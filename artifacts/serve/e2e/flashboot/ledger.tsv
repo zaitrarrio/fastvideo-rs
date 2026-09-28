@@ -1,0 +1,10 @@
+2026-09-28T22:17:36Z	template-created 37e0vbbfdd fv-flashboot-q-0928221735 ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:c0ce4f454f4f631d62ac19299424c7e6671a4d0108db463b5152d4b5baf58f22
+2026-09-28T22:17:37Z	endpoint-created flno5pyjhpq9mn fv-flashboot-q-0928221735 volume=s2k01690bi dc=US-CA-2 gpus=NVIDIA H100 NVL,NVIDIA H100 80GB HBM3,NVIDIA H200,NVIDIA RTX PRO 6000 Blackwell Server Edition template=37e0vbbfdd flashboot=true
+2026-09-28T22:42:01Z	endpoint-deleted flno5pyjhpq9mn
+2026-09-28T22:42:02Z	template-deleted 37e0vbbfdd
+2026-09-28T22:43:53Z	endpoint-created 7rvc47m5qtbfxi fv-flashboot-q-0928224352 volume=s2k01690bi dc=US-CA-2 gpus=NVIDIA H100 NVL,NVIDIA H100 80GB HBM3,NVIDIA H200,NVIDIA RTX PRO 6000 Blackwell Server Edition template=cyj8xv01wd flashboot=true
+2026-09-28T22:05:28Z	template-created v0yaogffu7 fv-flashboot-q-0928220527 ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:c0ce4f454f4f631d62ac19299424c7e6671a4d0108db463b5152d4b5baf58f22
+2026-09-28T22:05:29Z	endpoint-created efvt0e92qjfnm6 fv-flashboot-q-0928220527 volume=s2k01690bi dc=US-CA-2 gpus=NVIDIA H100 NVL,NVIDIA H100 80GB HBM3,NVIDIA H200,NVIDIA RTX PRO 6000 Blackwell Server Edition
+2026-09-28T22:16:11Z	endpoint-deleted efvt0e92qjfnm6
+2026-09-28T22:16:11Z	template-deleted v0yaogffu7
+2026-09-28T22:56:32Z	endpoint-deleted 7rvc47m5qtbfxi

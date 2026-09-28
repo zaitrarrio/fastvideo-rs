@@ -1,0 +1,20 @@
+[22:05:27] balance $28.7779087479 (stop under $14)
+[22:05:27] Runpod balance $28.7779087479 (floor $8)
+[22:05:29] queue endpoint efvt0e92qjfnm6 (template v0yaogffu7, volume s2k01690bi in US-CA-2, cap 2400s)
+[22:05:29] endpoint efvt0e92qjfnm6 template v0yaogffu7 flashboot=on
+[22:05:29] balance $28.7779087479 (stop under $14)
+[22:05:30] job b22ed087-453b-471d-bef4-c34fd29398da-u2: IN_QUEUE
+[22:07:25] job b22ed087-453b-471d-bef4-c34fd29398da-u2: IN_PROGRESS
+[22:07:31] job b22ed087-453b-471d-bef4-c34fd29398da-u2: COMPLETED
+[22:07:32] job 8b5a430a-d839-4904-9023-b2c7548edcad-u2: IN_PROGRESS
+[22:07:34] job 8b5a430a-d839-4904-9023-b2c7548edcad-u2: COMPLETED
+{"cycle":1,"flashboot":"on","submit_unix":1790633129.956642656,"health_before":{"jobs":{"completed":0,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":0,"initializing":1,"ready":0,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":114153,"executionTime":6440,"workerId":"wkwobrdvepg7or","client_wall_s":122.01234602928162,"first_in_progress_s":115.49612855911255,"job_status":"succeeded","bytes":1089835,"error":null},"info":{"workerId":"wkwobrdvepg7or","client_wall_s":2.8070573806762695,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790633192.4886189,"ready_after_s":51.819000354,"uptime_s":59.850695215},"process_start_after_submit_s":62.53197622299194,"ready_after_submit_s":114.35097646713257}
+[22:11:26] balance $28.2348396785 (stop under $14)
+[22:11:26] endpoint efvt0e92qjfnm6 template v0yaogffu7 flashboot=on
+[22:13:46] cycle 2: worker down (uptime frozen at 0s) after 140s; waiting 30s
+[22:14:17] balance $27.752703535 (stop under $14)
+[22:14:18] job 6ec0824b-3b30-42fc-b902-5205836d34ce-u1: IN_QUEUE
+[22:16:03] job 6ec0824b-3b30-42fc-b902-5205836d34ce-u1: IN_PROGRESS
+[22:16:09] job 6ec0824b-3b30-42fc-b902-5205836d34ce-u1: COMPLETED
+/home/user/fastvideo-rs/.claude/worktrees/serve-images/scripts/serve/e2e/../runpod-endpoint.sh: line 354: syntax error near unexpected token `('
+deleted efvt0e92qjfnm6 v0yaogffu7

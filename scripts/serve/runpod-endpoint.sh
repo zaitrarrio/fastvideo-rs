@@ -20,19 +20,30 @@
 # ({{ RUNPOD_SECRET_fv_* }} → FV_*), never values. The gateway authenticates,
 # so fv-serve runs `auth.mode = trust-gateway`.
 #
-# Money guards: workers min 0 / max 1, short idle timeout, FlashBoot off, a
+# Money guards: workers min 0 / max 1, short idle timeout, FlashBoot off
+# unless FV_FLASHBOOT=1 (docs/serve/images.md §FlashBoot), a
 # balance floor (FV_MIN_BALANCE, default 8 $), a wall-clock cap
 # (FV_ENDPOINT_CAP_S, default 1800 s) whose detached backstop deletes the
 # endpoint and template, a destroy-on-exit trap, and the ledger
 # (artifacts/runpod/serve/ledger.tsv).
 #
-# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_SERVE_CONFIG (default
+# Image: an explicit [image] or FV_SERVE_IMAGE wins. Otherwise a config of a
+# published variant (FV_VARIANT, or derived from FV_SERVE_CONFIG:
+# scripts/serve/variants.sh) boots the image of the variant's Runpod
+# template fv-serve-<variant>-sls (docs/serve/images.md), and a queue
+# endpoint without FV_EXTRA_ENV_JSON uses that template itself (never
+# deleted by `down`); anything else (the fake config) boots the legacy
+# all-in-one image (:latest).
+#
+# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_VARIANT; FV_SERVE_CONFIG (default
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default s2k01690bi,
 # fv-weights-b200-us) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
 # fv-serve as FV_WORKERS_MAX); FV_ENDPOINT_PREFIX (endpoint/template name
-# prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5); FV_EXTRA_ENV_JSON
+# prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5); FV_FLASHBOOT
+# (0 = off, the default; 1 = FlashBoot; priority = PRIORITY_FLASHBOOT, LB
+# only, the queue API has a boolean); FV_EXTRA_ENV_JSON
 # (a JSON object merged into the queue template's env, e.g. the gateway
 # worker role {"FV_SERVE_ROLE":"worker","FV_INTERNAL_TOKEN":"…"}, see
 # scripts/serve/runpod-gateway.sh).
@@ -40,6 +51,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
 source "$HERE/../gpu/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=variants.sh
+source "$HERE/variants.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
@@ -47,6 +60,15 @@ QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
+VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
+# pick_image [image] -> the image reference to boot (see the header).
+pick_image() {
+  if [[ -n "${1:-}" ]]; then echo "$1"
+  elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
+  elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" sls
+  else echo "$IMAGE_DEFAULT"
+  fi
+}
 VOLUME="${RUNPOD_VOLUME_ID:-s2k01690bi}"
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA GeForce RTX 4090,NVIDIA RTX 6000 Ada Generation}"
 CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
@@ -56,6 +78,12 @@ EXEC_MS="${FV_EXECUTION_TIMEOUT_MS:-1800000}"
 MODEL="${FV_SMOKE_MODEL:-fake-wan}"
 PREFIX="${FV_ENDPOINT_PREFIX:-fv-serve}"
 IDLE_S="${FV_IDLE_TIMEOUT_S:-5}"
+case "${FV_FLASHBOOT:-0}" in
+  0 | off | false) FLASHBOOT_Q=false; FLASHBOOT_LB=OFF ;;
+  1 | on | true) FLASHBOOT_Q=true; FLASHBOOT_LB=FLASHBOOT ;;
+  priority) FLASHBOOT_Q=true; FLASHBOOT_LB=PRIORITY_FLASHBOOT ;;
+  *) die "FV_FLASHBOOT must be 0, 1 or priority" ;;
+esac
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
 OUT_DIR="$FV_ROOT/artifacts/runpod/serve"
 
@@ -138,10 +166,10 @@ template_payload() {
 endpoint_payload() {
   local tpl="$1" name="$2" dc="$3"
   jq -n --arg name "$name" --arg tpl "$tpl" --argjson gpus "$(gpu_json)" --arg vol "$VOLUME" --arg dc "$dc" \
-    --arg cuda "$CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" '{
+    --arg cuda "$CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" --argjson fb "$FLASHBOOT_Q" '{
     name: $name, templateId: $tpl, computeType: "GPU", gpuTypeIds: $gpus, gpuCount: 1,
     networkVolumeId: $vol, dataCenterIds: [$dc], workersMin: 0, workersMax: 1, idleTimeout: $idle,
-    flashboot: false, executionTimeoutMs: ($exec|tonumber), scalerType: "QUEUE_DELAY", scalerValue: 1,
+    flashboot: $fb, executionTimeoutMs: ($exec|tonumber), scalerType: "QUEUE_DELAY", scalerValue: 1,
     allowedCudaVersions: ($cuda | split(" "))
   }'
 }
@@ -158,7 +186,7 @@ lb_payload() {
     | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
   [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
   jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson pools "$pools" --arg vol "$VOLUME" \
-    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" '{
+    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT_LB" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
     args: ("--config " + $cfg), ports: ["8000/http"], disk: 20,
     env: ($secrets + {
@@ -169,7 +197,7 @@ lb_payload() {
     gpu: ({pools: $pools, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
     workers: {min: 0, max: $max, idleTimeout: $idle},
     scaling: {type: "REQUEST_COUNT", requestCount: 1},
-    networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: "OFF", timeout: 330000
+    networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: $fb, timeout: 330000
   }'
 }
 
@@ -214,18 +242,29 @@ backstop() {
 # Sets EP and TPL.
 up_queue() {
   local image="$1" name dc resp
+  local vt="" tpl_use
   name="$PREFIX-q-$(date -u +%m%d%H%M%S)"
   dc="$(volume_dc)"
-  resp="$(rest POST /templates "$(template_payload "$image" "$name")")" || die "template create failed: $(head -c 300 <<<"$resp")"
-  TPL="$(jq -r '.id // empty' <<<"$resp")"
-  [[ -n "$TPL" ]] || die "template create returned no id"
-  ledger "template-created $TPL $name $image"
-  resp="$(rest POST /endpoints "$(endpoint_payload "$TPL" "$name" "$dc")")" || die "endpoint create failed: $(head -c 300 <<<"$resp")"
+  if [[ -n "$VARIANT" && -z "${FV_EXTRA_ENV_JSON:-}" ]]; then
+    vt="$(fv_template_get "$(fv_template_name "$VARIANT" sls)" || true)"
+    [[ -n "$vt" && "$(jq -r .imageName <<<"$vt")" == "$image" ]] || vt=""
+  fi
+  if [[ -n "$vt" ]]; then
+    tpl_use="$(jq -r .id <<<"$vt")"; TPL="-"
+    log "variant $VARIANT: the published template $tpl_use ($image)"
+  else
+    resp="$(rest POST /templates "$(template_payload "$image" "$name")")" || die "template create failed: $(head -c 300 <<<"$resp")"
+    TPL="$(jq -r '.id // empty' <<<"$resp")"
+    [[ -n "$TPL" ]] || die "template create returned no id"
+    ledger "template-created $TPL $name $image"
+    tpl_use="$TPL"
+  fi
+  resp="$(rest POST /endpoints "$(endpoint_payload "$tpl_use" "$name" "$dc")")" || die "endpoint create failed: $(head -c 300 <<<"$resp")"
   EP="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$EP" ]] || die "endpoint create returned no id"
-  ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS"
+  ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS template=$tpl_use flashboot=$FLASHBOOT_Q"
   backstop "$EP" "$TPL"
-  log "queue endpoint $EP (template $TPL, volume $VOLUME in $dc, cap ${CAP_S}s)"
+  log "queue endpoint $EP (template $tpl_use, volume $VOLUME in $dc, cap ${CAP_S}s)"
 }
 
 up_lb() {
@@ -268,7 +307,7 @@ cmd_smoke() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   check_balance
   local image cold caps gen warm media_url media=""
-  image="$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"
+  image="$(resolve_digest "$(pick_image "${1:-}")")"
   log "image $image"
   trap cleanup EXIT INT TERM
   up_queue "$image"
@@ -303,7 +342,7 @@ cmd_smoke_lb() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   check_balance
   local image base t0 t_first="" t_ready="" code caps
-  image="$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"
+  image="$(resolve_digest "$(pick_image "${1:-}")")"
   trap cleanup EXIT INT TERM
   t0="$(now)"
   up_lb "$image"
@@ -327,18 +366,18 @@ case "${1:-}" in
   smoke-lb) shift; cmd_smoke_lb "$@" ;;
   up)
     shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; check_balance
-    up_queue "$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"; echo "$EP $TPL" ;;
+    up_queue "$(resolve_digest "$(pick_image "${1:-}")")"; echo "$EP $TPL" ;;
   up-lb)
     shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; check_balance
-    up_lb "$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"; echo "$EP $TPL" ;;
+    up_lb "$(resolve_digest "$(pick_image "${1:-}")")"; echo "$EP $TPL" ;;
   job) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; job "${1:?endpoint}" "${2:?input json}" ;;
   down) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; down "${1:?endpoint}" "${2:-}"; echo "deleted ${1} ${2:-}" ;;
   plan)
     shift
-    img="${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}"
+    img="$(pick_image "${1:-}")"
     echo "# template (REST v1 POST /templates)"; template_payload "$img" fv-serve-plan
     echo "# queue endpoint (REST v1 POST /endpoints)"; endpoint_payload "<template id>" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}"
     echo "# load balancer (REST v2 POST /serverless)"
     RUNPOD_API_KEY="${RUNPOD_API_KEY:-}" lb_payload "$img" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}" ;;
-  *) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

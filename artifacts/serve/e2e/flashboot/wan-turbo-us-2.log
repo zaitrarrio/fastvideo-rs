@@ -1,0 +1,49 @@
+[22:17:34] balance $27.2747736332 (stop under $14)
+[22:17:35] Runpod balance $27.2747736332 (floor $8)
+[22:17:37] queue endpoint flno5pyjhpq9mn (template 37e0vbbfdd, volume s2k01690bi in US-CA-2, cap 3000s)
+[22:17:37] endpoint flno5pyjhpq9mn template 37e0vbbfdd flashboot=on
+[22:17:38] balance $27.2747736332 (stop under $14)
+[22:17:39] job 105916eb-b56c-4b3d-946e-5fb7ff2f3941-u1: IN_QUEUE
+[22:19:31] job 105916eb-b56c-4b3d-946e-5fb7ff2f3941-u1: IN_PROGRESS
+[22:19:37] job 105916eb-b56c-4b3d-946e-5fb7ff2f3941-u1: COMPLETED
+[22:19:38] job 82408c41-df6d-4125-9097-78f21e71fbbd-u2: COMPLETED
+{"cycle":1,"flashboot":"on","submit_unix":1790633858.586824136,"health_before":{"jobs":{"completed":0,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":0,"initializing":1,"ready":0,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":110285,"executionTime":6749,"workerId":"yg95q2mwezl0ia","client_wall_s":119.07057094573975,"first_in_progress_s":112.53388929367065,"job_status":"succeeded","bytes":1089835,"error":null},"info":{"workerId":"yg95q2mwezl0ia","client_wall_s":0.3593316078186035,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790633915.558308,"ready_after_s":53.577657216,"uptime_s":62.443248655},"process_start_after_submit_s":56.97148370742798,"ready_after_submit_s":110.54914093017578}
+[22:23:49] cycle 2: worker down (uptime frozen at 0s) after 251s; waiting 30s
+[22:24:20] balance $26.9236346313 (stop under $14)
+[22:24:21] job 20e0bd51-d25c-4005-8914-0076b84e0e67-u2: IN_QUEUE
+[22:25:22] job 20e0bd51-d25c-4005-8914-0076b84e0e67-u2: IN_PROGRESS
+[22:25:29] job 20e0bd51-d25c-4005-8914-0076b84e0e67-u2: COMPLETED
+[22:25:30] job 8af3e59d-d696-4a82-a9fc-1c22af4603ff-u2: COMPLETED
+{"cycle":2,"flashboot":"on","submit_unix":1790634260.460393329,"health_before":{"jobs":{"completed":2,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":61526,"executionTime":6324,"workerId":"kgxh8o70d3a309","client_wall_s":68.92857336997986,"first_in_progress_s":62.177369594573975,"job_status":"succeeded","bytes":963470,"error":null},"info":{"workerId":"kgxh8o70d3a309","client_wall_s":0.6913497447967529,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790634264.4058106,"ready_after_s":57.650318425,"uptime_s":65.327730197},"process_start_after_submit_s":3.9454174041748047,"ready_after_submit_s":61.59573578834534}
+[22:29:41] cycle 3: worker down (uptime frozen at 0s) after 251s; waiting 30s
+[22:30:11] balance $26.6382614952 (stop under $14)
+[22:30:12] job 82b81d03-941f-4048-bf06-46d4ecd65b58-u1: IN_QUEUE
+[22:31:08] job 82b81d03-941f-4048-bf06-46d4ecd65b58-u1: IN_PROGRESS
+[22:31:15] job 82b81d03-941f-4048-bf06-46d4ecd65b58-u1: COMPLETED
+[22:31:15] job 5f1f9c6d-5545-4d04-8281-1364b5a431d4-u1: COMPLETED
+{"cycle":3,"flashboot":"on","submit_unix":1790634611.566319801,"health_before":{"jobs":{"completed":4,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":56673,"executionTime":6376,"workerId":"yg95q2mwezl0ia","client_wall_s":63.820754051208496,"first_in_progress_s":57.213942527770996,"job_status":"succeeded","bytes":1244407,"error":null},"info":{"workerId":"yg95q2mwezl0ia","client_wall_s":0.3395416736602783,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790634616.290929,"ready_after_s":52.105699494,"uptime_s":59.445813137},"process_start_after_submit_s":4.724609375,"ready_after_submit_s":56.83030891418457}
+[22:33:38] cycle 4: worker down (uptime frozen at 0s) after 143s; waiting 30s
+[22:34:09] balance $26.3700936146 (stop under $14)
+[22:34:09] job 36b4b13d-e58d-4577-8743-8dcd785d43c9-u1: IN_QUEUE
+[22:35:29] job 36b4b13d-e58d-4577-8743-8dcd785d43c9-u1: IN_PROGRESS
+[22:35:38] job 36b4b13d-e58d-4577-8743-8dcd785d43c9-u1: COMPLETED
+[22:35:38] job 4f0e038d-ca13-4302-8bc9-38fd2477bdf6-u1: COMPLETED
+{"cycle":4,"flashboot":"on","submit_unix":1790634849.407309430,"health_before":{"jobs":{"completed":6,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":79317,"executionTime":7327,"workerId":"yg95q2mwezl0ia","client_wall_s":88.69105339050293,"first_in_progress_s":79.78330421447754,"job_status":"succeeded","bytes":780092,"error":null},"info":{"workerId":"yg95q2mwezl0ia","client_wall_s":0.5933294296264648,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790634876.3629231,"ready_after_s":52.512965971,"uptime_s":62.113727185},"process_start_after_submit_s":26.95561385154724,"ready_after_submit_s":79.46857976913452}
+{"id":"flno5pyjhpq9mn","flashboot":false}
+[22:37:13] cycle 5: worker down (uptime frozen at 0s) after 94s; waiting 30s
+[22:37:44] balance $26.0720030785 (stop under $14)
+[22:37:44] job ac73233c-416a-4655-a84d-be7845bfb626-u1: IN_QUEUE
+[22:38:39] job ac73233c-416a-4655-a84d-be7845bfb626-u1: IN_PROGRESS
+[22:38:45] job ac73233c-416a-4655-a84d-be7845bfb626-u1: COMPLETED
+[22:38:46] job 0723c28f-e221-460b-af69-2d273ef2d78d-u1: IN_PROGRESS
+[22:38:48] job 0723c28f-e221-460b-af69-2d273ef2d78d-u1: COMPLETED
+{"cycle":5,"flashboot":"off","submit_unix":1790635064.224647488,"health_before":{"jobs":{"completed":8,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":53084,"executionTime":6393,"workerId":"kgxh8o70d3a309","client_wall_s":61.751362562179565,"first_in_progress_s":55.14402627944946,"job_status":"succeeded","bytes":571694,"error":null},"info":{"workerId":"kgxh8o70d3a309","client_wall_s":2.565237283706665,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790635070.2618558,"ready_after_s":47.134262942,"uptime_s":56.030759721},"process_start_after_submit_s":6.037208318710327,"ready_after_submit_s":53.17147135734558}
+[22:40:22] cycle 6: worker down (uptime frozen at 0s) after 94s; waiting 30s
+[22:40:52] balance $26.0720030785 (stop under $14)
+[22:40:53] job 01a7a058-aed7-49e7-bb51-dd12b21df5e8-u1: IN_QUEUE
+[22:41:52] job 01a7a058-aed7-49e7-bb51-dd12b21df5e8-u1: IN_PROGRESS
+[22:41:59] job 01a7a058-aed7-49e7-bb51-dd12b21df5e8-u1: COMPLETED
+[22:42:00] job 691d6900-d78e-4eac-b0cc-774352e1c0d4-u2: COMPLETED
+{"cycle":6,"flashboot":"off","submit_unix":1790635253.277370018,"health_before":{"jobs":{"completed":10,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":57762,"executionTime":7123,"workerId":"jgihi264tdw0li","client_wall_s":66.46473693847656,"first_in_progress_s":59.575714111328125,"job_status":"succeeded","bytes":1372675,"error":null},"info":{"workerId":"jgihi264tdw0li","client_wall_s":0.5321090221405029,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790635260.8771348,"ready_after_s":50.472354164,"uptime_s":59.236831328},"process_start_after_submit_s":7.599764823913574,"ready_after_submit_s":58.07211899757385}
+[22:42:00] wrote /tmp/claude-0/-home-user-fastvideo-rs/cf87b4de-fc17-5db3-81a9-8f7d01db7f65/scratchpad/fbrun/artifacts/serve/e2e/flashboot/wan-turbo-us-2.jsonl
+deleted flno5pyjhpq9mn 37e0vbbfdd
