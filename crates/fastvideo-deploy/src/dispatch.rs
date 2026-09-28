@@ -71,6 +71,8 @@ pub struct RouterHandler {
     router: Router,
     info: Option<InfoFn>,
     opts: DispatchOpts,
+    /// Added to every dispatched request unless the envelope sets it.
+    extra_headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl std::fmt::Debug for RouterHandler {
@@ -139,7 +141,17 @@ fn path_of(u: &str) -> Option<String> {
 
 impl RouterHandler {
     pub fn new(router: Router) -> Self {
-        Self { router, info: None, opts: DispatchOpts::default() }
+        Self { router, info: None, opts: DispatchOpts::default(), extra_headers: Vec::new() }
+    }
+    /// Adds `name: value` to every request this handler dispatches (a queue
+    /// worker behind the gateway adds its internal token: queue jobs are
+    /// already authenticated by the platform). Invalid names or values are
+    /// ignored.
+    pub fn with_header(mut self, name: &str, value: &str) -> Self {
+        if let (Ok(n), Ok(v)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(value)) {
+            self.extra_headers.push((n, v));
+        }
+        self
     }
     pub fn with_info(mut self, f: InfoFn) -> Self {
         self.info = Some(f);
@@ -167,11 +179,18 @@ impl RouterHandler {
             .map_err(|_| JobError::new("InvalidInput", format!("bad method `{method}`")))?;
         let mut b = Request::builder().method(m).uri(path);
         let mut has_ct = false;
+        let mut seen = Vec::new();
         for (k, v) in headers {
             let name = HeaderName::from_bytes(k.as_bytes()).map_err(|_| JobError::new("InvalidInput", format!("bad header name `{k}`")))?;
             let val = HeaderValue::from_str(v).map_err(|_| JobError::new("InvalidInput", format!("bad value for header `{k}`")))?;
             has_ct |= name == axum::http::header::CONTENT_TYPE;
+            seen.push(name.clone());
             b = b.header(name, val);
+        }
+        for (n, v) in &self.extra_headers {
+            if !seen.contains(n) {
+                b = b.header(n.clone(), v.clone());
+            }
         }
         let body = match body {
             Some((bytes, ct)) => {
@@ -256,6 +275,15 @@ impl RouterHandler {
         let mut last = first.clone();
         loop {
             if cx.cancel.is_cancelled() {
+                if let Some(cp) = &job.cancel_path {
+                    let cp = match created_id(&first.body) {
+                        Some(id) => cp.replace("{id}", &id),
+                        None => cp.clone(),
+                    };
+                    if let Err(e) = self.call("DELETE", &cp, &job.headers, None).await {
+                        tracing::warn!(error = %e, path = %cp, "cancel_path failed");
+                    }
+                }
                 return Err(JobError::new("Cancelled", "cancelled while waiting").with_output(last.to_json()));
             }
             if Instant::now() > deadline {

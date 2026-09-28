@@ -101,6 +101,24 @@ pub fn fal_config(cfg: &MountCfg) -> fastvideo_fal::FalConfig {
     }
 }
 
+/// fal app ids → the model name each resolves to (the H3 tier alias for
+/// `minimax/h3-{max,turbo,draft}`, else the alias part): the gateway's
+/// director routing (docs/serve/gateway.md §5.1).
+pub fn fal_app_models(apps: &[String]) -> Vec<(String, String)> {
+    apps.iter()
+        .map(|id| {
+            let id = id.trim_matches('/').to_owned();
+            let model = match id.as_str() {
+                "minimax/h3-max" => "h3-max".to_owned(),
+                "minimax/h3-turbo" => "h3-turbo".to_owned(),
+                "minimax/h3-draft" => "h3-draft".to_owned(),
+                other => other.rsplit('/').next().unwrap_or(other).to_owned(),
+            };
+            (id, model)
+        })
+        .collect()
+}
+
 /// Callback renderers to register on the `ServeCtx` builder.
 pub fn renderers(cfg: &MountCfg) -> Vec<(ProtocolId, Arc<dyn CallbackRender>)> {
     #[allow(unused_mut)]

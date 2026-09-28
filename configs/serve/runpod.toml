@@ -52,6 +52,12 @@ weights = "${FV_WEIGHTS}/h3-base"
 resident = true
 served_names = ["fasth3"]
 continuity = "anchor-last-frame"
+# Image-to-video text: keep the Qwen-VL vision tower resident beside the
+# resident text encoder (`auto`: when it fits; `stream` reads it from the
+# volume per request, same bytes). `warmup` runs one I2V + one T2V job
+# before readiness so the first request pays no setup.
+i2v_encoder = "auto"
+warmup = true
 
 [aliases]
 "MiniMax-H3" = "fasth3"
@@ -70,3 +76,11 @@ native = true
 [limits]
 queue_max = 32
 body_max_mb = 64
+
+# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
+# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
+# requires the internal token on every API route, trusts the gateway's
+# authentication, and takes jobs from `/fv/v1/internal/jobs` (queue: the
+# gateway's `kind: http` envelope). Standalone deployments ignore this.
+[gateway]
+pool = "h3-turbo"
