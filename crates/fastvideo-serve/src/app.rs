@@ -195,7 +195,13 @@ pub fn catalog_models(entries: &[crate::config::ModelCfg]) -> anyhow::Result<Vec
             let extra = m
                 .extra
                 .iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                // Strings and booleans (`warmup = true`) reach the backend as text.
+                .filter_map(|(k, v)| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .or_else(|| v.as_bool().map(|b| b.to_string()))
+                        .map(|s| (k.clone(), s))
+                })
                 .collect();
             model_from_config(
                 &layout,
