@@ -1,0 +1,142 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "mem_used_mib": 21826,
+        "seconds": 133.36823274
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 18.533441527,
+        "decoder": "wan-vae",
+        "denoise_s": 191.225170335,
+        "frames_sha256": "750008c82211cf99eafb844be998c13800f973ca9c805bb7fb26c678de0526cb",
+        "peak_mib": 58892,
+        "step_s": [
+          5.305657441,
+          4.57787593,
+          4.595947633,
+          4.610993406,
+          4.624264608,
+          4.638319641,
+          4.656917533,
+          4.660089823,
+          4.669653905,
+          4.680370347,
+          4.687869429,
+          4.69918778,
+          4.70357631,
+          4.710198052,
+          4.713600143,
+          4.721575074,
+          4.722186924,
+          4.735669346,
+          4.743498787,
+          4.796589576,
+          4.807428338,
+          4.829471922,
+          4.849229545,
+          4.845915585,
+          4.861001058,
+          4.868717769,
+          4.864845717,
+          4.8636425580000004,
+          4.869660848,
+          4.869194828,
+          4.862458538,
+          4.877676179,
+          4.859882307,
+          4.846654715,
+          4.8447327940000005,
+          4.832383142,
+          4.81892005,
+          4.832665062,
+          4.825967192,
+          4.840302053
+        ],
+        "text_cache": "miss",
+        "text_s": 1.598085775,
+        "total_s": 211.409489826,
+        "video_encode_s": 0.145890314,
+        "video_push_s": 0.00026028900000000003,
+        "video_rgb_s": 0.24840051802306798,
+        "video_vae_s": 18.3250715637207,
+        "video_wait_s": 1.771615593,
+        "write_s": 0.388222124
+      }
+    },
+    {
+      "limits": {
+        "expected": 161
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 161,
+        "written": 161
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/wan5b-720p-161f/frames/frame-080.png",
+        "mean": 0.6424416156145181,
+        "std": 0.25699307205680694
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/wan/9b2c963-09282019/wan5b-720p-161f/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": false,
+      "dmd_steps": null,
+      "flow_shift": 5.0,
+      "guidance": 3.5,
+      "height": 704,
+      "num_frames": 161,
+      "preset": "wan_2_2_ti2v_5b",
+      "prompt_set": null,
+      "steps": 40,
+      "text_cache": "/fvscratch/runs/wan/9b2c963-09282019/wan5b-720p-161f/text-cache",
+      "vae": "auto",
+      "vsa": false,
+      "warm": false,
+      "weights": "/workspace/weights/wan22-ti2v-5b",
+      "width": 1280
+    }
+  },
+  "elapsed_s": 346.364061229,
+  "env": {
+    "FASTVIDEO_TAE_DIR": "/workspace/weights/auxiliary/tae"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}

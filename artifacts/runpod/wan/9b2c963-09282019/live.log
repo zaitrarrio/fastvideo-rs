@@ -1,0 +1,127 @@
+[20:22:02] [wan] prompt set: /opt/fastvideo-rs/scripts/gpu/prompts-eval.json
+[20:22:04] [wan] lpips weights: /workspace/weights/auxiliary/lpips
+[20:22:04] [wan] matrix start image=50c85fa457f7e5b6
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-e331b35f-c33c-50d4-845f-3bb639896730)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[20:22:04] [wan] skip wan13-dmd (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-dmd-dense (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan13-dmd--wan13-dmd-dense (frames missing)
+[20:22:04] [wan] skip wan13-f32act (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-bf16act (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-fuse (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-mxfp8 (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-w8a8 (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan13-f32act--wan13-bf16act (frames missing)
+[20:22:04] [wan] skip gate wan13-f32act--wan13-bf16act (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-f32act--wan13-fuse (frames missing)
+[20:22:04] [wan] skip gate wan13-f32act--wan13-fuse (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-f32act--wan13-mxfp8 (frames missing)
+[20:22:04] [wan] skip gate wan13-f32act--wan13-mxfp8 (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-f32act--wan13-w8a8 (frames missing)
+[20:22:04] [wan] skip gate wan13-f32act--wan13-w8a8 (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-bf16act--wan13-fuse (frames missing)
+[20:22:04] [wan] skip gate wan13-bf16act--wan13-fuse (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-fuse--wan13-mxfp8 (frames missing)
+[20:22:04] [wan] skip gate wan13-fuse--wan13-mxfp8 (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-fuse--wan13-w8a8 (frames missing)
+[20:22:04] [wan] skip gate wan13-fuse--wan13-w8a8 (benchmark.json missing)
+[20:22:04] [wan] skip sfwan13-81f-flash (not in FV_CELLS)
+[20:22:04] [wan] skip sfwan13-81f-composed (not in FV_CELLS)
+[20:22:04] [wan] skip sfwan13-81f-wholeclip (not in FV_CELLS)
+[20:22:04] [wan] skip compare sfwan13-81f-composed--sfwan13-81f-flash (frames missing)
+[20:22:04] [wan] skip gate sfwan13-81f-composed--sfwan13-81f-flash (benchmark.json missing)
+[20:22:04] [wan] skip compare sfwan13-81f-flash--sfwan13-81f-wholeclip (frames missing)
+[20:22:04] [wan] skip wan5b-f32act (not in FV_CELLS)
+[20:22:04] [wan] skip wan5b-bf16act (not in FV_CELLS)
+[20:22:04] [wan] skip wan5b-mxfp8 (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan5b-f32act--wan5b-bf16act (frames missing)
+[20:22:04] [wan] skip gate wan5b-f32act--wan5b-bf16act (benchmark.json missing)
+[20:22:04] [wan] skip compare wan5b-f32act--wan5b-mxfp8 (frames missing)
+[20:22:04] [wan] skip gate wan5b-f32act--wan5b-mxfp8 (benchmark.json missing)
+[20:22:04] [wan] skip wan14b-f32act (not in FV_CELLS)
+[20:22:04] [wan] skip wan14b-bf16act (not in FV_CELLS)
+[20:22:04] [wan] skip wan14b-mxfp8 (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan14b-f32act--wan14b-bf16act (frames missing)
+[20:22:04] [wan] skip gate wan14b-f32act--wan14b-bf16act (benchmark.json missing)
+[20:22:04] [wan] skip compare wan14b-f32act--wan14b-mxfp8 (frames missing)
+[20:22:04] [wan] skip gate wan14b-f32act--wan14b-mxfp8 (benchmark.json missing)
+[20:22:04] [wan] skip wan13-dmd-fullvae (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-dmd-fullvae-chunk1 (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan13-dmd-fullvae--wan13-dmd (frames missing)
+[20:22:04] [wan] skip gate wan13-dmd-fullvae--wan13-dmd (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-dmd-fullvae-chunk1--wan13-dmd-fullvae (frames missing)
+[20:22:04] [wan] skip wan13-dmd-nocache (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan13-dmd--wan13-dmd-nocache (frames missing)
+[20:22:04] [wan] skip gate wan13-dmd--wan13-dmd-nocache (benchmark.json missing)
+[20:22:04] [wan] skip wan13-dmd-sol (not in FV_CELLS)
+[20:22:04] [wan] skip wan13-dmd-teacache (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan13-dmd--wan13-dmd-sol (frames missing)
+[20:22:04] [wan] skip gate wan13-dmd--wan13-dmd-sol (benchmark.json missing)
+[20:22:04] [wan] skip compare wan13-dmd--wan13-dmd-teacache (frames missing)
+[20:22:04] [wan] skip gate wan13-dmd--wan13-dmd-teacache (benchmark.json missing)
+[20:22:04] [wan] skip wan14 (not in FV_CELLS)
+[20:22:04] [wan] skip wan14-4step (not in FV_CELLS)
+[20:22:04] [wan] skip wan14-4step-nocache (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan14-4step--wan14-4step-nocache (frames missing)
+[20:22:04] [wan] skip wan14-easycache (not in FV_CELLS)
+[20:22:04] [wan] skip wan14-teacache (not in FV_CELLS)
+[20:22:04] [wan] skip wan14-sol (not in FV_CELLS)
+[20:22:04] [wan] skip wan14-fullstack (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan14--wan14-easycache (frames missing)
+[20:22:04] [wan] skip gate wan14--wan14-easycache (benchmark.json missing)
+[20:22:04] [wan] skip compare wan14--wan14-teacache (frames missing)
+[20:22:04] [wan] skip gate wan14--wan14-teacache (benchmark.json missing)
+[20:22:04] [wan] skip compare wan14--wan14-sol (frames missing)
+[20:22:04] [wan] skip gate wan14--wan14-sol (benchmark.json missing)
+[20:22:04] [wan] skip compare wan14--wan14-fullstack (frames missing)
+[20:22:04] [wan] skip gate wan14--wan14-fullstack (benchmark.json missing)
+[20:22:04] [wan] skip wan5b (not in FV_CELLS)
+[20:22:04] [wan] skip wan5b-taehv (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan5b--wan5b-taehv (frames missing)
+[20:22:04] [wan] skip wan5b-i2v (not in FV_CELLS)
+[20:22:04] [wan] skip wan5b-easycache (not in FV_CELLS)
+[20:22:04] [wan] skip compare wan5b--wan5b-easycache (frames missing)
+[20:22:05] [wan] oracle: fetching https://uxhoohjvr4rko1-8000.proxy.runpod.net/upstream/9b2c963-09282013/oracle-fastwan22-ti2v/oracle-dump.tar
+[20:22:11] [wan] oracle: fastwan22-ti2v reference 599M
+[20:22:11] [wan] ▶ fw22-oracle  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --keep-going wan oracle --weights /workspace/weights/fastwan22-ti2v-5b --reference /fvscratch/oracle-ref/fastwan22-ti2v/dump --dump-out /fvscratch/runs/wan/9b2c963-09282019/fw22-oracle-dump --taehv /workspace/weights/auxiliary/tae/taew2_2.safetensors  (wall cap 1800s; 0=none)
+[20:23:32] [wan] FAIL fw22-oracle  81s  exit=1
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=27280 d=128: cuDNN 23.82 ms, flash_mma_fwd2 24.67 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=512 d=128: cuDNN 0.62 ms, flash_mma_fwd2 0.62 ms -> cuDNN
+[INFO] wan/t2v_dit_out {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178}
+[INFO] wan/i2v_dit_out {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247}
+[PASS] wan/vae_encode_rel_l2 {"cosine":0.9999855731958387,"max_abs":0.051241934299468994,"non_finite":0,"ref_norm":400.81394148930883,"rel_l2":0.005408307232250536,"seconds":0.509567624,"shape":[1,48,3,44,80]} (limits {"max_rel_l2":0.01})
+[PASS] wan/vae_decode_psnr {"cosine":0.9999984053331235,"max_abs":0.013720482587814331,"non_finite":0,"psnr_db":65.70148794680193,"ref_norm":2865.3577374458296,"rel_l2":0.0017858704194209487,"seconds":1.119734526,"shape":[1,3,9,704,1280]} (limits {"min_psnr_db":40.0})
+[FAIL] wan/t2v_dit_out_rel_l2 {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178} (limits {"max_rel_l2":0.05})
+[FAIL] wan/i2v_dit_out_rel_l2 {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247} (limits {"max_rel_l2":0.05})
+[FAIL] stage wan → gpucheck-out/wan.json (80.0s)
+check failed: 2 check(s) failed: wan/t2v_dit_out_rel_l2: {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178} vs limits {"max_rel_l2":0.05}; wan/i2v_dit_out_rel_l2: {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247} vs limits {"max_rel_l2":0.05}
+[20:23:32] [wan] skip fw22-oracle-diff (not in FV_CELLS)
+[20:23:33] [wan] ▶ fw22  env FASTVIDEO_WAN_VAE=full /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --prompts /opt/fastvideo-rs/scripts/gpu/prompts-eval.json --clip-dir /fvscratch/runs/wan/9b2c963-09282019/fw22/frames  (wall cap 1800s; 0=none)
+[20:27:12] [wan] ok fw22  219s  /fvscratch/runs/wan/9b2c963-09282019/fw22/stderr.log:wan gen spark-mountain-lake: total 18.50s (text 0.04s, denoise 4.56s, decode 13.87s) png 0.25s peak Some(61196) MiB frames ccccb58c8967375df2df84ff1eecc43585ad0613290317f2ed9b5a4a3264d510
+[20:27:14] [wan] ▶ fw22-taehv  env FASTVIDEO_WAN_VAE=taehv /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --prompts /opt/fastvideo-rs/scripts/gpu/prompts-eval.json --clip-dir /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames  (wall cap 1800s; 0=none)
+[20:29:52] [wan] ok fw22-taehv  158s  /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/stderr.log:wan gen spark-mountain-lake: total 5.42s (text 0.04s, denoise 4.50s, decode 0.86s) png 0.25s peak Some(29772) MiB frames e4433168bc973f368af49a8f58f09b5aa296bc182433c8b768263de49d866ba3
+[20:30:00] [wan] compare fw22--fw22-taehv-h3-demo exit=0 "psnr_mean":32.867112558721296 "max":0.04488827978466145 "mean":0.03221756335635897 
+[20:30:08] [wan] compare fw22--fw22-taehv-ltx-frogyoga exit=0 "psnr_mean":31.916032962420832 "max":0.03776952985194962 "mean":0.030380007745160843 
+[20:30:16] [wan] compare fw22--fw22-taehv-ltx-multishot exit=0 "psnr_mean":30.659914260357333 "max":0.17584570017466292 "mean":0.0659151741110096 
+[20:30:23] [wan] compare fw22--fw22-taehv-ltx-newsbroadcast exit=0 "psnr_mean":30.425836731561063 "max":0.08694423977692231 "mean":0.05733302044036386 
+[20:30:31] [wan] compare fw22--fw22-taehv-spark-mountain-lake exit=0 "psnr_mean":32.746754816824726 "max":0.05003200428261022 "mean":0.04519590185086698 
+[20:30:31] [wan] skip compare wan5b--fw22 (frames missing)
+[20:30:33] [wan] ▶ fw22-i2v  env FASTVIDEO_WAN_VAE=full /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 480 --width 832 --num-frames 121 --image /opt/fastvideo-rs/scripts/gpu/fixtures/ti2v-beach-832x480.jpg --prompt Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day. --clip-dir /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames  (wall cap 1800s; 0=none)
+[20:32:46] [wan] ok fw22-i2v  133s  /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/stderr.log:wan gen default: total 7.31s (text 0.02s, denoise 1.57s, decode 5.67s) png 0.15s peak Some(39396) MiB frames 403a604bb25d87a29932c4b458cef359c76c6fc45bdf63e8fec61495461789ae
+[20:32:49] [wan] ▶ fw22-580p-161f  env FASTVIDEO_WAN_VAE=full /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 576 --width 1024 --num-frames 161 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/wan/9b2c963-09282019/fw22-580p-161f/frames  (wall cap 1800s; 0=none)
+[20:35:19] [wan] ok fw22-580p-161f  150s  /fvscratch/runs/wan/9b2c963-09282019/fw22-580p-161f/stderr.log:wan gen default: total 15.03s (text 0.00s, denoise 3.68s, decode 11.29s) png 0.22s peak Some(47660) MiB frames 415be1aa27eb7bc27a0d29668b39092d909de7313082a55320bb4de28f6bb5a0
+[20:35:21] [wan] ▶ fw22-720p-161f  env FASTVIDEO_WAN_VAE=full /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 704 --width 1280 --num-frames 161 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames  (wall cap 1800s; 0=none)
+[20:38:10] [wan] ok fw22-720p-161f  169s  /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/stderr.log:wan gen default: total 25.20s (text 0.00s, denoise 6.85s, decode 18.29s) png 0.32s peak Some(60044) MiB frames 3349f5d403b64d4687046dafd2b4b058d629bd32b6989f640a54712d8652f31b
+[20:38:11] [wan] ▶ wan5b-580p-161f  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --unipc --steps 40 --guidance 3.5 --flow-shift 5.0 --fps 24 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --seed 1024 --height 576 --width 1024 --num-frames 161 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/frames  (wall cap 1800s; 0=none)
+[20:42:22] [wan] ok wan5b-580p-161f  251s  /fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/stderr.log:wan gen default: total 114.88s (text 2.26s, denoise 101.09s, decode 11.50s) png 0.29s peak Some(48588) MiB frames db6c0787e8259c352b56eec3cde2bfe82ca4165617fe41e864c3be184f09bcd7
+[20:42:26] [wan] ▶ wan5b-720p-161f  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --unipc --steps 40 --guidance 3.5 --flow-shift 5.0 --fps 24 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --seed 1024 --height 704 --width 1280 --num-frames 161 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/wan/9b2c963-09282019/wan5b-720p-161f/frames  (wall cap 1800s; 0=none)
+[20:48:13] [wan] ok wan5b-720p-161f  347s  /fvscratch/runs/wan/9b2c963-09282019/wan5b-720p-161f/stderr.log:wan gen default: total 211.41s (text 1.60s, denoise 191.23s, decode 18.53s) png 0.39s peak Some(58892) MiB frames 750008c82211cf99eafb844be998c13800f973ca9c805bb7fb26c678de0526cb
+[20:48:15] [wan] ▶ cli-fw22  env FASTVIDEO_WAN_VAE=full /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --no-text-cache --no-mp4 --clip-dir /fvscratch/runs/wan/9b2c963-09282019/cli-fw22/frames  (wall cap 1800s; 0=none)
+[20:50:34] [wan] ok cli-fw22  139s  /fvscratch/runs/wan/9b2c963-09282019/cli-fw22/stderr.log:wan gen default: total 19.50s (text 0.69s, denoise 5.12s, decode 13.65s) png 0.30s peak Some(57580) MiB frames e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46
+[20:50:38] [wan] ▶ engine-fw22  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast engine --model wan-turbo --weights-root /workspace/weights --tae-dir /workspace/weights/auxiliary/tae --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --reference /fvscratch/runs/wan/9b2c963-09282019/cli-fw22/frames --cancel-after-step 1 --clip-out /fvscratch/runs/wan/9b2c963-09282019/engine-fw22/out  (wall cap 1800s; 0=none)
+[20:52:53] [wan] ok engine-fw22  135s  
+[20:52:53] [wan] skip sfwan13-81f-fullvae (not in FV_CELLS)
+[20:52:53] [wan] skip compare sfwan13-81f-fullvae--sfwan13-81f-flash (frames missing)
+[20:52:53] [wan] matrix done
