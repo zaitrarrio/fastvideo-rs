@@ -253,6 +253,14 @@ pub enum Stage {
         /// read `fastvideo_inference.json` or 8-step.
         #[arg(long)]
         h3_recipe: Option<String>,
+        /// Ordered Ref2VA reference (repeatable; image / video / audio from
+        /// the extension). Any `--ref` loads `transformer_ref/` (Ref2VA).
+        #[arg(long = "ref")]
+        references: Vec<PathBuf>,
+        /// Root holding `transformer_ref/` and the Ref2VA turbo adapter when
+        /// it is not `--weights` (e.g. `$W/h3-ref2va`).
+        #[arg(long)]
+        ref_root: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
     },
@@ -373,6 +381,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             warm,
             taeh3_weights,
             h3_recipe,
+            references,
+            ref_root,
             device,
         } => {
             let text_cache = if *no_text_cache {
@@ -396,7 +406,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 .map_err(|e| anyhow::anyhow!(e))?,
                 taeh3: taeh3_weights.clone(),
                 recipe: h3_recipe.clone(),
-                ref2va: false,
+                ref2va: !references.is_empty(),
+                ref_root: ref_root.clone(),
                 adapter: None,
                 reference_image_resize: Default::default(),
                 dit_offload: dit_offload
@@ -432,6 +443,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 clip_dir,
                 arms,
                 options,
+                references,
                 *warm,
                 *compare_text_encoders,
                 device,
@@ -1463,6 +1475,7 @@ fn gen(
     clip_dir: &Path,
     arms: &[String],
     options: fastvideo_cudarc::h3::pipeline::H3PipelineOptions,
+    references: &[PathBuf],
     warm: bool,
     compare_text_encoders: bool,
     device: &str,
@@ -1481,8 +1494,16 @@ fn gen(
     );
     let seconds = canvas.seconds;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
+    let refs: Vec<fastvideo_models::h3::reference::H3ReferenceSpec> = references
+        .iter()
+        .map(|path| fastvideo_models::h3::reference::H3ReferenceSpec {
+            kind: fastvideo_models::h3::reference::infer_reference_kind(path),
+            path: path.clone(),
+        })
+        .collect();
     let mut request = canvas.request(prompt, seed)?;
     request.mp4 = mp4;
+    request.references = refs.clone();
     {
         use fastvideo_models::h3::memory::{plan, H3PlanOptions};
         let g = fastvideo_models::h3::config::H3Geometry::new(
@@ -1682,6 +1703,7 @@ fn gen(
     let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
     for (index, spec) in prompts.iter().enumerate() {
         let mut request = canvas.request(&spec.prompt, spec.seed)?;
+        request.references = refs.clone();
         request.mp4 = mp4;
         let clip_dir_owned = if multi {
             clip_dir.join(&spec.name)

@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 
 use fastvideo_models::h3::lora::{is_sol_h3_recipe, is_sol_h3_spark_recipe, sol_h3_forces_ref2va};
-use fastvideo_protocol::{ApiError, Family, FpsCaps, ModelCaps, ModelId, Tier};
+use fastvideo_protocol::{ApiError, Family, FpsCaps, ModelCaps, ModelId, Task, Tier};
 use serde::{Deserialize, Serialize};
 
 /// The profile Sol-H3 4-step serves with (design §0.5): Sol engine route,
@@ -223,12 +223,26 @@ impl CapabilityTable {
             let Some(alias) = tier_alias(c.family, tier) else {
                 continue;
             };
-            tiers.entry(alias.to_owned()).or_insert_with(|| TierBinding {
-                alias: alias.to_owned(),
-                family: c.family,
-                tier,
-                model: c.id.clone(),
-            });
+            // The first tagged model binds the tier, except that a model
+            // serving text-to-video displaces a task companion bound first
+            // (`fastvideo_protocol::resolve_tier` makes the same choice).
+            let displaces = |b: &TierBinding| {
+                c.supports(Task::T2V) && !models[&b.model].caps.supports(Task::T2V)
+            };
+            match tiers.get(alias) {
+                Some(b) if !displaces(b) => {}
+                _ => {
+                    tiers.insert(
+                        alias.to_owned(),
+                        TierBinding {
+                            alias: alias.to_owned(),
+                            family: c.family,
+                            tier,
+                            model: c.id.clone(),
+                        },
+                    );
+                }
+            }
         }
         for (alias, model) in overrides {
             let (family, tier) = parse_tier_alias(alias).ok_or_else(|| {
@@ -256,14 +270,25 @@ impl CapabilityTable {
                 },
             );
         }
-        // Tags follow the bindings: exactly the bound model of a family
-        // carries each tier.
+        // Tags follow the bindings: the bound model of a family carries
+        // each tier, and so does a task companion of it (a model serving a
+        // task the bound one does not, e.g. the H3 Ref2VA DiT), which
+        // `fastvideo_protocol::route_task` finds by (family, tier).
+        let bound_tasks: BTreeMap<ModelId, std::collections::BTreeSet<Task>> = tiers
+            .values()
+            .map(|b| (b.model.clone(), models[&b.model].caps.tasks.clone()))
+            .collect();
         for e in models.values_mut() {
             let c = &mut e.caps;
             let bound = |t: Tier| {
                 tier_alias(c.family, t)
                     .and_then(|a| tiers.get(a))
-                    .is_some_and(|b| b.model == c.id)
+                    .is_some_and(|b| {
+                        b.model == c.id
+                            || (c.tier == Some(t)
+                                && !c.supports(Task::T2V)
+                                && c.tasks.iter().any(|k| !bound_tasks[&b.model].contains(k)))
+                    })
             };
             let held: Vec<Tier> = [Tier::Max, Tier::Turbo, Tier::Draft]
                 .into_iter()

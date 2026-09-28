@@ -528,6 +528,7 @@ pub async fn submit_generation(
     let engine = ctx.engine().clone();
     let alias = move |n: &str| engine.alias(n);
     let (caps, via_tier) = mm.resolve_caps(&req.model, &alias, &models)?;
+    let caps = fastvideo_protocol::route_task(caps, req.task, &models);
     let four = four_second_frames(&req, caps)?;
     let mut plan = req.clone();
     if four.is_some() {
