@@ -3,7 +3,7 @@
 // navigation between the app's endpoints and the owner's other apps.
 
 import {
-  $, el, store, K, base, apiKey, request, setMsg, ago, copyText, loadCatalog, TASKS, modelHref, topbar,
+  $, el, store, K, base, apiKey, request, setMsg, ago, copyText, loadCatalog, appTasks, modelHref, topbar,
 } from './common.js';
 import { buildForm } from './form.js';
 import { snippets } from './snippets.js';
@@ -11,7 +11,9 @@ import { snippets } from './snippets.js';
 topbar('home');
 
 const parts = location.pathname.replace(/\/+$/, '').split('/').slice(3).map(decodeURIComponent);
-const [owner, alias, task] = parts;
+// The sub-path may have several segments (`text-to-video/fast`).
+const [owner, alias] = parts;
+const task = parts.slice(2).join('/');
 const app = owner + '/' + alias;
 const endpointId = app + '/' + task;
 const HISTORY_MAX = 50;
@@ -31,17 +33,19 @@ async function header() {
   try { ({ apps } = await loadCatalog()); } catch (e) { fail('Could not load the model catalog: ' + e.message); }
   const known = apps.find((a) => a.id === app);
   if (!known) fail('`' + app + '` is not mounted on this server. Mounted: ' + (apps.map((a) => a.id).join(', ') || 'none') + '.');
-  const siblings = apps.filter((a) => a.id.split('/')[0] === owner);
+  const tasks = appTasks(known);
+  // Variants: the owner's other apps that have this endpoint.
+  const siblings = apps.filter((a) => a.id.split('/')[0] === owner && appTasks(a).some((t) => t.sub === task));
   if (siblings.length > 1) {
     $('variants').replaceChildren(el('span', { class: 'label' }, 'Variant'),
       el('div', { class: 'tabs' }, siblings.map((a) => el('a', {
         href: modelHref(a.id, task), 'aria-current': a.id === app ? 'page' : undefined, 'data-variant': a.id,
       }, a.id.split('/')[1]))));
   }
-  $('tasks').replaceChildren(...TASKS.map((t) => el('a', {
+  $('tasks').replaceChildren(...tasks.map((t) => el('a', {
     href: modelHref(app, t.sub), 'aria-current': t.sub === task ? 'page' : undefined, 'data-task': t.sub,
   }, t.title, t.tag ? el('span', { class: 'tag' }, t.tag) : null)));
-  return known;
+  return { known, tasks };
 }
 
 // ---- uploads ---------------------------------------------------------------
@@ -275,14 +279,14 @@ $('reset').onclick = () => form && form.reset();
 
 // ---- boot -----------------------------------------------------------------------
 async function boot() {
-  const known = await header();
+  const { known, tasks } = await header();
   if (task === 'director') {
     $('director').hidden = false;
     const { mountDirector } = await import('./director.js');
     mountDirector($('director'), { app, available: !!known });
     return;
   }
-  if (!TASKS.some((t) => t.sub === task)) { fail('Unknown endpoint `' + task + '`.'); return; }
+  if (!tasks.some((t) => t.sub === task)) { fail('Unknown endpoint `' + task + '`.'); return; }
   if (!known) return;
   $('batch').hidden = false;
   $('endpoint-id').textContent = endpointId;

@@ -256,6 +256,8 @@ pub struct Opts {
     pub models: Vec<FakeModel>,
     pub mp4: bool,
     pub queue_max: usize,
+    /// fal app ids to mount (empty: `FalConfig::default()`'s).
+    pub fal_apps: Vec<&'static str>,
 }
 
 impl Default for Opts {
@@ -267,6 +269,7 @@ impl Default for Opts {
             models: vec![FakeModel::h3_max(), FakeModel::h3_turbo()],
             mp4: false,
             queue_max: 32,
+            fal_apps: Vec::new(),
         }
     }
 }
@@ -315,7 +318,11 @@ pub async fn fixture(o: Opts) -> Fixture {
         .await
         .unwrap();
     gate.ctx.set(ctx.clone()).ok().unwrap();
-    let app = router(ctx.clone(), FalConfig::default()).merge(ctx.routes().with_state(()));
+    let mut fal = FalConfig::default();
+    if !o.fal_apps.is_empty() {
+        fal.apps = o.fal_apps.iter().map(|id| fastvideo_fal::FalApp::from_id(id)).collect();
+    }
+    let app = router(ctx.clone(), fal).merge(ctx.routes().with_state(()));
     Fixture { ctx, gate, hooks, signer, app, dir }
 }
 

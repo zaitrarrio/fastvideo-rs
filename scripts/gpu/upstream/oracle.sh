@@ -9,12 +9,15 @@
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
 # Targets: wan22-ti2v (Wan 2.2 TI2V-5B modules through Diffusers, oracle_wan22.py),
+# fastwan22-ti2v (the same modules with the FastWan2.2 TI2V-5B FullAttn weights,
+# DiT at the DMD timestep 757),
 # fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
 # controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
 # fasth3-4step-dense (dense-datafree LoRA, FLASH_ATTN), and the
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
-# stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2; sfwan13
+# stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2, ltx25-i2v /
+# ltx25-kf (512p dense, first-frame / first+last image conditioning); sfwan13
 # (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py).
 # FastVideo runs its strict eager route (--profile strict
 # --no-inference-torch-compile): no report-only fusions, no compiled blocks
@@ -59,13 +62,16 @@ oracle_fv() {
     --no-warmup --profile strict --no-inference-torch-compile --no-compile-vae "$@"
 }
 
-# sol-engine LTX-2.5 two-stage; arm sol|dense (bench_ltx25.py), geometry per workload.
+# sol-engine LTX-2.5 two-stage; arm sol|dense (bench_ltx25.py), geometry per workload,
+# then any extra official args (image conditioning: --image PATH FRAME_IDX STRENGTH).
 oracle_ltx() {
   local name="$1" arm="$2" wl="$3" geo L="$UW/LTX-2.5"
+  shift 3
   case "$wl" in
     512p) geo=(--width 768 --height 512 --num-frames 121) ;;
     4k) geo=(--width 3840 --height 2176 --num-frames 121) ;;
   esac
+  geo+=("$@")
   oracle_cell "$name" env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=1 \
     TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 \
     "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_ltx25.py" --sol-engine "$SRC/sol-engine" \
@@ -89,6 +95,14 @@ oracle_wan22() {
     --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
 }
 
+# FastWan2.2 TI2V-5B FullAttn (FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers):
+# the TI2V-5B network DMD-distilled, so the same Diffusers modules; the DiT
+# forwards at the middle DMD timestep (1000/757/522). Weights: both volumes.
+oracle_fastwan22() {
+  oracle_cell fastwan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
+    --model "$W/fastwan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --timestep 757
+}
+
 # FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
 # no warm-up: the hooks dump the first denoise (oracle_dump.py _patch_sf_*).
 oracle_sfwan() {
@@ -101,6 +115,7 @@ run_oracle() {
   oracle_sfwan
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   oracle_wan22
+  oracle_fastwan22
   local g768=(--height 768 --width 1344 --num-frames 124)
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \
@@ -115,4 +130,10 @@ run_oracle() {
   oracle_ltx ltx25-512p-dense dense 512p
   oracle_ltx ltx25-4k sol 4k
   oracle_ltx ltx25-4k-dense dense 4k
+  # Image conditioning (E5 / E9, docs/ports/ltx25.md "Image conditioning"):
+  # first-frame I2V, and first + last frame (a keyframe at pixel frame 120).
+  local fx="$HERE/../fixtures"
+  oracle_ltx ltx25-i2v dense 512p --image "$fx/ti2v-beach-832x480.jpg" 0 1.0
+  oracle_ltx ltx25-kf dense 512p --image "$fx/ti2v-beach-832x480.jpg" 0 1.0 \
+    --image "$fx/ti2v-beach-zoom-832x480.jpg" 120 1.0
 }

@@ -5,7 +5,8 @@
 #   verify-weights.sh <cell>...        cells: fasth3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
-#                                      wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b
+#                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
+#                                      sfwan21-1.3b
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8
@@ -60,7 +61,7 @@ needs() {
     fastwan21-1.3b)
       echo "fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer" ;;
     # Wan Diffusers trees (weights-manifest.tsv rows of the same name).
-    wan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
+    wan22-ti2v-5b | fastwan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
       echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
     # MMAudio large-44k-v2 V2A (scripts/gpu/fetch-mmaudio.py): the converted
     # safetensors the port reads, plus the upstream .pth tree and the CLIP
@@ -80,7 +81,7 @@ needs() {
 }
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8)
+  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
