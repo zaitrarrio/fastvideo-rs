@@ -36,6 +36,9 @@ pub mod deploy;
 pub mod director;
 pub mod encoders;
 pub mod gate;
+/// Gateway mode (`engine.backend = "remote"`, docs/serve/gateway.md).
+#[cfg(feature = "http-client")]
+pub mod gateway;
 pub mod health;
 pub mod metrics;
 pub mod multiworker;
@@ -49,6 +52,9 @@ pub mod shutdown;
 pub mod storage;
 pub mod streams;
 pub mod whip;
+/// The worker role behind a gateway (`server.role = "worker"`).
+#[cfg(feature = "http-client")]
+pub mod worker;
 
 pub use app::{App, Overrides};
 pub use config::Config;

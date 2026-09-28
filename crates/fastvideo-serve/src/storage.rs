@@ -55,7 +55,7 @@ pub fn build_artifacts(c: &Config, public_base: &Url, key: &UrlKey) -> Result<Ar
             Arc::new(S3ArtifactStore::new(s3_config(c)?))
         }
         _ => Arc::new(LocalArtifactStore::new(
-            c.server.state_dir.join("artifacts"),
+            c.artifacts.local_dir.clone().unwrap_or_else(|| c.server.state_dir.join("artifacts")),
             LocalUrls { public_base: public_base.clone(), key: key.clone() },
         )),
     })
@@ -80,13 +80,31 @@ pub fn d1_options(c: &Config, worker: &str) -> D1Options {
     let mut o = D1Options::new(worker);
     o.progress_interval = Duration::from_millis(c.jobs.progress_interval_ms.max(1));
     o.stale_after = (c.jobs.stale_after_s > 0).then(|| Duration::from_secs(c.jobs.stale_after_s));
+    o.heartbeat = Duration::from_secs(c.jobs.heartbeat_s.max(1));
+    // The gateway inserts rows its workers adopt (docs/serve/gateway.md).
+    o.hold_inserts = c.engine.backend != crate::config::EngineBackendKind::Remote;
     o
 }
 
-/// The job store.
-pub async fn build_jobs(c: &Config, worker: &str, artifacts: Arc<dyn ArtifactStore>) -> Result<Jobs, String> {
-    let kind = c.job_backend();
+/// The job store. `d1` (tests: the mock) replaces the D1 HTTP client and
+/// selects the D1 store.
+pub async fn build_jobs(
+    c: &Config,
+    worker: &str,
+    artifacts: Arc<dyn ArtifactStore>,
+    d1: Option<fastvideo_serve_kit::D1Client>,
+) -> Result<Jobs, String> {
     let inputs = c.server.state_dir.join("inputs");
+    if let Some(client) = d1 {
+        let store = fastvideo_serve_kit::D1JobStore::new(client, d1_options(c, worker))
+            .with_artifacts(artifacts)
+            .with_inputs_root(inputs)
+            .open(OffsetDateTime::now_utc())
+            .await
+            .map_err(|e| format!("opening the D1 job store: {e}"))?;
+        return Ok(Jobs { store: store.clone(), d1: Some(store), kind: JobBackend::D1 });
+    }
+    let kind = c.job_backend();
     match kind {
         JobBackend::Memory => Ok(Jobs {
             store: Arc::new(MemJobStore::memory().with_artifacts(artifacts).with_inputs_root(inputs)),

@@ -26,6 +26,8 @@ pub enum Owner {
     Reactor,
     /// The `/console` pages (WP-20).
     Console,
+    /// Gateway mode and the worker role (docs/serve/gateway.md).
+    Gateway,
 }
 
 impl Owner {
@@ -41,6 +43,7 @@ impl Owner {
             Owner::FalDirector => "fal-director",
             Owner::Reactor => "reactor",
             Owner::Console => "console",
+            Owner::Gateway => "gateway",
         }
     }
 }
@@ -118,6 +121,13 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/streams/{id}"),
         r(Native, "DELETE", "/fv/v1/streams/{id}"),
         r(Native, "POST", "/fv/v1/streams/{id}/commands"),
+        // Gateway pool metrics (admin token) and the worker role's internal
+        // routes (docs/serve/gateway.md).
+        r(Gateway, "GET", "/fv/v1/gateway/pools"),
+        r(Gateway, "POST", "/fv/v1/internal/jobs"),
+        r(Gateway, "GET", "/fv/v1/internal/jobs/{id}"),
+        r(Gateway, "DELETE", "/fv/v1/internal/jobs/{id}"),
+        r(Gateway, "GET", "/fv/v1/internal/status"),
         // fal shared routes (§4.4, §5.6).
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),

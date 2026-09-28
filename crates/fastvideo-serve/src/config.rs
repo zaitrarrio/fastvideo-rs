@@ -29,6 +29,14 @@
 //! | `FV_R2_BUCKET`, `FV_R2_ENDPOINT`, `FV_R2_ACCESS_KEY_ID`, `FV_R2_SECRET_ACCESS_KEY` | `artifacts.s3.*` (R2: region `auto`) |
 //! | `FV_S3_ENDPOINT`, `FV_S3_REGION`, `FV_S3_BUCKET`, `FV_S3_ACCESS_KEY_ID`, `FV_S3_SECRET_ACCESS_KEY` | `artifacts.s3.*` (generic S3) |
 //! | `FV_LOG_FORMAT` (`text` \| `json`), `RUST_LOG` | logging |
+//! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker behind the gateway, docs/serve/gateway.md) |
+//! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (gateway ↔ worker; never a user key) |
+//! | `FV_GATEWAY_POOL` | `gateway.pool` (the pool a worker registers in) |
+//! | `FV_RUNPOD_API_KEY` (else `RUNPOD_API_KEY`) | `gateway.runpod_api_key` (serverless pools) |
+//! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
+//! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
+//! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
+//! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -102,6 +110,21 @@ pub struct ServerCfg {
     /// (`crate::multiworker`): async jobs need D1 jobs and S3/R2 artifacts;
     /// cancel, uploads and streaming sessions are never served.
     pub workers_max: u32,
+    /// `worker`: a GPU worker behind the gateway (docs/serve/gateway.md):
+    /// mounts `/fv/v1/internal/*`, requires the internal token on every
+    /// API route, trusts the gateway's authentication.
+    pub role: Role,
+}
+
+/// What this process is in a gateway deployment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Role {
+    /// A server of its own (also the gateway, `engine.backend = "remote"`).
+    #[default]
+    Standalone,
+    /// A pool worker behind a gateway.
+    Worker,
 }
 
 impl Default for ServerCfg {
@@ -118,6 +141,7 @@ impl Default for ServerCfg {
             forward: false,
             callbacks_allow_private: false,
             workers_max: 1,
+            role: Role::Standalone,
         }
     }
 }
@@ -184,6 +208,9 @@ pub struct ArtifactsCfg {
     /// HMAC key for `/files` URLs (normally `FV_URL_SIGNING_KEY`).
     pub signing_key: Secret,
     pub s3: S3Cfg,
+    /// Local artifacts directory (default `state_dir/artifacts`): processes
+    /// on one host (a gateway and its workers in tests) can share it.
+    pub local_dir: Option<PathBuf>,
 }
 
 impl Default for ArtifactsCfg {
@@ -193,6 +220,7 @@ impl Default for ArtifactsCfg {
             url_ttl_s: 86_400,
             signing_key: Secret::default(),
             s3: S3Cfg::default(),
+            local_dir: None,
         }
     }
 }
@@ -234,6 +262,9 @@ pub struct JobsCfg {
     pub sweep_interval_s: u64,
     /// Per-API retention overrides in seconds, keyed by `ProtocolId` name.
     pub retention_s: BTreeMap<String, u64>,
+    /// D1 heartbeat of this worker's unfinished jobs (`updated_at`); the
+    /// gateway declares a worker lost after its pool's `stale_after_s`.
+    pub heartbeat_s: u64,
 }
 
 impl Default for JobsCfg {
@@ -245,6 +276,7 @@ impl Default for JobsCfg {
             stale_after_s: 900,
             sweep_interval_s: 300,
             retention_s: BTreeMap::new(),
+            heartbeat_s: 60,
         }
     }
 }
@@ -257,6 +289,9 @@ pub enum EngineBackendKind {
     Fake,
     /// CudaBackend (WP-11; `--features cuda`).
     Cuda,
+    /// Gateway mode: no local engine; jobs go to the `[[pools]]`
+    /// (docs/serve/gateway.md).
+    Remote,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -500,6 +535,121 @@ impl Default for ReactorCfg {
     }
 }
 
+/// `[gateway]`: the gateway's settings (`engine.backend = "remote"`) and a
+/// worker's link to it (`server.role = "worker"`), docs/serve/gateway.md.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GatewayCfg {
+    /// Shared gateway ↔ worker secret (`FV_INTERNAL_TOKEN`).
+    pub internal_token: Secret,
+    /// Worker: the pool it registers in (`FV_GATEWAY_POOL`); pod workers
+    /// with a public base URL upsert `gw_workers` so gateways find them.
+    pub pool: Option<String>,
+    /// Worker: register in `gw_workers` (pods; needs D1).
+    pub register: bool,
+    /// Live caps refresh per pool.
+    pub caps_refresh_s: u64,
+    /// Metrics + reaper tick.
+    pub tick_s: u64,
+    /// Window of the duration metrics.
+    pub metrics_window_s: u64,
+    /// D1 poll for SSE and sync waits.
+    pub watch_poll_ms: u64,
+    /// Runpod queue API base (`https://api.runpod.ai/v2`; tests: the simulator).
+    pub runpod_api_base: String,
+    /// `FV_RUNPOD_API_KEY` / `RUNPOD_API_KEY`.
+    pub runpod_api_key: Secret,
+    /// The model of the Reactor routes on the gateway (default: the first
+    /// stream-capable model of a pod pool).
+    pub reactor_model: Option<String>,
+}
+
+impl Default for GatewayCfg {
+    fn default() -> Self {
+        Self {
+            internal_token: Secret::default(),
+            pool: None,
+            register: true,
+            caps_refresh_s: 60,
+            tick_s: 5,
+            metrics_window_s: 600,
+            watch_poll_ms: 1000,
+            runpod_api_base: "https://api.runpod.ai/v2".into(),
+            runpod_api_key: Secret::default(),
+            reactor_model: None,
+        }
+    }
+}
+
+/// How a pool's workers are reached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PoolKind {
+    /// A Runpod serverless queue endpoint (`/run` with the native envelope).
+    #[default]
+    RunpodServerless,
+    /// Pods addressed by URL (static `urls` plus registered workers).
+    Pod,
+}
+
+/// One `[[pools]]` entry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PoolCfg {
+    pub id: String,
+    pub kind: PoolKind,
+    /// Serverless: the Runpod endpoint id.
+    pub endpoint_id: Option<String>,
+    /// Pods: worker base URLs.
+    pub urls: Vec<String>,
+    /// Admission: queued jobs of this pool (0: no limit).
+    pub max_queued: u32,
+    /// Stream sessions of this pool (0: one per pod worker; serverless: none).
+    pub max_streams: u32,
+    pub dispatch_timeout_s: u64,
+    pub job_timeout_s: u64,
+    /// A job without a worker heartbeat for this long is lost.
+    pub stale_after_s: u64,
+    /// Re-dispatches after a worker loss.
+    pub retries: u32,
+    /// Extra aliases → model ids served here.
+    pub aliases: BTreeMap<String, String>,
+    /// Static caps: worker-style `[[models]]` entries (CUDA catalog).
+    pub models: Vec<ModelCfg>,
+    /// Static caps for fake pools (tests): fake model ids.
+    pub fake_models: Vec<String>,
+}
+
+impl Default for PoolCfg {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: PoolKind::RunpodServerless,
+            endpoint_id: None,
+            urls: Vec::new(),
+            max_queued: 64,
+            max_streams: 0,
+            dispatch_timeout_s: 30,
+            job_timeout_s: 3600,
+            stale_after_s: 90,
+            retries: 1,
+            aliases: BTreeMap::new(),
+            models: Vec::new(),
+            fake_models: Vec::new(),
+        }
+    }
+}
+
+impl PoolCfg {
+    /// `FV_POOL_<ID>_…` prefix for this pool.
+    pub fn env_prefix(&self) -> String {
+        format!(
+            "FV_POOL_{}_",
+            self.id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect::<String>()
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogCfg {
@@ -535,6 +685,8 @@ pub struct Config {
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
+    pub gateway: GatewayCfg,
+    pub pools: Vec<PoolCfg>,
 }
 
 /// Why a config was refused.
@@ -733,6 +885,48 @@ impl Config {
         if let Some(v) = env.var("FV_S3_REGION") {
             s3.region = Some(v);
         }
+        if let Some(v) = env.var("FV_JOBS_HEARTBEAT_S") {
+            self.jobs.heartbeat_s = v
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| ConfigError::Invalid(format!("FV_JOBS_HEARTBEAT_S={v} is not a number of seconds")))?;
+        }
+        if let Some(v) = env.var("FV_ARTIFACTS_DIR") {
+            self.artifacts.local_dir = Some(v.into());
+        }
+        if let Some(v) = env.var("FV_SERVE_ROLE") {
+            self.server.role = parse_enum("FV_SERVE_ROLE", &v)?;
+        }
+        if let Some(v) = env.var("FV_INTERNAL_TOKEN") {
+            self.gateway.internal_token = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_GATEWAY_POOL") {
+            self.gateway.pool = Some(v);
+        }
+        if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
+            self.gateway.runpod_api_key = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_RUNPOD_API_BASE") {
+            self.gateway.runpod_api_base = v;
+        }
+        for p in &mut self.pools {
+            let pre = p.env_prefix();
+            if let Some(v) = env.var(&format!("{pre}ENDPOINT")) {
+                p.endpoint_id = Some(v.trim().to_owned());
+            }
+            if let Some(v) = env.var(&format!("{pre}URLS")) {
+                p.urls = v.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+            }
+            if let Some(w) = env.var("FV_WEIGHTS") {
+                for m in &mut p.models {
+                    if let Some(x) = &mut m.weights {
+                        *x = x.replace("${FV_WEIGHTS}", &w);
+                    }
+                }
+            }
+        }
         if let Some(v) = env.var("FV_LOG_FORMAT") {
             self.log.format = v;
         }
@@ -794,6 +988,55 @@ impl Config {
         }
         if !(self.director.chunk_seconds.is_finite() && self.director.chunk_seconds > 0.0) {
             return Err(ConfigError::Invalid("director.chunk_seconds must be positive".into()));
+        }
+        self.validate_gateway()
+    }
+
+    /// `[gateway]`, `[[pools]]` and `server.role` checks.
+    fn validate_gateway(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(m));
+        if self.server.role == Role::Worker {
+            if self.gateway.internal_token.is_empty() {
+                return bad("server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
+            }
+            if self.engine.backend == EngineBackendKind::Remote {
+                return bad("a worker needs a local engine (engine.backend = fake | cuda)".into());
+            }
+        }
+        if self.engine.backend != EngineBackendKind::Remote {
+            return Ok(());
+        }
+        if self.pools.is_empty() {
+            return bad("engine.backend = remote (gateway) needs at least one [[pools]] entry".into());
+        }
+        if self.gateway.internal_token.is_empty() {
+            return bad("engine.backend = remote (gateway) needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
+        }
+        if self.job_backend() != JobBackend::D1 {
+            return bad("engine.backend = remote (gateway): jobs must be in D1, shared with the workers (FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID)".into());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for p in &self.pools {
+            if p.id.is_empty() || !p.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return bad(format!("pools: id `{}` must be non-empty [A-Za-z0-9_-]", p.id));
+            }
+            if !seen.insert(p.id.clone()) {
+                return bad(format!("pools: duplicate id `{}`", p.id));
+            }
+            if p.models.is_empty() && p.fake_models.is_empty() {
+                return bad(format!("pools.{}: list the models it serves (`models` or `fake_models`: the static caps)", p.id));
+            }
+            match p.kind {
+                PoolKind::RunpodServerless if p.endpoint_id.as_deref().unwrap_or("").is_empty() => {
+                    return bad(format!("pools.{}: a runpod-serverless pool needs endpoint_id ({}ENDPOINT)", p.id, p.env_prefix()));
+                }
+                PoolKind::Pod => {
+                    for u in &p.urls {
+                        url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("pools.{}: url `{u}`: {e}", p.id)))?;
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
