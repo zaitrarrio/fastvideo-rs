@@ -1,0 +1,143 @@
+# fv-serve as the gateway (docs/serve/gateway.md): one URL and one API key
+# for every API and model, in front of one worker pool per model family.
+# CPU only: no GPU and no `cuda` feature needed (`http-client` is).
+#
+# Environment (secrets never in this file):
+#
+#   FV_INTERNAL_TOKEN                     gateway ↔ worker secret (the workers get the same value)
+#   FV_API_KEYS / minted keys (D1)        the users' keys: only the gateway holds them
+#   FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID   the shared job store (required)
+#   FV_R2_BUCKET, FV_R2_ENDPOINT, FV_R2_ACCESS_KEY_ID, FV_R2_SECRET_ACCESS_KEY  shared media
+#   FV_URL_SIGNING_KEY, FV_WEBHOOK_ED25519_KEY   same values as the workers
+#   FV_RUNPOD_API_KEY (or RUNPOD_API_KEY)  serverless pools (/run, /status, /cancel, /health)
+#   FV_POOL_<ID>_ENDPOINT                  each serverless pool's endpoint id, e.g.
+#                                          FV_POOL_H3_TURBO_ENDPOINT, FV_POOL_WAN_ENDPOINT
+#   FV_POOL_<ID>_URLS                      pod pools' worker URLs (comma list); pods that
+#                                          register themselves (gateway.pool) join as well
+#   FV_PUBLIC_BASE_URL                     the gateway's public URL (workers use it too)
+#
+# Pool ids and their workers' configs (each worker: FV_SERVE_ROLE=worker,
+# FV_INTERNAL_TOKEN, FV_PUBLIC_BASE_URL = this gateway's URL):
+#
+#   h3-turbo    runpod-serverless   configs/serve/runpod.toml        (fasth3)
+#   h3-max      runpod-serverless   configs/serve/runpod-h3-max.toml (sol-h3)
+#   ltx         runpod-serverless   configs/serve/runpod-ltx.toml    (ltx25-distill-sol)
+#   wan         runpod-serverless   configs/serve/runpod-wan.toml    (fastwan21-1.3b)
+#   sfwan-live  pod                 configs/serve/runpod-sfwan.toml  (sfwan21-1.3b; WebRTC peer
+#                                   sessions and WHIP streams need pods)
+#
+# Each pool's `[[pools.models]]` repeat the worker's `[[models]]` (id, family,
+# recipe): the static caps advertised while the pool is scaled to zero.
+# Live caps from the workers replace them once a worker answers.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-gw-state"
+shutdown_grace_s = 10
+sync_timeout_s = 600
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "remote"
+
+[gateway]
+caps_refresh_s = 60
+tick_s = 5
+metrics_window_s = 600
+watch_poll_ms = 1000
+runpod_api_base = "https://api.runpod.ai/v2"
+reactor_model = "sfwan21-1.3b"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+"MiniMax-H3-Max" = "sol-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+# Every pool's fal apps (the workers mount the same ids).
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "fastvideo/ltx-turbo", "fastvideo/fastwan21-1.3b"]
+
+[limits]
+queue_max = 256
+body_max_mb = 64
+
+[[pools]]
+id = "h3-turbo"
+kind = "runpod-serverless"
+max_queued = 32
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "fasth3"
+family = "h3"
+recipe = "h3-turbo"
+
+[[pools]]
+id = "h3-max"
+kind = "runpod-serverless"
+max_queued = 16
+job_timeout_s = 3600
+stale_after_s = 180
+retries = 1
+[[pools.models]]
+id = "sol-h3"
+family = "h3"
+recipe = "h3-max"
+
+[[pools]]
+id = "ltx"
+kind = "runpod-serverless"
+max_queued = 32
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "ltx25-distill-sol"
+family = "ltx2"
+recipe = "ltx-turbo"
+
+[[pools]]
+id = "wan"
+kind = "runpod-serverless"
+max_queued = 64
+job_timeout_s = 900
+stale_after_s = 90
+retries = 1
+[[pools.models]]
+id = "fastwan21-1.3b"
+family = "wan"
+recipe = "wan-turbo"
+
+[[pools]]
+id = "sfwan-live"
+kind = "pod"
+# FV_POOL_SFWAN_LIVE_URLS, plus pods that register with gateway.pool = "sfwan-live".
+urls = []
+max_queued = 8
+max_streams = 0
+stale_after_s = 60
+retries = 0
+[[pools.models]]
+id = "sfwan21-1.3b"
+family = "wan"
+recipe = "sfwan21-1.3b"

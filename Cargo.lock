@@ -1467,6 +1467,7 @@ dependencies = [
  "fastvideo-reactor",
  "fastvideo-serve-kit",
  "fastvideo-webrtc",
+ "futures",
  "metrics",
  "metrics-exporter-prometheus",
  "reqwest",
@@ -1481,6 +1482,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

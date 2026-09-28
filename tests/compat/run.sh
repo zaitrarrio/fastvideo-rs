@@ -35,6 +35,13 @@
 #   FV_COMPAT_KEEP_LOGS=1     keep the per-suite logs directory
 #   FV_COMPAT_LOGS            write the logs there (kept) instead of a temp dir
 #   FV_COMPAT_DIR             client cache (venv, node_modules)
+#   FV_COMPAT_GATEWAY=1       gateway mode (docs/serve/gateway.md): every API suite
+#                             talks to an fv-serve gateway (`engine.backend = remote`)
+#                             in front of two fake pod workers (`server.role = worker`:
+#                             pool `h3` = the fake H3 models, pool `other` = LTX, Wan,
+#                             SF-Wan), sharing a local D1 mock (fv-d1-mock) and one
+#                             artifacts directory. The console suite starts its own
+#                             server and is unchanged.
 #
 # Needs: cargo (unless FV_SERVE_BIN), python3 (3.10+), node 18+, npm,
 # openssl, curl; ffmpeg on PATH so the fake engine writes real MP4s.
@@ -142,6 +149,18 @@ else
 fi
 [[ -x "$BIN" ]] || die "no fv-serve at $BIN"
 
+GATEWAY="${FV_COMPAT_GATEWAY:-0}"
+if [[ $GATEWAY == 1 ]]; then
+  if [[ -n "${FV_D1_MOCK_BIN:-}" ]]; then
+    D1BIN="$FV_D1_MOCK_BIN"
+  else
+    log "building fv-d1-mock (gateway mode)"
+    (cd "$ROOT" && cargo build -p fastvideo-serve-kit --features d1-mock --bin fv-d1-mock) || die "cargo build fv-d1-mock failed"
+    D1BIN="$TARGET/debug/fv-d1-mock"
+  fi
+  [[ -x "$D1BIN" ]] || die "no fv-d1-mock at $D1BIN"
+fi
+
 # The throwaway CA (self-signed, CA:TRUE, SAN 127.0.0.1/localhost).
 CERT="$WORK/ca.pem"
 CERT_KEY="$WORK/ca.key"
@@ -199,7 +218,103 @@ start_serve() {
   fi
 }
 
-stop_serve() { stop_pids $SERVE_PID ${TLS_PID:-}; }
+stop_serve() { stop_pids $SERVE_PID ${TLS_PID:-} ${GW_PIDS[@]+"${GW_PIDS[@]}"}; GW_PIDS=(); }
+
+# ------------------------------------------------------------ gateway mode
+GW_PIDS=()
+# A fixed webhook key: workers sign fal webhooks, the gateway serves the JWKS.
+GW_WEBHOOK_KEY="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+
+wait_health() { # <port> <pid> <log>
+  local i
+  for i in $(seq 300); do
+    curl -fsS "http://127.0.0.1:$1/health" >/dev/null 2>&1 && return 0
+    kill -0 "$2" 2>/dev/null || { tail -30 "$3" >&2; return 1; }
+    sleep 0.1
+  done
+  tail -30 "$3" >&2
+  return 1
+}
+
+# start_gateway <name> <protocols toml> [--tls] [ENV=VAL...]: the same
+# contract as start_serve (SERVE_PID/SERVE_PORT/BASE/TLS_PORT) with the
+# gateway as the server; extra ENV applies to the gateway and the workers.
+start_gateway() {
+  local name="$1" protocols="$2"
+  shift 2
+  local tls=0
+  if [[ "${1:-}" == "--tls" ]]; then tls=1; shift; fi
+  local dir="$WORK/$name"
+  mkdir -p "$dir/artifacts"
+  "$D1BIN" 127.0.0.1:0 >"$LOGS/$name.d1.log" 2>&1 &
+  GW_PIDS+=($!)
+  PIDS+=($!)
+  local d1base="" i
+  for i in $(seq 100); do
+    d1base="$(sed -n 's/^FV-D1-MOCK //p' "$LOGS/$name.d1.log" 2>/dev/null)"
+    [[ -n "$d1base" ]] && break
+    sleep 0.05
+  done
+  [[ -n "$d1base" ]] || { echo "compat: fv-d1-mock did not start" >&2; return 1; }
+  SERVE_PORT="$(free_port)"
+  TLS_PORT="$(free_port)"
+  local public="http://127.0.0.1:$SERVE_PORT"
+  [[ $tls == 1 ]] && public="https://127.0.0.1:$TLS_PORT"
+  local keyhash
+  keyhash="$(printf '%s' "$KEY" | sha256sum | cut -d' ' -f1)"
+  local common=(FV_URL_SIGNING_KEY="compat-signing" FV_WEBHOOK_ED25519_KEY="$GW_WEBHOOK_KEY"
+    FV_INTERNAL_TOKEN="compat-internal-token" FV_CF_ACCOUNT_ID=compat FV_CF_API_TOKEN=compat
+    FV_D1_DATABASE_ID=compat FV_D1_API_BASE="$d1base" FV_JOB_STORE=d1 FV_ARTIFACTS_DIR="$dir/artifacts"
+    FV_CALLBACKS_ALLOW_PRIVATE=1 FV_ADMIN_TOKEN="fvadm_compat_admin_token" RUST_LOG="${FV_COMPAT_RUST_LOG:-warn}")
+  local w models urls=()
+  for w in h3 other; do
+    case $w in
+      h3) models='["fake-h3-max", "fake-h3-turbo", "fake-sol-h3"]' ;;
+      other) models='["fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"]' ;;
+    esac
+    local port
+    port="$(free_port)"
+    mkdir -p "$dir/$w/state"
+    { sed "s/^\[engine.fake\]\$/[engine.fake]\nmodels = $models/" "$HERE/serve.toml"; printf '\n%s\n' "$protocols"; } > "$dir/$w/serve.toml"
+    env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy "${common[@]}" \
+      FV_SERVE_ROLE=worker FV_WORKER_ID="compat-$w" FV_BIND="127.0.0.1:$port" FV_PUBLIC_BASE_URL="$public" \
+      FV_STATE_DIR="$dir/$w/state" "$@" \
+      "$BIN" --config "$dir/$w/serve.toml" >"$LOGS/$name.worker-$w.log" 2>&1 &
+    local pid=$!
+    GW_PIDS+=("$pid")
+    PIDS+=("$pid")
+    wait_health "$port" "$pid" "$LOGS/$name.worker-$w.log" || return 1
+    urls+=("http://127.0.0.1:$port")
+  done
+  {
+    cat "$HERE/serve.toml"
+    printf '\n%s\n' "$protocols"
+    printf '\n[gateway]\ntick_s = 1\nwatch_poll_ms = 200\n'
+    printf '\n[[pools]]\nid = "h3"\nkind = "pod"\nurls = ["%s"]\nfake_models = ["fake-h3-max", "fake-h3-turbo", "fake-sol-h3"]\n' "${urls[0]}"
+    printf '\n[[pools]]\nid = "other"\nkind = "pod"\nurls = ["%s"]\nfake_models = ["fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"]\n' "${urls[1]}"
+  } > "$dir/gateway.toml"
+  env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy "${common[@]}" \
+    FV_ENGINE=remote FV_BIND="127.0.0.1:$SERVE_PORT" FV_PUBLIC_BASE_URL="$public" FV_STATE_DIR="$dir/gw-state" \
+    FV_API_KEYS="$keyhash" "$@" \
+    "$BIN" --config "$dir/gateway.toml" >"$LOGS/$name.serve.log" 2>&1 &
+  SERVE_PID=$!
+  PIDS+=("$SERVE_PID")
+  wait_health "$SERVE_PORT" "$SERVE_PID" "$LOGS/$name.serve.log" || return 1
+  BASE="http://127.0.0.1:$SERVE_PORT"
+  TLS_PID=""
+  if [[ $tls == 1 ]]; then
+    "$PY" "$HERE/lib/tls_proxy.py" --listen "$TLS_PORT" --upstream "$SERVE_PORT" --cert "$CERT" --key "$CERT_KEY" \
+      >"$LOGS/$name.tls.log" 2>&1 &
+    TLS_PID=$!
+    PIDS+=("$TLS_PID")
+    for i in $(seq 100); do grep -q READY "$LOGS/$name.tls.log" 2>/dev/null && break; sleep 0.05; done
+    BASE="https://127.0.0.1:$TLS_PORT"
+  fi
+}
+
+if [[ $GATEWAY == 1 ]]; then
+  start_serve() { start_gateway "$@"; }
+fi
 
 BATCH='[protocols]
 openai_videos = true

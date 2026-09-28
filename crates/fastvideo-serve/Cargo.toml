@@ -36,6 +36,10 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+futures.workspace = true
+uuid.workspace = true
+# Gateway (docs/serve/gateway.md) and worker input fetch; feature `http-client`.
+reqwest = { workspace = true, optional = true }
 
 # External-API adapters: mounted when their feature is on (src/adapters.rs).
 fastvideo-openai-videos = { workspace = true, optional = true }
@@ -64,7 +68,7 @@ webrtc = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "fastvideo-fal?/dire
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
 # Cloudflare D1 job store, WHIP, Runpod worker.
-http-client = ["fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
+http-client = ["dep:reqwest", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
 # Adapter mount points (design §9, src/adapters.rs); on by default once the
 # adapter is on main. `reactor` brings the str0m host (it answers offers).
 openai-videos = ["dep:fastvideo-openai-videos"]
