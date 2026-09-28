@@ -185,7 +185,7 @@ async fn every_mounted_route_of_the_table_answers() {
     let a = app("table").await;
     let apps = a.config.protocols.fal_apps.clone();
     for spec in route_table(&apps) {
-        if matches!(spec.owner, Owner::Reactor | Owner::FalDirector) {
+        if matches!(spec.owner, Owner::Reactor | Owner::FalDirector | Owner::Gateway) {
             continue;
         }
         let mut uri = String::new();

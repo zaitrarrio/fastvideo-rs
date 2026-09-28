@@ -61,6 +61,11 @@ pub struct Policy {
     pub artifacts: bool,
     /// Minted keys are in D1.
     pub keys: bool,
+    /// This is the gateway (docs/serve/gateway.md §6): cancel/delete go
+    /// through `gw_dispatch`, SSE polls D1 and session signalling follows
+    /// D1 leases, so those routes are served by any replica; only uploads,
+    /// `/fal/proxy` and (without R2) `/files` stay pinned.
+    pub gateway: bool,
 }
 
 impl Policy {
@@ -72,7 +77,17 @@ impl Policy {
             jobs: jobs_kind == "d1",
             artifacts: c.artifact_backend() == ArtifactBackend::S3,
             keys: c.key_store_backend() == KeyStoreBackend::D1,
+            gateway: c.engine.backend == crate::config::EngineBackendKind::Remote,
         }
+    }
+
+    /// Whether the route at `path` (of `scope`) is served, with the
+    /// gateway's wider set.
+    pub fn serves_route(&self, scope: Scope, path: &str) -> bool {
+        if self.serves(scope) {
+            return true;
+        }
+        self.gateway && scope == Scope::Pinned && self.jobs && !gateway_pinned(path, self.artifacts)
     }
 
     pub fn multi(&self) -> bool {
@@ -108,11 +123,22 @@ impl Policy {
     }
 }
 
+/// Routes a gateway replica still cannot serve for another one: its upload
+/// store is local disk (and `/files` without R2); `/fal/proxy` re-enters the
+/// router past this filter.
+fn gateway_pinned(path: &str, artifacts_shared: bool) -> bool {
+    path.starts_with("/uploads/")
+        || path == "/v1/upload"
+        || path == "/storage/upload/initiate"
+        || path == "/fal/proxy"
+        || (path.starts_with("/files/") && !artifacts_shared)
+}
+
 /// The scope of one §9 route.
 pub fn scope(spec: &RouteSpec) -> Scope {
     let (m, p) = (spec.method, spec.path.as_str());
     match spec.owner {
-        Owner::Serve | Owner::Console => Scope::Local,
+        Owner::Serve | Owner::Console | Owner::Gateway => Scope::Local,
         Owner::ServeKit => Scope::Pinned, // /files, /uploads: worker-local disk
         Owner::FalDirector | Owner::Reactor => Scope::Pinned,
         Owner::OpenAiVideos => match (m, p) {
@@ -227,6 +253,7 @@ pub fn layer(router: Router, policy: Policy, fal_apps: &[String]) -> Router {
             }
             let found = matcher.scope_of(req.method(), req.uri().path());
             let why = match found {
+                Some(s) if policy.serves_route(s, req.uri().path()) => None,
                 Some(s) => policy.refusal(s),
                 None => Some("it is not a route of this server's table"),
             };

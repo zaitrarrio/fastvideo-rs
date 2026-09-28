@@ -204,6 +204,11 @@ pub struct HttpJob {
     /// Give up waiting after this long (default 3600 s).
     #[serde(default)]
     pub timeout_s: Option<u64>,
+    /// On cancel (job-stop) while waiting, `DELETE` this path (`{id}` is
+    /// replaced by the created id) so the created job stops too (the
+    /// gateway's `/fv/v1/internal/jobs/{id}`, docs/serve/gateway.md).
+    #[serde(default)]
+    pub cancel_path: Option<String>,
 }
 
 fn default_method() -> String {
