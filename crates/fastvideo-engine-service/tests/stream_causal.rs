@@ -14,7 +14,7 @@ use fastvideo_engine_service::{
 use fastvideo_media::pacer::VideoOut;
 use fastvideo_protocol::{
     AudioPlan, Continuity, EndReason, JobId, ModelId, PostProcess, ResolvedJob, SamplingOverrides,
-    SessionSpec, Task, TrackSet,
+    SessionSpec, StreamCaps, Task, TrackSet,
 };
 
 const T: Duration = Duration::from_secs(20);
@@ -155,7 +155,7 @@ async fn the_lease_is_exclusive_and_batch_waits() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_causal_pacer_ticks_and_reports_ttff_and_unique_fps() {
     // 4 steps x 20 ms = 80 ms per 12-frame block: ~150 frames/s generated,
-    // so the pacer plays at the 16 fps ceiling and drops the excess.
+    // so the pacer plays at the 16 fps ceiling and holds the executor back.
     let e = engine(20).await;
     let s = e.open_causal_session(spec()).await.unwrap();
     let c = s.control();
@@ -183,6 +183,51 @@ async fn the_causal_pacer_ticks_and_reports_ttff_and_unique_fps() {
     let end = tokio::time::timeout(T, paced.task).await;
     assert!(end.is_ok());
     assert_eq!(paced.stats.borrow().ended, Some(EndReason::Stopped));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_generator_faster_than_playout_is_held_back_not_dropped() {
+    // ~150 frames/s generated against 16 fps playout (the GPU E2E on H200:
+    // 20-24 frames/s, and 21% of them were dropped): the pacer takes blocks
+    // only below its pull mark, every frame plays in order, and the executor
+    // waits instead of running ahead.
+    let e = engine(20).await;
+    let s = e.open_causal_session(spec()).await.unwrap();
+    let c = s.control();
+    c.set_prompt("a lighthouse");
+    let cfg = CausalPacerConfig::for_spec(&spec());
+    let mark = cfg.pull_mark();
+    let mut paced = spawn_causal_pacer(s, cfg).unwrap();
+    let mut last: Option<u64> = None;
+    let mut ticks = 0u64;
+    while ticks < 64 {
+        let t = tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().unwrap();
+        ticks += 1;
+        match t.video {
+            VideoOut::Fresh(f) => {
+                if let Some(p) = last {
+                    assert_eq!(f.index, p + 1, "frames skipped at tick {ticks}");
+                }
+                last = Some(f.index);
+            }
+            VideoOut::Repeat(_) => {}
+            VideoOut::Nothing => panic!("no picture"),
+        }
+    }
+    let st = paced.stats.borrow().clone();
+    assert_eq!(st.pacer_dropped, 0, "{st:?}");
+    // The block-time rate lifts playout to the ceiling despite backpressure.
+    assert!((st.effective_fps - 16.0).abs() < 1e-9, "{st:?}");
+    // Generated <= played + the pull mark + one block in the pacer + the
+    // channel (2 blocks) + the block in flight.
+    let n = match FakeModel::sf_wan().caps.stream {
+        Some(StreamCaps::Causal { block_frames, .. }) => u64::from(block_frames),
+        _ => unreachable!(),
+    };
+    let generated = n * c.state().block_index;
+    assert!(generated <= st.ticks + mark as u64 + 4 * n, "generated {generated} for {} ticks", st.ticks);
+    c.close();
+    assert!(tokio::time::timeout(T, paced.task).await.is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]

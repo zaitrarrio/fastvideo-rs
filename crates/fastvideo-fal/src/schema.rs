@@ -501,6 +501,24 @@ impl FalInput {
     }
 }
 
+/// An omitted `resolution` defaults to `768P` (the MiniMax H3 contract). A
+/// model without a 768 tier (an LTX app, `h3-draft`) gets its own first
+/// tier instead, so a body without `resolution` runs on every app.
+/// `short_edges` is the resolved model's `CanvasCaps::short_edges`.
+pub fn default_resolution_for(req: &mut GenerationRequest, short_edges: &[u32]) {
+    let default = Resolution::P768.short_edge();
+    let Some(&first) = short_edges.first() else { return };
+    if short_edges.contains(&default) {
+        return;
+    }
+    match &mut req.canvas {
+        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } if *short_edge == default => {
+            *short_edge = first;
+        }
+        _ => {}
+    }
+}
+
 fn aspect_canvas(a: AspectRatio, short_edge: u32) -> CanvasSpec {
     match a.ratio() {
         Some(ratio) => CanvasSpec::Aspect { ratio, short_edge },
@@ -628,5 +646,25 @@ mod tests {
         assert_eq!(fal_param("references[2]", &r), "reference_audio_urls[1]");
         assert_eq!(fal_param("audio", &r), "target_audio_url");
         assert_eq!(fal_param("duration", &r), "duration");
+    }
+
+    #[test]
+    fn omitted_resolution_follows_the_model_tiers() {
+        let t2v = |b: Value| FalInput::parse(Endpoint::TextToVideo, &b).unwrap().normalize("m", &cx()).unwrap();
+        let edge = |r: &GenerationRequest| match r.canvas {
+            CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } => short_edge,
+            _ => 0,
+        };
+        // H3 (768 served): unchanged.
+        let mut r = t2v(json!({"prompt": "p"}));
+        default_resolution_for(&mut r, &[768, 480]);
+        assert_eq!(edge(&r), 768);
+        // LTX (no 768 tier): the model's first tier; h3-draft: 480.
+        default_resolution_for(&mut r, &[1080, 720, 1440, 2160]);
+        assert_eq!(edge(&r), 1080);
+        let mut r = t2v(json!({"prompt": "p", "aspect_ratio": "9:16"}));
+        default_resolution_for(&mut r, &[480]);
+        assert_eq!(edge(&r), 480);
+        assert!(matches!(r.canvas, CanvasSpec::Aspect { ratio, .. } if ratio.w == 9 && ratio.h == 16));
     }
 }

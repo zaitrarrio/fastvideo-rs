@@ -1,0 +1,9 @@
+[16:56:16] Runpod balance $37.7790518645 (floor $8)
+[16:56:18] LB endpoint qmoctm732zz5qs (https://qmoctm732zz5qs.api.runpod.ai, cap 1500s)
+[16:56:18] LB endpoint qmoctm732zz5qs template -
+[16:58:48] ping 000
+[17:03:11] ping 200
+[17:03:17] sync 302 in 6.8 s
+[17:03:17] wrote /home/user/fastvideo-rs/.claude/worktrees/agent-ac97a00f2f8209790/artifacts/serve/e2e/serverless/wan-turbo-lb-us.json
+[17:03:17] down qmoctm732zz5qs -
+deleted qmoctm732zz5qs -

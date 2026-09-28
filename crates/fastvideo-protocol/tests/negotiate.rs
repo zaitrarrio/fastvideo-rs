@@ -464,6 +464,26 @@ fn wan_exact_canvas() {
 }
 
 #[test]
+fn aspect_canvas_stays_within_the_pixel_budget() {
+    // FastWan 1.3B (832x480 budget, multiple 16): 16:9 at 480 once snapped
+    // to 848x480, over the budget (seen through the fal 480P app).
+    let c = CanvasCaps {
+        aspect: (0.25, 4.0),
+        max_area: 832 * 480,
+        multiple: 16,
+        pad_and_crop: false,
+        short_edges: vec![480],
+    };
+    assert_eq!(canvas_for_aspect(&c, 16.0 / 9.0, 480), (832, 480));
+    assert_eq!(canvas_for_aspect(&c, 9.0 / 16.0, 480), (480, 832));
+    for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 3), (3, 4), (21, 9), (4, 1), (1, 4), (3, 2), (2, 3)] {
+        let (cw, ch) = canvas_for_aspect(&c, w as f64 / h as f64, 480);
+        assert!(u64::from(cw) * u64::from(ch) <= c.max_area, "{w}:{h} -> {cw}x{ch}");
+        assert!(cw % 16 == 0 && ch % 16 == 0, "{w}:{h} -> {cw}x{ch}");
+    }
+}
+
+#[test]
 fn follow_image() {
     let mut r = t2v("fasth3", "x");
     r.task = Task::I2V;

@@ -31,6 +31,9 @@ weights = "${FV_WEIGHTS}/fastwan21-1.3b"
 resident = true
 
 [protocols]
+# fal queue app for this model (the default apps are the H3 tiers); tested
+# in the GPU E2E (docs/serve/e2e/wan.md).
+fal_apps = ["fastvideo/fastwan21-1.3b"]
 openai_videos = true
 fastwan = true
 minimax = true

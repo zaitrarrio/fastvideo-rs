@@ -41,6 +41,40 @@ impl Boot {
     }
 }
 
+/// Where pods mount the weight volume; its HF-cache trees link absolutely
+/// under this path.
+pub const POD_WEIGHTS: &str = "/workspace/weights";
+
+/// Links `alias` → `root` when the weights root is elsewhere (a Runpod
+/// serverless worker mounts the volume at `/runpod-volume`) and `alias` does
+/// not exist, so the volume's absolute links into `/workspace/weights`
+/// resolve. Returns whether it created the link.
+pub fn link_weights_alias(root: &Path, alias: &Path) -> std::io::Result<bool> {
+    if root == alias || !root.is_dir() || alias.symlink_metadata().is_ok() {
+        return Ok(false);
+    }
+    if let Some(parent) = alias.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root, alias)?;
+        Ok(true)
+    }
+    #[cfg(not(unix))]
+    Ok(false)
+}
+
+/// [`link_weights_alias`] for `FV_WEIGHTS` and [`POD_WEIGHTS`] (logged).
+pub fn link_pod_weights() {
+    let Some(root) = std::env::var("FV_WEIGHTS").ok().filter(|s| !s.is_empty()) else { return };
+    match link_weights_alias(Path::new(&root), Path::new(POD_WEIGHTS)) {
+        Ok(true) => tracing::info!(%root, "linked {POD_WEIGHTS} to the weights root (absolute volume links)"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(%root, error = %e, "could not link {POD_WEIGHTS} to the weights root"),
+    }
+}
+
 fn http_port(c: &Config) -> u16 {
     c.bind_addr().map(|a| a.port()).unwrap_or(8000)
 }
@@ -266,4 +300,25 @@ async fn run_worker(
     _stop: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     Err(anyhow!("server.mode = runpod-queue needs fv-serve built with `http-client`"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn weights_alias_links_once() {
+        let base = std::env::temp_dir().join(format!("fv-alias-{}", std::process::id()));
+        let root = base.join("runpod-volume/weights");
+        std::fs::create_dir_all(root.join("h3-base")).unwrap();
+        let alias = base.join("workspace/weights");
+        assert!(link_weights_alias(&root, &alias).unwrap());
+        assert!(alias.join("h3-base").is_dir());
+        // Existing alias, same path, or a missing root: nothing to do.
+        assert!(!link_weights_alias(&root, &alias).unwrap());
+        assert!(!link_weights_alias(&root, &root).unwrap());
+        assert!(!link_weights_alias(&base.join("missing"), &base.join("other")).unwrap());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

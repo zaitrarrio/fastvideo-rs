@@ -46,7 +46,9 @@ pub struct EngineConfig {
     pub tier_overrides: BTreeMap<String, ModelId>,
     /// Batch MP4s go to `<output_dir>/<job id>/`.
     pub output_dir: PathBuf,
-    /// Executor -> causal consumer channel depth, in blocks (design §5.4: 4).
+    /// Executor -> causal consumer channel depth, in blocks. 2 (design §5.4
+    /// said 4): the causal pacer applies backpressure, so a generator faster
+    /// than playout waits here, and every queued block delays a prompt switch.
     pub causal_depth: usize,
 }
 
@@ -57,7 +59,7 @@ impl Default for EngineConfig {
             swap: false,
             tier_overrides: BTreeMap::new(),
             output_dir: std::env::temp_dir().join("fv-engine"),
-            causal_depth: 4,
+            causal_depth: 2,
         }
     }
 }

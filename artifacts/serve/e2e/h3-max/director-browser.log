@@ -1,0 +1,20 @@
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+[page warning] [wma] /ice unavailable, falling back to STUN: TypeError: Failed to fetch
+    at <anonymous>:678:36
+    at Generator.next (<anonymous>)
+    at fulfilled (<anonymous>:624:30)
+[page error] Failed to load resource: net::ERR_CERT_AUTHORITY_INVALID
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+page.evaluate: TypeError: Failed to fetch
+    at Object.<anonymous> (<anonymous>:6035:44)
+    at Generator.next (<anonymous>)
+    at fulfilled (<anonymous>:5177:30)
+    at /home/user/fastvideo-rs/.claude/worktrees/agent-ab064d535f0c203ce/tests/compat/suites/fal_director.mjs:292:35
+

@@ -1,0 +1,93 @@
+{
+ "aliases": {
+  "wan-turbo": "fastwan21-1.3b"
+ },
+ "models": [
+  {
+   "caps": {
+    "audio": null,
+    "canvas": {
+     "aspect": [
+      0.25,
+      4.0
+     ],
+     "max_area": 399360,
+     "multiple": 16,
+     "pad_and_crop": false,
+     "short_edges": [
+      480
+     ]
+    },
+    "family": "wan",
+    "fps": {
+     "allowed": [
+      16,
+      24
+     ],
+     "container_only": true,
+     "default": 16
+    },
+    "frames": {
+     "default": 81,
+     "max": 129,
+     "min": 9,
+     "offset": 1,
+     "step": 4
+    },
+    "id": "fastwan21-1.3b",
+    "knobs": {
+     "flow_shift": true,
+     "guidance": false,
+     "guidance_2": false,
+     "negative": false,
+     "seed": true,
+     "steps": true
+    },
+    "recipe": "fastwan21-1.3b-dmd3-vsa",
+    "refs": {
+     "audio": 0,
+     "images": 0,
+     "total": 0,
+     "videos": 0
+    },
+    "resident": true,
+    "served_names": [
+     "fastwan21-1.3b",
+     "FastVideo/FastWan2.1-T2V-1.3B-Diffusers"
+    ],
+    "stream": {
+     "clip": {
+      "max_s": 8.0625,
+      "min_s": 0.5625
+     }
+    },
+    "tasks": [
+     "t2v"
+    ],
+    "tier": "turbo"
+   },
+   "executors": [
+    0
+   ],
+   "recipe": {
+    "attention": "vsa",
+    "name": "fastwan21-1.3b-dmd3-vsa",
+    "steps": 3,
+    "summary": "fast_wan_t2v_480p DMD 3-step, VSA, full decode",
+    "vae": "full"
+   }
+  }
+ ],
+ "object": "fv.capabilities",
+ "readiness": {
+  "state": "ready"
+ },
+ "tiers": [
+  {
+   "alias": "wan-turbo",
+   "family": "wan",
+   "model": "fastwan21-1.3b",
+   "tier": "turbo"
+  }
+ ]
+}

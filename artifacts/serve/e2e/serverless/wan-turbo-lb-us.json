@@ -1,0 +1,13 @@
+{
+  "target": "runpod-serverless-lb (real CUDA backend)",
+  "endpoint": "qmoctm732zz5qs",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-4c8c773",
+  "first_204_s": null,
+  "ready_200_s": 415.1186554431915,
+  "sync": {
+    "http_status": 302,
+    "wall_s": 6.765949249267578,
+    "body": ""
+  },
+  "media": null
+}

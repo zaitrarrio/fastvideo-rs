@@ -38,6 +38,8 @@ fal_director = true
 ltx = true
 reactor = true
 native = true
+# fal apps: the default minimax/h3-* apps have no model on this pod.
+fal_apps = ["fastvideo/ltx-turbo"]
 
 [limits]
 queue_max = 32

@@ -115,6 +115,15 @@ impl<T: Clone, C: Clock> FramePacer<T, C> {
     /// latency stays bounded instead of growing without limit when generation
     /// runs hot.
     pub fn push_chunk<I: IntoIterator<Item = T>>(&mut self, chunk: I) {
+        self.push_chunk_rate(chunk, None);
+    }
+
+    /// [`Self::push_chunk`] with the burst's own generation rate (frames per
+    /// second of generation time). A consumer that holds generation back
+    /// when the buffer is full (backpressure) must pass it: arrivals then
+    /// follow the playout rate, and an arrival-timed estimate would lock
+    /// the adaptive rate wherever it stood when the buffer filled.
+    pub fn push_chunk_rate<I: IntoIterator<Item = T>>(&mut self, chunk: I, gen_fps: Option<f64>) {
         let mut n: u64 = 0;
         for frame in chunk {
             self.buf.push_back(frame);
@@ -126,12 +135,15 @@ impl<T: Clone, C: Clock> FramePacer<T, C> {
         // Ordering matters: this runs BEFORE the overflow drop, so the estimate
         // reflects what the model produced, not what survived the buffer.
         let t = self.clock.now();
-        if let (Some(prev), true) = (self.last_push_t, n > 0) {
-            let dt = t - prev;
-            if dt > 1e-3 {
-                let inst = n as f64 / dt;
-                self.gen_ema = 0.3 * inst + 0.7 * self.gen_ema;
-            }
+        let inst = match gen_fps {
+            Some(r) if r.is_finite() && r > 0.0 && n > 0 => Some(r),
+            _ => match (self.last_push_t, n > 0) {
+                (Some(prev), true) if t - prev > 1e-3 => Some(n as f64 / (t - prev)),
+                _ => None,
+            },
+        };
+        if let Some(inst) = inst {
+            self.gen_ema = 0.3 * inst + 0.7 * self.gen_ema;
         }
         self.last_push_t = Some(t);
         while self.buf.len() > self.max_buffer {
