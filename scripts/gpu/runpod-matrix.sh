@@ -2427,9 +2427,11 @@ Audio: male speech, clear voice, quiet room"
     # compared with the native 1080p clip of the same prompt and seed
     # (compare-clips: sharpness, jitter, patch-boundary ratios; LPIPS with
     # FV_LPIPS=1). Keyframes 0/40/80/120 of every clip are kept; the rest of
-    # the PNGs are deleted after the compares. FV_HD_POST_URL: a script fetched
-    # and run before that with $RUNS (scripts/gpu/hd-upscaler.sh, the upscaler
-    # benchmark).
+    # the PNGs are deleted after the compares (fetch with FV_FETCH_TREE=1 and
+    # FV_FETCH_SKIP='\.cache$'; a skip matching `frames/` also drops
+    # `keyframes/`). FV_HD_POST_URL: a script fetched and run before the prune
+    # with $RUNS (an upscaler benchmark; its weights must already be on the
+    # volumes, see CLAUDE.md).
     : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
     hd_common=(
       --seconds 5
