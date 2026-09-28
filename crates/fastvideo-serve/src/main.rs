@@ -53,6 +53,7 @@ fn main() -> ExitCode {
     let res = rt.block_on(async move {
         tracing::info!(config = %config.redacted(), "fv-serve {}", env!("CARGO_PKG_VERSION"));
         let boot = fastvideo_serve::deploy::Boot::now();
+        fastvideo_serve::deploy::link_pod_weights();
         let queue = config.server.mode == fastvideo_serve::config::Mode::RunpodQueue;
         let addr = config.bind_addr()?;
         let app = App::build(config, Overrides::default()).await?;
