@@ -579,9 +579,49 @@ Audio: male speech, clear voice, quiet room"
         --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086
-    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink3-120s,seconds=120,rope=rebased,sink=3 \
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink15-120s,seconds=120,rope=rebased,sink=15 \
       --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
-    sf_stream sfstream-10min --run reb-sink3-600s,seconds=600,rope=rebased,sink=3 --window-s 30
+    sf_stream sfstream-10min --run reb-sink15-600s,seconds=600,rope=rebased,sink=15 --window-s 30
+    ;;
+  sfquality)
+    # Long-rollout quality of the open-ended SF-Wan stream (design risk
+    # R12): per 10 s window picture and latent statistics (top band against
+    # the rest), a fresh-state TAEHV decode against the carried state, one
+    # contact sheet per run (gpucheck-out/sheets/<run>.jpg), for the RoPE
+    # policies, sink and window sizes, periodic KV re-cache, graph against
+    # eager, and f32 activations. FV_SFQ_RUNS / FV_SFQ_F32_RUNS override.
+    TAE_W="$TAE/taew2_1.safetensors"
+    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
+    export FASTVIDEO_TAE_DIR="$TAE"
+    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
+    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
+    sfq() {
+      # $2: a command prefix (e.g. "env FASTVIDEO_BF16_ACT=0"), word-split.
+      local name="$1" pre="$2"; shift 2
+      # shellcheck disable=SC2086
+      gated_cell "$name" sfwan21-1.3b $pre "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+    }
+    SFQ_RUNS="${FV_SFQ_RUNS:-reb-s3-180,seconds=180,keep_s=60 reb-s3-eager-90,seconds=90,graphs=0
+      rel-s3-120,seconds=120,rope=rel abs-s3-90,seconds=90,rope=abs reb-s1-90,seconds=90,sink=1
+      reb-s6-120,seconds=120,sink=6 reb-s9-120,seconds=120,sink=9 reb-s12-120,seconds=120,sink=12
+      reb-s3-w12-90,seconds=90,window=12 reb-s3-w27-90,seconds=90,window=27
+      reb-s3-rc7k9-120,seconds=120,recache=7:9 reb-s3-rc14k18-120,seconds=120,recache=14:18}"
+    # Runs are separated by spaces or "+" (so a list fits in FV_EXTRA_ENV).
+    args=()
+    for r in ${SFQ_RUNS//+/ }; do args+=(--run "$r"); done
+    # shellcheck disable=SC2086
+    sfq sfq-main "" ${FV_SFQ_PARITY---parity} "${args[@]}"
+    # A second seed (FV_SFQ_SEED2_RUNS; skipped when unset).
+    if [[ -n "${FV_SFQ_SEED2_RUNS:-}" ]]; then
+      args=()
+      for r in ${FV_SFQ_SEED2_RUNS//+/ }; do args+=(--run "$r"); done
+      SEED="${FV_SFQ_SEED2:-7}" sfq sfq-seed2 "" "${args[@]}"
+    fi
+    args=()
+    for r in ${FV_SFQ_F32_RUNS-reb-s3-f32-60,seconds=60,graphs=0}; do args+=(--run "$r"); done
+    if (( ${#args[@]} )); then sfq sfq-f32 "env FASTVIDEO_BF16_ACT=0" "${args[@]}"; fi
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
@@ -2233,6 +2273,12 @@ Audio: male speech, clear voice, quiet room"
       esac
       oracle_run "oracle-$target" "$ours"
       oracle_diff "oracle-$target-diff" "$ref/dump" "$ours"
+      # Ref2VA control: the reference's condition rows injected as well, so
+      # only the DiT (and the text, when its token count matches) differs.
+      if [[ "$target" == h3-ref2va-* ]]; then
+        oracle_run "oracle-$target-cond" "$ours-cond" FASTVIDEO_INJECT_COND=1
+        oracle_diff "oracle-$target-cond-diff" "$ref/dump" "$ours-cond"
+      fi
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.

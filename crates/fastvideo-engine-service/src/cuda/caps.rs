@@ -788,7 +788,9 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             ..fastwan(layout, WanDecoder::Taehv)
         },
         local_attn_frames: 21,
-        sink_frames: 3,
+        // The deep sink (`wan::stream::RolloutConfig`'s default): a one-block
+        // sink degrades within a minute (docs/ports/wan.md).
+        sink_frames: 15,
         block_frames: 12,
     };
     vec![

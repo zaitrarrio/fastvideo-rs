@@ -56,13 +56,21 @@ fn main() -> ExitCode {
         fastvideo_serve::deploy::link_pod_weights();
         let queue = config.server.mode == fastvideo_serve::config::Mode::RunpodQueue;
         let addr = config.bind_addr()?;
-        let app = App::build(config, Overrides::default()).await?;
         if queue {
+            let app = App::build(config, Overrides::default()).await?;
             return fastvideo_serve::deploy::run_runpod_queue(app, boot, fastvideo_serve::shutdown::signal()).await;
         }
+        // Bind before building, so `/ping` answers 204 (initializing) from
+        // the first second instead of the port being closed while the
+        // encoder probe, the stores and the engine start.
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        tracing::info!(%addr, "listening");
-        app.serve(listener, fastvideo_serve::shutdown::signal()).await
+        tracing::info!(%addr, "listening (starting)");
+        fastvideo_serve::app::serve_while_building(
+            listener,
+            App::build(config, Overrides::default()),
+            fastvideo_serve::shutdown::signal(),
+        )
+        .await
     });
     match res {
         Ok(()) => ExitCode::SUCCESS,

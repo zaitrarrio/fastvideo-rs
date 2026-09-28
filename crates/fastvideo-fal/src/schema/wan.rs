@@ -193,7 +193,7 @@ fn num_in(f: &Fields, k: &str, (lo, hi, default): (f64, f64, f64)) -> Result<f64
         Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
         Some(v) => return Err(bad(k, format!("Input should be a valid number, got {}", type_name(v)))),
     };
-    if !(v >= lo) {
+    if v.is_nan() || v < lo {
         return Err(bad(k, format!("Input should be greater than or equal to {lo}")));
     }
     if v > hi {

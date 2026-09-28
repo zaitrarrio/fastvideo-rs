@@ -556,6 +556,28 @@ impl App {
     /// admission stops (503), queued jobs are cancelled, the running one
     /// gets `shutdown_grace`, pending D1 writes are flushed, HTTP closes.
     pub async fn serve(self, listener: TcpListener, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+        self.announce();
+        let drained = self.drain_after(stop);
+        axum::serve(listener, self.router.clone())
+            .with_graceful_shutdown(drained)
+            .await
+            .context("HTTP server")?;
+        Ok(())
+    }
+
+    /// `FV-SERVE READY …` on stdout once ready: the gateway's pools, or the
+    /// engine's models ([`announce_ready`]).
+    fn announce(&self) {
+        #[cfg(feature = "http-client")]
+        if let Some(g) = &self.gateway {
+            println!("FV-SERVE READY gateway pools={}", g.pools.iter().map(|p| p.id().to_owned()).collect::<Vec<_>>().join(","));
+            return;
+        }
+        announce_ready(self.gate.clone());
+    }
+
+    /// Waits for `stop`, then drains (see [`App::serve`]).
+    fn drain_after(&self, stop: impl std::future::Future<Output = ()> + Send + 'static) -> impl std::future::Future<Output = ()> + Send + 'static {
         let gate = self.gate.clone();
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
@@ -566,15 +588,7 @@ impl App {
         let gw = self.gateway.clone();
         #[cfg(feature = "http-client")]
         let registration = self.registration.clone();
-        #[cfg(feature = "http-client")]
-        if let Some(g) = &gw {
-            println!("FV-SERVE READY gateway pools={}", g.pools.iter().map(|p| p.id().to_owned()).collect::<Vec<_>>().join(","));
-        } else {
-            announce_ready(gate.clone());
-        }
-        #[cfg(not(feature = "http-client"))]
-        announce_ready(gate.clone());
-        let drained = async move {
+        async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
             #[cfg(feature = "http-client")]
@@ -596,12 +610,105 @@ impl App {
                 tracing::warn!(error = %e, "api keys: writing last_used_at failed");
             }
             tracing::info!("drained");
-        };
-        axum::serve(listener, self.router.clone())
-            .with_graceful_shutdown(drained)
+        }
+    }
+}
+
+/// Serves on `listener` from the start while `build` runs (the encoder
+/// probe, stores, D1, the engine), then hands every request to the built
+/// app, which serves and drains as [`App::serve`]. Until the app exists
+/// the probes answer without blocking: `/ping` **204** (Runpod load
+/// balancer: initializing), `/health` and `/healthz` 503 `loading`, every
+/// other route 503 with `Retry-After`. Model loading itself runs in the
+/// background after `build` (`/ping` stays 204 until ready), so no probe
+/// waits for weights. A failed `build` stops the listener and returns
+/// the error; `stop` during `build` exits without draining.
+pub async fn serve_while_building(
+    listener: TcpListener,
+    build: impl std::future::Future<Output = anyhow::Result<App>> + Send,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let slot: Arc<std::sync::OnceLock<Router>> = Arc::default();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let boot = booting_router(slot.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, boot)
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
             .await
-            .context("HTTP server")?;
-        Ok(())
+    });
+    // `stop` fires once; a watch lets both the build race and the drain
+    // wait on it.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_task = tokio::spawn(async move {
+        stop.await;
+        let _ = stop_tx.send(true);
+    });
+    let stopped = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
+        let _ = rx.wait_for(|s| *s).await;
+    };
+    let built = tokio::select! {
+        r = build => r,
+        _ = stopped(stop_rx.clone()) => {
+            let _ = tx.send(());
+            let _ = server.await;
+            return Ok(());
+        }
+    };
+    let app = match built {
+        Ok(a) => a,
+        Err(e) => {
+            stop_task.abort();
+            let _ = tx.send(());
+            let _ = server.await;
+            return Err(e);
+        }
+    };
+    let _ = slot.set(app.router.clone());
+    app.announce();
+    tracing::info!("app built: serving every route");
+    app.drain_after(stopped(stop_rx)).await;
+    let _ = tx.send(());
+    server.await.context("HTTP server task")?.context("HTTP server")?;
+    Ok(())
+}
+
+/// The router while the app builds: [`booting_reply`] until `slot` holds
+/// the built router, then that router.
+fn booting_router(slot: Arc<std::sync::OnceLock<Router>>) -> Router {
+    Router::new().fallback(move |req: axum::extract::Request| {
+        let slot = slot.clone();
+        async move {
+            use tower::ServiceExt;
+            match slot.get() {
+                Some(r) => r.clone().oneshot(req).await.unwrap_or_else(|e| match e {}),
+                None => booting_reply(req.uri().path()),
+            }
+        }
+    })
+}
+
+/// A probe's answer before the app is built (see [`serve_while_building`]).
+fn booting_reply(path: &str) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::Json;
+    use serde_json::json;
+    match path {
+        "/ping" => StatusCode::NO_CONTENT.into_response(),
+        "/health" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "loading", "model_loaded": false, "state": "LOADING"})),
+        )
+            .into_response(),
+        "/healthz" => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"state": "starting"}))).into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "5")],
+            Json(json!({"error": {"kind": "loading", "message": "fv-serve is starting"}})),
+        )
+            .into_response(),
     }
 }
 
@@ -708,5 +815,53 @@ pub fn assemble(
             "server.workers_max > 1: serving only routes any worker can answer"
         );
     }
-    crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http())
+    let r = crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http());
+    match cors_layer(&config.server.cors_origins) {
+        Some(cors) => r.layer(cors),
+        None => r,
+    }
+}
+
+/// Response headers a cross-origin page may read: the FastVideo metric
+/// headers, our tier/recipe metadata and the fal request id.
+const CORS_EXPOSE: [&str; 11] = [
+    "x-request-id",
+    "x-model",
+    "x-inference-time-s",
+    "x-stage-durations",
+    "x-peak-memory-mb",
+    "x-fv-tier",
+    "x-fv-recipe",
+    "x-fv-quality",
+    "x-fal-request-id",
+    "content-disposition",
+    "content-length",
+];
+
+/// CORS for every route (`server.cors_origins`, config validated): answers
+/// preflights (so `PUT /uploads/{token}` and `POST /storage/upload/initiate`
+/// work from a page on another origin, as fal's storage does) with the
+/// request's method and headers mirrored (`Authorization` is never covered
+/// by a `*` allow-list, so it must be echoed), and exposes the metric
+/// headers. `["*"]` allows any origin; `[]` is `None` (no CORS). Never with
+/// credentials.
+pub fn cors_layer(origins: &[String]) -> Option<tower_http::cors::CorsLayer> {
+    use axum::http::{HeaderName, HeaderValue};
+    use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+    if origins.is_empty() {
+        return None;
+    }
+    let allow = if origins.iter().any(|o| o == "*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::list(origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()))
+    };
+    Some(
+        CorsLayer::new()
+            .allow_origin(allow)
+            .allow_methods(AllowMethods::mirror_request())
+            .allow_headers(AllowHeaders::mirror_request())
+            .expose_headers(CORS_EXPOSE.map(HeaderName::from_static))
+            .max_age(Duration::from_secs(3600)),
+    )
 }
