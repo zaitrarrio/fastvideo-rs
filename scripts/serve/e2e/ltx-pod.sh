@@ -5,6 +5,8 @@
 #                                the repo's configs/serve/runpod-ltx.toml (inlined,
 #                                so a config change needs no image rebuild); the
 #                                model is FV_LTX_RECIPE (ltx-turbo | ltx-pro).
+#                                FV_SERVE_TOML picks another config (e.g.
+#                                configs/serve/runpod-ltx-ref2v.toml).
 #                                Writes pod id + per-run key to $FV_E2E_STATE (0600)
 #   ltx-pod.sh switch <recipe>   restart the same pod with another recipe
 #                                (PATCH: the image stays pulled)
@@ -38,7 +40,7 @@ ledger() { mkdir -p "$(dirname "$LEDGER")"; printf '%s\t%s\n' "$(date -u +%FT%TZ
 # The container command: write the inlined config (recipe substituted) and exec fv-serve.
 entry_cmd() {
   local b64
-  b64="$(base64 -w0 "$ROOT/configs/serve/runpod-ltx.toml")"
+  b64="$(base64 -w0 "${FV_SERVE_TOML:-$ROOT/configs/serve/runpod-ltx.toml}")"
   printf '%s' "echo $b64 | base64 -d | sed -e \"s/^recipe = \\\"ltx-turbo\\\"/recipe = \\\"\$FV_LTX_RECIPE\\\"/\" -e \"s/^id = \\\"ltx25-distill-sol\\\"/id = \\\"ltx25-\$FV_LTX_RECIPE\\\"/\" -e \"s#fastvideo/ltx-turbo#fastvideo/\$FV_LTX_RECIPE#\" > /tmp/fv-ltx.toml && cat /tmp/fv-ltx.toml | grep -E '^(id|recipe|fal_apps)' && exec /opt/fastvideo-rs/bin/fv-serve --config /tmp/fv-ltx.toml"
 }
 
