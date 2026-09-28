@@ -13,6 +13,7 @@
 //! | `FV_SERVE_MODE` | `server.mode` (`http` \| `runpod-queue`) |
 //! | `PORT` | port of `server.bind` (Runpod load balancer) |
 //! | `FV_BIND`, `FV_PUBLIC_BASE_URL`, `FV_STATE_DIR`, `FV_WORKER_ID` | `server.*` |
+//! | `FV_WORKERS_MAX` | `server.workers_max` (load-balanced replicas; above 1 only routes any worker can answer are served) |
 //! | `FV_SERVE_FORWARD` (`1`) | `server.forward` (Vast PyWorker route) |
 //! | `FV_CALLBACKS_ALLOW_PRIVATE` (`1`) | `server.callbacks_allow_private` (tests only: webhooks to loopback/private hosts) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
@@ -96,6 +97,11 @@ pub struct ServerCfg {
     /// reach loopback and private hosts. Off in production (the SSRF
     /// guard); the client-compat suites turn it on to receive them locally.
     pub callbacks_allow_private: bool,
+    /// Workers behind the load balancer (Runpod serverless LB `workers.max`,
+    /// design §6.2). Above 1, only routes any worker can answer are served
+    /// (`crate::multiworker`): async jobs need D1 jobs and S3/R2 artifacts;
+    /// cancel, uploads and streaming sessions are never served.
+    pub workers_max: u32,
 }
 
 impl Default for ServerCfg {
@@ -111,6 +117,7 @@ impl Default for ServerCfg {
             console: true,
             forward: false,
             callbacks_allow_private: false,
+            workers_max: 1,
         }
     }
 }
@@ -617,6 +624,14 @@ impl Config {
         if let Some(v) = env.var("FV_CALLBACKS_ALLOW_PRIVATE") {
             self.server.callbacks_allow_private = matches!(v.trim(), "1" | "true" | "yes");
         }
+        if let Some(v) = env.var("FV_WORKERS_MAX") {
+            self.server.workers_max = v
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| ConfigError::Invalid(format!("FV_WORKERS_MAX={v} is not a worker count (1 or more)")))?;
+        }
         if let Some(v) = env.var("FV_WORKER_ID") {
             self.server.worker_id = Some(v);
         }
@@ -730,6 +745,9 @@ impl Config {
     /// Consistency checks that do not need I/O.
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.bind_addr()?;
+        if self.server.workers_max == 0 {
+            return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
+        }
         if let Some(u) = &self.server.public_base_url {
             url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
         }
@@ -955,6 +973,20 @@ body_max_mb = 64
         assert!(!c.server.callbacks_allow_private);
         let c = Config::from_toml("[server]\ncallbacks_allow_private = true\n", "t").unwrap();
         assert!(c.server.callbacks_allow_private);
+    }
+
+    #[test]
+    fn workers_max_env() {
+        let mut c = Config::default();
+        assert_eq!(c.server.workers_max, 1);
+        c.apply_env(&env(&[("FV_WORKERS_MAX", "3")])).unwrap();
+        assert_eq!(c.server.workers_max, 3);
+        c.validate().unwrap();
+        for bad in ["0", "-1", "many"] {
+            assert!(Config::default().apply_env(&env(&[("FV_WORKERS_MAX", bad)])).is_err(), "{bad}");
+        }
+        let c = Config::from_toml("[server]\nworkers_max = 0\n", "t").unwrap();
+        assert!(c.validate().is_err());
     }
 
     #[test]

@@ -14,6 +14,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
+use fastvideo_engine_service::ManualClock;
 use fastvideo_protocol::JobStore;
 use fastvideo_serve::config::{Config, JobBackend};
 use fastvideo_serve::router::{route_table, Owner};
@@ -186,11 +187,21 @@ async fn assembled_router_serves_its_route_table() {
     }
 }
 
-#[tokio::test]
+/// A fake engine whose load and denoise steps run on a manual clock: the
+/// test decides when loading and each step end.
+fn manual_engine(c: &Config) -> (fastvideo_engine_service::EngineService, Arc<ManualClock>) {
+    let clock = Arc::new(ManualClock::new());
+    let engine = fastvideo_serve::app::build_engine_with_clock(c, Some(clock.clone())).unwrap();
+    (engine, clock)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ping_is_204_while_loading() {
     let mut c = config("loading");
     c.engine.fake.load_ms = 1500;
-    let app = App::build(c, Overrides::default()).await.unwrap();
+    // Loading cannot finish before the clock moves, however slow the host.
+    let (engine, clock) = manual_engine(&c);
+    let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
     let (s, _, _) = call(&app.router, "GET", "/ping", None, false).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (s, v, _) = call(&app.router, "GET", "/health", None, false).await;
@@ -199,6 +210,18 @@ async fn ping_is_204_while_loading() {
     let (s, v, h) = call(&app.router, "POST", "/fv/v1/jobs", Some(submit_body("x")), true).await;
     assert_eq!(s, 503, "{v}");
     assert_eq!(h["retry-after"], "1");
+    // Let the load run: each of its slices sleeps from the time it starts.
+    let c2 = clock.clone();
+    let engine = app.gate.engine().clone();
+    tokio::task::spawn_blocking(move || {
+        while !matches!(engine.readiness(), fastvideo_engine_service::Readiness::Ready) {
+            if c2.wait_for_sleepers(1, Duration::from_millis(20)) {
+                c2.advance(Duration::from_millis(375));
+            }
+        }
+    })
+    .await
+    .unwrap();
     wait_ready(&app).await;
     let (s, _, _) = call(&app.router, "GET", "/ping", None, false).await;
     assert_eq!(s, 200);
@@ -232,17 +255,36 @@ async fn d1_job_store_end_to_end_over_the_mock() {
     assert!(mock.statements().iter().any(|s| s.starts_with("SELECT COUNT(*)")));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drain_cancels_queued_and_refuses_new_work() {
     let mut c = config("drain");
     c.engine.fake.step_ms = 300;
-    let app = App::build(c, Overrides::default()).await.unwrap();
+    // `a` stays in its first denoise step until the clock moves, so the
+    // drain always finds it running and `b` queued.
+    let (engine, clock) = manual_engine(&c);
+    let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
     wait_ready(&app).await;
     let r = app.router.clone();
     let (_, a, _) = call(&r, "POST", "/fv/v1/jobs", Some(submit_body("long one")), true).await;
     let (_, b, _) = call(&r, "POST", "/fv/v1/jobs", Some(submit_body("queued one")), true).await;
     let (a, b) = (a["id"].as_str().unwrap().to_owned(), b["id"].as_str().unwrap().to_owned());
     wait_status(&r, &a, &["running"]).await;
+    let c2 = clock.clone();
+    assert!(tokio::task::spawn_blocking(move || c2.wait_for_sleepers(1, Duration::from_secs(60))).await.unwrap());
+    // `a` is parked in its first step and virtual time stands still for
+    // the first second of the drain (ten times its 100 ms grace), so the
+    // drain always cancels a running job; then time moves so the step ends
+    // and the executor sees the cancellation.
+    let tick = {
+        let clock = clock.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            loop {
+                clock.advance(Duration::from_millis(50));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+    };
     fastvideo_serve::app::drain(&app.gate, Duration::from_millis(100), None).await;
     let (s, _, _) = call(&r, "GET", "/ping", None, false).await;
     assert_eq!(s, 503, "draining");
@@ -252,6 +294,7 @@ async fn drain_cancels_queued_and_refuses_new_work() {
     assert_eq!(vb["status"], "cancelled");
     let va = wait_status(&r, &a, &["cancelled", "succeeded"]).await;
     assert_eq!(va["status"], "cancelled", "the running job was cut after the grace period");
+    tick.abort();
 }
 
 #[test]
@@ -275,4 +318,79 @@ fn shipped_configs_parse() {
         n += 1;
     }
     assert!(n >= 2, "configs/serve has {n} configs");
+}
+
+/// Runpod load balancer with `workers.max > 1` and no shared state (file
+/// jobs, local artifacts): only routes any worker can answer are served.
+#[tokio::test]
+async fn multi_worker_without_shared_state_serves_only_local_routes() {
+    let mut c = config("lb");
+    c.server.workers_max = 2;
+    c.validate().unwrap();
+    let app = App::build(c, Overrides::default()).await.unwrap();
+    wait_ready(&app).await;
+    let r = app.router.clone();
+    for (m, uri) in [("GET", "/health"), ("GET", "/ping"), ("GET", "/healthz"), ("GET", "/fv/v1/capabilities"), ("GET", "/v1/models")] {
+        let (s, v, _) = call(&r, m, uri, None, true).await;
+        assert_eq!(s, 200, "{m} {uri}: {v}");
+    }
+    for (m, uri, body) in [
+        ("POST", "/fv/v1/jobs", Some(submit_body("x"))),
+        ("GET", "/fv/v1/jobs", None),
+        ("POST", "/v1/videos/sync", Some(json!({"prompt": "x"}))),
+        ("POST", "/v1/videos", Some(json!({"prompt": "x"}))),
+        ("DELETE", "/fv/v1/jobs/fvjob_x", None),
+        ("GET", "/files/a/b.mp4", None),
+        ("PUT", "/uploads/t", Some(json!({}))),
+        ("POST", "/fv/v1/streams", Some(json!({}))),
+        ("POST", "/start_session", Some(json!({}))),
+        ("GET", "/fv/v1/admin/keys", None),
+        ("GET", "/not-a-route", None),
+    ] {
+        let (s, v, h) = call(&r, m, uri, body, true).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{m} {uri}: {v}");
+        assert_eq!(h["x-fv-multi-worker"], "not-served", "{m} {uri}");
+        assert_eq!(v["error"]["type"], "not_served_by_multi_worker_deployment", "{m} {uri}");
+    }
+    // CORS preflight passes the filter.
+    let resp = r
+        .clone()
+        .oneshot(Request::builder().method("OPTIONS").uri("/fv/v1/jobs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert!(resp.headers().get("x-fv-multi-worker").is_none());
+}
+
+/// Two workers sharing D1 (and, in production, R2): a job submitted on one
+/// is read, listed and polled to completion on the other; cancel/delete is
+/// refused because the running job is authoritative on its own worker.
+#[tokio::test]
+async fn multi_worker_with_shared_jobs_reads_across_workers() {
+    use fastvideo_serve::multiworker::{layer, Policy};
+    let mock = MockD1::new();
+    let db = || D1Client::new(Arc::new(mock.clone()));
+    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false };
+    let mut workers = Vec::new();
+    for (tag, id) in [("lb-a", "worker-a"), ("lb-b", "worker-b")] {
+        let store = D1JobStore::new(db(), D1Options::new(id)).open(time::OffsetDateTime::now_utc()).await.unwrap();
+        let c = config(tag);
+        let apps = c.protocols.fal_apps.clone();
+        let app = App::build(c, Overrides { jobs: Some(store), ..Default::default() }).await.unwrap();
+        wait_ready(&app).await;
+        let router = layer(app.router.clone(), policy, &apps);
+        workers.push((app, router));
+    }
+    let (a, b) = (&workers[0].1, &workers[1].1);
+    let (s, v, _) = call(a, "POST", "/fv/v1/jobs", Some(submit_body("lb job")), true).await;
+    assert_eq!(s, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    // Worker B answers status and list from D1.
+    let done = wait_status(b, &id, &["succeeded"]).await;
+    assert_eq!(done["id"], id.as_str());
+    let (s, v, _) = call(b, "GET", "/fv/v1/jobs", None, true).await;
+    assert_eq!((s, v["total"].clone()), (StatusCode::OK, json!(1)), "{v}");
+    let (s, _, h) = call(b, "DELETE", &format!("/fv/v1/jobs/{id}"), None, true).await;
+    assert_eq!((s, &h["x-fv-multi-worker"]), (StatusCode::NOT_FOUND, &"not-served".parse::<axum::http::HeaderValue>().unwrap()));
+    let (s, _, _) = call(b, "GET", "/fv/v1/admin/keys", None, true).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "minted keys are not shared here");
 }

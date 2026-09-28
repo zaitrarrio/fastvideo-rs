@@ -211,7 +211,15 @@ fn handle(dev: &super::device::DeviceContext) -> Result<sys::cudnnHandle_t> {
         Ok(Handle(h))
     });
     match h {
-        Ok(h) => Ok(h.0),
+        Ok(h) => {
+            // The handle is shared; the stream is the caller's device's (a
+            // thread may run on another stream, e.g. a CUDA-graph capture).
+            let st = unsafe { sys::cudnnSetStream(h.0, dev.stream.cu_stream() as sys::cudaStream_t) };
+            if st != sys::cudnnStatus_t::CUDNN_STATUS_SUCCESS {
+                return Err(msg(format!("cudnnSetStream: {st:?}")));
+            }
+            Ok(h.0)
+        }
         Err(e) => Err(msg(e.clone())),
     }
 }

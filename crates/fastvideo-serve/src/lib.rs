@@ -10,6 +10,8 @@
 //!   assembles the router; [`adapters`] holds the feature-gated mount points.
 //! - [`health`] serves `/health`, `/healthz`, `/ping`, `/` and `/metrics`
 //!   (Prometheus, via [`metrics`]).
+//! - [`multiworker`]: the routes a replica serves behind a load balancer
+//!   with `server.workers_max > 1` (design §6.2).
 //! - [`native`] serves `/fv/v1/*`; serve-kit's `admin_routes` serve
 //!   `/fv/v1/admin/keys` (minted API keys, admin token).
 //! - [`console`] serves the `/console` pages (docs/serve/console.md).
@@ -36,6 +38,7 @@ pub mod encoders;
 pub mod gate;
 pub mod health;
 pub mod metrics;
+pub mod multiworker;
 pub mod native;
 #[cfg(feature = "reactor")]
 pub mod reactor;

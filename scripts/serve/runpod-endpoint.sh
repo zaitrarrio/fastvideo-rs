@@ -30,7 +30,8 @@
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default s2k01690bi,
 # fv-weights-b200-us) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
-# fake-wan).
+# fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
+# fv-serve as FV_WORKERS_MAX).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -134,22 +135,27 @@ endpoint_payload() {
 }
 
 # Load-balancer endpoint (REST v2: the only API with `type`). GPU pools come
-# from the catalog for the configured types.
+# from the catalog for the configured types. FV_WORKERS_MAX follows
+# workers.max: above 1 fv-serve serves only routes any worker can answer
+# (design §6.5).
+LB_WORKERS_MAX="${FV_LB_WORKERS_MAX:-1}"
+[[ "$LB_WORKERS_MAX" =~ ^[1-9][0-9]*$ ]] || die "FV_LB_WORKERS_MAX must be a positive integer"
 lb_payload() {
   local image="$1" name="$2" dc="$3" pools
   pools="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" "$REST2/catalog/gpus" 2>/dev/null \
     | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
   [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
   jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson pools "$pools" --arg vol "$VOLUME" \
-    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" '{
+    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
     args: ("--config " + $cfg), ports: ["8000/http"], disk: 20,
     env: ($secrets + {
       FV_SERVE_MODE: "http", FV_AUTH_MODE: "trust-gateway", PORT: "8000", PORT_HEALTH: "8000",
-      FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info"
+      FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info",
+      FV_WORKERS_MAX: ($max | tostring)
     }),
     gpu: ({pools: $pools, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
-    workers: {min: 0, max: 1, idleTimeout: 5},
+    workers: {min: 0, max: $max, idleTimeout: 5},
     scaling: {type: "REQUEST_COUNT", requestCount: 1},
     networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: "OFF", timeout: 330000
   }'

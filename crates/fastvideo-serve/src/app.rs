@@ -68,6 +68,15 @@ impl Drop for App {
 
 /// The engine from `[engine]`.
 pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
+    build_engine_with_clock(c, None)
+}
+
+/// [`build_engine`], with the fake backend's load and step time on `clock`
+/// (tests pass a `ManualClock` to decide when loading and steps end).
+pub fn build_engine_with_clock(
+    c: &Config,
+    clock: Option<std::sync::Arc<dyn fastvideo_engine_service::Clock>>,
+) -> anyhow::Result<EngineService> {
     let backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
         EngineBackendKind::Fake => {
             let f = &c.engine.fake;
@@ -91,6 +100,9 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
                 ..FakeTiming::default()
             };
             fc.mp4 = Mp4Mode::Auto;
+            if let Some(clock) = clock {
+                fc.clock = clock;
+            }
             vec![Box::new(FakeBackend::new(fc))]
         }
         EngineBackendKind::Cuda => {
@@ -511,7 +523,15 @@ pub fn assemble(
     if config.server.console {
         r = r.merge(console::routes());
     }
-    r
-        .route_layer(axum::middleware::from_fn(metrics::track))
-        .layer(TraceLayer::new_for_http())
+    let r = r.route_layer(axum::middleware::from_fn(metrics::track));
+    // Behind a load balancer with several workers: only the routes every
+    // worker can answer (design §6.2).
+    let policy = crate::multiworker::Policy::from_config(config, jobs_kind);
+    if policy.multi() {
+        tracing::warn!(
+            policy = %crate::multiworker::summary(&policy),
+            "server.workers_max > 1: serving only routes any worker can answer"
+        );
+    }
+    crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http())
 }

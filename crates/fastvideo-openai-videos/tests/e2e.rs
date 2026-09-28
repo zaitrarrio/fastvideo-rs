@@ -4,11 +4,13 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::*;
+use fastvideo_engine_service::ManualClock;
 use fastvideo_protocol::{ProtocolId, Task};
 use serde_json::json;
 
@@ -20,7 +22,15 @@ fn done(v: &serde_json::Value) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fastvideo_submit_poll_download_delete() {
-    let f = fixture(Opts::default()).await;
+    let clock = Arc::new(ManualClock::new());
+    let f = fixture(Opts {
+        clock: Some(clock.clone()),
+        ..Opts::default()
+    })
+    .await;
+    // A job behind a running one is `queued` (a lone job may already be
+    // `in_progress` when the create response is read).
+    hold_executor(&f, &clock).await;
     // The tier id resolves to the turbo model; defaults: 1344x768, 5 s.
     let r = call(
         &f.app,
@@ -64,6 +74,7 @@ async fn fastvideo_submit_poll_download_delete() {
         ("fake-h3-turbo", 124, 7)
     );
 
+    let _run = ClockDriver::start(clock, Duration::from_millis(5));
     let v = poll(&f.app, &format!("/v1/videos/{id}"), done).await;
     assert_eq!(
         (v["status"].as_str(), v["progress"].as_u64()),
@@ -549,19 +560,29 @@ async fn models_routes() {
 /// `processing`, `GET /video/{id}`), then `_delete_job`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fastwan_link_flow() {
-    let f = fixture(Opts::default()).await;
+    let clock = Arc::new(ManualClock::new());
+    let f = fixture(Opts {
+        clock: Some(clock.clone()),
+        ..Opts::default()
+    })
+    .await;
     let h = call(&f.app, "GET", "/health", None).await;
     assert_eq!(h.status, StatusCode::OK);
     assert_eq!(h.json()["model_loaded"], true);
     let root = call(&f.app, "GET", "/", None).await.json();
     assert_eq!(root["model"], "fastwan-5b");
 
+    // Another client's clip holds the executor, so this one is first seen
+    // `queued`, deterministically.
+    hold_executor(&f, &clock).await;
     let body = json!({"prompt": "a neon street in the rain", "width": 640, "height": 352, "num_frames": 49, "fps": 24, "seed": 1000});
     let r = call(&f.app, "POST", "/generate", Some(body)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.json());
     let mut job = r.json();
     let pid = job["prompt_id"].as_str().expect("prompt_id").to_owned();
     assert!(uuid::Uuid::parse_str(&pid).is_ok());
+    assert_eq!(job["status"], "queued", "{job}");
+    let _run = ClockDriver::start(clock, Duration::from_millis(5));
     // The client's loop, verbatim in spirit.
     let deadline = tokio::time::Instant::now() + T;
     let mut seen = Vec::new();
@@ -573,7 +594,7 @@ async fn fastwan_link_flow() {
             "unknown status {s}"
         );
         seen.push(s);
-        assert!(tokio::time::Instant::now() < deadline);
+        assert!(tokio::time::Instant::now() < deadline, "no result after {T:?}: {job}");
         tokio::time::sleep(Duration::from_millis(10)).await;
         let r = call(&f.app, "GET", &format!("/status/{pid}"), None).await;
         assert_eq!(r.status, StatusCode::OK);

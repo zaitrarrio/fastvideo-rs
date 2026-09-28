@@ -433,6 +433,41 @@ pub(crate) fn block_copy_into(
     .map_err(err)
 }
 
+/// Copy `outer` rows of `len` elements from `src` into the existing device
+/// storage of `dst` (row strides and element offsets as in
+/// [`block_copy_into`]), converting to `dst`'s dtype. An in-place write:
+/// the persistent buffers of the static KV cache and of CUDA-graph inputs
+/// (`wan::causal`, `wan::graph`) keep their address. `dst` must live on the
+/// device; bounds are the caller's.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn copy_rows_into(
+    src: &CudaTensor,
+    dst: &CudaTensor,
+    outer: usize,
+    len: usize,
+    in_stride: usize,
+    out_stride: usize,
+    in_offset: usize,
+    out_offset: usize,
+) -> Result<()> {
+    if outer == 0 || len == 0 {
+        return Ok(());
+    }
+    let (op_p, o16) = if let Some(b) = dst.device_slice_bf16() {
+        (ptr::<half::bf16>(b), 1)
+    } else if let Some(b) = dst.device_slice() {
+        (ptr::<f32>(b), 0)
+    } else {
+        return Err(msg("copy_rows_into: destination is not on the device"));
+    };
+    let x = operand(src)?.ok_or_else(|| msg("copy_rows_into: source has no device data"))?;
+    let dev = ctx()?;
+    let v = [outer, len, in_stride, out_stride, in_offset, out_offset].map(|u| u as i64);
+    launch!(dev.stream, &dev.kernels.mx_block_copy, cfg_n(outer * len);
+        &x.ptr, &x.is16, &op_p, &o16, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
+    .map_err(err)
+}
+
 pub(crate) fn rope_half(
     x: &CudaTensor,
     cos: &CudaTensor,
