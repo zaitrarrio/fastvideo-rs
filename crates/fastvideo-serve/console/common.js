@@ -119,12 +119,24 @@ export function loadCatalog() {
   return catalogPromise;
 }
 
+// The H3 apps' endpoints (a catalog without `endpoints` falls back to these).
 export const TASKS = [
   { sub: 'text-to-video', title: 'Text to Video' },
   { sub: 'image-to-video', title: 'Image to Video' },
   { sub: 'reference-to-video', title: 'Reference to Video' },
   { sub: 'director', title: 'Director', tag: 'live' },
 ];
+
+// An app's pages from its catalog entry: the batch endpoints (sub-paths may
+// have several segments, e.g. `v2.2-5b/text-to-video/fast-wan`), then the
+// live director on the H3 apps.
+export function appTasks(app) {
+  if (!app || !Array.isArray(app.endpoints)) return TASKS;
+  // Per-endpoint tier tags on the family apps (their endpoints differ in tier).
+  const list = app.endpoints.map((e) => ({ sub: e.sub, title: e.title || e.sub, tag: app.tier ? null : e.tier || null }));
+  if (app.director !== false) list.push(TASKS[TASKS.length - 1]);
+  return list;
+}
 
 export const modelHref = (app, sub) => '/console/models/' + app + '/' + sub;
 

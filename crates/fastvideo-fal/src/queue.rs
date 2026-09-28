@@ -45,13 +45,10 @@ use crate::{FalApp, FalConfig};
 // ---------------------------------------------------------------- views
 
 /// The app id a job was submitted under (`request_echo.model` is the full
-/// endpoint id, e.g. `minimax/h3-max/text-to-video`).
+/// endpoint id, e.g. `minimax/h3-max/text-to-video` or
+/// `lightricks/ltx-2.5/text-to-video/fast`).
 pub fn app_of(job: &Job) -> &str {
-    let m = job.requested_model();
-    match m.rsplit_once('/') {
-        Some((app, sub)) if Endpoint::from_sub(sub).is_some() => app,
-        _ => m,
-    }
+    crate::schema::app_id(job.requested_model())
 }
 
 /// `(response_url, status_url, cancel_url)`: app-only, no `/response`
@@ -275,7 +272,7 @@ impl FalEndpoint {
 impl SubmitEndpoint for FalEndpoint {
     type Body = Value;
     fn normalize(&self, body: Value, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
-        FalInput::parse(self.endpoint, &body)?.normalize(&self.app.model, cx)
+        FalInput::parse_for(self.app.kind(), self.endpoint, &body)?.normalize(&self.app.target(self.endpoint).0, cx)
     }
     /// HTTP 200 `{request_id, response_url, status_url, cancel_url,
     /// queue_position}` with app-only URLs (design §4.4), plus
@@ -308,18 +305,27 @@ async fn queued_for(ctx: &ServeCtx, app: &str) -> usize {
     ctx.jobs().list(q).await.items.iter().filter(|j| app_of(j) == app).count()
 }
 
-/// Resolves the app's model: its name through the engine's aliases and
-/// served names, else its tier (design §0.3).
-pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp) -> Result<String, ApiError> {
+/// Resolves an endpoint's model: its name (the app's model, or the LTX /
+/// Wan endpoint's tier alias) through the engine's aliases and served
+/// names, else its tier (design §0.3).
+pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp, endpoint: Endpoint) -> Result<String, ApiError> {
+    let (name, tier) = app.target(endpoint);
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
-    let by_name = fastvideo_protocol::resolve_model(&app.model, |n| engine.alias(n), &models).map(|c| c.id.0.clone());
+    let by_name = fastvideo_protocol::resolve_model(&name, |n| engine.alias(n), &models).map(|c| c.id.0.clone());
     by_name
-        .or_else(|e| match app.tier {
+        .or_else(|e| match tier {
             Some((family, tier)) => fastvideo_protocol::resolve_tier(family, tier, &models).map(|c| c.id.0.clone()),
             None => Err(e),
         })
-        .map_err(|_| ApiError::not_found(format!("Application \"{}\" not found", app.id)))
+        .map_err(|_| match endpoint.target() {
+            Some(_) => ApiError::not_found(format!(
+                "Application \"{}/{}\" not found (no `{name}` model is served here)",
+                app.id,
+                endpoint.sub()
+            )),
+            None => ApiError::not_found(format!("Application \"{}\" not found", app.id)),
+        })
 }
 
 /// Auth, validation, normalization, queue limit, then serve-kit's submit
@@ -361,8 +367,10 @@ pub(crate) async fn submit_job(
         }
     }
     crate::storage::rewrite_own_uploads(ctx, &mut req);
-    req.model = resolve_app_model(ctx, &ep.app)?;
-    if echo.get("resolution").is_none() {
+    req.model = resolve_app_model(ctx, &ep.app, ep.endpoint)?;
+    // The H3 schema's omitted `resolution` (768P) follows the model's tiers;
+    // the LTX and Wan schemas have their own defaults.
+    if echo.get("resolution").is_none() && ep.endpoint.target().is_none() {
         if let Some(caps) = ctx.engine().models().into_iter().find(|m| m.id.0 == req.model) {
             crate::schema::default_resolution_for(&mut req, &caps.canvas.short_edges);
         }
@@ -510,7 +518,7 @@ pub(crate) fn app_routes(
 ) -> axum::Router<ServeCtx> {
     use axum::routing::{get, post, put};
     let body_max = cfg.body_max;
-    for endpoint in Endpoint::ALL {
+    for &endpoint in app.endpoints() {
         let ep = Arc::new(FalEndpoint { app: app.clone(), endpoint });
         let path = format!("/{}", ep.endpoint_id());
         let (c, e) = (cfg.clone(), ep.clone());
@@ -524,7 +532,7 @@ pub(crate) fn app_routes(
     }
     let app_id: Arc<str> = Arc::from(app.id.as_str());
     let prefixes: Vec<String> = std::iter::once(format!("/{}", app.id))
-        .chain(Endpoint::ALL.iter().map(|e| format!("/{}/{}", app.id, e.sub())))
+        .chain(app.endpoints().iter().map(|e| format!("/{}/{}", app.id, e.sub())))
         .collect();
     for prefix in prefixes {
         let mk = |op: Op| {

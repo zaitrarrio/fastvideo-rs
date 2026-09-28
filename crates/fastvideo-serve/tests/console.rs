@@ -197,7 +197,10 @@ async fn console_pages_and_schema_serve() {
 
     let cat = call(&r, "GET", "/fal/schema", None, None).await.json();
     let ids: Vec<&str> = cat["apps"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft"]);
+    assert_eq!(ids, fastvideo_fal::DEFAULT_APPS);
+    // A multi-segment console page (fal's LTX / Wan sub-paths) serves the same page.
+    let p = call(&r, "GET", "/console/models/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", None, None).await;
+    assert_eq!(p.status, 200);
     let s = call(&r, "GET", "/fal/schema/minimax/h3-max/image-to-video", None, None).await;
     assert_eq!(s.status, 200);
     assert_eq!(s.json()["properties"]["image_url"]["x-fv-media"], "image");

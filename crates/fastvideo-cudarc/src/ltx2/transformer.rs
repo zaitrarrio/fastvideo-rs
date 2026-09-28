@@ -190,6 +190,75 @@ fn gated_then_text_norm(
     Ok((out, None))
 }
 
+/// A stream's text cross-attention (optional Q/KV AdaLN + output gate,
+/// LTX-2.5); its residual carries the next norm (`next`) when fused.
+#[allow(clippy::too_many_arguments)]
+fn text_cross(
+    stream: &StreamBlock,
+    name: &str,
+    x: CudaTensor,
+    h: Option<CudaTensor>,
+    ctx: &CudaTensor,
+    tab: &CudaTensor,
+    ones: &CudaTensor,
+    prompt: Option<&CudaTensor>,
+    dim: usize,
+    eps: f32,
+    tap: &mut Tap<'_, '_>,
+    next: fuse::Norm<'_>,
+    probed: bool,
+) -> Result<(CudaTensor, Option<CudaTensor>)> {
+    let h = match h {
+        Some(h) => h,
+        None => {
+            let mut h = x.rms_norm(ones, eps)?;
+            if stream.cross_attn_mod {
+                h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
+            }
+            h
+        }
+    };
+    let mut enc = ctx.clone();
+    if let Some(pt) = &stream.prompt_table {
+        let tab_p = match prompt {
+            Some(t) => pt.add(t)?,
+            None => pt.clone(),
+        };
+        enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
+    }
+    tap.emit(name, "attn2_in", &h)?;
+    let u = stream.attn2.forward_owned(h, Some(&enc), None, None)?;
+    drop(enc);
+    if !probed {
+        let res = if stream.cross_attn_mod {
+            fuse::Residual::Gated {
+                u: &u,
+                gates: tab,
+                row: 8,
+            }
+        } else {
+            fuse::Residual::Plain(&u)
+        };
+        if let Some((out, n)) = fuse::res_norm_mod(&x, res, next, eps)? {
+            drop((x, u));
+            tap.emit(name, "attn2_after", &out)?;
+            return Ok((out, Some(n)));
+        }
+    }
+    let u = if stream.cross_attn_mod {
+        let gated = u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?;
+        drop(u);
+        gated
+    } else {
+        u
+    };
+    tap.emit(name, "attn2_out", &u)?;
+    let out = x.add(&u)?;
+    drop((x, u));
+    tap.emit(name, "attn2_after", &out)?;
+    Ok((out, None))
+}
+
 /// Stage-2 video self-attention for one denoise loop. The step index is applied
 /// inside the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,6 +419,25 @@ impl Ropes {
         Self::upload(&Ltx2RopeTables::new(cfg, grid, audio_tokens, fps))
     }
 
+    /// [`Self::new`] with one appended `H·W` token block per keyframe at
+    /// pixel frame `extra[i]` (keyframe image conditioning).
+    pub fn with_keyframes(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        extra: &[usize],
+        audio_tokens: usize,
+        fps: f32,
+    ) -> Result<Self> {
+        Self::upload(&Ltx2RopeTables::with_keyframes(
+            cfg,
+            grid,
+            extra,
+            audio_tokens,
+            fps,
+            fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal,
+        ))
+    }
+
     pub fn upload(t: &Ltx2RopeTables) -> Result<Self> {
         Ok(Self {
             video: DeviceRope::upload(&t.video)?,
@@ -427,6 +515,80 @@ pub struct Ltx2Transformer {
     stage1: Arc<Mutex<Option<LtxStage1Runtime>>>,
     /// The last timestep's [`ForwardMods`], keyed by the timestep's bits.
     mods: Mutex<Option<(u32, ForwardMods)>>,
+    /// Per-token video timesteps of a conditioned stage (I2V / keyframes):
+    /// row ranges whose timestep is `mask * sigma` instead of `sigma`
+    /// ([`Self::set_video_conditioning`]). `None`: every row at `sigma`.
+    video_segments: Mutex<Option<Vec<VideoTimestepSegment>>>,
+}
+
+/// Rows `start .. start + len` of the packed video stream carry the
+/// denoise mask `mask` (`1 - strength`): their per-token timestep is
+/// `mask * sigma` (`timesteps_from_mask`, `ltx_pipelines/utils/helpers.py`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoTimestepSegment {
+    pub start: usize,
+    pub len: usize,
+    pub mask: f32,
+}
+
+/// One contiguous run of video rows at one timestep, with its modulation.
+struct VideoPiece {
+    start: usize,
+    len: usize,
+    main: CudaTensor,
+    cross: CudaTensor,
+    embedded: CudaTensor,
+}
+
+/// A [`VideoPiece`] with one block's tables added.
+struct PieceTabs {
+    start: usize,
+    len: usize,
+    /// `[rows, dim]`: the block's AdaLN table + the piece's modulation.
+    tab: CudaTensor,
+    /// `tab` as `[1, rows, dim]` for the gated residuals.
+    gates: CudaTensor,
+    /// `[4, dim]`: a2v/v2a scale and shift rows.
+    cross: CudaTensor,
+}
+
+/// `f` on each piece's rows of `x` (`[1, S, D]`), concatenated back.
+fn per_piece(
+    x: &CudaTensor,
+    pieces: &[PieceTabs],
+    mut f: impl FnMut(&CudaTensor, &PieceTabs) -> Result<CudaTensor>,
+) -> Result<CudaTensor> {
+    if let [p] = pieces {
+        return f(x, p);
+    }
+    let mut outs = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        outs.push(f(&x.narrow(1, p.start, p.len)?, p)?);
+    }
+    let refs: Vec<&CudaTensor> = outs.iter().collect();
+    CudaTensor::cat(&refs, 1)
+}
+
+/// [`per_piece`] over two same-shaped streams (a residual and its update).
+fn per_piece2(
+    x: &CudaTensor,
+    u: &CudaTensor,
+    pieces: &[PieceTabs],
+    mut f: impl FnMut(&CudaTensor, &CudaTensor, &PieceTabs) -> Result<CudaTensor>,
+) -> Result<CudaTensor> {
+    if let [p] = pieces {
+        return f(x, u, p);
+    }
+    let mut outs = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        outs.push(f(
+            &x.narrow(1, p.start, p.len)?,
+            &u.narrow(1, p.start, p.len)?,
+            p,
+        )?);
+    }
+    let refs: Vec<&CudaTensor> = outs.iter().collect();
+    CudaTensor::cat(&refs, 1)
 }
 
 struct LtxFbRuntime {
@@ -797,6 +959,7 @@ impl Ltx2Transformer {
             prune: Default::default(),
             stage1: Default::default(),
             mods: Mutex::new(None),
+            video_segments: Mutex::new(None),
             cfg: cfg.clone(),
         })
     }
@@ -882,6 +1045,23 @@ impl Ltx2Transformer {
         if let Some(runtime) = slot.as_mut() {
             runtime.active = active;
         }
+    }
+
+    /// Per-token video timesteps for the following forwards (a conditioned
+    /// stage); `None` or empty restores the plain `sigma` everywhere. Segments
+    /// must be sorted and disjoint. FBCache, the midpoint prune and the
+    /// stage-1 cache are bypassed while segments are set.
+    pub fn set_video_conditioning(&self, segments: Option<Vec<VideoTimestepSegment>>) {
+        *self.video_segments.lock().expect("ltx2 video segments") =
+            segments.filter(|s| !s.is_empty());
+    }
+
+    /// Whether per-token video timesteps are set.
+    pub fn video_conditioned(&self) -> bool {
+        self.video_segments
+            .lock()
+            .expect("ltx2 video segments")
+            .is_some()
     }
 
     pub fn enable_stage1_cache(&self) {
@@ -1272,6 +1452,16 @@ impl Ltx2Transformer {
                 video.shape, audio.shape
             )));
         }
+        let segments = self
+            .video_segments
+            .lock()
+            .expect("ltx2 video segments")
+            .clone();
+        if let Some(segments) = segments {
+            return self.forward_segmented(
+                video, audio, text, timestep, ropes, observer, &segments, route,
+            );
+        }
         let eps = self.cfg.norm_eps as f32;
         let ForwardMods {
             video: v_mod,
@@ -1382,6 +1572,313 @@ impl Ltx2Transformer {
         ))
     }
 
+    /// The video modulation at a per-token timestep: `(main, cross,
+    /// embedded)` from `time_embed` and the video a<->v scale/shift embedder
+    /// (the a<->v *gate* and the prompt AdaLN see the scalar `sigma`,
+    /// `transformer_args.py:_prepare_cross_attention_timestep`).
+    fn video_mods_at(&self, timestep: f32) -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+        let s = timestep_sinusoid(timestep, self.cfg.timestep_proj_dim)?;
+        let (main, embedded) = self.time_embed.forward(&s)?;
+        let cross = self.cross_video_scale_shift.forward(&s)?.0;
+        Ok((main, cross, embedded))
+    }
+
+    /// [`Self::forward_probed`] with per-token video timesteps: rows in a
+    /// segment run at `mask * timestep`, the rest at `timestep`
+    /// (`Modality.timesteps = denoise_mask * sigma`). Every video-side
+    /// modulation (block AdaLN, text-query AdaLN and gate, a<->v scale/shift,
+    /// output head) is applied per run of rows; attention and the FFN see the
+    /// whole stream. The audio stream, the a<->v gates and the prompt AdaLN
+    /// use the scalar timestep, as in the reference. FBCache and the
+    /// midpoint prune do not run here.
+    #[allow(clippy::too_many_arguments)]
+    fn forward_segmented(
+        &self,
+        video: &CudaTensor,
+        audio: &CudaTensor,
+        text: &TextConditioning,
+        timestep: f32,
+        ropes: &Ropes,
+        mut observer: Option<BlockObserver<'_>>,
+        segments: &[VideoTimestepSegment],
+        route: Ltx2VideoAttn,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        let eps = self.cfg.norm_eps as f32;
+        let rows = video.shape[1];
+        let base = self.modulations(timestep)?;
+        // The partition of [0, rows) into runs at one timestep each.
+        let mut runs: Vec<(usize, usize, f32)> = Vec::new();
+        let mut at = 0usize;
+        for seg in segments {
+            if seg.start < at || seg.start + seg.len > rows || seg.len == 0 {
+                return Err(msg(format!(
+                    "ltx2 video segments {segments:?} do not fit {rows} rows"
+                )));
+            }
+            if seg.start > at {
+                runs.push((at, seg.start - at, timestep));
+            }
+            runs.push((seg.start, seg.len, seg.mask * timestep));
+            at = seg.start + seg.len;
+        }
+        if at < rows {
+            runs.push((at, rows - at, timestep));
+        }
+        let mut cache: Vec<(u32, (CudaTensor, CudaTensor, CudaTensor))> = Vec::new();
+        let mut pieces = Vec::with_capacity(runs.len());
+        for (start, len, t) in runs {
+            let mods = if t.to_bits() == timestep.to_bits() {
+                (
+                    base.video.main.clone(),
+                    base.video.cross.clone(),
+                    base.v_embedded.clone(),
+                )
+            } else if let Some((_, m)) = cache.iter().find(|(k, _)| *k == t.to_bits()) {
+                m.clone()
+            } else {
+                let m = self.video_mods_at(t)?;
+                cache.push((t.to_bits(), m.clone()));
+                m
+            };
+            pieces.push(VideoPiece {
+                start,
+                len,
+                main: mods.0,
+                cross: mods.1,
+                embedded: mods.2,
+            });
+        }
+
+        let mut xv = self.proj_in.forward(video)?;
+        let mut xa = self.audio_proj_in.forward(audio)?;
+        let dump_blocks = crate::wan::dump::blocks();
+        if dump_blocks {
+            use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+            rows_strided(&named("step00_video_in"), &xv, BLOCK_ROW_STRIDE)?;
+            rows_strided(&named("step00_audio_in"), &xa, 1)?;
+        }
+        for i in 0..self.blocks.len() {
+            (xv, xa) = self.blocks.with(i, |block| {
+                self.block_segmented(
+                    block,
+                    xv,
+                    xa,
+                    text,
+                    &pieces,
+                    &base,
+                    ropes,
+                    eps,
+                    i,
+                    route,
+                )
+            })?;
+            if let Some(obs) = observer.as_mut() {
+                obs(i, &xv, &xa)?;
+            }
+            if dump_blocks {
+                use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+                rows_strided(&named(&format!("step00_video_block_{i}")), &xv, BLOCK_ROW_STRIDE)?;
+                rows_strided(&named(&format!("step00_audio_block_{i}")), &xa, 1)?;
+            }
+        }
+        let head = |x: &CudaTensor, tab: &CudaTensor, e: &CudaTensor| -> Result<CudaTensor> {
+            let dim = e.shape[1];
+            let mods = tab.add(e)?.reshape(vec![1, 2, dim])?;
+            x.ln_adaln_e(&mods, 1, 0, eps)
+        };
+        let modulated = if pieces.len() == 1 {
+            head(&xv, &self.scale_shift_table, &pieces[0].embedded)?
+        } else {
+            let mut outs = Vec::with_capacity(pieces.len());
+            for p in &pieces {
+                outs.push(head(
+                    &xv.narrow(1, p.start, p.len)?,
+                    &self.scale_shift_table,
+                    &p.embedded,
+                )?);
+            }
+            let refs: Vec<&CudaTensor> = outs.iter().collect();
+            CudaTensor::cat(&refs, 1)?
+        };
+        drop(xv);
+        let v_out = self.proj_out.forward(&modulated)?;
+        drop(modulated);
+        let a_out = self
+            .audio_proj_out
+            .forward(&head(&xa, &self.audio_scale_shift_table, &base.a_embedded)?)?;
+        Ok((v_out, a_out))
+    }
+
+    /// One block of [`Self::forward_segmented`]: the unfused op order of
+    /// [`Self::block`] with every video modulation applied per piece.
+    #[allow(clippy::too_many_arguments)]
+    fn block_segmented(
+        &self,
+        b: &Block,
+        xv: CudaTensor,
+        xa: CudaTensor,
+        text: &TextConditioning,
+        pieces: &[VideoPiece],
+        base: &ForwardMods,
+        ropes: &Ropes,
+        eps: f32,
+        layer: usize,
+        route: Ltx2VideoAttn,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        let (dv, da) = (xv.shape[2], xa.shape[2]);
+        let a_mod = &base.audio;
+        let tabs = pieces
+            .iter()
+            .map(|p| {
+                let tab = b.video.scale_shift_table.add(&p.main)?;
+                let rows = tab.shape[0];
+                Ok(PieceTabs {
+                    start: p.start,
+                    len: p.len,
+                    gates: tab.reshape(vec![1, rows, dv])?,
+                    tab,
+                    cross: b.video.cross_table.narrow(0, 0, 4)?.add(&p.cross)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let a_tab = b.audio.scale_shift_table.add(&a_mod.main)?;
+        let a_gates = a_tab.reshape(vec![1, a_tab.shape[0], da])?;
+        let mut tap = Tap {
+            probe: None,
+            block: layer,
+        };
+
+        // 1. self-attention.
+        let xv = {
+            let h = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.tab, 1, 0, eps))?;
+            let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, layer)?;
+            let out = per_piece2(&xv, &u, &tabs, |x, u, t| {
+                x.residual_gate_add_e(u, &t.gates, 2)
+            })?;
+            drop((xv, u));
+            out
+        };
+        let (xa, a_h2) = {
+            let h = adaln_rows(&xa, &a_tab, 1, 0, eps)?;
+            let u = b
+                .audio
+                .attn1
+                .forward_owned(h, None, Some(&ropes.audio), None)?;
+            gated_then_text_norm(&b.audio, xa, u, &a_gates, &a_tab, &self.ones_audio, eps)?
+        };
+
+        // 2. text cross-attention.
+        let xv = {
+            let h = per_piece(&xv, &tabs, |x, t| {
+                let h = x.rms_norm(&self.ones_video, eps)?;
+                if b.video.cross_attn_mod {
+                    scale_shift(&h, &row(&t.tab, 7)?, &row(&t.tab, 6)?)
+                } else {
+                    Ok(h)
+                }
+            })?;
+            let mut enc = text.video.clone();
+            if let Some(pt) = &b.video.prompt_table {
+                let tab_p = match &base.v_prompt {
+                    Some(t) => pt.add(t)?,
+                    None => pt.clone(),
+                };
+                enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
+            }
+            let u = b.video.attn2.forward_owned(h, Some(&enc), None, None)?;
+            drop(enc);
+            let out = if b.video.cross_attn_mod {
+                per_piece2(&xv, &u, &tabs, |x, u, t| {
+                    x.add(&u.mul(&row(&t.tab, 8)?.reshape(vec![1, 1, dv])?)?)
+                })?
+            } else {
+                xv.add(&u)?
+            };
+            drop((xv, u));
+            out
+        };
+        let a_cross = b.audio.cross_table.narrow(0, 0, 4)?.add(&a_mod.cross)?;
+        let (xa, a2v_kv) = text_cross(
+            &b.audio,
+            "audio",
+            xa,
+            a_h2,
+            &text.audio,
+            &a_tab,
+            &self.ones_audio,
+            base.a_prompt.as_ref(),
+            da,
+            eps,
+            &mut tap,
+            fuse::Norm::AdaLn(fuse::Mod {
+                tab: &a_cross,
+                scale: 0,
+                shift: 1,
+            }),
+            false,
+        )?;
+
+        // 3. audio<->video, both directions from the same pre-update states.
+        let a2v_gate = row(&b.video.cross_table, 4)?
+            .add(&base.video.gate)?
+            .reshape(vec![1, 1, dv])?;
+        let v2a_gate = row(&b.audio.cross_table, 4)?
+            .add(&a_mod.gate)?
+            .reshape(vec![1, 1, da])?;
+        let a2v = {
+            let q = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 0, 1, eps))?;
+            let kv = match a2v_kv {
+                Some(kv) => kv,
+                None => adaln_rows(&xa, &a_cross, 0, 1, eps)?,
+            };
+            b.audio_to_video.forward_owned(
+                q,
+                Some(&kv),
+                Some(&ropes.cross_video),
+                Some(&ropes.cross_audio),
+            )?
+        };
+        let v2a = {
+            let q = adaln_rows(&xa, &a_cross, 2, 3, eps)?;
+            let kv = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 2, 3, eps))?;
+            b.video_to_audio.forward_owned(
+                q,
+                Some(&kv),
+                Some(&ropes.cross_audio),
+                Some(&ropes.cross_video),
+            )?
+        };
+        let xv = {
+            let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
+            drop((xv, a2v));
+            out
+        };
+        let xa = {
+            let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+            drop((xa, v2a));
+            out
+        };
+
+        // 4. feed-forward.
+        let xv = {
+            let h = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.tab, 4, 3, eps))?;
+            let u = b.video.ff.forward_owned(h)?;
+            let out = per_piece2(&xv, &u, &tabs, |x, u, t| {
+                x.residual_gate_add_e(u, &t.gates, 5)
+            })?;
+            drop((xv, u));
+            out
+        };
+        let xa = {
+            let h = adaln_rows(&xa, &a_tab, 4, 3, eps)?;
+            let u = b.audio.ff.forward_owned(h)?;
+            let out = xa.residual_gate_add_e(&u, &a_gates, 5)?;
+            drop((xa, u));
+            out
+        };
+        Ok((xv, xa))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn block(
         &self,
@@ -1455,72 +1952,6 @@ impl Ltx2Transformer {
 
         // 2. text cross-attention (optional Q/KV AdaLN + output gate, LTX-2.5).
         // Its residual carries the audio↔video query norm (`side(x, cross, 0)`).
-        #[allow(clippy::too_many_arguments)]
-        fn text_cross(
-            stream: &StreamBlock,
-            name: &str,
-            x: CudaTensor,
-            h: Option<CudaTensor>,
-            ctx: &CudaTensor,
-            tab: &CudaTensor,
-            ones: &CudaTensor,
-            prompt: Option<&CudaTensor>,
-            dim: usize,
-            eps: f32,
-            tap: &mut Tap<'_, '_>,
-            next: fuse::Norm<'_>,
-            probed: bool,
-        ) -> Result<(CudaTensor, Option<CudaTensor>)> {
-            let h = match h {
-                Some(h) => h,
-                None => {
-                    let mut h = x.rms_norm(ones, eps)?;
-                    if stream.cross_attn_mod {
-                        h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
-                    }
-                    h
-                }
-            };
-            let mut enc = ctx.clone();
-            if let Some(pt) = &stream.prompt_table {
-                let tab_p = match prompt {
-                    Some(t) => pt.add(t)?,
-                    None => pt.clone(),
-                };
-                enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
-            }
-            tap.emit(name, "attn2_in", &h)?;
-            let u = stream.attn2.forward_owned(h, Some(&enc), None, None)?;
-            drop(enc);
-            if !probed {
-                let res = if stream.cross_attn_mod {
-                    fuse::Residual::Gated {
-                        u: &u,
-                        gates: tab,
-                        row: 8,
-                    }
-                } else {
-                    fuse::Residual::Plain(&u)
-                };
-                if let Some((out, n)) = fuse::res_norm_mod(&x, res, next, eps)? {
-                    drop((x, u));
-                    tap.emit(name, "attn2_after", &out)?;
-                    return Ok((out, Some(n)));
-                }
-            }
-            let u = if stream.cross_attn_mod {
-                let gated = u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?;
-                drop(u);
-                gated
-            } else {
-                u
-            };
-            tap.emit(name, "attn2_out", &u)?;
-            let out = x.add(&u)?;
-            drop((x, u));
-            tap.emit(name, "attn2_after", &out)?;
-            Ok((out, None))
-        }
         let q_mod = |cross| {
             fuse::Norm::AdaLn(fuse::Mod {
                 tab: cross,
