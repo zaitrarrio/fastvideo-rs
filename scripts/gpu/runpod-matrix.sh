@@ -2347,8 +2347,9 @@ Audio: male speech, clear voice, quiet room"
     # compared with the native 1080p clip of the same prompt and seed
     # (compare-clips: sharpness, jitter, patch-boundary ratios; LPIPS with
     # FV_LPIPS=1). Keyframes 0/40/80/120 of every clip are kept; the rest of
-    # the PNGs are deleted after the compare. FV_HD_POST_URL: a script fetched
-    # and run afterwards with $RUNS (the upscaler benchmark).
+    # the PNGs are deleted after the compares. FV_HD_POST_URL: a script fetched
+    # and run before that with $RUNS (scripts/gpu/hd-upscaler.sh, the upscaler
+    # benchmark).
     : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
     hd_common=(
       --seconds 5
@@ -2392,6 +2393,14 @@ Audio: male speech, clear voice, quiet room"
       done
       compare_cells "$lo-lanczos" "$hi"
     done
+    if [[ -n "${FV_HD_POST_URL:-}" ]]; then
+      log "post script $FV_HD_POST_URL"
+      if curl -fsSL "$FV_HD_POST_URL" -o "$SCRATCH/hd-post.sh"; then
+        FV_GEN_TIMEOUT_S="${FV_HD_POST_TIMEOUT_S:-3600}" run_cell upscaler env FV_BIN="$BIN" FV_LPIPS_ARGS="${LPIPS_ARGS[*]+${LPIPS_ARGS[*]}}" bash "$SCRATCH/hd-post.sh" "$RUNS"
+      else
+        log "post script fetch failed"
+      fi
+    fi
     for c in "$RUNS"/*/frames; do
       for d in "$c"/*/; do
         [[ -d "$d" ]] || continue
@@ -2403,14 +2412,6 @@ Audio: male speech, clear voice, quiet room"
         rm -f "$d"/frame-*.png
       done
     done
-    if [[ -n "${FV_HD_POST_URL:-}" ]]; then
-      log "post script $FV_HD_POST_URL"
-      if curl -fsSL "$FV_HD_POST_URL" -o "$SCRATCH/hd-post.sh"; then
-        FV_GEN_TIMEOUT_S="${FV_HD_POST_TIMEOUT_S:-3600}" run_cell upscaler bash "$SCRATCH/hd-post.sh" "$RUNS"
-      else
-        log "post script fetch failed"
-      fi
-    fi
     ;;
   serve-engine)
     # Serve engine CUDA backend (WP-11): for each family, the CLI generation
