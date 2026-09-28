@@ -472,9 +472,10 @@ form}.js`) and `configs/serve/runpod-{wan5b,wan,ltx}.toml`.
   `/{app}/requests/{id}` (the URLs we return) and under every
   `/{app}/{sub}/requests/{id}`. A job belongs to the app its endpoint id
   names (`schema::app_id` drops the longest known sub).
-- Output file names: `<nanoid21>_<slug>.mp4`, `minimax-h3` for every
-  `minimax/*` app and the alias elsewhere (`_ltx-2.5.mp4`, `_wan.mp4`,
-  `_fastwan21-1.3b.mp4`).
+- Output file names: `<nanoid21>_<slug>.mp4` from the app id
+  (`schema::output_slug`: `minimax-<alias>` on `minimax/*`, else the alias,
+  e.g. `_ltx-2.5.mp4`, `_wan.mp4`), plus the tier when the slug does not
+  name it (the API-fixes work refined the slug on top of this).
 - The director is mounted for the H3 apps only.
 - `GET /fal/schema` lists each app's own endpoints (`sub`, `endpoint_id`,
   `title`, and the endpoint's `model` / `tier`), plus `kind` and `director`;
