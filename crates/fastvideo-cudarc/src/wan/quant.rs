@@ -1089,7 +1089,8 @@ mod device_impl {
                 }
             }
             let mx = pre.or(own_mx.as_ref());
-            let run = |n_tok: usize, d_ptr: u64| -> Result<()> {
+            // `xb`: the bf16 input the bf16 sections read (`n_tok` rows of it).
+            let run = |n_tok: usize, d_ptr: u64, xb: Option<u64>| -> Result<()> {
                 let ltc = super::super::fp8::lt_context(&dev)?;
                 for (i, (s, l)) in lay.sections.iter().zip(&lay.lay).enumerate() {
                     let d = d_ptr + (l.row0 * 2) as u64;
@@ -1100,7 +1101,7 @@ mod device_impl {
                             n: n_tok,
                             k,
                             a,
-                            b: x_bf16.ok_or_else(|| msg("bf16 section without input"))?,
+                            b: xb.ok_or_else(|| msg("bf16 section without input"))?,
                             ab_type: lt::cudaDataType_t::CUDA_R_16BF,
                             d,
                             ldd: n_out,
@@ -1152,7 +1153,7 @@ mod device_impl {
             let mut out =
                 unsafe { dev.stream.alloc::<half::bf16>((m * n_out).max(1)) }.map_err(err)?;
             let op = ptr_mut(&mut out);
-            match run(m, op) {
+            match run(m, op, x_bf16) {
                 Ok(()) => Ok(out),
                 Err(first) if m != m_pad => {
                     // No algorithm for an unaligned token count: run the
@@ -1168,12 +1169,33 @@ mod device_impl {
                     let mut padded =
                         unsafe { dev.stream.alloc::<half::bf16>(m_pad * n_out) }.map_err(err)?;
                     let pp = ptr_mut(&mut padded);
-                    if lay.sections.iter().any(|s| !s.quantized) {
-                        return Err(msg(
-                            "quantized linear: unaligned token count with a bf16 section",
-                        ));
-                    }
-                    run(m_pad, pp)?;
+                    // The quantized activations are already zero-padded to
+                    // `m_pad` rows (`MxAct::alloc`, `W8Act::quantize`); a bf16
+                    // section reads `x` itself, so give it a zero-padded copy.
+                    let mut _own_x = None;
+                    let xb = if lay.sections.iter().any(|s| !s.quantized) {
+                        let xp = x_bf16.ok_or_else(|| msg("bf16 section without input"))?;
+                        let mut xpad =
+                            dev.stream.alloc_zeros::<half::bf16>(m_pad * k).map_err(err)?;
+                        let dst = ptr_mut(&mut xpad);
+                        // SAFETY: `xp` holds `m * k` bf16 values (the caller's
+                        // contract) and `xpad` holds `m_pad * k >= m * k`, both
+                        // on this stream's device; the copy is stream-ordered.
+                        unsafe {
+                            cudarc::driver::result::memcpy_dtod_async(
+                                dst,
+                                xp,
+                                m * k * 2,
+                                dev.stream.cu_stream(),
+                            )
+                        }
+                        .map_err(err)?;
+                        _own_x = Some(xpad);
+                        Some(dst)
+                    } else {
+                        x_bf16
+                    };
+                    run(m_pad, pp, xb)?;
                     let src = padded.slice(0..m * n_out);
                     dev.stream.memcpy_dtod(&src, &mut out).map_err(err)?;
                     Ok(out)
