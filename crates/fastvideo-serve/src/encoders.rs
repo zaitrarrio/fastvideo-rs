@@ -6,10 +6,11 @@
 //! defaults to `auto`. [`resolve`] runs the NVENC encode probe
 //! ([`fastvideo_media::video::auto_encoder`]) when any setting is `auto`,
 //! logs the choice, and rewrites those settings to the concrete backend:
-//! `nvenc` when the probe encoded, else `openh264`. A probe failure that may
+//! `nvenc` when the probe encoded, else the CPU fallback below. A probe failure that may
 //! be transient (ffmpeg has `h264_nvenc` but opening it failed, as on a
 //! serverless worker whose GPU is not ready) is retried once after 2 s; if
-//! NVENC still fails, the fallback is logged at WARN. Explicit values are
+//! NVENC still fails, the fallback of each setting is logged at WARN
+//! ([`Selection::describe`]). Explicit values are
 //! kept as they are.
 //!
 //! Where OpenH264 cannot serve, the fallback is what that consumer can still
@@ -47,6 +48,33 @@ impl Selection {
             _ if openh264_compiled => s("openh264", "openh264", "openh264", "cpu-test-x264"),
             _ => s("openh264", "off", "x264-test", "cpu-test-x264"),
         }
+    }
+
+    /// What each rewritten setting (`apply`'s names) now uses, for the log:
+    /// `director.encoder=openh264, webrtc.encoder=x264-test (CPU test
+    /// encoder), …`. Says what really runs, which is not OpenH264 for every
+    /// consumer (see the module docs).
+    pub fn describe(&self, settings: &[&str]) -> String {
+        let note = |v: &str| match v {
+            "off" => " (VP8 only)",
+            "x264-test" | "cpu-test-x264" => " (CPU test encoder)",
+            "openh264" if !EncoderBackend::OpenH264.compiled() => " (not in this build: H.264 offers fail, VP8 is used)",
+            _ => "",
+        };
+        settings
+            .iter()
+            .filter_map(|name| {
+                let v = match *name {
+                    "director.encoder" => &self.director,
+                    "reactor.h264" => &self.reactor,
+                    "webrtc.encoder" => &self.streams,
+                    "engine.post_encoder" => &self.post,
+                    _ => return None,
+                };
+                Some(format!("{name}={v}{}", note(v)))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -106,16 +134,19 @@ pub async fn resolve(c: &mut Config) {
         // A GPU worker without a working NVENC (a serverless host whose
         // driver lacks the `video` capability, or no free NVENC session)
         // still serves, on the CPU fallback.
-        Some(e) => tracing::warn!(
-            ?settings,
-            attempts = auto.attempts,
-            director = %sel.director,
-            reactor = %sel.reactor,
-            streams = %sel.streams,
-            post = %sel.post,
-            nvenc_error = %e,
-            "H.264 encoder: NVENC unavailable after the startup probe, falling back to openh264 (auto)"
-        ),
+        Some(e) => {
+            let fallback = sel.describe(&settings);
+            tracing::warn!(
+                ?settings,
+                attempts = auto.attempts,
+                director = %sel.director,
+                reactor = %sel.reactor,
+                streams = %sel.streams,
+                post = %sel.post,
+                nvenc_error = %e,
+                "H.264 encoder: NVENC unavailable after the startup probe, falling back to: {fallback} (auto)"
+            )
+        }
     }
 }
 
@@ -144,5 +175,20 @@ mod tests {
         assert_eq!(c.webrtc.encoder, "openh264");
         assert_eq!(c.engine.post_encoder, "cpu-test-x264");
         assert!(!wants_auto(&c));
+    }
+
+    /// The fallback log names what each rewritten setting really uses: a
+    /// build without OpenH264 says x264-test / off, not "openh264".
+    #[test]
+    fn fallback_description_names_the_real_encoders() {
+        let bad = AutoEncoder::from_probe(Err("no device".into()));
+        let all = ["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"];
+        let d = Selection::new(&bad, false).describe(&all);
+        assert!(d.contains("reactor.h264=off (VP8 only)"), "{d}");
+        assert!(d.contains("webrtc.encoder=x264-test (CPU test encoder)"), "{d}");
+        assert!(d.contains("engine.post_encoder=cpu-test-x264 (CPU test encoder)"), "{d}");
+        let d = Selection::new(&bad, true).describe(&["webrtc.encoder", "engine.post_encoder"]);
+        assert!(d.starts_with("webrtc.encoder=openh264"), "{d}");
+        assert!(!d.contains("director"), "only rewritten settings: {d}");
     }
 }
