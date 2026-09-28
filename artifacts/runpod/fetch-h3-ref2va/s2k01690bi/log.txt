@@ -1,0 +1,66 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+[19:06:26] plan: 29 files, 69059483520 bytes (69.06 GB) -> /workspace/weights/h3-ref2va
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 LICENSE -> LICENSE 17604
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 README.md -> README.md 38406
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 model_index.json -> model_index.json 2936
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/chat_template.json -> processor/chat_template.json 5499
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/merges.txt -> processor/merges.txt 1671839
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/preprocessor_config.json -> processor/preprocessor_config.json 390
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/tokenizer.json -> processor/tokenizer.json 7032403
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/tokenizer_config.json -> processor/tokenizer_config.json 11003
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/video_preprocessor_config.json -> processor/video_preprocessor_config.json 385
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 processor/vocab.json -> processor/vocab.json 2776833
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/config.json -> transformer_ref/config.json 546
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors 4825958704
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors 4702158032
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors 4933368192
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors 4567069608
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors 4702158080
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors 4933368232
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors 4567069608
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors 4702158080
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors 4933368232
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors 4567069608
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors 4702158080
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors 4933368232
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors 4567069608
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors -> transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors 4644161920
+[19:06:26]   MiniMaxAI/MiniMax-H3@42ed227 transformer_ref/diffusion_pytorch_model.safetensors.index.json -> transformer_ref/diffusion_pytorch_model.safetensors.index.json 64488
+[19:06:26]   lightx2v/Minimax-h3-Turbo@3ec17a3 README.md -> Minimax-h3-Turbo/README.md 1396
+[19:06:26]   lightx2v/Minimax-h3-Turbo@3ec17a3 minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors -> Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors 1383677768
+[19:06:26]   lightx2v/Minimax-h3-Turbo@3ec17a3 minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors -> Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808
+[19:06:26] volume free 979.6 GB
+[19:06:27] ok LICENSE 17604 59b99642b95ea216 small 0s
+[19:06:27] ok README.md 38406 f0116a90332496bd small 0s
+[19:06:27] ok model_index.json 2936 5a587fe13b237142 small 0s
+[19:06:27] ok processor/chat_template.json 5499 5c72a170d2a4a1a3 small 0s
+[19:06:27] ok processor/merges.txt 1671839 599bab5407508877 small 0s
+[19:06:28] ok processor/preprocessor_config.json 390 27225450ac9c6529 small 0s
+[19:06:28] ok processor/tokenizer.json 7032403 a5d85b6dcc535e6b small 0s
+[19:06:28] ok processor/tokenizer_config.json 11003 a07e942ac874baa1 small 0s
+[19:06:28] ok processor/video_preprocessor_config.json 385 7768af27c1fafa9c small 0s
+[19:06:29] ok processor/vocab.json 2776833 ca10d7e9fb3ed185 small 0s
+[19:06:29] ok transformer_ref/config.json 546 74c11bff52433657 small 0s
+[19:06:51] ok transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors 4825958704 7a3fcad885f51560 lfs 22s
+[19:07:15] ok transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors 4702158032 1638ae1dc8ae26c4 lfs 24s
+[19:07:35] ok transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors 4933368192 1ef3c4954ffe5a66 lfs 21s
+[19:07:56] ok transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors 4567069608 12d92f2975cfd5c5 lfs 21s
+[19:08:18] ok transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors 4702158080 304d41ce03d59ac9 lfs 21s
+[19:08:40] ok transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors 4933368232 12a134b7c76d86ed lfs 23s
+[19:09:01] ok transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors 4567069608 b96395261359937c lfs 21s
+[19:09:23] ok transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors 4702158080 1897a6bf3b4fc834 lfs 22s
+[19:09:49] ok transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors 4933368232 edfb38235adc96b9 lfs 25s
+[19:10:13] ok transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors 4567069608 f8710775cf341367 lfs 25s
+[19:10:35] ok transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors 4702158080 9e18acc09f84edb5 lfs 21s
+[19:11:00] ok transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors 4933368232 ea2e18228f8bdba1 lfs 26s
+[19:11:21] ok transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors 4567069608 1e12083b1875678f lfs 21s
+[19:11:42] ok transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors 4644161920 b340f44b5690cc74 lfs 21s
+[19:11:42] ok transformer_ref/diffusion_pytorch_model.safetensors.index.json 64488 ac30a3b58963f2e7 small 0s
+[19:11:43] ok Minimax-h3-Turbo/README.md 1396 4939071ba0e40d0c small 0s
+[19:11:50] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors 1383677768 9e642fc8749c74f8 lfs 7s
+[19:11:57] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 7s
+[19:13:49] DONE /workspace/weights/h3-ref2va: 29 files, 69059483520 bytes, 442s
+[19:13:49] h3-base snapshots: ['h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe']

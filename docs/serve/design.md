@@ -835,7 +835,7 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | H3 2K, fal 1080P refine, Context-IR, regeneration | MiniMax, fal | 400/422 | none (permanent) |
 | H3-Max weights | MiniMax, fal | alias with a documented substitution | none |
 | H3 target/conditioning audio | fal `target_audio_url`, director `audio_url` | 422 / `prompt_rejected{invalid_audio}` | E10 |
-| H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | 400 unless configured | E11 |
+| H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | served by the Ref2VA companion models `h3-ref2v-max` / `h3-ref2v-turbo` (`route_task`); 400 when none is configured. Own process on 80-96 GB cards (`configs/serve/runpod-h3-ref2v.toml`); docs/ports/h3-ref2v.md | E11 |
 | LTX fps 25/48/50 | LTX, FastVideo | served (validated at 1080p, `artifacts/serve/e4-ltx-fps/benchmark.json`; engines without them in caps still 400) | E4 done |
 | LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
 | LTX-2.5 I2V | LTX `image_uri` on 2.5 | 400 | E5 |
@@ -1732,8 +1732,13 @@ additions and readings; everything is re-exported from the crate root.
   denoise); I2V 110-154 s wall (21.8 s denoise). The I2V gap is the FL2VA
   text stage: `encode_request_multimodal` streams the Qwen-VL encoder (vision
   tower + LM) from the weight volume on every request and ignores the
-  resident text encoder; T2V uses the resident one. A resident multimodal
-  path (mRoPE + deepstack on the resident encoder) is the follow-up.
+  resident text encoder; T2V uses the resident one. Fixed: the multimodal
+  path runs on the resident text encoder plus a resident vision tower
+  (1.1 GB; `[[models]] i2v_encoder = auto|resident|stream`). Streaming uses
+  the same precision, so both give identical bytes. With `warmup = true`,
+  one I2V and one T2V job run before readiness. I2V is now 16.4 s wall at
+  480P and 33.1 s at 768P, and the first job equals a warm one
+  (docs/serve/e2e/i2v-resident.md).
 - The H3 profiles ask for MXFP8, which cuBLASLt runs only on sm_100+. On
   Hopper every H3 job failed (`h3-max`: "no MXFP8 ... algorithm on sm90";
   `h3-turbo`: the same, masked by the zero-padded retry refusing layers with a
@@ -1945,7 +1950,7 @@ additions and readings; everything is re-exported from the crate root.
 | **E5 LTX-2.5 I2V** | `ltx2/{i2v_encode.rs,pipeline.rs}`, the preset entry in `crates/fastvideo-core/src/registry.rs` | E4 → E5 | First-frame I2V on the 2.5 distilled two-stage; CLIP frame-0 similarity ≥ the 2.3 baseline; caps add `I2V` |
 | **E9 LTX last-frame keyframes** | `ltx2/pipeline.rs` | E5 → E9 | `last_frame_uri` interpolation; `Keyframes` in caps |
 | **E10 H3 target-audio conditioning** | `h3/{pipeline.rs,audio_vae.rs}` | after E2 | Research first: upstream FL2VA target-audio semantics. Then `target_audio_url` and director `audio_url` support |
-| **E11 H3 fl2va + ref2va co-residency** | `h3/pipeline.rs` (load options) | after E10 | Both DiTs served by one process within the memory budget, or a documented swap cost; caps advertise `Ref2V` |
+| **E11 H3 fl2va + ref2va co-residency** | `h3/pipeline.rs` (load options) | after E10 | Both DiTs served by one process within the memory budget, or a documented swap cost; caps advertise `Ref2V`. **Built**: catalog `h3-ref2v-max` (base, 49 forwards) and `h3-ref2v-turbo` (Sol-H3 Ref2VA, 4 forwards), weights `h3-ref2va` on both volumes; docs/ports/h3-ref2v.md |
 | **S1 (stretch) MiniMax V1 shape** | `crates/fastvideo-minimax/src/v1.rs` | after WP-07 | Only if a real client needs H3 over V1 |
 
 Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) → WP-12 → WP-14 → WP-18`.

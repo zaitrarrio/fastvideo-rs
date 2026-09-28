@@ -1,0 +1,14 @@
+[19:14:57] pod 652qtvg5a6hqfy $0.24/hr dc=EUR-IS-1 vol=jg48s6o1w0
+[19:14:57] backstop pid 10083 (cap 5400s)
+[19:15:28] ok transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors 4825958704 7a3fcad885f51560 lfs 16s
+[19:15:53] ok transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors 4933368192 1ef3c4954ffe5a66 lfs 13s
+[19:16:30] ok transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors 4933368232 12a134b7c76d86ed lfs 12s
+[19:16:57] ok transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors 4702158080 1897a6bf3b4fc834 lfs 15s
+[19:17:35] ok transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors 4702158080 9e18acc09f84edb5 lfs 12s
+[19:18:01] ok transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors 4567069608 1e12083b1875678f lfs 12s
+[19:18:24] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 4s
+[19:18:24] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 4s
+[19:18:24] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 4s
+[19:20:06] h3-base snapshots: ['h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe']
+[19:20:20] DONE=0
+[19:20:27] pod 652qtvg5a6hqfy deleted (verified)

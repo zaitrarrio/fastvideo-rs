@@ -114,7 +114,8 @@ fn h264_backend(s: &str) -> EncoderBackend {
 pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConfig {
     let d = &c.director;
     DirectorConfig {
-        apps: crate::adapters::fal_config(m).apps,
+        // The H3 apps only: LTX and Wan have no director.
+        apps: crate::adapters::fal_config(m).apps.into_iter().filter(|a| a.kind().director()).collect(),
         ice_servers: host.ice_servers().to_vec(),
         chunk_seconds: d.chunk_seconds,
         max_session_seconds: (d.max_session_seconds > 0).then_some(d.max_session_seconds),
@@ -194,7 +195,7 @@ mod tests {
         rt.block_on(async {
             let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
             let d = director_config(&c, &m, &host);
-            assert_eq!(d.apps.len(), 3);
+            assert_eq!(d.apps.len(), fastvideo_fal::DEFAULT_APPS.len());
             assert_eq!(d.max_session_seconds, Some(600));
             assert_eq!(d.h264, EncoderBackend::OpenH264);
             assert_eq!(d.chunk_seconds, 10.0);

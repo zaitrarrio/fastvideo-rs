@@ -85,29 +85,14 @@ pub fn minimax_config(cfg: &MountCfg) -> fastvideo_minimax::MiniMaxConfig {
     }
 }
 
-/// `owner/alias` app ids → fal apps: `minimax/h3-{max,turbo,draft}` get their
-/// H3 tier fallback; any other id resolves its alias part by name only.
+/// `owner/alias` app ids → fal apps (`FalApp::from_id`):
+/// `minimax/h3-{max,turbo,draft}`, `minimax/h3-max-turbo` and `minimax/h3`
+/// get their H3 tier fallback; `lightricks/ltx-2.5` and `fal-ai/wan` pick an
+/// LTX / Wan tier per endpoint; any other id resolves its alias part by name
+/// only (H3 schema).
 #[cfg(feature = "fal")]
 pub fn fal_config(cfg: &MountCfg) -> fastvideo_fal::FalConfig {
-    use fastvideo_protocol::Tier;
-    let apps = cfg
-        .protocols
-        .fal_apps
-        .iter()
-        .map(|id| {
-            let id = id.trim_matches('/');
-            match id {
-                "minimax/h3-max" => fastvideo_fal::FalApp::h3(Tier::Max),
-                "minimax/h3-turbo" => fastvideo_fal::FalApp::h3(Tier::Turbo),
-                "minimax/h3-draft" => fastvideo_fal::FalApp::h3(Tier::Draft),
-                other => fastvideo_fal::FalApp {
-                    id: other.to_owned(),
-                    model: other.rsplit('/').next().unwrap_or(other).to_owned(),
-                    tier: None,
-                },
-            }
-        })
-        .collect();
+    let apps = cfg.protocols.fal_apps.iter().map(|id| fastvideo_fal::FalApp::from_id(id)).collect();
     fastvideo_fal::FalConfig {
         apps,
         url_ttl: cfg.url_ttl,

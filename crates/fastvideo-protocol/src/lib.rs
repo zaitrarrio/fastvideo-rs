@@ -42,7 +42,7 @@ pub use job::{
 };
 pub use negotiate::{
     canvas_for_aspect, draw_seed, negotiate, precheck, resolve_canvas, resolve_frames,
-    resolve_model, resolve_tier, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
+    resolve_model, resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
     StagedInputs, StagedMedia,
 };
 pub use request::{

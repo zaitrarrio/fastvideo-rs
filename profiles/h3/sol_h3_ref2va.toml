@@ -1,0 +1,21 @@
+# sol-engine models/minimax_h3/Sol-H3 `--task ref2va`: the Ref2VA DiT
+# (MiniMax-H3 transformer_ref) with the lightx2v ref2v turbo 4-step LoRA
+# fused, four forwards on the uniform grid, dense attention (Sol-H3 allows
+# dense or sol_bsa for Ref2VA; the T2V Sol policy is refused), MXFP8 linears.
+# The H3 reference-to-video turbo tier (docs/ports/h3-ref2v.md).
+
+[id]
+name = "sol_h3_ref2va"
+family = "minimax_h3"
+description = "Sol-H3 4-step Ref2VA: transformer_ref + lightx2v turbo LoRA, dense attention, MXFP8."
+upstream = "sol-engine models/minimax_h3/Sol-H3 (--task ref2va)"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3-ref2va"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

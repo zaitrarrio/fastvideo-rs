@@ -198,7 +198,7 @@ create_pod() {
     read -r vol dc < <(volume) || true
     [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   fi
-  payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
+  payload="$(jq -n --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",

@@ -92,7 +92,7 @@ impl FakeModel {
             id: ModelId::new(id),
             family: Family::Ltx2,
             served_names: vec![id.to_owned()],
-            tasks: [Task::T2V, Task::I2V].into_iter().collect(),
+            tasks: [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect(),
             audio: Some(AudioCaps {
                 native_rate: 48_000,
                 channels: 2,

@@ -1,0 +1,12 @@
+[fastvideo] load/io h3 text_encoder {"wall_s":37.65,"viewed_gb":25.95,"prefetch_read_gb":27.54,"prefetch_skipped_gb":0.00,"prefetch_busy_s":601.9,"viewed_gbps":0.69,"window_wait_s":0.0,"fill_s":1.2,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":15.7,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 14.0 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] load/io h3 dit {"wall_s":134.25,"viewed_gb":98.76,"prefetch_read_gb":94.61,"prefetch_skipped_gb":0.00,"prefetch_busy_s":2179.8,"viewed_gbps":0.74,"window_wait_s":0.0,"fill_s":16.0,"h2d_wait_s":0.3,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":52.2,"read_wait_s":66.5,"mem_mode":true,"prefetch":true}
+[fastvideo] load/io h3 total {"wall_s":144.24,"viewed_gb":108.71,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":2332.2,"viewed_gbps":0.75,"window_wait_s":0.0,"fill_s":16.0,"h2d_wait_s":0.3,"h2d_pageable_s":0.3,"convert_s":0.0,"lora_s":52.2,"read_wait_s":73.4,"mem_mode":false,"prefetch":true}
+[2m2026-09-28T19:46:41.638008Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mfasth3 [3mseconds[0m[2m=[0m144.292581392
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images, resident)
+[2m2026-09-28T19:47:41.966709Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m warmup done [3mmodel[0m[2m=[0mfasth3 [3mseconds[0m[2m=[0m60.328647794 [3mruns[0m[2m=[0mi2v 1344x768x124 34.1s, t2v 1344x768x124 26.3s
+FV-SERVE READY models=fasth3
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images, resident)
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images, resident)
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images, resident)
+

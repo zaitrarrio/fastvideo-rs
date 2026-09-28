@@ -1,168 +1,493 @@
-//! LTX-2 I2V first-frame VAE encode.
+//! LTX-2 image conditioning: first-frame I2V and keyframes.
 //!
-//! Prefers [`super::vae_encoder::VideoEncoder`] when Diffusers `encoder.*`
-//! keys are present under `vae/` (full ResNet/downsample stack when
-//! `down_blocks` load). Otherwise uses a spatial downsample stub so
-//! `--image` still conditions frame 0 instead of refusing.
+//! The reference is `ltx_pipelines` (Lightricks/LTX-2 `fd4ded7`):
+//!
+//! * **Preprocess** (`utils/media_io/decode.py:load_image_and_preprocess`):
+//!   decode to sRGB RGB (EXIF rotations 3/6/8 applied, alpha dropped), re-encode
+//!   as one H.264 frame at the checkpoint's CRF and decode it back
+//!   (`preprocess`: libx264 `veryfast`, yuv420p, even crop; CRF 33 for 2.0-2.3,
+//!   18 from 2.4 on, `constants.py:DEFAULT_IMAGE_CRF / LTX_2_4_IMAGE_CRF`), then
+//!   `resize_and_center_crop` (bilinear, `align_corners=False`, no antialias, to
+//!   the smallest size covering the target, then a centered crop) and
+//!   `x / 127.5 − 1` in bf16.
+//! * **Encode** with the video VAE encoder ([`super::vae_encoder`]): one latent
+//!   frame per image, at each stage's resolution (half size for stage 1 of the
+//!   two-stage pipeline, full size for stage 2).
+//! * **Condition** (`helpers.py:combined_image_conditionings`): an image at
+//!   frame 0 replaces the latent tokens of latent frame 0
+//!   (`VideoConditionByLatentIndex`); an image at any other pixel frame `k` is
+//!   *appended* as extra tokens whose rotary positions sit at pixel frame
+//!   `[k, k + 1)` (`VideoConditionByKeyframeIndex`). Either way those tokens
+//!   get the clean latent and the denoise mask `1 − strength`.
+//! * **Sample** with the mask: the noiser draws over every token and
+//!   `lerp(clean, noised, mask)` (`noisers.py`); each forward sees per-token
+//!   timesteps `mask · σ` ([`super::transformer::VideoTimestepSegment`]); `x0 =
+//!   x − mask·σ·v` and `x0 ← x0·mask + clean·(1 − mask)` before every update,
+//!   and again after an ancestral step's noise (`samplers.py:post_process_latent`).
+//!   The appended tokens are dropped after the stage (`clear_conditioning`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use fastvideo_models::ltx2::config::Ltx2VideoVaeConfig;
+use fastvideo_models::ltx2::config::Ltx2ModelVersion;
+use image::RgbImage;
 
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
-use super::vae_encoder::VideoEncoder;
+use super::transformer::VideoTimestepSegment;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
 }
 
-/// Encode a first-frame image into a single latent frame `[1, C, 1, H, W]`.
-///
-/// When `vae_dir` contains encoder keys, runs the real (partial) Diffusers
-/// encoder path; otherwise falls back to spatial stub.
-pub fn encode_first_frame(
-    path: &Path,
-    pixel_height: usize,
-    pixel_width: usize,
-    latent_channels: usize,
-    spatial_compression: usize,
-    vae_dir: Option<&Path>,
-) -> Result<CudaTensor> {
-    if let Some(dir) = vae_dir {
-        if dir.is_dir() {
-            let map = WeightMap::open(dir).map_err(|e| msg(e.to_string()))?;
-            let mut cfg = Ltx2VideoVaeConfig::ltx2_19b();
-            cfg.latent_channels = latent_channels;
-            if let Some(enc) = VideoEncoder::try_load(&map, &cfg)? {
-                return enc.encode_first_frame(path, pixel_height, pixel_width);
-            }
-        }
-    }
-    encode_first_frame_stub(
-        path,
-        pixel_height,
-        pixel_width,
-        latent_channels,
-        spatial_compression,
-    )
+/// One conditioning image (`ImageConditioningInput`: path, pixel frame index,
+/// strength, CRF).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConditioningImage {
+    pub path: PathBuf,
+    /// Pixel frame the image pins: 0 for I2V, `num_frames − 1` for a last frame.
+    pub frame_idx: usize,
+    /// 1.0 = the frame is kept clean; 0.0 = no conditioning.
+    pub strength: f32,
+    /// H.264 CRF of the re-encode (`None` = the checkpoint's; 0 = none).
+    pub crf: Option<u32>,
 }
 
-/// Spatial downsample stub (no `encoder.*` weights).
-pub fn encode_first_frame_stub(
-    path: &Path,
-    pixel_height: usize,
-    pixel_width: usize,
-    latent_channels: usize,
-    spatial_compression: usize,
-) -> Result<CudaTensor> {
-    let img = image::open(path)
-        .map_err(|e| msg(format!("ltx2 i2v open {}: {e}", path.display())))?
-        .into_rgb8();
-    let img = image::imageops::resize(
-        &img,
-        pixel_width as u32,
-        pixel_height as u32,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let lh = pixel_height / spatial_compression;
-    let lw = pixel_width / spatial_compression;
-    if lh == 0 || lw == 0 {
-        return Err(msg(format!(
-            "ltx2 i2v: {pixel_height}x{pixel_width} too small for compression {spatial_compression}"
-        )));
-    }
-    let mut lat = vec![0f32; latent_channels * lh * lw];
-    for y in 0..lh {
-        for x in 0..lw {
-            let mut acc = [0f32; 3];
-            let y0 = y * spatial_compression;
-            let x0 = x * spatial_compression;
-            let mut n = 0usize;
-            for dy in 0..spatial_compression {
-                for dx in 0..spatial_compression {
-                    let py = (y0 + dy).min(pixel_height - 1);
-                    let px = (x0 + dx).min(pixel_width - 1);
-                    let p = img.get_pixel(px as u32, py as u32);
-                    for ch in 0..3 {
-                        acc[ch] += f32::from(p[ch]) / 127.5 - 1.0;
-                    }
-                    n += 1;
-                }
-            }
-            for ch in 0..3 {
-                acc[ch] /= n as f32;
-            }
-            for ch in 0..latent_channels {
-                lat[(ch * lh + y) * lw + x] = acc[ch % 3] * 0.5;
-            }
+impl ConditioningImage {
+    pub fn first_frame(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            frame_idx: 0,
+            strength: 1.0,
+            crf: None,
         }
     }
-    CudaTensor::from_vec(lat, vec![1, latent_channels, 1, lh, lw]).map_err(Into::into)
 }
 
-/// Overwrite frame 0 of packed video tokens with the encoded still.
-pub fn condition_first_frame(
-    packed_video: &CudaTensor,
-    grid: [usize; 3],
-    first_frame: &CudaTensor,
-) -> Result<CudaTensor> {
-    use super::transformer::{pack_video, unpack_video};
+/// The CRF an image conditioning is re-encoded at for a checkpoint line
+/// (`detect_params(...).default_image_crf`: 18 from 2.4 on, else 33).
+pub fn default_crf(version: Ltx2ModelVersion) -> u32 {
+    match version {
+        Ltx2ModelVersion::V25 => 18,
+        _ => 33,
+    }
+}
 
-    let [f, h, w] = grid;
-    let video = unpack_video(packed_video, grid).map_err(|e| msg(e.to_string()))?;
-    let [_, c, ef, eh, ew] = match first_frame.shape[..] {
-        [1, c, ef, eh, ew] => [1, c, ef, eh, ew],
-        _ => {
-            return Err(msg(format!(
-                "ltx2 i2v cond shape {:?} want [1,C,1,H,W]",
-                first_frame.shape
-            )))
-        }
+/// Decode `path` the way `decode_image` does: RGB, EXIF rotations applied
+/// (orientations 3, 6 and 8 only, as the reference), alpha dropped. The ICC
+/// profile conversion to sRGB is not applied (most inputs are sRGB already).
+pub fn decode_image(path: &Path) -> Result<RgbImage> {
+    use image::ImageDecoder;
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| msg(format!("ltx2 image {}: {e}", path.display())))?
+        .with_guessed_format()
+        .map_err(|e| msg(format!("ltx2 image {}: {e}", path.display())))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|e| msg(format!("ltx2 image {}: {e}", path.display())))?;
+    let orientation = decoder.orientation().ok();
+    let img = image::DynamicImage::from_decoder(decoder)
+        .map_err(|e| msg(format!("ltx2 image {}: {e}", path.display())))?;
+    let img = match orientation {
+        Some(image::metadata::Orientation::Rotate90) => img.rotate90(),
+        Some(image::metadata::Orientation::Rotate180) => img.rotate180(),
+        Some(image::metadata::Orientation::Rotate270) => img.rotate270(),
+        _ => img,
     };
-    if ef != 1 || eh != h || ew != w {
-        return Err(msg(format!(
-            "ltx2 i2v cond grid [{ef},{eh},{ew}] vs want [1,{h},{w}]"
-        )));
+    Ok(img.into_rgb8())
+}
+
+/// `preprocess(image, crf)`: one libx264 frame at `crf` (`veryfast`, yuv420p,
+/// cropped to even dimensions) decoded back to RGB, through the `ffmpeg` on
+/// the PATH (`FASTVIDEO_FFMPEG` overrides). CRF 0 returns the image as is.
+pub fn recompress(img: &RgbImage, crf: u32) -> Result<RgbImage> {
+    if crf == 0 || img.width() < 2 || img.height() < 2 {
+        return Ok(img.clone());
     }
-    if c != video.shape[1] {
-        return Err(msg(format!(
-            "ltx2 i2v channels {c} vs video {}",
-            video.shape[1]
-        )));
-    }
-    let mut host = video.host_cow()?.to_vec();
-    let cond = first_frame.host_cow()?;
-    for ch in 0..c {
-        for y in 0..h {
-            for x in 0..w {
-                let dst = ((ch * f) * h + y) * w + x;
-                let src = (ch * h + y) * w + x;
-                host[dst] = cond[src];
+    let (w, h) = (img.width() / 2 * 2, img.height() / 2 * 2);
+    let cropped = image::imageops::crop_imm(img, 0, 0, w, h).to_image();
+    let ffmpeg = std::env::var("FASTVIDEO_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
+    let tmp = std::env::temp_dir().join(format!(
+        "ltx2-crf-{}-{}.mp4",
+        std::process::id(),
+        uuid_like()
+    ));
+    let encode = || -> Result<()> {
+        use std::io::Write;
+        let mut child = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo"])
+            .args(["-pix_fmt", "rgb24", "-s", &format!("{w}x{h}"), "-r", "1", "-i", "-"])
+            .args(["-sws_flags", "bilinear", "-frames:v", "1", "-c:v", "libx264"])
+            .args(["-preset", "veryfast", "-crf", &crf.to_string(), "-pix_fmt", "yuv420p"])
+            .args(["-f", "mp4"])
+            .arg(&tmp)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| msg(format!("ltx2 image CRF re-encode: {ffmpeg}: {e}")))?;
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(cropped.as_raw())
+            .map_err(|e| msg(format!("ltx2 image CRF re-encode: {e}")))?;
+        let out = child
+            .wait_with_output()
+            .map_err(|e| msg(format!("ltx2 image CRF re-encode: {e}")))?;
+        if !out.status.success() {
+            return Err(msg(format!(
+                "ltx2 image CRF re-encode failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    };
+    let result = encode().and_then(|()| {
+        let out = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&tmp)
+            .args(["-frames:v", "1", "-sws_flags", "bilinear", "-f", "rawvideo"])
+            .args(["-pix_fmt", "rgb24", "-"])
+            .output()
+            .map_err(|e| msg(format!("ltx2 image CRF decode: {e}")))?;
+        if !out.status.success() || out.stdout.len() != (w * h * 3) as usize {
+            return Err(msg(format!(
+                "ltx2 image CRF decode: {} bytes for {w}x{h} ({})",
+                out.stdout.len(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        RgbImage::from_raw(w, h, out.stdout).ok_or_else(|| msg("ltx2 image CRF decode: size"))
+    });
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+fn uuid_like() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    t ^ N.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+}
+
+/// `torch.nn.functional.interpolate(mode="bilinear", align_corners=False)`
+/// source coordinates for one axis: `(i0, i1, λ)` per output index.
+fn bilinear_axis(src: usize, dst: usize) -> Vec<(usize, usize, f32)> {
+    // ATen: scale = src / dst in the accumulate type (float), source index
+    // `scale · (i + 0.5) − 0.5` clamped at 0.
+    let scale = src as f32 / dst as f32;
+    (0..dst)
+        .map(|i| {
+            let s = (scale * (i as f32 + 0.5) - 0.5).max(0.0);
+            let i0 = (s as usize).min(src - 1);
+            let i1 = if i0 < src - 1 { i0 + 1 } else { i0 };
+            (i0, i1, s - i0 as f32)
+        })
+        .collect()
+}
+
+/// `resize_and_center_crop` + `normalize_images`: `[3, height, width]`
+/// row-major in `[−1, 1]`, rounded to bf16 as the reference casts it.
+pub fn image_pixels(img: &RgbImage, height: usize, width: usize) -> Vec<f32> {
+    let (sh, sw) = (img.height() as usize, img.width() as usize);
+    let scale = f64::max(height as f64 / sh as f64, width as f64 / sw as f64);
+    let (nh, nw) = (
+        (sh as f64 * scale).ceil() as usize,
+        (sw as f64 * scale).ceil() as usize,
+    );
+    let (top, left) = ((nh - height) / 2, (nw - width) / 2);
+    let ys = bilinear_axis(sh, nh);
+    let xs = bilinear_axis(sw, nw);
+    let raw = img.as_raw();
+    let px = |y: usize, x: usize, c: usize| f32::from(raw[(y * sw + x) * 3 + c]);
+    let mut out = vec![0f32; 3 * height * width];
+    for oy in 0..height {
+        let (y0, y1, ly) = ys[oy + top];
+        for ox in 0..width {
+            let (x0, x1, lx) = xs[ox + left];
+            for c in 0..3 {
+                // ATen's upsample_bilinear2d: h0lambda·(w0lambda·p00 + w1lambda·p01)
+                // + h1lambda·(w0lambda·p10 + w1lambda·p11).
+                let top_row = (1.0 - lx) * px(y0, x0, c) + lx * px(y0, x1, c);
+                let bottom = (1.0 - lx) * px(y1, x0, c) + lx * px(y1, x1, c);
+                let v = (1.0 - ly) * top_row + ly * bottom;
+                out[(c * height + oy) * width + ox] =
+                    fastvideo_models::ltx2::schedule::bf16_round(v / 127.5 - 1.0);
             }
         }
     }
-    let video = CudaTensor::from_vec(host, vec![1, c, f, h, w])?;
-    pack_video(&video).map_err(|e| msg(e.to_string()))
+    out
+}
+
+/// One conditioned run of video rows of a stage.
+pub struct CondSegment {
+    pub start: usize,
+    pub len: usize,
+    /// Denoise mask `1 − strength`.
+    pub mask: f32,
+    /// The clean tokens `[1, len, C]` in the state's dtype.
+    pub clean: CudaTensor,
+}
+
+/// The image conditioning of one denoise stage.
+pub struct StageConditioning {
+    /// Rows of the stage's latent grid (`F·H·W`); appended keyframe tokens
+    /// follow them.
+    pub grid_tokens: usize,
+    /// Appended keyframe token blocks: the pixel frame each one pins.
+    pub extra_frames: Vec<usize>,
+    /// `H·W` of the stage's grid: the size of one frame's token block.
+    pub frame_tokens: usize,
+    /// Sorted, disjoint.
+    pub segments: Vec<CondSegment>,
+}
+
+impl StageConditioning {
+    /// `latents[i]` is image `i`'s packed latent `[1, H·W, C]` at this stage's
+    /// grid (`[F, H, W]`). Frame 0 replaces latent frame 0; frame `k > 0` is
+    /// appended. A later image at frame 0 overrides an earlier one.
+    pub fn new(
+        grid: [usize; 3],
+        images: &[ConditioningImage],
+        latents: Vec<CudaTensor>,
+        num_frames: usize,
+    ) -> Result<Self> {
+        let [f, h, w] = grid;
+        let hw = h * w;
+        let mut first: Option<CondSegment> = None;
+        let mut extra = Vec::new();
+        let mut extra_frames = Vec::new();
+        for (img, lat) in images.iter().zip(latents) {
+            if lat.shape.len() != 3 || lat.shape[1] != hw {
+                return Err(msg(format!(
+                    "ltx2 conditioning latent {:?} for a {h}x{w} grid",
+                    lat.shape
+                )));
+            }
+            if img.frame_idx >= num_frames {
+                return Err(msg(format!(
+                    "ltx2 conditioning frame {} is past the clip ({num_frames} frames)",
+                    img.frame_idx
+                )));
+            }
+            if !(0.0..=1.0).contains(&img.strength) {
+                return Err(msg(format!(
+                    "ltx2 conditioning strength {} is outside [0, 1]",
+                    img.strength
+                )));
+            }
+            if img.frame_idx == 0 {
+                first = Some(CondSegment {
+                    start: 0,
+                    len: hw,
+                    mask: 1.0 - img.strength,
+                    clean: lat,
+                });
+            } else {
+                extra.push((img.strength, lat));
+                extra_frames.push(img.frame_idx);
+            }
+        }
+        let grid_tokens = f * hw;
+        let mut segments: Vec<CondSegment> = first.into_iter().collect();
+        for (k, (strength, lat)) in extra.into_iter().enumerate() {
+            segments.push(CondSegment {
+                start: grid_tokens + k * hw,
+                len: hw,
+                mask: 1.0 - strength,
+                clean: lat,
+            });
+        }
+        Ok(Self {
+            grid_tokens,
+            extra_frames,
+            frame_tokens: hw,
+            segments,
+        })
+    }
+
+    /// All rows: the grid and the appended keyframe tokens.
+    pub fn total_tokens(&self) -> usize {
+        self.grid_tokens + self.extra_frames.len() * self.frame_tokens
+    }
+
+    /// The per-token timestep runs for the transformer (rows with mask 1 are
+    /// left out: they run at `σ`).
+    pub fn timestep_segments(&self) -> Vec<VideoTimestepSegment> {
+        self.segments
+            .iter()
+            .filter(|s| s.mask != 1.0)
+            .map(|s| VideoTimestepSegment {
+                start: s.start,
+                len: s.len,
+                mask: s.mask,
+            })
+            .collect()
+    }
+
+    /// `x` with each segment's rows replaced by `f(rows, segment)`.
+    fn splice(
+        &self,
+        x: &CudaTensor,
+        mut f: impl FnMut(&CudaTensor, &CondSegment) -> Result<CudaTensor>,
+    ) -> Result<CudaTensor> {
+        let rows = x.shape[1];
+        let mut parts = Vec::with_capacity(2 * self.segments.len() + 1);
+        let mut at = 0usize;
+        for s in &self.segments {
+            if s.start < at || s.start + s.len > rows {
+                return Err(msg(format!(
+                    "ltx2 conditioning rows {}..{} outside {rows}",
+                    s.start,
+                    s.start + s.len
+                )));
+            }
+            if s.start > at {
+                parts.push(x.narrow(1, at, s.start - at)?);
+            }
+            parts.push(f(&x.narrow(1, s.start, s.len)?, s)?);
+            at = s.start + s.len;
+        }
+        if parts.is_empty() {
+            return Ok(x.clone());
+        }
+        if at < rows {
+            parts.push(x.narrow(1, at, rows - at)?);
+        }
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        Ok(CudaTensor::cat(&refs, 1)?)
+    }
+
+    /// `torch.lerp(clean, noised, mask)` on the conditioned rows (`GaussianNoiser`).
+    pub fn apply_initial(&self, noised: &CudaTensor) -> Result<CudaTensor> {
+        self.splice(noised, |x, s| lerp(&s.clean, x, s.mask))
+    }
+
+    /// `X0Model`: `x − (mask·σ)·v` on the conditioned rows, `x − σ·v` elsewhere.
+    pub fn x0(&self, x: &CudaTensor, v: &CudaTensor, sigma: f32) -> Result<CudaTensor> {
+        let plain = CudaTensor::lincomb(&[(1.0, x), (-sigma, v)])?;
+        self.splice(&plain, |_, s| {
+            let xs = x.narrow(1, s.start, s.len)?;
+            let vs = v.narrow(1, s.start, s.len)?;
+            Ok(CudaTensor::lincomb(&[(1.0, &xs), (-(s.mask * sigma), &vs)])?)
+        })
+    }
+
+    /// `post_process_latent`: `x·mask + clean·(1 − mask)` on the conditioned rows.
+    pub fn post(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        self.splice(x, |xs, s| {
+            if s.mask == 0.0 {
+                Ok(s.clean.clone())
+            } else {
+                Ok(CudaTensor::lincomb(&[(s.mask, xs), (1.0 - s.mask, &s.clean)])?)
+            }
+        })
+    }
+
+    /// `clear_conditioning`: the grid rows only.
+    pub fn clear(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        if x.shape[1] == self.grid_tokens {
+            return Ok(x.clone());
+        }
+        Ok(x.narrow(1, 0, self.grid_tokens)?)
+    }
+}
+
+/// `torch.lerp(a, b, w)` for a scalar weight: ATen evaluates `a + w·(b − a)`
+/// below 0.5 and `b − (b − a)·(1 − w)` from 0.5 on.
+fn lerp(a: &CudaTensor, b: &CudaTensor, w: f32) -> Result<CudaTensor> {
+    if w == 0.0 {
+        return Ok(a.clone());
+    }
+    if w == 1.0 {
+        return Ok(b.clone());
+    }
+    let diff = CudaTensor::lincomb(&[(1.0, b), (-1.0, a)])?;
+    Ok(if w < 0.5 {
+        CudaTensor::lincomb(&[(1.0, a), (w, &diff)])?
+    } else {
+        CudaTensor::lincomb(&[(1.0, b), (-(1.0 - w), &diff)])?
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{Rgb, RgbImage};
+
+    fn t(v: Vec<f32>, shape: Vec<usize>) -> CudaTensor {
+        CudaTensor::from_vec(v, shape).unwrap()
+    }
 
     #[test]
-    fn stub_encode_shape() {
-        let dir = std::env::temp_dir().join("ltx2-i2v-stub.png");
-        let mut img = RgbImage::new(64, 64);
-        for p in img.pixels_mut() {
-            *p = Rgb([40, 80, 120]);
+    fn bilinear_matches_aten_half_pixel_centers() {
+        // 4 → 2: sources 0.5 and 2.5.
+        let a = bilinear_axis(4, 2);
+        assert_eq!(a[0], (0, 1, 0.5));
+        assert_eq!(a[1], (2, 3, 0.5));
+        // 2 → 4: 0.25·i − 0.25 clamped: -0.25→0, 0.25, 0.75, 1.25→(1,1).
+        let b = bilinear_axis(2, 4);
+        assert_eq!(b[0], (0, 1, 0.0));
+        assert_eq!(b[1], (0, 1, 0.25));
+        assert_eq!(b[3].0, 1);
+        assert_eq!(b[3].1, 1);
+    }
+
+    #[test]
+    fn pixels_cover_then_center_crop() {
+        // 4x2 (w x h) image into 2x2: scale 1 → 4x2 → crop columns 1..3.
+        let mut img = RgbImage::new(4, 2);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            *p = image::Rgb([(x * 50) as u8, (y * 100) as u8, 0]);
         }
-        img.save(&dir).unwrap();
-        let lat = encode_first_frame_stub(&dir, 64, 64, 128, 32).unwrap();
-        assert_eq!(lat.shape, vec![1, 128, 1, 2, 2]);
-        let _ = std::fs::remove_file(&dir);
+        let px = image_pixels(&img, 2, 2);
+        assert_eq!(px.len(), 12);
+        let r = |x: u32| fastvideo_models::ltx2::schedule::bf16_round((x * 50) as f32 / 127.5 - 1.0);
+        assert_eq!(px[0], r(1));
+        assert_eq!(px[1], r(2));
+    }
+
+    #[test]
+    fn first_frame_and_keyframe_rows() {
+        let lat = |v: f32| t(vec![v; 2 * 3], vec![1, 2, 3]);
+        let imgs = vec![
+            ConditioningImage::first_frame("a.png"),
+            ConditioningImage {
+                path: "b.png".into(),
+                frame_idx: 16,
+                strength: 0.5,
+                crf: None,
+            },
+        ];
+        let c = StageConditioning::new([3, 1, 2], &imgs, vec![lat(7.0), lat(9.0)], 17).unwrap();
+        assert_eq!(c.grid_tokens, 6);
+        assert_eq!(c.total_tokens(), 8);
+        assert_eq!(c.extra_frames, vec![16]);
+        let segs = c.timestep_segments();
+        assert_eq!(segs.len(), 2);
+        assert_eq!((segs[0].start, segs[0].len, segs[0].mask), (0, 2, 0.0));
+        assert_eq!((segs[1].start, segs[1].len, segs[1].mask), (6, 2, 0.5));
+
+        let noise = t(vec![1.0; 8 * 3], vec![1, 8, 3]);
+        let x = c.apply_initial(&noise).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&x[..6], &[7.0; 6]);
+        assert_eq!(&x[6..18], &[1.0; 12]);
+        // lerp(9, 1, 0.5) = 1 − (1 − 9)·0.5 = 5
+        assert_eq!(&x[18..], &[5.0; 6]);
+
+        let v = t(vec![2.0; 8 * 3], vec![1, 8, 3]);
+        let xs = t(vec![3.0; 8 * 3], vec![1, 8, 3]);
+        let x0 = c.x0(&xs, &v, 0.5).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&x0[..6], &[3.0; 6]); // mask 0: timestep 0
+        assert_eq!(&x0[6..18], &[2.0; 12]); // 3 − 0.5·2
+        assert_eq!(&x0[18..], &[2.5; 6]); // 3 − 0.25·2
+        let p = c.post(&t(x0, vec![1, 8, 3])).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&p[..6], &[7.0; 6]);
+        assert_eq!(&p[18..], &[0.5 * 2.5 + 0.5 * 9.0; 6]);
+        assert_eq!(c.clear(&noise).unwrap().shape, vec![1, 6, 3]);
     }
 }

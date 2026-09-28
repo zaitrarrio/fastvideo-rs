@@ -296,6 +296,10 @@ fn engine_gaps_render_400() {
     let caps = ltx_caps();
     let mut t2v_only = caps.clone();
     t2v_only.tasks.remove(&Task::I2V);
+    t2v_only.tasks.remove(&Task::Keyframes);
+    // An engine without keyframe conditioning (serve E9) refuses last_frame_uri.
+    let mut no_keyframes = caps.clone();
+    no_keyframes.tasks.remove(&Task::Keyframes);
     // An engine that has not validated the extra rates (serve E4) serves 24 only.
     let mut fps24 = caps.clone();
     fps24.fps = fastvideo_protocol::FpsCaps::fixed(24);
@@ -318,7 +322,7 @@ fn engine_gaps_render_400() {
             let mut b = with("image_uri", json!("ltx://uploads/a"));
             b["last_frame_uri"] = json!("ltx://uploads/b");
             b
-        }, &caps, GapId::LtxKeyframes),
+        }, &no_keyframes, GapId::LtxKeyframes),
         (Endpoint::ImageToVideo, with("image_uri", json!("ltx://uploads/a")), &t2v_only, GapId::Ltx25I2V),
     ];
     for (ep, body, caps, gap) in cases {

@@ -319,6 +319,11 @@ pub enum Stage {
         /// First-frame PNG/JPEG for I2V encode (`docs/ports/ltx2.md`).
         #[arg(long)]
         image: Option<PathBuf>,
+        /// More image conditionings, `PATH@FRAME[@STRENGTH[@CRF]]` (the
+        /// reference's `--image PATH FRAME_IDX STRENGTH [CRF]`); `FRAME` may
+        /// be `last` (`num_frames - 1`). Repeatable.
+        #[arg(long = "cond-image")]
+        cond_image: Vec<String>,
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
@@ -603,6 +608,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             two_stage,
             diff_vae,
             image,
+            cond_image,
             sol_stage2,
             dense_stage2,
             pisa_stage2,
@@ -702,6 +708,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 GenExtras {
                     skip_audio_decode: *skip_audio_decode,
                     sink_check: *sink_check,
+                    cond_images: cond_image.clone(),
                 },
             )
         }
@@ -1954,6 +1961,11 @@ fn gen(
         sol_stage2,
         pisa_stage2,
         image_path: image.map(Path::to_path_buf),
+        images: extras
+            .cond_images
+            .iter()
+            .map(|s| parse_cond_image(s, g.num_frames))
+            .collect::<StageResult<Vec<_>>>()?,
         skip_audio_decode: extras.skip_audio_decode,
     };
     report.set("skip_audio_decode", extras.skip_audio_decode);
@@ -1966,6 +1978,7 @@ fn gen(
             "sol_stage2": sol_stage2,
             "pisa_stage2": pisa_stage2,
             "image": image.map(|p| p.display().to_string()),
+            "cond_images": extras.cond_images,
             "prompt_set": multi.then(|| prompts.iter().map(|p| json!({"name": p.name, "seed": p.seed})).collect::<Vec<_>>()),
         }),
     );
@@ -2261,10 +2274,38 @@ fn gen(
 }
 
 /// `gen` switches beyond the pipeline's own (serve E2 / E4).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct GenExtras {
     skip_audio_decode: bool,
     sink_check: bool,
+    /// `--cond-image` specs.
+    cond_images: Vec<String>,
+}
+
+/// `PATH@FRAME[@STRENGTH[@CRF]]` → a conditioning image.
+fn parse_cond_image(
+    spec: &str,
+    num_frames: usize,
+) -> StageResult<fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage> {
+    let parts: Vec<&str> = spec.split('@').collect();
+    let bad = || {
+        crate::report::StageError::Error(anyhow::anyhow!(
+            "--cond-image {spec}: expected PATH@FRAME[@STRENGTH[@CRF]]"
+        ))
+    };
+    if parts.len() < 2 || parts.len() > 4 {
+        return Err(bad());
+    }
+    let frame_idx = match parts[1] {
+        "last" => num_frames - 1,
+        f => f.parse().map_err(|_| bad())?,
+    };
+    Ok(fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage {
+        path: PathBuf::from(parts[0]),
+        frame_idx,
+        strength: parts.get(2).map_or(Ok(1.0), |v| v.parse()).map_err(|_| bad())?,
+        crf: parts.get(3).map(|v| v.parse()).transpose().map_err(|_| bad())?,
+    })
 }
 
 /// `ffprobe` of a finished mp4: the video stream's decoded frame count and
