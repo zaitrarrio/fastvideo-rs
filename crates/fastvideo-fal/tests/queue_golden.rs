@@ -296,7 +296,12 @@ fn succeed(j: &mut Job) {
         fps: 24,
         audio: Some((32_000, 2)),
     };
-    let metrics = JobMetrics { inference_s: Some(2.5285604159580544), ..Default::default() };
+    let stages = [("text", 1.25), ("denoise", 2.5285604159580544), ("video_decode", 0.75), ("encode", 0.25)];
+    let metrics = JobMetrics {
+        inference_s: Some(2.5285604159580544),
+        stage_durations: stages.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+        ..Default::default()
+    };
     j.mark_succeeded(datetime!(2026-09-27 12:00:05 UTC), vec![a], metrics).unwrap();
 }
 

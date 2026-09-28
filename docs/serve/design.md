@@ -743,6 +743,18 @@ Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<model-slug>
 on every task: fal's r2v schema requires it, and on t2v/i2v it is an extra
 key the clients ignore.
 
+`timings` is fal's `object<string, number>` (seconds). `inference` keeps
+fal's meaning, the denoise only (also the status `metrics.inference_time`).
+The other keys are our breakdown, which the schema allows and the clients
+pass through untouched:
+
+| Key | Carries |
+|---|---|
+| `inference` | Denoise wall time (fal: "the DiT denoising time") |
+| one key per engine stage (`text`, `refine`, `denoise`, `audio_decode`, `video_decode`, `encode`, as in `X-Stage-Durations`) | That stage. `text` includes the I2V multimodal text encoder, which `inference` does not show |
+| `queue` | Submit to engine start |
+| `total` | Engine start to completion; `total - inference` is the time outside the denoise |
+
 Status: `Queued` → `IN_QUEUE`, `Running` → `IN_PROGRESS`, and
 `Succeeded`/`Failed`/`Cancelled` → `COMPLETED`. Failed adds `error` and
 `error_type`; cancelled adds `error_type:"client_cancelled"`. **Never** a

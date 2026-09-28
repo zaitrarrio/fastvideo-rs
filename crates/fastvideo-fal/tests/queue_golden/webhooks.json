@@ -33,7 +33,13 @@
       "expanded_prompt": null,
       "seed": 1851572118,
       "timings": {
-        "inference": 2.5285604159580544
+        "denoise": 2.5285604159580544,
+        "encode": 0.25,
+        "inference": 2.5285604159580544,
+        "queue": 0.0,
+        "text": 1.25,
+        "total": 5.0,
+        "video_decode": 0.75
       },
       "video": {
         "content_type": "video/mp4",

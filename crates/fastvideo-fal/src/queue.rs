@@ -158,13 +158,42 @@ pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> 
         // is an extra key clients ignore but callers need to reproduce a
         // clip.
         seed: Some(job.resolved.seed),
-        timings: job.metrics.inference_s.map(|s| {
-            let mut m = serde_json::Map::new();
-            m.insert("inference".into(), s.into());
-            m
-        }),
+        timings: timings(job),
     };
     serde_json::to_value(out).ok()
+}
+
+/// The output `timings` (fal: `object<string, number>`, "'inference' is the
+/// DiT denoising time"). `inference` keeps fal's meaning (denoise only);
+/// the other keys are our breakdown, all in seconds:
+///
+/// - one key per engine stage, named as in `X-Stage-Durations` (H3:
+///   `text`, `refine`, `denoise`, `audio_decode`, `video_decode`, `encode`;
+///   `text` includes the I2V multimodal text encoder);
+/// - `queue`: submit to start; `total`: start to completion (the whole
+///   engine run, so `total - inference` is the time outside the denoise).
+///
+/// `None` when nothing was measured (fal: "Null on routes that do not
+/// report backend timings").
+pub fn timings(job: &Job) -> Option<serde_json::Map<String, Value>> {
+    let mut m = serde_json::Map::new();
+    let secs = |d: time::Duration| Value::from(d.as_seconds_f64().max(0.0));
+    if let Some(s) = job.metrics.inference_s {
+        m.insert("inference".into(), s.into());
+    }
+    for (stage, s) in &job.metrics.stage_durations {
+        m.entry(stage.clone()).or_insert_with(|| (*s).into());
+    }
+    if m.is_empty() {
+        return None;
+    }
+    if let Some(start) = job.started_at {
+        m.entry("queue").or_insert_with(|| secs(start - job.created_at));
+        if let Some(end) = job.completed_at {
+            m.entry("total").or_insert_with(|| secs(end - start));
+        }
+    }
+    Some(m)
 }
 
 /// Headers that carry our tier/recipe metadata (design §0.3, §0.6: the fal
