@@ -1,0 +1,14 @@
+2026-09-28T16:28:00Z	template-created 5xubi545dl fv-e2e-e-q-0928162759 ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3beb71e40a7b6cb8ec23e5858627c614bdffe8447766181555fb6601937bc330
+2026-09-28T16:28:01Z	endpoint-created 1bumthyr4t8tt5 fv-e2e-e-q-0928162759 volume=jg48s6o1w0 dc=EUR-IS-1 gpus=NVIDIA RTX PRO 6000 Blackwell Server Edition,NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+2026-09-28T16:45:12Z	template-created kqb3xwrdwx fv-e2e-e-q-0928164511 ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3beb71e40a7b6cb8ec23e5858627c614bdffe8447766181555fb6601937bc330
+2026-09-28T16:45:13Z	endpoint-created w9nun9n2evt009 fv-e2e-e-q-0928164511 volume=s2k01690bi dc=US-CA-2 gpus=NVIDIA H200,NVIDIA H100 NVL,NVIDIA H100 80GB HBM3
+2026-09-28T16:49:11Z	endpoint-deleted w9nun9n2evt009
+2026-09-28T16:49:12Z	template-deleted kqb3xwrdwx
+2026-09-28T16:50:12Z	endpoint-deleted 1bumthyr4t8tt5
+2026-09-28T16:50:13Z	template-deleted 5xubi545dl
+2026-09-28T16:53:02Z	template-created d0i9dap671 fv-e2e-e-q-0928165301 ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3beb71e40a7b6cb8ec23e5858627c614bdffe8447766181555fb6601937bc330
+2026-09-28T16:53:03Z	endpoint-created 102wh2sgqet2i7 fv-e2e-e-q-0928165301 volume=s2k01690bi dc=US-CA-2 gpus=NVIDIA H100 NVL,NVIDIA H100 80GB HBM3,NVIDIA H200,NVIDIA RTX PRO 6000 Blackwell Server Edition
+2026-09-28T16:55:22Z	endpoint-deleted 102wh2sgqet2i7
+2026-09-28T16:55:23Z	template-deleted d0i9dap671
+2026-09-28T16:56:18Z	endpoint-created qmoctm732zz5qs fv-e2e-e-lb-0928165616 type=LOAD_BALANCER volume=s2k01690bi dc=US-CA-2 template=-
+2026-09-28T17:03:19Z	endpoint-deleted qmoctm732zz5qs

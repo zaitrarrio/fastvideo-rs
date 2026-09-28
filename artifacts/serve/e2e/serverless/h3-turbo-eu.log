@@ -1,0 +1,7 @@
+[16:27:59] Runpod balance $39.7779483895 (floor $8)
+[16:28:01] queue endpoint 1bumthyr4t8tt5 (template 5xubi545dl, volume jg48s6o1w0 in EUR-IS-1, cap 2400s)
+[16:28:01] endpoint 1bumthyr4t8tt5 template 5xubi545dl
+[16:28:01] cold gen submit
+[16:28:02] job 9f51e8e6-6670-41c0-8134-00a75bf806e7-u1: IN_QUEUE
+[16:50:11] down 1bumthyr4t8tt5 5xubi545dl
+deleted 1bumthyr4t8tt5 5xubi545dl

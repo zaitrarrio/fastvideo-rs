@@ -362,6 +362,11 @@ pub(crate) async fn submit_job(
     }
     crate::storage::rewrite_own_uploads(ctx, &mut req);
     req.model = resolve_app_model(ctx, &ep.app)?;
+    if echo.get("resolution").is_none() {
+        if let Some(caps) = ctx.engine().models().into_iter().find(|m| m.id.0 == req.model) {
+            crate::schema::default_resolution_for(&mut req, &caps.canvas.short_edges);
+        }
+    }
     if let Value::Object(m) = &mut echo {
         m.insert("model".into(), ep.endpoint_id().into());
     }

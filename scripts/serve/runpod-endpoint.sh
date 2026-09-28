@@ -31,7 +31,8 @@
 # fv-weights-b200-us) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
-# fv-serve as FV_WORKERS_MAX).
+# fv-serve as FV_WORKERS_MAX); FV_ENDPOINT_PREFIX (endpoint/template name
+# prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -50,6 +51,8 @@ CAP_S="${FV_ENDPOINT_CAP_S:-1800}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 EXEC_MS="${FV_EXECUTION_TIMEOUT_MS:-1800000}"
 MODEL="${FV_SMOKE_MODEL:-fake-wan}"
+PREFIX="${FV_ENDPOINT_PREFIX:-fv-serve}"
+IDLE_S="${FV_IDLE_TIMEOUT_S:-5}"
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
 OUT_DIR="$FV_ROOT/artifacts/runpod/serve"
 
@@ -109,12 +112,17 @@ volume_dc() {
 
 gpu_json() { jq -cn --arg g "$GPUS" '$g | split(",") | map(gsub("^ +| +$"; ""))'; }
 
-# Serverless template (REST v1).
+# Serverless template (REST v1). The volume's HF-cache trees link
+# absolutely into /workspace/weights (where pods mount it); a serverless
+# worker mounts it at /runpod-volume, so the entrypoint links
+# /workspace/weights there before exec'ing fv-serve (newer fv-serve does the
+# same itself; this keeps older images working).
+LINK_WEIGHTS='if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi; exec /opt/fastvideo-rs/bin/fv-serve "$@"'
 template_payload() {
   local image="$1" name="$2"
-  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson secrets "$SECRET_ENV_JSON" '{
+  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --arg link "$LINK_WEIGHTS" --argjson secrets "$SECRET_ENV_JSON" '{
     name: $name, imageName: $image, isServerless: true, containerDiskInGb: 20, volumeInGb: 0,
-    dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-serve"], dockerStartCmd: ["--config", $cfg],
+    dockerEntrypoint: ["/bin/sh", "-c", $link, "fv-serve"], dockerStartCmd: ["--config", $cfg],
     env: ($secrets + {
       FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
       FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"
@@ -126,9 +134,9 @@ template_payload() {
 endpoint_payload() {
   local tpl="$1" name="$2" dc="$3"
   jq -n --arg name "$name" --arg tpl "$tpl" --argjson gpus "$(gpu_json)" --arg vol "$VOLUME" --arg dc "$dc" \
-    --arg cuda "$CUDA" --arg exec "$EXEC_MS" '{
+    --arg cuda "$CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" '{
     name: $name, templateId: $tpl, computeType: "GPU", gpuTypeIds: $gpus, gpuCount: 1,
-    networkVolumeId: $vol, dataCenterIds: [$dc], workersMin: 0, workersMax: 1, idleTimeout: 5,
+    networkVolumeId: $vol, dataCenterIds: [$dc], workersMin: 0, workersMax: 1, idleTimeout: $idle,
     flashboot: false, executionTimeoutMs: ($exec|tonumber), scalerType: "QUEUE_DELAY", scalerValue: 1,
     allowedCudaVersions: ($cuda | split(" "))
   }'
@@ -146,7 +154,7 @@ lb_payload() {
     | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
   [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
   jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson pools "$pools" --arg vol "$VOLUME" \
-    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" '{
+    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
     args: ("--config " + $cfg), ports: ["8000/http"], disk: 20,
     env: ($secrets + {
@@ -155,7 +163,7 @@ lb_payload() {
       FV_WORKERS_MAX: ($max | tostring)
     }),
     gpu: ({pools: $pools, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
-    workers: {min: 0, max: $max, idleTimeout: 5},
+    workers: {min: 0, max: $max, idleTimeout: $idle},
     scaling: {type: "REQUEST_COUNT", requestCount: 1},
     networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: "OFF", timeout: 330000
   }'
@@ -202,7 +210,7 @@ backstop() {
 # Sets EP and TPL.
 up_queue() {
   local image="$1" name dc resp
-  name="fv-serve-q-$(date -u +%m%d%H%M%S)"
+  name="$PREFIX-q-$(date -u +%m%d%H%M%S)"
   dc="$(volume_dc)"
   resp="$(rest POST /templates "$(template_payload "$image" "$name")")" || die "template create failed: $(head -c 300 <<<"$resp")"
   TPL="$(jq -r '.id // empty' <<<"$resp")"
@@ -218,7 +226,7 @@ up_queue() {
 
 up_lb() {
   local image="$1" name dc resp
-  name="fv-serve-lb-$(date -u +%m%d%H%M%S)"
+  name="$PREFIX-lb-$(date -u +%m%d%H%M%S)"
   dc="$(volume_dc)"
   resp="$(rest2 POST /serverless "$(lb_payload "$image" "$name" "$dc")")" || die "LB endpoint create failed: $(head -c 400 <<<"$resp")"
   EP="$(jq -r '.id // empty' <<<"$resp")"
