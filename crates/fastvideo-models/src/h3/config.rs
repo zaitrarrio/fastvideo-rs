@@ -479,6 +479,11 @@ pub struct H3VisionConfig {
     pub out_hidden_size: usize,
     pub num_position_embeddings: usize,
     pub deepstack_visual_indexes: [usize; 3],
+    /// Image pixel bounds of `smart_resize`: the checkpoint's
+    /// `processor/preprocessor_config.json` `size` (`shortest_edge` 65 536,
+    /// `longest_edge` 16 777 216 pixels), not Qwen2-VL's defaults. A
+    /// 2048-short-edge Ref2VA reference (3552x2048) keeps its 7 104 tokens,
+    /// as FastVideo's `processor.image_processor` gives it.
     pub min_pixels: usize,
     pub max_pixels: usize,
     /// Qwen presentation sample rate for reference videos.
@@ -500,8 +505,8 @@ impl H3VisionConfig {
             out_hidden_size: 5120,
             num_position_embeddings: 2304,
             deepstack_visual_indexes: [8, 16, 24],
-            min_pixels: 56 * 56,
-            max_pixels: 28 * 28 * 1280,
+            min_pixels: 65_536,
+            max_pixels: 16_777_216,
             video_sample_fps_num: 2,
             video_sample_fps_den: 1,
         }

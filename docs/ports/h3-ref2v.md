@@ -173,4 +173,41 @@ every file, then renames). Results in §8.
 
 ## 8. Results
 
-(Filled in as the package runs: download hashes, parity, timings.)
+### 8.1 Download
+
+| Volume | Pod (cpu3c, $0.24/hr) | Wall | Result |
+|---|---|---:|---|
+| US `s2k01690bi` | `davmpuszksq3y8` | 442 s | 29 files, 69 059 483 520 bytes; every LFS SHA-256 = Hub; re-read after fsync; renamed from `.h3-ref2va.partial-*` |
+| EU `jg48s6o1w0` | `652qtvg5a6hqfy` | 296 s | same 29 SHA-256 / sizes as US |
+
+Both pods deleted (verified). The `h3-base` snapshot on both volumes is
+`42ed227`, the same revision. Hashes: `artifacts/runpod/fetch-h3-ref2va/*/sha256.txt`.
+
+### 8.2 Parity against FastVideo (RTX PRO 6000, EUR-IS-1)
+
+Target `h3-ref2va-4step`: FastVideo `MiniMaxH3Ref2VAModularPipeline`
+(`e90be598`, strict eager, FLASH_ATTN, `--steps 5`) against ours
+`h3 gen --h3-recipe base-4step --dense --ref beach.jpg --ref-root $W/h3-ref2va`,
+768x1344x124, one 832x480 image reference, seed 1024, bf16 (`FASTVIDEO_H3_QUANT=off`),
+the reference's starting noise injected.
+
+**Run 1** (upstream `2d9dd45-09282004`, ours `9b2c963-09282013`): the
+reference's packed rows are 44 400 = 7 104 condition + 37 296 target, as our
+layout expects; sigmas and timesteps are identical. The text was not: our
+multimodal prompt had **440 tokens against 7 154**. FastVideo shows Qwen-VL
+the *prepared* reference image (PIL Lanczos to the 2048-short-edge canvas,
+3552x2048: 7 104 vision tokens); we showed it the 832x480 file (390). Our
+VAE path also resized with nearest neighbour. With different conditioning the
+velocities agree only loosely (video `vel_step01` cosine 0.937, rel-L2 0.357;
+latents after step 1 rel-L2 2.4e-2, after step 4 0.378), and the block dumps
+are not comparable (different sequence lengths). Fixed in `64a3ff0`: one
+Lanczos-prepared image feeds both the VAE and Qwen-VL.
+
+Timings, 4 forwards (not a benchmark; one request each, cold):
+
+| | load | text | denoise | video decode | peak |
+|---|---:|---:|---:|---:|---:|
+| FastVideo (TE and VAE offloaded) | 339.9 s | 12.9 s (conditioning) | 81.8 s | 9.7 s | |
+| ours (streamed TE) | 91.9 s | 86.1 s (streamed Qwen-VL) | 86.1 s (first step 48.2 s, then 12.6 s/step) | 6.5 s | 50.2 GiB |
+
+(Run 1 had 440 text tokens instead of 7 154, so its denoise is not like for like.)

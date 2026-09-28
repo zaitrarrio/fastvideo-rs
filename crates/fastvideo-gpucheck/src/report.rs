@@ -75,6 +75,12 @@ impl Report {
         }
     }
 
+    /// The directory the report is written to (for files a stage writes
+    /// next to it).
+    pub fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
     /// Report name (stage + tag), e.g. `model-model-exact`.
     pub fn stage(&self) -> &str {
         &self.stage
