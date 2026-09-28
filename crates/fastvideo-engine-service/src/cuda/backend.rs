@@ -237,6 +237,102 @@ impl CudaBackend {
             .ok_or_else(|| ApiError::invalid(format!("model `{id}` is not served by this GPU")))
     }
 
+    /// `warmup = true`: one image-to-video and one text-to-video job at the
+    /// default canvas and length, through the same `generate` a request
+    /// takes (MP4 encode included), before the model is reported ready. The
+    /// first request then does not pay kernel compilation, plan search and
+    /// allocator growth. A failure is logged, not fatal: the model still
+    /// serves.
+    fn warmup(&mut self, m: &CudaModel) {
+        let t0 = std::time::Instant::now();
+        let dir = self.cfg.work_dir.join(format!("warmup-{}", uuid::Uuid::new_v4()));
+        let r = self.warmup_jobs(m, &dir);
+        remove_dir(&dir);
+        match r {
+            Ok(runs) => tracing::info!(
+                model = %m.id,
+                seconds = t0.elapsed().as_secs_f64(),
+                runs = %runs.join(", "),
+                "warmup done"
+            ),
+            Err(e) => tracing::warn!(model = %m.id, error = %e, "warmup failed; serving without it"),
+        }
+    }
+
+    fn warmup_jobs(&mut self, m: &CudaModel, dir: &Path) -> Result<Vec<String>, ApiError> {
+        use fastvideo_protocol::{
+            canvas_for_aspect, Anchor, AudioPlan, PostProcess, SamplingOverrides, Task,
+        };
+        let caps = m.caps();
+        let short = caps.canvas.short_edges.first().copied().unwrap_or(768);
+        let (width, height) = canvas_for_aspect(&caps.canvas, 16.0 / 9.0, short);
+        std::fs::create_dir_all(dir)
+            .map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
+        // A smooth gradient: something for the vision tower and the keyframe
+        // encoder to look at.
+        let image = dir.join("first.png");
+        image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([
+                (x * 255 / width.max(1)) as u8,
+                (y * 255 / height.max(1)) as u8,
+                128,
+            ])
+        })
+        .save(&image)
+        .map_err(|e| ApiError::internal(format!("{}: {e}", image.display())))?;
+        let audio = match &caps.audio {
+            Some(a) if !a.via_sidecar => AudioPlan::Native {
+                rate: a.native_rate,
+                channels: a.channels,
+            },
+            _ => AudioPlan::None,
+        };
+        let job = |task: Task, keyframes: Vec<(Anchor, PathBuf)>| ResolvedJob {
+            model: m.id.clone(),
+            task,
+            prompt: "A calm lake at sunrise, mist over the water, birds calling.".into(),
+            negative_prompt: String::new(),
+            seed: 0,
+            width,
+            height,
+            num_frames: caps.frames.default,
+            fps: caps.fps.default,
+            keyframes,
+            references: Vec::new(),
+            audio_in: None,
+            audio,
+            post: PostProcess {
+                crop: None,
+                drop_audio: false,
+            },
+            sampling: SamplingOverrides::default(),
+            tier: caps.tier,
+            recipe: caps.recipe.clone(),
+        };
+        let mut runs = Vec::new();
+        for (name, j) in [
+            ("i2v", job(Task::I2V, vec![(Anchor::First, image.clone())])),
+            ("t2v", job(Task::T2V, Vec::new())),
+        ] {
+            let t = std::time::Instant::now();
+            let ctl = StepControl::detached(
+                crate::cancel::CancelToken::new(),
+                OutputMode::File {
+                    dir: dir.join(name),
+                },
+            );
+            std::fs::create_dir_all(dir.join(name))
+                .map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
+            self.generate(&j, &mut crate::backend::NullSink, &ctl)?;
+            runs.push(format!(
+                "{name} {width}x{height}x{} {:.1}s",
+                j.num_frames,
+                t.elapsed().as_secs_f64()
+            ));
+        }
+        Ok(runs)
+    }
+
     fn mp4_options(&self) -> Mp4Options {
         Mp4Options {
             encoder: match self.cfg.encoder {
@@ -332,6 +428,10 @@ impl EngineBackend for CudaBackend {
         obs(LoadEvent::Progress { done: 1, total: 1 });
         tracing::info!(model = %model, seconds = t0.elapsed().as_secs_f64(), "model resident");
         self.loaded.insert(model.clone(), loaded);
+        if matches!(&m.recipe, CudaRecipe::H3(r) if r.warmup) {
+            obs(LoadEvent::Stage("warmup"));
+            self.warmup(&m);
+        }
         Ok(())
     }
 
