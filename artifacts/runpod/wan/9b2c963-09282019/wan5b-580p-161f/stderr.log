@@ -1,0 +1,62 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+[INFO] wan/load {"mem_used_mib":21826,"seconds":135.011835172}
+[fastvideo] generate preset=wan_2_2_ti2v_5b tiny=false 1024x576 frames=161 steps=40 dmd=false rcm=false latent=1x48x41x36x64 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=unipc steps=40
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=2 H=24 Sq=23616 Sk=23616 D=128
+[fastvideo] sdpa auto (sm_12x): bh=48 sq=23616 sk=23616 d=128: cuDNN 37.16 ms, flash_mma_fwd2 37.42 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=48 sq=23616 sk=512 d=128: cuDNN 1.10 ms, flash_mma_fwd2 1.09 ms -> flash_mma_fwd2
+[fastvideo] unipc step 1/40 t=999 done in 3086ms
+[fastvideo] unipc step 2/40 t=994 done in 2452ms
+[fastvideo] unipc step 3/40 t=989 done in 2462ms
+[fastvideo] unipc step 4/40 t=984 done in 2464ms
+[fastvideo] unipc step 5/40 t=978 done in 2465ms
+[fastvideo] unipc step 6/40 t=972 done in 2471ms
+[fastvideo] unipc step 7/40 t=965 done in 2478ms
+[fastvideo] unipc step 8/40 t=959 done in 2484ms
+[fastvideo] unipc step 9/40 t=952 done in 2484ms
+[fastvideo] unipc step 10/40 t=945 done in 2488ms
+[fastvideo] unipc step 11/40 t=937 done in 2493ms
+[fastvideo] unipc step 12/40 t=929 done in 2495ms
+[fastvideo] unipc step 13/40 t=921 done in 2497ms
+[fastvideo] unipc step 14/40 t=912 done in 2499ms
+[fastvideo] unipc step 15/40 t=902 done in 2502ms
+[fastvideo] unipc step 16/40 t=892 done in 2502ms
+[fastvideo] unipc step 17/40 t=882 done in 2505ms
+[fastvideo] unipc step 18/40 t=871 done in 2512ms
+[fastvideo] unipc step 19/40 t=859 done in 2513ms
+[fastvideo] unipc step 20/40 t=846 done in 2515ms
+[fastvideo] unipc step 21/40 t=833 done in 2520ms
+[fastvideo] unipc step 22/40 t=818 done in 2522ms
+[fastvideo] unipc step 23/40 t=803 done in 2524ms
+[fastvideo] unipc step 24/40 t=786 done in 2524ms
+[fastvideo] unipc step 25/40 t=769 done in 2524ms
+[fastvideo] unipc step 26/40 t=749 done in 2528ms
+[fastvideo] unipc step 27/40 t=729 done in 2530ms
+[fastvideo] unipc step 28/40 t=706 done in 2533ms
+[fastvideo] unipc step 29/40 t=681 done in 2533ms
+[fastvideo] unipc step 30/40 t=654 done in 2536ms
+[fastvideo] unipc step 31/40 t=624 done in 2538ms
+[fastvideo] unipc step 32/40 t=592 done in 2541ms
+[fastvideo] unipc step 33/40 t=555 done in 2539ms
+[fastvideo] unipc step 34/40 t=514 done in 2543ms
+[fastvideo] unipc step 35/40 t=468 done in 2543ms
+[fastvideo] unipc step 36/40 t=416 done in 2541ms
+[fastvideo] unipc step 37/40 t=357 done in 2544ms
+[fastvideo] unipc step 38/40 t=288 done in 2544ms
+[fastvideo] unipc step 39/40 t=208 done in 2543ms
+[fastvideo] unipc step 40/40 t=113 done in 2545ms
+[fastvideo] unipc 40 steps done in 101084ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=2304 Sk=2304 D=1024 query_chunk=2304
+[fastvideo] vae.decode done in 10237ms
+[fastvideo] video writer: 161 frames, png deferred (0 inline, 161 after the mp4 in 0.29s, 0.09 GiB, synced), ffmpeg feed blocked 0.95s, mp4 tail 0.10s, buffered peak 0.27 GiB of 85.14
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/frames/output.mp4
+[fastvideo] wrote 161 png frames → /fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/frames (text 2.26s, denoise 101.09s, decode+mp4 11.50s, png 0.29s)
+[fastvideo] generate done in 115170ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":11.50382206,"decoder":"wan-vae","denoise_s":101.086016441,"frames_sha256":"db6c0787e8259c352b56eec3cde2bfe82ca4165617fe41e864c3be184f09bcd7","peak_mib":48588,"step_s":[3.086958833,2.452832577,2.462253459,2.464935539,2.466078449,2.47190439,2.478920721,2.484188602,2.484397973,2.488551323,2.493371394,2.495434864,2.497384555,2.500075245,2.502193765,2.502971336,2.505846186,2.5125135370000002,2.513712997,2.515435458,2.520278938,2.522712229,2.524108139,2.5250400490000002,2.524889389,2.52871743,2.5304024,2.53344577,2.533240861,2.5361138309999998,2.5390004619999997,2.541948042,2.539413892,2.543462002,2.543499702,2.5411806710000002,2.544055652,2.544842123,2.5432822919999998,2.546116223],"text_cache":"miss","text_s":2.258014715,"total_s":114.879155091,"video_encode_s":0.099221097,"video_push_s":0.00016013899999999998,"video_rgb_s":0.1657574170002293,"video_vae_s":11.351764678955076,"video_wait_s":1.122444175,"write_s":0.291187608}
+wan gen default: total 114.88s (text 2.26s, denoise 101.09s, decode 11.50s) png 0.29s peak Some(48588) MiB frames db6c0787e8259c352b56eec3cde2bfe82ca4165617fe41e864c3be184f09bcd7
+[PASS] wan/frames {"decoded":161,"written":161} (limits {"expected":161})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/frames/frame-080.png","mean":0.7354672232618356,"std":0.24799335109231593} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/9b2c963-09282019/wan5b-580p-161f/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (251.1s)

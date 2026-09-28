@@ -1,0 +1,36 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"mem_used_mib":21794,"seconds":112.814146358}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=161 steps=3 dmd=true rcm=false latent=1x48x41x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=36080 Sk=36080 D=128
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=36080 sk=36080 d=128: cuDNN 38.63 ms, flash_mma_fwd2 42.64 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=36080 sk=512 d=128: cuDNN 0.81 ms, flash_mma_fwd2 0.82 ms -> cuDNN
+[fastvideo] dmd step 1/3 t=1000 done in 2987ms
+[fastvideo] dmd step 2/3 t=757 done in 2250ms
+[fastvideo] dmd step 3/3 t=522 done in 2258ms
+[fastvideo] dmd 3 steps done in 7496ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3520 Sk=3520 D=1024 query_chunk=3520
+[fastvideo] vae.decode done in 16380ms
+[fastvideo] video writer: 161 frames, png deferred (0 inline, 161 after the mp4 in 0.40s, 0.14 GiB, synced), ffmpeg feed blocked 1.52s, mp4 tail 0.17s, buffered peak 0.41 GiB of 85.14
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames/cold/output.mp4
+[fastvideo] wrote 161 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames/cold (text 2.30s, denoise 7.51s, decode+mp4 18.36s, png 0.40s)
+[fastvideo] generate done in 28607ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":18.357272227,"decoder":"wan-vae","denoise_s":7.5051687860000005,"step_s":[2.996137907,2.250521454,2.258168585],"text_cache":"miss","text_s":2.297005271,"total_s":28.607512419,"video_encode_s":0.173764919,"video_push_s":0.00020729299999999997,"video_rgb_s":0.2497365409910673,"video_vae_s":18.120663177490233,"video_wait_s":1.754516763,"write_s":0.396821356}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=161 steps=3 dmd=true rcm=false latent=1x48x41x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 2276ms
+[fastvideo] dmd step 2/3 t=757 done in 2284ms
+[fastvideo] dmd step 3/3 t=522 done in 2288ms
+[fastvideo] dmd 3 steps done in 6848ms
+[fastvideo] vae.decode done in 16365ms
+[fastvideo] video writer: 161 frames, png deferred (0 inline, 161 after the mp4 in 0.32s, 0.14 GiB, synced), ffmpeg feed blocked 1.50s, mp4 tail 0.17s, buffered peak 0.41 GiB of 85.07
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames/output.mp4
+[fastvideo] wrote 161 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames (text 0.00s, denoise 6.85s, decode+mp4 18.29s, png 0.32s)
+[fastvideo] generate done in 25523ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":18.292295387,"decoder":"wan-vae","denoise_s":6.849827007,"frames_sha256":"3349f5d403b64d4687046dafd2b4b058d629bd32b6989f640a54712d8652f31b","peak_mib":60044,"step_s":[2.277325688,2.284100409,2.28818693],"text_cache":"hit","text_s":0.00361902,"total_s":25.201157094,"video_encode_s":0.165342568,"video_push_s":0.00018576299999999998,"video_rgb_s":0.22752590900251515,"video_vae_s":18.112072219848635,"video_wait_s":1.760431302,"write_s":0.322784073}
+wan gen default: total 25.20s (text 0.00s, denoise 6.85s, decode 18.29s) png 0.32s peak Some(60044) MiB frames 3349f5d403b64d4687046dafd2b4b058d629bd32b6989f640a54712d8652f31b
+[PASS] wan/frames {"decoded":161,"written":161} (limits {"expected":161})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/frames/frame-080.png","mean":0.40063854168411056,"std":0.2768142078976938} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/9b2c963-09282019/fw22-720p-161f/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (168.2s)

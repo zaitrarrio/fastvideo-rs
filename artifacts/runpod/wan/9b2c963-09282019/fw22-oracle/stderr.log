@@ -1,0 +1,17 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3520 Sk=3520 D=640 query_chunk=3520
+[INFO] wan/vae_encode {"cosine":0.9999855731958387,"max_abs":0.051241934299468994,"non_finite":0,"ref_norm":400.81394148930883,"rel_l2":0.005408307232250536,"seconds":0.509567624,"shape":[1,48,3,44,80]}
+[INFO] wan/vae_decode {"cosine":0.9999984053331235,"max_abs":0.013720482587814331,"non_finite":0,"psnr_db":65.70148794680193,"ref_norm":2865.3577374458296,"rel_l2":0.0017858704194209487,"seconds":1.119734526,"shape":[1,3,9,704,1280]}
+[INFO] wan/taehv_vs_vae_decode {"cosine":0.998330141208575,"max_abs":0.4880392402410507,"non_finite":0,"psnr_db":35.477715308892016,"ref_norm":2865.3577374458296,"rel_l2":0.05794801658076196,"seconds":0.046501668}
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=27280 d=128: cuDNN 23.82 ms, flash_mma_fwd2 24.67 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=512 d=128: cuDNN 0.62 ms, flash_mma_fwd2 0.62 ms -> cuDNN
+[INFO] wan/t2v_dit_out {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178}
+[INFO] wan/i2v_dit_out {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247}
+[PASS] wan/vae_encode_rel_l2 {"cosine":0.9999855731958387,"max_abs":0.051241934299468994,"non_finite":0,"ref_norm":400.81394148930883,"rel_l2":0.005408307232250536,"seconds":0.509567624,"shape":[1,48,3,44,80]} (limits {"max_rel_l2":0.01})
+[PASS] wan/vae_decode_psnr {"cosine":0.9999984053331235,"max_abs":0.013720482587814331,"non_finite":0,"psnr_db":65.70148794680193,"ref_norm":2865.3577374458296,"rel_l2":0.0017858704194209487,"seconds":1.119734526,"shape":[1,3,9,704,1280]} (limits {"min_psnr_db":40.0})
+[FAIL] wan/t2v_dit_out_rel_l2 {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178} (limits {"max_rel_l2":0.05})
+[FAIL] wan/i2v_dit_out_rel_l2 {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247} (limits {"max_rel_l2":0.05})
+[FAIL] stage wan → gpucheck-out/wan.json (80.0s)
+check failed: 2 check(s) failed: wan/t2v_dit_out_rel_l2: {"cosine":0.9977235389214023,"max_abs":1.96875,"non_finite":0,"ref_norm":3093.26284364051,"rel_l2":0.06745486493852085,"seconds":11.026660178} vs limits {"max_rel_l2":0.05}; wan/i2v_dit_out_rel_l2: {"cosine":0.9976504736964831,"max_abs":2.0625,"non_finite":0,"ref_norm":3016.664059872176,"rel_l2":0.06863107420881501,"seconds":10.296092247} vs limits {"max_rel_l2":0.05}

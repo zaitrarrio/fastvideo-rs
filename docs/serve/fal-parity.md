@@ -3,7 +3,9 @@
 Status: research note, 2026-09-28. Goal (owner): serve the same modes and
 resolutions that fal.ai offers for each model family we serve (MiniMax H3,
 LTX, Wan). This note lists every relevant fal endpoint, compares it with what
-this repo serves today, and ranks the work. It changes no code.
+this repo serves today, and ranks the work. §1 to §4 are the research
+snapshot (repo at `fca5810`); the P0 items are now implemented, see §5 (the
+status cells below that changed carry **P0 (§5)**).
 
 Status words used below:
 
@@ -149,8 +151,8 @@ The five `minimax/h3-max[-turbo]` HTTP endpoints share these fields:
 | `minimax/h3-max/image-to-video` | **served** (first frame, last frame, both) | same as t2v | same |
 | `minimax/h3-max/reference-to-video` | **served when configured**: the Ref2VA companions `h3-ref2v-max` (base Ref2VA DiT, 49 forwards) and `h3-ref2v-turbo` (Sol-H3 Ref2VA, 4 forwards) take Ref2V requests on `h3-max` / `h3-turbo` (`route_task`); limits 9 / 3 / 3 / 12, clips 2 to 15 s and 15 s per kind, `adaptive` from the first image (else video) reference (docs/ports/h3-ref2v.md) | `1080P` (`H3Refine1080P`); reference-token billing is not modelled | Deploy `configs/serve/runpod-h3-ref2v.toml` (own process on 80-96 GB cards) |
 | `minimax/h3-max/director` | **served** (`fal_director`) | `1080p` gives `invalid_input`. `audio_url` gives `invalid_initial_audio`. No prompt expander (a chunk's prompt is premise + direction) | 1080p: not possible (as above). `audio_url`: engine port (E10) |
-| `minimax/h3-max-turbo/{text,image}-to-video` | **partial**: we serve the turbo tier as `minimax/h3-turbo` (plus `h3-draft`), not under fal's id | app id | **config**: add `"minimax/h3-max-turbo"` to `fal_apps` and `[aliases] "h3-max-turbo" = "fasth3-4step-vsa"`. Better: a one-line arm in `adapters::fal_config` giving it the H3 Turbo tier fallback. fal has no `h3-max-turbo/reference-to-video`; ours adds it on every app, which is harmless |
-| `minimax/h3/{t2v,i2v,r2v}` (base H3) | **partial**: 480P and 768P are what we generate; the base-model app id is not mounted | `2K` and `4K` (the default!) are refused (`H3Resolution2K`). App id `minimax/h3` | App id: **config**. 2K/4K: **not possible** with fal's pipeline. It would take **new weights**: an open video super-resolution model (none is vetted for this repo yet) |
+| `minimax/h3-max-turbo/{text,image}-to-video` | **served (P0, §5)**: mounted by default on the H3 Turbo tier. Was **partial**: we serve the turbo tier as `minimax/h3-turbo` (plus `h3-draft`), not under fal's id | app id | **config**: add `"minimax/h3-max-turbo"` to `fal_apps` and `[aliases] "h3-max-turbo" = "fasth3-4step-vsa"`. Better: a one-line arm in `adapters::fal_config` giving it the H3 Turbo tier fallback. fal has no `h3-max-turbo/reference-to-video`; ours adds it on every app, which is harmless |
+| `minimax/h3/{t2v,i2v,r2v}` (base H3) | **served (P0, §5)** at 480P and 768P on the H3 Max tier (mounted by default; `2K` / `4K` are listed and answer a clean 422 `H3Resolution2K` on `resolution`). Was **partial**: 480P and 768P are what we generate; the base-model app id is not mounted | `2K` and `4K` (the default!) are refused (`H3Resolution2K`). App id `minimax/h3` | App id: **config**. 2K/4K: **not possible** with fal's pipeline. It would take **new weights**: an open video super-resolution model (none is vetted for this repo yet) |
 | `minimax/h3/*/lora` | **missing** | `loras` (per-request LoRA) | **engine port** (`GapId::Lora`: runtime LoRA apply/unapply) plus a LoRA file format matching fal's trainers |
 | `minimax/h3-max/extend-video` | **missing** | continuation of a client video, `output` extended or continuation | **engine port**: a video-tail anchor (the director already continues from a last-frame anchor; this needs the source clip's tail as context) plus a stitching output. 2K: not possible |
 | `minimax/h3-max/lip-sync/image-to-video` | **missing** | image + driving audio | **engine port**: I2V + E10 target audio. 2K: not possible |
@@ -256,9 +258,9 @@ Ours today:
 
 | fal endpoint | Ours | Gap | What it takes |
 |---|---|---|---|
-| `lightricks/ltx-2.5/text-to-video/fast` | **partial**: same matrix on the LTX API wire (`ltx-2-5-fast` goes to `ltx-turbo`). On the fal wire only 1080p at 24 fps, 5 to 15 s | fal app id and sub-path, 720p/1440p/2160p, fps, 16 to 20 s, `generate_audio`, `duration: auto`, `camera_motion` | App, schema and routing: **schema** (an LTX fal schema and multi-segment subs `text-to-video/fast`; see P0-2). `auto`: **new weights + engine port** (`model_patches/ltx-2.5-duration-head-bf16.safetensors` in `Lightricks/LTX-2.5`, `LtxAutoDuration`). `camera_motion`: **not possible** on 2.5 (camera LoRAs exist only as `Lightricks/LTX-2-19b-LoRA-Camera-Control-*`). Accept `static` and refuse the rest, or approximate with the prompt |
-| `lightricks/ltx-2.5/text-to-video/pro` | **partial**: as fast (`ltx-2-5-pro` goes to `ltx-pro`) | as fast | as fast |
-| `lightricks/ltx-2.5/image-to-video/{fast,pro}` | **missing** (`Ltx25I2V`; `LtxKeyframes` for `end_image_url`) | whole mode | **engine port** (weights loaded). **In progress (other agent); targets in §2.3** |
+| `lightricks/ltx-2.5/text-to-video/fast` | **served (P0, §5)** on the fal wire (`lightricks/ltx-2.5` + `text-to-video/fast`, `ltx-turbo`): 720p to 2160p, 24/25/48/50 fps, 6 to 20 s, `generate_audio`; left: `auto` (`LtxAutoDuration`), non-static `camera_motion`, and combinations over 481 frames (20 s at 25 fps, 10 s at 50 fps). Was **partial**: same matrix on the LTX API wire (`ltx-2-5-fast` goes to `ltx-turbo`). On the fal wire only 1080p at 24 fps, 5 to 15 s | fal app id and sub-path, 720p/1440p/2160p, fps, 16 to 20 s, `generate_audio`, `duration: auto`, `camera_motion` | App, schema and routing: **schema** (an LTX fal schema and multi-segment subs `text-to-video/fast`; see P0-2). `auto`: **new weights + engine port** (`model_patches/ltx-2.5-duration-head-bf16.safetensors` in `Lightricks/LTX-2.5`, `LtxAutoDuration`). `camera_motion`: **not possible** on 2.5 (camera LoRAs exist only as `Lightricks/LTX-2-19b-LoRA-Camera-Control-*`). Accept `static` and refuse the rest, or approximate with the prompt |
+| `lightricks/ltx-2.5/text-to-video/pro` | **served (P0, §5)** as fast on `ltx-pro` (720p/1080p, 24/25/50 fps, 6 to 10 s; 10 s at 50 fps is over 481 frames). Was **partial**: as fast (`ltx-2-5-pro` goes to `ltx-pro`) | as fast | as fast |
+| `lightricks/ltx-2.5/image-to-video/{fast,pro}` | **schema served (P0, §5)**: `image_url` (required), `end_image_url`, `aspect_ratio` `auto`; normalizes to `Task::I2V` / `Task::Keyframes`, so it runs wherever the LTX engine has the I2V port (§2.3). Was **missing** (`Ltx25I2V`; `LtxKeyframes` for `end_image_url`) | whole mode | **engine port** (weights loaded). **In progress (other agent); targets in §2.3** |
 | `lightricks/ltx-2.5/audio-to-video/{fast,pro}` | **missing** (LTX API stub answers 403) | audio-driven generation | **engine port**: A2V (audio latents fixed as conditioning), same weights. `guidance_scale` is accepted and ignored on the distilled model |
 | `fal-ai/ltx-2.3/{text,image}-to-video[/fast]`, `audio-to-video` | as the 2.5 rows (`ltx-2-3-*` ids map to our 2.5 tiers on the LTX API) | Real 2.3 weights, if exact 2.3 output is wanted | **config + new weights** (`LtxVersion::V23` exists; `FastVideo/LTX-2.3-Distilled-Diffusers` or `Lightricks/LTX-2.3`, LTX-2 Community License). Low value: 2.5 is a superset |
 | `fal-ai/ltx-2.3/extend-video`, `fal-ai/ltx-2.3-22b/extend-video` | **missing** (stub 403) | extend forward or backward with context frames | **engine port**: video-latent prefix or suffix conditioning, same weights |
@@ -362,9 +364,9 @@ Ours today:
 
 | fal endpoint | Ours | Gap | What it takes |
 |---|---|---|---|
-| `fal-ai/wan/v2.2-5b/text-to-video` | **partial**: same model as `wan-max`, on native, OpenAI and fal (H3 schema) | fal app `fal-ai/wan` + sub `v2.2-5b/text-to-video`, fal Wan fields (`num_frames`, `frames_per_second`, `negative_prompt`, `num_inference_steps`, `guidance_scale`, `shift`). **580p** tier. Frames 122 to 161. fps other than 24/16. Interpolation. Our default is 50 steps with CFG 5; fal's is 40 steps with CFG 3.5 | Fields and ids: **schema** (a Wan fal schema; our knobs already exist in `KnobCaps`). 580p: **config** (add a 576 short edge to `wan_max.short_edges`; check the 5B canvas multiple of 32). 161 frames: **config** (`frames_max`), quality unverified past 121. fps: **config** (`FpsCaps.allowed` is container-only, so any integer 4 to 60 is a muxing choice). Interpolation: **new weights** (RIFE or FILM), low priority |
-| `fal-ai/wan/v2.2-5b/image-to-video` | **partial**: `wan-max` I2V is served (fal wire uses H3 field names) | as above, + aspect `auto` | as above |
-| `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` | **missing** (weights) | the whole tier: 480p, 580p, 720p at 24 fps, 17 to 161 frames | **new weights + config**: `FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers` (Apache-2.0). The preset `fast_wan_2_2_ti2v_5b` already exists in `fastvideo-models` (`wan/config.rs`), and `WanRecipe` takes a preset. This is the fal-comparable **wan-turbo** |
+| `fal-ai/wan/v2.2-5b/text-to-video` | **served (P0, §5)**: `fal-ai/wan` + `v2.2-5b/text-to-video` on `wan-max` with fal's fields and defaults (40 steps, CFG 3.5, shift 5), 580p/720p, 17 to 161 frames, 4 to 60 fps; interpolation refused. Was **partial**: same model as `wan-max`, on native, OpenAI and fal (H3 schema) | fal app `fal-ai/wan` + sub `v2.2-5b/text-to-video`, fal Wan fields (`num_frames`, `frames_per_second`, `negative_prompt`, `num_inference_steps`, `guidance_scale`, `shift`). **580p** tier. Frames 122 to 161. fps other than 24/16. Interpolation. Our default is 50 steps with CFG 5; fal's is 40 steps with CFG 3.5 | Fields and ids: **schema** (a Wan fal schema; our knobs already exist in `KnobCaps`). 580p: **config** (add a 576 short edge to `wan_max.short_edges`; check the 5B canvas multiple of 32). 161 frames: **config** (`frames_max`), quality unverified past 121. fps: **config** (`FpsCaps.allowed` is container-only, so any integer 4 to 60 is a muxing choice). Interpolation: **new weights** (RIFE or FILM), low priority |
+| `fal-ai/wan/v2.2-5b/image-to-video` | **served (P0, §5)** as t2v plus `image_url` and aspect `auto`. Was **partial**: `wan-max` I2V is served (fal wire uses H3 field names) | as above, + aspect `auto` | as above |
+| `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` | **served (P0, §5)**: FastWan2.2 TI2V-5B FullAttn is the `wan-turbo` tier (weights on both volumes), 480p/580p/720p, 17 to 161 frames. Was **missing** (weights) | the whole tier: 480p, 580p, 720p at 24 fps, 17 to 161 frames | **new weights + config**: `FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers` (Apache-2.0). The preset `fast_wan_2_2_ti2v_5b` already exists in `fastvideo-models` (`wan/config.rs`), and `WanRecipe` takes a preset. This is the fal-comparable **wan-turbo** |
 | `fal-ai/wan/v2.2-5b/text-to-video/distill` | **missing** | | Covered by fast-wan above; skip |
 | `fal-ai/wan/v2.2-a14b/{text,image}-to-video` (+ `/turbo`, `/video-to-video`) | **missing** | Wan2.2 MoE 14B T2V and I2V (+ end image), 480p, 580p, 720p, 17 to 161 frames, two guidance scales | **new weights** (`Wan-AI/Wan2.2-T2V-A14B`, `Wan-AI/Wan2.2-I2V-A14B`, Apache-2.0) + **engine port**. The presets and `boundary_ratio` exist in `fastvideo-models`, but the engine-service Wan loader (`cuda/wan.rs`) has no two-expert path, and 2x14B bf16 needs fp8 or offload on one 96 GB GPU. v2v (`strength`) is a second port |
 | `fal-ai/wan-t2v`, `fal-ai/wan-i2v` (2.1 14B) | **missing** | 14B at 480p, 580p, 720p, 81 to 100 frames | **new weights + config**: `Wan-AI/Wan2.1-T2V-14B-Diffusers`, `Wan2.1-I2V-14B-{480P,720P}-Diffusers` (Apache-2.0). Presets `wan_t2v_14b` and `wan_i2v_14b_*` exist. Lower value than A14B |
@@ -445,3 +447,171 @@ Ours today:
 - Prompt expansion (`prompt_expansion_mode`, `enable_prompt_expansion`)
   needs an LLM service, not weights. It stays accepted and ignored until one
   is wired in.
+
+## 5. P0 implementation (2026-09-28)
+
+All four P0 items are in. Code: `crates/fastvideo-fal/src/{schema.rs,
+schema/ltx.rs, schema/wan.rs, catalog.rs, queue.rs, sync.rs, lib.rs}`,
+`crates/fastvideo-engine-service/src/cuda/caps.rs`, the route table
+(`fastvideo-serve/src/router.rs`), the console (`console/{common,home,model,
+form}.js`) and `configs/serve/runpod-{wan5b,wan,ltx}.toml`.
+
+### 5.1 What the fal wire serves now
+
+| App (`[protocols] fal_apps`) | Sub-paths | Runs on | Schema |
+|---|---|---|---|
+| `minimax/h3-max`, `minimax/h3-turbo`, `minimax/h3-draft` | `text-to-video`, `image-to-video`, `reference-to-video` (+ `director`) | their H3 tier | H3 Max (unchanged) |
+| **`minimax/h3-max-turbo`** (default app) | same | H3 Turbo | H3 Max |
+| **`minimax/h3`** (default app) | same | H3 Max | base H3: `resolution` `480P`, `768P`, `2K`, `4K`; 2K / 4K normalize to the 1440 / 2160 short edge and answer 422 `H3Resolution2K` on `resolution`; an omitted `resolution` is `768P` (fal's default `2K` is not servable) |
+| **`lightricks/ltx-2.5`** | `text-to-video/fast`, `image-to-video/fast` → `ltx-turbo`; `text-to-video/pro`, `image-to-video/pro` → `ltx-pro` | per endpoint | §2.3 fields: `duration` (6 to 20 even, or `auto`), `resolution` (fast 720p/1080p/1440p/2160p, pro 720p/1080p), `aspect_ratio` (`16:9`, `9:16`; i2v `auto`), `fps` (fast 24/25/48/50, pro 24/25/50; default 25), `generate_audio`, `camera_motion`, `image_url` / `end_image_url` on i2v, `seed`, `sync_mode` |
+| **`fal-ai/wan`** | `v2.2-5b/text-to-video`, `v2.2-5b/image-to-video` → `wan-max`; `v2.2-5b/text-to-video/fast-wan` → `wan-turbo` | per endpoint | §3.1 fields: `num_frames` 17 to 161 (81), `frames_per_second` 4 to 60 (24), `resolution` (580p/720p; fast-wan also 480p), `aspect_ratio` (`16:9`, `9:16`, `1:1`; i2v `auto`), `negative_prompt`, `num_inference_steps` 2 to 50 (40), `guidance_scale` 1 to 10 (3.5), `shift` 1 to 10 (5), `interpolator_model` / `num_interpolated_frames`, `enable_prompt_expansion`, `image_url` on i2v, `seed`, `enable_safety_checker`, `sync_mode` |
+| any other `owner/alias` | the three H3 subs | its model by name | H3 Max (as before) |
+
+- Sub-paths may have several segments. Submit and `/run/{app}/{sub}` are
+  static routes per endpoint; status, result, stream and cancel answer under
+  `/{app}/requests/{id}` (the URLs we return) and under every
+  `/{app}/{sub}/requests/{id}`. A job belongs to the app its endpoint id
+  names (`schema::app_id` drops the longest known sub).
+- Output file names: `<nanoid21>_<slug>.mp4` from the app id
+  (`schema::output_slug`: `minimax-<alias>` on `minimax/*`, else the alias,
+  e.g. `_ltx-2.5.mp4`, `_wan.mp4`), plus the tier when the slug does not
+  name it (the API-fixes work refined the slug on top of this).
+- The director is mounted for the H3 apps only.
+- `GET /fal/schema` lists each app's own endpoints (`sub`, `endpoint_id`,
+  `title`, and the endpoint's `model` / `tier`), plus `kind` and `director`;
+  `GET /fal/schema/{owner}/{alias}/{*sub}` serves the endpoint's JSON Schema.
+  The console pages (`/console/models/{owner}/{alias}/{*sub}`) build their
+  endpoint tabs from it; enum selects keep the JSON type (integer `fps`,
+  `duration: 6 | "auto"`), number sliders step by 0.1.
+- Default apps (`fastvideo_fal::DEFAULT_APPS`, `ProtocolsCfg`): the three
+  H3 tiers plus `minimax/h3-max-turbo` and `minimax/h3`.
+  `configs/serve/runpod-ltx.toml` adds `lightricks/ltx-2.5`; the new
+  `configs/serve/runpod-wan5b.toml` serves `fal-ai/wan` (turbo resident,
+  max on demand with `swap`).
+
+Validation agreement (`crates/fastvideo-fal/src/catalog.rs` tests and
+`crates/fastvideo-fal/tests/family_schemas.rs`): every schema enum value,
+bound and default is what the parser accepts; every LTX (class ×
+resolution × fps × duration) combination the parser accepts negotiates on
+the CUDA catalog's LTX caps with the expected frames and delivered size;
+every Wan (resolution × aspect × frames × fps) combination negotiates on
+`wan22-ti2v-5b` and `fastwan22-ti2v-5b`; `minimax/h3` 2K / 4K give
+`H3Resolution2K` on the `sol-h3` caps. The LTX schema's frame ceiling
+(`LTX_FRAMES_MAX` = 481) is asserted equal to the engine's.
+
+Deviations kept (each a server limit, named in the schema descriptions):
+
+- LTX: fal allows 20 s at 25 fps and 10 s at 50 fps; both exceed our LTX
+  grid (481 frames; 505 would be needed) and are refused on `duration`
+  (25 fps: up to 18 s; 50 fps: up to 8 s). Raising the grid needs a GPU
+  check of the LTX engine at 505 frames (not done here).
+- LTX `duration: "auto"` answers `LtxAutoDuration`; an omitted duration is
+  6 s (fal's default is `auto`). `camera_motion` other than `static` answers
+  `LtxCameraMotion`.
+- LTX image-to-video: schema and normalization are in (`Task::I2V`, and
+  `Task::Keyframes` with `end_image_url`); it runs where the LTX engine has
+  image conditioning (the LTX image-conditioning work).
+- Wan: `interpolator_model` `film` / `rife` with `num_interpolated_frames`
+  > 0 is refused (no interpolator). `enable_prompt_expansion` and
+  `enable_safety_checker` are accepted no-ops. On fast-wan,
+  `guidance_scale` and `negative_prompt` are no-ops (DMD is unguided).
+- Wan sizes: 16:9 `720p` is 1280x704 (the 5B's trained size, multiple of
+  32), `580p` 1024x576, `480p` 832x480; `1:1` and `auto` keep the short
+  edge 704 / 576 / 480.
+
+### 5.2 Engine catalog (Wan 5B)
+
+- `wan22-ti2v-5b` (`wan-max`): short edges 704, 576, 480; frames up to 161
+  (4k+1); container fps any integer 4 to 60 (the frames do not depend on
+  it). Every non-causal Wan recipe now accepts 4 to 60 fps.
+- **`fastwan22-ti2v-5b` is `wan-turbo`**:
+  `FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers` on the
+  `fast_wan_2_2_ti2v_5b` preset, DMD 3 steps (1000/757/522), shift 5, no
+  VSA, full Wan 2.2 VAE, same canvas / frames / fps as `wan-max`, T2V and
+  I2V. `fastwan22-ti2v-5b-taehv` (TAEHV `taew2_2`) is `wan-draft`. All three
+  5B tiers run without VSA, so they share one process.
+- `fastwan21-1.3b` and `fastwan21-1.3b-taehv` are untiered ids now (they
+  were `wan-turbo` / `wan-draft`); `configs/serve/runpod-wan.toml` and
+  `configs/serve/gateway.toml` name `recipe = "fastwan21-1.3b"`. A
+  `[[models]] family = "wan"` entry without `recipe` resolves to the 5B
+  turbo.
+
+### 5.3 Weights
+
+`fastwan22-ti2v-5b` (Apache-2.0), repo revision
+`3e187042a324f6f5fb68fd22110a78725253de8f`, 15 files, 24 201 770 562 bytes
+(`scheduler/ tokenizer/ text_encoder/ transformer/ vae/` +
+`model_index.json`), on **both** weight volumes:
+
+- `scripts/gpu/weights-manifest.tsv` row and `verify-weights.sh` cell
+  `fastwan22-ti2v-5b`.
+- US (`s2k01690bi`): CPU pod `k756dt796jz3sx` pulled from the Hub into
+  `weights/.fastwan22-ti2v-5b.partial-<stamp>` (`local_dir`, plain files),
+  checked every file against the Hub listing at that revision (LFS SHA-256,
+  git blob SHA-1 for the small files, exact file list), wrote `.complete`,
+  then renamed to `weights/fastwan22-ti2v-5b` (94 s).
+- EU (`jg48s6o1w0`): the same (CPU pod `ianwq90j5m11eo`, 166 s), also
+  checked against the US copy's SHA-256 list: 15/15 identical. The EU tree
+  is a Hub pull verified against the US hashes rather than a pod-to-pod
+  byte copy: same bytes, one pod fewer.
+- Script: `scripts/gpu/fetch-hub-tree.sh <dest> <revision>
+  [expect-sha256.txt]` (add-only: refuses an existing `weights/<dest>`;
+  detached backstop). Logs and SHA-256 lists:
+  `artifacts/runpod/fetch-fastwan22-ti2v-5b-*`.
+- Every GPU cell below passed the matrix's `verify-weights.sh` gate first
+  (EU).
+
+### 5.4 GPU results (RTX PRO 6000 Blackwell Server, EU volume, image `sha-9b2c963`)
+
+Runs `artifacts/runpod/wan/9b2c963-09282019` (cells) and
+`…/9b2c963-09282112` (control); upstream
+`artifacts/runpod/upstream/9b2c963-09282013` (FastVideo image
+`fastvideo-rs-upstream-fastvideo:sha-5c10f56`). No H100 or H200 was in
+stock in US-CA-2.
+
+Seconds; 5p = medians over the five `prompts-eval.json` prompts, warm;
+else one prompt.
+
+| Cell | Size × frames | Steps | Text | Denoise | Decode | Total | Peak MiB |
+|---|---|---|---|---|---|---|---|
+| `fw22` (wan-turbo, full VAE, 5p) | 1280x704 × 121 | DMD 3 | 0.06 | 4.53 | 13.87 | **18.50** | 61 196 |
+| `fw22-taehv` (wan-draft, 5p) | 1280x704 × 121 | DMD 3 | 0.06 | 4.49 | 0.88 | **5.49** | 29 420 |
+| Upstream FastVideo `fv-fastwan22-5b` (5p, dense) | 1280x704 × 121 | DMD 3 | 0.09 | 6.85 | 11.77 (+0.6 save) | **19.65** | 44 123 (torch) |
+| `fw22-i2v` | 832x480 × 121 | DMD 3 | 0.02 | 1.57 | 5.67 | 7.31 | 39 396 |
+| `fw22-580p-161f` | 1024x576 × 161 | DMD 3 | 0.00 | 3.68 | 11.29 | 15.03 | 47 660 |
+| `fw22-720p-161f` | 1280x704 × 161 | DMD 3 | 0.00 | 6.85 | 18.29 | 25.20 | 60 044 |
+| `wan5b-580p-161f` (wan-max, fal's defaults) | 1024x576 × 161 | UniPC 40, CFG 3.5 | 2.26 | 101.09 | 11.50 | 114.88 | 48 588 |
+| `wan5b-720p-161f` (wan-max, fal's defaults) | 1280x704 × 161 | UniPC 40, CFG 3.5 | 1.60 | 191.23 | 18.53 | 211.41 | 58 892 |
+
+- **580p and 161 frames run** on both 5B checkpoints (every cell exit 0,
+  161 frames). Quality past the trained 121 frames was not scored.
+- **wan-turbo against FastVideo**: 18.50 s vs 19.65 s total (denoise 4.53
+  vs 6.85 s, 1.51x; our full-VAE decode, 13.9 vs 11.8 s, is the slower
+  stage, as on the base 5B). wan-draft (TAEHV) 5.49 s; TAEHV against our
+  full VAE on the same latents: LPIPS 0.030 to 0.066 (mean 0.046), PSNR
+  30.4 to 32.9 dB.
+- **Engine path**: `engine-fw22` loads the catalog's `wan-turbo` through
+  the engine service (`fv-gpucheck engine --model wan-turbo`): Ready in
+  110 s, frames **byte-identical** to the CLI (`cli-fw22`, SHA-256
+  `e46b7b2c…`), MP4 1280x704, 121 frames at 24 fps; a cancel after step 1
+  ends the job.
+- **Module parity against Diffusers** (`fw22-oracle`, the upstream
+  `oracle:fastwan22-ti2v` dump: `oracle_wan22.py` with the FastWan weights,
+  DiT at t = 757): VAE encode rel-L2 5.4e-3, decode PSNR 65.7 dB (same VAE
+  as the base); **DiT out rel-L2 6.75e-2 (t2v) / 6.86e-2 (i2v), cosine
+  0.9977: over the harness's 5e-2 limit (FAIL)**. Control on the same GPU
+  and image (`wan5b-oracle`, base TI2V-5B weights, t = 781): 2.62e-2 /
+  1.45e-2, cosine 0.99966 (PASS, as on H100). Same network code and inputs,
+  so the larger error comes with the distilled weights (larger activations
+  through the bf16 path, or the timestep); not bisected. Frame-level parity
+  with FastVideo's own clips was not measured (different noise).
+- Spend: about $2.2 (GPU pods at $2.09/hr: 34 + 10 + 5 + 8 + 4 min; two
+  CPU fetch pods at $0.24/hr, 2 to 3 min each). Every pod was deleted and
+  checked gone (404).
+
+### 5.5 Left from P0
+
+- The distilled 5B's DiT rel-L2 (6.8e-2 vs 2.6e-2 for the base) needs a
+  per-block look (`FASTVIDEO_DUMP_OPS`) before `wan-turbo` claims module
+  parity; the tier runs and is as fast as FastVideo.
+- LTX 20 s at 25 fps and 10 s at 50 fps (a 505-frame grid) and LTX `auto`.

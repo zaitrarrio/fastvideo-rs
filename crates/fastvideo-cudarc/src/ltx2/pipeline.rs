@@ -778,6 +778,7 @@ fn dump_step_velocity(
     v_audio: &CudaTensor,
     sigma: f64,
     state: LatentState,
+    cond: Option<&StageConditioning>,
 ) -> Result<()> {
     use crate::wan::dump;
     dump::set_blocks(false);
@@ -787,7 +788,12 @@ fn dump_step_velocity(
     for (tag, x, v) in [("video", video, v_video), ("audio", audio, v_audio)] {
         let v = state.store(v.clone())?;
         dump::tensor(&dump::named(&format!("{tag}_vel_step{:02}", i + 1)), &v)?;
-        let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+        // `X0Model`'s output: per-token timesteps under conditioning, before
+        // the clean-latent blend.
+        let x0 = match cond {
+            Some(c) if tag == "video" => state.store(c.x0(x, &v, sigma as f32)?)?,
+            _ => state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?,
+        };
         dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
     }
     Ok(())
@@ -905,6 +911,7 @@ pub fn denoise_with_cond(
             &v_audio,
             schedule.sigmas[i],
             state,
+            cond,
         )?;
         video = euler_update_cond(&video, &v_video, schedule, i, state, cond)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
@@ -1241,7 +1248,7 @@ pub fn denoise_ancestral_cond(
             model.stage1_store(&out.0, &out.1);
             out
         };
-        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state)?;
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state, cond)?;
         // One draw (one upload) per step: video, then audio.
         let draws = if opts.eta > 0.0 && sigma_next != 0.0 {
             noise.draw(&[&video.shape, &audio.shape])?
@@ -2751,8 +2758,20 @@ impl Ltx2Pipeline {
         for &(h, w, tag) in sizes {
             let mut stage = Vec::with_capacity(rgbs.len());
             for (i, rgb) in rgbs.iter().enumerate() {
-                let px = super::i2v_encode::image_pixels(rgb, h, w);
-                crate::wan::dump::host(&format!("{tag}_cond{i}_pixels"), &[3, h, w], &px)?;
+                let mut px = super::i2v_encode::image_pixels(rgb, h, w);
+                let pname = format!("{tag}_cond{i}_pixels");
+                crate::wan::dump::host(&pname, &[3, h, w], &px)?;
+                // FASTVIDEO_INJECT_PIXELS (default on with FASTVIDEO_INJECT_DIR):
+                // encode the reference's preprocessed pixels, so the latent diff
+                // is the encoder's alone.
+                if crate::wan::inject::enabled()
+                    && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                {
+                    if let Some(v) = crate::wan::inject::load_numel(&pname, px.len())? {
+                        crate::wan::log::info(format_args!("inject: {pname} (reference)"));
+                        px = v;
+                    }
+                }
                 let lat = encoder.encode_image(&px, h, w)?;
                 let lat = state.store(pack_video(&lat)?)?;
                 let name = format!("{tag}_cond{i}_latent");

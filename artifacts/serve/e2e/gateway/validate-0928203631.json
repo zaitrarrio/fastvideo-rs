@@ -1,0 +1,225 @@
+{
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-bd80065",
+  "gateway_pod_ready_s": 76.9,
+  "jobs": [
+    {
+      "api": "native",
+      "pool": "wan",
+      "cold": true,
+      "submit": "202 0.959859",
+      "wall_s": 158.26,
+      "status": "succeeded",
+      "url_host": "\\1"
+    },
+    {
+      "api": "fastvideo",
+      "pool": "wan",
+      "cold": false,
+      "submit": "200 0.719604",
+      "wall_s": 5.12,
+      "status": "completed"
+    },
+    {
+      "api": "fal",
+      "pool": "h3-turbo",
+      "cold": true,
+      "submit": "200 1.160768",
+      "wall_s": 212.33,
+      "status": "COMPLETED",
+      "error": null
+    },
+    {
+      "api": "minimax",
+      "pool": "h3-turbo",
+      "cold": false,
+      "submit": "200 0.911882",
+      "wall_s": 27.81,
+      "status": "succeeded"
+    },
+    {
+      "api": "ltx",
+      "pool": "ltx (not deployed)",
+      "submit": "503 0.653260"
+    }
+  ],
+  "latency": [
+    {
+      "gateway_wall_s": 128.74,
+      "gateway_submit": "202 0.863213",
+      "direct": {
+        "status": "COMPLETED",
+        "wall_s": 5.94,
+        "delayTime": 20,
+        "executionTime": 5322,
+        "job_status": "succeeded"
+      }
+    },
+    {
+      "gateway_wall_s": 4.99,
+      "gateway_submit": "202 1.187921",
+      "direct": {
+        "status": "COMPLETED",
+        "wall_s": 6.26,
+        "delayTime": 61,
+        "executionTime": 5605,
+        "job_status": "succeeded"
+      }
+    },
+    {
+      "gateway_wall_s": 5.12,
+      "gateway_submit": "202 1.004117",
+      "direct": {
+        "status": "COMPLETED",
+        "wall_s": 6.08,
+        "delayTime": 18,
+        "executionTime": 5322,
+        "job_status": "succeeded"
+      }
+    }
+  ],
+  "pools": [
+    {
+      "pool": "h3-turbo",
+      "queued": 0,
+      "running": 0,
+      "run_time": {
+        "count": 2,
+        "max_s": 26.598169181,
+        "mean_s": 26.5174110235,
+        "p50_s": 26.598169181,
+        "p90_s": 26.598169181
+      },
+      "queue_wait": {
+        "count": 2,
+        "max_s": 184.959356327,
+        "mean_s": 92.7565772645,
+        "p50_s": 184.959356327,
+        "p90_s": 184.959356327
+      },
+      "workers": {
+        "busy": 0,
+        "idle": 0,
+        "initializing": 0,
+        "ready": 0,
+        "total": 1,
+        "unhealthy": 0
+      },
+      "available": true
+    },
+    {
+      "pool": "h3-max",
+      "queued": 0,
+      "running": 0,
+      "run_time": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "queue_wait": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "workers": {
+        "busy": 0,
+        "idle": 0,
+        "initializing": 0,
+        "ready": 0,
+        "total": 0,
+        "unhealthy": 0
+      },
+      "available": false
+    },
+    {
+      "pool": "ltx",
+      "queued": 0,
+      "running": 0,
+      "run_time": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "queue_wait": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "workers": {
+        "busy": 0,
+        "idle": 0,
+        "initializing": 0,
+        "ready": 0,
+        "total": 0,
+        "unhealthy": 0
+      },
+      "available": false
+    },
+    {
+      "pool": "wan",
+      "queued": 0,
+      "running": 0,
+      "run_time": {
+        "count": 5,
+        "max_s": 5.11010532,
+        "mean_s": 4.3404169883999995,
+        "p50_s": 3.947753084,
+        "p90_s": 5.11010532
+      },
+      "queue_wait": {
+        "count": 5,
+        "max_s": 153.387363669,
+        "mean_s": 53.675488587400004,
+        "p50_s": 0.837481767,
+        "p90_s": 153.387363669
+      },
+      "workers": {
+        "busy": 1,
+        "idle": 0,
+        "initializing": 0,
+        "ready": 1,
+        "total": 1,
+        "unhealthy": 0
+      },
+      "available": true
+    },
+    {
+      "pool": "sfwan-live",
+      "queued": 0,
+      "running": 0,
+      "run_time": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "queue_wait": {
+        "count": 0,
+        "max_s": 0.0,
+        "mean_s": 0.0,
+        "p50_s": 0.0,
+        "p90_s": 0.0
+      },
+      "workers": {
+        "busy": 0,
+        "idle": 0,
+        "initializing": 0,
+        "ready": 0,
+        "total": 0,
+        "unhealthy": 0
+      },
+      "available": false
+    }
+  ],
+  "leftovers": "",
+  "balance_before": 42.9673772876,
+  "balance_after": 40.9261860701
+}
