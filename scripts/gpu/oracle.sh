@@ -48,7 +48,7 @@ log() { printf '[%s] oracle: %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$logs/o
 fv=() ltx=()
 for t in $targets; do
   case "$t" in
-    fasth3-* | sfwan13) fv+=("$t") ;;
+    fasth3-* | sfwan13 | h3-ref2va-*) fv+=("$t") ;;
     ltx25-*) ltx+=("$t") ;;
     *) log "unknown target $t"; exit 2 ;;
   esac

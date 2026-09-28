@@ -2134,6 +2134,18 @@ Audio: male speech, clear voice, quiet room"
         fasth3-4step-dense | fasth3-4step-vsa)
           wcell="$target"
           cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe "${target#fasth3-}" "${h3_oracle[@]}") ;;
+        h3-ref2va-*)
+          # MiniMax-H3 Ref2VA (docs/ports/h3-ref2v.md) against FastVideo's
+          # Ref2VA pipeline: transformer_ref from h3-ref2va, one image
+          # reference, dense, `base-<N>step` = the reference's --steps N+1.
+          # Prompt and image as scripts/gpu/upstream/oracle.sh oracle_ref2va.
+          wcell=h3-ref2va
+          ref2va_prompt="${FV_REF2VA_PROMPT:-The camera glides slowly forward along the shoreline of the beach in <Picture 1>, turquoise waves rolling in and breaking into white foam, bright sunny day, the sound of the surf and a light wind.}"
+          cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --ref-root "$W/h3-ref2va"
+            --h3-recipe "base-${target#h3-ref2va-}" --dense
+            --ref "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/ti2v-beach-832x480.jpg"
+            --prompt "$ref2va_prompt" --seconds 5 --seed "$SEED" --text-encoder streamed
+            --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base") ;;
         ltx25-*)
           wcell=ltx25-two-stage
           geo=(--height 512 --width 768 --num-frames 121)
