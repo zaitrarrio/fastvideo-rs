@@ -1,0 +1,10 @@
+fv_jobs_submitted_total{api="minimax_v2"} 1
+fv_jobs_submitted_total{api="native"} 1
+fv_jobs_submitted_total{api="fal"} 3
+fv_jobs_submitted_total{api="openai_videos"} 2
+fv_jobs_finished_total{api="minimax_v2",status="succeeded"} 1
+fv_jobs_finished_total{api="openai_videos",status="succeeded"} 2
+fv_jobs_finished_total{api="fal",status="succeeded"} 3
+fv_jobs_finished_total{api="native",status="succeeded"} 1
+fv_job_duration_seconds_sum{api="openai_videos"} 59.810074528
+fv_job_duration_seconds_count{api="openai_videos"} 2
