@@ -313,3 +313,78 @@ fn shipped_configs_parse() {
     }
     assert!(n >= 2, "configs/serve has {n} configs");
 }
+
+/// Runpod load balancer with `workers.max > 1` and no shared state (file
+/// jobs, local artifacts): only routes any worker can answer are served.
+#[tokio::test]
+async fn multi_worker_without_shared_state_serves_only_local_routes() {
+    let mut c = config("lb");
+    c.server.workers_max = 2;
+    c.validate().unwrap();
+    let app = App::build(c, Overrides::default()).await.unwrap();
+    wait_ready(&app).await;
+    let r = app.router.clone();
+    for (m, uri) in [("GET", "/health"), ("GET", "/ping"), ("GET", "/healthz"), ("GET", "/fv/v1/capabilities"), ("GET", "/v1/models")] {
+        let (s, v, _) = call(&r, m, uri, None, true).await;
+        assert_eq!(s, 200, "{m} {uri}: {v}");
+    }
+    for (m, uri, body) in [
+        ("POST", "/fv/v1/jobs", Some(submit_body("x"))),
+        ("GET", "/fv/v1/jobs", None),
+        ("POST", "/v1/videos/sync", Some(json!({"prompt": "x"}))),
+        ("POST", "/v1/videos", Some(json!({"prompt": "x"}))),
+        ("DELETE", "/fv/v1/jobs/fvjob_x", None),
+        ("GET", "/files/a/b.mp4", None),
+        ("PUT", "/uploads/t", Some(json!({}))),
+        ("POST", "/fv/v1/streams", Some(json!({}))),
+        ("POST", "/start_session", Some(json!({}))),
+        ("GET", "/fv/v1/admin/keys", None),
+        ("GET", "/not-a-route", None),
+    ] {
+        let (s, v, h) = call(&r, m, uri, body, true).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{m} {uri}: {v}");
+        assert_eq!(h["x-fv-multi-worker"], "not-served", "{m} {uri}");
+        assert_eq!(v["error"]["type"], "not_served_by_multi_worker_deployment", "{m} {uri}");
+    }
+    // CORS preflight passes the filter.
+    let resp = r
+        .clone()
+        .oneshot(Request::builder().method("OPTIONS").uri("/fv/v1/jobs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert!(resp.headers().get("x-fv-multi-worker").is_none());
+}
+
+/// Two workers sharing D1 (and, in production, R2): a job submitted on one
+/// is read, listed and polled to completion on the other; cancel/delete is
+/// refused because the running job is authoritative on its own worker.
+#[tokio::test]
+async fn multi_worker_with_shared_jobs_reads_across_workers() {
+    use fastvideo_serve::multiworker::{layer, Policy};
+    let mock = MockD1::new();
+    let db = || D1Client::new(Arc::new(mock.clone()));
+    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false };
+    let mut workers = Vec::new();
+    for (tag, id) in [("lb-a", "worker-a"), ("lb-b", "worker-b")] {
+        let store = D1JobStore::new(db(), D1Options::new(id)).open(time::OffsetDateTime::now_utc()).await.unwrap();
+        let c = config(tag);
+        let apps = c.protocols.fal_apps.clone();
+        let app = App::build(c, Overrides { jobs: Some(store), ..Default::default() }).await.unwrap();
+        wait_ready(&app).await;
+        let router = layer(app.router.clone(), policy, &apps);
+        workers.push((app, router));
+    }
+    let (a, b) = (&workers[0].1, &workers[1].1);
+    let (s, v, _) = call(a, "POST", "/fv/v1/jobs", Some(submit_body("lb job")), true).await;
+    assert_eq!(s, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    // Worker B answers status and list from D1.
+    let done = wait_status(b, &id, &["succeeded"]).await;
+    assert_eq!(done["id"], id.as_str());
+    let (s, v, _) = call(b, "GET", "/fv/v1/jobs", None, true).await;
+    assert_eq!((s, v["total"].clone()), (StatusCode::OK, json!(1)), "{v}");
+    let (s, _, h) = call(b, "DELETE", &format!("/fv/v1/jobs/{id}"), None, true).await;
+    assert_eq!((s, &h["x-fv-multi-worker"]), (StatusCode::NOT_FOUND, &"not-served".parse::<axum::http::HeaderValue>().unwrap()));
+    let (s, _, _) = call(b, "GET", "/fv/v1/admin/keys", None, true).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "minted keys are not shared here");
+}

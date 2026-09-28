@@ -1361,7 +1361,7 @@ are always open.
 |---|---|---|---|---|---|
 | **Runpod pod** | `http`; `scripts/serve/runpod-pod.sh` reuses `runpod-http.sh` `create_pod` (REST v1) with `dockerStartCmd` → `fv-serve` | `8000/http` (proxy, **100 s Cloudflare cap**), `70000/tcp` symmetrical (ICE-TCP) | Network volume at `/workspace` (read-only use) | `/healthz` through `https://<pod>-8000.proxy.runpod.net` | Long sync calls (`/v1/videos/sync`, LTX `/v1/*`, fal `/run`) above 100 s get 524. Document async use. Streaming: peer via ICE-TCP, WHIP for broadcast |
 | **Runpod serverless (queue)** | `runpod-queue`: the Rust worker loop (§6.4) plus the in-process router | none | Network volume at `/runpod-volume` (one per DC) | Heartbeat to `RUNPOD_WEBHOOK_PING`. CUDA init failure → fail one job with the reason, then exit 1 | `executionTimeout` ≥ max stream + cold start (1 800 000 ms); `workersMin ≥ 1`; FlashBoot; digest pin; artifacts **S3** (Runpod S3 API or R2) with presigned URLs, because output is capped at 20 MB and pod-local URLs die |
-| **Runpod serverless (LB)** | `http` on `$PORT`; `/ping` 204 while loading, 200 ready | `$PORT/http` | `/runpod-volume` | `/ping` | 5.5 min and 30 MB per request. `auth.mode = trust-gateway`. **Async job APIs are enabled only with `workers.max = 1`**: the job store is per-worker and clients can't pin `X-Runpod-Worker-Id`. Otherwise only sync routes are mounted. No streaming |
+| **Runpod serverless (LB)** | `http` on `$PORT`; `/ping` 204 while loading, 200 ready | `$PORT/http` | `/runpod-volume` | `/ping` | 5.5 min and 30 MB per request. `auth.mode = trust-gateway`. **With `workers.max > 1` set `FV_WORKERS_MAX` to match**: clients can't pin `X-Runpod-Worker-Id`, so fv-serve then serves only routes any worker can answer (§6.5): async job APIs need D1 jobs + R2 artifacts, sync routes need R2; cancel, uploads and streaming are never served. No streaming |
 | **Vast instance** | `http`; `scripts/serve/vast.sh` follows strobe's proven REST form: offers with `direct_port_count>=1`, `runtype:"ssh_direct"`, onstart launching `fv-serve`, `env` as a **JSON object** `{"-p 8000:8000":"1","-p 70010:70010/udp":"1",…}` | 8000/tcp, 70010/udp, 70000/tcp | `hf-fm` to container disk at boot (`.part` then rename), or a local volume | `/healthz` at `http://PUBLIC_IPADDR:<ports["8000/tcp"][0].HostPort>` | Best peer-WebRTC target. Reuses `scripts/gpu/lib.sh` (`vast_check_auth`, `vast_destroy`, ledger and destroy-on-exit trap) |
 | **Vast serverless** | Template onstart runs `start_server.sh` (pinned `PYWORKER_REF`, `SDK_VERSION`) with our `deploy/vast/worker.py`, plus `fv-serve` started by onstart | `WORKER_PORT` (PyWorker, TLS) → localhost:8000 | as the Vast instance | PyWorker tails the log for `FV-SERVE READY`; its benchmark handler calls `/fv/v1/capabilities` plus one tiny job | The forwarder proxies `payload` `{method,path,headers,body}` to the local router. It is batch only |
 
@@ -1425,6 +1425,32 @@ Job input (**native** envelope):
 {"kind":"stream","model":"wan-sf","prompt":"…","whip_url":"…","whip_token":"…","duration_s":600,
  "image_url":null}           // one job = one WHIP session; progress {"state":"live"} ; output = stats
 ```
+
+### 6.5 Several workers behind a load balancer (`crate::multiworker`)
+
+A Runpod load-balancer endpoint with `workers.max > 1` sends every request
+to any worker, and clients cannot pin one. `server.workers_max`
+(`FV_WORKERS_MAX`; `scripts/serve/runpod-endpoint.sh` sets it from the
+endpoint's `workers.max`) tells fv-serve so; above 1 it serves a route only
+when every worker can answer it. Each §9 route has a scope:
+
+| Scope | Served with `workers_max > 1` when | Routes |
+|---|---|---|
+| local | always | health, `/metrics`, `/console` pages, catalogs (`/v1/models`, `/fv/v1/capabilities`, `/fal/schema`, JWKS), LTX v1 sync (the reply is the MP4), LTX/MiniMax 4xx stubs |
+| sync | artifacts are S3/R2 | `POST /v1/videos/sync`, fal `/run/{app}/…` (the reply links the output) |
+| jobs | jobs are D1 **and** artifacts are S3/R2 | async submit, status, result and list of every API: a worker reads another's job from D1 (running jobs heartbeat; progress is throttled to 1 write/s) |
+| keys | `auth.key_store = d1` | `/fv/v1/admin/keys` (other workers reload within 30 s) |
+| pinned | never | cancel and `DELETE` (the running job is authoritative on its worker; a cancel written to D1 elsewhere would be overwritten), `/uploads`, `/v1/upload`, fal storage initiate, `/files` (worker-local disk), fal `status/stream` (in-memory watch), `/fal/proxy` (re-enters the router unfiltered), `/fv/v1/streams*`, the fal director and Reactor (WebRTC sessions) |
+
+A request that is not served, or that matches no route of the table (fail
+closed), gets `404` with `x-fv-multi-worker: not-served` and a JSON reason;
+`OPTIONS` passes. `configs/serve/runpod.toml` (D1 + R2 via `auto`) serves
+local, sync and jobs routes. `server.workers_max` also applies to the in-process
+router of a queue worker; queue `http` jobs should use `"wait": true` so the
+worker that took the job sees it through. Tests:
+`multiworker::tests` (every route classified), `tests/e2e.rs`
+`multi_worker_*` (filtering; a job submitted on one worker polled to
+completion on another over the D1 mock).
 
 ---
 

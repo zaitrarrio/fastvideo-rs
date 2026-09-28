@@ -455,7 +455,15 @@ pub fn assemble(
     if config.server.console {
         r = r.merge(console::routes());
     }
-    r
-        .route_layer(axum::middleware::from_fn(metrics::track))
-        .layer(TraceLayer::new_for_http())
+    let r = r.route_layer(axum::middleware::from_fn(metrics::track));
+    // Behind a load balancer with several workers: only the routes every
+    // worker can answer (design §6.2).
+    let policy = crate::multiworker::Policy::from_config(config, jobs_kind);
+    if policy.multi() {
+        tracing::warn!(
+            policy = %crate::multiworker::summary(&policy),
+            "server.workers_max > 1: serving only routes any worker can answer"
+        );
+    }
+    crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http())
 }
