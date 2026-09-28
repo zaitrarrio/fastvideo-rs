@@ -124,6 +124,9 @@ REF2VA_IMAGE="$HERE/../fixtures/ti2v-beach-832x480.jpg"
 # (text encoder and VAEs offloaded), FLASH_ATTN, `--steps <forwards+1>`.
 oracle_ref2va() {
   local name="$1" forwards="$2" root="$UW/MiniMax-H3"
+  # The baked image's fallback scripts (/opt/fvrs, used when the clone at the
+  # run's sha fails) carry no fixtures: stop before loading 130 GB of weights.
+  [[ -f "$REF2VA_IMAGE" ]] || { log "oracle $name: no reference image $REF2VA_IMAGE (clone failed?)"; return 1; }
   [[ -f "$root/model_index.json" && -d "$root/transformer" ]] || weights_h3_diffusers || return 1
   [[ -e "$root/transformer_ref" ]] || ln -s "$W/h3-ref2va/transformer_ref" "$root/transformer_ref"
   oracle_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_fastvideo.py" \
