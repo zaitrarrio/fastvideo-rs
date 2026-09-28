@@ -2,8 +2,10 @@
 #
 # Include: append this file's tables to configs/serve/gateway.toml, or point
 # the standalone controller at it (`fv-autoscale --config <this file>`).
-# Pool names are the gateway's `[[pools]] id`s. Only `[autoscale]` tables
-# are read from a document; everything else is ignored.
+# Pool names are the gateway's `[[pools]] id`s (configs/serve/gateway.toml);
+# a serverless pool without `serverless.endpoint_id` takes the gateway
+# pool's `endpoint_id` (FV_POOL_<ID>_ENDPOINT). The standalone binary needs
+# it set here. Only `[autoscale]` tables are read by `fv-autoscale`.
 #
 # Secrets come from the environment only: RUNPOD_API_KEY (FV_RUNPOD_API_KEY),
 # FV_ADMIN_TOKEN (the admin route), the D1 set for the lease row
@@ -57,27 +59,27 @@ priority = 1
 # Keep one H3 worker warm on weekday business hours (US Pacific).
 schedule_utc_offset_min = -420
 schedule = [{ days = [0, 1, 2, 3, 4], start_hour = 9, end_hour = 18, min_workers = 1 }]
-serverless = { endpoint_id = "REPLACE_H3_TURBO_ENDPOINT", gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
+serverless = { gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
 
 # wan-turbo (FastWan 1.3B): 6.4 s jobs, cold start ~49 s + 70 s load.
 [[autoscale.pools]]
-name = "wan-turbo"
+name = "wan"
 family = "wan"
 max_workers = 3
 slo_queue_wait_s = 60
 cold_start_s = 120
 default_job_s = 7
-serverless = { endpoint_id = "REPLACE_WAN_TURBO_ENDPOINT", gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 30, idle_timeout_s = 60 }
+serverless = { gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 30, idle_timeout_s = 60 }
 
 # ltx-turbo: ~40 s 1080p jobs, cold start ~79 s + 33 s load.
 [[autoscale.pools]]
-name = "ltx-turbo"
+name = "ltx"
 family = "ltx"
 max_workers = 3
 slo_queue_wait_s = 120
 cold_start_s = 112
 default_job_s = 40
-serverless = { endpoint_id = "REPLACE_LTX_TURBO_ENDPOINT", gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
+serverless = { gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
 
 # sfwan-live: WebRTC peer sessions need pods (one live stream per GPU).
 # Pods come from a template (image, fv-serve worker config, secrets as

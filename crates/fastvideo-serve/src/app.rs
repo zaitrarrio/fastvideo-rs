@@ -397,13 +397,20 @@ impl App {
         #[cfg(feature = "http-client")]
         if let Some(g) = &gw {
             g.attach(ctx.clone());
-            let router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let d1_client = d1.as_ref().map(|d| d.client().clone());
+            let autoscale = crate::autoscale::start(&config, g, d1_client, admin.clone(), &worker)?;
             let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
             let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
             let key_maintenance = key_store.spawn_maintenance(refresh, Duration::from_secs(30));
             // First probes before serving, then the tick loop.
             g.tick().await;
             let tick = g.spawn_tick();
+            let mut background = vec![tick];
+            if let Some((admin_routes, handle)) = autoscale {
+                router = router.merge(admin_routes);
+                background.push(handle);
+            }
             return Ok(App {
                 config,
                 ctx,
@@ -419,7 +426,7 @@ impl App {
                 registration: None,
                 sweeper,
                 key_maintenance,
-                background: vec![tick],
+                background,
             });
         }
 

@@ -68,6 +68,9 @@ async fn main() {
     if !cfg.enabled {
         die("autoscale.enabled is false");
     }
+    if let Some(p) = cfg.pools.iter().find(|p| p.kind == PoolKind::Serverless && p.serverless.endpoint_id.is_empty()) {
+        die(format!("pool {}: serverless.endpoint_id is required outside the gateway", p.name));
+    }
     let api = RunpodApi::from_env().unwrap_or_else(|e| die(e));
     let admin_token = std::env::var("FV_ADMIN_TOKEN").ok().filter(|s| !s.is_empty());
 

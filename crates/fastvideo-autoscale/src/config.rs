@@ -142,11 +142,8 @@ impl AutoscaleConfig {
                 return bad(format!("pool {}: no price for {:?} (set prices or price_usd_per_hr)", p.name, p.gpu_type()));
             }
             match p.kind {
-                PoolKind::Serverless => {
-                    if p.serverless.endpoint_id.is_empty() {
-                        return bad(format!("pool {}: serverless.endpoint_id is required", p.name));
-                    }
-                }
+                // The gateway fills an empty endpoint id from its `[[pools]]`.
+                PoolKind::Serverless => {}
                 PoolKind::Pod => {
                     if p.pod.template_id.is_empty() || p.pod.gpu_types.is_empty() || p.pod.placements.is_empty() {
                         return bad(format!("pool {}: pod.template_id, pod.gpu_types and pod.placements are required", p.name));
@@ -460,7 +457,7 @@ mod tests {
         assert!(c.enabled && c.dry_run);
         assert_eq!(c.lease.backend, LeaseBackend::D1);
         let names: Vec<&str> = c.pools.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["h3-turbo", "wan-turbo", "ltx-turbo", "sfwan-live"]);
+        assert_eq!(names, ["h3-turbo", "wan", "ltx", "sfwan-live"]);
         let live = &c.pools[3];
         assert_eq!(live.kind, PoolKind::Pod);
         assert_eq!(live.pod.placements[1].volume_id, "jg48s6o1w0");
@@ -479,8 +476,6 @@ mod tests {
     fn rejects_bad_pools() {
         let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nmin_workers=3\nmax_workers=1\nserverless={endpoint_id='e'}\n";
         assert!(AutoscaleConfig::from_toml_document(t).is_err());
-        let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\n";
-        assert!(AutoscaleConfig::from_toml_document(t).is_err(), "endpoint id required");
         let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nkind='pod'\n";
         assert!(AutoscaleConfig::from_toml_document(t).is_err(), "pod template required");
         let t = "[autoscale]\nbogus=1\n";

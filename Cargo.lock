@@ -1456,6 +1456,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "fastvideo-autoscale",
  "fastvideo-deploy",
  "fastvideo-engine-service",
  "fastvideo-fal",
