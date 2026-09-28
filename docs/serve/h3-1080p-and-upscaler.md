@@ -9,6 +9,10 @@ Date: 2026-09-28. Two questions:
 Raw run: `artifacts/runpod/hd/d46ca17-09282023/` (benchmark and compare
 JSONs, logs). Frames: [`artifacts/serve/h3-1080p/`](../../artifacts/serve/h3-1080p/).
 
+**Update (2026-09-28, later):** native 1080P now ships as an opt-in tier on
+h3-turbo and h3-max; see [Shipped: the native 1080P tier](#shipped-the-native-1080p-tier)
+for what is served, the 5-prompt gate and the lip-sync proxy.
+
 ## Summary
 
 - **Native 1080p works and adds real detail.** At 1920x1088 and 1088x1920,
@@ -45,6 +49,152 @@ JSONs, logs). Frames: [`artifacts/serve/h3-1080p/`](../../artifacts/serve/h3-108
   step that would write the weights to the volumes was refused by the
   permission system, so nothing was downloaded. See
   [Upscaler benchmark: blocked](#upscaler-benchmark-blocked).
+
+## Shipped: the native 1080P tier
+
+Owner decision (2026-09-28): ship native H3 1080p as an opt-in size.
+Commit `bc730e0`.
+
+### What is served
+
+| Surface | 1080P request | Canvas |
+|---|---|---|
+| fal `minimax/h3-max`, `minimax/h3-max-turbo`, `minimax/h3-turbo` (t2v, i2v) | `resolution: "1080P"` | 16:9 is generated at 1920x1088 and centre-cropped to 1920x1080; 9:16 1088x1920 → 1080x1920; 1:1 1088x1088 → 1080x1080; 4:3 1440x1088 → 1440x1080; 21:9 is capped by the 1088x1920 pixel budget (2176x960, not cropped) |
+| fal director (`minimax/h3-max/director`) | `configure.resolution: "1080p"` | Chunks stream at the generation canvas (1920x1088). Each chunk takes about 2.5x as long to build as at 768p, so a session runs further behind real time: a 5 s chunk takes about 62 s on h3-turbo. Allowed, not recommended for live use |
+| Native API | `short_edge: 1080` with `aspect_ratio`, or `size: "1920x1080"` | as fal; an exact size above the trained cap is padded to the multiple of 32 and cropped back |
+| FastVideo `/v1/videos` | `size: "1920x1080"` / `width`+`height` | as native |
+| Console | fal form (schema enum `1080P`); director form lists `1080p` | |
+| MiniMax `/v2/video_generation` | not offered | MiniMax's H3 schema lists `768P`/`2K` (H3) and `480P`/`768P` (H3-Max); there is no `1080P` to map |
+
+- **Models.** `h3-turbo` and `h3-max` carry the tier (`H3Recipe::hd_1080p`;
+  `[[models]] h3_1080p = false` turns it off). `h3-draft`, the 8-step dense
+  recipe and the Ref2VA models do not; 1080P there answers
+  `Unsupported(H3Refine1080P)` (422 on `resolution`), as before.
+- **Default.** 768P stays the default tier everywhere.
+- **Memory gate, at start.** `CudaBackend::new` reads the device's total
+  memory (without a context; `FASTVIDEO_DEVICE_BUDGET_GIB` caps it) and drops
+  the tier from every H3 model when it is below the tier's plan
+  (`plan_1080p_min_device_bytes`: resident-plan weights plus the
+  measured-rate working set of 1920x1088x124, 71.2 GiB). 96 GB and 80 GB
+  cards keep it (an H100 80 GB reports 79.6 GiB); 48 GB cards drop it and
+  answer `H3Refine1080P`. The log says which.
+- **Memory check, per job.** Before a 1080P-tier job starts, the engine
+  compares its working set (`measured_working_bytes`: 320 KiB per packed row
+  plus 2 GiB; 25.5 / 47.4 / 69.3 GiB at 5 / 10 / 15 s) with the free memory
+  plus the pool's cached bytes. When it does not fit, the job is refused
+  before any work with `H3Refine1080P` and a message naming both sizes. On
+  a 96 GB card whose serve process keeps the FP8 text encoder resident
+  (54 GiB of weights between jobs, docs/serve/e2e/i2v-resident.md), about
+  40 GiB is free: 1080P up to about 7 s fits and 10-15 s is refused. On an
+  80 GB card the text encoder is streamed (`auto`), which leaves room for
+  longer clips. The 10 s estimate is not measured yet (below).
+- **Pricing hint.** GPU time is about 2.4x (turbo) to 2.7x (max) that of
+  768P for the same clip; price 1080P at about 2.5x 768P (fal lists 2x).
+
+### Gate run (2026-09-28): h3-turbo, 5 prompts
+
+| Item | Value |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-bc730e0` |
+| Command | `FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s" scripts/gpu/runpod-http.sh run bc730e0` |
+| GPU | RTX PRO 6000 Blackwell Server Edition (97 887 MiB, driver 595.91.07), EUR-IS-1, $2.09/hr |
+| Pod | `uv4bu766l4xhs2` (`fv-1080-hd-bc730e0-09282244`), 22:44:36 to 22:59:37 UTC (15 min, about $0.52); deleted and checked (API 404) |
+| Prompts | `scripts/gpu/prompts-hd5.json`: talking-head, spark-mountain-lake, ltx-frogyoga (as above) plus ltx-newsbroadcast and h3-demo (two speech scenes) |
+| Raw results | `artifacts/runpod/hd/bc730e0-09282244/` (benchmarks, sharpness, lip-sync JSON) |
+
+The run was stopped by a coordinator budget stop after the two turbo cells:
+the h3-max cells, the 10 s cells and the fv-serve E2E did not run (see
+"Not done").
+
+**Time and memory** (per prompt, warm process; one model load of about
+100 s per cell not included):
+
+| Prompt | 768p denoise / e2e | 1080p denoise / e2e | Peak (nvidia-smi) 768p → 1080p |
+|---|---|---|---|
+| talking-head | 19.0 s / —* | 47.2 s / 64.4 s | 44 294 → 57 412 MiB |
+| spark-mountain-lake | 19.2 s / —* | 47.8 s / 62.0 s | 44 430 → 57 484 MiB |
+| ltx-frogyoga | 19.5 s / 29.7 s | 48.1 s / 62.4 s | 44 462 → 57 548 MiB |
+| ltx-newsbroadcast | 19.6 s / 29.9 s | 48.3 s / 62.6 s | 44 462 → 59 948 MiB |
+| h3-demo | 20.2 s / 30.7 s | 49.3 s / 63.5 s | 44 558 → 60 012 MiB |
+
+\*The first two 768p prompts streamed the text encoder into the cache (e2e
+122 s and 43 s), so their e2e is not comparable; the other three are
+29.7-30.7 s. Peak allocated: 41.4 GiB (768p), 52.7 GiB (1080p), as in the first
+run. 1080p costs 2.45x the denoise and 2.1x the video decode.
+
+**Coherence, duplication, tiling.** Frames 0/40/80/120 of every clip,
+768p next to 1080p:
+[`gate5-turbo-frame40.jpg`](../../artifacts/serve/h3-1080p/gate5-turbo-frame40.jpg),
+[`gate5-turbo-frame120.jpg`](../../artifacts/serve/h3-1080p/gate5-turbo-frame120.jpg).
+All five 1080p clips are coherent single scenes; the wider canvas shows
+more scene (more bridge windows on the starship, more of the valley), not a
+repeated one. No duplicated subjects and no tile seams or block grid. One
+content note: the 1080p news clip has two "LIVE" bugs (top left and bottom
+right), a plausible broadcast overlay rather than a tiling copy. PASS 5/5.
+
+**Sharpness vs Lanczos-stretched 768p** (the method above, on the kept
+PNG keyframes, measured at 1920x1088):
+
+| Prompt | Laplacian var (Lanczos → native) | Gradient ratio | Energy above the 768p band |
+|---|---|---:|---:|
+| talking-head | 21.9 → 43.6 | 0.92 | 7.0x |
+| spark-mountain-lake | 36.6 → 227.0 | 1.86 | 23.2x |
+| ltx-frogyoga | 76.6 → 197.7 | 1.22 | 4.7x |
+| ltx-newsbroadcast | 32.1 → 78.5 | 1.02 | 5.4x |
+| h3-demo | 65.5 → 98.1 | 1.01 | 2.6x |
+
+Native 1080p carries 2.6-23x the energy above what a 768p clip can hold,
+and a higher Laplacian variance on every prompt. PASS 5/5 (criterion: more
+detail above the 768p band limit than the Lanczos baseline).
+
+### Lip sync
+
+SyncNet was not run: it needs its own checkpoint, and new weights must go
+on both volumes with the owner's approval (CLAUDE.md). A documented proxy,
+`scripts/gpu/lipsync_proxy.py`, stands in:
+
+- face: OpenCV Haar detector (opencv-python-headless 4.x, no extra weights);
+- articulation: mean absolute change of the mouth region minus that of the
+  upper face (head motion and camera moves cancel), per frame, on 96x48
+  crops so resolutions are measured alike;
+- audio: speech-band (300-3400 Hz) RMS per video frame;
+- the lag (±6 frames, ±250 ms) with the best Pearson r, a confidence (best r
+  minus the median over lags) and the speech contrast (articulation in the
+  loudest 30 % of frames minus the quietest 30 %, in SD).
+
+| Clip (h3-turbo) | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| talking-head 768p | 124/124 | 0 | 0.169 (0.169) | 0.61 |
+| talking-head 1080p | 124/124 | 0 | 0.190 (0.190) | 0.76 |
+| ltx-newsbroadcast 768p | 75/124 | -5 | 0.187 (0.059) | 0.21 |
+| ltx-newsbroadcast 1080p | 65/124 | -1 | 0.267 (0.176) | 0.40 |
+| h3-demo (both) | 50 and 41/124 | n/a (the face is on screen in under half the frames) | | |
+| **pooled 768p** | 2 clips | +6 | 0.157 (0.114) | 0.40 |
+| **pooled 1080p** | 2 clips | **-1 (-42 ms)** | 0.192 (0.183) | 0.58 |
+
+Reading: at 1080p the mouth works with the speech (positive r at lag 0,
+positive speech contrast) and the best lag is within ±1 frame, inside the
+±2-frame window; 768p is no better (its news clip peaks at -5 frames and
+drags the pooled lag out). The earlier run's clips (d46ca17) give the same
+picture: talking-head lag 0 at 768p and 1 at 1080p (turbo), 0 and 2 (max),
+0 and 0 (turbo 9:16). The proxy's correlations are weak (r about 0.2), so
+it rules out a gross sync break (a shifted or frozen mouth), not a subtle
+one; a SyncNet score is still the stronger check.
+
+### Not done (budget stop, 22:52 UTC)
+
+- h3-max 5-prompt cells (the first run has h3-max at 1080p on 3 prompts:
+  78.4 s, 41.8 GB, coherent).
+- The 10 s 1080p cells (`turbo-1080p-10s`, `max-1080p-10s`), which would
+  check the per-job working-set estimate at 10 s.
+- One end-to-end fal request at `1080P` through fv-serve on a pod
+  (`scripts/serve/e2e/pod.sh` with the serve image of `bc730e0` or later).
+
+To finish them: `FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+FV_CELLS="max-768p max-1080p turbo-1080p-10s max-1080p-10s" FV_FETCH_TREE=1
+FV_FETCH_SKIP='\.cache$' FV_SKIP_TAE=1 scripts/gpu/runpod-http.sh run <sha>` (about
+25 min, $0.90), then a fal queue request with `resolution: "1080P"` on an
+E2E pod (about 20 min, $0.70).
 
 ## Part A: native H3 1080p
 
@@ -328,6 +478,7 @@ so no weights were downloaded and the benchmark did not run. To run it:
 |---|---|
 | Pod `awwqw8dm96u7h8` (RTX PRO 6000, EUR-IS-1), 33.5 min | ~$1.17 |
 | Upscaler benchmark | $0 (not run) |
+| 1080P gate pod `uv4bu766l4xhs2` (RTX PRO 6000, EUR-IS-1), 15 min | ~$0.52 |
 
 Runpod balance before the pod: $42.97. After: $37.11. The balance is
 shared, and other agents' pods ran at the same time.
