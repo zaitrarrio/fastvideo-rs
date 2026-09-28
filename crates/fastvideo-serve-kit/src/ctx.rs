@@ -137,9 +137,16 @@ pub struct ServeCtxBuilder {
     safety: Arc<dyn SafetyFilter>,
     prober: Arc<dyn Prober>,
     now: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
+    artifacts_root: Option<PathBuf>,
 }
 
 impl ServeCtxBuilder {
+    /// Where local artifacts live and `/files` serves them from (default
+    /// `state_dir/artifacts`); processes on one host can share it.
+    pub fn artifacts_root(mut self, p: impl Into<PathBuf>) -> Self {
+        self.artifacts_root = Some(p.into());
+        self
+    }
     pub fn auth(mut self, a: Auth) -> Self {
         self.auth = a;
         self
@@ -186,7 +193,7 @@ impl ServeCtxBuilder {
         let dir = &self.cfg.state_dir;
         let key = self.url_key.unwrap_or_else(UrlKey::random);
         let urls = LocalUrls { public_base: self.cfg.public_base.clone(), key: key.clone() };
-        let art_root = dir.join("artifacts");
+        let art_root = self.artifacts_root.clone().unwrap_or_else(|| dir.join("artifacts"));
         let up_root = dir.join("uploads");
         tokio::fs::create_dir_all(&art_root).await?;
         let artifacts: Arc<dyn ArtifactStore> = match self.artifacts {
@@ -239,6 +246,7 @@ impl ServeCtx {
             safety: Arc::new(NoSafetyFilter),
             prober: Arc::new(DefaultProber::default()),
             now: Arc::new(OffsetDateTime::now_utc),
+            artifacts_root: None,
         }
     }
 

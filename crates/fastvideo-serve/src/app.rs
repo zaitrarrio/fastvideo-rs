@@ -33,6 +33,12 @@ pub struct Overrides {
     pub jobs: Option<Arc<dyn JobStore>>,
     /// Use this engine instead of building one from `[engine]`.
     pub engine: Option<EngineService>,
+    /// Use this D1 connection for the D1 job store (and the gateway's
+    /// tables) instead of the HTTP API from `[jobs.d1]` (tests: the mock).
+    pub d1: Option<fastvideo_serve_kit::D1Client>,
+    /// Autoscaler hooks for gateway mode (docs/serve/gateway.md §7).
+    #[cfg(feature = "http-client")]
+    pub scalers: Vec<Arc<dyn crate::gateway::scale::PoolScaler>>,
 }
 
 /// A built server.
@@ -49,8 +55,16 @@ pub struct App {
     /// The Reactor local runtime, when mounted (feature `reactor`).
     #[cfg(feature = "reactor")]
     pub reactor: Option<fastvideo_reactor::Reactor>,
+    /// Gateway mode (`engine.backend = "remote"`): the pools.
+    #[cfg(feature = "http-client")]
+    pub gateway: Option<Arc<crate::gateway::Gateway>>,
+    /// This process's worker id (D1 `worker` column).
+    pub worker_id: String,
+    #[cfg(feature = "http-client")]
+    registration: Option<crate::worker::Registration>,
     sweeper: tokio::task::JoinHandle<()>,
     key_maintenance: tokio::task::JoinHandle<()>,
+    background: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for App {
@@ -63,6 +77,9 @@ impl Drop for App {
     fn drop(&mut self) {
         self.sweeper.abort();
         self.key_maintenance.abort();
+        for h in &self.background {
+            h.abort();
+        }
     }
 }
 
@@ -104,6 +121,12 @@ pub fn build_engine_with_clock(
                 fc.clock = clock;
             }
             vec![Box::new(FakeBackend::new(fc))]
+        }
+        EngineBackendKind::Remote => {
+            // Gateway mode: no local models. An idle engine keeps the
+            // drain/shutdown paths uniform; the gateway is the ServeCtx's
+            // engine gate.
+            vec![Box::new(FakeBackend::new(FakeConfig::default().with_models(&[])))]
         }
         EngineBackendKind::Cuda => {
             // WP-11: the CudaBackend from `[[models]]` (one GPU).
@@ -148,14 +171,25 @@ pub fn build_engine_with_clock(
 /// process (process-wide technique settings). Built without `cuda` so the
 /// shipped configs are tested on CPU.
 pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
-    use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, ProcessPlan, WeightLayout};
+    use fastvideo_engine_service::cuda::ProcessPlan;
+    let models = catalog_models(&c.models)?;
+    if !models.iter().any(|m| m.resident) {
+        return Err(anyhow!("[[models]]: no model is `resident = true` (nothing would load before readiness)"));
+    }
+    ProcessPlan::for_models(&models).map_err(|e| anyhow!("[[models]]: {e}"))?;
+    Ok(models)
+}
+
+/// `[[models]]`-style entries resolved against the CUDA catalog (CPU-only:
+/// no weights are read). The gateway uses it for a pool's static caps.
+pub fn catalog_models(entries: &[crate::config::ModelCfg]) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
+    use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, WeightLayout};
     let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
     let mut layout = WeightLayout::new(&root);
     if let Ok(t) = std::env::var("FV_TAE_DIR") {
         layout = layout.with_tae_dir(t);
     }
-    let models = c
-        .models
+    entries
         .iter()
         .map(|m| {
             let extra = m
@@ -177,12 +211,7 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
             )
             .map_err(|e| anyhow!("[[models]]: {e}"))
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    if !models.iter().any(|m| m.resident) {
-        return Err(anyhow!("[[models]]: no model is `resident = true` (nothing would load before readiness)"));
-    }
-    ProcessPlan::for_models(&models).map_err(|e| anyhow!("[[models]]: {e}"))?;
-    Ok(models)
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 /// The WP-11 `CudaBackend` (GPU 0) for `[[models]]` ([`cuda_models`]).
@@ -240,10 +269,16 @@ impl App {
             UrlKey::new(config.artifacts.signing_key.expose())
         };
         let artifacts = storage::build_artifacts(&config, &base, &key).map_err(|e| anyhow!(e))?;
+        let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
+        let worker_role = config.server.role == crate::config::Role::Worker;
+        if worker_role && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
+            tracing::info!("server.role = worker: API auth is the gateway's (trust-gateway); every route needs the internal token");
+            config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
+        }
         let (jobs, d1, jobs_kind) = match ov.jobs {
             Some(j) => (j, None, "custom"),
             None => {
-                let j = storage::build_jobs(&config, &worker, artifacts.clone()).await.map_err(|e| anyhow!(e))?;
+                let j = storage::build_jobs(&config, &worker, artifacts.clone(), ov.d1.clone()).await.map_err(|e| anyhow!(e))?;
                 let kind = match j.kind {
                     JobBackend::D1 => "d1",
                     JobBackend::Memory => "memory",
@@ -271,7 +306,7 @@ impl App {
             },
         );
 
-        let mut sc = ServeConfig::new(base, &config.server.state_dir);
+        let mut sc = ServeConfig::new(base.clone(), &config.server.state_dir);
         sc.url_ttl = Duration::from_secs(config.artifacts.url_ttl_s);
         sc.body_max_bytes = config.limits.body_max_mb * 1024 * 1024;
         sc.sync_timeout = Duration::from_secs(config.server.sync_timeout_s);
@@ -310,7 +345,35 @@ impl App {
         }
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
-        let mut builder = ServeCtx::builder(sc, gate.clone())
+        // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
+        // and a D1 read-through job store.
+        #[cfg(feature = "http-client")]
+        let (gw, jobs) = if gateway_mode {
+            let d1s = d1.clone().ok_or_else(|| anyhow!("engine.backend = remote needs the D1 job store"))?;
+            let store = Arc::new(crate::gateway::store::GatewayJobStore::new(
+                d1s.clone(),
+                Duration::from_millis(config.gateway.watch_poll_ms.max(50)),
+            ));
+            let gw = crate::gateway::Gateway::build(&config, d1s.client().clone(), store.clone()).await?;
+            for s in &ov.scalers {
+                gw.add_scaler(s.clone());
+            }
+            (Some(gw), store as Arc<dyn JobStore>)
+        } else {
+            (None, jobs)
+        };
+        #[cfg(not(feature = "http-client"))]
+        if gateway_mode || worker_role {
+            return Err(anyhow!("gateway mode and the worker role need fv-serve built with `http-client`"));
+        }
+        #[cfg(feature = "http-client")]
+        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match &gw {
+            Some(g) => g.clone(),
+            None => gate.clone(),
+        };
+        #[cfg(not(feature = "http-client"))]
+        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = gate.clone();
+        let mut builder = ServeCtx::builder(sc, engine_gate)
             .auth(Auth::new(config.auth.mode, keys).with_key_store(key_store.clone()))
             .url_key(key)
             .jobs(jobs.clone())
@@ -319,8 +382,40 @@ impl App {
         for (p, r) in adapters::renderers(&mcfg) {
             builder = builder.renderer(p, r);
         }
+        if let Some(dir) = &config.artifacts.local_dir {
+            builder = builder.artifacts_root(dir);
+        }
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
+        let admin = Arc::new(admin);
+        #[cfg(feature = "http-client")]
+        if let Some(g) = &gw {
+            g.attach(ctx.clone());
+            let router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
+            let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
+            let key_maintenance = key_store.spawn_maintenance(refresh, Duration::from_secs(30));
+            // First probes before serving, then the tick loop.
+            g.tick().await;
+            let tick = g.spawn_tick();
+            return Ok(App {
+                config,
+                ctx,
+                gate,
+                router,
+                d1,
+                keys: key_store,
+                admin_token_generated,
+                #[cfg(feature = "reactor")]
+                reactor: None,
+                gateway: Some(g.clone()),
+                worker_id: worker,
+                registration: None,
+                sweeper,
+                key_maintenance,
+                background: vec![tick],
+            });
+        }
 
         // Streaming front-ends that own sockets answer offers on one shared
         // WebRTC host (the Reactor runtime, the fal director): they share
@@ -358,7 +453,7 @@ impl App {
             _ => None,
         };
         // Minted API keys: /fv/v1/admin/keys behind the admin token.
-        streams = streams.merge(fastvideo_serve_kit::admin_routes(key_store.clone(), Arc::new(admin)));
+        streams = streams.merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()));
         #[allow(unused_mut)]
         let mut fal_extra: Router<ServeCtx> = Router::new();
         #[cfg(all(feature = "fal", feature = "webrtc"))]
@@ -366,7 +461,42 @@ impl App {
             let svc = crate::director::build(&config, &mcfg, gate.engine().clone(), host.clone());
             fal_extra = fastvideo_fal::director::routes(svc);
         }
+        #[allow(unused_mut)]
+        let mut background = Vec::new();
+        #[cfg(feature = "http-client")]
+        let mut registration = None;
+        // Worker role: the gateway's internal routes (before the route
+        // layers, so metrics and the multi-worker filter see them).
+        #[cfg(feature = "http-client")]
+        if worker_role {
+            let st = crate::worker::WorkerState::new(
+                ctx.clone(),
+                gate.clone(),
+                d1.clone(),
+                worker.clone(),
+                config.gateway.pool.clone(),
+                config.limits.queue_max,
+            );
+            streams = streams.merge(crate::worker::routes(st));
+            if let (Some(pool), Some(d), Some(url), true, Mode::Http) =
+                (&config.gateway.pool, &d1, &config.server.public_base_url, config.gateway.register, config.server.mode)
+            {
+                let reg = crate::worker::Registration {
+                    db: d.client().clone(),
+                    pool: pool.clone(),
+                    worker_id: worker.clone(),
+                    url: url.trim_end_matches('/').to_owned(),
+                    gate: gate.clone(),
+                };
+                background.push(crate::worker::spawn_registration(reg.clone()));
+                registration = Some(reg);
+            }
+        }
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
+        #[cfg(feature = "http-client")]
+        if worker_role {
+            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()));
+        }
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
             let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
@@ -392,8 +522,14 @@ impl App {
             admin_token_generated,
             #[cfg(feature = "reactor")]
             reactor,
+            #[cfg(feature = "http-client")]
+            gateway: None,
+            worker_id: worker,
+            #[cfg(feature = "http-client")]
+            registration,
             sweeper,
             key_maintenance,
+            background,
         })
     }
 
@@ -407,10 +543,30 @@ impl App {
         let keys = self.keys.clone();
         #[cfg(feature = "reactor")]
         let reactor = self.reactor.clone();
+        #[cfg(feature = "http-client")]
+        let gw = self.gateway.clone();
+        #[cfg(feature = "http-client")]
+        let registration = self.registration.clone();
+        #[cfg(feature = "http-client")]
+        if let Some(g) = &gw {
+            println!("FV-SERVE READY gateway pools={}", g.pools.iter().map(|p| p.id().to_owned()).collect::<Vec<_>>().join(","));
+        } else {
+            announce_ready(gate.clone());
+        }
+        #[cfg(not(feature = "http-client"))]
         announce_ready(gate.clone());
         let drained = async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
+            #[cfg(feature = "http-client")]
+            if let Some(g) = &gw {
+                g.stop_admission();
+            }
+            #[cfg(feature = "http-client")]
+            if let Some(r) = &registration {
+                gate.stop_admission();
+                r.write(true).await;
+            }
             // Reactor: `session_ended` with RT's drain reason, then close.
             #[cfg(feature = "reactor")]
             if let Some(r) = &reactor {

@@ -369,7 +369,7 @@ async fn multi_worker_with_shared_jobs_reads_across_workers() {
     use fastvideo_serve::multiworker::{layer, Policy};
     let mock = MockD1::new();
     let db = || D1Client::new(Arc::new(mock.clone()));
-    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false };
+    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false, gateway: false };
     let mut workers = Vec::new();
     for (tag, id) in [("lb-a", "worker-a"), ("lb-b", "worker-b")] {
         let store = D1JobStore::new(db(), D1Options::new(id)).open(time::OffsetDateTime::now_utc()).await.unwrap();
