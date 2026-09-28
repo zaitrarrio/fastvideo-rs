@@ -586,7 +586,52 @@ def _patch_ltx_feature_extractor(mod) -> None:
         cls.forward = forward
 
 
+def _patch_ltx_helpers(mod) -> None:
+    """Image conditioning (I2V / keyframes): each stage's preprocessed pixels and
+    encoded latents, named as ltx2/pipeline.rs `encode_images` dumps them
+    (`s{n}_cond{i}_pixels` `[3, H, W]`, `s{n}_cond{i}_latent` packed `[H*W, C]`),
+    so the Rust run can diff them and inject the latents (FASTVIDEO_INJECT_COND).
+    The n-th call of `combined_image_conditionings` is stage n."""
+    orig_combined = mod.combined_image_conditionings
+    orig_load = mod.load_image_and_preprocess
+
+    def load(*a, **kw):
+        out = orig_load(*a, **kw)
+        n, i = _Ltx.cond_call, _Ltx.cond_item
+        write(f"s{n}_cond{i}_pixels", out[0, :, 0])
+        return out
+
+    def combined(*a, **kw):
+        _Ltx.cond_call = getattr(_Ltx, "cond_call", 0) + 1
+        _Ltx.cond_item = 0
+        # Count items as load_image_and_preprocess runs (one per image).
+        items = []
+
+        def counting_load(*la, **lk):
+            out = load(*la, **lk)
+            _Ltx.cond_item += 1
+            return out
+
+        mod.load_image_and_preprocess = counting_load
+        try:
+            items = orig_combined(*a, **kw)
+        finally:
+            mod.load_image_and_preprocess = orig_load
+        n = _Ltx.cond_call
+        for i, c in enumerate(items):
+            lat = getattr(c, "latent", None)
+            if lat is None:
+                lat = getattr(c, "keyframes", None)
+            if lat is not None:
+                write(f"s{n}_cond{i}_latent", _ltx_pack5(lat))
+            _note(f"ltx cond s{n} item {i}: {type(c).__name__} strength {getattr(c, 'strength', '?')}")
+        return items
+
+    mod.combined_image_conditionings = combined
+
+
 _LTX_TARGETS: dict = {
+    "ltx_pipelines.utils.helpers": _patch_ltx_helpers,
     "ltx_pipelines.utils.blocks": _patch_ltx_blocks,
     "ltx_core.model.transformer.model": _patch_ltx_model,
     "ltx_core.text_encoders.gemma.encoders.base_encoder": _patch_ltx_gemma_encoder,

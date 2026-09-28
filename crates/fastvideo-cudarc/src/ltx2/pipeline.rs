@@ -47,6 +47,7 @@ pub use fastvideo_models::ltx2::memory::LtxOffload;
 
 use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioDecoder, AudioEncoder};
 use super::diffusion_decoder::DiffusionDecoder;
+use super::i2v_encode::{ConditioningImage, StageConditioning};
 use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
@@ -158,9 +159,13 @@ pub struct Ltx2Request {
     /// sparse at 0.9 / block 64. Same refine length. Sparse layers run the
     /// PISA score-route kernel; the midpoint token prune is not applied.
     pub pisa_stage2: bool,
-    /// First-frame image for I2V (`None` = T2AV). Uses VAE encode stub until
-    /// the full encoder lands.
+    /// First-frame image for I2V (`None` = T2AV): shorthand for an entry of
+    /// [`Self::images`] at frame 0, strength 1.
     pub image_path: Option<PathBuf>,
+    /// Image conditionings (`--image PATH FRAME_IDX STRENGTH [CRF]` of
+    /// `ltx_pipelines`): frame 0 is I2V, later frames are keyframes (a last
+    /// frame is `num_frames - 1`). See [`super::i2v_encode`].
+    pub images: Vec<ConditioningImage>,
     /// Silent output (serve E4): skip the audio VAE and vocoder. The audio
     /// latents are still denoised with the video (the model is joint, so the
     /// video is unchanged), but no `audio.wav` is written (`Ltx2Output::wav`
@@ -215,8 +220,18 @@ impl Ltx2Request {
             sol_stage2: false,
             pisa_stage2: false,
             image_path: None,
+            images: Vec::new(),
             skip_audio_decode: false,
         }
+    }
+
+    /// [`Self::image_path`] (first) and [`Self::images`], in that order.
+    pub fn conditioning_images(&self) -> Vec<ConditioningImage> {
+        self.image_path
+            .iter()
+            .map(|p| ConditioningImage::first_frame(p.clone()))
+            .chain(self.images.iter().cloned())
+            .collect()
     }
 
     /// The model card's constraints: H and W divisible by 32 (64 when two-stage),
@@ -294,6 +309,8 @@ impl Ltx2Request {
 pub struct Ltx2Timings {
     pub load_s: f64,
     pub text_s: f64,
+    /// Image conditioning: decode, CRF re-encode, VAE encode (both stages).
+    pub image_s: f64,
     pub denoise_s: f64,
     pub stage1_s: f64,
     pub upsample_s: f64,
@@ -552,6 +569,30 @@ pub fn euler_update(
     i: usize,
     state: LatentState,
 ) -> Result<CudaTensor> {
+    euler_update_cond(x, v, schedule, i, state, None)
+}
+
+/// [`euler_update`] under image conditioning (`euler_denoising_loop`'s
+/// `_step_state`): `x0` from the per-token timesteps, blended with the clean
+/// latent (`post_process_latent`), then the Euler step through `x0`.
+pub fn euler_update_cond(
+    x: &CudaTensor,
+    v: &CudaTensor,
+    schedule: &Ltx2Schedule,
+    i: usize,
+    state: LatentState,
+    cond: Option<&StageConditioning>,
+) -> Result<CudaTensor> {
+    if let Some(c) = cond {
+        let (sigma, next) = (schedule.sigmas[i] as f32, schedule.sigmas[i + 1] as f32);
+        let v = state.store(v.clone())?;
+        let x0 = state.store(c.x0(x, &v, sigma)?)?;
+        let x0 = state.store(c.post(&x0)?)?;
+        let v = state.store(
+            CudaTensor::lincomb(&[(1.0, x), (-1.0, &x0)])?.try_mul_scalar(1.0 / sigma)?,
+        )?;
+        return state.store(CudaTensor::lincomb(&[(1.0, x), (next - sigma, &v)])?);
+    }
     match state {
         LatentState::F32 => Ok(CudaTensor::lincomb(&[
             (1.0, x),
@@ -583,25 +624,47 @@ pub fn ancestral_update(
     noise: Option<&CudaTensor>,
     state: LatentState,
 ) -> Result<CudaTensor> {
+    ancestral_update_cond(x, v, sigma, sigma_next, opts, noise, state, None)
+}
+
+/// [`ancestral_update`] under image conditioning
+/// (`_ancestral_euler_denoising_loop`): `x0` from the per-token timesteps and
+/// blended with the clean latent before the step, and the stepped latent
+/// blended again after its noise.
+#[allow(clippy::too_many_arguments)]
+pub fn ancestral_update_cond(
+    x: &CudaTensor,
+    v: &CudaTensor,
+    sigma: f64,
+    sigma_next: f64,
+    opts: AncestralOpts,
+    noise: Option<&CudaTensor>,
+    state: LatentState,
+    cond: Option<&StageConditioning>,
+) -> Result<CudaTensor> {
     let v = state.store(v.clone())?;
-    let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+    let x0 = match cond {
+        None => state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?,
+        Some(c) => c.post(&state.store(c.x0(x, &v, sigma as f32)?)?)?,
+    };
     let Some(c) = fastvideo_models::ltx2::schedule::ancestral_coeffs_f32(
         sigma as f32,
         sigma_next as f32,
         opts.eta as f32,
         opts.s_noise as f32,
     ) else {
-        return Ok(x0);
+        return state.store(x0);
     };
     let stepped = CudaTensor::lincomb(&[(c.sample, x), (c.denoised, &x0)])?;
     if opts.eta <= 0.0 {
         return state.store(stepped);
     }
     let noise = noise.ok_or_else(|| err("ltx2 ancestral: eta > 0 needs a noise draw"))?;
-    state.store(CudaTensor::lincomb(&[
-        (c.factor, &stepped),
-        (c.noise, noise),
-    ])?)
+    let out = CudaTensor::lincomb(&[(c.factor, &stepped), (c.noise, noise)])?;
+    match cond {
+        Some(cd) => state.store(cd.post(&out)?),
+        None => state.store(out),
+    }
 }
 
 /// `GaussianNoiser` at `noise_scale = σ` (`ltx_core/components/noisers.py:29-37`):
@@ -638,6 +701,20 @@ pub fn initial_noise(
     audio_tokens: usize,
     noise: &mut NoiseStream,
 ) -> Result<(CudaTensor, CudaTensor)> {
+    initial_noise_with(cfg, grid, 0, audio_tokens, noise)
+}
+
+/// [`initial_noise`] with `extra` appended video tokens (keyframe
+/// conditioning): `ltx_core` draws the video noise over every token, grid and
+/// appended, in one tensor. The diffusers-order lines draw the grid as before
+/// and the appended tokens after the audio.
+pub fn initial_noise_with(
+    cfg: &Ltx2Config,
+    grid: [usize; 3],
+    extra: usize,
+    audio_tokens: usize,
+    noise: &mut NoiseStream,
+) -> Result<(CudaTensor, CudaTensor)> {
     let c = cfg.transformer.in_channels;
     let [f, h, w] = grid;
     let (ac, bins) = (
@@ -645,7 +722,8 @@ pub fn initial_noise(
         cfg.audio_vae.latent_mel_bins(),
     );
     if LatentState::for_version(cfg.version) == LatentState::Bf16 {
-        let mut draws = noise.draw(&[&[1, f * h * w, c], &[1, audio_tokens, ac * bins]])?;
+        let mut draws =
+            noise.draw(&[&[1, f * h * w + extra, c], &[1, audio_tokens, ac * bins]])?;
         let audio = draws.pop().expect("audio noise");
         let video = draws.pop().expect("video noise");
         return Ok((video, audio));
@@ -657,7 +735,12 @@ pub fn initial_noise(
     let audio = audio
         .permute(&[0, 2, 1, 3])?
         .reshape(vec![1, audio_tokens, ac * bins])?;
-    Ok((pack_video(&video)?, audio))
+    let video = pack_video(&video)?;
+    if extra > 0 {
+        let tail = noise.draw(&[&[1, extra, c]])?.pop().expect("extra noise");
+        return Ok((CudaTensor::cat(&[&video, &tail], 1)?, audio));
+    }
+    Ok((video, audio))
 }
 
 /// FASTVIDEO_DUMP_DIR, before step `i`'s forward, under the stage prefix
@@ -761,11 +844,32 @@ pub fn denoise_with(
     text: &TextConditioning,
     ropes: &Ropes,
     schedule: &Ltx2Schedule,
+    video: CudaTensor,
+    audio: CudaTensor,
+    observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
+    state: LatentState,
+) -> Result<(CudaTensor, CudaTensor)> {
+    denoise_with_cond(
+        model, text, ropes, schedule, video, audio, observer, stage2, state, None,
+    )
+}
+
+/// [`denoise_with`] under image conditioning ([`euler_update_cond`]); the
+/// caller sets the model's per-token timesteps
+/// ([`Ltx2Transformer::set_video_conditioning`]).
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_with_cond(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
     mut video: CudaTensor,
     mut audio: CudaTensor,
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
     state: LatentState,
+    cond: Option<&StageConditioning>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         crate::wan::gpu_trace::step_begin();
@@ -773,7 +877,12 @@ pub fn denoise_with(
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
         dump_step_begin(i, &video, &audio, schedule)?;
-        let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
+        let cached = if cond.is_none() {
+            model.stage1_reuse(i)
+        } else {
+            None
+        };
+        let (v_video, v_audio) = if let Some(cached) = cached {
             cached
         } else {
             let out = model.forward_sol(
@@ -797,7 +906,7 @@ pub fn denoise_with(
             schedule.sigmas[i],
             state,
         )?;
-        video = euler_update(&video, &v_video, schedule, i, state)?;
+        video = euler_update_cond(&video, &v_video, schedule, i, state, cond)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
@@ -829,6 +938,11 @@ pub fn denoise_cfg(
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
 ) -> Result<(CudaTensor, CudaTensor)> {
+    if model.video_conditioned() {
+        return Err(err(
+            "ltx2: image conditioning is not supported on the guided (CFG) sampler",
+        ));
+    }
     for i in 0..schedule.num_steps() {
         crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
@@ -876,8 +990,10 @@ fn velocity_call(
     route: Ltx2VideoAttn,
     call: usize,
 ) -> Result<(CudaTensor, CudaTensor)> {
-    if let Some(cached) = model.stage1_reuse(call) {
-        return Ok(cached);
+    if !model.video_conditioned() {
+        if let Some(cached) = model.stage1_reuse(call) {
+            return Ok(cached);
+        }
     }
     let out = if let Some(uncond) = text_uncond {
         let (vc, ac) = model.forward_sol(video, audio, text, t, ropes, None, route)?;
@@ -941,11 +1057,50 @@ pub fn denoise_res2s(
     schedule: &Ltx2Schedule,
     video_scale: f32,
     audio_scale: f32,
+    video: CudaTensor,
+    audio: CudaTensor,
+    observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
+) -> Result<(CudaTensor, CudaTensor)> {
+    denoise_res2s_cond(
+        model,
+        text,
+        text_uncond,
+        ropes,
+        schedule,
+        video_scale,
+        audio_scale,
+        video,
+        audio,
+        observer,
+        stage2,
+        None,
+    )
+}
+
+/// [`denoise_res2s`] under image conditioning: every `x0` estimate is taken
+/// at the per-token timesteps and blended with the clean latent.
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_res2s_cond(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    text_uncond: Option<&TextConditioning>,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    video_scale: f32,
+    audio_scale: f32,
     mut video: CudaTensor,
     mut audio: CudaTensor,
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
+    cond: Option<&StageConditioning>,
 ) -> Result<(CudaTensor, CudaTensor)> {
+    let video_x0 = |x: &CudaTensor, v: &CudaTensor, sigma: f64| -> Result<CudaTensor> {
+        match cond {
+            Some(c) => c.post(&c.x0(x, v, sigma as f32)?),
+            None => denoised_from_velocity(x, v, sigma),
+        }
+    };
     let mut call = 0usize;
     for i in 0..schedule.num_steps() {
         crate::wan::gpu_trace::step_begin();
@@ -970,7 +1125,7 @@ pub fn denoise_res2s(
             call,
         )?;
         call += 1;
-        let d_video = denoised_from_velocity(&video, &v_video, sigma)?;
+        let d_video = video_x0(&video, &v_video, sigma)?;
         let d_audio = denoised_from_velocity(&audio, &v_audio, sigma)?;
         if sigma_next == 0.0 || i + 1 == schedule.num_steps() {
             video = d_video;
@@ -999,7 +1154,7 @@ pub fn denoise_res2s(
                 call,
             )?;
             call += 1;
-            let d2_v = denoised_from_velocity(&mid_v, &v2_v, sub_sigma)?;
+            let d2_v = video_x0(&mid_v, &v2_v, sub_sigma)?;
             let d2_a = denoised_from_velocity(&mid_a, &v2_a, sub_sigma)?;
             video = res2s_combine(&video, &d_video, &d2_v, h, b1, b2)?;
             audio = res2s_combine(&audio, &d_audio, &d2_a, h, b1, b2)?;
@@ -1030,12 +1185,32 @@ pub fn denoise_ancestral(
     text: &TextConditioning,
     ropes: &Ropes,
     schedule: &Ltx2Schedule,
+    video: CudaTensor,
+    audio: CudaTensor,
+    opts: AncestralOpts,
+    observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
+    state: LatentState,
+) -> Result<(CudaTensor, CudaTensor)> {
+    denoise_ancestral_cond(
+        model, text, ropes, schedule, video, audio, opts, observer, stage2, state, None,
+    )
+}
+
+/// [`denoise_ancestral`] under image conditioning ([`ancestral_update_cond`]).
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_ancestral_cond(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
     mut video: CudaTensor,
     mut audio: CudaTensor,
     opts: AncestralOpts,
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
     state: LatentState,
+    cond: Option<&StageConditioning>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let mut noise = NoiseStream::new(opts.noise_seed, state == LatentState::Bf16);
     for i in 0..schedule.num_steps() {
@@ -1046,7 +1221,12 @@ pub fn denoise_ancestral(
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
         dump_step_begin(i, &video, &audio, schedule)?;
-        let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
+        let cached = if cond.is_none() {
+            model.stage1_reuse(i)
+        } else {
+            None
+        };
+        let (v_video, v_audio) = if let Some(cached) = cached {
             cached
         } else {
             let out = model.forward_sol(
@@ -1068,7 +1248,7 @@ pub fn denoise_ancestral(
         } else {
             Vec::new()
         };
-        video = ancestral_update(
+        video = ancestral_update_cond(
             &video,
             &v_video,
             sigma,
@@ -1076,6 +1256,7 @@ pub fn denoise_ancestral(
             opts,
             draws.first(),
             state,
+            cond,
         )?;
         audio = ancestral_update(
             &audio,
@@ -2539,6 +2720,63 @@ impl Ltx2Pipeline {
         Ok(())
     }
 
+    /// Image conditioning latents: each image decoded and re-encoded at its
+    /// CRF once, then VAE-encoded at every `(height, width, tag)` stage size,
+    /// packed `[1, H·W, C]` in the state's dtype. The encoder is loaded for
+    /// the call. FASTVIDEO_DUMP_DIR gets `{tag}_cond{i}_latent`; with
+    /// FASTVIDEO_INJECT_DIR the reference's own latents replace ours
+    /// (`FASTVIDEO_INJECT_COND=0` keeps ours).
+    fn encode_images(
+        &self,
+        images: &[ConditioningImage],
+        sizes: &[(usize, usize, &str)],
+        state: LatentState,
+    ) -> Result<Vec<Vec<CudaTensor>>> {
+        let default_crf = super::i2v_encode::default_crf(self.cfg.version);
+        let rgbs = images
+            .iter()
+            .map(|im| {
+                let rgb = super::i2v_encode::decode_image(&im.path)?;
+                super::i2v_encode::recompress(&rgb, im.crf.unwrap_or(default_crf))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let encoder = super::vae_encoder::VideoEncoder::load(
+            &self.weights.join("vae"),
+            self.cfg.vae.patch_size,
+            self.cfg.vae.pixel_norm_eps,
+        )?;
+        let inject = crate::wan::inject::enabled()
+            && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0");
+        let mut out = Vec::with_capacity(sizes.len());
+        for &(h, w, tag) in sizes {
+            let mut stage = Vec::with_capacity(rgbs.len());
+            for (i, rgb) in rgbs.iter().enumerate() {
+                let px = super::i2v_encode::image_pixels(rgb, h, w);
+                crate::wan::dump::host(&format!("{tag}_cond{i}_pixels"), &[3, h, w], &px)?;
+                let lat = encoder.encode_image(&px, h, w)?;
+                let lat = state.store(pack_video(&lat)?)?;
+                let name = format!("{tag}_cond{i}_latent");
+                crate::wan::dump::tensor(&name, &lat)?;
+                crate::wan::dump::digest(&name, &lat)?;
+                let lat = if inject {
+                    match crate::wan::inject::load_numel(&name, lat.numel())? {
+                        Some(v) => {
+                            crate::wan::log::info(format_args!("inject: {name} (reference)"));
+                            CudaTensor::from_vec(v, lat.shape.clone())?.to_device()?
+                        }
+                        None => lat,
+                    }
+                } else {
+                    lat
+                };
+                stage.push(lat);
+            }
+            out.push(stage);
+        }
+        drop(encoder);
+        Ok(out)
+    }
+
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
     /// this call only.
     pub fn generate(
@@ -2564,6 +2802,11 @@ impl Ltx2Pipeline {
         hooks: Hooks<'_>,
     ) -> Result<Ltx2Output> {
         let out = self.generate_hooked(req, use_text_cache, observer, hooks);
+        // A failed or cancelled conditioned generation must not leave its
+        // per-token timesteps on the resident DiT.
+        if let Some(model) = self.model.as_ref() {
+            model.set_video_conditioning(None);
+        }
         if matches!(&out, Err(e) if e.is_cancelled()) {
             crate::wan::dump::set_prefix("");
             if let Some(model) = self.model.as_ref() {
@@ -2695,6 +2938,45 @@ impl Ltx2Pipeline {
         trim()?;
         memory.mark("text")?;
 
+        // Image conditioning (I2V / keyframes): encode every image at each
+        // stage's resolution now, before the DiT loads, then free the encoder.
+        let images = req.conditioning_images();
+        let mut cond_latents: Option<(Vec<CudaTensor>, Vec<CudaTensor>)> = None;
+        if !images.is_empty() {
+            let t = Instant::now();
+            let state = LatentState::for_version(cfg.version);
+            let mut sizes = vec![(stage1_h, stage1_w, "s1")];
+            if req.two_stage {
+                sizes.push((req.height, req.width, "s2"));
+            }
+            let mut per_stage = self.encode_images(&images, &sizes, state)?;
+            let s2 = if req.two_stage {
+                per_stage.pop().expect("stage-2 latents")
+            } else {
+                Vec::new()
+            };
+            let s1 = per_stage.pop().expect("stage-1 latents");
+            cond_latents = Some((s1, s2));
+            trim()?;
+            timings.image_s = t.elapsed().as_secs_f64();
+            crate::wan::log::info(format_args!(
+                "ltx2: {} conditioning image(s) encoded in {:.2}s",
+                images.len(),
+                t.elapsed().as_secs_f64()
+            ));
+            memory.mark("image_encode")?;
+        }
+        let cond1 = match &mut cond_latents {
+            Some((l1, _)) => Some(StageConditioning::new(
+                grid1,
+                &images,
+                std::mem::take(l1),
+                req.num_frames,
+            )?),
+            None => None,
+        };
+        let extra1 = cond1.as_ref().map(|c| c.extra_frames.clone()).unwrap_or_default();
+
         let (s1, s2) = self.stage_lora_strengths(req.two_stage);
         let timer = Instant::now();
         self.dit_for(s1)?;
@@ -2717,31 +2999,31 @@ impl Ltx2Pipeline {
         // conditional context is ever re-projected.
         let reproject = req.two_stage && s1 != s2;
         let mut kept_contexts = reproject.then_some(contexts);
-        let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
+        let ropes = Ropes::with_keyframes(
+            &cfg.transformer,
+            grid1,
+            &extra1,
+            audio_tokens,
+            req.frame_rate as f32,
+        )?;
         // `generator = torch.Generator().manual_seed(seed)` (`distilled.py:217`):
         // the stage-1 initial noise and, later, the stage-2 renoise.
         let mut noise = NoiseStream::new(req.seed, state == LatentState::Bf16);
-        let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, &mut noise)?;
+        let extra_tokens1 = extra1.len() * grid1[1] * grid1[2];
+        let (mut video, audio) =
+            initial_noise_with(&cfg, grid1, extra_tokens1, audio_tokens, &mut noise)?;
         crate::wan::dump::digest("noise_video", &video)?;
         crate::wan::dump::digest("noise_audio", &audio)?;
         crate::wan::dump::digest("text_proj_video", &text.video)?;
         crate::wan::dump::digest("text_proj_audio", &text.audio)?;
-        if let Some(ref image_path) = req.image_path {
-            let spat = cfg.transformer.vae_scale_factors[1];
-            let vae_dir = self.weights.join("vae");
-            let first = super::i2v_encode::encode_first_frame(
-                image_path,
-                stage1_h,
-                stage1_w,
-                cfg.transformer.in_channels,
-                spat,
-                Some(vae_dir.as_path()),
-            )?;
-            video = super::i2v_encode::condition_first_frame(&video, grid1, &first)?;
-            crate::wan::log::info(format_args!(
-                "ltx2: I2V first-frame encode from {}",
-                image_path.display()
-            ));
+        if let Some(c) = &cond1 {
+            // `GaussianNoiser`: lerp(clean, noised, mask) on the conditioned rows.
+            video = state.store(c.apply_initial(&video)?)?;
+            self.model
+                .as_ref()
+                .expect("dit")
+                .set_video_conditioning(Some(c.timestep_segments()));
+            crate::wan::dump::digest("cond_noise_video", &video)?;
         }
         let mut step_s = Vec::new();
         let mut observer = observer;
@@ -2777,7 +3059,7 @@ impl Ltx2Pipeline {
                 hooks.step(Stage::Denoise, i + 1, stage1_total, None)
             };
             if ancestral {
-                denoise_ancestral(
+                denoise_ancestral_cond(
                     model,
                     &text,
                     &ropes,
@@ -2792,9 +3074,10 @@ impl Ltx2Pipeline {
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
                     state,
+                    cond1.as_ref(),
                 )?
             } else if res2s {
-                denoise_res2s(
+                denoise_res2s_cond(
                     model,
                     &text,
                     text_uncond.as_ref(),
@@ -2806,6 +3089,7 @@ impl Ltx2Pipeline {
                     audio,
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
+                    cond1.as_ref(),
                 )?
             } else if let Some(ref uncond) = text_uncond {
                 denoise_cfg(
@@ -2822,7 +3106,7 @@ impl Ltx2Pipeline {
                     Ltx2Stage2Attn::Off,
                 )?
             } else {
-                denoise(
+                denoise_with_cond(
                     model,
                     &text,
                     &ropes,
@@ -2831,9 +3115,19 @@ impl Ltx2Pipeline {
                     audio,
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
+                    LatentState::F32,
+                    cond1.as_ref(),
                 )?
             }
         };
+        // `clear_conditioning`: the appended keyframe tokens go.
+        if let Some(c) = &cond1 {
+            video = c.clear(&video)?;
+            if let Some(model) = self.model.as_ref() {
+                model.set_video_conditioning(None);
+            }
+        }
+        drop(cond1);
         timings.stage1_s = timer.elapsed().as_secs_f64();
         crate::wan::dump::digest("stage1_video", &video)?;
         crate::wan::dump::digest("stage1_audio", &audio)?;
@@ -2920,6 +3214,27 @@ impl Ltx2Pipeline {
             let schedule2 =
                 Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
             let sigma = schedule2.sigmas[0] as f32;
+            let cond2 = match &mut cond_latents {
+                Some((_, l2)) => Some(StageConditioning::new(
+                    grid_full,
+                    &images,
+                    std::mem::take(l2),
+                    req.num_frames,
+                )?),
+                None => None,
+            };
+            let extra2 = cond2
+                .as_ref()
+                .map(|c| c.extra_frames.clone())
+                .unwrap_or_default();
+            if let Some(c) = &cond2 {
+                // Appended keyframe tokens start from zeros (`torch.zeros_like`).
+                let extra = c.total_tokens() - c.grid_tokens;
+                if extra > 0 {
+                    let zeros = CudaTensor::zeros(&[1, extra, video.shape[2]]).to_device()?;
+                    video = CudaTensor::cat(&[&video, &zeros], 1)?;
+                }
+            }
             // Stage-2 entry: video then audio re-noised to `σ_0` from the same
             // generator as the initial noise (`distilled.py:294-313`).
             let mut draws = noise.draw(&[&video.shape, &audio.shape])?;
@@ -2927,6 +3242,13 @@ impl Ltx2Pipeline {
             video = renoise(&video, &noise_v, sigma, state)?;
             audio = renoise(&audio, &noise_a, sigma, state)?;
             drop((noise_v, noise_a));
+            if let Some(c) = &cond2 {
+                video = state.store(c.apply_initial(&video)?)?;
+                self.model
+                    .as_ref()
+                    .expect("dit")
+                    .set_video_conditioning(Some(c.timestep_segments()));
+            }
             crate::wan::dump::set_prefix("s2_");
             // FASTVIDEO_INJECT_DIR: stage 2 starts from the reference's own
             // entry state, so its diff is stage 2's alone (our entry, from our
@@ -2950,9 +3272,10 @@ impl Ltx2Pipeline {
             let stage2_total = schedule2.num_steps();
             hooks.stage(Stage::Refine, stage2_total)?;
             let s2_timer = Instant::now();
-            let ropes2 = Ropes::new(
+            let ropes2 = Ropes::with_keyframes(
                 &cfg.transformer,
                 grid_full,
+                &extra2,
                 audio_tokens,
                 req.frame_rate as f32,
             )?;
@@ -2970,7 +3293,7 @@ impl Ltx2Pipeline {
                         }?;
                         hooks.step(Stage::Refine, i + 1, stage2_total, None)
                     };
-                denoise_with(
+                denoise_with_cond(
                     model,
                     &text,
                     &ropes2,
@@ -2980,11 +3303,18 @@ impl Ltx2Pipeline {
                     Some(&mut record2),
                     req.stage2_attn(),
                     state,
+                    cond2.as_ref(),
                 )?
             };
             if let Some(model) = self.model.as_ref() {
                 model.set_prune_active(false);
+                model.set_video_conditioning(None);
             }
+            let v2 = match &cond2 {
+                Some(c) => c.clear(&v2)?,
+                None => v2,
+            };
+            drop(cond2);
             video = v2;
             audio = a2;
             crate::wan::dump::digest("stage2_video", &video)?;

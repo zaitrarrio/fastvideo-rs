@@ -2140,6 +2140,13 @@ Audio: male speech, clear voice, quiet room"
           [[ "$target" == ltx25-4k* ]] && geo=(--workload 4k5s)
           arm=()
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
+          # Image conditioning targets (upstream oracle.sh): 512p, dense stage 2.
+          fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+          case "$target" in
+            ltx25-i2v) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg") ;;
+            ltx25-kf) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg"
+              --cond-image "$fx/ti2v-beach-zoom-832x480.jpg@120@1.0") ;;
+          esac
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
             "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
         sfwan13)

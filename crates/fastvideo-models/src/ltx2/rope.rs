@@ -149,6 +149,7 @@ fn video_midpoints(
     grid: [usize; 3],
     fps: f32,
     division: ScalarDivision,
+    extra: &[usize],
 ) -> Vec<f32> {
     let [frames, height, width] = grid;
     let [st, sh, sw] = cfg.vae_scale_factors.map(|s| s as f32);
@@ -164,11 +165,26 @@ fn video_midpoints(
     let space = |i: usize, scale: f32| -> f32 {
         (i as f32 * scale + (i as f32 + cfg.patch_size as f32) * scale) / 2.0
     };
-    let mut out = Vec::with_capacity(frames * height * width * 3);
+    let mut out = Vec::with_capacity((frames + extra.len()) * height * width * 3);
     for f in 0..frames {
         for h in 0..height {
             for w in 0..width {
                 out.extend([time(f), space(h, sh), space(w, sw)]);
+            }
+        }
+    }
+    // Appended keyframe tokens (`VideoConditionByKeyframeIndex`,
+    // `ltx_core/conditioning/types/keyframe_cond.py`): one latent frame whose
+    // extent is shifted to pixel frame `k` with no causal fix and narrowed to
+    // one pixel frame, `[k, k + 1)`, then in seconds.
+    for &k in extra {
+        let t = division.div(
+            division.div(k as f32, fps) + division.div(k as f32 + 1.0, fps),
+            2.0,
+        );
+        for h in 0..height {
+            for w in 0..width {
+                out.extend([t, space(h, sh), space(w, sw)]);
             }
         }
     }
@@ -183,12 +199,24 @@ pub fn video_fractions(
     fps: f32,
     division: ScalarDivision,
 ) -> Vec<f32> {
+    video_fractions_with(cfg, grid, fps, division, &[])
+}
+
+/// [`video_fractions`] with appended one-frame keyframe tokens at pixel
+/// frames `extra` (one `H·W` block each, in order).
+pub fn video_fractions_with(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    division: ScalarDivision,
+    extra: &[usize],
+) -> Vec<f32> {
     let max = [
         cfg.pos_embed_max_pos as f32,
         cfg.base_height as f32,
         cfg.base_width as f32,
     ];
-    video_midpoints(cfg, grid, fps, division)
+    video_midpoints(cfg, grid, fps, division, extra)
         .chunks_exact(3)
         .flat_map(|c| {
             [
@@ -209,7 +237,20 @@ pub fn video_time_fractions(
     max_seconds: f32,
     division: ScalarDivision,
 ) -> Vec<f32> {
-    video_midpoints(cfg, grid, fps, division)
+    video_time_fractions_with(cfg, grid, fps, max_seconds, division, &[])
+}
+
+/// [`video_time_fractions`] with appended keyframe tokens (see
+/// [`video_fractions_with`]).
+pub fn video_time_fractions_with(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    max_seconds: f32,
+    division: ScalarDivision,
+    extra: &[usize],
+) -> Vec<f32> {
+    video_midpoints(cfg, grid, fps, division, extra)
         .chunks_exact(3)
         .map(|c| division.div(c[0], max_seconds))
         .collect()
@@ -285,13 +326,26 @@ impl Ltx2RopeTables {
         fps: f32,
         division: ScalarDivision,
     ) -> Self {
+        Self::with_keyframes(cfg, grid, &[], audio_tokens, fps, division)
+    }
+
+    /// The tables for a grid followed by one appended `H·W` token block per
+    /// keyframe at pixel frame `extra[i]` (keyframe conditioning).
+    pub fn with_keyframes(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        extra: &[usize],
+        audio_tokens: usize,
+        fps: f32,
+        division: ScalarDivision,
+    ) -> Self {
         let theta = cfg.rope_theta;
         let cross_dim = cfg.audio_cross_attention_dim;
         // Both cross tables share one time base so equal instants rotate equally.
         let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
         Self {
             video: SplitRope::from_fractions(
-                &video_fractions(cfg, grid, fps, division),
+                &video_fractions_with(cfg, grid, fps, division, extra),
                 3,
                 cfg.inner_dim(),
                 cfg.num_attention_heads,
@@ -310,7 +364,7 @@ impl Ltx2RopeTables {
                 theta,
             ),
             cross_video: SplitRope::from_fractions(
-                &video_time_fractions(cfg, grid, fps, cross_max, division),
+                &video_time_fractions_with(cfg, grid, fps, cross_max, division, extra),
                 1,
                 cross_dim,
                 cfg.num_attention_heads,
@@ -351,6 +405,20 @@ mod tests {
         // Column varies fastest.
         assert_eq!(f[3 + 2], 48.0 / 2048.0);
         assert_eq!(f[3 + 1], 16.0 / 2048.0);
+    }
+
+    #[test]
+    fn keyframe_tokens_sit_at_their_pixel_frame() {
+        let grid = [3, 2, 2];
+        let f = video_fractions_with(&cfg(), grid, 24.0, ScalarDivision::Exact, &[16]);
+        assert_eq!(f.len(), (3 + 1) * 2 * 2 * 3);
+        // The grid is unchanged by the appended block.
+        assert_eq!(&f[..3 * 4 * 3], &video_fractions(&cfg(), grid, 24.0, ScalarDivision::Exact)[..]);
+        // Keyframe at pixel frame 16 covers [16, 17) / 24 s: midpoint 16.5 / 24.
+        let t = f[3 * 4 * 3] * 20.0;
+        assert!((t - 16.5 / 24.0).abs() < 1e-6, "{t}");
+        // Same spatial midpoints as frame 0.
+        assert_eq!(&f[3 * 4 * 3 + 1..3 * 4 * 3 + 3], &f[1..3]);
     }
 
     #[test]
