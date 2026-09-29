@@ -866,6 +866,10 @@ fn dump_step_velocity(
             Some(c) if tag == "video" => state.store(c.x0(x, &v, sigma as f32)?)?,
             // Frozen audio: every audio timestep is 0, so `x0 = x`.
             Some(c) if c.frozen_audio.is_some() => x.clone(),
+            // A retake of the audio: per-token timesteps on its pinned rows.
+            Some(c) if c.audio_cond().is_some() => {
+                state.store(c.audio_cond().expect("audio cond").x0(x, &v, sigma as f32)?)?
+            }
             _ => state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?,
         };
         dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
@@ -3481,10 +3485,12 @@ impl Ltx2Pipeline {
         if let Some((clean, _)) = &driving {
             audio = clean.clone();
         }
+        // An edit's frozen stream is not: `ModalitySpec(frozen=True)` keeps
+        // the default `noise_scale=1`, so `_build_state` noises it fully and
+        // only then zeroes its mask. The first forward sees the noise (at
+        // timestep and sigma 0); the first step's `post_process_latent` makes
+        // it clean (`StageConditioning::audio_after`).
         let edit_frozen_audio = cond1.as_ref().and_then(|c| c.frozen_audio.clone()).filter(|_| req.edit.is_some());
-        if let Some(clean) = &edit_frozen_audio {
-            audio = clean.clone();
-        }
         self.model
             .as_ref()
             .expect("dit")
@@ -3503,7 +3509,11 @@ impl Ltx2Pipeline {
         crate::wan::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(c) = &cond1 {
             // `GaussianNoiser`: lerp(clean, noised, mask) on the conditioned rows.
-            video = state.store(c.apply_initial(&video)?)?;
+            // A frozen video (an edit that keeps it) stays at its noise until
+            // the first step's pin, as the frozen audio above.
+            if !video_frozen {
+                video = state.store(c.apply_initial(&video)?)?;
+            }
             self.model
                 .as_ref()
                 .expect("dit")
