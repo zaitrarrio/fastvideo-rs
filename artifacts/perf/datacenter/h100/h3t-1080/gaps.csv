@@ -1,0 +1,66 @@
+t_s,gap_us,cause,before,after
+0.0,19586.8,host_sync:cuStreamSynchronize,memcpy HtoD,cast_f32_bf16
+0.0196,87.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_4x1_v_bz_bias_TNT
+0.0198,36.4,host_cpu,w8a8_quantize,nvjet_sm90_qqtst_64x32_128x16_4x1_v_bz_algo2_TNT
+0.02,29.8,host_api:cuMemAllocAsync,mx_rms_norm,memset
+0.0205,520.9,host_sync:cuStreamSynchronize,mx_rms_norm,memcpy HtoD
+0.021,79.1,host_cpu,memcpy HtoD,memcpy HtoD
+0.0211,28031.0,host_cpu,memcpy HtoD,memcpy HtoD
+0.0491,310.8,host_api:cuMemAllocAsync,memcpy HtoD,memcpy HtoD
+0.0512,79.1,launch_latency,memcpy HtoD,memcpy HtoD
+0.0532,90280.6,host_cpu,memcpy HtoD,memcpy HtoD
+0.1448,46.7,host_cpu,memcpy HtoD,cast_f32_bf16
+0.1449,1571.1,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+0.1468,2327.2,host_api:cuMemAllocAsync,nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN,cast_bf16_f32_bias_act
+0.1531,28977.1,host_cpu,mx_block_copy,memcpy HtoD
+0.1848,29.9,host_cpu,memcpy HtoD,h3_norm_mod
+0.1893,5975.5,host_api:cuMemAllocAsync,w8a8_quantize,memset
+0.3697,126.9,host_api:cuKernelSetAttribute,w8a8_quantize,memset
+0.3698,23.5,launch_latency,memset,nvjet_sm90_qqtst_144x128_128x6_1x2_h_bz_coopA_algo2_TNN
+11.645,133.7,host_api:cuKernelSetAttribute,cast_f32_bf16,memset
+11.6457,103.7,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+11.6461,523.2,host_api:cuMemAllocAsync,nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN,cast_bf16_f32_bias_act
+11.6508,27568.7,host_cpu,mx_block_copy,memcpy HtoD
+23.1334,151.5,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+23.1336,924.5,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+23.139,27343.6,host_cpu,mx_block_copy,memcpy HtoD
+34.6423,124.4,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+34.6425,659.0,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+34.6434,442.9,host_api:cuMemAllocAsync,nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN,cast_bf16_f32_bias_act
+34.648,27483.0,host_cpu,mx_block_copy,memcpy HtoD
+46.1595,55877.9,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+46.2154,264.0,host_cpu,bcast_binary,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+46.2157,156.6,host_cpu,add_bias_inplace,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+46.216,90.1,host_cpu,add_bias_inplace,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+46.2163,24.6,host_cpu,"cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)0, (bo…","cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+46.2737,2608.3,host_sync:cuStreamSynchronize,memcpy DtoH,gather_nd
+46.2765,78.3,host_api:cuMemAllocAsync,gather_nd,gather_nd
+46.277,146.5,host_cpu,block_copy,memcpy HtoD
+46.2771,1993.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x64_64x16_1x2_h_bz_TNN
+46.2792,302.0,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+46.2795,223.3,host_api:cuMemAllocAsync,nvjet_sm90_tst_128x256_64x4_2x1_v_bz_coopA_TNN,cast_bf16_f32_bias_act
+46.2799,50.0,host_api:cuMemAllocAsync,block_copy,block_copy
+46.2802,147.7,host_cpu,h3v_residual_norm_bf16,memset
+46.2824,261.7,host_cpu,h3v_merge_heads_bf16,memset
+46.283,648.5,host_api:cuMemAllocAsync,h3v_residual_norm_bf16,memset
+46.4605,132.1,host_api:cuKernelSetAttribute,cast_f32_bf16,memset
+47.5984,144.3,host_api:cuKernelSetAttribute,cast_f32_bf16,nvjet_sm90_tst_32x64_64x16_1x4_h_bz_TNN
+47.5986,38.0,host_cpu,nvjet_sm90_tst_32x64_64x16_1x4_h_bz_TNN,cast_bf16_f32_bias_act
+47.5986,2058.5,host_cpu,cast_f32_bf16,memset
+47.6009,1902.5,host_cpu,h3v_residual_norm_bf16,memset
+49.1449,84.2,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+49.199,353771.3,host_cpu,memcpy DtoH,block_copy
+49.5531,243.2,host_cpu,block_copy,memcpy HtoD
+49.5533,97.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x64_64x16_1x2_h_bz_TNN
+49.5535,23.9,host_cpu,cast_f32_bf16,memset
+52.4117,76.2,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+52.4675,168896.6,host_cpu,memcpy DtoH,block_copy
+52.6366,235.7,host_cpu,block_copy,memcpy HtoD
+52.6369,97.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x64_64x16_1x2_h_bz_TNN
+52.637,23.7,host_cpu,cast_f32_bf16,memset
+55.4851,66.6,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+55.5398,166523.8,host_cpu,memcpy DtoH,block_copy
+55.7065,235.9,host_cpu,block_copy,memcpy HtoD
+55.7068,94.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x64_64x16_1x2_h_bz_TNN
+55.7069,23.0,host_cpu,cast_f32_bf16,memset
+57.1897,901.4,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH

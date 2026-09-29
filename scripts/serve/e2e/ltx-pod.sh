@@ -21,6 +21,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
+source "$ROOT/scripts/gpu/runpod-price.sh"
 API="https://rest.runpod.io/v1"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:-$ROOT/target/e2e-ltx.state}"
@@ -64,6 +66,8 @@ cmd_up() {
   name="${FV_POD_NAME_PREFIX:-fv-e2e-c}-$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"$GPUS"
   for gpu in "${types[@]}"; do
+    # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
+    fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash" "$RECIPE")" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi

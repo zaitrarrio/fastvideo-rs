@@ -26,6 +26,10 @@ members = [
     "crates/fastvideo-deploy",
     "crates/fastvideo-autoscale",
     "crates/fastvideo-serve",
+    # Push dispatch (docs/serve/gateway-cloudflare.md): the shared protocol
+    # and scheduler, and the Cloudflare Worker / Durable Object (wasm).
+    "crates/fastvideo-dispatch-proto",
+    "crates/fastvideo-edge",
 ]
 
 [workspace.package]
@@ -104,6 +108,7 @@ fastvideo-fal = { path = "crates/fastvideo-fal" }
 fastvideo-reactor = { path = "crates/fastvideo-reactor" }
 fastvideo-deploy = { path = "crates/fastvideo-deploy" }
 fastvideo-autoscale = { path = "crates/fastvideo-autoscale" }
+fastvideo-dispatch-proto = { path = "crates/fastvideo-dispatch-proto" }
 
 cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 

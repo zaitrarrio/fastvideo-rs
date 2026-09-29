@@ -118,6 +118,11 @@ impl WorkerState {
         self
     }
 
+    /// The drain flag (shared with the registration).
+    pub(crate) fn drained_flag(&self) -> &AtomicBool {
+        &self.drained
+    }
+
     /// Drained (autoscaler) or shutting down: no new jobs or sessions.
     pub fn draining(&self) -> bool {
         self.drained.load(Ordering::SeqCst) || !self.gate.admitting()
@@ -161,7 +166,12 @@ fn err(e: &ApiError) -> Response {
 const ENVELOPE_MAX: usize = 64 * 1024 * 1024;
 
 pub fn routes(st: WorkerState) -> Router {
-    let st = Arc::new(st);
+    routes_shared(Arc::new(st))
+}
+
+/// [`routes`] over a state shared with the dispatcher socket
+/// ([`crate::edge_link`]).
+pub fn routes_shared(st: Arc<WorkerState>) -> Router {
     Router::new()
         .route("/fv/v1/internal/jobs", post(take).layer(axum::extract::DefaultBodyLimit::max(ENVELOPE_MAX)))
         .route("/fv/v1/internal/jobs/{id}", get(job_status).delete(job_cancel))
@@ -180,22 +190,30 @@ fn readiness_word(r: &Readiness) -> &'static str {
 }
 
 async fn status(State(st): State<Arc<WorkerState>>) -> Response {
+    Json(status_json(&st)).into_response()
+}
+
+/// The body of `GET /fv/v1/internal/status` (also a dispatcher hello's caps).
+pub fn status_json(st: &WorkerState) -> Value {
     let engine = st.gate.engine();
     let s = engine.stats();
     let models: Vec<Value> = engine.caps().entries().map(|e| json!({"caps": e.caps, "recipe": e.recipe})).collect();
-    Json(json!({
+    json!({
         "object": "fv.worker",
         "worker_id": st.worker_id,
         "pool": st.pool,
         "readiness": readiness_word(&engine.readiness()),
+        // Models this worker failed (the startup capability check: a GPU
+        // that cannot run the model) and why; the gateway shows them in
+        // `/fv/v1/status` and dispatches nothing here.
+        "failed_models": crate::health::failed_models(&engine.pool()),
         "draining": st.draining(),
         "stats": {"queued_batch": s.queued_batch, "queued_stream": s.queued_stream, "running": s.running, "sessions": s.sessions},
         "models": models,
         "version": env!("CARGO_PKG_VERSION"),
         // Git sha, build time, variant, image and channel (docs/serve/releases.md).
         "build": crate::build_info::BuildInfo::current().json(),
-    }))
-    .into_response()
+    })
 }
 
 fn parse_id(id: &str) -> Result<JobId, Response> {
@@ -355,6 +373,14 @@ fn cleanup_inputs(st: &Arc<WorkerState>, id: JobId, env: &Envelope) {
 }
 
 async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> Response {
+    take_envelope(&st, env, false).await
+}
+
+/// Takes a dispatched job (the gateway's `POST /fv/v1/internal/jobs`, or a
+/// dispatcher push): 202 taken, 200 already held here, else the refusal.
+/// `takeover`: adopt even if another worker's heartbeat on the row is fresh
+/// (a dispatcher re-dispatch after it declared that worker lost).
+pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool) -> Response {
     let id = env.job.id;
     if st.submitted.lock().unwrap_or_else(|p| p.into_inner()).contains(&id) {
         let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
@@ -371,7 +397,7 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
         return err(&ApiError::queue_full(format!("worker queue is full ({} queued)", s.queued_batch)).with_retry_after(5));
     }
     let mut job = env.job.clone();
-    if let Err(e) = fetch_inputs(&st, &env, &mut job).await {
+    if let Err(e) = fetch_inputs(st, &env, &mut job).await {
         let _ = tokio::fs::remove_dir_all(st.ctx.inputs_dir(id)).await;
         return match e {
             // The gateway retries with the input in the store.
@@ -388,7 +414,7 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
     job.dispatched_at = Some(st.ctx.now());
     let t_adopt = std::time::Instant::now();
     let adopted = match &st.d1 {
-        Some(d1) => d1.adopt(job).await,
+        Some(d1) => d1.adopt_with(job, takeover).await,
         None => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
     };
     metrics::histogram!("fv_worker_adopt_seconds").record(t_adopt.elapsed().as_secs_f64());
@@ -406,7 +432,7 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
         let _ = apply_event(&st.ctx, id, JobEvent::Failed(e.clone())).await;
         return err(&e);
     }
-    cleanup_inputs(&st, id, &env);
+    cleanup_inputs(st, id, &env);
     tracing::info!(job = %id, attempt = env.attempt, pool = ?env.pool, "worker: took a dispatched job");
     let status = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_else(|| "queued".into());
     (StatusCode::ACCEPTED, Json(json!({"id": id.to_string(), "status": status, "worker": st.worker_id}))).into_response()

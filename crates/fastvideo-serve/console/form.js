@@ -124,7 +124,15 @@ function scalarField(name, prop, { onChange }) {
       r.oninput = () => { out.textContent = r.value; onChange(); };
       return {
         node: el('div', {}, r), get: () => Number(r.value),
-        set: (v) => { r.value = v; out.textContent = String(v); }, out,
+        set: (v) => { r.value = v; out.textContent = String(r.value); }, out,
+        // A lower maximum for the current choice elsewhere in the form
+        // (`x-fv-max-by-resolution`); the value is clamped to it.
+        setMax: (m) => {
+          r.max = String(m);
+          r.dataset.max = String(m);
+          if (Number(r.value) > m) r.value = String(m);
+          out.textContent = r.value;
+        },
       };
     }
     const inp = el('input', { id, inputmode: 'numeric', 'data-input': name, placeholder: nullable(prop) ? 'random' : '' });
@@ -150,8 +158,21 @@ function scalarField(name, prop, { onChange }) {
 }
 
 // Builds the form into `root`. Returns {values(), setValues(v), reset(), busy()}.
-export function buildForm(schema, root, { upload, onChange = () => {} }) {
+export function buildForm(schema, root, { upload, onChange: notify = () => {} }) {
   const props = schema.properties || {};
+  // Limits that depend on the chosen resolution (the H3 1080P tier's
+  // shorter duration cap, `x-fv-max-by-resolution`).
+  const applyLimits = () => {
+    const res = fields.resolution ? fields.resolution.get() : null;
+    for (const f of Object.values(fields)) {
+      const by = f.prop['x-fv-max-by-resolution'];
+      if (!by || !f.setMax) continue;
+      const base = inner(f.prop).maximum;
+      const cap = res !== null && Object.prototype.hasOwnProperty.call(by, res) ? Math.min(by[res], base) : base;
+      f.setMax(cap);
+    }
+  };
+  const onChange = () => { applyLimits(); notify(); };
   const order = schema['x-fal-order-properties'] || Object.keys(props);
   const required = new Set(schema.required || []);
   const fields = {};
@@ -184,6 +205,7 @@ export function buildForm(schema, root, { upload, onChange = () => {} }) {
     }
   }
   root.replaceChildren(primary, advancedBody.childNodes.length ? advanced : '');
+  applyLimits();
 
   function values() {
     const out = {};
@@ -198,6 +220,9 @@ export function buildForm(schema, root, { upload, onChange = () => {} }) {
     return out;
   }
   function setValues(v) {
+    // Lift the dependent limits first so a restored value is not clamped
+    // by the previous resolution's cap.
+    for (const f of Object.values(fields)) if (f.setMax) f.setMax(inner(f.prop).maximum);
     for (const [name, f] of Object.entries(fields)) {
       if (v && Object.prototype.hasOwnProperty.call(v, name)) f.set(v[name]);
       else f.set(f.prop.default ?? (baseType(f.prop) === 'array' ? [] : null));

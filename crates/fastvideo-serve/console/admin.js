@@ -52,10 +52,52 @@ async function listKeys() {
   }
 }
 
-$('admin-save').onclick = () => { session.set(K.admin, $('admintoken').value.trim()); listKeys(); };
+// Experimental feature flags (GET/PUT /fv/v1/admin/flags).
+async function listFlags() {
+  const table = $('flags');
+  if (!token()) {
+    table.hidden = true; $('flags-empty').hidden = false;
+    $('flags-empty').textContent = 'Enter the admin token to see the experimental features.';
+    return;
+  }
+  try {
+    const { flags, backend } = await request('GET', '/fv/v1/admin/flags', { auth: 'admin' });
+    $('flags-backend').textContent = 'store: ' + backend; $('flags-backend').hidden = false;
+    table.tBodies[0].replaceChildren(...flags.map((f) => {
+      const box = el('input', { type: 'checkbox', 'data-flag': f.name, 'aria-label': f.name });
+      box.checked = !!f.enabled;
+      box.onchange = async () => {
+        const on = box.checked;
+        const what = on ? 'Enable' : 'Disable';
+        if (!confirm(what + ' the experimental feature "' + f.name + '"?\n\n' + f.description)) { box.checked = !on; return; }
+        box.disabled = true;
+        try {
+          await request('PUT', '/fv/v1/admin/flags/' + encodeURIComponent(f.name), { auth: 'admin', body: { enabled: on } });
+          setMsg('flags-msg', f.name + (on ? ' enabled.' : ' disabled.'), 'ok');
+          await listFlags();
+        } catch (e) { box.checked = !on; box.disabled = false; setMsg('flags-msg', e.message, 'bad'); }
+      };
+      return el('tr', { 'data-flag-row': f.name, 'data-enabled': String(!!f.enabled) },
+        el('td', { class: 'mono' }, f.name),
+        el('td', {}, f.description),
+        el('td', {}, f.default ? 'on' : 'off'),
+        el('td', { title: f.updated_at ? new Date(f.updated_at).toISOString() : '' }, f.updated_at ? ago(f.updated_at) : '—'),
+        el('td', {}, el('label', { class: 'check' }, box, el('span', { class: 'pill ' + (f.enabled ? 'ok' : '') }, f.enabled ? 'on' : 'off'))));
+    }));
+    table.hidden = flags.length === 0;
+    $('flags-empty').hidden = flags.length !== 0;
+    $('flags-empty').textContent = 'This server has no experimental features.';
+  } catch (e) {
+    table.hidden = true; $('flags-empty').hidden = false;
+    $('flags-empty').textContent = 'Experimental features are hidden until the admin token is accepted.';
+    if (e.status !== 401) setMsg('flags-msg', e.message, 'bad');
+  }
+}
+
+$('admin-save').onclick = () => { session.set(K.admin, $('admintoken').value.trim()); listKeys(); listFlags(); };
 $('admintoken').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('admin-save').click(); });
-$('admin-clear').onclick = () => { session.set(K.admin, ''); $('admintoken').value = ''; listKeys(); };
-$('refresh').onclick = listKeys;
+$('admin-clear').onclick = () => { session.set(K.admin, ''); $('admintoken').value = ''; listKeys(); listFlags(); };
+$('refresh').onclick = () => { listKeys(); listFlags(); };
 
 $('mint').onclick = async () => {
   const name = $('keyname').value.trim();
@@ -83,3 +125,4 @@ $('copy-minted').onclick = async () => {
 $('hide-minted').onclick = () => { $('minted-key').textContent = ''; $('minted').hidden = true; };
 
 listKeys();
+listFlags();

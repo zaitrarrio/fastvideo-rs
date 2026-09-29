@@ -317,6 +317,14 @@ impl D1JobStore {
     /// changes) means refused; the conditions are checked by SQLite inside
     /// the statement, so two workers racing for a row cannot both win.
     pub async fn adopt(&self, job: Job) -> Result<Job, StoreError> {
+        self.adopt_with(job, false).await
+    }
+
+    /// [`D1JobStore::adopt`]; with `takeover` another worker's fresh
+    /// heartbeat does not block it (a dispatcher that owns the assignment,
+    /// e.g. the pool Durable Object re-dispatching after it declared the
+    /// other worker lost; docs/serve/gateway-cloudflare.md).
+    pub async fn adopt_with(&self, job: Job, takeover: bool) -> Result<Job, StoreError> {
         if let Some(e) = self.lock().jobs.get(&job.id) {
             return Ok(e.job.clone());
         }
@@ -325,7 +333,8 @@ impl D1JobStore {
         let dispatched = serde_json::to_value(&job).map_err(enc)?.get("dispatched_at").cloned().unwrap_or(Value::Null);
         let stale_ms = self.opts.stale_after.unwrap_or(Duration::from_secs(900)).as_millis() as i64;
         let mut params = row_params(&job, Some(&self.opts.worker_id))?;
-        params.extend([json!(resolved), dispatched, json!(self.opts.worker_id), json!(now_ms() - stale_ms)]);
+        let fresh_after = if takeover { now_ms() + 1 } else { now_ms() - stale_ms };
+        params.extend([json!(resolved), dispatched, json!(self.opts.worker_id), json!(fresh_after)]);
         let stmt = Stmt::new(
             format!(
                 "INSERT INTO jobs ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \

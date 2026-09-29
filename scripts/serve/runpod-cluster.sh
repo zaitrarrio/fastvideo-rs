@@ -59,6 +59,15 @@
 # older script keeps passing its own FV_ADMIN_TOKEN). Workers always need
 # the internal token (every route but health, /metrics and signed /files).
 #
+# GitHub token (optional): when $FV_GITHUB_TOKEN_FILE (default
+# /root/.config/fv/github_token) exists with mode 600, its content goes into
+# the gateway pod's env as FV_GITHUB_TOKEN, so the console's Deployments page
+# can Promote / Rollback (it dispatches .github/workflows/release.yml;
+# docs/serve/releases.md). It is read by jq straight from the file: never
+# printed, never in the state file, the ledger or the repo. Another mode is
+# refused with a warning (chmod 600 it); no file: Promote / Rollback answer
+# 503 "not configured" and their dry runs still work.
+#
 # Backstops (deadline = create + FV_CLUSTER_CAP_S, default 6000 s):
 # - pod side: the gateway pod runs a watchdog that deletes the four workers
 #   and itself at the deadline, or as soon as the account balance drops
@@ -85,6 +94,8 @@ source "$HERE/../gpu/lib.sh"
 source "$HERE/variants.sh"
 # shellcheck source-path=SCRIPTDIR source=lib/registry.sh
 source "$HERE/lib/registry.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
+source "$HERE/../gpu/runpod-price.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
@@ -225,6 +236,22 @@ spawn_local_backstop() {
   st_set --arg pid "$!" '.local_backstop_pid = ($pid|tonumber)'
 }
 
+# stdin: the gateway's env (JSON object) -> stdout: the same plus
+# FV_GITHUB_TOKEN from $GITHUB_TOKEN_FILE when that file is mode 600 (see
+# the header; the token is read by jq from the file, never printed).
+GITHUB_TOKEN_FILE="${FV_GITHUB_TOKEN_FILE:-/root/.config/fv/github_token}"
+with_github_token() {
+  local f="$GITHUB_TOKEN_FILE"
+  if [[ -f "$f" && -r "$f" ]]; then
+    if [[ "$(stat -c %a "$f" 2>/dev/null)" == 600 ]]; then
+      jq -c --rawfile gh "$f" '($gh | gsub("\\s"; "")) as $t | if $t == "" then . else . + {FV_GITHUB_TOKEN: $t} end'
+      return
+    fi
+    log "WARNING: $f is not mode 600: FV_GITHUB_TOKEN not passed to the gateway (chmod 600 it)"
+  fi
+  cat
+}
+
 create_gateway() {
   local image="$1" dc="$2" flavor resp pod env payload dcs
   env="$(jq -n --argjson s "$SECRET_ENV_JSON" --arg tok "$(st .internal_token)" --arg sign "$(st .url_signing_key)" \
@@ -234,7 +261,7 @@ create_gateway() {
       FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth,
       FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign, FV_GATEWAY_TOML_B64: $toml,
       FV_CLUSTER_DEADLINE: $dl, FV_MIN_BALANCE: $min, FV_BACKSTOP_API_KEY: $key, RUST_LOG: "info"}
-      + (if $recipient != "" then {FV_ADMIN_TOKEN_RECIPIENT: $recipient} else {FV_ADMIN_TOKEN: $admin} end)')"
+      + (if $recipient != "" then {FV_ADMIN_TOKEN_RECIPIENT: $recipient} else {FV_ADMIN_TOKEN: $admin} end)' | with_github_token)"
   for dcs in "[\"$dc\"]" "null"; do
     for flavor in $CPU_FLAVORS; do
       payload="$(jq -n --arg image "$image" --arg flavor "$flavor" --argjson dcs "$dcs" --arg boot "$GATEWAY_BOOT" \
@@ -277,6 +304,8 @@ create_worker() {
           env: ($s + $ident + {FV_SERVE_MODE: "http", FV_SERVE_ROLE: "worker", FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign,
             FV_PUBLIC_BASE_URL: $gw, FV_WORKER_CONFIG: $cfg, FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
             FV_JOBS_HEARTBEAT_S: "10", RUST_LOG: "info"})}')"
+      # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
+      fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE "$dc" || continue
       if ! resp="$(rest POST /pods "$payload" 2>&1)"; then
         log "$pool: no $gpu in $dc: $(jq -r '.error // .message // .' <<<"$resp" 2>/dev/null | head -c 160)"
         continue
@@ -322,7 +351,7 @@ patch_gateway() {
       FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign, FV_GATEWAY_TOML_B64: $toml,
       FV_CLUSTER_DEADLINE: $dl, FV_MIN_BALANCE: $min, FV_BACKSTOP_API_KEY: $key, FV_CLUSTER_PODS: $pods, RUST_LOG: "info"}
       + (if $recipient != "" then {FV_ADMIN_TOKEN_RECIPIENT: $recipient} else {FV_ADMIN_TOKEN: $admin} end)
-      + ($urls | to_entries | map({key: ("FV_POOL_" + (.key | ascii_upcase | gsub("-"; "_")) + "_URLS"), value: .value.url}) | from_entries)')"
+      + ($urls | to_entries | map({key: ("FV_POOL_" + (.key | ascii_upcase | gsub("-"; "_")) + "_URLS"), value: .value.url}) | from_entries)' | with_github_token)"
   body="$(jq -nc --argjson e "$env" --arg image "$image" '{env: $e} + (if $image == "" then {} else {imageName: $image} end)')"
   rest PATCH "/pods/$(st .gateway.pod)" "$body" >/dev/null
   ledger "pod-patched $(st .gateway.pod) cluster-gateway pools=$(jq -r '.workers | keys | join(",")' "$STATE") deadline=$(utc "$(st .deadline)")${image:+ image=$image}"

@@ -1,0 +1,467 @@
+t_s,gap_us,cause,before,after
+0.2092,227.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+0.2095,186.5,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+0.2794,215.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+0.2797,34.8,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+0.2797,162.8,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+0.2801,87.9,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+0.2972,231.0,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+0.2979,143.8,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+0.2981,2132.5,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+0.3005,62.8,host_cpu,block_copy,memcpy HtoD
+0.3007,49.1,launch_latency,mx_gather_nd,memcpy HtoD
+0.3007,63.4,launch_latency,mx_gather_nd,memcpy HtoD
+0.3009,94.7,host_cpu,mx_gather_nd,mx_block_copy
+0.301,85.6,host_cpu,mx_block_copy,memcpy HtoD
+0.3011,75.8,host_cpu,memcpy HtoD,memcpy HtoD
+0.3013,152.1,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+0.6051,243.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+0.6054,157.5,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+0.6814,209.9,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+0.6817,34.6,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+0.6817,158.2,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+0.682,90.0,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+0.6992,219.4,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+0.6995,21.8,launch_latency,pack_rgb_u8,memcpy DtoH
+0.6999,137.5,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+0.7001,2121.0,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+0.7025,49.3,launch_latency,block_copy,memcpy HtoD
+0.7026,46.4,launch_latency,mx_gather_nd,memcpy HtoD
+0.7027,57.1,launch_latency,mx_gather_nd,memcpy HtoD
+0.7028,83.0,host_cpu,mx_gather_nd,mx_block_copy
+0.7029,92.9,host_cpu,mx_block_copy,memcpy HtoD
+0.7031,58.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.7032,156.8,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+1.0317,221.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.032,195.7,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+1.1142,223.7,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.1144,26.4,host_cpu,mx_gather_nd,cast_bf16_f32_bias_act
+1.1145,32.6,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+1.1145,160.0,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+1.1148,74.8,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+1.132,218.5,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+1.1322,21.7,launch_latency,pack_rgb_u8,memcpy DtoH
+1.1327,143.2,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+1.1329,2113.7,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+1.1353,54.0,launch_latency,block_copy,memcpy HtoD
+1.1354,45.9,launch_latency,mx_gather_nd,memcpy HtoD
+1.1355,57.1,launch_latency,mx_gather_nd,memcpy HtoD
+1.1356,94.9,host_cpu,mx_gather_nd,mx_block_copy
+1.1357,86.3,host_cpu,mx_block_copy,memcpy HtoD
+1.1358,72.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.136,141.3,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+1.4341,241.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.4344,196.9,host_cpu,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+1.509,210.3,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.5093,32.7,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+1.5093,4367.7,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+1.5139,88.5,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+1.531,224.3,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+1.5313,22.4,launch_latency,pack_rgb_u8,memcpy DtoH
+1.5318,153.5,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+1.5319,2144.4,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+1.5344,55.9,host_cpu,block_copy,memcpy HtoD
+1.5345,61.8,launch_latency,mx_gather_nd,memcpy HtoD
+1.5346,38.1,launch_latency,mx_gather_nd,memcpy HtoD
+1.5347,442.1,host_cpu,mx_gather_nd,mx_block_copy
+1.5351,126.1,host_cpu,mx_block_copy,memcpy HtoD
+1.5353,72.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.5355,98.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.5356,118.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.5358,131.2,host_cpu,memcpy HtoD,memcpy HtoD
+1.536,104.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.85,159.4,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.8501,50.6,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+1.9247,120.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+1.9248,23.4,launch_latency,cast_bf16_f32_bias_act,memcpy HtoD
+1.9248,52.4,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+1.925,27.8,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+1.9421,117.9,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+1.9428,90.2,host_cpu,memcpy DtoH,memcpy DtoH
+1.9429,2071.6,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+1.9452,35.0,launch_latency,block_copy,memcpy HtoD
+1.9453,57.1,launch_latency,mx_gather_nd,memcpy HtoD
+1.9454,40.9,launch_latency,mx_gather_nd,memcpy HtoD
+1.9455,420.5,host_cpu,mx_gather_nd,mx_block_copy
+1.9459,102.2,host_cpu,mx_block_copy,memcpy HtoD
+1.9461,62.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.9462,76.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.9464,95.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.9465,87.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.9467,76.9,host_cpu,memcpy HtoD,memcpy HtoD
+2.2578,139.5,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+2.2579,42.8,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (i…"
+2.3324,112.5,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+2.3325,45.4,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+2.3498,113.5,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+2.3505,91.8,host_cpu,memcpy DtoH,memcpy DtoH
+2.3506,2086.4,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+2.3529,30.4,launch_latency,block_copy,memcpy HtoD
+2.3531,45.7,launch_latency,mx_gather_nd,memcpy HtoD
+2.3532,397.8,host_cpu,mx_gather_nd,mx_block_copy
+2.3536,45.1,host_cpu,mx_block_copy,memcpy HtoD
+2.3538,27.8,launch_latency,mx_block_copy,memcpy HtoD
+2.3539,22.6,launch_latency,mx_block_copy,memcpy HtoD
+2.3541,146324.3,host_api:cuGraphInstantiateWithFlags,mx_block_copy,cast_f32_bf16
+2.8076,27411.4,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+2.9088,253.9,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+2.909,22.4,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+2.9091,46.3,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+2.9091,184.6,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+2.9095,98.0,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+2.9267,254.5,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+2.9269,63.6,host_cpu,pack_rgb_u8,memcpy DtoH
+2.9311,594.3,host_api:cuMemcpyDtoHAsync_v2,memcpy DtoH,memcpy DtoH
+2.9317,2095.5,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+2.934,59.1,host_cpu,block_copy,memcpy HtoD
+2.9341,48.3,launch_latency,mx_gather_nd,memcpy HtoD
+2.9342,56.4,launch_latency,mx_gather_nd,memcpy HtoD
+2.9343,1145.2,host_cpu,mx_gather_nd,mx_block_copy
+2.9355,47.1,host_cpu,mx_block_copy,memcpy HtoD
+2.9356,29.2,launch_latency,mx_block_copy,memcpy HtoD
+2.9357,26.0,launch_latency,mx_block_copy,memcpy HtoD
+2.9358,37.2,launch_latency,mx_block_copy,memcpy HtoD
+2.9359,32.5,launch_latency,mx_block_copy,memcpy HtoD
+2.936,22.5,launch_latency,mx_block_copy,memcpy HtoD
+2.9361,2679.5,launch_latency,mx_block_copy,cast_f32_bf16
+3.1187,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+3.246,893.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+3.3206,212.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+3.3208,23.4,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+3.3208,45.3,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+3.3209,200.9,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+3.3212,86.1,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+3.3384,227.6,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+3.3391,145.3,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+3.3393,2123.3,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+3.3417,69.0,host_cpu,block_copy,memcpy HtoD
+3.3418,61.1,host_cpu,mx_gather_nd,memcpy HtoD
+3.3419,67.1,launch_latency,mx_gather_nd,memcpy HtoD
+3.342,513.0,host_cpu,mx_gather_nd,mx_block_copy
+3.3425,49.9,host_cpu,mx_block_copy,memcpy HtoD
+3.3426,29.3,launch_latency,mx_block_copy,memcpy HtoD
+3.3427,31.9,launch_latency,mx_block_copy,memcpy HtoD
+3.3428,31.5,launch_latency,mx_block_copy,memcpy HtoD
+3.3429,39.2,launch_latency,mx_block_copy,memcpy HtoD
+3.343,30.5,launch_latency,mx_block_copy,memcpy HtoD
+3.3431,2806.5,launch_latency,mx_block_copy,cast_f32_bf16
+3.5259,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+3.6532,880.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+3.7279,208.4,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+3.7281,23.7,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+3.7281,30.7,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+3.7282,194.7,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+3.7285,67.2,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+3.7457,121.3,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+3.7463,109.5,host_cpu,memcpy DtoH,memcpy DtoH
+3.7465,2092.8,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+3.7488,45.1,launch_latency,block_copy,memcpy HtoD
+3.7489,39.2,launch_latency,mx_gather_nd,memcpy HtoD
+3.749,26.2,launch_latency,mx_gather_nd,memcpy HtoD
+3.749,541.6,host_cpu,mx_gather_nd,mx_block_copy
+3.7496,54.3,host_cpu,mx_block_copy,memcpy HtoD
+3.7497,72.2,launch_latency,mx_block_copy,memcpy HtoD
+3.7499,38.0,launch_latency,mx_block_copy,memcpy HtoD
+3.75,51.6,launch_latency,mx_block_copy,memcpy HtoD
+3.7501,50.0,launch_latency,mx_block_copy,memcpy HtoD
+3.7502,39.3,launch_latency,mx_block_copy,memcpy HtoD
+3.7503,2662.1,launch_latency,mx_block_copy,cast_f32_bf16
+3.9331,53.8,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+4.0604,851.9,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.135,271.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.1353,74.3,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+4.1354,45.9,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+4.1354,25.2,host_api:cuMemAllocAsync,memcpy HtoD,tanh_scaled
+4.1355,206.2,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+4.1358,120.4,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.153,133.6,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+4.1537,126.8,host_cpu,memcpy DtoH,memcpy DtoH
+4.1539,2163.6,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+4.1563,21.0,launch_latency,memcpy HtoD,block_copy
+4.1563,70.6,host_cpu,block_copy,memcpy HtoD
+4.1564,38.6,launch_latency,mx_gather_nd,memcpy HtoD
+4.1565,22.6,launch_latency,mx_gather_nd,memcpy HtoD
+4.1566,532.4,host_cpu,mx_gather_nd,mx_block_copy
+4.1571,40.1,host_cpu,mx_block_copy,memcpy HtoD
+4.1573,26.0,launch_latency,mx_block_copy,memcpy HtoD
+4.1574,38.3,launch_latency,mx_block_copy,memcpy HtoD
+4.1575,44.6,launch_latency,mx_block_copy,memcpy HtoD
+4.1576,40.2,launch_latency,mx_block_copy,memcpy HtoD
+4.1577,31.0,launch_latency,mx_block_copy,memcpy HtoD
+4.1578,2776.1,launch_latency,mx_block_copy,cast_f32_bf16
+4.3408,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+4.4681,871.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.5428,203.4,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.543,26.0,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+4.543,29.7,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+4.5431,176.7,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+4.5434,81.2,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.547,6295.1,host_api:cuMemAllocAsync,upsample_nearest,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT
+4.5534,20.6,host_cpu,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.5669,208.4,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+4.5671,51.6,host_cpu,pack_rgb_u8,memcpy DtoH
+4.5689,563.4,host_api:cuMemcpyDtoHAsync_v2,memcpy DtoH,memcpy DtoH
+4.5695,2146.0,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+4.5719,59.8,host_cpu,block_copy,memcpy HtoD
+4.572,40.1,launch_latency,mx_gather_nd,memcpy HtoD
+4.572,60.5,launch_latency,mx_gather_nd,memcpy HtoD
+4.5721,499.2,host_cpu,mx_gather_nd,mx_block_copy
+4.5727,49.4,host_cpu,mx_block_copy,memcpy HtoD
+4.5728,29.6,launch_latency,mx_block_copy,memcpy HtoD
+4.5729,32.0,launch_latency,mx_block_copy,memcpy HtoD
+4.573,32.0,launch_latency,mx_block_copy,memcpy HtoD
+4.5731,30.1,launch_latency,mx_block_copy,memcpy HtoD
+4.5733,2750.1,launch_latency,mx_block_copy,cast_f32_bf16
+4.7563,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+4.8836,900.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.9584,114.2,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+4.9585,29.0,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+4.9585,176.8,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+4.9589,73.1,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.976,96.7,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+4.9767,94.6,host_cpu,memcpy DtoH,memcpy DtoH
+4.9768,2077.4,host_cpu,memcpy DtoH,mx_block_copy
+4.9789,400.4,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+4.9794,29.0,launch_latency,clamp_f,memcpy HtoD
+4.9797,343.7,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.9803,127.9,host_cpu,clamp_f,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.9823,1214.7,host_cpu,upsample_nearest,nvjet_sm100_sss_tf32_176x128_32x7_1x2_2cta_h_bz_NNN
+4.9836,268.6,host_cpu,nvjet_sm100_sss_tf32_176x128_32x7_1x2_2cta_h_bz_NNN,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+4.9862,3281.5,host_cpu,clamp_f,memcpy HtoD
+4.9984,337.4,host_cpu,clamp_f,memcpy HtoD
+5.0089,3447.5,host_api:cuMemAllocAsync,nvjet_sm100_sss_tf32_256x128_32x5_2x1_2cta_v_bz_NNT,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+5.0682,40864.8,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+5.1093,56.6,host_cpu,block_copy,memcpy HtoD
+5.1094,26.5,launch_latency,mx_gather_nd,memcpy HtoD
+5.1095,52.7,launch_latency,mx_gather_nd,memcpy HtoD
+5.1096,413.3,host_cpu,mx_gather_nd,mx_block_copy
+5.11,44.2,host_cpu,mx_block_copy,memcpy HtoD
+5.1101,25.2,launch_latency,mx_block_copy,memcpy HtoD
+5.1102,21.0,launch_latency,mx_block_copy,memcpy HtoD
+5.1105,22.9,launch_latency,mx_block_copy,memcpy HtoD
+5.1106,2673.8,launch_latency,mx_block_copy,cast_f32_bf16
+5.2936,53.5,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+5.421,867.3,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+5.4957,180.2,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+5.4959,28.0,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+5.4959,29.9,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+5.496,178.1,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+5.4962,327.3,host_api:cuMemAllocAsync,add_bias_inplace,clamp_f
+5.4966,89.6,host_api:cuMemAllocAsync,block_copy,block_copy
+5.4967,119.4,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+5.4971,44.3,host_api:cuMemAllocAsync,add_bias_inplace,elem_add
+5.514,119.2,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+5.5146,113.2,host_cpu,memcpy DtoH,memcpy DtoH
+5.5148,2265.4,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+5.5173,65.0,host_cpu,block_copy,memcpy HtoD
+5.5174,50.9,launch_latency,mx_gather_nd,memcpy HtoD
+5.5175,61.3,launch_latency,mx_gather_nd,memcpy HtoD
+5.5176,522.3,host_cpu,mx_gather_nd,mx_block_copy
+5.5181,44.8,host_cpu,mx_block_copy,memcpy HtoD
+5.5183,41.6,launch_latency,mx_block_copy,memcpy HtoD
+5.5184,46.9,launch_latency,mx_block_copy,memcpy HtoD
+5.5185,45.2,launch_latency,mx_block_copy,memcpy HtoD
+5.5186,34.2,launch_latency,mx_block_copy,memcpy HtoD
+5.5187,32.4,launch_latency,mx_block_copy,memcpy HtoD
+5.5188,2791.9,launch_latency,mx_block_copy,cast_f32_bf16
+5.7019,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+5.8292,835.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+5.9039,181.7,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+5.9041,22.9,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+5.9041,36.4,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+5.9041,184.1,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+5.9045,62.0,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+5.9216,103.2,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+5.9222,133.6,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+5.9223,2035.4,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+5.9246,35.6,launch_latency,block_copy,memcpy HtoD
+5.9247,46.3,launch_latency,mx_gather_nd,memcpy HtoD
+5.9248,58.5,launch_latency,mx_gather_nd,memcpy HtoD
+5.9249,476.5,host_cpu,mx_gather_nd,mx_block_copy
+5.9254,28.4,launch_latency,mx_block_copy,mx_block_copy
+5.9254,48.0,host_cpu,mx_block_copy,memcpy HtoD
+5.9255,21.8,launch_latency,mx_block_copy,memcpy HtoD
+5.9256,27.4,launch_latency,mx_block_copy,memcpy HtoD
+5.926,2661.7,launch_latency,mx_block_copy,cast_f32_bf16
+6.1089,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+6.2363,822.9,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+6.3109,181.5,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+6.3111,30.2,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+6.3112,189.1,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+6.3115,52.9,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+6.3286,200.8,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+6.3294,147.8,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+6.3295,2105.8,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+6.3319,43.3,launch_latency,block_copy,memcpy HtoD
+6.332,50.1,host_cpu,mx_gather_nd,memcpy HtoD
+6.3321,43.9,launch_latency,mx_gather_nd,memcpy HtoD
+6.3322,485.7,host_cpu,mx_gather_nd,mx_block_copy
+6.3327,47.5,host_cpu,mx_block_copy,memcpy HtoD
+6.3329,29.8,launch_latency,mx_block_copy,memcpy HtoD
+6.333,28.7,launch_latency,mx_block_copy,memcpy HtoD
+6.3332,25.7,launch_latency,mx_block_copy,memcpy HtoD
+6.3333,2848.4,launch_latency,mx_block_copy,cast_f32_bf16
+6.5164,53.5,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+6.6438,869.5,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+6.7185,179.5,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+6.7187,21.5,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+6.7187,30.4,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+6.7188,183.2,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+6.7191,53.5,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+6.7362,172.5,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+6.7369,160.6,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+6.7371,2073.3,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+6.7394,67.4,host_cpu,block_copy,memcpy HtoD
+6.7395,52.1,launch_latency,mx_gather_nd,memcpy HtoD
+6.7396,37.5,launch_latency,mx_gather_nd,memcpy HtoD
+6.7397,481.9,host_cpu,mx_gather_nd,mx_block_copy
+6.7402,42.9,host_cpu,mx_block_copy,memcpy HtoD
+6.7403,63.0,launch_latency,mx_block_copy,memcpy HtoD
+6.7405,40.2,launch_latency,mx_block_copy,memcpy HtoD
+6.7406,42.9,launch_latency,mx_block_copy,memcpy HtoD
+6.7407,33.1,launch_latency,mx_block_copy,memcpy HtoD
+6.7408,40.4,launch_latency,mx_block_copy,memcpy HtoD
+6.7409,2704.5,launch_latency,mx_block_copy,cast_f32_bf16
+6.9239,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+7.0513,839.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.126,175.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.1262,22.2,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+7.1262,31.6,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+7.1263,187.2,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+7.1266,66.5,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+7.133,2971.8,launch_latency,add_bias_inplace,elem_add
+7.1467,86.7,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+7.1474,147.6,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+7.1475,2124.1,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+7.1499,51.4,launch_latency,block_copy,memcpy HtoD
+7.15,40.6,launch_latency,mx_gather_nd,memcpy HtoD
+7.1501,59.0,launch_latency,mx_gather_nd,memcpy HtoD
+7.1502,510.2,host_cpu,mx_gather_nd,mx_block_copy
+7.1507,40.0,host_cpu,mx_block_copy,memcpy HtoD
+7.1508,30.0,launch_latency,mx_block_copy,memcpy HtoD
+7.1509,32.4,launch_latency,mx_block_copy,memcpy HtoD
+7.151,29.4,launch_latency,mx_block_copy,memcpy HtoD
+7.1511,26.6,launch_latency,mx_block_copy,memcpy HtoD
+7.1512,21.6,launch_latency,mx_block_copy,memcpy HtoD
+7.1513,2786.3,launch_latency,mx_block_copy,cast_f32_bf16
+7.3344,53.5,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+7.4618,893.7,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.5366,178.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.5368,63.7,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+7.5368,30.8,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+7.5369,189.4,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+7.5372,61.4,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+7.5544,98.8,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+7.555,134.1,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+7.5552,2014.8,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+7.5574,36.7,launch_latency,block_copy,memcpy HtoD
+7.5575,25.8,launch_latency,mx_gather_nd,memcpy HtoD
+7.5576,47.5,launch_latency,mx_gather_nd,memcpy HtoD
+7.5577,1212.6,host_cpu,mx_gather_nd,mx_block_copy
+7.5589,43.9,host_cpu,mx_block_copy,memcpy HtoD
+7.559,40.0,launch_latency,mx_block_copy,memcpy HtoD
+7.5591,30.2,launch_latency,mx_block_copy,memcpy HtoD
+7.5592,30.7,launch_latency,mx_block_copy,memcpy HtoD
+7.5593,51.0,launch_latency,mx_block_copy,memcpy HtoD
+7.5594,22.2,launch_latency,mx_block_copy,memcpy HtoD
+7.5595,2769.7,launch_latency,mx_block_copy,cast_f32_bf16
+7.7426,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+7.8701,790.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.9447,101.4,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+7.9449,31.6,host_sync:cuStreamSynchronize,mx_gather_nd,cast_bf16_f32_bias_act
+7.9449,116.6,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+7.9623,100.4,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+7.9629,117.6,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+7.9631,2010.1,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+7.9653,32.4,launch_latency,block_copy,memcpy HtoD
+7.9654,40.3,launch_latency,mx_gather_nd,memcpy HtoD
+7.9655,34.8,launch_latency,mx_gather_nd,memcpy HtoD
+7.9655,422.5,host_cpu,mx_gather_nd,mx_block_copy
+7.966,39.8,host_cpu,mx_block_copy,memcpy HtoD
+7.9662,27.3,launch_latency,mx_block_copy,memcpy HtoD
+7.9664,25.5,launch_latency,mx_block_copy,memcpy HtoD
+7.9665,22.4,launch_latency,mx_block_copy,memcpy HtoD
+7.9665,2301.1,launch_latency,mx_block_copy,cast_f32_bf16
+8.1492,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+8.2767,866.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+8.3515,177.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+8.3517,20.3,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+8.3517,29.2,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+8.3517,177.9,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+8.3521,65.9,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+8.3692,202.2,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+8.3694,21.0,launch_latency,pack_rgb_u8,memcpy DtoH
+8.3699,144.6,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+8.3701,2130.0,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+8.3725,52.9,launch_latency,block_copy,memcpy HtoD
+8.3725,49.1,launch_latency,mx_gather_nd,memcpy HtoD
+8.3726,52.1,launch_latency,mx_gather_nd,memcpy HtoD
+8.3727,516.9,host_cpu,mx_gather_nd,mx_block_copy
+8.3733,33.8,host_cpu,mx_block_copy,memcpy HtoD
+8.3735,25.2,launch_latency,mx_block_copy,memcpy HtoD
+8.3736,35.3,launch_latency,mx_block_copy,memcpy HtoD
+8.3738,2708.4,launch_latency,mx_block_copy,cast_f32_bf16
+8.5568,54.0,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+8.6844,852.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+8.7591,184.1,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+8.7593,23.6,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+8.7593,29.9,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+8.7594,178.5,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+8.7597,71.4,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+8.7769,208.1,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+8.7771,21.4,launch_latency,pack_rgb_u8,memcpy DtoH
+8.7776,148.5,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+8.7778,2124.1,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+8.7802,63.6,host_cpu,block_copy,memcpy HtoD
+8.7803,53.1,launch_latency,mx_gather_nd,memcpy HtoD
+8.7804,56.3,launch_latency,mx_gather_nd,memcpy HtoD
+8.7805,521.3,host_cpu,mx_gather_nd,mx_block_copy
+8.781,52.9,host_cpu,mx_block_copy,memcpy HtoD
+8.7811,20.9,launch_latency,mx_block_copy,memcpy HtoD
+8.7812,23.0,launch_latency,mx_block_copy,memcpy HtoD
+8.7813,40.9,launch_latency,mx_block_copy,memcpy HtoD
+8.7814,34.3,launch_latency,mx_block_copy,memcpy HtoD
+8.7816,2654.0,launch_latency,mx_block_copy,cast_f32_bf16
+8.9646,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+9.0921,895.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.1668,176.8,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.167,24.1,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+9.1671,29.5,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+9.1671,182.3,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+9.1674,71.4,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+9.1846,114.0,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+9.1852,140.1,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+9.1854,2096.3,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+9.1877,48.5,launch_latency,block_copy,memcpy HtoD
+9.1878,44.6,launch_latency,mx_gather_nd,memcpy HtoD
+9.1879,54.0,launch_latency,mx_gather_nd,memcpy HtoD
+9.188,502.2,host_cpu,mx_gather_nd,mx_block_copy
+9.1885,50.2,host_cpu,mx_block_copy,memcpy HtoD
+9.1888,24.2,launch_latency,mx_block_copy,memcpy HtoD
+9.1891,2680.5,launch_latency,mx_block_copy,cast_f32_bf16
+9.372,53.7,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+9.4995,829.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.5741,182.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.5743,37.9,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+9.5744,178.2,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+9.5747,70.9,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+9.5918,129.3,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+9.5925,136.5,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH
+9.5926,2101.1,host_sync:cuStreamSynchronize,memcpy DtoH,memcpy HtoD
+9.5949,39.6,launch_latency,block_copy,memcpy HtoD
+9.595,46.0,launch_latency,mx_gather_nd,memcpy HtoD
+9.5951,56.2,launch_latency,mx_gather_nd,memcpy HtoD
+9.5952,502.4,host_cpu,mx_gather_nd,mx_block_copy
+9.5957,50.1,host_cpu,mx_block_copy,memcpy HtoD
+9.596,30.1,launch_latency,mx_block_copy,memcpy HtoD
+9.5961,26.6,launch_latency,mx_block_copy,memcpy HtoD
+9.5963,2681.0,launch_latency,mx_block_copy,cast_f32_bf16
+9.7792,53.6,launch_latency,wan_qk_norm_rope16,fvf_split_heads_rows
+9.9066,853.0,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.9813,170.6,host_sync:cuStreamSynchronize,mx_block_copy,mx_gather_nd
+9.9815,20.2,host_api:cuMemAllocAsync,mx_gather_nd,cast_bf16_f32_bias_act
+9.9815,31.4,host_api:cuMemFreeAsync,cast_bf16_f32_bias_act,memcpy HtoD
+9.9815,175.8,host_cpu,tanh_scaled,"implicit_convolve_sgemm<float, float, int, (int)1024, (int)6, (int)7, (int)3, (i…"
+9.9819,63.2,host_cpu,block_copy,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+9.999,191.0,host_sync:cuStreamSynchronize,add_scalar,pack_rgb_u8
+9.9997,150.2,host_api:cuMemGetInfo_v2,memcpy DtoH,memcpy DtoH

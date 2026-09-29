@@ -417,6 +417,41 @@ fn h3_1080p_tier() {
     assert_eq!(err_of(nego(&r, &h3())).param.as_deref(), Some("size"));
 }
 
+/// The 1080P tier's clip length: 5 s by default; 10 s with the
+/// `h3_1080p_long` experimental flag; 768P keeps the whole 4..15 s grid.
+#[test]
+fn h3_1080p_length_cap_and_the_experimental_flag() {
+    let mut caps = h3();
+    caps.canvas = CanvasCaps::h3().with_h3_1080p();
+    let req = |short_edge: u32, secs: f64| {
+        let mut r = t2v("fasth3", "x");
+        r.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge };
+        r.timing = TimingSpec { length: Length::Seconds { value: secs, snap: Snap::AlignUp }, fps: None };
+        r
+    };
+    // Off (the default).
+    assert_eq!(nego(&req(1080, 5.0), &caps).unwrap().num_frames, 124);
+    let e = err_of(nego(&req(1080, 6.0), &caps));
+    assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("duration")), "{e:?}");
+    assert!(e.message.contains("limited to 5 s") && e.message.contains("experimental") && e.message.contains("h3_1080p_long"), "{}", e.message);
+    assert!(precheck(&req(1080, 10.0), &caps).is_err());
+    assert_eq!(nego(&req(768, 15.0), &caps).unwrap().num_frames, 362);
+    // Exact 1920x1080 and a frame count are capped the same way.
+    let mut r = req(1080, 5.0);
+    r.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
+    r.timing = TimingSpec { length: Length::Frames { value: 243, snap: Snap::Exact }, fps: None };
+    assert_eq!(err_of(nego(&r, &caps)).param.as_deref(), Some("num_frames"));
+    // On.
+    fastvideo_protocol::apply_feature_flags(&mut caps, &|f| f == fastvideo_protocol::FLAG_H3_1080P_LONG);
+    assert_eq!(nego(&req(1080, 10.0), &caps).unwrap().num_frames, 243);
+    assert_eq!(nego(&r, &caps).unwrap().num_frames, 243);
+    let e = err_of(nego(&req(1080, 11.0), &caps));
+    assert!(e.message.contains("limited to 10 s") && !e.message.contains("experimental"), "{}", e.message);
+    // Off again: idempotent.
+    fastvideo_protocol::apply_feature_flags(&mut caps, &|_| false);
+    assert!(nego(&req(1080, 10.0), &caps).is_err());
+}
+
 #[test]
 fn h3_exact_canvas_uses_check_canvas() {
     let mut r = t2v("fasth3", "x");

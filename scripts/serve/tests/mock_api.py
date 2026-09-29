@@ -43,6 +43,10 @@ STATE = {
     "drains": [],
     "patches": [],
     "requests": 0,
+    # GPU type -> quoted secure $/hr (GraphQL gpuTypes); others 0.5.
+    "gpu_prices": {"NVIDIA H100 80GB HBM3": 2.99},
+    # Every POST /v1/pods body's GPU types, in order.
+    "pod_creates": [],
 }
 
 
@@ -159,6 +163,14 @@ class H(BaseHTTPRequestHandler):
         if p == "/graphql":
             if self.bearer() != RUNPOD_KEY:
                 return self.reply(401, {"errors": ["bad key"]})
+            query = self.body().get("query", "")
+            gm = re.search(r'gpuTypes\(input: \{id: "([^"]*)"\}\)', query)
+            if gm:
+                price = STATE["gpu_prices"].get(gm.group(1), 0.5)
+                gt = {"id": gm.group(1), "securePrice": price, "communityPrice": price * 0.8}
+                if "lowestPrice" in query:
+                    gt["lowestPrice"] = {"uninterruptablePrice": price}
+                return self.reply(200, {"data": {"gpuTypes": [gt]}})
             return self.reply(200, {"data": {"myself": {"clientBalance": 100.0, "currentSpendPerHr": 1.0}}})
         if p.startswith("/v1/"):
             if self.bearer() != RUNPOD_KEY:
@@ -173,6 +185,8 @@ class H(BaseHTTPRequestHandler):
                     return self.reply(200, list(items.values()))
                 if m == "POST":
                     b = self.body()
+                    if coll == "pods":
+                        STATE["pod_creates"].append(b.get("gpuTypeIds") or [])
                     i = uuid.uuid4().hex[:14]
                     b.update({"id": i, "createdAt": now_str(), "desiredStatus": "RUNNING", "costPerHr": 0.5})
                     items[i] = b

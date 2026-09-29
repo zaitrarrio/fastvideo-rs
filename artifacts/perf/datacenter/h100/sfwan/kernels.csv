@@ -1,0 +1,42 @@
+name,category,count,total_ms,pct_device,mean_us,min_us,max_us,grid,block,cfg_share,n_cfgs,regs,smem
+fa_dc90_fwd_d128,attention,5669,4970.732,51.42,876.83,47.74,1799.23,37x12x1,384x1x1,1.0,1,168,165120
+nvjet_sm90_tst_192x144_64x5_2x1_v_bz_coopB_bias_TNT,gemm,11340,723.198,7.48,63.77,30.72,164.99,2x66x1,384x1x1,1.0,1,168,231692
+mx_unary,norm_elementwise,2835,544.082,5.63,191.92,187.62,198.78,40950x1x1,1024x1x1,1.0,1,16,0
+nvjet_sm90_tst_192x192_64x4_1x1_h_bz_coopB_bias_TNN,gemm,2835,521.484,5.39,183.94,178.11,191.33,1x132x1,384x1x1,1.0,1,168,213228
+wan_qk_norm_rope16,norm_elementwise,8503,461.665,4.78,54.29,36.74,65.25,4680x1x1,256x1x1,1.0,1,32,1024
+mx_block_copy,layout_copy,12163,441.184,4.56,36.27,1.5,39.46,7020x1x1,1024x1x1,0.97,5,16,0
+wan_res_ln,norm_elementwise,5670,385.996,3.99,68.08,61.38,75.46,4680x1x1,256x1x1,1.0,1,32,1024
+mx_merge_heads,layout_copy,5670,282.527,2.92,49.83,47.36,53.02,7020x1x1,1024x1x1,1.0,1,28,0
+nvjet_sm90_tst_192x176_64x4_2x1_v_bz_coopB_bias_TNT,gemm,2834,261.926,2.71,92.42,89.79,96.1,2x66x1,384x1x1,1.0,1,168,205036
+sm80_xmma_fprop_implicit_gemm_tf32f32_tf32f32_f32_nhwckrsc_nchw_tilesize256x64x32_stage3_warpsize4x2x1_g1_tensor16x8x8_execute_kernel__5x_cudnn,vae_conv,242,142.047,1.47,586.97,300.42,3028.83,1x2340x1,256x1x1,0.79,4,190,122880
+wan_res_gate,norm_elementwise,2835,140.304,1.45,49.49,47.9,51.07,7020x1x1,1024x1x1,1.0,1,26,0
+mx_ln_adaln_e,norm_elementwise,2929,102.974,1.07,35.16,33.44,37.44,4680x1x1,256x1x1,1.0,1,30,1024
+"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)2>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>, const T1 *, T2 *)",vae_conv,528,79.127,0.82,149.86,2.24,1223.23,1x2x64,256x1x1,0.29,9,32,4224
+clamp_f,norm_elementwise,660,77.449,0.8,117.35,13.7,1714.91,4680x1x1,1024x1x1,0.29,11,16,0
+block_copy,layout_copy,1211,74.934,0.78,61.88,2.82,254.21,6240x1x1,1024x1x1,0.22,14,16,0
+add_bias_inplace,norm_elementwise,732,61.628,0.64,84.19,20.22,264.93,4680x1x1,1024x1x1,0.26,9,18,0
+cast_f32_bf16,cast_quant,17943,51.653,0.53,2.88,1.31,32.77,2x1x1,1024x1x1,0.63,6,16,0
+fvf_split_heads_rows,layout_copy,2834,41.819,0.43,14.76,14.21,15.78,4680x1x1,256x1x1,1.0,1,25,1024
+upsample_nearest,vae_conv,66,32.784,0.34,496.72,129.57,1346.49,18720x1x1,1024x1x1,0.29,6,28,0
+sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_tf32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize128x16x64_stage1_warpsize4x1x1_g1_tensor16x8x8_alignc4_execute_kernel__5x_cudnn,vae_conv,22,29.781,0.31,1353.69,1284.19,1692.38,1x37440x1,128x1x1,0.86,2,94,4096
+gather_nd,layout_copy,96,24.464,0.25,254.83,225.44,1531.68,7020x1x1,1024x1x1,0.98,2,34,0
+sm90_xmma_gemm_f32f32_tf32f32_f32_nn_n_tilesize128x128x32_warpgroupsize1x1x1_execute_segment_k_off_kernel__5x_cublas,gemm,66,20.664,0.21,313.1,60.93,888.58,132x1x1,384x1x1,1.0,1,168,231424
+elem_add,norm_elementwise,198,18.47,0.19,93.28,24.35,252.7,4680x1x1,1024x1x1,0.29,6,16,0
+apply_rotary_bshd,norm_elementwise,540,16.551,0.17,30.65,29.89,31.68,3510x1x1,1024x1x1,1.0,1,26,0
+sm90_xmma_fprop_implicit_gemm_f32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize64x128x32_warpgroupsize1x1x1_g1_execute_segment_k_off_kernel__5x_cudnn,vae_conv,171,16.122,0.17,94.28,64.13,143.74,30x4x1,384x1x1,1.0,1,168,231424
+"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>, const T1 *, T2 *)",vae_conv,836,14.273,0.15,17.07,2.88,74.46,1x8x256,256x1x1,0.16,12,32,4224
+"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>, const T1 *, T2 *)",vae_conv,440,13.505,0.14,30.69,10.43,278.75,780x4x3,256x1x1,0.43,6,32,4224
+sm90_xmma_fprop_implicit_gemm_f32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize256x128x32_warpgroupsize2x1x1_g1_execute_segment_k_off_kernel__5x_cudnn,vae_conv,76,12.351,0.13,162.51,158.14,166.11,66x2x1,384x1x1,1.0,1,168,231424
+sm90_xmma_fprop_implicit_gemm_f32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize128x128x32_warpgroupsize1x1x1_g1_execute_segment_k_off_kernel__5x_cudnn,vae_conv,144,11.19,0.12,77.71,65.28,166.94,15x8x1,384x1x1,1.0,1,168,231424
+sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize32x32x8_stage3_warpsize1x2x1_g1_ffma_aligna4_alignc4_execute_kernel__5x_cudnn,vae_conv,116,6.635,0.07,57.2,52.64,85.63,48x147x1,64x1x1,0.81,3,92,6528
+mx_gather_nd,layout_copy,360,4.899,0.05,13.61,12.13,15.26,293x1x1,1024x1x1,0.99,2,34,0
+sm90_xmma_fprop_implicit_gemm_f32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize256x128x32_warpgroupsize2x1x1_g1_execute_segment_k_on_kernel__5x_cudnn,vae_conv,27,2.856,0.03,105.76,82.91,154.94,132x1x1,384x1x1,1.0,1,168,231424
+mul_scalar,norm_elementwise,22,1.404,0.01,63.81,61.09,81.63,14040x1x1,1024x1x1,0.86,3,16,0
+add_scalar,norm_elementwise,22,1.402,0.01,63.71,61.06,81.73,14040x1x1,1024x1x1,0.86,3,16,0
+cast_bf16_f32_bias_act,cast_quant,363,0.877,0.01,2.42,1.95,3.14,293x1x1,1024x1x1,0.99,2,18,0
+pack_rgb_u8,layout_copy,20,0.679,0.01,33.93,33.66,34.69,4680x1x1,1024x1x1,1.0,1,16,0
+nvjet_sm90_tst_64x56_64x14_1x4_h_bz_bias_TNT,gemm,95,0.546,0.01,5.74,5.47,5.95,4x21x1,384x1x1,1.0,1,168,231868
+lincomb3,norm_elementwise,133,0.328,0.0,2.47,2.05,3.2,293x1x1,1024x1x1,1.0,1,16,0
+mx_binary,norm_elementwise,95,0.231,0.0,2.43,2.08,2.82,3x1x1,1024x1x1,1.0,1,20,0
+"cask_plugin__5x_cudnn::xmma__5x_cudnn::init_device_workspace_kernel<xmma__5x_cudnn::implicit_gemm::fprop::Warp_specialized_params_non_template<xmma__5x_cudnn::Grid_constant_params>>(T1, bool)",vae_conv,27,0.066,0.0,2.45,2.43,2.53,1x1x1,1x1x1,1.0,1,16,0
+tanh_scaled,norm_elementwise,22,0.056,0.0,2.56,2.34,2.98,293x1x1,1024x1x1,0.86,2,18,0

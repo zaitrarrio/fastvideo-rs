@@ -1,0 +1,242 @@
+t_s,gap_us,cause,before,after
+0.0141,6027.3,host_cpu,memcpy HtoD,memcpy HtoD
+0.0342,6985.3,host_cpu,memcpy HtoD,memcpy HtoD
+0.0412,71.8,launch_latency,memcpy HtoD,memcpy HtoD
+0.0413,128296.1,host_cpu,memcpy HtoD,memcpy HtoD
+0.1767,2972.2,host_cpu,memcpy HtoD,memcpy HtoD
+0.1866,3991.9,host_cpu,memcpy HtoD,memcpy HtoD
+0.1906,55.7,launch_latency,memcpy HtoD,memcpy HtoD
+0.1907,25352.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.2162,142.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+0.2164,21.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_2x1_v_bz_splitK_bias_TNT
+0.217,31.1,host_api:cuMemFreeAsync,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT,cast_f32_bf16
+0.2171,2654.8,host_cpu,cast_f32_bf16,memset
+0.2198,30.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x40_64x16_1x2_h_bz_bias_TNT
+0.2198,256.3,host_api:cuMemAllocAsync,mx_binary,fvf_ltx_res_norm_mod
+0.2203,2069.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+0.2224,276.4,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+0.2322,59.8,host_cpu,cast_f32_bf16,memset
+0.2343,1003.2,host_cpu,fvf_ltx_res_norm_mod,memset
+0.2375,620.4,host_cpu,mx_unary,memset
+0.9992,7157.3,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+1.0066,127.8,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+1.0068,47.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+1.0068,25.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_2x1_v_bz_splitK_bias_TNT
+1.0069,21.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_512x8_64x3_4x1_v_bz_bias_TNT
+1.0075,23.0,host_api:cuMemFreeAsync,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT,cast_f32_bf16
+1.0076,174.5,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+1.0078,216.9,host_api:cuMemAllocAsync,mx_binary,fvf_ltx_res_norm_mod
+1.5362,21.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x40_64x16_1x2_h_bz_bias_TNT
+1.6013,25.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+1.7872,3997.3,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+1.7914,120.3,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+1.7915,22.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+2.3051,46.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+2.3679,27.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+2.3843,22.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+2.5727,3070.0,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+2.576,115.2,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+2.713,23.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+2.9922,37.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+3.3597,3022.1,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+3.3629,108.7,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+3.363,26.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+3.4056,23.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+4.142,3047.2,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+4.1453,113.5,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+4.8199,28.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+4.8226,20.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x40_64x16_1x2_h_bz_bias_TNT
+4.9273,3086.5,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+4.9306,118.2,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+5.1154,26.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_bias_TNN
+5.5553,30.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+5.7076,3183.1,host_cpu,nvjet_sm90_tst_64x8_64x16_2x4_h_bz_bias_TNT,memcpy HtoD
+5.711,119.0,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+6.4875,15593.0,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+6.5144,4657.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.5191,132.7,host_cpu,memcpy HtoD,memcpy HtoD
+6.5192,7592.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.5382,5573.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.5438,126.6,host_cpu,memcpy HtoD,memcpy HtoD
+6.5439,7716.8,host_cpu,memcpy HtoD,memcpy HtoD
+6.5629,6210.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.5691,129.6,host_cpu,memcpy HtoD,memcpy HtoD
+6.5693,7578.7,host_cpu,memcpy HtoD,memcpy HtoD
+6.5881,6100.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.5942,109.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.5944,7607.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.6132,5823.7,host_cpu,memcpy HtoD,memcpy HtoD
+6.619,137.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.6192,7537.7,host_cpu,memcpy HtoD,memcpy HtoD
+6.6379,5815.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.6437,115.8,host_cpu,memcpy HtoD,memcpy HtoD
+6.6438,7645.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.6627,5843.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.6685,125.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.6687,7693.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.6875,5405.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.6929,121.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.693,7631.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.7119,5907.8,host_cpu,memcpy HtoD,memcpy HtoD
+6.7178,141.6,host_cpu,memcpy HtoD,memcpy HtoD
+6.718,7742.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.7369,6065.8,host_cpu,memcpy HtoD,memcpy HtoD
+6.743,127.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.7431,7696.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.762,5817.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.7678,155.5,host_cpu,memcpy HtoD,memcpy HtoD
+6.768,7768.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.7869,5768.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.7927,133.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.7928,7737.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.8118,5738.4,host_cpu,memcpy HtoD,memcpy HtoD
+6.8176,144.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.8177,7879.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.8365,5690.8,host_cpu,memcpy HtoD,memcpy HtoD
+6.8422,133.9,host_cpu,memcpy HtoD,memcpy HtoD
+6.8423,7668.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.8612,5741.7,host_cpu,memcpy HtoD,memcpy HtoD
+6.867,112.3,host_cpu,memcpy HtoD,memcpy HtoD
+6.8671,7767.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.8859,5679.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.8916,120.6,host_cpu,memcpy HtoD,memcpy HtoD
+6.8917,924.3,host_cpu,memcpy HtoD,memcpy HtoD
+6.8953,106.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.8954,10108.2,host_cpu,memcpy HtoD,memcpy HtoD
+6.9202,7461.1,host_cpu,memcpy HtoD,memcpy HtoD
+6.9277,859.0,host_cpu,memcpy HtoD,memcpy HtoD
+6.9312,31997.5,host_sync:cuStreamSynchronize,memcpy HtoD,gather_nd
+6.9633,2217.8,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+6.9656,20.1,host_cpu,memset,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128…
+6.9657,44.3,host_api:cuMemAllocAsync,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float…",cast_bf16_f32_bias_act
+6.9665,1640.3,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+7.0328,58335.9,host_sync:cuEventSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+7.0916,4586158.2,host_cpu,cast_bf16_f32_bias_act,memcpy HtoD
+11.7338,19763.5,host_cpu,memcpy HtoD,memcpy HtoD
+11.8104,25933.7,host_cpu,memcpy HtoD,memcpy HtoD
+11.8364,66.8,launch_latency,memcpy HtoD,memcpy HtoD
+11.8365,497215.1,host_cpu,memcpy HtoD,memcpy HtoD
+12.3617,10265.2,host_cpu,memcpy HtoD,memcpy HtoD
+12.3999,12467.7,host_cpu,memcpy HtoD,memcpy HtoD
+12.4124,65.5,launch_latency,memcpy HtoD,memcpy HtoD
+12.4124,48736.6,host_cpu,memcpy HtoD,memcpy HtoD
+12.4612,33.3,host_cpu,memcpy HtoD,cast_f32_bf16
+12.4612,149.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+12.462,24.3,host_api:cuMemFreeAsync,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT,cast_f32_bf16
+12.4621,3286.2,host_cpu,cast_f32_bf16,memset
+12.4655,553.4,host_api:cuMemAllocAsync,mx_binary,fvf_ltx_res_norm_mod
+12.4667,1688.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.4685,578.7,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+12.5804,26.2,host_api:cuMemAllocAsync,memcpy HtoD,mx_binary
+12.5805,75.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.5879,23.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+12.6442,54.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.6516,26.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+12.7093,30.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.7169,28.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+12.7823,48.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+12.837,25.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.9007,42.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+12.965,21.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+13.0281,25.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+13.1558,22.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+13.2292,34.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+13.3599,38.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+13.548,24.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+13.7427,35.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+13.7502,24.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+14.0069,23.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.0145,20.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x40_64x16_1x2_h_bz_bias_TNT
+14.1397,36.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.2057,29.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.684,39.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.7524,55.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.828,21.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+14.9539,48.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+14.9617,23.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+14.9618,22.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x40_64x16_1x2_h_bz_bias_TNT
+15.0207,37.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.0284,22.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+15.2194,28.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.5489,35.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.6476,120.3,host_api:cuKernelSetAttribute,cast_f32_bf16,nvjet_sm90_tst_128x304_64x3_1x2_h_bz_coopA_bias_TNT
+15.6481,162.8,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+15.6483,52.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_4x1_v_bz_bias_TNT
+15.6484,20.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x8_64x16_2x1_v_bz_splitK_bias_TNT
+15.699,38.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.7627,44.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.8248,35.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.887,37.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.8946,36.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+15.9487,33.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+15.9562,35.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+16.0075,43.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.015,37.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+16.0668,35.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.1269,46.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.2464,36.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.3077,49.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.3152,26.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+16.3691,29.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+16.6752,22.6,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+17.1076,28.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+17.2946,22.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+17.613,20.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+17.7421,1214.7,host_cpu,mx_binary,cast_f32_bf16
+17.7433,58.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+17.7509,21.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_8x64_64x16_4x1_v_bz_bias_TNN
+18.6551,121.3,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,memcpy HtoD
+18.656,112.8,host_api:cuMemAllocAsync,mx_binary,fvf_ltx_res_norm_mod
+21.1412,25.7,host_api:cuMemAllocAsync,memcpy HtoD,mx_binary
+21.1413,53.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x192_64x7_1x2_h_bz_bias_TNN
+21.5307,54965.9,host_sync:cuStreamSynchronize,cast_bf16_f32_bias_act,bcast_binary
+21.5857,193.6,host_cpu,pad_axis,sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize32x32x8_st…
+21.5864,297.3,host_api:cuMemAllocAsync,pad_axis,pad_axis
+21.5867,69.7,host_cpu,pad_axis,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+21.633,75.3,host_api:cuMemcpyDtoHAsync_v2,memcpy DtoH,memcpy DtoH
+21.6331,54045.9,host_cpu,memcpy DtoH,memcpy HtoD
+21.6872,124.9,host_cpu,gather_nd,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+21.6873,199.8,host_cpu,add_bias_inplace,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+21.6928,5423.9,host_api:cuMemAllocAsync,snake_beta,pad_axis
+21.6988,4659.6,host_api:cuMemAllocAsync,snake_beta,pad_axis
+21.7077,5702.6,host_api:cuMemAllocAsync,snake_beta,pad_axis
+21.7183,5657.3,host_api:cuMemAllocAsync,snake_beta,pad_axis
+21.7668,3078.1,host_cpu,memcpy DtoH,gather_nd
+21.7701,50.7,host_cpu,gather_nd,memcpy HtoD
+21.7702,2161.8,host_cpu,ltxv_latent_in,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128…
+21.7724,1859.8,host_cpu,ltxv_norm_silu,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128…
+21.7754,893.0,host_cpu,ltxv_norm_silu,cask_plugin__5x_cudnn::xmma__5x_cudnn::init_device_workspace_kernel<xmma__5x_cud…
+21.7776,540.6,host_cpu,ltxv_norm_silu,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128…
+21.7785,1501.9,host_cpu,ltxv_norm_silu,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128…
+21.7821,469.0,host_cpu,ltxv_norm_silu,memset
+22.7192,1164.3,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+22.7459,1154.3,launch_latency,memcpy DtoH,block_copy
+22.747,22.1,host_api:cuMemFreeAsync,block_copy,mx_block_copy
+22.7727,878.2,launch_latency,memcpy DtoH,mx_binary
+22.799,879.8,launch_latency,memcpy DtoH,bcast_binary
+22.8251,896.2,launch_latency,memcpy DtoH,lincomb3
+22.8287,28.9,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+22.8539,525494.9,host_cpu,memcpy DtoH,block_copy
+23.3794,26.5,host_cpu,block_copy,mx_block_copy
+24.4298,929.8,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+24.4562,919.0,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+24.482,924.9,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+24.4858,1100.9,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+24.5122,172611.2,host_cpu,memcpy DtoH,block_copy
+24.7131,889.7,launch_latency,memcpy DtoH,mx_block_copy
+24.739,906.4,launch_latency,memcpy DtoH,mx_block_copy
+24.7624,1109.1,launch_latency,memcpy DtoH,bcast_binary
+24.7646,35.2,launch_latency,mx_block_copy,mx_binary
+24.7676,1374.5,host_cpu,ltxv_latent_in,memset
+24.769,27.2,host_cpu,memset,sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize64x128x…
+24.7691,2005.6,host_cpu,ltxv_norm_silu,cask_plugin__5x_cudnn::xmma__5x_cudnn::init_device_workspace_kernel<xmma__5x_cud…
+24.7718,1520.3,host_cpu,ltxv_norm_silu,cask_plugin__5x_cudnn::xmma__5x_cudnn::init_device_workspace_kernel<xmma__5x_cud…
+25.2883,85.3,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+25.3138,926.8,launch_latency,memcpy DtoH,block_copy
+25.3148,31.8,host_api:cuMemFreeAsync,block_copy,mx_block_copy
+25.3189,47.5,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+25.3441,90335.4,host_cpu,memcpy DtoH,block_copy
+25.4344,20.0,host_cpu,block_copy,mx_block_copy
+25.4639,929.8,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+25.4655,83.2,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH
+25.4907,927.8,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH

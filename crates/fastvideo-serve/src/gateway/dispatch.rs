@@ -303,7 +303,7 @@ impl Gateway {
                         stage_inputs_ms = (stage_s * 1e3) as u64, dispatch_ms = (dispatch_s * 1e3) as u64, record_ms = (record_s * 1e3) as u64,
                         "gateway: dispatched"
                     );
-                    if self.cfg.stage_inputs_for_retry && p.cfg.retries > 0 && inputs.iter().any(|i| i.artifact.is_none()) {
+                    if self.cfg.stage_inputs_for_retry && p.cfg.retries > 0 && !p.is_edge() && inputs.iter().any(|i| i.artifact.is_none()) {
                         if let Ok(ctx) = self.ctx() {
                             tokio::spawn(stage_for_retry(self.db.clone(), ctx.clone(), self.input_url_ttl, job.id, 1, inputs));
                         }
@@ -391,6 +391,9 @@ impl Gateway {
     pub(crate) async fn dispatch_to(&self, pool: &Pool, job: &Job, inputs: &[InputRef], attempt: u32, exclude: Option<&str>) -> Result<Placed, ApiError> {
         let env = Envelope { job: job.clone(), inputs: inputs.to_vec(), attempt, pool: Some(pool.id().to_owned()) };
         let timeout = Duration::from_secs(pool.cfg.dispatch_timeout_s.max(1));
+        if pool.is_edge() {
+            return self.edge_enqueue(pool, &env, timeout).await;
+        }
         if pool.is_pod() {
             let mut cands: Vec<(String, u32)> = {
                 let st = pool.lock();
@@ -481,7 +484,13 @@ impl Gateway {
     /// Writes (or replaces) the `gw_dispatch` row.
     async fn record(&self, pool: &Pool, id: JobId, placed: &Placed, attempt: u32, inputs: &[InputRef]) -> Result<(), String> {
         let now = now_ms();
-        let kind = if pool.is_pod() { "pod" } else { "runpod-serverless" };
+        let kind = if pool.is_edge() {
+            super::edge::KIND
+        } else if pool.is_pod() {
+            "pod"
+        } else {
+            "runpod-serverless"
+        };
         let rec: Vec<InputRef> = inputs.iter().map(InputRef::for_record).collect();
         let inputs = serde_json::to_string(&rec).unwrap_or_else(|_| "[]".into());
         self.db
@@ -514,7 +523,9 @@ impl Gateway {
             None => return false,
         };
         let pool = self.pool(&row.pool);
-        if row.kind == "pod" {
+        if row.kind == super::edge::KIND {
+            self.edge_cancel(&row, id).await;
+        } else if row.kind == "pod" {
             let r = self.worker_req(reqwest::Method::DELETE, &format!("{}{}", row.target, job_path(id))).timeout(Duration::from_secs(15)).send().await;
             if let Err(e) = r {
                 tracing::warn!(job = %id, error = %e.without_url(), "gateway: forwarding cancel to the worker failed");
