@@ -45,6 +45,7 @@ pub mod autoscale;
 #[cfg(feature = "http-client")]
 pub mod gateway;
 pub mod health;
+pub mod log_ship;
 pub mod metrics;
 pub mod multiworker;
 pub mod native;

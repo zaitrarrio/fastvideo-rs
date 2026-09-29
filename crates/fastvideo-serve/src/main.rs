@@ -20,13 +20,18 @@ struct Args {
 }
 
 fn init_tracing(c: &Config) {
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_new(&c.log.filter).unwrap_or_else(|_| EnvFilter::new("info"));
-    let b = tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr);
+    // Log shipping to fv-control (FV_LOG_SHIP_URL; off by default, src/log_ship.rs).
+    // A tracing-opentelemetry layer would join here (the `otel` feature seam).
+    let ship = fastvideo_serve::log_ship::layer();
+    let fmt = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let reg = tracing_subscriber::registry().with(filter).with(ship);
     if c.log.format == "json" {
-        b.json().init();
+        reg.with(fmt.json()).init();
     } else {
-        b.init();
+        reg.with(fmt).init();
     }
 }
 
@@ -60,6 +65,7 @@ fn main() -> ExitCode {
     };
     let res = rt.block_on(async move {
         tracing::info!(config = %config.redacted(), build = %BuildInfo::current().json(), "fv-serve {}", BuildInfo::current().summary());
+        fastvideo_serve::log_ship::spawn();
         let boot = fastvideo_serve::deploy::Boot::now();
         fastvideo_serve::deploy::link_pod_weights();
         let queue = config.server.mode == fastvideo_serve::config::Mode::RunpodQueue;

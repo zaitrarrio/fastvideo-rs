@@ -109,13 +109,13 @@ export interface SeriesPoint {
   dph: number | null;
   jobs: number | null;
 }
-const nul = (v: unknown) => (v === null || v === undefined || Number(v) < 0 ? null : Number(v));
+const nul = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : Number(v));
 
 /** AE SQL for the per-pod utilisation series (bucketed averages). */
 export function aeSeriesSql(hours: number, bucketMin: number, pod?: string): string {
   const safePod = pod && /^[a-z0-9]+$/i.test(pod) ? ` AND blob2 = '${pod}'` : "";
   return `SELECT toStartOfInterval(timestamp, INTERVAL '${bucketMin}' MINUTE) AS t, blob2 AS pod,
-  avg(if(double2 < 0, NULL, double2)) AS gpu, avg(if(double4 < 0, NULL, double4)) AS cpu, avg(if(double5 < 0, NULL, double5)) AS mem,
+  avgIf(double2, double2 >= 0) AS gpu, avgIf(double4, double4 >= 0) AS cpu, avgIf(double5, double5 >= 0) AS mem,
   avg(double1) AS dph, max(double7) AS jobs
 FROM fv_control_metrics
 WHERE blob1 = 'pod' AND timestamp > NOW() - INTERVAL '${Math.round(hours)}' HOUR${safePod}

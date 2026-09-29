@@ -70,7 +70,7 @@ PUBLIC_URL = "https://fv-control-staging.maximalize.workers.dev"
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "fv-control"
-database_id = "FV_CONTROL_D1_ID"
+database_id = "b883b6a2-adf6-483b-8d45-9231de9d256c"
 migrations_dir = "migrations"
 
 [[env.staging.d1_databases]]
