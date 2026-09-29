@@ -18,7 +18,8 @@
 //! | `FV_CALLBACKS_ALLOW_PRIVATE` (`1`) | `server.callbacks_allow_private` (tests only: webhooks to loopback/private hosts) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
-//! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
+//! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else made once and kept in `<state_dir>/admin_token`, mode 600) |
+//! | `FV_ADMIN_TOKEN_RECIPIENT` | `auth.admin_token_recipient` (X25519 public key: the token sealed at `/fv/v1/admin/token/sealed`) |
 //! | `FV_KEY_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `auth.key_store` (minted API keys) |
 //! | `FV_CONSOLE` (`0` \| `1`) | `server.console` (the `/console` pages) |
 //! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
@@ -177,8 +178,12 @@ pub struct AuthCfg {
     /// SHA-256 hex hashes of the accepted keys (normally `FV_API_KEYS`).
     pub keys: Secret,
     /// Admin token for `/fv/v1/admin/*` (normally `FV_ADMIN_TOKEN`); when
-    /// unset a random one is generated at startup and logged once.
+    /// unset one is made on the first start and kept in
+    /// `<state_dir>/admin_token` (mode 600; `crate::admin_token`).
     pub admin_token: Secret,
+    /// X25519 public key (base64) the admin token is sealed to at
+    /// `GET /fv/v1/admin/token/sealed` (`FV_ADMIN_TOKEN_RECIPIENT`).
+    pub admin_token_recipient: Option<String>,
     /// Minted-key store.
     pub key_store: KeyStoreBackend,
 }
@@ -603,6 +608,20 @@ pub struct GatewayCfg {
     /// The model of the Reactor routes on the gateway (default: the first
     /// stream-capable model of a pod pool).
     pub reactor_model: Option<String>,
+    /// Inputs up to this many bytes (all of a job's together) travel inside
+    /// the dispatch request (base64) instead of through the artifact store
+    /// (R2): no store round trip on the submit path. 0: always the store.
+    /// Serverless pools cap it at 6 MiB (a Runpod `/run` body is ≤ 10 MB).
+    pub inline_inputs_max_bytes: u64,
+    /// Video and audio inputs too large to inline that the client gave as
+    /// a public URL are fetched by the worker from that URL (the ingestion
+    /// SSRF guard, checked against the gateway's SHA-256) instead of
+    /// through the store.
+    pub input_passthrough: bool,
+    /// After a dispatch, copy the inputs that did not go through the store
+    /// into it in the background (off the submit path), so a re-dispatch
+    /// after a worker loss has them (pools with `retries > 0`).
+    pub stage_inputs_for_retry: bool,
 }
 
 impl Default for GatewayCfg {
@@ -618,6 +637,9 @@ impl Default for GatewayCfg {
             runpod_api_base: "https://api.runpod.ai/v2".into(),
             runpod_api_key: Secret::default(),
             reactor_model: None,
+            inline_inputs_max_bytes: 8 * 1024 * 1024,
+            input_passthrough: true,
+            stage_inputs_for_retry: true,
         }
     }
 }
@@ -855,6 +877,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_ADMIN_TOKEN") {
             self.auth.admin_token = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_ADMIN_TOKEN_RECIPIENT") {
+            self.auth.admin_token_recipient = Some(v.trim().to_owned()).filter(|v| !v.is_empty());
         }
         if let Some(v) = env.var("FV_KEY_STORE") {
             self.auth.key_store = parse_enum("FV_KEY_STORE", &v)?;

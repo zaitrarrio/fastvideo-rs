@@ -29,6 +29,7 @@
 //!   `[reactor]` (WP-13) on the shared WebRTC host of `rtc` (`[webrtc]`).
 
 pub mod adapters;
+pub mod admin_token;
 pub mod app;
 pub mod build_info;
 pub mod config;

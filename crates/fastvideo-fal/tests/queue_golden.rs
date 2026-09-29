@@ -460,3 +460,35 @@ fn small_helpers() {
     let a = FalProtocol.new_external_id(j.id);
     assert!(uuid::Uuid::parse_str(&a).is_ok() && a != FalProtocol.new_external_id(j.id));
 }
+
+/// Behind a gateway `queue` splits into `dispatch` (submit until the worker
+/// holds the job and its inputs) and `wait` (then until the engine starts).
+#[test]
+fn timings_split_queue_into_dispatch_and_wait() {
+    let t0 = now();
+    let mut j = job(Task::I2V, "minimax/h3-max/image-to-video");
+    j.dispatched_at = Some(t0 + time::Duration::milliseconds(1500));
+    j.mark_running(t0 + time::Duration::seconds(4)).unwrap();
+    let metrics = JobMetrics { inference_s: Some(8.0), ..Default::default() };
+    j.mark_succeeded(t0 + time::Duration::seconds(16), vec![], metrics).unwrap();
+    let t = fastvideo_fal::queue::timings(&j).unwrap();
+    assert_eq!(t["queue"], json!(4.0));
+    assert_eq!(t["dispatch"], json!(1.5));
+    assert_eq!(t["wait"], json!(2.5));
+    assert_eq!(t["total"], json!(12.0));
+
+    // A job that never left its process (or an older worker) reports no split.
+    let mut k = job(Task::T2V, "minimax/h3-max/text-to-video");
+    k.mark_running(t0 + time::Duration::seconds(1)).unwrap();
+    k.mark_succeeded(t0 + time::Duration::seconds(3), vec![], JobMetrics { inference_s: Some(1.0), ..Default::default() })
+        .unwrap();
+    let t = fastvideo_fal::queue::timings(&k).unwrap();
+    assert!(t.get("dispatch").is_none() && t.get("wait").is_none());
+    assert_eq!(t["queue"], json!(1.0));
+
+    // The field round-trips and is omitted when unset (stored rows stay as they were).
+    let v = serde_json::to_value(&k).unwrap();
+    assert!(v.get("dispatched_at").is_none());
+    let back: Job = serde_json::from_value(serde_json::to_value(&j).unwrap()).unwrap();
+    assert_eq!(back.dispatched_at, j.dispatched_at);
+}

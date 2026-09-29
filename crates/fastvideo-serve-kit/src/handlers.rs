@@ -23,7 +23,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use fastvideo_protocol::{
     negotiate_noted, precheck, resolve_model, ApiError, BatchProtocol, ErrorCtx, GenerationRequest,
-    HttpReply, Job, JobId, JobView, KeyId, NormalizeCtx, ReplyBody, SubmitEndpoint,
+    HttpReply, Job, JobId, JobView, KeyId, MediaKind, MediaRef, NormalizeCtx, ReplyBody, SubmitEndpoint,
 };
 use tower_http::services::ServeFile;
 
@@ -145,10 +145,10 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let dir = ctx.inputs_dir(id);
     let resolved = async {
         let staged = ctx.ingestor().stage(&req, policy, &dir, ctx.now()).await?;
-        negotiate_noted(&req, caps, &staged)
+        negotiate_noted(&req, caps, &staged).map(|(r, n)| (r, n, passthrough_sources(&req, &staged)))
     }
     .await;
-    let (resolved, notes) = match resolved {
+    let (resolved, notes, sources) = match resolved {
         Ok(r) => r,
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -161,6 +161,7 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     job.owner = owner;
     job.request_echo = request_echo;
     job.callback = req.callback.clone();
+    job.input_sources = sources;
     for n in notes {
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));
@@ -176,6 +177,25 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let job = ctx.jobs().get(id).await.unwrap_or(job);
     ctx.notify(&job);
     Ok(job)
+}
+
+/// Staged inputs a worker may fetch from the client's own URL (see
+/// `Job::input_sources`): video and audio given as `http(s)` URLs, stored
+/// byte for byte as fetched. Images are left out: ingestion may re-encode
+/// them upright (EXIF orientation).
+fn passthrough_sources(req: &GenerationRequest, staged: &fastvideo_protocol::StagedInputs) -> Vec<(std::path::PathBuf, String)> {
+    let mut out = Vec::new();
+    for (r, (kind, m)) in req.references.iter().zip(&staged.references) {
+        if let (MediaRef::Http(u), MediaKind::Video | MediaKind::Audio) = (&r.media, kind) {
+            out.push((m.path.clone(), u.to_string()));
+        }
+    }
+    if let (Some(a), Some(m)) = (&req.audio_in, &staged.audio_in) {
+        if let MediaRef::Http(u) = &a.media {
+            out.push((m.path.clone(), u.to_string()));
+        }
+    }
+    out
 }
 
 /// Looks a job up by its wire id for `owner` (other owners' jobs are 404).
