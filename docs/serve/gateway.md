@@ -69,6 +69,8 @@ dispatch_timeout_s = 30            # one dispatch request
 job_timeout_s = 3600               # envelope wait (serverless) / reaper cap
 stale_after_s = 90                 # running job without a worker heartbeat → lost
 retries = 1                        # re-dispatch after worker loss (0: fail at once)
+dispatch = "gateway"               # pod pools: or "durable-object" + do_url (push through a
+                                   # Cloudflare Durable Object; gateway-cloudflare.md §10)
 aliases = { "MiniMax-H3-Turbo" = "fasth3" }
 # Static caps (the fallback while the pool is scaled to zero): the same
 # entries a worker's [[models]] has, resolved through the CUDA catalog
@@ -91,6 +93,8 @@ pool = "h3-turbo"                  # FV_GATEWAY_POOL (self-registration, §5.3)
 # internal_token: FV_INTERNAL_TOKEN
 [jobs]
 heartbeat_s = 10                   # D1 heartbeat of unfinished jobs (worker-loss detection)
+# [dispatch] do_url = "https://…"  # a pool with dispatch = "durable-object": the worker's
+                                   # socket to the pool's DO (gateway-cloudflare.md §10)
 ```
 
 Shared secrets between gateway and workers: `FV_INTERNAL_TOKEN`, the D1 and

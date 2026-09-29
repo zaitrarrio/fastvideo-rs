@@ -163,7 +163,9 @@ impl Gateway {
         let futs = self.pools.iter().map(|p| {
             let reg = registered.get(p.id()).cloned().unwrap_or_default();
             async move {
-                if p.is_pod() {
+                if p.is_edge() {
+                    self.probe_edge(p).await;
+                } else if p.is_pod() {
                     self.probe_pods(p, reg).await;
                 } else {
                     self.probe_serverless(p).await;
@@ -346,6 +348,11 @@ impl Gateway {
         let Some(pool) = self.pool(&a.row.pool) else { return };
         let stale_ms = (pool.cfg.stale_after_s.max(1) * 1000) as i64;
         let age = now - a.job_updated;
+        if a.row.kind == super::edge::KIND {
+            // Worker loss is the Durable Object's (re-dispatch once, then
+            // fail); its failures come in through `probe_edge`.
+            return;
+        }
         if a.row.kind == "pod" {
             if age > stale_ms {
                 self.lost(pool, a, &format!("no heartbeat for {} s", age / 1000)).await;

@@ -37,6 +37,10 @@ pub mod console;
 pub mod deploy;
 #[cfg(all(feature = "fal", feature = "webrtc"))]
 pub mod director;
+/// A worker's socket to its pool's Durable Object (`[dispatch] do_url`,
+/// docs/serve/gateway-cloudflare.md).
+#[cfg(feature = "http-client")]
+pub mod edge_link;
 pub mod encoders;
 pub mod flags;
 pub mod gate;

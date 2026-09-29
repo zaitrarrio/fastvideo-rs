@@ -51,6 +51,10 @@ ctr = "0.9"
 uuid.workspace = true
 # Gateway (docs/serve/gateway.md) and worker input fetch; feature `http-client`.
 reqwest = { workspace = true, optional = true }
+# Push dispatch through a pool Durable Object (docs/serve/gateway-cloudflare.md):
+# the shared protocol, and the worker's socket (feature `http-client`).
+fastvideo-dispatch-proto.workspace = true
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
 
 # External-API adapters: mounted when their feature is on (src/adapters.rs).
 fastvideo-openai-videos = { workspace = true, optional = true }
@@ -61,6 +65,8 @@ fastvideo-reactor = { workspace = true, optional = true }
 
 [dev-dependencies]
 fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
+# The native Durable Object stand-in in tests/edge_dispatch.rs.
+axum = { workspace = true, features = ["ws"] }
 tower = { workspace = true, features = ["util"] }
 # WHEP viewer in tests/streams_whip.rs.
 reqwest.workspace = true
@@ -82,7 +88,7 @@ webrtc = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "fastvideo-fal?/dire
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
 # Cloudflare D1 job store, WHIP, Runpod worker.
-http-client = ["dep:reqwest", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod", "fastvideo-autoscale/runpod"]
+http-client = ["dep:reqwest", "dep:tokio-tungstenite", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod", "fastvideo-autoscale/runpod"]
 # Adapter mount points (design §9, src/adapters.rs); on by default once the
 # adapter is on main. `reactor` brings the str0m host (it answers offers).
 openai-videos = ["dep:fastvideo-openai-videos"]

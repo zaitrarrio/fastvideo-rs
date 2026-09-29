@@ -31,6 +31,8 @@ CRATES=(
   fastvideo-deploy
   fastvideo-autoscale
   fastvideo-serve
+  fastvideo-dispatch-proto
+  fastvideo-edge
 )
 PKGS=()
 for c in "${CRATES[@]}"; do PKGS+=(-p "$c"); done
@@ -40,6 +42,9 @@ run() { printf '\n==> %s\n' "$*" >&2; "$@"; }
 run cargo check "${PKGS[@]}" --all-targets
 run cargo clippy "${PKGS[@]}" --all-targets --no-deps -- -D warnings
 run cargo test "${PKGS[@]}"
+# The Cloudflare Worker / Durable Object dispatcher builds for wasm only
+# (docs/serve/gateway-cloudflare.md; scripts/serve/cf-edge.sh deploys it).
+run cargo clippy -p fastvideo-dispatch-proto -p fastvideo-edge --target wasm32-unknown-unknown --no-deps -- -D warnings
 # The release / deployment scripts against a mocked API (docs/serve/releases.md;
 # skips without python3).
 run bash scripts/serve/tests/release.test.sh
