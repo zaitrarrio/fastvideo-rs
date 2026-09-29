@@ -593,7 +593,7 @@ mod publish {
     use fastvideo_webrtc::host::{AudioLayout, HostConfig, PeerEvent, RtcHost};
     use fastvideo_webrtc::ice::IceServer;
     use fastvideo_webrtc::whip::{WhipAuth, WhipConfig, WhipPublishOptions, WhipPublisher, WhipTarget};
-    use fastvideo_webrtc::writer::{AudioPacket, VideoFrame};
+    use fastvideo_webrtc::writer::VideoFrame;
     use serde_json::json;
     use url::Url;
 
@@ -861,7 +861,7 @@ mod publish {
                         match op.push(a) {
                             Ok(pkts) => {
                                 for p in pkts {
-                                    if handle.send_audio(AudioPacket::new(p.data, u64::from(p.rtp_ts))).is_ok() {
+                                    if handle.send_audio(fastvideo_webrtc::writer::AudioPacket::new(p.data, u64::from(p.rtp_ts))).is_ok() {
                                         entry.set(|s| s.audio_packets_sent += 1);
                                     }
                                 }
