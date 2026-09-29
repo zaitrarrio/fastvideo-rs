@@ -9,7 +9,7 @@
 //! | Route | Behaviour |
 //! |---|---|
 //! | `POST /fv/v1/internal/jobs` | the dispatch envelope: fetch inputs, adopt the D1 row, submit to the engine → 202 `{id, status, worker, load}` (`load`: running, queued, capacity, queue_max after taking it); a job already held here answers 200; one held by another live worker 409 |
-//! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls) |
+//! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls); with `?wait_s=N&since=<status>` it answers once the status differs from `since` (or after `N` s, at most 60) and D1 has it, adding the `job` (the dispatching gateway's notification, gateway.md §3.5) |
 //! | `DELETE /fv/v1/internal/jobs/{id}` | cancel |
 //! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, `capacity` (executors), `queue_max`, caps, `build` (git sha, variant, image digest, channel) (gateway probes) |
 //! | `POST /fv/v1/internal/drain`, `…/undrain` | stop / resume taking new jobs and sessions (running work finishes); the `gw_workers` row says `draining` (the autoscaler, gateway.md §8.5) |
@@ -224,15 +224,65 @@ fn parse_id(id: &str) -> Result<JobId, Response> {
     id.parse::<JobId>().map_err(|_| err(&ApiError::not_found(format!("job `{id}` was not found"))))
 }
 
-async fn job_status(State(st): State<Arc<WorkerState>>, Path(id): Path<String>) -> Response {
+/// `?wait_s=N&since=<status>`: a gateway waiting for the job's next status.
+#[derive(Debug, Default, serde::Deserialize)]
+struct StatusWait {
+    wait_s: Option<u64>,
+    since: Option<String>,
+}
+
+/// The longest a status wait holds the request.
+const STATUS_WAIT_MAX: Duration = Duration::from_secs(60);
+
+async fn job_status(State(st): State<Arc<WorkerState>>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<StatusWait>) -> Response {
     let id = match parse_id(&id) {
         Ok(i) => i,
         Err(r) => return r,
     };
-    match st.ctx.jobs().get(id).await {
-        Some(j) => Json(json!({"id": id.to_string(), "status": j.status().as_str(), "progress": j.progress, "worker": st.worker_id})).into_response(),
-        None => err(&ApiError::not_found(format!("job `{id}` was not found"))),
+    let Some(wait) = q.wait_s else {
+        return match st.ctx.jobs().get(id).await {
+            Some(j) => Json(json!({"id": id.to_string(), "status": j.status().as_str(), "progress": j.progress, "worker": st.worker_id})).into_response(),
+            None => err(&ApiError::not_found(format!("job `{id}` was not found"))),
+        };
+    };
+    // A wait (the dispatching gateway, docs/serve/gateway.md §3.5): answer
+    // when the status differs from `since` (at once if it already does),
+    // or after `wait_s`, with the job itself, once D1 has that version (so
+    // the gateway never shows a state the other replicas cannot read).
+    let since = q.since.unwrap_or_default();
+    let changed = |j: &Job| j.status().as_str() != since;
+    let Some(mut job) = st.ctx.jobs().get(id).await else {
+        return err(&ApiError::not_found(format!("job `{id}` was not found")));
+    };
+    if !changed(&job) {
+        if let Some(mut rx) = st.ctx.jobs().watch(id) {
+            let limit = Duration::from_secs(wait).min(STATUS_WAIT_MAX);
+            let _ = tokio::time::timeout(limit, async {
+                while rx.changed().await.is_ok() {
+                    rx.borrow_and_update();
+                    match st.ctx.jobs().get(id).await {
+                        Some(j) if changed(&j) => return,
+                        Some(_) => {}
+                        None => return,
+                    }
+                }
+            })
+            .await;
+        }
+        match st.ctx.jobs().get(id).await {
+            Some(j) => job = j,
+            None => return err(&ApiError::not_found(format!("job `{id}` was not found"))),
+        }
     }
+    if changed(&job) {
+        if let Some(d1) = &st.d1 {
+            if let Err(e) = d1.settle(id).await {
+                tracing::debug!(job = %id, error = %e, "worker: status wait: D1 write pending");
+            }
+        }
+        job = st.ctx.jobs().get(id).await.unwrap_or(job);
+    }
+    Json(json!({"id": id.to_string(), "status": job.status().as_str(), "progress": job.progress, "worker": st.worker_id, "job": job})).into_response()
 }
 
 async fn job_cancel(State(st): State<Arc<WorkerState>>, Path(id): Path<String>) -> Response {
@@ -389,6 +439,7 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
 /// every write conditional on the lease (`D1JobStore::adopt_leased`).
 pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool, lease: Option<u64>) -> Response {
     let id = env.job.id;
+    tracing::debug!(job = %id, "worker: envelope received");
     if st.submitted.lock().unwrap_or_else(|p| p.into_inner()).contains(&id) {
         let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
         return (StatusCode::OK, Json(json!({"id": id.to_string(), "status": s, "worker": st.worker_id, "duplicate": true}))).into_response();
@@ -426,6 +477,7 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
         (None, _) => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
     };
     metrics::histogram!("fv_worker_adopt_seconds").record(t_adopt.elapsed().as_secs_f64());
+    tracing::debug!(job = %id, "worker: adopted");
     let job = match adopted {
         Ok(j) => j,
         Err(StoreError::AlreadyExists(_)) => {

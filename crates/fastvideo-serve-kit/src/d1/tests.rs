@@ -118,6 +118,48 @@ async fn progress_writes_are_throttled_and_state_changes_are_immediate() {
 }
 
 #[tokio::test]
+async fn deferred_writes_of_a_tick_go_in_one_batch() {
+    let m = MockD1::new();
+    let mut o = opts("w1");
+    o.progress_interval = Duration::from_millis(100);
+    // Ticks by hand (the flusher's first tick runs at open).
+    o.flush_tick = Duration::from_secs(3600);
+    let s = D1JobStore::new(client(&m), o).open(t0()).await.unwrap();
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let j = job(ProtocolId::Fal, &format!("b{i}"), t0());
+        ids.push(j.id);
+        s.insert(j).await.unwrap();
+        s.update(ids[i], Box::new(|j| j.mark_running(OffsetDateTime::now_utc()).unwrap())).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    for id in &ids {
+        s.update(*id, Box::new(|j| j.set_step(1, 4))).await.unwrap();
+    }
+    let (req, ups) = (m.requests(), upserts_for(&m));
+    s.tick().await;
+    assert_eq!(m.requests() - req, 1, "one D1 round trip for the tick");
+    assert_eq!(upserts_for(&m) - ups, 5, "every due job written");
+    for id in &ids {
+        assert!((row(&m, *id)["progress"].as_f64().unwrap() - 0.25).abs() < 1e-6);
+    }
+    // Throttling is per job, as before: nothing is due right after a write.
+    for id in &ids {
+        s.update(*id, Box::new(|j| j.set_step(2, 4))).await.unwrap();
+    }
+    let req = m.requests();
+    s.tick().await;
+    assert_eq!(m.requests(), req, "written less than progress_interval ago");
+    // A failed batch falls back to one write per job.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    m.fail_next(4, 500);
+    s.tick().await;
+    for id in &ids {
+        assert!((row(&m, *id)["progress"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    }
+}
+
+#[tokio::test]
 async fn watchers_see_updates() {
     let m = MockD1::new();
     let s = open(&m, "w1").await;

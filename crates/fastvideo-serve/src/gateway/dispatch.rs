@@ -270,6 +270,7 @@ impl Gateway {
                 continue;
             }
             let t_dispatch = Instant::now();
+            tracing::debug!(job = %job.id, pool = p.id(), "gateway: dispatch call");
             let mut r = self.dispatch_to(p, job, &inputs, 1, None).await;
             if matches!(&r, Err(e) if e.param.as_deref() == Some(INPUT_FETCH_FAILED)) {
                 // The worker could not fetch a client URL (gone, refused by
@@ -283,6 +284,7 @@ impl Gateway {
             }
             match r {
                 Ok(placed) => {
+                    tracing::debug!(job = %job.id, "gateway: the worker took the job");
                     let dispatch_s = t_dispatch.elapsed().as_secs_f64();
                     p.lock().recording += 1;
                     let t_record = Instant::now();
@@ -310,6 +312,7 @@ impl Gateway {
                         stage_inputs_ms = (stage_s * 1e3) as u64, dispatch_ms = (dispatch_s * 1e3) as u64, record_ms = (record_s * 1e3) as u64,
                         "gateway: dispatched"
                     );
+                    self.follow(p, job.id, &placed);
                     if self.cfg.stage_inputs_for_retry && p.cfg.retries > 0 && !p.is_edge() && inputs.iter().any(|i| i.artifact.is_none()) {
                         if let Ok(ctx) = self.ctx() {
                             tokio::spawn(stage_for_retry(self.db.clone(), ctx.clone(), self.input_url_ttl, job.id, 1, inputs));
@@ -504,6 +507,61 @@ impl Gateway {
         }
     }
 
+    /// Follows a job dispatched to a pod worker (docs/serve/gateway.md
+    /// §3.5): a status wait on the worker answers at each status change,
+    /// once D1 has it, and the job goes into this replica's view and wakes
+    /// its `watch()` poller, so a status change shows here without waiting
+    /// for a poll tick (`watch_poll_ms`) and a D1 read. Stops at a terminal
+    /// status, when the worker no longer knows the job (404), after three
+    /// failed calls in a row, or with a worker that does not wait (an older
+    /// build: no `job` in the answer). The poller and the reaper stay as
+    /// they are; this only makes the dispatching replica see changes sooner.
+    fn follow(&self, pool: &Pool, id: JobId, placed: &Placed) {
+        if !pool.is_pod() || pool.is_edge() {
+            return;
+        }
+        self.jobs.dispatched(id);
+        let (http, token, jobs) = (self.http.clone(), self.token.clone(), self.jobs.clone());
+        let url = format!("{}{}", placed.target, job_path(id));
+        tokio::spawn(async move {
+            const WAIT_S: u64 = 25;
+            let mut since = "queued".to_owned();
+            let mut errors = 0;
+            loop {
+                // `since` is a status word (`queued`, `running`, ...).
+                let r = http
+                    .get(format!("{url}?wait_s={WAIT_S}&since={since}"))
+                    .header(super::TOKEN_HEADER, &token)
+                    .timeout(Duration::from_secs(WAIT_S + 15))
+                    .send()
+                    .await;
+                let v: Value = match r {
+                    Ok(resp) if resp.status().is_success() => resp.json().await.unwrap_or(Value::Null),
+                    Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => return,
+                    _ => {
+                        errors += 1;
+                        if errors >= 3 {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+                errors = 0;
+                let Some(job) = v.get("job").and_then(|j| serde_json::from_value::<Job>(j.clone()).ok()) else {
+                    return;
+                };
+                let done = job.is_terminal();
+                since = job.status().as_str().to_owned();
+                tracing::debug!(job = %id, status = %since, "gateway: the worker reported a status change");
+                jobs.observe(job);
+                if done {
+                    return;
+                }
+            }
+        });
+    }
+
     /// Writes (or replaces) the `gw_dispatch` row; never over a later
     /// attempt's (a replica that lost the re-dispatch claim race).
     async fn record(&self, pool: &Pool, id: JobId, placed: &Placed, attempt: u32, inputs: &[InputRef]) -> Result<(), String> {
@@ -628,6 +686,7 @@ impl Gateway {
         match self.dispatch_to(pool, &job, &inputs, attempt, exclude).await {
             Ok(placed) => {
                 self.record(pool, job.id, &placed, attempt, &inputs).await.map_err(ApiError::internal)?;
+                self.follow(pool, job.id, &placed);
                 metrics::counter!("fv_gateway_redispatched_total", "pool" => pool.id().to_owned()).increment(1);
                 tracing::warn!(job = %job.id, pool = pool.id(), attempt, "gateway: job re-dispatched after a worker loss");
                 Ok(true)

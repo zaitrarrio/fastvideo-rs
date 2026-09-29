@@ -587,6 +587,11 @@ Common conventions for every API:
     faststart files (fal §6);
   - it applies `PostProcess`: `-an` for `Silent`, and a crop, which
     re-encodes with the same x264 settings, for pad-and-crop canvases.
+  - A file that is already faststart with one video track (and only audio
+    beside it) and needs neither is stored as it is
+    (`mp4::finalize_is_noop`): the remux would copy it byte for byte into
+    the same layout. Whether ffmpeg runs is probed once per process (at
+    startup, off the runtime), not per job (gateway.md §3.5).
 - H3 output is therefore H.264 plus AAC stereo at 32 kHz, the same as hosted
   (fal §6).
 - A fresh seed is drawn when none was sent and is stored on the job.
@@ -1774,7 +1779,8 @@ additions and readings; everything is re-exported from the crate root.
   worker, version`; indexes `(owner, protocol, created_at)`, `(status,
   created_at)`, `(protocol, created_at)`, `(expires_at)`, `(worker,
   status)`), write-through inserts, immediate state-change writes,
-  progress/log writes coalesced to ≤ 1/s/job, an authoritative in-memory
+  progress/log writes coalesced to ≤ 1/s/job (the flusher sends one tick's
+  due writes of all jobs as one D1 batch), an authoritative in-memory
   cache (and `watch`) for this worker's jobs, a 60 s heartbeat, restart
   recovery of this worker's jobs, and `sweep_expired` failing other
   workers' jobs with no heartbeat for 15 min. Jobs owned by another worker

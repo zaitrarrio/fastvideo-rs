@@ -326,6 +326,11 @@ pub struct FakeCfg {
     /// Without ffmpeg the fake writes no MP4; store a small placeholder
     /// file instead so the job still succeeds (CI).
     pub placeholder_output: bool,
+    /// Write the MP4 through `ffmpeg` (libx264) when it is on `PATH`
+    /// (`false`: never; the placeholder stands in). The encode of a
+    /// full-size clip takes seconds in a debug build: timing tests turn it
+    /// off to measure the serving path alone.
+    pub mp4: bool,
     /// Give the fake H3 max / turbo models the native 1080P tier, as an
     /// 80 GB-class GPU serves them (`FV_FAKE_H3_1080P`).
     pub h3_1080p: bool,
@@ -345,6 +350,7 @@ impl Default for FakeCfg {
             rtf: None,
             all_resident: true,
             placeholder_output: true,
+            mp4: true,
             h3_1080p: false,
             device: None,
         }

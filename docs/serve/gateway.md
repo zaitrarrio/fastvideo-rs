@@ -168,7 +168,9 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 
 Status, results, lists, fal `status/stream` (SSE), sync endpoints: the
 gateway answers them from D1 (`GatewayJobStore`: read-through, `watch()`
-polls D1 every `watch_poll_ms`), through the in-memory view of §3.3.
+polls D1 every `watch_poll_ms`), through the in-memory view of §3.3. The
+replica that dispatched a job to a pod worker also *follows* it: the
+worker reports each status change as soon as D1 has it (§3.5).
 Signed artifact URLs come from the shared R2 store (or a shared local
 directory in single-host tests).
 
@@ -331,7 +333,8 @@ Now, per pod pool, under the pool's lock:
 
 Measured with the fake engine (`crates/fastvideo-serve/tests/gateway_burst.rs`,
 `burst_queue_times_one_worker_vs_three`: 5 jobs submitted at once, 4 × 250 ms
-steps per job — about 10 s end to end on the build pod, D1 at 250 ms per call;
+steps per job — about 10 s end to end on the build pod, D1 at 250 ms per call,
+most of it the fake engine's own libx264 encode; see §3.5;
 queue = `created_at` → `started_at`):
 
 | workers | before: mean / max queue | jobs per worker | after: mean / max queue | jobs per worker |
@@ -341,6 +344,69 @@ queue = `created_at` → `started_at`):
 
 After the fix three jobs start at once (0.5 s: the insert and adopt round
 trips) and the other two wait one job time.
+
+### 3.5 Per-job overhead
+
+One job end to end on the fake engine, measured point by point
+(`crates/fastvideo-serve/tests/job_overhead.rs`; `cargo test -p
+fastvideo-serve --features http-client --test job_overhead --
+--include-ignored --nocapture` prints the waterfall): a fal
+`minimax/h3-turbo` job with a webhook, a status poll every 20 ms and an
+SSE stream; 4 fake steps (1 s of simulated work); D1 mocked at 0 or
+250 ms per call; R2 PUT mocked; debug events at submit/record, dispatch,
+worker envelope/adopt, every engine event, finalize, the artifact PUT and
+the terminal write, and every D1 call. Build pod, debug build, 2026-09-29;
+milliseconds from the submit call to the client seeing `COMPLETED`
+(poll / SSE / webhook):
+
+| setup | before | after |
+|---|---:|---:|
+| single server, D1 0 ms | 1013 / 1010 / 1042 | 1020 / 1007 / 1036 |
+| single server, D1 250 ms | 1261 / 1259 / 1561 | 1279 / 1257 / 1540 |
+| gateway + 1 worker, D1 0 ms, 4 × 250 ms | 1043 / 1022 / 1074 | 1042 / 1021 / 1048 |
+| gateway + 1 worker, D1 0 ms, 4 × 300 ms | 2037 / 2020 / 1243 | 1236 / 1215 / 1242 |
+| gateway + 1 worker, D1 250 ms | 2282 / 2271 / 1821 | 1781 / 1764 / 1790 |
+| gateway + 1 worker, D1 250 ms, 4 × 300 ms | 2273 / 2272 / 1995 | 1982 / 1965 / 1999 |
+| gateway, D1 250 ms, R2 PUT 1 s | 3574 / 3542 / 2806 | 2792 / 2769 / 2796 |
+| single server, D1 0 ms, fake x264 on | 9691 / 9675 / 9723 | 10005 / 9983 / 10013 |
+| gateway, the burst test's settings, fake x264 on | 12077 / 11906 / 11824 | 6845 / 6714 / 6740 |
+
+(With 4 × 250 ms the job ended right at a tick of the gateway's 1 s watch
+poll, which hid the wait; 4 × 300 ms shows it. The x264 rows vary by
+seconds with the pod's load: the fake engine's own encode.)
+
+Every gap over 100 ms, and what it was:
+
+| gap | size | kind | now |
+|---|---:|---|---|
+| fake steps | 4 × step | simulated work | — |
+| fake `decode` → `mux` → `finished` (renders 121 frames of 1344x768 in a debug build and pipes them through libx264) | 5-7 s | **test artefact**: the fake encoder; `engine.fake.mp4 = false` turns it off | unchanged |
+| engine `finished` → finalize start: `ffmpeg -version` run per finished job, blocking an async worker thread | 0.7-1.2 s | **real** (every worker with ffmpeg; less on an idle host) | probed once per process, at startup, off the runtime |
+| finalize: `-c copy +faststart` remux of an MP4 already faststart | 0.9-1.4 s | **real** | skipped when the file is faststart, one video track, only audio beside it, and no crop/`-an` (`mp4::finalize_is_noop`) |
+| gateway: terminal (or running) status in D1 → client | up to `watch_poll_ms` (1 s) + one D1 read (0.25 s) | **real** (the `watch()` poll and the view's freshness window) | the dispatching replica follows the job on its pod worker: `GET /fv/v1/internal/jobs/{id}?wait_s=25&since=<status>` answers at the next status change once D1 has it (`D1JobStore::settle`), with the job; the gateway puts it in its view and wakes the job's poller (a report during the poller's D1 read wins); ~1 ms after the worker's write. A status never moves back in the view (a read started before a change does not undo it). Other replicas still poll. |
+| gateway insert, worker adopt, terminal write | 1 D1 round trip each | real, **required** (the id is durable before the 202; the adopt is the fencing; the row says succeeded only after the artifact is stored) | unchanged |
+| R2 PUT → terminal write | the PUT | real, **required** (the row carries the artifact; nothing correct to overlap it with) | unchanged |
+| worker `Started` write | 1 round trip | real, off the critical path (the pump waits, the engine does not) | unchanged |
+| gateway `gw_dispatch` write before the 202 | 1 round trip on the submit call | real, required (cancel and the reaper find the worker through it) | unchanged |
+| webhook after the terminal write | 1 round trip | real, intentional (a receiver that reads the job gets the finished state) | unchanged |
+| submit read-back from D1 when the view went stale during the dispatch (`watch_poll_ms` ≤ the dispatch time) | 1 round trip | real | the view counts the dispatched job as seen (`GatewayJobStore::dispatched`) |
+| client poll (100 ms in the burst test) | ≤ the interval | **test artefact** | — |
+| `progress_interval_ms = 100`, `heartbeat_s = 1`, `watch_poll_ms = 100` in the burst test | continuous D1 writes/reads | **test artefact** (defaults 1000 / 60 / 1000) | — |
+
+D1 writes per job (defaults): the insert, the adopt, the `running` write,
+at most one coalesced progress/log write per second, the terminal write,
+and the `gw_dispatch` insert and close; the flusher now sends one tick's
+due writes of all jobs as **one D1 batch** (a worker with queued jobs
+wrote one row per job per tick, serially; per-job throttling is
+unchanged, and a failed batch falls back to one write per job). The D1
+poll behind an SSE stream (`watch_poll_ms`) is unchanged for jobs this
+replica did not dispatch.
+
+`overhead_budget_on_the_fake_engine` (feature `http-client`: run by
+`FV_SERVE_HEAVY=1 scripts/serve/check.sh`) holds it: at 0 ms D1 the poll, SSE and webhook see the job finish
+within the simulated work + 400 ms on both paths; at 250 ms through the
+gateway within work + 3 round trips + 400 ms. The code before these fixes
+fails it (2031 ms against 1600 ms).
 
 ## 4. Capabilities
 
