@@ -79,7 +79,8 @@ stereo. Frame counts are ffprobe `nb_read_frames`, rates `r_frame_rate`.
   frames), the native API (50 fps, 257 frames) and fal (24 fps). Every rate
   24/25/48/50 ran at 1080p 6 s through the LTX API.
 - Steady-state 1080p turbo: ~27 s denoise, ~35-41 s end to end for 121-153
-  frames; 48/50 fps doubles the frames and the time (78-84 s for 289-305
+  frames (before WP-F; now ~21.5 s denoise, 27 s run for 145 frames, see
+  "Host gaps removed (WP-F)" below); 48/50 fps doubles the frames and the time (78-84 s for 289-305
   frames). 20 s at 1080p: 144 s turbo, 218 s run for pro (dense stage 2).
 - The video-only request did not measure faster than the audio one (43.4 s
   vs 40.8 s sync; poll granularity is 2 s): the audio decode is small next
@@ -504,3 +505,25 @@ Reading:
   upload/probe/encode.
 - The native job lists `recipe: ltx25-distill-two-stage-dense` (the tier's
   label); edits always run the single distilled stage at the source size.
+
+## Host gaps removed (WP-F), 2026-09-29
+
+Device-built RoPE tables and an MP4 encoder fed off the decode thread
+(docs/perf/datacenter-profile.md "WP-F results"). 1x RTX PRO 6000 (EUR-IS-1,
+EU volume `jg48s6o1w0`, $2.09/h), one pod, baseline image `sha-1dac7d9`,
+then the same pod on `sha-a9fec55`. Native `/fv/v1/jobs`, `ltx-turbo`,
+1920x1080, 6 s, 24 fps (145 frames), T2V seed 7 (fox prompt) and I2V seed
+11 (beach fixture), warm after one 720p job; `run_s` from the job object.
+
+| Job | before | after | change |
+|---|---:|---:|---:|
+| T2V 1080p 6 s, run_s (2 runs) | 32.86 / 32.54 | 27.28 / 26.90 | **−17 %** |
+| — denoise (stage 1 + upsample + stage 2) | 27.13 / 26.80 | 21.82 / 21.42 | −5.4 s |
+| — video decode / encode tail | 4.40 / 0.90 | 4.08 / 0.13 | −1.1 s |
+| I2V 1080p 6 s, run_s (warm) | 38.00 | 32.34 | **−15 %** |
+| I2V, first job (prompt and image encoder load) | 84.11 | 76.40 | −7.7 s |
+
+Every job succeeded with 145 frames and audio. Frames are bit-identical to
+the baseline at 720p; at 1080p both builds vary between boots by the same
+amount (see the profile doc).
+

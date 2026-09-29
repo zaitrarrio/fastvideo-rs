@@ -142,11 +142,11 @@ impl std::fmt::Debug for TickReceiver {
 }
 
 #[derive(Clone)]
-struct TickSender {
+pub(crate) struct TickSender {
     inner: Arc<TickInner>,
 }
 
-fn tick_queue(cap: usize) -> (TickSender, TickReceiver) {
+pub(crate) fn tick_queue(cap: usize) -> (TickSender, TickReceiver) {
     let inner = Arc::new(TickInner {
         q: Mutex::new(VecDeque::new()),
         cap: cap.max(1),
@@ -159,7 +159,7 @@ fn tick_queue(cap: usize) -> (TickSender, TickReceiver) {
 }
 
 impl TickSender {
-    fn send(&self, t: Tick) {
+    pub(crate) fn send(&self, t: Tick) {
         {
             let mut q = lock(&self.inner.q);
             q.push_back(t);
@@ -172,7 +172,7 @@ impl TickSender {
         self.inner.notify.notify_one();
     }
 
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.notify.notify_one();
     }

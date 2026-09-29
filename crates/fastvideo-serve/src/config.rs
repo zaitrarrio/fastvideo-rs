@@ -25,6 +25,7 @@
 //! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
 //! | `FV_ENGINE` (`fake` \| `cuda`) | `engine.backend` |
+//! | `FV_ECHO_MODEL` (`0` \| `1`) | `engine.echo_model` (the `fv-echo` loopback duplex model: client camera/microphone in, overlaid echo out) |
 //! | `FV_FAKE_H3_1080P` (`0` \| `1`), `FV_FAKE_DEVICE` (`a100`, `h100`, `sm80:80`, …) | `engine.fake.h3_1080p`, `engine.fake.device` |
 //! | `FV_JOB_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `jobs.backend` |
 //! | `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN`, `FV_D1_DATABASE_ID` | `jobs.d1.*` |
@@ -326,6 +327,11 @@ pub struct FakeCfg {
     /// Without ffmpeg the fake writes no MP4; store a small placeholder
     /// file instead so the job still succeeds (CI).
     pub placeholder_output: bool,
+    /// Write the MP4 through `ffmpeg` (libx264) when it is on `PATH`
+    /// (`false`: never; the placeholder stands in). The encode of a
+    /// full-size clip takes seconds in a debug build: timing tests turn it
+    /// off to measure the serving path alone.
+    pub mp4: bool,
     /// Give the fake H3 max / turbo models the native 1080P tier, as an
     /// 80 GB-class GPU serves them (`FV_FAKE_H3_1080P`).
     pub h3_1080p: bool,
@@ -345,6 +351,7 @@ impl Default for FakeCfg {
             rtf: None,
             all_resident: true,
             placeholder_output: true,
+            mp4: true,
             h3_1080p: false,
             device: None,
         }
@@ -364,6 +371,10 @@ pub struct EngineCfg {
     /// startup probe encodes, else `cpu-test-x264`), `nvenc` (deployed) or
     /// `cpu-test-x264` (CPU CI only).
     pub post_encoder: String,
+    /// Serve the `fv-echo` loopback duplex model next to the backend's
+    /// models (design §5.11): it re-shows the client's camera with an
+    /// overlay, so WebRTC ingest is testable end to end without a GPU.
+    pub echo_model: bool,
 }
 
 impl Default for EngineCfg {
@@ -374,6 +385,7 @@ impl Default for EngineCfg {
             tier_overrides: BTreeMap::new(),
             fake: FakeCfg::default(),
             post_encoder: "auto".into(),
+            echo_model: false,
         }
     }
 }
@@ -960,6 +972,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_CONSOLE") {
             self.server.console = !matches!(v.trim(), "0" | "false" | "off" | "no");
+        }
+        if let Some(v) = env.var("FV_ECHO_MODEL") {
+            self.engine.echo_model = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
         if let Some(v) = env.var("FV_URL_SIGNING_KEY") {
             self.artifacts.signing_key = Secret(v);

@@ -323,6 +323,18 @@ impl Shared {
         sid: SessionId,
         causal: Option<Arc<CausalShared>>,
     ) -> Result<(usize, ModelCaps), ApiError> {
+        self.open_session_of(spec, sid, causal, false)
+    }
+
+    /// [`Self::open_session`] for any session kind: `duplex` for a duplex
+    /// model (client input tracks, design §5.11).
+    pub fn open_session_of(
+        &self,
+        spec: &SessionSpec,
+        sid: SessionId,
+        causal: Option<Arc<CausalShared>>,
+        duplex: bool,
+    ) -> Result<(usize, ModelCaps), ApiError> {
         let is_causal = causal.is_some();
         let caps = self
             .caps
@@ -331,18 +343,24 @@ impl Shared {
             .ok_or_else(|| {
                 ApiError::invalid_param("model", format!("model `{}` is not served here", spec.model))
             })?;
-        match (&caps.stream, is_causal) {
-            (Some(StreamCaps::Causal { .. }), true) | (Some(StreamCaps::Clip { .. }), false) => {}
-            _ => {
-                return Err(ApiError::invalid_param(
-                    "model",
-                    format!(
-                        "model `{}` does not support {} streaming",
-                        spec.model,
-                        if is_causal { "causal" } else { "clip" }
-                    ),
-                ))
-            }
+        let ok = match &caps.stream {
+            Some(StreamCaps::Causal { .. }) => is_causal && !duplex,
+            Some(StreamCaps::Clip { .. }) => !is_causal && !duplex,
+            Some(StreamCaps::Duplex(_)) => duplex,
+            None => false,
+        };
+        if !ok {
+            let kind = if duplex {
+                "duplex"
+            } else if is_causal {
+                "causal"
+            } else {
+                "clip"
+            };
+            return Err(ApiError::invalid_param(
+                "model",
+                format!("model `{}` does not support {kind} streaming", spec.model),
+            ));
         }
         if spec.tracks.has_audio() {
             spec.tracks.samples_per_frame()?;
@@ -609,6 +627,20 @@ impl EngineService {
         let sid = SessionId::new();
         let (exec, caps) = self.shared().open_session(&spec, sid, None)?;
         Ok(ClipSession::new(self.shared().clone(), sid, exec, spec, caps))
+    }
+
+    /// Opens a duplex session (design §5.11): admission as for any stream
+    /// (one session per executor, resident model), the model's input rings,
+    /// and — for the loopback echo — the model worker, started by
+    /// [`DuplexSession::start`](crate::stream::duplex::DuplexSession::start).
+    pub async fn open_duplex_session(
+        &self,
+        spec: fastvideo_protocol::DuplexSpec,
+    ) -> Result<crate::stream::duplex::DuplexSession, ApiError> {
+        spec.context.validate()?;
+        let sid = SessionId::new();
+        let (exec, caps) = self.shared().open_session_of(&spec.session, sid, None, true)?;
+        crate::stream::duplex::DuplexSession::new(self.shared().clone(), sid, exec, spec, caps)
     }
 
     /// Opens a causal SF-Wan session under an exclusive executor lease

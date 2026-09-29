@@ -15,7 +15,13 @@
 //! poll interval (`gateway.watch_poll_ms`, the latency SSE already has),
 //! or a finished job read within the last minute (finished jobs change only
 //! by deletion). Anything else reads D1 and refreshes the view; the
-//! pollers behind `watch()` refresh it too.
+//! pollers behind `watch()` refresh it too. A job this replica dispatched
+//! to a pod worker is also *followed*: the worker answers a status wait at
+//! each status change (once D1 has it), and [`GatewayJobStore::observe`]
+//! puts it in the view and wakes the job's poller, so completion shows
+//! without waiting for a poll tick (docs/serve/gateway.md §3.5). A status
+//! never moves back in the view (a D1 read that started before a change
+//! does not undo it).
 //!
 //! **Insert behind** (pools with `dispatch = "durable-object"`,
 //! docs/serve/gateway-cloudflare.md phase 2): for a job the predicate set
@@ -39,11 +45,20 @@ use tokio::sync::watch;
 pub struct GatewayJobStore {
     inner: Arc<D1JobStore>,
     poll: Duration,
-    watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
+    watchers: Watchers,
     view: Arc<View>,
     behind: std::sync::OnceLock<InsertBehind>,
     pending: Pending,
 }
+
+/// One `watch()` poller: its channel, and the wake-up a worker's status
+/// report ([`GatewayJobStore::observe`]) sends it.
+struct Watcher {
+    tx: watch::Sender<JobSnapshot>,
+    wake: tokio::sync::Notify,
+}
+
+type Watchers = Arc<Mutex<HashMap<JobId, Arc<Watcher>>>>;
 
 /// Which jobs are inserted behind (see the module docs).
 pub type InsertBehind = Arc<dyn Fn(&Job) -> bool + Send + Sync>;
@@ -90,6 +105,24 @@ impl View {
         g.by_ext.insert((j.protocol, j.external_id.clone()), j.id);
         g.by_id.insert(j.id, (j.clone(), Instant::now()));
     }
+    /// Remembers `j` unless the view holds the job, still fresh, in a later
+    /// status (a read that started before a change must not undo it);
+    /// returns the job the view holds now.
+    fn merge(&self, j: Job) -> Job {
+        if let Some(cur) = self.get(j.id) {
+            if stage(&cur) > stage(&j) {
+                return cur;
+            }
+        }
+        self.remember(&j);
+        j
+    }
+    /// Marks the job seen now (it is as this replica last knew it).
+    fn touch(&self, id: JobId) {
+        if let Some((_, at)) = self.lock().by_id.get_mut(&id) {
+            *at = Instant::now();
+        }
+    }
     fn forget(&self, id: JobId) {
         let mut g = self.lock();
         if let Some((j, _)) = g.by_id.remove(&id) {
@@ -105,6 +138,17 @@ impl View {
     fn by_external(&self, p: ProtocolId, ext: &str) -> Option<Job> {
         let id = *self.lock().by_ext.get(&(p, ext.to_owned()))?;
         self.get(id)
+    }
+}
+
+/// Queued < running < finished: a job's status only moves forward.
+fn stage(j: &Job) -> u8 {
+    if j.is_terminal() {
+        2
+    } else if j.started_at.is_some() {
+        1
+    } else {
+        0
     }
 }
 
@@ -152,6 +196,26 @@ impl GatewayJobStore {
     pub fn d1(&self) -> &Arc<D1JobStore> {
         &self.inner
     }
+
+    /// A job this replica just dispatched: what the view holds (its insert)
+    /// is current, so the submit's read-back does not go to D1; the worker's
+    /// first status report follows at once.
+    pub fn dispatched(&self, id: JobId) {
+        self.view.touch(id);
+    }
+
+    /// A job as its worker reported it after a status change (the worker
+    /// answers once D1 has it; docs/serve/gateway.md §3.5): into the view,
+    /// and the job's `watch()` poller publishes it at once instead of at
+    /// its next poll.
+    pub fn observe(&self, job: Job) {
+        let id = job.id;
+        self.view.merge(job);
+        let w = self.watchers.lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned();
+        if let Some(w) = w {
+            w.wake.notify_one();
+        }
+    }
 }
 
 /// What a poll compares (the parts a status view shows).
@@ -167,43 +231,55 @@ fn fingerprint(j: &Job) -> (String, u32, Option<u32>, usize, usize, bool) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn poller(
-    store: Arc<D1JobStore>,
-    view: Arc<View>,
-    pending: Pending,
-    id: JobId,
-    tx: Arc<watch::Sender<JobSnapshot>>,
-    watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
-    every: Duration,
-) {
+async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: JobId, w: Arc<Watcher>, watchers: Watchers, every: Duration) {
     let mut seq = 0u64;
     let mut last = None;
+    // Woken by a worker's report: the view already holds that job.
+    let mut woke = false;
     loop {
-        if tx.receiver_count() == 0 {
+        if w.tx.receiver_count() == 0 {
             break;
         }
-        let j = match store.get(id).await {
+        let seen = if woke { view.get(id) } else { None };
+        let j = match seen {
             Some(j) => j,
-            None => match pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone()) {
-                // Inserted behind, not in D1 yet.
-                Some(j) => j,
-                None => break,
-            },
+            None => {
+                // A report arriving during the D1 read wins over the read.
+                let read = tokio::select! {
+                    r = store.get(id) => Some(r),
+                    _ = w.wake.notified() => None,
+                };
+                match read {
+                    // Woken: the report is in the view (read again if not).
+                    None => {
+                        woke = true;
+                        continue;
+                    }
+                    Some(Some(j)) => view.merge(j),
+                    Some(None) => match pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone()) {
+                        // Inserted behind, not in D1 yet.
+                        Some(j) => j,
+                        None => break,
+                    },
+                }
+            }
         };
-        view.remember(&j);
         let fp = fingerprint(&j);
         if last.as_ref() != Some(&fp) {
             seq += 1;
-            tx.send_replace(j.snapshot(seq));
+            w.tx.send_replace(j.snapshot(seq));
             last = Some(fp);
         }
         if j.is_terminal() {
             break;
         }
-        tokio::time::sleep(every).await;
+        woke = tokio::select! {
+            _ = tokio::time::sleep(every) => false,
+            _ = w.wake.notified() => true,
+        };
     }
     let mut g = watchers.lock().unwrap_or_else(|p| p.into_inner());
-    if g.get(&id).is_some_and(|t| Arc::ptr_eq(t, &tx)) {
+    if g.get(&id).is_some_and(|t| Arc::ptr_eq(t, &w)) {
         g.remove(&id);
     }
 }
@@ -246,8 +322,7 @@ impl JobStore for GatewayJobStore {
         }
         counted("d1");
         let j = self.inner.get(id).await?;
-        self.view.remember(&j);
-        Some(j)
+        Some(self.view.merge(j))
     }
 
     async fn by_external(&self, p: ProtocolId, external_id: &str) -> Option<Job> {
@@ -262,8 +337,7 @@ impl JobStore for GatewayJobStore {
         }
         counted("d1");
         let j = self.inner.by_external(p, external_id).await?;
-        self.view.remember(&j);
-        Some(j)
+        Some(self.view.merge(j))
     }
 
     async fn update(&self, id: JobId, f: JobUpdate) -> Result<Job, StoreError> {
@@ -294,8 +368,8 @@ impl JobStore for GatewayJobStore {
 
     fn watch(&self, id: JobId) -> Option<watch::Receiver<JobSnapshot>> {
         let mut g = self.watchers.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(tx) = g.get(&id) {
-            return Some(tx.subscribe());
+        if let Some(w) = g.get(&id) {
+            return Some(w.tx.subscribe());
         }
         // A placeholder until the first poll (which runs at once).
         let (tx, rx) = watch::channel(JobSnapshot {
@@ -306,9 +380,9 @@ impl JobStore for GatewayJobStore {
             queue_position: None,
             log_count: 0,
         });
-        let tx = Arc::new(tx);
-        g.insert(id, tx.clone());
-        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, tx, self.watchers.clone(), self.poll));
+        let w = Arc::new(Watcher { tx, wake: tokio::sync::Notify::new() });
+        g.insert(id, w.clone());
+        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, w, self.watchers.clone(), self.poll));
         Some(rx)
     }
 

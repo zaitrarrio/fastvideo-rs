@@ -86,21 +86,9 @@ impl SplitRope {
             fractions.len()
         );
         let tokens = fractions.len() / axes;
+        let Layout { half, n, pad } = Layout::new(axes, dim, heads);
         let slots = dim / 2;
-        let half = slots / heads;
-        let n = dim / (2 * axes);
-        let pad = slots - n * axes;
-        // torch.linspace(0, 1, n, float64) → theta ** that → · pi/2 → float32.
-        let freqs: Vec<f32> = (0..n)
-            .map(|k| {
-                let e = if n == 1 {
-                    0.0
-                } else {
-                    k as f64 / (n - 1) as f64
-                };
-                (theta.powf(e) * std::f64::consts::FRAC_PI_2) as f32
-            })
-            .collect();
+        let freqs = frequencies(n, theta);
         let (mut cos, mut sin) = (
             vec![1f32; heads * tokens * half],
             vec![0f32; heads * tokens * half],
@@ -108,13 +96,11 @@ impl SplitRope {
         for t in 0..tokens {
             for m in pad..slots {
                 let (k, a) = ((m - pad) / axes, (m - pad) % axes);
-                // (grid * 2 - 1) * freqs, each step rounded to float32 as torch does.
-                let angle = (fractions[t * axes + a] * 2.0 - 1.0) * freqs[k];
+                let (c, s) = rotation(fractions[t * axes + a], freqs[k]);
                 let (h, j) = (m / half, m % half);
                 let at = (h * tokens + t) * half + j;
-                // cos/sin of the float32 angle, correctly rounded: evaluate in f64.
-                cos[at] = f64::from(angle).cos() as f32;
-                sin[at] = f64::from(angle).sin() as f32;
+                cos[at] = c;
+                sin[at] = s;
             }
         }
         Self {
@@ -138,6 +124,170 @@ impl SplitRope {
                 .collect()
         };
         (widen(&self.cos), widen(&self.sin))
+    }
+}
+
+/// Where a split table's values sit: `half` pairs per head, `n` frequencies
+/// per axis, `pad` identity slots in front of the flat `dim / 2` vector.
+#[derive(Debug, Clone, Copy)]
+struct Layout {
+    half: usize,
+    n: usize,
+    pad: usize,
+}
+
+impl Layout {
+    fn new(axes: usize, dim: usize, heads: usize) -> Self {
+        assert!(
+            axes > 0 && heads > 0 && dim.is_multiple_of(2 * heads),
+            "split rope: dim {dim}, {heads} heads, {axes} axes"
+        );
+        let slots = dim / 2;
+        let n = dim / (2 * axes);
+        Self {
+            half: slots / heads,
+            n,
+            pad: slots - n * axes,
+        }
+    }
+}
+
+/// torch.linspace(0, 1, n, float64) → theta ** that → · pi/2 → float32.
+fn frequencies(n: usize, theta: f64) -> Vec<f32> {
+    (0..n)
+        .map(|k| {
+            let e = if n == 1 {
+                0.0
+            } else {
+                k as f64 / (n - 1) as f64
+            };
+            (theta.powf(e) * std::f64::consts::FRAC_PI_2) as f32
+        })
+        .collect()
+}
+
+/// `(cos, sin)` of one slot: the angle `(fraction · 2 - 1) · freq`, each step
+/// rounded to float32 as torch does, then cos/sin of that float32 angle,
+/// correctly rounded (evaluated in f64).
+fn rotation(fraction: f32, freq: f32) -> (f32, f32) {
+    let angle = (fraction * 2.0 - 1.0) * freq;
+    (f64::from(angle).cos() as f32, f64::from(angle).sin() as f32)
+}
+
+/// A [`SplitRope`] factored for building on the device.
+///
+/// A slot's angle depends only on the token's fraction on one axis and the
+/// slot's frequency, and an LTX grid has few distinct fractions: one per
+/// latent frame, row and column (plus keyframe and reference blocks), a few
+/// hundred against tens of millions of table entries. So the cos/sin of every
+/// distinct `(fraction, frequency)` pair is evaluated once here, with the
+/// very arithmetic of [`SplitRope::from_fractions`], and the full table is a
+/// pure gather ([`Self::expand`], or the device kernel `ltx_split_rope`): the
+/// same bits, without the per-entry f64 `cos`/`sin` that made the 1080p
+/// stage-2 table a multi-second single-threaded host job.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitRopeLut {
+    pub heads: usize,
+    pub tokens: usize,
+    pub half: usize,
+    pub axes: usize,
+    /// Identity slots in front of the flat `dim / 2` vector.
+    pub pad: usize,
+    /// Frequencies per axis.
+    pub n: usize,
+    /// `[tokens, axes]`: the row of `cos` / `sin` holding each fraction.
+    pub index: Vec<u32>,
+    /// `[values, n]`: cos of every distinct fraction at every frequency.
+    pub cos: Vec<f32>,
+    pub sin: Vec<f32>,
+}
+
+impl SplitRopeLut {
+    /// The factored form of [`SplitRope::from_fractions`] (same arguments,
+    /// same panics).
+    pub fn from_fractions(
+        fractions: &[f32],
+        axes: usize,
+        dim: usize,
+        heads: usize,
+        theta: f64,
+    ) -> Self {
+        let layout = Layout::new(axes, dim, heads);
+        assert!(
+            fractions.len().is_multiple_of(axes),
+            "split rope: {} fractions over {axes} axes",
+            fractions.len()
+        );
+        let freqs = frequencies(layout.n, theta);
+        // Distinct fractions by bit pattern: the angle is a function of the
+        // bits alone, whatever axis they came from.
+        let mut rows = std::collections::HashMap::<u32, u32>::new();
+        let mut values: Vec<f32> = Vec::new();
+        let index = fractions
+            .iter()
+            .map(|&f| {
+                *rows.entry(f.to_bits()).or_insert_with(|| {
+                    values.push(f);
+                    (values.len() - 1) as u32
+                })
+            })
+            .collect();
+        let (mut cos, mut sin) = (
+            Vec::with_capacity(values.len() * layout.n),
+            Vec::with_capacity(values.len() * layout.n),
+        );
+        for &f in &values {
+            for &q in &freqs {
+                let (c, s) = rotation(f, q);
+                cos.push(c);
+                sin.push(s);
+            }
+        }
+        Self {
+            heads,
+            tokens: fractions.len() / axes,
+            half: layout.half,
+            axes,
+            pad: layout.pad,
+            n: layout.n,
+            index,
+            cos,
+            sin,
+        }
+    }
+
+    /// The `(cos, sin)` of head `h`, token `t`, pair `j`.
+    pub fn at(&self, h: usize, t: usize, j: usize) -> (f32, f32) {
+        let m = h * self.half + j;
+        if m < self.pad {
+            return (1.0, 0.0);
+        }
+        let (k, a) = ((m - self.pad) / self.axes, (m - self.pad) % self.axes);
+        let row = self.index[t * self.axes + a] as usize;
+        (self.cos[row * self.n + k], self.sin[row * self.n + k])
+    }
+
+    /// The full table, on the host: equal to [`SplitRope::from_fractions`]
+    /// bit for bit.
+    pub fn expand(&self) -> SplitRope {
+        let len = self.heads * self.tokens * self.half;
+        let (mut cos, mut sin) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        for h in 0..self.heads {
+            for t in 0..self.tokens {
+                for j in 0..self.half {
+                    let (c, s) = self.at(h, t, j);
+                    cos.push(c);
+                    sin.push(s);
+                }
+            }
+        }
+        SplitRope {
+            heads: self.heads,
+            tokens: self.tokens,
+            half: self.half,
+            cos,
+            sin,
+        }
     }
 }
 
@@ -417,44 +567,130 @@ impl Ltx2RopeTables {
         fps: f32,
         division: ScalarDivision,
     ) -> Self {
-        let theta = cfg.rope_theta;
-        let cross_dim = cfg.audio_cross_attention_dim;
-        // Both cross tables share one time base so equal instants rotate equally.
-        let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
+        let [video, audio, cross_video, cross_audio] =
+            table_inputs(cfg, grid, extra, reference, audio_tokens, fps, division)
+                .map(TableInput::table);
         Self {
-            video: SplitRope::from_fractions(
-                &video_fractions_cond(cfg, grid, fps, division, extra, reference),
-                3,
-                cfg.inner_dim(),
-                cfg.num_attention_heads,
-                theta,
+            video,
+            audio,
+            cross_video,
+            cross_audio,
+        }
+    }
+}
+
+/// What one split table is built from.
+struct TableInput {
+    fractions: Vec<f32>,
+    axes: usize,
+    dim: usize,
+    heads: usize,
+    theta: f64,
+}
+
+impl TableInput {
+    fn table(self) -> SplitRope {
+        SplitRope::from_fractions(&self.fractions, self.axes, self.dim, self.heads, self.theta)
+    }
+
+    fn lut(self) -> SplitRopeLut {
+        SplitRopeLut::from_fractions(&self.fractions, self.axes, self.dim, self.heads, self.theta)
+    }
+}
+
+/// The inputs of the video, audio, cross-video and cross-audio tables.
+fn table_inputs(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    extra: &[usize],
+    reference: Option<ReferenceBlock>,
+    audio_tokens: usize,
+    fps: f32,
+    division: ScalarDivision,
+) -> [TableInput; 4] {
+    let theta = cfg.rope_theta;
+    let cross_dim = cfg.audio_cross_attention_dim;
+    // Both cross tables share one time base so equal instants rotate equally.
+    let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
+    let input = |fractions, axes, dim, heads| TableInput {
+        fractions,
+        axes,
+        dim,
+        heads,
+        theta,
+    };
+    [
+        input(
+            video_fractions_cond(cfg, grid, fps, division, extra, reference),
+            3,
+            cfg.inner_dim(),
+            cfg.num_attention_heads,
+        ),
+        input(
+            audio_fractions(
+                cfg,
+                audio_tokens,
+                cfg.audio_pos_embed_max_pos as f32,
+                division,
             ),
-            audio: SplitRope::from_fractions(
-                &audio_fractions(
-                    cfg,
-                    audio_tokens,
-                    cfg.audio_pos_embed_max_pos as f32,
-                    division,
-                ),
-                1,
-                cfg.audio_inner_dim(),
-                cfg.audio_num_attention_heads,
-                theta,
-            ),
-            cross_video: SplitRope::from_fractions(
-                &video_time_fractions_cond(cfg, grid, fps, cross_max, division, extra, reference),
-                1,
-                cross_dim,
-                cfg.num_attention_heads,
-                theta,
-            ),
-            cross_audio: SplitRope::from_fractions(
-                &audio_fractions(cfg, audio_tokens, cross_max, division),
-                1,
-                cross_dim,
-                cfg.audio_num_attention_heads,
-                theta,
-            ),
+            1,
+            cfg.audio_inner_dim(),
+            cfg.audio_num_attention_heads,
+        ),
+        input(
+            video_time_fractions_cond(cfg, grid, fps, cross_max, division, extra, reference),
+            1,
+            cross_dim,
+            cfg.num_attention_heads,
+        ),
+        input(
+            audio_fractions(cfg, audio_tokens, cross_max, division),
+            1,
+            cross_dim,
+            cfg.audio_num_attention_heads,
+        ),
+    ]
+}
+
+/// [`Ltx2RopeTables`] in factored form ([`SplitRopeLut`]), for building the
+/// tables on the device: the same four tables, bit for bit, once expanded.
+#[derive(Debug, Clone)]
+pub struct Ltx2RopeLuts {
+    pub video: SplitRopeLut,
+    pub audio: SplitRopeLut,
+    pub cross_video: SplitRopeLut,
+    pub cross_audio: SplitRopeLut,
+}
+
+impl Ltx2RopeLuts {
+    /// Factored [`Ltx2RopeTables::with_conditioning`].
+    pub fn with_conditioning(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        extra: &[usize],
+        reference: Option<ReferenceBlock>,
+        audio_tokens: usize,
+        fps: f32,
+        division: ScalarDivision,
+    ) -> Self {
+        let [video, audio, cross_video, cross_audio] =
+            table_inputs(cfg, grid, extra, reference, audio_tokens, fps, division)
+                .map(TableInput::lut);
+        Self {
+            video,
+            audio,
+            cross_video,
+            cross_audio,
+        }
+    }
+
+    /// The four full tables on the host.
+    pub fn expand(&self) -> Ltx2RopeTables {
+        Ltx2RopeTables {
+            video: self.video.expand(),
+            audio: self.audio.expand(),
+            cross_video: self.cross_video.expand(),
+            cross_audio: self.cross_audio.expand(),
         }
     }
 }
@@ -580,6 +816,82 @@ mod tests {
                 assert!((f64::from(got.0) - angle.cos()).abs() < 2e-3, "slot {m}");
                 assert!((f64::from(got.1) - angle.sin()).abs() < 2e-3, "slot {m}");
             }
+        }
+    }
+
+    fn same_bits(a: &SplitRope, b: &SplitRope, what: &str) {
+        assert_eq!((a.heads, a.tokens, a.half), (b.heads, b.tokens, b.half), "{what}");
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert!(bits(&a.cos) == bits(&b.cos), "{what}: cos differs");
+        assert!(bits(&a.sin) == bits(&b.sin), "{what}: sin differs");
+    }
+
+    /// The factored tables expand to the direct ones bit for bit, for every
+    /// conditioning layout the pipeline builds: plain T2V, a first-frame
+    /// (I2V) or several keyframes, an IC-LoRA reference, and both divisions.
+    /// The time axis is the full 6 s clip (19 latent frames at 24 fps) and
+    /// the audio its 151 latents; the spatial axes are kept short so the
+    /// direct builder stays quick in a debug test.
+    #[test]
+    fn factored_tables_expand_to_the_direct_ones_exactly() {
+        let c = cfg();
+        let grid = [19, 3, 5];
+        let reference = Some(ReferenceBlock {
+            grid: [19, 2, 3],
+            downscale: 2,
+        });
+        for (extra, reference) in [
+            (&[][..], None),
+            (&[0][..], None),
+            (&[0, 72, 144][..], None),
+            (&[0][..], reference),
+        ] {
+            for division in [ScalarDivision::Reciprocal, ScalarDivision::Exact] {
+                let direct =
+                    Ltx2RopeTables::with_conditioning(&c, grid, extra, reference, 151, 24.0, division);
+                let luts =
+                    Ltx2RopeLuts::with_conditioning(&c, grid, extra, reference, 151, 24.0, division);
+                let got = luts.expand();
+                let what = format!("{extra:?} {reference:?} {division:?}");
+                same_bits(&got.video, &direct.video, &format!("video {what}"));
+                same_bits(&got.audio, &direct.audio, &format!("audio {what}"));
+                same_bits(&got.cross_video, &direct.cross_video, &format!("cross_video {what}"));
+                same_bits(&got.cross_audio, &direct.cross_audio, &format!("cross_audio {what}"));
+            }
+        }
+        // Connector-shaped (one axis, 30 heads, odd pad) as well.
+        let fr = connector_fractions(40, 4096);
+        same_bits(
+            &SplitRopeLut::from_fractions(&fr, 1, 3840, 30, 10_000.0).expand(),
+            &SplitRope::from_fractions(&fr, 1, 3840, 30, 10_000.0),
+            "connector",
+        );
+    }
+
+    /// At the 1080p 6 s stage-2 geometry the factored video table holds a
+    /// few hundred distinct fractions, not 38 760 tokens' worth of cos/sin.
+    #[test]
+    fn a_1080p_video_table_factors_into_a_few_hundred_rows() {
+        let luts = Ltx2RopeLuts::with_conditioning(
+            &cfg(),
+            [19, 34, 60],
+            &[0],
+            None,
+            151,
+            24.0,
+            ScalarDivision::Reciprocal,
+        );
+        assert_eq!(luts.video.tokens, 20 * 34 * 60);
+        let rows = luts.video.cos.len() / luts.video.n;
+        assert!(rows < 20 + 34 + 60 + 1, "{rows} distinct fractions");
+        // Spot checks against the direct definition.
+        let fr = video_fractions_cond(&cfg(), [19, 34, 60], 24.0, ScalarDivision::Reciprocal, &[0], None);
+        let (n, pad) = (luts.video.n, luts.video.pad);
+        let freqs = frequencies(n, cfg().rope_theta);
+        for (h, t, j) in [(0, 0, 5), (7, 12_345, 33), (31, 40_799, 63), (16, 38_760, 0)] {
+            let m = h * luts.video.half + j;
+            let want = rotation(fr[t * 3 + (m - pad) % 3], freqs[(m - pad) / 3]);
+            assert_eq!(luts.video.at(h, t, j), want, "h{h} t{t} j{j}");
         }
     }
 

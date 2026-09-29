@@ -6,9 +6,10 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use fastvideo_cudarc::sink::{AudioPcm, FrameSink, SinkPort, VideoFrames};
+use fastvideo_cudarc::sink::{AudioPcm, DetachedSink, FrameSink, SinkPort, VideoFrames};
 use fastvideo_cudarc::wan::pipeline::PipelineError;
 use fastvideo_cudarc::{Hooks, Progress, Stage};
 use fastvideo_media::mp4::{AudioTarget, Mp4Spec, Mp4Writer};
@@ -78,6 +79,16 @@ fn sink_err(e: impl std::fmt::Display) -> PipelineError {
     PipelineError::Message(format!("engine sink: {e}"))
 }
 
+/// A file job's MP4 encoder fed from the sink's relay thread
+/// ([`FrameSink::detach`]): the CPU (x264) or NVENC encode runs while later
+/// tiles decode, and a slow encoder never stalls the decode thread.
+struct EncodeFeed {
+    writer: Option<Mp4Writer>,
+    frames: u64,
+    /// Relay-thread time in the crop and the ffmpeg feed.
+    busy_s: f64,
+}
+
 /// The E2 sink: frames go straight into the NVENC writer (file jobs) or to
 /// the job's `ClipSink` (in-memory jobs), audio arrives first (A/V models).
 struct Delivery<'c> {
@@ -99,9 +110,23 @@ struct Delivery<'c> {
     stitch: Option<crate::stitch::Stitch>,
     /// Source frames written ahead of the generated ones.
     stitched: u64,
+    /// Set when the MP4 feed was detached onto the relay thread.
+    feed: Option<Arc<Mutex<EncodeFeed>>>,
 }
 
 impl Delivery<'_> {
+    /// Take the detached feed's writer and frame count back (the relay has
+    /// ended: the port that ran it is gone). Returns the feed's busy time.
+    fn reattach(&mut self) -> f64 {
+        let Some(feed) = self.feed.take() else {
+            return 0.0;
+        };
+        let mut f = feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.writer = f.writer.take();
+        self.count = f.frames;
+        f.busy_s
+    }
+
     fn writer(&mut self) -> Result<&mut Mp4Writer, PipelineError> {
         if self.writer.is_none() {
             let path = self.mp4_path.clone().expect("file mode");
@@ -168,6 +193,50 @@ impl FrameSink for Delivery<'_> {
         }
         self.pcm = Some(p);
         Ok(())
+    }
+
+    /// File jobs whose audio (if any) is already here encode off the
+    /// generating thread; in-memory and stitched (extend) jobs keep their
+    /// frames on it.
+    fn detach(&mut self) -> Option<DetachedSink> {
+        // Extend jobs splice source frames around the clip on this thread.
+        if self.mp4_path.is_none()
+            || self.stitch.is_some()
+            || self.feed.is_some()
+            || (self.keep_audio && self.pcm.is_none())
+        {
+            return None;
+        }
+        // A spawn failure here is met again, and reported, on the old path.
+        self.writer().ok()?;
+        let feed = Arc::new(Mutex::new(EncodeFeed {
+            writer: self.writer.take(),
+            frames: 0,
+            busy_s: 0.0,
+        }));
+        self.feed = Some(feed.clone());
+        let out_size = self.out_size;
+        Some(Box::new(move |v: &VideoFrames| {
+            let t0 = Instant::now();
+            let mut f = feed.lock().map_err(|_| sink_err("encoder feed poisoned"))?;
+            let wr = f.writer.as_mut().ok_or_else(|| sink_err("encoder feed closed"))?;
+            let (w, h) = (v.width as u32, v.height as u32);
+            for i in 0..v.len() {
+                let frame = crop(
+                    RgbFrame {
+                        width: w,
+                        height: h,
+                        data: v.frame(i).to_vec().into(),
+                        index: (v.index + i) as u64,
+                    },
+                    out_size,
+                );
+                wr.push(&frame).map_err(sink_err)?;
+            }
+            f.frames += v.len() as u64;
+            f.busy_s += t0.elapsed().as_secs_f64();
+            Ok(())
+        }))
     }
 
     fn frames(&mut self, v: &VideoFrames) -> fastvideo_cudarc::wan::pipeline::Result<()> {
@@ -242,6 +311,7 @@ pub(crate) fn deliver(
         encode_s: 0.0,
         stitch: crate::stitch::Stitch::for_job(job),
         stitched: 0,
+        feed: None,
     };
     // Steps finished in earlier stepping stages, and the current stage's total.
     let done_before = Cell::new(0u32);
@@ -264,14 +334,17 @@ pub(crate) fn deliver(
             let _ = ctl.step(step, total);
         }
     };
-    let mut metrics = {
+    let metrics = {
         let port = SinkPort::new(&mut d).with_pngs(opts.keep_frames);
         let hooks = Hooks::default()
             .with_cancel(&token)
             .with_progress(&progress)
             .with_sink(&port);
-        f(hooks)?
+        f(hooks)
     };
+    // The port is gone, so is its relay: the detached feed is complete.
+    let feed_busy_s = d.reattach();
+    let mut metrics = metrics?;
     ctl.check()?;
     if d.count != u64::from(job.num_frames) {
         return Err(ApiError::engine_failed(format!(
@@ -297,6 +370,10 @@ pub(crate) fn deliver(
         "encode".into(),
         d.encode_s + t0.elapsed().as_secs_f64(),
     );
+    if feed_busy_s > 0.0 {
+        // Off the critical path: the encoder fed during the decode.
+        tracing::debug!(feed_busy_s, tail_s = t0.elapsed().as_secs_f64(), "mp4 encoder feed overlapped the decode");
+    }
     let in_memory = mp4.is_none();
     Ok(ClipOutput {
         mp4,
@@ -348,6 +425,7 @@ mod tests {
             encode_s: 0.0,
             stitch: None,
             stitched: 0,
+            feed: None,
         };
         let s = [0.5f32, -0.5];
         d.audio(&AudioPcm { sample_rate: 32_000, channels: 2, samples: &s }).unwrap();
@@ -359,5 +437,58 @@ mod tests {
         assert_eq!((d.frames[0].width, d.frames[0].height), (2, 2));
         assert_eq!(clip.frames.len(), 2);
         assert_eq!(clip.audio.len(), 1);
+    }
+
+    /// A file job detaches its encoder: chunks fed from another thread are
+    /// cropped and encoded in order, and the writer and frame count come
+    /// back for the finish. Needs ffmpeg (skipped without it).
+    #[test]
+    fn a_file_job_encodes_on_the_detached_feed() {
+        use crate::backend::CollectSink;
+        if !fastvideo_media::tools::ffmpeg_available() {
+            eprintln!("skipped: no ffmpeg");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("fv-detached-mp4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut clip = CollectSink::default();
+        let mut d = Delivery {
+            out_size: (16, 16),
+            fps: 24,
+            keep_audio: false,
+            mp4_path: Some(dir.join("output.mp4")),
+            encoder: FfmpegH264::Libx264CpuTest,
+            quality: 19,
+            writer: None,
+            pcm: None,
+            frames: Vec::new(),
+            count: 0,
+            clip: &mut clip,
+            encode_s: 0.0,
+            stitch: None,
+            stitched: 0,
+            feed: None,
+        };
+        let mut consumer = d.detach().expect("a file job detaches");
+        assert!(d.detach().is_none(), "one feed per clip");
+        let (w, h) = (24usize, 20usize);
+        std::thread::spawn(move || {
+            for (index, n) in [(0usize, 3usize), (3, 5)] {
+                let rgb: Vec<u8> = (0..n * w * h * 3).map(|i| (i % 251) as u8).collect();
+                let v = VideoFrames { index, width: w, height: h, fps: 24.0, rgb: std::sync::Arc::new(rgb) };
+                consumer(&v).unwrap();
+            }
+        })
+        .join()
+        .unwrap();
+        assert!(d.reattach() > 0.0);
+        assert_eq!(d.count, 8);
+        assert!(d.frames.is_empty());
+        let mp4 = d.writer.take().expect("writer back").finish().unwrap();
+        assert!(clip.frames.is_empty(), "a file job's frames stay out of the clip sink");
+        let info = fastvideo_media::mp4::inspect(&mp4).unwrap();
+        let v = &info.tracks[0];
+        assert_eq!((v.width, v.height, v.samples), (Some(16), Some(16), 8));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

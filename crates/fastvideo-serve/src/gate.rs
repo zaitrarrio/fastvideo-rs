@@ -55,6 +55,10 @@ impl ServiceGate {
         for (alias, model) in engine.caps().tier_aliases() {
             aliases.entry(alias).or_insert(model.0);
         }
+        // Probe ffmpeg now, off the runtime, not when the first job ends.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn_blocking(ffmpeg_ok);
+        }
         Arc::new(Self { engine, aliases, ctx: OnceLock::new(), admitting: AtomicBool::new(true), output })
     }
 
@@ -137,6 +141,12 @@ async fn pump(
     let started = std::time::Instant::now();
     let mut ended = false;
     while let Some(ev) = events.recv().await {
+        match &ev {
+            EngineEvent::Stage { name } => tracing::debug!(job = %id, "engine: stage {name}"),
+            EngineEvent::Progress { step, total } => tracing::debug!(job = %id, "engine: step {step}/{total}"),
+            EngineEvent::Log(_) => {}
+            e => tracing::debug!(job = %id, "engine: {}", engine_event_name(e)),
+        }
         let ev = match ev {
             EngineEvent::Queued { position } => JobEvent::Queued { position },
             EngineEvent::Started => JobEvent::Started,
@@ -174,6 +184,26 @@ async fn pump(
     let _ = tokio::fs::remove_dir_all(output.scratch.join(id.to_string())).await;
 }
 
+/// Whether ffmpeg runs here: probed once per process (it was an
+/// `ffmpeg -version` run per finished job, on the async runtime).
+fn ffmpeg_ok() -> bool {
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(fastvideo_media::tools::ffmpeg_available)
+}
+
+fn engine_event_name(e: &EngineEvent) -> &'static str {
+    match e {
+        EngineEvent::Queued { .. } => "queued",
+        EngineEvent::Started => "started",
+        EngineEvent::Stage { .. } => "stage",
+        EngineEvent::Progress { .. } => "progress",
+        EngineEvent::Log(_) => "log",
+        EngineEvent::Finished(_) => "finished",
+        EngineEvent::Failed(_) => "failed",
+        EngineEvent::Cancelled => "cancelled",
+    }
+}
+
 /// The engine's output -> a finalized file plus its artifact facts.
 async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, policy: &OutputPolicy) -> Result<FinishedOutput, ApiError> {
     let dir = policy.scratch.join(id.to_string());
@@ -194,18 +224,25 @@ async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, po
         Some(src) => {
             let post: mp4::PostProcess = (&r.post).into();
             let needs_post = post.crop.is_some() || post.drop_audio;
-            if needs_post || fastvideo_media::tools::ffmpeg_available() {
-                let dst = dir.join("final.mp4");
-                let (src2, dst2, enc) = (src.clone(), dst.clone(), policy.encoder);
-                tokio::task::spawn_blocking(move || mp4::finalize_with(&src2, &dst2, &post, enc))
-                    .await
-                    .map_err(|e| ApiError::internal(format!("post-processing task: {e}")))?
-                    .map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;
+            let dst = dir.join("final.mp4");
+            let (src2, dst2, enc) = (src.clone(), dst.clone(), policy.encoder);
+            tracing::debug!(job = %id, "output: finalize start");
+            // Off the async runtime: the checks read the file and may run
+            // ffmpeg once (the probe is cached per process).
+            let out = tokio::task::spawn_blocking(move || -> Result<PathBuf, ApiError> {
+                if !needs_post && (!ffmpeg_ok() || mp4::finalize_is_noop(&src2, &post)) {
+                    return Ok(src2);
+                }
+                mp4::finalize_with(&src2, &dst2, &post, enc).map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;
+                Ok(dst2)
+            })
+            .await
+            .map_err(|e| ApiError::internal(format!("post-processing task: {e}")))??;
+            tracing::debug!(job = %id, remuxed = out != src, "output: finalize done");
+            if out != src {
                 let _ = tokio::fs::remove_file(&src).await;
-                dst
-            } else {
-                src
             }
+            out
         }
         None if policy.placeholder => write_placeholder(&dir, id, r).await?,
         None => return Err(ApiError::engine_failed("the engine produced no output file")),

@@ -2,6 +2,15 @@
 
 Project code: FVID
 
+### FVID · 2026-09-29 · FVID-2026-09-29-ltx-device-rope
+- Trigger: datacenter profile (docs/perf/datacenter-profile.md): LTX idles 3.6-4.6 s before stage 2 on a single-threaded host RoPE build, and the VAE decode stalls behind the CPU x264 feed; kernel plan WP-F, owner-approved
+- Options: cache the host tables per geometry; build them on the device; keep the host build
+- Decision: **the LTX RoPE tables are gathered on the device** (`ltx_split_rope`) from a factored form (cos/sin of each distinct fraction x frequency plus an index), and file jobs feed ffmpeg from a relay thread (`FrameSink::detach`). Escape hatch: `FASTVIDEO_LTX2_HOST_ROPE=1` restores the host build
+- Reason: the gather is bit-identical to the host tables (pure copies), needs no per-geometry cache, and covers every conditioning layout
+- Reversibility: cheap (env flag; the detach is one trait method)
+- Executed by: Executor
+- ADR: none
+- Verification: `factored_tables_expand_to_the_direct_ones_exactly` (host), `fv-gpucheck kernels` group `ltx_rope` (device vs host, 1080p), sink/output tests; timings in docs/perf/datacenter-profile.md "WP-F results"
 ### FVID · 2026-09-29 · FVID-2026-09-29-vsa-datacenter
 - Trigger: owner approved WP-D; the datacenter profile put VSA's mma.sync fine kernel at 51-61% of H3 turbo denoise on B200 (41-52% on H100)
 - Options: KV-tile-list producer in `attn_dc.cu` with tcgen05 / wgmma consumers; port FastVideo's ThunderKittens sm_90a / sm100a kernels; keep mma.sync

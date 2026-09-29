@@ -37,7 +37,8 @@ plan" below).
    - on **SF-Wan, the MXFP8 glue (activation quantize, dequant epilogue,
      block copies) takes 37 % of block time**, against 6 % for the GEMMs it
      feeds. The H100 runs the same model in BF16 without it.
-4. **LTX idles because of host work, not kernels.** The GPU is busy 63 % of
+4. **LTX idles because of host work, not kernels.** (Fixed 2026-09-29:
+   see "WP-F results" — −17 % T2V / −15 % I2V at 1080p on the PRO 6000.) The GPU is busy 63 % of
    the run. Stage 1 and stage 2 are each 95–97 % busy; per-step host idle is
    < 5 %.
    - The loss is one **3.6 s host-CPU gap before stage 2**, when the
@@ -360,6 +361,88 @@ here) and its 30–40 % util. Stage 1 there was also slower (8.3 s against
 4.9 s), which a single gap does not explain. Per-step host work, such as the
 1.15 GB of H2D in 98 copies each step, is the likely suspect, but this
 profile's host did not reproduce it.
+
+## WP-F results: LTX host gaps removed (2026-09-29)
+
+What changed (commits on `wip/ltx-rope`, merged to main):
+
+- **RoPE tables built on the device.** A slot's angle depends only on a
+  token's fraction on one axis and the slot's frequency, and an LTX grid
+  has a few hundred distinct fractions (one per latent frame, row and
+  column, plus keyframe / reference blocks). The host now evaluates cos/sin
+  once per distinct (fraction, frequency) with the same f32-angle / f64
+  cos-sin arithmetic (`SplitRopeLut`, `fastvideo_models::ltx2::rope`), and
+  the kernel `ltx_split_rope` gathers the `[H·S, D]` tables on the device.
+  Pure copies, so the tables are **bit-identical** to the host build: host
+  test `factored_tables_expand_to_the_direct_ones_exactly` (T2V, I2V,
+  keyframes, IC-LoRA reference, both divisions), GPU check `fv-gpucheck
+  kernels --groups ltx_rope` (device vs host at the 1080p stage-2 geometry).
+  Every `Ropes` constructor goes through it, so T2V, I2V/keyframes, ref2v,
+  A2V, retake/extend and the refiner all do. `FASTVIDEO_LTX2_HOST_ROPE=1`
+  restores the host build. This also removes the ~1.3 GB table upload.
+- **CPU encode overlapped with the decode.** The "per-tile host round
+  trips" in the decode were not the VAE: the served path wrote each chunk
+  into ffmpeg's stdin *on the decode thread* (`Delivery::frames` via the
+  sink pump), so the tiles waited for x264 / NVENC, and frames reached the
+  encoder only at the decode's next report. `FrameSink::detach` now hands
+  file jobs' ffmpeg feed to a relay thread fed straight from the writer's
+  tap; the decode never waits on the encoder and the encoder works while
+  later tiles decode. The VAE tiles already stayed on the device (blend,
+  RGB8 pack on the GPU, one async copy per chunk on its own stream).
+
+**Before / after, RTX PRO 6000 (EUR-IS-1, EU volume), same pod**, native
+`/fv/v1/jobs`, `ltx-turbo`, 1920x1080 (1088 generated), 6 s, 24 fps, warm
+(after one 720p job). Baseline image `sha-1dac7d9` (the merge base), new
+`sha-a9fec55`; the control arm is the new image with
+`FASTVIDEO_LTX2_HOST_ROPE=1`.
+
+| Job | run_s | stage 1 | upsample | stage 2 | video decode | encode tail |
+|---|---:|---:|---:|---:|---:|---:|
+| T2V, baseline (2 runs) | **32.86 / 32.54** | 10.14 / 10.16 | 0.57 / 0.54 | 16.42 / 16.10 | 4.40 / 4.41 | 0.90 / 0.83 |
+| T2V, new | **27.28 / 26.90** | 9.06 / 8.99 | 0.58 / 0.55 | 12.19 / 11.87 | 4.08 / 4.05 | 0.13 / 0.19 |
+| T2V, new with host RoPE (control) | 33.36 | 10.15 | 0.65 | 16.93 | 4.12 | 0.14 |
+| I2V, baseline (warm) | **38.00** | 12.15 | 0.54 | 19.09 | 4.40 | 0.91 |
+| I2V, new (warm) | **32.34** | 11.08 | 0.62 | 14.65 | 4.03 | 0.12 |
+
+- T2V **−17 %** (32.7 → 27.1 s), I2V **−15 %** (38.0 → 32.3 s) end to end.
+- RoPE: stage 2 −4.3 s (the stage-2 table build and upload), stage 1
+  −1.1 s (its smaller table). The control arm puts both back.
+- Encode: the post-decode tail drops from 0.83–0.91 s to 0.12–0.19 s and
+  the decode itself by ~0.35 s (no more stalls behind the encoder).
+- First-job I2V (prompt load included): 84.1 → 76.4 s.
+- Not run on the H100/B200 (budget); the profile's gap sizes there
+  (3.6–4.6 s + 0.4–0.5 s before stage 2, 0.8–1.4 s encode tail) are the
+  same work, so the profile's −18…−21 % estimate stands.
+
+**Output identity.** The 720p warm-up job decodes to the same frames in all
+three boots (baseline, new, control): frame MD5 `a5413900…`. At 1080p the
+output is deterministic within a boot (both T2V runs identical in each arm)
+but differs between boots *whatever the RoPE path*: baseline vs the
+host-RoPE control 33.7 dB PSNR, baseline vs new 33.6 dB, new vs control
+34.3 dB. That run-to-run spread predates this change (I2V differs even
+between two runs of one boot: 35.6 dB) and is left for a separate look
+(Sol stage-2 selection or a per-boot kernel choice are the suspects).
+Raw records: `artifacts/perf/wp-f/rtxpro6000-ab.jsonl`.
+
+**Oracle parity: not run to completion.** `scripts/gpu/oracle.sh 37faef4`
+(targets `ltx25-512p ltx25-i2v`, `FV_ORACLE_RUN_MODE=all` so the runtime pod
+would also run `fv-gpucheck kernels`, including `ltx_rope`) brought up the
+upstream pod and produced the `ltx25-512p` reference dump, but no RTX PRO 6000
+was free in EUR-IS-1 for the runtime pod, and the driver was lost in a
+container restart; the upstream pod was deleted. So the GPU-side
+`ltx_rope` bit-exact check and the oracle diff are **still to run**
+(`ORACLE_TARGETS="ltx25-512p ltx25-i2v" FV_ORACLE_RUN_MODE=all
+ORACLE_WAIT_FIRST=1 UP_IMAGE_TAG=latest scripts/gpu/oracle.sh <sha>`). What
+covers the change meanwhile: the host test that the factored tables expand to
+the direct ones bit for bit, the kernel being a pure gather of those values,
+and the 720p output being bit-identical to the baseline.
+
+Spend: A/B pod 18 min ($0.64); oracle upstream pod 100 min, mostly idle
+while waiting for runtime stock ($3.48).
+
+Still open from the profile's LTX list: the spatial upsampler is loaded
+from disk every job (0.55 s warm, part of it host), and the stage-1 /
+stage-2 per-step host work (< 5 %).
 
 ## Answers to the kernel plan (`datacenter-kernel-plan.md` §6)
 

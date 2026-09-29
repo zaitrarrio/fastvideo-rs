@@ -4696,6 +4696,57 @@ pub fn ltx_rope_rows_device(
         .map_err(err)?;
     Ok(rows)
 }
+
+/// A split rotary table in `rope_half`'s layout (`[heads · tokens, 2 · half]`
+/// cos and sin) gathered on the device from its factored form: `index`
+/// `[tokens, axes]` value rows into `lut_cos` / `lut_sin` `[values, n]`.
+/// Only the factored form crosses the bus, and the result has its bits.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn ltx_split_rope_device(
+    index: &[u32],
+    lut_cos: &[f32],
+    lut_sin: &[f32],
+    heads: usize,
+    tokens: usize,
+    half: usize,
+    axes: usize,
+    pad: usize,
+    n: usize,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>)> {
+    if index.len() != tokens * axes || lut_cos.len() != lut_sin.len() || n == 0 {
+        return Err(TensorError::Message(format!(
+            "ltx split rope: {} indices for {tokens}x{axes}, {} / {} values of {n}",
+            index.len(),
+            lut_cos.len(),
+            lut_sin.len()
+        )));
+    }
+    let dev = ctx()?;
+    let total = heads * tokens * 2 * half;
+    let upload = |v: &[f32]| -> Result<CudaSlice<f32>> {
+        let s = dev.stream.memcpy_stod(v).map_err(err)?;
+        super::stats::record_h2d(v.len());
+        Ok(s)
+    };
+    let idx = dev.stream.memcpy_stod(index).map_err(err)?;
+    super::stats::record_h2d(index.len());
+    let (lc, ls) = (upload(lut_cos)?, upload(lut_sin)?);
+    let mut cos = unsafe { dev.stream.alloc::<f32>(total.max(1)) }.map_err(err)?;
+    let mut sin = unsafe { dev.stream.alloc::<f32>(total.max(1)) }.map_err(err)?;
+    let (h, t, r, a, p, nn) = (
+        heads as i64,
+        tokens as i64,
+        half as i64,
+        axes as i64,
+        pad as i64,
+        n as i64,
+    );
+    launch!(dev.stream, &dev.kernels.ltx_split_rope, cfg_n(total);
+        &idx, &lc, &ls, &mut cos, &mut sin, &h, &t, &r, &a, &p, &nn)
+    .map_err(err)?;
+    Ok((cos, sin))
+}
 // ==== endregion: ltx2 ====
 
 // ==== region: h3 video vae (ViT decoder glue around bf16 GEMMs) ====

@@ -507,4 +507,17 @@ pub enum StreamCaps {
     Causal { block_frames: u32, target_fps: u32 },
     /// Clip-queue playout (H3, LTX, FastWan): clip length bounds in seconds.
     Clip { min_s: f32, max_s: f32 },
+    /// Duplex: the model reads client input tracks while it streams
+    /// (real-time V2V, live avatars; design §5.11).
+    Duplex(crate::ingest::DuplexCaps),
+}
+
+impl StreamCaps {
+    /// The duplex caps, for a duplex model.
+    pub fn duplex(&self) -> Option<&crate::ingest::DuplexCaps> {
+        match self {
+            StreamCaps::Duplex(d) => Some(d),
+            _ => None,
+        }
+    }
 }

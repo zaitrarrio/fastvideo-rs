@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use fastvideo_protocol::{
-    ApiError, Job, JobId, JobSnapshot, JobStore, JobUpdate, ListQuery, Page, ProtocolId,
-    SortOrder, StoreError,
+    ApiError, Job, JobId, JobSnapshot, JobStatus, JobStore, JobUpdate, ListQuery, Page,
+    ProtocolId, SortOrder, StoreError,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -44,6 +44,14 @@ use tokio::sync::watch;
 use super::client::{D1Client, D1Error, Stmt};
 use super::schema;
 use crate::artifacts::ArtifactStore;
+
+/// One write the flusher (or a state change) sends: version `seq` of a job.
+struct DueWrite {
+    seq: u64,
+    lease: Option<u64>,
+    status: JobStatus,
+    stmt: Stmt,
+}
 
 /// Tuning for [`D1JobStore`].
 #[derive(Clone, Debug)]
@@ -99,6 +107,8 @@ struct Entry {
     lease: Option<u64>,
     /// A newer lease holds the row: nothing more is written for this job.
     fenced: bool,
+    /// The status of the last version written to D1 (`None`: none yet).
+    written_status: Option<JobStatus>,
 }
 
 #[derive(Default)]
@@ -364,6 +374,7 @@ impl D1JobStore {
                     terminal_since: None,
                     lease: Some(lease),
                     fenced: false,
+                    written_status: None,
                 },
             );
         }
@@ -462,6 +473,7 @@ impl D1JobStore {
                 terminal_since: None,
                 lease: None,
                 fenced: false,
+                written_status: Some(next.status()),
             },
         );
         Ok(next)
@@ -567,34 +579,50 @@ impl D1JobStore {
         let Some(lock) = self.lock().jobs.get(&id).map(|e| e.flushed.clone()) else {
             return Ok(());
         };
-        let mut done = lock.lock().await;
+        let mut done = lock.lock_owned().await;
+        let Some(w) = self.prepare(id, *done)? else {
+            return Ok(());
+        };
+        let res = self.write(w.stmt).await;
+        self.written(id, w.seq, w.lease, w.status, &res, &mut done);
+        res.map(|_| ())
+    }
+
+    /// The write of `id`'s newest version when it is newer than `done` (the
+    /// last written sequence number) and the job is not fenced.
+    fn prepare(&self, id: JobId, done: u64) -> Result<Option<DueWrite>, D1Error> {
         let (job, seq, lease) = {
             let g = self.lock();
             match g.jobs.get(&id) {
-                Some(e) if e.fenced => return Ok(()),
-                Some(e) if e.seq > *done => (e.job.clone(), e.seq, e.lease),
-                _ => return Ok(()),
+                Some(e) if e.fenced => return Ok(None),
+                Some(e) if e.seq > done => (e.job.clone(), e.seq, e.lease),
+                _ => return Ok(None),
             }
         };
         let stmt = match lease {
             Some(l) => leased_upsert_stmt(&job, &self.opts.worker_id, l),
             None => upsert_stmt(&job, Some(&self.opts.worker_id)),
         };
-        let stmt = match stmt {
-            Ok(s) => s,
-            Err(e) => return Err(D1Error::Decode(e.to_string())),
-        };
-        let res = self.write(stmt).await;
+        let status = job.status();
+        stmt.map(|stmt| Some(DueWrite { seq, lease, status, stmt })).map_err(|e| D1Error::Decode(e.to_string()))
+    }
+
+    /// Bookkeeping after the write of version `seq` of `id` (under the job's
+    /// write lock, whose value `done` is the last written sequence number).
+    fn written(&self, id: JobId, seq: u64, lease: Option<u64>, status: JobStatus, res: &Result<u64, D1Error>, done: &mut u64) {
         let fenced = lease.is_some() && matches!(res, Ok(0));
         let mut g = self.lock();
         if let Some(e) = g.jobs.get_mut(&id) {
             e.last_write = Some(Instant::now());
-            match &res {
+            match res {
                 _ if fenced => {
                     e.fenced = true;
                     e.dirty = false;
                 }
-                Ok(_) => e.dirty = e.seq > seq,
+                Ok(_) => {
+                    e.dirty = e.seq > seq;
+                    e.written_status = Some(status);
+                }
                 Err(_) => e.dirty = true,
             }
         }
@@ -606,7 +634,83 @@ impl D1JobStore {
         if res.is_ok() {
             *done = seq;
         }
-        res.map(|_| ())
+    }
+
+    /// Waits until D1 has the job's current status: a write in flight
+    /// finishes first; when the status written last is still behind, the
+    /// newest version is written now (a status change is written at once
+    /// anyway, so this is mostly a wait). Coalesced progress is left to the
+    /// flusher. A worker answers the gateway's wait for a status change
+    /// after this, so the gateway never shows a status D1 does not have.
+    pub async fn settle(&self, id: JobId) -> Result<(), D1Error> {
+        let Some(lock) = self.lock().jobs.get(&id).map(|e| e.flushed.clone()) else {
+            return Ok(());
+        };
+        drop(lock.lock().await);
+        let behind = self.lock().jobs.get(&id).is_some_and(|e| !e.fenced && e.written_status != Some(e.job.status()));
+        if behind {
+            self.flush(id).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The coalesced writes of one flusher tick: every due job whose write
+    /// lock is free, in one D1 batch (one round trip for all of them rather
+    /// than one per job; throttling per job is unchanged). A job with a write
+    /// in flight is left for the next tick. A failed batch (one statement
+    /// rolls the whole batch back) falls back to one write per job, so one
+    /// bad row cannot hold the others back.
+    async fn flush_due(&self, due: Vec<JobId>) {
+        type Item = (JobId, tokio::sync::OwnedMutexGuard<u64>, u64, Option<u64>, JobStatus);
+        let mut items: Vec<Item> = Vec::new();
+        let mut stmts = Vec::new();
+        for id in due {
+            let Some(lock) = self.lock().jobs.get(&id).map(|e| e.flushed.clone()) else { continue };
+            let Ok(guard) = lock.try_lock_owned() else { continue };
+            match self.prepare(id, *guard) {
+                Ok(Some(w)) => {
+                    items.push((id, guard, w.seq, w.lease, w.status));
+                    stmts.push(w.stmt);
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry"),
+            }
+        }
+        if items.len() == 1 {
+            let (id, mut guard, seq, lease, status) = items.pop().expect("one");
+            let res = self.write(stmts.pop().expect("one")).await;
+            if let Err(e) = &res {
+                tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry");
+            }
+            self.written(id, seq, lease, status, &res, &mut guard);
+            return;
+        }
+        const CHUNK: usize = 50;
+        while !items.is_empty() {
+            let n = items.len().min(CHUNK);
+            let mut part: Vec<Item> = items.drain(..n).collect();
+            let part_stmts: Vec<Stmt> = stmts.drain(..n).collect();
+            self.count(|s| s.writes += n as u64);
+            match self.db.batch(part_stmts.clone()).await {
+                Ok(rs) => {
+                    for ((id, guard, seq, lease, status), r) in part.iter_mut().zip(rs) {
+                        self.written(*id, *seq, *lease, *status, &Ok(r.changes), guard);
+                    }
+                }
+                Err(e) => {
+                    self.count(|s| s.failed_writes += n as u64);
+                    tracing::warn!(jobs = n, error = %e, "D1 job store: batched deferred writes failed; writing one by one");
+                    for ((id, guard, seq, lease, status), stmt) in part.iter_mut().zip(part_stmts) {
+                        let res = self.write(stmt).await;
+                        if let Err(e) = &res {
+                            tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry");
+                        }
+                        self.written(*id, *seq, *lease, *status, &res, guard);
+                    }
+                }
+            }
+        }
     }
 
     /// Writes every dirty cached job now (shutdown).
@@ -629,10 +733,8 @@ impl D1JobStore {
                 .map(|(id, _)| *id)
                 .collect()
         };
-        for id in due {
-            if let Err(e) = self.flush(id).await {
-                tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry");
-            }
+        if !due.is_empty() {
+            self.flush_due(due).await;
         }
         {
             let mut g = self.lock();
@@ -829,6 +931,7 @@ impl JobStore for D1JobStore {
         let (tx, _) = watch::channel(job.snapshot(seq));
         g.by_ext.insert((job.protocol, job.external_id.clone()), job.id);
         let terminal = job.is_terminal();
+        let status = job.status();
         g.jobs.insert(
             job.id,
             Entry {
@@ -841,6 +944,7 @@ impl JobStore for D1JobStore {
                 terminal_since: terminal.then(Instant::now),
                 lease: None,
                 fenced: false,
+                written_status: Some(status),
             },
         );
         Ok(())

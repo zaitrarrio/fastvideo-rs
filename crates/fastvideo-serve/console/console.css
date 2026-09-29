@@ -162,3 +162,6 @@ dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); font-size:
 .timeline li { display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .timeline .v { font-family: var(--mono); color: var(--muted); min-width: 2.5em; }
 .timeline .t { flex: 1; overflow-wrap: anywhere; }
+/* Live input page */
+video.small-video { max-width: 260px; margin-top: 6px; }
+h3.sub { font-size: 13px; margin: 14px 0 0; color: var(--muted); font-weight: 600; }

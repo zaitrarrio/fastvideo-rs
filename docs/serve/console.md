@@ -15,6 +15,7 @@ with `curl`.
 | `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
+| `/console/live` | Live input: publish the camera and microphone (`getUserMedia`) to a duplex model and watch its output, over native WHIP ingest or the Reactor runtime (§4b) |
 | `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
 
 Disable the pages with `FV_CONSOLE=0` (or `server.console = false`); the
@@ -198,6 +199,41 @@ is kept in `window.__avatar` for `tests/console/avatar.cjs` (fake engine in
 `scripts/serve/e2e/pod-clients.sh avatar`, which also records the stream
 and runs the lip-sync proxy).
 
+## 4b. Live input page
+
+`/console/live` (`console/live.js`) publishes the browser's camera and
+microphone to a **duplex** model (design §5.11): the loopback echo
+`fv-echo` (`FV_ECHO_MODEL=1`) today, real-time V2V and live avatars later.
+The model list is every model of `GET /fv/v1/capabilities` with
+`stream.duplex`; the facts line shows its input caps (codecs, maximum size
+and fps, bitrate cap, audio) and session length.
+
+- **Camera / Microphone** checkboxes and a **Camera resolution** choice
+  (640×360, 1280×720, 320×240) go to `getUserMedia` (`frameRate.max` is the
+  model's `max_fps`); the model scales whatever arrives to its input size
+  and refuses pictures above its maximum.
+- **Scene** and **Persona** are the session context; **Session length** is
+  `max_seconds` (the causal rule: default 120 s, at most 300 s).
+- **Transport**:
+  - *Native WHIP ingest*: one send-receive video and audio transceiver
+    each, a complete offer `POST`ed to `/fv/v1/streams/ingest?model=…`
+    (`application/sdp`, `Authorization: Bearer <key>`), the answer from the
+    201; the output comes back on the same peer. Stats poll the stream's
+    `Location` every second; Stop sends `DELETE`.
+  - *Reactor runtime* (the server's `[reactor] model` must be the duplex
+    model, e.g. `FV_REACTOR_MODEL=fv-echo`): `/start_session` with the
+    context, `connections`, recv-only `main_video`/`main_audio` and
+    send-only `input_video`/`input_audio` transceivers with
+    `track_mapping`, the `data` and `control` channels, `publish_track` and
+    `resume_track` (v0 JSON), `get_state` every second for the stats, and
+    `/stop_session` on Stop.
+- **Pause model** sends `set_paused`. The page shows the output, your
+  camera, the counters (frames out, input frames shown, decoded, dropped,
+  refused, latency in the model queue) and an event log.
+
+Duplex sessions need the API key on both transports (unless the server runs
+with `FV_AUTH_MODE=none`); the page shows the usual banner without one.
+
 ## 5. Calling a server behind the Runpod proxy
 
 These notes apply to the console's API snippets and to your own scripts
@@ -352,6 +388,17 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   scripts/serve/check.sh` runs it; `FV_CONSOLE_SHOTS=<dir>` saves
   screenshots. It needs `node`, the `playwright` npm package and a Chromium
   under `PLAYWRIGHT_BROWSERS_PATH` (default `/opt/pw-browsers`).
+  After it, `tests/console/director_playback.cjs` (the director page with a
+  fake engine slower than real time) and `tests/console/live_echo.cjs`: a
+  server with `FV_ECHO_MODEL=1`, `FV_REACTOR_MODEL=fv-echo` and an API key;
+  Chromium with `--use-fake-device-for-media-stream` publishes its fake
+  camera and microphone from the Live input page over WHIP ingest, then
+  over the Reactor runtime, and checks the page reaches streaming, the
+  model shows input frames, the `<video>` shows the magenta overlay border
+  around the camera's picture (centre colours match), the overlay counter
+  advances, and Stop ends it; also that both transports refuse a request
+  without the key. `FV_CONSOLE_TESTS=live_echo bash tests/console/run.sh`
+  runs one of them.
 
 With the fake engine and no ffmpeg the "video" is a small placeholder file,
 so the player shows the URL but cannot play it; with ffmpeg on `PATH` the fake

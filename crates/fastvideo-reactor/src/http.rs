@@ -1,6 +1,10 @@
 //! The Reactor HTTP surface (reactor §3.2-3.4, design §5.7, §9): local
-//! session routes, `/schema`, `/events`, and the signalling group. No auth;
-//! CORS `*` with every method and header (RT `http/server.py:build_app`).
+//! session routes, `/schema`, `/events`, and the signalling group. No auth
+//! (RT parity), except for duplex sessions when `ReactorConfig::ingest_auth`
+//! is set: `/start_session`, `/stop_session`, `POST connections` and
+//! `sdp_params` then answer 401 without it (client media goes to
+//! authenticated sessions only, design §5.11). CORS `*` with every method
+//! and header (RT `http/server.py:build_app`).
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -69,7 +73,10 @@ fn object_body(b: &Bytes) -> Result<Value, Refusal> {
     }
 }
 
-async fn start_session(State(rt): State<Reactor>, body: Bytes) -> Response {
+async fn start_session(State(rt): State<Reactor>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err(e) = rt.authorize(&headers) {
+        return e.into_response();
+    }
     let params = match object_body(&body) {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -84,7 +91,10 @@ async fn session(State(rt): State<Reactor>) -> Response {
     Json(rt.descriptor()).into_response()
 }
 
-async fn stop_session(State(rt): State<Reactor>, body: Bytes) -> Response {
+async fn stop_session(State(rt): State<Reactor>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err(e) = rt.authorize(&headers) {
+        return e.into_response();
+    }
     let p = match object_body(&body) {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -146,7 +156,10 @@ async fn ice_servers(State(rt): State<Reactor>, Path(sid): Path<String>) -> Resp
     }
 }
 
-async fn connections(State(rt): State<Reactor>, Path(sid): Path<String>) -> Response {
+async fn connections(State(rt): State<Reactor>, Path(sid): Path<String>, headers: HeaderMap) -> Response {
+    if let Err(e) = rt.authorize(&headers) {
+        return e.into_response();
+    }
     match rt.register_connection(&sid) {
         Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
         Err(e) => e.into_response(),
@@ -164,7 +177,7 @@ async fn offer(
     body: Bytes,
 ) -> Response {
     // Session checks come before body validation (RT order).
-    if let Err(e) = rt.require_running(&sid) {
+    if let Err(e) = rt.require_running(&sid).and_then(|_| rt.authorize(&headers)) {
         return e.into_response();
     }
     let cid = match parse_cid(&cid) {
@@ -182,8 +195,8 @@ async fn offer(
     }
 }
 
-async fn poll_answer(State(rt): State<Reactor>, Path((sid, cid)): Path<(String, String)>) -> Response {
-    let cid = match rt.require_running(&sid).and_then(|_| parse_cid(&cid)) {
+async fn poll_answer(State(rt): State<Reactor>, Path((sid, cid)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cid = match rt.require_running(&sid).and_then(|_| rt.authorize(&headers)).and_then(|_| parse_cid(&cid)) {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };

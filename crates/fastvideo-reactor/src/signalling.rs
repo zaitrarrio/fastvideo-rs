@@ -132,7 +132,7 @@ impl Reactor {
             id,
             Conn { gen: 0, answer: Answer::None, candidates: Vec::new(), peer: None, mapping: HashMap::new() },
         );
-        Ok(json!({"connection_id": id, "track_map": Reactor::track_map(&live.tracks)}))
+        Ok(json!({"connection_id": id, "track_map": Reactor::live_track_map(&live)}))
     }
 
     /// `POST`/`PUT sdp_params`: starts answering `params.sdp_offer`.
@@ -183,6 +183,8 @@ impl Reactor {
             channels: ChannelPolicy::reactor(),
             start_paused: true,
             ice_credentials: params.ice_credentials.map(|c| (c.ufrag, c.pwd)),
+            // Duplex: every connection may publish the camera/microphone.
+            receive: live.inputs.as_ref().map(|i| i.receive_options()),
             ..AnswerOptions::default()
         };
         let me = self.clone();

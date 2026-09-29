@@ -416,7 +416,7 @@ impl Ropes {
         audio_tokens: usize,
         fps: f32,
     ) -> Result<Self> {
-        Self::upload(&Ltx2RopeTables::new(cfg, grid, audio_tokens, fps))
+        Self::with_conditioning(cfg, grid, &[], None, audio_tokens, fps)
     }
 
     /// [`Self::new`] with one appended `H·W` token block per keyframe at
@@ -428,18 +428,18 @@ impl Ropes {
         audio_tokens: usize,
         fps: f32,
     ) -> Result<Self> {
-        Self::upload(&Ltx2RopeTables::with_keyframes(
-            cfg,
-            grid,
-            extra,
-            audio_tokens,
-            fps,
-            fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal,
-        ))
+        Self::with_conditioning(cfg, grid, extra, None, audio_tokens, fps)
     }
 
     /// [`Self::with_keyframes`] plus an IC-LoRA reference block after the
     /// keyframe blocks.
+    ///
+    /// The tables are [`Ltx2RopeTables::with_conditioning`] (CUDA division)
+    /// bit for bit, but built from their factored form
+    /// ([`fastvideo_models::ltx2::Ltx2RopeLuts`]) and gathered on the device:
+    /// the direct host build was a multi-second single-threaded job at 1080p
+    /// (tens of millions of f64 cos/sin) plus a ~1.3 GB upload, all of it an
+    /// idle GPU before stage 2. `FASTVIDEO_LTX2_HOST_ROPE=1` restores it.
     pub fn with_conditioning(
         cfg: &Ltx2TransformerConfig,
         grid: [usize; 3],
@@ -448,15 +448,33 @@ impl Ropes {
         audio_tokens: usize,
         fps: f32,
     ) -> Result<Self> {
-        Self::upload(&Ltx2RopeTables::with_conditioning(
+        let division = fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal;
+        if crate::wan::envflag::bool_flag("FASTVIDEO_LTX2_HOST_ROPE", false) {
+            return Self::upload(&Ltx2RopeTables::with_conditioning(
+                cfg,
+                grid,
+                extra,
+                reference,
+                audio_tokens,
+                fps,
+                division,
+            ));
+        }
+        let t = fastvideo_models::ltx2::Ltx2RopeLuts::with_conditioning(
             cfg,
             grid,
             extra,
             reference,
             audio_tokens,
             fps,
-            fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal,
-        ))
+            division,
+        );
+        Ok(Self {
+            video: DeviceRope::from_lut(&t.video)?,
+            audio: DeviceRope::from_lut(&t.audio)?,
+            cross_video: DeviceRope::from_lut(&t.cross_video)?,
+            cross_audio: DeviceRope::from_lut(&t.cross_audio)?,
+        })
     }
 
     pub fn upload(t: &Ltx2RopeTables) -> Result<Self> {

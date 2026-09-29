@@ -2426,6 +2426,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         crate::kernels_fuse::dit_fusion(c.report, &mut c.seed)
     })?;
 
+    // LTX-2 rotary tables built on the device vs the host build, bit for bit.
+    group(&mut c, "ltx_rope", |c| crate::kernels_fuse::ltx_rope(c.report))?;
+
     // Wan DiT: the bf16 block chain (fused vs unfused, bit for bit) and the
     // block-causal flash attention of SF-Wan against sdpa_composed.
     group(&mut c, "wan_fusion", |c| {

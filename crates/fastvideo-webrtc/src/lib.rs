@@ -4,7 +4,11 @@
 //!   one ICE-TCP passive listener carry every peer; answers are non-trickle
 //!   with every candidate plus `a=end-of-candidates`; client trickle is
 //!   accepted; data channels; pre-encoded H.264/Opus writers; per-mid pause
-//!   gate; PLI events; stats; negotiation/idle/ICE timeouts.
+//!   gate; PLI events; stats; negotiation/idle/ICE timeouts; receiving client
+//!   camera/microphone tracks on a bounded, bitrate-capped queue.
+//! - [`ingest`] (feature `str0m`): client media → keyframe gate → ffmpeg
+//!   decode (warm spare) / Opus decode (`opus`) → the session's input rings
+//!   (design §5.11).
 //! - [`whip`]: the WHIP publisher. HTTP behind `whip`; the full publisher
 //!   (offer, POST, answer, DELETE) needs `whip` + `str0m`.
 //! - Pure, always-built helpers: [`sdp`] (validation and munging), [`ice`]
@@ -20,6 +24,8 @@ pub mod framing;
 #[cfg(feature = "str0m")]
 pub mod host;
 pub mod ice;
+#[cfg(feature = "str0m")]
+pub mod ingest;
 pub mod profile;
 pub mod sdp;
 pub mod stun;
