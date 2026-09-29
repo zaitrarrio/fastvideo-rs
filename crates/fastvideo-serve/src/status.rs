@@ -25,7 +25,9 @@
 //! `loading` (models loading, or a worker still starting: `/ping` 204),
 //! `scaled_to_zero` (no worker; a serverless pool starts one on demand),
 //! `draining`, `unhealthy` (answers with an error), `down` (unreachable),
-//! `failed` (model loading failed). A pool is its best worker; a model is
+//! `failed` (model loading failed, or the startup capability check found the
+//! GPU cannot run it: the model then carries a `reason` and its pool lists
+//! it in `failed_models`). A pool is its best worker; a model is
 //! its best pool; `state` is the best pool. Serverless pools also carry
 //! Runpod's `worker_counts` (idle, running, initializing, …).
 //!
@@ -123,6 +125,11 @@ pub struct PoolStatus {
     pub versions: Vec<VersionCount>,
     /// More than one sha among them.
     pub mixed_versions: bool,
+    /// Models that failed on this pool's workers, with the reason (the
+    /// startup capability check: "cannot run on this GPU (…, sm80): it needs
+    /// FP8 tensor cores …", or a failed load). Messages only: no URLs or ids.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub failed_models: BTreeMap<String, String>,
 }
 
 /// A pod pool's state from its workers' (none: scaled to zero).
@@ -158,16 +165,33 @@ pub fn worker_counts(health: &Value) -> BTreeMap<String, u64> {
 /// The `/fv/v1/status` body. `names`: every served name, alias and id →
 /// model id, so a client can find the model behind a fal app's `model`.
 pub fn body(gateway: bool, pools: Vec<PoolStatus>, names: BTreeMap<String, String>) -> Value {
-    let mut models: BTreeMap<String, (State, Vec<String>)> = BTreeMap::new();
+    let mut models: BTreeMap<String, (State, Vec<String>, Option<String>)> = BTreeMap::new();
     for p in &pools {
         for m in &p.models {
-            let e = models.entry(m.clone()).or_insert((p.state, Vec::new()));
-            e.0 = e.0.min(p.state);
+            // A model failed on this pool is `failed` there, whatever the pool's state.
+            let (st, why) = match p.failed_models.get(m) {
+                Some(why) => (State::Failed, Some(why.clone())),
+                None => (p.state, None),
+            };
+            let e = models.entry(m.clone()).or_insert((st, Vec::new(), None));
+            e.0 = e.0.min(st);
+            if e.2.is_none() {
+                e.2 = why;
+            }
             e.1.push(p.id.clone());
         }
     }
     let state = pools.iter().map(|p| p.state).min().unwrap_or(State::Down);
-    let models: BTreeMap<String, Value> = models.into_iter().map(|(m, (s, p))| (m, json!({"state": s, "pools": p}))).collect();
+    let models: BTreeMap<String, Value> = models
+        .into_iter()
+        .map(|(m, (s, p, why))| {
+            let mut v = json!({"state": s, "pools": p});
+            if let (State::Failed, Some(why)) = (s, why) {
+                v["reason"] = Value::String(why);
+            }
+            (m, v)
+        })
+        .collect();
     let mixed = pools.iter().any(|p| p.mixed_versions);
     json!({
         "object": "fv.status",
@@ -243,6 +267,7 @@ mod tests {
             worker_counts: None,
             versions: vec![],
             mixed_versions: false,
+            failed_models: BTreeMap::new(),
         };
         let b = body(true, vec![pool("a", State::Down, &["m1", "m2"]), pool("b", State::Busy, &["m2"])], BTreeMap::new());
         assert_eq!(b["state"], "busy");
@@ -251,6 +276,33 @@ mod tests {
         assert_eq!(body(false, vec![], BTreeMap::new())["state"], "down");
         assert_eq!(b["mixed_versions"], false);
         assert_eq!(b["version"]["sha"], crate::build_info::BuildInfo::current().git_sha_short);
+    }
+
+    #[test]
+    fn a_failed_model_carries_its_reason() {
+        let mut failed = BTreeMap::new();
+        failed.insert("h3-turbo".to_owned(), "model `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80)".to_owned());
+        let p = PoolStatus {
+            id: "local".into(),
+            kind: "local".into(),
+            state: State::Failed,
+            available: false,
+            models: vec!["h3-turbo".into(), "wan".into()],
+            queued: 0,
+            running: 0,
+            last_seen_s: None,
+            workers: vec![],
+            loading: None,
+            worker_counts: None,
+            versions: vec![],
+            mixed_versions: false,
+            failed_models: failed,
+        };
+        let b = body(false, vec![p], BTreeMap::new());
+        assert_eq!(b["models"]["h3-turbo"]["state"], "failed");
+        assert!(b["models"]["h3-turbo"]["reason"].as_str().unwrap().contains("sm80"));
+        assert!(b["models"]["wan"].get("reason").is_none());
+        assert!(b["pools"][0]["failed_models"]["h3-turbo"].is_string());
     }
 
     #[test]

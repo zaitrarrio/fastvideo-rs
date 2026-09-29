@@ -188,6 +188,10 @@ async fn status(State(st): State<Arc<WorkerState>>) -> Response {
         "worker_id": st.worker_id,
         "pool": st.pool,
         "readiness": readiness_word(&engine.readiness()),
+        // Models this worker failed (the startup capability check: a GPU
+        // that cannot run the model) and why; the gateway shows them in
+        // `/fv/v1/status` and dispatches nothing here.
+        "failed_models": crate::health::failed_models(&engine.pool()),
         "draining": st.draining(),
         "stats": {"queued_batch": s.queued_batch, "queued_stream": s.queued_stream, "running": s.running, "sessions": s.sessions},
         "models": models,

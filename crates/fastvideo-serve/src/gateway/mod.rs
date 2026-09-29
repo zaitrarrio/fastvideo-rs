@@ -108,11 +108,16 @@ pub struct WorkerView {
     /// Its build, from the last successful probe (admin view only; the
     /// public views show the short sha and channel per pool).
     pub build: Option<WorkerBuild>,
+    /// Reports `readiness: failed` (e.g. a GPU that cannot run its model):
+    /// shown as `failed` and never dispatched to.
+    pub failed: bool,
+    /// Its failed models and why (from its internal status).
+    pub failed_models: BTreeMap<String, String>,
 }
 
 impl WorkerView {
     fn usable(&self) -> bool {
-        self.healthy && !self.draining
+        self.healthy && !self.draining && !self.failed
     }
     fn load(&self) -> u32 {
         self.running + self.queued + self.inflight
@@ -123,6 +128,8 @@ impl WorkerView {
         if self.healthy {
             if self.draining {
                 S::Draining
+            } else if self.failed {
+                S::Failed
             } else if !self.ready {
                 S::Loading
             } else if self.load() > 0 {
