@@ -420,7 +420,11 @@ async fn create(mm: &MiniMax, ctx: &ServeCtx, headers: &HeaderMap, body: Body, r
     ncx.owner = owner.clone();
     ncx.request_id = rid.to_owned();
     let mut echo = request_echo(&parsed);
-    let req = CreateEndpoint.normalize(parsed, &ncx)?;
+    let defaulted = parsed.resolution.is_none();
+    let mut req = CreateEndpoint.normalize(parsed, &ncx)?;
+    if defaulted {
+        default_resolution(ctx, mm, &mut req, &mut echo);
+    }
     if let Length::Seconds { value, .. } = req.timing.length {
         echo["duration"] = json!(value as u64);
     }
@@ -451,6 +455,28 @@ async fn create(mm: &MiniMax, ctx: &ServeCtx, headers: &HeaderMap, body: Body, r
     }
     let job = submit_generation(ctx, mm, req, owner, echo).await?;
     Ok(CreateEndpoint.submit_reply(&job, &ctx.view_ctx(false)))
+}
+
+/// An omitted `resolution` is 768P (the H3-Max contract); on a model
+/// without the 768 tier (`MiniMax-H3-Draft` on the 480P draft recipe) it is
+/// the model's own default tier instead, so a body without `resolution`
+/// runs on every model.
+fn default_resolution(ctx: &ServeCtx, mm: &MiniMax, req: &mut GenerationRequest, echo: &mut Value) {
+    let models = ctx.engine().models();
+    let engine = ctx.engine().clone();
+    let alias = move |n: &str| engine.alias(n);
+    let Ok((caps, _)) = mm.resolve_caps(&req.model, &alias, &models) else { return };
+    let tiers = &caps.canvas.short_edges;
+    let p768 = Resolution::P768.short_edge();
+    let Some(&first) = tiers.first().filter(|_| !tiers.contains(&p768)) else { return };
+    let Some(r) = [Resolution::P480, Resolution::P768].into_iter().find(|r| r.short_edge() == first) else { return };
+    match &mut req.canvas {
+        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } if *short_edge == p768 => {
+            *short_edge = first;
+            echo["resolution"] = json!(r.as_str());
+        }
+        _ => {}
+    }
 }
 
 /// What the job keeps of the body for the views: the scalar fields as sent

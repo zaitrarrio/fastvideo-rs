@@ -251,10 +251,10 @@ pub fn negotiate_noted(
         _ => None,
     };
     let ((width, height, crop), note) = resolve_canvas_noted(&spec, caps, follow)?;
-    let num_frames = if req.task == Task::A2V {
-        a2v_frames(req, caps, staged, fps)?
+    let (num_frames, frames_note) = if req.task == Task::A2V {
+        (a2v_frames(req, caps, staged, fps)?, None)
     } else {
-        resolve_frames(&req.timing.length, fps, caps)?
+        resolve_frames_noted(&req.timing.length, fps, caps)?
     };
     check_fps(fps, caps)?;
     check_h3_geometry(caps, width, height, num_frames)?;
@@ -306,7 +306,7 @@ pub fn negotiate_noted(
         tier: caps.tier,
         recipe: caps.recipe.clone(),
     };
-    Ok((job, note.into_iter().collect()))
+    Ok((job, note.into_iter().chain(frames_note).collect()))
 }
 
 /// The canvas spec `negotiate` resolves. An image-conditioned request that
@@ -583,19 +583,27 @@ fn check_tier(short_edge: u32, caps: &ModelCaps) -> Result<(), ApiError> {
     if caps.canvas.short_edges.contains(&short_edge) {
         return Ok(());
     }
+    let mut tiers = caps.canvas.short_edges.clone();
+    tiers.sort_unstable();
+    let list = tiers.iter().map(|t| format!("{t}p")).collect::<Vec<_>>().join(", ");
     if caps.family == Family::H3 {
-        if short_edge == 1080 {
-            return Err(ApiError::unsupported(GapId::H3Refine1080P));
-        }
-        if short_edge > 1080 {
-            return Err(ApiError::unsupported(GapId::H3Resolution2K));
+        let gap = match short_edge {
+            1080 => Some(GapId::H3Refine1080P),
+            s if s > 1080 => Some(GapId::H3Resolution2K),
+            _ => None,
+        };
+        if let Some(g) = gap {
+            return Err(ApiError::unsupported_msg(
+                g,
+                format!("{}; model `{}` serves {list}", g.default_message(), caps.id),
+            ));
         }
     }
     Err(ApiError::invalid_param(
         "resolution",
         format!(
-            "short edge {short_edge} is not supported by model `{}`; supported: {:?}",
-            caps.id, caps.canvas.short_edges
+            "short edge {short_edge} is not supported by model `{}`; supported: {list}",
+            caps.id
         ),
     ))
 }
@@ -661,12 +669,15 @@ pub fn resolve_canvas_noted(
                 return Err(ApiError::invalid_param(
                     "aspect_ratio",
                     format!(
-                        "aspect ratio {ratio} is outside {}..{}",
+                        "aspect ratio {ratio} is outside this model's range {}..{} (width / height)",
                         c.aspect.0, c.aspect.1
                     ),
                 ));
             }
-            aspect_canvas(ratio.w as f64, ratio.h as f64, *short_edge, caps)
+            // The canvas the tier promises at this aspect: snapped to the
+            // multiple within the range, scaled into the pixel budget.
+            follow_canvas(f64::from(ratio.w) / f64::from(ratio.h), *short_edge, caps)
+                .map_err(|e| ApiError { param: Some("aspect_ratio".into()), ..e })
         }
         CanvasSpec::FollowImage { .. } => unreachable!("handled above"),
         CanvasSpec::ModelDefault => {
@@ -688,12 +699,12 @@ fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<Resolv
     if !c.pad_and_crop || caps.family == Family::H3 {
         // Snapping an aspect at the end of the range can land just outside
         // it (H3 1080P at 4:1 gives 2880x704): step the aspect inward until
-        // the snapped canvas fits.
+        // the snapped canvas fits the range and the engine's canvas check.
         let mut r = ratio;
         let mut last = None;
         for _ in 0..16 {
             match aspect_canvas(r, 1.0, short_edge, caps) {
-                Ok(out) if c.aspect_ok(out.0, out.1) => return Ok(out),
+                Ok(out) if c.aspect_ok(out.0, out.1) && h3_canvas_ok(caps, out.0, out.1) => return Ok(out),
                 Ok(_) => {}
                 Err(e) => last = Some(e),
             }
@@ -719,6 +730,20 @@ fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<Resolv
         }
     }
     exact_canvas(w, h, caps).map_err(|e| ApiError { param: Some("image_url".into()), ..e })
+}
+
+/// H3 only: the canvas passes the check the engine makes (768x1344, or the
+/// 1080P tier's budget on a model that serves it).
+fn h3_canvas_ok(caps: &ModelCaps, w: u32, h: u32) -> bool {
+    if caps.family != Family::H3 {
+        return true;
+    }
+    let (h, w) = (h as usize, w as usize);
+    if caps.canvas.hd.is_some() {
+        h3::check_canvas_1080p(h, w).is_ok()
+    } else {
+        h3::check_canvas(h, w).is_ok()
+    }
 }
 
 fn exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {
@@ -886,7 +911,11 @@ fn check_fps(fps: u32, caps: &ModelCaps) -> Result<(), ApiError> {
         return Ok(());
     }
     if caps.family == Family::Ltx2 {
-        return Err(ApiError::unsupported(GapId::LtxFps).with_param("fps"));
+        return Err(ApiError::unsupported_msg(
+            GapId::LtxFps,
+            format!("fps {fps} is not supported by this server; allowed: {:?}", caps.fps.allowed),
+        )
+        .with_param("fps"));
     }
     Err(ApiError::invalid_param(
         "fps",
@@ -899,6 +928,37 @@ fn check_fps(fps: u32, caps: &ModelCaps) -> Result<(), ApiError> {
 
 /// Resolves a length on `caps.frames` at `fps`.
 pub fn resolve_frames(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u32, ApiError> {
+    resolve_frames_noted(length, fps, caps).map(|(n, _)| n)
+}
+
+/// [`resolve_frames`], with a note when [`Snap::Nearest`] moved the length
+/// to the end of the model's range.
+pub fn resolve_frames_noted(length: &Length, fps: u32, caps: &ModelCaps) -> Result<(u32, Option<String>), ApiError> {
+    let g = &caps.frames;
+    let nearest = matches!(length, Length::Seconds { snap: Snap::Nearest, .. } | Length::Frames { snap: Snap::Nearest, .. });
+    let n = resolve_frames_inner(length, fps, caps)?;
+    if !nearest {
+        return Ok((n, None));
+    }
+    let raw = match *length {
+        Length::Seconds { value, .. } => (value * f64::from(fps.max(1)) - 1e-6).ceil() as u32,
+        Length::Frames { value, .. } => value,
+        _ => return Ok((n, None)),
+    };
+    let note = (g.next_on_grid(raw) != Some(n)).then(|| {
+        let f = f64::from(fps.max(1));
+        format!(
+            "length: {raw} frames ({:.2} s at {fps} fps) is outside this model's {}..={} frames; generating {n} ({:.2} s)",
+            f64::from(raw) / f,
+            g.min,
+            g.max,
+            f64::from(n) / f
+        )
+    });
+    Ok((n, note))
+}
+
+fn resolve_frames_inner(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u32, ApiError> {
     let g = &caps.frames;
     let (raw, snap, param) = match *length {
         Length::ModelDefault => return Ok(g.default),
@@ -941,6 +1001,12 @@ pub fn resolve_frames(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u32
     match snap {
         Snap::AlignUp => g.align_up(raw).ok_or_else(|| {
             ApiError::invalid_param(param, format!("length must be within {}", range()))
+        }),
+        Snap::Nearest => Ok(match g.align_up(raw) {
+            Some(n) => n,
+            None if raw < g.min => g.min,
+            // The longest on the grid.
+            None => g.max - (g.max.saturating_sub(g.offset)) % g.step.max(1),
         }),
         Snap::Exact if g.contains(raw) => Ok(raw),
         Snap::Exact => {

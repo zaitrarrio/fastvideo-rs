@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
-use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob, Task};
+use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob};
 
 use super::caps::{WanDecoder, WanRecipe, WanSampler};
 use super::output::{api_err, stages};
@@ -114,11 +114,7 @@ impl WanModel {
             .iter()
             .find(|(a, _)| *a == Anchor::First)
             .map(|(_, p)| p.to_string_lossy().into_owned());
-        if job.task == Task::I2V && (image.is_none() || !recipe.i2v) {
-            return Err(ApiError::invalid(
-                "wan: image-to-video needs a first-frame image on an I2V model",
-            ));
-        }
+        super::validate::wan(recipe, job)?;
         let (dmd, steps, guidance) = match recipe.sampler {
             WanSampler::Dmd { steps } => (true, steps, 1.0),
             WanSampler::Unipc { steps, guidance } => (false, steps, guidance),

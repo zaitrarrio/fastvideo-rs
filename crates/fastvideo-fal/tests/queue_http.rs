@@ -622,7 +622,7 @@ async fn family_apps_and_multi_segment_subs() {
     assert!(name.contains("_wan") && name.ends_with(".mp4"), "{name}");
     // Validation names fal's fields; the base H3 app refuses 2K / 4K cleanly.
     for (path, body, loc) in [
-        ("/lightricks/ltx-2.5/text-to-video/fast", json!({"prompt": "p", "duration": 20}), "duration"),
+        ("/lightricks/ltx-2.5/text-to-video/pro", json!({"prompt": "p", "duration": 12}), "duration"),
         ("/lightricks/ltx-2.5/text-to-video/pro", json!({"prompt": "p", "resolution": "2160p"}), "resolution"),
         ("/lightricks/ltx-2.5/image-to-video/fast", json!({"prompt": "p"}), "image_url"),
         ("/fal-ai/wan/v2.2-5b/text-to-video", json!({"prompt": "p", "frames_per_second": 61}), "frames_per_second"),
@@ -668,6 +668,7 @@ async fn base_h3_app() {
         assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{res}");
         let d = &r.json()["detail"][0];
         assert_eq!(d["loc"], json!(["body", "resolution"]), "{res}");
-        assert_eq!(d["msg"], "2K resolution is not supported by this server", "{res}");
+        let msg = d["msg"].as_str().unwrap();
+        assert!(msg.starts_with("2K resolution is not supported by this server") && msg.contains("768p"), "{res}: {msg}");
     }
 }

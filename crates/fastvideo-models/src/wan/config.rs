@@ -304,3 +304,62 @@ mod tests {
         assert_eq!(i2v.in_channels, 2 * i2v.out_channels + 4);
     }
 }
+
+/// The side multiple a Wan preset generates at exactly: the VAE's spatial
+/// compression times the DiT's spatial patch (Wan 2.1: 8 x 2 = 16; Wan 2.2
+/// TI2V-5B: 16 x 2 = 32). The pipeline floors other sizes to it silently.
+pub fn canvas_multiple(preset: &str) -> usize {
+    let dit = WanVideoArchConfig::from_preset(preset);
+    let vae = if dit.out_channels == 48 {
+        crate::wan::WanVaeConfig::wan_2_2()
+    } else {
+        crate::wan::WanVaeConfig::wan_2_1()
+    };
+    vae.spatial_compression() * dit.patch_size[1].max(1)
+}
+
+/// The request geometry a Wan preset generates exactly: height and width
+/// positive multiples of [`canvas_multiple`], `4k + 1` frames (the VAE's
+/// temporal compression), and for a causal preset latent frames in whole
+/// blocks (`num_frames_per_block`). The serving engine's job check.
+pub fn check_geometry(preset: &str, height: usize, width: usize, num_frames: usize) -> Result<(), String> {
+    let dit = WanVideoArchConfig::from_preset(preset);
+    let m = canvas_multiple(preset);
+    if height == 0 || width == 0 || !height.is_multiple_of(m) || !width.is_multiple_of(m) {
+        return Err(format!("wan: {width}x{height} — height and width must be positive multiples of {m}"));
+    }
+    let tc = if dit.out_channels == 48 {
+        crate::wan::WanVaeConfig::wan_2_2()
+    } else {
+        crate::wan::WanVaeConfig::wan_2_1()
+    }
+    .temporal_compression();
+    if num_frames == 0 || !(num_frames - 1).is_multiple_of(tc) {
+        return Err(format!("wan: {num_frames} frames — the frame count must be {tc}k + 1"));
+    }
+    let latents = (num_frames - 1) / tc + 1;
+    let fpb = dit.num_frames_per_block.max(1);
+    if dit.causal && !latents.is_multiple_of(fpb) {
+        return Err(format!(
+            "wan: {num_frames} frames are {latents} latent frames, not a multiple of the causal block ({fpb})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn wan_geometry() {
+        assert_eq!(canvas_multiple("wan_2_2_ti2v_5b"), 32);
+        assert_eq!(canvas_multiple("fast_wan_t2v_480p"), 16);
+        assert!(check_geometry("wan_2_2_ti2v_5b", 704, 1280, 121).is_ok());
+        assert!(check_geometry("wan_2_2_ti2v_5b", 720, 1280, 121).is_err());
+        assert!(check_geometry("wan_2_2_ti2v_5b", 704, 1280, 120).is_err());
+        assert!(check_geometry("fast_wan_t2v_480p", 480, 832, 81).is_ok());
+        assert!(check_geometry("sf_wan_t2v_1_3b", 480, 832, 81).is_ok());
+        assert!(check_geometry("sf_wan_t2v_1_3b", 480, 832, 77).is_err());
+    }
+}

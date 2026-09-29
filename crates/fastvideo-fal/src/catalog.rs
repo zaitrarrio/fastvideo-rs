@@ -4,8 +4,19 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `GET /fal/schema` | `{apps:[{id, model, tier, kind, director, endpoints:[{sub, endpoint_id, title}]}]}` for the configured apps |
-//! | `GET /fal/schema/{owner}/{alias}/{*sub}` | The endpoint's input JSON Schema (draft 2020-12); `sub` may have several segments (`text-to-video/fast`) |
+//! | `GET /fal/schema` | `{apps:[{id, model, tier, kind, director, endpoints:[{sub, endpoint_id, title}]}]}` for the configured apps; an endpoint whose task the app's model does not serve here is left out |
+//! | `GET /fal/schema/{owner}/{alias}/{*sub}` | The endpoint's input JSON Schema (draft 2020-12) as served here; `sub` may have several segments (`text-to-video/fast`) |
+//! | `GET /fal/schema/{owner}/{alias}/director` | The director form: the `configure` resolutions and aspect ratios the app's model serves |
+//!
+//! **Served schemas** ([`served_schema`]). fal's schema lists every value
+//! fal's own hosts take; the one served here (the console's form) is
+//! narrowed to what the endpoint's model serves, from its caps: the
+//! `resolution` tiers (h3-draft: 480P only; `minimax/h3` without 2K / 4K; a
+//! GPU below the 1080P tier's memory plan without 1080P), the LTX rates and
+//! durations (no `auto`: the duration head is not loaded), and
+//! frame ranges within the model's grid, with defaults moved onto a served
+//! value. The parsers still take fal's full lists: a value outside the
+//! served schema is refused at submit with the values that are served.
 //!
 //! The schema is built from the same constants [`FalInput::parse_for`]
 //! enforces (the H3 `PROMPT_MAX_CHARS`, `DURATION_MIN/MAX`, `Resolution` and
@@ -20,11 +31,12 @@
 
 use std::sync::Arc;
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use fastvideo_protocol::{route_task, ModelCaps, Task};
 use fastvideo_serve_kit::ServeCtx;
 use serde_json::{json, Map, Value};
 
@@ -456,8 +468,9 @@ fn a2v_schema(endpoint: Endpoint, class: LtxClass) -> Value {
     object(endpoint.title(), props, order, &["audio_url"])
 }
 
-/// One catalog entry.
-fn app_entry(a: &FalApp) -> Value {
+/// One catalog entry; `served` keeps the endpoints the app's models serve
+/// (every endpoint when `None`).
+fn app_entry(a: &FalApp, served: Option<&dyn Fn(Endpoint) -> bool>) -> Value {
     let kind = a.kind();
     json!({
         "id": a.id,
@@ -466,7 +479,7 @@ fn app_entry(a: &FalApp) -> Value {
         "tier": a.tier.filter(|_| kind.director()).map(|(_, t)| t.as_str()),
         "kind": kind,
         "director": kind.director(),
-        "endpoints": a.endpoints().iter().map(|e| {
+        "endpoints": a.endpoints().iter().filter(|e| served.is_none_or(|f| f(**e))).map(|e| {
             let (model, tier) = a.target(*e);
             json!({
                 "sub": e.sub(),
@@ -479,26 +492,204 @@ fn app_entry(a: &FalApp) -> Value {
     })
 }
 
-/// `GET /fal/schema` body.
+/// `GET /fal/schema` body with every endpoint of every configured app.
 pub fn catalog(cfg: &FalConfig) -> Value {
-    let apps: Vec<Value> = cfg.apps.iter().filter(|a| a.is_valid()).map(app_entry).collect();
+    let apps: Vec<Value> = cfg.apps.iter().filter(|a| a.is_valid()).map(|a| app_entry(a, None)).collect();
     json!({"apps": apps})
+}
+
+/// `GET /fal/schema` body: the configured apps with the endpoints this
+/// server's models serve.
+pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Value {
+    let apps: Vec<Value> = cfg
+        .apps
+        .iter()
+        .filter(|a| a.is_valid())
+        .map(|a| app_entry(a, Some(&|e| endpoint_caps(a, e, models, alias).is_some())))
+        .collect();
+    json!({"apps": apps})
+}
+
+/// The task an endpoint's form submits (the H3 image-to-video endpoint is
+/// image-to-video once an image is set).
+pub fn endpoint_task(e: Endpoint) -> Task {
+    match e {
+        Endpoint::TextToVideo | Endpoint::LtxTextToVideoFast | Endpoint::LtxTextToVideoPro | Endpoint::WanTextToVideo | Endpoint::WanFastWan => Task::T2V,
+        Endpoint::ImageToVideo | Endpoint::LtxImageToVideoFast | Endpoint::LtxImageToVideoPro | Endpoint::WanImageToVideo => Task::I2V,
+        Endpoint::ReferenceToVideo | Endpoint::LtxIngredient => Task::Ref2V,
+        Endpoint::LtxAudioToVideoFast | Endpoint::LtxAudioToVideoPro => Task::A2V,
+    }
+}
+
+/// The caps of the model an endpoint of `app` runs on (its name through the
+/// aliases, else its tier, then the task companion), when served here and
+/// serving the endpoint's task.
+pub fn endpoint_caps(app: &FalApp, e: Endpoint, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
+    let (name, tier) = app.target(e);
+    let caps = fastvideo_protocol::resolve_model(&name, alias, models)
+        .ok()
+        .or_else(|| tier.and_then(|(family, tier)| fastvideo_protocol::resolve_tier(family, tier, models).ok()))?;
+    let task = endpoint_task(e);
+    let caps = route_task(caps, task, models);
+    caps.supports(task).then(|| caps.clone())
+}
+
+/// The caps of the model an app's director runs (the app's own model).
+pub fn director_caps(app: &FalApp, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
+    app.kind().director().then_some(())?;
+    endpoint_caps(app, Endpoint::TextToVideo, models, alias)
+}
+
+fn narrow_enum(schema: &mut Value, field: &str, keep: impl Fn(&Value) -> bool, preferred_default: Option<Value>) {
+    let Some(p) = schema["properties"].get_mut(field) else { return };
+    let path = if p.get("enum").is_some() { "/enum" } else { "/anyOf/0/enum" };
+    let Some(Value::Array(list)) = p.pointer(path) else { return };
+    let kept: Vec<Value> = list.iter().filter(|v| keep(v)).cloned().collect();
+    if kept.is_empty() || kept.len() == list.len() {
+        return;
+    }
+    let default = p.get("default").cloned().unwrap_or(Value::Null);
+    if !default.is_null() && !kept.contains(&default) {
+        p["default"] = preferred_default.filter(|d| kept.contains(d)).unwrap_or_else(|| kept[0].clone());
+    }
+    if let Some(slot) = p.pointer_mut(path) {
+        *slot = Value::Array(kept);
+    }
+}
+
+fn narrow_range(schema: &mut Value, field: &str, lo: i64, hi: i64) {
+    let Some(p) = schema["properties"].get_mut(field) else { return };
+    let (Some(a), Some(b)) = (p["minimum"].as_i64(), p["maximum"].as_i64()) else { return };
+    let (a, b) = (a.max(lo), b.min(hi));
+    if a > b {
+        return;
+    }
+    p["minimum"] = a.into();
+    p["maximum"] = b.into();
+    if let Some(d) = p["default"].as_i64() {
+        p["default"] = d.clamp(a, b).into();
+    }
+}
+
+/// The schema this server serves for `endpoint` on an app of `kind` whose
+/// model has `caps`: fal's [`input_schema_for`], narrowed to the values the
+/// model serves (see the module docs).
+pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Value {
+    let mut s = input_schema_for(kind, endpoint);
+    let tiers = &caps.canvas.short_edges;
+    match endpoint {
+        Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {
+            let served = |v: &Value| {
+                Resolution::ALL.iter().chain(&Resolution::BASE).any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
+            };
+            // An omitted resolution is 768P, or the model's first tier.
+            let default = if tiers.contains(&Resolution::P768.short_edge()) {
+                Resolution::P768.as_str()
+            } else {
+                match tiers.first() {
+                    Some(480) => Resolution::P480.as_str(),
+                    Some(1080) => Resolution::P1080.as_str(),
+                    _ => Resolution::P768.as_str(),
+                }
+            };
+            narrow_enum(&mut s, "resolution", served, Some(default.into()));
+            // Durations within the model's grid (whole seconds).
+            let fps = caps.fps.default.max(1);
+            let lo = i64::from(caps.frames.min.div_ceil(fps));
+            let hi = i64::from(caps.frames.max / fps);
+            narrow_range(&mut s, "duration", lo, hi);
+        }
+        Endpoint::LtxTextToVideoFast
+        | Endpoint::LtxTextToVideoPro
+        | Endpoint::LtxImageToVideoFast
+        | Endpoint::LtxImageToVideoPro
+        | Endpoint::LtxAudioToVideoFast
+        | Endpoint::LtxAudioToVideoPro => {
+            narrow_enum(&mut s, "resolution", |v| ltx::LtxResolution::ALL.iter().any(|r| v == r.as_str() && tiers.contains(&r.landscape().1)), None);
+            narrow_enum(&mut s, "fps", |v| v.as_u64().is_some_and(|f| caps.fps.allows(f as u32)), None);
+            // `auto` needs the LTX-2.5 duration head, which is not loaded.
+            narrow_enum(&mut s, "duration", Value::is_number, None);
+        }
+        Endpoint::WanTextToVideo | Endpoint::WanImageToVideo | Endpoint::WanFastWan => {
+            narrow_enum(&mut s, "resolution", |v| WanResolution::ALL.iter().any(|r| v == r.as_str() && tiers.contains(&r.short_edge())), None);
+            narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
+        }
+        Endpoint::LtxIngredient => {
+            narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
+            // The rates the model generates at, as a list.
+            if let Some(p) = s["properties"].get_mut("frames_per_second") {
+                let (lo, hi) = (p["minimum"].as_u64().unwrap_or(0), p["maximum"].as_u64().unwrap_or(u64::MAX));
+                let rates: Vec<Value> = caps.fps.allowed.iter().filter(|&&f| (lo..=hi).contains(&u64::from(f))).map(|&f| f.into()).collect();
+                if !rates.is_empty() {
+                    let def = p["default"].clone();
+                    let obj = p.as_object_mut().expect("property object");
+                    obj.remove("minimum");
+                    obj.remove("maximum");
+                    obj.insert("default".into(), if rates.contains(&def) { def } else { rates[0].clone() });
+                    obj.insert("enum".into(), Value::Array(rates));
+                }
+            }
+        }
+    }
+    s
+}
+
+/// The director form of an app whose model has `caps`: the `configure`
+/// fields the console sets, with the values the model serves.
+pub fn director_schema(caps: &ModelCaps) -> Value {
+    use crate::director::messages::Resolution as R;
+    let res: Vec<&str> = [R::R480, R::R768, R::R1080]
+        .into_iter()
+        .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
+        .map(|r| r.as_str())
+        .collect();
+    // The session's own default: 768p when served, else the last tier.
+    let default = if res.contains(&"768p") { "768p" } else { res.last().copied().unwrap_or("768p") };
+    let mut props = Map::new();
+    props.insert(
+        "resolution".into(),
+        json!({"type": "string", "enum": res, "default": default, "description": "The resolution of every chunk (1080p takes about 2.5x as long per chunk as 768p)."}),
+    );
+    props.insert(
+        "aspect_ratio".into(),
+        json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."}),
+    );
+    object("Director", props, vec!["resolution", "aspect_ratio"], &[])
 }
 
 pub(crate) fn routes(router: Router<ServeCtx>, cfg: &Arc<FalConfig>) -> Router<ServeCtx> {
     let c = cfg.clone();
     let c2 = cfg.clone();
     router
-        .route("/fal/schema", get(move || std::future::ready(Json(catalog(&c)))))
+        .route(
+            "/fal/schema",
+            get(move |State(ctx): State<ServeCtx>| {
+                let models = ctx.engine().models();
+                let engine = ctx.engine().clone();
+                std::future::ready(Json(catalog_served(&c, &models, &|n| engine.alias(n))))
+            }),
+        )
         .route(
             "/fal/schema/{owner}/{alias}/{*sub}",
-            get(move |Path((owner, alias, sub)): Path<(String, String, String)>| {
+            get(move |State(ctx): State<ServeCtx>, Path((owner, alias, sub)): Path<(String, String, String)>| {
                 let id = format!("{owner}/{alias}");
                 let sub = sub.trim_matches('/').to_owned();
                 let app = c2.apps.iter().find(|a| a.is_valid() && a.id == id);
-                let ep = Endpoint::from_sub(&sub);
-                std::future::ready(match (app, ep) {
-                    (Some(a), Some(e)) if a.endpoints().contains(&e) => Json(input_schema_for(a.kind(), e)).into_response(),
+                let models = ctx.engine().models();
+                let engine = ctx.engine().clone();
+                let alias = |n: &str| engine.alias(n);
+                std::future::ready(match (app, sub.as_str()) {
+                    (Some(a), "director") => match director_caps(a, &models, &alias) {
+                        Some(caps) => Json(director_schema(&caps)).into_response(),
+                        None => not_found(&id, &sub),
+                    },
+                    (Some(a), _) => match Endpoint::from_sub(&sub).filter(|e| a.endpoints().contains(e)) {
+                        Some(e) => match endpoint_caps(a, e, &models, &alias) {
+                            Some(caps) => Json(served_schema(a.kind(), e, &caps)).into_response(),
+                            None => not_found(&id, &sub),
+                        },
+                        None => not_found(&id, &sub),
+                    },
                     _ => not_found(&id, &sub),
                 })
             }),

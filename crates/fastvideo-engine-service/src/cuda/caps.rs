@@ -721,6 +721,12 @@ fn sfwan_caps(id: &str, r: &SfWanRecipe) -> ModelCaps {
     let mut c = wan_caps(id, &r.wan);
     let fps = r.wan.default.3;
     c.fps = FpsCaps::fixed(fps);
+    // A bounded clip is whole causal blocks of latent frames: 4 (L - 1) + 1
+    // pixel frames for L a multiple of the block (3: 9, 21, ..., 81).
+    let fpb = fastvideo_models::wan::config::WanVideoArchConfig::from_preset(&r.wan.preset).num_frames_per_block.max(1) as u32;
+    let first = 4 * (fpb - 1) + 1;
+    let max = first + (r.wan.frames_max.saturating_sub(first) / (4 * fpb)) * 4 * fpb;
+    c.frames = FrameGrid::new(4 * fpb, first, first, max, r.wan.default.2.clamp(first, max));
     c.stream = Some(StreamCaps::Causal {
         block_frames: r.block_frames,
         target_fps: fps,

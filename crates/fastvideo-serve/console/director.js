@@ -193,10 +193,24 @@ export function mountDirector(root, { app, model }) {
   const video = el('video', { id: 'director-video', autoplay: true, playsinline: true, controls: true });
   const statePill = el('span', { class: 'pill', id: 'director-state' }, 'idle');
   const prompt = el('textarea', { id: 'director-prompt', rows: 4 }, 'A continuous live-action shot: a lighthouse keeper climbs the spiral stairs at dusk, lamp in hand.');
-  const resolution = el('select', { id: 'director-resolution' }, ['480p', '768p', '1080p'].map((v) => el('option', { value: v }, v === '1080p' ? '1080p (about 2.5x slower per chunk)' : v)));
-  resolution.value = '768p';
+  // The options come from the app's director form (`GET /fal/schema/{app}/director`):
+  // the resolutions its model serves here. Until it loads, the session default only.
+  const resLabel = (v) => (v === '1080p' ? '1080p (about 2.5x slower per chunk)' : v);
+  const aspectLabel = (v) => (v === 'auto' ? 'auto (from image, else 16:9)' : v);
+  const fill = (sel, values, label, def) => {
+    sel.replaceChildren(...values.map((v) => el('option', { value: v }, label(v))));
+    sel.value = values.includes(def) ? def : values[0];
+  };
+  const resolution = el('select', { id: 'director-resolution' });
   // `auto` sends no aspect_ratio: the session follows the image (16:9 without one).
-  const aspect = el('select', { id: 'director-aspect' }, ['auto', '16:9', '9:16', '1:1'].map((v) => el('option', { value: v }, v === 'auto' ? 'auto (from image, else 16:9)' : v)));
+  const aspect = el('select', { id: 'director-aspect' });
+  fill(resolution, ['768p'], resLabel, '768p');
+  fill(aspect, ['auto', '16:9', '9:16', '1:1'], aspectLabel, 'auto');
+  request('GET', '/fal/schema/' + app + '/director', { auth: null }).then((form) => {
+    const p = (form && form.properties) || {};
+    if (p.resolution && Array.isArray(p.resolution.enum) && p.resolution.enum.length) fill(resolution, p.resolution.enum, resLabel, p.resolution.default);
+    if (p.aspect_ratio && Array.isArray(p.aspect_ratio.enum) && p.aspect_ratio.enum.length) fill(aspect, p.aspect_ratio.enum, aspectLabel, p.aspect_ratio.default);
+  }).catch(() => { /* keep the session defaults */ });
   const seed = el('input', { inputmode: 'numeric', placeholder: 'random' });
   const memory = el('input', { type: 'number', min: 1, max: 50, value: 12 });
   const imageUrl = el('input', { type: 'url', placeholder: 'optional first-frame image URL', spellcheck: 'false' });

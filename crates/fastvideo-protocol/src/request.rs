@@ -352,6 +352,11 @@ pub enum Snap {
     AlignUp,
     /// Must already be on the grid (FastVideo explicit num_frames).
     Exact,
+    /// Round up to the next grid point, or down to the longest the model
+    /// makes when that is past its ceiling (an API whose listed durations
+    /// can exceed a model's frame grid at some rates: LTX 20 s at 25 fps is
+    /// 501 frames, the grid stops at 481). Below the floor, the floor.
+    Nearest,
 }
 
 /// Opaque id of a file uploaded through `PUT /uploads/{token}`
