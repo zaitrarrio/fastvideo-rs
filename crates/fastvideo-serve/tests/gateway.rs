@@ -39,11 +39,13 @@ fn tmp(tag: &str) -> PathBuf {
     ))
 }
 
-/// A D1 transport that can be cut (a lost worker stops writing).
+/// A D1 transport that can be cut (a lost worker stops writing), with an
+/// optional round-trip latency (the real D1 API: ~0.28 s).
 #[derive(Clone)]
 struct Cuttable {
     mock: MockD1,
     dead: Arc<AtomicBool>,
+    delay: Duration,
 }
 
 #[async_trait::async_trait]
@@ -52,6 +54,9 @@ impl D1Transport for Cuttable {
         if self.dead.load(Ordering::SeqCst) {
             return Err(D1Error::Transport("worker is gone".into()));
         }
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
         self.mock.post(body).await
     }
 }
@@ -59,16 +64,17 @@ impl D1Transport for Cuttable {
 struct Shared {
     mock: MockD1,
     arts: PathBuf,
+    d1_delay: Duration,
 }
 
 impl Shared {
     fn new() -> Self {
         let arts = tmp("arts");
         std::fs::create_dir_all(&arts).unwrap();
-        Self { mock: MockD1::new(), arts }
+        Self { mock: MockD1::new(), arts, d1_delay: Duration::ZERO }
     }
     fn d1(&self, dead: &Arc<AtomicBool>) -> D1Client {
-        D1Client::new(Arc::new(Cuttable { mock: self.mock.clone(), dead: dead.clone() }))
+        D1Client::new(Arc::new(Cuttable { mock: self.mock.clone(), dead: dead.clone(), delay: self.d1_delay }))
             .with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
     }
     fn rows(&self, sql: &str) -> Vec<serde_json::Map<String, Value>> {
@@ -730,4 +736,250 @@ fn shipped_gateway_config_resolves_every_pool() {
         let static_ids: Vec<String> = c.pools.iter().find(|p| p.id == pool).unwrap().models.iter().map(|m| m.id.clone()).collect();
         assert_eq!(models, static_ids, "{f}: the pool's static caps repeat the worker's [[models]]");
     }
+}
+
+/// Deterministic noise (PNG does not shrink it): a photo-sized input.
+fn noise_png(w: u32, h: u32) -> String {
+    use base64::Engine as _;
+    let mut x: u32 = 0x9e37_79b9;
+    let img = image::RgbImage::from_fn(w, h, |_, _| {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        image::Rgb([x as u8, (x >> 8) as u8, (x >> 16) as u8])
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
+}
+
+/// The shared artifacts directory with R2-like latency (measured on the
+/// cluster, 2026-09-28: PUT 1-3 s, GET ~1 s).
+struct SlowStore {
+    inner: fastvideo_serve_kit::LocalArtifactStore,
+    put: Duration,
+    get: Duration,
+}
+
+impl SlowStore {
+    fn arc(sh: &Shared, base: &str, put: Duration, get: Duration) -> Arc<dyn fastvideo_serve_kit::ArtifactStore> {
+        let urls = fastvideo_serve_kit::artifacts::LocalUrls { public_base: base.parse().unwrap(), key: fastvideo_serve_kit::UrlKey::new("shared-signing-key") };
+        Arc::new(Self { inner: fastvideo_serve_kit::LocalArtifactStore::new(sh.arts.clone(), urls), put, get })
+    }
+}
+
+impl fastvideo_protocol::UrlSigner for SlowStore {
+    fn url_for(&self, a: &fastvideo_protocol::Artifact, ttl: Duration) -> url::Url {
+        fastvideo_protocol::UrlSigner::url_for(&self.inner, a, ttl)
+    }
+}
+
+#[async_trait::async_trait]
+impl fastvideo_serve_kit::ArtifactStore for SlowStore {
+    async fn put(&self, src: &std::path::Path, meta: fastvideo_serve_kit::ArtifactMeta) -> Result<fastvideo_protocol::Artifact, fastvideo_protocol::ApiError> {
+        tokio::time::sleep(self.put).await;
+        self.inner.put(src, meta).await
+    }
+    async fn delete(&self, a: &fastvideo_protocol::Artifact) {
+        self.inner.delete(a).await
+    }
+    fn signer(&self) -> &dyn fastvideo_protocol::UrlSigner {
+        self
+    }
+    async fn open(&self, a: &fastvideo_protocol::Artifact) -> Result<fastvideo_serve_kit::ArtifactBody, fastvideo_protocol::ApiError> {
+        tokio::time::sleep(self.get).await;
+        self.inner.open(a).await
+    }
+}
+
+/// One fal image-to-video job's phases (seconds).
+#[derive(Clone, Copy, Debug, Default)]
+struct Phases {
+    /// Client: the submit call's latency.
+    submit: f64,
+    /// `created_at` → `dispatched_at` (the worker holds the job and its input).
+    dispatch: f64,
+    /// `dispatched_at` → `started_at`.
+    wait: f64,
+    /// `created_at` → `started_at` (fal `timings.queue`).
+    queue: f64,
+}
+
+/// Submits `n` fal image-to-video jobs one after another through a gateway
+/// whose inputs go inline up to `inline_max` bytes, over R2-like store and
+/// D1 latency; returns each job's phases.
+async fn i2v_phases(inline_max: u64, n: usize, tag: &str) -> Vec<Phases> {
+    let mut sh = Shared::new();
+    sh.d1_delay = Duration::from_millis(250);
+    let (put, get) = (Duration::from_millis(1500), Duration::from_millis(1000));
+    let (wl, wbase) = listen().await;
+    let mut wc = base_config(&format!("{tag}-w"), &sh);
+    wc.server.role = Role::Worker;
+    wc.server.public_base_url = Some(wbase.clone());
+    wc.server.worker_id = Some(format!("worker-{tag}"));
+    wc.engine.fake.models = vec!["fake-h3-turbo".into()];
+    wc.validate().unwrap();
+    let w = serve(wc, &sh, wl, wbase.clone(), Overrides { artifacts: Some(SlowStore::arc(&sh, &wbase, put, get)), ..Default::default() }).await;
+    let sim = Sim::new("rp-key");
+    let (sim_base, _t) = sim.serve("127.0.0.1:0").await.unwrap();
+    let (gl, gbase) = listen().await;
+    let mut c = base_config(&format!("{tag}-gw"), &sh);
+    c.engine.backend = EngineBackendKind::Remote;
+    c.server.public_base_url = Some(gbase.clone());
+    c.pools = vec![pod_pool("h3", &[&w.base], &["fake-h3-turbo"])];
+    c.gateway.tick_s = 1;
+    c.gateway.watch_poll_ms = 100;
+    c.gateway.runpod_api_base = format!("{sim_base}/v2");
+    c.gateway.inline_inputs_max_bytes = inline_max;
+    c.validate().unwrap();
+    let gw = serve(c, &sh, gl, gbase.clone(), Overrides { artifacts: Some(SlowStore::arc(&sh, &gbase, put, get)), ..Default::default() }).await;
+    let g = &gw.base;
+    let http = Http::new();
+    let image = noise_png(1024, 576);
+    let mut out = Vec::new();
+    for i in 0..n {
+        let t0 = std::time::Instant::now();
+        let (s, v, _) = http
+            .call("POST", &format!("{g}/minimax/h3-turbo/image-to-video"), Some(json!({"prompt": format!("a fox {i}"), "image_url": image})), fal_key())
+            .await;
+        let submit = t0.elapsed().as_secs_f64();
+        assert_eq!(s, 200, "{v}");
+        let rid = v["request_id"].as_str().unwrap().to_owned();
+        http.poll(&format!("{g}/minimax/h3-turbo/requests/{rid}/status"), fal_key(), |v| v["status"] == "COMPLETED").await;
+        let (s, res, _) = http.call("GET", &format!("{g}/minimax/h3-turbo/requests/{rid}"), None, fal_key()).await;
+        assert_eq!(s, 200, "{res}");
+        let row = sh.mock.sql("SELECT job FROM jobs WHERE external_id = ?", &[json!(rid)]).unwrap();
+        let job: fastvideo_protocol::Job = serde_json::from_str(row[0]["job"].as_str().unwrap()).unwrap();
+        let secs = |a: time::OffsetDateTime, b: time::OffsetDateTime| (b - a).as_seconds_f64();
+        let d = job.dispatched_at.expect("the worker records dispatched_at");
+        let st = job.started_at.unwrap();
+        let p = Phases { submit, dispatch: secs(job.created_at, d), wait: secs(d, st), queue: secs(job.created_at, st) };
+        // fal `timings`: dispatch + wait == queue.
+        let t = &res["timings"];
+        assert!(t["dispatch"].is_number() && t["wait"].is_number(), "{res}");
+        let sum = t["dispatch"].as_f64().unwrap() + t["wait"].as_f64().unwrap();
+        assert!((sum - t["queue"].as_f64().unwrap()).abs() < 1e-6, "{t}");
+        out.push(p);
+    }
+    drop((gw, w));
+    out
+}
+
+fn mean(v: &[Phases], f: impl Fn(&Phases) -> f64) -> f64 {
+    v.iter().map(f).sum::<f64>() / v.len().max(1) as f64
+}
+
+/// Before/after of the input path (docs/serve/gateway.md §3.2): the same
+/// image-to-video jobs through the store (R2 PUT on the gateway, GET on the
+/// worker: `inline_inputs_max_bytes = 0`, the old path) and inline in the
+/// dispatch request (the default), with R2-like store latency and D1 round
+/// trips of 250 ms. Prints the phases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn inline_inputs_take_the_store_off_the_dispatch_path() {
+    let before = i2v_phases(0, 3, "before").await;
+    let after = i2v_phases(8 * 1024 * 1024, 3, "after").await;
+    println!("fake-engine gateway, fal image-to-video (1024x576 noise PNG, {} KB), R2 PUT 1.5 s / GET 1.0 s, D1 0.25 s per call", noise_png(1024, 576).len() * 3 / 4 / 1024);
+    println!("{:<34} {:>9} {:>9} {:>9} {:>9}", "input path (mean of 3 jobs)", "submit_s", "dispatch", "wait", "queue");
+    for (name, v) in [("before: R2 staging (inline 0)", &before), ("after: inline (default 8 MiB)", &after)] {
+        println!(
+            "{:<34} {:>9.2} {:>9.2} {:>9.2} {:>9.2}",
+            name,
+            mean(v, |p| p.submit),
+            mean(v, |p| p.dispatch),
+            mean(v, |p| p.wait),
+            mean(v, |p| p.queue)
+        );
+    }
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        println!("job {i}: before {b:?}\n       after  {a:?}");
+    }
+    let (b, a) = (mean(&before, |p| p.dispatch), mean(&after, |p| p.dispatch));
+    assert!(b - a > 2.0, "the store round trips (1.5 s + 1.0 s) left the dispatch path: before {b:.2} s, after {a:.2} s");
+    assert!(mean(&after, |p| p.queue) < mean(&before, |p| p.queue));
+}
+
+/// Inline inputs end to end: the job runs, the dispatch row never holds
+/// the bytes, the background copy lets a re-dispatch after a worker loss
+/// find the input, and finished jobs leave no input copy in the store.
+/// Also: fal status polls are served from the gateway's memory, and a
+/// worker refuses a passed-through URL the SSRF guard does not allow (424).
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn inline_inputs_survive_a_worker_loss_and_are_cleaned_up() {
+    let sh = Shared::new();
+    let a = pod_worker(&sh, "ia", &["fake-h3-turbo"], 1500).await;
+    let b = pod_worker(&sh, "ib", &["fake-h3-turbo"], 1500).await;
+    let sim = Sim::new("rp-key");
+    let (sim_base, _t) = sim.serve("127.0.0.1:0").await.unwrap();
+    let gw = gateway(&sh, vec![pod_pool("h3", &[&a.base, &b.base], &["fake-h3-turbo"])], &sim_base, Overrides::default()).await;
+    let g = &gw.base;
+    let http = Http::new();
+    let image = noise_png(320, 180);
+
+    let (s, v, _) = http.call("POST", &format!("{g}/minimax/h3-turbo/image-to-video"), Some(json!({"prompt": "a fox", "image_url": image})), fal_key()).await;
+    assert_eq!(s, 200, "{v}");
+    let rid = v["request_id"].as_str().unwrap().to_owned();
+    // Rapid status polls: most are answered from the gateway's view.
+    for _ in 0..10 {
+        let (s, _, _) = http.call("GET", &format!("{g}/minimax/h3-turbo/requests/{rid}/status"), None, fal_key()).await;
+        assert_eq!(s, 200);
+    }
+    let (_, m, _) = http.call("GET", &format!("{g}/metrics"), None, None).await;
+    assert!(m.as_str().unwrap_or_default().contains("fv_gateway_job_reads_total{source=\"memory\"}"), "{m}");
+    http.poll(&format!("{g}/minimax/h3-turbo/requests/{rid}/status"), fal_key(), |v| v["status"] == "IN_PROGRESS").await;
+    let row = || sh.mock.sql("SELECT d.inputs AS inputs FROM gw_dispatch d JOIN jobs j ON j.id = d.job_id WHERE j.external_id = ?", &[json!(rid)]).unwrap();
+    let inputs: Value = serde_json::from_str(row()[0]["inputs"].as_str().unwrap()).unwrap();
+    assert!(inputs[0].get("inline").is_none(), "the dispatch row never holds the bytes: {inputs}");
+    // The background copy for a re-dispatch lands in the row.
+    for _ in 0..100 {
+        let i: Value = serde_json::from_str(row()[0]["inputs"].as_str().unwrap()).unwrap();
+        if i[0]["artifact"].is_object() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let i: Value = serde_json::from_str(row()[0]["inputs"].as_str().unwrap()).unwrap();
+    assert!(i[0]["artifact"].is_object() && i[0]["url"].is_string(), "{i}");
+
+    // The worker holding it disappears: the job runs again on the other one.
+    let holder = sh.mock.sql("SELECT worker FROM jobs WHERE external_id = ?", &[json!(rid)]).unwrap()[0]["worker"].as_str().unwrap().to_owned();
+    let (victim, survivor) = if holder == "worker-ia" { (&a, "worker-ib") } else { (&b, "worker-ia") };
+    victim.kill();
+    let done = http.poll(&format!("{g}/minimax/h3-turbo/requests/{rid}/status"), fal_key(), |v| v["status"] == "COMPLETED").await;
+    assert!(done.get("error").is_none(), "{done}");
+    let (s, res, _) = http.call("GET", &format!("{g}/minimax/h3-turbo/requests/{rid}"), None, fal_key()).await;
+    assert_eq!(s, 200, "{res}");
+    assert!(res["video"]["url"].is_string(), "{res}");
+    let w = sh.mock.sql("SELECT worker FROM jobs WHERE external_id = ?", &[json!(rid)]).unwrap();
+    assert_eq!(w[0]["worker"], survivor);
+
+    // Once the row is closed, no input copy is left in the store.
+    let left = || {
+        std::fs::read_dir(&sh.arts)
+            .unwrap()
+            .flatten()
+            .flat_map(|d| std::fs::read_dir(d.path()).into_iter().flatten().flatten())
+            .filter(|f| f.path().extension().is_some_and(|e| e == "png"))
+            .count()
+    };
+    for _ in 0..100 {
+        if left() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(left(), 0, "input copies left in {}", sh.arts.display());
+
+    // A passed-through URL the SSRF guard refuses: 424 (the gateway then
+    // sends that input through the store).
+    let survivor_run = if survivor == "worker-ia" { &a } else { &b };
+    let mut job: Value = serde_json::from_str(sh.mock.sql("SELECT job FROM jobs WHERE external_id = ?", &[json!(rid)]).unwrap()[0]["job"].as_str().unwrap()).unwrap();
+    job["id"] = json!(uuid::Uuid::new_v4().to_string());
+    job["external_id"] = json!(uuid::Uuid::new_v4().to_string());
+    job["state"] = json!({"status": "queued"});
+    let env = json!({"job": job, "inputs": [{"path": "/gw/in/a.mp4", "source": "http://127.0.0.1:9/a.mp4", "kind": "video", "bytes": 10}], "attempt": 1});
+    let r = http.0.post(format!("{}/fv/v1/internal/jobs", survivor_run.base)).header("x-fv-internal-token", TOKEN).json(&env).send().await.unwrap();
+    let st = r.status().as_u16();
+    let body = r.text().await.unwrap();
+    assert_eq!(st, 424, "{body}");
+    drop((gw, a, b));
 }

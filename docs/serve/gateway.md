@@ -53,7 +53,10 @@ caps_refresh_s = 60                # live caps refresh per pool
 tick_s = 5                         # metrics + reaper tick
 runpod_api_base = "https://api.runpod.ai/v2"   # tests: the local simulator
 # runpod_api_key: FV_RUNPOD_API_KEY (else RUNPOD_API_KEY)
-watch_poll_ms = 1000               # D1 poll for SSE / sync waits
+watch_poll_ms = 1000               # D1 poll for SSE / sync waits; freshness of the status view (§3.3)
+inline_inputs_max_bytes = 8388608  # inputs up to 8 MiB per job ride in the dispatch (§3.1; serverless ≤ 6 MiB)
+input_passthrough = true           # large video/audio given as a public URL: the worker fetches it (§3.1)
+stage_inputs_for_retry = true      # copy inputs to R2 after the dispatch, for a re-dispatch (§3.1)
 
 [[pools]]
 id = "h3-turbo"
@@ -111,17 +114,23 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
    - Every pool serving it is unavailable (pods unreachable, endpoint
      errors) → `503` + `Retry-After` (`ApiError::loading`).
    - Pool over `max_queued` → `429 QueueFull` + `Retry-After`.
-2. **Inputs**: staged files are put into the artifact store (R2 in
-   production) under a fresh id and passed as signed URLs; the worker
-   downloads them into its own inputs dir and deletes them when the job
-   ends.
+2. **Inputs** (§3.1): small ones travel inside the envelope (base64), large
+   video/audio a client gave as a public URL are fetched by the worker from
+   there, anything else goes through the artifact store (R2) with a signed
+   URL. The worker puts them in its own inputs dir, all at once.
 3. **Envelope** (native), the same for both pool kinds:
 
    ```jsonc
    POST /fv/v1/internal/jobs
-   {"job": <Job>, "inputs": {"<gateway path>": "<signed url>", …},
+   {"job": <Job>,
+    "inputs": [{"path": "<gateway path>", "kind": "image", "bytes": 1769472,
+                "inline": "<base64>"},                     // or
+               {"path": …, "source": "https://…", "sha256": "…"}, // or
+               {"path": …, "url": "<signed url>", "artifact": {…}}],
     "attempt": 1, "pool": "h3-turbo"}
    ```
+
+   The worker accepts envelopes up to 64 MiB.
 
    - `pod`: sent directly to a worker (`x-fv-internal-token`), tried in
      order of least in-flight work; a refused/unreachable worker moves on
@@ -138,9 +147,15 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 4. **Dispatch record**: `gw_dispatch` row (job id, pool, kind, target =
    pod URL or endpoint id, ref = Runpod job id or worker id, attempt,
    state). Any gateway replica can cancel or reap from it.
-5. **Worker side**: `POST /fv/v1/internal/jobs` adopts the job
-   (`D1JobStore::adopt`: the worker's cache becomes authoritative and the
-   row's `worker` column its id), stages the inputs, submits to its engine.
+5. **Worker side**: `POST /fv/v1/internal/jobs` puts the inputs in place,
+   sets `Job.dispatched_at`, adopts the job (`D1JobStore::adopt`: the
+   worker's cache becomes authoritative and the row's `worker` column its
+   id) and submits to its engine. The adoption is **one D1 statement**: an
+   upsert whose `DO UPDATE … WHERE` only applies when the row is queued or
+   running, has no cancel request, and has no other worker with a fresh
+   heartbeat, `RETURNING job`; no row back means refused (409). It keeps
+   the row's fields and sets the worker's input paths and `dispatched_at`
+   (`json_set`), so the race between two workers is decided inside SQLite.
    From then on it is an ordinary job on that worker: progress (≤ 1 write/s),
    logs, artifacts (R2), terminal state and callbacks/webhooks all come
    from the worker. Idempotent: a duplicate delivery to the same worker
@@ -149,8 +164,9 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 
 Status, results, lists, fal `status/stream` (SSE), sync endpoints: the
 gateway answers them from D1 (`GatewayJobStore`: read-through, `watch()`
-polls D1 every `watch_poll_ms`). Signed artifact URLs come from the shared
-R2 store (or a shared local directory in single-host tests).
+polls D1 every `watch_poll_ms`), through the in-memory view of §3.3.
+Signed artifact URLs come from the shared R2 store (or a shared local
+directory in single-host tests).
 
 **Cancel** (`DELETE`/`cancel` routes of every API): the gateway marks the
 row (queued → cancelled at once; running → `cancel_requested`) and forwards
@@ -172,6 +188,84 @@ calls the envelope's `cancel_path` in-process.
   (another pod, or a new Runpod job; the old ref is cancelled best effort);
   otherwise it is failed `"the worker running this job was lost"` (which
   fires its webhook through the gateway).
+
+### 3.1 Input path
+
+Measured on the cluster (2026-09-28, image-to-video): the gateway's R2 PUT
+of the input took 1-3 s (once 11 s) and the worker's R2 GET about 1 s, all
+before the GPU saw the job. The input does not need to be stored for the
+job to run, so the store is off the submit path now:
+
+| input | how it reaches the worker |
+|---|---|
+| all of a job's inputs together up to `inline_inputs_max_bytes` (8 MiB; serverless pools 6 MiB, a Runpod `/run` body is ≤ 10 MB) | **inline**: base64 in the envelope; the worker writes the bytes |
+| a larger video or audio input the client gave as an `http(s)` URL (`Job.input_sources`; images are left out because ingestion may rewrite them upright) | **source**: the worker fetches the URL itself with ingestion's SSRF guard, redirect rules and size/time limits, and checks the gateway's SHA-256; if that fails the worker answers **424** and the gateway sends that input through the store and dispatches again |
+| anything else (large images, uploads, data URIs over the budget) | **store**: R2 PUT (all inputs at once) and a signed URL; the worker reads the object (all at once) |
+
+After a dispatch the gateway copies the inputs that skipped the store into
+it **in the background** (`stage_inputs_for_retry`, pools with
+`retries > 0`) and points the `gw_dispatch` row at the copies, so a
+re-dispatch after a worker loss (§3, any replica) finds them. A re-dispatch
+that comes before the copy is done stores the input from the replica's
+staged file then. The row never holds the inline bytes. The copies go when
+the tick closes the row (the job finished) or the job is failed as lost;
+a copy that finishes after the row moved on is deleted at once. None of the
+mounted APIs returns a job's input URL, so nothing else needs a stored
+input (uploads, `/uploads` and fal storage keep their own store).
+
+### 3.2 Queue timings
+
+fal `timings.queue` is `created_at` → the worker's `started_at`. Behind a
+gateway it splits into **`dispatch`** (`created_at` → `Job.dispatched_at`:
+the job row insert, input transfer, the hop to the worker, which sets
+`dispatched_at` once the inputs are in place) and **`wait`**
+(`dispatched_at` → `started_at`: the adoption write and the wait for the
+GPU), with `dispatch + wait == queue`. `dispatched_at` is omitted from the
+job JSON when unset (a job that never left its process), and then `timings`
+has no split.
+
+Where the time goes, per dispatch:
+
+- log line `gateway: dispatched` (job, pool, inputs, and how many went
+  `inline` / `source` / `store`, `stage_inputs_ms`, `dispatch_ms`,
+  `record_ms`) and on the worker `worker: dispatched inputs in place`
+  (`fetch_ms`);
+- `/metrics`: `fv_gateway_submit_phase_seconds{pool,phase}` (`phase` =
+  `stage_inputs`, `dispatch`, `record`), `fv_worker_input_fetch_seconds`,
+  `fv_worker_adopt_seconds`, `fv_gateway_retry_stage_seconds` (the
+  background copy), `fv_gateway_job_reads_total{source}` (`memory` | `d1`,
+  §3.3).
+
+Dispatch is immediate on submit (not bound to the tick). The worker adopts
+in one D1 round trip (§3 step 5, was a read then an upsert), and puts all
+inputs in place concurrently, as the gateway stores them concurrently.
+
+Before / after on the fake engine
+(`tests/gateway.rs::inline_inputs_take_the_store_off_the_dispatch_path`):
+fal image-to-video with a 1024x576 noise PNG (1.7 MB), the shared
+artifacts directory behind R2-like latency (PUT 1.5 s, GET 1.0 s) and
+250 ms per D1 call; mean of 3 jobs, seconds:
+
+| input path | submit call | `dispatch` | `wait` | `queue` |
+|---|---:|---:|---:|---:|
+| before: through the store (`inline_inputs_max_bytes = 0`) | 3.97 | 2.93 | 0.38 | 3.30 |
+| after: inline (default) | 1.58 | 0.46 | 0.33 | 0.79 |
+
+The 2.5 s gone are the PUT and the GET; what is left of `dispatch` is the
+job row insert and the hop (with 250 ms D1 calls), and `wait` is the
+adoption write plus the fake engine picking the job up. Text-to-video
+(no inputs) was already about 1.1 s of `queue` on the cluster.
+
+### 3.3 Status reads from memory
+
+Each fal status poll cost one D1 read (~0.28 s). `GatewayJobStore` keeps a
+view of the jobs it recently inserted, updated or read, and answers `get` /
+by-external-id reads from it where the state is known: a job seen within
+`watch_poll_ms` (the latency SSE already has), or a finished job seen within
+the last 60 s (finished jobs only change by deletion). Anything else reads
+D1 and refreshes the view; the `watch()` pollers refresh it too. With
+several replicas, a change made through another replica shows up here at
+most `watch_poll_ms` later (60 s for deleting a finished job).
 
 ## 4. Capabilities
 

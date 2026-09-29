@@ -32,6 +32,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine as _;
 use fastvideo_engine_service::Readiness;
 use fastvideo_protocol::{ApiError, Job, JobId, StoreError};
 use fastvideo_serve_kit::d1::{D1Client, Stmt};
@@ -84,6 +85,8 @@ pub struct WorkerState {
     pub worker_id: String,
     pub pool: Option<String>,
     pub queue_max: usize,
+    /// SSRF guard and limits for inputs passed through as client URLs.
+    pub ingest: fastvideo_serve_kit::IngestPolicy,
     submitted: Mutex<HashSet<JobId>>,
     /// Set by `POST /fv/v1/internal/drain` (the autoscaler, docs/serve/gateway.md §8.5).
     drained: Arc<AtomicBool>,
@@ -101,6 +104,7 @@ impl WorkerState {
             worker_id,
             pool,
             queue_max,
+            ingest: fastvideo_serve_kit::IngestPolicy::default(),
             submitted: Mutex::new(HashSet::new()),
             drained: Arc::default(),
             registration: None,
@@ -152,10 +156,14 @@ fn err(e: &ApiError) -> Response {
 }
 
 /// `/fv/v1/internal/*`.
+/// Envelopes carry small inputs inline (base64; the gateway's
+/// `inline_inputs_max_bytes`, 8 MiB by default): well above axum's 2 MB.
+const ENVELOPE_MAX: usize = 64 * 1024 * 1024;
+
 pub fn routes(st: WorkerState) -> Router {
     let st = Arc::new(st);
     Router::new()
-        .route("/fv/v1/internal/jobs", post(take))
+        .route("/fv/v1/internal/jobs", post(take).layer(axum::extract::DefaultBodyLimit::max(ENVELOPE_MAX)))
         .route("/fv/v1/internal/jobs/{id}", get(job_status).delete(job_cancel))
         .route("/fv/v1/internal/status", get(status))
         .route("/fv/v1/internal/drain", post(drain))
@@ -218,46 +226,97 @@ async fn job_cancel(State(st): State<Arc<WorkerState>>, Path(id): Path<String>) 
     }
 }
 
-/// Downloads the envelope's inputs and points `job.resolved` at them.
-async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result<(), ApiError> {
+/// Why an input could not be put in place: a passed-through client URL
+/// (the gateway sends it through the store instead: HTTP 424), or anything
+/// else.
+enum FetchError {
+    Source(ApiError),
+    Other(ApiError),
+}
+
+/// Puts one envelope input at `dst`: inline bytes, the client's URL (SSRF
+/// guard of ingestion, checked against the gateway's SHA-256), the shared
+/// store, or the signed URL.
+async fn fetch_one(st: &WorkerState, input: &crate::gateway::dispatch::InputRef, dst: &std::path::Path) -> Result<(), FetchError> {
+    let other = FetchError::Other;
+    if let Some(b64) = &input.inline {
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| other(ApiError::invalid(format!("a dispatched input is not valid base64: {e}"))))?;
+        return tokio::fs::write(dst, &data).await.map_err(|e| other(ApiError::internal(format!("writing a dispatched input: {e}"))));
+    }
+    if let Some(src) = &input.source {
+        let r = async {
+            let url = url::Url::parse(src).map_err(|e| ApiError::invalid(format!("a passed-through input URL: {e}")))?;
+            let kind = input.kind.unwrap_or(fastvideo_protocol::MediaKind::Video);
+            fastvideo_serve_kit::ingest::fetch_public(&url, kind, &st.ingest, dst, "input").await?;
+            if let Some(want) = &input.sha256 {
+                let got = crate::gateway::dispatch::sha256_file(dst).await?;
+                if !got.eq_ignore_ascii_case(want) {
+                    return Err(ApiError::invalid("a passed-through input changed since the gateway fetched it"));
+                }
+            }
+            Ok(())
+        }
+        .await;
+        match r {
+            Ok(()) => return Ok(()),
+            Err(e) if input.artifact.is_none() && input.url.is_empty() => {
+                let _ = tokio::fs::remove_file(dst).await;
+                return Err(FetchError::Source(e));
+            }
+            Err(e) => tracing::info!(error = %e.message, "worker: a passed-through input failed; using the store copy"),
+        }
+    }
+    // The shared store first (R2, or a directory shared on one host):
+    // no round trip through the gateway's public URL.
+    if let Some(a) = &input.artifact {
+        match st.ctx.artifacts().open(a).await {
+            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p)) if tokio::fs::copy(&p, dst).await.is_ok() => return Ok(()),
+            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b)) if tokio::fs::write(dst, &b).await.is_ok() => return Ok(()),
+            _ => {}
+        }
+    }
+    if input.url.is_empty() {
+        return Err(other(ApiError::internal("a dispatched input has no source")));
+    }
+    let resp = st
+        .http
+        .get(&input.url)
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| other(ApiError::internal(format!("fetching a dispatched input: {}", e.without_url()))))?;
+    if !resp.status().is_success() {
+        return Err(other(ApiError::internal(format!("fetching a dispatched input answered {}", resp.status()))));
+    }
+    let bytes = resp.bytes().await.map_err(|e| other(ApiError::internal(format!("reading a dispatched input: {}", e.without_url()))))?;
+    tokio::fs::write(dst, &bytes).await.map_err(|e| other(ApiError::internal(format!("writing a dispatched input: {e}"))))
+}
+
+/// Puts the envelope's inputs in place (all at once: one store round trip
+/// in wall time, not one per input) and points `job.resolved` at them.
+async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result<(), FetchError> {
     if env.inputs.is_empty() {
         return Ok(());
     }
     let dir = st.ctx.inputs_dir(job.id);
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| ApiError::internal(format!("inputs dir: {e}")))?;
-    let mut map: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
-    for (i, input) in env.inputs.iter().enumerate() {
-        let name = input.path.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_else(|| format!("input-{i}"));
-        let dst = dir.join(format!("{i}-{name}"));
-        // The shared store first (R2, or a directory shared on one host):
-        // no round trip through the gateway's public URL.
-        if let Some(a) = &input.artifact {
-            match st.ctx.artifacts().open(a).await {
-                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p)) if tokio::fs::copy(&p, &dst).await.is_ok() => {
-                    map.insert(input.path.clone(), dst);
-                    continue;
-                }
-                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b)) if tokio::fs::write(&dst, &b).await.is_ok() => {
-                    map.insert(input.path.clone(), dst);
-                    continue;
-                }
-                _ => {}
-            }
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| FetchError::Other(ApiError::internal(format!("inputs dir: {e}"))))?;
+    let t0 = std::time::Instant::now();
+    let fetches = env.inputs.iter().enumerate().map(|(i, input)| {
+        let dir = &dir;
+        async move {
+            let name = input.path.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_else(|| format!("input-{i}"));
+            let dst = dir.join(format!("{i}-{name}"));
+            fetch_one(st, input, &dst).await.map(|()| (input.path.clone(), dst))
         }
-        let resp = st
-            .http
-            .get(&input.url)
-            .timeout(Duration::from_secs(300))
-            .send()
-            .await
-            .map_err(|e| ApiError::internal(format!("fetching a dispatched input: {}", e.without_url())))?;
-        if !resp.status().is_success() {
-            return Err(ApiError::internal(format!("fetching a dispatched input answered {}", resp.status())));
-        }
-        let bytes = resp.bytes().await.map_err(|e| ApiError::internal(format!("reading a dispatched input: {}", e.without_url())))?;
-        tokio::fs::write(&dst, &bytes).await.map_err(|e| ApiError::internal(format!("writing a dispatched input: {e}")))?;
-        map.insert(input.path.clone(), dst);
-    }
+    });
+    let map: BTreeMap<PathBuf, PathBuf> = futures::future::try_join_all(fetches).await?.into_iter().collect();
+    let fetch_s = t0.elapsed().as_secs_f64();
+    metrics::histogram!("fv_worker_input_fetch_seconds").record(fetch_s);
+    let via = |w: &str| env.inputs.iter().filter(|i| i.via() == w).count();
+    tracing::info!(job = %job.id, inputs = map.len(), inline = via("inline"), source = via("source"), store = via("store"),
+        fetch_ms = (fetch_s * 1e3) as u64, "worker: dispatched inputs in place");
     let r = &mut job.resolved;
     let swap = |p: &mut PathBuf| {
         if let Some(n) = map.get(p) {
@@ -312,12 +371,25 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
     let mut job = env.job.clone();
     if let Err(e) = fetch_inputs(&st, &env, &mut job).await {
         let _ = tokio::fs::remove_dir_all(st.ctx.inputs_dir(id)).await;
-        return err(&e);
+        return match e {
+            // The gateway retries with the input in the store.
+            FetchError::Source(e) => (
+                StatusCode::FAILED_DEPENDENCY,
+                Json(json!({"error": {"kind": "invalid_request", "message": format!("a passed-through input: {}", e.message)}})),
+            )
+                .into_response(),
+            FetchError::Other(e) => err(&e),
+        };
     }
+    // Inputs are in place: the rest is the store write and the GPU queue
+    // (fal `timings.dispatch` ends here, `timings.wait` starts).
+    job.dispatched_at = Some(st.ctx.now());
+    let t_adopt = std::time::Instant::now();
     let adopted = match &st.d1 {
         Some(d1) => d1.adopt(job).await,
         None => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
     };
+    metrics::histogram!("fv_worker_adopt_seconds").record(t_adopt.elapsed().as_secs_f64());
     let job = match adopted {
         Ok(j) => j,
         Err(StoreError::AlreadyExists(_)) => {

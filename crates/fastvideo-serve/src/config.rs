@@ -603,6 +603,20 @@ pub struct GatewayCfg {
     /// The model of the Reactor routes on the gateway (default: the first
     /// stream-capable model of a pod pool).
     pub reactor_model: Option<String>,
+    /// Inputs up to this many bytes (all of a job's together) travel inside
+    /// the dispatch request (base64) instead of through the artifact store
+    /// (R2): no store round trip on the submit path. 0: always the store.
+    /// Serverless pools cap it at 6 MiB (a Runpod `/run` body is ≤ 10 MB).
+    pub inline_inputs_max_bytes: u64,
+    /// Video and audio inputs too large to inline that the client gave as
+    /// a public URL are fetched by the worker from that URL (the ingestion
+    /// SSRF guard, checked against the gateway's SHA-256) instead of
+    /// through the store.
+    pub input_passthrough: bool,
+    /// After a dispatch, copy the inputs that did not go through the store
+    /// into it in the background (off the submit path), so a re-dispatch
+    /// after a worker loss has them (pools with `retries > 0`).
+    pub stage_inputs_for_retry: bool,
 }
 
 impl Default for GatewayCfg {
@@ -618,6 +632,9 @@ impl Default for GatewayCfg {
             runpod_api_base: "https://api.runpod.ai/v2".into(),
             runpod_api_key: Secret::default(),
             reactor_model: None,
+            inline_inputs_max_bytes: 8 * 1024 * 1024,
+            input_passthrough: true,
+            stage_inputs_for_retry: true,
         }
     }
 }

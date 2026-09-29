@@ -36,6 +36,9 @@ pub struct Overrides {
     /// Use this D1 connection for the D1 job store (and the gateway's
     /// tables) instead of the HTTP API from `[jobs.d1]` (tests: the mock).
     pub d1: Option<fastvideo_serve_kit::D1Client>,
+    /// Use this artifact store instead of the configured one (tests: a
+    /// store with R2-like latency).
+    pub artifacts: Option<Arc<dyn fastvideo_serve_kit::ArtifactStore>>,
     /// Autoscaler hooks for gateway mode (docs/serve/gateway.md §7).
     #[cfg(feature = "http-client")]
     pub scalers: Vec<Arc<dyn crate::gateway::scale::PoolScaler>>,
@@ -274,7 +277,10 @@ impl App {
         } else {
             UrlKey::new(config.artifacts.signing_key.expose())
         };
-        let artifacts = storage::build_artifacts(&config, &base, &key).map_err(|e| anyhow!(e))?;
+        let artifacts = match ov.artifacts.clone() {
+            Some(a) => a,
+            None => storage::build_artifacts(&config, &base, &key).map_err(|e| anyhow!(e))?,
+        };
         let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
         let worker_role = config.server.role == crate::config::Role::Worker;
         if worker_role && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
