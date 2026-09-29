@@ -16,8 +16,9 @@
 //! - [`clock`]: [`ManualClock`] for deterministic tests.
 //! - [`device`]: the startup capability check (compute capability, FP8,
 //!   memory) that keeps a model off a GPU it cannot run on.
-//! - [`stream`]: [`ClipSession`] (clip-queue builds) and [`CausalSession`]
-//!   (SF-Wan block rollout).
+//! - [`stream`]: [`ClipSession`] (clip-queue builds), [`CausalSession`]
+//!   (SF-Wan block rollout) and [`DuplexSession`] (client input tracks; the
+//!   loopback echo, [`EchoBackend`]).
 //!
 //! - [`cuda`]: the CUDA model catalog (tiers, recipes, caps; always built)
 //!   and, with the `cuda` feature, `CudaBackend` over the fastvideo-cudarc
@@ -64,6 +65,10 @@ pub use stream::causal::{
     CausalStats, Ttff,
 };
 pub use stream::clip::{ClipBuild, ClipSession};
+pub use stream::duplex::{
+    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply, DuplexSession,
+    DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
+};
 pub use stream::pace::{
     spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipPacerConfig, IdlePolicy,
     MediaItem, MediaSlice, PaceStats, PacedStream, PlayOutcome, Tick, TickReceiver, TickStart,
