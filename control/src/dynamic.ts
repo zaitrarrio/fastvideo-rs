@@ -18,12 +18,13 @@ export interface GpuType {
   stock: string | null;
 }
 let gpuCache: { at: number; list: GpuType[] } | null = null;
+/** Runpod GPU types; a price of 0 means "not offered" in that cloud (null here); cheapest secure first. */
 export async function gpuTypes(env: Env): Promise<GpuType[]> {
   if (gpuCache && Date.now() - gpuCache.at < 300_000) return gpuCache.list;
   const d = await runpod.gql<any>(env, "{ gpuTypes { id displayName memoryInGb securePrice communityPrice lowestPrice(input: {gpuCount: 1}) { stockStatus } } }");
   const list: GpuType[] = (d?.gpuTypes || [])
     .filter((g: any) => g.id && g.id !== "unknown")
-    .map((g: any) => ({ id: g.id, display: g.displayName || g.id, memory_gb: g.memoryInGb ?? null, secure_price: g.securePrice ?? null, community_price: g.communityPrice ?? null, stock: g.lowestPrice?.stockStatus ?? null }))
+    .map((g: any) => ({ id: g.id, display: g.displayName || g.id, memory_gb: g.memoryInGb ?? null, secure_price: g.securePrice > 0 ? g.securePrice : null, community_price: g.communityPrice > 0 ? g.communityPrice : null, stock: g.lowestPrice?.stockStatus ?? null }))
     .sort((a: GpuType, b: GpuType) => (a.secure_price ?? 99) - (b.secure_price ?? 99));
   gpuCache = { at: Date.now(), list };
   return list;

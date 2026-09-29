@@ -250,6 +250,8 @@ const routes = [
   [/^#\/settings$/, pageSettings],
 ];
 function clearTimers() {
+  const tip = document.getElementById("tip");
+  if (tip) tip.hidden = true;
   for (const t of state.timers) clearInterval(t);
   state.timers = [];
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
@@ -737,14 +739,15 @@ async function pageEnv(main) {
   const parts = [
     h("h1", {}, "Environment"),
     h("p", { class: "muted small" }, "Resolution: pod > cluster > account > the controller's own keys (which cannot be overridden). Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one."),
-    card("Account (every controller cluster)", docPanel("env", "account", { title: "env: account" })),
+    card("Account (every controller cluster)", docPanel("env", "account", { title: "env: account", onSaved: () => refreshEff() })),
   ];
+  let refreshEff = async () => {};
   if (cid) {
     const eff = await api(`/api/clusters/${cid}/env`);
     parts.push(h("div", { class: "row", style: "margin-bottom:12px" }, h("label", {}, "Cluster", sel)));
     parts.push(card("Cluster", docPanel("env", `cluster:${cid}`, { title: "env: cluster", cluster: cid, onSaved: () => refreshEff() })));
     const effBox = h("div", {});
-    const refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/clusters/${cid}/env`), cid));
+    refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/clusters/${cid}/env`), cid));
     effBox.replaceChildren(effView(eff, cid));
     parts.push(card("Effective env per pod", effBox));
   } else parts.push(card("Clusters", h("p", { class: "muted small" }, "Define a cluster to set cluster and pod env.")));
