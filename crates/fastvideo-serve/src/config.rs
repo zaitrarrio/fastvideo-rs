@@ -25,6 +25,7 @@
 //! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
 //! | `FV_ENGINE` (`fake` \| `cuda`) | `engine.backend` |
+//! | `FV_FAKE_H3_1080P` (`0` \| `1`), `FV_FAKE_DEVICE` (`a100`, `h100`, `sm80:80`, …) | `engine.fake.h3_1080p`, `engine.fake.device` |
 //! | `FV_JOB_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `jobs.backend` |
 //! | `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN`, `FV_D1_DATABASE_ID` | `jobs.d1.*` |
 //! | `FV_ARTIFACTS` (`auto` \| `local` \| `s3`) | `artifacts.backend` |
@@ -323,11 +324,28 @@ pub struct FakeCfg {
     /// Without ffmpeg the fake writes no MP4; store a small placeholder
     /// file instead so the job still succeeds (CI).
     pub placeholder_output: bool,
+    /// Give the fake H3 max / turbo models the native 1080P tier, as an
+    /// 80 GB-class GPU serves them (`FV_FAKE_H3_1080P`).
+    pub h3_1080p: bool,
+    /// A simulated GPU for the startup capability check (`a100`, `l40s`,
+    /// `h100`, `b200`, `rtx-pro-6000`, `sm<NN>[:<GiB>]`; `FV_FAKE_DEVICE`):
+    /// a model it cannot run is failed with the reason (the fake H3 models
+    /// need FP8, sm89+). Unset: no check.
+    pub device: Option<String>,
 }
 
 impl Default for FakeCfg {
     fn default() -> Self {
-        Self { models: Vec::new(), step_ms: 2, load_ms: 0, rtf: None, all_resident: true, placeholder_output: true }
+        Self {
+            models: Vec::new(),
+            step_ms: 2,
+            load_ms: 0,
+            rtf: None,
+            all_resident: true,
+            placeholder_output: true,
+            h3_1080p: false,
+            device: None,
+        }
     }
 }
 
@@ -950,6 +968,13 @@ impl Config {
         }
         if let Some(v) = env.var("FV_ENGINE") {
             self.engine.backend = parse_enum("FV_ENGINE", &v)?;
+        }
+        if let Some(v) = env.var("FV_FAKE_H3_1080P") {
+            self.engine.fake.h3_1080p = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_FAKE_DEVICE") {
+            let v = v.trim();
+            self.engine.fake.device = (!v.is_empty()).then(|| v.to_owned());
         }
         if let Some(v) = env.var("FV_JOB_STORE") {
             self.jobs.backend = parse_enum("FV_JOB_STORE", &v)?;

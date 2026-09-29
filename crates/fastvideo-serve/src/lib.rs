@@ -38,6 +38,7 @@ pub mod deploy;
 #[cfg(all(feature = "fal", feature = "webrtc"))]
 pub mod director;
 pub mod encoders;
+pub mod flags;
 pub mod gate;
 /// Gateway mode (`engine.backend = "remote"`, docs/serve/gateway.md).
 #[cfg(feature = "http-client")]

@@ -66,6 +66,8 @@ pub struct App {
     pub gateway: Option<Arc<crate::gateway::Gateway>>,
     /// This process's worker id (D1 `worker` column).
     pub worker_id: String,
+    /// Experimental feature flags (`/fv/v1/admin/flags`, crate::flags).
+    pub flags: Arc<crate::flags::FeatureFlags>,
     #[cfg(feature = "http-client")]
     registration: Option<crate::worker::Registration>,
     sweeper: tokio::task::JoinHandle<()>,
@@ -115,6 +117,18 @@ pub fn build_engine_with_clock(
                 for m in &mut fc.models {
                     m.caps.resident = true;
                 }
+            }
+            if f.h3_1080p {
+                for m in &mut fc.models {
+                    if m.caps.family == fastvideo_protocol::Family::H3
+                        && matches!(m.caps.tier, Some(fastvideo_protocol::Tier::Max | fastvideo_protocol::Tier::Turbo))
+                    {
+                        m.caps.canvas = m.caps.canvas.clone().with_h3_1080p();
+                    }
+                }
+            }
+            if let Some(d) = &f.device {
+                fc.device_profile = Some(fastvideo_engine_service::device::DeviceProfile::parse(d).map_err(|e| anyhow!("engine.fake.device: {e}"))?);
             }
             fc.timing = FakeTiming {
                 load: Duration::from_millis(f.load_ms),
@@ -395,6 +409,16 @@ impl App {
         };
         #[cfg(not(feature = "http-client"))]
         let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = gate.clone();
+        // Experimental feature flags: in D1 beside the jobs when there is
+        // D1, else in the state dir; applied to the caps every API
+        // negotiates against (crate::flags).
+        let flags = match &d1 {
+            Some(d) => crate::flags::FeatureFlags::d1(d.client().clone()).await,
+            None => crate::flags::FeatureFlags::file(config.server.state_dir.join("feature_flags.json")).await,
+        };
+        let flags_refresh = flags.spawn_refresh(Duration::from_secs(30));
+        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> =
+            Arc::new(crate::flags::FlaggedGate { inner: engine_gate, flags: flags.clone() });
         let mut builder = ServeCtx::builder(sc, engine_gate)
             .auth(Auth::new(config.auth.mode, keys).with_key_store(key_store.clone()))
             .url_key(key)
@@ -414,7 +438,8 @@ impl App {
         if let Some(g) = &gw {
             g.attach(ctx.clone());
             let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone())
-                .merge(crate::admin_token::routes(sealed_admin.clone()));
+                .merge(crate::admin_token::routes(sealed_admin.clone()))
+                .merge(crate::flags::routes(flags.clone(), admin.clone()));
             let d1_client = d1.as_ref().map(|d| d.client().clone());
             let autoscale = crate::autoscale::start(&config, g, d1_client, admin.clone(), &worker)?;
             let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
@@ -423,7 +448,7 @@ impl App {
             // First probes before serving, then the tick loop.
             g.tick().await;
             let tick = g.spawn_tick();
-            let mut background = vec![tick];
+            let mut background = vec![tick, flags_refresh];
             if let Some((admin_routes, handle)) = autoscale {
                 router = router.merge(admin_routes);
                 background.push(handle);
@@ -441,6 +466,7 @@ impl App {
                 reactor: None,
                 gateway: Some(g.clone()),
                 worker_id: worker,
+                flags,
                 registration: None,
                 sweeper,
                 key_maintenance,
@@ -486,6 +512,7 @@ impl App {
         // Minted API keys: /fv/v1/admin/keys behind the admin token.
         streams = streams
             .merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()))
+            .merge(crate::flags::routes(flags.clone(), admin.clone()))
             .merge(crate::admin_token::routes(sealed_admin));
         #[allow(unused_mut)]
         let mut fal_extra: Router<ServeCtx> = Router::new();
@@ -495,7 +522,7 @@ impl App {
             fal_extra = fastvideo_fal::director::routes(svc);
         }
         #[allow(unused_mut)]
-        let mut background = Vec::new();
+        let mut background = vec![flags_refresh];
         #[cfg(feature = "http-client")]
         let mut registration = None;
         // Worker role: the gateway's internal routes (before the route
@@ -562,6 +589,7 @@ impl App {
             #[cfg(feature = "http-client")]
             gateway: None,
             worker_id: worker,
+            flags,
             #[cfg(feature = "http-client")]
             registration,
             sweeper,
