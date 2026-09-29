@@ -8,8 +8,10 @@ import type { Env } from "../env";
 import { resolveDigest, resolveClusterImages } from "../ghcr";
 import { runpod } from "../runpod";
 import { HttpError, now, scrub } from "../util";
+import { randomToken } from "../crypto";
 import {
   adminGet,
+  LEGACY_ADMIN_SWITCH,
   createGateway,
   createWorker,
   deletePod,
@@ -206,7 +208,10 @@ export class ClusterOps implements DurableObject {
       if (c.spec.image.ref) c.state.image = c.state.images.gateway || Object.values(c.state.images)[0];
       this.log(`images: ${JSON.stringify(c.state.images)}`);
       const s = await secretsOf(env, c);
-      delete s.admin_token; // a new gateway makes a new one
+      // A new gateway makes a new token; an image older than the sealed-token
+      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN.
+      if (s.legacy_admin_token) s.admin_token = `fvadm_${randomToken("", 24)}`;
+      else delete s.admin_token;
       await saveSecrets(env, c, s);
       await saveState(env, c, { status: "starting", deadline: now() + c.spec.cap_s * 1000 });
       this.log(`deadline ${new Date(c.deadline!).toISOString()} (${c.spec.cap_s}s)`);
@@ -253,6 +258,13 @@ export class ClusterOps implements DurableObject {
       try {
         view = await adminGet(env, c, "/fv/v1/gateway/pools");
       } catch (e) {
+        if ((e as Error).message.startsWith(LEGACY_ADMIN_SWITCH) && !op.data.legacy_patched) {
+          // adminToken just switched this cluster to FV_ADMIN_TOKEN: restart the gateway with it.
+          op.data.legacy_patched = true;
+          this.log("gateway image predates the sealed admin token route: passing FV_ADMIN_TOKEN and restarting it");
+          await patchGateway(env, c, this.log);
+          return { delayMs: 20_000 };
+        }
         this.log(`gateway not answering yet (${Math.round((now() - t0) / 1000)}s): ${(e as Error).message.slice(0, 100)}`);
       }
       if (view) {

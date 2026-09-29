@@ -224,6 +224,8 @@ async function gatewayFetch(env: Env, c: Cluster, path: string, init: RequestIni
   if (!c.state.gateway_url) throw new HttpError(409, `${c.name} has no gateway`);
   return fetchWithTimeout(`${c.state.gateway_url}${path}`, { timeoutMs: 20000, ...init });
 }
+/** The start of adminToken's error when it has just switched an older gateway image to FV_ADMIN_TOKEN. */
+export const LEGACY_ADMIN_SWITCH = "this gateway image has no sealed admin token route";
 export async function adminToken(env: Env, c: Cluster): Promise<string> {
   const s = await secretsOf(env, c);
   if (s.admin_token) {
@@ -243,7 +245,7 @@ export async function adminToken(env: Env, c: Cluster): Promise<string> {
       s.legacy_admin_token = true;
       await saveSecrets(env, c, s);
     }
-    throw new HttpError(409, "this gateway image has no sealed admin token route; the cluster now passes FV_ADMIN_TOKEN: restart the gateway (Env: apply) to use it");
+    throw new HttpError(409, `${LEGACY_ADMIN_SWITCH}; the cluster now passes FV_ADMIN_TOKEN: restart the gateway (Env: apply) to use it`);
   }
   if (!r.ok) throw new HttpError(503, `the gateway did not publish its sealed admin token (${r.status}; not up yet?)`);
   const tok = await openSealedToken((await r.json()) as SealedToken, s.admin_private, s.admin_recipient);
