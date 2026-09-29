@@ -126,6 +126,67 @@ export class DirectorClient {
   }
 }
 
+// What the viewer is shown, reconstructed from the control messages (the
+// director sends no playback-state message). Nothing plays until chunk 0 is
+// built, which takes a model-dependent time (about 20 s for a 10 s chunk on
+// h3-turbo at 480p, over a minute at 768p): the stream carries silence and
+// no video meanwhile. Each chunk then plays for its `playback_seconds`,
+// from its arrival or from the end of the one before it, and when the next
+// one is not ready the last frame holds (fal's
+// `freeze_video_and_silence_audio_until_ready`) until it is. When
+// generation is slower than real time that hold follows every chunk, and it
+// is not a stall: without this status line the page looked stuck until an
+// unrelated event (the next prompt) happened to coincide with the next chunk.
+export class PlaybackTracker {
+  constructor() { this.reset(); }
+
+  reset() {
+    this.phase = 'idle';
+    this.since = 0;
+    this.segments = []; // [{index, start, end}] in ms
+    this.est = null;
+    this.play = null;
+  }
+
+  configured(now) {
+    this.phase = 'generating';
+    this.since = now;
+  }
+
+  chunk(m, now) {
+    const last = this.segments[this.segments.length - 1];
+    const start = Math.max(now, last ? last.end : now);
+    const seconds = Number(m.playback_seconds) || 0;
+    this.segments.push({ index: m.chunk_index, start, end: start + seconds * 1000 });
+    if (this.segments.length > 8) this.segments.shift();
+    if (m.next_generation_estimate_seconds != null) this.est = Number(m.next_generation_estimate_seconds);
+    this.play = seconds;
+    this.phase = 'streaming';
+  }
+
+  // {phase: idle|generating|playing|waiting, chunk, text} at `now`.
+  view(now) {
+    const s = (ms) => Math.max(0, Math.round(ms / 1000));
+    if (this.phase === 'idle') return { phase: 'idle', chunk: null, text: '' };
+    if (this.phase === 'generating') {
+      return {
+        phase: 'generating', chunk: 0,
+        text: 'Generating chunk 0 (' + s(now - this.since) + ' s so far). Video starts when it is ready; there is no picture before that.',
+      };
+    }
+    const cur = this.segments.find((g) => now >= g.start && now < g.end);
+    if (cur) {
+      return { phase: 'playing', chunk: cur.index, text: 'Playing chunk ' + cur.index + ' (' + s(cur.end - now) + ' s left).' };
+    }
+    const last = this.segments[this.segments.length - 1];
+    const next = last.index + 1;
+    const pace = this.est != null && this.play
+      ? ' Each ' + this.play.toFixed(0) + ' s chunk takes about ' + this.est.toFixed(0) + ' s to generate, so the last frame holds between chunks.'
+      : '';
+    return { phase: 'waiting', chunk: next, text: 'Waiting for chunk ' + next + ' (' + s(now - last.end) + ' s).' + pace };
+  }
+}
+
 // Renders the director page into `root`.
 export function mountDirector(root, { app, model }) {
   const appId = app + '/director';
@@ -142,6 +203,15 @@ export function mountDirector(root, { app, model }) {
   const start = el('button', { class: 'primary', id: 'director-start' }, 'Start session');
   const stop = el('button', { id: 'director-stop', disabled: true }, 'Stop');
   const msg = el('div', { class: 'msg', role: 'status', id: 'director-msg' });
+  const playback = el('div', { class: 'msg', role: 'status', id: 'director-playback', 'data-phase': 'idle' });
+  const tracker = new PlaybackTracker();
+  let ticker = null;
+  function renderPlayback() {
+    const v = tracker.view(Date.now());
+    playback.textContent = v.text;
+    playback.dataset.phase = v.phase;
+    if (v.chunk == null) delete playback.dataset.chunk; else playback.dataset.chunk = String(v.chunk);
+  }
   const next = el('textarea', { rows: 2, placeholder: 'Next direction, e.g. "They reach the lamp room and look out to sea."', id: 'director-next' });
   const replan = el('input', { type: 'checkbox', checked: true, id: 'director-replan' });
   const send = el('button', { class: 'primary', disabled: true, id: 'director-send' }, 'Send prompt');
@@ -174,11 +244,18 @@ export function mountDirector(root, { app, model }) {
   function onEvent(m) {
     logLine(m);
     switch (m.type) {
-      case 'configured': setPromptState(m.prompt_version, 'applied', 'ok'); break;
+      case 'configured':
+        setPromptState(m.prompt_version, 'applied', 'ok');
+        tracker.configured(Date.now());
+        if (!ticker) ticker = setInterval(renderPlayback, 250);
+        renderPlayback();
+        break;
       case 'prompt_pending': setPromptState(m.prompt_version, 'pending', 'warn'); break;
       case 'prompt_applied': setPromptState(m.prompt_version, 'applied', 'ok'); break;
       case 'prompt_rejected': setPromptState(m.prompt_version, 'rejected: ' + m.reason, 'bad'); break;
       case 'chunk':
+        tracker.chunk(m, Date.now());
+        renderPlayback();
         chunks += 1;
         stats.replaceChildren(
           el('dt', {}, 'chunks'), el('dd', {}, String(chunks)),
@@ -191,6 +268,12 @@ export function mountDirector(root, { app, model }) {
     }
   }
   function onState(s, reason) {
+    if (s === 'closed' || s === 'idle') {
+      if (ticker) clearInterval(ticker);
+      ticker = null;
+      tracker.reset();
+      renderPlayback();
+    }
     statePill.textContent = s;
     statePill.className = 'pill' + (s === 'streaming' ? ' ok' : s === 'closed' ? '' : ' warn');
     start.disabled = s !== 'closed' && s !== 'idle';
@@ -246,7 +329,7 @@ export function mountDirector(root, { app, model }) {
           el('div', { class: 'actions' }, start, stop, poolBadge(model)), msg)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Stream')),
-        el('div', { class: 'stage-body' }, el('div', { style: 'margin-top:10px' }, video), stats)),
+        el('div', { class: 'stage-body' }, el('div', { style: 'margin-top:10px' }, video), playback, stats)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Direct')),
         el('div', { class: 'stage-body' },

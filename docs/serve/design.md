@@ -1204,7 +1204,20 @@ router so `/fal/proxy` reaches `/wma/*`).
   libwebp when ffmpeg has no libvpx. (An earlier measurement of ~200 ms per
   832x480 libvpx frame was ffmpeg's default thread count: libvpx's VP8
   worker threads spin-wait and collapse on a contended CPU; one thread
-  encodes 1344x768 at ~60-80 fps.)
+  encodes 1344x768 at ~60-80 fps.) A director whose H.264 backend is not
+  in the build prefers VP8 for every offer that has it
+  (`director::service::video_codecs`): `auto` on a GPU without NVENC
+  (H100, A100) resolves to OpenH264, which the serve images do not build,
+  and answering a browser's H.264 then failed the session at its first
+  frame.
+- Playback when generation is slower than real time (the usual case for
+  H3: ~22 s per 10 s chunk at 480p on an H100, over a minute at 768p):
+  nothing plays until chunk 0 is built (silence, no video), each chunk
+  plays for its length, and the last frame holds until the next one is
+  ready. The console's director page shows that phase (`#director-playback`:
+  generating / playing / waiting, from the `chunk` messages), since a held
+  or empty picture otherwise looks like a stall; prompts only direct later
+  chunks and never start playout.
 - Tests: `crates/fastvideo-fal/tests/director_e2e.rs` (a str0m client:
   signalling, strict schemas, versions, heartbeat expiry, `/start-session`
   SSE, session limit, `deadline_missed`, A/V at 24 fps / 48 kHz stereo, a

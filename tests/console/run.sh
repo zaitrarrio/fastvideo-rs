@@ -8,7 +8,9 @@
 # without NVENC), then runs tests/console/smoke.cjs with
 # the globally installed `playwright` npm package and the preinstalled
 # Chromium (PLAYWRIGHT_BROWSERS_PATH, default /opt/pw-browsers). Never runs
-# `playwright install`. scripts/serve/check.sh runs it when FV_SERVE_UI=1.
+# `playwright install`. Then tests/console/director_playback.cjs (the
+# director page against a fake engine slower than real time).
+# scripts/serve/check.sh runs it when FV_SERVE_UI=1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,4 +29,7 @@ node -e "require('playwright')" 2>/dev/null || {
 
 cargo build -p fastvideo-serve --features fake,encoders --bin fv-serve
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
-FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}" node tests/console/smoke.cjs
+export FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}"
+node tests/console/smoke.cjs
+# Director playback when generation is slower than real time (~50 s).
+node tests/console/director_playback.cjs
