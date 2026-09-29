@@ -355,3 +355,61 @@ Notes:
   job's `output.audio` said 48 kHz (the model's vocoder rate) while the file
   is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
 - Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.
+
+## Script avatar (Reactor avatar mode, P0-3), 2026-09-29
+
+`fv-serve` with `configs/serve/runpod-ltx.toml` (`ltx-turbo`) and
+`FV_REACTOR_MODE=avatar`, 1x RTX PRO 6000 on the EU volume `jg48s6o1w0`,
+$2.09/h, three pods through `scripts/serve/e2e/pod.sh`
+(`FV_E2E_BASE_CONFIG=/etc/fv/runpod-ltx.toml`, 10 min idle self-delete, 45-50
+min backstop), each deleted and verified 404: 682 s + 778 s + 861 s =
+**$1.35**. The client is the console page `/console/avatar` in headless
+Chromium on the pod (`pod-clients.sh avatar` → `tests/console/avatar.cjs`,
+live mode): the portrait is the 5th frame of a 9-frame native text-to-video
+job on the same server; the photo uploads through the Reactor uploads
+protocol; the received stream is recorded with MediaRecorder (WebM),
+remuxed to MP4 at 24 fps and measured with `scripts/gpu/lipsync_proxy.py`.
+The script: 4 sentences, 67 words at 140 wpm → 28.7 s, 4 windows
+(9.38 / 10.0 / 7.67 / 4.67 s played; 225 / 241 / 185 / 113 frames generated
+at 640x384, delivered 640x352). Summaries: `artifacts/serve/e2e/ltx-avatar/`.
+
+| Run (image) | Window build s (RTF) | First frame | Stalls | Wall for 28.7 s |
+|---|---|---|---|---|
+| 1 (`sha-d878286`) | 12.5 (1.34), 11.9 (1.19), 10.1 (1.32), 8.2 (1.75) | 12.6 s | 3, 3.5 s | 45.1 s |
+| 2 (`sha-bd58c71`) | 13.0 (1.38), 11.9 (1.19), 15.2 (1.99), 30.9 (6.62) | 13.0 s | 3, 31.3 s | 73.5 s |
+| 3 (`sha-495e8f2`) | 18.3 (1.95), 17.4 (1.74), 16.1 (2.09), 14.4 (3.09) | 18.4 s | 3, 20.5 s | 69.4 s |
+
+- **Latency per window.** Build time is 8-18 s per window. A full 10 s window
+  has an RTF of 1.2-1.7, and short windows are worse because of the per-job
+  overhead (text encode, image encode, two stages, VAE). The first frame
+  arrives after one window's build, 12.6-18.4 s. Whole-take RTF is 1.35 at
+  best (run 1). Generation is **slower than real time** on one RTX PRO
+  6000, so playout holds the last frame between windows (the stalls). Run
+  to run variance is large on the same GPU type: the 30.9 s window in run 2
+  and all of run 3 are 1.3-1.5x slower than run 1. The cause was not found.
+- **Lip sync.** The model itself is in sync. Batch I2V of the same portrait,
+  scene and first sentence (225 frames, 2 seeds, 11.2 s each) pools at lag
+  −1 frame (−42 ms), r 0.37, speech contrast 0.75.
+
+  The streamed takes correlate with the speech (r 0.32-0.39, speech contrast
+  0.58-0.90). Their best lag lands at −5 to −10 frames: the mouth leads the
+  sound by 200-400 ms, depending on the cut and on the lag window (±6 or ±14
+  frames). Run 1 had video and audio in two msid streams, which the browser
+  does not sync. Run 2 put them in one stream and did not change the lag.
+  Part of the offset is the recording: the WebM video track starts
+  0.13-0.15 s after the audio track, and the remux drops that start. The
+  rest is **not resolved**. It sits on the transport or recording side,
+  since the frames and their audio leave the pacer in lockstep and the
+  model's own clips are in sync. The next step is a marker-based A/V offset
+  measurement on the fake engine (burned-in frame index against the fake
+  click).
+- **Voice-driven take** (`set_voice_audio`, the 7.0 s flite fixture,
+  audio-to-video): one window of 7.04 s. It passed end to end, and the
+  output audio is the file. Build time is 57-60 s (RTF about 8.5) even on a
+  warm pod, far slower than batch A2V. Lip sync on the 160-frame take:
+  lag −3, r 0.18, weak. Not investigated.
+- **Stop.** In run 2 `/stop_session` left the runtime in `closing` for good.
+  Close is now bounded: it waits at most 10 s for the driver and logs every
+  step. In run 3 End session returned to `ready` in under 1 ms (`peers=0`
+  at close: the browser peer had already gone). The run 2 hang, with a
+  peer still attached, was not reproduced.

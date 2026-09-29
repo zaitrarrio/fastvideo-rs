@@ -1295,6 +1295,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "fastvideo-engine-service",
  "fastvideo-protocol",
@@ -1432,6 +1433,7 @@ dependencies = [
  "fastvideo-protocol",
  "fastvideo-webrtc",
  "futures",
+ "image",
  "prost",
  "prost-build",
  "prost-types",
