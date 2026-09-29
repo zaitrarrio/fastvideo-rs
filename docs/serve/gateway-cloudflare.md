@@ -657,15 +657,18 @@ pod, 10 serial jobs and 5 at once):
 | 250 ms | **durable-object** | **0.023 / 0.022 / 0.027** | **0.081 / 0.098 / 0.118** | 0.583 |
 | 0 ms | gateway | 0.002 / 0.002 / 0.002 | 4.333 / 4.538 / 11.929 | 0.003 |
 | 0 ms | durable-object | 0.029 / 0.028 / 0.045 | 0.088 / 0.105 / 0.127 | 0.094 |
+| 250 ms, after the gateway burst fix | gateway | 0.506 / 0.506 / 0.507 | 0.505 / 0.504 / 0.506 | 1.012 |
+| 250 ms, after the gateway burst fix | durable-object | 0.020 / 0.021 / 0.024 | 0.099 / 0.118 / 0.143 | 0.585 |
 
 **The phase-2 target (≤ 0.4 s p50 on the staging path) is met: 0.022 s p50**
 with the 250 ms D1 of the bench, against 0.506 s on the gateway path: no D1
 round trip is left between the submit and the GPU. What is left is the
 enqueue to the edge and the push (≈ 20–30 ms from EU-RO-1). The submit call
 still includes the `gw_dispatch` insert (0.58 s at 250 ms D1); it could go
-behind too. The gateway's burst placement problem (§9.4) was still on main
-when this ran; it is fixed since (gateway.md §3.4), so the gateway's
-"5 at once" rows above are the old behaviour.
+behind too. The first four rows ran before the gateway's burst placement fix
+(gateway.md §3.4); the last two after it: bursts now start as fast as single
+jobs on the gateway path (0.5 s, its two D1 round trips), and the DO path
+stays 4–25× faster (0.02 s serial, 0.12 s p50 for 5 at once).
 
 GPU_RESULTS_PLACEHOLDER
 
