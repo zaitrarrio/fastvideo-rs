@@ -141,32 +141,9 @@ pub fn limits_for(cfg: &DirectorConfig, caps: &ModelCaps) -> Limits {
     }
 }
 
-/// One media stream for every track of the answer: browsers group tracks
-/// by `msid` stream id, so the video and audio tracks arrive in a single
-/// `MediaStream` (one `onMedia` call, one `<video>` element with sound).
-pub fn unify_msid(answer: &str, stream: &str) -> String {
-    let mut out = String::with_capacity(answer.len());
-    for line in answer.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\r', '\n']);
-        let eol = &line[body.len()..];
-        if let Some(rest) = body.strip_prefix("a=msid:") {
-            if let Some((_, track)) = rest.split_once(' ') {
-                out.push_str(&format!("a=msid:{stream} {track}{eol}"));
-                continue;
-            }
-        }
-        if let Some(rest) = body.strip_prefix("a=ssrc:") {
-            if let Some((ssrc, attr)) = rest.split_once(" msid:") {
-                if let Some((_, track)) = attr.split_once(' ') {
-                    out.push_str(&format!("a=ssrc:{ssrc} msid:{stream} {track}{eol}"));
-                    continue;
-                }
-            }
-        }
-        out.push_str(line);
-    }
-    out
-}
+/// One media stream for every track of the answer (moved to
+/// `fastvideo_webrtc::sdp`, shared with the Reactor avatar mode).
+pub use fastvideo_webrtc::sdp::unify_msid;
 
 /// A new session's answer.
 #[derive(Debug)]

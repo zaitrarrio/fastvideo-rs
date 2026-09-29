@@ -134,7 +134,10 @@ async function portrait(origin) {
   }
   if (s.status !== 'succeeded') fail('portrait job ' + s.status + ': ' + JSON.stringify(s.error));
   const mp4 = path.join(OUT, 'portrait.mp4');
-  const v = await fetch(s.output.url.startsWith('http') ? s.output.url : origin + s.output.url, { headers: h });
+  // A signed artifact URL (R2) takes no Authorization header.
+  const u = s.output.url;
+  const v = u.startsWith('http') ? await fetch(u) : await fetch(origin + u, { headers: h });
+  if (!v.ok) fail('portrait download: ' + v.status);
   fs.writeFileSync(mp4, Buffer.from(await v.arrayBuffer()));
   const img = path.join(OUT, 'portrait.png');
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', mp4, '-vf', 'select=eq(n\\,4)', '-frames:v', '1', img]);
@@ -156,6 +159,17 @@ async function main() {
     page.on('pageerror', (e) => process.stdout.write('  ! page error: ' + e.message + '\n'));
     const chunks = [];
     await page.exposeFunction('__saveChunk', (b64) => { chunks.push(Buffer.from(b64, 'base64')); });
+    if (process.env.FV_AVATAR_UNIFY_MSID === '1') {
+      // Experiment: group the answer's tracks in one msid stream client-side.
+      await page.route('**/sdp_params', async (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+        const r = await route.fetch();
+        if (r.status() !== 200) return route.fulfill({ response: r });
+        const j = await r.json();
+        j.sdp_answer = j.sdp_answer.replace(/^a=msid:\S+ /gm, 'a=msid:fv-avatar ').replace(/^(a=ssrc:\d+ msid:)\S+ /gm, '$1fv-avatar ');
+        return route.fulfill({ response: r, json: j });
+      });
+    }
     await page.goto(origin + '/console/avatar');
     await page.setInputFiles('#image', image);
     await page.fill('#script', SCRIPT);
@@ -167,7 +181,11 @@ async function main() {
     const tStart = Date.now();
     await page.click('#start');
     // Record what arrives, from the moment the stream exists.
-    await page.waitForFunction(() => !!(window.__avatar && window.__avatar.stream && window.__avatar.stream.getTracks().length >= 2), null, { timeout: 60000 });
+    try {
+      await page.waitForFunction(() => !!(window.__avatar && window.__avatar.stream && window.__avatar.stream.getTracks().length >= 2), null, { timeout: 60000 });
+    } catch (e) {
+      fail('no audio + video stream; page says: ' + (await page.textContent('#take-msg')));
+    }
     await page.evaluate(() => {
       const rec = new MediaRecorder(window.__avatar.stream, { mimeType: 'video/webm;codecs=vp8,opus' });
       rec.ondataavailable = async (ev) => {

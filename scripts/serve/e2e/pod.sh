@@ -72,7 +72,7 @@ cmd_up() {
         gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 40, volumeInGb: 0,
         ports: ["8000/http", "8001/http"],
         dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
-        env: {
+        env: ({
           FV_CF_ACCOUNT_ID: "{{ RUNPOD_SECRET_fv_cf_account_id }}",
           FV_CF_API_TOKEN: "{{ RUNPOD_SECRET_fv_cf_api_token }}",
           FV_D1_DATABASE_ID: "{{ RUNPOD_SECRET_fv_d1_database_id }}",
@@ -84,7 +84,7 @@ cmd_up() {
           FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
           FV_API_KEYS: $keyhash, FV_ADMIN_TOKEN: $admin, FV_SIDECAR_TOKEN: $sidecar, FV_SIDECAR_B64: $side,
           FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info", FV_E2E_BASE_CONFIG: $cfg
-        } + $extra
+        } + $extra)
       } + $vol')"
     if ! resp="$(rest POST /pods "$payload" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
