@@ -8,6 +8,10 @@ compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# The editor bundle (public/editor.js) is built from ui/ before dev and deploy.
+[build]
+command = "node build-ui.mjs"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"

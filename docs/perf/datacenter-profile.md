@@ -499,6 +499,94 @@ Where the list differs from the task's hypotheses:
   (#7), not to syncs.
 - **"Overlapping CPU encode"**: 3–9 % (#7), largest for LTX.
 
+## WP-D results: VSA on the datacenter kernels (2026-09-29)
+
+Opportunity #1 above, implemented as `fa_dc100_vsa` (tcgen05) /
+`fa_dc90_vsa` (wgmma) with a KV-tile-list TMA producer, a fused prep
+(tiles + means in one launch) and the H3 combine in the fine epilogue
+(`docs/perf/datacenter-kernel-plan.md` WP-D). Same binary for both arms; the
+baseline arm is `FASTVIDEO_VSA_KERNEL=tma2` (the incumbent path, unchanged).
+
+**Kernel tier** (`fv-gpucheck kernels --groups vsa_dc,attn_dc`: 99/99 pass
+on both GPUs; artifacts `artifacts/perf/wp-d/{b200,h100}/`).
+
+| Check | B200 | H100 SXM |
+|---|---|---|
+| fine vs `vsa_mma_attn_tma2`, same selection (H3 480p / 768p / 1080p grids, sparsity 0.5-0.9, full and odd-base partial query ranges, smooth and white-noise q/k): rel-L2 (limit 1e-3) | 1.5e-5 - 5.7e-4 | 1.6e-5 - 4.7e-4 |
+| fine vs an f64 block-masked dense reference on sampled query tiles (limit 3.5e-3) | 7.6e-5 - 1.58e-3; at most 1.011x tma2's own error | 7.6e-5 - 1.58e-3; at most 1.010x tma2's |
+| fused prep vs `vsa_tile_qkv` + `vsa_tile_mean` (f32 round16, f32, bf16) | bit-identical | bit-identical |
+| fused H3 combine vs `vsa_combine(round16)` / `_g16` (f32, bf16, no gate) | bit-identical | bit-identical |
+
+Timings, 56 heads, synthetic smooth q/k (ms; the fine stage alone and
+prep + fine + combine):
+
+| Grid | Sparsity | B200 fine tma2 → dc | B200 stage | H100 fine tma2 → dc | H100 stage |
+|---|---|---|---|---|---|
+| 480p (280 tiles) | 0.8 | 7.13 → 5.15 (1.38x) | 1.55x | 7.77 → 4.23 (1.84x) | 1.70x |
+| | 0.9 | 3.87 → 3.28 (1.18x) | 1.57x | 3.96 → 2.37 (1.67x) | 1.55x |
+| 768p (660 tiles) | 0.8 | 36.3 → 24.7 (1.47x) | 1.58x | 41.6 → 22.0 (1.89x) | 1.92x |
+| | 0.9 | 18.5 → 14.0 (1.33x) | 1.55x | 21.2 → 11.6 (1.83x) | 1.86x |
+| 1080p (1350 tiles) | 0.8 | 149.2 → 97.9 (1.52x) | 1.59x | 171.7 → 105.7 (1.63x) | 1.82x |
+| | 0.9 | 75.3 → 54.1 (1.39x) | 1.52x | 90.2 → 50.9 (1.77x) | 1.85x |
+
+Prep (q/k/v tiling + means) alone: B200 5.87 → 1.49 ms at 768p, 11.40 →
+2.49 ms at 1080p; H100 5.87 → 1.89 and 12.74 → 3.84 ms. Effective fine
+rate: B200 366-437 TFLOPS, H100 405-464 (tma2: 276-287 / 237-250).
+
+The sm_100 kernel runs two query tiles as one M = 128 tcgen05 tile over the
+union of their selections. On these synthetic fields the union is 1.55-1.70x
+one selection. **On real H3 turbo selections it is 1.25-1.42x (median 1.33,
+200 calls, `FASTVIDEO_VSA_UNION_LOG=1`)**, so the real-data B200 gain is
+larger than the synthetic table. The sm_90 kernel has no union but streams
+K/V per warpgroup, which at ~450 TFLOPS is ~7 TB/s of L2 → SMEM traffic:
+bandwidth, not wgmma, bounds it.
+
+**End to end, H3 turbo (4step-vsa), B200** (US-CA-2, `fv-gpucheck --mode
+fast h3 gen`, warm, seed 7, fox prompt, same pod and binary; the profile
+column is the traced fv-serve job above):
+
+| | profile (tma2) | tma2 (this run) | dc | change |
+|---|---:|---:|---:|---:|
+| 768p denoise | 11.88 s | 11.87 s | 9.18 s | **−22.6%** |
+| 768p text + denoise + decode | — | 15.32 s | 12.62 s | −17.6% |
+| 1080p denoise | 33.00 s | 32.73 s | 24.46 s | **−25.3%** |
+| 1080p text + denoise + decode | — | 39.87 s | 31.59 s | −20.8% |
+| peak allocated (768p / 1080p) | — | 65.2 / 76.5 GiB | 64.1 / 74.3 GiB | −1 / −2 GiB |
+
+Against the profile's full job (run_s 15.33 s / 40.74 s, with x264 encode
+and upload), the saving is −17.5% (768p) and −20.3% (1080p); the estimate
+was −24% / −32%. The gap is the estimate's assumed 3.5x fine stage: the
+measured real-data fine stage is ~2x (the union, and a raw tcgen05 rate of
+~650-690 TFLOPS, below the dense kernel's 1.1 PFLOPS).
+
+**Numerics, E2E.** Step-1 per-block rel-L2, dc vs tma2 (768p, same pod):
+block 0 1.2e-4, 1 1.6e-3, 6 3.8e-3, 12 5.1e-3, 18 3.1e-2, 24 3.4e-2, 30
+0.10, 36 0.21, 42 0.32, 48 0.56, 49 0.44; latents after steps 1 / 2 / 3:
+1.0e-2 / 2.8e-2 / 8.6e-2. That is the order of the recorded Rust-vs-Python
+oracle for this recipe (`docs/oracle.md`: 1.35e-2 at block 18, 0.36 at
+block 49; latents 7.2e-3 / 2.5e-2 / 8.5e-2): bf16-floor early, then VSA's
+top-k turning tiny differences into different tile choices. Clips (dc vs
+tma2): 768p PSNR 17.2 dB, LPIPS 0.28, sharpness 0.98, jitter 0.96 (min
+0.86); 1080p LPIPS 0.36. **Control**: the incumbent VSA with only the
+dense-prefix SDPA kernel switched (`FASTVIDEO_FLASH_KERNEL=v2`) moves the
+768p clip by LPIPS 0.32. The dc kernel's divergence is H3's sensitivity to
+rounding, not a kernel defect. The Python oracle itself (an upstream
+reference pod) was not re-run on B200.
+
+**End to end, H3 turbo, H100 SXM** (US-CA-2, same method):
+
+| | tma2 | dc | change |
+|---|---:|---:|---:|
+| 768p denoise | 19.46 s | 16.34 s | **−16.0%** |
+| 768p text + denoise + decode | 24.58 s | 21.50 s | −12.5% |
+| 1080p denoise | 49.62 s | 39.44 s | **−20.5%** |
+| 1080p text + denoise + decode | 60.17 s | 49.96 s | −17.0% |
+| peak allocated (768p / 1080p) | 57.0 / 68.3 GiB | 55.9 / 66.1 GiB | −1 / −2 GiB |
+
+Against the profile's full H100 jobs (run_s 27.73 s / 57.21 s) the saving
+is −11.1% (768p) and −17.8% (1080p); the estimate was −13% / −22%. Clips dc
+vs tma2: LPIPS 0.22 (768p) / 0.23 (1080p), within the B200 control's 0.32.
+
 ## Top 20 kernels per workload
 
 Full lists in `artifacts/perf/datacenter/<gpu>/<workload>/kernels.csv`,

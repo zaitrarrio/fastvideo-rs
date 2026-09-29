@@ -101,7 +101,7 @@ seam (`[kernels]` profile key, else env) is
 | Sol prep (K/V to bf16, pooled Kc/Vc, thresholds) | ours-mma, 3-4 SIMT launches | same | same | rule | `wan/ops.rs` `sol_prep_*` (`kernels.cu:2784-2888`) |
 | VSA coarse (tile means + scores) | ours tile-mean kernels + **cuBLAS f32 (TF32)** GEMM | same | same | rule | `wan/ops.rs:838`, `:851`; `h3/vsa.rs` |
 | VSA top-k | ours `vsa_topk2` (radix select) | same | same | rule (`FASTVIDEO_VSA_TOPK`) | `wan/ops.rs:877-893` |
-| VSA fine | ours-mma **`vsa_mma_attn_tma2`** (TMA 128B swizzle, 3-slot ring, mma.sync) | same kernel (log: `Tma ring (3 slots) (sm10, 128B swizzle)`) | same kernel | rule: `tma_requested` is `sm_major >= 9`, ring default on | `wan/ops.rs:1096` `vsa_mma_attn_device`, `:1292`, `:1348` `tma_requested`, `:1382` `vsa_ring_default`; `wan/vsa.rs:293` `fine_kernel`; `h3/vsa.rs:600`, `:729` |
+| VSA fine | **ours-dc `fa_dc90_vsa`** (wgmma, KV-tile-list producer; WP-D) | **ours-dc `fa_dc100_vsa`** (tcgen05 + TMEM; log: `vsa fine kernel: dc KV-tile-list (sm100, tcgen05, cubin)`) | ours-mma `vsa_mma_attn_tma2` (TMA 128B swizzle, 3-slot ring, mma.sync; the 9.0 / 10.0 escape hatch `tma2`) | rule: `tma_requested` is `sm_major >= 9`, ring default on | `wan/ops.rs:1096` `vsa_mma_attn_device`, `:1292`, `:1348` `tma_requested`, `:1382` `vsa_ring_default`; `wan/vsa.rs:293` `fine_kernel`; `h3/vsa.rs:600`, `:729` |
 | Block-causal full-sequence (causal Wan clip forward) | ours-mma `flash_mma_fwd2_causal_d{64,128}` | same | same | rule | `wan/attn.rs:548` `device_mma_sdpa_causal`; `wan/nn.rs:1754` |
 | SF-Wan streaming (queries vs sink + rolling window, no mask) | **ours-dc** (plain dense via `sdpa_kv_window`, d = 128) | **ours-dc** | timed cuDNN / V2 | same as dense | `wan/nn.rs:1793` `sdpa_kv_window`, `:1749` `causal_flash_enabled`; `wan/transformer.rs:257`, `:290` |
 | FP8 attention (Sage-style, opt-in, H3 `fp8_attention`) | ours `attn_fp8.cu` (mma.sync e4m3 QK, bf16 PV) | same | same | opt-in; `supported()` = sm >= 8.9 | `wan/attn_fp8.rs:79`, build.rs `fp8_entries` |
@@ -381,6 +381,60 @@ run needs more than ~$15.
 - **Dependencies:** the profile; WP-0 (c) for graphs.
 
 ### WP-D. VSA on datacenter GPUs (sm_100 first, then sm_90)
+
+**Status (2026-09-29): landed, `auto` on 9.0 / 10.0** (seam value
+`vsa_attention = dc`; `FASTVIDEO_VSA_KERNEL=tma2` restores the mma.sync
+kernel; sm_120 never loads the module). Numbers in
+`docs/perf/datacenter-profile.md`, "WP-D results".
+
+- **What was built** (`attn_dc.cu`, `attn_dc.rs`)
+  - A **KV-tile-list producer**: the consumers read an ordered list of
+    32-bit entries (tile index, valid keys, per-64-row-group visibility
+    mask) and the TMA warp streams two 64-key tiles (128 keys) per softmax
+    step, ring order K_a K_b V_a V_b. Builders produce the list:
+    `dcv_build_union` (sm_100) and `dcv_list_sel` (sm_90). Sol's exact
+    blocks (per-group ballot masks) and block-causal key ranges (contiguous
+    tiles, frame boundary as `valid` / group mask) are meant to be further
+    builders over the same entry word and pipelines (WP-B / C / E).
+  - `fa_dc100_vsa` (tcgen05 + TMEM): 128 query rows per CTA = two VSA
+    query tiles (M = 128, the layout the dense kernel proves), attending the
+    **union** of their selections, each row masking the tiles its own tile
+    did not select (exactly per-tile VSA). Warps 0-3 softmax, 4 list + TMA,
+    5 MMA; S double-buffered in TMEM so QK_{j+1} overlaps softmax_j.
+  - `fa_dc90_vsa` (wgmma): three warpgroups as `fa_dc90`; each consumer
+    warpgroup owns one query tile (M = 64) and its own selection and K/V
+    ring, so no union work is wasted. Every wgmma is unconditional (a
+    partial last step repeats tile a, masked), which keeps ptxas from
+    serialising them (C7519).
+  - `dcv_prep_f32` / `dcv_prep_b16`: one launch tiles q/k/v and pools
+    their means, bit for bit `vsa_tile_qkv` + `vsa_tile_mean`, so the f32
+    scores and the selection are unchanged (item 3 below became "keep the
+    f32 coarse stage, fuse its inputs": a bf16 coarse GEMM would move the
+    selection).
+  - The fine epilogue can write H3's combine
+    `bf16(bf16(sparse) + bf16(bf16(coarse) * gate))` straight into token
+    order (bit for bit `vsa_combine(round16)` / `vsa_combine_g16`): no
+    `sparse` buffer, no combine launch. H3 (`h3/vsa.rs`
+    `attend_device_dc`) takes prep + fine + combine; Wan's VSA and every
+    other `vsa_mma_attn_tiled_device` caller take the dc fine stage alone.
+  - `sm_103a` cubin built beside `sm_100a` (loaded on 10.3 only with
+    `FASTVIDEO_DC_SM103=1`: never run on a B300).
+- **Validation**: kernels group `vsa_dc` (99/99 with `attn_dc` on B200
+  and H100); E2E H3 turbo on B200 and H100 (768p / 1080p, same pod, tma2
+  vs dc), block dumps and clip comparisons with a control on B200; see the
+  profile doc.
+- **Measured vs the estimate** (same pod, tma2 vs dc): B200 denoise
+  −22.6% (768p) / −25.3% (1080p), whole job vs the profile −17.5% / −20.3%
+  (estimate −24% / −32%); H100 denoise −16.0% / −20.5%, job −11.1% /
+  −17.8% (estimate −13% / −22%). The sm_100 union
+  costs 1.25-1.42x the per-tile work on real H3 selections (median 1.33).
+- **Next** (not done): sm_100 without the union waste (M = 64 tcgen05, or
+  per-row-group lists sharing only common tiles); the sm_90 kernel is
+  L2-bandwidth-bound (each warpgroup streams its own K/V: 64 KB per
+  64 x 128 step, twice dense's bytes per FLOP), so share tiles both
+  warpgroups selected; FA4's partial exp2 emulation on sm_100.
+
+Original scope:
 
 - **Scope**
   - (1) Add to `attn_dc.cu` a **KV-tile-list TMA producer**. The producer
