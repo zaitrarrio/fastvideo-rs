@@ -30,6 +30,8 @@ default = []
 str0m = ["dep:str0m"]
 # WHIP publisher client (HTTP via reqwest). The publisher itself also needs `str0m`.
 whip = ["dep:reqwest"]
+# Opus decoding of client microphone tracks in `ingest` (libopus).
+opus = ["fastvideo-media/opus"]
 
 [lints]
 workspace = true

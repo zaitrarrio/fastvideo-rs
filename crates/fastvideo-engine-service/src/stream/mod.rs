@@ -8,6 +8,7 @@
 //! | [`queue`] | Generation / playout queues ([`ClipQueue`]) and the wire [`ClipInfo`] |
 //! | [`rules`] | `valid_commands` (fast-h3 `fasth3_session_rules`) |
 //! | [`causal`] | [`CausalSession`] / [`CausalControl`]: SF-Wan block rollout under an exclusive lease; the Reactor causal command set; TTFF |
+//! | [`duplex`] | [`DuplexSession`] / [`DuplexControl`]: client input tracks into a model (design §5.11); the loopback echo ([`EchoBackend`]) |
 //! | [`pace`] | Pacers: clip [`MediaItem`]s → `AvPacer` ticks; causal blocks → adaptive `FramePacer` ticks; the drop-oldest [`TickReceiver`] |
 //!
 //! Typical clip front-end (Reactor fast-h3 mode, fal director):
@@ -33,6 +34,7 @@
 pub mod avatar;
 pub mod causal;
 pub mod clip;
+pub mod duplex;
 pub mod pace;
 pub mod player;
 pub mod queue;
@@ -47,6 +49,10 @@ pub use causal::{
     CausalStats, Ttff,
 };
 pub use clip::{ClipBuild, ClipSession};
+pub use duplex::{
+    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply, DuplexSession,
+    DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
+};
 pub use pace::{
     spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipPacerConfig, IdlePolicy,
     MediaItem, MediaSlice, PaceStats, PacedStream, PlayOutcome, Tick, TickReceiver, TickStart,

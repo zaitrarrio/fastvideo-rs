@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live input · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/live.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Live input <small>publish your camera and microphone to a duplex model and watch its output</small></h1>
+  </div>
+  <div id="key-banner" class="banner" hidden>No API key in this browser. Duplex sessions need one: <a href="/console/admin">mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-setup">
+      <div class="stage-head"><h2 id="h-setup">Session</h2><span id="live-state" class="pill">idle</span></div>
+      <div class="stage-body">
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <p class="hint" id="model-facts"></p>
+        <label for="transport">Transport</label>
+        <select id="transport">
+          <option value="whip">Native WHIP ingest (/fv/v1/streams/ingest)</option>
+          <option value="reactor">Reactor runtime (PublishTrack)</option>
+        </select>
+        <div class="row">
+          <div><label><input type="checkbox" id="cam" checked> Camera</label></div>
+          <div><label><input type="checkbox" id="mic" checked> Microphone</label></div>
+        </div>
+        <label for="res">Camera resolution</label>
+        <select id="res">
+          <option value="640x360">640 × 360</option>
+          <option value="1280x720">1280 × 720</option>
+          <option value="320x240">320 × 240</option>
+        </select>
+        <p class="hint">The browser is asked for this size (the model scales it to its input size; larger than the model's limit is refused).</p>
+        <label for="scene">Scene (context, optional)</label>
+        <input id="scene" spellcheck="false" autocomplete="off" placeholder="a quiet studio, warm light">
+        <label for="persona">Persona (context, optional)</label>
+        <input id="persona" spellcheck="false" autocomplete="off" placeholder="a friendly presenter">
+        <label for="max-seconds">Session length (s)</label>
+        <input id="max-seconds" type="number" min="1" step="1" placeholder="server default">
+        <div class="actions">
+          <button id="start" class="primary" type="button">Start</button>
+          <button id="pause" type="button" disabled>Pause model</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+        <div id="live-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-out">
+      <div class="stage-head"><h2 id="h-out">Output</h2></div>
+      <div class="stage-body">
+        <video id="remote" autoplay playsinline muted></video>
+        <div class="actions"><label><input type="checkbox" id="unmute"> Play the model's audio</label></div>
+        <h3 class="sub">Your camera</h3>
+        <video id="local" autoplay playsinline muted class="small-video"></video>
+        <dl id="live-stats"></dl>
+        <details><summary>Events</summary><div id="live-log" class="logs"></div></details>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

@@ -883,7 +883,8 @@ front-end (fal director | Reactor | native /fv/v1/streams)
    │ SessionSpec{model, mode, tracks, canvas, fps, continuity}
    ▼
 EngineService ── ClipSession  (H3, LTX, FastWan, TI2V-5B; generation queue ─► build on executor)
-             └─ CausalSession (SF-Wan; one block per executor turn)
+             ├─ CausalSession (SF-Wan; one block per executor turn)
+             └─ DuplexSession (client camera/mic in through input rings, §5.11; the loopback echo)
    │ tokio::mpsc bounded (clips: playout capacity; blocks: depth 4)
    ▼
 AvPacer (media)  — one tick = 1 video frame + 48000/fps audio samples (or silence)
@@ -1273,7 +1274,9 @@ Wire handling:
 - Outbound tracks start **paused** and are sent only after `ResumeTrack`.
 - `RequestSchema` → `model_schema` (OpenAPI 3.1 from the command table).
 - `RequestClip`/`RequestRecording` → `clip_failed{reason:"recording disabled"}`.
-- `PublishTrack` → error `publish_refused` (we declare no IN tracks).
+- `PublishTrack` → error `publish_refused` for clip and causal models (they
+  declare no IN tracks). Duplex models declare `input_video` /
+  `input_audio` and `PublishTrack` claims them (§5.11).
 - A command reply is a correlated `ModelMessage`, or a bodyless ack (v1 only).
 - Refusals are broadcast `command_error{command,reason}` plus a bodyless ack,
   as fast-h3 does.
@@ -1284,6 +1287,7 @@ Command sets, chosen by `ModelCaps.stream`:
 |---|---|---|
 | Clip (H3, LTX, FastWan) — **fast-h3 verbatim** | `enqueue{prompt≤800,metadata≤2000,seed?,seconds?,position?}`, `play{clip_id}`, `pop`, `move`, `stop`, `get_queue`, `get_state`, `set_clip_seconds`, `set_seed`, `set_autoplay`, `set_canvas{aspect∈16:9,1:1,9:16,4:3}`, `reset` | `clip_queued`, `clip_generated`, `clip_moved`, `clip_started`, `clip_finished`, `clip_stopped`, `clip_popped`, `clip_failed`, `clip_length_accepted`, `seed_accepted`, `autoplay_accepted`, `canvas_accepted`, `session_reset`, `state_update`, `queue_update`, `command_error` |
 | Causal (SF-Wan), Waypoint-style `InputState` setters | `set_prompt{prompt}`, `set_paused{paused}`, `set_seed{seed}`, `reset` | `state_update{prompt,paused,seed,block_index,unique_fps}`, `command_error` |
+| Duplex (client input tracks, §5.11) | `set_paused{paused}`, `get_state` | `state_update{paused,context,frames_out,input_frames,input_latency_ms,publishers,ingest,…}`, `input_rejected{track,reason}` |
 
 - Clip-length bounds and snapping come from caps: H3 5.167–14.375 s on
   17n+5; LTX on 8k+1 at the model fps; FastWan on 4k+1.
@@ -1429,6 +1433,122 @@ samples), and an RTP timestamp derived from the global sample counter.
 | Pipe-encoder start and restart (forced IDR / keyframe) | 1 warm spare ffmpeg per streaming session (`fastvideo_media::pipe::SparePool`) | The spare (one profile: codec, size, fps, bitrate, level) is primed with one discarded black frame; its first real frame is a forced keyframe. The Reactor keeps one warm while READY for the next session (canvas and fps follow from the loaded model; preferred codec; codec probes off the media thread), hands it to the session at `start_session` (or pre-warms at session start) and the first encoder adopts it; a new one is warmed after the session ends. After every (re)start's first frame the encoder refills it. A restart gives the old process EOF (it flushes its last frames, which go out first) and swaps the spare in; a keyframe asked for before the process's first frame (a keyframe) went out needs no restart. No spare for batch encodes; killed at session end; `FV_ENCODER_SPARE=0` turns it off. `fv_encoder_restart_duration_seconds{codec,spare=warm\|warming\|cold}`, `fv_encoder_restarts_total`. |
 | Per-peer str0m send | str0m internal | A peer whose RTCP shows no progress for 20 s is dropped |
 | Control channels | 64 queued messages per peer | Excess → close with `invalid_message` |
+| Client media in (§5.11): str0m → ingest | 64 frames per peer; `max_bitrate_kbps` × 1.25 per 2 s | Drop the new frame; the next video frame is marked non-contiguous (the decoder waits for a keyframe, PLI ≤ 1/s) |
+| Ingest → decode thread | 32 frames | Drop (`dropped_behind`), then wait for a keyframe |
+| Decoded input rings | `buffer_ms` of frames (≥ 2) and 10 ms audio chunks, and `buffer_ms` of pts | Drop oldest; the model takes the newest frame (`take_latest`, the skipped ones counted) |
+
+### 5.11 Client input: WebRTC ingest and duplex sessions
+
+**Decided and implemented 2026-09-29** (P0-1 of
+[research-avatar-v2v.md](research-avatar-v2v.md) §5). Before this, our
+WebRTC peers only sent. Real-time V2V, a microphone-driven avatar and a
+full-duplex agent ([../ports/wan-streamer.md](../ports/wan-streamer.md))
+all need the client's camera and microphone in the engine.
+
+```
+browser / SDK camera+mic ──RTP──► str0m host (AnswerOptions::receive: VP8/H.264/Opus, b=AS cap)
+   └─► inbound queue (64, bitrate budget, drop + gap flag)         [fastvideo-webrtc::host]
+   └─► Ingest: publish gate, keyframe gate (PLI), size/fps/duration  [fastvideo-webrtc::ingest]
+         ├─► VideoDecoder: ffmpeg VP8-in-IVF / H.264 Annex-B → RGB24 at the model input size
+         │     (session DecoderPool: one warm process per codec before the first frame, then the spare)
+         └─► libopus → 48 kHz PCM (mono mix)                         [fastvideo-media::decode]
+   └─► InputBuffers: video + audio TimedRing (drop oldest, pts span) [fastvideo-media::ring]
+   └─► DuplexSession worker (the echo today) ─► Tick stream ─► the usual egress (encoders, peers)
+```
+
+**Capabilities.** A model that reads client input declares
+`StreamCaps::Duplex(DuplexCaps)` (`fastvideo-protocol::ingest`), shaped so
+that a Wan-Streamer-like model fits later without another protocol change:
+
+| Field | Meaning |
+|---|---|
+| `input.video` | `width`×`height` the model reads (every accepted picture is scaled to it, fit + black pad), `max_width`×`max_height` (either orientation), `max_fps`, `codecs` (`vp8`, `h264`) |
+| `input.audio` | PCM `rate` (48000) and `channels` the model reads |
+| `input.max_bitrate_kbps`, `input.buffer_ms` | the inbound cap (answer `b=AS` and enforcement) and the ring depth |
+| `unit_ms` | the model step: input consumed and output produced per step (33 for a per-frame model, 160 for Wan-Streamer) |
+| `target_fps`, `audio_out` | output video rate; whether the output carries audio (an avatar's or agent's speech) |
+| `context` | the model takes a `SessionContext{scene, persona}` at session start (Wan-Streamer v0.3's "world context", prefilled once) |
+
+**Engine.** `EngineService::open_duplex_session(DuplexSpec{session,
+context})` admits like every stream (one session per executor, resident
+model, busy = `Conflict`) and owns the session's `InputBuffers`; a
+transport's ingest writes into them. `DuplexSession::start()` runs the
+model worker and returns a `DuplexControl` (`set_paused`, `get_state`,
+`close`) and the same `PacedStream` of ticks as every other stream, so
+the egress side is unchanged. Duplex sessions follow the causal
+session-length rule (§5.2): `max_seconds`, else `[streams]
+causal_default_max_s`, at most `causal_hard_max_s`; the ingest also stops
+taking input at that length.
+
+**The loopback echo.** `[engine] echo_model = true` (`FV_ECHO_MODEL=1`)
+serves `fv-echo` (`EchoBackend`, family `loopback`, its own executor, no
+GPU): each output tick shows the newest input frame at the session canvas
+with a magenta border and the tick index in 32 black/white cells, and
+plays the microphone back; before input it shows a grey card with the same
+overlay. It makes the whole path testable end to end. Real-time V2V and
+avatar models plug in as further duplex workers (a GPU worker will take
+the exclusive executor lease, as causal sessions do).
+
+**Transports.**
+
+| Transport | How the client publishes | Output |
+|---|---|---|
+| Reactor (`[reactor] model` a duplex model) | The descriptor's `capabilities.tracks` adds `input_video` / `input_audio` (`sendonly`), `track_map` and `x-reactor.tracks` add them as `in`, `x-reactor.input` carries the caps. The client adds send transceivers, maps them in `track_mapping`, and sends `PublishTrack{name}`: first come, first served per name (`publish_refused` "track already published", or for a name the model does not declare). `UnpublishTrack` and closing release the slot. Only the slot holder's media reaches the model | `main_video` / `main_audio` as for every mode; `/start_session` takes `{"context": {...}, "max_seconds": n}` |
+| Native WHIP ingest | `POST /fv/v1/streams/ingest?model=…` with an `application/sdp` offer (RFC 9725 shape): 201, the answer, `Location`. `DELETE` stops, `PATCH` is 405 (the answer is complete) | A `sendrecv` offer gets the output back on the same peer (H.264 when an encoder is usable, else VP8; Opus stereo); a `sendonly` offer (OBS) only feeds the model |
+| fal director (WMA) | Not wired. The WMA contract is per app; our director serves clip models only (it refuses causal models, §5.2 table). A realtime duplex fal app can answer with `AnswerOptions::receive` and reuse the ingest as is | — |
+
+**Controls.**
+
+- *Backpressure and dropping when behind* (table above): bounded queues at
+  every hop, drop-newest before decoding (a gap then waits for a keyframe
+  and sends a PLI at most once a second), drop-oldest after decoding, and
+  the model reads the newest frame.
+- *Resolution negotiation*: the caps advertise the model's input size and
+  the maximum; the console asks `getUserMedia` for a size and caps the
+  frame rate; the answer's `b=AS` bounds the encoder; every accepted
+  picture is scaled to the model's size (a mid-stream change needs no
+  restart); a keyframe above the maximum is refused (`input_rejected`,
+  `ingest.rejected`) and its frames dropped until an acceptable keyframe.
+- *Frame rate*: pictures above `max_fps` are decoded (the reference chain
+  needs them) but not buffered.
+
+**Security.** Limits on bitrate (answer `b=AS` and enforcement), resolution
+(keyframe size checked before decoding: VP8 frame header, H.264 SPS) and
+duration (the session length). Only authenticated sessions: native WHIP
+ingest needs the native key (`Authorization: Bearer`); Reactor duplex
+sessions need it on `/start_session`, `/stop_session`, `POST connections`
+and `sdp_params` (`ReactorConfig::ingest_auth`, 401 without; RT has no
+auth, so clip and causal Reactor sessions stay open). `auth.mode = none`
+lets everyone in. The session caps of §5.2 apply unchanged: one session per
+executor, busy answers (Reactor 409, `/fv/v1/streams/ingest` 429 +
+`Retry-After`), resident model only.
+
+**Decoder.** One ffmpeg process per publisher: VP8 frames go in as IVF
+records, H.264 access units as Annex-B each followed by an access unit
+delimiter (the h264 parser then ends the unit at once). Flags
+`-probesize 32 -analyzeduration 0 -flags low_delay -threads 1 -fps_mode
+passthrough`; RGB24 out at a fixed size. Measured: H.264 ~1 ms per frame
+with ffmpeg 6.1 (one frame held by 5.1), VP8 one frame (the IVF demuxer);
+the first picture waits for the second frame (the stream probe). A cold
+ffmpeg start took seconds on the loaded build pod and the first frames
+waited for it, so a session's `DecoderPool` starts one decoder per accepted
+codec when the session opens and the pool then keeps a warm spare for
+restarts (`FV_DECODER_SPARE=0` disables it), the pattern of the encoders'
+`SparePool` (§5.10).
+
+**Tests.** `fastvideo-media`: ring and decoder units, `tests/decode_pipe.rs`
+(VP8/H.264 round trip, pts order, resolution change padded, H.264 at most
+one frame behind, warm spare). `fastvideo-webrtc`: `tests/ingest.rs`
+(receive answers with `b=AS`, PLI, bitrate cap and full-queue drops with
+the gap flag, decode into the rings, oversized and unpublished input
+refused). `fastvideo-engine-service`: `tests/stream_duplex.rs` (echo
+overlay and newest-frame rule, microphone playback, pause, admission,
+session limit). `fastvideo-reactor`: `tests/duplex.rs` (tracks in all
+three places, publish slots, auth, a VP8 camera and Opus microphone round
+trip decoded back with the overlay). `fastvideo-serve`:
+`tests/ingest_whip.rs` (WHIP ingest round trip, refusals, busy, commands,
+DELETE). `tests/console/live_echo.cjs`: headless Chromium with a fake
+camera publishing to the echo over both transports from the console.
 
 ---
 
@@ -2111,8 +2231,9 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `POST /start_session`, `GET /session`, `POST /stop_session`, `GET /schema`, `GET /events` (SSE) | reactor | `GET /session` versus WMA `POST /wma/session` do not collide. CORS `*` |
 | `GET /sessions/{sid}/transport/webrtc/ice_servers`, `POST …/connections`, `POST\|PUT\|GET …/connections/{cid}/sdp_params`, `POST …/connections/{cid}/ice_candidates` | reactor | Mounted by `App::build` (the runtime owns the WebRTC host); feature `reactor`, on by default |
 | `/fv/v1/*` | serve (native) | Includes `POST/GET /fv/v1/admin/keys`, `DELETE /fv/v1/admin/keys/{id}` (serve-kit `keys::admin_routes`, admin token; WP-20) |
+| `POST`/`GET /fv/v1/streams/ingest`, `GET`/`DELETE`/`PATCH /fv/v1/streams/ingest/{id}`, `POST /fv/v1/streams/ingest/{id}/commands` | serve (native WHIP ingest, §5.11) | Mounted when a duplex model is served (feature `webrtc`); static `ingest` beside `/fv/v1/streams/{id}` does not collide |
 | `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
-| `GET /console`, `/console/admin`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
+| `GET /console`, `/console/admin`, `/console/live`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
 | `GET /fv/v1/gateway/pools` | serve (gateway) | Per-pool metrics for the autoscaler (admin token); gateway mode only ([`gateway.md`](gateway.md) §7) |
 | `POST /fv/v1/internal/jobs`, `GET`/`DELETE /fv/v1/internal/jobs/{id}`, `GET /fv/v1/internal/status` | serve (worker role) | Gateway → worker dispatch, cancel and probes; internal token only ([`gateway.md`](gateway.md) §3) |
 

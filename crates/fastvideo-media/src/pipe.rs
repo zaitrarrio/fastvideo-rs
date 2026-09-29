@@ -57,6 +57,9 @@ pub(crate) enum Framer {
     AnnexB,
     /// IVF (one VP8 frame per record).
     Ivf,
+    /// Raw decoded pictures of a fixed byte length (the decode pipe,
+    /// [`crate::decode`]).
+    Raw(usize),
 }
 
 /// A process whose EOF went unanswered this long is killed (its remaining
@@ -296,6 +299,7 @@ impl Proc {
         let name = match framer {
             Framer::AnnexB => "h264-ffmpeg-out",
             Framer::Ivf => "vp8-ffmpeg-out",
+            Framer::Raw(_) => "ffmpeg-decode-out",
         };
         let reader =
             std::thread::Builder::new().name(name.into()).spawn(move || read_frames(stdout, framer, skip, &tx, &first));
@@ -310,19 +314,23 @@ impl Proc {
         Ok(Self { child, stdin, rx, reader: Some(reader), first_out, eof_at: None })
     }
 
+    pub(crate) fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     pub(crate) fn write(&mut self, data: &[u8]) -> Result<()> {
         let stdin = self.stdin.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
         stdin.write_all(data).map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))
     }
 
     /// Close stdin: ffmpeg encodes what it has and exits.
-    fn eof(&mut self) {
+    pub(crate) fn eof(&mut self) {
         drop(self.stdin.take());
         self.eof_at.get_or_insert_with(Instant::now);
     }
 
     /// The frames ready now, and whether the output ended.
-    fn try_take(&mut self) -> Result<(Vec<Vec<u8>>, bool)> {
+    pub(crate) fn try_take(&mut self) -> Result<(Vec<Vec<u8>>, bool)> {
         let mut out = Vec::new();
         loop {
             match self.rx.try_recv() {
@@ -346,14 +354,14 @@ impl Proc {
     }
 
     /// Close stdin, drain every frame, reap the process.
-    fn close(mut self, what: &str) -> Result<Vec<Vec<u8>>> {
+    pub(crate) fn close(mut self, what: &str) -> Result<Vec<Vec<u8>>> {
         self.eof();
         let frames: Vec<Vec<u8>> = self.rx.iter().collect::<Result<_>>()?;
         self.reap(what)?;
         Ok(frames)
     }
 
-    fn alive(&mut self) -> bool {
+    pub(crate) fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
 }
@@ -392,6 +400,7 @@ fn read_frames(
                 let frames = match framer {
                     Framer::AnnexB => Ok(take_complete_aus(&mut buf)),
                     Framer::Ivf => crate::vp8::take_ivf_frames(&mut buf, &mut header_done),
+                    Framer::Raw(len) => Ok(take_raw_frames(&mut buf, len)),
                 };
                 match frames {
                     Ok(frames) => {
@@ -413,6 +422,17 @@ fn read_frames(
     if framer == Framer::AnnexB && !buf.is_empty() {
         emit(buf, &mut skip);
     }
+}
+
+/// Pop every complete fixed-size picture from `buf`.
+pub(crate) fn take_raw_frames(buf: &mut Vec<u8>, len: usize) -> Vec<Vec<u8>> {
+    if len == 0 || buf.len() < len {
+        return Vec::new();
+    }
+    let n = buf.len() / len;
+    let out = buf[..n * len].chunks_exact(len).map(<[u8]>::to_vec).collect();
+    buf.drain(..n * len);
+    out
 }
 
 /// Pop every access unit that is followed by the next AUD from `buf`.
@@ -668,6 +688,19 @@ impl PipeProcs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_framer_splits_fixed_size_pictures() {
+        let mut b: Vec<u8> = (0..10).collect();
+        assert_eq!(take_raw_frames(&mut b, 4), vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
+        assert_eq!(b, vec![8, 9]);
+        assert!(take_raw_frames(&mut b, 4).is_empty());
+        let (tx, rx) = mpsc::channel();
+        let first = OnceLock::new();
+        read_frames(&[7u8; 9][..], Framer::Raw(3), 1, &tx, &first);
+        drop(tx);
+        assert_eq!(rx.iter().count(), 2);
+    }
 
     #[test]
     fn primer_keyframe_goes_before_the_output() {

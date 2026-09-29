@@ -475,6 +475,27 @@ impl Sdp {
         }
     }
 
+    /// Cap what the remote may send on every m-line of `kind` that this
+    /// description receives on (`recvonly`/`sendrecv`): `b=AS:<kbps>`
+    /// (RFC 3556). Browsers honour it when it is in the answer to their
+    /// offer. Only one `b=` line, right after `c=`: str0m's parser takes no
+    /// more (so no `b=TIAS`). Returns how many m-lines got it.
+    pub fn set_receive_bandwidth(&mut self, kind: MediaKind, kbps: u32) -> usize {
+        let mut n = 0;
+        for m in self
+            .media
+            .iter_mut()
+            .filter(|m| m.kind() == kind && !m.is_rejected() && m.direction().is_receiving())
+        {
+            m.lines.retain(|l| !l.starts_with("b=AS:") && !l.starts_with("b=TIAS:"));
+            // b= lines follow c= (RFC 8866 §5 order: i, c, b, k, a).
+            let at = m.lines.iter().position(|l| l.starts_with("c=")).map(|i| i + 1).unwrap_or(0);
+            m.lines.insert(at, format!("b=AS:{kbps}"));
+            n += 1;
+        }
+        n
+    }
+
     /// Set `stereo=1;sprop-stereo=1` (or remove them) on every Opus fmtp.
     /// Chrome downmixes to mono unless the SDP it receives says stereo.
     pub fn set_opus_stereo(&mut self, stereo: bool) {
@@ -1125,5 +1146,27 @@ a=max-message-size:262144\r\n";
             ),
             Err(SdpError::NoCommonCodec("audio", _))
         ));
+    }
+
+    #[test]
+    fn receive_bandwidth_goes_on_receiving_m_lines_after_c() {
+        let mut sdp = Sdp::parse(OFFER).unwrap();
+        // OFFER's video is recvonly: this description receives on it.
+        assert_eq!(sdp.set_receive_bandwidth(MediaKind::Video, 2500), 1);
+        let v = &sdp.media[0];
+        let c = v.lines.iter().position(|l| l.starts_with("c=")).unwrap();
+        assert_eq!(v.lines[c + 1], "b=AS:2500");
+        assert!(!v.lines[c + 2].starts_with("b="));
+        // Idempotent: replaced, not duplicated.
+        sdp.set_receive_bandwidth(MediaKind::Video, 800);
+        let v = &sdp.media[0];
+        assert_eq!(v.lines.iter().filter(|l| l.starts_with("b=")).count(), 1);
+        assert!(v.lines.contains(&"b=AS:800".to_string()));
+        // A send-only m-line gets nothing.
+        sdp.media[0].set_direction(Direction::SendOnly);
+        let before = sdp.media[0].lines.clone();
+        assert_eq!(sdp.set_receive_bandwidth(MediaKind::Video, 100), 0);
+        assert_eq!(sdp.media[0].lines, before);
+        assert!(Sdp::parse(&sdp.to_string()).is_ok());
     }
 }

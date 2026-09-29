@@ -19,7 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fastvideo_engine_service::{CausalControl, PacedStream};
-use fastvideo_protocol::{draw_seed, ApiError, CausalLimits, Continuity, EndReason, ModelCaps, SessionSpec, StreamCaps, TrackSet};
+use fastvideo_protocol::{
+    draw_seed, ApiError, CausalLimits, Continuity, DuplexSpec, EndReason, ModelCaps, SessionContext, SessionSpec,
+    StreamCaps, TrackSet,
+};
 use fastvideo_webrtc::host::{PeerHandle, RtcHost};
 use fastvideo_webrtc::writer::VideoCodec;
 use serde_json::{json, Value};
@@ -29,6 +32,7 @@ use crate::causal::CausalDriver;
 use crate::clip::{aspect_canvas, ClipDriver};
 use crate::commands::{ClipBounds, CommandTable};
 use crate::driver::{Driver, Outbox};
+use crate::duplex::{DuplexDriver, Inputs};
 use crate::engine::{LoadState, Mode, StreamEngine};
 use crate::journal::Journal;
 use crate::media::{sendable_codecs, H264Backend, MediaConfig, MediaPipeline};
@@ -52,6 +56,22 @@ pub fn session_limit_reason(seconds: u32) -> String {
 pub const DRIVER_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// RT's moderated-stop notice.
 pub const MODERATION_MESSAGE: &str = "Session terminated due to policy violation.";
+
+/// Who may start and join a duplex session (design §5.11: client media
+/// goes to authenticated sessions only). Called with the request headers;
+/// `Err(reason)` answers 401. RT has no auth, so clip and causal sessions
+/// never call it.
+#[derive(Clone)]
+pub struct IngestAuth(pub Arc<IngestCheck>);
+
+/// The check behind an [`IngestAuth`].
+pub type IngestCheck = dyn Fn(&axum::http::HeaderMap) -> Result<(), String> + Send + Sync;
+
+impl std::fmt::Debug for IngestAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IngestAuth(..)")
+    }
+}
 
 /// Runtime settings (RT env equivalents in brackets).
 #[derive(Clone, Debug)]
@@ -89,8 +109,12 @@ pub struct ReactorConfig {
     pub server_version: String,
     /// Causal-mode session length (design §5.2): `/start_session`
     /// `max_seconds`, else the default, at most the hard ceiling; a `reset`
-    /// restarts the clock up to the ceiling in all.
+    /// restarts the clock up to the ceiling in all. Duplex sessions follow
+    /// the same rule.
     pub causal_limits: CausalLimits,
+    /// Duplex sessions: the check on `/start_session`, `/stop_session`,
+    /// `POST connections` and `sdp_params` (`None`: open, as RT).
+    pub ingest_auth: Option<IngestAuth>,
     /// Command set override: `None` follows the model's stream caps (clip
     /// or causal); `Some(Mode::Avatar)` serves the script avatar (Reactor
     /// `ltx`) on an image-to-video model with audio.
@@ -118,6 +142,7 @@ impl Default for ReactorConfig {
             latch_grace: Duration::from_secs(2),
             server_version: format!("fastvideo-rs {}", env!("CARGO_PKG_VERSION")),
             causal_limits: CausalLimits::default(),
+            ingest_auth: None,
             mode: None,
             avatar: AvatarSettings::default(),
         }
@@ -188,6 +213,8 @@ pub(crate) struct Live {
     pub codecs: Vec<VideoCodec>,
     pub conns: Mutex<HashMap<u32, Conn>>,
     pub connected: Mutex<HashSet<u32>>,
+    /// Duplex mode: the input tracks and their publishers.
+    pub inputs: Option<Arc<Inputs>>,
 }
 
 pub(crate) struct St {
@@ -402,7 +429,10 @@ impl Reactor {
     /// The OpenAPI document of a session (avatar mode adds its limits).
     fn openapi(&self, caps: &ModelCaps, table: &CommandTable, tracks: &TrackSet) -> Value {
         let cfg = &self.inner.cfg;
-        let mut doc = schema::openapi(&caps.id.0, &cfg.server_version, table, tracks, &cfg.causal_limits);
+        // Duplex models add their input tracks and caps (design §5.11).
+        let inputs = (table.mode == Mode::Duplex).then(|| Self::input_caps(caps).map(crate::duplex::input_schema)).flatten();
+        let mut doc =
+            schema::openapi_with_inputs(&caps.id.0, &cfg.server_version, table, tracks, &cfg.causal_limits, inputs.as_ref());
         if table.mode == Mode::Avatar {
             use fastvideo_engine_service::stream::avatar::{TAKE_MAX_S, TAKE_MIN_S};
             doc["x-reactor"]["session_limits"] = json!({
@@ -431,6 +461,28 @@ impl Reactor {
         }
     }
 
+    /// A duplex model's input caps.
+    pub fn input_caps(caps: &ModelCaps) -> Option<&fastvideo_protocol::InputCaps> {
+        caps.stream.as_ref().and_then(StreamCaps::duplex).map(|d| &d.input)
+    }
+
+    /// Whether the live session (else the model to stream) is duplex.
+    pub fn is_duplex(&self) -> bool {
+        match self.live() {
+            Some(l) => l.inputs.is_some(),
+            None => self.model().is_some_and(|c| Self::input_caps(&c).is_some()),
+        }
+    }
+
+    /// The [`IngestAuth`] check, for duplex sessions only.
+    pub fn authorize(&self, headers: &axum::http::HeaderMap) -> Result<(), Refusal> {
+        let Some(auth) = &self.inner.cfg.ingest_auth else { return Ok(()) };
+        if !self.is_duplex() {
+            return Ok(());
+        }
+        (auth.0)(headers).map_err(|e| Refusal::new(401, e))
+    }
+
     /// `capabilities.tracks`, client perspective (`recvonly` = model out).
     pub fn client_tracks(tracks: &TrackSet) -> Value {
         let mut v = vec![json!({"name": tracks.video.name, "kind": "video", "direction": "recvonly"})];
@@ -450,6 +502,16 @@ impl Reactor {
         Value::Object(m)
     }
 
+    /// `track_map` of a live session: its output tracks and, in duplex
+    /// mode, its input tracks (`in`).
+    pub(crate) fn live_track_map(live: &Live) -> Value {
+        let mut m = Self::track_map(&live.tracks);
+        if let (Some(i), Value::Object(o)) = (&live.inputs, &mut m) {
+            i.track_map(o);
+        }
+        m
+    }
+
     /// The session descriptor (`runner.py:descriptor`).
     pub fn descriptor(&self) -> Value {
         let state = self.state();
@@ -459,6 +521,7 @@ impl Reactor {
         };
         let caps = caps.or_else(|| self.model());
         let tracks = tracks.or_else(|| caps.as_ref().map(|c| self.tracks(c)));
+        let inputs = caps.as_ref().and_then(Self::input_caps).map(crate::duplex::client_input_tracks);
         let mut d = json!({
             "session_id": SESSION_ID,
             "state": state.as_str(),
@@ -469,7 +532,11 @@ impl Reactor {
             "recording": {"enabled": false, "chunk_seconds": 4},
         });
         if let Some(t) = tracks {
-            d["capabilities"] = json!({"protocol_version": "v0", "tracks": Self::client_tracks(&t), "commands": []});
+            let mut all = Self::client_tracks(&t);
+            if let (Value::Array(a), Some(i)) = (&mut all, inputs) {
+                a.extend(i);
+            }
+            d["capabilities"] = json!({"protocol_version": "v0", "tracks": all, "commands": []});
         }
         d
     }
@@ -535,7 +602,7 @@ impl Reactor {
         // Causal sessions always have a length (design §5.2); clip sessions
         // run until stopped.
         let max_seconds = match table.mode {
-            Mode::Causal => {
+            Mode::Causal | Mode::Duplex => {
                 let asked = match params.get("max_seconds") {
                     None | Some(Value::Null) => None,
                     Some(v) => Some(
@@ -592,6 +659,12 @@ impl Reactor {
             }
             r
         };
+        let context: SessionContext = match params.get("context") {
+            None | Some(Value::Null) => SessionContext::default(),
+            Some(v) => serde_json::from_value(v.clone()).map_err(|e| Refusal::new(400, format!("context: {e}")))?,
+        };
+        context.validate().map_err(|e| Refusal::new(400, format!("{}: {}", e.param.unwrap_or_default(), e.message)))?;
+        let mut inputs = None;
         let (driver, paced, causal): (Arc<dyn Driver>, PacedStream, Option<CausalControl>) = match table.mode {
             Mode::Clip => {
                 let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
@@ -604,6 +677,14 @@ impl Reactor {
                     CausalDriver::start(session, seed, &cfg.causal_limits, out.clone()).map_err(refuse)?;
                 let c = d.control().clone();
                 (Arc::new(d), p, Some(c))
+            }
+            Mode::Duplex => {
+                let session = self.inner.engine.open_duplex(DuplexSpec { session: spec, context }).await.map_err(refuse)?;
+                let i = Arc::new(Inputs::new(&session.duplex_caps().input, session.input().clone(), max_seconds));
+                i.prewarm();
+                let (d, p) = DuplexDriver::start(session, out.clone(), i.clone()).map_err(refuse)?;
+                inputs = Some(i);
+                (Arc::new(d), p, None)
             }
             Mode::Avatar => {
                 let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
@@ -636,6 +717,7 @@ impl Reactor {
                 codecs,
                 conns: Mutex::new(HashMap::new()),
                 connected: Mutex::new(HashSet::new()),
+                inputs,
             });
             st.live = Some(live);
             self.transition(&mut st, RtState::Waiting, "start_session", json!({}));

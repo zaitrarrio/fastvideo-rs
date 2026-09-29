@@ -10,7 +10,10 @@
 //!   identical to the descriptor and `track_map` (design §5.3);
 //! - each field carries `x-reactor-moderate`;
 //! - causal mode adds `x-reactor.session_limits{default_max_s, hard_max_s,
-//!   clock, reset_restarts_clock}` (design §5.2).
+//!   clock, reset_restarts_clock}` (design §5.2);
+//! - duplex mode adds the input tracks to `x-reactor.tracks` (`in`), the
+//!   same session limits, and `x-reactor.input` (the model's input caps:
+//!   size, fps, codecs, bitrate; design §5.11).
 
 use fastvideo_protocol::{CausalLimits, TrackSet};
 use serde_json::{json, Map, Value};
@@ -41,8 +44,28 @@ pub fn component_name(msg: &str) -> String {
         .collect()
 }
 
-/// The OpenAPI document for `table`.
+/// The OpenAPI document for `table` (no input tracks).
 pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackSet, causal: &CausalLimits) -> Value {
+    openapi_with_inputs(title, version, table, tracks, causal, None)
+}
+
+/// The input side of a duplex model: `x-reactor.tracks` entries (model
+/// perspective, `in`) and the caps.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputSchema {
+    pub tracks: Vec<Value>,
+    pub caps: Value,
+}
+
+/// [`openapi`] with a duplex model's input tracks.
+pub fn openapi_with_inputs(
+    title: &str,
+    version: &str,
+    table: &CommandTable,
+    tracks: &TrackSet,
+    causal: &CausalLimits,
+    inputs: Option<&InputSchema>,
+) -> Value {
     let mut paths = Map::new();
     for c in &table.commands {
         let mut props = Map::new();
@@ -96,9 +119,16 @@ pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackS
             "mime_type": {"type": "string"}, "size": {"type": "integer"}
         }, "required": ["upload_id"]}),
     );
-    let mut x = json!({"tracks": model_tracks(tracks), "mode": table.mode});
-    if table.mode == Mode::Causal {
+    let mut all = model_tracks(tracks);
+    if let Some(i) = inputs {
+        all.extend(i.tracks.iter().cloned());
+    }
+    let mut x = json!({"tracks": all, "mode": table.mode});
+    if matches!(table.mode, Mode::Causal | Mode::Duplex) {
         x["session_limits"] = causal.advertised();
+    }
+    if let Some(i) = inputs {
+        x["input"] = i.caps.clone();
     }
     json!({
         "openapi": "3.1.0",

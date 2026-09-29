@@ -83,7 +83,7 @@ fake = []
 # CudaBackend over fastvideo-cudarc (the only path to CUDA).
 cuda = ["fastvideo-engine-service/cuda"]
 # str0m peer host for Reactor and the fal director (the director also needs `fal`).
-webrtc = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "fastvideo-fal?/director"]
+webrtc = ["fastvideo-webrtc/str0m", "fastvideo-webrtc/opus", "fastvideo-media/opus", "fastvideo-fal?/director"]
 # In-process OpenH264 and Opus encoders.
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the

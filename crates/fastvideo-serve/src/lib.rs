@@ -50,6 +50,9 @@ pub mod autoscale;
 #[cfg(feature = "http-client")]
 pub mod gateway;
 pub mod health;
+/// Native WHIP ingest into duplex models (`/fv/v1/streams/ingest`).
+#[cfg(feature = "webrtc")]
+pub mod ingest;
 pub mod log_ship;
 pub mod metrics;
 pub mod multiworker;
@@ -60,7 +63,7 @@ pub mod native;
 pub mod releases;
 #[cfg(feature = "reactor")]
 pub mod reactor;
-#[cfg(any(feature = "reactor", all(feature = "fal", feature = "webrtc")))]
+#[cfg(feature = "webrtc")]
 pub mod rtc;
 pub mod router;
 pub mod shutdown;

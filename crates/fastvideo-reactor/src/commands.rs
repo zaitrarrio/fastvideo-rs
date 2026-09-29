@@ -240,6 +240,7 @@ impl CommandTable {
             Mode::Clip => clip_table(bounds),
             Mode::Causal => causal_table(),
             Mode::Avatar => avatar_table(),
+            Mode::Duplex => duplex_table(),
         }
     }
 }
@@ -508,6 +509,46 @@ fn avatar_table() -> CommandTable {
         m("command_error", "A refused command.", command_error_schema()),
     ];
     CommandTable { mode: Mode::Avatar, commands, messages }
+}
+
+/// Duplex mode (design §5.11): the client publishes input tracks with
+/// `PublishTrack`; commands pause the model and read its state.
+fn duplex_table() -> CommandTable {
+    let commands = vec![
+        CommandSpec {
+            name: "set_paused",
+            description: "Pause or resume the model (input is dropped while paused).",
+            params: vec![Param::new("paused", ParamType::Boolean, "Paused.")],
+            reply: None,
+        },
+        CommandSpec { name: "get_state", description: "The session state.", params: vec![], reply: Some("state_update") },
+    ];
+    let messages = vec![
+        MessageSpec {
+            name: "state_update",
+            description: "Session state: the model's counters, the context, and the ingest of the published tracks.",
+            schema: obj(
+                json!({
+                    "paused": {"type": "boolean"}, "context": {"type": "object"},
+                    "unit_ms": {"type": "integer"}, "fps": {"type": "integer"},
+                    "frames_out": {"type": "integer"}, "input_frames": {"type": "integer"},
+                    "input_skipped": {"type": "integer"}, "input_dropped": {"type": "integer"},
+                    "input_audio_chunks": {"type": "integer"},
+                    "input_latency_ms": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+                    "has_input": {"type": "boolean"},
+                    "publishers": {"type": "object", "additionalProperties": {"type": "integer"}},
+                    "ingest": {"anyOf": [{"type": "object"}, {"type": "null"}]}
+                }),
+                &["paused", "frames_out", "input_frames", "has_input"],
+            ),
+        },
+        MessageSpec {
+            name: "input_rejected",
+            description: "Client input was refused (too large, a codec the model does not take).",
+            schema: obj(json!({"track": {"type": "string"}, "reason": {"type": "string"}}), &["track", "reason"]),
+        },
+    ];
+    CommandTable { mode: Mode::Duplex, commands, messages }
 }
 
 #[cfg(test)]
