@@ -93,6 +93,16 @@ impl Aspect {
             Aspect::Square => "1:1",
         }
     }
+    /// The served aspect closest to `ratio` (`width / height`) on a log
+    /// scale: 16:9 for a landscape image, 9:16 for a portrait one, 1:1 for
+    /// a near-square one (within 4:3 and 3:4).
+    pub fn nearest(ratio: f64) -> Self {
+        let l = ratio.max(1e-6).ln();
+        [Aspect::Landscape, Aspect::Portrait, Aspect::Square]
+            .into_iter()
+            .min_by(|a, b| (a.ratio().ln() - l).abs().total_cmp(&(b.ratio().ln() - l).abs()))
+            .unwrap_or(Aspect::Landscape)
+    }
     /// `width / height`.
     pub fn ratio(self) -> f64 {
         match self {
@@ -468,6 +478,24 @@ pub fn object(fields: Vec<(&str, Value)>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_aspect_follows_the_image() {
+        for (w, h, want) in [
+            (1920.0, 1080.0, Aspect::Landscape),
+            (1080.0, 1920.0, Aspect::Portrait),
+            (1024.0, 1024.0, Aspect::Square),
+            (1200.0, 1000.0, Aspect::Square),
+            (1500.0, 1000.0, Aspect::Landscape),
+            (1000.0, 1250.0, Aspect::Square),
+            (1000.0, 1400.0, Aspect::Portrait),
+            (1000.0, 1500.0, Aspect::Portrait),
+            (8000.0, 500.0, Aspect::Landscape),
+            (500.0, 8000.0, Aspect::Portrait),
+        ] {
+            assert_eq!(Aspect::nearest(w / h), want, "{w}x{h}");
+        }
+    }
 
     fn err(s: &str) -> Invalid {
         parse(s).unwrap_err()

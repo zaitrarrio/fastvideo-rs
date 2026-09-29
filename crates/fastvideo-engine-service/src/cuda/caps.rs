@@ -1597,6 +1597,70 @@ mod tests {
         );
     }
 
+    /// Image-to-video (and H3 reference-to-video) with no size or aspect:
+    /// every served model derives its canvas from the image at its default
+    /// tier, snapped to its multiple and budget, clamped to its aspect range.
+    #[test]
+    fn image_conditioned_canvas_follows_the_image_on_every_model() {
+        use fastvideo_protocol::*;
+        let cat = catalog(&WeightLayout::default());
+        let staged_image = |w: u32, h: u32| StagedMedia {
+            path: "/stage/i.png".into(),
+            mime: "image/png".into(),
+            bytes: 1,
+            probe: MediaProbe { width: Some(w), height: Some(h), ..Default::default() },
+        };
+        let images = [("landscape", 1920, 1080), ("portrait", 1080, 1920), ("square", 1024, 1024), ("4:5", 1080, 1350), ("extreme", 6000, 500)];
+        let mut table = String::new();
+        for m in &cat {
+            let caps = m.caps();
+            let task = if caps.supports(Task::I2V) {
+                Task::I2V
+            } else if caps.supports(Task::Ref2V) {
+                Task::Ref2V
+            } else {
+                continue;
+            };
+            let mut row = format!("{:36} {:6}", m.id.as_str(), if task == Task::I2V { "i2v" } else { "ref2v" });
+            for (name, w, h) in images {
+                let mut req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
+                req.task = task;
+                let media = MediaRef::parse("https://e.x/i.png", "image_url").unwrap();
+                let mut staged = StagedInputs::default();
+                if task == Task::I2V {
+                    req.keyframes = vec![Keyframe { at: Anchor::First, image: media }];
+                    staged.keyframes = vec![(Anchor::First, staged_image(w, h))];
+                } else {
+                    req.references = vec![Reference { kind: MediaKind::Image, media }];
+                    staged.references = vec![(MediaKind::Image, staged_image(w, h))];
+                }
+                let (j, notes) = negotiate_noted(&req, &caps, &staged).unwrap_or_else(|e| panic!("{} {name}: {e:?}", m.id));
+                let (ow, oh) = j.output_size();
+                row.push_str(&format!(" {name}={ow}x{oh}"));
+                let c = &caps.canvas;
+                assert_eq!((j.width % c.multiple, j.height % c.multiple), (0, 0), "{} {name}", m.id);
+                if m.family() == Family::Ltx2 && task == Task::Ref2V {
+                    // The reference sheet does not set the canvas: 16:9.
+                    assert!(notes.is_empty(), "{} {name}", m.id);
+                    assert_eq!((ow, oh), (1592, 896), "{} {name}", m.id);
+                    continue;
+                }
+                let want = (f64::from(w) / f64::from(h)).clamp(0.25, 4.0);
+                let got = f64::from(ow) / f64::from(oh);
+                // Within one snap step of the image's (clamped) aspect.
+                assert!((got / want).ln().abs() < 0.08, "{} {name}: {ow}x{oh} vs {want}", m.id);
+                assert_eq!(ow.cmp(&oh), want.total_cmp(&1.0), "{} {name}: {ow}x{oh}", m.id);
+                let tier = c.short_edges[0];
+                assert!(ow.min(oh) <= tier.max(1088) && u64::from(j.width) * u64::from(j.height) <= c.max_area.max(c.hd.map_or(0, |t| t.max_area)), "{} {name}", m.id);
+                assert_eq!(notes.len(), 1, "{} {name}", m.id);
+                assert_eq!(notes[0].contains("clamped"), name == "extreme", "{} {name}: {notes:?}", m.id);
+            }
+            table.push_str(&row);
+            table.push('\n');
+        }
+        eprintln!("{table}");
+    }
+
     fn get_caps(cat: &[CudaModel], id: &str) -> ModelCaps {
         cat.iter().find(|m| m.id.as_str() == id).unwrap().caps()
     }

@@ -278,7 +278,7 @@ pub enum CanvasSpec {
     Exact { width: u32, height: u32 },        // FastVideo size/width/height, FastWan, LTX "WxH"
     Aspect { ratio: Ratio, short_edge: u32 }, // fal/MiniMax ratio + 480P/768P
     FollowImage { short_edge: u32 },          // fal i2v, MiniMax "adaptive"
-    ModelDefault,
+    ModelDefault,                             // i2v/keyframes (and H3 ref2v with an image): follows the image
 }
 pub struct Ratio { pub w: u32, pub h: u32 }
 
@@ -2087,3 +2087,31 @@ never allowed; the APIs authenticate with headers.
 | Q5 | MMAudio sliding-window V2A for causal streams (latency and quality) | After E8; not scheduled |
 | Q6 | Does anyone need the FastVideo `WS /v1/stream` contract? | Non-goal until asked |
 | Q7 | MiniMax `usage` token fields: omit or zero? | Omit (fields are billing-only) |
+
+## Image-conditioned canvases (2026-09-29)
+
+For image-to-video the output aspect follows the input image unless the
+request sets a size or aspect ratio.
+
+- Ingestion bakes a JPEG/PNG's EXIF orientation into the staged file
+  (written upright as PNG), so the probe, the gateway's copy to a worker and
+  every pipeline decode see the image as a viewer shows it. The gateway
+  stages and probes inputs before `negotiate`, so the canvas is known before
+  dispatch and the caps checks.
+- `negotiate` treats `ModelDefault` on I2V and keyframes (first frame, else
+  last) and on H3 Ref2V with an image reference as `FollowImage` at the
+  model's default tier. LTX Ref2V keeps its default canvas: its reference is
+  a composite sheet, not a frame.
+- `FollowImage` snaps with the model's rule (H3 `resolve_canvas_size` and
+  the 480/1080 tiers, the Wan and LTX short-edge rule, LTX pad-and-crop
+  scaled into the pixel budget). An image outside the aspect range is
+  clamped to the nearest end (the pipelines centre-crop the image) instead
+  of refused. The choice is logged and recorded as a `canvas: …` job log
+  line (fal status `logs`, native `notes`).
+- Per API: fal `aspect_ratio: "auto"` or absent follows the image (H3 i2v has
+  no field; LTX and Wan i2v default to `auto`); MiniMax i2v/fl2va is always
+  `adaptive`; native `/fv/v1/jobs` and `/v1/videos` follow the image when no
+  size or aspect is set (`short_edge` alone picks the tier); the fal
+  director follows `image_url` (else `end_image_url`) when `aspect_ratio` is
+  absent, at the nearest of 16:9, 9:16 and 1:1; the LTX API keeps its
+  required `resolution` (upstream resizes the image to it).

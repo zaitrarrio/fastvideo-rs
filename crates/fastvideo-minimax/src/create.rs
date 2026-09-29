@@ -28,7 +28,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use fastvideo_models::h3::config::H3Geometry;
 use fastvideo_protocol::{
-    negotiate, precheck, Anchor, ApiError, BatchProtocol, CallbackSpec, CanvasSpec, ErrorCtx,
+    negotiate_noted, precheck, Anchor, ApiError, BatchProtocol, CallbackSpec, CanvasSpec, ErrorCtx,
     Family, GapId, GenerationRequest, HttpReply, Job, JobId, KeyId, Keyframe, Length, ListQuery,
     MediaKind, MediaRef, ModelCaps, NormalizeCtx, ProtocolId, Ratio, Reference, Snap,
     StagedInputs, SubmitEndpoint, Task, TimingSpec, ViewCtx,
@@ -539,7 +539,7 @@ pub async fn submit_generation(
     let dir = ctx.inputs_dir(id);
     let staged = async {
         let staged = ctx.ingestor().stage(&plan, &mm.config().ingest, &dir, ctx.now()).await?;
-        let mut resolved = negotiate(&plan, caps, &staged)?;
+        let (mut resolved, notes) = negotiate_noted(&plan, caps, &staged)?;
         if let Some(n) = four {
             H3Geometry::new(resolved.height as usize, resolved.width as usize, n as usize)
                 .map_err(|e| bad("duration", format!("H3 geometry: {e}")))?;
@@ -550,10 +550,10 @@ pub async fn submit_generation(
         if resolved.tier.is_none() {
             resolved.tier = via_tier;
         }
-        Ok::<_, ApiError>((staged, resolved))
+        Ok::<_, ApiError>((staged, resolved, notes))
     }
     .await;
-    let (staged, resolved) = match staged {
+    let (staged, resolved, notes) = match staged {
         Ok(r) => r,
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -566,6 +566,10 @@ pub async fn submit_generation(
     job.owner = owner;
     job.request_echo = echo;
     job.callback = req.callback.clone();
+    for n in notes {
+        tracing::info!(job = %id, model = %caps.id, "{n}");
+        job.logs.push(fastvideo_protocol::LogLine::info(n, now));
+    }
     if !req.accepted_noop.is_empty() {
         tracing::debug!(job = %id, fields = ?req.accepted_noop, "accepted no-op fields");
     }

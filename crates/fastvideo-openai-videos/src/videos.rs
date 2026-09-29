@@ -168,6 +168,9 @@ pub struct VideoGenerationRequest {
     pub num_frames: Option<u32>,
     pub video_params: Option<VideoParams>,
     pub aspect_ratio: Option<String>,
+    /// With `aspect_ratio`; alone, on an image-conditioned request, the tier
+    /// the image-derived canvas uses. With no size, aspect or short edge,
+    /// an image-to-video / keyframes request follows its first image.
     pub short_edge: Option<u32>,
     pub image_reference: Option<OneOrMany<ImageRef>>,
     pub video_reference: Option<OneOrMany<VideoRef>>,
@@ -538,10 +541,14 @@ impl SubmitEndpoint for VideosCreate {
             let ratio: Ratio = a.parse()?;
             let short_edge = positive("short_edge", b.short_edge)?.unwrap_or(DEFAULT_SHORT_EDGE);
             CanvasSpec::Aspect { ratio, short_edge }
+        } else if let Some(short_edge) = positive("short_edge", b.short_edge)? {
+            // An image-conditioned job follows its image at this tier; with
+            // no size at all it follows it at the default tier (`negotiate`).
+            CanvasSpec::FollowImage { short_edge }
         } else {
             CanvasSpec::ModelDefault
         };
-        if b.short_edge.is_some() && b.aspect_ratio.is_none() {
+        if b.short_edge.is_some() && b.aspect_ratio.is_none() && !matches!(req.canvas, CanvasSpec::FollowImage { .. }) {
             return Err(ApiError::invalid_param(
                 "short_edge",
                 "short_edge requires aspect_ratio",
@@ -703,6 +710,12 @@ impl SubmitEndpoint for VideosCreate {
                 req.task = Task::Ref2V;
                 req.references = refs_task(images, videos, audio)?;
             }
+        }
+        if req.task == Task::T2V && matches!(req.canvas, CanvasSpec::FollowImage { .. }) {
+            return Err(ApiError::invalid_param(
+                "short_edge",
+                "short_edge requires aspect_ratio",
+            ));
         }
 
         req.sampling = SamplingOverrides {

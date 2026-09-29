@@ -22,7 +22,7 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Request, StatusCode
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use fastvideo_protocol::{
-    negotiate, precheck, resolve_model, ApiError, BatchProtocol, ErrorCtx, GenerationRequest,
+    negotiate_noted, precheck, resolve_model, ApiError, BatchProtocol, ErrorCtx, GenerationRequest,
     HttpReply, Job, JobId, JobView, KeyId, NormalizeCtx, ReplyBody, SubmitEndpoint,
 };
 use tower_http::services::ServeFile;
@@ -145,10 +145,10 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let dir = ctx.inputs_dir(id);
     let resolved = async {
         let staged = ctx.ingestor().stage(&req, policy, &dir, ctx.now()).await?;
-        negotiate(&req, caps, &staged)
+        negotiate_noted(&req, caps, &staged)
     }
     .await;
-    let resolved = match resolved {
+    let (resolved, notes) = match resolved {
         Ok(r) => r,
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -161,6 +161,10 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     job.owner = owner;
     job.request_echo = request_echo;
     job.callback = req.callback.clone();
+    for n in notes {
+        tracing::info!(job = %id, model = %caps.id, "{n}");
+        job.logs.push(fastvideo_protocol::LogLine::info(n, now));
+    }
     if let Err(e) = ctx.jobs().insert(job.clone()).await {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(e.into());

@@ -83,9 +83,13 @@ pub struct NativeBody {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
-    /// `"16:9"` with `short_edge`.
+    /// `"16:9"` with `short_edge`. With no size or aspect, an image-to-video,
+    /// keyframes or H3 reference-to-video job follows its image's aspect
+    /// (after EXIF orientation), clamped to the model's aspect range.
     #[serde(default)]
     pub aspect_ratio: Option<String>,
+    /// The short-edge tier: with `aspect_ratio`, or alone on an
+    /// image-conditioned job (the canvas follows the image at this tier).
     #[serde(default)]
     pub short_edge: Option<u32>,
     #[serde(default)]
@@ -162,7 +166,12 @@ impl SubmitEndpoint for NativeSubmit {
                     .short_edge
                     .ok_or_else(|| ApiError::invalid_param("short_edge", "`aspect_ratio` needs `short_edge`"))?,
             },
-            (None, None, None, None) => CanvasSpec::ModelDefault,
+            // No size: an image-conditioned job follows its image
+            // (`negotiate`), at `short_edge` when given.
+            (None, None, None, None) => match b.short_edge {
+                Some(short_edge) => CanvasSpec::FollowImage { short_edge },
+                None => CanvasSpec::ModelDefault,
+            },
             _ => {
                 return Err(ApiError::invalid_param(
                     "size",
@@ -201,6 +210,12 @@ impl SubmitEndpoint for NativeSubmit {
                     media: media(u, &format!("reference_urls[{i}]"))?,
                 });
             }
+        }
+        if r.task == Task::T2V && matches!(r.canvas, CanvasSpec::FollowImage { .. }) {
+            return Err(ApiError::invalid_param(
+                "short_edge",
+                "`short_edge` without `aspect_ratio` follows an input image; text-to-video needs `aspect_ratio`",
+            ));
         }
         Ok(r)
     }
@@ -241,6 +256,7 @@ pub fn job_json(job: &Job, cx: &ViewCtx) -> Value {
         "num_frames": job.resolved.num_frames,
         "fps": job.resolved.fps,
         "seed": job.resolved.seed,
+        "notes": job.logs.iter().filter(|l| l.message.starts_with("canvas:")).map(|l| l.message.as_str()).collect::<Vec<_>>(),
         "created_at": rfc(job.created_at),
         "started_at": job.started_at.and_then(rfc),
         "completed_at": job.completed_at.and_then(rfc),

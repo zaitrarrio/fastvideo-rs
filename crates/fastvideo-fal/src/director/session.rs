@@ -354,13 +354,18 @@ impl Session {
     }
 
     async fn stage(&self, url: &str, param: &str) -> Result<PathBuf, String> {
+        self.stage_sized(url, param).await.map(|(p, _)| p)
+    }
+
+    /// [`Self::stage`], plus the image's upright size when known.
+    async fn stage_sized(&self, url: &str, param: &str) -> Result<(PathBuf, Option<(u32, u32)>), String> {
         let r = MediaRef::parse(url, param).map_err(|e| e.message)?;
         let dir = self.dir.join("inputs");
         let ctx = &self.init.ctx;
         ctx.ingestor()
             .stage_one(&r, MediaKind::Image, &self.init.cfg.ingest, &dir, param, ctx.now())
             .await
-            .map(|m| m.path)
+            .map(|m| (m.path, m.probe.dims()))
             .map_err(|e| e.message)
     }
 
@@ -409,19 +414,19 @@ impl Session {
                     return;
                 }
                 let v = Some(c.prompt_version);
-                let image = match &c.image_url {
-                    Some(u) => match self.stage(u, "image_url").await {
-                        Ok(p) => Some(p),
+                let (image, image_dims) = match &c.image_url {
+                    Some(u) => match self.stage_sized(u, "image_url").await {
+                        Ok((p, d)) => (Some(p), d),
                         Err(e) => return self.fail(ErrorCode::InvalidInitialImage, e, v),
                     },
-                    None => None,
+                    None => (None, None),
                 };
-                let end_image = match &c.end_image_url {
-                    Some(u) => match self.stage(u, "end_image_url").await {
-                        Ok(p) => Some(p),
+                let (end_image, end_dims) = match &c.end_image_url {
+                    Some(u) => match self.stage_sized(u, "end_image_url").await {
+                        Ok((p, d)) => (Some(p), d),
                         Err(e) => return self.fail(ErrorCode::InvalidInitialImage, e, v),
                     },
-                    None => None,
+                    None => (None, None),
                 };
                 let script_images = match &c.script {
                     Some(b) => match self.stage_script(b).await {
@@ -432,6 +437,17 @@ impl Session {
                 };
                 // Every chunk is built on the configured canvas.
                 let res = c.resolution.unwrap_or(self.control.default_resolution());
+                // No `aspect_ratio`: the session follows the opening image
+                // (else the end image), at the nearest aspect the director
+                // serves; with no image, 16:9 (fal's default).
+                let mut c = c;
+                if c.aspect_ratio.is_none() {
+                    if let Some((w, h)) = image_dims.or(end_dims) {
+                        let a = m::Aspect::nearest(f64::from(w) / f64::from(h));
+                        tracing::info!(session = %self.init.handle.id, "director canvas: aspect {} follows the {w}x{h} image", a.as_str());
+                        c.aspect_ratio = Some(a);
+                    }
+                }
                 let aspect = c.aspect_ratio.unwrap_or(m::Aspect::Landscape);
                 self.canvas = Some(canvas_for(self.clips.caps(), res, aspect));
                 if let Some(b) = c.audio_bitrate {

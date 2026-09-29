@@ -566,11 +566,18 @@ fn follow_image() {
     let e = negotiate(&r, &h3(), &st).unwrap_err();
     assert_eq!(e.kind, ErrorKind::UnsupportedMedia);
 
+    // An image outside 1:4..4:1 is clamped to the range, and the note says so.
     st.keyframes[0].1 = image("f.png", 5000, 1000);
-    assert_eq!(
-        negotiate(&r, &h3(), &st).unwrap_err().param.as_deref(),
-        Some("image_url")
-    );
+    let (j, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
+    assert_eq!((j.width, j.height), (2016, 512));
+    assert!(notes[0].contains("clamped") && notes[0].contains("5000x1000"), "{notes:?}");
+    st.keyframes[0].1 = image("f.png", 100, 1000);
+    let (j, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
+    assert_eq!((j.width, j.height), (512, 2016));
+    assert!(notes[0].contains("clamped"), "{notes:?}");
+    st.keyframes[0].1 = image("f.png", 1920, 1080);
+    let (_, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
+    assert_eq!(notes, vec!["canvas: 1344x768 follows the input image (1920x1080)".to_owned()]);
 
     // FollowImage on T2V has no image.
     let mut t = t2v("fasth3", "x");
@@ -1235,4 +1242,97 @@ fn ref2v_adaptive_canvas_follows_the_first_image_else_the_first_video() {
     staged.references.truncate(1);
     let j = negotiate(&r, &caps, &staged).unwrap();
     assert!(j.width > j.height, "video only: the video's landscape canvas");
+}
+
+// ---- image-conditioned requests with no size follow the image -----------------------
+
+fn i2v_default(model: &str) -> GenerationRequest {
+    let mut r = t2v(model, "x");
+    r.task = Task::I2V;
+    r.keyframes = vec![Keyframe { at: Anchor::First, image: url("https://e.x/f.png") }];
+    r
+}
+
+fn with_first(r: &GenerationRequest, w: u32, h: u32) -> StagedInputs {
+    let mut st = stage_all(r);
+    st.keyframes[0].1 = image("f.png", w, h);
+    st
+}
+
+#[test]
+fn model_default_i2v_follows_the_image() {
+    let r = i2v_default("fasth3");
+    assert_eq!(effective_canvas(&r, &h3()), CanvasSpec::FollowImage { short_edge: 768 });
+    assert!(precheck(&r, &h3()).is_ok());
+    for ((w, h), want) in [
+        ((1920, 1080), (1344, 768)),
+        ((1080, 1920), (768, 1344)),
+        ((1024, 1024), (768, 768)),
+        ((1080, 1350), (768, 960)),
+        ((6000, 1000), (2016, 512)),
+    ] {
+        let j = negotiate(&r, &h3(), &with_first(&r, w, h)).unwrap();
+        assert_eq!((j.width, j.height), want, "{w}x{h}");
+    }
+    // Keyframes with only a last frame follow that frame.
+    let mut k = t2v("fasth3", "x");
+    k.task = Task::Keyframes;
+    k.keyframes = vec![Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") }];
+    let j = negotiate(&k, &h3(), &with_first(&k, 720, 1280)).unwrap();
+    assert!(j.height > j.width);
+    // Text-to-video keeps 16:9.
+    let j = nego(&t2v("fasth3", "x"), &h3()).unwrap();
+    assert_eq!((j.width, j.height), (1344, 768));
+    // An explicit aspect or size wins over the image.
+    let mut e = r.clone();
+    e.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge: 768 };
+    let j = negotiate(&e, &h3(), &with_first(&e, 1080, 1920)).unwrap();
+    assert_eq!((j.width, j.height), (1344, 768));
+    e.canvas = CanvasSpec::Exact { width: 960, height: 960 };
+    let j = negotiate(&e, &h3(), &with_first(&e, 1080, 1920)).unwrap();
+    assert_eq!((j.width, j.height), (960, 960));
+}
+
+#[test]
+fn model_default_ltx_i2v_follows_the_image_within_the_budget() {
+    let mut caps = ltx23();
+    caps.tasks.insert(Task::Keyframes);
+    let mut r = i2v_default("ltx");
+    r.timing.length = Length::Frames { value: 145, snap: Snap::Exact };
+    for ((w, h), gen, out) in [
+        ((1920, 1080), (1920, 1088), (1920, 1080)),
+        ((1080, 1920), (1088, 1920), (1080, 1920)),
+        ((1000, 1000), (1088, 1088), (1080, 1080)),
+        ((1080, 1350), (1088, 1408), (1080, 1350)),
+    ] {
+        let j = negotiate(&r, &caps, &with_first(&r, w, h)).unwrap();
+        assert_eq!(((j.width, j.height), j.output_size()), (gen, out), "{w}x{h}");
+    }
+    // 4:1 at the 2160 tier would be 8640x2160: scaled into the pixel budget.
+    r.canvas = CanvasSpec::FollowImage { short_edge: 2160 };
+    let (j, notes) = negotiate_noted(&r, &caps, &with_first(&r, 8000, 1000)).unwrap();
+    assert!(u64::from(j.width) * u64::from(j.height) <= caps.canvas.max_area);
+    assert_eq!((j.width % 64, j.height % 64), (0, 0));
+    let (ow, oh) = j.output_size();
+    assert!((f64::from(ow) / f64::from(oh) - 4.0).abs() < 0.1, "{ow}x{oh}");
+    assert!(notes[0].contains("clamped"), "{notes:?}");
+}
+
+#[test]
+fn model_default_ref2v_follows_the_image_on_h3_only() {
+    let mut r = t2v("fasth3", "x");
+    r.task = Task::Ref2V;
+    r.references = vec![image_ref("https://e.x/r.png")];
+    let mut st = stage_all(&r);
+    st.references[0].1 = image("r.png", 720, 1280);
+    let j = negotiate(&r, &h3_ref2va(), &st).unwrap();
+    assert_eq!((j.width, j.height), (768, 1344));
+    // Video-only references keep the 16:9 default.
+    r.references = vec![Reference { kind: MediaKind::Video, media: url("https://e.x/v.mp4") }];
+    assert_eq!(effective_canvas(&r, &h3_ref2va()), CanvasSpec::ModelDefault);
+    // LTX reference-to-video: the reference is a sheet, not a frame.
+    let mut ltx = ltx23();
+    ltx.tasks = [Task::Ref2V].into_iter().collect();
+    r.references = vec![image_ref("https://e.x/r.png")];
+    assert_eq!(effective_canvas(&r, &ltx), CanvasSpec::ModelDefault);
 }

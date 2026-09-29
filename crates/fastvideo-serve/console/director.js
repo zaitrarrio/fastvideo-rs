@@ -134,7 +134,8 @@ export function mountDirector(root, { app }) {
   const prompt = el('textarea', { id: 'director-prompt', rows: 4 }, 'A continuous live-action shot: a lighthouse keeper climbs the spiral stairs at dusk, lamp in hand.');
   const resolution = el('select', { id: 'director-resolution' }, ['480p', '768p', '1080p'].map((v) => el('option', { value: v }, v === '1080p' ? '1080p (about 2.5x slower per chunk)' : v)));
   resolution.value = '768p';
-  const aspect = el('select', { id: 'director-aspect' }, ['16:9', '9:16', '1:1'].map((v) => el('option', { value: v }, v)));
+  // `auto` sends no aspect_ratio: the session follows the image (16:9 without one).
+  const aspect = el('select', { id: 'director-aspect' }, ['auto', '16:9', '9:16', '1:1'].map((v) => el('option', { value: v }, v === 'auto' ? 'auto (from image, else 16:9)' : v)));
   const seed = el('input', { inputmode: 'numeric', placeholder: 'random' });
   const memory = el('input', { type: 'number', min: 1, max: 50, value: 12 });
   const imageUrl = el('input', { type: 'url', placeholder: 'optional first-frame image URL', spellcheck: 'false' });
@@ -203,7 +204,8 @@ export function mountDirector(root, { app }) {
     if (!apiKey()) { setMsg(msg, 'Set an API key first.', 'bad'); return; }
     const text = prompt.value.trim();
     if (!text) { setMsg(msg, 'Enter an opening prompt.', 'bad'); return; }
-    const cfg = { prompt: text, resolution: resolution.value, aspect_ratio: aspect.value, memory: Number(memory.value) || 12 };
+    const cfg = { prompt: text, resolution: resolution.value, memory: Number(memory.value) || 12 };
+    if (aspect.value !== 'auto') cfg.aspect_ratio = aspect.value;
     if (seed.value.trim()) cfg.seed = Number(seed.value.trim());
     if (imageUrl.value.trim()) cfg.image_url = imageUrl.value.trim();
     prompts.clear(); timeline.replaceChildren(); chunks = 0; stats.replaceChildren();

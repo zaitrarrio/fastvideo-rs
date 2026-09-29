@@ -57,6 +57,9 @@ tower = { workspace = true, features = ["util"] }
 # WHEP viewer in tests/streams_whip.rs.
 reqwest.workspace = true
 bytes.workspace = true
+# Test images (PNG, EXIF-rotated JPEG) in tests/i2v_aspect.rs.
+image.workspace = true
+base64.workspace = true
 
 [features]
 default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]

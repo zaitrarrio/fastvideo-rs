@@ -41,7 +41,8 @@ pub use job::{
     StoreError, TransitionError,
 };
 pub use negotiate::{
-    canvas_for_aspect, draw_seed, h3_1080p_canvas, negotiate, precheck, resolve_canvas, resolve_frames,
+    canvas_for_aspect, draw_seed, effective_canvas, h3_1080p_canvas, negotiate, negotiate_noted, precheck,
+    resolve_canvas, resolve_canvas_noted, resolve_frames,
     resolve_model, resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
     StagedInputs, StagedMedia,
 };

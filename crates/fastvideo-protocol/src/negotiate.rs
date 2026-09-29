@@ -230,10 +230,27 @@ pub fn negotiate(
     caps: &ModelCaps,
     staged: &StagedInputs,
 ) -> Result<ResolvedJob, ApiError> {
+    negotiate_noted(req, caps, staged).map(|(job, _)| job)
+}
+
+/// [`negotiate`], plus the notes worth telling the client about the choices
+/// it made (an image-derived canvas, an input aspect clamped to the model's
+/// range). Handlers log them and record them on the job.
+pub fn negotiate_noted(
+    req: &GenerationRequest,
+    caps: &ModelCaps,
+    staged: &StagedInputs,
+) -> Result<(ResolvedJob, Vec<String>), ApiError> {
     check_task(req, caps)?;
     check_staged(req, staged)?;
     let fps = requested_fps(req, caps);
-    let (width, height, crop) = resolve_canvas(&req.canvas, caps, follow_dims(req, staged)?)?;
+    let spec = effective_canvas(req, caps);
+    let follow = if matches!(spec, CanvasSpec::FollowImage { .. }) {
+        follow_dims(staged)?
+    } else {
+        None
+    };
+    let ((width, height, crop), note) = resolve_canvas_noted(&spec, caps, follow)?;
     let num_frames = resolve_frames(&req.timing.length, fps, caps)?;
     check_fps(fps, caps)?;
     check_h3_geometry(caps, width, height, num_frames)?;
@@ -256,7 +273,7 @@ pub fn negotiate(
         (Some(a), Some(m)) => Some((a.role, m.path.clone())),
         _ => None,
     };
-    Ok(ResolvedJob {
+    let job = ResolvedJob {
         model: caps.id.clone(),
         task: req.task,
         prompt: req.prompt.clone(),
@@ -277,7 +294,31 @@ pub fn negotiate(
         sampling: req.sampling.clone(),
         tier: caps.tier,
         recipe: caps.recipe.clone(),
-    })
+    };
+    Ok((job, note.into_iter().collect()))
+}
+
+/// The canvas spec `negotiate` resolves. An image-conditioned request that
+/// sets no size or aspect ([`CanvasSpec::ModelDefault`]) follows its image:
+/// image-to-video and keyframes follow the first frame (else the last);
+/// H3 reference-to-video follows the first image reference, as fal's and
+/// MiniMax's `adaptive` default does. LTX reference-to-video keeps its
+/// default canvas: its reference is a composite sheet, not a frame.
+pub fn effective_canvas(req: &GenerationRequest, caps: &ModelCaps) -> CanvasSpec {
+    if req.canvas != CanvasSpec::ModelDefault {
+        return req.canvas.clone();
+    }
+    let follows = match req.task {
+        Task::I2V | Task::Keyframes => !req.keyframes.is_empty(),
+        Task::Ref2V => {
+            caps.family == Family::H3 && req.references.iter().any(|r| r.kind == MediaKind::Image)
+        }
+        _ => false,
+    };
+    match caps.canvas.short_edges.first() {
+        Some(&short_edge) if follows => CanvasSpec::FollowImage { short_edge },
+        _ => CanvasSpec::ModelDefault,
+    }
 }
 
 /// Every rule that does not need staged media (for `FollowImage` only the
@@ -285,7 +326,7 @@ pub fn negotiate(
 pub fn precheck(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError> {
     check_task(req, caps)?;
     let fps = requested_fps(req, caps);
-    let canvas = match &req.canvas {
+    let canvas = match &effective_canvas(req, caps) {
         CanvasSpec::FollowImage { short_edge } => {
             check_tier(*short_edge, caps)?;
             None
@@ -473,14 +514,9 @@ fn mime_fits(kind: MediaKind, mime: &str) -> bool {
 // ---- rule 3: canvas ------------------------------------------------------------
 
 /// The image `FollowImage` follows: the first keyframe (first-frame anchor
-/// preferred), else the first image reference.
-fn follow_dims(
-    req: &GenerationRequest,
-    staged: &StagedInputs,
-) -> Result<Option<(u32, u32)>, ApiError> {
-    if !matches!(req.canvas, CanvasSpec::FollowImage { .. }) {
-        return Ok(None);
-    }
+/// preferred), else the first image reference. The staged size is after
+/// EXIF orientation (ingestion bakes the rotation into the staged file).
+fn follow_dims(staged: &StagedInputs) -> Result<Option<(u32, u32)>, ApiError> {
     let img = staged
         .keyframes
         .iter()
@@ -537,8 +573,43 @@ pub fn resolve_canvas(
     caps: &ModelCaps,
     follow: Option<(u32, u32)>,
 ) -> Result<ResolvedCanvas, ApiError> {
+    resolve_canvas_noted(spec, caps, follow).map(|(c, _)| c)
+}
+
+/// [`resolve_canvas`] with a note on what an image-derived canvas did.
+/// An input image outside the model's aspect range is clamped to the
+/// nearest end of the range (the pipelines centre-crop the image to the
+/// canvas) rather than refused.
+pub fn resolve_canvas_noted(
+    spec: &CanvasSpec,
+    caps: &ModelCaps,
+    follow: Option<(u32, u32)>,
+) -> Result<(ResolvedCanvas, Option<String>), ApiError> {
     let c = &caps.canvas;
-    match spec {
+    if let CanvasSpec::FollowImage { short_edge } = spec {
+        check_tier(*short_edge, caps)?;
+        let (w, h) = follow.ok_or_else(|| {
+            ApiError::invalid_param(
+                "aspect_ratio",
+                "an adaptive aspect ratio needs an input image",
+            )
+        })?;
+        let (lo, hi) = (f64::from(c.aspect.0), f64::from(c.aspect.1));
+        let r = f64::from(w) / f64::from(h);
+        let clamped = r.clamp(lo, hi);
+        let out = follow_canvas(clamped, *short_edge, caps)?;
+        let (ow, oh) = out.2.unwrap_or((out.0, out.1));
+        let note = if (clamped - r).abs() > 1e-9 {
+            format!(
+                "canvas: the input image is {w}x{h} (aspect {r:.3}), outside this model's {lo}..{hi} range; \
+                 clamped to {clamped:.3}: {ow}x{oh}, the image is centre-cropped"
+            )
+        } else {
+            format!("canvas: {ow}x{oh} follows the input image ({w}x{h})")
+        };
+        return Ok((out, Some(note)));
+    }
+    let out = match spec {
         CanvasSpec::Exact { width, height } => exact_canvas(*width, *height, caps),
         CanvasSpec::Aspect { ratio, short_edge } => {
             check_tier(*short_edge, caps)?;
@@ -553,32 +624,57 @@ pub fn resolve_canvas(
             }
             aspect_canvas(ratio.w as f64, ratio.h as f64, *short_edge, caps)
         }
-        CanvasSpec::FollowImage { short_edge } => {
-            check_tier(*short_edge, caps)?;
-            let (w, h) = follow.ok_or_else(|| {
-                ApiError::invalid_param(
-                    "aspect_ratio",
-                    "an adaptive aspect ratio needs an input image",
-                )
-            })?;
-            if !c.aspect_ok(w, h) {
-                return Err(ApiError::invalid_param(
-                    "image_url",
-                    format!(
-                        "input image aspect {w}x{h} is outside {}..{}",
-                        c.aspect.0, c.aspect.1
-                    ),
-                ));
-            }
-            aspect_canvas(w as f64, h as f64, *short_edge, caps)
-        }
+        CanvasSpec::FollowImage { .. } => unreachable!("handled above"),
         CanvasSpec::ModelDefault => {
             let short = *c.short_edges.first().ok_or_else(|| {
                 ApiError::internal(format!("model `{}` declares no canvas tier", caps.id))
             })?;
             aspect_canvas(Ratio::R16_9.w as f64, Ratio::R16_9.h as f64, short, caps)
         }
+    }?;
+    Ok((out, None))
+}
+
+/// The canvas for an image aspect `ratio` (already within the model's range)
+/// at `short_edge`: the model's aspect rule, except that a pad-and-crop
+/// canvas (LTX) whose padded size would exceed the pixel budget is scaled
+/// down to fit instead of refused.
+fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {
+    let c = &caps.canvas;
+    if !c.pad_and_crop || caps.family == Family::H3 {
+        // Snapping an aspect at the end of the range can land just outside
+        // it (H3 1080P at 4:1 gives 2880x704): step the aspect inward until
+        // the snapped canvas fits.
+        let mut r = ratio;
+        let mut last = None;
+        for _ in 0..16 {
+            match aspect_canvas(r, 1.0, short_edge, caps) {
+                Ok(out) if c.aspect_ok(out.0, out.1) => return Ok(out),
+                Ok(_) => {}
+                Err(e) => last = Some(e),
+            }
+            r = if r > 1.0 { (r * 0.99).max(1.0) } else { (r / 0.99).min(1.0) };
+        }
+        return Err(last.unwrap_or_else(|| ApiError::invalid_param("image_url", "no canvas fits the input image's aspect")));
     }
+    let m = c.multiple.max(1);
+    let even = |v: f64| ((v / 2.0).round() as u32).max(1) * 2;
+    let s = f64::from(short_edge);
+    let (mut w, mut h) = if ratio >= 1.0 { (even(s * ratio), short_edge) } else { (short_edge, even(s / ratio)) };
+    let padded = |w: u32, h: u32| u64::from(w.div_ceil(m) * m) * u64::from(h.div_ceil(m) * m);
+    if padded(w, h) > c.max_area {
+        let k = (c.max_area as f64 / padded(w, h) as f64).sqrt();
+        (w, h) = (even(f64::from(w) * k), even(f64::from(h) * k));
+        while padded(w, h) > c.max_area && w > m && h > m {
+            // Trim the long side one multiple at a time (keeps the aspect close).
+            if w >= h {
+                w -= m;
+            } else {
+                h -= m;
+            }
+        }
+    }
+    exact_canvas(w, h, caps).map_err(|e| ApiError { param: Some("image_url".into()), ..e })
 }
 
 fn exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {

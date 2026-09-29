@@ -459,7 +459,7 @@ impl Ingestor {
         let declared = declared
             .map(|m| m.split(';').next().unwrap_or(&m).trim().to_ascii_lowercase())
             .filter(|m| !m.is_empty() && m != "application/octet-stream" && m != "binary/octet-stream");
-        let mime = match sniff_mime(&head[..n]) {
+        let mut mime = match sniff_mime(&head[..n]) {
             Some(s) => s.to_owned(),
             None => declared.ok_or_else(|| {
                 ApiError::unsupported_media(format!("`{param}`: unrecognized {} format", kind_word(kind))).with_param(param)
@@ -472,10 +472,28 @@ impl Ingestor {
             ))
             .with_param(param));
         }
-        let path = dir.join(format!("{}.{}", crate::random_token(), ext_for(&mime)));
+        let mut path = dir.join(format!("{}.{}", crate::random_token(), ext_for(&mime)));
         tokio::fs::rename(tmp, &path)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
+        let mut bytes = bytes;
+        if kind == MediaKind::Image && matches!(mime.as_str(), "image/png" | "image/jpeg") {
+            let (src, out) = (path.clone(), dir.join(format!("{}.png", crate::random_token())));
+            let done = tokio::task::spawn_blocking(move || apply_exif_orientation(&src, &out).map(|b| b.map(|b| (out, b))))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            match done {
+                Ok(Some((out, b))) => {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    (path, mime, bytes) = (out, "image/png".to_owned(), b);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(ApiError::unsupported_media(format!("`{param}`: the image could not be decoded: {e}")).with_param(param));
+                }
+            }
+        }
         let probe = match self.prober.probe(&path, kind, &mime).await {
             Ok(p) => p,
             Err(e) => {
@@ -485,6 +503,30 @@ impl Ingestor {
         };
         Ok(StagedMedia { path, mime, bytes, probe })
     }
+}
+
+/// Bakes a JPEG/PNG's EXIF orientation into its pixels: when the image
+/// carries an orientation other than "as stored", it is decoded, rotated or
+/// flipped upright and written losslessly to `out` as PNG (without EXIF);
+/// returns the new file's size. `None` when there is nothing to apply (only
+/// the headers are read). Every consumer downstream (the canvas choice, the
+/// gateway's copy to a worker, each pipeline's decode) then sees the image
+/// the way a viewer displays it.
+pub fn apply_exif_orientation(path: &Path, out: &Path) -> std::io::Result<Option<u64>> {
+    use image::metadata::Orientation;
+    use image::ImageDecoder as _;
+    let mut decoder = image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .into_decoder()
+        .map_err(std::io::Error::other)?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    if orientation == Orientation::NoTransforms {
+        return Ok(None);
+    }
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(std::io::Error::other)?;
+    img.apply_orientation(orientation);
+    img.save_with_format(out, image::ImageFormat::Png).map_err(std::io::Error::other)?;
+    Ok(Some(std::fs::metadata(out)?.len()))
 }
 
 fn too_large(param: &str, max: u64) -> ApiError {
@@ -624,6 +666,54 @@ pub(crate) mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
+    }
+
+    /// A `w`x`h` JPEG (as stored) carrying EXIF `orientation` (1..=8); the
+    /// left half is dark and the right half bright, so a rotation shows.
+    pub fn jpeg_exif(w: u32, h: u32, orientation: u16) -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let img = image::RgbImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgb([0, 0, 0]) } else { image::Rgb([255, 255, 255]) });
+        // A little-endian TIFF header with one IFD entry: 0x0112 SHORT = orientation.
+        let mut exif = vec![0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0];
+        exif.extend_from_slice(&orientation.to_le_bytes());
+        exif.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut out = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95);
+        enc.set_exif_metadata(exif).unwrap();
+        enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8).unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn exif_orientation_is_baked_in() {
+        let dir = tmpdir();
+        let ing = Ingestor::new(None, Arc::new(DefaultProber { ffprobe: None }));
+        let now = OffsetDateTime::now_utc();
+        // Stored 64x32 landscape, orientation 6 (rotate 90 CW to display):
+        // the viewer sees 32x64 portrait with the bright half at the bottom.
+        let s = ing
+            .stage(&i2v(MediaRef::DataUri(data_uri("image/jpeg", &jpeg_exif(64, 32, 6)))), &IngestPolicy::default(), &dir, now)
+            .await
+            .unwrap();
+        let m = &s.keyframes[0].1;
+        assert_eq!(m.probe.dims(), Some((32, 64)));
+        assert_eq!(m.mime, "image/png");
+        assert_eq!(m.path.extension().unwrap(), "png");
+        assert_eq!(m.bytes, std::fs::metadata(&m.path).unwrap().len());
+        let img = image::open(&m.path).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (32, 64));
+        assert!(img.get_pixel(16, 4)[0] < 64 && img.get_pixel(16, 60)[0] > 192, "rotated clockwise");
+        // Only the upright file stays staged.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // 8 (rotate 90 CCW) and 3 (180) too; 1 is left untouched.
+        for (o, dims, mime) in [(8, (32, 64), "image/png"), (3, (64, 32), "image/png"), (1, (64, 32), "image/jpeg")] {
+            let s = ing
+                .stage(&i2v(MediaRef::DataUri(data_uri("image/jpeg", &jpeg_exif(64, 32, o)))), &IngestPolicy::default(), &dir, now)
+                .await
+                .unwrap();
+            assert_eq!((s.keyframes[0].1.probe.dims(), s.keyframes[0].1.mime.as_str()), (Some(dims), mime), "orientation {o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     pub fn data_uri(mime: &str, b: &[u8]) -> String {
