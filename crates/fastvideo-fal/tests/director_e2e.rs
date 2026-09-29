@@ -80,6 +80,21 @@ impl Client {
         }
     }
 
+    /// Waits for the first video frame, then for the encoder's input queue
+    /// to drain. Video follows the first chunk once the encoder has started:
+    /// an ffmpeg encoder can take a second or more to start on a loaded
+    /// host (measured 1-2 s on the build pod), longer than chunk 1 takes to
+    /// build, and the (up to 10) frames queued meanwhile go out in a burst
+    /// that a rate window must not count.
+    async fn first_video(&self) {
+        let deadline = Instant::now() + T;
+        while self.media.lock().unwrap().video.is_empty() {
+            assert!(Instant::now() < deadline, "no video after the first chunk");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     /// Video frames / audio samples per second over `window`, measured
     /// from arrival times and RTP clocks.
     async fn rates(&self, window: Duration) -> (f64, f64, f64, f64) {
@@ -179,7 +194,7 @@ async fn wait_closed(f: &Fixture, id: &str, within: Duration) -> Option<SessionS
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn av_session_end_to_end() {
     let Some(h264) = h264_or_skip() else { return };
-    let f = fixture(Opts { h264, ..Opts::default() }).await;
+    let f = fixture(Opts { h264, hold_builds: true, ..Opts::default() }).await;
     let mut c = open(&f, "minimax/h3-max/director").await;
 
     // session_info first, with our constants.
@@ -208,9 +223,24 @@ async fn av_session_end_to_end() {
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "again"})).await;
     assert_eq!(c.expect("error").await["code"], "immutable_settings");
 
+    // A direction change: pending now, applied when its chunk dispatches.
+    // Chunk 0 was dispatched at `configure` (prompt_version 1) and its
+    // build is held, so the prompt targets chunk 1 on any machine: chunk 1
+    // is dispatched once chunk 0 is built and playing. (Sent after chunk 0
+    // arrived, the prompt raced that dispatch, which follows within one
+    // playout tick: it landed on chunk 1 or chunk 2, and `prompt_applied`
+    // could precede the reply to the second prompt.)
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "The storm arrives"})).await;
+    assert_eq!(c.expect("prompt_pending").await["prompt_version"], 2);
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "reused"})).await;
+    let rej = c.expect("prompt_rejected").await;
+    assert_eq!((rej["prompt_version"].as_u64(), rej["reason"].as_str()), (Some(2), Some("stale_prompt_version")));
+    f.release_builds();
+
     let ch0 = c.expect("chunk").await;
     let t_ch0 = Instant::now();
     assert_eq!(ch0["chunk_index"], 0);
+    assert_eq!(ch0["prompt_version"], 1);
     assert_eq!(ch0["generated_frame_count"], 124, "5 s on 17n+5: {ch0}");
     assert_eq!(ch0["trimmed_context_frames"], 0);
     assert_eq!(ch0["route"], "unknown");
@@ -218,12 +248,6 @@ async fn av_session_end_to_end() {
     let m0 = c.expect("chunk_metrics").await;
     assert_eq!((m0["chunk_index"].as_u64(), m0["units"].as_str()), (Some(0), Some("ms")));
 
-    // A direction change: pending now, applied when its chunk dispatches.
-    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "The storm arrives"})).await;
-    assert_eq!(c.expect("prompt_pending").await["prompt_version"], 2);
-    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "reused"})).await;
-    let rej = c.expect("prompt_rejected").await;
-    assert_eq!((rej["prompt_version"].as_u64(), rej["reason"].as_str()), (Some(2), Some("stale_prompt_version")));
     assert_eq!(c.expect("prompt_applied").await["prompt_version"], 2);
 
     // Continuation chunks start from the previous last frame (trimmed).
@@ -232,12 +256,9 @@ async fn av_session_end_to_end() {
     assert_eq!((ch1["trimmed_context_frames"].as_u64(), ch1["presented_frame_count"].as_u64()), (Some(1), Some(123)));
     assert_eq!(ch1["prompt_version"], 2);
 
-    {
-        // Audio (silence) flows from the start; video from the first chunk.
-        let l = c.media.lock().unwrap();
-        assert!(l.audio.first().is_some_and(|a| a.0 <= t_ch0), "audio before the first chunk");
-        assert!(!l.video.is_empty(), "video after the first chunk");
-    }
+    // Audio (silence) flows from the start; video from the first chunk.
+    assert!(c.media.lock().unwrap().audio.first().is_some_and(|a| a.0 <= t_ch0), "audio before the first chunk");
+    c.first_video().await;
     // A/V at 24 fps / 48 kHz.
     let (fps, rtp_fps, audio_rate, audio_step) = c.rates(Duration::from_secs(4)).await;
     eprintln!("received: {fps:.2} fps (rtp {rtp_fps:.2}), audio {audio_rate:.0} samples/s, {audio_step} per packet");
@@ -280,6 +301,7 @@ async fn video_only_session() {
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p"})).await;
     c.expect("configured").await;
     c.expect("chunk").await;
+    c.first_video().await;
     let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
     eprintln!("video-only: {fps:.2} fps (rtp {rtp_fps:.2})");
     assert!((fps - 24.0).abs() < 2.4, "{fps}");

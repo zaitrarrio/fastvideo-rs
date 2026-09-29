@@ -18,6 +18,16 @@
 // Chromium under PLAYWRIGHT_BROWSERS_PATH; tests/console/run.sh sets both.
 // Never prints the admin token or minted keys.
 //
+// Every page shows the server status strip (GET /fv/v1/status): the local
+// pool's dot, the details panel, and the model page's pool badge; a pool
+// reported down (status mocked in the browser) makes Run warn first and
+// submit on the second click.
+//
+// A second fv-serve with FV_AUTH_MODE=none then checks the keyless console:
+// capabilities report `auth.mode = none`, no key field, pill or banner, and
+// text-to-video and a director session run with no key and no
+// `Authorization` header on any request.
+//
 // Against a running server (the WP-18 GPU E2E): FV_CONSOLE_ORIGIN=<origin>
 // with FV_ADMIN_TOKEN set skips starting fv-serve; FV_CONSOLE_TIMEOUT_MS
 // (default 60 s) bounds each wait (real generations need minutes).
@@ -77,6 +87,119 @@ async function shot(page, name) {
 }
 
 function step(msg) { process.stdout.write('  - ' + msg + '\n'); }
+
+// Starts fv-serve with `extra` env on a free port; resolves once /health answers.
+async function startServer(extra) {
+  const port = await freePort();
+  const origin = 'http://127.0.0.1:' + port;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-console-smoke-'));
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('FV_') && k !== 'FV_SERVE_BIN') delete env[k];
+  Object.assign(env, {
+    FV_BIND: '127.0.0.1:' + port, FV_STATE_DIR: state, FV_JOB_STORE: 'memory', FV_ENGINE: 'fake',
+    FV_URL_SIGNING_KEY: 'console-smoke', RUST_LOG: 'warn',
+  }, extra);
+  const srv = { origin, state, logs: '', exited: null };
+  srv.proc = spawn(BIN, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  srv.proc.stdout.on('data', (d) => { srv.logs += d; });
+  srv.proc.stderr.on('data', (d) => { srv.logs += d; });
+  srv.proc.on('exit', (code) => { srv.exited = code; });
+  for (let i = 0; i < 600; i++) {
+    if (srv.exited !== null) throw new Error('fv-serve exited with ' + srv.exited);
+    try { const r = await fetch(origin + '/health'); if (r.ok) return srv; } catch { /* not yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('fv-serve did not become healthy');
+}
+
+async function stopServer(srv) {
+  srv.proc.kill('SIGTERM');
+  await new Promise((r) => { if (srv.exited !== null) r(); else { srv.proc.on('exit', r); setTimeout(r, 5000); } });
+  fs.rmSync(srv.state, { recursive: true, force: true });
+}
+
+// FV_AUTH_MODE=none: the console asks for no key and sends none.
+async function authNone(browser, redact) {
+  const srv = await startServer({ FV_AUTH_MODE: 'none' });
+  try {
+    const origin = srv.origin;
+    const caps = await (await fetch(origin + '/fv/v1/capabilities')).json();
+    if (!caps.auth || caps.auth.mode !== 'none') throw new Error('auth none: capabilities auth = ' + JSON.stringify(caps.auth));
+    step('auth none: /fv/v1/capabilities reports auth.mode = none without a key');
+
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(TIMEOUT);
+    const errors = [];
+    const authed = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
+    page.on('request', (r) => { if (r.headers().authorization) authed.push(r.method() + ' ' + new URL(r.url()).pathname); });
+
+    await page.goto(origin + '/console');
+    await page.waitForSelector('#conn-state.ok');
+    await page.waitForFunction(() => document.querySelector('#conn').textContent === 'no key needed');
+    if (await page.isVisible('#apikey')) throw new Error('auth none: the API key field is shown');
+    if (await page.isVisible('#forget')) throw new Error('auth none: "Forget key" is shown');
+    await shot(page, '08-auth-none-home');
+    step('auth none: home connects with no key field');
+
+    // A pool reported down: Run warns first, the second click submits.
+    const real = await (await fetch(origin + '/fv/v1/status')).json();
+    const down = JSON.parse(JSON.stringify(real));
+    for (const p of down.pools) { p.state = 'down'; p.available = false; for (const w of p.workers) w.state = 'down'; }
+    for (const m of Object.values(down.models)) m.state = 'down';
+    down.state = 'down';
+    await page.route('**/fv/v1/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(down) }));
+    const submits = [];
+    page.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/minimax/h3-turbo/text-to-video') submits.push(r); });
+    await page.goto(origin + '/console/models/minimax/h3-turbo/text-to-video');
+    await page.waitForSelector('[data-input="prompt"]');
+    await page.waitForSelector('#pool-state[data-state="down"] .dot.bad');
+    await page.waitForSelector('#status-strip [data-pool="local"][data-state="down"] .dot.bad');
+    await page.fill('[data-input="prompt"]', 'A lighthouse at dusk, waves below.');
+    await page.click('#run');
+    await page.waitForSelector('#run-msg.bad');
+    if (!/down/.test(await page.textContent('#run-msg'))) throw new Error('down pool: no warning before Run');
+    await new Promise((r) => setTimeout(r, 300));
+    if (submits.length) throw new Error('down pool: submitted without the second click');
+    await shot(page, '09-pool-down-warning');
+    await page.click('#run');
+    await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    if (submits.length !== 1) throw new Error('down pool: expected one submit after the second click, got ' + submits.length);
+    await page.unroute('**/fv/v1/status');
+    step('pool reported down: red badge, Run warned, second click submitted');
+
+    await page.goto(origin + '/console/models/minimax/h3-turbo/text-to-video');
+    await page.waitForSelector('[data-input="prompt"]');
+    await page.waitForFunction(() => document.querySelector('#conn').textContent === 'no key needed');
+    await page.waitForSelector('#pool-state[data-state="ready"]');
+    if (await page.isVisible('#key-banner')) throw new Error('auth none: the key banner is shown');
+    await page.fill('[data-input="prompt"]', 'A lighthouse at dusk, waves below.');
+    await page.click('#run');
+    await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    await page.waitForFunction(() => !!document.querySelector('#video')?.getAttribute('src'), null, { timeout: 30_000 });
+    step('auth none: text-to-video ran without a key or banner');
+
+    await page.click('[data-task="director"]');
+    await page.waitForURL(/director$/);
+    await page.waitForSelector('#director-start');
+    await page.click('#director-start');
+    await page.waitForFunction(() => document.querySelector('#director-state').textContent === 'streaming', null, { timeout: TIMEOUT });
+    await page.click('#director-stop');
+    await page.waitForFunction(() => document.querySelector('#director-state').textContent === 'closed', null, { timeout: 30_000 });
+    step('auth none: director session started and stopped without a key');
+
+    if (authed.length) throw new Error('auth none: requests sent Authorization: ' + authed.join(', '));
+    if (errors.length) throw new Error('auth none: browser errors:\n' + errors.join('\n'));
+    await context.close();
+  } catch (e) {
+    process.stderr.write('--- fv-serve (auth none) log ---\n' + redact(srv.logs).slice(-4000) + '\n');
+    throw e;
+  } finally {
+    await stopServer(srv);
+  }
+}
 
 async function main() {
   if (!REMOTE && !fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
@@ -138,6 +261,21 @@ async function main() {
     await shot(page, '01-home');
     step('home lists the fal apps');
 
+    // Status strip: the local pool's dot, and the panel on click.
+    if (!REMOTE) {
+      await page.waitForSelector('#status-strip [data-pool="local"][data-state="ready"] .dot.ok');
+      await page.click('#status-strip');
+      await page.waitForSelector('#status-panel:not([hidden]) tr[data-pool="local"] [data-worker="local"]');
+      const panel = await page.textContent('#status-panel');
+      if (/127\.0\.0\.1|https?:\/\//.test(panel)) throw new Error('status panel shows an address: ' + panel.slice(0, 200));
+      await shot(page, '01b-status-panel');
+      await page.click('#status-strip');
+      step('status strip: local pool ready (green), details panel lists the worker');
+    } else {
+      await page.waitForSelector('#status-strip .status-pool');
+      step('status strip lists ' + (await page.$$('#status-strip .status-pool')).length + ' pools');
+    }
+
     // Admin: wrong token refused, right token lists, mint a key.
     await page.goto(origin + '/console/admin');
     await page.fill('#admintoken', 'fvadm_wrong');
@@ -165,6 +303,8 @@ async function main() {
     // Text to video.
     await page.goto(origin + '/console/models/minimax/h3-turbo/text-to-video');
     await page.waitForSelector('[data-input="prompt"]');
+    await page.waitForSelector('#pool-state:not([hidden])');
+    step('model page: pool badge "' + (await page.textContent('#pool-state')).trim() + '" next to Run');
     await page.fill('[data-input="prompt"]', 'A red fox trots across fresh snow at dawn, low tracking shot.');
     await page.selectOption('[data-input="aspect_ratio"]', '9:16');
     await page.click('#run');
@@ -278,6 +418,7 @@ async function main() {
     step('revoked on /console/admin; the key is refused');
 
     if (errors.length) throw new Error('browser errors:\n' + errors.join('\n'));
+    if (!REMOTE) await authNone(browser, redact);
     process.stdout.write('console smoke: OK\n');
   } catch (e) {
     process.stderr.write('console smoke FAILED: ' + redact(String(e && e.stack || e)) + '\n');

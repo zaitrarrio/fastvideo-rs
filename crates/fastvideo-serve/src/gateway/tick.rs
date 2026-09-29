@@ -70,6 +70,22 @@ impl WorkerStatus {
     }
 }
 
+/// A failed worker probe.
+#[derive(Debug)]
+struct ProbeErr {
+    msg: String,
+    /// An HTTP answer (not a connection error).
+    answered: bool,
+    /// fv-serve still starting (503 `{"error":{"kind":"loading"}}`).
+    starting: bool,
+}
+
+impl ProbeErr {
+    fn net(msg: String) -> Self {
+        Self { msg, answered: false, starting: false }
+    }
+}
+
 /// A job's row as the reaper sees it.
 #[derive(Debug)]
 struct Active {
@@ -170,9 +186,16 @@ impl Gateway {
                 .send()
                 .await;
             let res = match r {
-                Ok(resp) if resp.status().is_success() => resp.json::<Value>().await.map(|v| WorkerStatus::parse(&v)).map_err(|e| e.without_url().to_string()),
-                Ok(resp) => Err(format!("status probe answered {}", resp.status().as_u16())),
-                Err(e) => Err(e.without_url().to_string()),
+                Ok(resp) if resp.status().is_success() => {
+                    resp.json::<Value>().await.map(|v| WorkerStatus::parse(&v)).map_err(|e| ProbeErr::net(e.without_url().to_string()))
+                }
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    let body = resp.json::<Value>().await.unwrap_or(Value::Null);
+                    let starting = code == 503 && body.pointer("/error/kind").and_then(Value::as_str) == Some("loading");
+                    Err(ProbeErr { msg: format!("status probe answered {code}"), answered: true, starting })
+                }
+                Err(e) => Err(ProbeErr::net(e.without_url().to_string())),
             };
             (u.clone(), res)
         });
@@ -182,10 +205,12 @@ impl Gateway {
         let mut next: BTreeMap<String, WorkerView> = BTreeMap::new();
         for (url, res) in results {
             let reg_state = registered.iter().find(|(u, _)| *u == url).map(|(_, s)| s.clone());
-            let mut w = WorkerView { url: url.clone(), registered: reg_state.is_some(), ..WorkerView::default() };
+            let last_ok = st.workers.get(&url).and_then(|w| w.last_ok);
+            let mut w = WorkerView { url: url.clone(), registered: reg_state.is_some(), last_ok, ..WorkerView::default() };
             match res {
                 Ok(s) => {
                     w.healthy = true;
+                    w.last_ok = Some(Instant::now());
                     w.ready = s.ready;
                     w.draining = s.draining || reg_state.as_deref() == Some("draining");
                     w.running = s.running;
@@ -199,7 +224,9 @@ impl Gateway {
                 }
                 Err(e) => {
                     w.healthy = false;
-                    w.last_error = Some(e);
+                    w.answered = e.answered;
+                    w.starting = e.starting;
+                    w.last_error = Some(e.msg);
                 }
             }
             next.insert(url, w);
@@ -224,6 +251,7 @@ impl Gateway {
                 st.available = true;
                 st.last_error = None;
                 st.health = Some(v);
+                st.health_at = Some(Instant::now());
             }
             Err(e) => {
                 st.available = false;

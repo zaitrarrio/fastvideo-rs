@@ -186,7 +186,12 @@ calls the envelope's `cancel_path` in-process.
   on a single server, `[aliases]` and `pools[].aliases` merge on top.
 - `/fv/v1/capabilities` adds `pools` (id, kind, available, models, workers)
   and each model's `pools`; the console reads the same endpoint, so it
-  lists every model of every pool.
+  lists every model of every pool. Like a single server's, it also reports
+  the gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
+- `GET /fv/v1/status` (public, no secrets; docs/serve/console.md): each
+  pool's and worker's state from the tick's probes (`ready`, `busy`,
+  `loading`, `scaled_to_zero`, `draining`, `unhealthy`, `down`), last-seen
+  age, queue depth and running jobs; the console's status strip polls it.
 
 ## 5. Streaming
 

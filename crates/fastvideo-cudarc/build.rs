@@ -60,6 +60,18 @@ fn oxide_cubin_dir() -> PathBuf {
         .join("../../artifacts/oxide")
 }
 
+/// `rerun-if-changed` on `path`, or on its nearest existing ancestor.
+fn watch_existing(path: &Path) {
+    let mut p = path;
+    while !p.exists() {
+        match p.parent() {
+            Some(q) if !q.as_os_str().is_empty() => p = q,
+            _ => return,
+        }
+    }
+    println!("cargo:rerun-if-changed={}", p.display());
+}
+
 /// One row of `manifest.tsv` written by `fv-oxide-aot`
 /// (`sm  out  bm  bn  bk  entry  file`).
 struct OxideRow {
@@ -75,8 +87,14 @@ struct OxideRow {
 fn find_oxide_cubins() -> Vec<OxideRow> {
     let dir = oxide_cubin_dir();
     let manifest = dir.join("manifest.tsv");
-    println!("cargo:rerun-if-changed={}", dir.display());
-    println!("cargo:rerun-if-changed={}", manifest.display());
+    // Cargo treats a missing rerun-if-changed path as changed on every build,
+    // which re-ran this script (all the nvcc cubins) on each no-op `cargo
+    // build --features cuda` when artifacts/oxide does not exist. Watch the
+    // nearest existing ancestor instead: its mtime changes when the dir appears.
+    watch_existing(&dir);
+    if manifest.exists() {
+        println!("cargo:rerun-if-changed={}", manifest.display());
+    }
     let Ok(text) = fs::read_to_string(&manifest) else {
         return Vec::new();
     };

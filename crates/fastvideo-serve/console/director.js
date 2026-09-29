@@ -13,7 +13,7 @@
 // 404 / 405 / 501 on the signalling routes means this server has no
 // director yet: the page says so instead of failing.
 
-import { el, request, setMsg, apiKey } from './common.js';
+import { el, request, setMsg, loadAuthMode, needsKey, poolBadge, poolWarning } from './common.js';
 
 const HEARTBEAT_MS = 5000;
 const UNAVAILABLE = new Set([404, 405, 501]);
@@ -127,7 +127,7 @@ export class DirectorClient {
 }
 
 // Renders the director page into `root`.
-export function mountDirector(root, { app }) {
+export function mountDirector(root, { app, model }) {
   const appId = app + '/director';
   const video = el('video', { id: 'director-video', autoplay: true, playsinline: true, controls: true });
   const statePill = el('span', { class: 'pill', id: 'director-state' }, 'idle');
@@ -200,8 +200,13 @@ export function mountDirector(root, { app }) {
   }
 
   let client = null;
+  let armed = null; // a pool warning already shown: a second Start goes ahead
   start.onclick = async () => {
-    if (!apiKey()) { setMsg(msg, 'Set an API key first.', 'bad'); return; }
+    await loadAuthMode();
+    if (needsKey()) { setMsg(msg, 'Set an API key first.', 'bad'); return; }
+    const warn = poolWarning(model);
+    if (warn && armed !== warn) { armed = warn; setMsg(msg, warn + ' Click Start again to try anyway.', 'bad'); return; }
+    armed = null;
     const text = prompt.value.trim();
     if (!text) { setMsg(msg, 'Enter an opening prompt.', 'bad'); return; }
     const cfg = { prompt: text, resolution: resolution.value, memory: Number(memory.value) || 12 };
@@ -238,7 +243,7 @@ export function mountDirector(root, { app }) {
           el('details', { class: 'more' }, el('summary', {}, 'Additional settings'),
             el('div', { class: 'row' }, field('Seed', seed), field('Memory', memory, 'Prior segment prompts kept as context (1-50).')),
             field('First-frame image URL', imageUrl)),
-          el('div', { class: 'actions' }, start, stop), msg)),
+          el('div', { class: 'actions' }, start, stop, poolBadge(model)), msg)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Stream')),
         el('div', { class: 'stage-body' }, el('div', { style: 'margin-top:10px' }, video), stats)),

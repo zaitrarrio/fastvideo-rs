@@ -3,7 +3,7 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier; causal models also `stream_limits`, design §5.2), tier bindings and aliases: what every public id maps to (risk R10) |
+//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier; causal models also `stream_limits`, design §5.2), tier bindings and aliases: what every public id maps to (risk R10); `auth.mode` (`none` \| `keys` \| `trust-gateway`, no secrets) |
 //! | `POST /fv/v1/jobs` | Submit `{model, prompt, ...}` → 202 job object |
 //! | `GET /fv/v1/jobs` | Caller's jobs, newest first (`status`, `model`, `limit`, `after`, `order`, `protocol`) |
 //! | `GET /fv/v1/jobs/{id}` | Job object (with `protocol` and `metrics`: stage timings from the engine) |
@@ -432,6 +432,13 @@ fn capabilities(gate: &ServiceGate, causal: &CausalLimits) -> Value {
     })
 }
 
+/// The `auth` object of `/fv/v1/capabilities`: the server's auth mode
+/// (`none`, `keys` or `trust-gateway`) only, never keys or tokens. The
+/// console reads it to drop its API-key prompts when `mode` is `none`.
+pub fn auth_info(mode: fastvideo_serve_kit::AuthMode) -> Value {
+    json!({ "mode": mode })
+}
+
 /// The `/fv/v1/capabilities` body.
 pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
 
@@ -456,7 +463,11 @@ pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
                 let caps = caps.clone();
                 async move {
                     match ctx.auth().authenticate(ProtocolId::Native, &headers) {
-                        Ok(_) => Json(caps()).into_response(),
+                        Ok(_) => {
+                            let mut body = caps();
+                            body["auth"] = auth_info(ctx.auth().mode);
+                            Json(body).into_response()
+                        }
                         Err(e) => reply_err(e),
                     }
                 }

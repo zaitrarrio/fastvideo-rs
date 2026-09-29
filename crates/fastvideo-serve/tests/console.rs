@@ -109,7 +109,13 @@ async fn minted_keys_drive_every_api_and_revoke_immediately() {
     let sub = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(format!("Key {key}")), Some(json!({"prompt": "a red fox"}))).await;
     assert_eq!(sub.status, 200, "{}", sub.text());
     let rid = sub.json()["request_id"].as_str().unwrap().to_owned();
-    assert_eq!(call(&r, "GET", "/fv/v1/capabilities", Some(format!("Bearer {key}")), None).await.status, 200);
+    let caps = call(&r, "GET", "/fv/v1/capabilities", Some(format!("Bearer {key}")), None).await;
+    assert_eq!(caps.status, 200);
+    // The console learns the auth mode here; no key or token is echoed.
+    assert_eq!(caps.json()["auth"], json!({"mode": "keys"}), "{}", caps.text());
+    assert!(!caps.text().contains(&key) && !caps.text().contains(ADMIN));
+    // Keys mode: the unauthenticated probe is refused, so the console keeps asking for a key.
+    assert_eq!(call(&r, "GET", "/fv/v1/capabilities", None, None).await.status, 401);
     let mm = call(&r, "GET", "/v2/query/video_generation?task_id=1", Some(format!("Bearer {key}")), None).await;
     assert_ne!(mm.status, 401, "{}", mm.text());
     assert_ne!(mm.json()["base_resp"]["status_code"], 1004, "{}", mm.text());
@@ -157,6 +163,135 @@ async fn minted_keys_drive_every_api_and_revoke_immediately() {
     assert_eq!(call(&r, "GET", "/fv/v1/capabilities", Some(format!("Bearer {key2}")), None).await.status, 200);
     assert_eq!(call(&r, "GET", "/fv/v1/capabilities", Some(format!("Bearer {key}")), None).await.status, 401);
     assert_eq!(call(&r, "GET", "/fv/v1/admin/keys", admin(), None).await.json()["keys"].as_array().unwrap().len(), 2);
+    drop(a);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `FV_AUTH_MODE=none`: capabilities report `auth.mode = "none"` without
+/// credentials, and every call the console makes (capabilities, fal submit,
+/// status, result, upload) works with no `Authorization`, as the console
+/// sends none in that mode. The admin routes still need the admin token.
+#[tokio::test]
+async fn auth_none_is_reported_and_the_console_needs_no_key() {
+    let dir = state_dir("none");
+    let mut env = BTreeMap::new();
+    env.insert("FV_AUTH_MODE".to_owned(), "none".to_owned());
+    let mut c = config(&dir, Some(ADMIN));
+    c.apply_env(&env).unwrap();
+    c.validate().unwrap();
+    let a = app(c).await;
+    let r = a.router.clone();
+
+    let caps = call(&r, "GET", "/fv/v1/capabilities", None, None).await;
+    assert_eq!(caps.status, 200, "{}", caps.text());
+    assert_eq!(caps.json()["auth"], json!({"mode": "none"}), "{}", caps.text());
+    assert!(!caps.text().contains(ADMIN));
+    assert!(caps.json()["models"].as_array().is_some_and(|m| !m.is_empty()));
+
+    // The console's model page: upload, submit, status, result, all without a key.
+    let up = call(
+        &r,
+        "POST",
+        "/storage/upload/initiate?storage_type=fal-cdn-v3",
+        None,
+        Some(json!({"content_type": "image/png", "file_name": "a.png"})),
+    )
+    .await;
+    assert_eq!(up.status, 200, "{}", up.text());
+    let sub = call(&r, "POST", "/minimax/h3-turbo/text-to-video", None, Some(json!({"prompt": "a red fox"}))).await;
+    assert_eq!(sub.status, 200, "{}", sub.text());
+    let rid = sub.json()["request_id"].as_str().unwrap().to_owned();
+    let mut done = false;
+    for _ in 0..2000 {
+        let s = call(&r, "GET", &format!("/minimax/h3-turbo/requests/{rid}/status?logs=1"), None, None).await;
+        assert_eq!(s.status, 200, "{}", s.text());
+        if s.json()["status"] == "COMPLETED" {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(done);
+    let out = call(&r, "GET", &format!("/minimax/h3-turbo/requests/{rid}"), None, None).await;
+    assert_eq!(out.status, 200, "{}", out.text());
+    assert!(out.json()["video"]["url"].as_str().unwrap().contains("/files/"));
+
+    // The public status view: one local pool, ready once the job is done.
+    let st = call(&r, "GET", "/fv/v1/status", None, None).await;
+    assert_eq!(st.status, 200, "{}", st.text());
+    assert_eq!(st.json()["pools"][0]["id"], "local");
+
+    // Admin routes keep their token.
+    assert_eq!(call(&r, "GET", "/fv/v1/admin/keys", None, None).await.status, 401);
+    assert_eq!(call(&r, "GET", "/fv/v1/admin/keys", admin(), None).await.status, 200);
+
+    // The shipped console reads the mode and drops the key prompts.
+    let common = call(&r, "GET", "/console/assets/common.js", None, None).await.text();
+    assert!(common.contains("c.auth.mode") && common.contains("export const needsKey"));
+    for page in ["model.js", "director.js"] {
+        let js = call(&r, "GET", &format!("/console/assets/{page}"), None, None).await.text();
+        assert!(js.contains("needsKey()") && !js.contains("!apiKey()"), "{page} still gates on apiKey()");
+    }
+    drop(a);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `GET /fv/v1/status` on a single server: public even with keys, the
+/// engine as one `local` pool (state, queue depth, running jobs), the name
+/// map the console resolves fal apps with, and nothing secret.
+#[tokio::test]
+async fn single_server_status_is_public_and_tracks_the_engine() {
+    let dir = state_dir("status");
+    let mut c = config(&dir, Some(ADMIN));
+    c.engine.fake.step_ms = 40;
+    let a = app(c).await;
+    let r = a.router.clone();
+    let (key, _) = mint(&r, "status").await;
+
+    let st = call(&r, "GET", "/fv/v1/status", None, None).await;
+    assert_eq!(st.status, 200, "{}", st.text());
+    let v = st.json();
+    assert_eq!(v["object"], "fv.status");
+    assert_eq!(v["gateway"], false);
+    assert_eq!(v["state"], "ready", "{v}");
+    let p = &v["pools"][0];
+    assert_eq!((p["id"].as_str(), p["kind"].as_str(), p["state"].as_str()), (Some("local"), Some("local"), Some("ready")), "{v}");
+    assert_eq!(p["available"], true);
+    assert_eq!(p["workers"].as_array().unwrap().len(), 1);
+    assert_eq!(p["workers"][0]["label"], "local");
+    assert_eq!((p["queued"].as_u64(), p["running"].as_u64()), (Some(0), Some(0)));
+    let models = p["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    for m in models {
+        assert_eq!(v["models"][m.as_str().unwrap()]["state"], "ready");
+        assert_eq!(v["models"][m.as_str().unwrap()]["pools"], json!(["local"]));
+    }
+    // fal apps name models by served name or alias; `names` resolves them.
+    let target = v["names"]["h3-turbo"].as_str().expect("names resolves h3-turbo");
+    assert!(models.iter().any(|m| m == target), "{v}");
+    assert!(!st.text().contains(ADMIN) && !st.text().contains(&key) && !st.text().contains("fv.test"));
+
+    // A running job shows as busy with the job counted.
+    let sub = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(format!("Key {key}")), Some(json!({"prompt": "a red fox"}))).await;
+    assert_eq!(sub.status, 200, "{}", sub.text());
+    let mut busy = false;
+    for _ in 0..500 {
+        let v = call(&r, "GET", "/fv/v1/status", None, None).await.json();
+        if v["pools"][0]["state"] == "busy" {
+            assert!(v["pools"][0]["running"].as_u64().unwrap() + v["pools"][0]["queued"].as_u64().unwrap() >= 1, "{v}");
+            assert_eq!(v["state"], "busy");
+            busy = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(busy, "never saw the engine busy");
+
+    // Draining (shutdown step 1) shows as draining.
+    a.gate.stop_admission();
+    let v = call(&r, "GET", "/fv/v1/status", None, None).await.json();
+    assert_eq!(v["pools"][0]["state"], "draining", "{v}");
+    assert_eq!(v["pools"][0]["available"], false);
     drop(a);
     std::fs::remove_dir_all(&dir).ok();
 }

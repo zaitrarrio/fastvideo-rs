@@ -51,6 +51,7 @@ pub mod reactor;
 pub mod rtc;
 pub mod router;
 pub mod shutdown;
+pub mod status;
 pub mod storage;
 pub mod streams;
 pub mod whip;

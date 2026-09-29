@@ -16,6 +16,7 @@
 #                                    bash scripts/gpu/lint.sh); streams the log
 #                                    and exits with the command's status
 #   build-pod.sh log <job>           re-attach to a job's log
+#   build-pod.sh cancel <job>        cancel a job (e.g. after the client died)
 #   build-pod.sh fetch <agent> <path> [dest]
 #                                    copy target/<agent>/<path> back (gzip in
 #                                    transit), e.g. release/fv-serve
@@ -36,7 +37,9 @@
 #
 # Env: RUNPOD_API_KEY; FV_BUILD_STATE (default ~/.config/fv-build: token,
 # mode 600, never printed); FV_BUILD_VOLUME (default fv-build);
-# FV_BUILD_FLAVORS (default "cpu5c cpu3c"); FV_BUILD_VCPUS (default 32);
+# FV_BUILD_FLAVORS (default "cpu5c cpu3c"); FV_BUILD_VCPUS (default 32) and
+# FV_BUILD_VCPUS_FALLBACK (default 16, taken when the first has no stock);
+# FV_BUILD_CONTAINER_GB (default 200: snapshots and target dirs live there);
 # FV_BUILD_IMAGE (default rust:1-bookworm); FV_BUILD_DC / FV_BUILD_VOLUME_GB
 # for volume-create (default EU-RO-1 / 200).
 set -euo pipefail
@@ -51,8 +54,9 @@ POD_NAME="${FV_BUILD_POD_NAME:-fv-build}"
 VOL_NAME="${FV_BUILD_VOLUME:-fv-build}"
 FLAVORS="${FV_BUILD_FLAVORS:-cpu5c cpu3c}"
 VCPUS="${FV_BUILD_VCPUS:-32}"
+VCPUS_FALLBACK="${FV_BUILD_VCPUS_FALLBACK-16}"   # "" disables
 IMAGE="${FV_BUILD_IMAGE:-rust:1-bookworm}"
-DISK_GB="${FV_BUILD_CONTAINER_GB:-40}"
+DISK_GB="${FV_BUILD_CONTAINER_GB:-200}"
 MAX_DPH="${FV_BUILD_MAX_DPH:-1.5}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
@@ -132,13 +136,17 @@ new_token() {
   chmod 600 "$TOKEN_FILE.new" "$AUTH_FILE.new"
   printf '%s' "$tok" | sha256sum | cut -d' ' -f1
 }
+server_sha() { sha256sum "$HERE/build-pod-server.py" | cut -c1-12; }
 commit_token() { mv -f "$TOKEN_FILE.new" "$TOKEN_FILE"; mv -f "$AUTH_FILE.new" "$AUTH_FILE"; }
 
 start_cmd() {
   cat <<'EOF'
 mkdir -p /opt/fvb
 printf '%s' "$FV_BUILD_SERVER_B64" | base64 -d | gunzip >/opt/fvb/server.py
-command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y -qq python3; }
+# python3-venv here, not in the server's setup: installing it there upgrades
+# the python3 the server is running from, and the server restarted (killing
+# jobs) about a minute after every first boot.
+{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv; } >/dev/null 2>&1
 while true; do python3 /opt/fvb/server.py; echo "server exited $?; restarting" >&2; sleep 5; done
 EOF
 }
@@ -162,14 +170,32 @@ payload() {
 }
 
 create_pod() {
-  local vol="$1" dc="$2" payload resp id dph
-  payload="$(payload "$vol" "$dc" "$(new_token)")"
-  log "create pod $POD_NAME: ${VCPUS} vCPU [$FLAVORS] in $dc, image $IMAGE, volume $vol"
-  resp="$(rest POST /pods "$payload" 2>&1)" || die "pod create failed: $(head -c 400 <<<"$resp")"
+  local vol="$1" dc="$2" hash resp="" id dph v created=""
+  hash="$(new_token)"
+  log "create pod $POD_NAME: ${VCPUS} vCPU (fallback ${VCPUS_FALLBACK:-none}) [$FLAVORS] in $dc, image $IMAGE, ${DISK_GB} GB disk, volume $vol"
+  # The volume pins the datacenter, and CPU stock there comes and goes (no
+  # 32-vCPU cpu5c/cpu3c in EU-RO-1 for 15+ min on 2026-09-28 while 16 had
+  # stock): each round tries VCPUS, then the fallback, for a while.
+  local t0=$SECONDS
+  while [[ -z "$created" ]]; do
+    for v in $VCPUS $VCPUS_FALLBACK; do
+      if resp="$(VCPUS=$v payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)"; then
+        created=$v
+        break
+      fi
+      grep -q "no longer any instances available" <<<"$resp" || die "pod create failed: $(head -c 400 <<<"$resp")"
+    done
+    [[ -n "$created" ]] && break
+    (( SECONDS - t0 < ${FV_BUILD_STOCK_WAIT_S:-900} )) \
+      || die "no ${VCPUS}/${VCPUS_FALLBACK:-} vCPU [$FLAVORS] stock in $dc for ${FV_BUILD_STOCK_WAIT_S:-900}s (try more FV_BUILD_FLAVORS)"
+    log "no stock in $dc; retrying in 30s"
+    sleep 30
+  done
+  [[ "$created" == "$VCPUS" ]] || log "no ${VCPUS}-vCPU stock; took ${created} vCPU"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "pod create returned no id: $(head -c 400 <<<"$resp")"
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
-  ledger "pod-created $id flavor=$(jq -r '.machine.cpuFlavorId // .cpuFlavorId // "?"' <<<"$resp") vcpu=$VCPUS usd_per_hr=$dph dc=$dc"
+  ledger "pod-created $id flavor=$(jq -r '.machine.cpuFlavorId // .cpuFlavorId // "?"' <<<"$resp") vcpu=$created usd_per_hr=$dph dc=$dc"
   if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
     rest DELETE "/pods/$id" >/dev/null || true
     ledger "pod-deleted $id over-cap"
@@ -177,15 +203,23 @@ create_pod() {
   fi
   commit_token
   echo "$id" >"$STATE/pod"
+  server_sha >"$STATE/pod-server"
   log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h, pod-side)"
 }
 
+# $2: epoch the pod was (re)started at. Right after a start the proxy can
+# still answer from the stopped container ("ready after 0s", then 502s), so
+# only a server that booted after that counts.
 wait_ready() {
-  local id="$1" t0 h phase="" last=""
+  local id="$1" since="${2:-0}" t0 h phase="" last="" boot
   t0=$(date +%s)
   while :; do
     h="$(curl -sS --max-time 15 "$(base_url "$id")/healthz" 2>/dev/null || true)"
     phase="$(jq -r '.phase // empty' <<<"$h" 2>/dev/null || true)"
+    boot="$(jq -r '.boot // 0' <<<"$h" 2>/dev/null || echo 0)"
+    if [[ -n "$phase" ]] && (( ${boot%.*} > 0 && ${boot%.*} < since - 30 )); then
+      phase=""  # the previous container
+    fi
     [[ -n "$phase" && "$phase" != "$last" ]] && { log "pod setup: $phase"; last="$phase"; }
     [[ "$phase" == ready ]] && break
     [[ "$phase" == failed ]] && { svc GET /v1/status | jq -c .setup >&2; die "pod setup failed"; }
@@ -199,7 +233,7 @@ cmd_up() {
   need_key
   require_tools curl jq openssl gzip base64 sha256sum
   check_balance
-  local pod id status vol dc
+  local pod id status vol dc since=0
   pod="$(pod_json)"
   if [[ -n "$pod" ]]; then
     id="$(jq -r .id <<<"$pod")"
@@ -210,8 +244,15 @@ cmd_up() {
         [[ -s "$AUTH_FILE" ]] || die "pod $id is running but this container has no token; run: build-pod.sh down && build-pod.sh up"
         log "reusing running pod $id" ;;
       EXITED)
-        log "starting stopped pod $id"
-        if rest POST "/pods/$id/start" >/dev/null 2>&1; then
+        # A stopped pod restarts with the server it was created with (it is
+        # sent in the pod's env); recreate it when this checkout's differs.
+        # Nothing is lost: the container disk does not survive a stop anyway.
+        if [[ "$(cat "$STATE/pod-server" 2>/dev/null)" != "$(server_sha)" ]]; then
+          log "stopped pod $id runs an older server; terminating it and creating a new pod"
+          rest DELETE "/pods/$id" >/dev/null || true
+          ledger "pod-deleted $id server-update"
+          pod=""
+        elif log "starting stopped pod $id" && since=$(date +%s) && rest POST "/pods/$id/start" >/dev/null 2>&1; then
           ledger "pod-started $id"
         else
           log "start refused; terminating $id and creating a new pod"
@@ -226,12 +267,13 @@ cmd_up() {
     vol="$(volume_json)"
     [[ -n "$vol" ]] || die "no network volume named $VOL_NAME; run: build-pod.sh volume-create"
     dc="$(jq -r .dataCenterId <<<"$vol")"
+    since=$(date +%s)
     create_pod "$(jq -r .id <<<"$vol")" "$dc"
     id="$(cat "$STATE/pod")"
   fi
-  wait_ready "$id"
+  wait_ready "$id" "$since"
   local srv_local srv_pod
-  srv_local="$(sha256sum "$HERE/build-pod-server.py" | cut -c1-12)"
+  srv_local="$(server_sha)"
   srv_pod="$(svc GET /v1/status | jq -r '.server_sha // ""')"
   [[ "$srv_pod" == "$srv_local" ]] || log "note: pod runs server $srv_pod, this checkout has $srv_local (down + up to update)"
 }
@@ -259,7 +301,9 @@ cmd_sync() {
   agent="$(agent_name "${1:?agent}")"
   t0=$(date +%s)
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/fv-build-sync.XXXXXX")"
-  trap 'rm -rf "$tmp"' RETURN
+  # A RETURN trap outlives this function (it would fire again when cmd_run
+  # returns, with $tmp unset under set -u): clear it as it fires.
+  trap 'rm -rf "${tmp:-}"; trap - RETURN' RETURN
   svc GET "/v1/agents/$agent/manifest" >"$tmp/remote"
   {
     git -C "$FV_ROOT" ls-files -z --recurse-submodules
@@ -292,7 +336,9 @@ PY
   n_deleted="$(tr -cd '\0' <"$tmp/deleted" | wc -c)"
   if (( n_changed > 0 )); then
     tar -C "$FV_ROOT" --null -T "$tmp/changed" --format=gnu -cf - | gzip -1 >"$tmp/upload.tgz"
-    svc PUT "/v1/agents/$agent/files" --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip' >/dev/null
+    # A first full snapshot (~1400 files, 29 MB) takes about a minute to
+    # extract onto the network volume; allow far more than the default 90 s.
+    FV_BUILD_HTTP_TIMEOUT="${FV_BUILD_SYNC_TIMEOUT:-900}" svc PUT "/v1/agents/$agent/files" --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip' >/dev/null
   fi
   if (( n_deleted > 0 )); then
     svc POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted" >/dev/null
@@ -350,8 +396,16 @@ cmd_fetch() {
   dest="${3:-$FV_ROOT/artifacts/build-pod/$agent/$path}"
   mkdir -p "$(dirname "$dest")"
   t0=$(date +%s)
-  FV_BUILD_HTTP_TIMEOUT=900 svc GET "/v1/agents/$agent/artifact?path=$(jq -rn --arg p "$path" '$p|@uri')&gz=1" \
-    | gunzip >"$dest.part"
+  # Download first, so a 404 shows the pod's error instead of a gunzip one.
+  if ! FV_BUILD_HTTP_TIMEOUT=900 svc GET "/v1/agents/$agent/artifact?path=$(jq -rn --arg p "$path" '$p|@uri')&gz=1" \
+    -o "$dest.gz.part"; then
+    local err
+    err="$(jq -r '.error // empty' "$dest.gz.part" 2>/dev/null || true)"
+    rm -f "$dest.gz.part"
+    die "fetch $path failed${err:+: $err}"
+  fi
+  gunzip <"$dest.gz.part" >"$dest.part"
+  rm -f "$dest.gz.part"
   mv -f "$dest.part" "$dest"
   chmod +x "$dest" 2>/dev/null || true
   log "fetched $path → $dest ($(du -h "$dest" | cut -f1), $(( $(date +%s) - t0 ))s)"
@@ -397,6 +451,7 @@ case "${1:-}" in
   sync) shift; cmd_sync "$@" ;;
   run) shift; cmd_run "$@" ;;
   log) follow "${2:?job id}" ;;
+  cancel) svc POST "/v1/jobs/${2:?job id}/cancel" | jq -c '{id, agent, state}' ;;
   fetch) shift; cmd_fetch "$@" ;;
   clean) svc POST "/v1/agents/$(agent_name "${2:?agent}")/clean" -d "{\"what\":\"${3:-all}\"}" | jq -c . ;;
   stop) cmd_stop ;;

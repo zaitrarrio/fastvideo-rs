@@ -33,7 +33,7 @@ use bytes::Bytes;
 use fastvideo_media::lockstep::{self, Slice, EMIT_FRAMES, WIRE_RATE};
 use fastvideo_media::opus::{OpusConfig, OpusEncoder};
 use fastvideo_media::pacer::{AvPacer, AvPacerConfig, Metronome, VideoOut};
-use fastvideo_media::queue::DropOldest;
+use fastvideo_media::queue::{DropOldest, GapKeyframes};
 use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config, PublishTarget, VideoEncoder};
 use fastvideo_media::RgbFrame;
 use fastvideo_webrtc::writer::KeyframeLimiter;
@@ -202,6 +202,7 @@ impl<S: MediaSink> MediaLoop<S> {
             gauges: self.gauges.clone(),
             video: Video::None,
             pending_rtp: VecDeque::new(),
+            gaps: GapKeyframes::default(),
         };
         std::thread::Builder::new().name("wma-video-enc".into()).spawn(move || enc.run())?;
         std::thread::Builder::new().name("wma-playout".into()).spawn(move || self.run())
@@ -381,9 +382,18 @@ struct VideoThread<S: MediaSink> {
     gauges: Arc<MediaGauges>,
     video: Video,
     pending_rtp: VecDeque<u64>,
+    gaps: GapKeyframes,
 }
 
 impl<S: MediaSink> VideoThread<S> {
+    fn send(&mut self, data: Bytes, rtp: u64, keyframe: bool) {
+        if keyframe {
+            self.gaps.sent(Instant::now());
+        }
+        self.sink.video(data, rtp, keyframe);
+        self.gauges.video_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn run(mut self) {
         loop {
             let Some((f, rtp)) = self.q.pop_timeout(Duration::from_millis(50)) else {
@@ -397,8 +407,7 @@ impl<S: MediaSink> VideoThread<S> {
                         Ok(frames) => {
                             for x in frames {
                                 let t = self.pending_rtp.pop_front().unwrap_or_default();
-                                self.sink.video(x.data, t, x.keyframe);
-                                self.gauges.video_packets.fetch_add(1, Ordering::Relaxed);
+                                self.send(x.data, t, x.keyframe);
                             }
                         }
                         Err(e) => {
@@ -410,15 +419,26 @@ impl<S: MediaSink> VideoThread<S> {
                 }
                 continue;
             };
-            // A gap in the sequence (drop-oldest) needs a keyframe.
-            if self.q.take_dropped() {
+            // A gap in the sequence (drop-oldest) needs a keyframe, unless
+            // one is on its way or just went out. (A pipe encoder restarts
+            // ffmpeg for a keyframe; frames dropped while it starts must
+            // not restart it again.)
+            if self.q.take_dropped() && self.gaps.gap_needs_keyframe(Instant::now()) {
                 self.keyframe.store(true, Ordering::Relaxed);
             }
             if self.keyframe.swap(false, Ordering::Relaxed) {
                 match &mut self.video {
-                    Video::H264(e) => e.force_idr(),
-                    Video::Libvpx(e) => e.force_keyframe(),
+                    Video::H264(e) => {
+                        e.force_idr();
+                        self.gaps.forced();
+                    }
+                    Video::Libvpx(e) => {
+                        e.force_keyframe();
+                        self.gaps.forced();
+                    }
+                    // Intra-only: every frame is a keyframe.
                     Video::Vp8(_) => {}
+                    // Opened with the next frame, a keyframe.
                     Video::None => {}
                 }
             }
@@ -458,6 +478,7 @@ impl<S: MediaSink> VideoThread<S> {
     fn encode_video(&mut self, f: &RgbFrame, rtp: u64) -> Result<(), String> {
         if matches!(self.video, Video::None) {
             self.open_video(f)?;
+            self.gaps.forced();
         }
         let out: Vec<(u64, Bytes, bool)> = match &mut self.video {
             Video::H264(e) => {
@@ -475,8 +496,7 @@ impl<S: MediaSink> VideoThread<S> {
             Video::None => Vec::new(),
         };
         for (t, data, key) in out {
-            self.sink.video(data, t, key);
-            self.gauges.video_packets.fetch_add(1, Ordering::Relaxed);
+            self.send(data, t, key);
         }
         Ok(())
     }
