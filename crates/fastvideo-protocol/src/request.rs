@@ -123,6 +123,8 @@ pub enum Family {
     Wan,
     /// MMAudio (V2A sidecar).
     MmAudio,
+    /// Transport test models (the duplex loopback echo): no weights.
+    Loopback,
 }
 
 /// What the client asked for, before capability checks.

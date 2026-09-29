@@ -12,6 +12,8 @@
 //!   [`SubmitEndpoint`], [`JobView`] traits.
 //! - [`stream`]: [`TrackSet`], [`StreamProtocol`], session types.
 //! - [`av`]: raw [`RgbFrame`] / [`Pcm`] buffers.
+//! - [`ingest`]: duplex streaming: [`DuplexCaps`], input tracks, decoded
+//!   [`InputFrame`] / [`InputAudio`], the session [`SessionContext`].
 //!
 //! No tokio runtime and no axum: only `tokio::sync` for `JobStore::watch`.
 //!
@@ -21,6 +23,7 @@ pub mod av;
 pub mod caps;
 pub mod error;
 pub mod http;
+pub mod ingest;
 pub mod job;
 pub mod negotiate;
 pub mod request;
@@ -35,6 +38,10 @@ pub use error::{ApiError, ErrorKind, GapId};
 pub use http::{
     BatchProtocol, ErrorCtx, HttpReply, JobView, NormalizeCtx, ReplyBody, SseEvent, SseFollow,
     SseSpec, SubmitEndpoint, UrlSigner, ViewCtx,
+};
+pub use ingest::{
+    AudioInputCaps, DuplexCaps, DuplexSpec, InputAudio, InputCaps, InputFrame, InputVideoCodec, SessionContext,
+    VideoInputCaps, CONTEXT_MAX_CHARS,
 };
 pub use job::{
     Artifact, ArtifactId, ArtifactLocation, CallbackSpec, Job, JobId, JobMetrics, JobSnapshot,

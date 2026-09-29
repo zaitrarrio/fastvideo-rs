@@ -65,6 +65,7 @@ pub fn tier_alias(family: Family, tier: Tier) -> String {
         Family::Ltx2 => "ltx",
         Family::Wan => "wan",
         Family::MmAudio => "mmaudio",
+        Family::Loopback => "loopback",
     };
     match (family, tier) {
         (Family::Ltx2, Tier::Max) => "ltx-pro".to_owned(),

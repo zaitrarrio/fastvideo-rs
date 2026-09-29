@@ -70,7 +70,7 @@ pub fn tier_alias(family: Family, tier: Tier) -> Option<&'static str> {
         (Family::Wan, Tier::Max) => "wan-max",
         (Family::Wan, Tier::Turbo) => "wan-turbo",
         (Family::Wan, Tier::Draft) => "wan-draft",
-        (Family::MmAudio, _) => return None,
+        (Family::MmAudio | Family::Loopback, _) => return None,
     })
 }
 
