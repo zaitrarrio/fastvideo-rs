@@ -346,6 +346,13 @@ pub enum Stage {
         /// `num_frames / frame_rate`.
         #[arg(long)]
         audio: Option<PathBuf>,
+        /// Retake / extend (`ltx_pipelines/retake.py`, LTX-Desktop's extend;
+        /// one distilled stage at `--width` x `--height`): the oracle's spec,
+        /// `retake:SRC:START:END:av|v|a` or `extend:SRC:FRAMES:start|end`.
+        /// The frame count and rate follow the source (the whole source, cut
+        /// to 8k+1 frames, plus any extension); not with `--two-stage`.
+        #[arg(long)]
+        edit: Option<String>,
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
@@ -636,6 +643,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             reference_strength,
             ic_lora_strength,
             audio,
+            edit,
             sol_stage2,
             dense_stage2,
             pisa_stage2,
@@ -753,6 +761,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     audio: audio
                         .clone()
                         .map(fastvideo_cudarc::ltx2::a2v::DrivingAudio::new),
+                    edit: edit
+                        .as_deref()
+                        .map(fastvideo_cudarc::ltx2::v2v::VideoEdit::from_spec)
+                        .transpose()
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
                 },
             )
         }
@@ -1986,6 +1999,17 @@ fn gen(
     let multi = *multi;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
     let cfg = model_version.config();
+    // Retake / extend: the frame count and rate follow the source.
+    let mut g = g;
+    if let Some(e) = &extras.edit {
+        g.num_frames = e.target_frames();
+        g.frame_rate = e.source_fps;
+        report.set(
+            "edit",
+            json!({"source": e.source.display().to_string(), "kind": format!("{:?}", e.kind), "window_frames": e.window_frames,
+                   "source_fps": e.source_fps, "source_audio": e.source_audio, "region": [e.region().0, e.region().1]}),
+        );
+    }
     let request = Ltx2Request {
         prompt: prompt.to_string(),
         height: g.height,
@@ -2013,6 +2037,7 @@ fn gen(
         skip_audio_decode: extras.skip_audio_decode,
         reference: extras.reference.clone(),
         audio: extras.audio.clone(),
+        edit: extras.edit.clone(),
     };
     if let Some(a) = &extras.audio {
         report.set("audio_in", json!({"path": a.path.display().to_string()}));
@@ -2351,6 +2376,8 @@ struct GenExtras {
     reference: Option<fastvideo_cudarc::ltx2::pipeline::IcReference>,
     /// `--audio` (audio-to-video).
     audio: Option<fastvideo_cudarc::ltx2::a2v::DrivingAudio>,
+    /// `--edit` (retake / extend).
+    edit: Option<fastvideo_cudarc::ltx2::v2v::VideoEdit>,
 }
 
 /// `PATH@FRAME[@STRENGTH[@CRF]]` → a conditioning image.

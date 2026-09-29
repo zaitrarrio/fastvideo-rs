@@ -9,6 +9,7 @@
 //! | `minimax/h3` (base) | [`AppKind::H3Base`] | the same; `resolution` `480P 768P 2K 4K` |
 //! | `lightricks/ltx-2.5` | [`AppKind::Ltx25`] | `{text,image}-to-video/{fast,pro}` ([`ltx`]) |
 //! | `fal-ai/ltx-2.3-quality` | [`AppKind::LtxQuality`] | `ingredient` ([`ingredient`]: reference-sheet video, `ltx-pro` Ref2V) |
+//! | `fal-ai/ltx-2.3` | [`AppKind::Ltx23`] | `retake-video`, `extend-video` ([`edit`]: LTX-2.5 retake / extend on `ltx-pro`) |
 //! | `fal-ai/wan` | [`AppKind::Wan`] | `v2.2-5b/text-to-video`, `v2.2-5b/image-to-video`, `v2.2-5b/text-to-video/fast-wan` ([`wan`]) |
 //!
 //! The H3 fields:
@@ -39,6 +40,7 @@
 //! so an omitted `resolution` means `768P` here.
 
 pub mod a2v;
+pub mod edit;
 pub mod ingredient;
 pub mod ltx;
 pub mod wan;
@@ -51,6 +53,7 @@ use fastvideo_protocol::{
 };
 
 pub use a2v::LtxA2vInput;
+pub use edit::LtxEditInput;
 pub use ingredient::IngredientInput;
 pub use ltx::{LtxClass, LtxInput};
 pub use wan::{WanInput, WanVariant};
@@ -97,6 +100,10 @@ pub enum Endpoint {
     WanFastWan,
     /// `fal-ai/ltx-2.3-quality/ingredient` (reference sheet, IC-LoRA).
     LtxIngredient,
+    /// `fal-ai/ltx-2.3/retake-video`.
+    LtxRetake,
+    /// `fal-ai/ltx-2.3/extend-video`.
+    LtxExtend,
 }
 
 impl Endpoint {
@@ -119,8 +126,10 @@ impl Endpoint {
     pub const WAN: [Endpoint; 3] = [Endpoint::WanTextToVideo, Endpoint::WanImageToVideo, Endpoint::WanFastWan];
     /// `fal-ai/ltx-2.3-quality`.
     pub const LTX_QUALITY: [Endpoint; 1] = [Endpoint::LtxIngredient];
+    /// `fal-ai/ltx-2.3`.
+    pub const LTX23: [Endpoint; 2] = [Endpoint::LtxRetake, Endpoint::LtxExtend];
     /// Every endpoint of every family.
-    pub const EVERY: [Endpoint; 13] = [
+    pub const EVERY: [Endpoint; 15] = [
         Endpoint::TextToVideo,
         Endpoint::ImageToVideo,
         Endpoint::ReferenceToVideo,
@@ -134,6 +143,8 @@ impl Endpoint {
         Endpoint::WanImageToVideo,
         Endpoint::WanFastWan,
         Endpoint::LtxIngredient,
+        Endpoint::LtxRetake,
+        Endpoint::LtxExtend,
     ];
 
     /// The path after the app id (one or more segments).
@@ -152,6 +163,8 @@ impl Endpoint {
             Endpoint::WanImageToVideo => "v2.2-5b/image-to-video",
             Endpoint::WanFastWan => "v2.2-5b/text-to-video/fast-wan",
             Endpoint::LtxIngredient => "ingredient",
+            Endpoint::LtxRetake => "retake-video",
+            Endpoint::LtxExtend => "extend-video",
         }
     }
 
@@ -175,6 +188,8 @@ impl Endpoint {
             Endpoint::WanImageToVideo => "Image to Video · 5B",
             Endpoint::WanFastWan => "Text to Video · FastWan",
             Endpoint::LtxIngredient => "Reference Sheet to Video · Ingredients",
+            Endpoint::LtxRetake => "Retake Video",
+            Endpoint::LtxExtend => "Extend Video",
         }
     }
 
@@ -190,7 +205,9 @@ impl Endpoint {
             Endpoint::LtxTextToVideoPro
             | Endpoint::LtxImageToVideoPro
             | Endpoint::LtxAudioToVideoPro
-            | Endpoint::LtxIngredient => (Family::Ltx2, Tier::Max),
+            | Endpoint::LtxIngredient
+            | Endpoint::LtxRetake
+            | Endpoint::LtxExtend => (Family::Ltx2, Tier::Max),
             Endpoint::WanTextToVideo | Endpoint::WanImageToVideo => (Family::Wan, Tier::Max),
             Endpoint::WanFastWan => (Family::Wan, Tier::Turbo),
         })
@@ -212,6 +229,8 @@ pub enum AppKind {
     Wan,
     /// `fal-ai/ltx-2.3-quality` (the `ingredient` endpoint).
     LtxQuality,
+    /// `fal-ai/ltx-2.3` (the `retake-video` and `extend-video` endpoints).
+    Ltx23,
 }
 
 impl AppKind {
@@ -221,6 +240,7 @@ impl AppKind {
             "lightricks/ltx-2.5" => AppKind::Ltx25,
             "fal-ai/wan" => AppKind::Wan,
             "fal-ai/ltx-2.3-quality" => AppKind::LtxQuality,
+            "fal-ai/ltx-2.3" => AppKind::Ltx23,
             _ => AppKind::H3,
         }
     }
@@ -230,6 +250,7 @@ impl AppKind {
             AppKind::Ltx25 => &Endpoint::LTX,
             AppKind::Wan => &Endpoint::WAN,
             AppKind::LtxQuality => &Endpoint::LTX_QUALITY,
+            AppKind::Ltx23 => &Endpoint::LTX23,
         }
     }
     /// Whether the app has the H3 WMA director (`{app}/director`).
@@ -403,6 +424,8 @@ pub enum FalInput {
     Ingredient(IngredientInput),
     /// `lightricks/ltx-2.5/audio-to-video/*`.
     LtxA2v(LtxA2vInput),
+    /// `fal-ai/ltx-2.3/{retake,extend}-video`.
+    LtxEdit(LtxEditInput),
 }
 
 // ---------------------------------------------------------------- parsing
@@ -590,6 +613,8 @@ impl FalInput {
             Endpoint::LtxIngredient => return Ok(FalInput::Ingredient(ingredient::parse(&f)?)),
             Endpoint::LtxAudioToVideoFast => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Fast)?)),
             Endpoint::LtxAudioToVideoPro => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Pro)?)),
+            Endpoint::LtxRetake => return Ok(FalInput::LtxEdit(edit::parse_retake(&f)?)),
+            Endpoint::LtxExtend => return Ok(FalInput::LtxEdit(edit::parse_extend(&f)?)),
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {}
         }
         let common = parse_common(&f, kind.h3_resolutions())?;
@@ -653,6 +678,8 @@ impl FalInput {
                 LtxClass::Fast => Endpoint::LtxAudioToVideoFast,
                 LtxClass::Pro => Endpoint::LtxAudioToVideoPro,
             },
+            FalInput::LtxEdit(i) if i.is_retake() => Endpoint::LtxRetake,
+            FalInput::LtxEdit(_) => Endpoint::LtxExtend,
         }
     }
 
@@ -662,7 +689,7 @@ impl FalInput {
             FalInput::TextToVideo { common, .. }
             | FalInput::ImageToVideo { common, .. }
             | FalInput::ReferenceToVideo { common, .. } => Some(common),
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) => None,
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) | FalInput::LtxEdit(_) => None,
         }
     }
 
@@ -730,7 +757,7 @@ impl FalInput {
                     a => aspect_canvas(*a, short_edge),
                 };
             }
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) => {}
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) | FalInput::LtxEdit(_) => {}
         }
         Ok(r)
     }
@@ -743,6 +770,7 @@ impl FalInput {
             FalInput::Wan(i) => i.normalize(model)?,
             FalInput::Ingredient(i) => i.normalize(model)?,
             FalInput::LtxA2v(i) => i.normalize(model)?,
+            FalInput::LtxEdit(i) => i.normalize(model)?,
             _ => self.normalize_h3(model)?,
         };
         if let Some(hook) = cx.query_param("fal_webhook") {
@@ -1069,5 +1097,40 @@ mod tests {
         default_resolution_for(&mut r, &[480]);
         assert_eq!(edge(&r), 480);
         assert!(matches!(r.canvas, CanvasSpec::Aspect { ratio, .. } if ratio.w == 9 && ratio.h == 16));
+    }
+
+    #[test]
+    fn retake_and_extend_are_edits_on_ltx_pro() {
+        let kind = AppKind::of("fal-ai/ltx-2.3");
+        assert_eq!(kind, AppKind::Ltx23);
+        assert_eq!(kind.endpoints(), &[Endpoint::LtxRetake, Endpoint::LtxExtend]);
+        assert_eq!(Endpoint::from_sub("retake-video"), Some(Endpoint::LtxRetake));
+        assert_eq!(Endpoint::LtxExtend.target(), Some((Family::Ltx2, Tier::Max)));
+        let body = json!({"video_url": "https://a.test/v.mp4", "prompt": "the dog jumps", "start_time": 1.5, "retake_mode": "replace_video", "seed": 7});
+        let i = FalInput::parse_for(kind, Endpoint::LtxRetake, &body).unwrap();
+        assert_eq!(i.endpoint(), Endpoint::LtxRetake);
+        let r = i.normalize("ltx-pro", &cx()).unwrap();
+        assert_eq!((r.task, r.seed, r.prompt.as_str()), (Task::Retake, Some(7), "the dog jumps"));
+        assert_eq!(
+            r.edit.as_ref().unwrap().op,
+            fastvideo_protocol::EditOp::Retake { start_s: 1.5, duration_s: 5.0, mode: fastvideo_protocol::RetakeMode::ReplaceVideo }
+        );
+        let x = FalInput::parse_for(kind, Endpoint::LtxExtend, &json!({"video_url": "https://a.test/v.mp4", "duration": 2.5, "mode": "start", "context": 4})).unwrap();
+        let r = x.normalize("ltx-pro", &cx()).unwrap();
+        assert_eq!((r.task, r.prompt.as_str()), (Task::Extend, ""));
+        assert_eq!(
+            r.edit.unwrap().op,
+            fastvideo_protocol::EditOp::Extend { duration_s: 2.5, at: fastvideo_protocol::ExtendAt::Start, context_s: Some(4.0) }
+        );
+        for (e, b, param) in [
+            (Endpoint::LtxRetake, json!({"prompt": "p"}), "video_url"),
+            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4"}), "prompt"),
+            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "start_time": 21}), "start_time"),
+            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "duration": 1}), "duration"),
+            (Endpoint::LtxExtend, json!({"video_url": "https://a.test/v.mp4", "context": 25}), "context"),
+            (Endpoint::LtxExtend, json!({"video_url": "https://a.test/v.mp4", "mode": "both"}), "mode"),
+        ] {
+            assert_eq!(FalInput::parse_for(kind, e, &b).unwrap_err().param.as_deref(), Some(param), "{b}");
+        }
     }
 }

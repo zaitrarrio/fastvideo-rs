@@ -4,6 +4,7 @@
 //! and `pipelines/ltx2`. See docs/ports/ltx2.md.
 
 pub mod config;
+pub mod edit;
 pub mod fbcache;
 pub mod hq;
 pub mod lora;

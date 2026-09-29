@@ -334,26 +334,42 @@ impl VideoEncoder {
     /// One frame, `pixels` `[3, H, W]` row-major in `[-1, 1]` → the
     /// normalized latent `[1, C, 1, H/32, W/32]`.
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Result<CudaTensor> {
+        self.encode_video(pixels, 1, height, width)
+    }
+
+    /// A clip, `pixels` `[3, F, H, W]` row-major in `[-1, 1]` (`F = 8k + 1`)
+    /// → the normalized latent `[1, C, (F − 1)/8 + 1, H/32, W/32]` on the
+    /// host (`VideoEncoder.forward`: causal in time, the first frame alone
+    /// in the first latent frame).
+    pub fn encode_video(&self, pixels: &[f32], frames: usize, height: usize, width: usize) -> Result<CudaTensor> {
         let p = self.patch;
-        if pixels.len() != 3 * height * width || height % p != 0 || width % p != 0 {
+        if frames == 0
+            || pixels.len() != 3 * frames * height * width
+            || height % p != 0
+            || width % p != 0
+        {
             return Err(msg(format!(
-                "ltx2 encoder: {} pixels for 3x{height}x{width} (patch {p})",
+                "ltx2 encoder: {} pixels for 3x{frames}x{height}x{width} (patch {p})",
                 pixels.len()
             )));
         }
         let (ph, pw) = (height / p, width / p);
         let cin = 3 * p * p;
-        let mut patched = vec![0f32; cin * ph * pw];
+        let plane = height * width;
+        let mut patched = vec![0f32; cin * frames * ph * pw];
         for c in 0..3 {
-            for y in 0..height {
-                for x in 0..width {
-                    // channel = (c·p + r)·p + q, r the column and q the row in the patch.
-                    let k = (c * p + x % p) * p + y % p;
-                    patched[(k * ph + y / p) * pw + x / p] = pixels[(c * height + y) * width + x];
+            for t in 0..frames {
+                let src = &pixels[(c * frames + t) * plane..(c * frames + t + 1) * plane];
+                for y in 0..height {
+                    for x in 0..width {
+                        // channel = (c·p + r)·p + q, r the column and q the row in the patch.
+                        let k = (c * p + x % p) * p + y % p;
+                        patched[((k * frames + t) * ph + y / p) * pw + x / p] = src[y * width + x];
+                    }
                 }
             }
         }
-        let mut x = CudaTensor::from_vec(patched, vec![1, cin, 1, ph, pw])?.to_device()?;
+        let mut x = CudaTensor::from_vec(patched, vec![1, cin, frames, ph, pw])?.to_device()?;
         x = self.conv_in.forward(&x)?;
         for block in &self.blocks {
             for r in &block.resnets {

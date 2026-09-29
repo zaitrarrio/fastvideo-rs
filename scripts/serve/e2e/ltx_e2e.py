@@ -259,7 +259,7 @@ I2V_PROMPT = ("Aerial drone shot of a tropical beach: turquoise sea waves roll i
 
 def data_uri(path):
     import base64
-    mime = {"png": "image/png", "flac": "audio/flac", "wav": "audio/wav", "mp3": "audio/mpeg"}.get(
+    mime = {"png": "image/png", "flac": "audio/flac", "wav": "audio/wav", "mp3": "audio/mpeg", "mp4": "video/mp4"}.get(
         path.rsplit(".", 1)[-1], "image/jpeg")
     return f"data:{mime};base64," + base64.b64encode(open(path, "rb").read()).decode()
 
@@ -369,6 +369,39 @@ def native_i2v(case, size, last=False, seconds=5):
         record(case + "-fidelity", api="frame fidelity (ffmpeg)", ok=True, **frame_fidelity(p, pins, w, h))
 
 
+# Retake / extend (docs/oracle.md "LTX-2.5 retake and extend"): the oracle's beach
+# push-in (768x512, 121 frames at 24 fps, the speech clip as its soundtrack).
+SOURCE = os.path.join(FIXTURES, "beach-push-768x512-24fps.mp4")
+RETAKE_PROMPT = ("A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, "
+                 "a narrator speaks calmly.")
+EXTEND_PROMPT = ("The camera keeps pushing in slowly over the rocky beach at golden hour, waves rolling onto the "
+                 "sand, a narrator speaks calmly.")
+
+
+def kept_fidelity(case, spans, shift=0):
+    """SSIM / PSNR of the output's kept frames against the source's: `spans` are
+    [start, end) source frame ranges, found in the output `shift` frames later."""
+    p = f"{OUT}/mp4/{case}.mp4"
+    if not os.path.exists(p):
+        return
+    sel = "+".join(f"between(n\\,{a}\\,{b - 1})" for a, b in spans)
+    osel = "+".join(f"between(n\\,{a + shift}\\,{b - 1 + shift})" for a, b in spans)
+    out = {}
+    for m in ("ssim", "psnr"):
+        lav = (f"[0:v]select='{osel}',setpts=N/24/TB,format=yuv420p[a];"
+               f"[1:v]select='{sel}',setpts=N/24/TB,format=yuv420p[b];[a][b]{m}")
+        r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", p, "-i", SOURCE, "-lavfi", lav, "-f", "null", "-"],
+                           capture_output=True, text=True)
+        line = [x for x in r.stderr.splitlines() if f"Parsed_{m}" in x]
+        out[m] = line[-1].split("] ", 1)[-1] if line else r.stderr[-200:]
+    ok = False
+    try:
+        ok = float(out["ssim"].split("All:")[1].split()[0]) > 0.8
+    except Exception:  # noqa: BLE001
+        pass
+    record(case + "-kept", api="kept frames vs source (ffmpeg)", ok=ok, spans=spans, shift=shift, **out)
+
+
 CASES = {
     "probe": lambda: probe("probe"),
     # warm-up + v2 at 720p
@@ -434,6 +467,36 @@ CASES = {
         ltx_error("a2v-err-no-prompt", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(SPEECH)}, 400, "invalid_request_error"),
         ltx_error("a2v-err-pro-unserved", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(SPEECH), "prompt": "p", "model": "ltx-2-5-pro"}, 403, "permission_error"),
         ltx_error("a2v-err-image-as-audio", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(BEACH), "prompt": "p", "model": "ltx-2-5-fast"}, 400, "invalid_request_error"),
+    ],
+    # Retake [1.5, 3.5) s of both streams on the LTX API: the whole clip comes back
+    # (121 frames at 24 fps, 768x512, with audio); latent frames 5..11 (pixel frames
+    # 33..88) are regenerated, the rest are VAE round trips of the source.
+    "retake-v2": lambda: (
+        ltx_v2("retake-v2", {"video_uri": data_uri(SOURCE), "start_time": 1.5, "duration": 2, "prompt": RETAKE_PROMPT},
+               expect(121, 24, audio=True), endpoint="retake"),
+        kept_fidelity("retake-v2", [(0, 33), (89, 121)])),
+    # Retake the audio only (the video frozen) on fal: every frame is kept.
+    "retake-fal-audio": lambda: (
+        fal_queue("retake-fal-audio", "fal-ai/ltx-2.3", {"video_url": data_uri(SOURCE), "prompt": RETAKE_PROMPT,
+                  "start_time": 1.5, "duration": 2, "retake_mode": "replace_audio", "seed": 7},
+                  expect(121, 24, audio=True), sub="retake-video"),
+        kept_fidelity("retake-fal-audio", [(0, 121)])),
+    # Extend 2 s after the end on fal: 169 frames, the source's 0..104 kept.
+    "extend-fal": lambda: (
+        fal_queue("extend-fal", "fal-ai/ltx-2.3", {"video_url": data_uri(SOURCE), "prompt": EXTEND_PROMPT,
+                  "duration": 2, "seed": 7}, expect(169, 24, audio=True), sub="extend-video"),
+        kept_fidelity("extend-fal", [(0, 105)])),
+    # Extend 2 s before the start with 2 s of context (native): the model sees the
+    # first 41 source frames; the other 80 are copied after the generated clip
+    # (48 + 41 generated, + 80 stitched = 169 frames).
+    "extend-native-start": lambda: (
+        native("extend-native-start", {"model": "ltx-pro", "prompt": EXTEND_PROMPT, "video_url": data_uri(SOURCE),
+               "extend_s": 2, "extend_at": "start", "context_s": 2, "seed": 7}, expect(169, 24, audio=True)),
+        kept_fidelity("extend-native-start", [(41, 121)], shift=48)),
+    "edit-errors": lambda: [
+        ltx_error("retake-err-past-end", "POST", "/v2/retake", {"video_uri": data_uri(SOURCE), "start_time": 6, "duration": 2}, 400, "invalid_request_error"),
+        ltx_error("extend-err-image", "POST", "/v2/extend", {"video_uri": data_uri(BEACH), "duration": 2}, 400, "invalid_request_error"),
+        ltx_error("extend-err-too-long", "POST", "/v2/extend", {"video_uri": data_uri(SOURCE), "duration": 25}, 400, "invalid_request_error"),
     ],
     "pro-err-20s": lambda: ltx_error("pro-err-20s", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro", seconds=20), 400, "invalid_request_error"),
 }

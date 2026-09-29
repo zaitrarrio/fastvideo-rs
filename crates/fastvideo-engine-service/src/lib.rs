@@ -32,6 +32,7 @@ pub mod fake;
 pub mod pool;
 pub mod scheduler;
 pub mod service;
+pub mod stitch;
 pub mod stream;
 pub mod cuda;
 

@@ -408,6 +408,139 @@ impl DecodePlan {
     }
 }
 
+impl TileSizeConfig {
+    /// `TileSizeConfig.default()` (`tiling.py:747-752`): 80 / 24 frames and
+    /// 768 / 64 pixels on both spatial axes. `video_latent_from_file` encodes
+    /// with it when no layout is given (`helpers.py:165-233`), as
+    /// `retake.py` does.
+    pub fn encode_default() -> Self {
+        Self {
+            frames: DimSize::new(80, 24),
+            height: DimSize::new(768, 64),
+            width: DimSize::new(768, 64),
+        }
+    }
+}
+
+/// One encode tile along one axis (`prepare_tiles_for_encoding`,
+/// `video_vae.py:420-478`): the pixel range the encoder reads, the latent
+/// range it writes, and its blend weights in latent units (`None` on an
+/// untiled axis).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodeAxisTile {
+    pub input: std::ops::Range<usize>,
+    pub latent: std::ops::Range<usize>,
+    pub mask: Option<Vec<f32>>,
+}
+
+/// The encode tiles of one axis whose latent length is `len`. The split is
+/// [`axis_tiles`]'s (`to_splitters`, causal in time); the input slice is
+/// `map_temporal_slice` / `map_spatial_slice`, and the mask is the
+/// trapezoid of the latent interval (`compute_trapezoidal_mask_1d`, from 0
+/// on the left in time).
+pub fn encode_axis_tiles(len: usize, cfg: DimSize, factor: usize, axis: Axis) -> Vec<EncodeAxisTile> {
+    let in_len = match axis {
+        Axis::Time => (len.max(1) - 1) * factor + 1,
+        Axis::Space => len * factor,
+    };
+    if !cfg.is_tiled() {
+        return vec![EncodeAxisTile {
+            input: 0..in_len,
+            latent: 0..len,
+            mask: None,
+        }];
+    }
+    let size = cfg.tile_size / factor;
+    let overlap = cfg.overlap / factor;
+    let tile = size.max(2usize.max(overlap + 1));
+    let intervals = match axis {
+        Axis::Time => split_temporal_causal(len, tile, overlap),
+        Axis::Space => split_by_size(len, tile, overlap),
+    };
+    intervals
+        .into_iter()
+        .map(|iv| {
+            let input = match axis {
+                Axis::Time => iv.start * factor..1 + (iv.end - 1) * factor,
+                Axis::Space => iv.start * factor..iv.end * factor,
+            };
+            let mask = trapezoidal_mask(iv.end - iv.start, iv.left_ramp, iv.right_ramp, axis == Axis::Time);
+            EncodeAxisTile {
+                input,
+                latent: iv.start..iv.end,
+                mask: Some(mask),
+            }
+        })
+        .collect()
+}
+
+/// Per-latent-position sum of the encode tiles' weights along one axis.
+pub fn encode_weight_sum(tiles: &[EncodeAxisTile], len: usize) -> Vec<f32> {
+    let mut acc = vec![0.0f32; len];
+    for t in tiles {
+        match &t.mask {
+            Some(m) => {
+                for (a, w) in acc[t.latent.clone()].iter_mut().zip(m) {
+                    *a += w;
+                }
+            }
+            None => acc[t.latent.clone()].iter_mut().for_each(|a| *a += 1.0),
+        }
+    }
+    acc
+}
+
+/// The whole encode plan of a `(frames, height, width)` video: `tiled_encode`
+/// encodes each tile on its own, scales it by the separable masks, sums the
+/// tiles and divides by the summed weights unless they are all 1
+/// (`masks_are_complementary`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodePlan {
+    pub time: Vec<EncodeAxisTile>,
+    pub height: Vec<EncodeAxisTile>,
+    pub width: Vec<EncodeAxisTile>,
+    /// Latent `[frames, height, width]`.
+    pub latent: [usize; 3],
+    pub complementary: bool,
+}
+
+impl EncodePlan {
+    /// `frames` must be `8k + 1` and the sides multiples of the spatial
+    /// factor (the caller conforms the clip first). `_validate_overlap`: a
+    /// tiled axis needs at least 16 frames / 64 pixels of overlap.
+    pub fn new(frames: usize, height: usize, width: usize, cfg: &TileSizeConfig, scale: [usize; 3]) -> Result<Self, String> {
+        cfg.validate(scale)?;
+        if frames == 0 || (frames - 1) % scale[0] != 0 || height % scale[1] != 0 || width % scale[2] != 0 || height == 0 || width == 0 {
+            return Err(format!(
+                "ltx2 encode tiling: {frames} frames of {width}x{height} are not on the {scale:?} grid"
+            ));
+        }
+        if (cfg.frames.is_tiled() && cfg.frames.overlap < 16)
+            || (cfg.height.is_tiled() && cfg.height.overlap < 64)
+            || (cfg.width.is_tiled() && cfg.width.overlap < 64)
+        {
+            return Err("ltx2 encode tiling: tiled axes need 16 frames / 64 pixels of overlap".into());
+        }
+        let latent = [(frames - 1) / scale[0] + 1, height / scale[1], width / scale[2]];
+        let time = encode_axis_tiles(latent[0], cfg.frames, scale[0], Axis::Time);
+        let height_t = encode_axis_tiles(latent[1], cfg.height, scale[1], Axis::Space);
+        let width_t = encode_axis_tiles(latent[2], cfg.width, scale[2], Axis::Space);
+        let ones = |t: &[EncodeAxisTile], n: usize| encode_weight_sum(t, n).iter().all(|&s| (s - 1.0).abs() <= 1e-5);
+        let complementary = ones(&time, latent[0]) && ones(&height_t, latent[1]) && ones(&width_t, latent[2]);
+        Ok(Self {
+            time,
+            height: height_t,
+            width: width_t,
+            latent,
+            complementary,
+        })
+    }
+
+    pub fn tiles(&self) -> usize {
+        self.time.len() * self.height.len() * self.width.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +672,24 @@ mod tests {
         .unwrap();
         assert_eq!(auto.tiles(), 2 * 2 * 2);
         assert!(auto.complementary);
+    }
+
+    #[test]
+    fn a_121_frame_512p_encode_is_two_causal_time_tiles() {
+        let p = EncodePlan::new(121, 512, 768, &TileSizeConfig::encode_default(), VIDEO_SCALE).unwrap();
+        assert_eq!(p.latent, [16, 16, 24]);
+        assert_eq!((p.height.len(), p.width.len()), (1, 1));
+        assert_eq!(p.time.len(), 2);
+        assert_eq!((p.time[0].latent.clone(), p.time[0].input.clone()), (0..10, 0..73));
+        assert_eq!((p.time[1].latent.clone(), p.time[1].input.clone()), (6..16, 48..121));
+        // Latent 6 is the second tile's first (one-frame) latent: weight 0.
+        assert_eq!(p.time[1].mask.as_ref().unwrap()[0], 0.0);
+        assert!(p.complementary);
+        // 1080p: the width is cut into 768 px tiles with 64 px overlap.
+        let q = EncodePlan::new(97, 1056, 1920, &TileSizeConfig::encode_default(), VIDEO_SCALE).unwrap();
+        assert_eq!(q.latent, [13, 33, 60]);
+        assert!(q.width.len() > 1 && q.height.len() > 1);
+        assert!(q.width.iter().all(|t| t.input.end <= 1920));
+        assert!(EncodePlan::new(96, 512, 768, &TileSizeConfig::encode_default(), VIDEO_SCALE).is_err());
     }
 }

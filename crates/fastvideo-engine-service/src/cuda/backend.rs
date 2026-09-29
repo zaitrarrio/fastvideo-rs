@@ -321,6 +321,7 @@ impl CudaBackend {
             sampling: SamplingOverrides::default(),
             tier: caps.tier,
             recipe: caps.recipe.clone(),
+            edit: None,
         };
         let mut runs = Vec::new();
         for (name, j) in [
@@ -488,7 +489,7 @@ impl EngineBackend for CudaBackend {
                 deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
             }
             Loaded::Ltx2(m) => {
-                let planned = m.planned_steps();
+                let planned = m.planned_steps(job);
                 deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
             }
             Loaded::Wan(m) => {

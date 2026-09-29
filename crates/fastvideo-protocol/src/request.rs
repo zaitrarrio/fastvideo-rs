@@ -141,9 +141,11 @@ pub enum Task {
     /// (`AudioRole::Drive`), an optional first-frame image (and a last frame
     /// with it), the prompt required without an image.
     A2V,
-    /// LTX edit endpoint. Unsupported today.
+    /// LTX extend: continue a source video (`GenerationRequest::edit`,
+    /// [`EditOp::Extend`]) at its end or its start.
     Extend,
-    /// LTX edit endpoint. Unsupported today.
+    /// LTX retake: regenerate a time window of a source video
+    /// (`GenerationRequest::edit`, [`EditOp::Retake`]), video, audio or both.
     Retake,
     /// LTX edit endpoint. Unsupported today.
     V2V,
@@ -151,10 +153,15 @@ pub enum Task {
 
 impl Task {
     /// The LTX edit endpoints no engine path serves (`GapId::LtxEndpoint`).
-    /// Audio-to-video is served by LTX-2.5; other LTX models answer the same
-    /// gap for it (`negotiate` rule 2).
+    /// Audio-to-video, retake and extend are served by LTX-2.5; other LTX
+    /// models answer the same gap for them (`negotiate` rule 2).
     pub fn is_edit_endpoint(&self) -> bool {
-        matches!(self, Task::Extend | Task::Retake | Task::V2V)
+        matches!(self, Task::V2V)
+    }
+
+    /// Retake and extend: the task edits a source video.
+    pub fn edits_video(&self) -> bool {
+        matches!(self, Task::Retake | Task::Extend)
     }
 }
 
@@ -178,6 +185,9 @@ pub struct GenerationRequest {
     pub audio_out: AudioOut,
     pub sampling: SamplingOverrides,
     pub output: OutputOptions,
+    /// Retake / extend: the source video and the edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<VideoEdit>,
     /// Fields accepted but ignored (e.g. `"prompt_expansion_mode"`); logged and
     /// counted only. Not deserialized (a `&'static str` cannot be); a
     /// deserialized request has this empty.
@@ -208,19 +218,21 @@ impl GenerationRequest {
             audio_out: AudioOut::ModelDefault,
             sampling: SamplingOverrides::default(),
             output: OutputOptions::default(),
+            edit: None,
             accepted_noop: Vec::new(),
             callback: None,
         }
     }
 
     /// Every media ref the request carries, in order: keyframes, references,
-    /// then `audio_in`.
+    /// `audio_in`, then the edit's source video.
     pub fn media_refs(&self) -> impl Iterator<Item = &MediaRef> {
         self.keyframes
             .iter()
             .map(|k| &k.image)
             .chain(self.references.iter().map(|r| &r.media))
             .chain(self.audio_in.iter().map(|a| &a.media))
+            .chain(self.edit.iter().map(|e| &e.video))
     }
 
     /// Records an accepted-but-ignored field once.
@@ -458,6 +470,9 @@ pub enum AudioRole {
     TargetSoundtrack,
     /// LTX A2V.
     Drive,
+    /// LTX retake (`replace_video`): the new audio of the retaken window,
+    /// spliced into the source's audio, which then stays clean conditioning.
+    Dub,
 }
 
 /// What audio the output should carry.
@@ -494,6 +509,96 @@ pub struct SamplingOverrides {
 impl SamplingOverrides {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
+    }
+}
+
+/// A retake or extend of a source video (LTX `/retake`, `/extend`; fal
+/// `fal-ai/ltx-2.3/{retake,extend}-video`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VideoEdit {
+    /// The source video.
+    pub video: MediaRef,
+    pub op: EditOp,
+}
+
+/// What an edit does to its source.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum EditOp {
+    /// Regenerate `[start_s, start_s + duration_s)` (clamped to the video).
+    Retake {
+        start_s: f64,
+        duration_s: f64,
+        mode: RetakeMode,
+    },
+    /// Add `duration_s` seconds at `at`, continuing from up to `context_s`
+    /// seconds of the source (`None`: as much as fits).
+    Extend {
+        duration_s: f64,
+        at: ExtendAt,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_s: Option<f64>,
+    },
+}
+
+/// LTX `retake` `mode` / fal `retake_mode`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetakeMode {
+    ReplaceAudio,
+    ReplaceVideo,
+    #[default]
+    ReplaceAudioAndVideo,
+}
+
+impl RetakeMode {
+    pub const ALL: [RetakeMode; 3] = [RetakeMode::ReplaceAudio, RetakeMode::ReplaceVideo, RetakeMode::ReplaceAudioAndVideo];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RetakeMode::ReplaceAudio => "replace_audio",
+            RetakeMode::ReplaceVideo => "replace_video",
+            RetakeMode::ReplaceAudioAndVideo => "replace_audio_and_video",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.as_str() == s)
+    }
+
+    /// `(regenerate_video, regenerate_audio)` (LTX-Desktop `_resolve_retake_mode`).
+    pub fn regenerates(&self) -> (bool, bool) {
+        match self {
+            RetakeMode::ReplaceAudio => (false, true),
+            RetakeMode::ReplaceVideo => (true, false),
+            RetakeMode::ReplaceAudioAndVideo => (true, true),
+        }
+    }
+}
+
+/// LTX `extend` `mode` / fal `mode`: where the new frames go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtendAt {
+    Start,
+    #[default]
+    End,
+}
+
+impl ExtendAt {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExtendAt::Start => "start",
+            ExtendAt::End => "end",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "start" => Some(ExtendAt::Start),
+            "end" => Some(ExtendAt::End),
+            _ => None,
+        }
     }
 }
 

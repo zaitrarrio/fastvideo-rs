@@ -175,6 +175,7 @@ impl ClipSession {
             sampling: SamplingOverrides::default(),
             tier: self.caps.tier,
             recipe: self.caps.recipe.clone(),
+            edit: None,
         })
     }
 

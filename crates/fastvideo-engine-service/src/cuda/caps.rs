@@ -571,10 +571,13 @@ pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Opt
 }
 
 /// LTX caps from the model config (audio from the vocoder).
+/// The longest LTX-2 clip served (frames), for every task.
+pub const LTX_MAX_FRAMES: u32 = 481;
+
 fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
     let cfg = ltx_config(r.version);
     let fps = cfg.defaults.frame_rate.round() as u32;
-    let grid = FrameGrid::new(8, 1, 9, 481, 121);
+    let grid = FrameGrid::new(8, 1, 9, LTX_MAX_FRAMES, 121);
     if r.ic_lora.is_some() {
         return ltx2_ref_caps(id, r, fps);
     }
@@ -586,8 +589,13 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         // the 2.5 distilled pipeline (`ltx2::i2v_encode`, oracle-checked on 2.5).
         // Audio-to-video: the driving audio pinned as clean audio latents on
         // both stages (`ltx2::a2v`, docs/oracle.md "LTX-2.5 audio-to-video").
+        // Retake / extend: one distilled stage at the source size with the
+        // kept tokens pinned (`ltx2::v2v`, docs/oracle.md "LTX-2.5 retake and
+        // extend").
         tasks: match r.version {
-            LtxVersion::V25 => [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
+            LtxVersion::V25 => {
+                [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V, Task::Retake, Task::Extend].into_iter().collect()
+            }
             LtxVersion::V23 => [Task::T2V].into_iter().collect(),
         },
         audio: Some(AudioCaps {

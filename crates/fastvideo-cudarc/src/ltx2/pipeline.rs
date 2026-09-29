@@ -181,6 +181,10 @@ pub struct Ltx2Request {
     /// output carries the input waveform instead of a vocoded one. See
     /// [`super::a2v`].
     pub audio: Option<DrivingAudio>,
+    /// Retake / extend of a source video (`ltx_pipelines/retake.py`,
+    /// LTX-Desktop's extend): one stage at the source size, the kept tokens
+    /// pinned. See [`super::v2v`].
+    pub edit: Option<super::v2v::VideoEdit>,
 }
 
 /// One IC-LoRA reference: a still (the Ingredients LoRA's reference sheet)
@@ -258,6 +262,7 @@ impl Ltx2Request {
             skip_audio_decode: false,
             reference: None,
             audio: None,
+            edit: None,
         }
     }
 
@@ -281,8 +286,10 @@ impl Ltx2Request {
         )
         .map_err(err)?;
         // Audio-to-video with an image may leave the prompt empty (the LTX
-        // API: "Can be empty string when image_uri is provided").
-        let prompt_optional = self.audio.is_some() && !self.conditioning_images().is_empty();
+        // API: "Can be empty string when image_uri is provided"); so may an
+        // edit (the LTX API's `prompt` is optional on retake and extend).
+        let prompt_optional =
+            (self.audio.is_some() && !self.conditioning_images().is_empty()) || self.edit.is_some();
         if self.frame_rate.is_nan()
             || self.frame_rate <= 0.0
             || (self.prompt.trim().is_empty() && !prompt_optional)
@@ -295,6 +302,15 @@ impl Ltx2Request {
             return Err(err(
                 "ltx2: audio-to-video and reference-to-video are separate pipelines",
             ));
+        }
+        if let Some(e) = &self.edit {
+            if self.audio.is_some() || self.reference.is_some() || !self.conditioning_images().is_empty() {
+                return Err(err("ltx2: retake/extend takes no images, references or driving audio"));
+            }
+            if self.sol_stage2 || self.pisa_stage2 {
+                return Err(err("ltx2 retake/extend is one dense stage"));
+            }
+            e.validate(self.num_frames, self.frame_rate, self.two_stage)?;
         }
         if let Some(n) = self.refine_steps {
             if n != 2 && n != 3 {
@@ -972,9 +988,12 @@ pub fn denoise_with_cond(
             cond,
         )?;
         video = euler_update_cond(&video, &v_video, schedule, i, state, cond)?;
-        let next = StageConditioning::audio_after(cond, || {
-            euler_update(&audio, &v_audio, schedule, i, state)
-        })?;
+        let next = match cond.and_then(StageConditioning::audio_cond) {
+            Some(ac) => euler_update_cond(&audio, &v_audio, schedule, i, state, Some(ac))?,
+            None => StageConditioning::audio_after(cond, || {
+                euler_update(&audio, &v_audio, schedule, i, state)
+            })?,
+        };
         audio = next;
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
@@ -1327,9 +1346,10 @@ pub fn denoise_ancestral_cond(
             cond,
         )?;
         // Frozen audio (A2V): its noise is still drawn (above), then the zero
-        // mask puts the clean latent back (`post_process_latent`).
-        let next = StageConditioning::audio_after(cond, || {
-            ancestral_update(
+        // mask puts the clean latent back (`post_process_latent`). A retake of
+        // the audio steps it under its own pinned runs.
+        let next = match cond.and_then(StageConditioning::audio_cond) {
+            Some(ac) => ancestral_update_cond(
                 &audio,
                 &v_audio,
                 sigma,
@@ -1337,8 +1357,20 @@ pub fn denoise_ancestral_cond(
                 opts,
                 draws.get(1),
                 state,
-            )
-        })?;
+                Some(ac),
+            )?,
+            None => StageConditioning::audio_after(cond, || {
+                ancestral_update(
+                    &audio,
+                    &v_audio,
+                    sigma,
+                    sigma_next,
+                    opts,
+                    draws.get(1),
+                    state,
+                )
+            })?,
+        };
         audio = next;
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
@@ -3110,6 +3142,8 @@ impl Ltx2Pipeline {
         if let Some(model) = self.model.as_ref() {
             model.set_video_conditioning(None);
             model.set_audio_frozen(false);
+            model.set_audio_conditioning(None);
+            model.set_video_frozen(false);
         }
         if matches!(&out, Err(e) if e.is_cancelled()) {
             crate::wan::dump::set_prefix("");
@@ -3153,6 +3187,13 @@ impl Ltx2Pipeline {
                 req.num_frames,
                 self.lora_note(req.two_stage),
             ));
+        }
+        if req.edit.is_some()
+            && (cfg.version != Ltx2ModelVersion::V25 || cfg.scheduler.use_dynamic_shifting || use_cfg)
+        {
+            // `RetakePipeline(distilled=True)` with the 2.5 ancestral sampler;
+            // the guided line would need the dev transformer.
+            return Err(err("ltx2 retake/extend runs on the LTX-2.5 distilled pipeline (unguided)"));
         }
         if req.audio.is_some()
             && (cfg.version != Ltx2ModelVersion::V25 || cfg.scheduler.use_dynamic_shifting || use_cfg)
@@ -3336,6 +3377,25 @@ impl Ltx2Pipeline {
             )?),
             None => None,
         };
+        // Retake / extend: the source window encoded (video and audio) and
+        // its kept tokens pinned, before the DiT loads.
+        let mut video_frozen = false;
+        if let Some(edit) = &req.edit {
+            let prep = super::v2v::prepare(
+                &self.weights,
+                &cfg,
+                edit,
+                (req.height, req.width),
+                grid1,
+                audio_tokens,
+            )?;
+            trim()?;
+            timings.image_s = prep.video_s;
+            timings.audio_encode_s = prep.audio_s;
+            video_frozen = prep.video_frozen;
+            cond1 = Some(prep.cond);
+            memory.mark("edit_encode")?;
+        }
         if let Some((clean, _)) = &driving {
             let base = match cond1.take() {
                 Some(c) => c,
@@ -3421,10 +3481,24 @@ impl Ltx2Pipeline {
         if let Some((clean, _)) = &driving {
             audio = clean.clone();
         }
+        let edit_frozen_audio = cond1.as_ref().and_then(|c| c.frozen_audio.clone()).filter(|_| req.edit.is_some());
+        if let Some(clean) = &edit_frozen_audio {
+            audio = clean.clone();
+        }
         self.model
             .as_ref()
             .expect("dit")
-            .set_audio_frozen(driving.is_some());
+            .set_audio_frozen(driving.is_some() || edit_frozen_audio.is_some());
+        // A retake of the audio: its kept tokens pinned (`GaussianNoiser`'s
+        // `lerp(clean, noised, mask)`), per-token audio timesteps.
+        if let Some(ac) = cond1.as_ref().and_then(StageConditioning::audio_cond) {
+            audio = state.store(ac.apply_initial(&audio)?)?;
+            self.model
+                .as_ref()
+                .expect("dit")
+                .set_audio_conditioning(Some(ac.timestep_segments()));
+        }
+        self.model.as_ref().expect("dit").set_video_frozen(video_frozen);
         crate::wan::dump::digest("text_proj_video", &text.video)?;
         crate::wan::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(c) = &cond1 {
@@ -3456,7 +3530,9 @@ impl Ltx2Pipeline {
         let ancestral =
             cfg.version == Ltx2ModelVersion::V25 && distilled && req.reference.is_none();
         let res2s = cfg.version == Ltx2ModelVersion::V23;
-        crate::wan::dump::set_prefix(if req.two_stage { "s1_" } else { "" });
+        // An edit's one stage is the reference's first (and only)
+        // `DiffusionStage`: its dumps are `s1_` as well.
+        crate::wan::dump::set_prefix(if req.two_stage || req.edit.is_some() { "s1_" } else { "" });
         let stage1_total = schedule.num_steps();
         hooks.stage(Stage::Denoise, stage1_total)?;
         let (mut video, mut audio) = {
@@ -3543,6 +3619,8 @@ impl Ltx2Pipeline {
             video = c.clear(&video)?;
             if let Some(model) = self.model.as_ref() {
                 model.set_video_conditioning(None);
+                model.set_audio_conditioning(None);
+                model.set_video_frozen(false);
             }
         }
         drop(cond1);
@@ -4088,7 +4166,7 @@ impl Ltx2Pipeline {
     }
 }
 
-fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
+pub(super) fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
     if let Ok(raw) = std::env::var("FASTVIDEO_LTX2_AUDIO_VAE") {
         let path = PathBuf::from(raw);
         if path.is_file() {
