@@ -1,2 +1,4 @@
 2026-09-29T10:25:57Z	pod-created 52rgddmv8h5dvo fv-dcprof-h100-0929102555 gpu=NVIDIA H100 80GB HBM3 dph=3.49 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:01c9fcf58d3b8504b1255879adcc1752366ecac92345d888eea87d98f1ecf895
 2026-09-29T10:36:58Z	pod-deleted 52rgddmv8h5dvo
+2026-09-29T10:37:23Z	pod-created tz3d74y6u0ct7s fv-dcprof-b200-0929103722 gpu=NVIDIA B200 dph=6.79 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:01c9fcf58d3b8504b1255879adcc1752366ecac92345d888eea87d98f1ecf895
+2026-09-29T10:48:38Z	pod-deleted tz3d74y6u0ct7s

@@ -1,0 +1,818 @@
+t_s,name,category,ms,n
+0.0,add_bias_inplace,norm_elementwise,0.3819,1
+0.0,block_copy,layout_copy,0.0125,2
+0.0,cast_f32_bf16,cast_quant,0.3019,4
+0.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,0.0942,1
+0.0,fa_dc100_fwd_d128,attention,78.9829,22
+0.0,fvf_split_heads_rows,layout_copy,1.4012,41
+0.0,gather_nd,layout_copy,2.2338,2
+0.0,memcpy HtoD,copies_memset,2.0715,5
+0.0,memset,copies_memset,0.2419,162
+0.0,mx_ln_adaln_e,norm_elementwise,3.3522,11
+0.0,mx_merge_heads,layout_copy,11.0205,22
+0.0,mx_unary,norm_elementwise,0.0071,1
+0.0,mxfp8_quantize,cast_quant,31.9109,96
+0.0,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,26.1889,66
+0.0,nvjet_sm100_qqtst_256x128_128x5_2x4_2cta_h_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,0.3645,30
+0.0,nvjet_sm100_tst_96x128_64x9_2x2_2cta_h_bz_bias_TNN,gemm,0.0265,2
+0.0,quant_linear_epilogue,cast_quant,53.3142,95
+0.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.0211,2
+0.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.1357,1
+0.0,wan_qk_norm_rope16,norm_elementwise,15.8217,63
+0.0,wan_res_gate,norm_elementwise,4.8026,10
+0.0,wan_res_ln,norm_elementwise,12.099,22
+0.25,fa_dc100_fwd_d128,attention,86.8988,23
+0.25,fvf_split_heads_rows,layout_copy,1.3681,12
+0.25,memset,copies_memset,0.2169,134
+0.25,mx_ln_adaln_e,norm_elementwise,3.6696,12
+0.25,mx_merge_heads,layout_copy,11.0304,22
+0.25,mxfp8_quantize,cast_quant,31.9542,67
+0.25,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,26.7962,67
+0.25,quant_linear_epilogue,cast_quant,54.8489,68
+0.25,wan_qk_norm_rope16,norm_elementwise,16.6048,35
+0.25,wan_res_gate,norm_elementwise,5.7801,12
+0.25,wan_res_ln,norm_elementwise,12.1083,22
+0.5,add_bias_inplace,norm_elementwise,0.3892,1
+0.5,cast_bf16_f32_bias_act,cast_quant,0.0131,1
+0.5,cast_f32_bf16,cast_quant,0.291,2
+0.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,0.094,1
+0.5,fa_dc100_fwd_d128,attention,70.7896,20
+0.5,fvf_split_heads_rows,layout_copy,1.135,10
+0.5,gather_nd,layout_copy,2.2268,2
+0.5,lincomb3,norm_elementwise,0.0357,2
+0.5,memcpy HtoD,copies_memset,0.593,1
+0.5,memset,copies_memset,0.1941,120
+0.5,mx_binary,norm_elementwise,0.0022,1
+0.5,mx_block_copy,layout_copy,0.0035,2
+0.5,mx_gather_nd,layout_copy,0.255,2
+0.5,mx_ln_adaln_e,norm_elementwise,3.3494,11
+0.5,mx_merge_heads,layout_copy,10.0175,20
+0.5,mxfp8_quantize,cast_quant,28.7056,60
+0.5,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,23.6508,60
+0.5,nvjet_sm100_tst_128x208_64x7_2x2_2cta_h_bz_bias_TNT,gemm,0.0374,1
+0.5,quant_linear_epilogue,cast_quant,48.3028,60
+0.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.0204,2
+0.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.136,1
+0.5,wan_qk_norm_rope16,norm_elementwise,14.0767,30
+0.5,wan_res_gate,norm_elementwise,4.8013,10
+0.5,wan_res_ln,norm_elementwise,10.9941,20
+0.75,fa_dc100_fwd_d128,attention,79.1873,23
+0.75,fvf_split_heads_rows,layout_copy,1.2425,11
+0.75,memset,copies_memset,0.2295,142
+0.75,mx_ln_adaln_e,norm_elementwise,3.3496,11
+0.75,mx_merge_heads,layout_copy,12.0138,24
+0.75,mxfp8_quantize,cast_quant,34.0986,71
+0.75,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,27.8152,71
+0.75,quant_linear_epilogue,cast_quant,56.4282,71
+0.75,wan_qk_norm_rope16,norm_elementwise,15.7993,34
+0.75,wan_res_gate,norm_elementwise,5.2866,11
+0.75,wan_res_ln,norm_elementwise,13.1746,24
+1.0,fa_dc100_fwd_d128,attention,86.1867,23
+1.0,fvf_split_heads_rows,layout_copy,1.3579,12
+1.0,memset,copies_memset,0.2161,134
+1.0,mx_ln_adaln_e,norm_elementwise,3.6559,12
+1.0,mx_merge_heads,layout_copy,11.5191,23
+1.0,mxfp8_quantize,cast_quant,31.8935,67
+1.0,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,26.7118,67
+1.0,quant_linear_epilogue,cast_quant,54.0214,67
+1.0,wan_qk_norm_rope16,norm_elementwise,16.5726,35
+1.0,wan_res_gate,norm_elementwise,5.7776,12
+1.0,wan_res_ln,norm_elementwise,12.08,22
+1.25,add_bias_inplace,norm_elementwise,0.3902,1
+1.25,cast_bf16_f32_bias_act,cast_quant,0.013,1
+1.25,cast_f32_bf16,cast_quant,0.2904,2
+1.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,0.0925,1
+1.25,fa_dc100_fwd_d128,attention,78.5638,23
+1.25,fvf_split_heads_rows,layout_copy,1.2421,11
+1.25,gather_nd,layout_copy,2.2262,2
+1.25,lincomb3,norm_elementwise,0.0373,2
+1.25,memcpy HtoD,copies_memset,0.8435,1
+1.25,memset,copies_memset,0.2258,140
+1.25,mx_binary,norm_elementwise,0.0024,1
+1.25,mx_block_copy,layout_copy,0.0035,2
+1.25,mx_gather_nd,layout_copy,0.2557,2
+1.25,mx_ln_adaln_e,norm_elementwise,3.6523,12
+1.25,mx_merge_heads,layout_copy,11.4985,23
+1.25,mxfp8_quantize,cast_quant,32.7231,70
+1.25,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,27.2939,70
+1.25,nvjet_sm100_tst_128x208_64x7_2x2_2cta_h_bz_bias_TNT,gemm,0.037,1
+1.25,quant_linear_epilogue,cast_quant,56.0419,70
+1.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.0203,2
+1.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.1353,1
+1.25,wan_qk_norm_rope16,norm_elementwise,15.7819,34
+1.25,wan_res_gate,norm_elementwise,5.2853,11
+1.25,wan_res_ln,norm_elementwise,13.1623,24
+1.5,fa_dc100_fwd_d128,attention,86.9204,23
+1.5,fvf_split_heads_rows,layout_copy,1.3585,12
+1.5,memset,copies_memset,0.2208,136
+1.5,mx_ln_adaln_e,norm_elementwise,3.6565,12
+1.5,mx_merge_heads,layout_copy,11.0165,22
+1.5,mxfp8_quantize,cast_quant,33.2411,68
+1.5,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,27.4425,68
+1.5,quant_linear_epilogue,cast_quant,54.4166,68
+1.5,wan_qk_norm_rope16,norm_elementwise,16.6,35
+1.5,wan_res_gate,norm_elementwise,5.7795,12
+1.5,wan_res_ln,norm_elementwise,12.0824,22
+1.75,fa_dc100_fwd_d128,attention,79.5031,23
+1.75,fvf_split_heads_rows,layout_copy,1.2508,11
+1.75,memset,copies_memset,0.2259,140
+1.75,mx_ln_adaln_e,norm_elementwise,3.3672,11
+1.75,mx_merge_heads,layout_copy,12.098,24
+1.75,mxfp8_quantize,cast_quant,33.0033,70
+1.75,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,27.5882,70
+1.75,quant_linear_epilogue,cast_quant,56.426,70
+1.75,wan_qk_norm_rope16,norm_elementwise,15.9393,34
+1.75,wan_res_gate,norm_elementwise,5.3233,11
+1.75,wan_res_ln,norm_elementwise,13.2653,24
+2.0,add_bias_inplace,norm_elementwise,13.4731,66
+2.0,bcast_binary,norm_elementwise,0.0409,2
+2.0,block_copy,layout_copy,28.225,147
+2.0,cast_bf16_f32_bias_act,cast_quant,6.2637,54
+2.0,cast_f32_bf16,cast_quant,18.5546,109
+2.0,clamp_f,norm_elementwise,0.0071,1
+2.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,7.0338,30
+2.0,cutlass3x_sm100_tensorop_s256x128x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x128x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,0.3179,1
+2.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.1366,5
+2.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,29.4567,17
+2.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,1.1843,1
+2.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,11.8971,3
+2.0,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,3.1386,1
+2.0,elem_add,norm_elementwise,5.5984,30
+2.0,fill_f,layout_copy,5.7947,52
+2.0,gather_nd,layout_copy,58.1891,23
+2.0,lincomb3,norm_elementwise,0.0196,1
+2.0,memcpy DtoH,copies_memset,0.3756,1
+2.0,memcpy HtoD,copies_memset,0.0033,2
+2.0,memset,copies_memset,0.0333,24
+2.0,mx_binary,norm_elementwise,0.0023,1
+2.0,mx_block_copy,layout_copy,0.0034,2
+2.0,mx_gather_nd,layout_copy,0.2561,2
+2.0,mx_ln_adaln_e,norm_elementwise,0.3045,1
+2.0,mxfp8_quantize,cast_quant,1.3596,1
+2.0,nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT,gemm,0.7279,1
+2.0,nvjet_sm100_sss_tf32_128x192_32x5_1x2_h_bz_NNT,gemm,0.0343,1
+2.0,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0629,1
+2.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.813,3
+2.0,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.038,2
+2.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.1194,1
+2.0,nvjet_sm100_sss_tf32_256x128_32x5_2x2f_2cta_h_bz_TNT,gemm,0.0381,1
+2.0,nvjet_sm100_sss_tf32_384x48_32x4_2x1_2cta_v_bz_NNT,gemm,0.0092,1
+2.0,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0529,2
+2.0,nvjet_sm100_tst_128x208_64x7_2x2_2cta_h_bz_bias_TNT,gemm,0.0375,1
+2.0,pack_rgb_u8,layout_copy,0.0053,1
+2.0,quant_linear_epilogue,cast_quant,0.3844,1
+2.0,rms_norm_channels,vae_conv,25.8563,51
+2.0,softmax_last_bf16,attention,0.1014,2
+2.0,split_heads_bhsd,layout_copy,0.1941,6
+2.0,upsample_nearest,vae_conv,4.0332,5
+2.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.0871,105
+2.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.3886,10
+2.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.3306,53
+2.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.0984,5
+2.0,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0102,1
+2.0,wan_res_gate,norm_elementwise,0.4801,1
+2.25,add_bias_inplace,norm_elementwise,7.4029,5
+2.25,block_copy,layout_copy,10.9021,13
+2.25,cast_bf16_f32_bias_act,cast_quant,2.3272,3
+2.25,cast_f32_bf16,cast_quant,3.0052,6
+2.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,11.0001,3
+2.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.5889,2
+2.25,elem_add,norm_elementwise,1.7214,2
+2.25,fill_f,layout_copy,1.1524,3
+2.25,gather_nd,layout_copy,5.456,1
+2.25,memset,copies_memset,0.0036,3
+2.25,rms_norm_channels,vae_conv,1.8708,2
+2.25,upsample_nearest,vae_conv,5.2729,2
+2.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,1.2852,6
+2.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6231,4
+2.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,0.8758,3
+2.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.4196,2
+2.5,block_copy,layout_copy,3.9045,2
+2.5,gather_nd,layout_copy,42.3172,2
+2.75,gather_nd,layout_copy,23.0084,1
+3.0,add_bias_inplace,norm_elementwise,16.6419,37
+3.0,block_copy,layout_copy,85.5041,112
+3.0,cast_bf16_f32_bias_act,cast_quant,10.381,32
+3.0,cast_f32_bf16,cast_quant,23.9244,67
+3.0,clamp_f,norm_elementwise,0.0766,1
+3.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.4402,12
+3.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.5611,10
+3.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,16.6945,9
+3.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,1.1654,1
+3.0,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2833,2
+3.0,elem_add,norm_elementwise,9.372,13
+3.0,fill_f,layout_copy,6.138,7
+3.0,gather_nd,layout_copy,6.7611,11
+3.0,memcpy DtoH,copies_memset,5.111,1
+3.0,memset,copies_memset,0.0158,12
+3.0,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0613,1
+3.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0606,1
+3.0,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.024,1
+3.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9071,2
+3.0,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0333,1
+3.0,pack_rgb_u8,layout_copy,0.0372,1
+3.0,rms_norm_channels,vae_conv,20.0192,23
+3.0,softmax_last_bf16,attention,0.0668,1
+3.0,split_heads_bhsd,layout_copy,0.1285,3
+3.0,upsample_nearest,vae_conv,0.3304,1
+3.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,10.4134,64
+3.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.141,2
+3.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,4.0383,32
+3.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.0911,1
+3.0,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0204,2
+3.25,add_bias_inplace,norm_elementwise,14.8091,14
+3.25,block_copy,layout_copy,26.1833,42
+3.25,cast_bf16_f32_bias_act,cast_quant,5.4664,10
+3.25,cast_f32_bf16,cast_quant,8.199,18
+3.25,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,0.432,1
+3.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,27.7101,8
+3.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.5581,2
+3.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,9.5389,1
+3.25,elem_add,norm_elementwise,7.9541,6
+3.25,gather_nd,layout_copy,110.7196,9
+3.25,memset,copies_memset,0.0115,9
+3.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6614,1
+3.25,rms_norm_channels,vae_conv,10.3264,8
+3.25,upsample_nearest,vae_conv,7.9667,3
+3.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,3.5199,18
+3.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.4447,6
+3.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.0162,10
+3.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.1335,3
+3.5,add_bias_inplace,norm_elementwise,19.818,41
+3.5,block_copy,layout_copy,70.8718,111
+3.5,cast_bf16_f32_bias_act,cast_quant,11.1737,35
+3.5,cast_f32_bf16,cast_quant,24.6096,71
+3.5,clamp_f,norm_elementwise,0.0755,1
+3.5,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.877,13
+3.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6429,10
+3.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,18.6318,10
+3.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.6853,2
+3.5,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2837,2
+3.5,elem_add,norm_elementwise,6.1534,13
+3.5,gather_nd,layout_copy,23.3343,14
+3.5,memcpy DtoH,copies_memset,0.701,1
+3.5,memset,copies_memset,0.0179,14
+3.5,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0616,1
+3.5,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.06,1
+3.5,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0237,1
+3.5,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9141,2
+3.5,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0333,1
+3.5,pack_rgb_u8,layout_copy,0.0382,1
+3.5,rms_norm_channels,vae_conv,17.8714,23
+3.5,softmax_last_bf16,attention,0.0665,1
+3.5,split_heads_bhsd,layout_copy,0.1293,3
+3.5,upsample_nearest,vae_conv,2.963,2
+3.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,10.7485,68
+3.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9527,4
+3.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,4.3207,35
+3.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.8034,2
+3.5,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0201,2
+3.75,add_bias_inplace,norm_elementwise,13.7136,14
+3.75,block_copy,layout_copy,41.7381,49
+3.75,cast_bf16_f32_bias_act,cast_quant,6.2267,11
+3.75,cast_f32_bf16,cast_quant,13.7763,22
+3.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,33.3841,11
+3.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6128,2
+3.75,elem_add,norm_elementwise,7.7187,5
+3.75,gather_nd,layout_copy,93.5222,6
+3.75,memset,copies_memset,0.0129,11
+3.75,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.664,1
+3.75,rms_norm_channels,vae_conv,10.9751,8
+3.75,upsample_nearest,vae_conv,5.2739,2
+3.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,5.9178,22
+3.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6251,4
+3.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.3382,11
+3.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.419,2
+4.0,add_bias_inplace,norm_elementwise,17.6908,37
+4.0,block_copy,layout_copy,61.4671,110
+4.0,cast_bf16_f32_bias_act,cast_quant,9.6197,31
+4.0,cast_f32_bf16,cast_quant,20.1376,65
+4.0,clamp_f,norm_elementwise,0.0758,1
+4.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8725,13
+4.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6717,10
+4.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,17.6711,7
+4.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7047,2
+4.0,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.282,2
+4.0,elem_add,norm_elementwise,7.8762,14
+4.0,gather_nd,layout_copy,45.7383,16
+4.0,memcpy DtoH,copies_memset,0.6972,1
+4.0,memset,copies_memset,0.0139,11
+4.0,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0615,1
+4.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0603,1
+4.0,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.024,1
+4.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.913,2
+4.0,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0336,1
+4.0,pack_rgb_u8,layout_copy,0.0379,1
+4.0,rms_norm_channels,vae_conv,18.2524,23
+4.0,softmax_last_bf16,attention,0.0666,1
+4.0,split_heads_bhsd,layout_copy,0.1289,3
+4.0,upsample_nearest,vae_conv,2.9628,2
+4.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.7584,62
+4.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.952,4
+4.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.7214,31
+4.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.8029,2
+4.0,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0199,2
+4.25,add_bias_inplace,norm_elementwise,17.8964,18
+4.25,block_copy,layout_copy,52.226,50
+4.25,cast_bf16_f32_bias_act,cast_quant,7.7399,13
+4.25,cast_f32_bf16,cast_quant,16.0263,26
+4.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,7.0181,3
+4.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,26.9065,10
+4.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6064,2
+4.25,elem_add,norm_elementwise,7.6948,5
+4.25,gather_nd,layout_copy,70.7381,4
+4.25,memset,copies_memset,0.0124,10
+4.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6613,1
+4.25,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9121,2
+4.25,rms_norm_channels,vae_conv,10.5985,8
+4.25,upsample_nearest,vae_conv,5.2799,2
+4.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,6.8988,26
+4.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6235,4
+4.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.9255,13
+4.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.4202,2
+4.5,add_bias_inplace,norm_elementwise,17.7038,38
+4.5,block_copy,layout_copy,49.7586,109
+4.5,cast_bf16_f32_bias_act,cast_quant,10.4034,33
+4.5,cast_f32_bf16,cast_quant,19.6699,67
+4.5,clamp_f,norm_elementwise,0.0755,1
+4.5,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8772,13
+4.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,11.6816,7
+4.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,29.7216,11
+4.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7025,2
+4.5,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.281,2
+4.5,elem_add,norm_elementwise,7.0244,14
+4.5,gather_nd,layout_copy,45.3492,16
+4.5,memcpy DtoH,copies_memset,0.6541,1
+4.5,memset,copies_memset,0.0188,15
+4.5,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0614,1
+4.5,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.7246,2
+4.5,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0237,1
+4.5,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0334,1
+4.5,pack_rgb_u8,layout_copy,0.0371,1
+4.5,rms_norm_channels,vae_conv,19.577,25
+4.5,softmax_last_bf16,attention,0.0672,1
+4.5,split_heads_bhsd,layout_copy,0.129,3
+4.5,upsample_nearest,vae_conv,2.9633,2
+4.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.5316,64
+4.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9522,4
+4.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.9894,33
+4.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.802,2
+4.5,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0201,2
+4.75,add_bias_inplace,norm_elementwise,17.8811,17
+4.75,block_copy,layout_copy,61.6981,52
+4.75,cast_bf16_f32_bias_act,cast_quant,8.5283,13
+4.75,cast_f32_bf16,cast_quant,15.3275,24
+4.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,11.1752,6
+4.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,14.9285,6
+4.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6024,2
+4.75,elem_add,norm_elementwise,8.545,5
+4.75,gather_nd,layout_copy,70.7391,4
+4.75,memset,copies_memset,0.007,6
+4.75,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9085,2
+4.75,rms_norm_channels,vae_conv,10.7582,7
+4.75,upsample_nearest,vae_conv,5.2737,2
+4.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,6.6243,24
+4.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6251,4
+4.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.2461,13
+4.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.4201,2
+5.0,add_bias_inplace,norm_elementwise,16.6494,37
+5.0,block_copy,layout_copy,37.5303,102
+5.0,cast_bf16_f32_bias_act,cast_quant,9.6235,32
+5.0,cast_f32_bf16,cast_quant,18.7262,65
+5.0,clamp_f,norm_elementwise,0.0756,1
+5.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8765,13
+5.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,7.468,4
+5.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,37.1143,13
+5.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,4.7992,1
+5.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7156,2
+5.0,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2805,2
+5.0,elem_add,norm_elementwise,7.0159,15
+5.0,gather_nd,layout_copy,50.6852,17
+5.0,memcpy DtoH,copies_memset,0.7229,1
+5.0,memset,copies_memset,0.0209,17
+5.0,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0616,1
+5.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.7228,2
+5.0,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0239,1
+5.0,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0335,1
+5.0,pack_rgb_u8,layout_copy,0.0376,1
+5.0,rms_norm_channels,vae_conv,18.468,25
+5.0,softmax_last_bf16,attention,0.0666,1
+5.0,split_heads_bhsd,layout_copy,0.1293,3
+5.0,upsample_nearest,vae_conv,5.5994,3
+5.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.1088,62
+5.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.764,6
+5.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.6794,32
+5.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.5127,3
+5.0,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.02,2
+5.25,add_bias_inplace,norm_elementwise,18.9262,18
+5.25,block_copy,layout_copy,71.6992,58
+5.25,cast_bf16_f32_bias_act,cast_quant,9.3039,14
+5.25,cast_f32_bf16,cast_quant,18.0297,28
+5.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6782,10
+5.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,7.5359,4
+5.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,4.7908,1
+5.25,elem_add,norm_elementwise,8.5333,4
+5.25,gather_nd,layout_copy,65.2847,3
+5.25,memset,copies_memset,0.0047,4
+5.25,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9103,2
+5.25,rms_norm_channels,vae_conv,11.847,7
+5.25,upsample_nearest,vae_conv,2.636,1
+5.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,7.7832,28
+5.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.8116,2
+5.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.5566,14
+5.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.7104,1
+5.5,add_bias_inplace,norm_elementwise,16.6423,35
+5.5,block_copy,layout_copy,30.4117,93
+5.5,cast_bf16_f32_bias_act,cast_quant,6.5293,28
+5.5,cast_f32_bf16,cast_quant,14.0162,57
+5.5,clamp_f,norm_elementwise,0.077,1
+5.5,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8703,13
+5.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,37.1082,13
+5.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6088,2
+5.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7353,2
+5.5,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2818,2
+5.5,elem_add,norm_elementwise,5.3126,14
+5.5,gather_nd,layout_copy,72.2506,18
+5.5,memcpy DtoH,copies_memset,0.7008,1
+5.5,memset,copies_memset,0.0203,17
+5.5,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0617,1
+5.5,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.7224,2
+5.5,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0238,1
+5.5,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0333,1
+5.5,pack_rgb_u8,layout_copy,0.0373,1
+5.5,rms_norm_channels,vae_conv,15.5044,23
+5.5,softmax_last_bf16,attention,0.0665,1
+5.5,split_heads_bhsd,layout_copy,0.129,3
+5.5,upsample_nearest,vae_conv,8.2345,4
+5.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,6.0946,54
+5.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.5774,8
+5.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.4918,28
+5.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.2246,4
+5.5,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.02,2
+5.75,add_bias_inplace,norm_elementwise,15.8463,34
+5.75,block_copy,layout_copy,70.3157,97
+5.75,cast_bf16_f32_bias_act,cast_quant,9.8104,29
+5.75,cast_f32_bf16,cast_quant,22.3169,59
+5.75,clamp_f,norm_elementwise,0.0765,1
+5.75,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.4426,12
+5.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6531,10
+5.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,9.3654,5
+5.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,1.1779,1
+5.75,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2808,2
+5.75,elem_add,norm_elementwise,8.9048,11
+5.75,gather_nd,layout_copy,50.197,13
+5.75,memcpy DtoH,copies_memset,0.6866,1
+5.75,memset,copies_memset,0.0109,8
+5.75,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0616,1
+5.75,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0602,1
+5.75,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.024,1
+5.75,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9097,2
+5.75,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0333,1
+5.75,pack_rgb_u8,layout_copy,0.0378,1
+5.75,rms_norm_channels,vae_conv,17.5268,20
+5.75,softmax_last_bf16,attention,0.0667,1
+5.75,split_heads_bhsd,layout_copy,0.129,3
+5.75,upsample_nearest,vae_conv,0.3311,1
+5.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,9.7445,56
+5.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.1412,2
+5.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.8358,29
+5.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.0912,1
+5.75,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0202,2
+6.0,add_bias_inplace,norm_elementwise,15.5238,17
+6.0,block_copy,layout_copy,27.4293,51
+6.0,cast_bf16_f32_bias_act,cast_quant,6.0175,13
+6.0,cast_f32_bf16,cast_quant,9.7262,26
+6.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,0.4296,1
+6.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,35.3023,12
+6.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6094,2
+6.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,9.5457,1
+6.0,elem_add,norm_elementwise,4.934,7
+6.0,gather_nd,layout_copy,109.2146,9
+6.0,memset,copies_memset,0.015,13
+6.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6609,1
+6.0,rms_norm_channels,vae_conv,9.8252,10
+6.0,upsample_nearest,vae_conv,7.9035,3
+6.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,4.1439,26
+6.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.4368,6
+6.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.219,13
+6.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.1321,3
+6.25,add_bias_inplace,norm_elementwise,17.7162,40
+6.25,block_copy,layout_copy,70.8615,111
+6.25,cast_bf16_f32_bias_act,cast_quant,11.17,35
+6.25,cast_f32_bf16,cast_quant,24.606,71
+6.25,clamp_f,norm_elementwise,0.0764,1
+6.25,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8778,13
+6.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6958,10
+6.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,18.7135,10
+6.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7266,2
+6.25,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2815,2
+6.25,elem_add,norm_elementwise,9.5616,14
+6.25,gather_nd,layout_copy,12.4219,13
+6.25,memcpy DtoH,copies_memset,0.6811,1
+6.25,memset,copies_memset,0.0178,14
+6.25,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0616,1
+6.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0607,1
+6.25,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0239,1
+6.25,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9067,2
+6.25,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0333,1
+6.25,pack_rgb_u8,layout_copy,0.0383,1
+6.25,rms_norm_channels,vae_conv,20.8568,24
+6.25,softmax_last_bf16,attention,0.0663,1
+6.25,split_heads_bhsd,layout_copy,0.1301,3
+6.25,upsample_nearest,vae_conv,2.9632,2
+6.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,10.7338,68
+6.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9531,4
+6.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,4.3205,35
+6.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.091,1
+6.25,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.02,2
+6.5,add_bias_inplace,norm_elementwise,14.7213,13
+6.5,block_copy,layout_copy,36.6303,42
+6.5,cast_bf16_f32_bias_act,cast_quant,5.4289,9
+6.5,cast_f32_bf16,cast_quant,12.1408,20
+6.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,31.5843,10
+6.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6087,2
+6.5,elem_add,norm_elementwise,7.698,5
+6.5,gather_nd,layout_copy,103.2731,7
+6.5,memset,copies_memset,0.012,10
+6.5,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6675,1
+6.5,rms_norm_channels,vae_conv,9.4648,7
+6.5,upsample_nearest,vae_conv,5.2731,2
+6.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,5.1949,20
+6.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6243,4
+6.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.1822,10
+6.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.132,3
+6.75,add_bias_inplace,norm_elementwise,18.7624,39
+6.75,block_copy,layout_copy,61.1169,113
+6.75,cast_bf16_f32_bias_act,cast_quant,10.3937,33
+6.75,cast_f32_bf16,cast_quant,19.9101,65
+6.75,clamp_f,norm_elementwise,0.0766,1
+6.75,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.886,13
+6.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.6833,10
+6.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,13.0282,7
+6.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.735,2
+6.75,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2806,2
+6.75,elem_add,norm_elementwise,7.8582,14
+6.75,gather_nd,layout_copy,44.9552,16
+6.75,memcpy DtoH,copies_memset,0.6752,1
+6.75,memset,copies_memset,0.0139,11
+6.75,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0622,1
+6.75,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0617,1
+6.75,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0246,1
+6.75,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9107,2
+6.75,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0355,1
+6.75,pack_rgb_u8,layout_copy,0.0384,1
+6.75,rms_norm_channels,vae_conv,17.9025,23
+6.75,softmax_last_bf16,attention,0.067,1
+6.75,split_heads_bhsd,layout_copy,0.1298,3
+6.75,upsample_nearest,vae_conv,2.9636,2
+6.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.682,62
+6.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9565,4
+6.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.8759,32
+6.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.8036,2
+6.75,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0198,2
+7.0,add_bias_inplace,norm_elementwise,17.8863,18
+7.0,block_copy,layout_copy,52.2315,50
+7.0,cast_bf16_f32_bias_act,cast_quant,7.7505,13
+7.0,cast_f32_bf16,cast_quant,16.0652,26
+7.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,3.7404,2
+7.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,33.4711,11
+7.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6045,2
+7.0,elem_add,norm_elementwise,7.6945,5
+7.0,gather_nd,layout_copy,70.7325,4
+7.0,memset,copies_memset,0.0136,11
+7.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6605,1
+7.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9087,2
+7.0,rms_norm_channels,vae_conv,10.9424,8
+7.0,upsample_nearest,vae_conv,5.2735,2
+7.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,6.9029,26
+7.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6243,4
+7.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.922,13
+7.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.419,2
+7.25,add_bias_inplace,norm_elementwise,16.6467,37
+7.25,block_copy,layout_copy,53.3661,110
+7.25,cast_bf16_f32_bias_act,cast_quant,9.6034,32
+7.25,cast_f32_bf16,cast_quant,20.4177,67
+7.25,clamp_f,norm_elementwise,0.0766,1
+7.25,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8721,13
+7.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,14.9635,8
+7.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,26.0286,10
+7.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7044,2
+7.25,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2801,2
+7.25,elem_add,norm_elementwise,7.0197,14
+7.25,gather_nd,layout_copy,44.9594,16
+7.25,memcpy DtoH,copies_memset,0.6999,1
+7.25,memset,copies_memset,0.0175,14
+7.25,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0621,1
+7.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.725,2
+7.25,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.024,1
+7.25,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0334,1
+7.25,pack_rgb_u8,layout_copy,0.0379,1
+7.25,rms_norm_channels,vae_conv,20.1203,25
+7.25,softmax_last_bf16,attention,0.0667,1
+7.25,split_heads_bhsd,layout_copy,0.1303,3
+7.25,upsample_nearest,vae_conv,2.9633,2
+7.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.849,64
+7.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9523,4
+7.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.702,32
+7.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.8031,2
+7.25,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0198,2
+7.5,add_bias_inplace,norm_elementwise,18.6713,17
+7.5,block_copy,layout_copy,56.1054,49
+7.5,cast_bf16_f32_bias_act,cast_quant,9.0201,13
+7.5,cast_f32_bf16,cast_quant,16.3242,26
+7.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,11.2154,6
+7.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,18.6393,7
+7.5,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.5985,2
+7.5,elem_add,norm_elementwise,6.8297,4
+7.5,gather_nd,layout_copy,70.7391,4
+7.5,memset,copies_memset,0.0082,7
+7.5,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9087,2
+7.5,rms_norm_channels,vae_conv,10.1951,7
+7.5,upsample_nearest,vae_conv,5.2772,2
+7.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,7.0631,26
+7.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6245,4
+7.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.4685,13
+7.5,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.4206,2
+7.75,add_bias_inplace,norm_elementwise,16.9324,38
+7.75,block_copy,layout_copy,44.2025,107
+7.75,cast_bf16_f32_bias_act,cast_quant,9.829,33
+7.75,cast_f32_bf16,cast_quant,18.7482,65
+7.75,clamp_f,norm_elementwise,0.0766,1
+7.75,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8755,13
+7.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,7.494,4
+7.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,37.0692,13
+7.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7184,2
+7.75,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2819,2
+7.75,elem_add,norm_elementwise,8.7398,16
+7.75,gather_nd,layout_copy,51.0338,17
+7.75,memcpy DtoH,copies_memset,0.6661,1
+7.75,memset,copies_memset,0.0208,17
+7.75,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0619,1
+7.75,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.7238,2
+7.75,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0238,1
+7.75,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0338,1
+7.75,pack_rgb_u8,layout_copy,0.038,1
+7.75,rms_norm_channels,vae_conv,19.9973,26
+7.75,softmax_last_bf16,attention,0.0669,1
+7.75,split_heads_bhsd,layout_copy,0.13,3
+7.75,upsample_nearest,vae_conv,2.963,2
+7.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.13,62
+7.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.9519,4
+7.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.7567,33
+7.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.8038,2
+7.75,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0199,2
+8.0,add_bias_inplace,norm_elementwise,16.822,16
+8.0,block_copy,layout_copy,66.5735,53
+8.0,cast_bf16_f32_bias_act,cast_quant,9.1037,13
+8.0,cast_f32_bf16,cast_quant,17.4359,26
+8.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.2524,9
+8.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,7.5213,4
+8.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6067,2
+8.0,elem_add,norm_elementwise,6.831,3
+8.0,gather_nd,layout_copy,65.285,3
+8.0,memset,copies_memset,0.0048,4
+8.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9069,2
+8.0,rms_norm_channels,vae_conv,10.3617,6
+8.0,upsample_nearest,vae_conv,5.272,2
+8.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,7.5375,26
+8.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,1.6222,4
+8.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.4908,13
+8.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,1.4201,2
+8.25,add_bias_inplace,norm_elementwise,18.7406,37
+8.25,block_copy,layout_copy,34.0795,98
+8.25,cast_bf16_f32_bias_act,cast_quant,6.7179,29
+8.25,cast_f32_bf16,cast_quant,14.6051,59
+8.25,clamp_f,norm_elementwise,0.0766,1
+8.25,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8783,13
+8.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,0.458,1
+8.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,37.132,13
+8.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6123,2
+8.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7219,2
+8.25,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.281,2
+8.25,elem_add,norm_elementwise,7.0137,15
+8.25,gather_nd,layout_copy,72.2499,18
+8.25,memcpy DtoH,copies_memset,0.6775,1
+8.25,memset,copies_memset,0.0207,17
+8.25,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0622,1
+8.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.7244,2
+8.25,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0237,1
+8.25,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0336,1
+8.25,pack_rgb_u8,layout_copy,0.0381,1
+8.25,rms_norm_channels,vae_conv,17.0295,24
+8.25,softmax_last_bf16,attention,0.067,1
+8.25,split_heads_bhsd,layout_copy,0.1299,3
+8.25,upsample_nearest,vae_conv,8.2364,4
+8.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,6.3513,56
+8.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.5757,8
+8.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.5611,29
+8.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.2245,4
+8.25,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0202,2
+8.5,add_bias_inplace,norm_elementwise,15.327,32
+8.5,block_copy,layout_copy,71.0642,84
+8.5,cast_bf16_f32_bias_act,cast_quant,9.6137,28
+8.5,cast_f32_bf16,cast_quant,21.9242,57
+8.5,clamp_f,norm_elementwise,0.0768,1
+8.5,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.4424,12
+8.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.7238,10
+8.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,7.5289,4
+8.5,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2789,2
+8.5,elem_add,norm_elementwise,8.7002,10
+8.5,gather_nd,layout_copy,46.1308,10
+8.5,memcpy DtoH,copies_memset,0.6818,1
+8.5,memset,copies_memset,0.0077,6
+8.5,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0615,1
+8.5,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0601,1
+8.5,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0238,1
+8.5,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9019,2
+8.5,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0335,1
+8.5,pack_rgb_u8,layout_copy,0.0374,1
+8.5,rms_norm_channels,vae_conv,15.8995,18
+8.5,softmax_last_bf16,attention,0.0662,1
+8.5,split_heads_bhsd,layout_copy,0.13,3
+8.5,upsample_nearest,vae_conv,0.331,1
+8.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,9.5755,54
+8.5,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.1406,2
+8.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.7622,28
+8.5,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0206,2
+8.75,add_bias_inplace,norm_elementwise,16.0535,19
+8.75,block_copy,layout_copy,28.5987,65
+8.75,cast_bf16_f32_bias_act,cast_quant,6.2124,14
+8.75,cast_f32_bf16,cast_quant,10.1197,28
+8.75,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,0.4321,1
+8.75,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,37.1758,13
+8.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.606,2
+8.75,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,10.7307,2
+8.75,elem_add,norm_elementwise,5.1507,8
+8.75,gather_nd,layout_copy,113.0032,12
+8.75,memset,copies_memset,0.0184,15
+8.75,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6601,1
+8.75,rms_norm_channels,vae_conv,11.4667,12
+8.75,upsample_nearest,vae_conv,7.9046,3
+8.75,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,4.2995,28
+8.75,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.4361,6
+8.75,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,2.2902,14
+8.75,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.2238,4
+9.0,add_bias_inplace,norm_elementwise,17.7004,40
+9.0,block_copy,layout_copy,70.8546,111
+9.0,cast_bf16_f32_bias_act,cast_quant,11.1736,35
+9.0,cast_f32_bf16,cast_quant,24.6034,71
+9.0,clamp_f,norm_elementwise,0.0766,1
+9.0,cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,2.8772,13
+9.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.7173,10
+9.0,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,18.6739,10
+9.0,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,1.1767,1
+9.0,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2807,2
+9.0,elem_add,norm_elementwise,9.5589,14
+9.0,gather_nd,layout_copy,12.4188,13
+9.0,memcpy DtoH,copies_memset,0.6638,1
+9.0,memset,copies_memset,0.0164,13
+9.0,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT,gemm,0.0615,1
+9.0,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.0602,1
+9.0,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT,gemm,0.0239,1
+9.0,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9131,2
+9.0,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT,gemm,0.0335,1
+9.0,pack_rgb_u8,layout_copy,0.0381,1
+9.0,rms_norm_channels,vae_conv,20.8416,24
+9.0,softmax_last_bf16,attention,0.0668,1
+9.0,split_heads_bhsd,layout_copy,0.1299,3
+9.0,upsample_nearest,vae_conv,0.3306,1
+9.0,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,10.7465,68
+9.0,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,0.141,2
+9.0,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,4.3195,35
+9.0,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,0.0909,1
+9.0,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0199,2
+9.25,add_bias_inplace,norm_elementwise,14.1968,12
+9.25,block_copy,layout_copy,34.6867,41
+9.25,cast_bf16_f32_bias_act,cast_quant,5.0405,8
+9.25,cast_f32_bf16,cast_quant,10.5587,17
+9.25,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,27.8741,8
+9.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,9.6265,2
+9.25,cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,9.5461,1
+9.25,elem_add,norm_elementwise,7.6909,5
+9.25,gather_nd,layout_copy,103.2807,7
+9.25,memset,copies_memset,0.0108,9
+9.25,nvjet_sm100_sss_tf32_128x256_32x6_2x1_2cta_v_bz_NNT,gemm,0.6643,1
+9.25,rms_norm_channels,vae_conv,9.4548,7
+9.25,upsample_nearest,vae_conv,7.9048,3
+9.25,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,3.8316,16
+9.25,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>…",vae_conv,2.4344,6
+9.25,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,1.8812,8
+9.25,"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>…",vae_conv,2.1325,3
+9.5,add_bias_inplace,norm_elementwise,14.2935,17
+9.5,block_copy,layout_copy,58.1135,68
+9.5,cast_bf16_f32_bias_act,cast_quant,8.9812,15
+9.5,cast_f32_bf16,cast_quant,17.2452,29
+9.5,clamp_f,norm_elementwise,0.0769,1
+9.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,18.706,10
+9.5,cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,5.6448,3
+9.5,cutlass3x_sm100_tensorop_s32x256x16_conv3d_fprop_weight_stationary_nq_2d_tiled_bf16_bf16_f32_void_bf16_void_t3xr3xs3_32x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_1sm,vae_conv,6.2803,2
+9.5,elem_add,norm_elementwise,5.1284,3
+9.5,gather_nd,layout_copy,1.032,2
+9.5,memcpy DtoH,copies_memset,4.8262,1
+9.5,memset,copies_memset,0.0063,5
+9.5,nvjet_sm100_sss_tf32_256x128_32x4_1x2_h_bz_NNT,gemm,0.9068,2
+9.5,pack_rgb_u8,layout_copy,0.0384,1
+9.5,rms_norm_channels,vae_conv,8.9129,6
+9.5,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2n…",vae_conv,8.1032,28
+9.5,"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2n…",vae_conv,3.4933,15
+9.5,"tensorTransformGeneric<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformPara…",vae_conv,0.0203,2
