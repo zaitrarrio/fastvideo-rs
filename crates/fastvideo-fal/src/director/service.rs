@@ -51,7 +51,8 @@ pub struct DirectorConfig {
     pub video_bitrate: Option<u32>,
     /// Answer VP8 (ffmpeg `libvpx`; intra-only libwebp when ffmpeg has no
     /// libvpx) to offers without H.264; real
-    /// Chrome/Safari/Firefox offer H.264 and get it.
+    /// Chrome/Safari/Firefox offer H.264 and get it. Also what every offer
+    /// gets when `h264` is not in this build (see [`video_codecs`]).
     pub vp8_fallback: bool,
     /// Audio crossfade at chunk joins (design §5.5).
     pub crossfade_ms: u16,
@@ -81,6 +82,22 @@ impl Default for DirectorConfig {
             work_dir: std::env::temp_dir().join("fv-director"),
             max_sessions: 1,
         }
+    }
+}
+
+/// The video codecs the director answers, in preference order: H.264, then
+/// VP8 with `vp8_fallback`. When the H.264 backend is not in this build, VP8
+/// comes first: an `auto` encoder on a GPU without NVENC (H100, A100 have no
+/// NVENC hardware) resolves to OpenH264, which images built without the
+/// `openh264` feature lack, and a browser (which offers both) must get the
+/// VP8 we can encode, not an H.264 that fails the session at its first
+/// frame ("built without the `openh264` feature"). H.264 stays in the list
+/// so an H.264-only offer is still answered as before.
+pub fn video_codecs(h264_compiled: bool, vp8_fallback: bool) -> Vec<WVideoCodec> {
+    match (h264_compiled, vp8_fallback) {
+        (true, true) => vec![WVideoCodec::H264, WVideoCodec::Vp8],
+        (false, true) => vec![WVideoCodec::Vp8, WVideoCodec::H264],
+        (_, false) => vec![WVideoCodec::H264],
     }
 }
 
@@ -289,7 +306,7 @@ impl DirectorService {
             video: true,
             audio: audio.then_some(AudioLayout::Stereo),
             channels: ChannelPolicy::fal(),
-            video_codecs: if self.cfg.vp8_fallback { vec![WVideoCodec::H264, WVideoCodec::Vp8] } else { vec![WVideoCodec::H264] },
+            video_codecs: video_codecs(self.cfg.h264.compiled(), self.cfg.vp8_fallback),
             ..AnswerOptions::default()
         };
         let (peer, answer) = self.host.answer(offer, opts).await.map_err(|e| match e {
@@ -335,6 +352,15 @@ impl DirectorService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_vp8_when_h264_is_not_in_the_build() {
+        use WVideoCodec::{Vp8, H264};
+        assert_eq!(video_codecs(true, true), vec![H264, Vp8]);
+        assert_eq!(video_codecs(true, false), vec![H264]);
+        assert_eq!(video_codecs(false, true), vec![Vp8, H264]);
+        assert_eq!(video_codecs(false, false), vec![H264]);
+    }
 
     #[test]
     fn one_stream_for_all_tracks() {

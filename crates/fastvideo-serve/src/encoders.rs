@@ -16,8 +16,10 @@
 //! Where OpenH264 cannot serve, the fallback is what that consumer can still
 //! do: without OpenH264 in the build (feature `encoders`) the Reactor
 //! runtime answers VP8 only (`off`), `/fv/v1/streams` keeps its CPU test
-//! encoder (`x264-test`) and the director keeps `openh264` (its H.264 offers
-//! then fail per session; VP8 offers use `vp8_fallback`). The crop
+//! encoder (`x264-test`) and the director keeps `openh264`, which it then
+//! knows it cannot encode: it prefers VP8 for every offer that has it, a
+//! browser's H.264 + VP8 included (`vp8_fallback`; GPUs without NVENC such
+//! as H100 and A100 land here). The crop
 //! re-encode runs inside ffmpeg, which has no OpenH264, so its fallback is
 //! ffmpeg's CPU test encoder (`cpu-test-x264`).
 
@@ -58,7 +60,7 @@ impl Selection {
         let note = |v: &str| match v {
             "off" => " (VP8 only)",
             "x264-test" | "cpu-test-x264" => " (CPU test encoder)",
-            "openh264" if !EncoderBackend::OpenH264.compiled() => " (not in this build: H.264 offers fail, VP8 is used)",
+            "openh264" if !EncoderBackend::OpenH264.compiled() => " (not in this build: answered with VP8 instead)",
             _ => "",
         };
         settings

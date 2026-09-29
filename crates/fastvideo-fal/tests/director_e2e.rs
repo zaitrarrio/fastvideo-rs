@@ -18,7 +18,7 @@ use fastvideo_protocol::{EndReason, SessionState};
 use fastvideo_webrtc::channel::ChannelMessage;
 use fastvideo_webrtc::host::{AudioLayout, HostConfig, OfferOptions, PeerEvent, PeerHandle, RtcHost};
 use fastvideo_webrtc::sdp::{Direction, MediaKind, Sdp};
-use fastvideo_webrtc::writer::TrackKind;
+use fastvideo_webrtc::writer::{TrackKind, VideoCodec};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -30,6 +30,8 @@ struct MediaLog {
     /// (arrival, rtp_time) per Opus packet.
     audio: Vec<(Instant, u64)>,
     keyframes: u64,
+    /// The first video frame's payload (to tell H.264 from VP8).
+    first_video: Option<bytes::Bytes>,
 }
 
 struct Client {
@@ -117,12 +119,19 @@ impl Client {
 }
 
 async fn open(f: &Fixture, app_id: &str) -> Client {
+    open_with(f, app_id, vec![VideoCodec::H264]).await
+}
+
+/// [`open`] with the video codecs the client offers (a browser offers
+/// H.264 and VP8).
+async fn open_with(f: &Fixture, app_id: &str, video_codecs: Vec<VideoCodec>) -> Client {
     let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
             audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
             channels: vec!["control".into()],
+            video_codecs,
             ..Default::default()
         })
         .await
@@ -148,10 +157,11 @@ async fn open(f: &Fixture, app_id: &str) -> Client {
                     let v: Value = serde_json::from_str(m.as_text().unwrap()).unwrap();
                     let _ = tx.send(v);
                 }
-                PeerEvent::Media { kind, rtp_time, keyframe, .. } => {
+                PeerEvent::Media { kind, rtp_time, keyframe, data, .. } => {
                     let mut l = log.lock().unwrap();
                     match kind {
                         TrackKind::Video => {
+                            l.first_video.get_or_insert(data);
                             l.video.push((Instant::now(), rtp_time));
                             l.keyframes += u64::from(keyframe);
                         }
@@ -307,6 +317,36 @@ async fn video_only_session() {
     assert!((fps - 24.0).abs() < 2.4, "{fps}");
     assert!((rtp_fps - 24.0).abs() < 0.01, "{rtp_fps}");
     assert!(c.media.lock().unwrap().audio.is_empty(), "no audio on a video-only session");
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// A director whose H.264 backend is not in this build (an `auto` encoder
+/// on a GPU without NVENC resolves to OpenH264, which images built without
+/// the `openh264` feature lack) answers a browser's H.264 + VP8 offer with
+/// VP8 and streams. Before, it answered H.264 and the session failed at its
+/// first frame ("encoding failed: ... built without the `openh264` feature";
+/// seen on an H100 worker).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn browser_offer_without_a_usable_h264_encoder_gets_vp8() {
+    use fastvideo_media::video::EncoderBackend;
+    let f = fixture(Opts { h264: EncoderBackend::OpenH264, ..Opts::default() }).await;
+    let mut c = open_with(&f, "fv/h3-silent/director", vec![VideoCodec::H264, VideoCodec::Vp8]).await;
+    c.expect("session_info").await;
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p"})).await;
+    c.expect("configured").await;
+    c.expect("chunk").await;
+    c.first_video().await;
+    // What was sent: H.264 arrives as Annex-B (start code first), a VP8
+    // keyframe carries its start code 9d 01 2a at bytes 3..6.
+    let head = c.media.lock().unwrap().first_video.clone().unwrap();
+    let h264 = head.starts_with(&[0, 0, 0, 1]) || head.starts_with(&[0, 0, 1]);
+    let vp8 = head.len() > 6 && head[3..6] == [0x9d, 0x01, 0x2a];
+    let codec = if h264 { "H.264" } else if vp8 { "VP8" } else { "unknown" };
+    let want = if EncoderBackend::OpenH264.compiled() { "H.264" } else { "VP8" };
+    assert_eq!(codec, want, "first video frame {:02x?}", &head[..head.len().min(8)]);
+    let (fps, _, _, _) = c.rates(Duration::from_secs(3)).await;
+    assert!((fps - 24.0).abs() < 2.4, "{codec}: {fps} fps");
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
 }
