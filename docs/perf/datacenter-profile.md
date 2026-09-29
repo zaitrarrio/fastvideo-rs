@@ -490,8 +490,19 @@ dense-prefix SDPA kernel switched (`FASTVIDEO_FLASH_KERNEL=v2`) moves the
 rounding, not a kernel defect. The Python oracle itself (an upstream
 reference pod) was not re-run on B200.
 
-**H100 end to end**: see below (pending pod availability at the time of
-writing).
+**End to end, H3 turbo, H100 SXM** (US-CA-2, same method):
+
+| | tma2 | dc | change |
+|---|---:|---:|---:|
+| 768p denoise | 19.46 s | 16.34 s | **−16.0%** |
+| 768p text + denoise + decode | 24.58 s | 21.50 s | −12.5% |
+| 1080p denoise | 49.62 s | 39.44 s | **−20.5%** |
+| 1080p text + denoise + decode | 60.17 s | 49.96 s | −17.0% |
+| peak allocated (768p / 1080p) | 57.0 / 68.3 GiB | 55.9 / 66.1 GiB | −1 / −2 GiB |
+
+Against the profile's full H100 jobs (run_s 27.73 s / 57.21 s) the saving
+is −11.1% (768p) and −17.8% (1080p); the estimate was −13% / −22%. Clips dc
+vs tma2: LPIPS 0.22 (768p) / 0.23 (1080p), within the B200 control's 0.32.
 
 ## Top 20 kernels per workload
 

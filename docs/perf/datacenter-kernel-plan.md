@@ -420,10 +420,13 @@ kernel; sm_120 never loads the module). Numbers in
   - `sm_103a` cubin built beside `sm_100a` (loaded on 10.3 only with
     `FASTVIDEO_DC_SM103=1`: never run on a B300).
 - **Validation**: kernels group `vsa_dc` (99/99 with `attn_dc` on B200
-  and H100); E2E H3 turbo on B200 (768p / 1080p, same pod, tma2 vs dc) with
-  block dumps and clip comparisons; see the profile doc.
-- **Measured vs the estimate**: B200 denoise −22.6% (768p) / −25.3%
-  (1080p) against the estimated −24% / −32% of the run. The sm_100 union
+  and H100); E2E H3 turbo on B200 and H100 (768p / 1080p, same pod, tma2
+  vs dc), block dumps and clip comparisons with a control on B200; see the
+  profile doc.
+- **Measured vs the estimate** (same pod, tma2 vs dc): B200 denoise
+  −22.6% (768p) / −25.3% (1080p), whole job vs the profile −17.5% / −20.3%
+  (estimate −24% / −32%); H100 denoise −16.0% / −20.5%, job −11.1% /
+  −17.8% (estimate −13% / −22%). The sm_100 union
   costs 1.25-1.42x the per-tile work on real H3 selections (median 1.33).
 - **Next** (not done): sm_100 without the union waste (M = 64 tcgen05, or
   per-row-group lists sharing only common tiles); the sm_90 kernel is
