@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::schema::now_ms;
-use super::{Gateway, Pool};
+use super::{Gateway, NoWorker, Pool, Reservation, TakeLoad};
 
 /// `param` of the error a dispatch returns when the worker could not fetch
 /// a passed-through input (HTTP 424 from the worker).
@@ -249,7 +249,7 @@ impl Gateway {
         }
         let mut order: Vec<&Pool> = pools.iter().filter_map(|i| self.pools.get(*i)).collect();
         // Available pools first, then fewest queued.
-        order.sort_by_key(|p| (!p.available(), { let s = p.lock(); s.queued + s.pending }));
+        order.sort_by_key(|p| (!p.available(), { let s = p.lock(); s.queued + s.pending() }));
         let budget = order.iter().map(|p| self.inline_budget(p)).min().unwrap_or(0);
         let t_stage = Instant::now();
         let mut inputs = self.plan_inputs(job, budget).await?;
@@ -263,7 +263,7 @@ impl Gateway {
             let max = p.cfg.max_queued;
             let queued = {
                 let s = p.lock();
-                s.queued + s.pending
+                s.queued + s.pending()
             };
             if max > 0 && queued >= max {
                 last = Some(ApiError::queue_full(format!("pool `{}` has {queued} queued jobs (max {max})", p.id())).with_retry_after(5));
@@ -284,10 +284,17 @@ impl Gateway {
             match r {
                 Ok(placed) => {
                     let dispatch_s = t_dispatch.elapsed().as_secs_f64();
-                    p.lock().pending += 1;
+                    p.lock().recording += 1;
                     let t_record = Instant::now();
                     if let Err(e) = self.record(p, job.id, &placed, 1, &inputs).await {
                         tracing::warn!(job = %job.id, error = %e, "gateway: recording the dispatch failed (the job runs; reaping and metrics miss it)");
+                    }
+                    {
+                        // Counted as pending until a tick's D1 count read
+                        // after this write (see `tick`).
+                        let mut st = p.lock();
+                        st.recording = st.recording.saturating_sub(1);
+                        st.recorded.push(Instant::now());
                     }
                     let record_s = t_record.elapsed().as_secs_f64();
                     let pool = p.id().to_owned();
@@ -395,13 +402,24 @@ impl Gateway {
             return self.edge_enqueue(pool, &env, timeout).await;
         }
         if pool.is_pod() {
-            let mut cands: Vec<(String, u32)> = {
-                let st = pool.lock();
-                st.workers.values().filter(|w| w.usable() && Some(w.url.as_str()) != exclude).map(|w| (w.url.clone(), w.load())).collect()
-            };
-            cands.sort_by_key(|(_, l)| *l);
+            // One worker at a time, each reserved before its call (so the
+            // concurrent submits of a burst spread instead of all picking
+            // the worker that looked emptiest at the last probe).
+            let mut tried: Vec<String> = exclude.map(|e| vec![e.to_owned()]).unwrap_or_default();
             let mut last = None;
-            for (url, _) in cands {
+            let mut full = false;
+            loop {
+                let slot = match Reservation::take(pool, &tried) {
+                    Ok(r) => r,
+                    Err(NoWorker::QueueFull) => {
+                        full = true;
+                        break;
+                    }
+                    Err(NoWorker::None) => break,
+                };
+                let url = slot.url.clone();
+                tried.push(url.clone());
+                let sent = Instant::now();
                 let r = self
                     .worker_req(reqwest::Method::POST, &format!("{url}/fv/v1/internal/jobs"))
                     .timeout(timeout)
@@ -411,9 +429,7 @@ impl Gateway {
                 match r {
                     Ok(resp) if resp.status().is_success() => {
                         let v: Value = resp.json().await.unwrap_or(Value::Null);
-                        if let Some(w) = pool.lock().workers.get_mut(&url) {
-                            w.inflight += 1;
-                        }
+                        slot.placed(job.id, sent, TakeLoad::parse(&v));
                         let worker = v.get("worker").and_then(Value::as_str).map(str::to_owned);
                         return Ok(Placed { target: url, r#ref: worker });
                     }
@@ -438,6 +454,9 @@ impl Gateway {
                                 None => ApiError::invalid(msg),
                             });
                         }
+                        if s == 429 {
+                            full = true;
+                        }
                         last = Some(format!("worker {url} answered {s}: {msg}"));
                     }
                     Err(e) => {
@@ -449,11 +468,15 @@ impl Gateway {
                         last = Some(format!("worker {url}: {msg}"));
                     }
                 }
+                // `slot` dropped: the reservation is released.
             }
             // The details (worker URLs, errors) are for the log and the
             // admin route, not for API clients.
             if let Some(l) = &last {
                 tracing::warn!(job = %job.id, pool = pool.id(), last = %l, "gateway: no worker took the job");
+            }
+            if full {
+                return Err(ApiError::queue_full(format!("every worker of pool `{}` has a full queue", pool.id())).with_retry_after(5));
             }
             return Err(ApiError::loading(format!("pool `{}` has no worker that can take the job now", pool.id())).with_retry_after(10));
         }
@@ -481,7 +504,8 @@ impl Gateway {
         }
     }
 
-    /// Writes (or replaces) the `gw_dispatch` row.
+    /// Writes (or replaces) the `gw_dispatch` row; never over a later
+    /// attempt's (a replica that lost the re-dispatch claim race).
     async fn record(&self, pool: &Pool, id: JobId, placed: &Placed, attempt: u32, inputs: &[InputRef]) -> Result<(), String> {
         let now = now_ms();
         let kind = if pool.is_edge() {
@@ -498,7 +522,8 @@ impl Gateway {
                 "INSERT INTO gw_dispatch (job_id, pool, kind, target, ref, attempt, state, inputs, created_at, updated_at) \
                  VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?) \
                  ON CONFLICT(job_id) DO UPDATE SET pool = excluded.pool, kind = excluded.kind, target = excluded.target, \
-                 ref = excluded.ref, attempt = excluded.attempt, state = 'active', updated_at = excluded.updated_at",
+                 ref = excluded.ref, attempt = excluded.attempt, state = 'active', updated_at = excluded.updated_at \
+                 WHERE gw_dispatch.attempt <= excluded.attempt",
                 vec![
                     json!(id.to_string()),
                     json!(pool.id()),
