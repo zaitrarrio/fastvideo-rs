@@ -18,7 +18,8 @@
 //! | `FV_CALLBACKS_ALLOW_PRIVATE` (`1`) | `server.callbacks_allow_private` (tests only: webhooks to loopback/private hosts) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
-//! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
+//! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else made once and kept in `<state_dir>/admin_token`, mode 600) |
+//! | `FV_ADMIN_TOKEN_RECIPIENT` | `auth.admin_token_recipient` (X25519 public key: the token sealed at `/fv/v1/admin/token/sealed`) |
 //! | `FV_KEY_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `auth.key_store` (minted API keys) |
 //! | `FV_CONSOLE` (`0` \| `1`) | `server.console` (the `/console` pages) |
 //! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
@@ -177,8 +178,12 @@ pub struct AuthCfg {
     /// SHA-256 hex hashes of the accepted keys (normally `FV_API_KEYS`).
     pub keys: Secret,
     /// Admin token for `/fv/v1/admin/*` (normally `FV_ADMIN_TOKEN`); when
-    /// unset a random one is generated at startup and logged once.
+    /// unset one is made on the first start and kept in
+    /// `<state_dir>/admin_token` (mode 600; `crate::admin_token`).
     pub admin_token: Secret,
+    /// X25519 public key (base64) the admin token is sealed to at
+    /// `GET /fv/v1/admin/token/sealed` (`FV_ADMIN_TOKEN_RECIPIENT`).
+    pub admin_token_recipient: Option<String>,
     /// Minted-key store.
     pub key_store: KeyStoreBackend,
 }
@@ -872,6 +877,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_ADMIN_TOKEN") {
             self.auth.admin_token = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_ADMIN_TOKEN_RECIPIENT") {
+            self.auth.admin_token_recipient = Some(v.trim().to_owned()).filter(|v| !v.is_empty());
         }
         if let Some(v) = env.var("FV_KEY_STORE") {
             self.auth.key_store = parse_enum("FV_KEY_STORE", &v)?;

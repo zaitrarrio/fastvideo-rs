@@ -13,7 +13,9 @@ the serve code is the same). Raw smoke result:
   runs `fv-serve` with `configs/serve/gateway-pods.toml`. That config sets
   `[engine] backend = "remote"` and four `kind = "pod"` pools. The script
   passes the config as base64 in the env, because the image predates the
-  file. `FV_AUTH_MODE=none`: no API key is needed.
+  file. `FV_AUTH_MODE=none`: no API key is needed. (Since 2026-09-29 the
+  script runs the gateway with `keys` and the gateway keeps its own admin
+  token, fetched sealed by `runpod-cluster.sh admin-token`: gateway.md §9.)
 - **Workers**: one pod per pool, all on the EU volume `jg48s6o1w0`
   (EUR-IS-1). Each is an RTX PRO 6000 Blackwell Server Edition (96 GB) at
   $2.09/hr. Every worker runs with `FV_SERVE_ROLE=worker`, the shared

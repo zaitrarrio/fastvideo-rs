@@ -447,12 +447,12 @@ impl Gateway {
                     }
                 }
             }
-            return Err(ApiError::loading(format!(
-                "pool `{}` has no worker that can take the job now{}",
-                pool.id(),
-                last.map(|l| format!(" ({l})")).unwrap_or_default()
-            ))
-            .with_retry_after(10));
+            // The details (worker URLs, errors) are for the log and the
+            // admin route, not for API clients.
+            if let Some(l) = &last {
+                tracing::warn!(job = %job.id, pool = pool.id(), last = %l, "gateway: no worker took the job");
+            }
+            return Err(ApiError::loading(format!("pool `{}` has no worker that can take the job now", pool.id())).with_retry_after(10));
         }
         let ep = pool.cfg.endpoint_id.clone().unwrap_or_default();
         let path = job_path(job.id);
@@ -472,7 +472,8 @@ impl Gateway {
             Err(e) => {
                 let mut st = pool.lock();
                 st.last_error = Some(e.clone());
-                Err(ApiError::loading(format!("pool `{}` (Runpod endpoint) did not take the job: {e}", pool.id())).with_retry_after(10))
+                tracing::warn!(job = %job.id, pool = pool.id(), error = %e, "gateway: the Runpod endpoint did not take the job");
+                Err(ApiError::loading(format!("pool `{}` did not take the job; retry later", pool.id())).with_retry_after(10))
             }
         }
     }
@@ -680,10 +681,10 @@ impl Gateway {
     }
 }
 
-/// `503` for a pool that cannot take work.
+/// `503` for a pool that cannot take work (the probe's error text stays
+/// in the log and on the admin route).
 fn unavailable(p: &Pool) -> ApiError {
-    let why = p.lock().last_error.clone().unwrap_or_else(|| "no worker is reachable".into());
-    ApiError::loading(format!("the pool serving this model (`{}`) is unavailable: {why}", p.id())).with_retry_after(15)
+    ApiError::loading(format!("the pool serving this model (`{}`) is unavailable: no worker is reachable", p.id())).with_retry_after(15)
 }
 
 /// A `gw_dispatch` row.

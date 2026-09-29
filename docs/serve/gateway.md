@@ -278,10 +278,13 @@ most `watch_poll_ms` later (60 s for deleting a finished job).
 - The gateway's table is `CapabilityTable::build` over the pools (one
   "executor" per pool), so tier aliases (`h3-turbo`, `ltx-max`, …) bind as
   on a single server, `[aliases]` and `pools[].aliases` merge on top.
-- `/fv/v1/capabilities` adds `pools` (id, kind, available, models, workers)
-  and each model's `pools`; the console reads the same endpoint, so it
-  lists every model of every pool. Like a single server's, it also reports
-  the gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
+- `/fv/v1/capabilities` adds `pools` and each model's `pools`; the console
+  reads the same endpoint, so it lists every model of every pool. `pools`
+  is the safe summary of `/fv/v1/status` (id, kind, state, available,
+  models, queue depth, running jobs, last seen, workers as `w1`, `w2`, …
+  with state and load): never worker URLs, worker / pod / endpoint ids, IPs
+  or probe error texts. Like a single server's, it also reports the
+  gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
 - `GET /fv/v1/status` (public, no secrets; docs/serve/console.md): each
   pool's and worker's state from the tick's probes (`ready`, `busy`,
   `loading`, `scaled_to_zero`, `draining`, `unhealthy`, `down`), last-seen
@@ -332,9 +335,13 @@ autoscaler add or remove pods without touching the gateway.
 ## 6. Replicas, health, route filter
 
 - `/ping`: 200 when at least one pool is available (or has static caps and
-  can scale from zero), 503 while draining; `/healthz` and `/health`
-  include per-pool state. `/fv/v1/gateway/pools` (admin token) returns the
-  metrics of §7.
+  can scale from zero), 503 while draining; `/healthz` includes the same
+  safe per-pool summary as `/fv/v1/status`. The details (worker URLs and
+  ids, endpoint ids, probe errors) are only on `/fv/v1/gateway/pools`
+  (admin token: the metrics of §7 plus `state`, each pool's full view).
+  Errors returned to API clients name the pool only (a `503` for a pool
+  that cannot take work, a dispatch nobody took); the causes go to the
+  log.
 - Several replicas: every gateway route reads D1/R2, so with
   `server.workers_max > 1` (design §6.5) the gateway serves jobs, cancel
   and delete (routed through `gw_dispatch`), fal `status/stream` (D1 poll)
@@ -643,3 +650,49 @@ $4.18/h; the account balance went $48.03 → $46.74 over the run, which
 includes other agents' pods.
 
 <!-- END §8 Autoscaling -->
+
+## 9. Auth and the admin token
+
+- The gateway runs `auth.mode = "keys"` (the default, and what
+  `configs/serve/gateway*.toml` set): users call it with API keys, from
+  `FV_API_KEYS` (SHA-256 list) or minted with the admin token
+  (`/console/admin`, `POST /fv/v1/admin/keys`, stored in D1 so every
+  replica sees them). `FV_AUTH_MODE=none` still exists for a local demo;
+  the cluster script no longer uses it. Workers are always
+  `trust-gateway` behind the internal token.
+- **Admin token** (`/fv/v1/admin/*`, `/fv/v1/gateway/pools`, key minting):
+  `FV_ADMIN_TOKEN` when set; otherwise the server makes one on its first
+  start and keeps it in **`<state_dir>/admin_token`** (mode 600, written
+  under a temporary name and renamed), and every later start with the same
+  state dir reuses it. It is never logged: the log line names the file and
+  the token's first 4 characters. The process keeps only its SHA-256.
+  Workers keep no file (their admin routes sit behind the internal token).
+- **On a Runpod pod without a volume** the state dir is on the container
+  disk: the token survives a restart of the pod (an env PATCH, `extend`),
+  not its re-creation (a new pod makes a new token). Put `state_dir` on a
+  volume, or set `FV_ADMIN_TOKEN` from a Runpod secret, to keep it across
+  re-creations.
+- **Fetching it remotely**: with `FV_ADMIN_TOKEN_RECIPIENT` (an X25519
+  public key, 32 bytes base64) the server publishes the token sealed to
+  that key at `GET /fv/v1/admin/token/sealed` (public; 404 without a
+  recipient): `{"alg": "X25519-SHA512-AES256CTR-HMACSHA256", "epk", "iv",
+  "ct", "tag"}` (ephemeral X25519, SHA-512 key derivation, AES-256-CTR,
+  HMAC-SHA256 over `iv ‖ ct`; `crates/fastvideo-serve/src/admin_token.rs`).
+  Only the private key's holder can open it, with a stock `openssl`.
+- **The cluster** (`scripts/serve/runpod-cluster.sh`): `up` makes an X25519
+  key pair next to the state file (`cluster.json.admin-key.pem`, mode 600;
+  the private half never leaves the machine) and gives the gateway the
+  public half; nothing secret about the admin token is in the pod's env.
+  The owner reads the token with
+
+  ```bash
+  scripts/serve/runpod-cluster.sh admin-token
+  ```
+
+  which fetches the sealed token on first use, opens it with `openssl`,
+  keeps a copy in the state file (`.admin_token`, mode 600) and prints it.
+  `wait`, `status` and `smoke` use the same copy through a header file
+  (never argv): `wait` / `status` read the admin route
+  `/fv/v1/gateway/pools`, `smoke` mints an API key once (`.smoke_api_key`).
+  If the gateway pod was re-created, the copy stops working (401) and the
+  script fetches the new token by itself.

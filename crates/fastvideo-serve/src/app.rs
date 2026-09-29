@@ -14,7 +14,7 @@ use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{JobStore, ModelId, ProtocolId};
 use fastvideo_serve_kit::store::spawn_sweeper;
 use fastvideo_serve_kit::{
-    AdminToken, Auth, CallbackSender, KeyRing, KeyStore, ServeConfig, ServeCtx, UrlKey, WebhookSigner,
+    Auth, CallbackSender, KeyRing, KeyStore, ServeConfig, ServeCtx, UrlKey, WebhookSigner,
 };
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -53,8 +53,11 @@ pub struct App {
     pub d1: Option<Arc<fastvideo_serve_kit::D1JobStore>>,
     /// Minted API keys (`/fv/v1/admin/keys`).
     pub keys: Arc<KeyStore>,
-    /// Whether the admin token was generated at startup (no `FV_ADMIN_TOKEN`).
+    /// Whether the admin token is the server's own (`<state_dir>/admin_token`
+    /// or, on a worker, random) rather than `FV_ADMIN_TOKEN`.
     pub admin_token_generated: bool,
+    /// Where the admin token came from.
+    pub admin_token_source: crate::admin_token::Source,
     /// The Reactor local runtime, when mounted (feature `reactor`).
     #[cfg(feature = "reactor")]
     pub reactor: Option<fastvideo_reactor::Reactor>,
@@ -338,7 +341,11 @@ impl App {
         if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() && key_store.list().is_empty() {
             tracing::warn!("auth.mode = keys with no FV_API_KEYS and no minted keys: keyed APIs answer 401 until a key is minted (/console/admin)");
         }
-        let (admin, admin_token_generated) = admin_token(&config);
+        let admin_resolved = crate::admin_token::resolve(&config, !worker_role)?;
+        let admin_token_generated = admin_resolved.source != crate::admin_token::Source::Configured;
+        let admin_token_source = admin_resolved.source.clone();
+        let sealed_admin = admin_resolved.sealed;
+        let admin = admin_resolved.token;
         // fal webhooks are Ed25519-signed with a key published at
         // /.well-known/jwks.json; without FV_WEBHOOK_ED25519_KEY the key is
         // per process (receivers must re-fetch the JWKS after restarts).
@@ -406,7 +413,8 @@ impl App {
         #[cfg(feature = "http-client")]
         if let Some(g) = &gw {
             g.attach(ctx.clone());
-            let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone())
+                .merge(crate::admin_token::routes(sealed_admin.clone()));
             let d1_client = d1.as_ref().map(|d| d.client().clone());
             let autoscale = crate::autoscale::start(&config, g, d1_client, admin.clone(), &worker)?;
             let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
@@ -428,6 +436,7 @@ impl App {
                 d1,
                 keys: key_store,
                 admin_token_generated,
+                admin_token_source: admin_token_source.clone(),
                 #[cfg(feature = "reactor")]
                 reactor: None,
                 gateway: Some(g.clone()),
@@ -475,7 +484,9 @@ impl App {
             _ => None,
         };
         // Minted API keys: /fv/v1/admin/keys behind the admin token.
-        streams = streams.merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()));
+        streams = streams
+            .merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()))
+            .merge(crate::admin_token::routes(sealed_admin));
         #[allow(unused_mut)]
         let mut fal_extra: Router<ServeCtx> = Router::new();
         #[cfg(all(feature = "fal", feature = "webrtc"))]
@@ -545,6 +556,7 @@ impl App {
             d1,
             keys: key_store,
             admin_token_generated,
+            admin_token_source,
             #[cfg(feature = "reactor")]
             reactor,
             #[cfg(feature = "http-client")]
@@ -716,20 +728,6 @@ fn booting_reply(path: &str) -> axum::response::Response {
         )
             .into_response(),
     }
-}
-
-/// The admin token: `auth.admin_token` (`FV_ADMIN_TOKEN`), else a fresh
-/// CSPRNG token logged once at WARN. Only its digest is kept.
-fn admin_token(config: &Config) -> (AdminToken, bool) {
-    if !config.auth.admin_token.is_empty() {
-        return (AdminToken::from_secret(config.auth.admin_token.expose()), false);
-    }
-    let (token, plain) = AdminToken::generate();
-    let line = "=".repeat(78);
-    tracing::warn!(
-        "\n{line}\n  fv-serve admin token (generated at startup; set FV_ADMIN_TOKEN to choose one):\n\n      {plain}\n\n  Mint API keys at /console/admin or POST /fv/v1/admin/keys with\n  `Authorization: Bearer <admin token>`. It is not stored and not shown again.\n{line}"
-    );
-    (token, true)
 }
 
 /// Stops admission, drains the engine, waits for the job pumps, flushes D1.

@@ -15,6 +15,10 @@
 #   FV_POOL_<ID>_URLS                      pod pools' worker URLs (comma list); pods that
 #                                          register themselves (gateway.pool) join as well
 #   FV_PUBLIC_BASE_URL                     the gateway's public URL (workers use it too)
+#   FV_ADMIN_TOKEN (optional)              else the gateway makes one on its first start and
+#                                          keeps it in <state_dir>/admin_token (mode 600)
+#   FV_ADMIN_TOKEN_RECIPIENT (optional)    X25519 public key: the token sealed to it at
+#                                          /fv/v1/admin/token/sealed (docs/serve/gateway.md §9)
 #
 # Pool ids and their workers' configs (each worker: FV_SERVE_ROLE=worker,
 # FV_INTERNAL_TOKEN, FV_PUBLIC_BASE_URL = this gateway's URL):
@@ -37,7 +41,7 @@ shutdown_grace_s = 10
 sync_timeout_s = 600
 
 [auth]
-mode = "keys"
+mode = "keys"                      # the default; API keys: FV_API_KEYS or minted (/console/admin)
 
 [artifacts]
 backend = "auto"

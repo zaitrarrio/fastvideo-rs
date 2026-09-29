@@ -14,8 +14,14 @@
 # Environment (secrets never in this file): FV_INTERNAL_TOKEN (shared with
 # the workers), FV_URL_SIGNING_KEY and FV_WEBHOOK_ED25519_KEY (same values as
 # the workers), the D1 + R2 set (FV_CF_*, FV_D1_DATABASE_ID, FV_R2_*),
-# FV_ADMIN_TOKEN, FV_PUBLIC_BASE_URL (this gateway's URL, also given to the
-# workers), FV_POOL_<ID>_URLS, and FV_AUTH_MODE (the cluster runs `none`).
+# FV_PUBLIC_BASE_URL (this gateway's URL, also given to the workers),
+# FV_POOL_<ID>_URLS, FV_AUTH_MODE (the cluster runs `keys`, the default) and
+# FV_ADMIN_TOKEN_RECIPIENT (the cluster script's X25519 public key). No
+# FV_ADMIN_TOKEN: the gateway makes its admin token on the first start and
+# keeps it in state_dir/admin_token (mode 600, never logged); the cluster
+# script fetches it sealed to its key (`runpod-cluster.sh admin-token`).
+# /fvstate is the container disk: the token survives a restart of the pod,
+# not its re-creation.
 #
 # Pools and their workers (FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN,
 # FV_PUBLIC_BASE_URL = this gateway's URL):

@@ -323,6 +323,24 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     // The gateway's own auth mode (the console reads it), no secrets.
     assert_eq!(caps["auth"], json!({"mode": "keys"}), "{caps}");
     assert!(!caps.to_string().contains(KEY) && !caps.to_string().contains(TOKEN) && !caps.to_string().contains(ADMIN));
+    // Public bodies describe pools with the status view's safe summary: no
+    // worker URLs, worker / endpoint ids, IPs or probe errors (those are on
+    // the admin route only).
+    let (s, hz0, _) = http.call("GET", &format!("{g}/healthz"), None, None).await;
+    assert!(s == 200 || s == 503, "{hz0}");
+    for body in [&caps, &hz0] {
+        let text = body.to_string();
+        for secret in [h3.base.as_str(), ltx.base.as_str(), "127.0.0.1", "sim-ep", "worker-h3", "worker-ltx", "endpoint_id", "\"url\"", "last_error"] {
+            assert!(!text.contains(secret), "public body leaks {secret}: {body}");
+        }
+        let h3p = body["pools"].as_array().unwrap().iter().find(|p| p["id"] == "h3").unwrap();
+        assert_eq!(h3p["kind"], "pod");
+        assert_eq!(h3p["workers"][0]["label"], "w1", "{body}");
+    }
+    let (s, detail, _) = http.call("GET", &format!("{g}/fv/v1/gateway/pools"), None, Some(&format!("Bearer {ADMIN}"))).await;
+    assert_eq!(s, 200);
+    assert!(detail["state"].to_string().contains(h3.base.as_str()), "the admin route keeps the details: {detail}");
+    assert!(detail["state"].to_string().contains("sim-ep"), "{detail}");
 
     // Public status view (no key even in keys mode): per-pool and per-worker
     // state from the tick's probes, with no URLs, endpoint or worker ids.
@@ -497,6 +515,7 @@ async fn cancel_worker_loss_and_unavailable_pool() {
     let (s, v, h) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-ltx-turbo", "prompt": "x"})), bearer()).await;
     assert_eq!(s, 503, "{v}");
     assert!(h.get("retry-after").is_some());
+    assert!(!v.to_string().contains(&dead_base) && !v.to_string().contains("127.0.0.1"), "the error names no worker: {v}");
     let (_, caps, _) = http.call("GET", &format!("{g}/fv/v1/capabilities"), None, bearer()).await;
     assert!(caps["models"].as_array().unwrap().iter().any(|m| m["caps"]["id"] == "fake-ltx-turbo"), "static caps still advertise it");
     // An unknown model is the API's own 4xx, not 503.
@@ -618,6 +637,32 @@ async fn gateway_with_auth_none_reports_it_and_takes_keyless_jobs() {
     assert!(st["pools"][0]["workers"][0]["last_seen_s"].is_number(), "{st}");
     assert_eq!(st["models"]["fake-h3-turbo"]["state"], "down");
     assert!(!st.to_string().contains(&h3.base));
+}
+
+/// With `FV_ADMIN_TOKEN_RECIPIENT`, the admin token is published sealed to
+/// that key: only the private key opens it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admin_token_is_published_sealed_to_the_recipient() {
+    use base64::Engine as _;
+    let sh = Shared::new();
+    let sim = Sim::new("rp-key");
+    let (sim_base, _t) = sim.serve("127.0.0.1:0").await.unwrap();
+    let secret: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(11));
+    let public = base64::engine::general_purpose::STANDARD.encode(fastvideo_serve::admin_token::public_key(secret));
+    let gw = gateway_with(&sh, vec![serverless_pool("wan", &["fake-wan"])], &sim_base, Overrides::default(), |c| {
+        c.auth.admin_token_recipient = Some(public);
+    })
+    .await;
+    let http = Http::new();
+    let (s, v, _) = http.call("GET", &format!("{}/fv/v1/admin/token/sealed", gw.base), None, None).await;
+    assert_eq!(s, 200, "{v}");
+    assert!(!v.to_string().contains(ADMIN), "{v}");
+    assert_eq!(fastvideo_serve::admin_token::open(&v, secret).unwrap(), ADMIN);
+    assert!(fastvideo_serve::admin_token::open(&v, [7u8; 32]).is_err());
+    // Without a recipient: nothing is published.
+    let gw2 = gateway(&sh, vec![serverless_pool("wan", &["fake-wan"])], &sim_base, Overrides::default()).await;
+    let (s, _, _) = http.call("GET", &format!("{}/fv/v1/admin/token/sealed", gw2.base), None, None).await;
+    assert_eq!(s, 404);
 }
 
 #[cfg(feature = "reactor")]
