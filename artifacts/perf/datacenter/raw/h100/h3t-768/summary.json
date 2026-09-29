@@ -1,0 +1,472 @@
+{
+ "label": "h3t-768",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "job": {
+  "label": "h3t-768",
+  "i": 0,
+  "ok": true,
+  "wall_s": 29.27,
+  "id": "fvjob_e0738c0369de49d6acaf68cd98eb38e6",
+  "model": "fasth3",
+  "status": "succeeded",
+  "width": 1344,
+  "height": 768,
+  "num_frames": 124,
+  "fps": 24,
+  "error": null,
+  "metrics": {
+   "build_rtf": 3.3992497952903222,
+   "inference_s": 17.562790609,
+   "peak_memory_mb": 39432.9284658432,
+   "queue_s": 0.201709729,
+   "run_s": 28.48004047,
+   "stage_durations": {
+    "audio_decode": 0.061023744,
+    "denoise": 17.562790609,
+    "encode": 0.6095896189999999,
+    "refine": 0.007229892,
+    "text": 5.428949021,
+    "video_decode": 4.897298967
+   }
+  },
+  "tier": "turbo",
+  "recipe": "fasth3-4step-vsa",
+  "created_at": "2026-09-29T10:28:31.963050359Z",
+  "started_at": "2026-09-29T10:28:32.164760088Z",
+  "completed_at": "2026-09-29T10:29:00.644800558Z"
+ },
+ "window_s": 27.7288,
+ "gpu_busy_s": 23.0524,
+ "gpu_busy_pct": 83.14,
+ "idle_s": 4.6764,
+ "device_time_s": 23.216,
+ "kernels": 29822,
+ "kernels_under_10us": 4719,
+ "kernel_time_in_graphs_pct": 0.0,
+ "host_launch_calls": 29822,
+ "idle_attribution_s": {
+  "host_cpu": 2.3442,
+  "host_sync:cuStreamSynchronize": 1.5142,
+  "host_api:cuMemHostAlloc": 0.4431,
+  "launch_latency": 0.3576,
+  "host_sync:cuEventSynchronize": 0.0127,
+  "host_api:cuMemAllocAsync": 0.0045,
+  "host_api:cuLaunchKernelEx": 0.0001,
+  "host_api:cuLaunchKernel": 0.0,
+  "host_api:cuCtxSetCurrent": 0.0,
+  "host_api:cudaEventRecord_v3020": 0.0
+ },
+ "idle_attribution_n": {
+  "launch_latency": 36323,
+  "host_cpu": 617,
+  "host_sync:cuEventSynchronize": 85,
+  "host_api:cuMemAllocAsync": 36,
+  "host_sync:cuStreamSynchronize": 7,
+  "host_api:cuCtxSetCurrent": 2,
+  "host_api:cuMemHostAlloc": 1,
+  "host_api:cuLaunchKernelEx": 1,
+  "host_api:cudaEventRecord_v3020": 1,
+  "host_api:cuLaunchKernel": 1
+ },
+ "gap_histogram": {
+  "<5us": {
+   "n": 35815,
+   "s": 0.082
+  },
+  "5-50us": {
+   "n": 904,
+   "s": 0.0091
+  },
+  "50-500us": {
+   "n": 81,
+   "s": 0.0091
+  },
+  "0.5-5ms": {
+   "n": 110,
+   "s": 0.4325
+  },
+  "5-50ms": {
+   "n": 160,
+   "s": 1.8479
+  },
+  ">50ms": {
+   "n": 4,
+   "s": 2.2957
+  }
+ },
+ "largest_gaps": [
+  {
+   "gap_ms": 1482.07,
+   "at_s": 3.698,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy HtoD",
+   "after": "cast_f32_bf16"
+  },
+  {
+   "gap_ms": 443.145,
+   "at_s": 0.0,
+   "cause": "host_api:cuMemHostAlloc",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 265.63,
+   "at_s": 3.43,
+   "cause": "host_sync:cuEventSynchronize",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 104.904,
+   "at_s": 24.255,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 43.961,
+   "at_s": 5.2,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 37.63,
+   "at_s": 5.249,
+   "cause": "host_cpu",
+   "before": "mx_block_copy",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 33.425,
+   "at_s": 14.037,
+   "cause": "host_cpu",
+   "before": "mx_block_copy",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 33.397,
+   "at_s": 18.421,
+   "cause": "host_cpu",
+   "before": "mx_block_copy",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 32.878,
+   "at_s": 9.638,
+   "cause": "host_cpu",
+   "before": "mx_block_copy",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 28.999,
+   "at_s": 22.808,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "lincomb3",
+   "after": "gather_nd"
+  },
+  {
+   "gap_ms": 20.605,
+   "at_s": 0.462,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 16.876,
+   "at_s": 0.488,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 16.821,
+   "at_s": 0.51,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 13.857,
+   "at_s": 2.677,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 13.311,
+   "at_s": 1.611,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  }
+ ],
+ "category_s": {
+  "attention": 7.956,
+  "gemm": 6.8544,
+  "norm_elementwise": 3.1098,
+  "cast_quant": 2.3481,
+  "layout_copy": 1.7556,
+  "copies_memset": 1.1218,
+  "vae_conv": 0.0703
+ },
+ "category_pct": {
+  "attention": 34.27,
+  "gemm": 29.52,
+  "norm_elementwise": 13.4,
+  "cast_quant": 10.11,
+  "layout_copy": 7.56,
+  "copies_memset": 4.83,
+  "vae_conv": 0.3
+ },
+ "memcpy": {
+  "memcpy HtoD": {
+   "n": 1481,
+   "ms": 922.305,
+   "MB": 48999.7,
+   "GBps": 53.13
+  },
+  "memcpy DtoH": {
+   "n": 10,
+   "ms": 192.935,
+   "MB": 385.8,
+   "GBps": 2.0
+  },
+  "memset": {
+   "n": 7139,
+   "ms": 6.524,
+   "MB": 0.0,
+   "GBps": 0.0
+  }
+ },
+ "cuda_api_top": [
+  {
+   "api": "cuMemcpyHtoDAsync_v2",
+   "n": 1481,
+   "s": 18.9169
+  },
+  {
+   "api": "cuLaunchKernel",
+   "n": 21777,
+   "s": 1.4116
+  },
+  {
+   "api": "cuEventSynchronize",
+   "n": 59,
+   "s": 1.0965
+  },
+  {
+   "api": "cuStreamSynchronize",
+   "n": 61,
+   "s": 1.0753
+  },
+  {
+   "api": "cuMemHostAlloc",
+   "n": 1,
+   "s": 0.4429
+  },
+  {
+   "api": "cuLaunchKernelEx",
+   "n": 5895,
+   "s": 0.3229
+  },
+  {
+   "api": "cuMemFreeHost",
+   "n": 1,
+   "s": 0.2655
+  },
+  {
+   "api": "cuMemcpyDtoHAsync_v2",
+   "n": 10,
+   "s": 0.2345
+  },
+  {
+   "api": "cudaMemsetAsync_v3020",
+   "n": 5523,
+   "s": 0.1931
+  },
+  {
+   "api": "cuMemAllocAsync",
+   "n": 39750,
+   "s": 0.0709
+  },
+  {
+   "api": "cuMemFreeAsync",
+   "n": 39745,
+   "s": 0.0305
+  },
+  {
+   "api": "cuMemPoolTrimTo",
+   "n": 2,
+   "s": 0.029
+  },
+  {
+   "api": "cuEventRecord",
+   "n": 75,
+   "s": 0.0066
+  },
+  {
+   "api": "cudaLaunchKernel_v7000",
+   "n": 1348,
+   "s": 0.0042
+  },
+  {
+   "api": "cudaStreamIsCapturing_v10000",
+   "n": 12792,
+   "s": 0.0037
+  }
+ ],
+ "library_host_ranges": [],
+ "segments": [
+  {
+   "t0_s": 0.0,
+   "dur_s": 0.0,
+   "busy_pct": 100.0,
+   "n": 1,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 0.443,
+   "dur_s": 0.019,
+   "busy_pct": 18.4,
+   "n": 7,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 0.483,
+   "dur_s": 2.947,
+   "busy_pct": 31.4,
+   "n": 2355,
+   "mix": {
+    "copies_memset": 97.5,
+    "gemm": 2.0,
+    "norm_elementwise": 0.2,
+    "layout_copy": 0.1
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 3.696,
+   "dur_s": 0.002,
+   "busy_pct": 22.3,
+   "n": 43,
+   "mix": {
+    "gemm": 75.7,
+    "norm_elementwise": 8.8,
+    "copies_memset": 6.4,
+    "layout_copy": 5.3
+   },
+   "top": "nvjet_sm90_tst_128x32_64x10_4x1_v_bz_TNT"
+  },
+  {
+   "t0_s": 5.18,
+   "dur_s": 0.02,
+   "busy_pct": 10.3,
+   "n": 74,
+   "mix": {
+    "copies_memset": 75.4,
+    "gemm": 16.3,
+    "norm_elementwise": 4.8,
+    "cast_quant": 2.3
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 5.244,
+   "dur_s": 0.005,
+   "busy_pct": 60.7,
+   "n": 12,
+   "mix": {
+    "layout_copy": 37.1,
+    "cast_quant": 33.6,
+    "copies_memset": 23.9,
+    "gemm": 5.5
+   },
+   "top": "mx_block_copy"
+  },
+  {
+   "t0_s": 5.287,
+   "dur_s": 4.351,
+   "busy_pct": 99.8,
+   "n": 3441,
+   "mix": {
+    "attention": 41.2,
+    "gemm": 26.8,
+    "norm_elementwise": 13.6,
+    "cast_quant": 13.4
+   },
+   "top": "vsa_mma_attn_tma2"
+  },
+  {
+   "t0_s": 9.671,
+   "dur_s": 4.366,
+   "busy_pct": 99.8,
+   "n": 3441,
+   "mix": {
+    "attention": 41.2,
+    "gemm": 26.8,
+    "norm_elementwise": 13.6,
+    "cast_quant": 13.4
+   },
+   "top": "vsa_mma_attn_tma2"
+  },
+  {
+   "t0_s": 14.07,
+   "dur_s": 4.351,
+   "busy_pct": 99.8,
+   "n": 3441,
+   "mix": {
+    "attention": 41.2,
+    "gemm": 26.8,
+    "norm_elementwise": 13.6,
+    "cast_quant": 13.4
+   },
+   "top": "vsa_mma_attn_tma2"
+  },
+  {
+   "t0_s": 18.454,
+   "dur_s": 4.354,
+   "busy_pct": 99.8,
+   "n": 3431,
+   "mix": {
+    "attention": 41.2,
+    "gemm": 26.8,
+    "norm_elementwise": 13.6,
+    "cast_quant": 13.4
+   },
+   "top": "vsa_mma_attn_tma2"
+  },
+  {
+   "t0_s": 22.837,
+   "dur_s": 1.418,
+   "busy_pct": 98.5,
+   "n": 8042,
+   "mix": {
+    "gemm": 42.7,
+    "layout_copy": 18.1,
+    "attention": 15.5,
+    "norm_elementwise": 14.8
+   },
+   "top": "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_TNT"
+  },
+  {
+   "t0_s": 24.36,
+   "dur_s": 3.369,
+   "busy_pct": 99.0,
+   "n": 14164,
+   "mix": {
+    "gemm": 45.2,
+    "layout_copy": 18.6,
+    "attention": 16.5,
+    "norm_elementwise": 15.3
+   },
+   "top": "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_TNT"
+  }
+ ]
+}

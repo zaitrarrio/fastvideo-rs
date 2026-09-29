@@ -1,0 +1,323 @@
+{
+ "label": "wan5b-704",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "job": {
+  "label": "wan5b-704",
+  "i": 0,
+  "ok": true,
+  "wall_s": 13.64,
+  "id": "fvjob_0fc84707746742c5baa62305d227d0ef",
+  "model": "fastwan22-ti2v-5b",
+  "status": "succeeded",
+  "width": 1248,
+  "height": 704,
+  "num_frames": 121,
+  "fps": 24,
+  "error": null,
+  "metrics": {
+   "build_rtf": 0.5660328297520661,
+   "inference_s": 2.85374885,
+   "peak_memory_mb": null,
+   "queue_s": 0.112167022,
+   "run_s": 12.827710945,
+   "stage_durations": {
+    "denoise": 2.85374885,
+    "encode": 0.7756426490000001,
+    "text": 0.002805784,
+    "video_decode": 9.520200789
+   }
+  },
+  "tier": "turbo",
+  "recipe": "fastwan22-ti2v-5b-dmd3",
+  "created_at": "2026-09-29T10:34:27.451527238Z",
+  "started_at": "2026-09-29T10:34:27.56369426Z",
+  "completed_at": "2026-09-29T10:34:40.391405205Z"
+ },
+ "window_s": 12.3021,
+ "gpu_busy_s": 12.2529,
+ "gpu_busy_pct": 99.6,
+ "idle_s": 0.0493,
+ "device_time_s": 12.2912,
+ "kernels": 11845,
+ "kernels_under_10us": 1209,
+ "kernel_time_in_graphs_pct": 0.0,
+ "host_launch_calls": 11845,
+ "idle_attribution_s": {
+  "launch_latency": 0.0253,
+  "host_cpu": 0.022,
+  "host_api:cuKernelSetAttribute": 0.0012,
+  "host_sync:cuStreamSynchronize": 0.0008,
+  "host_api:cuLaunchKernel": 0.0
+ },
+ "idle_attribution_n": {
+  "launch_latency": 12762,
+  "host_cpu": 19,
+  "host_api:cuKernelSetAttribute": 4,
+  "host_sync:cuStreamSynchronize": 3,
+  "host_api:cuLaunchKernel": 1
+ },
+ "gap_histogram": {
+  "<5us": {
+   "n": 12734,
+   "s": 0.0241
+  },
+  "5-50us": {
+   "n": 34,
+   "s": 0.0004
+  },
+  "50-500us": {
+   "n": 13,
+   "s": 0.002
+  },
+  "0.5-5ms": {
+   "n": 7,
+   "s": 0.0124
+  },
+  "5-50ms": {
+   "n": 1,
+   "s": 0.0104
+  },
+  ">50ms": {
+   "n": 0,
+   "s": 0.0
+  }
+ },
+ "largest_gaps": [
+  {
+   "gap_ms": 10.365,
+   "at_s": 0.003,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 3.851,
+   "at_s": 2.856,
+   "cause": "host_cpu",
+   "before": "cast_f32_bf16",
+   "after": "cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0,\u2026"
+  },
+  {
+   "gap_ms": 2.913,
+   "at_s": 2.861,
+   "cause": "host_cpu",
+   "before": "cast_f32_bf16",
+   "after": "cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0,\u2026"
+  },
+  {
+   "gap_ms": 2.285,
+   "at_s": 2.867,
+   "cause": "host_cpu",
+   "before": "softmax_last_bf16",
+   "after": "nvjet_sm90_tss_256x112_64x4_1x2_h_bz_coopA_NNT"
+  },
+  {
+   "gap_ms": 1.004,
+   "at_s": 2.866,
+   "cause": "host_cpu",
+   "before": "cast_f32_bf16",
+   "after": "memset"
+  },
+  {
+   "gap_ms": 0.855,
+   "at_s": 0.016,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "gather_nd"
+  },
+  {
+   "gap_ms": 0.841,
+   "at_s": 2.969,
+   "cause": "host_api:cuKernelSetAttribute",
+   "before": "memcpy DtoH",
+   "after": "memset"
+  },
+  {
+   "gap_ms": 0.607,
+   "at_s": 2.855,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "lincomb3",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 0.377,
+   "at_s": 0.017,
+   "cause": "host_cpu",
+   "before": "gather_nd",
+   "after": "sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize256x64x8_stage3_warp\u2026"
+  },
+  {
+   "gap_ms": 0.347,
+   "at_s": 2.856,
+   "cause": "host_cpu",
+   "before": "bcast_binary",
+   "after": "cutlass::Kernel2<cutlass_80_tensorop_s1688gemm_256x64_16x4_nn_align4>(T1::Params)"
+  },
+  {
+   "gap_ms": 0.205,
+   "at_s": 0.0,
+   "cause": "host_api:cuLaunchKernel",
+   "before": "block_copy",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 0.182,
+   "at_s": 0.953,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "lincomb3",
+   "after": "gather_nd"
+  },
+  {
+   "gap_ms": 0.168,
+   "at_s": 0.023,
+   "cause": "host_api:cuKernelSetAttribute",
+   "before": "cast_f32_bf16",
+   "after": "memset"
+  },
+  {
+   "gap_ms": 0.137,
+   "at_s": 2.968,
+   "cause": "launch_latency",
+   "before": "cast_f32_bf16",
+   "after": "memcpy DtoH"
+  },
+  {
+   "gap_ms": 0.11,
+   "at_s": 1.905,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "lincomb3",
+   "after": "gather_nd"
+  }
+ ],
+ "category_s": {
+  "vae_conv": 3.9291,
+  "layout_copy": 3.9097,
+  "norm_elementwise": 1.3319,
+  "attention": 1.2763,
+  "gemm": 0.937,
+  "cast_quant": 0.8452,
+  "copies_memset": 0.062
+ },
+ "category_pct": {
+  "vae_conv": 31.97,
+  "layout_copy": 31.81,
+  "norm_elementwise": 10.84,
+  "attention": 10.38,
+  "gemm": 7.62,
+  "cast_quant": 6.88,
+  "copies_memset": 0.5
+ },
+ "memcpy": {
+  "memcpy HtoD": {
+   "n": 9,
+   "ms": 8.697,
+   "MB": 96.9,
+   "GBps": 11.14
+  },
+  "memset": {
+   "n": 1298,
+   "ms": 1.507,
+   "MB": 0.0,
+   "GBps": 0.0
+  },
+  "memcpy DtoH": {
+   "n": 16,
+   "ms": 51.815,
+   "MB": 318.9,
+   "GBps": 6.16
+  }
+ },
+ "cuda_api_top": [
+  {
+   "api": "cuEventSynchronize",
+   "n": 16,
+   "s": 9.2797
+  },
+  {
+   "api": "cuLaunchKernel",
+   "n": 8247,
+   "s": 4.06
+  },
+  {
+   "api": "cudaLaunchKernel_v7000",
+   "n": 2169,
+   "s": 2.1963
+  },
+  {
+   "api": "cuMemcpyHtoDAsync_v2",
+   "n": 9,
+   "s": 1.7763
+  },
+  {
+   "api": "cuStreamSynchronize",
+   "n": 3,
+   "s": 0.9439
+  },
+  {
+   "api": "cudaLaunchKernelExC_v11060",
+   "n": 822,
+   "s": 0.7078
+  },
+  {
+   "api": "cudaMemsetAsync_v3020",
+   "n": 1298,
+   "s": 0.4383
+  },
+  {
+   "api": "cuKernelSetAttribute",
+   "n": 12,
+   "s": 0.0862
+  },
+  {
+   "api": "cuMemcpyDtoHAsync_v2",
+   "n": 16,
+   "s": 0.0604
+  },
+  {
+   "api": "cuMemAllocAsync",
+   "n": 8997,
+   "s": 0.0513
+  },
+  {
+   "api": "cuLaunchKernelEx",
+   "n": 607,
+   "s": 0.0138
+  },
+  {
+   "api": "cuMemFreeAsync",
+   "n": 8993,
+   "s": 0.0086
+  },
+  {
+   "api": "cuEventRecord",
+   "n": 49,
+   "s": 0.0066
+  },
+  {
+   "api": "cudaStreamIsCapturing_v10000",
+   "n": 1384,
+   "s": 0.0004
+  },
+  {
+   "api": "cuKernelGetName",
+   "n": 2169,
+   "s": 0.0003
+  }
+ ],
+ "library_host_ranges": [],
+ "segments": [
+  {
+   "t0_s": 0.0,
+   "dur_s": 12.302,
+   "busy_pct": 99.6,
+   "n": 13154,
+   "mix": {
+    "vae_conv": 32.0,
+    "layout_copy": 31.8,
+    "norm_elementwise": 10.8,
+    "attention": 10.4
+   },
+   "top": "gather_nd"
+  }
+ ]
+}

@@ -1,0 +1,491 @@
+{
+ "label": "ltx-1080",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "job": {
+  "label": "ltx-1080",
+  "i": 0,
+  "ok": true,
+  "wall_s": 29.19,
+  "id": "fvjob_a442fea213844329a2204bd915dab2eb",
+  "model": "ltx25-distill-sol",
+  "status": "succeeded",
+  "width": 1920,
+  "height": 1088,
+  "num_frames": 145,
+  "fps": 24,
+  "error": null,
+  "metrics": {
+   "build_rtf": 3.7572479468689655,
+   "inference_s": 22.700039679,
+   "peak_memory_mb": 44407.20295238495,
+   "queue_s": 0.108049581,
+   "run_s": 28.163287779,
+   "stage_durations": {
+    "audio_decode": 0.183857463,
+    "denoise": 22.700039679,
+    "encode": 1.3660512630000001,
+    "stage1": 7.713567854,
+    "stage2": 14.439251317,
+    "text": 0.058697253,
+    "upsample": 0.547220508,
+    "video_decode": 3.933518999
+   }
+  },
+  "tier": "turbo",
+  "recipe": "ltx25-distill-two-stage-sol",
+  "created_at": "2026-09-29T10:32:43.590133543Z",
+  "started_at": "2026-09-29T10:32:43.698183124Z",
+  "completed_at": "2026-09-29T10:33:11.861470903Z"
+ },
+ "window_s": 25.5167,
+ "gpu_busy_s": 18.5844,
+ "gpu_busy_pct": 72.83,
+ "idle_s": 6.9322,
+ "device_time_s": 18.629,
+ "kernels": 87577,
+ "kernels_under_10us": 46247,
+ "kernel_time_in_graphs_pct": 0.0,
+ "host_launch_calls": 87577,
+ "idle_attribution_s": {
+  "host_cpu": 6.4799,
+  "launch_latency": 0.234,
+  "host_sync:cuStreamSynchronize": 0.1034,
+  "host_sync:cuEventSynchronize": 0.0907,
+  "host_api:cuMemAllocAsync": 0.0239,
+  "host_api:cuKernelSetAttribute": 0.0001,
+  "host_api:cuMemFreeAsync": 0.0001,
+  "host_api:cuMemcpyDtoHAsync_v2": 0.0001,
+  "host_api:cuKernelGetAttribute": 0.0,
+  "host_api:cuMemcpyHtoDAsync_v2": 0.0
+ },
+ "idle_attribution_n": {
+  "launch_latency": 95589,
+  "host_cpu": 823,
+  "host_api:cuMemAllocAsync": 29,
+  "host_sync:cuEventSynchronize": 13,
+  "host_sync:cuStreamSynchronize": 12,
+  "host_api:cuMemFreeAsync": 7,
+  "host_api:cuKernelGetAttribute": 3,
+  "host_api:cuMemcpyHtoDAsync_v2": 1,
+  "host_api:cuKernelSetAttribute": 1,
+  "host_api:cuMemcpyDtoHAsync_v2": 1
+ },
+ "gap_histogram": {
+  "<5us": {
+   "n": 94072,
+   "s": 0.2063
+  },
+  "5-50us": {
+   "n": 2250,
+   "s": 0.0199
+  },
+  "50-500us": {
+   "n": 55,
+   "s": 0.007
+  },
+  "0.5-5ms": {
+   "n": 47,
+   "s": 0.0845
+  },
+  "5-50ms": {
+   "n": 46,
+   "s": 0.4471
+  },
+  ">50ms": {
+   "n": 9,
+   "s": 6.1675
+  }
+ },
+ "largest_gaps": [
+  {
+   "gap_ms": 4586.158,
+   "at_s": 7.092,
+   "cause": "host_cpu",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 525.495,
+   "at_s": 22.854,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 497.215,
+   "at_s": 11.836,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 172.611,
+   "at_s": 24.512,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 128.296,
+   "at_s": 0.041,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 90.335,
+   "at_s": 25.344,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 58.336,
+   "at_s": 7.033,
+   "cause": "host_sync:cuEventSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 54.966,
+   "at_s": 21.531,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "bcast_binary"
+  },
+  {
+   "gap_ms": 54.046,
+   "at_s": 21.633,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 48.737,
+   "at_s": 12.412,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 31.997,
+   "at_s": 6.931,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy HtoD",
+   "after": "gather_nd"
+  },
+  {
+   "gap_ms": 25.934,
+   "at_s": 11.81,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 25.353,
+   "at_s": 0.191,
+   "cause": "host_sync:cuEventSynchronize",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 19.763,
+   "at_s": 11.734,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 15.593,
+   "at_s": 6.488,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  }
+ ],
+ "category_s": {
+  "gemm": 6.3917,
+  "attention": 4.0883,
+  "norm_elementwise": 3.3931,
+  "vae_conv": 2.518,
+  "copies_memset": 1.9773,
+  "layout_copy": 0.1885,
+  "cast_quant": 0.0722
+ },
+ "category_pct": {
+  "gemm": 34.31,
+  "attention": 21.95,
+  "norm_elementwise": 18.21,
+  "vae_conv": 13.52,
+  "copies_memset": 10.61,
+  "layout_copy": 1.01,
+  "cast_quant": 0.39
+ },
+ "memcpy": {
+  "memcpy HtoD": {
+   "n": 1175,
+   "ms": 1511.467,
+   "MB": 17731.2,
+   "GBps": 11.73
+  },
+  "memset": {
+   "n": 9802,
+   "ms": 9.165,
+   "MB": 7.4,
+   "GBps": 0.81
+  },
+  "memcpy DtoH": {
+   "n": 23,
+   "ms": 456.647,
+   "MB": 916.0,
+   "GBps": 2.01
+  }
+ },
+ "cuda_api_top": [
+  {
+   "api": "cuMemcpyHtoDAsync_v2",
+   "n": 1175,
+   "s": 14.1953
+  },
+  {
+   "api": "cuLaunchKernel",
+   "n": 63487,
+   "s": 0.9928
+  },
+  {
+   "api": "cudaLaunchKernelExC_v11060",
+   "n": 4202,
+   "s": 0.54
+  },
+  {
+   "api": "cuMemcpyDtoHAsync_v2",
+   "n": 23,
+   "s": 0.5334
+  },
+  {
+   "api": "cudaMemsetAsync_v3020",
+   "n": 9785,
+   "s": 0.5323
+  },
+  {
+   "api": "cuEventSynchronize",
+   "n": 31,
+   "s": 0.4883
+  },
+  {
+   "api": "cuMemAllocAsync",
+   "n": 92202,
+   "s": 0.1812
+  },
+  {
+   "api": "cuStreamSynchronize",
+   "n": 19,
+   "s": 0.1116
+  },
+  {
+   "api": "cuMemFreeAsync",
+   "n": 92198,
+   "s": 0.0714
+  },
+  {
+   "api": "cuMemPoolTrimTo",
+   "n": 3,
+   "s": 0.0655
+  },
+  {
+   "api": "cuLaunchKernelEx",
+   "n": 18260,
+   "s": 0.0602
+  },
+  {
+   "api": "cuKernelSetAttribute",
+   "n": 14,
+   "s": 0.0226
+  },
+  {
+   "api": "cuMemHostAlloc",
+   "n": 3,
+   "s": 0.0167
+  },
+  {
+   "api": "cudaStreamIsCapturing_v10000",
+   "n": 36526,
+   "s": 0.0106
+  },
+  {
+   "api": "cudaLaunchKernel_v7000",
+   "n": 1628,
+   "s": 0.0052
+  }
+ ],
+ "library_host_ranges": [],
+ "segments": [
+  {
+   "t0_s": 0.0,
+   "dur_s": 0.041,
+   "busy_pct": 68.3,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 0.17,
+   "dur_s": 0.021,
+   "busy_pct": 66.7,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 0.216,
+   "dur_s": 6.715,
+   "busy_pct": 93.8,
+   "n": 58564,
+   "mix": {
+    "gemm": 42.7,
+    "norm_elementwise": 22.0,
+    "attention": 18.0,
+    "copies_memset": 15.9
+   },
+   "top": "fa_dc90_fwd_d128"
+  },
+  {
+   "t0_s": 6.963,
+   "dur_s": 0.07,
+   "busy_pct": 93.4,
+   "n": 311,
+   "mix": {
+    "vae_conv": 62.2,
+    "layout_copy": 20.9,
+    "cast_quant": 8.8,
+    "norm_elementwise": 8.0
+   },
+   "top": "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128\u2026"
+  },
+  {
+   "t0_s": 7.091,
+   "dur_s": 0.001,
+   "busy_pct": 94.9,
+   "n": 11,
+   "mix": {
+    "copies_memset": 75.3,
+    "norm_elementwise": 11.7,
+    "cast_quant": 7.4,
+    "layout_copy": 5.7
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 11.678,
+   "dur_s": 0.133,
+   "busy_pct": 85.1,
+   "n": 2,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 11.836,
+   "dur_s": 0.0,
+   "busy_pct": 45.2,
+   "n": 2,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 12.334,
+   "dur_s": 0.079,
+   "busy_pct": 71.1,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 12.461,
+   "dur_s": 9.07,
+   "busy_pct": 99.3,
+   "n": 22368,
+   "mix": {
+    "gemm": 41.1,
+    "attention": 32.8,
+    "norm_elementwise": 21.9,
+    "copies_memset": 3.4
+   },
+   "top": "sol_mma_fwd_x4f"
+  },
+  {
+   "t0_s": 21.586,
+   "dur_s": 0.047,
+   "busy_pct": 92.0,
+   "n": 1664,
+   "mix": {
+    "vae_conv": 68.5,
+    "layout_copy": 21.3,
+    "norm_elementwise": 9.1,
+    "copies_memset": 0.9
+   },
+   "top": "cudnn::cnn::dgrad2d_grouped_direct_kernel<float, int, float, float, (bool)0, (bo\u2026"
+  },
+  {
+   "t0_s": 21.687,
+   "dur_s": 1.167,
+   "busy_pct": 95.8,
+   "n": 6344,
+   "mix": {
+    "vae_conv": 83.2,
+    "copies_memset": 13.6,
+    "layout_copy": 1.9,
+    "norm_elementwise": 1.0
+   },
+   "top": "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128\u2026"
+  },
+  {
+   "t0_s": 23.379,
+   "dur_s": 1.133,
+   "busy_pct": 98.7,
+   "n": 5502,
+   "mix": {
+    "vae_conv": 88.4,
+    "copies_memset": 9.4,
+    "layout_copy": 1.2,
+    "norm_elementwise": 0.7
+   },
+   "top": "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128\u2026"
+  },
+  {
+   "t0_s": 24.685,
+   "dur_s": 0.659,
+   "busy_pct": 97.7,
+   "n": 3401,
+   "mix": {
+    "vae_conv": 77.2,
+    "copies_memset": 18.9,
+    "layout_copy": 2.1,
+    "norm_elementwise": 1.2
+   },
+   "top": "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128\u2026"
+  },
+  {
+   "t0_s": 25.434,
+   "dur_s": 0.082,
+   "busy_pct": 97.3,
+   "n": 396,
+   "mix": {
+    "copies_memset": 88.1,
+    "layout_copy": 6.2,
+    "norm_elementwise": 3.8,
+    "cast_quant": 2.0
+   },
+   "top": "memcpy DtoH"
+  }
+ ]
+}

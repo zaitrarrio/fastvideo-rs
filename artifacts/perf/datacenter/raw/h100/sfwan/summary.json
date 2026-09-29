@@ -1,0 +1,324 @@
+{
+ "label": "sfwan",
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "job": null,
+ "window_s": 9.9992,
+ "gpu_busy_s": 9.6669,
+ "gpu_busy_pct": 96.68,
+ "idle_s": 0.3323,
+ "device_time_s": 9.6669,
+ "kernels": 91390,
+ "kernels_under_10us": 19282,
+ "kernel_time_in_graphs_pct": 88.6,
+ "host_launch_calls": 22584,
+ "idle_attribution_s": {
+  "host_sync:cuStreamSynchronize": 0.1127,
+  "launch_latency": 0.1065,
+  "host_api:cuGraphInstantiateWithFlags": 0.074,
+  "host_cpu": 0.0366,
+  "host_api:cuMemcpyDtoHAsync_v2": 0.0021,
+  "host_api:cuMemAllocAsync": 0.0003,
+  "host_api:cuLibraryLoadData": 0.0001,
+  "host_api:cuMemFreeAsync": 0.0
+ },
+ "idle_attribution_n": {
+  "launch_latency": 97546,
+  "host_cpu": 108,
+  "host_sync:cuStreamSynchronize": 78,
+  "host_api:cuMemAllocAsync": 19,
+  "host_api:cuMemcpyDtoHAsync_v2": 5,
+  "host_api:cuGraphInstantiateWithFlags": 1,
+  "host_api:cuLibraryLoadData": 1,
+  "host_api:cuMemFreeAsync": 1
+ },
+ "gap_histogram": {
+  "<5us": {
+   "n": 94437,
+   "s": 0.0658
+  },
+  "5-50us": {
+   "n": 3003,
+   "s": 0.0177
+  },
+  "50-500us": {
+   "n": 275,
+   "s": 0.0309
+  },
+  "0.5-5ms": {
+   "n": 41,
+   "s": 0.0765
+  },
+  "5-50ms": {
+   "n": 2,
+   "s": 0.0664
+  },
+  ">50ms": {
+   "n": 1,
+   "s": 0.0749
+  }
+ },
+ "largest_gaps": [
+  {
+   "gap_ms": 74.913,
+   "at_s": 0.457,
+   "cause": "host_api:cuGraphInstantiateWithFlags",
+   "before": "mx_block_copy",
+   "after": "cast_f32_bf16"
+  },
+  {
+   "gap_ms": 49.372,
+   "at_s": 3.769,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 17.035,
+   "at_s": 0.916,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "mx_block_copy",
+   "after": "mx_gather_nd"
+  },
+  {
+   "gap_ms": 4.737,
+   "at_s": 3.649,
+   "cause": "host_cpu",
+   "before": "clamp_f",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.64,
+   "at_s": 5.36,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.619,
+   "at_s": 2.089,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.619,
+   "at_s": 4.844,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.617,
+   "at_s": 1.573,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.615,
+   "at_s": 8.969,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.615,
+   "at_s": 2.603,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.614,
+   "at_s": 1.06,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.609,
+   "at_s": 4.328,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.603,
+   "at_s": 9.485,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.6,
+   "at_s": 5.875,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 2.592,
+   "at_s": 7.939,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  }
+ ],
+ "category_s": {
+  "attention": 4.9707,
+  "norm_elementwise": 1.8125,
+  "gemm": 1.5278,
+  "layout_copy": 0.8705,
+  "vae_conv": 0.3607,
+  "copies_memset": 0.0721,
+  "cast_quant": 0.0525
+ },
+ "category_pct": {
+  "attention": 51.42,
+  "norm_elementwise": 18.75,
+  "gemm": 15.8,
+  "layout_copy": 9.0,
+  "vae_conv": 3.73,
+  "copies_memset": 0.75,
+  "cast_quant": 0.54
+ },
+ "memcpy": {
+  "memset": {
+   "n": 6126,
+   "ms": 5.316,
+   "MB": 0.0,
+   "GBps": 0.0
+  },
+  "memcpy HtoD": {
+   "n": 211,
+   "ms": 38.112,
+   "MB": 608.6,
+   "GBps": 15.97
+  },
+  "memcpy DtoH": {
+   "n": 39,
+   "ms": 28.66,
+   "MB": 298.9,
+   "GBps": 10.43
+  }
+ },
+ "cuda_api_top": [
+  {
+   "api": "cuStreamSynchronize",
+   "n": 83,
+   "s": 9.2322
+  },
+  {
+   "api": "cuLaunchKernel",
+   "n": 16439,
+   "s": 0.3555
+  },
+  {
+   "api": "cuGraphLaunch",
+   "n": 36,
+   "s": 0.3119
+  },
+  {
+   "api": "cudaMemsetAsync_v3020",
+   "n": 1580,
+   "s": 0.2927
+  },
+  {
+   "api": "cuMemcpyDtoHAsync_v2",
+   "n": 43,
+   "s": 0.1155
+  },
+  {
+   "api": "cuLaunchKernelEx",
+   "n": 3257,
+   "s": 0.0901
+  },
+  {
+   "api": "cuMemcpyHtoDAsync_v2",
+   "n": 233,
+   "s": 0.064
+  },
+  {
+   "api": "cuGraphInstantiateWithFlags",
+   "n": 2,
+   "s": 0.0514
+  },
+  {
+   "api": "cuMemAllocAsync",
+   "n": 20145,
+   "s": 0.024
+  },
+  {
+   "api": "cuMemFreeAsync",
+   "n": 20140,
+   "s": 0.0145
+  },
+  {
+   "api": "cudaLaunchKernel_v7000",
+   "n": 1968,
+   "s": 0.0065
+  },
+  {
+   "api": "cudaLaunchKernelExC_v11060",
+   "n": 884,
+   "s": 0.0035
+  },
+  {
+   "api": "cuStreamEndCapture",
+   "n": 2,
+   "s": 0.0019
+  },
+  {
+   "api": "cuGraphNodeGetType",
+   "n": 14171,
+   "s": 0.0013
+  },
+  {
+   "api": "cudaStreamIsCapturing_v10000",
+   "n": 3419,
+   "s": 0.0011
+  }
+ ],
+ "library_host_ranges": [],
+ "segments": [
+  {
+   "t0_s": 0.0,
+   "dur_s": 0.457,
+   "busy_pct": 97.0,
+   "n": 4438,
+   "mix": {
+    "attention": 52.5,
+    "norm_elementwise": 18.9,
+    "gemm": 16.3,
+    "layout_copy": 7.9
+   },
+   "top": "fa_dc90_fwd_d128"
+  },
+  {
+   "t0_s": 0.532,
+   "dur_s": 3.237,
+   "busy_pct": 97.4,
+   "n": 31648,
+   "mix": {
+    "attention": 49.9,
+    "norm_elementwise": 18.8,
+    "gemm": 15.4,
+    "layout_copy": 9.2
+   },
+   "top": "fa_dc90_fwd_d128"
+  },
+  {
+   "t0_s": 3.819,
+   "dur_s": 6.18,
+   "busy_pct": 98.2,
+   "n": 61680,
+   "mix": {
+    "attention": 52.1,
+    "norm_elementwise": 18.7,
+    "gemm": 16.0,
+    "layout_copy": 9.0
+   },
+   "top": "fa_dc90_fwd_d128"
+  }
+ ]
+}
