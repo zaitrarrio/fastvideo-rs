@@ -10,6 +10,10 @@ h3-to-ltx	Efficient-Large-Model/H3-to-LTX-Latent-Adapter	config.json model.safet
 ltx2	Lightricks/LTX-2	tokenizer/* text_encoder/model-* text_encoder/*.json vae/* audio_vae/* vocoder/* ltx-2-19b-distilled.safetensors
 ltx25	Lightricks/LTX-2.5-Diffusers	tokenizer/* text_encoder/model-* text_encoder/*.json connectors/* transformer/* vae/* audio_vae/* vocoder/* latent_upsampler/* ltx-2.5-22b-distilled-lora-450-bf16.safetensors
 ltx23	FastVideo/LTX-2.3-Distilled-Diffusers	tokenizer/* text_encoder/model-* text_encoder/gemma/* text_encoder/*.json text_embedding_projection/* transformer/* vae/* audio_vae/* vocoder/* spatial_upscaler/* latent_upsampler/* ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-22b-distilled-lora-384.safetensors
+# ltx25-dev: the LTX-2.5 *dev* transformer (transformer_full/, 4 shards, 37 976 221 088 B; LTX-2 community license,
+# gated auto) @ 426936f8b22dc28e4def61e515478b0b7e4a53cc, fetched with fetch-hub-tree.sh (LFS SHA-256 checked against the
+# Hub). Stage 1 of audio-to-video on ltx-pro (a2vid_two_stage.py); the rest of the bundle is the ltx25 tree.
+ltx25-dev	Lightricks/LTX-2.5-Diffusers	transformer_full/*
 # ltx25-ic-lora-ingredients: gated (auto); fetched with fetch-ltx-iclora.sh @ 12040e4, LFS sha256 ff873a5b…8715e95
 ltx25-ic-lora-ingredients	Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients	ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors README.md
 hy15-480-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*

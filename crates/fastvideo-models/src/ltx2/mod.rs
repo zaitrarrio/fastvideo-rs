@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod fbcache;
+pub mod guidance;
 pub mod hq;
 pub mod lora;
 pub mod memory;

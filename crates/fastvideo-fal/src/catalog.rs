@@ -460,7 +460,10 @@ fn a2v_schema(endpoint: Endpoint, class: LtxClass) -> Value {
     let (glo, ghi) = a2v::A2V_GUIDANCE;
     props.insert(
         "guidance_scale".into(),
-        json!({"anyOf": [{"type": "number", "minimum": glo, "maximum": ghi}, {"type": "null"}], "default": null, "description": "Guidance scale for video generation. Accepted; the distilled model this server runs is unguided.", "x-fv-advanced": true}),
+        json!({"anyOf": [{"type": "number", "minimum": glo, "maximum": ghi}, {"type": "null"}], "default": null, "description": match class {
+            LtxClass::Pro => "Guidance scale for video generation: the video CFG scale of the guided pipeline (default 3 when unset).",
+            LtxClass::Fast => "Guidance scale for video generation. Accepted; the distilled model the fast endpoint runs is unguided.",
+        }, "x-fv-advanced": true}),
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());

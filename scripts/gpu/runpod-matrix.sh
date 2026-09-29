@@ -2283,8 +2283,18 @@ Audio: male speech, clear voice, quiet room"
                 a2v_prompt="${FV_LTX_A2V_I2V_PROMPT:-A calm beach at golden hour, gentle waves rolling in, while a narrator speaks.}"
               fi
               ltx_args=(--prompt "$a2v_prompt" --seed "$SEED" --two-stage --text streamed) ;;
+            ltx25-a2v-guided)
+              # Guided audio-to-video (docs/oracle.md "LTX-2.5 guided
+              # audio-to-video"): the dev transformer, the multimodal guider
+              # at stage 1, the distilled LoRA at stage 2; the talking head.
+              wcell=ltx25-a2v-guided
+              arm=(--dense-stage2 --guided --audio "$fx/speech-flite-44k.flac")
+              a2v_prompt="${FV_LTX_A2V_PROMPT:-A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word.}"
+              ltx_args=(--prompt "$a2v_prompt" --seed "$SEED" --two-stage --text streamed) ;;
           esac
-          cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+          ltx_dit="$W/ltx25"
+          [[ "$target" == ltx25-a2v-guided ]] && ltx_dit="$W/ltx25-dev/transformer_full"
+          cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$ltx_dit"
             "${geo[@]}" "${arm[@]}" "${ltx_args[@]}") ;;
         sfwan13)
           # FastVideo SF-Wan 1.3B at its defaults; the full Wan VAE (the

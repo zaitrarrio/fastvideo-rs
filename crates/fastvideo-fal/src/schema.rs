@@ -992,6 +992,15 @@ mod tests {
         assert_eq!(r.keyframes.len(), 1);
         assert!(r.prompt.is_empty());
         assert_eq!(r.audio_in.as_ref().unwrap().max_s, Some(10));
+        // Pro runs the guided dev pipeline: guidance_scale is its CFG scale.
+        assert_eq!(r.sampling.guidance, None);
+        assert!(r.accepted_noop.is_empty());
+        let r = parse(Endpoint::LtxAudioToVideoPro, json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 5}))
+            .unwrap()
+            .normalize("ltx-pro", &cx())
+            .unwrap();
+        assert_eq!(r.sampling.guidance, Some(5.0));
+        assert!(r.accepted_noop.is_empty());
         let r = parse(Endpoint::LtxAudioToVideoFast, json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "aspect_ratio": "9:16"}))
             .unwrap()
             .normalize("ltx-turbo", &cx())

@@ -346,6 +346,24 @@ pub enum Stage {
         /// `num_frames / frame_rate`.
         #[arg(long)]
         audio: Option<PathBuf>,
+        /// Guided audio-to-video (`a2vid_two_stage.py` proper, needs `--audio`,
+        /// `--two-stage`, `--dense-stage2` and `--model-version 2.5`): `--dit`
+        /// names the LTX-2.5 *dev* transformer (`ltx25-dev/transformer_full`),
+        /// stage 1 runs the multimodal guider (CFG, STG on block 28, modality
+        /// guidance, rescale 0.7) over the `LTX2Scheduler` schedule, stage 2
+        /// the distilled LoRA (beside `--weights`) fused at 1. The unfused
+        /// base stays in pinned host memory (`FASTVIDEO_LTX2_LORA_BASE`).
+        #[arg(long)]
+        guided: bool,
+        /// `--guided`: the video CFG scale (the reference default 3).
+        #[arg(long)]
+        guidance_scale: Option<f32>,
+        /// `--guided`: stage-1 steps (the reference default 30).
+        #[arg(long)]
+        num_inference_steps: Option<usize>,
+        /// `--guided`: the negative prompt (default: the reference CLI's).
+        #[arg(long)]
+        negative_prompt: Option<String>,
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
@@ -636,6 +654,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             reference_strength,
             ic_lora_strength,
             audio,
+            guided,
+            guidance_scale,
+            num_inference_steps,
+            negative_prompt,
             sol_stage2,
             dense_stage2,
             pisa_stage2,
@@ -645,6 +667,25 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         } => {
             if let Some(gib) = device_budget_gib {
                 crate::gpu::set_budget_gib(*gib)?;
+            }
+            if *guided
+                && !(audio.is_some()
+                    && *two_stage
+                    && *dense_stage2
+                    && matches!(model_version, ModelVersion::V25))
+            {
+                return Err(anyhow::anyhow!(
+                    "--guided is the LTX-2.5 dev audio-to-video: pass --model-version 2.5 --audio FILE --two-stage --dense-stage2"
+                )
+                .into());
+            }
+            if !*guided
+                && (guidance_scale.is_some() || num_inference_steps.is_some() || negative_prompt.is_some())
+            {
+                return Err(anyhow::anyhow!(
+                    "--guidance-scale / --num-inference-steps / --negative-prompt need --guided"
+                )
+                .into());
             }
             if *sol_stage2 && *dense_stage2 {
                 return Err(anyhow::anyhow!("--sol-stage2 and --dense-stage2 conflict").into());
@@ -717,6 +758,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .map_err(|e| anyhow::anyhow!(e))?,
                     tae: ltx_tae_weights.clone(),
                     ic_lora: ic_lora.clone(),
+                    lora_base_host: *guided,
                 },
                 &match prompts {
                     Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
@@ -753,6 +795,12 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     audio: audio
                         .clone()
                         .map(fastvideo_cudarc::ltx2::a2v::DrivingAudio::new),
+                    guided: guided.then(|| GuidedArgs {
+                        guidance_scale: guidance_scale
+                            .unwrap_or(fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale),
+                        steps: *num_inference_steps,
+                        negative_prompt: negative_prompt.clone().unwrap_or_default(),
+                    }),
                 },
             )
         }
@@ -1985,7 +2033,16 @@ fn gen(
     );
     let multi = *multi;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
-    let cfg = model_version.config();
+    let cfg = match &extras.guided {
+        Some(_) => fastvideo_models::ltx2::config::ltx2_5_22b_dev(),
+        None => model_version.config(),
+    };
+    report.set(
+        "guided",
+        extras.guided.as_ref().map(|g| {
+            json!({"guidance_scale": g.guidance_scale, "steps": g.steps, "negative_prompt": g.negative_prompt})
+        }),
+    );
     let request = Ltx2Request {
         prompt: prompt.to_string(),
         height: g.height,
@@ -1997,10 +2054,14 @@ fn gen(
         mp4,
         two_stage,
         diff_vae,
-        negative_prompt: String::new(),
-        guidance_scale: 1.0,
+        negative_prompt: extras
+            .guided
+            .as_ref()
+            .map(|g| g.negative_prompt.clone())
+            .unwrap_or_default(),
+        guidance_scale: extras.guided.as_ref().map_or(1.0, |g| g.guidance_scale),
         audio_guidance_scale: 1.0,
-        num_inference_steps: None,
+        num_inference_steps: extras.guided.as_ref().and_then(|g| g.steps),
         refine_steps: None,
         sol_stage2,
         pisa_stage2,
@@ -2351,6 +2412,17 @@ struct GenExtras {
     reference: Option<fastvideo_cudarc::ltx2::pipeline::IcReference>,
     /// `--audio` (audio-to-video).
     audio: Option<fastvideo_cudarc::ltx2::a2v::DrivingAudio>,
+    /// `--guided` (the dev transformer's guided audio-to-video).
+    guided: Option<GuidedArgs>,
+}
+
+/// `--guided`'s knobs.
+#[derive(Debug, Clone)]
+struct GuidedArgs {
+    guidance_scale: f32,
+    steps: Option<usize>,
+    /// Empty: the reference CLI's default negative prompt.
+    negative_prompt: String,
 }
 
 /// `PATH@FRAME[@STRENGTH[@CRF]]` → a conditioning image.

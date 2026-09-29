@@ -185,7 +185,31 @@ pub struct Ltx2Recipe {
     /// `Task::Ref2V` only, with a dense stage 2 (`ICLoraPipeline`).
     #[serde(default)]
     pub ic_lora: Option<PathBuf>,
+    /// Audio-to-video on this model ([`LtxA2v`]).
+    #[serde(default)]
+    pub a2v: LtxA2v,
 }
+
+/// How an LTX-2.5 model serves audio-to-video.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LtxA2v {
+    /// The driving audio pinned as clean latents on the distilled stages
+    /// (unguided; the fast tier).
+    #[default]
+    Distilled,
+    /// Not served: the tier's guided companion takes it (`ltx-pro`).
+    Off,
+    /// `A2VidPipelineTwoStage` proper, the model serving audio-to-video only:
+    /// `dit` is the LTX-2.5 *dev* transformer (`ltx25-dev/transformer_full`),
+    /// stage 1 runs the multimodal guider (CFG / STG / modality / rescale,
+    /// `stage1_steps` on the `LTX2Scheduler` schedule), stage 2 the distilled
+    /// LoRA fused at 1 on the same DiT.
+    Guided,
+}
+
+/// The dev transformer of the guided audio-to-video, under the weight root.
+pub const LTX25_DEV_DIT: &str = "ltx25-dev/transformer_full";
 
 /// Wan sampler.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -355,6 +379,7 @@ impl CudaModel {
     pub fn dit_bytes(&self) -> Option<u64> {
         let dir = match &self.recipe {
             CudaRecipe::Ltx2(r) if r.dit.is_file() => return r.dit.metadata().ok().map(|m| m.len()),
+            CudaRecipe::Ltx2(r) if r.a2v == LtxA2v::Guided => r.dit.clone(),
             CudaRecipe::Ltx2(r) => r.dit.join("transformer"),
             CudaRecipe::H3(r) if r.ref2va => {
                 r.ref_weights.as_deref().unwrap_or(&r.weights).join("transformer_ref")
@@ -432,6 +457,14 @@ impl CudaModel {
                 }
                 .to_owned(),
                 if r.tae.is_some() { "taehv" } else { "full" }.to_owned(),
+                if r.a2v == LtxA2v::Guided {
+                    format!(
+                        "Audio-to-video, guided (A2VidPipelineTwoStage): the LTX-2.5 dev DiT, stage 1 {} steps \
+                         with CFG 3 (guidance_scale), STG on block 28, modality guidance 3 and rescale 0.7, stage 2 \
+                         the distilled LoRA, dense, conv VAE; the output carries the input audio",
+                        r.stage1_steps
+                    )
+                } else {
                 format!(
                     "{}LTX-{} distilled {}, {} stage 2{}{}",
                     if r.ic_lora.is_some() {
@@ -451,7 +484,8 @@ impl CudaModel {
                     },
                     if r.profile.as_deref() == Some(LTX_DRAFT_PROFILE) { ", NVFP4 video FFN" } else { "" },
                     if r.tae.is_some() { ", TAEHV decode (fails the quality gate)" } else { ", conv VAE" },
-                ),
+                )
+                },
             ),
             CudaRecipe::Wan(r) => (
                 r.sampler.steps(),
@@ -578,6 +612,9 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
     if r.ic_lora.is_some() {
         return ltx2_ref_caps(id, r, fps);
     }
+    if r.a2v == LtxA2v::Guided {
+        return ltx2_a2v_guided_caps(id, r);
+    }
     ModelCaps {
         id: ModelId::new(id),
         family: Family::Ltx2,
@@ -586,9 +623,11 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         // the 2.5 distilled pipeline (`ltx2::i2v_encode`, oracle-checked on 2.5).
         // Audio-to-video: the driving audio pinned as clean audio latents on
         // both stages (`ltx2::a2v`, docs/oracle.md "LTX-2.5 audio-to-video").
-        tasks: match r.version {
-            LtxVersion::V25 => [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
-            LtxVersion::V23 => [Task::T2V].into_iter().collect(),
+        // `a2v = off` (`ltx-pro`): its guided companion serves audio-to-video.
+        tasks: match (r.version, r.a2v) {
+            (LtxVersion::V25, LtxA2v::Off) => [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect(),
+            (LtxVersion::V25, _) => [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
+            (LtxVersion::V23, _) => [Task::T2V].into_iter().collect(),
         },
         audio: Some(AudioCaps {
             native_rate: cfg.vocoder.output_sampling_rate as u32,
@@ -655,6 +694,22 @@ fn ltx2_ref_caps(id: &str, r: &Ltx2Recipe, fps: u32) -> ModelCaps {
         knobs: KnobCaps {
             seed: true,
             reference_strength: true,
+            ..KnobCaps::default()
+        },
+        ..base
+    }
+}
+
+/// LTX-2.5 guided audio-to-video (the dev-DiT companion of `ltx-pro`):
+/// audio-to-video only, the video CFG scale a per-request knob
+/// (`guidance_scale`; the reference default 3 when unset).
+fn ltx2_a2v_guided_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
+    let base = ltx2_caps(id, &Ltx2Recipe { a2v: LtxA2v::Distilled, ..r.clone() });
+    ModelCaps {
+        tasks: [Task::A2V].into_iter().collect(),
+        knobs: KnobCaps {
+            seed: true,
+            guidance: true,
             ..KnobCaps::default()
         },
         ..base
@@ -789,6 +844,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         stage1_steps: 8,
         refine_steps: 3,
         ic_lora: None,
+        a2v: LtxA2v::Distilled,
     }
 }
 
@@ -855,6 +911,14 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
                 .join(fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_FILE),
         ),
         canvas: LTX_REF_CANVAS,
+        ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
+    };
+    // Audio-to-video on the dev transformer, guided (`A2VidPipelineTwoStage`):
+    // the companion of `ltx-pro` for that task.
+    let ltx_a2v_guided = Ltx2Recipe {
+        dit: layout.root.join(LTX25_DEV_DIT),
+        a2v: LtxA2v::Guided,
+        stage1_steps: fastvideo_models::ltx2::guidance::LTX25_DEV_STEPS as u32,
         ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
     };
     let ltx_draft = Ltx2Recipe {
@@ -952,7 +1016,10 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "ltx25-distill-dense",
             Some(Tier::Max),
             "ltx25-distill-two-stage-dense",
-            CudaRecipe::Ltx2(ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")),
+            CudaRecipe::Ltx2(Ltx2Recipe {
+                a2v: LtxA2v::Off,
+                ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
+            }),
         ),
         CudaModel::new(
             "ltx25-distill-sol",
@@ -973,6 +1040,14 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             Some(Tier::Max),
             "ltx25-ic-lora-ingredients-dense",
             CudaRecipe::Ltx2(ltx_ref),
+        ),
+        // Audio-to-video companion of `ltx-pro`: the routing sends A2V
+        // requests for `ltx-pro` here (the fast tier keeps the distilled A2V).
+        CudaModel::new(
+            "ltx25-a2v-guided",
+            Some(Tier::Max),
+            "ltx25-dev-a2v-guided",
+            CudaRecipe::Ltx2(ltx_a2v_guided),
         ),
         CudaModel::new(
             "wan22-ti2v-5b",
@@ -1156,6 +1231,17 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("ic_lora").filter(|_| r.ic_lora.is_some()) {
                 r.ic_lora = Some(t.into());
+            }
+            if r.a2v == LtxA2v::Guided {
+                // The dev DiT: `dit = "..."`, else beside the weight root's
+                // parent as in the catalog layout.
+                r.dit = match x("dit") {
+                    Some(d) => d.into(),
+                    None => match &e.weights {
+                        Some(w) => w.parent().unwrap_or(w).join(LTX25_DEV_DIT),
+                        None => r.dit.clone(),
+                    },
+                };
             }
         }
         CudaRecipe::Wan(r) => {
@@ -1529,6 +1615,57 @@ mod tests {
         }
         let tier_max = fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied()).unwrap();
         assert_eq!(tier_max.id.as_str(), "sol-h3");
+    }
+
+    #[test]
+    fn ltx_guided_a2v_is_the_task_companion_of_ltx_pro() {
+        use fastvideo_protocol::*;
+        let cat = catalog(&WeightLayout::default());
+        let m = cat.iter().find(|m| m.id.as_str() == "ltx25-a2v-guided").unwrap().clone();
+        let CudaRecipe::Ltx2(r) = &m.recipe else { panic!("ltx25-a2v-guided") };
+        assert_eq!((r.a2v, r.stage2, r.two_stage), (LtxA2v::Guided, LtxStage2::Dense, true));
+        assert_eq!((r.stage1_steps, r.refine_steps), (30, 3));
+        assert!(r.dit.ends_with("ltx25-dev/transformer_full"));
+        assert!(r.weights.ends_with("ltx25"));
+        let c = m.caps();
+        assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::A2V]);
+        assert!(c.knobs.seed && c.knobs.guidance && !c.knobs.steps && !c.knobs.negative);
+        assert_eq!(c.tier, Some(Tier::Max));
+        assert!(m.describe().summary.starts_with("Audio-to-video, guided"));
+        // ltx-pro's plain model no longer takes A2V; the fast tier keeps the
+        // distilled one.
+        let t = table(&cat);
+        let models: Vec<&ModelCaps> = t.models().collect();
+        let base = t.resolve("ltx-pro").unwrap();
+        assert_eq!(base.id.as_str(), "ltx25-distill-dense");
+        assert!(!base.supports(Task::A2V));
+        assert_eq!(route_task(base, Task::A2V, models.iter().copied()).id.as_str(), "ltx25-a2v-guided");
+        assert_eq!(route_task(base, Task::I2V, models.iter().copied()).id, base.id);
+        let turbo = t.resolve("ltx-turbo").unwrap();
+        assert!(turbo.supports(Task::A2V));
+        assert_eq!(route_task(turbo, Task::A2V, models.iter().copied()).id, turbo.id);
+        // A `[[models]]` weight root moves the dev DiT beside it; `dit` names it.
+        let e = ModelEntryCfg {
+            id: "ltx25-a2v-guided".into(),
+            family: "ltx2".into(),
+            recipe: "ltx25-a2v-guided".into(),
+            weights: Some(PathBuf::from("/w/ltx25")),
+            resident: true,
+            served_names: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        let recipe = |e: &ModelEntryCfg| match model_from_config(&WeightLayout::default(), e).unwrap().recipe {
+            CudaRecipe::Ltx2(r) => r,
+            _ => panic!("not ltx2"),
+        };
+        let r = recipe(&e);
+        assert_eq!(r.dit, PathBuf::from("/w/ltx25-dev/transformer_full"));
+        let r2 = recipe(&ModelEntryCfg {
+            extra: [("dit".to_owned(), "/x/dev".to_owned())].into_iter().collect(),
+            ..e.clone()
+        });
+        assert_eq!(r2.dit, PathBuf::from("/x/dev"));
+        assert_eq!(r.weights, PathBuf::from("/w/ltx25"));
     }
 
     #[test]
