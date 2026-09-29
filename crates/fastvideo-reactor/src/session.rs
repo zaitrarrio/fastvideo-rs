@@ -31,6 +31,7 @@ use crate::driver::{Driver, Outbox};
 use crate::engine::{LoadState, Mode, StreamEngine};
 use crate::journal::Journal;
 use crate::media::{sendable_codecs, H264Backend, MediaConfig, MediaPipeline};
+use fastvideo_media::pipe::SparePool;
 use crate::schema;
 use crate::wire::ServerMsg;
 
@@ -193,6 +194,11 @@ pub(crate) struct Inner {
     pub st: Mutex<St>,
     pub op: tokio::sync::Mutex<()>,
     pub journal: Journal,
+    /// The next session's warm encoder spare, started while READY (the
+    /// session's canvas, fps and codec follow from the loaded model), so
+    /// the first video frame does not wait for ffmpeg to start. Taken by
+    /// `start_session`; a new one is started once the session ended.
+    pub next_spares: Mutex<Option<SparePool>>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -238,7 +244,7 @@ pub fn clip_bounds(caps: &ModelCaps, fps: u32) -> ClipBounds {
 impl Reactor {
     /// A runtime over `engine`, answering offers on `host`.
     pub fn new(cfg: ReactorConfig, engine: Arc<dyn StreamEngine>, host: RtcHost) -> Self {
-        Self {
+        let me = Self {
             inner: Arc::new(Inner {
                 cfg,
                 engine,
@@ -246,8 +252,56 @@ impl Reactor {
                 st: Mutex::new(St { phase: RtState::Ready, live: None, epoch: 0, orphan_gen: 0 }),
                 op: tokio::sync::Mutex::new(()),
                 journal: Journal::default(),
+                next_spares: Mutex::new(None),
             }),
+        };
+        // Warm the first session's encoder once the model has loaded.
+        if me.inner.engine.load_state() == LoadState::Ready {
+            me.warm_next_session();
+        } else if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let weak = Arc::downgrade(&me.inner);
+            rt.spawn(async move {
+                loop {
+                    let Some(inner) = weak.upgrade() else { return };
+                    match inner.engine.load_state() {
+                        LoadState::Ready => {
+                            Reactor { inner }.warm_next_session();
+                            return;
+                        }
+                        LoadState::Failed(_) => return,
+                        _ => {}
+                    }
+                    drop(inner);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            });
         }
+        me
+    }
+
+    /// The media settings of a session of `caps`.
+    fn media_config(&self, caps: &ModelCaps, audio: bool) -> MediaConfig {
+        let cfg = &self.inner.cfg;
+        MediaConfig {
+            h264: cfg.h264,
+            bitrate_bps: cfg.h264_bitrate_bps,
+            vp8_quality: cfg.vp8_quality,
+            ..MediaConfig::new(Self::fps(caps), audio, self.canvas(caps))
+        }
+    }
+
+    /// Starts the next session's warm encoder spare (READY, model loaded).
+    fn warm_next_session(&self) {
+        let Some(caps) = self.model() else { return };
+        if Self::table(&caps).is_none() {
+            return;
+        }
+        let pool = SparePool::per_session();
+        if !pool.enabled() {
+            return;
+        }
+        crate::media::prewarm(&pool, &self.media_config(&caps, false));
+        *lock(&self.inner.next_spares) = Some(pool);
     }
 
     pub fn config(&self) -> &ReactorConfig {
@@ -480,15 +534,9 @@ impl Reactor {
             }
         };
         let mut pace_stats = paced.stats.clone();
-        let media = Arc::new(MediaPipeline::start(
-            MediaConfig {
-                h264: cfg.h264,
-                bitrate_bps: cfg.h264_bitrate_bps,
-                vp8_quality: cfg.vp8_quality,
-                ..MediaConfig::new(fps, tracks.has_audio(), canvas)
-            },
-            paced.ticks,
-        ));
+        let spares = lock(&self.inner.next_spares).take().unwrap_or_else(SparePool::per_session);
+        let media =
+            Arc::new(MediaPipeline::start_with_spares(self.media_config(&caps, tracks.has_audio()), paced.ticks, spares));
         if let Some(c) = causal {
             media.on_first_frame(move || c.mark_first_frame_sent());
         }
@@ -582,8 +630,13 @@ impl Reactor {
         }
         live.driver.close().await;
         live.media.close();
-        let mut st = lock(&self.inner.st);
-        self.transition(&mut st, RtState::Ready, "cleanup_complete", json!({}));
+        {
+            let mut st = lock(&self.inner.st);
+            self.transition(&mut st, RtState::Ready, "cleanup_complete", json!({}));
+        }
+        // The session's spare ends with its media thread; warm one for the
+        // next session.
+        self.warm_next_session();
     }
 
     /// A peer reached connected (gateway).

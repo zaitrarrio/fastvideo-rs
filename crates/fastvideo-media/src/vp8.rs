@@ -14,20 +14,21 @@
 //!
 //! Forced keyframes (PLI/FIR, a new peer) restart the ffmpeg process: the
 //! first frame of a new process is a keyframe. Callers rate-limit requests
-//! (`IdrLimiter` / `fastvideo_webrtc::writer::KeyframeLimiter`).
+//! (`IdrLimiter` / `fastvideo_webrtc::writer::KeyframeLimiter`). The old
+//! process gets EOF and flushes the frame libvpx still holds; a streaming
+//! session's warm spare ([`crate::pipe`]) takes over without an ffmpeg start.
 //!
 //! [`libvpx_available`] probes once per process whether ffmpeg can encode
 //! `libvpx` here; the serve image's ffmpeg has it (docker/gpucheck.Dockerfile
 //! checks at build time).
 
-use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc;
+use std::process::Stdio;
 
 use bytes::Bytes;
 
 use crate::av::{AvCheck, RgbFrame};
 use crate::error::{MediaError, Result};
+use crate::pipe::{PipeProcs, RestartStats, SparePool, SpareSpec};
 use crate::tools;
 use crate::video::EncodedFrame;
 
@@ -149,93 +150,31 @@ pub fn take_ivf_frames(buf: &mut Vec<u8>, header_done: &mut bool) -> Result<Vec<
     Ok(out)
 }
 
-struct Proc {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    rx: mpsc::Receiver<Result<Vec<u8>>>,
-    reader: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Proc {
-    fn spawn(cfg: &Vp8Config) -> Result<Self> {
-        let mut cmd = tools::ffmpeg_command();
-        cmd.args(ffmpeg_args(cfg)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
-        let stdin = child.stdin.take();
-        let mut stdout = child.stdout.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdout"))?;
-        let (tx, rx) = mpsc::channel();
-        let reader = std::thread::Builder::new().name("vp8-ffmpeg-out".into()).spawn(move || {
-            let mut buf = Vec::new();
-            let mut header_done = false;
-            let mut chunk = vec![0u8; 1 << 16];
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        match take_ivf_frames(&mut buf, &mut header_done) {
-                            Ok(frames) => {
-                                for f in frames {
-                                    if tx.send(Ok(f)).is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Err(e));
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        })?;
-        Ok(Self { child, stdin, rx, reader: Some(reader) })
-    }
-
-    /// Close stdin, drain every frame, reap the process.
-    fn close(mut self) -> Result<Vec<Vec<u8>>> {
-        drop(self.stdin.take());
-        let frames: Vec<Vec<u8>> = self.rx.iter().collect::<Result<_>>()?;
-        if let Some(r) = self.reader.take() {
-            let _ = r.join();
-        }
-        let status = self.child.wait()?;
-        if !status.success() {
-            return Err(MediaError::tool("ffmpeg", format!("libvpx encode exited with {status}")));
-        }
-        Ok(frames)
-    }
-}
-
-impl Drop for Proc {
-    fn drop(&mut self) {
-        drop(self.stdin.take());
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 /// Inter-frame VP8 through an ffmpeg `libvpx` subprocess.
 pub struct Vp8Encoder {
     cfg: Vp8Config,
-    proc: Option<Proc>,
+    procs: PipeProcs,
     out_index: u64,
     key_pending: bool,
-    restarts: u64,
 }
 
 impl std::fmt::Debug for Vp8Encoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Vp8Encoder").field("cfg", &self.cfg).field("restarts", &self.restarts).finish()
+        f.debug_struct("Vp8Encoder").field("cfg", &self.cfg).field("restarts", &self.restarts()).finish()
     }
 }
 
 impl Vp8Encoder {
+    /// A standalone encoder: no spare.
     pub fn new(cfg: Vp8Config) -> Result<Self> {
-        cfg.validate()?;
-        let proc = Proc::spawn(&cfg)?;
-        Ok(Self { cfg, proc: Some(proc), out_index: 0, key_pending: false, restarts: 0 })
+        Self::with_pool(cfg, None)
+    }
+
+    /// A streaming session's encoder: starts from `pool`'s warm spare when
+    /// it holds this profile, and restarts into it ([`crate::pipe`]).
+    pub fn with_pool(cfg: Vp8Config, pool: Option<SparePool>) -> Result<Self> {
+        let procs = PipeProcs::new(SpareSpec::vp8(&cfg)?, pool)?;
+        Ok(Self { cfg, procs, out_index: 0, key_pending: false })
     }
 
     pub fn config(&self) -> &Vp8Config {
@@ -244,7 +183,17 @@ impl Vp8Encoder {
 
     /// ffmpeg restarts done to honour forced keyframes.
     pub fn restarts(&self) -> u64 {
-        self.restarts
+        self.procs.stats().restarts
+    }
+
+    /// Restart counts by spare use and their latencies.
+    pub fn restart_stats(&self) -> &RestartStats {
+        self.procs.stats()
+    }
+
+    /// ffmpeg ids: current, then flushing ones.
+    pub fn pids(&self) -> Vec<u32> {
+        self.procs.pids()
     }
 
     /// Make the next encoded frame a keyframe.
@@ -274,42 +223,25 @@ impl Vp8Encoder {
                 frame.width, frame.height, self.cfg.width, self.cfg.height
             )));
         }
-        let mut out = Vec::new();
         if self.key_pending {
             // A fresh process starts with a keyframe.
             self.key_pending = false;
-            if let Some(p) = self.proc.take() {
-                let frames = p.close()?;
-                out.extend(self.wrap(frames));
-            }
-            self.proc = Some(Proc::spawn(&self.cfg)?);
-            self.restarts += 1;
+            self.procs.restart()?;
         }
-        let p = self.proc.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
-        let stdin = p.stdin.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
-        stdin.write_all(&frame.data).map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))?;
-        out.extend(self.poll()?);
-        Ok(out)
+        self.procs.write(&frame.data)?;
+        self.poll()
     }
 
     /// The frames that became ready since the last call, in order.
     pub fn poll(&mut self) -> Result<Vec<EncodedFrame>> {
-        let raw: Vec<Vec<u8>> = match &self.proc {
-            Some(p) => p.rx.try_iter().collect::<Result<_>>()?,
-            None => Vec::new(),
-        };
+        let raw = self.procs.ready()?;
         Ok(self.wrap(raw))
     }
 
     /// Flush everything still inside the encoder.
     pub fn finish(&mut self) -> Result<Vec<EncodedFrame>> {
-        match self.proc.take() {
-            Some(p) => {
-                let frames = p.close()?;
-                Ok(self.wrap(frames))
-            }
-            None => Ok(Vec::new()),
-        }
+        let frames = self.procs.finish()?;
+        Ok(self.wrap(frames))
     }
 }
 

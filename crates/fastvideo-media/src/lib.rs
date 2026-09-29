@@ -10,6 +10,7 @@
 //! | [`crossfade`] | Raised-cosine clip-edge fades that keep sample counts |
 //! | [`opus`] | Opus framer (10/20 ms, sample-counter RTP timestamps) and libopus encoder (`opus` feature) |
 //! | [`video`] | `VideoEncoder` trait: NVENC (production, via ffmpeg `h264_nvenc`), OpenH264 (CPU test backend, `openh264` feature); publish profiles (Cloudflare 720p/L3.1, MediaMTX/peer native/L4.0) |
+//! | [`pipe`] | ffmpeg pipe-encoder processes: EOF flush on a keyframe restart, one warm pre-primed spare per streaming session ([`pipe::SparePool`]), restart latency metrics |
 //! | [`vp8`] | Inter-frame VP8 via ffmpeg `libvpx` (IVF over a pipe; forced keyframes restart the process) for peers without H.264 |
 //! | [`scale`] | Pre-encode canvas scaler (fit+pad or stretch) |
 //! | [`h264`] | Annex-B / SPS helpers and the H.264 level table |
@@ -32,6 +33,7 @@ pub mod lockstep;
 pub mod mp4;
 pub mod opus;
 pub mod pacer;
+pub mod pipe;
 pub mod probe;
 pub mod queue;
 pub mod resample;

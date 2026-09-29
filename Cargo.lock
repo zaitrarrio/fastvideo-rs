@@ -1318,6 +1318,7 @@ dependencies = [
  "bytes",
  "fastvideo-protocol",
  "image",
+ "metrics",
  "openh264",
  "rubato",
  "serde",
