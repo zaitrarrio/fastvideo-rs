@@ -498,6 +498,23 @@ CASES = {
         ltx_error("extend-err-image", "POST", "/v2/extend", {"video_uri": data_uri(BEACH), "duration": 2}, 400, "invalid_request_error"),
         ltx_error("extend-err-too-long", "POST", "/v2/extend", {"video_uri": data_uri(SOURCE), "duration": 25}, 400, "invalid_request_error"),
     ],
+    # Guided audio-to-video pod (configs/serve/runpod-ltx-a2v.toml): ltx-pro's A2V
+    # on the dev transformer (A2VidPipelineTwoStage). fal pro with its
+    # guidance_scale, the native API at 720p with the default guidance, and
+    # the fast endpoint (not served on this pod).
+    "a2v-fal-pro": lambda: (
+        fal_queue("a2v-fal-pro", "lightricks/ltx-2.5",
+                  {"audio_url": data_uri(SPEECH), "prompt": A2V_PROMPT, "seed": 5, "guidance_scale": 3},
+                  expect(161, 24, True), sub="audio-to-video/pro"),
+        audio_passthrough("a2v-fal-pro")),
+    "a2v-native-pro-720p": lambda: (
+        native("a2v-native-pro-720p", {"model": "ltx-pro", "prompt": A2V_PROMPT, "size": "1280x720", "seed": 11,
+                                       "audio_url": data_uri(SPEECH)}, expect(161, 24, True)),
+        audio_passthrough("a2v-native-pro-720p")),
+    "a2v-guided-errors": lambda: [
+        ltx_error("a2v-err-fast-unserved", "POST", "/v2/audio-to-video",
+                  {"audio_uri": data_uri(SPEECH), "prompt": "p", "model": "ltx-2-5-fast"}, 403, "permission_error"),
+    ],
     "pro-err-20s": lambda: ltx_error("pro-err-20s", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro", seconds=20), 400, "invalid_request_error"),
 }
 

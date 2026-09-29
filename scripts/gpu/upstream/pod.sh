@@ -64,6 +64,7 @@ run_step() {
     weights:h3-diffusers) weights_h3_diffusers ;;
     weights:fasth3-8step) weights_fasth3_8step ;;
     weights:ltx25) weights_ltx25 ;;
+    weights:ltx25-dev) weights_ltx25_dev ;;
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
@@ -229,6 +230,32 @@ weights_fasth3_8step() {
 LTX_REV=5e6e71018ee1756ed329b697a7b4aedc934dfce9
 weights_ltx25() {
   local L="$W/ltx25" o="$UW/LTX-2.5" rc=0
+  weights_ltx25_common || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_transformer --src "T=$L/transformer" --src "C=$L/connectors" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-dit.json" || rc=1
+  return $rc
+}
+
+# The dev transformer (weights/ltx25-dev/transformer_full, the Diffusers
+# `transformer_full/`, with the ltx25 connectors) and the distilled LoRA
+# (the Diffusers copy carries the single-file LoRA's tensors under the same
+# names, plus the connectors' that the single file does not have) for
+# `a2vid_two_stage.py`, plus the shared packs; not the distilled DiT.
+weights_ltx25_dev() {
+  local L="$W/ltx25" o="$UW/LTX-2.5" rc=0
+  weights_ltx25_common || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_transformer --src "T=$W/ltx25-dev/transformer_full" --src "C=$L/connectors" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-dit-dev.json" || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_lora --src "$L/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-lora.json" || rc=1
+  return $rc
+}
+
+weights_ltx25_common() {
+  local L="$W/ltx25" o="$UW/LTX-2.5" rc=0
   pyn "$HERE/reconstruct.py" --plan ltx25_upsampler --src "$L/latent_upsampler" --repo Lightricks/LTX-2.5 \
     --revision "$LTX_REV" --files latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors \
     --out-root "$o" --report "$OUT/reconstruct-ltx-up.json" || rc=1
@@ -241,9 +268,6 @@ weights_ltx25() {
   pyn "$HERE/reconstruct.py" --plan ltx25_text_encoder --src "G=$L/text_encoder" --src "C=$L/connectors" \
     --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors \
     --out-root "$o" --report "$OUT/reconstruct-ltx-te.json" || rc=1
-  pyn "$HERE/reconstruct.py" --plan ltx25_transformer --src "T=$L/transformer" --src "C=$L/connectors" \
-    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors \
-    --out-root "$o" --report "$OUT/reconstruct-ltx-dit.json" || rc=1
   return $rc
 }
 

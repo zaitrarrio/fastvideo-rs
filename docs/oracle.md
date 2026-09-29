@@ -414,9 +414,8 @@ every LTX target): `decode_audio_from_file(…, max_duration=num_frames/fps)`,
 `AudioConditioner` + `encode_audio`, the latent cut to `from_duration`, and
 `ModalitySpec(frozen=True, noise_scale=0, initial_latent=…)` for the audio
 on both stages; the output carries the input waveform. The faithful guided
-path would need `transformer_full/` of `Lightricks/LTX-2.5-Diffusers`
-(38.0 GB, LTX-2 community license, gated auto; not downloaded: owner
-approval, and both volumes) plus a guided sampler.
+path (`transformer_full/` and the multimodal guider) is served on `ltx-pro`
+since 2026-09-29: "LTX-2.5 guided audio-to-video" below.
 
 Targets `ltx25-a2v` (prompt only, a talking head) and `ltx25-a2v-i2v` (the
 TI2V beach fixture at frame 0 + the same audio), 768x512x121, dense stage 2,
@@ -488,6 +487,98 @@ the reference): reference e2e 49.2 s (stage 1 18.7 s, stage 2 13.4 s); the
 driving audio decode + encode on ours is a fraction of a second. Lip sync of
 the served clips: docs/serve/e2e/ltx.md, "Audio-to-video". Spend: upstream
 pod 35 min (15 min of image pull), runtime pod 9 min: $1.55.
+
+## LTX-2.5 guided audio-to-video (2026-09-29)
+
+Reference: Lightricks/LTX-2 `fd4ded7`, `python -m ltx_pipelines.a2vid_two_stage`
+as published (`A2VidPipelineTwoStage`, scripts/gpu/upstream/oracle.sh
+`oracle_ltx_a2v`), on the Lightricks/LTX-2.5 single-file packs rebuilt from
+the volumes (upstream pod step `weights:ltx25-dev`): the dev transformer from
+`ltx25-dev/transformer_full` (the Diffusers `transformer_full/` at `426936f`,
+with the bundle's connectors; accepted mismatch on the connectors, as for the
+distilled pack) and `loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors`,
+which rebuilds **byte-exactly** (SHA-256 = the Hub's LFS oid) from the
+Diffusers copy's tensors of the same names (the Diffusers copy adds the
+connectors' LoRA, which upstream never applies). The CLI defaults of a
+`model_version = 2.5.0` checkpoint (`LTX_2_4_PARAMS`): stage 1 30 steps on
+`LTX2Scheduler` (shift at 4096 tokens, stretch to 0.1), the video guider CFG
+3, STG 1 on block 28 (self-attention replaced by its value projection), the
+isolated-modality pass (every a↔v cross-attention skipped) at 3, rescale 0.7,
+the default negative prompt; the frozen audio's guider is neutral; one pass
+per forward (`--max-batch-size 1`), Euler. Stage 2: the distilled LoRA fused
+at 1.0 into the same dev DiT, 3 Euler steps, dense. `--offload cpu`.
+
+Ours: `fv-gpucheck ltx2 gen --guided --dense-stage2 --audio … --two-stage
+--dit weights/ltx25-dev/transformer_full` (`denoise_guided_cond`,
+`Ltx2Perturbation`, `Ltx2Schedule::ltx_core`; the unfused DiT base kept in
+pinned host memory and re-uploaded at each base ↔ fused switch). Target
+`ltx25-a2v-guided`: the `ltx25-a2v` talking head (768x512x121, seed 1024,
+`speech-flite-44k.flac`). New dump names: each pass's velocity
+(`s1_video_vel_stepNN` = cond, `_uncond`, `_ptb`, `_mod`), the guided `x0`
+(`s1_video_x0_stepNN`), the negative prompt's contexts
+(`text_{video,audio}_ctx_neg`, injected like the positive ones). The
+upstream CLI pipeline dumps no driving-audio waveform or latent, so our audio
+latent is our own encoder's (7.5e-2 from theirs, cosine 0.997, as in "LTX-2.5
+audio-to-video"); the `-ownaud` arm is therefore identical to the main one.
+Run: runtime and scripts `fe45a1b`, upstream `sol-ltx25:latest` (scripts at
+`fe45a1b`), both on RTX PRO 6000 (EUR-IS-1, EU volume). rel-L2 of ours
+against the reference.
+
+| | rel-L2 (cosine) |
+|---|---|
+| stage-1 sigmas (30 + terminal) | 4.0e-8 |
+| text contexts, positive / negative (then injected) | 4.6e-3 / 5.5e-3 |
+| audio state, every step, both stages | 7.5e-2 (the encoder; pinned) |
+| s1 video block 0 / 1 / 24 / 47, cond pass, step 1 | 4.6e-3 / 2.5e-3 / 6.0e-3 / 3.8e-3 |
+| s1 velocity step 1: cond / uncond / ptb / mod | 7.2e-3 / 9.3e-3 / 7.1e-3 / 7.0e-3 |
+| s1 velocity step 10: cond / uncond / ptb / mod | 3.2e-2 / 2.7e-2 / 2.5e-2 / 2.7e-2 |
+| s1 guided x0, steps 1 / 5 / 10 / 30 | 3.9e-2 / 5.9e-2 / 0.16 / 0.29 |
+| s1 video latents, steps 1 / 2 / 5 / 10 | 6.2e-4 / 9.2e-4 / 1.8e-3 / 4.3e-3 |
+| s1 video latents, steps 15 / 20 / 25 / 30 | 1.4e-2 / 5.2e-2 / 0.16 / 0.29 (cos 0.958) |
+| s2 video block 0 / 24 / 47 (LoRA fused), step 1 | 2.9e-3 / 5.9e-3 / 2.3e-2 |
+| s2 video latents, steps 1 / 2 / 3 | 1.0e-2 / 3.9e-2 / 6.5e-2 |
+| decoded clip vs the reference's (121 frames) | SSIM 0.987, PSNR 40.5 dB (min 40.0) |
+| output audio | AAC 44.1 kHz stereo, the input's (219 AAC frames on both) |
+
+Reading:
+
+- **Every pass is at the bf16 floor**: the four passes' velocities at step 1
+  are 7.0e-3 to 9.3e-3 (the distilled A2V's single pass at the same sigma
+  1.0: 3.7e-2), and the cond pass's blocks are where T2V's are (block 0 / 24 /
+  47 = 3.3e-3 / 5.4e-3 / 2.3e-2 on the distilled 512p). The STG pass (block
+  28's self-attention replaced by the value projection) and the modality pass
+  (no a↔v attention anywhere) land with the cond pass: a wrong perturbation
+  would put those two far off.
+- **The guided `x0` amplifies the passes' error by the guidance weights**
+  (`6·cond − 2·uncond − 1·ptb − 2·mod`, sum of magnitudes 11): 3.9e-2 at step
+  1 from 7e-3 per pass, while the state moves by `dt·v` and stays at 6.2e-4.
+  Over 30 guided steps the trajectory then drifts as a chaotic sampler does
+  (4.3e-3 at step 10, 0.29 at the end; the distilled stage 1 ends at 0.39
+  after 8 steps). The audio latent (our encoder, 7.5e-2) is a second source
+  this run could not remove; the video blocks at step 1 show it does not move
+  the first forward.
+- **Stage 2 (the LoRA fused on the dev DiT) matches**: from the reference's
+  entry state, 1.0e-2 / 3.9e-2 / 6.5e-2 over the 3 steps (the distilled
+  pipeline: 1.2e-2 / 4.8e-2 / 7.8e-2), with 1 660 LoRA pairs attached (every
+  pair of the single-file LoRA; the connectors' pairs are not applied, as
+  upstream). The clip is as close to the reference's as the distilled A2V's
+  was (SSIM 0.986, 40.5 dB).
+
+Verdict: **pass** at the bf16 floor per pass, with the guided stage-1
+trajectory's late drift (0.29, cosine 0.958 at step 30) noted. The only
+failing check of the runtime cell was `gen.latents_finite`, which expected
+the distilled 8 + 3 steps (33 were run; the check now counts the guided
+stage 1).
+
+Timings (RTX PRO 6000, 768x512x121): ours stage 1 30 steps × 4 passes in
+21.2 s (0.705 s a step), stage 2 4.1 s of which 2.1 s is the LoRA switch
+(38.4 GB uploaded from pinned host memory and re-fused), peak device memory
+56.9 GiB (the DiT and the attached LoRA factors 52.0 GiB); the DiT load 46 s
+(cold, 46.9 GB read). The reference (`--offload cpu`) 117 s for stage 1
+(3.9 s a step), 4 s for stage 2, 168 s for the cell. Spend: upstream pods 21 +
+27 + 30 min, runtime pods 3 + 12 + 24 min (two runs lost: the first runtime
+image missed the connectors fallback, the second reference was deleted by the
+session's idle watchdog before the runtime pod fetched its dump), about $4.
 
 ## LTX-2.5 retake and extend (avatar P0-4, 2026-09-29)
 

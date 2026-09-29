@@ -1,0 +1,66 @@
+# fv-serve on Runpod: LTX-2.5 guided audio-to-video (A2VidPipelineTwoStage on
+# the dev transformer, docs/oracle.md "LTX-2.5 guided audio-to-video").
+# Secrets as in runpod.toml.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+# The A2V companion of ltx-pro alone: the LTX-2.5 dev DiT
+# (weights/ltx25-dev/transformer_full on both volumes) with the multimodal
+# guider at stage 1 (30 steps, CFG 3 = fal `guidance_scale`, STG on block 28,
+# modality 3, rescale 0.7) and the distilled LoRA fused at stage 2. It serves
+# audio-to-video only; `ltx-pro` resolves to it on this pod (beside
+# ltx25-distill-dense, `ltx-pro` A2V routes here). One device copy of the DiT
+# (the unfused base in pinned host memory, ~38 GB of host RAM) plus the LoRA
+# factors: an 80-96 GB card.
+[[models]]
+id = "ltx25-a2v-guided"
+family = "ltx2"
+recipe = "ltx25-a2v-guided"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = true
+# The dev DiT is ${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's
+# layout); `dit = "/abs/path"` overrides it.
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+# fal apps: `lightricks/ltx-2.5/audio-to-video/pro` runs on ltx-pro, i.e.
+# this model (`audio-to-video/fast` is the ltx-turbo pod's).
+fal_apps = ["lightricks/ltx-2.5"]
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
+# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
+# requires the internal token on every API route, trusts the gateway's
+# authentication, and takes jobs from `/fv/v1/internal/jobs` (queue: the
+# gateway's `kind: http` envelope). Standalone deployments ignore this.
+[gateway]
+pool = "ltx-a2v"

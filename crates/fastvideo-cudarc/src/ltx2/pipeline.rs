@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastvideo_models::ltx2::config::{Ltx2Config, Ltx2ModelVersion, Ltx2TextNorm};
+use fastvideo_models::ltx2::guidance::{self, GuiderParams};
 use fastvideo_models::ltx2::tiling::TileSizeConfig;
 use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
 use rand::{Rng, SeedableRng};
@@ -141,11 +142,16 @@ pub struct Ltx2Request {
     pub two_stage: bool,
     /// DiffVAE: diffusion video decoder instead of the conv VAE (audio unchanged).
     pub diff_vae: bool,
-    /// Empty = unconditional branch uses empty tokenization when CFG is on.
+    /// Empty = unconditional branch uses empty tokenization when CFG is on;
+    /// guided audio-to-video then takes the reference CLI's default
+    /// ([`guidance::DEFAULT_NEGATIVE_PROMPT`]).
     pub negative_prompt: String,
     /// Video CFG (`uncond + scale * (cond - uncond)`). Distilled stays at 1.0.
+    /// Guided audio-to-video (the LTX-2.5 dev transformer): the video
+    /// guider's CFG scale ([`Self::a2v_guiders`], default 3).
     pub guidance_scale: f32,
-    /// Audio CFG scale. Distilled stays at 1.0; base often 7.0.
+    /// Audio CFG scale. Distilled stays at 1.0; base often 7.0. Guided
+    /// audio-to-video: 1 (the frozen audio is not guided).
     pub audio_guidance_scale: f32,
     /// Base/dev step count (`None` → 40 for 2.0, 30 for 2.3). Distilled: subset
     /// size (`None` → 8); with `--two-stage`, stage-1 steps (5 → implies refine 2).
@@ -251,8 +257,18 @@ impl Ltx2Request {
             two_stage: false,
             diff_vae: false,
             negative_prompt: String::new(),
-            guidance_scale: if base { 4.0 } else { 1.0 },
-            audio_guidance_scale: if base { 7.0 } else { 1.0 },
+            // The LTX-2.5 dev transformer generates guided audio-to-video
+            // only: CFG 3 on the video, the frozen audio unguided.
+            guidance_scale: match (base, cfg.version) {
+                (true, Ltx2ModelVersion::V25) => guidance::ltx25_video_guider().cfg_scale,
+                (true, _) => 4.0,
+                (false, _) => 1.0,
+            },
+            audio_guidance_scale: if base && cfg.version != Ltx2ModelVersion::V25 {
+                7.0
+            } else {
+                1.0
+            },
             num_inference_steps: None,
             refine_steps: None,
             sol_stage2: false,
@@ -358,6 +374,21 @@ impl Ltx2Request {
         } else {
             Ltx2Stage2Attn::Off
         }
+    }
+
+    /// The guiders of a guided audio-to-video (the dev transformer,
+    /// `a2vid_two_stage.py`): the video guider at the reference defaults
+    /// ([`guidance::ltx25_video_guider`]: CFG 3, STG 1 on block 28, rescale
+    /// 0.7, modality 3) with [`Self::guidance_scale`] as its CFG scale, and
+    /// the neutral guider for the frozen audio.
+    pub fn a2v_guiders(&self) -> (GuiderParams, GuiderParams) {
+        (
+            GuiderParams {
+                cfg_scale: self.guidance_scale,
+                ..guidance::ltx25_video_guider()
+            },
+            GuiderParams::default(),
+        )
     }
 
     /// Stage-1 distilled step count (defaults to 8).
@@ -1060,6 +1091,238 @@ pub fn denoise_cfg(
             i + 1,
             schedule.num_steps(),
             schedule.sigmas[i]
+        ));
+        if let Some(obs) = observer.as_mut() {
+            obs(i, &video, &audio, secs)?;
+        }
+    }
+    Ok((video, audio))
+}
+
+/// One guided pass of [`denoise_guided_cond`] (`_guided_denoise`'s pass
+/// names; their velocities dump as `{video,audio}_vel_stepNN[_<name>]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuidedPass {
+    Cond,
+    Uncond,
+    Ptb,
+    Mod,
+}
+
+impl GuidedPass {
+    pub const ALL: [GuidedPass; 4] = [Self::Cond, Self::Uncond, Self::Ptb, Self::Mod];
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Cond => "",
+            Self::Uncond => "_uncond",
+            Self::Ptb => "_ptb",
+            Self::Mod => "_mod",
+        }
+    }
+}
+
+/// The passes a step of the two guiders runs, in the reference's order
+/// (`cond`, then `uncond`, `ptb`, `mod` when either stream's guider needs it).
+pub fn guided_passes(video: &GuiderParams, audio: &GuiderParams) -> Vec<GuidedPass> {
+    let mut out = vec![GuidedPass::Cond];
+    if video.needs_uncond() || audio.needs_uncond() {
+        out.push(GuidedPass::Uncond);
+    }
+    if video.needs_ptb() || audio.needs_ptb() {
+        out.push(GuidedPass::Ptb);
+    }
+    if video.needs_mod() || audio.needs_mod() {
+        out.push(GuidedPass::Mod);
+    }
+    out
+}
+
+/// The perturbation a pass runs under (`_guided_denoise`): STG perturbs the
+/// self-attention of each stream whose guider asks for it, the modality pass
+/// skips every audio↔video cross-attention.
+fn pass_perturbation(
+    pass: GuidedPass,
+    video: &GuiderParams,
+    audio: &GuiderParams,
+) -> super::transformer::Ltx2Perturbation {
+    use super::transformer::Ltx2Perturbation;
+    match pass {
+        GuidedPass::Cond | GuidedPass::Uncond => Ltx2Perturbation::default(),
+        GuidedPass::Ptb => Ltx2Perturbation {
+            skip_video_self_attn: if video.needs_ptb() { video.stg_blocks.clone() } else { Vec::new() },
+            skip_audio_self_attn: if audio.needs_ptb() { audio.stg_blocks.clone() } else { Vec::new() },
+            skip_av_cross: false,
+        },
+        GuidedPass::Mod => Ltx2Perturbation {
+            skip_av_cross: true,
+            ..Ltx2Perturbation::default()
+        },
+    }
+}
+
+/// `MultiModalGuider.calculate` on device: the weighted sum of the passes'
+/// `x0`s in float32 ([`GuiderParams::weights`]), the rescale toward
+/// `std(cond)` (standard deviations on the host), stored in the state dtype.
+fn guided_combine(
+    p: &GuiderParams,
+    x0: &[(GuidedPass, CudaTensor)],
+    state: LatentState,
+) -> Result<CudaTensor> {
+    let w = p.weights();
+    let terms: Vec<(f32, &CudaTensor)> = x0
+        .iter()
+        .filter_map(|(pass, t)| {
+            let wi = w[GuidedPass::ALL.iter().position(|q| q == pass).expect("pass")];
+            (wi != 0.0).then_some((wi, t))
+        })
+        .collect();
+    let cond = &x0
+        .iter()
+        .find(|(pass, _)| *pass == GuidedPass::Cond)
+        .ok_or_else(|| err("ltx2 guided: no cond pass"))?
+        .1;
+    if terms.len() == 1 && terms[0].0 == 1.0 && p.rescale_scale == 0.0 {
+        return state.store(cond.clone());
+    }
+    let pred = CudaTensor::lincomb(&terms)?;
+    let pred = match p.rescale_factor(
+        guidance::std_unbiased(&cond.host_cow()?),
+        guidance::std_unbiased(&pred.host_cow()?),
+    ) {
+        Some(f) => pred.try_mul_scalar(f)?,
+        None => pred,
+    };
+    state.store(pred)
+}
+
+/// The Euler step through a given `x0` (`EulerDiffusionStep` after
+/// `post_process_latent`): `v = (x − x0)/σ` stored, then `x + v·(σ' − σ)`.
+fn euler_from_x0(
+    x: &CudaTensor,
+    x0: &CudaTensor,
+    sigma: f32,
+    next: f32,
+    state: LatentState,
+) -> Result<CudaTensor> {
+    let v = state.store(CudaTensor::lincomb(&[(1.0, x), (-1.0, x0)])?.try_mul_scalar(1.0 / sigma)?)?;
+    state.store(CudaTensor::lincomb(&[(1.0, x), (next - sigma, &v)])?)
+}
+
+/// The dev stage 1 of `ltx_pipelines` (`DiffusionStage` with a
+/// `GuidedDenoiser` and the default `euler_denoising_loop`, as
+/// `a2vid_two_stage.py` runs it): per step every pass of
+/// [`guided_passes`] (sequentially, `--max-batch-size 1`), each pass's `x0`
+/// (`X0Model`, per-token timesteps under conditioning), the guided `x0` per
+/// stream ([`GuiderParams`]), the clean-latent blend and the Euler step. The
+/// uncond pass takes `text_uncond` (the negative prompt's video context and
+/// the audio guider's context, the positive one when it has no negative).
+/// A frozen audio stream stays the clean latent. FASTVIDEO_DUMP_DIR gets the
+/// cond pass's blocks at the first step, every pass's velocity and the guided
+/// `x0` (`video_x0_stepNN`).
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_guided_cond(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    text_uncond: Option<&TextConditioning>,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    video_guider: &GuiderParams,
+    audio_guider: &GuiderParams,
+    mut video: CudaTensor,
+    mut audio: CudaTensor,
+    mut observer: Option<StepObserver<'_>>,
+    state: LatentState,
+    cond: Option<&StageConditioning>,
+) -> Result<(CudaTensor, CudaTensor)> {
+    use crate::wan::dump;
+    let passes = guided_passes(video_guider, audio_guider);
+    if passes.contains(&GuidedPass::Uncond) && text_uncond.is_none() {
+        return Err(err("ltx2 guided: CFG needs the negative prompt's context"));
+    }
+    let x0_of = |x: &CudaTensor, v: &CudaTensor, sigma: f32, video: bool| -> Result<CudaTensor> {
+        match cond {
+            Some(c) if video => state.store(c.x0(x, v, sigma)?),
+            _ => state.store(CudaTensor::lincomb(&[(1.0, x), (-sigma, v)])?),
+        }
+    };
+    let mut last: Option<(CudaTensor, CudaTensor)> = None;
+    for i in 0..schedule.num_steps() {
+        crate::wan::gpu_trace::step_begin();
+        let timer = Instant::now();
+        let (sigma, next) = (schedule.sigmas[i] as f32, schedule.sigmas[i + 1] as f32);
+        dump_step_begin(i, &video, &audio, schedule)?;
+        let skip = video_guider.skips(i) && audio_guider.skips(i);
+        let (x0_video, x0_audio) = match (&last, skip) {
+            (Some(prev), true) => {
+                dump::set_blocks(false);
+                prev.clone()
+            }
+            _ => {
+                let mut vx0 = Vec::with_capacity(passes.len());
+                let mut ax0 = Vec::with_capacity(passes.len());
+                for &pass in &passes {
+                    let t = match pass {
+                        GuidedPass::Uncond => text_uncond.expect("checked above"),
+                        _ => text,
+                    };
+                    model.set_perturbation(pass_perturbation(pass, video_guider, audio_guider));
+                    let out = model.forward_sol(
+                        &video,
+                        &audio,
+                        t,
+                        schedule.timestep_f32(i),
+                        ropes,
+                        None,
+                        Ltx2VideoAttn::Off,
+                    );
+                    model.set_perturbation(Default::default());
+                    // Blocks are dumped for the first (cond) forward only.
+                    dump::set_blocks(false);
+                    let (vv, va) = out?;
+                    let (vv, va) = (state.store(vv)?, state.store(va)?);
+                    if dump::enabled() {
+                        let sfx = pass.suffix();
+                        dump::tensor(&dump::named(&format!("video_vel_step{:02}{sfx}", i + 1)), &vv)?;
+                        dump::tensor(&dump::named(&format!("audio_vel_step{:02}{sfx}", i + 1)), &va)?;
+                    }
+                    vx0.push((pass, x0_of(&video, &vv, sigma, true)?));
+                    ax0.push((pass, x0_of(&audio, &va, sigma, false)?));
+                }
+                let xv = guided_combine(video_guider, &vx0, state)?;
+                // A frozen audio stream's `x0` is never read.
+                let xa = match cond.and_then(|c| c.frozen_audio.as_ref()) {
+                    Some(clean) => clean.clone(),
+                    None => guided_combine(audio_guider, &ax0, state)?,
+                };
+                (xv, xa)
+            }
+        };
+        if dump::enabled() {
+            dump::tensor(&dump::named(&format!("video_x0_step{:02}", i + 1)), &x0_video)?;
+            dump::tensor(&dump::named(&format!("audio_x0_step{:02}", i + 1)), &x0_audio)?;
+        }
+        let post = match cond {
+            Some(c) => state.store(c.post(&x0_video)?)?,
+            None => x0_video.clone(),
+        };
+        video = euler_from_x0(&video, &post, sigma, next, state)?;
+        audio = StageConditioning::audio_after(cond, || {
+            euler_from_x0(&audio, &x0_audio, sigma, next, state)
+        })?;
+        last = Some((x0_video, x0_audio));
+        dump_step_end(i, &video, &audio)?;
+        let secs = step_sync(&timer)?;
+        crate::wan::log::info(format_args!(
+            "ltx2 guided step {}/{} sigma {:.6} passes {} cfg {} stg {} mod {} rescale {} ({secs:.2}s)",
+            i + 1,
+            schedule.num_steps(),
+            sigma,
+            passes.len(),
+            video_guider.cfg_scale,
+            video_guider.stg_scale,
+            video_guider.modality_scale,
+            video_guider.rescale_scale,
         ));
         if let Some(obs) = observer.as_mut() {
             obs(i, &video, &audio, secs)?;
@@ -2081,6 +2344,9 @@ impl TextEncoder {
                 .filter(|p| p.is_dir())
             {
                 weights_identity(&sibling, None)?
+            } else if self.paths.weights.join("connectors").is_dir() {
+                // The dev DiT's tree: the bundle's connectors (`load_connectors`).
+                weights_identity(&self.paths.weights.join("connectors"), None)?
             } else {
                 weights_identity(&self.paths.dit, None)?
             };
@@ -2101,7 +2367,11 @@ impl TextEncoder {
     }
 
     fn load_connectors(&self) -> Result<TextConnectors> {
-        let map = open_distilled(&self.paths.dit, "connectors")?;
+        // Beside the DiT, else in the weight root: `LTX-2.5-Diffusers` keeps
+        // one `connectors/` for `transformer/` and `transformer_full/` (the
+        // dev DiT lives in its own tree, `ltx25-dev/transformer_full`).
+        let map = open_distilled(&self.paths.dit, "connectors")
+            .or_else(|e| open_distilled(&self.paths.weights, "connectors").map_err(|_| e))?;
         Ok(TextConnectors::load(
             &map,
             &Keys::connectors(Keys::detect(&map)),
@@ -2333,6 +2603,13 @@ pub struct PipelineOptions {
     /// (about 26 GB on the 22B DiT) so stage 1 fuses it and stage 2 does not,
     /// without a reload. `None`: `FASTVIDEO_LTX2_IC_LORA`, else no reference mode.
     pub ic_lora: Option<PathBuf>,
+    /// A dev DiT with the distilled LoRA keeps its unfused base in pinned
+    /// host memory, not beside the live weights on the device
+    /// ([`crate::wan::nn::with_lora_base_on_host`]): one device copy of the
+    /// 22B DiT, and each base <-> fused switch (stage 1 <-> stage 2 of the
+    /// guided audio-to-video) uploads the base again. `FASTVIDEO_LTX2_LORA_BASE`
+    /// (`host` | `device`) overrides.
+    pub lora_base_host: bool,
 }
 
 /// [`PipelineOptions::ic_lora`], else `FASTVIDEO_LTX2_IC_LORA`.
@@ -2355,16 +2632,18 @@ fn resolve_tae(explicit: Option<&Path>) -> Option<PathBuf> {
     })
 }
 
-/// What [`Ltx2Pipeline::generate`] can reproduce. LTX-2.5 generates only
-/// through `DistilledPipeline`, which has no guidance at all (`SimpleDenoiser`
-/// on both stages, `distilled.py:245-313`); the dev two-stage
-/// (`TI2VidTwoStages`) needs the multimodal CFG/STG/modality/rescale guider,
-/// which is not ported — plain CFG would silently be a different sampler.
-pub fn check_generate_contract(cfg: &Ltx2Config, guided: bool) -> Result<()> {
+/// What [`Ltx2Pipeline::generate`] can reproduce. LTX-2.5 generates through
+/// `DistilledPipeline`, which has no guidance at all (`SimpleDenoiser` on
+/// both stages, `distilled.py:245-313`), and, on the dev transformer, through
+/// `A2VidPipelineTwoStage` (`a2v_guided`: the multimodal guider at stage 1,
+/// [`denoise_guided_cond`]). The dev text-to-video two-stage
+/// (`TI2VidTwoStages`) also guides its audio stream, which is not validated
+/// here: plain CFG would silently be a different sampler.
+pub fn check_generate_contract(cfg: &Ltx2Config, guided: bool, a2v_guided: bool) -> Result<()> {
     if cfg.version != Ltx2ModelVersion::V25 {
         return Ok(());
     }
-    if cfg.scheduler.use_dynamic_shifting {
+    if cfg.scheduler.use_dynamic_shifting && !a2v_guided {
         return Err(err(
             "ltx2: LTX-2.5 dev generation (TI2VidTwoStages, multimodal guider) is not ported; \
 the dev transformer runs only as the refiner",
@@ -2519,6 +2798,8 @@ pub struct Ltx2Pipeline {
     ic_lora: Option<(PathBuf, super::lora::IcLoraInfo)>,
     /// The strength the IC-LoRA is fused at right now (0 = the base DiT).
     ic_strength: f32,
+    /// [`PipelineOptions::lora_base_host`], resolved.
+    lora_base_host: bool,
 }
 
 impl Ltx2Pipeline {
@@ -2694,7 +2975,23 @@ impl Ltx2Pipeline {
         } else {
             None
         };
+        let lora_base_host = match std::env::var("FASTVIDEO_LTX2_LORA_BASE").ok().as_deref().map(str::trim) {
+            Some("host") => true,
+            Some("device") => false,
+            Some(other) if !other.is_empty() => {
+                return Err(err(format!(
+                    "FASTVIDEO_LTX2_LORA_BASE={other}: expected host or device"
+                )))
+            }
+            _ => options.lora_base_host,
+        };
+        if lora_base_host && lora.is_some() && residency.is_streamed() {
+            return Err(err(
+                "ltx2: a host-kept LoRA base needs a resident DiT (dit offload 'resident' or 'auto' with room)",
+            ));
+        }
         Ok(Self {
+            lora_base_host,
             ic_lora,
             ic_strength: 0.0,
             dit_warm: std::sync::Mutex::new(dit_warm),
@@ -2814,12 +3111,14 @@ impl Ltx2Pipeline {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
             // unfused `W0`. Device re-fuse walks the resident linears.
             let guard = super::lora::install(&path, 0.0)?;
-            let mut model = Ltx2Transformer::load_with_residency(
-                &map,
-                &keys,
-                &self.cfg.transformer,
-                self.residency,
-            )?;
+            let mut model = crate::wan::nn::with_lora_base_on_host(self.lora_base_host, || {
+                Ltx2Transformer::load_with_residency(
+                    &map,
+                    &keys,
+                    &self.cfg.transformer,
+                    self.residency,
+                )
+            })?;
             let hits = super::lora::hits();
             if hits == 0 {
                 drop(guard);
@@ -2831,7 +3130,8 @@ impl Ltx2Pipeline {
             model.set_lora_strength(strength)?;
             drop(guard);
             crate::wan::log::info(format_args!(
-                "ltx2 lora: attached {hits} weights, fused at strength {strength} ({})",
+                "ltx2 lora: attached {hits} weights, fused at strength {strength}, unfused base on the {} ({})",
+                if self.lora_base_host { "host (pinned)" } else { "device" },
                 path.display()
             ));
             model
@@ -3174,8 +3474,32 @@ impl Ltx2Pipeline {
         // count as one sequence; FASTVIDEO_GPU_TRACE_STEP picks it).
         crate::wan::gpu_trace::pass_begin("ltx2");
         let cfg = self.cfg.clone();
-        let use_cfg = req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0;
-        check_generate_contract(&cfg, use_cfg)?;
+        // Audio-to-video on the LTX-2.5 dev transformer: `A2VidPipelineTwoStage`
+        // proper, a guided stage 1 ([`denoise_guided_cond`]).
+        let a2v_guided = req.audio.is_some()
+            && cfg.version == Ltx2ModelVersion::V25
+            && cfg.scheduler.use_dynamic_shifting;
+        let use_cfg = !a2v_guided && (req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0);
+        check_generate_contract(&cfg, use_cfg, a2v_guided)?;
+        let guiders = if a2v_guided {
+            if !req.two_stage {
+                return Err(err("ltx2 guided audio-to-video is two-stage (`A2VidPipelineTwoStage`)"));
+            }
+            if req.audio_guidance_scale != 1.0 {
+                return Err(err(
+                    "ltx2 guided audio-to-video guides the frozen audio with the neutral guider; set the audio guidance scale to 1",
+                ));
+            }
+            if !req.guidance_scale.is_finite() || req.guidance_scale < 1.0 {
+                return Err(err(format!(
+                    "ltx2 guided audio-to-video: guidance scale {} must be at least 1",
+                    req.guidance_scale
+                )));
+            }
+            Some(req.a2v_guiders())
+        } else {
+            None
+        };
         if fastvideo_models::ltx2::hq::requested(std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref())
             || (req.two_stage
                 && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
@@ -3199,14 +3523,12 @@ impl Ltx2Pipeline {
             // the guided line would need the dev transformer.
             return Err(err("ltx2 retake/extend runs on the LTX-2.5 distilled pipeline (unguided)"));
         }
-        if req.audio.is_some()
-            && (cfg.version != Ltx2ModelVersion::V25 || cfg.scheduler.use_dynamic_shifting || use_cfg)
-        {
-            // The guided dev line (`A2VidPipelineTwoStage` proper) needs the
-            // dev transformer and the guided sampler; only the distilled 2.5
-            // stages carry the frozen audio stream here.
+        if req.audio.is_some() && !a2v_guided && (cfg.version != Ltx2ModelVersion::V25 || use_cfg) {
+            // The frozen audio stream runs on the LTX-2.5 lines only: the
+            // distilled stages (unguided), or the dev transformer with the
+            // guided stage 1.
             return Err(err(
-                "ltx2 audio-to-video runs on the LTX-2.5 distilled pipeline (unguided)",
+                "ltx2 audio-to-video runs on LTX-2.5: the distilled pipeline (unguided) or the dev transformer (guided)",
             ));
         }
         if req.two_stage {
@@ -3282,9 +3604,39 @@ impl Ltx2Pipeline {
                 }
             }
         }
-        let uncond_contexts = if use_cfg {
-            let (c, rep) = self.text.encode(&req.negative_prompt, use_text_cache)?;
+        let needs_negative = use_cfg
+            || guiders
+                .as_ref()
+                .is_some_and(|(v, a)| v.needs_uncond() || a.needs_uncond());
+        let uncond_contexts = if needs_negative {
+            // The guided A2V's negative prompt defaults to the reference CLI's.
+            let negative = if a2v_guided && req.negative_prompt.is_empty() {
+                guidance::DEFAULT_NEGATIVE_PROMPT
+            } else {
+                req.negative_prompt.as_str()
+            };
+            let (mut c, rep) = self.text.encode(negative, use_text_cache)?;
             timings.text_s += rep.seconds;
+            crate::wan::dump::tensor("text_video_ctx_neg", &c.video)?;
+            crate::wan::dump::tensor("text_audio_ctx_neg", &c.audio)?;
+            if crate::wan::inject::text_enabled() {
+                for (name, slot) in [
+                    ("text_video_ctx_neg", &mut c.video),
+                    ("text_audio_ctx_neg", &mut c.audio),
+                ] {
+                    match crate::wan::inject::load(name)? {
+                        Some((_, v)) if v.len() == slot.numel() => {
+                            let shape = slot.shape.clone();
+                            *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
+                        }
+                        Some((shape, _)) => crate::wan::log::info(format_args!(
+                            "inject: {name} {shape:?} does not fit ours {:?}; ours kept",
+                            slot.shape
+                        )),
+                        None => {}
+                    }
+                }
+            }
             Some(c)
         } else {
             None
@@ -3453,6 +3805,13 @@ impl Ltx2Pipeline {
             model.project_text(&contexts.video, &contexts.audio)?
         };
         let mut text_uncond = match &uncond_contexts {
+            // The guided uncond pass: the negative video context beside the
+            // positive audio one (the audio guider has no negative context,
+            // `_guided_denoise`).
+            Some(c) if a2v_guided => {
+                let model = self.model.as_ref().expect("dit");
+                Some(model.project_text(&c.video, &contexts.audio)?)
+            }
             Some(c) => {
                 let model = self.model.as_ref().expect("dit");
                 Some(model.project_text(&c.video, &c.audio)?)
@@ -3528,7 +3887,10 @@ impl Ltx2Pipeline {
         } else {
             40
         };
-        let schedule = if cfg.scheduler.use_dynamic_shifting {
+        let schedule = if a2v_guided {
+            // `LTX2Scheduler().execute(steps)` (`a2vid_two_stage.py`).
+            Ltx2Schedule::ltx_core(req.num_inference_steps.unwrap_or(guidance::LTX25_DEV_STEPS))
+        } else if cfg.scheduler.use_dynamic_shifting {
             let steps = req.num_inference_steps.unwrap_or(default_dev_steps);
             Ltx2Schedule::dev(&cfg.scheduler, steps, video_seq_len)
         } else {
@@ -3557,7 +3919,22 @@ impl Ltx2Pipeline {
                 }?;
                 hooks.step(Stage::Denoise, i + 1, stage1_total, None)
             };
-            if ancestral {
+            if let Some((vg, ag)) = &guiders {
+                denoise_guided_cond(
+                    model,
+                    &text,
+                    text_uncond.as_ref(),
+                    &ropes,
+                    &schedule,
+                    vg,
+                    ag,
+                    video,
+                    audio,
+                    Some(&mut record),
+                    state,
+                    cond1.as_ref(),
+                )?
+            } else if ancestral {
                 denoise_ancestral_cond(
                     model,
                     &text,
@@ -4566,12 +4943,15 @@ mod tests {
     #[test]
     fn ltx25_generation_is_the_unguided_distilled_pipeline() {
         let distilled = fastvideo_models::ltx2::ltx2_5_22b_distilled();
-        assert!(check_generate_contract(&distilled, false).is_ok());
-        assert!(check_generate_contract(&distilled, true).is_err());
-        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_5_22b_dev(), false).is_err());
+        let dev = fastvideo_models::ltx2::ltx2_5_22b_dev();
+        assert!(check_generate_contract(&distilled, false, false).is_ok());
+        assert!(check_generate_contract(&distilled, true, false).is_err());
+        assert!(check_generate_contract(&dev, false, false).is_err());
+        // The dev transformer generates audio-to-video only (guided).
+        assert!(check_generate_contract(&dev, false, true).is_ok());
         // Other lines keep their own (guided) samplers.
-        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_19b(), true).is_ok());
-        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_23_22b(), true).is_ok());
+        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_19b(), true, false).is_ok());
+        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_23_22b(), true, false).is_ok());
         assert_eq!(
             LatentState::for_version(Ltx2ModelVersion::V25),
             LatentState::Bf16
