@@ -1,0 +1,111 @@
+=== 2026-09-29T08:06:35Z start /e2e/fv.toml
+2026-09-29T08:06:42.385969Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_encoder=cpu-test-x264 (CPU test encoder) (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post
+2026-09-29T08:06:43.985066Z  INFO fastvideo_engine_service::cuda::backend: H3 1080P tier offered device_gib=178.35107421875
+2026-09-29T08:06:43.985251Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("h3/fasth3_4step_vsa")
+[fastvideo] cuda device=0 sm_100 kernels=Cubin(100) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] h3 technique profile: h3/fasth3_4step_vsa
+[fastvideo] h3 technique setting FASTVIDEO_BF16_ACT=1 (bf16_activations)
+[fastvideo] h3 technique setting FASTVIDEO_H3_QUANT=mxfp8 (mxfp8)
+[fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default) [attention_backend from profile]
+[fastvideo] text encoder: pre-quantized fp8 tree /workspace/weights/h3-base/text_encoder_fp8 (350 linears, 50 layers)
+2026-09-29T08:06:44.465944Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+[fastvideo] load/io h3 text_encoder {"wall_s":12.31,"viewed_gb":25.95,"prefetch_read_gb":32.45,"prefetch_skipped_gb":0.00,"prefetch_busy_s":198.3,"viewed_gbps":2.11,"window_wait_s":0.0,"fill_s":1.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":7.5,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 recipe=4step-vsa steps=4 video_shift=12 vsa=0.9 dense=false
+[fastvideo] h3 fasth3-preview vsa-datafree: fuse 362 pairs rank=64 strength=1 diffs=82 set_weight=50 (/workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors)
+[fastvideo] h3 i2v encoder: resident (154.9 GiB free covers the vision tower (2.0 GiB) and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 6.8 s; the language model is the resident text encoder (ResidentFp8), 153.8 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, 153.8 GiB free before load)
+[fastvideo] h3 quant: mxfp8 (180 reference linears incl. refiner; Sol-H3 MXFP8, blocks 2..=46), bf16 activations
+[fastvideo] load/io h3 dit {"wall_s":47.44,"viewed_gb":98.76,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":615.3,"viewed_gbps":2.08,"window_wait_s":0.0,"fill_s":10.7,"h2d_wait_s":0.2,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":9.4,"read_wait_s":7.5,"mem_mode":true,"prefetch":true}
+[fastvideo] load/io h3 total {"wall_s":56.44,"viewed_gb":108.71,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":615.3,"viewed_gbps":1.93,"window_wait_s":0.0,"fill_s":10.7,"h2d_wait_s":0.2,"h2d_pageable_s":1.0,"convert_s":0.0,"lora_s":9.4,"read_wait_s":7.5,"mem_mode":false,"prefetch":true}
+2026-09-29T08:07:40.901831Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fasth3 seconds=56.543679254
+[fastvideo] sdpa: device dense B=1 H=16 Sq=4032 Sk=4032 D=72 query_chunk=4032
+[fastvideo] sdpa: fused mma B=1 H=56 Sq=1030 Sk=1030 D=128
+[fastvideo] h3 fl2va: encode first (/fvstate/engine-work/warmup-641dc41d-399c-4310-9042-21e905fddfca/first.png)
+[fastvideo] vsa-h3: 40 prefix + 660 video tiles, k_vid 66, 2452 of 39748 rows dense
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm10, 128B swizzle)
+[fastvideo] h3 memory denoise: peak 65.81 GiB used, 67.38 GiB reserved; 54.08 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 12.97 | pool_reserved 1.57 | non_pool 0.76 | total 66.56 GiB
+[fastvideo] h3 memory video_decode: peak 55.47 GiB used, 57.09 GiB reserved; 54.09 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.63 | pool_reserved 1.62 | non_pool 0.76 | total 56.23 GiB
+[fastvideo] vsa-h3: 8 prefix + 660 video tiles, k_vid 66, 428 of 37724 rows dense
+[fastvideo] h3 memory denoise: peak 65.19 GiB used, 66.62 GiB reserved; 54.06 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 12.36 | pool_reserved 1.43 | non_pool 0.76 | total 65.96 GiB
+[fastvideo] h3 memory video_decode: peak 55.45 GiB used, 56.88 GiB reserved; 54.08 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.61 | pool_reserved 1.43 | non_pool 0.76 | total 56.21 GiB
+2026-09-29T08:08:23.356728Z  INFO fastvideo_engine_service::cuda::backend: warmup done model=fasth3 seconds=42.45485181 runs=i2v 1344x768x124 25.2s, t2v 1344x768x124 17.2s
+FV-SERVE READY models=fasth3
+2026-09-29T08:08:23.357153Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] vsa-h3: 8 prefix + 280 video tiles, k_vid 28, 440 of 14870 rows dense
+[fastvideo] h3 memory denoise: peak 58.57 GiB used, 59.34 GiB reserved; 54.05 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 5.73 | pool_reserved 0.78 | non_pool 0.76 | total 59.33 GiB
+[fastvideo] h3 memory video_decode: peak 54.95 GiB used, 55.75 GiB reserved; 54.06 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.12 | pool_reserved 0.80 | non_pool 0.77 | total 55.72 GiB
+[fastvideo] h3 memory denoise: peak 58.57 GiB used, 59.34 GiB reserved; 54.05 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 5.73 | pool_reserved 0.78 | non_pool 0.77 | total 59.33 GiB
+[fastvideo] h3 memory video_decode: peak 54.95 GiB used, 55.72 GiB reserved; 54.06 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.12 | pool_reserved 0.77 | non_pool 0.77 | total 55.72 GiB
+[fastvideo] vsa-h3: 8 prefix + 660 video tiles, k_vid 66, 440 of 37736 rows dense
+[fastvideo] h3 memory denoise: peak 65.20 GiB used, 67.75 GiB reserved; 54.06 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 12.36 | pool_reserved 2.55 | non_pool 0.77 | total 65.96 GiB
+[fastvideo] h3 memory video_decode: peak 55.45 GiB used, 56.94 GiB reserved; 54.08 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.61 | pool_reserved 1.49 | non_pool 0.77 | total 56.22 GiB
+[fastvideo] h3 memory denoise: peak 65.20 GiB used, 67.72 GiB reserved; 54.06 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 12.36 | pool_reserved 2.52 | non_pool 0.77 | total 65.96 GiB
+[fastvideo] h3 memory video_decode: peak 55.45 GiB used, 56.81 GiB reserved; 54.08 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 2.61 | pool_reserved 1.36 | non_pool 0.77 | total 56.22 GiB
+[fastvideo] vsa-h3: 8 prefix + 1350 video tiles, k_vid 135, 440 of 75920 rows dense
+[fastvideo] h3 memory denoise: peak 76.52 GiB used, 81.69 GiB reserved; 54.08 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 23.68 | pool_reserved 5.17 | non_pool 0.77 | total 77.28 GiB
+[fastvideo] h3 memory video_decode: peak 56.88 GiB used, 58.94 GiB reserved; 54.10 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.05 | pool_reserved 2.05 | non_pool 0.77 | total 57.65 GiB
+[fastvideo] h3 memory video_decode: peak 56.88 GiB used, 59.00 GiB reserved; 54.10 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.05 | pool_reserved 2.12 | non_pool 0.77 | total 57.65 GiB
+[fastvideo] vsa-h3: 14 prefix + 2430 video tiles, k_vid 243, 836 of 147716 rows dense
+[fastvideo] h3 memory denoise: peak 96.93 GiB used, 104.31 GiB reserved; 54.10 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 44.10 | pool_reserved 7.38 | non_pool 0.77 | total 97.70 GiB
+[fastvideo] h3 memory video_decode: peak 56.97 GiB used, 58.91 GiB reserved; 54.16 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.14 | pool_reserved 1.94 | non_pool 0.77 | total 57.74 GiB
+=== 2026-09-29T08:15:13Z start /etc/fv/runpod-h3-max.toml
+2026-09-29T08:15:19.535072Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_encoder=cpu-test-x264 (CPU test encoder) (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post
+2026-09-29T08:15:20.980443Z  INFO fastvideo_engine_service::cuda::backend: H3 1080P tier offered device_gib=178.35107421875
+2026-09-29T08:15:20.980678Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("h3/sol_h3_4step_engine_ladder")
+2026-09-29T08:15:21.339236Z  INFO fastvideo_engine_service::cuda::backend: loading model=sol-h3 dit_gb=1.106e-6 free_gb=190.70222336
+[fastvideo] h3 technique profile: h3/sol_h3_4step_engine_ladder
+[fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); sol_attn [engine] (dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5, sink prefix, thresh diag) [attention_backend from profile]
+2026-09-29T08:15:21.362039Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:36215) tcp=None
+[fastvideo] load/io h3 text_encoder {"wall_s":5.13,"viewed_gb":25.95,"prefetch_read_gb":76.74,"prefetch_skipped_gb":0.00,"prefetch_busy_s":81.3,"viewed_gbps":5.06,"window_wait_s":0.0,"fill_s":1.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.3,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 recipe=sol-h3 steps=4 video_shift=12 vsa=0 dense=true
+[fastvideo] h3 sol-attn: dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5
+[fastvideo] h3 sol-h3: fuse 362 pairs rank=64 alpha=64 scale=1 diffs=85 (/workspace/weights/FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors)
+[fastvideo] h3 i2v encoder: resident (154.9 GiB free covers the vision tower (2.0 GiB) and the resident plan (60.0 GiB)): vision tower 1.09 GiB loaded in 0.8 s; the language model is the resident text encoder (ResidentFp8), 153.8 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 60.0 GiB, 153.8 GiB free before load)
+[fastvideo] load/io h3 dit {"wall_s":29.77,"viewed_gb":94.91,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":109.1,"viewed_gbps":3.19,"window_wait_s":0.0,"fill_s":4.8,"h2d_wait_s":0.2,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":5.4,"read_wait_s":0.3,"mem_mode":true,"prefetch":true}
+[fastvideo] load/io h3 total {"wall_s":38.14,"viewed_gb":104.86,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":109.1,"viewed_gbps":2.75,"window_wait_s":0.0,"fill_s":4.8,"h2d_wait_s":0.2,"h2d_pageable_s":0.9,"convert_s":0.0,"lora_s":5.4,"read_wait_s":0.3,"mem_mode":false,"prefetch":true}
+2026-09-29T08:15:59.602131Z  INFO fastvideo_engine_service::cuda::backend: model resident model=sol-h3 seconds=38.262865046
+[fastvideo] h3 fl2va: encode first (/fvstate/engine-work/warmup-8e5a3e4a-8da7-42c5-860d-869933127a05/first.png)
+[fastvideo] h3 sol sink: prefix [0, 2452) in packed order, dense prefix query rows
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=39748 blocks=622 sink=2452
+[fastvideo] h3 memory denoise: peak 56.57 GiB used, 58.66 GiB reserved; 50.49 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 7.32 | pool_reserved 2.09 | non_pool 0.76 | total 57.33 GiB
+[fastvideo] h3 memory video_decode: peak 51.88 GiB used, 53.91 GiB reserved; 50.51 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 2.63 | pool_reserved 2.03 | non_pool 0.76 | total 52.64 GiB
+[fastvideo] h3 sol sink: prefix [0, 428) in packed order, dense prefix query rows
+[fastvideo] h3 memory denoise: peak 56.21 GiB used, 58.28 GiB reserved; 50.47 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 6.96 | pool_reserved 2.07 | non_pool 0.76 | total 56.97 GiB
+[fastvideo] h3 memory video_decode: peak 51.86 GiB used, 53.84 GiB reserved; 50.49 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 2.61 | pool_reserved 1.98 | non_pool 0.76 | total 52.62 GiB
+2026-09-29T08:16:37.460494Z  INFO fastvideo_engine_service::cuda::backend: warmup done model=sol-h3 seconds=37.858322915 runs=i2v 1344x768x124 21.7s, t2v 1344x768x124 16.1s
+FV-SERVE READY models=sol-h3
+2026-09-29T08:16:37.460694Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] h3 sol sink: prefix [0, 440) in packed order, dense prefix query rows
+[fastvideo] h3 memory denoise: peak 56.21 GiB used, 58.25 GiB reserved; 50.47 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 6.96 | pool_reserved 2.04 | non_pool 0.76 | total 56.97 GiB
+[fastvideo] h3 memory video_decode: peak 51.86 GiB used, 53.91 GiB reserved; 50.49 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 2.61 | pool_reserved 2.05 | non_pool 0.76 | total 52.62 GiB
+[fastvideo] h3 memory denoise: peak 61.99 GiB used, 64.19 GiB reserved; 50.49 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 12.74 | pool_reserved 2.20 | non_pool 0.76 | total 62.75 GiB
+[fastvideo] h3 memory video_decode: peak 53.30 GiB used, 55.91 GiB reserved; 50.51 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 4.05 | pool_reserved 2.61 | non_pool 0.76 | total 54.06 GiB
+[fastvideo] h3 memory video_decode: peak 53.30 GiB used, 55.50 GiB reserved; 50.51 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 20.28 | vae 4.52 | audio_vae 0.24 | activations 4.05 | pool_reserved 2.20 | non_pool 0.76 | total 54.06 GiB
+=== 2026-09-29T08:20:00Z start /etc/fv/runpod-ltx.toml
+2026-09-29T08:20:06.644064Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_encoder=cpu-test-x264 (CPU test encoder) (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post
+2026-09-29T08:20:07.143673Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("ltx2/ltx25_distill_sol")
+2026-09-29T08:20:07.509599Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:45577) tcp=None
+2026-09-29T08:20:08.141224Z  INFO fastvideo_engine_service::cuda::backend: loading model=ltx25-distill-sol dit_gb=9.48e-7 free_gb=190.70222336
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_sol
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 177.6 GiB free before load)
+[fastvideo] load/io ltx2 load {"wall_s":17.60,"viewed_gb":39.11,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":224.4,"viewed_gbps":2.22,"window_wait_s":0.0,"fill_s":2.2,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":9.4,"mem_mode":false,"prefetch":true}
+2026-09-29T08:20:25.816106Z  INFO fastvideo_engine_service::cuda::backend: model resident model=ltx25-distill-sol seconds=17.67483333
+FV-SERVE READY models=ltx25-distill-sol
+2026-09-29T08:20:25.816525Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=18240 blocks=285 sink=0
+=== 2026-09-29T08:26:36Z start /etc/fv/runpod-wan5b.toml
+2026-09-29T08:26:42.655737Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_encoder=cpu-test-x264 (CPU test encoder) (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+2026-09-29T08:28:24.186525Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fastwan22-ti2v-5b seconds=99.694835227
+FV-SERVE READY models=fastwan22-ti2v-5b,wan22-ti2v-5b
+2026-09-29T08:28:24.187118Z  INFO fastvideo_serve::app: ready models=2
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 864x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x54 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=12555 Sk=12555 D=128
+[fastvideo] sdpa: device dense B=1 H=1 Sq=1620 Sk=1620 D=1024 query_chunk=1620
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1248x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x78 nvfp4=off resident=true cuda=true
+=== 2026-09-29T08:29:22Z start /etc/fv/runpod-sfwan.toml
+2026-09-29T08:29:28.651839Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_encoder=cpu-test-x264 (CPU test encoder) (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post
+
