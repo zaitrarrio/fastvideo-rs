@@ -43,6 +43,42 @@ use store::GatewayJobStore;
 /// Header carrying the internal token on gateway → worker requests.
 pub const TOKEN_HEADER: &str = "x-fv-internal-token";
 
+/// A worker's build as its `/fv/v1/internal/status` reports it
+/// ([`crate::build_info`]; docs/serve/releases.md). Old workers report
+/// none.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct WorkerBuild {
+    pub version: Option<String>,
+    pub git_sha: Option<String>,
+    pub build_time: Option<String>,
+    pub variant: Option<String>,
+    pub channel: Option<String>,
+    pub image_digest: Option<String>,
+    pub image_tag: Option<String>,
+}
+
+impl WorkerBuild {
+    /// From the status body's `build` object (and `version`).
+    pub fn parse(status: &Value) -> Option<Self> {
+        let b = status.get("build").filter(|b| b.is_object())?;
+        let s = |p: &str| b.pointer(p).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
+        Some(Self {
+            version: s("/version").or_else(|| status.get("version").and_then(Value::as_str).map(str::to_owned)),
+            git_sha: s("/git_sha"),
+            build_time: s("/build_time"),
+            variant: s("/variant"),
+            channel: s("/channel"),
+            image_digest: s("/image/digest"),
+            image_tag: s("/image/tag"),
+        })
+    }
+
+    /// The short sha the public views show (`unknown` when not reported).
+    pub fn short_sha(b: Option<&Self>) -> String {
+        b.and_then(|b| b.git_sha.as_deref()).filter(|s| *s != "unknown").map(|s| s.chars().take(7).collect()).unwrap_or_else(|| "unknown".into())
+    }
+}
+
 /// One worker of a pod pool as last seen.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct WorkerView {
@@ -69,6 +105,9 @@ pub struct WorkerView {
     /// When a probe last succeeded.
     #[serde(skip)]
     pub last_ok: Option<Instant>,
+    /// Its build, from the last successful probe (admin view only; the
+    /// public views show the short sha and channel per pool).
+    pub build: Option<WorkerBuild>,
 }
 
 impl WorkerView {
@@ -436,6 +475,7 @@ pub fn assemble(
         .with_state(ctx.clone())
         .merge(stateful)
         .merge(fastvideo_serve_kit::admin_routes(keys, admin.clone()))
+        .merge(crate::releases::routes(gw.clone(), admin.clone(), crate::releases::ReleasesCfg::from_env(&crate::config::ProcessEnv)))
         .merge(routes::routes(gw.clone(), admin, crate::metrics::install(), crate::adapters::root_model(&mcfg, ctx)));
     if config.protocols.reactor {
         r = r.merge(proxy::reactor_routes(gw.clone(), ctx.clone()));

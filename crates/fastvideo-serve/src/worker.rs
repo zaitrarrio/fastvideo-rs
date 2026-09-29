@@ -11,7 +11,7 @@
 //! | `POST /fv/v1/internal/jobs` | the dispatch envelope: fetch inputs, adopt the D1 row, submit to the engine → 202 `{id, status, worker}`; a job already held here answers 200; one held by another live worker 409 |
 //! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls) |
 //! | `DELETE /fv/v1/internal/jobs/{id}` | cancel |
-//! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, caps (gateway probes) |
+//! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, caps, `build` (git sha, variant, image digest, channel) (gateway probes) |
 //! | `POST /fv/v1/internal/drain`, `…/undrain` | stop / resume taking new jobs and sessions (running work finishes); the `gw_workers` row says `draining` (the autoscaler, gateway.md §8.5) |
 //!
 //! - [`spawn_registration`]: pod workers upsert `gw_workers` every 10 s.
@@ -192,6 +192,8 @@ async fn status(State(st): State<Arc<WorkerState>>) -> Response {
         "stats": {"queued_batch": s.queued_batch, "queued_stream": s.queued_stream, "running": s.running, "sessions": s.sessions},
         "models": models,
         "version": env!("CARGO_PKG_VERSION"),
+        // Git sha, build time, variant, image and channel (docs/serve/releases.md).
+        "build": crate::build_info::BuildInfo::current().json(),
     }))
     .into_response()
 }

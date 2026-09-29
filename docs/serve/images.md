@@ -30,7 +30,11 @@ Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
 promoted (`scripts/serve/release.sh promote <sha>`), and is what deploys
 and the Runpod templates follow. Deploy tooling pins digests. Every image's
 `fv-serve --version` and `/health` (`build`) report its git sha and build
-time; the templates' env adds the image digest and channel.
+time; the templates' env adds the image digest and channel. A worker
+reports the same in its internal status, so the gateway shows each pool's
+build (`/fv/v1/status`: short sha and channel; the admin pools route and
+the console's Deployments page: everything) and flags a pool whose
+workers run different builds.
 
 ### Layers
 

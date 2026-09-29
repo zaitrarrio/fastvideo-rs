@@ -133,6 +133,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         // Console pages (src/console.rs).
         r(Console, "GET", "/console"),
         r(Console, "GET", "/console/admin"),
+        r(Console, "GET", "/console/deployments"),
         r(Console, "GET", "/console/models/{owner}/{alias}/{*task}"),
         r(Console, "GET", "/console/assets/{file}"),
         r(Native, "GET", "/fv/v1/streams/{id}"),
@@ -141,6 +142,11 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         // Gateway pool metrics (admin token) and the worker role's internal
         // routes (docs/serve/gateway.md).
         r(Gateway, "GET", "/fv/v1/gateway/pools"),
+        // Releases and deployments (admin token; src/releases.rs).
+        r(Gateway, "GET", "/fv/v1/admin/releases"),
+        r(Gateway, "GET", "/fv/v1/admin/deployments"),
+        r(Gateway, "POST", "/fv/v1/admin/releases/promote"),
+        r(Gateway, "POST", "/fv/v1/admin/releases/rollback"),
         r(Gateway, "POST", "/fv/v1/internal/jobs"),
         r(Gateway, "GET", "/fv/v1/internal/jobs/{id}"),
         r(Gateway, "DELETE", "/fv/v1/internal/jobs/{id}"),

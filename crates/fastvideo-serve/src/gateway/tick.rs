@@ -40,6 +40,7 @@ pub struct WorkerStatus {
     pub queued: u32,
     pub sessions: u32,
     pub caps: Vec<(ModelCaps, Recipe)>,
+    pub build: Option<super::WorkerBuild>,
 }
 
 impl WorkerStatus {
@@ -66,6 +67,7 @@ impl WorkerStatus {
             queued: n("/stats/queued_batch") + n("/stats/queued_stream"),
             sessions: n("/stats/sessions"),
             caps,
+            build: super::WorkerBuild::parse(v),
         }
     }
 }
@@ -226,6 +228,7 @@ impl Gateway {
                     w.queued = s.queued;
                     w.sessions = s.sessions;
                     w.id = s.id.clone();
+                    w.build = s.build.clone();
                     if s.ready && !s.caps.is_empty() && st.caps_at.is_none_or(|t| t.elapsed() >= refresh) {
                         st.live_caps = Some(s.caps);
                         st.caps_at = Some(Instant::now());

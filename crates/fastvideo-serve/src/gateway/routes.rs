@@ -48,7 +48,8 @@ pub fn capabilities(gw: &Gateway) -> Value {
 }
 
 /// Every detail of every pool (worker URLs and ids, endpoint ids, probe
-/// errors): the admin route `/fv/v1/gateway/pools` only.
+/// errors, each worker's full `build`: sha, build time, variant, image
+/// digest and tag, channel): the admin route `/fv/v1/gateway/pools` only.
 pub fn pool_details(gw: &Gateway) -> Vec<Value> {
     gw.pools
         .iter()
@@ -56,8 +57,16 @@ pub fn pool_details(gw: &Gateway) -> Vec<Value> {
             let available = p.available();
             let st = p.lock();
             let models: Vec<String> = st.live_caps.as_ref().unwrap_or(&p.static_caps).iter().map(|(c, _)| c.id.0.clone()).collect();
+            let (versions, mixed) = crate::status::versions(
+                st.workers
+                    .values()
+                    .filter(|w| w.healthy)
+                    .map(|w| (super::WorkerBuild::short_sha(w.build.as_ref()), w.build.as_ref().and_then(|b| b.channel.clone()))),
+            );
             json!({
                 "id": p.id(),
+                "versions": versions,
+                "mixed_versions": mixed,
                 "kind": p.cfg.kind,
                 "endpoint_id": p.cfg.endpoint_id,
                 "available": available,
@@ -93,6 +102,13 @@ pub fn public_pools(gw: &Gateway) -> Vec<crate::status::PoolStatus> {
             let st = p.lock();
             let models: Vec<String> = st.live_caps.as_ref().unwrap_or(&p.static_caps).iter().map(|(c, _)| c.id.0.clone()).collect();
             let kind = serde_json::to_value(p.cfg.kind).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            // Short sha and channel of every answering worker.
+            let (versions, mixed_versions) = status::versions(
+                st.workers
+                    .values()
+                    .filter(|w| w.healthy)
+                    .map(|w| (super::WorkerBuild::short_sha(w.build.as_ref()), w.build.as_ref().and_then(|b| b.channel.clone()))),
+            );
             let (state, workers, last_seen, counts) = if p.is_pod() {
                 let workers: Vec<WorkerStatus> = st
                     .workers
@@ -133,6 +149,8 @@ pub fn public_pools(gw: &Gateway) -> Vec<crate::status::PoolStatus> {
                 workers,
                 loading: None,
                 worker_counts: counts,
+                versions,
+                mixed_versions,
             }
         })
         .collect()
@@ -189,7 +207,13 @@ async fn health(State(h): State<HealthState>) -> Response {
         "draining" => ("draining", "DRAINING"),
         _ => ("unavailable", "UNAVAILABLE"),
     };
-    (c, Json(json!({"status": status, "model_loaded": c == StatusCode::OK, "state": state, "gateway": true}))).into_response()
+    let build = crate::build_info::BuildInfo::current();
+    (
+        c,
+        Json(json!({"status": status, "model_loaded": c == StatusCode::OK, "state": state, "gateway": true,
+            "version": build.version, "build": build.json()})),
+    )
+        .into_response()
 }
 
 async fn healthz(State(h): State<HealthState>) -> Response {
@@ -204,6 +228,7 @@ async fn healthz(State(h): State<HealthState>) -> Response {
             "pools": public_pools(&h.gw),
             "stores": {"jobs": "d1"},
             "version": env!("CARGO_PKG_VERSION"),
+            "build": crate::build_info::BuildInfo::current().json(),
         })),
     )
         .into_response()
@@ -232,5 +257,11 @@ async fn pools_route(State(h): State<HealthState>, headers: HeaderMap) -> Respon
     if !h.admin.check_headers(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": {"kind": "unauthorized", "message": "the admin token is required"}}))).into_response();
     }
-    Json(json!({"object": "fv.gateway.pools", "pools": h.gw.metrics(), "state": pool_details(&h.gw)})).into_response()
+    Json(json!({
+        "object": "fv.gateway.pools",
+        "pools": h.gw.metrics(),
+        "state": pool_details(&h.gw),
+        "gateway_build": crate::build_info::BuildInfo::current().json(),
+    }))
+    .into_response()
 }

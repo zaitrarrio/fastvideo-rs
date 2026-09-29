@@ -28,6 +28,14 @@
 //! `failed` (model loading failed). A pool is its best worker; a model is
 //! its best pool; `state` is the best pool. Serverless pools also carry
 //! Runpod's `worker_counts` (idle, running, initializing, …).
+//!
+//! Versions (docs/serve/releases.md): each pod pool lists the builds its
+//! answering workers run as `versions: [{sha, channel, workers}]` (the
+//! 7-character git sha and the release channel only: no digests, image
+//! names or ids) and sets `mixed_versions` when they run more than one sha;
+//! the top level has this server's own `version` and `mixed_versions` when
+//! any pool is mixed. The admin route `/fv/v1/gateway/pools` has the full
+//! builds.
 
 use std::collections::BTreeMap;
 
@@ -60,6 +68,35 @@ pub struct WorkerStatus {
     pub sessions: u32,
 }
 
+/// One build a pool runs, as the public views show it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct VersionCount {
+    /// The 7-character git sha (`unknown` for a worker that does not say).
+    pub sha: String,
+    /// The release channel it was deployed from, when known.
+    pub channel: Option<String>,
+    /// How many of the pool's answering workers run it.
+    pub workers: u32,
+}
+
+/// Groups `(short sha, channel)` per worker; `true` when there is more than
+/// one sha.
+pub fn versions(it: impl IntoIterator<Item = (String, Option<String>)>) -> (Vec<VersionCount>, bool) {
+    let mut m: BTreeMap<(String, Option<String>), u32> = BTreeMap::new();
+    for k in it {
+        *m.entry(k).or_default() += 1;
+    }
+    let shas: std::collections::BTreeSet<&String> = m.keys().map(|(s, _)| s).collect();
+    let mixed = shas.len() > 1;
+    (m.into_iter().map(|((sha, channel), workers)| VersionCount { sha, channel, workers }).collect(), mixed)
+}
+
+/// This server's own `{sha, channel}` (see [`crate::build_info`]).
+pub fn own_version() -> Value {
+    let b = crate::build_info::BuildInfo::current();
+    json!({"sha": b.git_sha_short, "channel": b.channel})
+}
+
 /// One pool as the status view shows it.
 #[derive(Clone, Debug, Serialize)]
 pub struct PoolStatus {
@@ -81,6 +118,11 @@ pub struct PoolStatus {
     /// Serverless: Runpod's worker counts (`idle`, `running`, `initializing`, …).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worker_counts: Option<BTreeMap<String, u64>>,
+    /// The builds the answering workers run (short sha and channel).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<VersionCount>,
+    /// More than one sha among them.
+    pub mixed_versions: bool,
 }
 
 /// A pod pool's state from its workers' (none: scaled to zero).
@@ -126,10 +168,13 @@ pub fn body(gateway: bool, pools: Vec<PoolStatus>, names: BTreeMap<String, Strin
     }
     let state = pools.iter().map(|p| p.state).min().unwrap_or(State::Down);
     let models: BTreeMap<String, Value> = models.into_iter().map(|(m, (s, p))| (m, json!({"state": s, "pools": p}))).collect();
+    let mixed = pools.iter().any(|p| p.mixed_versions);
     json!({
         "object": "fv.status",
         "gateway": gateway,
         "state": state,
+        "version": own_version(),
+        "mixed_versions": mixed,
         "pools": pools,
         "models": models,
         "names": names,
@@ -196,11 +241,30 @@ mod tests {
             workers: vec![],
             loading: None,
             worker_counts: None,
+            versions: vec![],
+            mixed_versions: false,
         };
         let b = body(true, vec![pool("a", State::Down, &["m1", "m2"]), pool("b", State::Busy, &["m2"])], BTreeMap::new());
         assert_eq!(b["state"], "busy");
         assert_eq!(b["models"]["m1"], json!({"state": "down", "pools": ["a"]}));
         assert_eq!(b["models"]["m2"], json!({"state": "busy", "pools": ["a", "b"]}));
         assert_eq!(body(false, vec![], BTreeMap::new())["state"], "down");
+        assert_eq!(b["mixed_versions"], false);
+        assert_eq!(b["version"]["sha"], crate::build_info::BuildInfo::current().git_sha_short);
+    }
+
+    #[test]
+    fn versions_group_workers_and_flag_a_mix() {
+        let k = |s: &str, c: Option<&str>| (s.to_owned(), c.map(str::to_owned));
+        let (v, mixed) = versions([k("aaaaaaa", Some("stable")), k("aaaaaaa", Some("stable"))]);
+        assert!(!mixed);
+        assert_eq!(v, vec![VersionCount { sha: "aaaaaaa".into(), channel: Some("stable".into()), workers: 2 }]);
+        let (v, mixed) = versions([k("bbbbbbb", Some("stable")), k("aaaaaaa", Some("stable")), k("aaaaaaa", None)]);
+        assert!(mixed);
+        assert_eq!(v.len(), 3);
+        assert_eq!(serde_json::to_value(&v[0]).unwrap(), json!({"sha": "aaaaaaa", "channel": null, "workers": 1}));
+        // One sha under two channel names is not a mix.
+        assert!(!versions([k("aaaaaaa", Some("stable")), k("aaaaaaa", Some("latest"))]).1);
+        assert_eq!(versions(Vec::new()), (vec![], false));
     }
 }

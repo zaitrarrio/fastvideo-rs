@@ -338,7 +338,24 @@ autoscaler add or remove pods without touching the gateway.
   can scale from zero), 503 while draining; `/healthz` includes the same
   safe per-pool summary as `/fv/v1/status`. The details (worker URLs and
   ids, endpoint ids, probe errors) are only on `/fv/v1/gateway/pools`
-  (admin token: the metrics of §7 plus `state`, each pool's full view).
+  (admin token: the metrics of §7 plus `state`, each pool's full view,
+  including each worker's full `build` (git sha, build time, variant, image
+  digest and tag, release channel) and `gateway_build`).
+- **Versions** (docs/serve/releases.md): workers report their build in
+  `GET /fv/v1/internal/status` (`build`), and the tick keeps it per worker.
+  The public views (`/fv/v1/status`, `/healthz`, capabilities' `pools`)
+  show per pod pool only `versions: [{sha, channel, workers}]` (the
+  7-character sha and the channel of the answering workers) and
+  `mixed_versions` when they run more than one sha (a rolling redeploy in
+  progress, or drift); `/fv/v1/status` adds the gateway's own `version`
+  (`{sha, channel}`) and a top-level `mixed_versions`. Serverless pools
+  have no per-worker version (their workers follow the Runpod template).
+- **Releases** (admin token; `crates/fastvideo-serve/src/releases.rs`):
+  `GET /fv/v1/admin/releases`, `GET /fv/v1/admin/deployments` (the D1
+  history and registry, live builds, drift) and `POST
+  /fv/v1/admin/releases/{promote,rollback}` (`dry_run` for the plan;
+  otherwise they dispatch `release.yml`, which needs `FV_GITHUB_TOKEN` on
+  the gateway, else 503). The console's Deployments page uses them.
   Errors returned to API clients name the pool only (a `503` for a pool
   that cannot take work, a dispatch nobody took); the causes go to the
   log.

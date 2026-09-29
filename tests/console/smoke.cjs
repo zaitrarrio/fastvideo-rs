@@ -202,6 +202,82 @@ async function authNone(browser, redact) {
   }
 }
 
+// The Deployments page. A standalone server has no release routes (404: "not a
+// gateway"); then the gateway's admin API is mocked with page.route to check
+// rendering (channels, drift, mixed versions) and the Promote / Rollback flow
+// (dry-run plan first, confirm, dispatch). Nothing is dispatched for real.
+async function deploymentsPage(page, origin) {
+  await page.goto(origin + '/console/deployments');
+  if (!REMOTE) {
+    await page.waitForSelector('#admin-state.bad');
+    if (!/not a gateway/.test(await page.textContent('#admin-state'))) throw new Error('deployments: a standalone server should say "not a gateway"');
+  }
+  const d = (x) => 'sha256:' + x.repeat(64);
+  const head = (id, channel, sha, x) => ({ id, channel, git_sha: sha.repeat(40), action: 'promote', promoted_at: Date.now() - 3600e3, promoted_by: 'ci:release#1',
+    digests: { 'h3-turbo': 'ghcr.io/x/serve@' + d(x), debug: 'ghcr.io/x/serve@' + d('e') } });
+  const dispatch = { configured: true, repo: 'o/r', workflow: 'release.yml', ref: 'main', runs_url: 'https://github.com/o/r/actions/workflows/release.yml' };
+  const deps = {
+    object: 'fv.deployments', template_channel: 'stable', dispatch,
+    gateway: { sha: 'aaaaaaa', channel: 'stable', follows: 'stable', variant: 'gateway', image_digest: d('a'), drift: false },
+    heads: [head(2, 'stable', 'a', 'a'), head(3, 'latest', 'b', 'b')],
+    pools: [{ id: 'h3', kind: 'pod', mixed_versions: true, versions: [{ sha: 'aaaaaaa', channel: 'stable', workers: 1 }, { sha: 'bbbbbbb', channel: null, workers: 1 }],
+      workers: [
+        { url: 'https://p1-8000.proxy.runpod.net', id: 'p1', state: 'ready', healthy: true, build: { sha: 'aaaaaaa', channel: 'stable', follows: 'stable', variant: 'h3-turbo', image_digest: d('a'), drift: false } },
+        { url: 'https://p2-8000.proxy.runpod.net', id: 'p2', state: 'busy', healthy: true, build: { sha: 'bbbbbbb', channel: null, follows: 'stable', variant: 'h3-turbo', image_digest: d('b'), drift: 'aaaaaaa' } }] }],
+    deployments: [{ id: 'pod:p2', kind: 'pod', runpod_id: 'p2', name: 'fv-cluster-h3-turbo', pool: 'h3-turbo', variant: 'h3-turbo', git_sha: 'b'.repeat(40),
+      digest: d('b'), status: 'ready', created_at: Date.now() - 600e3, created_by: 'agent:x/runpod-cluster.sh', follows: 'stable', drift: 'aaaaaaa' }],
+  };
+  const rel = { object: 'fv.releases', template_channel: 'stable', dispatch, heads: deps.heads,
+    history: [head(3, 'latest', 'b', 'b'), head(2, 'stable', 'a', 'a'), { ...head(1, 'stable', 'c', 'c'), rolled_back_at: 5 }] };
+  const posts = [];
+  await page.route('**/fv/v1/admin/deployments', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(deps) }));
+  await page.route((u) => u.pathname === '/fv/v1/admin/releases', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(rel) }));
+  await page.route('**/fv/v1/admin/releases/*', (r) => {
+    const body = JSON.parse(r.request().postData() || '{}');
+    const auth = r.request().headers().authorization || '';
+    posts.push({ url: r.request().url().replace(/^.*\/releases\//, ''), body, admin: auth.startsWith('Bearer fvadm_') });
+    const rollback = r.request().url().endsWith('/rollback');
+    const plan = { object: 'fv.release.request', dry_run: !!body.dry_run, workflow: 'release.yml', ref: 'main', dispatch, templates: body.channel === 'stable',
+      inputs: rollback ? { action: 'rollback', channel: body.channel, to: '1', target: '' } : { action: 'promote', channel: body.channel, target: body.target },
+      current: head(2, 'stable', 'a', 'a'), ...(rollback ? { target: head(1, 'stable', 'c', 'c') } : {}) };
+    r.fulfill({ status: body.dry_run ? 200 : 202, contentType: 'application/json', body: JSON.stringify(body.dry_run ? plan : { ...plan, dispatched: true }) });
+  });
+  await page.reload();
+  await page.waitForSelector('#admin-state.ok');
+  await page.waitForSelector('#heads tr[data-channel="stable"]');
+  await page.waitForSelector('#live tr[data-worker="p2"] [data-drift="drift"]');
+  await page.waitForSelector('#live tr[data-worker="p1"] [data-drift="ok"]');
+  await page.waitForSelector('#mixed:not([hidden])');
+  await page.waitForSelector('#deps tr[data-deployment="pod:p2"] [data-drift="drift"]');
+  if ((await page.$$('#history tbody tr')).length !== 3) throw new Error('deployments: history rows');
+  if (!/dispatch|ready/.test(await page.textContent('#dispatch-state'))) throw new Error('deployments: dispatch state');
+  await shot(page, '08-deployments');
+  step('deployments: channels, live builds with drift and the mixed flag, registry and history render');
+
+  // Promote: plan only, then confirm → dispatched.
+  await page.fill('#target', '2cd1ba0');
+  await page.click('#plan');
+  await page.waitForSelector('#plan-out:not([hidden])');
+  if (posts.length !== 1 || !posts[0].body.dry_run) throw new Error('plan must be a dry run: ' + JSON.stringify(posts));
+  let dialogText = '';
+  page.once('dialog', (dlg) => { dialogText = dlg.message(); dlg.accept(); });
+  await page.click('#promote');
+  await page.waitForFunction(() => /Dispatched/.test(document.querySelector('#promote-msg').textContent));
+  const last = posts.slice(-2);
+  if (!(last[0].body.dry_run === true && last[1].body.dry_run === false && last[1].body.target === '2cd1ba0' && last[1].body.channel === 'stable'))
+    throw new Error('promote: dry run then dispatch expected: ' + JSON.stringify(last));
+  if (!/Promote 2cd1ba0 to stable/.test(dialogText) || !/current: #2/.test(dialogText)) throw new Error('promote: the confirm shows the plan: ' + dialogText);
+  // Rollback: the plan is shown; cancelling dispatches nothing.
+  const before = posts.length;
+  page.once('dialog', (dlg) => dlg.dismiss());
+  await page.click('#heads [data-rollback="stable"]');
+  await page.waitForFunction(() => /cancelled/.test(document.querySelector('#promote-msg').textContent));
+  if (posts.length !== before + 1 || posts[before].body.dry_run !== true) throw new Error('rollback: only the dry run when cancelled');
+  if (!posts.every((x) => x.admin)) throw new Error('release calls must carry the admin token');
+  step('deployments: Promote plans, confirms and dispatches; Rollback shows its plan and cancel sends nothing');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+}
+
 async function main() {
   if (!REMOTE && !fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
   const port = REMOTE ? 0 : await freePort();
@@ -269,6 +345,9 @@ async function main() {
       await page.waitForSelector('#status-strip [data-pool="local"][data-state="ready"] .dot.ok');
       await page.click('#status-strip');
       await page.waitForSelector('#status-panel:not([hidden]) tr[data-pool="local"] [data-worker="local"]');
+      // The pool's build: this server's short sha (docs/serve/releases.md).
+      const vers = await page.getAttribute('#status-panel tr[data-pool="local"] [data-versions]', 'data-versions');
+      if (!/^([0-9a-f]{7}|unknown)$/.test(vers || '')) throw new Error('status panel: no build for the local pool (' + vers + ')');
       const panel = await page.textContent('#status-panel');
       if (/127\.0\.0\.1|https?:\/\//.test(panel)) throw new Error('status panel shows an address: ' + panel.slice(0, 200));
       await shot(page, '01b-status-panel');
@@ -407,6 +486,8 @@ async function main() {
     await shot(page, '07-r2v-phone');
     if (overflow > 1) throw new Error('horizontal overflow at 390 px: ' + overflow + ' px');
     step('reference-to-video form fits a 390 px viewport');
+
+    await deploymentsPage(page, origin);
 
     // Revoke from the admin page: the key stops working.
     await page.goto(origin + '/console/admin');

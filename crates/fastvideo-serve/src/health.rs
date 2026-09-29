@@ -200,6 +200,11 @@ pub fn status_body(h: &Health) -> serde_json::Value {
         workers: vec![WorkerStatus { label: "local".into(), state, last_seen_s: Some(0.0), running, queued, sessions: s.sessions as u32 }],
         loading,
         worker_counts: None,
+        versions: {
+            let b = BuildInfo::current();
+            status::versions([(b.git_sha_short.clone(), b.channel.clone())]).0
+        },
+        mixed_versions: false,
     };
     status::body(false, vec![pool], status::names(caps.models(), h.gate.aliases()))
 }
