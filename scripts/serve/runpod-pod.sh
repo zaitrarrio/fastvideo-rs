@@ -15,7 +15,10 @@
 # digest first. Default: for a published variant's config (FV_VARIANT, or
 # derived from FV_SERVE_CONFIG; scripts/serve/variants.sh) the image of its
 # Runpod template fv-serve-<variant>-pod (docs/serve/images.md), else the
-# legacy all-in-one ghcr.io/zaitrarrio/fastvideo-rs-serve:latest.
+# legacy all-in-one ghcr.io/zaitrarrio/fastvideo-rs-serve:stable (the release
+# channel deploys follow; :latest until the first promotion,
+# docs/serve/releases.md). Every pod is recorded in the D1 deployments
+# table (scripts/serve/lib/registry.sh; best effort).
 # fv-serve starts from the image ENTRYPOINT with `--config $FV_SERVE_CONFIG`.
 #
 # Money guards: the GPU's $/hr cap (RUNPOD_GPU_MAX_DPH, default 1.0), a
@@ -36,17 +39,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../gpu/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=variants.sh
 source "$HERE/variants.sh"
+# shellcheck source-path=SCRIPTDIR source=lib/registry.sh
+source "$HERE/lib/registry.sh"
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
 VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
 pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
   elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" pod
-  else echo "$IMAGE_DEFAULT"
+  else fv_default_image
   fi
 }
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA RTX 2000 Ada Generation,NVIDIA GeForce RTX 3090,NVIDIA L4}"
@@ -117,13 +121,13 @@ payload() {
     vol_json="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
   fi
   jq -n --arg name "$name" --arg image "$image" --arg gpu "$gpu" --arg cfg "$CONFIG" --arg cuda "$CUDA" \
-    --arg keys "$keyhash" --argjson secrets "$SECRET_ENV_JSON" --argjson vol "$vol_json" '{
+    --arg keys "$keyhash" --argjson secrets "$SECRET_ENV_JSON" --argjson vol "$vol_json" --argjson ident "$(fv_image_env_json "$image")" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 30, volumeInGb: 0,
       ports: ["8000/http", "70000/tcp"],
       dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-serve"],
       dockerStartCmd: ["--config", $cfg],
-      env: ($secrets + {
+      env: ($secrets + $ident + {
         FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
         FV_API_KEYS: $keys, FV_SERVE_FORWARD: "1", RUST_LOG: "info"
       })
@@ -135,7 +139,7 @@ cleanup() {
   local rc=$?
   if [[ -n "$POD" ]]; then
     log "destroy-on-exit: deleting pod $POD"
-    if rest DELETE "/pods/$POD" >/dev/null 2>&1; then ledger "pod-deleted $POD"; else log "WARNING: delete of $POD failed; the ${CAP_S}s backstop will retry"; fi
+    if rest DELETE "/pods/$POD" >/dev/null 2>&1; then ledger "pod-deleted $POD"; fv_deploy_deleted pod "$POD"; else log "WARNING: delete of $POD failed; the ${CAP_S}s backstop will retry"; fi
     POD=""
   fi
   exit "$rc"
@@ -169,6 +173,8 @@ create() {
       'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' \
       >/dev/null 2>&1 &
     log "pod $POD: $gpu at \$$dph/hr (wall-clock cap ${CAP_S}s)"
+    fv_deploy_created pod "$POD" name="$name" image="$image" gpu="$gpu" cost_per_hr="$dph" variant="$VARIANT" \
+      dc="$(jq -r '.machine.dataCenterId // .dataCenterId // empty' <<<"$resp")" meta="$(jq -nc --arg c "$CONFIG" '{config: $c}')"
     CREATED_GPU="$gpu"; CREATED_DPH="$dph"
     return 0
   done
@@ -199,6 +205,7 @@ cmd_smoke() {
     (( $(date +%s) - t0 < ${FV_BOOT_WAIT_S:-1200} )) || die "pod $POD never answered /ping 200 (last $code)"
     sleep 5
   done
+  fv_deploy_ready pod "$POD"
   log "ready: first /ping answer $(awk -v a="$t_first" -v b="$t_create" 'BEGIN{printf "%.1f", a-b}')s, ready $(awk -v a="$t_ready" -v b="$t_create" 'BEGIN{printf "%.1f", a-b}')s after create"
   http "$base/healthz" | jq -c . >&2
   caps="$(http -H "Authorization: Bearer $key" "$base/fv/v1/capabilities")"
@@ -253,7 +260,7 @@ case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   down)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
-    rest DELETE "/pods/${2:?pod id}" >/dev/null && ledger "pod-deleted $2" && echo "deleted $2" ;;
+    rest DELETE "/pods/${2:?pod id}" >/dev/null && ledger "pod-deleted $2" && fv_deploy_deleted pod "$2" && echo "deleted $2" ;;
   plan)
     shift
     IFS=',' read -r -a types <<<"$GPUS"

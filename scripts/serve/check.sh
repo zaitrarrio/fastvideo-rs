@@ -40,6 +40,9 @@ run() { printf '\n==> %s\n' "$*" >&2; "$@"; }
 run cargo check "${PKGS[@]}" --all-targets
 run cargo clippy "${PKGS[@]}" --all-targets --no-deps -- -D warnings
 run cargo test "${PKGS[@]}"
+# The release / deployment scripts against a mocked API (docs/serve/releases.md;
+# skips without python3).
+run bash scripts/serve/tests/release.test.sh
 
 if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets

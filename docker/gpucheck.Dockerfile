@@ -155,6 +155,11 @@ WORKDIR /opt/fastvideo-rs
 # CPU-only test backend and is not shipped, design §0 decision 1).
 FROM build AS serve-build
 ARG FV_SERVE_FEATURES=cuda,http-client
+# Build identity for `fv-serve --version` and /health (crates/fastvideo-serve/
+# build.rs; .git is not in the context). CI passes the commit sha and time.
+ARG BUILD_ID=unknown
+ARG FV_GIT_SHA=unknown
+ARG FV_BUILD_TIME=
 # The Reactor adapter (a default feature) encodes Opus: audiopus_sys builds
 # libopus statically with CMake.
 RUN apt-get update \
@@ -346,6 +351,9 @@ LABEL org.opencontainers.image.description="fv-serve sfwan (configs/serve/runpod
 # on serve-os; ffmpeg stays for input probing.
 FROM build AS gateway-build
 ARG FV_GATEWAY_FEATURES=http-client
+ARG BUILD_ID=unknown
+ARG FV_GIT_SHA=unknown
+ARG FV_BUILD_TIME=
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake \
  && rm -rf /var/lib/apt/lists/*

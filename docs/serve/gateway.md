@@ -691,8 +691,12 @@ includes other agents' pods.
 
   which fetches the sealed token on first use, opens it with `openssl`,
   keeps a copy in the state file (`.admin_token`, mode 600) and prints it.
-  `wait`, `status` and `smoke` use the same copy through a header file
-  (never argv): `wait` / `status` read the admin route
-  `/fv/v1/gateway/pools`, `smoke` mints an API key once (`.smoke_api_key`).
-  If the gateway pod was re-created, the copy stops working (401) and the
-  script fetches the new token by itself.
+  `wait`, `status`, `mint` and `smoke` use the same copy through a header
+  file (never argv): `wait` / `status` read the admin route
+  `/fv/v1/gateway/pools`, `mint <name> <file>` mints a user key, and
+  `smoke` uses `FV_CLUSTER_KEY_FILE` or mints one key once
+  (`.smoke_api_key`). If the gateway pod was re-created, the copy stops
+  working (401) and the script fetches the new token by itself. A state
+  file from an older script (an `.admin_token` it generated, no key pair)
+  keeps passing that token as `FV_ADMIN_TOKEN`, so a running cluster is
+  not cut off.

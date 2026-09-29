@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
+use fastvideo_serve::build_info::BuildInfo;
 use fastvideo_serve::config::{Config, ProcessEnv};
 use fastvideo_serve::{App, Overrides};
 
@@ -29,8 +30,15 @@ fn init_tracing(c: &Config) {
     }
 }
 
+/// `--version` prints the build identity (git sha, build time, variant,
+/// image; docs/serve/releases.md), `-V` the package version only.
+fn parse_args() -> Args {
+    let matches = Args::command().long_version(BuildInfo::current_long_version()).get_matches();
+    Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
 fn main() -> ExitCode {
-    let args = Args::parse();
+    let args = parse_args();
     let config = match Config::load(args.config.as_deref(), &ProcessEnv) {
         Ok(c) => c,
         Err(e) => {
@@ -51,7 +59,7 @@ fn main() -> ExitCode {
         }
     };
     let res = rt.block_on(async move {
-        tracing::info!(config = %config.redacted(), "fv-serve {}", env!("CARGO_PKG_VERSION"));
+        tracing::info!(config = %config.redacted(), build = %BuildInfo::current().json(), "fv-serve {}", BuildInfo::current().summary());
         let boot = fastvideo_serve::deploy::Boot::now();
         fastvideo_serve::deploy::link_pod_weights();
         let queue = config.server.mode == fastvideo_serve::config::Mode::RunpodQueue;

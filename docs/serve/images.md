@@ -13,18 +13,24 @@ deploy scripts pull anonymously).
 
 | variant | config baked as `FV_CONFIG` | GHCR tags | Runpod templates |
 |---|---|---|---|
-| h3-turbo | `runpod.toml` | `:h3-turbo`, `:h3-turbo-sha-<sha>` | `fv-serve-h3-turbo-sls`, `fv-serve-h3-turbo-pod` |
+| h3-turbo | `runpod.toml` | `:h3-turbo-sha-<sha>`, `:h3-turbo` / `:h3-turbo-latest`, `:h3-turbo-stable` | `fv-serve-h3-turbo-sls`, `fv-serve-h3-turbo-pod` |
 | h3-max | `runpod-h3-max.toml` | `:h3-max`, … | `fv-serve-h3-max-sls` / `-pod` |
 | ltx | `runpod-ltx.toml` | `:ltx`, … | `fv-serve-ltx-sls` / `-pod` |
 | wan (wan-turbo) | `runpod-wan.toml` | `:wan`, … | `fv-serve-wan-sls` / `-pod` |
 | wan5b | `runpod-wan5b.toml` | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
 | gateway (CPU only) | `gateway.toml` | `:gateway`, … | `fv-serve-gateway-pod` |
-| debug (legacy all-in-one) | every config, `runpod.toml` default | `:latest`, `:sha-<sha>` | none |
+| debug (legacy all-in-one) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
 
 Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
-`<sha>` tags are immutable; the bare variant tags follow main. Deploy tooling
-pins digests.
+`<sha>` tags are immutable. Two release channels move over them
+([releases.md](releases.md)): `latest` (`:latest`, `:<variant>`,
+`:<variant>-latest`) is the newest green main build, moved by CI;
+`stable` (`:stable`, `:<variant>-stable`) moves only when a build is
+promoted (`scripts/serve/release.sh promote <sha>`), and is what deploys
+and the Runpod templates follow. Deploy tooling pins digests. Every image's
+`fv-serve --version` and `/health` (`build`) report its git sha and build
+time; the templates' env adds the image digest and channel.
 
 ### Layers
 
@@ -91,9 +97,11 @@ Options checked (Runpod docs, 2026-09-28):
 | **Templates pointing at the image** | persistent `fv-serve-<variant>-sls` / `-pod` templates the endpoints and pods start from; updating a template rolls every endpoint using it (rolling release) | **chosen** |
 | Cached models | weights on the host, see above | not applicable to the image |
 
-What CI does (`Register the Runpod templates` step, main only): after the
-variant images are pushed and smoke-checked, `runpod-templates.sh sync-all`
-creates or updates, per variant, the serverless template (`isServerless`,
+What `runpod-templates.sh sync` does, per variant (run by
+`release.sh promote … stable` / `rollback`, see [releases.md](releases.md);
+CI's `Register the Runpod templates` step runs `sync-all` after main builds
+only when the repository variable `FV_TEMPLATE_CHANNEL` is `latest`):
+it creates or updates the serverless template (`isServerless`,
 `FV_SERVE_MODE=runpod-queue`, `FV_WEIGHTS=/runpod-volume/weights`,
 trust-gateway auth, 20 GB disk) and the pod template (HTTP mode, ports
 8000/http + 70000/tcp, `/workspace` volume mount, 30 GB disk); the gateway
@@ -101,7 +109,8 @@ gets a CPU pod template only. Images are referenced **by digest**. Secrets are
 Runpod secret references (`{{ RUNPOD_SECRET_fv_* }}`), never values. If the
 registry ever goes private, create a Runpod registry auth for GHCR once and set
 its id as the `RUNPOD_REGISTRY_AUTH_ID` secret; the script adds it to every
-template.
+template. The env also names the image (`FV_IMAGE_REF`, `FV_IMAGE_DIGEST`)
+and the channel (`FV_RELEASE_CHANNEL`), which fv-serve reports.
 
 Deploy scripts boot what the templates name:
 
@@ -111,7 +120,8 @@ Deploy scripts boot what the templates name:
   itself (`down` never deletes it); with `FV_EXTRA_ENV_JSON` (gateway worker
   role) or for load-balancer endpoints, a per-run template/endpoint boots the
   template's image digest. `[image]` / `FV_SERVE_IMAGE` still override; the
-  fake config keeps the legacy `:latest`.
+  fake config boots the all-in-one `:stable` (`:latest` until the first
+  promotion).
 - `scripts/serve/runpod-pod.sh`: the pod boots the image of
   `fv-serve-<variant>-pod`.
 - `scripts/serve/runpod-gateway.sh validate` without an image: each pool its
@@ -124,7 +134,9 @@ Deploy scripts boot what the templates name:
 | secret | used by | required |
 |---|---|---|
 | `GITHUB_TOKEN` (automatic) | push to GHCR, registry build cache | yes (built in) |
-| `RUNPOD_API_KEY` | `Register the Runpod templates` (REST v1 `/templates`) | for Runpod publishing; without it the step warns and skips |
+| `RUNPOD_API_KEY` | `release.yml` template sync; `Register the Runpod templates` when the templates follow `latest` (REST v1 `/templates`) | for Runpod publishing; without it the step warns and skips |
+| `FV_CF_API_TOKEN` (or `CLOUDFLARE_API_TOKEN`) | release history in D1: `Record the latest release`, `release.yml` | for release history; without it serve-image warns and release.yml fails |
+| `FV_CF_ACCOUNT_ID`, `FV_D1_DATABASE_ID` | the same | no (looked up from the token: first account, database `fv-jobs`) |
 | `RUNPOD_REGISTRY_AUTH_ID` | added to the templates as `containerRegistryAuthId` | only if the GHCR package becomes private |
 
 The Runpod account needs the `fv_*` Runpod secrets the templates reference

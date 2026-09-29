@@ -33,7 +33,10 @@
 # template fv-serve-<variant>-sls (docs/serve/images.md), and a queue
 # endpoint without FV_EXTRA_ENV_JSON uses that template itself (never
 # deleted by `down`); anything else (the fake config) boots the legacy
-# all-in-one image (:latest).
+# all-in-one image (:stable, or :latest before the first promotion;
+# docs/serve/releases.md). Endpoints are recorded in the D1 deployments
+# table (scripts/serve/lib/registry.sh; FV_DEPLOY_POOL names the gateway
+# pool, when there is one).
 #
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_VARIANT; FV_SERVE_CONFIG (default
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default s2k01690bi,
@@ -53,12 +56,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../gpu/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=variants.sh
 source "$HERE/variants.sh"
+# shellcheck source-path=SCRIPTDIR source=lib/registry.sh
+source "$HERE/lib/registry.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
 VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
 # pick_image [image] -> the image reference to boot (see the header).
@@ -66,7 +70,7 @@ pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
   elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" sls
-  else echo "$IMAGE_DEFAULT"
+  else fv_default_image
   fi
 }
 VOLUME="${RUNPOD_VOLUME_ID:-s2k01690bi}"
@@ -152,10 +156,10 @@ LINK_WEIGHTS='if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; t
 template_payload() {
   local image="$1" name="$2"
   jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --arg link "$LINK_WEIGHTS" --argjson secrets "$SECRET_ENV_JSON" \
-    --argjson extra "${FV_EXTRA_ENV_JSON:-{\}}" '{
+    --argjson extra "${FV_EXTRA_ENV_JSON:-{\}}" --argjson ident "$(fv_image_env_json "$image")" '{
     name: $name, imageName: $image, isServerless: true, containerDiskInGb: 20, volumeInGb: 0,
     dockerEntrypoint: ["/bin/sh", "-c", $link, "fv-serve"], dockerStartCmd: ["--config", $cfg],
-    env: ($secrets + {
+    env: ($secrets + $ident + {
       FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
       FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"
     } + $extra)
@@ -186,10 +190,11 @@ lb_payload() {
     | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
   [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
   jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson pools "$pools" --arg vol "$VOLUME" \
-    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT_LB" '{
+    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT_LB" \
+    --argjson ident "$(fv_image_env_json "$image")" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
     args: ("--config " + $cfg), ports: ["8000/http"], disk: 20,
-    env: ($secrets + {
+    env: ($secrets + $ident + {
       FV_SERVE_MODE: "http", FV_AUTH_MODE: "trust-gateway", PORT: "8000", PORT_HEALTH: "8000",
       FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info",
       FV_WORKERS_MAX: ($max | tostring)
@@ -209,7 +214,7 @@ down() {
     rest PATCH "/endpoints/$ep" '{"workersMin":0,"workersMax":0}' >/dev/null 2>&1 || true
     local i
     for i in 1 2 3 4 5 6; do
-      if rest DELETE "/endpoints/$ep" >/dev/null 2>&1; then ledger "endpoint-deleted $ep"; break; fi
+      if rest DELETE "/endpoints/$ep" >/dev/null 2>&1; then ledger "endpoint-deleted $ep"; fv_deploy_deleted endpoint "$ep"; break; fi
       [[ $i == 6 ]] && log "WARNING: could not delete endpoint $ep (backstop retries at the cap)"
       sleep $((i * 5))
     done
@@ -263,6 +268,9 @@ up_queue() {
   EP="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$EP" ]] || die "endpoint create returned no id"
   ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS template=$tpl_use flashboot=$FLASHBOOT_Q"
+  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$VARIANT" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
+    meta="$(jq -nc --arg t "$tpl_use" --arg v "$VOLUME" --arg c "$CONFIG" --argjson shared "$([[ "$TPL" == - ]] && echo true || echo false)" \
+      '{type: "queue", template: $t, shared_template: $shared, volume: $v, config: $c}')"
   backstop "$EP" "$TPL"
   log "queue endpoint $EP (template $tpl_use, volume $VOLUME in $dc, cap ${CAP_S}s)"
 }
@@ -276,6 +284,8 @@ up_lb() {
   [[ -n "$EP" ]] || die "LB endpoint create returned no id: $(head -c 300 <<<"$resp")"
   TPL="$(jq -r '.templateId // .template.id // "-"' <<<"$resp")"
   ledger "endpoint-created $EP $name type=LOAD_BALANCER volume=$VOLUME dc=$dc template=$TPL"
+  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$VARIANT" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
+    meta="$(jq -nc --arg t "$TPL" --arg v "$VOLUME" --arg c "$CONFIG" '{type: "load-balancer", template: $t, volume: $v, config: $c}')"
   backstop "$EP" "$TPL"
   log "LB endpoint $EP (https://$EP.api.runpod.ai, cap ${CAP_S}s)"
 }
@@ -312,6 +322,7 @@ cmd_smoke() {
   trap cleanup EXIT INT TERM
   up_queue "$image"
   cold="$(job "$EP" '{"kind":"info","nvenc":true}')"
+  [[ "$(jq -r .status <<<"$cold")" != COMPLETED ]] || fv_deploy_ready endpoint "$EP"
   caps="$(job "$EP" '{"kind":"http","method":"GET","path":"/fv/v1/capabilities"}')"
   gen="$(job "$EP" "{\"kind\":\"http\",\"method\":\"POST\",\"path\":\"/fv/v1/jobs\",\"body\":{\"model\":\"$MODEL\",\"prompt\":\"a red fox trotting through fresh snow\",\"seed\":1},\"wait\":true}")"
   warm="$(job "$EP" '{"kind":"info"}')"
@@ -350,7 +361,7 @@ cmd_smoke_lb() {
   while :; do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 150 -H "Authorization: Bearer $RUNPOD_API_KEY" "$base/ping" || true)"
     [[ "$code" == 204 && -z "$t_first" ]] && t_first="$(now)"
-    [[ "$code" == 200 ]] && { t_ready="$(now)"; break; }
+    [[ "$code" == 200 ]] && { t_ready="$(now)"; fv_deploy_ready endpoint "$EP"; break; }
     (( ${t0%.*} + ${FV_BOOT_WAIT_S:-1200} > $(date +%s) )) || die "LB endpoint never answered /ping 200 (last $code)"
     sleep 5
   done

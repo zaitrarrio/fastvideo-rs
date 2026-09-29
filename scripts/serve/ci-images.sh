@@ -10,7 +10,9 @@
 #
 # Env: FV_IMAGE (repo, e.g. ghcr.io/zaitrarrio/fastvideo-rs-serve); FV_SHORT_SHA;
 # FV_BUILD_ID; FV_SERVE_FEATURES (default cuda,http-client);
-# FV_GATEWAY_FEATURES (default http-client); FV_LATEST=1 also tags :<variant>;
+# FV_GATEWAY_FEATURES (default http-client); FV_LATEST=1 also tags :<variant>
+# and :<variant>-latest (the `latest` channel, docs/serve/releases.md);
+# FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
 # registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv).
 set -euo pipefail
@@ -38,7 +40,7 @@ build() {
   mkdir -p "$(dirname "$OUT")"
   for v in "$@"; do
     tags="$FV_IMAGE:$v-sha-$FV_SHORT_SHA"
-    [[ "${FV_LATEST:-0}" == 1 ]] && tags+=",$FV_IMAGE:$v"
+    [[ "${FV_LATEST:-0}" == 1 ]] && tags+=",$FV_IMAGE:$v,$FV_IMAGE:$v-latest"
     [[ "$COMPRESSION" == gzip ]] || tags="${tags//:$v-sha-/:$v-$COMPRESSION-sha-}"
     # One registry cache per build graph: the CUDA variants share everything
     # up to the variant stage (h3-turbo exports it), the gateway has its own.
@@ -55,6 +57,8 @@ build() {
     log "build serve-$v -> $tags ($COMPRESSION)"
     docker buildx build "$ROOT" -f "$ROOT/docker/gpucheck.Dockerfile" --target "serve-$v" --platform linux/amd64 \
       --build-arg "BUILD_ID=${FV_BUILD_ID:-unknown}" \
+      --build-arg "FV_GIT_SHA=${GITHUB_SHA:-unknown}" \
+      --build-arg "FV_BUILD_TIME=${FV_BUILD_TIME:-}" \
       --build-arg "FV_SERVE_FEATURES=${FV_SERVE_FEATURES:-cuda,http-client}" \
       --build-arg "FV_GATEWAY_FEATURES=${FV_GATEWAY_FEATURES:-http-client}" \
       --label "org.opencontainers.image.revision=${GITHUB_SHA:-unknown}" \

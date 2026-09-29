@@ -9,7 +9,8 @@
 //! - [`router`]: the §9 route table and its collision check; [`app`]
 //!   assembles the router; [`adapters`] holds the feature-gated mount points.
 //! - [`health`] serves `/health`, `/healthz`, `/ping`, `/` and `/metrics`
-//!   (Prometheus, via [`metrics`]).
+//!   (Prometheus, via [`metrics`]); [`build_info`] is the build and image
+//!   identity they (and `fv-serve --version`) report.
 //! - [`multiworker`]: the routes a replica serves behind a load balancer
 //!   with `server.workers_max > 1` (design §6.2).
 //! - [`native`] serves `/fv/v1/*`; serve-kit's `admin_routes` serve
@@ -30,6 +31,7 @@
 pub mod adapters;
 pub mod admin_token;
 pub mod app;
+pub mod build_info;
 pub mod config;
 pub mod console;
 pub mod deploy;
