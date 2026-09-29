@@ -9,7 +9,7 @@
 //! | [`signalling`] | `/sessions/{sid}/transport/webrtc/…`: connections, async answers (202 → 200 once), trickle buffering |
 //! | [`gateway`] | per connection: v0/v1 latch, 20 s watchdog, pause gate, routing |
 //! | [`commands`] / [`schema`] | fast-h3 (clip) and SF-Wan (causal) command sets; the OpenAPI `/schema` |
-//! | [`clip`] / [`causal`] / [`avatar`] | the session drivers over the [`engine`] seam (avatar: Reactor `ltx`, the windowed script avatar) |
+//! | [`clip`] / [`causal`] / [`avatar`] / [`duplex`] | the session drivers over the [`engine`] seam (avatar: Reactor `ltx`, the windowed script avatar; duplex: client input tracks (`PublishTrack`) into a duplex model) |
 //! | [`uploads`] | client uploads (`FileRef` parameters, reactor §3.5) |
 //! | [`media`] | pacing, encode once per codec (H.264 / VP8), 10 ms mono Opus, black frames |
 //! | [`http`] | the axum router ([`router`]) |
@@ -25,6 +25,7 @@ pub mod causal;
 pub mod clip;
 pub mod commands;
 pub mod driver;
+pub mod duplex;
 pub mod engine;
 pub mod gateway;
 pub mod http;
@@ -41,4 +42,4 @@ pub use engine::{LoadState, Mode, StreamEngine};
 pub use http::router;
 pub use media::H264Backend;
 pub use avatar::AvatarSettings;
-pub use session::{session_limit_reason, Reactor, ReactorConfig, RtState, SESSION_ID};
+pub use session::{session_limit_reason, IngestAuth, Reactor, ReactorConfig, RtState, SESSION_ID};

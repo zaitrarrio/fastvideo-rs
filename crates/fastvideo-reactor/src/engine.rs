@@ -8,8 +8,8 @@
 //! the CUDA backend in production).
 
 use async_trait::async_trait;
-use fastvideo_engine_service::{CausalSession, ClipSession, EngineService, Readiness};
-use fastvideo_protocol::{ApiError, ModelCaps, ModelId, SessionSpec, StreamCaps};
+use fastvideo_engine_service::{CausalSession, ClipSession, DuplexSession, EngineService, Readiness};
+use fastvideo_protocol::{ApiError, DuplexSpec, ModelCaps, ModelId, SessionSpec, StreamCaps};
 
 /// Model loading as the runtime's state machine sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +33,9 @@ pub trait StreamEngine: Send + Sync + 'static {
     async fn open_clip(&self, spec: SessionSpec) -> Result<ClipSession, ApiError>;
     /// Admission of a causal session (`StreamCaps::Causal` models).
     async fn open_causal(&self, spec: SessionSpec) -> Result<CausalSession, ApiError>;
+    /// Admission of a duplex session (`StreamCaps::Duplex` models: client
+    /// input tracks, design §5.11).
+    async fn open_duplex(&self, spec: DuplexSpec) -> Result<DuplexSession, ApiError>;
 }
 
 #[async_trait]
@@ -64,6 +67,10 @@ impl StreamEngine for EngineService {
     async fn open_causal(&self, spec: SessionSpec) -> Result<CausalSession, ApiError> {
         self.open_causal_session(spec).await
     }
+
+    async fn open_duplex(&self, spec: DuplexSpec) -> Result<DuplexSession, ApiError> {
+        self.open_duplex_session(spec).await
+    }
 }
 
 /// Which command set a model gets (design §5.7).
@@ -76,6 +83,9 @@ pub enum Mode {
     /// windowed. Chosen by config (`[reactor] mode = "avatar"`), never
     /// implied by caps.
     Avatar,
+    /// Client input tracks into a duplex model (design §5.11): the client
+    /// publishes its camera and microphone with `PublishTrack`.
+    Duplex,
 }
 
 impl Mode {
@@ -101,6 +111,7 @@ impl Mode {
         match caps.stream.as_ref()? {
             StreamCaps::Clip { .. } => Some(Mode::Clip),
             StreamCaps::Causal { .. } => Some(Mode::Causal),
+            StreamCaps::Duplex(_) => Some(Mode::Duplex),
         }
     }
 }

@@ -51,7 +51,7 @@ proto-codegen = ["dep:prost-build", "dep:protox"]
 # VP8 video for clients without H.264 (the Python/C++ SDKs).
 vp8 = ["dep:webp"]
 # Opus (libopus) for the audio track; without it audio tracks carry nothing.
-opus = ["fastvideo-media/opus"]
+opus = ["fastvideo-media/opus", "fastvideo-webrtc/opus"]
 # In-process H.264 (OpenH264; the CPU test backend). Production H.264 is
 # NVENC through ffmpeg; without either only VP8 clients get video.
 openh264 = ["fastvideo-media/openh264"]
