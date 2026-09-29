@@ -12,6 +12,7 @@ with `curl`.
 |---|---|
 | `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints. With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys |
+| `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
 
@@ -21,7 +22,9 @@ APIs stay up.
 **Server status.** Every page's top bar has a status strip: one dot per
 pool (green ready, amber busy / loading / draining, grey scaled to zero, red
 unhealthy / down / failed). Click it for a panel with each pool's workers
-(state, last seen, running and queued jobs), queue depth and models. Model
+(state, last seen, running and queued jobs), queue depth, the build it runs
+(short sha and channel; flagged when its workers run different builds) and
+models. Model
 and director pages show the endpoint's pool next to Run / Start session and,
 when the pool is loading, scaled to zero, draining or down, warn first: the
 second click submits. The strip polls `GET /fv/v1/status` every 7 s while
@@ -198,7 +201,29 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   files: CORS allows any origin by default, preflights included
   (`server.cors_origins` / `FV_CORS_ORIGINS` narrows it; design §9).
 
-## 6. Tests
+## 6. Deployments page
+
+`/console/deployments` (the admin token from the API keys page, this tab
+only) reads `GET /fv/v1/admin/deployments` and `GET /fv/v1/admin/releases`
+on a gateway (a standalone server answers 404: "not a gateway"):
+
+- **Channels**: each channel's current release (build, action, when, by)
+  with **Rollback…**.
+- **Promote a build**: a git sha, digest or tag and a channel. **Plan (dry
+  run)** shows what would happen; **Promote…** shows the same plan in a
+  confirm dialog and, on OK, dispatches the `release` workflow. Rollback
+  does the same with the release it would go back to. Without
+  `FV_GITHUB_TOKEN` on the gateway the pill says "dispatch not
+  configured" and only plans work.
+- **Live**: the gateway and every pod worker with its build (short sha,
+  channel, variant and image digest) and drift against the channel it
+  follows (`ok`, `behind: stable is abc1234`, or `?` when no release names
+  its image); "mixed versions" when a pool runs more than one sha.
+- **Deployments**: live rows of the D1 registry (what the deploy scripts
+  created) with their build, status, age, creator and drift.
+- **History**: the last 50 releases, rolled-back ones marked.
+
+## 7. Tests
 
 - Rust: `fastvideo-serve-kit` `keys` (mint / check / revoke, file
   persistence and digest-only storage, D1 over the SQLite mock shared by two
@@ -221,7 +246,10 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   with an uploaded image, the API tab, history, a live director session
   (start, 1344x768 video with one video and one audio track playing, a
   second prompt applied, stop; the encoder is `auto`, i.e. OpenH264 on a
-  machine without NVENC), a 390 px layout and revocation. `FV_SERVE_UI=1 bash
+  machine without NVENC), a 390 px layout, the Deployments page (404 on a
+  standalone server, then the admin API mocked with `page.route`: channels,
+  drift, mixed versions, Promote's dry run → confirm → dispatch, a
+  cancelled Rollback sending only its dry run) and revocation. `FV_SERVE_UI=1 bash
   scripts/serve/check.sh` runs it; `FV_CONSOLE_SHOTS=<dir>` saves
   screenshots. It needs `node`, the `playwright` npm package and a Chromium
   under `PLAYWRIGHT_BROWSERS_PATH` (default `/opt/pw-browsers`).

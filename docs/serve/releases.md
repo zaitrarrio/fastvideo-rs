@@ -191,6 +191,43 @@ Locally the same variables come from the environment or `.env`
 reach curl through header file descriptors, and only named fields of Runpod
 objects are ever shown.
 
+## In the gateway and the console
+
+- Workers report `build` in `GET /fv/v1/internal/status`; the gateway keeps
+  it per worker.
+- Public `GET /fv/v1/status` (also `/healthz` and capabilities' `pools`):
+  per pod pool `versions: [{sha, channel, workers}]` (7-character sha and
+  channel only: no digests, image names or ids) and `mixed_versions`; at
+  the top the gateway's own `version` and `mixed_versions` if any pool is
+  mixed. The console's status panel shows it per pool.
+- Admin `GET /fv/v1/gateway/pools`: each worker's full `build` and the
+  gateway's `gateway_build`.
+- Admin release API (`crates/fastvideo-serve/src/releases.rs`; gateway
+  mode, admin token on every route):
+
+  | route | |
+  |---|---|
+  | `GET /fv/v1/admin/releases?channel=&limit=` | heads and history |
+  | `GET /fv/v1/admin/deployments` | registry rows (live), the gateway's and every pod worker's build, drift per row and worker |
+  | `POST /fv/v1/admin/releases/promote` `{target, channel, notes, dry_run}` | validates, then the plan (`dry_run`) or a `release.yml` dispatch (202) |
+  | `POST /fv/v1/admin/releases/rollback` `{channel, to, dry_run}` | picks the target like `release.sh rollback` (409 when there is none) and dispatches it as `to`, so what was shown is what runs |
+
+  The gateway itself never retags or edits templates; the workflow does.
+  Dispatching needs `FV_GITHUB_TOKEN` (a fine-grained token with
+  `actions:write` on the repository; `FV_GITHUB_REPO`, `FV_GITHUB_API`,
+  `FV_RELEASE_WORKFLOW`, `FV_RELEASE_REF`, `FV_TEMPLATE_CHANNEL` adjust
+  it); without it promote / rollback answer 503 and dry runs still work.
+  The token is never returned or logged. The cluster script does not pass
+  one: promotion from the console is off until an operator sets it on the
+  gateway pod.
+- Console `/console/deployments` (docs/serve/console.md §6): channels with
+  Rollback, Promote with a dry-run plan and a confirm, live builds with
+  drift and the mixed flag, the registry, history.
+- After a promotion to `stable`, serverless endpoints on the shared
+  templates roll by themselves (Runpod); pod pools of the standing cluster
+  roll with `release.sh redeploy`, which the console does not start (the
+  cluster's state and its pod-creation secrets live with the operator).
+
 ## Tests
 
 `bash scripts/serve/tests/release.test.sh` (run by `scripts/serve/check.sh`;
@@ -202,4 +239,10 @@ record-build, the registry writes of runpod-pod.sh, deployed, reconcile, a
 rolling redeploy and a gateway move, and that no token appears in any
 output or the ledger. The Rust side: `build_info` unit tests,
 `tests/version.rs` (`--version` output) and the `/health` assertions in
-`tests/e2e.rs`.
+`tests/e2e.rs`; `tests/releases.rs` (a gateway over a real worker and a
+stub on another build, the D1 mock and a mock GitHub: the worker's
+`build`, the public summary with nothing more than sha and channel, the
+mixed flag, the admin pools builds, the release routes' admin token, drift,
+promote / rollback dry runs, dispatch and the rollback choice, 503 without
+a token); `status` and `releases` unit tests; and the Deployments step of
+`tests/console/run.sh`.

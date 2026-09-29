@@ -268,7 +268,15 @@ function poolLine(p) {
   const counts = p.worker_counts ? Object.entries(p.worker_counts).filter(([, n]) => n).map(([k, n]) => n + ' ' + k).join(', ') : '';
   return p.id + ' (' + p.kind + '): ' + stateText(p.state)
     + (w.length ? ', ' + w.length + ' worker' + (w.length > 1 ? 's' : '') : counts ? ', workers: ' + counts : '')
-    + ', ' + (p.queued || 0) + ' queued, ' + (p.running || 0) + ' running';
+    + ', ' + (p.queued || 0) + ' queued, ' + (p.running || 0) + ' running'
+    + (p.versions && p.versions.length ? ', build ' + versionText(p) : '');
+}
+
+// `abc1234 (stable)`, or every build with its worker count when the pool is mixed.
+function versionText(p) {
+  const v = p.versions || [];
+  const one = (x) => x.sha + (x.channel ? ' (' + x.channel + ')' : '');
+  return v.length === 1 ? one(v[0]) : v.map((x) => one(x) + ' ×' + x.workers).join(', ');
 }
 
 function renderStatus(strip, panel, st) {
@@ -286,7 +294,7 @@ function renderStatus(strip, panel, st) {
   if (!pools.length) strip.append(dot('down'), el('span', { class: 'status-label' }, 'no pools'));
   strip.title = pools.map(poolLine).join('\n') || 'No pools';
   panel.replaceChildren(el('div', { class: 'status-scroll' }, el('table', { class: 'status-table' },
-    el('thead', {}, el('tr', {}, ['Pool', 'State', 'Workers', 'Queued', 'Running', 'Last seen', 'Models'].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ['Pool', 'State', 'Workers', 'Queued', 'Running', 'Last seen', 'Build', 'Models'].map((h) => el('th', {}, h)))),
     el('tbody', {}, pools.map((p) => el('tr', { 'data-pool': p.id },
       el('td', {}, dot(p.state), ' ', p.id, el('small', {}, ' ' + p.kind)),
       el('td', {}, stateText(p.state), p.loading ? ' (' + p.loading.done + '/' + p.loading.total + ')' : ''),
@@ -297,6 +305,9 @@ function renderStatus(strip, panel, st) {
       el('td', {}, String(p.queued || 0)),
       el('td', {}, String(p.running || 0)),
       el('td', {}, ageText(p.last_seen_s)),
+      el('td', { class: 'mono', 'data-versions': (p.versions || []).map((x) => x.sha).join(' ') },
+        (p.versions || []).length ? versionText(p) : '–',
+        p.mixed_versions ? el('span', { class: 'pill warn', title: 'the workers run different builds' }, ' mixed') : ''),
       el('td', {}, (p.models || []).join(', '))))))));
 }
 
@@ -335,7 +346,7 @@ export function topbar(active) {
     el('div', { class: 'topbar-in' },
       el('a', { class: 'brand', href: '/console' }, 'fv-serve', el('small', {}, 'console')),
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
-        link('/console', 'Models', 'home'), link('/console/admin', 'API keys', 'admin')),
+        link('/console', 'Models', 'home'), link('/console/admin', 'API keys', 'admin'), link('/console/deployments', 'Deployments', 'deployments')),
       el('span', { class: 'spacer' }), strip, pill, theme),
     panel);
   strip.onclick = () => {
