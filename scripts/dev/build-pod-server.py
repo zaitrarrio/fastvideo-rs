@@ -24,7 +24,7 @@ Auth: every endpoint but GET /healthz needs "Authorization: Bearer <token>";
 the pod only knows sha256(token) (FV_BUILD_TOKEN_SHA256).
 
 Endpoints (all JSON unless noted):
-  GET  /healthz                         {ok, ready}            (no auth)
+  GET  /healthz                         {ok, ready, phase, boot}  (no auth)
   GET  /v1/status                       setup state, jobs, idle timer, disk
   GET  /v1/agents[?sizes=1]             agent dirs (sizes via du, slow)
   GET  /v1/agents/<a>/manifest          text: path\\tsize\\tmtime per file
@@ -802,7 +802,8 @@ class Handler(BaseHTTPRequestHandler):
         q = dict(urllib.parse.parse_qsl(u.query))
         parts = [p for p in u.path.split("/") if p]
         if method == "GET" and parts == ["healthz"]:
-            return self.send_json(200, {"ok": True, "ready": setup_state["ready"], "phase": setup_state["phase"]})
+            return self.send_json(200, {"ok": True, "ready": setup_state["ready"], "phase": setup_state["phase"],
+                                        "boot": round(BOOT)})
         if not self.authed():
             return self.send_json(401, {"error": "unauthorized"})
         touch()

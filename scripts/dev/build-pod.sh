@@ -207,12 +207,19 @@ create_pod() {
   log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h, pod-side)"
 }
 
+# $2: epoch the pod was (re)started at. Right after a start the proxy can
+# still answer from the stopped container ("ready after 0s", then 502s), so
+# only a server that booted after that counts.
 wait_ready() {
-  local id="$1" t0 h phase="" last=""
+  local id="$1" since="${2:-0}" t0 h phase="" last="" boot
   t0=$(date +%s)
   while :; do
     h="$(curl -sS --max-time 15 "$(base_url "$id")/healthz" 2>/dev/null || true)"
     phase="$(jq -r '.phase // empty' <<<"$h" 2>/dev/null || true)"
+    boot="$(jq -r '.boot // 0' <<<"$h" 2>/dev/null || echo 0)"
+    if [[ -n "$phase" ]] && (( ${boot%.*} > 0 && ${boot%.*} < since - 30 )); then
+      phase=""  # the previous container
+    fi
     [[ -n "$phase" && "$phase" != "$last" ]] && { log "pod setup: $phase"; last="$phase"; }
     [[ "$phase" == ready ]] && break
     [[ "$phase" == failed ]] && { svc GET /v1/status | jq -c .setup >&2; die "pod setup failed"; }
@@ -226,7 +233,7 @@ cmd_up() {
   need_key
   require_tools curl jq openssl gzip base64 sha256sum
   check_balance
-  local pod id status vol dc
+  local pod id status vol dc since=0
   pod="$(pod_json)"
   if [[ -n "$pod" ]]; then
     id="$(jq -r .id <<<"$pod")"
@@ -245,7 +252,7 @@ cmd_up() {
           rest DELETE "/pods/$id" >/dev/null || true
           ledger "pod-deleted $id server-update"
           pod=""
-        elif log "starting stopped pod $id" && rest POST "/pods/$id/start" >/dev/null 2>&1; then
+        elif log "starting stopped pod $id" && since=$(date +%s) && rest POST "/pods/$id/start" >/dev/null 2>&1; then
           ledger "pod-started $id"
         else
           log "start refused; terminating $id and creating a new pod"
@@ -260,10 +267,11 @@ cmd_up() {
     vol="$(volume_json)"
     [[ -n "$vol" ]] || die "no network volume named $VOL_NAME; run: build-pod.sh volume-create"
     dc="$(jq -r .dataCenterId <<<"$vol")"
+    since=$(date +%s)
     create_pod "$(jq -r .id <<<"$vol")" "$dc"
     id="$(cat "$STATE/pod")"
   fi
-  wait_ready "$id"
+  wait_ready "$id" "$since"
   local srv_local srv_pod
   srv_local="$(server_sha)"
   srv_pod="$(svc GET /v1/status | jq -r '.server_sha // ""')"

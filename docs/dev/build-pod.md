@@ -4,15 +4,14 @@ Agents compile and test on one shared Runpod **CPU pod** with a 200 GB
 **network volume** (`fv-build`), not in their own containers, whose disks are
 small. `scripts/dev/build-pod.sh` drives it over the pod's HTTPS proxy
 (`https://<pod>-8000.proxy.runpod.net`); there is no SSH. Each agent gets its
-own source snapshot and `CARGO_TARGET_DIR` on the volume, so agents build in
-parallel without sharing a cargo lock or clobbering each other's artifacts.
+own source snapshot and `CARGO_TARGET_DIR` on the pod's container disk, so
+agents build in parallel without sharing a cargo lock or clobbering each
+other's artifacts; the toolchains and the compile cache live on the volume.
 
-**Status (2026-09-28):** the service and client are tested locally (sync and
-delta sync, allowlist, exit codes, two agents in parallel, cancel, artifact
-fetch, path-escape rejection, idle self-stop trigger), and the volume toolkit
-install was checked (the redist nvcc 13.4.92 compiles an sm_90 cubin). The
-`fv-build` volume has not been created yet, so there are no measured pod
-build times; run `build-pod.sh volume-create` once, then `up`.
+**Status (2026-09-28):** in use. The `fv-build` volume (`pxy4hlsnwq`,
+EU-RO-1) exists; pods were created, validated and stopped on it — see
+[Measured](#measured-2026-09-28) for build times, sizes and the stop/start
+behaviour.
 
 ## One-liners
 
@@ -29,7 +28,9 @@ $B run $A -- cargo build --release -p fastvideo-serve --features cuda,http-clien
 $B fetch $A release/fv-serve              # -> artifacts/build-pod/$A/release/fv-serve
 $B run $A -- cargo build --release -p fastvideo-gpucheck --features cuda
 $B fetch $A release/fv-gpucheck
+$B run $A -- bash tests/compat/run.sh      # client-compat suites (Node + Chromium on the pod)
 $B status                                 # pod, $/hr, setup, running jobs, disk
+$B cancel <job>                           # cancel a job whose client died
 $B clean $A target                        # drop your target dir when you are done
 $B stop                                   # when nobody needs it (it also stops itself)
 ```
@@ -43,20 +44,35 @@ connection.
 
 ## What runs where
 
-| Path on the volume (`/workspace/fv-build`) | What |
+| Path | What |
 |---|---|
-| `worktrees/<agent>/` | the agent's snapshot: tracked + untracked, non-ignored files (submodules included) |
-| `target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental, kept between runs) |
-| `cargo/` | shared `CARGO_HOME` (registry, git checkouts) |
-| `rustup/` | shared `RUSTUP_HOME` (stable + rustfmt + clippy, per `rust-toolchain.toml`) |
+| container disk `/root/fvb/worktrees/<agent>/` | the agent's snapshot: tracked + untracked, non-ignored files (submodules included) |
+| container disk `/root/fvb/target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental while the pod runs) |
+| container disk `/root/fvb/cargo/` | `CARGO_HOME`; its `registry/cache` and `git/db` link to the volume |
+| volume `cargo/registry/cache`, `cargo/git/db` | downloaded crates and git checkouts (shared) |
+| volume `rustup/` | shared `RUSTUP_HOME` (stable + rustfmt + clippy, per `rust-toolchain.toml`) |
 | `sccache/` | shared sccache (40 GB cap): registry crates compile once for all agents |
 | `cuda-13.4/` | CUDA 13.4.92 nvcc, crt, cudart, NVRTC, libnvvm, CCCL, tileiras (NVIDIA redist tarballs, sha256-checked) — the same toolkit the CI builder image pins |
+| `node-v22.23.3/`, `playwright-1.56.1/`, `pw-browsers/` | Node, the Playwright package and its Chromium, for `tests/compat/run.sh`, `tests/console/run.sh` and `FV_SERVE_UI=1` |
 | `jobs/`, `logs/`, `ledger.tsv` | job logs, service log, pod-side ledger (self-stops) |
 
+**Why targets are not on the volume:** the first pod kept them there. Cargo
+on the network filesystem took 18 min for a cold `cargo check` of the serve
+crates and 30 s for a no-op one (fingerprint stats), and a full snapshot sync
+took 63 s to extract. On the container disk with the volume's sccache: 3.5 min,
+1.4 s and 5 s. The price is that a stopped or recreated pod starts with empty
+target dirs, which sccache refills (release builds of fv-serve / fv-gpucheck
+in about 6.5 min each). `FV_BUILD_TARGETS=volume` in the pod env restores
+the old layout.
+
 The first boot on a fresh volume installs the toolchain onto the volume
-(~200 MB of CUDA downloads, the Rust toolchain, sccache); later boots only
-`apt-get install` cmake/clang/mold/pkg-config into the container (about a
-minute). The image is stock `rust:1-bookworm`; nothing is baked for us.
+(CUDA redist in ~90 s, the Rust toolchain, sccache); later boots only
+`apt-get install` cmake/clang/mold/pkg-config into the container and are
+ready in 30–60 s. A second phase (in the background; build jobs do not wait
+for it) installs ffmpeg and Chromium's system libraries into the container
+and, once, Node and Playwright's Chromium onto the volume; compat, console
+and `FV_SERVE_UI=1` jobs wait for it. The image is stock `rust:1-bookworm`;
+nothing is baked for us.
 
 Jobs get: `CUDARC_CUDA_VERSION=13000`, `NVCC` and `CUDA_HOME` pointing at the
 volume's toolkit (so `--features cuda` builds compile the AOT cubins),
@@ -71,7 +87,10 @@ workspace-profile build.
 
 The service runs no shell. Allowed: `cargo check|build|test|clippy|fmt|doc|
 tree|metadata` (not `--target-dir` / `--manifest-path`), `bash
-scripts/serve/check.sh`, `bash scripts/gpu/lint.sh`. Environment overrides:
+scripts/serve/check.sh`, `bash scripts/gpu/lint.sh`, `bash
+tests/compat/run.sh`, `bash tests/console/run.sh`. Jobs see no `RUNPOD_*`
+variables (they would switch fv-serve's ICE into "serving on a Runpod pod"
+mode in local tests). Environment overrides:
 `CUDARC_CUDA_VERSION`, `FV_*`, `RUST_LOG`, `RUST_BACKTRACE`, `RUSTFLAGS`,
 `RUSTDOCFLAGS`, `CARGO_PROFILE_*`, `CARGO_INCREMENTAL`, `CARGO_BUILD_JOBS`,
 `CARGO_TERM_COLOR`. Add to `CARGO_SUBCOMMANDS` / `SCRIPTS` / `ENV_ALLOW` in
@@ -90,25 +109,28 @@ not recreate a pod another session is using; ask, or wait for it to stop.
 
 | Item | Price (Runpod secure cloud, 2026-09-28) |
 |---|---|
-| **Pod (default): cpu5c, 32 vCPU / 64 GB** | **$1.12/hr** |
-| fallback: cpu3c, 32 vCPU / 64 GB | $0.96/hr |
+| **Pod (default): cpu5c, 32 vCPU / 64 GB** | **$1.12/hr** (never allocated on 2026-09-28) |
+| fallback: cpu3c, 32 vCPU / 64 GB | $0.96/hr (what `up` got every time) |
 | cpu3g, 32 vCPU / 128 GB (`FV_BUILD_FLAVORS=cpu3g`) | $1.28/hr |
-| cpu5c / cpu3c, 16 vCPU / 32 GB (`FV_BUILD_VCPUS=16`) | $0.56 / $0.48/hr |
+| cpu5c / cpu3c, 16 vCPU / 32 GB (automatic fallback, `FV_BUILD_VCPUS_FALLBACK`) | $0.56 / $0.48/hr |
 | Volume `fv-build`, 200 GB in EU-RO-1 | $0.07/GB/month = **$14/month** |
 
 32 vCPUs keep parallel rustc and the per-SM nvcc cubin compiles busy; 64 GB
 is plenty for 32 rustc processes with LTO off. cpu5c is the newer generation
 (faster per core) for 17 % more per hour; `FV_BUILD_FLAVORS` falls back to
-cpu3c when cpu5c has no stock. EU-RO-1 was the datacenter reporting stock for
-both at 32 vCPU.
+cpu3c when cpu5c has no stock. The volume pins the pod to EU-RO-1, whose CPU
+stock comes and goes: on 2026-09-28 there was no 32-vCPU cpu5c/cpu3c/cpu3g/
+cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
+16 vCPU, and retries both every 30 s for `FV_BUILD_STOCK_WAIT_S` (900).
 
 - The pod stops itself after `FV_BUILD_IDLE_MIN` (default 20) minutes with no
   request and no running job, and `FV_BUILD_MAX_HOURS` (default 8) after boot
   regardless. Both run on the pod, so they fire even if every agent container
-  is gone. It uses the pod-scoped `RUNPOD_API_KEY` Runpod injects; `status`
-  shows `self_stop_key`. If Runpod refuses to *stop* a pod with a network
-  volume, the pod terminates itself instead; nothing is lost, since all state
-  is on the volume, and the next `up` creates a new pod.
+  is gone. It uses the pod-scoped `RUNPOD_API_KEY` Runpod injects (verified:
+  every pod had `RUNPOD_API_KEY` and `RUNPOD_POD_ID`, `status` shows
+  `self_stop_key: true`; the idle stop itself has not fired on a real pod
+  yet, since the pod was never idle for 20 min). Runpod does *stop* a pod
+  with a network volume (verified); the terminate fallback stays for safety.
 - `up` refuses to run below a $8 balance (`FV_MIN_BALANCE`) and deletes a pod
   created above `FV_BUILD_MAX_DPH` (default $1.50/hr).
 - Ledger: `~/.config/fv-build/ledger.tsv` (local) and `ledger.tsv` on the
@@ -116,13 +138,16 @@ both at 32 vCPU.
 
 ## Limits
 
-- **Disk:** 200 GB total. Expect (not yet measured) 10–20 GB per CUDA release
-  target dir and a few GB per debug `check.sh` target, so roughly 8–10 active
-  agents next to the caches. Target dirs untouched for 14 days (`FV_BUILD_TARGET_TTL_DAYS`) are
-  pruned at boot; `clean <agent>` frees one now; `agents --sizes` shows usage.
-- **Network volume I/O** is slower than local NVMe; incremental rebuilds are
-  still far cheaper than cold ones, and sccache absorbs most dependency cost
-  for new agents.
+- **Disk:** target dirs share the 200 GB container disk (`FV_BUILD_CONTAINER_GB`).
+  Measured: `FV_SERVE_HEAVY=1 FV_SERVE_UI=1 check.sh` leaves **~45 GB**
+  (debug, every feature combination); release fv-serve + fv-gpucheck + the
+  CUDA check **2.6 GB**; other agents' test targets 13–21 GB. Three heavy
+  agents fill it, so `clean <agent> target` when done. `status` shows
+  `local_disk` and the volume's usage (a du every 15 min; the volume held
+  ~110 GB, mostly sccache and target dirs of the first, volume-mode pod,
+  which boot now removes).
+- **Network volume I/O** is slow for many small files, which is why only
+  large-file caches (sccache, `.crate`s, toolchains) live there.
 - **Concurrency:** 4 jobs at once (`FV_BUILD_MAX_JOBS`), one per agent; more
   queue. Two agents building release CUDA binaries at once share 32 vCPUs.
 - **Transfers** go through the Runpod HTTPS proxy: uploads up to 512 MiB per
@@ -133,5 +158,59 @@ both at 32 vCPU.
   (`scripts/gpu/runpod-http.sh`).
 - **Server updates:** the service code is sent at pod creation. After
   changing `build-pod-server.py`, `down` then `up` (the volume keeps all
-  caches); `up` prints a note when the pod runs an older server.
-- `FV_SERVE_UI=1` (headless Chromium) is not supported on the pod.
+  caches); `up` prints a note when the pod runs an older server, and
+  recreates (rather than starts) a *stopped* pod whose server is older.
+  `down` kills other agents' running jobs: check `status` first.
+
+## Measured (2026-09-28)
+
+Pods on `fv-build` in EU-RO-1: `up` asked for cpu5c then cpu3c at 32 vCPU
+and always got **cpu3c, 32 vCPU / 64 GB, $0.96/hr** (once, after 15 min
+without 32-vCPU stock, cpu3c 16 vCPU / 32 GB at $0.48/hr). The create
+payload is accepted as written. The container sees the host's 192 CPUs in
+`os.cpu_count()`, but its affinity (what cargo sizes `-j` by) is the pod's
+vCPUs.
+
+**Stop / start:** `stop` on a network-volume pod is accepted (`EXITED`);
+`up` then starts it again: setup ready ~30 s after the container starts
+(CUDA, rustup and Node markers on the volume, nothing reinstalled), the
+volume contents intact (15.8 GB used before and after), the container disk
+empty (target dirs and snapshots gone, as expected).
+
+Boot: first boot on the empty volume ~2 min to `ready` (CUDA redist ~90 s),
+later creates 30–60 s; the browser extras (ffmpeg, Chromium libraries, and
+once Node + Chromium onto the volume) follow in the background in 1–2 min.
+
+| Job (agents `validate`, `validate2` in parallel) | Volume targets, 32 vCPU | Container-disk targets |
+|---|---|---|
+| full snapshot sync (1403 files, 29 MB gz) | 63 s | 4–5 s |
+| `cargo check` 13 serve crates `--all-targets`, cold | 18 min 20 s (cold registry, cold sccache) | 3 min 32 s (16 vCPU, sccache warm) |
+| same, no-op | 30 s | 1.4 s |
+| CUDA type-check (`fastvideo-cudarc/-gpucheck/-cli`, `cuda`) | 18 min 14 s | 4 min 31 s (16 vCPU) |
+| release `fv-gpucheck --features cuda`, cold | — | 6 min 33 s (16 vCPU, next to check.sh) |
+| release `fv-serve --features cuda,http-client`, cold | — | 6 min 34 s (16 vCPU, next to tests) |
+| same two, no-op, before the build.rs fix | — | 3 min 25 s / 3 min 42 s |
+| same two, no-op, after it | — | 1.6 s / 1.3 s |
+| `FV_SERVE_HEAVY=1 FV_SERVE_UI=1 check.sh` up to its director_e2e step | — | 4 min 40 s |
+| `tests/compat/run.sh` (all 10 suites, incl. clients + fv-serve build) | — | 25 min 34 s (32 vCPU, 3 other agents' jobs running) |
+| fetch fv-gpucheck (56 MB) / fv-serve (77 MB) | — | 3 s each; both run `--help` here |
+
+The no-op release rebuilds re-ran `fastvideo-cudarc`'s build script (every
+nvcc cubin) each time because it watched the absent `artifacts/oxide`;
+fixed in `crates/fastvideo-cudarc/build.rs`.
+
+Target dir sizes: `check.sh` heavy + UI ~45 GB; release fv-serve +
+fv-gpucheck + the CUDA check 2.6 GB; other agents' test targets 13–21 GB.
+
+Results on main as of this run: the serve crates' check/clippy/tests pass,
+and so do the heavy steps except `fastvideo-fal --test director_e2e`
+(`av_session_end_to_end`, `video_only_session`: video at 0–1 fps instead of
+24, also with no other job running and without `RUNPOD_*` in the env). The
+console smoke failed once under `check.sh` ("video URL does not serve") and
+passed as the compat `console` suite. Compat: openai, fastwan, minimax, ltx,
+fal-py, fal-js, fal-webhook, console PASS; **fal-director** (video decoded at
+0.25 fps) and **reactor** (only 4–12 video frames in av / video / causal)
+FAIL, the same real-time video symptom as director_e2e.
+
+Spend for these runs: about $2.25 of pod time (four pods; other agents used
+them too), plus the volume at $14/month.
