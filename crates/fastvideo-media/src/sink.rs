@@ -16,12 +16,13 @@
 //!   NVENC pipe encoder; audio is AAC 128k at 48 kHz (§5.3).
 //! - A dead ffmpeg is restarted lazily (at most once per 2 s).
 
-use std::io::Write;
+use std::collections::VecDeque;
+use std::io::{BufRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -153,7 +154,14 @@ struct Running {
     audio_q: Option<Arc<DropOldest<Bytes>>>,
     threads: Vec<std::thread::JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    /// The last lines ffmpeg wrote to stderr (`-loglevel error`: its
+    /// reason for failing), for the error of a failed [`FfmpegSink::finish`].
+    stderr: Arc<Mutex<VecDeque<String>>>,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
+
+/// Lines of ffmpeg's stderr kept for an error message.
+const STDERR_LINES: usize = 8;
 
 /// An ffmpeg RTMP/HLS/file sink fed one tick at a time.
 pub struct FfmpegSink {
@@ -190,9 +198,25 @@ impl FfmpegSink {
         };
         let port = listener.as_ref().map(|l| l.local_addr().map(|a| a.port())).transpose()?;
         let mut cmd = std::process::Command::new(tools::ffmpeg_bin());
-        cmd.args(cfg.ffmpeg_args(port)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.args(cfg.ffmpeg_args(port)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
         let mut stdin = child.stdin.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdin"))?;
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_reader = match child.stderr.take() {
+            Some(pipe) => {
+                let tail = stderr.clone();
+                Some(std::thread::Builder::new().name("sink-stderr".into()).spawn(move || {
+                    for line in std::io::BufReader::new(pipe).lines().map_while(|l| l.ok()) {
+                        let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
+                        if t.len() == STDERR_LINES {
+                            t.pop_front();
+                        }
+                        t.push_back(line);
+                    }
+                })?)
+            }
+            None => None,
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let cap = cfg.queue_ticks.max(1);
         let video_q = Arc::new(DropOldest::<Bytes>::new(cap));
@@ -226,7 +250,7 @@ impl FfmpegSink {
             }
             None => None,
         };
-        Ok(Running { child, video_q, audio_q, threads, stop })
+        Ok(Running { child, video_q, audio_q, threads, stop, stderr, stderr_reader })
     }
 
     /// Whether ffmpeg is alive; restarts it (at most every 2 s) when not.
@@ -270,6 +294,9 @@ impl FfmpegSink {
         let _ = r.child.kill();
         let _ = r.child.wait();
         for t in r.threads {
+            let _ = t.join();
+        }
+        if let Some(t) = r.stderr_reader {
             let _ = t.join();
         }
     }
@@ -318,9 +345,16 @@ impl FfmpegSink {
         };
         self.stats.dropped_video += r.video_q.dropped_total();
         self.stats.dropped_audio += r.audio_q.as_ref().map(|q| q.dropped_total()).unwrap_or(0);
+        // ffmpeg has exited: its stderr is at EOF.
+        if let Some(t) = r.stderr_reader.take() {
+            let _ = t.join();
+        }
         match status {
             Some(s) if s.success() => Ok(self.stats),
-            Some(s) => Err(MediaError::tool("ffmpeg", format!("sink exited with {s}"))),
+            Some(s) => {
+                let tail = r.stderr.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect::<Vec<_>>().join("\n");
+                Err(MediaError::tool("ffmpeg", format!("sink exited with {s}: {tail}")))
+            }
             None => Err(MediaError::tool("ffmpeg", "sink did not exit in time")),
         }
     }
