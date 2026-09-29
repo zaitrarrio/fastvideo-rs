@@ -1,0 +1,190 @@
+compare-dumps noise_seed1024_000: missing in candidate
+compare-dumps noise_seed1024_001: missing in candidate
+compare-dumps noise_seed11024_000: missing in candidate
+compare-dumps noise_seed11024_001: missing in candidate
+compare-dumps noise_seed11024_002: missing in candidate
+compare-dumps noise_seed11024_003: missing in candidate
+compare-dumps noise_seed11024_004: missing in candidate
+compare-dumps noise_seed11024_005: missing in candidate
+compare-dumps noise_seed11024_006: missing in candidate
+compare-dumps noise_seed11024_007: missing in candidate
+compare-dumps noise_seed11024_008: missing in candidate
+compare-dumps noise_seed11024_009: missing in candidate
+compare-dumps noise_seed11024_010: missing in candidate
+compare-dumps noise_seed11024_011: missing in candidate
+compare-dumps noise_seed11024_012: missing in candidate
+compare-dumps noise_seed11024_013: missing in candidate
+compare-dumps s1_audio_step01              rel_l2 8.845e-2  cosine 0.996091  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step02              rel_l2 8.878e-2  cosine 0.996062  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step03              rel_l2 8.883e-2  cosine 0.996057  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step04              rel_l2 8.909e-2  cosine 0.996034  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step05              rel_l2 9.081e-2  cosine 0.995880  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step06              rel_l2 9.430e-2  cosine 0.995559  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step07              rel_l2 9.590e-2  cosine 0.995405  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step08              rel_l2 9.703e-2  cosine 0.995296  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_step00_in           rel_l2 8.815e-2  cosine 0.996117  max_abs 1.664e0  n 16128
+compare-dumps s1_audio_vel_step01          rel_l2 1.455e-1  cosine 0.989434  max_abs 4.246e0  n 16128
+compare-dumps s1_audio_vel_step02          rel_l2 1.134e-1  cosine 0.993633  max_abs 4.184e0  n 16128
+compare-dumps s1_audio_vel_step03          rel_l2 1.051e-1  cosine 0.994469  max_abs 4.248e0  n 16128
+compare-dumps s1_audio_vel_step04          rel_l2 1.024e-1  cosine 0.994774  max_abs 4.293e0  n 16128
+compare-dumps s1_audio_vel_step05          rel_l2 9.927e-2  cosine 0.995096  max_abs 4.258e0  n 16128
+compare-dumps s1_audio_vel_step06          rel_l2 1.061e-1  cosine 0.994367  max_abs 4.240e0  n 16128
+compare-dumps s1_audio_vel_step07          rel_l2 1.164e-1  cosine 0.993227  max_abs 4.070e0  n 16128
+compare-dumps s1_audio_vel_step08          rel_l2 1.348e-1  cosine 0.990908  max_abs 4.011e0  n 16128
+compare-dumps s1_audio_x0_step01           rel_l2 7.111e-1  cosine 0.936617  max_abs 4.938e0  n 16128
+compare-dumps s1_audio_x0_step02           rel_l2 7.290e-1  cosine 0.952892  max_abs 4.875e0  n 16128
+compare-dumps s1_audio_x0_step03           rel_l2 6.905e-1  cosine 0.947847  max_abs 4.938e0  n 16128
+compare-dumps s1_audio_x0_step04           rel_l2 6.857e-1  cosine 0.950500  max_abs 4.875e0  n 16128
+compare-dumps s1_audio_x0_step05           rel_l2 6.556e-1  cosine 0.949186  max_abs 4.812e0  n 16128
+compare-dumps s1_audio_x0_step06           rel_l2 5.727e-1  cosine 0.949222  max_abs 4.625e0  n 16128
+compare-dumps s1_audio_x0_step07           rel_l2 4.583e-1  cosine 0.961243  max_abs 3.625e0  n 16128
+compare-dumps s1_audio_x0_step08           rel_l2 2.834e-1  cosine 0.980508  max_abs 2.328e0  n 16128
+compare-dumps s1_sigmas                    rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 9
+compare-dumps s1_step00_audio_block_0      rel_l2 8.898e-2  cosine 0.996038  max_abs 1.160e2  n 258048
+compare-dumps s1_step00_audio_block_1      rel_l2 9.451e-2  cosine 0.995528  max_abs 1.372e2  n 258048
+compare-dumps s1_step00_audio_block_2      rel_l2 9.719e-2  cosine 0.995268  max_abs 1.470e2  n 258048
+compare-dumps s1_step00_audio_block_3      rel_l2 9.339e-2  cosine 0.995634  max_abs 1.485e2  n 258048
+compare-dumps s1_step00_audio_block_4      rel_l2 1.047e-1  cosine 0.994508  max_abs 1.612e2  n 258048
+compare-dumps s1_step00_audio_block_5      rel_l2 1.106e-1  cosine 0.993873  max_abs 1.675e2  n 258048
+compare-dumps s1_step00_audio_block_6      rel_l2 1.128e-1  cosine 0.993630  max_abs 1.725e2  n 258048
+compare-dumps s1_step00_audio_block_7      rel_l2 1.139e-1  cosine 0.993505  max_abs 1.730e2  n 258048
+compare-dumps s1_step00_audio_block_8      rel_l2 1.152e-1  cosine 0.993357  max_abs 1.760e2  n 258048
+compare-dumps s1_step00_audio_block_9      rel_l2 1.171e-1  cosine 0.993136  max_abs 1.805e2  n 258048
+compare-dumps s1_step00_audio_block_10     rel_l2 1.182e-1  cosine 0.993008  max_abs 1.815e2  n 258048
+compare-dumps s1_step00_audio_block_11     rel_l2 1.187e-1  cosine 0.992951  max_abs 1.835e2  n 258048
+compare-dumps s1_step00_audio_block_12     rel_l2 1.191e-1  cosine 0.992912  max_abs 1.860e2  n 258048
+compare-dumps s1_step00_audio_block_13     rel_l2 1.200e-1  cosine 0.992809  max_abs 1.865e2  n 258048
+compare-dumps s1_step00_audio_block_14     rel_l2 1.204e-1  cosine 0.992759  max_abs 1.860e2  n 258048
+compare-dumps s1_step00_audio_block_15     rel_l2 1.201e-1  cosine 0.992803  max_abs 1.885e2  n 258048
+compare-dumps s1_step00_audio_block_16     rel_l2 1.220e-1  cosine 0.992568  max_abs 1.905e2  n 258048
+compare-dumps s1_step00_audio_block_17     rel_l2 1.256e-1  cosine 0.992122  max_abs 1.900e2  n 258048
+compare-dumps s1_step00_audio_block_18     rel_l2 1.270e-1  cosine 0.991955  max_abs 1.915e2  n 258048
+compare-dumps s1_step00_audio_block_19     rel_l2 1.280e-1  cosine 0.991832  max_abs 1.920e2  n 258048
+compare-dumps s1_step00_audio_block_20     rel_l2 1.287e-1  cosine 0.991742  max_abs 1.940e2  n 258048
+compare-dumps s1_step00_audio_block_21     rel_l2 1.302e-1  cosine 0.991536  max_abs 1.965e2  n 258048
+compare-dumps s1_step00_audio_block_22     rel_l2 1.308e-1  cosine 0.991492  max_abs 1.985e2  n 258048
+compare-dumps s1_step00_audio_block_23     rel_l2 1.343e-1  cosine 0.991016  max_abs 1.995e2  n 258048
+compare-dumps s1_step00_audio_block_24     rel_l2 1.312e-1  cosine 0.991443  max_abs 1.995e2  n 258048
+compare-dumps s1_step00_audio_block_25     rel_l2 1.353e-1  cosine 0.990906  max_abs 2.000e2  n 258048
+compare-dumps s1_step00_audio_block_26     rel_l2 1.279e-1  cosine 0.991856  max_abs 2.005e2  n 258048
+compare-dumps s1_step00_audio_block_27     rel_l2 1.310e-1  cosine 0.991500  max_abs 2.010e2  n 258048
+compare-dumps s1_step00_audio_block_28     rel_l2 1.248e-1  cosine 0.992290  max_abs 2.000e2  n 258048
+compare-dumps s1_step00_audio_block_29     rel_l2 1.287e-1  cosine 0.991731  max_abs 1.965e2  n 258048
+compare-dumps s1_step00_audio_block_30     rel_l2 1.284e-1  cosine 0.991729  max_abs 1.965e2  n 258048
+compare-dumps s1_step00_audio_block_31     rel_l2 1.308e-1  cosine 0.991465  max_abs 1.980e2  n 258048
+compare-dumps s1_step00_audio_block_32     rel_l2 1.255e-1  cosine 0.992176  max_abs 1.975e2  n 258048
+compare-dumps s1_step00_audio_block_33     rel_l2 1.254e-1  cosine 0.992130  max_abs 1.975e2  n 258048
+compare-dumps s1_step00_audio_block_34     rel_l2 1.217e-1  cosine 0.992574  max_abs 1.978e2  n 258048
+compare-dumps s1_step00_audio_block_35     rel_l2 1.207e-1  cosine 0.992694  max_abs 1.995e2  n 258048
+compare-dumps s1_step00_audio_block_36     rel_l2 1.219e-1  cosine 0.992549  max_abs 2.023e2  n 258048
+compare-dumps s1_step00_audio_block_37     rel_l2 1.262e-1  cosine 0.992017  max_abs 2.045e2  n 258048
+compare-dumps s1_step00_audio_block_38     rel_l2 1.262e-1  cosine 0.992012  max_abs 2.075e2  n 258048
+compare-dumps s1_step00_audio_block_39     rel_l2 1.332e-1  cosine 0.991101  max_abs 2.140e2  n 258048
+compare-dumps s1_step00_audio_block_40     rel_l2 1.335e-1  cosine 0.991050  max_abs 2.280e2  n 258048
+compare-dumps s1_step00_audio_block_41     rel_l2 1.325e-1  cosine 0.991216  max_abs 2.380e2  n 258048
+compare-dumps s1_step00_audio_block_42     rel_l2 1.382e-1  cosine 0.990446  max_abs 2.555e2  n 258048
+compare-dumps s1_step00_audio_block_43     rel_l2 1.468e-1  cosine 0.989182  max_abs 2.600e2  n 258048
+compare-dumps s1_step00_audio_block_44     rel_l2 1.418e-1  cosine 0.989909  max_abs 2.855e2  n 258048
+compare-dumps s1_step00_audio_block_45     rel_l2 1.352e-1  cosine 0.990831  max_abs 2.895e2  n 258048
+compare-dumps s1_step00_audio_block_46     rel_l2 1.060e-1  cosine 0.994387  max_abs 2.590e2  n 258048
+compare-dumps s1_step00_audio_block_47     rel_l2 5.383e-2  cosine 0.998550  max_abs 2.440e2  n 258048
+compare-dumps s1_step00_audio_in           rel_l2 6.846e-2  cosine 0.997655  max_abs 1.175e1  n 258048
+compare-dumps s1_step00_video_block_0      rel_l2 2.521e-1  cosine 0.971083  max_abs 8.000e1  n 393216
+compare-dumps s1_step00_video_block_1      rel_l2 7.563e-1  cosine 0.678365  max_abs 1.860e2  n 393216
+compare-dumps s1_step00_video_block_2      rel_l2 1.049e0  cosine 0.424832  max_abs 3.320e2  n 393216
+compare-dumps s1_step00_video_block_3      rel_l2 1.130e0  cosine 0.318468  max_abs 4.210e2  n 393216
+compare-dumps s1_step00_video_block_4      rel_l2 9.608e-1  cosine 0.541627  max_abs 3.960e2  n 393216
+compare-dumps s1_step00_video_block_5      rel_l2 1.034e0  cosine 0.442960  max_abs 4.150e2  n 393216
+compare-dumps s1_step00_video_block_6      rel_l2 1.178e0  cosine 0.236541  max_abs 5.100e2  n 393216
+compare-dumps s1_step00_video_block_7      rel_l2 1.206e0  cosine 0.202825  max_abs 5.432e2  n 393216
+compare-dumps s1_step00_video_block_8      rel_l2 1.270e0  cosine 0.052025  max_abs 7.140e2  n 393216
+compare-dumps s1_step00_video_block_9      rel_l2 1.328e0  cosine 0.007524  max_abs 9.060e2  n 393216
+compare-dumps s1_step00_video_block_10     rel_l2 1.344e0  cosine -0.066519  max_abs 9.720e2  n 393216
+compare-dumps s1_step00_video_block_11     rel_l2 1.375e0  cosine -0.148818  max_abs 1.132e3  n 393216
+compare-dumps s1_step00_video_block_12     rel_l2 1.357e0  cosine -0.142469  max_abs 8.280e2  n 393216
+compare-dumps s1_step00_video_block_13     rel_l2 1.258e0  cosine -0.039238  max_abs 9.020e2  n 393216
+compare-dumps s1_step00_video_block_14     rel_l2 1.237e0  cosine 0.133691  max_abs 9.620e2  n 393216
+compare-dumps s1_step00_video_block_15     rel_l2 1.109e0  cosine 0.173355  max_abs 9.980e2  n 393216
+compare-dumps s1_step00_video_block_16     rel_l2 1.115e0  cosine 0.157829  max_abs 1.028e3  n 393216
+compare-dumps s1_step00_video_block_17     rel_l2 1.114e0  cosine 0.230661  max_abs 1.020e3  n 393216
+compare-dumps s1_step00_video_block_18     rel_l2 1.121e0  cosine 0.206562  max_abs 1.012e3  n 393216
+compare-dumps s1_step00_video_block_19     rel_l2 1.147e0  cosine 0.148607  max_abs 9.260e2  n 393216
+compare-dumps s1_step00_video_block_20     rel_l2 1.188e0  cosine 0.081006  max_abs 8.300e2  n 393216
+compare-dumps s1_step00_video_block_21     rel_l2 1.226e0  cosine 0.079752  max_abs 8.340e2  n 393216
+compare-dumps s1_step00_video_block_22     rel_l2 1.221e0  cosine 0.010487  max_abs 7.380e2  n 393216
+compare-dumps s1_step00_video_block_23     rel_l2 1.279e0  cosine -0.099418  max_abs 9.260e2  n 393216
+compare-dumps s1_step00_video_block_24     rel_l2 1.303e0  cosine -0.192747  max_abs 1.128e3  n 393216
+compare-dumps s1_step00_video_block_25     rel_l2 1.237e0  cosine -0.198087  max_abs 3.962e3  n 393216
+compare-dumps s1_step00_video_block_26     rel_l2 1.204e0  cosine -0.180357  max_abs 5.474e3  n 393216
+compare-dumps s1_step00_video_block_27     rel_l2 1.196e0  cosine -0.228699  max_abs 5.476e3  n 393216
+compare-dumps s1_step00_video_block_28     rel_l2 1.217e0  cosine -0.265933  max_abs 5.154e3  n 393216
+compare-dumps s1_step00_video_block_29     rel_l2 1.231e0  cosine -0.302446  max_abs 4.720e3  n 393216
+compare-dumps s1_step00_video_block_30     rel_l2 1.243e0  cosine -0.281239  max_abs 4.396e3  n 393216
+compare-dumps s1_step00_video_block_31     rel_l2 1.248e0  cosine -0.321018  max_abs 3.868e3  n 393216
+compare-dumps s1_step00_video_block_32     rel_l2 1.253e0  cosine -0.207589  max_abs 2.836e3  n 393216
+compare-dumps s1_step00_video_block_33     rel_l2 1.281e0  cosine -0.122635  max_abs 1.506e3  n 393216
+compare-dumps s1_step00_video_block_34     rel_l2 1.295e0  cosine -0.133614  max_abs 1.416e3  n 393216
+compare-dumps s1_step00_video_block_35     rel_l2 1.274e0  cosine -0.089338  max_abs 6.520e2  n 393216
+compare-dumps s1_step00_video_block_36     rel_l2 1.268e0  cosine 0.017646  max_abs 6.080e2  n 393216
+compare-dumps s1_step00_video_block_37     rel_l2 1.287e0  cosine -0.089122  max_abs 6.680e2  n 393216
+compare-dumps s1_step00_video_block_38     rel_l2 1.214e0  cosine -0.000095  max_abs 5.300e2  n 393216
+compare-dumps s1_step00_video_block_39     rel_l2 1.192e0  cosine 0.029502  max_abs 5.280e2  n 393216
+compare-dumps s1_step00_video_block_40     rel_l2 1.165e0  cosine 0.052132  max_abs 4.800e2  n 393216
+compare-dumps s1_step00_video_block_41     rel_l2 1.141e0  cosine 0.112520  max_abs 4.200e2  n 393216
+compare-dumps s1_step00_video_block_42     rel_l2 1.173e0  cosine -0.003109  max_abs 5.260e2  n 393216
+compare-dumps s1_step00_video_block_43     rel_l2 1.225e0  cosine -0.045148  max_abs 6.080e2  n 393216
+compare-dumps s1_step00_video_block_44     rel_l2 1.255e0  cosine -0.092628  max_abs 6.520e2  n 393216
+compare-dumps s1_step00_video_block_45     rel_l2 1.301e0  cosine -0.087027  max_abs 9.680e2  n 393216
+compare-dumps s1_step00_video_block_46     rel_l2 1.205e0  cosine 0.096423  max_abs 1.110e3  n 393216
+compare-dumps s1_step00_video_block_47     rel_l2 5.285e-1  cosine 0.851448  max_abs 1.476e3  n 393216
+compare-dumps s1_step00_video_in           rel_l2 1.351e0  cosine -0.008565  max_abs 2.019e1  n 393216
+compare-dumps s1_video_step01              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step02              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step03              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step04              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step05              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step06              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step07              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step08              rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_step00_in           rel_l2 1.290e0  cosine -0.003466  max_abs 7.547e0  n 786432
+compare-dumps s1_video_vel_step01          rel_l2 1.747e0  cosine 0.005619  max_abs 1.171e1  n 786432
+compare-dumps s1_video_vel_step02          rel_l2 2.495e-2  cosine 0.999689  max_abs 6.914e-1  n 786432
+compare-dumps s1_video_vel_step03          rel_l2 2.481e-2  cosine 0.999693  max_abs 4.492e-1  n 786432
+compare-dumps s1_video_vel_step04          rel_l2 2.475e-2  cosine 0.999694  max_abs 4.609e-1  n 786432
+compare-dumps s1_video_vel_step05          rel_l2 2.490e-2  cosine 0.999690  max_abs 6.914e-1  n 786432
+compare-dumps s1_video_vel_step06          rel_l2 2.524e-2  cosine 0.999682  max_abs 5.234e-1  n 786432
+compare-dumps s1_video_vel_step07          rel_l2 2.384e-2  cosine 0.999717  max_abs 4.531e-1  n 786432
+compare-dumps s1_video_vel_step08          rel_l2 2.366e-2  cosine 0.999721  max_abs 5.039e-1  n 786432
+compare-dumps s1_video_x0_step01           rel_l2 1.290e0  cosine -0.003466  max_abs 7.547e0  n 786432
+compare-dumps s1_video_x0_step02           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step03           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step04           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step05           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step06           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step07           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps s1_video_x0_step08           rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+compare-dumps text_attention_mask: missing in candidate
+compare-dumps text_audio_ctx               rel_l2 5.873e-3  cosine 0.999983  max_abs 5.674e-1  n 2097152
+compare-dumps text_audio_ctx_real: missing in candidate
+compare-dumps text_audio_feats: missing in candidate
+compare-dumps text_hidden_0: missing in candidate
+compare-dumps text_hidden_1: missing in candidate
+compare-dumps text_hidden_2: missing in candidate
+compare-dumps text_hidden_5: missing in candidate
+compare-dumps text_hidden_6: missing in candidate
+compare-dumps text_hidden_7: missing in candidate
+compare-dumps text_hidden_12: missing in candidate
+compare-dumps text_hidden_24: missing in candidate
+compare-dumps text_hidden_36: missing in candidate
+compare-dumps text_hidden_47: missing in candidate
+compare-dumps text_hidden_48: missing in candidate
+compare-dumps text_input_ids: missing in candidate
+compare-dumps text_video_ctx               rel_l2 4.533e-3  cosine 0.999990  max_abs 1.188e0  n 4194304
+compare-dumps text_video_ctx_real: missing in candidate
+compare-dumps text_video_feats: missing in candidate
+compare-dumps v2v_audio_latent             rel_l2 9.943e-2  cosine 0.995058  max_abs 1.961e0  n 16128
+compare-dumps v2v_audio_wave               rel_l2 7.021e-5  cosine 1.000000  max_abs 3.747e-4  n 444416
+compare-dumps v2v_frame0_pixels            rel_l2 3.254e-6  cosine 1.000000  max_abs 3.052e-5  n 1179648
+compare-dumps v2v_region: missing in candidate
+compare-dumps v2v_video_latent             rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+[PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.3s)

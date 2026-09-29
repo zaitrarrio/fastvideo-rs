@@ -390,11 +390,9 @@ conditioning's alone. Results: docs/oracle.md, "LTX-2.5 image conditioning".
 Upstream ships audio-to-video as `A2VidPipelineTwoStage`
 (`ltx_pipelines/a2vid_two_stage.py`, Lightricks/LTX-2 `fd4ded7`): the *dev*
 transformer with CFG/STG/modality guidance at stage 1 and the distilled LoRA
-at stage 2. That needs `transformer_full/` of `Lightricks/LTX-2.5-Diffusers`
-(4 shards, 37 976 221 088 B ≈ 38.0 GB, LTX-2 community license, gated
-auto-approval), which is not on the volumes, plus a guided sampler we do not
-have. Not downloaded (large downloads need the owner's approval; any new tree
-goes on both volumes, CLAUDE.md). What we serve instead is the same audio
+at stage 2. Both tiers serve audio-to-video (2026-09-29): `ltx-pro` runs it
+as published (the dev transformer, "Guided audio-to-video" below),
+`ltx-turbo` keeps the distilled variant described here: the same audio
 mechanism on the distilled pipeline we already run: `DistilledPipeline`
 with `a2vid_two_stage.py`'s audio handling put in line for line
 (`scripts/gpu/upstream/ltx25_a2v.py` is that reference, built from upstream
@@ -416,11 +414,50 @@ blocks). Code: `ltx2/a2v.rs`, `Ltx2Pipeline::encode_driving_audio`,
 `Task::A2V` on the 2.5 models (see docs/serve/fal-parity.md,
 docs/serve/e2e/ltx.md). Oracle: docs/oracle.md, "LTX-2.5 audio-to-video".
 
+## Guided audio-to-video (the dev transformer, 2026-09-29)
+
+`A2VidPipelineTwoStage` as published, on `transformer_full/` of
+`Lightricks/LTX-2.5-Diffusers` @ `426936f` (4 shards, 37 976 670 004 B with
+`model_index.json`; weights-manifest.tsv `ltx25-dev`, on both volumes, LFS
+SHA-256 checked, verify-weights.sh `ltx25-dev` / `ltx25-a2v-guided`). The
+config is `ltx2_5_22b_dev()` (the distilled bundle's modules with the dev
+scheduler); the connectors, VAEs, vocoder, upsampler and the distilled LoRA
+come from the `ltx25` tree.
+
+| step | reference | ours |
+|---|---|---|
+| params | `detect_params` of `model_version = 2.5.0` → `LTX_2_4_PARAMS`: 30 steps, video guider CFG 3 / STG 1 on block 28 / rescale 0.7 / modality 3 / skip 0, the default negative prompt; the audio guider `MultiModalGuiderParams()` | `guidance::ltx25_video_guider()`, `LTX25_DEV_STEPS`, `DEFAULT_NEGATIVE_PROMPT`; `Ltx2Request::guidance_scale` is the CFG scale (`a2v_guiders`) |
+| schedule | `LTX2Scheduler().execute(steps)`, no latent: shift at 4096 tokens (2.05), stretch to 0.1, float32 | `Ltx2Schedule::ltx_core` (the same float32 ops, `a / t` as `reciprocal(t)·a`) |
+| passes | `_guided_denoise`: cond; uncond (negative video context, *positive* audio context: the audio guider has none); ptb (`SKIP_VIDEO_SELF_ATTN` on block 28: the value projection stands in for the attention output, gates and `to_out` as usual); mod (`SKIP_A2V_CROSS_ATTN` + `SKIP_V2A_CROSS_ATTN` everywhere) | `denoise_guided_cond`, `Ltx2Transformer::set_perturbation`, `Attention::forward_value_only`, both block paths (plain and per-token timesteps) |
+| combine | `MultiModalGuider.calculate` on the passes' `x0` in float32, rescale `r·std(cond)/std(pred) + 1 − r`, stored bf16; `post_process_latent`; `EulerDiffusionStep` | `guided_combine` (weights `6, −2, −1, −2` at the defaults, stds on the host in f64), `euler_from_x0` |
+| stage 2 | the dev DiT with the distilled LoRA fused at 1.0 (`bf16_fuse_rule`), `SimpleDenoiser`, `STAGE_2_DISTILLED_SIGMAS`, renoise from the same generator | the same DiT re-fused (`set_lora_strength(1)`), the distilled stage-2 loop; the LoRA's original names alias the diffusers module names (`adaln_single` → `time_embed`, …): 1 660 pairs |
+| audio | frozen on both stages, output the input waveform | as the distilled variant |
+
+Memory: the DiT is resident once. The unfused base of the 1 660 LoRA linears
+stays in pinned host memory (`PipelineOptions::lora_base_host`,
+`wan::nn::with_lora_base_on_host`; ~38 GB of host RAM) rather than beside the
+live weights on the device (a second ~35 GB): each base ↔ fused switch
+uploads the base (2.1 s on RTX PRO 6000) and fuses into a fresh buffer.
+Measured peak at 768x512x121: 56.9 GiB (DiT + LoRA factors 52.0 GiB), so it
+fits 80 GB cards; `FASTVIDEO_LTX2_LORA_BASE=device` restores the device copy.
+A streamed (`--offload cpu`) DiT is refused with a host-kept base.
+
+Serve: catalog model `ltx25-a2v-guided` (recipe `ltx25-dev-a2v-guided`, tier
+max, `Task::A2V` only, knobs seed + guidance), the task companion of
+`ltx-pro`, whose plain model (`ltx25-distill-dense`) no longer takes A2V, so
+`ltx-pro` A2V routes to it (`route_task`); `ltx-turbo` keeps the distilled
+A2V. Config `configs/serve/runpod-ltx-a2v.toml`. Oracle: docs/oracle.md,
+"LTX-2.5 guided audio-to-video". GPU: `fv-gpucheck ltx2 gen --guided
+--dense-stage2 --two-stage --audio FILE --dit …/ltx25-dev/transformer_full
+[--guidance-scale G] [--num-inference-steps N] [--negative-prompt …]`.
+
 ## Out of scope (this milestone)
 
 DiffVAE tiling / multi-step stage-5 / two-stage+DiffVAE combo, duration head,
-prompt enhancer, generated keyframes (`VideoGeneratedKeyframeSlots`), dev DiT
-+ CFG/STG/modality guidance, Comfy int8/nvfp4, official 1536×1024 canvas.
+prompt enhancer, generated keyframes (`VideoGeneratedKeyframeSlots`), the dev
+DiT's text-to-video (`TI2VidTwoStages`, which also guides the audio stream;
+the guider itself is ported for audio-to-video), Comfy int8/nvfp4, official
+1536×1024 canvas.
 
 ---
 

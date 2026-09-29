@@ -171,7 +171,18 @@ pub fn stage_all(req: &GenerationRequest) -> StagedInputs {
                 m.probe.audio_rate = Some(48_000);
                 m
             }),
+        video_in: req.edit.as_ref().map(|_| source_video(768, 512, 24.0, 121, true)),
     }
+}
+
+/// A staged source video for retake / extend.
+pub fn source_video(w: u32, h: u32, fps: f64, frames: u32, audio: bool) -> StagedMedia {
+    let mut m = staged("video/mp4", Some((w, h)), "source.mp4");
+    m.probe.fps = Some(fps);
+    m.probe.frames = Some(frames);
+    m.probe.duration_s = Some(f64::from(frames) / fps);
+    m.probe.audio_rate = audio.then_some(44_100);
+    m
 }
 
 /// Negotiates with auto-staged inputs.

@@ -39,12 +39,15 @@ pub struct MediaProbe {
     /// Codec profiles as ffprobe names them (`Constrained Baseline`, `LC`).
     pub video_profile: Option<String>,
     pub audio_profile: Option<String>,
+    /// The video stream's frame count (`nb_frames`, the MP4 sample count).
+    #[serde(default)]
+    pub frames: Option<u32>,
 }
 
 impl From<&MediaProbe> for fastvideo_protocol::MediaProbe {
     /// The subset `StagedMedia.probe` carries (design §3.2).
     fn from(p: &MediaProbe) -> Self {
-        Self { width: p.width, height: p.height, duration_s: p.duration_s, fps: p.fps, audio_rate: p.audio_rate }
+        Self { width: p.width, height: p.height, duration_s: p.duration_s, fps: p.fps, audio_rate: p.audio_rate, frames: p.frames }
     }
 }
 
@@ -103,6 +106,7 @@ pub fn parse_ffprobe_json(json: &str) -> Result<MediaProbe> {
                 p.video_codec = s["codec_name"].as_str().map(str::to_string);
                 p.video_profile = s["profile"].as_str().map(str::to_string);
                 p.fps = s["avg_frame_rate"].as_str().and_then(parse_rate).or_else(|| s["r_frame_rate"].as_str().and_then(parse_rate));
+                p.frames = s["nb_frames"].as_str().and_then(|n| n.parse().ok()).filter(|n: &u32| *n > 0);
                 still = matches!(p.video_codec.as_deref(), Some("png" | "mjpeg" | "webp" | "bmp" | "gif"))
                     && s["nb_frames"].as_str().map(|n| n == "1").unwrap_or(true)
                     && p.format.contains("pipe");
@@ -151,6 +155,7 @@ fn from_mp4(i: &crate::mp4::Mp4Info) -> MediaProbe {
         format: "mov,mp4,m4a,3gp,3g2,mj2".into(),
         video_profile: None,
         audio_profile: None,
+        frames: v.and_then(|t| u32::try_from(t.samples).ok()).filter(|n| *n > 0),
     }
 }
 

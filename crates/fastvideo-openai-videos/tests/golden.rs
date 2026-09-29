@@ -109,6 +109,7 @@ fn resolved(model: &str, w: u32, h: u32, frames: u32, fps: u32) -> ResolvedJob {
         sampling: SamplingOverrides::default(),
         tier: Some(Tier::Turbo),
         recipe: Some("4step-vsa".into()),
+        edit: None,
     }
 }
 

@@ -96,6 +96,39 @@ fn wav(rate: u32, secs: f64) -> String {
     format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(v))
 }
 
+/// A header-only MP4 (no frames can be decoded, but ingestion probes it
+/// exactly: size, sample count, rate, audio track), as a data URI.
+fn mp4(w: u16, h: u16, timescale: u32, delta: u32, frames: u32, audio: bool) -> String {
+    let b = fastvideo_media::mp4::inspect::header_only_mp4(w, h, timescale, delta, frames, audio.then_some(44_100));
+    format!("data:video/mp4;base64,{}", base64::engine::general_purpose::STANDARD.encode(b))
+}
+
+/// One source video for retake / extend: its name, data URI and whether the
+/// edit endpoints must take it (`false`: a clear 4xx is the right answer).
+#[derive(Clone)]
+struct Vid {
+    name: &'static str,
+    uri: String,
+    ok: bool,
+}
+
+/// The source videos: the default is 505 frames at 24 fps with audio (every
+/// start time and duration the forms offer fits it); then portrait 30 fps,
+/// NTSC 29.97 fps without audio, a 4K clip (scaled into the budget), a 1 s
+/// clip, and refusals: 8 frames, 120 fps and 70 s.
+fn videos() -> Vec<Vid> {
+    vec![
+        Vid { name: "768x512-24fps-505f", uri: mp4(768, 512, 24_000, 1000, 505, true), ok: true },
+        Vid { name: "1080x1920-30fps-150f", uri: mp4(1080, 1920, 30_000, 1000, 150, true), ok: true },
+        Vid { name: "640x360-29.97fps-121f-silent", uri: mp4(640, 360, 30_000, 1001, 121, false), ok: true },
+        Vid { name: "3840x2160-25fps-125f", uri: mp4(3840, 2160, 25_000, 1000, 125, true), ok: true },
+        Vid { name: "1920x1080-24fps-24f", uri: mp4(1920, 1080, 24_000, 1000, 24, true), ok: true },
+        Vid { name: "8-frames", uri: mp4(768, 512, 24_000, 1000, 8, true), ok: false },
+        Vid { name: "120fps", uri: mp4(768, 512, 120_000, 1000, 240, true), ok: false },
+        Vid { name: "70s", uri: mp4(640, 360, 24_000, 1000, 1680, true), ok: false },
+    ]
+}
+
 /// One input image: its name and data URI.
 #[derive(Clone)]
 struct Img {
@@ -218,7 +251,7 @@ async fn harness_flagged(hd: bool, long: bool) -> Sweep {
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
     c.limits.queue_max = 1_000_000;
-    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality"] {
+    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3"] {
         c.protocols.fal_apps.push(a.to_owned());
     }
     c.validate().unwrap();
@@ -489,7 +522,11 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             }
             v
         };
-        let (plain, plain_in) = task_inputs[0].clone();
+        // A model with no plain task (the guided audio-to-video companion
+        // serves A2V only): its cases are the API blocks' below.
+        let Some((plain, plain_in)) = task_inputs.first().cloned() else {
+            continue;
+        };
         // Canvas: every tier at every aspect (promised within the aspect range).
         for &se in &caps.canvas.short_edges {
             for a in ASPECTS {
@@ -546,6 +583,37 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             let mut extra = plain_in.clone();
             extra.extend([("num_frames", json!(g.max)), ("fps", json!(fps))]);
             out.push(case(id, format!("{plain} max frames @ {fps} fps"), with(&base, &extra), Offer::Caps));
+        }
+        // Retake / extend: every source video, the windows and extensions
+        // the API allows. The default source takes every one of them.
+        if caps.supports(Task::Retake) {
+            for v in videos() {
+                let offer = if v.ok { Offer::Caps } else { Offer::Api };
+                let r = with(&base, &[("video_url", json!(v.uri)), ("start_s", json!(0.5)), ("end_s", json!(2.5))]);
+                out.push(case(id, format!("retake {}", v.name), r, offer));
+                let x = with(&base, &[("video_url", json!(v.uri)), ("extend_s", json!(2))]);
+                out.push(case(id, format!("extend {}", v.name), x, offer));
+            }
+            let src = &videos()[0].uri;
+            for mode in ["replace_audio", "replace_video", "replace_audio_and_video"] {
+                for (a, b) in [(0.0, 2.0), (10.0, 30.0), (19.0, 21.0)] {
+                    let r = with(&base, &[("video_url", json!(src)), ("start_s", json!(a)), ("end_s", json!(b)), ("retake_mode", json!(mode))]);
+                    out.push(case(id, format!("retake [{a}, {b}) {mode}"), r, Offer::Caps));
+                }
+            }
+            for at in ["start", "end"] {
+                for secs in [2, 5, 10, 20] {
+                    for ctx in [None, Some(1.0), Some(20.0)] {
+                        let mut x = with(&base, &[("video_url", json!(src)), ("extend_s", json!(secs)), ("extend_at", json!(at))]);
+                        if let Some(c) = ctx {
+                            x["context_s"] = json!(c);
+                        }
+                        out.push(case(id, format!("extend {secs} s at {at} context {ctx:?}"), x, Offer::Caps));
+                    }
+                }
+            }
+            let dub = with(&base, &[("video_url", json!(src)), ("start_s", json!(1)), ("end_s", json!(4)), ("audio_url", json!(wav(16_000, 3.0)))]);
+            out.push(case(id, "retake with new window audio".into(), dub, Offer::Caps));
         }
         // The largest canvas with the longest clip: the grid's (promised
         // below the 1080P tier), and the tier's own cap (5 s; 10 s with the
@@ -638,6 +706,49 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             };
             let props = api["properties"].as_object().unwrap();
             let label = format!("{app_id}/{sub}");
+            // Retake / extend: a source video instead of images; its own
+            // grid of start times, durations, modes and contexts.
+            if props.get("video_url").is_some_and(|p| p["x-fv-media"] == "video") {
+                let mut push = |combo: String, body: Value, offer: Offer| {
+                    out.push(Case {
+                        api: "fal",
+                        model: label.clone(),
+                        combo,
+                        uri: format!("/{app_id}/{sub}"),
+                        body,
+                        auth: "Key {KEY}".into(),
+                        protocol: ProtocolId::Fal,
+                        id_field: "request_id",
+                        offer,
+                    });
+                };
+                let base = json!({"prompt": "a huge wave crashes over the rocks"});
+                for v in videos() {
+                    let offer = if v.ok { Offer::Console } else { Offer::Api };
+                    push(format!("video {}", v.name), with(&base, &[("video_url", json!(v.uri))]), offer);
+                }
+                let src = json!(videos()[0].uri);
+                if endpoint == fastvideo_fal::Endpoint::LtxRetake {
+                    for mode in ["replace_audio", "replace_video", "replace_audio_and_video"] {
+                        for start in [0.0, 1.5, 10.0, 20.0] {
+                            for dur in [2.0, 5.0, 20.0] {
+                                let b = with(&base, &[("video_url", src.clone()), ("start_time", json!(start)), ("duration", json!(dur)), ("retake_mode", json!(mode))]);
+                                push(format!("start {start} duration {dur} {mode}"), b, Offer::Console);
+                            }
+                        }
+                    }
+                } else {
+                    for mode in ["start", "end"] {
+                        for dur in [2.0, 5.0, 10.0, 20.0] {
+                            for ctx in [Value::Null, json!(1), json!(20)] {
+                                let b = with(&base, &[("video_url", src.clone()), ("duration", json!(dur)), ("mode", json!(mode)), ("context", ctx.clone())]);
+                                push(format!("duration {dur} mode {mode} context {ctx}"), b, Offer::Console);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             let base = json!({"prompt": "A reference sheet: a fox. Generated video: the fox runs"});
             // Image inputs this endpoint takes.
             let required: Vec<&str> = api["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
@@ -983,6 +1094,32 @@ async fn ltx_api() {
                         cases.push(case("audio-to-video", format!("a2v {res} image {}", img.name), b));
                     }
                 }
+            }
+        }
+    }
+    // Retake / extend (their own schemas; `model` defaults to ltx-2-3-pro).
+    for (api, prefix, protocol, id_field) in [("ltx v2", "/v2", ProtocolId::LtxV2, "id"), ("ltx v1", "/v1", ProtocolId::LtxV1, "")] {
+        for v in videos() {
+            if api == "ltx v1" && v.name != "768x512-24fps-505f" {
+                continue;
+            }
+            for (ep, body) in [
+                ("retake", json!({"video_uri": v.uri, "start_time": 0.5, "duration": 2, "prompt": "rain starts"})),
+                ("retake", json!({"video_uri": v.uri, "start_time": 0, "duration": 20, "mode": "replace_audio", "resolution": "1920x1080"})),
+                ("extend", json!({"video_uri": v.uri, "duration": 2})),
+                ("extend", json!({"video_uri": v.uri, "duration": 20, "mode": "start", "context": 1, "model": "ltx-2-5-pro"})),
+            ] {
+                cases.push(Case {
+                    api,
+                    model: "ltx-2-3-pro".into(),
+                    combo: format!("{ep} {} {body}", v.name).chars().take(160).collect(),
+                    uri: format!("{prefix}/{ep}"),
+                    body,
+                    auth: "Bearer {KEY}".into(),
+                    protocol,
+                    id_field,
+                    offer: Offer::Api,
+                });
             }
         }
     }
