@@ -346,7 +346,7 @@ export function topbar(active) {
     el('div', { class: 'topbar-in' },
       el('a', { class: 'brand', href: '/console' }, 'fv-serve', el('small', {}, 'console')),
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
-        link('/console', 'Models', 'home'), link('/console/admin', 'API keys', 'admin'), link('/console/deployments', 'Deployments', 'deployments')),
+        link('/console', 'Models', 'home'), link('/console/admin', 'API keys', 'admin'), link('/console/deployments', 'Deployments', 'deployments'), link('/console/avatar', 'Avatar', 'avatar')),
       el('span', { class: 'spacer' }), strip, pill, theme),
     panel);
   strip.onclick = () => {

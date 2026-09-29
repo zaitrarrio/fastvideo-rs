@@ -1,0 +1,25 @@
+{
+  "name": "fv-control",
+  "private": true,
+  "type": "module",
+  "description": "fv-control: the fastvideo-rs cluster controller (Cloudflare Worker + static dashboard). docs/control/README.md",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run test/unit",
+    "test:integration": "node test/integration/run.mjs",
+    "test:ui": "node test/ui/smoke.mjs",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy:staging": "wrangler deploy --env staging"
+  },
+  "dependencies": {
+    "hono": "^4.13.11"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260929.1",
+    "miniflare": "^4.20260730.0",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "wrangler": "^4.143.0"
+  }
+}

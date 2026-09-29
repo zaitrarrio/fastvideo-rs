@@ -212,14 +212,98 @@ Everything for it is in the repo:
 - The engine path matched upstream `ICLoraPipeline` at the clip level
   (docs/oracle.md, SSIM 0.982), so this opening is probably the model's own
   behaviour for the `Reference sheet: … Generated video: …` prompt format,
-  not a serve bug. The oracle run kept no frames to confirm it. **Open
-  question for the owner:** should the ingredient endpoint trim the sheet
-  segment (the first ~1.75 s), or match whatever fal's hosted
-  `ltx-2.3-quality/ingredient` returns? Checking fal's hosted output for the
-  same request would settle it.
+  not a serve bug. The oracle run kept no frames to confirm it. Whether to
+  trim the sheet segment was the open question; fal's hosted output for the
+  same request settles it (next section: fal shows the same sheet
+  bleed-through, often worse, and has no trim parameter).
 - Warm run on H100: 22.5 s for 1536x896x121 with the IC-LoRA stage 1 (the
   oracle measured about 1.0 s per stage-1 step and 1.8-2.1 s per stage-2
   step on H100).
+
+### The sheet opening vs fal's hosted endpoint, 2026-09-29
+
+Question: our ingredient clips open with the reference sheet for 42 frames
+(1.75 s, with garbled labels the sheet does not have), then hard-cut to the
+prompted shot. Does fal's hosted endpoint do the same?
+
+**App and schema.** fal's queue OpenAPI for `fal-ai/ltx-2.3-quality/ingredient`
+(fetched 2026-09-29) is the endpoint our catalog maps: required `prompt`,
+`image_url`; `num_frames` 9-481 (121), `resolution` (default 1536x896, "keeps
+the workflow's first stage at the Ingredient LoRA's trained 768x448 bucket
+before the official 2x refinement"), `frames_per_second` (24),
+`guidance_scale` 1-20 (1), `ingredient_strength` and `reference_strength`
+0-2 (1), `generate_audio` (true), `negative_prompt`, `seed`,
+**`enable_prompt_expansion` (default true)**, `enable_safety_checker`,
+`video_quality`, `video_write_mode`, `sync_mode`. Output: `video`, `seed`,
+`prompt` (the prompt after expansion). **There is no parameter to trim or
+skip the reference segment.** It runs LTX-2.3 with the 2.3 build of the
+LoRA; we run the 2.5 build on the 2.5 base, so pixels are not comparable,
+only behaviour.
+
+**Requests** (fal queue API, `scripts/gpu/fixtures/ltx-ref-sheet-768x448.png`
+as a data URI, all other fields default, so 1536x896, 121 @ 24, audio):
+
+| Clip | Body | fal inference | Returned prompt |
+|---|---|---|---|
+| `fal-same` | exactly our E2E body: `REF_PROMPT`, `image_url`, `seed 1024` | 67.9 s | rewritten by fal's prompt expansion into a plain shot description ("Style: 3D animation - The bright orange cartoon crab scuttles…"); the "Reference sheet: … Generated video: …" structure is gone |
+| `fal-noexpand` | the same plus `enable_prompt_expansion: false` (what our engine receives) | 65.4 s | unchanged |
+| `fal-alt-prompt` | same sheet, same "Reference sheet:" part, a different "Generated video:" (a slow dolly-in, the crab under the umbrella), `seed 7`, no expansion | 62.9 s | unchanged |
+
+**Metrics** (`artifacts/serve/e2e/ltx-ref2v/fal-compare/metrics.json`):
+per-frame SSIM and PSNR, grayscale at 384x224, of frames 0-72 (3 s) against
+the whole sheet and against each of its four panels scaled to full frame;
+ffmpeg `scdet` (threshold 10) over the whole clip. "Sheet-like" = SSIM ≥ 0.5
+against the sheet or one panel. Contact sheets of the first 2 s (every 3rd
+frame, frame numbers burned in): `fal-compare/first2s-<clip>.jpg`.
+
+| Clip | SSIM vs sheet f0 / f41 / f42 / f72 | best panel f0 / f72 | Sheet-like leading frames | Cuts (frame, score) | What it shows |
+|---|---|---|---|---|---|
+| ours, fal API | 0.649 / 0.653 / 0.130 / 0.134 | 0.23 / 0.27 | **42** | (42, 23.9) | the whole 4-panel sheet (coast panels moving, hallucinated labels), hard cut to the prompted beach shot |
+| ours, native | 0.636 / 0.638 / 0.130 / 0.134 | 0.23 / 0.27 | **42** | (42, 23.9) | same |
+| `fal-same` | 0.243 / 0.240 / 0.247 / 0.294 | **0.53 / 0.51** | **all 73** (whole clip) | none | the sheet's crab panel (both crabs) on black, static, to frame ~67; a whip-pan to the umbrella + crab panels on black to the end. The beach never appears |
+| `fal-noexpand` | **0.695 / 0.647 / 0.645 / 0.639** | 0.23 / 0.23 | **all 73** (whole clip) | none | the 4-panel sheet layout for all 121 frames; the prompted action (crab walks under the umbrella) plays inside the top-left coast panel, the other three panels stay static |
+| `fal-alt-prompt` | 0.235 / 0.160 / 0.160 / 0.152 | **0.62** / 0.24 | **3** | (3, 12.8) | the crab panel for 3 frames, a wipe to the beach by frame ~9, then the prompted shot |
+
+**Finding: (a), it is the model, not our pipeline.** fal's hosted endpoint
+shows the same reference-sheet bleed-through on all three requests, and
+with our exact body it is worse than ours: the sheet (or one of its panels)
+never leaves the frame. Where it does cut to the shot (`fal-alt-prompt`)
+the lead-in is 3 frames; ours was 42 on this sheet and seed. The length of
+the lead-in varies with prompt and seed from a few frames to the whole clip,
+on both stacks. Nothing points at our reference-token positions, the LoRA
+stage or the conditioning index: the engine already matched upstream
+`ICLoraPipeline` at clip level (docs/oracle.md, SSIM 0.982), and fal (the
+official two-stage workflow at the LoRA's trained bucket) produces the same
+class of output. No code change.
+
+Two parity notes from the schema (not changed here): fal expands the prompt
+by default and returns the expanded text as `prompt`; our `ingredient`
+accepts and ignores `enable_prompt_expansion` (it is not in our schema) and
+returns `expanded_prompt`. On this sheet fal's expansion removed the
+"Reference sheet:" structure, and the result lost the setting entirely, so
+matching fal's expansion would not help.
+
+**Recommendation.**
+
+* Do not trim by default: fal does not, has no parameter for it, and a fixed
+  N is wrong (3, 42 and "the whole clip" on four requests).
+* If a cleaner output is wanted, add an opt-in trim (an `fv` extension field,
+  off by default) that detects the lead-in: leading frames with SSIM ≥ 0.5
+  against the sheet or any panel, ended by a scene cut (`scdet` ≥ 10) in the
+  first ~3 s; cut there. To still deliver the requested length, generate
+  extra frames (e.g. +48, 8k+1) and cut to the requested count, at about
+  +40 % GPU time at 121 frames; otherwise return a shorter clip. When no cut
+  is found and the whole clip stays sheet-like, return it untouched and flag
+  it (`fal-noexpand` case), since trimming cannot rescue it.
+* The prompt is the stronger lever: the documented "Reference sheet: …
+  Generated video: …" format is what both stacks received; the lead-in
+  length changed from 121+ frames to 3 on fal with a different
+  "Generated video:" part and seed. Not tested further (it would need more
+  GPU or fal runs).
+
+**fal spend:** three requests at fal's published $0.0024075 per megapixel
+of output (1536 × 896 × 121 = 166.5 MP each, about $0.40): **about $1.20**.
+The fal response URLs are not kept in the repo.
 
 ## Audio-to-video (avatar P0), 2026-09-29
 

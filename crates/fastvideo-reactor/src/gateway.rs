@@ -249,7 +249,15 @@ impl Gw {
             ClientMsg::Error { code, message } => {
                 tracing::debug!(conn = self.conn, %code, %message, "client error payload");
             }
-            ClientMsg::Command { request_id, name, data, .. } => {
+            ClientMsg::Command { request_id, name, mut data, uploads } => {
+                // `Command.uploads[param]` fills that parameter with the
+                // upload reference (reactor §3.5); the driver resolves it.
+                for (param, u) in uploads {
+                    data.insert(
+                        param,
+                        serde_json::json!({"upload_id": u.upload_id, "name": u.name, "mime_type": u.mime_type, "size": u.size}),
+                    );
+                }
                 // RT mints an id for an uncorrelated v1 command.
                 let v1 = self.version == Some(WireVersion::V1);
                 let request_id = match request_id {

@@ -965,6 +965,16 @@ pub enum Continuity { HardCut, Crossfade { ms: u16 }, AnchorLastFrame { crossfad
    `stream_limits{default_max_s, hard_max_s, clock, reset_restarts_clock}`),
    the Reactor schema (`x-reactor.session_limits`, causal mode) and the
    console home page. Clip sessions have no default limit.
+
+   **Script avatar limits (2026-09-29, §5.7 avatar mode).** A take lasts
+   4-300 s of video (Reactor `ltx`: the script's derived length or
+   `set_duration_seconds`, clamped), the script is at most 10 000
+   characters and the scene prompt 800. The session as a whole is capped in
+   video time like a causal one: `/start_session` `max_seconds` (1 up to
+   the ceiling; larger is refused with 400), else the ceiling
+   `[reactor] avatar_session_max_s` (default 1800 s, several takes); at the
+   limit `session_ended{reason: session_limit_reason(n)}`. Advertised as
+   `x-reactor.session_limits{take_min_s, take_max_s, session_max_s, clock}`.
 4. **Orphaned**: all peers are gone.
    - Generation pauses: clip builds stop and causal blocks stop.
    - After `orphan_timeout` (60 s, as RT) the session enters `Closing`.
@@ -1272,6 +1282,46 @@ Command sets, chosen by `ModelCaps.stream`:
 
 - Clip-length bounds and snapping come from caps: H3 5.167–14.375 s on
   17n+5; LTX on 8k+1 at the model fps; FastWan on 4k+1.
+
+**Avatar mode (2026-09-29; research-avatar-v2v.md P0-3).** `[reactor] mode
+= "avatar"` (`FV_REACTOR_MODE=avatar`) on a model with image-to-video and
+native audio (LTX-2.5) serves Reactor's `ltx` model contract
+(`crates/fastvideo-reactor/src/avatar.rs` over
+`fastvideo_engine_service::stream::avatar`):
+
+| Commands | Messages |
+|---|---|
+| `set_avatar_image{avatar_image: FileRef}`, `set_script{script≤10000}`, `set_prompt{prompt≤800}`, `set_wpm{80..220}`, `set_duration_seconds{0 \| 4..300}`, `set_seed`, `start`, `pause`, `resume`, `stop`, `reset`; extensions `get_state`, `set_voice_audio{voice_audio: FileRef}` | `state_update`, `*_accepted`, `generation_started`, `window_progress`, `generation_{paused,resumed,stopped,complete,failed,reset}`, `command_error`; extensions `window_built{build_seconds, rtf}`, `window_started{since_start_seconds, stalled_seconds}`, `voice_audio_accepted` |
+
+- **Uploads** (reactor §3.5): `POST /sessions/{sid}/uploads` → 201
+  `{presigned_id, presigned_url, path}`, `PUT /sessions/{sid}/uploads/{id}`
+  (the declared size exactly; RT's `/uploads/{id}` is serve-kit's route);
+  a `FileRef` parameter comes from `Command.uploads[param]` or inline
+  `{upload_id}`, resolved within 10 s (`unresolved_upload` otherwise);
+  cleared at session end.
+- **Speech is the model's own** (Reactor: "no separate text-to-speech
+  step"): each window's prompt is the scene plus `The person says:
+  "<lines>"`, joint audio and video. No TTS weights.
+- **Windows**: the script is cut at sentence ends (then clauses, words) into
+  windows of at most `avatar_window_s` (10 s) of speech at the rate, plus a
+  0.5 s breath, on the 8k+1 grid; a longer duration adds idle windows
+  (listening, silent), a shorter one cuts the script. Window 0 is I2V from
+  the photo; window k is I2V from window k−1's last frame (uncropped PNG),
+  its duplicate first frame dropped with its audio, 20 ms audio crossfade,
+  the same seed for every window (the voice). With `set_voice_audio` each
+  window is audio-to-video (`Task::A2V` on `ClipBuild::audio_drive`) on its
+  slice of the file, cut one frame early so the dropped anchor frame's
+  audio is the previous window's last. Reactor's own schedule (20 s
+  windows every 10 s, each overlapping the previous by half) needs partial
+  latent conditioning (the retake/extend work); ours overlaps generation
+  with playout instead.
+- **Playout**: builds are sequential (each needs the last frame) and run
+  while earlier windows play, at most 2 built windows ahead; 3-frame
+  lockstep slices to the clip pacer (idle policy Hold); a window not ready
+  when the previous ends holds the last frame with silence and is counted
+  (`stalls`, `stalled_seconds`). 640x352 is generated at 640x384 (the
+  two-stage multiple of 64) and centre-cropped. Audio is 48 kHz mono on
+  the Reactor wire (§5.3; Reactor's `ltx` states stereo).
 - The fps is pinned to the model fps (24 for H3/LTX). Pacing is never
   measured for audio models (reactor §4.5).
 - `set_canvas` is valid only when both queues are empty and nothing is

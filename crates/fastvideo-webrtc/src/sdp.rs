@@ -657,6 +657,34 @@ pub struct OfferRequirements {
     pub audio: bool,
 }
 
+/// One media stream for every track of an SDP (an answer): browsers group
+/// tracks by `msid` stream id, and only tracks of one stream are played in
+/// sync (lip sync from the RTCP sender reports). Rewrites the stream id of
+/// every `a=msid:` and `a=ssrc:… msid:` line to `stream`.
+pub fn unify_msid(sdp: &str, stream: &str) -> String {
+    let mut out = String::with_capacity(sdp.len());
+    for line in sdp.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        let eol = &line[body.len()..];
+        if let Some(rest) = body.strip_prefix("a=msid:") {
+            if let Some((_, track)) = rest.split_once(' ') {
+                out.push_str(&format!("a=msid:{stream} {track}{eol}"));
+                continue;
+            }
+        }
+        if let Some(rest) = body.strip_prefix("a=ssrc:") {
+            if let Some((ssrc, attr)) = rest.split_once(" msid:") {
+                if let Some((_, track)) = attr.split_once(' ') {
+                    out.push_str(&format!("a=ssrc:{ssrc} msid:{stream} {track}{eol}"));
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 /// Validate an offer (client → us) and summarise it.
 pub fn validate_offer(sdp: &Sdp, req: OfferRequirements) -> Result<OfferSummary, SdpError> {
     validate_offer_with(sdp, req, false)

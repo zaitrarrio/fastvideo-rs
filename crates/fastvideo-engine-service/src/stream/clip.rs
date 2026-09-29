@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fastvideo_protocol::{
-    draw_seed, Anchor, ApiError, AudioPlan, JobId, ModelCaps, PostProcess, ResolvedJob,
+    draw_seed, Anchor, ApiError, AudioPlan, AudioRole, JobId, ModelCaps, PostProcess, ResolvedJob,
     SamplingOverrides, SessionSpec, Task,
 };
 
@@ -40,6 +40,11 @@ pub struct ClipBuild {
     pub first_frame: Option<PathBuf>,
     /// `Keyframe{Last}` (director `end_image_url`).
     pub last_frame: Option<PathBuf>,
+    /// Driving speech (`Task::A2V`, `AudioRole::Drive`): the clip's audio is
+    /// this file, held clean as conditioning; the model does not generate
+    /// its own. With `first_frame` this is image + audio to video (the
+    /// script avatar's voice-driven windows).
+    pub audio_drive: Option<PathBuf>,
 }
 
 /// An open clip session. Dropping it releases the executor slot.
@@ -138,14 +143,15 @@ impl ClipSession {
         if let Some(p) = &b.last_frame {
             keyframes.push((Anchor::Last, p.clone()));
         }
-        let task = match (&b.first_frame, &b.last_frame) {
-            (None, None) => Task::T2V,
-            (Some(_), None) => Task::I2V,
+        let task = match (&b.first_frame, &b.last_frame, &b.audio_drive) {
+            (_, _, Some(_)) => Task::A2V,
+            (None, None, None) => Task::T2V,
+            (Some(_), None, None) => Task::I2V,
             _ => Task::Keyframes,
         };
         if !self.caps.supports(task) {
             return Err(ApiError::invalid_param(
-                "image_url",
+                if task == Task::A2V { "audio_url" } else { "image_url" },
                 format!("model `{}` cannot build {task:?} clips", self.caps.id),
             ));
         }
@@ -169,7 +175,7 @@ impl ClipSession {
             fps: self.spec.fps,
             keyframes,
             references: Vec::new(),
-            audio_in: None,
+            audio_in: b.audio_drive.clone().map(|p| (AudioRole::Drive, p)),
             audio,
             post: PostProcess::default(),
             sampling: SamplingOverrides::default(),

@@ -6,6 +6,11 @@
 //!   `set_canvas`, `reset`.
 //! - **Causal** (SF-Wan): Waypoint-style `InputState` setters `set_prompt`,
 //!   `set_paused`, `set_seed`, plus `reset` and `get_state`.
+//! - **Avatar** (LTX-2.5 script avatar): Reactor's `ltx` model verbatim
+//!   (`set_avatar_image`, `set_script`, `set_prompt`, `set_wpm`,
+//!   `set_duration_seconds`, `set_seed`, `start`, `pause`, `resume`, `stop`,
+//!   `reset`) plus two extensions, `get_state` and `set_voice_audio` (a
+//!   driving voice file: the windows become audio-to-video).
 //!
 //! A [`CommandTable`] validates `Command.data` like RT's model contract
 //! (types, bounds, `max_length`, choices, required fields, defaults) and
@@ -24,6 +29,11 @@ pub enum ParamType {
     Number { min: Option<f64>, max: Option<f64> },
     Boolean,
     Choice(Vec<String>),
+    /// An uploaded file (`FileRef`): the `Command.uploads[param]` reference
+    /// or `{upload_id, …}` inline; normalized to an upload reference object.
+    /// `accept`: the MIME type prefix a client should send (a hint; the
+    /// model side checks the bytes).
+    File { accept: &'static str },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,6 +97,10 @@ impl Param {
             }
             ParamType::Boolean => json!({"type": "boolean"}),
             ParamType::Choice(c) => json!({"type": "string", "enum": c}),
+            ParamType::File { accept } => json!({
+                "$ref": "#/components/schemas/ReactorUploadReference",
+                "x-reactor-file": {"accept": accept}
+            }),
         };
         if self.nullable {
             s = json!({"anyOf": [s, {"type": "null"}]});
@@ -146,6 +160,26 @@ impl Param {
                 Some(s) if c.iter().any(|x| x == s) => Ok(v.clone()),
                 _ => Err(format!("`{}` must be one of {}", self.name, c.join(", "))),
             },
+            ParamType::File { .. } => {
+                let (id, o) = match v {
+                    Value::String(s) => (s.as_str(), None),
+                    Value::Object(o) => match o.get("upload_id").and_then(Value::as_str) {
+                        Some(id) => (id, Some(o)),
+                        None => return bad("an upload reference with `upload_id`"),
+                    },
+                    _ => return bad("an upload reference"),
+                };
+                if id.is_empty() {
+                    return bad("an upload reference with a non-empty `upload_id`");
+                }
+                let f = |k: &str| o.and_then(|o| o.get(k)).cloned();
+                Ok(json!({
+                    "upload_id": id,
+                    "name": f("name").unwrap_or(json!("")),
+                    "mime_type": f("mime_type").unwrap_or(json!("")),
+                    "size": f("size").unwrap_or(json!(0)),
+                }))
+            }
         }
     }
 }
@@ -205,6 +239,7 @@ impl CommandTable {
         match mode {
             Mode::Clip => clip_table(bounds),
             Mode::Causal => causal_table(),
+            Mode::Avatar => avatar_table(),
         }
     }
 }
@@ -376,6 +411,105 @@ fn causal_table() -> CommandTable {
     CommandTable { mode: Mode::Causal, commands, messages }
 }
 
+/// Reactor `ltx` bounds (docs.reactor.inc/model-api-reference/ltx/schema).
+pub const AVATAR_SCRIPT_MAX: usize = fastvideo_engine_service::stream::avatar::SCRIPT_MAX_CHARS;
+pub const AVATAR_PROMPT_MAX: usize = fastvideo_engine_service::stream::avatar::SCENE_MAX_CHARS;
+
+fn avatar_table() -> CommandTable {
+    use fastvideo_engine_service::stream::avatar::{TAKE_MAX_S, WPM_MAX, WPM_MIN};
+    let file = |accept| ParamType::File { accept };
+    let cmd = |name, description, params, reply| CommandSpec { name, description, params, reply };
+    let commands = vec![
+        cmd(
+            "set_avatar_image",
+            "The portrait: a clear, well-lit photo with the whole head visible (PNG or JPEG). Required before start.",
+            vec![Param::new("avatar_image", file("image/"), "Uploaded image.")],
+            Some("avatar_image_accepted"),
+        ),
+        cmd(
+            "set_script",
+            "What the person says (plain text). Required before start.",
+            vec![Param::new("script", s(AVATAR_SCRIPT_MAX), "Script text.").moderate()],
+            Some("script_accepted"),
+        ),
+        cmd(
+            "set_prompt",
+            "Scene and delivery: voice, staging, lighting, mood. Empty: straight to camera.",
+            vec![Param::new("prompt", s(AVATAR_PROMPT_MAX), "Scene prompt.").moderate()],
+            Some("prompt_accepted"),
+        ),
+        cmd(
+            "set_wpm",
+            "Speech rate in words per minute; sets the derived take length.",
+            vec![Param::new("wpm", ParamType::Integer { min: Some(i64::from(WPM_MIN)), max: Some(i64::from(WPM_MAX)) }, "Words per minute (default 140).")],
+            Some("wpm_accepted"),
+        ),
+        cmd(
+            "set_duration_seconds",
+            "Take length: 4-300 s, or 0 to derive it from the script and the speech rate. A longer take is filled with idle presence.",
+            vec![Param::new("duration_seconds", ParamType::Number { min: Some(0.0), max: Some(TAKE_MAX_S) }, "Seconds, or 0.")],
+            Some("duration_accepted"),
+        ),
+        cmd("set_seed", "Seed; pin it to keep the voice.", vec![Param::new("seed", uint(), "Seed.")], Some("seed_accepted")),
+        cmd("start", "Start the take (needs the image and the script).", vec![], None),
+        cmd("pause", "Hold the take (only while generating).", vec![], None),
+        cmd("resume", "Continue a paused take.", vec![], None),
+        cmd("stop", "End the take; keeps every condition.", vec![], None),
+        cmd("reset", "Clear every condition, including the avatar image.", vec![], None),
+        cmd("get_state", "The session state (extension).", vec![], Some("state_update")),
+        cmd(
+            "set_voice_audio",
+            "Extension: a driving voice file (speech). The take follows the audio (audio-to-video per window); the script becomes an optional transcript hint. Cleared by reset.",
+            vec![Param::new("voice_audio", file("audio/"), "Uploaded audio.")],
+            Some("voice_audio_accepted"),
+        ),
+    ];
+    let m = |name, description, schema| MessageSpec { name, description, schema };
+    let n = || json!({"type": "number"});
+    let i = || json!({"type": "integer"});
+    let st = || json!({"type": "string"});
+    let b = || json!({"type": "boolean"});
+    let sent = || obj(json!({"seconds_sent": n()}), &["seconds_sent"]);
+    let messages = vec![
+        m("state_update", "Session state (on connect and after every change).", obj(json!({
+            "script": st(), "prompt": st(), "has_avatar_image": b(), "has_voice_audio": b(),
+            "wpm": i(), "wpm_min": i(), "wpm_max": i(),
+            "duration_seconds": n(), "effective_seconds": n(), "seed": i(),
+            "ready": b(), "generating": b(), "paused": b(), "finished": b(),
+            "valid_commands": {"type": "array", "items": st()},
+            "queued_changes": {"type": "array", "items": st()},
+            "window_index": i(), "total_windows": i(), "seconds_sent": n(),
+            "windows_built": i(), "stalls": i(), "stalled_seconds": n(),
+            "first_frame_seconds": {"anyOf": [n(), {"type": "null"}]}
+        }), &[])),
+        m("avatar_image_accepted", "The image was accepted.", obj(json!({"name": st(), "width": i(), "height": i()}), &["name", "width", "height"])),
+        m("script_accepted", "The script was accepted.", obj(json!({"words": i(), "derived_seconds": n(), "effective_seconds": n()}), &["words", "derived_seconds", "effective_seconds"])),
+        m("prompt_accepted", "The scene prompt was accepted.", obj(json!({"prompt": st()}), &["prompt"])),
+        m("wpm_accepted", "The speech rate was accepted.", obj(json!({"wpm": i(), "derived_seconds": n(), "effective_seconds": n()}), &["wpm", "derived_seconds", "effective_seconds"])),
+        m("duration_accepted", "The take length was accepted.", obj(json!({"duration_seconds": n(), "effective_seconds": n()}), &["duration_seconds", "effective_seconds"])),
+        m("seed_accepted", "The seed was accepted.", obj(json!({"seed": i()}), &["seed"])),
+        m("voice_audio_accepted", "Extension: the driving voice was accepted.", obj(json!({"name": st(), "seconds": n(), "effective_seconds": n()}), &["name", "seconds", "effective_seconds"])),
+        m("generation_started", "A take began.", obj(json!({"seconds": n(), "total_windows": i(), "width": i(), "height": i()}), &["seconds", "total_windows", "width", "height"])),
+        m("window_progress", "A window was streamed.", obj(json!({
+            "window_index": i(), "total_windows": i(), "seconds_sent": n(), "total_seconds": n()
+        }), &["window_index", "total_windows", "seconds_sent", "total_seconds"])),
+        m("window_built", "Extension: a window finished generating (timings).", obj(json!({
+            "window_index": i(), "total_windows": i(), "kind": st(), "frames": i(), "seconds": n(), "build_seconds": n(), "rtf": n()
+        }), &["window_index", "total_windows", "seconds", "build_seconds", "rtf"])),
+        m("window_started", "Extension: a window's first frame was sent.", obj(json!({
+            "window_index": i(), "total_windows": i(), "seconds_sent": n(), "since_start_seconds": n(), "stalled_seconds": n()
+        }), &["window_index", "total_windows", "seconds_sent", "since_start_seconds", "stalled_seconds"])),
+        m("generation_paused", "The take is paused.", sent()),
+        m("generation_resumed", "The take resumed.", sent()),
+        m("generation_stopped", "The take was stopped.", sent()),
+        m("generation_complete", "The take reached its end.", sent()),
+        m("generation_failed", "The take ended early.", obj(json!({"reason": st(), "seconds_sent": n()}), &["reason", "seconds_sent"])),
+        m("generation_reset", "Every condition was cleared.", obj(json!({"was_generating": b()}), &["was_generating"])),
+        m("command_error", "A refused command.", command_error_schema()),
+    ];
+    CommandTable { mode: Mode::Avatar, commands, messages }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +559,27 @@ mod tests {
         let names: Vec<&str> = c.commands.iter().map(|c| c.name).collect();
         assert_eq!(names, ["set_prompt", "set_paused", "set_seed", "reset", "get_state"]);
         assert!(c.validate("set_paused", &m(json!({"paused": true}))).is_ok());
+    }
+
+    #[test]
+    fn avatar_set_is_reactor_ltx() {
+        let t = CommandTable::for_mode(Mode::Avatar, b());
+        let names: Vec<&str> = t.commands.iter().map(|c| c.name).collect();
+        for want in ["set_avatar_image", "set_script", "set_prompt", "set_wpm", "set_duration_seconds", "set_seed", "start", "pause", "resume", "stop", "reset"] {
+            assert!(names.contains(&want), "{want}");
+        }
+        let msgs: Vec<&str> = t.messages.iter().map(|c| c.name).collect();
+        for want in ["state_update", "avatar_image_accepted", "script_accepted", "prompt_accepted", "wpm_accepted", "duration_accepted", "seed_accepted", "generation_started", "window_progress", "generation_paused", "generation_resumed", "generation_stopped", "generation_complete", "generation_failed", "generation_reset", "command_error"] {
+            assert!(msgs.contains(&want), "{want}");
+        }
+        assert!(t.validate("set_wpm", &m(json!({"wpm": 79}))).is_err());
+        assert!(t.validate("set_wpm", &m(json!({"wpm": 220}))).is_ok());
+        assert!(t.validate("set_duration_seconds", &m(json!({"duration_seconds": 301}))).is_err());
+        assert!(t.validate("set_script", &m(json!({"script": "x".repeat(10_001)}))).is_err());
+        let f = t.validate("set_avatar_image", &m(json!({"avatar_image": {"upload_id": "u1", "name": "a.png"}}))).unwrap();
+        assert_eq!(f["avatar_image"], json!({"upload_id": "u1", "name": "a.png", "mime_type": "", "size": 0}));
+        assert_eq!(t.validate("set_avatar_image", &m(json!({"avatar_image": "u2"}))).unwrap()["avatar_image"]["upload_id"], "u2");
+        assert!(t.validate("set_avatar_image", &m(json!({"avatar_image": {"name": "a"}}))).is_err());
+        assert!(t.validate("set_avatar_image", &m(json!({}))).is_err());
     }
 }
