@@ -155,13 +155,13 @@ Notes:
 - 720p and 1440p text-to-video now both ran on GPU (720p in the first run,
   row 1; 1440p here).
 
-## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: pending GPU run
+## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: setup
 
 The serve path for the LTX reference mode (docs/ports/ltx-ref2v.md) is built
 and tested on CPU (`scripts/serve/check.sh`: caps, routing, negotiate, the
 native body and the fal `ingredient` schema), and the engine path passed the
 GPU oracle on H100 (docs/oracle.md, "LTX-2.5 reference-to-video"). The serve
-E2E on a GPU pod is **not run yet**: it was held for budget on 2026-09-28.
+E2E on a GPU pod was held for budget on 2026-09-28 and **ran on 2026-09-29** (below).
 Everything for it is in the repo:
 
 - config `configs/serve/runpod-ltx-ref2v.toml`: only the `ltx25-ref2v`
@@ -177,3 +177,46 @@ Everything for it is in the repo:
   data URI, the oracle's prompt, seed 1024: expect 1536x896, 121 @ 24 with
   audio, plus frame 0 against the sheet), `ref2v-native` (`/fv/v1/jobs`,
   `model: ltx-pro`, `reference_urls`, `size: 1536x896`, `num_frames: 121`).
+
+### GPU run, 2026-09-29
+
+| | |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:680ffa2a…` = `ltx-sha-2cd1ba0`, the ltx variant image of main `2cd1ba0` (serve-image run 36503456884, green; contains `b38a408`). It is also the image of the `fv-serve-ltx-pod` template |
+| Config | `configs/serve/runpod-ltx-ref2v.toml`, inlined by `ltx-pod.sh` (`FV_SERVE_TOML`); state in `/fvstate`, the volume read only |
+| GPU | 1x H100 80GB HBM3, US-CA-2, US volume `s2k01690bi`, $3.49/hr. EUR-IS-1 had no RTX PRO 6000 for 6 minutes (6 tries, HTTP 500 "no instances"), so the driver fell back to the US H100 the setup above names |
+| Pod | `668xunbciyho04` (`fv-ltx-ref2v-0929023958`), created 02:40:00, deleted 02:42:54 UTC and checked gone: 174 s, **about $0.17**. Create to `/ping` 200: 84 s |
+| Driver | `ltx_e2e.py <base> artifacts/serve/e2e/ltx-ref2v probe ref2v-fal-ingredient ref2v-native` |
+| Raw results | `artifacts/serve/e2e/ltx-ref2v/results.jsonl`, frames every 10th of the fal clip: `fal-ingredient-every10.jpg` |
+
+**Result: all three cases pass.**
+
+| Case | Request | Result | Time | Output |
+|---|---|---|---|---|
+| `probe` | `/healthz`, `/fv/v1/capabilities`, `/fal/schema` | PASS: one model `ltx25-ref2v` loaded, alias `ltx-pro`, tier `max` | — | — |
+| `ref2v-fal-ingredient` | fal queue `fal-ai/ltx-2.3-quality/ingredient`, `image_url` = the reference sheet (data URI), oracle prompt, seed 1024 | PASS, `COMPLETED`; result keys `expanded_prompt, seed, timings, video` | 57.8 s (first job after boot), inference 21.2 s | 1536x896, 121 @ 24, AAC 48 kHz stereo, 2.36 MB |
+| `ref2v-native` | `/fv/v1/jobs`, `model: ltx-pro`, `reference_urls: [sheet]`, `size: 1536x896`, `num_frames: 121`, seed 1024 | PASS, `succeeded`; `resolved_model ltx25-ref2v`, recipe `ltx25-ic-lora-ingredients-dense` | 25.4 s (run 22.5 s) | 1536x896, 121 @ 24, AAC 48 kHz stereo, 2.40 MB |
+
+- Frame 0 against the sheet (both at 768x448): SSIM 0.777 (fal) and 0.771
+  (native).
+- **The clips open with the reference sheet.** Frames 0-41 (1.75 s) show
+  the sheet's four panels: the coast panels move (waves), the prop and
+  character panels stay still, and the sheet's labels come out as garbled
+  text ("Stop Reffice Rep:", "Propp"). At frame 42 there is a hard cut
+  (ffmpeg scene score 0.61 in both clips) to the generated shot: the
+  orange cartoon crab under the red and white umbrella on the wet sand in
+  front of the dark boulders, waves breaking, as the prompt describes. The
+  two APIs produce the same video (they differ only in the encode).
+  Frame 0's SSIM of 0.77 against the sheet comes from that opening; it is
+  not the "new shot" the case note above expects.
+- The engine path matched upstream `ICLoraPipeline` at the clip level
+  (docs/oracle.md, SSIM 0.982), so this opening is probably the model's own
+  behaviour for the `Reference sheet: … Generated video: …` prompt format,
+  not a serve bug. The oracle run kept no frames to confirm it. **Open
+  question for the owner:** should the ingredient endpoint trim the sheet
+  segment (the first ~1.75 s), or match whatever fal's hosted
+  `ltx-2.3-quality/ingredient` returns? Checking fal's hosted output for the
+  same request would settle it.
+- Warm run on H100: 22.5 s for 1536x896x121 with the IC-LoRA stage 1 (the
+  oracle measured about 1.0 s per stage-1 step and 1.8-2.1 s per stage-2
+  step on H100).
