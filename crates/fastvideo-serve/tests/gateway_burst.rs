@@ -1,4 +1,4 @@
-//! Burst placement on the gateway path (docs/serve/gateway.md §3.3): the
+//! Burst placement on the gateway path (docs/serve/gateway.md §3.4): the
 //! gateway reserves a slot on a pod worker when it picks it, before the
 //! dispatch call, so the concurrent submits of a burst spread over the
 //! pool instead of all landing on the worker that looked emptiest at the
@@ -464,7 +464,7 @@ async fn two_gateway_replicas_share_the_pool() {
     drop((g1, g2, ws));
 }
 
-/// The measurement (docs/serve/gateway.md §3.3): 5 jobs at once through the
+/// The measurement (docs/serve/gateway.md §3.4): 5 jobs at once through the
 /// gateway on 1 worker and on 3 workers (fake jobs of 4 x 250 ms steps, D1 at 250 ms).
 /// Prints the queue times (`created_at` → `started_at`). On 3 workers the
 /// burst takes 2 rounds (⌈5/3⌉), so no job waits two job times.

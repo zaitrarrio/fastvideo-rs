@@ -557,7 +557,9 @@ Reading it:
   only rises when a dispatch *returns*, so concurrent submits all pick the
   same worker and queue on its GPU. The DO places jobs one at a time. (A
   gateway fix, independent of this work: count the dispatch before sending
-  it.)
+  it. Done 2026-09-29: the gateway reserves the worker before the call,
+  [gateway.md](gateway.md) §3.4; 5 jobs on 3 workers went from 16.7 s to
+  3.5 s mean queue.)
 - The submit call returns earlier on the DO path (0.77–0.85 s against
   1.01 s at 250 ms D1) because it does not wait for the worker's adopt; with
   no D1 latency it costs the HTTPS enqueue to the edge (≈ 0.13 s from
@@ -568,8 +570,8 @@ Reading it:
 
 ### 9.5 Risks found
 
-- **Burst placement on the gateway path** (above): a burst of N jobs lands
-  on one pod. Not part of this change; noted for the gateway owner.
+- **Burst placement on the gateway path** (above): a burst of N jobs landed
+  on one pod. Fixed on the gateway since ([gateway.md](gateway.md) §3.4).
 - **Serialized enqueues**: the DO handles one event at a time and each
   enqueue writes SQLite and re-arms the alarm, so 5 concurrent enqueues
   took up to 185 ms each on staging. Fine at 10³ jobs/h; batch or skip the
