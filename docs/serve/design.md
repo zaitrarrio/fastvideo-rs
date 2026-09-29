@@ -156,7 +156,7 @@ text says **native**.
 |---|---|
 | MiniMax **V1** (`/v1/video_generation`, `/v1/files/*`) | V1 lists only Hailuo models and never H3 (minimax-fastvideo §0.1, §1.8). No client targets H3 over V1. Listed as stretch package S1 |
 | MiniMax Context-IR, `/v2/video_regeneration`, `resolution: 2K` | These need MiniMax platform components and a 2K upscaler we don't have (§1.6b, §3.5 #2). The endpoints return 400 |
-| LTX `audio-to-video`, `retake`, `extend`, `video-to-video-hdr`, `video-to-video-reframe` | No engine path (ltx §5 #10-13). They answer `403 permission_error` ("endpoint not available for the account"), a documented LTX type (ltx §1.5) |
+| LTX `retake`, `extend`, `video-to-video-hdr`, `video-to-video-reframe` | No engine path (ltx §5 #11-13). They answer `403 permission_error` ("endpoint not available for the account"), a documented LTX type (ltx §1.5). `audio-to-video` is served since 2026-09-29 (`Task::A2V`) |
 | FastVideo `WS /v1/stream`, image routes, playground | These are not part of the requested batch contract |
 | fal msgpack realtime WS, `ws.fal.run`, `/stream` SSE on H3 | fal does not expose them for H3 (fal §10.2-10.4) |
 | Reactor cloud coordinator (`api.reactor.inc`, `/tokens`), recording and HLS clips | The coordinator is closed source (reactor §9). We serve the **local runtime** contract. `RequestClip` answers `clip_failed` |
@@ -252,7 +252,7 @@ pub enum Task {
     I2V,        // exactly one first-frame image
     Keyframes,  // last-only or first+last (H3 fl2va, LTX last_frame_uri)
     Ref2V,      // H3 ref2va: ordered image/video/audio references
-    A2V,        // audio drives output (LTX audio-to-video)  -> Unsupported today
+    A2V,        // audio drives output (LTX audio-to-video; served on LTX-2.5 since 2026-09-29)
     Extend, Retake, V2V,                          // LTX edit endpoints -> Unsupported today
 }
 
@@ -795,7 +795,7 @@ Source: ltx §1-§3 and §5.
 | `GET /v2/{endpoint}/{id}` | `oneOf`: `pending`/`processing` `{status,id,created_at}`; `completed` adds `completed_at` and `result:{video_url}`; `failed` adds `completed_at` and `error:{type,message}`. Wrong endpoint segment → 404 |
 | `POST /v1/text-to-video`, `POST /v1/image-to-video` | Sync. 200 with `Content-Type: video/mp4` bytes; generation over `ltx.sync_timeout` → 504 |
 | `POST /v1/upload` | 200 `{upload_url, storage_uri:"ltx://uploads/<token>", expires_at, required_headers:{}}`. `PUT /uploads/{token}` accepts and ignores the `x-goog-*` headers clients copy |
-| `/v1\|v2/{audio-to-video,retake,extend,video-to-video-hdr,video-to-video-reframe}` | 403 `permission_error` |
+| `/v1\|v2/{retake,extend,video-to-video-hdr,video-to-video-reframe}` | 403 `permission_error` (`audio-to-video` is served) |
 
 Every reply carries `x-request-id` (32 hex characters).
 

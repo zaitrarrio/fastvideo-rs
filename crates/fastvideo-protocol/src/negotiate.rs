@@ -261,7 +261,14 @@ pub fn negotiate_noted(
     check_refs(req, caps)?;
     check_ref_durations(caps, staged)?;
     check_knobs(req, caps)?;
-    let audio = plan_audio(req, caps)?;
+    let mut audio = plan_audio(req, caps)?;
+    // Audio-to-video carries the driving audio itself (at its own rate; the
+    // engine decodes it to stereo).
+    if let (Task::A2V, AudioPlan::Native { rate, .. }) = (req.task, &mut audio) {
+        if let Some(r) = staged.audio_in.as_ref().and_then(|m| m.probe.audio_rate) {
+            *rate = r;
+        }
+    }
 
     let keyframes = staged
         .keyframes

@@ -1040,6 +1040,8 @@ fn a2v_takes_its_length_from_the_audio() {
     let j = negotiate(&a, &c, &with_audio(&a, Some(5.2), Some(44_100))).unwrap();
     assert_eq!((j.task, j.num_frames, j.fps), (Task::A2V, 121, 24));
     assert_eq!(j.audio_in, Some((AudioRole::Drive, "/stage/audio.wav".into())));
+    // The output carries the input audio, at its rate.
+    assert_eq!(j.audio, AudioPlan::Native { rate: 44_100, channels: 2 });
     // Exactly 5 s: 120 frames fit, 113 is the grid value below.
     assert_eq!(negotiate(&a, &c, &with_audio(&a, Some(5.0), Some(48_000))).unwrap().num_frames, 113);
     // 20 s: 480 → 473; at 25 fps 500 → the grid's 481 ceiling.

@@ -259,8 +259,39 @@ I2V_PROMPT = ("Aerial drone shot of a tropical beach: turquoise sea waves roll i
 
 def data_uri(path):
     import base64
-    mime = "image/png" if path.endswith(".png") else "image/jpeg"
+    mime = {"png": "image/png", "flac": "audio/flac", "wav": "audio/wav", "mp3": "audio/mpeg"}.get(
+        path.rsplit(".", 1)[-1], "image/jpeg")
     return f"data:{mime};base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
+# Audio-to-video (docs/oracle.md "LTX-2.5 audio-to-video"): the oracle's 7 s speech
+# clip (44.1 kHz stereo FLAC). The clip is the longest 8k+1 that fits in the
+# audio: 161 frames at 24 fps (6.71 s); the output carries the input audio.
+SPEECH = os.path.join(FIXTURES, "speech-flite-44k.flac")
+A2V_PROMPT = ("A close-up of a woman with short dark hair talking directly to the camera in a bright living "
+              "room, natural light, she speaks clearly and calmly, her lips moving with every word.")
+
+
+def audio_passthrough(case):
+    """The output's audio against the input: rate, and the first 6 s decoded at 16 kHz mono
+    (AAC round trip) correlated with the input's."""
+    p = f"{OUT}/mp4/{case}.mp4"
+    if not os.path.exists(p):
+        return
+    import numpy as np
+
+    def pcm(path):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000", "-t", "6",
+                              "-f", "f32le", "-"], capture_output=True, check=True).stdout
+        return np.frombuffer(raw, dtype="<f4")
+    a, b = pcm(SPEECH), pcm(p)
+    n = min(len(a), len(b))
+    lags = range(-2000, 2001, 16)
+    best = max(lags, key=lambda k: float(np.dot(a[max(0, k):n + min(0, k)], b[max(0, -k):n - max(0, k)])))
+    x, y = a[max(0, best):n + min(0, best)], b[max(0, -best):n - max(0, best)]
+    r = float(np.corrcoef(x, y)[0, 1]) if len(x) > 100 else None
+    record(case + "-audio", api="output audio vs input (ffmpeg)", ok=bool(r and r > 0.9), corr=r,
+           lag_ms=best / 16, input_s=round(len(a) / 16000, 3), output_s=round(len(b) / 16000, 3))
 
 
 # Reference-to-video (docs/ports/ltx-ref2v.md): the oracle's reference sheet and prompt.
@@ -382,6 +413,28 @@ CASES = {
         native("ref2v-native", {"model": "ltx-pro", "prompt": REF_PROMPT, "size": "1536x896", "num_frames": 121,
                                 "seed": 1024, "reference_urls": [data_uri(SHEET)]}, expect(121, 24, True)),
         ref_first_frame_vs_sheet("ref2v-native")),
+    # Audio-to-video (ltx-turbo pod): LTX v2, native with an image, fal fast.
+    "a2v-v2-1080p": lambda: (
+        ltx_v2("a2v-v2-1080p", {"audio_uri": data_uri(SPEECH), "prompt": A2V_PROMPT, "model": "ltx-2-5-fast"},
+               expect(161, 24, True), endpoint="audio-to-video"),
+        audio_passthrough("a2v-v2-1080p")),
+    "a2v-native-i2v-720p": lambda: (
+        native("a2v-native-i2v-720p", {"model": "ltx-turbo", "prompt": I2V_PROMPT + " A narrator speaks.",
+                                       "size": "1280x720", "seed": 11, "image_url": data_uri(BEACH),
+                                       "audio_url": data_uri(SPEECH)}, expect(161, 24, True)),
+        audio_passthrough("a2v-native-i2v-720p"),
+        os.path.exists(f"{OUT}/mp4/a2v-native-i2v-720p.mp4") and record(
+            "a2v-native-i2v-720p-fidelity", api="frame fidelity (ffmpeg)", ok=True,
+            **frame_fidelity(f"{OUT}/mp4/a2v-native-i2v-720p.mp4", [(0, BEACH)], 1280, 720))),
+    "a2v-fal-fast": lambda: (
+        fal_queue("a2v-fal-fast", "lightricks/ltx-2.5", {"audio_url": data_uri(SPEECH), "prompt": A2V_PROMPT, "seed": 5},
+                  expect(161, 24, True), sub="audio-to-video/fast"),
+        audio_passthrough("a2v-fal-fast")),
+    "a2v-errors": lambda: [
+        ltx_error("a2v-err-no-prompt", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(SPEECH)}, 400, "invalid_request_error"),
+        ltx_error("a2v-err-pro-unserved", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(SPEECH), "prompt": "p", "model": "ltx-2-5-pro"}, 403, "permission_error"),
+        ltx_error("a2v-err-image-as-audio", "POST", "/v2/audio-to-video", {"audio_uri": data_uri(BEACH), "prompt": "p", "model": "ltx-2-5-fast"}, 400, "invalid_request_error"),
+    ],
     "pro-err-20s": lambda: ltx_error("pro-err-20s", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro", seconds=20), 400, "invalid_request_error"),
 }
 

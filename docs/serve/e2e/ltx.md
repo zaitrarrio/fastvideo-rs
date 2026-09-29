@@ -177,3 +177,54 @@ Everything for it is in the repo:
   data URI, the oracle's prompt, seed 1024: expect 1536x896, 121 @ 24 with
   audio, plus frame 0 against the sheet), `ref2v-native` (`/fv/v1/jobs`,
   `model: ltx-pro`, `reference_urls`, `size: 1536x896`, `num_frames: 121`).
+
+## Audio-to-video (avatar P0), 2026-09-29
+
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-320e25b` (branch build of
+the A2V commit), `ltx-turbo` (`configs/serve/runpod-ltx.toml`, fal apps
+`fastvideo/ltx-turbo` and `lightricks/ltx-2.5`), 1x H100 80GB HBM3 on the US
+volume `s2k01690bi` (US-CA-2; no RTX PRO 6000 in EUR-IS-1 that hour),
+$3.49/h. Pod `1kfzrh1szqirmg` created 02:45:12, deleted 02:50:56 (verified,
+404): **$0.33**. Boot to `/ping` 200: 219 s (image pull included). Driver:
+`scripts/serve/e2e/ltx_e2e.py … probe a2v-v2-1080p a2v-native-i2v-720p
+a2v-fal-fast a2v-errors`. Input: the oracle's speech fixture
+(`scripts/gpu/fixtures/speech-flite-44k.flac`, 7.0 s, 44.1 kHz stereo FLAC)
+as a data URI. Raw results: `artifacts/serve/e2e/ltx-a2v/results.jsonl`;
+samples: `sample-a2v-v2-1080p-first3s.mp4`, `frame-*.jpg`.
+
+| Case | Request | Result | Time | Frames @ rate | Audio |
+|---|---|---|---|---|---|
+| probe | `/fv/v1/capabilities` | PASS: `ltx25-ltx-turbo` tasks `t2v i2v keyframes a2v` | | | |
+| `a2v-v2-1080p` | LTX `POST /v2/audio-to-video` `{audio_uri, prompt (talking head), model: ltx-2-5-fast}` | PASS, `processing` → `completed`, R2 URL | 37.5 s (first job) | 161 @ 24 (6.71 s: the longest 8k+1 clip in 7.0 s), 1920x1080 | AAC 44.1 kHz stereo; vs the input: corr 0.99999, lag 0 |
+| `a2v-native-i2v-720p` | native `/fv/v1/jobs` `{audio_url, image_url (beach), size 1280x720}` | PASS, run 20.6 s | 25.2 s | 161 @ 24, 1280x720 | same; frame 0 vs the image: SSIM 0.9776, PSNR 41.5 dB |
+| `a2v-fal-fast` | fal queue `lightricks/ltx-2.5/audio-to-video/fast` `{audio_url, prompt, seed}` | PASS, `COMPLETED`, `inference_time` 24.9 s | 34.5 s | 161 @ 24, 1920x1080 | same |
+| `a2v-err-no-prompt` | no prompt, no image | 400 `invalid_request_error` "prompt is required if image_uri is not provided" | | | |
+| `a2v-err-pro-unserved` | `model: ltx-2-5-pro` on the turbo pod | 403 `permission_error` | | | |
+| `a2v-err-image-as-audio` | a JPEG as `audio_uri` | 400 `invalid_request_error` "expected audio input, got `image/jpeg`" | | | |
+
+**Lip sync** (`scripts/gpu/lipsync_proxy.py`, the documented SyncNet
+stand-in, see h3-1080p-and-upscaler.md "Lip sync"; the flite voice is
+synthetic):
+
+| Clip | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| `a2v-v2-1080p` | 161/161 | -3 | 0.148 (-0.003) | 0.08 |
+| `a2v-fal-fast` | 161/161 | -2 | 0.279 (0.172) | 0.49 |
+| **pooled** | 2 clips | **-2 (-83 ms)** | 0.21 (0.085) | **0.29** |
+| control: the same videos with the audio shifted by 2.3 s | 2 clips | -4 (-167 ms) | 0.22 (0.027) | **-0.02** |
+
+Reading: pooled, the mouth moves with the speech (positive speech contrast,
+best lag -2 frames, at the edge of the ±2-frame window: the mouth leads the
+sound by about 80 ms); with the audio shifted the speech contrast drops to
+zero and the lag leaves the window. The proxy's correlations are weak (r
+about 0.2 even for the control), so this rules out a gross break (a frozen
+or unrelated mouth), not a subtle offset; a SyncNet score is still the
+stronger check.
+
+Notes:
+
+- Every output carries the input audio unchanged (AAC round trip, corr
+  0.99999 at lag 0), as upstream returns the input waveform. The native
+  job's `output.audio` said 48 kHz (the model's vocoder rate) while the file
+  is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
+- Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.

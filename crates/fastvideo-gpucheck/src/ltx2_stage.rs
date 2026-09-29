@@ -2295,6 +2295,18 @@ fn gen(
                 json!({"wav": out.wav}),
                 json!({"wav": ""}),
             )?;
+        } else if let Some(a) = &extras.audio {
+            // Audio-to-video: the WAV is the driving audio, stereo at its own
+            // rate, cut to the clip (`decode_audio_from_file(max_duration)`).
+            use fastvideo_cudarc::ltx2::a2v;
+            let rate = a2v::probe(&a.path).map(|(r, _)| r).unwrap_or(0);
+            let want = a2v::max_samples(g.num_frames as f64 / g.frame_rate, rate);
+            report.check(
+                ck("gen.wav"),
+                wav_bytes == 44 + (want * a2v::ENCODER_CHANNELS * 2) as u64,
+                json!({"bytes": wav_bytes}),
+                json!({"samples_per_channel": want, "sample_rate": rate, "channels": a2v::ENCODER_CHANNELS, "source": "driving audio"}),
+            )?;
         } else {
         report.check(
         ck("gen.wav"),
