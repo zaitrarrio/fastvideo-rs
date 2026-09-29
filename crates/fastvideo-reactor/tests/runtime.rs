@@ -3,6 +3,13 @@
 //! (offering VP8 like the Python reactor_sdk), v1 and v0 wire traffic,
 //! the pause gate, the black start frame, the watchdog and the orphan
 //! timeout.
+//!
+//! Waits are event-driven: [`pump`] returns as soon as its condition holds,
+//! and its limit ([`T`]) only bounds a hang, so a loaded host (the shared
+//! build pod) passes. Frame counts that hold only when the host keeps real
+//! time (a clip delivered frame for frame, a take's frame floor) are checked
+//! by the `realtime_` twins, ignored by default and run serialized by
+//! `scripts/serve/check.sh --realtime` (docs/dev/testing.md).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +31,11 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const W: &str = "/sessions/00000000-0000-0000-0000-000000000000/transport/webrtc";
+
+/// How long a wait for something that must happen may take before the test
+/// fails. Generous: video waits for an ffmpeg encoder process, which starts
+/// in seconds on a loaded host.
+const T: Duration = Duration::from_secs(60);
 
 fn engine(model: FakeModel, load: Duration) -> EngineService {
     let fc = FakeConfig {
@@ -125,7 +137,7 @@ async fn connect(app: &Router, audio: bool) -> Client {
             break v["sdp_answer"].as_str().unwrap().to_owned();
         }
         assert_eq!(s, StatusCode::ACCEPTED, "{v}");
-        assert!(t0.elapsed() < Duration::from_secs(10));
+        assert!(t0.elapsed() < T, "no answer");
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     // Taken: a second GET is 202 again.
@@ -140,7 +152,7 @@ async fn connect(app: &Router, audio: bool) -> Client {
     let mut connected = false;
     let t0 = Instant::now();
     while !(connected && open.len() == 2) {
-        let ev = tokio::time::timeout(Duration::from_secs(10), peer.next_event()).await.expect("connect timeout");
+        let ev = tokio::time::timeout(T, peer.next_event()).await.expect("connect timeout");
         match ev {
             Some(PeerEvent::Connected) => connected = true,
             Some(PeerEvent::ChannelOpen { label }) => {
@@ -150,7 +162,7 @@ async fn connect(app: &Router, audio: bool) -> Client {
             Some(_) => {}
             None => panic!("peer gone"),
         }
-        assert!(t0.elapsed() < Duration::from_secs(10));
+        assert!(t0.elapsed() < T, "connect timeout");
     }
     Client { peer, host, cid }
 }
@@ -307,8 +319,15 @@ async fn lifecycle_routes_and_codes() {
     // A bad offer: 202, then the poll reports the failure.
     let (s, _, _) = call(&app, "POST", &format!("{W}/connections/{cid}/sdp_params"), Some(json!({"sdp_offer": "v=0\r\n"}))).await;
     assert_eq!(s, StatusCode::ACCEPTED);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let (s, _, v) = call(&app, "GET", &format!("{W}/connections/{cid}/sdp_params"), None).await;
+    // 202 while the offer is processed, then the failure.
+    let t0 = Instant::now();
+    let (s, v) = loop {
+        let (s, _, v) = call(&app, "GET", &format!("{W}/connections/{cid}/sdp_params"), None).await;
+        if s != StatusCode::ACCEPTED || t0.elapsed() > T {
+            break (s, v);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
 
     // CLOSING → READY.
@@ -330,6 +349,18 @@ async fn lifecycle_routes_and_codes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v1_client_av_session() {
+    v1_av_session(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time delivery: scripts/serve/check.sh --realtime"]
+async fn realtime_v1_client_av_session() {
+    v1_av_session(true).await;
+}
+
+/// `realtime`: also check that the clip arrives frame for frame and mostly
+/// as inter frames (a loaded host sheds frames and forces keyframes).
+async fn v1_av_session(realtime: bool) {
     let e = engine(FakeModel::h3_turbo(), Duration::ZERO);
     e.wait_ready().await;
     let (rt, app) = runtime(e, |_| {}).await;
@@ -343,7 +374,7 @@ async fn v1_client_av_session() {
     h.send_message(control(C::Ping(pb::Ping {}), "", K::Notification)).await.unwrap();
     let mut seen = Seen::default();
     // The greeting (state_update + queue_update) arrives as v1.
-    pump(&mut peer, &mut seen, Duration::from_secs(3), |s| !s.model("queue_update").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("queue_update").is_empty()).await;
     assert_eq!(seen.model("state_update").len(), 1, "{seen:?}");
     assert!(seen.text.is_empty(), "v0 text on a v1 connection: {:?}", seen.text);
     assert_eq!(rt.state(), RtState::Streaming);
@@ -357,10 +388,10 @@ async fn v1_client_av_session() {
     h.send_message(control(C::RequestClip(pb::RequestClip { duration_seconds: 2.0 }), "ctrl_3", K::Request)).await.unwrap();
     h.send_message(control(C::ResumeTrack(pb::ResumeTrack { name: "main_video".into() }), "", K::Notification)).await.unwrap();
     h.send_message(control(C::ResumeTrack(pb::ResumeTrack { name: "main_audio".into() }), "", K::Notification)).await.unwrap();
-    // Video waits for the encoder to start: an ffmpeg process, 1-3 s on a
+    // Video waits for the encoder to start: an ffmpeg process, seconds on a
     // loaded host (the shared build pod); the pump returns as soon as it
     // has everything.
-    pump(&mut peer, &mut seen, Duration::from_secs(10), |s| s.control.len() >= 3 && !s.video.is_empty() && s.audio > 5).await;
+    pump(&mut peer, &mut seen, T, |s| s.control.len() >= 3 && !s.video.is_empty() && s.audio > 5).await;
     use pb::control_server_message::Payload as CS;
     let by = |rid: &str| seen.control.iter().find(|m| m.request_id == rid).and_then(|m| m.payload.clone());
     let Some(CS::ModelSchema(ms)) = by("ctrl_1") else { panic!("{:?}", seen.control) };
@@ -378,7 +409,7 @@ async fn v1_client_av_session() {
     h.send_message(command("set_seed", json!({"seed": -1}), "data_3")).await.unwrap();
     h.send_message(command("nope", json!({}), "data_4")).await.unwrap();
     h.send_message(command("play", json!({}), "data_5")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(3), |s| (1..=5).all(|i| s.reply(&format!("data_{i}")).is_some())).await;
+    pump(&mut peer, &mut seen, T, |s| (1..=5).all(|i| s.reply(&format!("data_{i}")).is_some())).await;
     let state = seen.model("state_update").into_iter().find(|(r, _)| r == "data_1").expect("get_state reply").1;
     assert_eq!(state["autoplay"], false);
     assert!(state["valid_commands"].as_array().unwrap().iter().any(|c| c == "enqueue"));
@@ -389,13 +420,13 @@ async fn v1_client_av_session() {
     assert!(matches!(&seen.reply("data_4").unwrap().payload, Some(DS::Error(e)) if e.code == "invalid_command"));
     // `play` with nothing queued: refused by broadcast, bodyless ack.
     assert_eq!(seen.reply("data_5").unwrap().payload, None);
-    pump(&mut peer, &mut seen, Duration::from_secs(2), |s| !s.model("command_error").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("command_error").is_empty()).await;
     assert_eq!(seen.model("command_error")[0].1["command"], "play");
 
     // A clip end to end: queued, generated, started, finished, then black.
     let v0 = seen.video.len();
     h.send_message(command("enqueue", json!({"prompt": "a red kite", "metadata": "k1"}), "data_6")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(30), |s| !s.model("clip_finished").is_empty()).await;
+    pump(&mut peer, &mut seen, 2 * T, |s| !s.model("clip_finished").is_empty()).await;
     let (rid, q) = seen.model("clip_queued").remove(0);
     assert_eq!(rid, "data_6");
     assert_eq!(q["clip"]["metadata"], "k1");
@@ -403,24 +434,37 @@ async fn v1_client_av_session() {
         assert_eq!(seen.model(t).len(), 1, "{t}");
     }
     let frames = q["clip"]["frames"].as_u64().unwrap() as usize;
-    pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
-    let sent = seen.video.len() - v0;
-    assert!(sent > frames, "{sent} video frames for a {frames}-frame clip (+ black)");
-    // The peer starts on a key frame. With ffmpeg libvpx the rest are
-    // mostly inter frames; the libwebp fallback sends only key frames.
+    // The peer starts on a key frame.
     assert!(seen.video[0].0, "first frame is not a key frame");
-    let keys = seen.video.iter().filter(|(k, _)| *k).count();
-    if fastvideo_media::vp8::libvpx_available() {
-        assert!(keys * 4 < seen.video.len(), "{keys} key frames of {}", seen.video.len());
+    if realtime {
+        pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
+        let sent = seen.video.len() - v0;
+        assert!(sent > frames, "{sent} video frames for a {frames}-frame clip (+ black)");
+        // With ffmpeg libvpx the rest are mostly inter frames (a host that
+        // sheds frames forces keyframes); the libwebp fallback sends only
+        // key frames.
+        let keys = seen.video.iter().filter(|(k, _)| *k).count();
+        if fastvideo_media::vp8::libvpx_available() {
+            assert!(keys * 4 < seen.video.len(), "{keys} key frames of {}", seen.video.len());
+        } else {
+            assert_eq!(keys, seen.video.len());
+        }
     } else {
-        assert_eq!(keys, seen.video.len());
+        // The clip's frames reach the peer (a loaded host may shed some).
+        pump(&mut peer, &mut seen, T, |s| s.video.len() > v0).await;
+        assert!(seen.video.len() > v0, "no video frames for a {frames}-frame clip");
+        // The libwebp fallback sends only key frames, loaded or not.
+        if !fastvideo_media::vp8::libvpx_available() {
+            let keys = seen.video.iter().filter(|(k, _)| *k).count();
+            assert_eq!(keys, seen.video.len());
+        }
     }
 
     // Stop with a reason: session_ended, then the wire closes; READY.
     let (s, _, _) = call(&app, "POST", "/stop_session", Some(json!({"reason": "bye"}))).await;
     assert_eq!(s, StatusCode::OK);
     let ended = |s: &Seen| s.control.iter().any(|m| matches!(&m.payload, Some(CS::SessionEnded(e)) if e.reason == "bye"));
-    pump(&mut peer, &mut seen, Duration::from_secs(5), ended).await;
+    pump(&mut peer, &mut seen, T, ended).await;
     assert!(ended(&seen), "{:?}", seen.control);
     assert!(seen.control.iter().any(|m| m.kind == pb::MessageKind::Notification as i32));
     assert_eq!(rt.state(), RtState::Ready);
@@ -448,7 +492,7 @@ async fn v0_client_video_only() {
     h.send_message(ChannelMessage::text("control", r#"{"type":"notification","event":"resume_track","data":{"name":"main_video"}}"#)).await.unwrap();
     let mut seen = Seen::default();
     // As in `v1_client_av_session`: video waits for the encoder to start.
-    pump(&mut peer, &mut seen, Duration::from_secs(10), |s| {
+    pump(&mut peer, &mut seen, T, |s| {
         s.text.iter().any(|(_, v)| v["data"]["type"] == "modelSchema")
             && s.text.iter().filter(|(_, v)| v["data"]["type"] == "state_update").count() >= 2
             && s.text.iter().any(|(l, _)| l == "control")
@@ -532,7 +576,7 @@ async fn causal_session_setters() {
     h.send_message(command("set_prompt", json!({"prompt": "a road"}), "data_1")).await.unwrap();
     h.send_message(command("get_state", json!({}), "data_2")).await.unwrap();
     let mut seen = Seen::default();
-    pump(&mut peer, &mut seen, Duration::from_secs(10), |s| s.video.len() > 20 && s.reply("data_2").is_some()).await;
+    pump(&mut peer, &mut seen, T, |s| s.video.len() > 20 && s.reply("data_2").is_some()).await;
     assert_eq!(seen.reply("data_1").unwrap().payload, None, "setter → bodyless ack");
     let st = seen.model("state_update").into_iter().find(|(r, _)| r == "data_2").unwrap().1;
     assert_eq!(st["prompt"], "a road");
@@ -574,13 +618,13 @@ async fn causal_session_ends_at_its_length_limit() {
             |s: &Seen| s.control.iter().any(|m| matches!(&m.payload, Some(CS::SessionEnded(e)) if e.reason == want));
         let t0 = Instant::now();
         let mut seen = Seen::default();
-        pump(&mut peer, &mut seen, Duration::from_secs(20), |s| ended(s) && !s.video.is_empty()).await;
+        pump(&mut peer, &mut seen, T, |s| ended(s) && !s.video.is_empty()).await;
         assert!(ended(&seen), "{:?}", seen.control);
         assert!(!seen.video.is_empty(), "no video received");
         // Not before the limit: the clock starts at the first frame.
         assert!(t0.elapsed() >= Duration::from_secs(u64::from(limit)), "{:?}", t0.elapsed());
         let t1 = Instant::now();
-        while rt.state() != RtState::Ready && t1.elapsed() < Duration::from_secs(5) {
+        while rt.state() != RtState::Ready && t1.elapsed() < T {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(rt.state(), RtState::Ready);
@@ -619,6 +663,17 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 /// and resumes, completes, and reset clears the conditions.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn avatar_script_take_streams_in_windows() {
+    avatar_take(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time delivery: scripts/serve/check.sh --realtime"]
+async fn realtime_avatar_script_take_streams_in_windows() {
+    avatar_take(true).await;
+}
+
+/// `realtime`: also check the take's video frame floor.
+async fn avatar_take(realtime: bool) {
     use fastvideo_reactor::engine::Mode;
     use fastvideo_reactor::AvatarSettings;
     use pb::control_client_message::Payload as C;
@@ -667,7 +722,7 @@ async fn avatar_script_take_streams_in_windows() {
     let mut seen = Seen::default();
     // Greeting, then `start` without an image: refused.
     h.send_message(command("start", json!({}), "d1")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("command_error").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("command_error").is_empty()).await;
     assert!(seen.model("state_update")[0].1["has_avatar_image"] == false);
     assert_eq!(seen.model("command_error")[0].1["reason"], "set_avatar_image first");
 
@@ -678,7 +733,7 @@ async fn avatar_script_take_streams_in_windows() {
     h.send_message(command("set_script", json!({"script": script}), "d3")).await.unwrap();
     h.send_message(command("set_wpm", json!({"wpm": 300}), "d4")).await.unwrap();
     h.send_message(command("set_seed", json!({"seed": 11}), "d5")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(15), |s| s.reply("d5").is_some() && s.reply("d2b").is_some()).await;
+    pump(&mut peer, &mut seen, T, |s| s.reply("d5").is_some() && s.reply("d2b").is_some()).await;
     let acc = seen.model("avatar_image_accepted");
     assert_eq!(acc[0].1, json!({"name": "face.png", "width": 96, "height": 96}), "{acc:?}");
     use pb::data_server_message::Payload as DS;
@@ -692,7 +747,7 @@ async fn avatar_script_take_streams_in_windows() {
     let v0 = seen.video.len();
     let a0 = seen.audio;
     h.send_message(command("start", json!({}), "d6")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(20), |s| !s.model("window_started").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("window_started").is_empty()).await;
     let started = seen.model("generation_started");
     assert_eq!(started.len(), 1, "{:?}", seen.model("command_error"));
     let total = started[0].1["total_windows"].as_u64().unwrap();
@@ -700,10 +755,10 @@ async fn avatar_script_take_streams_in_windows() {
     assert_eq!((started[0].1["width"].as_u64(), started[0].1["height"].as_u64()), (Some(128), Some(64)));
     // Pause and resume mid-take.
     h.send_message(command("pause", json!({}), "d7")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("generation_paused").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("generation_paused").is_empty()).await;
     h.send_message(command("pause", json!({}), "d7b")).await.unwrap();
     h.send_message(command("resume", json!({}), "d8")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(60), |s| !s.model("generation_complete").is_empty()).await;
+    pump(&mut peer, &mut seen, 2 * T, |s| !s.model("generation_complete").is_empty()).await;
     assert_eq!(seen.model("generation_resumed").len(), 1);
     assert!(seen.model("command_error").iter().any(|(_, e)| e["command"] == "pause"), "second pause refused");
     let progress = seen.model("window_progress");
@@ -718,11 +773,17 @@ async fn avatar_script_take_streams_in_windows() {
     let secs = done["seconds_sent"].as_f64().unwrap();
     let effective = sa["effective_seconds"].as_f64().unwrap();
     assert!((secs - effective).abs() < 0.1, "sent {secs} of {effective}");
-    pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
-    let frames = seen.video.len() - v0;
-    // Played at 3x real time: the encoder's drop-oldest input queue may shed
-    // frames on a loaded host, so only a floor is checked.
-    assert!(frames as f64 >= effective * 24.0 * 0.4, "{frames} frames for {effective} s");
+    if realtime {
+        pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
+        let frames = seen.video.len() - v0;
+        // Played at 3x real time: the encoder's drop-oldest input queue may
+        // shed frames, so only a floor is checked.
+        assert!(frames as f64 >= effective * 24.0 * 0.4, "{frames} frames for {effective} s");
+    } else {
+        // The take's video reaches the peer (a loaded host sheds frames).
+        pump(&mut peer, &mut seen, T, |s| s.video.len() > v0).await;
+        assert!(seen.video.len() > v0, "no video frames for the take");
+    }
     assert!(seen.audio - a0 > 50, "{} audio packets", seen.audio - a0);
     let st = seen.model("state_update").last().unwrap().1.clone();
     assert_eq!(st["finished"], true);
@@ -730,9 +791,9 @@ async fn avatar_script_take_streams_in_windows() {
 
     // A queued change while generating is listed; reset clears everything.
     h.send_message(command("reset", json!({}), "d9")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("generation_reset").is_empty()).await;
+    pump(&mut peer, &mut seen, T, |s| !s.model("generation_reset").is_empty()).await;
     h.send_message(command("get_state", json!({}), "d10")).await.unwrap();
-    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| s.reply("d10").is_some()).await;
+    pump(&mut peer, &mut seen, T, |s| s.reply("d10").is_some()).await;
     let st = seen.model("state_update").into_iter().find(|(r, _)| r == "d10").unwrap().1;
     assert_eq!(st["has_avatar_image"], false);
     assert_eq!(st["script"], "");
