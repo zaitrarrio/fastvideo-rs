@@ -23,6 +23,7 @@ use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
 mod attn3;
+mod vsa_dc;
 
 fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
     device::global_device().ok_or_else(|| anyhow::anyhow!("no live CUDA device"))
@@ -2253,6 +2254,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     group(&mut c, "attn3_bench", attn3::bench)?;
     group(&mut c, "vsa_stages", attn3::vsa_stages)?;
     group(&mut c, "attn_dc", attn2::dc_parity)?;
+    group(&mut c, "vsa_dc", vsa_dc::run)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.
