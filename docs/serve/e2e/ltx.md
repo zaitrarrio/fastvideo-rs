@@ -355,3 +355,53 @@ Notes:
   job's `output.audio` said 48 kHz (the model's vocoder rate) while the file
   is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
 - Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.
+
+## Retake and extend (avatar P0-4), 2026-09-29
+
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-7392995` (branch build of
+the retake/extend commit), `ltx-pro` (`configs/serve/runpod-ltx.toml`, fal
+apps now including `fal-ai/ltx-2.3`), 1x H100 80GB HBM3 on the US volume
+`s2k01690bi` (no RTX PRO 6000 in stock in either region that hour),
+$3.49/h. Run twice; the first run's artifacts were lost in a container
+restart, and the second reproduced every number below within noise (the
+table is the second run). Pods `b49a41mw3fybmk` (09:56:48-09:59:38) and
+`9g9nk44q0g21c8` (10:25:03-10:28:14), both deleted and verified (404):
+**$0.36**. Boot to `/ping` 200: 63 s and 67 s. Driver:
+`scripts/serve/e2e/ltx_e2e.py … probe retake-v2 retake-fal-audio extend-fal
+extend-native-start edit-errors`. Input: the oracle's source clip
+`scripts/gpu/fixtures/beach-push-768x512-24fps.mp4` (a slow zoom over the
+beach still, 121 frames at 24 fps, 768x512, H.264 with AAC 44.1 kHz stereo
+speech) as a data URI. Raw results: `artifacts/serve/e2e/ltx-v2v/results.jsonl`
+(data URIs stripped); sample `sample-retake-v2.mp4`, stills `frame-*.jpg`.
+
+| Case | Request | Result | Time | Output | Kept frames vs the source |
+|---|---|---|---|---|---|
+| probe | `/fv/v1/capabilities` | PASS: `ltx25-ltx-pro` (tier `max`) | | | |
+| `retake-v2` | LTX `POST /v2/retake` `{video_uri, start_time 1.5, duration 2, prompt}` (both modalities) | PASS, `processing` → `completed`, R2 URL | 43.4 s (first job, cold; 17.0 s in the first run) | 121 @ 24, 768x512, AAC 48 kHz stereo | frames 0-32 and 89-120: SSIM 0.979, PSNR 43.0 dB |
+| `retake-fal-audio` | fal queue `fal-ai/ltx-2.3/retake-video` `{…, retake_mode: replace_audio, seed 7}` | PASS, `COMPLETED`, `inference_time` 5.4 s | 12.0 s | 121 @ 24 | all 121 (video frozen): SSIM 0.980, PSNR 43.1 dB |
+| `extend-fal` | fal queue `fal-ai/ltx-2.3/extend-video` `{video_url, prompt, duration 2, seed 7}` (mode `end`, full context) | PASS, `inference_time` 7.4 s | 18.9 s | 169 @ 24 (121 + 48) | frames 0-104: SSIM 0.979, PSNR 43.0 dB |
+| `extend-native-start` | native `/fv/v1/jobs` `{video_url, extend_s 2, extend_at start, context_s 2}` | PASS, run 7.5 s | 12.4 s | 169 @ 24: 48 new + 41 context (generated) + 80 source frames stitched | source frames 41-120 at output 89-168: SSIM 0.988, PSNR 46.2 dB |
+| `retake-err-past-end` | `/v2/retake` `start_time 6` on the 5.04 s clip | 400 `invalid_request_error` "start_time 6 s must be less than the video's usable length 5.042 s (121 frames)" | | | |
+| `extend-err-image` | a JPEG as `video_uri` | 400 `invalid_request_error` "`video_url`: expected video input, got `image/jpeg`" | | | |
+| `extend-err-too-long` | `duration 25` | 400 `invalid_request_error` "duration must be between 2 and 20 seconds" | | | |
+
+Reading:
+
+- Kept frames carry the source through a VAE round trip (43 dB, as the
+  reference's own output: docs/oracle.md "LTX-2.5 retake and extend"); the
+  stitched frames of the short-context extension skip the VAE and are closer
+  (46 dB: a resize and an H.264 re-encode only).
+- The retaken window (frames 33-88) is at 40.6 dB against the source, only
+  2.4 dB below the kept frames, even though it starts from pure noise. This
+  is the model, not a pinned window: the upstream reference retake of the
+  same clip and window lands at 40.5 dB too. The fixture (a zoom over a
+  still photograph) has nothing to regenerate that its context does not
+  already fix; a real clip with motion is the better demonstration and was
+  not run.
+- The extension's new frames (stills `frame-extend-*`) continue the push-in
+  without a seam.
+- Warm latency at 768x512: 5.4 s of inference for a 5 s retake, 7.4 s for
+  an extension to 7 s (one distilled stage, 8 steps), plus ~5 s of
+  upload/probe/encode.
+- The native job lists `recipe: ltx25-distill-two-stage-dense` (the tier's
+  label); edits always run the single distilled stage at the source size.
