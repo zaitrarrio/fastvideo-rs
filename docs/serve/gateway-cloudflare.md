@@ -1,8 +1,9 @@
 # Gateway on Cloudflare Workers + Durable Objects (workers-rs): assessment
 
-Status: design 2026-09-29; **phases 0 and 1 are implemented as a parallel
-path** (the owner: "let's test durable objects as a parallel deployment
-path"): see §9 for the results and §10 for how to run it. The fv-serve
+Status: design 2026-09-29; **phases 0, 1 and 2 are implemented as a
+parallel path** (the owner: "let's test durable objects as a parallel deployment
+path"): see §9 for the results (phase 2: §9.7–§9.9, with a real GPU
+worker and a production-readiness checklist) and §10 for how to run it. The fv-serve
 gateway path stays the default and unchanged; a pod pool opts in with
 `dispatch = "durable-object"`. A staging Worker runs at
 `https://fv-edge-staging.maximalize.workers.dev`. The owner asked: "on queue handling, what if we use workers-rs to
@@ -564,9 +565,7 @@ Reading it:
   1.01 s at 250 ms D1) because it does not wait for the worker's adopt; with
   no D1 latency it costs the HTTPS enqueue to the edge (≈ 0.13 s from
   EU-RO-1).
-- A real GPU worker (optional in the task) was not run: the worker side
-  of this path is not in any published image yet, and building one is a
-  release step. The fake-engine runs above exercise the same code.
+- A real GPU worker was not run in phase 1; phase 2 ran one (§9.8).
 
 ### 9.5 Risks found
 
@@ -670,7 +669,38 @@ behind too. The first four rows ran before the gateway's burst placement fix
 jobs on the gateway path (0.5 s, its two D1 round trips), and the DO path
 stays 4–25× faster (0.02 s serial, 0.12 s p50 for 5 at once).
 
-GPU_RESULTS_PLACEHOLDER
+### 9.8 One real GPU worker (2026-09-29)
+
+One h3-turbo worker pod (image `fastvideo-rs-serve:h3-turbo-sha-a6104dd`,
+built by the normal main CI with phase 2) on an RTX PRO 6000 in EUR-IS-1
+with the EU volume, `scripts/serve/edge-gpu-test.sh`: the pod held a socket
+to `fv-edge-staging` (pool `gpu-h3`) and served the gateway's internal
+routes at the same time. A local fv-serve gateway (release build, in the
+agent's container, D1 `fv-jobs`) ran twice against it, once per `dispatch`
+mode: one warm-up job, then 5 text-to-video jobs one at a time (h3-turbo
+defaults, 26.2 s of GPU run each).
+
+| path | queue p50 | mean | max | of which `dispatch` (created → inputs in place) | `wait` (→ GPU start) | submit call |
+|---|---:|---:|---:|---|---|---:|
+| gateway | 1.136 s | 1.108 s | 1.299 s | 0.61–0.98 s (D1 insert + the Runpod proxy hop) | 0.31–0.37 s (the worker's D1 adopt) | 1.27–1.66 s |
+| durable-object | **0.494 s** | 0.512 s | 0.792 s | 0.38–0.79 s (enqueue to the edge + push) | **0.000 s** | 0.78–1.13 s |
+
+- The DO path removes the adopt entirely (`wait` 0: the engine starts on the
+  push) and the D1 insert from the dispatch: queue time **−57 %** (p50 1.14 →
+  0.49 s) on a real GPU.
+- What is left is the gateway's hop to the edge. This gateway ran in the
+  agent's container behind an egress proxy, where one request to the
+  Worker costs 0.2–0.6 s (measured with curl: TLS through the proxy); from
+  the build pod (EU-RO-1) the same enqueue + push is 20–30 ms (§9.7). With
+  the gateway on its usual CPU pod the DO path should land near the staging
+  bench (≈ 0.05 s + engine start), but that was not measured here; the
+  ≤ 0.4 s target is met on the staging path, not in this GPU setup.
+- Every job ran once; the DO rows carried lease 1; the worker's version and
+  sha (`a6104dd`) showed in the DO status.
+- This run applied migration 3 (`jobs.lease`, additive) to `fv-jobs`.
+- Cost: the pod ran 11 min (13:47–13:58 UTC) at $2.09/h ≈ **$0.39**; it was
+  deleted and `GET /pods/<id>` answered 404. Backstops: the pod's own
+  watchdog (cap 70 min, 10 min at 0 % GPU) and a local loop.
 
 ### 9.9 Production-readiness checklist
 
@@ -693,6 +723,7 @@ Before production:
 - [ ] alerts on the DO: `restage` and `failed` counts in `/pools/{pool}/status`, workers connected per pool, `wrangler tail` errors; Workers Logs retention
 - [ ] a deploy runbook: deploys drop every socket (recovery measured at 0.25–0.3 s); avoid deploying during large bursts, or accept one ack timeout (10 s) for jobs pushed in the gap
 - [ ] load: one DO per pool handles about 10 enqueues per second in this setup; shard a pool per region above that
+- [ ] the real-GPU queue time with the gateway on its CPU pod (§9.8 ran it from the agent container, whose egress proxy dominated)
 - [ ] rollback: set the pool back to `dispatch = "gateway"` (the workers keep their internal routes; they need their public URL again)
 
 ## 10. How to run the parallel path
