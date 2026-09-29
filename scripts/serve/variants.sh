@@ -60,3 +60,29 @@ fv_variant_image() {
   fi
   echo "${img:-$FV_SERVE_REPO:$1}"
 }
+
+# fv_image_env_json <image> -> the env that tells fv-serve which image it runs
+# ({FV_IMAGE_REF, FV_IMAGE_DIGEST, FV_RELEASE_CHANNEL when set}; /health
+# reports them, docs/serve/releases.md).
+fv_image_env_json() {
+  jq -nc --arg image "$1" --arg ch "${FV_RELEASE_CHANNEL:-}" '{FV_IMAGE_REF: $image}
+    + (if ($image | contains("@sha256:")) then {FV_IMAGE_DIGEST: ($image | split("@")[1])} else {} end)
+    + (if $ch == "" then {} else {FV_RELEASE_CHANNEL: $ch} end)'
+}
+
+# fv_default_image -> the all-in-one image deploys boot when nothing names
+# one: :$FV_DEFAULT_CHANNEL (default stable), or :latest while that channel
+# tag does not exist yet (before the first `release.sh promote`).
+fv_default_image() {
+  local ch="${FV_DEFAULT_CHANNEL:-stable}" repo tok code
+  repo="${FV_SERVE_REPO#*/}"
+  tok="$(curl -sS --max-time 15 "${FV_REGISTRY_API:-https://ghcr.io}/token?scope=repository:$repo:pull" 2>/dev/null | jq -r '.token // empty' 2>/dev/null || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -I -H @<(printf 'Authorization: Bearer %s\n' "$tok") \
+    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+    "${FV_REGISTRY_API:-https://ghcr.io}/v2/$repo/manifests/$ch" 2>/dev/null || true)"
+  if [[ "$code" == 200 ]]; then echo "$FV_SERVE_REPO:$ch"
+  else
+    echo "variants: no :$ch tag yet; using :latest" >&2
+    echo "$FV_SERVE_REPO:latest"
+  fi
+}
