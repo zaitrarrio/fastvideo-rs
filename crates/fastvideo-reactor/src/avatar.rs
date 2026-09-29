@@ -519,7 +519,9 @@ impl Driver for AvatarDriver {
     }
 
     async fn close(&self) {
+        tracing::info!("avatar driver closing");
         self.inner.player.close().await;
+        tracing::info!("avatar player closed");
         let _ = std::fs::remove_dir_all(&self.inner.dir);
     }
 }

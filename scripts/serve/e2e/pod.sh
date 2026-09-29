@@ -131,7 +131,7 @@ cmd_bundle() {
   local tgz; tgz="$(mktemp)"
   tar czf "$tgz" -C "$ROOT" tests/compat/package.json tests/compat/package-lock.json tests/compat/requirements.txt \
     tests/compat/suites crates/fastvideo-reactor/tests/compat/reactor_sdk_compat.py tests/console/smoke.cjs \
-    tests/console/avatar.cjs scripts/gpu/lipsync_proxy.py scripts/serve/e2e
+    tests/console/avatar.cjs scripts/gpu/lipsync_proxy.py scripts/gpu/fixtures/speech-flite-44k.flac scripts/serve/e2e
   side /bundle 120 -X PUT --data-binary "@$tgz" -H 'content-type: application/gzip'; echo
   rm -f "$tgz"
 }

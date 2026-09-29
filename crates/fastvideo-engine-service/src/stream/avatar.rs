@@ -726,7 +726,7 @@ impl Player {
                     Some(Msg::Resume(r)) => { let x = self.pause(false).await; let _ = r.send(x); }
                     Some(Msg::Stop(r)) => { let x = self.stop().await; let _ = r.send(x); }
                     Some(Msg::Audience(b)) => self.audience = b,
-                    Some(Msg::Close(tx)) => { closer = Some(tx); break; }
+                    Some(Msg::Close(tx)) => { tracing::info!(session = %self.session.id(), "avatar player: close"); closer = Some(tx); break; }
                     None => break,
                 },
                 Some(done) = builds.recv() => self.apply_build(done).await,
@@ -745,6 +745,7 @@ impl Player {
             let _ = std::fs::remove_dir_all(&self.session_dir);
         }
         self.session.end();
+        tracing::info!(session = %self.session.id(), "avatar player: session released");
         if let Some(tx) = closer {
             let _ = tx.send(());
         }
