@@ -2272,7 +2272,14 @@ fn gen(
         json!({"prompt": out.prompt_tokens, "video": out.video_tokens, "audio": out.audio_tokens}),
     );
 
-        let want_steps = if two_stage { 11 } else { 8 };
+        // Distilled: 8 (+ 3 refine); guided A2V: its stage-1 steps (30) + 3.
+        let stage1 = match &extras.guided {
+            Some(_) => request
+                .num_inference_steps
+                .unwrap_or(fastvideo_models::ltx2::guidance::LTX25_DEV_STEPS),
+            None => request.stage1_steps(),
+        };
+        let want_steps = stage1 + if two_stage { request.stage2_steps() } else { 0 };
         let finite = stats.iter().all(|s| {
             s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4)
         });
