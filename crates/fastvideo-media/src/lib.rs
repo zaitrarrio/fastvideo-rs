@@ -13,6 +13,8 @@
 //! | [`pipe`] | ffmpeg pipe-encoder processes: EOF flush on a keyframe restart, one warm pre-primed spare per streaming session ([`pipe::SparePool`]), restart latency metrics |
 //! | [`vp8`] | Inter-frame VP8 via ffmpeg `libvpx` (IVF over a pipe; forced keyframes restart the process) for peers without H.264 |
 //! | [`scale`] | Pre-encode canvas scaler (fit+pad or stretch) |
+//! | [`decode`] | Client video in: warm ffmpeg decode pipe (VP8 in IVF, H.264 Annex-B → RGB24 at the model's input size), keyframe probes |
+//! | [`ring`] | Timestamped drop-oldest ring buffers for decoded client input ([`ring::InputBuffers`]) |
 //! | [`h264`] | Annex-B / SPS helpers and the H.264 level table |
 //! | [`mp4`] | ffmpeg MP4 writer and `finalize` (faststart, `-an`, crop), plus a pure-Rust box inspector |
 //! | [`probe`] | `MediaProbe` via the image crate, ffprobe, or the MP4 inspector; decoding helpers |
@@ -27,6 +29,7 @@
 pub mod av;
 pub mod clock;
 pub mod crossfade;
+pub mod decode;
 pub mod error;
 pub mod h264;
 pub mod lockstep;
@@ -37,6 +40,7 @@ pub mod pipe;
 pub mod probe;
 pub mod queue;
 pub mod resample;
+pub mod ring;
 pub mod scale;
 pub mod sink;
 pub mod tools;

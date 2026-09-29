@@ -16,6 +16,15 @@
 //!   (the WHIP publisher, and loopback tests).
 //! - [`PeerHandle`]: pre-encoded H.264/Opus writes, data-channel sends, the
 //!   per-mid pause gate, close. [`Peer`] also yields [`PeerEvent`]s.
+//! - **Receiving** (client camera and microphone, design §5.11): an answer
+//!   with [`AnswerOptions::receive`] accepts the client's sending m-lines
+//!   (VP8/H.264, Opus), caps their bitrate (`b=AS` in the answer,
+//!   and inbound media over the cap is dropped), and delivers depacketized
+//!   frames as [`InboundMedia`] on a **bounded** queue
+//!   ([`Peer::take_inbound`]): a consumer that falls behind loses frames
+//!   (counted in [`InboundStats`]) and the next frame after a loss is marked
+//!   non-contiguous, so the decoder waits for a keyframe
+//!   ([`PeerHandle::request_keyframe`] sends a PLI).
 //!
 //! ICE-TCP (RFC 6544) is passive only: browsers connect to our listener and
 //! every packet is RFC 4571 framed. That is the only inbound path on a
@@ -36,7 +45,7 @@ use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{
-    Direction as RtcDirection, Frequency, MediaKind as RtcMediaKind, MediaTime, Mid, Pt,
+    Direction as RtcDirection, Frequency, KeyframeRequestKind, MediaKind as RtcMediaKind, MediaTime, Mid, Pt,
 };
 use str0m::net::{Protocol, Receive, TcpType};
 use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc};
@@ -127,6 +136,67 @@ pub enum AudioLayout {
     Stereo,
 }
 
+/// What an answer accepts from the client (design §5.11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveOptions {
+    /// Video codecs the client may send; empty: no video in.
+    pub video_codecs: Vec<VideoCodec>,
+    /// Accept Opus from the client.
+    pub audio: bool,
+    /// Cap on everything the client sends, in kbit/s (0: none). Put in the
+    /// answer (`b=AS` on the receiving m-lines: video gets the cap,
+    /// audio 128 kbit/s at most) and enforced over 2 s windows: media above
+    /// 125 % of it is dropped.
+    pub max_bitrate_kbps: u32,
+    /// Inbound frames queued for the consumer before new ones are dropped.
+    pub queue: usize,
+}
+
+impl Default for ReceiveOptions {
+    fn default() -> Self {
+        ReceiveOptions {
+            video_codecs: vec![VideoCodec::Vp8, VideoCodec::H264],
+            audio: true,
+            max_bitrate_kbps: 0,
+            queue: 64,
+        }
+    }
+}
+
+/// One depacketized frame from the client (a VP8 frame, an H.264 access
+/// unit in Annex-B, one Opus packet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundMedia {
+    pub mid: String,
+    pub kind: TrackKind,
+    /// The video codec (`None` for audio: always Opus).
+    pub codec: Option<VideoCodec>,
+    /// RTP timestamp (90 kHz video, 48 kHz audio).
+    pub rtp_time: u64,
+    pub keyframe: bool,
+    /// False after a loss (RTP gap, or frames dropped here): a video
+    /// decoder must wait for the next keyframe.
+    pub contiguous: bool,
+    pub data: Bytes,
+    pub arrived: Instant,
+}
+
+/// Inbound counters of one peer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct InboundStats {
+    pub video_frames: u64,
+    pub audio_packets: u64,
+    pub bytes: u64,
+    /// Dropped because the consumer's queue was full.
+    pub dropped_queue: u64,
+    /// Dropped because the peer exceeded `max_bitrate_kbps`.
+    pub dropped_bitrate: u64,
+    /// Dropped: a codec the answer did not accept.
+    pub dropped_codec: u64,
+    /// PLIs we sent.
+    pub keyframe_requests_sent: u64,
+}
+
 /// How to answer an offer.
 #[derive(Debug, Clone)]
 pub struct AnswerOptions {
@@ -152,6 +222,9 @@ pub struct AnswerOptions {
     /// native resolution at level 4.0. Only the profile must match the
     /// offer; a level difference is allowed (RFC 6184 §8.2.2).
     pub h264_level: H264Level,
+    /// Accept client media (camera, microphone). `None`: we only send, and
+    /// inbound media (loopback tests) arrives as [`PeerEvent::Media`].
+    pub receive: Option<ReceiveOptions>,
 }
 
 impl Default for AnswerOptions {
@@ -164,6 +237,7 @@ impl Default for AnswerOptions {
             start_paused: false,
             ice_credentials: None,
             h264_level: EncodeProfile::NATIVE.h264_level,
+            receive: None,
         }
     }
 }
@@ -298,6 +372,8 @@ pub struct PeerStats {
     pub messages_in: u64,
     pub messages_out: u64,
     pub keyframe_requests: u64,
+    /// Client media ([`AnswerOptions::receive`]).
+    pub inbound: InboundStats,
 }
 
 /// Host-wide counters.
@@ -356,6 +432,10 @@ enum Cmd {
         peer: PeerId,
         candidate: String,
         reply: oneshot::Sender<Result<bool, WebrtcError>>,
+    },
+    RequestKeyframe {
+        peer: PeerId,
+        mid: String,
     },
     Close {
         peer: PeerId,
@@ -701,6 +781,15 @@ impl PeerHandle {
         rx.await.map_err(|_| WebrtcError::PeerGone)?
     }
 
+    /// Ask the client for a keyframe on a receiving m-line (RTCP PLI), e.g.
+    /// after inbound frames were lost or dropped. Never blocks.
+    pub fn request_keyframe(&self, mid: &str) -> Result<(), WebrtcError> {
+        self.try_send(Cmd::RequestKeyframe {
+            peer: self.id,
+            mid: mid.to_string(),
+        })
+    }
+
     /// Close the peer. Idempotent.
     pub fn close(&self) {
         let _ = self.tx.try_send(Cmd::Close { peer: self.id });
@@ -718,6 +807,7 @@ impl PeerHandle {
 pub struct Peer {
     handle: PeerHandle,
     events: mpsc::UnboundedReceiver<PeerEvent>,
+    inbound: Option<mpsc::Receiver<InboundMedia>>,
 }
 
 impl std::fmt::Debug for Peer {
@@ -742,6 +832,12 @@ impl Peer {
 
     pub fn split(self) -> (PeerHandle, mpsc::UnboundedReceiver<PeerEvent>) {
         (self.handle, self.events)
+    }
+
+    /// The client-media queue of an answer made with
+    /// [`AnswerOptions::receive`] (once; `None` afterwards or without it).
+    pub fn take_inbound(&mut self) -> Option<mpsc::Receiver<InboundMedia>> {
+        self.inbound.take()
     }
 }
 
@@ -788,6 +884,7 @@ impl PendingOffer {
                     ..handle
                 },
                 events,
+                inbound: None,
             }),
             Err(e) => {
                 handle.close();
@@ -878,8 +975,28 @@ struct MidState {
     paused: bool,
 }
 
+/// The receive side of a peer answered with [`ReceiveOptions`].
+struct InboundLane {
+    tx: mpsc::Sender<InboundMedia>,
+    video_codecs: Vec<VideoCodec>,
+    audio: bool,
+    /// Bytes allowed per 2 s window (0: unlimited).
+    window_budget: u64,
+    window_start: Instant,
+    window_bytes: u64,
+    /// Video frames were dropped here since the last forwarded one.
+    video_gap: bool,
+}
+
+/// The bitrate window.
+const INBOUND_WINDOW: Duration = Duration::from_secs(2);
+
 struct PeerSlot {
     rtc: Rtc,
+    inbound: Option<InboundLane>,
+    /// Video codecs we send, in preference order (the offering side picks
+    /// its payload type from the answer).
+    video_prefs: Vec<VideoCodec>,
     state: SlotState,
     events: mpsc::UnboundedSender<PeerEvent>,
     policy: ChannelPolicy,
@@ -1280,6 +1397,19 @@ impl HostLoop {
                 });
                 let _ = reply.send(result);
             }
+            Cmd::RequestKeyframe { peer, mid } => {
+                self.with_peer(peer, now, |slot, _| {
+                    let Some(m) = slot.mids.iter().find(|m| m.info.mid == mid).map(|m| m.mid) else {
+                        return;
+                    };
+                    let r = slot.rtc.writer(m).map(|mut w| w.request_keyframe(None, KeyframeRequestKind::Pli));
+                    match r {
+                        Some(Ok(())) => slot.stats.inbound.keyframe_requests_sent += 1,
+                        Some(Err(e)) => tracing::debug!(%mid, error = %e, "keyframe request not sent"),
+                        None => {}
+                    }
+                });
+            }
             Cmd::Close { peer } => {
                 if let Some(p) = self.peers.get_mut(&peer) {
                     p.close(CloseReason::Local);
@@ -1318,6 +1448,7 @@ impl HostLoop {
         level: H264Level,
         video: &[VideoCodec],
     ) -> Rtc {
+        // `video`: every codec we send or receive.
         let mut cfg = Rtc::builder()
             .clear_codecs()
             .enable_opus(true, false)
@@ -1384,12 +1515,14 @@ impl HostLoop {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_slot(
         &mut self,
         rtc: Rtc,
         state: SlotState,
         policy: ChannelPolicy,
         mids: Vec<MidState>,
+        inbound: Option<InboundLane>,
         now: Instant,
     ) -> (PeerId, PeerHandle, mpsc::UnboundedReceiver<PeerEvent>) {
         let id = self.next_id;
@@ -1399,6 +1532,8 @@ impl HostLoop {
         let media = Arc::new(mids.iter().map(|m| m.info.clone()).collect());
         let slot = PeerSlot {
             rtc,
+            inbound,
+            video_prefs: vec![VideoCodec::H264],
             state,
             events: etx,
             policy,
@@ -1463,21 +1598,25 @@ impl HostLoop {
             vp8_ok,
         )?;
         sdp.strip_unresolvable_candidates();
-        if opts.audio.is_none() {
+        let recv = opts.receive.clone();
+        let recv_video = recv.as_ref().is_some_and(|r| !r.video_codecs.is_empty());
+        let recv_audio = recv.as_ref().is_some_and(|r| r.audio);
+        if opts.audio.is_none() && !recv_audio {
             sdp.set_direction_for_kind(MediaKind::Audio, Direction::Inactive);
         }
-        if !opts.video {
+        if !opts.video && !recv_video {
             sdp.set_direction_for_kind(MediaKind::Video, Direction::Inactive);
         }
         // We never mirror the Reactor RXMT trailer (reactor §4.2).
         sdp.remove_session_attr("x-reactor-frame-metadata");
 
-        let mut rtc = self.new_rtc(
-            now,
-            opts.ice_credentials.clone(),
-            opts.h264_level,
-            &opts.video_codecs,
-        );
+        let mut codecs = opts.video_codecs.clone();
+        for c in recv.iter().flat_map(|r| r.video_codecs.iter()) {
+            if !codecs.contains(c) {
+                codecs.push(*c);
+            }
+        }
+        let mut rtc = self.new_rtc(now, opts.ice_credentials.clone(), opts.h264_level, &codecs);
         self.add_candidates(&mut rtc, &[]);
         let offer = SdpOffer::from_sdp_string(&sdp.to_string())
             .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
@@ -1490,6 +1629,12 @@ impl HostLoop {
         answer_sdp.finish_candidates();
         if let Some(layout) = opts.audio {
             answer_sdp.set_opus_stereo(layout == AudioLayout::Stereo);
+        }
+        if let Some(r) = &recv {
+            if r.max_bitrate_kbps > 0 {
+                answer_sdp.set_receive_bandwidth(MediaKind::Video, r.max_bitrate_kbps);
+                answer_sdp.set_receive_bandwidth(MediaKind::Audio, r.max_bitrate_kbps.min(128));
+            }
         }
 
         let mids = summary
@@ -1520,9 +1665,35 @@ impl HostLoop {
                 Some(st)
             })
             .collect();
-        let (id, handle, events) = self.new_slot(rtc, SlotState::Active, opts.channels, mids, now);
+        let (lane, inbound_rx) = match &recv {
+            Some(r) => {
+                let (tx, rx) = mpsc::channel(r.queue.max(1));
+                let lane = InboundLane {
+                    tx,
+                    video_codecs: r.video_codecs.clone(),
+                    audio: r.audio,
+                    window_budget: u64::from(r.max_bitrate_kbps) * 1000 / 8
+                        * INBOUND_WINDOW.as_secs()
+                        * 5
+                        / 4,
+                    window_start: now,
+                    window_bytes: 0,
+                    video_gap: false,
+                };
+                (Some(lane), Some(rx))
+            }
+            None => (None, None),
+        };
+        let (id, handle, events) = self.new_slot(rtc, SlotState::Active, opts.channels, mids, lane, now);
         self.with_peer(id, now, |_, _| {});
-        Ok((Peer { handle, events }, answer_sdp.to_string()))
+        Ok((
+            Peer {
+                handle,
+                events,
+                inbound: inbound_rx,
+            },
+            answer_sdp.to_string(),
+        ))
     }
 
     fn offer(
@@ -1559,7 +1730,10 @@ impl HostLoop {
         }
         let policy = ChannelPolicy::Only(opts.channels.clone());
         let (id, handle, events) =
-            self.new_slot(rtc, SlotState::Offering(Some(pending)), policy, mids, now);
+            self.new_slot(rtc, SlotState::Offering(Some(pending)), policy, mids, None, now);
+        if let Some(slot) = self.peers.get_mut(&id) {
+            slot.video_prefs = opts.video_codecs.clone();
+        }
         self.with_peer(id, now, |_, _| {});
         Ok((
             PendingOffer {
@@ -1630,6 +1804,13 @@ fn accept_answer(slot: &mut PeerSlot, answer: &str) -> Result<Vec<MediaInfo>, We
     for m in slot.mids.iter_mut() {
         if let Some(media) = slot.rtc.media(m.mid) {
             m.info.direction = from_rtc_dir(media.direction());
+        }
+        if m.info.kind == TrackKind::Video && m.info.sends() {
+            // The answer's codec in our preference order (VP8 test clients).
+            if let Some((pt, codec)) = slot.rtc.writer(m.mid).and_then(|w| choose_video(&w, &slot.video_prefs)) {
+                m.pt = Some(pt);
+                m.info.video_codec = Some(codec);
+            }
         }
     }
     Ok(slot.mids.iter().map(|m| m.info.clone()).collect())
@@ -1766,6 +1947,70 @@ fn pick_pt(w: &str0m::media::Writer, kind: TrackKind) -> Option<Pt> {
     }
 }
 
+/// Routes one client frame to the bounded inbound queue: codec check,
+/// bitrate budget, queue room (design §5.11).
+fn inbound_media(slot: &mut PeerSlot, d: str0m::media::MediaData, kind: TrackKind, keyframe: bool, now: Instant) {
+    let Some(lane) = slot.inbound.as_mut() else { return };
+    let st = &mut slot.stats.inbound;
+    let codec = match d.params.spec().codec {
+        Codec::Vp8 => Some(VideoCodec::Vp8),
+        Codec::H264 => Some(VideoCodec::H264),
+        _ => None,
+    };
+    let accepted = match kind {
+        TrackKind::Video => codec.is_some_and(|c| lane.video_codecs.contains(&c)),
+        TrackKind::Audio => lane.audio && d.params.spec().codec == Codec::Opus,
+    };
+    if !accepted {
+        st.dropped_codec += 1;
+        return;
+    }
+    let len = d.data.len() as u64;
+    if now.duration_since(lane.window_start) >= INBOUND_WINDOW {
+        lane.window_start = now;
+        lane.window_bytes = 0;
+    }
+    if lane.window_budget > 0 && lane.window_bytes + len > lane.window_budget {
+        st.dropped_bitrate += 1;
+        if kind == TrackKind::Video {
+            lane.video_gap = true;
+        }
+        return;
+    }
+    lane.window_bytes += len;
+    let contiguous = d.contiguous && !(kind == TrackKind::Video && lane.video_gap);
+    let m = InboundMedia {
+        mid: d.mid.to_string(),
+        kind,
+        codec: if kind == TrackKind::Video { codec } else { None },
+        rtp_time: d.time.numer(),
+        keyframe,
+        contiguous,
+        data: Bytes::copy_from_slice(&d.data),
+        arrived: now,
+    };
+    match lane.tx.try_send(m) {
+        Ok(()) => {
+            st.bytes += len;
+            match kind {
+                TrackKind::Video => {
+                    st.video_frames += 1;
+                    lane.video_gap = false;
+                }
+                TrackKind::Audio => st.audio_packets += 1,
+            }
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            st.dropped_queue += 1;
+            if kind == TrackKind::Video {
+                lane.video_gap = true;
+            }
+        }
+        // The consumer is gone: nothing to do (the owner closes the peer).
+        Err(mpsc::error::TrySendError::Closed(_)) => {}
+    }
+}
+
 /// Drain `poll_output` until `Timeout`, dispatching transmits and events.
 fn drain(slot: &mut PeerSlot, io: &mut Io, now: Instant) {
     loop {
@@ -1860,6 +2105,10 @@ fn event(slot: &mut PeerSlot, e: Event, now: Instant) {
                 TrackKind::Video
             };
             let keyframe = d.is_keyframe();
+            if slot.inbound.is_some() {
+                inbound_media(slot, d, kind, keyframe, now);
+                return;
+            }
             slot.emit(PeerEvent::Media {
                 mid: d.mid.to_string(),
                 kind,
