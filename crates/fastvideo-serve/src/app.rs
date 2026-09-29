@@ -136,7 +136,7 @@ pub fn build_engine_with_clock(
                 rtf: f.rtf,
                 ..FakeTiming::default()
             };
-            fc.mp4 = Mp4Mode::Auto;
+            fc.mp4 = if f.mp4 { Mp4Mode::Auto } else { Mp4Mode::Off };
             if let Some(clock) = clock {
                 fc.clock = clock;
             }

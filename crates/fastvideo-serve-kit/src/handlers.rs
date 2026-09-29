@@ -166,14 +166,17 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));
     }
+    tracing::debug!(job = %id, "job: submit accepted, recording");
     if let Err(e) = ctx.jobs().insert(job.clone()).await {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(e.into());
     }
+    tracing::debug!(job = %id, "job: recorded");
     if let Err(e) = ctx.engine().submit(&job).await {
         ctx.jobs().remove(id).await;
         return Err(e);
     }
+    tracing::debug!(job = %id, "job: submitted to the engine");
     let job = ctx.jobs().get(id).await.unwrap_or(job);
     ctx.notify(&job);
     Ok(job)

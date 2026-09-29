@@ -48,7 +48,9 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
         .status();
     let job = match ev {
         JobEvent::Finished(out) => {
+            tracing::debug!(job = %id, "job: storing the output");
             let art = ctx.artifacts().put(&out.file, out.meta).await;
+            tracing::debug!(job = %id, "job: output stored");
             let art = match art {
                 Ok(a) => a,
                 Err(e) => {
@@ -122,6 +124,9 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
         }
     };
     finish(ctx, before, &job);
+    if job.is_terminal() && before != job.status() {
+        tracing::debug!(job = %id, status = job.status().as_str(), "job: terminal state recorded");
+    }
     Ok(job)
 }
 

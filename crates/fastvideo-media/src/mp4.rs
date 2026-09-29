@@ -214,6 +214,19 @@ impl From<&fastvideo_protocol::PostProcess> for PostProcess {
     }
 }
 
+/// Whether [`finalize`] would leave `input` as it is: no crop, audio kept,
+/// and the file already faststart (`moov` before `mdat`) with one video
+/// track and nothing but audio beside it. The remux is then skipped (an
+/// ffmpeg run per job for an identical file).
+pub fn finalize_is_noop(input: &Path, post: &PostProcess) -> bool {
+    if post.crop.is_some() || post.drop_audio {
+        return false;
+    }
+    let Ok(info) = inspect::inspect(input) else { return false };
+    let videos = info.tracks.iter().filter(|t| t.kind == inspect::TrackKind::Video).count();
+    info.faststart && videos == 1 && info.tracks.iter().all(|t| t.kind != inspect::TrackKind::Other)
+}
+
 /// Remux `input` to `output` with `+faststart`; `-an` when `drop_audio`;
 /// a crop re-encodes video on NVENC (quality 19) and copies audio.
 pub fn finalize(input: &Path, output: &Path, post: &PostProcess) -> Result<()> {
@@ -266,6 +279,28 @@ mod tests {
         assert!(s.faststart);
         assert_eq!((s.quality, s.encoder), (19, FfmpegH264::Nvenc));
         assert_eq!(AudioTarget::CD.rate, 44_100);
+    }
+
+    #[test]
+    fn finalize_is_noop_only_for_a_faststart_file_left_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.mp4");
+        std::fs::write(&p, inspect::header_only_mp4(640, 360, 24_000, 1000, 24, Some(44_100))).unwrap();
+        assert!(finalize_is_noop(&p, &PostProcess::default()));
+        assert!(!finalize_is_noop(&p, &PostProcess { drop_audio: true, ..PostProcess::default() }));
+        let crop = PostProcess { crop: Some(Crop { width: 320, height: 180, x: None, y: None }), drop_audio: false };
+        assert!(!finalize_is_noop(&p, &crop));
+        // moov after mdat: remuxed.
+        let b = std::fs::read(&p).unwrap();
+        let moov = b.windows(4).position(|w| w == b"moov").unwrap() - 4;
+        let mdat = b.windows(4).position(|w| w == b"mdat").unwrap() - 4;
+        let moov_len = u32::from_be_bytes(b[moov..moov + 4].try_into().unwrap()) as usize;
+        let mut late = b[..moov].to_vec();
+        late.extend_from_slice(&b[mdat..]);
+        late.extend_from_slice(&b[moov..moov + moov_len]);
+        std::fs::write(&p, late).unwrap();
+        assert!(!finalize_is_noop(&p, &PostProcess::default()));
+        assert!(!finalize_is_noop(&dir.path().join("missing.mp4"), &PostProcess::default()));
     }
 
     #[test]
