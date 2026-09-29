@@ -168,6 +168,7 @@ impl H3Model {
         dir: &Path,
         hooks: Hooks<'_>,
     ) -> Result<JobMetrics, ApiError> {
+        super::validate::h3(&self.recipe, job)?;
         let req = Self::request(job, self.recipe.hd_1080p)?;
         if req.height * req.width > fastvideo_models::h3::config::H3_MAX_PIXELS {
             check_hd_memory(&req)?;

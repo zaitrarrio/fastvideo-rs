@@ -48,33 +48,8 @@ pub fn conditioning_images(job: &ResolvedJob) -> Vec<ConditioningImage> {
 /// with one): the first reference image at the job's strengths (1 and 1 when
 /// unset: the model card's defaults).
 pub fn reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<IcReference>, ApiError> {
-    if job.task != Task::Ref2V {
-        return Ok(None);
-    }
-    if !ic_lora {
-        return Err(ApiError::invalid_param(
-            "task",
-            "reference-to-video needs an LTX model loaded with the IC-LoRA",
-        ));
-    }
-    let mut images = job
-        .references
-        .iter()
-        .filter(|(k, _)| *k == fastvideo_protocol::MediaKind::Image);
-    let (Some((_, path)), None) = (images.next(), images.next()) else {
-        return Err(ApiError::invalid_param(
-            "references",
-            "LTX reference-to-video takes exactly one reference image (the reference sheet)",
-        ));
-    };
-    if job.references.len() != 1 {
-        return Err(ApiError::invalid_param(
-            "references",
-            "LTX reference-to-video takes one reference image and no video or audio",
-        ));
-    }
-    Ok(Some(IcReference {
-        path: path.clone(),
+    Ok(super::validate::ltx2_reference(job, ic_lora)?.map(|path| IcReference {
+        path: path.to_path_buf(),
         strength: job.sampling.reference_strength.unwrap_or(1.0),
         lora_strength: job.sampling.reference_lora_strength.unwrap_or(1.0),
     }))
@@ -183,6 +158,7 @@ impl Ltx2Model {
 
     /// The request `fv-gpucheck ltx2 gen` would build for this job.
     pub fn request(&self, job: &ResolvedJob, dir: &Path) -> Result<Ltx2Request, ApiError> {
+        super::validate::ltx2(&self.recipe, job)?;
         let reference = reference(job, self.recipe.ic_lora.is_some())?;
         let images = match job.task {
             Task::Ref2V => Vec::new(),

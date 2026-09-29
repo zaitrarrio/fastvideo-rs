@@ -220,6 +220,33 @@ impl Ltx2TransformerConfig {
     }
 }
 
+/// The side multiple of an LTX-2 generation canvas: 32, or 64 two-stage
+/// (stage 1 runs at half size).
+pub fn canvas_multiple(two_stage: bool) -> usize {
+    if two_stage {
+        64
+    } else {
+        32
+    }
+}
+
+/// The model card's request geometry: height and width positive multiples
+/// of [`canvas_multiple`], and `8k + 1` frames. `Ltx2Request::validate` and
+/// the serving engine's job check both use this.
+pub fn check_geometry(height: usize, width: usize, num_frames: usize, two_stage: bool) -> Result<(), String> {
+    let multiple = canvas_multiple(two_stage);
+    if height == 0 || width == 0 || !height.is_multiple_of(multiple) || !width.is_multiple_of(multiple) {
+        return Err(format!(
+            "ltx2: {width}x{height} — height and width must be positive multiples of {multiple}{}",
+            if two_stage { " for two-stage" } else { "" }
+        ));
+    }
+    if num_frames % 8 != 1 {
+        return Err(format!("ltx2: {num_frames} frames — the frame count must be 8k + 1"));
+    }
+    Ok(())
+}
+
 /// Python 3 `round()`: ties go to the even neighbour.
 pub fn round_half_even(x: f64) -> f64 {
     let r = x.round();

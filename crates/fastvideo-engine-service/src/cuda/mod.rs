@@ -4,6 +4,8 @@
 //! - [`caps`] (always built): the model catalog, tiers, recipes, technique
 //!   profiles and the `ModelCaps` derived from the model configs, plus the
 //!   [`ProcessPlan`] check for which models may share a process.
+//! - [`validate`] (always built): the checks each pipeline makes on a job
+//!   before it starts, shared with the fake backend.
 //! - `h3`, `ltx2`, `wan` (feature `cuda`): one resident pipeline per model
 //!   (`H3Pipeline`, `Ltx2Pipeline`, `WanPipeline` incl. TI2V-5B), loaded
 //!   once and kept (the warm pool), and `generate` mapping a `ResolvedJob`
@@ -43,6 +45,7 @@
 //! request.
 
 pub mod caps;
+pub mod validate;
 
 #[cfg(feature = "cuda")]
 mod backend;

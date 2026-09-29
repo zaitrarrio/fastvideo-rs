@@ -23,8 +23,11 @@
 //!   loaded, so an omitted `duration` means 6 s here.
 //! - The matrix (fast: > 10 s only at 720p/1080p and 24/25 fps) is fal's;
 //!   on top of it, the frame count (`duration × fps + 1` on the 8k+1 grid)
-//!   must fit the engine's LTX grid, [`LTX_FRAMES_MAX`] (481): 20 s at
-//!   24 fps fits, 20 s at 25 fps and 10 s at 50 fps do not.
+//!   is capped by the engine's LTX grid, [`LTX_FRAMES_MAX`] (481): 20 s at
+//!   24 fps fits, 20 s at 25 fps and 10 s at 50 fps do not. Every listed
+//!   duration is accepted (the console offers the fields independently); one
+//!   past either limit runs at the longest both allow (20 s at 25 fps: 481
+//!   frames, 19.24 s, noted in the job log; 12 s at 1440p: 10 s).
 //! - Image-to-video normalizes to `Task::I2V` / `Task::Keyframes`; the engine
 //!   refuses them (`Ltx25I2V`, `LtxKeyframes`) until the LTX I2V port lands.
 
@@ -219,25 +222,6 @@ pub(super) fn parse(f: &Fields, class: LtxClass, image_to_video: bool) -> Result
     let duration = parse_duration(f, class)?;
     let resolution = parse_enum(f, "resolution", class.resolutions(), LtxResolution::as_str, LtxResolution::P1080)?;
     let fps = parse_fps(f, class)?;
-    if let Some(d) = duration {
-        let max = max_duration(class, resolution, fps);
-        if d > max {
-            return Err(bad(
-                "duration",
-                format!("duration {d} is not available at {} and {fps} fps; the maximum is {max}", resolution.as_str()),
-            ));
-        }
-        let frames = frames_for(d, fps);
-        if frames > LTX_FRAMES_MAX {
-            let longest = (6..=d).step_by(2).filter(|&x| frames_for(x, fps) <= LTX_FRAMES_MAX).last().unwrap_or(6);
-            return Err(bad(
-                "duration",
-                format!(
-                    "duration {d} at {fps} fps is {frames} frames, more than this server's LTX limit of {LTX_FRAMES_MAX}; the longest at {fps} fps is {longest}"
-                ),
-            ));
-        }
-    }
     let (aspects, default_aspect): (&[LtxAspect], _) =
         if image_to_video { (&LtxAspect::I2V, LtxAspect::Auto) } else { (&LtxAspect::T2V, LtxAspect::R16x9) };
     let aspect_ratio = parse_enum(f, "aspect_ratio", aspects, LtxAspect::as_str, default_aspect)?;
@@ -278,8 +262,14 @@ impl LtxInput {
         r.seed = self.seed;
         r.output.inline_data_uri = self.sync_mode;
         r.timing = TimingSpec {
+            // fal's matrix caps the duration per resolution and rate, and
+            // the engine's grid at LTX_FRAMES_MAX: a longer listed duration
+            // runs at the longest both allow (`Snap::Nearest` notes it).
             length: match self.duration {
-                Some(d) => Length::Seconds { value: d as f64, snap: Snap::AlignUp },
+                Some(d) => Length::Seconds {
+                    value: f64::from(d.min(max_duration(self.class, self.resolution, self.fps))),
+                    snap: Snap::Nearest,
+                },
                 None => Length::Auto,
             },
             fps: Some(self.fps),

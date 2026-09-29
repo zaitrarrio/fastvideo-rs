@@ -266,25 +266,13 @@ impl Ltx2Request {
     /// The model card's constraints: H and W divisible by 32 (64 when two-stage),
     /// `8k + 1` frames.
     pub fn validate(&self) -> Result<()> {
-        let multiple = if self.two_stage { 64 } else { 32 };
-        if self.height == 0
-            || self.width == 0
-            || !self.height.is_multiple_of(multiple)
-            || !self.width.is_multiple_of(multiple)
-        {
-            return Err(err(format!(
-                "ltx2: {}x{} — height and width must be positive multiples of {multiple}{}",
-                self.width,
-                self.height,
-                if self.two_stage { " for two-stage" } else { "" }
-            )));
-        }
-        if self.num_frames % 8 != 1 {
-            return Err(err(format!(
-                "ltx2: {} frames — the frame count must be 8k + 1",
-                self.num_frames
-            )));
-        }
+        fastvideo_models::ltx2::config::check_geometry(
+            self.height,
+            self.width,
+            self.num_frames,
+            self.two_stage,
+        )
+        .map_err(err)?;
         if self.frame_rate.is_nan() || self.frame_rate <= 0.0 || self.prompt.trim().is_empty() {
             return Err(err(
                 "ltx2: needs a positive frame rate and a non-empty prompt",

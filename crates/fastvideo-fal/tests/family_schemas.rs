@@ -1,7 +1,7 @@
 //! The fal family schemas (docs/serve/fal-parity.md P0) agree with the CUDA
 //! catalog's caps: every request the LTX, Wan and base-H3 parsers accept
-//! negotiates on the model its endpoint runs, and the parsers refuse what
-//! the engine would (the LTX frame ceiling, H3 2K/4K as a clean gap).
+//! negotiates on the model its endpoint runs (LTX durations past the
+//! engine's frame ceiling run at it), and H3 2K/4K is a clean gap.
 
 use fastvideo_engine_service::cuda::caps::{catalog, WeightLayout, WAN5B_FRAMES_MAX};
 use fastvideo_fal::schema::ltx::{self, LtxClass, LtxResolution, LTX_FRAMES_MAX};
@@ -34,38 +34,31 @@ fn ltx_matrix_matches_the_engine() {
     for (e, class) in [(Endpoint::LtxTextToVideoFast, LtxClass::Fast), (Endpoint::LtxTextToVideoPro, LtxClass::Pro)] {
         let caps = caps_of(e.target().unwrap());
         assert_eq!(caps.frames.max, LTX_FRAMES_MAX, "the schema's frame ceiling is the engine's");
-        let mut refused_by_frames = Vec::new();
+        let mut clamped = Vec::new();
         for res in class.resolutions() {
             for &fps in class.fps() {
                 assert!(caps.fps.allows(fps), "{fps}");
                 for d in class.durations() {
+                    // Every listed duration runs: past fal's matrix at the
+                    // matrix's longest, past the engine's grid at 481 frames.
                     let body = json!({"prompt": "p", "resolution": res.as_str(), "fps": fps, "duration": d});
-                    let fal_ok = d <= ltx::max_duration(class, *res, fps);
-                    let fits = ltx::frames_for(d, fps) <= LTX_FRAMES_MAX;
-                    match run("lightricks/ltx-2.5", e, body) {
-                        Ok(j) => {
-                            assert!(fal_ok && fits, "{e:?} {res:?} {fps} {d}");
-                            assert_eq!((j.fps, j.num_frames), (fps, ltx::frames_for(d, fps)));
-                            let delivered = j.post.crop.unwrap_or((j.width, j.height));
-                            assert_eq!(delivered, res.landscape(), "{e:?} {res:?}");
-                        }
-                        Err(err) => {
-                            assert!(!(fal_ok && fits), "{e:?} {res:?} {fps} {d}: {err:?}");
-                            assert_eq!(err.param.as_deref(), Some("duration"));
-                            if fal_ok {
-                                refused_by_frames.push((res.as_str(), fps, d));
-                            }
-                        }
+                    let j = run("lightricks/ltx-2.5", e, body).unwrap_or_else(|err| panic!("{e:?} {res:?} {fps} {d}: {err:?}"));
+                    let want = ltx::frames_for(d.min(ltx::max_duration(class, *res, fps)), fps).min(LTX_FRAMES_MAX);
+                    assert_eq!((j.fps, j.num_frames), (fps, want), "{e:?} {res:?} {fps} {d}");
+                    let delivered = j.post.crop.unwrap_or((j.width, j.height));
+                    assert_eq!(delivered, res.landscape(), "{e:?} {res:?}");
+                    if d <= ltx::max_duration(class, *res, fps) && ltx::frames_for(d, fps) > LTX_FRAMES_MAX {
+                        clamped.push((res.as_str(), fps, d));
                     }
                 }
             }
         }
-        // fal allows these; this server's LTX grid (481 frames) does not.
+        // fal allows these; this server's LTX grid (481 frames) runs them at 481.
         let want: Vec<(&str, u32, u32)> = match class {
             LtxClass::Fast => vec![("720p", 25, 20), ("720p", 50, 10), ("1080p", 25, 20), ("1080p", 50, 10), ("1440p", 50, 10), ("2160p", 50, 10)],
             LtxClass::Pro => vec![("720p", 50, 10), ("1080p", 50, 10)],
         };
-        assert_eq!(refused_by_frames, want, "{class:?}");
+        assert_eq!(clamped, want, "{class:?}");
     }
     // Portrait, silent, `static` camera, auto duration.
     let j = run("lightricks/ltx-2.5", Endpoint::LtxTextToVideoFast, json!({"prompt": "p", "aspect_ratio": "9:16", "resolution": "720p", "generate_audio": false, "camera_motion": "static"})).unwrap();
@@ -74,7 +67,7 @@ fn ltx_matrix_matches_the_engine() {
     let gap = |r: Result<ResolvedJob, ApiError>| r.unwrap_err().kind;
     assert_eq!(gap(run("lightricks/ltx-2.5", Endpoint::LtxTextToVideoFast, json!({"prompt": "p", "duration": "auto"}))), ErrorKind::Unsupported(GapId::LtxAutoDuration));
     assert_eq!(gap(run("lightricks/ltx-2.5", Endpoint::LtxTextToVideoPro, json!({"prompt": "p", "camera_motion": "dolly_in"}))), ErrorKind::Unsupported(GapId::LtxCameraMotion));
-    // Pro has no 1440p/2160p and no 48 fps.
+    // Pro has no 1440p/2160p, no 48 fps and no 12 s.
     for body in [json!({"prompt": "p", "resolution": "1440p"}), json!({"prompt": "p", "fps": 48}), json!({"prompt": "p", "duration": 12})] {
         assert!(FalInput::parse(Endpoint::LtxTextToVideoPro, &body).is_err(), "{body}");
     }

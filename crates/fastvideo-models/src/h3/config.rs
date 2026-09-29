@@ -840,7 +840,28 @@ pub fn resolve_canvas_size_short(
         height *= scale;
     }
     let snap = |v: f64| (py_round(v / m as f64) * m).max(m);
-    Ok((snap(height), snap(width)))
+    let (sh, sw) = (snap(height), snap(width));
+    // `packing.py` rounds both sides to the nearest multiple, which can land
+    // above the pixel cap (a 6:13 image: 704x1504 > 768x1344, which
+    // `check_canvas` then refuses). At the standard ratios it never does;
+    // elsewhere round one side down instead: the largest area within the
+    // cap, then the closest aspect.
+    let budget = max_pixels.floor() as usize;
+    if sh * sw <= budget {
+        return Ok((sh, sw));
+    }
+    let floor = |v: f64| (((v / m as f64).floor() as usize) * m).max(m);
+    let (fh, fw) = (floor(height), floor(width));
+    let best = [(sh, fw), (fh, sw), (fh, fw)]
+        .into_iter()
+        .filter(|&(h, w)| h * w <= budget && (0.25..=4.0).contains(&(w as f64 / h as f64)))
+        .max_by(|&(ah, aw), &(bh, bw)| {
+            let da = (aw as f64 / ah as f64 - ratio).abs();
+            let db = (bw as f64 / bh as f64 - ratio).abs();
+            (ah * aw).cmp(&(bh * bw)).then(db.total_cmp(&da))
+        })
+        .unwrap_or((fh, fw));
+    Ok(best)
 }
 
 /// A requested canvas snapped the way [`resolve_canvas_size`] snaps: each side
@@ -1308,6 +1329,26 @@ mod tests {
         assert_eq!(resolve_canvas_size(4.0, 3.0).unwrap(), (768, 1024));
         assert_eq!(resolve_canvas_size(21.0, 9.0).unwrap(), (672, 1536));
         assert!(resolve_canvas_size(5.0, 1.0).is_err());
+        // Nearest-multiple rounding above the cap rounds a side down instead
+        // (a 6:13 portrait used to give 1504x704, refused by `check_canvas`).
+        assert_eq!(resolve_canvas_size(6.0, 13.0).unwrap(), (1472, 704));
+        for (aw, ah) in [(6.0, 13.0), (5.0, 9.0), (3.0, 11.0), (7.0, 15.0), (13.0, 6.0), (1.0, 4.0), (4.0, 1.0)] {
+            let (h, w) = resolve_canvas_size(aw, ah).unwrap();
+            assert!(check_canvas(h, w).is_ok(), "{aw}:{ah} -> {h}x{w}");
+        }
+        // Every aspect in range resolves to a canvas `check_canvas` accepts.
+        for n in 1..=64u32 {
+            for d in 1..=64u32 {
+                let r = f64::from(n) / f64::from(d);
+                if !(0.25..=4.0).contains(&r) {
+                    continue;
+                }
+                for short in [H3_SHORT_EDGE, H3_SHORT_EDGE_480P] {
+                    let (h, w) = resolve_canvas_size_short(f64::from(n), f64::from(d), short).unwrap();
+                    assert!(check_canvas(h, w).is_ok(), "{n}:{d} at {short} -> {h}x{w}");
+                }
+            }
+        }
     }
 
     #[test]

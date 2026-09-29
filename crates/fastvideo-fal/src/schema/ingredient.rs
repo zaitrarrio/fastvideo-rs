@@ -11,7 +11,7 @@
 //! | `image_url` | required | string: the reference sheet (character, prop and location panels) |
 //! | `ingredient_strength` | `1` | number 0..=2: the IC-LoRA's strength at stage 1 |
 //! | `reference_strength` | `1` | number 0..=2; this server takes 0..=1 (the reference tokens' denoise mask is `1 − s`), above 1 is refused by `negotiate` |
-//! | `num_frames` | `121` | integer 9..=481 (8k+1, rounded up); this server generates at most 241 |
+//! | `num_frames` | `121` | integer 9..=481 (8k+1, rounded up); this server generates at most 241 (a longer count runs at 241) |
 //! | `frames_per_second` | `24` | integer 1..=60; this server takes the LTX rates 24, 25, 48, 50 |
 //! | `generate_audio` | `true` | boolean |
 //! | `negative_prompt` | `""` | string; a no-op (the distilled model runs one unguided pass) |
@@ -108,7 +108,9 @@ impl IngredientInput {
         r.seed = self.seed;
         r.output.inline_data_uri = self.sync_mode;
         r.timing = TimingSpec {
-            length: Length::Frames { value: self.num_frames, snap: Snap::AlignUp },
+            // fal takes up to 481; this server's reference clips stop at
+            // 241, so a longer count runs at 241 (noted in the job log).
+            length: Length::Frames { value: self.num_frames, snap: Snap::Nearest },
             fps: Some(self.frames_per_second),
         };
         if !self.generate_audio {

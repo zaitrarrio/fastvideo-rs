@@ -504,9 +504,19 @@ every Wan (resolution × aspect × frames × fps) combination negotiates on
 Deviations kept (each a server limit, named in the schema descriptions):
 
 - LTX: fal allows 20 s at 25 fps and 10 s at 50 fps; both exceed our LTX
-  grid (481 frames; 505 would be needed) and are refused on `duration`
-  (25 fps: up to 18 s; 50 fps: up to 8 s). Raising the grid needs a GPU
-  check of the LTX engine at 505 frames (not done here).
+  grid (481 frames; 505 would be needed). They run at 481 frames (19.24 s
+  and 9.62 s; `Snap::Nearest`, noted in the job log) rather than being
+  refused, since the console offers duration and fps independently; a
+  duration past fal's matrix (12 s at 1440p) runs at the matrix's longest.
+  Raising the grid needs a GPU check of the LTX engine at 505 frames (not
+  done here).
+- Served schemas (`GET /fal/schema/...`, the console forms) list only what
+  the endpoint's model serves: `h3-draft` 480P only (and no
+  reference-to-video endpoint: no draft Ref2VA model), `minimax/h3` without
+  2K / 4K, no 1080P where the GPU lacks the tier, LTX without `auto`,
+  `ingredient` at 24/25/48/50 fps and up to 241 frames. The parsers still
+  take fal's lists and answer a 422 naming the served values
+  (`crates/fastvideo-serve/tests/dimension_sweep.rs` sweeps both).
 - LTX `duration: "auto"` answers `LtxAutoDuration`; an omitted duration is
   6 s (fal's default is `auto`). `camera_motion` other than `static` answers
   `LtxCameraMotion`.

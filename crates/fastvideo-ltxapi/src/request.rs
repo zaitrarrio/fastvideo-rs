@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `prompt` (required, ≤ 5000 chars) | `prompt` |
 //! | `model` (required) | the target's engine name ([`crate::models`]) |
-//! | `duration` (key required; integer per matrix) | `Seconds{AlignUp}` → 8k+1 frames; `null` → `Length::Auto` (400 `Unsupported(LtxAutoDuration)` at negotiation) |
+//! | `duration` (key required; integer per matrix) | `Seconds{Nearest}` → 8k+1 frames, at most the engine's 481 (20 s at 25 fps runs 481 frames, noted in the job log); `null` → `Length::Auto` (400 `Unsupported(LtxAutoDuration)` at negotiation) |
 //! | `resolution` (required, `WxH`) | `Exact` (the engine pads to its multiple and crops back) |
 //! | `fps` (24 / 25 / 48 / 50, default 24) | `fps` (the engine's caps decide; 24 / 25 / 48 / 50 since E4, else 400 `Unsupported(LtxFps)`) |
 //! | `generate_audio` (default `true`) | `false` → `AudioOut::Silent` |
@@ -281,9 +281,11 @@ pub fn normalize(
     };
     req.timing = TimingSpec {
         length: match duration {
+            // The matrix's longest clips (20 s at 25 fps, 10 s at 50 fps)
+            // are past the engine's 481-frame grid: they run at its longest.
             Some(d) => Length::Seconds {
                 value: d as f64,
-                snap: Snap::AlignUp,
+                snap: Snap::Nearest,
             },
             None => Length::Auto,
         },

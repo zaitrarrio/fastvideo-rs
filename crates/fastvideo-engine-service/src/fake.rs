@@ -15,6 +15,11 @@
 //!   `fail_at_step`; listed models fail to load.
 //! - **MP4**: in `OutputMode::File`, written through `ffmpeg` when it is on
 //!   `PATH` (skipped otherwise: `ClipOutput::mp4` is `None`).
+//! - **Engine checks**: with [`FakeConfig::validator`] every job first runs
+//!   the checks a real backend makes; [`FakeConfig::cuda_catalog`] serves the
+//!   CUDA catalog's caps with the CUDA pipelines' own checks
+//!   ([`crate::cuda::validate`]), so a job the GPU engine would refuse fails
+//!   here too.
 //!
 //! The default model set mirrors the real caps shapes: H3 max/turbo, Sol-H3
 //! 4-step, LTX pro/turbo, a video-only Wan clip model, and a causal SF-Wan model.
@@ -297,6 +302,39 @@ pub enum Mp4Mode {
     Off,
 }
 
+/// An engine-side job check: `Err` fails the job before any step, as a real
+/// pipeline refuses a shape it cannot generate.
+#[derive(Clone)]
+pub struct JobValidator(pub Arc<JobCheck>);
+
+/// The check a [`JobValidator`] runs.
+pub type JobCheck = dyn Fn(&ResolvedJob) -> Result<(), ApiError> + Send + Sync;
+
+impl JobValidator {
+    pub fn new(f: impl Fn(&ResolvedJob) -> Result<(), ApiError> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+    pub fn check(&self, job: &ResolvedJob) -> Result<(), ApiError> {
+        (self.0)(job)
+    }
+    /// The CUDA pipelines' checks ([`crate::cuda::validate::check_job`]) for
+    /// the models of `catalog`, by model id; other models pass.
+    pub fn cuda(catalog: &[crate::cuda::caps::CudaModel]) -> Self {
+        let by_id: BTreeMap<ModelId, crate::cuda::caps::CudaRecipe> =
+            catalog.iter().map(|m| (m.id.clone(), m.recipe.clone())).collect();
+        Self::new(move |job| match by_id.get(&job.model) {
+            Some(r) => crate::cuda::validate::check_job(r, job),
+            None => Ok(()),
+        })
+    }
+}
+
+impl std::fmt::Debug for JobValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("JobValidator")
+    }
+}
+
 /// Fake backend configuration.
 #[derive(Clone, Debug)]
 pub struct FakeConfig {
@@ -307,6 +345,8 @@ pub struct FakeConfig {
     pub faults: FakeFaults,
     pub mp4: Mp4Mode,
     pub ffmpeg: PathBuf,
+    /// Engine-side job checks run before generation (`None`: every job runs).
+    pub validator: Option<JobValidator>,
 }
 
 impl Default for FakeConfig {
@@ -323,11 +363,30 @@ impl Default for FakeConfig {
             faults: FakeFaults::default(),
             mp4: Mp4Mode::Auto,
             ffmpeg: PathBuf::from("ffmpeg"),
+            validator: None,
         }
     }
 }
 
 impl FakeConfig {
+    /// The CUDA catalog's models (their real caps and recipes, every one
+    /// resident) with the CUDA pipelines' job checks.
+    pub fn cuda_catalog(catalog: &[crate::cuda::caps::CudaModel]) -> Self {
+        let models = catalog
+            .iter()
+            .map(|m| {
+                let mut caps = m.caps();
+                caps.resident = true;
+                FakeModel { caps, recipe: m.describe() }
+            })
+            .collect();
+        Self {
+            models,
+            validator: Some(JobValidator::cuda(catalog)),
+            ..Self::default()
+        }
+    }
+
     /// Only the listed models (by id) from the default set.
     pub fn with_models(mut self, ids: &[&str]) -> Self {
         self.models.retain(|m| ids.contains(&m.caps.id.as_str()));
@@ -625,6 +684,9 @@ impl EngineBackend for FakeBackend {
         let m = self.model(&job.model)?.clone();
         if !self.loaded.contains(&job.model) {
             return Err(ApiError::engine_failed(format!("`{}` is not loaded", job.model)));
+        }
+        if let Some(v) = &self.cfg.validator {
+            v.check(job)?;
         }
         let steps = match job.sampling.steps {
             Some(s) if m.caps.knobs.steps && s > 0 => s,
