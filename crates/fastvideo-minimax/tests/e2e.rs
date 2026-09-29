@@ -124,7 +124,7 @@ async fn resolutions_and_ratios_resolve() {
     // 2K on H3: the permanent engine gap, 400 (2013).
     let (s, _, v) = call(&f.app, "POST", "/v2/video_generation", Some(KEY), Some(mk("MiniMax-H3", "2K", "16:9"))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    assert_eq!(v["error"]["message"], "invalid params, 2K resolution is not supported by this server (2013)");
+    assert_eq!(v["error"]["message"], "invalid params, 2K resolution is not supported by this server; model `fake-h3-max` serves 480p, 768p (2013)");
     // t2va with adaptive: 400.
     let (s, _, v) = call(&f.app, "POST", "/v2/video_generation", Some(KEY), Some(mk("MiniMax-H3", "768P", "adaptive"))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");

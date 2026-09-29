@@ -18,7 +18,7 @@
     "negative_prompt": null,
     "seed": null,
     "canvas": { "exact": { "width": 1080, "height": 1920 } },
-    "timing": { "length": { "seconds": { "value": 6.0, "snap": "align_up" } }, "fps": 25 },
+    "timing": { "length": { "seconds": { "value": 6.0, "snap": "nearest" } }, "fps": 25 },
     "keyframes": [ { "at": "first", "image": { "upload": "abc-123" } } ],
     "references": [],
     "audio_in": null,

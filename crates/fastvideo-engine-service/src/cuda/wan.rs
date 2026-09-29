@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
-use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob, Task};
+use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob};
 
 use super::caps::{WanDecoder, WanRecipe, WanSampler};
 use super::output::{api_err, stages};

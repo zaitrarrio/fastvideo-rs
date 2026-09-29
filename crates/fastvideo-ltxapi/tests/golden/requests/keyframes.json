@@ -17,7 +17,7 @@
     "negative_prompt": null,
     "seed": null,
     "canvas": { "exact": { "width": 3840, "height": 2160 } },
-    "timing": { "length": { "seconds": { "value": 10.0, "snap": "align_up" } }, "fps": 24 },
+    "timing": { "length": { "seconds": { "value": 10.0, "snap": "nearest" } }, "fps": 24 },
     "keyframes": [
       { "at": "first", "image": { "http": "https://example.com/first.png" } },
       { "at": "last", "image": { "data_uri": "data:image/png;base64,iVBORw0KGgo=" } }

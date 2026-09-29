@@ -334,12 +334,12 @@ pub fn check_geometry(preset: &str, height: usize, width: usize, num_frames: usi
         crate::wan::WanVaeConfig::wan_2_1()
     }
     .temporal_compression();
-    if num_frames == 0 || (num_frames - 1) % tc != 0 {
+    if num_frames == 0 || !(num_frames - 1).is_multiple_of(tc) {
         return Err(format!("wan: {num_frames} frames — the frame count must be {tc}k + 1"));
     }
     let latents = (num_frames - 1) / tc + 1;
     let fpb = dit.num_frames_per_block.max(1);
-    if dit.causal && latents % fpb != 0 {
+    if dit.causal && !latents.is_multiple_of(fpb) {
         return Err(format!(
             "wan: {num_frames} frames are {latents} latent frames, not a multiple of the causal block ({fpb})"
         ));

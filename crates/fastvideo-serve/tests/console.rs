@@ -340,7 +340,10 @@ async fn console_pages_and_schema_serve() {
     assert_eq!(s.status, 200);
     assert_eq!(s.json()["properties"]["image_url"]["x-fv-media"], "image");
     assert_eq!(call(&r, "GET", "/fal/schema/minimax/h9/text-to-video", None, None).await.status, 404);
-    assert_eq!(call(&r, "GET", "/fal/schema/minimax/h3-max/director", None, None).await.status, 404);
+    // The director form: the resolutions the app's model serves.
+    let d = call(&r, "GET", "/fal/schema/minimax/h3-max/director", None, None).await;
+    assert_eq!(d.status, 200);
+    assert!(d.json()["properties"]["resolution"]["enum"].as_array().is_some_and(|l| !l.is_empty()));
 
     // `server.console = false` unmounts the pages only.
     drop(a);

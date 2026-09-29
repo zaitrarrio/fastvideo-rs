@@ -1033,7 +1033,7 @@ mod tests {
         assert_eq!(r.references.len(), 1);
         assert_eq!(r.references[0].kind, MediaKind::Image);
         assert_eq!(r.canvas, CanvasSpec::Exact { width: 1536, height: 896 });
-        assert_eq!(r.timing.length, Length::Frames { value: 100, snap: Snap::AlignUp });
+        assert_eq!(r.timing.length, Length::Frames { value: 100, snap: Snap::Nearest });
         assert_eq!(r.timing.fps, Some(24));
         assert_eq!(r.sampling.reference_lora_strength, Some(1.5));
         assert_eq!(r.sampling.reference_strength, Some(1.0));

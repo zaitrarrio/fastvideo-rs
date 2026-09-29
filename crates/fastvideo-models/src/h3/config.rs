@@ -1331,7 +1331,7 @@ mod tests {
         assert!(resolve_canvas_size(5.0, 1.0).is_err());
         // Nearest-multiple rounding above the cap rounds a side down instead
         // (a 6:13 portrait used to give 1504x704, refused by `check_canvas`).
-        assert_eq!(resolve_canvas_size(6.0, 13.0).unwrap(), (1472, 704));
+        assert_eq!(resolve_canvas_size(6.0, 13.0).unwrap(), (1504, 672));
         for (aw, ah) in [(6.0, 13.0), (5.0, 9.0), (3.0, 11.0), (7.0, 15.0), (13.0, 6.0), (1.0, 4.0), (4.0, 1.0)] {
             let (h, w) = resolve_canvas_size(aw, ah).unwrap();
             assert!(check_canvas(h, w).is_ok(), "{aw}:{ah} -> {h}x{w}");
