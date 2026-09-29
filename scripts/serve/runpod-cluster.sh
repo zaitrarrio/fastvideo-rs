@@ -221,7 +221,7 @@ create_worker() {
         --arg gw "$(st .gateway_url)" --arg cfg "$(pool_config "$pool")" --arg name "fv-cluster-$pool-$(date -u +%m%d%H%M%S)" '{
           name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuTypeIds: [$gpu], gpuCount: 1,
           containerDiskInGb: 40, volumeInGb: 0, networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
-          ports: ["8000/http"], dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
+          ports: ["8000/http", "70000/tcp"], dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
           env: ($s + {FV_SERVE_MODE: "http", FV_SERVE_ROLE: "worker", FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign,
             FV_PUBLIC_BASE_URL: $gw, FV_WORKER_CONFIG: $cfg, FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
             FV_JOBS_HEARTBEAT_S: "10", RUST_LOG: "info"})}')"
@@ -304,7 +304,7 @@ cmd_status() {
     rest GET "/pods/$p" 2>/dev/null | jq -r '[.id, .name, .desiredStatus, .costPerHr, (.machine.gpuDisplayName // .gpu.displayName // "cpu")] | @tsv' \
       || echo "$p gone"
   done
-  admin_get /fv/v1/gateway/pools | jq -c '.pools[]? | {pool, available, workers: [.workers[]? | {id, healthy, ready, running}]}' 2>/dev/null || true
+  admin_get /fv/v1/gateway/pools | jq -c '.pools[]? | {pool, available, queued, running, workers}' 2>/dev/null || true
 }
 
 cmd_wait() {
@@ -313,7 +313,7 @@ cmd_wait() {
   while :; do
     caps="$(curl -sS --max-time 20 "$(st .gateway_url)/fv/v1/capabilities" 2>/dev/null || true)"
     pools="$(jq -c '[.pools[]? | select(.available) | .id]' <<<"$caps" 2>/dev/null || echo '[]')"
-    n="$(admin_get /fv/v1/gateway/pools 2>/dev/null | jq '[.pools[]? | select([.workers[]? | select(.ready)] | length > 0)] | length' 2>/dev/null || echo 0)"
+    n="$(jq '[.pools[]? | select([.workers[]? | select(.ready)] | length > 0)] | length' <<<"$caps" 2>/dev/null || echo 0)"
     log "available $pools; pools with a ready worker: $n/4 ($(( $(date +%s) - t0 ))s)"
     (( n >= 4 )) && return 0
     (( $(date +%s) - t0 < ${FV_WAIT_S:-1800} )) || die "not every pool became ready"

@@ -268,7 +268,7 @@ Ours today:
 | `fal-ai/ltx-2.3/retake-video` | **missing** (stub 403) | temporal-window regeneration of audio, video or both | **engine port**: masked temporal denoise, same weights |
 | `fal-ai/ltx-2.3/reframe`, `…-quality/outpaint`, `…/inpaint` | **missing** (stub 403) | outpainting and inpainting | **new weights + engine port**: `Lightricks/LTX-2.3-22b-IC-LoRA-In-Outpainting` (2.3 only; no 2.5 build listed) plus IC-LoRA conditioning |
 | `fal-ai/ltx-2.3-22b/reference-video-to-video` | **missing** | IC-LoRA control from a reference video plus depth, canny and pose preprocessors | **new weights + engine port**: `Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control` (2.3 only), `…-Motion-Track-Control`, plus depth and pose estimators |
-| `fal-ai/ltx-2.3-quality/ingredient` | **missing** | reference-sheet image | **new weights + engine port**: `Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients` (**exists for 2.5**). This is the LTX "reference" mode that fits our 2.5 base |
+| `fal-ai/ltx-2.3-quality/ingredient` | **served (engine oracle-checked; serve E2E pending)**: app `fal-ai/ltx-2.3-quality`, endpoint `ingredient` (`AppKind::LtxQuality`, `schema/ingredient.rs`) on `ltx-pro`, which routes Ref2V to the IC-LoRA companion `ltx25-ref2v` (the LTX-2.5 build of the same LoRA). Fields `prompt`, `image_url` (the sheet), `ingredient_strength` 0-2 (the stage-1 LoRA strength), `reference_strength` (fal 0-2; ours 0-1, above 1 answers 422 on `reference_strength`), `num_frames` 9-481 (ours up to 241), `frames_per_second` 1-60 (ours 24/25/48/50), `generate_audio`, `negative_prompt` (no-op), `seed`, `sync_mode`; always 1536x896 | 2.5 weights instead of 2.3; `reference_strength` above 1; clips over 241 frames; fps outside the LTX set; no size field (fal's default only) | done: docs/ports/ltx-ref2v.md, docs/oracle.md "LTX-2.5 reference-to-video" |
 | `fal-ai/ltx-2.3-quality/*` effects (clean-plate, colorization, day-to-night, deblur, decompression, water-simulation, HDR…) | **missing** | per-effect IC-LoRA | **new weights + engine port** (the same IC-LoRA path). 2.5 builds exist for clean-plate, colorization, day-to-night, deblur, decompression, water-simulation and pixel-spatial-upscaler; HDR, relight and in-outpainting are 2.3 only |
 | `fal-ai/ltx-2.3-22b/video-to-video` | **missing** | SDEdit-style restyle (`video_strength`) | **engine port**, same weights |
 | `fal-ai/ltx-2.3-22b/distilled/text-to-video` | **partial**: our model is the 2.5 counterpart | `num_frames`, `video_size` presets and custom sizes, `fps` 1 to 60, `camera_lora`, `negative_prompt` | **schema**: frames and size map onto our caps; fps other than 24/25/48/50 is `LtxFps` (E4 validated only those); negative prompt is meaningless for the unguided distilled model |
@@ -304,7 +304,7 @@ contract as LTX API `/v2/image-to-video` (`image_uri` and `last_frame_uri`):
 
 **Reference modes**, in order of fit to our LTX-2.5 base:
 
-1. `fal-ai/ltx-2.3-quality/ingredient`:
+1. `fal-ai/ltx-2.3-quality/ingredient` (**implemented 2026-09-28**, see the §2.2 row):
    - Inputs: `image_url` (a reference sheet with character, prop and
      location panels), `prompt` ("Reference sheet: … Generated video: …"),
      `ingredient_strength` 0 to 2 (1), `reference_strength` 0 to 2 (1),

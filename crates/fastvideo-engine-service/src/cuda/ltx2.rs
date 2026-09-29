@@ -11,7 +11,8 @@ use std::path::Path;
 
 use fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage;
 use fastvideo_cudarc::ltx2::pipeline::{
-    default_sol_stage2, Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions, TextResidency,
+    default_sol_stage2, IcReference, Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions,
+    TextResidency,
 };
 use fastvideo_models::ltx2::config::Ltx2Config;
 use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
@@ -41,6 +42,42 @@ pub fn conditioning_images(job: &ResolvedJob) -> Vec<ConditioningImage> {
     // The first frame first, as the reference lists them.
     out.sort_by_key(|c| c.frame_idx);
     out
+}
+
+/// The job's reference sheet for the IC-LoRA (`Task::Ref2V` on a model loaded
+/// with one): the first reference image at the job's strengths (1 and 1 when
+/// unset: the model card's defaults).
+pub fn reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<IcReference>, ApiError> {
+    if job.task != Task::Ref2V {
+        return Ok(None);
+    }
+    if !ic_lora {
+        return Err(ApiError::invalid_param(
+            "task",
+            "reference-to-video needs an LTX model loaded with the IC-LoRA",
+        ));
+    }
+    let mut images = job
+        .references
+        .iter()
+        .filter(|(k, _)| *k == fastvideo_protocol::MediaKind::Image);
+    let (Some((_, path)), None) = (images.next(), images.next()) else {
+        return Err(ApiError::invalid_param(
+            "references",
+            "LTX reference-to-video takes exactly one reference image (the reference sheet)",
+        ));
+    };
+    if job.references.len() != 1 {
+        return Err(ApiError::invalid_param(
+            "references",
+            "LTX reference-to-video takes one reference image and no video or audio",
+        ));
+    }
+    Ok(Some(IcReference {
+        path: path.clone(),
+        strength: job.sampling.reference_strength.unwrap_or(1.0),
+        lora_strength: job.sampling.reference_lora_strength.unwrap_or(1.0),
+    }))
 }
 
 /// One resident LTX-2 pipeline.
@@ -124,6 +161,7 @@ impl Ltx2Model {
             dit_offload: None,
             offload: None,
             tae: recipe.tae.clone(),
+            ic_lora: recipe.ic_lora.clone(),
         };
         obs("ltx2_pipeline");
         let pipe = Ltx2Pipeline::load(&paths, &cfg, &options)
@@ -145,7 +183,9 @@ impl Ltx2Model {
 
     /// The request `fv-gpucheck ltx2 gen` would build for this job.
     pub fn request(&self, job: &ResolvedJob, dir: &Path) -> Result<Ltx2Request, ApiError> {
+        let reference = reference(job, self.recipe.ic_lora.is_some())?;
         let images = match job.task {
+            Task::Ref2V => Vec::new(),
             Task::T2V if job.keyframes.is_empty() => Vec::new(),
             Task::I2V | Task::Keyframes if self.recipe.version == LtxVersion::V25 => {
                 conditioning_images(job)
@@ -168,6 +208,12 @@ impl Ltx2Model {
         // E4: no audio decode when the output drops it.
         req.skip_audio_decode = !wants_audio(job);
         req.images = images;
+        if reference.is_some() {
+            // `ICLoraPipeline`'s stage 2 is the plain dense refine.
+            req.sol_stage2 = false;
+            req.pisa_stage2 = false;
+        }
+        req.reference = reference;
         req.validate()
             .map_err(|e| ApiError::invalid(e.to_string()))?;
         Ok(req)
