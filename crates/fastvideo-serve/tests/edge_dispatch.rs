@@ -105,6 +105,8 @@ mod native_do {
                 .route("/pools/{pool}/enqueue", post(enqueue))
                 .route("/pools/{pool}/cancel/{job}", post(cancel))
                 .route("/pools/{pool}/status", get(status))
+                // Envelopes carry inline inputs (the Worker takes up to 100 MB).
+                .layer(axum::extract::DefaultBodyLimit::max(64 << 20))
                 .with_state(d.clone());
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", l.local_addr().unwrap());

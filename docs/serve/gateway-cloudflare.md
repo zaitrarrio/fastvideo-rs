@@ -570,23 +570,15 @@ Reading it:
 
 - **Burst placement on the gateway path** (above): a burst of N jobs lands
   on one pod. Not part of this change; noted for the gateway owner.
-- **Serialized enqueues**: the DO handles one event at a time and each
-  enqueue writes SQLite and re-arms the alarm, so 5 concurrent enqueues
-  took up to 185 ms each on staging. Fine at 10³ jobs/h; batch or skip the
-  alarm write when unchanged if it matters.
-- **Envelope size**: inline inputs (≤ 8 MiB per job) are held in the DO's
-  SQLite and memory while queued (128 MB per isolate; 32 MiB per received
-  WebSocket message). A long queue of large i2v jobs could press on the
-  memory limit: lower `inline_inputs_max_bytes` for DO pools, or push
-  store URLs only.
-- **424 has no fallback on the DO path**: when a worker cannot fetch a
-  passed-through client URL, the gateway path re-sends that input through
-  the store; the DO path fails the job. Set `input_passthrough = false`
-  with DO pools until phase 2 handles it.
-- **Takeover after a loss**: a worker the DO declared lost (no socket for
-  `reconnect_grace_ms`, 20 s) may still be alive behind a partition and
-  keep writing the row; it is told to drop the job when it reconnects
-  (`welcome.cancel`). The gateway path has the same class of risk.
+- **Serialized enqueues**: 5 concurrent enqueues took up to 185 ms each
+  (reduced in phase 2 to ≤ 0.12 s by skipping most alarm writes, §9.7).
+- **Envelope size**: inline inputs (≤ 8 MiB per job) were held in the DO's
+  memory while queued (fixed in phase 2, §9.7: spilled to R2 above 1 MiB).
+- **424 has no fallback on the DO path** (fixed in phase 2, §9.7: restage
+  through the store).
+- **Takeover after a loss**: a worker the DO declared lost may still be
+  alive behind a partition (fixed in phase 2, §9.7: leases fence its writes
+  and it stops the job).
 - **Deploys drop every socket** (confirmed): recovery took 0.3 s on staging,
   but a job pushed in the gap waits for its ack timeout (10 s) before it is
   pushed again. `stale_after_ms` (60 s) must stay above the reconnect
@@ -607,6 +599,7 @@ Reading it:
 | Worker | `fv-edge-staging` (`https://fv-edge-staging.maximalize.workers.dev`, workers.dev subdomain, no custom domain) | the staging dispatcher |
 | Durable Object class | `PoolScheduler` (namespace of `fv-edge-staging`, SQLite, migration `v1`) | one object per pool name |
 | D1 database | `fv-edge-staging` | `edge_jobs` write-behind |
+| R2 bucket | `fv-edge-staging-envelopes` (binding `ENVELOPES`) | envelopes above 1 MiB (phase 2) |
 | Worker secrets | `FV_INTERNAL_TOKEN`, `FV_ADMIN_TOKEN` | workers / gateway token; read-only status |
 
 - The deploy uses the owner's token (`/root/.config/fv/cf_api_token`),
@@ -628,6 +621,73 @@ Reading it:
 Spend: no GPU pods were created. Cloudflare usage was a few thousand DO
 requests and D1 rows on the account's existing plan (no marginal cost).
 The shared build pod ran this work's jobs for roughly an hour.
+
+### 9.7 Phase 2: the D1 writes off the critical path, and the phase-1 risks
+
+Approved by the owner after phase 1. What changed:
+
+| item | how | where |
+|---|---|---|
+| **worker starts at once** | a pushed job carries a **lease** (fencing token, +1 per push of that job). The worker holds it in memory and submits it to its engine without a D1 round trip (`D1JobStore::adopt_leased`); its row is written behind by the flusher, and every write of it is an upsert conditional on the lease: it applies when the row carries the same lease, or an older one (or none) and is still queued/running with no cancel request. The DO is the authority for who holds a job; D1 stays the record the APIs read | serve-kit `d1/store.rs` (`leased_upsert_stmt`, migration 3: `jobs.lease`), `worker::take_envelope`, `edge_link` |
+| **gateway insert behind** | for a job only DO pools serve, `GatewayJobStore::insert` returns at once and writes the row in the background; until it lands, reads answer from memory and updates wait for it. If the worker's row lands first, the late insert keeps it (same external id) | `gateway/store.rs` (`set_insert_behind`), `gateway/edge.rs::install` |
+| **fencing (double runs)** | a write with an older lease changes nothing: the worker marks the job *fenced*, stops writing it, and cancels it in its engine (`subscribe_fenced`). The DO cancels an ack or a reconnect under an older lease (`welcome.cancel`) | `sched.rs` (`ack`, `hello`), serve-kit, `edge_link` |
+| **424 → store** | a worker that cannot fetch a client URL nacks 424; the job waits in the DO (`restage`) until the gateway's tick stores its inputs (from its staged copies) and replaces the envelope (`enqueue` with `replace`); a restage that never comes fails after 3 min | `sched.rs`, `gateway/edge.rs::edge_restage` |
+| **enqueue concurrency** | the DO moves its alarm only earlier (a later deadline is found by the tick that runs anyway), so an enqueue usually costs no alarm write: 5 enqueues at once now take 0.08–0.12 s (was 0.15–0.19 s) | `edge.rs::apply` |
+| **envelope memory** | an envelope above `SPILL_BYTES` (1 MiB) goes to the R2 bucket `fv-edge-staging-envelopes` (binding `ENVELOPES`) and only its key stays in the DO; the push loads it; the object is deleted when the job ends (verified on staging: a 1.5 MB envelope appeared in the bucket and was gone after its cancel) | `sched.rs` (`enqueue_spilled`, `Out::PushSpilled`), `edge.rs` |
+
+Tests (all pass): 14 scheduler units (leases, restage, spill), serve-kit
+`leased_adopt_writes_behind_and_fences_stale_holders`, and
+`tests/edge_dispatch.rs` against the native stand-in and staging:
+`a_partitioned_worker_is_fenced_out` (the holder is cut off beyond the grace
+period, the job moves to the other worker under lease 2, the stale holder
+is fenced and its writes never replace the row; native only),
+`a_424_restages_inputs_through_the_store` (native and staging),
+`a_large_envelope_runs` (native and staging, spilled on staging), the
+loss, cancel and redeploy tests (staging redeploy: workers back in 0.25 s,
+4 jobs once each).
+
+Queue time on the staging path (same bench as §9.4, workers on the build
+pod, 10 serial jobs and 5 at once):
+
+| D1 round trip | path | 10 × 1: queue mean / p50 / max | 5 at once: mean / p50 / max | submit call |
+|---|---|---|---|---:|
+| 250 ms | gateway | 0.506 / 0.506 / 0.507 | 9.713 / 9.326 / 19.601 | 1.012 |
+| 250 ms | **durable-object** | **0.023 / 0.022 / 0.027** | **0.081 / 0.098 / 0.118** | 0.583 |
+| 0 ms | gateway | 0.002 / 0.002 / 0.002 | 4.333 / 4.538 / 11.929 | 0.003 |
+| 0 ms | durable-object | 0.029 / 0.028 / 0.045 | 0.088 / 0.105 / 0.127 | 0.094 |
+
+**The phase-2 target (≤ 0.4 s p50 on the staging path) is met: 0.022 s p50**
+with the 250 ms D1 of the bench, against 0.506 s on the gateway path: no D1
+round trip is left between the submit and the GPU. What is left is the
+enqueue to the edge and the push (≈ 20–30 ms from EU-RO-1). The submit call
+still includes the `gw_dispatch` insert (0.58 s at 250 ms D1); it could go
+behind too. The gateway's burst placement problem (§9.4) was still on main
+when this ran (being fixed separately).
+
+GPU_RESULTS_PLACEHOLDER
+
+### 9.9 Production-readiness checklist
+
+Done in phases 0–2 (staging):
+- [x] push dispatch, ack as the take, reconnect/reconcile across deploys (tested on staging, 0.25–0.3 s)
+- [x] worker loss: re-dispatch once, then fail; the gateway fails the D1 row
+- [x] fencing tokens: a stale worker's writes are refused and it stops the job
+- [x] D1 off the critical path (gateway insert and worker adopt written behind)
+- [x] 424 fallback through the store; large envelopes spilled to R2
+- [x] one real GPU worker through the staging DO (§9.8)
+
+Before production:
+- [ ] a production Worker (`fv-edge`) bound to the **gateway's D1** (`fv-jobs`) for `edge_jobs`, with its own R2 envelope bucket; `POOL_LOCATIONS` per pool (`weur` for EUR-IS-1 pods, `wnam` for US-CA-2)
+- [ ] a least-privilege deploy token (`fv-edge-deploy`: Workers Scripts edit, D1 edit, Workers R2 Storage edit) instead of the owner's token (§9.6)
+- [ ] the gateway's and the workers' `FV_INTERNAL_TOKEN` as the Worker secret (`FV_EDGE_INTERNAL_TOKEN_FILE`), rotated together
+- [ ] migration 3 (`jobs.lease`) applied to `fv-jobs` before the first leased worker (any phase-2 worker or gateway applies it on start)
+- [ ] the autoscaler on DO pools: pods it starts need `FV_DISPATCH_DO_URL` and no public URL registration; worker counts from the DO status (phase 2 of §7, still open)
+- [ ] streams and peer sessions: signalling relayed over the worker socket (§3.7; DO pools answer 503 today)
+- [ ] the `gw_dispatch` insert behind the response too (the submit call, not the queue time)
+- [ ] alerts on the DO: `restage` and `failed` counts in `/pools/{pool}/status`, workers connected per pool, `wrangler tail` errors; Workers Logs retention
+- [ ] a deploy runbook: deploys drop every socket (recovery measured at 0.25–0.3 s); avoid deploying during large bursts, or accept one ack timeout (10 s) for jobs pushed in the gap
+- [ ] load: one DO per pool handles about 10 enqueues per second in this setup; shard a pool per region above that
+- [ ] rollback: set the pool back to `dispatch = "gateway"` (the workers keep their internal routes; they need their public URL again)
 
 ## 10. How to run the parallel path
 
@@ -666,7 +726,7 @@ The Worker (`scripts/serve/cf-edge.sh`, staging only):
 E=scripts/serve/cf-edge.sh
 $E build                  # wasm on the build pod (FV_EDGE_BUILD=local: here), wasm-bindgen + bundle → artifacts/edge/build
 $E dev 8787               # wrangler dev: local workerd, DO and D1 state in artifacts/edge/dev-state
-$E deploy                 # D1 fv-edge-staging (once), secrets, wrangler deploy
+$E deploy                 # D1 fv-edge-staging and R2 fv-edge-staging-envelopes (once), secrets, wrangler deploy
 $E status h3-turbo        # version + the pool's DO status (admin token)
 FV_EDGE_CONFIRM=fv-edge-staging $E down    # delete the Worker, its DOs and the D1 database
 ```
@@ -675,7 +735,17 @@ To reuse the gateway's secrets instead of the generated ones:
 `FV_EDGE_INTERNAL_TOKEN_FILE=… FV_EDGE_ADMIN_TOKEN_FILE=… $E deploy`.
 `FV_EDGE_POOL_LOCATIONS='{"h3-turbo":"weur"}'` pins pool objects near their
 pods; `FV_EDGE_ACK_TIMEOUT_MS`, `FV_EDGE_RECONNECT_GRACE_MS`,
-`FV_EDGE_STALE_AFTER_MS`, `FV_EDGE_REDISPATCH_WAIT_MS` tune the scheduler.
+`FV_EDGE_STALE_AFTER_MS`, `FV_EDGE_REDISPATCH_WAIT_MS` tune the scheduler;
+`FV_EDGE_SPILL_BYTES` (1 MiB) is where envelopes go to R2.
+
+Nothing else is needed for phase 2: a worker built after it takes pushed
+jobs with leases, and a gateway built after it inserts DO-pool jobs behind.
+The first phase-2 process to open a D1 database applies migration 3
+(`ALTER TABLE jobs ADD COLUMN lease`).
+
+The real-GPU comparison (§9.8) is `scripts/serve/edge-gpu-test.sh up
+<h3-turbo image>`, `bench <n>` (a local fv-serve gateway, `FV_SERVE_BIN`, run
+once per `dispatch` mode against the same pod) and `down`.
 
 Tests against a real dispatcher (the fake-engine workers and the gateway run
 inside the test; on the build pod, or here with a test binary fetched from
