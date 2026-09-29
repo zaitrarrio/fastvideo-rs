@@ -7,7 +7,8 @@
 #    environment so the WebRTC host binds UDP 40010 + ICE-TCP 40000 and
 #    advertises 127.0.0.1: the streaming clients (headless Chromium,
 #    reactor_sdk) run on the pod itself.
-# 2. Python 3 from apt, then the sidecar (scripts/serve/e2e/sidecar.py, from
+# 2. With FV_E2E_IDLE_DELETE_MIN set, an idle guard (see below).
+# 3. Python 3 from apt, then the sidecar (scripts/serve/e2e/sidecar.py, from
 #    FV_SIDECAR_B64) on :8001 in the foreground.
 set -u
 mkdir -p /e2e
@@ -33,6 +34,24 @@ EOF
 chmod +x /e2e/serve.sh
 /e2e/serve.sh /e2e/fv.toml
 date -u +%s > /e2e/boot.t0
+# Optional idle guard (FV_E2E_IDLE_DELETE_MIN): the pod deletes itself after
+# that many minutes in a row at 0 % GPU utilization (sampled every 30 s),
+# with the pod-scoped RUNPOD_API_KEY Runpod puts in the environment.
+if [ -n "${FV_E2E_IDLE_DELETE_MIN:-}" ]; then
+  (
+    idle=0
+    while sleep 30; do
+      u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+      if [ "${u:-0}" = 0 ]; then idle=$((idle + 30)); else idle=0; fi
+      echo "$(date -u +%FT%TZ) util=${u:-?} idle_s=$idle" >> /e2e/idle.log
+      if [ "$idle" -ge $((FV_E2E_IDLE_DELETE_MIN * 60)) ]; then
+        echo "$(date -u +%FT%TZ) idle for ${FV_E2E_IDLE_DELETE_MIN} min: deleting pod" >> /e2e/idle.log
+        curl -sS -X DELETE -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" >> /e2e/idle.log 2>&1
+        command -v runpodctl >/dev/null && runpodctl remove pod "$RUNPOD_POD_ID" >> /e2e/idle.log 2>&1
+      fi
+    done
+  ) &
+fi
 export DEBIAN_FRONTEND=noninteractive
 { apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-pip xz-utils; } > /e2e/apt.log 2>&1
 exec python3 /e2e/sidecar.py

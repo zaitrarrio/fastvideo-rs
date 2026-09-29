@@ -1232,6 +1232,14 @@ impl Config {
     }
 }
 
+/// `WxH` (even sides, 64..=4096).
+pub fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.trim().split_once(['x', 'X'])?;
+    let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    let ok = |v: u32| (64..=4096).contains(&v) && v % 2 == 0;
+    (ok(w) && ok(h)).then_some((w, h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1415,12 +1423,4 @@ body_max_mb = 64
         c.jobs.retention_s.insert("nope".into(), 1);
         assert!(c.validate().is_err());
     }
-}
-
-/// `WxH` (even sides, 64..=4096).
-pub fn parse_size(s: &str) -> Option<(u32, u32)> {
-    let (w, h) = s.trim().split_once(['x', 'X'])?;
-    let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    let ok = |v: u32| (64..=4096).contains(&v) && v % 2 == 0;
-    (ok(w) && ok(h)).then_some((w, h))
 }
