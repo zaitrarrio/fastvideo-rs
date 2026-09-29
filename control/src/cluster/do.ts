@@ -375,6 +375,13 @@ export class ClusterOps implements DurableObject {
     }
     if (op.phase === "grow") {
       if (cur.length < pool.count) {
+        if (!c.state.images[poolId] && !c.state.image) {
+          // A pool added to the spec after the launch: resolve its image the way `up` does.
+          const img = (await resolveClusterImages(env, c.spec))[poolId];
+          if (!img) return { done: true, error: `no image for pool ${poolId}` };
+          c.state.images[poolId] = img;
+          await saveState(env, c);
+        }
         const rec = await createWorker(env, c, poolId, c.state.images[poolId] || c.state.image!, "workers", this.log);
         if (!rec) {
           op.phase = "patch";
