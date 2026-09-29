@@ -426,10 +426,10 @@ fn num_field(o: &Map<String, Value>, k: &str) -> Result<Option<f64>, ApiError> {
 }
 
 /// `prompt` (optional on the edit endpoints), `model` and `video_uri`.
-fn edit_common<'a>(
+fn edit_common(
     api: Api,
     models: &LtxModels,
-    o: &'a Map<String, Value>,
+    o: &Map<String, Value>,
 ) -> Result<(GenerationRequest, MediaRef), ApiError> {
     let video = media_uri(req_str(o, "video_uri")?, "video_uri")?;
     let prompt = opt_str(o, "prompt")?.unwrap_or_default();

@@ -289,7 +289,7 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
     let video = media(b.video_url.as_deref().unwrap_or_default(), "video_url")?;
     let op = match (b.start_s, b.end_s, b.extend_s) {
         (Some(start_s), Some(end_s), None) => {
-            if !(end_s > start_s) {
+            if end_s.partial_cmp(&start_s) != Some(std::cmp::Ordering::Greater) {
                 return Err(ApiError::invalid_param("end_s", "`end_s` must be greater than `start_s`"));
             }
             let mode = match b.retake_mode.as_deref() {
