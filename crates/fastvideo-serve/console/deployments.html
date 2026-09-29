@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployments · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/deployments.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Deployments <small>operator page: needs the admin token; gateway only</small></h1>
+  </div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-token">
+      <div class="stage-head"><h2 id="h-token">Admin token</h2><span id="admin-state" class="pill">not set</span></div>
+      <div class="stage-body">
+        <label for="admintoken">Admin token</label>
+        <input id="admintoken" type="password" spellcheck="false" autocomplete="off" placeholder="fvadm_…">
+        <div class="actions">
+          <button id="admin-save" class="primary">Use token</button>
+          <button id="admin-clear" type="button">Clear</button>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+        <p class="hint">The same token as the <a href="/console/admin">API keys</a> page (this tab only).</p>
+        <div id="page-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-promote">
+      <div class="stage-head"><h2 id="h-promote">Promote a build</h2><span id="dispatch-state" class="pill">…</span></div>
+      <div class="stage-body">
+        <label for="target">Build</label>
+        <input id="target" spellcheck="false" autocomplete="off" placeholder="git sha (2cd1ba0), digest (sha256:…) or tag (latest)">
+        <label for="channel">Channel</label>
+        <select id="channel"><option value="stable">stable (deploys and the Runpod templates)</option><option value="latest">latest (newest main)</option></select>
+        <label for="notes">Note</label>
+        <input id="notes" maxlength="200" placeholder="optional, kept in the history">
+        <div class="actions">
+          <button id="plan" type="button">Plan (dry run)</button>
+          <button id="promote" class="primary" type="button">Promote…</button>
+        </div>
+        <div id="promote-msg" class="msg" role="status"></div>
+        <pre id="plan-out" class="mono plan" hidden></pre>
+        <p class="hint">Promote and Rollback dispatch the <code>release</code> workflow (retag in GHCR, Runpod templates, history in D1);
+          each shows its plan and asks first. Pod pools of a standing cluster then roll with <code>scripts/serve/release.sh redeploy</code>.</p>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-channels">
+      <div class="stage-head"><h2 id="h-channels">Channels</h2><span id="template-channel" class="pill" hidden></span></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="heads" hidden>
+          <thead><tr><th>Channel</th><th>Release</th><th>Build</th><th>Action</th><th>When</th><th>By</th><th>Images</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="heads-empty" class="empty">Enter the admin token to see the channels.</div>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-live">
+      <div class="stage-head"><h2 id="h-live">Live</h2><span id="mixed" class="pill warn" hidden>mixed versions</span></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="live" hidden>
+          <thead><tr><th>Pool</th><th>Worker</th><th>State</th><th>Build</th><th>Channel</th><th>Image</th><th>Drift</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="live-empty" class="empty">No data yet.</div>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-registry">
+      <div class="stage-head"><h2 id="h-registry">Deployments</h2><small class="hint">recorded by the deploy scripts (D1 <code>deployments</code>)</small></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="deps" hidden>
+          <thead><tr><th>Kind</th><th>Runpod id</th><th>Name</th><th>Pool / image</th><th>Build</th><th>Status</th><th>Created</th><th>By</th><th>Drift</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="deps-empty" class="empty">No live deployments recorded.</div>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-history">
+      <div class="stage-head"><h2 id="h-history">History</h2></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="history" hidden>
+          <thead><tr><th>#</th><th>Channel</th><th>Action</th><th>Build</th><th>When</th><th>By</th><th>Note</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="history-empty" class="empty">No releases recorded yet.</div>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

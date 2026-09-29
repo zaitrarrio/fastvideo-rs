@@ -307,39 +307,49 @@ impl D1JobStore {
     /// docs/serve/gateway.md): from now on this worker's memory is
     /// authoritative for it and the row's `worker` is this worker. `job` is
     /// the dispatched copy; the row's fields win except `resolved` (whose
-    /// input paths are this worker's). Idempotent for a job already held
-    /// here. Refused (`AlreadyExists`) when the row is finished, cancel was
-    /// requested, or another worker holds it with a fresh heartbeat
-    /// (younger than `stale_after`).
+    /// input paths are this worker's) and `dispatched_at`. Idempotent for a
+    /// job already held here. Refused (`AlreadyExists`) when the row is
+    /// finished, cancel was requested, or another worker holds it with a
+    /// fresh heartbeat (younger than `stale_after`).
+    ///
+    /// One D1 round trip: an upsert whose `DO UPDATE` only applies when the
+    /// row may be taken over, returning the row it wrote. No row back (zero
+    /// changes) means refused; the conditions are checked by SQLite inside
+    /// the statement, so two workers racing for a row cannot both win.
     pub async fn adopt(&self, job: Job) -> Result<Job, StoreError> {
         if let Some(e) = self.lock().jobs.get(&job.id) {
             return Ok(e.job.clone());
         }
-        let rows = self
-            .read(Stmt::new("SELECT job, version, worker, updated_at FROM jobs WHERE id = ?", vec![json!(job.id.to_string())]))
-            .await
-            .map_err(io)?;
-        let mut next = job;
-        if let Some(r) = rows.first() {
-            let held_by = r.get("worker").and_then(Value::as_str).filter(|w| *w != self.opts.worker_id);
-            let fresh = r
-                .get("updated_at")
-                .and_then(Value::as_f64)
-                .is_some_and(|t| now_ms() - (t as i64) < self.opts.stale_after.unwrap_or(Duration::from_secs(900)).as_millis() as i64);
-            if let Some(row) = decode_job(r) {
-                if row.is_terminal() || row.cancel_requested {
-                    return Err(StoreError::AlreadyExists(row.id));
-                }
-                if held_by.is_some() && fresh {
-                    return Err(StoreError::AlreadyExists(row.id));
-                }
-                let resolved = next.resolved.clone();
-                next = row;
-                next.resolved = resolved;
+        let enc = |e: serde_json::Error| StoreError::Io(format!("encoding job: {e}"));
+        let resolved = serde_json::to_string(&job.resolved).map_err(enc)?;
+        let dispatched = serde_json::to_value(&job).map_err(enc)?.get("dispatched_at").cloned().unwrap_or(Value::Null);
+        let stale_ms = self.opts.stale_after.unwrap_or(Duration::from_secs(900)).as_millis() as i64;
+        let mut params = row_params(&job, Some(&self.opts.worker_id))?;
+        params.extend([json!(resolved), dispatched, json!(self.opts.worker_id), json!(now_ms() - stale_ms)]);
+        let stmt = Stmt::new(
+            format!(
+                "INSERT INTO jobs ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET worker = excluded.worker, updated_at = excluded.updated_at, \
+                 version = jobs.version + 1, \
+                 job = json_set(jobs.job, '$.resolved', json(?), '$.dispatched_at', ?) \
+                 WHERE jobs.status IN ('queued', 'running') \
+                 AND COALESCE(json_extract(jobs.job, '$.cancel_requested'), 0) = 0 \
+                 AND (jobs.worker IS NULL OR jobs.worker = ? OR jobs.updated_at <= ?) \
+                 RETURNING job"
+            ),
+            params,
+        );
+        self.count(|s| s.writes += 1);
+        let r = match self.db.query(stmt).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.count(|s| s.failed_writes += 1);
+                return Err(io(e));
             }
-        }
-        let stmt = upsert_stmt(&next, Some(&self.opts.worker_id))?;
-        self.write(stmt).await.map_err(io)?;
+        };
+        let Some(next) = r.rows.first().and_then(decode_job) else {
+            return Err(StoreError::AlreadyExists(job.id));
+        };
         let mut g = self.lock();
         g.seq += 1;
         let seq = g.seq;

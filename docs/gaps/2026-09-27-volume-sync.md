@@ -129,6 +129,24 @@ which the loader requires before it uses a tree. Nothing else on either
 volume was touched. About 20 minutes wall clock, about $0.11 of pods (all
 deleted; a watchdog would have deleted them after 2.5 h).
 
+### Spark latent upscaler on EU (2026-09-29)
+
+`verify-weights.sh sol-h3-spark` was INCOMPLETE on EU only: the gate reads
+`upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors`
+(the Hub layout since `6749d7b`), and EU held only the earlier top-level
+`upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors`: same bytes
+(690 592 992, SHA-256 `4f57821f…46a5e6`, the LFS oid at both revisions).
+US holds the HF cache at `3f941d5` with that path as a link (SHA-256
+equal). A 2 vCPU CPU pod on EU downloaded the file from the Hub at `3f941d5`
+into `upscaler/.minimax_h3_latent_upscaler_3d_conv_v1.partial-<stamp>/`,
+fsync'd, re-read it with the page cache dropped, matched size and SHA-256,
+and renamed the folder (add-only; the old file and `.complete` untouched).
+The manifest now pins that revision and SHA-256, and the `sol-h3-spark`
+cell checks the upscaler's size and SHA-256. Fresh pods then ran
+`verify-weights.sh sol-h3-spark`: **ok on EU and US**. Four pods
+(`0i0pk5duq3mnkn`, `j0g7h0i4422pdq`, `pa0nbcn5f8dcvo`, `d6re9jgfuly2gw`),
+under a minute each at $0.06/hr, all deleted.
+
 ### Remaining differences (left alone on purpose)
 
 | Where | What | GB | Why left |

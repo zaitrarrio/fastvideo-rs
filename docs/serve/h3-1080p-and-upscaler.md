@@ -13,6 +13,11 @@ JSONs, logs). Frames: [`artifacts/serve/h3-1080p/`](../../artifacts/serve/h3-108
 h3-turbo and h3-max; see [Shipped: the native 1080P tier](#shipped-the-native-1080p-tier)
 for what is served, the 5-prompt gate and the lip-sync proxy.
 
+**Update (2026-09-29):** the rest of the gate ran: h3-max passed 5/5
+prompts, the 10 s cells confirmed the per-job memory estimate, and a fal
+`resolution: "1080P"` request through fv-serve passed. See
+[Gate run, part 2](#gate-run-part-2-2026-09-29-h3-max-5-prompts-10-s-cells-fal-1080p).
+
 ## Summary
 
 - **Native 1080p works and adds real detail.** At 1920x1088 and 1088x1920,
@@ -98,7 +103,9 @@ Commit `bc730e0`.
   (54 GiB of weights between jobs, docs/serve/e2e/i2v-resident.md), about
   40 GiB is free: 1080P up to about 7 s fits and 10-15 s is refused. On an
   80 GB card the text encoder is streamed (`auto`), which leaves room for
-  longer clips. The 10 s estimate is not measured yet (below).
+  longer clips. At 10 s the estimate covers the measured h3-turbo working
+  set (42.9 GiB) with 10 % to spare, and h3-max needs less than half of it
+  (22.4 GiB); see [Gate run, part 2](#gate-run-part-2-2026-09-29-h3-max-5-prompts-10-s-cells-fal-1080p).
 - **Pricing hint.** GPU time is about 2.4x (turbo) to 2.7x (max) that of
   768P for the same clip; price 1080P at about 2.5x 768P (fal lists 2x).
 
@@ -192,20 +199,138 @@ picture: talking-head lag 0 at 768p and 1 at 1080p (turbo), 0 and 2 (max),
 it rules out a gross sync break (a shifted or frozen mouth), not a subtle
 one; a SyncNet score is still the stronger check.
 
-### Not done (budget stop, 22:52 UTC)
+### Not done in the first gate run (budget stop, 22:52 UTC)
 
-- h3-max 5-prompt cells (the first run has h3-max at 1080p on 3 prompts:
-  78.4 s, 41.8 GB, coherent).
-- The 10 s 1080p cells (`turbo-1080p-10s`, `max-1080p-10s`), which would
-  check the per-job working-set estimate at 10 s.
-- One end-to-end fal request at `1080P` through fv-serve on a pod
-  (`scripts/serve/e2e/pod.sh` with the serve image of `bc730e0` or later).
+The h3-max 5-prompt cells, the 10 s cells and the fv-serve fal request did
+not run on 2026-09-28. They ran on 2026-09-29 (next section).
 
-To finish them: `FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
-FV_CELLS="max-768p max-1080p turbo-1080p-10s max-1080p-10s" FV_FETCH_TREE=1
-FV_FETCH_SKIP='\.cache$' FV_SKIP_TAE=1 scripts/gpu/runpod-http.sh run <sha>` (about
-25 min, $0.90), then a fal queue request with `resolution: "1080P"` on an
-E2E pod (about 20 min, $0.70).
+### Gate run, part 2 (2026-09-29): h3-max 5 prompts, 10 s cells, fal 1080P
+
+| Item | Value |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-2cd1ba0` (main `2cd1ba0`, fv-gpucheck build id `e459d24cc5a25933`) |
+| Command | `RUNPOD_VOLUME_ID=jg48s6o1w0 FV_POD_CAP_S=3000 FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json FV_CELLS="max-768p max-1080p turbo-1080p-10s max-1080p-10s" FV_FETCH_TREE=1 FV_FETCH_SKIP='\.cache$' FV_SKIP_TAE=1 scripts/gpu/runpod-http.sh run 2cd1ba0` |
+| GPU | RTX PRO 6000 Blackwell Server Edition (97 887 MiB, driver 595.91.07), EUR-IS-1, $2.09/hr |
+| Pod | `9t9awkj9iquyc7` (`fv-1080b-hd-2cd1ba0-09290122`), 01:22:29 to about 02:09:50 UTC (47 min, about $1.65); deleted, GET 404. The cells ended at 01:54:30; the last 15 min were the 1.5 GB tree fetch through the proxy (the 10 s cells keep every PNG frame, 600 MB each). Next time skip `frames/.*\.png$` for the `-10s` cells |
+| Raw results | `artifacts/runpod/hd/2cd1ba0-09290122/` (benchmarks, compare-clips JSON, `report.txt`, lip-sync JSON) |
+
+The driver exited 1 because the weight gate reports `sol-h3-spark` incomplete
+(the latent upscaler file under `upscaler/` is missing on the EU volume).
+No cell here uses it; every cell ran and passed.
+
+**h3-max, 5 prompts** (warm process; model load 104-108 s per cell not
+included):
+
+| Prompt | 768p denoise / e2e | 1080p denoise / e2e | Peak (nvidia-smi) 768p → 1080p |
+|---|---|---|---|
+| talking-head | 21.3 s / —* | 64.3 s / 79.2 s | 35 008 → 41 056 MiB |
+| spark-mountain-lake | 21.5 s / —* | 66.1 s / 81.2 s | 35 072 → 41 120 MiB |
+| ltx-frogyoga | 21.8 s / —* | 68.5 s / 83.4 s | 35 104 → 41 216 MiB |
+| ltx-newsbroadcast | 21.8 s / —* | 68.9 s / 84.0 s | 35 136 → 41 216 MiB |
+| h3-demo | 22.1 s / —* | 68.8 s / 83.9 s | 35 136 → 41 280 MiB |
+
+\*The 768p cell was the pod's first, so all five prompts streamed the text
+encoder into the cache (e2e 88-118 s); denoise + decode is 28.0-28.8 s.
+Steps: 8.3 / 4.8 / 4.5 / 4.2 s at 768p, 30.3 / 13.8 / 12.7 / 11.6 s at
+1080p. Peak allocated 32.4 GiB (768p) and 38.2 GiB (1080p), as in the first
+run. 1080p costs 3.1x the denoise (h3-max's dense first step scales about
+quadratically) and 2.2x the video decode (6.7 → 14.5 s). This matches the
+3-prompt run (78.4 s e2e, 41.8 GB).
+
+**Coherence, duplication, tiling.** Keyframes 0 and 80 of every 1080p clip
+(`max-1080p/keyframes/`): all five are coherent. There are no duplicated
+subjects, no tile seams and no block grid. Two prompts describe several
+shots (`ltx-newsbroadcast`: the reporter, then the site; `h3-demo`:
+`[Shot 1]`…), and those clips change shot as the prompt asks. The
+compare-clips patch-boundary ratio is 1.03-1.84 on average. PASS 5/5.
+
+**Sharpness vs Lanczos-stretched 768p** (`hd_report.py`, lossless PNG
+keyframes at 1920x1088):
+
+| Prompt | Laplacian var (Lanczos → native) | Energy above the 768p band |
+|---|---|---:|
+| talking-head | 21.4 → 36.6 | 9.7x |
+| spark-mountain-lake | 56.1 → 179.1 | 6.9x |
+| ltx-frogyoga | 56.6 → 210.1 | 6.5x |
+| ltx-newsbroadcast | 101.6 → 103.1 | 2.3x |
+| h3-demo | 133.1 → 129.5 | 2.2x |
+
+Every clip carries 2.2-9.7x the energy above the 768p band limit. PASS 5/5
+on that criterion. The Laplacian variance is higher on 3 prompts and level
+on the two multi-shot prompts, where the 1080p keyframes show other shots
+than the 768p ones.
+
+**Lip-sync proxy (h3-max).**
+
+| Clip | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| talking-head 768p / 1080p | 124 / 124 | -1 / +2 | 0.134 (0.115) / 0.154 (0.105) | 0.54 / 0.47 |
+| ltx-newsbroadcast 768p / 1080p | 100 / 71 | -6 / +1 | -0.334 / -0.017 | -0.93 / -0.28 |
+
+On talking-head the proxy reads the same at both sizes: best lag within
+±2 frames and a positive r. The news clips give no usable signal at either
+size (negative r and speech contrast; the reporter is on screen for only
+part of the clip). That matches h3-max's first run (talking-head lag 0 and
+2). The proxy does not show a sync change at 1080p.
+
+**10 s at 1080p (1920x1088x244, `talking-head`, one warm process)** against
+the per-job estimate (`measured_working_bytes`, 47.4 GiB at 10 s):
+
+| Cell | Denoise | Video decode | e2e | Weights resident (text stage) | Peak allocated (denoise) | Working set measured | Estimate | nvidia-smi peak |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| h3-turbo | 114.2 s | 28.9 s | 143.9 s | 30.1 GiB | 73.0 GiB | **42.9 GiB** | 47.4 GiB | 82 820 MiB |
+| h3-max | 200.8 s | 29.0 s | 230.6 s | 26.5 GiB | 48.9 GiB | **22.4 GiB** | 47.4 GiB | 54 028 MiB |
+
+- **The estimate holds.** On h3-turbo it covers the measured 10 s working
+  set with 4.5 GiB (10 %) to spare. At 5 s it was 25.5 GiB estimated
+  against 22.5 GiB measured. h3-max's Sol-Attn recipe needs less than
+  half as much (22.4 GiB at 10 s, about 11.6 GiB at 5 s), so the one
+  estimate is conservative for max. It is a single constant per packed row
+  over both recipes; a per-recipe rate would admit longer h3-max clips on a
+  card with resident text weights.
+- On a 96 GB card with the text encoder resident (about 40 GiB free
+  between jobs), a 10 s 1080P job is refused on both models, as designed.
+  A streamed-encoder 80 GB card (about 49 GiB free beside the DiT) admits
+  it. h3-turbo peaked at 80.2 GiB reserved (82.8 GB nvidia-smi), which
+  fits an RTX PRO 6000 and is at the edge of an 80 GB H100 with the DiT
+  resident.
+- **Time.** 10 s costs 2.4x (turbo) and 3.0x (max) the 5 s denoise; max's
+  dense first step is 98 s of its 201 s. At $2.09/hr a 10 s 1080p clip is
+  about $0.08 (turbo) and $0.13 (max) of GPU time.
+- **Frames.** Both clips have 244 frames and 243/243 face frames. Neither
+  has a hard cut: ffmpeg scene scores are all below 0.1. h3-turbo is one
+  stable scene. On **h3-max the room drifts**: over the 10 s the background
+  (windows, sofa, shelves) morphs continuously into another room while the
+  speaker stays the same person. It is not a cut and not tiling; it is
+  long-clip background drift at 2x the trained area, and h3-max shows it at
+  10 s, h3-turbo does not. Strip (every 20th frame):
+  [`max-1080p-10s-strip.jpg`](../../artifacts/serve/h3-1080p/max-1080p-10s-strip.jpg).
+  Lip-sync proxy: turbo lag 0, r 0.125, speech contrast 0.47; max lag -1,
+  r 0.132, contrast -0.03.
+
+**fal `resolution: "1080P"` through fv-serve.** The h3-turbo variant
+image from its Runpod template (`fv-serve-h3-turbo-pod`,
+`ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:c782eb37…`, tag
+`h3-turbo-sha-2cd1ba0`) booted with its baked `runpod.toml` on an RTX PRO
+6000 (EUR-IS-1, EU volume read only). Pod `bn56zvm3xeppih`, 532 s (about
+$0.31); deleted, GET 404. Create to `/ping` 200 took 441 s, mostly the
+first pull of the slim image on that host. Driver:
+`scripts/serve/fal-queue-smoke.sh <base> minimax/h3-turbo text-to-video
+'{"prompt": <fox>, "seed": 1, "resolution": "1080P"}'`. Raw:
+`artifacts/serve/e2e/slim-images/h3-turbo/results.jsonl`.
+
+| Request | Result | Wall (submit → result) | fal timings | MP4 |
+|---|---|---:|---|---|
+| `minimax/h3-turbo/text-to-video`, `resolution: "1080P"`, seed 1 | PASS, `COMPLETED` | 67.7 s | denoise 47.0 s, video decode 14.0 s, encode 0.65 s, total 62.4 s | **1920x1080** (generated 1920x1088, cropped), 124 frames @ 24, AAC 32 kHz; 10.7 MB, R2 |
+
+The served denoise (47.0 s) matches the matrix cell (47.2-49.3 s), and the
+clip is a coherent single scene
+([`fal-1080p-turbo-frame60.jpg`](../../artifacts/serve/h3-1080p/fal-1080p-turbo-frame60.jpg)).
+The 1080P tier is served end to end. The same pod ran the 480P request of
+the h3-turbo E2E, and its output was byte-identical to the old image's
+(docs/serve/images.md, GPU smoke).
+
+**Spend (part 2):** hd pod $1.65 + fal pod $0.31 = **about $1.96**.
 
 ## Part A: native H3 1080p
 
@@ -605,6 +730,8 @@ $0.90): 12 min of setup, most of it apt, then the runs.
 | Pod `z40i7yclzakuse` (RTX PRO 6000): H3 + SeedVR2 1080p/1440p + FlashVSR setup + metrics, 60.5 min | ~$2.11 |
 | Pod `r69atksckzoztw` (RTX PRO 6000): SeedVR2 1080p rerun with full frames, stopped at the coordinator's budget stop, 15.8 min | ~$0.55 |
 | **Upscaler benchmark total** | **~$3.17** |
+| 2026-09-29, gate part 2: pod `9t9awkj9iquyc7` (RTX PRO 6000, EUR-IS-1), 47 min | ~$1.65 |
+| 2026-09-29, fal 1080P: pod `bn56zvm3xeppih` (RTX PRO 6000, EUR-IS-1), 8.9 min | ~$0.31 |
 
 All pods were deleted, and a GET after each delete returned 404. The
 Runpod balance was $34.49 before the weight pods and $20.26 after the last

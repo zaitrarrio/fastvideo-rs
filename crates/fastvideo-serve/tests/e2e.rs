@@ -93,10 +93,19 @@ async fn batch_job_end_to_end_with_file_store() {
     assert_eq!((s, v), (StatusCode::OK, json!({"status": "healthy"})));
     let (s, v, _) = call(&r, "GET", "/health", None, false).await;
     assert_eq!(s, 200);
-    assert_eq!(v, json!({"status": "ok", "model_loaded": true, "state": "AVAILABLE"}));
+    assert_eq!(
+        (&v["status"], &v["model_loaded"], &v["state"]),
+        (&json!("ok"), &json!(true), &json!("AVAILABLE"))
+    );
+    // Build identity (docs/serve/releases.md): the compiled-in git sha and
+    // the package version, the same object on /healthz.
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    assert!(v["build"]["git_sha"].as_str().is_some_and(|s| !s.is_empty()), "{v}");
+    assert_eq!(v["build"], fastvideo_serve::build_info::BuildInfo::current().json());
     let (s, v, _) = call(&r, "GET", "/healthz", None, false).await;
     assert_eq!(s, 200);
     assert_eq!(v["state"], "ready");
+    assert_eq!(v["build"], fastvideo_serve::build_info::BuildInfo::current().json());
     assert_eq!(v["stores"], json!({"jobs": "file", "artifacts": "local"}));
     let (_, v, _) = call(&r, "GET", "/", None, false).await;
     assert!(v["model"].is_string(), "{v}");

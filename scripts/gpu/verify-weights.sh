@@ -34,6 +34,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 W="${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}"
 UPSCALER_REL="upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
+# The Spark latent upscaler at the revision pinned in weights-manifest.tsv:
+# size and the Hub's LFS SHA-256 (0.69 GB read), checked with its length.
+UPSCALER_SIZE=690592992
+UPSCALER_SHA256=4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6
 
 # cell -> space-separated "root:component" requirements. A component ending in
 # .safetensors is a single file; anything else is a directory.
@@ -122,6 +126,15 @@ check_path() {
   local rc=0
   if [[ "$p" == *.safetensors ]]; then
     bash "$HERE/verify-safetensors.sh" "$p" >/dev/null || rc=1
+    if [[ "$p" == "$W/$UPSCALER_REL" && -f "$p" ]]; then
+      local got
+      got="$(wc -c <"$p" | tr -d ' ')"
+      if [[ "$got" != "$UPSCALER_SIZE" ]]; then
+        echo "  SIZE $p: $got, expected $UPSCALER_SIZE" >&2; rc=1
+      elif [[ "$(sha256sum "$p" | awk '{print $1}')" != "$UPSCALER_SHA256" ]]; then
+        echo "  SHA256 $p differs from $UPSCALER_SHA256" >&2; rc=1
+      fi
+    fi
   elif [[ ! -d "$p" ]]; then
     echo "  MISSING dir $p" >&2
     rc=1

@@ -12,6 +12,7 @@ with `curl`.
 |---|---|
 | `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints. With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys |
+| `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
 
@@ -21,7 +22,9 @@ APIs stay up.
 **Server status.** Every page's top bar has a status strip: one dot per
 pool (green ready, amber busy / loading / draining, grey scaled to zero, red
 unhealthy / down / failed). Click it for a panel with each pool's workers
-(state, last seen, running and queued jobs), queue depth and models. Model
+(state, last seen, running and queued jobs), queue depth, the build it runs
+(short sha and channel; flagged when its workers run different builds) and
+models. Model
 and director pages show the endpoint's pool next to Run / Start session and,
 when the pool is loading, scaled to zero, draining or down, warn first: the
 second click submits. The strip polls `GET /fv/v1/status` every 7 s while
@@ -53,25 +56,25 @@ Admin calls (`/fv/v1/admin/*`) need the admin token as
 
 - Set it with `FV_ADMIN_TOKEN` (or `auth.admin_token` in the TOML). Use a
   long random value, e.g. `echo "fvadm_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d =)"`.
-- If it is unset, fv-serve generates one at startup (`fvadm_` + 32 bytes from
-  the CSPRNG, base64url) and logs it **once** at `WARN` in a banner:
+- If it is unset, fv-serve makes one on its first start (`fvadm_` + 32
+  bytes from the CSPRNG, base64url) and keeps it in
+  **`<state_dir>/admin_token`** (mode 600). Later starts with the same state
+  dir reuse it. The log names the file and shows only the token's first 4
+  characters:
 
   ```
-  ==============================================================================
-    fv-serve admin token (generated at startup; set FV_ADMIN_TOKEN to choose one):
-
-        fvadm_…
-
-    Mint API keys at /console/admin or POST /fv/v1/admin/keys with
-    `Authorization: Bearer <admin token>`. It is not stored and not shown again.
-  ==============================================================================
+  INFO admin token: generated and stored (read it on the server; FV_ADMIN_TOKEN overrides) file=/workspace/fv-state/admin_token starts_with=fvad created=true
   ```
 
-  A generated token changes on every restart. On Runpod/Vast, read it from the
-  worker log, or set `FV_ADMIN_TOKEN` as a secret.
+  Read it on the server (`cat <state_dir>/admin_token`). On a Runpod pod
+  without a volume the state dir is container disk: the token survives a
+  restart, not a re-creation. A remote operator can have it sealed to an
+  X25519 key instead (`FV_ADMIN_TOKEN_RECIPIENT`,
+  `GET /fv/v1/admin/token/sealed`; the gateway cluster's
+  `runpod-cluster.sh admin-token` does that, docs/serve/gateway.md §9).
 
 The server keeps only the token's SHA-256 digest and compares digests in
-constant time. The token is never written to disk.
+constant time.
 
 ## 2. API keys
 
@@ -198,7 +201,29 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   files: CORS allows any origin by default, preflights included
   (`server.cors_origins` / `FV_CORS_ORIGINS` narrows it; design §9).
 
-## 6. Tests
+## 6. Deployments page
+
+`/console/deployments` (the admin token from the API keys page, this tab
+only) reads `GET /fv/v1/admin/deployments` and `GET /fv/v1/admin/releases`
+on a gateway (a standalone server answers 404: "not a gateway"):
+
+- **Channels**: each channel's current release (build, action, when, by)
+  with **Rollback…**.
+- **Promote a build**: a git sha, digest or tag and a channel. **Plan (dry
+  run)** shows what would happen; **Promote…** shows the same plan in a
+  confirm dialog and, on OK, dispatches the `release` workflow. Rollback
+  does the same with the release it would go back to. Without
+  `FV_GITHUB_TOKEN` on the gateway the pill says "dispatch not
+  configured" and only plans work.
+- **Live**: the gateway and every pod worker with its build (short sha,
+  channel, variant and image digest) and drift against the channel it
+  follows (`ok`, `behind: stable is abc1234`, or `?` when no release names
+  its image); "mixed versions" when a pool runs more than one sha.
+- **Deployments**: live rows of the D1 registry (what the deploy scripts
+  created) with their build, status, age, creator and drift.
+- **History**: the last 50 releases, rolled-back ones marked.
+
+## 7. Tests
 
 - Rust: `fastvideo-serve-kit` `keys` (mint / check / revoke, file
   persistence and digest-only storage, D1 over the SQLite mock shared by two
@@ -208,17 +233,23 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
   and content types, `/fal/schema`, `auth.mode` in capabilities, the keyless
   flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining),
-  `tests/gateway.rs` (status per pool and worker with nothing secret, a
-  killed worker turning `down`, a gateway with auth `none`) and `console` unit tests (every asset
+  `tests/gateway.rs` (status, capabilities and `/healthz` per pool and
+  worker with nothing secret, a killed worker turning `down`, a gateway
+  with auth `none`, the sealed admin token), `admin_token` unit tests
+  (stored once, reused, overridden, sealing) and `console` unit tests (every asset
   referenced is embedded; no inline scripts).
 - Browser: `bash tests/console/run.sh` builds `fv-serve --features
   fake,encoders`, starts it with no config file and without
-  `FV_ADMIN_TOKEN`, reads the generated token from the log and drives
+  `FV_ADMIN_TOKEN`, reads the token from `<state dir>/admin_token` (and
+  checks the file is mode 600 and the token is not in the log) and drives
   headless Chromium through minting a key, text-to-video, image-to-video
   with an uploaded image, the API tab, history, a live director session
   (start, 1344x768 video with one video and one audio track playing, a
   second prompt applied, stop; the encoder is `auto`, i.e. OpenH264 on a
-  machine without NVENC), a 390 px layout and revocation. `FV_SERVE_UI=1 bash
+  machine without NVENC), a 390 px layout, the Deployments page (404 on a
+  standalone server, then the admin API mocked with `page.route`: channels,
+  drift, mixed versions, Promote's dry run → confirm → dispatch, a
+  cancelled Rollback sending only its dry run) and revocation. `FV_SERVE_UI=1 bash
   scripts/serve/check.sh` runs it; `FV_CONSOLE_SHOTS=<dir>` saves
   screenshots. It needs `node`, the `playwright` npm package and a Chromium
   under `PLAYWRIGHT_BROWSERS_PATH` (default `/opt/pw-browsers`).

@@ -650,7 +650,10 @@ async fn st_create(State(ctx): State<ServeCtx>, axum::Extension(s): Ss, headers:
     let ep = pool.cfg.endpoint_id.clone().unwrap_or_default();
     let rid = match s.gw.runpod.run(&ep, &input, Duration::from_secs(pool.cfg.dispatch_timeout_s.max(1))).await {
         Ok(id) => id,
-        Err(e) => return native_error(&ApiError::loading(format!("pool `{}` did not take the stream: {e}", pool.id())).with_retry_after(10)),
+        Err(e) => {
+            tracing::warn!(pool = pool.id(), error = %e, "gateway: the Runpod endpoint did not take the stream");
+            return native_error(&ApiError::loading(format!("pool `{}` did not take the stream; retry later", pool.id())).with_retry_after(10));
+        }
     };
     let id = format!("gws_{}", uuid::Uuid::new_v4().simple());
     s.gw.lease_put(Lease {

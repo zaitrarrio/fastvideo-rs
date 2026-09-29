@@ -10,17 +10,23 @@
 #   runpod-templates.sh id <variant> <sls|pod>   print one template id
 #   runpod-templates.sh plan <variant> <image>   print the payloads (no API call)
 #
-# CI (.github/workflows/serve-image.yml) runs `sync-all` after every main build
-# when the RUNPOD_API_KEY secret is set; runpod-endpoint.sh and runpod-pod.sh then
-# boot the image the template names. Updating a template's image rolls every
-# endpoint that uses it to the new image (Runpod rolling release).
+# The templates follow one release channel (FV_TEMPLATE_CHANNEL, default
+# `stable`; docs/serve/releases.md): `release.sh promote … stable` and
+# `rollback` sync them. CI's main builds sync them only when the repository
+# variable FV_TEMPLATE_CHANNEL is `latest`. runpod-endpoint.sh and
+# runpod-pod.sh boot the image the template names. Updating a template's
+# image rolls every endpoint that uses it to the new image (Runpod rolling
+# release). Each template's env names its image (FV_IMAGE_REF,
+# FV_IMAGE_DIGEST) and, when FV_RELEASE_CHANNEL is set, the channel, so
+# fv-serve's /health reports them.
 #
 # Templates carry no secret values: the D1/R2/webhook values are Runpod secret
 # references ({{ RUNPOD_SECRET_fv_* }}), resolved by Runpod at boot. A private
 # registry needs RUNPOD_REGISTRY_AUTH_ID (a Runpod container registry auth id,
 # `POST /containerregistryauth`); the GHCR package is public, so none is set.
 #
-# Env: RUNPOD_API_KEY; RUNPOD_REGISTRY_AUTH_ID (optional).
+# Env: RUNPOD_API_KEY; RUNPOD_REGISTRY_AUTH_ID (optional); FV_RELEASE_CHANNEL
+# (optional: the channel being synced).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -51,17 +57,20 @@ rest() {
 payload() {
   local v="$1" flavour="$2" image="$3" mode="${4:-}"
   jq -n --arg name "$(fv_template_name "$v" "$flavour")" --arg image "$image" --arg flavour "$flavour" \
-    --arg v "$v" --arg auth "${RUNPOD_REGISTRY_AUTH_ID:-}" --arg mode "$mode" --argjson secrets "$SECRET_ENV_JSON" '
-    {name: $name, imageName: $image, volumeInGb: 0,
+    --arg v "$v" --arg auth "${RUNPOD_REGISTRY_AUTH_ID:-}" --arg mode "$mode" --argjson secrets "$SECRET_ENV_JSON" \
+    --arg ch "${FV_RELEASE_CHANNEL:-}" '
+    ({FV_IMAGE_REF: $image} + (if ($image | contains("@sha256:")) then {FV_IMAGE_DIGEST: ($image | split("@")[1])} else {} end)
+     + (if $ch == "" then {} else {FV_RELEASE_CHANNEL: $ch} end)) as $ident
+    | {name: $name, imageName: $image, volumeInGb: 0,
      readme: ("fv-serve " + $v + " (" + $flavour + "), published by CI; docs/serve/images.md")}
     + (if $flavour == "sls" then {
          containerDiskInGb: 20,
-         env: ($secrets + {FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
+         env: ($secrets + $ident + {FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
                            FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"})}
        else {
          containerDiskInGb: 30, volumeMountPath: "/workspace",
          ports: (if $v == "gateway" then ["8000/http"] else ["8000/http", "70000/tcp"] end),
-         env: ($secrets + {FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", RUST_LOG: "info"}
+         env: ($secrets + $ident + {FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", RUST_LOG: "info"}
                + (if $v == "gateway" then {} else {FV_WEIGHTS: "/workspace/weights", FV_SERVE_FORWARD: "1"} end))}
        end)
     + (if $auth == "" then {} else {containerRegistryAuthId: $auth} end)
@@ -77,7 +86,10 @@ sync_one() {
     cur="$(fv_template_get "$name")"
     if [[ -n "$cur" ]]; then
       id="$(jq -r .id <<<"$cur")"
-      if [[ "$(jq -r .imageName <<<"$cur")" == "$image" ]]; then log "$name ($id): already $image"; continue; fi
+      if [[ "$(jq -r .imageName <<<"$cur")" == "$image" && "$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")" == "${FV_RELEASE_CHANNEL:-$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")}" \
+        && "$(jq -r '.env.FV_IMAGE_REF // ""' <<<"$cur")" == "$image" ]]; then
+        log "$name ($id): already $image"; continue
+      fi
       resp="$(rest PATCH "/templates/$id" "$(payload "$v" "$flavour" "$image")")" || die "$name: update failed: $(head -c 300 <<<"$resp")"
       log "$name ($id): updated to $image"
     else

@@ -312,6 +312,13 @@ pub struct Job {
     pub queue_position: Option<u32>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// When the job reached the process that runs it with its inputs in
+    /// place (a gateway worker adopting a dispatched job; `None` when the
+    /// job never left the process that created it). `created_at` to here
+    /// is dispatch (input staging, store round trips, the hop to the
+    /// worker); here to `started_at` is the wait for the GPU.
+    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    pub dispatched_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -323,6 +330,13 @@ pub struct Job {
     pub artifacts: Vec<Artifact>,
     pub callback: Option<CallbackSpec>,
     pub cancel_requested: bool,
+    /// Public URLs a client gave for staged inputs that were stored exactly
+    /// as fetched (video and audio; not images, which ingestion may rewrite
+    /// upright): staged path → URL. A gateway lets its worker fetch large
+    /// ones from there instead of through the store (docs/serve/gateway.md
+    /// §3). Empty on most jobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_sources: Vec<(std::path::PathBuf, String)>,
 }
 
 impl Job {
@@ -346,6 +360,7 @@ impl Job {
             progress: 0.0,
             queue_position: None,
             created_at: now,
+            dispatched_at: None,
             started_at: None,
             completed_at: None,
             expires_at: now + retention,
@@ -354,6 +369,7 @@ impl Job {
             artifacts: Vec::new(),
             callback: None,
             cancel_requested: false,
+            input_sources: Vec::new(),
         }
     }
 

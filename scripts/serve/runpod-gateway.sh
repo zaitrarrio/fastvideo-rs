@@ -24,6 +24,9 @@
 # published image and the gateway the CPU-only `gateway` image
 # (docs/serve/images.md, scripts/serve/variants.sh).
 #
+# Registry: the gateway pod and the pools' endpoints are recorded in the D1
+# deployments table (scripts/serve/lib/registry.sh; best effort).
+#
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; RUNPOD_VOLUME_ID (default s2k01690bi);
 # RUNPOD_GPU_TYPES (default H100/H200 list); FV_GATEWAY_CPU_FLAVOR (default cpu3c).
 set -euo pipefail
@@ -32,6 +35,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../gpu/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=variants.sh
 source "$HERE/variants.sh"
+# shellcheck source-path=SCRIPTDIR source=lib/registry.sh
+source "$HERE/lib/registry.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
@@ -91,7 +96,7 @@ cmd_down() {
   while read -r kind id name; do
     [[ -n "$id" ]] || continue
     case $kind in
-      pod) rest DELETE "/pods/$id" >/dev/null 2>&1 && ledger "pod-deleted $id" ;;
+      pod) rest DELETE "/pods/$id" >/dev/null 2>&1 && ledger "pod-deleted $id" && fv_deploy_deleted gateway "$id" ;;
       endpoint) bash "$HERE/runpod-endpoint.sh" down "$id" >/dev/null 2>&1 ;;
       template) rest DELETE "/templates/$id" >/dev/null 2>&1 && ledger "template-deleted $id" ;;
     esac
@@ -108,7 +113,7 @@ EPS=()
 TPLS=()
 cleanup() {
   local rc=$?
-  [[ -n "$POD" ]] && { rest DELETE "/pods/$POD" >/dev/null 2>&1 && ledger "pod-deleted $POD"; POD=""; }
+  [[ -n "$POD" ]] && { rest DELETE "/pods/$POD" >/dev/null 2>&1 && ledger "pod-deleted $POD" && fv_deploy_deleted gateway "$POD"; POD=""; }
   local i
   for i in "${!EPS[@]}"; do bash "$HERE/runpod-endpoint.sh" down "${EPS[$i]}" "${TPLS[$i]}" >/dev/null 2>&1 || true; done
   EPS=(); TPLS=()
@@ -183,10 +188,10 @@ cmd_validate() {
   # Pools: queue endpoints whose workers run behind the gateway.
   local extra ep_h3 tpl_h3 ep_wan tpl_wan line
   extra="$(jq -cn --arg t "$token" '{FV_SERVE_ROLE: "worker", FV_INTERNAL_TOKEN: $t, FV_JOBS_HEARTBEAT_S: "10"}')"
-  line="$(FV_EXTRA_ENV_JSON="$extra" FV_ENDPOINT_PREFIX=fv-gw-h3 FV_SERVE_CONFIG=/etc/fv/runpod.toml FV_IDLE_TIMEOUT_S=30 \
+  line="$(FV_EXTRA_ENV_JSON="$extra" FV_DEPLOY_POOL=h3-turbo FV_ENDPOINT_PREFIX=fv-gw-h3 FV_SERVE_CONFIG=/etc/fv/runpod.toml FV_IDLE_TIMEOUT_S=30 \
     FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up ${image:+"$image"} | tail -1)"
   read -r ep_h3 tpl_h3 <<<"$line"; EPS+=("$ep_h3"); TPLS+=("$tpl_h3")
-  line="$(FV_EXTRA_ENV_JSON="$extra" FV_ENDPOINT_PREFIX=fv-gw-wan FV_SERVE_CONFIG=/etc/fv/runpod-wan.toml FV_IDLE_TIMEOUT_S=30 \
+  line="$(FV_EXTRA_ENV_JSON="$extra" FV_DEPLOY_POOL=wan FV_ENDPOINT_PREFIX=fv-gw-wan FV_SERVE_CONFIG=/etc/fv/runpod-wan.toml FV_IDLE_TIMEOUT_S=30 \
     FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up ${image:+"$image"} | tail -1)"
   read -r ep_wan tpl_wan <<<"$line"; EPS+=("$ep_wan"); TPLS+=("$tpl_wan")
   log "pools: h3-turbo=$ep_h3 wan=$ep_wan"
@@ -195,11 +200,12 @@ cmd_validate() {
   local payload resp t_create t_ready code
   payload="$(jq -n --arg image "$gw_image" \
     --arg flavor "$CPU_FLAVOR" --argjson secrets "$SECRET_ENV_JSON" --arg tok "$token" --arg keys "$keyhash" \
-    --arg admin "$admin" --arg rp "$RUNPOD_API_KEY" --arg h3 "$ep_h3" --arg wan "$ep_wan" --arg name "fv-gw-gateway-$(date -u +%m%d%H%M%S)" '{
+    --arg admin "$admin" --arg rp "$RUNPOD_API_KEY" --arg h3 "$ep_h3" --arg wan "$ep_wan" --arg name "fv-gw-gateway-$(date -u +%m%d%H%M%S)" \
+    --argjson ident "$(fv_image_env_json "$gw_image")" '{
       name: $name, imageName: $image, computeType: "CPU", cpuFlavorIds: [$flavor], vcpuCount: 2,
       containerDiskInGb: 20, ports: ["8000/http"],
       dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-serve"], dockerStartCmd: ["--config", "/etc/fv/gateway.toml"],
-      env: ($secrets + {
+      env: ($secrets + $ident + {
         FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_INTERNAL_TOKEN: $tok, FV_API_KEYS: $keys,
         FV_ADMIN_TOKEN: $admin, FV_RUNPOD_API_KEY: $rp, FV_POOL_H3_TURBO_ENDPOINT: $h3, FV_POOL_WAN_ENDPOINT: $wan,
         FV_POOL_H3_MAX_ENDPOINT: "fv-gw-not-deployed", FV_POOL_LTX_ENDPOINT: "fv-gw-not-deployed", RUST_LOG: "info"
@@ -210,6 +216,8 @@ cmd_validate() {
   POD="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$POD" ]] || die "gateway pod create returned no id"
   ledger "pod-created $POD gateway cpu=$CPU_FLAVOR $(jq -r '.costPerHr // empty' <<<"$resp")/h"
+  fv_deploy_created gateway "$POD" name="$(jq -r '.name // empty' <<<"$resp")" image="$gw_image" variant=gateway gpu="cpu:$CPU_FLAVOR" \
+    cost_per_hr="$(jq -r '.costPerHr // empty' <<<"$resp")" meta="$(jq -nc --arg h3 "$ep_h3" --arg wan "$ep_wan" '{pools: {"h3-turbo": $h3, wan: $wan}}')"
   # shellcheck disable=SC2016 # expanded by the child shell
   nohup env POD_ID="$POD" CAP="$CAP_S" API="$REST" bash -c \
     'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' >/dev/null 2>&1 &
@@ -217,7 +225,7 @@ cmd_validate() {
   log "gateway pod $POD ($GW); waiting for /health"
   while :; do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$GW/health" || true)"
-    [[ "$code" == 200 ]] && { t_ready="$(now)"; break; }
+    [[ "$code" == 200 ]] && { t_ready="$(now)"; fv_deploy_ready gateway "$POD"; break; }
     (( ${t_create%.*} + 1500 > $(date +%s) )) || die "the gateway never answered /health (last $code)"
     sleep 5
   done
@@ -266,7 +274,7 @@ cmd_validate() {
   pools="$(curl -sS --max-time 30 -H "Authorization: Bearer $admin" "$GW/fv/v1/gateway/pools" | jq -c '[.pools[] | {pool, queued, running, run_time, queue_wait, workers, available}]')"
 
   trap - EXIT INT TERM
-  rest DELETE "/pods/$POD" >/dev/null 2>&1 && ledger "pod-deleted $POD"; POD=""
+  rest DELETE "/pods/$POD" >/dev/null 2>&1 && ledger "pod-deleted $POD" && fv_deploy_deleted gateway "$POD"; POD=""
   for i in "${!EPS[@]}"; do bash "$HERE/runpod-endpoint.sh" down "${EPS[$i]}" "${TPLS[$i]}" >/dev/null 2>&1 || true; done
   EPS=(); TPLS=()
   sleep 10

@@ -40,6 +40,7 @@ pub struct WorkerStatus {
     pub queued: u32,
     pub sessions: u32,
     pub caps: Vec<(ModelCaps, Recipe)>,
+    pub build: Option<super::WorkerBuild>,
 }
 
 impl WorkerStatus {
@@ -66,6 +67,7 @@ impl WorkerStatus {
             queued: n("/stats/queued_batch") + n("/stats/queued_stream"),
             sessions: n("/stats/sessions"),
             caps,
+            build: super::WorkerBuild::parse(v),
         }
     }
 }
@@ -108,7 +110,11 @@ impl Gateway {
         let now = now_ms();
         for a in active {
             match a.status.as_deref() {
-                None => self.close_row(&a.row.job_id, None).await,
+                None => {
+                    if self.close_row(&a.row.job_id, None).await {
+                        self.drop_inputs(&a.row.inputs).await;
+                    }
+                }
                 Some("queued") | Some("running") => {
                     let e = counts.entry(a.row.pool.clone()).or_insert((0, 0, i64::MAX));
                     if a.status.as_deref() == Some("queued") {
@@ -125,7 +131,12 @@ impl Gateway {
                         Some(id) => self.jobs.get(id).await,
                         None => None,
                     };
-                    self.close_row(&a.row.job_id, job.as_ref()).await;
+                    // The store copies of its inputs go with the row (the
+                    // worker deletes those it was sent; the background
+                    // copies for a re-dispatch are only in the row).
+                    if self.close_row(&a.row.job_id, job.as_ref()).await {
+                        self.drop_inputs(&a.row.inputs).await;
+                    }
                 }
             }
         }
@@ -217,6 +228,7 @@ impl Gateway {
                     w.queued = s.queued;
                     w.sessions = s.sessions;
                     w.id = s.id.clone();
+                    w.build = s.build.clone();
                     if s.ready && !s.caps.is_empty() && st.caps_at.is_none_or(|t| t.elapsed() >= refresh) {
                         st.live_caps = Some(s.caps);
                         st.caps_at = Some(Instant::now());
@@ -289,8 +301,9 @@ impl Gateway {
             .collect()
     }
 
-    /// Closes a dispatch row (job finished or gone), keeping durations.
-    async fn close_row(&self, job_id: &str, job: Option<&fastvideo_protocol::Job>) {
+    /// Closes a dispatch row (job finished or gone), keeping durations;
+    /// `true` when this call closed it.
+    async fn close_row(&self, job_id: &str, job: Option<&fastvideo_protocol::Job>) -> bool {
         let secs = |a: time::OffsetDateTime, b: time::OffsetDateTime| (b - a).as_seconds_f64();
         let (run_s, wait_s) = match job {
             Some(j) => (
@@ -307,8 +320,12 @@ impl Gateway {
                 vec![json!(now), json!(now), run_s.map_or(Value::Null, |v| json!(v)), wait_s.map_or(Value::Null, |v| json!(v)), json!(job_id)],
             ))
             .await;
-        if let Err(e) = r {
-            tracing::warn!(job = %job_id, error = %e, "gateway: closing a dispatch row failed");
+        match r {
+            Ok(r) => r.changes > 0,
+            Err(e) => {
+                tracing::warn!(job = %job_id, error = %e, "gateway: closing a dispatch row failed");
+                false
+            }
         }
     }
 
