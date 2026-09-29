@@ -167,6 +167,13 @@ impl std::fmt::Debug for MediaPipeline {
 impl MediaPipeline {
     /// Starts consuming `ticks` (must be called inside a tokio runtime).
     pub fn start(cfg: MediaConfig, ticks: TickReceiver) -> Self {
+        Self::start_with_spares(cfg, ticks, SparePool::per_session())
+    }
+
+    /// [`Self::start`] with the session's encoder spare pool (possibly
+    /// warmed before the session started); pre-warms it unless it already
+    /// holds a spare. The pool's spare ends with the session.
+    pub fn start_with_spares(cfg: MediaConfig, ticks: TickReceiver, spares: SparePool) -> Self {
         let sh = Arc::new(Shared {
             cfg,
             peers: Mutex::new(HashMap::new()),
@@ -183,9 +190,9 @@ impl MediaPipeline {
         // Pre-warm an encoder for the session's canvas in the codec answers
         // prefer, while the peer connects (codec probes included), so the
         // first video frame does not wait for ffmpeg to start.
-        let spares = SparePool::per_session();
-        let c = sh.cfg.clone();
-        spares.prewarm_with(move || prewarm_spec(&c));
+        if spares.spare_state().is_none() {
+            prewarm(&spares, &sh.cfg);
+        }
         std::thread::Builder::new()
             .name("reactor-video".into())
             .spawn(move || video_loop(v, ticks, rt, spares))
@@ -575,6 +582,12 @@ pub trait FrameEncoder: Send {
     fn poll(&mut self) -> Result<Vec<(u64, Bytes)>, String> {
         Ok(Vec::new())
     }
+}
+
+/// Pre-warms `pool` for a session with `cfg`, on a background thread.
+pub(crate) fn prewarm(pool: &SparePool, cfg: &MediaConfig) {
+    let c = cfg.clone();
+    pool.prewarm_with(move || prewarm_spec(&c));
 }
 
 /// The pipe encoder the session most likely needs first (the codec answers
