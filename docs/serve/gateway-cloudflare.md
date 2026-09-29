@@ -557,7 +557,9 @@ Reading it:
   only rises when a dispatch *returns*, so concurrent submits all pick the
   same worker and queue on its GPU. The DO places jobs one at a time. (A
   gateway fix, independent of this work: count the dispatch before sending
-  it.)
+  it. Done 2026-09-29: the gateway reserves the worker before the call,
+  [gateway.md](gateway.md) §3.4; 5 jobs on 3 workers went from 16.7 s to
+  3.5 s mean queue.)
 - The submit call returns earlier on the DO path (0.77–0.85 s against
   1.01 s at 250 ms D1) because it does not wait for the worker's adopt; with
   no D1 latency it costs the HTTPS enqueue to the edge (≈ 0.13 s from
@@ -568,8 +570,8 @@ Reading it:
 
 ### 9.5 Risks found
 
-- **Burst placement on the gateway path** (above): a burst of N jobs lands
-  on one pod. Not part of this change; noted for the gateway owner.
+- **Burst placement on the gateway path** (above): a burst of N jobs landed
+  on one pod. Fixed on the gateway since ([gateway.md](gateway.md) §3.4).
 - **Serialized enqueues**: 5 concurrent enqueues took up to 185 ms each
   (reduced in phase 2 to ≤ 0.12 s by skipping most alarm writes, §9.7).
 - **Envelope size**: inline inputs (≤ 8 MiB per job) were held in the DO's
@@ -662,7 +664,8 @@ round trip is left between the submit and the GPU. What is left is the
 enqueue to the edge and the push (≈ 20–30 ms from EU-RO-1). The submit call
 still includes the `gw_dispatch` insert (0.58 s at 250 ms D1); it could go
 behind too. The gateway's burst placement problem (§9.4) was still on main
-when this ran (being fixed separately).
+when this ran; it is fixed since (gateway.md §3.4), so the gateway's
+"5 at once" rows above are the old behaviour.
 
 GPU_RESULTS_PLACEHOLDER
 

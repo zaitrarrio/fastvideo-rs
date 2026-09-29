@@ -95,8 +95,27 @@ pub struct WorkerView {
     pub sessions: u32,
     /// From `gw_workers` (self-registered) rather than `urls`.
     pub registered: bool,
-    /// Dispatches from this replica since the last probe.
-    pub inflight: u32,
+    /// Jobs it runs at once (its executors; 1 when it does not say).
+    pub capacity: u32,
+    /// Its batch queue limit (0: none, or not reported).
+    pub queue_max: u32,
+    /// Dispatch calls from this replica to it now in progress: reserved
+    /// when the worker is picked, released when the call returns.
+    pub reserved: u32,
+    /// Jobs this replica placed here that `running` / `queued` may not
+    /// count yet (see [`WorkerView::unreported`]).
+    pub unreported: u32,
+    /// The placements behind `unreported`: (job, when the worker took it).
+    #[serde(skip)]
+    pub placed: Vec<(JobId, Instant)>,
+    /// `running` / `queued` were computed by the worker after this instant
+    /// (the probe or dispatch call that brought them was sent then).
+    #[serde(skip)]
+    pub load_at: Option<Instant>,
+    /// The job whose dispatch answer brought `running` / `queued` (it
+    /// counts it although it was taken after `load_at`).
+    #[serde(skip)]
+    pub load_includes: Option<JobId>,
     pub last_error: Option<String>,
     /// The last failed probe got an HTTP answer (not a connection error).
     pub answered: bool,
@@ -125,8 +144,39 @@ impl WorkerView {
     pub fn dialable(&self) -> bool {
         !self.url.starts_with("do:")
     }
-    fn load(&self) -> u32 {
-        self.running + self.queued + self.inflight
+    /// Its load as the gateway places against it: what the worker last
+    /// reported (running + queued), the jobs placed here since that report,
+    /// and the dispatch calls in progress.
+    pub fn load(&self) -> u32 {
+        self.running + self.queued + self.unreported_now() + self.reserved
+    }
+    /// Placements its last report cannot include: taken after the report
+    /// was computed, other than the job whose answer brought it.
+    fn unreported_now(&self) -> u32 {
+        self.placed.iter().filter(|(j, at)| self.load_at.is_none_or(|t| *at > t) && Some(*j) != self.load_includes).count() as u32
+    }
+    /// Takes a load report computed after `at` (older reports are ignored:
+    /// a probe answered before a later dispatch's answer); placements the
+    /// report surely counts are forgotten.
+    pub(crate) fn report_load(&mut self, at: Instant, running: u32, queued: u32, includes: Option<JobId>) {
+        if self.load_at.is_some_and(|t| t > at) {
+            return;
+        }
+        self.running = running;
+        self.queued = queued;
+        self.load_at = Some(at);
+        self.load_includes = includes;
+        self.placed.retain(|(_, took)| *took > at);
+        self.unreported = self.unreported_now();
+    }
+    /// Job-times a new job would wait here: full rounds of its capacity
+    /// ahead of it (0: a free slot).
+    fn rounds(&self) -> u32 {
+        self.load() / self.capacity.max(1)
+    }
+    /// Its queue is full (jobs beyond its run slots reach `queue_max`).
+    fn queue_full(&self) -> bool {
+        self.queue_max > 0 && self.load().saturating_sub(self.capacity.max(1)) >= self.queue_max
     }
     /// The public status word (see [`crate::status`]).
     pub fn state(&self) -> crate::status::State {
@@ -169,9 +219,130 @@ pub struct PoolState {
     pub queued: u32,
     pub running: u32,
     pub streams: u32,
-    /// Dispatches from this replica since the last tick.
-    pub pending: u32,
+    /// Dispatches from this replica the last tick's D1 count may miss:
+    /// being recorded now, and recorded (at these instants) after it.
+    pub recording: u32,
+    pub recorded: Vec<Instant>,
     pub metrics: Option<PoolMetrics>,
+    /// Orders equally loaded workers differently on each replica (so two
+    /// replicas' bursts do not start on the same worker).
+    pub tie_seed: u64,
+}
+
+impl PoolState {
+    /// Jobs dispatched from this replica that `queued` does not count yet.
+    pub fn pending(&self) -> u32 {
+        self.recording + self.recorded.len() as u32
+    }
+
+    /// Picks the worker for a job and reserves a slot on it, under the pool
+    /// lock (concurrent submits see each other's picks): among usable,
+    /// dialable workers not in `skip` whose queue is not full, ready ones
+    /// first, then the fewest job-times of wait (free slot first), then the
+    /// lowest load. With no free slot anywhere the job queues on the worker
+    /// where it starts soonest; the gateway holds no queue of its own.
+    pub(crate) fn pick(&mut self, skip: &[String]) -> Result<String, NoWorker> {
+        let seed = self.tie_seed;
+        let tie = |url: &str| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (seed, url).hash(&mut h);
+            h.finish()
+        };
+        let mut full = false;
+        let mut best: Option<((bool, u32, u32, u64), String)> = None;
+        for w in self.workers.values() {
+            if !w.usable() || !w.dialable() || skip.contains(&w.url) {
+                continue;
+            }
+            if w.queue_full() {
+                full = true;
+                continue;
+            }
+            let key = (!w.ready, w.rounds(), w.load(), tie(&w.url));
+            if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                best = Some((key, w.url.clone()));
+            }
+        }
+        let Some((_, url)) = best else {
+            return Err(if full { NoWorker::QueueFull } else { NoWorker::None });
+        };
+        if let Some(w) = self.workers.get_mut(&url) {
+            w.reserved += 1;
+        }
+        Ok(url)
+    }
+}
+
+/// Why [`PoolState::pick`] found no worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoWorker {
+    /// None is usable (down, draining, failed, or already tried).
+    None,
+    /// Every usable one has a full queue.
+    QueueFull,
+}
+
+/// A slot reserved on a pod worker for one dispatch call; dropping it
+/// (a refusal, an error, a cancelled submit) releases it, [`Reservation::placed`]
+/// turns it into a placement.
+pub(crate) struct Reservation<'a> {
+    pool: &'a Pool,
+    pub url: String,
+    open: bool,
+}
+
+/// The worker's load right after it took a job (the dispatch answer).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct TakeLoad {
+    pub running: u32,
+    pub queued: u32,
+    pub capacity: u32,
+    pub queue_max: u32,
+}
+
+impl TakeLoad {
+    pub fn parse(v: &Value) -> Option<Self> {
+        let l = v.get("load").filter(|l| l.is_object())?;
+        let n = |k: &str| l.get(k).and_then(Value::as_u64).map(|x| x as u32);
+        Some(Self { running: n("running")?, queued: n("queued")?, capacity: n("capacity").unwrap_or(1), queue_max: n("queue_max").unwrap_or(0) })
+    }
+}
+
+impl<'a> Reservation<'a> {
+    /// Reserves a slot on the best worker of `pool` (see [`PoolState::pick`]).
+    pub fn take(pool: &'a Pool, skip: &[String]) -> Result<Self, NoWorker> {
+        let url = pool.lock().pick(skip)?;
+        Ok(Self { pool, url, open: true })
+    }
+
+    /// The worker took `job` (the call was sent at `sent`): the slot
+    /// becomes a placement, counted until a report includes it; `load` is
+    /// the worker's own count from its answer.
+    pub fn placed(mut self, job: JobId, sent: Instant, load: Option<TakeLoad>) {
+        self.open = false;
+        let mut st = self.pool.lock();
+        if let Some(w) = st.workers.get_mut(&self.url) {
+            w.reserved = w.reserved.saturating_sub(1);
+            w.placed.push((job, Instant::now()));
+            if let Some(l) = load {
+                w.capacity = l.capacity.max(1);
+                w.queue_max = l.queue_max;
+                w.report_load(sent, l.running, l.queued, Some(job));
+            }
+            w.unreported = w.unreported_now();
+        }
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            if let Some(w) = self.pool.lock().workers.get_mut(&self.url) {
+                w.reserved = w.reserved.saturating_sub(1);
+            }
+        }
+    }
 }
 
 /// One `[[pools]]` entry at run time.
@@ -325,10 +496,11 @@ impl Gateway {
         let mut pools = Vec::new();
         for (idx, p) in config.pools.iter().enumerate() {
             let caps = static_caps(p)?;
-            let mut st = PoolState { available: true, ..PoolState::default() };
+            let tie_seed = u64::from_str_radix(&fastvideo_serve_kit::random_token()[..16], 16).unwrap_or(idx as u64);
+            let mut st = PoolState { available: true, tie_seed, ..PoolState::default() };
             for u in &p.urls {
                 let url = u.trim_end_matches('/').to_owned();
-                st.workers.insert(url.clone(), WorkerView { url, healthy: true, ready: true, ..WorkerView::default() });
+                st.workers.insert(url.clone(), WorkerView { url, healthy: true, ready: true, capacity: 1, ..WorkerView::default() });
             }
             pools.push(Pool { idx, cfg: p.clone(), static_caps: caps, st: Mutex::new(st) });
         }
