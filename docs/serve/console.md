@@ -11,7 +11,7 @@ with `curl`.
 | Page | What it does |
 |---|---|
 | `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints. With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
-| `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys |
+| `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
@@ -19,6 +19,12 @@ with `curl`.
 
 Disable the pages with `FV_CONSOLE=0` (or `server.console = false`); the
 APIs stay up.
+
+**Fake engine knobs** (tests, demos): `FV_FAKE_H3_1080P=1` gives the fake
+H3 max / turbo models the 1080P tier; `FV_FAKE_DEVICE=a100` (or `l40s`,
+`h100`, `b200`, `rtx-pro-6000`, `sm<NN>[:<GiB>]`) simulates a GPU for the
+startup capability check, so a model it cannot run shows as failed with
+its reason (the fake H3 models need FP8).
 
 **Server status.** Every page's top bar has a status strip: one dot per
 pool (green ready, amber busy / loading / draining, grey scaled to zero, red
@@ -38,7 +44,11 @@ probe errors; workers are `w1`, `w2`, … per pool). Single server: one
 `busy`, `draining`, `failed`). Gateway: each pool from the tick's probes
 (pods per worker, including `loading` for a worker still starting;
 serverless from Runpod's `/health` worker counts, `scaled_to_zero` with no
-worker). Shape (see `crates/fastvideo-serve/src/status.rs`):
+worker). A model that failed (its load, or the startup capability check:
+a GPU that cannot run it) is `failed` with a `reason`, e.g. "model
+`h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80): it needs FP8
+tensor cores (Ada, Hopper or Blackwell: sm89 or newer)"; its pool lists it
+in `failed_models`. Shape (see `crates/fastvideo-serve/src/status.rs`):
 
 ```json
 {"object": "fv.status", "gateway": true, "state": "ready",
@@ -243,7 +253,66 @@ on a gateway (a standalone server answers 404: "not a gateway"):
   created) with their build, status, age, creator and drift.
 - **History**: the last 50 releases, rolled-back ones marked.
 
-## 7. Tests
+## 7. Experimental features
+
+The admin page's **Experimental features** section lists the server's
+feature flags with a switch each (a confirm dialog first). The Deployments
+page links to it. Every flag is off by default.
+
+| Flag | Off (default) | On |
+|---|---|---|
+| `h3_1080p_long` | H3 native 1080P clips up to **5 s**; a longer 1080P request is a 4xx naming the 5 s limit and this flag | H3 1080P up to **10 s** (longer is still refused) |
+
+Owner decision (2026-09-29): H3 native 1080P is 5 s at most by default;
+10 s is experimental (about 47 GiB of working memory at 1080P,
+docs/serve/h3-1080p-and-upscaler.md).
+
+```bash
+curl -s "$BASE/fv/v1/admin/flags" -H "Authorization: Bearer $ADMIN"
+# → {"object":"fv.feature_flags","backend":"d1","flags":[{"name":"h3_1080p_long","enabled":false,"default":false,
+#     "experimental":true,"description":"…","updated_at":null,"updated_by":null}]}
+curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' -d '{"enabled": true}'
+```
+
+`PUT` answers the new list; an unknown flag is 404, a body without a boolean
+`enabled` 400, a missing or wrong admin token 401.
+
+**How a flag takes effect** (`crates/fastvideo-serve/src/flags.rs`):
+
+- **Storage.** D1 table `feature_flags (name, enabled, updated_at,
+  updated_by)`, created on first use (like the release registry tables),
+  when the server has the D1 job store (a gateway always does); otherwise
+  `<state_dir>/feature_flags.json`. Every process caches the flags; a
+  `PUT` applies at once on the process that took it, the others re-read D1
+  every 30 s (the admin list re-reads it on every call).
+- **Enforcement.** Flags act on the model caps
+  (`fastvideo_protocol::apply_feature_flags`) through the engine gate every
+  API negotiates against, so negotiation refuses what a flag does not
+  allow, on the gateway, before a job exists or reaches a worker. The same
+  caps feed `/fal/schema/…` (the console's forms) and
+  `/fv/v1/capabilities`. Nothing is added to the dispatch: workers run
+  jobs that were already negotiated. The fal director (whose sessions run
+  on a worker) caps 1080p chunks from the same caps, with the worker
+  reading the same D1 table.
+- **What `h3_1080p_long` changes.** The H3 1080P tier's `canvas.hd`
+  carries `max_frames` (124 = 5 s; 243 = 10 s with the flag) and, while
+  the flag is off, `experimental_max_frames` (243) for the refusal message.
+  The refusal (fal 422, native / `/v1/videos` 400, on `duration` or
+  `num_frames`):
+
+  > 1080P clips are limited to 5 s (at most 124 frames at 24 fps) on model
+  > `h3-turbo`; this request asks for 243 frames (10.12 s). Longer 1080P
+  > clips, up to 10 s, are an experimental feature (`h3_1080p_long`) that
+  > is off on this server; an admin can enable it under Experimental
+  > features in the console
+
+  The fal form's `duration` gets `x-fv-max-by-resolution: {"1080P": 5}`
+  (10 with the flag): the console narrows the duration slider when 1080P
+  is chosen and clamps a longer value. Director sessions configured at
+  1080p use 5 s chunks (10 s with the flag).
+
+## 8. Tests
 
 - Rust: `fastvideo-serve-kit` `keys` (mint / check / revoke, file
   persistence and digest-only storage, D1 over the SQLite mock shared by two
@@ -253,6 +322,13 @@ on a gateway (a standalone server answers 404: "not a gateway"):
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
   and content types, `/fal/schema`, `auth.mode` in capabilities, the keyless
   flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining),
+  `tests/flags.rs` (the `h3_1080p_long` flag through the admin API; 1080P
+  over 5 s refused on fal, native and `/v1/videos` with the flag off and
+  accepted up to 10 s with it on; the fal form's duration cap and
+  `/fv/v1/capabilities` follow it; persistence across a restart and
+  through D1; a fake engine on a simulated A100 failing its FP8 models with
+  the reason in `/fv/v1/status`), `tests/dimension_sweep.rs` (the sweep
+  runs with the flag off and on),
   `tests/gateway.rs` (status, capabilities and `/healthz` per pool and
   worker with nothing secret, a killed worker turning `down`, a gateway
   with auth `none`, the sealed admin token), `admin_token` unit tests
@@ -262,7 +338,10 @@ on a gateway (a standalone server answers 404: "not a gateway"):
   fake,encoders`, starts it with no config file and without
   `FV_ADMIN_TOKEN`, reads the token from `<state dir>/admin_token` (and
   checks the file is mode 600 and the token is not in the log) and drives
-  headless Chromium through minting a key, text-to-video, image-to-video
+  headless Chromium through minting a key, the Experimental features
+  section (with `FV_FAKE_H3_1080P=1`: `h3_1080p_long` off, the h3-turbo
+  form's duration capped at 5 s at 1080P and 15 s at 768P, 10 s after
+  enabling the flag, 5 s again after disabling it), text-to-video, image-to-video
   with an uploaded image, the API tab, history, a live director session
   (start, 1344x768 video with one video and one audio track playing, a
   second prompt applied, stop; the encoder is `auto`, i.e. OpenH264 on a

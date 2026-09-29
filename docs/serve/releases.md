@@ -217,9 +217,10 @@ objects are ever shown.
   `actions:write` on the repository; `FV_GITHUB_REPO`, `FV_GITHUB_API`,
   `FV_RELEASE_WORKFLOW`, `FV_RELEASE_REF`, `FV_TEMPLATE_CHANNEL` adjust
   it); without it promote / rollback answer 503 and dry runs still work.
-  The token is never returned or logged. The cluster script does not pass
-  one: promotion from the console is off until an operator sets it on the
-  gateway pod.
+  The token is never returned or logged. The cluster script passes one
+  when `/root/.config/fv/github_token` (or `$FV_GITHUB_TOKEN_FILE`) exists
+  with mode 600 (docs/serve/gateway.md §9); without that file promotion
+  from the console stays off.
 - Console `/console/deployments` (docs/serve/console.md §6): channels with
   Rollback, Promote with a dry-run plan and a confirm, live builds with
   drift and the mixed flag, the registry, history.

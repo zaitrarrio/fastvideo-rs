@@ -18,6 +18,12 @@ prompts, the 10 s cells confirmed the per-job memory estimate, and a fal
 `resolution: "1080P"` request through fv-serve passed. See
 [Gate run, part 2](#gate-run-part-2-2026-09-29-h3-max-5-prompts-10-s-cells-fal-1080p).
 
+**Update (2026-09-29, owner decision):** native 1080P is **5 s at most**
+by default; up to **10 s** is an experimental feature (`h3_1080p_long`) an
+admin turns on in the console. See [Clip length](#clip-length-5-s-10-s-experimental).
+Workers also refuse to report ready on a GPU that cannot run H3 (no FP8);
+see [Capability check](#capability-check-at-start-2026-09-29).
+
 ## Summary
 
 - **Native 1080p works and adds real detail.** At 1920x1088 and 1088x1920,
@@ -87,6 +93,9 @@ Commit `bc730e0`.
   recipe and the Ref2VA models do not; 1080P there answers
   `Unsupported(H3Refine1080P)` (422 on `resolution`), as before.
 - **Default.** 768P stays the default tier everywhere.
+- **Clip length.** 1080P is 5 s at most unless the `h3_1080p_long`
+  experimental feature is on (then 10 s); see
+  [Clip length](#clip-length-5-s-10-s-experimental).
 - **Memory gate, at start.** `CudaBackend::new` reads the device's total
   memory (without a context; `FASTVIDEO_DEVICE_BUDGET_GIB` caps it) and drops
   the tier from every H3 model when it is below the tier's plan
@@ -108,6 +117,54 @@ Commit `bc730e0`.
   (22.4 GiB); see [Gate run, part 2](#gate-run-part-2-2026-09-29-h3-max-5-prompts-10-s-cells-fal-1080p).
 - **Pricing hint.** GPU time is about 2.4x (turbo) to 2.7x (max) that of
   768P for the same clip; price 1080P at about 2.5x 768P (fal lists 2x).
+
+### Clip length: 5 s, 10 s experimental
+
+Owner decision (2026-09-29): **H3 native 1080P defaults to 5 s max; 10 s
+is an experimental feature.** 10 s at 1080P needs about 47 GiB of working
+memory (the per-job estimate above; on a 96 GB card with the FP8 text
+encoder resident it does not fit), and the gate validated 10 s only on
+two cells.
+
+| `h3_1080p_long` | 1080P lengths accepted | A longer 1080P request |
+|---|---|---|
+| off (default) | 4 to 5 s (107 or 124 frames) | 4xx on `duration` / `num_frames`: "1080P clips are limited to 5 s (at most 124 frames at 24 fps) on model `…`; … Longer 1080P clips, up to 10 s, are an experimental feature (`h3_1080p_long`) that is off on this server; an admin can enable it under Experimental features in the console" |
+| on | up to 10 s (243 frames) | 4xx: "1080P clips are limited to 10 s (at most 243 frames …)" |
+
+768P and 480P keep the whole 4 to 15 s grid. The flag lives in D1
+(`feature_flags`), is toggled on the console's admin page (Experimental
+features) or `PUT /fv/v1/admin/flags/h3_1080p_long`, and acts on the caps
+at negotiation, on the gateway (or a single server), on every API: fal
+(`resolution: "1080P"`), native (`short_edge: 1080`, `size`), `/v1/videos`
+(`size: "1920x1080"`). The console's fal form narrows the duration slider
+to the cap when 1080P is picked (`x-fv-max-by-resolution` in the served
+schema), and director sessions configured at 1080p use chunks of at most
+5 s (10 s with the flag). The per-job memory check below still applies on
+top: with the flag on, a 10 s job on a GPU without room is refused as
+before. Details: docs/serve/console.md §7.
+
+### Capability check at start (2026-09-29)
+
+An A100 (sm80) worker once reported ready, then every H3 job failed with
+"cuBLASLt has no tensorwise FP8 algorithm … on sm80". Now `CudaBackend`
+reads the device's name, compute capability and total memory at start
+(without a context) and checks each model's needs
+(`CudaModel::requirements`, `crates/fastvideo-engine-service/src/device.rs`):
+sm80 for every model; FP8 tensor cores (sm89: Ada, Hopper, Blackwell) for
+H3 recipes with a technique profile (MXFP8 linears) or an FP8-resident
+text encoder; NVFP4 (sm100) for the LTX draft profile; the DiT's weight
+bytes within the device memory. A model that fails is not loaded: its load
+fails at once with the reason, readiness is `failed` (so `/health` is 503
+and the gateway never dispatches to the worker), and `/fv/v1/status` shows
+the model `failed` with the reason:
+
+> model `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80): it
+> needs FP8 tensor cores (Ada, Hopper or Blackwell: sm89 or newer); not
+> loaded, this worker does not report ready
+
+The fake engine takes a simulated device (`FakeConfig::device_profile`,
+`FV_FAKE_DEVICE=a100`) so the path is tested on CPU
+(`crates/fastvideo-serve/tests/flags.rs`).
 
 ### Gate run (2026-09-28): h3-turbo, 5 prompts
 

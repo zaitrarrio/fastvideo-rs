@@ -202,6 +202,13 @@ job to run, so the store is off the submit path now:
 | a larger video or audio input the client gave as an `http(s)` URL (`Job.input_sources`; images are left out because ingestion may rewrite them upright) | **source**: the worker fetches the URL itself with ingestion's SSRF guard, redirect rules and size/time limits, and checks the gateway's SHA-256; if that fails the worker answers **424** and the gateway sends that input through the store and dispatches again |
 | anything else (large images, uploads, data URIs over the budget) | **store**: R2 PUT (all inputs at once) and a signed URL; the worker reads the object (all at once) |
 
+**Owner decision (2026-09-29): inline inputs are the default for
+serverless pools too.** An image-to-video (or any job whose inputs fit
+`inline_inputs_max_bytes`) rides in the Runpod `/run` body, capped at 6 MiB
+for serverless pools so the body stays under Runpod's 10 MB; only larger
+inputs go through a URL or the store. This is what the gateway does today;
+the setting stays for tests and for turning it off (`0`).
+
 After a dispatch the gateway copies the inputs that skipped the store into
 it **in the background** (`stage_inputs_for_retry`, pools with
 `retries > 0`) and points the `gw_dispatch` row at the copies, so a
@@ -287,8 +294,27 @@ most `watch_poll_ms` later (60 s for deleting a finished job).
   gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
 - `GET /fv/v1/status` (public, no secrets; docs/serve/console.md): each
   pool's and worker's state from the tick's probes (`ready`, `busy`,
-  `loading`, `scaled_to_zero`, `draining`, `unhealthy`, `down`), last-seen
-  age, queue depth and running jobs; the console's status strip polls it.
+  `loading`, `scaled_to_zero`, `draining`, `unhealthy`, `down`, `failed`),
+  last-seen age, queue depth and running jobs; the console's status strip
+  polls it.
+- **A worker on a GPU that cannot run its model** (the startup capability
+  check, `crates/fastvideo-engine-service/src/device.rs`: compute
+  capability, FP8 / NVFP4 tensor cores, the DiT's size against the
+  device's memory) fails that model instead of loading it: its internal
+  status says `readiness: failed` with `failed_models: {model: reason}`,
+  the gateway shows the worker `failed` and never dispatches to it, and
+  `/fv/v1/status` gives the model `state: failed` with the `reason` (e.g.
+  "model `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80): it
+  needs FP8 tensor cores (Ada, Hopper or Blackwell: sm89 or newer)"). This
+  replaces the failure mode where an A100 reported ready and every H3 job
+  then failed with "no tensorwise FP8 algorithm on sm80".
+- **Experimental feature flags** (docs/serve/console.md §7) act on the
+  caps at negotiation: the gateway wraps its pools' aggregated caps with
+  the flags (D1 `feature_flags`, cached, re-read every 30 s) before any
+  API negotiates, so a request the flags do not allow is refused on the
+  gateway and never dispatched. Workers need no flag state for batch jobs
+  (they run already-negotiated jobs); a worker's fal director reads the same
+  D1 table for its 1080p chunk cap.
 
 ## 5. Streaming
 
@@ -717,3 +743,23 @@ includes other agents' pods.
   file from an older script (an `.admin_token` it generated, no key pair)
   keeps passing that token as `FV_ADMIN_TOKEN`, so a running cluster is
   not cut off.
+- **GitHub token for Promote / Rollback** (optional): when
+  `/root/.config/fv/github_token` (or `$FV_GITHUB_TOKEN_FILE`) exists with
+  mode 600, `runpod-cluster.sh` (`up`, and every gateway env update:
+  `roll`, `extend`, the pool URLs) puts its content in the gateway pod's
+  env as `FV_GITHUB_TOKEN`, so the console's Deployments page can dispatch
+  `release.yml` (docs/serve/releases.md). jq reads it from the file: it is
+  never printed and never written to the state file, the ledger or the
+  repo. Another mode is refused with a warning; without the file the
+  Promote / Rollback routes answer 503 and their dry runs still work.
+- **Price cap before create**: every script that creates a GPU pod
+  (`runpod-cluster.sh`, `runpod-pod.sh`, `scripts/gpu/runpod-http.sh`,
+  `runpod-sfwan-whip.sh`, `e2e/{pod,wan-pod,ltx-pod}.sh`) checks Runpod's
+  price quote for the GPU type (`gpuTypes` `securePrice` /
+  `communityPrice`, and the datacenter's lowest uninterruptible price when
+  it pins one) against `RUNPOD_GPU_MAX_DPH` **before** `POST /pods`, with
+  `scripts/gpu/runpod-price.sh`, and skips a type over the cap or without a
+  quote. Before, `runpod-pod.sh` created the pod, read `costPerHr` and
+  deleted it when over the cap: a director-debug run created and deleted 18
+  H100 pods above its cap that way. The post-create check stays as a
+  second guard.
