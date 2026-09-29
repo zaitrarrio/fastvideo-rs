@@ -90,6 +90,9 @@ minimax = ["dep:fastvideo-minimax"]
 ltxapi = ["dep:fastvideo-ltxapi"]
 fal = ["dep:fastvideo-fal"]
 reactor = ["dep:fastvideo-reactor", "webrtc"]
+# Seam, not implemented: a tracing-opentelemetry layer in main.rs's
+# init_tracing (docs/control/README.md "Observability"). Off by default.
+otel = []
 # Everything except CUDA (and adapters not merged yet).
 full = ["webrtc", "encoders", "http-client", "openai-videos", "minimax", "ltxapi", "fal", "reactor"]
 

@@ -30,6 +30,10 @@ node -e "require('playwright')" 2>/dev/null || {
 cargo build -p fastvideo-serve --features fake,encoders --bin fv-serve
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 export FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}"
+# FV_CONSOLE_ONLY=avatar runs only the avatar page test.
+if [[ "${FV_CONSOLE_ONLY:-}" == avatar ]]; then exec node tests/console/avatar.cjs; fi
 node tests/console/smoke.cjs
 # Director playback when generation is slower than real time (~50 s).
 node tests/console/director_playback.cjs
+# The script avatar page (Reactor avatar mode on the fake engine, ~30 s).
+node tests/console/avatar.cjs

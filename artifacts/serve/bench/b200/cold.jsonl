@@ -1,0 +1,4 @@
+{"label":"cold-h3-max","config":"/etc/fv/runpod-h3-max.toml","restart_cmd_s":4.5,"start_to_ready_s_client":84.0}
+{"label":"cold-ltx","config":"/etc/fv/runpod-ltx.toml","restart_cmd_s":4.6,"start_to_ready_s_client":24.6}
+{"label":"cold-wan5b","config":"/etc/fv/runpod-wan5b.toml","restart_cmd_s":4.4,"start_to_ready_s_client":105.9}
+{"label":"cold-sfwan","config":"/etc/fv/runpod-sfwan.toml","restart_cmd_s":4.5,"start_to_ready_s_client":100.9}

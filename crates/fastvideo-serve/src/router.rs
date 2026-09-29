@@ -135,6 +135,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         // Console pages (src/console.rs).
         r(Console, "GET", "/console"),
         r(Console, "GET", "/console/admin"),
+        r(Console, "GET", "/console/avatar"),
         r(Console, "GET", "/console/deployments"),
         r(Console, "GET", "/console/models/{owner}/{alias}/{*task}"),
         r(Console, "GET", "/console/assets/{file}"),
@@ -180,6 +181,10 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Reactor, "PUT", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
         r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
         r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/ice_candidates"),
+        // Reactor uploads (reactor §3.5; the byte PUT is under the session,
+        // since `PUT /uploads/{token}` is serve-kit's).
+        r(Reactor, "POST", "/sessions/{sid}/uploads"),
+        r(Reactor, "PUT", "/sessions/{sid}/uploads/{id}"),
     ];
     for ep in LTX_GENERATE {
         v.push(r(Ltx, "POST", format!("/v2/{ep}")));

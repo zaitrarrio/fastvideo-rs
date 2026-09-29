@@ -6,6 +6,7 @@
 //! | `GET /console` | Connect (server URL, API key in local storage) and the model list (`GET /fal/schema`) |
 //! | `GET /console/admin` | Admin token (session storage), mint / list / revoke API keys (`/fv/v1/admin/keys`) |
 //! | `GET /console/deployments` | Admin: release channels, live builds and drift, the deployment registry, history; Promote / Rollback (`/fv/v1/admin/releases*`, `/fv/v1/admin/deployments`; gateway only) |
+//! | `GET /console/avatar` | The script avatar (Reactor `ltx` over the Reactor runtime in avatar mode): photo, script, scene, speech rate, duration, seed; the WebRTC stream and per-window timings |
 //! | `GET /console/models/{owner}/{alias}/{task}` | A fal model page: Playground (schema-driven form, uploads, result, logs, history) and API snippets; `task = director` is the live WebRTC page |
 //! | `GET /console/assets/{file}` | CSS and JS modules |
 //!
@@ -30,12 +31,14 @@ pub const ASSETS: &[(&str, &str, &str)] = &[
     ("form.js", "text/javascript; charset=utf-8", include_str!("../console/form.js")),
     ("snippets.js", "text/javascript; charset=utf-8", include_str!("../console/snippets.js")),
     ("director.js", "text/javascript; charset=utf-8", include_str!("../console/director.js")),
+    ("avatar.js", "text/javascript; charset=utf-8", include_str!("../console/avatar.js")),
 ];
 
 const INDEX: &str = include_str!("../console/index.html");
 const ADMIN: &str = include_str!("../console/admin.html");
 const DEPLOYMENTS: &str = include_str!("../console/deployments.html");
 const MODEL: &str = include_str!("../console/model.html");
+const AVATAR: &str = include_str!("../console/avatar.html");
 
 /// Scripts and styles from this origin only; media, images and API calls may
 /// go to other origins (signed file URLs, a configured server URL).
@@ -74,6 +77,7 @@ pub fn routes() -> Router {
         .route("/console", get(|| async { page(INDEX) }))
         .route("/console/admin", get(|| async { page(ADMIN) }))
         .route("/console/deployments", get(|| async { page(DEPLOYMENTS) }))
+        .route("/console/avatar", get(|| async { page(AVATAR) }))
         .route("/console/models/{owner}/{alias}/{*task}", get(|| async { page(MODEL) }))
         .route("/console/assets/{file}", get(asset))
 }
@@ -99,6 +103,7 @@ mod tests {
             ("/console", "home.js"),
             ("/console/admin", "admin.js"),
             ("/console/deployments", "deployments.js"),
+            ("/console/avatar", "avatar.js"),
             ("/console/models/minimax/h3-max/text-to-video", "model.js"),
             ("/console/models/minimax/h3-turbo/director", "model.js"),
         ] {

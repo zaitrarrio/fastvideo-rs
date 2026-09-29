@@ -52,6 +52,10 @@ pub use scheduler::Priority;
 pub use service::{
     CancelOutcome, EngineConfig, EngineEvent, EngineService, EngineStats, JobHandle,
 };
+pub use stream::avatar::{
+    AvatarConfig, AvatarEvent, AvatarOutputs, AvatarPlan, AvatarPlayer, AvatarStatus, AvatarTake,
+    AvatarWindow, PlanInput, WindowKind, WindowReport,
+};
 pub use stream::causal::{
     CausalBlock, CausalCommand, CausalControl, CausalReply, CausalSession, CausalState,
     CausalStats, Ttff,

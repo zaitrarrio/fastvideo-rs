@@ -201,6 +201,14 @@ impl Reactor {
                 };
                 match res {
                     Ok((peer, answer)) => {
+                        // Avatar mode: video and audio in one MediaStream, so
+                        // the browser plays them in sync (Reactor `ltx`: both
+                        // tracks on one clock in a single MediaStream).
+                        let answer = if live.table.mode == crate::engine::Mode::Avatar {
+                            fastvideo_webrtc::sdp::unify_msid(&answer, "fv-avatar")
+                        } else {
+                            answer
+                        };
                         c.answer = Answer::Ready(answer);
                         c.peer = Some(peer.handle().clone());
                         (peer, std::mem::take(&mut c.candidates), c.mapping.clone())

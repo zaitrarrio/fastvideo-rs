@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Script avatar · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/avatar.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Script avatar <small>a photo and a script in, speech and video streamed out window by window (Reactor <code>ltx</code>)</small></h1>
+  </div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-take">
+      <div class="stage-head"><h2 id="h-take">1 · Take</h2><span id="session-state" class="pill">no session</span></div>
+      <div class="stage-body">
+        <label for="image">Avatar photo</label>
+        <input id="image" type="file" accept="image/png,image/jpeg">
+        <p class="hint">A clear, well-lit photo with the whole head visible (PNG or JPEG).</p>
+        <img id="image-preview" alt="" hidden style="max-width:160px;max-height:120px;border-radius:6px">
+        <label for="script">Script</label>
+        <textarea id="script" rows="6" maxlength="10000" placeholder="What the person says."></textarea>
+        <p class="hint"><span id="script-facts">0 words</span></p>
+        <label for="prompt">Scene and delivery</label>
+        <textarea id="prompt" rows="3" maxlength="800" placeholder="Voice, staging, lighting, mood. Empty: straight to camera."></textarea>
+        <div class="grid3">
+          <div><label for="wpm">Words per minute</label><input id="wpm" type="number" min="80" max="220" value="140"></div>
+          <div><label for="duration">Duration (s, 0 = from the script)</label><input id="duration" type="number" min="0" max="300" step="0.5" value="0"></div>
+          <div><label for="seed">Seed (keeps the voice)</label><input id="seed" type="number" min="0" placeholder="session seed"></div>
+        </div>
+        <details>
+          <summary>Driving voice (extension)</summary>
+          <label for="voice">Speech audio</label>
+          <input id="voice" type="file" accept="audio/*">
+          <p class="hint">Optional. The windows follow this audio (audio-to-video) instead of the model's own speech.</p>
+        </details>
+        <div class="actions">
+          <button id="start" class="primary">Start take</button>
+          <button id="pause" type="button" disabled>Pause</button>
+          <button id="resume" type="button" disabled>Resume</button>
+          <button id="stop" type="button" disabled>Stop</button>
+          <button id="reset" type="button" disabled>Reset</button>
+          <button id="end" type="button" disabled>End session</button>
+        </div>
+        <div id="take-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-out">
+      <div class="stage-head"><h2 id="h-out">2 · Stream</h2><span id="take-state" class="pill">idle</span></div>
+      <div class="stage-body">
+        <video id="video" autoplay playsinline controls style="width:100%;background:#000;border-radius:6px"></video>
+        <p id="playback" class="hint" aria-live="polite"></p>
+        <table class="table" id="windows-table">
+          <thead><tr><th>Window</th><th>Kind</th><th>Seconds</th><th>Build s</th><th>RTF</th><th>Started at</th><th>Waited</th></tr></thead>
+          <tbody id="windows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-log">
+      <div class="stage-head"><h2 id="h-log">Events</h2></div>
+      <div class="stage-body"><pre id="log" class="logs"></pre></div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

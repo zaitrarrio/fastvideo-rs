@@ -16,7 +16,10 @@
 # (FV_MIN_BALANCE, 8 $), $/hr cap (RUNPOD_GPU_MAX_DPH, 2.2), a detached
 # wall-clock backstop (FV_POD_CAP_S, max 5400 s) that deletes the pod.
 # Env: RUNPOD_API_KEY, RUNPOD_GPU_TYPES (comma list), RUNPOD_VOLUME_ID,
-# FV_E2E_NAME (pod name prefix, default fv-e2e-a-).
+# FV_E2E_NAME (pod name prefix, default fv-e2e-a-), FV_E2E_ENV_JSON (extra
+# pod env as a JSON object, e.g. '{"FV_REACTOR_MODE":"avatar"}').
+# `up <image> <config>`: the in-image config pod-boot.sh starts from
+# (default /etc/fv/runpod.toml; e.g. /etc/fv/runpod-ltx.toml).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
@@ -64,12 +67,12 @@ cmd_up() {
       --arg boot "$(cat "$ROOT/scripts/serve/e2e/pod-boot.sh")" \
       --arg side "$(base64 -w0 "$ROOT/scripts/serve/e2e/sidecar.py")" \
       --arg keyhash "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)" --arg admin "$admin" --arg sidecar "$sidecar" \
-      --argjson vol "$vol" '{
+      --argjson vol "$vol" --argjson extra "${FV_E2E_ENV_JSON:-{\}}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
         gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 40, volumeInGb: 0,
         ports: ["8000/http", "8001/http"],
         dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
-        env: {
+        env: ({
           FV_CF_ACCOUNT_ID: "{{ RUNPOD_SECRET_fv_cf_account_id }}",
           FV_CF_API_TOKEN: "{{ RUNPOD_SECRET_fv_cf_api_token }}",
           FV_D1_DATABASE_ID: "{{ RUNPOD_SECRET_fv_d1_database_id }}",
@@ -80,8 +83,8 @@ cmd_up() {
           FV_WEBHOOK_ED25519_KEY: "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
           FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
           FV_API_KEYS: $keyhash, FV_ADMIN_TOKEN: $admin, FV_SIDECAR_TOKEN: $sidecar, FV_SIDECAR_B64: $side,
-          FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info"
-        }
+          FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info", FV_E2E_BASE_CONFIG: $cfg
+        } + $extra)
       } + $vol')"
     if ! resp="$(rest POST /pods "$payload" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
@@ -127,7 +130,8 @@ cmd_wait() {
 cmd_bundle() {
   local tgz; tgz="$(mktemp)"
   tar czf "$tgz" -C "$ROOT" tests/compat/package.json tests/compat/package-lock.json tests/compat/requirements.txt \
-    tests/compat/suites crates/fastvideo-reactor/tests/compat/reactor_sdk_compat.py tests/console/smoke.cjs scripts/serve/e2e
+    tests/compat/suites crates/fastvideo-reactor/tests/compat/reactor_sdk_compat.py tests/console/smoke.cjs \
+    tests/console/avatar.cjs scripts/gpu/lipsync_proxy.py scripts/serve/e2e
   side /bundle 120 -X PUT --data-binary "@$tgz" -H 'content-type: application/gzip'; echo
   rm -f "$tgz"
 }

@@ -820,6 +820,7 @@ impl Player {
                 canvas: Some(canvas),
                 first_frame,
                 last_frame: entry.last_frame.clone(),
+                audio_drive: None,
             };
             let info = entry.info();
             let prompt_version = entry.prompt_version;
