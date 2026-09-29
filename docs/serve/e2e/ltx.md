@@ -356,6 +356,47 @@ Notes:
   is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
 - Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.
 
+## Guided audio-to-video on `ltx-pro` (2026-09-29)
+
+`ltx-pro` A2V now runs upstream's own pipeline (`A2VidPipelineTwoStage`: the
+LTX-2.5 dev DiT with the multimodal guider at stage 1, the distilled LoRA at
+stage 2; docs/oracle.md "LTX-2.5 guided audio-to-video"), as the catalog
+model `ltx25-a2v-guided`, the A2V companion of `ltx-pro`
+(`ltx25-distill-dense` no longer takes A2V; `ltx-turbo` keeps the distilled
+A2V above). fal `audio-to-video/pro` passes `guidance_scale` as the CFG scale.
+
+| | |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-fe45a1b` (the `serve` image of the branch, workflow_dispatch) |
+| Config | `configs/serve/runpod-ltx-a2v.toml` (`ltx25-a2v-guided` alone, alias `ltx-pro`, fal app `lightricks/ltx-2.5`), inlined by `ltx-pod.sh` |
+| Pod | `nx0eeayme99u9a` (`fv-a2vg-e2e-0929111415`), **H100 80GB HBM3** on the US volume (no RTX PRO 6000 in either volume's datacenter for an hour), $3.49/hr, created 11:14:20, deleted 11:22:34 UTC and checked gone: about **$0.48**. Create to `/ping` 200: 64 s |
+| Driver | `ltx_e2e.py <base> … probe a2v-guided-errors a2v-fal-pro a2v-native-pro-720p` |
+
+| Case | Request | Result | Time | Output |
+|---|---|---|---|---|
+| `probe` | `/fv/v1/capabilities` | PASS: one model `ltx25-a2v-guided`, tasks `a2v`, recipe `ltx25-dev-a2v-guided` (33 steps) | | |
+| `a2v-err-fast-unserved` | LTX `POST /v2/audio-to-video`, `model: ltx-2-5-fast` | 403 `permission_error` (the fast tier is not on this pod) | | |
+| `a2v-fal-pro` | fal queue `lightricks/ltx-2.5/audio-to-video/pro` `{audio_url, prompt (talking head), seed 5, guidance_scale 3}` | PASS, `COMPLETED` | 317.9 s (first job after boot), `inference_time` 274.4 s | 1920x1080, 161 @ 24 (6.71 s), AAC 44.1 kHz stereo; vs the input: corr 0.99999, lag 0 |
+| `a2v-native-pro-720p` | native `/fv/v1/jobs` `{model: ltx-pro, audio_url, prompt, size 1280x720, seed 11}` (default guidance 3) | PASS, `succeeded`, `resolved_model ltx25-a2v-guided`, tier max | 69.0 s (run 65.7 s) | 1280x720, 161 @ 24; audio as above |
+
+**Lip sync** (`scripts/gpu/lipsync_proxy.py`, the SyncNet stand-in; flite voice):
+
+| Clip | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| `a2v-fal-pro` (1080p) | 161/161 | -4 | 0.197 (0.042) | 0.14 |
+| `a2v-native-pro-720p` | 161/161 | 0 | 0.202 (0.202) | 0.58 |
+| **pooled** | 2 clips | **0 (0 ms)** | 0.12 (0.12) | **0.36** |
+
+Pooled the mouth moves with the speech at lag 0 (the distilled `ltx-turbo`
+clips above: -2 frames, speech contrast 0.29).
+
+Timings: guided 1080p for 6.7 s took 274 s of inference on the H100 (the
+distilled `ltx-turbo`: 25 s on RTX PRO 6000): stage 1 is 30 steps × 4 passes
+of the 22B DiT at 960x544 against 8 single-pass steps, and each request
+switches the DiT between its base and the fused LoRA twice (38 GB uploaded
+each way from pinned host memory). 720p for 6.7 s: 66 s. At 768x512x121 on
+RTX PRO 6000 (the oracle): stage 1 21.2 s, stage 2 4.1 s.
+
 ## Script avatar (Reactor avatar mode, P0-3), 2026-09-29
 
 `fv-serve` with `configs/serve/runpod-ltx.toml` (`ltx-turbo`) and
@@ -413,3 +454,53 @@ at 640x384, delivered 640x352). Summaries: `artifacts/serve/e2e/ltx-avatar/`.
   step. In run 3 End session returned to `ready` in under 1 ms (`peers=0`
   at close: the browser peer had already gone). The run 2 hang, with a
   peer still attached, was not reproduced.
+
+## Retake and extend (avatar P0-4), 2026-09-29
+
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-7392995` (branch build of
+the retake/extend commit), `ltx-pro` (`configs/serve/runpod-ltx.toml`, fal
+apps now including `fal-ai/ltx-2.3`), 1x H100 80GB HBM3 on the US volume
+`s2k01690bi` (no RTX PRO 6000 in stock in either region that hour),
+$3.49/h. Run twice; the first run's artifacts were lost in a container
+restart, and the second reproduced every number below within noise (the
+table is the second run). Pods `b49a41mw3fybmk` (09:56:48-09:59:38) and
+`9g9nk44q0g21c8` (10:25:03-10:28:14), both deleted and verified (404):
+**$0.36**. Boot to `/ping` 200: 63 s and 67 s. Driver:
+`scripts/serve/e2e/ltx_e2e.py … probe retake-v2 retake-fal-audio extend-fal
+extend-native-start edit-errors`. Input: the oracle's source clip
+`scripts/gpu/fixtures/beach-push-768x512-24fps.mp4` (a slow zoom over the
+beach still, 121 frames at 24 fps, 768x512, H.264 with AAC 44.1 kHz stereo
+speech) as a data URI. Raw results: `artifacts/serve/e2e/ltx-v2v/results.jsonl`
+(data URIs stripped); sample `sample-retake-v2.mp4`, stills `frame-*.jpg`.
+
+| Case | Request | Result | Time | Output | Kept frames vs the source |
+|---|---|---|---|---|---|
+| probe | `/fv/v1/capabilities` | PASS: `ltx25-ltx-pro` (tier `max`) | | | |
+| `retake-v2` | LTX `POST /v2/retake` `{video_uri, start_time 1.5, duration 2, prompt}` (both modalities) | PASS, `processing` → `completed`, R2 URL | 43.4 s (first job, cold; 17.0 s in the first run) | 121 @ 24, 768x512, AAC 48 kHz stereo | frames 0-32 and 89-120: SSIM 0.979, PSNR 43.0 dB |
+| `retake-fal-audio` | fal queue `fal-ai/ltx-2.3/retake-video` `{…, retake_mode: replace_audio, seed 7}` | PASS, `COMPLETED`, `inference_time` 5.4 s | 12.0 s | 121 @ 24 | all 121 (video frozen): SSIM 0.980, PSNR 43.1 dB |
+| `extend-fal` | fal queue `fal-ai/ltx-2.3/extend-video` `{video_url, prompt, duration 2, seed 7}` (mode `end`, full context) | PASS, `inference_time` 7.4 s | 18.9 s | 169 @ 24 (121 + 48) | frames 0-104: SSIM 0.979, PSNR 43.0 dB |
+| `extend-native-start` | native `/fv/v1/jobs` `{video_url, extend_s 2, extend_at start, context_s 2}` | PASS, run 7.5 s | 12.4 s | 169 @ 24: 48 new + 41 context (generated) + 80 source frames stitched | source frames 41-120 at output 89-168: SSIM 0.988, PSNR 46.2 dB |
+| `retake-err-past-end` | `/v2/retake` `start_time 6` on the 5.04 s clip | 400 `invalid_request_error` "start_time 6 s must be less than the video's usable length 5.042 s (121 frames)" | | | |
+| `extend-err-image` | a JPEG as `video_uri` | 400 `invalid_request_error` "`video_url`: expected video input, got `image/jpeg`" | | | |
+| `extend-err-too-long` | `duration 25` | 400 `invalid_request_error` "duration must be between 2 and 20 seconds" | | | |
+
+Reading:
+
+- Kept frames carry the source through a VAE round trip (43 dB, as the
+  reference's own output: docs/oracle.md "LTX-2.5 retake and extend"); the
+  stitched frames of the short-context extension skip the VAE and are closer
+  (46 dB: a resize and an H.264 re-encode only).
+- The retaken window (frames 33-88) is at 40.6 dB against the source, only
+  2.4 dB below the kept frames, even though it starts from pure noise. This
+  is the model, not a pinned window: the upstream reference retake of the
+  same clip and window lands at 40.5 dB too. The fixture (a zoom over a
+  still photograph) has nothing to regenerate that its context does not
+  already fix; a real clip with motion is the better demonstration and was
+  not run.
+- The extension's new frames (stills `frame-extend-*`) continue the push-in
+  without a seam.
+- Warm latency at 768x512: 5.4 s of inference for a 5 s retake, 7.4 s for
+  an extension to 7 s (one distilled stage, 8 steps), plus ~5 s of
+  upload/probe/encode.
+- The native job lists `recipe: ltx25-distill-two-stage-dense` (the tier's
+  label); edits always run the single distilled stage at the source size.

@@ -368,6 +368,35 @@ impl Attention {
         then(merged, |m| self.to_out.forward(m))
     }
 
+    /// The perturbed self-attention of a guided STG pass (`Attention.forward`
+    /// with `all_perturbed`, `ltx_core/model/transformer/attention.py`): the
+    /// query/key path is skipped and the value projection stands in for the
+    /// attention output, then the per-head gates (from `x`) and `to_out` as
+    /// usual.
+    pub fn forward_value_only(&self, x: CudaTensor) -> Result<CudaTensor> {
+        let (heads, d) = (self.dims.heads, self.dims.head_dim);
+        let gate_logits = match &self.to_gate_logits {
+            Some(l) => Some(l.forward(&x)?),
+            None => None,
+        };
+        let v = self.to_v.forward(&x)?;
+        drop(x);
+        let merged = match gate_logits {
+            Some(logits) => {
+                let vh = then(v, |t| t.split_heads_bhsd(0, heads, d))?;
+                match super::fuse::gate_merge(&vh, &logits)? {
+                    Some(m) => m,
+                    None => {
+                        let gated = then(vh, |o| self.apply_head_gates(o, &logits))?;
+                        then(gated, |g| g.merge_heads())?
+                    }
+                }
+            }
+            None => v,
+        };
+        then(merged, |m| self.to_out.forward(m))
+    }
+
     pub(crate) fn for_each_linear_mut(
         &mut self,
         f: &mut dyn FnMut(&mut Linear) -> Result<()>,
@@ -1020,6 +1049,47 @@ pub(crate) mod tests {
         let got = attn.forward(&tensor(&x), None, None, None).unwrap();
         let want = attention_reference(&map, "blk.gattn", dims, &x, &x, None, None, true);
         assert_close(&rows(&got, 12), &want, 2e-5, "gated self attention");
+    }
+
+    #[test]
+    fn value_only_attention_is_gated_value_projection_then_out() {
+        let dims = AttentionDims {
+            query_dim: 12,
+            context_dim: 12,
+            heads: 3,
+            head_dim: 4,
+        };
+        let map = weights();
+        let attn = Attention::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.vattn",
+            dims,
+            1e-6,
+            true,
+        )
+        .unwrap();
+        let x = tokens(5, 12, 0.23);
+        let got = attn.forward_value_only(tensor(&x)).unwrap();
+        let w = |n: &str, s: &[usize]| get(&map, &format!("blk.vattn.{n}"), s);
+        let (wv, bv) = (w("to_v.weight", &[12, 12]), w("to_v.bias", &[12]));
+        let (wg, bg) = (w("to_gate_logits.weight", &[3, 12]), w("to_gate_logits.bias", &[3]));
+        let (wo, bo) = (w("to_out.0.weight", &[12, 12]), w("to_out.0.bias", &[12]));
+        let want: Vec<Vec<f32>> = x
+            .iter()
+            .map(|row| {
+                let mut v = linear(row, &wv, &bv);
+                let g = linear(row, &wg, &bg);
+                for h in 0..3 {
+                    let s = 2.0 / (1.0 + (-g[h]).exp());
+                    for j in 0..4 {
+                        v[h * 4 + j] *= s;
+                    }
+                }
+                linear(&v, &wo, &bo)
+            })
+            .collect();
+        assert_close(&rows(&got, 12), &want, 2e-5, "value-only (STG) attention");
     }
 
     #[test]

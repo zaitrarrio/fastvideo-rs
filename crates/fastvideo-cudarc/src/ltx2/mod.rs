@@ -22,6 +22,7 @@ pub mod slim;
 pub mod text;
 pub mod text_cache;
 pub mod transformer;
+pub mod v2v;
 pub mod vae;
 pub mod vae_encoder;
 pub mod vocoder;

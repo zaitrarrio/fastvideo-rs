@@ -100,7 +100,16 @@ fvw=""
 # Diffusers copy, and two of them (Gemma layers 12-47, the DiT's embedding
 # connectors) carry the Diffusers numbers -- the ones our port loads -- in the
 # original layout (upstream/pod.sh weights_ltx25); without it the rebuild stops.
-(( ${#ltx[@]} )) && start_up sol-ltx25 "${ltx[*]}" "weights:ltx25" 250 RECON_ACCEPT_MISMATCH=1
+# The guided audio-to-video target reads the dev DiT and the distilled LoRA
+# (weights:ltx25-dev); the other LTX targets the distilled DiT (weights:ltx25).
+ltxw=""
+for t in "${ltx[@]}"; do
+  case "$t" in
+    ltx25-a2v-guided) [[ " $ltxw " == *" weights:ltx25-dev "* ]] || ltxw+=" weights:ltx25-dev" ;;
+    *) [[ " $ltxw " == *" weights:ltx25 "* ]] || ltxw+=" weights:ltx25" ;;
+  esac
+done
+(( ${#ltx[@]} )) && start_up sol-ltx25 "${ltx[*]}" "${ltxw# }" 250 RECON_ACCEPT_MISMATCH=1
 
 # Wait for each upstream pod to be up (runpod-http writes "<id> <tag>"); a
 # stack whose pod never comes up drops its targets.

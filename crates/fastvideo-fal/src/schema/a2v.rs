@@ -16,9 +16,11 @@
 //!
 //! Deviations, each documented in fal-parity:
 //!
-//! - `guidance_scale` is validated and then a no-op: the distilled LTX-2.5
-//!   model this server runs is unguided (one pass per step). fal's hosted
-//!   model is guided (its defaults 5 / 9 are CFG scales).
+//! - `guidance_scale`: on `pro` it is the video CFG scale of the guided
+//!   pipeline (`A2VidPipelineTwoStage` on the LTX-2.5 dev transformer;
+//!   unset: the reference default 3, not fal's 5 / 9). On `fast` (the
+//!   distilled model, one unguided pass per step) it is validated and then
+//!   a no-op.
 //! - The frame count is the longest 8k+1 clip whose length fits in the audio
 //!   (`negotiate`); fal's exact rule is not published.
 
@@ -118,9 +120,12 @@ impl LtxA2vInput {
             LtxAspect::R16x9 => CanvasSpec::Exact { width: w, height: h },
             LtxAspect::R9x16 => CanvasSpec::Exact { width: h, height: w },
         };
-        if self.guidance_scale.is_some() {
-            // The distilled two-stage is unguided: nothing reads it.
-            r.note_noop("guidance_scale");
+        match (self.class, self.guidance_scale) {
+            // `pro`: the guided dev pipeline's video CFG scale.
+            (LtxClass::Pro, g) => r.sampling.guidance = g.map(|g| g as f32),
+            // `fast`: the distilled two-stage is unguided, nothing reads it.
+            (LtxClass::Fast, Some(_)) => r.note_noop("guidance_scale"),
+            (LtxClass::Fast, None) => {}
         }
         Ok(r)
     }

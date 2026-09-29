@@ -105,6 +105,11 @@ struct Delivery<'c> {
     count: u64,
     clip: &'c mut dyn ClipSink,
     encode_s: f64,
+    /// Extend with less context than the source: the source frames and
+    /// audio around the generated clip ([`crate::stitch`]).
+    stitch: Option<crate::stitch::Stitch>,
+    /// Source frames written ahead of the generated ones.
+    stitched: u64,
     /// Set when the MP4 feed was detached onto the relay thread.
     feed: Option<Arc<Mutex<EncodeFeed>>>,
 }
@@ -138,9 +143,51 @@ impl Delivery<'_> {
     }
 }
 
+impl Delivery<'_> {
+    /// Frames to the MP4 or the clip sink.
+    fn push(&mut self, chunk: Vec<RgbFrame>) -> Result<(), PipelineError> {
+        if self.mp4_path.is_some() {
+            let wr = self.writer()?;
+            for f in &chunk {
+                wr.push(f).map_err(sink_err)?;
+            }
+        } else {
+            self.clip.frames(&chunk);
+            self.frames.extend(chunk);
+        }
+        Ok(())
+    }
+
+    /// Source frames `span` of the stitch, in chunks of 8.
+    fn push_source(&mut self, span: (u32, u32), index0: u64) -> Result<u32, PipelineError> {
+        let Some(st) = self.stitch.clone() else { return Ok(0) };
+        let mut buf = Vec::with_capacity(8);
+        let mut fault: Option<PipelineError> = None;
+        let n = st
+            .frames(span, index0, |f| {
+                buf.push(f);
+                if buf.len() == 8 {
+                    if let Err(e) = self.push(std::mem::take(&mut buf)) {
+                        fault = Some(e);
+                        return Err(ApiError::engine_failed("stitch: the sink failed"));
+                    }
+                }
+                Ok(())
+            })
+            .map_err(|e| fault.take().unwrap_or_else(|| sink_err(e.message)))?;
+        if !buf.is_empty() {
+            self.push(buf)?;
+        }
+        Ok(n)
+    }
+}
+
 impl FrameSink for Delivery<'_> {
     fn audio(&mut self, pcm: &AudioPcm<'_>) -> fastvideo_cudarc::wan::pipeline::Result<()> {
-        let p = Pcm::new(pcm.sample_rate, pcm.channels as u8, pcm.samples.to_vec());
+        let mut p = Pcm::new(pcm.sample_rate, pcm.channels as u8, pcm.samples.to_vec());
+        if let (Some(st), true) = (&self.stitch, self.keep_audio) {
+            p = st.splice_audio(&p).map_err(|e| sink_err(e.message))?;
+        }
         if self.keep_audio && self.mp4_path.is_none() {
             self.clip.audio(&p);
         }
@@ -149,9 +196,15 @@ impl FrameSink for Delivery<'_> {
     }
 
     /// File jobs whose audio (if any) is already here encode off the
-    /// generating thread; in-memory jobs keep their frames on it.
+    /// generating thread; in-memory and stitched (extend) jobs keep their
+    /// frames on it.
     fn detach(&mut self) -> Option<DetachedSink> {
-        if self.mp4_path.is_none() || self.feed.is_some() || (self.keep_audio && self.pcm.is_none()) {
+        // Extend jobs splice source frames around the clip on this thread.
+        if self.mp4_path.is_none()
+            || self.stitch.is_some()
+            || self.feed.is_some()
+            || (self.keep_audio && self.pcm.is_none())
+        {
             return None;
         }
         // A spawn failure here is met again, and reported, on the old path.
@@ -188,7 +241,15 @@ impl FrameSink for Delivery<'_> {
 
     fn frames(&mut self, v: &VideoFrames) -> fastvideo_cudarc::wan::pipeline::Result<()> {
         let t0 = Instant::now();
+        // An extension at the end with less context than the source: the
+        // source frames before the context go first.
+        if self.count == 0 && self.stitched == 0 {
+            if let Some(span) = self.stitch.as_ref().map(|s| s.prefix) {
+                self.stitched = u64::from(self.push_source(span, 0)?);
+            }
+        }
         let (w, h) = (v.width as u32, v.height as u32);
+        let offset = self.stitched;
         let chunk: Vec<RgbFrame> = (0..v.len())
             .map(|i| {
                 crop(
@@ -196,22 +257,14 @@ impl FrameSink for Delivery<'_> {
                         width: w,
                         height: h,
                         data: v.frame(i).to_vec().into(),
-                        index: (v.index + i) as u64,
+                        index: offset + (v.index + i) as u64,
                     },
                     self.out_size,
                 )
             })
             .collect();
         self.count += chunk.len() as u64;
-        if self.mp4_path.is_some() {
-            let wr = self.writer()?;
-            for f in &chunk {
-                wr.push(f).map_err(sink_err)?;
-            }
-        } else {
-            self.clip.frames(&chunk);
-            self.frames.extend(chunk);
-        }
+        self.push(chunk)?;
         self.encode_s += t0.elapsed().as_secs_f64();
         Ok(())
     }
@@ -256,6 +309,8 @@ pub(crate) fn deliver(
         count: 0,
         clip,
         encode_s: 0.0,
+        stitch: crate::stitch::Stitch::for_job(job),
+        stitched: 0,
         feed: None,
     };
     // Steps finished in earlier stepping stages, and the current stage's total.
@@ -298,6 +353,12 @@ pub(crate) fn deliver(
         )));
     }
     let t0 = Instant::now();
+    // An extension at the start with less context than the source: the
+    // source frames after the context go last.
+    if let Some(span) = d.stitch.as_ref().map(|s| s.suffix).filter(|s| s.1 > 0) {
+        let index0 = d.stitched + d.count;
+        d.push_source(span, index0).map_err(|e| ApiError::engine_failed(format!("stitch: {e}")))?;
+    }
     let mp4 = match d.writer.take() {
         Some(w) => Some(
             w.finish()
@@ -362,6 +423,8 @@ mod tests {
             count: 0,
             clip: &mut clip,
             encode_s: 0.0,
+            stitch: None,
+            stitched: 0,
             feed: None,
         };
         let s = [0.5f32, -0.5];
@@ -402,6 +465,8 @@ mod tests {
             count: 0,
             clip: &mut clip,
             encode_s: 0.0,
+            stitch: None,
+            stitched: 0,
             feed: None,
         };
         let mut consumer = d.detach().expect("a file job detaches");

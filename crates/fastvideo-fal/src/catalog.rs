@@ -36,11 +36,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use fastvideo_protocol::{route_task, ModelCaps, Task};
+use fastvideo_protocol::{route_task, ExtendAt, ModelCaps, RetakeMode, Task};
 use fastvideo_serve_kit::ServeCtx;
 use serde_json::{json, Map, Value};
 
-use crate::schema::{a2v, ingredient};
+use crate::schema::{a2v, edit, ingredient};
 use crate::schema::ltx::{self, LtxAspect, LtxClass, CAMERA_MOTIONS, LTX_PROMPT_MAX_CHARS};
 use crate::schema::wan::{self, WanAspect, WanResolution, WanVariant, INTERPOLATORS};
 use crate::schema::{
@@ -126,6 +126,8 @@ pub fn input_schema_for(kind: AppKind, endpoint: Endpoint) -> Value {
         Endpoint::LtxIngredient => ingredient_schema(endpoint),
         Endpoint::LtxAudioToVideoFast => a2v_schema(endpoint, LtxClass::Fast),
         Endpoint::LtxAudioToVideoPro => a2v_schema(endpoint, LtxClass::Pro),
+        Endpoint::LtxRetake => retake_schema(endpoint),
+        Endpoint::LtxExtend => extend_schema(endpoint),
         Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => h3_schema(kind, endpoint),
     }
 }
@@ -460,12 +462,72 @@ fn a2v_schema(endpoint: Endpoint, class: LtxClass) -> Value {
     let (glo, ghi) = a2v::A2V_GUIDANCE;
     props.insert(
         "guidance_scale".into(),
-        json!({"anyOf": [{"type": "number", "minimum": glo, "maximum": ghi}, {"type": "null"}], "default": null, "description": "Guidance scale for video generation. Accepted; the distilled model this server runs is unguided.", "x-fv-advanced": true}),
+        json!({"anyOf": [{"type": "number", "minimum": glo, "maximum": ghi}, {"type": "null"}], "default": null, "description": match class {
+            LtxClass::Pro => "Guidance scale for video generation: the video CFG scale of the guided pipeline (default 3 when unset).",
+            LtxClass::Fast => "Guidance scale for video generation. Accepted; the distilled model the fast endpoint runs is unguided.",
+        }, "x-fv-advanced": true}),
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());
     let order = vec!["audio_url", "image_url", "prompt", "aspect_ratio", "guidance_scale", "seed", "sync_mode"];
     object(endpoint.title(), props, order, &["audio_url"])
+}
+
+const EDIT_VIDEO: &str = "URL of the source video (MP4, MOV, MKV or WebM; 8 to 60 fps; at most 60 s; this server edits at most 505 frames at once). The output keeps its frame rate and size (snapped down to multiples of 32, at most 1920x1088 worth of pixels). An HTTP(S) URL or a base64 data URI.";
+
+/// `fal-ai/ltx-2.3/retake-video` (fal's `Ltx23RetakeVideoInput`, plus this
+/// server's `seed` and `sync_mode`).
+fn retake_schema(endpoint: Endpoint) -> Value {
+    let mut props = Map::new();
+    props.insert("video_url".into(), required_media_url("video", &format!("The URL of the video to retake. {EDIT_VIDEO}")));
+    props.insert(
+        "prompt".into(),
+        json!({"type": "string", "minLength": 1, "maxLength": LTX_PROMPT_MAX_CHARS, "description": "The prompt to retake the video with: what happens in the retaken section.", "x-fv-multiline": true}),
+    );
+    let (lo, hi) = edit::RETAKE_START;
+    props.insert(
+        "start_time".into(),
+        json!({"type": "number", "minimum": lo, "maximum": hi, "default": 0, "description": "The start time of the video to retake in seconds."}),
+    );
+    props.insert(
+        "duration".into(),
+        json!({"type": "number", "minimum": fastvideo_protocol::EDIT_DURATION_MIN_S, "maximum": fastvideo_protocol::EDIT_DURATION_MAX_S, "default": edit::EDIT_DURATION_DEFAULT, "description": "The duration of the video to retake in seconds (clamped to the video's end)."}),
+    );
+    props.insert(
+        "retake_mode".into(),
+        json!({"type": "string", "enum": strings(&edit::RETAKE_MODES, RetakeMode::as_str), "default": RetakeMode::default().as_str(), "description": "The retake mode to use for the retake: regenerate the audio, the video, or both, in the section."}),
+    );
+    props.insert("seed".into(), seed());
+    props.insert("sync_mode".into(), sync_mode());
+    let order = vec!["video_url", "prompt", "start_time", "duration", "retake_mode", "seed", "sync_mode"];
+    object(endpoint.title(), props, order, &["video_url", "prompt"])
+}
+
+/// `fal-ai/ltx-2.3/extend-video` (fal's `Ltx23ExtendVideoInput`, plus this
+/// server's `seed` and `sync_mode`).
+fn extend_schema(endpoint: Endpoint) -> Value {
+    let mut props = Map::new();
+    props.insert("video_url".into(), required_media_url("video", &format!("The URL of the video to extend. {EDIT_VIDEO}")));
+    props.insert(
+        "prompt".into(),
+        json!({"anyOf": [{"type": "string", "maxLength": LTX_PROMPT_MAX_CHARS}, {"type": "null"}], "default": null, "description": "Description of what should happen in the extended portion of the video.", "x-fv-multiline": true}),
+    );
+    props.insert(
+        "duration".into(),
+        json!({"type": "number", "minimum": fastvideo_protocol::EDIT_DURATION_MIN_S, "maximum": fastvideo_protocol::EDIT_DURATION_MAX_S, "default": edit::EDIT_DURATION_DEFAULT, "description": "Duration in seconds to extend the video. Minimum 2 seconds, maximum 20 seconds."}),
+    );
+    props.insert(
+        "mode".into(),
+        json!({"type": "string", "enum": strings(&edit::EXTEND_MODES, ExtendAt::as_str), "default": ExtendAt::End.as_str(), "description": "Where to extend the video: 'end' extends at the end, 'start' extends at the beginning."}),
+    );
+    props.insert(
+        "context".into(),
+        json!({"anyOf": [{"type": "number", "minimum": fastvideo_protocol::EXTEND_CONTEXT_MIN_S, "maximum": fastvideo_protocol::EXTEND_CONTEXT_MAX_S}, {"type": "null"}], "default": null, "description": "Number of seconds from the input video to use as context for the extension (minimum 1 second, maximum 20 seconds). If not provided, defaults to maximize available context within the 505 frame limit. The rest of the video is kept unchanged."}),
+    );
+    props.insert("seed".into(), seed());
+    props.insert("sync_mode".into(), sync_mode());
+    let order = vec!["video_url", "prompt", "duration", "mode", "context", "seed", "sync_mode"];
+    object(endpoint.title(), props, order, &["video_url"])
 }
 
 /// One catalog entry; `served` keeps the endpoints the app's models serve
@@ -518,6 +580,8 @@ pub fn endpoint_task(e: Endpoint) -> Task {
         Endpoint::ImageToVideo | Endpoint::LtxImageToVideoFast | Endpoint::LtxImageToVideoPro | Endpoint::WanImageToVideo => Task::I2V,
         Endpoint::ReferenceToVideo | Endpoint::LtxIngredient => Task::Ref2V,
         Endpoint::LtxAudioToVideoFast | Endpoint::LtxAudioToVideoPro => Task::A2V,
+        Endpoint::LtxRetake => Task::Retake,
+        Endpoint::LtxExtend => Task::Extend,
     }
 }
 
@@ -638,6 +702,8 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
             narrow_enum(&mut s, "resolution", |v| WanResolution::ALL.iter().any(|r| v == r.as_str() && tiers.contains(&r.short_edge())), None);
             narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
         }
+        // The source video sets the size, length and rate.
+        Endpoint::LtxRetake | Endpoint::LtxExtend => {}
         Endpoint::LtxIngredient => {
             narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
             // The rates the model generates at, as a list.
@@ -729,7 +795,7 @@ mod tests {
     use super::*;
     use crate::schema::FalInput;
 
-    const KINDS: [AppKind; 5] = [AppKind::H3, AppKind::H3Base, AppKind::Ltx25, AppKind::Wan, AppKind::LtxQuality];
+    const KINDS: [AppKind; 6] = [AppKind::H3, AppKind::H3Base, AppKind::Ltx25, AppKind::Wan, AppKind::LtxQuality, AppKind::Ltx23];
 
     fn defaults(s: &Value) -> Map<String, Value> {
         let mut m = Map::new();
@@ -758,6 +824,9 @@ mod tests {
             }
             Endpoint::LtxAudioToVideoFast | Endpoint::LtxAudioToVideoPro => {
                 m.insert("audio_url".into(), "https://a.test/speech.mp3".into());
+            }
+            Endpoint::LtxRetake | Endpoint::LtxExtend => {
+                m.insert("video_url".into(), "https://a.test/source.mp4".into());
             }
             _ => {}
         }
@@ -818,7 +887,8 @@ mod tests {
                         assert!(parse(&b).is_err(), "{e:?} {k} maxItems");
                     }
                 }
-                let max = s["properties"]["prompt"]["maxLength"].as_u64().unwrap() as usize;
+                let p = &s["properties"]["prompt"];
+                let max = p["maxLength"].as_u64().or_else(|| p.pointer("/anyOf/0/maxLength").and_then(Value::as_u64)).unwrap() as usize;
                 let mut b = body.clone();
                 b.insert("prompt".into(), "x".repeat(max + 1).into());
                 assert!(parse(&b).is_err());
@@ -848,6 +918,29 @@ mod tests {
             assert!(s["properties"]["audio_url"]["description"].as_str().unwrap().contains(&format!("2 and {max} seconds")));
             assert_eq!(s["x-fal-order-properties"][0], "audio_url");
         }
+    }
+
+    #[test]
+    fn retake_and_extend_forms_upload_a_video() {
+        let app = FalConfig { apps: vec![FalApp::from_id("fal-ai/ltx-2.3")], ..FalConfig::default() };
+        let c = catalog(&app);
+        assert_eq!(c["apps"][0]["kind"], "ltx23");
+        let eps: Vec<(&str, &str)> = c["apps"][0]["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["endpoint_id"].as_str().unwrap(), e["model"].as_str().unwrap()))
+            .collect();
+        assert_eq!(eps, [("fal-ai/ltx-2.3/retake-video", "ltx-pro"), ("fal-ai/ltx-2.3/extend-video", "ltx-pro")]);
+        let r = input_schema_for(AppKind::Ltx23, Endpoint::LtxRetake);
+        assert_eq!(r["required"], json!(["video_url", "prompt"]));
+        assert_eq!(r["properties"]["video_url"]["x-fv-media"], "video");
+        assert_eq!(r["properties"]["retake_mode"]["default"], "replace_audio_and_video");
+        let x = input_schema_for(AppKind::Ltx23, Endpoint::LtxExtend);
+        assert_eq!(x["required"], json!(["video_url"]));
+        assert_eq!(x["properties"]["mode"]["enum"], json!(["start", "end"]));
+        assert_eq!(endpoint_task(Endpoint::LtxRetake), Task::Retake);
+        assert_eq!(endpoint_task(Endpoint::LtxExtend), Task::Extend);
     }
 
     #[test]

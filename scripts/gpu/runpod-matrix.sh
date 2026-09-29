@@ -2219,9 +2219,26 @@ Audio: male speech, clear voice, quiet room"
     ltx_oracle=(--prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed)
     # The LTX reference-to-video prompt (upstream oracle.sh LTX_REF_PROMPT).
     LTX_REF_PROMPT="${FV_LTX_REF_PROMPT:-Reference sheet: Top Row Left (Setting): a rocky coastline at golden hour, dark boulders in the surf and green hills behind a sandy beach. Top Row Right (Setting): a closer view of the same boulders with waves breaking around them. Bottom Row Left (Prop): a red and white striped beach umbrella, shown twice. Bottom Row Right (Character): a cartoon orange crab with big claws and eyes on stalks, shown twice. Generated video: A bright 3D animated shot on the rocky beach at golden hour. The cheerful orange cartoon crab scuttles sideways across the wet sand in front of the dark boulders, waving its big claws, next to the red and white striped beach umbrella planted in the sand, while waves roll in and break into white foam behind it.}"
-    for target in ${FV_ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense}; do
+    oracle_targets="${FV_ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense}"
+    # Every reference dump is fetched in the background as soon as it is
+    # ready (FV_ORACLE_PREFETCH, default on), so an upstream pod that finishes
+    # early can go (its idle watchdog) before our runs reach the last target.
+    declare -A prefetch=()
+    if [[ "${FV_ORACLE_PREFETCH:-1}" == 1 ]]; then
+      mkdir -p "$SCRATCH/oracle-ref"
+      for target in $oracle_targets; do
+        oracle_fetch "$target" "$SCRATCH/oracle-ref/$target" >"$SCRATCH/oracle-ref/$target.fetch.log" 2>&1 &
+        prefetch[$target]=$!
+      done
+    fi
+    for target in $oracle_targets; do
       ref="$SCRATCH/oracle-ref/$target"
-      if ! oracle_fetch "$target" "$ref"; then
+      fetched=0
+      if [[ -n "${prefetch[$target]:-}" ]] && wait "${prefetch[$target]}"; then
+        fetched=1
+        cat "$SCRATCH/oracle-ref/$target.fetch.log" >>"$LOG" 2>/dev/null || true
+      fi
+      if [[ "$fetched" != 1 ]] && ! oracle_fetch "$target" "$ref"; then
         mkdir -p "$RUNS/oracle-$target"
         write_json "$RUNS/oracle-$target/summary.json" "$(printf '{"cell":"oracle-%s","family":"%s","exit":null,"skipped":"reference dump unavailable"}' "$target" "$FAMILY")"
         continue
@@ -2283,8 +2300,34 @@ Audio: male speech, clear voice, quiet room"
                 a2v_prompt="${FV_LTX_A2V_I2V_PROMPT:-A calm beach at golden hour, gentle waves rolling in, while a narrator speaks.}"
               fi
               ltx_args=(--prompt "$a2v_prompt" --seed "$SEED" --two-stage --text streamed) ;;
+            ltx25-retake | ltx25-retake-v | ltx25-retake-a | ltx25-extend)
+              # Retake / extend (docs/oracle.md "LTX-2.5 retake and extend"):
+              # one distilled stage at the source size on the beach push-in
+              # fixture; specs and prompts as scripts/gpu/upstream/oracle.sh.
+              src="$fx/beach-push-768x512-24fps.mp4"
+              edit_prompt="${FV_LTX_RETAKE_PROMPT:-A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly.}"
+              case "$target" in
+                ltx25-retake) spec="retake:$src:1.5:3.5:av" ;;
+                ltx25-retake-v) spec="retake:$src:1.5:3.5:v" ;;
+                ltx25-retake-a) spec="retake:$src:1.5:3.5:a" ;;
+                ltx25-extend)
+                  spec="extend:$src:48:end"
+                  edit_prompt="${FV_LTX_EXTEND_PROMPT:-The camera keeps pushing in slowly over the rocky beach at golden hour, waves rolling onto the sand, a narrator speaks calmly.}" ;;
+              esac
+              arm=(--edit "$spec")
+              ltx_args=(--prompt "$edit_prompt" --seed "$SEED" --text streamed) ;;
+            ltx25-a2v-guided)
+              # Guided audio-to-video (docs/oracle.md "LTX-2.5 guided
+              # audio-to-video"): the dev transformer, the multimodal guider
+              # at stage 1, the distilled LoRA at stage 2; the talking head.
+              wcell=ltx25-a2v-guided
+              arm=(--dense-stage2 --guided --audio "$fx/speech-flite-44k.flac")
+              a2v_prompt="${FV_LTX_A2V_PROMPT:-A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word.}"
+              ltx_args=(--prompt "$a2v_prompt" --seed "$SEED" --two-stage --text streamed) ;;
           esac
-          cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+          ltx_dit="$W/ltx25"
+          [[ "$target" == ltx25-a2v-guided ]] && ltx_dit="$W/ltx25-dev/transformer_full"
+          cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$ltx_dit"
             "${geo[@]}" "${arm[@]}" "${ltx_args[@]}") ;;
         sfwan13)
           # FastVideo SF-Wan 1.3B at its defaults; the full Wan VAE (the
@@ -2367,6 +2410,47 @@ Audio: male speech, clear voice, quiet room"
           cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
           ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height \
             -of compact "$mp4" | sed "s/^/${src%%:*}: /" >>"$fm/metrics.txt" 2>&1
+        done
+        if [[ -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ]]; then
+          for m in ssim psnr; do
+            r="$(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
+              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
+          done
+        fi
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+      fi
+      # Retake / extend: -ownenc decodes and encodes the source (video and
+      # audio) on our own; then the clips (ours, ownenc, the reference's) and
+      # their fidelity: every frame against the reference's, and the kept
+      # frames (outside the window) against the source.
+      if [[ "$target" == ltx25-retake* || "$target" == ltx25-extend ]]; then
+        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        src="$fx/beach-push-768x512-24fps.mp4"
+        for c in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownenc:$RUNS/oracle-$target-ownenc/frames/output.mp4" \
+          "reference:$ref/dump/ref.mp4"; do
+          mp4="${c#*:}"
+          [[ -f "$mp4" ]] || { echo "${c%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${c%%:*}.mp4" 2>/dev/null || true
+          ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height \
+            -of compact "$mp4" | sed "s/^/${c%%:*}: /" >>"$fm/metrics.txt" 2>&1
+          # Kept source frames: 0..32 and 89..120 for the retake of [1.5, 3.5) s
+          # (the regenerated latent frames 5..11 cover pixel frames 33..88);
+          # 0..104 for the extension (its 0.5 s feather regenerates latent
+          # frames 14.., pixel frames 105..).
+          case "$target" in
+            ltx25-retake-a) keep="lt(n\,121)" ;;
+            ltx25-retake*) keep="lt(n\,33)+gte(n\,89)" ;;
+            *) keep="lt(n\,105)" ;;
+          esac
+          for m in ssim psnr; do
+            r="$(ffmpeg -v info -nostats -i "$mp4" -i "$src" -lavfi "[0:v]select='$keep',setpts=N/24/TB,format=yuv420p[a];[1:v]select='$keep',setpts=N/24/TB,format=yuv420p[b];[a][b]$m" \
+              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            echo "${c%%:*} kept frames vs source $m: ${r##*] }" >>"$fm/metrics.txt"
+          done
         done
         if [[ -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ]]; then
           for m in ssim psnr; do

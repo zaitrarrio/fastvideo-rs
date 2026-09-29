@@ -21,7 +21,9 @@
 # The pod's start command runs everything; results are published read-only on
 # port 8000 (python http.server over /workspace/runs) and fetched through
 # https://<pod>-8000.proxy.runpod.net. The pod is always deleted at the end,
-# and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless.
+# and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless; the
+# pod also deletes itself after FV_IDLE_GPU_MIN (default 10) minutes at 0 %
+# GPU once it has used the GPU (idle_watchdog).
 #
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
@@ -95,6 +97,28 @@ volume() {
   echo "$first"
 }
 
+# The pod-side idle watchdog: the pod deletes itself (pod-scoped
+# RUNPOD_API_KEY / RUNPOD_POD_ID, injected by Runpod) after FV_IDLE_GPU_MIN
+# minutes (default 10; 0 disables) at 0 % GPU utilization, counted once the
+# GPU has been busy; before that, after FV_IDLE_GPU_GRACE_MIN (default 30:
+# setup, weight reads). Independent of this shell, like the wall-clock cap.
+idle_watchdog() {
+  local idle="${FV_IDLE_GPU_MIN:-10}" grace="${FV_IDLE_GPU_GRACE_MIN:-30}"
+  [[ "$idle" == 0 ]] && return 0
+  cat <<WDEOF
+( used=0; n=0
+  while sleep 60; do
+    u=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')
+    if [ "\${u:-0}" -gt 0 ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi
+    lim=$grace; [ "\$used" = 1 ] && lim=$idle
+    if [ "\$n" -ge "\$lim" ] && [ -n "\${RUNPOD_API_KEY:-}" ] && [ -n "\${RUNPOD_POD_ID:-}" ]; then
+      echo "\$(date -u +%FT%TZ) idle \$n min at 0 % GPU: deleting pod \$RUNPOD_POD_ID" >>/tmp/idle-watchdog.log
+      curl -sS -X DELETE -H "Authorization: Bearer \$RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID" >>/tmp/idle-watchdog.log 2>&1
+    fi
+  done ) >/dev/null 2>&1 &
+WDEOF
+}
+
 # $1 = image, $2 = run tag, $3 = mode (run|weights)
 start_cmd() {
   local tag="$2" mode="$3"
@@ -103,6 +127,7 @@ start_cmd() {
     return
   fi
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
+  idle_watchdog
   cat <<EOF
 set -u
 # All writes on the container disk: the weight volume is read-only for us
@@ -172,6 +197,7 @@ upstream_start_cmd() {
   # UP_LOCAL=1: nothing is written to the volume (it is read for weights only);
   # venvs, derived weights and results live on the container disk.
   [[ "${UP_LOCAL:-1}" == 1 ]] && runs=/root/runs
+  idle_watchdog
   cat <<EOF
 set -u
 OUT=$runs/$FAMILY/$tag

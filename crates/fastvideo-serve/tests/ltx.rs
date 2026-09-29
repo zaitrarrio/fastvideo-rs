@@ -134,10 +134,14 @@ async fn ltx_v2_v1_upload_and_stubs() {
     let req = Request::put(&put_path).header("content-type", "image/png").body(Body::from(vec![1u8, 2, 3])).unwrap();
     assert_eq!(r.clone().oneshot(req).await.unwrap().status(), 200);
 
-    // 403 stubs, 401 without a key, 404 for another endpoint's job.
-    let s = call(&r, "POST", "/v2/retake", Some(json!({})), true).await;
+    // 403 stubs, 400 for an edit without its video, 401 without a key, 404
+    // for another endpoint's job.
+    let s = call(&r, "POST", "/v2/video-to-video-hdr", Some(json!({})), true).await;
     assert_eq!(s.status, 403);
     assert_eq!(s.json()["error"]["type"], "permission_error");
+    let s = call(&r, "POST", "/v2/retake", Some(json!({})), true).await;
+    assert_eq!(s.status, 400);
+    assert_eq!(s.json()["error"]["type"], "invalid_request_error");
     let s = call(&r, "POST", "/v2/text-to-video", Some(t2v("ltx-turbo", "1280x720")), false).await;
     assert_eq!(s.status, 401);
     let s = call(&r, "GET", &format!("/v2/image-to-video/{id}"), None, true).await;

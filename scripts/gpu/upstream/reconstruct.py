@@ -300,6 +300,9 @@ PLANS = {
     "ltx25_video_vae": plan_ltx25_video_vae,
     "ltx25_audio_vae": plan_ltx25_audio_vae,
     "ltx25_upsampler": lambda k: ("copy", k),
+    # The single-file distilled LoRA's tensors carry the same names in the
+    # Diffusers repo's copy (which adds the connectors' LoRA).
+    "ltx25_lora": lambda k: ("copy", k),
     "h3_fl2va_dit": plan_h3_fl2va_dit,
     "h3_fl2va_video_vae": plan_h3_fl2va_video_vae,
 }

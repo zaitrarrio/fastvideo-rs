@@ -19,7 +19,11 @@
 # stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2, ltx25-i2v /
 # ltx25-kf (512p dense, first-frame / first+last image conditioning),
 # ltx25-ref2v (ltx_pipelines ICLoraPipeline with the Ingredients IC-LoRA on a
-# reference sheet, 1536x896x121: the LoRA's 768x448 stage-1 bucket); sfwan13
+# reference sheet, 1536x896x121: the LoRA's 768x448 stage-1 bucket);
+# ltx25-a2v / ltx25-a2v-i2v (audio-to-video, ltx25_a2v.py); ltx25-retake /
+# ltx25-retake-v / ltx25-retake-a / ltx25-extend (retake of both streams, of
+# the video, of the audio, and an extension, on one distilled stage at the
+# source size: ltx25_edit.py); sfwan13
 # (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py);
 # h3-ref2va-4step (FastVideo MiniMaxH3Ref2VAModularPipeline on transformer_ref,
 # one image reference, dense, 4 forwards on the uniform grid; ours: `base-4step`).
@@ -74,6 +78,12 @@ oracle_ltx() {
   # --a2v AUDIO [PROMPT] first: audio-to-video (ltx25_a2v.py) on that audio.
   if [[ "${1:-}" == --a2v ]]; then
     a2v=(--a2v-audio "$2"); shift 2
+    [[ -n "${1:-}" && "${1:-}" != --* ]] && { prompt="$1"; shift; }
+  fi
+  # --edit SPEC [PROMPT] first: retake / extend (ltx25_edit.py); pass the
+  # generated clip's --num-frames after it when it differs from the source's.
+  if [[ "${1:-}" == --edit ]]; then
+    a2v=(--edit "$2"); shift 2
     [[ -n "${1:-}" && "${1:-}" != --* ]] && { prompt="$1"; shift; }
   fi
   case "$wl" in
@@ -149,10 +159,43 @@ PY
   rm -f "$c/reference.mov"
 }
 
-# Audio-to-video prompts (targets ltx25-a2v, ltx25-a2v-i2v; shared with
-# runpod-matrix.sh's `oracle` family).
+# Guided audio-to-video (docs/oracle.md "LTX-2.5 guided audio-to-video"):
+# ltx_pipelines' A2VidPipelineTwoStage (`python -m ltx_pipelines.a2vid_two_stage`)
+# at Lightricks/LTX-2 fd4ded7 as published: the dev transformer with the
+# multimodal guider at stage 1 (the CLI defaults of a 2.5 checkpoint: 30 steps,
+# CFG 3, STG 1 on block 28, modality 3, rescale 0.7, the default negative
+# prompt), the distilled LoRA at 1.0 at stage 2. Weights: weights:ltx25-dev.
+# oracle_ltx_a2v <name> <audio> <prompt> [extra args, e.g. --image PATH 0 1.0]
+oracle_ltx_a2v() {
+  local name="$1" audio="$2" prompt="$3" L="$UW/LTX-2.5" py="$UP/sol-ltx25/LTX-2/.venv/bin/python"
+  shift 3
+  if [[ -n "${UP_ORACLE:-}" && " $UP_ORACLE " != *" $name "* ]]; then return 0; fi
+  local dit="$L/diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"
+  local lora="$L/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
+  [[ -f "$dit" && -f "$lora" ]] || { log "oracle $name: no dev DiT / distilled LoRA under $L (weights:ltx25-dev)"; return 1; }
+  oracle_cell "$name" env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=1 \
+    TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 "$py" -m ltx_pipelines.a2vid_two_stage \
+    --transformer-path "$dit" \
+    --text-encoder-path "$L/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors" \
+    --video-vae-path "$L/vae/ltx-2.5-video-vae-conv-bf16.safetensors" \
+    --audio-vae-path "$L/vae/ltx-2.5-audio-vae-bf16.safetensors" \
+    --spatial-upsampler-path "$L/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" \
+    --distilled-lora "$lora" 1.0 --audio-path "$audio" \
+    --offload cpu --width 768 --height 512 --num-frames 121 --frame-rate 24 --seed "$SEED_OURS" \
+    --prompt "$prompt" --output-path "$OUT/oracle-$name/out.mp4" "$@"
+}
+
+# Audio-to-video prompts (targets ltx25-a2v, ltx25-a2v-i2v, ltx25-a2v-guided;
+# shared with runpod-matrix.sh's `oracle` family).
 LTX_A2V_PROMPT="${FV_LTX_A2V_PROMPT:-A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word.}"
 LTX_A2V_I2V_PROMPT="${FV_LTX_A2V_I2V_PROMPT:-A calm beach at golden hour, gentle waves rolling in, while a narrator speaks.}"
+
+# Retake / extend (targets ltx25-retake*, ltx25-extend; shared with
+# runpod-matrix.sh): the beach push-in fixture with the speech clip as its
+# soundtrack (scripts/gpu/fixtures/beach-push-768x512-24fps.mp4, 121 frames).
+LTX_EDIT_SOURCE_NAME=beach-push-768x512-24fps.mp4
+LTX_RETAKE_PROMPT="${FV_LTX_RETAKE_PROMPT:-A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly.}"
+LTX_EXTEND_PROMPT="${FV_LTX_EXTEND_PROMPT:-The camera keeps pushing in slowly over the rocky beach at golden hour, waves rolling onto the sand, a narrator speaks calmly.}"
 
 # Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
 # of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
@@ -237,4 +280,16 @@ run_oracle() {
   oracle_ltx ltx25-a2v dense 512p --a2v "$fx/speech-flite-44k.flac" "$LTX_A2V_PROMPT"
   oracle_ltx ltx25-a2v-i2v dense 512p --a2v "$fx/speech-flite-44k.flac" "$LTX_A2V_I2V_PROMPT" \
     --image "$fx/ti2v-beach-832x480.jpg" 0 1.0
+  # Retake / extend (docs/oracle.md "LTX-2.5 retake and extend"): one
+  # distilled stage at the source size (ltx25_edit.py). Retake [1.5, 3.5) s of
+  # both streams, of the video only (the audio frozen) and of the audio only
+  # (the video frozen); extend 48 frames (2 s) after the source.
+  local src="$fx/$LTX_EDIT_SOURCE_NAME"
+  oracle_ltx ltx25-retake dense 512p --edit "retake:$src:1.5:3.5:av" "$LTX_RETAKE_PROMPT"
+  oracle_ltx ltx25-retake-v dense 512p --edit "retake:$src:1.5:3.5:v" "$LTX_RETAKE_PROMPT"
+  oracle_ltx ltx25-retake-a dense 512p --edit "retake:$src:1.5:3.5:a" "$LTX_RETAKE_PROMPT"
+  oracle_ltx ltx25-extend dense 512p --edit "extend:$src:48:end" "$LTX_EXTEND_PROMPT" --num-frames 169
+  # Guided audio-to-video on the dev transformer (A2VidPipelineTwoStage as
+  # published), the talking head of ltx25-a2v.
+  oracle_ltx_a2v ltx25-a2v-guided "$fx/speech-flite-44k.flac" "$LTX_A2V_PROMPT"
 }

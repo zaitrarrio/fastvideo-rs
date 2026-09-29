@@ -17,9 +17,11 @@ use fastvideo_cudarc::ltx2::pipeline::{
 };
 use fastvideo_models::ltx2::config::Ltx2Config;
 use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
-use fastvideo_protocol::{ApiError, AudioRole, GapId, JobMetrics, ResolvedJob, Task};
+use fastvideo_cudarc::ltx2::v2v::{EditKind, VideoEdit};
+use fastvideo_models::ltx2::edit::ExtendAt;
+use fastvideo_protocol::{ApiError, AudioRole, GapId, JobMetrics, ResolvedEditOp, ResolvedJob, Task};
 
-use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxStage2, LtxVersion};
+use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxA2v, LtxStage2, LtxVersion};
 use super::output::{api_err, bytes_mb, stages, wants_audio};
 use fastvideo_cudarc::Hooks;
 
@@ -65,12 +67,43 @@ pub fn driving_audio(job: &ResolvedJob) -> Result<Option<DrivingAudio>, ApiError
             "audio_url",
             "audio-to-video needs the driving audio",
         )),
+        // A retake's new window audio goes with the edit (`video_edit`).
+        (Task::Retake, Some((AudioRole::Dub, _))) => Ok(None),
         (_, Some(_)) => Err(ApiError::invalid_param(
             "audio_url",
             "input audio is only taken by audio-to-video",
         )),
         _ => Ok(None),
     }
+}
+
+/// The job's retake / extend (`Task::Retake`, `Task::Extend`) as the
+/// engine's edit: the window, the op and a retake's new window audio.
+pub fn video_edit(job: &ResolvedJob) -> Result<Option<VideoEdit>, ApiError> {
+    let Some(e) = &job.edit else { return Ok(None) };
+    let kind = match e.op {
+        ResolvedEditOp::Retake { start_s, end_s, video, audio } => EditKind::Retake { start_s, end_s, video, audio },
+        ResolvedEditOp::Extend { frames, at } => EditKind::Extend {
+            frames: frames as usize,
+            at: match at {
+                fastvideo_protocol::ExtendAt::Start => ExtendAt::Start,
+                fastvideo_protocol::ExtendAt::End => ExtendAt::End,
+            },
+        },
+    };
+    let dub = match &job.audio_in {
+        Some((AudioRole::Dub, p)) => Some(p.clone()),
+        _ => None,
+    };
+    Ok(Some(VideoEdit {
+        source: e.source.clone(),
+        source_fps: e.source_fps,
+        window_start: e.window_start as usize,
+        window_frames: e.window_frames as usize,
+        kind,
+        source_audio: e.source_audio,
+        dub,
+    }))
 }
 
 /// One resident LTX-2 pipeline.
@@ -141,7 +174,12 @@ impl Ltx2Model {
         text_cache: Option<&Path>,
         obs: &mut dyn FnMut(&'static str),
     ) -> Result<Self, ApiError> {
-        let cfg = ltx_config(recipe.version);
+        // The guided audio-to-video runs the dev transformer's config (its
+        // scheduler is the dev one; the modules are the distilled bundle's).
+        let cfg = match recipe.a2v {
+            LtxA2v::Guided => fastvideo_models::ltx2::config::ltx2_5_22b_dev(),
+            _ => ltx_config(recipe.version),
+        };
         let (sol_stage2, pisa_stage2) = stage2_route(recipe, &cfg)?;
         let paths = Ltx2Paths {
             weights: recipe.weights.clone(),
@@ -155,6 +193,9 @@ impl Ltx2Model {
             offload: None,
             tae: recipe.tae.clone(),
             ic_lora: recipe.ic_lora.clone(),
+            // The dev DiT switches between its base (stage 1) and the fused
+            // distilled LoRA (stage 2) per request: one device copy.
+            lora_base_host: recipe.a2v == LtxA2v::Guided,
         };
         obs("ltx2_pipeline");
         let pipe = Ltx2Pipeline::load(&paths, &cfg, &options)
@@ -179,8 +220,10 @@ impl Ltx2Model {
         super::validate::ltx2(&self.recipe, job)?;
         let reference = reference(job, self.recipe.ic_lora.is_some())?;
         let audio = driving_audio(job)?;
+        let edit = video_edit(job)?;
         let images = match job.task {
             Task::Ref2V => Vec::new(),
+            Task::Retake | Task::Extend => Vec::new(),
             Task::T2V if job.keyframes.is_empty() => Vec::new(),
             Task::I2V | Task::Keyframes | Task::A2V if self.recipe.version == LtxVersion::V25 => {
                 conditioning_images(job)
@@ -199,6 +242,22 @@ impl Ltx2Model {
         req.two_stage = self.recipe.two_stage;
         req.guidance_scale = 1.0;
         req.audio_guidance_scale = 1.0;
+        if self.recipe.a2v == LtxA2v::Guided {
+            if job.task != Task::A2V {
+                return Err(ApiError::invalid_param(
+                    "task",
+                    "this model serves guided audio-to-video only",
+                ));
+            }
+            // `a2vid_two_stage.py`'s defaults: CFG 3, the reference CLI's
+            // negative prompt, `stage1_steps` (30) on `LTX2Scheduler`.
+            req.guidance_scale = job
+                .sampling
+                .guidance
+                .unwrap_or(fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale);
+            req.num_inference_steps = Some(self.recipe.stage1_steps as usize);
+            req.negative_prompt = job.negative_prompt.clone();
+        }
         req.sol_stage2 = self.sol_stage2;
         req.pisa_stage2 = self.pisa_stage2;
         // E4: no audio decode when the output drops it.
@@ -211,15 +270,24 @@ impl Ltx2Model {
         }
         req.reference = reference;
         req.audio = audio;
+        if let Some(e) = edit {
+            // `RetakePipeline`: one dense distilled stage at the source size,
+            // at the source's exact frame rate.
+            req.two_stage = false;
+            req.sol_stage2 = false;
+            req.pisa_stage2 = false;
+            req.frame_rate = e.source_fps;
+            req.edit = Some(e);
+        }
         req.validate()
             .map_err(|e| ApiError::invalid(e.to_string()))?;
         Ok(req)
     }
 
-    /// Planned denoise steps (stage 1 + refine).
-    pub(crate) fn planned_steps(&self) -> u32 {
+    /// Planned denoise steps (stage 1 + refine; an edit is one stage).
+    pub(crate) fn planned_steps(&self, job: &ResolvedJob) -> u32 {
         self.recipe.stage1_steps
-            + if self.recipe.two_stage {
+            + if self.recipe.two_stage && job.edit.is_none() {
                 self.recipe.refine_steps
             } else {
                 0

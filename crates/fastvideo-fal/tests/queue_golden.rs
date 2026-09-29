@@ -271,6 +271,7 @@ fn resolved(task: Task) -> ResolvedJob {
         sampling: SamplingOverrides::default(),
         tier: Some(Tier::Max),
         recipe: Some("full-dense".into()),
+        edit: None,
     }
 }
 
