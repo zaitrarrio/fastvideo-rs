@@ -23,6 +23,13 @@
 //!   current picture is black. PLI/FIR ([`MediaPipeline::request_keyframe`])
 //!   is rate-limited to one keyframe per [`KEYFRAME_MIN_INTERVAL`] per codec
 //!   (a later request waits for the window, it is not dropped).
+//! - **Warm spare**: a keyframe restarts a pipe encoder's ffmpeg (NVENC,
+//!   libvpx). The session keeps one pre-started, primed spare process
+//!   ([`fastvideo_media::pipe::SparePool`]): pre-warmed at session start for
+//!   the canvas in the preferred codec (the first encoder adopts it), then
+//!   refilled after every (re)start. A restart swaps it in while the old
+//!   process flushes its last frame after EOF; the spare ends with the
+//!   session.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -32,6 +39,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use fastvideo_engine_service::{Tick, TickReceiver};
 use fastvideo_media::pacer::VideoOut;
+use fastvideo_media::pipe::{SparePool, SpareSpec};
 use fastvideo_media::queue::GapKeyframes;
 use fastvideo_protocol::RgbFrame;
 use fastvideo_webrtc::host::PeerHandle;
@@ -172,9 +180,15 @@ impl MediaPipeline {
         });
         let v = sh.clone();
         let rt = tokio::runtime::Handle::current();
+        // Pre-warm an encoder for the session's canvas in the codec answers
+        // prefer, while the peer connects (codec probes included), so the
+        // first video frame does not wait for ffmpeg to start.
+        let spares = SparePool::per_session();
+        let c = sh.cfg.clone();
+        spares.prewarm_with(move || prewarm_spec(&c));
         std::thread::Builder::new()
             .name("reactor-video".into())
-            .spawn(move || video_loop(v, ticks, rt))
+            .spawn(move || video_loop(v, ticks, rt, spares))
             .expect("spawning the reactor video thread");
         if sh.cfg.audio {
             let a = sh.clone();
@@ -252,12 +266,22 @@ struct VideoState {
     first_sent: bool,
     /// Per codec: whether a gap in the ticks still needs a keyframe.
     gaps: HashMap<VideoCodec, GapKeyframes>,
+    /// The session's warm ffmpeg spare (one, shared by the pipe encoders):
+    /// the first encoder and keyframe restarts take it instead of starting
+    /// ffmpeg. Killed when the video thread ends (session end).
+    spares: SparePool,
 }
 
-fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Handle) {
+fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Handle, spares: SparePool) {
     let step = 90_000 / u64::from(sh.cfg.fps.max(1));
-    let mut st =
-        VideoState { encoders: HashMap::new(), current: None, last_rtp: 0, first_sent: false, gaps: HashMap::new() };
+    let mut st = VideoState {
+        encoders: HashMap::new(),
+        current: None,
+        last_rtp: 0,
+        first_sent: false,
+        gaps: HashMap::new(),
+        spares,
+    };
     while !sh.closed.load(Ordering::Relaxed) {
         let next = rt.block_on(async { tokio::time::timeout(Duration::from_millis(50), ticks.recv()).await });
         let tick: Option<Tick> = match next {
@@ -372,9 +396,13 @@ fn send_picture(
     let black = frame.data.iter().step_by(97).all(|b| *b == 0);
     for codec in codecs {
         let gaps = st.gaps.entry(codec).or_default();
+        if st.encoders.get(&codec).is_some_and(|e| e.dims() != (frame.width, frame.height)) {
+            // Dropped first: its ffmpeg processes (and spare) end here.
+            st.encoders.remove(&codec);
+        }
         let enc = match st.encoders.get_mut(&codec) {
-            Some(e) if e.dims() == (frame.width, frame.height) => e,
-            _ => match new_encoder(codec, &sh.cfg, frame.width, frame.height) {
+            Some(e) => e,
+            None => match new_encoder(codec, &sh.cfg, frame.width, frame.height, &st.spares) {
                 Ok(e) => {
                     // A new encoder starts with a keyframe.
                     gaps.forced();
@@ -549,11 +577,48 @@ pub trait FrameEncoder: Send {
     }
 }
 
-fn new_encoder(codec: VideoCodec, cfg: &MediaConfig, w: u32, h: u32) -> Result<Box<dyn FrameEncoder>, String> {
+/// The pipe encoder the session most likely needs first (the codec answers
+/// prefer, at the canvas), or `None` for an in-process one.
+fn prewarm_spec(cfg: &MediaConfig) -> Option<SpareSpec> {
+    let (w, h) = cfg.canvas;
+    if cfg.h264 == H264Backend::Nvenc && cfg.h264.usable() {
+        let c = h264_config(cfg, w, h);
+        return SpareSpec::h264(fastvideo_media::video::FfmpegH264::Nvenc, &c).ok();
+    }
+    if cfg.h264 == H264Backend::OpenH264 && cfg.h264.usable() {
+        return None;
+    }
+    fastvideo_media::vp8::libvpx_available().then(|| SpareSpec::vp8(&vp8_config(cfg, w, h)).ok()).flatten()
+}
+
+fn h264_config(cfg: &MediaConfig, w: u32, h: u32) -> fastvideo_media::video::H264Config {
+    use fastvideo_media::video::{H264Config, PublishTarget};
+    let mut c = H264Config::for_publish(PublishTarget::Peer, w, h, cfg.fps.max(1));
+    if let Some(b) = cfg.bitrate_bps {
+        c.bitrate_bps = b;
+    }
+    c
+}
+
+fn vp8_config(cfg: &MediaConfig, w: u32, h: u32) -> fastvideo_media::vp8::Vp8Config {
+    let mut c = fastvideo_media::vp8::Vp8Config::new(w, h, cfg.fps.max(1));
+    if let Some(b) = cfg.bitrate_bps {
+        c.bitrate_bps = b;
+    }
+    c
+}
+
+fn new_encoder(
+    codec: VideoCodec,
+    cfg: &MediaConfig,
+    w: u32,
+    h: u32,
+    spares: &SparePool,
+) -> Result<Box<dyn FrameEncoder>, String> {
     match codec {
-        VideoCodec::H264 => H264Encoder::new(cfg, w, h).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
+        VideoCodec::H264 => H264Encoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
         VideoCodec::Vp8 if fastvideo_media::vp8::libvpx_available() => {
-            LibvpxEncoder::new(cfg, w, h).map(|e| Box::new(e) as Box<dyn FrameEncoder>)
+            LibvpxEncoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>)
         }
         VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
     }
@@ -584,12 +649,9 @@ struct LibvpxEncoder {
 }
 
 impl LibvpxEncoder {
-    fn new(cfg: &MediaConfig, w: u32, h: u32) -> Result<Self, String> {
-        let mut c = fastvideo_media::vp8::Vp8Config::new(w, h, cfg.fps.max(1));
-        if let Some(b) = cfg.bitrate_bps {
-            c.bitrate_bps = b;
-        }
-        let inner = fastvideo_media::vp8::Vp8Encoder::new(c).map_err(|e| e.to_string())?;
+    fn new(cfg: &MediaConfig, w: u32, h: u32, spares: &SparePool) -> Result<Self, String> {
+        let c = vp8_config(cfg, w, h);
+        let inner = fastvideo_media::vp8::Vp8Encoder::with_pool(c, Some(spares.clone())).map_err(|e| e.to_string())?;
         Ok(Self { inner, rtps: RtpFifo::default() })
     }
 }
@@ -618,18 +680,14 @@ struct H264Encoder {
 }
 
 impl H264Encoder {
-    fn new(cfg: &MediaConfig, w: u32, h: u32) -> Result<Self, String> {
-        use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config, PublishTarget};
+    fn new(cfg: &MediaConfig, w: u32, h: u32, spares: &SparePool) -> Result<Self, String> {
+        use fastvideo_media::video::{create_stream_encoder, EncoderBackend};
         let backend = match cfg.h264 {
             H264Backend::Nvenc => EncoderBackend::Nvenc,
             H264Backend::OpenH264 => EncoderBackend::OpenH264,
             H264Backend::Off => return Err("H.264 is off".into()),
         };
-        let mut c = H264Config::for_publish(PublishTarget::Peer, w, h, cfg.fps.max(1));
-        if let Some(b) = cfg.bitrate_bps {
-            c.bitrate_bps = b;
-        }
-        let inner = create_encoder(backend, c).map_err(|e| e.to_string())?;
+        let inner = create_stream_encoder(backend, h264_config(cfg, w, h), spares).map_err(|e| e.to_string())?;
         Ok(Self { dims: (w, h), inner, rtps: RtpFifo::default() })
     }
 }
@@ -646,6 +704,10 @@ impl FrameEncoder for H264Encoder {
         // Every AU goes out: dropping one would break the references of the
         // P-frames after it.
         Ok(self.rtps.stamp(rtp, out.into_iter().map(|e| e.data)))
+    }
+    fn poll(&mut self) -> Result<Vec<(u64, Bytes)>, String> {
+        let out = self.inner.poll().map_err(|e| e.to_string())?;
+        Ok(self.rtps.take(out.into_iter().map(|e| e.data)))
     }
 }
 

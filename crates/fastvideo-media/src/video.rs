@@ -21,17 +21,18 @@
 //! Forced IDRs (PLI/FIR, rate-limited by [`IdrLimiter`]) are native in
 //! OpenH264. Through the ffmpeg pipe there is no per-frame control, so the
 //! pipe encoder restarts its ffmpeg process: the first frame of a new process
-//! is an IDR with SPS/PPS. Frame indices continue across the restart.
+//! is an IDR with SPS/PPS. Frame indices continue across the restart. A
+//! streaming session keeps a warm spare process so a restart does not wait
+//! for ffmpeg to start ([`crate::pipe`]).
 
-use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc;
+use std::process::Stdio;
 
 use bytes::Bytes;
 
 use crate::av::{AvCheck, RgbFrame};
 use crate::error::{MediaError, Result};
 use crate::h264::{self, H264Level};
+use crate::pipe::{PipeProcs, RestartStats, SparePool, SpareSpec};
 use crate::scale::{self, ScaleMode};
 use crate::tools;
 
@@ -211,6 +212,15 @@ pub trait VideoEncoder: Send {
     fn force_idr(&mut self);
     /// Flush everything still inside the encoder.
     fn finish(&mut self) -> Result<Vec<EncodedFrame>>;
+    /// Access units that became ready since the last call (a pipe encoder
+    /// hands them back asynchronously; in-process encoders have none).
+    fn poll(&mut self) -> Result<Vec<EncodedFrame>> {
+        Ok(Vec::new())
+    }
+    /// Keyframe restarts (pipe encoders).
+    fn restart_stats(&self) -> Option<&RestartStats> {
+        None
+    }
 }
 
 /// Construct a backend.
@@ -225,6 +235,20 @@ pub fn create_encoder(backend: EncoderBackend, cfg: H264Config) -> Result<Box<dy
         EncoderBackend::OpenH264 => {
             Err(MediaError::Unsupported("built without the `openh264` feature of fastvideo-media".into()))
         }
+    }
+}
+
+/// Construct a backend for a streaming session: a pipe encoder starts from
+/// and restarts into `pool`'s warm spare ([`crate::pipe`]); in-process
+/// encoders ignore the pool.
+pub fn create_stream_encoder(backend: EncoderBackend, cfg: H264Config, pool: &SparePool) -> Result<Box<dyn VideoEncoder>> {
+    cfg.validate()?;
+    match backend {
+        EncoderBackend::Nvenc => Ok(Box::new(PipeEncoder::with_pool(cfg, FfmpegH264::Nvenc, Some(pool.clone()))?)),
+        EncoderBackend::CpuTestX264 => {
+            Ok(Box::new(PipeEncoder::with_pool(cfg, FfmpegH264::Libx264CpuTest, Some(pool.clone()))?))
+        }
+        EncoderBackend::OpenH264 => create_encoder(backend, cfg),
     }
 }
 
@@ -403,7 +427,8 @@ impl FfmpegH264 {
                 a.extend(s(&["-level:v", &lvl.to_string(), "-g", &g, "-keyint_min", &g, "-sc_threshold", "0"]));
                 a.extend(s(&["-b:v", &b, "-maxrate", &b]));
                 a.extend(["-bufsize".into(), (u64::from(cfg.bitrate_bps) / 2).to_string()]);
-                a.extend(s(&["-x264-params", "aud=1:repeat-headers=1"]));
+                // A forced keyframe (the warm spare's first real frame) is an IDR.
+                a.extend(s(&["-forced-idr", "1", "-x264-params", "aud=1:repeat-headers=1"]));
                 a
             }
         };
@@ -515,67 +540,6 @@ static AUTO: std::sync::OnceLock<AutoEncoder> = std::sync::OnceLock::new();
 // The ffmpeg pipe encoder (NVENC in production)
 // ---------------------------------------------------------------------------
 
-struct Proc {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    rx: mpsc::Receiver<Vec<u8>>,
-    reader: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Proc {
-    fn spawn(cfg: &H264Config, codec: FfmpegH264) -> Result<Self> {
-        let mut cmd = tools::ffmpeg_command();
-        cmd.args(pipe_encoder_args(cfg, codec)?).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
-        let stdin = child.stdin.take();
-        let mut stdout = child.stdout.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdout"))?;
-        let (tx, rx) = mpsc::channel();
-        let reader = std::thread::Builder::new().name("h264-ffmpeg-out".into()).spawn(move || {
-            let mut buf = Vec::new();
-            let mut chunk = vec![0u8; 1 << 16];
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        for au in take_complete_aus(&mut buf) {
-                            if tx.send(au).is_err() {
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            if !buf.is_empty() {
-                let _ = tx.send(buf);
-            }
-        })?;
-        Ok(Self { child, stdin, rx, reader: Some(reader) })
-    }
-
-    /// Close stdin, drain every AU, reap the process.
-    fn close(mut self) -> Result<Vec<Vec<u8>>> {
-        drop(self.stdin.take());
-        let aus: Vec<Vec<u8>> = self.rx.iter().collect();
-        if let Some(r) = self.reader.take() {
-            let _ = r.join();
-        }
-        let status = self.child.wait()?;
-        if !status.success() {
-            return Err(MediaError::tool("ffmpeg", format!("h264 encode exited with {status}")));
-        }
-        Ok(aus)
-    }
-}
-
-impl Drop for Proc {
-    fn drop(&mut self) {
-        drop(self.stdin.take());
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 /// The full ffmpeg argument list (after the common flags) of the pipe encoder.
 pub fn pipe_encoder_args(cfg: &H264Config, codec: FfmpegH264) -> Result<Vec<String>> {
     let mut a: Vec<String> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"].map(String::from).to_vec();
@@ -589,26 +553,47 @@ pub fn pipe_encoder_args(cfg: &H264Config, codec: FfmpegH264) -> Result<Vec<Stri
     Ok(a)
 }
 
+/// The metrics / log label of a pipe encoder's codec.
+pub(crate) fn pipe_label(codec: FfmpegH264) -> &'static str {
+    match codec {
+        FfmpegH264::Nvenc => "h264_nvenc",
+        FfmpegH264::Libx264CpuTest => "libx264",
+    }
+}
+
 /// H.264 through an ffmpeg subprocess: rgb24 in, Annex-B access units out.
+/// A forced IDR restarts ffmpeg ([`crate::pipe`]): the old process flushes
+/// after EOF, and with a [`SparePool`] ([`Self::with_pool`]) a pre-started
+/// spare takes over at once.
 pub struct PipeEncoder {
     cfg: H264Config,
     codec: FfmpegH264,
-    proc: Option<Proc>,
+    procs: PipeProcs,
     out_index: u64,
     idr_pending: bool,
-    restarts: u64,
 }
 
 impl PipeEncoder {
+    /// A batch / standalone encoder: no spare.
     pub fn new(cfg: H264Config, codec: FfmpegH264) -> Result<Self> {
-        cfg.validate()?;
-        let proc = Proc::spawn(&cfg, codec)?;
-        Ok(Self { cfg, codec, proc: Some(proc), out_index: 0, idr_pending: false, restarts: 0 })
+        Self::with_pool(cfg, codec, None)
+    }
+
+    /// A streaming session's encoder: starts from `pool`'s spare when it
+    /// holds this profile, and restarts into it.
+    pub fn with_pool(cfg: H264Config, codec: FfmpegH264, pool: Option<SparePool>) -> Result<Self> {
+        let procs = PipeProcs::new(SpareSpec::h264(codec, &cfg)?, pool)?;
+        Ok(Self { cfg, codec, procs, out_index: 0, idr_pending: false })
     }
 
     /// ffmpeg restarts done to honour forced IDRs.
     pub fn restarts(&self) -> u64 {
-        self.restarts
+        self.procs.stats().restarts
+    }
+
+    /// ffmpeg ids: current, then flushing ones.
+    pub fn pids(&self) -> Vec<u32> {
+        self.procs.pids()
     }
 
     fn wrap(&mut self, aus: impl IntoIterator<Item = Vec<u8>>) -> Vec<EncodedFrame> {
@@ -620,40 +605,6 @@ impl PipeEncoder {
             })
             .collect()
     }
-
-    fn ready(&mut self) -> Vec<EncodedFrame> {
-        let aus: Vec<Vec<u8>> = match &self.proc {
-            Some(p) => p.rx.try_iter().collect(),
-            None => Vec::new(),
-        };
-        self.wrap(aus)
-    }
-}
-
-/// Pop every access unit that is followed by the next AUD from `buf`.
-fn take_complete_aus(buf: &mut Vec<u8>) -> Vec<Vec<u8>> {
-    let mut starts = Vec::new();
-    let mut i = 0;
-    while i + 4 <= buf.len() {
-        if buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1 && buf[i + 3] & 0x1f == h264::nal::AUD {
-            // Include the leading zero of a 4-byte start code.
-            let s = if i > 0 && buf[i - 1] == 0 { i - 1 } else { i };
-            starts.push(s);
-            i += 4;
-        } else {
-            i += 1;
-        }
-    }
-    let mut out = Vec::new();
-    if starts.len() < 2 {
-        return out;
-    }
-    let last = *starts.last().expect("len >= 2");
-    for w in starts.windows(2) {
-        out.push(buf[w[0]..w[1]].to_vec());
-    }
-    buf.drain(..last);
-    out
 }
 
 impl VideoEncoder for PipeEncoder {
@@ -676,36 +627,32 @@ impl VideoEncoder for PipeEncoder {
                 frame.width, frame.height, self.cfg.input_width, self.cfg.input_height
             )));
         }
-        let mut out = Vec::new();
         if self.idr_pending {
             // A fresh process starts with an IDR (plus SPS/PPS).
             self.idr_pending = false;
-            if let Some(p) = self.proc.take() {
-                let aus = p.close()?;
-                out.extend(self.wrap(aus));
-            }
-            self.proc = Some(Proc::spawn(&self.cfg, self.codec)?);
-            self.restarts += 1;
+            self.procs.restart()?;
         }
-        let p = self.proc.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
-        let stdin = p.stdin.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
-        stdin.write_all(&frame.data).map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))?;
-        out.extend(self.ready());
-        Ok(out)
+        self.procs.write(&frame.data)?;
+        let aus = self.procs.ready()?;
+        Ok(self.wrap(aus))
     }
 
     fn force_idr(&mut self) {
         self.idr_pending = true;
     }
 
+    fn poll(&mut self) -> Result<Vec<EncodedFrame>> {
+        let aus = self.procs.ready()?;
+        Ok(self.wrap(aus))
+    }
+
+    fn restart_stats(&self) -> Option<&RestartStats> {
+        Some(self.procs.stats())
+    }
+
     fn finish(&mut self) -> Result<Vec<EncodedFrame>> {
-        match self.proc.take() {
-            Some(p) => {
-                let aus = p.close()?;
-                Ok(self.wrap(aus))
-            }
-            None => Ok(Vec::new()),
-        }
+        let aus = self.procs.finish()?;
+        Ok(self.wrap(aus))
     }
 }
 
@@ -1087,7 +1034,7 @@ mod tests {
     #[test]
     fn aud_splitter() {
         let mut buf = vec![0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x65, 1, 0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 0x41, 2];
-        let aus = take_complete_aus(&mut buf);
+        let aus = crate::pipe::take_complete_aus(&mut buf);
         assert_eq!(aus.len(), 1);
         assert_eq!(aus[0], vec![0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x65, 1]);
         assert_eq!(buf, vec![0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 0x41, 2]);

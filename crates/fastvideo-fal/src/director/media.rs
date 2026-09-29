@@ -19,6 +19,10 @@
 //! restarting encoder never stalls the clock or the audio (design §5.10:
 //! "encoder input 10 ticks, drop-oldest, then force IDR"). RTP times come
 //! from the tick counter; PLI/FIR is rate limited to one keyframe a second.
+//! A forced keyframe restarts a pipe encoder's ffmpeg (x264 in tests, NVENC,
+//! libvpx): the session keeps one warm, primed spare process that the
+//! restart swaps in while the old process flushes its last frames
+//! ([`fastvideo_media::pipe`]).
 //!
 //! It reports chunk starts (with lateness after an underrun), underruns and
 //! emitted video time back to the session.
@@ -33,8 +37,9 @@ use bytes::Bytes;
 use fastvideo_media::lockstep::{self, Slice, EMIT_FRAMES, WIRE_RATE};
 use fastvideo_media::opus::{OpusConfig, OpusEncoder};
 use fastvideo_media::pacer::{AvPacer, AvPacerConfig, Metronome, VideoOut};
+use fastvideo_media::pipe::SparePool;
 use fastvideo_media::queue::{DropOldest, GapKeyframes};
-use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config, PublishTarget, VideoEncoder};
+use fastvideo_media::video::{create_stream_encoder, EncoderBackend, H264Config, PublishTarget, VideoEncoder};
 use fastvideo_media::RgbFrame;
 use fastvideo_webrtc::writer::KeyframeLimiter;
 
@@ -133,7 +138,7 @@ enum Video {
     H264(Box<dyn VideoEncoder>),
     Vp8(Vp8Encoder),
     /// Inter-frame VP8 through ffmpeg `libvpx` (when ffmpeg has it).
-    Libvpx(fastvideo_media::vp8::Vp8Encoder),
+    Libvpx(Box<fastvideo_media::vp8::Vp8Encoder>),
 }
 
 /// The playout thread's state.
@@ -203,6 +208,7 @@ impl<S: MediaSink> MediaLoop<S> {
             video: Video::None,
             pending_rtp: VecDeque::new(),
             gaps: GapKeyframes::default(),
+            spares: SparePool::per_session(),
         };
         std::thread::Builder::new().name("wma-video-enc".into()).spawn(move || enc.run())?;
         std::thread::Builder::new().name("wma-playout".into()).spawn(move || self.run())
@@ -383,6 +389,10 @@ struct VideoThread<S: MediaSink> {
     video: Video,
     pending_rtp: VecDeque<u64>,
     gaps: GapKeyframes,
+    /// The session's warm ffmpeg spare: a keyframe restart of the pipe
+    /// encoder swaps it in instead of starting ffmpeg (1-7 s on a loaded
+    /// host). Killed when this thread ends with the session.
+    spares: SparePool,
 }
 
 impl<S: MediaSink> VideoThread<S> {
@@ -400,21 +410,25 @@ impl<S: MediaSink> VideoThread<S> {
                 if self.q.is_closed() {
                     return;
                 }
-                // The libvpx pipe hands frames back a few ms after the
-                // input: send the last one before a pause now.
-                if let Video::Libvpx(e) = &mut self.video {
-                    match e.poll() {
-                        Ok(frames) => {
-                            for x in frames {
-                                let t = self.pending_rtp.pop_front().unwrap_or_default();
-                                self.send(x.data, t, x.keyframe);
-                            }
+                // The pipe encoders hand frames back a few ms after the
+                // input (and a restarted process's last frames after its
+                // EOF): send them before a pause now.
+                let polled = match &mut self.video {
+                    Video::Libvpx(e) => e.poll().map_err(|e| format!("vp8: {e}")),
+                    Video::H264(e) => e.poll().map_err(|e| format!("h264: {e}")),
+                    Video::Vp8(_) | Video::None => Ok(Vec::new()),
+                };
+                match polled {
+                    Ok(frames) => {
+                        for x in frames {
+                            let t = self.pending_rtp.pop_front().unwrap_or_default();
+                            self.send(x.data, t, x.keyframe);
                         }
-                        Err(e) => {
-                            self.failed.store(true, Ordering::Relaxed);
-                            let _ = self.events.send(MediaEvent::Failed(format!("vp8: {e}")));
-                            return;
-                        }
+                    }
+                    Err(e) => {
+                        self.failed.store(true, Ordering::Relaxed);
+                        let _ = self.events.send(MediaEvent::Failed(e));
+                        return;
                     }
                 }
                 continue;
@@ -459,13 +473,15 @@ impl<S: MediaSink> VideoThread<S> {
                 let mut c = H264Config::for_publish(PublishTarget::Peer, f.width, f.height, self.cfg.fps);
                 c.bitrate_bps = bitrate;
                 c.gop_seconds = self.cfg.gop_seconds;
-                Video::H264(create_encoder(self.cfg.h264, c).map_err(|e| format!("h264 encoder: {e}"))?)
+                Video::H264(create_stream_encoder(self.cfg.h264, c, &self.spares).map_err(|e| format!("h264 encoder: {e}"))?)
             }
             VideoCodec::Vp8 if fastvideo_media::vp8::libvpx_available() => {
                 let mut c = fastvideo_media::vp8::Vp8Config::new(f.width, f.height, self.cfg.fps);
                 c.bitrate_bps = bitrate;
                 c.gop_seconds = self.cfg.gop_seconds;
-                Video::Libvpx(fastvideo_media::vp8::Vp8Encoder::new(c).map_err(|e| format!("vp8 encoder: {e}"))?)
+                let e = fastvideo_media::vp8::Vp8Encoder::with_pool(c, Some(self.spares.clone()))
+                    .map_err(|e| format!("vp8 encoder: {e}"))?;
+                Video::Libvpx(Box::new(e))
             }
             VideoCodec::Vp8 => Video::Vp8(
                 Vp8Encoder::new(f.width, f.height, quality_for(bitrate, f.width, f.height, self.cfg.fps))
