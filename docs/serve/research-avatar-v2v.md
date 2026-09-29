@@ -86,8 +86,8 @@ The roadmap with effort, GPU cost, licences and API surfaces is in §5.
 | Served clip models | H3 (T2V, I2V, keyframes, ref2v), LTX-2.5 (T2V, I2V, keyframes), Wan2.2 TI2V-5B, FastWan 5B/1.3B | [fal-parity.md](fal-parity.md) §0 "What we serve today", `crates/fastvideo-engine-service/src/cuda/caps.rs` |
 | Causal real-time | SF-Wan 1.3B (`SfWanRecipe`: `local_attn_frames`, `sink_frames`, `block_frames`) over `wan::stream::CausalRollout` | `caps.rs`, `crates/fastvideo-engine-service/src/cuda/causal.rs` |
 | WebRTC **output** | H.264 (NVENC) and VP8 encode, Opus encode; Reactor, fal director (WMA) and native WHIP transports | `crates/fastvideo-media/src/{video,vp8,opus}.rs`, `crates/fastvideo-webrtc` |
-| WebRTC **input** | **None.** `fastvideo-webrtc/src/host.rs` says "our server peers only send". Reactor `PublishTrack` answers `publish_refused` ("the model declares no input track") | `crates/fastvideo-reactor/src/gateway.rs:241-244` |
-| Decoders we could reuse for ingest | An Opus **decoder** exists (`OpusDecoder`, used in tests). There is no H.264/VP8 decoder | `crates/fastvideo-media/src/opus.rs:239-248` |
+| WebRTC **input** | **Done 2026-09-29 (P0-1, below).** At the time of this study: none (`host.rs`: "our server peers only send"; Reactor `PublishTrack` answered `publish_refused`) | [design.md](design.md) §5.11 |
+| Decoders we could reuse for ingest | Now: a warm ffmpeg VP8/H.264 → RGB decode pipe and the Opus decoder in the ingest path. At the time: only `OpusDecoder` (tests) | `crates/fastvideo-media/src/decode.rs`, `crates/fastvideo-webrtc/src/ingest.rs` |
 | Tasks in the protocol | `Task::{A2V, Extend, Retake, V2V}` exist and are always refused as unsupported | `crates/fastvideo-protocol/src/{request.rs:147-153, negotiate.rs:360}` |
 | LTX A2V / retake / extend | Refused (`403 permission_error` on the LTX API, `GapId::LtxEndpoint`) | [design.md](design.md) §"LTX endpoints", fal-parity §4 P1 #9-#10 |
 | H3 target audio (E10) | Refused (`H3TargetAudio`); would unlock fal `minimax/h3-max/lip-sync/image-to-video` | fal-parity §1.2, design.md E10 |
@@ -107,7 +107,13 @@ microphone, is blocked on **ingest**. That means:
   https://fal.ai/docs/documentation/development/wma), and a native WHIP
   ingest.
 
-That is why ingest is P0-1 in §5.
+That is why ingest is P0-1 in §5. **Status 2026-09-29: P0-1 is done**
+([design.md](design.md) §5.11): client VP8/H.264 camera and Opus
+microphone tracks are received (Reactor `PublishTrack`, native WHIP ingest
+at `/fv/v1/streams/ingest`), decoded into per-session ring buffers and read
+by duplex models; the loopback echo model `fv-echo` proves the path end to
+end, including in headless Chromium from the console's Live input page.
+WMA client tracks are not wired (the director serves clip models only).
 
 ---
 
@@ -410,7 +416,7 @@ Every new tree goes to both volumes and into `weights-manifest.tsv` and
 
 | # | Item | Effort | GPU $ | New weights | License | API surfaces |
 |---|---|---|---|---|---|---|
-| P0-1 | **WebRTC ingest.** Client video (H.264/VP8 → RGB via an ffmpeg subprocess) and audio (Opus → PCM, decoder exists) tracks into per-session ring buffers. Reactor `PublishTrack`/`UnpublishTrack` and input-track capabilities; WMA client tracks; native WHIP ingest | 2-3 sessions | ~$2-5 (mostly CPU/loopback tests; one GPU E2E) | none | — | Reactor, fal WMA, native |
+| P0-1 | **DONE 2026-09-29 (CPU only, $0).** **WebRTC ingest.** Client video (H.264/VP8 → RGB through a warm ffmpeg decode pipe, pre-started per session) and audio (Opus → PCM) into per-session ring buffers with timestamps; `StreamCaps::Duplex` (input tracks with size/fps/bitrate limits, audio out, unit length in ms, session context: the Wan-Streamer shape); Reactor duplex mode (`input_video`/`input_audio`, `PublishTrack`/`UnpublishTrack` slots); native WHIP ingest (`POST /fv/v1/streams/ingest`, output back on the same peer); backpressure, keyframe gating with PLI, `b=AS` bitrate cap, resolution limits; only authenticated sessions; the loopback echo model and the console's Live input page (design.md §5.11). **Not wired:** WMA client tracks (the director serves clip models only). The GPU E2E follows with the first real duplex model (P0-5) | 1 session | $0 | none | — | Reactor, native (fal WMA later) |
 | P0-2 | **DONE 2026-09-29.** **LTX-2.5 audio-to-video** (`Task::A2V`, `AudioRole::Drive`): audio → audio latents held clean as conditioning, optional first-frame image. This is the batch talking photo. Served on the distilled weights (the upstream audio mechanism of `a2vid_two_stage.py` on `DistilledPipeline`); GPU oracle at the bf16 floor, serve E2E pass on LTX v2, native and fal, lip-sync proxy in sync (docs/oracle.md "LTX-2.5 audio-to-video", docs/serve/e2e/ltx.md "Audio-to-video"). Spend $1.9. Upstream's guided variant (dev DiT + CFG/STG) would need `transformer_full/` (38.0 GB, not downloaded) | 1 session | $1.9 | none | LTX-2 community (below USD 10M revenue) | fal `lightricks/ltx-2.5/audio-to-video/{fast,pro}`; LTX API `/v1\|v2/audio-to-video`; native `audio_url`. `fal-ai/ltx-2.3/audio-to-video` not mounted (same contract, a 2.3 app id) |
 | P0-3 | **DONE 2026-09-29 (slower than real time).** Reactor avatar mode (`[reactor] mode = "avatar"`, design §5.7): the Reactor `ltx` command set, uploads, native speech from the prompt (no TTS), sentence-cut windows of ≤ 10 s, each I2V from the previous last frame, one seed; builds overlap playout; `/console/avatar`; optional driving voice (A2V windows). GPU (RTX PRO 6000): 8-18 s per window, RTF 1.2-1.7 for 10 s windows, first frame 12.6-18.4 s, stalls between windows; streamed lip sync shows a 200-400 ms offset that is not resolved, while batch clips are in sync (docs/serve/e2e/ltx.md "Script avatar"). Spend $1.35. Reactor's 50 % window overlap needs partial latent conditioning (retake/extend). Previously: **LTX "script avatar", real-time.** Portrait + script → joint speech+video, streamed as overlapping windows via LTX continuation (the Reactor `ltx` contract: `set_avatar_image`, `set_script`, `set_wpm`, `start`; 640×352 at 24 fps, 48 kHz stereo, ≤ 300 s). Batch variant: I2V with the dialogue prompt | 2-3 sessions | ~$10-20 | none | LTX-2 community | Reactor (new model schema), native; fal WMA later |
 | P0-4 | **LTX retake + extend** | 2-3 sessions | ~$10-20 | none | LTX-2 community | fal `fal-ai/ltx-2.3/{retake,extend}-video`; LTX API `/retake`, `/extend` |

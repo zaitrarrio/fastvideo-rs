@@ -67,6 +67,11 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
     --config 'profile.dev.package.audiopus_sys.opt-level=3' \
     --config 'profile.dev.package.libwebp-sys.opt-level=3'
   run cargo test -p fastvideo-serve --features webrtc,fake --test director
+  # WebRTC ingest (design §5.11): receiving answers, the bitrate cap, PLIs,
+  # the decode thread into the input rings (VP8 via ffmpeg libvpx; skips
+  # without it). The Reactor duplex, engine echo and native WHIP ingest
+  # tests run in the default pass above.
+  run cargo test -p fastvideo-webrtc --features str0m,opus --test ingest
   # fv-serve with outbound HTTP: D1 over HTTP, S3/R2 read-back for LTX v1.
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
