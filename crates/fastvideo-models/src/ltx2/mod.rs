@@ -35,6 +35,6 @@ pub use pisa::{
     BLOCK_SIZE as PISA_BLOCK_SIZE, PRUNE_APPLIED, SPARSITY as PISA_SPARSITY, STAGE1_CACHE_APPLIED,
     STAGE1_CACHE_PRESET,
 };
-pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
+pub use rope::{Ltx2RopeLuts, Ltx2RopeTables, ScalarDivision, SplitRope, SplitRopeLut};
 pub use schedule::{AncestralOpts, Ltx2Schedule};
 pub use sol::{route, route_for_call, Ltx25SolRoute, LORA_STRENGTH, STAGE2_SIGMAS, STAGE2_TAUS};
