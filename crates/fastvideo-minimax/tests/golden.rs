@@ -53,6 +53,7 @@ fn resolved(task: Task) -> ResolvedJob {
         sampling: SamplingOverrides::default(),
         tier: None,
         recipe: None,
+        edit: None,
     }
 }
 

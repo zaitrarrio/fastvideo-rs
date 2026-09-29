@@ -85,6 +85,46 @@ impl Waveform {
         out
     }
 
+    /// `channels` of silence, `samples` long, at `rate`.
+    pub fn silence(channels: usize, samples: usize, rate: u32) -> Self {
+        Self {
+            planar: vec![0.0; channels * samples],
+            channels,
+            rate,
+        }
+    }
+
+    /// Drops the first `n` samples of every channel.
+    pub fn skip(&mut self, n: usize) {
+        let len = self.samples();
+        let n = n.min(len);
+        if n == 0 {
+            return;
+        }
+        let mut out = Vec::with_capacity((len - n) * self.channels);
+        for c in 0..self.channels {
+            out.extend_from_slice(&self.planar[c * len + n..(c + 1) * len]);
+        }
+        self.planar = out;
+    }
+
+    /// Overwrites samples `at..` of every channel with `other`'s (same
+    /// channel count and rate), as far as this waveform reaches.
+    pub fn splice(&mut self, at: usize, other: &Waveform) -> Result<()> {
+        if other.channels != self.channels || other.rate != self.rate {
+            return Err(err(format!(
+                "ltx2 audio splice: {} ch @ {} Hz into {} ch @ {} Hz",
+                other.channels, other.rate, self.channels, self.rate
+            )));
+        }
+        let (len, olen) = (self.samples(), other.samples());
+        let n = olen.min(len.saturating_sub(at));
+        for c in 0..self.channels {
+            self.planar[c * len + at..c * len + at + n].copy_from_slice(&other.planar[c * olen..c * olen + n]);
+        }
+        Ok(())
+    }
+
     /// The first `keep` samples of every channel.
     pub fn truncate(&mut self, keep: usize) {
         let n = self.samples();
@@ -157,13 +197,25 @@ fn planar_of(interleaved: &[f32], channels: usize) -> Vec<f32> {
 /// stream at its own rate, float, [`ENCODER_CHANNELS`] channels (see the
 /// module note), at most `round(max_duration · rate)` samples.
 pub fn decode(path: &Path, max_duration_s: Option<f64>) -> Result<Waveform> {
-    let (rate, native) = probe(path)?;
+    decode_range(path, 0.0, max_duration_s, None)
+}
+
+/// `decode_audio_from_file(path, start_time, max_duration)`: as [`decode`],
+/// from `start_s` (the first `round(start_s · rate)` samples dropped), and
+/// resampled to `rate` by ffmpeg when given (a spliced track takes the
+/// source's rate).
+pub fn decode_range(path: &Path, start_s: f64, max_duration_s: Option<f64>, to_rate: Option<u32>) -> Result<Waveform> {
+    let (native_rate, native) = probe(path)?;
+    let rate = to_rate.unwrap_or(native_rate);
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-v", "error", "-nostdin", "-i"])
         .arg(path)
         .args(["-vn", "-map", "0:a:0", "-f", "f32le", "-acodec", "pcm_f32le"]);
     if native != ENCODER_CHANNELS {
         cmd.args(["-ac", &ENCODER_CHANNELS.to_string()]);
+    }
+    if rate != native_rate {
+        cmd.args(["-ar", &rate.to_string()]);
     }
     let mut child = cmd
         .arg("pipe:1")
@@ -206,6 +258,9 @@ pub fn decode(path: &Path, max_duration_s: Option<f64>) -> Result<Waveform> {
         channels: ENCODER_CHANNELS,
         rate,
     };
+    if start_s > 0.0 {
+        wave.skip(max_samples(start_s, rate));
+    }
     if let Some(d) = max_duration_s {
         wave.truncate(max_samples(d, rate));
     }

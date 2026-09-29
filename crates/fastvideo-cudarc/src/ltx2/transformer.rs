@@ -535,8 +535,8 @@ pub struct Ltx2Transformer {
     prune: Arc<Mutex<Option<LtxPruneRuntime>>>,
     stage1: Arc<Mutex<Option<LtxStage1Runtime>>>,
     /// The last timestep's [`ForwardMods`], keyed by the timestep's bits and
-    /// whether the audio stream was frozen.
-    mods: Mutex<Option<(u32, bool, ForwardMods)>>,
+    /// whether the audio and the video streams were frozen.
+    mods: Mutex<Option<(u32, bool, bool, ForwardMods)>>,
     /// Audio-to-video: the audio stream is clean conditioning
     /// ([`Self::set_audio_frozen`]).
     audio_frozen: std::sync::atomic::AtomicBool,
@@ -544,6 +544,36 @@ pub struct Ltx2Transformer {
     /// row ranges whose timestep is `mask * sigma` instead of `sigma`
     /// ([`Self::set_video_conditioning`]). `None`: every row at `sigma`.
     video_segments: Mutex<Option<Vec<VideoTimestepSegment>>>,
+    /// Per-token audio timesteps (a retake of the audio): the same runs over
+    /// the audio rows ([`Self::set_audio_conditioning`]).
+    audio_segments: Mutex<Option<Vec<VideoTimestepSegment>>>,
+    /// Retake `replace_audio`: the video stream is clean conditioning
+    /// ([`Self::set_video_frozen`]).
+    video_frozen: std::sync::atomic::AtomicBool,
+    /// A guided pass's perturbation ([`Self::set_perturbation`]).
+    perturbation: Mutex<Ltx2Perturbation>,
+}
+
+/// One guided pass's perturbation (`ltx_core.guidance.perturbations`,
+/// `PerturbationType`), applied by every following forward until reset.
+/// The default perturbs nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ltx2Perturbation {
+    /// `SKIP_VIDEO_SELF_ATTN` on these blocks (the STG pass): the video
+    /// self-attention output is its value projection
+    /// ([`super::attention::Attention::forward_value_only`]).
+    pub skip_video_self_attn: Vec<usize>,
+    /// `SKIP_AUDIO_SELF_ATTN` on these blocks.
+    pub skip_audio_self_attn: Vec<usize>,
+    /// `SKIP_A2V_CROSS_ATTN` and `SKIP_V2A_CROSS_ATTN` on every block (the
+    /// isolated-modality pass): neither stream adds the other's attention.
+    pub skip_av_cross: bool,
+}
+
+impl Ltx2Perturbation {
+    pub fn is_none(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 /// Rows `start .. start + len` of the packed video stream carry the
@@ -575,6 +605,50 @@ struct PieceTabs {
     gates: CudaTensor,
     /// `[4, dim]`: a2v/v2a scale and shift rows.
     cross: CudaTensor,
+}
+
+/// The partition of `[0, rows)` into runs at one timestep each: the segments
+/// at `mask · timestep`, the rows between them at `timestep`.
+fn timestep_runs(
+    segments: &[VideoTimestepSegment],
+    rows: usize,
+    timestep: f32,
+    what: &str,
+) -> Result<Vec<(usize, usize, f32)>> {
+    let mut runs: Vec<(usize, usize, f32)> = Vec::new();
+    let mut at = 0usize;
+    for seg in segments {
+        if seg.start < at || seg.start + seg.len > rows || seg.len == 0 {
+            return Err(msg(format!("ltx2 {what} segments {segments:?} do not fit {rows} rows")));
+        }
+        if seg.start > at {
+            runs.push((at, seg.start - at, timestep));
+        }
+        runs.push((seg.start, seg.len, seg.mask * timestep));
+        at = seg.start + seg.len;
+    }
+    if at < rows {
+        runs.push((at, rows - at, timestep));
+    }
+    Ok(runs)
+}
+
+/// One block's tables per piece of a stream.
+fn piece_tabs(pieces: &[VideoPiece], table: &CudaTensor, cross_table: &CudaTensor, dim: usize) -> Result<Vec<PieceTabs>> {
+    pieces
+        .iter()
+        .map(|p| {
+            let tab = table.add(&p.main)?;
+            let rows = tab.shape[0];
+            Ok(PieceTabs {
+                start: p.start,
+                len: p.len,
+                gates: tab.reshape(vec![1, rows, dim])?,
+                tab,
+                cross: cross_table.narrow(0, 0, 4)?.add(&p.cross)?,
+            })
+        })
+        .collect()
 }
 
 /// `f` on each piece's rows of `x` (`[1, S, D]`), concatenated back.
@@ -985,7 +1059,10 @@ impl Ltx2Transformer {
             stage1: Default::default(),
             mods: Mutex::new(None),
             audio_frozen: std::sync::atomic::AtomicBool::new(false),
+            perturbation: Mutex::new(Ltx2Perturbation::default()),
             video_segments: Mutex::new(None),
+            audio_segments: Mutex::new(None),
+            video_frozen: std::sync::atomic::AtomicBool::new(false),
             cfg: cfg.clone(),
         })
     }
@@ -1094,17 +1171,50 @@ impl Ltx2Transformer {
             .store(frozen, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// The perturbation of the forwards that follow (a guided pass,
+    /// `_guided_denoise`); [`Ltx2Perturbation::default`] restores the plain
+    /// forward.
+    pub fn set_perturbation(&self, p: Ltx2Perturbation) {
+        *self.perturbation.lock().expect("ltx2 perturbation") = p;
+    }
+
+    fn perturbation(&self) -> Ltx2Perturbation {
+        self.perturbation.lock().expect("ltx2 perturbation").clone()
+    }
+
     /// Whether the audio stream is frozen ([`Self::set_audio_frozen`]).
     pub fn audio_frozen(&self) -> bool {
         self.audio_frozen.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Whether per-token video timesteps are set.
+    /// Per-token audio timesteps for the following forwards (retake of the
+    /// audio: `TemporalRegionMask` on the audio stream); `None` or empty
+    /// restores the plain `sigma`. Segments must be sorted and disjoint. The
+    /// forwards run [`Self::forward_segmented`] while they are set.
+    pub fn set_audio_conditioning(&self, segments: Option<Vec<VideoTimestepSegment>>) {
+        *self.audio_segments.lock().expect("ltx2 audio segments") = segments.filter(|s| !s.is_empty());
+    }
+
+    /// Retake `replace_audio` (`ModalitySpec(frozen=True)` on the video):
+    /// the video `Modality.sigma` is 0, which the video prompt AdaLN and the
+    /// audio side's v->a gate read. The per-token video timesteps are set as
+    /// segments at mask 0 ([`Self::set_video_conditioning`]).
+    pub fn set_video_frozen(&self, frozen: bool) {
+        self.video_frozen.store(frozen, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether the video stream is frozen ([`Self::set_video_frozen`]).
+    pub fn video_frozen(&self) -> bool {
+        self.video_frozen.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether per-token video or audio timesteps are set.
     pub fn video_conditioned(&self) -> bool {
         self.video_segments
             .lock()
             .expect("ltx2 video segments")
             .is_some()
+            || self.audio_segments.lock().expect("ltx2 audio segments").is_some()
     }
 
     pub fn enable_stage1_cache(&self) {
@@ -1362,8 +1472,9 @@ impl Ltx2Transformer {
     fn modulations(&self, timestep: f32) -> Result<ForwardMods> {
         let key = timestep.to_bits();
         let frozen = self.audio_frozen();
-        if let Some((k, f, m)) = self.mods.lock().expect("ltx2 mods").as_ref() {
-            if *k == key && *f == frozen {
+        let vfrozen = self.video_frozen();
+        if let Some((k, f, vf, m)) = self.mods.lock().expect("ltx2 mods").as_ref() {
+            if *k == key && *f == frozen && *vf == vfrozen {
                 return Ok(m.clone());
             }
         }
@@ -1387,10 +1498,19 @@ impl Ltx2Transformer {
         } else {
             (s.clone(), s_gate.clone())
         };
+        // Frozen video (retake `replace_audio`): the video sigma is 0 for its
+        // prompt AdaLN and for the audio side's v->a gate; its per-token
+        // timesteps come from the segments.
+        let (s_video_sigma, s_video_gate) = if vfrozen {
+            let z = timestep_sinusoid(0.0, self.cfg.timestep_proj_dim)?;
+            (z.clone(), z)
+        } else {
+            (s.clone(), s_gate.clone())
+        };
         let (v_main, v_embedded) = self.time_embed.forward(&s)?;
         let (a_main, a_embedded) = self.audio_time_embed.forward(&s_audio)?;
         let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
-            (Some(p), Some(a)) => (Some(p.forward(&s)?.0), Some(a.forward(&s_audio)?.0)),
+            (Some(p), Some(a)) => (Some(p.forward(&s_video_sigma)?.0), Some(a.forward(&s_audio)?.0)),
             _ => (None, None),
         };
         let mods = ForwardMods {
@@ -1402,14 +1522,14 @@ impl Ltx2Transformer {
             audio: StepModulation {
                 main: a_main,
                 cross: self.cross_audio_scale_shift.forward(&s_audio)?.0,
-                gate: self.cross_audio_gate.forward(&s_gate)?.0,
+                gate: self.cross_audio_gate.forward(&s_video_gate)?.0,
             },
             v_prompt,
             a_prompt,
             v_embedded,
             a_embedded,
         };
-        *self.mods.lock().expect("ltx2 mods") = Some((key, frozen, mods.clone()));
+        *self.mods.lock().expect("ltx2 mods") = Some((key, frozen, vfrozen, mods.clone()));
         Ok(mods)
     }
 
@@ -1510,9 +1630,18 @@ impl Ltx2Transformer {
             .lock()
             .expect("ltx2 video segments")
             .clone();
-        if let Some(segments) = segments {
+        let audio_segments = self.audio_segments.lock().expect("ltx2 audio segments").clone();
+        if segments.is_some() || audio_segments.is_some() || self.video_frozen() {
             return self.forward_segmented(
-                video, audio, text, timestep, ropes, observer, &segments, route,
+                video,
+                audio,
+                text,
+                timestep,
+                ropes,
+                observer,
+                segments.as_deref().unwrap_or(&[]),
+                audio_segments.as_deref(),
+                route,
             );
         }
         let eps = self.cfg.norm_eps as f32;
@@ -1654,29 +1783,35 @@ impl Ltx2Transformer {
         ropes: &Ropes,
         mut observer: Option<BlockObserver<'_>>,
         segments: &[VideoTimestepSegment],
+        audio_segments: Option<&[VideoTimestepSegment]>,
         route: Ltx2VideoAttn,
     ) -> Result<(CudaTensor, CudaTensor)> {
         let eps = self.cfg.norm_eps as f32;
         let rows = video.shape[1];
         let base = self.modulations(timestep)?;
-        // The partition of [0, rows) into runs at one timestep each.
-        let mut runs: Vec<(usize, usize, f32)> = Vec::new();
-        let mut at = 0usize;
-        for seg in segments {
-            if seg.start < at || seg.start + seg.len > rows || seg.len == 0 {
-                return Err(msg(format!(
-                    "ltx2 video segments {segments:?} do not fit {rows} rows"
-                )));
+        let runs = timestep_runs(segments, rows, timestep, "video")?;
+        // Per-token audio timesteps (a retake of the audio): the audio stream's
+        // own modulations per run; `None` keeps the scalar path.
+        let audio_pieces = match audio_segments {
+            None => None,
+            Some(segs) => {
+                let mut cache: Vec<(u32, (CudaTensor, CudaTensor, CudaTensor))> = Vec::new();
+                let mut pieces = Vec::new();
+                for (start, len, t) in timestep_runs(segs, audio.shape[1], timestep, "audio")? {
+                    let mods = if t.to_bits() == timestep.to_bits() {
+                        (base.audio.main.clone(), base.audio.cross.clone(), base.a_embedded.clone())
+                    } else if let Some((_, m)) = cache.iter().find(|(k, _)| *k == t.to_bits()) {
+                        m.clone()
+                    } else {
+                        let m = self.audio_mods_at(t)?;
+                        cache.push((t.to_bits(), m.clone()));
+                        m
+                    };
+                    pieces.push(VideoPiece { start, len, main: mods.0, cross: mods.1, embedded: mods.2 });
+                }
+                Some(pieces)
             }
-            if seg.start > at {
-                runs.push((at, seg.start - at, timestep));
-            }
-            runs.push((seg.start, seg.len, seg.mask * timestep));
-            at = seg.start + seg.len;
-        }
-        if at < rows {
-            runs.push((at, rows - at, timestep));
-        }
+        };
         let mut cache: Vec<(u32, (CudaTensor, CudaTensor, CudaTensor))> = Vec::new();
         let mut pieces = Vec::with_capacity(runs.len());
         for (start, len, t) in runs {
@@ -1718,6 +1853,7 @@ impl Ltx2Transformer {
                     xa,
                     text,
                     &pieces,
+                    audio_pieces.as_deref(),
                     &base,
                     ropes,
                     eps,
@@ -1756,10 +1892,30 @@ impl Ltx2Transformer {
         drop(xv);
         let v_out = self.proj_out.forward(&modulated)?;
         drop(modulated);
-        let a_out = self
-            .audio_proj_out
-            .forward(&head(&xa, &self.audio_scale_shift_table, &base.a_embedded)?)?;
+        let a_modulated = match audio_pieces.as_deref() {
+            None => head(&xa, &self.audio_scale_shift_table, &base.a_embedded)?,
+            Some([p]) => head(&xa, &self.audio_scale_shift_table, &p.embedded)?,
+            Some(ps) => {
+                let mut outs = Vec::with_capacity(ps.len());
+                for p in ps {
+                    outs.push(head(&xa.narrow(1, p.start, p.len)?, &self.audio_scale_shift_table, &p.embedded)?);
+                }
+                let refs: Vec<&CudaTensor> = outs.iter().collect();
+                CudaTensor::cat(&refs, 1)?
+            }
+        };
+        let a_out = self.audio_proj_out.forward(&a_modulated)?;
         Ok((v_out, a_out))
+    }
+
+    /// The audio modulation at a per-token timestep: `(main, cross,
+    /// embedded)` from `audio_time_embed` and the audio a<->v scale/shift
+    /// embedder (as [`Self::video_mods_at`] for the video).
+    fn audio_mods_at(&self, timestep: f32) -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+        let s = timestep_sinusoid(timestep, self.cfg.timestep_proj_dim)?;
+        let (main, embedded) = self.audio_time_embed.forward(&s)?;
+        let cross = self.cross_audio_scale_shift.forward(&s)?.0;
+        Ok((main, cross, embedded))
     }
 
     /// One block of [`Self::forward_segmented`]: the unfused op order of
@@ -1772,12 +1928,16 @@ impl Ltx2Transformer {
         xa: CudaTensor,
         text: &TextConditioning,
         pieces: &[VideoPiece],
+        audio_pieces: Option<&[VideoPiece]>,
         base: &ForwardMods,
         ropes: &Ropes,
         eps: f32,
         layer: usize,
         route: Ltx2VideoAttn,
     ) -> Result<(CudaTensor, CudaTensor)> {
+        if let Some(ap) = audio_pieces {
+            return self.block_segmented_av(b, xv, xa, text, pieces, ap, base, ropes, eps, layer, route);
+        }
         let (dv, da) = (xv.shape[2], xa.shape[2]);
         let a_mod = &base.audio;
         let tabs = pieces
@@ -1800,11 +1960,16 @@ impl Ltx2Transformer {
             probe: None,
             block: layer,
         };
+        let pert = self.perturbation();
 
         // 1. self-attention.
         let xv = {
             let h = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.tab, 1, 0, eps))?;
-            let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, layer)?;
+            let u = if pert.skip_video_self_attn.contains(&layer) {
+                b.video.attn1.forward_value_only(h)?
+            } else {
+                video_self_attn(&b.video.attn1, h, &ropes.video, route, layer)?
+            };
             let out = per_piece2(&xv, &u, &tabs, |x, u, t| {
                 x.residual_gate_add_e(u, &t.gates, 2)
             })?;
@@ -1813,10 +1978,13 @@ impl Ltx2Transformer {
         };
         let (xa, a_h2) = {
             let h = adaln_rows(&xa, &a_tab, 1, 0, eps)?;
-            let u = b
-                .audio
-                .attn1
-                .forward_owned(h, None, Some(&ropes.audio), None)?;
+            let u = if pert.skip_audio_self_attn.contains(&layer) {
+                b.audio.attn1.forward_value_only(h)?
+            } else {
+                b.audio
+                    .attn1
+                    .forward_owned(h, None, Some(&ropes.audio), None)?
+            };
             gated_then_text_norm(&b.audio, xa, u, &a_gates, &a_tab, &self.ones_audio, eps)?
         };
 
@@ -1871,45 +2039,52 @@ impl Ltx2Transformer {
             false,
         )?;
 
-        // 3. audio<->video, both directions from the same pre-update states.
-        let a2v_gate = row(&b.video.cross_table, 4)?
-            .add(&base.video.gate)?
-            .reshape(vec![1, 1, dv])?;
-        let v2a_gate = row(&b.audio.cross_table, 4)?
-            .add(&a_mod.gate)?
-            .reshape(vec![1, 1, da])?;
-        let a2v = {
-            let q = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 0, 1, eps))?;
-            let kv = match a2v_kv {
-                Some(kv) => kv,
-                None => adaln_rows(&xa, &a_cross, 0, 1, eps)?,
+        // 3. audio<->video, both directions from the same pre-update states
+        // (skipped whole by the isolated-modality pass).
+        let (xv, xa) = if pert.skip_av_cross {
+            drop(a2v_kv);
+            (xv, xa)
+        } else {
+            let a2v_gate = row(&b.video.cross_table, 4)?
+                .add(&base.video.gate)?
+                .reshape(vec![1, 1, dv])?;
+            let v2a_gate = row(&b.audio.cross_table, 4)?
+                .add(&a_mod.gate)?
+                .reshape(vec![1, 1, da])?;
+            let a2v = {
+                let q = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 0, 1, eps))?;
+                let kv = match a2v_kv {
+                    Some(kv) => kv,
+                    None => adaln_rows(&xa, &a_cross, 0, 1, eps)?,
+                };
+                b.audio_to_video.forward_owned(
+                    q,
+                    Some(&kv),
+                    Some(&ropes.cross_video),
+                    Some(&ropes.cross_audio),
+                )?
             };
-            b.audio_to_video.forward_owned(
-                q,
-                Some(&kv),
-                Some(&ropes.cross_video),
-                Some(&ropes.cross_audio),
-            )?
-        };
-        let v2a = {
-            let q = adaln_rows(&xa, &a_cross, 2, 3, eps)?;
-            let kv = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 2, 3, eps))?;
-            b.video_to_audio.forward_owned(
-                q,
-                Some(&kv),
-                Some(&ropes.cross_audio),
-                Some(&ropes.cross_video),
-            )?
-        };
-        let xv = {
-            let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
-            drop((xv, a2v));
-            out
-        };
-        let xa = {
-            let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
-            drop((xa, v2a));
-            out
+            let v2a = {
+                let q = adaln_rows(&xa, &a_cross, 2, 3, eps)?;
+                let kv = per_piece(&xv, &tabs, |x, t| adaln_rows(x, &t.cross, 2, 3, eps))?;
+                b.video_to_audio.forward_owned(
+                    q,
+                    Some(&kv),
+                    Some(&ropes.cross_audio),
+                    Some(&ropes.cross_video),
+                )?
+            };
+            let xv = {
+                let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
+                drop((xv, a2v));
+                out
+            };
+            let xa = {
+                let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+                drop((xa, v2a));
+                out
+            };
+            (xv, xa)
         };
 
         // 4. feed-forward.
@@ -1926,6 +2101,124 @@ impl Ltx2Transformer {
             let h = adaln_rows(&xa, &a_tab, 4, 3, eps)?;
             let u = b.audio.ff.forward_owned(h)?;
             let out = xa.residual_gate_add_e(&u, &a_gates, 5)?;
+            drop((xa, u));
+            out
+        };
+        Ok((xv, xa))
+    }
+
+    /// [`Self::block_segmented`] with per-token timesteps on both streams (a
+    /// retake of the audio): every modulation of each stream is applied per
+    /// run of its rows, with the unfused op order; attention, the FFN and the
+    /// a<->v gates (the other stream's scalar sigma) see whole streams.
+    #[allow(clippy::too_many_arguments)]
+    fn block_segmented_av(
+        &self,
+        b: &Block,
+        xv: CudaTensor,
+        xa: CudaTensor,
+        text: &TextConditioning,
+        pieces: &[VideoPiece],
+        audio_pieces: &[VideoPiece],
+        base: &ForwardMods,
+        ropes: &Ropes,
+        eps: f32,
+        layer: usize,
+        route: Ltx2VideoAttn,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        let (dv, da) = (xv.shape[2], xa.shape[2]);
+        let vt = piece_tabs(pieces, &b.video.scale_shift_table, &b.video.cross_table, dv)?;
+        let at = piece_tabs(audio_pieces, &b.audio.scale_shift_table, &b.audio.cross_table, da)?;
+
+        // 1. self-attention.
+        let xv = {
+            let h = per_piece(&xv, &vt, |x, t| adaln_rows(x, &t.tab, 1, 0, eps))?;
+            let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, layer)?;
+            let out = per_piece2(&xv, &u, &vt, |x, u, t| x.residual_gate_add_e(u, &t.gates, 2))?;
+            drop((xv, u));
+            out
+        };
+        let xa = {
+            let h = per_piece(&xa, &at, |x, t| adaln_rows(x, &t.tab, 1, 0, eps))?;
+            let u = b.audio.attn1.forward_owned(h, None, Some(&ropes.audio), None)?;
+            let out = per_piece2(&xa, &u, &at, |x, u, t| x.residual_gate_add_e(u, &t.gates, 2))?;
+            drop((xa, u));
+            out
+        };
+
+        // 2. text cross-attention, per stream.
+        let cross = |stream: &StreamBlock,
+                     x: CudaTensor,
+                     tabs: &[PieceTabs],
+                     ones: &CudaTensor,
+                     ctx: &CudaTensor,
+                     prompt: Option<&CudaTensor>,
+                     dim: usize|
+         -> Result<CudaTensor> {
+            let h = per_piece(&x, tabs, |x, t| {
+                let h = x.rms_norm(ones, eps)?;
+                if stream.cross_attn_mod {
+                    scale_shift(&h, &row(&t.tab, 7)?, &row(&t.tab, 6)?)
+                } else {
+                    Ok(h)
+                }
+            })?;
+            let mut enc = ctx.clone();
+            if let Some(pt) = &stream.prompt_table {
+                let tab_p = match prompt {
+                    Some(t) => pt.add(t)?,
+                    None => pt.clone(),
+                };
+                enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
+            }
+            let u = stream.attn2.forward_owned(h, Some(&enc), None, None)?;
+            drop(enc);
+            let out = if stream.cross_attn_mod {
+                per_piece2(&x, &u, tabs, |x, u, t| x.add(&u.mul(&row(&t.tab, 8)?.reshape(vec![1, 1, dim])?)?))?
+            } else {
+                x.add(&u)?
+            };
+            Ok(out)
+        };
+        let xv = cross(&b.video, xv, &vt, &self.ones_video, &text.video, base.v_prompt.as_ref(), dv)?;
+        let xa = cross(&b.audio, xa, &at, &self.ones_audio, &text.audio, base.a_prompt.as_ref(), da)?;
+
+        // 3. audio<->video, both directions from the same pre-update states.
+        let a2v_gate = row(&b.video.cross_table, 4)?.add(&base.video.gate)?.reshape(vec![1, 1, dv])?;
+        let v2a_gate = row(&b.audio.cross_table, 4)?.add(&base.audio.gate)?.reshape(vec![1, 1, da])?;
+        let a2v = {
+            let q = per_piece(&xv, &vt, |x, t| adaln_rows(x, &t.cross, 0, 1, eps))?;
+            let kv = per_piece(&xa, &at, |x, t| adaln_rows(x, &t.cross, 0, 1, eps))?;
+            b.audio_to_video.forward_owned(q, Some(&kv), Some(&ropes.cross_video), Some(&ropes.cross_audio))?
+        };
+        let v2a = {
+            let q = per_piece(&xa, &at, |x, t| adaln_rows(x, &t.cross, 2, 3, eps))?;
+            let kv = per_piece(&xv, &vt, |x, t| adaln_rows(x, &t.cross, 2, 3, eps))?;
+            b.video_to_audio.forward_owned(q, Some(&kv), Some(&ropes.cross_audio), Some(&ropes.cross_video))?
+        };
+        let xv = {
+            let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
+            drop((xv, a2v));
+            out
+        };
+        let xa = {
+            let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+            drop((xa, v2a));
+            out
+        };
+
+        // 4. feed-forward.
+        let xv = {
+            let h = per_piece(&xv, &vt, |x, t| adaln_rows(x, &t.tab, 4, 3, eps))?;
+            let u = b.video.ff.forward_owned(h)?;
+            let out = per_piece2(&xv, &u, &vt, |x, u, t| x.residual_gate_add_e(u, &t.gates, 5))?;
+            drop((xv, u));
+            out
+        };
+        let xa = {
+            let h = per_piece(&xa, &at, |x, t| adaln_rows(x, &t.tab, 4, 3, eps))?;
+            let u = b.audio.ff.forward_owned(h)?;
+            let out = per_piece2(&xa, &u, &at, |x, u, t| x.residual_gate_add_e(u, &t.gates, 5))?;
             drop((xa, u));
             out
         };
@@ -1970,13 +2263,18 @@ impl Ltx2Transformer {
         // by one). A probe wants the gated text-cross update, which the fused
         // residual never stores, so a probed forward keeps that one unfused.
         let probed = tap.on();
+        let pert = self.perturbation();
 
         // 1. self-attention; its residual carries the text cross-attention's
         // norm (LTX-2.5 modulates it).
         let (xv, v_h2) = {
             let h = adaln_rows(&xv, &v_tab, 1, 0, eps)?;
             tap.emit("video", "attn1_in", &h)?;
-            let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, tap.block)?;
+            let u = if pert.skip_video_self_attn.contains(&tap.block) {
+                b.video.attn1.forward_value_only(h)?
+            } else {
+                video_self_attn(&b.video.attn1, h, &ropes.video, route, tap.block)?
+            };
             tap.emit("video", "attn1_out", &u)?;
             let (out, h2) =
                 gated_then_text_norm(&b.video, xv, u, &v_gates, &v_tab, &self.ones_video, eps)?;
@@ -1986,10 +2284,13 @@ impl Ltx2Transformer {
         let (xa, a_h2) = {
             let h = adaln_rows(&xa, &a_tab, 1, 0, eps)?;
             tap.emit("audio", "attn1_in", &h)?;
-            let u = b
-                .audio
-                .attn1
-                .forward_owned(h, None, Some(&ropes.audio), None)?;
+            let u = if pert.skip_audio_self_attn.contains(&tap.block) {
+                b.audio.attn1.forward_value_only(h)?
+            } else {
+                b.audio
+                    .attn1
+                    .forward_owned(h, None, Some(&ropes.audio), None)?
+            };
             tap.emit("audio", "attn1_out", &u)?;
             let (out, h2) =
                 gated_then_text_norm(&b.audio, xa, u, &a_gates, &a_tab, &self.ones_audio, eps)?;
@@ -2044,77 +2345,86 @@ impl Ltx2Transformer {
         )?;
 
         // 3. audio↔video, both directions from the same pre-update states.
-        let a2v_gate = row(&b.video.cross_table, 4)?
-            .add(&v_mod.gate)?
-            .reshape(vec![1, 1, dv])?;
-        let v2a_gate = row(&b.audio.cross_table, 4)?
-            .add(&a_mod.gate)?
-            .reshape(vec![1, 1, da])?;
-        let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| {
-            adaln_rows(x, cross, first, first + 1, eps)
-        };
-        let a2v = {
-            let a2v_q = match a2v_q {
-                Some(q) => q,
-                None => side(&xv, &v_cross, 0)?,
+        // The isolated-modality pass skips both (`SKIP_A2V_CROSS_ATTN`,
+        // `SKIP_V2A_CROSS_ATTN`: each residual adds nothing), and the
+        // feed-forward norms are then taken unfused below.
+        let (xv, v_ff_in, xa, a_ff_in) = if pert.skip_av_cross {
+            drop((a2v_q, a2v_kv));
+            (xv, None, xa, None)
+        } else {
+            let a2v_gate = row(&b.video.cross_table, 4)?
+                .add(&v_mod.gate)?
+                .reshape(vec![1, 1, dv])?;
+            let v2a_gate = row(&b.audio.cross_table, 4)?
+                .add(&a_mod.gate)?
+                .reshape(vec![1, 1, da])?;
+            let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| {
+                adaln_rows(x, cross, first, first + 1, eps)
             };
-            tap.emit("video", "av_in", &a2v_q)?;
-            let kv = match a2v_kv {
-                Some(kv) => kv,
-                None => side(&xa, &a_cross, 0)?,
+            let a2v = {
+                let a2v_q = match a2v_q {
+                    Some(q) => q,
+                    None => side(&xv, &v_cross, 0)?,
+                };
+                tap.emit("video", "av_in", &a2v_q)?;
+                let kv = match a2v_kv {
+                    Some(kv) => kv,
+                    None => side(&xa, &a_cross, 0)?,
+                };
+                b.audio_to_video.forward_owned(
+                    a2v_q,
+                    Some(&kv),
+                    Some(&ropes.cross_video),
+                    Some(&ropes.cross_audio),
+                )?
             };
-            b.audio_to_video.forward_owned(
-                a2v_q,
-                Some(&kv),
-                Some(&ropes.cross_video),
+            let v2a_q = side(&xa, &a_cross, 2)?;
+            let v2a = b.video_to_audio.forward(
+                &v2a_q,
+                Some(&side(&xv, &v_cross, 2)?),
                 Some(&ropes.cross_audio),
-            )?
-        };
-        let v2a_q = side(&xa, &a_cross, 2)?;
-        let v2a = b.video_to_audio.forward(
-            &v2a_q,
-            Some(&side(&xv, &v_cross, 2)?),
-            Some(&ropes.cross_audio),
-            Some(&ropes.cross_video),
-        )?;
-        // The a↔v residuals carry the feed-forward norms.
-        let ff_norm = |tab| {
-            fuse::Norm::AdaLn(fuse::Mod {
-                tab,
-                scale: 4,
-                shift: 3,
-            })
-        };
-        let (xv, v_ff_in) = {
-            tap.emit("video", "av_out", &a2v)?;
-            let res = fuse::Residual::Gated {
-                u: &a2v,
-                gates: &a2v_gate,
-                row: 0,
+                Some(&ropes.cross_video),
+            )?;
+            // The a↔v residuals carry the feed-forward norms.
+            let ff_norm = |tab| {
+                fuse::Norm::AdaLn(fuse::Mod {
+                    tab,
+                    scale: 4,
+                    shift: 3,
+                })
             };
-            let (out, h) = match fuse::res_norm_mod(&xv, res, ff_norm(&v_tab), eps)? {
-                Some((out, h)) => (out, Some(h)),
-                None => (xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?, None),
+            let (xv, v_ff_in) = {
+                tap.emit("video", "av_out", &a2v)?;
+                let res = fuse::Residual::Gated {
+                    u: &a2v,
+                    gates: &a2v_gate,
+                    row: 0,
+                };
+                let (out, h) = match fuse::res_norm_mod(&xv, res, ff_norm(&v_tab), eps)? {
+                    Some((out, h)) => (out, Some(h)),
+                    None => (xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?, None),
+                };
+                drop((xv, a2v));
+                tap.emit("video", "av_after", &out)?;
+                (out, h)
             };
-            drop((xv, a2v));
-            tap.emit("video", "av_after", &out)?;
-            (out, h)
-        };
-        let (xa, a_ff_in) = {
-            tap.emit("audio", "av_in", &v2a_q)?;
-            tap.emit("audio", "av_out", &v2a)?;
-            let res = fuse::Residual::Gated {
-                u: &v2a,
-                gates: &v2a_gate,
-                row: 0,
+            let (xa, a_ff_in) = {
+                tap.emit("audio", "av_in", &v2a_q)?;
+                tap.emit("audio", "av_out", &v2a)?;
+                let res = fuse::Residual::Gated {
+                    u: &v2a,
+                    gates: &v2a_gate,
+                    row: 0,
+                };
+                let (out, h) = match fuse::res_norm_mod(&xa, res, ff_norm(&a_tab), eps)? {
+                    Some((out, h)) => (out, Some(h)),
+                    None => (xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?, None),
+                };
+                drop((xa, v2a, v2a_q));
+                tap.emit("audio", "av_after", &out)?;
+                (out, h)
             };
-            let (out, h) = match fuse::res_norm_mod(&xa, res, ff_norm(&a_tab), eps)? {
-                Some((out, h)) => (out, Some(h)),
-                None => (xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?, None),
-            };
-            drop((xa, v2a, v2a_q));
-            tap.emit("audio", "av_after", &out)?;
-            (out, h)
+            (xv, v_ff_in, xa, a_ff_in)
         };
 
         // 4. feed-forward. The FFN takes its input by value: once its
@@ -2397,6 +2707,59 @@ mod tests {
         );
         assert!(units <= planned, "{units:.2} live vs {planned:.2} planned");
         assert!(units <= 7.0, "{units:.2}");
+    }
+
+    /// The guided passes' perturbations (`_guided_denoise`): the modality
+    /// pass cuts every audio↔video path, and with the video self-attention
+    /// also skipped in every block each video token sees only itself.
+    #[test]
+    fn perturbations_cut_the_paths_they_name() {
+        let cfg = tiny();
+        let map = weights();
+        let model =
+            Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).unwrap();
+        let (grid, l, t_len, timestep) = ([2usize, 1, 3], 4usize, 5usize, 725.0f32);
+        let s = 6;
+        let ropes = Ropes::upload(&Ltx2RopeTables::new(&cfg, grid, l, 24.0)).unwrap();
+        let (ctx_v, ctx_a) = (tokens(t_len, 12, 0.29), tokens(t_len, 12, 0.57));
+        let text = model
+            .project_text(&tensor(&ctx_v), &tensor(&ctx_a))
+            .unwrap();
+        let video = tokens(s, 6, 0.41);
+        let run = |v: &[Vec<f32>], a: &[Vec<f32>], p: Ltx2Perturbation| {
+            model.set_perturbation(p);
+            let out = model
+                .forward(&tensor(v), &tensor(a), &text, timestep, &ropes, None)
+                .unwrap();
+            model.set_perturbation(Ltx2Perturbation::default());
+            (rows(&out.0, 6), rows(&out.1, 5))
+        };
+        let (a1, a2) = (tokens(l, 5, 0.83), tokens(l, 5, 0.17));
+        let plain = |a: &[Vec<f32>]| run(&video, a, Ltx2Perturbation::default());
+        assert_ne!(plain(&a1).0, plain(&a2).0, "audio reaches video unperturbed");
+        let iso = Ltx2Perturbation {
+            skip_av_cross: true,
+            ..Ltx2Perturbation::default()
+        };
+        assert_eq!(run(&video, &a1, iso.clone()).0, run(&video, &a2, iso.clone()).0);
+        // STG on block 1 changes the video, on a block the model lacks it does not.
+        let stg = |blocks: Vec<usize>| Ltx2Perturbation {
+            skip_video_self_attn: blocks,
+            ..Ltx2Perturbation::default()
+        };
+        assert_ne!(run(&video, &a1, stg(vec![1])).0, plain(&a1).0);
+        assert_eq!(run(&video, &a1, stg(vec![7])).0, plain(&a1).0);
+        // Everything cut: row 0's output ignores the other rows.
+        let local = Ltx2Perturbation {
+            skip_video_self_attn: vec![0, 1],
+            skip_audio_self_attn: vec![],
+            skip_av_cross: true,
+        };
+        let mut other = video.clone();
+        other[3] = other[3].iter().map(|x| -x * 2.0).collect();
+        let (x, y) = (run(&video, &a1, local.clone()).0, run(&other, &a1, local).0);
+        assert_eq!(x[0], y[0]);
+        assert_ne!(x[3], y[3]);
     }
 
     #[test]

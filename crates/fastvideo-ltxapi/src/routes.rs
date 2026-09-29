@@ -2,11 +2,11 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `POST /v2/{text,image,audio}-to-video` | `202 {id, created_at}` |
-//! | `GET /v2/{text,image,audio}-to-video/{id}` | `V2JobStatusResponse`; other endpoint's job → 404 |
-//! | `POST /v1/{text,image,audio}-to-video` | sync; `200 video/mp4` bytes; over the timeout → 504 |
+//! | `POST /v2/{text,image,audio}-to-video`, `/v2/{retake,extend}` | `202 {id, created_at}` |
+//! | `GET /v2/{those}/{id}` | `V2JobStatusResponse`; other endpoint's job → 404 |
+//! | `POST /v1/{text,image,audio}-to-video`, `/v1/{retake,extend}` | sync; `200 video/mp4` bytes; over the timeout → 504 |
 //! | `POST /v1/upload` | `200 {upload_url, storage_uri, expires_at, required_headers}` |
-//! | `POST /v1\|v2/{retake,extend,video-to-video-hdr,video-to-video-reframe}` | `403 permission_error` |
+//! | `POST /v1\|v2/{video-to-video-hdr,video-to-video-reframe}` | `403 permission_error` |
 //! | `GET /v2/{those}/{id}` | `404 not_found_error` |
 //!
 //! Every reply carries `x-request-id` (32 hex characters). Auth is

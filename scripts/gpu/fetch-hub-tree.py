@@ -50,12 +50,22 @@ def file_hash(path, algo, prefix=b""):
 
 
 def main():
-    from huggingface_hub import HfApi, snapshot_download
-
     final = WEIGHTS / DEST
     if final.exists():
         raise SystemExit(f"{final} exists: add-only fetch refuses to touch it")
     final.parent.mkdir(parents=True, exist_ok=True)
+    # This script's own unfinished temp folders for DEST (a failed earlier
+    # run); never anything else.
+    for old in final.parent.glob(f".{final.name}.partial-*"):
+        shutil.rmtree(old, ignore_errors=True)
+        log(f"removed own partial {old}")
+    # Gated repos: the volume's token when the pod env has none.
+    tok = Path("/workspace/hf/token")
+    if not os.environ.get("HF_TOKEN") and tok.is_file():
+        os.environ["HF_TOKEN"] = tok.read_text().strip()
+        log("HF token: /workspace/hf/token")
+    from huggingface_hub import HfApi, snapshot_download
+
     tmp = final.parent / f".{final.name}.partial-{time.strftime('%Y%m%d%H%M%S')}"
     info = HfApi().model_info(REPO, revision=REV, files_metadata=True)
     want = [s for s in info.siblings if any(fnmatch.fnmatch(s.rfilename, g) for g in GLOBS)]

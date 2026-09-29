@@ -80,6 +80,14 @@ pub const MIGRATIONS: &[(u32, &[&str])] = &[(
             revoked_at INTEGER
         )",
     ],
+), (
+    3,
+    &[
+        // Fencing token of a pushed job (docs/serve/gateway-cloudflare.md,
+        // phase 2): the lease the pool dispatcher gave the worker holding
+        // it; a write with an older lease is refused.
+        "ALTER TABLE jobs ADD COLUMN lease INTEGER",
+    ],
 )];
 
 /// The newest schema version this build knows.

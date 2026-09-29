@@ -136,9 +136,9 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 
    The worker accepts envelopes up to 64 MiB.
 
-   - `pod`: sent directly to a worker (`x-fv-internal-token`), tried in
-     order of least in-flight work; a refused/unreachable worker moves on
-     to the next.
+   - `pod`: sent directly to a worker (`x-fv-internal-token`), the one
+     where the job starts soonest, reserved before the call (§3.4); a
+     refused/unreachable worker gives its slot back and the next is tried.
    - `runpod-serverless`: `POST {runpod_api_base}/{endpoint}/run` with the
      existing queue envelope `{"input":{"kind":"http","method":"POST",
      "path":"/fv/v1/internal/jobs","body":…,"wait":true,
@@ -277,6 +277,70 @@ the last 60 s (finished jobs only change by deletion). Anything else reads
 D1 and refreshes the view; the `watch()` pollers refresh it too. With
 several replicas, a change made through another replica shows up here at
 most `watch_poll_ms` later (60 s for deleting a finished job).
+
+### 3.4 Pod placement and bursts
+
+A burst of submits used to land on one pod worker: the gateway picked the
+least-loaded worker from its last probe and counted the job against it
+only when the dispatch call *returned* (the worker's adopt alone is a D1
+round trip), so every concurrent submit saw the same idle worker. 5 jobs
+on 3 idle workers queued on one GPU (numbers below;
+[gateway-cloudflare.md](gateway-cloudflare.md) §9.4 found 5–11 s mean on
+5 workers).
+
+Now, per pod pool, under the pool's lock:
+
+- **Pick and reserve at once.** A worker's load is what it last reported
+  (`running` + `queued`) plus the jobs this replica placed there since that
+  report was computed, plus this replica's dispatch calls to it in progress
+  (`reserved`). The pick takes usable workers (healthy, not draining or
+  failed, not already tried for this job), ready ones first, then the fewest
+  job-times of wait (`load / capacity`: 0 = a free slot), then the lowest
+  load; equal workers are ordered by a per-replica seed, so two replicas do
+  not start their bursts on the same worker. The slot is reserved before
+  the call.
+- **Capacity and queue limit.** Workers report `capacity` (their engine's
+  executors) and `queue_max` (`limits.queue_max`) in
+  `GET /fv/v1/internal/status`; a worker whose waiting jobs
+  (`load − capacity`) reach `queue_max` is skipped. When every usable
+  worker is full, `429 QueueFull` + `Retry-After` (as a worker's own 429).
+- **No free slot anywhere**: the job goes to the worker where it starts
+  soonest and queues there. The gateway keeps no queue of its own (a
+  held job would add a poll interval and a second dispatch round trip,
+  and the D1 rows already are the durable queue).
+- **Release.** A failed call (refusal, 5xx, connection error) or a dropped
+  submit gives the slot back (a guard, so no path leaks one). A taken job
+  becomes a *placement*: the worker's 202 answer carries its load after
+  taking it (`load: {running, queued, capacity, queue_max}`), which is
+  applied at once.
+- **Reconciliation with the tick.** Every report (probe or dispatch answer)
+  carries the instant after which the worker computed it; placements
+  acknowledged before that instant are in it and are dropped, later ones
+  still count; an older report never overwrites a newer one. Nothing is
+  reset wholesale at the tick, and a finished job leaves the count with the
+  next report.
+- **Replicas.** Each replica reserves for its own calls; other replicas'
+  jobs show up in the next report (probe every `tick_s`, or any dispatch
+  answer from that worker). Dispatch-row claims are unchanged: a
+  re-dispatch claims the row by `attempt`/`state` (one replica wins), and a
+  row upsert never overwrites a later attempt.
+- **Serverless pools** are unchanged: Runpod queues and places. Their
+  `pending` count (for `max_queued` and the pool order) now keeps the
+  dispatches the tick's D1 count missed (recorded after it was read)
+  instead of resetting to zero, and counts nothing twice.
+
+Measured with the fake engine (`crates/fastvideo-serve/tests/gateway_burst.rs`,
+`burst_queue_times_one_worker_vs_three`: 5 jobs submitted at once, 4 × 250 ms
+steps per job — about 10 s end to end on the build pod, D1 at 250 ms per call;
+queue = `created_at` → `started_at`):
+
+| workers | before: mean / max queue | jobs per worker | after: mean / max queue | jobs per worker |
+|---|---:|---|---:|---|
+| 1 | 14.3 s / 27.6 s | 5 | 14.8 s / 28.4 s | 5 |
+| 3 | 16.7 s / 30.6 s | 5 on one | 3.5 s / 8.2 s | 2, 1, 2 |
+
+After the fix three jobs start at once (0.5 s: the insert and adopt round
+trips) and the other two wait one job time.
 
 ## 4. Capabilities
 

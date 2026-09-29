@@ -35,6 +35,7 @@ pub fn job(model: &str, frames: u32, fps: u32, audio: AudioPlan, prompt: &str) -
         sampling: SamplingOverrides::default(),
         tier: None,
         recipe: None,
+        edit: None,
     }
 }
 

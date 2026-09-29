@@ -29,6 +29,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use fastvideo_protocol::{EditOp, ExtendAt, RetakeMode, VideoEdit};
 use fastvideo_protocol::{
     ApiError, AudioInput, AudioRole, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
     JobView, Keyframe, Length, ListQuery, MediaKind, MediaRef, Reference, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
@@ -130,6 +131,33 @@ pub struct NativeBody {
     /// `image_url` (optional) is the first frame.
     #[serde(default)]
     pub audio_url: Option<String>,
+    /// Source video (https URL or data URI) of a retake or extend (LTX-2.5;
+    /// MP4/MOV/MKV/WebM, 8 to 60 fps, at most 60 s). The output keeps its
+    /// size (snapped down to multiples of 32, at most 1920x1088 worth of
+    /// pixels) and frame rate.
+    #[serde(default)]
+    pub video_url: Option<String>,
+    /// Retake: regenerate `[start_s, end_s)` seconds of `video_url` (2 to
+    /// 20 s; clamped to the video) with `prompt`; the rest is kept.
+    #[serde(default)]
+    pub start_s: Option<f64>,
+    #[serde(default)]
+    pub end_s: Option<f64>,
+    /// Retake: `replace_audio_and_video` (default), `replace_video` or
+    /// `replace_audio`. With `audio_url`, `replace_video`: the window gets
+    /// that audio and the picture is regenerated to match it.
+    #[serde(default)]
+    pub retake_mode: Option<String>,
+    /// Extend: add `extend_s` seconds (2 to 20) to `video_url`.
+    #[serde(default)]
+    pub extend_s: Option<f64>,
+    /// Extend: `end` (default) or `start`.
+    #[serde(default)]
+    pub extend_at: Option<String>,
+    /// Extend: seconds of the source the model continues from (1 to 20;
+    /// default as many as fit). The rest of the source is copied unchanged.
+    #[serde(default)]
+    pub context_s: Option<f64>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -156,9 +184,25 @@ impl SubmitEndpoint for NativeSubmit {
 
     fn normalize(&self, b: NativeBody, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
         let _ = cx;
-        // Audio-to-video with a first frame may leave the prompt empty.
-        if b.prompt.trim().is_empty() && !(b.audio_url.is_some() && b.image_url.is_some()) {
+        // Audio-to-video with a first frame may leave the prompt empty; so
+        // may a retake or an extend (the LTX API's `prompt` is optional).
+        if b.prompt.trim().is_empty() && !(b.audio_url.is_some() && b.image_url.is_some()) && b.video_url.is_none() {
             return Err(ApiError::invalid_param("prompt", "`prompt` must not be empty"));
+        }
+        if b.video_url.is_some() {
+            return normalize_edit(b);
+        }
+        for (set, field) in [
+            (b.start_s.is_some(), "start_s"),
+            (b.end_s.is_some(), "end_s"),
+            (b.retake_mode.is_some(), "retake_mode"),
+            (b.extend_s.is_some(), "extend_s"),
+            (b.extend_at.is_some(), "extend_at"),
+            (b.context_s.is_some(), "context_s"),
+        ] {
+            if set {
+                return Err(ApiError::invalid_param(field, format!("`{field}` needs `video_url` (retake / extend)")));
+            }
         }
         let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
         r.negative_prompt = b.negative_prompt;
@@ -238,6 +282,80 @@ impl SubmitEndpoint for NativeSubmit {
     fn submit_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
         HttpReply::json(202, job_json(job, cx))
     }
+}
+
+/// A retake (`start_s` + `end_s`) or an extend (`extend_s`) of `video_url`.
+fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
+    let video = media(b.video_url.as_deref().unwrap_or_default(), "video_url")?;
+    let op = match (b.start_s, b.end_s, b.extend_s) {
+        (Some(start_s), Some(end_s), None) => {
+            if end_s.partial_cmp(&start_s) != Some(std::cmp::Ordering::Greater) {
+                return Err(ApiError::invalid_param("end_s", "`end_s` must be greater than `start_s`"));
+            }
+            let mode = match b.retake_mode.as_deref() {
+                None if b.audio_url.is_some() => RetakeMode::ReplaceVideo,
+                None => RetakeMode::default(),
+                Some(m) => RetakeMode::parse(m).ok_or_else(|| {
+                    ApiError::invalid_param("retake_mode", "`retake_mode` must be one of replace_audio, replace_video, replace_audio_and_video")
+                })?,
+            };
+            if b.extend_at.is_some() || b.context_s.is_some() {
+                return Err(ApiError::invalid_param("extend_at", "`extend_at` / `context_s` are extend fields; a retake takes `start_s`, `end_s`"));
+            }
+            EditOp::Retake { start_s, duration_s: end_s - start_s, mode }
+        }
+        (None, None, Some(duration_s)) => {
+            let at = match b.extend_at.as_deref() {
+                None => ExtendAt::End,
+                Some(a) => ExtendAt::parse(a).ok_or_else(|| ApiError::invalid_param("extend_at", "`extend_at` must be one of start, end"))?,
+            };
+            if b.retake_mode.is_some() || b.audio_url.is_some() {
+                return Err(ApiError::invalid_param("retake_mode", "an extend takes no `retake_mode` or `audio_url`"));
+            }
+            EditOp::Extend { duration_s, at, context_s: b.context_s }
+        }
+        _ => {
+            return Err(ApiError::invalid_param(
+                "video_url",
+                "with `video_url`, give `start_s` and `end_s` (retake) or `extend_s` (extend)",
+            ))
+        }
+    };
+    for (set, field) in [
+        (b.image_url.is_some(), "image_url"),
+        (b.last_image_url.is_some(), "last_image_url"),
+        (!b.reference_urls.is_empty(), "reference_urls"),
+        (b.seconds.is_some(), "seconds"),
+        (b.num_frames.is_some(), "num_frames"),
+        (b.fps.is_some(), "fps"),
+        (b.aspect_ratio.is_some() || b.short_edge.is_some(), "aspect_ratio"),
+    ] {
+        if set {
+            return Err(ApiError::invalid_param(field, format!("a retake or extend takes no `{field}`: it follows the source video")));
+        }
+    }
+    let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
+    r.task = match op {
+        EditOp::Retake { .. } => Task::Retake,
+        EditOp::Extend { .. } => Task::Extend,
+    };
+    r.negative_prompt = b.negative_prompt;
+    r.seed = b.seed;
+    r.canvas = match (b.size, b.width, b.height) {
+        (Some(s), None, None) => {
+            let (width, height) = parse_size(&s)?;
+            CanvasSpec::Exact { width, height }
+        }
+        (None, Some(width), Some(height)) => CanvasSpec::Exact { width, height },
+        (None, None, None) => CanvasSpec::ModelDefault,
+        _ => return Err(ApiError::invalid_param("size", "give `size` or `width`+`height` (at most the source's), or neither")),
+    };
+    r.sampling = SamplingOverrides { steps: b.steps, guidance: b.guidance, ..Default::default() };
+    if let Some(u) = b.audio_url {
+        r.audio_in = Some(AudioInput { media: media(&u, "audio_url")?, role: AudioRole::Dub, max_s: None });
+    }
+    r.edit = Some(VideoEdit { video, op });
+    Ok(r)
 }
 
 /// The native job object.
@@ -585,5 +703,35 @@ mod tests {
         assert_eq!(e.unwrap_err().param.as_deref(), Some("prompt"));
         let e = NativeSubmit.normalize(body(json!({"model": "m", "prompt": "p", "audio_url": "nope"})), &cx);
         assert_eq!(e.unwrap_err().param.as_deref(), Some("audio_url"));
+    }
+
+    #[test]
+    fn video_url_makes_a_retake_or_an_extend() {
+        let cx = NormalizeCtx::new(time::OffsetDateTime::UNIX_EPOCH);
+        let n = |v: Value| NativeSubmit.normalize(body(v), &cx);
+        let r = n(json!({"model": "ltx-pro", "prompt": "it rains", "video_url": "https://e.x/v.mp4", "start_s": 1.0, "end_s": 3.5})).unwrap();
+        assert_eq!(r.task, Task::Retake);
+        let e = r.edit.unwrap();
+        assert_eq!(e.op, EditOp::Retake { start_s: 1.0, duration_s: 2.5, mode: RetakeMode::ReplaceAudioAndVideo });
+        assert!(r.audio_in.is_none());
+        // New window audio: replace_video by default, the audio a dub.
+        let r = n(json!({"model": "ltx-pro", "prompt": "", "video_url": "https://e.x/v.mp4", "start_s": 0, "end_s": 2, "audio_url": "https://e.x/a.wav"})).unwrap();
+        assert_eq!(r.edit.unwrap().op, EditOp::Retake { start_s: 0.0, duration_s: 2.0, mode: RetakeMode::ReplaceVideo });
+        assert_eq!(r.audio_in.map(|a| a.role), Some(AudioRole::Dub));
+        let x = n(json!({"model": "ltx-pro", "prompt": "the road", "video_url": "https://e.x/v.mp4", "extend_s": 4, "extend_at": "start", "context_s": 3})).unwrap();
+        assert_eq!(x.task, Task::Extend);
+        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 4.0, at: ExtendAt::Start, context_s: Some(3.0) });
+        for (b, param) in [
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4"}), "video_url"),
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 2, "end_s": 1}), "end_s"),
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 0, "end_s": 2, "retake_mode": "x"}), "retake_mode"),
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "extend_at": "middle"}), "extend_at"),
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "seconds": 4}), "seconds"),
+            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "image_url": "https://e.x/i.png"}), "image_url"),
+            (json!({"model": "m", "prompt": "p", "start_s": 0, "end_s": 2}), "start_s"),
+            (json!({"model": "m", "prompt": "p", "extend_s": 2}), "extend_s"),
+        ] {
+            assert_eq!(n(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+        }
     }
 }

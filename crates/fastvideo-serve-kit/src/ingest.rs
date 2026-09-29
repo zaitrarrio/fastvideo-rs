@@ -134,6 +134,18 @@ impl Prober for DefaultProber {
                 _ => Err(ApiError::unsupported_media("the image could not be decoded")),
             };
         }
+        // MP4 / MOV video: the box reader gives the exact sample count, size,
+        // rate and audio track without a subprocess (retake / extend need all
+        // four); other containers go to ffprobe.
+        if kind == MediaKind::Video {
+            let p = path.to_owned();
+            let boxed = tokio::task::spawn_blocking(move || fastvideo_media::mp4::inspect(&p).ok())
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            if let Some(probe) = boxed.as_ref().and_then(mp4_probe) {
+                return Ok(probe);
+            }
+        }
         let mut p = match &self.ffprobe {
             Some(bin) => ffprobe(bin, path).await.unwrap_or_default(),
             None => MediaProbe::default(),
@@ -153,6 +165,25 @@ impl Prober for DefaultProber {
         }
         Ok(p)
     }
+}
+
+/// An MP4 / MOV with a sized video track: its size, sample count and rate
+/// (the frame count over the track's duration when `stts` has several
+/// deltas), the file's duration and the first audio track's rate.
+pub fn mp4_probe(i: &fastvideo_media::mp4::Mp4Info) -> Option<MediaProbe> {
+    let v = i.video()?;
+    let (w, h) = (v.width.filter(|w| *w > 0)?, v.height.filter(|h| *h > 0)?);
+    let frames = u32::try_from(v.samples).ok().filter(|n| *n > 0)?;
+    let dur = v.duration_s();
+    let fps = v.fps.or_else(|| (dur > 0.0).then(|| f64::from(frames) / dur))?;
+    Some(MediaProbe {
+        width: Some(w),
+        height: Some(h),
+        duration_s: Some(if dur > 0.0 { dur } else { i.duration_s }),
+        fps: Some(fps),
+        audio_rate: i.audio().and_then(|a| a.audio.as_ref().map(|x| x.sample_rate)).filter(|r| *r > 0),
+        frames: Some(frames),
+    })
 }
 
 /// How much of a WAV file [`parse_wav_header`] looks at.
@@ -233,6 +264,7 @@ pub fn parse_ffprobe(v: &serde_json::Value) -> Option<MediaProbe> {
                 if p.duration_s.is_none() {
                     p.duration_s = num(s.get("duration"));
                 }
+                p.frames = num(s.get("nb_frames")).filter(|n| *n >= 1.0).map(|n| n as u32);
             }
             Some("audio") if p.audio_rate.is_none() => {
                 p.audio_rate = num(s.get("sample_rate")).map(|r| r as u32);
@@ -416,6 +448,9 @@ impl Ingestor {
         }
         if let Some(a) = &req.audio_in {
             out.audio_in = Some(self.stage_one(&a.media, MediaKind::Audio, policy, dir, "audio", now).await?);
+        }
+        if let Some(e) = &req.edit {
+            out.video_in = Some(self.stage_one(&e.video, MediaKind::Video, policy, dir, "video_url", now).await?);
         }
         Ok(out)
     }

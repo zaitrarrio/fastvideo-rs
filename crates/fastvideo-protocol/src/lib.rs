@@ -54,11 +54,16 @@ pub use negotiate::{
     resolve_model, resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
     StagedInputs, StagedMedia,
 };
+pub use negotiate::{
+    ResolvedEdit, ResolvedEditOp, EDIT_DURATION_MAX_S, EDIT_DURATION_MIN_S, EDIT_FPS, EDIT_MAX_FRAMES, EDIT_MAX_PIXELS,
+    EDIT_SOURCE_MAX_S, EXTEND_CONTEXT_MAX_S, EXTEND_CONTEXT_MIN_S,
+};
 pub use request::{
     Anchor, AudioInput, AudioOut, AudioRole, CanvasSpec, Family, GenerationRequest, Keyframe,
     Length, MediaKind, MediaRef, ModelId, OutputOptions, ProtocolId, Ratio, Reference,
     SamplingOverrides, Snap, Task, TimingSpec, UploadId,
 };
+pub use request::{EditOp, ExtendAt, RetakeMode, VideoEdit};
 pub use stream::{
     AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
     VideoTrack, WIRE_AUDIO_RATE,

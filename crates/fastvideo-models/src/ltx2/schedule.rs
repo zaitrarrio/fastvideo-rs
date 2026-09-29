@@ -139,6 +139,61 @@ impl Ltx2Schedule {
         }
     }
 
+    /// `ltx_core`'s `LTX2Scheduler().execute(steps=N)` with no latent (the
+    /// dev pipelines' stage 1, `a2vid_two_stage.py`): `linspace(1, 0, N+1)`,
+    /// the exponential shift at the default token count 4096 (so
+    /// `sigma_shift = max_shift = 2.05`), and the stretch of the non-zero
+    /// sigmas to the terminal 0.1. float32 throughout, as torch evaluates
+    /// it: `a / t` is `reciprocal(t) · a` (`Tensor.__rtruediv__`), and the
+    /// python scalars are rounded to float32 where they meet the tensor.
+    pub fn ltx_core(steps: usize) -> Self {
+        const BASE_ANCHOR: f64 = 1024.0;
+        const MAX_ANCHOR: f64 = 4096.0;
+        let (max_shift, base_shift, terminal) = (2.05f64, 0.95f64, 0.1f64);
+        let n = steps.max(1);
+        // torch.linspace(1, 0, n + 1): step = (end − start) / n in float32,
+        // the first half from the start, the second half from the end.
+        let pts = n + 1;
+        let step = (0.0f32 - 1.0f32) / n as f32;
+        let half = pts / 2;
+        let lin: Vec<f32> = (0..pts)
+            .map(|i| {
+                if i < half {
+                    1.0f32 + step * i as f32
+                } else {
+                    0.0f32 - step * (pts - i - 1) as f32
+                }
+            })
+            .collect();
+        let mm = (max_shift - base_shift) / (MAX_ANCHOR - BASE_ANCHOR);
+        let b = base_shift - mm * BASE_ANCHOR;
+        let e = (MAX_ANCHOR * mm + b).exp() as f32;
+        let mut sig: Vec<f32> = lin
+            .iter()
+            .map(|&s| {
+                if s == 0.0 {
+                    return 0.0;
+                }
+                let t = (1.0f32 / s) - 1.0;
+                (1.0f32 / (e + t)) * e
+            })
+            .collect();
+        // Stretch the non-zero sigmas so the last one is `terminal`.
+        let last_nz = sig.iter().rposition(|&s| s != 0.0);
+        if let Some(k) = last_nz {
+            let scale = (1.0f32 - sig[k]) / (1.0 - terminal) as f32;
+            for s in sig.iter_mut().filter(|s| **s != 0.0) {
+                *s = 1.0f32 - (1.0f32 - *s) / scale;
+            }
+        }
+        let n_train = 1000usize;
+        Self {
+            timesteps: sig[..n].iter().map(|&s| s as f64 * n_train as f64).collect(),
+            sigmas: sig.iter().map(|&s| s as f64).collect(),
+            num_train_timesteps: n_train,
+        }
+    }
+
     /// The dev model's schedule for `num_inference_steps` steps at a given
     /// video token count: `linspace(1, 1/N, N)`, exponential time shift by
     /// `mu(seq_len)`, then a stretch so the last sigma equals `shift_terminal`.
@@ -400,6 +455,27 @@ fn combinations(items: &[usize], k: usize) -> Vec<Vec<usize>> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ltx_core_scheduler_matches_the_reference_shape() {
+        let s = Ltx2Schedule::ltx_core(30);
+        assert_eq!(s.num_steps(), 30);
+        assert_eq!(s.sigmas.len(), 31);
+        // float32 `reciprocal(e + 0) · e`: 1 up to one ulp.
+        assert!((s.sigmas[0] - 1.0).abs() < 1e-6, "{}", s.sigmas[0]);
+        assert_eq!(*s.sigmas.last().unwrap(), 0.0);
+        // The stretch pins the last non-zero sigma to the terminal 0.1.
+        assert!((s.sigmas[29] - 0.1).abs() < 1e-6, "{}", s.sigmas[29]);
+        assert!(s.sigmas.windows(2).all(|w| w[0] > w[1]));
+        // Shifted at exp(2.05): the second sigma sits well above linspace's 29/30.
+        let e = 2.05f64.exp();
+        let t: f64 = 30.0 / 29.0 - 1.0;
+        let raw = e / (e + t);
+        let raw_last = e / (e + 29.0);
+        let want = 1.0 - (1.0 - raw) / ((1.0 - raw_last) / 0.9);
+        assert!((s.sigmas[1] - want).abs() < 1e-6, "{} vs {want}", s.sigmas[1]);
+        assert!((s.timestep_f32(1) - (s.sigmas[1] as f32) * 1000.0).abs() < 1e-3);
+    }
     use super::*;
 
     fn close(a: f64, b: f64, tol: f64) -> bool {

@@ -13,6 +13,10 @@ use worker::*;
 
 const DO_BINDING: &str = "POOL_SCHEDULER";
 const D1_BINDING: &str = "DB";
+/// R2 bucket for large envelopes (optional; without it everything stays in SQLite).
+const R2_BINDING: &str = "ENVELOPES";
+/// Envelopes larger than this (JSON bytes) are spilled to R2 (`SPILL_BYTES`).
+const SPILL_BYTES: usize = 1 << 20;
 /// Envelope chunk size in SQLite (a DO row / string is at most 2 MB).
 const CHUNK: usize = 1_000_000;
 
@@ -263,21 +267,85 @@ impl PoolScheduler {
                         let _ = ws.close(Some(4001), Some("no heartbeat"));
                     }
                 }
+                Out::PushSpilled { worker, key, msg } => {
+                    if let Err(e) = self.push_spilled(&worker, &key, msg).await {
+                        // The ack timeout pushes it again.
+                        console_warn!("spilled push to {worker} failed: {e:?}");
+                    }
+                }
             }
         }
         let now = now_ms();
         let (dirty, pool, wake) = self.with(|s| (s.take_dirty(), s.pool.clone(), s.next_wake(now).map(|t| t.max(now + 1))))?;
         self.persist(&dirty)?;
         self.record(&pool, &dirty);
-        if self.alarm_at.get() != wake {
-            let storage = self.state.storage();
-            match wake {
-                Some(t) => storage.set_alarm(ScheduledTime::new(js_sys::Date::new(&JsValue::from_f64(t as f64)))).await?,
-                None => storage.delete_alarm().await?,
+        self.drop_spills(&dirty);
+        // Only ever move the alarm earlier: a later deadline is picked up by
+        // the tick that runs anyway (it recomputes), so most events (every
+        // enqueue moves the next ack deadline) cost no alarm write.
+        if let Some(t) = wake {
+            let set = self.alarm_at.get();
+            if set.is_none_or(|a| t < a || a <= now) {
+                self.state.storage().set_alarm(ScheduledTime::new(js_sys::Date::new(&JsValue::from_f64(t as f64)))).await?;
+                self.alarm_at.set(Some(t));
             }
-            self.alarm_at.set(wake);
         }
         Ok(())
+    }
+
+    /// Loads a spilled envelope and sends the push.
+    async fn push_spilled(&self, worker: &str, key: &str, mut msg: proto::DoMsg) -> Result<()> {
+        let bucket = self.env.bucket(R2_BINDING)?;
+        let Some(obj) = bucket.get(key).execute().await? else {
+            console_warn!("spilled envelope {key} is missing");
+            return Ok(());
+        };
+        let text = match obj.body() {
+            Some(b) => b.text().await?,
+            None => return Ok(()),
+        };
+        if let proto::DoMsg::Job { envelope, .. } = &mut msg {
+            *envelope = serde_json::from_str(&text).map_err(|e| Error::RustError(e.to_string()))?;
+        }
+        let text = serde_json::to_string(&msg).map_err(|e| Error::RustError(e.to_string()))?;
+        for ws in self.state.get_websockets_with_tag(worker) {
+            if let Err(e) = ws.send_with_str(&text) {
+                console_warn!("send to {worker} failed: {e:?}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes spilled envelopes no job needs any more (behind the response).
+    fn drop_spills(&self, d: &Dirty) {
+        if d.dropped_spills.is_empty() {
+            return;
+        }
+        let Ok(bucket) = self.env.bucket(R2_BINDING) else { return };
+        let keys = d.dropped_spills.clone();
+        self.state.wait_until(async move {
+            for k in keys {
+                if let Err(e) = bucket.delete(k.as_str()).await {
+                    console_warn!("deleting spilled envelope {k}: {e:?}");
+                }
+            }
+        });
+    }
+
+    /// Enqueues, spilling a large envelope to R2 when the bucket is bound.
+    async fn enqueue(&self, pool: &str, body: EnqueueReq, now: i64) -> Result<(proto::EnqueueResp, Vec<Out>)> {
+        let limit = self.env.var("SPILL_BYTES").ok().and_then(|v| v.to_string().parse::<usize>().ok()).unwrap_or(SPILL_BYTES);
+        let text = serde_json::to_string(&body.envelope).map_err(|e| Error::RustError(e.to_string()))?;
+        if text.len() > limit {
+            if let Ok(bucket) = self.env.bucket(R2_BINDING) {
+                let key = format!("env/{pool}/{}/{:x}", body.job_id, (js_sys::Math::random() * 1e15) as u64);
+                bucket.put(key.as_str(), text).execute().await?;
+                let req = EnqueueReq { envelope: serde_json::Value::Null, ..body };
+                return self.with(|s| s.enqueue_spilled(req, Some(key), now));
+            }
+        }
+        drop(text);
+        self.with(|s| s.enqueue(body, now))
     }
 
     fn persist(&self, d: &Dirty) -> Result<()> {
@@ -427,7 +495,7 @@ impl DurableObject for PoolScheduler {
                 if !proto::valid_id(&body.job_id) {
                     return json_err(400, "invalid_request", "invalid job id");
                 }
-                let (resp, out) = self.with(|s| s.enqueue(body, now))?;
+                let (resp, out) = self.enqueue(&pool, body, now).await?;
                 self.apply(out).await?;
                 Ok(Response::from_json(&resp)?.with_status(202))
             }
@@ -451,6 +519,7 @@ impl DurableObject for PoolScheduler {
 
     async fn alarm(&self) -> Result<Response> {
         self.alarm_at.set(None);
+        // (A spurious early alarm is harmless: the tick recomputes.)
         let pool = self.pool_name(None)?;
         self.ensure(&pool)?;
         let out = self.with(|s| s.tick(now_ms()))?;

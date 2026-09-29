@@ -159,7 +159,7 @@ impl Prober for TestProber {
     async fn probe(&self, path: &Path, kind: MediaKind, mime: &str) -> Result<MediaProbe, ApiError> {
         match kind {
             MediaKind::Image => DefaultProber { ffprobe: None }.probe(path, kind, mime).await,
-            MediaKind::Video => Ok(MediaProbe { width: Some(1280), height: Some(720), duration_s: Some(3.2), fps: Some(24.0), audio_rate: None }),
+            MediaKind::Video => Ok(MediaProbe { width: Some(1280), height: Some(720), duration_s: Some(3.2), fps: Some(24.0), audio_rate: None, frames: None }),
             MediaKind::Audio => Ok(MediaProbe { duration_s: Some(6.0), audio_rate: Some(48000), ..MediaProbe::default() }),
         }
     }

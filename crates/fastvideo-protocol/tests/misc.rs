@@ -204,7 +204,8 @@ fn request_helpers() {
     let all: Vec<String> = r.media_refs().map(|m| format!("{m:?}")).collect();
     assert_eq!(all.len(), 3);
     assert!(all[0].contains("/1") && all[1].contains("/2") && all[2].contains("/3"));
-    assert!(Task::Retake.is_edit_endpoint() && !Task::Ref2V.is_edit_endpoint());
+    assert!(Task::V2V.is_edit_endpoint() && !Task::Retake.is_edit_endpoint() && !Task::Ref2V.is_edit_endpoint());
+    assert!(Task::Retake.edits_video() && Task::Extend.edits_video() && !Task::A2V.edits_video());
     assert_eq!(ModelId::from("x").to_string(), "x");
     let c = CallbackSpec::FalWebhook {
         url: url::Url::parse("https://h.x/").unwrap(),

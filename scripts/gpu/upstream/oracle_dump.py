@@ -358,6 +358,27 @@ class _Ltx:
     step = -1
     in_stage = False
     draws: dict = {}
+    # Guided stages (GuidedDenoiser): the transformer runs once per pass per
+    # step (--max-batch-size 1), in _guided_denoise's order.
+    call = 0
+    passes: tuple = ("",)
+
+
+def _ltx_passes(den) -> tuple:
+    """Dump suffixes of a denoiser's passes, in `_guided_denoise`'s order:
+    cond (no suffix), then _uncond / _ptb / _mod as its guiders need them."""
+    vg, ag = getattr(den, "video_guider", None), getattr(den, "audio_guider", None)
+    if vg is None and ag is None:
+        return ("",)
+    gs = [g for g in (vg, ag) if g is not None]
+    out = [""]
+    if any(g.do_unconditional_generation() for g in gs) or getattr(den, "force_uncond_pass", False):
+        out.append("_uncond")
+    if any(g.do_perturbed_generation() for g in gs):
+        out.append("_ptb")
+    if any(g.do_isolated_modality_generation() for g in gs):
+        out.append("_mod")
+    return tuple(out)
 
 
 def _ltx_pack5(t):
@@ -395,8 +416,11 @@ def _patch_ltx_blocks(mod) -> None:
             den = lk["denoiser"]
             sig = lk["sigmas"]
 
+            _Ltx.passes = _ltx_passes(den)
+
             def denoiser(transformer, vs, as_, sigmas, step_idx):
                 _Ltx.step = step_idx
+                _Ltx.call = 0
                 tag = "step00_in" if step_idx == 0 else f"step{step_idx:02d}"
                 if step_idx == 0:
                     write(p + "sigmas", sigmas)
@@ -438,6 +462,10 @@ def _patch_ltx_blocks(mod) -> None:
             _Ltx.text_done = True
             write("text_video_ctx", out[0].video_encoding)
             write("text_audio_ctx", out[0].audio_encoding)
+            # A guided pipeline's second prompt is the negative one.
+            if len(out) > 1:
+                write("text_video_ctx_neg", out[1].video_encoding)
+                write("text_audio_ctx_neg", out[1].audio_encoding)
             try:
                 # The connector output mask is all ones (registers fill the pads):
                 # the real rows are the tokenizer mask's count, front-aligned.
@@ -468,8 +496,12 @@ def _patch_ltx_model(mod) -> None:
     def forward(self, video, audio, perturbations):
         n, k = _Ltx.stage, _Ltx.step
         p = f"s{n}_"
+        j = _Ltx.call
+        _Ltx.call += 1
+        sfx = _Ltx.passes[j] if j < len(_Ltx.passes) else f"_pass{j}"
         handles = []
-        if _Ltx.in_stage and k == 0:
+        # Blocks: the first (cond) pass of the first step only.
+        if _Ltx.in_stage and k == 0 and j == 0:
             for i, block in enumerate(self.transformer_blocks):
                 def hook(m, a, out, i=i):
                     v, au = out
@@ -493,9 +525,9 @@ def _patch_ltx_model(mod) -> None:
                 h.remove()
         if _Ltx.in_stage and k >= 0:
             if vx is not None:
-                write(f"{p}video_vel_step{k + 1:02d}", vx)
+                write(f"{p}video_vel_step{k + 1:02d}{sfx}", vx)
             if ax is not None:
-                write(f"{p}audio_vel_step{k + 1:02d}", ax)
+                write(f"{p}audio_vel_step{k + 1:02d}{sfx}", ax)
         return vx, ax
 
     cls.forward = forward

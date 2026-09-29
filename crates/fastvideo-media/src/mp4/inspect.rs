@@ -339,6 +339,67 @@ pub fn inspect(path: &Path) -> Result<Mp4Info> {
     Ok(Mp4Info { major_brand: brand, top_level: top, faststart, duration_s, tracks })
 }
 
+/// A header-only MP4 (`ftyp`, `moov`, an empty `mdat`) with one H.264 video
+/// track of `frames` samples at `timescale / delta` fps and, optionally, an
+/// AAC-LC stereo track at `audio_rate`. [`inspect`] reads it like a real
+/// file; nothing can decode it. For tests of ingestion and negotiation that
+/// must not need ffmpeg.
+#[doc(hidden)]
+pub fn header_only_mp4(width: u16, height: u16, timescale: u32, delta: u32, frames: u32, audio_rate: Option<u32>) -> Vec<u8> {
+    fn bx(ty: &str, payload: &[u8]) -> Vec<u8> {
+        let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(ty.as_bytes());
+        v.extend_from_slice(payload);
+        v
+    }
+    fn full(rest: &[u8]) -> Vec<u8> {
+        let mut v = 0u32.to_be_bytes().to_vec();
+        v.extend_from_slice(rest);
+        v
+    }
+    fn trak(handler: &str, timescale: u32, duration: u32, entry: Vec<u8>, stts: &[(u32, u32)]) -> Vec<u8> {
+        let mut mdhd = vec![0u8; 8];
+        mdhd.extend(timescale.to_be_bytes());
+        mdhd.extend(duration.to_be_bytes());
+        mdhd.extend([0u8; 4]);
+        let mut hdlr = vec![0u8; 4];
+        hdlr.extend(handler.as_bytes());
+        hdlr.extend([0u8; 13]);
+        let mut st = (stts.len() as u32).to_be_bytes().to_vec();
+        for (c, d) in stts {
+            st.extend(c.to_be_bytes());
+            st.extend(d.to_be_bytes());
+        }
+        let stsd = full(&[&1u32.to_be_bytes()[..], &entry].concat());
+        let stbl = bx("stbl", &[bx("stsd", &stsd), bx("stts", &full(&st))].concat());
+        let minf = bx("minf", &stbl);
+        let mdia = bx("mdia", &[bx("mdhd", &full(&mdhd)), bx("hdlr", &full(&hdlr)), minf].concat());
+        bx("trak", &mdia)
+    }
+    let mut v = vec![0u8; 78];
+    v[24..26].copy_from_slice(&width.to_be_bytes());
+    v[26..28].copy_from_slice(&height.to_be_bytes());
+    v.extend(bx("avcC", &[1, 100, 0, 40, 0xff]));
+    let vdur = frames.saturating_mul(delta);
+    let mut traks = trak("vide", timescale, vdur, bx("avc1", &v), &[(frames, delta)]);
+    let secs = f64::from(vdur) / f64::from(timescale.max(1));
+    if let Some(rate) = audio_rate {
+        let mut a = vec![0u8; 28];
+        a[16..18].copy_from_slice(&2u16.to_be_bytes());
+        a[24..28].copy_from_slice(&(rate << 16).to_be_bytes());
+        let esds = full(&[3, 25, 0, 1, 0, 4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 0x12, 0x10, 6, 1, 2]);
+        a.extend(bx("esds", &esds));
+        let packets = (secs * f64::from(rate) / 1024.0).ceil() as u32;
+        traks.extend(trak("soun", rate, packets * 1024, bx("mp4a", &a), &[(packets, 1024)]));
+    }
+    let mut mvhd = vec![0u8; 8];
+    mvhd.extend(1000u32.to_be_bytes());
+    mvhd.extend(((secs * 1000.0).round() as u32).to_be_bytes());
+    let moov = bx("moov", &[bx("mvhd", &full(&mvhd)), traks].concat());
+    let ftyp = bx("ftyp", b"isom\0\0\x02\0isomiso2avc1mp41");
+    [ftyp, moov, bx("mdat", &[])].concat()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +505,21 @@ mod tests {
         let p = dir.path().join("c.mp4");
         std::fs::write(&p, b"\0\0\0\x10junkjunkjunk").unwrap();
         assert!(inspect(&p).is_err());
+    }
+
+    #[test]
+    fn header_only_files_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("h.mp4");
+        std::fs::write(&p, header_only_mp4(768, 512, 24_000, 1000, 121, Some(44_100))).unwrap();
+        let i = inspect(&p).unwrap();
+        let v = i.video().unwrap();
+        assert_eq!((v.width, v.height, v.samples, v.fps), (Some(768), Some(512), 121, Some(24.0)));
+        assert!((v.duration_s() - 121.0 / 24.0).abs() < 1e-9);
+        assert_eq!(i.audio().unwrap().audio.as_ref().unwrap().sample_rate, 44_100);
+        std::fs::write(&p, header_only_mp4(640, 360, 30_000, 1001, 90, None)).unwrap();
+        let i = inspect(&p).unwrap();
+        assert!((i.video().unwrap().fps.unwrap() - 29.97).abs() < 1e-2);
+        assert!(i.audio().is_none());
     }
 }

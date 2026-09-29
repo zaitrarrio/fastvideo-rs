@@ -30,6 +30,9 @@ def main() -> int:
     # Audio-to-video (ltx25_a2v.py): DistilledPipeline with a2vid_two_stage.py's
     # frozen driving audio; the audio VAE is the official args' --audio-vae-path.
     ap.add_argument("--a2v-audio", default=None)
+    # Retake / extend (ltx25_edit.py): RetakePipeline's flow on the distilled
+    # blocks; SPEC is retake:SRC:START:END:av|v|a or extend:SRC:FRAMES:start|end.
+    ap.add_argument("--edit", default=None)
     ap.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args()
     rest = a.rest[1:] if a.rest[:1] == ["--"] else a.rest
@@ -69,6 +72,14 @@ def main() -> int:
             raise SystemExit("--a2v-audio needs the official --audio-vae-path")
         ltx25_a2v.install(a.a2v_audio, vae)
         info["a2v_audio"] = a.a2v_audio
+    if a.edit:
+        import ltx25_edit
+
+        vae = next((rest[i + 1] for i, x in enumerate(rest[:-1]) if x == "--audio-vae-path"), None)
+        if vae is None:
+            raise SystemExit("--edit needs the official --audio-vae-path")
+        ltx25_edit.install(a.edit, vae)
+        info["edit"] = a.edit
     sys.argv = ["gpu_infer", *rest]
     rc = 0
     try:
