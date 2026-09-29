@@ -510,7 +510,7 @@ impl EncodePlan {
     /// tiled axis needs at least 16 frames / 64 pixels of overlap.
     pub fn new(frames: usize, height: usize, width: usize, cfg: &TileSizeConfig, scale: [usize; 3]) -> Result<Self, String> {
         cfg.validate(scale)?;
-        if frames == 0 || (frames - 1) % scale[0] != 0 || height % scale[1] != 0 || width % scale[2] != 0 || height == 0 || width == 0 {
+        if frames == 0 || !(frames - 1).is_multiple_of(scale[0]) || !height.is_multiple_of(scale[1]) || !width.is_multiple_of(scale[2]) || height == 0 || width == 0 {
             return Err(format!(
                 "ltx2 encode tiling: {frames} frames of {width}x{height} are not on the {scale:?} grid"
             ));

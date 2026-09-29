@@ -345,8 +345,8 @@ impl VideoEncoder {
         let p = self.patch;
         if frames == 0
             || pixels.len() != 3 * frames * height * width
-            || height % p != 0
-            || width % p != 0
+            || !height.is_multiple_of(p)
+            || !width.is_multiple_of(p)
         {
             return Err(msg(format!(
                 "ltx2 encoder: {} pixels for 3x{frames}x{height}x{width} (patch {p})",
