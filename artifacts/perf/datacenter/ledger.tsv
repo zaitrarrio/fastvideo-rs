@@ -1,3 +1,13 @@
+# Round 1 (lost in the container restart; values restated from the session, pods verified deleted)
+2026-09-29T09:16:34Z	pod-created x05b4xj6vnzmky fv-dcprof-b200-0929091632 gpu=NVIDIA B200 dph=6.79
+2026-09-29T09:27:30Z	pod-deleted x05b4xj6vnzmky (idle guard: nsys launch refused --cpuctxsw so fv-serve never started; GET 404 at 09:27:52)
+2026-09-29T09:29:00Z	pod-created df1338tu3n9spm fv-dcprof-test-0929092859 gpu=NVIDIA L4 dph=0.49 (nsys option debug, no volume)
+2026-09-29T09:32:04Z	pod-deleted df1338tu3n9spm
+2026-09-29T09:32:40Z	pod-created aimjsaiw5sp3mt fv-dcprof-b200-0929093238 gpu=NVIDIA B200 dph=6.79
+2026-09-29T09:44:55Z	pod-deleted aimjsaiw5sp3mt
+2026-09-29T09:45:21Z	pod-created gwvhcx3usfmawd fv-dcprof-h100-0929094520 gpu=NVIDIA H100 80GB HBM3 dph=3.49
+2026-09-29T09:59:59Z	pod-deleted gwvhcx3usfmawd
+# Round 2 (the committed data)
 2026-09-29T10:25:57Z	pod-created 52rgddmv8h5dvo fv-dcprof-h100-0929102555 gpu=NVIDIA H100 80GB HBM3 dph=3.49 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:01c9fcf58d3b8504b1255879adcc1752366ecac92345d888eea87d98f1ecf895
 2026-09-29T10:36:58Z	pod-deleted 52rgddmv8h5dvo
 2026-09-29T10:37:23Z	pod-created tz3d74y6u0ct7s fv-dcprof-b200-0929103722 gpu=NVIDIA B200 dph=6.79 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:01c9fcf58d3b8504b1255879adcc1752366ecac92345d888eea87d98f1ecf895

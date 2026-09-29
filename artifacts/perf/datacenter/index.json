@@ -1,0 +1,1836 @@
+{
+ "b200/h3t-768": {
+  "window_s": 15.3304,
+  "gpu_busy_s": 14.995,
+  "gpu_busy_pct": 97.81,
+  "device_time_s": 15.0601,
+  "idle_attribution_s": {
+   "host_cpu": 0.2518,
+   "host_sync:cuStreamSynchronize": 0.0541,
+   "host_api:cuMemAllocAsync": 0.0147,
+   "launch_latency": 0.0141,
+   "host_sync:cuEventSynchronize": 0.0004,
+   "host_api:cuKernelSetAttribute": 0.0002,
+   "host_api:cuKernelGetFunction": 0.0,
+   "host_api:cuMemFreeAsync": 0.0,
+   "host_api:cudaEventRecord_v3020": 0.0
+  },
+  "category_s": {
+   "attention": 6.6659,
+   "gemm": 3.5021,
+   "norm_elementwise": 2.7396,
+   "layout_copy": 1.3528,
+   "cast_quant": 0.673,
+   "copies_memset": 0.1,
+   "vae_conv": 0.0266
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 12.0,
+    "device_s": 11.806,
+    "busy_pct": 98.4,
+    "category_s": {
+     "attention": 5.967,
+     "gemm": 2.474,
+     "norm_elementwise": 2.08,
+     "cast_quant": 0.658,
+     "layout_copy": 0.618,
+     "copies_memset": 0.01
+    },
+    "top": [
+     [
+      "vsa_mma_attn_tma2",
+      4.242
+     ],
+     [
+      "nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT",
+      1.697
+     ],
+     [
+      "h3_qk_norm_rope",
+      1.014
+     ],
+     [
+      "vsa_tile_qkv",
+      0.897
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      0.63
+     ],
+     [
+      "h3_swiglu_mx",
+      0.469
+     ],
+     [
+      "cast_f32_bf16",
+      0.412
+     ],
+     [
+      "vsa_combine",
+      0.358
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 12.0,
+    "wall_s": 3.5,
+    "device_s": 3.254,
+    "busy_pct": 93.0,
+    "category_s": {
+     "gemm": 1.029,
+     "layout_copy": 0.735,
+     "attention": 0.699,
+     "norm_elementwise": 0.66,
+     "copies_memset": 0.09,
+     "vae_conv": 0.027,
+     "cast_quant": 0.015
+    },
+    "top": [
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      0.769
+     ],
+     [
+      "flash_mma_fwd2_d64",
+      0.667
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      0.5
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.419
+     ],
+     [
+      "nvjet_sm100_tst_256x240_64x4_2x1_2cta_v_bz_TNT",
+      0.255
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.209
+     ],
+     [
+      "h3v_merge_heads_bf16",
+      0.11
+     ],
+     [
+      "memcpy DtoH",
+      0.088
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 6398.3,
+   "denoise_gemm_s": 2.474,
+   "dit_gemm_tflops": 2586,
+   "fp8_gemm_s": 1.697,
+   "fp8_tflops": 3085,
+   "fp8_pct_peak": 68.6,
+   "bf16_gemm_s": 0.777,
+   "bf16_tflops": 1497,
+   "bf16_pct_peak": 66.5
+  },
+  "library_host_ranges": [],
+  "run_s": 15.886225081,
+  "stage_durations": {
+   "audio_decode": 0.042610924,
+   "denoise": 11.876662255,
+   "encode": 0.49982284499999996,
+   "refine": 0.003900828,
+   "text": 0.354977716,
+   "video_decode": 3.230213492
+  }
+ },
+ "b200/h3m-768": {
+  "window_s": 14.5372,
+  "gpu_busy_s": 14.227,
+  "gpu_busy_pct": 97.87,
+  "device_time_s": 14.293,
+  "idle_attribution_s": {
+   "host_cpu": 0.2393,
+   "host_sync:cuStreamSynchronize": 0.0475,
+   "host_api:cuMemAllocAsync": 0.013,
+   "launch_latency": 0.0097,
+   "host_sync:cuEventSynchronize": 0.0004,
+   "host_api:cuKernelSetAttribute": 0.0002,
+   "host_api:cuLaunchKernel": 0.0001
+  },
+  "category_s": {
+   "attention": 6.7596,
+   "gemm": 3.0707,
+   "norm_elementwise": 2.8657,
+   "layout_copy": 1.4498,
+   "copies_memset": 0.1012,
+   "vae_conv": 0.0263,
+   "cast_quant": 0.0197
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 11.25,
+    "device_s": 11.034,
+    "busy_pct": 98.1,
+    "category_s": {
+     "attention": 6.07,
+     "norm_elementwise": 2.204,
+     "gemm": 2.031,
+     "layout_copy": 0.711,
+     "copies_memset": 0.009,
+     "cast_quant": 0.008
+    },
+    "top": [
+     [
+      "sol_mma_fwd_x4f",
+      3.866
+     ],
+     [
+      "fa_dc100_fwd_d128",
+      2.135
+     ],
+     [
+      "nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT",
+      1.697
+     ],
+     [
+      "h3_qk_norm_rope",
+      1.045
+     ],
+     [
+      "h3_swiglu_mx",
+      0.48
+     ],
+     [
+      "mx_block_copy",
+      0.354
+     ],
+     [
+      "h3_res_gate_norm_mod",
+      0.31
+     ],
+     [
+      "fvf_h3_gate_res_norm_mod",
+      0.299
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 11.25,
+    "wall_s": 3.5,
+    "device_s": 3.259,
+    "busy_pct": 93.1,
+    "category_s": {
+     "gemm": 1.04,
+     "layout_copy": 0.738,
+     "attention": 0.69,
+     "norm_elementwise": 0.661,
+     "copies_memset": 0.092,
+     "vae_conv": 0.026,
+     "cast_quant": 0.012
+    },
+    "top": [
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      0.776
+     ],
+     [
+      "flash_mma_fwd2_d64",
+      0.668
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      0.501
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.416
+     ],
+     [
+      "nvjet_sm100_tst_256x240_64x4_2x1_2cta_v_bz_TNT",
+      0.255
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.209
+     ],
+     [
+      "h3v_merge_heads_bf16",
+      0.11
+     ],
+     [
+      "memcpy DtoH",
+      0.091
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 5816.7,
+   "denoise_gemm_s": 2.031,
+   "dit_gemm_tflops": 2864,
+   "fp8_gemm_s": 1.697,
+   "fp8_tflops": 3084,
+   "fp8_pct_peak": 68.5,
+   "bf16_gemm_s": 0.334,
+   "bf16_tflops": 1743,
+   "bf16_pct_peak": 77.5
+  },
+  "library_host_ranges": [],
+  "run_s": 15.080822072,
+  "stage_durations": {
+   "audio_decode": 0.041672785,
+   "denoise": 11.256089319,
+   "encode": 0.40864736,
+   "refine": 0.005635229,
+   "text": 0.222993976,
+   "video_decode": 3.191717742
+  }
+ },
+ "b200/h3t-1080": {
+  "window_s": 40.7352,
+  "gpu_busy_s": 39.2263,
+  "gpu_busy_pct": 96.3,
+  "device_time_s": 39.311,
+  "idle_attribution_s": {
+   "host_cpu": 1.3759,
+   "host_sync:cuStreamSynchronize": 0.0832,
+   "launch_latency": 0.0248,
+   "host_api:cuMemAllocAsync": 0.0234,
+   "host_api:cuKernelSetAttribute": 0.001,
+   "host_sync:cuEventSynchronize": 0.0006
+  },
+  "category_s": {
+   "attention": 21.3066,
+   "gemm": 7.2729,
+   "norm_elementwise": 5.5611,
+   "layout_copy": 3.5482,
+   "cast_quant": 1.3942,
+   "copies_memset": 0.202,
+   "vae_conv": 0.0259
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 32.75,
+    "device_s": 32.461,
+    "busy_pct": 99.1,
+    "category_s": {
+     "attention": 19.88,
+     "gemm": 5.049,
+     "norm_elementwise": 4.167,
+     "layout_copy": 1.978,
+     "cast_quant": 1.369,
+     "copies_memset": 0.017
+    },
+    "top": [
+     [
+      "vsa_mma_attn_tma2",
+      16.183
+     ],
+     [
+      "nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT",
+      2.672
+     ],
+     [
+      "h3_qk_norm_rope",
+      2.133
+     ],
+     [
+      "vsa_tile_qkv",
+      1.908
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      1.272
+     ],
+     [
+      "h3_swiglu_mx",
+      1.001
+     ],
+     [
+      "cast_f32_bf16",
+      0.806
+     ],
+     [
+      "mx_block_copy",
+      0.758
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 32.75,
+    "wall_s": 8.0,
+    "device_s": 6.85,
+    "busy_pct": 85.6,
+    "category_s": {
+     "gemm": 2.224,
+     "layout_copy": 1.57,
+     "attention": 1.427,
+     "norm_elementwise": 1.394,
+     "copies_memset": 0.185,
+     "vae_conv": 0.026,
+     "cast_quant": 0.025
+    },
+    "top": [
+     [
+      "flash_mma_fwd2_d64",
+      1.427
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      1.41
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      1.078
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.901
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_4x1f_2cta_v_bz_TNT",
+      0.684
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.446
+     ],
+     [
+      "h3v_merge_heads_bf16",
+      0.237
+     ],
+     [
+      "memcpy DtoH",
+      0.182
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 12872.6,
+   "denoise_gemm_s": 5.049,
+   "dit_gemm_tflops": 2550,
+   "fp8_gemm_s": 3.368,
+   "fp8_tflops": 3127,
+   "fp8_pct_peak": 69.5,
+   "bf16_gemm_s": 1.681,
+   "bf16_tflops": 1392,
+   "bf16_pct_peak": 61.9
+  },
+  "library_host_ranges": [],
+  "run_s": 41.587211132,
+  "stage_durations": {
+   "audio_decode": 0.040361299,
+   "denoise": 32.649664267,
+   "encode": 1.428553758,
+   "refine": 0.000791461,
+   "text": 0.222922297,
+   "video_decode": 7.938180114
+  }
+ },
+ "b200/ltx-1080": {
+  "window_s": 17.2284,
+  "gpu_busy_s": 12.0044,
+  "gpu_busy_pct": 69.68,
+  "device_time_s": 12.0519,
+  "idle_attribution_s": {
+   "host_cpu": 5.0234,
+   "host_sync:cuEventSynchronize": 0.0819,
+   "launch_latency": 0.0587,
+   "host_sync:cuStreamSynchronize": 0.0526,
+   "host_api:cuMemAllocAsync": 0.0067,
+   "host_api:cuKernelSetAttribute": 0.0003,
+   "host_api:cuMemFreeAsync": 0.0002,
+   "host_api:cuLaunchKernel": 0.0002,
+   "host_api:cuMemcpyDtoHAsync_v2": 0.0001,
+   "host_api:cuLaunchKernelEx": 0.0,
+   "host_api:cuKernelGetAttribute": 0.0
+  },
+  "category_s": {
+   "attention": 3.1093,
+   "gemm": 3.0907,
+   "norm_elementwise": 3.0904,
+   "vae_conv": 1.4857,
+   "copies_memset": 1.0434,
+   "layout_copy": 0.1665,
+   "cast_quant": 0.0659
+  },
+  "stages": {
+   "decode": {
+    "t0_s": 15.0,
+    "wall_s": 2.25,
+    "device_s": 1.773,
+    "busy_pct": 78.8,
+    "category_s": {
+     "vae_conv": 1.392,
+     "copies_memset": 0.31,
+     "layout_copy": 0.039,
+     "norm_elementwise": 0.022,
+     "cast_quant": 0.011
+    },
+    "top": [
+     [
+      "ltxv_norm_silu",
+      0.478
+     ],
+     [
+      "memcpy DtoH",
+      0.309
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+      0.263
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+      0.219
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+      0.158
+     ],
+     [
+      "ltxv_d2s_bias",
+      0.128
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+      0.109
+     ],
+     [
+      "block_copy",
+      0.03
+     ]
+    ]
+   },
+   "stage 1": {
+    "t0_s": 0.0,
+    "wall_s": 4.0,
+    "device_s": 3.785,
+    "busy_pct": 94.6,
+    "category_s": {
+     "norm_elementwise": 1.285,
+     "gemm": 1.276,
+     "attention": 0.716,
+     "copies_memset": 0.425,
+     "layout_copy": 0.046,
+     "cast_quant": 0.036
+    },
+    "top": [
+     [
+      "fa_dc100_fwd_d128",
+      0.616
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_bias_TNT",
+      0.479
+     ],
+     [
+      "memcpy HtoD",
+      0.425
+     ],
+     [
+      "fvf_ltx_qk_norm_rope",
+      0.411
+     ],
+     [
+      "fvf_ltx_res_norm_mod",
+      0.403
+     ],
+     [
+      "nvjet_sm100_tst_256x224_64x4_2x1_2cta_v_bz_TNT",
+      0.299
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      0.288
+     ],
+     [
+      "mx_unary",
+      0.251
+     ]
+    ]
+   },
+   "stage 1 -> 2 (upsample, host)": {
+    "t0_s": 4.0,
+    "wall_s": 4.5,
+    "device_s": 0.172,
+    "busy_pct": 3.8,
+    "category_s": {
+     "copies_memset": 0.126,
+     "vae_conv": 0.024,
+     "layout_copy": 0.012,
+     "cast_quant": 0.005,
+     "norm_elementwise": 0.004
+    },
+    "top": [
+     [
+      "memcpy HtoD",
+      0.126
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+      0.01
+     ],
+     [
+      "pad_axis",
+      0.01
+     ],
+     [
+      "cast_f32_bf16",
+      0.004
+     ],
+     [
+      "group_norm_stats",
+      0.004
+     ],
+     [
+      "group_norm_apply",
+      0.003
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+      0.003
+     ],
+     [
+      "gather_nd",
+      0.002
+     ]
+    ]
+   },
+   "stage 2": {
+    "t0_s": 8.5,
+    "wall_s": 6.5,
+    "device_s": 6.323,
+    "busy_pct": 97.3,
+    "category_s": {
+     "attention": 2.393,
+     "gemm": 1.814,
+     "norm_elementwise": 1.779,
+     "copies_memset": 0.182,
+     "vae_conv": 0.07,
+     "layout_copy": 0.07,
+     "cast_quant": 0.014
+    },
+    "top": [
+     [
+      "sol_mma_fwd_x4f",
+      2.048
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_bias_TNT",
+      0.866
+     ],
+     [
+      "fvf_ltx_res_norm_mod",
+      0.562
+     ],
+     [
+      "fvf_ltx_qk_norm_rope",
+      0.555
+     ],
+     [
+      "nvjet_sm100_tst_256x256_64x4_2x1_2cta_v_bz_TNT",
+      0.448
+     ],
+     [
+      "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+      0.446
+     ],
+     [
+      "mx_unary",
+      0.371
+     ],
+     [
+      "memcpy HtoD",
+      0.181
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 4682.1,
+   "denoise_gemm_s": 3.09,
+   "dit_gemm_tflops": 1515,
+   "bf16_pct_peak": 67.3
+  },
+  "library_host_ranges": [],
+  "run_s": 18.931009117,
+  "stage_durations": {
+   "audio_decode": 0.126599788,
+   "denoise": 15.711254190000002,
+   "encode": 0.8128497170000001,
+   "stage1": 4.903723365,
+   "stage2": 10.433205471,
+   "text": 0.035503252,
+   "upsample": 0.374325354,
+   "video_decode": 2.278404951
+  }
+ },
+ "b200/wan5b-704": {
+  "window_s": 9.6621,
+  "gpu_busy_s": 8.9875,
+  "gpu_busy_pct": 93.02,
+  "device_time_s": 9.0033,
+  "idle_attribution_s": {
+   "host_api:cuMemAllocAsync": 0.6247,
+   "host_cpu": 0.0429,
+   "launch_latency": 0.0055,
+   "host_sync:cuStreamSynchronize": 0.0009,
+   "host_api:cuKernelSetAttribute": 0.0007,
+   "host_api:cuLaunchKernel": 0.0,
+   "host_api:cudaLaunchKernel_v7000": 0.0,
+   "host_api:cuMemFreeAsync": 0.0
+  },
+  "category_s": {
+   "layout_copy": 3.3471,
+   "vae_conv": 2.3326,
+   "cast_quant": 1.4242,
+   "norm_elementwise": 0.9852,
+   "attention": 0.6481,
+   "gemm": 0.2413,
+   "copies_memset": 0.0249
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 2.0,
+    "device_s": 1.965,
+    "busy_pct": 98.3,
+    "category_s": {
+     "cast_quant": 0.692,
+     "attention": 0.647,
+     "norm_elementwise": 0.298,
+     "gemm": 0.214,
+     "layout_copy": 0.108,
+     "copies_memset": 0.005,
+     "vae_conv": 0.001
+    },
+    "top": [
+     [
+      "fa_dc100_fwd_d128",
+      0.647
+     ],
+     [
+      "quant_linear_epilogue",
+      0.434
+     ],
+     [
+      "mxfp8_quantize",
+      0.258
+     ],
+     [
+      "nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT",
+      0.213
+     ],
+     [
+      "wan_qk_norm_rope16",
+      0.127
+     ],
+     [
+      "wan_res_ln",
+      0.099
+     ],
+     [
+      "mx_merge_heads",
+      0.09
+     ],
+     [
+      "wan_res_gate",
+      0.043
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 2.0,
+    "wall_s": 7.75,
+    "device_s": 7.038,
+    "busy_pct": 90.8,
+    "category_s": {
+     "layout_copy": 3.239,
+     "vae_conv": 2.332,
+     "cast_quant": 0.732,
+     "norm_elementwise": 0.687,
+     "gemm": 0.027,
+     "copies_memset": 0.02,
+     "attention": 0.001
+    },
+    "top": [
+     [
+      "gather_nd",
+      1.755
+     ],
+     [
+      "block_copy",
+      1.468
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+      0.673
+     ],
+     [
+      "cast_f32_bf16",
+      0.491
+     ],
+     [
+      "add_bias_inplace",
+      0.475
+     ],
+     [
+      "rms_norm_channels",
+      0.423
+     ],
+     [
+      "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+      0.282
+     ],
+     [
+      "cast_bf16_f32_bias_act",
+      0.239
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 692.8,
+   "denoise_gemm_s": 0.214,
+   "dit_gemm_tflops": 3237,
+   "fp8_gemm_s": 0.215,
+   "fp8_tflops": 3229,
+   "fp8_pct_peak": 71.7
+  },
+  "library_host_ranges": [],
+  "run_s": 10.011176347,
+  "stage_durations": {
+   "denoise": 2.00451465,
+   "encode": 0.423724053,
+   "text": 0.001637042,
+   "video_decode": 7.69579122
+  }
+ },
+ "b200/sfwan": {
+  "window_s": 9.9999,
+  "gpu_busy_s": 9.5735,
+  "gpu_busy_pct": 95.74,
+  "device_time_s": 9.5762,
+  "idle_attribution_s": {
+   "host_api:cuGraphInstantiateWithFlags": 0.1438,
+   "host_sync:cuStreamSynchronize": 0.1224,
+   "launch_latency": 0.115,
+   "host_cpu": 0.0312,
+   "host_api:cuMemAllocAsync": 0.0106,
+   "host_api:cuMemGetInfo_v2": 0.0021,
+   "host_api:cuMemcpyDtoHAsync_v2": 0.0011,
+   "host_api:cuMemFreeAsync": 0.0001,
+   "host_api:cuMemcpyHtoDAsync_v2": 0.0,
+   "host_api:cuLaunchKernel": 0.0
+  },
+  "category_s": {
+   "attention": 3.6108,
+   "cast_quant": 2.7254,
+   "norm_elementwise": 1.3411,
+   "layout_copy": 1.025,
+   "gemm": 0.5527,
+   "vae_conv": 0.2397,
+   "copies_memset": 0.0814
+  },
+  "stages": {
+   "steady": {
+    "t0_s": 0.0,
+    "wall_s": 10.0,
+    "device_s": 9.576,
+    "busy_pct": 95.8,
+    "category_s": {
+     "attention": 3.611,
+     "cast_quant": 2.725,
+     "norm_elementwise": 1.341,
+     "layout_copy": 1.025,
+     "gemm": 0.553,
+     "vae_conv": 0.24,
+     "copies_memset": 0.081
+    },
+    "top": [
+     [
+      "fa_dc100_fwd_d128",
+      3.611
+     ],
+     [
+      "quant_linear_epilogue",
+      1.609
+     ],
+     [
+      "mxfp8_quantize",
+      1.101
+     ],
+     [
+      "mx_block_copy",
+      0.558
+     ],
+     [
+      "wan_qk_norm_rope16",
+      0.491
+     ],
+     [
+      "wan_res_ln",
+      0.406
+     ],
+     [
+      "mx_merge_heads",
+      0.31
+     ],
+     [
+      "nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_Avec32UE8M0_Bvec32UE8M0_TNT",
+      0.247
+     ]
+    ]
+   }
+  },
+  "analytic": {},
+  "library_host_ranges": [],
+  "run_s": null,
+  "stage_durations": null
+ },
+ "h100/h3t-768": {
+  "window_s": 27.7288,
+  "gpu_busy_s": 23.0524,
+  "gpu_busy_pct": 83.14,
+  "device_time_s": 23.216,
+  "idle_attribution_s": {
+   "host_cpu": 2.3442,
+   "host_sync:cuStreamSynchronize": 1.5142,
+   "host_api:cuMemHostAlloc": 0.4431,
+   "launch_latency": 0.3576,
+   "host_sync:cuEventSynchronize": 0.0127,
+   "host_api:cuMemAllocAsync": 0.0045,
+   "host_api:cuLaunchKernelEx": 0.0001,
+   "host_api:cuLaunchKernel": 0.0,
+   "host_api:cuCtxSetCurrent": 0.0,
+   "host_api:cudaEventRecord_v3020": 0.0
+  },
+  "category_s": {
+   "attention": 7.956,
+   "gemm": 6.8544,
+   "norm_elementwise": 3.1098,
+   "cast_quant": 2.3481,
+   "layout_copy": 1.7556,
+   "copies_memset": 1.1218,
+   "vae_conv": 0.0703
+  },
+  "stages": {
+   "pre (text / setup)": {
+    "t0_s": 0.0,
+    "wall_s": 5.0,
+    "device_s": 0.928,
+    "busy_pct": 18.6,
+    "category_s": {
+     "copies_memset": 0.905,
+     "gemm": 0.019,
+     "norm_elementwise": 0.002,
+     "layout_copy": 0.001,
+     "cast_quant": 0.001,
+     "attention": 0.0
+    },
+    "top": [
+     [
+      "memcpy HtoD",
+      0.905
+     ],
+     [
+      "nvjet_sm90_tst_128x32_64x10_4x1_v_bz_TNT",
+      0.009
+     ],
+     [
+      "nvjet_sm90_tst_128x32_64x10_4x1_v_bz_splitK_TNT",
+      0.005
+     ],
+     [
+      "nvjet_sm90_tst_64x32_64x16_4x1_v_bz_TNT",
+      0.002
+     ],
+     [
+      "nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT",
+      0.002
+     ],
+     [
+      "mx_gather_nd",
+      0.001
+     ],
+     [
+      "rms_norm_last",
+      0.001
+     ],
+     [
+      "nvjet_sm90_tst_64x32_64x16_4x1_v_bz_splitK_TNT",
+      0.001
+     ]
+    ]
+   },
+   "denoise": {
+    "t0_s": 5.0,
+    "wall_s": 17.75,
+    "device_s": 17.351,
+    "busy_pct": 97.8,
+    "category_s": {
+     "attention": 7.16,
+     "gemm": 4.644,
+     "norm_elementwise": 2.356,
+     "cast_quant": 2.324,
+     "layout_copy": 0.849,
+     "copies_memset": 0.019
+    },
+    "top": [
+     [
+      "vsa_mma_attn_tma2",
+      5.076
+     ],
+     [
+      "nvjet_sm90_qqtst_128x160_128x5_2x1_v_bz_coopA_algo2_TNT",
+      3.872
+     ],
+     [
+      "w8a8_quantize",
+      1.476
+     ],
+     [
+      "h3_qk_norm_rope",
+      1.205
+     ],
+     [
+      "vsa_tile_qkv",
+      1.037
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_1x2_h_bz_coopA_TNT",
+      0.692
+     ],
+     [
+      "cast_f32_bf16",
+      0.652
+     ],
+     [
+      "mx_swiglu",
+      0.627
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 22.75,
+    "wall_s": 5.0,
+    "device_s": 4.937,
+    "busy_pct": 98.7,
+    "category_s": {
+     "gemm": 2.191,
+     "layout_copy": 0.906,
+     "attention": 0.796,
+     "norm_elementwise": 0.752,
+     "copies_memset": 0.198,
+     "vae_conv": 0.07,
+     "cast_quant": 0.024
+    },
+    "top": [
+     [
+      "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_TNT",
+      1.084
+     ],
+     [
+      "flash_mma_fwd2_d64",
+      0.793
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_2x1_v_bz_coopA_TNT",
+      0.678
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      0.62
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.448
+     ],
+     [
+      "nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN",
+      0.414
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.273
+     ],
+     [
+      "memcpy DtoH",
+      0.193
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 6398.3,
+   "denoise_gemm_s": 4.644,
+   "dit_gemm_tflops": 1378,
+   "fp8_gemm_s": 3.886,
+   "fp8_tflops": 1497,
+   "fp8_pct_peak": 75.6,
+   "bf16_gemm_s": 0.758,
+   "bf16_tflops": 767,
+   "bf16_pct_peak": 77.6
+  },
+  "library_host_ranges": [],
+  "run_s": 28.48004047,
+  "stage_durations": {
+   "audio_decode": 0.061023744,
+   "denoise": 17.562790609,
+   "encode": 0.6095896189999999,
+   "refine": 0.007229892,
+   "text": 5.428949021,
+   "video_decode": 4.897298967
+  }
+ },
+ "h100/h3m-768": {
+  "window_s": 22.8844,
+  "gpu_busy_s": 22.4474,
+  "gpu_busy_pct": 98.09,
+  "device_time_s": 22.6157,
+  "idle_attribution_s": {
+   "host_cpu": 0.3045,
+   "launch_latency": 0.072,
+   "host_sync:cuStreamSynchronize": 0.0547,
+   "host_api:cuMemAllocAsync": 0.0051,
+   "host_sync:cuEventSynchronize": 0.0007,
+   "host_api:cuLaunchKernel": 0.0
+  },
+  "category_s": {
+   "attention": 9.5754,
+   "gemm": 6.0931,
+   "norm_elementwise": 3.1471,
+   "layout_copy": 1.7752,
+   "cast_quant": 1.7316,
+   "copies_memset": 0.2227,
+   "vae_conv": 0.0705
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 18.0,
+    "device_s": 17.728,
+    "busy_pct": 98.5,
+    "category_s": {
+     "attention": 8.777,
+     "gemm": 3.903,
+     "norm_elementwise": 2.405,
+     "cast_quant": 1.72,
+     "layout_copy": 0.876,
+     "vae_conv": 0.029,
+     "copies_memset": 0.018
+    },
+    "top": [
+     [
+      "sol_mma_fwd_x4f",
+      4.436
+     ],
+     [
+      "fa_dc90_fwd_d128",
+      4.237
+     ],
+     [
+      "nvjet_sm90_qqtst_128x160_128x5_2x1_v_bz_coopA_algo2_TNT",
+      3.902
+     ],
+     [
+      "w8a8_quantize",
+      1.52
+     ],
+     [
+      "h3_qk_norm_rope",
+      1.252
+     ],
+     [
+      "mx_swiglu",
+      0.643
+     ],
+     [
+      "mx_block_copy",
+      0.402
+     ],
+     [
+      "mx_merge_heads",
+      0.377
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 18.0,
+    "wall_s": 5.0,
+    "device_s": 4.887,
+    "busy_pct": 97.7,
+    "category_s": {
+     "gemm": 2.19,
+     "layout_copy": 0.899,
+     "attention": 0.798,
+     "norm_elementwise": 0.742,
+     "copies_memset": 0.205,
+     "vae_conv": 0.042,
+     "cast_quant": 0.012
+    },
+    "top": [
+     [
+      "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_TNT",
+      1.09
+     ],
+     [
+      "flash_mma_fwd2_d64",
+      0.798
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_2x1_v_bz_coopA_TNT",
+      0.682
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      0.623
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.45
+     ],
+     [
+      "nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN",
+      0.417
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.274
+     ],
+     [
+      "memcpy DtoH",
+      0.2
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 5816.7,
+   "denoise_gemm_s": 3.903,
+   "dit_gemm_tflops": 1490,
+   "fp8_gemm_s": 3.902,
+   "fp8_tflops": 1491,
+   "fp8_pct_peak": 75.3,
+   "bf16_gemm_s": 0.001,
+   "bf16_tflops": 0,
+   "bf16_pct_peak": 0.0
+  },
+  "library_host_ranges": [],
+  "run_s": 23.650299027,
+  "stage_durations": {
+   "audio_decode": 0.062128225,
+   "denoise": 17.859610037,
+   "encode": 0.6237461999999999,
+   "refine": 0.007207055,
+   "text": 0.25970121,
+   "video_decode": 4.925067253
+  }
+ },
+ "h100/h3t-1080": {
+  "window_s": 57.2059,
+  "gpu_busy_s": 55.9888,
+  "gpu_busy_pct": 97.87,
+  "device_time_s": 56.1797,
+  "idle_attribution_s": {
+   "host_cpu": 0.9264,
+   "launch_latency": 0.1965,
+   "host_sync:cuStreamSynchronize": 0.0789,
+   "host_api:cuMemAllocAsync": 0.0139,
+   "host_sync:cuEventSynchronize": 0.001,
+   "host_api:cuKernelSetAttribute": 0.0005
+  },
+  "category_s": {
+   "attention": 25.5123,
+   "gemm": 14.394,
+   "norm_elementwise": 6.5924,
+   "cast_quant": 4.712,
+   "layout_copy": 4.465,
+   "copies_memset": 0.4345,
+   "vae_conv": 0.0695
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 46.25,
+    "device_s": 45.834,
+    "busy_pct": 99.1,
+    "category_s": {
+     "attention": 23.791,
+     "gemm": 9.754,
+     "norm_elementwise": 5.012,
+     "cast_quant": 4.686,
+     "layout_copy": 2.537,
+     "copies_memset": 0.031,
+     "vae_conv": 0.023
+    },
+    "top": [
+     [
+      "vsa_mma_attn_tma2",
+      19.245
+     ],
+     [
+      "nvjet_sm90_qqtst_128x160_128x5_1x2_h_bz_coopA_algo2_TNT",
+      3.194
+     ],
+     [
+      "nvjet_sm90_qqtst_144x128_128x6_1x2_h_bz_coopA_algo2_TNN",
+      3.133
+     ],
+     [
+      "w8a8_quantize",
+      2.971
+     ],
+     [
+      "h3_qk_norm_rope",
+      2.627
+     ],
+     [
+      "vsa_tile_qkv",
+      2.315
+     ],
+     [
+      "nvjet_sm90_qqtst_128x160_128x5_2x1_v_bz_coopA_algo2_TNT",
+      1.667
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_1x2_h_bz_coopA_TNT",
+      1.396
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 46.25,
+    "wall_s": 11.0,
+    "device_s": 10.346,
+    "busy_pct": 94.1,
+    "category_s": {
+     "gemm": 4.64,
+     "layout_copy": 1.929,
+     "attention": 1.721,
+     "norm_elementwise": 1.58,
+     "copies_memset": 0.404,
+     "vae_conv": 0.046,
+     "cast_quant": 0.026
+    },
+    "top": [
+     [
+      "nvjet_sm90_tst_256x160_64x4_1x2_h_bz_coopA_TNT",
+      2.142
+     ],
+     [
+      "flash_mma_fwd2_d64",
+      1.721
+     ],
+     [
+      "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT",
+      1.346
+     ],
+     [
+      "h3v_qkv_heads_bf16",
+      1.337
+     ],
+     [
+      "h3v_swiglu_bf16",
+      0.965
+     ],
+     [
+      "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_TNT",
+      0.824
+     ],
+     [
+      "h3v_residual_norm_bf16",
+      0.578
+     ],
+     [
+      "memcpy DtoH",
+      0.394
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 12872.6,
+   "denoise_gemm_s": 9.754,
+   "dit_gemm_tflops": 1320,
+   "fp8_gemm_s": 8.047,
+   "fp8_tflops": 1454,
+   "fp8_pct_peak": 73.5,
+   "bf16_gemm_s": 1.707,
+   "bf16_tflops": 686,
+   "bf16_pct_peak": 69.3
+  },
+  "library_host_ranges": [],
+  "run_s": 58.555347075,
+  "stage_durations": {
+   "audio_decode": 0.060113854,
+   "denoise": 46.014761482,
+   "encode": 1.1576200610000003,
+   "refine": 0.00072719,
+   "text": 0.284003003,
+   "video_decode": 11.090551979
+  }
+ },
+ "h100/ltx-1080": {
+  "window_s": 25.5167,
+  "gpu_busy_s": 18.5844,
+  "gpu_busy_pct": 72.83,
+  "device_time_s": 18.629,
+  "idle_attribution_s": {
+   "host_cpu": 6.4799,
+   "launch_latency": 0.234,
+   "host_sync:cuStreamSynchronize": 0.1034,
+   "host_sync:cuEventSynchronize": 0.0907,
+   "host_api:cuMemAllocAsync": 0.0239,
+   "host_api:cuKernelSetAttribute": 0.0001,
+   "host_api:cuMemFreeAsync": 0.0001,
+   "host_api:cuMemcpyDtoHAsync_v2": 0.0001,
+   "host_api:cuKernelGetAttribute": 0.0,
+   "host_api:cuMemcpyHtoDAsync_v2": 0.0
+  },
+  "category_s": {
+   "gemm": 6.3917,
+   "attention": 4.0883,
+   "norm_elementwise": 3.3931,
+   "vae_conv": 2.518,
+   "copies_memset": 1.9773,
+   "layout_copy": 0.1885,
+   "cast_quant": 0.0722
+  },
+  "stages": {
+   "decode": {
+    "t0_s": 21.75,
+    "wall_s": 3.75,
+    "device_s": 2.966,
+    "busy_pct": 79.1,
+    "category_s": {
+     "vae_conv": 2.423,
+     "copies_memset": 0.46,
+     "layout_copy": 0.045,
+     "norm_elementwise": 0.026,
+     "cast_quant": 0.012
+    },
+    "top": [
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128x64_warpgroupsize2x1",
+      1.265
+     ],
+     [
+      "ltxv_norm_silu",
+      0.538
+     ],
+     [
+      "memcpy DtoH",
+      0.456
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize64x128x64_warpgroupsize1x1x",
+      0.359
+     ],
+     [
+      "ltxv_d2s_bias",
+      0.139
+     ],
+     [
+      "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage4_warpsize4x",
+      0.055
+     ],
+     [
+      "block_copy",
+      0.034
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_warpgroupsize1x1",
+      0.02
+     ]
+    ]
+   },
+   "stage 1": {
+    "t0_s": 0.0,
+    "wall_s": 6.5,
+    "device_s": 6.14,
+    "busy_pct": 94.5,
+    "category_s": {
+     "gemm": 2.691,
+     "norm_elementwise": 1.383,
+     "attention": 1.132,
+     "copies_memset": 0.846,
+     "layout_copy": 0.049,
+     "cast_quant": 0.039
+    },
+    "top": [
+     [
+      "fa_dc90_fwd_d128",
+      1.026
+     ],
+     [
+      "nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_bias_TNN",
+      0.994
+     ],
+     [
+      "memcpy HtoD",
+      0.842
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_1x2_h_bz_coopA_TNT",
+      0.614
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_2x1_v_bz_coopA_TNT",
+      0.607
+     ],
+     [
+      "fvf_ltx_qk_norm_rope",
+      0.431
+     ],
+     [
+      "fvf_ltx_res_norm_mod",
+      0.429
+     ],
+     [
+      "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_bias_TNT",
+      0.284
+     ]
+    ]
+   },
+   "stage 1 -> 2 (upsample, host)": {
+    "t0_s": 6.5,
+    "wall_s": 6.0,
+    "device_s": 0.477,
+    "busy_pct": 8.0,
+    "category_s": {
+     "copies_memset": 0.369,
+     "vae_conv": 0.04,
+     "attention": 0.035,
+     "layout_copy": 0.014,
+     "norm_elementwise": 0.008,
+     "cast_quant": 0.006,
+     "gemm": 0.005
+    },
+    "top": [
+     [
+      "memcpy HtoD",
+      0.369
+     ],
+     [
+      "fa_dc90_fwd_d128",
+      0.035
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128x64_warpgroupsize2x1",
+      0.028
+     ],
+     [
+      "pad_axis",
+      0.011
+     ],
+     [
+      "nvjet_sm90_tst_256x144_64x4_1x2_h_bz_coopA_bias_TNT",
+      0.005
+     ],
+     [
+      "cast_f32_bf16",
+      0.004
+     ],
+     [
+      "group_norm_apply",
+      0.004
+     ],
+     [
+      "group_norm_stats",
+      0.003
+     ]
+    ]
+   },
+   "stage 2": {
+    "t0_s": 12.5,
+    "wall_s": 9.25,
+    "device_s": 9.046,
+    "busy_pct": 97.8,
+    "category_s": {
+     "gemm": 3.695,
+     "attention": 2.921,
+     "norm_elementwise": 1.976,
+     "copies_memset": 0.303,
+     "layout_copy": 0.08,
+     "vae_conv": 0.055,
+     "cast_quant": 0.015
+    },
+    "top": [
+     [
+      "sol_mma_fwd_x4f",
+      2.433
+     ],
+     [
+      "nvjet_sm90_tst_256x144_64x4_1x2_h_bz_coopA_bias_TNT",
+      1.825
+     ],
+     [
+      "nvjet_sm90_tst_256x160_64x4_2x1_v_bz_coopA_TNT",
+      1.778
+     ],
+     [
+      "fvf_ltx_res_norm_mod",
+      0.62
+     ],
+     [
+      "fvf_ltx_qk_norm_rope",
+      0.603
+     ],
+     [
+      "mx_unary",
+      0.425
+     ],
+     [
+      "memcpy HtoD",
+      0.301
+     ],
+     [
+      "fa_dc90_fwd_d128",
+      0.276
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 4682.1,
+   "denoise_gemm_s": 6.386,
+   "dit_gemm_tflops": 733,
+   "bf16_pct_peak": 74.1
+  },
+  "library_host_ranges": [],
+  "run_s": 28.163287779,
+  "stage_durations": {
+   "audio_decode": 0.183857463,
+   "denoise": 22.700039679,
+   "encode": 1.3660512630000001,
+   "stage1": 7.713567854,
+   "stage2": 14.439251317,
+   "text": 0.058697253,
+   "upsample": 0.547220508,
+   "video_decode": 3.933518999
+  }
+ },
+ "h100/wan5b-704": {
+  "window_s": 12.3021,
+  "gpu_busy_s": 12.2529,
+  "gpu_busy_pct": 99.6,
+  "device_time_s": 12.2912,
+  "idle_attribution_s": {
+   "launch_latency": 0.0253,
+   "host_cpu": 0.022,
+   "host_api:cuKernelSetAttribute": 0.0012,
+   "host_sync:cuStreamSynchronize": 0.0008,
+   "host_api:cuLaunchKernel": 0.0
+  },
+  "category_s": {
+   "vae_conv": 3.9291,
+   "layout_copy": 3.9097,
+   "norm_elementwise": 1.3319,
+   "attention": 1.2763,
+   "gemm": 0.937,
+   "cast_quant": 0.8452,
+   "copies_memset": 0.062
+  },
+  "stages": {
+   "denoise": {
+    "t0_s": 0.0,
+    "wall_s": 2.75,
+    "device_s": 2.733,
+    "busy_pct": 99.4,
+    "category_s": {
+     "attention": 1.231,
+     "gemm": 0.847,
+     "norm_elementwise": 0.513,
+     "layout_copy": 0.128,
+     "copies_memset": 0.009,
+     "vae_conv": 0.003,
+     "cast_quant": 0.002
+    },
+    "top": [
+     [
+      "fa_dc90_fwd_d128",
+      1.231
+     ],
+     [
+      "nvjet_sm90_tst_192x192_64x4_1x2_h_bz_coopB_bias_TNN",
+      0.419
+     ],
+     [
+      "nvjet_sm90_tst_192x208_64x4_1x2_h_bz_coopB_bias_TNT",
+      0.259
+     ],
+     [
+      "nvjet_sm90_tst_192x208_64x4_2x1_v_bz_coopB_bias_TNT",
+      0.167
+     ],
+     [
+      "mx_unary",
+      0.161
+     ],
+     [
+      "wan_qk_norm_rope16",
+      0.149
+     ],
+     [
+      "wan_res_ln",
+      0.12
+     ],
+     [
+      "mx_merge_heads",
+      0.106
+     ]
+    ]
+   },
+   "decode": {
+    "t0_s": 2.75,
+    "wall_s": 9.75,
+    "device_s": 9.558,
+    "busy_pct": 98.0,
+    "category_s": {
+     "vae_conv": 3.926,
+     "layout_copy": 3.782,
+     "cast_quant": 0.843,
+     "norm_elementwise": 0.819,
+     "gemm": 0.09,
+     "copies_memset": 0.053,
+     "attention": 0.046
+    },
+    "top": [
+     [
+      "gather_nd",
+      2.077
+     ],
+     [
+      "block_copy",
+      1.68
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128x64_warpgroupsize2x1",
+      1.552
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_f32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize256x128x32_warpgroupsize2x1x1",
+      0.57
+     ],
+     [
+      "cast_f32_bf16",
+      0.56
+     ],
+     [
+      "add_bias_inplace",
+      0.528
+     ],
+     [
+      "rms_norm_channels",
+      0.52
+     ],
+     [
+      "sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_warpgroupsize1x1",
+      0.456
+     ]
+    ]
+   }
+  },
+  "analytic": {
+   "dit_linear_tflop": 692.8,
+   "denoise_gemm_s": 0.847,
+   "dit_gemm_tflops": 818,
+   "bf16_pct_peak": 82.7
+  },
+  "library_host_ranges": [],
+  "run_s": 12.827710945,
+  "stage_durations": {
+   "denoise": 2.85374885,
+   "encode": 0.7756426490000001,
+   "text": 0.002805784,
+   "video_decode": 9.520200789
+  }
+ },
+ "h100/sfwan": {
+  "window_s": 9.9992,
+  "gpu_busy_s": 9.6669,
+  "gpu_busy_pct": 96.68,
+  "device_time_s": 9.6669,
+  "idle_attribution_s": {
+   "host_sync:cuStreamSynchronize": 0.1127,
+   "launch_latency": 0.1065,
+   "host_api:cuGraphInstantiateWithFlags": 0.074,
+   "host_cpu": 0.0366,
+   "host_api:cuMemcpyDtoHAsync_v2": 0.0021,
+   "host_api:cuMemAllocAsync": 0.0003,
+   "host_api:cuLibraryLoadData": 0.0001,
+   "host_api:cuMemFreeAsync": 0.0
+  },
+  "category_s": {
+   "attention": 4.9707,
+   "norm_elementwise": 1.8125,
+   "gemm": 1.5278,
+   "layout_copy": 0.8705,
+   "vae_conv": 0.3607,
+   "copies_memset": 0.0721,
+   "cast_quant": 0.0525
+  },
+  "stages": {
+   "steady": {
+    "t0_s": 0.0,
+    "wall_s": 10.0,
+    "device_s": 9.667,
+    "busy_pct": 96.7,
+    "category_s": {
+     "attention": 4.971,
+     "norm_elementwise": 1.813,
+     "gemm": 1.528,
+     "layout_copy": 0.871,
+     "vae_conv": 0.361,
+     "copies_memset": 0.072,
+     "cast_quant": 0.053
+    },
+    "top": [
+     [
+      "fa_dc90_fwd_d128",
+      4.971
+     ],
+     [
+      "nvjet_sm90_tst_192x144_64x5_2x1_v_bz_coopB_bias_TNT",
+      0.723
+     ],
+     [
+      "mx_unary",
+      0.544
+     ],
+     [
+      "nvjet_sm90_tst_192x192_64x4_1x1_h_bz_coopB_bias_TNN",
+      0.521
+     ],
+     [
+      "wan_qk_norm_rope16",
+      0.462
+     ],
+     [
+      "mx_block_copy",
+      0.441
+     ],
+     [
+      "wan_res_ln",
+      0.386
+     ],
+     [
+      "mx_merge_heads",
+      0.283
+     ]
+    ]
+   }
+  },
+  "analytic": {},
+  "library_host_ranges": [],
+  "run_s": null,
+  "stage_durations": null
+ }
+}

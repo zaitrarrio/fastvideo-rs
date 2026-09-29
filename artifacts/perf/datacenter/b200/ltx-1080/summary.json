@@ -1,0 +1,659 @@
+{
+ "label": "ltx-1080",
+ "gpu": "NVIDIA B200",
+ "job": {
+  "label": "ltx-1080",
+  "i": 0,
+  "ok": true,
+  "wall_s": 19.66,
+  "id": "fvjob_1d6ab28277074a34af648c4be6fcc33a",
+  "model": "ltx25-distill-sol",
+  "status": "succeeded",
+  "width": 1920,
+  "height": 1088,
+  "num_frames": 145,
+  "fps": 24,
+  "error": null,
+  "metrics": {
+   "build_rtf": 2.600483452137931,
+   "inference_s": 15.711254190000002,
+   "peak_memory_mb": 44559.22153377533,
+   "queue_s": 0.102024006,
+   "run_s": 18.931009117,
+   "stage_durations": {
+    "audio_decode": 0.126599788,
+    "denoise": 15.711254190000002,
+    "encode": 0.8128497170000001,
+    "stage1": 4.903723365,
+    "stage2": 10.433205471,
+    "text": 0.035503252,
+    "upsample": 0.374325354,
+    "video_decode": 2.278404951
+   }
+  },
+  "tier": "turbo",
+  "recipe": "ltx25-distill-two-stage-sol",
+  "created_at": "2026-09-29T10:43:53.735708003Z",
+  "started_at": "2026-09-29T10:43:53.837732009Z",
+  "completed_at": "2026-09-29T10:44:12.768741126Z"
+ },
+ "window_s": 17.2284,
+ "gpu_busy_s": 12.0044,
+ "gpu_busy_pct": 69.68,
+ "idle_s": 5.224,
+ "device_time_s": 12.0519,
+ "kernels": 88943,
+ "kernels_under_10us": 47889,
+ "kernel_time_in_graphs_pct": 0.0,
+ "host_launch_calls": 88943,
+ "idle_attribution_s": {
+  "host_cpu": 5.0234,
+  "host_sync:cuEventSynchronize": 0.0819,
+  "launch_latency": 0.0587,
+  "host_sync:cuStreamSynchronize": 0.0526,
+  "host_api:cuMemAllocAsync": 0.0067,
+  "host_api:cuKernelSetAttribute": 0.0003,
+  "host_api:cuMemFreeAsync": 0.0002,
+  "host_api:cuLaunchKernel": 0.0002,
+  "host_api:cuMemcpyDtoHAsync_v2": 0.0001,
+  "host_api:cuLaunchKernelEx": 0.0,
+  "host_api:cuKernelGetAttribute": 0.0
+ },
+ "idle_attribution_n": {
+  "launch_latency": 66963,
+  "host_cpu": 1410,
+  "host_api:cuMemAllocAsync": 116,
+  "host_api:cuMemFreeAsync": 16,
+  "host_sync:cuEventSynchronize": 14,
+  "host_sync:cuStreamSynchronize": 12,
+  "host_api:cuLaunchKernel": 3,
+  "host_api:cuKernelSetAttribute": 2,
+  "host_api:cuKernelGetAttribute": 2,
+  "host_api:cuLaunchKernelEx": 1,
+  "host_api:cuMemcpyDtoHAsync_v2": 1
+ },
+ "gap_histogram": {
+  "<5us": {
+   "n": 65747,
+   "s": 0.0286
+  },
+  "5-50us": {
+   "n": 2542,
+   "s": 0.0266
+  },
+  "50-500us": {
+   "n": 148,
+   "s": 0.0185
+  },
+  "0.5-5ms": {
+   "n": 56,
+   "s": 0.0975
+  },
+  "5-50ms": {
+   "n": 41,
+   "s": 0.4221
+  },
+  ">50ms": {
+   "n": 6,
+   "s": 4.6307
+  }
+ },
+ "largest_gaps": [
+  {
+   "gap_ms": 3642.025,
+   "at_s": 4.405,
+   "cause": "host_cpu",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 411.89,
+   "at_s": 8.12,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 226.635,
+   "at_s": 15.611,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 167.939,
+   "at_s": 16.54,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 101.627,
+   "at_s": 0.019,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 80.555,
+   "at_s": 17.128,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "block_copy"
+  },
+  {
+   "gap_ms": 47.991,
+   "at_s": 4.356,
+   "cause": "host_sync:cuEventSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 42.198,
+   "at_s": 14.892,
+   "cause": "host_cpu",
+   "before": "memcpy DtoH",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 34.081,
+   "at_s": 8.57,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 21.123,
+   "at_s": 4.285,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "memcpy HtoD",
+   "after": "gather_nd"
+  },
+  {
+   "gap_ms": 18.305,
+   "at_s": 0.132,
+   "cause": "host_sync:cuEventSynchronize",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 15.753,
+   "at_s": 3.984,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 14.808,
+   "at_s": 14.838,
+   "cause": "host_sync:cuStreamSynchronize",
+   "before": "cast_bf16_f32_bias_act",
+   "after": "bcast_binary"
+  },
+  {
+   "gap_ms": 12.515,
+   "at_s": 8.071,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  },
+  {
+   "gap_ms": 12.343,
+   "at_s": 8.107,
+   "cause": "host_cpu",
+   "before": "memcpy HtoD",
+   "after": "memcpy HtoD"
+  }
+ ],
+ "category_s": {
+  "attention": 3.1093,
+  "gemm": 3.0907,
+  "norm_elementwise": 3.0904,
+  "vae_conv": 1.4857,
+  "copies_memset": 1.0434,
+  "layout_copy": 0.1665,
+  "cast_quant": 0.0659
+ },
+ "category_pct": {
+  "attention": 25.8,
+  "gemm": 25.64,
+  "norm_elementwise": 25.64,
+  "vae_conv": 12.33,
+  "copies_memset": 8.66,
+  "layout_copy": 1.38,
+  "cast_quant": 0.55
+ },
+ "memcpy": {
+  "memcpy HtoD": {
+   "n": 1175,
+   "ms": 733.09,
+   "MB": 17731.2,
+   "GBps": 24.19
+  },
+  "memset": {
+   "n": 1090,
+   "ms": 1.325,
+   "MB": 1.0,
+   "GBps": 0.78
+  },
+  "memcpy DtoH": {
+   "n": 23,
+   "ms": 309.015,
+   "MB": 916.0,
+   "GBps": 2.96
+  }
+ },
+ "cuda_api_top": [
+  {
+   "api": "cuMemcpyHtoDAsync_v2",
+   "n": 1175,
+   "s": 8.9821
+  },
+  {
+   "api": "cuLaunchKernel",
+   "n": 63487,
+   "s": 0.7183
+  },
+  {
+   "api": "cuLaunchKernelEx",
+   "n": 22262,
+   "s": 0.4036
+  },
+  {
+   "api": "cuMemcpyDtoHAsync_v2",
+   "n": 23,
+   "s": 0.3772
+  },
+  {
+   "api": "cuEventSynchronize",
+   "n": 31,
+   "s": 0.3721
+  },
+  {
+   "api": "cuMemAllocAsync",
+   "n": 92207,
+   "s": 0.1126
+  },
+  {
+   "api": "cuMemsetD8Async",
+   "n": 1084,
+   "s": 0.0908
+  },
+  {
+   "api": "cuStreamSynchronize",
+   "n": 22,
+   "s": 0.0717
+  },
+  {
+   "api": "cuMemFreeAsync",
+   "n": 92203,
+   "s": 0.0574
+  },
+  {
+   "api": "cuMemPoolTrimTo",
+   "n": 4,
+   "s": 0.0266
+  },
+  {
+   "api": "cuKernelSetAttribute",
+   "n": 14,
+   "s": 0.0162
+  },
+  {
+   "api": "cuMemHostAlloc",
+   "n": 3,
+   "s": 0.0114
+  },
+  {
+   "api": "cudaStreamIsCapturing_v10000",
+   "n": 36526,
+   "s": 0.009
+  },
+  {
+   "api": "cudaLaunchKernelExC_v11060",
+   "n": 2130,
+   "s": 0.0073
+  },
+  {
+   "api": "cuKernelGetAttribute",
+   "n": 36524,
+   "s": 0.0054
+  }
+ ],
+ "library_host_ranges": [],
+ "segments": [
+  {
+   "t0_s": 0.0,
+   "dur_s": 0.019,
+   "busy_pct": 45.7,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 0.121,
+   "dur_s": 4.164,
+   "busy_pct": 92.4,
+   "n": 55456,
+   "mix": {
+    "norm_elementwise": 33.4,
+    "gemm": 33.1,
+    "attention": 18.6,
+    "copies_memset": 12.8
+   },
+   "top": "fa_dc100_fwd_d128"
+  },
+  {
+   "t0_s": 4.307,
+   "dur_s": 0.05,
+   "busy_pct": 90.9,
+   "n": 301,
+   "mix": {
+    "vae_conv": 52.6,
+    "layout_copy": 26.7,
+    "cast_quant": 10.8,
+    "norm_elementwise": 9.8
+   },
+   "top": "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_\u2026"
+  },
+  {
+   "t0_s": 4.404,
+   "dur_s": 0.001,
+   "busy_pct": 76.6,
+   "n": 11,
+   "mix": {
+    "copies_memset": 80.0,
+    "norm_elementwise": 7.7,
+    "cast_quant": 6.8,
+    "layout_copy": 5.5
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 8.047,
+   "dur_s": 0.073,
+   "busy_pct": 65.9,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 8.532,
+   "dur_s": 0.038,
+   "busy_pct": 63.7,
+   "n": 4,
+   "mix": {
+    "copies_memset": 100.0
+   },
+   "top": "memcpy HtoD"
+  },
+  {
+   "t0_s": 8.604,
+   "dur_s": 6.288,
+   "busy_pct": 99.2,
+   "n": 22785,
+   "mix": {
+    "attention": 38.3,
+    "gemm": 29.1,
+    "norm_elementwise": 28.4,
+    "copies_memset": 2.5
+   },
+   "top": "sol_mma_fwd_x4f"
+  },
+  {
+   "t0_s": 14.934,
+   "dur_s": 0.677,
+   "busy_pct": 97.9,
+   "n": 4794,
+   "mix": {
+    "vae_conv": 82.8,
+    "copies_memset": 13.2,
+    "layout_copy": 2.5,
+    "norm_elementwise": 1.2
+   },
+   "top": "ltxv_norm_silu"
+  },
+  {
+   "t0_s": 15.838,
+   "dur_s": 0.703,
+   "busy_pct": 98.9,
+   "n": 4672,
+   "mix": {
+    "vae_conv": 81.7,
+    "copies_memset": 14.4,
+    "layout_copy": 2.1,
+    "norm_elementwise": 1.2
+   },
+   "top": "ltxv_norm_silu"
+  },
+  {
+   "t0_s": 16.708,
+   "dur_s": 0.42,
+   "busy_pct": 98.0,
+   "n": 3103,
+   "mix": {
+    "vae_conv": 69.7,
+    "copies_memset": 24.0,
+    "layout_copy": 3.4,
+    "norm_elementwise": 1.9
+   },
+   "top": "memcpy DtoH"
+  },
+  {
+   "t0_s": 17.209,
+   "dur_s": 0.02,
+   "busy_pct": 99.0,
+   "n": 97,
+   "mix": {
+    "copies_memset": 86.8,
+    "layout_copy": 7.3,
+    "norm_elementwise": 4.1,
+    "cast_quant": 1.8
+   },
+   "top": "memcpy DtoH"
+  }
+ ],
+ "stages": {
+  "decode": {
+   "t0_s": 15.0,
+   "wall_s": 2.25,
+   "device_s": 1.773,
+   "busy_pct": 78.8,
+   "category_s": {
+    "vae_conv": 1.392,
+    "copies_memset": 0.31,
+    "layout_copy": 0.039,
+    "norm_elementwise": 0.022,
+    "cast_quant": 0.011
+   },
+   "top": [
+    [
+     "ltxv_norm_silu",
+     0.478
+    ],
+    [
+     "memcpy DtoH",
+     0.309
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+     0.263
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+     0.219
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+     0.158
+    ],
+    [
+     "ltxv_d2s_bias",
+     0.128
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+     0.109
+    ],
+    [
+     "block_copy",
+     0.03
+    ]
+   ]
+  },
+  "stage 1": {
+   "t0_s": 0.0,
+   "wall_s": 4.0,
+   "device_s": 3.785,
+   "busy_pct": 94.6,
+   "category_s": {
+    "norm_elementwise": 1.285,
+    "gemm": 1.276,
+    "attention": 0.716,
+    "copies_memset": 0.425,
+    "layout_copy": 0.046,
+    "cast_quant": 0.036
+   },
+   "top": [
+    [
+     "fa_dc100_fwd_d128",
+     0.616
+    ],
+    [
+     "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_bias_TNT",
+     0.479
+    ],
+    [
+     "memcpy HtoD",
+     0.425
+    ],
+    [
+     "fvf_ltx_qk_norm_rope",
+     0.411
+    ],
+    [
+     "fvf_ltx_res_norm_mod",
+     0.403
+    ],
+    [
+     "nvjet_sm100_tst_256x224_64x4_2x1_2cta_v_bz_TNT",
+     0.299
+    ],
+    [
+     "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+     0.288
+    ],
+    [
+     "mx_unary",
+     0.251
+    ]
+   ]
+  },
+  "stage 1 -> 2 (upsample, host)": {
+   "t0_s": 4.0,
+   "wall_s": 4.5,
+   "device_s": 0.172,
+   "busy_pct": 3.8,
+   "category_s": {
+    "copies_memset": 0.126,
+    "vae_conv": 0.024,
+    "layout_copy": 0.012,
+    "cast_quant": 0.005,
+    "norm_elementwise": 0.004
+   },
+   "top": [
+    [
+     "memcpy HtoD",
+     0.126
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_c",
+     0.01
+    ],
+    [
+     "pad_axis",
+     0.01
+    ],
+    [
+     "cast_f32_bf16",
+     0.004
+    ],
+    [
+     "group_norm_stats",
+     0.004
+    ],
+    [
+     "group_norm_apply",
+     0.003
+    ],
+    [
+     "cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_c",
+     0.003
+    ],
+    [
+     "gather_nd",
+     0.002
+    ]
+   ]
+  },
+  "stage 2": {
+   "t0_s": 8.5,
+   "wall_s": 6.5,
+   "device_s": 6.323,
+   "busy_pct": 97.3,
+   "category_s": {
+    "attention": 2.393,
+    "gemm": 1.814,
+    "norm_elementwise": 1.779,
+    "copies_memset": 0.182,
+    "vae_conv": 0.07,
+    "layout_copy": 0.07,
+    "cast_quant": 0.014
+   },
+   "top": [
+    [
+     "sol_mma_fwd_x4f",
+     2.048
+    ],
+    [
+     "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_bias_TNT",
+     0.866
+    ],
+    [
+     "fvf_ltx_res_norm_mod",
+     0.562
+    ],
+    [
+     "fvf_ltx_qk_norm_rope",
+     0.555
+    ],
+    [
+     "nvjet_sm100_tst_256x256_64x4_2x1_2cta_v_bz_TNT",
+     0.448
+    ],
+    [
+     "nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT",
+     0.446
+    ],
+    [
+     "mx_unary",
+     0.371
+    ],
+    [
+     "memcpy HtoD",
+     0.181
+    ]
+   ]
+  }
+ },
+ "analytic": {
+  "dit_linear_tflop": 4682.1,
+  "denoise_gemm_s": 3.09,
+  "dit_gemm_tflops": 1515,
+  "bf16_pct_peak": 67.3
+ }
+}
