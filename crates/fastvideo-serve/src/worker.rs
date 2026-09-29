@@ -373,14 +373,17 @@ fn cleanup_inputs(st: &Arc<WorkerState>, id: JobId, env: &Envelope) {
 }
 
 async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> Response {
-    take_envelope(&st, env, false).await
+    take_envelope(&st, env, false, None).await
 }
 
 /// Takes a dispatched job (the gateway's `POST /fv/v1/internal/jobs`, or a
 /// dispatcher push): 202 taken, 200 already held here, else the refusal.
 /// `takeover`: adopt even if another worker's heartbeat on the row is fresh
-/// (a dispatcher re-dispatch after it declared that worker lost).
-pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool) -> Response {
+/// (a dispatcher re-dispatch after it declared that worker lost). `lease`:
+/// the dispatcher's fencing token (docs/serve/gateway-cloudflare.md, phase
+/// 2): the job is held and started at once and its row written behind,
+/// every write conditional on the lease (`D1JobStore::adopt_leased`).
+pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool, lease: Option<u64>) -> Response {
     let id = env.job.id;
     if st.submitted.lock().unwrap_or_else(|p| p.into_inner()).contains(&id) {
         let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
@@ -413,9 +416,10 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool)
     // (fal `timings.dispatch` ends here, `timings.wait` starts).
     job.dispatched_at = Some(st.ctx.now());
     let t_adopt = std::time::Instant::now();
-    let adopted = match &st.d1 {
-        Some(d1) => d1.adopt_with(job, takeover).await,
-        None => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
+    let adopted = match (&st.d1, lease) {
+        (Some(d1), Some(l)) if l > 0 => d1.adopt_leased(job, l),
+        (Some(d1), _) => d1.adopt_with(job, takeover).await,
+        (None, _) => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
     };
     metrics::histogram!("fv_worker_adopt_seconds").record(t_adopt.elapsed().as_secs_f64());
     let job = match adopted {

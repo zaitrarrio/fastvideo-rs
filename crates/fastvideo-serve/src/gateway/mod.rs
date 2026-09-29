@@ -367,6 +367,7 @@ impl Gateway {
             input_url_ttl: Duration::from_secs(6 * 3600),
         });
         tracing::info!(pools = ?gw.pools.iter().map(|p| (p.id().to_owned(), p.cfg.kind)).collect::<Vec<_>>(), models = gw.catalog().table.len(), "gateway: pools configured");
+        edge::install(&gw);
         Ok(gw)
     }
 

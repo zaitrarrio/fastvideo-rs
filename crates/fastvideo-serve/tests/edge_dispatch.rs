@@ -72,6 +72,8 @@ mod native_do {
     }
 
     struct Inner {
+        /// Workers refused (as by a network partition) until then (ms).
+        blocked: HashMap<String, i64>,
         scheds: HashMap<String, Sched>,
         /// (pool, worker) → (connection nonce, sender).
         conns: HashMap<(String, String), (u64, mpsc::UnboundedSender<String>)>,
@@ -92,7 +94,7 @@ mod native_do {
         pub async fn start(token: &str, cfg: Cfg) -> (Self, String) {
             let (epoch, _) = watch::channel(0);
             let d = Self {
-                inner: Arc::new(Mutex::new(Inner { scheds: HashMap::new(), conns: HashMap::new(), next_conn: 0 })),
+                inner: Arc::new(Mutex::new(Inner { blocked: HashMap::new(), scheds: HashMap::new(), conns: HashMap::new(), next_conn: 0 })),
                 token: token.to_owned(),
                 cfg,
                 epoch,
@@ -153,6 +155,18 @@ mod native_do {
             *ver = format!("native-{}", v + 1);
         }
 
+        /// A network partition: `worker`'s socket drops and it cannot
+        /// reconnect for `for_ms`; the worker itself keeps running.
+        pub fn partition(&self, worker: &str, for_ms: i64) {
+            let mut g = self.inner.lock().unwrap();
+            let t = now();
+            g.blocked.insert(worker.to_owned(), t + for_ms);
+            g.conns.retain(|(_, w), _| w != worker);
+            for s in g.scheds.values_mut() {
+                s.disconnect(worker, t);
+            }
+        }
+
         fn authed(&self, h: &HeaderMap) -> bool {
             h.get(proto::TOKEN_HEADER).and_then(|v| v.to_str().ok()) == Some(self.token.as_str())
         }
@@ -169,6 +183,8 @@ mod native_do {
                 Out::Close { worker } => {
                     g.conns.remove(&(pool.to_owned(), worker));
                 }
+                // No spill here (only the Worker has an R2 bucket).
+                Out::PushSpilled { .. } => {}
             }
         }
         if let Some(s) = g.scheds.get_mut(pool) {
@@ -187,6 +203,9 @@ mod native_do {
         let Some(worker) = h.get(proto::WORKER_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned) else {
             return StatusCode::BAD_REQUEST.into_response();
         };
+        if d.inner.lock().unwrap().blocked.get(&worker).is_some_and(|t| *t > now()) {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         ws.on_upgrade(move |socket| run(d, pool, worker, socket))
     }
 
@@ -743,4 +762,114 @@ async fn queue_time_gateway_vs_durable_object() {
             println!("{path:<16} {label:<9} {qm:>8.3} {q50:>8.3} {qmx:>8.3} {dm:>9.3} {d50:>9.3} {dmx:>9.3} {sm:>9.3}");
         }
     }
+}
+
+/// Phase 2 fencing: a worker cut off from the dispatcher (a partition, the
+/// worker keeps running) loses its job to another worker after the grace
+/// period; when it comes back its copy is cancelled, and none of its writes
+/// replace the new holder's row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_partitioned_worker_is_fenced_out() {
+    init_log();
+    let d = Dispatcher::new().await;
+    let Some(native) = d.native.clone() else {
+        eprintln!("skipped: needs the native dispatcher (a partition is simulated there)");
+        return;
+    };
+    let sh = Shared::new(&d.token);
+    let pool = pool_id("fence");
+    let http = Http::new();
+    let a = worker(&sh, "fa", &pool, Some(&d.base), 150, 1).await;
+    let b = worker(&sh, "fb", &pool, Some(&d.base), 150, 1).await;
+    connected(&d, &http, &pool, 2).await;
+    let gw = gateway(&sh, &pool, DispatchMode::DurableObject, Some(&d.base), &[]).await;
+    let g = gw.base.clone();
+    available(&http, &g).await;
+    let id = http.submit(&g, "across a partition").await;
+    http.wait(&g, &id, |v| v["status"] == "running", Duration::from_secs(30)).await;
+    let holder = sh.job_row(&id)["worker"].as_str().unwrap().to_owned();
+    let (stale, survivor) = if holder == "worker-fa" { (&a, "worker-fb") } else { (&b, "worker-fa") };
+    // Cut the holder off for longer than the grace period (1.5 s here).
+    native.partition(&holder, 4_000);
+    let done = http.finished(&g, &id).await;
+    assert_eq!(done["status"], "succeeded", "{done}");
+    let r = sh.mock.sql("SELECT worker, lease FROM jobs WHERE external_id = ?", &[json!(id)]).unwrap().remove(0);
+    assert_eq!(r["worker"], survivor, "{r:?}");
+    assert_eq!(r["lease"].as_f64(), Some(2.0), "{r:?}");
+    // The stale holder is fenced: its own copy was stopped, not written.
+    let jid = sh.job(&id).id;
+    let t0 = Instant::now();
+    while !stale.app.d1.as_ref().unwrap().is_fenced(jid) {
+        assert!(t0.elapsed() < Duration::from_secs(20), "the stale holder was never fenced");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let r = sh.mock.sql("SELECT worker, status FROM jobs WHERE external_id = ?", &[json!(id)]).unwrap().remove(0);
+    assert_eq!((r["worker"].as_str(), r["status"].as_str()), (Some(survivor), Some("succeeded")), "{r:?}");
+    drop(gw);
+}
+
+/// Phase 2 restage: a worker that cannot fetch a job's input nacks 424;
+/// the gateway sends the job again with its inputs in the store, and it
+/// runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_424_restages_inputs_through_the_store() {
+    use fastvideo_dispatch_proto::{DoMsg, WorkerMsg};
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+    init_log();
+    let d = Dispatcher::new().await;
+    let sh = Shared::new(&d.token);
+    let pool = pool_id("rst");
+    let http = Http::new();
+    // A stand-in worker that answers every push with 424.
+    let url = format!("{}/pools/{pool}/connect", d.base.replacen("http", "ws", 1));
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut().insert("x-fv-internal-token", d.token.parse().unwrap());
+    req.headers_mut().insert("x-fv-worker-id", "flaky".parse().unwrap());
+    let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    let (mut sink, mut stream) = ws.split();
+    let hello = WorkerMsg::Hello(fastvideo_dispatch_proto::Hello { worker_id: "flaky".into(), pool: pool.clone(), capacity: 1, ..Default::default() });
+    sink.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+    connected(&d, &http, &pool, 1).await;
+    let gw = gateway(&sh, &pool, DispatchMode::DurableObject, Some(&d.base), &[]).await;
+    let g = gw.base.clone();
+    available(&http, &g).await;
+    let (s, v) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "a fox", "image_url": noise_png(64, 48)}))).await;
+    assert_eq!(s, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    // The push arrives inline; answer 424, then leave.
+    let first = loop {
+        let Some(Ok(Message::Text(t))) = stream.next().await else { panic!("socket closed") };
+        if let Ok(DoMsg::Job { job_id, attempt, envelope, .. }) = serde_json::from_str::<DoMsg>(t.as_str()) {
+            break (job_id, attempt, envelope);
+        }
+    };
+    assert!(first.2.to_string().contains("\"inline\""), "the first push carries the input inline");
+    let nack = WorkerMsg::Nack { job_id: first.0.clone(), attempt: first.1, retry: true, code: 424, message: "cannot fetch".into() };
+    sink.send(Message::text(serde_json::to_string(&nack).unwrap())).await.unwrap();
+    drop((sink, stream));
+    // A real worker joins; the gateway restages and the job runs there.
+    let w = worker(&sh, "rw", &pool, Some(&d.base), 5, 1).await;
+    let done = http.wait(&g, &id, |v| v["status"] == "succeeded", Duration::from_secs(60)).await;
+    assert_eq!(done["status"], "succeeded", "{done}");
+    let st = d.status(&http, &pool).await;
+    assert!(st.restage.is_empty() && st.failed.is_empty(), "{st:?}");
+    drop((gw, w));
+}
+
+/// A PNG data URI of noise.
+fn noise_png(w: u32, h: u32) -> String {
+    use base64::Engine as _;
+    let mut x: u32 = 0x9e37_79b9;
+    let img = image::RgbImage::from_fn(w, h, |_, _| {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        image::Rgb([x as u8, (x >> 8) as u8, (x >> 16) as u8])
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
 }

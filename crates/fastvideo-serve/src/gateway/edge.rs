@@ -13,20 +13,43 @@
 //!   (workers, load, caps and builds come from the workers' hellos). Worker
 //!   loss is the DO's (re-dispatch once, then fail): the reaper leaves these
 //!   rows alone, and jobs the DO failed are failed in D1 here.
+//! - phase 2: the job row of a job only DO pools serve is inserted behind
+//!   the dispatch ([`install`]); the worker starts at once and writes its
+//!   row behind too, fenced by the push's lease. A job a worker could not
+//!   fetch a client URL for comes back in the status (`restage`): its inputs
+//!   go through the store and the envelope is replaced on the DO.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fastvideo_dispatch_proto::{self as proto, EnqueueReq, EnqueueResp, PoolStatus};
 use fastvideo_protocol::{ApiError, JobId};
 
-use super::dispatch::{DispatchRow, Envelope, Placed};
+use super::dispatch::{DispatchRow, Envelope, InputRef, Placed};
 use super::tick::WorkerStatus;
 use super::{Gateway, Pool, WorkerBuild, WorkerView, TOKEN_HEADER};
 use crate::config::DispatchMode;
 
 /// `gw_dispatch.kind` of a job handed to a Durable Object.
 pub const KIND: &str = "durable-object";
+
+/// Restages in progress on this replica (job ids).
+static RESTAGING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Phase 2: job rows of jobs only Durable Object pools serve are inserted
+/// behind the dispatch (see the module docs).
+pub(crate) fn install(gw: &Arc<Gateway>) {
+    if !gw.pools.iter().any(Pool::is_edge) {
+        return;
+    }
+    let weak = Arc::downgrade(gw);
+    gw.jobs.set_insert_behind(Arc::new(move |job| {
+        let Some(gw) = weak.upgrade() else { return false };
+        let cat = gw.catalog();
+        cat.pools_of.get(&job.resolved.model).is_some_and(|ps| !ps.is_empty() && ps.iter().all(|i| gw.pools.get(*i).is_some_and(Pool::is_edge)))
+    }));
+}
 
 impl Pool {
     /// Jobs go through the pool's Durable Object.
@@ -53,6 +76,7 @@ impl Gateway {
             envelope: serde_json::to_value(env).map_err(|e| ApiError::internal(format!("encoding the envelope: {e}")))?,
             retries: pool.cfg.retries,
             model: Some(env.job.resolved.model.to_string()),
+            replace: false,
         };
         let t0 = Instant::now();
         let r = self.edge_req(reqwest::Method::POST, &format!("{base}{}", proto::enqueue_path(pool.id()))).timeout(timeout).json(&body).send().await;
@@ -143,11 +167,50 @@ impl Gateway {
             st.last_error = if st.available { None } else { Some("no worker is connected to the pool's Durable Object".into()) };
             st.workers = next;
         }
+        for id in &st_.restage {
+            self.edge_restage(p, id).await;
+        }
         // Failed in the last 10 min (older ones were handled by earlier ticks).
         let recent = st_.now_ms - 600_000;
         for f in st_.failed.iter().filter(|f| f.at_ms > recent) {
             self.edge_failed(p, f).await;
         }
+    }
+
+    /// A worker could not fetch a client URL: send the job again with its
+    /// inputs in the store (the envelope is replaced on the DO).
+    async fn edge_restage(&self, p: &Pool, job_id: &str) {
+        if !RESTAGING.lock().unwrap_or_else(|e| e.into_inner()).insert(job_id.to_owned()) {
+            return;
+        }
+        let r = async {
+            let id = job_id.parse::<JobId>().map_err(|_| "bad job id".to_owned())?;
+            let row = self.dispatch_row(id).await.ok_or("no dispatch row")?;
+            let job = fastvideo_protocol::JobStore::get(self.jobs.as_ref(), id).await.ok_or("no job row")?;
+            // Every input through the store (from this replica's staged files).
+            let bare: Vec<InputRef> = row.inputs.iter().map(|i| InputRef { path: i.path.clone(), kind: i.kind, bytes: i.bytes, ..InputRef::default() }).collect();
+            let inputs = self.revive_inputs(&bare).await.map_err(|e| e.message)?;
+            let env = Envelope { job, inputs, attempt: row.attempt, pool: Some(p.id().to_owned()) };
+            let body = EnqueueReq {
+                job_id: job_id.to_owned(),
+                envelope: serde_json::to_value(&env).map_err(|e| e.to_string())?,
+                retries: p.cfg.retries,
+                model: Some(env.job.resolved.model.to_string()),
+                replace: true,
+            };
+            let url = format!("{}{}", p.do_base(), proto::enqueue_path(p.id()));
+            let resp = self.edge_req(reqwest::Method::POST, &url).timeout(Duration::from_secs(30)).json(&body).send().await.map_err(|e| e.without_url().to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("dispatcher answered {}", resp.status()));
+            }
+            Ok::<usize, String>(env.inputs.len())
+        }
+        .await;
+        match r {
+            Ok(n) => tracing::info!(job = %job_id, pool = p.id(), inputs = n, "gateway: inputs restaged through the store for a worker that could not fetch them"),
+            Err(e) => tracing::warn!(job = %job_id, pool = p.id(), error = %e, "gateway: restaging a job's inputs failed (the next tick retries)"),
+        }
+        RESTAGING.lock().unwrap_or_else(|e| e.into_inner()).remove(job_id);
     }
 
     /// A job the Durable Object failed: fail its D1 row (idempotent: the

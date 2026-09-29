@@ -369,7 +369,7 @@ impl Gateway {
     /// Inputs of a `gw_dispatch` row for a re-dispatch: an input whose store
     /// copy was not made yet goes through the store now, from this replica's
     /// staged file (off the client's path).
-    async fn revive_inputs(&self, inputs: &[InputRef]) -> Result<Vec<InputRef>, ApiError> {
+    pub(crate) async fn revive_inputs(&self, inputs: &[InputRef]) -> Result<Vec<InputRef>, ApiError> {
         let mut out = inputs.to_vec();
         let idx: Vec<usize> = (0..out.len()).filter(|&i| out[i].via() == "none").collect();
         if !idx.is_empty() {
