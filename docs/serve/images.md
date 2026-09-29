@@ -215,10 +215,34 @@ come out larger), on top of the base image and the CUDA libraries we keep:
   (seed 1 → 1 089 835 B MP4, the same size as seed 1 on the old image),
   model load 47.6 s / 46.2 s (old image 47-58 s). NVENC: `h264_nvenc` present,
   encode not possible on H100 (no NVENC hardware, as before). The other CUDA
-  variants carry exactly the same base, CUDA and binary layers; they were not
-  run on a GPU here (the coordinator stopped GPU spend), so the H3 and LTX
-  code paths (cuDNN conv3d in the LTX upsampler, cuDNN SDPA on sm_12x) are
-  covered only by the soname checks above.
+  variants carry exactly the same base, CUDA and binary layers. The H3 and
+  LTX variants ran on a GPU on 2026-09-29 (next item).
+- **GPU smoke (h3-turbo, h3-max, ltx variants), 2026-09-29.** Each image was
+  taken from its published pod template (`fv-serve-<variant>-pod`; all
+  three are the images of main `2cd1ba0`, serve-image run 36503456884). Each
+  booted with its baked config (`scripts/serve/runpod-pod.sh up` with
+  `FV_SERVE_CONFIG=/etc/fv/<config>`, `RUNPOD_ALLOWED_CUDA=""`) on 1x RTX PRO
+  6000 Blackwell (EUR-IS-1, $2.09/hr, EU volume `jg48s6o1w0` read only, R2 +
+  D1 stores) and served one fal queue job. "Old image" is the legacy
+  all-in-one `fastvideo-rs-serve:sha-9c42844` (1.6 GB) of the WP-18 E2E runs
+  (docs/serve/e2e/h3-turbo.md, h3-max.md, ltx.md). Raw results:
+  `artifacts/serve/e2e/slim-images/<variant>/`.
+
+  | variant | image (template digest) | pod, lifetime | create → `/ping` 200 | job | result | against the old image |
+  |---|---|---|---:|---|---|---|
+  | h3-turbo | `sha256:c782eb37…` | `bn56zvm3xeppih`, 532 s ($0.31) | 441 s | fal `minimax/h3-turbo` 480P, fox prompt, seed 1; then 1080P (docs/serve/h3-1080p-and-upscaler.md) | PASS: 832x480, 124 frames, AAC; wall 12.5 s, denoise 7.05 s, encode 0.51 s | **byte-identical** MP4 (2 916 017 B, `cmp` equal, SSIM 1.0) to `artifacts/serve/e2e/h3-turbo/samples/fal-t2v-480p.mp4` |
+  | h3-max | `sha256:066a5547…` | `14siooczdtjlkp`, 387 s ($0.22) | 342 s | fal `minimax/h3-max` default 768P, fox prompt, seed 1 | PASS: 1344x768, 124 frames, AAC; wall 36.6 s, denoise 22.7 s, encode 0.90 s | same MP4 size as the old run's identical request (8 286 812 B, `artifacts/serve/e2e/h3-max/results.jsonl`); against the kept 960-px re-encode of it, SSIM 0.962 / PSNR 37.0 dB, which is the re-encode's limit |
+  | ltx | `sha256:680ffa2a…` | `sn8tfngz26mcua`, 147 s ($0.09) | 64 s | `ltx_e2e.py probe fal-turbo-1080p` (fal `fastvideo/ltx-turbo`, 1080P, seed 3) | PASS: 1920x1080, 121 frames @ 24, AAC 48 kHz; first job after boot 71.5 s, inference 26.2 s (old 27.1 s) | 10 554 814 B against 10 436 599 B (+1.1 %): not bit-identical, as expected, because the LTX path changed between `9c42844` and `2cd1ba0` (image conditioning E5/E9, the IC-LoRA wiring). The clip is a coherent, sharp shot of the prompt. The old MP4 was not kept, so no frame metric |
+
+  The LTX job ran the two-stage path on the slim image on sm_120 (RTX PRO
+  6000), including cuDNN conv3d in the latent upsampler. The same ltx image
+  also served the LTX reference-to-video E2E on an H100 (sm_90,
+  docs/serve/e2e/ltx.md). The
+  identical H3 outputs show that the image slimming (cuDNN without `adv`,
+  no CUPTI, the minimal FFmpeg) does not change what fv-serve computes or
+  how it encodes. The h3-turbo and h3-max pulls (342-441 s to ready) were
+  first pulls of these images on the host; ltx came up in 64 s on a host
+  that already had the shared layers.
 - **cuDNN pruning**: only `libcudnn_adv` is dropped. `libcudnn.so` loads it
   only for the legacy RNN / multi-head-attention / CTC API, which fv-serve
   does not call (it uses the legacy convolution API → `libcudnn_cnn`,
