@@ -319,7 +319,7 @@ async fn console_pages_and_schema_serve() {
     let dir = state_dir("pages");
     let a = app(config(&dir, Some(ADMIN))).await;
     let r = a.router.clone();
-    for uri in ["/console", "/console/admin", "/console/models/minimax/h3-max/reference-to-video", "/console/models/minimax/h3-max/director"] {
+    for uri in ["/console", "/console/admin", "/console/avatar", "/console/models/minimax/h3-max/reference-to-video", "/console/models/minimax/h3-max/director"] {
         let p = call(&r, "GET", uri, None, None).await;
         assert_eq!(p.status, 200, "{uri}");
         assert_eq!(p.headers[header::CONTENT_TYPE], "text/html; charset=utf-8");

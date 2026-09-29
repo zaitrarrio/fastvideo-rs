@@ -13,7 +13,7 @@ set -u
 mkdir -p /e2e
 { nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; nproc; } > /e2e/box.txt 2>&1
 printf '%s' "$FV_SIDECAR_B64" | base64 -d > /e2e/sidecar.py
-{ cat /etc/fv/runpod.toml; printf '\n[webrtc]\nudp_port = 40010\ntcp_port = 40000\npublic_ip = "127.0.0.1"\n'; } > /e2e/fv.toml
+{ cat "${FV_E2E_BASE_CONFIG:-/etc/fv/runpod.toml}"; printf '\n[webrtc]\nudp_port = 40010\ntcp_port = 40000\npublic_ip = "127.0.0.1"\n'; } > /e2e/fv.toml
 sed 's/^post_encoder = "auto"/post_encoder = "cpu-test-x264"/' /e2e/fv.toml > /e2e/fv-x264.toml
 cat > /e2e/serve.sh <<'EOF'
 #!/bin/bash

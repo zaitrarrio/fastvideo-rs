@@ -563,6 +563,17 @@ pub struct ReactorCfg {
     /// ffmpeg `libvpx`, intra-only libwebp when ffmpeg has no libvpx).
     pub h264: String,
     pub h264_bitrate_bps: Option<u32>,
+    /// Command set (`FV_REACTOR_MODE`): `auto` (the model's own: clip or
+    /// causal) | `avatar` (the script avatar, Reactor `ltx`, on an
+    /// image-to-video model with audio such as LTX-2.5).
+    pub mode: String,
+    /// Avatar: the longest generation window, seconds of speech.
+    pub avatar_window_s: f64,
+    /// Avatar: delivered canvas `WxH` (Reactor `ltx`: 640x352; LTX
+    /// generates it padded to its multiple and it is centre-cropped).
+    pub avatar_size: String,
+    /// Avatar: session ceiling in video seconds (design §5.2).
+    pub avatar_session_max_s: u32,
 }
 
 impl Default for ReactorCfg {
@@ -577,6 +588,10 @@ impl Default for ReactorCfg {
             max_connections: 64,
             h264: "auto".into(),
             h264_bitrate_bps: None,
+            mode: "auto".into(),
+            avatar_window_s: 10.0,
+            avatar_size: "640x352".into(),
+            avatar_session_max_s: 1800,
         }
     }
 }
@@ -930,6 +945,9 @@ impl Config {
         if let Some(v) = env.var("FV_REACTOR_MODEL") {
             self.reactor.model = Some(v);
         }
+        if let Some(v) = env.var("FV_REACTOR_MODE") {
+            self.reactor.mode = v;
+        }
         if let Some(v) = env.var("FV_ENGINE") {
             self.engine.backend = parse_enum("FV_ENGINE", &v)?;
         }
@@ -1080,6 +1098,19 @@ impl Config {
             other => {
                 return Err(ConfigError::Invalid(format!("director.encoder: unknown `{other}` (auto | nvenc | openh264)")))
             }
+        }
+        match self.reactor.mode.as_str() {
+            "auto" | "avatar" => {}
+            other => return Err(ConfigError::Invalid(format!("reactor.mode: unknown `{other}` (auto | avatar)"))),
+        }
+        if parse_size(&self.reactor.avatar_size).is_none() {
+            return Err(ConfigError::Invalid(format!("reactor.avatar_size: `{}` is not WxH", self.reactor.avatar_size)));
+        }
+        if !(1.0..=20.0).contains(&self.reactor.avatar_window_s) {
+            return Err(ConfigError::Invalid("reactor.avatar_window_s: 1..=20 seconds".into()));
+        }
+        if self.reactor.avatar_session_max_s == 0 {
+            return Err(ConfigError::Invalid("reactor.avatar_session_max_s: at least 1".into()));
         }
         match self.reactor.h264.as_str() {
             "auto" | "nvenc" | "openh264" | "off" => {}
@@ -1384,4 +1415,12 @@ body_max_mb = 64
         c.jobs.retention_s.insert("nope".into(), 1);
         assert!(c.validate().is_err());
     }
+}
+
+/// `WxH` (even sides, 64..=4096).
+pub fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.trim().split_once(['x', 'X'])?;
+    let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    let ok = |v: u32| (64..=4096).contains(&v) && v % 2 == 0;
+    (ok(w) && ok(h)).then_some((w, h))
 }

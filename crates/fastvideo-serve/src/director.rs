@@ -67,6 +67,7 @@ impl DirectorClips for Clips {
             canvas: c.canvas,
             first_frame: c.first_frame,
             last_frame: c.last_frame,
+            audio_drive: None,
         };
         let job = {
             let g = self.session.read().await;

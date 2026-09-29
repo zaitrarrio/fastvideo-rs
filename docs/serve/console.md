@@ -15,6 +15,7 @@ with `curl`.
 | `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
+| `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
 
 Disable the pages with `FV_CONSOLE=0` (or `server.console = false`); the
 APIs stay up.
@@ -167,6 +168,25 @@ implements the client side of design §5.6 in one module,
 and `protocols.fal_director` is on. Otherwise the signalling routes answer
 404/405/501 and the page shows "Streaming is not available on this server
 yet".
+
+## 4b. Script avatar page
+
+`/console/avatar` is a Reactor client in one module, `console/avatar.js`,
+for a server whose Reactor runtime runs in avatar mode (`[reactor] mode =
+"avatar"`, design §5.7): `POST /start_session` (a running session is
+joined), `ice_servers`, `POST connections`, recv-only video and audio with
+client-created `data` and `control` channels, a non-trickle offer with the
+track mapping, the answer polled; the v0 JSON wire, pings every 5 s,
+`resume_track` for both tracks. **Start take** uploads the photo (and the
+voice file) through `POST /sessions/{sid}/uploads` + `PUT`, sends the
+setters and `start`; Pause / Resume / Stop / Reset send those commands and
+End session calls `/stop_session`. The status line shows the window, the
+seconds sent, the latency to the first frame and the stalls; the table
+lists every window's build time and real-time factor. Every server message
+is kept in `window.__avatar` for `tests/console/avatar.cjs` (fake engine in
+`tests/console/run.sh`; live on a GPU pod through
+`scripts/serve/e2e/pod-clients.sh avatar`, which also records the stream
+and runs the lip-sync proxy).
 
 ## 5. Calling a server behind the Runpod proxy
 

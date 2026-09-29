@@ -24,6 +24,7 @@ use fastvideo_webrtc::host::{PeerHandle, RtcHost};
 use fastvideo_webrtc::writer::VideoCodec;
 use serde_json::{json, Value};
 
+use crate::avatar::{AvatarDriver, AvatarSettings};
 use crate::causal::CausalDriver;
 use crate::clip::{aspect_canvas, ClipDriver};
 use crate::commands::{ClipBounds, CommandTable};
@@ -33,6 +34,7 @@ use crate::journal::Journal;
 use crate::media::{sendable_codecs, H264Backend, MediaConfig, MediaPipeline};
 use fastvideo_media::pipe::SparePool;
 use crate::schema;
+use crate::uploads::Uploads;
 use crate::wire::ServerMsg;
 
 /// RT's fixed local session id (`runner.py:SESSION_ID`).
@@ -87,6 +89,12 @@ pub struct ReactorConfig {
     /// `max_seconds`, else the default, at most the hard ceiling; a `reset`
     /// restarts the clock up to the ceiling in all.
     pub causal_limits: CausalLimits,
+    /// Command set override: `None` follows the model's stream caps (clip
+    /// or causal); `Some(Mode::Avatar)` serves the script avatar (Reactor
+    /// `ltx`) on an image-to-video model with audio.
+    pub mode: Option<Mode>,
+    /// Avatar-mode settings.
+    pub avatar: AvatarSettings,
 }
 
 impl Default for ReactorConfig {
@@ -108,6 +116,8 @@ impl Default for ReactorConfig {
             latch_grace: Duration::from_secs(2),
             server_version: format!("fastvideo-rs {}", env!("CARGO_PKG_VERSION")),
             causal_limits: CausalLimits::default(),
+            mode: None,
+            avatar: AvatarSettings::default(),
         }
     }
 }
@@ -199,6 +209,8 @@ pub(crate) struct Inner {
     /// the first video frame does not wait for ffmpeg to start. Taken by
     /// `start_session`; a new one is started once the session ended.
     pub next_spares: Mutex<Option<SparePool>>,
+    /// Client uploads (reactor §3.5), cleared when a session ends.
+    pub uploads: Arc<Uploads>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -253,6 +265,9 @@ impl Reactor {
                 op: tokio::sync::Mutex::new(()),
                 journal: Journal::default(),
                 next_spares: Mutex::new(None),
+                uploads: Arc::new(Uploads::new(
+                    std::env::temp_dir().join("fv-reactor-uploads").join(uuid::Uuid::new_v4().simple().to_string()),
+                )),
             }),
         };
         // Warm the first session's encoder once the model has loaded.
@@ -293,7 +308,7 @@ impl Reactor {
     /// Starts the next session's warm encoder spare (READY, model loaded).
     fn warm_next_session(&self) {
         let Some(caps) = self.model() else { return };
-        if Self::table(&caps).is_none() {
+        if self.table(&caps).is_none() {
             return;
         }
         let pool = SparePool::per_session();
@@ -338,7 +353,11 @@ impl Reactor {
         caps.fps.default
     }
 
+    /// The delivered canvas (the tracks' size).
     fn canvas(&self, caps: &ModelCaps) -> (u32, u32) {
+        if self.mode(caps) == Some(Mode::Avatar) {
+            return self.inner.cfg.avatar.size;
+        }
         let short = self
             .inner
             .cfg
@@ -354,10 +373,46 @@ impl Reactor {
         TrackSet::for_model(caps, self.canvas(caps), Self::fps(caps), (VIDEO_TRACK, AUDIO_TRACK), 1, false)
     }
 
+    /// The mode a session of `caps` runs: the configured override when the
+    /// model can serve it, else the model's own.
+    pub fn mode(&self, caps: &ModelCaps) -> Option<Mode> {
+        match self.inner.cfg.mode {
+            Some(Mode::Avatar) if Mode::avatar_capable(caps) => Some(Mode::Avatar),
+            Some(Mode::Avatar) => {
+                tracing::warn!(model = %caps.id, "reactor mode avatar: the model has no image-to-video with audio");
+                None
+            }
+            _ => Mode::of(caps),
+        }
+    }
+
     /// The command table for `caps`.
-    pub fn table(caps: &ModelCaps) -> Option<CommandTable> {
-        let mode = Mode::of(caps)?;
+    pub fn table(&self, caps: &ModelCaps) -> Option<CommandTable> {
+        let mode = self.mode(caps)?;
         Some(CommandTable::for_mode(mode, clip_bounds(caps, Self::fps(caps))))
+    }
+
+    /// The upload store.
+    pub fn uploads(&self) -> &Arc<Uploads> {
+        &self.inner.uploads
+    }
+
+    /// The OpenAPI document of a session (avatar mode adds its limits).
+    fn openapi(&self, caps: &ModelCaps, table: &CommandTable, tracks: &TrackSet) -> Value {
+        let cfg = &self.inner.cfg;
+        let mut doc = schema::openapi(&caps.id.0, &cfg.server_version, table, tracks, &cfg.causal_limits);
+        if table.mode == Mode::Avatar {
+            use fastvideo_engine_service::stream::avatar::{TAKE_MAX_S, TAKE_MIN_S};
+            doc["x-reactor"]["session_limits"] = json!({
+                "take_min_s": TAKE_MIN_S, "take_max_s": TAKE_MAX_S,
+                "session_max_s": cfg.avatar.session_max_s, "clock": "video"
+            });
+            doc["x-reactor"]["avatar"] = json!({
+                "window_s": cfg.avatar.window_s, "width": cfg.avatar.size.0, "height": cfg.avatar.size.1,
+                "fps": Self::fps(caps), "speech": "native (the model speaks the script); set_voice_audio drives it with a file"
+            });
+        }
+        doc
     }
 
     /// `GET /schema`: the OpenAPI document (`{}` before the model loads).
@@ -366,14 +421,8 @@ impl Reactor {
             return l.openapi.clone();
         }
         match self.model() {
-            Some(caps) => match Self::table(&caps) {
-                Some(t) => schema::openapi(
-                    &caps.id.0,
-                    &self.inner.cfg.server_version,
-                    &t,
-                    &self.tracks(&caps),
-                    &self.inner.cfg.causal_limits,
-                ),
+            Some(caps) => match self.table(&caps) {
+                Some(t) => self.openapi(&caps, &t, &self.tracks(&caps)),
                 None => json!({}),
             },
             None => json!({}),
@@ -468,7 +517,7 @@ impl Reactor {
         let caps = self
             .model()
             .ok_or_else(|| Refusal::new(503, "cannot start session: no streamable model is loaded"))?;
-        let table = Self::table(&caps).ok_or_else(|| Refusal::new(503, "the model has no stream caps"))?;
+        let table = self.table(&caps).ok_or_else(|| Refusal::new(503, "the model has no stream caps"))?;
         let fps = Self::fps(&caps);
         let canvas = self.canvas(&caps);
         let tracks = self.tracks(&caps);
@@ -495,12 +544,34 @@ impl Reactor {
                 };
                 Some(self.inner.cfg.causal_limits.resolve(asked).map_err(|e| Refusal::new(400, e.message))?)
             }
+            Mode::Avatar => {
+                let cap = self.inner.cfg.avatar.session_max_s;
+                match params.get("max_seconds") {
+                    None | Some(Value::Null) => Some(cap),
+                    Some(v) => Some(
+                        v.as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .filter(|n| (1..=cap).contains(n))
+                            .ok_or_else(|| Refusal::new(400, format!("max_seconds must be 1..={cap}")))?,
+                    ),
+                }
+            }
             Mode::Clip => None,
+        };
+        // Avatar: generated on the model's padded canvas, delivered cropped.
+        let gen_canvas = match table.mode {
+            Mode::Avatar => {
+                let (w, h) = canvas;
+                fastvideo_protocol::resolve_canvas(&fastvideo_protocol::CanvasSpec::Exact { width: w, height: h }, &caps, None)
+                    .map(|(gw, gh, _)| (gw, gh))
+                    .map_err(|e| Refusal::new(503, format!("avatar canvas {w}x{h}: {}", e.message)))?
+            }
+            _ => canvas,
         };
         let spec = SessionSpec {
             model: caps.id.clone(),
             tracks: tracks.clone(),
-            canvas,
+            canvas: gen_canvas,
             fps,
             continuity: Continuity::HardCut,
             max_seconds,
@@ -532,6 +603,12 @@ impl Reactor {
                 let c = d.control().clone();
                 (Arc::new(d), p, Some(c))
             }
+            Mode::Avatar => {
+                let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
+                let (d, p) = AvatarDriver::start(session, &cfg.avatar, self.inner.uploads.clone(), seed, out.clone())
+                    .map_err(refuse)?;
+                (Arc::new(d), p, None)
+            }
         };
         let mut pace_stats = paced.stats.clone();
         let spares = lock(&self.inner.next_spares).take().unwrap_or_else(SparePool::per_session);
@@ -540,7 +617,7 @@ impl Reactor {
         if let Some(c) = causal {
             media.on_first_frame(move || c.mark_first_frame_sent());
         }
-        let openapi = schema::openapi(&caps.id.0, &cfg.server_version, &table, &tracks, &cfg.causal_limits);
+        let openapi = self.openapi(&caps, &table, &tracks);
         let codecs = sendable_codecs(cfg.h264);
         let (epoch, gen) = {
             let mut st = lock(&self.inner.st);
@@ -630,6 +707,7 @@ impl Reactor {
         }
         live.driver.close().await;
         live.media.close();
+        self.inner.uploads.clear();
         {
             let mut st = lock(&self.inner.st);
             self.transition(&mut st, RtState::Ready, "cleanup_complete", json!({}));

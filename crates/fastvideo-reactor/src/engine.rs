@@ -72,9 +72,31 @@ impl StreamEngine for EngineService {
 pub enum Mode {
     Clip,
     Causal,
+    /// The script avatar (Reactor `ltx`): image-to-video clips with audio,
+    /// windowed. Chosen by config (`[reactor] mode = "avatar"`), never
+    /// implied by caps.
+    Avatar,
 }
 
 impl Mode {
+    /// Whether a model can serve the script avatar: image-to-video with
+    /// native audio, clip-streamable.
+    pub fn avatar_capable(caps: &ModelCaps) -> bool {
+        matches!(caps.stream, Some(StreamCaps::Clip { .. }))
+            && caps.supports(fastvideo_protocol::Task::I2V)
+            && caps.audio.as_ref().is_some_and(|a| !a.via_sidecar)
+    }
+
+    /// Parses `clip` | `causal` | `avatar`.
+    pub fn parse(s: &str) -> Option<Mode> {
+        match s {
+            "clip" => Some(Mode::Clip),
+            "causal" => Some(Mode::Causal),
+            "avatar" => Some(Mode::Avatar),
+            _ => None,
+        }
+    }
+
     pub fn of(caps: &ModelCaps) -> Option<Mode> {
         match caps.stream.as_ref()? {
             StreamCaps::Clip { .. } => Some(Mode::Clip),
