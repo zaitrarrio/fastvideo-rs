@@ -1,0 +1,23 @@
+  10 [fastvideo] cuda device=0 sm_100 kernels=Cubin(100) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+   7 [fastvideo] text encoder: pre-quantized fp8 tree /workspace/weights/h3-base/text_encoder_fp8 (350 linears, 50 layers)
+   7 [fastvideo] h3 quant: mxfp8 (180 reference linears incl. refiner; Sol-H3 MXFP8, blocks 2..=46), bf16 activations
+   7 [fastvideo] sdpa: device dense B=1 H=16 Sq=4032 Sk=4032 D=72 query_chunk=4032
+   7 [fastvideo] sdpa: fused mma B=1 H=56 Sq=1030 Sk=1030 D=128
+   4 [fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default) [attention_backend from profile]
+   4 [fastvideo] h3 i2v encoder: resident () and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 4.4 s; the language model is the resident text encoder (ResidentFp8), 
+   4 [fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, )
+   4 [fastvideo] vsa fine kernel: Tma ring (3 slots) (sm10, 128B swizzle)
+   4 [fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+   3 [fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); sol_attn [engine] (dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5, sink prefix, thresh diag) [attention_backend from profile]
+   3 [fastvideo] h3 sol-attn: dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5
+   3 [fastvideo] h3 i2v encoder: resident () and the resident plan (60.0 GiB)): vision tower 1.09 GiB loaded in 0.3 s; the language model is the resident text encoder (ResidentFp8), 
+   3 [fastvideo] h3 dit offload: auto -> resident (resident plan 60.0 GiB, )
+   3 [fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=39748 blocks=622 sink=2452
+   2 [fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, )
+   2 [fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+   2 [fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=18240 blocks=285 sink=0
+   1 [fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+   1 [fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 864x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x54 nvfp4=off resident=true cuda=true
+   1 [fastvideo] sdpa: fused mma B=1 H=24 Sq=12555 Sk=12555 D=128
+   1 [fastvideo] sdpa: device dense B=1 H=1 Sq=1620 Sk=1620 D=1024 query_chunk=1620
+   1 [fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1248x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x78 nvfp4=off resident=true cuda=true

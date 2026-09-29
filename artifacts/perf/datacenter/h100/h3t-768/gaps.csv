@@ -1,0 +1,413 @@
+t_s,gap_us,cause,before,after
+0.0,443145.0,host_api:cuMemHostAlloc,memcpy HtoD,memcpy HtoD
+0.4432,7863.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.4528,580.4,host_cpu,memcpy HtoD,memcpy HtoD
+0.4536,7125.8,host_cpu,memcpy HtoD,memcpy HtoD
+0.4623,20604.8,host_cpu,memcpy HtoD,memcpy HtoD
+0.4878,16875.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.5095,16821.2,host_cpu,memcpy HtoD,memcpy HtoD
+0.5312,166.0,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.5314,36.8,host_cpu,memcpy HtoD,rms_norm_last
+0.5314,22.6,host_cpu,rms_norm_last,cast_f32_bf16
+0.5314,2981.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.5345,1827.3,host_cpu,cast_f32_bf16,memcpy HtoD
+0.5379,98.8,launch_latency,memcpy HtoD,memcpy HtoD
+0.5382,233.4,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.5385,56.1,host_cpu,softmax_last,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+0.5386,21.0,host_cpu,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…,gather_nd
+0.5386,241.8,host_cpu,cast_f32_bf16,memcpy HtoD
+0.539,1949.8,host_cpu,memcpy HtoD,nvjet_sm90_tst_64x32_64x16_4x1_v_bz_TNT
+0.541,2784.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_128x32_64x10_4x1_v_bz_TNT
+0.544,107.4,host_api:cuMemAllocAsync,mx_binary,memcpy HtoD
+0.5457,885.3,host_cpu,memcpy HtoD,nvjet_sm90_tst_128x32_64x10_4x1_v_bz_splitK_TNT
+0.5467,12483.3,host_cpu,mx_binary,memcpy HtoD
+0.5641,9988.4,host_cpu,memcpy HtoD,memcpy HtoD
+0.579,9832.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.5936,110.4,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.5938,56.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.594,50.0,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.5941,21.5,host_cpu,softmax_last,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+0.5946,3994.7,host_cpu,mx_binary,memcpy HtoD
+0.6005,4406.9,host_cpu,memcpy HtoD,memcpy HtoD
+0.6065,12844.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.6242,9385.4,host_cpu,memcpy HtoD,memcpy HtoD
+0.6385,9349.0,host_cpu,memcpy HtoD,memcpy HtoD
+0.6526,95.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.6528,39.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.653,52.2,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.6531,20.4,host_cpu,softmax_last,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+0.6535,3938.6,host_cpu,mx_binary,memcpy HtoD
+0.6594,4355.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.6653,12702.8,host_cpu,memcpy HtoD,memcpy HtoD
+0.6829,9888.4,host_cpu,memcpy HtoD,memcpy HtoD
+0.6976,9773.9,host_cpu,memcpy HtoD,memcpy HtoD
+0.7122,94.1,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.7124,37.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.7126,37.3,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.7131,3903.8,host_cpu,mx_binary,memcpy HtoD
+0.7189,4478.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.725,12882.3,host_cpu,memcpy HtoD,memcpy HtoD
+0.7427,9697.2,host_cpu,memcpy HtoD,memcpy HtoD
+0.7573,9505.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.7716,92.7,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.7717,44.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.772,37.6,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.772,26.5,host_cpu,softmax_last,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+0.7725,3961.3,host_cpu,mx_binary,memcpy HtoD
+0.7784,4322.9,host_cpu,memcpy HtoD,memcpy HtoD
+0.7843,12900.0,host_cpu,memcpy HtoD,memcpy HtoD
+0.802,9120.9,host_cpu,memcpy HtoD,memcpy HtoD
+0.816,9257.2,host_cpu,memcpy HtoD,memcpy HtoD
+0.8301,91.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.8302,37.2,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.8305,36.2,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.8305,21.4,host_cpu,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…,gather_nd
+0.831,4007.0,host_cpu,mx_binary,memcpy HtoD
+0.8369,4529.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.843,12720.1,host_cpu,memcpy HtoD,memcpy HtoD
+0.8606,9400.0,host_cpu,memcpy HtoD,memcpy HtoD
+0.8748,9479.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.8891,87.7,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.8893,43.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.8895,34.3,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.89,3966.0,host_cpu,mx_binary,memcpy HtoD
+0.8959,4419.5,host_cpu,memcpy HtoD,memcpy HtoD
+0.9019,12790.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.9195,9522.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.934,9485.7,host_cpu,memcpy HtoD,memcpy HtoD
+0.9482,93.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+0.9484,43.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+0.9486,36.2,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+0.9491,4025.4,host_cpu,mx_binary,memcpy HtoD
+0.9551,4487.6,host_cpu,memcpy HtoD,memcpy HtoD
+0.9611,12708.3,host_cpu,memcpy HtoD,memcpy HtoD
+0.9787,9322.3,host_cpu,memcpy HtoD,memcpy HtoD
+0.9929,9297.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.007,98.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.0071,44.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.0074,34.7,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.0079,3908.2,host_cpu,mx_binary,memcpy HtoD
+1.0137,4479.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.0198,12849.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.0375,9359.8,host_cpu,memcpy HtoD,memcpy HtoD
+1.0517,9482.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.066,91.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.0662,37.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.0664,33.7,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.0669,3947.8,host_cpu,mx_binary,memcpy HtoD
+1.0728,4411.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.0787,12618.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.0962,9392.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.1105,9368.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.1246,94.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.1248,45.9,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.125,42.7,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.1255,3962.7,host_cpu,mx_binary,memcpy HtoD
+1.1314,4462.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.1375,12632.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.155,9422.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.1692,9378.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.1834,88.1,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.1836,36.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.1838,33.5,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.1843,4048.2,host_cpu,mx_binary,memcpy HtoD
+1.1903,4507.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.1963,12796.8,host_cpu,memcpy HtoD,memcpy HtoD
+1.214,9317.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.2282,9347.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.2424,90.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.2425,48.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.2427,36.4,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.2432,3985.8,host_cpu,mx_binary,memcpy HtoD
+1.2492,4231.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.255,12669.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.2725,9622.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.287,9584.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.3014,89.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.3015,41.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.3017,33.8,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.3022,3915.6,host_cpu,mx_binary,memcpy HtoD
+1.3081,4337.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.314,12682.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.3315,9551.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.346,9522.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.3603,88.1,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.3604,36.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.3606,28.3,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.361,3977.0,host_cpu,mx_binary,memcpy HtoD
+1.367,4461.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.373,12830.8,host_cpu,memcpy HtoD,memcpy HtoD
+1.3907,9450.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.405,9350.8,host_cpu,memcpy HtoD,memcpy HtoD
+1.4191,83.4,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.4198,4200.1,host_cpu,mx_binary,memcpy HtoD
+1.426,4456.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.432,12753.2,host_cpu,memcpy HtoD,memcpy HtoD
+1.4496,9613.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.4641,9602.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.4785,82.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.4792,4209.6,host_cpu,mx_binary,memcpy HtoD
+1.4854,4382.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.4913,12804.2,host_cpu,memcpy HtoD,memcpy HtoD
+1.509,9315.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.5232,9659.8,host_cpu,memcpy HtoD,memcpy HtoD
+1.5377,86.6,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.5384,4257.0,host_cpu,mx_binary,memcpy HtoD
+1.5446,4447.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.5507,12801.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.5684,9455.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.5827,9857.2,host_cpu,memcpy HtoD,memcpy HtoD
+1.5974,95.4,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.5981,4308.6,host_cpu,mx_binary,memcpy HtoD
+1.6044,4608.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.6106,13311.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.6288,10001.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.6437,9671.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.6582,115.5,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.6584,28.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.659,4222.3,host_cpu,mx_binary,memcpy HtoD
+1.6652,4572.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.6713,12889.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.6891,9635.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.7037,9480.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.718,95.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.7181,22.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.7187,4127.4,host_cpu,mx_binary,memcpy HtoD
+1.7248,4393.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.7307,12791.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.7484,9348.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.7627,9423.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.7769,106.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.777,24.5,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.7776,4135.8,host_cpu,mx_binary,memcpy HtoD
+1.7837,4377.5,host_cpu,memcpy HtoD,memcpy HtoD
+1.7897,12802.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.8073,9624.2,host_cpu,memcpy HtoD,memcpy HtoD
+1.8219,9356.7,host_cpu,memcpy HtoD,memcpy HtoD
+1.836,119.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.8362,20.4,host_cpu,memcpy HtoD,rms_norm_last
+1.8362,56.1,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.8364,33.7,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+1.8369,4284.1,host_cpu,mx_binary,memcpy HtoD
+1.8431,4656.4,host_cpu,memcpy HtoD,memcpy HtoD
+1.8494,13044.9,host_cpu,memcpy HtoD,memcpy HtoD
+1.8673,9205.5,host_cpu,memcpy HtoD,memcpy HtoD
+1.8814,9401.3,host_cpu,memcpy HtoD,memcpy HtoD
+1.8956,89.4,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.8963,4132.0,host_cpu,mx_binary,memcpy HtoD
+1.9024,4697.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.9087,12647.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.9262,9617.6,host_cpu,memcpy HtoD,memcpy HtoD
+1.9407,9252.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.9547,82.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+1.9548,20.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+1.9554,4182.9,host_cpu,mx_binary,memcpy HtoD
+1.9616,4429.1,host_cpu,memcpy HtoD,memcpy HtoD
+1.9675,12704.0,host_cpu,memcpy HtoD,memcpy HtoD
+1.9851,9763.5,host_cpu,memcpy HtoD,memcpy HtoD
+1.9997,9537.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.0141,84.1,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.0148,4166.9,host_cpu,mx_binary,memcpy HtoD
+2.0209,4319.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.0268,12712.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.0444,9419.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.0587,9522.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.073,178.5,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.0738,4181.5,host_cpu,mx_binary,memcpy HtoD
+2.0799,4568.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.086,12609.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.1035,9223.9,host_cpu,memcpy HtoD,memcpy HtoD
+2.1176,9775.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.1322,84.5,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.1329,4159.2,host_cpu,mx_binary,memcpy HtoD
+2.139,4415.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.145,12786.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.1626,9577.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.1771,9346.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.1912,80.5,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.1919,4055.7,host_cpu,mx_binary,memcpy HtoD
+2.1979,4513.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.204,13047.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.2219,9381.2,host_cpu,memcpy HtoD,memcpy HtoD
+2.2362,9305.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.2503,86.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.251,4177.6,host_cpu,mx_binary,memcpy HtoD
+2.2571,4290.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.263,12673.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.2805,9316.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.2947,9413.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.309,92.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.3096,4158.4,host_cpu,mx_binary,memcpy HtoD
+2.3157,4525.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.3218,12618.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.3393,9446.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.3536,9530.6,host_cpu,memcpy HtoD,memcpy HtoD
+2.368,87.4,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.3686,4249.5,host_cpu,mx_binary,memcpy HtoD
+2.3748,4372.9,host_cpu,memcpy HtoD,memcpy HtoD
+2.3808,12661.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.3983,9287.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.4125,9061.9,host_cpu,memcpy HtoD,memcpy HtoD
+2.4263,82.1,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.427,4054.0,host_cpu,mx_binary,memcpy HtoD
+2.433,4540.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.4391,12641.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.4566,9480.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.471,9547.2,host_cpu,memcpy HtoD,memcpy HtoD
+2.4853,83.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.486,4199.8,host_cpu,mx_binary,memcpy HtoD
+2.4921,4530.2,host_cpu,memcpy HtoD,memcpy HtoD
+2.4982,12806.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.5159,9576.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.5303,9589.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.5447,83.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.5454,4166.9,host_cpu,mx_binary,memcpy HtoD
+2.5515,4530.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.5576,12751.6,host_cpu,memcpy HtoD,memcpy HtoD
+2.5752,9422.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.5895,9172.6,host_cpu,memcpy HtoD,memcpy HtoD
+2.6035,86.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.6041,4074.2,host_cpu,mx_binary,memcpy HtoD
+2.6102,4313.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.616,12869.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.6338,9417.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.648,9477.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.6623,79.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.663,4942.5,host_cpu,mx_binary,memcpy HtoD
+2.6697,284.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.6702,5354.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.6771,13857.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.6958,9377.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.7101,9598.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.7245,85.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.7252,4217.3,host_cpu,mx_binary,memcpy HtoD
+2.7313,4536.2,host_cpu,memcpy HtoD,memcpy HtoD
+2.7374,12981.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.7553,9448.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.7696,9662.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.784,81.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.7842,24.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+2.7847,4255.7,host_cpu,mx_binary,memcpy HtoD
+2.7909,4441.8,host_cpu,memcpy HtoD,memcpy HtoD
+2.7969,12651.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.8145,9616.4,host_cpu,memcpy HtoD,memcpy HtoD
+2.829,9042.6,host_cpu,memcpy HtoD,memcpy HtoD
+2.8428,82.6,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.8435,4164.5,host_cpu,mx_binary,memcpy HtoD
+2.8496,4369.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.8555,12769.7,host_cpu,memcpy HtoD,memcpy HtoD
+2.8732,9581.1,host_cpu,memcpy HtoD,memcpy HtoD
+2.8877,9082.2,host_cpu,memcpy HtoD,memcpy HtoD
+2.9015,79.3,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.9022,4036.1,host_cpu,mx_binary,memcpy HtoD
+2.9082,4405.6,host_cpu,memcpy HtoD,memcpy HtoD
+2.9142,12742.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.9318,9310.9,host_cpu,memcpy HtoD,memcpy HtoD
+2.9459,9521.5,host_cpu,memcpy HtoD,memcpy HtoD
+2.9603,102.6,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+2.961,4162.1,host_cpu,mx_binary,memcpy HtoD
+2.9671,4519.0,host_cpu,memcpy HtoD,memcpy HtoD
+2.9732,12437.3,host_cpu,memcpy HtoD,memcpy HtoD
+2.9905,9354.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.0047,9282.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.0188,98.2,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.019,23.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.0191,79.4,host_api:cuLaunchKernelEx,nvjet_sm90_tst_64x32_64x16_4x1_v_bz_splitK_TNT,"cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float…"
+3.0192,21.3,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+3.0197,4016.8,host_cpu,mx_binary,memcpy HtoD
+3.0256,4198.9,host_cpu,memcpy HtoD,memcpy HtoD
+3.0314,12783.3,host_cpu,memcpy HtoD,memcpy HtoD
+3.0491,9393.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.0634,9609.1,host_cpu,memcpy HtoD,memcpy HtoD
+3.0778,107.0,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.078,21.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.0786,4196.4,host_cpu,mx_binary,memcpy HtoD
+3.0847,4505.1,host_cpu,memcpy HtoD,memcpy HtoD
+3.0908,12841.1,host_cpu,memcpy HtoD,memcpy HtoD
+3.1085,9440.8,host_cpu,memcpy HtoD,memcpy HtoD
+3.1229,9305.5,host_cpu,memcpy HtoD,memcpy HtoD
+3.137,96.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.1372,21.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.1377,4248.8,host_cpu,mx_binary,memcpy HtoD
+3.1439,4450.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.1499,12620.9,host_cpu,memcpy HtoD,memcpy HtoD
+3.1675,9487.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.1819,9072.4,host_cpu,memcpy HtoD,memcpy HtoD
+3.1958,100.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.1959,33.4,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.1961,23.4,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+3.1966,3974.8,host_cpu,mx_binary,memcpy HtoD
+3.2025,4362.4,host_cpu,memcpy HtoD,memcpy HtoD
+3.2085,12881.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.2263,9230.5,host_cpu,memcpy HtoD,memcpy HtoD
+3.2404,9384.6,host_cpu,memcpy HtoD,memcpy HtoD
+3.2546,91.9,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.2547,20.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.2553,4112.9,host_cpu,mx_binary,memcpy HtoD
+3.2614,4376.5,host_cpu,memcpy HtoD,memcpy HtoD
+3.2674,12745.7,host_cpu,memcpy HtoD,memcpy HtoD
+3.285,9073.2,host_cpu,memcpy HtoD,memcpy HtoD
+3.299,9213.6,host_cpu,memcpy HtoD,memcpy HtoD
+3.3131,94.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.3138,4107.4,host_cpu,mx_binary,memcpy HtoD
+3.3198,4338.3,host_cpu,memcpy HtoD,memcpy HtoD
+3.3258,12775.1,host_cpu,memcpy HtoD,memcpy HtoD
+3.3434,9050.8,host_cpu,memcpy HtoD,memcpy HtoD
+3.3574,9230.6,host_cpu,memcpy HtoD,memcpy HtoD
+3.3715,85.6,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.3722,4198.4,host_cpu,mx_binary,memcpy HtoD
+3.3783,4399.8,host_cpu,memcpy HtoD,memcpy HtoD
+3.3843,12576.1,host_cpu,memcpy HtoD,memcpy HtoD
+3.4017,9278.9,host_cpu,memcpy HtoD,memcpy HtoD
+3.4159,9421.9,host_cpu,memcpy HtoD,memcpy HtoD
+3.4301,265629.8,host_sync:cuEventSynchronize,memcpy HtoD,memcpy HtoD
+3.6958,33.9,host_cpu,memcpy HtoD,memcpy HtoD
+3.6958,25.3,host_cpu,memcpy HtoD,rms_norm_last
+3.6958,68.7,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT
+3.6961,36.4,host_cpu,cast_bf16_f32_bias_act,sm80_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize32x32x64_stage3_warpsize2x2x1_ten…
+3.6966,1457.7,host_cpu,memcpy DtoH,memcpy HtoD
+3.698,1482069.5,host_sync:cuStreamSynchronize,memcpy HtoD,cast_f32_bf16
+5.1801,2220.3,host_cpu,cast_f32_bf16,nvjet_sm90_tst_64x32_64x16_4x1_v_bz_bias_TNT
+5.1824,1949.5,host_cpu,w8a8_quantize,nvjet_sm90_qqtst_64x32_128x16_4x1_v_bz_algo2_TNT
+5.1845,30.9,host_cpu,fvf_split_heads_rows,fa_dc90_fwd_d128
+5.1845,121.7,host_cpu,w8a8_quantize,nvjet_sm90_qqtst_64x32_128x16_4x1_v_bz_algo2_TNT
+5.1847,2091.2,host_cpu,w8a8_quantize,nvjet_sm90_qqtst_128x32_128x10_2x1_v_bz_algo2_TNT
+5.1869,128.9,host_cpu,w8a8_quantize,nvjet_sm90_qqtst_64x32_128x16_4x1_v_bz_algo2_TNT
+5.1874,316.8,host_sync:cuStreamSynchronize,mx_rms_norm,memcpy HtoD
+5.1877,52.1,host_cpu,memcpy HtoD,memcpy HtoD
+5.1878,10863.6,host_cpu,memcpy HtoD,memcpy HtoD
+5.1986,77.4,host_api:cuMemAllocAsync,memcpy HtoD,memcpy HtoD
+5.1995,77.8,launch_latency,memcpy HtoD,memcpy HtoD
+5.2003,43961.4,host_cpu,memcpy HtoD,memcpy HtoD
+5.245,36.5,host_cpu,memcpy HtoD,cast_f32_bf16
+5.245,59.6,host_cpu,cast_f32_bf16,memset
+5.2452,1691.2,host_api:cuMemAllocAsync,nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN,cast_bf16_f32_bias_act
+5.2489,37629.9,host_cpu,mx_block_copy,memcpy HtoD
+5.292,981.8,host_api:cuMemAllocAsync,w8a8_quantize,memset
+9.6353,98.6,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+9.6376,32878.1,host_cpu,mx_block_copy,memcpy HtoD
+14.033,126.0,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+14.0331,24.3,host_cpu,cast_f32_bf16,memset
+14.0333,1261.1,host_api:cuMemAllocAsync,nvjet_sm90_tst_192x192_64x4_2x1_v_bz_coopB_TNN,cast_bf16_f32_bias_act
+14.0366,33425.3,host_cpu,mx_block_copy,memcpy HtoD
+18.4182,114.8,host_sync:cuStreamSynchronize,lincomb3,cast_f32_bf16
+18.4206,33397.0,host_cpu,mx_block_copy,memcpy HtoD
+22.8077,28999.2,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+22.8367,361.1,host_cpu,bcast_binary,sm80_xmma_gemm_f32f32_f32f32_f32_nn_n_tilesize32x32x8_stage3_warpsize1x2x1_ffma_…
+22.8371,174.4,host_cpu,add_bias_inplace,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+22.8374,97.5,host_cpu,add_bias_inplace,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+22.8378,38.8,host_cpu,"cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)0, (bo…","cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+22.8958,2542.3,host_sync:cuStreamSynchronize,memcpy DtoH,gather_nd
+22.8985,41.5,host_cpu,gather_nd,gather_nd
+22.8987,311.5,host_cpu,block_copy,memcpy HtoD
+22.8991,43.8,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_TNN
+22.8992,173.7,host_api:cuMemAllocAsync,cast_f32_bf16,memset
+22.8994,108.4,host_api:cuMemAllocAsync,nvjet_sm90_tst_128x256_64x4_2x1_v_bz_coopA_TNN,cast_bf16_f32_bias_act
+22.8996,116.4,host_api:cuMemAllocAsync,block_copy,block_copy
+22.8999,69.0,host_api:cuMemAllocAsync,h3v_residual_norm_bf16,memset
+24.2285,105.8,host_sync:cuEventSynchronize,pack_rgb_u8,memcpy DtoH
+24.2551,104904.1,host_cpu,memcpy DtoH,block_copy
+24.3601,311.2,host_cpu,block_copy,memcpy HtoD
+24.3605,97.0,host_cpu,cast_f32_bf16,nvjet_sm90_tst_32x128_64x10_1x4_h_bz_TNN
+24.3606,24.3,host_cpu,cast_f32_bf16,memset
+27.721,703.2,host_sync:cuEventSynchronize,memcpy DtoH,memcpy DtoH

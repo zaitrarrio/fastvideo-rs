@@ -1,0 +1,27 @@
+t_s,gap_us,cause,before,after
+0.0,36.6,host_cpu,memcpy HtoD,block_copy
+0.0001,205.2,host_api:cuLaunchKernel,block_copy,memcpy HtoD
+0.0016,81.2,launch_latency,block_copy,memcpy HtoD
+0.0032,10365.4,host_cpu,memcpy HtoD,memcpy HtoD
+0.0147,89.5,launch_latency,memcpy HtoD,memcpy HtoD
+0.0159,855.3,host_cpu,memcpy HtoD,gather_nd
+0.0169,377.2,host_cpu,gather_nd,sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize256x64x8_s…
+0.0233,167.9,host_api:cuKernelSetAttribute,cast_f32_bf16,memset
+0.0395,91.4,host_api:cuKernelSetAttribute,cast_f32_bf16,memset
+0.044,95.7,host_api:cuKernelSetAttribute,cast_f32_bf16,memset
+0.9533,50.8,host_cpu,memcpy HtoD,lincomb3
+0.9534,182.4,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+0.9537,66.8,host_cpu,gather_nd,sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize256x64x8_s…
+1.9046,49.2,host_cpu,memcpy HtoD,lincomb3
+1.9047,109.7,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+1.9049,40.7,host_cpu,gather_nd,sm80_xmma_fprop_implicit_gemm_f32f32_f32f32_f32_nchwkcrs_nchw_tilesize256x64x8_s…
+2.855,607.1,host_sync:cuStreamSynchronize,lincomb3,memcpy HtoD
+2.8556,35.5,host_cpu,memcpy HtoD,bcast_binary
+2.8557,346.7,host_cpu,bcast_binary,cutlass::Kernel2<cutlass_80_tensorop_s1688gemm_256x64_16x4_nn_align4>(T1::Params…
+2.8561,3850.6,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+2.86,32.1,host_cpu,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…",sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128…
+2.8606,2913.1,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+2.8658,1003.8,host_cpu,cast_f32_bf16,memset
+2.8669,2285.4,host_cpu,softmax_last_bf16,nvjet_sm90_tss_256x112_64x4_1x2_h_bz_coopA_NNT
+2.9678,137.0,launch_latency,cast_f32_bf16,memcpy DtoH
+2.9686,841.0,host_api:cuKernelSetAttribute,memcpy DtoH,memset

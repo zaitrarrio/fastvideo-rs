@@ -1,0 +1,28 @@
+t_s,gap_us,cause,before,after
+0.0,41.2,host_cpu,memcpy HtoD,block_copy
+0.0001,124.3,host_api:cuLaunchKernel,block_copy,memcpy HtoD
+0.0009,44.4,launch_latency,block_copy,memcpy HtoD
+0.0015,4760.1,host_cpu,memcpy HtoD,memcpy HtoD
+0.0072,753.6,host_cpu,gather_nd,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+0.6649,307.0,host_api:cuKernelSetAttribute,cast_f32_bf16,nvjet_sm100_tst_128x208_64x7_2x2_2cta_h_bz_bias_TNT
+0.6652,54.1,host_cpu,nvjet_sm100_tst_128x208_64x7_2x2_2cta_h_bz_bias_TNT,mx_gather_nd
+0.6656,28841.4,host_cpu,lincomb3,memcpy HtoD
+0.695,32.9,host_api:cuMemAllocAsync,memcpy HtoD,lincomb3
+0.6951,124.6,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+0.6953,133.0,host_cpu,gather_nd,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+1.3492,67.1,host_cpu,memcpy HtoD,lincomb3
+1.3493,110.9,host_sync:cuStreamSynchronize,lincomb3,gather_nd
+1.3496,130.9,host_cpu,gather_nd,"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool…"
+2.0051,646.9,host_sync:cuStreamSynchronize,lincomb3,memcpy HtoD
+2.0057,33.1,host_cpu,memcpy HtoD,bcast_binary
+2.0058,2309.0,host_cpu,bcast_binary,nvjet_sm100_sss_tf32_384x48_32x4_2x1_2cta_v_bz_NNT
+2.0082,1590.2,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+2.0104,604.9,host_cpu,cast_f32_bf16,"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float…"
+2.0127,614.4,host_cpu,cast_f32_bf16,nvjet_sm100_sss_tf32_256x128_32x5_2x2f_2cta_h_bz_TNT
+2.0134,1619.5,host_cpu,softmax_last_bf16,nvjet_sm100_tss_128x192_64x7_2x1_2cta_v_bz_NNT
+2.0151,1613.4,host_cpu,gather_nd,nvjet_sm100_sss_tf32_192x128_32x6_2x1_2cta_v_bz_NNT
+2.0916,141.0,launch_latency,cast_f32_bf16,memcpy DtoH
+2.0921,399.0,host_api:cuKernelSetAttribute,memcpy DtoH,nvjet_sm100_sss_tf32_128x192_32x7_2x1_2cta_v_bz_TNT
+2.3119,160207.7,host_api:cuMemAllocAsync,add_bias_inplace,block_copy
+2.4761,167480.5,host_api:cuMemAllocAsync,block_copy,gather_nd
+2.6898,297073.6,host_api:cuMemAllocAsync,gather_nd,gather_nd
