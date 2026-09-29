@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use fastvideo_engine_service::EngineService;
-use fastvideo_reactor::{H264Backend, Reactor, ReactorConfig};
+use fastvideo_reactor::{H264Backend, IngestAuth, Reactor, ReactorConfig};
 use fastvideo_webrtc::host::RtcHost;
 
 use crate::config::{Config, ReactorCfg, StreamsCfg};
@@ -58,13 +58,26 @@ pub use crate::rtc::{host_config, ice_servers};
 /// Binds the host and builds the runtime.
 pub async fn build(c: &Config, engine: &EngineService) -> anyhow::Result<Reactor> {
     let host = crate::rtc::bind(c).await?;
-    build_on(c, engine, host)
+    build_on(c, engine, host, None)
+}
+
+/// Duplex sessions (client camera/microphone in, design §5.11) need an API
+/// key like the native API (`Authorization: Bearer`); clip and causal
+/// Reactor sessions stay open, as RT. `auth.mode = none` lets everyone in.
+pub fn ingest_auth(ctx: fastvideo_serve_kit::ServeCtx) -> IngestAuth {
+    IngestAuth(Arc::new(move |h: &axum::http::HeaderMap| {
+        ctx.auth()
+            .authenticate(fastvideo_protocol::ProtocolId::Native, h)
+            .map(|_| ())
+            .map_err(|e| e.message)
+    }))
 }
 
 /// Builds the runtime on an already bound host (shared with the fal
-/// director in `App::build`).
-pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost) -> anyhow::Result<Reactor> {
-    let cfg = reactor_config(&c.reactor, &c.streams)?;
+/// director in `App::build`); `auth` guards duplex sessions.
+pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost, auth: Option<IngestAuth>) -> anyhow::Result<Reactor> {
+    let mut cfg = reactor_config(&c.reactor, &c.streams)?;
+    cfg.ingest_auth = auth;
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "reactor runtime ready to answer offers");
     Ok(Reactor::new(cfg, Arc::new(engine.clone()), host))
 }

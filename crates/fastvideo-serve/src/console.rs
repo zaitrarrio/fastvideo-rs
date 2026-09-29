@@ -6,6 +6,7 @@
 //! | `GET /console` | Connect (server URL, API key in local storage) and the model list (`GET /fal/schema`) |
 //! | `GET /console/admin` | Admin token (session storage), mint / list / revoke API keys (`/fv/v1/admin/keys`) |
 //! | `GET /console/deployments` | Admin: release channels, live builds and drift, the deployment registry, history; Promote / Rollback (`/fv/v1/admin/releases*`, `/fv/v1/admin/deployments`; gateway only) |
+//! | `GET /console/live` | Live input: publish the camera and microphone (getUserMedia) to a duplex model over native WHIP ingest or the Reactor runtime, and watch its output |
 //! | `GET /console/avatar` | The script avatar (Reactor `ltx` over the Reactor runtime in avatar mode): photo, script, scene, speech rate, duration, seed; the WebRTC stream and per-window timings |
 //! | `GET /console/models/{owner}/{alias}/{task}` | A fal model page: Playground (schema-driven form, uploads, result, logs, history) and API snippets; `task = director` is the live WebRTC page |
 //! | `GET /console/assets/{file}` | CSS and JS modules |
@@ -32,6 +33,7 @@ pub const ASSETS: &[(&str, &str, &str)] = &[
     ("snippets.js", "text/javascript; charset=utf-8", include_str!("../console/snippets.js")),
     ("director.js", "text/javascript; charset=utf-8", include_str!("../console/director.js")),
     ("avatar.js", "text/javascript; charset=utf-8", include_str!("../console/avatar.js")),
+    ("live.js", "text/javascript; charset=utf-8", include_str!("../console/live.js")),
 ];
 
 const INDEX: &str = include_str!("../console/index.html");
@@ -39,6 +41,7 @@ const ADMIN: &str = include_str!("../console/admin.html");
 const DEPLOYMENTS: &str = include_str!("../console/deployments.html");
 const MODEL: &str = include_str!("../console/model.html");
 const AVATAR: &str = include_str!("../console/avatar.html");
+const LIVE: &str = include_str!("../console/live.html");
 
 /// Scripts and styles from this origin only; media, images and API calls may
 /// go to other origins (signed file URLs, a configured server URL).
@@ -78,6 +81,7 @@ pub fn routes() -> Router {
         .route("/console/admin", get(|| async { page(ADMIN) }))
         .route("/console/deployments", get(|| async { page(DEPLOYMENTS) }))
         .route("/console/avatar", get(|| async { page(AVATAR) }))
+        .route("/console/live", get(|| async { page(LIVE) }))
         .route("/console/models/{owner}/{alias}/{*task}", get(|| async { page(MODEL) }))
         .route("/console/assets/{file}", get(asset))
 }

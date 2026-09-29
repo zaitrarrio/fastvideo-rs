@@ -228,7 +228,7 @@ async fn auth_none_is_reported_and_the_console_needs_no_key() {
     // The shipped console reads the mode and drops the key prompts.
     let common = call(&r, "GET", "/console/assets/common.js", None, None).await.text();
     assert!(common.contains("c.auth.mode") && common.contains("export const needsKey"));
-    for page in ["model.js", "director.js"] {
+    for page in ["model.js", "director.js", "live.js"] {
         let js = call(&r, "GET", &format!("/console/assets/{page}"), None, None).await.text();
         assert!(js.contains("needsKey()") && !js.contains("!apiKey()"), "{page} still gates on apiKey()");
     }
@@ -319,7 +319,14 @@ async fn console_pages_and_schema_serve() {
     let dir = state_dir("pages");
     let a = app(config(&dir, Some(ADMIN))).await;
     let r = a.router.clone();
-    for uri in ["/console", "/console/admin", "/console/avatar", "/console/models/minimax/h3-max/reference-to-video", "/console/models/minimax/h3-max/director"] {
+    for uri in [
+        "/console",
+        "/console/admin",
+        "/console/live",
+        "/console/avatar",
+        "/console/models/minimax/h3-max/reference-to-video",
+        "/console/models/minimax/h3-max/director",
+    ] {
         let p = call(&r, "GET", uri, None, None).await;
         assert_eq!(p.status, 200, "{uri}");
         assert_eq!(p.headers[header::CONTENT_TYPE], "text/html; charset=utf-8");

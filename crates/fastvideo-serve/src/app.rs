@@ -102,7 +102,7 @@ pub fn build_engine_with_clock(
     c: &Config,
     clock: Option<std::sync::Arc<dyn fastvideo_engine_service::Clock>>,
 ) -> anyhow::Result<EngineService> {
-    let backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
+    let mut backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
         EngineBackendKind::Fake => {
             let f = &c.engine.fake;
             let mut fc = FakeConfig::default();
@@ -173,6 +173,10 @@ pub fn build_engine_with_clock(
             ));
         }
     };
+    if c.engine.echo_model && c.engine.backend != EngineBackendKind::Remote {
+        // The loopback duplex model on its own executor (design §5.11).
+        backends.push(Box::new(fastvideo_engine_service::EchoBackend));
+    }
     let cfg = EngineConfig {
         queue_max: c.limits.queue_max,
         swap: c.engine.swap,
@@ -475,17 +479,20 @@ impl App {
         }
 
         // Streaming front-ends that own sockets answer offers on one shared
-        // WebRTC host (the Reactor runtime, the fal director): they share
-        // the `[webrtc]` ports.
-        #[cfg(any(feature = "reactor", all(feature = "fal", feature = "webrtc")))]
+        // WebRTC host (the Reactor runtime, the fal director, native WHIP
+        // ingest): they share the `[webrtc]` ports.
+        #[cfg(feature = "webrtc")]
+        let ingest_on = config.protocols.native
+            && gate.engine().caps().models().any(|m| m.stream.as_ref().is_some_and(|s| s.duplex().is_some()));
+        #[cfg(feature = "webrtc")]
         let rtc_host = {
             let reactor_on = cfg!(feature = "reactor") && config.protocols.reactor;
             let director_on = cfg!(all(feature = "fal", feature = "webrtc")) && config.protocols.fal && config.protocols.fal_director;
-            if reactor_on || director_on {
+            if reactor_on || director_on || ingest_on {
                 match crate::rtc::bind(&config).await {
                     Ok(h) => Some(h),
                     Err(e) => {
-                        tracing::error!(error = %format!("{e:#}"), "no WebRTC host: the Reactor runtime and the fal director are not mounted");
+                        tracing::error!(error = %format!("{e:#}"), "no WebRTC host: the Reactor runtime, the fal director and WHIP ingest are not mounted");
                         None
                     }
                 }
@@ -497,7 +504,12 @@ impl App {
         let mut streams = Router::new();
         #[cfg(feature = "reactor")]
         let reactor = match (&rtc_host, config.protocols.reactor) {
-            (Some(host), true) => match crate::reactor::build_on(&config, gate.engine(), host.clone()) {
+            (Some(host), true) => match crate::reactor::build_on(
+                &config,
+                gate.engine(),
+                host.clone(),
+                Some(crate::reactor::ingest_auth(ctx.clone())),
+            ) {
                 Ok(r) => {
                     streams = streams.merge(fastvideo_reactor::router(r.clone()));
                     Some(r)
@@ -509,6 +521,12 @@ impl App {
             },
             _ => None,
         };
+        // Native WHIP ingest into duplex models (design §5.11).
+        #[cfg(feature = "webrtc")]
+        if let (Some(host), true) = (&rtc_host, ingest_on) {
+            let settings = crate::ingest::IngestSettings::from_config(&config);
+            streams = streams.merge(crate::ingest::routes(gate.clone(), host.clone(), settings).with_state(ctx.clone()));
+        }
         // Minted API keys: /fv/v1/admin/keys behind the admin token.
         streams = streams
             .merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()))

@@ -430,9 +430,14 @@ fn capabilities(gate: &ServiceGate, causal: &CausalLimits) -> Value {
         .entries()
         .map(|e| {
             let mut m = json!({"caps": e.caps, "recipe": e.recipe, "executors": e.executors});
-            // Live causal sessions are length-limited (design §5.2).
-            if matches!(e.caps.stream, Some(StreamCaps::Causal { .. })) {
+            // Live causal and duplex sessions are length-limited (design
+            // §5.2); duplex models take client input at
+            // `/fv/v1/streams/ingest` (design §5.11).
+            if matches!(e.caps.stream, Some(StreamCaps::Causal { .. } | StreamCaps::Duplex(_))) {
                 m["stream_limits"] = causal.advertised();
+            }
+            if matches!(e.caps.stream, Some(StreamCaps::Duplex(_))) {
+                m["ingest"] = json!({"whip": format!("/fv/v1/streams/ingest?model={}", e.caps.id)});
             }
             m
         })
