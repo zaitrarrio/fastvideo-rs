@@ -33,10 +33,7 @@ const TOKEN: &str = "gw-internal-token";
 const ADMIN: &str = "fvadm_gateway_test";
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-gw-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-gw-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// A D1 transport that can be cut (a lost worker stops writing), with an
@@ -273,6 +270,11 @@ fn pool_of(sh: &Shared, external_id: &str) -> String {
     rows.first().and_then(|r| r.get("pool")).and_then(Value::as_str).unwrap_or_default().to_owned()
 }
 
+/// The public status view's state of pool h3's first worker.
+fn h3_worker_state(status: &Value) -> Option<&str> {
+    status["pools"].as_array()?.iter().find(|p| p["id"] == "h3")?["workers"][0]["state"].as_str()
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Vec<Vec<PoolMetrics>>>);
 
@@ -454,10 +456,17 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     assert!(s == 200 || s == 302, "sync answered {s}");
     let _ = hs;
 
-    // Metrics: the tick closed the rows with durations; the scaler saw them.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    let (s, pools, _) = http.call("GET", &format!("{g}/fv/v1/gateway/pools"), None, Some(&format!("Bearer {ADMIN}"))).await;
-    assert_eq!(s, 200, "{pools}");
+    // Metrics: the tick (every second) closes the rows with durations; the
+    // scaler sees them. Waited for, not slept on: a loaded host runs the
+    // tick late.
+    let admin = format!("Bearer {ADMIN}");
+    let pools = http
+        .poll(&format!("{g}/fv/v1/gateway/pools"), Some(&admin), |v| {
+            let Ok(p) = serde_json::from_value::<Vec<PoolMetrics>>(v["pools"].clone()) else { return false };
+            let (Some(h3m), Some(wan)) = (p.iter().find(|m| m.pool == "h3"), p.iter().find(|m| m.pool == "wan")) else { return false };
+            h3m.run_time.count >= 3 && (h3m.queued, h3m.running) == (0, 0) && h3m.workers.ready == 1 && wan.run_time.count >= 1
+        })
+        .await;
     let p: Vec<PoolMetrics> = serde_json::from_value(pools["pools"].clone()).unwrap();
     let h3m = p.iter().find(|m| m.pool == "h3").unwrap();
     assert!(h3m.run_time.count >= 3, "{h3m:?}");
@@ -478,13 +487,14 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     let tok = |r: reqwest::RequestBuilder| r.header("x-fv-internal-token", TOKEN);
     let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/drain", h3.base))).send().await.unwrap().json().await.unwrap();
     assert_eq!(d["draining"], true, "{d}");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // The gateway learns it on its next probe of the worker.
+    http.poll(&format!("{g}/fv/v1/status"), None, |v| h3_worker_state(v) == Some("draining")).await;
     let (s, v, h) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "while drained"})), bearer()).await;
     assert_eq!(s, 503, "{v}");
     assert!(h.get("retry-after").is_some());
     let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/undrain", h3.base))).send().await.unwrap().json().await.unwrap();
     assert_eq!(d["draining"], false, "{d}");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    http.poll(&format!("{g}/fv/v1/status"), None, |v| matches!(h3_worker_state(v), Some("ready" | "busy"))).await;
     let (s, v, _) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "after undrain"})), bearer()).await;
     assert_eq!(s, 202, "{v}");
     drop(gw);

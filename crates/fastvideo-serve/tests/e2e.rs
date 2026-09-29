@@ -27,7 +27,7 @@ use tower::ServiceExt;
 const KEY: &str = "sk-test-fv";
 
 fn config(tag: &str) -> Config {
-    let dir = std::env::temp_dir().join(format!("fv-serve-e2e-{tag}-{}", uuid_like()));
+    let dir = tempfile::Builder::new().prefix(&format!("fv-serve-e2e-{tag}-")).tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "test-signing-key".to_owned());
@@ -39,10 +39,6 @@ fn config(tag: &str) -> Config {
     c.engine.fake.step_ms = 1;
     c.validate().unwrap();
     c
-}
-
-fn uuid_like() -> String {
-    format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>, auth: bool) -> (StatusCode, Value, axum::http::HeaderMap) {
@@ -255,8 +251,11 @@ async fn ping_answers_while_the_app_builds() {
         let _ = stop_rx.await;
     }));
     let http = reqwest::Client::new();
+    // The per-request timeout only turns a hung server into a failure; it is
+    // not a latency budget (a loaded build pod answers in seconds, a hang
+    // never).
     let get = |p: &str| {
-        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(5));
+        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(30));
         async move { req.send().await.unwrap() }
     };
     assert_eq!(get("/ping").await.status(), 204);
@@ -268,14 +267,23 @@ async fn ping_answers_while_the_app_builds() {
     assert!(r.headers().get("retry-after").is_some());
 
     go_tx.send(()).unwrap();
-    let mut ready = false;
-    for _ in 0..400 {
-        if get("/ping").await.status() == 200 {
-            ready = true;
-            break;
+    // /ping answers 204 until the build is done and the engine is ready,
+    // then 200. The build's duration is not what this test checks (the fake
+    // engine loads in a blocking thread, which a loaded host schedules late),
+    // so the wait is bounded generously; every answer on the way must be
+    // 204 or 200.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let ready = loop {
+        let s = get("/ping").await.status();
+        if s == 200 {
+            break true;
+        }
+        assert_eq!(s, 204, "/ping while the app builds");
+        if std::time::Instant::now() >= deadline {
+            break false;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    };
     assert!(ready, "/ping never reached 200 after the build");
     let r = http.get(format!("{base}/fv/v1/capabilities")).bearer_auth(KEY).send().await.unwrap();
     assert_eq!(r.status(), 200);
