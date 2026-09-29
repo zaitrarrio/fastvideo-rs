@@ -601,7 +601,11 @@ fn prewarm_spec(cfg: &MediaConfig) -> Option<SpareSpec> {
     if cfg.h264 == H264Backend::OpenH264 && cfg.h264.usable() {
         return None;
     }
-    fastvideo_media::vp8::libvpx_available().then(|| SpareSpec::vp8(&vp8_config(cfg, w, h)).ok()).flatten()
+    // VP8: start the spare without waiting for the libvpx probe (another
+    // ffmpeg run, seconds on a loaded host), which runs alongside; an
+    // encoder adopts the spare only when the probe found libvpx.
+    let _ = std::thread::Builder::new().name("libvpx-probe".into()).spawn(fastvideo_media::vp8::libvpx_available);
+    SpareSpec::vp8(&vp8_config(cfg, w, h)).ok()
 }
 
 fn h264_config(cfg: &MediaConfig, w: u32, h: u32) -> fastvideo_media::video::H264Config {
