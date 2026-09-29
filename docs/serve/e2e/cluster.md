@@ -117,3 +117,57 @@ scripts/serve/runpod-cluster.sh status         # pods, deadline, pools
 
 `extend` does not move the Routine. The Routine checks the gateway's
 `FV_CLUSTER_DEADLINE` and does nothing while it is in the future.
+
+## Run 2 (2026-09-29): per-variant images, auth on, WebRTC ports
+
+`FV_CLUSTER_CAP_S=10800 FV_MIN_BALANCE=15 runpod-cluster.sh up sha-2cd1ba0`.
+A `sha-<commit>` argument deploys the per-variant images of that commit
+(docs/serve/images.md). `2cd1ba0` was the newest green serve image, and main
+(`8bcf5bd`) differed from it only in docs.
+
+| pod | image tag | digest |
+|---|---|---|
+| gateway (cpu3c, $0.06/hr) | `gateway-sha-2cd1ba0` | `sha256:00d85291…` |
+| h3-turbo | `h3-turbo-sha-2cd1ba0` | `sha256:c782eb37…` |
+| h3-max | `h3-max-sha-2cd1ba0` | `sha256:066a5547…` |
+| ltx | `ltx-sha-2cd1ba0` | `sha256:680ffa2a…` |
+| wan | `wan5b-sha-2cd1ba0` | `sha256:0441e76f…` |
+
+- All workers ran on RTX PRO 6000 in EUR-IS-1 at $2.09/hr. Each worker has
+  `8000/http` plus `70000/tcp`: Runpod gives each one a public IP and a
+  symmetric TCP port (`RUNPOD_TCP_PORT_70000`), which the WebRTC host
+  advertises for ICE-TCP.
+- Auth is `keys`. A call without a key gets 401. One user key was minted
+  with `runpod-cluster.sh mint`, which uses the admin route and stores the
+  key in D1. The admin token exists only in the state file.
+- The slim gateway image has no `curl`, so the gateway watchdog installs it
+  with apt at boot.
+
+Boot, measured from create at 02:01:57-02:02:02. The slim images pull in
+seconds, where run 1's all-in-one image took 10-19 min:
+
+| pod | ready |
+|---|---|
+| gateway | 02:02:40 (43 s, including the restart from the env PATCH) |
+| ltx | 02:03:26 (1.4 min) |
+| wan | 02:03:38 (1.6 min) |
+| h3-turbo (warmup) | 02:06:23 (4.4 min) |
+| h3-max | 02:07:07 (5.1 min) |
+
+Smoke with the minted key (native API, 16:9, smallest short edge):
+
+| pool | short edge | wall (s) | worker run (s) | denoise (s) |
+|---|---:|---:|---:|---:|
+| h3-turbo | 480 | 14.7 | 10.5 | 7.1 |
+| h3-max | 480 | 18.8 | 9.8 | 6.3 |
+| ltx | 720 | 40.0 | 35.8 | 13.5 |
+| wan | 480 | 13.0 | 8.9 | 1.7 |
+
+`/fv/v1/status` (public) lists the four pools as `ready`, each with one
+worker. The console's `common.js`, which contains the status strip, reads
+that endpoint. `/console` returned 200.
+
+Backstop: 2026-09-29T05:01:56Z (3 h). It is enforced by the gateway
+watchdog (which also deletes at a balance below $15), the local loop, and a
+Routine at 05:03Z. A local balance watchdog checks every 60 s with a floor
+of $15.
