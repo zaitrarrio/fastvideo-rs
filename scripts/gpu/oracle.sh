@@ -24,7 +24,9 @@
 # (upstream steps after the dumps), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
 # 0,1,24,47), FV_ORACLE_F32 (1: the f32-activation control for every target,
 # 0: none; default H3 only), FV_ORACLE_OWN_TEXT (1: LTX targets also run on our own text
-# contexts, no text injection), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
+# contexts, no text injection), FV_ORACLE_RUN_MODE (runtime pod mode: `run`,
+# default, or `all`: fv-gpucheck kernels first, then the oracle cells on the
+# same pod), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
 # Logs: $ORACLE_LOG_DIR (default /tmp/claude-0) oracle-*.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -146,7 +148,7 @@ log "runtime pod: targets $targets"
 rc=0
 FV_FAMILY="${FV_ORACLE_FAMILY:-oracle}" FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}" \
   FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-5400}" \
-  bash "$HERE/runpod-http.sh" run "$sha" >"$logs/oracle-rust.log" 2>&1 || rc=$?
+  bash "$HERE/runpod-http.sh" "${FV_ORACLE_RUN_MODE:-run}" "$sha" >"$logs/oracle-rust.log" 2>&1 || rc=$?
 log "runtime pod finished rc=$rc"
 for image in "${!bg[@]}"; do
   wait "${bg[$image]}" || log "upstream driver $image rc=$?"

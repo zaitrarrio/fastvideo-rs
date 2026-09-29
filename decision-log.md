@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-29 · FVID-2026-09-29-ltx-device-rope
+- Trigger: datacenter profile (docs/perf/datacenter-profile.md): LTX idles 3.6-4.6 s before stage 2 on a single-threaded host RoPE build, and the VAE decode stalls behind the CPU x264 feed; kernel plan WP-F, owner-approved
+- Options: cache the host tables per geometry; build them on the device; keep the host build
+- Decision: **the LTX RoPE tables are gathered on the device** (`ltx_split_rope`) from a factored form (cos/sin of each distinct fraction x frequency plus an index), and file jobs feed ffmpeg from a relay thread (`FrameSink::detach`). Escape hatch: `FASTVIDEO_LTX2_HOST_ROPE=1` restores the host build
+- Reason: the gather is bit-identical to the host tables (pure copies), needs no per-geometry cache, and covers every conditioning layout
+- Reversibility: cheap (env flag; the detach is one trait method)
+- Executed by: Executor
+- ADR: none
+- Verification: `factored_tables_expand_to_the_direct_ones_exactly` (host), `fv-gpucheck kernels` group `ltx_rope` (device vs host, 1080p), sink/output tests; timings in docs/perf/datacenter-profile.md "WP-F results"
+
 ### FVID · 2026-09-29 · FVID-2026-09-29-h3-1080p-length
 - Trigger: owner decision list (2026-09-29), item 1
 - Options: serve native 1080P over the whole 4..15 s grid; cap it at 5 s; cap at 5 s with 10 s behind a switch

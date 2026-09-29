@@ -419,8 +419,9 @@ mod tests {
     #[test]
     fn a_detached_consumer_gets_every_chunk_off_the_generating_thread() {
         use std::sync::Mutex;
+        type Got = Arc<Mutex<Vec<(usize, Vec<u8>, String)>>>;
         struct Detach {
-            got: Arc<Mutex<Vec<(usize, Vec<u8>, String)>>>,
+            got: Got,
         }
         impl FrameSink for Detach {
             fn frames(&mut self, _: &VideoFrames) -> Result<()> {

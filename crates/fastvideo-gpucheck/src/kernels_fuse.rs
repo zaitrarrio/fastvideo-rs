@@ -109,7 +109,8 @@ pub fn ltx_rope(report: &mut Report) -> StageResult<()> {
         grid: [19, 17, 30],
         downscale: 2,
     };
-    let cases: [(&str, [usize; 3], &[usize], Option<ReferenceBlock>); 5] = [
+    type Case<'a> = (&'a str, [usize; 3], &'a [usize], Option<ReferenceBlock>);
+    let cases: [Case; 5] = [
         ("t2v_1080p", [19, 34, 60], &[], None),
         ("i2v_1080p", [19, 34, 60], &[0], None),
         ("keyframes_540p", [19, 17, 30], &[0, 72, 144], None),
@@ -156,7 +157,7 @@ pub fn ltx_rope(report: &mut Report) -> StageResult<()> {
             differing.insert(table.into(), json!(n));
         }
         report.check(
-            &format!("ltx_rope_{name}"),
+            format!("ltx_rope_{name}"),
             ok,
             json!({
                 "differing_values": differing,
