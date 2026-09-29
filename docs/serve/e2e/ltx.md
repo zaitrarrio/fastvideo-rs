@@ -355,3 +355,44 @@ Notes:
   job's `output.audio` said 48 kHz (the model's vocoder rate) while the file
   is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
 - Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.
+
+## Guided audio-to-video on `ltx-pro` (2026-09-29)
+
+`ltx-pro` A2V now runs upstream's own pipeline (`A2VidPipelineTwoStage`: the
+LTX-2.5 dev DiT with the multimodal guider at stage 1, the distilled LoRA at
+stage 2; docs/oracle.md "LTX-2.5 guided audio-to-video"), as the catalog
+model `ltx25-a2v-guided`, the A2V companion of `ltx-pro`
+(`ltx25-distill-dense` no longer takes A2V; `ltx-turbo` keeps the distilled
+A2V above). fal `audio-to-video/pro` passes `guidance_scale` as the CFG scale.
+
+| | |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-fe45a1b` (the `serve` image of the branch, workflow_dispatch) |
+| Config | `configs/serve/runpod-ltx-a2v.toml` (`ltx25-a2v-guided` alone, alias `ltx-pro`, fal app `lightricks/ltx-2.5`), inlined by `ltx-pod.sh` |
+| Pod | `nx0eeayme99u9a` (`fv-a2vg-e2e-0929111415`), **H100 80GB HBM3** on the US volume (no RTX PRO 6000 in either volume's datacenter for an hour), $3.49/hr, created 11:14:20, deleted 11:22:34 UTC and checked gone: about **$0.48**. Create to `/ping` 200: 64 s |
+| Driver | `ltx_e2e.py <base> … probe a2v-guided-errors a2v-fal-pro a2v-native-pro-720p` |
+
+| Case | Request | Result | Time | Output |
+|---|---|---|---|---|
+| `probe` | `/fv/v1/capabilities` | PASS: one model `ltx25-a2v-guided`, tasks `a2v`, recipe `ltx25-dev-a2v-guided` (33 steps) | | |
+| `a2v-err-fast-unserved` | LTX `POST /v2/audio-to-video`, `model: ltx-2-5-fast` | 403 `permission_error` (the fast tier is not on this pod) | | |
+| `a2v-fal-pro` | fal queue `lightricks/ltx-2.5/audio-to-video/pro` `{audio_url, prompt (talking head), seed 5, guidance_scale 3}` | PASS, `COMPLETED` | 317.9 s (first job after boot), `inference_time` 274.4 s | 1920x1080, 161 @ 24 (6.71 s), AAC 44.1 kHz stereo; vs the input: corr 0.99999, lag 0 |
+| `a2v-native-pro-720p` | native `/fv/v1/jobs` `{model: ltx-pro, audio_url, prompt, size 1280x720, seed 11}` (default guidance 3) | PASS, `succeeded`, `resolved_model ltx25-a2v-guided`, tier max | 69.0 s (run 65.7 s) | 1280x720, 161 @ 24; audio as above |
+
+**Lip sync** (`scripts/gpu/lipsync_proxy.py`, the SyncNet stand-in; flite voice):
+
+| Clip | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| `a2v-fal-pro` (1080p) | 161/161 | -4 | 0.197 (0.042) | 0.14 |
+| `a2v-native-pro-720p` | 161/161 | 0 | 0.202 (0.202) | 0.58 |
+| **pooled** | 2 clips | **0 (0 ms)** | 0.12 (0.12) | **0.36** |
+
+Pooled the mouth moves with the speech at lag 0 (the distilled `ltx-turbo`
+clips above: -2 frames, speech contrast 0.29).
+
+Timings: guided 1080p for 6.7 s took 274 s of inference on the H100 (the
+distilled `ltx-turbo`: 25 s on RTX PRO 6000): stage 1 is 30 steps × 4 passes
+of the 22B DiT at 960x544 against 8 single-pass steps, and each request
+switches the DiT between its base and the fused LoRA twice (38 GB uploaded
+each way from pinned host memory). 720p for 6.7 s: 66 s. At 768x512x121 on
+RTX PRO 6000 (the oracle): stage 1 21.2 s, stage 2 4.1 s.
