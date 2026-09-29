@@ -7,11 +7,22 @@
 #   h3-turbo  /etc/fv/runpod.toml         h3-max  /etc/fv/runpod-h3-max.toml
 #   ltx       /etc/fv/runpod-ltx.toml     wan     /etc/fv/runpod-wan5b.toml
 #
-#   runpod-cluster.sh up [image]     create the gateway, then the four workers,
-#                                    then give the gateway the worker URLs
+#   runpod-cluster.sh up [image|sha-<commit>|<channel>]
+#                                    create the gateway, then the four workers,
+#                                    then give the gateway the worker URLs.
+#                                    `sha-<commit>` or a release channel
+#                                    (`stable`, `latest`; docs/serve/releases.md):
+#                                    the per-variant images of that commit or
+#                                    channel (docs/serve/images.md): gateway,
+#                                    h3-turbo, h3-max, ltx, wan5b; an image ref:
+#                                    that (all-in-one) image for every pod
+#   runpod-cluster.sh mint <name> <file>
+#                                    mint a user API key (admin route) into <file>
+#                                    (mode 600; never printed)
 #   runpod-cluster.sh wait           until every pool reports a ready worker
 #   runpod-cluster.sh status         pods, deadline, pools as the gateway sees them
-#   runpod-cluster.sh smoke          one small text-to-video per pool, no API key
+#   runpod-cluster.sh smoke          one small text-to-video per pool (with the key
+#                                    in FV_CLUSTER_KEY_FILE when auth is on)
 #   runpod-cluster.sh extend <min>   move the deadline (restarts the gateway pod
 #                                    only: its watchdog holds the deadline)
 #   runpod-cluster.sh down           delete every pod of the cluster, check they are gone
@@ -31,7 +42,7 @@
 # in the D1 deployments table (scripts/serve/lib/registry.sh; best effort)
 # and gets FV_IMAGE_REF / FV_IMAGE_DIGEST (/health reports them).
 #
-# Auth: FV_CLUSTER_AUTH (default none) is the gateway's FV_AUTH_MODE. The
+# Auth: FV_CLUSTER_AUTH (default keys; kept in the state) is the gateway's FV_AUTH_MODE. The
 # admin routes (/fv/v1/admin/*, /fv/v1/gateway/pools, key minting in
 # /console/admin) keep needing the admin token whatever the auth mode; it
 # is generated per cluster and kept in the state file. Workers always need
@@ -40,7 +51,7 @@
 # Backstops (deadline = create + FV_CLUSTER_CAP_S, default 6000 s):
 # - pod side: the gateway pod runs a watchdog that deletes the four workers
 #   and itself at the deadline, or as soon as the account balance drops
-#   below FV_MIN_BALANCE (default 8.25 $). It holds the account API key
+#   below FV_MIN_BALANCE (default 8.25 $, kept in the state). It holds the account API key
 #   (FV_BACKSTOP_API_KEY in its env) for that.
 # - detached here: one loop (setsid) that deletes every pod of the state
 #   file at the deadline the state file holds (extend moves it).
@@ -73,7 +84,7 @@ MIN_BALANCE="${FV_MIN_BALANCE:-8.25}"
 MIN_START="${FV_CLUSTER_MIN_START:-20}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-3.6}"
 REGIONS="${FV_CLUSTER_REGIONS:-eu us}"
-AUTH_MODE="${FV_CLUSTER_AUTH:-none}"
+AUTH_MODE="${FV_CLUSTER_AUTH:-keys}"
 CPU_FLAVORS="${FV_GATEWAY_CPU_FLAVORS:-cpu3c cpu5c cpu3g}"
 POOLS=(h3-turbo h3-max ltx wan)
 
@@ -93,6 +104,9 @@ pool_config() {
     wan) echo /etc/fv/runpod-wan5b.toml ;;
   esac
 }
+# The per-variant image of a pod (docs/serve/images.md).
+pool_variant() { case $1 in wan) echo wan5b ;; *) echo "$1" ;; esac; }
+pool_image() { jq -r --arg p "$1" '.images[$p] // .image' "$STATE"; }
 pool_env() { echo "FV_POOL_$(tr 'a-z-' 'A-Z_' <<<"$1")_URLS"; }
 
 SECRET_ENV_JSON='{
@@ -114,6 +128,7 @@ mkdir -p /fvstate
 printf "%s" "$FV_GATEWAY_TOML_B64" | base64 -d > /fv-gateway.toml
 export FV_PUBLIC_BASE_URL="https://${RUNPOD_POD_ID}-8000.proxy.runpod.net"
 (
+  command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
   api=https://rest.runpod.io/v1
   kill_all() {
     echo "[watchdog] $1: deleting ${FV_CLUSTER_PODS:-} and ${RUNPOD_POD_ID}" >&2
@@ -200,7 +215,7 @@ spawn_local_backstop() {
 create_gateway() {
   local image="$1" dc="$2" flavor resp pod env payload dcs
   env="$(jq -n --argjson s "$SECRET_ENV_JSON" --arg tok "$(st .internal_token)" --arg sign "$(st .url_signing_key)" \
-    --arg admin "$(st .admin_token)" --arg auth "$AUTH_MODE" --arg dl "$(st .deadline)" --arg min "$MIN_BALANCE" \
+    --arg admin "$(st .admin_token)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
     --arg key "$RUNPOD_API_KEY" --arg toml "$(base64 -w0 "$FV_ROOT/configs/serve/gateway-pods.toml")" \
     --argjson ident "$(fv_image_env_json "$image")" '$s + $ident + {
       FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth, FV_ADMIN_TOKEN: $admin,
@@ -283,7 +298,7 @@ patch_gateway() {
   local image="${1:-}" env body
   # The whole env again (secret references, never values), plus the pools.
   env="$(jq -n --argjson s "$SECRET_ENV_JSON" --arg tok "$(st .internal_token)" --arg sign "$(st .url_signing_key)" \
-    --arg admin "$(st .admin_token)" --arg auth "$AUTH_MODE" --arg dl "$(st .deadline)" --arg min "$MIN_BALANCE" \
+    --arg admin "$(st .admin_token)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
     --arg key "$RUNPOD_API_KEY" --arg toml "$(base64 -w0 "$FV_ROOT/configs/serve/gateway-pods.toml")" \
     --arg pods "$(jq -r '[.workers[]?.pod] + [.rolling[]?.pod] + [.retired[]?.pod] | join(" ")' "$STATE")" \
     --argjson urls "$(jq -c '(.workers // {}) as $w | (.rolling // {}) as $r
@@ -311,26 +326,40 @@ cmd_up() {
   read -r b spend <<<"$(balance)"
   awk -v b="$b" -v m="$MIN_START" 'BEGIN{exit !(b+0 >= m+0)}' || die "balance \$$b is below \$$MIN_START"
   log "balance \$$b, account spend \$$spend/hr"
-  image="$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$(fv_default_image)}}")"
-  log "image $image"
+  local arg="${1:-${FV_SERVE_IMAGE:-$(fv_default_image)}}" images='{}' p
+  if [[ "$arg" =~ ^[a-z][a-z0-9-]*$ ]]; then
+    # sha-<commit> or a channel: :<suffix> and :<variant>-<suffix>.
+    image="$(resolve_digest "$FV_SERVE_REPO:$arg")"
+    for p in gateway "${POOLS[@]}"; do
+      images="$(jq -c --arg p "$p" --arg i "$(resolve_digest "$FV_SERVE_REPO:$(pool_variant "$p")-$arg")" '. + {($p): $i}' <<<"$images")"
+    done
+  else
+    image="$(resolve_digest "$arg")"
+  fi
+  log "image $image; per pod: $images"
   mkdir -p "$(dirname "$STATE")"
   (umask 077; jq -n --arg image "$image" --arg tok "$(openssl rand -hex 32)" --arg sign "$(openssl rand -hex 32)" \
     --arg admin "fvadm_$(openssl rand -hex 24)" --arg dl "$(( $(date +%s) + CAP_S ))" --arg auth "$AUTH_MODE" \
-    '{image: $image, internal_token: $tok, url_signing_key: $sign, admin_token: $admin, auth: $auth,
+    --argjson images "$images" --arg min "$MIN_BALANCE" \
+    '{image: $image, images: $images, internal_token: $tok, url_signing_key: $sign, admin_token: $admin, auth: $auth,
+      min_balance: $min,
       deadline: ($dl|tonumber), workers: {}}' >"$STATE")
   log "deadline $(utc "$(st .deadline)") (${CAP_S}s)"
   region="${REGIONS%% *}"; dc="$(region_dc "$region")"
-  create_gateway "$image" "$dc"
+  create_gateway "$(pool_image gateway)" "$dc"
   st_set --arg u "https://$(st .gateway.pod)-8000.proxy.runpod.net" '.gateway_url = $u'
   spawn_local_backstop
   local pool failed=()
-  for pool in "${POOLS[@]}"; do create_worker "$pool" "$image" || failed+=("$pool"); done
+  for pool in "${POOLS[@]}"; do create_worker "$pool" "$(pool_image "$pool")" || failed+=("$pool"); done
   patch_gateway
   jq -c '{gateway: .gateway, gateway_url, deadline_utc: (.deadline | todate), workers: (.workers | map_values({pod, gpu, dc, dph}))}' "$STATE"
   (( ${#failed[@]} == 0 )) || log "WARNING: no pod for: ${failed[*]}"
 }
 
 # The admin-token call (pools view).
+# The user key for keyed calls (FV_CLUSTER_KEY_FILE), as curl arguments.
+KEY_ARGS=()
+if [[ -n "${FV_CLUSTER_KEY_FILE:-}" ]]; then KEY_ARGS=(-H "Authorization: Bearer $(tr -d '\n' <"$FV_CLUSTER_KEY_FILE")"); fi
 admin_get() { curl -sS --max-time 30 -H "Authorization: Bearer $(st .admin_token)" "$(st .gateway_url)$1"; }
 
 cmd_status() {
@@ -347,7 +376,7 @@ cmd_wait() {
   local t0 caps pools n p
   t0=$(date +%s)
   while :; do
-    caps="$(curl -sS --max-time 20 "$(st .gateway_url)/fv/v1/capabilities" 2>/dev/null || true)"
+    caps="$(curl -sS --max-time 20 "${KEY_ARGS[@]}" "$(st .gateway_url)/fv/v1/capabilities" 2>/dev/null || true)"
     pools="$(jq -c '[.pools[]? | select(.available) | .id]' <<<"$caps" 2>/dev/null || echo '[]')"
     n="$(jq '[.pools[]? | select([.workers[]? | select(.ready)] | length > 0)] | length' <<<"$caps" 2>/dev/null || echo 0)"
     log "available $pools; pools with a ready worker: $n/4 ($(( $(date +%s) - t0 ))s)"
@@ -371,15 +400,15 @@ cmd_smoke() {
       h3-turbo) model=fasth3 ;; h3-max) model=sol-h3 ;; ltx) model=ltx25-distill-sol ;; wan) model=fastwan22-ti2v-5b ;;
     esac
     # The smallest short-edge tier the model advertises, 16:9, default length.
-    size="$(curl -sS --max-time 20 "$gw/fv/v1/capabilities" | jq -c --arg m "$model" \
+    size="$(curl -sS --max-time 20 "${KEY_ARGS[@]}" "$gw/fv/v1/capabilities" | jq -c --arg m "$model" \
       '[.models[] | select(.caps.id == $m) | .caps.canvas.short_edges[]?] | min')"
     body="$(jq -nc --arg m "$model" --argjson se "$size" '{model: $m, prompt: "a red fox trotting through fresh snow, cinematic", seed: 1}
       + (if $se then {aspect_ratio: "16:9", short_edge: $se} else {} end)')"
     t0=$(date +%s.%N)
-    id="$(curl -sS --max-time 60 -H 'content-type: application/json' -d "$body" "$gw/fv/v1/jobs" | jq -r '.id // empty')"
+    id="$(curl -sS --max-time 60 "${KEY_ARGS[@]}" -H 'content-type: application/json' -d "$body" "$gw/fv/v1/jobs" | jq -r '.id // empty')"
     [[ -n "$id" ]] || { log "$pool: submit refused"; res="$(jq -c --arg p "$pool" '. + [{pool: $p, status: "refused"}]' <<<"$res")"; continue; }
     while :; do
-      st_json="$(curl -sS --max-time 30 "$gw/fv/v1/jobs/$id" || echo '{}')"
+      st_json="$(curl -sS --max-time 30 "${KEY_ARGS[@]}" "$gw/fv/v1/jobs/$id" || echo '{}')"
       case "$(jq -r '.status // ""' <<<"$st_json")" in succeeded | failed | cancelled) break ;; esac
       (( ${t0%.*} + 1200 > $(date +%s) )) || break
       sleep 1
@@ -392,14 +421,25 @@ cmd_smoke() {
   jq . <<<"$res" | tee "$OUT_DIR/smoke-$(date -u +%m%d%H%M%S).json"
 }
 
+cmd_mint() {
+  local name="${1:?key name}" file="${2:?output file}" resp
+  resp="$(curl -sS --max-time 30 -H "Authorization: Bearer $(st .admin_token)" -H 'content-type: application/json' \
+    -d "$(jq -nc --arg n "$name" '{name: $n}')" "$(st .gateway_url)/fv/v1/admin/keys")"
+  jq -e '.api_key' <<<"$resp" >/dev/null || die "mint refused: $(jq -c 'del(.api_key)' <<<"$resp" 2>/dev/null | head -c 300)"
+  (umask 077; jq -r '.api_key' <<<"$resp" >"$file")
+  chmod 600 "$file"
+  log "minted key $(jq -c '.key | {id, name, prefix}' <<<"$resp") into $file"
+  ledger "cluster-key-minted $(jq -r '.key.id' <<<"$resp") name=$name"
+}
+
 cmd_extend() {
   local min="${1:?minutes}" b spend dph new
   read -r b spend <<<"$(balance)"
   new=$(( $(st .deadline) + min * 60 ))
   dph="$(jq '[.gateway.dph] + [.workers[].dph] | add' "$STATE")"
   log "balance \$$b, account spend \$$spend/hr (cluster \$$dph/hr); new deadline $(utc "$new")"
-  awk -v b="$b" -v s="$spend" -v h="$(( new - $(date +%s) ))" -v m="$MIN_BALANCE" 'BEGIN{exit !(b - s*h/3600 >= m)}' \
-    || die "at \$$spend/hr the balance would fall below \$$MIN_BALANCE before $(utc "$new")"
+  awk -v b="$b" -v s="$spend" -v h="$(( new - $(date +%s) ))" -v m="$(st .min_balance)" 'BEGIN{exit !(b - s*h/3600 >= m)}' \
+    || die "at \$$spend/hr the balance would fall below \$$(st .min_balance) before $(utc "$new")"
   st_set --arg d "$new" '.deadline = ($d|tonumber)'
   patch_gateway
   ledger "cluster-extended deadline=$(utc "$new")"
@@ -501,7 +541,10 @@ cmd_roll() {
   done
   # 6. The new workers take the pools' places; the gateway drops the old ones.
   st_set '.retired = [.workers as $w | (.rolling // {}) | keys[] as $p | $w[$p]]'
-  st_set '.workers += (.rolling // {}) | del(.rolling)'
+  # Per-variant clusters (`.images`) boot their next workers from there too.
+  st_set '(if (.images // {} | length) > 0 then .images += ((.rolling // {}) | map_values(.image)) else . end)
+    | .workers += (.rolling // {}) | del(.rolling)'
+  if [[ -n "$gw_img" ]]; then st_set --arg i "$gw_img" 'if (.images // {} | length) > 0 then .images.gateway = $i else . end'; fi
   if ((${#pools[@]})) || [[ -n "$gw_img" ]]; then patch_gateway "$gw_img"; fi
   # 7. Delete the old workers.
   for old in $(jq -r '[.retired[]?.pod] | .[]' "$STATE"); do
@@ -517,7 +560,7 @@ case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   wait | status | smoke | down)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; "cmd_$1" ;;
-  extend) : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state"; shift; cmd_extend "$@" ;;
-  roll) : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; shift; cmd_roll "$@" ;;
-  *) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  extend | mint | roll)
+    : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; c="$1"; shift; "cmd_$c" "$@" ;;
+  *) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

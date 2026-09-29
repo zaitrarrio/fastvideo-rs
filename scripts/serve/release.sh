@@ -450,8 +450,11 @@ cmd_reconcile() {
 # ---- redeploy (rolling) -----------------------------------------------------
 
 cmd_redeploy() {
-  local sel="${ARGS[0]:?redeploy <pool|all|gateway> [channel|sha]}" target="${ARGS[1]:-stable}" rel digests pools p kind="${FV_CLUSTER_IMAGE_KIND:-debug}" key img old specs=()
+  local sel="${ARGS[0]:?redeploy <pool|all|gateway> [channel|sha]}" target="${ARGS[1]:-stable}" rel digests pools p kind key img old specs=()
   [[ -s "$STATE" ]] || die "no cluster state ($STATE): redeploy rolls the standing cluster of runpod-cluster.sh"
+  # A cluster started on per-variant images (`up sha-…` / `up <channel>`)
+  # rolls onto the target's variant images, else onto its all-in-one image.
+  kind="${FV_CLUSTER_IMAGE_KIND:-$(jq -r 'if (.images // {} | length) > 0 then "variant" else "debug" end' "$STATE")}"
   if [[ "$target" =~ ^[a-z][a-z0-9-]{1,30}$ ]] && fv_d1_available && rel="$(fv_release_current "$target" 2>/dev/null)" && [[ -n "$rel" ]]; then
     digests="$(jq -c '.digests | fromjson' <<<"$rel")"
     log "target: $target = release $(jq -r .id <<<"$rel") ($(short "$(jq -r .git_sha <<<"$rel")"))"
@@ -465,12 +468,12 @@ cmd_redeploy() {
   for p in $pools; do
     if [[ "$p" == gateway ]]; then
       key=debug; [[ "$kind" == variant ]] && key=gateway
-      old="$(jq -r '.gateway.image // .image' "$STATE")"
+      old="$(jq -r '.gateway.image // .images.gateway // .image' "$STATE")"
     else
       jq -e --arg p "$p" '.workers | has($p)' "$STATE" >/dev/null || die "the cluster has no pool $p ($(jq -r '.workers | keys | join(", ")' "$STATE"))"
       key=debug
       if [[ "$kind" == variant ]]; then key="$p"; [[ "$p" == wan ]] && key=wan5b; fi
-      old="$(jq -r --arg p "$p" '.workers[$p].image // .image' "$STATE")"
+      old="$(jq -r --arg p "$p" '.workers[$p].image // .images[$p] // .image' "$STATE")"
     fi
     img="$(jq -r --arg k "$key" '.[$k] // empty' <<<"$digests")"
     [[ -n "$img" ]] || die "the target has no $key image"

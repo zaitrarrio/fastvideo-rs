@@ -160,9 +160,12 @@ standing gateway cluster of `runpod-cluster.sh` (state
    pod id, so its URL stays);
 7. delete the old worker.
 
-The cluster boots the all-in-one image (release key `debug`);
-`FV_CLUSTER_IMAGE_KIND=variant` rolls workers onto their variant images
-instead (the gateway stays on the all-in-one: its watchdog needs curl).
+A cluster started on per-variant images (`runpod-cluster.sh up sha-<commit>`
+or `up stable`) rolls each pod onto the target's image of its variant
+(`wan` → `wan5b`, the gateway → `gateway`) and keeps the state's `images`
+in step; one started on an image reference rolls onto the target's
+all-in-one image (release key `debug`). `FV_CLUSTER_IMAGE_KIND=variant|debug`
+overrides.
 The balance guard (`FV_CLUSTER_MIN_START`) and a deadline check (at least
 `FV_ROLL_MIN_LEFT_S`, 40 min, left) apply. Serverless endpoints are not
 rolled here: an endpoint on a shared template follows the template, which

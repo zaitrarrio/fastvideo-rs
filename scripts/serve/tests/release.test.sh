@@ -217,6 +217,16 @@ check "redeploy gateway: same pod, new image" \
 out="$(bash "$SERVE/release.sh" redeploy all stable 2>&1)"
 check "redeploy all: only what is behind (wan)" bash -c 'grep -q "  wan: " <<<"$0" && ! grep -q "  h3-turbo: " <<<"$0" && ! grep -q "  gateway: " <<<"$0"' "$out"
 
+# A cluster on per-variant images rolls onto the target's variant images.
+curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"old-wan5b\": {\"id\": \"old-wan5b\", \"name\": \"fv-cluster-wan-2\", \"imageName\": \"$REPO@$(jq -r .wan5b <<<"$DA")\", \"desiredStatus\": \"RUNNING\", \"env\": {}}}}" >/dev/null
+jq --arg w "$REPO@$(jq -r .wan5b <<<"$DA")" --arg g "$REPO@$(jq -r .gateway <<<"$DA")" \
+  '.images = {gateway: $g, wan: $w} | .workers = {wan: {pod: "old-wan5b", url: "https://old-wan5b-8000.proxy.runpod.net", image: $w}} | .gateway.image = $g' \
+  "$T/cluster.json" >"$T/c2.json" && mv "$T/c2.json" "$T/cluster.json"
+out="$(bash "$SERVE/release.sh" redeploy all stable 2>&1)"
+check "redeploy (per-variant cluster): wan -> wan5b image, gateway -> gateway image, images kept in step" \
+  test "$(jq -r '.workers.wan.image, .images.wan, .gateway.image, .images.gateway' "$T/cluster.json" | xargs)" \
+  = "$REPO@$(jq -r .wan5b <<<"$DB") $REPO@$(jq -r .wan5b <<<"$DB") $REPO@$(jq -r .gateway <<<"$DB") $REPO@$(jq -r .gateway <<<"$DB")"
+
 # --- secrets -------------------------------------------------------------------
 all="$(cat "$T"/*.out "$T/stderr.log" 2>/dev/null)"
 check "no secret in any output" bash -c '! grep -Eq "test-cf-token|test-runpod-key|test-gh-token|test-internal-token|never-print-me" <<<"$0"' "$all"
