@@ -1,0 +1,23 @@
+=== 2026-09-29T08:29:22Z start /etc/fv/runpod-sfwan.toml
+2026-09-29T08:29:22.608234Z  INFO fv_serve: listening (starting) addr=0.0.0.0:8000
+2026-09-29T08:29:28.651839Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to: director.encoder=openh264 (not in this build: answered with VP8 instead), reactor.h264=off (VP8 only), webrtc.encoder=x264-test (CPU test encoder), engine.post_enco
+2026-09-29T08:29:28.652362Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+2026-09-29T08:29:29.526613Z  INFO fastvideo_serve::admin_token: admin token: from FV_ADMIN_TOKEN
+2026-09-29T08:29:29.526812Z  WARN fastvideo_serve::app: server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+2026-09-29T08:29:29.527521Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:51100) tcp_local=None candidates=["candidate:1 1 udp 2130706431 172.23.0.2 51100 typ host"]
+2026-09-29T08:29:29.527586Z  INFO fastvideo_serve::rtc: webrtc host bound udp=Some(0.0.0.0:51100) tcp=None
+2026-09-29T08:29:29.527644Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:51100) tcp=None
+2026-09-29T08:29:29.530032Z  INFO fastvideo_serve::app: app built: serving every route
+[fastvideo] cuda device=0 sm_100 kernels=Cubin(100) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+2026-09-29T08:29:30.452031Z  INFO fastvideo_engine_service::cuda::backend: loading model=sfwan21-1.3b dit_gb=5.676070816 free_gb=190.70222336
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+2026-09-29T08:31:03.495390Z  INFO fastvideo_engine_service::cuda::backend: model resident model=sfwan21-1.3b seconds=93.04331528
+FV-SERVE READY models=sfwan21-1.3b
+2026-09-29T08:31:03.495773Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] cuda device=0 sm_100 kernels=Cubin(100) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+[fastvideo] causal rollout 832x480 window=21 sink=3 rope=RebasedSink switch=Keep timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+[INFO] wan/run/g60 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.702274317,"p50":0.41420653,"p90":0.421113},"blocks":81,"consumer_frames":969,"diagnostics_s":2.292981255,"first_block_s":0.702274317,"fps_steady_engine"
+

@@ -8,6 +8,9 @@
 #   pod-clients.sh director [res] [app]  tests/compat fal_director.mjs (headless Chromium)
 #   pod-clients.sh reactor               reactor_sdk 1.6.0 clip mode (av)
 #   pod-clients.sh console               tests/console/smoke.cjs against :8000
+#   pod-clients.sh avatar                tests/console/avatar.cjs (live) against :8000
+#                                        (the Reactor avatar mode), then the
+#                                        recording's lip-sync proxy
 #   pod-clients.sh encode <mp4>          h264_nvenc vs libx264 on one clip
 set -uo pipefail
 E=/e2e
@@ -47,6 +50,18 @@ case "${1:-}" in
     origin=$BASE; [ "${2:-}" = public ] && origin="https://${RUNPOD_POD_ID}-8000.proxy.runpod.net"
     FV_CONSOLE_ORIGIN="$origin" FV_CONSOLE_TIMEOUT_MS="${FV_CONSOLE_TIMEOUT_MS:-420000}" NODE_PATH=$E/node/node_modules \
       timeout 1800 node $E/tests/console/smoke.cjs
+    ;;
+  avatar)
+    # Live script avatar: the page drives a take; the recording is remuxed
+    # to MP4 at 24 fps and measured with the lip-sync proxy.
+    out=$E/out/avatar; rm -rf "$out"; mkdir -p "$out"
+    FV_AVATAR_ORIGIN=$BASE FV_AVATAR_OUT=$out FV_KEY="${FV_KEY:-}" NODE_PATH=$E/node/node_modules \
+      timeout 1500 node $E/tests/console/avatar.cjs || exit 1
+    ffmpeg -v error -y -i "$out/avatar.webm" -r 24 -c:v libx264 -preset veryfast -crf 18 -c:a aac "$out/avatar.mp4"
+    VIRTUAL_ENV=$E/venv $E/uv/uv pip install -q numpy 'opencv-python-headless<5' >/dev/null 2>&1
+    python $E/scripts/gpu/lipsync_proxy.py --json "$out/lipsync.json" --pool avatar "$out/avatar.mp4"
+    for t in 3 12 25; do ffmpeg -v error -y -ss $t -i "$out/avatar.mp4" -frames:v 1 -vf scale=320:-2 "$out/frame-$t.jpg" 2>/dev/null; done
+    ls -la "$out"
     ;;
   encode)
     # Decode once to raw frames, then time each encoder on the same frames

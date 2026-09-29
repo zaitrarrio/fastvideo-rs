@@ -50,6 +50,8 @@ pub fn router(rt: Reactor) -> Router {
             post(offer).put(offer).get(poll_answer),
         )
         .route(&format!("{W}/connections/{{cid}}/ice_candidates"), post(candidates))
+        .route("/sessions/{sid}/uploads", post(create_upload))
+        .route("/sessions/{sid}/uploads/{id}", axum::routing::put(put_upload).layer(axum::extract::DefaultBodyLimit::max(crate::uploads::MAX_UPLOAD_BYTES as usize)))
         .layer(CorsLayer::permissive())
         .with_state(rt)
 }
@@ -207,6 +209,66 @@ async fn candidates(
     };
     match rt.add_candidates(&sid, cid, c).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateUpload {
+    #[serde(default)]
+    name: String,
+    size: u64,
+    #[serde(default)]
+    mime_type: String,
+    #[serde(default)]
+    upload_id: Option<String>,
+}
+
+/// The origin a client reached us at (`x-forwarded-proto` + `Host`), for
+/// the presigned URL; empty (a relative URL) without a `Host`.
+fn origin(headers: &HeaderMap) -> String {
+    let host = headers.get("x-forwarded-host").or_else(|| headers.get("host")).and_then(|v| v.to_str().ok());
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|p| p.split(',').next())
+        .map(str::trim)
+        .unwrap_or("http");
+    match host {
+        Some(h) if !h.is_empty() && !h.contains(['/', ' ']) => format!("{proto}://{h}"),
+        _ => String::new(),
+    }
+}
+
+/// `POST /sessions/{sid}/uploads` (reactor §3.5): 201 with the presigned URL.
+async fn create_upload(State(rt): State<Reactor>, Path(sid): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err(e) = rt.require_running(&sid) {
+        return e.into_response();
+    }
+    let req: CreateUpload = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return Refusal::new(422, format!("invalid upload request: {e}")).into_response(),
+    };
+    match rt.uploads().create(&req.name, req.size, &req.mime_type, req.upload_id.as_deref()) {
+        Ok(id) => {
+            let path = format!("/sessions/{sid}/uploads/{id}");
+            (
+                StatusCode::CREATED,
+                Json(json!({"presigned_id": id, "upload_id": id, "presigned_url": format!("{}{path}", origin(&headers)), "path": path})),
+            )
+                .into_response()
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `PUT /sessions/{sid}/uploads/{id}`: the raw bytes (exactly the declared size).
+async fn put_upload(State(rt): State<Reactor>, Path((sid, id)): Path<(String, String)>, body: Bytes) -> Response {
+    if let Err(e) = rt.require_running(&sid) {
+        return e.into_response();
+    }
+    match rt.uploads().put(&id, &body) {
+        Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
     }
 }

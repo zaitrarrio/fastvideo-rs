@@ -30,6 +30,7 @@
 //! let paced = spawn_causal_pacer(session, CausalPacerConfig::for_spec(&spec))?;
 //! ```
 
+pub mod avatar;
 pub mod causal;
 pub mod clip;
 pub mod pace;
@@ -37,6 +38,10 @@ pub mod player;
 pub mod queue;
 pub mod rules;
 
+pub use avatar::{
+    AvatarConfig, AvatarEvent, AvatarOutputs, AvatarPlan, AvatarPlayer, AvatarStatus, AvatarTake,
+    AvatarWindow, PlanInput, WindowKind, WindowReport,
+};
 pub use causal::{
     CausalBlock, CausalCommand, CausalControl, CausalReply, CausalSession, CausalState,
     CausalStats, Ttff,

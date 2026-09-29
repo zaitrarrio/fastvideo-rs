@@ -37,6 +37,17 @@ pub fn reactor_config(c: &ReactorCfg, streams: &StreamsCfg) -> anyhow::Result<Re
         h264: h264_backend(&c.h264)?,
         h264_bitrate_bps: c.h264_bitrate_bps,
         causal_limits: streams.causal_limits(),
+        mode: match c.mode.as_str() {
+            "avatar" => Some(fastvideo_reactor::engine::Mode::Avatar),
+            _ => None,
+        },
+        avatar: fastvideo_reactor::AvatarSettings {
+            window_s: c.avatar_window_s,
+            size: crate::config::parse_size(&c.avatar_size)
+                .ok_or_else(|| anyhow!("[reactor] avatar_size = {:?} (WxH)", c.avatar_size))?,
+            session_max_s: c.avatar_session_max_s,
+            ..fastvideo_reactor::AvatarSettings::default()
+        },
         ..ReactorConfig::default()
     })
 }
@@ -71,6 +82,11 @@ mod tests {
         assert_eq!(r.orphan_timeout, Duration::from_secs(60));
         assert_eq!(r.ping_timeout, Duration::from_secs(20));
         assert_eq!(r.max_connections, 64);
+        assert_eq!(r.mode, None);
+        assert_eq!(r.avatar.size, (640, 352));
+        let mut rc = c.reactor.clone();
+        rc.mode = "avatar".into();
+        assert_eq!(reactor_config(&rc, &c.streams).unwrap().mode, Some(fastvideo_reactor::engine::Mode::Avatar));
         assert_eq!(h264_backend("nvenc").unwrap(), H264Backend::Nvenc);
         assert!(h264_backend("x264").is_err());
         // `auto` follows the per-process NVENC probe.

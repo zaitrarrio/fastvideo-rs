@@ -20,6 +20,7 @@ time.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+image.workspace = true
 
 fastvideo-media.workspace = true
 # The Reactor runtime answers offers itself, so the str0m host is always on.

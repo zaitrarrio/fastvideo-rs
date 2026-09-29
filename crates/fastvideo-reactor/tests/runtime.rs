@@ -586,3 +586,155 @@ async fn causal_session_ends_at_its_length_limit() {
         assert_eq!(rt.state(), RtState::Ready);
     }
 }
+
+/// `PUT` of raw bytes.
+async fn put_bytes(app: &Router, uri: &str, bytes: Vec<u8>) -> StatusCode {
+    let req = Request::builder().method("PUT").uri(uri).header("content-type", "application/octet-stream").body(Body::from(bytes)).unwrap();
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+/// A command whose file parameter rides `Command.uploads` (the SDK's way).
+fn command_with_upload(name: &str, param: &str, upload_id: &str, rid: &str) -> ChannelMessage {
+    let m = pb::DataClientMessage {
+        request_id: rid.into(),
+        kind: pb::MessageKind::Request as i32,
+        payload: Some(pb::data_client_message::Payload::Command(pb::Command {
+            r#type: name.into(),
+            data: Some(json_to_struct(&json!({}))),
+            uploads: [(param.to_owned(), pb::UploadReference { upload_id: upload_id.into(), name: "face.png".into(), mime_type: "image/png".into(), size: 0 })].into(),
+        })),
+    };
+    ChannelMessage::binary("data", m.encode_to_vec())
+}
+
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 2) as u8, (y * 2) as u8, 128]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+/// Avatar mode (Reactor `ltx`) on the fake LTX engine: upload the photo,
+/// set the script, start; the take streams window by window (A/V), pauses
+/// and resumes, completes, and reset clears the conditions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avatar_script_take_streams_in_windows() {
+    use fastvideo_reactor::engine::Mode;
+    use fastvideo_reactor::AvatarSettings;
+    use pb::control_client_message::Payload as C;
+    use pb::MessageKind as K;
+    let e = engine(FakeModel::ltx_turbo(), Duration::ZERO);
+    e.wait_ready().await;
+    let (rt, app) = runtime(e, |c| {
+        c.mode = Some(Mode::Avatar);
+        c.avatar = AvatarSettings { size: (128, 64), speed: 3.0, session_max_s: 120, ..AvatarSettings::default() };
+    })
+    .await;
+    let (_, _, schema) = call(&app, "GET", "/schema", None).await;
+    assert_eq!(schema["x-reactor"]["mode"], "avatar", "{schema}");
+    assert_eq!(schema["x-reactor"]["session_limits"]["take_max_s"], 300.0);
+    assert!(schema["paths"]["/events/set_avatar_image"].is_object());
+    assert_eq!(
+        schema["paths"]["/events/set_avatar_image"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"]["avatar_image"]["$ref"],
+        "#/components/schemas/ReactorUploadReference"
+    );
+    let (s, _, d) = call(&app, "POST", "/start_session", Some(json!({"max_seconds": 121}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{d}");
+    let (s, _, d) = call(&app, "POST", "/start_session", None).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(d["capabilities"]["tracks"][1]["name"], "main_audio");
+
+    // The upload: register, then PUT the bytes to the presigned URL.
+    let bytes = png(96, 96);
+    let (s, _, up) = call(
+        &app,
+        "POST",
+        "/sessions/00000000-0000-0000-0000-000000000000/uploads",
+        Some(json!({"name": "face.png", "size": bytes.len(), "mime_type": "image/png"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{up}");
+    let id = up["presigned_id"].as_str().unwrap().to_owned();
+    assert_eq!(put_bytes(&app, up["path"].as_str().unwrap(), bytes[..10].to_vec()).await, StatusCode::BAD_REQUEST);
+    assert_eq!(put_bytes(&app, up["path"].as_str().unwrap(), bytes.clone()).await, StatusCode::OK);
+
+    let Client { mut peer, .. } = connect(&app, true).await;
+    let h = peer.handle().clone();
+    h.send_message(control(C::Ping(pb::Ping {}), "", K::Notification)).await.unwrap();
+    for t in ["main_video", "main_audio"] {
+        h.send_message(control(C::ResumeTrack(pb::ResumeTrack { name: t.into() }), "", K::Notification)).await.unwrap();
+    }
+    let mut seen = Seen::default();
+    // Greeting, then `start` without an image: refused.
+    h.send_message(command("start", json!({}), "d1")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("command_error").is_empty()).await;
+    assert!(seen.model("state_update")[0].1["has_avatar_image"] == false);
+    assert_eq!(seen.model("command_error")[0].1["reason"], "set_avatar_image first");
+
+    h.send_message(command_with_upload("set_avatar_image", "avatar_image", &id, "d2")).await.unwrap();
+    h.send_message(command_with_upload("set_avatar_image", "avatar_image", "never-uploaded-x", "d2b")).await.unwrap();
+    let script = "Hello and welcome. This is a short script for the avatar test, and it is long enough to need two windows \
+                  of speech at the default rate. Thanks for watching, see you soon.";
+    h.send_message(command("set_script", json!({"script": script}), "d3")).await.unwrap();
+    h.send_message(command("set_wpm", json!({"wpm": 300}), "d4")).await.unwrap();
+    h.send_message(command("set_seed", json!({"seed": 11}), "d5")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(15), |s| s.reply("d5").is_some() && s.reply("d2b").is_some()).await;
+    let acc = seen.model("avatar_image_accepted");
+    assert_eq!(acc[0].1, json!({"name": "face.png", "width": 96, "height": 96}), "{acc:?}");
+    use pb::data_server_message::Payload as DS;
+    assert!(matches!(&seen.reply("d2b").unwrap().payload, Some(DS::Error(e)) if e.code == "unresolved_upload"));
+    let sa = &seen.model("script_accepted")[0].1;
+    let words = sa["words"].as_u64().unwrap();
+    assert_eq!(words, script.split_whitespace().count() as u64);
+    assert!(matches!(&seen.reply("d4").unwrap().payload, Some(DS::Error(e)) if e.code == "invalid_command"));
+    assert_eq!(seen.model("seed_accepted")[0].1["seed"], 11);
+
+    let v0 = seen.video.len();
+    let a0 = seen.audio;
+    h.send_message(command("start", json!({}), "d6")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(20), |s| !s.model("window_started").is_empty()).await;
+    let started = seen.model("generation_started");
+    assert_eq!(started.len(), 1, "{:?}", seen.model("command_error"));
+    let total = started[0].1["total_windows"].as_u64().unwrap();
+    assert!(total >= 2, "{started:?}");
+    assert_eq!((started[0].1["width"].as_u64(), started[0].1["height"].as_u64()), (Some(128), Some(64)));
+    // Pause and resume mid-take.
+    h.send_message(command("pause", json!({}), "d7")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("generation_paused").is_empty()).await;
+    h.send_message(command("pause", json!({}), "d7b")).await.unwrap();
+    h.send_message(command("resume", json!({}), "d8")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(60), |s| !s.model("generation_complete").is_empty()).await;
+    assert_eq!(seen.model("generation_resumed").len(), 1);
+    assert!(seen.model("command_error").iter().any(|(_, e)| e["command"] == "pause"), "second pause refused");
+    let progress = seen.model("window_progress");
+    assert_eq!(progress.len() as u64, total, "{progress:?}");
+    for (i, (_, p)) in progress.iter().enumerate() {
+        assert_eq!(p["window_index"].as_u64(), Some(i as u64));
+    }
+    let built = seen.model("window_built");
+    assert_eq!(built.len() as u64, total);
+    assert!(built.iter().all(|(_, b)| b["rtf"].as_f64().is_some_and(|r| r > 0.0)));
+    let done = &seen.model("generation_complete")[0].1;
+    let secs = done["seconds_sent"].as_f64().unwrap();
+    let effective = sa["effective_seconds"].as_f64().unwrap();
+    assert!((secs - effective).abs() < 0.1, "sent {secs} of {effective}");
+    pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
+    let frames = seen.video.len() - v0;
+    // Played at 3x real time: the encoder's drop-oldest input queue may shed
+    // frames on a loaded host, so only a floor is checked.
+    assert!(frames as f64 >= effective * 24.0 * 0.4, "{frames} frames for {effective} s");
+    assert!(seen.audio - a0 > 50, "{} audio packets", seen.audio - a0);
+    let st = seen.model("state_update").last().unwrap().1.clone();
+    assert_eq!(st["finished"], true);
+    assert!(st["valid_commands"].as_array().unwrap().iter().any(|c| c == "start"), "{st}");
+
+    // A queued change while generating is listed; reset clears everything.
+    h.send_message(command("reset", json!({}), "d9")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| !s.model("generation_reset").is_empty()).await;
+    h.send_message(command("get_state", json!({}), "d10")).await.unwrap();
+    pump(&mut peer, &mut seen, Duration::from_secs(5), |s| s.reply("d10").is_some()).await;
+    let st = seen.model("state_update").into_iter().find(|(r, _)| r == "d10").unwrap().1;
+    assert_eq!(st["has_avatar_image"], false);
+    assert_eq!(st["script"], "");
+    rt.drain().await;
+}
