@@ -340,6 +340,12 @@ pub enum Stage {
         /// The IC-LoRA's stage-1 fuse strength.
         #[arg(long, default_value_t = 1.0)]
         ic_lora_strength: f32,
+        /// Audio-to-video (`a2vid_two_stage.py --audio-path`, on the distilled
+        /// 2.5 stages): the driving audio file, VAE-encoded and pinned clean
+        /// on both stages; the output carries this audio. Must last at least
+        /// `num_frames / frame_rate`.
+        #[arg(long)]
+        audio: Option<PathBuf>,
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
@@ -629,6 +635,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             ic_lora,
             reference_strength,
             ic_lora_strength,
+            audio,
             sol_stage2,
             dense_stage2,
             pisa_stage2,
@@ -743,6 +750,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                             lora_strength: *ic_lora_strength,
                         }
                     }),
+                    audio: audio
+                        .clone()
+                        .map(fastvideo_cudarc::ltx2::a2v::DrivingAudio::new),
                 },
             )
         }
@@ -2002,7 +2012,11 @@ fn gen(
             .collect::<StageResult<Vec<_>>>()?,
         skip_audio_decode: extras.skip_audio_decode,
         reference: extras.reference.clone(),
+        audio: extras.audio.clone(),
     };
+    if let Some(a) = &extras.audio {
+        report.set("audio_in", json!({"path": a.path.display().to_string()}));
+    }
     report.set("skip_audio_decode", extras.skip_audio_decode);
     if let Some(r) = &extras.reference {
         report.set(
@@ -2281,6 +2295,18 @@ fn gen(
                 json!({"wav": out.wav}),
                 json!({"wav": ""}),
             )?;
+        } else if let Some(a) = &extras.audio {
+            // Audio-to-video: the WAV is the driving audio, stereo at its own
+            // rate, cut to the clip (`decode_audio_from_file(max_duration)`).
+            use fastvideo_cudarc::ltx2::a2v;
+            let rate = a2v::probe(&a.path).map(|(r, _)| r).unwrap_or(0);
+            let want = a2v::max_samples(g.num_frames as f64 / g.frame_rate, rate);
+            report.check(
+                ck("gen.wav"),
+                wav_bytes == 44 + (want * a2v::ENCODER_CHANNELS * 2) as u64,
+                json!({"bytes": wav_bytes}),
+                json!({"samples_per_channel": want, "sample_rate": rate, "channels": a2v::ENCODER_CHANNELS, "source": "driving audio"}),
+            )?;
         } else {
         report.check(
         ck("gen.wav"),
@@ -2323,6 +2349,8 @@ struct GenExtras {
     cond_images: Vec<String>,
     /// `--reference` (IC-LoRA reference-to-video).
     reference: Option<fastvideo_cudarc::ltx2::pipeline::IcReference>,
+    /// `--audio` (audio-to-video).
+    audio: Option<fastvideo_cudarc::ltx2::a2v::DrivingAudio>,
 }
 
 /// `PATH@FRAME[@STRENGTH[@CRF]]` → a conditioning image.

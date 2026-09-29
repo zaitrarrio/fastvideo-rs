@@ -137,7 +137,9 @@ pub enum Task {
     Keyframes,
     /// H3 ref2va: ordered image/video/audio references.
     Ref2V,
-    /// Audio drives output (LTX audio-to-video). Unsupported today.
+    /// Audio drives output (LTX audio-to-video): a driving `audio_in`
+    /// (`AudioRole::Drive`), an optional first-frame image (and a last frame
+    /// with it), the prompt required without an image.
     A2V,
     /// LTX edit endpoint. Unsupported today.
     Extend,
@@ -148,9 +150,11 @@ pub enum Task {
 }
 
 impl Task {
-    /// The LTX edit/audio endpoints no engine path serves (`GapId::LtxEndpoint`).
+    /// The LTX edit endpoints no engine path serves (`GapId::LtxEndpoint`).
+    /// Audio-to-video is served by LTX-2.5; other LTX models answer the same
+    /// gap for it (`negotiate` rule 2).
     pub fn is_edit_endpoint(&self) -> bool {
-        matches!(self, Task::A2V | Task::Extend | Task::Retake | Task::V2V)
+        matches!(self, Task::Extend | Task::Retake | Task::V2V)
     }
 }
 
@@ -244,6 +248,13 @@ pub enum CanvasSpec {
     /// fal i2v, MiniMax `"adaptive"`: the first image's aspect.
     FollowImage {
         short_edge: u32,
+    },
+    /// A landscape size, transposed when the first image is portrait (the
+    /// LTX API audio-to-video default: "Portrait image → 1080x1920,
+    /// landscape → 1920x1080; no image → 1920x1080").
+    Oriented {
+        width: u32,
+        height: u32,
     },
     ModelDefault,
 }
@@ -433,6 +444,11 @@ pub struct Reference {
 pub struct AudioInput {
     pub media: MediaRef,
     pub role: AudioRole,
+    /// The adapter's own ceiling on the audio's length in seconds, below the
+    /// protocol-wide one (audio-to-video: fal and the LTX API cap `pro` at
+    /// 10 s, `negotiate` otherwise takes up to 20 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_s: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

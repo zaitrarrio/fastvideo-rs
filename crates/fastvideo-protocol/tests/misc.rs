@@ -199,6 +199,7 @@ fn request_helpers() {
     r.audio_in = Some(AudioInput {
         media: url("https://e.x/3"),
         role: AudioRole::Drive,
+        max_s: None,
     });
     let all: Vec<String> = r.media_refs().map(|m| format!("{m:?}")).collect();
     assert_eq!(all.len(), 3);

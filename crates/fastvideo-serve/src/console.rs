@@ -5,6 +5,7 @@
 //! |---|---|
 //! | `GET /console` | Connect (server URL, API key in local storage) and the model list (`GET /fal/schema`) |
 //! | `GET /console/admin` | Admin token (session storage), mint / list / revoke API keys (`/fv/v1/admin/keys`) |
+//! | `GET /console/deployments` | Admin: release channels, live builds and drift, the deployment registry, history; Promote / Rollback (`/fv/v1/admin/releases*`, `/fv/v1/admin/deployments`; gateway only) |
 //! | `GET /console/models/{owner}/{alias}/{task}` | A fal model page: Playground (schema-driven form, uploads, result, logs, history) and API snippets; `task = director` is the live WebRTC page |
 //! | `GET /console/assets/{file}` | CSS and JS modules |
 //!
@@ -24,6 +25,7 @@ pub const ASSETS: &[(&str, &str, &str)] = &[
     ("common.js", "text/javascript; charset=utf-8", include_str!("../console/common.js")),
     ("home.js", "text/javascript; charset=utf-8", include_str!("../console/home.js")),
     ("admin.js", "text/javascript; charset=utf-8", include_str!("../console/admin.js")),
+    ("deployments.js", "text/javascript; charset=utf-8", include_str!("../console/deployments.js")),
     ("model.js", "text/javascript; charset=utf-8", include_str!("../console/model.js")),
     ("form.js", "text/javascript; charset=utf-8", include_str!("../console/form.js")),
     ("snippets.js", "text/javascript; charset=utf-8", include_str!("../console/snippets.js")),
@@ -32,6 +34,7 @@ pub const ASSETS: &[(&str, &str, &str)] = &[
 
 const INDEX: &str = include_str!("../console/index.html");
 const ADMIN: &str = include_str!("../console/admin.html");
+const DEPLOYMENTS: &str = include_str!("../console/deployments.html");
 const MODEL: &str = include_str!("../console/model.html");
 
 /// Scripts and styles from this origin only; media, images and API calls may
@@ -70,6 +73,7 @@ pub fn routes() -> Router {
     Router::new()
         .route("/console", get(|| async { page(INDEX) }))
         .route("/console/admin", get(|| async { page(ADMIN) }))
+        .route("/console/deployments", get(|| async { page(DEPLOYMENTS) }))
         .route("/console/models/{owner}/{alias}/{*task}", get(|| async { page(MODEL) }))
         .route("/console/assets/{file}", get(asset))
 }
@@ -94,6 +98,7 @@ mod tests {
         for (uri, marker) in [
             ("/console", "home.js"),
             ("/console/admin", "admin.js"),
+            ("/console/deployments", "deployments.js"),
             ("/console/models/minimax/h3-max/text-to-video", "model.js"),
             ("/console/models/minimax/h3-turbo/director", "model.js"),
         ] {
@@ -114,7 +119,7 @@ mod tests {
     /// loaded from another origin.
     #[test]
     fn references_resolve_and_stay_local() {
-        let mut texts: Vec<&str> = vec![INDEX, ADMIN, MODEL];
+        let mut texts: Vec<&str> = vec![INDEX, ADMIN, DEPLOYMENTS, MODEL];
         texts.extend(ASSETS.iter().map(|a| a.2));
         for t in &texts {
             for part in t.split("/console/assets/").skip(1) {
@@ -127,7 +132,7 @@ mod tests {
             }
             assert!(!t.contains("<script src=\"http"), "no external scripts");
         }
-        for t in [INDEX, ADMIN, MODEL] {
+        for t in [INDEX, ADMIN, DEPLOYMENTS, MODEL] {
             for attr in ["onclick=\"", "onsubmit=\"", "onload=\"", "<script>"] {
                 assert!(!t.contains(attr), "inline script `{attr}` is blocked by the CSP");
             }

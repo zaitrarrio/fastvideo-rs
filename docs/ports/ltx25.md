@@ -385,6 +385,37 @@ dumps `s{n}_cond{i}_{pixels,latent}`; ours injects the reference's latents
 (`FASTVIDEO_INJECT_COND=0` keeps ours) so the denoiser diff is the
 conditioning's alone. Results: docs/oracle.md, "LTX-2.5 image conditioning".
 
+## Audio-to-video (avatar P0, 2026-09-29)
+
+Upstream ships audio-to-video as `A2VidPipelineTwoStage`
+(`ltx_pipelines/a2vid_two_stage.py`, Lightricks/LTX-2 `fd4ded7`): the *dev*
+transformer with CFG/STG/modality guidance at stage 1 and the distilled LoRA
+at stage 2. That needs `transformer_full/` of `Lightricks/LTX-2.5-Diffusers`
+(4 shards, 37 976 221 088 B ≈ 38.0 GB, LTX-2 community license, gated
+auto-approval), which is not on the volumes, plus a guided sampler we do not
+have. Not downloaded (large downloads need the owner's approval; any new tree
+goes on both volumes, CLAUDE.md). What we serve instead is the same audio
+mechanism on the distilled pipeline we already run: `DistilledPipeline`
+with `a2vid_two_stage.py`'s audio handling put in line for line
+(`scripts/gpu/upstream/ltx25_a2v.py` is that reference, built from upstream
+blocks). Code: `ltx2/a2v.rs`, `Ltx2Pipeline::encode_driving_audio`,
+`StageConditioning::with_frozen_audio`, `Ltx2Transformer::set_audio_frozen`,
+`Ltx2Request::audio`.
+
+| step | reference | ours |
+|---|---|---|
+| decode | `decode_audio_from_file(path, 0, num_frames / fps)`: PyAV, the file's rate and layout, float, `round(d·rate)` samples | ffprobe + ffmpeg `f32le` at the file's rate, same cut (Python rounding); a non-stereo file goes through `-ac 2` (the encoder takes 2 channels; upstream fails on mono) |
+| encode | `AudioConditioner` → `encode_audio`: torchaudio resample to 16 kHz, slaney log-mel (1024 / 160 / 64), causal encoder, bf16 | `AudioEncoder::encode_waveform` (the refiner's encoder), f32 over the bf16 weights |
+| cut | `[:, :, :AudioLatentShape.from_duration(num_frames / fps).frames]` (`round(d·25)`) | `conform_audio_time` to the clip's audio tokens; a shorter audio is refused |
+| stage 1 / 2 | `ModalitySpec(frozen=True, noise_scale=0, initial_latent=…)`: the noiser still draws audio noise, `denoise_mask` 0, `Modality.sigma` 0 | the noise stream draws as for T2V, the audio stays the clean latent after every update (`StageConditioning::audio_after`) |
+| DiT | audio per-token timesteps 0 (audio AdaLN, audio a↔v scale/shift, audio head); audio sigma 0 for the audio prompt AdaLN and the *video's* a→v gate (the cross modality's sigma); the audio's v→a gate and everything video keep the video sigma | `modulations()` with the freeze flag, both forward paths |
+| image | the I2V / keyframe conditionings as `DistilledPipeline` | unchanged (combines with the frozen audio) |
+| output | the decoded input waveform ("to preserve fidelity"), no vocoder | `DecodeOut::audio_passthrough`: `audio.wav` / the sink get the input PCM at its own rate |
+
+`fv-gpucheck ltx2 gen --two-stage --audio FILE [--image …]`. Serve:
+`Task::A2V` on the 2.5 models (see docs/serve/fal-parity.md,
+docs/serve/e2e/ltx.md). Oracle: docs/oracle.md, "LTX-2.5 audio-to-video".
+
 ## Out of scope (this milestone)
 
 DiffVAE tiling / multi-step stage-5 / two-stage+DiffVAE combo, duration head,

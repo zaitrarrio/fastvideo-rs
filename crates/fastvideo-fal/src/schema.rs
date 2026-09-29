@@ -38,6 +38,7 @@
 //! short edges, which the H3 caps refuse as `Unsupported(H3Resolution2K)`,
 //! so an omitted `resolution` means `768P` here.
 
+pub mod a2v;
 pub mod ingredient;
 pub mod ltx;
 pub mod wan;
@@ -49,6 +50,7 @@ use fastvideo_protocol::{
     Task, Tier, TimingSpec,
 };
 
+pub use a2v::LtxA2vInput;
 pub use ingredient::IngredientInput;
 pub use ltx::{LtxClass, LtxInput};
 pub use wan::{WanInput, WanVariant};
@@ -83,6 +85,10 @@ pub enum Endpoint {
     LtxImageToVideoFast,
     /// `lightricks/ltx-2.5/image-to-video/pro`.
     LtxImageToVideoPro,
+    /// `lightricks/ltx-2.5/audio-to-video/fast`.
+    LtxAudioToVideoFast,
+    /// `lightricks/ltx-2.5/audio-to-video/pro`.
+    LtxAudioToVideoPro,
     /// `fal-ai/wan/v2.2-5b/text-to-video`.
     WanTextToVideo,
     /// `fal-ai/wan/v2.2-5b/image-to-video`.
@@ -101,18 +107,20 @@ impl Endpoint {
         Endpoint::ReferenceToVideo,
     ];
     /// `lightricks/ltx-2.5`.
-    pub const LTX: [Endpoint; 4] = [
+    pub const LTX: [Endpoint; 6] = [
         Endpoint::LtxTextToVideoFast,
         Endpoint::LtxTextToVideoPro,
         Endpoint::LtxImageToVideoFast,
         Endpoint::LtxImageToVideoPro,
+        Endpoint::LtxAudioToVideoFast,
+        Endpoint::LtxAudioToVideoPro,
     ];
     /// `fal-ai/wan`.
     pub const WAN: [Endpoint; 3] = [Endpoint::WanTextToVideo, Endpoint::WanImageToVideo, Endpoint::WanFastWan];
     /// `fal-ai/ltx-2.3-quality`.
     pub const LTX_QUALITY: [Endpoint; 1] = [Endpoint::LtxIngredient];
     /// Every endpoint of every family.
-    pub const EVERY: [Endpoint; 11] = [
+    pub const EVERY: [Endpoint; 13] = [
         Endpoint::TextToVideo,
         Endpoint::ImageToVideo,
         Endpoint::ReferenceToVideo,
@@ -120,6 +128,8 @@ impl Endpoint {
         Endpoint::LtxTextToVideoPro,
         Endpoint::LtxImageToVideoFast,
         Endpoint::LtxImageToVideoPro,
+        Endpoint::LtxAudioToVideoFast,
+        Endpoint::LtxAudioToVideoPro,
         Endpoint::WanTextToVideo,
         Endpoint::WanImageToVideo,
         Endpoint::WanFastWan,
@@ -136,6 +146,8 @@ impl Endpoint {
             Endpoint::LtxTextToVideoPro => "text-to-video/pro",
             Endpoint::LtxImageToVideoFast => "image-to-video/fast",
             Endpoint::LtxImageToVideoPro => "image-to-video/pro",
+            Endpoint::LtxAudioToVideoFast => "audio-to-video/fast",
+            Endpoint::LtxAudioToVideoPro => "audio-to-video/pro",
             Endpoint::WanTextToVideo => "v2.2-5b/text-to-video",
             Endpoint::WanImageToVideo => "v2.2-5b/image-to-video",
             Endpoint::WanFastWan => "v2.2-5b/text-to-video/fast-wan",
@@ -157,6 +169,8 @@ impl Endpoint {
             Endpoint::LtxTextToVideoPro => "Text to Video · Pro",
             Endpoint::LtxImageToVideoFast => "Image to Video · Fast",
             Endpoint::LtxImageToVideoPro => "Image to Video · Pro",
+            Endpoint::LtxAudioToVideoFast => "Audio to Video · Fast",
+            Endpoint::LtxAudioToVideoPro => "Audio to Video · Pro",
             Endpoint::WanTextToVideo => "Text to Video · 5B",
             Endpoint::WanImageToVideo => "Image to Video · 5B",
             Endpoint::WanFastWan => "Text to Video · FastWan",
@@ -169,11 +183,14 @@ impl Endpoint {
     pub fn target(&self) -> Option<(Family, Tier)> {
         Some(match self {
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => return None,
-            Endpoint::LtxTextToVideoFast | Endpoint::LtxImageToVideoFast => (Family::Ltx2, Tier::Turbo),
-            // `ltx-pro`: its Ref2V requests route to the IC-LoRA companion.
-            Endpoint::LtxTextToVideoPro | Endpoint::LtxImageToVideoPro | Endpoint::LtxIngredient => {
-                (Family::Ltx2, Tier::Max)
+            Endpoint::LtxTextToVideoFast | Endpoint::LtxImageToVideoFast | Endpoint::LtxAudioToVideoFast => {
+                (Family::Ltx2, Tier::Turbo)
             }
+            // `ltx-pro`: its Ref2V requests route to the IC-LoRA companion.
+            Endpoint::LtxTextToVideoPro
+            | Endpoint::LtxImageToVideoPro
+            | Endpoint::LtxAudioToVideoPro
+            | Endpoint::LtxIngredient => (Family::Ltx2, Tier::Max),
             Endpoint::WanTextToVideo | Endpoint::WanImageToVideo => (Family::Wan, Tier::Max),
             Endpoint::WanFastWan => (Family::Wan, Tier::Turbo),
         })
@@ -384,6 +401,8 @@ pub enum FalInput {
     Wan(WanInput),
     /// `fal-ai/ltx-2.3-quality/ingredient`.
     Ingredient(IngredientInput),
+    /// `lightricks/ltx-2.5/audio-to-video/*`.
+    LtxA2v(LtxA2vInput),
 }
 
 // ---------------------------------------------------------------- parsing
@@ -569,6 +588,8 @@ impl FalInput {
             Endpoint::WanImageToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::ImageToVideo)?)),
             Endpoint::WanFastWan => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::FastWan)?)),
             Endpoint::LtxIngredient => return Ok(FalInput::Ingredient(ingredient::parse(&f)?)),
+            Endpoint::LtxAudioToVideoFast => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Fast)?)),
+            Endpoint::LtxAudioToVideoPro => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Pro)?)),
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {}
         }
         let common = parse_common(&f, kind.h3_resolutions())?;
@@ -628,6 +649,10 @@ impl FalInput {
                 WanVariant::FastWan => Endpoint::WanFastWan,
             },
             FalInput::Ingredient(_) => Endpoint::LtxIngredient,
+            FalInput::LtxA2v(i) => match i.class {
+                LtxClass::Fast => Endpoint::LtxAudioToVideoFast,
+                LtxClass::Pro => Endpoint::LtxAudioToVideoPro,
+            },
         }
     }
 
@@ -637,7 +662,7 @@ impl FalInput {
             FalInput::TextToVideo { common, .. }
             | FalInput::ImageToVideo { common, .. }
             | FalInput::ReferenceToVideo { common, .. } => Some(common),
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) => None,
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) => None,
         }
     }
 
@@ -658,7 +683,7 @@ impl FalInput {
             FalInput::TextToVideo { aspect_ratio, target_audio_url, .. } => {
                 r.canvas = aspect_canvas(*aspect_ratio, short_edge);
                 if let Some(a) = target_audio_url {
-                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack });
+                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack, max_s: None });
                 }
             }
             FalInput::ImageToVideo { target_audio_url, image_url, end_image_url, .. } => {
@@ -676,7 +701,7 @@ impl FalInput {
                     _ => (Task::Keyframes, CanvasSpec::FollowImage { short_edge }),
                 };
                 if let Some(a) = target_audio_url {
-                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack });
+                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack, max_s: None });
                 }
             }
             FalInput::ReferenceToVideo {
@@ -705,7 +730,7 @@ impl FalInput {
                     a => aspect_canvas(*a, short_edge),
                 };
             }
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) => {}
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) => {}
         }
         Ok(r)
     }
@@ -717,6 +742,7 @@ impl FalInput {
             FalInput::Ltx(i) => i.normalize(model)?,
             FalInput::Wan(i) => i.normalize(model)?,
             FalInput::Ingredient(i) => i.normalize(model)?,
+            FalInput::LtxA2v(i) => i.normalize(model)?,
             _ => self.normalize_h3(model)?,
         };
         if let Some(hook) = cx.query_param("fal_webhook") {
@@ -796,6 +822,8 @@ pub fn fal_param(param: &str, req: &GenerationRequest) -> String {
         "image_uri" => "image_url".into(),
         "last_frame_uri" => "end_image_url".into(),
         "size" => "resolution".into(),
+        // Audio-to-video's driving audio is fal's own `audio_url`.
+        "audio" | "audio_url" if req.task == Task::A2V => "audio_url".into(),
         "audio" | "audio_url" => "target_audio_url".into(),
         "references" => match req.references.first().map(|r| r.kind) {
             Some(MediaKind::Video) => "reference_video_urls".into(),
@@ -932,6 +960,53 @@ mod tests {
         assert_eq!(fal_param("references[2]", &r), "reference_audio_urls[1]");
         assert_eq!(fal_param("audio", &r), "target_audio_url");
         assert_eq!(fal_param("duration", &r), "duration");
+    }
+
+    #[test]
+    fn audio_to_video_drives_the_ltx_tiers() {
+        let kind = AppKind::of("lightricks/ltx-2.5");
+        assert!(kind.endpoints().contains(&Endpoint::LtxAudioToVideoFast));
+        assert_eq!(Endpoint::from_sub("audio-to-video/pro"), Some(Endpoint::LtxAudioToVideoPro));
+        assert_eq!(Endpoint::LtxAudioToVideoFast.target(), Some((Family::Ltx2, Tier::Turbo)));
+        assert_eq!(Endpoint::LtxAudioToVideoPro.target(), Some((Family::Ltx2, Tier::Max)));
+        let parse = |e, b: Value| FalInput::parse_for(kind, e, &b);
+        // Prompt only: 16:9 1080p, the length from the audio, 24 fps.
+        let i = parse(Endpoint::LtxAudioToVideoFast, json!({"audio_url": "https://a.test/s.mp3", "prompt": "a man talks", "guidance_scale": 5})).unwrap();
+        assert_eq!(i.endpoint(), Endpoint::LtxAudioToVideoFast);
+        let r = i.normalize("ltx-turbo", &cx()).unwrap();
+        assert_eq!(r.task, Task::A2V);
+        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
+        assert_eq!((r.timing.length.clone(), r.timing.fps), (Length::ModelDefault, Some(24)));
+        let a = r.audio_in.as_ref().unwrap();
+        assert_eq!((a.role, a.max_s), (AudioRole::Drive, None));
+        assert!(r.keyframes.is_empty());
+        assert_eq!(r.accepted_noop, vec!["guidance_scale"]);
+        assert_eq!(fal_param("audio_url", &r), "audio_url");
+        // An image: the first frame, `auto` follows it, the prompt optional;
+        // pro caps the audio at 10 s.
+        let r = parse(Endpoint::LtxAudioToVideoPro, json!({"audio_url": "data:audio/wav;base64,AA", "image_url": "https://a.test/f.png"}))
+            .unwrap()
+            .normalize("ltx-pro", &cx())
+            .unwrap();
+        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
+        assert_eq!(r.keyframes.len(), 1);
+        assert!(r.prompt.is_empty());
+        assert_eq!(r.audio_in.as_ref().unwrap().max_s, Some(10));
+        let r = parse(Endpoint::LtxAudioToVideoFast, json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "aspect_ratio": "9:16"}))
+            .unwrap()
+            .normalize("ltx-turbo", &cx())
+            .unwrap();
+        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        // No audio; neither prompt nor image; guidance out of range; an empty prompt.
+        for (b, field) in [
+            (json!({"prompt": "p"}), "audio_url"),
+            (json!({"audio_url": "https://a.test/s.mp3"}), "prompt"),
+            (json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 0.5}), "guidance_scale"),
+            (json!({"audio_url": "https://a.test/s.mp3", "prompt": ""}), "prompt"),
+        ] {
+            let e = parse(Endpoint::LtxAudioToVideoFast, b).unwrap_err();
+            assert_eq!(e.param.as_deref(), Some(field));
+        }
     }
 
     #[test]

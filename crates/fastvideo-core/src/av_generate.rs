@@ -246,6 +246,7 @@ fn generate_ltx2(
             image_path: opts.image_path,
             skip_audio_decode: false,
             reference: None,
+            audio: None,
         };
         request
             .validate()

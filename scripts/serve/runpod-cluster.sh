@@ -22,7 +22,10 @@
 #   runpod-cluster.sh wait           until every pool reports a ready worker
 #   runpod-cluster.sh status         pods, deadline, pools as the gateway sees them
 #   runpod-cluster.sh smoke          one small text-to-video per pool (with the key
-#                                    in FV_CLUSTER_KEY_FILE when auth is on)
+#                                    in FV_CLUSTER_KEY_FILE, else one minted once
+#                                    and kept in the state, when auth is on)
+#   runpod-cluster.sh admin-token    print the gateway's admin token (fetched
+#                                    sealed on first use, kept in the state file)
 #   runpod-cluster.sh extend <min>   move the deadline (restarts the gateway pod
 #                                    only: its watchdog holds the deadline)
 #   runpod-cluster.sh down           delete every pod of the cluster, check they are gone
@@ -42,10 +45,18 @@
 # in the D1 deployments table (scripts/serve/lib/registry.sh; best effort)
 # and gets FV_IMAGE_REF / FV_IMAGE_DIGEST (/health reports them).
 #
-# Auth: FV_CLUSTER_AUTH (default keys; kept in the state) is the gateway's FV_AUTH_MODE. The
-# admin routes (/fv/v1/admin/*, /fv/v1/gateway/pools, key minting in
-# /console/admin) keep needing the admin token whatever the auth mode; it
-# is generated per cluster and kept in the state file. Workers always need
+# Auth: FV_CLUSTER_AUTH (default keys; kept in the state) is the gateway's
+# FV_AUTH_MODE. The admin routes (/fv/v1/admin/*, /fv/v1/gateway/pools, key
+# minting in /console/admin) need the admin token whatever the auth mode.
+# The gateway makes that token itself on its first start and keeps it in
+# /fvstate/admin_token (mode 600, container disk: it survives a restart,
+# e.g. `extend`, but not a re-creation); it is never in the pod's
+# environment or its log. `up` creates an X25519 key pair
+# ($STATE.admin-key.pem, mode 600) and gives the gateway the public half
+# (FV_ADMIN_TOKEN_RECIPIENT); the gateway publishes the token sealed to it
+# at /fv/v1/admin/token/sealed, and this script opens it with openssl and
+# keeps a copy in the state file (`admin-token` prints it; a state from an
+# older script keeps passing its own FV_ADMIN_TOKEN). Workers always need
 # the internal token (every route but health, /metrics and signed /files).
 #
 # Backstops (deadline = create + FV_CLUSTER_CAP_S, default 6000 s):
@@ -56,7 +67,8 @@
 # - detached here: one loop (setsid) that deletes every pod of the state
 #   file at the deadline the state file holds (extend moves it).
 # State: $FV_CLUSTER_STATE (default artifacts/runpod/serve/cluster.json, mode
-# 600: it holds the internal token and the admin token; never printed).
+# 600: it holds the internal token, the admin token once fetched and the
+# smoke API key; nothing is printed but by `admin-token`).
 # Ledger: artifacts/runpod/serve/ledger.tsv.
 #
 # Placement: FV_CLUSTER_REGIONS (default "eu us"): eu = volume jg48s6o1w0
@@ -85,6 +97,7 @@ MIN_START="${FV_CLUSTER_MIN_START:-20}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-3.6}"
 REGIONS="${FV_CLUSTER_REGIONS:-eu us}"
 AUTH_MODE="${FV_CLUSTER_AUTH:-keys}"
+ADMIN_KEY="$STATE.admin-key.pem"
 CPU_FLAVORS="${FV_GATEWAY_CPU_FLAVORS:-cpu3c cpu5c cpu3g}"
 POOLS=(h3-turbo h3-max ltx wan)
 
@@ -215,12 +228,13 @@ spawn_local_backstop() {
 create_gateway() {
   local image="$1" dc="$2" flavor resp pod env payload dcs
   env="$(jq -n --argjson s "$SECRET_ENV_JSON" --arg tok "$(st .internal_token)" --arg sign "$(st .url_signing_key)" \
-    --arg admin "$(st .admin_token)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
+    --arg admin "$(st .admin_token)" --arg recipient "$(st .admin_recipient)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
     --arg key "$RUNPOD_API_KEY" --arg toml "$(base64 -w0 "$FV_ROOT/configs/serve/gateway-pods.toml")" \
     --argjson ident "$(fv_image_env_json "$image")" '$s + $ident + {
-      FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth, FV_ADMIN_TOKEN: $admin,
+      FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth,
       FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign, FV_GATEWAY_TOML_B64: $toml,
-      FV_CLUSTER_DEADLINE: $dl, FV_MIN_BALANCE: $min, FV_BACKSTOP_API_KEY: $key, RUST_LOG: "info"}')"
+      FV_CLUSTER_DEADLINE: $dl, FV_MIN_BALANCE: $min, FV_BACKSTOP_API_KEY: $key, RUST_LOG: "info"}
+      + (if $recipient != "" then {FV_ADMIN_TOKEN_RECIPIENT: $recipient} else {FV_ADMIN_TOKEN: $admin} end)')"
   for dcs in "[\"$dc\"]" "null"; do
     for flavor in $CPU_FLAVORS; do
       payload="$(jq -n --arg image "$image" --arg flavor "$flavor" --argjson dcs "$dcs" --arg boot "$GATEWAY_BOOT" \
@@ -298,15 +312,16 @@ patch_gateway() {
   local image="${1:-}" env body
   # The whole env again (secret references, never values), plus the pools.
   env="$(jq -n --argjson s "$SECRET_ENV_JSON" --arg tok "$(st .internal_token)" --arg sign "$(st .url_signing_key)" \
-    --arg admin "$(st .admin_token)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
+    --arg admin "$(st .admin_token)" --arg recipient "$(st .admin_recipient)" --arg auth "$(st .auth)" --arg dl "$(st .deadline)" --arg min "$(st .min_balance)" \
     --arg key "$RUNPOD_API_KEY" --arg toml "$(base64 -w0 "$FV_ROOT/configs/serve/gateway-pods.toml")" \
     --arg pods "$(jq -r '[.workers[]?.pod] + [.rolling[]?.pod] + [.retired[]?.pod] | join(" ")' "$STATE")" \
     --argjson urls "$(jq -c '(.workers // {}) as $w | (.rolling // {}) as $r
       | reduce (($w + $r) | keys[]) as $p ({}; .[$p] = {url: ([$w[$p].url, $r[$p].url] | map(select(. != null)) | join(","))})' "$STATE")" \
     --argjson ident "$(fv_image_env_json "${image:-$(jq -r '.gateway.image // .image' "$STATE")}")" '$s + $ident + {
-      FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth, FV_ADMIN_TOKEN: $admin,
+      FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_AUTH_MODE: $auth,
       FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign, FV_GATEWAY_TOML_B64: $toml,
       FV_CLUSTER_DEADLINE: $dl, FV_MIN_BALANCE: $min, FV_BACKSTOP_API_KEY: $key, FV_CLUSTER_PODS: $pods, RUST_LOG: "info"}
+      + (if $recipient != "" then {FV_ADMIN_TOKEN_RECIPIENT: $recipient} else {FV_ADMIN_TOKEN: $admin} end)
       + ($urls | to_entries | map({key: ("FV_POOL_" + (.key | ascii_upcase | gsub("-"; "_")) + "_URLS"), value: .value.url}) | from_entries)')"
   body="$(jq -nc --argjson e "$env" --arg image "$image" '{env: $e} + (if $image == "" then {} else {imageName: $image} end)')"
   rest PATCH "/pods/$(st .gateway.pod)" "$body" >/dev/null
@@ -338,10 +353,14 @@ cmd_up() {
   fi
   log "image $image; per pod: $images"
   mkdir -p "$(dirname "$STATE")"
+  # The key pair the gateway seals its admin token to (the private half
+  # never leaves this machine).
+  (umask 077; openssl genpkey -algorithm X25519 -out "$ADMIN_KEY" 2>/dev/null) || die "openssl cannot make an X25519 key"
   (umask 077; jq -n --arg image "$image" --arg tok "$(openssl rand -hex 32)" --arg sign "$(openssl rand -hex 32)" \
-    --arg admin "fvadm_$(openssl rand -hex 24)" --arg dl "$(( $(date +%s) + CAP_S ))" --arg auth "$AUTH_MODE" \
+    --arg recipient "$(openssl pkey -in "$ADMIN_KEY" -pubout -outform DER | tail -c 32 | base64 -w0)" \
+    --arg dl "$(( $(date +%s) + CAP_S ))" --arg auth "$AUTH_MODE" \
     --argjson images "$images" --arg min "$MIN_BALANCE" \
-    '{image: $image, images: $images, internal_token: $tok, url_signing_key: $sign, admin_token: $admin, auth: $auth,
+    '{image: $image, images: $images, internal_token: $tok, url_signing_key: $sign, admin_recipient: $recipient, auth: $auth,
       min_balance: $min,
       deadline: ($dl|tonumber), workers: {}}' >"$STATE")
   log "deadline $(utc "$(st .deadline)") (${CAP_S}s)"
@@ -356,11 +375,91 @@ cmd_up() {
   (( ${#failed[@]} == 0 )) || log "WARNING: no pod for: ${failed[*]}"
 }
 
-# The admin-token call (pools view).
-# The user key for keyed calls (FV_CLUSTER_KEY_FILE), as curl arguments.
+# Opens the sealed admin token (JSON on stdin) with $ADMIN_KEY; prints it.
+# Scheme (crates/fastvideo-serve/src/admin_token.rs): s = X25519(key, epk);
+# k = SHA-512("fv-admin-token-v1" | s | epk | our public key); the token is
+# AES-256-CTR(k[0..32], iv), authenticated by HMAC-SHA256(k[32..64], iv | ct).
+open_sealed() {
+  local d rc=0
+  d="$(mktemp -d)"
+  # A subshell tested by || ignores set -e: every step checks its status.
+  (
+    hex() { od -An -tx1 | tr -d ' \n'; }
+    cat >"$d/sealed.json" || exit 1
+    [[ "$(jq -r .alg "$d/sealed.json")" == X25519-SHA512-AES256CTR-HMACSHA256 ]] || exit 1
+    for f in epk iv ct tag; do jq -r ".$f" "$d/sealed.json" | base64 -d >"$d/$f" || exit 1; done
+    # A raw X25519 public key as DER (SubjectPublicKeyInfo) for openssl.
+    { printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x6e\x03\x21\x00'; cat "$d/epk"; } >"$d/epk.der" || exit 1
+    openssl pkey -pubin -inform DER -in "$d/epk.der" -out "$d/epk.pem" 2>/dev/null || exit 1
+    openssl pkeyutl -derive -inkey "$ADMIN_KEY" -peerkey "$d/epk.pem" -out "$d/shared" 2>/dev/null || exit 1
+    openssl pkey -in "$ADMIN_KEY" -pubout -outform DER | tail -c 32 >"$d/rpk" || exit 1
+    { printf 'fv-admin-token-v1'; cat "$d/shared" "$d/epk" "$d/rpk"; } | openssl dgst -sha512 -binary >"$d/k" || exit 1
+    ek="$(head -c 32 "$d/k" | hex)"
+    mk="$(tail -c 32 "$d/k" | hex)"
+    tag="$(cat "$d/iv" "$d/ct" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$mk" -binary | hex)"
+    [[ ${#ek} == 64 && ${#tag} == 64 && "$tag" == "$(hex <"$d/tag")" ]] || exit 1
+    openssl enc -d -aes-256-ctr -K "$ek" -iv "$(hex <"$d/iv")" -in "$d/ct" || exit 1
+  ) || rc=$?
+  rm -rf "$d"
+  return "$rc"
+}
+
+# The admin token: the state file's copy while the gateway accepts it, else
+# fetched sealed from the gateway (a re-created gateway pod makes a new one).
+admin_token() {
+  local tok sealed code
+  tok="$(st .admin_token)"
+  if [[ -n "$tok" ]]; then
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -H @<(printf 'Authorization: Bearer %s\n' "$tok") \
+      "$(st .gateway_url)/fv/v1/gateway/pools" 2>/dev/null || true)"
+    [[ "$code" == 401 && -n "$(st .admin_recipient)" ]] || { printf '%s' "$tok"; return 0; }
+  fi
+  [[ -s "$ADMIN_KEY" ]] || die "no admin key pair ($ADMIN_KEY): read /fvstate/admin_token on the gateway pod instead"
+  sealed="$(curl -sS --fail --max-time 20 "$(st .gateway_url)/fv/v1/admin/token/sealed")" \
+    || die "the gateway did not publish its sealed admin token (not up yet?)"
+  tok="$(open_sealed <<<"$sealed")" || die "could not open the sealed admin token"
+  [[ "$tok" == fvadm_* ]] || die "the sealed admin token does not look like one"
+  st_set --arg t "$tok" '.admin_token = $t'
+  printf '%s' "$tok"
+}
+
+# An admin-token call; the token goes in through a header file, never argv.
+admin_call() {
+  local method="$1" path="$2" tok
+  shift 2
+  tok="$(admin_token)"
+  curl -sS --max-time 30 -X "$method" -H @<(printf 'Authorization: Bearer %s\n' "$tok") "$@" "$(st .gateway_url)$path"
+}
+admin_get() { admin_call GET "$1"; }
+
+# The user key for keyed calls (FV_CLUSTER_KEY_FILE, else a smoke key minted
+# once and kept in the state), as curl arguments pointing at a header file
+# (mode 600, removed on exit): never on argv.
 KEY_ARGS=()
-if [[ -n "${FV_CLUSTER_KEY_FILE:-}" ]]; then KEY_ARGS=(-H "Authorization: Bearer $(tr -d '\n' <"$FV_CLUSTER_KEY_FILE")"); fi
-admin_get() { curl -sS --max-time 30 -H "Authorization: Bearer $(st .admin_token)" "$(st .gateway_url)$1"; }
+KEY_HDR=""
+key_args() {
+  local k=""
+  if [[ -n "${FV_CLUSTER_KEY_FILE:-}" ]]; then
+    k="$(tr -d '\n' <"$FV_CLUSTER_KEY_FILE")"
+  elif [[ "$(st .auth)" != none ]]; then
+    k="$(st .smoke_api_key)"
+    if [[ -z "$k" ]]; then
+      k="$(admin_call POST /fv/v1/admin/keys -H 'content-type: application/json' -d '{"name":"cluster-smoke"}' | jq -r '.api_key // empty')"
+      [[ -n "$k" ]] || die "minting the smoke API key failed"
+      st_set --arg k "$k" '.smoke_api_key = $k'
+    fi
+  fi
+  [[ -n "$k" ]] || return 0
+  KEY_HDR="$(mktemp)"
+  trap 'rm -f "$KEY_HDR"' EXIT
+  printf 'Authorization: Bearer %s\n' "$k" >"$KEY_HDR"
+  KEY_ARGS=(-H "@$KEY_HDR")
+}
+
+cmd_admin_token() {
+  admin_token
+  echo
+}
 
 cmd_status() {
   local p
@@ -373,12 +472,13 @@ cmd_status() {
 }
 
 cmd_wait() {
-  local t0 caps pools n p
+  local t0 view pools n p
   t0=$(date +%s)
   while :; do
-    caps="$(curl -sS --max-time 20 "${KEY_ARGS[@]}" "$(st .gateway_url)/fv/v1/capabilities" 2>/dev/null || true)"
-    pools="$(jq -c '[.pools[]? | select(.available) | .id]' <<<"$caps" 2>/dev/null || echo '[]')"
-    n="$(jq '[.pools[]? | select([.workers[]? | select(.ready)] | length > 0)] | length' <<<"$caps" 2>/dev/null || echo 0)"
+    # The admin view (worker details are not on the public routes).
+    view="$( (admin_get /fv/v1/gateway/pools) 2>/dev/null || true)"
+    pools="$(jq -c '[.state[]? | select(.available) | .id]' <<<"$view" 2>/dev/null || echo '[]')"
+    n="$(jq '[.state[]? | select([.workers[]? | select(.ready)] | length > 0)] | length' <<<"$view" 2>/dev/null || echo 0)"
     log "available $pools; pools with a ready worker: $n/4 ($(( $(date +%s) - t0 ))s)"
     if (( n >= 4 )); then
       fv_deploy_ready gateway "$(st .gateway.pod)"
@@ -390,11 +490,12 @@ cmd_wait() {
   done
 }
 
-# One small text-to-video per pool through the native API, no key.
+# One small text-to-video per pool through the native API (Bearer key, see key_args).
 cmd_smoke() {
   local gw pool model body id t0 st_json res='[]' size
   gw="$(st .gateway_url)"
   mkdir -p "$OUT_DIR"
+  key_args
   for pool in "${POOLS[@]}"; do
     case $pool in
       h3-turbo) model=fasth3 ;; h3-max) model=sol-h3 ;; ltx) model=ltx25-distill-sol ;; wan) model=fastwan22-ti2v-5b ;;
@@ -423,8 +524,7 @@ cmd_smoke() {
 
 cmd_mint() {
   local name="${1:?key name}" file="${2:?output file}" resp
-  resp="$(curl -sS --max-time 30 -H "Authorization: Bearer $(st .admin_token)" -H 'content-type: application/json' \
-    -d "$(jq -nc --arg n "$name" '{name: $n}')" "$(st .gateway_url)/fv/v1/admin/keys")"
+  resp="$(admin_call POST /fv/v1/admin/keys -H 'content-type: application/json' -d "$(jq -nc --arg n "$name" '{name: $n}')")"
   jq -e '.api_key' <<<"$resp" >/dev/null || die "mint refused: $(jq -c 'del(.api_key)' <<<"$resp" 2>/dev/null | head -c 300)"
   (umask 077; jq -r '.api_key' <<<"$resp" >"$file")
   chmod 600 "$file"
@@ -456,7 +556,10 @@ cmd_down() {
     rest GET "/pods/$p" >/dev/null 2>&1 && left+=" $p"
   done
   [[ -z "$left" ]] || die "still present:$left"
-  mv "$STATE" "$STATE.down-$(date -u +%m%d%H%M%S)"
+  local stamp
+  stamp="$(date -u +%m%d%H%M%S)"
+  mv "$STATE" "$STATE.down-$stamp"
+  [[ ! -f "$ADMIN_KEY" ]] || mv "$ADMIN_KEY" "$ADMIN_KEY.down-$stamp"
   log "cluster deleted"
 }
 
@@ -560,7 +663,8 @@ case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   wait | status | smoke | down)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; "cmd_$1" ;;
+  admin-token) [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; cmd_admin_token ;;
   extend | mint | roll)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; c="$1"; shift; "cmd_$c" "$@" ;;
-  *) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

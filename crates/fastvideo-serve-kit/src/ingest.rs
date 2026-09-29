@@ -134,11 +134,62 @@ impl Prober for DefaultProber {
                 _ => Err(ApiError::unsupported_media("the image could not be decoded")),
             };
         }
-        match &self.ffprobe {
-            Some(bin) => Ok(ffprobe(bin, path).await.unwrap_or_default()),
-            None => Ok(MediaProbe::default()),
+        let mut p = match &self.ffprobe {
+            Some(bin) => ffprobe(bin, path).await.unwrap_or_default(),
+            None => MediaProbe::default(),
+        };
+        // A WAV's rate and length are in its header: read them when ffprobe
+        // is missing (audio-to-video needs both).
+        if kind == MediaKind::Audio && (p.audio_rate.is_none() || p.duration_s.is_none()) {
+            let head = tokio::fs::read(path).await.ok().map(|mut b| {
+                b.truncate(WAV_HEAD_MAX);
+                b
+            });
+            let size = tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
+            if let Some((rate, secs)) = head.as_deref().and_then(|h| parse_wav_header(h, size)) {
+                p.audio_rate.get_or_insert(rate);
+                p.duration_s.get_or_insert(secs);
+            }
         }
+        Ok(p)
     }
+}
+
+/// How much of a WAV file [`parse_wav_header`] looks at.
+const WAV_HEAD_MAX: usize = 1 << 16;
+
+/// `(sample_rate, seconds)` from a RIFF/WAVE header: the `fmt ` chunk's rate
+/// and block size and the `data` chunk's length (clamped to the file for
+/// streamed WAVs whose size field is 0 or 0xFFFFFFFF). `None` for anything
+/// else.
+pub fn parse_wav_header(head: &[u8], file_len: u64) -> Option<(u32, f64)> {
+    let u16_at = |i: usize| head.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let u32_at = |i: usize| head.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if head.get(0..4)? != b"RIFF" || head.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let (mut rate, mut block) = (None, None);
+    let mut at = 12usize;
+    while at + 8 <= head.len() {
+        let id = &head[at..at + 4];
+        let len = u32_at(at + 4)? as usize;
+        let body = at + 8;
+        match id {
+            b"fmt " => {
+                rate = u32_at(body + 4).filter(|&r| r > 0);
+                block = u16_at(body + 12).filter(|&b| b > 0);
+            }
+            b"data" => {
+                let (rate, block) = (rate?, u64::from(block?));
+                let avail = file_len.saturating_sub(body as u64);
+                let bytes = if len == 0 || len == u32::MAX as usize { avail } else { (len as u64).min(avail) };
+                return Some((rate, (bytes / block) as f64 / f64::from(rate)));
+            }
+            _ => {}
+        }
+        at = body.checked_add(len + (len & 1))?;
+    }
+    None
 }
 
 /// Runs `ffprobe -show_streams -show_format` and reads the first video and
@@ -529,6 +580,14 @@ pub fn apply_exif_orientation(path: &Path, out: &Path) -> std::io::Result<Option
     Ok(Some(std::fs::metadata(out)?.len()))
 }
 
+/// Fetches a public `url` into `dest` under `policy` (the ingestion SSRF
+/// guard, redirect rules, and `kind`'s size and time limits); returns the
+/// byte count. A gateway worker uses it for inputs the client gave as a
+/// URL (docs/serve/gateway.md §3).
+pub async fn fetch_public(url: &url::Url, kind: MediaKind, policy: &IngestPolicy, dest: &Path, param: &str) -> Result<u64, ApiError> {
+    fetch::fetch_to(url, policy.limits(kind), policy, dest, param).await.map(|(n, _)| n)
+}
+
 fn too_large(param: &str, max: u64) -> ApiError {
     ApiError::payload_too_large(format!("`{param}` exceeds {max} bytes")).with_param(param)
 }
@@ -659,6 +718,41 @@ mod fetch {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    fn wav(rate: u32, channels: u16, frames: u32) -> Vec<u8> {
+        let block = 2 * channels;
+        let data = frames * u32::from(block);
+        let mut v = b"RIFF".to_vec();
+        v.extend((36 + data).to_le_bytes());
+        v.extend(b"WAVEfmt ");
+        v.extend(16u32.to_le_bytes());
+        v.extend(1u16.to_le_bytes());
+        v.extend(channels.to_le_bytes());
+        v.extend(rate.to_le_bytes());
+        v.extend((rate * u32::from(block)).to_le_bytes());
+        v.extend(block.to_le_bytes());
+        v.extend(16u16.to_le_bytes());
+        // An extra chunk before `data` (LIST), odd-sized to test padding.
+        v.extend(b"LIST");
+        v.extend(3u32.to_le_bytes());
+        v.extend([1, 2, 3, 0]);
+        v.extend(b"data");
+        v.extend(data.to_le_bytes());
+        v.extend(vec![0u8; data as usize]);
+        v
+    }
+
+    #[test]
+    fn wav_headers_give_rate_and_length() {
+        let w = wav(48_000, 2, 24_000);
+        let (rate, secs) = parse_wav_header(&w, w.len() as u64).unwrap();
+        assert_eq!(rate, 48_000);
+        assert!((secs - 0.5).abs() < 1e-9);
+        let w = wav(16_000, 1, 48_000);
+        assert_eq!(parse_wav_header(&w, w.len() as u64), Some((16_000, 3.0)));
+        assert_eq!(parse_wav_header(b"RIFF\0\0\0\0AVI LIST", 16), None);
+        assert_eq!(parse_wav_header(b"ID3", 3), None);
+    }
     use fastvideo_protocol::{Anchor, ErrorKind, Keyframe, ProtocolId, Reference, UploadId};
 
     pub fn png(w: u32, h: u32) -> Vec<u8> {

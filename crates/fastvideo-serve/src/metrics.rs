@@ -10,6 +10,11 @@
 //!   `fv_job_duration_seconds{api}` (the engine gate);
 //! - `fv_engine_queued{priority}`, `fv_engine_running`, `fv_engine_sessions`,
 //!   `fv_ready` (refreshed on scrape).
+//! - `fv_encoder_restart_duration_seconds{codec,spare}` and
+//!   `fv_encoder_restarts_total{codec,spare}`: keyframe restarts of the
+//!   ffmpeg pipe encoders (director, Reactor), from the restart to the new
+//!   process's first frame; `spare` is `warm`, `warming` or `cold`
+//!   (`fastvideo_media::pipe`).
 
 use std::sync::OnceLock;
 use std::time::Instant;

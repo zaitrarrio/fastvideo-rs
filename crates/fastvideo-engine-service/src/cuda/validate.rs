@@ -58,14 +58,26 @@ pub fn h3(r: &H3Recipe, job: &ResolvedJob) -> Result<H3Geometry, ApiError> {
 /// `Ltx2Request::validate`'s geometry (multiples of 64 two-stage, 8k+1).
 pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
     ltx2_reference(job, r.ic_lora.is_some())?;
+    let drive = matches!(job.audio_in, Some((fastvideo_protocol::AudioRole::Drive, _)));
+    match (job.task, &job.audio_in) {
+        (Task::A2V, _) if !drive => {
+            return Err(ApiError::invalid_param("audio_url", "audio-to-video needs the driving audio"))
+        }
+        (Task::A2V, _) => {}
+        (_, Some(_)) => return Err(ApiError::invalid_param("audio_url", "input audio is only taken by audio-to-video")),
+        _ => {}
+    }
     match job.task {
         Task::Ref2V => {}
         Task::T2V if job.keyframes.is_empty() => {}
-        Task::I2V | Task::Keyframes if r.version == LtxVersion::V25 => {}
+        Task::I2V | Task::Keyframes | Task::A2V if r.version == LtxVersion::V25 => {}
+        Task::A2V => return Err(ApiError::unsupported(GapId::LtxEndpoint)),
         Task::Keyframes => return Err(ApiError::unsupported(GapId::LtxKeyframes)),
         _ => return Err(ApiError::unsupported(GapId::Ltx25I2V)),
     }
-    if job.fps == 0 || job.prompt.trim().is_empty() {
+    // Audio-to-video with an image may leave the prompt empty.
+    let prompt_optional = drive && !job.keyframes.is_empty();
+    if job.fps == 0 || (job.prompt.trim().is_empty() && !prompt_optional) {
         return Err(ApiError::invalid("ltx2: needs a positive frame rate and a non-empty prompt"));
     }
     fastvideo_models::ltx2::config::check_geometry(

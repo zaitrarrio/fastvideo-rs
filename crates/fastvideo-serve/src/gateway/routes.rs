@@ -4,6 +4,11 @@
 //! tick's probes, no URLs or ids), and `/ping`,
 //! `/health`, `/healthz`, `/`, `/metrics` reflecting pool health
 //! (docs/serve/gateway.md §4, §6, §7).
+//!
+//! Every public body describes pools with the same safe summary as
+//! `/fv/v1/status` ([`public_pools`]): labels, states, ages and counts.
+//! Worker URLs, worker / pod / endpoint ids, IPs and probe error texts are
+//! only on the admin route ([`pool_details`]).
 
 use std::sync::Arc;
 
@@ -38,20 +43,30 @@ pub fn capabilities(gw: &Gateway) -> Value {
         "aliases": cat.aliases,
         "readiness": if gw.any_available() { "ready" } else { "unavailable" },
         "gateway": true,
-        "pools": pools(gw),
+        "pools": public_pools(gw),
     })
 }
 
-/// Per-pool state for `/fv/v1/capabilities` and `/healthz`.
-pub fn pools(gw: &Gateway) -> Vec<Value> {
+/// Every detail of every pool (worker URLs and ids, endpoint ids, probe
+/// errors, each worker's full `build`: sha, build time, variant, image
+/// digest and tag, channel): the admin route `/fv/v1/gateway/pools` only.
+pub fn pool_details(gw: &Gateway) -> Vec<Value> {
     gw.pools
         .iter()
         .map(|p| {
             let available = p.available();
             let st = p.lock();
             let models: Vec<String> = st.live_caps.as_ref().unwrap_or(&p.static_caps).iter().map(|(c, _)| c.id.0.clone()).collect();
+            let (versions, mixed) = crate::status::versions(
+                st.workers
+                    .values()
+                    .filter(|w| w.healthy)
+                    .map(|w| (super::WorkerBuild::short_sha(w.build.as_ref()), w.build.as_ref().and_then(|b| b.channel.clone()))),
+            );
             json!({
                 "id": p.id(),
+                "versions": versions,
+                "mixed_versions": mixed,
                 "kind": p.cfg.kind,
                 "endpoint_id": p.cfg.endpoint_id,
                 "available": available,
@@ -71,9 +86,15 @@ pub fn pools(gw: &Gateway) -> Vec<Value> {
 /// probes (pods: per worker, labelled `w1`, `w2`, …; serverless: Runpod's
 /// `/health` worker counts) and its D1 queue depth and running jobs.
 pub fn status_body(gw: &Gateway) -> Value {
-    use crate::status::{self, PoolStatus, State as S, WorkerStatus};
     let cat = gw.catalog();
-    let pools: Vec<PoolStatus> = gw
+    crate::status::body(true, public_pools(gw), crate::status::names(cat.table.models(), &cat.aliases))
+}
+
+/// Each pool as the public views show it (`/fv/v1/status`,
+/// `/fv/v1/capabilities`, `/healthz`): no URLs, ids or error texts.
+pub fn public_pools(gw: &Gateway) -> Vec<crate::status::PoolStatus> {
+    use crate::status::{self, PoolStatus, State as S, WorkerStatus};
+    gw
         .pools
         .iter()
         .map(|p| {
@@ -81,6 +102,13 @@ pub fn status_body(gw: &Gateway) -> Value {
             let st = p.lock();
             let models: Vec<String> = st.live_caps.as_ref().unwrap_or(&p.static_caps).iter().map(|(c, _)| c.id.0.clone()).collect();
             let kind = serde_json::to_value(p.cfg.kind).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            // Short sha and channel of every answering worker.
+            let (versions, mixed_versions) = status::versions(
+                st.workers
+                    .values()
+                    .filter(|w| w.healthy)
+                    .map(|w| (super::WorkerBuild::short_sha(w.build.as_ref()), w.build.as_ref().and_then(|b| b.channel.clone()))),
+            );
             let (state, workers, last_seen, counts) = if p.is_pod() {
                 let workers: Vec<WorkerStatus> = st
                     .workers
@@ -121,10 +149,11 @@ pub fn status_body(gw: &Gateway) -> Value {
                 workers,
                 loading: None,
                 worker_counts: counts,
+                versions,
+                mixed_versions,
             }
         })
-        .collect();
-    status::body(true, pools, status::names(cat.table.models(), &cat.aliases))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -178,7 +207,13 @@ async fn health(State(h): State<HealthState>) -> Response {
         "draining" => ("draining", "DRAINING"),
         _ => ("unavailable", "UNAVAILABLE"),
     };
-    (c, Json(json!({"status": status, "model_loaded": c == StatusCode::OK, "state": state, "gateway": true}))).into_response()
+    let build = crate::build_info::BuildInfo::current();
+    (
+        c,
+        Json(json!({"status": status, "model_loaded": c == StatusCode::OK, "state": state, "gateway": true,
+            "version": build.version, "build": build.json()})),
+    )
+        .into_response()
 }
 
 async fn healthz(State(h): State<HealthState>) -> Response {
@@ -190,9 +225,10 @@ async fn healthz(State(h): State<HealthState>) -> Response {
             "state": s,
             "gateway": true,
             "models": cat.table.models().map(|m| m.id.0.clone()).collect::<Vec<_>>(),
-            "pools": pools(&h.gw),
+            "pools": public_pools(&h.gw),
             "stores": {"jobs": "d1"},
             "version": env!("CARGO_PKG_VERSION"),
+            "build": crate::build_info::BuildInfo::current().json(),
         })),
     )
         .into_response()
@@ -221,5 +257,11 @@ async fn pools_route(State(h): State<HealthState>, headers: HeaderMap) -> Respon
     if !h.admin.check_headers(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": {"kind": "unauthorized", "message": "the admin token is required"}}))).into_response();
     }
-    Json(json!({"object": "fv.gateway.pools", "pools": h.gw.metrics(), "state": pools(&h.gw)})).into_response()
+    Json(json!({
+        "object": "fv.gateway.pools",
+        "pools": h.gw.metrics(),
+        "state": pool_details(&h.gw),
+        "gateway_build": crate::build_info::BuildInfo::current().json(),
+    }))
+    .into_response()
 }

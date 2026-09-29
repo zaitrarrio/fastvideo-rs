@@ -1,6 +1,6 @@
 //! Endpoints with no engine path: `403 permission_error` (design §1.2, §4.5).
 //!
-//! `audio-to-video`, `retake`, `extend`, `video-to-video-hdr` and
+//! `retake`, `extend`, `video-to-video-hdr` and
 //! `video-to-video-reframe` answer `403 permission_error` ("endpoint not
 //! available for the account", a documented LTX type, ltx §1.5) on both
 //! `/v1/*` and `/v2/*` after authentication. `GET /v2/{endpoint}/{id}` for
@@ -9,8 +9,7 @@
 use fastvideo_protocol::{ApiError, GapId};
 
 /// Path segments of the refused endpoints.
-pub const STUB_ENDPOINTS: [&str; 5] = [
-    "audio-to-video",
+pub const STUB_ENDPOINTS: [&str; 4] = [
     "retake",
     "extend",
     "video-to-video-hdr",

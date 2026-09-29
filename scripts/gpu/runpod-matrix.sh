@@ -2272,6 +2272,17 @@ Audio: male speech, clear voice, quiet room"
               arm=(--dense-stage2 --reference "$fx/ltx-ref-sheet-768x448.png"
                 --ic-lora "$W/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors")
               ltx_args=(--prompt "$LTX_REF_PROMPT" --seed "$SEED" --two-stage --text streamed) ;;
+            ltx25-a2v | ltx25-a2v-i2v)
+              # Audio-to-video (docs/oracle.md "LTX-2.5 audio-to-video"): the
+              # speech clip pinned as clean audio latents on both stages;
+              # prompts as scripts/gpu/upstream/oracle.sh LTX_A2V_*.
+              arm=(--dense-stage2 --audio "$fx/speech-flite-44k.flac")
+              a2v_prompt="${FV_LTX_A2V_PROMPT:-A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word.}"
+              if [[ "$target" == ltx25-a2v-i2v ]]; then
+                arm+=(--image "$fx/ti2v-beach-832x480.jpg")
+                a2v_prompt="${FV_LTX_A2V_I2V_PROMPT:-A calm beach at golden hour, gentle waves rolling in, while a narrator speaks.}"
+              fi
+              ltx_args=(--prompt "$a2v_prompt" --seed "$SEED" --two-stage --text streamed) ;;
           esac
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
             "${geo[@]}" "${arm[@]}" "${ltx_args[@]}") ;;
@@ -2339,17 +2350,48 @@ Audio: male speech, clear voice, quiet room"
         cp "$ref/dump/ref.mp4" "$fm/reference.mp4" 2>/dev/null || true
         sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
-      if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf ]]; then
-        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
-        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
-        oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
-        oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+      # Audio-to-video: -ownaud decodes and encodes the driving audio on our
+      # own (no reference waveform or latent injected), then the clips (ours,
+      # ownaud, the reference's) are kept for the lip-sync proxy
+      # (scripts/gpu/lipsync_proxy.py, run where they are fetched) and the
+      # output audio is checked against the input (the pass-through).
+      if [[ "$target" == ltx25-a2v* ]]; then
+        oracle_run "oracle-$target-ownaud" "$ours-ownaud" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownaud-diff" "$ref/dump" "$ours-ownaud"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownaud:$RUNS/oracle-$target-ownaud/frames/output.mp4" \
+          "reference:$ref/dump/ref.mp4"; do
+          mp4="${src#*:}"
+          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
+          ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height \
+            -of compact "$mp4" | sed "s/^/${src%%:*}: /" >>"$fm/metrics.txt" 2>&1
+        done
+        if [[ -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ]]; then
+          for m in ssim psnr; do
+            r="$(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
+              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
+          done
+        fi
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+      fi
+      if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf || "$target" == ltx25-a2v-i2v ]]; then
+        # (ltx25-a2v-i2v: its -ownaud run above already encodes the image on our own.)
+        if [[ "$target" != ltx25-a2v-i2v ]]; then
+          oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
+          oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+          oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+          oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+        fi
         fm="$RUNS/oracle-$target-frames"
         mkdir -p "$fm"
         pins=("0 $fx/ti2v-beach-832x480.jpg")
         [[ "$target" == ltx25-kf ]] && pins+=("120 $fx/ti2v-beach-zoom-832x480.jpg")
-        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4" \
-          "reference:$ref/dump/ref.mp4"; do
+        own="ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4"
+        [[ "$target" == ltx25-a2v-i2v ]] && own="ownaud:$RUNS/oracle-$target-ownaud/frames/output.mp4"
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "$own" "reference:$ref/dump/ref.mp4"; do
           mp4="${src#*:}"
           [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
           cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true

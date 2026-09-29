@@ -17,6 +17,14 @@
 //! | `image_uri` (i2v, required) | `Keyframe{First}`: `I2V` |
 //! | `last_frame_uri` (i2v) | `Keyframe{Last}`: `Keyframes` (E9; 400 `Unsupported(LtxKeyframes)` on an engine without it) |
 //!
+//! `AudioToVideoRequest` (ltx §2.5, [`normalize_a2v`]): `audio_uri`
+//! (required) drives an `A2V` job whose length follows the audio;
+//! `image_uri` / `last_frame_uri` pin the first / last frame; `prompt` is
+//! required only without an image (may be empty with one); `model` defaults
+//! to `ltx-2-3-pro` (served by our max tier; `ltx-2-3-fast` has no A2V);
+//! `resolution` defaults to 1920x1080, or 1080x1920 for a portrait image; the
+//! audio may be at most 10 s on `ltx-2-5-pro` and at 1440p/4K, else 20 s.
+//!
 //! Media URIs must be `https://…`, `data:…;base64,…` or `ltx://uploads/<token>`
 //! (ltx §2.0). `image_uri` / `last_frame_uri` on text-to-video are refused
 //! rather than ignored. Other unknown fields are ignored (the OAS does not
@@ -25,13 +33,13 @@
 use std::sync::Arc;
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioOut, CanvasSpec, GapId, GenerationRequest, HttpReply, Job, Keyframe,
-    Length, MediaRef, NormalizeCtx, Snap, SubmitEndpoint, Task, TimingSpec, ViewCtx,
+    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, GapId, GenerationRequest, HttpReply,
+    Job, Keyframe, Length, MediaRef, NormalizeCtx, Snap, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
 use serde_json::{Map, Value};
 
 use crate::error::Api;
-use crate::models::{self, LtxModels, Resolution};
+use crate::models::{self, LtxModels, ResTier, Resolution};
 
 /// Longest prompt (OAS `maxLength`).
 pub const PROMPT_MAX_CHARS: usize = 5000;
@@ -53,16 +61,18 @@ pub const CAMERA_MOTIONS: [&str; 8] = [
 pub enum Endpoint {
     TextToVideo,
     ImageToVideo,
+    AudioToVideo,
 }
 
 impl Endpoint {
-    pub const ALL: [Endpoint; 2] = [Endpoint::TextToVideo, Endpoint::ImageToVideo];
+    pub const ALL: [Endpoint; 3] = [Endpoint::TextToVideo, Endpoint::ImageToVideo, Endpoint::AudioToVideo];
 
     /// The path segment (`text-to-video`).
     pub fn segment(&self) -> &'static str {
         match self {
             Endpoint::TextToVideo => "text-to-video",
             Endpoint::ImageToVideo => "image-to-video",
+            Endpoint::AudioToVideo => "audio-to-video",
         }
     }
     pub fn from_segment(s: &str) -> Option<Self> {
@@ -73,6 +83,7 @@ impl Endpoint {
         match t {
             Task::T2V => Some(Endpoint::TextToVideo),
             Task::I2V | Task::Keyframes => Some(Endpoint::ImageToVideo),
+            Task::A2V => Some(Endpoint::AudioToVideo),
             _ => None,
         }
     }
@@ -187,6 +198,9 @@ pub fn normalize(
     let o = body
         .as_object()
         .ok_or_else(|| ApiError::invalid("request body must be a JSON object"))?;
+    if endpoint == Endpoint::AudioToVideo {
+        return normalize_a2v(api, models, o);
+    }
 
     let prompt = req_str(o, "prompt")?;
     if prompt.chars().count() > PROMPT_MAX_CHARS {
@@ -248,6 +262,7 @@ pub fn normalize(
             }
             Task::T2V
         }
+        Endpoint::AudioToVideo => unreachable!("normalize_a2v"),
         Endpoint::ImageToVideo => {
             let first = media_uri(req_str(o, "image_uri")?, "image_uri")?;
             keyframes.push(Keyframe {
@@ -295,6 +310,72 @@ pub fn normalize(
     if !generate_audio {
         req.audio_out = AudioOut::Silent;
     }
+    Ok(req)
+}
+
+/// The A2V default model (OAS: `AudioToVideoRequest.model` defaults to it).
+pub const A2V_DEFAULT_MODEL: &str = "ltx-2-3-pro";
+/// Input audio ceilings (OAS `audio_uri`): 20 s at 720p/1080p, 10 s at
+/// 1440p/4K, and 10 s at every size on `ltx-2-5-pro`.
+pub const A2V_MAX_S_LONG: u32 = 20;
+pub const A2V_MAX_S_SHORT: u32 = 10;
+
+fn camera_motion(o: &Map<String, Value>) -> Result<(), ApiError> {
+    if let Some(cm) = opt_str(o, "camera_motion")? {
+        if !CAMERA_MOTIONS.contains(&cm) {
+            return Err(invalid(
+                "camera_motion",
+                format!("camera_motion must be one of: {}", CAMERA_MOTIONS.join(", ")),
+            ));
+        }
+        return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion"));
+    }
+    Ok(())
+}
+
+/// `AudioToVideoRequest` (ltx §2.5) → an `A2V` request (see the module docs).
+pub fn normalize_a2v(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+    let audio = media_uri(req_str(o, "audio_uri")?, "audio_uri")?;
+    let image = opt_str(o, "image_uri")?.map(|s| media_uri(s, "image_uri")).transpose()?;
+    let last = opt_str(o, "last_frame_uri")?.map(|s| media_uri(s, "last_frame_uri")).transpose()?;
+    if last.is_some() && image.is_none() {
+        return Err(invalid("last_frame_uri", "last_frame_uri requires image_uri"));
+    }
+    let prompt = opt_str(o, "prompt")?.unwrap_or_default();
+    if prompt.trim().is_empty() && image.is_none() {
+        return Err(invalid("prompt", "prompt is required if image_uri is not provided"));
+    }
+    if prompt.chars().count() > PROMPT_MAX_CHARS {
+        return Err(invalid("prompt", format!("prompt must be at most {PROMPT_MAX_CHARS} characters")));
+    }
+    let model_id = opt_str(o, "model")?.unwrap_or(A2V_DEFAULT_MODEL);
+    if model_id == "ltx-2-3-fast" {
+        return Err(invalid("model", "ltx-2-3-fast does not support audio-to-video; use ltx-2-3-pro, ltx-2-5-fast or ltx-2-5-pro"));
+    }
+    let model = models.lookup(model_id)?;
+    let res = opt_str(o, "resolution")?.map(Resolution::parse).transpose()?;
+    let fps = int_field(o, "fps")?.unwrap_or(models::DEFAULT_FPS);
+    models::check_fps(fps)?;
+    camera_motion(o)?;
+    let short = matches!(res.map(|r| r.tier), Some(ResTier::P1440 | ResTier::K4)) || model_id == "ltx-2-5-pro";
+    let max_s = if short { A2V_MAX_S_SHORT } else { A2V_MAX_S_LONG };
+
+    let mut req = GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt);
+    req.task = Task::A2V;
+    req.canvas = match res {
+        Some(r) => CanvasSpec::Exact { width: r.width, height: r.height },
+        // "Portrait image → 1080x1920, landscape → 1920x1080; no image → 1920x1080".
+        None => CanvasSpec::Oriented { width: 1920, height: 1080 },
+    };
+    // The audio sets the length (`negotiate`).
+    req.timing = TimingSpec { length: Length::ModelDefault, fps: Some(fps) };
+    if let Some(first) = image {
+        req.keyframes.push(Keyframe { at: Anchor::First, image: first });
+    }
+    if let Some(l) = last {
+        req.keyframes.push(Keyframe { at: Anchor::Last, image: l });
+    }
+    req.audio_in = Some(AudioInput { media: audio, role: AudioRole::Drive, max_s: Some(max_s) });
     Ok(req)
 }
 
@@ -412,6 +493,48 @@ mod tests {
         assert!(i2v(with("image_uri", json!("data:image/png;base64,AAAA"))).is_ok());
         // T2V refuses image fields rather than dropping them.
         assert!(t2v(with("image_uri", json!("https://example.com/a.png"))).is_err());
+    }
+
+    fn a2v(body: Value) -> Result<GenerationRequest, ApiError> {
+        normalize(Endpoint::AudioToVideo, Api::V2, &LtxModels::default(), &body)
+    }
+
+    #[test]
+    fn a2v_shapes() {
+        // Defaults: ltx-2-3-pro (our max tier), 1920x1080 or portrait by the
+        // image, the length from the audio, 20 s of audio at 1080p.
+        let r = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "a man talks"})).unwrap();
+        assert_eq!((r.task, r.model.as_str()), (Task::A2V, "ltx-pro"));
+        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
+        assert_eq!(r.timing, TimingSpec { length: Length::ModelDefault, fps: Some(24) });
+        let a = r.audio_in.unwrap();
+        assert_eq!((a.role, a.max_s), (AudioRole::Drive, Some(20)));
+        assert!(r.keyframes.is_empty());
+        // An image: the prompt may be empty; a last frame with it.
+        let r = a2v(json!({"audio_uri": "ltx://uploads/a", "image_uri": "ltx://uploads/i", "last_frame_uri": "https://example.com/l.png", "prompt": "", "model": "ltx-2-5-fast", "resolution": "1080x1920", "fps": 25})).unwrap();
+        assert_eq!(r.keyframes.len(), 2);
+        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        assert_eq!((r.model.as_str(), r.timing.fps), ("ltx-turbo", Some(25)));
+        // 10 s: pro, and 1440p / 4K.
+        let pro = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-5-pro"})).unwrap();
+        assert_eq!(pro.audio_in.unwrap().max_s, Some(10));
+        let k4 = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-5-fast", "resolution": "3840x2160"})).unwrap();
+        assert_eq!(k4.audio_in.unwrap().max_s, Some(10));
+        // Refusals.
+        for (b, param) in [
+            (json!({"prompt": "p"}), "audio_uri"),
+            (json!({"audio_uri": "https://example.com/a.mp3"}), "prompt"),
+            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "last_frame_uri": "https://example.com/l.png"}), "last_frame_uri"),
+            (json!({"audio_uri": "http://example.com/a.mp3", "prompt": "p"}), "audio_uri"),
+            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-3-fast"}), "model"),
+            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "fps": 30}), "fps"),
+        ] {
+            let e = a2v(b.clone()).unwrap_err();
+            assert_eq!(e.param.as_deref(), Some(param), "{b}");
+        }
+        let (k, _) = msg(a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "camera_motion": "jib_up"})));
+        assert_eq!(k, ErrorKind::Unsupported(GapId::LtxCameraMotion));
+        assert_eq!(Endpoint::of_task(Task::A2V), Some(Endpoint::AudioToVideo));
     }
 
     #[test]

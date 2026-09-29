@@ -29,6 +29,7 @@
 //!   `[reactor]` (WP-13) on the shared WebRTC host of `rtc` (`[webrtc]`).
 
 pub mod adapters;
+pub mod admin_token;
 pub mod app;
 pub mod build_info;
 pub mod config;
@@ -47,6 +48,10 @@ pub mod health;
 pub mod metrics;
 pub mod multiworker;
 pub mod native;
+/// Release channels and deployments in the gateway's admin API
+/// (docs/serve/releases.md).
+#[cfg(feature = "http-client")]
+pub mod releases;
 #[cfg(feature = "reactor")]
 pub mod reactor;
 #[cfg(any(feature = "reactor", all(feature = "fal", feature = "webrtc")))]

@@ -10,6 +10,7 @@ description = "fv-serve media: A/V pacer, resampler, Opus and H.264 encoders, MP
 fastvideo-protocol.workspace = true
 bytes.workspace = true
 image.workspace = true
+metrics.workspace = true
 rubato.workspace = true
 serde.workspace = true
 serde_json.workspace = true

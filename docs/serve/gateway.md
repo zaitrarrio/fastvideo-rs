@@ -53,7 +53,10 @@ caps_refresh_s = 60                # live caps refresh per pool
 tick_s = 5                         # metrics + reaper tick
 runpod_api_base = "https://api.runpod.ai/v2"   # tests: the local simulator
 # runpod_api_key: FV_RUNPOD_API_KEY (else RUNPOD_API_KEY)
-watch_poll_ms = 1000               # D1 poll for SSE / sync waits
+watch_poll_ms = 1000               # D1 poll for SSE / sync waits; freshness of the status view (§3.3)
+inline_inputs_max_bytes = 8388608  # inputs up to 8 MiB per job ride in the dispatch (§3.1; serverless ≤ 6 MiB)
+input_passthrough = true           # large video/audio given as a public URL: the worker fetches it (§3.1)
+stage_inputs_for_retry = true      # copy inputs to R2 after the dispatch, for a re-dispatch (§3.1)
 
 [[pools]]
 id = "h3-turbo"
@@ -111,17 +114,23 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
    - Every pool serving it is unavailable (pods unreachable, endpoint
      errors) → `503` + `Retry-After` (`ApiError::loading`).
    - Pool over `max_queued` → `429 QueueFull` + `Retry-After`.
-2. **Inputs**: staged files are put into the artifact store (R2 in
-   production) under a fresh id and passed as signed URLs; the worker
-   downloads them into its own inputs dir and deletes them when the job
-   ends.
+2. **Inputs** (§3.1): small ones travel inside the envelope (base64), large
+   video/audio a client gave as a public URL are fetched by the worker from
+   there, anything else goes through the artifact store (R2) with a signed
+   URL. The worker puts them in its own inputs dir, all at once.
 3. **Envelope** (native), the same for both pool kinds:
 
    ```jsonc
    POST /fv/v1/internal/jobs
-   {"job": <Job>, "inputs": {"<gateway path>": "<signed url>", …},
+   {"job": <Job>,
+    "inputs": [{"path": "<gateway path>", "kind": "image", "bytes": 1769472,
+                "inline": "<base64>"},                     // or
+               {"path": …, "source": "https://…", "sha256": "…"}, // or
+               {"path": …, "url": "<signed url>", "artifact": {…}}],
     "attempt": 1, "pool": "h3-turbo"}
    ```
+
+   The worker accepts envelopes up to 64 MiB.
 
    - `pod`: sent directly to a worker (`x-fv-internal-token`), tried in
      order of least in-flight work; a refused/unreachable worker moves on
@@ -138,9 +147,15 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 4. **Dispatch record**: `gw_dispatch` row (job id, pool, kind, target =
    pod URL or endpoint id, ref = Runpod job id or worker id, attempt,
    state). Any gateway replica can cancel or reap from it.
-5. **Worker side**: `POST /fv/v1/internal/jobs` adopts the job
-   (`D1JobStore::adopt`: the worker's cache becomes authoritative and the
-   row's `worker` column its id), stages the inputs, submits to its engine.
+5. **Worker side**: `POST /fv/v1/internal/jobs` puts the inputs in place,
+   sets `Job.dispatched_at`, adopts the job (`D1JobStore::adopt`: the
+   worker's cache becomes authoritative and the row's `worker` column its
+   id) and submits to its engine. The adoption is **one D1 statement**: an
+   upsert whose `DO UPDATE … WHERE` only applies when the row is queued or
+   running, has no cancel request, and has no other worker with a fresh
+   heartbeat, `RETURNING job`; no row back means refused (409). It keeps
+   the row's fields and sets the worker's input paths and `dispatched_at`
+   (`json_set`), so the race between two workers is decided inside SQLite.
    From then on it is an ordinary job on that worker: progress (≤ 1 write/s),
    logs, artifacts (R2), terminal state and callbacks/webhooks all come
    from the worker. Idempotent: a duplicate delivery to the same worker
@@ -149,8 +164,9 @@ inserted in D1 (`queued`, owner, callback, request echo) → `RemoteGate::submit
 
 Status, results, lists, fal `status/stream` (SSE), sync endpoints: the
 gateway answers them from D1 (`GatewayJobStore`: read-through, `watch()`
-polls D1 every `watch_poll_ms`). Signed artifact URLs come from the shared
-R2 store (or a shared local directory in single-host tests).
+polls D1 every `watch_poll_ms`), through the in-memory view of §3.3.
+Signed artifact URLs come from the shared R2 store (or a shared local
+directory in single-host tests).
 
 **Cancel** (`DELETE`/`cancel` routes of every API): the gateway marks the
 row (queued → cancelled at once; running → `cancel_requested`) and forwards
@@ -173,6 +189,84 @@ calls the envelope's `cancel_path` in-process.
   otherwise it is failed `"the worker running this job was lost"` (which
   fires its webhook through the gateway).
 
+### 3.1 Input path
+
+Measured on the cluster (2026-09-28, image-to-video): the gateway's R2 PUT
+of the input took 1-3 s (once 11 s) and the worker's R2 GET about 1 s, all
+before the GPU saw the job. The input does not need to be stored for the
+job to run, so the store is off the submit path now:
+
+| input | how it reaches the worker |
+|---|---|
+| all of a job's inputs together up to `inline_inputs_max_bytes` (8 MiB; serverless pools 6 MiB, a Runpod `/run` body is ≤ 10 MB) | **inline**: base64 in the envelope; the worker writes the bytes |
+| a larger video or audio input the client gave as an `http(s)` URL (`Job.input_sources`; images are left out because ingestion may rewrite them upright) | **source**: the worker fetches the URL itself with ingestion's SSRF guard, redirect rules and size/time limits, and checks the gateway's SHA-256; if that fails the worker answers **424** and the gateway sends that input through the store and dispatches again |
+| anything else (large images, uploads, data URIs over the budget) | **store**: R2 PUT (all inputs at once) and a signed URL; the worker reads the object (all at once) |
+
+After a dispatch the gateway copies the inputs that skipped the store into
+it **in the background** (`stage_inputs_for_retry`, pools with
+`retries > 0`) and points the `gw_dispatch` row at the copies, so a
+re-dispatch after a worker loss (§3, any replica) finds them. A re-dispatch
+that comes before the copy is done stores the input from the replica's
+staged file then. The row never holds the inline bytes. The copies go when
+the tick closes the row (the job finished) or the job is failed as lost;
+a copy that finishes after the row moved on is deleted at once. None of the
+mounted APIs returns a job's input URL, so nothing else needs a stored
+input (uploads, `/uploads` and fal storage keep their own store).
+
+### 3.2 Queue timings
+
+fal `timings.queue` is `created_at` → the worker's `started_at`. Behind a
+gateway it splits into **`dispatch`** (`created_at` → `Job.dispatched_at`:
+the job row insert, input transfer, the hop to the worker, which sets
+`dispatched_at` once the inputs are in place) and **`wait`**
+(`dispatched_at` → `started_at`: the adoption write and the wait for the
+GPU), with `dispatch + wait == queue`. `dispatched_at` is omitted from the
+job JSON when unset (a job that never left its process), and then `timings`
+has no split.
+
+Where the time goes, per dispatch:
+
+- log line `gateway: dispatched` (job, pool, inputs, and how many went
+  `inline` / `source` / `store`, `stage_inputs_ms`, `dispatch_ms`,
+  `record_ms`) and on the worker `worker: dispatched inputs in place`
+  (`fetch_ms`);
+- `/metrics`: `fv_gateway_submit_phase_seconds{pool,phase}` (`phase` =
+  `stage_inputs`, `dispatch`, `record`), `fv_worker_input_fetch_seconds`,
+  `fv_worker_adopt_seconds`, `fv_gateway_retry_stage_seconds` (the
+  background copy), `fv_gateway_job_reads_total{source}` (`memory` | `d1`,
+  §3.3).
+
+Dispatch is immediate on submit (not bound to the tick). The worker adopts
+in one D1 round trip (§3 step 5, was a read then an upsert), and puts all
+inputs in place concurrently, as the gateway stores them concurrently.
+
+Before / after on the fake engine
+(`tests/gateway.rs::inline_inputs_take_the_store_off_the_dispatch_path`):
+fal image-to-video with a 1024x576 noise PNG (1.7 MB), the shared
+artifacts directory behind R2-like latency (PUT 1.5 s, GET 1.0 s) and
+250 ms per D1 call; mean of 3 jobs, seconds:
+
+| input path | submit call | `dispatch` | `wait` | `queue` |
+|---|---:|---:|---:|---:|
+| before: through the store (`inline_inputs_max_bytes = 0`) | 3.97 | 2.93 | 0.38 | 3.30 |
+| after: inline (default) | 1.58 | 0.46 | 0.33 | 0.79 |
+
+The 2.5 s gone are the PUT and the GET; what is left of `dispatch` is the
+job row insert and the hop (with 250 ms D1 calls), and `wait` is the
+adoption write plus the fake engine picking the job up. Text-to-video
+(no inputs) was already about 1.1 s of `queue` on the cluster.
+
+### 3.3 Status reads from memory
+
+Each fal status poll cost one D1 read (~0.28 s). `GatewayJobStore` keeps a
+view of the jobs it recently inserted, updated or read, and answers `get` /
+by-external-id reads from it where the state is known: a job seen within
+`watch_poll_ms` (the latency SSE already has), or a finished job seen within
+the last 60 s (finished jobs only change by deletion). Anything else reads
+D1 and refreshes the view; the `watch()` pollers refresh it too. With
+several replicas, a change made through another replica shows up here at
+most `watch_poll_ms` later (60 s for deleting a finished job).
+
 ## 4. Capabilities
 
 - Per pool: **static** caps from `[[pools.models]]` (CUDA catalog, same
@@ -184,10 +278,13 @@ calls the envelope's `cancel_path` in-process.
 - The gateway's table is `CapabilityTable::build` over the pools (one
   "executor" per pool), so tier aliases (`h3-turbo`, `ltx-max`, …) bind as
   on a single server, `[aliases]` and `pools[].aliases` merge on top.
-- `/fv/v1/capabilities` adds `pools` (id, kind, available, models, workers)
-  and each model's `pools`; the console reads the same endpoint, so it
-  lists every model of every pool. Like a single server's, it also reports
-  the gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
+- `/fv/v1/capabilities` adds `pools` and each model's `pools`; the console
+  reads the same endpoint, so it lists every model of every pool. `pools`
+  is the safe summary of `/fv/v1/status` (id, kind, state, available,
+  models, queue depth, running jobs, last seen, workers as `w1`, `w2`, …
+  with state and load): never worker URLs, worker / pod / endpoint ids, IPs
+  or probe error texts. Like a single server's, it also reports the
+  gateway's `auth.mode` (`none` | `keys` | `trust-gateway`).
 - `GET /fv/v1/status` (public, no secrets; docs/serve/console.md): each
   pool's and worker's state from the tick's probes (`ready`, `busy`,
   `loading`, `scaled_to_zero`, `draining`, `unhealthy`, `down`), last-seen
@@ -238,9 +335,30 @@ autoscaler add or remove pods without touching the gateway.
 ## 6. Replicas, health, route filter
 
 - `/ping`: 200 when at least one pool is available (or has static caps and
-  can scale from zero), 503 while draining; `/healthz` and `/health`
-  include per-pool state. `/fv/v1/gateway/pools` (admin token) returns the
-  metrics of §7.
+  can scale from zero), 503 while draining; `/healthz` includes the same
+  safe per-pool summary as `/fv/v1/status`. The details (worker URLs and
+  ids, endpoint ids, probe errors) are only on `/fv/v1/gateway/pools`
+  (admin token: the metrics of §7 plus `state`, each pool's full view,
+  including each worker's full `build` (git sha, build time, variant, image
+  digest and tag, release channel) and `gateway_build`).
+- **Versions** (docs/serve/releases.md): workers report their build in
+  `GET /fv/v1/internal/status` (`build`), and the tick keeps it per worker.
+  The public views (`/fv/v1/status`, `/healthz`, capabilities' `pools`)
+  show per pod pool only `versions: [{sha, channel, workers}]` (the
+  7-character sha and the channel of the answering workers) and
+  `mixed_versions` when they run more than one sha (a rolling redeploy in
+  progress, or drift); `/fv/v1/status` adds the gateway's own `version`
+  (`{sha, channel}`) and a top-level `mixed_versions`. Serverless pools
+  have no per-worker version (their workers follow the Runpod template).
+- **Releases** (admin token; `crates/fastvideo-serve/src/releases.rs`):
+  `GET /fv/v1/admin/releases`, `GET /fv/v1/admin/deployments` (the D1
+  history and registry, live builds, drift) and `POST
+  /fv/v1/admin/releases/{promote,rollback}` (`dry_run` for the plan;
+  otherwise they dispatch `release.yml`, which needs `FV_GITHUB_TOKEN` on
+  the gateway, else 503). The console's Deployments page uses them.
+  Errors returned to API clients name the pool only (a `503` for a pool
+  that cannot take work, a dispatch nobody took); the causes go to the
+  log.
 - Several replicas: every gateway route reads D1/R2, so with
   `server.workers_max > 1` (design §6.5) the gateway serves jobs, cancel
   and delete (routed through `gw_dispatch`), fal `status/stream` (D1 poll)
@@ -549,3 +667,53 @@ $4.18/h; the account balance went $48.03 → $46.74 over the run, which
 includes other agents' pods.
 
 <!-- END §8 Autoscaling -->
+
+## 9. Auth and the admin token
+
+- The gateway runs `auth.mode = "keys"` (the default, and what
+  `configs/serve/gateway*.toml` set): users call it with API keys, from
+  `FV_API_KEYS` (SHA-256 list) or minted with the admin token
+  (`/console/admin`, `POST /fv/v1/admin/keys`, stored in D1 so every
+  replica sees them). `FV_AUTH_MODE=none` still exists for a local demo;
+  the cluster script no longer uses it. Workers are always
+  `trust-gateway` behind the internal token.
+- **Admin token** (`/fv/v1/admin/*`, `/fv/v1/gateway/pools`, key minting):
+  `FV_ADMIN_TOKEN` when set; otherwise the server makes one on its first
+  start and keeps it in **`<state_dir>/admin_token`** (mode 600, written
+  under a temporary name and renamed), and every later start with the same
+  state dir reuses it. It is never logged: the log line names the file and
+  the token's first 4 characters. The process keeps only its SHA-256.
+  Workers keep no file (their admin routes sit behind the internal token).
+- **On a Runpod pod without a volume** the state dir is on the container
+  disk: the token survives a restart of the pod (an env PATCH, `extend`),
+  not its re-creation (a new pod makes a new token). Put `state_dir` on a
+  volume, or set `FV_ADMIN_TOKEN` from a Runpod secret, to keep it across
+  re-creations.
+- **Fetching it remotely**: with `FV_ADMIN_TOKEN_RECIPIENT` (an X25519
+  public key, 32 bytes base64) the server publishes the token sealed to
+  that key at `GET /fv/v1/admin/token/sealed` (public; 404 without a
+  recipient): `{"alg": "X25519-SHA512-AES256CTR-HMACSHA256", "epk", "iv",
+  "ct", "tag"}` (ephemeral X25519, SHA-512 key derivation, AES-256-CTR,
+  HMAC-SHA256 over `iv ‖ ct`; `crates/fastvideo-serve/src/admin_token.rs`).
+  Only the private key's holder can open it, with a stock `openssl`.
+- **The cluster** (`scripts/serve/runpod-cluster.sh`): `up` makes an X25519
+  key pair next to the state file (`cluster.json.admin-key.pem`, mode 600;
+  the private half never leaves the machine) and gives the gateway the
+  public half; nothing secret about the admin token is in the pod's env.
+  The owner reads the token with
+
+  ```bash
+  scripts/serve/runpod-cluster.sh admin-token
+  ```
+
+  which fetches the sealed token on first use, opens it with `openssl`,
+  keeps a copy in the state file (`.admin_token`, mode 600) and prints it.
+  `wait`, `status`, `mint` and `smoke` use the same copy through a header
+  file (never argv): `wait` / `status` read the admin route
+  `/fv/v1/gateway/pools`, `mint <name> <file>` mints a user key, and
+  `smoke` uses `FV_CLUSTER_KEY_FILE` or mints one key once
+  (`.smoke_api_key`). If the gateway pod was re-created, the copy stops
+  working (401) and the script fetches the new token by itself. A state
+  file from an older script (an `.admin_token` it generated, no key pair)
+  keeps passing that token as `FV_ADMIN_TOKEN`, so a running cluster is
+  not cut off.

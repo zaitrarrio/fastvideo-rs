@@ -303,3 +303,78 @@ async fn over_http_with_bearer_auth() {
     let e = schema::migrate(&D1Client::http(cfg).unwrap()).await.unwrap_err();
     assert!(matches!(e, D1Error::Api { status: 401, .. }), "{e}");
 }
+
+/// A worker adopts a row a gateway inserted in one D1 round trip: the row
+/// keeps its fields, takes the worker's input paths and `dispatched_at`,
+/// and the conditions (finished, cancel requested, held by another live
+/// worker) are checked inside the statement.
+#[tokio::test]
+async fn adopt_is_one_conditional_upsert() {
+    let m = MockD1::new();
+    let mut go = opts("gateway");
+    go.hold_inserts = false;
+    let gw = D1JobStore::new(client(&m), go).open(t0()).await.unwrap();
+    let w1 = open(&m, "w1").await;
+    let w2 = open(&m, "w2").await;
+
+    let mut j = job(ProtocolId::Fal, "adopt-1", t0());
+    j.resolved.keyframes = vec![(fastvideo_protocol::Anchor::First, "/gw/inputs/a.png".into())];
+    gw.insert(j.clone()).await.unwrap();
+    assert!(row(&m, j.id)["worker"].is_null());
+    // The gateway logged something on the row meanwhile (a re-dispatch note):
+    // the row's fields win over the dispatched copy.
+    gw.update(j.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        j.logs.push(fastvideo_protocol::LogLine::info("dispatching again", t0()));
+    }))
+    .await
+    .unwrap();
+
+    let mut mine = j.clone();
+    mine.resolved.keyframes[0].1 = "/w1/inputs/0-a.png".into();
+    mine.dispatched_at = Some(t0());
+    let before = m.statements().len();
+    let got = w1.adopt(mine.clone()).await.unwrap();
+    assert_eq!(m.statements().len() - before, 1, "one statement: {:?}", &m.statements()[before..]);
+    assert_eq!(got.resolved.keyframes[0].1, std::path::PathBuf::from("/w1/inputs/0-a.png"));
+    assert_eq!(got.dispatched_at.map(|t| t.unix_timestamp()), Some(t0().unix_timestamp()));
+    assert_eq!(got.logs.len(), 1, "the row's logs are kept");
+    let r = row(&m, j.id);
+    assert_eq!(r["worker"], "w1");
+    let stored: fastvideo_protocol::Job = serde_json::from_str(r["job"].as_str().unwrap()).unwrap();
+    assert_eq!(stored.resolved.keyframes, got.resolved.keyframes);
+    assert_eq!(stored.dispatched_at, got.dispatched_at);
+    // Held here: idempotent, no D1 call.
+    let before = m.statements().len();
+    assert_eq!(w1.adopt(mine.clone()).await.unwrap().id, j.id);
+    assert_eq!(m.statements().len(), before);
+    // Another worker while w1's heartbeat is fresh: refused, row unchanged.
+    assert_eq!(w2.adopt(mine.clone()).await, Err(StoreError::AlreadyExists(j.id)));
+    assert_eq!(row(&m, j.id)["worker"], "w1");
+    // Stale heartbeat: w2 may take it over.
+    m.sql("UPDATE jobs SET updated_at = 0 WHERE id = ?", &[json!(j.id.to_string())]).unwrap();
+    assert_eq!(w2.adopt(mine.clone()).await.unwrap().id, j.id);
+    assert_eq!(row(&m, j.id)["worker"], "w2");
+
+    // Cancel requested or finished rows are refused.
+    let c = job(ProtocolId::Fal, "adopt-2", t0());
+    gw.insert(c.clone()).await.unwrap();
+    gw.update(c.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        j.cancel_requested = true;
+    }))
+    .await
+    .unwrap();
+    assert_eq!(w1.adopt(c.clone()).await, Err(StoreError::AlreadyExists(c.id)));
+    let f = job(ProtocolId::Fal, "adopt-3", t0());
+    gw.insert(f.clone()).await.unwrap();
+    gw.update(f.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        let _ = j.mark_failed(t0(), fastvideo_protocol::ApiError::internal("x"));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(w1.adopt(f.clone()).await, Err(StoreError::AlreadyExists(f.id)));
+    assert!(row(&m, f.id)["worker"].is_null());
+    // No row yet (the gateway's insert was lost): the dispatched copy is inserted.
+    let n = job(ProtocolId::Fal, "adopt-4", t0());
+    assert_eq!(w1.adopt(n.clone()).await.unwrap().id, n.id);
+    assert_eq!(row(&m, n.id)["worker"], "w1");
+}

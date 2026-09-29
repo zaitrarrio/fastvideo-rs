@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use fastvideo_cudarc::ltx2::a2v::DrivingAudio;
 use fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage;
 use fastvideo_cudarc::ltx2::pipeline::{
     default_sol_stage2, IcReference, Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions,
@@ -16,7 +17,7 @@ use fastvideo_cudarc::ltx2::pipeline::{
 };
 use fastvideo_models::ltx2::config::Ltx2Config;
 use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
-use fastvideo_protocol::{ApiError, GapId, JobMetrics, ResolvedJob, Task};
+use fastvideo_protocol::{ApiError, AudioRole, GapId, JobMetrics, ResolvedJob, Task};
 
 use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxStage2, LtxVersion};
 use super::output::{api_err, bytes_mb, stages, wants_audio};
@@ -53,6 +54,23 @@ pub fn reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<IcReference>
         strength: job.sampling.reference_strength.unwrap_or(1.0),
         lora_strength: job.sampling.reference_lora_strength.unwrap_or(1.0),
     }))
+}
+
+/// The job's driving audio (`Task::A2V`, `AudioRole::Drive`): the output
+/// carries it, the model's own audio is not generated.
+pub fn driving_audio(job: &ResolvedJob) -> Result<Option<DrivingAudio>, ApiError> {
+    match (job.task, &job.audio_in) {
+        (Task::A2V, Some((AudioRole::Drive, path))) => Ok(Some(DrivingAudio::new(path.clone()))),
+        (Task::A2V, _) => Err(ApiError::invalid_param(
+            "audio_url",
+            "audio-to-video needs the driving audio",
+        )),
+        (_, Some(_)) => Err(ApiError::invalid_param(
+            "audio_url",
+            "input audio is only taken by audio-to-video",
+        )),
+        _ => Ok(None),
+    }
 }
 
 /// One resident LTX-2 pipeline.
@@ -160,12 +178,14 @@ impl Ltx2Model {
     pub fn request(&self, job: &ResolvedJob, dir: &Path) -> Result<Ltx2Request, ApiError> {
         super::validate::ltx2(&self.recipe, job)?;
         let reference = reference(job, self.recipe.ic_lora.is_some())?;
+        let audio = driving_audio(job)?;
         let images = match job.task {
             Task::Ref2V => Vec::new(),
             Task::T2V if job.keyframes.is_empty() => Vec::new(),
-            Task::I2V | Task::Keyframes if self.recipe.version == LtxVersion::V25 => {
+            Task::I2V | Task::Keyframes | Task::A2V if self.recipe.version == LtxVersion::V25 => {
                 conditioning_images(job)
             }
+            Task::A2V => return Err(ApiError::unsupported(GapId::LtxEndpoint)),
             Task::Keyframes => return Err(ApiError::unsupported(GapId::LtxKeyframes)),
             _ => return Err(ApiError::unsupported(GapId::Ltx25I2V)),
         };
@@ -190,6 +210,7 @@ impl Ltx2Model {
             req.pisa_stage2 = false;
         }
         req.reference = reference;
+        req.audio = audio;
         req.validate()
             .map_err(|e| ApiError::invalid(e.to_string()))?;
         Ok(req)
@@ -222,6 +243,8 @@ impl Ltx2Model {
             inference_s: Some(t.denoise_s),
             stage_durations: stages(&[
                 ("text", t.text_s),
+                ("image_encode", t.image_s),
+                ("audio_encode", t.audio_encode_s),
                 ("stage1", t.stage1_s),
                 ("upsample", t.upsample_s),
                 ("stage2", t.stage2_s),

@@ -402,6 +402,93 @@ tokens (the reference doubles the sequence), stage 2 1.8-2.1 s per step at
 LoRA linears is 61.8 GiB), peak 70 GiB. Upstream (`--offload cpu`) ran the
 cell in 116 s, peak 9.3 GiB. Spend: upstream pod 13 min, runtime pod 8 min.
 
+## LTX-2.5 audio-to-video (avatar P0, 2026-09-29)
+
+Reference: Lightricks/LTX-2 `fd4ded7`. Upstream's audio-to-video pipeline,
+`A2VidPipelineTwoStage` (`a2vid_two_stage.py`), runs the dev transformer
+with guidance at stage 1; the weights we serve are the distilled
+transformer. The reference here is therefore `DistilledPipeline` with
+`a2vid_two_stage.py`'s audio handling put in line for line
+(`scripts/gpu/upstream/ltx25_a2v.py`, through sol-engine's `gpu_infer.py` as
+every LTX target): `decode_audio_from_file(…, max_duration=num_frames/fps)`,
+`AudioConditioner` + `encode_audio`, the latent cut to `from_duration`, and
+`ModalitySpec(frozen=True, noise_scale=0, initial_latent=…)` for the audio
+on both stages; the output carries the input waveform. The faithful guided
+path would need `transformer_full/` of `Lightricks/LTX-2.5-Diffusers`
+(38.0 GB, LTX-2 community license, gated auto; not downloaded: owner
+approval, and both volumes) plus a guided sampler.
+
+Targets `ltx25-a2v` (prompt only, a talking head) and `ltx25-a2v-i2v` (the
+TI2V beach fixture at frame 0 + the same audio), 768x512x121, dense stage 2,
+seed 1024, the speech fixture `scripts/gpu/fixtures/speech-flite-44k.flac`
+(7.0 s, 44.1 kHz stereo FLAC synthesized with ffmpeg's flite filter, voice
+`slt`; the clip uses its first 5.04 s). New dump names: `a2v_audio_wave`
+(`[C, N]`, the decoded waveform) and `a2v_audio_latent` (`[L, 128]`, the
+encoded latent as the DiT sees it); ours injects the reference's latent
+(`FASTVIDEO_INJECT_COND=0` keeps ours) and encodes the reference's waveform
+(`FASTVIDEO_INJECT_PIXELS=0` decodes ours). Arm `-ownaud` injects neither.
+Run: runtime and scripts `320e25b`, upstream `sol-ltx25:latest`, both on
+RTX PRO 6000 (EUR-IS-1, EU volume), 2026-09-29. rel-L2 of ours against the
+reference; stage 2 starts from the reference's entry state as every LTX
+target.
+
+| | ltx25-a2v | -ownaud (all ours) | ltx25-a2v-i2v | i2v -ownaud |
+|---|---|---|---|---|
+| decoded waveform (222 338 samples x 2) | **0** | 0 | 0 | 0 |
+| audio latent (126 x 128; our f32 encoder vs their bf16) | 7.5e-2 (cos 0.9972) | 7.5e-2 | 7.5e-2 | 7.5e-2 |
+| audio state, every step, both stages | **0** (pinned; reference latent injected) | 7.5e-2 (= the latent) | 0 | 7.5e-2 |
+| s1 video block 0 / 24 / 47 (step 1) | 3.9e-3 / 4.7e-3 / 2.3e-2 | 3.9e-3 / 5.3e-3 / 2.7e-2 | 4.5e-3 / 7.6e-3 / 2.1e-2 | 7.5e-3 / 2.4e-2 / 4.2e-2 |
+| s1 audio block 0 / 24 / 47 (step 1) | 3.3e-3 / 1.0e-2 / 5.3e-3 | | | |
+| s1 video velocity, step 1 | 3.7e-2 | 4.0e-2 | 4.3e-2 | 8.0e-2 |
+| s1 video latents steps 1-4 | 9.0e-4 … 2.2e-3 | 9.2e-4 … 2.3e-3 | 9.8e-4 … 2.4e-3 | 1.6e-2 … 1.7e-2 (the image latent) |
+| s1 video latents steps 5 / 6 / 7 / 8 | 7.2e-3 / 7.8e-2 / 0.27 / 0.39 | 9.3e-3 / 7.9e-2 / 0.27 / 0.38 | 7.3e-3 / 3.8e-2 / 9.6e-2 / 0.14 | 2.0e-2 / 4.1e-2 / 0.10 / 0.15 |
+| s2 video block 0 / 24 / 47 (step 1) | 2.7e-3 / 6.1e-3 / 1.8e-2 | same | 2.6e-3 / 1.6e-2 / 1.0e-2 | same |
+| s2 video latents steps 1 / 2 / 3 | 1.2e-2 / 4.8e-2 / 7.8e-2 | 1.2e-2 / 4.7e-2 / 7.7e-2 | 8.1e-3 / 2.3e-2 / 3.9e-2 | 1.1e-2 / 3.2e-2 / 5.6e-2 |
+| image pixels / latent (s1, s2) | | | 1.2e-2 / 1.5e-2, 1.7e-2 | 1.2e-2 / 8.2e-2, 0.14 |
+| decoded clip vs the reference's (121 frames) | SSIM 0.986, PSNR 40.5 dB (min 39.9) | | SSIM 0.988, PSNR 45.0 dB (min 41.1) | |
+| pinned frame 0 vs the image (SSIM / PSNR) | | | 0.9671 / 39.53 dB (reference 0.9666 / 39.31) | 0.9672 / 39.62 dB |
+| output audio | AAC 44.1 kHz stereo, the input's | same | same | same |
+
+Reading:
+
+- **The audio is conditioning, not generated, exactly as upstream**: the
+  decoded waveform is bit-identical (the same cut, `round(5.0417·44100)` =
+  222 338 samples, Python rounding), and the audio state never moves (0 at
+  every step of both stages) while its noise is still drawn: the noise
+  stream stayed aligned with the reference's (every `noise_seed*` draw
+  replayed, stage-1 steps 1-4 at 9e-4 … 2.2e-3).
+- **The denoiser under a frozen audio stream is at the bf16 floor**: video
+  and audio blocks at step 1 are where T2V is (T2V 512p dense: video block 0
+  / 24 / 47 = 3.3e-3 / 5.4e-3 / 2.3e-2), and the latents follow the T2V
+  profile (T2V: 9e-4 … 2.2e-3, then 7.1e-3 / 7.5e-2 / 0.25 / 0.34; the late
+  steps of the distilled stage 1 amplify bf16 noise, docs above). A wrong
+  audio modulation (the audio sigma, or the video's a→v gate on the audio
+  sigma) would show at block 0; it does not. With the image the profile is
+  the I2V one (I2V: final s1 0.16, s2 3.6e-2).
+- **Our audio encoder is 7.5e-2 from the reference's** (cosine 0.997, f32 on
+  our side against bf16 upstream, resampler and mel on the host). It does
+  not move the video: the `-ownaud` arm (our waveform decode and encode end
+  to end) lands where the injected arm does at every step (s1 step 8 0.38
+  vs 0.39, s2 step 3 7.7e-2 vs 7.8e-2). The encoder's own breakdown
+  (resample, mel, the conv stack) was not isolated in this run.
+- The image path is as in "LTX-2.5 image conditioning" (pixels 1.2e-2, the
+  encoder at 1.5e-2 with the reference's pixels, 8.2e-2 end to end through
+  the H.264 re-encode) and the pinned frame is as faithful to the image as
+  the reference's.
+
+The four runtime cells report exit 1: all their checks pass (121 frames at
+24 fps, AAC 44.1 kHz stereo, finite latents) except `ltx2/gen.wav`, whose
+expected size assumed the vocoder's 48 kHz output. The WAV was 889 396 B,
+exactly the pass-through (44 + 222 338 x 2 x 2); the check now expects the
+driving audio's size (not rerun on a GPU).
+
+Verdict: **pass**, at the bf16 floor, with the audio encoder's 7.5e-2 noted
+(it does not change the output). Timings (RTX PRO 6000, `--offload cpu` on
+the reference): reference e2e 49.2 s (stage 1 18.7 s, stage 2 13.4 s); the
+driving audio decode + encode on ours is a fraction of a second. Lip sync of
+the served clips: docs/serve/e2e/ltx.md, "Audio-to-video". Spend: upstream
+pod 35 min (15 min of image pull), runtime pod 9 min: $1.55.
+
 ## Wan 2.2 TI2V-5B modules (Diffusers)
 
 `scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,

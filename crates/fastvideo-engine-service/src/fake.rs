@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastvideo_protocol::{
-    ApiError, AudioCaps, AudioPlan, CanvasCaps, Family, FpsCaps, FrameGrid, JobMetrics, KnobCaps,
+    ApiError, AudioCaps, AudioPlan, AudioRole, CanvasCaps, Family, FpsCaps, FrameGrid, JobMetrics, KnobCaps,
     ModelCaps, ModelId, Pcm, RefLimits, ResolvedJob, RgbFrame, StreamCaps, Task, Tier,
 };
 
@@ -97,7 +97,7 @@ impl FakeModel {
             id: ModelId::new(id),
             family: Family::Ltx2,
             served_names: vec![id.to_owned()],
-            tasks: [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect(),
+            tasks: [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
             audio: Some(AudioCaps {
                 native_rate: 48_000,
                 channels: 2,
@@ -696,6 +696,18 @@ impl EngineBackend for FakeBackend {
         let clock = self.cfg.clock.clone();
         let t0 = clock.now();
         let fail = job.prompt.contains(&self.cfg.faults.fail_marker);
+        // Audio-to-video: the staged driving audio must be there (the engine
+        // decodes it); the fake still renders its own tone.
+        if job.task == Task::A2V {
+            match &job.audio_in {
+                Some((AudioRole::Drive, p)) if p.is_file() => {}
+                other => {
+                    return Err(ApiError::engine_failed(format!(
+                        "audio-to-video without a staged driving audio: {other:?}"
+                    )))
+                }
+            }
+        }
 
         ctl.stage("text_encode");
         ctl.check()?;

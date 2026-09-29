@@ -155,13 +155,13 @@ Notes:
 - 720p and 1440p text-to-video now both ran on GPU (720p in the first run,
   row 1; 1440p here).
 
-## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: pending GPU run
+## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: setup
 
 The serve path for the LTX reference mode (docs/ports/ltx-ref2v.md) is built
 and tested on CPU (`scripts/serve/check.sh`: caps, routing, negotiate, the
 native body and the fal `ingredient` schema), and the engine path passed the
 GPU oracle on H100 (docs/oracle.md, "LTX-2.5 reference-to-video"). The serve
-E2E on a GPU pod is **not run yet**: it was held for budget on 2026-09-28.
+E2E on a GPU pod was held for budget on 2026-09-28 and **ran on 2026-09-29** (below).
 Everything for it is in the repo:
 
 - config `configs/serve/runpod-ltx-ref2v.toml`: only the `ltx25-ref2v`
@@ -177,3 +177,97 @@ Everything for it is in the repo:
   data URI, the oracle's prompt, seed 1024: expect 1536x896, 121 @ 24 with
   audio, plus frame 0 against the sheet), `ref2v-native` (`/fv/v1/jobs`,
   `model: ltx-pro`, `reference_urls`, `size: 1536x896`, `num_frames: 121`).
+
+### GPU run, 2026-09-29
+
+| | |
+|---|---|
+| Image | `ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:680ffa2a…` = `ltx-sha-2cd1ba0`, the ltx variant image of main `2cd1ba0` (serve-image run 36503456884, green; contains `b38a408`). It is also the image of the `fv-serve-ltx-pod` template |
+| Config | `configs/serve/runpod-ltx-ref2v.toml`, inlined by `ltx-pod.sh` (`FV_SERVE_TOML`); state in `/fvstate`, the volume read only |
+| GPU | 1x H100 80GB HBM3, US-CA-2, US volume `s2k01690bi`, $3.49/hr. EUR-IS-1 had no RTX PRO 6000 for 6 minutes (6 tries, HTTP 500 "no instances"), so the driver fell back to the US H100 the setup above names |
+| Pod | `668xunbciyho04` (`fv-ltx-ref2v-0929023958`), created 02:40:00, deleted 02:42:54 UTC and checked gone: 174 s, **about $0.17**. Create to `/ping` 200: 84 s |
+| Driver | `ltx_e2e.py <base> artifacts/serve/e2e/ltx-ref2v probe ref2v-fal-ingredient ref2v-native` |
+| Raw results | `artifacts/serve/e2e/ltx-ref2v/results.jsonl`, frames every 10th of the fal clip: `fal-ingredient-every10.jpg` |
+
+**Result: all three cases pass.**
+
+| Case | Request | Result | Time | Output |
+|---|---|---|---|---|
+| `probe` | `/healthz`, `/fv/v1/capabilities`, `/fal/schema` | PASS: one model `ltx25-ref2v` loaded, alias `ltx-pro`, tier `max` | — | — |
+| `ref2v-fal-ingredient` | fal queue `fal-ai/ltx-2.3-quality/ingredient`, `image_url` = the reference sheet (data URI), oracle prompt, seed 1024 | PASS, `COMPLETED`; result keys `expanded_prompt, seed, timings, video` | 57.8 s (first job after boot), inference 21.2 s | 1536x896, 121 @ 24, AAC 48 kHz stereo, 2.36 MB |
+| `ref2v-native` | `/fv/v1/jobs`, `model: ltx-pro`, `reference_urls: [sheet]`, `size: 1536x896`, `num_frames: 121`, seed 1024 | PASS, `succeeded`; `resolved_model ltx25-ref2v`, recipe `ltx25-ic-lora-ingredients-dense` | 25.4 s (run 22.5 s) | 1536x896, 121 @ 24, AAC 48 kHz stereo, 2.40 MB |
+
+- Frame 0 against the sheet (both at 768x448): SSIM 0.777 (fal) and 0.771
+  (native).
+- **The clips open with the reference sheet.** Frames 0-41 (1.75 s) show
+  the sheet's four panels: the coast panels move (waves), the prop and
+  character panels stay still, and the sheet's labels come out as garbled
+  text ("Stop Reffice Rep:", "Propp"). At frame 42 there is a hard cut
+  (ffmpeg scene score 0.61 in both clips) to the generated shot: the
+  orange cartoon crab under the red and white umbrella on the wet sand in
+  front of the dark boulders, waves breaking, as the prompt describes. The
+  two APIs produce the same video (they differ only in the encode).
+  Frame 0's SSIM of 0.77 against the sheet comes from that opening; it is
+  not the "new shot" the case note above expects.
+- The engine path matched upstream `ICLoraPipeline` at the clip level
+  (docs/oracle.md, SSIM 0.982), so this opening is probably the model's own
+  behaviour for the `Reference sheet: … Generated video: …` prompt format,
+  not a serve bug. The oracle run kept no frames to confirm it. **Open
+  question for the owner:** should the ingredient endpoint trim the sheet
+  segment (the first ~1.75 s), or match whatever fal's hosted
+  `ltx-2.3-quality/ingredient` returns? Checking fal's hosted output for the
+  same request would settle it.
+- Warm run on H100: 22.5 s for 1536x896x121 with the IC-LoRA stage 1 (the
+  oracle measured about 1.0 s per stage-1 step and 1.8-2.1 s per stage-2
+  step on H100).
+
+## Audio-to-video (avatar P0), 2026-09-29
+
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-320e25b` (branch build of
+the A2V commit), `ltx-turbo` (`configs/serve/runpod-ltx.toml`, fal apps
+`fastvideo/ltx-turbo` and `lightricks/ltx-2.5`), 1x H100 80GB HBM3 on the US
+volume `s2k01690bi` (US-CA-2; no RTX PRO 6000 in EUR-IS-1 that hour),
+$3.49/h. Pod `1kfzrh1szqirmg` created 02:45:12, deleted 02:50:56 (verified,
+404): **$0.33**. Boot to `/ping` 200: 219 s (image pull included). Driver:
+`scripts/serve/e2e/ltx_e2e.py … probe a2v-v2-1080p a2v-native-i2v-720p
+a2v-fal-fast a2v-errors`. Input: the oracle's speech fixture
+(`scripts/gpu/fixtures/speech-flite-44k.flac`, 7.0 s, 44.1 kHz stereo FLAC)
+as a data URI. Raw results: `artifacts/serve/e2e/ltx-a2v/results.jsonl`;
+samples: `sample-a2v-v2-1080p-first3s.mp4`, `frame-*.jpg`.
+
+| Case | Request | Result | Time | Frames @ rate | Audio |
+|---|---|---|---|---|---|
+| probe | `/fv/v1/capabilities` | PASS: `ltx25-ltx-turbo` tasks `t2v i2v keyframes a2v` | | | |
+| `a2v-v2-1080p` | LTX `POST /v2/audio-to-video` `{audio_uri, prompt (talking head), model: ltx-2-5-fast}` | PASS, `processing` → `completed`, R2 URL | 37.5 s (first job) | 161 @ 24 (6.71 s: the longest 8k+1 clip in 7.0 s), 1920x1080 | AAC 44.1 kHz stereo; vs the input: corr 0.99999, lag 0 |
+| `a2v-native-i2v-720p` | native `/fv/v1/jobs` `{audio_url, image_url (beach), size 1280x720}` | PASS, run 20.6 s | 25.2 s | 161 @ 24, 1280x720 | same; frame 0 vs the image: SSIM 0.9776, PSNR 41.5 dB |
+| `a2v-fal-fast` | fal queue `lightricks/ltx-2.5/audio-to-video/fast` `{audio_url, prompt, seed}` | PASS, `COMPLETED`, `inference_time` 24.9 s | 34.5 s | 161 @ 24, 1920x1080 | same |
+| `a2v-err-no-prompt` | no prompt, no image | 400 `invalid_request_error` "prompt is required if image_uri is not provided" | | | |
+| `a2v-err-pro-unserved` | `model: ltx-2-5-pro` on the turbo pod | 403 `permission_error` | | | |
+| `a2v-err-image-as-audio` | a JPEG as `audio_uri` | 400 `invalid_request_error` "expected audio input, got `image/jpeg`" | | | |
+
+**Lip sync** (`scripts/gpu/lipsync_proxy.py`, the documented SyncNet
+stand-in, see h3-1080p-and-upscaler.md "Lip sync"; the flite voice is
+synthetic):
+
+| Clip | Face frames | Best lag | r (lag 0) | Speech contrast |
+|---|---|---|---|---|
+| `a2v-v2-1080p` | 161/161 | -3 | 0.148 (-0.003) | 0.08 |
+| `a2v-fal-fast` | 161/161 | -2 | 0.279 (0.172) | 0.49 |
+| **pooled** | 2 clips | **-2 (-83 ms)** | 0.21 (0.085) | **0.29** |
+| control: the same videos with the audio shifted by 2.3 s | 2 clips | -4 (-167 ms) | 0.22 (0.027) | **-0.02** |
+
+Reading: pooled, the mouth moves with the speech (positive speech contrast,
+best lag -2 frames, at the edge of the ±2-frame window: the mouth leads the
+sound by about 80 ms); with the audio shifted the speech contrast drops to
+zero and the lag leaves the window. The proxy's correlations are weak (r
+about 0.2 even for the control), so this rules out a gross break (a frozen
+or unrelated mouth), not a subtle offset; a SyncNet score is still the
+stronger check.
+
+Notes:
+
+- Every output carries the input audio unchanged (AAC round trip, corr
+  0.99999 at lag 0), as upstream returns the input waveform. The native
+  job's `output.audio` said 48 kHz (the model's vocoder rate) while the file
+  is 44.1 kHz; `negotiate` now records the driving audio's rate for A2V jobs.
+- Warm A2V at 1080p for 6.7 s: 25 s of inference, as T2V of the same length.

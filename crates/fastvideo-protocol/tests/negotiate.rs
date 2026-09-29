@@ -174,6 +174,7 @@ fn gap_table() {
     r.audio_in = Some(AudioInput {
         media: url("https://e.x/a.wav"),
         role: AudioRole::TargetSoundtrack,
+        max_s: None,
     });
     cases.push(Case {
         name: "H3 target audio",
@@ -970,6 +971,7 @@ fn audio_plans() {
     w.audio_in = Some(AudioInput {
         media: url("https://e.x/a.wav"),
         role: AudioRole::TargetSoundtrack,
+        max_s: None,
     });
     assert_eq!(
         err_of(nego(&w, &fastwan())).param.as_deref(),
@@ -978,6 +980,7 @@ fn audio_plans() {
     w.audio_in = Some(AudioInput {
         media: url("https://e.x/a.wav"),
         role: AudioRole::Drive,
+        max_s: None,
     });
     assert_eq!(
         err_of(nego(&w, &fastwan())).param.as_deref(),
@@ -991,12 +994,151 @@ fn audio_plans() {
     a.audio_in = Some(AudioInput {
         media: url("https://e.x/a.wav"),
         role: AudioRole::Drive,
+        max_s: None,
     });
     let j = nego(&a, &caps).unwrap();
     assert_eq!(
         j.audio_in,
         Some((AudioRole::Drive, "/stage/audio.wav".into()))
     );
+}
+
+// ---- audio-to-video --------------------------------------------------------------------------
+
+fn a2v_caps() -> ModelCaps {
+    let mut c = ltx25();
+    c.tasks.insert(Task::A2V);
+    c.frames = FrameGrid::new(8, 1, 9, 481, 121);
+    c.fps = FpsCaps { allowed: vec![24, 25, 48, 50], default: 24, container_only: false };
+    c
+}
+
+fn a2v_req(prompt: &str) -> GenerationRequest {
+    let mut a = t2v("ltx", prompt);
+    a.task = Task::A2V;
+    a.audio_in = Some(AudioInput {
+        media: url("https://e.x/a.wav"),
+        role: AudioRole::Drive,
+        max_s: None,
+    });
+    a
+}
+
+fn with_audio(req: &GenerationRequest, duration: Option<f64>, rate: Option<u32>) -> StagedInputs {
+    let mut st = stage_all(req);
+    let m = st.audio_in.as_mut().unwrap();
+    m.probe.duration_s = duration;
+    m.probe.audio_rate = rate;
+    st
+}
+
+#[test]
+fn a2v_takes_its_length_from_the_audio() {
+    let c = a2v_caps();
+    let a = a2v_req("a woman talks to the camera");
+    // 5.2 s at 24 fps: 124.8 → the longest 8k+1 that fits, 121 (5.04 s).
+    let j = negotiate(&a, &c, &with_audio(&a, Some(5.2), Some(44_100))).unwrap();
+    assert_eq!((j.task, j.num_frames, j.fps), (Task::A2V, 121, 24));
+    assert_eq!(j.audio_in, Some((AudioRole::Drive, "/stage/audio.wav".into())));
+    // The output carries the input audio, at its rate.
+    assert_eq!(j.audio, AudioPlan::Native { rate: 44_100, channels: 2 });
+    // Exactly 5 s: 120 frames fit, 113 is the grid value below.
+    assert_eq!(negotiate(&a, &c, &with_audio(&a, Some(5.0), Some(48_000))).unwrap().num_frames, 113);
+    // 20 s: 480 → 473; at 25 fps 500 → the grid's 481 ceiling.
+    assert_eq!(negotiate(&a, &c, &with_audio(&a, Some(20.0), Some(48_000))).unwrap().num_frames, 473);
+    let mut f25 = a.clone();
+    f25.timing.fps = Some(25);
+    assert_eq!(negotiate(&f25, &c, &with_audio(&f25, Some(20.0), Some(48_000))).unwrap().num_frames, 481);
+    // An explicit length must fit in the audio.
+    let mut s4 = a.clone();
+    seconds(&mut s4, 4.0);
+    assert_eq!(negotiate(&s4, &c, &with_audio(&s4, Some(5.2), Some(44_100))).unwrap().num_frames, 97);
+    let mut s6 = a.clone();
+    seconds(&mut s6, 6.0);
+    assert_eq!(
+        negotiate(&s6, &c, &with_audio(&s6, Some(5.2), Some(44_100))).unwrap_err().param.as_deref(),
+        Some("duration")
+    );
+    // precheck cannot see the audio: the default length passes it.
+    assert!(precheck(&a, &c).is_ok());
+}
+
+#[test]
+fn a2v_validates_the_audio() {
+    let c = a2v_caps();
+    let a = a2v_req("x");
+    let param = |st: StagedInputs| negotiate(&a, &c, &st).unwrap_err();
+    for (d, r) in [(Some(1.5), Some(48_000)), (Some(25.0), Some(48_000)), (Some(8.0), Some(4_000)), (Some(8.0), Some(384_000))] {
+        let e = param(with_audio(&a, d, r));
+        assert_eq!(e.param.as_deref(), Some("audio_url"), "{d:?} {r:?}: {e:?}");
+        assert_eq!(e.kind, ErrorKind::InvalidRequest);
+    }
+    // Container rounding: 20.02 s is 20 s.
+    assert!(negotiate(&a, &c, &with_audio(&a, Some(20.02), Some(48_000))).is_ok());
+    // An adapter's own ceiling (fal / LTX `pro`: 10 s).
+    let mut pro = a.clone();
+    pro.audio_in.as_mut().unwrap().max_s = Some(10);
+    assert!(negotiate(&pro, &c, &with_audio(&pro, Some(10.0), Some(48_000))).is_ok());
+    assert_eq!(
+        negotiate(&pro, &c, &with_audio(&pro, Some(12.0), Some(48_000))).unwrap_err().param.as_deref(),
+        Some("audio_url")
+    );
+    for (d, r) in [(None, Some(48_000)), (Some(8.0), None)] {
+        let e = param(with_audio(&a, d, r));
+        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::UnsupportedMedia, Some("audio_url")));
+    }
+    // An image as the audio is refused by type.
+    let mut st = with_audio(&a, Some(8.0), Some(48_000));
+    st.audio_in.as_mut().unwrap().mime = "image/png".into();
+    assert_eq!(param(st).param.as_deref(), Some("audio_url"));
+}
+
+#[test]
+fn a2v_inputs_prompt_and_canvas() {
+    let c = a2v_caps();
+    // No driving audio.
+    let mut none = a2v_req("x");
+    none.audio_in = None;
+    assert_eq!(err_of(nego(&none, &c)).param.as_deref(), Some("audio_url"));
+    // A soundtrack role is not a driving audio.
+    let mut target = a2v_req("x");
+    target.audio_in.as_mut().unwrap().role = AudioRole::TargetSoundtrack;
+    assert_eq!(err_of(nego(&target, &c)).param.as_deref(), Some("audio_url"));
+    // No image and no prompt.
+    assert_eq!(err_of(nego(&a2v_req(" "), &c)).param.as_deref(), Some("prompt"));
+    // With a first-frame image the prompt may be empty and the canvas
+    // follows the image (portrait 1080x1920 → the 1080 tier, 1088 wide).
+    let mut i = a2v_req("");
+    i.keyframes = vec![Keyframe { at: Anchor::First, image: url("https://e.x/f.png") }];
+    let mut st = stage_all(&i);
+    st.keyframes[0].1 = image("kf0.png", 1080, 1920);
+    let j = negotiate(&i, &c, &st).unwrap();
+    assert_eq!(j.keyframes.len(), 1);
+    assert_eq!(j.output_size(), (1080, 1920));
+    // The LTX API default: 1920x1080, 1080x1920 for a portrait image.
+    let mut o = i.clone();
+    o.canvas = CanvasSpec::Oriented { width: 1920, height: 1080 };
+    assert_eq!(negotiate(&o, &c, &st).unwrap().output_size(), (1080, 1920));
+    let mut land = stage_all(&o);
+    land.keyframes[0].1 = image("kf0.png", 832, 480);
+    assert_eq!(negotiate(&o, &c, &land).unwrap().output_size(), (1920, 1080));
+    let mut no_image = a2v_req("x");
+    no_image.canvas = CanvasSpec::Oriented { width: 1920, height: 1080 };
+    let j = negotiate(&no_image, &c, &stage_all(&no_image)).unwrap();
+    assert_eq!((j.width, j.height, j.output_size()), (1920, 1088, (1920, 1080)));
+    // A last frame needs a first one; references are not inputs of A2V.
+    let mut last = a2v_req("x");
+    last.keyframes = vec![Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") }];
+    assert_eq!(err_of(nego(&last, &c)).param.as_deref(), Some("task"));
+    let mut fl = i.clone();
+    fl.keyframes.push(Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") });
+    assert!(nego(&fl, &c).is_ok());
+    let mut refs = a2v_req("x");
+    refs.references = vec![Reference { kind: MediaKind::Image, media: url("https://e.x/r.png") }];
+    assert_eq!(err_of(nego(&refs, &c)).param.as_deref(), Some("task"));
+    // A model without A2V: LTX answers the endpoint gap, others the task.
+    assert_eq!(gap_of(nego(&a2v_req("x"), &ltx23())), Some(GapId::LtxEndpoint));
+    assert_eq!(err_of(nego(&a2v_req("x"), &h3())).param.as_deref(), Some("task"));
 }
 
 // ---- rule order, precheck, model resolution -----------------------------------------------

@@ -584,8 +584,10 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         served_names: vec![id.to_owned()],
         // E5 / E9: first-frame image and last-frame keyframe conditioning on
         // the 2.5 distilled pipeline (`ltx2::i2v_encode`, oracle-checked on 2.5).
+        // Audio-to-video: the driving audio pinned as clean audio latents on
+        // both stages (`ltx2::a2v`, docs/oracle.md "LTX-2.5 audio-to-video").
         tasks: match r.version {
-            LtxVersion::V25 => [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect(),
+            LtxVersion::V25 => [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
             LtxVersion::V23 => [Task::T2V].into_iter().collect(),
         },
         audio: Some(AudioCaps {

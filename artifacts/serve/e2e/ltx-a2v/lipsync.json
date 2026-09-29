@@ -1,0 +1,85 @@
+{
+  "clips": [
+    {
+      "clip": "/tmp/claude-0/-home-user-fastvideo-rs/cf87b4de-fc17-5db3-81a9-8f7d01db7f65/scratchpad/e2e-a2v/mp4/a2v-v2-1080p.mp4",
+      "size": "1920x1080",
+      "fps": 24.0,
+      "frames": 161,
+      "face_frames": 161,
+      "best_lag_frames": -3,
+      "best_lag_ms": -125.0,
+      "r_best": 0.148,
+      "r_lag0": -0.003,
+      "confidence": 0.158,
+      "speech_contrast": 0.083,
+      "r_by_lag": {
+        "-6": -0.109,
+        "-5": -0.046,
+        "-4": 0.056,
+        "-3": 0.148,
+        "-2": 0.14,
+        "-1": 0.041,
+        "0": -0.003,
+        "1": -0.006,
+        "2": -0.01,
+        "3": -0.042,
+        "4": -0.018,
+        "5": -0.059,
+        "6": -0.087
+      }
+    },
+    {
+      "clip": "/tmp/claude-0/-home-user-fastvideo-rs/cf87b4de-fc17-5db3-81a9-8f7d01db7f65/scratchpad/e2e-a2v/mp4/a2v-fal-fast.mp4",
+      "size": "1920x1080",
+      "fps": 24.0,
+      "frames": 161,
+      "face_frames": 161,
+      "best_lag_frames": -2,
+      "best_lag_ms": -83.3,
+      "r_best": 0.279,
+      "r_lag0": 0.172,
+      "confidence": 0.192,
+      "speech_contrast": 0.491,
+      "r_by_lag": {
+        "-6": 0.075,
+        "-5": 0.087,
+        "-4": 0.075,
+        "-3": 0.168,
+        "-2": 0.279,
+        "-1": 0.237,
+        "0": 0.172,
+        "1": 0.169,
+        "2": 0.108,
+        "3": 0.035,
+        "4": -0.016,
+        "5": 0.035,
+        "6": -0.007
+      }
+    }
+  ],
+  "pooled": {
+    "label": "serve-1080p",
+    "best_lag_frames": -2,
+    "best_lag_ms": -83.3,
+    "r_best": 0.21,
+    "r_lag0": 0.085,
+    "confidence": 0.161,
+    "speech_contrast": 0.287,
+    "r_by_lag": {
+      "-6": -0.017,
+      "-5": 0.021,
+      "-4": 0.066,
+      "-3": 0.158,
+      "-2": 0.21,
+      "-1": 0.139,
+      "0": 0.085,
+      "1": 0.081,
+      "2": 0.048,
+      "3": -0.004,
+      "4": -0.017,
+      "5": -0.012,
+      "6": -0.046
+    },
+    "clips": 2
+  }
+}

@@ -71,6 +71,26 @@ fn jpeg(w: u32, h: u32, exif_orientation: Option<u8>) -> String {
     format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(out))
 }
 
+/// A silent 16-bit mono WAV of `secs` seconds at `rate`, as a data URI.
+fn wav(rate: u32, secs: f64) -> String {
+    let frames = (secs * f64::from(rate)) as u32;
+    let data = frames * 2;
+    let mut v = b"RIFF".to_vec();
+    v.extend((36 + data).to_le_bytes());
+    v.extend(b"WAVEfmt ");
+    v.extend(16u32.to_le_bytes());
+    v.extend(1u16.to_le_bytes());
+    v.extend(1u16.to_le_bytes());
+    v.extend(rate.to_le_bytes());
+    v.extend((rate * 2).to_le_bytes());
+    v.extend(2u16.to_le_bytes());
+    v.extend(16u16.to_le_bytes());
+    v.extend(b"data");
+    v.extend(data.to_le_bytes());
+    v.extend(vec![0u8; data as usize]);
+    format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(v))
+}
+
 /// One input image: its name and data URI.
 #[derive(Clone)]
 struct Img {
@@ -596,6 +616,25 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             if image_fields.contains(&"end_image_url") && image_fields.contains(&"image_url") {
                 inputs.push(("first+last".into(), vec![("image_url".into(), json!(imgs[0].uri)), ("end_image_url".into(), json!(imgs[1].uri))]));
             }
+            // A required audio input (audio-to-video): clips of several
+            // lengths within the shortest limit (2..=10 s), with each input.
+            let audio_fields: Vec<&str> = props
+                .iter()
+                .filter(|(k, p)| p["x-fv-media"] == "audio" && required.contains(&k.as_str()))
+                .map(|(k, _)| k.as_str())
+                .collect();
+            if let Some(af) = audio_fields.first() {
+                let mut with_audio = Vec::new();
+                for (i, (name, set)) in inputs.iter().enumerate() {
+                    let lens: &[f64] = if i == 0 { &[2.5, 7.0, 10.0] } else { &[7.0] };
+                    for &secs in lens {
+                        let mut set = set.clone();
+                        set.push((af.to_string(), json!(wav(16_000, secs))));
+                        with_audio.push((format!("{name} audio {secs} s"), set));
+                    }
+                }
+                inputs = with_audio;
+            }
             let first_input = inputs.iter().find(|(n, _)| n != "no image").cloned().unwrap_or_else(|| inputs[0].clone());
             let dims = |fields: &[&str]| -> Vec<(String, Vec<Value>)> {
                 fields.iter().filter_map(|f| props.get(*f).map(|p| (f.to_string(), values_of(p)))).filter(|(_, v)| !v.is_empty()).collect()
@@ -868,6 +907,16 @@ async fn ltx_api() {
                 if api == "ltx v2" {
                     let b = json!({"prompt": "a fox", "model": model, "resolution": res, "duration": 8, "image_uri": imgs[0].uri, "last_frame_uri": imgs[1].uri});
                     cases.push(case("image-to-video", format!("keyframes {res}"), b));
+                    for fps in [24, 25, 48, 50] {
+                        for secs in [2.5, 7.0, 10.0] {
+                            let b = json!({"prompt": "a fox talks", "model": model, "resolution": res, "fps": fps, "audio_uri": wav(16_000, secs)});
+                            cases.push(case("audio-to-video", format!("a2v {res} {fps} fps audio {secs} s"), b));
+                        }
+                    }
+                    for img in &imgs {
+                        let b = json!({"prompt": "", "model": model, "resolution": res, "audio_uri": wav(16_000, 7.0), "image_uri": img.uri});
+                        cases.push(case("audio-to-video", format!("a2v {res} image {}", img.name), b));
+                    }
                 }
             }
         }

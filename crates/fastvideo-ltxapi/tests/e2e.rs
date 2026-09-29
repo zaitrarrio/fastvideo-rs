@@ -430,6 +430,77 @@ async fn upload_then_image_to_video() {
     assert_eq!((r.status, r.err_type()), (StatusCode::UNAUTHORIZED, "authentication_error".into()));
 }
 
+/// A silent 16-bit mono WAV of `secs` seconds at `rate`, as a data URI.
+fn wav_uri(rate: u32, secs: f64) -> String {
+    use base64::Engine as _;
+    let frames = (secs * f64::from(rate)) as u32;
+    let data = frames * 2;
+    let mut v = b"RIFF".to_vec();
+    v.extend((36 + data).to_le_bytes());
+    v.extend(b"WAVEfmt ");
+    for x in [16u32.to_le_bytes().to_vec(), 1u16.to_le_bytes().to_vec(), 1u16.to_le_bytes().to_vec()] {
+        v.extend(x);
+    }
+    v.extend(rate.to_le_bytes());
+    v.extend((rate * 2).to_le_bytes());
+    v.extend(2u16.to_le_bytes());
+    v.extend(16u16.to_le_bytes());
+    v.extend(b"data");
+    v.extend(data.to_le_bytes());
+    v.extend(vec![0u8; data as usize]);
+    format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(v))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn audio_to_video() {
+    let fx = fixture(LtxConfig::default(), true).await;
+    // 7 s of audio: the longest 8k+1 clip within it at 24 fps is 161 frames;
+    // the default model is ltx-2-3-pro (our max tier), 1920x1080.
+    let b = json!({"audio_uri": wav_uri(16_000, 7.0), "prompt": "a man talks to the camera"});
+    let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b.clone())).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
+    assert_rid(&r);
+    let id = r.json()["id"].as_str().unwrap().to_owned();
+    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, &id).await.unwrap();
+    let j = &job.resolved;
+    assert_eq!((j.task, j.model.0.as_str(), j.num_frames, j.fps), (fastvideo_protocol::Task::A2V, "fake-ltx-pro", 161, 24));
+    assert_eq!((j.width, j.height, j.post.crop), (1920, 1088, Some((1920, 1080))));
+    assert!(matches!(&j.audio_in, Some((fastvideo_protocol::AudioRole::Drive, p)) if p.is_file()));
+    let v = poll_terminal(&fx.app, "audio-to-video", &id).await.json();
+    assert_eq!(v["status"], "completed", "{v}");
+    assert!(v["result"]["video_url"].is_string(), "{v}");
+    // Not visible under another endpoint.
+    let r = call(&fx.app, "GET", &format!("/v2/image-to-video/{id}"), Some("sk-a"), None).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    // v1 answers the video bytes.
+    let r = call(&fx.app, "POST", "/v1/audio-to-video", Some("sk-a"), Some(b)).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.json());
+    assert_eq!(r.header("content-type"), Some("video/mp4"));
+    // With an image, a portrait one: 1080x1920 and an empty prompt.
+    let b = json!({"audio_uri": wav_uri(16_000, 7.0), "image_uri": format!("data:image/png;base64,{PNG_B64}"), "prompt": "", "model": "ltx-2-5-fast"});
+    let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b)).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
+    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, r.json()["id"].as_str().unwrap()).await.unwrap();
+    assert_eq!((job.resolved.model.0.as_str(), job.resolved.keyframes.len()), ("fake-ltx-turbo", 1));
+    // Audio validation: too short, too long for pro, too long at all.
+    for (audio, model, what) in [
+        (wav_uri(16_000, 1.5), "ltx-2-5-fast", "2 to 20"),
+        (wav_uri(8_000, 12.0), "ltx-2-5-pro", "2 to 10"),
+        (wav_uri(8_000, 21.0), "ltx-2-5-fast", "2 to 20"),
+    ] {
+        let b = json!({"audio_uri": audio, "prompt": "p", "model": model});
+        let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b)).await;
+        assert_eq!((r.status, r.err_type()), (StatusCode::BAD_REQUEST, "invalid_request_error".into()), "{what}");
+        let m = r.json()["error"]["message"].as_str().unwrap().to_owned();
+        assert!(m.contains(what), "{m}");
+    }
+    // An image is not audio.
+    let b = json!({"audio_uri": format!("data:image/png;base64,{PNG_B64}"), "prompt": "p"});
+    let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b)).await;
+    assert!(r.status.is_client_error(), "{:?}", r.json());
+    assert_eq!(r.err_type(), "invalid_request_error");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn auth_stubs_and_gaps() {
     let fx = fixture(LtxConfig::default(), false).await;

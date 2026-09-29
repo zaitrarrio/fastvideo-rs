@@ -245,19 +245,30 @@ pub fn negotiate_noted(
     check_staged(req, staged)?;
     let fps = requested_fps(req, caps);
     let spec = effective_canvas(req, caps);
-    let follow = if matches!(spec, CanvasSpec::FollowImage { .. }) {
-        follow_dims(staged)?
-    } else {
-        None
+    let follow = match spec {
+        CanvasSpec::FollowImage { .. } => follow_dims(staged)?,
+        CanvasSpec::Oriented { .. } if !staged.keyframes.is_empty() => follow_dims(staged)?,
+        _ => None,
     };
     let ((width, height, crop), note) = resolve_canvas_noted(&spec, caps, follow)?;
-    let (num_frames, frames_note) = resolve_frames_noted(&req.timing.length, fps, caps)?;
+    let (num_frames, frames_note) = if req.task == Task::A2V {
+        (a2v_frames(req, caps, staged, fps)?, None)
+    } else {
+        resolve_frames_noted(&req.timing.length, fps, caps)?
+    };
     check_fps(fps, caps)?;
     check_h3_geometry(caps, width, height, num_frames)?;
     check_refs(req, caps)?;
     check_ref_durations(caps, staged)?;
     check_knobs(req, caps)?;
-    let audio = plan_audio(req, caps)?;
+    let mut audio = plan_audio(req, caps)?;
+    // Audio-to-video carries the driving audio itself (at its own rate; the
+    // engine decodes it to stereo).
+    if let (Task::A2V, AudioPlan::Native { rate, .. }) = (req.task, &mut audio) {
+        if let Some(r) = staged.audio_in.as_ref().and_then(|m| m.probe.audio_rate) {
+            *rate = r;
+        }
+    }
 
     let keyframes = staged
         .keyframes
@@ -309,7 +320,7 @@ pub fn effective_canvas(req: &GenerationRequest, caps: &ModelCaps) -> CanvasSpec
         return req.canvas.clone();
     }
     let follows = match req.task {
-        Task::I2V | Task::Keyframes => !req.keyframes.is_empty(),
+        Task::I2V | Task::Keyframes | Task::A2V => !req.keyframes.is_empty(),
         Task::Ref2V => {
             caps.family == Family::H3 && req.references.iter().any(|r| r.kind == MediaKind::Image)
         }
@@ -333,10 +344,15 @@ pub fn precheck(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiErro
         }
         other => Some(resolve_canvas(other, caps, None)?),
     };
-    let num_frames = resolve_frames(&req.timing.length, fps, caps)?;
+    // Audio-to-video takes its length from the staged audio by default.
+    let num_frames = if req.task == Task::A2V && req.timing.length == Length::ModelDefault {
+        None
+    } else {
+        Some(resolve_frames(&req.timing.length, fps, caps)?)
+    };
     check_fps(fps, caps)?;
-    if let Some((w, h, _)) = canvas {
-        check_h3_geometry(caps, w, h, num_frames)?;
+    if let (Some((w, h, _)), Some(n)) = (canvas, num_frames) {
+        check_h3_geometry(caps, w, h, n)?;
     }
     check_refs(req, caps)?;
     check_knobs(req, caps)?;
@@ -364,6 +380,7 @@ fn check_task(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
     if !caps.supports(task) {
         let gap = match (task, caps.family) {
             (t, _) if t.is_edit_endpoint() => Some(GapId::LtxEndpoint),
+            (Task::A2V, Family::Ltx2) => Some(GapId::LtxEndpoint),
             (Task::Ref2V, Family::H3) => Some(GapId::H3Ref2vaNotLoaded),
             (Task::Keyframes, Family::Ltx2) => Some(GapId::LtxKeyframes),
             (Task::I2V, Family::Ltx2) => Some(GapId::Ltx25I2V),
@@ -398,7 +415,10 @@ fn check_task(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
         Task::I2V => first == 1 && last == 0 && refs == 0,
         Task::Keyframes => last == 1 && first <= 1 && refs == 0,
         Task::Ref2V => refs > 0 && req.keyframes.is_empty(),
-        Task::A2V | Task::Extend | Task::Retake | Task::V2V => true,
+        // A last frame only with a first one (LTX `last_frame_uri`: "Requires
+        // `image_uri`").
+        Task::A2V => refs == 0 && first <= 1 && last <= 1 && (last == 0 || first == 1),
+        Task::Extend | Task::Retake | Task::V2V => true,
     };
     if !shape_ok {
         let msg = match task {
@@ -409,6 +429,9 @@ fn check_task(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
             }
             Task::Ref2V => {
                 "reference-to-video takes one or more references and no first/last frames"
+            }
+            Task::A2V => {
+                "audio-to-video takes at most one first-frame image (a last frame only with it) and no references"
             }
             _ => "inputs do not match the task",
         };
@@ -425,6 +448,20 @@ fn check_task(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
             "prompt",
             "prompt must not be empty",
         ));
+    }
+    if task == Task::A2V {
+        if !matches!(&req.audio_in, Some(a) if a.role == AudioRole::Drive) {
+            return Err(ApiError::invalid_param(
+                "audio_url",
+                "audio-to-video needs the driving audio",
+            ));
+        }
+        if req.prompt.trim().is_empty() && req.keyframes.is_empty() {
+            return Err(ApiError::invalid_param(
+                "prompt",
+                "the prompt is required when no image is given",
+            ));
+        }
     }
     Ok(())
 }
@@ -619,6 +656,13 @@ pub fn resolve_canvas_noted(
     }
     let out = match spec {
         CanvasSpec::Exact { width, height } => exact_canvas(*width, *height, caps),
+        CanvasSpec::Oriented { width, height } => {
+            let (long, short) = ((*width).max(*height), (*width).min(*height));
+            match follow {
+                Some((w, h)) if h > w => exact_canvas(short, long, caps),
+                _ => exact_canvas(long, short, caps),
+            }
+        }
         CanvasSpec::Aspect { ratio, short_edge } => {
             check_tier(*short_edge, caps)?;
             if !c.aspect_ok(ratio.w, ratio.h) {
@@ -976,6 +1020,81 @@ fn resolve_frames_inner(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u
             ))
         }
     }
+}
+
+/// Audio-to-video: the shortest and longest driving audio (fal
+/// `lightricks/ltx-2.5/audio-to-video`: "Duration must be between 2 and 20
+/// seconds"; the LTX API caps the audio at 20 s for 720p/1080p).
+pub const A2V_AUDIO_MIN_S: f64 = 2.0;
+pub const A2V_AUDIO_MAX_S: f64 = 20.0;
+/// Driving-audio sample rates accepted (the encoder resamples to 16 kHz).
+pub const A2V_AUDIO_RATES: std::ops::RangeInclusive<u32> = 8_000..=192_000;
+/// Container rounding of a probed duration (a 20 s clip probes as 20.02 s).
+const A2V_SLACK_S: f64 = 0.05;
+
+/// Rule 4 for audio-to-video: the audio sets the length (the LTX API: "sets
+/// the output length"; fal: the video "follows the audio"). By default the
+/// longest clip on the model's grid whose duration fits in the audio (the
+/// reference cuts the audio to `num_frames / fps` and needs it at least that
+/// long); an explicit length must fit in the audio too. The audio must be
+/// 2 to 20 s at 8 to 192 kHz.
+fn a2v_frames(
+    req: &GenerationRequest,
+    caps: &ModelCaps,
+    staged: &StagedInputs,
+    fps: u32,
+) -> Result<u32, ApiError> {
+    let probe = staged.audio_in.as_ref().map(|m| &m.probe);
+    let Some(d) = probe.and_then(|p| p.duration_s).filter(|d| d.is_finite() && *d > 0.0) else {
+        return Err(ApiError::unsupported_media("could not read the audio duration").with_param("audio_url"));
+    };
+    let Some(rate) = probe.and_then(|p| p.audio_rate) else {
+        return Err(ApiError::unsupported_media("could not read the audio sample rate").with_param("audio_url"));
+    };
+    if !A2V_AUDIO_RATES.contains(&rate) {
+        return Err(ApiError::invalid_param(
+            "audio_url",
+            format!(
+                "the audio's sample rate {rate} Hz is outside {}..={} Hz",
+                A2V_AUDIO_RATES.start(),
+                A2V_AUDIO_RATES.end()
+            ),
+        ));
+    }
+    let max_s = req
+        .audio_in
+        .as_ref()
+        .and_then(|a| a.max_s)
+        .map_or(A2V_AUDIO_MAX_S, |m| f64::from(m).min(A2V_AUDIO_MAX_S));
+    if d + A2V_SLACK_S < A2V_AUDIO_MIN_S || d > max_s + A2V_SLACK_S {
+        return Err(ApiError::invalid_param(
+            "audio_url",
+            format!("the audio is {d:.2} s; it must be {A2V_AUDIO_MIN_S} to {max_s} s"),
+        ));
+    }
+    let fit = (d * f64::from(fps) + 1e-6).floor().min(f64::from(u32::MAX)) as u32;
+    if req.timing.length == Length::ModelDefault {
+        return caps.frames.align_down(fit).ok_or_else(|| {
+            ApiError::invalid_param(
+                "audio_url",
+                format!(
+                    "the audio is {d:.2} s, shorter than the model's shortest clip ({} frames at {fps} fps)",
+                    caps.frames.min
+                ),
+            )
+        });
+    }
+    let n = resolve_frames(&req.timing.length, fps, caps)?;
+    if n > fit {
+        return Err(ApiError::invalid_param(
+            "duration",
+            format!(
+                "{n} frames at {fps} fps ({:.2} s) is longer than the {d:.2} s audio",
+                f64::from(n) / f64::from(fps.max(1))
+            ),
+        ));
+    }
+    Ok(n)
 }
 
 // ---- rules 6-8 -------------------------------------------------------------------
