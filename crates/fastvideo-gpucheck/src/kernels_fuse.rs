@@ -93,6 +93,83 @@ pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     with_bf16_act(true, || timing(report, seed))
 }
 
+/// `ltx_rope`: the LTX-2 rotary tables gathered on the device from their
+/// factored form ([`fastvideo_cudarc::ltx2::transformer::Ropes`]) against the
+/// direct host build ([`Ltx2RopeTables::with_conditioning`], CUDA division)
+/// widened by [`SplitRope::rotate_half_tables`] — the tables the pipeline
+/// uploaded before. Bit-exact, for T2V, I2V (first-frame keyframe), several
+/// keyframes and an IC-LoRA reference, at the 1080p 6 s stage-2 geometry
+/// (and a small one); also times both builds.
+pub fn ltx_rope(report: &mut Report) -> StageResult<()> {
+    use fastvideo_cudarc::ltx2::transformer::Ropes;
+    use fastvideo_models::ltx2::config::Ltx2TransformerConfig;
+    use fastvideo_models::ltx2::rope::{Ltx2RopeTables, ReferenceBlock, ScalarDivision};
+    let cfg = Ltx2TransformerConfig::ltx2_5_22b();
+    let reference = ReferenceBlock {
+        grid: [19, 17, 30],
+        downscale: 2,
+    };
+    let cases: [(&str, [usize; 3], &[usize], Option<ReferenceBlock>); 5] = [
+        ("t2v_1080p", [19, 34, 60], &[], None),
+        ("i2v_1080p", [19, 34, 60], &[0], None),
+        ("keyframes_540p", [19, 17, 30], &[0, 72, 144], None),
+        ("ref2v_540p", [19, 17, 30], &[0], Some(reference)),
+        ("t2v_small", [3, 2, 3], &[], None),
+    ];
+    for (name, grid, extra, reference) in cases {
+        let audio_tokens = 151;
+        let d = dev()?;
+        d.synchronize()?;
+        let timer = std::time::Instant::now();
+        let ropes = Ropes::with_conditioning(&cfg, grid, extra, reference, audio_tokens, 24.0)?;
+        d.synchronize()?;
+        let device_s = timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
+        let host = Ltx2RopeTables::with_conditioning(
+            &cfg,
+            grid,
+            extra,
+            reference,
+            audio_tokens,
+            24.0,
+            ScalarDivision::Reciprocal,
+        );
+        let host_s = timer.elapsed().as_secs_f64();
+        let mut differing = serde_json::Map::new();
+        let mut ok = true;
+        for (table, got, want) in [
+            ("video", &ropes.video, &host.video),
+            ("audio", &ropes.audio, &host.audio),
+            ("cross_video", &ropes.cross_video, &host.cross_video),
+            ("cross_audio", &ropes.cross_audio, &host.cross_audio),
+        ] {
+            let (gc, gs) = got.host_tables()?;
+            let (wc, ws) = want.rotate_half_tables();
+            let diff = |a: &[f32], b: &[f32]| {
+                if a.len() != b.len() {
+                    return usize::MAX;
+                }
+                a.iter().zip(b).filter(|(x, y)| x.to_bits() != y.to_bits()).count()
+            };
+            let n = diff(&gc, &wc).saturating_add(diff(&gs, &ws));
+            ok &= n == 0;
+            differing.insert(table.into(), json!(n));
+        }
+        report.check(
+            &format!("ltx_rope_{name}"),
+            ok,
+            json!({
+                "differing_values": differing,
+                "video_tokens": host.video.tokens,
+                "device_build_s": device_s,
+                "host_build_s": host_s,
+            }),
+            json!({"differing": 0}),
+        )?;
+    }
+    Ok(())
+}
+
 /// The bytes of an MXFP8 activation: codes of the real rows, every scale.
 fn mx_bytes(a: &quant::MxAct) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let d = dev()?;

@@ -5123,6 +5123,35 @@ extern "C" __global__ void ltx_rope_rows(
     if (i >= k * heads) return;
     rows[i] = (unsigned int)((i / k) * tokens + (long)idx[i % k]);
 }
+
+// A split rotary table in rope_half's layout — cos/sin [heads * tokens,
+// 2 * half], head-major, each pair's value in both halves — gathered from its
+// factored form (fastvideo_models::ltx2::SplitRopeLut): slot m = h * half + j
+// is identity below `pad`, else frequency (m - pad) / axes on axis
+// (m - pad) % axes, whose value row is index[t * axes + axis]. Pure copies,
+// so the table carries the host's bits.
+extern "C" __global__ void ltx_split_rope(
+    const unsigned int* index, const float* lut_cos, const float* lut_sin,
+    float* cos_out, float* sin_out,
+    long heads, long tokens, long half, long axes, long pad, long n
+) {
+    long i = IDX();
+    long d = 2 * half;
+    if (i >= heads * tokens * d) return;
+    long row = i / d, c = i % d;
+    long j = c < half ? c : c - half;
+    long h = row / tokens, t = row % tokens;
+    long m = h * half + j;
+    if (m < pad) {
+        cos_out[i] = 1.0f;
+        sin_out[i] = 0.0f;
+        return;
+    }
+    long k = (m - pad) / axes, a = (m - pad) % axes;
+    long u = (long)index[t * axes + a];
+    cos_out[i] = lut_cos[u * n + k];
+    sin_out[i] = lut_sin[u * n + k];
+}
 // ==== endregion: ltx2 ====
 
 // ==== region: bf16 activations + reference FP8 recipes ====

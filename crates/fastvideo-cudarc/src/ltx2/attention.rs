@@ -16,7 +16,7 @@
 //!   `[B, 1, H·S, D]` is the same memory — so no kernel is needed for it.
 
 use fastvideo_models::ltx2::memory::FeedForwardChunking;
-use fastvideo_models::ltx2::SplitRope;
+use fastvideo_models::ltx2::{SplitRope, SplitRopeLut};
 use std::borrow::Cow;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
@@ -48,6 +48,36 @@ impl DeviceRope {
             tokens: table.tokens,
             head_dim: d,
         })
+    }
+
+    /// The table of `lut` ([`SplitRopeLut::expand`]), gathered on the device
+    /// when there is one: only the factored form (a few hundred distinct
+    /// fractions' cos/sin and a `[tokens, axes]` index) is built on the host
+    /// and uploaded, not the `[H·S, D]` tables. Bit-identical to
+    /// [`Self::upload`] of the expanded table; without a device it is that.
+    pub fn from_lut(lut: &SplitRopeLut) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if crate::wan::device::global_device().is_some() {
+            let (rows, d) = (lut.heads * lut.tokens, lut.half * 2);
+            let (cos, sin) = crate::wan::ops::ltx_split_rope_device(
+                &lut.index, &lut.cos, &lut.sin, lut.heads, lut.tokens, lut.half, lut.axes,
+                lut.pad, lut.n,
+            )?;
+            return Ok(Self {
+                cos: CudaTensor::from_device_slice(cos, vec![rows, d])?,
+                sin: CudaTensor::from_device_slice(sin, vec![rows, d])?,
+                heads: lut.heads,
+                tokens: lut.tokens,
+                head_dim: d,
+            });
+        }
+        Self::upload(&lut.expand())
+    }
+
+    /// The cos / sin tables on the host (`[H·S, D]` each, row-major), for
+    /// parity checks against [`SplitRope::rotate_half_tables`].
+    pub fn host_tables(&self) -> Result<(Vec<f32>, Vec<f32>)> {
+        Ok((self.cos.host_cow()?.into_owned(), self.sin.host_cow()?.into_owned()))
     }
 
     /// Keep `tokens` (ascending video-token indices) in the head-major table.

@@ -169,6 +169,7 @@ kernel_fns!(
     ltx_row_sumsq,
     ltx_index_copy_rows,
     ltx_rope_rows,
+    ltx_split_rope,
     // ---- bf16 activations + reference FP8 recipes ----
     mx_binary,
     mx_unary,
