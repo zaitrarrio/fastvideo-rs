@@ -557,6 +557,7 @@ export class ClusterOps implements DurableObject {
       const ok = q.role === "gateway" ? await gatewayHealthy(env, c) : (await workerHealth(env, q.pod)).ok;
       if (ok) {
         this.log(`${q.pod} is back (${Math.round((now() - d.t0) / 1000)}s)`);
+        await podUpdate(env, q.pod, { ready: true, status: "ready" });
         op.phase = "next";
         return { delayMs: 10 };
       }

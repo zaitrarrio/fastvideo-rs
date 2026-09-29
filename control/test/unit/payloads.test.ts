@@ -129,6 +129,7 @@ describe("payloads and TOML", () => {
     const m = gatewayToml(defaultSpec("t", "tiny-cpu"));
     expect(m).not.toContain("reactor_model");
     expect(m).not.toContain("fal_apps");
+    expect(m).not.toContain("inline_inputs_max_bytes");
     expect(m).toContain('fake_models = ["fake-wan"]');
     expect(m).toContain("[autoscale]\nenabled = false");
   });

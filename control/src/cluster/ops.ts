@@ -2,7 +2,7 @@
 // a port of runpod-cluster.sh's create_gateway, create_worker,
 // patch_gateway, admin_token, the price and balance guards, and the
 // gateway / worker probes.
-import { openSealedToken, sha256Hex, type SealedToken } from "../crypto";
+import { openSealedToken, randomToken, sha256Hex, type SealedToken } from "../crypto";
 import { defaults, type Env } from "../env";
 import { resolvePlain } from "../envvars";
 import { cpuPrice, runpod } from "../runpod";
@@ -231,6 +231,19 @@ export async function adminToken(env: Env, c: Cluster): Promise<string> {
   }
   if (!s.admin_private || !s.admin_recipient) throw new HttpError(409, "no admin key pair for this cluster (imported without its .admin-key.pem)");
   const r = await gatewayFetch(env, c, "/fv/v1/admin/token/sealed");
+  if (r.status === 404 && (await gatewayHealthy(env, c))) {
+    // A gateway image older than the sealed-token route (gateway.md §9) is up but
+    // keeps its own token where nobody can read it: switch the cluster to a token
+    // the controller makes and passes as FV_ADMIN_TOKEN (sealed in D1, masked in
+    // every view), as runpod-cluster.sh did before. It applies on the gateway's
+    // next restart (the env view shows it as needing one).
+    if (!s.legacy_admin_token) {
+      s.admin_token = `fvadm_${randomToken("", 24)}`;
+      s.legacy_admin_token = true;
+      await saveSecrets(env, c, s);
+    }
+    throw new HttpError(409, "this gateway image has no sealed admin token route; the cluster now passes FV_ADMIN_TOKEN: restart the gateway (Env: apply) to use it");
+  }
   if (!r.ok) throw new HttpError(503, `the gateway did not publish its sealed admin token (${r.status}; not up yet?)`);
   const tok = await openSealedToken((await r.json()) as SealedToken, s.admin_private, s.admin_recipient);
   if (!tok.startsWith("fvadm_")) throw new HttpError(502, "the sealed admin token does not look like one");

@@ -70,7 +70,10 @@ export const GATEWAY_BASE_MINIMAL = GATEWAY_BASE_PODS.replace(/^reactor_model = 
   .replace(/^fal_director = true$/m, "fal_director = false")
   .replace(/^reactor = true$/m, "reactor = false")
   .replace(/^# Every pool's fal apps.*\n/m, "")
-  .replace(/^fal_apps = .*\n/m, "");
+  .replace(/^fal_apps = .*\n/m, "")
+  // Keys newer than some released gateway images (serde denies unknown
+  // fields): leave them out, their defaults apply.
+  .replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
 
 const tomlStr = (s: string) => JSON.stringify(s);
 export function gatewayToml(spec: ClusterSpec): string {

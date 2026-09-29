@@ -258,10 +258,11 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let sub = tracing_subscriber::registry().with(ShipLayer { tx, level: Level::INFO });
         tracing::subscriber::with_default(sub, || {
-            let span = tracing::info_span!("job", job_id = "job_1");
+            // (The shipper skips its own module's events: these name another target.)
+            let span = tracing::info_span!(target: "fv_test", "job", job_id = "job_1");
             let _g = span.enter();
-            tracing::info!(step = 3, "denoise");
-            tracing::debug!("not shipped at info");
+            tracing::info!(target: "fv_test", step = 3, "denoise");
+            tracing::debug!(target: "fv_test", "not shipped at info");
             tracing::warn!(target: "hyper::client", "not shipped: the HTTP client");
         });
         let a = rx.try_recv().unwrap();
@@ -279,7 +280,7 @@ mod tests {
         let sub = tracing_subscriber::registry().with(ShipLayer { tx, level: Level::INFO });
         tracing::subscriber::with_default(sub, || {
             for i in 0..5 {
-                tracing::info!(i, "x");
+                tracing::info!(target: "fv_test", i, "x");
             }
         });
         assert!(dropped() >= before + 4);
