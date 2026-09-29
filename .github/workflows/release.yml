@@ -1,0 +1,122 @@
+# Release channels for the fv-serve images (docs/serve/releases.md).
+#
+#   promote <sha|digest|tag> [channel]  retag the all-in-one image and every
+#       variant image of that build to :<channel> / :<variant>-<channel>
+#       (docker buildx imagetools create: no rebuild, same digests), point the
+#       Runpod templates at them when <channel> is the one they follow
+#       (vars.FV_TEMPLATE_CHANNEL, default stable), record the release in D1
+#   rollback [channel] [to]  re-promote the channel's previous release (or
+#       release <to>) from the D1 history
+#
+# scripts/serve/release.sh does the work (`--local`); `release.sh promote …`
+# on a laptop dispatches this workflow. Secrets: RUNPOD_API_KEY (templates);
+# a Cloudflare API token with D1 edit (FV_CF_API_TOKEN, or
+# CLOUDFLARE_API_TOKEN) and optionally FV_CF_ACCOUNT_ID / FV_D1_DATABASE_ID
+# (looked up from the token otherwise). GITHUB_TOKEN pushes the tags.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "promote or rollback"
+        required: true
+        type: choice
+        options: [promote, rollback]
+        default: promote
+      target:
+        description: "promote: git sha (7+ hex), image digest (sha256:…) or tag (e.g. latest, sha-abc1234)"
+        required: false
+        default: ""
+      channel:
+        description: "channel (stable: what deploys and the Runpod templates follow; latest: newest main)"
+        required: false
+        default: "stable"
+      to:
+        description: "rollback: a release id instead of the previous one"
+        required: false
+        default: ""
+      notes:
+        description: "a note for the release history"
+        required: false
+        default: ""
+      templates:
+        description: "update the Runpod templates (when the channel is theirs)"
+        required: false
+        default: "true"
+      allow_partial:
+        description: "promote a build that lacks some variant images"
+        required: false
+        default: "false"
+      dry_run:
+        description: "print the plan only"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  packages: write
+
+# One release at a time; never cancel one halfway through its retags.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ${{ inputs.action }} ${{ inputs.target }} -> ${{ inputs.channel }}
+        env:
+          ACTION: ${{ inputs.action }}
+          TARGET: ${{ inputs.target }}
+          CHANNEL: ${{ inputs.channel }}
+          TO: ${{ inputs.to }}
+          NOTES: ${{ inputs.notes }}
+          TEMPLATES: ${{ inputs.templates }}
+          PARTIAL: ${{ inputs.allow_partial }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FV_SERVE_REPO: ghcr.io/${{ github.repository_owner }}/fastvideo-rs-serve
+          FV_TEMPLATE_CHANNEL: ${{ vars.FV_TEMPLATE_CHANNEL || 'stable' }}
+          FV_DEPLOYED_BY: ci:release#${{ github.run_id }} by ${{ github.actor }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_REGISTRY_AUTH_ID: ${{ secrets.RUNPOD_REGISTRY_AUTH_ID }}
+          FV_CF_API_TOKEN: ${{ secrets.FV_CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          FV_CF_ACCOUNT_ID: ${{ secrets.FV_CF_ACCOUNT_ID }}
+          FV_D1_DATABASE_ID: ${{ secrets.FV_D1_DATABASE_ID }}
+        run: |
+          FV_SERVE_REPO="${FV_SERVE_REPO,,}"; export FV_SERVE_REPO
+          args=(--local)
+          [ "$TEMPLATES" = false ] && args+=(--no-templates)
+          [ "$PARTIAL" = true ] && args+=(--allow-partial)
+          [ "$DRY_RUN" = true ] && args+=(--dry-run)
+          [ -n "$NOTES" ] && args+=(--notes "$NOTES")
+          case "$ACTION" in
+            promote)
+              [ -n "$TARGET" ] || { echo "::error::promote needs a target"; exit 2; }
+              bash scripts/serve/release.sh promote "$TARGET" "$CHANNEL" "${args[@]}" ;;
+            rollback)
+              [ -n "$TO" ] && args+=(--to "$TO")
+              bash scripts/serve/release.sh rollback "$CHANNEL" "${args[@]}" ;;
+          esac
+
+      - name: Channels
+        if: always()
+        env:
+          FV_CF_API_TOKEN: ${{ secrets.FV_CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          FV_CF_ACCOUNT_ID: ${{ secrets.FV_CF_ACCOUNT_ID }}
+          FV_D1_DATABASE_ID: ${{ secrets.FV_D1_DATABASE_ID }}
+        run: |
+          if [ -z "$FV_CF_API_TOKEN" ]; then echo "::warning::no D1 token secret (FV_CF_API_TOKEN)"; exit 0; fi
+          { echo '### Channels'; echo '```'; bash scripts/serve/release.sh list || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

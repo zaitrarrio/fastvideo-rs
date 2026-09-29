@@ -301,9 +301,13 @@ cmd_sync() {
   agent="$(agent_name "${1:?agent}")"
   t0=$(date +%s)
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/fv-build-sync.XXXXXX")"
-  # A RETURN trap outlives this function (it would fire again when cmd_run
-  # returns, with $tmp unset under set -u): clear it as it fires.
-  trap 'rm -rf "${tmp:-}"; trap - RETURN' RETURN
+  # No RETURN trap: it is global, not function-local, and depending on the
+  # bash version it fired again after this function (in cmd_run, or on the
+  # script's last return) with the local $tmp gone, so set -u reported
+  # "tmp: unbound variable" after successful runs. A global path plus an EXIT
+  # trap covers die(); the normal path removes the directory itself.
+  FV_SYNC_TMP="$tmp"
+  trap 'rm -rf "${FV_SYNC_TMP:-}"' EXIT
   svc GET "/v1/agents/$agent/manifest" >"$tmp/remote"
   {
     git -C "$FV_ROOT" ls-files -z --recurse-submodules
@@ -343,6 +347,8 @@ PY
   if (( n_deleted > 0 )); then
     svc POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted" >/dev/null
   fi
+  rm -rf "$tmp"
+  FV_SYNC_TMP=""
   log "sync $agent: $n_changed changed, $n_deleted deleted ($(( $(date +%s) - t0 ))s)"
 }
 

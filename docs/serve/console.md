@@ -53,25 +53,25 @@ Admin calls (`/fv/v1/admin/*`) need the admin token as
 
 - Set it with `FV_ADMIN_TOKEN` (or `auth.admin_token` in the TOML). Use a
   long random value, e.g. `echo "fvadm_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d =)"`.
-- If it is unset, fv-serve generates one at startup (`fvadm_` + 32 bytes from
-  the CSPRNG, base64url) and logs it **once** at `WARN` in a banner:
+- If it is unset, fv-serve makes one on its first start (`fvadm_` + 32
+  bytes from the CSPRNG, base64url) and keeps it in
+  **`<state_dir>/admin_token`** (mode 600). Later starts with the same state
+  dir reuse it. The log names the file and shows only the token's first 4
+  characters:
 
   ```
-  ==============================================================================
-    fv-serve admin token (generated at startup; set FV_ADMIN_TOKEN to choose one):
-
-        fvadm_…
-
-    Mint API keys at /console/admin or POST /fv/v1/admin/keys with
-    `Authorization: Bearer <admin token>`. It is not stored and not shown again.
-  ==============================================================================
+  INFO admin token: generated and stored (read it on the server; FV_ADMIN_TOKEN overrides) file=/workspace/fv-state/admin_token starts_with=fvad created=true
   ```
 
-  A generated token changes on every restart. On Runpod/Vast, read it from the
-  worker log, or set `FV_ADMIN_TOKEN` as a secret.
+  Read it on the server (`cat <state_dir>/admin_token`). On a Runpod pod
+  without a volume the state dir is container disk: the token survives a
+  restart, not a re-creation. A remote operator can have it sealed to an
+  X25519 key instead (`FV_ADMIN_TOKEN_RECIPIENT`,
+  `GET /fv/v1/admin/token/sealed`; the gateway cluster's
+  `runpod-cluster.sh admin-token` does that, docs/serve/gateway.md §9).
 
 The server keeps only the token's SHA-256 digest and compares digests in
-constant time. The token is never written to disk.
+constant time.
 
 ## 2. API keys
 
@@ -208,12 +208,15 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
   and content types, `/fal/schema`, `auth.mode` in capabilities, the keyless
   flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining),
-  `tests/gateway.rs` (status per pool and worker with nothing secret, a
-  killed worker turning `down`, a gateway with auth `none`) and `console` unit tests (every asset
+  `tests/gateway.rs` (status, capabilities and `/healthz` per pool and
+  worker with nothing secret, a killed worker turning `down`, a gateway
+  with auth `none`, the sealed admin token), `admin_token` unit tests
+  (stored once, reused, overridden, sealing) and `console` unit tests (every asset
   referenced is embedded; no inline scripts).
 - Browser: `bash tests/console/run.sh` builds `fv-serve --features
   fake,encoders`, starts it with no config file and without
-  `FV_ADMIN_TOKEN`, reads the generated token from the log and drives
+  `FV_ADMIN_TOKEN`, reads the token from `<state dir>/admin_token` (and
+  checks the file is mode 600 and the token is not in the log) and drives
   headless Chromium through minting a key, text-to-video, image-to-video
   with an uploaded image, the API tab, history, a live director session
   (start, 1344x768 video with one video and one audio track playing, a

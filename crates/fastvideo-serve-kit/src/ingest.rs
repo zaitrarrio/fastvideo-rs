@@ -529,6 +529,14 @@ pub fn apply_exif_orientation(path: &Path, out: &Path) -> std::io::Result<Option
     Ok(Some(std::fs::metadata(out)?.len()))
 }
 
+/// Fetches a public `url` into `dest` under `policy` (the ingestion SSRF
+/// guard, redirect rules, and `kind`'s size and time limits); returns the
+/// byte count. A gateway worker uses it for inputs the client gave as a
+/// URL (docs/serve/gateway.md §3).
+pub async fn fetch_public(url: &url::Url, kind: MediaKind, policy: &IngestPolicy, dest: &Path, param: &str) -> Result<u64, ApiError> {
+    fetch::fetch_to(url, policy.limits(kind), policy, dest, param).await.map(|(n, _)| n)
+}
+
 fn too_large(param: &str, max: u64) -> ApiError {
     ApiError::payload_too_large(format!("`{param}` exceeds {max} bytes")).with_param(param)
 }

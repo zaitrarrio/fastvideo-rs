@@ -168,7 +168,11 @@ pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> 
 ///   `text`, `refine`, `denoise`, `audio_decode`, `video_decode`, `encode`;
 ///   `text` includes the I2V multimodal text encoder);
 /// - `queue`: submit to start; `total`: start to completion (the whole
-///   engine run, so `total - inference` is the time outside the denoise).
+///   engine run, so `total - inference` is the time outside the denoise);
+/// - behind a gateway, `queue` splits into `dispatch` (submit until the
+///   worker holds the job with its inputs: input transfer, store round
+///   trips, the hop to the worker) and `wait` (the worker's store write
+///   and the wait for the GPU), so `dispatch + wait == queue`.
 ///
 /// `None` when nothing was measured (fal: "Null on routes that do not
 /// report backend timings").
@@ -186,6 +190,10 @@ pub fn timings(job: &Job) -> Option<serde_json::Map<String, Value>> {
     }
     if let Some(start) = job.started_at {
         m.entry("queue").or_insert_with(|| secs(start - job.created_at));
+        if let Some(d) = job.dispatched_at.filter(|d| *d >= job.created_at && *d <= start) {
+            m.entry("dispatch").or_insert_with(|| secs(d - job.created_at));
+            m.entry("wait").or_insert_with(|| secs(start - d));
+        }
         if let Some(end) = job.completed_at {
             m.entry("total").or_insert_with(|| secs(end - start));
         }

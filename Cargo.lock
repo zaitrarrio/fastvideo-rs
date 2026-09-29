@@ -1452,12 +1452,14 @@ dependencies = [
 name = "fastvideo-serve"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
  "clap",
+ "ctr",
  "fastvideo-autoscale",
  "fastvideo-deploy",
  "fastvideo-engine-service",
@@ -1471,12 +1473,15 @@ dependencies = [
  "fastvideo-serve-kit",
  "fastvideo-webrtc",
  "futures",
+ "hmac",
  "image",
  "metrics",
  "metrics-exporter-prometheus",
+ "rand 0.9.5",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "time",
  "tokio",
@@ -1487,6 +1492,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "x25519-dalek",
 ]
 
 [[package]]

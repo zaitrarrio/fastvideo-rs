@@ -7,9 +7,11 @@
 //!   [`crate::app::serve_while_building`] until these routes exist.
 //! - `GET /health`: the merged FastVideo / FastWan / Reactor body
 //!   `{"status":"ok","model_loaded":true,"state":"AVAILABLE"}`; 503 with
-//!   `model_loaded:false` until ready.
-//! - `GET /healthz`: `{state, loaded, loading, models, engine, jobs}`; 200 when
-//!   ready, else 503 (pods and Vast probe it).
+//!   `model_loaded:false` until ready. Plus `version` and `build` (git sha,
+//!   build time, variant, image ref / tag / digest, release channel:
+//!   [`crate::build_info`], docs/serve/releases.md).
+//! - `GET /healthz`: `{state, loaded, loading, models, engine, jobs, version,
+//!   build}`; 200 when ready, else 503 (pods and Vast probe it).
 //! - `GET /`: `{"model": <first served name>, "server": "fv-serve", ...}`
 //!   (FastWan reads `model`).
 //! - `GET /metrics`: Prometheus text.
@@ -27,6 +29,7 @@ use axum::{Json, Router};
 use fastvideo_engine_service::{Readiness, Residency};
 use serde_json::json;
 
+use crate::build_info::BuildInfo;
 use crate::gate::ServiceGate;
 
 /// State for the health routes.
@@ -109,7 +112,12 @@ async fn health(State(h): State<Health>) -> Response {
         Phase::Failed => "failed",
         Phase::Draining => "draining",
     };
-    (code, Json(json!({"status": status, "model_loaded": ready, "state": state}))).into_response()
+    let build = BuildInfo::current();
+    (
+        code,
+        Json(json!({"status": status, "model_loaded": ready, "state": state, "version": build.version, "build": build.json()})),
+    )
+        .into_response()
 }
 
 async fn healthz(State(h): State<Health>) -> Response {
@@ -153,6 +161,7 @@ async fn healthz(State(h): State<Health>) -> Response {
         },
         "stores": {"jobs": h.jobs_backend, "artifacts": h.artifacts_backend},
         "version": env!("CARGO_PKG_VERSION"),
+        "build": BuildInfo::current().json(),
     });
     let code = if phase == Phase::Ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (code, Json(body)).into_response()
@@ -204,6 +213,7 @@ async fn root(State(h): State<Health>) -> Response {
         "model": h.served_name(),
         "server": "fv-serve",
         "version": env!("CARGO_PKG_VERSION"),
+        "git_sha": BuildInfo::current().git_sha,
     }))
     .into_response()
 }

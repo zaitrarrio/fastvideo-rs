@@ -8,10 +8,18 @@
 //! sync endpoints' waits work unchanged. A version conflict on an update
 //! (a worker wrote the row meanwhile) is not an error for the gateway: the
 //! worker's copy is authoritative, so the fresh row is returned.
+//!
+//! Status reads (a fal client polls `status` every few hundred ms; each D1
+//! read costs ~0.3 s) are served from an in-memory view where the state is
+//! known: a job this replica inserted, updated or read within the watch
+//! poll interval (`gateway.watch_poll_ms`, the latency SSE already has),
+//! or a finished job read within the last minute (finished jobs change only
+//! by deletion). Anything else reads D1 and refreshes the view; the
+//! pollers behind `watch()` refresh it too.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fastvideo_protocol::{Job, JobId, JobSnapshot, JobState, JobStore, JobUpdate, ListQuery, Page, ProtocolId, StoreError};
 use fastvideo_serve_kit::D1JobStore;
@@ -23,6 +31,65 @@ pub struct GatewayJobStore {
     inner: Arc<D1JobStore>,
     poll: Duration,
     watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
+    view: Arc<View>,
+}
+
+/// How long a finished job read from D1 is served from memory.
+const TERMINAL_FRESH: Duration = Duration::from_secs(60);
+/// Jobs the view holds before it drops the stale ones.
+const VIEW_MAX: usize = 4096;
+
+/// The in-memory view of recently seen jobs (see the module docs).
+#[derive(Default)]
+struct View {
+    fresh: Duration,
+    jobs: Mutex<ViewInner>,
+}
+
+#[derive(Default)]
+struct ViewInner {
+    by_id: HashMap<JobId, (Job, Instant)>,
+    by_ext: HashMap<(ProtocolId, String), JobId>,
+}
+
+impl View {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ViewInner> {
+        self.jobs.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    fn remember(&self, j: &Job) {
+        let mut g = self.lock();
+        if g.by_id.len() >= VIEW_MAX {
+            let fresh = self.fresh;
+            g.by_id.retain(|_, (j, at)| at.elapsed() < if j.is_terminal() { TERMINAL_FRESH } else { fresh });
+            if g.by_id.len() >= VIEW_MAX {
+                g.by_id.clear();
+            }
+            let ViewInner { by_id, by_ext } = &mut *g;
+            by_ext.retain(|_, id| by_id.contains_key(id));
+        }
+        g.by_ext.insert((j.protocol, j.external_id.clone()), j.id);
+        g.by_id.insert(j.id, (j.clone(), Instant::now()));
+    }
+    fn forget(&self, id: JobId) {
+        let mut g = self.lock();
+        if let Some((j, _)) = g.by_id.remove(&id) {
+            g.by_ext.remove(&(j.protocol, j.external_id));
+        }
+    }
+    fn get(&self, id: JobId) -> Option<Job> {
+        let g = self.lock();
+        let (j, at) = g.by_id.get(&id)?;
+        let ttl = if j.is_terminal() { TERMINAL_FRESH } else { self.fresh };
+        (at.elapsed() < ttl).then(|| j.clone())
+    }
+    fn by_external(&self, p: ProtocolId, ext: &str) -> Option<Job> {
+        let id = *self.lock().by_ext.get(&(p, ext.to_owned()))?;
+        self.get(id)
+    }
+}
+
+fn counted(source: &'static str) {
+    metrics::counter!("fv_gateway_job_reads_total", "source" => source).increment(1);
 }
 
 impl std::fmt::Debug for GatewayJobStore {
@@ -33,7 +100,8 @@ impl std::fmt::Debug for GatewayJobStore {
 
 impl GatewayJobStore {
     pub fn new(inner: Arc<D1JobStore>, poll: Duration) -> Self {
-        Self { inner, poll: poll.max(Duration::from_millis(20)), watchers: Arc::default() }
+        let poll = poll.max(Duration::from_millis(20));
+        Self { inner, poll, watchers: Arc::default(), view: Arc::new(View { fresh: poll, ..View::default() }) }
     }
 
     pub fn d1(&self) -> &Arc<D1JobStore> {
@@ -55,6 +123,7 @@ fn fingerprint(j: &Job) -> (String, u32, Option<u32>, usize, usize, bool) {
 
 async fn poller(
     store: Arc<D1JobStore>,
+    view: Arc<View>,
     id: JobId,
     tx: Arc<watch::Sender<JobSnapshot>>,
     watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
@@ -67,6 +136,7 @@ async fn poller(
             break;
         }
         let Some(j) = store.get(id).await else { break };
+        view.remember(&j);
         let fp = fingerprint(&j);
         if last.as_ref() != Some(&fp) {
             seq += 1;
@@ -87,25 +157,47 @@ async fn poller(
 #[async_trait::async_trait]
 impl JobStore for GatewayJobStore {
     async fn insert(&self, job: Job) -> Result<(), StoreError> {
-        self.inner.insert(job).await
+        let j = job.clone();
+        self.inner.insert(job).await?;
+        self.view.remember(&j);
+        Ok(())
     }
 
     async fn get(&self, id: JobId) -> Option<Job> {
-        self.inner.get(id).await
+        if let Some(j) = self.view.get(id) {
+            counted("memory");
+            return Some(j);
+        }
+        counted("d1");
+        let j = self.inner.get(id).await?;
+        self.view.remember(&j);
+        Some(j)
     }
 
     async fn by_external(&self, p: ProtocolId, external_id: &str) -> Option<Job> {
-        self.inner.by_external(p, external_id).await
+        if let Some(j) = self.view.by_external(p, external_id) {
+            counted("memory");
+            return Some(j);
+        }
+        counted("d1");
+        let j = self.inner.by_external(p, external_id).await?;
+        self.view.remember(&j);
+        Some(j)
     }
 
     async fn update(&self, id: JobId, f: JobUpdate) -> Result<Job, StoreError> {
-        match self.inner.update(id, f).await {
+        let r = match self.inner.update(id, f).await {
             Err(StoreError::Io(m)) if m.contains("changed concurrently") => {
                 tracing::debug!(job = %id, "gateway update lost to a worker write; the worker's copy stands");
                 self.inner.get(id).await.ok_or(StoreError::NotFound(id))
             }
             r => r,
+        };
+        match &r {
+            Ok(j) => self.view.remember(j),
+            Err(_) => self.view.forget(id),
         }
+        r
     }
 
     async fn list(&self, q: ListQuery) -> Page<Job> {
@@ -113,6 +205,7 @@ impl JobStore for GatewayJobStore {
     }
 
     async fn remove(&self, id: JobId) -> Option<Job> {
+        self.view.forget(id);
         self.inner.remove(id).await
     }
 
@@ -132,7 +225,7 @@ impl JobStore for GatewayJobStore {
         });
         let tx = Arc::new(tx);
         g.insert(id, tx.clone());
-        tokio::spawn(poller(self.inner.clone(), id, tx, self.watchers.clone(), self.poll));
+        tokio::spawn(poller(self.inner.clone(), self.view.clone(), id, tx, self.watchers.clone(), self.poll));
         Some(rx)
     }
 

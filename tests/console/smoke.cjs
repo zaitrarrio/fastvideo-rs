@@ -1,7 +1,8 @@
 // Headless browser smoke test of the fv-serve console (WP-20).
 //
 // Starts `fv-serve` (built with `--features fake`) on a free port with no
-// FV_ADMIN_TOKEN, reads the generated admin token from its WARN banner, and
+// FV_ADMIN_TOKEN, reads the admin token it made from `<state dir>/admin_token`
+// (mode 600; the log names the file, never the token), and
 // drives Chromium through: mint an API key on /console/admin, run
 // text-to-video, upload an image and run image-to-video, see video results,
 // the API snippets, the history, and a live director session over WebRTC
@@ -229,19 +230,21 @@ async function main() {
 
   let browser;
   try {
-    // Ready and the admin banner logged.
+    // Ready and the admin token file written.
     let admin = REMOTE ? process.env.FV_ADMIN_TOKEN : null;
     if (REMOTE && !admin) throw new Error('FV_CONSOLE_ORIGIN needs FV_ADMIN_TOKEN');
+    const tokenFile = path.join(state, 'admin_token');
     for (let i = 0; i < 600 && !admin; i++) {
       if (exited !== null) throw new Error('fv-serve exited with ' + exited);
-      const m = logs.match(/fvadm_[A-Za-z0-9_-]{43}/);
-      if (m) admin = m[0];
+      const t = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim() : '';
+      if (/^fvadm_[A-Za-z0-9_-]{43}$/.test(t)) admin = t;
       else await new Promise((r) => setTimeout(r, 100));
     }
-    if (!admin) throw new Error('no generated admin token in the fv-serve log');
+    if (!admin) throw new Error('no admin token file at ' + tokenFile);
     secrets.push(admin);
-    if (!REMOTE && (logs.match(new RegExp(admin, 'g')) || []).length !== 1) throw new Error('admin token must be logged exactly once');
-    step(REMOTE ? 'target ' + origin + ' (admin token from FV_ADMIN_TOKEN)' : 'fv-serve up on ' + origin + ' (generated admin token found in the WARN banner)');
+    if (!REMOTE && (fs.statSync(tokenFile).mode & 0o077) !== 0) throw new Error('the admin token file must be mode 600');
+    if (!REMOTE && logs.includes(admin)) throw new Error('the admin token must never be logged');
+    step(REMOTE ? 'target ' + origin + ' (admin token from FV_ADMIN_TOKEN)' : 'fv-serve up on ' + origin + ' (admin token read from the state dir, not in the log)');
     for (let i = 0; i < 600; i++) {
       try { const r = await fetch(origin + '/health'); if (r.ok) break; } catch { /* not yet */ }
       await new Promise((r) => setTimeout(r, 100));
