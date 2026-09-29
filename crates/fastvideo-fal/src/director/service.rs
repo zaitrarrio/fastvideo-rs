@@ -137,6 +137,13 @@ pub fn limits_for(cfg: &DirectorConfig, caps: &ModelCaps) -> Limits {
         min_chunk_seconds: min,
         max_chunk_seconds: max,
         resolutions: served_resolutions(caps),
+        // The H3 1080P tier's clip cap (5 s; 10 s with `h3_1080p_long`).
+        hd_max_chunk_seconds: caps
+            .canvas
+            .hd
+            .filter(|t| t.short_edge == Resolution::R1080.short_edge())
+            .and_then(|t| t.max_frames)
+            .map(|n| (f64::from(n) / f64::from(fps.max(1))).floor()),
         ..Limits::default()
     }
 }
@@ -359,5 +366,14 @@ mod tests {
         assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Landscape), (1920, 1088));
         assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Portrait), (1088, 1920));
         assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Square), (1088, 1088));
+        // 1080p chunks within the tier's clip cap: 5 s, 10 s with the flag.
+        let l = limits_for(&DirectorConfig::default(), &caps);
+        assert_eq!(l.hd_max_chunk_seconds, Some(5.0));
+        let at = l.at(Resolution::R1080);
+        assert_eq!((at.min_chunk_seconds, at.chunk_seconds, at.max_chunk_seconds), (5.0, 5.0, 5.0));
+        assert_eq!(l.at(Resolution::R768), l);
+        fastvideo_protocol::apply_feature_flags(&mut caps, &|_| true);
+        let at = limits_for(&DirectorConfig::default(), &caps).at(Resolution::R1080);
+        assert_eq!((at.chunk_seconds, at.max_chunk_seconds), (10.0, 10.0));
     }
 }

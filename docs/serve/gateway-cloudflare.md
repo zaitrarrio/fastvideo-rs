@@ -1,7 +1,11 @@
 # Gateway on Cloudflare Workers + Durable Objects (workers-rs): assessment
 
-Status: research and design, 2026-09-29. Nothing was deployed and no code
-changed. The owner asked: "on queue handling, what if we use workers-rs to
+Status: design 2026-09-29; **phases 0 and 1 are implemented as a parallel
+path** (the owner: "let's test durable objects as a parallel deployment
+path"): see §9 for the results and §10 for how to run it. The fv-serve
+gateway path stays the default and unchanged; a pod pool opts in with
+`dispatch = "durable-object"`. A staging Worker runs at
+`https://fv-edge-staging.maximalize.workers.dev`. The owner asked: "on queue handling, what if we use workers-rs to
 implement the gateway and Durable Objects?" This document answers that
 question against the gateway in [gateway.md](gateway.md)
 (`crates/fastvideo-serve/src/gateway/`).
@@ -427,11 +431,270 @@ push to SSE. Both help the current gateway too.
 
 ## 8. Spike
 
-No code was written. CLAUDE.md requires builds on the shared build pod, and
-this task started no pods, so the wasm check stays in phase 0. The
-dependency analysis in §4 comes from `cargo tree --target
-wasm32-unknown-unknown` (metadata only), which shows that one edge
-(`fastvideo-models` → `tokenizers`) is the blocker for every crate.
+Superseded by §9. The first pass wrote no code; the dependency analysis in
+§4 came from `cargo tree --target wasm32-unknown-unknown` (metadata only).
+
+## 9. Phases 0 and 1: what was built and measured (2026-09-29)
+
+### 9.1 What exists
+
+| piece | where | notes |
+|---|---|---|
+| protocol + scheduler | `crates/fastvideo-dispatch-proto` | `serde` + `serde_json` only; builds for wasm32 and natively. Frames (`hello`, `ack`, `nack`, `done`, `status` ▲; `welcome`, `job`, `cancel`, `drain` ▼), enqueue / status bodies, and `sched`: a pure, deterministic scheduler (time in, effects out) with 13 unit tests |
+| Worker + DO | `crates/fastvideo-edge` (workers-rs 0.8.7) | Worker front (routes, token checks, `POOL_LOCATIONS` hints) and `PoolScheduler`: queue, envelopes (chunked 1 MB) and worker registry in DO SQLite, reloaded after every eviction; hibernatable sockets tagged by worker id; the alarm runs the scheduler's timers; `edge_jobs` rows written to D1 through the binding with `waitUntil` (off the critical path). Empty on the host |
+| gateway option | `crates/fastvideo-serve/src/gateway/edge.rs` | per pod pool `dispatch = "durable-object"` + `do_url`: submit enqueues the same envelope on the DO (`gw_dispatch.kind = "durable-object"`), cancel goes through the DO, the tick reads the DO's status instead of probing workers (availability, caps, builds) and fails in D1 the jobs the DO failed; the reaper leaves these rows to the DO |
+| worker socket | `crates/fastvideo-serve/src/edge_link.rs` | `[dispatch] do_url` (`FV_DISPATCH_DO_URL`), `capacity` (2), `status_s` (10): dials `wss://…/pools/{pool}/connect`, hello with caps / version / capacity / held jobs, takes pushed jobs through the same code as `POST /fv/v1/internal/jobs` (`worker::take_envelope`), acks (= taken), nacks, reports done, reconnects (0.25 s doubling to 2 s) |
+| takeover adopt | `D1JobStore::adopt_with(job, takeover)` | a DO re-dispatch after it declared a worker lost may adopt the row although the old worker's heartbeat is fresh (the gateway path clears the row's worker instead) |
+| tests | `crates/fastvideo-serve/tests/edge_dispatch.rs` | a native stand-in for the DO (same routes, same scheduler, a "redeploy" that drops every socket and reloads state); `FV_EDGE_URL` + `FV_EDGE_TOKEN` point the same tests at `wrangler dev` or staging |
+| scripts | `scripts/serve/cf-edge.sh build\|dev\|deploy\|status\|down\|check-token` | staging names only (`fv-edge-staging`) |
+
+What the gateway keeps unchanged: auth (API keys, admin token), the API
+adapters, the D1 job rows (it still inserts them; workers still adopt and
+write progress / results to D1 and R2) and the console. **Serverless pools
+stay on the gateway path** (config validation refuses `durable-object`
+for them): Runpod starts and reaps serverless workers from its own queue,
+so a job pushed around that queue is invisible to its scaler and the worker
+would be reaped while busy (§3.2). Peer sessions and streams are not routed
+to Durable Object pools yet (their workers have no URL at the gateway:
+`503`); relaying signalling over the socket is phase 2.
+
+### 9.2 Phase 0: wasm feasibility (build pod)
+
+- `cargo check -p fastvideo-protocol --target wasm32-unknown-unknown` still
+  **fails**, as §4 predicted: first `getrandom` 0.3 (uuid v4) wants
+  `--cfg getrandom_backend="wasm_js"`; with that set, `onig_sys` (C, through
+  `fastvideo-models` → `tokenizers`) does not compile for wasm32.
+- Phase 1 does not need it: the dispatcher never looks inside the envelope,
+  so the protocol lives in `fastvideo-dispatch-proto` (plain serde) and the
+  envelope rides as opaque JSON. Cutting `protocol → models` stays the first
+  step of phase 3.
+- `fastvideo-edge` builds (release, `panic = "abort"`): 1.7 MB of wasm, 976
+  KB after wasm-bindgen; the upload is 1018 KiB (244 KiB gzip), and
+  Cloudflare reports a 4 ms Worker startup. No `SendFuture` was needed (no
+  axum in the Worker).
+- Toolchain: `rust-toolchain.toml` lists the `wasm32-unknown-unknown`
+  target (rustup adds it by itself). `worker-build` is not used: it cannot
+  be compiled in the agents' container (CLAUDE.md) and the build pod runs
+  only allowlisted commands, so `crates/fastvideo-edge/js/pack.mjs` repeats
+  its steps with the prebuilt wasm-bindgen 0.2.129 CLI (sha256 pinned in
+  `cf-edge.sh`), esbuild from npm and the vendored shim.
+- workerd's `Date.now()` only advances on I/O inside a request (Spectre
+  mitigation), so the DO's own timings are coarse; the comparison below uses
+  the job's `created_at` / `dispatched_at` / `started_at`.
+
+### 9.3 Tests
+
+| test | native stand-in | `wrangler dev` (this container) | staging Worker (workers on the build pod, EU-RO-1) |
+|---|---|---|---|
+| jobs, cancel through the DO, worker loss → re-dispatch once (takeover) → other worker | pass | pass | pass (20 s reconnect grace) |
+| last worker lost → re-dispatched, then failed; the gateway fails the D1 row | pass | not run (default `redispatch_wait_ms` 120 s) | not run |
+| **redeploy during 4 running jobs** | pass: sockets dropped, state reloaded, reconnect in 0.26 s | pass: `wrangler dev` killed and restarted on the same state (5 s outage); both workers back 3.0 s after it answered (the backoff then capped at 5 s; now 2 s) | pass: `cf-edge.sh deploy` mid-jobs; the sockets reset when the new version went live, both workers reconnected **0.3 s** later holding 2 + 2 jobs |
+
+In every redeploy run each job finished once, on the worker that held it
+before the deploy (no re-dispatch log, the D1 row's worker unchanged, each
+worker adopted exactly its own jobs), and the DO reported nothing failed
+or left queued. The staging D1 `edge_jobs` table held the matching
+write-behind rows (34 jobs: 32 succeeded at attempt 1, one cancelled, one
+succeeded at attempt 2 after the loss test, pushed 20.1 s after enqueue).
+
+### 9.4 Queue time: gateway path vs Durable Object path
+
+Same fake setup for both paths, in one process: a gateway, five fake-engine
+workers of one pod pool (`capacity = 1` each on the DO path), D1 simulated
+by the SQLite mock with a fixed round trip; `queue` = `created_at` →
+`started_at`, `dispatch` = `created_at` → `dispatched_at` (the worker has
+the job and its inputs), seconds; `FV_EDGE_BENCH=1 cargo test -p
+fastvideo-serve --features http-client --test edge_dispatch
+queue_time_gateway_vs_durable_object -- --nocapture`.
+
+D1 at 250 ms per call (the measured D1 API round trip):
+
+| dispatcher | path | jobs | queue mean | p50 | max | dispatch mean | submit call |
+|---|---|---|---:|---:|---:|---:|---:|
+| `wrangler dev` (local) | gateway | 5 × 1 | 0.510 | 0.508 | 0.516 | 0.256 | 1.019 |
+| | gateway | 5 at once | 10.579 | 10.376 | 21.135 | 0.255 | 1.017 |
+| | durable-object | 5 × 1 | 0.517 | 0.517 | 0.522 | 0.264 | 0.774 |
+| | durable-object | 5 at once | 0.542 | 0.547 | 0.550 | 0.288 | 0.810 |
+| staging (build pod → workers.dev) | gateway | 5 × 1 | 0.507 | 0.507 | 0.508 | 0.253 | 1.014 |
+| | gateway | 5 at once | 7.755 | 7.629 | 15.456 | 0.257 | 1.018 |
+| | durable-object | 5 × 1 | 0.529 | 0.528 | 0.532 | 0.276 | 0.853 |
+| | durable-object | 5 at once | 0.599 | 0.622 | 0.629 | 0.346 | 0.876 |
+
+D1 at 0 ms (what is left is the dispatch itself):
+
+| dispatcher | path | jobs | queue mean | p50 | max | dispatch mean | submit call |
+|---|---|---|---:|---:|---:|---:|---:|
+| `wrangler dev` (local) | gateway | 5 × 1 | 0.004 | 0.004 | 0.004 | 0.002 | 0.008 |
+| | gateway | 5 at once | 6.621 | 5.949 | 16.040 | 0.005 | 0.015 |
+| | durable-object | 5 × 1 | 0.012 | 0.012 | 0.014 | 0.011 | 0.017 |
+| | durable-object | 5 at once | 0.039 | 0.043 | 0.047 | 0.037 | 0.052 |
+| staging | gateway | 10 × 1 | 0.004 | 0.004 | 0.004 | 0.002 | 0.007 |
+| | gateway | 5 at once | 4.987 | 4.837 | 11.749 | 0.005 | 0.013 |
+| | durable-object | 10 × 1 | 0.026 | 0.024 | 0.035 | 0.024 | 0.136 |
+| | durable-object | 5 at once | 0.153 | 0.185 | 0.186 | 0.151 | 0.191 |
+
+The DO's own view on staging (D1 0 ms): enqueue → push under 1 ms, push →
+ack p50 15 ms (max 104 ms), of which 2 ms on the worker; with 250 ms D1 the
+ack takes 264 ms p50, 253 ms of it the worker's D1 adopt.
+
+Reading it:
+
+- **One job at a time, the paths are equal** and both sit at two D1 round
+  trips (the gateway's job insert and the worker's adopt, ≈ 0.5 s at
+  250 ms). Phase 1 keeps both, so the phase-1 exit criterion (≤ 0.4 s p50)
+  is **not met** on this setup: it needs the adopt off the critical path
+  (the DO as the record, the worker's ack as the adopt, D1 written behind:
+  §3.4) or the insert behind the response.
+- The DO hop costs ≈ 20–25 ms p50 from EU-RO-1 through the edge
+  (`wss` push + ack) and ≈ 10 ms on `wrangler dev`. Here the gateway →
+  worker hop is loopback; in production it is the Runpod proxy (§1:
+  ~40–150 ms and more), which this setup does not show, so these numbers
+  favour the gateway path on single jobs.
+- **Bursts are where the DO path wins by far**: 5 jobs at once on 5 idle
+  workers start within 0.04–0.6 s on the DO path, but take 5–11 s mean
+  (max 12–21 s) on the gateway path. The gateway picks the least-loaded
+  worker from its last probe plus its own in-flight count, and the count
+  only rises when a dispatch *returns*, so concurrent submits all pick the
+  same worker and queue on its GPU. The DO places jobs one at a time. (A
+  gateway fix, independent of this work: count the dispatch before sending
+  it.)
+- The submit call returns earlier on the DO path (0.77–0.85 s against
+  1.01 s at 250 ms D1) because it does not wait for the worker's adopt; with
+  no D1 latency it costs the HTTPS enqueue to the edge (≈ 0.13 s from
+  EU-RO-1).
+- A real GPU worker (optional in the task) was not run: the worker side
+  of this path is not in any published image yet, and building one is a
+  release step. The fake-engine runs above exercise the same code.
+
+### 9.5 Risks found
+
+- **Burst placement on the gateway path** (above): a burst of N jobs lands
+  on one pod. Not part of this change; noted for the gateway owner.
+- **Serialized enqueues**: the DO handles one event at a time and each
+  enqueue writes SQLite and re-arms the alarm, so 5 concurrent enqueues
+  took up to 185 ms each on staging. Fine at 10³ jobs/h; batch or skip the
+  alarm write when unchanged if it matters.
+- **Envelope size**: inline inputs (≤ 8 MiB per job) are held in the DO's
+  SQLite and memory while queued (128 MB per isolate; 32 MiB per received
+  WebSocket message). A long queue of large i2v jobs could press on the
+  memory limit: lower `inline_inputs_max_bytes` for DO pools, or push
+  store URLs only.
+- **424 has no fallback on the DO path**: when a worker cannot fetch a
+  passed-through client URL, the gateway path re-sends that input through
+  the store; the DO path fails the job. Set `input_passthrough = false`
+  with DO pools until phase 2 handles it.
+- **Takeover after a loss**: a worker the DO declared lost (no socket for
+  `reconnect_grace_ms`, 20 s) may still be alive behind a partition and
+  keep writing the row; it is told to drop the job when it reconnects
+  (`welcome.cancel`). The gateway path has the same class of risk.
+- **Deploys drop every socket** (confirmed): recovery took 0.3 s on staging,
+  but a job pushed in the gap waits for its ack timeout (10 s) before it is
+  pushed again. `stale_after_ms` (60 s) must stay above the reconnect
+  backoff (2 s).
+- **Separate D1 on staging**: the staging DO writes `edge_jobs` to its own
+  database (`fv-edge-staging`), not `fv-jobs`; the job rows the APIs read
+  are still written by the gateway and workers. Production should bind the
+  gateway's D1.
+- **Build pod**: its disk filled twice during this work (other agents'
+  target dirs of 40–55 GB; stale ones, idle > 4.5 h, were cleaned), and a
+  container reset lost its access token; `cf-edge.sh build` has
+  `FV_EDGE_BUILD=local` for when the pod is unavailable.
+
+### 9.6 Cloudflare resources and credentials
+
+| resource | name | purpose |
+|---|---|---|
+| Worker | `fv-edge-staging` (`https://fv-edge-staging.maximalize.workers.dev`, workers.dev subdomain, no custom domain) | the staging dispatcher |
+| Durable Object class | `PoolScheduler` (namespace of `fv-edge-staging`, SQLite, migration `v1`) | one object per pool name |
+| D1 database | `fv-edge-staging` | `edge_jobs` write-behind |
+| Worker secrets | `FV_INTERNAL_TOKEN`, `FV_ADMIN_TOKEN` | workers / gateway token; read-only status |
+
+- The deploy uses the owner's token (`/root/.config/fv/cf_api_token`),
+  which has Workers Scripts (with Durable Objects) edit and D1 edit. No new
+  Cloudflare API token was created: the base token cannot mint one
+  (`/user/tokens` and `/accounts/{id}/tokens` answer 9109
+  "Unauthorized"). For least privilege the owner can either add **User →
+  API Tokens → Edit** to the base token, so agents mint `fv-`-prefixed
+  scoped tokens, or create a token named **`fv-edge-staging-deploy`** with
+  **Account → Workers Scripts → Edit** and **Account → D1 → Edit** (plus
+  **Account → Workers Tail → Read** for `wrangler tail`) on this account,
+  stored at `/root/.config/fv/fv-edge-staging-deploy` (mode 600;
+  `FV_CF_TOKEN_FILE` points `cf-edge.sh` at it).
+- The staging tokens live in `~/.config/fv-edge-staging/` (mode 600, made
+  by `cf-edge.sh`), never in the repo or the logs. If that directory is
+  lost, `cf-edge.sh deploy` makes new ones and replaces the Worker's
+  secrets.
+
+Spend: no GPU pods were created. Cloudflare usage was a few thousand DO
+requests and D1 rows on the account's existing plan (no marginal cost).
+The shared build pod ran this work's jobs for roughly an hour.
+
+## 10. How to run the parallel path
+
+Gateway (`configs/serve/gateway.toml`), per pod pool:
+
+```toml
+[[pools]]
+id = "h3-turbo"
+kind = "pod"
+dispatch = "durable-object"        # default "gateway"; FV_POOL_H3_TURBO_DISPATCH
+do_url = "https://fv-edge-staging.maximalize.workers.dev"   # FV_POOL_H3_TURBO_DO_URL
+retries = 1                        # the DO re-dispatches once after a loss, then fails
+```
+
+Worker (any worker config):
+
+```toml
+[server]
+role = "worker"
+[gateway]
+pool = "h3-turbo"                  # the DO is per pool
+[dispatch]
+do_url = "https://fv-edge-staging.maximalize.workers.dev"   # FV_DISPATCH_DO_URL
+capacity = 2                       # jobs held at once (running + next); FV_DISPATCH_CAPACITY
+status_s = 10                      # heartbeat frame
+```
+
+The gateway, its workers and the Worker share one internal token
+(`FV_INTERNAL_TOKEN`). The worker keeps its `POST /fv/v1/internal/jobs`
+route, so a pool can be switched back to `dispatch = "gateway"` without
+touching the workers (they then need their public URL again).
+
+The Worker (`scripts/serve/cf-edge.sh`, staging only):
+
+```bash
+E=scripts/serve/cf-edge.sh
+$E build                  # wasm on the build pod (FV_EDGE_BUILD=local: here), wasm-bindgen + bundle → artifacts/edge/build
+$E dev 8787               # wrangler dev: local workerd, DO and D1 state in artifacts/edge/dev-state
+$E deploy                 # D1 fv-edge-staging (once), secrets, wrangler deploy
+$E status h3-turbo        # version + the pool's DO status (admin token)
+FV_EDGE_CONFIRM=fv-edge-staging $E down    # delete the Worker, its DOs and the D1 database
+```
+
+To reuse the gateway's secrets instead of the generated ones:
+`FV_EDGE_INTERNAL_TOKEN_FILE=… FV_EDGE_ADMIN_TOKEN_FILE=… $E deploy`.
+`FV_EDGE_POOL_LOCATIONS='{"h3-turbo":"weur"}'` pins pool objects near their
+pods; `FV_EDGE_ACK_TIMEOUT_MS`, `FV_EDGE_RECONNECT_GRACE_MS`,
+`FV_EDGE_STALE_AFTER_MS`, `FV_EDGE_REDISPATCH_WAIT_MS` tune the scheduler.
+
+Tests against a real dispatcher (the fake-engine workers and the gateway run
+inside the test; on the build pod, or here with a test binary fetched from
+it):
+
+```bash
+B=scripts/dev/build-pod.sh
+T="$(cat ~/.config/fv-edge-staging/internal_token)"
+$B run . -- FV_EDGE_URL=https://fv-edge-staging.maximalize.workers.dev FV_EDGE_TOKEN="$T" \
+  cargo test -p fastvideo-serve --features http-client --test edge_dispatch -- --nocapture --test-threads=1
+# redeploy during jobs: run with FV_EDGE_REDEPLOY=1, and when the test prints
+# "FV-EDGE: redeploy the Worker now", run `scripts/serve/cf-edge.sh deploy`.
+# queue times: add FV_EDGE_BENCH=1 (FV_EDGE_BENCH_D1_MS, FV_EDGE_BENCH_JOBS).
+```
+
+Observe: `cf-edge.sh status <pool>` (workers, held jobs, queue, failed jobs,
+dispatch timings), `/fv/v1/gateway/pools` on the gateway (workers appear as
+`do:<worker id>`), `wrangler tail fv-edge-staging`, and the `edge_jobs` table
+in the `fv-edge-staging` D1 database.
 
 ## Sources
 

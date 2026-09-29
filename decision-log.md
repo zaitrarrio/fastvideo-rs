@@ -2,6 +2,24 @@
 
 Project code: FVID
 
+### FVID · 2026-09-29 · FVID-2026-09-29-h3-1080p-length
+- Trigger: owner decision list (2026-09-29), item 1
+- Options: serve native 1080P over the whole 4..15 s grid; cap it at 5 s; cap at 5 s with 10 s behind a switch
+- Decision: **H3 native 1080P is 5 s at most by default; up to 10 s is the experimental feature `h3_1080p_long`**, toggled on the console's admin page (Experimental features), stored in D1 `feature_flags`, applied to the caps at negotiation (gateway or single server), reflected in the fal form (`x-fv-max-by-resolution`) and the director's 1080p chunks
+- Reason: 10 s at 1080P needs ~47 GiB of working memory and was validated on two cells only
+- Reversibility: cheap (flag; the caps' `max_frames`)
+- Executed by: Executor
+- ADR: none
+- Verification: `crates/fastvideo-protocol/tests/negotiate.rs`, `crates/fastvideo-serve/tests/flags.rs`, `tests/dimension_sweep.rs` (flag off and on), console smoke; docs/serve/console.md §7, docs/serve/h3-1080p-and-upscaler.md
+
+### FVID · 2026-09-29 · FVID-2026-09-29-owner-decisions
+- Trigger: owner decision list (2026-09-29), items 2, 3, 5
+- Decision: (2) **over-length LTX clips run shorter** (the longest clip that fits, `Snap::Nearest`, as since `401a089`), not refused; (3) **inline inputs are the default for serverless pools** (`inline_inputs_max_bytes`, 6 MiB there); (5) **a worker refuses to report ready on a GPU that cannot run its model** (startup capability check: compute capability, FP8 / NVFP4, memory; the model is failed with the reason in `/fv/v1/status`)
+- Reversibility: cheap
+- Executed by: Executor
+- ADR: none
+- Verification: docs/serve/fal-parity.md, docs/serve/gateway.md §3.1 and §4; `crates/fastvideo-engine-service/src/device.rs` tests, `crates/fastvideo-serve/tests/flags.rs` (simulated A100)
+
 ### FVID · 2026-09-28 · FVID-2026-09-28-sfwan-stream-cap
 - Trigger: the R12 study (`docs/ports/wan.md`) rates a single-prompt SF-Wan stream (sink 15) clean for 2 min and usable to 5 min with a transient top-edge strip; owner: "yes cap SF-Wan streams"
 - Options: leave `max_seconds` to each request; cap per front-end; one shared cap for every live causal session, with or without a reset restarting the clock

@@ -92,7 +92,9 @@ impl Gateway {
         let st = pool.lock();
         // Free workers first; else the least busy ready one, whose own
         // admission answers (busy → 429): the probes and leases lag.
-        let ready = || st.workers.values().filter(|w| w.usable() && w.ready);
+        // Durable Object pools' workers have no URL here (`do:<id>`): no
+        // sessions through them (docs/serve/gateway-cloudflare.md).
+        let ready = || st.workers.values().filter(|w| w.usable() && w.ready && w.dialable());
         ready()
             .filter(|w| w.sessions == 0 && !leased.contains(&w.url))
             .min_by_key(|w| w.load())
@@ -103,7 +105,7 @@ impl Gateway {
     /// Any usable worker of `pool` (stateless signalling: ICE servers, info).
     pub(crate) fn any_worker(&self, pool: &Pool) -> Option<String> {
         let st = pool.lock();
-        st.workers.values().filter(|w| w.usable()).min_by_key(|w| w.load()).map(|w| w.url.clone())
+        st.workers.values().filter(|w| w.usable() && w.dialable()).min_by_key(|w| w.load()).map(|w| w.url.clone())
     }
 
     pub(crate) async fn lease_put(&self, l: Lease) {

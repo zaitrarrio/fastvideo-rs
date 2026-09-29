@@ -41,6 +41,8 @@ source "$HERE/../gpu/lib.sh"
 source "$HERE/variants.sh"
 # shellcheck source-path=SCRIPTDIR source=lib/registry.sh
 source "$HERE/lib/registry.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
+source "$HERE/../gpu/runpod-price.sh"
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
@@ -152,6 +154,9 @@ create() {
   name="${FV_POD_NAME_PREFIX:-fv-serve-smoke}-$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"$GPUS"
   for gpu in "${types[@]}"; do
+    # The price cap is checked on Runpod's quote BEFORE the create, never by
+    # creating and deleting an over-cap pod (scripts/gpu/runpod-price.sh).
+    fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash")" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"
       continue
@@ -161,7 +166,8 @@ create() {
     ledger "pod-created $POD $name gpu=$gpu image=$image"
     dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
-      log "pod $POD on $gpu costs \$$dph/hr > cap \$$MAX_DPH: deleting"
+      # Only when the billed price differs from the quote checked above.
+      log "pod $POD on $gpu costs \$$dph/hr > cap \$$MAX_DPH (quoted \$$FV_QUOTED_DPH): deleting"
       rest DELETE "/pods/$POD" >/dev/null || true
       ledger "pod-deleted $POD over-cap"
       POD=""

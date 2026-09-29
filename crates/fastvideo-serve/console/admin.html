@@ -59,6 +59,19 @@
           Revocation applies at once on this server; other workers sharing a D1 store pick it up within 30 s.</p>
       </div>
     </section>
+    <section class="stage span2" id="flags-section" aria-labelledby="h-flags">
+      <div class="stage-head"><h2 id="h-flags">Experimental features</h2><span id="flags-backend" class="pill" hidden></span></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="flags" hidden>
+          <thead><tr><th>Feature</th><th>What it does</th><th>Default</th><th>Changed</th><th>State</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="flags-empty" class="empty">Enter the admin token to see the experimental features.</div>
+        <div id="flags-msg" class="msg" role="status"></div>
+        <p class="hint">Flags are stored in D1 (else in the server's state dir). They apply at once on this server and
+          within 30 s on other replicas and workers; request validation and the model forms follow them.</p>
+      </div>
+    </section>
   </div>
 </main>
 </body>

@@ -205,8 +205,20 @@ pub fn status_body(h: &Health) -> serde_json::Value {
             status::versions([(b.git_sha_short.clone(), b.channel.clone())]).0
         },
         mixed_versions: false,
+        failed_models: failed_models(&engine.pool()),
     };
     status::body(false, vec![pool], status::names(caps.models(), h.gate.aliases()))
+}
+
+/// Models whose load failed (the startup capability check or a load
+/// error) and why, for `/fv/v1/status` and the worker's internal status.
+pub fn failed_models(pool: &fastvideo_engine_service::ModelPool) -> std::collections::BTreeMap<String, String> {
+    pool.entries()
+        .filter_map(|e| match &e.state {
+            fastvideo_engine_service::Residency::Failed(err) => Some((e.model.0.clone(), err.message.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 async fn status(State(h): State<Health>) -> Response {

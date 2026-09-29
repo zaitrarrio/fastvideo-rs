@@ -258,6 +258,7 @@ pub fn negotiate_noted(
     };
     check_fps(fps, caps)?;
     check_h3_geometry(caps, width, height, num_frames)?;
+    check_hd_length(caps, is_hd_canvas(caps, width, height), num_frames, fps, &req.timing.length)?;
     check_refs(req, caps)?;
     check_ref_durations(caps, staged)?;
     check_knobs(req, caps)?;
@@ -337,13 +338,18 @@ pub fn effective_canvas(req: &GenerationRequest, caps: &ModelCaps) -> CanvasSpec
 pub fn precheck(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError> {
     check_task(req, caps)?;
     let fps = requested_fps(req, caps);
+    let mut hd = false;
     let canvas = match &effective_canvas(req, caps) {
         CanvasSpec::FollowImage { short_edge } => {
             check_tier(*short_edge, caps)?;
+            hd = caps.canvas.is_hd(*short_edge);
             None
         }
         other => Some(resolve_canvas(other, caps, None)?),
     };
+    if let Some((w, h, _)) = canvas {
+        hd = is_hd_canvas(caps, w, h);
+    }
     // Audio-to-video takes its length from the staged audio by default.
     let num_frames = if req.task == Task::A2V && req.timing.length == Length::ModelDefault {
         None
@@ -354,9 +360,47 @@ pub fn precheck(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiErro
     if let (Some((w, h, _)), Some(n)) = (canvas, num_frames) {
         check_h3_geometry(caps, w, h, n)?;
     }
+    if let Some(n) = num_frames {
+        check_hd_length(caps, hd, n, fps, &req.timing.length)?;
+    }
     check_refs(req, caps)?;
     check_knobs(req, caps)?;
     plan_audio(req, caps).map(|_| ())
+}
+
+/// Whether a generation canvas is on the opt-in [`CanvasCaps::hd`] tier:
+/// above the trained pixel budget of a model that serves the tier.
+pub fn is_hd_canvas(caps: &ModelCaps, width: u32, height: u32) -> bool {
+    caps.canvas.hd.is_some() && u64::from(width) * u64::from(height) > caps.canvas.max_area
+}
+
+/// The longest clip at the opt-in tier (`HdTier::max_frames`): H3 1080P
+/// is 5 s unless the `h3_1080p_long` experimental feature is on (10 s).
+fn check_hd_length(caps: &ModelCaps, hd: bool, num_frames: u32, fps: u32, length: &Length) -> Result<(), ApiError> {
+    let Some(t) = caps.canvas.hd.filter(|_| hd) else { return Ok(()) };
+    let Some(max) = t.max_frames else { return Ok(()) };
+    if num_frames <= max {
+        return Ok(());
+    }
+    let f = f64::from(fps.max(1));
+    let secs = |n: u32| (f64::from(n) / f).floor();
+    let param = if matches!(length, Length::Frames { .. }) { "num_frames" } else { "duration" };
+    let mut msg = format!(
+        "{}P clips are limited to {} s (at most {max} frames at {fps} fps) on model `{}`; this request asks for {num_frames} frames ({:.2} s)",
+        t.short_edge,
+        secs(max),
+        caps.id,
+        f64::from(num_frames) / f,
+    );
+    if let Some(long) = t.experimental_max_frames {
+        msg += &format!(
+            ". Longer {}P clips, up to {} s, are an experimental feature (`{}`) that is off on this server; an admin can enable it under Experimental features in the console",
+            t.short_edge,
+            secs(long),
+            crate::caps::FLAG_H3_1080P_LONG
+        );
+    }
+    Err(ApiError::invalid_param(param, msg))
 }
 
 /// H3 only: the final shape check through `fastvideo_models::h3::config::H3Geometry`.

@@ -511,6 +511,18 @@ Deviations kept (each a server limit, named in the schema descriptions):
   duration past fal's matrix (12 s at 1440p) runs at the matrix's longest.
   Raising the grid needs a GPU check of the LTX engine at 505 frames (not
   done here).
+  **Owner decision (2026-09-29): over-length LTX clips run shorter.** A
+  request past the LTX grid or fal's matrix is served at the longest clip
+  that fits (the behaviour since `401a089`, `Snap::Nearest`, with the note
+  in the job log), not refused. Revisit only if the engine is validated at
+  505 frames.
+- H3 1080P: fal lists `duration` 5 to 15 at every resolution; we serve
+  1080P up to 5 s, and up to 10 s when the `h3_1080p_long` experimental
+  feature is on (owner decision 2026-09-29; docs/serve/console.md §7). A
+  longer 1080P request is a 422 on `duration` naming the limit and the
+  flag; the served schema carries the cap as
+  `x-fv-max-by-resolution: {"1080P": 5}` and the console narrows the
+  duration slider when 1080P is chosen.
 - Served schemas (`GET /fal/schema/...`, the console forms) list only what
   the endpoint's model serves: `h3-draft` 480P only (and no
   reference-to-video endpoint: no draft Ref2VA model), `minimax/h3` without

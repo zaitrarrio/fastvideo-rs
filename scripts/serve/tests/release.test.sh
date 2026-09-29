@@ -27,6 +27,9 @@ export RUNPOD_API_BASE="$M/v1" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-r
 export FV_REGISTRY_API="$M" FV_GITHUB_API="$M" GH_TOKEN=test-gh-token
 export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_CLUSTER_STATE="$T/cluster.json" FV_SERVE_LEDGER="$T/ledger.tsv"
 export FV_DEPLOYED_BY=test FV_POD_CAP_S=1 FV_ROLL_WAIT_S=30 FV_DRAIN_WAIT_S=5
+# The gateway's optional GitHub token (runpod-cluster.sh): a test file, mode 600.
+export FV_GITHUB_TOKEN_FILE="$T/github_token"
+( umask 077; printf 'test-gh-pat-0929\n' >"$FV_GITHUB_TOKEN_FILE" )
 REPO=ghcr.io/zaitrarrio/fastvideo-rs-serve
 KEYS="debug h3-turbo h3-max ltx wan wan5b sfwan gateway"
 
@@ -156,6 +159,22 @@ check "runpod-pod.sh down: the row is deleted" \
 FV_REGISTRY=0 FV_SERVE_IMAGE="$REPO@$(jq -r .debug <<<"$DA")" bash "$SERVE/runpod-pod.sh" up >/dev/null 2>>"$T/stderr.log"
 check "FV_REGISTRY=0: nothing recorded" test "$(sql "SELECT COUNT(*) AS n FROM deployments" | jq -r '.[0].n')" = 1
 
+# --- the $/hr cap is checked on Runpod's quote BEFORE a pod is created -----------
+n0="$(state | jq '.pod_creates | length')"
+if RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3" RUNPOD_GPU_MAX_DPH=1.0 FV_REGISTRY=0 FV_SERVE_IMAGE="$REPO@$(jq -r .debug <<<"$DA")" \
+    bash "$SERVE/runpod-pod.sh" up >/dev/null 2>"$T/price.log"; then
+  bad "price cap: an over-cap GPU type must not produce a pod"
+else
+  ok "price cap: runpod-pod.sh up fails when every GPU type is over the cap"
+fi
+check "price cap: no create request was sent for the over-cap type" test "$(state | jq '.pod_creates | length')" = "$n0"
+check "price cap: the log names the quote and the cap" grep -q 'quoted at \$2.99/hr, over the cap \$1.0/hr' "$T/price.log"
+line="$(RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3,NVIDIA L4" RUNPOD_GPU_MAX_DPH=1.0 FV_REGISTRY=0 FV_SERVE_IMAGE="$REPO@$(jq -r .debug <<<"$DA")" \
+  bash "$SERVE/runpod-pod.sh" up 2>>"$T/stderr.log")"
+check "price cap: the over-cap type is skipped and the next one created, once" \
+  test "$(state | jq -c --argjson n "$n0" '.pod_creates[$n:]')" = '[["NVIDIA L4"]]'
+[[ -n "${line%% *}" ]] && bash "$SERVE/runpod-pod.sh" down "${line%% *}" >/dev/null 2>>"$T/stderr.log"
+
 # --- deployed / reconcile --------------------------------------------------------
 # A stray fv pod nobody recorded, and a row for a pod that is gone.
 curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$REPO@$(jq -r .ltx <<<"$DB")\",
@@ -206,6 +225,8 @@ check "redeploy: the old worker was drained, then deleted" \
   test "$(state | jq -c '[.drains, (.pods | has("old-h3")), (.pods | has("old-wan"))]')" = '[["old-h3"],false,true]'
 check "redeploy: the gateway saw both workers, then only the new one" \
   test "$(state | jq -r '.pods.gw1.env.FV_POOL_H3_TURBO_URLS')" = "https://$NEW-8000.proxy.runpod.net"
+check "redeploy: the gateway gets FV_GITHUB_TOKEN from the mode-600 token file" \
+  test "$(state | jq -r '.pods.gw1.env.FV_GITHUB_TOKEN')" = test-gh-pat-0929
 check "redeploy: two gateway restarts, no image change" \
   test "$(state | jq -c '[.patches[] | select(.id == "gw1") | .keys]')" = '[["env"],["env"]]'
 check "redeploy: the registry has the new pod ready and the old one deleted" \
@@ -229,7 +250,8 @@ check "redeploy (per-variant cluster): wan -> wan5b image, gateway -> gateway im
 
 # --- secrets -------------------------------------------------------------------
 all="$(cat "$T"/*.out "$T/stderr.log" 2>/dev/null)"
-check "no secret in any output" bash -c '! grep -Eq "test-cf-token|test-runpod-key|test-gh-token|test-internal-token|never-print-me" <<<"$0"' "$all"
+check "no secret in any output" bash -c '! grep -Eq "test-cf-token|test-runpod-key|test-gh-token|test-gh-pat|test-internal-token|never-print-me" <<<"$0"' "$all"
+check "the GitHub token is not in the cluster state" bash -c '! grep -q "test-gh-pat" "$0"' "$T/cluster.json"
 check "no secret in the ledger" bash -c '! grep -Eq "test-|never-print-me" "$0"' "$T/ledger.tsv"
 
 printf '\nrelease.test: %d passed, %d failed\n' "$PASS" "$FAIL"

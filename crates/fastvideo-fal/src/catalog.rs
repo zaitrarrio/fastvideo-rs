@@ -601,6 +601,30 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
             let lo = i64::from(caps.frames.min.div_ceil(fps));
             let hi = i64::from(caps.frames.max / fps);
             narrow_range(&mut s, "duration", lo, hi);
+            // The opt-in H3 1080P tier's own clip cap (5 s; 10 s with the
+            // `h3_1080p_long` experimental flag): the console form narrows
+            // the duration when 1080P is picked.
+            if let Some(t) = caps.canvas.hd.filter(|t| tiers.contains(&t.short_edge)) {
+                if let (Some(max), Some(p)) = (t.max_frames, s["properties"].get_mut("duration")) {
+                    let cap = i64::from(max / fps).min(hi);
+                    let res = Resolution::ALL.iter().find(|r| r.short_edge() == t.short_edge).map(|r| r.as_str());
+                    if let Some(res) = res {
+                        let mut by = Map::new();
+                        by.insert(res.to_owned(), cap.into());
+                        p["x-fv-max-by-resolution"] = Value::Object(by);
+                        let note = match t.experimental_max_frames {
+                            Some(long) => format!(
+                                " At {res} the longest clip is {cap} s; up to {} s at {res} is an experimental feature (`{}`) an admin can enable.",
+                                long / fps,
+                                fastvideo_protocol::FLAG_H3_1080P_LONG
+                            ),
+                            None => format!(" At {res} the longest clip is {cap} s."),
+                        };
+                        let d = p["description"].as_str().unwrap_or("").to_owned();
+                        p["description"] = Value::String(format!("{d}{note}").trim_start().to_owned());
+                    }
+                }
+            }
         }
         Endpoint::LtxTextToVideoFast
         | Endpoint::LtxTextToVideoPro
