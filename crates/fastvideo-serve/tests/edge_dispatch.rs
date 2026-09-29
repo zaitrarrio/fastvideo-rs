@@ -873,3 +873,26 @@ fn noise_png(w: u32, h: u32) -> String {
     img.write_to(&mut out, image::ImageFormat::Png).unwrap();
     format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
 }
+
+/// A job with a large inline input (a ~2.3 MB envelope): the Worker spills
+/// it to R2 (above `SPILL_BYTES`, 1 MiB) and loads it for the push; the
+/// native dispatcher keeps it in memory. Either way the job runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_large_envelope_runs() {
+    init_log();
+    let d = Dispatcher::new().await;
+    let sh = Shared::new(&d.token);
+    let pool = pool_id("big");
+    let http = Http::new();
+    let w = worker(&sh, "bw", &pool, Some(&d.base), 5, 1).await;
+    connected(&d, &http, &pool, 1).await;
+    let gw = gateway(&sh, &pool, DispatchMode::DurableObject, Some(&d.base), &[]).await;
+    let g = gw.base.clone();
+    available(&http, &g).await;
+    let (s, v) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "a big fox", "image_url": noise_png(1024, 576)}))).await;
+    assert_eq!(s, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let done = http.wait(&g, &id, |v| matches!(v["status"].as_str(), Some("succeeded" | "failed")), Duration::from_secs(120)).await;
+    assert_eq!(done["status"], "succeeded", "{done}");
+    drop((gw, w));
+}
