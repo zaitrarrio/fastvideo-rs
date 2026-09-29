@@ -3,7 +3,8 @@
 // navigation between the app's endpoints and the owner's other apps.
 
 import {
-  $, el, store, K, base, apiKey, request, setMsg, ago, copyText, loadCatalog, appTasks, modelHref, topbar,
+  $, el, store, K, base, request, setMsg, ago, copyText, loadCatalog, appTasks, modelHref, topbar,
+  loadAuthMode, needsKey, poolBadge, poolWarning,
 } from './common.js';
 import { buildForm } from './form.js';
 import { snippets } from './snippets.js';
@@ -21,7 +22,8 @@ const HISTORY_MAX = 50;
 document.title = endpointId + ' · fv-serve console';
 $('title').textContent = endpointId;
 $('crumbs').append(' / ', owner, ' / ', alias);
-$('key-banner').hidden = !!apiKey();
+// The banner shows once the server is known to need a key (not for auth mode `none`).
+loadAuthMode().then(() => { $('key-banner').hidden = !needsKey(); });
 
 function fail(msg) {
   $('page-error').textContent = msg;
@@ -50,7 +52,8 @@ async function header() {
 
 // ---- uploads ---------------------------------------------------------------
 async function upload(file) {
-  if (!apiKey()) throw new Error('set an API key first');
+  await loadAuthMode();
+  if (needsKey()) throw new Error('set an API key first');
   const type = file.type || 'application/octet-stream';
   const name = (file.name || 'upload').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-100) || 'upload';
   const init = await request('POST', '/storage/upload/initiate?storage_type=fal-cdn-v3', {
@@ -249,9 +252,21 @@ $('tab-playground').onclick = () => view('playground');
 $('tab-api').onclick = () => view('api');
 
 // ---- run ----------------------------------------------------------------------
+// The served model behind this endpoint (the catalog's `model`), for the pool state.
+let modelName = null;
+// A pool warning already shown: a second Run with the same warning submits.
+let armed = null;
 async function run() {
   if (!form) return;
-  if (!apiKey()) { setMsg('run-msg', 'Set an API key first (Models page or API keys page).', 'bad'); return; }
+  await loadAuthMode();
+  if (needsKey()) { setMsg('run-msg', 'Set an API key first (Models page or API keys page).', 'bad'); return; }
+  const warn = poolWarning(modelName);
+  if (warn && armed !== warn) {
+    armed = warn;
+    setMsg('run-msg', warn + ' Click Run again to submit anyway.', 'bad');
+    return;
+  }
+  armed = null;
   if (form.busy()) { setMsg('run-msg', 'Wait for the uploads to finish.', 'bad'); return; }
   const input = form.values();
   if (!input.prompt || !String(input.prompt).trim()) { setMsg('run-msg', 'Enter a prompt.', 'bad'); return; }
@@ -280,12 +295,15 @@ $('reset').onclick = () => form && form.reset();
 // ---- boot -----------------------------------------------------------------------
 async function boot() {
   const { known, tasks } = await header();
+  const ep = known && Array.isArray(known.endpoints) ? known.endpoints.find((e) => e.sub === task) : null;
+  modelName = (ep && ep.model) || (known && known.model) || null;
   if (task === 'director') {
     $('director').hidden = false;
     const { mountDirector } = await import('./director.js');
-    mountDirector($('director'), { app, available: !!known });
+    mountDirector($('director'), { app, available: !!known, model: modelName });
     return;
   }
+  $('run').before(poolBadge(modelName));
   if (!tasks.some((t) => t.sub === task)) { fail('Unknown endpoint `' + task + '`.'); return; }
   if (!known) return;
   $('batch').hidden = false;

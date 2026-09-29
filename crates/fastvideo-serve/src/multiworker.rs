@@ -310,6 +310,7 @@ mod tests {
             ("GET", "/console/models/minimax/h3-max/text-to-video", Scope::Local),
             ("GET", "/v1/models", Scope::Local),
             ("GET", "/fv/v1/capabilities", Scope::Local),
+            ("GET", "/fv/v1/status", Scope::Local),
             ("GET", "/fal/schema/minimax/h3-max/text-to-video", Scope::Local),
             ("GET", "/.well-known/jwks.json", Scope::Local),
             ("POST", "/v1/text-to-video", Scope::Local),

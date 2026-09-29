@@ -1,4 +1,7 @@
-import { $, el, store, K, base, apiKey, request, setMsg, loadCatalog, appTasks, modelHref, topbar, refreshConnPill } from './common.js';
+import {
+  $, el, store, K, base, apiKey, request, setMsg, loadCatalog, appTasks, modelHref, topbar, refreshConnPill,
+  loadAuthMode, resetAuthMode, keyless,
+} from './common.js';
 
 topbar('home');
 
@@ -9,7 +12,12 @@ async function check() {
   const pill = $('conn-state');
   const facts = $('server-facts');
   facts.hidden = true;
-  if (!apiKey()) {
+  pill.textContent = 'checking…'; pill.className = 'pill warn';
+  await loadAuthMode();
+  // Auth mode `none`: no key field, no key check.
+  for (const id of ['key-fields', 'toggle-key', 'forget']) $(id).hidden = keyless();
+  refreshConnPill();
+  if (!keyless() && !apiKey()) {
     pill.textContent = 'no key'; pill.className = 'pill';
     setMsg('connect-msg', 'Enter an API key (or mint one on the API keys page).');
     return;
@@ -20,7 +28,7 @@ async function check() {
     const caps = await request('GET', '/fv/v1/capabilities', { auth: 'bearer' });
     const models = Array.isArray(caps.models) ? caps.models : [];
     pill.textContent = 'connected'; pill.className = 'pill ok';
-    setMsg('connect-msg', 'Key accepted by ' + base() + '.', 'ok');
+    setMsg('connect-msg', keyless() ? base() + ' needs no API key (auth mode none).' : 'Key accepted by ' + base() + '.', 'ok');
     // Live causal (SF-Wan) streams are length-limited (design §5.2).
     const live = models.filter((m) => m.stream_limits).map((m) => {
       const l = m.stream_limits;
@@ -49,7 +57,8 @@ async function check() {
 
 $('connect').onclick = () => {
   store.set(K.base, $('base').value.trim().replace(/\/+$/, ''));
-  store.set(K.key, $('apikey').value.trim());
+  if (!keyless()) store.set(K.key, $('apikey').value.trim());
+  resetAuthMode();
   refreshConnPill();
   check();
   renderModels();

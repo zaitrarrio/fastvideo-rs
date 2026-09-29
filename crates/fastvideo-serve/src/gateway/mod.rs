@@ -61,6 +61,14 @@ pub struct WorkerView {
     /// Dispatches from this replica since the last probe.
     pub inflight: u32,
     pub last_error: Option<String>,
+    /// The last failed probe got an HTTP answer (not a connection error).
+    pub answered: bool,
+    /// The last failed probe hit a worker still starting (503 `loading`
+    /// before its routes exist; its `/ping` answers 204).
+    pub starting: bool,
+    /// When a probe last succeeded.
+    #[serde(skip)]
+    pub last_ok: Option<Instant>,
 }
 
 impl WorkerView {
@@ -69,6 +77,27 @@ impl WorkerView {
     }
     fn load(&self) -> u32 {
         self.running + self.queued + self.inflight
+    }
+    /// The public status word (see [`crate::status`]).
+    pub fn state(&self) -> crate::status::State {
+        use crate::status::State as S;
+        if self.healthy {
+            if self.draining {
+                S::Draining
+            } else if !self.ready {
+                S::Loading
+            } else if self.load() > 0 {
+                S::Busy
+            } else {
+                S::Ready
+            }
+        } else if self.starting {
+            S::Loading
+        } else if self.answered {
+            S::Unhealthy
+        } else {
+            S::Down
+        }
     }
 }
 
@@ -80,6 +109,8 @@ pub struct PoolState {
     pub workers: BTreeMap<String, WorkerView>,
     /// Serverless: the last Runpod `/health` body.
     pub health: Option<Value>,
+    /// Serverless: when Runpod `/health` last answered.
+    pub health_at: Option<Instant>,
     pub available: bool,
     pub last_error: Option<String>,
     /// From the last tick (D1).

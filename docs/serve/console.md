@@ -10,13 +10,41 @@ with `curl`.
 
 | Page | What it does |
 |---|---|
-| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints |
+| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints. With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
 
 Disable the pages with `FV_CONSOLE=0` (or `server.console = false`); the
 APIs stay up.
+
+**Server status.** Every page's top bar has a status strip: one dot per
+pool (green ready, amber busy / loading / draining, grey scaled to zero, red
+unhealthy / down / failed). Click it for a panel with each pool's workers
+(state, last seen, running and queued jobs), queue depth and models. Model
+and director pages show the endpoint's pool next to Run / Start session and,
+when the pool is loading, scaled to zero, draining or down, warn first: the
+second click submits. The strip polls `GET /fv/v1/status` every 7 s while
+the tab is visible (doubling up to 60 s on errors, paused while hidden).
+
+`GET /fv/v1/status` is public in every auth mode and carries labels, states,
+ages and counts only (no worker URLs, pod or endpoint ids, IPs, tokens or
+probe errors; workers are `w1`, `w2`, … per pool). Single server: one
+`local` pool from the engine (`loading` with `{done, total}`, `ready`,
+`busy`, `draining`, `failed`). Gateway: each pool from the tick's probes
+(pods per worker, including `loading` for a worker still starting;
+serverless from Runpod's `/health` worker counts, `scaled_to_zero` with no
+worker). Shape (see `crates/fastvideo-serve/src/status.rs`):
+
+```json
+{"object": "fv.status", "gateway": true, "state": "ready",
+ "pools": [{"id": "h3", "kind": "pod", "state": "busy", "available": true,
+            "models": ["h3-turbo"], "queued": 2, "running": 1, "last_seen_s": 1.4,
+            "workers": [{"label": "w1", "state": "busy", "last_seen_s": 1.4,
+                         "running": 1, "queued": 0, "sessions": 0}]}],
+ "models": {"h3-turbo": {"state": "busy", "pools": ["h3"]}},
+ "names": {"h3-turbo": "h3-turbo"}}
+```
 
 ## 1. The admin token
 
@@ -178,7 +206,10 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   (minted keys on every API); `fastvideo-fal` `catalog` (schema agrees with
   validation); `fastvideo-serve` `tests/console.rs` (full router: admin
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
-  and content types, `/fal/schema`) and `console` unit tests (every asset
+  and content types, `/fal/schema`, `auth.mode` in capabilities, the keyless
+  flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining),
+  `tests/gateway.rs` (status per pool and worker with nothing secret, a
+  killed worker turning `down`, a gateway with auth `none`) and `console` unit tests (every asset
   referenced is embedded; no inline scripts).
 - Browser: `bash tests/console/run.sh` builds `fv-serve --features
   fake,encoders`, starts it with no config file and without

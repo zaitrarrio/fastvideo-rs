@@ -19,9 +19,11 @@
         <label for="base">Server URL</label>
         <input id="base" spellcheck="false" autocomplete="off" placeholder="same origin">
         <p class="hint">Leave empty to use this page's origin.</p>
-        <label for="apikey">API key</label>
-        <input id="apikey" type="password" spellcheck="false" autocomplete="off" placeholder="fv_…">
-        <p class="hint">Mint one on the <a href="/console/admin">API keys</a> page with the admin token. It is kept in this browser's local storage.</p>
+        <div id="key-fields">
+          <label for="apikey">API key</label>
+          <input id="apikey" type="password" spellcheck="false" autocomplete="off" placeholder="fv_…">
+          <p class="hint">Mint one on the <a href="/console/admin">API keys</a> page with the admin token. It is kept in this browser's local storage.</p>
+        </div>
         <div class="actions">
           <button id="connect" class="primary">Save and check</button>
           <button id="toggle-key" type="button">Show key</button>

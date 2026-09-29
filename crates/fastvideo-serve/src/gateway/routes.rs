@@ -1,5 +1,7 @@
 //! Gateway-only HTTP: the aggregated `/fv/v1/capabilities` body, the pool
-//! metrics `GET /fv/v1/gateway/pools` (admin token), and `/ping`,
+//! metrics `GET /fv/v1/gateway/pools` (admin token), the public status view
+//! `GET /fv/v1/status` ([`crate::status`]: pool and worker states from the
+//! tick's probes, no URLs or ids), and `/ping`,
 //! `/health`, `/healthz`, `/`, `/metrics` reflecting pool health
 //! (docs/serve/gateway.md §4, §6, §7).
 
@@ -65,6 +67,66 @@ pub fn pools(gw: &Gateway) -> Vec<Value> {
         .collect()
 }
 
+/// The gateway's `/fv/v1/status` body: each pool's state from the tick's
+/// probes (pods: per worker, labelled `w1`, `w2`, …; serverless: Runpod's
+/// `/health` worker counts) and its D1 queue depth and running jobs.
+pub fn status_body(gw: &Gateway) -> Value {
+    use crate::status::{self, PoolStatus, State as S, WorkerStatus};
+    let cat = gw.catalog();
+    let pools: Vec<PoolStatus> = gw
+        .pools
+        .iter()
+        .map(|p| {
+            let available = p.available();
+            let st = p.lock();
+            let models: Vec<String> = st.live_caps.as_ref().unwrap_or(&p.static_caps).iter().map(|(c, _)| c.id.0.clone()).collect();
+            let kind = serde_json::to_value(p.cfg.kind).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            let (state, workers, last_seen, counts) = if p.is_pod() {
+                let workers: Vec<WorkerStatus> = st
+                    .workers
+                    .values()
+                    .enumerate()
+                    .map(|(i, w)| WorkerStatus {
+                        label: format!("w{}", i + 1),
+                        state: w.state(),
+                        last_seen_s: status::age_s(w.last_ok),
+                        running: w.running,
+                        queued: w.queued,
+                        sessions: w.sessions,
+                    })
+                    .collect();
+                let last = st.workers.values().filter_map(|w| w.last_ok).max();
+                (status::pool_state(&workers), workers, last, None)
+            } else {
+                let counts = st.health.as_ref().map(status::worker_counts).unwrap_or_default();
+                let state = if st.available {
+                    status::serverless_state(&counts)
+                } else if st.last_error.is_some() {
+                    S::Down
+                } else {
+                    // Not probed yet.
+                    S::Loading
+                };
+                (state, Vec::new(), st.health_at, Some(counts))
+            };
+            PoolStatus {
+                id: p.id().to_owned(),
+                kind,
+                state,
+                available,
+                models,
+                queued: st.queued,
+                running: st.running,
+                last_seen_s: status::age_s(last_seen),
+                workers,
+                loading: None,
+                worker_counts: counts,
+            }
+        })
+        .collect();
+    status::body(true, pools, status::names(cat.table.models(), &cat.aliases))
+}
+
 #[derive(Clone)]
 struct HealthState {
     gw: Arc<Gateway>,
@@ -88,6 +150,7 @@ pub fn routes(
         .route("/", get(root))
         .route("/metrics", get(metrics_text))
         .route("/fv/v1/gateway/pools", get(pools_route))
+        .route("/fv/v1/status", get(status_route))
         .with_state(HealthState { gw, admin, metrics, root_model })
 }
 
@@ -148,6 +211,10 @@ async fn metrics_text(State(h): State<HealthState>) -> Response {
     metrics::gauge!("fv_ready").set(if phase(&h.gw).0 == "ready" { 1.0 } else { 0.0 });
     handle.run_upkeep();
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], handle.render()).into_response()
+}
+
+async fn status_route(State(h): State<HealthState>) -> Response {
+    Json(status_body(&h.gw)).into_response()
 }
 
 async fn pools_route(State(h): State<HealthState>, headers: HeaderMap) -> Response {

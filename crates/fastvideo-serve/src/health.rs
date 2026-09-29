@@ -13,6 +13,9 @@
 //! - `GET /`: `{"model": <first served name>, "server": "fv-serve", ...}`
 //!   (FastWan reads `model`).
 //! - `GET /metrics`: Prometheus text.
+//! - `GET /fv/v1/status`: the public status view ([`crate::status`]): one
+//!   `local` pool with the engine's state (loading with progress, ready,
+//!   busy, draining, failed), queue depth and running jobs. No credentials.
 
 use std::sync::Arc;
 
@@ -78,6 +81,7 @@ pub fn routes(h: Health) -> Router {
         .route("/healthz", get(healthz))
         .route("/", get(root))
         .route("/metrics", get(metrics_text))
+        .route("/fv/v1/status", get(status))
         .with_state(h)
 }
 
@@ -152,6 +156,47 @@ async fn healthz(State(h): State<Health>) -> Response {
     });
     let code = if phase == Phase::Ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (code, Json(body)).into_response()
+}
+
+/// The single-server status body (see [`crate::status`]).
+pub fn status_body(h: &Health) -> serde_json::Value {
+    use crate::status::{self, PoolStatus, State as S, WorkerStatus};
+    let engine = h.gate.engine();
+    let s = engine.stats();
+    let running = s.running as u32;
+    let queued = (s.queued_batch + s.queued_stream) as u32;
+    let (state, loading) = match h.phase() {
+        Phase::Draining => (S::Draining, None),
+        Phase::Failed => (S::Failed, None),
+        Phase::Loading => {
+            let p = match engine.readiness() {
+                Readiness::Loading { done, total } => Some(json!({"done": done, "total": total})),
+                _ => None,
+            };
+            (S::Loading, p)
+        }
+        Phase::Ready if running + queued > 0 => (S::Busy, None),
+        Phase::Ready => (S::Ready, None),
+    };
+    let caps = engine.caps();
+    let pool = PoolStatus {
+        id: "local".into(),
+        kind: "local".into(),
+        state,
+        available: matches!(state, S::Ready | S::Busy),
+        models: caps.models().map(|m| m.id.0.clone()).collect(),
+        queued,
+        running,
+        last_seen_s: Some(0.0),
+        workers: vec![WorkerStatus { label: "local".into(), state, last_seen_s: Some(0.0), running, queued, sessions: s.sessions as u32 }],
+        loading,
+        worker_counts: None,
+    };
+    status::body(false, vec![pool], status::names(caps.models(), h.gate.aliases()))
+}
+
+async fn status(State(h): State<Health>) -> Response {
+    Json(status_body(&h)).into_response()
 }
 
 async fn root(State(h): State<Health>) -> Response {

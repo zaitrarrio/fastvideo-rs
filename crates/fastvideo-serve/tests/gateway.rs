@@ -195,6 +195,11 @@ fn serverless_pool(id: &str, models: &[&str]) -> PoolCfg {
 }
 
 async fn gateway(sh: &Shared, pools: Vec<PoolCfg>, runpod_base: &str, ov: Overrides) -> Running {
+    gateway_with(sh, pools, runpod_base, ov, |_| {}).await
+}
+
+/// [`gateway`] with `edit` applied to its config before validation.
+async fn gateway_with(sh: &Shared, pools: Vec<PoolCfg>, runpod_base: &str, ov: Overrides, edit: impl FnOnce(&mut Config)) -> Running {
     let (l, base) = listen().await;
     let mut c = base_config("gw", sh);
     c.engine.backend = EngineBackendKind::Remote;
@@ -205,6 +210,7 @@ async fn gateway(sh: &Shared, pools: Vec<PoolCfg>, runpod_base: &str, ov: Overri
     c.gateway.reactor_model = Some("fake-sfwan".into());
     c.gateway.runpod_api_base = format!("{runpod_base}/v2");
     c.gateway.runpod_api_key = fastvideo_serve::config::Secret("rp-key".into());
+    edit(&mut c);
     c.validate().unwrap();
     serve(c, sh, l, base, ov).await
 }
@@ -308,6 +314,39 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     }
     assert_eq!(caps["aliases"]["h3-turbo"], "fake-h3-turbo");
     assert_eq!(caps["pools"].as_array().unwrap().len(), 3);
+    // The gateway's own auth mode (the console reads it), no secrets.
+    assert_eq!(caps["auth"], json!({"mode": "keys"}), "{caps}");
+    assert!(!caps.to_string().contains(KEY) && !caps.to_string().contains(TOKEN) && !caps.to_string().contains(ADMIN));
+
+    // Public status view (no key even in keys mode): per-pool and per-worker
+    // state from the tick's probes, with no URLs, endpoint or worker ids.
+    let stv = http
+        .poll(&format!("{g}/fv/v1/status"), None, |v| {
+            // Probed at least once (before that, configured workers are assumed up with no last-seen).
+            v["pools"].as_array().is_some_and(|p| p.iter().any(|p| p["id"] == "h3" && p["workers"][0]["last_seen_s"].is_number()))
+        })
+        .await;
+    assert_eq!(stv["object"], "fv.status");
+    assert_eq!(stv["gateway"], true);
+    let text = stv.to_string();
+    for secret in [h3.base.as_str(), ltx.base.as_str(), "127.0.0.1", KEY, TOKEN, ADMIN, "rp-key", "sim-ep", "worker-h3", "worker-ltx"] {
+        assert!(!text.contains(secret), "status leaks {secret}: {stv}");
+    }
+    let by_id: BTreeMap<String, Value> = stv["pools"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap().to_owned(), p.clone())).collect();
+    let h3s = &by_id["h3"];
+    assert_eq!(h3s["kind"], "pod");
+    assert!(matches!(h3s["state"].as_str(), Some("ready" | "busy")), "{h3s}");
+    assert_eq!(h3s["available"], true);
+    assert_eq!(h3s["workers"][0]["label"], "w1");
+    assert!(matches!(h3s["workers"][0]["state"].as_str(), Some("ready" | "busy")), "{h3s}");
+    assert!(h3s["workers"][0]["last_seen_s"].as_f64().is_some_and(|s| s < 30.0), "{h3s}");
+    assert!(h3s["queued"].is_u64() && h3s["running"].is_u64());
+    let wan = &by_id["wan"];
+    assert_eq!(wan["kind"], "runpod-serverless");
+    assert!(wan["worker_counts"].is_object(), "{wan}");
+    assert_ne!(wan["state"], "down", "{wan}");
+    assert_eq!(stv["models"]["fake-h3-turbo"]["pools"], json!(["h3"]));
+    assert_eq!(stv["names"]["h3-turbo"], "fake-h3-turbo");
     // The worker itself refuses anything without the internal token.
     let (s, _, _) = http.call("GET", &format!("{}/fv/v1/capabilities", h3.base), None, bearer()).await;
     assert_eq!(s, 401);
@@ -523,6 +562,56 @@ async fn serverless_cancel_and_lost_runpod_job() {
     assert_eq!(done["status"], "succeeded", "{done}");
     let second = sh.mock.sql("SELECT d.ref AS ref, d.attempt AS attempt FROM gw_dispatch d JOIN jobs j ON j.id = d.job_id WHERE j.external_id = ?", &[json!(id2)]).unwrap();
     assert_ne!(second[0]["ref"].as_str().unwrap(), first);
+}
+
+/// A gateway with `FV_AUTH_MODE=none` (its workers stay trust-gateway
+/// behind the internal token): capabilities say so without credentials, and
+/// a fal job runs through the pool with no key, as the console sends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gateway_with_auth_none_reports_it_and_takes_keyless_jobs() {
+    let sh = Shared::new();
+    let h3 = pod_worker(&sh, "h3-open", &["fake-h3-turbo"], 5).await;
+    let sim = Sim::new("rp-key");
+    let (sim_base, _t) = sim.serve("127.0.0.1:0").await.unwrap();
+    let gw = gateway_with(&sh, vec![pod_pool("h3", &[&h3.base], &["fake-h3-turbo"])], &sim_base, Overrides::default(), |c| {
+        c.auth.mode = fastvideo_serve_kit::AuthMode::None;
+    })
+    .await;
+    let g = &gw.base;
+    let http = Http::new();
+
+    let (s, caps, _) = http.call("GET", &format!("{g}/fv/v1/capabilities"), None, None).await;
+    assert_eq!(s, 200, "{caps}");
+    assert_eq!(caps["auth"], json!({"mode": "none"}), "{caps}");
+    assert_eq!(caps["gateway"], true);
+    assert!(!caps.to_string().contains(TOKEN) && !caps.to_string().contains(ADMIN));
+
+    let (s, sub, _) = http.call("POST", &format!("{g}/minimax/h3-turbo/text-to-video"), Some(json!({"prompt": "a red fox"})), None).await;
+    assert_eq!(s, 200, "{sub}");
+    let rid = sub["request_id"].as_str().unwrap();
+    http.poll(&format!("{g}/minimax/h3-turbo/requests/{rid}/status"), None, |v| v["status"] == "COMPLETED").await;
+    let (s, out, _) = http.call("GET", &format!("{g}/minimax/h3-turbo/requests/{rid}"), None, None).await;
+    assert_eq!(s, 200, "{out}");
+    assert!(out["video"]["url"].is_string(), "{out}");
+
+    // Admin routes keep the admin token.
+    let (s, _, _) = http.call("GET", &format!("{g}/fv/v1/admin/keys"), None, None).await;
+    assert_eq!(s, 401);
+
+    // The status view follows the worker: ready, then down once it is gone.
+    let st = http
+        .poll(&format!("{g}/fv/v1/status"), None, |v| v["pools"][0]["workers"][0]["state"] == "ready" && v["pools"][0]["workers"][0]["last_seen_s"].is_number())
+        .await;
+    assert_eq!(st["pools"][0]["state"], "ready", "{st}");
+    assert_eq!(st["state"], "ready");
+    assert_eq!(st["models"]["fake-h3-turbo"]["state"], "ready");
+    h3.kill();
+    let st = http.poll(&format!("{g}/fv/v1/status"), None, |v| v["pools"][0]["state"] == "down").await;
+    assert_eq!(st["pools"][0]["workers"][0]["state"], "down", "{st}");
+    assert_eq!(st["pools"][0]["available"], false);
+    assert!(st["pools"][0]["workers"][0]["last_seen_s"].is_number(), "{st}");
+    assert_eq!(st["models"]["fake-h3-turbo"]["state"], "down");
+    assert!(!st.to_string().contains(&h3.base));
 }
 
 #[cfg(feature = "reactor")]

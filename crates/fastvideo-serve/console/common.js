@@ -39,6 +39,29 @@ export function base() {
 }
 export const apiKey = () => store.get(K.key).trim();
 
+// The server's auth mode, `auth.mode` of `GET /fv/v1/capabilities` probed
+// with no credentials. `none` (FV_AUTH_MODE=none) means the API takes no key:
+// the console then drops its key prompts and sends no `Authorization`
+// (except the admin token on the admin page, which admin routes always
+// need). A 401, a server without the native API or an older server that does
+// not report the mode all count as `keys`.
+let authModePromise = null;
+let openServer = false;
+export function loadAuthMode() {
+  if (!authModePromise) {
+    authModePromise = request('GET', '/fv/v1/capabilities', { auth: null })
+      .then((c) => (c && c.auth && typeof c.auth.mode === 'string' ? c.auth.mode : 'keys'), () => 'keys')
+      .then((m) => { openServer = m === 'none'; return m; });
+  }
+  return authModePromise;
+}
+// Probe again (the server URL changed).
+export function resetAuthMode() { authModePromise = null; openServer = false; }
+// True once the server reported `auth.mode = none`.
+export const keyless = () => openServer;
+// A request would be refused for lack of a key.
+export const needsKey = () => !openServer && !apiKey();
+
 export function errorText(status, body) {
   if (body && body.error && body.error.message) return body.error.message;
   if (body && body.detail !== undefined) {
@@ -66,7 +89,8 @@ export class HttpError extends Error {
 export async function request(method, path, { auth = 'key', token, body, root } = {}) {
   const headers = { Accept: 'application/json' };
   const secret = token ?? (auth === 'admin' ? session.get(K.admin) : apiKey());
-  if (auth && secret) headers.Authorization = (auth === 'key' ? 'Key ' : 'Bearer ') + secret;
+  // An open server (auth mode `none`) gets no API key; the admin token still goes to admin routes.
+  if (auth && secret && (auth === 'admin' || !openServer)) headers.Authorization = (auth === 'key' ? 'Key ' : 'Bearer ') + secret;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const url = /^https?:/.test(path) ? path : (root || base()) + path;
   let resp;
@@ -145,12 +169,158 @@ function applyTheme(t) {
   else delete document.documentElement.dataset.theme;
 }
 
-// The top bar: brand, nav, connection pill, theme toggle.
+// ---- server status (GET /fv/v1/status) --------------------------------------
+// Public and credential-free: pool and worker states, queue depth, running
+// jobs. Polled every POLL_MS while the tab is visible, backing off on errors.
+
+const STATE_TEXT = {
+  ready: 'ready', busy: 'busy', loading: 'loading', scaled_to_zero: 'scaled to zero',
+  draining: 'draining', unhealthy: 'unhealthy', down: 'down', failed: 'failed',
+};
+// Dot colour: green ready, amber loading / busy / draining, grey scaled to zero or unknown, red down.
+export function stateTone(s) {
+  return { ready: 'ok', busy: 'warn', loading: 'warn', draining: 'warn', unhealthy: 'bad', down: 'bad', failed: 'bad' }[s] || 'idle';
+}
+export const stateText = (s) => STATE_TEXT[s] || s || 'unknown';
+export const dot = (state, title) => el('span', { class: 'dot ' + stateTone(state), title, 'data-state': state || 'unknown', 'aria-hidden': 'true' });
+
+const POLL_MS = 7000;
+const POLL_MAX_MS = 60000;
+let lastStatus = null;
+const statusSubs = new Set();
+let pollTimer = null;
+let pollDelay = POLL_MS;
+let pollBusy = false;
+let polling = false;
+
+// `cb(status)` on every poll (`status.error` set when the poll failed); now if known.
+export function onStatus(cb) {
+  statusSubs.add(cb);
+  if (lastStatus) cb(lastStatus);
+  return () => statusSubs.delete(cb);
+}
+
+// The model behind `name` (a fal app's `model`, an alias or an id) and its pools.
+export function modelStatus(st, name) {
+  if (!st || !st.models || !name) return null;
+  const id = (st.names && st.names[name]) || name;
+  const m = st.models[id];
+  if (!m) return null;
+  return { id, state: m.state, pools: (st.pools || []).filter((p) => (m.pools || []).includes(p.id)) };
+}
+
+// A warning before submitting to `name`'s model, or null when it can take work.
+export function poolWarning(name) {
+  const m = modelStatus(lastStatus, name);
+  if (!m) return null;
+  const where = m.pools.map((p) => p.id).join(', ') || m.id;
+  switch (m.state) {
+    case 'ready': case 'busy': return null;
+    case 'loading': return 'The pool serving ' + m.id + ' (' + where + ') is still loading; the job will wait until it is ready.';
+    case 'scaled_to_zero': return 'The pool serving ' + m.id + ' (' + where + ') has no running worker; a cold start can take minutes.';
+    case 'draining': return 'The pool serving ' + m.id + ' (' + where + ') is draining and takes no new work.';
+    default: return 'The pool serving ' + m.id + ' (' + where + ') is ' + stateText(m.state) + '; the request will probably fail.';
+  }
+}
+
+function publish(st) {
+  lastStatus = st;
+  for (const cb of statusSubs) { try { cb(st); } catch { /* a subscriber's bug is not the poller's */ } }
+}
+
+async function pollStatus() {
+  pollTimer = null;
+  if (document.hidden || pollBusy) return;
+  pollBusy = true;
+  let stop = false;
+  try {
+    publish(await request('GET', '/fv/v1/status', { auth: null }));
+    pollDelay = POLL_MS;
+  } catch (e) {
+    // 404: a server without the status view; stop asking.
+    stop = e.status === 404;
+    publish({ error: e.message, http_status: e.status, pools: [], models: {} });
+    pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);
+  } finally {
+    pollBusy = false;
+  }
+  if (!stop && !document.hidden) pollTimer = setTimeout(pollStatus, pollDelay);
+}
+
+export function startStatusPolling() {
+  if (polling) return;
+  polling = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { clearTimeout(pollTimer); pollTimer = null; } else if (!pollTimer) pollStatus();
+  });
+  pollStatus();
+}
+
+function ageText(s) {
+  if (s === null || s === undefined) return 'never seen';
+  if (s < 1) return 'just now';
+  if (s < 90) return Math.round(s) + ' s ago';
+  return Math.round(s / 60) + ' min ago';
+}
+
+function poolLine(p) {
+  const w = p.workers || [];
+  const counts = p.worker_counts ? Object.entries(p.worker_counts).filter(([, n]) => n).map(([k, n]) => n + ' ' + k).join(', ') : '';
+  return p.id + ' (' + p.kind + '): ' + stateText(p.state)
+    + (w.length ? ', ' + w.length + ' worker' + (w.length > 1 ? 's' : '') : counts ? ', workers: ' + counts : '')
+    + ', ' + (p.queued || 0) + ' queued, ' + (p.running || 0) + ' running';
+}
+
+function renderStatus(strip, panel, st) {
+  if (st.error) {
+    strip.replaceChildren(dot(null), el('span', { class: 'status-label' }, st.http_status === 404 ? 'no status' : 'status unavailable'));
+    strip.title = 'Server status: ' + st.error;
+    panel.replaceChildren(el('p', { class: 'hint' }, 'Could not read ' + base() + '/fv/v1/status: ' + st.error));
+    strip.hidden = st.http_status === 404;
+    return;
+  }
+  strip.hidden = false;
+  const pools = st.pools || [];
+  strip.replaceChildren(...pools.map((p) => el('span', { class: 'status-pool', 'data-pool': p.id, 'data-state': p.state },
+    dot(p.state), el('span', { class: 'status-label' }, p.id))));
+  if (!pools.length) strip.append(dot('down'), el('span', { class: 'status-label' }, 'no pools'));
+  strip.title = pools.map(poolLine).join('\n') || 'No pools';
+  panel.replaceChildren(el('div', { class: 'status-scroll' }, el('table', { class: 'status-table' },
+    el('thead', {}, el('tr', {}, ['Pool', 'State', 'Workers', 'Queued', 'Running', 'Last seen', 'Models'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, pools.map((p) => el('tr', { 'data-pool': p.id },
+      el('td', {}, dot(p.state), ' ', p.id, el('small', {}, ' ' + p.kind)),
+      el('td', {}, stateText(p.state), p.loading ? ' (' + p.loading.done + '/' + p.loading.total + ')' : ''),
+      el('td', {}, (p.workers || []).length
+        ? (p.workers || []).map((w) => el('div', { 'data-worker': w.label, 'data-state': w.state }, dot(w.state), ' ', w.label + ' ' + stateText(w.state)
+          + ' · ' + ageText(w.last_seen_s) + (w.running || w.queued ? ' · ' + w.running + ' running, ' + w.queued + ' queued' : '')))
+        : p.worker_counts ? Object.entries(p.worker_counts).map(([k, n]) => n + ' ' + k).join(', ') || 'none' : 'none'),
+      el('td', {}, String(p.queued || 0)),
+      el('td', {}, String(p.running || 0)),
+      el('td', {}, ageText(p.last_seen_s)),
+      el('td', {}, (p.models || []).join(', '))))))));
+}
+
+// A "pool: state" badge for `name`'s model (the model and director pages).
+export function poolBadge(name) {
+  const node = el('span', { class: 'pool-badge', id: 'pool-state', hidden: true });
+  onStatus((st) => {
+    const m = modelStatus(st, name);
+    if (!m) { node.hidden = true; return; }
+    node.hidden = false;
+    node.dataset.state = m.state;
+    node.replaceChildren(dot(m.state), ' ', (m.pools.map((p) => p.id).join(', ') || m.id) + ': ' + stateText(m.state));
+    node.title = m.pools.map(poolLine).join('\n');
+  });
+  return node;
+}
+
+// The top bar: brand, nav, status strip, connection pill, theme toggle.
 export function topbar(active) {
   applyTheme(store.get(K.theme));
   const link = (href, text, id) => el('a', { href, 'aria-current': active === id ? 'page' : undefined }, text);
-  const pill = el('span', { id: 'conn', class: 'pill' }, apiKey() ? 'key set' : 'no API key');
-  if (apiKey()) pill.classList.add('ok');
+  const pill = el('span', { id: 'conn', class: 'pill' });
+  connPill(pill);
+  loadAuthMode().then(() => refreshConnPill());
   const theme = el('button', { class: 'small', type: 'button', title: 'Switch light / dark / system theme' });
   const label = () => { theme.textContent = { light: 'Light', dark: 'Dark' }[store.get(K.theme)] || 'Auto'; };
   theme.onclick = () => {
@@ -158,19 +328,33 @@ export function topbar(active) {
     store.set(K.theme, next); applyTheme(next); label();
   };
   label();
+  const strip = el('button', { id: 'status-strip', class: 'status-strip', type: 'button', 'aria-expanded': 'false', 'aria-controls': 'status-panel', title: 'Server status' },
+    dot(null), el('span', { class: 'status-label' }, 'status…'));
+  const panel = el('div', { id: 'status-panel', class: 'status-panel', hidden: true });
   const bar = el('header', { class: 'topbar' },
     el('div', { class: 'topbar-in' },
       el('a', { class: 'brand', href: '/console' }, 'fv-serve', el('small', {}, 'console')),
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
         link('/console', 'Models', 'home'), link('/console/admin', 'API keys', 'admin')),
-      el('span', { class: 'spacer' }), pill, theme));
+      el('span', { class: 'spacer' }), strip, pill, theme),
+    panel);
+  strip.onclick = () => {
+    panel.hidden = !panel.hidden;
+    strip.setAttribute('aria-expanded', String(!panel.hidden));
+  };
+  onStatus((st) => renderStatus(strip, panel, st));
+  startStatusPolling();
   document.body.prepend(bar);
   return bar;
 }
 
-export function refreshConnPill() {
-  const p = $('conn');
-  if (!p) return;
+function connPill(p) {
+  if (openServer) { p.textContent = 'no key needed'; p.className = 'pill ok'; return; }
   p.textContent = apiKey() ? 'key set' : 'no API key';
   p.className = 'pill' + (apiKey() ? ' ok' : '');
+}
+
+export function refreshConnPill() {
+  const p = $('conn');
+  if (p) connPill(p);
 }
