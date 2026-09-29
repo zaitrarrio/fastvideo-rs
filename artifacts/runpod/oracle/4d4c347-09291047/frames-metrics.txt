@@ -1,0 +1,56 @@
+[ltx25-extend-frames] ours kept frames vs source psnr: PSNR y:41.469072 u:49.481360 v:49.913609 average:42.914779 min:39.533732 max:44.196430
+[ltx25-extend-frames] ours kept frames vs source ssim: SSIM Y:0.974415 (15.920206) U:0.990590 (20.263879) V:0.991272 (20.590950) All:0.979921 (16.972476)
+[ltx25-extend-frames] ours vs reference clip psnr: PSNR y:45.008275 u:49.554771 v:50.253488 average:46.115349 min:45.056426 max:46.835766
+[ltx25-extend-frames] ours vs reference clip ssim: SSIM Y:0.986858 (18.813483) U:0.993577 (21.922466) V:0.994082 (22.278410) All:0.989182 (19.658541)
+[ltx25-extend-frames] ours: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=330
+[ltx25-extend-frames] ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=169
+[ltx25-extend-frames] ownenc kept frames vs source psnr: PSNR y:41.582703 u:49.520271 v:49.884744 average:43.020828 min:39.627101 max:44.304716
+[ltx25-extend-frames] ownenc kept frames vs source ssim: SSIM Y:0.974417 (15.920467) U:0.990682 (20.306909) V:0.991252 (20.581158) All:0.979934 (16.975333)
+[ltx25-extend-frames] ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=330
+[ltx25-extend-frames] ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=169
+[ltx25-extend-frames] reference kept frames vs source psnr: PSNR y:41.098268 u:47.987278 v:48.872951 average:42.473356 min:39.362444 max:43.614914
+[ltx25-extend-frames] reference kept frames vs source ssim: SSIM Y:0.974144 (15.874402) U:0.989906 (19.959397) V:0.990617 (20.276688) All:0.979517 (16.885982)
+[ltx25-extend-frames] reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=330
+[ltx25-extend-frames] reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=169
+[ltx25-retake-a-frames] ours kept frames vs source psnr: PSNR y:41.588010 u:49.468448 v:49.869976 average:43.023300 min:39.551620 max:44.196430
+[ltx25-retake-a-frames] ours kept frames vs source ssim: SSIM Y:0.974903 (16.003818) U:0.990558 (20.249492) V:0.991178 (20.544331) All:0.980225 (17.038803)
+[ltx25-retake-a-frames] ours vs reference clip psnr: PSNR y:44.942526 u:49.640663 v:50.301341 average:46.068097 min:45.205400 max:46.835766
+[ltx25-retake-a-frames] ours vs reference clip ssim: SSIM Y:0.986818 (18.800093) U:0.993661 (21.979875) V:0.994133 (22.315678) All:0.989177 (19.656708)
+[ltx25-retake-a-frames] ours: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-a-frames] ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-a-frames] ownenc kept frames vs source psnr: PSNR y:41.697621 u:49.482290 v:49.832601 average:43.124110 min:39.621635 max:44.304716
+[ltx25-retake-a-frames] ownenc kept frames vs source ssim: SSIM Y:0.974862 (15.996761) U:0.990587 (20.262707) V:0.991150 (20.530575) All:0.980198 (17.032857)
+[ltx25-retake-a-frames] ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-a-frames] ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-a-frames] reference kept frames vs source psnr: PSNR y:41.202049 u:47.940769 v:48.848698 average:42.565032 min:39.344236 max:43.614534
+[ltx25-retake-a-frames] reference kept frames vs source ssim: SSIM Y:0.974576 (15.947615) U:0.989794 (19.911638) V:0.990522 (20.233054) All:0.979770 (16.940120)
+[ltx25-retake-a-frames] reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-a-frames] reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] ours kept frames vs source psnr: PSNR y:41.500335 u:49.545301 v:49.894717 average:42.945559 min:40.502057 max:44.107331
+[ltx25-retake-frames] ours kept frames vs source ssim: SSIM Y:0.974139 (15.873533) U:0.990748 (20.337453) V:0.991265 (20.587162) All:0.979761 (16.938175)
+[ltx25-retake-frames] ours vs reference clip psnr: PSNR y:44.942038 u:49.686418 v:50.297237 average:46.070750 min:45.194115 max:46.782676
+[ltx25-retake-frames] ours vs reference clip ssim: SSIM Y:0.986863 (18.815022) U:0.993860 (22.118290) V:0.994167 (22.340935) All:0.989246 (19.684473)
+[ltx25-retake-frames] ours: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] ownenc kept frames vs source psnr: PSNR y:41.595356 u:49.571811 v:49.877775 average:43.034251 min:40.362528 max:44.290390
+[ltx25-retake-frames] ownenc kept frames vs source ssim: SSIM Y:0.974056 (15.859587) U:0.990781 (20.352944) V:0.991253 (20.581353) All:0.979709 (16.927050)
+[ltx25-retake-frames] ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] reference kept frames vs source psnr: PSNR y:41.094395 u:48.068375 v:48.931804 average:42.475806 min:40.268195 max:43.521301
+[ltx25-retake-frames] reference kept frames vs source ssim: SSIM Y:0.973738 (15.806718) U:0.990030 (20.013149) V:0.990710 (20.319970) All:0.979282 (16.836536)
+[ltx25-retake-frames] reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-v-frames] ours kept frames vs source psnr: PSNR y:41.499573 u:49.555002 v:49.940778 average:42.946746 min:40.502252 max:44.116294
+[ltx25-retake-v-frames] ours kept frames vs source ssim: SSIM Y:0.974163 (15.877498) U:0.990765 (20.345583) V:0.991349 (20.629530) All:0.979794 (16.945209)
+[ltx25-retake-v-frames] ours vs reference clip psnr: PSNR y:44.938805 u:49.679870 v:50.271130 average:46.065833 min:45.138429 max:46.872606
+[ltx25-retake-v-frames] ours vs reference clip ssim: SSIM Y:0.986874 (18.818814) U:0.993844 (22.107106) V:0.994179 (22.349833) All:0.989253 (19.687299)
+[ltx25-retake-v-frames] ours: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-v-frames] ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-v-frames] ownenc kept frames vs source psnr: PSNR y:41.592027 u:49.555323 v:49.872545 average:43.030369 min:40.350926 max:44.275857
+[ltx25-retake-v-frames] ownenc kept frames vs source ssim: SSIM Y:0.974031 (15.855364) U:0.990754 (20.340625) V:0.991222 (20.566283) All:0.979683 (16.921434)
+[ltx25-retake-v-frames] ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-v-frames] ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-v-frames] reference kept frames vs source psnr: PSNR y:41.088893 u:48.045676 v:48.941674 average:42.470090 min:40.253569 max:43.556027
+[ltx25-retake-v-frames] reference kept frames vs source ssim: SSIM Y:0.973719 (15.803504) U:0.990008 (20.003691) V:0.990673 (20.302796) All:0.979259 (16.831776)
+[ltx25-retake-v-frames] reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-v-frames] reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121

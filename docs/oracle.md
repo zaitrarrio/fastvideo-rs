@@ -489,6 +489,106 @@ driving audio decode + encode on ours is a fraction of a second. Lip sync of
 the served clips: docs/serve/e2e/ltx.md, "Audio-to-video". Spend: upstream
 pod 35 min (15 min of image pull), runtime pod 9 min: $1.55.
 
+## LTX-2.5 retake and extend (avatar P0-4, 2026-09-29)
+
+References: Lightricks/LTX-2 `fd4ded7` `ltx_pipelines/retake.py`
+(`RetakePipeline`: the source's video and audio VAE-encoded by
+`video_latent_from_file` / `audio_latent_from_file` with
+`TileSizeConfig.default()`, one `DiffusionStage` at the source size with
+`DISTILLED_SIGMAS`, a `TemporalRegionMask` on each regenerated modality and
+`frozen=True` on the other), and Lightricks' LTX-Desktop `68cd86c`
+(`ltx_retake_pipeline.py`) for extend, which LTX-2 does not ship: both
+latents zero-padded by the new frames, the regenerated window the new frames
+plus a 0.5 s feather into the source, and for 2.5 checkpoints the ancestral
+stage sampler. No new weights: the edits run on the distilled weights we
+already serve. The driver is `scripts/gpu/upstream/ltx25_edit.py`, which
+swaps `DistilledPipeline.__call__` for that flow on the pipeline's own
+blocks, through sol-engine's `gpu_infer.py` as for every LTX target.
+
+Targets, all on the committed source clip
+`scripts/gpu/fixtures/beach-push-768x512-24fps.mp4` (121 frames at 24 fps,
+768x512, a slow zoom over the beach still with the speech fixture as AAC
+audio), seed 1024:
+
+- `ltx25-retake`: the window 1.5-3.5 s, both modalities.
+- `ltx25-retake-v`: the same window, video only (audio frozen).
+- `ltx25-retake-a`: the same window, audio only (video frozen).
+- `ltx25-extend`: 48 frames after the end (169 in all; region
+  [4.5417, 7.0417) s).
+
+New dump names: `v2v_video_latent` and `v2v_audio_latent` (the encoded
+source before padding), `v2v_audio_wave` and `v2v_frame0_pixels`. Ours
+injects the reference's latents; the `-ownenc` arm runs our own decode and
+encode end to end. Run: runtime and scripts `4d4c347`, upstream
+`sol-ltx25:latest` (the scripts cloned at the same sha), both on RTX PRO 6000
+(EUR-IS-1, the EU volume). rel-L2 is ours against the reference.
+
+| | retake | -ownenc | retake-v | retake-a | extend | -ownenc |
+|---|---|---|---|---|---|---|
+| decoded source frame 0 / audio waveform | 3.3e-6 / 7.0e-5 | same | same | same | same | same |
+| source video latent (our encoder, the reference's pixels) | 1.8e-2 | 1.8e-2 | 1.8e-2 | 1.8e-2 | 1.8e-2 | 1.8e-2 |
+| source audio latent (injected arm / -ownenc) | 7.8e-2 | 9.9e-2 | 7.8e-2 | 7.8e-2 | 7.8e-2 | 9.9e-2 |
+| video block 0 / 24 / 47 (step 1) | 1.8e-3 / 9.0e-3 / 9.3e-3 | 3.0e-3 / 2.3e-2 / 1.7e-2 | 1.8e-3 / 4.7e-2 / 1.8e-2 | frozen, see below | 2.6e-3 / 1.1e-2 / 1.0e-2 | 3.3e-3 / 2.7e-2 / 2.0e-2 |
+| audio block 0 / 24 / 47 (step 1) | 3.2e-3 / 9.3e-3 / 5.1e-3 | 8.9e-2 / 0.13 / 4.2e-2 | frozen, see below | 5.2e-3 / 4.2e-2 / 3.3e-2 | 3.1e-3 / 9.1e-3 / 5.7e-3 | 8.5e-2 / 0.11 / 3.9e-2 |
+| video velocity, step 1 | 1.3e-2 | 2.3e-2 | 2.2e-2 | | 1.6e-2 | 2.8e-2 |
+| video latents, steps 1 / 4 / 8 | 3.7e-4 / 7.7e-4 / 7.5e-3 | 1.3e-2 / 1.3e-2 / 2.0e-2 | 5.4e-4 / 8.3e-4 / 7.5e-3 | **0** (frozen) | 4.0e-4 / 7.6e-4 / 9.3e-3 | 1.2e-2 / 1.2e-2 / 2.0e-2 |
+| audio latents, steps 1 / 4 / 8 | 3.6e-4 / 6.8e-4 / 2.4e-2 | 8.8e-2 / 8.9e-2 / 0.10 | **0** (frozen) | 1.4e-3 / 1.6e-3 / 2.0e-2 | 3.4e-4 / 5.7e-4 / 2.3e-2 | 8.6e-2 / 8.6e-2 / 0.11 |
+| clip vs the reference's (SSIM / PSNR, all frames) | 0.989 / 46.1 dB | | 0.989 / 46.1 dB | 0.989 / 46.1 dB | 0.989 / 46.1 dB | |
+| kept frames vs the source: ours / -ownenc / reference (PSNR) | 42.9 / 43.0 / 42.5 dB | | 42.9 / 43.0 / 42.5 dB | 43.0 / 43.1 / 42.6 dB (all 121) | 42.9 / 43.0 / 42.5 dB (frames < 105) | |
+| output | 121 @ 24, AAC 48 kHz stereo | | same | same | 169 @ 24 | |
+
+Raw: `artifacts/runpod/oracle/4d4c347-09291047/oracle-ltx25-*-diff/stderr.log`
+and `frames-metrics.txt`.
+
+Reading:
+
+- **Both-modality retake and extend are at the bf16 floor.** The source
+  decode is exact: the same frames and waveform (3e-6, 7e-5). The pinned
+  rows, the per-token timesteps and the padded extension line up token for
+  token. Blocks at step 1 and the latents follow the T2V profile (T2V 512p:
+  block 0 / 24 / 47 = 3.3e-3 / 5.4e-3 / 2.3e-2), ending at 7.5e-3 / 9.3e-3
+  video and 2.4e-2 audio after 8 steps. The decoded clips are 46.1 dB from
+  the reference's, the same distance as its own clip sits from ours at the
+  latent floor.
+- **Our encoders are the known gaps:** video 1.8e-2 (as in I2V), audio
+  7.8e-2 (as in A2V). Running them end to end (`-ownenc`) moves the latents
+  to about 1.2e-2 / 9e-2, which is the encoder difference carried along,
+  and not the trajectory.
+- **The kept frames are the source through a VAE round trip**, for ours and
+  the reference alike (42.5-43.1 dB).
+- **A frozen stream started differently from the reference's.** Upstream's
+  `_build_state` noises every modality (`create_noised_state`, default
+  `noise_scale=1`) and only then zeroes a frozen one's mask. So the frozen
+  stream's first forward sees the drawn noise (at timestep and sigma 0),
+  and the first step's `post_process_latent` makes it clean. `4d4c347`
+  started it clean. Hence the step-0 state of the frozen stream is
+  uncorrelated with the reference's (cosine ≈ 0; retake-a video input
+  1.29, retake-v audio input 1.56), while every later state matches exactly
+  (0). Through the first forward's cross-attention this raised the
+  regenerated stream's mid blocks (retake-v video block 24 4.7e-2 vs 9.0e-3
+  in the joint retake; retake-a audio block 24 4.2e-2 vs 9.3e-3). It washed
+  out by the last step (latents 7.5e-3 / 2.0e-2, clip 46.1 dB). `d5940c5`
+  starts a frozen edit stream from its noise, as upstream; audio-to-video,
+  whose reference uses `noise_scale=0`, keeps the clean start. That commit
+  is compiled and unit-tested (115 ltx2 tests). **Its GPU rerun of
+  retake-v / retake-a is still to do** (about $2).
+- `*_audio_x0_step*` (0.7 at step 1) differed on every target while the
+  audio velocity and latents matched. Our dump used the scalar sigma on the
+  pinned audio rows where the reference's `X0Model` uses the per-token
+  timesteps; the dump is fixed in `d5940c5`. The trajectory was not
+  affected: pinned rows are replaced after every step.
+- The retaken window is 40.5 dB from the source in the reference's output
+  (ours 40.6 in the serve E2E), barely below the kept frames, although it
+  starts from pure noise: on a zoom over a still photo the model
+  reproduces what its context fixes. A clip with real motion would show
+  the retake better.
+
+Run history: the first attempt used an unbuilt upstream tag (the pod
+exited). The second ran without the fixture (`*.mp4` was gitignored; now
+exempted for `scripts/gpu/fixtures/`). A third was lost with a container
+restart, and its two pods are left to the owner. The numbers above are
+from the fourth.
+
 ## Wan 2.2 TI2V-5B modules (Diffusers)
 
 `scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,
