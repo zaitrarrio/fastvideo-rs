@@ -1,0 +1,87 @@
+# fv-control: the cluster controller (docs/control/README.md).
+# Secrets (wrangler secret put, never here): RUNPOD_API_KEY,
+# CLOUDFLARE_API_KEY, GITHUB_PAT, CONTROL_KEK, SESSION_SECRET,
+# OWNER_PASSPHRASE_HASH. Deploy: scripts/serve/fv-control.sh deploy staging.
+name = "fv-control"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/ingest/*", "/healthz"]
+
+[[durable_objects.bindings]]
+name = "CLUSTER_OPS"
+class_name = "ClusterOps"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ClusterOps"]
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+ENVIRONMENT = "dev"
+GITHUB_REPO = "zaitrarrio/fastvideo-rs"
+RELEASE_WORKFLOW = "release.yml"
+SERVE_REPO = "ghcr.io/zaitrarrio/fastvideo-rs-serve"
+BALANCE_FLOOR = "8"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fv-control"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "fv-control-logs"
+
+# ---------------------------------------------------------------- staging
+[env.staging]
+name = "fv-control-staging"
+workers_dev = true
+
+[env.staging.assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/ingest/*", "/healthz"]
+
+[[env.staging.durable_objects.bindings]]
+name = "CLUSTER_OPS"
+class_name = "ClusterOps"
+
+[env.staging.triggers]
+crons = ["* * * * *"]
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+CF_ACCOUNT_ID = "0cd06fd37ee4e07de370821cb3852a8a"
+GITHUB_REPO = "zaitrarrio/fastvideo-rs"
+RELEASE_WORKFLOW = "release.yml"
+SERVE_REPO = "ghcr.io/zaitrarrio/fastvideo-rs-serve"
+BALANCE_FLOOR = "8"
+PUBLIC_URL = "https://fv-control-staging.maximalize.workers.dev"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "fv-control"
+database_id = "FV_CONTROL_D1_ID"
+migrations_dir = "migrations"
+
+[[env.staging.d1_databases]]
+binding = "JOBS_DB"
+database_name = "fv-jobs"
+database_id = "1796e295-a7f0-4402-bbed-ec94ccb27c15"
+
+[[env.staging.r2_buckets]]
+binding = "LOGS"
+bucket_name = "fv-control-logs"
+
+[[env.staging.analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "fv_control_metrics"
