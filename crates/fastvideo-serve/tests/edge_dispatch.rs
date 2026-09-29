@@ -46,7 +46,7 @@ fn init_log() {
 const ADMIN: &str = "fvadm_edge_test";
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("fv-edge-{tag}-{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    tempfile::Builder::new().prefix(&format!("fv-edge-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// The native stand-in for the Durable Object: the same routes, the same

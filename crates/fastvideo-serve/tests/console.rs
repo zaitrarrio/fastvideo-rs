@@ -21,10 +21,7 @@ use tower::ServiceExt;
 const ADMIN: &str = "fvadm_test-admin-token";
 
 fn state_dir(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-serve-console-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-serve-console-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn config(dir: &Path, admin: Option<&str>) -> Config {

@@ -32,10 +32,7 @@ use tower::ServiceExt;
 const KEY: &str = "sk-ingest";
 
 async fn app() -> App {
-    let dir = std::env::temp_dir().join(format!(
-        "fv-serve-ingest-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let dir = tempfile::Builder::new().prefix("fv-serve-ingest-").tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());

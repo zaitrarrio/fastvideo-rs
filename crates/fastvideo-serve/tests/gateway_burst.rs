@@ -37,10 +37,7 @@ const TOKEN: &str = "burst-internal-token";
 const STEP_MS: u64 = 250;
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-burst-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-burst-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// A D1 transport that can be cut (a lost worker stops writing), with a
