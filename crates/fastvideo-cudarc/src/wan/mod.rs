@@ -42,6 +42,7 @@ pub mod ops;
 pub mod pipeline;
 pub mod quant;
 pub mod resident;
+pub mod sdpa_rule;
 pub mod sla;
 pub mod sol_cache;
 pub mod sol_ops;

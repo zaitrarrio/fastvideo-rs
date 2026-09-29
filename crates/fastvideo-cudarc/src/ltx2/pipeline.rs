@@ -2528,6 +2528,7 @@ impl TextEncoder {
         });
         self.cache = cache;
         let (contexts, outcome) = result?;
+        let contexts = canonical_contexts(contexts)?;
         if outcome == CacheOutcome::Hit {
             // Gemma was not needed; release its read-ahead window.
             self.warm = None;
@@ -2549,6 +2550,24 @@ impl TextEncoder {
             },
         ))
     }
+}
+
+/// The contexts in one representation whatever the cache did: f32 values
+/// (what the cache stores and a hit reads back) uploaded as an f32 device
+/// tensor. A fresh encode leaves them in whatever form the connectors
+/// produced (bf16 storage with bf16 activations), a hit as host f32, and the
+/// DiT's first linears can take different paths for the two; the first job
+/// of a new prompt (a miss) and the next one (a hit) must see the same
+/// tensor. The values are unchanged (bf16 widens exactly).
+fn canonical_contexts(c: CachedContexts) -> Result<CachedContexts> {
+    let canon = |t: CudaTensor| -> Result<CudaTensor> {
+        let shape = t.shape.clone();
+        Ok(CudaTensor::from_vec(t.host_cow()?.into_owned(), shape)?.to_device()?)
+    };
+    Ok(CachedContexts {
+        video: canon(c.video)?,
+        audio: canon(c.audio)?,
+    })
 }
 
 /// The cache protocol, apart from what it caches: look up, else compute and

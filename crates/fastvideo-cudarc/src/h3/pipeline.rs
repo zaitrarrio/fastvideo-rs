@@ -1595,11 +1595,21 @@ impl H3Pipeline {
                 resident,
             )?
         } else {
-            super::text::encode_prompt_with(
+            // Without a resident encoder, stream at the numbers the resolved
+            // choice stands for: after `auto` released its resident FP8
+            // encoder, later prompts still get FP8 conditioning, so a
+            // prompt's output does not depend on what the process ran first.
+            let streamed = self
+                .options
+                .text_encoder
+                .precision()
+                .unwrap_or(crate::llm::WeightPrecision::Native);
+            super::text::encode_prompt_with_at(
                 tokenizer_root,
                 &request.prompt,
                 self.options.text_cache.as_deref(),
                 resident,
+                streamed,
             )?
         };
         timings.text_s = timer.elapsed().as_secs_f64();

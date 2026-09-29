@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh determinism|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -2199,6 +2199,115 @@ Audio: male speech, clear voice, quiet room"
       grep -h 'vae-bench\|vae_check\|video decode' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -3 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
+  determinism)
+    # Bit-identity of 1080p generations (docs/perf/determinism.md): the
+    # oracle cells first when FV_ORACLE_URL serves references (so the
+    # upstream pod can go early), then LTX-2.5 1080p 6 s T2V and I2V and H3
+    # (h3-turbo) 1080p 5 s, each run twice in one process (prompt set
+    # run1, run2) and once in a second process (run3), all with
+    # FASTVIDEO_DIGEST=1 (stage digests in stderr, to find where two runs
+    # part). The LTX first run is a conditioning-cache miss and the second a
+    # hit; H3 runs without the cache, so its second run re-encodes after
+    # `auto` released the resident encoder. A control process per model with
+    # FASTVIDEO_SDPA_AUTO=timed (the old per-process timed kernel pick) gives
+    # the speed baseline on the same pod. Frames are hashed (PNG bytes and
+    # audio.wav) into <cell>/hashes.txt, then deleted but for 3 keyframes;
+    # $RUNS/determinism.txt holds the verdicts. FV_DET_CELLS picks cells.
+    if [[ -n "${FV_ORACLE_URL:-}" ]]; then
+      FV_RUNS_DIR="$RUNS" bash "${BASH_SOURCE[0]}" oracle || true
+    fi
+    fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+    det_t2v="${FV_DET_T2V_PROMPT:-A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field}"
+    det_i2v="${FV_DET_I2V_PROMPT:-Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day.}"
+    # det_set <file> <prompt> <seed> <name...>: a prompt set of one prompt
+    # repeated under each name.
+    det_set() {
+      local file="$1" prompt="$2" seed="$3" first=1 n esc
+      shift 3
+      esc="$(printf '%s' "$prompt" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+      { printf '{"prompts": ['
+        for n in "$@"; do
+          (( first )) || printf ','
+          first=0
+          printf '{"name": "%s", "seed": %s, "prompt": "%s"}' "$n" "$seed" "$esc"
+        done
+        printf ']}\n'; } >"$file"
+    }
+    det_set "$RUNS/t2v-ab.json" "$det_t2v" 7 run1 run2
+    det_set "$RUNS/t2v-c.json" "$det_t2v" 7 run3
+    det_set "$RUNS/i2v-ab.json" "$det_i2v" 11 run1 run2
+    det_set "$RUNS/i2v-c.json" "$det_i2v" 11 run3
+    det_set "$RUNS/h3-ab.json" "$det_t2v" 7 run1 run2
+    det_set "$RUNS/h3-c.json" "$det_t2v" 7 run3
+    # det_hash <cell>: sha256 of every run's PNG frames (in frame order) and
+    # audio.wav; keep frames 000 / 072 / 120 of each run.
+    det_hash() {
+      local cell="$RUNS/$1" d run
+      : >"$cell/hashes.txt"
+      for d in "$cell"/frames/*/; do
+        [[ -d "$d" ]] || continue
+        run="$(basename "$d")"
+        [[ "$run" == warmup ]] && continue
+        printf '%s frames %s %s\n' "$run" "$(ls "$d" | grep -c '^frame-.*\.png$')" \
+          "$(cat "$d"/frame-*.png 2>/dev/null | sha256sum | cut -d' ' -f1)" >>"$cell/hashes.txt"
+        [[ -f "$d/audio.wav" ]] && printf '%s audio %s\n' "$run" "$(sha256sum <"$d/audio.wav" | cut -d' ' -f1)" >>"$cell/hashes.txt"
+        find "$d" -name 'frame-*.png' ! -name 'frame-000.png' ! -name 'frame-072.png' ! -name 'frame-120.png' -delete
+      done
+      grep -h ' digest ' "$cell/stderr.log" 2>/dev/null | sed 's/^.*digest //' >"$cell/digests.txt" || true
+      sed "s/^/[$1] /" "$cell/hashes.txt" | tee -a "$LOG"
+    }
+    det_on() { [[ -z "${FV_DET_CELLS:-}" || " $FV_DET_CELLS " == *" $1 "* ]]; }
+    ltx_det=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+      --height 1088 --width 1920 --num-frames 145 --frame-rate 24 --two-stage --text streamed)
+    for arm in t2v i2v; do
+      img=()
+      [[ "$arm" == i2v ]] && img=(--image "$fx/ti2v-beach-832x480.jpg")
+      p="$det_t2v"; seed=7
+      [[ "$arm" == i2v ]] && { p="$det_i2v"; seed=11; }
+      for proc in ab c timed; do
+        cell="ltx-$arm-$proc"
+        det_on "$cell" || continue
+        set_file="$RUNS/$arm-$proc.json"
+        extra_env=()
+        [[ "$proc" == timed ]] && { set_file="$RUNS/$arm-ab.json"; extra_env=(FASTVIDEO_SDPA_AUTO=timed); }
+        gated_cell "$cell" ltx25-two-stage env FASTVIDEO_DIGEST=1 ${extra_env[@]+"${extra_env[@]}"} \
+          "${ltx_det[@]}" ${img[@]+"${img[@]}"} --prompt "$p" --seed "$seed" --prompts "$set_file" \
+          --clip "$RUNS/$cell/frames"
+        det_hash "$cell"
+      done
+    done
+    for proc in ab c timed; do
+      cell="h3-$proc"
+      det_on "$cell" || continue
+      set_file="$RUNS/h3-$proc.json"
+      extra_env=()
+      [[ "$proc" == timed ]] && { set_file="$RUNS/h3-ab.json"; extra_env=(FASTVIDEO_SDPA_AUTO=timed); }
+      gated_cell "$cell" fasth3-4step-vsa env FASTVIDEO_DIGEST=1 ${extra_env[@]+"${extra_env[@]}"} \
+        "$BIN" --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          --height 1088 --width 1920 --oversize-canvas --seconds 5 --prompt "$det_t2v" --seed 7 \
+          --prompts "$set_file" --text-encoder auto --no-text-cache --text-weights "$W/h3-base" \
+          --adaln-cache "$RUNS/h3-det-adaln.cache" --clip-dir "$RUNS/$cell/frames"
+      det_hash "$cell"
+    done
+    # Verdicts: every run of a model (run1, run2 in one process, run3 in the
+    # other; the timed control's too, for reference) against run1.
+    {
+      for m in ltx-t2v ltx-i2v h3; do
+        ref="$(grep -h '^run1 frames' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $4}')"
+        refa="$(grep -h '^run1 audio' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $3}')"
+        for f in "$RUNS/$m-ab/hashes.txt" "$RUNS/$m-c/hashes.txt" "$RUNS/$m-timed/hashes.txt"; do
+          [[ -f "$f" ]] || continue
+          c="$(basename "$(dirname "$f")")"
+          while read -r run kind a b; do
+            want="$ref"; got="$b"
+            [[ "$kind" == audio ]] && { want="$refa"; got="$a"; }
+            [[ "$kind" == frames ]] && [[ "$a" == 0 ]] && got=none
+            printf '%s %s %s %s\n' "$c/$run" "$kind" "$([[ -n "$want" && "$got" == "$want" ]] && echo IDENTICAL || echo DIFFERENT)" "$got"
+          done <"$f"
+        done
+      done
+    } | tee "$RUNS/determinism.txt" | tee -a "$LOG"
+    ;;
   oracle)
     # GPU oracle diff (docs/oracle.md): the Python references' dumps
     # (scripts/gpu/upstream/oracle.sh on an upstream pod, served under
@@ -2230,6 +2339,24 @@ Audio: male speech, clear voice, quiet room"
         oracle_fetch "$target" "$SCRATCH/oracle-ref/$target" >"$SCRATCH/oracle-ref/$target.fetch.log" 2>&1 &
         prefetch[$target]=$!
       done
+      # Every reference fetched and unpacked: publish ORACLE_REFS_DONE, on
+      # which scripts/gpu/oracle.sh deletes the upstream pods instead of
+      # keeping them until this pod ends.
+      (
+        t0=$(date +%s)
+        while (( $(date +%s) - t0 < ${FV_ORACLE_WAIT_S:-10800} )); do
+          all=1
+          for target in $oracle_targets; do
+            ref="$SCRATCH/oracle-ref/$target"
+            [[ -d "$ref/dump" && ! -e "$ref/dump.tar" ]] || all=0
+          done
+          if (( all )); then
+            date -u +%FT%TZ >"$RUNS/ORACLE_REFS_DONE"
+            exit 0
+          fi
+          sleep 20
+        done
+      ) &
     fi
     for target in $oracle_targets; do
       ref="$SCRATCH/oracle-ref/$target"

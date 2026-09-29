@@ -100,6 +100,42 @@ impl HiddenStateEncoder for StreamedEncoder<'_> {
     }
 }
 
+/// The resident FP8 encoder's numbers, one layer on the device at a time
+/// ([`crate::llm::hidden_states_at`]): what a pipeline whose `auto` encoder
+/// started resident at FP8 streams once it released that encoder, so a
+/// prompt's conditioning does not depend on whether the release happened.
+pub struct StreamedFp8Encoder<'a> {
+    /// The checkpoint (embeddings).
+    pub map: &'a WeightMap,
+    /// The layers: the pre-quantized `text_encoder_fp8/` tree when valid,
+    /// else the checkpoint (quantized per layer as the resident load does).
+    pub layers: &'a WeightMap,
+    pub cfg: &'a DecoderConfig,
+}
+
+impl HiddenStateEncoder for StreamedFp8Encoder<'_> {
+    fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor> {
+        let positions: Vec<u32> = (0..ids.len() as u32).collect();
+        let attend = vec![true; ids.len()];
+        let mut taps = crate::llm::hidden_states_at(
+            self.map,
+            self.layers,
+            self.cfg,
+            ids,
+            &positions,
+            &attend,
+            &[tap],
+            crate::llm::WeightPrecision::Fp8Rows,
+        )?;
+        taps.pop()
+            .ok_or_else(|| msg("h3 text: the decoder returned no hidden state"))
+    }
+
+    fn kind(&self) -> &'static str {
+        "streamed-fp8"
+    }
+}
+
 /// [`crate::llm::ResidentDecoder`]: layers 0..=49 stay on the device, a new
 /// prompt costs a forward instead of 50 GB of transfers. At the checkpoint's
 /// bf16 that is 50 GB, which does not fit beside the 41 GB DiT on a 96 GB card;
@@ -226,17 +262,52 @@ pub fn encode_prompt_with(
     cache_dir: Option<&Path>,
     resident: Option<&dyn HiddenStateEncoder>,
 ) -> Result<TextConditioning> {
+    encode_prompt_with_at(
+        root,
+        prompt,
+        cache_dir,
+        resident,
+        crate::llm::WeightPrecision::Native,
+    )
+}
+
+/// [`encode_prompt_with`], streaming at `streamed` when there is no
+/// resident encoder (`Fp8Rows`: [`StreamedFp8Encoder`], the resident FP8
+/// numbers). Cache entries of FP8 numbers are keyed apart from bf16 ones,
+/// so an entry always holds what the encoder asked for would compute.
+pub fn encode_prompt_with_at(
+    root: &Path,
+    prompt: &str,
+    cache_dir: Option<&Path>,
+    resident: Option<&dyn HiddenStateEncoder>,
+    streamed: crate::llm::WeightPrecision,
+) -> Result<TextConditioning> {
     use super::text_cache as cache;
     let ids = tokenize(root, prompt)?;
     let map = WeightMap::open(&root.join("text_encoder"))?;
     // The reference encoder runs in bf16; follow its constant casts.
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
     let tap = H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
-    let streamed = StreamedEncoder {
+    let fp8_tree = if resident.is_none() && streamed == crate::llm::WeightPrecision::Fp8Rows {
+        crate::llm::prequant::open_tree(&root.join("text_encoder"), tap)?
+    } else {
+        None
+    };
+    let streamed_native = StreamedEncoder {
         map: &map,
         cfg: &cfg,
     };
-    let encoder: &dyn HiddenStateEncoder = resident.unwrap_or(&streamed);
+    let streamed_fp8 = StreamedFp8Encoder {
+        map: &map,
+        layers: fp8_tree.as_ref().unwrap_or(&map),
+        cfg: &cfg,
+    };
+    let encoder: &dyn HiddenStateEncoder = match (resident, streamed) {
+        (Some(r), _) => r,
+        (None, crate::llm::WeightPrecision::Fp8Rows) => &streamed_fp8,
+        (None, crate::llm::WeightPrecision::Native) => &streamed_native,
+    };
+    let fp8_numbers = encoder.kind().contains("fp8");
     let Some(dir) = cache_dir else {
         let hidden = encoder.hidden_state(&ids, tap)?;
         return Ok(TextConditioning {
@@ -254,12 +325,12 @@ pub fn encode_prompt_with(
     let store = map
         .lazy()
         .ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
-    let key = cache::cache_key(
-        prompt,
-        &cache::sha256(&tokenizer_bytes),
-        tap,
-        &cache::encoder_identity(store, &cfg, tap)?,
-    );
+    let mut identity = cache::encoder_identity(store, &cfg, tap)?;
+    if fp8_numbers {
+        // Weight-only FP8 rows are a different function of the same weights.
+        identity = cache::sha256(&[identity.as_slice(), b"/fp8-rows".as_slice()].concat());
+    }
+    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
     })?;
@@ -896,6 +967,16 @@ mod tests {
         let rel = (err / norm).sqrt();
         assert!(rel > 0.0 && rel < 0.1, "fp8 rows vs native: rel {rel}");
         assert_eq!(fp8.kind(), "resident-fp8");
+        // Streamed at FP8 (what `auto` uses once it released the resident
+        // encoder): the resident FP8 numbers, bit for bit.
+        let streamed_fp8 = StreamedFp8Encoder {
+            map: &map,
+            layers: &map,
+            cfg: &cfg,
+        };
+        let again = streamed_fp8.hidden_state(&ids, 2).unwrap();
+        assert_eq!(&*again.host_cow().unwrap(), &*quantized.host_cow().unwrap());
+        assert_eq!(streamed_fp8.kind(), "streamed-fp8");
     }
 
     #[test]

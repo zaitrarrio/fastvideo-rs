@@ -102,14 +102,24 @@ volume() {
 # minutes (default 10; 0 disables) at 0 % GPU utilization, counted once the
 # GPU has been busy; before that, after FV_IDLE_GPU_GRACE_MIN (default 30:
 # setup, weight reads). Independent of this shell, like the wall-clock cap.
+# With `net` (upstream pods), a minute in which the pod sent at least
+# FV_IDLE_NET_BYTES (default 256 KiB) also counts as busy: a reference pod
+# whose GPU work is done is still in use while its runtime pod downloads the
+# dumps, and scripts/gpu/oracle.sh fetches its 1 MiB keepalive.bin every
+# minute while the runtime pod is up. When the heartbeats stop (the runtime
+# pod is gone, or the driver died) the pod goes after FV_IDLE_GPU_MIN.
 idle_watchdog() {
-  local idle="${FV_IDLE_GPU_MIN:-10}" grace="${FV_IDLE_GPU_GRACE_MIN:-30}"
+  local idle="${FV_IDLE_GPU_MIN:-10}" grace="${FV_IDLE_GPU_GRACE_MIN:-30}" net="${1:-}"
   [[ "$idle" == 0 ]] && return 0
   cat <<WDEOF
-( used=0; n=0
+( used=0; n=0; tx0=0
+  txb() { awk 'NR > 2 { sub(/^[ \t]+/, ""); split(\$0, f, /[: ]+/); if (f[1] != "lo") s += f[10] } END { printf "%.0f", s }' /proc/net/dev 2>/dev/null || echo 0; }
+  [ "$net" = net ] && tx0=\$(txb)
   while sleep 60; do
     u=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')
-    if [ "\${u:-0}" -gt 0 ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi
+    sent=0
+    if [ "$net" = net ]; then tx1=\$(txb); sent=\$(( tx1 - tx0 )); tx0=\$tx1; fi
+    if [ "\${u:-0}" -gt 0 ] 2>/dev/null || [ "\$sent" -ge ${FV_IDLE_NET_BYTES:-262144} ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi
     lim=$grace; [ "\$used" = 1 ] && lim=$idle
     if [ "\$n" -ge "\$lim" ] && [ -n "\${RUNPOD_API_KEY:-}" ] && [ -n "\${RUNPOD_POD_ID:-}" ]; then
       echo "\$(date -u +%FT%TZ) idle \$n min at 0 % GPU: deleting pod \$RUNPOD_POD_ID" >>/tmp/idle-watchdog.log
@@ -197,11 +207,13 @@ upstream_start_cmd() {
   # UP_LOCAL=1: nothing is written to the volume (it is read for weights only);
   # venvs, derived weights and results live on the container disk.
   [[ "${UP_LOCAL:-1}" == 1 ]] && runs=/root/runs
-  idle_watchdog
+  idle_watchdog net
   cat <<EOF
 set -u
 OUT=$runs/$FAMILY/$tag
 mkdir -p "\$OUT"
+# What oracle.sh fetches as its heartbeat while the runtime pod is up.
+head -c 1048576 /dev/urandom >$runs/keepalive.bin 2>/dev/null || true
 if fv-gpucheck serve --help >/dev/null 2>&1; then
   ( while true; do fv-gpucheck serve --dir $runs --port 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
 else
