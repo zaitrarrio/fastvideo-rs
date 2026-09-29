@@ -378,3 +378,74 @@ async fn adopt_is_one_conditional_upsert() {
     assert_eq!(w1.adopt(n.clone()).await.unwrap().id, n.id);
     assert_eq!(row(&m, n.id)["worker"], "w1");
 }
+
+/// Push dispatch, phase 2 (docs/serve/gateway-cloudflare.md): a leased
+/// adopt holds the job at once and writes the row behind; the row may
+/// even not exist yet (the gateway writes its insert behind too, and that
+/// late insert keeps the worker's row). A newer lease fences the older
+/// holder: its writes are refused and its listeners are told.
+#[tokio::test]
+async fn leased_adopt_writes_behind_and_fences_stale_holders() {
+    let m = MockD1::new();
+    let mut go = opts("gateway");
+    go.hold_inserts = false;
+    let gw = D1JobStore::new(client(&m), go).open(t0()).await.unwrap();
+    let w1 = open(&m, "w1").await;
+    let w2 = open(&m, "w2").await;
+    let mut fenced1 = w1.subscribe_fenced();
+
+    let j = job(ProtocolId::Fal, "lease-1", t0());
+    let before = m.statements().len();
+    w1.adopt_leased(j.clone(), 1).unwrap();
+    assert_eq!(m.statements().len(), before, "no D1 call on the take");
+    for _ in 0..100 {
+        if m.sql("SELECT lease FROM jobs WHERE id = ?", &[json!(j.id.to_string())]).unwrap().len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let r = row(&m, j.id);
+    assert_eq!((r["worker"].as_str(), r["lease"].as_f64()), (Some("w1"), Some(1.0)));
+    // The gateway's insert, written behind, lands after it: the row stays w1's.
+    gw.insert(j.clone()).await.unwrap();
+    assert_eq!(row(&m, j.id)["worker"], "w1");
+
+    // Re-dispatched under lease 2 to w2: w2 takes the row even though w1's
+    // heartbeat is fresh.
+    w2.adopt_leased(j.clone(), 2).unwrap();
+    w2.flush_all().await;
+    assert_eq!(row(&m, j.id)["worker"], "w2");
+    // w1 keeps working: its next write is refused and it learns it is fenced.
+    w1.update(j.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        let _ = j.mark_running(t0());
+    }))
+    .await
+    .unwrap();
+    w1.flush_all().await;
+    let got = tokio::time::timeout(Duration::from_secs(2), fenced1.recv()).await.unwrap();
+    assert_eq!(got, Some(j.id));
+    assert!(w1.is_fenced(j.id));
+    let r = row(&m, j.id);
+    assert_eq!((r["worker"].as_str(), r["lease"].as_f64()), (Some("w2"), Some(2.0)));
+    // w2's own writes still go through.
+    w2.update(j.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        j.progress = 0.5;
+    }))
+    .await
+    .unwrap();
+    w2.flush_all().await;
+    assert!((row(&m, j.id)["progress"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+
+    // A cancelled row refuses a new lease.
+    let c = job(ProtocolId::Fal, "lease-2", t0());
+    gw.insert(c.clone()).await.unwrap();
+    gw.update(c.id, Box::new(|j: &mut fastvideo_protocol::Job| {
+        j.cancel_requested = true;
+    }))
+    .await
+    .unwrap();
+    let mut fenced2 = w2.subscribe_fenced();
+    w2.adopt_leased(c.clone(), 1).unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(2), fenced2.recv()).await.unwrap();
+    assert_eq!(got, Some(c.id));
+}

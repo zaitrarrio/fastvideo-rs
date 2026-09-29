@@ -1,7 +1,7 @@
 // Pod payloads and env of a cluster: a port of scripts/serve/runpod-cluster.sh
 // (create_gateway, create_worker, patch_gateway, GATEWAY_BOOT, WORKER_BOOT).
 import { GATEWAY_BASE_PODS } from "./gateway-base";
-import { REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
+import { REGIONS, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -252,7 +252,7 @@ export function gatewayCreatePayload(name: string, image: string, flavor: string
 
 /** One placement attempt of a worker (a GPU type in a region, or a CPU flavor). */
 export interface Placement {
-  region?: string;
+  region?: RegionId;
   dc?: string;
   gpu?: string;
   cpu?: string;

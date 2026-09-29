@@ -39,10 +39,21 @@ rest() { curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $RUNPOD_API
 ledger() { mkdir -p "$(dirname "$LEDGER")"; printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >>"$LEDGER"; }
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
+# The pod-side idle watchdog (as scripts/gpu/runpod-http.sh idle_watchdog):
+# the pod deletes itself after FV_IDLE_GPU_MIN (default 10; 0 disables)
+# minutes at 0 % GPU once the GPU has been busy, FV_IDLE_GPU_GRACE_MIN
+# (default 30) before that.
+watchdog_cmd() {
+  local idle="${FV_IDLE_GPU_MIN:-10}" grace="${FV_IDLE_GPU_GRACE_MIN:-30}"
+  [[ "$idle" == 0 ]] && return 0
+  printf '%s' "( used=0; n=0; while sleep 60; do u=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' '); if [ \"\${u:-0}\" -gt 0 ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi; lim=$grace; [ \"\$used\" = 1 ] && lim=$idle; if [ \"\$n\" -ge \"\$lim\" ] && [ -n \"\${RUNPOD_API_KEY:-}\" ] && [ -n \"\${RUNPOD_POD_ID:-}\" ]; then curl -sS -X DELETE -H \"Authorization: Bearer \$RUNPOD_API_KEY\" \"https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log 2>&1; fi; done ) >/dev/null 2>&1 & "
+}
+
 # The container command: write the inlined config (recipe substituted) and exec fv-serve.
 entry_cmd() {
   local b64
   b64="$(base64 -w0 "${FV_SERVE_TOML:-$ROOT/configs/serve/runpod-ltx.toml}")"
+  watchdog_cmd
   printf '%s' "echo $b64 | base64 -d | sed -e \"s/^recipe = \\\"ltx-turbo\\\"/recipe = \\\"\$FV_LTX_RECIPE\\\"/\" -e \"s/^id = \\\"ltx25-distill-sol\\\"/id = \\\"ltx25-\$FV_LTX_RECIPE\\\"/\" -e \"s#fastvideo/ltx-turbo#fastvideo/\$FV_LTX_RECIPE#\" > /tmp/fv-ltx.toml && cat /tmp/fv-ltx.toml | grep -E '^(id|recipe|fal_apps)' && exec /opt/fastvideo-rs/bin/fv-serve --config /tmp/fv-ltx.toml"
 }
 

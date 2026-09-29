@@ -16,6 +16,15 @@
 //! or a finished job read within the last minute (finished jobs change only
 //! by deletion). Anything else reads D1 and refreshes the view; the
 //! pollers behind `watch()` refresh it too.
+//!
+//! **Insert behind** (pools with `dispatch = "durable-object"`,
+//! docs/serve/gateway-cloudflare.md phase 2): for a job the predicate set
+//! with [`GatewayJobStore::set_insert_behind`] accepts, `insert` returns at
+//! once and the D1 insert runs in the background, so the dispatch does not
+//! wait for it. Until it lands the job is answered from memory; updates and
+//! removals wait for it. The worker's own write may land first: the late
+//! insert then keeps the worker's row (`D1JobStore::insert` treats a row
+//! with the same external id as its own).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -32,7 +41,18 @@ pub struct GatewayJobStore {
     poll: Duration,
     watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
     view: Arc<View>,
+    behind: std::sync::OnceLock<InsertBehind>,
+    pending: Pending,
 }
+
+/// Which jobs are inserted behind (see the module docs).
+pub type InsertBehind = Arc<dyn Fn(&Job) -> bool + Send + Sync>;
+
+/// Jobs whose D1 insert is in flight: the job, and a flag set when it lands.
+type Pending = Arc<Mutex<HashMap<JobId, (Job, watch::Receiver<bool>)>>>;
+
+/// How long an update waits for an insert in flight.
+const PENDING_WAIT: Duration = Duration::from_secs(15);
 
 /// How long a finished job read from D1 is served from memory.
 const TERMINAL_FRESH: Duration = Duration::from_secs(60);
@@ -101,7 +121,32 @@ impl std::fmt::Debug for GatewayJobStore {
 impl GatewayJobStore {
     pub fn new(inner: Arc<D1JobStore>, poll: Duration) -> Self {
         let poll = poll.max(Duration::from_millis(20));
-        Self { inner, poll, watchers: Arc::default(), view: Arc::new(View { fresh: poll, ..View::default() }) }
+        Self {
+            inner,
+            poll,
+            watchers: Arc::default(),
+            view: Arc::new(View { fresh: poll, ..View::default() }),
+            behind: std::sync::OnceLock::new(),
+            pending: Arc::default(),
+        }
+    }
+
+    /// Inserts the jobs `f` accepts behind the response (once; see the
+    /// module docs).
+    pub fn set_insert_behind(&self, f: InsertBehind) {
+        let _ = self.behind.set(f);
+    }
+
+    fn pending_job(&self, id: JobId) -> Option<Job> {
+        self.pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone())
+    }
+
+    /// Waits until an insert in flight for `id` landed (or gave up).
+    async fn settled(&self, id: JobId) {
+        let rx = self.pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(_, rx)| rx.clone());
+        if let Some(mut rx) = rx {
+            let _ = tokio::time::timeout(PENDING_WAIT, rx.wait_for(|done| *done)).await;
+        }
     }
 
     pub fn d1(&self) -> &Arc<D1JobStore> {
@@ -121,9 +166,11 @@ fn fingerprint(j: &Job) -> (String, u32, Option<u32>, usize, usize, bool) {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn poller(
     store: Arc<D1JobStore>,
     view: Arc<View>,
+    pending: Pending,
     id: JobId,
     tx: Arc<watch::Sender<JobSnapshot>>,
     watchers: Arc<Mutex<HashMap<JobId, Arc<watch::Sender<JobSnapshot>>>>>,
@@ -135,7 +182,14 @@ async fn poller(
         if tx.receiver_count() == 0 {
             break;
         }
-        let Some(j) = store.get(id).await else { break };
+        let j = match store.get(id).await {
+            Some(j) => j,
+            None => match pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone()) {
+                // Inserted behind, not in D1 yet.
+                Some(j) => j,
+                None => break,
+            },
+        };
         view.remember(&j);
         let fp = fingerprint(&j);
         if last.as_ref() != Some(&fp) {
@@ -157,6 +211,24 @@ async fn poller(
 #[async_trait::async_trait]
 impl JobStore for GatewayJobStore {
     async fn insert(&self, job: Job) -> Result<(), StoreError> {
+        if self.behind.get().is_some_and(|f| f(&job)) {
+            let id = job.id;
+            let (tx, rx) = watch::channel(false);
+            self.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (job.clone(), rx));
+            self.view.remember(&job);
+            let inner = self.inner.clone();
+            let pending = self.pending.clone();
+            tokio::spawn(async move {
+                let t0 = std::time::Instant::now();
+                match inner.insert(job).await {
+                    Ok(()) => metrics::histogram!("fv_gateway_insert_behind_seconds").record(t0.elapsed().as_secs_f64()),
+                    Err(e) => tracing::warn!(job = %id, error = %e, "gateway: a job row inserted behind the dispatch failed"),
+                }
+                pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+                let _ = tx.send(true);
+            });
+            return Ok(());
+        }
         let j = job.clone();
         self.inner.insert(job).await?;
         self.view.remember(&j);
@@ -165,6 +237,10 @@ impl JobStore for GatewayJobStore {
 
     async fn get(&self, id: JobId) -> Option<Job> {
         if let Some(j) = self.view.get(id) {
+            counted("memory");
+            return Some(j);
+        }
+        if let Some(j) = self.pending_job(id) {
             counted("memory");
             return Some(j);
         }
@@ -179,6 +255,11 @@ impl JobStore for GatewayJobStore {
             counted("memory");
             return Some(j);
         }
+        let pend = self.pending.lock().unwrap_or_else(|p| p.into_inner()).values().find(|(j, _)| j.protocol == p && j.external_id == external_id).map(|(j, _)| j.clone());
+        if let Some(j) = pend {
+            counted("memory");
+            return Some(j);
+        }
         counted("d1");
         let j = self.inner.by_external(p, external_id).await?;
         self.view.remember(&j);
@@ -186,6 +267,7 @@ impl JobStore for GatewayJobStore {
     }
 
     async fn update(&self, id: JobId, f: JobUpdate) -> Result<Job, StoreError> {
+        self.settled(id).await;
         let r = match self.inner.update(id, f).await {
             Err(StoreError::Io(m)) if m.contains("changed concurrently") => {
                 tracing::debug!(job = %id, "gateway update lost to a worker write; the worker's copy stands");
@@ -205,6 +287,7 @@ impl JobStore for GatewayJobStore {
     }
 
     async fn remove(&self, id: JobId) -> Option<Job> {
+        self.settled(id).await;
         self.view.forget(id);
         self.inner.remove(id).await
     }
@@ -225,7 +308,7 @@ impl JobStore for GatewayJobStore {
         });
         let tx = Arc::new(tx);
         g.insert(id, tx.clone());
-        tokio::spawn(poller(self.inner.clone(), self.view.clone(), id, tx, self.watchers.clone(), self.poll));
+        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, tx, self.watchers.clone(), self.poll));
         Some(rx)
     }
 

@@ -16,11 +16,20 @@
 //!   the queue and its running jobs are **re-dispatched once** (attempt + 1,
 //!   `takeover`), then failed ([`EnqueueReq::retries`]). A re-dispatch no
 //!   worker takes within [`Cfg::redispatch_wait_ms`] fails too.
-//! - **Reconnect** ([`Hello::jobs`]): a job the worker still holds stays
-//!   (or becomes) running there; a job the dispatcher pushed to it that it
-//!   does not hold is queued again; one it ran that it lost is a loss; a job
-//!   meanwhile running on another worker is cancelled on the reconnecting
-//!   one ([`DoMsg::Welcome`]).
+//! - **Leases** (fencing tokens): every push carries the job's next lease.
+//!   The worker writes the job's D1 row only while no newer lease holds it,
+//!   and an ack or a reconnect with an older lease gets a cancel: a worker
+//!   the dispatcher gave up on cannot run on in parallel with its successor.
+//! - **Reconnect** ([`Hello::jobs`]): a job the worker still holds with the
+//!   current lease stays (or becomes) running there; a job the dispatcher
+//!   pushed to it that it does not hold is queued again; one it ran that it
+//!   lost is a loss; a job it holds under an older lease is cancelled there
+//!   ([`DoMsg::Welcome`]).
+//! - **Restage**: a worker that cannot fetch a client URL nacks 424; the job
+//!   waits until the gateway sends it again with the input in the store
+//!   ([`EnqueueReq::replace`]).
+//! - **Spill**: the host may keep a large envelope outside ([`Sched::enqueue_spilled`],
+//!   e.g. in R2); the push then asks the host to load it ([`Out::PushSpilled`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -131,8 +140,23 @@ pub struct JobRec {
     /// When a loss put it back in the queue (the re-dispatch wait).
     #[serde(default)]
     pub requeued_at: Option<i64>,
+    /// The lease of the last push (0: never pushed).
+    #[serde(default)]
+    pub lease: u64,
+    /// Waiting for the gateway to restage an input (a worker nacked 424).
+    #[serde(default)]
+    pub restage: bool,
+    /// Where the host keeps the envelope when it is not held here.
+    #[serde(default)]
+    pub spill: Option<String>,
     #[serde(skip)]
     pub envelope: Option<Value>,
+}
+
+impl JobRec {
+    fn has_envelope(&self) -> bool {
+        self.envelope.is_some() || self.spill.is_some()
+    }
 }
 
 /// One worker (persisted as JSON).
@@ -159,6 +183,9 @@ pub enum Out {
     Send { worker: String, msg: DoMsg },
     /// Close the worker's socket (declared lost while connected).
     Close { worker: String },
+    /// Load the envelope kept at `key` into `msg` (a [`DoMsg::Job`] with a
+    /// null envelope), then send it to the worker.
+    PushSpilled { worker: String, key: String, msg: DoMsg },
 }
 
 /// What changed since the last [`Sched::take_dirty`]: rows to write.
@@ -172,6 +199,8 @@ pub struct Dirty {
     pub new_envelopes: Vec<(String, Value)>,
     /// ... or deleted (finished).
     pub dropped_envelopes: Vec<String>,
+    /// Spilled envelopes (host keys) no longer needed.
+    pub dropped_spills: Vec<String>,
 }
 
 impl Dirty {
@@ -182,6 +211,7 @@ impl Dirty {
             && self.removed_workers.is_empty()
             && self.new_envelopes.is_empty()
             && self.dropped_envelopes.is_empty()
+            && self.dropped_spills.is_empty()
     }
 }
 
@@ -199,6 +229,7 @@ pub struct Sched {
     removed_workers: BTreeSet<String>,
     new_envelopes: BTreeSet<String>,
     dropped_envelopes: BTreeSet<String>,
+    dropped_spills: BTreeSet<String>,
     /// (queue_ms, ack_ms, worker_ms) of recent first dispatches.
     timings: VecDeque<(f64, f64, f64)>,
 }
@@ -221,6 +252,7 @@ impl Sched {
             removed_workers: BTreeSet::new(),
             new_envelopes: BTreeSet::new(),
             dropped_envelopes: BTreeSet::new(),
+            dropped_spills: BTreeSet::new(),
             timings: VecDeque::new(),
         }
     }
@@ -266,6 +298,7 @@ impl Sched {
             removed_workers: std::mem::take(&mut self.removed_workers).into_iter().collect(),
             new_envelopes,
             dropped_envelopes: std::mem::take(&mut self.dropped_envelopes).into_iter().collect(),
+            dropped_spills: std::mem::take(&mut self.dropped_spills).into_iter().collect(),
         }
     }
 
@@ -284,8 +317,35 @@ impl Sched {
         self.jobs.values().filter(|o| o.phase == Phase::Queued && o.seq < j.seq).count() as u32
     }
 
-    /// `POST /enqueue`. A job id seen before answers its state (idempotent).
+    /// `POST /enqueue`. A job id seen before answers its state (idempotent),
+    /// unless it is a `replace` of a job waiting for a restage.
     pub fn enqueue(&mut self, req: EnqueueReq, now: i64) -> (EnqueueResp, Vec<Out>) {
+        self.enqueue_spilled(req, None, now)
+    }
+
+    /// [`Sched::enqueue`] with the envelope kept by the host at `spill`
+    /// (then `req.envelope` is ignored).
+    pub fn enqueue_spilled(&mut self, req: EnqueueReq, spill: Option<String>, now: i64) -> (EnqueueResp, Vec<Out>) {
+        if req.replace && self.jobs.get(&req.job_id).is_some_and(|j| j.restage && j.phase == Phase::Queued) {
+            let id = req.job_id.clone();
+            let j = self.jobs.get_mut(&id).expect("checked");
+            if let Some(old) = j.spill.take() {
+                self.dropped_spills.insert(old);
+            }
+            j.restage = false;
+            j.not_before = now;
+            j.first_push_at = None;
+            j.envelope = if spill.is_some() { None } else { Some(req.envelope) };
+            j.spill = spill;
+            if j.envelope.is_some() {
+                self.new_envelopes.insert(id.clone());
+            }
+            self.touch_job(&id);
+            let out = self.pump(now);
+            let j = &self.jobs[&id];
+            let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: false };
+            return (resp, out);
+        }
         if let Some(j) = self.jobs.get(&req.job_id) {
             let resp = EnqueueResp { job_id: j.job_id.clone(), state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: true };
             return (resp, Vec::new());
@@ -313,11 +373,17 @@ impl Sched {
             failed_here: false,
             timed: false,
             requeued_at: None,
-            envelope: Some(req.envelope),
+            lease: 0,
+            restage: false,
+            envelope: if spill.is_some() { None } else { Some(req.envelope) },
+            spill,
         };
+        let held_here = j.envelope.is_some();
         self.jobs.insert(id.clone(), j);
         self.touch_job(&id);
-        self.new_envelopes.insert(id.clone());
+        if held_here {
+            self.new_envelopes.insert(id.clone());
+        }
         let out = self.pump(now);
         let j = &self.jobs[&id];
         let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: false };
@@ -354,6 +420,9 @@ impl Sched {
             if j.envelope.take().is_some() {
                 self.dropped_envelopes.insert(id.to_owned());
             }
+            if let Some(k) = j.spill.take() {
+                self.dropped_spills.insert(k);
+            }
         }
     }
 
@@ -365,7 +434,7 @@ impl Sched {
         }
         match msg {
             WorkerMsg::Hello(h) => return self.hello(worker, h, now),
-            WorkerMsg::Ack { job_id, attempt, worker_ms } => self.ack(worker, &job_id, attempt, worker_ms, now, &mut out),
+            WorkerMsg::Ack { job_id, attempt, lease, worker_ms } => self.ack(worker, &job_id, attempt, lease, worker_ms, now, &mut out),
             WorkerMsg::Nack { job_id, attempt, retry, code, message } => self.nack(worker, &job_id, attempt, retry, code, &message, now),
             WorkerMsg::Done { job_id, attempt: _, state } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
@@ -450,6 +519,9 @@ impl Sched {
                             failed_here: false,
                             timed: true,
                             requeued_at: None,
+                            lease: r.lease,
+                            restage: false,
+                            spill: None,
                             envelope: None,
                         },
                     );
@@ -457,14 +529,17 @@ impl Sched {
                 }
                 continue;
             };
+            // Its copy is current when it holds the last lease (0: a worker
+            // without leases, matched by assignment only).
+            let current = r.lease == 0 || r.lease == j.lease;
             if j.phase.finished() {
-                if !r.finished() && (j.phase == Phase::Cancelled || j.worker.as_deref() != Some(worker)) {
+                if !r.finished() && (j.phase == Phase::Cancelled || j.worker.as_deref() != Some(worker) || !current) {
                     cancel.push(id.clone());
                 }
                 continue;
             }
             if r.finished() {
-                if j.worker.as_deref() == Some(worker) || j.phase == Phase::Queued {
+                if current && (j.worker.as_deref() == Some(worker) || j.phase == Phase::Queued) {
                     j.phase = Phase::from_worker(&r.state);
                     j.worker = Some(worker.to_owned());
                     j.finished_at = Some(now);
@@ -475,34 +550,20 @@ impl Sched {
                 continue;
             }
             let mine = j.worker.as_deref() == Some(worker);
-            match j.phase {
-                Phase::Running if !mine => {
-                    // Given to another worker, which acked: drop this copy.
-                    cancel.push(id.clone());
-                }
-                Phase::Pushed if !mine => {
-                    // The other worker has not taken it yet: this one keeps it.
-                    if let Some(other) = j.worker.replace(worker.to_owned()) {
-                        out.push(Out::Send { worker: other, msg: DoMsg::Cancel { job_id: id.clone() } });
-                    }
-                    j.phase = Phase::Running;
-                    j.acked_at = Some(now);
-                    j.deadline = None;
-                    j.requeued_at = None;
-                    j.attempt = j.attempt.max(r.attempt);
-                    self.touch_job(id);
-                }
-                _ => {
-                    // Mine (pushed or running), or queued again after a
-                    // timeout: it runs here.
-                    j.worker = Some(worker.to_owned());
-                    j.phase = Phase::Running;
-                    j.acked_at.get_or_insert(now);
-                    j.deadline = None;
-                    j.requeued_at = None;
-                    j.attempt = j.attempt.max(r.attempt);
-                    self.touch_job(id);
-                }
+            let keep = current && (mine || j.phase == Phase::Queued);
+            if keep {
+                // Pushed or running here, or queued again (ack timeout,
+                // grace period) with no newer push: it runs here.
+                j.worker = Some(worker.to_owned());
+                j.phase = Phase::Running;
+                j.acked_at.get_or_insert(now);
+                j.deadline = None;
+                j.requeued_at = None;
+                j.attempt = j.attempt.max(r.attempt);
+                self.touch_job(id);
+            } else {
+                // Given to another worker under a newer lease: drop this copy.
+                cancel.push(id.clone());
             }
         }
         // What we gave it that it does not report.
@@ -524,27 +585,28 @@ impl Sched {
         out
     }
 
-    fn ack(&mut self, worker: &str, id: &str, attempt: u32, worker_ms: u64, now: i64, out: &mut Vec<Out>) {
+    #[allow(clippy::too_many_arguments)]
+    fn ack(&mut self, worker: &str, id: &str, attempt: u32, lease: u64, worker_ms: u64, now: i64, out: &mut Vec<Out>) {
         let Some(j) = self.jobs.get_mut(id) else { return };
         let cancel = |out: &mut Vec<Out>| out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::Cancel { job_id: id.to_owned() } });
+        let current = lease == 0 || lease == j.lease;
         if j.phase.finished() {
-            if j.worker.as_deref() != Some(worker) || j.phase == Phase::Cancelled {
+            if j.worker.as_deref() != Some(worker) || j.phase == Phase::Cancelled || !current {
                 cancel(out);
             }
+            return;
+        }
+        if !current {
+            // An older push (the job went to another worker meanwhile).
+            cancel(out);
             return;
         }
         let mine = j.worker.as_deref() == Some(worker);
         match j.phase {
             Phase::Pushed if mine && j.attempt == attempt => {}
+            // Late ack after an ack timeout, before any newer push.
             Phase::Queued => {}
             Phase::Running if mine => return,
-            Phase::Pushed if !mine => {
-                // Late ack after a timeout, while the retry is in flight
-                // elsewhere: this worker has it; stop the other push.
-                if let Some(other) = j.worker.clone() {
-                    out.push(Out::Send { worker: other, msg: DoMsg::Cancel { job_id: id.to_owned() } });
-                }
-            }
             _ => {
                 cancel(out);
                 return;
@@ -576,6 +638,19 @@ impl Sched {
     fn nack(&mut self, worker: &str, id: &str, attempt: u32, retry: bool, code: u16, message: &str, now: i64) {
         let Some(j) = self.jobs.get(id) else { return };
         if !(j.phase == Phase::Pushed && j.worker.as_deref() == Some(worker) && j.attempt == attempt) {
+            return;
+        }
+        if code == 424 {
+            // A client URL the worker could not fetch: the gateway sends
+            // the job again with that input in the store.
+            if let Some(j) = self.jobs.get_mut(id) {
+                j.phase = Phase::Queued;
+                j.worker = None;
+                j.deadline = None;
+                j.restage = true;
+                j.error = Some(format!("an input needs the store: {message}"));
+            }
+            self.touch_job(id);
             return;
         }
         if !retry {
@@ -611,7 +686,7 @@ impl Sched {
     /// The job's worker is lost: re-dispatch (attempt + 1) or fail.
     fn lose(&mut self, id: &str, why: &str, now: i64) {
         let Some(j) = self.jobs.get_mut(id) else { return };
-        if j.attempt < j.max_attempts && j.envelope.is_some() && !j.cancel_requested {
+        if j.attempt < j.max_attempts && j.has_envelope() && !j.cancel_requested {
             j.attempt += 1;
             j.phase = Phase::Queued;
             j.worker = None;
@@ -726,6 +801,17 @@ impl Sched {
             let why = format!("the worker running this job was lost ({prev}); no worker took it again within {} s", self.cfg.redispatch_wait_ms / 1000);
             self.fail(&id, &why, now);
         }
+        // Restages the gateway never sent.
+        let unstaged: Vec<String> = self
+            .jobs
+            .values()
+            .filter(|j| j.phase == Phase::Queued && j.restage && j.first_push_at.is_some_and(|t| now - t > self.cfg.max_bounce_ms))
+            .map(|j| j.job_id.clone())
+            .collect();
+        for id in unstaged {
+            let why = format!("an input could not be fetched and was not restaged within {} s", self.cfg.max_bounce_ms / 1000);
+            self.fail(&id, &why, now);
+        }
         // Cleanup.
         let old: Vec<String> =
             self.jobs.values().filter(|j| j.phase.finished() && j.finished_at.is_some_and(|t| now - t > self.cfg.keep_finished_ms)).map(|j| j.job_id.clone()).collect();
@@ -772,6 +858,9 @@ impl Sched {
                 if let Some(t) = j.requeued_at {
                     at(t + self.cfg.redispatch_wait_ms);
                 }
+                if let (true, Some(t)) = (j.restage, j.first_push_at) {
+                    at(t + self.cfg.max_bounce_ms + 1);
+                }
             }
             if j.phase.finished() {
                 if let Some(f) = j.finished_at {
@@ -806,7 +895,7 @@ impl Sched {
         let mut queued: Vec<(u64, String)> = self
             .jobs
             .values()
-            .filter(|j| j.phase == Phase::Queued && j.not_before <= now && j.envelope.is_some())
+            .filter(|j| j.phase == Phase::Queued && j.not_before <= now && j.has_envelope() && !j.restage)
             .map(|j| (j.seq, j.job_id.clone()))
             .collect();
         queued.sort();
@@ -828,9 +917,14 @@ impl Sched {
             j.pushed_at = Some(now);
             j.deadline = Some(now + self.cfg.ack_timeout_ms);
             j.first_push_at.get_or_insert(now);
-            let msg = DoMsg::Job { job_id: id.clone(), attempt: j.attempt, envelope: j.envelope.clone().unwrap_or(Value::Null), takeover: j.takeover };
+            j.lease += 1;
+            let msg = DoMsg::Job { job_id: id.clone(), attempt: j.attempt, envelope: j.envelope.clone().unwrap_or(Value::Null), lease: j.lease, takeover: j.takeover };
+            let spill = if j.envelope.is_none() { j.spill.clone() } else { None };
             self.touch_job(&id);
-            out.push(Out::Send { worker: w, msg });
+            match spill {
+                Some(key) => out.push(Out::PushSpilled { worker: w, key, msg }),
+                None => out.push(Out::Send { worker: w, msg }),
+            }
         }
         out
     }
@@ -859,9 +953,11 @@ impl Sched {
             .filter(|j| j.failed_here && j.phase == Phase::Failed)
             .map(|j| FailedJob { job_id: j.job_id.clone(), attempt: j.attempt, error: j.error.clone().unwrap_or_default(), at_ms: j.finished_at.unwrap_or(now) })
             .collect();
+        let restage = self.jobs.values().filter(|j| j.restage && j.phase == Phase::Queued).map(|j| j.job_id.clone()).collect();
         PoolStatus {
             pool: self.pool.clone(),
             now_ms: now,
+            restage,
             queued: count(Phase::Queued),
             pushed: count(Phase::Pushed),
             running: count(Phase::Running),
@@ -897,7 +993,7 @@ mod tests {
         WorkerMsg::Hello(Hello { worker_id: id.into(), pool: "p".into(), capacity: cap, jobs, ..Hello::default() })
     }
     fn enq(s: &mut Sched, id: &str, now: i64) -> (EnqueueResp, Vec<Out>) {
-        s.enqueue(EnqueueReq { job_id: id.into(), envelope: json!({"job": {"id": id}}), retries: 1, model: None }, now)
+        s.enqueue(EnqueueReq { job_id: id.into(), envelope: json!({"job": {"id": id}}), retries: 1, model: None, replace: false }, now)
     }
     fn pushes(out: &[Out]) -> Vec<(String, String, u32, bool)> {
         out.iter()
@@ -916,7 +1012,7 @@ mod tests {
             .collect()
     }
     fn ack(s: &mut Sched, w: &str, j: &str, attempt: u32, now: i64) -> Vec<Out> {
-        s.on_msg(w, WorkerMsg::Ack { job_id: j.into(), attempt, worker_ms: 3 }, now)
+        s.on_msg(w, WorkerMsg::Ack { job_id: j.into(), attempt, lease: 0, worker_ms: 3 }, now)
     }
 
     #[test]
@@ -968,15 +1064,16 @@ mod tests {
         let wake = s.next_wake(0).unwrap();
         assert_eq!(wake, s.cfg.ack_timeout_ms);
         let out = s.tick(wake);
-        // w1 is skipped for a while: w2 gets it, same attempt.
+        // w1 is skipped for a while: w2 gets it, same attempt, next lease.
         assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
-        // w1's late ack wins; w2's push is cancelled.
-        let out = ack(&mut s, "w1", "a", 1, wake + 5);
-        assert_eq!(cancels(&out), vec![("w2".into(), "a".into())]);
-        assert_eq!(s.job("a").unwrap().worker.as_deref(), Some("w1"));
-        // w2's ack now is refused with a cancel.
-        let out = ack(&mut s, "w2", "a", 1, wake + 6);
-        assert_eq!(cancels(&out), vec![("w2".into(), "a".into())]);
+        assert_eq!(s.job("a").unwrap().lease, 2);
+        // w1's late ack (lease 1) is stale: w1 is told to drop it.
+        let late = WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 1, worker_ms: 3 };
+        let out = s.on_msg("w1", late, wake + 5);
+        assert_eq!(cancels(&out), vec![("w1".into(), "a".into())]);
+        let out = s.on_msg("w2", WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 2, worker_ms: 3 }, wake + 6);
+        assert!(cancels(&out).is_empty());
+        assert_eq!((s.job("a").unwrap().phase, s.job("a").unwrap().worker.as_deref()), (Phase::Running, Some("w2")));
     }
 
     #[test]
@@ -1040,8 +1137,8 @@ mod tests {
         // It comes back holding `run` (never got `pushed`) plus one it
         // finished meanwhile that we never heard of.
         let held = vec![
-            Held { job_id: "run".into(), attempt: 1, state: "running".into() },
-            Held { job_id: "ghost".into(), attempt: 1, state: "succeeded".into() },
+            Held { job_id: "run".into(), attempt: 1, lease: 1, state: "running".into() },
+            Held { job_id: "ghost".into(), attempt: 1, lease: 1, state: "succeeded".into() },
         ];
         let out = s.on_msg("w1", hello("w1", 2, held), 2_000);
         assert_eq!(s.job("run").unwrap().phase, Phase::Running);
@@ -1084,8 +1181,8 @@ mod tests {
         let t = 10 + s.cfg.reconnect_grace_ms;
         s.tick(t);
         ack(&mut s, "w2", "a", 2, t + 1);
-        // w1 comes back, still running attempt 1: told to drop it.
-        let out = s.on_msg("w1", hello("w1", 1, vec![Held { job_id: "a".into(), attempt: 1, state: "running".into() }]), t + 2);
+        // w1 comes back, still running attempt 1 under lease 1: told to drop it.
+        let out = s.on_msg("w1", hello("w1", 1, vec![Held { job_id: "a".into(), attempt: 1, lease: 1, state: "running".into() }]), t + 2);
         let welcome = out.iter().find_map(|o| match o {
             Out::Send { msg: DoMsg::Welcome { cancel, .. }, .. } => Some(cancel.clone()),
             _ => None,
@@ -1114,15 +1211,15 @@ mod tests {
         let mut s = Sched::new("p", Cfg::default());
         let mut h = Hello { worker_id: "w1".into(), pool: "p".into(), capacity: 4, models: vec!["m1".into()], ..Hello::default() };
         s.on_msg("w1", WorkerMsg::Hello(h.clone()), 0);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "x".into(), envelope: json!({}), retries: 0, model: Some("m2".into()) }, 1);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "x".into(), envelope: json!({}), retries: 0, model: Some("m2".into()), replace: false }, 1);
         assert!(pushes(&out).is_empty());
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "y".into(), envelope: json!({}), retries: 0, model: Some("m1".into()) }, 2);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "y".into(), envelope: json!({}), retries: 0, model: Some("m1".into()), replace: false }, 2);
         assert_eq!(pushes(&out).len(), 1);
         h.draining = true;
-        h.jobs = vec![Held { job_id: "y".into(), attempt: 1, state: "queued".into() }];
+        h.jobs = vec![Held { job_id: "y".into(), attempt: 1, lease: 1, state: "queued".into() }];
         s.on_msg("w1", WorkerMsg::Hello(h), 3);
         assert_eq!(s.job("y").unwrap().phase, Phase::Running);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "z".into(), envelope: json!({}), retries: 0, model: None }, 4);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "z".into(), envelope: json!({}), retries: 0, model: None, replace: false }, 4);
         assert!(pushes(&out).is_empty());
         let out = s.on_msg("w1", WorkerMsg::Status { running: 1, draining: false, capacity: 4 }, 5);
         assert_eq!(pushes(&out).len(), 1);
@@ -1140,5 +1237,33 @@ mod tests {
         s.tick(t);
         assert!(s.job("a").is_none());
         assert!(s.take_dirty().removed_jobs.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn restage_after_424_and_spilled_envelopes() {
+        let mut s = Sched::new("p", Cfg::default());
+        s.on_msg("w1", hello("w1", 1, vec![]), 0);
+        let (_, out) = s.enqueue_spilled(EnqueueReq { job_id: "a".into(), envelope: json!(null), retries: 1, model: None, replace: false }, Some("env/a".into()), 0);
+        // A spilled envelope is pushed through the host.
+        assert!(matches!(&out[..], [Out::PushSpilled { key, .. }] if key == "env/a"));
+        let out = s.on_msg("w1", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 1);
+        assert!(out.iter().all(|o| !matches!(o, Out::Send { msg: DoMsg::Job { .. }, .. } | Out::PushSpilled { .. })));
+        assert_eq!(s.status(2).restage, vec!["a".to_string()]);
+        // Not pushed again until the gateway replaces the envelope.
+        assert!(pushes(&s.tick(5_000)).is_empty());
+        let (r, out) = s.enqueue(EnqueueReq { job_id: "a".into(), envelope: json!({"stored": true}), retries: 1, model: None, replace: true }, 6_000);
+        assert!(!r.duplicate);
+        assert_eq!(pushes(&out), vec![("w1".into(), "a".into(), 1, false)]);
+        assert_eq!(s.job("a").unwrap().lease, 2);
+        let d = s.take_dirty();
+        assert_eq!(d.dropped_spills, vec!["env/a".to_string()]);
+        assert!(s.status(7_000).restage.is_empty());
+        // A restage that never comes fails after the bounce limit.
+        s.enqueue(EnqueueReq { job_id: "b".into(), envelope: json!({}), retries: 1, model: None, replace: false }, 7_000);
+        s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 7_001);
+        s.on_msg("w1", WorkerMsg::Nack { job_id: "b".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 7_002);
+        let t = s.next_wake(7_003).unwrap();
+        s.tick(t.max(7_000 + s.cfg.max_bounce_ms + 2));
+        assert_eq!(s.job("b").unwrap().phase, Phase::Failed);
     }
 }

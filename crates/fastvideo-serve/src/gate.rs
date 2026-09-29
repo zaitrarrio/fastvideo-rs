@@ -217,7 +217,8 @@ async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, po
             mime: "video/mp4".into(),
             width,
             height,
-            frames: r.num_frames,
+            // An edit's output adds the source frames outside its window.
+            frames: r.output_frames(),
             fps: r.fps,
             audio,
         },

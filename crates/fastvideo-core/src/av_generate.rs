@@ -247,6 +247,8 @@ fn generate_ltx2(
             skip_audio_decode: false,
             reference: None,
             audio: None,
+            images: Vec::new(),
+            edit: None,
         };
         request
             .validate()

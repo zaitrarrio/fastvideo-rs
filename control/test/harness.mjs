@@ -104,6 +104,12 @@ export function startMock() {
     if (p === "/rp/graphql") {
       if (bearer !== m.runpodKey) return json(res, 401, { errors: [{ message: "bad key" }] });
       const q = body.query || "";
+      if (q.includes("gpuTypes") && !body.variables?.id)
+        return json(res, 200, { data: { gpuTypes: [
+          { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", displayName: "RTX PRO 6000", memoryInGb: 96, securePrice: 2.09, communityPrice: 1.69, lowestPrice: { stockStatus: "Low" } },
+          { id: "NVIDIA H100 80GB HBM3", displayName: "H100 SXM", memoryInGb: 80, securePrice: 3.29, communityPrice: 2.99, lowestPrice: { stockStatus: "High" } },
+          { id: "NVIDIA H200", displayName: "H200 SXM", memoryInGb: 141, securePrice: 3.59, communityPrice: null, lowestPrice: { stockStatus: "Medium" } },
+        ] } });
       if (q.includes("gpuTypes")) return json(res, 200, { data: { gpuTypes: [{ id: body.variables?.id, securePrice: body.variables?.id?.includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: "High" } }] } });
       const pods = [...m.pods.values()].map((x) => ({
         id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.computeType === "CPU" ? 0 : 1, vcpuCount: 2,

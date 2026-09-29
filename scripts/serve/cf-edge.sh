@@ -9,11 +9,12 @@
 #                               bundle here -> artifacts/edge/build
 #   cf-edge.sh dev [port]       wrangler dev: local workerd with local DO/D1 state
 #                               (artifacts/edge/dev-state), default port 8787
-#   cf-edge.sh deploy           D1 `fv-edge-staging` (created once), secrets, wrangler deploy
+#   cf-edge.sh deploy           D1 `fv-edge-staging` and R2 `fv-edge-staging-envelopes`
+#                               (created once), secrets, wrangler deploy
 #                               -> https://fv-edge-staging.<subdomain>.workers.dev
 #   cf-edge.sh status [pool..]  the Worker's version and each pool's dispatcher status
-#   cf-edge.sh down             delete the Worker (and its Durable Objects) and the D1
-#                               database; needs FV_EDGE_CONFIRM=fv-edge-staging
+#   cf-edge.sh down             delete the Worker (and its Durable Objects), the D1
+#                               database and the R2 bucket; needs FV_EDGE_CONFIRM=fv-edge-staging
 #   cf-edge.sh check-token      what the Cloudflare token can read (never printed)
 #
 # State (mode 700): ${FV_EDGE_STATE:-~/.config/fv-edge-staging}/
@@ -25,6 +26,7 @@
 # the file into wrangler's environment and curl header files only; never printed.
 # Env: FV_EDGE_POOL_LOCATIONS ('{"h3-turbo":"weur"}'), FV_EDGE_ACK_TIMEOUT_MS,
 # FV_EDGE_RECONNECT_GRACE_MS, FV_EDGE_STALE_AFTER_MS, FV_EDGE_REDISPATCH_WAIT_MS,
+# FV_EDGE_SPILL_BYTES (envelopes above it go to R2, default 1 MiB),
 # FV_EDGE_BUILD_AGENT (build-pod agent name, default this worktree's), FV_EDGE_TOOLS.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +34,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 
 NAME="fv-edge-staging"
 D1_NAME="fv-edge-staging"
+R2_NAME="fv-edge-staging-envelopes"
 COMPAT_DATE="2026-09-01"
 WRANGLER_VERSION="4.143.0"
 ESBUILD_VERSION="0.28.2"
@@ -118,6 +121,7 @@ write_config() {
     printf '[[durable_objects.bindings]]\nname = "POOL_SCHEDULER"\nclass_name = "PoolScheduler"\n\n'
     printf '[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["PoolScheduler"]\n\n'
     printf '[[d1_databases]]\nbinding = "DB"\ndatabase_name = "%s"\ndatabase_id = "%s"\n\n' "$D1_NAME" "$d1_id"
+    printf '[[r2_buckets]]\nbinding = "ENVELOPES"\nbucket_name = "%s"\n\n' "$R2_NAME"
     printf '[observability]\nenabled = true\n\n'
     printf '[vars]\nFV_EDGE_VERSION = "%s"\n' "$version"
     printf "POOL_LOCATIONS = '%s'\n" "$locations"
@@ -125,6 +129,7 @@ write_config() {
     [[ -n "${FV_EDGE_RECONNECT_GRACE_MS:-}" ]] && printf 'RECONNECT_GRACE_MS = "%s"\n' "$FV_EDGE_RECONNECT_GRACE_MS"
     [[ -n "${FV_EDGE_STALE_AFTER_MS:-}" ]] && printf 'STALE_AFTER_MS = "%s"\n' "$FV_EDGE_STALE_AFTER_MS"
     [[ -n "${FV_EDGE_REDISPATCH_WAIT_MS:-}" ]] && printf 'REDISPATCH_WAIT_MS = "%s"\n' "$FV_EDGE_REDISPATCH_WAIT_MS"
+    [[ -n "${FV_EDGE_SPILL_BYTES:-}" ]] && printf 'SPILL_BYTES = "%s"\n' "$FV_EDGE_SPILL_BYTES"
     true
   } >"$dest"
 }
@@ -201,6 +206,11 @@ cmd_deploy() {
   fi
   mkdir -p "$STATE" && chmod 700 "$STATE"
   printf '%s\n' "$id" >"$STATE/d1_id"
+  if ! cf "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_NAME" | python3 -c 'import sys,json; sys.exit(0 if json.load(sys.stdin).get("success") else 1)'; then
+    log "creating R2 bucket $R2_NAME"
+    cf -X POST "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets" -d "{\"name\":\"$R2_NAME\"}" |
+      python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get("success") else "R2 bucket create failed: %s (the token needs Account > Workers R2 Storage > Edit)" % d.get("errors"))'
+  fi
   local dir="$OUT/deploy" version
   version="$(version_string)"
   mkdir -p "$dir"
@@ -253,6 +263,13 @@ cmd_down() {
     log "deleting D1 database $D1_NAME"
     cf -X DELETE "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$id" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("deleted" if d.get("success") else d.get("errors"))'
   fi
+  log "emptying and deleting R2 bucket $R2_NAME"
+  local keys
+  keys="$(cf "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_NAME/objects?per_page=1000" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("\n".join(o["key"] for o in (d.get("result") or [])))' 2>/dev/null || true)"
+  while IFS= read -r k; do
+    [[ -n "$k" ]] && cf -X DELETE "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_NAME/objects/$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$k")" >/dev/null
+  done <<<"$keys"
+  cf -X DELETE "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$R2_NAME" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("deleted" if d.get("success") else d.get("errors"))'
   rm -f "$STATE/url" "$STATE/d1_id"
 }
 

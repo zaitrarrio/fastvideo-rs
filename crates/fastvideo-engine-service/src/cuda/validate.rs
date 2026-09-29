@@ -59,13 +59,29 @@ pub fn h3(r: &H3Recipe, job: &ResolvedJob) -> Result<H3Geometry, ApiError> {
 pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
     ltx2_reference(job, r.ic_lora.is_some())?;
     let drive = matches!(job.audio_in, Some((fastvideo_protocol::AudioRole::Drive, _)));
+    let dub = matches!(job.audio_in, Some((fastvideo_protocol::AudioRole::Dub, _)));
     match (job.task, &job.audio_in) {
         (Task::A2V, _) if !drive => {
             return Err(ApiError::invalid_param("audio_url", "audio-to-video needs the driving audio"))
         }
         (Task::A2V, _) => {}
-        (_, Some(_)) => return Err(ApiError::invalid_param("audio_url", "input audio is only taken by audio-to-video")),
+        (Task::Retake, Some(_)) if dub => {}
+        (_, Some(_)) => {
+            return Err(ApiError::invalid_param(
+                "audio_url",
+                "input audio is only taken by audio-to-video (and a retake's new window audio)",
+            ))
+        }
         _ => {}
+    }
+    if job.task.edits_video() {
+        if r.version != LtxVersion::V25 || r.ic_lora.is_some() {
+            return Err(ApiError::unsupported(GapId::LtxEndpoint));
+        }
+        return ltx2_edit(job);
+    }
+    if job.edit.is_some() {
+        return Err(ApiError::invalid_param("video_url", "a source video is only taken by retake and extend"));
     }
     match job.task {
         Task::Ref2V => {}
@@ -87,6 +103,61 @@ pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
         r.two_stage,
     )
     .map_err(ApiError::invalid)
+}
+
+/// LTX-2.5 retake / extend (`ltx2::v2v::VideoEdit::validate`): one stage
+/// at a multiple of 32 within [`fastvideo_protocol::EDIT_MAX_PIXELS`], the
+/// generated clip `8k + 1` frames (the window plus a multiple-of-8
+/// extension) within [`fastvideo_protocol::EDIT_MAX_FRAMES`], and a window
+/// that fits the source.
+pub fn ltx2_edit(job: &ResolvedJob) -> Result<(), ApiError> {
+    use fastvideo_protocol::{ResolvedEditOp, EDIT_MAX_FRAMES, EDIT_MAX_PIXELS};
+    let Some(e) = &job.edit else {
+        return Err(ApiError::invalid_param("video_url", "retake and extend need the source video"));
+    };
+    if !job.keyframes.is_empty() || !job.references.is_empty() {
+        return Err(ApiError::invalid_param("task", "retake and extend take no images or references"));
+    }
+    fastvideo_models::ltx2::config::check_geometry(job.height as usize, job.width as usize, job.num_frames as usize, false)
+        .map_err(ApiError::invalid)?;
+    if u64::from(job.width) * u64::from(job.height) > EDIT_MAX_PIXELS {
+        return Err(ApiError::invalid(format!(
+            "ltx2 edit: {}x{} is over the {EDIT_MAX_PIXELS}-pixel budget of one stage",
+            job.width, job.height
+        )));
+    }
+    if job.num_frames > EDIT_MAX_FRAMES {
+        return Err(ApiError::invalid(format!(
+            "ltx2 edit: {} frames; at most {EDIT_MAX_FRAMES} are generated",
+            job.num_frames
+        )));
+    }
+    let window_ok = e.window_frames % 8 == 1
+        && e.window_frames >= 9
+        && e.window_start + e.window_frames <= e.source_frames
+        && e.source_fps.is_finite()
+        && e.source_fps > 0.0;
+    let extend = match e.op {
+        ResolvedEditOp::Retake { start_s, end_s, video, audio } => {
+            if !(video || audio) || !(start_s >= 0.0 && end_s > start_s) {
+                return Err(ApiError::invalid("ltx2 retake: an empty window or nothing to regenerate"));
+            }
+            0
+        }
+        ResolvedEditOp::Extend { frames, .. } => {
+            if frames == 0 || frames % 8 != 0 {
+                return Err(ApiError::invalid(format!("ltx2 extend: {frames} new frames is not a positive multiple of 8")));
+            }
+            frames
+        }
+    };
+    if !window_ok || job.num_frames != e.window_frames + extend {
+        return Err(ApiError::invalid(format!(
+            "ltx2 edit: window {}+{} of {} source frames, {} generated",
+            e.window_start, e.window_frames, e.source_frames, job.num_frames
+        )));
+    }
+    Ok(())
 }
 
 /// The LTX reference sheet of a `Ref2V` job: exactly one image reference

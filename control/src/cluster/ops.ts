@@ -95,7 +95,8 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
   }
   const cluster_dph = pods.reduce((s, p) => s + (p.dph ?? 0), 0);
   // The account's burn already includes the running pods of this cluster.
-  const burn = acct.spendPerHr + cluster_dph;
+  // The account's burn includes this cluster's running pods (runningDph) when it replans a running cluster.
+  const burn = Math.max(0, acct.spendPerHr - (opts.runningDph ?? 0)) + cluster_dph;
   const projected = acct.balance - burn * opts.hours;
   const floor = Math.max(spec.balance_floor, defaults.balanceFloor(env));
   const reasons: string[] = [];

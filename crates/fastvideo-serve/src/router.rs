@@ -61,9 +61,9 @@ fn r(owner: Owner, method: &'static str, path: impl Into<String>) -> RouteSpec {
 }
 
 /// LTX endpoints with no engine path (design §4.5): 403 stubs.
-pub const LTX_STUBS: &[&str] = &["retake", "extend", "video-to-video-hdr", "video-to-video-reframe"];
+pub const LTX_STUBS: &[&str] = &["video-to-video-hdr", "video-to-video-reframe"];
 /// LTX generation endpoints (`/v1/*` sync, `/v2/*` async).
-pub const LTX_GENERATE: &[&str] = &["text-to-video", "image-to-video", "audio-to-video"];
+pub const LTX_GENERATE: &[&str] = &["text-to-video", "image-to-video", "audio-to-video", "retake", "extend"];
 /// fal submit sub-paths of the H3 apps (design §4.4).
 pub const FAL_SUBS: &[&str] = &["text-to-video", "image-to-video", "reference-to-video"];
 

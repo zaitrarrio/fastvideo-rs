@@ -77,9 +77,44 @@ struct LinearLora {
     w0: CudaTensor,
     #[cfg(feature = "cuda")]
     w0_bf16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+    /// The device bf16 base kept in pinned host memory instead
+    /// ([`with_lora_base_on_host`]): each re-fuse uploads it.
+    #[cfg(feature = "cuda")]
+    w0_host: Option<HostBase>,
     a: CudaTensor,
     b: CudaTensor,
     strength: f32,
+}
+
+/// A pinned host copy of a device bf16 weight.
+#[cfg(feature = "cuda")]
+#[derive(Clone)]
+struct HostBase(std::sync::Arc<cudarc::driver::PinnedHostSlice<half::bf16>>);
+
+#[cfg(feature = "cuda")]
+impl std::fmt::Debug for HostBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HostBase({} bf16)", self.0.len())
+    }
+}
+
+thread_local! {
+    static LORA_BASE_HOST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` (a DiT load that attaches LoRAs) with every [`Linear::attach_lora`]
+/// keeping the unfused device bf16 base in pinned host memory rather than a
+/// second device copy: the device holds one copy of the weights, and each
+/// [`Linear::set_lora_strength`] uploads the base and fuses into a fresh
+/// buffer (strength 0 is the upload alone, the base exactly). For a DiT
+/// that switches between its base and a fused adapter per request (the
+/// LTX-2.5 dev transformer: the base at stage 1, the distilled LoRA at
+/// stage 2) without holding the base twice on the device.
+pub fn with_lora_base_on_host<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let prev = LORA_BASE_HOST.with(|c| c.replace(on));
+    let out = f();
+    LORA_BASE_HOST.with(|c| c.set(prev));
+    out
 }
 
 /// LongLive NVFP4 on every prefix of a fused linear. Conservative: one
@@ -1158,9 +1193,20 @@ impl Linear {
     fn snapshot_w0(&self) -> Result<LinearLora> {
         #[cfg(feature = "cuda")]
         if let Some(w16) = &self.weight_bf16 {
+            if LORA_BASE_HOST.with(|c| c.get()) {
+                return Ok(LinearLora {
+                    w0: CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim])?,
+                    w0_bf16: None,
+                    w0_host: Some(HostBase(std::sync::Arc::new(pin_bf16_slice(w16)?))),
+                    a: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+                    b: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+                    strength: 0.0,
+                });
+            }
             return Ok(LinearLora {
                 w0: CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim])?,
                 w0_bf16: Some(std::sync::Arc::new(clone_bf16_slice(w16)?)),
+                w0_host: None,
                 a: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
                 b: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
                 strength: 0.0,
@@ -1170,6 +1216,8 @@ impl Linear {
             w0: self.weight.clone(),
             #[cfg(feature = "cuda")]
             w0_bf16: None,
+            #[cfg(feature = "cuda")]
+            w0_host: None,
             a: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
             b: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
             strength: 0.0,
@@ -1186,6 +1234,20 @@ impl Linear {
         if let Some(w0_16) = lora.w0_bf16.clone() {
             let fused = fuse_w0_plus_sba_bf16(&w0_16, &lora.a, &lora.b, s, out, inn)?;
             self.weight_bf16 = Some(std::sync::Arc::new(fused));
+            return Ok(());
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(HostBase(host)) = lora.w0_host.clone() {
+            // The live buffer goes first: at most one extra weight (and the
+            // fuse's f32 temporaries) exists at a time.
+            self.weight_bf16 = None;
+            let w0 = upload_pinned_bf16(&host)?;
+            let live = if s == 0.0 {
+                w0
+            } else {
+                fuse_w0_plus_sba_bf16(&w0, &lora.a, &lora.b, s, out, inn)?
+            };
+            self.weight_bf16 = Some(std::sync::Arc::new(live));
             return Ok(());
         }
         self.weight = fuse_w0_plus_sba(&lora.w0, &lora.a, &lora.b, s, out, inn)?;
@@ -1518,6 +1580,38 @@ fn clone_bf16_slice(
         .memcpy_stod(&host)
         .map_err(|e| msg(e.to_string()))?;
     stats::record_h2d(host.len() / 2);
+    Ok(out)
+}
+
+/// A pinned host copy of a device bf16 buffer.
+#[cfg(feature = "cuda")]
+fn pin_bf16_slice(
+    src: &cudarc::driver::CudaSlice<half::bf16>,
+) -> Result<cudarc::driver::PinnedHostSlice<half::bf16>> {
+    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+    let err = |e: cudarc::driver::DriverError| msg(format!("lora base to host: {e}"));
+    // Every element is written by the copy before it is read.
+    let mut pinned = unsafe { dev.ctx.alloc_pinned::<half::bf16>(src.len()) }.map_err(err)?;
+    {
+        let host = pinned.as_mut_slice().map_err(err)?;
+        dev.stream.memcpy_dtoh(src, host).map_err(err)?;
+    }
+    dev.stream.synchronize().map_err(err)?;
+    stats::record_d2h(src.len() / 2);
+    Ok(pinned)
+}
+
+/// A device copy of a pinned host bf16 buffer.
+#[cfg(feature = "cuda")]
+fn upload_pinned_bf16(
+    src: &cudarc::driver::PinnedHostSlice<half::bf16>,
+) -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+    let err = |e: cudarc::driver::DriverError| msg(format!("lora base to device: {e}"));
+    // Every element is written by the copy before it is read.
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(src.len()) }.map_err(err)?;
+    dev.stream.memcpy_htod(src, &mut out).map_err(err)?;
+    stats::record_h2d(src.len() / 2);
     Ok(out)
 }
 

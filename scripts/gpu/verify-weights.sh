@@ -11,6 +11,7 @@
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8 upscalers
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
+#                                      ltx25-dev ltx25-a2v-guided
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -87,6 +88,12 @@ needs() {
       echo ":ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors" ;;
     # LTX-2.5 reference-to-video: the two-stage base plus the Ingredients IC-LoRA.
     ltx25-ref2v) echo "$(needs ltx25-two-stage) $(needs ltx25-ic-lora-ingredients)" ;;
+    # The LTX-2.5 dev transformer (weights-manifest.tsv ltx25-dev; fetch-hub-tree.sh).
+    ltx25-dev) echo "ltx25-dev:transformer_full" ;;
+    # Guided audio-to-video (A2VidPipelineTwoStage): the two-stage bundle, the
+    # dev transformer and the distilled LoRA beside the bundle.
+    ltx25-a2v-guided)
+      echo "$(needs ltx25-two-stage) $(needs ltx25-dev) :ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     upscalers) echo "upscalers" ;;
@@ -96,7 +103,7 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done

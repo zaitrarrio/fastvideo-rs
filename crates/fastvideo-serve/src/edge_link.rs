@@ -8,9 +8,12 @@
 //!   version, capacity, draining, and every job it took from the dispatcher
 //!   that it has not reported done (reconcile after a Worker redeploy).
 //! - A pushed job goes through the same take as the gateway path
-//!   ([`crate::worker::take_envelope`]: inputs, D1 adopt, engine); `ack`
-//!   when taken, `nack` otherwise (`retry` for busy / draining / held
-//!   elsewhere). A finished job is reported `done`.
+//!   ([`crate::worker::take_envelope`]: inputs, engine), but with the
+//!   push's lease: the job is held and started at once and its D1 row is
+//!   written behind, fenced by the lease (phase 2). `ack` when taken,
+//!   `nack` otherwise (`retry` for busy / draining; 424 for a client URL it
+//!   could not fetch). A finished job is reported `done`; a job a newer
+//!   lease took is stopped here.
 //! - `cancel` and `drain` frames act as the internal routes do; a status
 //!   frame every `dispatch.status_s` is the heartbeat.
 
@@ -40,8 +43,8 @@ pub struct LinkCfg {
     pub status_every: Duration,
 }
 
-/// Jobs taken from the dispatcher (id → attempt) not yet reported done.
-type Taken = Arc<Mutex<BTreeMap<JobId, u32>>>;
+/// Jobs taken from the dispatcher (id → (attempt, lease)) not yet reported done.
+type Taken = Arc<Mutex<BTreeMap<JobId, (u32, u64)>>>;
 
 /// `http(s)://host/…` → `ws(s)://host/…/pools/{pool}/connect`.
 pub fn connect_url(base: &str, pool: &str) -> String {
@@ -61,6 +64,18 @@ pub fn spawn(st: Arc<WorkerState>, cfg: LinkCfg) -> tokio::task::JoinHandle<()> 
     tokio::spawn(async move {
         let taken: Taken = Arc::default();
         let (tx, mut rx) = mpsc::unbounded_channel::<WorkerMsg>();
+        // A newer lease took one of our jobs (the dispatcher gave up on us
+        // meanwhile): stop it here; its writes are already refused.
+        if let Some(d1) = st.d1.clone() {
+            let mut fenced = d1.subscribe_fenced();
+            let st2 = st.clone();
+            tokio::spawn(async move {
+                while let Some(id) = fenced.recv().await {
+                    tracing::warn!(job = %id, "worker: a newer lease holds this job; stopping it here");
+                    let _ = st2.gate.engine().cancel(id);
+                }
+            });
+        }
         let mut backoff = Duration::from_millis(250);
         let url = connect_url(&cfg.do_url, &cfg.pool);
         tracing::info!(pool = %cfg.pool, url = %url, capacity = cfg.capacity, "worker: connecting to the pool's dispatcher");
@@ -84,12 +99,12 @@ fn state_word(j: Option<&fastvideo_protocol::Job>) -> String {
 }
 
 async fn hello(st: &WorkerState, cfg: &LinkCfg, taken: &Taken) -> (Hello, Vec<JobId>) {
-    let held: Vec<(JobId, u32)> = taken.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| (*k, *v)).collect();
+    let held: Vec<(JobId, (u32, u64))> = taken.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| (*k, *v)).collect();
     let mut jobs = Vec::new();
     let mut finished = Vec::new();
-    for (id, attempt) in held {
+    for (id, (attempt, lease)) in held {
         let j = st.ctx.jobs().get(id).await;
-        let h = Held { job_id: id.to_string(), attempt, state: state_word(j.as_ref()) };
+        let h = Held { job_id: id.to_string(), attempt, lease, state: state_word(j.as_ref()) };
         if h.finished() {
             finished.push(id);
         }
@@ -188,11 +203,11 @@ async fn session(
 
 fn on_frame(st: &Arc<WorkerState>, taken: &Taken, tx: &mpsc::UnboundedSender<WorkerMsg>, m: DoMsg) {
     match m {
-        DoMsg::Job { job_id, attempt, envelope, takeover } => {
+        DoMsg::Job { job_id, attempt, envelope, lease, takeover } => {
             let st = st.clone();
             let taken = taken.clone();
             let tx = tx.clone();
-            tokio::spawn(async move { take(st, taken, tx, job_id, attempt, envelope, takeover).await });
+            tokio::spawn(async move { take(st, taken, tx, Push { job_id, attempt, lease, takeover }, envelope).await });
         }
         DoMsg::Cancel { job_id } => cancel(st, job_id),
         DoMsg::Welcome { cancel: drop, .. } => {
@@ -217,7 +232,16 @@ fn cancel(st: &Arc<WorkerState>, job_id: String) {
     });
 }
 
-async fn take(st: Arc<WorkerState>, taken: Taken, tx: mpsc::UnboundedSender<WorkerMsg>, job_id: String, attempt: u32, envelope: serde_json::Value, takeover: bool) {
+/// A push's identity.
+struct Push {
+    job_id: String,
+    attempt: u32,
+    lease: u64,
+    takeover: bool,
+}
+
+async fn take(st: Arc<WorkerState>, taken: Taken, tx: mpsc::UnboundedSender<WorkerMsg>, push: Push, envelope: serde_json::Value) {
+    let Push { job_id, attempt, lease, takeover } = push;
     let t0 = Instant::now();
     let nack = |retry: bool, code: u16, message: String| WorkerMsg::Nack { job_id: job_id.clone(), attempt, retry, code, message };
     let env: Envelope = match serde_json::from_value(envelope) {
@@ -232,14 +256,14 @@ async fn take(st: Arc<WorkerState>, taken: Taken, tx: mpsc::UnboundedSender<Work
         let _ = tx.send(nack(false, 400, "the envelope is for another job".into()));
         return;
     }
-    let resp = crate::worker::take_envelope(&st, env, takeover).await;
+    let resp = crate::worker::take_envelope(&st, env, takeover, Some(lease)).await;
     let code = resp.status().as_u16();
     if resp.status().is_success() {
         let worker_ms = t0.elapsed().as_millis() as u64;
-        taken.lock().unwrap_or_else(|p| p.into_inner()).insert(id, attempt);
-        let _ = tx.send(WorkerMsg::Ack { job_id: job_id.clone(), attempt, worker_ms });
+        taken.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (attempt, lease));
+        let _ = tx.send(WorkerMsg::Ack { job_id: job_id.clone(), attempt, lease, worker_ms });
         metrics::histogram!("fv_worker_edge_take_seconds").record(worker_ms as f64 / 1e3);
-        tracing::info!(job = %id, attempt, takeover, worker_ms, "worker: took a pushed job");
+        tracing::info!(job = %id, attempt, lease, takeover, worker_ms, "worker: took a pushed job");
         // Report the end (frees the slot on the dispatcher).
         if let Some(mut w) = st.ctx.jobs().watch(id) {
             while !w.borrow_and_update().state.is_terminal() {
