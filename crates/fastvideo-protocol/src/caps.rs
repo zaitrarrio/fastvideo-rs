@@ -306,16 +306,62 @@ pub struct HdTier {
     pub short_edge: u32,
     /// Largest generation canvas area (H3: 1088*1920).
     pub max_area: u64,
+    /// Longest clip at this tier, in frames (`None`: the model's frame
+    /// grid). H3 1080P: 5 s (124 frames) by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_frames: Option<u32>,
+    /// The longer cap the experimental feature flag [`FLAG_H3_1080P_LONG`]
+    /// allows, while that flag is off (`None` once it is on, or when no
+    /// flag lifts the cap). Refusals name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental_max_frames: Option<u32>,
 }
+
+/// The experimental feature flag that lifts the H3 1080P tier's clip length
+/// from 5 s to 10 s (owner decision 2026-09-29; docs/serve/console.md §7).
+pub const FLAG_H3_1080P_LONG: &str = "h3_1080p_long";
+
+/// H3 1080P clip cap without the flag (seconds).
+pub const H3_1080P_MAX_S: usize = 5;
+/// H3 1080P clip cap with [`FLAG_H3_1080P_LONG`] on (seconds).
+pub const H3_1080P_LONG_MAX_S: usize = 10;
 
 impl HdTier {
     /// H3 1080P: short edge 1080, generated at 1088 on the short side and
     /// centre-cropped back; at most 1088x1920 pixels
-    /// (docs/serve/h3-1080p-and-upscaler.md).
+    /// (docs/serve/h3-1080p-and-upscaler.md). Clips up to 5 s; 10 s with
+    /// the [`FLAG_H3_1080P_LONG`] feature flag ([`HdTier::with_long`]).
     pub fn h3_1080p() -> Self {
         Self {
             short_edge: h3::H3_SHORT_EDGE_1080P as u32,
             max_area: h3::H3_MAX_PIXELS_1080P as u64,
+            max_frames: Some(h3::align_num_frames(H3_1080P_MAX_S * h3::H3_FPS) as u32),
+            experimental_max_frames: Some(h3::align_num_frames(H3_1080P_LONG_MAX_S * h3::H3_FPS) as u32),
+        }
+    }
+
+    /// The tier with the [`FLAG_H3_1080P_LONG`] flag applied: `on` allows
+    /// up to 10 s, off keeps 5 s. Idempotent, so a gateway can re-apply it
+    /// to caps a worker already flagged.
+    pub fn with_long(self, on: bool) -> Self {
+        let short = h3::align_num_frames(H3_1080P_MAX_S * h3::H3_FPS) as u32;
+        let long = h3::align_num_frames(H3_1080P_LONG_MAX_S * h3::H3_FPS) as u32;
+        if on {
+            Self { max_frames: Some(long), experimental_max_frames: None, ..self }
+        } else {
+            Self { max_frames: Some(short), experimental_max_frames: Some(long), ..self }
+        }
+    }
+}
+
+/// Applies the experimental feature flags to a model's caps (what the
+/// server negotiates against and the console's forms are built from).
+/// `enabled(name)` answers whether a flag is on. Today one flag:
+/// [`FLAG_H3_1080P_LONG`] on the H3 1080P tier.
+pub fn apply_feature_flags(caps: &mut ModelCaps, enabled: &dyn Fn(&str) -> bool) {
+    if caps.family == Family::H3 {
+        if let Some(t) = caps.canvas.hd {
+            caps.canvas.hd = Some(t.with_long(enabled(FLAG_H3_1080P_LONG)));
         }
     }
 }

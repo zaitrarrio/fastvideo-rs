@@ -347,6 +347,13 @@ pub struct FakeConfig {
     pub ffmpeg: PathBuf,
     /// Engine-side job checks run before generation (`None`: every job runs).
     pub validator: Option<JobValidator>,
+    /// A simulated GPU for the startup capability check ([`crate::device`]):
+    /// a model it cannot run fails its load with the reason (`None`: no
+    /// check, every model loads).
+    pub device_profile: Option<crate::device::DeviceProfile>,
+    /// Per-model requirements for that check. A model not listed: FP8 for
+    /// the H3 family (as the shipped H3 recipes), nothing special otherwise.
+    pub requirements: BTreeMap<ModelId, crate::device::Requirements>,
 }
 
 impl Default for FakeConfig {
@@ -364,6 +371,8 @@ impl Default for FakeConfig {
             mp4: Mp4Mode::Auto,
             ffmpeg: PathBuf::from("ffmpeg"),
             validator: None,
+            device_profile: None,
+            requirements: BTreeMap::new(),
         }
     }
 }
@@ -383,6 +392,7 @@ impl FakeConfig {
         Self {
             models,
             validator: Some(JobValidator::cuda(catalog)),
+            requirements: catalog.iter().map(|m| (m.id.clone(), m.requirements())).collect(),
             ..Self::default()
         }
     }
@@ -637,7 +647,14 @@ fn write_mp4(
 
 impl EngineBackend for FakeBackend {
     fn device(&self) -> DeviceInfo {
-        self.cfg.device.clone()
+        match &self.cfg.device_profile {
+            Some(d) => DeviceInfo {
+                name: d.name.clone(),
+                total_memory_mb: d.total_bytes.map_or(self.cfg.device.total_memory_mb, |b| b >> 20),
+                ..self.cfg.device.clone()
+            },
+            None => self.cfg.device.clone(),
+        }
     }
 
     fn caps(&self) -> Vec<ModelCaps> {
@@ -652,7 +669,14 @@ impl EngineBackend for FakeBackend {
     }
 
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
-        self.model(model)?;
+        let m = self.model(model)?;
+        if let Some(dev) = &self.cfg.device_profile {
+            let req = self.cfg.requirements.get(model).cloned().unwrap_or_else(|| crate::device::Requirements {
+                fp8: m.caps.family == fastvideo_protocol::Family::H3,
+                ..Default::default()
+            });
+            req.check(model.as_str(), dev).map_err(ApiError::engine_failed)?;
+        }
         obs(LoadEvent::Stage("weights"));
         let slice = self.cfg.timing.load / 4;
         for i in 1..=4u64 {

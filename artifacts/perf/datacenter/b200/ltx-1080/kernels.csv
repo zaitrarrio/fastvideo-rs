@@ -1,0 +1,98 @@
+name,category,count,total_ms,pct_device,mean_us,min_us,max_us,grid,block,cfg_share,n_cfgs,regs,smem
+sol_mma_fwd_x4f,attention,141,2047.709,16.99,14522.76,9439.39,21608.03,606x32x1,128x1x1,1.0,1,255,34432
+nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_bias_TNT,gemm,4131,1344.322,11.15,325.42,67.68,774.27,1216x1x1,256x1x1,0.65,3,255,213568
+fvf_ltx_qk_norm_rope,norm_elementwise,6336,966.031,8.02,152.47,7.23,1089.63,151x1x1,256x1x1,0.42,4,30,1024
+fvf_ltx_res_norm_mod,norm_elementwise,5280,965.022,8.01,182.77,8.9,1019.84,151x1x1,256x1x1,0.5,3,21,1024
+fa_dc100_fwd_d128,attention,915,782.821,6.5,855.54,190.47,19375.32,38x32x1,384x1x1,0.84,2,168,197888
+nvjet_sm100_tst_128x256_64x6_2x1_2cta_v_bz_TNT,gemm,528,733.6,6.09,1389.39,726.56,3163.37,4864x1x1,256x1x1,0.73,2,255,213296
+mx_unary,norm_elementwise,2288,622.417,5.16,272.04,1.22,2750.6,4x1x1,1024x1x1,0.27,5,16,0
+ltxv_norm_silu,vae_conv,3519,480.442,3.99,136.53,14.43,1255.11,9408x1x1,256x1x1,0.11,91,63,0
+nvjet_sm100_tst_256x256_64x4_2x1_2cta_v_bz_TNT,gemm,144,448.146,3.72,3112.12,2945.07,3169.51,2432x1x1,256x1x1,1.0,1,255,213240
+nvjet_sm100_tst_256x224_64x4_2x1_2cta_v_bz_TNT,gemm,384,298.944,2.48,778.5,747.04,793.83,704x1x1,256x1x1,1.0,1,255,205048
+mx_residual_gate,norm_elementwise,1056,279.271,2.32,264.46,4.42,1232.16,302x1x1,1024x1x1,0.5,3,26,0
+cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,623,279.063,2.32,447.93,92.74,1298.4,148x1x4,256x1x1,0.26,7,255,216064
+flash_mma_fwd2_d64,attention,2112,235.376,1.95,111.45,5.98,713.48,2x32x1,256x1x1,0.75,3,128,32768
+cutlass3x_sm100_tensorop_s256x256x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x256x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,1456,219.326,1.82,150.64,109.57,382.66,2x294x1,256x1x1,0.23,16,125,216064
+fvf_ltx_gate_merge,norm_elementwise,3168,179.327,1.49,56.61,3.68,289.73,151x1x1,256x1x1,0.5,3,26,128
+cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,1149,161.032,1.34,140.15,51.07,378.5,2x1176x1,256x1x1,0.19,14,123,215040
+ltxv_d2s_bias,vae_conv,270,129.43,1.07,479.37,59.1,939.91,37632x1x1,1024x1x1,0.13,42,34,0
+nvjet_sm100_tst_128x192_64x7_2x1_2cta_v_bz_bias_TNT,gemm,1152,116.563,0.97,101.18,97.57,107.9,816x1x1,256x1x1,1.0,1,255,217688
+cutlass3x_sm100_tensorop_s256x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,409,113.832,0.94,278.32,64.58,1264.8,74x2x1,256x1x1,0.27,20,254,215040
+fvf_split_heads_rows,layout_copy,3168,91.111,0.76,28.76,3.1,211.62,151x1x1,256x1x1,0.33,4,32,1024
+cast_f32_bf16,cast_quant,19551,58.845,0.49,3.01,0.83,189.54,2x1x1,1024x1x1,0.44,20,16,0
+mx_binary,norm_elementwise,6610,48.363,0.4,7.32,1.73,43.52,8x1x1,1024x1x1,0.16,20,20,0
+block_copy,layout_copy,1648,34.494,0.29,20.93,1.22,237.63,672x1x1,1024x1x1,0.17,66,16,0
+nvjet_sm100_tst_64x48_64x16_2x2_2cta_h_bz_bias_TNT,gemm,5280,33.86,0.28,6.41,5.6,7.36,128x1x1,256x1x1,1.0,1,255,197304
+nvjet_sm100_tst_128x256_64x6_2x2_2cta_h_bz_bias_TNT,gemm,1056,27.092,0.22,25.66,24.29,28.0,128x1x1,256x1x1,1.0,1,255,213568
+nvjet_sm100_tst_64x272_64x5_1x2_h_bz_bias_TNT,gemm,432,26.773,0.22,61.97,59.3,65.63,144x1x1,256x1x1,1.0,1,255,223648
+"cudnn::cnn::dgrad2d_grouped_direct_kernel<float, int, float, float, (bool)0, (bool)1, (int)1, (int)0>(cudnn::cnn::DgradGroupedDirectParams, const T1 *, const T1 *, T1 *, T4, T4)",vae_conv,201,24.308,0.2,120.94,35.04,177.76,4509x1x1,1024x1x1,0.18,10,31,0
+sol_prep_kv,attention,141,23.799,0.2,168.78,165.79,177.25,606x32x1,128x1x1,1.0,1,32,0
+pad_axis,layout_copy,508,22.547,0.19,44.38,2.56,308.45,4509x1x1,1024x1x1,0.14,40,28,0
+nvjet_sm100_tst_64x80_64x12_1x4_h_bz_bias_TNT,gemm,1152,20.217,0.17,17.55,13.66,21.34,124x1x1,256x1x1,1.0,1,255,229960
+ltxv_out_unpatch,vae_conv,126,14.408,0.12,114.35,63.42,158.88,14112x1x1,1024x1x1,0.22,11,28,0
+mx_block_copy,layout_copy,4476,14.301,0.12,3.19,1.18,42.62,4x1x1,1024x1x1,0.35,16,16,0
+cutlass3x_sm100_tensorop_s256x64x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_256x64x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,126,13.931,0.12,110.56,61.34,153.73,2x1176x1,256x1x1,0.22,11,123,222720
+sol_prep_q,attention,141,13.53,0.11,95.95,93.22,101.47,606x32x1,128x1x1,1.0,1,32,640
+bcast_binary,norm_elementwise,510,12.174,0.1,23.87,1.98,36.29,8064x1x1,1024x1x1,0.36,15,20,0
+nvjet_sm100_tst_128x128_64x8_2x2_2cta_h_bz_bias_TNT,gemm,1056,9.998,0.08,9.47,8.7,10.46,128x1x1,256x1x1,1.0,1,255,213616
+"cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0, float, __nv_bfloat16, __nv_bfloat16, (bool)1, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T10 *, T9 *, T5 *, const T6 *, const T6 *, const T11 *, const T4 *, T…",gemm,2123,9.425,0.08,4.44,2.18,7.01,1x10x1,32x16x1,0.75,3,32,0
+cutlass3x_sm100_tensorop_s128x128x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_128x128x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha_stream_k,vae_conv,35,7.781,0.06,222.3,108.8,554.47,72x2x1,256x1x1,0.8,4,164,231424
+"cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0, (int)1, (int)0, int, float, float, float, float, float, float>(cudnn::cnn::GroupedDirectFpropParams, const T11 *, const T13 *, T12 *, T14, T14, const T14 *, const T14 *, const T12 *, const T15 *, cudnnActi…",vae_conv,200,7.65,0.06,38.25,23.65,55.3,2254x1x1,1024x1x1,0.55,3,32,0
+cast_bf16_f32_bias_act,cast_quant,129,7.021,0.06,54.42,1.34,186.31,19x1x1,1024x1x1,0.29,8,18,0
+nvjet_sm100_tst_64x32_64x16_1x4_h_bz_splitK_bias_TNT,gemm,1584,6.667,0.06,4.21,3.9,5.54,16x1x1,256x1x1,1.0,1,255,201104
+nvjet_sm100_tst_64x96_64x15_2x2_2cta_h_bz_splitK_bias_TNT,gemm,528,6.342,0.05,12.01,11.3,13.06,128x1x1,256x1x1,1.0,1,255,223616
+sol_prep_kstats,attention,141,6.112,0.05,43.35,42.34,45.34,32x1x1,128x1x1,1.0,1,20,0
+snake_beta,vae_conv,200,6.11,0.05,30.55,18.69,44.77,4508x1x1,1024x1x1,0.55,3,21,0
+nvjet_sm100_tst_128x80_64x10_2x2_2cta_h_bz_bias_TNT,gemm,528,5.689,0.05,10.77,10.27,11.58,128x1x1,256x1x1,1.0,1,255,232096
+add_bias_inplace,norm_elementwise,260,5.322,0.04,20.47,1.98,191.01,2254x1x1,1024x1x1,0.44,16,18,0
+"implicit_convolve_sgemm<float, float, int, (int)128, (int)5, (int)5, (int)3, (int)3, (int)3, (int)1, (bool)0, (bool)0, (bool)1>(int, int, int, const T1 *, int, T2 *, const T1 *, kernel_conv_params, unsigned long long, T3, float, float, int, const T2 *, const T2 *, bool, bool, int, int)",vae_conv,36,3.776,0.03,104.88,46.78,187.14,9015x1x1,8x8x1,0.33,5,78,2304
+group_norm_stats,vae_conv,17,3.525,0.03,207.35,56.7,377.63,32x1x1,512x1x1,1.0,1,30,8192
+group_norm_apply,vae_conv,17,3.402,0.03,200.15,81.89,332.99,9690x1x1,1024x1x1,0.53,2,28,0
+elem_add,norm_elementwise,127,3.378,0.03,26.6,2.66,206.11,2254x1x1,1024x1x1,0.43,11,16,0
+mul_scalar,norm_elementwise,209,3.13,0.03,14.98,1.31,22.59,4509x1x1,1024x1x1,0.18,13,16,0
+mx_ln_adaln_e,norm_elementwise,22,3.023,0.03,137.42,9.5,567.43,151x1x1,256x1x1,0.5,3,32,1024
+rms_norm_channels,vae_conv,23,2.952,0.02,128.35,51.1,193.15,3x1x1,1024x1x1,0.43,3,32,0
+"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>, const T1 *, T2 *)",vae_conv,348,2.575,0.02,7.4,2.4,172.67,1x8x256,256x1x1,0.07,48,20,4224
+gather_nd,layout_copy,10,2.486,0.02,248.55,5.25,1017.25,38760x1x1,1024x1x1,0.2,7,34,0
+cutlass3x_sm100_tensorop_s256x256x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x256x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,24,2.052,0.02,85.49,27.52,873.15,6x12x1,256x1x1,0.71,4,128,200704
+"implicit_convolve_sgemm<float, float, int, (int)128, (int)5, (int)5, (int)3, (int)3, (int)3, (int)1, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, int, T2 *, const T1 *, kernel_conv_params, unsigned long long, T3, float, float, int, const T2 *, const T2 *, bool, bool, int, int)",vae_conv,18,1.882,0.02,104.57,46.66,186.18,9015x1x1,8x8x1,0.33,5,78,2304
+cutlass3x_sm100_tensorop_s256x128x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x128x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,93,1.658,0.01,17.83,8.9,70.24,4x47x1,256x1x1,0.18,9,126,207872
+pack_rgb_u8,layout_copy,20,1.595,0.01,79.76,10.4,92.58,16320x1x1,1024x1x1,0.85,3,16,0
+"cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>, const T1 *, T2 *)",vae_conv,36,1.535,0.01,42.65,4.58,65.44,1x32x1024,256x1x1,0.44,6,17,2112
+silu,norm_elementwise,17,1.487,0.01,87.44,28.45,151.55,9690x1x1,1024x1x1,0.53,2,16,0
+lincomb3,norm_elementwise,301,1.455,0.01,4.83,1.38,20.7,672x1x1,1024x1x1,0.31,15,16,0
+"cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>, const T1 *, T2 *)",vae_conv,181,1.039,0.01,5.74,2.69,63.81,94x24x1,256x1x1,0.1,20,20,4224
+nvjet_sm100_tst_64x16_64x16_4x1_2cta_h_bz_bias_TNT,gemm,121,0.871,0.01,7.2,4.9,12.1,64x1x1,256x1x1,0.55,2,255,164520
+cutlass3x_sm100_tensorop_s128x64x16implicit_gemm_fprop_bf16_bf16_f32_void_bf16_f32_128x64x64_dyn_cga_ndhwc_ndhwc_ndhwc_align8_2sm_relu_valpha,vae_conv,27,0.815,0.01,30.2,14.95,45.5,32x27x1,256x1x1,0.15,12,127,231424
+nvjet_sm100_tst_256x8_64x6_2x1_v_bz_bias_TNT,gemm,11,0.643,0.01,58.42,50.72,60.67,144x1x1,256x1x1,1.0,1,255,219960
+"cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16, __nv_bfloat16, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>, const T1 *, T2 *)",vae_conv,18,0.525,0.0,29.16,7.55,50.66,303x32x1,256x1x1,0.5,3,16,2112
+sm80_xmma_fprop_implicit_gemm_tf32f32_tf32f32_f32_nhwckrsc_nhwc_tilesize128x128x16_stage4_warpsize2x2x1_g1_tensor16x8x8_execute_kernel__5x_cudnn,vae_conv,4,0.473,0.0,118.31,44.0,188.0,3x47x9,128x1x1,0.5,3,242,65536
+cutlass3x_sm100_tensorop_s256x64x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x64x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,35,0.443,0.0,12.67,8.06,21.38,2x188x1,256x1x1,0.31,5,125,219136
+nvjet_sm100_tst_64x8_64x16_4x1_v_bz_bias_TNT,gemm,66,0.37,0.0,5.61,2.72,14.08,64x1x1,256x1x1,0.67,2,255,156328
+cutlass3x_sm100_tensorop_s128x256x8tf32implicit_gemm_strided_dgrad_f32_f32_f32_void_f32_f32_128x256x32_8w16h1d1n_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm,vae_conv,1,0.353,0.0,353.15,353.15,353.15,16x38x5,256x1x1,1.0,1,89,231424
+cutlass3x_sm100_tensorop_s128x128x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_128x128x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha,vae_conv,11,0.326,0.0,29.68,7.07,32.19,8x19x1,256x1x1,0.91,2,127,216064
+nvjet_sm100_tst_128x8_64x12_4x1_v_bz_bias_TNT,gemm,11,0.264,0.0,23.96,23.49,24.26,128x1x1,256x1x1,1.0,1,255,225992
+sm80_xmma_fprop_implicit_gemm_tf32f32_tf32f32_f32_nhwckrsc_nchw_tilesize128x128x16_stage4_warpsize2x2x1_g1_tensor16x8x8_execute_kernel__5x_cudnn,vae_conv,3,0.213,0.0,71.11,61.73,87.55,2x94x1,128x1x1,0.33,3,238,65536
+nvjet_sm100_tst_128x272_64x4_1x2_h_bz_bias_TNT,gemm,3,0.184,0.0,61.18,60.48,61.73,144x1x1,256x1x1,1.0,1,255,221696
+nvjet_sm100_tst_256x96_64x5_2x1_2cta_v_bz_bias_TNT,gemm,8,0.18,0.0,22.5,21.95,23.01,1616x1x1,256x1x1,1.0,1,255,211752
+nvjet_sm100_tst_128x8_64x12_2x1_v_bz_bias_TNT,gemm,11,0.159,0.0,14.41,14.11,14.75,144x1x1,256x1x1,1.0,1,255,225992
+nvjet_sm100_tst_16x64_64x16_4x1_v_bz_bias_TNN,gemm,44,0.146,0.0,3.33,2.85,3.94,128x1x1,256x1x1,1.0,1,255,172616
+ltxv_latent_in,vae_conv,27,0.139,0.0,5.16,3.78,6.43,336x1x1,1024x1x1,0.22,10,26,0
+nvjet_sm100_tst_64x160_64x11_2x2_2cta_h_bz_bias_TNT,gemm,8,0.124,0.0,15.53,15.33,16.13,124x1x1,256x1x1,1.0,1,255,219704
+"cudnn::engines_precompiled::nchwToNhwcKernel<float, float, float, (bool)0, (bool)1, (cudnnKernelDataType_t)2>(cudnn::engines_precompiled::nchw2nhwc_params_t<T3>, const T1 *, T2 *)",vae_conv,18,0.122,0.0,6.8,2.72,27.23,188x12x1,256x1x1,0.11,16,24,4224
+"precomputed_convolve_sgemm<float, int, (int)1024, (int)5, (int)5, (int)4, (int)3, (int)3, (int)1, (bool)0>(int, int, int, const T1 *, int, T1 *, const T1 *, kernel_conv_params, unsigned long long, T2, float, float, int, bool, bool, const T1 *, const T1 *, int *)",vae_conv,1,0.092,0.0,91.78,91.78,91.78,76x17x1,8x8x1,1.0,1,64,4608
+upsample_nearest,vae_conv,2,0.088,0.0,44.08,30.4,57.76,4832x1x1,1024x1x1,0.5,2,28,0
+cutlass3x_sm100_tensorop_s256x64x8tf32implicit_gemm_strided_dgrad_f32_f32_f32_void_f32_f32_256x64x32_256w1h1d1n_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm,vae_conv,5,0.072,0.0,14.32,9.28,22.14,2x94x2,256x1x1,0.2,5,99,219136
+cutlass__5x_cudnn::Kernel<cutlass_tensorop_s1688fprop_optimized_tf32_256x64_16x4_nhwc_align4>(T1::Params),vae_conv,2,0.065,0.0,32.45,27.49,37.41,188x1x1,128x1x1,0.5,2,255,81920
+cutlass3x_sm100_tensorop_s64x64x8tf32implicit_gemm_strided_dgrad_f32_f32_f32_void_f32_f32_64x64x32_32w2h1d1n_dyn_cga_ndhwc_ndhwc_ndhwc_align4_1sm,vae_conv,2,0.064,0.0,31.89,23.84,39.94,1x752x2,256x1x1,0.5,2,53,231424
+"cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0, (int)0, (int)0, int, float, float, float, float, float, float>(cudnn::cnn::GroupedDirectFpropParams, const T11 *, const T13 *, T12 *, T14, T14, const T14 *, const T14 *, const T12 *, const T15 *, cudnnActi…",vae_conv,1,0.057,0.0,56.99,56.99,56.99,564x1x1,1024x1x1,1.0,1,48,0
+cutlass3x_sm100_tensorop_s128x256x8tf32implicit_gemm_strided_dgrad_f32_f32_f32_void_f32_f32_128x256x32_128w1h1d1n_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm,vae_conv,3,0.049,0.0,16.33,11.81,22.27,16x6x2,256x1x1,0.33,3,110,231424
+nvjet_sm100_tst_32x64_64x16_4x2_2cta_h_bz_splitK_bias_TNN,gemm,11,0.043,0.0,3.91,3.74,4.03,32x1x1,256x1x1,1.0,1,255,172432
+nvjet_sm100_tst_64x40_64x16_1x4_h_bz_bias_TNT,gemm,11,0.04,0.0,3.66,3.49,4.06,128x1x1,256x1x1,1.0,1,255,221864
+cutlass3x_sm100_tensorop_s256x128x8tf32implicit_gemm_fprop_f32_f32_f32_void_f32_f32_256x128x32_dyn_cga_ndhwc_ndhwc_ndhwc_align4_2sm_relu_valpha_stream_k,vae_conv,1,0.023,0.0,22.62,22.62,22.62,752x1x1,256x1x1,1.0,1,254,207872
+"implicit_convolve_sgemm<float, float, int, (int)1024, (int)5, (int)5, (int)3, (int)3, (int)3, (int)1, (bool)0, (bool)0, (bool)1>(int, int, int, const T1 *, int, T2 *, const T1 *, kernel_conv_params, unsigned long long, T3, float, float, int, const T2 *, const T2 *, bool, bool, int, int)",vae_conv,1,0.015,0.0,14.72,14.72,14.72,76x16x1,8x8x1,1.0,1,61,2304
+"tensorTransformGeneric<float, float, float, (bool)1, (bool)0, (bool)0, (cudnnKernelDataType_t)0>(cudnnTensorTransformStruct, tensorTransformParams, int, unsigned long, const T1 *, T2 *, T3, T3)",vae_conv,2,0.014,0.0,7.09,4.96,9.22,296x1x1,1024x1x1,1.0,1,20,0
+nvjet_sm100_sss_tf32_144x128_32x6_2x1_v_bz_NNN,gemm,1,0.013,0.0,13.22,13.22,13.22,268x1x1,256x1x1,1.0,1,255,229680
+nvjet_sm100_sss_tf32_144x128_32x7_1x2_2cta_h_bz_NNN,gemm,1,0.009,0.0,9.09,9.09,9.09,134x1x1,256x1x1,1.0,1,255,209232
+clamp_f,norm_elementwise,1,0.003,0.0,2.62,2.62,2.62,564x1x1,1024x1x1,1.0,1,16,0
+"cudnn::cnn::kern_precompute_indices<(bool)0>(int *, int, int, int, int, int)",vae_conv,1,0.001,0.0,0.99,0.99,0.99,1x1x1,256x1x1,1.0,1,19,0

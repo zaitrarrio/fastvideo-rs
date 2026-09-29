@@ -3,7 +3,8 @@
 // Starts `fv-serve` (built with `--features fake`) on a free port with no
 // FV_ADMIN_TOKEN, reads the admin token it made from `<state dir>/admin_token`
 // (mode 600; the log names the file, never the token), and
-// drives Chromium through: mint an API key on /console/admin, run
+// drives Chromium through: mint an API key on /console/admin, toggle the
+// `h3_1080p_long` experimental feature (the 1080P duration cap in the form), run
 // text-to-video, upload an image and run image-to-video, see video results,
 // the API snippets, the history, and a live director session over WebRTC
 // (start, 1344x768 video with one video and one audio track playing, a
@@ -278,6 +279,49 @@ async function deploymentsPage(page, origin) {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 }
 
+// Experimental features on the admin page: `h3_1080p_long` is listed off;
+// the h3-turbo form caps the duration at 5 s when 1080P is picked (15 s at
+// 768P); enabling the flag lifts the 1080P cap to 10 s; disabling it
+// restores 5 s. (The server runs with FV_FAKE_H3_1080P=1: the fake H3
+// models carry the 1080P tier.)
+async function experimentalFeatures(page, origin) {
+  const row = '#flags tr[data-flag-row="h3_1080p_long"]';
+  await page.waitForSelector(row + '[data-enabled="false"]');
+  const durationMax = async (res) => {
+    await page.goto(origin + '/console/models/minimax/h3-turbo/text-to-video');
+    await page.waitForSelector('[data-input="duration"]');
+    await page.selectOption('[data-input="resolution"]', res);
+    return page.getAttribute('[data-input="duration"]', 'max');
+  };
+  const expectMax = async (res, want, what) => {
+    const got = await durationMax(res);
+    if (got !== String(want)) throw new Error('experimental features: ' + what + ': duration max at ' + res + ' is ' + got + ', expected ' + want);
+  };
+  const toggle = async (on) => {
+    await page.goto(origin + '/console/admin');
+    await page.waitForSelector(row + '[data-enabled="' + String(!on) + '"]');
+    page.once('dialog', (d) => d.accept());
+    await page.click(row + ' [data-flag="h3_1080p_long"]');
+    await page.waitForSelector(row + '[data-enabled="' + String(on) + '"]');
+  };
+  await shot(page, '02b-admin-flags');
+  await expectMax('1080P', 5, 'flag off');
+  // A value past the cap is clamped when 1080P is picked.
+  await page.selectOption('[data-input="resolution"]', '768P');
+  await page.$eval('[data-input="duration"]', (r) => { r.value = '12'; r.dispatchEvent(new Event('input')); });
+  await page.selectOption('[data-input="resolution"]', '1080P');
+  const clamped = await page.inputValue('[data-input="duration"]');
+  if (clamped !== '5') throw new Error('experimental features: 12 s not clamped to 5 at 1080P (' + clamped + ')');
+  await expectMax('768P', 15, 'flag off');
+  await toggle(true);
+  await expectMax('1080P', 10, 'flag on');
+  await toggle(false);
+  await expectMax('1080P', 5, 'flag off again');
+  step('experimental features: h3_1080p_long listed off; the 1080P duration cap follows it (5 s off, 10 s on)');
+  await page.goto(origin + '/console/admin');
+  await page.waitForSelector('#admin-state.ok');
+}
+
 async function main() {
   if (!REMOTE && !fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
   const port = REMOTE ? 0 : await freePort();
@@ -291,6 +335,7 @@ async function main() {
     FV_JOB_STORE: 'memory',
     FV_ENGINE: 'fake',
     FV_URL_SIGNING_KEY: 'console-smoke',
+    FV_FAKE_H3_1080P: '1',
     RUST_LOG: 'warn',
   });
   const server = REMOTE ? null : spawn(BIN, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -376,6 +421,8 @@ async function main() {
     await shot(page, '02-admin-minted');
     await page.click('#use-minted');
     step('minted a key on /console/admin and stored it in the browser');
+
+    if (!REMOTE) await experimentalFeatures(page, origin);
 
     // Home: the key is accepted.
     await page.goto(origin + '/console');

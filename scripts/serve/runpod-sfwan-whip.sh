@@ -19,6 +19,8 @@
 # FV_STREAM_SECONDS (default 90). Results: artifacts/serve/sfwan-whip/<tag>/.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
+source "$ROOT/scripts/gpu/runpod-price.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 : "${RUNPOD_IMAGE:?RUNPOD_IMAGE (the fv-serve image with webrtc) missing}"
@@ -127,6 +129,8 @@ create() {
 id=""
 IFS='|' read -r -a gpu_list <<<"$GPUS"
 for g in "${gpu_list[@]}"; do
+  # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
+  fv_runpod_price_ok "$g" "$MAX_DPH" SECURE || continue
   log "create pod on $g"
   if resp="$(create "$g" 2>&1)"; then
     id="$(jq -r '.id // empty' <<<"$resp")"

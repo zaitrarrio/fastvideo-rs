@@ -14,6 +14,8 @@
 //     it a portrait is generated first with a native text-to-video job
 //     (FV_KEY). The received stream is recorded (MediaRecorder, WebM) and
 //     the events and per-window timings are written to FV_AVATAR_OUT.
+//     FV_AVATAR_VOICE: a speech file for set_voice_audio (voice-driven
+//     windows, audio-to-video).
 //
 //   FV_SERVE_BIN=target/debug/fv-serve node tests/console/avatar.cjs
 //
@@ -172,6 +174,7 @@ async function main() {
     }
     await page.goto(origin + '/console/avatar');
     await page.setInputFiles('#image', image);
+    if (process.env.FV_AVATAR_VOICE) await page.setInputFiles('#voice', process.env.FV_AVATAR_VOICE);
     await page.fill('#script', SCRIPT);
     await page.fill('#prompt', PROMPT);
     await page.fill('#seed', '42');
@@ -276,7 +279,15 @@ async function main() {
       + `${summary.stalls} stalls (${summary.stalled_s} s), wall ${wall.toFixed(1)} s`);
     for (const w of windows) step(`window ${w.index} ${w.kind}: ${w.seconds} s built in ${w.build_s} s (rtf ${w.rtf}), started at ${w.started_s} s, waited ${w.stalled_s} s`);
     process.stdout.write('SUMMARY ' + JSON.stringify(summary) + '\n');
+    // End session: the runtime closes it and is READY again.
     await page.click('#end');
+    let st = '';
+    for (let i = 0; i < 150 && st !== 'ready'; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      st = (await (await fetch(origin + '/session')).json()).state;
+    }
+    if (st !== 'ready') fail('after End session the runtime is ' + st + (srv ? '\n' + srv.logs.slice(-3000) : ''));
+    step('session ended: ready');
     ok = true;
   } finally {
     await browser.close();

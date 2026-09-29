@@ -151,6 +151,7 @@ pub fn public_pools(gw: &Gateway) -> Vec<crate::status::PoolStatus> {
                 worker_counts: counts,
                 versions,
                 mixed_versions,
+                failed_models: st.workers.values().filter(|w| w.healthy).flat_map(|w| w.failed_models.clone()).collect(),
             }
         })
         .collect()

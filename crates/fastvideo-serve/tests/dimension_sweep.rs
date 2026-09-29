@@ -14,6 +14,11 @@
 //! - offered by the console (the served fal schemas, the director form) or
 //!   promised by the model's caps (native, `/v1/videos`) ⇒ accepted.
 //!
+//! The H3 1080P tier is swept with the `h3_1080p_long` experimental flag off
+//! (the default: 1080P clips up to 5 s; the console's fal form carries the
+//! cap as `x-fv-max-by-resolution`, the director caps 1080p chunks) and on
+//! (up to 10 s).
+//!
 //! Every violation is collected and printed as a table (model x API), then
 //! the test fails listing them. `FV_SWEEP_REPORT=<path>` also writes the
 //! table as TSV.
@@ -203,12 +208,21 @@ struct Report {
 struct Sweep {
     app: App,
     /// Appended to every row label (`[no 1080P]`: a GPU below the H3
-    /// 1080P tier's memory plan, where the tier is off).
+    /// 1080P tier's memory plan, where the tier is off; `[1080P long]`: the
+    /// `h3_1080p_long` flag on).
     variant: &'static str,
     catalog: Vec<CudaModel>,
     validator: JobValidator,
     report: Mutex<Report>,
     next_key: std::sync::atomic::AtomicUsize,
+    /// The server's state dir (staged inputs of every case): removed on drop.
+    dir: std::path::PathBuf,
+}
+
+impl Drop for Sweep {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// The catalog a server on an 80 GB-class GPU serves (`hd`: the H3 1080P
@@ -221,7 +235,8 @@ fn served_catalog(hd: bool) -> Vec<CudaModel> {
     cat
 }
 
-async fn harness(hd: bool) -> Sweep {
+/// `long`: the `h3_1080p_long` experimental flag on (H3 1080P up to 10 s).
+async fn harness_flagged(hd: bool, long: bool) -> Sweep {
     let dir = std::env::temp_dir().join(format!(
         "fv-serve-sweep-{:x}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
@@ -252,13 +267,38 @@ async fn harness(hd: bool) -> Sweep {
     let engine = EngineService::start(cfg, vec![Box::new(FakeBackend::new(fc))]).unwrap();
     let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
     app.gate.engine().wait_ready().await;
+    if long {
+        app.flags.set(fastvideo_protocol::FLAG_H3_1080P_LONG, true, None).await.unwrap();
+    }
     Sweep {
         app,
-        variant: if hd { "" } else { " [no 1080P]" },
+        variant: match (hd, long) {
+            (true, false) => "",
+            (true, true) => " [1080P long]",
+            (false, _) => " [no 1080P]",
+        },
         catalog: cat,
         validator,
         report: Mutex::new(Report::default()),
         next_key: std::sync::atomic::AtomicUsize::new(0),
+        dir,
+    }
+}
+
+async fn harness(hd: bool) -> Sweep {
+    harness_flagged(hd, false).await
+}
+
+/// The catalogs every API is swept on: the 1080P tier on (flag off and on)
+/// and off.
+const VARIANTS: [(bool, bool); 3] = [(true, false), (true, true), (false, false)];
+
+/// The longest clip (frames) `caps` promises at a canvas of `w`x`h`: the
+/// 1080P tier's own cap (with the flags the server applied), else the grid.
+fn max_frames_at(caps: &ModelCaps, w: u32, h: u32) -> u32 {
+    match caps.canvas.hd.and_then(|t| t.max_frames) {
+        Some(m) if fastvideo_protocol::is_hd_canvas(caps, w, h) => m.min(caps.frames.max),
+        _ => caps.frames.max,
     }
 }
 
@@ -462,8 +502,10 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
         id_field: "id",
         offer,
     };
+    let served = s.app.ctx.engine().models();
     for m in &s.catalog {
-        let caps = m.caps();
+        // The caps as served: the experimental flags applied.
+        let caps = served.iter().find(|c| c.id == m.id).cloned().unwrap_or_else(|| m.caps());
         let id = m.id.as_str();
         let base = json!({"model": id, "prompt": "a fox runs"});
         // The input a task needs.
@@ -569,11 +611,22 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             let dub = with(&base, &[("video_url", json!(src)), ("start_s", json!(1)), ("end_s", json!(4)), ("audio_url", json!(wav(16_000, 3.0)))]);
             out.push(case(id, "retake with new window audio".into(), dub, Offer::Caps));
         }
-        // The largest canvas with the longest clip.
+        // The largest canvas with the longest clip: the grid's (promised
+        // below the 1080P tier), and the tier's own cap (5 s; 10 s with the
+        // `h3_1080p_long` flag), which is promised.
         if let Some(&top) = caps.canvas.short_edges.iter().max() {
-            let mut extra = plain_in.clone();
-            extra.extend([("aspect_ratio", json!("16:9")), ("short_edge", json!(top)), ("num_frames", json!(g.max))]);
-            out.push(case(id, format!("{plain} 16:9 at {top}, {} frames", g.max), with(&base, &extra), Offer::Caps));
+            let cap = if caps.canvas.is_hd(top) { max_frames_at(&caps, 1920, 1088) } else { g.max };
+            for n in [g.max, cap] {
+                let mut extra = plain_in.clone();
+                extra.extend([("aspect_ratio", json!("16:9")), ("short_edge", json!(top)), ("num_frames", json!(n))]);
+                out.push(case(id, format!("{plain} 16:9 at {top}, {n} frames"), with(&base, &extra), if n <= cap { Offer::Caps } else { Offer::Api }));
+            }
+            for secs in [5u32, 10, 15] {
+                let promised = g.align_up(secs * caps.fps.default).is_some_and(|n| n <= cap);
+                let mut extra = plain_in.clone();
+                extra.extend([("aspect_ratio", json!("16:9")), ("short_edge", json!(top)), ("seconds", json!(secs))]);
+                out.push(case(id, format!("{plain} 16:9 at {top}, {secs} s"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+            }
         }
     }
     out
@@ -583,8 +636,8 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
 async fn native_api() {
     let imgs = images();
     let mut bad = Vec::new();
-    for hd in [true, false] {
-        let s = harness(hd).await;
+    for (hd, long) in VARIANTS {
+        let s = harness_flagged(hd, long).await;
         let cases = native_cases(&s, &imgs);
         s.run_all(cases).await;
         bad.extend(s.finish("native /fv/v1/jobs"));
@@ -751,7 +804,17 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 for (k, v) in combo.iter().chain(&input.1) {
                     body[k.as_str()] = v.clone();
                 }
-                let console = combo.iter().all(|(k, v)| offered(k, v));
+                // A value the form offers for the chosen resolution: the
+                // duration within `x-fv-max-by-resolution` (the H3 1080P cap).
+                let res = combo.iter().find(|(k, _)| k == "resolution").map(|(_, v)| v.clone());
+                let within_res_cap = combo.iter().all(|(k, v)| {
+                    let by = &served["properties"][k.as_str()]["x-fv-max-by-resolution"];
+                    match (res.as_ref().and_then(Value::as_str), v.as_i64()) {
+                        (Some(r), Some(n)) => by.get(r).and_then(Value::as_i64).is_none_or(|cap| n <= cap),
+                        _ => true,
+                    }
+                });
+                let console = within_res_cap && combo.iter().all(|(k, v)| offered(k, v));
                 let desc = combo.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ");
                 out.push(Case {
                     api: "fal",
@@ -799,8 +862,8 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
 async fn fal_apps() {
     let imgs = images();
     let mut bad = Vec::new();
-    for hd in [true, false] {
-        let s = harness(hd).await;
+    for (hd, long) in VARIANTS {
+        let s = harness_flagged(hd, long).await;
         let cases = fal_cases(&s, &imgs).await;
         s.run_all(cases).await;
         bad.extend(s.finish("fal apps"));
@@ -816,8 +879,8 @@ async fn fal_apps() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fal_director_configure() {
     let mut bad = Vec::new();
-    for hd in [true, false] {
-        let s = harness(hd).await;
+    for (hd, long) in VARIANTS {
+        let s = harness_flagged(hd, long).await;
         director_sweep(&s).await;
         bad.extend(s.finish("fal director configure"));
     }
@@ -860,8 +923,10 @@ async fn director_sweep(s: &Sweep) {
         let res: Vec<Resolution> = values_of(&form["properties"]["resolution"]).iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
         let aspects: Vec<String> = values_of(&form["properties"]["aspect_ratio"]).iter().map(|v| v.as_str().unwrap().to_owned()).collect();
         assert!(!res.is_empty() && !aspects.is_empty(), "{form}");
-        let chunk_s: Vec<f64> = (limits.min_chunk_seconds.ceil() as u32..=limits.max_chunk_seconds.floor() as u32).map(f64::from).collect();
         for r in &res {
+            // The session's limits at this resolution (1080p: the tier's cap).
+            let limits = limits.at(*r);
+            let chunk_s: Vec<f64> = (limits.min_chunk_seconds.ceil() as u32..=limits.max_chunk_seconds.floor() as u32).map(f64::from).collect();
             let served = limits.resolutions.contains(r);
             for a in &aspects {
                 // `auto` follows the image at the nearest served aspect.

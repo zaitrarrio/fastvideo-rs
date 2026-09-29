@@ -347,6 +347,23 @@ impl CudaModel {
         }
     }
 
+    /// What this model needs from the GPU (the startup capability check,
+    /// [`crate::device`]): FP8 tensor cores for the H3 recipes with a
+    /// technique profile (MXFP8 linears; tensorwise FP8 off Blackwell) or
+    /// an FP8-resident text encoder; NVFP4 for the LTX draft profile; the
+    /// DiT's weight bytes (when the weights are on disk) within the device.
+    pub fn requirements(&self) -> crate::device::Requirements {
+        let (fp8, nvfp4) = match &self.recipe {
+            CudaRecipe::H3(r) => (r.profile.is_some() || r.text_encoder == "resident-fp8", false),
+            CudaRecipe::Ltx2(r) => {
+                let fp4 = r.profile.as_deref() == Some(LTX_DRAFT_PROFILE);
+                (fp4, fp4)
+            }
+            CudaRecipe::Wan(_) | CudaRecipe::SfWan(_) => (false, false),
+        };
+        crate::device::Requirements { fp8, nvfp4, min_total_bytes: self.dit_bytes() }
+    }
+
     /// On-disk bytes of the DiT, the dominant resident weights: the
     /// `*.safetensors` under `<weights>/transformer` (LTX: the `dit` file
     /// when it is one). `None` when there is nothing to measure. A bf16

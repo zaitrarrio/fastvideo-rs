@@ -14,6 +14,8 @@
 //! - [`backend`]: the [`EngineBackend`] trait and its value types.
 //! - [`fake`]: [`FakeBackend`], deterministic synthetic A/V (always built).
 //! - [`clock`]: [`ManualClock`] for deterministic tests.
+//! - [`device`]: the startup capability check (compute capability, FP8,
+//!   memory) that keeps a model off a GPU it cannot run on.
 //! - [`stream`]: [`ClipSession`] (clip-queue builds) and [`CausalSession`]
 //!   (SF-Wan block rollout).
 //!
@@ -27,6 +29,7 @@ pub mod backend;
 pub mod cancel;
 pub mod caps;
 pub mod clock;
+pub mod device;
 pub(crate) mod executor;
 pub mod fake;
 pub mod pool;

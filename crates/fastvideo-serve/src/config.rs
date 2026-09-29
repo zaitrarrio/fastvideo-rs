@@ -25,6 +25,7 @@
 //! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
 //! | `FV_ENGINE` (`fake` \| `cuda`) | `engine.backend` |
+//! | `FV_FAKE_H3_1080P` (`0` \| `1`), `FV_FAKE_DEVICE` (`a100`, `h100`, `sm80:80`, …) | `engine.fake.h3_1080p`, `engine.fake.device` |
 //! | `FV_JOB_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `jobs.backend` |
 //! | `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN`, `FV_D1_DATABASE_ID` | `jobs.d1.*` |
 //! | `FV_ARTIFACTS` (`auto` \| `local` \| `s3`) | `artifacts.backend` |
@@ -37,6 +38,8 @@
 //! | `FV_RUNPOD_API_KEY` (else `RUNPOD_API_KEY`) | `gateway.runpod_api_key` (serverless pools) |
 //! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
 //! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
+//! | `FV_POOL_<ID>_DISPATCH` (`gateway` \| `durable-object`), `FV_POOL_<ID>_DO_URL` | a pod pool's dispatch path (docs/serve/gateway-cloudflare.md) |
+//! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
@@ -323,11 +326,28 @@ pub struct FakeCfg {
     /// Without ffmpeg the fake writes no MP4; store a small placeholder
     /// file instead so the job still succeeds (CI).
     pub placeholder_output: bool,
+    /// Give the fake H3 max / turbo models the native 1080P tier, as an
+    /// 80 GB-class GPU serves them (`FV_FAKE_H3_1080P`).
+    pub h3_1080p: bool,
+    /// A simulated GPU for the startup capability check (`a100`, `l40s`,
+    /// `h100`, `b200`, `rtx-pro-6000`, `sm<NN>[:<GiB>]`; `FV_FAKE_DEVICE`):
+    /// a model it cannot run is failed with the reason (the fake H3 models
+    /// need FP8, sm89+). Unset: no check.
+    pub device: Option<String>,
 }
 
 impl Default for FakeCfg {
     fn default() -> Self {
-        Self { models: Vec::new(), step_ms: 2, load_ms: 0, rtf: None, all_resident: true, placeholder_output: true }
+        Self {
+            models: Vec::new(),
+            step_ms: 2,
+            load_ms: 0,
+            rtf: None,
+            all_resident: true,
+            placeholder_output: true,
+            h3_1080p: false,
+            device: None,
+        }
     }
 }
 
@@ -696,6 +716,41 @@ pub struct PoolCfg {
     pub models: Vec<ModelCfg>,
     /// Static caps for fake pools (tests): fake model ids.
     pub fake_models: Vec<String>,
+    /// Pod pools: `gateway` (the gateway calls the workers, default) or
+    /// `durable-object` (the gateway enqueues to the pool's Durable Object,
+    /// which pushes to the workers' sockets; docs/serve/gateway-cloudflare.md).
+    pub dispatch: DispatchMode,
+    /// `dispatch = "durable-object"`: the fv-edge Worker's base URL.
+    pub do_url: Option<String>,
+}
+
+/// How a pool's jobs reach its workers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DispatchMode {
+    /// The gateway posts each job to a worker (docs/serve/gateway.md §3).
+    #[default]
+    Gateway,
+    /// The pool's Durable Object pushes it over the worker's WebSocket.
+    DurableObject,
+}
+
+/// `[dispatch]` of a worker: the socket to its pool's Durable Object.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DispatchCfg {
+    /// The fv-edge Worker's base URL (`https://…`); unset: no socket.
+    pub do_url: Option<String>,
+    /// Jobs this worker takes at once (running + waiting on its GPU).
+    pub capacity: u32,
+    /// Status (heartbeat) frame interval.
+    pub status_s: u64,
+}
+
+impl Default for DispatchCfg {
+    fn default() -> Self {
+        Self { do_url: None, capacity: 2, status_s: 10 }
+    }
 }
 
 impl Default for PoolCfg {
@@ -714,6 +769,8 @@ impl Default for PoolCfg {
             aliases: BTreeMap::new(),
             models: Vec::new(),
             fake_models: Vec::new(),
+            dispatch: DispatchMode::Gateway,
+            do_url: None,
         }
     }
 }
@@ -768,6 +825,8 @@ pub struct Config {
     pub pools: Vec<PoolCfg>,
     /// The gateway's autoscaler (docs/serve/gateway.md §8; configs/serve/autoscale.toml).
     pub autoscale: fastvideo_autoscale::AutoscaleConfig,
+    /// A worker's socket to its pool's Durable Object (docs/serve/gateway-cloudflare.md).
+    pub dispatch: DispatchCfg,
 }
 
 /// Why a config was refused.
@@ -951,6 +1010,13 @@ impl Config {
         if let Some(v) = env.var("FV_ENGINE") {
             self.engine.backend = parse_enum("FV_ENGINE", &v)?;
         }
+        if let Some(v) = env.var("FV_FAKE_H3_1080P") {
+            self.engine.fake.h3_1080p = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_FAKE_DEVICE") {
+            let v = v.trim();
+            self.engine.fake.device = (!v.is_empty()).then(|| v.to_owned());
+        }
         if let Some(v) = env.var("FV_JOB_STORE") {
             self.jobs.backend = parse_enum("FV_JOB_STORE", &v)?;
         }
@@ -1011,6 +1077,12 @@ impl Config {
         if let Some(v) = env.var("FV_GATEWAY_POOL") {
             self.gateway.pool = Some(v);
         }
+        if let Some(v) = env.var("FV_DISPATCH_DO_URL") {
+            self.dispatch.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
+        }
+        if let Some(v) = env.var("FV_DISPATCH_CAPACITY").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.capacity = v;
+        }
         if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
             self.gateway.runpod_api_key = Secret(v.trim().to_owned());
         }
@@ -1024,6 +1096,14 @@ impl Config {
             }
             if let Some(v) = env.var(&format!("{pre}URLS")) {
                 p.urls = v.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+            }
+            match env.var(&format!("{pre}DISPATCH")).as_deref().map(str::trim) {
+                Some("gateway") => p.dispatch = DispatchMode::Gateway,
+                Some("durable-object") => p.dispatch = DispatchMode::DurableObject,
+                _ => {}
+            }
+            if let Some(v) = env.var(&format!("{pre}DO_URL")) {
+                p.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
             }
             if let Some(w) = env.var("FV_WEIGHTS") {
                 for m in &mut p.models {
@@ -1138,6 +1218,12 @@ impl Config {
             if self.engine.backend == EngineBackendKind::Remote {
                 return bad("a worker needs a local engine (engine.backend = fake | cuda)".into());
             }
+            if let Some(u) = &self.dispatch.do_url {
+                url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
+                if self.gateway.pool.as_deref().unwrap_or("").is_empty() {
+                    return bad("dispatch.do_url needs gateway.pool (FV_GATEWAY_POOL): the pool whose Durable Object this worker connects to".into());
+                }
+            }
         }
         if self.engine.backend != EngineBackendKind::Remote {
             return Ok(());
@@ -1172,6 +1258,16 @@ impl Config {
                     }
                 }
                 _ => {}
+            }
+            if p.dispatch == DispatchMode::DurableObject {
+                // Serverless pools stay on the gateway path: Runpod scales
+                // and reaps their workers from its own queue, which a pushed
+                // job would bypass (docs/serve/gateway-cloudflare.md §3.2).
+                if p.kind != PoolKind::Pod {
+                    return bad(format!("pools.{}: dispatch = \"durable-object\" is for pod pools only (serverless pools use the Runpod queue)", p.id));
+                }
+                let u = p.do_url.as_deref().unwrap_or("");
+                url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("pools.{}: do_url `{u}` ({}DO_URL): {e}", p.id, p.env_prefix())))?;
             }
         }
         Ok(())
@@ -1422,5 +1518,42 @@ body_max_mb = 64
         c.validate().unwrap();
         c.jobs.retention_s.insert("nope".into(), 1);
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn durable_object_dispatch_is_for_pod_pools_with_a_url() {
+        let gateway = |kind: PoolKind, dispatch: DispatchMode, do_url: Option<&str>| {
+            let mut c = Config::default();
+            c.engine.backend = EngineBackendKind::Remote;
+            c.gateway.internal_token = Secret("t".into());
+            c.jobs.d1 = D1Cfg { account_id: Some("a".into()), database_id: Some("d".into()), api_token: Secret("x".into()), ..D1Cfg::default() };
+            c.pools = vec![PoolCfg {
+                id: "h3".into(),
+                kind,
+                endpoint_id: Some("ep".into()),
+                fake_models: vec!["fake-h3-turbo".into()],
+                dispatch,
+                do_url: do_url.map(str::to_owned),
+                ..PoolCfg::default()
+            }];
+            c
+        };
+        gateway(PoolKind::Pod, DispatchMode::DurableObject, Some("https://edge.example")).validate().unwrap();
+        gateway(PoolKind::Pod, DispatchMode::Gateway, None).validate().unwrap();
+        assert!(gateway(PoolKind::Pod, DispatchMode::DurableObject, None).validate().is_err(), "needs do_url");
+        let e = gateway(PoolKind::RunpodServerless, DispatchMode::DurableObject, Some("https://edge.example")).validate().unwrap_err();
+        assert!(e.to_string().contains("pod pools only"), "{e}");
+        // Env: the pool's dispatch and URL, and the worker's socket.
+        let mut c = gateway(PoolKind::Pod, DispatchMode::Gateway, None);
+        c.apply_env(&env(&[("FV_POOL_H3_DISPATCH", "durable-object"), ("FV_POOL_H3_DO_URL", "https://edge.example")])).unwrap();
+        assert_eq!((c.pools[0].dispatch, c.pools[0].do_url.as_deref()), (DispatchMode::DurableObject, Some("https://edge.example")));
+        let mut w = Config::default();
+        w.server.role = Role::Worker;
+        w.gateway.internal_token = Secret("t".into());
+        w.apply_env(&env(&[("FV_DISPATCH_DO_URL", "https://edge.example"), ("FV_DISPATCH_CAPACITY", "3")])).unwrap();
+        assert_eq!((w.dispatch.do_url.as_deref(), w.dispatch.capacity), (Some("https://edge.example"), 3));
+        assert!(w.validate().is_err(), "a worker's socket needs its pool");
+        w.gateway.pool = Some("h3".into());
+        w.validate().unwrap();
     }
 }

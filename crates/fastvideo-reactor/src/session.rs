@@ -48,6 +48,8 @@ pub const DRAIN_REASON: &str = "Session ended: the server is shutting down.";
 pub fn session_limit_reason(seconds: u32) -> String {
     format!("Session ended: the {seconds} s session length limit was reached.")
 }
+/// How long a closing session waits for its driver (engine release).
+pub const DRIVER_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// RT's moderated-stop notice.
 pub const MODERATION_MESSAGE: &str = "Session terminated due to policy violation.";
 
@@ -702,11 +704,19 @@ impl Reactor {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         let peers: Vec<PeerHandle> = lock(&live.conns).values_mut().filter_map(|c| c.peer.take()).collect();
+        let n_peers = peers.len();
         for p in peers {
             p.close();
         }
-        live.driver.close().await;
+        tracing::info!(event, peers = n_peers, "reactor session closing: peers closed");
+        // The driver releases the engine session; bounded, so a stuck
+        // driver cannot leave the runtime in CLOSING for good.
+        if tokio::time::timeout(DRIVER_CLOSE_TIMEOUT, live.driver.close()).await.is_err() {
+            tracing::warn!(event, "reactor session closing: the driver did not close within {DRIVER_CLOSE_TIMEOUT:?}; going on");
+        }
+        tracing::info!(event, "reactor session closing: driver closed");
         live.media.close();
+        tracing::info!(event, "reactor session closing: media closed");
         self.inner.uploads.clear();
         {
             let mut st = lock(&self.inner.st);

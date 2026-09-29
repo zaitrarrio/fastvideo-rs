@@ -54,7 +54,8 @@ case "${1:-}" in
   avatar)
     # Live script avatar: the page drives a take; the recording is remuxed
     # to MP4 at 24 fps and measured with the lip-sync proxy.
-    out=$E/out/avatar; rm -rf "$out"; mkdir -p "$out"
+    # $2: an output name (default avatar); FV_AVATAR_* pass through.
+    out=$E/out/${2:-avatar}; rm -rf "$out"; mkdir -p "$out"
     FV_AVATAR_ORIGIN=$BASE FV_AVATAR_OUT=$out FV_KEY="${FV_KEY:-}" NODE_PATH=$E/node/node_modules \
       timeout 1500 node $E/tests/console/avatar.cjs || exit 1
     ffmpeg -v error -y -i "$out/avatar.webm" -r 24 -c:v libx264 -preset veryfast -crf 18 -c:a aac "$out/avatar.mp4"

@@ -1,0 +1,20 @@
+  10 [fastvideo] cuda device=0 sm_90 kernels=Cubin(90) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=10
+   7 [fastvideo] h3 i2v encoder: stream (the text encoder is Streamed, not a resident Qwen3-VL): FL2VA/Ref2VA requests read the vision tower and the bf16 language model from the volume per request
+   7 [fastvideo] h3 quant: w8a8 (312 reference linears incl. refiner; FastVideo tensorwise W8A8, all blocks + refiner), bf16 activations
+   7 [fastvideo] sdpa: device dense B=1 H=16 Sq=4032 Sk=4032 D=72 query_chunk=4032
+   7 [fastvideo] sdpa: fused mma B=1 H=56 Sq=1030 Sk=1030 D=128
+   4 [fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default) [attention_backend from profile]
+   4 [fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, )
+   4 [fastvideo] vsa fine kernel: Tma ring (3 slots) (sm9, 128B swizzle)
+   4 [fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+   3 [fastvideo] h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); sol_attn [engine] (dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5, sink prefix, thresh diag) [attention_backend from profile]
+   3 [fastvideo] h3 sol-attn: dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5
+   3 [fastvideo] h3 dit offload: auto -> resident (resident plan 60.0 GiB, )
+   3 [fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=39748 blocks=622 sink=2452
+   2 [fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, )
+   2 [fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+   2 [fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=18240 blocks=285 sink=0
+   1 [fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 864x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x54 nvfp4=off resident=true cuda=true
+   1 [fastvideo] sdpa: fused mma B=1 H=24 Sq=12555 Sk=12555 D=128
+   1 [fastvideo] sdpa: device dense B=1 H=1 Sq=1620 Sk=1620 D=1024 query_chunk=1620
+   1 [fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1248x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x78 nvfp4=off resident=true cuda=true

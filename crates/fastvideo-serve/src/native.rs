@@ -572,6 +572,19 @@ pub fn auth_info(mode: fastvideo_serve_kit::AuthMode) -> Value {
     json!({ "mode": mode })
 }
 
+/// Each listed model's `canvas` as the engine gate serves it: with the
+/// experimental feature flags applied (crate::flags), so the 1080P tier's
+/// `max_frames` matches what negotiation enforces.
+fn flagged_canvases(body: &mut Value, served: &[fastvideo_protocol::ModelCaps]) {
+    let Some(list) = body.get_mut("models").and_then(Value::as_array_mut) else { return };
+    for m in list {
+        let Some(c) = m["caps"]["id"].as_str().and_then(|id| served.iter().find(|c| c.id.0 == id)) else { continue };
+        if let Ok(v) = serde_json::to_value(&c.canvas) {
+            m["caps"]["canvas"] = v;
+        }
+    }
+}
+
 /// The `/fv/v1/capabilities` body.
 pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
 
@@ -598,6 +611,7 @@ pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
                     match ctx.auth().authenticate(ProtocolId::Native, &headers) {
                         Ok(_) => {
                             let mut body = caps();
+                            flagged_canvases(&mut body, &ctx.engine().models());
                             body["auth"] = auth_info(ctx.auth().mode);
                             Json(body).into_response()
                         }

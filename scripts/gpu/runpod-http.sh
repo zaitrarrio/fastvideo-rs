@@ -49,6 +49,8 @@ if [[ -z "${FV_HTTP_COPY:-}" ]]; then
   FV_HTTP_COPY=1 FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
 fi
 HERE="${FV_HTTP_HERE:-$HERE}"
+# shellcheck source-path=SCRIPTDIR source=runpod-price.sh
+source "$HERE/runpod-price.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -249,7 +251,9 @@ create_pod() {
       + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
       + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
-  log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE}"
+  # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
+  fv_runpod_price_ok "$GPU" "$MAX_DPH" "${RUNPOD_CLOUD_TYPE:-SECURE}" "$dc" || die "not creating a pod on \"$GPU\" over the \$$MAX_DPH/hr cap"
+  log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE} quoted=\$$FV_QUOTED_DPH/hr"
   # Capacity in the volume's datacenter comes and goes; retry instead of failing.
   local t0 wait="${FV_CREATE_WAIT_S:-3600}"
   t0=$(date +%s)

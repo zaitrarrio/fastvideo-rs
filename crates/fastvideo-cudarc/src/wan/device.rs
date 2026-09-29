@@ -280,6 +280,29 @@ pub fn device_total_memory(index: usize) -> Option<u64> {
     }
 }
 
+/// Name and compute capability `(major, minor)` of CUDA device `index`
+/// without creating a context (the startup capability check decides which
+/// models this GPU can run before the executor owns it). `None` without a
+/// driver or device.
+pub fn device_identity(index: usize) -> Option<(String, (i32, i32))> {
+    #[cfg(feature = "cuda")]
+    {
+        use cudarc::driver::{result, sys};
+        result::init().ok()?;
+        let dev = result::device::get(i32::try_from(index).ok()?).ok()?;
+        let attr = |a| unsafe { result::device::get_attribute(dev, a) }.ok();
+        let major = attr(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
+        let minor = attr(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
+        let name = result::device::get_name(dev).unwrap_or_else(|_| format!("cuda:{index}"));
+        Some((name, (major, minor)))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = index;
+        None
+    }
+}
+
 /// `(free, total)` as the driver reports them, ballast included.
 pub fn raw_free_memory() -> Option<(u64, u64)> {
     #[cfg(feature = "cuda")]

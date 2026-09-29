@@ -22,6 +22,8 @@
 # (default /etc/fv/runpod.toml; e.g. /etc/fv/runpod-ltx.toml).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
+source "$ROOT/scripts/gpu/runpod-price.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:?FV_E2E_STATE (state file path) missing}"
@@ -86,6 +88,8 @@ cmd_up() {
           FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info", FV_E2E_BASE_CONFIG: $cfg
         } + $extra)
       } + $vol')"
+    # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
+    fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
     if ! resp="$(rest POST /pods "$payload" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi
@@ -131,7 +135,7 @@ cmd_bundle() {
   local tgz; tgz="$(mktemp)"
   tar czf "$tgz" -C "$ROOT" tests/compat/package.json tests/compat/package-lock.json tests/compat/requirements.txt \
     tests/compat/suites crates/fastvideo-reactor/tests/compat/reactor_sdk_compat.py tests/console/smoke.cjs \
-    tests/console/avatar.cjs scripts/gpu/lipsync_proxy.py scripts/serve/e2e
+    tests/console/avatar.cjs scripts/gpu/lipsync_proxy.py scripts/gpu/fixtures/speech-flite-44k.flac scripts/serve/e2e
   side /bundle 120 -X PUT --data-binary "@$tgz" -H 'content-type: application/gzip'; echo
   rm -f "$tgz"
 }

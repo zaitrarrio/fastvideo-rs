@@ -55,6 +55,23 @@ pub struct Limits {
     /// Resolutions this model serves (`resolutions`).
     pub resolutions: Vec<Resolution>,
     pub default_memory: u32,
+    /// The longest chunk at 1080p (the H3 1080P tier's clip cap: 5 s, or
+    /// 10 s with the `h3_1080p_long` experimental flag). `None`: no cap.
+    pub hd_max_chunk_seconds: Option<f64>,
+}
+
+impl Limits {
+    /// The limits a session configured at `res` runs with: at 1080p the
+    /// chunk lengths are capped by [`Limits::hd_max_chunk_seconds`].
+    pub fn at(&self, res: Resolution) -> Limits {
+        let mut l = self.clone();
+        if let (Resolution::R1080, Some(cap)) = (res, self.hd_max_chunk_seconds) {
+            l.max_chunk_seconds = l.max_chunk_seconds.min(cap);
+            l.min_chunk_seconds = l.min_chunk_seconds.min(l.max_chunk_seconds);
+            l.chunk_seconds = l.chunk_seconds.clamp(l.min_chunk_seconds, l.max_chunk_seconds);
+        }
+        l
+    }
 }
 
 impl Default for Limits {
@@ -70,6 +87,7 @@ impl Default for Limits {
             end_image_spacing_seconds: 3.0,
             resolutions: vec![Resolution::R768],
             default_memory: 12,
+            hd_max_chunk_seconds: None,
         }
     }
 }
@@ -301,7 +319,7 @@ impl Control {
             if script.iter().any(|b| b.audio_url.is_some()) {
                 return fail(ErrorCode::InvalidInitialScript, "script audio beats are not supported by this server yet".into());
             }
-            if let Err(e) = plan_script(script, &self.limits) {
+            if let Err(e) = plan_script(script, &self.limits.at(res)) {
                 return fail(ErrorCode::InvalidInitialScript, e);
             }
         }
@@ -319,6 +337,8 @@ impl Control {
             seed: c.seed.map(|s| s as u64),
             has_initial_image: image.is_some(),
         };
+        // 1080p: chunks within the tier's clip cap.
+        self.limits = self.limits.at(settings.resolution);
         self.premise = c.prompt.clone();
         self.current_version = c.prompt_version;
         self.last_version = c.prompt_version;

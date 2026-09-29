@@ -41,6 +41,10 @@ pub struct WorkerStatus {
     pub sessions: u32,
     pub caps: Vec<(ModelCaps, Recipe)>,
     pub build: Option<super::WorkerBuild>,
+    /// `readiness: failed` (a model failed to load or cannot run on its GPU).
+    pub failed: bool,
+    /// Its failed models and why.
+    pub failed_models: BTreeMap<String, String>,
 }
 
 impl WorkerStatus {
@@ -68,6 +72,12 @@ impl WorkerStatus {
             sessions: n("/stats/sessions"),
             caps,
             build: super::WorkerBuild::parse(v),
+            failed: v.get("readiness").and_then(Value::as_str) == Some("failed"),
+            failed_models: v
+                .get("failed_models")
+                .and_then(Value::as_object)
+                .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.chars().take(400).collect()))).collect())
+                .unwrap_or_default(),
         }
     }
 }
@@ -153,7 +163,9 @@ impl Gateway {
         let futs = self.pools.iter().map(|p| {
             let reg = registered.get(p.id()).cloned().unwrap_or_default();
             async move {
-                if p.is_pod() {
+                if p.is_edge() {
+                    self.probe_edge(p).await;
+                } else if p.is_pod() {
                     self.probe_pods(p, reg).await;
                 } else {
                     self.probe_serverless(p).await;
@@ -229,6 +241,8 @@ impl Gateway {
                     w.sessions = s.sessions;
                     w.id = s.id.clone();
                     w.build = s.build.clone();
+                    w.failed = s.failed;
+                    w.failed_models = s.failed_models.clone();
                     if s.ready && !s.caps.is_empty() && st.caps_at.is_none_or(|t| t.elapsed() >= refresh) {
                         st.live_caps = Some(s.caps);
                         st.caps_at = Some(Instant::now());
@@ -334,6 +348,11 @@ impl Gateway {
         let Some(pool) = self.pool(&a.row.pool) else { return };
         let stale_ms = (pool.cfg.stale_after_s.max(1) * 1000) as i64;
         let age = now - a.job_updated;
+        if a.row.kind == super::edge::KIND {
+            // Worker loss is the Durable Object's (re-dispatch once, then
+            // fail); its failures come in through `probe_edge`.
+            return;
+        }
         if a.row.kind == "pod" {
             if age > stale_ms {
                 self.lost(pool, a, &format!("no heartbeat for {} s", age / 1000)).await;

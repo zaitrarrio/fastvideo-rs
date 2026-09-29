@@ -115,6 +115,9 @@ pub struct CudaBackend {
     causal_owner: BTreeMap<SessionId, ModelId>,
     device_up: bool,
     info: DeviceInfo,
+    /// Models this GPU cannot run (the startup capability check,
+    /// [`crate::device`]) and why: their load fails at once with the reason.
+    unsupported: BTreeMap<ModelId, String>,
 }
 
 impl std::fmt::Debug for CudaBackend {
@@ -198,6 +201,20 @@ impl CudaBackend {
             name: format!("cuda:{}", cfg.device),
             total_memory_mb: 0,
         };
+        // The capability check: a model this GPU cannot run (compute
+        // capability, FP8/NVFP4, memory) is failed with the reason instead
+        // of loading and reporting ready.
+        let mut unsupported = BTreeMap::new();
+        if let Some((name, (major, minor))) = fastvideo_cudarc::wan::device::device_identity(cfg.device as usize) {
+            let total = fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
+            let dev = crate::device::DeviceProfile::new(name, (major.max(0) as u32, minor.max(0) as u32), total);
+            for m in &cfg.models {
+                if let Err(why) = m.requirements().check(m.id.as_str(), &dev) {
+                    tracing::error!(model = %m.id, "{why}");
+                    unsupported.insert(m.id.clone(), why);
+                }
+            }
+        }
         Ok(Self {
             cfg,
             plan,
@@ -207,6 +224,7 @@ impl CudaBackend {
             causal_owner: BTreeMap::new(),
             device_up: false,
             info,
+            unsupported,
         })
     }
 
@@ -384,6 +402,9 @@ impl EngineBackend for CudaBackend {
             return Ok(());
         }
         let m = self.model(model)?.clone();
+        if let Some(why) = self.unsupported.get(model) {
+            return Err(ApiError::engine_failed(why.clone()));
+        }
         if !m.weights().is_dir() {
             return Err(ApiError::engine_failed(format!(
                 "model `{model}`: weight directory {} does not exist (set `weights` in [[models]] or \
