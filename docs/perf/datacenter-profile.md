@@ -422,7 +422,23 @@ host-RoPE control 33.7 dB PSNR, baseline vs new 33.6 dB, new vs control
 34.3 dB. That run-to-run spread predates this change (I2V differs even
 between two runs of one boot: 35.6 dB) and is left for a separate look
 (Sol stage-2 selection or a per-boot kernel choice are the suspects).
-Oracle parity: see docs/oracle.md "WP-F". Raw records: `artifacts/perf/wp-f/rtxpro6000-ab.jsonl`.
+Raw records: `artifacts/perf/wp-f/rtxpro6000-ab.jsonl`.
+
+**Oracle parity: not run to completion.** `scripts/gpu/oracle.sh 37faef4`
+(targets `ltx25-512p ltx25-i2v`, `FV_ORACLE_RUN_MODE=all` so the runtime pod
+would also run `fv-gpucheck kernels`, including `ltx_rope`) brought up the
+upstream pod and produced the `ltx25-512p` reference dump, but no RTX PRO 6000
+was free in EUR-IS-1 for the runtime pod, and the driver was lost in a
+container restart; the upstream pod was deleted. So the GPU-side
+`ltx_rope` bit-exact check and the oracle diff are **still to run**
+(`ORACLE_TARGETS="ltx25-512p ltx25-i2v" FV_ORACLE_RUN_MODE=all
+ORACLE_WAIT_FIRST=1 UP_IMAGE_TAG=latest scripts/gpu/oracle.sh <sha>`). What
+covers the change meanwhile: the host test that the factored tables expand to
+the direct ones bit for bit, the kernel being a pure gather of those values,
+and the 720p output being bit-identical to the baseline.
+
+Spend: A/B pod 18 min ($0.64); oracle upstream pod 100 min, mostly idle
+while waiting for runtime stock ($3.48).
 
 Still open from the profile's LTX list: the spatial upsampler is loaded
 from disk every job (0.55 s warm, part of it host), and the stage-1 /
