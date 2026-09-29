@@ -33,8 +33,15 @@ const SRC: &str = "src/wan/kernels.cu";
 const SRC_FP8: &str = "src/wan/attn_fp8.cu";
 /// Datacenter attention kernels (tcgen05 / wgmma): arch-specific targets only.
 const DC_SRC: &str = "src/wan/attn_dc.cu";
-/// (SM in FV_CUBIN_SMS, nvcc arch) pairs attn_dc.cu is built for.
-const DC_ARCHS: &[(u32, &str)] = &[(90, "sm_90a"), (100, "sm_100a")];
+/// (SM, nvcc arch) pairs attn_dc.cu is built for, when their SM is in
+/// FV_CUBIN_SMS. sm_103a (B300) rides on 100: it is the same tcgen05 code,
+/// built so a B300 can opt in (`FASTVIDEO_DC_SM103=1`; never run on one).
+const DC_ARCHS: &[(u32, &str)] = &[(90, "sm_90a"), (100, "sm_100a"), (103, "sm_103a")];
+
+/// Whether attn_dc.cu is built for `sm` given the FV_CUBIN_SMS list.
+fn dc_wanted(sm: u32, sms: &[u32]) -> bool {
+    sms.contains(&sm) || (sm == 103 && sms.contains(&100))
+}
 const DEFAULT_SMS: &str = "75,80,86,89,90,100,120";
 
 fn find_nvcc() -> Option<PathBuf> {
@@ -187,6 +194,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUDA");
     println!("cargo:rerun-if-env-changed=FV_OXIDE_CUBIN_DIR");
     println!("cargo:rerun-if-env-changed=FV_REQUIRE_OXIDE");
+    println!("cargo:rerun-if-env-changed=FV_DC_PTXAS_VERBOSE");
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let table = out.join("aot.rs");
@@ -270,27 +278,40 @@ fn main() {
     // PTX: sm_90a / sm_100a code runs on exactly that SM, so there is nothing
     // to fall forward to.
     let mut dc_entries = String::new();
-    for &(sm, arch) in DC_ARCHS.iter().filter(|(sm, _)| sms.contains(sm)) {
+    for &(sm, arch) in DC_ARCHS.iter().filter(|(sm, _)| dc_wanted(*sm, &sms)) {
         let cubin = out.join(format!("attn_dc_{arch}.cubin"));
-        let status = Command::new(&nvcc)
-            .args([
-                "-cubin",
-                "-arch",
-                arch,
-                "-O3",
-                "--fmad=true",
-                "--prec-div=true",
-                "--prec-sqrt=true",
-                "--ftz=false",
-                "-o",
-            ])
+        // FV_DC_PTXAS_VERBOSE=1: ptxas register / spill / smem report per
+        // kernel, surfaced as cargo warnings (kernel work on the build pod).
+        let verbose = env::var("FV_DC_PTXAS_VERBOSE").is_ok_and(|v| v == "1");
+        let mut cmd = Command::new(&nvcc);
+        cmd.args([
+            "-cubin",
+            "-arch",
+            arch,
+            "-O3",
+            "--fmad=true",
+            "--prec-div=true",
+            "--prec-sqrt=true",
+            "--ftz=false",
+        ]);
+        if verbose {
+            cmd.arg("-Xptxas=-v");
+        }
+        let res = cmd
+            .arg("-o")
             .arg(&cubin)
             .arg(DC_SRC)
-            .status()
+            .output()
             .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+        let text = String::from_utf8_lossy(&res.stderr);
+        if verbose || !res.status.success() {
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                println!("cargo:warning=attn_dc {arch}: {line}");
+            }
+        }
         assert!(
-            status.success(),
-            "nvcc -cubin -arch={arch} failed for {DC_SRC}"
+            res.status.success(),
+            "nvcc -cubin -arch={arch} failed for {DC_SRC}:\n{text}"
         );
         dc_entries.push_str(&format!(
             "    ({sm}, include_bytes!({:?})),\n",

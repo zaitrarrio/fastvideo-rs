@@ -1287,6 +1287,26 @@ pub fn vsa_mma_attn_tiled_device(
     } else {
         fill_device(bh * padded * dim, 0.0)?
     };
+    // 9.0 / 10.0: the datacenter KV-tile-list kernel (attn_dc.cu, WP-D);
+    // `FASTVIDEO_VSA_KERNEL=tma2` (or mma / tma) keeps the mma.sync kernels.
+    if crate::wan::attn_dc::vsa_enabled()
+        && crate::wan::attn_dc::vsa_fine(
+            qt,
+            kt,
+            vt,
+            selected,
+            plan,
+            bh,
+            topk,
+            scale,
+            q_base,
+            q_tiles,
+            crate::wan::attn_dc::VsaEpilogue::Sparse(&mut out),
+        )?
+    {
+        log_vsa_dc_once();
+        return Ok(out);
+    }
     let (nt, tk, qb) = (nb as i32, topk as i32, q_base as i32);
     let scale_log2 = scale * std::f32::consts::LOG2_E;
     let want_tma = tma_requested(dev.sm_major);
@@ -1342,6 +1362,24 @@ pub fn vsa_mma_attn_tiled_device(
         qt, kt, vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
     .map_err(err)?;
     Ok(out)
+}
+
+/// One log line naming the datacenter VSA kernel (the `vsa fine kernel`
+/// line the mma.sync path prints).
+#[cfg(feature = "cuda")]
+pub(crate) fn log_vsa_dc_once() {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Some(k) = crate::wan::attn_dc::vsa() {
+        crate::wan::log::info_once(
+            &LOGGED,
+            format_args!(
+                "vsa fine kernel: dc KV-tile-list (sm{}, {}, {})",
+                k.sm,
+                if k.sm == 90 { "wgmma" } else { "tcgen05" },
+                k.origin
+            ),
+        );
+    }
 }
 
 #[cfg(feature = "cuda")]

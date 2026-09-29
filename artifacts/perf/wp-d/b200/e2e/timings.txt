@@ -1,0 +1,137 @@
+== tma2-768p
+benchmark.json
+frames
+h3.json
+tma2-768p/benchmark.json .decode_s 3.140773714
+tma2-768p/benchmark.json .denoise_s 11.87097477
+tma2-768p/benchmark.json .e2e_seconds 15.315126216
+tma2-768p/benchmark.json .generate_wall_s 15.447406561
+tma2-768p/benchmark.json .inference_time_s 15.315126216
+tma2-768p/benchmark.json .load_s 12.336105564
+tma2-768p/benchmark.json .peak_allocated_gib 65.18172389920801
+tma2-768p/benchmark.json .peak_memory_mb 68128.0
+tma2-768p/benchmark.json .peak_reserved_gib 66.53125
+tma2-768p/benchmark.json .png_frames_s 0.132280345
+tma2-768p/benchmark.json .stage_seconds.audio_decode 0.041029219
+tma2-768p/benchmark.json .stage_seconds.denoise 11.87097477
+tma2-768p/benchmark.json .stage_seconds.png_frames 0.132280345
+tma2-768p/benchmark.json .stage_seconds.refine 0.000498801
+tma2-768p/benchmark.json .stage_seconds.text 0.223528062
+tma2-768p/benchmark.json .stage_seconds.video_decode 3.099744495
+tma2-768p/benchmark.json .stage_seconds.video_encode_tail 5.486e-05
+tma2-768p/benchmark.json .stage_seconds.video_push 2.657e-05
+tma2-768p/benchmark.json .stage_seconds.video_rgb 0.08875356200468087
+tma2-768p/benchmark.json .stage_seconds.video_vae 3.0866212187409396
+tma2-768p/benchmark.json .stage_seconds.video_wait 0.140528882
+tma2-768p/benchmark.json .text_s 0.223528062
+tma2-768p/benchmark.json .total_s 15.315126216
+tma2-768p/benchmark.json .vsa.total_tiles 4997708800.0
+tma2-768p/benchmark.json .vsa.video_selected_tiles 487872000.0
+tma2-768p/benchmark.json .vsa.video_total_tiles 4878720000.0
+tma2-768p/benchmark.json .warm_steady_state True
+tma2-768p/benchmark.json .workload.duration_s 5
+tma2-768p/benchmark.json .workload.measured_steps 4
+tma2-768p/benchmark.json .workload.text_tokens 22
+== dc-768p
+benchmark.json
+frames
+h3.json
+dc-768p/benchmark.json .decode_s 3.136415123
+dc-768p/benchmark.json .denoise_s 9.183399263
+dc-768p/benchmark.json .e2e_seconds 12.619830772
+dc-768p/benchmark.json .generate_wall_s 12.752138628
+dc-768p/benchmark.json .inference_time_s 12.619830772
+dc-768p/benchmark.json .load_s 14.408368718
+dc-768p/benchmark.json .peak_allocated_gib 64.09363491553813
+dc-768p/benchmark.json .peak_memory_mb 66816.0
+dc-768p/benchmark.json .peak_reserved_gib 65.25
+dc-768p/benchmark.json .png_frames_s 0.132307856
+dc-768p/benchmark.json .stage_seconds.audio_decode 0.042010901
+dc-768p/benchmark.json .stage_seconds.denoise 9.183399263
+dc-768p/benchmark.json .stage_seconds.png_frames 0.132307856
+dc-768p/benchmark.json .stage_seconds.refine 0.00045772
+dc-768p/benchmark.json .stage_seconds.text 0.223331552
+dc-768p/benchmark.json .stage_seconds.video_decode 3.094404222
+dc-768p/benchmark.json .stage_seconds.video_encode_tail 6.308e-05
+dc-768p/benchmark.json .stage_seconds.video_push 2.6769999999999996e-05
+dc-768p/benchmark.json .stage_seconds.video_rgb 0.09080918600020194
+dc-768p/benchmark.json .stage_seconds.video_vae 3.079416574239731
+dc-768p/benchmark.json .stage_seconds.video_wait 0.139729872
+dc-768p/benchmark.json .text_s 0.223331552
+dc-768p/benchmark.json .total_s 12.619830772
+dc-768p/benchmark.json .vsa.total_tiles 4997708800.0
+dc-768p/benchmark.json .vsa.video_selected_tiles 487872000.0
+dc-768p/benchmark.json .vsa.video_total_tiles 4878720000.0
+dc-768p/benchmark.json .warm_steady_state True
+dc-768p/benchmark.json .workload.duration_s 5
+dc-768p/benchmark.json .workload.measured_steps 4
+dc-768p/benchmark.json .workload.text_tokens 22
+== tma2-1080p
+benchmark.json
+frames
+h3.json
+tma2-1080p/benchmark.json .decode_s 6.733593588
+tma2-1080p/benchmark.json .denoise_s 32.734075293
+tma2-1080p/benchmark.json .e2e_seconds 39.869046952
+tma2-1080p/benchmark.json .generate_wall_s 40.126656409
+tma2-1080p/benchmark.json .inference_time_s 39.869046952
+tma2-1080p/benchmark.json .load_s 14.05290382
+tma2-1080p/benchmark.json .peak_allocated_gib 76.504060796462
+tma2-1080p/benchmark.json .peak_memory_mb 81152.0
+tma2-1080p/benchmark.json .peak_reserved_gib 79.25
+tma2-1080p/benchmark.json .png_frames_s 0.257609457
+tma2-1080p/benchmark.json .stage_seconds.audio_decode 0.040271209
+tma2-1080p/benchmark.json .stage_seconds.denoise 32.734075293
+tma2-1080p/benchmark.json .stage_seconds.png_frames 0.257609457
+tma2-1080p/benchmark.json .stage_seconds.refine 0.00042308
+tma2-1080p/benchmark.json .stage_seconds.text 0.222081061
+tma2-1080p/benchmark.json .stage_seconds.video_decode 6.693322379
+tma2-1080p/benchmark.json .stage_seconds.video_encode_tail 7.2161e-05
+tma2-1080p/benchmark.json .stage_seconds.video_push 2.9449999999999998e-05
+tma2-1080p/benchmark.json .stage_seconds.video_rgb 0.18108020401709843
+tma2-1080p/benchmark.json .stage_seconds.video_vae 6.661277599811554
+tma2-1080p/benchmark.json .stage_seconds.video_wait 0.048081734
+tma2-1080p/benchmark.json .text_s 0.222081061
+tma2-1080p/benchmark.json .total_s 39.869046952
+tma2-1080p/benchmark.json .vsa.total_tiles 20654636800.0
+tma2-1080p/benchmark.json .vsa.video_selected_tiles 2041200000.0
+tma2-1080p/benchmark.json .vsa.video_total_tiles 20412000000.0
+tma2-1080p/benchmark.json .warm_steady_state True
+tma2-1080p/benchmark.json .workload.duration_s 5
+tma2-1080p/benchmark.json .workload.measured_steps 4
+tma2-1080p/benchmark.json .workload.text_tokens 22
+== dc-1080p
+benchmark.json
+frames
+h3.json
+dc-1080p/benchmark.json .decode_s 6.754464764
+dc-1080p/benchmark.json .denoise_s 24.455557636
+dc-1080p/benchmark.json .e2e_seconds 31.592632617
+dc-1080p/benchmark.json .generate_wall_s 31.850412223
+dc-1080p/benchmark.json .inference_time_s 31.592632617
+dc-1080p/benchmark.json .load_s 14.462080617
+dc-1080p/benchmark.json .peak_allocated_gib 74.29204755742103
+dc-1080p/benchmark.json .peak_memory_mb 78496.0
+dc-1080p/benchmark.json .peak_reserved_gib 76.65625
+dc-1080p/benchmark.json .png_frames_s 0.257779606
+dc-1080p/benchmark.json .stage_seconds.audio_decode 0.04061276
+dc-1080p/benchmark.json .stage_seconds.denoise 24.455557636
+dc-1080p/benchmark.json .stage_seconds.png_frames 0.257779606
+dc-1080p/benchmark.json .stage_seconds.refine 0.00044524
+dc-1080p/benchmark.json .stage_seconds.text 0.225608024
+dc-1080p/benchmark.json .stage_seconds.video_decode 6.713852004
+dc-1080p/benchmark.json .stage_seconds.video_encode_tail 7.465e-05
+dc-1080p/benchmark.json .stage_seconds.video_push 3.86e-05
+dc-1080p/benchmark.json .stage_seconds.video_rgb 0.18289151998030018
+dc-1080p/benchmark.json .stage_seconds.video_vae 6.681450144052505
+dc-1080p/benchmark.json .stage_seconds.video_wait 0.049007475999999994
+dc-1080p/benchmark.json .text_s 0.225608024
+dc-1080p/benchmark.json .total_s 31.592632617
+dc-1080p/benchmark.json .vsa.total_tiles 20654636800.0
+dc-1080p/benchmark.json .vsa.video_selected_tiles 2041200000.0
+dc-1080p/benchmark.json .vsa.video_total_tiles 20412000000.0
+dc-1080p/benchmark.json .warm_steady_state True
+dc-1080p/benchmark.json .workload.duration_s 5
+dc-1080p/benchmark.json .workload.measured_steps 4
+dc-1080p/benchmark.json .workload.text_tokens 22
+

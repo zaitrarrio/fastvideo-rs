@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-29 · FVID-2026-09-29-vsa-datacenter
+- Trigger: owner approved WP-D; the datacenter profile put VSA's mma.sync fine kernel at 51-61% of H3 turbo denoise on B200 (41-52% on H100)
+- Options: KV-tile-list producer in `attn_dc.cu` with tcgen05 / wgmma consumers; port FastVideo's ThunderKittens sm_90a / sm100a kernels; keep mma.sync
+- Decision: `attn_dc.cu` gains a KV-tile-list producer, `fa_dc100_vsa` (M = 128 over the union of two query tiles' selections, per-row masks) and `fa_dc90_vsa` (one query tile per wgmma warpgroup), a fused prep (tiles + means, bit for bit the old kernels, so the selection is unchanged) and H3's combine in the fine epilogue. Seam value `vsa_attention = dc`, `auto` on 9.0 / 10.0 only; `FASTVIDEO_VSA_KERNEL=tma2` restores the mma.sync path; sm_120 never loads the module. sm_103a cubin built, loaded on 10.3 only with `FASTVIDEO_DC_SM103=1`
+- Reason: `vsa_dc` kernels group 99/99 on B200 and H100 (fine vs tma2 rel-L2 <= 5.7e-4, vs an f64 block-masked reference within 1.011x tma2's error, prep and combine bit-identical); B200 H3 turbo denoise 11.87 -> 9.18 s (768p), 32.73 -> 24.46 s (1080p) on one pod, H100 19.46 -> 16.34 s / 49.62 -> 39.44 s; step-1 block dumps at the order of the Rust-vs-Python oracle; clip divergence (LPIPS 0.28) below a dense-kernel-switch control (0.32)
+- Reversibility: cheap (`FASTVIDEO_VSA_KERNEL=tma2`)
+- Executed by: Executor
+- ADR: none
+- Verification: pods 1i22qqo8592p38 (H100 kernels), 9qx6yvvqsm4fm5 (B200 kernels), xlei1f70cz6zuw (B200 E2E), 3l1v20bt2op1ej (H100 E2E), both US-CA-2 on the US weights volume, all deleted; GPU spend $5.08; artifacts/perf/wp-d/; docs/perf/datacenter-profile.md "WP-D results"
+
 ### FVID · 2026-09-29 · FVID-2026-09-29-h3-1080p-length
 - Trigger: owner decision list (2026-09-29), item 1
 - Options: serve native 1080P over the whole 4..15 s grid; cap it at 5 s; cap at 5 s with 10 s behind a switch

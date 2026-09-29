@@ -1,0 +1,11 @@
+== clips 768p
+[INFO] compare-clips/lpips {"backend":"cuda (cuDNN conv)","max":0.27391930324187674,"mean":0.2195990171738302,"n":44,"seconds":4.715695652}
+[INFO] compare-clips/pixel_metrics {"mean_abs_pixel_diff":12.169588442201965,"mse_max":1183.0142399217716,"mse_mean":651.6051495420705,"pairs":124,"patch_boundary_ratio_by_size_max":{"16":1.1050638096143004,"32":1.17694374157727,"8":1.076382331440208},"patch_boundary_ratio_by_size_mean":{"16":1.016160285556076,"32":1.0190305910154553,"8":1.0155065953158031},"patch_boundary_ratio_max":1.17694374157727,"patch_boundary_
+== clips 1080p
+[INFO] compare-clips/lpips {"backend":"cuda (cuDNN conv)","max":0.2755853991620856,"mean":0.23145143392674983,"n":44,"seconds":10.487797166}
+[INFO] compare-clips/pixel_metrics {"mean_abs_pixel_diff":14.006484486698321,"mse_max":1888.0437069163604,"mse_mean":884.0013978762288,"pairs":124,"patch_boundary_ratio_by_size_max":{"16":1.067411172570922,"32":1.1315148840806777,"8":1.0383769424403932},"patch_boundary_ratio_by_size_mean":{"16":0.993246532910141,"32":0.9933035143407094,"8":0.9924961360937239},"patch_boundary_ratio_max":1.1315148840806777,"patch_bound
+tma2-768p {'text_s': 0.297878733, 'denoise_s': 19.458783254, 'decode_s': 4.728497256000001, 'total_s': 24.576362609, 'peak_allocated_gib': 56.980863871984184}
+dc-768p {'text_s': 0.334914738, 'denoise_s': 16.339766435, 'decode_s': 4.736374274, 'total_s': 21.495432892, 'peak_allocated_gib': 55.89277488831431}
+tma2-1080p {'text_s': 0.320197791, 'denoise_s': 49.620318034, 'decode_s': 10.043285125, 'total_s': 60.174178314, 'peak_allocated_gib': 68.30320076923817}
+dc-1080p {'text_s': 0.278886597, 'denoise_s': 39.441753645, 'decode_s': 10.057770812, 'total_s': 49.962084138, 'peak_allocated_gib': 66.0911875301972}
+

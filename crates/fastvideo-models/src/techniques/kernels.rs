@@ -140,7 +140,7 @@ pub struct OxideBackend;
 pub struct CudnnBackend;
 pub struct CublasBackend;
 
-static NVCC: [KernelImpl; 15] = [
+static NVCC: [KernelImpl; 16] = [
     k(
         KernelOp::DenseAttention,
         "v1",
@@ -220,7 +220,16 @@ static NVCC: [KernelImpl; 15] = [
         "tma2",
         "tma2",
         90,
-        "TMA three-slot ring (the auto kernel on sm90+)",
+        "TMA three-slot ring (the auto kernel on sm_120; the mma.sync escape hatch on 9.0 / 10.0)",
+    ),
+    k(
+        KernelOp::VsaAttention,
+        "dc",
+        "dc",
+        90,
+        "attn_dc.cu KV-tile-list producer: tcgen05 + TMEM (sm_100, 128-row union of two query \
+         tiles) / wgmma (sm_90, one query tile per warpgroup), fused prep and H3 combine \
+         (the auto kernel on 9.0 / 10.0)",
     ),
     k(
         KernelOp::Conv3d,
@@ -469,6 +478,19 @@ mod tests {
         );
         // `cudnn` names a conv3d kernel in one backend only; unambiguous.
         assert!(resolve(KernelOp::Conv3d, "cudnn", None).unwrap().is_some());
+    }
+
+    #[test]
+    fn datacenter_vsa_is_exactly_sm90_and_sm100() {
+        for sm in [90, 100] {
+            let c = resolve(KernelOp::VsaAttention, "dc", Some(sm)).unwrap().unwrap();
+            assert_eq!(c.setting(), ("FASTVIDEO_VSA_KERNEL", "dc"));
+        }
+        for sm in [80, 89, 103, 120] {
+            assert!(resolve(KernelOp::VsaAttention, "dc", Some(sm)).is_err(), "sm {sm}");
+        }
+        // sm_120 keeps the mma.sync ring kernel as its only TMA choice.
+        assert!(resolve(KernelOp::VsaAttention, "tma2", Some(120)).unwrap().is_some());
     }
 
     #[test]
