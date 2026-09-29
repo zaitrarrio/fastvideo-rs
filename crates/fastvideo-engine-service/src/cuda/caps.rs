@@ -1556,6 +1556,27 @@ mod tests {
             let caps = m.caps();
             let mut req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
             let mut staged = StagedInputs::default();
+            if caps.tasks.iter().copied().collect::<Vec<_>>() == vec![Task::A2V] {
+                // The guided A2V companion: its length follows the driving
+                // audio (7 s -> 161 frames at 24 fps), its guidance is a knob.
+                req.task = Task::A2V;
+                req.sampling.guidance = Some(5.0);
+                req.audio_in = Some(AudioInput {
+                    media: MediaRef::parse("https://e.x/a.wav", "audio_url").unwrap(),
+                    role: AudioRole::Drive,
+                    max_s: None,
+                });
+                staged.audio_in = Some(StagedMedia {
+                    path: "/stage/a.wav".into(),
+                    mime: "audio/wav".into(),
+                    bytes: 1,
+                    probe: MediaProbe { duration_s: Some(7.0), audio_rate: Some(44_100), ..Default::default() },
+                });
+                let r = negotiate(&req, &caps, &staged).unwrap_or_else(|e| panic!("{}: {e:?}", m.id));
+                assert_eq!((r.num_frames, r.fps, r.sampling.guidance), (161, 24, Some(5.0)), "{}", m.id);
+                assert_eq!(r.recipe.as_deref(), Some(m.recipe_name.as_str()));
+                continue;
+            }
             if !caps.supports(Task::T2V) {
                 // Ref2VA models serve reference-to-video only.
                 assert_eq!(caps.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);

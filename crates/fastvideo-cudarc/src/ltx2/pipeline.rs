@@ -2308,6 +2308,9 @@ impl TextEncoder {
                 .filter(|p| p.is_dir())
             {
                 weights_identity(&sibling, None)?
+            } else if self.paths.weights.join("connectors").is_dir() {
+                // The dev DiT's tree: the bundle's connectors (`load_connectors`).
+                weights_identity(&self.paths.weights.join("connectors"), None)?
             } else {
                 weights_identity(&self.paths.dit, None)?
             };
@@ -2328,7 +2331,11 @@ impl TextEncoder {
     }
 
     fn load_connectors(&self) -> Result<TextConnectors> {
-        let map = open_distilled(&self.paths.dit, "connectors")?;
+        // Beside the DiT, else in the weight root: `LTX-2.5-Diffusers` keeps
+        // one `connectors/` for `transformer/` and `transformer_full/` (the
+        // dev DiT lives in its own tree, `ltx25-dev/transformer_full`).
+        let map = open_distilled(&self.paths.dit, "connectors")
+            .or_else(|e| open_distilled(&self.paths.weights, "connectors").map_err(|_| e))?;
         Ok(TextConnectors::load(
             &map,
             &Keys::connectors(Keys::detect(&map)),

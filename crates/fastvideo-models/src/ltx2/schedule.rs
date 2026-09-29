@@ -461,7 +461,8 @@ mod tests {
         let s = Ltx2Schedule::ltx_core(30);
         assert_eq!(s.num_steps(), 30);
         assert_eq!(s.sigmas.len(), 31);
-        assert_eq!(s.sigmas[0], 1.0);
+        // float32 `reciprocal(e + 0) · e`: 1 up to one ulp.
+        assert!((s.sigmas[0] - 1.0).abs() < 1e-6, "{}", s.sigmas[0]);
         assert_eq!(*s.sigmas.last().unwrap(), 0.0);
         // The stretch pins the last non-zero sigma to the terminal 0.1.
         assert!((s.sigmas[29] - 0.1).abs() < 1e-6, "{}", s.sigmas[29]);
