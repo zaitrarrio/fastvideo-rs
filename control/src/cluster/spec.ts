@@ -1,15 +1,18 @@
 // A cluster definition (the controller's version of runpod-cluster.sh's
 // fixed shape): one CPU gateway pod in front of pod pools. Defaults match
 // the script (docs/serve/e2e/cluster.md).
+import { validate } from "../schemas";
 import { HttpError } from "../util";
 
+export type RegionId = "eu" | "us";
+export type CpuFlavor = "cpu3c" | "cpu3g" | "cpu3m" | "cpu5c" | "cpu5g" | "cpu5m";
 export interface RegionDef {
   volume: string;
   dc: string;
   gpus: string[];
 }
 /** CLAUDE.md: the two network volumes (weights live on both). */
-export const REGIONS: Record<string, RegionDef> = {
+export const REGIONS: Record<RegionId, RegionDef> = {
   eu: { volume: "jg48s6o1w0", dc: "EUR-IS-1", gpus: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] },
   us: { volume: "s2k01690bi", dc: "US-CA-2", gpus: ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H200"] },
 };
@@ -27,8 +30,8 @@ export interface PoolSpec {
   config?: string; // the worker config inside the image (/etc/fv/runpod.toml …)
   config_toml?: string; // or an inline worker config (FV_WORKER_TOML_B64)
   gpu_types?: string[]; // default: the region's
-  regions?: string[]; // default: the cluster's
-  cpu_flavors?: string[];
+  regions?: RegionId[]; // default: the cluster's
+  cpu_flavors?: CpuFlavor[];
   vcpu?: number;
   container_disk_gb?: number;
   volume?: boolean; // mount the region's network volume at /workspace (GPU default true)
@@ -43,10 +46,10 @@ export interface ClusterSpec {
   name: string;
   /** Image source: a release channel (stable, latest, …), a commit (sha), or one image ref for every pod (all-in-one). */
   image: { channel?: string; sha?: string; ref?: string };
-  regions: string[];
+  regions: RegionId[];
   gateway: {
     enabled: boolean;
-    cpu_flavors: string[];
+    cpu_flavors: CpuFlavor[];
     vcpu: number;
     container_disk_gb: number;
     base: "pods" | "minimal"; // the gateway TOML (non-pool part)
@@ -66,7 +69,7 @@ export interface ClusterSpec {
   max_gpu_dph: number;
   auto_stop_idle_min?: number | null; // per-cluster override of the idle auto-stop policy
   log_shipping: boolean;
-  log_level?: string; // FV_LOG_SHIP_LEVEL
+  log_level?: "trace" | "debug" | "info" | "warn" | "error"; // FV_LOG_SHIP_LEVEL
 }
 
 export const STANDARD_POOLS: PoolSpec[] = [
@@ -207,5 +210,8 @@ export function normalizeSpec(input: any): ClusterSpec {
   if (!["pods", "minimal"].includes(s.gateway.base)) throw new HttpError(400, "gateway.base: pods | minimal");
   s.gateway.vcpu = Number(s.gateway.vcpu) || 2;
   s.log_shipping = s.log_shipping !== false;
+  // The same schema the editor validates against (src/schemas.ts).
+  const v = validate("cluster-spec", s);
+  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".") || "spec"}: ${i.message}`).join("; "), { issues: v.issues });
   return s;
 }

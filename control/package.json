@@ -4,18 +4,31 @@
   "type": "module",
   "description": "fv-control: the fastvideo-rs cluster controller (Cloudflare Worker + static dashboard). docs/control/README.md",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "test": "vitest run test/unit",
     "test:integration": "node test/integration/run.mjs",
     "test:ui": "node test/ui/smoke.mjs",
     "build": "wrangler deploy --dry-run --outdir dist",
-    "deploy:staging": "wrangler deploy --env staging"
+    "deploy:staging": "wrangler deploy --env staging",
+    "build:ui": "node build-ui.mjs"
   },
   "dependencies": {
-    "hono": "^4.13.11"
+    "hono": "^4.13.11",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260929.1",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
+    "@lezer/common": "^1.5.3",
+    "@lezer/highlight": "^1.2.5",
+    "esbuild": "^0.28.2",
     "miniflare": "^4.20260730.0",
     "playwright-core": "^1.63.0",
     "typescript": "^5.9.3",
