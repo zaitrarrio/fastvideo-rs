@@ -8,10 +8,10 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `POST /fv/v1/internal/jobs` | the dispatch envelope: fetch inputs, adopt the D1 row, submit to the engine → 202 `{id, status, worker}`; a job already held here answers 200; one held by another live worker 409 |
+//! | `POST /fv/v1/internal/jobs` | the dispatch envelope: fetch inputs, adopt the D1 row, submit to the engine → 202 `{id, status, worker, load}` (`load`: running, queued, capacity, queue_max after taking it); a job already held here answers 200; one held by another live worker 409 |
 //! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls) |
 //! | `DELETE /fv/v1/internal/jobs/{id}` | cancel |
-//! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, caps, `build` (git sha, variant, image digest, channel) (gateway probes) |
+//! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, `capacity` (executors), `queue_max`, caps, `build` (git sha, variant, image digest, channel) (gateway probes) |
 //! | `POST /fv/v1/internal/drain`, `…/undrain` | stop / resume taking new jobs and sessions (running work finishes); the `gw_workers` row says `draining` (the autoscaler, gateway.md §8.5) |
 //!
 //! - [`spawn_registration`]: pod workers upsert `gw_workers` every 10 s.
@@ -209,6 +209,10 @@ pub fn status_json(st: &WorkerState) -> Value {
         "failed_models": crate::health::failed_models(&engine.pool()),
         "draining": st.draining(),
         "stats": {"queued_batch": s.queued_batch, "queued_stream": s.queued_stream, "running": s.running, "sessions": s.sessions},
+        // What the gateway places against: jobs run at once (executors)
+        // and the batch queue limit (0: none).
+        "capacity": s.executors.max(1),
+        "queue_max": st.queue_max,
         "models": models,
         "version": env!("CARGO_PKG_VERSION"),
         // Git sha, build time, variant, image and channel (docs/serve/releases.md).
@@ -373,14 +377,17 @@ fn cleanup_inputs(st: &Arc<WorkerState>, id: JobId, env: &Envelope) {
 }
 
 async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> Response {
-    take_envelope(&st, env, false).await
+    take_envelope(&st, env, false, None).await
 }
 
 /// Takes a dispatched job (the gateway's `POST /fv/v1/internal/jobs`, or a
 /// dispatcher push): 202 taken, 200 already held here, else the refusal.
 /// `takeover`: adopt even if another worker's heartbeat on the row is fresh
-/// (a dispatcher re-dispatch after it declared that worker lost).
-pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool) -> Response {
+/// (a dispatcher re-dispatch after it declared that worker lost). `lease`:
+/// the dispatcher's fencing token (docs/serve/gateway-cloudflare.md, phase
+/// 2): the job is held and started at once and its row written behind,
+/// every write conditional on the lease (`D1JobStore::adopt_leased`).
+pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool, lease: Option<u64>) -> Response {
     let id = env.job.id;
     if st.submitted.lock().unwrap_or_else(|p| p.into_inner()).contains(&id) {
         let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
@@ -413,9 +420,10 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool)
     // (fal `timings.dispatch` ends here, `timings.wait` starts).
     job.dispatched_at = Some(st.ctx.now());
     let t_adopt = std::time::Instant::now();
-    let adopted = match &st.d1 {
-        Some(d1) => d1.adopt_with(job, takeover).await,
-        None => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
+    let adopted = match (&st.d1, lease) {
+        (Some(d1), Some(l)) if l > 0 => d1.adopt_leased(job, l),
+        (Some(d1), _) => d1.adopt_with(job, takeover).await,
+        (None, _) => st.ctx.jobs().insert(job.clone()).await.map(|_| job),
     };
     metrics::histogram!("fv_worker_adopt_seconds").record(t_adopt.elapsed().as_secs_f64());
     let job = match adopted {
@@ -435,7 +443,11 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool)
     cleanup_inputs(st, id, &env);
     tracing::info!(job = %id, attempt = env.attempt, pool = ?env.pool, "worker: took a dispatched job");
     let status = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_else(|| "queued".into());
-    (StatusCode::ACCEPTED, Json(json!({"id": id.to_string(), "status": status, "worker": st.worker_id}))).into_response()
+    // The load right after taking it (this job included): the gateway
+    // places the next job of a burst on it without waiting for a probe.
+    let s = st.gate.engine().stats();
+    let load = json!({"running": s.running, "queued": s.queued_batch + s.queued_stream, "capacity": s.executors.max(1), "queue_max": st.queue_max});
+    (StatusCode::ACCEPTED, Json(json!({"id": id.to_string(), "status": status, "worker": st.worker_id, "load": load}))).into_response()
 }
 
 /// A pod worker's registration in `gw_workers`.

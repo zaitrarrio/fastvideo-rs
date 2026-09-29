@@ -134,6 +134,8 @@ pub struct EngineStats {
     pub running: usize,
     pub sessions: usize,
     pub draining: bool,
+    /// Jobs it can run at once (one per executor).
+    pub executors: usize,
 }
 
 pub(crate) struct JobEntry {
@@ -597,6 +599,7 @@ impl EngineService {
                 .filter(|&i| st.sched.exec(i).session.is_some())
                 .count(),
             draining: st.draining,
+            executors: st.sched.executors(),
         }
     }
 

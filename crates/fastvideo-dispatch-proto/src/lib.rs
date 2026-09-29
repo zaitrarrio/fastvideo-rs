@@ -61,6 +61,9 @@ pub fn valid_id(s: &str) -> bool {
 pub struct Held {
     pub job_id: String,
     pub attempt: u32,
+    /// The lease (fencing token) it was pushed with.
+    #[serde(default)]
+    pub lease: u64,
     /// `queued` | `running` (unfinished) or `succeeded` | `failed` |
     /// `cancelled` (finished).
     pub state: String,
@@ -113,10 +116,12 @@ pub enum WorkerMsg {
     Hello(Hello),
     /// The job is taken (the adopt). `worker_ms`: time from receiving the
     /// push to this ack on the worker (input fetch, adopt, engine submit).
-    Ack { job_id: String, attempt: u32, #[serde(default)] worker_ms: u64 },
+    Ack { job_id: String, attempt: u32, #[serde(default)] lease: u64, #[serde(default)] worker_ms: u64 },
     /// The job was not taken. `retry`: another worker (or later) may take
     /// it (busy, draining, held elsewhere); otherwise it is failed with
-    /// `message`.
+    /// `message`. `code` 424: a client URL it could not fetch; the job
+    /// waits for the gateway to send it again with the input in the store
+    /// ([`PoolStatus::restage`], [`EnqueueReq::replace`]).
     Nack { job_id: String, attempt: u32, retry: bool, #[serde(default)] code: u16, #[serde(default)] message: String },
     /// A taken job finished (its D1 row is already terminal).
     Done { job_id: String, attempt: u32, state: String },
@@ -131,10 +136,11 @@ pub enum DoMsg {
     /// Answer to [`WorkerMsg::Hello`]: the jobs it reported that it must
     /// drop (the dispatcher gave them to another worker meanwhile).
     Welcome { worker_id: String, pool: String, #[serde(default)] cancel: Vec<String> },
-    /// A job to take: ack or nack. `takeover`: this is a re-dispatch after
-    /// a worker loss decided by the dispatcher, so the worker may adopt the
-    /// row even though another worker's heartbeat on it is still fresh.
-    Job { job_id: String, attempt: u32, envelope: Value, #[serde(default)] takeover: bool },
+    /// A job to take: ack or nack. `lease` is its fencing token: the worker
+    /// writes the job's row only while no newer lease holds it, so a worker
+    /// the dispatcher gave up on cannot overwrite its successor.
+    /// `takeover`: a re-dispatch after a worker loss.
+    Job { job_id: String, attempt: u32, envelope: Value, #[serde(default)] lease: u64, #[serde(default)] takeover: bool },
     /// Stop a job (client cancel).
     Cancel { job_id: String },
     /// Take no new jobs (running ones finish).
@@ -154,6 +160,10 @@ pub struct EnqueueReq {
     /// The model (for workers that announce a model list).
     #[serde(default)]
     pub model: Option<String>,
+    /// Replace the envelope of a job waiting for a restage (its inputs now
+    /// in the store) and queue it again.
+    #[serde(default)]
+    pub replace: bool,
 }
 
 /// Answer to an enqueue.
@@ -226,6 +236,10 @@ pub struct PoolStatus {
     pub failed: Vec<FailedJob>,
     #[serde(default)]
     pub timings: DispatchTimings,
+    /// Jobs waiting for the gateway to put a client-URL input in the store
+    /// (a worker could not fetch it) and enqueue them again with `replace`.
+    #[serde(default)]
+    pub restage: Vec<String>,
     /// Worker build of the dispatcher (the Worker script version).
     #[serde(default)]
     pub dispatcher: String,
@@ -245,9 +259,9 @@ mod tests {
 
     #[test]
     fn frames_round_trip() {
-        let m = WorkerMsg::Ack { job_id: "j".into(), attempt: 2, worker_ms: 7 };
+        let m = WorkerMsg::Ack { job_id: "j".into(), attempt: 2, lease: 3, worker_ms: 7 };
         let s = serde_json::to_string(&m).unwrap();
-        assert_eq!(s, r#"{"t":"ack","job_id":"j","attempt":2,"worker_ms":7}"#);
+        assert_eq!(s, r#"{"t":"ack","job_id":"j","attempt":2,"lease":3,"worker_ms":7}"#);
         assert_eq!(serde_json::from_str::<WorkerMsg>(&s).unwrap(), m);
         let hello: WorkerMsg = serde_json::from_value(json!({"t": "hello", "worker_id": "w1", "pool": "p"})).unwrap();
         match hello {
@@ -257,7 +271,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let job = DoMsg::Job { job_id: "j".into(), attempt: 1, envelope: json!({"job": {}}), takeover: false };
+        let job = DoMsg::Job { job_id: "j".into(), attempt: 1, envelope: json!({"job": {}}), lease: 1, takeover: false };
         let v = serde_json::to_value(&job).unwrap();
         assert_eq!(v["t"], "job");
         assert_eq!(serde_json::from_value::<DoMsg>(v).unwrap(), job);

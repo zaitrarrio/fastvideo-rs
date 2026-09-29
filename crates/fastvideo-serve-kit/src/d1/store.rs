@@ -94,6 +94,11 @@ struct Entry {
     last_write: Option<Instant>,
     dirty: bool,
     terminal_since: Option<Instant>,
+    /// Dispatcher lease (fencing token) of a job taken with
+    /// [`D1JobStore::adopt_leased`]: every write is conditional on it.
+    lease: Option<u64>,
+    /// A newer lease holds the row: nothing more is written for this job.
+    fenced: bool,
 }
 
 #[derive(Default)]
@@ -124,6 +129,8 @@ pub struct D1JobStore {
     artifacts: Option<Arc<dyn ArtifactStore>>,
     inputs_root: Option<PathBuf>,
     last_heartbeat: Mutex<Option<Instant>>,
+    /// Listeners told about jobs whose row a newer lease took ([`D1JobStore::subscribe_fenced`]).
+    fenced_tx: Mutex<Vec<tokio::sync::mpsc::UnboundedSender<JobId>>>,
 }
 
 impl std::fmt::Debug for D1JobStore {
@@ -201,6 +208,28 @@ fn upsert_stmt(job: &Job, worker: Option<&str>) -> Result<Stmt, StoreError> {
     ))
 }
 
+/// The upsert of a leased job (phase 2 push dispatch): applies when the row
+/// already carries this lease, or when it carries an older one (or none) and
+/// is still queued or running with no cancel request. Zero changes: fenced.
+fn leased_upsert_stmt(job: &Job, worker: &str, lease: u64) -> Result<Stmt, StoreError> {
+    let mut params = row_params(job, Some(worker))?;
+    params.push(json!(lease));
+    Ok(Stmt::new(
+        format!(
+            "INSERT INTO jobs ({COLS}, lease) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, status = excluded.status, \
+             model = excluded.model, resolved_model = excluded.resolved_model, task = excluded.task, \
+             progress = excluded.progress, updated_at = excluded.updated_at, \
+             completed_at = excluded.completed_at, expires_at = excluded.expires_at, \
+             worker = excluded.worker, version = jobs.version + 1, job = excluded.job, lease = excluded.lease \
+             WHERE jobs.lease = excluded.lease \
+             OR (COALESCE(jobs.lease, 0) < excluded.lease AND jobs.status IN {UNFINISHED} \
+                 AND COALESCE(json_extract(jobs.job, '$.cancel_requested'), 0) = 0)"
+        ),
+        params,
+    ))
+}
+
 /// `UPDATE ... WHERE id = ? AND version = ?` (jobs owned elsewhere).
 fn cas_stmt(job: &Job, version: i64) -> Result<Stmt, StoreError> {
     let body = serde_json::to_string(job).map_err(|e| StoreError::Io(format!("encoding job: {e}")))?;
@@ -267,6 +296,7 @@ impl D1JobStore {
             artifacts: None,
             inputs_root: None,
             last_heartbeat: Mutex::new(None),
+            fenced_tx: Mutex::new(Vec::new()),
         }
     }
     /// Deletes artifacts through `a` when jobs are removed or expire.
@@ -301,6 +331,62 @@ impl D1JobStore {
     /// The D1 client (for tables other than `jobs`).
     pub fn client(&self) -> &D1Client {
         &self.db
+    }
+
+    /// Takes a job pushed by a pool dispatcher under `lease` (its fencing
+    /// token; docs/serve/gateway-cloudflare.md, phase 2) **without a D1 round
+    /// trip**: the job is held here at once (the engine can start it) and
+    /// the row is written behind, by the flusher, with every write
+    /// conditional on the lease (`leased_upsert_stmt`). When a newer lease
+    /// holds the row, or the row finished or was cancelled meanwhile, the
+    /// job is *fenced*: nothing more of it is written and the listeners of
+    /// [`D1JobStore::subscribe_fenced`] are told, so the worker stops it.
+    /// Idempotent for a job already held here.
+    pub fn adopt_leased(self: &Arc<Self>, job: Job, lease: u64) -> Result<Job, StoreError> {
+        {
+            let mut g = self.lock();
+            if let Some(e) = g.jobs.get(&job.id) {
+                return Ok(e.job.clone());
+            }
+            g.seq += 1;
+            let seq = g.seq;
+            let (tx, _) = watch::channel(job.snapshot(seq));
+            g.by_ext.insert((job.protocol, job.external_id.clone()), job.id);
+            g.jobs.insert(
+                job.id,
+                Entry {
+                    job: job.clone(),
+                    tx,
+                    seq,
+                    flushed: Arc::new(tokio::sync::Mutex::new(0)),
+                    last_write: None,
+                    dirty: true,
+                    terminal_since: None,
+                    lease: Some(lease),
+                    fenced: false,
+                },
+            );
+        }
+        let me = self.clone();
+        let id = job.id;
+        tokio::spawn(async move {
+            if let Err(e) = me.flush(id).await {
+                tracing::warn!(job = %id, error = %e, "D1 job store: leased adopt write failed; the flusher retries");
+            }
+        });
+        Ok(job)
+    }
+
+    /// Jobs fenced out by a newer lease (see [`D1JobStore::adopt_leased`]).
+    pub fn subscribe_fenced(&self) -> tokio::sync::mpsc::UnboundedReceiver<JobId> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.fenced_tx.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
+        rx
+    }
+
+    /// Whether a leased job was fenced out.
+    pub fn is_fenced(&self, id: JobId) -> bool {
+        self.lock().jobs.get(&id).is_some_and(|e| e.fenced)
     }
 
     /// Takes over a job another process inserted (a gateway, see
@@ -374,6 +460,8 @@ impl D1JobStore {
                 last_write: Some(Instant::now()),
                 dirty: false,
                 terminal_since: None,
+                lease: None,
+                fenced: false,
             },
         );
         Ok(next)
@@ -480,27 +568,41 @@ impl D1JobStore {
             return Ok(());
         };
         let mut done = lock.lock().await;
-        let (job, seq) = {
+        let (job, seq, lease) = {
             let g = self.lock();
             match g.jobs.get(&id) {
-                Some(e) if e.seq > *done => (e.job.clone(), e.seq),
+                Some(e) if e.fenced => return Ok(()),
+                Some(e) if e.seq > *done => (e.job.clone(), e.seq, e.lease),
                 _ => return Ok(()),
             }
         };
-        let stmt = match upsert_stmt(&job, Some(&self.opts.worker_id)) {
+        let stmt = match lease {
+            Some(l) => leased_upsert_stmt(&job, &self.opts.worker_id, l),
+            None => upsert_stmt(&job, Some(&self.opts.worker_id)),
+        };
+        let stmt = match stmt {
             Ok(s) => s,
             Err(e) => return Err(D1Error::Decode(e.to_string())),
         };
         let res = self.write(stmt).await;
+        let fenced = lease.is_some() && matches!(res, Ok(0));
         let mut g = self.lock();
         if let Some(e) = g.jobs.get_mut(&id) {
             e.last_write = Some(Instant::now());
             match &res {
+                _ if fenced => {
+                    e.fenced = true;
+                    e.dirty = false;
+                }
                 Ok(_) => e.dirty = e.seq > seq,
                 Err(_) => e.dirty = true,
             }
         }
         drop(g);
+        if fenced {
+            tracing::warn!(job = %id, lease = ?lease, "D1 job store: a newer lease holds this job (or it ended); its writes stop here");
+            self.fenced_tx.lock().unwrap_or_else(|p| p.into_inner()).retain(|t| t.send(id).is_ok());
+        }
         if res.is_ok() {
             *done = seq;
         }
@@ -737,6 +839,8 @@ impl JobStore for D1JobStore {
                 last_write: Some(Instant::now()),
                 dirty: false,
                 terminal_since: terminal.then(Instant::now),
+                lease: None,
+                fenced: false,
             },
         );
         Ok(())

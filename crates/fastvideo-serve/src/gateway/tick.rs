@@ -39,6 +39,10 @@ pub struct WorkerStatus {
     pub running: u32,
     pub queued: u32,
     pub sessions: u32,
+    /// Jobs it runs at once (1 when not reported: older workers).
+    pub capacity: u32,
+    /// Its batch queue limit (0: none, or not reported).
+    pub queue_max: u32,
     pub caps: Vec<(ModelCaps, Recipe)>,
     pub build: Option<super::WorkerBuild>,
     /// `readiness: failed` (a model failed to load or cannot run on its GPU).
@@ -70,6 +74,8 @@ impl WorkerStatus {
             running: n("/stats/running"),
             queued: n("/stats/queued_batch") + n("/stats/queued_stream"),
             sessions: n("/stats/sessions"),
+            capacity: n("/capacity").max(1),
+            queue_max: n("/queue_max"),
             caps,
             build: super::WorkerBuild::parse(v),
             failed: v.get("readiness").and_then(Value::as_str) == Some("failed"),
@@ -115,6 +121,8 @@ impl Gateway {
     pub async fn tick(&self) {
         self.probe_pools().await;
         self.rebuild_catalog();
+        // Dispatches recorded before this read are in its counts.
+        let counted_at = Instant::now();
         let active = self.active_rows().await;
         let mut counts: BTreeMap<String, (u32, u32, i64)> = BTreeMap::new();
         let now = now_ms();
@@ -151,7 +159,7 @@ impl Gateway {
             }
         }
         self.expire_leases().await;
-        let metrics = self.compute_metrics(&counts, now).await;
+        let metrics = self.compute_metrics(&counts, now, counted_at).await;
         for s in self.scalers() {
             s.observe(&metrics).await;
         }
@@ -202,6 +210,8 @@ impl Gateway {
                 urls.push(u.clone());
             }
         }
+        // A probe's load is computed by the worker after this instant.
+        let sent = Instant::now();
         let probes = urls.iter().map(|u| async move {
             let r = self
                 .worker_req(reqwest::Method::GET, &format!("{u}/fv/v1/internal/status"))
@@ -228,16 +238,32 @@ impl Gateway {
         let mut next: BTreeMap<String, WorkerView> = BTreeMap::new();
         for (url, res) in results {
             let reg_state = registered.iter().find(|(u, _)| *u == url).map(|(_, s)| s.clone());
-            let last_ok = st.workers.get(&url).and_then(|w| w.last_ok);
-            let mut w = WorkerView { url: url.clone(), registered: reg_state.is_some(), last_ok, ..WorkerView::default() };
+            // What this replica knows beyond the probe: its reservations
+            // and placements, and a load report newer than this probe.
+            let prev = st.workers.remove(&url).unwrap_or_default();
+            let mut w = WorkerView {
+                url: url.clone(),
+                registered: reg_state.is_some(),
+                last_ok: prev.last_ok,
+                capacity: prev.capacity.max(1),
+                queue_max: prev.queue_max,
+                reserved: prev.reserved,
+                placed: prev.placed,
+                running: prev.running,
+                queued: prev.queued,
+                load_at: prev.load_at,
+                load_includes: prev.load_includes,
+                ..WorkerView::default()
+            };
             match res {
                 Ok(s) => {
                     w.healthy = true;
                     w.last_ok = Some(Instant::now());
                     w.ready = s.ready;
                     w.draining = s.draining || reg_state.as_deref() == Some("draining");
-                    w.running = s.running;
-                    w.queued = s.queued;
+                    w.capacity = s.capacity;
+                    w.queue_max = s.queue_max;
+                    w.report_load(sent, s.running, s.queued, None);
                     w.sessions = s.sessions;
                     w.id = s.id.clone();
                     w.build = s.build.clone();
@@ -250,11 +276,13 @@ impl Gateway {
                 }
                 Err(e) => {
                     w.healthy = false;
+                    (w.running, w.queued) = (0, 0);
                     w.answered = e.answered;
                     w.starting = e.starting;
                     w.last_error = Some(e.msg);
                 }
             }
+            w.unreported = w.unreported_now();
             next.insert(url, w);
         }
         st.available = next.values().any(|w| w.healthy && !w.draining);
@@ -423,7 +451,7 @@ impl Gateway {
         g.retain(|_, l| l.created_at > cutoff_any);
     }
 
-    async fn compute_metrics(&self, counts: &BTreeMap<String, (u32, u32, i64)>, now: i64) -> Vec<PoolMetrics> {
+    async fn compute_metrics(&self, counts: &BTreeMap<String, (u32, u32, i64)>, now: i64, counted_at: Instant) -> Vec<PoolMetrics> {
         let window = self.cfg.metrics_window_s.max(1);
         let mut run: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         let mut wait: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -486,10 +514,10 @@ impl Gateway {
             st.queued = queued;
             st.running = running;
             st.streams = m.streams;
-            st.pending = 0;
-            for w in st.workers.values_mut() {
-                w.inflight = 0;
-            }
+            // Only what the D1 count missed stays pending (resetting it all
+            // would drop the dispatches recorded during the tick). Pod
+            // workers' placements are reconciled by their probes instead.
+            st.recorded.retain(|at| *at > counted_at);
             st.metrics = Some(m.clone());
             let pool = p.id().to_owned();
             metrics::gauge!("fv_pool_queued", "pool" => pool.clone()).set(m.queued as f64);
