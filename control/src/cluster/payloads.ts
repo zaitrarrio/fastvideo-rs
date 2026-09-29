@@ -70,14 +70,17 @@ export const GATEWAY_BASE_MINIMAL = GATEWAY_BASE_PODS.replace(/^reactor_model = 
   .replace(/^fal_director = true$/m, "fal_director = false")
   .replace(/^reactor = true$/m, "reactor = false")
   .replace(/^# Every pool's fal apps.*\n/m, "")
-  .replace(/^fal_apps = .*\n/m, "")
-  // Keys newer than some released gateway images (serde denies unknown
-  // fields): leave them out, their defaults apply.
-  .replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
+  .replace(/^fal_apps = .*\n/m, "");
+
+/** Keys newer than released gateway images (release 1 = 2cd1ba0; serde
+ * denies unknown fields). Their values in the base equal the gateway's
+ * defaults, so leaving them out is behaviour-neutral on newer images. */
+const stripNewGatewayKeys = (t: string) =>
+  t.replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
 
 const tomlStr = (s: string) => JSON.stringify(s);
 export function gatewayToml(spec: ClusterSpec): string {
-  let t = spec.gateway.base === "minimal" ? GATEWAY_BASE_MINIMAL : GATEWAY_BASE_PODS;
+  let t = stripNewGatewayKeys(spec.gateway.base === "minimal" ? GATEWAY_BASE_MINIMAL : GATEWAY_BASE_PODS);
   if (!t.endsWith("\n")) t += "\n";
   for (const p of spec.pools) {
     t += `\n[[pools]]\nid = ${tomlStr(p.id)}\nkind = "pod"\nurls = []\nmax_queued = ${p.max_queued ?? 32}\ndispatch_timeout_s = 30\njob_timeout_s = ${p.job_timeout_s ?? 1800}\nstale_after_s = ${p.stale_after_s ?? 120}\nretries = 1\n`;

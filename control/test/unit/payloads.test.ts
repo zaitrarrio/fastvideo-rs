@@ -124,6 +124,8 @@ describe("payloads and TOML", () => {
   it("gateway TOML: pools with static caps, fake models, minimal base without the reactor", () => {
     const t = gatewayToml(defaultSpec("s"));
     expect(t).toContain('reactor_model = "fasth3"');
+    // keys newer than the stable (release 1) gateway image stay out of every base
+    expect(t).not.toMatch(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) =/m);
     expect(t.match(/\[\[pools\]\]/g)!.length).toBe(4);
     expect(t).toContain('id = "fastwan22-ti2v-5b"');
     const m = gatewayToml(defaultSpec("t", "tiny-cpu"));
