@@ -361,7 +361,9 @@ async fn tracks_publish_slots_and_the_echo_round_trip() {
     assert_eq!(pubs.len(), 1, "{st}");
     assert_eq!(pubs["input_audio"].as_f64(), Some(a.cid as f64), "{st}");
     b.peer.send_message(publish("input_video", "p5")).await.unwrap();
-    pump(&mut b.peer, &mut sb, Duration::from_secs(5), |s| s.publish_reply("p5").is_some()).await;
+    // B has not been pumped while A published: its echo backlog comes
+    // first, which takes a while on a loaded host.
+    pump(&mut b.peer, &mut sb, Duration::from_secs(30), |s| s.publish_reply("p5").is_some()).await;
     assert_eq!(sb.publish_reply("p5"), Some(Ok(())));
 
     let (s, _) = call(&app, "POST", "/stop_session", None, false).await;
