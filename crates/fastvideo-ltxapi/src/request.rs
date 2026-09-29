@@ -25,6 +25,18 @@
 //! `resolution` defaults to 1920x1080, or 1080x1920 for a portrait image; the
 //! audio may be at most 10 s on `ltx-2-5-pro` and at 1440p/4K, else 20 s.
 //!
+//! `EditVideoRequest` (`/retake`, ltx §2.6, [`normalize_retake`]) and
+//! `ExtendVideoRequest` (`/extend`, ltx §2.7, [`normalize_extend`]):
+//! `video_uri` (required) is edited on LTX-2.5; `model` defaults to
+//! `ltx-2-3-pro` (served by our max tier); the output keeps the source's
+//! size (snapped down to multiples of 32; a `resolution` can only ask for
+//! less, never an upscale) and frame rate. Retake: `start_time` (≥ 0),
+//! `duration` (≥ 2, clamped to the video), `mode`
+//! (`replace_audio_and_video` default, `replace_video`, `replace_audio`).
+//! Extend: `duration` (2 to 20), `mode` (`end` default, `start`), `context`
+//! (1 to 20 s, default as much as fits); context plus extension are at most
+//! 505 frames (the LTX API's limit).
+//!
 //! Media URIs must be `https://…`, `data:…;base64,…` or `ltx://uploads/<token>`
 //! (ltx §2.0). `image_uri` / `last_frame_uri` on text-to-video are refused
 //! rather than ignored. Other unknown fields are ignored (the OAS does not
@@ -33,8 +45,9 @@
 use std::sync::Arc;
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, GapId, GenerationRequest, HttpReply,
-    Job, Keyframe, Length, MediaRef, NormalizeCtx, Snap, SubmitEndpoint, Task, TimingSpec, ViewCtx,
+    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExtendAt, GapId, GenerationRequest,
+    HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx, RetakeMode, Snap, SubmitEndpoint, Task, TimingSpec,
+    VideoEdit, ViewCtx,
 };
 use serde_json::{Map, Value};
 
@@ -62,10 +75,18 @@ pub enum Endpoint {
     TextToVideo,
     ImageToVideo,
     AudioToVideo,
+    Retake,
+    Extend,
 }
 
 impl Endpoint {
-    pub const ALL: [Endpoint; 3] = [Endpoint::TextToVideo, Endpoint::ImageToVideo, Endpoint::AudioToVideo];
+    pub const ALL: [Endpoint; 5] = [
+        Endpoint::TextToVideo,
+        Endpoint::ImageToVideo,
+        Endpoint::AudioToVideo,
+        Endpoint::Retake,
+        Endpoint::Extend,
+    ];
 
     /// The path segment (`text-to-video`).
     pub fn segment(&self) -> &'static str {
@@ -73,6 +94,8 @@ impl Endpoint {
             Endpoint::TextToVideo => "text-to-video",
             Endpoint::ImageToVideo => "image-to-video",
             Endpoint::AudioToVideo => "audio-to-video",
+            Endpoint::Retake => "retake",
+            Endpoint::Extend => "extend",
         }
     }
     pub fn from_segment(s: &str) -> Option<Self> {
@@ -84,6 +107,8 @@ impl Endpoint {
             Task::T2V => Some(Endpoint::TextToVideo),
             Task::I2V | Task::Keyframes => Some(Endpoint::ImageToVideo),
             Task::A2V => Some(Endpoint::AudioToVideo),
+            Task::Retake => Some(Endpoint::Retake),
+            Task::Extend => Some(Endpoint::Extend),
             _ => None,
         }
     }
@@ -198,8 +223,11 @@ pub fn normalize(
     let o = body
         .as_object()
         .ok_or_else(|| ApiError::invalid("request body must be a JSON object"))?;
-    if endpoint == Endpoint::AudioToVideo {
-        return normalize_a2v(api, models, o);
+    match endpoint {
+        Endpoint::AudioToVideo => return normalize_a2v(api, models, o),
+        Endpoint::Retake => return normalize_retake(api, models, o),
+        Endpoint::Extend => return normalize_extend(api, models, o),
+        _ => {}
     }
 
     let prompt = req_str(o, "prompt")?;
@@ -262,7 +290,7 @@ pub fn normalize(
             }
             Task::T2V
         }
-        Endpoint::AudioToVideo => unreachable!("normalize_a2v"),
+        Endpoint::AudioToVideo | Endpoint::Retake | Endpoint::Extend => unreachable!("normalized above"),
         Endpoint::ImageToVideo => {
             let first = media_uri(req_str(o, "image_uri")?, "image_uri")?;
             keyframes.push(Keyframe {
@@ -376,6 +404,95 @@ pub fn normalize_a2v(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Re
         req.keyframes.push(Keyframe { at: Anchor::Last, image: l });
     }
     req.audio_in = Some(AudioInput { media: audio, role: AudioRole::Drive, max_s: Some(max_s) });
+    Ok(req)
+}
+
+/// The retake / extend default model (OAS: `ltx-2-3-pro`, the only value
+/// listed; this server takes its other ids too).
+pub const EDIT_DEFAULT_MODEL: &str = "ltx-2-3-pro";
+/// Retake `resolution` values (OAS enum).
+pub const RETAKE_RESOLUTIONS: [&str; 2] = ["1920x1080", "1080x1920"];
+
+/// A number field (`start_time`, `duration`, `context`).
+fn num_field(o: &Map<String, Value>, k: &str) -> Result<Option<f64>, ApiError> {
+    match field(o, k) {
+        None => Ok(None),
+        Some(v) => v
+            .as_f64()
+            .filter(|f| f.is_finite())
+            .map(Some)
+            .ok_or_else(|| invalid(k, format!("{k} must be a number"))),
+    }
+}
+
+/// `prompt` (optional on the edit endpoints), `model` and `video_uri`.
+fn edit_common(
+    api: Api,
+    models: &LtxModels,
+    o: &Map<String, Value>,
+) -> Result<(GenerationRequest, MediaRef), ApiError> {
+    let video = media_uri(req_str(o, "video_uri")?, "video_uri")?;
+    let prompt = opt_str(o, "prompt")?.unwrap_or_default();
+    if prompt.chars().count() > PROMPT_MAX_CHARS {
+        return Err(invalid("prompt", format!("prompt must be at most {PROMPT_MAX_CHARS} characters")));
+    }
+    let model = models.lookup(opt_str(o, "model")?.unwrap_or(EDIT_DEFAULT_MODEL))?;
+    Ok((GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt), video))
+}
+
+/// `EditVideoRequest` (ltx §2.6) → a `Retake` request.
+pub fn normalize_retake(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+    let (mut req, video) = edit_common(api, models, o)?;
+    let start_s = num_field(o, "start_time")?.ok_or_else(|| invalid("start_time", "start_time is required"))?;
+    if start_s < 0.0 {
+        return Err(invalid("start_time", "start_time must be at least 0"));
+    }
+    let duration_s = num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
+    if duration_s < fastvideo_protocol::EDIT_DURATION_MIN_S {
+        return Err(invalid("duration", format!("duration must be at least {}", fastvideo_protocol::EDIT_DURATION_MIN_S)));
+    }
+    // "Clamped to video length": the window is clamped at negotiation; this
+    // server regenerates at most 20 s at once.
+    let duration_s = duration_s.min(fastvideo_protocol::EDIT_DURATION_MAX_S);
+    let mode = match opt_str(o, "mode")? {
+        None => RetakeMode::default(),
+        Some(m) => RetakeMode::parse(m).ok_or_else(|| {
+            invalid("mode", "mode must be one of: replace_audio, replace_video, replace_audio_and_video")
+        })?,
+    };
+    if let Some(r) = opt_str(o, "resolution")? {
+        if !RETAKE_RESOLUTIONS.contains(&r) {
+            return Err(invalid("resolution", format!("resolution must be one of: {}", RETAKE_RESOLUTIONS.join(", "))));
+        }
+        let res = Resolution::parse(r)?;
+        req.canvas = CanvasSpec::Exact { width: res.width, height: res.height };
+    }
+    req.task = Task::Retake;
+    req.edit = Some(VideoEdit { video, op: EditOp::Retake { start_s, duration_s, mode } });
+    Ok(req)
+}
+
+/// `ExtendVideoRequest` (ltx §2.7) → an `Extend` request.
+pub fn normalize_extend(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+    let (mut req, video) = edit_common(api, models, o)?;
+    let (lo, hi) = (fastvideo_protocol::EDIT_DURATION_MIN_S, fastvideo_protocol::EDIT_DURATION_MAX_S);
+    let duration_s = num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
+    if !(lo..=hi).contains(&duration_s) {
+        return Err(invalid("duration", format!("duration must be between {lo} and {hi} seconds")));
+    }
+    let at = match opt_str(o, "mode")? {
+        None => ExtendAt::End,
+        Some(m) => ExtendAt::parse(m).ok_or_else(|| invalid("mode", "mode must be one of: start, end"))?,
+    };
+    let context_s = num_field(o, "context")?;
+    if let Some(c) = context_s {
+        let (clo, chi) = (fastvideo_protocol::EXTEND_CONTEXT_MIN_S, fastvideo_protocol::EXTEND_CONTEXT_MAX_S);
+        if !(clo..=chi).contains(&c) {
+            return Err(invalid("context", format!("context must be between {clo} and {chi} seconds")));
+        }
+    }
+    req.task = Task::Extend;
+    req.edit = Some(VideoEdit { video, op: EditOp::Extend { duration_s, at, context_s } });
     Ok(req)
 }
 
@@ -541,5 +658,48 @@ mod tests {
     fn prompt_limit() {
         assert!(t2v(with("prompt", json!("é".repeat(5000)))).is_ok());
         assert!(t2v(with("prompt", json!("a".repeat(5001)))).is_err());
+    }
+
+    #[test]
+    fn retake_and_extend_shapes() {
+        let ret = |b: Value| normalize(Endpoint::Retake, Api::V2, &LtxModels::default(), &b);
+        let ext = |b: Value| normalize(Endpoint::Extend, Api::V2, &LtxModels::default(), &b);
+        let r = ret(json!({"video_uri": "https://example.com/v.mp4", "start_time": 1.5, "duration": 3})).unwrap();
+        assert_eq!((r.task, r.model.as_str(), r.prompt.as_str()), (Task::Retake, "ltx-pro", ""));
+        assert_eq!(
+            r.edit.as_ref().unwrap().op,
+            EditOp::Retake { start_s: 1.5, duration_s: 3.0, mode: RetakeMode::ReplaceAudioAndVideo }
+        );
+        assert_eq!(r.canvas, CanvasSpec::ModelDefault);
+        let r = ret(json!({"video_uri": "ltx://uploads/v", "start_time": 0, "duration": 30, "mode": "replace_audio", "resolution": "1080x1920", "prompt": "rain"})).unwrap();
+        assert_eq!(r.edit.unwrap().op, EditOp::Retake { start_s: 0.0, duration_s: 20.0, mode: RetakeMode::ReplaceAudio });
+        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        for (b, param) in [
+            (json!({"start_time": 0, "duration": 3}), "video_uri"),
+            (json!({"video_uri": "https://example.com/v.mp4", "duration": 3}), "start_time"),
+            (json!({"video_uri": "https://example.com/v.mp4", "start_time": -1, "duration": 3}), "start_time"),
+            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 1.5}), "duration"),
+            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "mode": "both"}), "mode"),
+            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "resolution": "1280x720"}), "resolution"),
+            (json!({"video_uri": "http://example.com/v.mp4", "start_time": 0, "duration": 3}), "video_uri"),
+        ] {
+            assert_eq!(ret(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+        }
+        let x = ext(json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "prompt": "the car drives on"})).unwrap();
+        assert_eq!((x.task, x.model.as_str()), (Task::Extend, "ltx-pro"));
+        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 5.0, at: ExtendAt::End, context_s: None });
+        let x = ext(json!({"video_uri": "https://example.com/v.mp4", "duration": 2, "mode": "start", "context": 4, "model": "ltx-2-5-fast"})).unwrap();
+        assert_eq!(x.model, "ltx-turbo");
+        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 2.0, at: ExtendAt::Start, context_s: Some(4.0) });
+        for (b, param) in [
+            (json!({"video_uri": "https://example.com/v.mp4"}), "duration"),
+            (json!({"video_uri": "https://example.com/v.mp4", "duration": 21}), "duration"),
+            (json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "mode": "middle"}), "mode"),
+            (json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "context": 0.5}), "context"),
+        ] {
+            assert_eq!(ext(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+        }
+        assert_eq!(Endpoint::of_task(Task::Retake), Some(Endpoint::Retake));
+        assert_eq!(Endpoint::from_segment("extend"), Some(Endpoint::Extend));
     }
 }

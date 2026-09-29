@@ -317,6 +317,10 @@ pub struct StageConditioning {
     /// and the ancestral loop still draw audio noise (the stream's draws are
     /// unchanged), but a zero denoise mask keeps every audio token clean.
     pub frozen_audio: Option<CudaTensor>,
+    /// Retake / extend of the audio: pinned runs of the audio rows
+    /// (`TemporalRegionMask` on the audio stream), stepped with the same
+    /// masked `x0` and post-processing as the video.
+    pub audio: Option<Box<StageConditioning>>,
 }
 
 impl StageConditioning {
@@ -382,7 +386,51 @@ impl StageConditioning {
             segments,
             reference: None,
             frozen_audio: None,
+            audio: None,
         })
+    }
+
+    /// Pinned runs of a stream's `rows` (retake / extend: the kept latent
+    /// frames at mask 0, or `1 − strength` in general), no appended tokens.
+    /// `frame_tokens` is the rows of one latent frame (`H·W` for the video,
+    /// 1 for the audio).
+    pub fn pinned(rows: usize, frame_tokens: usize, segments: Vec<CondSegment>) -> Result<Self> {
+        let mut at = 0usize;
+        for s in &segments {
+            if s.start < at || s.start + s.len > rows || s.len == 0 || s.clean.shape.len() != 3 || s.clean.shape[1] != s.len {
+                return Err(msg(format!(
+                    "ltx2 pinned rows {}..{} (clean {:?}) do not fit {rows} rows in order",
+                    s.start,
+                    s.start + s.len,
+                    s.clean.shape
+                )));
+            }
+            if !(0.0..=1.0).contains(&s.mask) {
+                return Err(msg(format!("ltx2 pinned mask {} is outside [0, 1]", s.mask)));
+            }
+            at = s.start + s.len;
+        }
+        Ok(Self {
+            grid_tokens: rows,
+            extra_frames: Vec::new(),
+            frame_tokens: frame_tokens.max(1),
+            segments,
+            reference: None,
+            frozen_audio: None,
+            audio: None,
+        })
+    }
+
+    /// Condition the audio stream with `audio` (a [`Self::pinned`] over the
+    /// audio rows).
+    pub fn with_audio(mut self, audio: StageConditioning) -> Self {
+        self.audio = Some(Box::new(audio));
+        self
+    }
+
+    /// The audio stream's pinned runs, if any.
+    pub fn audio_cond(&self) -> Option<&StageConditioning> {
+        self.audio.as_deref()
     }
 
     /// Append the IC-LoRA reference after every other block (`ic_lora.py`

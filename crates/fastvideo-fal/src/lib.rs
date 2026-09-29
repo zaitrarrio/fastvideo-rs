@@ -122,7 +122,7 @@ impl FalApp {
         let (model, tier) = match AppKind::of(id) {
             AppKind::Ltx25 => ("ltx-turbo", (Family::Ltx2, Tier::Turbo)),
             AppKind::Wan => ("wan-max", (Family::Wan, Tier::Max)),
-            AppKind::LtxQuality => ("ltx-pro", (Family::Ltx2, Tier::Max)),
+            AppKind::LtxQuality | AppKind::Ltx23 => ("ltx-pro", (Family::Ltx2, Tier::Max)),
             AppKind::H3 | AppKind::H3Base => return None,
         };
         Some(Self { id: id.to_owned(), model: model.to_owned(), tier: Some(tier) })

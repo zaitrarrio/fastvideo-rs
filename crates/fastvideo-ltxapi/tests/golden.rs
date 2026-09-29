@@ -57,6 +57,7 @@ fn resolved(task: Task) -> ResolvedJob {
         sampling: SamplingOverrides::default(),
         tier: Some(Tier::Turbo),
         recipe: Some("two-stage-sol".into()),
+        edit: None,
     }
 }
 

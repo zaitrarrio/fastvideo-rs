@@ -61,6 +61,7 @@ fn resolved() -> ResolvedJob {
         sampling: SamplingOverrides::default(),
         tier: None,
         recipe: None,
+        edit: None,
     }
 }
 

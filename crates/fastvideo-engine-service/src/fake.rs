@@ -97,7 +97,7 @@ impl FakeModel {
             id: ModelId::new(id),
             family: Family::Ltx2,
             served_names: vec![id.to_owned()],
-            tasks: [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V].into_iter().collect(),
+            tasks: [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V, Task::Retake, Task::Extend].into_iter().collect(),
             audio: Some(AudioCaps {
                 native_rate: 48_000,
                 channels: 2,
@@ -733,6 +733,16 @@ impl EngineBackend for FakeBackend {
             }
         }
 
+        // Retake / extend: the staged source video must be there (the engine
+        // decodes it); the fake renders the whole output (the generated clip
+        // plus the source frames an extension keeps).
+        if let Some(e) = &job.edit {
+            if !e.source.is_file() {
+                return Err(ApiError::engine_failed(format!("an edit without its staged source video: {}", e.source.display())));
+            }
+        }
+        let frames_out = job.output_frames();
+
         ctl.stage("text_encode");
         ctl.check()?;
         ctl.stage("denoise");
@@ -761,7 +771,7 @@ impl EngineBackend for FakeBackend {
             _ if !to_sink && mp4_dir.is_none() => None,
             AudioPlan::Native { rate, channels } => Some(render_audio(
                 job.seed,
-                job.num_frames,
+                frames_out,
                 job.fps,
                 rate,
                 channels,
@@ -771,8 +781,8 @@ impl EngineBackend for FakeBackend {
         let render = |i: u32| render_frame(job.seed, &job.prompt, job.width, job.height, i as u64);
         const CHUNK: u32 = 8;
         let mut i = 0;
-        while to_sink && i < job.num_frames {
-            let end = (i + CHUNK).min(job.num_frames);
+        while to_sink && i < frames_out {
+            let end = (i + CHUNK).min(frames_out);
             let chunk: Vec<RgbFrame> = (i..end).map(render).collect();
             out.frames(&chunk);
             i = end;
@@ -795,7 +805,7 @@ impl EngineBackend for FakeBackend {
                     &self.cfg.ffmpeg,
                     dir,
                     job,
-                    (0..job.num_frames).map(render),
+                    (0..frames_out).map(render),
                     audio.as_ref(),
                 )?)
             }

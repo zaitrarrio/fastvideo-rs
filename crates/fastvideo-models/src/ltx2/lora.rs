@@ -85,7 +85,12 @@ pub fn weight_key_for_lora_a(key: &str) -> Option<&str> {
 }
 
 /// On-disk weight key, plus the `diffusion_model.` / `model.diffusion_model.`
-/// spellings the single-file and Comfy exports use for the same module.
+/// spellings the single-file and Comfy exports use for the same module, plus
+/// the diffusers name of a DiT module the original (`ltx-core`) naming calls
+/// otherwise (`adaln_single` → `time_embed`, `patchify_proj` → `proj_in`, the
+/// `av_ca_*_adaln_single` embedders, the prompt AdaLNs): the distilled LoRA
+/// speaks the original names, `LTX-2.5-Diffusers/transformer_full` the
+/// diffusers ones.
 pub fn weight_key_aliases(stem: &str) -> Vec<String> {
     let mut out = vec![format!("{stem}.weight")];
     let rest = stem
@@ -99,7 +104,35 @@ pub fn weight_key_aliases(stem: &str) -> Vec<String> {
         push_unique(&mut out, format!("diffusion_model.{stem}.weight"));
         push_unique(&mut out, format!("model.diffusion_model.{stem}.weight"));
     }
+    let bare = rest.unwrap_or(stem);
+    let diffusers = diffusers_transformer_name(bare);
+    if diffusers != bare {
+        push_unique(&mut out, format!("{diffusers}.weight"));
+    }
     out
+}
+
+/// The diffusers spelling of an original (`ltx-core`) DiT module path,
+/// segment by segment (diffusers' `convert_ltx2_to_diffusers.py`, the
+/// inverse of `ltx2/keys.rs`'s transformer renames).
+pub fn diffusers_transformer_name(original: &str) -> String {
+    original
+        .split('.')
+        .map(|seg| match seg {
+            "patchify_proj" => "proj_in",
+            "audio_patchify_proj" => "audio_proj_in",
+            "adaln_single" => "time_embed",
+            "audio_adaln_single" => "audio_time_embed",
+            "prompt_adaln_single" => "prompt_adaln",
+            "audio_prompt_adaln_single" => "audio_prompt_adaln",
+            "av_ca_video_scale_shift_adaln_single" => "av_cross_attn_video_scale_shift",
+            "av_ca_audio_scale_shift_adaln_single" => "av_cross_attn_audio_scale_shift",
+            "av_ca_a2v_gate_adaln_single" => "av_cross_attn_video_a2v_gate",
+            "av_ca_v2a_gate_adaln_single" => "av_cross_attn_audio_v2a_gate",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn push_unique(out: &mut Vec<String>, key: String) {
@@ -180,6 +213,22 @@ mod tests {
         assert!(weight_key_aliases(stem).contains(&format!("{stem}.weight")));
         assert!(weight_key_aliases(stem)
             .contains(&"transformer_blocks.0.attn1.to_q.weight".to_string()));
+    }
+
+    #[test]
+    fn original_names_alias_the_diffusers_modules() {
+        let a = weight_key_aliases("diffusion_model.adaln_single.linear");
+        assert!(a.contains(&"time_embed.linear.weight".to_owned()), "{a:?}");
+        assert!(a.contains(&"adaln_single.linear.weight".to_owned()));
+        let a = weight_key_aliases("diffusion_model.av_ca_a2v_gate_adaln_single.emb.timestep_embedder.linear_1");
+        assert!(a.contains(&"av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.weight".to_owned()));
+        assert!(weight_key_aliases("diffusion_model.patchify_proj").contains(&"proj_in.weight".to_owned()));
+        assert!(weight_key_aliases("diffusion_model.audio_prompt_adaln_single.linear")
+            .contains(&"audio_prompt_adaln.linear.weight".to_owned()));
+        // Block linears are spelled alike in both namings.
+        let a = weight_key_aliases("diffusion_model.transformer_blocks.3.audio_ff.net.0.proj");
+        assert_eq!(a.len(), 3, "{a:?}");
+        assert_eq!(diffusers_transformer_name("proj_out"), "proj_out");
     }
 
     #[test]

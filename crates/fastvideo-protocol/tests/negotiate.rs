@@ -1513,3 +1513,173 @@ fn model_default_ref2v_follows_the_image_on_h3_only() {
     r.references = vec![image_ref("https://e.x/r.png")];
     assert_eq!(effective_canvas(&r, &ltx), CanvasSpec::ModelDefault);
 }
+
+// ---- retake / extend -------------------------------------------------------------------------
+
+fn edit_caps() -> ModelCaps {
+    let mut c = a2v_caps();
+    c.tasks.insert(Task::Retake);
+    c.tasks.insert(Task::Extend);
+    c
+}
+
+fn edit_req(op: EditOp) -> GenerationRequest {
+    let mut r = t2v("ltx", "the car turns left");
+    r.task = match op {
+        EditOp::Retake { .. } => Task::Retake,
+        EditOp::Extend { .. } => Task::Extend,
+    };
+    r.edit = Some(VideoEdit { video: url("https://e.x/v.mp4"), op });
+    r
+}
+
+fn with_source(req: &GenerationRequest, src: StagedMedia) -> StagedInputs {
+    let mut st = stage_all(req);
+    st.video_in = Some(src);
+    st
+}
+
+fn retake(start_s: f64, duration_s: f64, mode: RetakeMode) -> GenerationRequest {
+    edit_req(EditOp::Retake { start_s, duration_s, mode })
+}
+
+fn extend(duration_s: f64, at: ExtendAt, context_s: Option<f64>) -> GenerationRequest {
+    edit_req(EditOp::Extend { duration_s, at, context_s })
+}
+
+#[test]
+fn retake_follows_the_source() {
+    let c = edit_caps();
+    let r = retake(1.0, 2.0, RetakeMode::ReplaceAudioAndVideo);
+    // 768x512, 121 frames at 24 fps with audio: the window is the whole clip.
+    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
+    assert_eq!((j.width, j.height, j.num_frames, j.fps), (768, 512, 121, 24));
+    let e = j.edit.as_ref().unwrap();
+    assert_eq!((e.window_start, e.window_frames, e.source_audio), (0, 121, true));
+    assert_eq!(e.op, ResolvedEditOp::Retake { start_s: 1.0, end_s: 3.0, video: true, audio: true });
+    assert_eq!(j.output_frames(), 121);
+    // 1080p at 30 fps, 125 frames: 1920x1056, 121 frames (the last 4 dropped),
+    // the window clamped to the clip.
+    let r = retake(3.0, 20.0, RetakeMode::ReplaceVideo);
+    let (j, notes) = negotiate_noted(&r, &c, &with_source(&r, source_video(1920, 1080, 30.0, 125, true))).unwrap();
+    assert_eq!((j.width, j.height, j.num_frames, j.fps), (1920, 1056, 121, 30));
+    assert_eq!(
+        j.edit.as_ref().unwrap().op,
+        ResolvedEditOp::Retake { start_s: 3.0, end_s: 121.0 / 30.0, video: true, audio: false }
+    );
+    assert!(notes.iter().any(|n| n.contains("dropped")), "{notes:?}");
+    // 29.97 fps is written at 30 fps, the model runs at the exact rate.
+    let j = negotiate(&r, &c, &with_source(&r, source_video(640, 360, 30000.0 / 1001.0, 97, false))).unwrap();
+    assert_eq!((j.width, j.height, j.fps), (640, 352, 30));
+    assert!((j.edit.unwrap().source_fps - 29.97).abs() < 1e-2);
+    // 4K is scaled into the one-stage budget; an exact size can only shrink.
+    let j = negotiate(&r, &c, &with_source(&r, source_video(3840, 2160, 24.0, 97, true))).unwrap();
+    assert!(u64::from(j.width * j.height) <= EDIT_MAX_PIXELS && j.width % 32 == 0);
+    let mut small = r.clone();
+    small.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
+    let j = negotiate(&small, &c, &with_source(&small, source_video(768, 512, 24.0, 97, true))).unwrap();
+    assert_eq!((j.width, j.height), (768, 512));
+}
+
+#[test]
+fn retake_refusals_name_what_is_valid() {
+    let c = edit_caps();
+    let src = || source_video(768, 512, 24.0, 121, true);
+    let refuse = |r: GenerationRequest, s: StagedMedia| negotiate(&r, &c, &with_source(&r, s)).unwrap_err();
+    // Past the end, too long a source, too short, a bad rate.
+    let e = refuse(retake(5.1, 2.0, RetakeMode::default()), src());
+    assert_eq!(e.param.as_deref(), Some("start_time"));
+    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 24.0, 600, true));
+    assert!(e.message.contains("at most 505 frames"), "{}", e.message);
+    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 24.0, 8, true));
+    assert!(e.message.contains("at least 9 frames"), "{}", e.message);
+    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 120.0, 121, true));
+    assert_eq!(e.param.as_deref(), Some("video_url"));
+    // Bad numbers, a length or fps set, a missing or mistyped video.
+    assert_eq!(err_of(nego(&retake(0.0, 1.0, RetakeMode::default()), &c)).param.as_deref(), Some("duration"));
+    assert_eq!(err_of(nego(&retake(-1.0, 2.0, RetakeMode::default()), &c)).param.as_deref(), Some("start_time"));
+    let mut r = retake(0.0, 2.0, RetakeMode::default());
+    r.timing.fps = Some(24);
+    assert_eq!(err_of(nego(&r, &c)).param.as_deref(), Some("fps"));
+    let mut r = retake(0.0, 2.0, RetakeMode::default());
+    seconds(&mut r, 4.0);
+    assert_eq!(err_of(nego(&r, &c)).param.as_deref(), Some("duration"));
+    let mut r = retake(0.0, 2.0, RetakeMode::default());
+    r.edit = None;
+    assert_eq!(precheck(&r, &c).unwrap_err().param.as_deref(), Some("video_url"));
+    let r = retake(0.0, 2.0, RetakeMode::default());
+    let mut st = with_source(&r, src());
+    st.video_in.as_mut().unwrap().mime = "image/png".into();
+    assert_eq!(negotiate(&r, &c, &st).unwrap_err().param.as_deref(), Some("video_url"));
+    // A model without the edits answers the LTX endpoint gap.
+    assert_eq!(gap_of(nego(&retake(0.0, 2.0, RetakeMode::default()), &ltx25())), Some(GapId::LtxEndpoint));
+    // A source video on another task is refused.
+    let mut t = t2v("ltx", "x");
+    t.edit = retake(0.0, 2.0, RetakeMode::default()).edit;
+    assert_eq!(precheck(&t, &c).unwrap_err().param.as_deref(), Some("video_url"));
+}
+
+#[test]
+fn retake_takes_new_window_audio_with_replace_video() {
+    let c = edit_caps();
+    let mut r = retake(1.0, 2.0, RetakeMode::ReplaceVideo);
+    r.audio_in = Some(AudioInput { media: url("https://e.x/dub.wav"), role: AudioRole::Dub, max_s: None });
+    let mut st = with_source(&r, source_video(768, 512, 24.0, 121, true));
+    st.audio_in.as_mut().unwrap().probe.duration_s = Some(2.0);
+    let j = negotiate(&r, &c, &st).unwrap();
+    assert_eq!(j.audio_in.as_ref().map(|a| a.0), Some(AudioRole::Dub));
+    // Shorter than the window, or on another mode.
+    st.audio_in.as_mut().unwrap().probe.duration_s = Some(1.5);
+    assert_eq!(negotiate(&r, &c, &st).unwrap_err().param.as_deref(), Some("audio_url"));
+    let mut both = r.clone();
+    both.edit = retake(1.0, 2.0, RetakeMode::ReplaceAudioAndVideo).edit;
+    assert_eq!(precheck(&both, &c).unwrap_err().param.as_deref(), Some("retake_mode"));
+    // A dub is a retake input only.
+    let mut x = extend(2.0, ExtendAt::End, None);
+    x.audio_in = r.audio_in.clone();
+    assert!(precheck(&x, &c).is_err());
+}
+
+#[test]
+fn extend_adds_whole_latent_frames_and_keeps_the_rest_of_the_source() {
+    let c = edit_caps();
+    // 5 s at 24 fps (120 frames) after a 121-frame source: all of it fits.
+    let r = extend(5.0, ExtendAt::End, None);
+    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
+    assert_eq!(j.num_frames, 241);
+    let e = j.edit.as_ref().unwrap();
+    assert_eq!((e.window_start, e.window_frames), (0, 121));
+    assert_eq!(e.op, ResolvedEditOp::Extend { frames: 120, at: ExtendAt::End });
+    assert_eq!((e.prefix_frames(), e.suffix_frames(), j.output_frames()), (0, 0, 241));
+    // A 20 s source with 5 s more: the context is the last 385 frames that
+    // fit in 505, the first 95 source frames are copied in front.
+    let r = extend(5.0, ExtendAt::End, None);
+    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 480, true))).unwrap();
+    let e = j.edit.as_ref().unwrap();
+    assert_eq!((e.window_start, e.window_frames, j.num_frames), (95, 385, 505));
+    assert_eq!(j.output_frames(), 480 + 120);
+    // 20 s more at 24 fps keeps 25 frames of context (fal / the LTX API: 505).
+    let r = extend(20.0, ExtendAt::End, None);
+    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
+    assert_eq!((j.edit.as_ref().unwrap().window_frames, j.num_frames), (25, 505));
+    // An explicit context, extended at the start: the rest follows the clip.
+    let r = extend(2.0, ExtendAt::Start, Some(3.0));
+    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 25.0, 250, false))).unwrap();
+    let e = j.edit.as_ref().unwrap();
+    // 2 s at 25 fps = 50 → 56 frames; 3 s = 75 → 73 frames of context.
+    assert_eq!((e.window_start, e.window_frames, j.num_frames), (0, 73, 129));
+    assert_eq!((e.prefix_frames(), e.suffix_frames(), j.output_frames()), (0, 177, 56 + 250));
+    assert_eq!(e.op, ResolvedEditOp::Extend { frames: 56, at: ExtendAt::Start });
+    // Refusals: no room for context (20 s at 25 fps is 504 frames), bad
+    // context, short or long sources.
+    let r = extend(20.0, ExtendAt::End, None);
+    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 25.0, 121, true))).unwrap_err();
+    assert_eq!(e.param.as_deref(), Some("duration"));
+    assert!(e.message.contains("at most"), "{}", e.message);
+    assert_eq!(err_of(nego(&extend(2.0, ExtendAt::End, Some(0.5)), &c)).param.as_deref(), Some("context"));
+    let r = extend(2.0, ExtendAt::End, None);
+    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 5, true))).unwrap_err();
+    assert!(e.message.contains("at least 9 frames"), "{}", e.message);
+    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 24 * 61, true))).unwrap_err();
+    assert!(e.message.contains("at most 60 s"), "{}", e.message);
+}
