@@ -10,6 +10,7 @@ Project code: FVID
 - Reversibility: cheap (`FASTVIDEO_VSA_KERNEL=tma2`)
 - Executed by: Executor
 - ADR: none
+- Oracle (owner-approved, $2.06): FastVideo reference (RTX PRO 6000; the upstream image dies on sm_90) injected into ours on one H100, tma2 vs dc on the same pod: final latents 0.387 vs 0.375, clip PSNR 19.17 vs 19.73 dB, SSIM 0.691 vs 0.699, LPIPS 0.238 vs 0.236 against the reference; dc no worse at any block, so the default stays dc. Pods 9rz0air1ze26xy (failed H100 reference), uomkr05e6boddd (reference), 7nnmf9cciynj8j (H100 runtime), all deleted
 - Verification: pods 1i22qqo8592p38 (H100 kernels), 9qx6yvvqsm4fm5 (B200 kernels), xlei1f70cz6zuw (B200 E2E), 3l1v20bt2op1ej (H100 E2E), both US-CA-2 on the US weights volume, all deleted; GPU spend $5.08; artifacts/perf/wp-d/; docs/perf/datacenter-profile.md "WP-D results"
 
 ### FVID · 2026-09-29 · FVID-2026-09-29-h3-1080p-length

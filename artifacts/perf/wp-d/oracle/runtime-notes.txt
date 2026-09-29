@@ -1,0 +1,20 @@
+[fastvideo] inject: audio_step00_in [414, 32] from the reference
+[fastvideo] inject: text_hidden [1, 46, 5120] from the reference
+[fastvideo] inject: video_step00_in [37296, 96] from the reference
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm9, 128B swizzle)
+[fastvideo] vsa fine kernel: dc KV-tile-list (sm90, wgmma, cubin)
+"denoise_s": 17.22897159
+"denoise_s": 16.883978745
+"denoise_s": 17.183585552
+"denoise_s": 17.183585552
+"denoise_s": 17.22897159
+"denoise_s": 16.883978745
+"denoise_s": 17.183585552
+"denoise_s": 20.55393483
+"denoise_s": 20.12079201
+"denoise_s": 20.401464615
+"denoise_s": 20.401464615
+"denoise_s": 20.55393483
+"denoise_s": 20.12079201
+"denoise_s": 20.401464615
+

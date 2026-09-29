@@ -504,6 +504,35 @@ Against the profile's full H100 jobs (run_s 27.73 s / 57.21 s) the saving
 is −11.1% (768p) and −17.8% (1080p); the estimate was −13% / −22%. Clips dc
 vs tma2: LPIPS 0.22 (768p) / 0.23 (1080p), within the B200 control's 0.32.
 
+**Python-reference oracle (2026-09-29, owner-approved, $2.06).** FastVideo's
+FastH3 4-step VSA (upstream image `fastvideo:latest`, strict eager, Triton
+VSA, 768x1344x124, the matrix prompt, seed 1024) was run as the reference.
+The dump was injected into ours on one H100 SXM, where the dc path is
+active, in two arms on the same pod: `tma2` and `dc`. The reference ran on
+an RTX PRO 6000 (EUR-IS-1): the upstream image is built for sm_120 and dies
+on sm_90 with `CUDA error: an illegal instruction`. Both arms are measured
+against the same dump, so the cross-GPU offset is common to both.
+
+| rel-L2 to the FastVideo reference | tma2 | dc | dc vs tma2 |
+|---|---:|---:|---:|
+| step-1 block 0 / 1 / 12 | 8.4e-4 / 3.9e-3 / 5.9e-3 | 8.4e-4 / 3.9e-3 / 5.9e-3 | 1.2e-4 / 1.6e-3 / 2.4e-3 |
+| block 18 / 24 / 30 | 1.16e-2 / 1.48e-2 / 4.55e-2 | 1.32e-2 / 1.51e-2 / 4.53e-2 | 4.5e-3 / 6.1e-3 / 2.6e-2 |
+| block 36 / 42 / 47 / 49 | 0.125 / 0.224 / 0.382 / 0.331 | 0.119 / 0.217 / 0.371 / 0.326 | 0.083 / 0.171 / 0.312 / 0.278 |
+| latents after steps 1 / 2 / 3 / 4 | 6.5e-3 / 2.21e-2 / 7.36e-2 / **0.387** | 6.2e-3 / 2.03e-2 / 6.92e-2 / **0.375** | 5.2e-3 / 1.8e-2 / 6.4e-2 / 0.352 |
+| decoded clip PSNR / SSIM / LPIPS | 19.17 dB / 0.691 / 0.238 | **19.73 dB / 0.699 / 0.236** | 20.57 dB / 0.723 / 0.191 |
+| sharpness / temporal jitter ratio | 1.002 / 1.165 | 1.007 / 1.134 | 1.006 / 0.977 |
+
+The tma2 column reproduces the recorded RTX PRO 6000 oracle
+(`docs/oracle.md`: blocks 0 / 1 / 12 at 8.2e-4 / 3.9e-3 / 5.9e-3, final
+latents 0.435). **dc is no farther from upstream than tma2 at any depth, and
+slightly closer at the final latents and in the clip, so it passes and
+stays the default.** The dc-vs-tma2 distance is smaller than either arm's
+distance to upstream. Visual check, contact sheets under
+`artifacts/perf/wp-d/oracle/sheets/` (frames 0 / 40 / 80 / 123, one row per
+arm): the oracle prompt (upstream / tma2 / dc) and three eval prompts
+(`h3-demo`, `ltx-multishot`, `ltx-newsbroadcast`; tma2 / dc). They show the
+same scenes with no artefacts in either arm.
+
 ## Top 20 kernels per workload
 
 Full lists in `artifacts/perf/datacenter/<gpu>/<workload>/kernels.csv`,

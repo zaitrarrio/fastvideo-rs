@@ -85,6 +85,28 @@ with depth, no block where it jumps. A jump is bisected with the block's op
 dumps (`FASTVIDEO_DUMP_OPS=<i>`): the first op whose rel-L2 leaves the bf16
 floor is the divergent one.
 
+## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
+
+Target `fasth3-4step-vsa`, runtime f9be674 (WP-D). The reference was run
+by `runpod-http.sh upstream` (image `fastvideo-rs-upstream-fastvideo:latest`)
+on an **RTX PRO 6000**, because that image is built for sm_120 only
+(`TORCH_CUDA_ARCH_LIST=12.0`); on an H100 it fails in the first forward
+with `CUDA error: an illegal instruction`. Ours ran injected on one **H100
+SXM** in two arms on the same pod, `FASTVIDEO_VSA_KERNEL=tma2` (mma.sync)
+and the default `dc` (wgmma KV-tile-list kernel). The dump was trimmed to the
+injected inputs, all step latents and velocities, 13 step-1 blocks and the
+block 0 / 47 attention ops.
+
+| rel-L2 vs reference | tma2 | dc |
+|---|---:|---:|
+| step-1 blocks 0 / 1 / 12 / 24 / 49 | 8.4e-4 / 3.9e-3 / 5.9e-3 / 1.48e-2 / 0.331 | 8.4e-4 / 3.9e-3 / 5.9e-3 / 1.51e-2 / 0.326 |
+| latents after steps 1 / 2 / 3 / 4 | 6.5e-3 / 2.21e-2 / 7.36e-2 / 0.387 | 6.2e-3 / 2.03e-2 / 6.92e-2 / 0.375 |
+| clip PSNR / SSIM / LPIPS | 19.17 dB / 0.691 / 0.238 | 19.73 dB / 0.699 / 0.236 |
+
+The tma2 arm matches the 2026-09-26 RTX PRO 6000 profile below, and dc is
+at or below it everywhere. Details and contact sheets:
+`docs/perf/datacenter-profile.md` "WP-D results", `artifacts/perf/wp-d/oracle/`.
+
 ## Results: H3 (2026-09-26, RTX PRO 6000, runtime f49db62 / 5312e4b / b1226e9)
 
 Reference: FastVideo e90be59, strict eager route, 768x1344x124, the matrix
