@@ -1,5 +1,5 @@
 // A D1Database over node:sqlite for unit tests (the subset fv-control uses).
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 class Stmt {
@@ -28,7 +28,8 @@ class Stmt {
 }
 export function d1(): D1Database {
   const db = new DatabaseSync(":memory:");
-  db.exec(readFileSync(new URL("../../migrations/0001_init.sql", import.meta.url), "utf8"));
+  const dir = new URL("../../migrations/", import.meta.url);
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(f, dir), "utf8"));
   return {
     prepare: (sql: string) => new Stmt(db, sql),
     batch: async (stmts: Stmt[]) => Promise.all(stmts.map((s) => s.run())),
