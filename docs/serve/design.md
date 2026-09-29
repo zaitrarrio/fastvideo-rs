@@ -1357,7 +1357,7 @@ samples), and an RTP timestamp derived from the global sample counter.
 | Executor → causal pacer | 4 blocks | Executor blocks |
 | Executor → clip playout | playout cap (10 clips) | Build not submitted |
 | Pacer | causal: 48 frames; clip: 2 s A/V | causal: drop-oldest; clip: bounded by reservation |
-| Encoder input | 10 ticks | Drop-oldest, then force IDR |
+| Encoder input | 10 ticks | Drop-oldest, then force IDR, unless one is on its way (encoder just opened or forced) or went out < 1 s before (`fastvideo_media::queue::GapKeyframes`; a forced pipe-encoder IDR restarts ffmpeg, and frames dropped while it starts must not restart it again). |
 | Per-peer str0m send | str0m internal | A peer whose RTCP shows no progress for 20 s is dropped |
 | Control channels | 64 queued messages per peer | Excess → close with `invalid_message` |
 

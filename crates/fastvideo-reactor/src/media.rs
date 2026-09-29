@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use fastvideo_engine_service::{Tick, TickReceiver};
 use fastvideo_media::pacer::VideoOut;
+use fastvideo_media::queue::GapKeyframes;
 use fastvideo_protocol::RgbFrame;
 use fastvideo_webrtc::host::PeerHandle;
 use fastvideo_webrtc::writer::{AudioPacket, TrackKind, VideoCodec, VideoFrame};
@@ -249,11 +250,14 @@ struct VideoState {
     current: Option<RgbFrame>,
     last_rtp: u64,
     first_sent: bool,
+    /// Per codec: whether a gap in the ticks still needs a keyframe.
+    gaps: HashMap<VideoCodec, GapKeyframes>,
 }
 
 fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Handle) {
     let step = 90_000 / u64::from(sh.cfg.fps.max(1));
-    let mut st = VideoState { encoders: HashMap::new(), current: None, last_rtp: 0, first_sent: false };
+    let mut st =
+        VideoState { encoders: HashMap::new(), current: None, last_rtp: 0, first_sent: false, gaps: HashMap::new() };
     while !sh.closed.load(Ordering::Relaxed) {
         let next = rt.block_on(async { tokio::time::timeout(Duration::from_millis(50), ticks.recv()).await });
         let tick: Option<Tick> = match next {
@@ -266,8 +270,18 @@ fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Hand
         let mut kicks: HashSet<VideoCodec> = std::mem::take(&mut *lock(&sh.kicks));
         kicks.extend(due_requests(&sh, Instant::now()));
         if ticks.take_dropped() {
-            // Frames were lost before the encoder: re-sync every codec.
-            kicks.extend(lock(&sh.peers).values().filter_map(|p| p.codec));
+            // Frames were lost before the encoder: re-sync every codec,
+            // unless a keyframe is on its way or just went out (a pipe
+            // encoder restarts ffmpeg for a keyframe; frames dropped while
+            // it starts must not restart it again).
+            let now = Instant::now();
+            let gaps = &st.gaps;
+            kicks.extend(
+                lock(&sh.peers)
+                    .values()
+                    .filter_map(|p| p.codec)
+                    .filter(|c| gaps.get(c).is_none_or(|g| g.gap_needs_keyframe(now))),
+            );
         }
         let Some(t) = tick else {
             if !kicks.is_empty() {
@@ -357,14 +371,15 @@ fn send_picture(
     let codecs: HashSet<VideoCodec> = peers.iter().map(|(_, c)| *c).collect();
     let black = frame.data.iter().step_by(97).all(|b| *b == 0);
     for codec in codecs {
-        let key = all_key || kicks.contains(&codec);
-        if kicks.contains(&codec) {
-            sh.stats.keyframes_forced.fetch_add(1, Ordering::Relaxed);
-        }
+        let gaps = st.gaps.entry(codec).or_default();
         let enc = match st.encoders.get_mut(&codec) {
             Some(e) if e.dims() == (frame.width, frame.height) => e,
             _ => match new_encoder(codec, &sh.cfg, frame.width, frame.height) {
-                Ok(e) => st.encoders.entry(codec).insert_entry(e).into_mut(),
+                Ok(e) => {
+                    // A new encoder starts with a keyframe.
+                    gaps.forced();
+                    st.encoders.entry(codec).insert_entry(e).into_mut()
+                }
                 Err(e) => {
                     tracing::warn!(?codec, error = %e, "video encoder unavailable");
                     sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
@@ -372,8 +387,19 @@ fn send_picture(
                 }
             },
         };
+        let key = all_key || kicks.contains(&codec);
+        if key {
+            gaps.forced();
+        }
+        if kicks.contains(&codec) {
+            sh.stats.keyframes_forced.fetch_add(1, Ordering::Relaxed);
+        }
         match enc.encode(&frame, key, rtp) {
-            Ok(out) => fan_out(sh, &peers, codec, out, black),
+            Ok(out) => {
+                if fan_out(sh, &peers, codec, out, black) {
+                    gaps.sent(Instant::now());
+                }
+            }
             Err(e) => {
                 sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(?codec, error = %e, "video encode failed");
@@ -385,9 +411,15 @@ fn send_picture(
     st.last_rtp = rtp;
 }
 
-/// Sends encoded frames to every peer of `codec`.
-fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, out: Vec<(u64, Bytes)>, black: bool) {
+/// Sends encoded frames to every peer of `codec`; `true` if one was a
+/// keyframe.
+fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, out: Vec<(u64, Bytes)>, black: bool) -> bool {
+    let mut key = false;
     for (t, data) in out {
+        key |= match codec {
+            VideoCodec::H264 => fastvideo_media::h264::is_idr(&data),
+            VideoCodec::Vp8 => fastvideo_media::vp8::is_keyframe(&data),
+        };
         sh.stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
         sh.stats.video_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
         if black {
@@ -399,6 +431,7 @@ fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, o
             }
         }
     }
+    key
 }
 
 /// Sends what the pipe encoders finished since the last encode, so the last
@@ -415,7 +448,11 @@ fn flush_ready(sh: &Shared, st: &mut VideoState) {
     let mut failed = Vec::new();
     for (codec, enc) in st.encoders.iter_mut() {
         match enc.poll() {
-            Ok(out) => fan_out(sh, &peers, *codec, out, black),
+            Ok(out) => {
+                if fan_out(sh, &peers, *codec, out, black) {
+                    st.gaps.entry(*codec).or_default().sent(Instant::now());
+                }
+            }
             Err(e) => {
                 sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(?codec, error = %e, "video encode failed");

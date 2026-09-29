@@ -51,14 +51,17 @@ pub fn silent_app() -> FalApp {
     FalApp { id: "fv/h3-silent".into(), model: "fake-h3-silent".into(), tier: None }
 }
 
-/// `DirectorEngine` over `EngineService` (what fv-serve does).
-pub struct EngineDirector(pub EngineService);
+/// `DirectorEngine` over `EngineService` (what fv-serve does), with a
+/// test gate in front of every chunk build (see [`Opts::hold_builds`]).
+pub struct EngineDirector(pub EngineService, pub tokio::sync::watch::Receiver<bool>);
 
 /// The clip session, released by `close` (the build future may outlive it).
 pub struct Clips {
     caps: ModelCaps,
     spec: SessionSpec,
     session: tokio::sync::RwLock<Option<ClipSession>>,
+    /// Builds wait until this reads `true`.
+    gate: tokio::sync::watch::Receiver<bool>,
 }
 
 #[async_trait::async_trait]
@@ -75,6 +78,8 @@ impl DirectorClips for Clips {
         }
     }
     async fn build(&self, c: ChunkBuild) -> Result<ChunkOutput, ApiError> {
+        let mut gate = self.gate.clone();
+        gate.wait_for(|open| *open).await.map_err(|_| ApiError::internal("the build gate is gone"))?;
         let b = ClipBuild {
             prompt: c.prompt,
             negative_prompt: None,
@@ -99,7 +104,12 @@ impl DirectorClips for Clips {
 impl DirectorEngine for EngineDirector {
     async fn open(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorClips>, ApiError> {
         let s = self.0.open_clip_session(spec).await?;
-        Ok(Arc::new(Clips { caps: s.caps().clone(), spec: s.spec().clone(), session: tokio::sync::RwLock::new(Some(s)) }))
+        Ok(Arc::new(Clips {
+            caps: s.caps().clone(),
+            spec: s.spec().clone(),
+            session: tokio::sync::RwLock::new(Some(s)),
+            gate: self.1.clone(),
+        }))
     }
 }
 
@@ -144,6 +154,15 @@ pub struct Fixture {
     pub svc: Arc<DirectorService>,
     pub app: Router,
     pub dir: PathBuf,
+    /// Opens the chunk-build gate (see [`Opts::hold_builds`]).
+    pub builds: tokio::sync::watch::Sender<bool>,
+}
+
+impl Fixture {
+    /// Lets held chunk builds start (a no-op unless `hold_builds`).
+    pub fn release_builds(&self) {
+        self.builds.send_replace(true);
+    }
 }
 
 impl Drop for Fixture {
@@ -162,6 +181,10 @@ pub struct Opts {
     /// loopback candidates) instead of 127.0.0.1.
     pub lan: bool,
     pub public_base: String,
+    /// Chunk builds wait for [`Fixture::release_builds`]: a test can then
+    /// act while chunk 0 is dispatched but not yet built, whatever the
+    /// machine's speed.
+    pub hold_builds: bool,
 }
 
 impl Default for Opts {
@@ -174,6 +197,7 @@ impl Default for Opts {
             h264: EncoderBackend::CpuTestX264,
             lan: false,
             public_base: "https://fal.fv.test".into(),
+            hold_builds: false,
         }
     }
 }
@@ -215,10 +239,11 @@ pub async fn fixture(o: Opts) -> Fixture {
         work_dir: dir.join("director"),
         ..DirectorConfig::default()
     };
-    let svc = DirectorService::new(dcfg, host, Arc::new(EngineDirector(engine.clone())));
+    let (builds, gate) = tokio::sync::watch::channel(!o.hold_builds);
+    let svc = DirectorService::new(dcfg, host, Arc::new(EngineDirector(engine.clone(), gate)));
     let fal = FalConfig { apps: vec![FalApp::h3(Tier::Max), silent_app()], ..FalConfig::default() };
     let app = router_with(ctx.clone(), fal, fastvideo_fal::director::routes(svc.clone())).merge(ctx.routes().with_state(()));
-    Fixture { ctx, engine, svc, app, dir }
+    Fixture { ctx, engine, svc, app, dir, builds }
 }
 
 pub struct Resp {
