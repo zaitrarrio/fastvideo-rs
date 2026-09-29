@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use fastvideo_webrtc::channel::{ChannelMessage, ChannelPolicy};
 use fastvideo_webrtc::host::{
-    AnswerOptions, AudioLayout, CloseReason, HostConfig, OfferOptions, Peer, PeerEvent, RtcHost,
+    AnswerOptions, AudioLayout, CloseReason, HostConfig, OfferOptions, Peer, PeerEvent, PeerStats,
+    RtcHost,
 };
 use fastvideo_webrtc::sdp::{Direction, MediaKind, Sdp};
 use fastvideo_webrtc::writer::{
@@ -30,6 +31,20 @@ async fn wait_for(peer: &mut Peer, what: &str, mut f: impl FnMut(&PeerEvent) -> 
             Ok(None) => panic!("event stream ended while waiting for {what}"),
             Err(_) => panic!("timed out waiting for {what}"),
         }
+    }
+}
+
+/// The peer's stats once `f` holds (they are published on the host's
+/// housekeeping tick, which a loaded host runs late), or the last snapshot
+/// after 10 s for the caller's assertions to report.
+async fn stats_when(peer: &Peer, f: impl Fn(&PeerStats) -> bool) -> PeerStats {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let st = peer.stats();
+        if f(&st) || Instant::now() >= deadline {
+            return st;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -256,8 +271,13 @@ async fn two_hosts_exchange_data_and_av() {
     }
 
     // Stats are refreshed from str0m.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let st = sp.stats();
+    let st = stats_when(&sp, |st| {
+        st.video.written == frames.len() as u64
+            && st.audio.written == packets.len() as u64
+            && st.bytes_tx > 0
+            && st.transport.is_some()
+    })
+    .await;
     assert!(st.connected);
     assert_eq!(st.video.written, frames.len() as u64);
     assert_eq!(st.audio.written, packets.len() as u64);
@@ -368,8 +388,10 @@ async fn pause_gate_and_video_only_answers() {
         )
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let st = sp.stats();
+    let st = stats_when(&sp, |st| {
+        st.video.dropped_paused >= 5 && st.audio.dropped_paused >= 10
+    })
+    .await;
     assert_eq!(st.video.dropped_paused, 5);
     assert_eq!(
         st.audio.dropped_paused, 10,
@@ -458,9 +480,13 @@ async fn answers_a_chrome_offer() {
 
 #[tokio::test]
 async fn rejects_unusable_offers_and_enforces_limits() {
+    // The peer limit is checked on a host whose negotiation timeout cannot
+    // expire during the test: with a short one, a loaded host could take
+    // longer than it between the first answer and the second, time the
+    // first peer out and free its slot, and the second answer succeeded.
     let mut cfg = HostConfig::loopback(true, false);
     cfg.max_peers = 1;
-    cfg.negotiation_timeout = Duration::from_millis(300);
+    cfg.negotiation_timeout = Duration::from_secs(3600);
     let server = RtcHost::bind(cfg).await.unwrap();
     // No H.264: refused before str0m sees it.
     let vp8_only = CHROME_OFFER.replace("H264/90000", "H263/90000");
@@ -483,12 +509,39 @@ async fn rejects_unusable_offers_and_enforces_limits() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("peer limit"), "{err}");
-    // Nobody connects: negotiation timeout closes the peer and frees the slot.
+    // Closing the peer frees the slot: the host removes a peer before it
+    // reports `Closed`, so the next answer needs no grace period.
+    p.close();
+    wait_for(&mut p, "local close", |e| {
+        *e == PeerEvent::Closed(CloseReason::Local)
+    })
+    .await;
+    server
+        .answer(CHROME_OFFER, AnswerOptions::default())
+        .await
+        .unwrap();
+    server.shutdown().await;
+
+    // Nobody connects: the negotiation timeout closes the peer (not before
+    // the timeout) and frees the slot.
+    let mut cfg = HostConfig::loopback(true, false);
+    cfg.max_peers = 1;
+    cfg.negotiation_timeout = Duration::from_millis(300);
+    let server = RtcHost::bind(cfg).await.unwrap();
+    let t0 = Instant::now();
+    let (mut p, _) = server
+        .answer(CHROME_OFFER, AnswerOptions::default())
+        .await
+        .unwrap();
     wait_for(&mut p, "negotiation timeout", |e| {
         *e == PeerEvent::Closed(CloseReason::NegotiationTimeout)
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        t0.elapsed() >= Duration::from_millis(300),
+        "timed out early: {:?}",
+        t0.elapsed()
+    );
     server
         .answer(CHROME_OFFER, AnswerOptions::default())
         .await
