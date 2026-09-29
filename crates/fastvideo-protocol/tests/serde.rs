@@ -51,6 +51,7 @@ pub fn full_request() -> GenerationRequest {
     r.audio_in = Some(AudioInput {
         media: MediaRef::ProviderFile("mm_file://9".into()),
         role: AudioRole::TargetSoundtrack,
+        max_s: None,
     });
     r.audio_out = AudioOut::Silent;
     r.sampling = SamplingOverrides {

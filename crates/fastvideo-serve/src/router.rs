@@ -61,7 +61,9 @@ fn r(owner: Owner, method: &'static str, path: impl Into<String>) -> RouteSpec {
 }
 
 /// LTX endpoints with no engine path (design §4.5): 403 stubs.
-pub const LTX_STUBS: &[&str] = &["audio-to-video", "retake", "extend", "video-to-video-hdr", "video-to-video-reframe"];
+pub const LTX_STUBS: &[&str] = &["retake", "extend", "video-to-video-hdr", "video-to-video-reframe"];
+/// LTX generation endpoints (`/v1/*` sync, `/v2/*` async).
+pub const LTX_GENERATE: &[&str] = &["text-to-video", "image-to-video", "audio-to-video"];
 /// fal submit sub-paths of the H3 apps (design §4.4).
 pub const FAL_SUBS: &[&str] = &["text-to-video", "image-to-video", "reference-to-video"];
 
@@ -173,7 +175,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
         r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/ice_candidates"),
     ];
-    for ep in ["text-to-video", "image-to-video"] {
+    for ep in LTX_GENERATE {
         v.push(r(Ltx, "POST", format!("/v2/{ep}")));
         v.push(r(Ltx, "GET", format!("/v2/{ep}/{{id}}")));
         v.push(r(Ltx, "POST", format!("/v1/{ep}")));

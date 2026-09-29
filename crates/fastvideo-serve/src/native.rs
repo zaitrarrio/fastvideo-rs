@@ -30,7 +30,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use fastvideo_protocol::{
-    ApiError, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
+    ApiError, AudioInput, AudioRole, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
     JobView, Keyframe, Length, ListQuery, MediaKind, MediaRef, Reference, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
     SortOrder, StreamCaps, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
@@ -71,6 +71,8 @@ impl BatchProtocol for Native {
 #[serde(deny_unknown_fields)]
 pub struct NativeBody {
     pub model: String,
+    /// Required, except for audio-to-video with an `image_url`.
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub negative_prompt: Option<String>,
@@ -122,6 +124,12 @@ pub struct NativeBody {
     /// default 1).
     #[serde(default)]
     pub reference_lora_strength: Option<f32>,
+    /// Driving audio (https URL or data URI): audio-to-video (`Task::A2V`,
+    /// LTX-2.5). The audio sets the length (2 to 20 s; `seconds` /
+    /// `num_frames` may ask for less), the output carries it, and
+    /// `image_url` (optional) is the first frame.
+    #[serde(default)]
+    pub audio_url: Option<String>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -148,7 +156,8 @@ impl SubmitEndpoint for NativeSubmit {
 
     fn normalize(&self, b: NativeBody, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
         let _ = cx;
-        if b.prompt.trim().is_empty() {
+        // Audio-to-video with a first frame may leave the prompt empty.
+        if b.prompt.trim().is_empty() && !(b.audio_url.is_some() && b.image_url.is_some()) {
             return Err(ApiError::invalid_param("prompt", "`prompt` must not be empty"));
         }
         let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
@@ -210,6 +219,12 @@ impl SubmitEndpoint for NativeSubmit {
                     media: media(u, &format!("reference_urls[{i}]"))?,
                 });
             }
+        }
+        if let Some(u) = b.audio_url {
+            // Audio-to-video: the images (if any) stay its first/last frames;
+            // `negotiate` refuses references mixed in.
+            r.task = Task::A2V;
+            r.audio_in = Some(AudioInput { media: media(&u, "audio_url")?, role: AudioRole::Drive, max_s: None });
         }
         if r.task == Task::T2V && matches!(r.canvas, CanvasSpec::FollowImage { .. }) {
             return Err(ApiError::invalid_param(
@@ -522,5 +537,34 @@ mod tests {
             .unwrap();
         assert_eq!(t2v.task, Task::T2V);
         assert!(t2v.references.is_empty() && t2v.sampling.is_empty());
+    }
+
+    #[test]
+    fn audio_url_makes_an_audio_to_video_request() {
+        let cx = NormalizeCtx::new(time::OffsetDateTime::UNIX_EPOCH);
+        let r = NativeSubmit
+            .normalize(
+                body(json!({"model": "ltx-turbo", "prompt": "a man talks", "audio_url": "https://e.x/speech.mp3"})),
+                &cx,
+            )
+            .unwrap();
+        assert_eq!(r.task, Task::A2V);
+        assert_eq!(r.audio_in.as_ref().map(|a| a.role), Some(AudioRole::Drive));
+        assert!(r.keyframes.is_empty());
+        assert_eq!(r.timing.length, Length::ModelDefault);
+        // With a first frame the prompt may be empty; the image stays frame 0.
+        let i = NativeSubmit
+            .normalize(
+                body(json!({"model": "ltx-turbo", "image_url": "data:image/png;base64,AA", "audio_url": "data:audio/wav;base64,AA"})),
+                &cx,
+            )
+            .unwrap();
+        assert_eq!((i.task, i.keyframes.len()), (Task::A2V, 1));
+        assert!(i.prompt.is_empty());
+        // Without an image the prompt is required; a bad URL names its field.
+        let e = NativeSubmit.normalize(body(json!({"model": "m", "audio_url": "https://e.x/a.wav"})), &cx);
+        assert_eq!(e.unwrap_err().param.as_deref(), Some("prompt"));
+        let e = NativeSubmit.normalize(body(json!({"model": "m", "prompt": "p", "audio_url": "nope"})), &cx);
+        assert_eq!(e.unwrap_err().param.as_deref(), Some("audio_url"));
     }
 }

@@ -534,8 +534,12 @@ pub struct Ltx2Transformer {
     fbcache: Arc<Mutex<Option<LtxFbRuntime>>>,
     prune: Arc<Mutex<Option<LtxPruneRuntime>>>,
     stage1: Arc<Mutex<Option<LtxStage1Runtime>>>,
-    /// The last timestep's [`ForwardMods`], keyed by the timestep's bits.
-    mods: Mutex<Option<(u32, ForwardMods)>>,
+    /// The last timestep's [`ForwardMods`], keyed by the timestep's bits and
+    /// whether the audio stream was frozen.
+    mods: Mutex<Option<(u32, bool, ForwardMods)>>,
+    /// Audio-to-video: the audio stream is clean conditioning
+    /// ([`Self::set_audio_frozen`]).
+    audio_frozen: std::sync::atomic::AtomicBool,
     /// Per-token video timesteps of a conditioned stage (I2V / keyframes):
     /// row ranges whose timestep is `mask * sigma` instead of `sigma`
     /// ([`Self::set_video_conditioning`]). `None`: every row at `sigma`.
@@ -980,6 +984,7 @@ impl Ltx2Transformer {
             prune: Default::default(),
             stage1: Default::default(),
             mods: Mutex::new(None),
+            audio_frozen: std::sync::atomic::AtomicBool::new(false),
             video_segments: Mutex::new(None),
             cfg: cfg.clone(),
         })
@@ -1075,6 +1080,23 @@ impl Ltx2Transformer {
     pub fn set_video_conditioning(&self, segments: Option<Vec<VideoTimestepSegment>>) {
         *self.video_segments.lock().expect("ltx2 video segments") =
             segments.filter(|s| !s.is_empty());
+    }
+
+    /// Audio-to-video (`ModalitySpec(frozen=True)`, `a2vid_two_stage.py`):
+    /// every audio token is clean conditioning. Its per-token timesteps are 0
+    /// (`denoise_mask` zeroed), and so is the audio `Modality.sigma`
+    /// (`modality_from_latent_state`), which the audio prompt AdaLN and the
+    /// video side's a->v gate read (`transformer_args.py`). The video stream,
+    /// the audio side's v->a gate and the video prompt AdaLN keep the video
+    /// sigma. `false` restores the joint T2AV modulation.
+    pub fn set_audio_frozen(&self, frozen: bool) {
+        self.audio_frozen
+            .store(frozen, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether the audio stream is frozen ([`Self::set_audio_frozen`]).
+    pub fn audio_frozen(&self) -> bool {
+        self.audio_frozen.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether per-token video timesteps are set.
@@ -1339,37 +1361,47 @@ impl Ltx2Transformer {
     /// at the same timestep (the uncond pass of CFG) reuses the result.
     fn modulations(&self, timestep: f32) -> Result<ForwardMods> {
         let key = timestep.to_bits();
-        if let Some((k, m)) = self.mods.lock().expect("ltx2 mods").as_ref() {
-            if *k == key {
+        let frozen = self.audio_frozen();
+        if let Some((k, f, m)) = self.mods.lock().expect("ltx2 mods").as_ref() {
+            if *k == key && *f == frozen {
                 return Ok(m.clone());
             }
         }
         // The a↔v gate embedders see the timestep rescaled by
         // cross_attn_timestep_scale_multiplier / timestep_scale_multiplier (= 1).
-        let gate_t = timestep
-            * (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier)
-                as f32;
+        let gate_scale =
+            (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier) as f32;
+        let gate_t = timestep * gate_scale;
         let s = timestep_sinusoid(timestep, self.cfg.timestep_proj_dim)?;
         let s_gate = if gate_t.to_bits() == key {
             s.clone()
         } else {
             timestep_sinusoid(gate_t, self.cfg.timestep_proj_dim)?
         };
+        // Frozen audio (A2V): the audio stream's own timestep and its sigma are
+        // 0 (`modality_from_latent_state`); the video's a->v gate reads the
+        // audio sigma (`_prepare_cross_attention_timestep`, cross modality).
+        let (s_audio, s_audio_gate) = if frozen {
+            let z = timestep_sinusoid(0.0, self.cfg.timestep_proj_dim)?;
+            (z.clone(), z)
+        } else {
+            (s.clone(), s_gate.clone())
+        };
         let (v_main, v_embedded) = self.time_embed.forward(&s)?;
-        let (a_main, a_embedded) = self.audio_time_embed.forward(&s)?;
+        let (a_main, a_embedded) = self.audio_time_embed.forward(&s_audio)?;
         let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
-            (Some(p), Some(a)) => (Some(p.forward(&s)?.0), Some(a.forward(&s)?.0)),
+            (Some(p), Some(a)) => (Some(p.forward(&s)?.0), Some(a.forward(&s_audio)?.0)),
             _ => (None, None),
         };
         let mods = ForwardMods {
             video: StepModulation {
                 main: v_main,
                 cross: self.cross_video_scale_shift.forward(&s)?.0,
-                gate: self.cross_video_gate.forward(&s_gate)?.0,
+                gate: self.cross_video_gate.forward(&s_audio_gate)?.0,
             },
             audio: StepModulation {
                 main: a_main,
-                cross: self.cross_audio_scale_shift.forward(&s)?.0,
+                cross: self.cross_audio_scale_shift.forward(&s_audio)?.0,
                 gate: self.cross_audio_gate.forward(&s_gate)?.0,
             },
             v_prompt,
@@ -1377,7 +1409,7 @@ impl Ltx2Transformer {
             v_embedded,
             a_embedded,
         };
-        *self.mods.lock().expect("ltx2 mods") = Some((key, mods.clone()));
+        *self.mods.lock().expect("ltx2 mods") = Some((key, frozen, mods.clone()));
         Ok(mods)
     }
 

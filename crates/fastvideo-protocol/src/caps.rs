@@ -257,6 +257,20 @@ impl FrameGrid {
         (self.min..=self.max).contains(&m).then_some(m)
     }
 
+    /// The largest admissible count `<= n`: on the grid, capped at `max`.
+    /// `None` when that is below `min`.
+    pub fn align_down(&self, n: u32) -> Option<u32> {
+        let n = n.min(self.max);
+        if n < self.offset {
+            return None;
+        }
+        let m = match (n - self.offset).checked_div(self.step) {
+            Some(k) => self.offset + k * self.step,
+            None => self.offset,
+        };
+        (m >= self.min).then_some(m)
+    }
+
     /// On the grid and within `min..=max`.
     pub fn contains(&self, n: u32) -> bool {
         self.on_grid(n) && (self.min..=self.max).contains(&n)

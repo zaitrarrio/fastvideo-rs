@@ -69,8 +69,13 @@ oracle_fv() {
 # sol-engine LTX-2.5 two-stage; arm sol|dense (bench_ltx25.py), geometry per workload,
 # then any extra official args (image conditioning: --image PATH FRAME_IDX STRENGTH).
 oracle_ltx() {
-  local name="$1" arm="$2" wl="$3" geo L="$UW/LTX-2.5"
+  local name="$1" arm="$2" wl="$3" geo L="$UW/LTX-2.5" a2v=() prompt="$PROMPT_OURS"
   shift 3
+  # --a2v AUDIO [PROMPT] first: audio-to-video (ltx25_a2v.py) on that audio.
+  if [[ "${1:-}" == --a2v ]]; then
+    a2v=(--a2v-audio "$2"); shift 2
+    [[ -n "${1:-}" && "${1:-}" != --* ]] && { prompt="$1"; shift; }
+  fi
   case "$wl" in
     512p) geo=(--width 768 --height 512 --num-frames 121) ;;
     4k) geo=(--width 3840 --height 2176 --num-frames 121) ;;
@@ -79,14 +84,14 @@ oracle_ltx() {
   oracle_cell "$name" env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=1 \
     TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 \
     "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_ltx25.py" --sol-engine "$SRC/sol-engine" \
-    --arm "$arm" --result "$OUT/oracle-$name/result.json" -- \
+    --arm "$arm" "${a2v[@]}" --result "$OUT/oracle-$name/result.json" -- \
     --pipeline bf16 --metrics "$OUT/oracle-$name/benchmark.json" -- \
     --transformer-path "$L/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors" \
     --text-encoder-path "$L/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors" \
     --video-vae-path "$L/vae/ltx-2.5-video-vae-conv-bf16.safetensors" \
     --audio-vae-path "$L/vae/ltx-2.5-audio-vae-bf16.safetensors" \
     --spatial-upsampler-path "$L/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" \
-    --offload cpu "${geo[@]}" --frame-rate 24 --seed "$SEED_OURS" --prompt "$PROMPT_OURS" \
+    --offload cpu "${geo[@]}" --frame-rate 24 --seed "$SEED_OURS" --prompt "$prompt" \
     --output-path "$OUT/oracle-$name/out.mp4"
 }
 
@@ -143,6 +148,11 @@ PY
     --prompt "$LTX_REF_PROMPT" --output-path "$c/out.mp4"
   rm -f "$c/reference.mov"
 }
+
+# Audio-to-video prompts (targets ltx25-a2v, ltx25-a2v-i2v; shared with
+# runpod-matrix.sh's `oracle` family).
+LTX_A2V_PROMPT="${FV_LTX_A2V_PROMPT:-A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word.}"
+LTX_A2V_I2V_PROMPT="${FV_LTX_A2V_I2V_PROMPT:-A calm beach at golden hour, gentle waves rolling in, while a narrator speaks.}"
 
 # Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
 # of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
@@ -220,4 +230,11 @@ run_oracle() {
   oracle_ltx ltx25-kf dense 512p --image "$fx/ti2v-beach-832x480.jpg" 0 1.0 \
     --image "$fx/ti2v-beach-zoom-832x480.jpg" 120 1.0
   oracle_ltx_ref ltx25-ref2v
+  # Audio-to-video (docs/oracle.md "LTX-2.5 audio-to-video"): the distilled
+  # two-stage with a2vid_two_stage.py's frozen driving audio (ltx25_a2v.py) on
+  # a speech clip, prompt only (a talking head), then with the beach image as
+  # the first frame. The prompt is shared with runpod-matrix.sh.
+  oracle_ltx ltx25-a2v dense 512p --a2v "$fx/speech-flite-44k.flac" "$LTX_A2V_PROMPT"
+  oracle_ltx ltx25-a2v-i2v dense 512p --a2v "$fx/speech-flite-44k.flac" "$LTX_A2V_I2V_PROMPT" \
+    --image "$fx/ti2v-beach-832x480.jpg" 0 1.0
 }

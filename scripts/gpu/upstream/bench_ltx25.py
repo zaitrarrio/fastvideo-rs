@@ -27,6 +27,9 @@ def main() -> int:
     ap.add_argument("--sol-engine", required=True)
     ap.add_argument("--arm", choices=("dense", "sol"), required=True)
     ap.add_argument("--result", required=True)
+    # Audio-to-video (ltx25_a2v.py): DistilledPipeline with a2vid_two_stage.py's
+    # frozen driving audio; the audio VAE is the official args' --audio-vae-path.
+    ap.add_argument("--a2v-audio", default=None)
     ap.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args()
     rest = a.rest[1:] if a.rest[:1] == ["--"] else a.rest
@@ -58,6 +61,14 @@ def main() -> int:
         return p
 
     gi.build_pipeline = timed_build
+    if a.a2v_audio:
+        import ltx25_a2v
+
+        vae = next((rest[i + 1] for i, x in enumerate(rest[:-1]) if x == "--audio-vae-path"), None)
+        if vae is None:
+            raise SystemExit("--a2v-audio needs the official --audio-vae-path")
+        ltx25_a2v.install(a.a2v_audio, vae)
+        info["a2v_audio"] = a.a2v_audio
     sys.argv = ["gpu_infer", *rest]
     rc = 0
     try:

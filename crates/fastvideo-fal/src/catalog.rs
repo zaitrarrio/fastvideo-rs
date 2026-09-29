@@ -28,7 +28,7 @@ use axum::{Json, Router};
 use fastvideo_serve_kit::ServeCtx;
 use serde_json::{json, Map, Value};
 
-use crate::schema::ingredient;
+use crate::schema::{a2v, ingredient};
 use crate::schema::ltx::{self, LtxAspect, LtxClass, CAMERA_MOTIONS, LTX_PROMPT_MAX_CHARS};
 use crate::schema::wan::{self, WanAspect, WanResolution, WanVariant, INTERPOLATORS};
 use crate::schema::{
@@ -112,6 +112,8 @@ pub fn input_schema_for(kind: AppKind, endpoint: Endpoint) -> Value {
         Endpoint::WanImageToVideo => wan_schema(endpoint, WanVariant::ImageToVideo),
         Endpoint::WanFastWan => wan_schema(endpoint, WanVariant::FastWan),
         Endpoint::LtxIngredient => ingredient_schema(endpoint),
+        Endpoint::LtxAudioToVideoFast => a2v_schema(endpoint, LtxClass::Fast),
+        Endpoint::LtxAudioToVideoPro => a2v_schema(endpoint, LtxClass::Pro),
         Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => h3_schema(kind, endpoint),
     }
 }
@@ -413,6 +415,47 @@ fn ingredient_schema(endpoint: Endpoint) -> Value {
     object(endpoint.title(), props, order, &["prompt", "image_url"])
 }
 
+/// `lightricks/ltx-2.5/audio-to-video/{fast,pro}` (fal's
+/// `Ltx25AudioToVideo*Input`, plus this server's `seed` and `sync_mode`).
+fn a2v_schema(endpoint: Endpoint, class: LtxClass) -> Value {
+    let mut props = Map::new();
+    let max_s = match class {
+        LtxClass::Fast => fastvideo_protocol::A2V_AUDIO_MAX_S,
+        LtxClass::Pro => f64::from(a2v::A2V_PRO_MAX_S),
+    };
+    props.insert(
+        "audio_url".into(),
+        required_media_url(
+            "audio",
+            &format!(
+                "URL of the audio file to generate a video from. Duration must be between {} and {max_s} seconds; the video follows its length and carries it as the soundtrack. An HTTP(S) URL or a base64 data URI.",
+                fastvideo_protocol::A2V_AUDIO_MIN_S
+            ),
+        ),
+    );
+    props.insert(
+        "image_url".into(),
+        media_url("image", "URL of an image to use as the first frame of the video. If not provided, prompt is required."),
+    );
+    props.insert(
+        "prompt".into(),
+        json!({"type": "string", "minLength": 1, "maxLength": LTX_PROMPT_MAX_CHARS, "description": "Text description of how the video should be generated. Required if image_url is not provided. When image_url is provided, this describes how the image should be animated.", "x-fv-multiline": true}),
+    );
+    props.insert(
+        "aspect_ratio".into(),
+        json!({"type": "string", "enum": strings(&a2v::A2V_ASPECTS, LtxAspect::as_str), "default": LtxAspect::Auto.as_str(), "description": "The aspect ratio of the generated video. If 'auto', the aspect ratio will be determined automatically based on the input image, or defaults to 16:9 if no image is provided."}),
+    );
+    let (glo, ghi) = a2v::A2V_GUIDANCE;
+    props.insert(
+        "guidance_scale".into(),
+        json!({"anyOf": [{"type": "number", "minimum": glo, "maximum": ghi}, {"type": "null"}], "default": null, "description": "Guidance scale for video generation. Accepted; the distilled model this server runs is unguided.", "x-fv-advanced": true}),
+    );
+    props.insert("seed".into(), seed());
+    props.insert("sync_mode".into(), sync_mode());
+    let order = vec!["audio_url", "image_url", "prompt", "aspect_ratio", "guidance_scale", "seed", "sync_mode"];
+    object(endpoint.title(), props, order, &["audio_url"])
+}
+
 /// One catalog entry.
 fn app_entry(a: &FalApp) -> Value {
     let kind = a.kind();
@@ -498,6 +541,9 @@ mod tests {
             | Endpoint::LtxIngredient => {
                 m.insert("image_url".into(), "https://a.test/1.png".into());
             }
+            Endpoint::LtxAudioToVideoFast | Endpoint::LtxAudioToVideoPro => {
+                m.insert("audio_url".into(), "https://a.test/speech.mp3".into());
+            }
             _ => {}
         }
         m
@@ -562,6 +608,30 @@ mod tests {
                 b.insert("prompt".into(), "x".repeat(max + 1).into());
                 assert!(parse(&b).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn audio_to_video_form_uploads_audio() {
+        let fam = FalConfig { apps: vec![FalApp::from_id("lightricks/ltx-2.5")], ..FalConfig::default() };
+        let c = catalog(&fam);
+        let eps = c["apps"][0]["endpoints"].as_array().unwrap();
+        let a2v: Vec<(&str, &str)> = eps
+            .iter()
+            .filter(|e| e["sub"].as_str().unwrap().starts_with("audio-to-video"))
+            .map(|e| (e["endpoint_id"].as_str().unwrap(), e["model"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            a2v,
+            [("lightricks/ltx-2.5/audio-to-video/fast", "ltx-turbo"), ("lightricks/ltx-2.5/audio-to-video/pro", "ltx-pro")]
+        );
+        for (e, max) in [(Endpoint::LtxAudioToVideoFast, "20"), (Endpoint::LtxAudioToVideoPro, "10")] {
+            let s = input_schema_for(AppKind::Ltx25, e);
+            assert_eq!(s["required"], json!(["audio_url"]));
+            assert_eq!(s["properties"]["audio_url"]["x-fv-media"], "audio");
+            assert_eq!(s["properties"]["image_url"]["x-fv-media"], "image");
+            assert!(s["properties"]["audio_url"]["description"].as_str().unwrap().contains(&format!("2 and {max} seconds")));
+            assert_eq!(s["x-fal-order-properties"][0], "audio_url");
         }
     }
 

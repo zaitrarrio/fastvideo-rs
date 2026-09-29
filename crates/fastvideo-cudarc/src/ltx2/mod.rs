@@ -8,6 +8,7 @@
 //! (`fastvideo_models::ltx2::rope`) and the checkpoint key view ([`keys`]).
 //! Device tensors are f32; bf16 lives only inside [`crate::wan::nn::Linear`].
 
+pub mod a2v;
 pub mod attention;
 pub mod audio_vae;
 pub mod diffusion_decoder;

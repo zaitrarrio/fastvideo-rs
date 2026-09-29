@@ -164,7 +164,13 @@ pub fn stage_all(req: &GenerationRequest) -> StagedInputs {
         audio_in: req
             .audio_in
             .as_ref()
-            .map(|_| staged("audio/wav", None, "audio.wav")),
+            .map(|_| {
+                // 8 s at 48 kHz: long enough for every audio-to-video default.
+                let mut m = staged("audio/wav", None, "audio.wav");
+                m.probe.duration_s = Some(8.0);
+                m.probe.audio_rate = Some(48_000);
+                m
+            }),
     }
 }
 

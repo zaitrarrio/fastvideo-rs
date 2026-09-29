@@ -311,6 +311,12 @@ pub struct StageConditioning {
     pub segments: Vec<CondSegment>,
     /// The IC-LoRA reference block after the keyframe blocks, if any.
     pub reference: Option<fastvideo_models::ltx2::rope::ReferenceBlock>,
+    /// Audio-to-video: the clean audio latent `[1, L, 128]` (state dtype) the
+    /// whole audio stream is pinned to (`ModalitySpec(frozen=True,
+    /// noise_scale=0, initial_latent=…)`, `a2vid_two_stage.py`). The noiser
+    /// and the ancestral loop still draw audio noise (the stream's draws are
+    /// unchanged), but a zero denoise mask keeps every audio token clean.
+    pub frozen_audio: Option<CudaTensor>,
 }
 
 impl StageConditioning {
@@ -375,6 +381,7 @@ impl StageConditioning {
             frame_tokens: hw,
             segments,
             reference: None,
+            frozen_audio: None,
         })
     }
 
@@ -405,6 +412,30 @@ impl StageConditioning {
             clean: r.clean,
         });
         Ok(self)
+    }
+
+    /// Pin the audio stream to `clean` (audio-to-video).
+    pub fn with_frozen_audio(mut self, clean: CudaTensor) -> Result<Self> {
+        if clean.shape.len() != 3 || clean.shape[0] != 1 {
+            return Err(msg(format!(
+                "ltx2 frozen audio latent {:?}: expected [1, L, C]",
+                clean.shape
+            )));
+        }
+        self.frozen_audio = Some(clean);
+        Ok(self)
+    }
+
+    /// The audio state after a step: the clean latent when the audio is
+    /// frozen (`post_process_latent` with a zero mask), else `stepped()`.
+    pub fn audio_after(
+        cond: Option<&Self>,
+        stepped: impl FnOnce() -> Result<CudaTensor>,
+    ) -> Result<CudaTensor> {
+        match cond.and_then(|c| c.frozen_audio.as_ref()) {
+            Some(clean) => Ok(clean.clone()),
+            None => stepped(),
+        }
     }
 
     /// Rows appended after the grid (keyframes and the reference).
