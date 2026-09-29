@@ -14,6 +14,7 @@
 //! - [`schema`]: the gateway's D1 tables; [`runpod`]: the queue API client.
 
 pub mod dispatch;
+pub mod edge;
 pub mod proxy;
 pub mod routes;
 pub mod runpod;
@@ -113,6 +114,11 @@ pub struct WorkerView {
 impl WorkerView {
     fn usable(&self) -> bool {
         self.healthy && !self.draining
+    }
+    /// Has a base URL the gateway can call (not a worker known only
+    /// through a Durable Object, `do:<id>`).
+    pub fn dialable(&self) -> bool {
+        !self.url.starts_with("do:")
     }
     fn load(&self) -> u32 {
         self.running + self.queued + self.inflight

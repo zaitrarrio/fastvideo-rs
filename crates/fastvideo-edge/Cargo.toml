@@ -1,0 +1,31 @@
+[package]
+name = "fastvideo-edge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cloudflare Worker + per-pool Durable Object dispatcher (workers-rs) for fv-serve GPU workers: push dispatch over WebSockets (docs/serve/gateway-cloudflare.md)."
+
+# The Worker is built for wasm32-unknown-unknown only (scripts/serve/cf-edge.sh);
+# on the host the crate is empty, so workspace builds and tests stay native.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fastvideo-dispatch-proto = { path = "../fastvideo-dispatch-proto" }
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = { version = "=0.8.7", features = ["d1"] }
+# Pinned to the wasm-bindgen CLI scripts/serve/cf-edge.sh downloads: the two
+# must match exactly.
+wasm-bindgen = "=0.2.129"
+js-sys = "0.3.106"
+wasm-bindgen-futures = "0.4.79"
+
+# Not `workspace = true`: the wasm-bindgen / workers-rs macros expand to
+# unsafe FFI glue, which the workspace's `unsafe_code = "forbid"` rejects.
+# This crate's own code has none.
+[lints.clippy]
+all = { level = "warn", priority = -1 }

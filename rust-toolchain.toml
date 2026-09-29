@@ -1,3 +1,6 @@
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]
+# crates/fastvideo-edge (the Cloudflare Worker / Durable Object dispatcher)
+# builds for wasm; docs/serve/gateway-cloudflare.md.
+targets = ["wasm32-unknown-unknown"]

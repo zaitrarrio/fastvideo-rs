@@ -526,7 +526,22 @@ impl App {
                 config.limits.queue_max,
             )
             .with_drain(drained, registration.clone());
-            streams = streams.merge(crate::worker::routes(st));
+            let st = Arc::new(st);
+            // Push dispatch: a socket to the pool's Durable Object
+            // (docs/serve/gateway-cloudflare.md); the internal routes stay.
+            if let (Some(do_url), Some(pool)) = (&config.dispatch.do_url, &config.gateway.pool) {
+                background.push(crate::edge_link::spawn(
+                    st.clone(),
+                    crate::edge_link::LinkCfg {
+                        do_url: do_url.clone(),
+                        pool: pool.clone(),
+                        token: config.gateway.internal_token.expose().to_owned(),
+                        capacity: config.dispatch.capacity,
+                        status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
+                    },
+                ));
+            }
+            streams = streams.merge(crate::worker::routes_shared(st));
         }
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
