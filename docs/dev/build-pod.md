@@ -29,9 +29,10 @@ $B fetch $A release/fv-serve              # -> artifacts/build-pod/$A/release/fv
 $B run $A -- cargo build --release -p fastvideo-gpucheck --features cuda
 $B fetch $A release/fv-gpucheck
 $B run $A -- bash tests/compat/run.sh      # client-compat suites (Node + Chromium on the pod)
-$B status                                 # pod, $/hr, setup, running jobs, disk
+$B status                                 # pod, $/hr, setup, jobs, disk, per-agent sizes + eviction
 $B cancel <job>                           # cancel a job whose client died
 $B clean $A target                        # drop your target dir when you are done
+$B evict                                  # run the eviction pass now (see Limits)
 $B stop                                   # when nobody needs it (it also stops itself)
 ```
 
@@ -47,7 +48,8 @@ connection.
 | Path | What |
 |---|---|
 | container disk `/root/fvb/worktrees/<agent>/` | the agent's snapshot: tracked + untracked, non-ignored files (submodules included) |
-| container disk `/root/fvb/target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental while the pod runs) |
+| container disk `/root/fvb/target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental while the pod runs; evicted when unused, see Limits) |
+| container disk `/root/fvb/.last-use/<agent>` | stamp of the agent's last sync, job or fetch (what eviction goes by) |
 | container disk `/root/fvb/cargo/` | `CARGO_HOME`; its `registry/cache` and `git/db` link to the volume |
 | volume `cargo/registry/cache`, `cargo/git/db` | downloaded crates and git checkouts (shared) |
 | volume `rustup/` | shared `RUSTUP_HOME` (stable + rustfmt + clippy, per `rust-toolchain.toml`) |
@@ -142,10 +144,23 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
   Measured: `FV_SERVE_HEAVY=1 FV_SERVE_UI=1 check.sh` leaves **~45 GB**
   (debug, every feature combination); release fv-serve + fv-gpucheck + the
   CUDA check **2.6 GB**; other agents' test targets 13–21 GB. Three heavy
-  agents fill it, so `clean <agent> target` when done. `status` shows
-  `local_disk` and the volume's usage (a du every 15 min; the volume held
-  ~110 GB, mostly sccache and target dirs of the first, volume-mode pod,
-  which boot now removes).
+  agents fill it (on 2026-09-29 nine finished agents had left 185 GB and
+  27 GB free), so `clean <agent> target` when done. `status` shows
+  `local_disk`, the volume's usage (a du every 15 min) and a per-agent table:
+  idle hours, target/snapshot sizes (a du every 5 min), and hours until
+  eviction.
+- **Eviction** (automatic, on the pod): every minute and after each job, the
+  server removes the target dir and snapshot of every agent unused (no sync,
+  job or fetch) for more than `FV_BUILD_EVICT_HOURS` (6), then, while the
+  container disk has less than `FV_BUILD_EVICT_FREE_GB` (40) free, target dirs
+  in least-recently-used order. An agent with a job running or queued is never
+  touched. Each eviction goes to `logs/pod.log` and `status`
+  (`eviction.recent`). An evicted target dir only costs a cold build (sccache
+  refills it); an evicted snapshot is re-sent by the next `run`. `sync` and
+  `run` that still find less than `FV_BUILD_MIN_FREE_GB` (2) free after a pass
+  fail with `build pod disk full: …` (HTTP 507). The eviction settings are
+  sent at pod creation (`up`); the logic has unit tests,
+  `python3 scripts/dev/test_build_pod_server.py`.
 - **Network volume I/O** is slow for many small files, which is why only
   large-file caches (sccache, `.crate`s, toolchains) live there.
 - **Concurrency:** 4 jobs at once (`FV_BUILD_MAX_JOBS`), one per agent; more
