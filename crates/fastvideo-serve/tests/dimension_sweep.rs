@@ -522,7 +522,11 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             }
             v
         };
-        let (plain, plain_in) = task_inputs[0].clone();
+        // A model with no plain task (the guided audio-to-video companion
+        // serves A2V only): its cases are the API blocks' below.
+        let Some((plain, plain_in)) = task_inputs.first().cloned() else {
+            continue;
+        };
         // Canvas: every tier at every aspect (promised within the aspect range).
         for &se in &caps.canvas.short_edges {
             for a in ASPECTS {
