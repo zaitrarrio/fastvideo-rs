@@ -334,6 +334,33 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   boot().catch((e) => $("#main").replaceChildren(card("Error", e.message)));
 });
+// The editor bundle (CodeMirror 6 + forms, ~140 KiB gzip) loads only on pages that edit or view JSON.
+let editorLoading = null;
+function fvEditor() {
+  if (window.FVEditor) return Promise.resolve(window.FVEditor);
+  editorLoading ||= new Promise((res, rej) => {
+    const sc = document.createElement("script");
+    sc.src = "/editor.js";
+    sc.onload = () => res(window.FVEditor);
+    sc.onerror = () => { editorLoading = null; rej(new Error("could not load the editor")); };
+    document.head.append(sc);
+  });
+  return editorLoading;
+}
+/** A document editor panel (Form / JSON, validate, review, plan, save, history). */
+function docPanel(kind, id, opts = {}) {
+  const host = h("div", { class: "docpanel" }, h("span", { class: "muted small" }, "loading editor…"));
+  fvEditor()
+    .then((E) => E.openDocPanel(host, { kind, id, api, toast, ...opts }))
+    .catch((e) => host.replaceChildren(h("p", { class: "small" }, e.message)));
+  return host;
+}
+/** A read-only JSON tree (search, copy path / value). */
+function jsonTree(value, opts = {}) {
+  const host = h("div", {}, h("span", { class: "muted small" }, "loading viewer…"));
+  fvEditor().then((E) => host.replaceChildren(E.renderTree(value, opts))).catch((e) => host.replaceChildren(h("pre", { class: "log" }, JSON.stringify(value, null, 2))));
+  return host;
+}
 function every(ms, fn) {
   state.timers.push(setInterval(fn, ms));
 }
@@ -482,16 +509,22 @@ async function pagePod(main, id) {
       card("Utilisation, 24 h", lineChart({ series: [{ name: "GPU", points: pts.map((x) => [x.t, x.gpu]) }, { name: "CPU", points: pts.map((x) => [x.t, x.cpu]) }, { name: "memory", points: pts.map((x) => [x.t, x.mem]) }], yFmt: (v) => `${Math.round(v)}%` })),
       card("Running jobs, 24 h", lineChart({ series: [{ name: "jobs", points: pts.map((x) => [x.t, x.jobs]) }] })),
     ),
+    h("div", { class: "grid g2" }, card("Snapshot (JSON)", jsonTree({ pod: p, controller: r.controller, costs: r.costs }, { open: 1 })), card("Metric samples, 24 h (JSON)", jsonTree(series, { open: 1 }))),
   );
 }
 
 // ---------------------------------------------------------------- clusters
 async function pageClusters(main) {
   const [r, tpl] = await Promise.all([api("/api/clusters"), api("/api/templates")]);
-  const ta = h("textarea", { "aria-label": "Cluster spec (JSON)" }, JSON.stringify({ ...tpl["tiny-cpu"], name: "tiny" }, null, 2));
+  const ta = { value: JSON.stringify({ ...tpl["tiny-cpu"], name: "tiny" }, null, 2) };
+  const edHost = h("div", {});
+  let ed = null;
+  Promise.all([fvEditor(), api("/api/schemas"), api("/api/schemas/dynamic")]).then(([E, sc, dyn]) => {
+    ed = E.createJsonEditor({ parent: edHost, doc: ta.value, schema: sc.schemas["cluster-spec"], dynamic: dyn, onChange: (t) => (ta.value = t) });
+  }).catch(() => edHost.replaceChildren(h("textarea", { oninput: (e) => (ta.value = e.target.value) }, ta.value)));
   const tplSel = h(
     "select",
-    { onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : "main" }, null, 2); } },
+    { onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : "main" }, null, 2); ed?.set(ta.value); } },
     h("option", { value: "tiny-cpu" }, "tiny-cpu: CPU gateway + 1 fake-engine CPU worker"),
     h("option", { value: "standard" }, "standard: CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools"),
   );
@@ -522,7 +555,7 @@ async function pageClusters(main) {
       card(
         "Define a cluster",
         h("div", { class: "row", style: "margin-bottom:8px" }, tplSel),
-        ta,
+        edHost,
         h(
           "div",
           { class: "row", style: "margin-top:8px" },
@@ -653,11 +686,14 @@ async function pageCluster(main, id) {
       pods,
       h("div", { class: "grid g2" }, opsCard, tools),
       card("Environment", h("p", { class: "small" }, h("a", { href: `#/env?cluster=${c.id}` }, "Cluster and pod env, effective values, restarts →"))),
-      card("Spec", h("pre", { class: "log" }, JSON.stringify(c.spec, null, 2))),
     );
     if (op) showOp(r.ops.find((o) => o.status === "running")?.id);
   };
+  const live = h("div", {});
+  const outer = main;
+  main = live;
   await draw();
+  outer.replaceChildren(live, card("Spec", h("p", { class: "muted small" }, "Edit the definition: the form and the JSON stay in sync; Review shows the diff and the plan (what would be created, stopped or restarted, and the $/hr against the floor) before saving."), docPanel("cluster-spec", id, { title: "cluster spec", cluster: id })));
   every(10_000, () => draw().catch(() => {}));
 }
 async function showOp(id) {
@@ -697,71 +733,66 @@ async function pageEnv(main) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const clusters = (await api("/api/clusters")).clusters;
   const cid = q.get("cluster") || clusters[0]?.id || "";
-  const acc = await api("/api/env/account");
-  const editor = (scope, sid, vars, title, hint) => {
-    const k = h("input", { placeholder: "NAME", "aria-label": "Variable name" });
-    const v = h("input", { placeholder: "value", "aria-label": "Value" });
-    const sec = h("input", { type: "checkbox", "aria-label": "Secret" });
-    const base = scope === "account" ? "/api/env/account" : `/api/env/${scope}/${encodeURIComponent(sid)}`;
-    return card(
-      title,
-      hint && h("p", { class: "muted small" }, hint),
-      table(
-        [
-          { label: "name", get: (x) => h("code", {}, x.key) },
-          { label: "value", get: (x) => (x.secret ? h("span", { class: "muted" }, "•••••••• (secret)") : h("code", {}, x.value)), wrap: true },
-          { label: "by", get: (x) => `${x.updated_by}, ${ago(x.updated_at)}` },
-          { label: "", get: (x) => h("button", { class: "ghost danger", onclick: async () => { if (confirm(`Delete ${x.key}?`)) { await act("delete", () => api(`${base}/${encodeURIComponent(x.key)}`, { method: "DELETE" })); route(); } } }, "Delete") },
-        ],
-        vars,
-        "No variables at this level.",
-      ),
-      h(
-        "div",
-        { class: "row", style: "margin-top:8px" },
-        k, v, h("label", { style: "flex-direction:row;align-items:center;gap:5px" }, sec, "secret"),
-        h("button", { class: "primary", onclick: async () => { await act("set", () => api(`${base}/${encodeURIComponent(k.value.trim())}`, { method: "PUT", body: { value: v.value, secret: sec.checked } })); route(); } }, "Set"),
-      ),
-    );
-  };
-  const parts = [h("h1", {}, "Environment"), h("p", { class: "muted small" }, "Resolution: pod > cluster > account > the controller's own keys (which cannot be overridden). Runpod applies an env change only on a restart (PATCH): the table below marks the pods that need one."), editor("account", "", acc.vars, "Account (every controller cluster)")];
-  const sel = h("select", { onchange: () => { location.hash = `#/env?cluster=${sel.value}`; } }, clusters.map((c) => h("option", { value: c.id, selected: c.id === cid }, c.name)));
+  const sel = h("select", { "aria-label": "Cluster", onchange: () => { location.hash = `#/env?cluster=${sel.value}`; } }, clusters.map((c) => h("option", { value: c.id, selected: c.id === cid }, c.name)));
+  const parts = [
+    h("h1", {}, "Environment"),
+    h("p", { class: "muted small" }, "Resolution: pod > cluster > account > the controller's own keys (which cannot be overridden). Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one."),
+    card("Account (every controller cluster)", docPanel("env", "account", { title: "env: account" })),
+  ];
   if (cid) {
-    const [cv, eff] = await Promise.all([api(`/api/env/cluster/${cid}`), api(`/api/clusters/${cid}/env`)]);
+    const eff = await api(`/api/clusters/${cid}/env`);
     parts.push(h("div", { class: "row", style: "margin-bottom:12px" }, h("label", {}, "Cluster", sel)));
-    parts.push(editor("cluster", cid, cv.vars, "Cluster"));
-    const needs = eff.needs_restart;
-    parts.push(
-      card(
-        "Effective env per pod",
-        needs.length
-          ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? Workers first, the gateway last; each must come back before the next.`)) { await act("restart", () => api(`/api/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
-          : h("p", { class: "small" }, badge("every pod has its env", "good")),
-        eff.pods.length ? eff.pods.map((p) => h("details", {}, h("summary", {}, `${p.role} ${p.pool || ""} ${p.pod_id} `, p.needs_restart ? badge("needs restart", "warn") : ""), envTable(p.env), h("div", { class: "muted small" }, "Pod-level variables:"), podEnvEditor(p.pod_id))) : h("p", { class: "muted small" }, "No pods running; what a new pod would get:"),
-        !eff.pods.length && Object.entries(eff.preview).map(([k, env]) => h("details", {}, h("summary", {}, k), envTable(env))),
-      ),
-    );
+    parts.push(card("Cluster", docPanel("env", `cluster:${cid}`, { title: "env: cluster", cluster: cid, onSaved: () => refreshEff() })));
+    const effBox = h("div", {});
+    const refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/clusters/${cid}/env`), cid));
+    effBox.replaceChildren(effView(eff, cid));
+    parts.push(card("Effective env per pod", effBox));
   } else parts.push(card("Clusters", h("p", { class: "muted small" }, "Define a cluster to set cluster and pod env.")));
   main.replaceChildren(...parts);
-  async function fillPod(el, pod) {
-    const pv = await api(`/api/env/pod/${pod}`);
-    el.replaceChildren(editor("pod", pod, pv.vars, null));
-  }
-  function podEnvEditor(pod) {
-    const el = h("div", {});
-    fillPod(el, pod).catch(() => {});
-    return el;
-  }
+}
+function effView(eff, cid) {
+  const needs = eff.needs_restart;
+  const head = needs.length
+    ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? Workers first, the gateway last; each must come back before the next.`)) { await act("restart", () => api(`/api/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
+    : h("p", { class: "small" }, badge("every pod has its env", "good"));
+  if (!eff.pods.length) return h("div", {}, head, h("p", { class: "muted small" }, "No pods running; what a new pod would get:"), Object.entries(eff.preview).map(([k, env]) => h("details", {}, h("summary", {}, k), envTable(env))));
+  return h(
+    "div",
+    {},
+    head,
+    h("p", { class: "muted small" }, "Highlighted: a value that overrides a lower level. Marked at the left: a conflict (two of your levels set the key to different values)."),
+    eff.pods.map((p) => {
+      const conflicts = p.env.filter((v) => (v.overrides || []).some((x) => x !== "system")).length;
+      const podHost = h("div", {});
+      const det = h(
+        "details",
+        {},
+        h("summary", {}, `${p.role} ${p.pool || ""} ${p.pod_id} `, p.needs_restart ? badge("needs restart", "warn") : badge("applied", "good"), conflicts ? " " : "", conflicts ? badge(`${conflicts} conflict(s)`, "serious") : ""),
+        envTable(p.env),
+        h("h3", {}, "Pod-level variables"),
+        podHost,
+      );
+      det.addEventListener("toggle", () => { if (det.open && !podHost.childElementCount) podHost.append(docPanel("env", `pod:${p.pod_id}`, { title: `env: pod ${p.pod_id}`, cluster: cid })); });
+      return det;
+    }),
+  );
 }
 function envTable(env) {
-  return table(
+  const tb = table(
     [
       { label: "name", get: (x) => h("code", {}, x.key) },
       { label: "value", get: (x) => (x.secret ? h("span", { class: "muted" }, "•••••••• secret") : x.runpod_secret_ref ? h("span", {}, h("code", {}, x.value), " ", badge("Runpod secret")) : h("code", {}, x.value)), wrap: true },
-      { label: "source", get: (x) => `${x.source}${x.overrides ? ` (over ${x.overrides.join(", ")})` : ""}` },
+      { label: "source", get: (x) => h("span", {}, badge(x.source, x.source === "pod" ? "serious" : x.source === "cluster" ? "warn" : x.source === "account" ? "good" : ""), x.overrides ? h("span", { class: "muted small" }, ` over ${x.overrides.join(", ")}`) : "") },
     ],
     env,
   );
+  // Rows: highlight overrides, mark conflicts between user levels.
+  const rows = tb.querySelectorAll("tbody tr");
+  env.forEach((x, i) => {
+    if (x.overrides) rows[i]?.classList.add("env-override");
+    if ((x.overrides || []).some((y) => y !== "system")) rows[i]?.classList.add("env-conflict");
+  });
+  return tb;
 }
 
 // ---------------------------------------------------------------- logs
@@ -882,37 +913,36 @@ async function pageReleases(main) {
     ),
     card("Cluster drift", table([{ label: "cluster", get: (d) => d.cluster }, { label: "channel", get: (d) => d.channel || "–" }, { label: "running", get: (d) => d.running_sha || "?" }, { label: "head", get: (d) => d.head_sha || "?" }, { label: "", get: (d) => (d.drift ? badge("drift", "warn") : badge("in step", "good")) }], rel.drift, "No clusters.")),
     card("History", table([{ label: "id", get: (r) => r.id, num: true }, { label: "channel", get: (r) => r.channel }, { label: "sha", get: (r) => h("code", {}, r.git_sha.slice(0, 7)) }, { label: "action", get: (r) => r.action }, { label: "when", get: (r) => dt(r.promoted_at) }, { label: "by", get: (r) => r.promoted_by }, { label: "rolled back", get: (r) => (r.rolled_back_at ? "yes" : "") }], rel.history)),
+    card("Release records (JSON)", jsonTree({ heads: rel.heads, history: rel.history }, { open: 1 })),
     card("Deployment registry (fv-jobs)", table([{ label: "resource", get: (r) => r.id }, { label: "pool", get: (r) => r.pool || "" }, { label: "variant", get: (r) => r.variant || "" }, { label: "sha", get: (r) => (r.git_sha || "").slice(0, 7) }, { label: "status", get: (r) => r.status }, { label: "by", get: (r) => r.created_by }, { label: "created", get: (r) => ago(r.created_at) }], rel.registry.slice(0, 50))),
   );
 }
 
 // ---------------------------------------------------------------- settings
 async function pageSettings(main) {
-  const [pol, tok, aud] = await Promise.all([api("/api/policies"), api("/api/tokens"), api("/api/audit?limit=100")]);
-  const p = pol.policies;
-  const fields = {};
-  const num = (k, label) => h("label", {}, label, (fields[k] = h("input", { type: "number", step: "any", value: p[k], style: "width:110px" })));
-  const bool = (k, label) => h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, (fields[k] = h("input", { type: "checkbox", checked: !!p[k] })), label);
+  const [tok, aud] = await Promise.all([api("/api/tokens"), api("/api/audit?limit=100")]);
   const tName = h("input", { placeholder: "token name", "aria-label": "Token name" });
   const tScope = h("select", { "aria-label": "Scope" }, h("option", { value: "read" }, "read"), h("option", { value: "admin" }, "admin"));
+  const tTtl = h("input", { type: "number", min: 1, max: 365, value: 90, "aria-label": "Days", style: "width:80px" });
   const tOut = h("pre", { class: "log", hidden: true });
+  const auditView = h("div", {});
+  const parse = (x) => { try { return JSON.parse(x); } catch { return x; } };
   main.replaceChildren(
     h("h1", {}, "Settings"),
-    card(
-      "Alert policies",
-      h("div", { class: "row" }, num("idle_gpu_pct", "idle: GPU below %"), num("idle_min", "idle alert after min"), num("cluster_dph_max", "cluster $/hr above"), num("daily_spend_max", "daily spend above $"), num("balance_margin", "balance margin over floor $"), num("pod_down_min", "pod down after min")),
-      h("div", { class: "row", style: "margin-top:10px" }, bool("auto_stop_idle", "Auto-remove idle workers of controller clusters after"), num("auto_stop_idle_min", "min"), bool("stop_on_floor", "Stop controller clusters below the balance floor")),
-      h("p", { class: "muted small" }, "Auto-actions touch controller clusters only, never external pods. The deadline backstop always applies."),
-      h("button", { class: "primary", onclick: async () => { const b = {}; for (const [k, el] of Object.entries(fields)) b[k] = el.type === "checkbox" ? el.checked : Number(el.value); await act("policies", () => api("/api/policies", { method: "PUT", body: b })); } }, "Save"),
-      h("h3", {}, "External pod attribution (name prefix → owner)"),
-      table([{ label: "prefix", get: (r) => h("code", {}, r.prefix) }, { label: "owner", get: (r) => r.owner }], p.attribution),
-    ),
+    card("Alert policies", h("p", { class: "muted small" }, "Auto-actions touch controller clusters only, never external pods. The deadline backstop always applies."), docPanel("policies", "default", { title: "policies" })),
+    card("External pod attribution (name prefix → owner; first match wins)", docPanel("attribution", "default", { title: "attribution rules" })),
     card(
       "API tokens (scripts/serve/fv-control.sh, agents)",
       table([{ label: "name", get: (t) => t.name }, { label: "scope", get: (t) => t.scope }, { label: "created", get: (t) => ago(t.created_at) }, { label: "last used", get: (t) => ago(t.last_used_at) }, { label: "expires", get: (t) => dt(t.expires_at) }, { label: "", get: (t) => (t.revoked_at ? "revoked" : h("button", { class: "ghost danger", onclick: async () => { await act("revoke", () => api(`/api/tokens/${t.id}`, { method: "DELETE" })); route(); } }, "Revoke")) }], tok.tokens, "No tokens."),
-      h("div", { class: "row", style: "margin-top:8px" }, tName, tScope, h("button", { onclick: async () => { const j = await act("mint", () => api("/api/tokens", { method: "POST", body: { name: tName.value, scope: tScope.value, ttl_days: 90 } })); tOut.hidden = false; tOut.textContent = `${j.token}\n(shown once; expires ${dt(j.expires_at)})`; } }, "Mint token")),
+      h("div", { class: "row", style: "margin-top:8px" }, tName, tScope, h("label", { style: "flex-direction:row;align-items:center;gap:4px" }, tTtl, "days"), h("button", { onclick: async () => { const j = await act("mint", () => api("/api/tokens", { method: "POST", body: { name: tName.value, scope: tScope.value, ttl_days: Number(tTtl.value) } })); tOut.hidden = false; tOut.textContent = `${j.token}\n(shown once; expires ${dt(j.expires_at)})`; } }, "Mint token")),
+      h("p", { class: "muted small" }, "read: GET only · admin: everything but minting tokens (validated against the token-create schema)."),
       tOut,
     ),
-    card("Audit log", table([{ label: "when", get: (a) => dt(a.at) }, { label: "who", get: (a) => a.actor }, { label: "action", get: (a) => a.action }, { label: "target", get: (a) => a.target || "" }, { label: "ok", get: (a) => (a.ok ? "" : badge("failed", "critical")) }, { label: "detail", get: (a) => [a.detail, a.after].filter(Boolean).join(" ").slice(0, 160), wrap: true }], aud.audit)),
+    card(
+      "Audit log",
+      h("p", { class: "muted small" }, "Click an entry to inspect its before / after."),
+      table([{ label: "when", get: (a) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); auditView.replaceChildren(h("h3", {}, `#${a.id} ${a.action} ${a.target || ""}`), jsonTree({ ...a, before: parse(a.before), after: parse(a.after) }, { open: 2 })); auditView.scrollIntoView({ block: "nearest" }); } }, dt(a.at)) }, { label: "who", get: (a) => a.actor }, { label: "action", get: (a) => a.action }, { label: "target", get: (a) => a.target || "" }, { label: "ok", get: (a) => (a.ok ? "" : badge("failed", "critical")) }, { label: "detail", get: (a) => (a.detail || "").slice(0, 120), wrap: true }], aud.audit),
+      auditView,
+    ),
   );
 }
