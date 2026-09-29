@@ -250,6 +250,56 @@ await step("log shipping: ingest, search, level filter, live tail, download, aut
   assert.ok(!JSON.stringify(rl).includes(SECRETS.RUNPOD_API_KEY));
 });
 
+await step("schemas, dynamic values and the document API (versions, validation, plan, history, restore)", async () => {
+  const sc = (await call("/api/schemas", { headers: T() })).j;
+  assert.ok(sc.schemas["cluster-spec"].properties.pools);
+  assert.equal(sc.documents.env, "env");
+  const dyn = (await call(`/api/schemas/dynamic?cluster=${cid}`, { headers: T() })).j;
+  assert.equal(dyn.gpu_types.length, 3);
+  assert.equal(dyn.gpu_types[0].secure_price, 2.09, "sorted by price");
+  assert.deepEqual(dyn.pools, ["fake"]);
+  assert.ok(dyn.env_keys.includes("HF_TOKEN"));
+  assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "jg48s6o1w0");
+  const d = (await call(`/api/docs/cluster-spec/${cid}`, { headers: T() })).j;
+  assert.equal(d.schema, "cluster-spec");
+  const v0 = d.version;
+  const bad = (await call(`/api/docs/cluster-spec/${cid}/validate`, { method: "POST", body: { doc: { ...d.doc, cap_s: 5, image: { channel: "stable", sha: "abcdef1" } } }, headers: T() })).j;
+  assert.equal(bad.ok, false);
+  assert.ok(bad.issues.some((i) => i.path.join(".") === "cap_s"));
+  assert.ok(bad.issues.some((i) => /exactly one/.test(i.message)));
+  const put400 = await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: { ...d.doc, cap_s: 5 }, version: v0 }, headers: T() });
+  assert.equal(put400.status, 400);
+  assert.ok(put400.j.issues.length);
+  const plan = (await call(`/api/docs/cluster-spec/${cid}/plan`, { method: "POST", body: { doc: { ...d.doc, pools: [{ ...d.doc.pools[0], count: 3 }] } }, headers: T() })).j;
+  assert.equal(plan.ok, true);
+  assert.ok(plan.projection.cluster_dph > 0);
+  const ok = await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: { ...d.doc, max_gpu_dph: 3 }, version: v0 }, headers: T() });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.equal(ok.j.version, v0 + 1);
+  const stale = await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: { ...d.doc, max_gpu_dph: 4 }, version: v0 }, headers: T() });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.j.current_version, v0 + 1);
+  assert.equal((await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: d.doc }, headers: T() })).status, 400, "a version is required");
+  const hist = (await call(`/api/docs/cluster-spec/${cid}/history`, { headers: T() })).j.history;
+  assert.equal(hist[0].after.max_gpu_dph, 3);
+  const rs = await call(`/api/docs/cluster-spec/${cid}/restore`, { method: "POST", body: { audit_id: hist[0].audit_id, which: "before", version: v0 + 1 }, headers: T() });
+  assert.equal(rs.status, 200, JSON.stringify(rs.j));
+  assert.equal(rs.j.doc.max_gpu_dph, d.doc.max_gpu_dph);
+  // Env document: secrets never come back.
+  const e = (await call(`/api/docs/env/cluster:${cid}`, { headers: T() })).j;
+  assert.deepEqual(e.doc.HF_TOKEN, { value: null, secret: true });
+  const e2 = await call(`/api/docs/env/cluster:${cid}`, { method: "PUT", body: { doc: { ...e.doc, NEW_SECRET: { value: null, secret: true, set: "s3cr3t_new_value" } }, version: e.version }, headers: T() });
+  assert.equal(e2.status, 200, JSON.stringify(e2.j));
+  assert.deepEqual(e2.j.doc.NEW_SECRET, { value: null, secret: true });
+  assert.ok(!bodies.join("").includes("s3cr3t_new_value"));
+  // The legacy per-key route bumps the same version.
+  await call(`/api/env/cluster/${cid}/OTHER`, { method: "PUT", body: { value: "1" }, headers: T() });
+  assert.equal((await call(`/api/docs/env/cluster:${cid}`, { headers: T() })).j.version, e2.j.version + 1);
+  await call(`/api/env/cluster/${cid}/OTHER`, { method: "DELETE", headers: T() });
+  await call(`/api/env/cluster/${cid}/NEW_SECRET`, { method: "DELETE", headers: T() });
+  assert.equal((await call("/api/tokens", { method: "POST", body: { name: "x", scope: "root" }, headers: { cookie, "x-csrf-token": csrf } })).status, 400, "token scope validated by schema");
+});
+
 await step("scale a pool up and down (drain first)", async () => {
   assert.equal((await call(`/api/clusters/${cid}/scale`, { method: "POST", body: { pool: "fake", count: 2 }, headers: T() })).status, 202);
   let op = await waitOp(cid, "scale");
@@ -366,7 +416,7 @@ await step("import a runpod-cluster.sh state (and stop it through the controller
 await step("audit log; no secret in any response", async () => {
   const a = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
   const actions = new Set(a.map((x) => x.action));
-  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "policies.update"]) assert.ok(actions.has(want), `audit has ${want}`);
+  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
   assert.ok(a.some((x) => x.action === "auth.login" && x.ok === 0), "failed logins are audited");
   const envSet = a.find((x) => x.action === "env.set" && x.target.includes("HF_TOKEN"));
   assert.ok(!envSet.after.includes("hf_supersecret"));

@@ -78,20 +78,86 @@ try {
   await page.waitForSelector("h1:has-text('tiny')");
   assert.ok(await page.isVisible("text=Stop (delete pods)"));
   await page.screenshot({ path: `${out}/04-cluster.png`, fullPage: true });
-  // Set a secret env var through the UI; it shows masked.
+  // ---- the smart editor: edit → invalid → error shown → fix → diff → plan → save → history → restore.
+  await page.goto(`${B}/#/cluster/${c.cluster.id}`);
+  await page.waitForSelector(".fv-panel[data-kind=cluster-spec] .fv-form");
+  const panel = ".fv-panel[data-kind=cluster-spec]";
+  assert.equal(await page.textContent(`${panel} .badge`), "v0");
+  // Form: the pools table and a toggle are there.
+  assert.ok(await page.isVisible(`${panel} .fv-table table`), "pools table");
+  await page.click(`${panel} .tabs button:text('JSON')`);
+  await page.waitForSelector(`${panel} .cm-content`);
+  const setDoc = (fn) => page.evaluate(([sel, src]) => {
+    const view = window.FVEditor.viewOf(document.querySelector(sel + " .cm-editor"));
+    const f = new Function("t", src);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: f(view.state.doc.toString()) } });
+  }, [panel, fn]);
+  await setDoc(`return t.replace(/"cap_s": \\d+/, '"cap_s": 1')`);
+  await page.waitForSelector(`${panel} .cm-lintRange-error`);
+  await page.waitForSelector(`${panel} .fv-issues li:has-text("cap_s")`);
+  await page.screenshot({ path: `${out}/08-editor-invalid.png`, fullPage: false });
+  // Hover docs from the schema.
+  const capKey = await page.$(`${panel} .cm-content >> text=cap_s`);
+  await capKey.hover();
+  await page.waitForSelector(".cm-tooltip-hover:has-text('Backstop')");
+  // Completion of keys: an optional key that is not in the document.
+  await page.evaluate((sel) => { const v = window.FVEditor.viewOf(document.querySelector(sel + " .cm-editor")); const p = v.state.doc.toString().indexOf("{") + 1; v.dispatch({ selection: { anchor: p }, changes: { from: p, insert: "\n  \"log_l" } }); v.focus(); }, panel);
+  await page.keyboard.press("Control+Space");
+  await page.waitForSelector(".cm-tooltip-autocomplete li:has-text('log_level')");
+  await page.keyboard.press("Escape");
+  // Fix: a valid cap_s, and a pool count change in the form.
+  await setDoc(`return t.replace(/\\n  "log_l/, "").replace(/"cap_s": 1\\b/, '"cap_s": 3000')`);
+  await page.waitForSelector(`${panel} .fv-status.ok`);
+  await page.click(`${panel} .tabs button:text('Form')`);
+  const count = await page.$(`${panel} .fv-table tbody tr:first-child input[type=number]`);
+  await count.fill("2");
+  await page.click(`${panel} button:text('Review, plan & save')`);
+  await page.waitForSelector(`${panel} .fv-diff .add`);
+  await page.waitForSelector(`${panel} .fv-plan li`);
+  const planText = await page.textContent(`${panel} .fv-plan`);
+  assert.match(planText, /more worker|Scale fake to 2/, planText);
+  assert.match(planText, /within the floor|over the floor/);
+  await page.screenshot({ path: `${out}/09-editor-review.png`, fullPage: false });
+  await page.click(`${panel} button:has-text('Save (v0')`);
+  await page.waitForFunction((sel) => document.querySelector(sel + " .badge")?.textContent === "v1", panel);
+  // A stale edit elsewhere is refused.
+  const stale = await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ doc: {}, version: 0 }) });
+  assert.ok(stale.status === 409 || stale.status === 400);
+  // History and restore.
+  await page.click(`${panel} button:text('History')`);
+  await page.waitForSelector(`${panel} .fv-history details summary`);
+  await page.click(`${panel} .fv-history details summary`);
+  await page.click(`${panel} button:text('Restore the version before it')`);
+  await page.waitForFunction((sel) => document.querySelector(sel + " .badge")?.textContent === "v2", panel);
+  const spec = await (await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  assert.equal(spec.doc.cap_s, 3600, "restored");
+  assert.equal(spec.doc.pools[0].count, 1);
+
+  // ---- env editor: a secret through the write-only field never reaches the page.
   await page.goto(`${B}/#/env?cluster=${c.cluster.id}`);
-  await page.waitForSelector("h1:text('Environment')");
-  const inputs = await page.$$("section.card input[placeholder=NAME]");
-  await inputs[1].fill("HF_TOKEN");
-  const vals = await page.$$("section.card input[placeholder=value]");
-  await vals[1].fill("hf_ui_secret");
-  const secs = await page.$$("section.card input[type=checkbox]");
-  await secs[1].check();
-  const sets = await page.$$("section.card button.primary:text('Set')");
-  await sets[1].click();
-  await page.waitForSelector("text=pod(s) need a restart");
-  assert.ok(!(await page.content()).includes("hf_ui_secret"), "the secret is never rendered");
-  await page.screenshot({ path: `${out}/05-env.png`, fullPage: true });
+  const envp = ".fv-panel[data-kind=env]";
+  await page.waitForSelector(`${envp} .fv-table`);
+  await page.fill(`${envp} input[aria-label="new key"]`, "HF_TOKEN");
+  await page.click(`${envp} button:text('+ add')`);
+  await page.check(`${envp} tr[data-key=HF_TOKEN] input[type=checkbox]`);
+  await page.fill(`${envp} tr[data-key=HF_TOKEN] input[type=password]`, "hf_editor_secret");
+  await page.click(`${envp} .tabs button:text('JSON')`);
+  assert.ok(!(await page.textContent(`${envp} .cm-content`)).includes("hf_editor_secret"), "JSON tab masks the pending secret");
+  await page.click(`${envp} button:text('Review & save')`);
+  await page.waitForSelector(`${envp} .fv-diff .add`);
+  await page.click(`${envp} button:has-text('Save (v')`);
+  await page.waitForFunction((sel) => document.querySelector(sel + " .badge")?.textContent === "v1", envp);
+  assert.ok(!(await page.content()).includes("hf_editor_secret"), "the secret is never rendered");
+  await page.waitForSelector("details summary:has-text('needs restart'), p:has-text('No pods running')");
+  await page.screenshot({ path: `${out}/10-env-editor.png`, fullPage: true });
+
+  // ---- read-only JSON tree: search and copy.
+  const pods = await (await fetch(`${B}/api/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  await page.goto(`${B}/#/pod/${pods.pods[0].pod_id}`);
+  await page.waitForSelector(".fv-tree input[type=search]");
+  await page.fill(".fv-tree input[type=search]", "cost_per_hr");
+  await page.waitForSelector(".fv-thead.hit");
+  await page.screenshot({ path: `${out}/11-tree.png`, fullPage: false });
 
   // Dark mode.
   await page.goto(`${B}/#/`);

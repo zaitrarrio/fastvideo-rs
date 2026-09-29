@@ -17,7 +17,10 @@ import type { Env, Vars } from "./env";
 import { deleteVar, listVars, maskRow, resolveView, setVar, type Scope } from "./envvars";
 import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
+import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
+import { dynamicEnums } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
+import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
@@ -206,12 +209,9 @@ app.get("/api/clusters/:id", async (c) => {
 app.put("/api/clusters/:id/spec", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const b = await body(c);
-  const spec = normalizeSpec({ ...(b.spec || b), name: cl.name });
-  const before = cl.spec;
-  cl.spec = spec;
-  await saveSpec(c.env, cl);
-  await auditC(c, { action: "cluster.spec", target: cl.name, before, after: spec });
-  return c.json({ cluster: clusterView(cl) });
+  const doc = normalizeSpec({ ...(b.spec || b), name: cl.name });
+  await saveDoc(c.env, "cluster-spec", cl.id, doc, { version: b.version, actor: actor(c), ip: clientIp(c) });
+  return c.json({ cluster: clusterView(await getCluster(c.env, cl.id)) });
 });
 app.delete("/api/clusters/:id", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
@@ -364,11 +364,13 @@ async function putVar(c: C, scope: Scope, sid: string, key: string) {
   const b = await body<{ value?: string; secret?: boolean }>(c);
   if (scope === "cluster") await getCluster(c.env, sid);
   const r = await setVar(c.env, scope, sid, key, String(b.value ?? ""), !!b.secret, actor(c));
+  await bumpDoc(c.env, "env", scope === "account" ? "account" : `${scope}:${sid}`, actor(c));
   await auditC(c, { action: "env.set", target: `${scope}:${sid || "-"}:${key}`, before: r.before, after: r.after });
   return c.json({ ok: true, ...r.after, key });
 }
 async function delVar(c: C, scope: Scope, sid: string, key: string) {
   const r = await deleteVar(c.env, scope, sid, key);
+  await bumpDoc(c.env, "env", scope === "account" ? "account" : `${scope}:${sid}`, actor(c));
   await auditC(c, { action: "env.delete", target: `${scope}:${sid || "-"}:${key}`, before: r.before });
   return c.json({ ok: true });
 }
@@ -391,24 +393,10 @@ app.post("/api/alerts/:id/resolve", async (c) => {
 app.get("/api/policies", async (c) => c.json({ policies: await policies(c.env), defaults: DEFAULT_POLICIES }));
 app.put("/api/policies", async (c) => {
   const b = await body<any>(c);
-  const before = await policies(c.env);
-  const next: any = { ...before };
-  for (const k of Object.keys(DEFAULT_POLICIES) as (keyof typeof DEFAULT_POLICIES)[]) {
-    if (!(k in b)) continue;
-    const d = DEFAULT_POLICIES[k];
-    if (typeof d === "number") {
-      const v = Number(b[k]);
-      if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `${k}: a number >= 0`);
-      next[k] = v;
-    } else if (typeof d === "boolean") next[k] = !!b[k];
-    else if (k === "attribution") {
-      if (!Array.isArray(b[k]) || b[k].some((r: any) => typeof r?.prefix !== "string" || typeof r?.owner !== "string")) throw new HttpError(400, "attribution: [{prefix, owner}]");
-      next[k] = b[k].slice(0, 50);
-    }
-  }
-  await putSetting(c.env, "policies", next, actor(c));
-  await auditC(c, { action: "policies.update", before, after: next });
-  return c.json({ policies: next });
+  const next = { ...(await policies(c.env)), ...b };
+  delete next.version;
+  const r = await saveDoc(c.env, "policies", "default", next, { version: b.version, actor: actor(c), ip: clientIp(c) });
+  return c.json({ policies: r.doc, version: r.version });
 });
 
 // ---------------- logs
@@ -460,6 +448,8 @@ app.get("/api/images/tags", async (c) => {
 app.get("/api/github/ci", async (c) => c.json(await ciStatus(c.env)));
 app.post("/api/github/release", async (c) => {
   const b = await body(c);
+  const v = validate("release-dispatch", b);
+  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
   const r = await dispatchRelease(c.env, b);
   await auditC(c, { action: `release.${b.action}`, target: b.channel || "stable", after: r.inputs });
   return c.json(r, 202);
@@ -473,8 +463,9 @@ app.get("/api/tokens", async (c) => {
 app.post("/api/tokens", async (c) => {
   if (c.get("authKind") === "token") throw new HttpError(403, "API tokens cannot mint tokens");
   const b = await body<{ name?: string; scope?: string; ttl_days?: number }>(c);
-  const name = String(b.name || "");
-  if (!/^[A-Za-z0-9._-]{1,40}$/.test(name)) throw new HttpError(400, "name: 1-40 of [A-Za-z0-9._-]");
+  const v = validate("token-create", { scope: "admin", ...b });
+  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
+  const name = String(b.name);
   const scope = b.scope === "read" ? "read" : "admin";
   const t = await mintApiToken(c.env, name, scope, actor(c), b.ttl_days ? Number(b.ttl_days) : 90);
   await auditC(c, { action: "token.mint", target: t.id, after: { name, scope, expires_at: t.expires_at } });
@@ -491,6 +482,47 @@ app.get("/api/audit", async (c) => {
   return c.json({ audit: r.results || [] });
 });
 app.post("/api/collect", async (c) => c.json(await collect(c.env)));
+
+// ---------------- schemas and editable documents (src/schemas.ts, src/docs.ts)
+app.get("/api/schemas", (c) => c.json({ schemas: jsonSchemas(), documents: SCHEMA_OF }));
+app.get("/api/schemas/dynamic", async (c) => c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined)));
+app.get("/api/schemas/:name", (c) => {
+  const s = jsonSchemas()[c.req.param("name")];
+  if (!s) throw new HttpError(404, "no such schema");
+  return c.json(s);
+});
+const kindOf = (k: string): DocKind => {
+  if (!DOC_KINDS.includes(k as DocKind)) throw new HttpError(404, `document kinds: ${DOC_KINDS.join(", ")}`);
+  return k as DocKind;
+};
+app.get("/api/docs/:kind/:id", async (c) => {
+  const kind = kindOf(c.req.param("kind"));
+  const id = await canonicalId(c.env, kind, c.req.param("id"));
+  return c.json({ kind, id, schema: SCHEMA_OF[kind], version: await docVersion(c.env, kind, id), doc: await readDoc(c.env, kind, id) });
+});
+app.post("/api/docs/:kind/:id/validate", async (c) => {
+  const kind = kindOf(c.req.param("kind"));
+  const id = await canonicalId(c.env, kind, c.req.param("id"));
+  const r = await validateDoc(c.env, kind, id, (await body(c)).doc);
+  return c.json({ ok: r.ok, issues: r.issues });
+});
+app.post("/api/docs/:kind/:id/plan", async (c) => {
+  if (c.req.param("kind") !== "cluster-spec") throw new HttpError(400, "plans are for cluster-spec documents");
+  return c.json(await planSpec(c.env, c.req.param("id"), (await body(c)).doc));
+});
+app.put("/api/docs/:kind/:id", async (c) => {
+  const kind = kindOf(c.req.param("kind"));
+  const b = await body<{ doc?: unknown; version?: number }>(c);
+  if (typeof b.version !== "number") throw new HttpError(400, "version: the version you loaded (optimistic concurrency)");
+  return c.json(await saveDoc(c.env, kind, c.req.param("id"), b.doc, { version: b.version, actor: actor(c), ip: clientIp(c) }));
+});
+app.get("/api/docs/:kind/:id/history", async (c) => c.json({ history: await docHistory(c.env, kindOf(c.req.param("kind")), c.req.param("id")) }));
+app.post("/api/docs/:kind/:id/restore", async (c) => {
+  const kind = kindOf(c.req.param("kind"));
+  const b = await body<{ audit_id?: number; which?: "after" | "before"; version?: number }>(c);
+  if (typeof b.version !== "number") throw new HttpError(400, "version: the version you loaded");
+  return c.json(await restoreDoc(c.env, kind, c.req.param("id"), Number(b.audit_id), b.which === "before" ? "before" : "after", { version: b.version, actor: actor(c), ip: clientIp(c) }));
+});
 
 app.all("/api/*", () => {
   throw new HttpError(404, "no such route");

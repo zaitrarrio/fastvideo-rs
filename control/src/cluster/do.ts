@@ -3,6 +3,7 @@
 // step machine driven by alarms, so a 30-minute rolling redeploy never
 // depends on one request staying open. It also fans ingested log lines
 // out to live-tail WebSockets (hibernation API).
+import { bumpDoc } from "../docs";
 import type { Env } from "../env";
 import { resolveDigest, resolveClusterImages } from "../ghcr";
 import { runpod } from "../runpod";
@@ -346,6 +347,7 @@ export class ClusterOps implements DurableObject {
       if (!Number.isInteger(count) || count < 0 || count > 8) return { done: true, error: "count: 0-8" };
       pool.count = count;
       await saveSpec(env, c);
+      await bumpDoc(env, "cluster-spec", c.id, op.actor);
       if (count > cur.length) {
         const hours = Math.max(0.1, ((c.deadline || now()) - now()) / 3_600_000);
         const proj = await projectSpend(env, c.spec, { hours, extraOnly: { pool: poolId, count: count - cur.length } });

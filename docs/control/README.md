@@ -484,6 +484,8 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET /api/logs?pod=&q=&level=&since=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
 | `GET /api/releases`, `/api/images/tags?filter=`, `/api/github/ci`, `POST /api/github/release` | channels, drift, registry, GHCR tags, CI on main, promote/rollback dispatch |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/<id>`, `GET /api/audit` | tokens and audit |
+| `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` | JSON Schemas and live values (section 13) |
+| `GET/PUT /api/docs/<kind>/<id>`, `POST …/validate`, `POST …/plan`, `GET …/history`, `POST …/restore` | editable documents with versions (section 13) |
 | `POST /api/collect` | run the collector now |
 | `POST /ingest/v1/logs` | log ingest (cluster ingest token) |
 
@@ -596,3 +598,226 @@ Log shipping could not be exercised live: `2cd1ba0` predates
 Runpod log tab showed their output. Shipping is covered by the fv-serve
 unit tests and the integration test's ingest path. It turns on for a
 cluster started from an image built after this change.
+
+## 13. Editors (specs and JSON)
+
+Every JSON document the controller edits has a schema, a smart editor, a
+generated form, and the same safety path: validate, review the diff (and
+the plan for a cluster spec), save against the loaded version, then
+history and restore.
+
+### Schemas
+
+`control/src/schemas.ts` defines the schemas in zod. They are the one
+source for:
+
+- **server-side validation** on every write path: the document API, the
+  older `PUT /api/clusters/<id>/spec`, `PUT /api/policies`, `POST /api/tokens`
+  and `POST /api/github/release`;
+- **JSON Schema** (draft 2020-12, `z.toJSONSchema`) served at
+  `GET /api/schemas` and `GET /api/schemas/<name>`;
+- **compile-time checks** against the TypeScript types. The `_check*`
+  assignments at the bottom of the file break `tsc` if `ClusterSpec`,
+  `PoolSpec` or `Policies` drift from their schemas.
+
+| schema | document |
+|---|---|
+| `cluster-spec` (with `pool`) | a cluster definition: pools, GPU types, regions and volumes, image channel / sha / ref, counts, backstop (`cap_s`), floors, auto-stop, log shipping |
+| `env` | env vars at one level: `KEY → {value, secret, set?}` |
+| `policies` (with `attribution`) | alert thresholds, auto-actions, attribution rules |
+| `token-create` | API token name, scope (`read` / `admin`) and expiry |
+| `release-dispatch` | `release.yml` promote / rollback inputs |
+
+Every field carries a `description`, which the editor shows on hover and
+the form shows as help. Two custom keywords drive the editor:
+
+- `x-dynamic: <source>` marks a field that takes live values (GPU types,
+  channels, shas, variants, fake models, env keys).
+- `x-secret` marks the write-only `set` of an env var.
+
+The browser validates as you type with a small validator
+(`control/ui/schema.ts`). The server then validates with zod, debounced,
+which adds the checks JSON Schema cannot express: "exactly one of
+channel, sha, ref"; "config or config_toml"; "models or fake_models"; a
+duplicate or reserved pool id; the fixed cluster name; secret rules; and
+the controller's reserved env keys. A unit test runs both validators on
+the same valid and invalid documents and checks that they agree.
+
+**Live values** come from `GET /api/schemas/dynamic?cluster=`
+(`control/src/dynamic.ts`):
+
+- Runpod GPU types with secure and community $/hr, memory and stock,
+  cached 5 min;
+- regions with their DCs and network volumes;
+- CPU flavors with $/vCPU;
+- release channels with their head sha and per-variant digests (from
+  fv-jobs), plus recent shas;
+- image variants and fake models;
+- the cluster's pools;
+- env keys in use, and the reserved keys.
+
+### Documents API
+
+| route | |
+|---|---|
+| `GET /api/docs/<kind>/<id>` | `{doc, version, schema}` |
+| `POST /api/docs/<kind>/<id>/validate {doc}` | `{ok, issues: [{path, message}]}` |
+| `POST /api/docs/cluster-spec/<id>/plan {doc}` | what the change means for the running cluster, and the projection |
+| `PUT /api/docs/<kind>/<id> {doc, version}` | save; **409** `{current_version}` when someone saved in between |
+| `GET /api/docs/<kind>/<id>/history` | the saves, from the audit log (`doc.save` / `doc.restore`, before and after) |
+| `POST /api/docs/<kind>/<id>/restore {audit_id, which, version}` | save a snapshot again, as a new version |
+
+The kinds and ids are:
+
+- `cluster-spec/<cluster id or name>`
+- `policies/default`
+- `attribution/default` (a slice of the policies)
+- `env/account`, `env/cluster:<id>` and `env/pod:<pod id>`
+
+Versions live in D1 `doc_versions` (migration `0002`). The check is one
+conditional `UPDATE … WHERE version = ?`. Every other write path bumps
+the same version: per-key env routes, the older spec and policies routes,
+and a `scale` operation (which changes a pool's count). So an editor
+opened before any of these is refused on save instead of overwriting.
+
+**The plan** of a cluster spec compares the proposed spec with the
+cluster's state:
+
+- workers to create or drain per pool (count changes and new or removed
+  pools);
+- a roll when the image source or a pool's variant or image changes;
+- each running pod whose env would differ (the same env hash as the
+  "needs restart" view).
+
+It also shows $/hr now and after, and the price projection against the
+floor; for a running cluster, that projection takes the account's burn
+without the cluster's own pods. Saving changes only the definition.
+Scale, Roll and the env restart apply it, and the plan names the one
+needed.
+
+**Secrets:**
+
+- An env document returns a secret as `{value: null, secret: true}`,
+  never its value.
+- A new value goes only in the write-only `set`. In the form this is a
+  password field; the JSON tab shows a placeholder and refuses a typed
+  value.
+- History snapshots store secrets masked. Restoring a snapshot keeps
+  secrets that still exist. It cannot bring back the value of one that
+  was deleted: that key is reported as `skipped`, and the owner sets it
+  again.
+
+### The editor (`control/ui/`, built to `public/editor.js`)
+
+The editor is CodeMirror 6: `@codemirror/{state,view,commands,language,lang-json,lint,autocomplete,search}`,
+with no basic-setup bundle. It adds:
+
+- **Inline diagnostics:** local schema errors, plus the server's issues
+  placed at their JSON path; JSON syntax errors at their position.
+- **Hover docs:** type, description, range or pattern, and for a live
+  value its price and stock or its sha. An unknown GPU type or channel is
+  flagged.
+- **Completion:**
+  - missing keys, required ones first, inserted as `"key": `;
+  - enum values, `true` / `false` / `null`;
+  - live values with details (e.g. `"NVIDIA H200"  $3.59/hr · Medium stock`);
+  - env keys in use.
+- Folding, search (Ctrl-F), bracket matching, history, format
+  (pretty-print).
+- Light and dark from the page's CSS tokens. Line wrapping and a capped
+  height keep it usable on a phone.
+
+**The form** (`control/ui/form.ts`) is generated from the same schema and
+kept in sync with the JSON tab. A change on either side updates the other;
+the form refuses to open while the JSON does not parse. It renders:
+
+- objects as a grid of fields with help text;
+- enums as selects, booleans as toggles, numbers with their bounds;
+- live strings with a datalist;
+- live and enum arrays (GPU types, regions, CPU flavors) as ordered chip
+  pickers, where the order is the placement order;
+- arrays of objects (pools, attribution rules) as a table with the main
+  columns (id, variant, count, compute), each item's full form behind
+  "more", and add / remove;
+- an env set as a key / value / secret table: secret inputs are
+  write-only password fields, and new keys complete from the keys in use.
+
+**The panel** (`control/ui/panel.ts`) adds:
+
+- Form / JSON tabs, a version badge and an unsaved-changes marker;
+- Format, Validate and Revert;
+- Review: a line diff of current → proposed and, for a spec, the plan;
+  Save is refused if anything is invalid;
+- on a 409, "Compare with the saved version" and "Reload";
+- History: each save with its diff, "Restore this version" and "Restore
+  the version before it".
+
+**Where it is used:**
+
+- the cluster page: spec editor, outside the page's 10 s refresh;
+- the clusters page: the define editor, with schema, completion and live
+  values;
+- the Env page: account, cluster and pod documents;
+- Settings: policies and attribution.
+
+**Read-only JSON trees** (`renderTree`) are collapsible, render lazily,
+and have search plus copy-path (`$.pools[0].count`) and copy-value. They
+show:
+
+- pod snapshots and their 24 h metric samples (pod page);
+- each audit entry's before / after (Settings);
+- release heads and history (Releases).
+
+The **Env page** shows the effective env per pod with the source level of
+each key as a badge:
+
+- a value that overrides a lower level is highlighted;
+- a conflict (two of the owner's levels setting different values) is
+  marked;
+- "needs restart" and "Apply with a rolling restart" work as before, and
+  the view refreshes after a save.
+
+**Bundle:** the dashboard (`app.js`, `app.css`) stays dependency-free and
+small. `editor.js` (425 KiB minified, 139 KiB gzip; mostly
+`@codemirror/view`) loads on first use, only on pages that edit or view
+JSON. Wrangler builds it (`[build] command = "node build-ui.mjs"`) before
+`dev` and `deploy`; it is not committed.
+
+**CSP:** CodeMirror injects its styles with a `<style>` element, so
+`style-src` is `'self' 'unsafe-inline'`. Scripts stay `'self'` only, and
+every API value reaches the DOM through `textContent`.
+
+### Tests
+
+- **Unit** (`test/unit/schemas.test.ts`):
+  - the JSON Schemas (required keys, descriptions, `x-dynamic`,
+    `x-secret`);
+  - zod validation with paths;
+  - the browser validator against zod;
+  - `schemaAt` / `unwrap`;
+  - editor path ↔ position mapping on a real CodeMirror state;
+  - the line diff;
+  - documents: versions and 409, invalid saves, the fixed name, history
+    and restore, the plan, env secrets (write-only, never read back or put
+    in history, restore skips lost values, reserved keys), and policies
+    and attribution sharing one setting.
+- **Integration**, the step "schemas, dynamic values and the document
+  API":
+  - schemas and live values;
+  - validation issues with paths, including a server-only refinement;
+  - 400 on save, the plan, save → v+1, a stale save → 409;
+  - version required, history, restore;
+  - an env secret never in any response;
+  - per-key routes bumping the version;
+  - token scope checked by the schema.
+- **UI smoke** (headless Chromium), in order:
+  1. the spec editor's JSON tab: an invalid `cap_s` shows an inline lint
+     error and an issue;
+  2. hover docs, and key completion (`log_level`);
+  3. fix the value, change a pool count in the form;
+  4. Review shows the diff and the plan (create a worker, within the
+     floor); Save → v1; a stale PUT is refused;
+  5. History → restore → v2, checked by reading the document back;
+  6. the env form with a write-only secret: masked in the JSON tab,
+     saved, never in the page, and the effective view flags the restart;
+  7. JSON tree search.
