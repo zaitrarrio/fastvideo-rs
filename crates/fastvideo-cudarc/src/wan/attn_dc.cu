@@ -1073,7 +1073,7 @@ DC_DEV void dcv100_body(const DcTensorMap* tq, const DcTensorMap* tk, const DcTe
             dc_tma_prefetch(tq);
             dc_tma_prefetch(tk);
             dc_tma_prefetch(tv);
-            dc_mbar_expect(b_q, 2 * DC_TILEB);
+            dc_mbar_expect(b_q, DC_TILEB);   // one 128-row tile: 4 boxes of 8 KB
             const int qrow = qt0 * DCV_TILE;
 #pragma unroll
             for (int h = 0; h < 2; h++) {

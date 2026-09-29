@@ -797,6 +797,32 @@ impl H3Vsa {
                 .ok_or_else(|| msg("vsa-h3: biased scores have no device buffer"))?;
             ops::vsa_topk_device(b, bh * n, n, topk)
         })?;
+        if crate::wan::envflag::bool_flag("FASTVIDEO_VSA_UNION_LOG", false) {
+            // Diagnostic: how much larger the sm_100 kernel's union of two
+            // query tiles' selections is than one selection (1.0 = identical).
+            let sel = device::global_device()
+                .ok_or_else(|| msg("vsa-h3: no device"))?
+                .stream
+                .memcpy_dtov(&selected)
+                .map_err(|e| msg(e.to_string()))?;
+            let (mut sum, mut pairs) = (0.0f64, 0usize);
+            for h in 0..bh {
+                let mut t = q_base;
+                while t + 1 < q_base + q_tiles {
+                    let row = |x: usize| &sel[(h * n + x) * topk..(h * n + x + 1) * topk];
+                    let mut u: Vec<u32> = row(t).iter().chain(row(t + 1)).copied().collect();
+                    u.sort_unstable();
+                    u.dedup();
+                    sum += u.len() as f64 / topk as f64;
+                    pairs += 1;
+                    t += 2;
+                }
+            }
+            crate::wan::log::info(format_args!(
+                "vsa-h3 union: {:.3} x topk {topk} over {pairs} query-tile pairs",
+                sum / pairs.max(1) as f64
+            ));
+        }
         // 3. Fine stage + combine into token order. Prefix query rows (outside
         //    the range when sparse) are written by the dense pass below.
         let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
@@ -817,8 +843,8 @@ impl H3Vsa {
                     coarse: &coarse,
                     gate: match &gate_dc {
                         VsaGate::None => VsaGate::None,
-                        VsaGate::F32(g) => VsaGate::F32(*g),
-                        VsaGate::Bf16(g) => VsaGate::Bf16(*g),
+                        VsaGate::F32(g) => VsaGate::F32(g),
+                        VsaGate::Bf16(g) => VsaGate::Bf16(g),
                     },
                     seq,
                 },
