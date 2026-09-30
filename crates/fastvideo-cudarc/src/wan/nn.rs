@@ -1812,6 +1812,15 @@ pub fn scaled_dot_product_attention_masked(
             }
             if sdpa_backend() != "cublas" && super::attn::mma_sdpa_default() {
                 let out_bf16 = super::tensor::bf16_activations();
+                // Opt-in SageAttention2 (INT8 QK, FP8 PV): long self-attention only.
+                if super::attn_sage::dense_enabled()
+                    && q.shape.get(2).is_some_and(|&s| s >= super::attn_sage::min_seq())
+                    && k.shape.get(2).is_some_and(|&s| s >= super::attn_sage::min_seq())
+                {
+                    if let Some(out) = super::attn_sage::dense_sdpa(q, k, v, scale, out_bf16)? {
+                        return Ok(out);
+                    }
+                }
                 if let Some(out) = super::attn::device_mma_sdpa(q, k, v, scale, out_bf16)? {
                     return Ok(out);
                 }

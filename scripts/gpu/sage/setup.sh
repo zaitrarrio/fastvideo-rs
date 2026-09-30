@@ -20,6 +20,7 @@ pip install -q ninja packaging wheel setuptools huggingface_hub hf_transfer safe
 ARCH="sm_$SM"; [[ "$SM" == 90 || "$SM" == 100 ]] && ARCH="sm_${SM}a"
 ( nvcc -cubin -arch "$ARCH" -O3 --fmad=true --prec-div=true --prec-sqrt=true --ftz=false -o kernels.cubin kernels.cu \
   && nvcc -cubin -arch "$ARCH" -O3 -std=c++17 --use_fast_math -o attn_fp8.cubin attn_fp8.cu \
+  && { [[ ! -f attn_sage.cu ]] || nvcc -cubin -arch "$ARCH" -O3 -std=c++17 --use_fast_math -Xptxas=-v -o attn_sage.cubin attn_sage.cu; } \
   && echo ours-ok ) >"$W/logs/ours.log" 2>&1 &
 
 # the image has no git: fetch source tarballs
@@ -39,6 +40,7 @@ tarfile.open(fileobj=io.BytesIO(data)).extractall(tmp)
 print("fetched", url, len(data))
 PY
 }
+if [[ "${SAGE_UPSTREAM:-1}" == 1 ]]; then
 fetch_tgz "https://codeload.github.com/thu-ml/SageAttention/tar.gz/$SAGE_REV" sage
 ( cd sage && pip install -v --no-build-isolation . && echo sage2-ok ) >"$W/logs/sage2.log" 2>&1 &
 S2=$!
@@ -51,6 +53,7 @@ if [[ "$SM" == 120 || "$SM" == 121 || "$SM" == 100 ]]; then
            && fetch_tgz https://codeload.github.com/NVIDIA/cutlass/tar.gz/refs/heads/main csrc/cutlass \
            && pip install -v --no-build-isolation . ; } ; } && echo sage3-ok ) >"$W/logs/sage3.log" 2>&1 &
   S3=$!
+fi
 fi
 ( HF_HUB_ENABLE_HF_TRANSFER=1 python -c "
 from huggingface_hub import snapshot_download

@@ -5,6 +5,7 @@ Kernels (each is timed as the whole call a model would make, including any
 quantization / smoothing / padding it does):
 
   fv_fwd2     our bf16 `flash_mma_fwd2_d128` (kernels.cu, nvcc cubin via libcuda)
+  fv_sage     our SageAttention2 port (attn_sage.cu): INT8 QK, FP8 PV, f32 accumulation
   fv_fp8      our FP8-QK attempt `attn_fp8_fwd_d128` (+ its colsum/quant kernels)
   sdpa_flash  torch SDPA, FlashAttention-2 backend
   sdpa_cudnn  torch SDPA, cuDNN backend (our sm_12x default picks cuDNN or fwd2 per shape)
@@ -96,6 +97,7 @@ def P(t):
 class Ours:
     FWD2_SMEM = 4 * 64 * D * 2
     FP8_SMEM = 2 * (64 * 128 + 64 * 128 * 2)
+    SAGE_SMEM = 2 * (64 * 128 + 128 * 64)
 
     def __init__(self, cubin_dir):
         torch.zeros(1, device="cuda")  # make torch's primary context current for the driver API
@@ -109,6 +111,15 @@ class Ours:
             self.colsum = self.cu.func(m8, "attn_fp8_colsum_bf16")
             self.quant = self.cu.func(m8, "attn_fp8_quant_bf16")
             self.fp8 = self.cu.func(m8, "attn_fp8_fwd_d128", self.FP8_SMEM)
+        self.sage = None
+        ps = os.path.join(cubin_dir, "attn_sage.cubin")
+        if os.path.exists(ps):
+            ms = self.cu.load(ps)
+            self.s_colsum = self.cu.func(ms, "attn_sage_colsum_bf16")
+            self.s_quant = self.cu.func(ms, "attn_sage_quant_i8")
+            self.s_vmax = self.cu.func(ms, "attn_sage_vmax")
+            self.s_vquant = self.cu.func(ms, "attn_sage_vquant")
+            self.sage = self.cu.func(ms, "attn_sage_fwd_d128", self.SAGE_SMEM)
         self.dummy = torch.empty(4, device="cuda", dtype=torch.float32)
 
     def dense(self, q, k, v):
@@ -149,6 +160,41 @@ class Ours:
         return out
 
 
+    def _squant(self, x, bh, rows, rows_pad, grp, smooth):
+        s = torch.zeros(bh * 128, device="cuda", dtype=torch.float32)
+        if smooth:
+            self.cu.launch(self.s_colsum, ((rows + 255) // 256, bh, 1), (128, 1, 1), 0,
+                           [P(x), P(s), ctypes.c_int(rows), ctypes.c_int(256)])
+        out = torch.empty(bh * rows_pad * 128, device="cuda", dtype=torch.uint8)
+        sc = torch.empty(bh * rows_pad // grp, device="cuda", dtype=torch.float32)
+        self.cu.launch(self.s_quant, (rows_pad // 64, bh, 1), (128, 1, 1), 0,
+                       [P(x), P(s), ctypes.c_float(1.0 / max(rows, 1)), ctypes.c_int(int(smooth)),
+                        P(out), P(sc), ctypes.c_int(rows), ctypes.c_int(rows_pad), ctypes.c_int(grp)])
+        return out, sc
+
+    def dense_sage(self, q, k, v):
+        b, h, sq, d = q.shape
+        sk = k.shape[2]
+        bh = b * h
+        sqp, skp = (sq + 127) // 128 * 128, (sk + 63) // 64 * 64
+        q8, qs = self._squant(q, bh, sq, sqp, 16, False)
+        k8, ks = self._squant(k, bh, sk, skp, 64, True)
+        vmax = torch.zeros(bh * 128, device="cuda", dtype=torch.int32)
+        self.cu.launch(self.s_vmax, ((sk + 255) // 256, bh, 1), (128, 1, 1), 0,
+                       [P(v), P(vmax), ctypes.c_int(sk), ctypes.c_int(256)])
+        vt = torch.empty(bh * 128 * skp, device="cuda", dtype=torch.uint8)
+        vs = torch.empty(bh * 128, device="cuda", dtype=torch.float32)
+        self.cu.launch(self.s_vquant, (skp // 64, bh, 1), (128, 1, 1), 0,
+                       [P(v), P(vmax), P(vt), P(vs), ctypes.c_int(sk), ctypes.c_int(skp)])
+        out = torch.empty_like(q)
+        sl2 = (1.0 / math.sqrt(d)) * LOG2E
+        self.cu.launch(self.sage, (sqp // 128, bh, 1), (256, 1, 1), self.SAGE_SMEM,
+                       [P(q8), P(qs), P(k8), P(ks), P(vt), P(vs), P(self.dummy), P(out), ctypes.c_int(1),
+                        ctypes.c_int(sq), ctypes.c_int(sk), ctypes.c_int(sqp), ctypes.c_int(skp),
+                        ctypes.c_float(sl2)])
+        return out
+
+
 # ---------------------------------------------------------------- kernels
 def build_kernels(cubin_dir, only=None):
     ks = {}
@@ -157,6 +203,8 @@ def build_kernels(cubin_dir, only=None):
         ks["fv_fwd2"] = ours.dense
         if ours.fp8 is not None:
             ks["fv_fp8"] = ours.dense_fp8
+        if ours.sage is not None:
+            ks["fv_sage"] = ours.dense_sage
     except Exception as e:  # noqa: BLE001
         print(f"[warn] our kernels unavailable: {e}", file=sys.stderr)
     from torch.nn.attention import SDPBackend, sdpa_kernel

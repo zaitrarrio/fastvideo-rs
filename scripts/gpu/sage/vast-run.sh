@@ -45,6 +45,7 @@ cmd_pack() {
   cp "$HERE"/{bench.py,capture.py,setup.sh,run.sh} "$WORK/pay/"
   [[ -d "$HERE/port" ]] && cp -r "$HERE/port" "$WORK/pay/"
   cp "$ROOT/crates/fastvideo-cudarc/src/wan/attn_fp8.cu" "$WORK/pay/"
+  [[ -f "$ROOT/crates/fastvideo-cudarc/src/wan/attn_sage.cu" ]] && cp "$ROOT/crates/fastvideo-cudarc/src/wan/attn_sage.cu" "$WORK/pay/"
   fwd2_subset >"$WORK/pay/kernels.cu"
   tar -C "$WORK/pay" -czf "$WORK/pay.tgz" .
   base64 -w0 "$WORK/pay.tgz" >"$WORK/pay.b64"
