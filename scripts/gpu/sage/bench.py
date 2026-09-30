@@ -9,6 +9,7 @@ quantization / smoothing / padding it does):
   sdpa_flash  torch SDPA, FlashAttention-2 backend
   sdpa_cudnn  torch SDPA, cuDNN backend (our sm_12x default picks cuDNN or fwd2 per shape)
   sage2pp     sageattn() on sm_120: INT8 QK per-warp, FP8 PV, fp32+fp16 accumulation (SageAttention2++)
+  sage2_warp32 INT8 QK per-warp, FP8 PV, fp32+fp32 accumulation
   sage2_thr   INT8 QK per-thread, FP8 PV, fp32+fp32 accumulation (SageAttention2, most accurate FP8-PV route)
   sage2_f16pv INT8 QK per-thread, FP16 PV, fp32 accumulation
   sage3       sageattn3_blackwell: NVFP4 microscaled QK and PV (sm_120a)
@@ -170,6 +171,8 @@ def build_kernels(cubin_dir, only=None):
     try:
         import sageattention as sa
         ks["sage2pp"] = lambda q, k, v: sa.sageattn(q, k, v, tensor_layout="HND")
+        ks["sage2_warp32"] = lambda q, k, v: sa.sageattn_qk_int8_pv_fp8_cuda(
+            q, k, v, tensor_layout="HND", qk_quant_gran="per_warp", pv_accum_dtype="fp32+fp32")
         ks["sage2_thr"] = lambda q, k, v: sa.sageattn_qk_int8_pv_fp8_cuda(
             q, k, v, tensor_layout="HND", qk_quant_gran="per_thread", pv_accum_dtype="fp32+fp32")
         ks["sage2_f16pv"] = lambda q, k, v: sa.sageattn_qk_int8_pv_fp16_cuda(
