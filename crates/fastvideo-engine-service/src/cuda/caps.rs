@@ -673,9 +673,15 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
             multiple: if r.two_stage { 64 } else { 32 },
             max_area: 3840 * 2176,
             aspect: (0.25, 4.0),
-            // The LTX API tiers; the first is the default (1080 is generated
-            // at 1088 and cropped back, ltx §3.1).
-            short_edges: vec![1080, 720, 1440, 2160],
+            // The first is the default (1080 is generated at 1088 and cropped
+            // back, ltx §3.1). 720 / 1440 / 2160 are the other LTX API tiers
+            // (that protocol keeps its own list, `fastvideo_ltxapi::models::
+            // ResTier`); 480 and 768 are ours, for the real-time director and
+            // the batch APIs whose schemas offer them (native, /v1/videos,
+            // fal H3-schema apps on LTX). Two-stage sizes off the multiple of
+            // 64 are generated padded and cropped back (480p 16:9: 854x480
+            // from 896x512), like 1080.
+            short_edges: LTX_SHORT_EDGES.to_vec(),
             pad_and_crop: true,
             hd: None,
         },
@@ -691,6 +697,9 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         recipe: None,
     }
 }
+
+/// LTX-2.5's canvas tiers, the default first (see `ltx2_caps`).
+pub const LTX_SHORT_EDGES: [u32; 6] = [1080, 480, 720, 768, 1440, 2160];
 
 /// Stage-1 bucket of the Ingredients IC-LoRA (model card: trained at
 /// 768x448, 121 frames, 24 fps); the two-stage output is twice that.

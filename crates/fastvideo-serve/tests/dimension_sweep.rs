@@ -251,7 +251,9 @@ async fn harness_flagged(hd: bool, long: bool) -> Sweep {
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
     c.limits.queue_max = 1_000_000;
-    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3"] {
+    // `fastvideo/ltx-turbo`: an H3-schema app on LTX, whose director streams
+    // LTX (480p / 720p / 768p / 1080p).
+    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3", "fastvideo/ltx-turbo"] {
         c.protocols.fal_apps.push(a.to_owned());
     }
     c.validate().unwrap();
@@ -947,10 +949,17 @@ async fn director_sweep(s: &Sweep) {
                             s.record(&case, false, Some(("console offer refused", format!("{} is not served by {}", r.as_str(), caps.id))));
                             continue;
                         }
-                        let (w, h) = canvas_for(&caps, *r, asp);
+                        let (w, h, crop) = canvas_for(&caps, *r, asp);
                         let frames = fastvideo_fal::director::engine::frames_for(&caps, limits.fps, secs).unwrap_or(caps.frames.default);
                         let job = chunk_job(&caps, w, h, frames, limits.fps);
-                        let v = s.validator.check(&job).err().map(|e| ("accepted, engine refuses", format!("{w}x{h} {frames} frames: {}", e.message)));
+                        let mut v = s.validator.check(&job).err().map(|e| ("accepted, engine refuses", format!("{w}x{h} {frames} frames: {}", e.message)));
+                        // The delivered size: the tier on the short side, even
+                        // sides (H.264 / VP8), within the generated canvas.
+                        let (dw, dh) = crop.unwrap_or((w, h));
+                        let tier_ok = dw.min(dh) == r.short_edge() || !caps.canvas.pad_and_crop;
+                        if v.is_none() && (dw > w || dh > h || dw % 2 != 0 || dh % 2 != 0 || !tier_ok) {
+                            v = Some(("accepted, wrong delivered size", format!("{dw}x{dh} from {w}x{h} at {}", r.as_str())));
+                        }
                         s.record(&case, true, v);
                     }
                 }

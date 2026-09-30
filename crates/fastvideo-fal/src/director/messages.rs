@@ -51,6 +51,10 @@ pub const SERVER_MESSAGE_TYPES: [&str; 16] = [
 pub enum Resolution {
     #[serde(rename = "480p")]
     R480,
+    /// Not in fal's published schema (an extension for models with a 720
+    /// tier, e.g. LTX); clients that do not know it never send it.
+    #[serde(rename = "720p")]
+    R720,
     #[serde(rename = "768p")]
     R768,
     #[serde(rename = "1080p")]
@@ -58,9 +62,13 @@ pub enum Resolution {
 }
 
 impl Resolution {
+    /// Every value, lowest first (the order forms list them in).
+    pub const ALL: [Resolution; 4] = [Resolution::R480, Resolution::R720, Resolution::R768, Resolution::R1080];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Resolution::R480 => "480p",
+            Resolution::R720 => "720p",
             Resolution::R768 => "768p",
             Resolution::R1080 => "1080p",
         }
@@ -68,6 +76,7 @@ impl Resolution {
     pub fn short_edge(self) -> u32 {
         match self {
             Resolution::R480 => 480,
+            Resolution::R720 => 720,
             Resolution::R768 => 768,
             Resolution::R1080 => 1080,
         }
@@ -102,6 +111,14 @@ impl Aspect {
             .into_iter()
             .min_by(|a, b| (a.ratio().ln() - l).abs().total_cmp(&(b.ratio().ln() - l).abs()))
             .unwrap_or(Aspect::Landscape)
+    }
+    /// The protocol's aspect ratio (`CanvasSpec::Aspect`).
+    pub fn as_ratio(self) -> fastvideo_protocol::Ratio {
+        match self {
+            Aspect::Landscape => fastvideo_protocol::Ratio::R16_9,
+            Aspect::Portrait => fastvideo_protocol::Ratio::R9_16,
+            Aspect::Square => fastvideo_protocol::Ratio::R1_1,
+        }
     }
     /// `width / height`.
     pub fn ratio(self) -> f64 {
@@ -514,6 +531,17 @@ mod tests {
         assert_eq!(c.memory, Some(3));
         // Nulls are accepted for every nullable field.
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null}"#).is_ok());
+    }
+
+    #[test]
+    fn every_resolution_round_trips() {
+        for r in Resolution::ALL {
+            let m = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","resolution":"{}"}}"#, r.as_str())).unwrap();
+            let ClientMessage::Configure(c) = m else { panic!() };
+            assert_eq!(c.resolution, Some(r));
+            assert_eq!(r.as_str().trim_end_matches('p').parse::<u32>().unwrap(), r.short_edge());
+        }
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720P"}"#).is_err());
     }
 
     #[test]
