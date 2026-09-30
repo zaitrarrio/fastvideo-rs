@@ -1,0 +1,58 @@
+# Per-file hashes of weight trees, recorded in this repo at fetch time (not guessed).
+# dest<TAB>path in the tree<TAB>bytes ("-" = not recorded)<TAB>algo:hex
+# Checked by `verify-weights.sh sha:<dest>` (reads every listed file). Sources:
+#   h3-ref2va          artifacts/runpod/fetch-h3-ref2va/{s2k01690bi,jg48s6o1w0}/sha256.txt (US = EU; Hub LFS SHA-256 at the pinned revisions)
+#   fastwan22-ti2v-5b  artifacts/runpod/fetch-fastwan22-ti2v-5b-fv-weights-*/{sha256.txt,log.txt} (US = EU)
+#   ltx25-ic-lora-ingredients  docs/ports/ltx-ref2v.md (Hub LFS oid; both volumes)
+#   mmaudio-44k-v2     the md5s scripts/gpu/fetch-mmaudio.py pins (MMAudio download_utils.py); the
+#                      converted safetensors/ files have no recorded hash
+# Trees with hashes elsewhere: auxiliary/ (weights-manifest.tsv, cell aux), auxiliary/upscalers/
+# (cell upscalers), */text_encoder_fp8 (cell text-fp8), the upscaler file (cell sol-h3-spark).
+h3-ref2va	LICENSE	17604	sha256:59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44
+h3-ref2va	README.md	38406	sha256:f0116a90332496bdfcc827320c603a26b849c73bf804f2674d03682fbbd2334a
+h3-ref2va	model_index.json	2936	sha256:5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2
+h3-ref2va	processor/chat_template.json	5499	sha256:5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce
+h3-ref2va	processor/merges.txt	1671839	sha256:599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3
+h3-ref2va	processor/preprocessor_config.json	390	sha256:27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+h3-ref2va	processor/tokenizer.json	7032403	sha256:a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7
+h3-ref2va	processor/tokenizer_config.json	11003	sha256:a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68
+h3-ref2va	processor/video_preprocessor_config.json	385	sha256:7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13
+h3-ref2va	processor/vocab.json	2776833	sha256:ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910
+h3-ref2va	transformer_ref/config.json	546	sha256:74c11bff524336576096993cbfcdcdc2ef4fa2fa4409df693bdcbc6c666282ae
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors	4825958704	sha256:7a3fcad885f51560e550b2e84c9a8d8b35e62996cfd9076937e992bd23478df9
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors	4702158032	sha256:1638ae1dc8ae26c4ba43ad28a6d851ad8983847324bb2b468719c7c81f219706
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors	4933368192	sha256:1ef3c4954ffe5a664c2e3028e2a3241190d9c159dce6ba1136002c6af1db5353
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors	4567069608	sha256:12d92f2975cfd5c5b786126385c52e5bf64884d4b4d6e60c3ef5d857c3f7469f
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors	4702158080	sha256:304d41ce03d59ac94bceb055935bf4e034df0badf8b0df4ded327c08a288a4cc
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors	4933368232	sha256:12a134b7c76d86edbe8fa2dc315f6cdaf4e1aca1b6ea4dfe4cad92df03d42eeb
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors	4567069608	sha256:b96395261359937c00fb42f4eb29306dc59b1a3368eeba52af4fb66e3e142c69
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors	4702158080	sha256:1897a6bf3b4fc834bb82d73ca02a7afc7d38c07f50ec5382cd54cd2f91b604d1
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors	4933368232	sha256:edfb38235adc96b99f55a401849befce59075a745e99c2d8c63ff358dd36443d
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors	4567069608	sha256:f8710775cf3413670edd7e23861b650a3431a71a6cc14cb1080623ab6b052385
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors	4702158080	sha256:9e18acc09f84edb5b34df9628efa15cfcab8bb76e8e20c1c2e979a107a0f7215
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors	4933368232	sha256:ea2e18228f8bdba1a4e0f32b155e4586df055997c45356213d05b971ba13e2f4
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors	4567069608	sha256:1e12083b1875678f7414ff55b09cd8bb1c30b861243f9bb7ff1e75b6ad3f1bdc
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors	4644161920	sha256:b340f44b5690cc745d48ae399381ec15b26a4fe25d483f677ccb4960dadb50d4
+h3-ref2va	transformer_ref/diffusion_pytorch_model.safetensors.index.json	64488	sha256:ac30a3b58963f2e735d493475fbb81853a5735ec947619648b3e045acda6783e
+h3-ref2va	Minimax-h3-Turbo/README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-ref2va	Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors	1383677768	sha256:9e642fc8749c74f8da5e2382877ab5c7aa37b9a73b7fd0d6d457bd1b3cb1ae99
+h3-ref2va	Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors	1383677808	sha256:9bac880b1a5d7ac052171cf6cce769f0cceaaa42ffa51de4b8e41143a2bdd2d2
+fastwan22-ti2v-5b	model_index.json	502	sha256:a43fbeeb223895748ee9b266f52c0272ad31e6be3eb664d22dfc097015134ab9
+fastwan22-ti2v-5b	scheduler/scheduler_config.json	820	sha256:571a3eed68bcd943a61b9fea8efa9e141472216ada59f928c8b5128ce24b32e0
+fastwan22-ti2v-5b	text_encoder/config.json	855	sha256:a2bcb24699f6c009a2427432bdd483ef8b2b42a712abc9503759cdc77d171f07
+fastwan22-ti2v-5b	text_encoder/model-00001-of-00003.safetensors	4935812536	sha256:a8e861969c7433e707cc5a74065d795d36cca07ec96eb6763eb4083df7248f58
+fastwan22-ti2v-5b	text_encoder/model-00002-of-00003.safetensors	4983103192	sha256:d57d948ece4837d850b7a859a4415121d57cacf8b9ee1d4db200c67f592902d7
+fastwan22-ti2v-5b	text_encoder/model-00003-of-00003.safetensors	1442935480	sha256:0da9ee284e21d1406df708788db1d502d95d75f69faa25cd26151bf8829b7c5f
+fastwan22-ti2v-5b	text_encoder/model.safetensors.index.json	22476	sha256:31c4c7bcce679eaa0dd4667462394ddb013dc2f748e0bffc893dc9146a320dab
+fastwan22-ti2v-5b	tokenizer/special_tokens_map.json	7079	sha256:456b58fd240a06c743a7c2cf8008bec501240d68ebd1fc4018ea569505fea270
+fastwan22-ti2v-5b	tokenizer/spiece.model	4548313	sha256:e3909a67b780650b35cf529ac782ad2b6b26e6d1f849d3fbb6a872905f452458
+fastwan22-ti2v-5b	tokenizer/tokenizer.json	16837459	sha256:20a46ac256746594ed7e1e3ef733b83fbc5a6f0922aa7480eda961743de080ef
+fastwan22-ti2v-5b	tokenizer/tokenizer_config.json	61758	sha256:1d8d2a216bf8e70ac15b7ddcea566c4dd0433c024b39a58ca5e4c66bd78defbd
+fastwan22-ti2v-5b	transformer/config.json	503	sha256:9ffd02a1f215985805f12ee409dd3deb5fbc2a812ffa555e6027f71d9764ee5d
+fastwan22-ti2v-5b	transformer/diffusion_pytorch_model.safetensors	9999660080	sha256:a1cf4acd5d0242ca0cad68e115064f4ac7e748686c9cf0da050ce87decc6b9bf
+fastwan22-ti2v-5b	vae/config.json	1701	sha256:d996c340fe9a7df5d7371f76a7d8d6956f6c98256080074d8434fa5eeac11360
+fastwan22-ti2v-5b	vae/diffusion_pytorch_model.safetensors	2818777808	sha256:62cd18f19438e35b32ac63020e2852f566e9b02f46b6cdbd87972a356e3c6f4b
+ltx25-ic-lora-ingredients	ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors	1308787472	sha256:ff873a5beada3c579a8137c7c53343916f78bcc9a529ba910143073fe8715e95
+mmaudio-44k-v2	weights/mmaudio_large_44k_v2.pth	-	md5:01ad4464f049b2d7efdaa4c1a59b8dfe
+mmaudio-44k-v2	ext_weights/v1-44.pth	-	md5:fab020275fa44c6589820ce025191600
+mmaudio-44k-v2	ext_weights/synchformer_state_dict.pth	-	md5:5b2f5594b0730f70e41e549b7c94390c

@@ -1,4 +1,7 @@
 # dest	hub_id	globs
+# Pinned Hub revisions: weights-revisions.tsv. Recorded per-file hashes: weights-sha256.tsv
+# (verify-weights.sh sha:<dest>). Every tree, both volumes, how to rebuild: docs/ops/runpod-volumes.md
+# and scripts/gpu/rebuild-volume.sh.
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors

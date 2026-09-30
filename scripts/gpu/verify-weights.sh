@@ -11,7 +11,8 @@
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8 upscalers
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
-#                                      ltx25-dev ltx25-a2v-guided
+#                                      ltx25-dev ltx25-a2v-guided ltx2
+#                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -29,6 +30,9 @@
 # manifest's SHA-256 and the model's size and full length, plus the model's
 # SHA-256 when FV_VERIFY_FP8_SHA=1 (about 40 GB read). A missing tree only
 # means the loader quantizes at load; the cell reports it as INCOMPLETE.
+# A `sha:<dest>` cell checks every file weights-sha256.tsv lists for <dest>
+# (hashes recorded at fetch time): present, the listed size, the listed
+# SHA-256 or md5. It reads the whole of each file (h3-ref2va: 69 GB).
 # Exit status is non-zero on the first cell with a gap; the report names it.
 set -euo pipefail
 
@@ -94,6 +98,10 @@ needs() {
     # dev transformer and the distilled LoRA beside the bundle.
     ltx25-a2v-guided)
       echo "$(needs ltx25-two-stage) $(needs ltx25-dev) :ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" ;;
+    # LTX-2 19B distilled (weights-manifest.tsv ltx2): the single-file DiT the
+    # ltx2 matrix cells pass as --dit, and the Diffusers parts beside it.
+    ltx2)
+      echo "ltx2:ltx-2-19b-distilled.safetensors ltx2:text_encoder ltx2:tokenizer ltx2:vae ltx2:audio_vae ltx2:vocoder" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     upscalers) echo "upscalers" ;;
@@ -103,10 +111,15 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2)
+SHA_LIST="$HERE/weights-sha256.tsv"
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
+  if [[ -f "$SHA_LIST" ]]; then
+    grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST" | cut -f1 | sort | uniq -c \
+      | awk '{printf "%-20s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
+  fi
   exit 0
 fi
 (( $# >= 1 )) || { echo "usage: $0 <cell>... | --list" >&2; exit 2; }
@@ -234,7 +247,34 @@ check_upscalers() {
   return $rc
 }
 
+# sha:<dest>: every weights-sha256.tsv row of <dest>, by size and hash.
+check_sha_list() {
+  local want="$1" rc=0 dest rel size hash algo hex p got n=0
+  [[ -f "$SHA_LIST" ]] || { echo "  no $SHA_LIST" >&2; return 1; }
+  while IFS=$'\t' read -r dest rel size hash; do
+    [[ "$dest" == "$want" ]] || continue
+    n=$((n + 1))
+    algo="${hash%%:*}"; hex="${hash#*:}"
+    p="$W/$dest/$rel"
+    if [[ ! -f "$p" ]]; then echo "  MISSING $p" >&2; rc=1; continue; fi
+    got="$(wc -c <"$p" | tr -d ' ')"
+    if [[ "$size" != "-" && "$got" != "$size" ]]; then echo "  SIZE $p: $got, expected $size" >&2; rc=1; continue; fi
+    case "$algo" in
+      sha256) got="$(sha256sum "$p" | awk '{print $1}')" ;;
+      md5) got="$(md5sum "$p" | awk '{print $1}')" ;;
+      *) echo "  unknown hash $algo for $p" >&2; rc=1; continue ;;
+    esac
+    if [[ "$got" != "$hex" ]]; then echo "  ${algo^^} $p: $got, expected $hex" >&2; rc=1; fi
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST")
+  (( n > 0 )) || { echo "  no weights-sha256.tsv rows for $want" >&2; rc=1; }
+  return $rc
+}
+
 for cell in "$@"; do
+  if [[ "$cell" == sha:* ]]; then
+    if check_sha_list "${cell#sha:}"; then echo "weights ok: $cell"; else echo "weights INCOMPLETE: $cell" >&2; fail=1; fi
+    continue
+  fi
   if [[ "$cell" == upscalers ]]; then
     if check_upscalers; then echo "weights ok: upscalers"; else echo "weights INCOMPLETE: upscalers" >&2; fail=1; fi
     continue
