@@ -1,0 +1,34 @@
+2026-09-29T23:44:24Z | EVENT | start: image ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-3341394 (@sha256:52d89026…); balance $9.99; watchdog deletes my pods below $3.50
+2026-09-29T23:44:24Z | EVENT | RTX PRO 6000 pod 5zbsx3omtnotmv created (EUR-IS-1, EU volume jg48s6o1w0, $2.09/hr, backstop 4500 s, idle guard 15 min)
+2026-09-29T23:44:24Z | EVENT | H100 stock check 23:43Z: none in US-CA-2 (SXM/NVL/PCIe); will retry every ~5 min
+2026-09-29T23:44:39Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-29T23:49:43Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-29T23:50:05Z | RTX PRO 6000 | H3 turbo 480p | default | 9.84 (9.74–9.85) s | 7.07 (6.99–7.08) | 2.71 (2.70–2.72) | 60.3 GiB | 1.90
+2026-09-29T23:53:28Z | RTX PRO 6000 | H3 turbo 480p | max-speed [tae] | 7.35 (7.33–7.37) s | 7.04 (7.02–7.06) | 0.24 (0.23–0.24) | 57.6 GiB | 1.42
+2026-09-29T23:53:28Z | RTX PRO 6000 | H3 turbo 480p | max-speed [tae-fp8attn] | 7.08 (7.08–7.09) s | 6.78 (6.77–6.79) | 0.24 (0.24–0.24) | 57.6 GiB | 1.37
+2026-09-29T23:54:46Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-29T23:55:50Z | RTX PRO 6000 | H3 max 480p | default | 8.87 (8.82–8.89) s | 6.13 (6.11–6.15) | 2.69 (2.68–2.70) | 54.7 GiB | 1.72
+2026-09-29T23:58:58Z | RTX PRO 6000 | H3 max 480p | max-speed | 6.43 (6.40–6.45) s | 6.14 (6.12–6.16) | 0.23 (0.22–0.23) | 52.0 GiB | 1.24
+2026-09-29T23:59:50Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:02:06Z | RTX PRO 6000 | LTX-2.5 turbo 720p | default | 10.04 (9.69–10.08) s | 8.53 (8.00–8.57) | 1.46 (1.45–1.47) | 66.0 GiB | 1.99
+2026-09-30T00:04:28Z | RTX PRO 6000 | LTX-2.5 turbo 720p | max-speed | 7.38 (7.25–7.50) s | 6.92 (6.75–7.03) | 0.40 (0.40–0.45) | 55.9 GiB | 1.46
+2026-09-30T00:04:53Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:06:02Z | RTX PRO 6000 | Wan2.2 TI2V-5B turbo 480p | default | 7.11 (7.10–7.12) s | 1.55 (1.55–1.56) | 5.54 (5.54–5.55) | 38.2 GiB | 1.41
+2026-09-30T00:07:37Z | RTX PRO 6000 | Wan2.2 TI2V-5B turbo 480p | max-speed | 1.49 (1.49–2.97) s | 1.38 (1.38–1.38) | 0.10 (0.10–1.58) | 21.4 GiB | 0.30
+2026-09-30T00:09:12Z | RTX PRO 6000 | FastWan 1.3B 480p | default | 4.85 (4.85–4.86) s | 1.92 (1.92–1.93) | 2.91 (2.91–2.92) | 27.1 GiB | 0.96
+2026-09-30T00:09:57Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:10:00Z | RTX PRO 6000 | FastWan 1.3B 480p | max-speed | 2.26 (2.26–2.29) s | 1.99 (1.99–1.99) | 0.26 (0.26–0.27) | 21.5 GiB | 0.45
+2026-09-30T00:14:14Z | RTX PRO 6000 | SF-Wan 1.3B stream 480p | default (TAEHV, bf16) | 15.18 fps steady (15.14–15.24); 5.27 s per 5 s video (80 frames); block p50 0.782 s; TTFF 0.43 s | — | — | 26.7 GiB | 1.05
+2026-09-30T00:14:14Z | RTX PRO 6000 | SF-Wan 1.3B stream 480p | max-speed (+MXFP8) | 15.16 fps steady (15.12–15.18); 5.28 s per 5 s video; block p50 0.780 s; TTFF 0.42 s | — | — | 26.1 GiB | 1.06
+2026-09-30T00:14:42Z | EVENT | RTX PRO 6000 pod 5zbsx3omtnotmv deleted (GET 404); lifetime 1836 s ≈ $1.07; 00:13:53 balance=8.269544786
+2026-09-30T00:15:00Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:20:04Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:25:08Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:30:12Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:35:16Z | EVENT | H100 retry: no capacity in US-CA-2
+2026-09-30T00:36:45Z | EVENT | retry loop widened: H100 SXM/NVL/PCIe + H200/H200 NVL, US-CA-2 and EUR-IS-1, one pod max, until 00:46Z
+2026-09-30T00:36:55Z | EVENT | H100/H200 retry: no capacity in US-CA-2 or EUR-IS-1
+2026-09-30T00:41:05Z | EVENT | H100/H200 retry: no capacity in US-CA-2 or EUR-IS-1
+2026-09-30T00:45:15Z | EVENT | H100/H200 retry: no capacity in US-CA-2 or EUR-IS-1
+2026-09-30T00:49:15Z | EVENT | no H100/H200 found by 00:46Z; PRO-only
+2026-09-30T00:49:39Z | EVENT | final: only pod created was 5zbsx3omtnotmv (deleted, 404); my spend ≈ $1.07; balance $8.03 (00:49Z)
