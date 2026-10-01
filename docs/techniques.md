@@ -546,6 +546,13 @@ SageAttention uses) with per-warp Q scales in the same kernels, and then the
 end-to-end gate. A 1.19x faster dense kernel would save at most about 10% of
 the Sol-H3 dense denoise.
 
+Follow-up (2026-10-01, docs/perf/sage-attention.md): SageAttention2's INT8
+`Q K^T` with FP8 `P V` passes this tolerance on peaked, outlier and real
+FastWan inputs (worst rel-L2 0.044 / 0.021) at 1.5-1.8x over fwd2 on RTX PRO
+6000 at >= 7k tokens. It is ported as `wan::attn_sage`
+(`FASTVIDEO_ATTN_SAGE=2`, branch `wip/sage-attn`), and the end-to-end gate
+is pending. SageAttention3 (NVFP4) fails the tolerance (rel-L2 0.19-0.36).
+
 Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
 for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
