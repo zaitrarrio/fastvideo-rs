@@ -34,7 +34,7 @@ It is default-off either way; merging it is the owner's call (section 6.6).
   (the dense kernel switched from cuDNN to fwd2) moves H3 just as far and
   fails the same gate on another prompt, so on H3 this gate cannot tell
   Sage from bf16 noise.
-* **Spend:** $1.50 of Vast credit (Phases 1-2); Phase 3 about $4.20 on
+* **Spend:** $1.50 of Vast credit (Phases 1-2); Phase 3 about $4.36 on
   Runpod (section 6.7).
 
 ## 1. What we run today (Phase 0)
@@ -485,11 +485,12 @@ ltx-pro dense route, the one recipe that passes (1.15x denoise at 1080p);
 |---|---|---|
 | Build pod `dap2h1xyxyyy10` (cpu, EU-RO-1, $1.12/hr): merge build, unit tests, release `fv-gpucheck` / `fv-serve`; stopped | 24 min | ~$0.45 |
 | GPU pod `9lnoscqp7y8v5k` (RTX PRO 6000, EUR-IS-1): items a-e; deleted, GET 404 | 106 min (6 357 s) | ~$3.69 |
-| **total** | | **~$4.14** |
+| Build pod `9hndck5b8pgl4y` (cpu3c, $0.96/hr): tests of the main-bound tree; stopped | 14 min | ~$0.22 |
+| **total** | | **~$4.36** |
 
 The pod had a detached 3.5 h DELETE backstop, an on-pod idle guard (20 min
 at 0 % GPU) and a local balance watchdog (delete below $9). The balance
-went from $78.97 to $73.02 over the session; other agents' pods ran
+went from $78.97 to $72.79 over the session; other agents' pods ran
 at the same time.
 
 ## 7. Spend and instances (Vast)
