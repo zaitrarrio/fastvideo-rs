@@ -113,7 +113,7 @@ impl FakeModel {
                 multiple: 64,
                 max_area: 3840 * 2176,
                 aspect: (0.25, 4.0),
-                short_edges: vec![1080, 720, 1440, 2160],
+                short_edges: crate::cuda::caps::LTX_SHORT_EDGES.to_vec(),
                 pad_and_crop: true,
                 hd: None,
             },

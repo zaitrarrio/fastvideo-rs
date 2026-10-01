@@ -784,14 +784,16 @@ impl FalInput {
     }
 }
 
-/// An omitted `resolution` defaults to `768P` (the MiniMax H3 contract). A
-/// model without a 768 tier (an LTX app, `h3-draft`) gets its own first
-/// tier instead, so a body without `resolution` runs on every app.
+/// An omitted `resolution` defaults to `768P` (the MiniMax H3 contract),
+/// which is every H3 model's default tier. A model whose default (first)
+/// tier is another one (LTX: 1080, `h3-draft`: 480) gets that tier instead,
+/// so a body without `resolution` runs on every app and an LTX app keeps
+/// 1080P although LTX also serves 768.
 /// `short_edges` is the resolved model's `CanvasCaps::short_edges`.
 pub fn default_resolution_for(req: &mut GenerationRequest, short_edges: &[u32]) {
     let default = Resolution::P768.short_edge();
     let Some(&first) = short_edges.first() else { return };
-    if short_edges.contains(&default) {
+    if first == default {
         return;
     }
     match &mut req.canvas {
@@ -1099,8 +1101,11 @@ mod tests {
         let mut r = t2v(json!({"prompt": "p"}));
         default_resolution_for(&mut r, &[768, 480]);
         assert_eq!(edge(&r), 768);
-        // LTX (no 768 tier): the model's first tier; h3-draft: 480.
+        // LTX: the model's first tier, also with a 768 tier; h3-draft: 480.
         default_resolution_for(&mut r, &[1080, 720, 1440, 2160]);
+        assert_eq!(edge(&r), 1080);
+        let mut r = t2v(json!({"prompt": "p"}));
+        default_resolution_for(&mut r, &[1080, 480, 720, 768, 1440, 2160]);
         assert_eq!(edge(&r), 1080);
         let mut r = t2v(json!({"prompt": "p", "aspect_ratio": "9:16"}));
         default_resolution_for(&mut r, &[480]);

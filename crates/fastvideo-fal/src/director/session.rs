@@ -178,8 +178,11 @@ struct Session {
     build_rx: mpsc::UnboundedReceiver<Result<Built, ApiError>>,
     building: bool,
     anchor: Option<PathBuf>,
-    /// The configured canvas (`None` until `configure`).
+    /// The configured generation canvas (`None` until `configure`).
     canvas: Option<(u32, u32)>,
+    /// The delivered size when the generation canvas is padded (LTX):
+    /// frames are centre-cropped to it.
+    crop: Option<(u32, u32)>,
     dir: PathBuf,
     started: Instant,
     info_sent: bool,
@@ -240,6 +243,7 @@ pub async fn run(init: SessionInit) {
         building: false,
         anchor: None,
         canvas: None,
+        crop: None,
         dir,
         started: Instant::now(),
         info_sent: false,
@@ -449,7 +453,10 @@ impl Session {
                     }
                 }
                 let aspect = c.aspect_ratio.unwrap_or(m::Aspect::Landscape);
-                self.canvas = Some(canvas_for(self.clips.caps(), res, aspect));
+                let (w, h, crop) = canvas_for(self.clips.caps(), res, aspect);
+                tracing::info!(session = %self.init.handle.id, res = res.as_str(), aspect = aspect.as_str(), "director canvas: generate {w}x{h}, deliver {:?}", crop.unwrap_or((w, h)));
+                self.canvas = Some((w, h));
+                self.crop = crop;
                 if let Some(b) = c.audio_bitrate {
                     let _ = self.media.send(MediaCmd::AudioBitrate(b));
                 }
@@ -524,6 +531,7 @@ impl Session {
         };
         let anchor_path = self.anchoring().then(|| self.dir.join(format!("anchor-{}.png", plan.index)));
         let dir = self.dir.clone();
+        let crop = self.crop;
         tokio::spawn(async move {
             let t0 = Instant::now();
             let out = clips.build(build).await;
@@ -532,7 +540,7 @@ impl Session {
                 Err(e) => Err(e),
                 Ok(out) => {
                     let t1 = Instant::now();
-                    let prep = Prep { fps, audio, trimmed, crossfade, anchor_path, dir };
+                    let prep = Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop };
                     let prepared = tokio::task::spawn_blocking(move || prepare(plan, out, prep))
                         .await
                         .map_err(|e| ApiError::internal(format!("chunk preparation panicked: {e}")))
@@ -721,16 +729,22 @@ struct Prep {
     /// Where to write the last frame for the next chunk's anchor.
     anchor_path: Option<PathBuf>,
     dir: PathBuf,
+    /// Centre-crop every frame to this size (pad-and-crop canvases).
+    crop: Option<(u32, u32)>,
 }
 
 /// Chunk preparation (blocking): anchor PNG, trim, wire audio, fades.
 fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<Built, ApiError> {
-    let Prep { fps, audio, trimmed, crossfade, anchor_path, dir } = p;
+    let Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop } = p;
     let mut frames = out.frames;
     let generated = frames.len() as u32;
     if generated == 0 {
         return Err(ApiError::engine_failed("the engine produced no frames"));
     }
+    // The anchor is the uncropped last frame: the next chunk is generated on
+    // the same padded canvas, so its first frame matches pixel for pixel
+    // (a cropped anchor would be scaled up to cover the canvas: a zoom at
+    // every join).
     let anchor = match anchor_path {
         Some(p) => {
             std::fs::create_dir_all(&dir).map_err(|e| ApiError::internal(format!("session dir: {e}")))?;
@@ -757,6 +771,11 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
         None
     };
     frames.drain(..trimmed as usize);
+    if let Some((w, h)) = crop {
+        for f in &mut frames {
+            *f = f.crop_center(w, h);
+        }
+    }
     let index = plan.index;
     Ok(Built {
         plan,
@@ -768,4 +787,40 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
         prep_s: 0.0,
         ready_at: Instant::now(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fastvideo_protocol::RgbFrame;
+
+    /// A pad-and-crop chunk: frames delivered centre-cropped, the anchor
+    /// saved uncropped (the next chunk generates on the padded canvas).
+    #[test]
+    fn prepare_crops_frames_and_keeps_the_anchor_uncropped() {
+        let dir = std::env::temp_dir().join(format!("fv-director-prep-{}", uuid::Uuid::new_v4()));
+        let frame = |i: u64| {
+            let mut data = Vec::with_capacity(8 * 6 * 3);
+            for y in 0..6u8 {
+                for x in 0..8u8 {
+                    data.extend_from_slice(&[x, y, i as u8]);
+                }
+            }
+            RgbFrame::new(8, 6, data.into(), i).unwrap()
+        };
+        let plan = ChunkPlan { index: 1, prompt: "p".into(), seconds: 5.0, first_image: None, end_image: None, prompt_version: 1 };
+        let out = super::super::engine::ChunkOutput { frames: (0..3).map(frame).collect(), audio: None };
+        let anchor_path = dir.join("anchor-1.png");
+        let prep = Prep { fps: 24, audio: false, trimmed: 1, crossfade: None, anchor_path: Some(anchor_path.clone()), dir: dir.clone(), crop: Some((6, 4)) };
+        let b = prepare(plan, out, prep).unwrap();
+        assert_eq!((b.generated, b.trimmed), (3, 1));
+        assert_eq!(b.chunk.frames.len(), 2);
+        for f in &b.chunk.frames {
+            assert_eq!((f.width, f.height), (6, 4));
+            assert_eq!(f.pixel(0, 0), Some([1, 1, f.index as u8]));
+        }
+        let anchor = image::open(b.anchor.as_ref().unwrap()).unwrap().to_rgb8();
+        assert_eq!(anchor.dimensions(), (8, 6));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

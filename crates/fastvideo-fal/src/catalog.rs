@@ -646,15 +646,12 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
             let served = |v: &Value| {
                 Resolution::ALL.iter().chain(&Resolution::BASE).any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
             };
-            // An omitted resolution is 768P, or the model's first tier.
-            let default = if tiers.contains(&Resolution::P768.short_edge()) {
-                Resolution::P768.as_str()
-            } else {
-                match tiers.first() {
-                    Some(480) => Resolution::P480.as_str(),
-                    Some(1080) => Resolution::P1080.as_str(),
-                    _ => Resolution::P768.as_str(),
-                }
+            // An omitted resolution is the model's default (first) tier:
+            // 768P on H3, 1080P on LTX, 480P on h3-draft.
+            let default = match tiers.first() {
+                Some(480) => Resolution::P480.as_str(),
+                Some(1080) => Resolution::P1080.as_str(),
+                _ => Resolution::P768.as_str(),
             };
             narrow_enum(&mut s, "resolution", served, Some(default.into()));
             // Durations within the model's grid (whole seconds).
@@ -728,17 +725,34 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
 /// fields the console sets, with the values the model serves.
 pub fn director_schema(caps: &ModelCaps) -> Value {
     use crate::director::messages::Resolution as R;
-    let res: Vec<&str> = [R::R480, R::R768, R::R1080]
-        .into_iter()
-        .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
-        .map(|r| r.as_str())
-        .collect();
+    use crate::director::info::{relative_chunk_cost, served_resolutions};
+    let served = served_resolutions(caps);
+    let res: Vec<&str> = served.iter().map(|r| r.as_str()).collect();
     // The session's own default: 768p when served, else the last tier.
-    let default = if res.contains(&"768p") { "768p" } else { res.last().copied().unwrap_or("768p") };
+    let default = if served.contains(&R::R768) { "768p" } else { res.last().copied().unwrap_or("768p") };
+    // What a chunk costs next to 768p on this model (the console's labels).
+    let mut labels = Map::new();
+    let mut notes = Vec::new();
+    for r in &served {
+        if let Some(x) = relative_chunk_cost(caps, *r) {
+            let label = if x >= 1.0 {
+                format!("{} (about {x}x slower per chunk)", r.as_str())
+            } else {
+                format!("{} (about {x}x the time per chunk)", r.as_str())
+            };
+            labels.insert(r.as_str().to_owned(), label.into());
+            notes.push(format!("{} takes about {x}x as long per chunk as 768p", r.as_str()));
+        }
+    }
+    let description = if notes.is_empty() {
+        "The resolution of every chunk.".to_owned()
+    } else {
+        format!("The resolution of every chunk ({}).", notes.join("; "))
+    };
     let mut props = Map::new();
     props.insert(
         "resolution".into(),
-        json!({"type": "string", "enum": res, "default": default, "description": "The resolution of every chunk (1080p takes about 2.5x as long per chunk as 768p)."}),
+        json!({"type": "string", "enum": res, "default": default, "description": description, "x-fv-labels": labels}),
     );
     props.insert(
         "aspect_ratio".into(),
