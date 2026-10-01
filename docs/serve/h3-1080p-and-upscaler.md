@@ -760,6 +760,21 @@ is fixed (torch first). The coordinator's budget stop ruled out another GPU
 pod. A FlashVSR run on this hook needs about 25 min of RTX PRO 6000 (about
 $0.90): 12 min of setup, most of it apt, then the runs.
 
+**FlashVSR v1.1 and Real-ESRGAN, measured (2026-10-01, LTX 384p rows).**
+The same setup (CUDA 12.8 nvcc from apt, torch 2.7.1 cu128, FlashVSR
+`cf910c6`, Block-Sparse-Attention `49d6c39` built for sm_120) completed in
+7 min on an RTX PRO 6000. The import still failed on one more missing
+dependency, `modelscope` (imported by `diffsynth/models/downloader.py`, not
+in the filtered requirements); after `uv pip install modelscope` it ran.
+At x2 from 672x384 (output 1280x768, 117 of 121 frames) the tiny-decoder
+pipeline takes 5.1 s per 5 s clip (22.9 fps) plus 2.9 s of input
+preparation, with 13 GiB peak. Real-ESRGAN x2plus per frame (fp16) takes
+4.0 s (30 fps), with 4.3 GiB peak. Neither beats LTX's own upsampler and refine at
+768p on cost or detail. Numbers and verdict are in docs/serve/e2e/ltx.md
+("384p stage 1 and upscale rows"). `hd-upscaler.sh` now installs
+`modelscope` too. FlashVSR was not re-run on the H3 768p clips (the 1440p/4K
+question).
+
 ### Recommendation after the benchmark
 
 1. **Serve native H3 1080p; do not add an upscaler for 1080p.** SeedVR2

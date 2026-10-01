@@ -527,3 +527,78 @@ Every job succeeded with 145 frames and audio. Frames are bit-identical to
 the baseline at 720p; at 1080p both builds vary between boots by the same
 amount (see the profile doc).
 
+
+## Director tiers (2026-10-01)
+
+`wip/ltx-director-res` adds LTX director sessions at 480p, 720p and 768p
+next to 1080p (`LTX_SHORT_EDGES`, `director::service::canvas_for`). Two-stage
+LTX needs sides that are multiples of 64, so each tier is generated padded
+and centre-cropped back to the batch APIs' size. The next chunk's anchor is
+the uncropped last frame, so joins do not zoom:
+
+| tier (16:9) | generated | delivered | denoise s (stage 1 / upsample / stage 2) | decode s | chunk (denoise + decode) | vs 768p |
+|---|---|---|---|---|---|---|
+| 480p | 896x512 | 854x480 | 4.23 (1.60 / 0.65 / 1.98) | 1.12 | 5.35 s | 0.49 |
+| 720p | 1280x768 | 1280x720 | 8.25 (3.16 / 0.78 / 4.32) | 1.91 | 10.16 s | 0.93 |
+| 768p | 1408x768 | 1366x768 | 8.91 (3.49 / 0.67 / 4.76) | 2.00 | 10.91 s | 1.00 |
+| 1080p | 1920x1088 | 1920x1080 | 18.92 (6.88 / 2.51 / 9.54) | 3.80 | 22.72 s | 2.08 |
+
+RTX PRO 6000 (pod `9lnoscqp7y8v5k`, EUR-IS-1, EU volume read-only),
+`fv-gpucheck` from `wip/phase3-pro6000` (`f6dcd6d`), `ltx2 gen --two-stage`
+with the ltx-turbo profile (`ltx2/ltx25_distill_sol`, Sol stage 2), 121
+frames at 24 fps (one 5 s chunk), three prompts (ltx-multishot,
+ltx-newsbroadcast, ltx-frogyoga, seed 42), medians, warm process, text
+excluded. Every clip has the generation canvas's size and 121 frames. No clip
+is flat (luma std 27-70) and every clip moves. The "vs 768p" column replaces
+the form labels' estimates (0.4 / 0.9 / 2.2 -> 0.5 / 0.9 / 2.1,
+`director::info::LTX_COST_*`).
+
+**What was not run:** a live fv-serve director session (WebRTC client,
+first-frame latency, delivered fps). This is the generation path the session
+calls, at the session's canvases. The crop and the uncropped anchor are
+covered by unit tests (`prepare_crops_frames_and_keeps_the_anchor_uncropped`,
+`ltx_serves_480_720_768_and_1080_padded_and_cropped`) and by the serve
+dimension sweep, all passing on the build pod.
+
+SageAttention2 (`FASTVIDEO_ATTN_SAGE=2`) on the same tiers: 480p 4.20 s,
+720p 8.20 s, 768p 8.96 s, 1080p 18.44 s denoise, so 0.99-1.03x. ltx-turbo's
+stage 2 is Sol on layers 1-47, and stage 1 is below Sage's 6 144-token floor
+except at 1080p. Frames stay at 31-37 dB PSNR from bf16 up to 768p. See
+docs/perf/sage-attention.md section 6.3.
+
+## 384p stage 1 and upscale rows (2026-10-01)
+
+Can a 384p stage-1-only LTX clip plus an upscaler replace the two-stage
+768p clip? Same pod and prompts. The 384p clip is LTX-2.5 distilled, single
+stage, 672x384 (stage 1 of a 1344x768 two-stage run), 121 frames. Every
+upscale row doubles it to 768p and is scored against LTX's own two-stage
+1344x768 clip of the same prompt and seed. That clip is not ground truth:
+its refine stage re-synthesises detail.
+
+| row | GPU time per 5 s clip | how measured | vs LTX two-stage: LPIPS | PSNR dB | sharpness ratio |
+|---|---|---|---|---|---|
+| 384p stage 1 only | 3.90 s (denoise 3.26 + decode 0.64) | `ltx2 gen`, medians of 3 | - | - | - |
+| + Lanczos x2 | CPU, 1.7-1.8 s with PNG I/O | ffmpeg | 0.34-0.42 | 19.1-21.0 | 0.78-0.86 |
+| + Real-ESRGAN x2plus | 4.03 s (30 fps), 4.3 GiB | fp16, batches of 8, CUDA-synchronised; PNG I/O excluded | 0.38-0.45 | 18.9-20.8 | 1.08-1.12 |
+| + FlashVSR v1.1 x2 (tiny decoder) | 5.1 s (22.9 fps) + 2.9 s input prep, 13 GiB; load 27 s | official pipeline, block-sparse attention built for sm_120 | 0.41-0.52 | 18.3-20.3 | 1.19-1.64 |
+| LTX latent upsampler + 3-step refine (two-stage 1344x768) | 10.42 s (stage 1 3.27, upsample 0.74, stage 2 4.47, decode 1.94) | `ltx2 gen --two-stage`, ltx-turbo profile | reference | | |
+
+* **Saving.** 384p + Real-ESRGAN is about 7.9 s against 10.4 s for the
+  two-stage clip (-24 %). 384p + FlashVSR is 9-12 s with input
+  preparation, so it saves nothing.
+* **Look.** Lanczos is visibly softer than the refine (sharpness 0.78-0.86).
+  ESRGAN sharpens edges without adding detail. FlashVSR adds the most high
+  frequency (up to 1.64x) and invents texture. It also returns 117 of 121
+  frames (its 8n-3 rule) and a 1280x768 centre crop (sides multiple of
+  128). The montage `artifacts/perf/sage-phase3/shots/upscale-frogyoga-f060.jpg`
+  shows, left to right, Lanczos, ESRGAN, FlashVSR and LTX refine (centre
+  448x384 crops of frame 60).
+* **Verdict.** LTX's own upsampler and refine stay the 768p path: they
+  cost 6.5 s more than stage 1 alone and give new detail that follows the
+  prompt. Per-frame ESRGAN is the only cheaper option, at a visible loss
+  of detail. FlashVSR is not worth it at x2 from 384p.
+
+The Real-ESRGAN checkpoint (`RealESRGAN_x2plus.pth`, 67 MB, sha256
+`49fafd45…266abb`, GitHub release v0.2.1) went to the pod's container disk
+only. Driver: `artifacts/perf/sage-phase3/driver/` (`phase3.sh e`,
+`esrgan_x2.py`, `fvsr.sh`).
