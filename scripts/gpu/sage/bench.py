@@ -120,6 +120,10 @@ class Ours:
             self.s_vmax = self.cu.func(ms, "attn_sage_vmax")
             self.s_vquant = self.cu.func(ms, "attn_sage_vquant")
             self.sage = self.cu.func(ms, "attn_sage_fwd_d128", self.SAGE_SMEM)
+            try:
+                self.sage_w32 = self.cu.func(ms, "attn_sage_fwd_w32_d128", self.SAGE_SMEM)
+            except RuntimeError:
+                self.sage_w32 = None
         self.dummy = torch.empty(4, device="cuda", dtype=torch.float32)
 
     def dense(self, q, k, v):
@@ -172,7 +176,10 @@ class Ours:
                         P(out), P(sc), ctypes.c_int(rows), ctypes.c_int(rows_pad), ctypes.c_int(grp)])
         return out, sc
 
-    def dense_sage(self, q, k, v):
+    def dense_sage_w32(self, q, k, v):
+        return self.dense_sage(q, k, v, w32=True)
+
+    def dense_sage(self, q, k, v, w32=False):
         b, h, sq, d = q.shape
         sk = k.shape[2]
         bh = b * h
@@ -188,7 +195,8 @@ class Ours:
                        [P(v), P(vmax), P(vt), P(vs), ctypes.c_int(sk), ctypes.c_int(skp)])
         out = torch.empty_like(q)
         sl2 = (1.0 / math.sqrt(d)) * LOG2E
-        self.cu.launch(self.sage, (sqp // 128, bh, 1), (256, 1, 1), self.SAGE_SMEM,
+        f, nt = (self.sage_w32, 128) if w32 else (self.sage, 256)
+        self.cu.launch(f, (sqp // 128, bh, 1), (nt, 1, 1), self.SAGE_SMEM,
                        [P(q8), P(qs), P(k8), P(ks), P(vt), P(vs), P(self.dummy), P(out), ctypes.c_int(1),
                         ctypes.c_int(sq), ctypes.c_int(sk), ctypes.c_int(sqp), ctypes.c_int(skp),
                         ctypes.c_float(sl2)])
@@ -205,6 +213,8 @@ def build_kernels(cubin_dir, only=None):
             ks["fv_fp8"] = ours.dense_fp8
         if ours.sage is not None:
             ks["fv_sage"] = ours.dense_sage
+            if ours.sage_w32 is not None:
+                ks["fv_sage_w32"] = ours.dense_sage_w32
     except Exception as e:  # noqa: BLE001
         print(f"[warn] our kernels unavailable: {e}", file=sys.stderr)
     from torch.nn.attention import SDPBackend, sdpa_kernel

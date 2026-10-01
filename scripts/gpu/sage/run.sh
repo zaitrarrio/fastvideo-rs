@@ -20,7 +20,7 @@ if [[ ",$STEPS," == *,setup,* ]]; then
       tail -n 15 "$f" | sed 's/^/S   /'
     fi
   done
-  grep -A2 "attn_sage_fwd_d128\|flash_mma_fwd2_d128" logs/ours.log | grep -i "registers\|spill" | sed 's/^/S ptxas /'
+  grep -A4 "Compiling entry.*\(attn_sage_fwd\|flash_mma_fwd2_d128\)" logs/ours.log | grep -i "Compiling entry\|registers\|spill" | sed 's/^/S ptxas /'
   say setup done
 fi
 python - <<'EOF' 2>&1 | sed 's/^/S env /'

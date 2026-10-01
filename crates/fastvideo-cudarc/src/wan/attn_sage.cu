@@ -200,25 +200,6 @@ __device__ __forceinline__ void sg_cp16(unsigned int smem, const void* gmem, int
 }
 __device__ __forceinline__ void sg_commit() { asm volatile("cp.async.commit_group;\n" ::); }
 template <int N> __device__ __forceinline__ void sg_wait() { asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); }
-// ROWS x 128-byte rows (global stride 128) with 256 threads.
-template <int ROWS>
-__device__ __forceinline__ void sg_load128(unsigned int smem, const unsigned char* g, int tid) {
-    #pragma unroll
-    for (int i = 0; i < ROWS * 8 / 256; i++) {
-        const int chunk = tid + i * 256;
-        const int row = chunk >> 3, c = chunk & 7;
-        sg_cp16(smem + sg_swz128(row, c * 16), g + (long)row * 128 + c * 16, 1);
-    }
-}
-// V^T tile: 128 dim rows x 64 key bytes, global row stride `gs` bytes.
-__device__ __forceinline__ void sg_load_vt(unsigned int smem, const unsigned char* g, long gs, int tid) {
-    #pragma unroll
-    for (int i = 0; i < 2; i++) {
-        const int chunk = tid + i * 256;
-        const int row = chunk >> 2, c = chunk & 3;
-        sg_cp16(smem + sg_swz64(row, c * 16), g + (long)row * gs + c * 16, 1);
-    }
-}
 __device__ __forceinline__ void sg_ldm_x4(unsigned int addr, unsigned int& r0, unsigned int& r1, unsigned int& r2, unsigned int& r3) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                  : "=r"(r0), "=r"(r1), "=r"(r2), "=r"(r3) : "r"(addr));
@@ -245,22 +226,23 @@ __device__ __forceinline__ float sg_exp2(float x) {
 }
 #endif
 
-// Dense SDPA: CTA = 128 queries x (batch*head), 8 warps x 16 rows, double-
-// buffered (K8, V8^T) stages. q8 [bh, sq_pad, 128] int8 + qs [bh, sq_pad /
-// 16]; k8 [bh, sk_pad, 128] int8 + ks [bh, sk_pad / 64]; vt [bh, 128, sk_pad]
-// e4m3 + vs [bh, 128]. Output f32 or bf16 [bh, sq, 128]. Dynamic shared
-// memory: 2 * 16 KB (Q, 16 KB, is staged in stage 1 before the loop).
-extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+// The dense body. CTA = 128 queries x (batch*head); NW warps of MT x 16 query
+// rows (NW * MT * 16 = 128), double-buffered (K8, V8^T) stages. With MT = 2
+// every K / V fragment loaded from shared memory feeds two MMAs (upstream
+// SageAttention2's 32-row warps). Scores are kept in the log2 domain: the
+// dequant scale q_scale * k_scale * sl2 is applied once per element.
+template <int MT, int NW>
+__device__ __forceinline__ void sg_fwd_body(
     const sg_u8* __restrict__ q8, const float* __restrict__ qs,
     const sg_u8* __restrict__ k8, const float* __restrict__ ks,
     const sg_u8* __restrict__ vt, const float* __restrict__ vs,
     float* __restrict__ out, sg_u16* __restrict__ out_bf16,
-    int out_is_bf16, int sq, int sk, int sq_pad, int sk_pad, float sl2
+    int out_is_bf16, int sq, int sk, int sq_pad, int sk_pad, float sl2, unsigned char* smem
 ) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
-    extern __shared__ __align__(128) unsigned char sg_smem[];
-    constexpr int BR = 128;
-    const unsigned int base = sg_smem_u32(sg_smem);
+    constexpr int BR = 128, NT = NW * 32;
+    static_assert(NW * MT * 16 == BR, "128 query rows per CTA");
+    const unsigned int base = sg_smem_u32(smem);
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
     const int g = lane >> 2, t = lane & 3;
     const int q0 = (int)blockIdx.x * BR;
@@ -271,29 +253,56 @@ extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
     const unsigned char* Kh = k8 + bh * (long)sk_pad * SG_D;
     const unsigned char* Vh = vt + bh * (long)SG_D * sk_pad;
     const float* ksh = ks + bh * (long)(sk_pad / SG_TILE);
-    const float qscale = qs[bh * (long)(sq_pad / 16) + (q0 >> 4) + warp];
+    float qsl[MT];
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++) qsl[mt] = qs[bh * (long)(sq_pad / 16) + (q0 >> 4) + warp * MT + mt] * sl2;
     const int nkt = (sk + SG_TILE - 1) / SG_TILE;
 
+    auto load_k = [&](unsigned int s, const unsigned char* gk) {
+        #pragma unroll
+        for (int i = 0; i < SG_TILE * 8 / NT; i++) {
+            const int chunk = tid + i * NT, row = chunk >> 3, c = chunk & 7;
+            sg_cp16(s + sg_swz128(row, c * 16), gk + (long)row * 128 + c * 16, 1);
+        }
+    };
+    auto load_v = [&](unsigned int s, const unsigned char* gv) {
+        #pragma unroll
+        for (int i = 0; i < SG_D * 4 / NT; i++) {
+            const int chunk = tid + i * NT, row = chunk >> 2, c = chunk & 3;
+            sg_cp16(s + sg_swz64(row, c * 16), gv + (long)row * sk_pad + c * 16, 1);
+        }
+    };
     // Q (128 int8 rows, 16 KB) -> stage 1; (K8_0, V8^T_0) -> stage 0.
-    sg_load128<BR>(base + SG_STAGE, Qh, tid);
+    #pragma unroll
+    for (int i = 0; i < BR * 8 / NT; i++) {
+        const int chunk = tid + i * NT, row = chunk >> 3, c = chunk & 7;
+        sg_cp16(base + SG_STAGE + sg_swz128(row, c * 16), Qh + (long)row * 128 + c * 16, 1);
+    }
     sg_commit();
-    sg_load128<SG_TILE>(base, Kh, tid);
-    sg_load_vt(base + SG_KB, Vh, sk_pad, tid);
+    load_k(base, Kh);
+    load_v(base + SG_KB, Vh);
     sg_commit();
     sg_wait<1>();
     __syncthreads();
-    unsigned int qf[4][4];
+    unsigned int qf[MT][4][4];
     #pragma unroll
-    for (int kc = 0; kc < 4; kc++) {
-        const int row = warp * 16 + (lane & 15), byte = kc * 32 + (lane >> 4) * 16;
-        sg_ldm_x4(base + SG_STAGE + sg_swz128(row, byte), qf[kc][0], qf[kc][1], qf[kc][2], qf[kc][3]);
+    for (int mt = 0; mt < MT; mt++) {
+        #pragma unroll
+        for (int kc = 0; kc < 4; kc++) {
+            const int row = (warp * MT + mt) * 16 + (lane & 15), byte = kc * 32 + (lane >> 4) * 16;
+            sg_ldm_x4(base + SG_STAGE + sg_swz128(row, byte), qf[mt][kc][0], qf[mt][kc][1], qf[mt][kc][2], qf[mt][kc][3]);
+        }
     }
 
-    float o[16][4];
+    float o[MT][16][4];
     #pragma unroll
-    for (int n = 0; n < 16; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    for (int mt = 0; mt < MT; mt++)
+        #pragma unroll
+        for (int n = 0; n < 16; n++) { o[mt][n][0] = o[mt][n][1] = o[mt][n][2] = o[mt][n][3] = 0.f; }
     const float NEG = __int_as_float(0xff800000);
-    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;
+    float m[MT][2], l[MT][2];
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++) { m[mt][0] = m[mt][1] = NEG; l[mt][0] = l[mt][1] = 0.f; }
 
     #pragma unroll 1
     for (int j = 0; j < nkt; j++) {
@@ -304,14 +313,16 @@ extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
         if (j + 1 < nkt) {
             const unsigned int nK = base + ((j + 1) & 1) * SG_STAGE;
             const int nkv = kv0 + SG_TILE;
-            sg_load128<SG_TILE>(nK, Kh + (long)nkv * SG_D, tid);
-            sg_load_vt(nK + SG_KB, Vh + nkv, sk_pad, tid);
+            load_k(nK, Kh + (long)nkv * SG_D);
+            load_v(nK + SG_KB, Vh + nkv);
             sg_commit();
         }
-        // S[16 x 64] = Q8 K8^T (exact int32)
-        int si[8][4];
+        // S[MT*16 x 64] = Q8 K8^T (exact int32); each K fragment feeds MT MMAs
+        int si[MT][8][4];
         #pragma unroll
-        for (int n = 0; n < 8; n++) { si[n][0] = si[n][1] = si[n][2] = si[n][3] = 0; }
+        for (int mt = 0; mt < MT; mt++)
+            #pragma unroll
+            for (int n = 0; n < 8; n++) { si[mt][n][0] = si[mt][n][1] = si[mt][n][2] = si[mt][n][3] = 0; }
         #pragma unroll
         for (int kc = 0; kc < 4; kc++) {
             #pragma unroll
@@ -320,61 +331,76 @@ extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
                 const int row = n * 8 + (lane & 7) + ((lane >> 4) << 3);
                 const int byte = kc * 32 + ((lane >> 3) & 1) * 16;
                 sg_ldm_x4(sK + sg_swz128(row, byte), b[0], b[1], b[2], b[3]);
-                sg_mma_s8(si[n], qf[kc], b);
-                sg_mma_s8(si[n + 1], qf[kc], b + 2);
+                #pragma unroll
+                for (int mt = 0; mt < MT; mt++) {
+                    sg_mma_s8(si[mt][n], qf[mt][kc], b);
+                    sg_mma_s8(si[mt][n + 1], qf[mt][kc], b + 2);
+                }
             }
         }
-        // online softmax (f32), dequantized by q_scale * k_scale
-        const float dq = qscale * ksh[j];
-        float s[8][4];
+        const float kd = ksh[j];
+        unsigned int pa[MT][2][4];
         #pragma unroll
-        for (int n = 0; n < 8; n++) {
-            const int c0 = n * 8 + 2 * t;
-            s[n][0] = c0 < len ? (float)si[n][0] * dq : NEG;
-            s[n][2] = c0 < len ? (float)si[n][2] * dq : NEG;
-            s[n][1] = c0 + 1 < len ? (float)si[n][1] * dq : NEG;
-            s[n][3] = c0 + 1 < len ? (float)si[n][3] * dq : NEG;
+        for (int mt = 0; mt < MT; mt++) {
+            // online softmax in the log2 domain (x = s * scale * log2 e)
+            const float c = qsl[mt] * kd;
+            float x[8][4];
+            if (len == SG_TILE) {
+                #pragma unroll
+                for (int n = 0; n < 8; n++) {
+                    x[n][0] = (float)si[mt][n][0] * c; x[n][1] = (float)si[mt][n][1] * c;
+                    x[n][2] = (float)si[mt][n][2] * c; x[n][3] = (float)si[mt][n][3] * c;
+                }
+            } else {
+                #pragma unroll
+                for (int n = 0; n < 8; n++) {
+                    const int c0 = n * 8 + 2 * t;
+                    x[n][0] = c0 < len ? (float)si[mt][n][0] * c : NEG;
+                    x[n][2] = c0 < len ? (float)si[mt][n][2] * c : NEG;
+                    x[n][1] = c0 + 1 < len ? (float)si[mt][n][1] * c : NEG;
+                    x[n][3] = c0 + 1 < len ? (float)si[mt][n][3] * c : NEG;
+                }
+            }
+            float rmax0 = NEG, rmax1 = NEG;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                rmax0 = fmaxf(rmax0, fmaxf(x[n][0], x[n][1]));
+                rmax1 = fmaxf(rmax1, fmaxf(x[n][2], x[n][3]));
+            }
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+            const float mn0 = fmaxf(m[mt][0], rmax0), mn1 = fmaxf(m[mt][1], rmax1);
+            const float ms0 = (mn0 == NEG) ? 0.f : mn0;
+            const float ms1 = (mn1 == NEG) ? 0.f : mn1;
+            const float a0 = sg_exp2(m[mt][0] - ms0), a1 = sg_exp2(m[mt][1] - ms1);
+            m[mt][0] = mn0; m[mt][1] = mn1;
+            float ls0 = 0.f, ls1 = 0.f;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                x[n][0] = sg_exp2(x[n][0] - ms0);
+                x[n][1] = sg_exp2(x[n][1] - ms0);
+                x[n][2] = sg_exp2(x[n][2] - ms1);
+                x[n][3] = sg_exp2(x[n][3] - ms1);
+                ls0 += x[n][0] + x[n][1];
+                ls1 += x[n][2] + x[n][3];
+            }
+            l[mt][0] = fmaf(l[mt][0], a0, ls0);
+            l[mt][1] = fmaf(l[mt][1], a1, ls1);
+            #pragma unroll
+            for (int n = 0; n < 16; n++) { o[mt][n][0] *= a0; o[mt][n][1] *= a0; o[mt][n][2] *= a1; o[mt][n][3] *= a1; }
+            // P -> e4m3 A fragments (k32 chunk kc = key blocks 4kc..4kc+3)
+            #pragma unroll
+            for (int kc = 0; kc < 2; kc++) {
+                const int nb = 4 * kc;
+                pa[mt][kc][0] = sg_pack_e4m3(x[nb][0] * SG_P_SCALE, x[nb][1] * SG_P_SCALE, x[nb + 1][0] * SG_P_SCALE, x[nb + 1][1] * SG_P_SCALE);
+                pa[mt][kc][1] = sg_pack_e4m3(x[nb][2] * SG_P_SCALE, x[nb][3] * SG_P_SCALE, x[nb + 1][2] * SG_P_SCALE, x[nb + 1][3] * SG_P_SCALE);
+                pa[mt][kc][2] = sg_pack_e4m3(x[nb + 2][0] * SG_P_SCALE, x[nb + 2][1] * SG_P_SCALE, x[nb + 3][0] * SG_P_SCALE, x[nb + 3][1] * SG_P_SCALE);
+                pa[mt][kc][3] = sg_pack_e4m3(x[nb + 2][2] * SG_P_SCALE, x[nb + 2][3] * SG_P_SCALE, x[nb + 3][2] * SG_P_SCALE, x[nb + 3][3] * SG_P_SCALE);
+            }
         }
-        float rmax0 = NEG, rmax1 = NEG;
-        #pragma unroll
-        for (int n = 0; n < 8; n++) {
-            rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
-            rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
-        }
-        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
-        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
-        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
-        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
-        const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
-        const float ms0 = (mn0 == NEG) ? 0.f : mn0 * sl2;
-        const float ms1 = (mn1 == NEG) ? 0.f : mn1 * sl2;
-        const float a0 = sg_exp2(fmaf(m0, sl2, -ms0)), a1 = sg_exp2(fmaf(m1, sl2, -ms1));
-        m0 = mn0; m1 = mn1;
-        float ls0 = 0.f, ls1 = 0.f;
-        #pragma unroll
-        for (int n = 0; n < 8; n++) {
-            s[n][0] = sg_exp2(fmaf(s[n][0], sl2, -ms0));
-            s[n][1] = sg_exp2(fmaf(s[n][1], sl2, -ms0));
-            s[n][2] = sg_exp2(fmaf(s[n][2], sl2, -ms1));
-            s[n][3] = sg_exp2(fmaf(s[n][3], sl2, -ms1));
-            ls0 += s[n][0] + s[n][1];
-            ls1 += s[n][2] + s[n][3];
-        }
-        l0 = fmaf(l0, a0, ls0);
-        l1 = fmaf(l1, a1, ls1);
-        #pragma unroll
-        for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
-        // P -> e4m3 A fragments (k32 chunk kc = key blocks 4kc..4kc+3)
-        unsigned int pa[2][4];
-        #pragma unroll
-        for (int kc = 0; kc < 2; kc++) {
-            const int nb = 4 * kc;
-            pa[kc][0] = sg_pack_e4m3(s[nb][0] * SG_P_SCALE, s[nb][1] * SG_P_SCALE, s[nb + 1][0] * SG_P_SCALE, s[nb + 1][1] * SG_P_SCALE);
-            pa[kc][1] = sg_pack_e4m3(s[nb][2] * SG_P_SCALE, s[nb][3] * SG_P_SCALE, s[nb + 1][2] * SG_P_SCALE, s[nb + 1][3] * SG_P_SCALE);
-            pa[kc][2] = sg_pack_e4m3(s[nb + 2][0] * SG_P_SCALE, s[nb + 2][1] * SG_P_SCALE, s[nb + 3][0] * SG_P_SCALE, s[nb + 3][1] * SG_P_SCALE);
-            pa[kc][3] = sg_pack_e4m3(s[nb + 2][2] * SG_P_SCALE, s[nb + 2][3] * SG_P_SCALE, s[nb + 3][2] * SG_P_SCALE, s[nb + 3][3] * SG_P_SCALE);
-        }
-        // O[16 x 128] += P8[16 x 64] V8[64 x 128] (V^T tile: dim rows, key bytes)
+        // O[MT*16 x 128] += P8 V8 (V^T tile: dim rows, key bytes)
         #pragma unroll
         for (int kc = 0; kc < 2; kc++) {
             #pragma unroll
@@ -383,37 +409,76 @@ extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
                 const int row = n * 8 + (lane & 7) + ((lane >> 4) << 3);
                 const int byte = kc * 32 + ((lane >> 3) & 1) * 16;
                 sg_ldm_x4(sV + sg_swz64(row, byte), b[0], b[1], b[2], b[3]);
-                sg_mma_e4m3(o[n], pa[kc], b);
-                sg_mma_e4m3(o[n + 1], pa[kc], b + 2);
+                #pragma unroll
+                for (int mt = 0; mt < MT; mt++) {
+                    sg_mma_e4m3(o[mt][n], pa[mt][kc], b);
+                    sg_mma_e4m3(o[mt][n + 1], pa[mt][kc], b + 2);
+                }
             }
         }
     }
 
-    l0 += __shfl_xor_sync(0xffffffffu, l0, 1);
-    l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
-    l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
-    l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
-    const float inv0 = l0 > 0.f ? 1.f / (l0 * SG_P_SCALE) : 0.f;
-    const float inv1 = l1 > 0.f ? 1.f / (l1 * SG_P_SCALE) : 0.f;
     const float* vsh = vs + bh * SG_D;
-    const int row0 = warp * 16 + g, row1 = row0 + 8;
-    const bool ok0 = row0 < qlen, ok1 = row1 < qlen;
-    const long r0 = (bh * sq + q0 + row0) * SG_D, r1 = r0 + 8L * SG_D;
     #pragma unroll
-    for (int n = 0; n < 16; n++) {
-        const int col = n * 8 + 2 * t;
-        const float c0 = vsh[col], c1 = vsh[col + 1];
-        if (out_is_bf16) {
-            if (ok0) *reinterpret_cast<unsigned int*>(out_bf16 + r0 + col) = sg_pack_bf16(o[n][0] * inv0 * c0, o[n][1] * inv0 * c1);
-            if (ok1) *reinterpret_cast<unsigned int*>(out_bf16 + r1 + col) = sg_pack_bf16(o[n][2] * inv1 * c0, o[n][3] * inv1 * c1);
-        } else {
-            if (ok0) *reinterpret_cast<float2*>(out + r0 + col) = make_float2(o[n][0] * inv0 * c0, o[n][1] * inv0 * c1);
-            if (ok1) *reinterpret_cast<float2*>(out + r1 + col) = make_float2(o[n][2] * inv1 * c0, o[n][3] * inv1 * c1);
+    for (int mt = 0; mt < MT; mt++) {
+        float l0 = l[mt][0], l1 = l[mt][1];
+        l0 += __shfl_xor_sync(0xffffffffu, l0, 1);
+        l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
+        l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
+        l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
+        const float inv0 = l0 > 0.f ? 1.f / (l0 * SG_P_SCALE) : 0.f;
+        const float inv1 = l1 > 0.f ? 1.f / (l1 * SG_P_SCALE) : 0.f;
+        const int row0 = (warp * MT + mt) * 16 + g, row1 = row0 + 8;
+        const bool ok0 = row0 < qlen, ok1 = row1 < qlen;
+        const long r0 = (bh * sq + q0 + row0) * SG_D, r1 = r0 + 8L * SG_D;
+        #pragma unroll
+        for (int n = 0; n < 16; n++) {
+            const int col = n * 8 + 2 * t;
+            const float c0 = vsh[col], c1 = vsh[col + 1];
+            if (out_is_bf16) {
+                if (ok0) *reinterpret_cast<unsigned int*>(out_bf16 + r0 + col) = sg_pack_bf16(o[mt][n][0] * inv0 * c0, o[mt][n][1] * inv0 * c1);
+                if (ok1) *reinterpret_cast<unsigned int*>(out_bf16 + r1 + col) = sg_pack_bf16(o[mt][n][2] * inv1 * c0, o[mt][n][3] * inv1 * c1);
+            } else {
+                if (ok0) *reinterpret_cast<float2*>(out + r0 + col) = make_float2(o[mt][n][0] * inv0 * c0, o[mt][n][1] * inv0 * c1);
+                if (ok1) *reinterpret_cast<float2*>(out + r1 + col) = make_float2(o[mt][n][2] * inv1 * c0, o[mt][n][3] * inv1 * c1);
+            }
         }
     }
+}
+#define SG_ENTRY(MT, NW)                                                                     \
+    extern __shared__ __align__(128) unsigned char sg_smem[];                                \
+    sg_fwd_body<MT, NW>(q8, qs, k8, ks, vt, vs, out, out_bf16, out_is_bf16, sq, sk, sq_pad,  \
+                        sk_pad, sl2, sg_smem);
 #else
-    (void)q8; (void)qs; (void)k8; (void)ks; (void)vt; (void)vs; (void)out; (void)out_bf16;
-    (void)out_is_bf16; (void)sq; (void)sk; (void)sq_pad; (void)sk_pad; (void)sl2;
+#define SG_ENTRY(MT, NW)                                                                     \
+    (void)q8; (void)qs; (void)k8; (void)ks; (void)vt; (void)vs; (void)out; (void)out_bf16;   \
+    (void)out_is_bf16; (void)sq; (void)sk; (void)sq_pad; (void)sk_pad; (void)sl2;            \
     __trap();
 #endif
+
+// Dense SDPA: q8 [bh, sq_pad, 128] int8 + qs [bh, sq_pad / 16]; k8 [bh,
+// sk_pad, 128] int8 + ks [bh, sk_pad / 64]; vt [bh, 128, sk_pad] e4m3 + vs
+// [bh, 128]. Output f32 or bf16 [bh, sq, 128]. grid (sq_pad / 128, bh);
+// dynamic shared memory 2 x 16 KB (Q, 16 KB, is staged in stage 1 first).
+// attn_sage_fwd_d128: 8 warps x 16 rows (256 threads).
+extern "C" __global__ void __launch_bounds__(256, 1) attn_sage_fwd_d128(
+    const sg_u8* __restrict__ q8, const float* __restrict__ qs,
+    const sg_u8* __restrict__ k8, const float* __restrict__ ks,
+    const sg_u8* __restrict__ vt, const float* __restrict__ vs,
+    float* __restrict__ out, sg_u16* __restrict__ out_bf16,
+    int out_is_bf16, int sq, int sk, int sq_pad, int sk_pad, float sl2
+) {
+    SG_ENTRY(1, 8)
+}
+
+// attn_sage_fwd_w32_d128: 4 warps x 32 rows (128 threads), K / V fragments
+// reused across each warp's two row tiles.
+extern "C" __global__ void __launch_bounds__(128, 1) attn_sage_fwd_w32_d128(
+    const sg_u8* __restrict__ q8, const float* __restrict__ qs,
+    const sg_u8* __restrict__ k8, const float* __restrict__ ks,
+    const sg_u8* __restrict__ vt, const float* __restrict__ vs,
+    float* __restrict__ out, sg_u16* __restrict__ out_bf16,
+    int out_is_bf16, int sq, int sk, int sq_pad, int sk_pad, float sl2
+) {
+    SG_ENTRY(2, 4)
 }
