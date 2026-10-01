@@ -191,7 +191,7 @@ if [[ "${FV_HD_FLASHVSR:-0}" == 1 && -f "$FV_W/.complete" ]]; then
       git -C "$UP/$d" fetch -q --depth 1 origin "$sha"; git -C "$UP/$d" checkout -q FETCH_HEAD
     done
     grep -vE "^(torch|torchvision|torchaudio)==" "$UP/FlashVSR/requirements.txt" >"$UP/fvsr-req.txt"
-    uv pip install -q -r "$UP/fvsr-req.txt" packaging ninja psutil wheel setuptools
+    uv pip install -q -r "$UP/fvsr-req.txt" packaging ninja psutil wheel setuptools modelscope
     cd "$UP/Block-Sparse-Attention"
     CUDA_HOME=/usr/local/cuda-12.8 BLOCK_SPARSE_ATTN_CUDA_ARCHS="$arch" MAX_JOBS="${MAX_JOBS:-$(( $(nproc) / 2 ))}" \
       uv pip install --no-build-isolation -v . 2>&1 | tail -40

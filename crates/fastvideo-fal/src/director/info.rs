@@ -43,10 +43,12 @@ pub fn relative_chunk_cost(caps: &ModelCaps, res: Resolution) -> Option<f64> {
     }
 }
 
-/// LTX chunk time relative to 768p (see [`relative_chunk_cost`]).
-const LTX_COST_480: f64 = 0.4;
+/// LTX chunk time relative to 768p (see [`relative_chunk_cost`]): ltx-turbo
+/// two-stage, 121 frames, denoise + decode, measured 2026-10-01 on RTX PRO
+/// 6000: 480p 5.35 s, 720p 10.16 s, 768p 10.91 s, 1080p 22.72 s.
+const LTX_COST_480: f64 = 0.5;
 const LTX_COST_720: f64 = 0.9;
-const LTX_COST_1080: f64 = 2.2;
+const LTX_COST_1080: f64 = 2.1;
 
 /// Per-session facts that `session_info` reports.
 #[derive(Clone, Debug, PartialEq)]

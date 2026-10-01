@@ -1,10 +1,11 @@
 # SageAttention2 / SageAttention3 against our attention kernels
 
-Status (2026-10-01): Phases 1 and 2 are done; Phase 3 (end to end) is
-planned but not started (section 6). The kernel code
-(`wan/attn_sage.{cu,rs}`) and the harness (`scripts/gpu/sage/`: `bench.py`,
-`capture.py`, `summarize.py`, `vast-run.sh`) are on branch `wip/sage-attn`,
-not on main, until Phase 3 passes.
+Status (2026-10-01): Phases 1, 2 and 3 are done (Phase 3: section 6). The
+kernel code (`wan/attn_sage.{cu,rs}`) and the harness (`scripts/gpu/sage/`:
+`bench.py`, `capture.py`, `summarize.py`, `vast-run.sh`) stay on branch
+`wip/sage-attn` (also merged into `wip/phase3-pro6000`), not on main: the
+H3 five-prompt gate does not pass (section 6.2), so the port is not merged.
+It is default-off either way; merging it is the owner's call (section 6.6).
 
 **Summary**
 
@@ -20,9 +21,21 @@ not on main, until Phase 3 passes.
   (up to 2.2x on the PRO 6000). It exists for sm_120/121 only.
 * **Ported** as `wan::attn_sage` (opt-in `FASTVIDEO_ATTN_SAGE=2`):
   upstream-level accuracy, 1.42-1.62x over fwd2 at >= 12k tokens (about
-  10 % behind upstream's kernel). Built and checked with the harness on
-  RTX PRO 6000; the Rust `fv-gpucheck` group is compiled but not yet run.
-* **Spend:** $1.50 of Vast credit over six instances, all destroyed.
+  10 % behind upstream's kernel). The Rust parity group passes on RTX PRO
+  6000 (6/6 cases), and the kernel is 1.41-1.50x over our real dense
+  default (cuDNN or fwd2, whichever is faster per shape).
+* **End to end (Phase 3, RTX PRO 6000).** Denoise speedups where dense
+  attention runs: Sol-H3 4-step dense 1.33x, H3 max (Sol-H3 engine ladder)
+  1.13x, LTX-2.5 dense stage 2 at 1080p 1.15x. Nothing where the serving
+  recipe is already sparse: h3-turbo (VSA) 1.00x (byte-identical), LTX
+  turbo (Sol stage 2) 0.99-1.03x.
+* **Gates.** LTX dense 1080p passes. Both H3 recipes fail on one prompt of
+  five (sharpness 0.93 / 0.89 against a 0.95 floor). A bf16-only control
+  (the dense kernel switched from cuDNN to fwd2) moves H3 just as far and
+  fails the same gate on another prompt, so on H3 this gate cannot tell
+  Sage from bf16 noise.
+* **Spend:** $1.50 of Vast credit (Phases 1-2); Phase 3 about $4.20 on
+  Runpod (section 6.7).
 
 ## 1. What we run today (Phase 0)
 
@@ -253,9 +266,8 @@ considered. At kernel level it is ~25x the bf16 error.
 * **Parity group.** `fv-gpucheck kernels --groups attn_sage` covers flat /
   peaked parity against the bf16 kernel and f64 (the `attn_fp8` cases plus
   an odd 130-row case) and timing at the H3 768p / LTX 720p stage-2 /
-  FastWan shapes. The group compiles (`cargo check`) but has **not been run**
-  through the Rust binary: the Runpod build pod is unavailable, and the Vast
-  runs used the harness.
+  FastWan shapes. First run through the Rust binary in Phase 3: all six
+  cases pass (section 6.1).
 
 Measured with the harness on RTX PRO 6000 (instance 53608464; the kernel as
 committed, 8 warps):
@@ -339,59 +351,146 @@ which is under 1.3x. It is 1.32x over torch's cuDNN 9.10 (our proxy here,
 76.3 ms, 541 TFLOPS). Our `mma.sync` port is no faster than fwd2 on H100: a
 wgmma port would be a separate kernel for a ~15 % gain. Not pursued.
 
-## 6. Phase 3 plan (not started; needs the coordinator's go-ahead and the owner's approval of the downloads)
+## 6. Phase 3: end to end (Runpod RTX PRO 6000, 2026-10-01)
 
-**What it would answer.** Does `FASTVIDEO_ATTN_SAGE=2` pass the end-to-end
-gates, and what does it buy per request? The same session would also run
-the LTX items below, so the large downloads are used once.
+**Setup.** One RTX PRO 6000 Blackwell Server Edition pod (`9lnoscqp7y8v5k`,
+EUR-IS-1, $2.09/hr, driver 595.91.07) on the EU weight volume `jg48s6o1w0`,
+mounted read-only; everything written went to the container disk. The
+binary is `fv-gpucheck` built on the shared build pod from
+`wip/phase3-pro6000` (main + `wip/sage-attn` + `wip/ltx-director-res`,
+`f6dcd6d`), uploaded to a pod running the `wip/sage-attn` runtime image
+(`fastvideo-rs-runtime:sha-4eeb801`, the same pinned CUDA 13.4 libraries).
+The branch's own CI image did not build: rustup inside the Docker build
+fails to update `stable` to 1.99.0 ("Invalid cross-device link"), which
+will hit main's next image build too. The pod was driven through
+`scripts/serve/e2e/pod.sh` (sidecar exec). Driver, per-row summary and
+frame montages: `artifacts/perf/sage-phase3/`.
 
-**Host.** One Vast RTX PRO 6000 (96 GB; WS or Server Edition), >= 32 cores,
->= 1.9 Gbps down, 500 GB disk. On 2026-10-01 there were eight such offers
-at $1.47-2.38/hr; the cheapest was UK offer 42402155 at $1.47/hr, with
-storage at $0.13/GB-month (500 GB is about $0.09/hr). Plan for about
-$1.56/hr all-in.
+Every A/B is two processes on the same pod, identical except for
+`FASTVIDEO_ATTN_SAGE=2`; each arm has its own text and AdaLN caches, so
+nothing is shared between arms. Quality is `fv-gpucheck compare-clips` (LPIPS
+alex on 44 frames, PSNR, sharpness and temporal-jitter ratios) per prompt,
+then `fv-gpucheck gate` with `scripts/gpu/gate-policy.toml` (`lossy`: hard
+limits sharpness 0.95-1.08, jitter 0.85-1.20, frame count, LPIPS
+available; promotion speedup >= 1.10 on denoise).
 
-**Downloads** (Hugging Face, to the instance disk; owner approval needed):
+### 6.1 The Rust parity group (`kernels --groups attn_sage,attn_fp8,attn3_bench`)
 
-| tree | size |
-|---|---|
-| H3 8-step (`FastVideo/FastVideo-FastH3-8-Step-V2`: transformer 70.0 GB, text encoder 66.7 GB, VAE 10.4 GB, audio VAE 0.6 GB) | 147.7 GB |
-| LTX-2.5 (`Lightricks/LTX-2.5-Diffusers`: transformer 75.9, text encoder 23.9, connectors 12.6, distilled LoRA 9.7, VAE / upsampler / audio 2.6 GB) | 124.7 GB |
-| FlashVSR v1.1 (`JunhaoZhuang/FlashVSR-v1.1`) + Real-ESRGAN x2plus | ~4 GB |
-| **total** | **~277 GB** (more than the 190 GB first estimated) |
+First run through the Rust binary. `attn_sage` passes all six parity cases
+against the bf16 kernel (rel-L2 0.035-0.039, cosine 0.9992-0.9994, peaked
+S = 4097 included). The bench cases compare against `auto`, i.e. our real
+dense default (cuDNN or fwd2, per shape):
 
-The same trees already sit verified on the Runpod network volumes
-(`scripts/gpu/weights-manifest.tsv`). Once the Runpod balance is positive,
-running Phase 3 on a Runpod RTX PRO 6000 ($2.09/hr) against those volumes
-would skip the 277 GB fetch and its ~30 min; that is the cheaper choice if
-it is available.
+| shape | heads x seq | dense `auto` ms | `attn_sage` ms | speedup | harness (Vast, vs fwd2) |
+|---|---|---|---|---|---|
+| H3 768p | 56 x 37 966 | 106.99 (386 TFLOPS) | 71.43 (579 TFLOPS) | 1.50x | 70.47 vs 113.60 (1.61x) |
+| LTX 720p stage 2 | 32 x 14 080 | 8.75 | 6.00 | 1.46x | 5.68 vs 8.87 (1.56x) |
+| FastWan 480p | 12 x 32 760 | 16.54 (cuDNN) | 11.77 | 1.41x | 11.51 vs 18.48 (1.61x) |
 
-**Steps and estimates** (wall clock on the host above):
+The port runs at the harness's speed; the lower ratio is the stronger
+baseline: at the H3 shape `auto` picks cuDNN 9.26, about 6 % faster than
+fwd2 there (106-110 ms against 112-117 ms in the H3 runs' logs). `attn_fp8`
+reconfirms its known result: 5 peaked cases fail (rel-L2 0.067-0.086), 1.19x
+dense.
 
-| # | item | time | cost at $1.56/hr |
-|---|---|---|---|
-| 0 | rent, CUDA 13 devel image, Rust toolchain; release build of `wip/sage-attn` merged with `wip/ltx-director-res` (7c7a856), in parallel with the weight fetch (277 GB at ~200-400 MB/s) | 35 min | $0.91 |
-| 1 | `fv-gpucheck kernels --groups attn_sage,attn3_bench,attn_fp8` (the port's parity group runs through the Rust binary for the first time) | 5 min | $0.13 |
-| 2 | H3 five-prompt gate (docs/techniques.md, docs/ports/h3.md gate), Sage vs bf16, same seeds: FastH3 4-step dense 768p (attention-bound), Sol-H3 / `h3-max` (dense calls), `h3-turbo` 8-step VSA (only the dense layers change) | 40 min | $1.04 |
-| 3 | LTX-2.5 Sage A/B: 720p and 1080p two-stage, 3 prompts, stage-2 s/step and frame PSNR / LPIPS vs bf16 | 20 min | $0.52 |
-| 4 | LTX director tier check from `wip/ltx-director-res`: 480p / 720p / 768p sessions (caps, pad-and-crop, first-frame latency, fps) | 20 min | $0.52 |
-| 5 | LTX stage-1-only 384p timing, plus upscale rows to 768p: per-frame Real-ESRGAN x2, FlashVSR x2 (its sparse-attention extension built for sm_120, about 2.5 min), and LTX's own latent upsampler + 3-step refine (docs/serve/h3-1080p-and-upscaler.md) | 45 min | $1.17 |
-| 6 | pull results (skip the per-frame PNGs), destroy, verify | 10 min | $0.26 |
-| | **total** | **~3 h** | **~$4.6; budget $7 with 50 % contingency** |
+### 6.2 H3 five-prompt gate (768p, `scripts/gpu/prompts-eval.json`)
 
-**Risk.** This session has no ssh to Vast instances: the egress proxy only
-allows the Vast REST API. All GPU work above ran as one batch per rental
-(scripts in the instance env, results read back through the Vast logs API).
-A 3-hour batch cannot be steered mid-run, and a failure in step 0 would
-waste the download. Two ways to reduce that:
-1. Run Phase 3 from a session that can ssh into the instance.
-2. Split the work: fetch the weights onto a Vast local volume, then run
-   short batches as successive instances on the same machine attached to
-   that volume.
+Medians over the five prompts, warm process; denoise and total (text +
+denoise + decode) per clip. LPIPS / PSNR / sharpness / jitter are the range
+over the five prompts.
 
-Either way, keep the bf16 baseline arm in every cell. H3 is known to move
-20 dB in PSNR from 1-ulp bf16 changes, so the gate must be the sharpness /
-LPIPS gate, not PSNR.
+| recipe | dense video calls | bf16 denoise / total s | Sage denoise / total s | speedup denoise / total | LPIPS | PSNR dB | sharpness | jitter | gate |
+|---|---|---|---|---|---|---|---|---|---|
+| H3 max (`sol-h3`, `h3/sol_h3_4step_engine_ladder`) | 56 of 200 | 23.62 / 31.30 | 20.94 / 28.60 | 1.13x / 1.09x | 0.31-0.49 | 14.3-21.6 | 0.932-1.052 | 0.93-1.10 | **fail**: frogyoga sharpness 0.932 |
+| Sol-H3 4-step dense (`h3/sol_h3_4step`) | 200 of 200 | 35.79 / 43.39 | 27.01 / 34.61 | **1.33x / 1.25x** | 0.31-0.51 | 13.6-20.8 | 0.891-1.031 | 0.78-1.06 | **fail**: frogyoga sharpness 0.891, jitter 0.780 |
+| h3-turbo (`4step-vsa`) | 0 of 200 (all VSA) | 20.57 / 28.33 | 20.54 / 28.25 | 1.00x | 0 (byte-identical) | - | 1.000 | 1.000 | fail: no speedup |
+| **control**: dense, bf16 with the dense kernel switched cuDNN -> fwd2 (`FASTVIDEO_CUDNN_SDPA_GRAPH=composite`) | 200 of 200 | 35.79 / 43.39 | 36.58 / 44.08 | 0.98x | 0.27-0.49 | 14.0-21.6 | 0.936-1.046 | 0.93-1.06 | fail: spark-mountain-lake sharpness 0.936 |
+
+* **The gate is at H3's noise floor.** Switching only the bf16 dense kernel
+  (cuDNN and fwd2 differ by rounding) moves every clip as far as Sage
+  does: LPIPS 0.27-0.49 against Sage's 0.31-0.51, PSNR 14-22 dB in both.
+  The control fails the same sharpness floor, on a different prompt. The
+  montage `shots/h3dense-frogyoga-f060-bf16-sage-ctl.jpg` shows three
+  different, equally clean compositions of the same prompt. Across
+  processes the bf16 arms are deterministic (h3-turbo, where Sage never
+  routes, is byte-identical), so the divergence comes from the changed
+  kernel, and H3 amplifies any such change.
+* **Sage is a little further out on one prompt.** frogyoga fails under both
+  Sage arms (sharpness 0.932 and 0.891, jitter 0.780 dense) and sits at
+  0.952 under the control. That is one prompt of five, so it is suggestive
+  but not conclusive.
+* **Lip sync (proxy, `scripts/gpu/lipsync_proxy.py`, pooled over h3-demo
+  and ltx-newsbroadcast): not informative.** h3-demo never shows a stable
+  face (29 of 124 face frames). On the one usable clip the bf16 arms are not
+  in sync either (best lag +250 ms / +42 ms, |r| <= 0.3, negative speech
+  contrast), so no arm can be told apart.
+* **The `auto` choice is per process.** For the text encoder's d = 64 shape
+  (224 x 1 797), one process picked cuDNN and the other fwd2 (0.69 vs 0.65-0.70
+  ms). That flip did not change any output here, but it means `auto` is
+  not reproducible across processes by construction.
+
+**Verdict: fail for H3 under the current policy** (both recipes, one
+prompt each). Sage stays off for H3. A fair re-test needs a gate that
+measures against the bf16 spread: several bf16 control arms per prompt,
+then Sage judged against their distribution. More prompts would also
+settle whether frogyoga is a real Sage effect.
+
+### 6.3 LTX-2.5 (two-stage, 121 frames, 3 prompts: ltx-multishot, -newsbroadcast, -frogyoga)
+
+`--no-text-cache` in every arm (cache hits and misses differ on LTX,
+docs/techniques.md). Stage 1 runs at half size: at 720p it is 3 520 tokens,
+below the 6 144 routing floor, while at 1080p it is 8 160 tokens and is routed.
+
+| cell | bf16 denoise s (stage 1 / 2) | Sage denoise s (stage 1 / 2) | speedup | LPIPS | PSNR dB | sharpness | gate |
+|---|---|---|---|---|---|---|---|
+| ltx-turbo 720p (1280x768, Sol stage 2) | 8.25 (3.16 / 4.32) | 8.20 (3.16 / 4.31) | 1.01x | 0.029-0.036 | 34.8-36.4 | 0.997-1.005 | fail: speed |
+| ltx-turbo 1080p (1920x1088, Sol stage 2) | 18.92 (6.88 / 9.54) | 18.44 (6.54 / 9.48) | 1.03x | 0.20-0.22 | 22.3-24.4 | 0.986-1.006 | fail: speed |
+| dense stage 2 1080p (`--dense-stage2`, the ltx-pro route) | 22.75 (6.96 / 14.99) | 19.84 (6.57 / 12.50) | **1.15x** (stage 2 1.20x) | 0.20-0.23 | 20.9-24.4 | 0.986-0.993 | **pass** |
+
+The serving turbo route runs Sol on stage-2 layers 1-47, so Sage only
+reaches layer 0 there (and stage 1 at 1080p). LTX is far less chaotic than
+H3: at 720p Sage stays at 35 dB from bf16, so the 0.20 LPIPS at 1080p is
+mostly the routed stage 1 moving the clip. Sage passes the gate on the
+dense route (one LPIPS 0.86 outlier frame at a scene cut in multishot; the
+mean is 0.23).
+
+### 6.4 What it buys per request
+
+| workload | denoise saved | per 5 s clip |
+|---|---|---|
+| Sol-H3 4-step dense 768p | 8.8 s of 35.8 | 43.4 -> 34.6 s total |
+| H3 max 768p (serving) | 2.7 s of 23.6 | 31.3 -> 28.6 s |
+| LTX dense stage 2 1080p | 2.9 s of 22.8 | |
+| h3-turbo, ltx-turbo (serving) | none (sparse attention already) | |
+
+### 6.5 Not covered
+
+The VSA fine stage and Sol kernels have no Sage variant (`attn_fp8_vsa`
+is the template), so the sparse serving recipes gain nothing yet. LTX
+director tiers and the 384p upscale rows from the same session are in
+docs/serve/e2e/ltx.md ("Director tiers", "384p stage 1 and upscale rows").
+
+### 6.6 Decision
+
+The port stays on `wip/sage-attn` / `wip/phase3-pro6000`, not on main. It is
+opt-in (`FASTVIDEO_ATTN_SAGE=2`, default off), so merging it would change no
+output; the merge condition was a passing gate, and H3's did not pass.
+Options for the owner: (a) merge it default-off and enable it on the
+ltx-pro dense route, the one recipe that passes (1.15x denoise at 1080p);
+(b) re-run H3 with a control-calibrated gate first.
+
+### 6.7 Spend (Runpod)
+
+| item | time | cost |
+|---|---|---|
+| Build pod `dap2h1xyxyyy10` (cpu, EU-RO-1, $1.12/hr): merge build, unit tests, release `fv-gpucheck` / `fv-serve`; stopped | 24 min | ~$0.45 |
+| GPU pod `9lnoscqp7y8v5k` (RTX PRO 6000, EUR-IS-1): items a-e; deleted, GET 404 | 106 min (6 357 s) | ~$3.69 |
+| **total** | | **~$4.14** |
+
+The pod had a detached 3.5 h DELETE backstop, an on-pod idle guard (20 min
+at 0 % GPU) and a local balance watchdog (delete below $9). The balance
+went from $78.97 to $73.02 over the session; other agents' pods ran
+at the same time.
 
 ## 7. Spend and instances (Vast)
 
