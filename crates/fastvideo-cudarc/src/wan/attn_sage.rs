@@ -13,7 +13,7 @@
 //! Knob: `FASTVIDEO_ATTN_SAGE=2` routes the dense self-attention of the DiTs
 //! (`nn::scaled_dot_product_attention`: H3, LTX-2.5, Wan) through
 //! [`dense_sdpa`] when the head dim is 128, the device is sm_89+ and both
-//! sequences are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ` (default 4096: below
+//! sequences are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ` (default 6144: below
 //! that the bf16 kernels are as fast). `=3` (SageAttention3, NVFP4) is
 //! refused: it failed the accuracy tolerance (docs/perf/sage-attention.md).
 //! Unset / `0`: off, nothing here runs.
@@ -43,7 +43,7 @@ pub fn mode() -> u8 {
 /// Smallest `Sq` and `Sk` routed to the kernel.
 pub fn min_seq() -> usize {
     static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| crate::wan::envflag::usize_flag("FASTVIDEO_ATTN_SAGE_MIN_SEQ", 4096))
+    *MIN.get_or_init(|| crate::wan::envflag::usize_flag("FASTVIDEO_ATTN_SAGE_MIN_SEQ", 6144))
 }
 
 #[cfg(feature = "cuda")]
