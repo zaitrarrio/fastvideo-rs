@@ -584,6 +584,9 @@ mod tests {
         assert_eq!((e.0["code"].as_str(), e.1), (Some("invalid_input"), true));
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"480p"}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_input");
+        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#).unwrap_err();
+        assert_eq!(e.0["code"], "invalid_input");
+        assert!(e.0["error"].as_str().unwrap().contains("served: 768p"), "{}", e.0);
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_initial_audio");
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":0,"audio_url":"https://a"}]}"#).unwrap_err();

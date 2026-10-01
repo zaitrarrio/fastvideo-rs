@@ -194,8 +194,10 @@ export function mountDirector(root, { app, model }) {
   const statePill = el('span', { class: 'pill', id: 'director-state' }, 'idle');
   const prompt = el('textarea', { id: 'director-prompt', rows: 4 }, 'A continuous live-action shot: a lighthouse keeper climbs the spiral stairs at dusk, lamp in hand.');
   // The options come from the app's director form (`GET /fal/schema/{app}/director`):
-  // the resolutions its model serves here. Until it loads, the session default only.
-  const resLabel = (v) => (v === '1080p' ? '1080p (about 2.5x slower per chunk)' : v);
+  // the resolutions its model serves here, labelled with what a chunk costs
+  // next to 768p on that model (`x-fv-labels`). Until it loads, the session default only.
+  let resLabels = {};
+  const resLabel = (v) => resLabels[v] || v;
   const aspectLabel = (v) => (v === 'auto' ? 'auto (from image, else 16:9)' : v);
   const fill = (sel, values, label, def) => {
     sel.replaceChildren(...values.map((v) => el('option', { value: v }, label(v))));
@@ -208,6 +210,7 @@ export function mountDirector(root, { app, model }) {
   fill(aspect, ['auto', '16:9', '9:16', '1:1'], aspectLabel, 'auto');
   request('GET', '/fal/schema/' + app + '/director', { auth: null }).then((form) => {
     const p = (form && form.properties) || {};
+    if (p.resolution && p.resolution['x-fv-labels'] && typeof p.resolution['x-fv-labels'] === 'object') resLabels = p.resolution['x-fv-labels'];
     if (p.resolution && Array.isArray(p.resolution.enum) && p.resolution.enum.length) fill(resolution, p.resolution.enum, resLabel, p.resolution.default);
     if (p.aspect_ratio && Array.isArray(p.aspect_ratio.enum) && p.aspect_ratio.enum.length) fill(aspect, p.aspect_ratio.enum, aspectLabel, p.aspect_ratio.default);
   }).catch(() => { /* keep the session defaults */ });

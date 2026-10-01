@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{
-    canvas_for_aspect, h3_1080p_canvas, ApiError, Continuity, ErrorKind, Family, ModelCaps, ModelId, SessionSpec, StreamCaps, Task, TrackSet,
+    canvas_for_aspect, h3_1080p_canvas, resolve_canvas, ApiError, CanvasSpec, Continuity, ErrorKind, Family, ModelCaps, ModelId, ResolvedCanvas,
+    SessionSpec, StreamCaps, Task, TrackSet,
 };
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 use fastvideo_webrtc::channel::ChannelPolicy;
@@ -20,6 +21,7 @@ use serde_json::Value;
 use super::control::Limits;
 use super::engine::{frames_for, DirectorEngine};
 use super::info::{app_name, director_info, InfoFacts};
+pub use super::info::{relative_chunk_cost, served_resolutions};
 use super::media::VideoCodec;
 use super::messages::{Aspect, Resolution};
 use super::session::{self, SessionHandle, SessionInit};
@@ -101,25 +103,37 @@ pub fn video_codecs(h264_compiled: bool, vp8_fallback: bool) -> Vec<WVideoCodec>
     }
 }
 
-/// `(width, height)` of `res` at `aspect` on the model's canvas rules.
-/// The H3 1080P tier streams the generation canvas (1920x1088 at 16:9):
-/// chunks are not cropped.
-pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> (u32, u32) {
+/// The canvas of `res` at `aspect` on the model's canvas rules:
+/// `(width, height, crop)`, where `(width, height)` is what the engine
+/// generates and `crop` the delivered size when that differs.
+///
+/// - The H3 1080P tier streams the generation canvas (1920x1088 at 16:9):
+///   chunks are not cropped.
+/// - A pad-and-crop model (LTX two-stage: sides multiples of 64) takes the
+///   exact size the batch APIs give the same tier and aspect (even sides,
+///   the tier on the short side) and generates it padded up to the multiple:
+///   480p 16:9 is 854x480 from 896x512, 720p 1280x720 from 1280x768, 768p
+///   1366x768 from 1408x768, 1080p 1920x1080 from 1920x1088. The session
+///   centre-crops every frame; the next chunk's anchor is the uncropped
+///   last frame, so continuity does not zoom.
+/// - Any other model: the canvas-for-aspect rule (sides snapped to the
+///   multiple), not cropped.
+pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> ResolvedCanvas {
     if caps.family == Family::H3 && caps.canvas.is_hd(res.short_edge()) {
         let (w, h, _) = h3_1080p_canvas(caps, aspect.ratio(), 1.0);
-        return (w, h);
+        return (w, h, None);
     }
-    canvas_for_aspect(&caps.canvas, aspect.ratio(), res.short_edge())
-}
-
-/// Resolutions a model serves: its canvas tiers among 480p / 768p / 1080p
-/// (1080p only with the opt-in H3 1080P tier: each chunk takes about 2.5x
-/// as long to build as at 768p).
-pub fn served_resolutions(caps: &ModelCaps) -> Vec<Resolution> {
-    [Resolution::R480, Resolution::R768, Resolution::R1080]
-        .into_iter()
-        .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
-        .collect()
+    if caps.canvas.pad_and_crop {
+        let spec = CanvasSpec::Aspect { ratio: aspect.as_ratio(), short_edge: res.short_edge() };
+        match resolve_canvas(&spec, caps, None) {
+            Ok(c) => return c,
+            // Not reached for a served tier (the dimension sweep checks every
+            // one); the snapped canvas below is the engine-valid fallback.
+            Err(e) => tracing::warn!(model = %caps.id, res = res.as_str(), aspect = aspect.as_str(), error = %e.message, "director canvas"),
+        }
+    }
+    let (w, h) = canvas_for_aspect(&caps.canvas, aspect.ratio(), res.short_edge());
+    (w, h, None)
 }
 
 /// The control limits for a model.
@@ -267,8 +281,11 @@ impl DirectorService {
         } else {
             *facts_probe.resolutions.last().ok_or_else(|| ApiError::invalid(format!("model `{}` serves neither 480p nor 768p", caps.id)))?
         };
-        let canvas = canvas_for(&caps, res, Aspect::Landscape);
-        let tracks = TrackSet::for_model(&caps, canvas, fps, ("video", "audio"), 2, false);
+        // The engine session generates `canvas`; the tracks carry the
+        // delivered (cropped) size.
+        let (w, h, crop) = canvas_for(&caps, res, Aspect::Landscape);
+        let canvas = (w, h);
+        let tracks = TrackSet::for_model(&caps, crop.unwrap_or(canvas), fps, ("video", "audio"), 2, false);
         let audio = tracks.has_audio();
         let continuity = if caps.supports(Task::I2V) {
             Continuity::AnchorLastFrame { crossfade_ms: self.cfg.crossfade_ms }
@@ -362,10 +379,13 @@ mod tests {
         assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768]);
         caps.canvas = caps.canvas.clone().with_h3_1080p();
         assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768, Resolution::R1080]);
-        assert_eq!(canvas_for(&caps, Resolution::R768, Aspect::Landscape), (1344, 768));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Landscape), (1920, 1088));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Portrait), (1088, 1920));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Square), (1088, 1088));
+        assert_eq!(canvas_for(&caps, Resolution::R768, Aspect::Landscape), (1344, 768, None));
+        assert_eq!(canvas_for(&caps, Resolution::R480, Aspect::Landscape), (832, 480, None));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Landscape), (1920, 1088, None));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Portrait), (1088, 1920, None));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Square), (1088, 1088, None));
+        assert_eq!(relative_chunk_cost(&caps, Resolution::R1080), Some(2.5));
+        assert_eq!(relative_chunk_cost(&caps, Resolution::R480), None);
         // 1080p chunks within the tier's clip cap: 5 s, 10 s with the flag.
         let l = limits_for(&DirectorConfig::default(), &caps);
         assert_eq!(l.hd_max_chunk_seconds, Some(5.0));
@@ -375,5 +395,75 @@ mod tests {
         fastvideo_protocol::apply_feature_flags(&mut caps, &|_| true);
         let at = limits_for(&DirectorConfig::default(), &caps).at(Resolution::R1080);
         assert_eq!((at.chunk_seconds, at.max_chunk_seconds), (10.0, 10.0));
+    }
+
+    /// LTX two-stage caps as the CUDA catalog declares them (sides multiples
+    /// of 64, pad-and-crop, the 480/720/768/1080 tiers among others).
+    fn ltx_caps() -> ModelCaps {
+        let mut caps = ModelCaps::h3("ltx", true);
+        caps.family = Family::Ltx2;
+        caps.canvas = fastvideo_protocol::CanvasCaps {
+            multiple: 64,
+            max_area: 3840 * 2176,
+            aspect: (0.25, 4.0),
+            short_edges: vec![1080, 480, 720, 768, 1440, 2160],
+            pad_and_crop: true,
+            hd: None,
+        };
+        caps
+    }
+
+    #[test]
+    fn ltx_serves_480_720_768_and_1080_padded_and_cropped() {
+        let caps = ltx_caps();
+        assert_eq!(served_resolutions(&caps), Resolution::ALL);
+        use Aspect::{Landscape as L, Portrait as P, Square as S};
+        // (resolution, aspect) -> generated, delivered.
+        let want = [
+            (Resolution::R480, L, (896, 512), (854, 480)),
+            (Resolution::R480, P, (512, 896), (480, 854)),
+            (Resolution::R480, S, (512, 512), (480, 480)),
+            (Resolution::R720, L, (1280, 768), (1280, 720)),
+            (Resolution::R720, P, (768, 1280), (720, 1280)),
+            (Resolution::R720, S, (768, 768), (720, 720)),
+            (Resolution::R768, L, (1408, 768), (1366, 768)),
+            (Resolution::R768, P, (768, 1408), (768, 1366)),
+            (Resolution::R768, S, (768, 768), (768, 768)),
+            (Resolution::R1080, L, (1920, 1088), (1920, 1080)),
+            (Resolution::R1080, P, (1088, 1920), (1080, 1920)),
+            (Resolution::R1080, S, (1088, 1088), (1080, 1080)),
+        ];
+        for (r, a, gen, out) in want {
+            let (w, h, crop) = canvas_for(&caps, r, a);
+            assert_eq!(((w, h), crop.unwrap_or((w, h))), (gen, out), "{} {}", r.as_str(), a.as_str());
+            // Two-stage: stage 1 runs at half size on the latent grid (/32).
+            assert_eq!((w % 64, h % 64), (0, 0), "{} {}", r.as_str(), a.as_str());
+            assert_eq!(crop.is_some(), gen != out);
+        }
+        // No 1080p clip cap on LTX; every tier keeps the model's chunk range.
+        let l = limits_for(&DirectorConfig::default(), &caps);
+        assert_eq!(l.hd_max_chunk_seconds, None);
+        for r in Resolution::ALL {
+            assert_eq!(l.at(r), l);
+        }
+        // Labels: chunk cost next to 768p.
+        assert_eq!(relative_chunk_cost(&caps, Resolution::R768), None);
+        assert!(relative_chunk_cost(&caps, Resolution::R480).unwrap() < 1.0);
+        assert!(relative_chunk_cost(&caps, Resolution::R720).unwrap() <= 1.0);
+        assert!(relative_chunk_cost(&caps, Resolution::R1080).unwrap() > 1.0);
+    }
+
+    #[test]
+    fn ltx_director_form_lists_every_tier_with_labels() {
+        let form = crate::catalog::director_schema(&ltx_caps());
+        let p = &form["properties"]["resolution"];
+        assert_eq!(p["enum"], serde_json::json!(["480p", "720p", "768p", "1080p"]));
+        assert_eq!(p["default"], "768p");
+        assert!(p["x-fv-labels"]["1080p"].as_str().unwrap().contains("slower"), "{p}");
+        assert!(p["x-fv-labels"].get("768p").is_none());
+        // H3 without the 1080P tier: no labels, 768p default.
+        let form = crate::catalog::director_schema(&ModelCaps::h3("h3", false));
+        assert_eq!(form["properties"]["resolution"]["enum"], serde_json::json!(["768p"]));
+        assert_eq!(form["properties"]["resolution"]["x-fv-labels"], serde_json::json!({}));
     }
 }

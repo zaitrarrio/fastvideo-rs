@@ -8,15 +8,45 @@
 //!   `continuation_playback_seconds` is a default chunk minus that frame;
 //! - `audio_sample_rate: 48000` (Opus on the wire), conditioning audio would
 //!   be 32 kHz but `audio_conditioning: false` until E10;
-//! - `resolutions` lists what the model's canvas tiers serve (`768p`, plus
-//!   `480p` once E3 adds the tier, and `1080p` when the model serves the
-//!   opt-in H3 1080P tier);
+//! - `resolutions` lists what the model's canvas tiers serve among `480p`,
+//!   `720p`, `768p` and `1080p` (H3: `480p`/`768p`, `1080p` with the opt-in
+//!   H3 1080P tier; LTX: all four). `720p` is ours, not in fal's schema;
+//!   older clients never ask for it;
 //! - `prompt_expander: "none"`, `accelerations: ["none"]`.
 
+use fastvideo_protocol::{Family, ModelCaps};
 use serde_json::{json, Value};
 
 use super::control::Limits;
-use super::messages::{CLIENT_MESSAGE_TYPES, SCRIPT_MAX_BEATS, SERVER_MESSAGE_TYPES};
+use super::messages::{Resolution, CLIENT_MESSAGE_TYPES, SCRIPT_MAX_BEATS, SERVER_MESSAGE_TYPES};
+
+/// Resolutions a model serves: its canvas tiers among 480p / 720p / 768p /
+/// 1080p (H3: 480p and 768p, 1080p with the opt-in 1080P tier; LTX: all
+/// four).
+pub fn served_resolutions(caps: &ModelCaps) -> Vec<Resolution> {
+    Resolution::ALL.into_iter().filter(|r| caps.canvas.short_edges.contains(&r.short_edge())).collect()
+}
+
+/// What a chunk costs at `res` relative to 768p on this model's family,
+/// for the director form's labels (`None`: no note, e.g. at 768p).
+/// Measured per chunk on one GPU of the class the family is served on:
+/// H3 1080P about 2.5x 768p (docs/serve/h3-1080p-and-upscaler.md); LTX
+/// two-stage at the director's canvases, RTX PRO 6000 (docs/serve/e2e/ltx.md
+/// "Director tiers").
+pub fn relative_chunk_cost(caps: &ModelCaps, res: Resolution) -> Option<f64> {
+    match (caps.family, res) {
+        (Family::H3, Resolution::R1080) => Some(2.5),
+        (Family::Ltx2, Resolution::R480) => Some(LTX_COST_480),
+        (Family::Ltx2, Resolution::R720) => Some(LTX_COST_720),
+        (Family::Ltx2, Resolution::R1080) => Some(LTX_COST_1080),
+        _ => None,
+    }
+}
+
+/// LTX chunk time relative to 768p (see [`relative_chunk_cost`]).
+const LTX_COST_480: f64 = 0.4;
+const LTX_COST_720: f64 = 0.9;
+const LTX_COST_1080: f64 = 2.2;
 
 /// Per-session facts that `session_info` reports.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,7 +126,6 @@ pub fn session_info(f: &InfoFacts) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::director::messages::Resolution;
 
     #[test]
     fn our_constants() {
@@ -126,8 +155,11 @@ mod tests {
         assert_eq!(v["client_message_types"], json!(["configure", "ping", "prompt", "stop"]));
         assert_eq!(v["server_message_types"].as_array().unwrap().len(), 16);
         let l = Limits { resolutions: vec![Resolution::R480, Resolution::R768], ..Limits::default() };
-        let v = director_info(&InfoFacts { limits: l, ..f });
+        let v = director_info(&InfoFacts { limits: l, ..f.clone() });
         assert_eq!(v["resolutions"], json!(["480p", "768p"]));
+        let l = Limits { resolutions: Resolution::ALL.to_vec(), ..Limits::default() };
+        let v = director_info(&InfoFacts { limits: l, ..f });
+        assert_eq!(v["resolutions"], json!(["480p", "720p", "768p", "1080p"]));
         assert!(v.get("type").is_none());
     }
 }
