@@ -555,7 +555,8 @@ mod tests {
         assert!(parse(r#"{"type":"prompt","prompt_version":2,"prompt":"x","script":[{"offset":0,"prompt":"a","speed":1}]}"#).is_err());
         // Types, enums, ranges.
         assert!(parse(r#"{"type":"configure","prompt_version":"1","prompt":"x"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#).is_err());
+        // 720p is an extension (LTX's tier); tiers nobody serves stay refused.
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"360p"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768P"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"4:3"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":0}"#).is_err());
