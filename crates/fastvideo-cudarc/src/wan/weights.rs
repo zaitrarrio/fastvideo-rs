@@ -125,6 +125,17 @@ impl WeightMap {
         }
     }
 
+    /// Eager map of tensors in their own dtypes (a checkpoint renamed or
+    /// merged on the host, e.g. `wan::longlive`).
+    pub fn from_raw_tensors(tensors: HashMap<String, RawTensor>) -> Self {
+        Self {
+            tensors,
+            lazy: None,
+            generator: None,
+            mlx_h3: false,
+        }
+    }
+
     fn mlx_h3_alias(key: &str) -> Option<String> {
         if let Some(rest) = key.strip_prefix("transformer_blocks.") {
             return Some(format!("blocks.{rest}"));

@@ -9,8 +9,9 @@
 //!   per-block carried-state decode against the whole-clip decode of the same
 //!   latents (max abs, PSNR);
 //! * every `--run name,seconds=S[,rope=rel|abs][,sink=N][,window=N]
-//!   [,switch_at=S][,switch=keep|reset][,drop_rgb=1][,recache=EVERY:KEEP]
-//!   [,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]`: a rollout for `S`
+//!   [,switch_at=S[/S2/...]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]
+//!   [,recache=EVERY:KEEP][,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]
+//!   [,longlive=1]`: a rollout for `S`
 //!   seconds of video at `--fps`, blocks handed through a depth-4 channel to
 //!   a consumer thread (the design's executor → pacer hand-off) that measures
 //!   picture statistics per window of video time. Reports time to first
@@ -26,11 +27,23 @@
 //!   decodes the first `S` seconds of latents again at the end as one clip
 //!   (TAEHV's default 4-latent chunks, one carried state) and compares it
 //!   with the streamed 3-latent blocks frame by frame.
+//!
+//! LongLive (`--longlive DIR`, docs/serve/research-longlive.md): the
+//! LongLive-1.3B transformer (the converted `longlive_base` + `lora`
+//! safetensors, renamed and merged by `wan::longlive`) replaces
+//! `--weights/transformer`. `longlive=1` in a run (put it first: later keys
+//! override it) takes LongLive's window 12, sink 3, absolute RoPE and the
+//! prompt-switch KV re-cache (`switch=recache`; `switch=keep` is the
+//! no-re-cache ablation). Several `switch_at` times (`/`-separated) switch
+//! through `--switch-prompts` (one prompt per line, or LongLive's
+//! `interactive_example.jsonl`: `{"prompts": [...]}` on a line, whose first
+//! prompt replaces `--prompt`), else to `--switch-prompt` each time.
 
 use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail};
+use fastvideo_cudarc::wan::longlive::LongLiveConfig;
 use fastvideo_cudarc::wan::stream::{
     CausalRollout, HostBlock, PromptSwitch, Recache, RolloutConfig, RopePolicy,
 };
@@ -45,6 +58,13 @@ pub struct Args<'a> {
     pub preset: &'a str,
     pub prompt: &'a str,
     pub switch_prompt: &'a str,
+    /// Prompts of successive switches (`--switch-prompts`); empty: always
+    /// `switch_prompt`.
+    pub switch_prompts: &'a [String],
+    /// LongLive-1.3B converted checkpoint dir (`--longlive`).
+    pub longlive: Option<&'a std::path::Path>,
+    /// Merge LongLive's `lora.safetensors` (off: the base generator).
+    pub longlive_lora: bool,
     pub seed: u64,
     pub height: usize,
     pub width: usize,
@@ -62,7 +82,7 @@ struct RunSpec {
     rope: RopePolicy,
     sink: usize,
     window: usize,
-    switch_at: Option<f64>,
+    switch_at: Vec<f64>,
     switch: PromptSwitch,
     drop_rgb: bool,
     recache: Option<Recache>,
@@ -81,7 +101,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         rope: RopePolicy::RebasedSink,
         sink: RolloutConfig::default().sink_frames,
         window: 21,
-        switch_at: None,
+        switch_at: Vec::new(),
         switch: PromptSwitch::Keep,
         drop_rgb: false,
         recache: None,
@@ -104,13 +124,25 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             }
             "sink" => r.sink = v.parse()?,
             "window" => r.window = v.parse()?,
-            "switch_at" => r.switch_at = Some(v.parse()?),
+            "switch_at" => {
+                r.switch_at = v.split('/').map(str::parse).collect::<Result<Vec<f64>, _>>()?;
+                r.switch_at.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            }
             "switch" => {
                 r.switch = match v {
                     "keep" => PromptSwitch::Keep,
                     "reset" => PromptSwitch::Reset,
+                    "recache" => PromptSwitch::Recache { global_sink: true },
+                    "recache_sink" => PromptSwitch::Recache { global_sink: false },
                     _ => bail!("--run {s}: switch={v}"),
                 }
+            }
+            "longlive" if v == "1" => {
+                let ll = LongLiveConfig::interactive();
+                r.window = ll.local_attn_frames;
+                r.sink = ll.sink_frames;
+                r.rope = ll.rope(false);
+                r.switch = ll.prompt_switch();
             }
             "drop_rgb" => r.drop_rgb = v == "1",
             "recache" => {
@@ -125,6 +157,32 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         }
     }
     Ok(r)
+}
+
+/// `--switch-prompts`: LongLive's `interactive_example.jsonl` (line `line`
+/// is `{"prompts": [p0, p1, ...]}`: `p0` starts the run, the rest are the
+/// switches) or plain text (one switch prompt per non-empty line).
+pub fn read_switch_prompts(path: &std::path::Path, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
+    let text = std::fs::read_to_string(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+    parse_switch_prompts(&text, line).map_err(|e| anyhow!("{}: {e}", path.display()))
+}
+
+fn parse_switch_prompts(text: &str, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if lines.first().is_some_and(|l| l.starts_with('{')) {
+        let l = lines.get(line).ok_or_else(|| anyhow!("no line {line} ({} lines)", lines.len()))?;
+        let v: Value = serde_json::from_str(l)?;
+        let ps: Vec<String> = v["prompts"]
+            .as_array()
+            .ok_or_else(|| anyhow!("line {line}: no \"prompts\" array"))?
+            .iter()
+            .map(|p| p.as_str().map(str::to_string).ok_or_else(|| anyhow!("line {line}: a prompt is not a string")))
+            .collect::<anyhow::Result<_>>()?;
+        let mut it = ps.into_iter();
+        let first = it.next().ok_or_else(|| anyhow!("line {line}: no prompts"))?;
+        return Ok((Some(first), it.collect()));
+    }
+    Ok((None, lines.into_iter().map(str::to_string).collect()))
 }
 
 fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
@@ -148,7 +206,26 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     }
     let tokenizer = tokenizer.to_string_lossy().into_owned();
     let t = Instant::now();
-    let pipe = WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true })
+    let dit = match a.longlive {
+        Some(dir) => {
+            let ll = LongLiveConfig::interactive();
+            let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(dir, &ll);
+            if !a.longlive_lora {
+                w.lora = None;
+            } else if w.lora.is_none() {
+                return Err(anyhow!("--longlive {}: no lora.safetensors (--longlive-no-lora for the base)", dir.display()).into());
+            }
+            let (map, rep) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| anyhow!("{e}"))?;
+            report.note(
+                "longlive_weights",
+                json!({"dir": dir.display().to_string(), "tensors": rep.tensors, "lora_modules_merged": rep.merged,
+                       "lora_scale": w.lora_scale, "skipped": rep.skipped, "seconds": t.elapsed().as_secs_f64()}),
+            );
+            Some(map)
+        }
+        None => None,
+    };
+    let pipe = WanPipeline::load_with_dit(a.weights, a.preset, LoadParts { text_encoder: true }, dit)
         .map_err(|e| anyhow!("load {}: {e}", a.weights.display()))?;
     report.note(
         "load",
@@ -851,7 +928,7 @@ fn one_run(
     let mut totals = Vec::new();
     let mut frames = 0usize;
     let mut ttff = None;
-    let mut switch_info = None;
+    let mut switch_info: Vec<Value> = Vec::new();
     let mut mem_first_full = None;
     let mut mem_max = 0u64;
     let mut mems: Vec<f64> = Vec::new();
@@ -863,11 +940,18 @@ fn one_run(
     let (mut keep_lat, mut keep_rgb) = (Vec::new(), Vec::new());
     let mut extra_s = 0.0f64;
     while frames < want_frames {
-        if let Some(at) = r.switch_at.filter(|_| switch_info.is_none()) {
+        if let Some(&at) = r.switch_at.get(switch_info.len()) {
             if frames as f64 / fps >= at {
+                let i = switch_info.len();
+                let p = if a.switch_prompts.is_empty() {
+                    a.switch_prompt
+                } else {
+                    a.switch_prompts[i % a.switch_prompts.len()].as_str()
+                };
                 let t = Instant::now();
-                let v = ro.set_prompt(a.switch_prompt).map_err(|e| anyhow!("{e}"))?;
-                switch_info = Some(json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v}));
+                let v = ro.set_prompt(p).map_err(|e| anyhow!("{e}"))?;
+                switch_info.push(json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v,
+                                        "prompt": p}));
             }
         }
         let mut b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
@@ -886,7 +970,7 @@ fn one_run(
             mems.push(m as f64);
         }
         let kv_now = ro.kv_bytes();
-        blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20]));
+        blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20, tm.recache_s]));
         // Diagnostics, outside the block's own timings.
         let t_extra = Instant::now();
         let lat_h = host(&b.latents)?;
@@ -945,6 +1029,7 @@ fn one_run(
                "failed": r.failed})
     });
     let recaches = ro.recaches();
+    let switch_recaches = ro.switch_recaches();
     drop(ro);
     drop(tx);
     drop(ring);
@@ -987,10 +1072,11 @@ fn one_run(
         "kv_mib_end": kv_bytes >> 20,
         "graph": graph,
         "recaches": recaches,
+        "switch_recaches": switch_recaches,
         "sheet": sheet_path,
         "whole_clip_decode": whole_clip,
         "windows": windows,
-        "block_rows": ["index", "frames", "denoise_s", "context_s", "decode_s", "rgb_s", "total_s", "mem_used_mib", "kv_mib"],
+        "block_rows": ["index", "frames", "denoise_s", "context_s", "decode_s", "rgb_s", "total_s", "mem_used_mib", "kv_mib", "recache_s"],
         "switch": switch_info,
         "per_block": blocks,
     });
@@ -1014,4 +1100,32 @@ fn one_run(
         json!({"min": want_frames}),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn longlive_run_spec() {
+        let r = parse_run("ll,longlive=1,seconds=60,switch_at=15/30/45").unwrap();
+        assert_eq!((r.window, r.sink, r.rope), (12, 3, RopePolicy::Absolute));
+        assert_eq!(r.switch, PromptSwitch::Recache { global_sink: true });
+        assert_eq!(r.switch_at, [15.0, 30.0, 45.0]);
+        let r = parse_run("ll,longlive=1,switch=keep,switch_at=45/15").unwrap();
+        assert_eq!(r.switch, PromptSwitch::Keep);
+        assert_eq!(r.switch_at, [15.0, 45.0]);
+        let r = parse_run("x,switch=recache_sink,rope=rel").unwrap();
+        assert_eq!(r.switch, PromptSwitch::Recache { global_sink: false });
+        assert!(parse_run("x,switch=nope").is_err());
+    }
+
+    #[test]
+    fn switch_prompts_from_jsonl_or_lines() {
+        let jsonl = "{\"prompts\": [\"a\", \"b\", \"c\"]}\n{\"prompts\": [\"x\", \"y\"]}\n";
+        assert_eq!(parse_switch_prompts(jsonl, 0).unwrap(), (Some("a".into()), vec!["b".into(), "c".into()]));
+        assert_eq!(parse_switch_prompts(jsonl, 1).unwrap(), (Some("x".into()), vec!["y".into()]));
+        assert!(parse_switch_prompts(jsonl, 2).is_err());
+        assert_eq!(parse_switch_prompts("p1\n\np2\n", 0).unwrap(), (None, vec!["p1".into(), "p2".into()]));
+    }
 }
