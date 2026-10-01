@@ -1,10 +1,10 @@
 # SageAttention2 / SageAttention3 against our attention kernels
 
 Status (2026-10-01): Phases 1 and 2 are done; Phase 3 (end to end) is
-planned but not started (section 6). Kernel code is on branch
-`wip/sage-attn`. Harness: `scripts/gpu/sage/` (`bench.py`, `capture.py`,
-`summarize.py`, `vast-run.sh`). Progress log lines are in the session
-scratchpad.
+planned but not started (section 6). The kernel code
+(`wan/attn_sage.{cu,rs}`) and the harness (`scripts/gpu/sage/`: `bench.py`,
+`capture.py`, `summarize.py`, `vast-run.sh`) are on branch `wip/sage-attn`,
+not on main, until Phase 3 passes.
 
 **Summary**
 
