@@ -20,6 +20,13 @@ pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 pub const PROMPT_MAX_CHARS: usize = 50_000;
 /// `script` beat count bounds.
 pub const SCRIPT_MAX_BEATS: usize = 64;
+/// `configure.chunk_duration` values (whole seconds): an extension of
+/// fal's schema, which echoes the session's chunk length as
+/// `configured.chunk_duration` but takes none. Clip models only; a causal
+/// model ignores it.
+pub const CHUNK_DURATIONS: [u32; 2] = [5, 10];
+/// `configure.chunk_duration` when absent (the director's default).
+pub const DEFAULT_CHUNK_DURATION: u32 = 5;
 /// Reserved WMA network-info vocabulary (JS `wma.ts`).
 pub const NETWORK_INFO_REQUEST: &str = "wma.network-info.request";
 pub const NETWORK_INFO_RESPONSE: &str = "wma.network-info.response";
@@ -195,6 +202,11 @@ pub struct Configure {
     pub script: Option<Vec<ScriptBeat>>,
     #[serde(default)]
     pub protocol_version: Option<u64>,
+    /// Seconds per chunk, one of [`CHUNK_DURATIONS`] (ours, not in fal's
+    /// schema; named after `configured.chunk_duration`). `None`: the
+    /// server's default (`default_chunk_duration`).
+    #[serde(default)]
+    pub chunk_duration: Option<u32>,
 }
 
 /// `prompt` (correlation `/prompt_version`).
@@ -317,6 +329,12 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
     let de = |e: serde_json::Error| invalid(format!("invalid `{ty}` message: {e}"), &v);
     match ty {
         "configure" => {
+            // Checked on the raw value so a wrong type names the field too.
+            match obj.get("chunk_duration") {
+                None | Some(Value::Null) => {}
+                Some(d) if d.as_u64().is_some_and(|d| CHUNK_DURATIONS.iter().any(|&c| u64::from(c) == d)) => {}
+                Some(d) => return Err(invalid(format!("`chunk_duration` must be 5 or 10 (whole seconds), got {d}"), &v)),
+            }
             let m: Configure = serde_json::from_value(v.clone()).map_err(de)?;
             check_version(m.prompt_version, &v)?;
             check_text("prompt", &m.prompt, &v)?;
@@ -530,7 +548,14 @@ mod tests {
         assert_eq!(c.aspect_ratio, Some(Aspect::Landscape));
         assert_eq!(c.memory, Some(3));
         // Nulls are accepted for every nullable field.
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null}"#).is_ok());
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null,"chunk_duration":null}"#).is_ok());
+        assert_eq!(c.chunk_duration, None);
+        for d in CHUNK_DURATIONS {
+            let ClientMessage::Configure(c) = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{d}}}"#)).unwrap() else {
+                panic!()
+            };
+            assert_eq!(c.chunk_duration, Some(d));
+        }
     }
 
     #[test]
@@ -563,6 +588,12 @@ mod tests {
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":51}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_bitrate":64000}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","protocol_version":2}"#).is_err());
+        // chunk_duration: whole seconds, 5 or 10.
+        for bad in ["0", "3", "7", "15", "-5", "5.5", "\"5\""] {
+            let e = err(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{bad}}}"#));
+            assert!(e.error.contains("chunk_duration"), "{bad}: {e:?}");
+            assert_eq!(e.prompt_version, Some(1));
+        }
         assert!(parse(r#"{"type":"configure","prompt_version":0,"prompt":"x"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":9007199254740992,"prompt":"x"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":""}"#).is_err());

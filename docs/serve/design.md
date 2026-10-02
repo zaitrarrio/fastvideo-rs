@@ -1149,8 +1149,8 @@ Control channel `control`:
 
 | Client message | Server behaviour |
 |---|---|
-| (channel open) | Send `session_info` with **our** constants: `fps:24`, `chunk_seconds`/`default_chunk_duration` = configured (10), `min_chunk_duration:5`, `max_chunk_duration:15`, `continuation_context_frames:1` (last-frame anchor), `audio_sample_rate:48000`, `conditioning_audio_sample_rate:32000`, `resolutions:["480p","768p"]` (after E3; `["768p"]` before), `aspect_ratios:["16:9","9:16","1:1"]`, `one_session_per_machine:true`, `audio_conditioning:false`, `scripts:true`, … |
-| `configure` (once, `prompt_version:1`) | Validate. `resolution:"1080p"` → `error{code:"invalid_input"}`. `audio_url` → `error{code:"invalid_initial_audio"}` until E10. `image_url` → first chunk `Keyframe{First}`; `end_image_url` → first chunk `Keyframe{Last}`. `script` beats with only `prompt`/`end_image_url` are accepted; audio beats → `invalid_initial_script`. Reply `configured{prompt_version, enable_safety_checker:false, aspect_ratio, memory, chunk_duration, audio_bitrate, resolution, has_initial_image, has_initial_audio:false, acceleration:null}` and start chunk 0 |
+| (channel open) | Send `session_info` with **our** constants: `fps:24`, `chunk_seconds`/`default_chunk_duration` = configured (5), `min_chunk_duration:5`, `max_chunk_duration:15`, `chunk_duration_options` (`[5,10]`, per tier in `chunk_duration_options_by_resolution`; docs/serve/director-chunks.md), `continuation_context_frames:1` (last-frame anchor), `audio_sample_rate:48000`, `conditioning_audio_sample_rate:32000`, `resolutions:["480p","768p"]` (after E3; `["768p"]` before), `aspect_ratios:["16:9","9:16","1:1"]`, `one_session_per_machine:true`, `audio_conditioning:false`, `scripts:true`, … |
+| `configure` (once, `prompt_version:1`) | Validate. `resolution:"1080p"` → `error{code:"invalid_input"}`. `audio_url` → `error{code:"invalid_initial_audio"}` until E10. `image_url` → first chunk `Keyframe{First}`; `end_image_url` → first chunk `Keyframe{Last}`. `script` beats with only `prompt`/`end_image_url` are accepted; audio beats → `invalid_initial_script`. `chunk_duration` (ours: 5 or 10, default 5; other values → `invalid_message`) sets the session's chunk length. Reply `configured{prompt_version, enable_safety_checker:false, aspect_ratio, memory, chunk_duration, audio_bitrate, resolution, has_initial_image, has_initial_audio:false, acceleration:null}` and start chunk 0 |
 | `prompt` v≥2 | Version ≤ last seen → `prompt_rejected{reason:"stale_prompt_version"}`. Otherwise `prompt_pending`. With `replan:true` it replaces the planned prompt for the next **undispatched** chunk; an older pending version may get no final event (`replace-pending`). With `replan:false` it appends. `prompt_applied` is sent when that chunk is dispatched. `audio_url` → `prompt_rejected{reason:"invalid_audio"}`. Planned deck full → `queue_full` |
 | `ping{ts}` | `pong{client_ts}` |
 | `stop` | Finish nothing new, then `stream_exhausted{chunks,reason:"stopped"}` and close |
@@ -1164,7 +1164,9 @@ Control channel `control`:
     at the end with `final:true`.
 - Late chunks produce `deadline_missed`.
 - `max_session_seconds` → `stream_exhausted{reason:"session_limit"}`.
-- The default chunk duration is 10 s → 17n+5 → 243 frames (10.125 s).
+- The default chunk duration is 5 s → 17n+5 → 124 frames (5.17 s); a
+  session may ask for 10 s (243 frames, 10.125 s) with
+  `configure.chunk_duration` (docs/serve/director-chunks.md).
 
 **WP-14 notes (as implemented).** `fastvideo-fal::director` (feature
 `director`; fv-serve mounts it with `fal` + `webrtc`, merged into the fal

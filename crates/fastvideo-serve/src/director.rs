@@ -266,7 +266,7 @@ mod tests {
             assert_eq!(d.apps.len(), fastvideo_fal::DEFAULT_APPS.len());
             assert_eq!(d.max_session_seconds, Some(600));
             assert_eq!(d.h264, EncoderBackend::OpenH264);
-            assert_eq!(d.chunk_seconds, 10.0);
+            assert_eq!(d.chunk_seconds, 5.0);
             assert!(d.vp8_fallback);
             host.shutdown().await;
         });
