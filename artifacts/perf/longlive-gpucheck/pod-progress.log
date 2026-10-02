@@ -1,0 +1,51 @@
+/workspace/weights/auxiliary/tae:
+total 130446
+drwxrwxrwx 2 root root  2012260 Sep 27 15:38 .
+drwxrwxrwx 5 root root  3001360 Sep 28 21:17 ..
+-rw-rw-rw- 1 root root       16 Sep 27 15:38 .complete
+-rw-rw-rw- 1 root root 22709752 Sep 27 15:38 taeh3.safetensors
+-rw-rw-rw- 1 root root 60359856 Sep 27 15:38 taeltx2_3_wide.safetensors
+-rw-rw-rw- 1 root root 22642902 Sep 27 15:38 taew2_1.safetensors
+-rw-rw-rw- 1 root root 22848048 Sep 27 15:38 taew2_2.safetensors
+
+/workspace/weights/longlive-1.3b-safetensors:
+total 6917087
+drwxrwxrwx  2 root root    3000659 Oct  2 01:39 .
+drwxrwxrwx 33 root root    4000122 Oct  2 01:39 ..
+-rw-rw-rw-  1 root root         21 Oct  2 01:39 .complete
+-rw-rw-rw-  1 root root      46769 Oct  2 01:39 keys-longlive_base.txt
+-rw-rw-rw-  1 root root      46720 Oct  2 01:39 keys-lora.txt
+-rw-rw-rw-  1 root root 5676075416 Oct  2 01:39 longlive_base.safetensors
+-rw-rw-rw-  1 root root 1399924800 Oct  2 01:39 lora.safetensors
+-rw-rw-rw-  1 root root        175 Oct  2 01:39 sha256.txt
+
+/workspace/weights/longlive-1.3b/prompts:
+total 3911
+drwxrwxrwx 2 root root 1000334 Oct  2 01:37 .
+drwxrwxrwx 4 root root 3000789 Oct  2 01:37 ..
+-rw-rw-rw- 1 root root    3429 Oct  2 01:37 interactive_example.jsonl
+
+/workspace/weights/sfwan21-1.3b:
+total 17657
+drwxrwxrwx  8 root root 3002694 Sep 27 15:39 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+drwxrwxrwx  3 root root 1000901 Sep 27 15:39 .cache
+-rw-rw-rw-  1 root root       3 Sep 27 15:39 .complete
+-rw-rw-rw-  1 root root     421 Sep 27 15:39 model_index.json
+drwxrwxrwx  2 root root   20500 Sep 27 15:39 scheduler
+drwxrwxrwx  2 root root 3002116 Sep 27 15:39 text_encoder
+drwxrwxrwx  2 root root 2002046 Sep 27 15:39 tokenizer
+drwxrwxrwx  2 root root 3000528 Sep 27 15:39 transformer
+drwxrwxrwx  2 root root 2048407 Sep 27 15:39 vae
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 97887 MiB
+2026-10-02T01:44:32Z | venv exit=0
+2026-10-02T01:45:58Z | cell sf rc=143 wall=52s peak=17405MiB
+2026-10-02T01:53:36Z | cell sf rc=143 wall=434s peak=47521MiB
+2026-10-02T01:53:50Z | cell ll rc=2 wall=1s peak=0MiB
+2026-10-02T01:56:59Z | cell sf rc=0 wall=189s peak=33169MiB
+2026-10-02T01:56:59Z | frames at 
+2026-10-02T01:56:59Z | drift metrics exit=1
+2026-10-02T02:01:13Z | cell ll rc=1 wall=236s peak=27219MiB
+2026-10-02T02:01:13Z | frames at /root/ll/ll/frames
+2026-10-02T02:02:23Z | drift metrics exit=0
+2026-10-02T02:11:02Z | cell llb rc=0 wall=454s peak=27607MiB

@@ -55,7 +55,10 @@ def main(tree, out):
         tensors = {k: v.detach().contiguous() for k, v in sd.items() if torch.is_tensor(v)}
         skipped = [k for k, v in sd.items() if not torch.is_tensor(v)]
         path = tmp / f"{name}.safetensors"
-        save_file(tensors, str(path), metadata={"source": rel, "sub_dict": sub})
+        # One metadata entry: safetensors writes __metadata__ from a hash map, so
+        # with two entries their order (and the file's SHA-256) varied per run
+        # (the 2026-10-02 trees: US and EU longlive_base differ only there).
+        save_file(tensors, str(path), metadata={"source": f"{rel}#{sub}"})
         with safe_open(str(path), framework="pt") as f:
             if set(f.keys()) != set(tensors):
                 raise SystemExit(f"{name}: key set differs after the round trip")

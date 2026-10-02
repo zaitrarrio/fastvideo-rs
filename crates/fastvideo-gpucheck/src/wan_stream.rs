@@ -11,7 +11,7 @@
 //! * every `--run name,seconds=S[,rope=rel|abs][,sink=N][,window=N]
 //!   [,switch_at=S[/S2/...]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]
 //!   [,recache=EVERY:KEEP][,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]
-//!   [,longlive=1]`: a rollout for `S`
+//!   [,longlive=1][,dump=1]`: a rollout for `S`
 //!   seconds of video at `--fps`, blocks handed through a depth-4 channel to
 //!   a consumer thread (the design's executor → pacer hand-off) that measures
 //!   picture statistics per window of video time. Reports time to first
@@ -26,7 +26,10 @@
 //!   window, the streamed frame over its fresh-state decode. `keep_s=S`
 //!   decodes the first `S` seconds of latents again at the end as one clip
 //!   (TAEHV's default 4-latent chunks, one carried state) and compares it
-//!   with the streamed 3-latent blocks frame by frame.
+//!   with the streamed 3-latent blocks frame by frame. `dump=1` writes every
+//!   streamed frame as `frames/<name>/frame-NNNNN.png` (fast PNG, from the
+//!   consumer thread) for offline metrics (`hd_upscaler_metrics.py`'s
+//!   `warp_err` / `lum_flicker`).
 //!
 //! LongLive (`--longlive DIR`, docs/serve/research-longlive.md): the
 //! LongLive-1.3B transformer (the converted `longlive_base` + `lora`
@@ -90,6 +93,7 @@ struct RunSpec {
     fresh: bool,
     sheet: bool,
     keep_s: f64,
+    dump: bool,
 }
 
 fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
@@ -109,6 +113,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         fresh: true,
         sheet: true,
         keep_s: 0.0,
+        dump: false,
     };
     for kv in parts {
         let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("--run {s}: `{kv}` is not key=value"))?;
@@ -153,6 +158,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             "fresh" => r.fresh = v == "1",
             "sheet" => r.sheet = v == "1",
             "keep_s" => r.keep_s = v.parse()?,
+            "dump" => r.dump = v == "1",
             _ => bail!("--run {s}: unknown key {k}"),
         }
     }
@@ -743,6 +749,32 @@ fn write_sheet(path: &std::path::Path, tiles: &[Tile], h: usize, w: usize) -> an
     Ok(())
 }
 
+/// `dump=1`: every frame of a block as `frame-NNNNN.png` (global frame
+/// index), fast compression; errors are logged, not fatal.
+fn dump_frames(dir: &std::path::Path, b: &HostBlock) {
+    let plane = b.height * b.width * 3;
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("dump {}: {e}", dir.display());
+        return;
+    }
+    for i in 0..b.frames {
+        let Some(px) = b.rgb.get(i * plane..(i + 1) * plane) else { break };
+        let path = dir.join(format!("frame-{:05}.png", b.first_frame + i));
+        let res = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|f| {
+            let enc = image::codecs::png::PngEncoder::new_with_quality(
+                std::io::BufWriter::new(f),
+                image::codecs::png::CompressionType::Fast,
+                image::codecs::png::FilterType::NoFilter,
+            );
+            image::ImageEncoder::write_image(enc, px, b.width as u32, b.height as u32, image::ExtendedColorType::Rgb8)
+                .map_err(anyhow::Error::from)
+        });
+        if let Err(e) = res {
+            eprintln!("dump {}: {e}", path.display());
+        }
+    }
+}
+
 /// The first latents decoded again as one clip (TAEHV's default 4-latent
 /// chunks through one carried state, a fresh one) against the streamed
 /// frames (3-latent blocks), per window of video time.
@@ -855,6 +887,7 @@ fn consume(
     fps: f64,
     window_s: f64,
     sheet: bool,
+    dump: Option<std::path::PathBuf>,
 ) -> Consumed {
     let mut prev_last = None;
     let mut windows: Vec<Value> = Vec::new();
@@ -875,6 +908,9 @@ fn consume(
             win_start = (t / window_s).floor() * window_s;
         }
         let p = if b.rgb.is_empty() { Pic::default() } else { block_pic(&b, &mut prev_last) };
+        if let Some(d) = dump.as_ref().filter(|_| !b.rgb.is_empty()) {
+            dump_frames(d, &b);
+        }
         if sheet && x.sample && !b.rgb.is_empty() {
             dims = (b.height, b.width);
             let plane = b.height * b.width * 3;
@@ -919,7 +955,8 @@ fn one_run(
     let tae = pipe.taehv().ok_or_else(|| anyhow!("no TAEHV loaded"))?;
     let (tx, rx) = sync_channel::<(HostBlock, Option<u64>, usize, Extra)>(4);
     let (window_s, sheet) = (a.window_s, r.sheet);
-    let consumer = std::thread::spawn(move || consume(rx, fps, window_s, sheet));
+    let dump = r.dump.then(|| report.dir().join("frames").join(&r.name));
+    let consumer = std::thread::spawn(move || consume(rx, fps, window_s, sheet, dump));
 
     let t_open = Instant::now();
     let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
@@ -1062,7 +1099,7 @@ fn one_run(
         "spec": {"seconds": r.seconds, "rope": format!("{:?}", r.rope), "sink": r.sink, "window": r.window,
                  "switch_at": r.switch_at, "switch": format!("{:?}", r.switch),
                  "recache": r.recache.map(|c| json!({"every_blocks": c.every_blocks, "keep_frames": c.keep_frames})),
-                 "graphs": r.graphs, "fresh": r.fresh, "keep_s": r.keep_s},
+                 "graphs": r.graphs, "fresh": r.fresh, "keep_s": r.keep_s, "dump": r.dump},
         "frames": frames, "consumer_frames": rx_frames, "blocks": totals.len(),
         "open_s": open_s, "ttff_s": ttff, "first_block_s": totals.first(),
         "block_s": {"p50": pct(&mut tt, 0.5), "p90": pct(&mut tt, 0.9), "max": pct(&mut tt, 1.0)},
@@ -1118,6 +1155,8 @@ mod tests {
         let r = parse_run("x,switch=recache_sink,rope=rel").unwrap();
         assert_eq!(r.switch, PromptSwitch::Recache { global_sink: false });
         assert!(parse_run("x,switch=nope").is_err());
+        assert!(!parse_run("x").unwrap().dump);
+        assert!(parse_run("x,longlive=1,dump=1").unwrap().dump);
     }
 
     #[test]
