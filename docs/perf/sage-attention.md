@@ -698,3 +698,49 @@ Each GPU pod had a detached 5 400 s DELETE backstop, an on-pod idle guard
 (20 min at 0 % GPU) and a local balance watchdog (delete below $8.50). The
 balance went from $69.90 to $63.86 over the session. Other agents' pods ran
 at the same time.
+
+## 9. `ltx-pro` under the calibrated rule (2026-10-02)
+
+Owner decision on section 8.5: re-run the LTX-pro Sage gate (the one recipe
+that has Sage on by default) to the section 8.2 standard, and confirm that
+the served `ltx-pro` route really turns Sage on.
+
+### 9.1 Rule, fixed before any run
+
+**Workload.** RTX PRO 6000 (sm_120). `ltx25-distill-dense`, the `ltx-pro`
+route: `fv-gpucheck --techniques ltx2/ltx25_distill_dense ltx2 gen
+--model-version 2.5 --two-stage --dense-stage2`, 1920 x 1088, 121 frames at
+24 fps, `--no-text-cache` (as Phase 3, section 6.3). The three LTX prompts
+(`artifacts/perf/sage-phase3/driver/prompts-ltx3.json`: ltx-multishot,
+ltx-newsbroadcast, ltx-frogyoga), each at seeds 42, 1042 and 2042: 9 clips
+per arm. Stage 1 at 1080p is 8 160 tokens, so both stages are routed.
+
+**Arms**, one warm process each over the 9 clips, kernel picks pinned:
+
+| arm | env | role |
+|---|---|---|
+| `cud` | `FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=cudnn` | bf16 reference |
+| `fw2` | `FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=v2 FASTVIDEO_CUDNN_SDPA_GRAPH=composite` | bf16 control (fwd2) |
+| `sage` | `FASTVIDEO_ATTN_SAGE=2 FASTVIDEO_FLASH_KERNEL=cudnn` | candidate |
+
+**Pairs, deviations, rules 1 and 2:** exactly section 8.2 (control pair
+`cud`/`fw2`, Sage pair `cud`/`sage`; LPIPS mean, PSNR mean, |ln sharpness|,
+|ln jitter|; the same margins and outlier floors), per prompt over its 3
+seeds.
+
+**Verdict: pass** when (i) at least **2 of 3** prompts pass rule 1 (at most
+one prompt out of band, as H3's 4 of 5 allows one), (ii) no prompt breaks
+rule 2, and (iii) the denoise speedup (median over the 9 clips, `sage` vs
+`cud`) is at least 1.10. Analysis: `artifacts/perf/sage-calibrated/driver/calib.py`
+with the prompt list switched to the LTX three (`--prompts`), unchanged
+otherwise.
+
+**If it fails**, the proposal is to turn the `ltx-pro` default off
+(`Ltx2Recipe::sage_attention = false`); the owner decides, nothing is changed
+here.
+
+**Serving check (not part of the verdict).** One `ltx-pro` request through
+`fv-serve` (image `fastvideo-rs-serve:sha-ee9de1a`, main HEAD) with
+`FASTVIDEO_ATTN_SAGE` unset: Sage is on by default if the serve log shows the
+`attn_sage: kernels loaded` and `sdpa: SageAttention2 ... (attn_sage)` lines
+for that job.

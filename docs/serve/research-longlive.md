@@ -981,3 +981,60 @@ weights were written; the adapters were already on both volumes (§8).
 Balance $64.08 before the first pod, $55.06 after the second (other
 agents ran in parallel).
 
+
+### 12.6 Five-prompt check against base H3: rule, fixed before any run
+
+Owner decision on 12.4: run the five-prompt 768p check against base H3 and
+decide whether `h3-plug-4step` should replace Sol-H3 as `h3-max`.
+
+**Workload.** RTX PRO 6000, 768 × 1344, 124 frames (5 s), the five gate
+prompts with the calibrated gate's seeds
+(`artifacts/perf/sage-calibrated/driver/prompts-5x3.json`: each prompt at its
+own seed, 0 for h3-demo and 42 for the rest, plus +1000 and +2000).
+
+**Arms.** One `fv-gpucheck h3 gen` process per arm, all with
+`FASTVIDEO_ATTN_SAGE=0`, `FASTVIDEO_FLASH_KERNEL=cudnn` (picks pinned, so
+every arm is deterministic), `--text-encoder resident-fp8 --dit-offload
+resident` and their own text cache:
+
+| arm | recipe | forwards | clips |
+|---|---|---|---|
+| `base` (the reference) | `--h3-recipe base --dense` | 49 | 5: each prompt at its own seed (no warm pass) |
+| `plug` | `--h3-recipe h3-plug-4step --dense` | 4 | 15 |
+| `max` (`h3-max` as served) | `--techniques h3/sol_h3_4step_engine_ladder --h3-recipe sol-h3` | 4 | 15 |
+| `turbo` (`h3-turbo` as served) | `--techniques h3/fasth3_4step_vsa --h3-recipe 4step-vsa` | 4 | 15 |
+| `plugfw2` (control) | as `plug`, with `FASTVIDEO_FLASH_KERNEL=v2 FASTVIDEO_CUDNN_SDPA_GRAPH=composite` | 4 | 15 |
+
+The control and a second `plug` run happen on another pod (pod-hour cap);
+the two `plug` runs must be byte-identical (frame sha256), so the control
+pair `plug`/`plugfw2` measures the one kernel switch.
+
+**Pairs.** `compare-clips` (LPIPS alex, PSNR, sharpness and temporal-jitter
+ratios, candidate over base) of every 4-step clip against the base clip of
+its prompt. Base exists at the prompt's own seed only, so the +1000 / +2000
+clips are compared with that same base clip. That is fair to every arm: at
+4 forwards no sampler reproduces the base sample even at the same seed
+(12.3: LPIPS 0.54 for plug at the same seed), so all three pairs per prompt
+measure distance to the base's look, not sample identity. The same-seed pair
+is reported on its own as well. Control: `plug` vs `plugfw2` per clip (15).
+
+**Per prompt and arm:** the median over the 3 seeds of LPIPS, PSNR,
+sharpness ratio, jitter ratio and |ln ratio| of the last two.
+
+**Rule.**
+
+1. *Closer:* `plug` is closer to base than `max` on a prompt when its median
+   LPIPS is lower. Required on **at least 4 of 5** prompts.
+2. *No outlier beyond the control:* on every prompt, `plug`'s median
+   |ln sharpness ratio| and median |ln jitter ratio| against base stay within
+   max(1.5 × Cmax, Cmax + d), where Cmax is the largest |ln ratio| over the 15
+   control clips and d = 0.02 (sharpness), 0.03 (jitter), as in
+   docs/perf/sage-attention.md section 8.2.
+
+**Verdict:** `h3-plug-4step` is the better `h3-max` candidate when 1 and 2
+both hold. `max` and `turbo` are judged by rule 2 too and reported (not part
+of the verdict). Not in the verdict but in the proposal: denoise and total
+time per arm (median over its clips), and prompt adherence from frame
+sheets (for example, frogs on ltx-frogyoga). Analysis:
+`artifacts/perf/plug-five/driver/plugcmp.py`. Defaults are not changed; the
+owner decides.
