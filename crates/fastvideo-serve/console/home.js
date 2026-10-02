@@ -1,6 +1,6 @@
 import {
   $, el, store, K, base, apiKey, request, setMsg, loadCatalog, appTasks, modelHref, topbar, refreshConnPill,
-  loadAuthMode, resetAuthMode, keyless,
+  loadAuthMode, resetAuthMode, keyless, recipeText, streamKind, mountedProtocols,
 } from './common.js';
 
 topbar('home');
@@ -29,19 +29,14 @@ async function check() {
     const models = Array.isArray(caps.models) ? caps.models : [];
     pill.textContent = 'connected'; pill.className = 'pill ok';
     setMsg('connect-msg', keyless() ? base() + ' needs no API key (auth mode none).' : 'Key accepted by ' + base() + '.', 'ok');
-    // Live causal (SF-Wan) streams are length-limited (design §5.2).
-    const live = models.filter((m) => m.stream_limits).map((m) => {
-      const l = m.stream_limits;
-      return String((m.caps && m.caps.id) || '') + ': ' + l.default_max_s + ' s by default, at most ' + l.hard_max_s + ' s'
-        + (l.reset_restarts_clock ? ' (a reset restarts the clock)' : '');
-    });
+    const protos = mountedProtocols(caps);
     facts.replaceChildren(
       el('dt', {}, 'server'), el('dd', {}, base()),
-      el('dt', {}, 'models'), el('dd', {}, models.map((m) => String((m.caps && m.caps.id) || m.id || '')).filter(Boolean).join(', ') || '—'),
-      ...(live.length ? [el('dt', {}, 'live stream length'), el('dd', {}, live.join('; '))] : []),
+      el('dt', {}, 'models'), el('dd', {}, String(models.length)),
+      ...(protos ? [el('dt', {}, 'APIs'), el('dd', { id: 'server-apis' }, Object.entries(protos).filter(([, v]) => v).map(([k]) => k).join(', ') || '—')] : []),
     );
     facts.hidden = false;
-  } catch (e) {
+    renderServed(caps);  } catch (e) {
     if (e.status === 401) {
       pill.textContent = 'key refused'; pill.className = 'pill bad';
     } else if (e.status === 404) {
@@ -69,12 +64,54 @@ $('toggle-key').onclick = () => {
   f.type = show ? 'text' : 'password'; $('toggle-key').textContent = show ? 'Hide key' : 'Show key';
 };
 
+// The served models (`/fv/v1/capabilities`): id, tier, the recipe it runs
+// (attention, VAE, steps, profile), tasks, and the live pages for stream
+// models (causal: Live stream, with its session-length rule; duplex: Live input).
+async function renderServed(caps) {
+  const box = $('served');
+  const models = (caps && Array.isArray(caps.models)) ? caps.models : [];
+  let licences = {};
+  try {
+    const { apps } = await loadCatalog();
+    for (const a of apps || []) if (a.licence && a.model) licences[a.model] = a.licence;
+  } catch { licences = {}; }
+  const aliasesOf = (id) => Object.entries((caps && caps.aliases) || {}).filter(([, v]) => v === id).map(([k]) => k);
+  const rows = models.map((m) => {
+    const c = m.caps || {};
+    const kind = streamKind(m);
+    const l = m.stream_limits;
+    const live = kind === 'causal'
+      ? el('span', {}, el('a', { href: '/console/stream?model=' + encodeURIComponent(c.id), 'data-live': c.id }, 'Live stream'),
+        l ? el('small', { class: 'hint' }, ' ' + l.default_max_s + ' s default, ' + l.hard_max_s + ' s max' + (l.reset_restarts_clock ? '; reset restarts the clock' : '')) : '')
+      : kind === 'duplex' ? el('a', { href: '/console/live' }, 'Live input') : kind === 'clip' ? 'clip stream' : '–';
+    const lic = licences[c.id] || (c.served_names || []).map((n) => licences[n]).find(Boolean) || m.licence;
+    return el('tr', { 'data-model': c.id },
+      el('td', { class: 'mono' }, c.id, aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
+      el('td', {}, c.tier || '–', lic ? el('div', {}, el('span', { class: 'pill warn', title: lic, 'data-licence': 'non-commercial' }, /non-commercial/i.test(lic) ? 'non-commercial' : 'licence')) : ''),
+      el('td', { 'data-recipe': '' }, el('div', { class: 'mono' }, c.recipe || ''), el('div', { class: 'hint' }, recipeText(m.recipe))),
+      el('td', {}, (c.tasks || []).join(', ')),
+      el('td', {}, live),
+      el('td', {}, el('a', { href: '/console/native?model=' + encodeURIComponent(c.id) }, 'Native API')));
+  });
+  box.replaceChildren(...rows);
+  $('served-table').hidden = !rows.length;
+  const tiers = (caps && Array.isArray(caps.tiers)) ? caps.tiers : [];
+  $('served-tiers').textContent = tiers.length
+    ? 'Tier bindings: ' + tiers.map((t) => (t.alias || t.name || [t.family, t.tier].filter(Boolean).join('/')) + ' → ' + (t.model || t.id || '?')).join(', ') + '.'
+    : '';
+  setMsg('served-msg', rows.length ? '' : 'Connect with a key to list the served models (GET /fv/v1/capabilities).');
+}
+
 async function renderModels() {
   const box = $('models');
   try {
     const { apps } = await loadCatalog();
-    box.replaceChildren(...apps.map((app) => el('div', { class: 'card' },
-      el('h3', {}, app.id, app.tier ? el('span', { class: 'tag' }, app.tier) : null),
+    box.replaceChildren(...apps.map((app) => el('div', { class: 'card', 'data-app': app.id },
+      el('h3', {}, app.id, app.tier ? el('span', { class: 'tag' }, app.tier) : null,
+        app.licence ? el('span', { class: 'tag warn', title: app.licence, 'data-licence': 'non-commercial' }, /non-commercial/i.test(app.licence) ? 'non-commercial' : 'licence') : null),
+      app.model ? el('p', { class: 'hint mono' }, 'model ' + app.model) : null,
+      !Array.isArray(app.endpoints) ? el('p', { class: 'hint' }, 'This server does not list the endpoints; open one by its path.')
+        : !app.endpoints.length && app.director !== true ? el('p', { class: 'hint', 'data-unserved': '' }, 'Not served here: no model behind ' + (app.model || 'this app') + ' is loaded.') : null,
       el('ul', {}, appTasks(app).map((t) => el('li', {},
         el('a', { href: modelHref(app.id, t.sub), 'data-endpoint': app.id + '/' + t.sub }, t.title),
         t.tag ? el('span', { class: 'tag' }, t.tag) : null))))));

@@ -56,7 +56,7 @@ export function loadAuthMode() {
   return authModePromise;
 }
 // Probe again (the server URL changed).
-export function resetAuthMode() { authModePromise = null; openServer = false; }
+export function resetAuthMode() { authModePromise = null; openServer = false; capsPromise = null; }
 // True once the server reported `auth.mode = none`.
 export const keyless = () => openServer;
 // A request would be refused for lack of a key.
@@ -85,8 +85,9 @@ export class HttpError extends Error {
 }
 
 // fetch JSON. `auth`: 'key' (fal `Key`), 'bearer', 'admin' (bearer with the
-// admin token) or null. Throws HttpError on non-2xx.
-export async function request(method, path, { auth = 'key', token, body, root } = {}) {
+// admin token) or null. Throws HttpError on non-2xx. `full: true` resolves
+// `{body, headers, status}` instead of the body (for the `x-fv-*` headers).
+export async function request(method, path, { auth = 'key', token, body, root, full = false } = {}) {
   const headers = { Accept: 'application/json' };
   const secret = token ?? (auth === 'admin' ? session.get(K.admin) : apiKey());
   // An open server (auth mode `none`) gets no API key; the admin token still goes to admin routes.
@@ -103,7 +104,73 @@ export async function request(method, path, { auth = 'key', token, body, root } 
   let parsed = text;
   try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
   if (!resp.ok) throw new HttpError(resp.status, parsed);
-  return parsed;
+  return full ? { body: parsed, headers: resp.headers, status: resp.status } : parsed;
+}
+
+// The model metadata headers of a fal result or a director session
+// (`x-fv-tier`, `x-fv-quality`, `x-fv-recipe`, `x-fv-model`): {tier, quality, recipe, model}.
+export function metaHeaders(h) {
+  const get = (k) => (h && h.get(k)) || null;
+  return { tier: get('x-fv-tier'), quality: get('x-fv-quality'), recipe: get('x-fv-recipe'), model: get('x-fv-model') };
+}
+
+// A "draft quality" pill: the tier did not pass the quality gate.
+export const draftPill = () => el('span', { class: 'pill warn', 'data-quality': 'draft', title: 'This tier does not pass the quality gate (x-fv-quality: draft): a fast preview, not a final render.' }, 'draft quality');
+
+// A licence label (the LongLive-1.3B weights are non-commercial).
+export function licenceBanner(text) {
+  if (!text) return null;
+  const nc = /non-commercial/i.test(text);
+  return el('div', { class: 'banner licence', 'data-licence': nc ? 'non-commercial' : 'other', role: 'note' },
+    el('b', {}, nc ? 'Non-commercial licence. ' : 'Licence. '), text);
+}
+
+let capsPromise = null;
+// `GET /fv/v1/capabilities` (Bearer key): served models with caps, recipe,
+// tier and stream limits, tier bindings, aliases, the auth mode and (newer
+// servers) the mounted protocols. Null when the native API is not mounted
+// or the key is refused.
+export function loadCapabilities() {
+  if (!capsPromise) capsPromise = request('GET', '/fv/v1/capabilities', { auth: 'bearer' }).catch(() => null);
+  return capsPromise;
+}
+
+// The protocols this server mounts (`protocols` of the capabilities), or
+// null when the server does not say (older servers, the gateway).
+export const mountedProtocols = (caps) => (caps && caps.protocols && typeof caps.protocols === 'object' ? caps.protocols : null);
+
+// `{attention, vae, steps, profile}` of a capabilities model's recipe, as text.
+export function recipeText(r) {
+  if (!r || typeof r !== 'object') return '';
+  const parts = [];
+  if (r.attention) parts.push('attention ' + r.attention);
+  if (r.vae) parts.push('vae ' + r.vae);
+  if (r.steps != null) parts.push(r.steps + ' steps');
+  if (r.profile) parts.push('profile ' + r.profile);
+  return parts.join(' · ');
+}
+
+// A capabilities model's stream kind: 'causal', 'duplex', 'clip' or null.
+export function streamKind(m) {
+  const s = m && m.caps && m.caps.stream;
+  if (!s || typeof s !== 'object') return null;
+  // `{causal: {...}}`, `{duplex: {...}}` or `{clip: {...}}` (StreamCaps).
+  for (const k of ['causal', 'duplex', 'clip']) if (s[k]) return k;
+  return null;
+}
+
+// Uploads a browser file through the fal storage API -> its URL.
+export async function upload(file) {
+  await loadAuthMode();
+  if (needsKey()) throw new Error('set an API key first');
+  const type = file.type || 'application/octet-stream';
+  const name = (file.name || 'upload').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-100) || 'upload';
+  const init = await request('POST', '/storage/upload/initiate?storage_type=fal-cdn-v3', {
+    auth: 'key', body: { content_type: type, file_name: name },
+  });
+  const put = await fetch(init.upload_url, { method: 'PUT', headers: { 'Content-Type': type }, body: file });
+  if (!put.ok) throw new Error('upload failed: HTTP ' + put.status);
+  return init.file_url;
 }
 
 export function setMsg(node, text, kind) {
@@ -143,22 +210,22 @@ export function loadCatalog() {
   return catalogPromise;
 }
 
-// The H3 apps' endpoints (a catalog without `endpoints` falls back to these).
-export const TASKS = [
-  { sub: 'text-to-video', title: 'Text to Video' },
-  { sub: 'image-to-video', title: 'Image to Video' },
-  { sub: 'reference-to-video', title: 'Reference to Video' },
-  { sub: 'director', title: 'Director', tag: 'live' },
-];
+// The live director page of an app (its tag says when it is a causal rollout).
+const directorTask = (app) => ({ sub: 'director', title: 'Director', tag: app && app.director_mode === 'causal' ? 'live · causal' : 'live' });
 
 // An app's pages from its catalog entry: the batch endpoints (sub-paths may
 // have several segments, e.g. `v2.2-5b/text-to-video/fast-wan`), then the
-// live director on the H3 apps.
+// live director when the server says the app has one. A catalog entry
+// without `endpoints` (a server older than the served catalog) lists no
+// batch endpoints: the model page then asks the server for the endpoint's
+// schema directly instead of assuming the H3 set.
 export function appTasks(app) {
-  if (!app || !Array.isArray(app.endpoints)) return TASKS;
+  if (!app) return [];
   // Per-endpoint tier tags on the family apps (their endpoints differ in tier).
-  const list = app.endpoints.map((e) => ({ sub: e.sub, title: e.title || e.sub, tag: app.tier ? null : e.tier || null }));
-  if (app.director !== false) list.push(TASKS[TASKS.length - 1]);
+  const list = Array.isArray(app.endpoints)
+    ? app.endpoints.map((e) => ({ sub: e.sub, title: e.title || e.sub, tag: app.tier ? null : e.tier || null }))
+    : [];
+  if (app.director === true) list.push(directorTask(app));
   return list;
 }
 
@@ -346,8 +413,9 @@ export function topbar(active) {
     el('div', { class: 'topbar-in' },
       el('a', { class: 'brand', href: '/console' }, 'fv-serve', el('small', {}, 'console')),
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
-        link('/console', 'Models', 'home'), link('/console/live', 'Live input', 'live'), link('/console/admin', 'API keys', 'admin'),
-        link('/console/deployments', 'Deployments', 'deployments'), link('/console/avatar', 'Avatar', 'avatar')),
+        link('/console', 'Models', 'home'), link('/console/stream', 'Live stream', 'stream'), link('/console/live', 'Live input', 'live'),
+        link('/console/native', 'Native API', 'native'), link('/console/avatar', 'Avatar', 'avatar'),
+        link('/console/admin', 'API keys', 'admin'), link('/console/deployments', 'Deployments', 'deployments')),
       el('span', { class: 'spacer' }), strip, pill, theme),
     panel);
   strip.onclick = () => {

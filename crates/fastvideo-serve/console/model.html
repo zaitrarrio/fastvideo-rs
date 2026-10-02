@@ -55,6 +55,7 @@
             </div>
           </div>
           <div data-rpanel="preview">
+            <div id="result-quality" class="banner" data-quality="draft" hidden><b>Draft quality.</b> This tier does not pass the quality gate (<code>x-fv-quality: draft</code>): a fast preview, not a final render.</div>
             <div id="video-empty" class="placeholder-video" style="margin-top:10px">Run a request to see the video here.</div>
             <video id="video" controls playsinline preload="metadata" hidden style="margin-top:10px"></video>
             <div class="actions" id="result-links" hidden>
@@ -85,6 +86,7 @@
       <section class="stage">
         <div class="stage-head">
           <h2>Call it from code</h2>
+          <div class="tabs" role="tablist" aria-label="API" id="protocols" hidden></div>
           <div class="tabs" role="tablist" aria-label="Language">
             <button type="button" data-lang="curl" aria-selected="true">cURL</button>
             <button type="button" data-lang="python" aria-selected="false">Python</button>
@@ -93,7 +95,7 @@
           <button id="copy-snippet" class="small" type="button">Copy</button>
         </div>
         <div class="stage-body">
-          <p class="hint">Filled with the inputs currently set in the Playground. Auth is fal's <code>Authorization: Key &lt;key&gt;</code>.</p>
+          <p class="hint" id="snippet-note">Filled with the inputs currently set in the Playground. Auth is fal's <code>Authorization: Key &lt;key&gt;</code>.</p>
           <pre id="snippet"></pre>
           <details class="more">
             <summary>Input schema</summary>

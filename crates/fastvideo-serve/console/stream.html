@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live stream · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/stream.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Live stream <small>a causal model (SF-Wan, LongLive) generating one continuous video you steer with prompts</small></h1>
+  </div>
+  <div id="key-banner" class="banner" hidden>No API key in this browser. Streams need one: <a href="/console/admin">mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
+  <div id="licence"></div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-setup">
+      <div class="stage-head"><h2 id="h-setup">Session</h2><span id="stream-state" class="pill">idle</span></div>
+      <div class="stage-body">
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <p class="hint" id="model-facts"></p>
+        <p class="hint" id="director-link" hidden></p>
+        <label for="transport">Transport</label>
+        <select id="transport">
+          <option value="reactor">Reactor runtime (plays in this page)</option>
+          <option value="whip">Native stream: POST /fv/v1/streams, published to a WHIP endpoint</option>
+        </select>
+        <p class="hint" id="transport-note"></p>
+        <div id="whip-fields" hidden>
+          <label for="whip-url">WHIP endpoint</label>
+          <input id="whip-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://relay.example/live/whip (MediaMTX, Cloudflare Stream, …)">
+          <div class="row">
+            <div><label for="whip-target">Target</label>
+              <select id="whip-target"><option value="">guess from the URL</option><option value="mediamtx">mediamtx</option><option value="cloudflare">cloudflare</option></select></div>
+            <div><label for="whip-token">WHIP token</label>
+              <input id="whip-token" type="password" spellcheck="false" autocomplete="off" placeholder="server default"></div>
+          </div>
+          <label for="whep-url">Playback (WHEP) URL</label>
+          <input id="whep-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://relay.example/live/whep (optional: no picture here without it)">
+          <p class="hint">fv-serve publishes H.264 to the WHIP endpoint; this page plays it back from the relay's WHEP URL.</p>
+        </div>
+        <label for="prompt">Opening prompt</label>
+        <textarea id="prompt" rows="4">A first-person drive along a coastal road at golden hour, waves breaking on the rocks below.</textarea>
+        <div class="row">
+          <div><label for="seed">Seed</label><input id="seed" inputmode="numeric" placeholder="random"></div>
+          <div><label for="max-seconds">Length (s)</label><input id="max-seconds" type="number" min="1" step="1" placeholder="server default"></div>
+        </div>
+        <div class="actions">
+          <button id="start" class="primary" type="button">Start stream</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+        <div id="stream-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-out">
+      <div class="stage-head"><h2 id="h-out">Stream</h2></div>
+      <div class="stage-body">
+        <video id="video" autoplay playsinline muted controls style="margin-top:10px"></video>
+        <dl id="stream-stats"></dl>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-direct">
+      <div class="stage-head"><h2 id="h-direct">Direct</h2></div>
+      <div class="stage-body">
+        <label for="next">Next prompt</label>
+        <textarea id="next" rows="2" placeholder="The road turns inland through a pine forest."></textarea>
+        <p class="hint">Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).</p>
+        <div class="actions">
+          <button id="switch" class="primary" type="button" disabled>Switch prompt</button>
+          <button id="pause" type="button" disabled>Pause</button>
+          <button id="reset" type="button" disabled>Reset</button>
+        </div>
+        <h3 style="margin-top:14px">Timeline</h3>
+        <ul class="timeline" id="timeline"></ul>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-events">
+      <div class="stage-head"><h2 id="h-events">Events</h2></div>
+      <div class="stage-body"><div id="stream-log" class="logs"></div></div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

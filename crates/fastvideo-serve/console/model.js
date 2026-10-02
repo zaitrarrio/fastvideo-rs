@@ -4,10 +4,11 @@
 
 import {
   $, el, store, K, base, request, setMsg, ago, copyText, loadCatalog, appTasks, modelHref, topbar,
-  loadAuthMode, needsKey, poolBadge, poolWarning,
+  loadAuthMode, needsKey, poolBadge, poolWarning, upload, metaHeaders, draftPill, licenceBanner,
+  loadCapabilities, mountedProtocols,
 } from './common.js';
 import { buildForm } from './form.js';
-import { snippets } from './snippets.js';
+import { snippets, protocolSnippets, snippetProtocols } from './snippets.js';
 
 topbar('home');
 
@@ -50,20 +51,6 @@ async function header() {
   return { known, tasks };
 }
 
-// ---- uploads ---------------------------------------------------------------
-async function upload(file) {
-  await loadAuthMode();
-  if (needsKey()) throw new Error('set an API key first');
-  const type = file.type || 'application/octet-stream';
-  const name = (file.name || 'upload').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-100) || 'upload';
-  const init = await request('POST', '/storage/upload/initiate?storage_type=fal-cdn-v3', {
-    auth: 'key', body: { content_type: type, file_name: name },
-  });
-  const put = await fetch(init.upload_url, { method: 'PUT', headers: { 'Content-Type': type }, body: file });
-  if (!put.ok) throw new Error('upload failed: HTTP ' + put.status);
-  return init.file_url;
-}
-
 // ---- history -----------------------------------------------------------------
 const history = () => store.json(K.history, []);
 function saveHistory(entry) {
@@ -87,7 +74,7 @@ function renderHistory() {
     class: 'clickable' + (current && current.id === h.request_id ? ' selected' : ''), 'data-request': h.request_id,
     onclick: () => loadFromHistory(h),
   },
-  el('td', {}, el('span', { class: 'pill s-' + (h.status || '') }, pretty(h.status))),
+  el('td', {}, el('span', { class: 'pill s-' + (h.status || '') }, pretty(h.status)), h.quality === 'draft' ? [' ', draftPill()] : null),
   el('td', { class: 'mono' }, h.sub),
   el('td', { class: 'clip', title: (h.input && h.input.prompt) || '' }, (h.input && h.input.prompt) || ''),
   el('td', { class: 'mono' }, h.request_id.slice(0, 13) + '…'),
@@ -124,8 +111,12 @@ function renderLogs(logs) {
 
 function fmtS(ms) { return ms == null ? '—' : (ms / 1000).toFixed(2) + ' s'; }
 
-function renderFacts(out, c) {
+// `meta`: the result's `x-fv-tier`, `x-fv-quality` and `x-fv-recipe` headers.
+function renderFacts(out, c, meta = {}) {
   const facts = [['request_id', c.id], ['endpoint', app + '/' + c.sub]];
+  if (meta.tier) facts.push(['tier', el('span', {}, meta.tier, meta.quality === 'draft' ? [' ', draftPill()] : '')]);
+  if (meta.quality) facts.push(['quality', meta.quality]);
+  if (meta.recipe) facts.push(['recipe', meta.recipe]);
   if (out && out.video) {
     if (out.video.file_name) facts.push(['file', out.video.file_name]);
     if (out.video.file_size) facts.push(['size', (out.video.file_size / 1e6).toFixed(2) + ' MB']);
@@ -134,7 +125,9 @@ function renderFacts(out, c) {
   if (out && out.timings && out.timings.inference != null) facts.push(['inference', Number(out.timings.inference).toFixed(2) + ' s']);
   if (c.tStart) facts.push(['queue wait', fmtS(c.tStart - c.t0)]);
   if (c.tEnd) facts.push(['total', fmtS(c.tEnd - c.t0)]);
-  $('facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]));
+  $('facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', {}, k), el('dd', { 'data-fact': k }, v)]));
+  // A draft-tier result is flagged above the video, not only in the facts.
+  $('result-quality').hidden = meta.quality !== 'draft';
 }
 
 function showVideo(url) {
@@ -152,20 +145,26 @@ function resetResult(text) {
   $('video-empty').textContent = text || 'Run a request to see the video here.';
   $('output-json').textContent = '{}';
   $('facts').replaceChildren();
+  $('result-quality').hidden = true;
   renderLogs([]);
   setMsg('result-msg', '');
 }
 
 async function fetchResult(c) {
   try {
-    const out = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id));
+    const r = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id), { full: true });
+    const out = r.body;
+    const meta = metaHeaders(r.headers);
     $('output-json').textContent = JSON.stringify(out, null, 2);
     const url = out && out.video && out.video.url;
     showVideo(url);
-    renderFacts(out, c);
+    renderFacts(out, c, meta);
     status('COMPLETED');
     setMsg('result-msg', url ? '' : 'Completed without a video URL.', url ? '' : 'bad');
-    patchHistory(c.id, { status: 'COMPLETED', video_url: url && !url.startsWith('data:') ? url : null, elapsed_ms: c.tEnd ? c.tEnd - c.t0 : null });
+    patchHistory(c.id, {
+      status: 'COMPLETED', video_url: url && !url.startsWith('data:') ? url : null, elapsed_ms: c.tEnd ? c.tEnd - c.t0 : null,
+      tier: meta.tier, quality: meta.quality, recipe: meta.recipe,
+    });
   } catch (e) {
     $('output-json').textContent = JSON.stringify(e.body ?? e.message, null, 2);
     showVideo(null);
@@ -230,10 +229,29 @@ function loadFromHistory(h) {
 // ---- tabs, snippets -----------------------------------------------------------
 let form = null;
 let lang = 'curl';
+let proto = 'fal';
+// Context for the other protocols' snippets: the served model behind the
+// endpoint and its capabilities entry (set at boot).
+let snippetCtx = null;
 function updateSnippet() {
   if (!form) return;
-  const s = snippets({ base: base(), app, sub: task, input: form.values() });
-  $('snippet').textContent = s[lang];
+  const input = form.values();
+  const s = proto === 'fal' || !snippetCtx
+    ? snippets({ base: base(), app, sub: task, input })
+    : protocolSnippets(proto, { ...snippetCtx, base: base(), input });
+  $('snippet').textContent = s[lang] || s.curl;
+  $('snippet-note').textContent = s.note || (proto === 'fal' ? 'Filled with the inputs currently set in the Playground. Auth is fal\'s Authorization: Key <key>.' : '');
+}
+function renderProtocolTabs(list) {
+  $('protocols').replaceChildren(...list.map((p) => el('button', {
+    type: 'button', 'data-proto': p.id, 'aria-selected': String(p.id === proto), title: p.title,
+    onclick: () => {
+      proto = p.id;
+      $('protocols').querySelectorAll('[data-proto]').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.proto === proto)));
+      updateSnippet();
+    },
+  }, p.label)));
+  $('protocols').hidden = list.length < 2;
 }
 document.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => {
   lang = b.dataset.lang;
@@ -268,6 +286,8 @@ async function run() {
   }
   armed = null;
   if (form.busy()) { setMsg('run-msg', 'Wait for the uploads to finish.', 'bad'); return; }
+  const invalid = form.validate();
+  if (invalid) { setMsg('run-msg', invalid, 'bad'); return; }
   const input = form.values();
   if (!input.prompt || !String(input.prompt).trim()) { setMsg('run-msg', 'Enter a prompt.', 'bad'); return; }
   $('run').disabled = true;
@@ -304,8 +324,10 @@ async function boot() {
     return;
   }
   $('run').before(poolBadge(modelName));
-  if (!tasks.some((t) => t.sub === task)) { fail('Unknown endpoint `' + task + '`.'); return; }
+  // A catalog without `endpoints` (an older server) does not list them: the schema request decides.
+  if (known && Array.isArray(known.endpoints) && !tasks.some((t) => t.sub === task)) { fail('Unknown endpoint `' + task + '`.'); return; }
   if (!known) return;
+  if (known.licence) $('page-error').after(licenceBanner(known.licence));
   $('batch').hidden = false;
   $('endpoint-id').textContent = endpointId;
   let schema;
@@ -314,6 +336,13 @@ async function boot() {
   } catch (e) { fail('Could not load the input schema: ' + e.message); return; }
   $('schema-json').textContent = JSON.stringify(schema, null, 2);
   form = buildForm(schema, $('form'), { upload, onChange: updateSnippet });
+  // The other APIs this server mounts that can run this endpoint's model.
+  loadCapabilities().then((caps) => {
+    const entry = caps && (caps.models || []).find((m) => m.caps && (m.caps.id === modelName || (m.caps.served_names || []).includes(modelName)));
+    const tierHit = caps && !entry ? (caps.tiers || []).find((t) => t && (t.name === modelName || t.tier === modelName)) : null;
+    snippetCtx = { model: modelName, entry, tierHit, endpoint: ep, app: known, sub: task };
+    renderProtocolTabs(snippetProtocols(mountedProtocols(caps), snippetCtx));
+  });
   $('form').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
   renderHistory();
   const m = location.hash.match(/request=([^&]+)/);
