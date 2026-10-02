@@ -17,7 +17,7 @@ deploy scripts pull anonymously).
 | h3-max | `runpod-h3-max.toml` | `:h3-max`, … | `fv-serve-h3-max-sls` / `-pod` |
 | ltx | `runpod-ltx.toml` | `:ltx`, … | `fv-serve-ltx-sls` / `-pod` |
 | wan (wan-turbo) | `runpod-wan.toml` | `:wan`, … | `fv-serve-wan-sls` / `-pod` |
-| wan5b | `runpod-wan5b.toml` | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
+| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, the `wan14b-turbo` tier: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
 | gateway (CPU only) | `gateway.toml` | `:gateway`, … | `fv-serve-gateway-pod` |
 | debug (legacy all-in-one) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |

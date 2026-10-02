@@ -252,8 +252,9 @@ async fn harness_flagged(hd: bool, long: bool) -> Sweep {
     c.jobs.backend = JobBackend::Memory;
     c.limits.queue_max = 1_000_000;
     // `fastvideo/ltx-turbo`: an H3-schema app on LTX, whose director streams
-    // LTX (480p / 720p / 768p / 1080p).
-    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3", "fastvideo/ltx-turbo"] {
+    // LTX (480p / 720p / 768p / 1080p). `fastvideo/wan14b-turbo`: the same
+    // kind of app on the Wan 14B fast tier (480P, up to 81 frames).
+    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3", "fastvideo/ltx-turbo", "fastvideo/wan14b-turbo"] {
         c.protocols.fal_apps.push(a.to_owned());
     }
     c.validate().unwrap();
