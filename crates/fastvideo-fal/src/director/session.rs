@@ -626,6 +626,15 @@ impl Session {
             last_frame: plan.end_image.clone(),
         };
         self.building = true;
+        tracing::info!(
+            session = %self.init.handle.id,
+            chunk = plan.index,
+            prompt_version = plan.prompt_version,
+            seconds = plan.seconds,
+            ready = self.chunks_ready,
+            started = self.chunks_started,
+            "director: chunk dispatched"
+        );
         let clips = self.clips.clone();
         let tx = self.build_tx.clone();
         let fps = self.clips.spec().fps;
@@ -713,6 +722,7 @@ impl Session {
                 "classified_ms": ms(b.gen_s + b.prep_s),
             },
         });
+        tracing::info!(session = %self.init.handle.id, chunk = b.plan.index, generation_s = b.gen_s, prepare_s = b.prep_s, frames = presented, lead_s, "director: chunk built");
         self.send(chunk);
         self.send(json!({
             "type": "chunk_metrics",
@@ -917,6 +927,9 @@ impl Session {
         match e {
             MediaEvent::ChunkStarted { index, late_by } => {
                 self.chunks_started += 1;
+                if self.causal.is_none() {
+                    tracing::info!(session = %self.init.handle.id, chunk = index, late_by = late_by.unwrap_or(0.0), "director: chunk playout started");
+                }
                 self.init.handle.set_state(SessionState::Streaming);
                 if let Some(late) = late_by {
                     // Causal playout units are blocks: name their chunk.
@@ -930,7 +943,10 @@ impl Session {
                     }
                 }
             }
-            MediaEvent::Underrun { .. } => self.underruns += 1,
+            MediaEvent::Underrun { after } => {
+                self.underruns += 1;
+                tracing::info!(session = %self.init.handle.id, after, underruns = self.underruns, "director: playout underrun (holding the last frame)");
+            }
             MediaEvent::Emitted { video_seconds } => {
                 self.video_seconds = video_seconds;
                 if let Some(max) = self.init.facts.max_session_seconds {
