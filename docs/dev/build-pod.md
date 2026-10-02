@@ -148,6 +148,10 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
      once Runpod reports it up ≥ 9 h (`build_pod_max_h`), or once its public
      `/healthz` shows no jobs and idle ≥ its idle stop + 15 min
      (`build_pod_idle_grace_min`). Alert kind `build_pod`, audited.
+     Its dashboard shows the same timers read only (Dashboard → Build pod):
+     the public `/healthz` carries the timers, the last self-stop attempt
+     (`self_stop`) and the active jobs (`jobs`: id, agent, state, seconds;
+     no command lines).
   The volume keeps everything worth keeping, so a terminate costs nothing
   but the container disk (which a stop loses too); `up` recreates.
 - **Incident 2026-10-02 (why the layers exist).** Pod `jactz9o1k6x58u` ran

@@ -1,9 +1,11 @@
 # fv-serve as the gateway in front of four GPU *pod* pools (one pod each):
 # the cluster of scripts/serve/runpod-cluster.sh. Same as gateway.toml except
-# the pools (kind "pod", worker URLs from FV_POOL_<ID>_URLS), the wan pool
-# (the Wan 5B tiers of runpod-wan5b.toml), the fal apps the workers mount,
-# and the Reactor model (H3 clip mode on the h3-turbo pod). The cluster
-# script passes this file to the CPU pod (the image may predate it).
+# the state dir, the pools (kind "pod", worker URLs from FV_POOL_<ID>_URLS),
+# the wan pool (the Wan 5B tiers of runpod-wan5b.toml) and the Reactor model
+# (H3 clip mode on the h3-turbo pod); tests/gateway_bases.rs keeps the rest
+# in step. The cluster script passes this file to the CPU pod (the image may
+# predate it); fv-control embeds everything before the first [[pools]] as its
+# gateway base (control/gen-configs.mjs) and adds the cluster's own pools.
 #
 # The workers do not self-register: gw_workers takes the worker's
 # server.public_base_url as its URL, and here that is the gateway's URL (the
@@ -77,8 +79,11 @@ fal_director = true
 ltx = true
 reactor = true
 native = true
-# Every pool's fal apps (the workers mount the same ids).
-fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/wan"]
+# Every worker config's fal apps (the union; the workers mount the same ids;
+# runpod.toml and the H3 configs mount the default H3 apps). An app whose
+# model no pool serves answers 404 ("model ... is not served by any pool");
+# the gateway starts and serves the rest (tests/gateway_bases.rs).
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3", "fal-ai/ltx-2.3-quality", "fal-ai/wan", "fastvideo/fastwan21-1.3b", "fastvideo/wan14b-turbo"]
 
 [limits]
 queue_max = 256

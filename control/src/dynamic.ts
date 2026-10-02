@@ -1,9 +1,12 @@
 // Live values for the editors' autocomplete and dropdowns
 // (GET /api/schemas/dynamic): GPU types with price and stock, regions and
 // volumes, CPU flavors, release channels and their digests, image
-// variants, pools, env keys in use and the controller's reserved keys.
+// variants and the pool presets that use them, pools, model ids, recipes and
+// fal apps (cluster/catalog.json), env keys (the engine's, with what they do,
+// and those in use) and the controller's reserved keys.
+import CATALOG from "./cluster/catalog.json";
 import { RESERVED_KEYS } from "./cluster/payloads";
-import { REGIONS, STANDARD_POOLS } from "./cluster/spec";
+import { POOL_PRESETS, REGIONS } from "./cluster/spec";
 import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
@@ -30,7 +33,20 @@ export async function gpuTypes(env: Env): Promise<GpuType[]> {
   return list;
 }
 
+/** Image variants CI builds (scripts/serve/variants.sh); the pool presets reuse them. */
 export const VARIANTS = ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "gateway"];
+const variantDetail = (v: string) => {
+  const ps = POOL_PRESETS.filter((p) => p.pool.variant === v).map((p) => p.id);
+  return v === "gateway" ? "CPU: the gateway, and the fake engine" : ps.length ? `presets: ${ps.join(", ")}` : "";
+};
+/** Env keys with what they do: the engine's (catalog.json) and the controller-facing serve ones. */
+export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]) {
+  const use = new Map<string, string[]>();
+  for (const k of inUse) (use.get(k.key) || use.set(k.key, []).get(k.key)!).push(`${k.scope}×${k.n}`);
+  const out = CATALOG.engine_env.map((e) => ({ id: e.id, detail: use.has(e.id) ? `${e.detail} (in use: ${use.get(e.id)!.join(", ")})` : e.detail }));
+  for (const [k, v] of use) if (!out.some((o) => o.id === k)) out.push({ id: k, detail: `in use: ${v.join(", ")}` });
+  return out;
+}
 export const FAKE_MODELS = ["fake-h3-max", "fake-h3-turbo", "fake-sol-h3", "fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"];
 
 export async function dynamicEnums(env: Env, clusterId?: string) {
@@ -51,12 +67,17 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
       return { id: ch, sha: h?.git_sha?.slice(0, 7) ?? null, promoted_at: h?.promoted_at ?? null, digests: h?.digests ?? {} };
     }),
     shas: [...new Set(heads.history.map((h: any) => String(h.git_sha).slice(0, 7)))].slice(0, 20),
-    variants: VARIANTS,
+    variants: VARIANTS.map((v) => ({ id: v, detail: variantDetail(v) })),
+    pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}` })),
     fake_models: FAKE_MODELS,
-    models: STANDARD_POOLS.flatMap((p) => p.models || []),
+    models: POOL_PRESETS.flatMap((p) => p.pool.models || []),
+    model_ids: CATALOG.models.map((m) => ({ id: m.id, detail: `${m.family} · ${m.recipe} · ${m.detail}` })),
+    families: CATALOG.families,
+    recipes: CATALOG.recipes.map((r) => ({ id: r.id, detail: `${r.family}${r.serve ? "" : " · NOT servable"} · ${r.detail}` })),
+    fal_apps: CATALOG.fal_apps,
     pools,
     clusters: clusters.map((c) => ({ id: c.id, name: c.name })),
-    env_keys: [...new Set((keys.results || []).map((k) => k.key))],
+    env_keys: envKeyOptions(keys.results || []),
     reserved_env_keys: [...RESERVED_KEYS, "FV_POOL_<ID>_URLS"],
   };
 }
