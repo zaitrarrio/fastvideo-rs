@@ -1,6 +1,7 @@
 //! The engine seam of the director: a thin adapter over the engine's clip
-//! sessions (`fastvideo-engine-service::ClipSession`, design §5.5), which
-//! adapters may not depend on (design §2.2). `fv-serve` implements it over
+//! sessions (`fastvideo-engine-service::ClipSession`, design §5.5) and causal
+//! sessions (`CausalSession`, design §5.4; docs/serve/director-causal.md),
+//! which adapters may not depend on (design §2.2). `fv-serve` implements it over
 //! `EngineService::open_clip_session` + `ClipSession::build`; the tests
 //! implement it over the fake engine.
 
@@ -47,12 +48,58 @@ pub trait DirectorClips: Send + Sync + 'static {
     async fn close(&self);
 }
 
+/// One block of a causal rollout ([`DirectorStream::next_block`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StreamBlock {
+    /// 0-based since open (or the engine's last reset).
+    pub index: u64,
+    /// The engine prompt version this block was generated with (the value
+    /// [`DirectorStream::set_prompt`] returned; 0 never happens: generation
+    /// waits for the first prompt).
+    pub prompt_version: u64,
+    pub frames: Vec<RgbFrame>,
+    /// Denoise + decode (+ re-cache) of this block, in milliseconds.
+    pub block_ms: f64,
+    /// The prompt-switch KV re-cache run before this block (LongLive), in
+    /// milliseconds; 0 when none.
+    pub recache_ms: f64,
+}
+
+/// An open causal rollout (SF-Wan / LongLive, design §5.4): one continuous
+/// generation for the whole director session; prompt changes land at the
+/// next block boundary. Dropping the last reference does not end it: call
+/// [`DirectorStream::close`].
+#[async_trait::async_trait]
+pub trait DirectorStream: Send + Sync + 'static {
+    fn caps(&self) -> &ModelCaps;
+    fn spec(&self) -> &SessionSpec;
+    /// The prompt from the next block the engine starts on; returns its
+    /// engine version (1, 2, ...). Generation starts with the first prompt.
+    fn set_prompt(&self, prompt: &str) -> u64;
+    /// Seed of the rollout from the next block (call before the first
+    /// prompt: it restarts the rollout).
+    fn set_seed(&self, seed: u64);
+    /// Pauses (or resumes) generation at the next block boundary.
+    fn set_paused(&self, paused: bool);
+    /// The next block; `None` once the rollout has ended. An engine error
+    /// arrives once as `Some(Err(_))`.
+    async fn next_block(&self) -> Option<Result<StreamBlock, ApiError>>;
+    /// Ends the rollout and releases the executor (idempotent).
+    async fn close(&self);
+}
+
 /// Opens clip sessions: one per executor, the model resident, `48000 % fps
 /// == 0` for audio sessions. Busy is `ApiError` kind `Busy`/`Conflict`;
 /// not resident is `Loading` with `Retry-After`.
 #[async_trait::async_trait]
 pub trait DirectorEngine: Send + Sync + 'static {
     async fn open(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorClips>, ApiError>;
+
+    /// Opens a causal rollout for a `StreamCaps::Causal` model (exclusive
+    /// executor lease). Engines without causal support refuse.
+    async fn open_stream(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorStream>, ApiError> {
+        Err(ApiError::invalid(format!("model `{}` (causal streaming) is not available to the director here", spec.model)))
+    }
 }
 
 /// Frames a chunk of `seconds` gets on `caps`' grid at `fps` (snapped up,

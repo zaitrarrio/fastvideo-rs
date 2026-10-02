@@ -14,11 +14,26 @@
 //!   older clients never ask for it;
 //! - `prompt_expander: "none"`, `accelerations: ["none"]`.
 
-use fastvideo_protocol::{Family, ModelCaps};
+use fastvideo_protocol::{Family, ModelCaps, StreamCaps};
 use serde_json::{json, Value};
 
 use super::control::Limits;
 use super::messages::{Resolution, CLIENT_MESSAGE_TYPES, SCRIPT_MAX_BEATS, SERVER_MESSAGE_TYPES};
+
+/// Whether the director can run a model: clip streaming (H3, LTX) or a
+/// causal rollout (LongLive, SF-Wan).
+pub fn director_capable(caps: &ModelCaps) -> bool {
+    matches!(caps.stream, Some(StreamCaps::Clip { .. } | StreamCaps::Causal { .. }))
+}
+
+/// Whether a causal model is LongLive (served as `longlive`): its weights are
+/// non-commercial (docs/serve/research-longlive.md §4.3).
+pub fn is_longlive(caps: &ModelCaps) -> bool {
+    caps.id.0.contains("longlive") || caps.served_names.iter().any(|n| n.contains("longlive"))
+}
+
+/// The licence note of a LongLive model's director.
+pub const LONGLIVE_LICENCE: &str = "LongLive-1.3B weights (NVIDIA, HF card: CC-BY-NC-SA 4.0): non-commercial use only (research and evaluation) unless NVIDIA confirms otherwise; see docs/serve/research-longlive.md §4.3.";
 
 /// Resolutions a model serves: its canvas tiers among 480p / 720p / 768p /
 /// 1080p (H3: 480p and 768p, 1080p with the opt-in 1080P tier; LTX: all
@@ -72,6 +87,9 @@ pub fn app_name(app_id: &str) -> String {
 pub fn director_info(f: &InfoFacts) -> Value {
     let l = &f.limits;
     let resolutions: Vec<&str> = l.resolutions.iter().map(|r| r.as_str()).collect();
+    if let Some(c) = &l.causal {
+        return causal_info(f, c, &resolutions);
+    }
     let playback = f64::from(f.default_chunk_frames.saturating_sub(1)) / f64::from(l.fps.max(1));
     json!({
         "app": f.app,
@@ -116,6 +134,47 @@ pub fn director_info(f: &InfoFacts) -> Value {
         "client_message_types": CLIENT_MESSAGE_TYPES,
         "server_message_types": SERVER_MESSAGE_TYPES,
     })
+}
+
+/// `DirectorInfo` of a causal model (docs/serve/director-causal.md §4): the
+/// chunk is a group of blocks played as they arrive; the continuation
+/// context is the KV window, not an anchor frame; text only, 16:9 only.
+fn causal_info(f: &InfoFacts, c: &super::control::CausalLimits, resolutions: &[&str]) -> Value {
+    let l = &f.limits;
+    let mut v = {
+        let clip = InfoFacts { limits: super::control::Limits { causal: None, ..l.clone() }, ..f.clone() };
+        director_info(&clip)
+    };
+    let chunk_frames = c.block_frames * c.chunk_blocks.max(1);
+    let chunk_s = f64::from(chunk_frames) / f64::from(l.fps.max(1));
+    let whole = (chunk_s.round() as u64).max(1);
+    v["chunk_seconds"] = whole.into();
+    v["default_chunk_duration"] = whole.into();
+    v["min_chunk_duration"] = whole.into();
+    v["max_chunk_duration"] = whole.into();
+    v["continuation_context_frames"] = c.context.map_or(c.block_frames, |x| x.window_pixel_frames()).into();
+    v["continuation_playback_seconds"] = ((chunk_s * 1000.0).round() / 1000.0).into();
+    v["resolutions"] = json!(resolutions);
+    v["aspect_ratios"] = json!(["16:9"]);
+    v["audio_behaviors"] = json!([]);
+    v["script_max_end_images"] = 0.into();
+    v["script_min_end_image_spacing_seconds"] = 0.into();
+    v["script_min_chunk_seconds"] = 1.into();
+    v["script_min_opening_chunk_seconds"] = 1.into();
+    v["causal"] = json!({
+        "block_frames": c.block_frames,
+        "block_seconds": c.block_seconds,
+        "chunk_blocks": c.chunk_blocks,
+        "kv_window_latent_frames": c.context.map(|x| x.window_latent_frames),
+        "sink_latent_frames": c.context.map(|x| x.sink_latent_frames),
+        "prompt_switch": match c.context {
+            Some(x) if x.prompt_recache => "recache",
+            Some(_) => "keep",
+            None => "unknown",
+        },
+        "image_conditioning": false,
+    });
+    v
 }
 
 /// The `session_info` message: `DirectorInfo` plus `type`.
@@ -163,5 +222,35 @@ mod tests {
         let v = director_info(&InfoFacts { limits: l, ..f });
         assert_eq!(v["resolutions"], json!(["480p", "720p", "768p", "1080p"]));
         assert!(v.get("type").is_none());
+    }
+
+    #[test]
+    fn causal_constants() {
+        use super::super::control::CausalLimits;
+        let ctx = fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true };
+        let l = Limits {
+            fps: 16,
+            chunk_seconds: 3.0,
+            min_chunk_seconds: 3.0,
+            max_chunk_seconds: 3.0,
+            resolutions: vec![Resolution::R480],
+            causal: Some(CausalLimits { block_frames: 12, block_seconds: 0.75, chunk_blocks: 4, context: Some(ctx) }),
+            ..Limits::default()
+        };
+        let f = InfoFacts { app: app_name("fastvideo/longlive"), limits: l, default_chunk_frames: 48, max_session_seconds: Some(600), audio: false };
+        let v = session_info(&f);
+        assert_eq!(v["type"], "session_info");
+        assert_eq!(v["app"], "fastvideo-longlive-director");
+        assert_eq!(v["fps"], 16);
+        assert_eq!((v["chunk_seconds"].as_u64(), v["min_chunk_duration"].as_u64(), v["max_chunk_duration"].as_u64()), (Some(3), Some(3), Some(3)));
+        assert_eq!(v["continuation_context_frames"], 48);
+        assert_eq!(v["continuation_playback_seconds"], 3.0);
+        assert_eq!(v["resolutions"], json!(["480p"]));
+        assert_eq!(v["aspect_ratios"], json!(["16:9"]));
+        assert_eq!(v["script_max_end_images"], 0);
+        assert_eq!(v["causal"]["prompt_switch"], "recache");
+        assert_eq!(v["causal"]["kv_window_latent_frames"], 12);
+        assert_eq!(v["causal"]["block_seconds"], 0.75);
+        assert_eq!(v["max_session_seconds"], 600);
     }
 }

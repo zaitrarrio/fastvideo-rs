@@ -556,6 +556,12 @@ pub struct DirectorCfg {
     pub buffer_chunks: usize,
     /// Video bitrate in bit/s; 0 = by canvas.
     pub video_bitrate: u32,
+    /// Causal models (LongLive, SF-Wan): blocks per director `chunk`
+    /// (4 blocks of 12 frames = 3 s at 16 fps).
+    pub causal_chunk_blocks: u32,
+    /// Causal models: seconds of video kept queued for playout; above it the
+    /// rollout pauses at the next block boundary (prompt latency).
+    pub causal_lead_seconds: f64,
 }
 
 impl Default for DirectorCfg {
@@ -567,6 +573,8 @@ impl Default for DirectorCfg {
             vp8_fallback: true,
             buffer_chunks: 1,
             video_bitrate: 0,
+            causal_chunk_blocks: 4,
+            causal_lead_seconds: 2.0,
         }
     }
 }

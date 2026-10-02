@@ -1,0 +1,178 @@
+{
+  "app": "fastvideo/longlive",
+  "audio_packets": 0,
+  "chunks": 20,
+  "deadline_missed": 0,
+  "errors": [],
+  "final_metrics": {
+    "causal": {
+      "blocks": 83,
+      "paused": false,
+      "recache_ms_total": 1172.932,
+      "recaches": 3,
+      "video_dropped": 0
+    },
+    "final": true,
+    "gauges": {
+      "audio_packets": 0,
+      "buffered_frames": 27,
+      "chunks": 20,
+      "encode_ms_total": 1458.888,
+      "underruns": 0,
+      "video_packets": 964,
+      "video_seconds": 59.8125
+    },
+    "history_limit": 64,
+    "history_size": 20,
+    "phases": {
+      "delivery": {
+        "count": 0,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "total_ms": -0.0
+      },
+      "generation": {
+        "count": 20,
+        "max_ms": 2696.502,
+        "p50_ms": 2300.445,
+        "p95_ms": 2690.48,
+        "total_ms": 46994.99900000001
+      },
+      "prepare": {
+        "count": 20,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "total_ms": 0.0
+      }
+    },
+    "session_wall_ms": 63536.959,
+    "type": "session_metrics",
+    "units": "ms"
+  },
+  "freezes_over_250ms": 0,
+  "generation_fps_mean": 20.431499999999996,
+  "generation_fps_min": 17.8,
+  "generation_over_playback": 0.7857053530114942,
+  "keyframes": 31,
+  "max_frame_gap_ms": 65.32722399999966,
+  "recaches_reported": 3,
+  "received_fps": 16.055224734046888,
+  "received_span_s": 59.98047464,
+  "rtp_fps": 16.0,
+  "session_id": "f54b4d5c-cb91-4065-b03b-8741a9e0ba65",
+  "session_info": {
+    "accelerations": [
+      "none"
+    ],
+    "app": "fastvideo-longlive-director",
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "audio_behaviors": [],
+    "audio_bitrates": [
+      96000,
+      128000,
+      192000
+    ],
+    "audio_conditioning": false,
+    "audio_sample_rate": 48000,
+    "causal": {
+      "block_frames": 12,
+      "block_seconds": 0.75,
+      "chunk_blocks": 4,
+      "image_conditioning": false,
+      "kv_window_latent_frames": 12,
+      "prompt_switch": "recache",
+      "sink_latent_frames": 3
+    },
+    "chunk_seconds": 3,
+    "client_message_types": [
+      "configure",
+      "ping",
+      "prompt",
+      "stop"
+    ],
+    "conditioning_audio_sample_rate": 32000,
+    "continuation_context_frames": 48,
+    "continuation_playback_seconds": 3.0,
+    "default_acceleration": "none",
+    "default_audio_bitrate": null,
+    "default_chunk_duration": 3,
+    "default_memory": 12,
+    "fps": 16,
+    "max_audio_source_seconds": 0,
+    "max_chunk_duration": 3,
+    "max_memory": 50,
+    "max_session_seconds": null,
+    "min_chunk_duration": 3,
+    "min_memory": 1,
+    "one_session_per_machine": true,
+    "prompt_context_segments": 12,
+    "prompt_deck_size": 6,
+    "prompt_expander": "none",
+    "protocol_version": 1,
+    "resolutions": [
+      "480p"
+    ],
+    "script_max_audio_beats": 0,
+    "script_max_beats": 64,
+    "script_max_end_images": 0,
+    "script_max_pending": 4,
+    "script_max_queued": 4,
+    "script_min_chunk_seconds": 1,
+    "script_min_end_image_spacing_seconds": 0,
+    "script_min_opening_chunk_seconds": 1,
+    "script_modes": [
+      "replace",
+      "append"
+    ],
+    "scripts": true,
+    "server_message_types": [
+      "session_info",
+      "configured",
+      "prompt_pending",
+      "prompt_applied",
+      "prompt_rejected",
+      "audio_pending",
+      "audio_applied",
+      "audio_rejected",
+      "audio_exhausted",
+      "chunk",
+      "chunk_metrics",
+      "deadline_missed",
+      "error",
+      "pong",
+      "session_metrics",
+      "stream_exhausted"
+    ],
+    "session_limit_scope": "configured",
+    "type": "session_info"
+  },
+  "switches": [
+    {
+      "applied_after_ms": 1359.109994999999,
+      "first_chunk": 6,
+      "prompt": "A realistic video of a Texas Hold'em poker event at a casino. The same male player—late 30s, medium build, short dark hair, light stubble, sharp jawline—dressed in a fitted navy blazer over a charcoal tee, dark jeans, and a stainless-steel watch—flicks his cards onto the felt, then leans back in the chair with arms spread wide in celebration. The dealer continues dealing to the table as stacks of multicolored chips crowd the surface; slot machines and nearby patrons fill the background. The camera locks onto the player’s exuberant reaction. Wide shot to medium close-up.",
+      "prompt_version": 2,
+      "sent_s": 15.077809452000002
+    },
+    {
+      "applied_after_ms": 1584.0739990000002,
+      "first_chunk": 11,
+      "prompt": "A realistic video of a Texas Hold'em poker event at a casino. The same late-30s male player, medium build with short dark hair and light stubble, wearing a navy blazer, charcoal tee, dark jeans, and a stainless-steel watch, reveals the winning hand and leans back in celebration while the dealer keeps the game moving. A nearby patron claps and cheers for the winner, amplifying the festive atmosphere. The table brims with colorful chips, with slot machines and other tables behind. The camera centers on the winner’s reaction as the applause rises. Wide shot to medium close-up.",
+      "prompt_version": 3,
+      "sent_s": 30.074582203
+    },
+    {
+      "applied_after_ms": 1576.6615660000025,
+      "first_chunk": 16,
+      "prompt": "A realistic video of a Texas Hold'em poker event at a casino. The same male player—late 30s, medium build, short dark hair, light stubble—still in his navy blazer, charcoal tee, dark jeans, and stainless-steel watch—sits upright and begins neatly arranging the stacks of chips in front of him, methodically straightening and organizing the piles. The dealer continues dealing, and rows of slot machines pulse in the background. The camera captures the composed, purposeful movements at the well-lit table. Wide shot to medium close-up.",
+      "prompt_version": 4,
+      "sent_s": 45.031966512
+    }
+  ],
+  "ttff_ms": 3504.1154850000003,
+  "video_frames": 964
+}
