@@ -1230,6 +1230,7 @@ name = "fastvideo-edge"
 version = "0.1.0"
 dependencies = [
  "fastvideo-dispatch-proto",
+ "futures",
  "js-sys",
  "serde",
  "serde_json",

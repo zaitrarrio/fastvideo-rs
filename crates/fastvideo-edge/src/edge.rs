@@ -2,10 +2,14 @@
 //! docs). wasm32 only.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
+use std::time::Duration;
 
 use fastvideo_dispatch_proto as proto;
-use proto::sched::{Cfg, Dirty, JobRec, Out, Sched, WorkerRec};
-use proto::{EnqueueReq, WorkerMsg};
+use futures::channel::oneshot;
+use proto::presign::{cap_url, cap_verify, Cap, S3Presign};
+use proto::sched::{Admit, Cfg, Dirty, JobRec, Out, Sched, SessionRec, UploadRec, WorkerRec};
+use proto::{DoMsg, EnqueueReq, PartUrl, Scope, SessionGrant, SessionReq, WorkerMsg};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use wasm_bindgen::JsValue;
@@ -15,10 +19,16 @@ const DO_BINDING: &str = "POOL_SCHEDULER";
 const D1_BINDING: &str = "DB";
 /// R2 bucket for large envelopes (optional; without it everything stays in SQLite).
 const R2_BINDING: &str = "ENVELOPES";
+/// R2 bucket for job outputs (direct uploads; optional).
+const OUTPUTS_BINDING: &str = "OUTPUTS";
+/// Secret signing edge capability URLs (`/up`, `/dl`); GPU hosts never see it.
+const UPLOAD_KEY: &str = "FV_UPLOAD_SIGNING_KEY";
 /// Envelopes larger than this (JSON bytes) are spilled to R2 (`SPILL_BYTES`).
 const SPILL_BYTES: usize = 1 << 20;
 /// Envelope chunk size in SQLite (a DO row / string is at most 2 MB).
 const CHUNK: usize = 1_000_000;
+/// A session admission waits this long for the workers' answers.
+const ADMIT_WAIT: Duration = Duration::from_secs(20);
 
 fn now_ms() -> i64 {
     Date::now().as_millis() as i64
@@ -30,6 +40,10 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 fn version(env: &Env) -> String {
     env.var("FV_EDGE_VERSION").map(|v| v.to_string()).unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned())
+}
+
+fn rust_err(e: impl std::fmt::Display) -> Error {
+    Error::RustError(e.to_string())
 }
 
 /// The presented token: `x-fv-internal-token`, else `Authorization: Bearer`.
@@ -76,33 +90,90 @@ fn json_err(status: u16, kind: &str, message: &str) -> Result<Response> {
     Ok(Response::from_json(&json!({"error": {"kind": kind, "message": message}}))?.with_status(status))
 }
 
-/// `/pools/{pool}/{action}[/{job}]`.
-fn split(path: &str) -> Option<(String, String, Option<String>)> {
+/// A parsed route: `/pools/{pool}/{action}[/{arg}[/{sub}]]` or
+/// `/families/{family}/…`.
+struct Route {
+    scope: Scope,
+    action: String,
+    arg: Option<String>,
+    sub: Option<String>,
+}
+
+fn split(path: &str) -> Option<Route> {
     let mut it = path.trim_start_matches('/').split('/');
-    if it.next()? != "pools" {
+    let kind = it.next()?;
+    let id = it.next()?.to_owned();
+    if !proto::valid_id(&id) {
         return None;
     }
-    let pool = it.next()?.to_owned();
+    let scope = match kind {
+        "pools" => Scope::Pool(id),
+        "families" => Scope::Family(id),
+        _ => return None,
+    };
     let action = it.next()?.to_owned();
     let arg = it.next().map(str::to_owned);
-    if it.next().is_some() || !proto::valid_id(&pool) || arg.as_deref().is_some_and(|a| !proto::valid_id(a)) {
+    let sub = it.next().map(str::to_owned);
+    if it.next().is_some() || arg.as_deref().is_some_and(|a| !proto::valid_id(a)) || sub.as_deref().is_some_and(|a| !proto::valid_id(a)) {
         return None;
     }
-    Some((pool, action, arg))
+    Some(Route { scope, action, arg, sub })
+}
+
+/// `PUT /up?…` (a part of an output upload) and `GET /dl?…` (an output),
+/// authorized by the capability in the query (docs/serve/dispatch-do-family.md §7.3).
+async fn capability(mut req: Request, env: &Env) -> Result<Response> {
+    let Ok(secret) = env.secret(UPLOAD_KEY) else {
+        return json_err(503, "loading", "uploads are not configured");
+    };
+    let url = req.url()?;
+    let cap = match cap_verify(url.path(), url.query().unwrap_or(""), secret.to_string().as_bytes(), now_ms()) {
+        Ok(c) => c,
+        Err(e) => return json_err(403, "forbidden", e),
+    };
+    let bucket = env.bucket(OUTPUTS_BINDING)?;
+    match (req.method(), cap) {
+        (Method::Put, Cap::Part { key, upload_id, part }) => {
+            let body = req.bytes().await?;
+            let mp = bucket.resume_multipart_upload(key, upload_id)?;
+            match mp.upload_part(part, body).await {
+                Ok(p) => {
+                    let h = Headers::new();
+                    h.set("etag", &p.etag())?;
+                    Ok(Response::empty()?.with_headers(h))
+                }
+                Err(e) => json_err(409, "conflict", &format!("upload_part: {e}")),
+            }
+        }
+        (Method::Get, Cap::Get { key }) => match bucket.get(key).execute().await? {
+            Some(obj) => {
+                let h = Headers::new();
+                obj.write_http_metadata(h.clone())?;
+                h.set("etag", &obj.http_etag())?;
+                let body = obj.body().ok_or_else(|| rust_err("no body"))?;
+                Ok(Response::from_stream(body.stream()?)?.with_headers(h))
+            }
+            None => json_err(404, "not_found", "no such object"),
+        },
+        _ => json_err(405, "invalid_request", "method not allowed"),
+    }
 }
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let path = req.path();
     if matches!(path.as_str(), "/" | "/healthz") {
-        return Response::from_json(&json!({"object": "fv.edge", "version": version(&env)}));
+        return Response::from_json(&json!({"object": "fv.edge", "version": version(&env), "proto": proto::PROTO_VERSION}));
     }
-    let Some((pool, action, _)) = split(&path) else {
+    if matches!(path.as_str(), "/up" | "/dl") {
+        return capability(req, &env).await;
+    }
+    let Some(route) = split(&path) else {
         return json_err(404, "not_found", "no such route");
     };
-    let secrets: &[&str] = match action.as_str() {
-        "connect" | "enqueue" | "cancel" => &["FV_INTERNAL_TOKEN"],
-        "status" => &["FV_INTERNAL_TOKEN", "FV_ADMIN_TOKEN"],
+    let secrets: &[&str] = match route.action.as_str() {
+        "connect" | "enqueue" | "cancel" | "sessions" => &["FV_INTERNAL_TOKEN"],
+        "status" | "metrics" => &["FV_INTERNAL_TOKEN", "FV_ADMIN_TOKEN"],
         _ => return json_err(404, "not_found", "no such route"),
     };
     match check(&env, &req, secrets) {
@@ -111,15 +182,17 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Auth::NotConfigured => return json_err(503, "loading", "the dispatcher has no token configured"),
     }
     let ns = env.durable_object(DO_BINDING)?;
-    // `POOL_LOCATIONS`: {"h3-turbo": "weur", …} (near the pool's pods).
-    let hint = env
-        .var("POOL_LOCATIONS")
-        .ok()
-        .and_then(|v| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&v.to_string()).ok())
-        .and_then(|m| m.get(&pool).and_then(|h| h.as_str()).map(str::to_owned));
+    let name = route.scope.object_name();
+    // `LOCATIONS` (or the older `POOL_LOCATIONS`): {"family:wan": "weur", "h3-turbo": "wnam", …}.
+    let hint = ["LOCATIONS", "POOL_LOCATIONS"].iter().find_map(|v| {
+        env.var(v)
+            .ok()
+            .and_then(|v| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&v.to_string()).ok())
+            .and_then(|m| m.get(&name).and_then(|h| h.as_str()).map(str::to_owned))
+    });
     let stub = match hint {
-        Some(h) => ns.get_by_name_with_location_hint(&pool, &h)?,
-        None => ns.get_by_name(&pool)?,
+        Some(h) => ns.get_by_name_with_location_hint(&name, &h)?,
+        None => ns.get_by_name(&name)?,
     };
     stub.fetch_with_request(req).await
 }
@@ -150,7 +223,7 @@ struct MetaRow {
     v: String,
 }
 
-/// One pool's scheduler.
+/// One pool's or one family's scheduler.
 #[durable_object]
 pub struct PoolScheduler {
     state: State,
@@ -158,6 +231,8 @@ pub struct PoolScheduler {
     sched: RefCell<Option<Sched>>,
     /// The alarm last set (ms), to skip redundant `setAlarm` calls.
     alarm_at: Cell<Option<i64>>,
+    /// Admission calls waiting for a worker's session answer.
+    waiters: RefCell<HashMap<String, oneshot::Sender<std::result::Result<SessionGrant, String>>>>,
 }
 
 impl PoolScheduler {
@@ -174,6 +249,10 @@ impl PoolScheduler {
         )?;
         sql.exec("CREATE TABLE IF NOT EXISTS workers (worker_id TEXT PRIMARY KEY, rec TEXT NOT NULL)", None)?;
         sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)", None)?;
+        // Protocol 2 (schema 2): session leases and output uploads.
+        sql.exec("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, rec TEXT NOT NULL)", None)?;
+        sql.exec("CREATE TABLE IF NOT EXISTS uploads (key TEXT PRIMARY KEY, rec TEXT NOT NULL)", None)?;
+        sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('schema', '2')", None)?;
         Ok(())
     }
 
@@ -192,10 +271,19 @@ impl PoolScheduler {
         if let Some(v) = n("REDISPATCH_WAIT_MS") {
             c.redispatch_wait_ms = v;
         }
+        if let Some(v) = n("SESSION_TTL_MS") {
+            c.session_ttl_ms = v;
+        }
+        if let Some(v) = n("UPLOAD_TTL_MS") {
+            c.upload_ttl_ms = v;
+        }
+        if let Ok(v) = self.env.var("UPLOAD_PREFIX") {
+            c.upload_prefix = v.to_string();
+        }
         c
     }
 
-    /// The pool this object serves (stored on first use).
+    /// The object's name (`family:wan` or a pool id), stored on first use.
     fn pool_name(&self, from_path: Option<&str>) -> Result<String> {
         self.init_tables()?;
         let sql = self.sql();
@@ -204,7 +292,12 @@ impl PoolScheduler {
             return Ok(p.to_owned());
         }
         let rows: Vec<MetaRow> = sql.exec("SELECT v FROM meta WHERE k = 'pool'", None)?.to_array()?;
-        rows.into_iter().next().map(|r| r.v).ok_or_else(|| Error::RustError("pool name unknown".into()))
+        rows.into_iter().next().map(|r| r.v).ok_or_else(|| rust_err("pool name unknown"))
+    }
+
+    fn meta(&self, k: &str) -> Option<String> {
+        let rows: Vec<MetaRow> = self.sql().exec("SELECT v FROM meta WHERE k = ?", vec![k.into()]).ok()?.to_array().ok()?;
+        rows.into_iter().next().map(|r| r.v)
     }
 
     /// Loads the scheduler from SQLite when this instance has none yet
@@ -229,7 +322,11 @@ impl PoolScheduler {
         }
         let rows: Vec<RecRow> = sql.exec("SELECT rec FROM workers", None)?.to_array()?;
         let workers: Vec<WorkerRec> = rows.iter().filter_map(|r| serde_json::from_str(&r.rec).ok()).collect();
-        let mut s = Sched::restore(pool, self.cfg(), jobs, workers);
+        let rows: Vec<RecRow> = sql.exec("SELECT rec FROM sessions", None)?.to_array()?;
+        let sessions: Vec<SessionRec> = rows.iter().filter_map(|r| serde_json::from_str(&r.rec).ok()).collect();
+        let rows: Vec<RecRow> = sql.exec("SELECT rec FROM uploads", None)?.to_array()?;
+        let uploads: Vec<UploadRec> = rows.iter().filter_map(|r| serde_json::from_str(&r.rec).ok()).collect();
+        let mut s = Sched::restore_all(pool, self.cfg(), jobs, workers, sessions, uploads);
         // Sockets survive hibernation, not deploys: a worker recorded as
         // connected without a live socket starts its grace period now.
         let now = now_ms();
@@ -245,23 +342,67 @@ impl PoolScheduler {
 
     fn with<T>(&self, f: impl FnOnce(&mut Sched) -> T) -> Result<T> {
         let mut g = self.sched.borrow_mut();
-        let s = g.as_mut().ok_or_else(|| Error::RustError("scheduler not loaded".into()))?;
+        let s = g.as_mut().ok_or_else(|| rust_err("scheduler not loaded"))?;
         Ok(f(s))
     }
 
-    /// Sends the effects, persists what changed, re-arms the alarm, and
-    /// queues the D1 record writes.
-    async fn apply(&self, out: Vec<Out>) -> Result<()> {
-        for o in out {
-            match o {
-                Out::Send { worker, msg } => {
-                    let text = serde_json::to_string(&msg).map_err(|e| Error::RustError(e.to_string()))?;
-                    for ws in self.state.get_websockets_with_tag(&worker) {
-                        if let Err(e) = ws.send_with_str(&text) {
-                            console_warn!("send to {worker} failed: {e:?}");
-                        }
-                    }
+    fn send(&self, worker: &str, msg: &DoMsg) -> Result<()> {
+        let text = serde_json::to_string(msg).map_err(rust_err)?;
+        for ws in self.state.get_websockets_with_tag(worker) {
+            if let Err(e) = ws.send_with_str(&text) {
+                console_warn!("send to {worker} failed: {e:?}");
+            }
+        }
+        Ok(())
+    }
+
+    /// The bucket name outputs are recorded under (the artifact location).
+    fn outputs_bucket(&self) -> String {
+        self.env.var("OUTPUTS_BUCKET").map(|v| v.to_string()).unwrap_or_default()
+    }
+
+    /// Part URLs: R2's S3 endpoint when its credentials are set, else edge
+    /// capability URLs checked by the Worker front.
+    fn mint(&self, key: &str, upload_id: &str, from: u16, count: u16, exp_ms: i64) -> Result<Vec<PartUrl>> {
+        let s3 = match (self.env.secret("R2_ACCESS_KEY_ID"), self.env.secret("R2_SECRET_ACCESS_KEY"), self.env.var("R2_S3_ENDPOINT")) {
+            (Ok(a), Ok(s), Ok(e)) => Some(S3Presign {
+                endpoint: e.to_string(),
+                region: "auto".into(),
+                bucket: self.outputs_bucket(),
+                access_key: a.to_string(),
+                secret_key: s.to_string(),
+                path_style: true,
+            }),
+            _ => None,
+        };
+        let now = now_ms();
+        let last = from.saturating_add(count.saturating_sub(1)).min(10_000);
+        let mut out = Vec::with_capacity(count as usize);
+        match s3 {
+            Some(p) => {
+                let secs = ((exp_ms - now) / 1000).max(60) as u64;
+                for n in from..=last {
+                    out.push(PartUrl { n, url: p.part_url(key, upload_id, n, secs, now / 1000) });
                 }
+            }
+            None => {
+                let secret = self.env.secret(UPLOAD_KEY).map_err(|_| rust_err("FV_UPLOAD_SIGNING_KEY is not set"))?.to_string();
+                let base = self.env.var("FV_EDGE_PUBLIC_URL").map(|v| v.to_string()).ok().or_else(|| self.meta("base")).ok_or_else(|| rust_err("the Worker's public URL is unknown"))?;
+                for n in from..=last {
+                    out.push(PartUrl { n, url: cap_url(&base, secret.as_bytes(), &Cap::Part { key: key.to_owned(), upload_id: upload_id.to_owned(), part: n }, exp_ms) });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Runs the effects (and the effects of their results), persists what
+    /// changed, re-arms the alarm, and queues the D1 record writes.
+    async fn apply(&self, out: Vec<Out>) -> Result<()> {
+        let mut q: VecDeque<Out> = out.into();
+        while let Some(o) = q.pop_front() {
+            match o {
+                Out::Send { worker, msg } => self.send(&worker, &msg)?,
                 Out::Close { worker } => {
                     for ws in self.state.get_websockets_with_tag(&worker) {
                         let _ = ws.close(Some(4001), Some("no heartbeat"));
@@ -271,6 +412,69 @@ impl PoolScheduler {
                     if let Err(e) = self.push_spilled(&worker, &key, msg).await {
                         // The ack timeout pushes it again.
                         console_warn!("spilled push to {worker} failed: {e:?}");
+                    }
+                }
+                Out::CreateUpload { worker: _, req, key, content_type, parts } => {
+                    let r = match self.env.bucket(OUTPUTS_BINDING) {
+                        Ok(b) => {
+                            let meta = HttpMetadata { content_type: Some(content_type).filter(|c| !c.is_empty()), ..HttpMetadata::default() };
+                            match b.create_multipart_upload(key.clone()).http_metadata(meta).execute().await {
+                                Ok(mp) => Ok(mp.upload_id().await),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                        Err(_) => Err("no outputs bucket is bound".to_owned()),
+                    };
+                    let more = self.with(|s| s.upload_created(&key, req, parts, r, now_ms()))?;
+                    q.extend(more);
+                }
+                Out::Grant { worker, req, job_id, key, upload_id, from, count, expires_ms } => {
+                    let msg = match self.mint(&key, &upload_id, from, count, expires_ms) {
+                        Ok(part_urls) => DoMsg::UploadGrant { req, job_id, upload_id, key, bucket: self.outputs_bucket(), part_urls, expires_ms, error: None },
+                        Err(e) => DoMsg::UploadGrant {
+                            req,
+                            job_id,
+                            upload_id: String::new(),
+                            key: String::new(),
+                            bucket: String::new(),
+                            part_urls: Vec::new(),
+                            expires_ms: 0,
+                            error: Some(format!("minting part URLs: {e}")),
+                        },
+                    };
+                    self.send(&worker, &msg)?;
+                }
+                Out::CompleteUpload { worker: _, req, key, upload_id, parts, bytes: _ } => {
+                    let r = match self.env.bucket(OUTPUTS_BINDING) {
+                        Ok(b) => match b.resume_multipart_upload(key.clone(), upload_id) {
+                            Ok(mp) => {
+                                let parts: Vec<UploadedPart> = parts.into_iter().map(|p| UploadedPart::new(p.n, p.etag.trim_matches('"').to_owned())).collect();
+                                mp.complete(parts).await.map(|o| o.size()).map_err(|e| e.to_string())
+                            }
+                            Err(e) => Err(e.to_string()),
+                        },
+                        Err(_) => Err("no outputs bucket is bound".to_owned()),
+                    };
+                    let more = self.with(|s| s.upload_completed(&key, req, r, now_ms()))?;
+                    q.extend(more);
+                }
+                Out::AbortUpload { key, upload_id } => {
+                    if let Ok(b) = self.env.bucket(OUTPUTS_BINDING) {
+                        self.state.wait_until(async move {
+                            match b.resume_multipart_upload(key.clone(), upload_id) {
+                                Ok(mp) => {
+                                    if let Err(e) = mp.abort().await {
+                                        console_warn!("aborting the upload of {key}: {e:?}");
+                                    }
+                                }
+                                Err(e) => console_warn!("aborting the upload of {key}: {e:?}"),
+                            }
+                        });
+                    }
+                }
+                Out::SessionReady { session_id, result } => {
+                    if let Some(w) = self.waiters.borrow_mut().remove(&session_id) {
+                        let _ = w.send(result);
                     }
                 }
             }
@@ -294,7 +498,7 @@ impl PoolScheduler {
     }
 
     /// Loads a spilled envelope and sends the push.
-    async fn push_spilled(&self, worker: &str, key: &str, mut msg: proto::DoMsg) -> Result<()> {
+    async fn push_spilled(&self, worker: &str, key: &str, mut msg: DoMsg) -> Result<()> {
         let bucket = self.env.bucket(R2_BINDING)?;
         let Some(obj) = bucket.get(key).execute().await? else {
             console_warn!("spilled envelope {key} is missing");
@@ -304,16 +508,10 @@ impl PoolScheduler {
             Some(b) => b.text().await?,
             None => return Ok(()),
         };
-        if let proto::DoMsg::Job { envelope, .. } = &mut msg {
-            *envelope = serde_json::from_str(&text).map_err(|e| Error::RustError(e.to_string()))?;
+        if let DoMsg::Job { envelope, .. } = &mut msg {
+            *envelope = serde_json::from_str(&text).map_err(rust_err)?;
         }
-        let text = serde_json::to_string(&msg).map_err(|e| Error::RustError(e.to_string()))?;
-        for ws in self.state.get_websockets_with_tag(worker) {
-            if let Err(e) = ws.send_with_str(&text) {
-                console_warn!("send to {worker} failed: {e:?}");
-            }
-        }
-        Ok(())
+        self.send(worker, &msg)
     }
 
     /// Deletes spilled envelopes no job needs any more (behind the response).
@@ -335,7 +533,7 @@ impl PoolScheduler {
     /// Enqueues, spilling a large envelope to R2 when the bucket is bound.
     async fn enqueue(&self, pool: &str, body: EnqueueReq, now: i64) -> Result<(proto::EnqueueResp, Vec<Out>)> {
         let limit = self.env.var("SPILL_BYTES").ok().and_then(|v| v.to_string().parse::<usize>().ok()).unwrap_or(SPILL_BYTES);
-        let text = serde_json::to_string(&body.envelope).map_err(|e| Error::RustError(e.to_string()))?;
+        let text = serde_json::to_string(&body.envelope).map_err(rust_err)?;
         if text.len() > limit {
             if let Ok(bucket) = self.env.bucket(R2_BINDING) {
                 let key = format!("env/{pool}/{}/{:x}", body.job_id, (js_sys::Math::random() * 1e15) as u64);
@@ -354,11 +552,11 @@ impl PoolScheduler {
         }
         let sql = self.sql();
         for j in &d.jobs {
-            let rec = serde_json::to_string(j).map_err(|e| Error::RustError(e.to_string()))?;
+            let rec = serde_json::to_string(j).map_err(rust_err)?;
             sql.exec("INSERT OR REPLACE INTO jobs (job_id, rec) VALUES (?, ?)", vec![j.job_id.as_str().into(), rec.into()])?;
         }
         for (id, env) in &d.new_envelopes {
-            let text = serde_json::to_string(env).map_err(|e| Error::RustError(e.to_string()))?;
+            let text = serde_json::to_string(env).map_err(rust_err)?;
             sql.exec("DELETE FROM envelopes WHERE job_id = ?", vec![id.as_str().into()])?;
             for (i, part) in chunks(&text, CHUNK).into_iter().enumerate() {
                 sql.exec("INSERT INTO envelopes (job_id, part, data) VALUES (?, ?, ?)", vec![id.as_str().into(), (i as i64).into(), part.into()])?;
@@ -371,16 +569,31 @@ impl PoolScheduler {
             sql.exec("DELETE FROM jobs WHERE job_id = ?", vec![id.as_str().into()])?;
         }
         for w in &d.workers {
-            let rec = serde_json::to_string(w).map_err(|e| Error::RustError(e.to_string()))?;
+            let rec = serde_json::to_string(w).map_err(rust_err)?;
             sql.exec("INSERT OR REPLACE INTO workers (worker_id, rec) VALUES (?, ?)", vec![w.worker_id.as_str().into(), rec.into()])?;
         }
         for id in &d.removed_workers {
             sql.exec("DELETE FROM workers WHERE worker_id = ?", vec![id.as_str().into()])?;
         }
+        for x in &d.sessions {
+            let rec = serde_json::to_string(x).map_err(rust_err)?;
+            sql.exec("INSERT OR REPLACE INTO sessions (session_id, rec) VALUES (?, ?)", vec![x.session_id.as_str().into(), rec.into()])?;
+        }
+        for id in &d.removed_sessions {
+            sql.exec("DELETE FROM sessions WHERE session_id = ?", vec![id.as_str().into()])?;
+        }
+        for u in &d.uploads {
+            let rec = serde_json::to_string(u).map_err(rust_err)?;
+            sql.exec("INSERT OR REPLACE INTO uploads (key, rec) VALUES (?, ?)", vec![u.key.as_str().into(), rec.into()])?;
+        }
+        for k in &d.removed_uploads {
+            sql.exec("DELETE FROM uploads WHERE key = ?", vec![k.as_str().into()])?;
+        }
         Ok(())
     }
 
-    /// The durable record in D1 (`edge_jobs`), written behind the response.
+    /// The durable record in D1 (`edge_jobs`, `edge_results`), written
+    /// behind the response.
     fn record(&self, pool: &str, d: &Dirty) {
         if d.jobs.is_empty() {
             return;
@@ -388,10 +601,16 @@ impl PoolScheduler {
         let Ok(db) = self.env.d1(D1_BINDING) else { return };
         let now = now_ms() as f64;
         let opt = |v: Option<i64>| v.map_or(JsValue::NULL, |x| JsValue::from_f64(x as f64));
-        let mut stmts = vec![db.prepare(
-            "CREATE TABLE IF NOT EXISTS edge_jobs (job_id TEXT PRIMARY KEY, pool TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL, \
+        let mut stmts = vec![
+            db.prepare(
+                "CREATE TABLE IF NOT EXISTS edge_jobs (job_id TEXT PRIMARY KEY, pool TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL, \
              worker TEXT, enqueued_at INTEGER, pushed_at INTEGER, acked_at INTEGER, finished_at INTEGER, error TEXT, updated_at INTEGER NOT NULL)",
-        )];
+            ),
+            db.prepare(
+                "CREATE TABLE IF NOT EXISTS edge_results (job_id TEXT PRIMARY KEY, pool TEXT NOT NULL, key TEXT NOT NULL, bytes INTEGER NOT NULL, \
+             sha256 TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+            ),
+        ];
         for j in &d.jobs {
             let args = [
                 JsValue::from_str(&j.job_id),
@@ -410,6 +629,20 @@ impl PoolScheduler {
                 Ok(s) => stmts.push(s),
                 Err(e) => console_warn!("edge_jobs bind: {e:?}"),
             }
+            if let Some(r) = &j.result {
+                let args = [
+                    JsValue::from_str(&j.job_id),
+                    JsValue::from_str(pool),
+                    JsValue::from_str(&r.key),
+                    JsValue::from_f64(r.bytes as f64),
+                    JsValue::from_str(&r.sha256),
+                    JsValue::from_f64(now),
+                ];
+                match db.prepare("INSERT OR REPLACE INTO edge_results (job_id, pool, key, bytes, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(&args) {
+                    Ok(s) => stmts.push(s),
+                    Err(e) => console_warn!("edge_results bind: {e:?}"),
+                }
+            }
         }
         self.state.wait_until(async move {
             if let Err(e) = db.batch(stmts).await {
@@ -425,6 +658,11 @@ impl PoolScheduler {
         let Some(worker) = req.headers().get(proto::WORKER_HEADER)?.filter(|w| proto::valid_id(w)) else {
             return json_err(400, "invalid_request", "x-fv-worker-id is missing or invalid");
         };
+        // The public base for edge upload URLs (`/up` on this Worker).
+        if let Ok(u) = req.url() {
+            let base = u.origin().ascii_serialization();
+            let _ = self.sql().exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('base', ?)", vec![base.into()]);
+        }
         let conn = format!("{:x}", (js_sys::Math::random() * 1e15) as u64);
         // A worker reconnecting without closing its old socket: replace it.
         for old in self.state.get_websockets_with_tag(&worker) {
@@ -451,6 +689,42 @@ impl PoolScheduler {
         let out = self.with(|s| s.disconnect(&a.worker_id, now_ms()))?;
         self.apply(out).await
     }
+
+    /// `POST {scope}/sessions`: admit, then wait for a worker's answer.
+    async fn admit(&self, body: SessionReq) -> Result<Response> {
+        let (a, out) = self.with(|s| s.admit(body, now_ms()))?;
+        let rx = match &a {
+            Admit::Pending(id) => {
+                let (tx, rx) = oneshot::channel();
+                self.waiters.borrow_mut().insert(id.clone(), tx);
+                Some(rx)
+            }
+            _ => None,
+        };
+        self.apply(out).await?;
+        match a {
+            Admit::Granted(g) => Response::from_json(&g),
+            Admit::Refused(why) => json_err(429, "queue_full", &why),
+            Admit::Pending(id) => {
+                let rx = rx.expect("pending");
+                let r = match futures::future::select(rx, Box::pin(Delay::from(ADMIT_WAIT))).await {
+                    futures::future::Either::Left((r, _)) => r.ok(),
+                    futures::future::Either::Right(_) => None,
+                };
+                self.waiters.borrow_mut().remove(&id);
+                match r {
+                    Some(Ok(g)) => Response::from_json(&g),
+                    Some(Err(why)) => json_err(429, "queue_full", &why),
+                    None => {
+                        // Give it up so the worker frees its slot.
+                        let (_, out) = self.with(|s| s.release(&id, now_ms()))?;
+                        self.apply(out).await?;
+                        json_err(503, "loading", "no worker answered the session offer in time")
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Splits `s` into pieces of at most `max` bytes on char boundaries.
@@ -475,19 +749,19 @@ impl DurableObject for PoolScheduler {
         if let Ok(pair) = WebSocketRequestResponsePair::new(proto::PING, proto::PONG) {
             state.set_websocket_auto_response(&pair);
         }
-        Self { state, env, sched: RefCell::new(None), alarm_at: Cell::new(None) }
+        Self { state, env, sched: RefCell::new(None), alarm_at: Cell::new(None), waiters: RefCell::new(HashMap::new()) }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
-        let Some((pool, action, arg)) = split(&req.path()) else {
+        let Some(route) = split(&req.path()) else {
             return json_err(404, "not_found", "no such route");
         };
-        let pool = self.pool_name(Some(&pool))?;
+        let pool = self.pool_name(Some(&route.scope.object_name()))?;
         self.ensure(&pool)?;
         let now = now_ms();
-        match (req.method(), action.as_str()) {
-            (Method::Get, "connect") => self.accept_worker(req, &pool).await,
-            (Method::Post, "enqueue") => {
+        match (req.method(), route.action.as_str(), route.sub.as_deref()) {
+            (Method::Get, "connect", None) => self.accept_worker(req, &pool).await,
+            (Method::Post, "enqueue", None) => {
                 let body: EnqueueReq = match req.json().await {
                     Ok(b) => b,
                     Err(e) => return json_err(400, "invalid_request", &format!("enqueue body: {e}")),
@@ -499,8 +773,8 @@ impl DurableObject for PoolScheduler {
                 self.apply(out).await?;
                 Ok(Response::from_json(&resp)?.with_status(202))
             }
-            (Method::Post, "cancel") => {
-                let Some(job) = arg else { return json_err(404, "not_found", "no job id") };
+            (Method::Post, "cancel", None) => {
+                let Some(job) = route.arg else { return json_err(404, "not_found", "no job id") };
                 let (st, out) = self.with(|s| s.cancel(&job, now))?;
                 self.apply(out).await?;
                 match st {
@@ -508,10 +782,36 @@ impl DurableObject for PoolScheduler {
                     None => json_err(404, "not_found", "unknown job"),
                 }
             }
-            (Method::Get, "status") => {
+            (Method::Get, "status", None) => {
                 let mut st = self.with(|s| s.status(now))?;
                 st.dispatcher = version(&self.env);
                 Response::from_json(&st)
+            }
+            (Method::Get, "metrics", None) => Response::from_json(&self.with(|s| s.metrics(now))?),
+            (Method::Post, "sessions", None) if route.arg.is_none() => {
+                let body: SessionReq = match req.json().await {
+                    Ok(b) => b,
+                    Err(e) => return json_err(400, "invalid_request", &format!("session body: {e}")),
+                };
+                self.admit(body).await
+            }
+            (Method::Post, "sessions", Some("renew")) => {
+                let id = route.arg.unwrap_or_default();
+                let g = self.with(|s| s.renew(&id, 0, now))?;
+                self.apply(Vec::new()).await?;
+                match g {
+                    Some(g) => Response::from_json(&g),
+                    None => json_err(404, "not_found", "no live session"),
+                }
+            }
+            (Method::Post, "sessions", Some("release")) => {
+                let id = route.arg.unwrap_or_default();
+                let (st, out) = self.with(|s| s.release(&id, now))?;
+                self.apply(out).await?;
+                match st {
+                    Some(st) => Response::from_json(&json!({"session_id": id, "state": st})),
+                    None => json_err(404, "not_found", "unknown session"),
+                }
             }
             _ => json_err(405, "invalid_request", "method not allowed"),
         }
