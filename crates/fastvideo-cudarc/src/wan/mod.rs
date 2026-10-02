@@ -41,6 +41,7 @@ pub mod nvfp4_linear;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;
+pub mod plug;
 pub mod quant;
 pub mod resident;
 pub mod sla;

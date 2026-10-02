@@ -19,6 +19,7 @@ pub mod ltx2;
 pub mod matrixgame;
 pub mod mmaudio;
 pub mod nvfp4;
+pub mod plug;
 pub mod pisa_attn;
 pub mod schedulers;
 pub mod sd35;

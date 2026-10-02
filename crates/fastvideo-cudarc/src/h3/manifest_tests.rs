@@ -225,6 +225,7 @@ fn dit_loaders_cover_the_published_transformer_and_nothing_else() {
     let schedule = H3JointSchedule {
         video: rung(10.0),
         audio: rung(3.0),
+        fresh_noise: false,
     };
 
     // Resident stack with the VSA gates, block 0 only; then block 49 for real.
