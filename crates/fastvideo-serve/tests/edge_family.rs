@@ -831,12 +831,16 @@ async fn multi_family_worker_never_holds_two_jobs() {
     });
     let ids = futures::future::join_all(subs).await;
     let mut spans: BTreeMap<String, Vec<(i128, i128)>> = BTreeMap::new();
-    for id in &ids {
+    for (i, id) in ids.iter().enumerate() {
         let v = e.http.finished(&g, id).await;
         assert_eq!(v["status"], "succeeded", "{v}");
         let j = e.job(id);
         let (s, c) = (j.started_at.unwrap().unix_timestamp_nanos(), j.completed_at.unwrap().unix_timestamp_nanos());
         spans.entry(e.worker_of(id)).or_default().push((s, c));
+        // Each job went through its own family's pool (and object).
+        let want = if i % 2 == 0 { "p-h3" } else { "p-ltx" };
+        let row = e.mock.sql("SELECT d.pool AS pool FROM gw_dispatch d JOIN jobs j ON j.id = d.job_id WHERE j.external_id = ?", &[json!(id)]).unwrap();
+        assert_eq!(row[0]["pool"], want, "{v}");
     }
     // Each worker ran its jobs one after another: its one slot was never
     // given to two families at once.

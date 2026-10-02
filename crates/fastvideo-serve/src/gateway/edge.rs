@@ -169,8 +169,15 @@ impl Gateway {
         {
             let mut st = p.lock();
             let mut next: BTreeMap<String, WorkerView> = BTreeMap::new();
+            // A family object's worker may serve several families: this
+            // pool keeps the live caps of its own models only (else it would
+            // claim, and take, another family's jobs).
+            let own: BTreeSet<&str> = p.static_caps.iter().map(|(c, _)| c.id.0.as_str()).collect();
             for w in &st_.workers {
-                let parsed = WorkerStatus::parse(&w.caps);
+                let mut parsed = WorkerStatus::parse(&w.caps);
+                if p.cfg.family.is_some() {
+                    parsed.caps.retain(|(c, _)| own.contains(c.id.0.as_str()));
+                }
                 // A family object's workers announce their public endpoint
                 // (sessions are proxied there); others are reached only
                 // through the object.

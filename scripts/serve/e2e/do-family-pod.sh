@@ -151,7 +151,7 @@ TOML
     } > $WK/gateway-$mode.toml
   done
   # A key for the clients (its hash on the gateway).
-  [ -s $WK/key ] || printf 'fvk-%s' "$(head -c 16 /dev/urandom | xxd -p)" > $WK/key
+  python3 -c 'import secrets; print("fvk-" + secrets.token_hex(16), end="")' > $WK/key
   printf '%s' "$(sha256sum < $WK/key | cut -d' ' -f1)" > $WK/key.sha
   python3 - <<'PY' > $WK/prompts.txt
 import json
@@ -190,8 +190,12 @@ def call(m, path, body=None):
                                headers={'authorization': 'Bearer ' + key, 'content-type': 'application/json'})
     with urllib.request.urlopen(r, timeout=60) as x:
         return json.load(x)
+import re
 def ts(s):
-    return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp() if s else None
+    if not s:
+        return None
+    s = re.sub(r'(\.\d{6})\d+', r'\1', s.replace('Z', '+00:00'))
+    return datetime.fromisoformat(s).timestamp()
 res = []
 def one(model, i):
     body = {'model': model, 'prompt': f'a red fox running through snow, shot {i}', 'seed': 1000 + i}
