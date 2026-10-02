@@ -1,11 +1,10 @@
 # SageAttention2 / SageAttention3 against our attention kernels
 
-Status (2026-10-01): Phases 1, 2 and 3 are done (Phase 3: section 6). The
-kernel code (`wan/attn_sage.{cu,rs}`) and the harness (`scripts/gpu/sage/`:
-`bench.py`, `capture.py`, `summarize.py`, `vast-run.sh`) stay on branch
-`wip/sage-attn` (also merged into `wip/phase3-pro6000`), not on main: the
-H3 five-prompt gate does not pass (section 6.2), so the port is not merged.
-It is default-off either way; merging it is the owner's call (section 6.6).
+Status (2026-10-02): Phases 1-4 are done. The port is merged on main
+(`wan/attn_sage.{cu,rs}`, harness in `scripts/gpu/sage/`). It is
+default-off for every model except `ltx-pro` (`ltx25-distill-dense`) on
+sm_120 (section 8.1). H3 stays bf16: both H3 recipes fail the calibrated gate
+(sections 8.2-8.5).
 
 **Summary**
 
@@ -34,8 +33,14 @@ It is default-off either way; merging it is the owner's call (section 6.6).
   (the dense kernel switched from cuDNN to fwd2) moves H3 just as far and
   fails the same gate on another prompt, so on H3 this gate cannot tell
   Sage from bf16 noise.
-* **Spend:** $1.50 of Vast credit (Phases 1-2); Phase 3 about $4.36 on
-  Runpod (section 6.7).
+* **Calibrated H3 gate (Phase 4, 3 seeds x 5 prompts, two bf16 control
+  arms).** Both H3 recipes fail. H3 max misses narrowly (2/5 prompts inside
+  the noise band, 1.11x); Sol-H3 dense fails more clearly (3/5, three
+  sharpness outliers, 1.30x). Sage is further from bf16 than the control on
+  11 of 15 clips in both. With kernel picks pinned, bf16 runs are
+  byte-identical across processes.
+* **Spend:** $1.50 of Vast credit (Phases 1-2); Phase 3 about $4.36 and
+  Phase 4 about $3.2 on Runpod (sections 6.7, 8.6).
 
 ## 1. What we run today (Phase 0)
 
@@ -472,6 +477,9 @@ docs/serve/e2e/ltx.md ("Director tiers", "384p stage 1 and upscale rows").
 
 ### 6.6 Decision
 
+(Superseded 2026-10-02: the owner chose both options. Section 8 has the
+merge and the calibrated H3 re-test.)
+
 The port stays on `wip/sage-attn` / `wip/phase3-pro6000`, not on main. It is
 opt-in (`FASTVIDEO_ATTN_SAGE=2`, default off), so merging it would change no
 output; the merge condition was a passing gate, and H3's did not pass.
@@ -509,3 +517,184 @@ Every instance was labelled `fv-sage-*`, had a detached wall-clock backstop
 (a DELETE after 1-2 h) and a container-side timeout, and was destroyed as
 soon as its batch finished. Each destroy was checked: the instance list is
 empty.
+
+## 8. Phase 4: merge for ltx-pro, and a calibrated H3 gate (2026-10-02)
+
+Owner decision on section 6.6: do both. (a) Merge the port default-off and
+turn it on for the `ltx-pro` route only. (b) Re-test H3 with a gate that
+judges Sage against the measured bf16 spread instead of single-clip limits.
+
+### 8.1 What is merged (a)
+
+`FASTVIDEO_ATTN_SAGE` is now an override with three states:
+
+| `FASTVIDEO_ATTN_SAGE` | effect |
+|---|---|
+| unset | off, except a recipe that opts in, on sm_120 only |
+| `2` | on for every model, on any sm_89+ device (the old opt-in) |
+| `0` | off for every model, opted-in recipes included |
+
+A recipe opts in per request (`attn_sage::recipe_scope`, a thread-local
+guard on the executor thread that owns the CUDA device). The only recipe
+that does is `ltx25-distill-dense`, the `ltx-pro` model
+(`Ltx2Recipe::sage_attention`), for its two-stage generations. Its edit
+routes (retake, extend) stay bf16, and so do the Ref2V / A2V companions,
+which run other models. The arch check is `(sm_major, sm_minor) == (12, 0)`
+(RTX PRO 6000, RTX 5090). On sm_90 / sm_100 the kernel does not pay
+(section 5), and sm_121 has not been measured. `fv-gpucheck` has no recipe
+scope, so measurements still opt in with `FASTVIDEO_ATTN_SAGE=2`.
+
+### 8.2 The calibrated gate (b): rule, fixed before any run
+
+The single-clip gate (section 6.2) fails a bf16-only control on H3, so its
+limits sit inside H3's noise. The calibrated gate measures that noise per
+prompt and seed and judges Sage against it.
+
+**Workload.** RTX PRO 6000 (sm_120), 768p, 5 s, the five gate prompts
+(`scripts/gpu/prompts-eval.json`), each at 3 seeds: its own (0 for h3-demo,
+42 for the rest), +1000 and +2000. That is 15 clips per arm. Recipes: H3 max
+(`sol-h3`, `h3/sol_h3_4step_engine_ladder`) first, then Sol-H3 4-step dense
+(`h3/sol_h3_4step`).
+
+**Arms.** Each arm is one warm `fv-gpucheck h3 gen` process over the 15
+clips, with its own text and AdaLN caches. Kernel picks are pinned, so no
+arm depends on `auto`'s per-process timing:
+
+| arm | env | role |
+|---|---|---|
+| `cud` | `FASTVIDEO_FLASH_KERNEL=cudnn` | bf16 control 1, the reference (what `auto` picks at the 768p DiT shape) |
+| `fw2` | `FASTVIDEO_FLASH_KERNEL=v2 FASTVIDEO_CUDNN_SDPA_GRAPH=composite` | bf16 control 2: the same math, another bf16 kernel (fwd2) |
+| `sage` | `FASTVIDEO_ATTN_SAGE=2 FASTVIDEO_FLASH_KERNEL=cudnn` | candidate; shapes below 6 144 tokens run as in `cud` |
+
+**Pairs.** For each (prompt, seed) clip, `fv-gpucheck compare-clips` (LPIPS
+alex, PSNR, sharpness and temporal-jitter ratios) on:
+
+* control pair `cud` vs `fw2`: how far a rounding-level kernel change moves
+  that clip (the noise);
+* Sage pair `cud` vs `sage`: how far Sage moves it;
+* (`fw2` vs `sage`, reported only.)
+
+**Deviation per pair**, larger is further: LPIPS mean; PSNR mean (here
+smaller is further); |ln sharpness ratio|; |ln jitter ratio|.
+
+**Per prompt** (C = its 3 control deviations, S = its 3 Sage deviations,
+per metric; P95 / P5 are numpy's linear-interpolated percentiles of C):
+
+1. *Within the noise band:* median(S) <= P95(C) + margin, with margins
+   LPIPS 0.03, |ln sharpness| 0.02, |ln jitter| 0.03; for PSNR,
+   median(S) >= P5(C) - 1.0 dB. The prompt passes when all four metrics do.
+2. *No outlier:* every single Sage clip within max(1.5 x max(C), max(C) +
+   d) per metric, d = LPIPS 0.05, |ln sharpness| 0.02, |ln jitter| 0.03;
+   for PSNR, >= min(C) - 3 dB.
+
+**Verdict per recipe: pass** when (i) at least 4 of 5 prompts pass rule 1,
+(ii) no prompt breaks rule 2, and (iii) the denoise speedup (median over the
+15 clips, `sage` vs `cud`) is at least 1.10 (the old promotion floor).
+
+**Also recorded, not part of the verdict:** the old single-clip gate
+(`fv-gpucheck gate`, `scripts/gpu/gate-policy.toml`) on `cud` vs `sage` and
+on `cud` vs `fw2`, so the two rules can be compared on the same clips; the
+signed median sharpness and jitter ratios (a systematic softening would
+show up there even when the magnitudes pass); a repeat of `cud` on one clip
+in a new process, to check that pinned picks are byte-identical across
+processes.
+
+Driver, analysis script and result rows: `artifacts/perf/sage-calibrated/`.
+
+### 8.3 Results (b): H3 max
+
+Two pods, one after the other (RTX PRO 6000 Server Edition, EUR-IS-1,
+$2.09/hr, driver 595.91.07, EU volume `jg48s6o1w0`, nothing written to it).
+Image `fastvideo-rs-runtime:sha-4eeb801` (pinned by digest), `fv-gpucheck`
+from `wip/sage2` @ `fecffde` built on the build pod. Pod `w3x68sjrthgyca` ran
+H3 max, pod `2v5demd2n1fptz` the dense recipe. Rows, per-clip numbers and the
+analysis output are in `artifacts/perf/sage-calibrated/{max,dense}/`.
+
+**Pinned picks are deterministic.** No arm logged an `sdpa auto` timing.
+`cud` run again in a new process (spark-mountain-lake, seed 42) is
+byte-identical: 0 of 124 frames differ. So everything the control pair
+measures comes from the one kernel switch.
+
+Per prompt: Sage median over 3 seeds / the band from rule 1.
+
+| prompt | LPIPS | PSNR dB | \|ln sharpness\| | \|ln jitter\| | sharpness ratio, Sage (control) | prompt |
+|---|---|---|---|---|---|---|
+| h3-demo | 0.446 / 0.491 | 14.48 / 13.13 | 0.019 / 0.053 | 0.017 / 0.064 | 1.020 (1.006) | pass |
+| ltx-multishot | 0.529 / 0.527 | 15.15 / 13.45 | 0.036 / 0.065 | 0.064 / 0.085 | 1.011 (1.034) | fail: LPIPS |
+| ltx-newsbroadcast | 0.518 / 0.496 | 14.02 / 13.59 | 0.029 / 0.075 | 0.030 / 0.055 | 1.029 (1.015) | fail: LPIPS; jitter outlier (seed 42: 1.070, control max 0.975-1.025) |
+| ltx-frogyoga | 0.373 / 0.439 | 15.54 / 13.59 | 0.025 / 0.085 | 0.039 / 0.594 | 1.016 (0.990) | pass |
+| spark-mountain-lake | 0.410 / 0.398 | 18.20 / 17.92 | 0.012 / 0.055 | 0.019 / 0.073 | 1.012 (1.022) | fail: LPIPS |
+
+* Denoise (median of 15): `cud` 21.51 s, `fw2` 21.80 s, `sage` 19.42 s:
+  **1.108x**, just over the 1.10 floor.
+* Pooled over 15 clips: LPIPS median 0.405 for the control against 0.414 for
+  Sage; Sage is further than the control on 11 of 15 clips. PSNR is lower on
+  11 of 15.
+* No softening: the median Sage sharpness ratio is 1.01-1.03 per prompt.
+  The frogyoga montage (`shots/max-frogyoga-f060-cud-fw2-sage-x3seeds.jpg`;
+  rows are arms, columns seeds) keeps the same composition per seed across
+  all three arms.
+* Old single-clip gate on the same clips: fail for both. The control breaks
+  its limits on 2 of 15 clips (frogyoga s42 jitter 1.86, s1042 sharpness
+  0.936), Sage on 1 (frogyoga s42 jitter 1.50).
+
+**Verdict H3 max: fail** (rule 1: 2 of 5 prompts, rule 2: one jitter
+outlier). The misses are small: the three LPIPS medians are 0.002-0.022
+above their bands. They all point the same way, though: Sage moves H3 max a
+little further than bf16 rounding does.
+
+### 8.4 Results (b): Sol-H3 4-step dense
+
+| prompt | LPIPS | PSNR dB | \|ln sharpness\| | \|ln jitter\| | sharpness ratio, Sage (control) | prompt |
+|---|---|---|---|---|---|---|
+| h3-demo | 0.439 / 0.493 | 14.63 / 13.00 | 0.034 / 0.062 | 0.042 / 0.130 | 0.967 (1.000) | fail: sharpness outlier (s1000: 0.912) |
+| ltx-multishot | 0.455 / 0.529 | 15.58 / 13.72 | 0.025 / 0.034 | 0.026 / 0.074 | 0.999 (1.012) | pass |
+| ltx-newsbroadcast | 0.493 / 0.493 | 14.42 / 13.46 | 0.019 / 0.051 | 0.037 / 0.088 | 0.994 (1.006) | fail: LPIPS (at the band); sharpness outlier (s2042: 0.942) |
+| ltx-frogyoga | 0.373 / 0.460 | 15.57 / 13.53 | 0.014 / 0.060 | 0.010 / 0.635 | 0.994 (0.988) | pass |
+| spark-mountain-lake | 0.384 / 0.374 | 18.28 / 18.30 | 0.025 / 0.035 | 0.031 / 0.080 | 1.026 (1.003) | fail: LPIPS, PSNR; sharpness outlier (s42: 1.117) |
+
+* Denoise: `cud` 32.86 s, `fw2` 33.90 s, `sage` 25.27 s: **1.30x**.
+* Pooled: LPIPS median 0.420 for the control against 0.425 for Sage; Sage is
+  further on 11 of 15 clips, PSNR lower on 11 of 15.
+* Old single-clip gate: the control breaks its limits on 1 of 15 clips
+  (frogyoga s42 jitter 1.95), Sage on 4 (h3-demo s1000 sharpness 0.912,
+  frogyoga s42 jitter 1.54, newsbroadcast s2042 sharpness 0.942, spark s42
+  sharpness 1.117).
+
+**Verdict Sol-H3 4-step dense: fail** (rule 1: 3 of 5 prompts, rule 2:
+three sharpness outliers). This recipe runs Sage on all 200 dense calls and
+shows it more clearly than H3 max does: the sharpness changes go in both
+directions but reach 1.5-3x the control's spread.
+
+### 8.5 Decision and what is not proposed
+
+* **H3 stays bf16.** Both H3 recipes fail the calibrated rule. No default is
+  proposed for H3 max. The section 6.2 conclusion was that the old gate
+  could not tell Sage from noise. With 3 seeds and a measured control, it
+  now can: Sage is a small but consistent step further than bf16 rounding,
+  and on the all-dense recipe it adds sharpness outliers.
+* **`ltx-pro` keeps Sage** (8.1). That rests on the Phase 3 LTX pass
+  (section 6.3), where LTX moves far less than H3 (35 dB at 720p). It was
+  not re-run under the calibrated rule. Doing so (same arms, 3 seeds x the 3
+  LTX prompts at 1080p, about 45 min, ~$1.6) is the next check if the owner
+  wants the same standard on LTX.
+* **Kernel picks (for task "deterministic kernel picks").** `auto` times
+  cuDNN against fwd2 per shape and per process, and the text encoder's
+  d = 64 shape flipped between processes in Phase 3. Pinning
+  `FASTVIDEO_FLASH_KERNEL=cudnn` (or `v2`) removes the timing: two
+  processes then produce byte-identical clips (8.3). Any A/B where one arm
+  may change a pick should pin it like this.
+
+### 8.6 Spend (Runpod)
+
+| item | time | cost |
+|---|---|---|
+| GPU pod `w3x68sjrthgyca` (RTX PRO 6000, EUR-IS-1), H3 max: deleted, GET 404 | 2 238 s | ~$1.30 |
+| GPU pod `2v5demd2n1fptz` (RTX PRO 6000, EUR-IS-1), dense: deleted, GET 404 | 2 769 s | ~$1.61 |
+| Build pod `jactz9o1k6x58u` (shared, $0.96/hr): tests and the release `fv-gpucheck` | ~12 min of jobs | ~$0.20-0.40 |
+| **total** | | **~$3.2** |
+
+Each GPU pod had a detached 5 400 s DELETE backstop, an on-pod idle guard
+(20 min at 0 % GPU) and a local balance watchdog (delete below $8.50). The
+balance went from $69.90 to $63.86 over the session. Other agents' pods ran
+at the same time.

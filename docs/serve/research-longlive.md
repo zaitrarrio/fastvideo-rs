@@ -329,7 +329,7 @@ in writing. That is an owner/legal decision; the port does not depend on it.
 | `.pt` checkpoints | safetensors-only loaders | **done**: converter script plus Rust rename and merge (`wan::longlive`) |
 | LoRA r=256 merge | H3 / LTX LoRA merges (`crates/fastvideo-models/src/h3/lora.rs`, `ltx2/lora.rs`) | **done** for Wan names (host f32 merge) |
 | CUDA graphs per cache state | `wan::graph`, static KV cache | the re-cache runs eagerly on the graph stream; pointers unchanged, so block graphs replay |
-| Prompt switching on our surfaces | Reactor causal `set_prompt` → `CausalControl` → `CausalDriver::block` → `CausalRollout::set_prompt` | wired: the recipe opts in. **The director refuses causal models** (`director/service.rs::caps_for` needs `StreamCaps::Clip`), so director `prompt` updates cannot reach it without a causal director engine (Phase A follow-up, §6) |
+| Prompt switching on our surfaces | Reactor causal `set_prompt` → `CausalControl` → `CausalDriver::block` → `CausalRollout::set_prompt` | wired: the recipe opts in. The director serves causal models too since `wip/director-causal` (docs/serve/director-causal.md): its `prompt` updates reach the same `set_prompt` at the next block boundary |
 | TAEHV per block | `taew2_1` | none |
 | **2.0**: Wan2.2-TI2V-5B DiT, VAE, `taew2_2` | the 5B port (`vae22.rs`, `wan_2_2_ti2v_5b`), FastWan2.2 | causal 5B preset (8-frame chunks, window 32, sink 8); `forward_kv` is architecture-generic (**INFERRED**: not run on 5B) |
 | 2.0 multi-shot sink + RoPE shot offset | single sink | a pinned-segment cache (global sink + shot sinks + rolling), a per-shot temporal RoPE offset |
@@ -619,7 +619,7 @@ Cost:
   matters for self-hosting (owner).
 - H3 Plug LoRAs: the H3 territory clause blocks serving from US/EU without a
   MiniMax licence (as for H3 itself).
-- The director has no causal mode (§5, §6 A4).
+- ~~The director has no causal mode (§5, §6 A4)~~: done, docs/serve/director-causal.md.
 
 ---
 

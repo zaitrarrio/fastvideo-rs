@@ -30,7 +30,7 @@ use fastvideo_cudarc::wan::pipeline::PipelineError;
 use fastvideo_cudarc::wan::stream::{CausalRollout, RolloutConfig};
 use fastvideo_cudarc::{LoadParts, WanPipeline};
 use fastvideo_protocol::{
-    ApiError, CanvasCaps, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, RefLimits,
+    ApiError, CanvasCaps, CausalContext, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, RefLimits,
     ResolvedJob, RgbFrame, StreamCaps, Task,
 };
 
@@ -125,7 +125,8 @@ impl CausalDriver {
             live.ro.reset(Some(input.seed));
             live.seed = input.seed;
         }
-        if input.prompt != live.prompt {
+        let switched = input.prompt != live.prompt;
+        if switched {
             live.ro.set_prompt(&input.prompt).map_err(pipe_err)?;
             live.prompt = input.prompt.clone();
         }
@@ -133,6 +134,22 @@ impl CausalDriver {
         let b = live.ro.next_block_with_hooks(hooks).map_err(pipe_err)?;
         let first = b.first_frame as u64;
         let total_ms = b.timings.total_s * 1e3;
+        let recache_ms = b.timings.recache_s * 1e3;
+        if recache_ms > 0.0 {
+            // Once per switch: several prompt changes before a block re-cache
+            // once, with the latest prompt.
+            tracing::info!(
+                session = %s,
+                block = input.block_index,
+                prompt_version = input.prompt_version,
+                recache_ms,
+                block_ms = total_ms,
+                switch_recaches = live.ro.switch_recaches(),
+                "prompt switch: KV re-cache"
+            );
+        } else if switched && input.block_index > 0 {
+            tracing::info!(session = %s, block = input.block_index, prompt_version = input.prompt_version, "prompt switch: KV cache kept");
+        }
         let h = b.into_host();
         let (w, hh, n) = (h.width as u32, h.height as u32, h.frames);
         let per = RgbFrame::byte_len(w, hh);
@@ -158,6 +175,7 @@ impl CausalDriver {
             block_index: input.block_index,
             frames: n as u32,
             block_ms: total_ms,
+            recache_ms,
         })
     }
 
@@ -167,8 +185,9 @@ impl CausalDriver {
 }
 
 /// Caps of the SF-Wan 1.3B streaming model: 16 fps, 12-frame blocks,
-/// 832×480 default canvas (design §5.4), video only.
-pub fn sfwan_caps(id: &str) -> ModelCaps {
+/// 832×480 default canvas (design §5.4), video only; `context` is the
+/// rollout's window, sink and prompt-switch policy.
+pub fn sfwan_caps(id: &str, context: Option<CausalContext>) -> ModelCaps {
     let grid = FrameGrid::new(4, 1, 9, 1_000_001, 81);
     ModelCaps {
         id: ModelId::new(id),
@@ -180,6 +199,7 @@ pub fn sfwan_caps(id: &str) -> ModelCaps {
         stream: Some(StreamCaps::Causal {
             block_frames: 12,
             target_fps: 16,
+            context,
         }),
         frames: grid,
         canvas: CanvasCaps {
@@ -200,6 +220,8 @@ pub fn sfwan_caps(id: &str) -> ModelCaps {
         recipe: Some("sf-wan-causal-dmd-4step".into()),
     }
 }
+
+pub use super::caps::LONGLIVE_NAME;
 
 /// A backend serving only causal SF-Wan (streaming; no batch jobs).
 pub struct CausalCudaBackend {
@@ -300,7 +322,19 @@ impl EngineBackend for CausalCudaBackend {
     }
 
     fn caps(&self) -> Vec<ModelCaps> {
-        vec![sfwan_caps(&self.id)]
+        use fastvideo_cudarc::wan::stream::PromptSwitch;
+        let context = CausalContext {
+            window_latent_frames: self.base.local_attn_frames as u32,
+            sink_latent_frames: self.base.sink_frames as u32,
+            prompt_recache: matches!(self.base.prompt_switch, PromptSwitch::Recache { .. }),
+        };
+        let mut c = sfwan_caps(&self.id, Some(context));
+        // A LongLive model is also served as `longlive` (the fal app
+        // `fastvideo/longlive` resolves to it).
+        if self.longlive.is_some() && self.id != LONGLIVE_NAME {
+            c.served_names.push(LONGLIVE_NAME.into());
+        }
+        vec![c]
     }
 
     fn recipe(&self, _model: &ModelId) -> Recipe {

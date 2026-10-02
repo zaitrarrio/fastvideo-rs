@@ -22,6 +22,12 @@
 //! reported with `chunk` + `chunk_metrics`, late ones with
 //! `deadline_missed` (freeze video, silence audio), and `session_metrics`
 //! goes out every 10 s and at the end with `final: true`.
+//!
+//! Causal models (LongLive-1.3B, SF-Wan) run as one continuous rollout
+//! instead ([`engine::DirectorStream`]): blocks play as they arrive, a
+//! `chunk` reports every few blocks, and prompt updates reach the engine at
+//! the next block boundary (LongLive re-caches its KV window once per
+//! switch). See docs/serve/director-causal.md.
 
 pub mod control;
 pub mod engine;
@@ -38,7 +44,7 @@ pub mod service;
 #[cfg(feature = "director")]
 pub mod session;
 
-pub use engine::{ChunkBuild, ChunkOutput, DirectorClips, DirectorEngine};
+pub use engine::{ChunkBuild, ChunkOutput, DirectorClips, DirectorEngine, DirectorStream, StreamBlock};
 
 #[cfg(feature = "director")]
 pub use routes::routes;

@@ -965,7 +965,7 @@ pub enum Continuity { HardCut, Crossfade { ms: u16 }, AnchorLastFrame { crossfad
    |---|---|---|
    | native `POST /fv/v1/streams` | body `max_seconds` | stream `status.end_reason: "session_limit"`, WHIP `DELETE`; the stream object shows the resolved `max_seconds` and `pacer.limit_seconds` |
    | Reactor causal mode | `/start_session` `{"max_seconds": n}` | `session_ended{reason: "Session ended: the <n> s session length limit was reached."}`, then `READY` |
-   | fal director | — | clip models only (causal models are refused), so it never opens a causal session; its own `max_session_seconds` bounds clip sessions |
+   | fal director | — | `[director] max_session_seconds` bounds both clip sessions and causal ones (LongLive / SF-Wan, one rollout per session, docs/serve/director-causal.md): `stream_exhausted{reason:"session_limit"}`. The `[streams]` causal limits do not apply to it |
 
    Advertised in `/fv/v1/capabilities` (each causal model's
    `stream_limits{default_max_s, hard_max_s, clock, reset_restarts_clock}`),

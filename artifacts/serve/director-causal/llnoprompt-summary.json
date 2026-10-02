@@ -1,0 +1,156 @@
+{
+  "app": "fastvideo/longlive",
+  "audio_packets": 0,
+  "chunks": 21,
+  "deadline_missed": 0,
+  "errors": [],
+  "final_metrics": {
+    "causal": {
+      "blocks": 84,
+      "paused": true,
+      "recache_ms_total": 0.0,
+      "recaches": 0,
+      "video_dropped": 0
+    },
+    "final": true,
+    "gauges": {
+      "audio_packets": 0,
+      "buffered_frames": 39,
+      "chunks": 21,
+      "encode_ms_total": 1521.824,
+      "underruns": 0,
+      "video_packets": 965,
+      "video_seconds": 59.5625
+    },
+    "history_limit": 64,
+    "history_size": 21,
+    "phases": {
+      "delivery": {
+        "count": 0,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "total_ms": -0.0
+      },
+      "generation": {
+        "count": 21,
+        "max_ms": 2347.633,
+        "p50_ms": 2307.401,
+        "p95_ms": 2310.93,
+        "total_ms": 48217.638000000006
+      },
+      "prepare": {
+        "count": 21,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "total_ms": 0.0
+      }
+    },
+    "session_wall_ms": 60805.698,
+    "type": "session_metrics",
+    "units": "ms"
+  },
+  "freezes_over_250ms": 1,
+  "generation_fps_mean": 20.852857142857136,
+  "generation_fps_min": 20.45,
+  "generation_over_playback": 0.7676439800039802,
+  "keyframes": 31,
+  "max_frame_gap_ms": 265.9235540000002,
+  "recaches_reported": 0,
+  "received_fps": 16.055671323088813,
+  "received_span_s": 60.04108956899999,
+  "rtp_fps": 16.0,
+  "session_id": "63810364-e0b7-4df8-9406-5d5fce58398d",
+  "session_info": {
+    "accelerations": [
+      "none"
+    ],
+    "app": "fastvideo-longlive-director",
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "audio_behaviors": [],
+    "audio_bitrates": [
+      96000,
+      128000,
+      192000
+    ],
+    "audio_conditioning": false,
+    "audio_sample_rate": 48000,
+    "causal": {
+      "block_frames": 12,
+      "block_seconds": 0.75,
+      "chunk_blocks": 4,
+      "image_conditioning": false,
+      "kv_window_latent_frames": 12,
+      "prompt_switch": "recache",
+      "sink_latent_frames": 3
+    },
+    "chunk_seconds": 3,
+    "client_message_types": [
+      "configure",
+      "ping",
+      "prompt",
+      "stop"
+    ],
+    "conditioning_audio_sample_rate": 32000,
+    "continuation_context_frames": 48,
+    "continuation_playback_seconds": 3.0,
+    "default_acceleration": "none",
+    "default_audio_bitrate": null,
+    "default_chunk_duration": 3,
+    "default_memory": 12,
+    "fps": 16,
+    "max_audio_source_seconds": 0,
+    "max_chunk_duration": 3,
+    "max_memory": 50,
+    "max_session_seconds": null,
+    "min_chunk_duration": 3,
+    "min_memory": 1,
+    "one_session_per_machine": true,
+    "prompt_context_segments": 12,
+    "prompt_deck_size": 6,
+    "prompt_expander": "none",
+    "protocol_version": 1,
+    "resolutions": [
+      "480p"
+    ],
+    "script_max_audio_beats": 0,
+    "script_max_beats": 64,
+    "script_max_end_images": 0,
+    "script_max_pending": 4,
+    "script_max_queued": 4,
+    "script_min_chunk_seconds": 1,
+    "script_min_end_image_spacing_seconds": 0,
+    "script_min_opening_chunk_seconds": 1,
+    "script_modes": [
+      "replace",
+      "append"
+    ],
+    "scripts": true,
+    "server_message_types": [
+      "session_info",
+      "configured",
+      "prompt_pending",
+      "prompt_applied",
+      "prompt_rejected",
+      "audio_pending",
+      "audio_applied",
+      "audio_rejected",
+      "audio_exhausted",
+      "chunk",
+      "chunk_metrics",
+      "deadline_missed",
+      "error",
+      "pong",
+      "session_metrics",
+      "stream_exhausted"
+    ],
+    "session_limit_scope": "configured",
+    "type": "session_info"
+  },
+  "switches": [],
+  "ttff_ms": 756.601128,
+  "video_frames": 965
+}

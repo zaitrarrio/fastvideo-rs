@@ -15,7 +15,7 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
-//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
+//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
 //! | (`ltx-pro` Ref2V) | `ltx25-ref2v` | the `ltx-pro` recipe plus the Ingredients IC-LoRA fused at stage 1 (`ICLoraPipeline`): reference-to-video only, one reference sheet, 1536x896 default | `ltx2/ltx25_distill_dense` | The LTX reference mode (docs/ports/ltx-ref2v.md); `route_task` sends `ltx-pro` Ref2V requests here |
@@ -189,6 +189,14 @@ pub struct Ltx2Recipe {
     /// Audio-to-video on this model ([`LtxA2v`]).
     #[serde(default)]
     pub a2v: LtxA2v,
+    /// SageAttention2 (`fastvideo_cudarc::wan::attn_sage`, INT8 QK / FP8 PV)
+    /// on the dense DiT self-attention of this model's two-stage generations,
+    /// on sm_120 only (RTX PRO 6000 / RTX 5090); edits stay bf16.
+    /// `FASTVIDEO_ATTN_SAGE=0|2` overrides it. Set on `ltx25-distill-dense`
+    /// (`ltx-pro`) only: the one recipe that passed the end-to-end gate
+    /// (docs/perf/sage-attention.md, Phase 3: 1080p denoise 1.15x).
+    #[serde(default)]
+    pub sage_attention: bool,
 }
 
 /// How an LTX-2.5 model serves audio-to-video.
@@ -290,6 +298,10 @@ pub struct SfWanRecipe {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub longlive: Option<LongLiveRecipe>,
 }
+
+/// The extra served name of a LongLive model: the fal app
+/// `fastvideo/longlive` resolves to it (docs/serve/director-causal.md §5).
+pub const LONGLIVE_NAME: &str = "longlive";
 
 /// LongLive settings of an [`SfWanRecipe`] (`wan::longlive::LongLiveConfig`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -859,6 +871,11 @@ fn sfwan_caps(id: &str, r: &SfWanRecipe) -> ModelCaps {
     c.stream = Some(StreamCaps::Causal {
         block_frames: r.block_frames,
         target_fps: fps,
+        context: Some(fastvideo_protocol::CausalContext {
+            window_latent_frames: r.local_attn_frames,
+            sink_latent_frames: r.sink_frames,
+            prompt_recache: r.longlive.as_ref().is_some_and(|l| l.recache),
+        }),
     });
     c.knobs = KnobCaps {
         seed: true,
@@ -919,6 +936,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         refine_steps: 3,
         ic_lora: None,
         a2v: LtxA2v::Distilled,
+        sage_attention: false,
     }
 }
 
@@ -1093,6 +1111,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "ltx25-distill-two-stage-dense",
             CudaRecipe::Ltx2(Ltx2Recipe {
                 a2v: LtxA2v::Off,
+                sage_attention: true,
                 ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
             }),
         ),
@@ -1328,6 +1347,31 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             if let Some(w) = &e.weights {
                 r.wan.weights = w.clone();
             }
+            // LongLive-1.3B (opt-in): `longlive = "<dir>"` holds the
+            // converted `longlive_base.safetensors` + `lora.safetensors`;
+            // LongLive's window 12 / sink 3, KV re-cache at prompt switches
+            // (`longlive_recache = false`: keep the cache, the ablation).
+            if let Some(dir) = x("longlive").filter(|d| !d.is_empty()) {
+                let flag = |k: &str| -> Result<bool, String> {
+                    match x(k).as_deref() {
+                        None | Some("true") => Ok(true),
+                        Some("false") => Ok(false),
+                        Some(other) => Err(format!("model `{}`: {k} = {other:?} (true | false)", e.id)),
+                    }
+                };
+                r.longlive = Some(LongLiveRecipe {
+                    weights: dir.into(),
+                    lora: true,
+                    recache: flag("longlive_recache")?,
+                    global_sink: true,
+                    relative_rope: false,
+                });
+                r.local_attn_frames = 12;
+                r.sink_frames = 3;
+                if !m.served_names.iter().any(|n| n == LONGLIVE_NAME) {
+                    m.served_names.push(LONGLIVE_NAME.into());
+                }
+            }
         }
     }
     Ok(m)
@@ -1460,6 +1504,21 @@ mod tests {
         assert_eq!(t.resolve("fasth3").unwrap().id.as_str(), "fasth3-4step-vsa");
         assert!(t.get(&ModelId::new("fasth3-8step-dense")).unwrap().tier.is_none());
         assert_eq!(t.len(), cat.len());
+    }
+
+    #[test]
+    fn sage_attention_is_ltx_pro_only() {
+        let cat = catalog(&WeightLayout::default());
+        let on: Vec<&str> = cat
+            .iter()
+            .filter(|m| matches!(&m.recipe, CudaRecipe::Ltx2(r) if r.sage_attention))
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(on, ["ltx25-distill-dense"]);
+        assert_eq!(
+            find(&cat, "ltx-pro").unwrap().id.as_str(),
+            "ltx25-distill-dense"
+        );
     }
 
     #[test]
@@ -1614,13 +1673,14 @@ mod tests {
         assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
         assert_eq!(fw.tier, Some(Tier::Turbo));
         let sf = get("sfwan21-1.3b");
-        assert_eq!(
+        assert!(matches!(
             sf.stream,
             Some(StreamCaps::Causal {
                 block_frames: 12,
-                target_fps: 16
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { prompt_recache: false, .. })
             })
-        );
+        ));
     }
 
     #[test]
@@ -2017,6 +2077,49 @@ mod tests {
         };
         assert_eq!(r.weights, Path::new("/w/h3-8step"));
         assert!(r.dense);
+    }
+
+    /// `[[models]]` turns LongLive on with `longlive = "<dir>"`: window 12,
+    /// sink 3, re-cache, the extra served name `longlive` and the context in
+    /// the caps; without it the SF-Wan entry is unchanged.
+    #[test]
+    fn models_entry_opts_into_longlive() {
+        let layout = WeightLayout::new("/w");
+        let mut e = ModelEntryCfg {
+            id: "longlive-1.3b".into(),
+            family: "wan".into(),
+            recipe: "sfwan21-1.3b".into(),
+            weights: None,
+            resident: true,
+            served_names: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        let plain = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &plain.recipe else { panic!() };
+        assert!(r.longlive.is_none());
+        assert!(!plain.served_names.iter().any(|n| n == LONGLIVE_NAME));
+        e.extra.insert("longlive".into(), "/w/longlive-1.3b-safetensors".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        let l = r.longlive.as_ref().unwrap();
+        assert!(l.recache && l.lora && l.global_sink);
+        assert_eq!((r.local_attn_frames, r.sink_frames), (12, 3));
+        let caps = m.caps();
+        assert!(caps.served_names.iter().any(|n| n == LONGLIVE_NAME), "{:?}", caps.served_names);
+        assert_eq!(
+            caps.stream,
+            Some(StreamCaps::Causal {
+                block_frames: 12,
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+            })
+        );
+        e.extra.insert("longlive_recache".into(), "false".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        assert!(!r.longlive.as_ref().unwrap().recache);
+        e.extra.insert("longlive_recache".into(), "maybe".into());
+        assert!(model_from_config(&layout, &e).is_err());
     }
 
     /// LongLive is opt-in on an SF-Wan recipe: absent from the catalog's

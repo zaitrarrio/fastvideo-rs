@@ -32,12 +32,25 @@ RUN apt-get update \
       "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
  && apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
  && rm -rf /var/lib/apt/lists/*
+# Rust: install exactly what rust-toolchain.toml asks for (channel, components,
+# targets) in this one layer, then pin later layers to that toolchain. Without
+# this, the first `cargo` in a later layer sees a target the toolchain file
+# lists but the image lacks (wasm32), syncs `stable` to the newest release and
+# fails renaming files that live in a lower overlayfs layer ("Invalid
+# cross-device link", os error 18). RUSTUP_TOOLCHAIN stops any later sync;
+# RUSTUP_PERMIT_COPY_RENAME makes rustup copy instead of failing if one ever
+# happens anyway.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
+    PATH=/usr/local/cargo/bin:$PATH \
+    RUSTUP_PERMIT_COPY_RENAME=1
+COPY rust-toolchain.toml /etc/fastvideo/rust/rust-toolchain.toml
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,clippy \
- && rustc --version
+      | sh -s -- -y --profile minimal --default-toolchain none \
+ && cd /etc/fastvideo/rust && rustup toolchain install \
+ && rustup default stable \
+ && rustc --version && cargo --version && rustup target list --installed
+ENV RUSTUP_TOOLCHAIN=stable
 ENV CUDARC_CUDA_VERSION=13000 \
     LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64 \
     PATH=/usr/local/cuda-13.0/bin:/usr/local/cargo/bin:$PATH \

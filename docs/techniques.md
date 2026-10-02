@@ -554,8 +554,15 @@ FastWan inputs (worst rel-L2 0.044 / 0.021) at 1.5-1.8x over fwd2 on RTX PRO
 saves 1.33x of the Sol-H3 dense denoise and 1.13x of h3-max's, but fails the
 H3 five-prompt gate on one prompt per recipe, as does a bf16-only control
 (the gate is at H3's noise floor); it passes on LTX dense stage 2 at 1080p
-(1.15x). Not merged. SageAttention3 (NVFP4) fails the tolerance (rel-L2
-0.19-0.36).
+(1.15x). SageAttention3 (NVFP4) fails the tolerance (rel-L2 0.19-0.36).
+
+Phase 4 (2026-10-02, docs/perf/sage-attention.md section 8): the port is
+merged on main and is default-off. `FASTVIDEO_ATTN_SAGE` is now an override
+(`2` on everywhere, `0` off everywhere). When it is unset, a recipe may opt
+in per request (`attn_sage::recipe_scope`), on sm_120 only. Only `ltx-pro`
+(`ltx25-distill-dense`, `Ltx2Recipe::sage_attention`) does. A calibrated H3
+gate (3 seeds x 5 prompts, judged against two pinned bf16 control arms)
+fails both H3 recipes, so H3 stays bf16.
 
 Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
