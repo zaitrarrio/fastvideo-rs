@@ -3,6 +3,7 @@
 // whitelisted /metrics, then costs, idle tracking, alerts, the backstops
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
+import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
 import { adminGet, gatewayPublic } from "./cluster/ops";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { listClusters, type Cluster } from "./cluster/store";
@@ -200,6 +201,22 @@ export async function collect(env: Env): Promise<CollectResult> {
       } else if (left < 15 * 60_000) alerts.push({ key: `deadline:${c.id}`, kind: "deadline", severity: "info", target: c.name, message: `${c.name} stops at its deadline in ${Math.round(left / 60000)} min (extend to keep it)` });
     }
   }
+  // Backstop for the shared build pod (buildpod.ts): its own self-stop failed before.
+  if (pol.build_pod_backstop)
+    for (const x of podInfo) {
+      if (!x.running || x.owner !== "external:build-pod") continue;
+      const why = buildPodVerdict(x.p.runtime?.uptimeInSeconds, await buildPodHealth(env, x.p.id), pol);
+      if (!why) continue;
+      let result: string;
+      try {
+        result = await stopBuildPod(env, x.p.id);
+      } catch (e) {
+        result = `stop failed: ${(e as Error).message.slice(0, 160)}`;
+      }
+      alerts.push({ key: `build_pod:${x.p.id}`, kind: "build_pod", severity: "critical", target: x.p.id, message: `${x.p.name} ${x.p.id}: ${why}: ${result}`, action: "stop" });
+      actions.push(`build pod ${x.p.id}: ${result} (${why})`);
+      await audit(env, { actor: "policy:build_pod_backstop", action: "pod.stop", target: x.p.id, detail: `${why}: ${result}` });
+    }
   const today = await env.DB.prepare("SELECT COALESCE(SUM(usd), 0) AS usd FROM cost_daily WHERE day = ?").bind(day).first<{ usd: number }>();
   if ((today?.usd || 0) > pol.daily_spend_max) alerts.push({ key: "daily_spend", kind: "daily_spend", severity: "warn", message: `spend today $${today!.usd.toFixed(2)} (> $${pol.daily_spend_max})` });
   if (balance < floor) {
@@ -214,7 +231,7 @@ export async function collect(env: Env): Promise<CollectResult> {
       actions.push(await stopCluster(env, c, "cluster balance floor"));
     }
   }
-  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin"]);
+  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod"]);
 
   // ---- retention
   await env.DB.batch([

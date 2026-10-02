@@ -417,9 +417,11 @@ and resolve every minute.
 | `balance_floor` | balance < floor ($8), or < a cluster's own `balance_floor` | on | `stop_on_floor` (**on**): stop controller clusters |
 | `deadline` | < 15 min to a cluster's deadline (info); passed (critical) | on | **always**: stop the cluster |
 | `pod_down` | a controller pod not answering for `pod_down_min` (10) | on | – |
+| `build_pod` | the shared build pod (`external:build-pod`) up ≥ `build_pod_max_h` (9 h), or idle (no jobs, per its public `/healthz`) `build_pod_idle_grace_min` (15) past its own idle stop | on | `build_pod_backstop` (**on**): stop it, terminate if the stop is refused (`src/buildpod.ts`, docs/dev/build-pod.md) |
 
 Everything is notify-only except the two rules the scripts already had:
-the deadline backstop and the balance floor. Auto-actions never touch
+the deadline backstop and the balance floor, plus the build pod backstop
+the owner asked for on 2026-10-02. Otherwise auto-actions never touch
 external pods. Pod health in the pod views comes from the gateway's view
 (ready, loading or down).
 
