@@ -251,6 +251,14 @@ each op's log is in `/api/ops/<id>`):
 | `restart {pods?}` | Rolling env apply: PATCH workers one at a time, then the gateway, each only after the previous one answers again |
 | `gateway/stop`, `gateway/start` | Runpod stop/start of the gateway pod (same id and URL; container disk and admin token are new). With no gateway, `start` creates one and re-points the workers |
 
+**Gateway-less clusters** (`gateway.enabled: false`): `start` creates only
+the workers, and clients call each one at its pod URL. The controller makes
+the cluster's admin token and passes it to every worker as `FV_ADMIN_TOKEN`
+with `FV_WORKER_DIRECT=1`, so the workers check API keys themselves.
+Minted keys live in the shared D1 `api_keys` table. Minting goes to one
+worker; a revocation goes to all of them. See
+[gateway-less-auth.md](gateway-less-auth.md).
+
 **Parity with the script.** Unit tests check these byte for byte against
 `runpod-cluster.sh`:
 
@@ -479,7 +487,7 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `POST /api/clusters/<id>/{price,start,stop,extend,scale,roll,restart,gateway/start,gateway/stop,cancel}` | operations (202 + operation id) |
 | `GET /api/clusters/<id>/ops`, `/api/ops/<id>` | operation logs |
 | `GET /api/clusters/<id>/env` | effective env per pod (masked), `needs_restart` |
-| `GET /api/clusters/<id>/gateway`, `POST …/admin-token`, `POST …/mint-key` | the gateway's status and pools view; reveal the admin token (audited); mint a user API key |
+| `GET /api/clusters/<id>/gateway`, `POST …/admin-token`, `POST …/mint-key`, `GET …/keys`, `DELETE …/keys/<key_id>` | the gateway's status and pools view (gateway-less: each worker's URL and health); reveal the admin token, with the worker URLs when there is no gateway (audited); mint a user API key; list keys; revoke one (on every worker when there is no gateway; audited) |
 | `POST /api/clusters/import` | adopt a runpod-cluster.sh state |
 | `GET /api/env/account`, `GET /api/env/<scope>/<id>`, `PUT/DELETE /api/env/<scope>/<id>/<KEY>` (`PUT /api/env/account/<KEY>`) | env layers |
 | `GET /api/alerts`, `POST /api/alerts/<id>/resolve`, `GET/PUT /api/policies` | alerts and policies |
@@ -536,6 +544,9 @@ including the sealed token. The steps cover:
 - scale up and down, with a drain;
 - a roll with the gateway, checking digests;
 - extend, gateway stop and start, admin token and key mint;
+- a gateway-less cluster: the controller's admin token on every worker
+  (also after a scale-up), the workers view, and minting, listing and
+  revoking a key on the workers;
 - GitHub dispatch and CI;
 - the deadline backstop and the balance-floor stop;
 - importing a script state;
