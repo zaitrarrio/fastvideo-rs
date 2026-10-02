@@ -1,0 +1,5 @@
+      1 [fastvideo] attn_sage: kernels loaded (cubin sm120, 0.0s, sm120)
+      1 [fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=0
+      1 [fastvideo] sdpa: SageAttention2 INT8 QK / FP8 PV (attn_sage) B=1 H=56 Sq=38247 Sk=38247 D=128
+      1 [fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, , workspace 0 B)
+      1 [fastvideo] sdpa: fused mma B=1 H=56 Sq=537 Sk=537 D=128

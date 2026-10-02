@@ -1,0 +1,2 @@
+      1 [fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=0
+      1 [fastvideo] sdpa: fused mma B=1 H=56 Sq=537 Sk=537 D=128

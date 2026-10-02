@@ -15,7 +15,7 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
-//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
+//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
 //! | (`ltx-pro` Ref2V) | `ltx25-ref2v` | the `ltx-pro` recipe plus the Ingredients IC-LoRA fused at stage 1 (`ICLoraPipeline`): reference-to-video only, one reference sheet, 1536x896 default | `ltx2/ltx25_distill_dense` | The LTX reference mode (docs/ports/ltx-ref2v.md); `route_task` sends `ltx-pro` Ref2V requests here |
