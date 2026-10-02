@@ -35,6 +35,7 @@ Endpoints (all JSON unless noted):
   POST /v1/jobs/<id>/cancel
   GET  /v1/agents/<a>/artifact?path=P[&gz=1]   file under target/<a> (binary)
   POST /v1/agents/<a>/clean             {what: target|worktree|all}
+  GET  /v1/log?lines=N                  text: tail of logs/pod.log (self-stop attempts etc.)
   POST /v1/stop                         stop the pod now
 
 Only these commands run (no shell): cargo {check,build,test,clippy,fmt,doc,
@@ -42,12 +43,25 @@ tree,metadata}, and `bash <script>` for the scripts in SCRIPTS. Environment
 overrides must match ENV_ALLOW. Build scripts still execute code, so the token
 is the real boundary; the allowlist keeps agents on the build path.
 
-Auto-stop: after FV_BUILD_IDLE_MIN minutes (default 20) with no request and no
-running job, or FV_BUILD_MAX_HOURS (default 8) after boot regardless, the pod
-stops itself through the Runpod API with the pod-scoped key Runpod injects
-(RUNPOD_API_KEY, RUNPOD_POD_ID). If stopping is refused (pods with a network
-volume may only be terminated), it terminates instead: everything worth
-keeping lives on the volume.
+Auto-stop (StopPolicy, Stopper below; docs/dev/build-pod.md "Costs and money
+guards"):
+  idle  FV_BUILD_IDLE_MIN (default 20) minutes with no queued or running job
+        and no work request (sync, job submit, artifact fetch, clean). Status,
+        health, agent listings, manifests and job-log polls are reads: they do
+        not keep the pod alive (monitors poll /v1/status).
+  cap   FV_BUILD_MAX_HOURS (default 8) after boot: stop at once when no job is
+        active; otherwise new jobs are refused, active jobs get a warning in
+        their log, and the pod stops FV_BUILD_MAX_GRACE_MIN (default 30) later
+        even if they are still running.
+The stop goes through the Runpod API with the pod-scoped key Runpod injects
+(RUNPOD_API_KEY, RUNPOD_POD_ID): REST stop, REST terminate, then GraphQL
+podStop / podTerminate (everything worth keeping lives on the volume). Every
+failure is logged with its HTTP status and body, and the whole sequence is
+retried (1, 2, 4 ... 10 min apart) until the pod is gone; after an accepted
+call it is retried 10 min later should the pod still be running. All calls send
+an explicit User-Agent: Cloudflare in front of rest.runpod.io and
+api.runpod.io answers Python's default "Python-urllib/3.x" with 403 "error
+code: 1010", which is why no self-stop ever worked before 2026-10-02.
 """
 
 import gzip
@@ -63,6 +77,7 @@ import sys
 import tarfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -73,6 +88,12 @@ PORT = int(os.environ.get("FV_BUILD_PORT", "8000"))
 TOKEN_SHA = os.environ.get("FV_BUILD_TOKEN_SHA256", "").strip().lower()
 IDLE_S = float(os.environ.get("FV_BUILD_IDLE_MIN", "20")) * 60
 MAX_S = float(os.environ.get("FV_BUILD_MAX_HOURS", "8")) * 3600
+MAX_GRACE_S = float(os.environ.get("FV_BUILD_MAX_GRACE_MIN", "30")) * 60
+# Cloudflare (rest.runpod.io, api.runpod.io) rejects urllib's default
+# "Python-urllib/3.x" with 403 / error code 1010.
+USER_AGENT = "fv-build-pod/1 (+scripts/dev/build-pod-server.py)"
+RUNPOD_REST = os.environ.get("FV_BUILD_RUNPOD_REST", "https://rest.runpod.io/v1")
+RUNPOD_GRAPHQL = os.environ.get("FV_BUILD_RUNPOD_GRAPHQL", "https://api.runpod.io/graphql")
 MAX_JOBS = int(os.environ.get("FV_BUILD_MAX_JOBS", "4"))
 TARGET_TTL_DAYS = float(os.environ.get("FV_BUILD_TARGET_TTL_DAYS", "14"))
 SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
@@ -714,48 +735,207 @@ def du(path, timeout=60):
 # --------------------------------------------------------------------------- self-stop
 
 
-def runpod_call(method, path):
+def runpod_call(method, url, body=None):
+    """One Runpod API call with the pod-scoped key; returns the parsed JSON
+    (or None). Raises RuntimeError carrying the HTTP status and the start of
+    the body (never the key) on failure, including GraphQL errors."""
     key = os.environ.get("RUNPOD_API_KEY")
     if not key:
         raise RuntimeError("no RUNPOD_API_KEY in the pod environment")
-    req = urllib.request.Request("https://rest.runpod.io/v1" + path, method=method,
-                                 headers={"Authorization": "Bearer " + key, "content-type": "application/json"},
-                                 data=b"" if method == "POST" else None)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.status
-
-
-def self_stop(reason):
-    pod = os.environ.get("RUNPOD_POD_ID")
-    log(f"self-stop ({reason}) pod={pod}")
-    ledger(f"self-stop {reason}")
-    if not pod:
-        return False
-    for method, path in (("POST", f"/pods/{pod}/stop"), ("DELETE", f"/pods/{pod}")):
+    data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
+    req = urllib.request.Request(url, method=method, data=data, headers={
+        "Authorization": "Bearer " + key, "content-type": "application/json", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            text = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
         try:
-            runpod_call(method, path)
-            ledger(f"self-stop-ok {method} {path}")
-            return True
-        except Exception as e:
-            log(f"{method} {path} failed: {e}")
-    return False
+            detail = e.read().decode("utf-8", "replace")[:300].strip()
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"HTTP {e.code} {e.reason}: {detail}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"network: {e}") from None
+    try:
+        out = json.loads(text) if text.strip() else None
+    except ValueError:
+        out = None
+    if isinstance(out, dict) and out.get("errors"):
+        raise RuntimeError("graphql: " + "; ".join(str(x.get("message", x)) for x in out["errors"])[:300])
+    return out
+
+
+def stop_calls(pod):
+    """The stop sequence, first accepted call wins. REST stop keeps the pod
+    record (a later `up` starts or recreates it); terminate drops it; the
+    GraphQL mutations are what runpodctl uses with the same key."""
+    q = json.dumps(pod)
+    return [
+        ("REST stop", "POST", f"{RUNPOD_REST}/pods/{pod}/stop", None),
+        ("REST terminate", "DELETE", f"{RUNPOD_REST}/pods/{pod}", None),
+        ("GraphQL podStop", "POST", RUNPOD_GRAPHQL,
+         {"query": f"mutation {{ podStop(input: {{podId: {q}}}) {{ id desiredStatus }} }}"}),
+        ("GraphQL podTerminate", "POST", RUNPOD_GRAPHQL,
+         {"query": f"mutation {{ podTerminate(input: {{podId: {q}}}) }}"}),
+    ]
+
+
+class StopPolicy:
+    """When the pod stops itself. Pure (the clock is an argument), so tests
+    drive it with a fake one."""
+
+    def __init__(self, boot, idle_s, max_s, grace_s):
+        self.boot, self.idle_s, self.max_s, self.grace_s = boot, idle_s, max_s, grace_s
+
+    def past_cap(self, now):
+        return now - self.boot >= self.max_s
+
+    def decide(self, now, last_activity, active):
+        """A reason to stop now, or None. `active`: queued + running jobs."""
+        up = now - self.boot
+        if up >= self.max_s:
+            if not active:
+                return f"wall-clock cap {self.max_s / 3600:g}h"
+            if up >= self.max_s + self.grace_s:
+                return f"wall-clock cap {self.max_s / 3600:g}h + {self.grace_s / 60:g} min grace ({active} job(s) still active)"
+            return None
+        if not active and now - last_activity >= self.idle_s:
+            return f"idle {(now - last_activity) / 60:.0f} min"
+        return None
+
+    def timers(self, now, last_activity, active):
+        """Seconds idle, and until the idle and the cap stop (None: not
+        counting down: jobs are active)."""
+        up = now - self.boot
+        idle = 0 if active else now - last_activity
+        cap_at = self.max_s + (self.grace_s if active else 0)
+        return {
+            "uptime_s": round(up),
+            "idle_s": round(idle),
+            "idle_stop_in_s": None if active else max(0, round(self.idle_s - idle)),
+            "max_stop_in_s": max(0, round(cap_at - up)),
+        }
+
+
+class Stopper:
+    """Runs the stop sequence; on failure retries 1, 2, 4 ... 10 min apart,
+    and 10 min after an accepted call if the pod is still running then."""
+
+    RETRY_MIN_S, RETRY_MAX_S, AFTER_OK_S = 60, 600, 600
+
+    def __init__(self, call=runpod_call, pod=None):
+        self.call = call
+        self.pod = pod
+        self.lock = threading.Lock()
+        self.attempts = 0
+        self.failures = 0
+        self.next_at = 0.0
+        self.last = {}
+
+    def due(self, now):
+        return now >= self.next_at
+
+    def info(self):
+        return {"attempts": self.attempts, "next_at": round(self.next_at) or None, **self.last}
+
+    def attempt(self, reason, now):
+        if not self.lock.acquire(blocking=False):
+            return False
+        try:
+            pod = self.pod or os.environ.get("RUNPOD_POD_ID")
+            self.attempts += 1
+            log(f"self-stop ({reason}) pod={pod} attempt {self.attempts}")
+            ledger(f"self-stop {reason}")
+            errors = []
+            if pod:
+                for name, method, url, body in stop_calls(pod):
+                    try:
+                        self.call(method, url, body)
+                    except Exception as e:
+                        errors.append(f"{name}: {e}")
+                        log(f"self-stop: {name} failed: {e}")
+                        continue
+                    ledger(f"self-stop-ok {name}")
+                    log(f"self-stop: {name} accepted")
+                    self.failures = 0
+                    self.next_at = now + self.AFTER_OK_S
+                    self.last = {"reason": reason, "at": round(now), "ok": name, "error": None}
+                    return True
+            else:
+                errors.append("no RUNPOD_POD_ID")
+            self.failures += 1
+            delay = min(self.RETRY_MAX_S, self.RETRY_MIN_S * 2 ** (self.failures - 1))
+            self.next_at = now + delay
+            self.last = {"reason": reason, "at": round(now), "ok": None, "error": "; ".join(errors)[-600:]}
+            ledger(f"self-stop-failed retry-in={delay:.0f}s")
+            log(f"self-stop failed (attempt {self.attempts}); retrying in {delay:.0f}s")
+            return False
+        finally:
+            self.lock.release()
+
+
+POLICY = StopPolicy(BOOT, IDLE_S, MAX_S, MAX_GRACE_S)
+STOPPER = Stopper()
+
+
+def active_jobs():
+    return [j for j in list(jobs.values()) if j.state in ("running", "queued")]
+
+
+def public_timers(now):
+    act = active_jobs()
+    return {**POLICY.timers(now, last_activity, len(act)), "jobs_active": len(act), "idle_stop_s": IDLE_S,
+            "max_s": MAX_S, "max_grace_s": MAX_GRACE_S}
+
+
+def note_jobs(act, msg):
+    for j in act:
+        try:
+            j.write(f"\n[build pod] {msg}\n".encode())
+        except OSError:
+            pass
+
+
+cap_warned = set()
+
+
+def watch_tick(now):
+    act = active_jobs()
+    if POLICY.past_cap(now):
+        new = [j for j in act if j.id not in cap_warned]
+        if new:
+            left = POLICY.boot + POLICY.max_s + POLICY.grace_s - now
+            note_jobs(new, f"the pod passed its {POLICY.max_s / 3600:g} h cap: it stops in {max(0, left) / 60:.0f} min "
+                           "even if this job is still running; new jobs are refused (build-pod.sh up after it is gone)")
+            log(f"past the {POLICY.max_s / 3600:g} h cap with {len(act)} active job(s); hard stop in {max(0, left) / 60:.0f} min")
+            cap_warned.update(j.id for j in new)
+    reason = POLICY.decide(now, last_activity, len(act))
+    if reason and STOPPER.due(now):
+        if act:
+            note_jobs(act, f"stopping the pod now ({reason}); this job is killed")
+        STOPPER.attempt(reason, now)
+    return reason
 
 
 def watchdog():
-    fired = False
     while True:
         time.sleep(30)
-        running = any(j.state in ("running", "queued") for j in list(jobs.values()))
-        idle = time.time() - last_activity
-        reason = None
-        if time.time() - BOOT > MAX_S:
-            reason = f"wall-clock cap {MAX_S / 3600:g}h"
-        elif not running and idle > IDLE_S:
-            reason = f"idle {idle / 60:.0f} min"
-        if reason and not fired:
-            fired = self_stop(reason)
-            if not fired:
-                time.sleep(300)  # retry later rather than spinning
+        try:
+            watch_tick(time.time())
+        except Exception as e:  # never let the watchdog thread die
+            log(f"watchdog: {e!r}")
+
+
+def tail_file(path, lines):
+    lines = max(1, min(lines, 5000))
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - lines * 300))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    return "\n".join(data.splitlines()[-lines:]) + "\n"
 
 
 # --------------------------------------------------------------------------- http
@@ -802,19 +982,23 @@ class Handler(BaseHTTPRequestHandler):
         q = dict(urllib.parse.parse_qsl(u.query))
         parts = [p for p in u.path.split("/") if p]
         if method == "GET" and parts == ["healthz"]:
+            # Timers without auth, for external backstops (docs/dev/build-pod.md).
             return self.send_json(200, {"ok": True, "ready": setup_state["ready"], "phase": setup_state["phase"],
-                                        "boot": round(BOOT)})
+                                        "boot": round(BOOT), **public_timers(time.time())})
         if not self.authed():
             return self.send_json(401, {"error": "unauthorized"})
-        touch()
+        # No touch() here: only job events and work requests (sync, job
+        # submit, artifact, clean) count as activity, never status polls.
         if parts[:1] != ["v1"]:
             return self.send_json(404, {"error": "not found"})
         parts = parts[1:]
         if method == "GET" and parts == ["status"]:
             return self.status()
         if method == "POST" and parts == ["stop"]:
-            threading.Thread(target=self_stop, args=("requested",), daemon=True).start()
+            threading.Thread(target=STOPPER.attempt, args=("requested", time.time()), daemon=True).start()
             return self.send_json(202, {"stopping": True})
+        if method == "GET" and parts == ["log"]:
+            return self.send_text(200, tail_file(os.path.join(ROOT, "logs", "pod.log"), int(q.get("lines", "200"))))
         if method == "GET" and parts == ["agents"]:
             return self.agents(q.get("sizes") == "1")
         if len(parts) >= 2 and parts[0] == "jobs":
@@ -835,8 +1019,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and action == "manifest":
                 return self.send_text(200, manifest(wt) if os.path.isdir(wt) else "")
             if method == "PUT" and action == "files":
+                touch()
                 return self.put_files(agent, wt)
             if method == "POST" and action == "delete":
+                touch()
                 paths = [p for p in self.body(64 << 20).decode().split("\0") if p]
                 with agent_locks.setdefault(agent, threading.Lock()):
                     n = delete_paths(wt, paths) if os.path.isdir(wt) else 0
@@ -844,8 +1030,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and action == "jobs":
                 return self.new_job(agent, wt)
             if method == "GET" and action == "artifact":
+                touch()
                 return self.artifact(agent, q.get("path", ""), q.get("gz") == "1")
             if method == "POST" and action == "clean":
+                touch()
                 return self.clean(agent, json.loads(self.body() or b"{}").get("what", "all"))
         return self.send_json(404, {"error": "not found"})
 
@@ -859,8 +1047,9 @@ class Handler(BaseHTTPRequestHandler):
             "extras": dict(extras_state),
             # The container sees the host's CPUs and RAM and the whole shared
             # filesystem behind the volume; report the pod's own limits.
-            "vcpus": vcpus, "host_cpus": os.cpu_count(), "mem_mib": mem, "uptime_s": round(time.time() - BOOT),
-            "idle_s": round(time.time() - last_activity), "idle_stop_s": IDLE_S, "max_s": MAX_S,
+            "vcpus": vcpus, "host_cpus": os.cpu_count(), "mem_mib": mem,
+            **POLICY.timers(time.time(), last_activity, len(running)), "idle_stop_s": IDLE_S, "max_s": MAX_S,
+            "max_grace_s": MAX_GRACE_S, "self_stop": STOPPER.info(),
             "volume": {"size_gb": VOLUME_GB, "used_gb": volume_usage.get("used_gb"),
                        "measured_s_ago": round(time.time() - volume_usage["t"]) if "t" in volume_usage else None},
             "local_disk": disk_gb(LOCAL),
@@ -911,6 +1100,10 @@ class Handler(BaseHTTPRequestHandler):
         err = validate_command(argv, env)
         if err:
             return self.send_json(403, {"error": err})
+        if POLICY.past_cap(time.time()):
+            return self.send_json(503, {"error": f"build pod is past its {MAX_S / 3600:g} h cap and stopping; "
+                                                  "run build-pod.sh up for a fresh pod once it is gone"})
+        touch()
         if not os.path.isdir(wt):
             return self.send_json(409, {"error": f"agent {agent} has no worktree; sync first"})
         job = Job(agent, argv, env)

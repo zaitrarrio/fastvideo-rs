@@ -123,6 +123,9 @@ export const PoliciesZ = z
     stop_on_floor: z.boolean().describe("Auto-action (default on): stop controller clusters below the balance floor."),
     pod_down_min: z.number().min(1).max(1440).describe("Alert when a controller pod has not answered this many minutes."),
     attribution: AttributionZ,
+    build_pod_backstop: z.boolean().describe("Auto-action (default on): stop the shared build pod (external:build-pod) when its own self-stop did not happen."),
+    build_pod_max_h: z.number().min(0).max(72).describe("…when it has been up this many hours (0: off; its own cap is 8 h + 30 min grace)."),
+    build_pod_idle_grace_min: z.number().min(0).max(1440).describe("…or idle (no jobs, per its /healthz) this many minutes past its own idle stop."),
   })
   .strict()
   .describe("Alert thresholds and auto-actions (docs/control/README.md §8).");

@@ -568,14 +568,19 @@ Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
 for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
 
-## LongLive-Plug recipes (opt-in, not in the catalog)
+## LongLive-Plug recipes
 
 NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base
 weights at load. They are recipes, not techniques: each one fixes a base
 checkpoint, its adapters with their merge weights, and the sampler that the
 adapters were distilled for. `fastvideo_models::plug::PlugRecipe` is the
-catalog. None of them is in the serve catalog, and nothing selects them by
-default.
+catalog.
+
+**Serving:** `wan14b-plug-4step` is in the serve catalog (owner decision,
+2026-10-02) as the Wan 2.1 T2V-14B fast tier, public name `wan14b-turbo`.
+It runs at 832x480 / 480x832, up to 81 frames at 16 fps, text-to-video only,
+and is not in the `wan-*` tier slots (see docs/serve/fal-parity.md §3). The
+other three recipes stay opt-in (`fv-gpucheck` only).
 
 | recipe | base | adapters (merge weight, rank / alpha) | sampler | licence |
 |---|---|---|---|---|
@@ -605,6 +610,15 @@ fv-gpucheck --mode fast wan gen --weights $W/wan21-t2v-14b --preset wan_t2v_14b 
 The adapters resolve under `$FASTVIDEO_PLUG_ROOT`, else under
 `<weights>/../longlive-plug/`. Results, verdicts and the catalog proposal:
 docs/serve/research-longlive.md §12.
+
+In fv-serve, a Wan catalog recipe names its Plug recipe
+(`WanRecipe::plug`). The CUDA backend merges the adapters into the
+transformer on the host at load, through the same
+`wan::plug::load_merged_transformer` that `fv-gpucheck` uses, and installs
+the sampler (`WanSampler::StepDistill` → `WanPipeline::set_step_distill`).
+Steps, shift and guidance are then fixed: the model's caps offer only `seed`.
+Serve it with `configs/serve/runpod-wan14b.toml`, or with a `[[models]]` entry
+`recipe = "wan14b-turbo"` whose `weights` are the `wan21-t2v-14b` tree.
 
 ## Adding a technique
 
