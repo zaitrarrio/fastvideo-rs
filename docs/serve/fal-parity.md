@@ -93,7 +93,7 @@ The Lightricks repo list comes from
 |---|---|---|---|---|---|---|
 | H3 | `h3-max`: `sol-h3`; `h3-turbo`: `fasth3-4step-vsa`; `h3-draft`: 480p TAEH3 | T2V, I2V, keyframes (first, last, first+last). Ref2V only with the ref2va DiT loaded (`H3Ref2vaNotLoaded` otherwise) | short edge 768 or 480 (draft: 480), max 768x1344, multiple of the H3 canvas, aspect 0.25 to 4 | 24 fps fixed; 4 to 15 s on the H3 chunk grid (fal wire: 5 to 15) | yes (32 kHz) | seed |
 | LTX | `ltx-pro`: `ltx25-distill-dense`; `ltx-turbo`: `ltx25-distill-sol`; `ltx-draft`: NVFP4 + TAEHV | T2V, I2V, keyframes, A2V, retake, extend (2.5 distilled) | short edge 1080, 720, 1440 or 2160, pad and crop, max 3840x2176 | 9 to 481 frames (8k+1); 24, 25, 48, 50 fps | yes (vocoder) | seed |
-| Wan | `wan-max`: Wan2.2 TI2V-5B, UniPC 50; `wan-turbo`: FastWan2.1 1.3B DMD-3; `wan-draft`: + TAEHV; untiered `sfwan21-1.3b` (causal) | 5B: T2V + I2V. 1.3B: T2V | 5B: short edge 704 or 480, max 1280x704. 1.3B: 480, max 832x480 | 5B: ≤ 121 frames at 24 fps. 1.3B: ≤ 129 frames at 16 fps (24 accepted as the container rate) | no | 5B: seed, steps, guidance, shift, negative prompt. 1.3B: seed, steps, shift |
+| Wan | `wan-max`: Wan2.2 TI2V-5B, UniPC 50; `wan-turbo`: FastWan2.1 1.3B DMD-3 (FastWan2.2 5B since §5); `wan-draft`: + TAEHV; untiered `sfwan21-1.3b` (causal); untiered **`wan14b-turbo`**: Wan 2.1 T2V-14B + LongLive-Plug 4-step (§6, 2026-10-02) | 5B: T2V + I2V. 1.3B: T2V | 5B: short edge 704 or 480, max 1280x704. 1.3B: 480, max 832x480 | 5B: ≤ 121 frames at 24 fps. 1.3B: ≤ 129 frames at 16 fps (24 accepted as the container rate) | no | 5B: seed, steps, guidance, shift, negative prompt. 1.3B: seed, steps, shift |
 
 The wires:
 
@@ -371,7 +371,7 @@ Ours today:
 | `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` | **served (P0, §5)**: FastWan2.2 TI2V-5B FullAttn is the `wan-turbo` tier (weights on both volumes), 480p/580p/720p, 17 to 161 frames. Was **missing** (weights) | the whole tier: 480p, 580p, 720p at 24 fps, 17 to 161 frames | **new weights + config**: `FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers` (Apache-2.0). The preset `fast_wan_2_2_ti2v_5b` already exists in `fastvideo-models` (`wan/config.rs`), and `WanRecipe` takes a preset. This is the fal-comparable **wan-turbo** |
 | `fal-ai/wan/v2.2-5b/text-to-video/distill` | **missing** | | Covered by fast-wan above; skip |
 | `fal-ai/wan/v2.2-a14b/{text,image}-to-video` (+ `/turbo`, `/video-to-video`) | **missing** | Wan2.2 MoE 14B T2V and I2V (+ end image), 480p, 580p, 720p, 17 to 161 frames, two guidance scales | **new weights** (`Wan-AI/Wan2.2-T2V-A14B`, `Wan-AI/Wan2.2-I2V-A14B`, Apache-2.0) + **engine port**. The presets and `boundary_ratio` exist in `fastvideo-models`, but the engine-service Wan loader (`cuda/wan.rs`) has no two-expert path, and 2x14B bf16 needs fp8 or offload on one 96 GB GPU. v2v (`strength`) is a second port |
-| `fal-ai/wan-t2v`, `fal-ai/wan-i2v` (2.1 14B) | **missing** | 14B at 480p, 580p, 720p, 81 to 100 frames | **new weights + config**: `Wan-AI/Wan2.1-T2V-14B-Diffusers`, `Wan2.1-I2V-14B-{480P,720P}-Diffusers` (Apache-2.0). Presets `wan_t2v_14b` and `wan_i2v_14b_*` exist. Lower value than A14B |
+| `fal-ai/wan-t2v`, `fal-ai/wan-i2v` (2.1 14B) | **partial (§6)**: Wan 2.1 T2V-14B is served as `wan14b-turbo` (LongLive-Plug 4-step), 480p, 81 frames, T2V; on the fal wire as `fastvideo/wan14b-turbo` (H3 schema), not under fal's id. Was **missing** | `fal-ai/wan-t2v` is a root endpoint (no sub-path), which the fal router and console do not mount yet; fal's Wan 2.1 fields (`num_frames` 81 to 100, `frames_per_second`, `num_inference_steps`, `turbo_mode`); 580p / 720p; I2V | **new weights + config**: `Wan-AI/Wan2.1-T2V-14B-Diffusers`, `Wan2.1-I2V-14B-{480P,720P}-Diffusers` (Apache-2.0). Presets `wan_t2v_14b` and `wan_i2v_14b_*` exist. Lower value than A14B |
 | `fal-ai/wan-flf2v` | **missing** | first + last frame | **new weights + engine port**: `Wan-AI/Wan2.1-FLF2V-14B-720P` (Apache-2.0) + last-frame conditioning |
 | `…/lora` endpoints | **missing** | per-request LoRA | **engine port** (`GapId::Lora`) |
 | `fal-ai/wan/v2.2-14b/speech-to-video` | **missing** | image + speech to talking video | **new weights + engine port**: `Wan-AI/Wan2.2-S2V-14B` (Apache-2.0), a new pipeline (audio encoder) |
@@ -642,3 +642,38 @@ else one prompt.
   per-block look (`FASTVIDEO_DUMP_OPS`) before `wan-turbo` claims module
   parity; the tier runs and is as fast as FastVideo.
 - LTX 20 s at 25 fps and 10 s at 50 fps (a 505-frame grid) and LTX `auto`.
+
+## 6. Wan 2.1 T2V-14B fast tier (2026-10-02)
+
+Owner decision ("yes add wan 14b"): the LongLive-Plug recipe
+`wan14b-plug-4step` (docs/serve/research-longlive.md §12) is in the serve
+catalog as the Wan 14B fast tier.
+
+| | |
+|---|---|
+| Public names | **`wan14b-turbo`** (served name), `wan14b-plug-4step` (catalog id) |
+| Tier slot | none: the `(family, tier)` table keeps one model per slot, and `wan-turbo` stays FastWan2.2 5B, which fal's `fast-wan` endpoint runs. `wan14b-turbo` is addressed by name, like `fastwan21-1.3b` |
+| Recipe | Wan 2.1 T2V-14B (`wan21-t2v-14b`) with the few-step lightx2v adapter (1.0) and the CFG adapter (0.5) merged at load; LightX2V step-distill Euler, timesteps 1000 / 750 / 500 / 250 at shift 5, guidance 1 (4 forwards); full Wan 2.1 VAE |
+| Offered | T2V; 832x480 and 480x832 (short edge 480, multiple 16); 9 to 81 frames (4k+1), default 81 at 16 fps (container rates 4 to 60); knobs: `seed` only (steps, shift and guidance are fixed by the distilled schedule) |
+| Measured | RTX PRO 6000: 19.0 s denoise, 22.0 s total at 832x480x81; 25x / 22x faster than the base 14B (UniPC 50, CFG 5); peak 50.9 GiB; load 313 s (adapter merge 175 s on the host) |
+| Licence | Apache-2.0 (base and adapters) |
+| Weights | `wan21-t2v-14b`, `longlive-plug/wan21-t2v-14b-{few-step,cfg}` on both volumes (scripts/gpu/weights-manifest.tsv) |
+| Config | `configs/serve/runpod-wan14b.toml` (standalone or gateway worker of the `wan14b` pod pool in `configs/serve/gateway.toml`) |
+
+Wires:
+
+- **Native** `/fv/v1/jobs` and **OpenAI** `/v1/videos`: `model: "wan14b-turbo"`
+  (or the catalog id); `/v1/models` lists both names.
+- **fal**: `fastvideo/wan14b-turbo`, an H3-schema app on the model (as
+  `fastvideo/fastwan21-1.3b` for the 1.3B). Its served schema narrows
+  `resolution` to `480P` and `duration` to what the 81-frame grid takes
+  (5 s). fal's own Wan 2.1 id, `fal-ai/wan-t2v`, is a root endpoint without a
+  sub-path; mounting it needs root-endpoint support in the fal router,
+  catalog and console, plus fal's Wan 2.1 schema. That is left for later (§3.2).
+- **MiniMax**, **LTX**: not applicable (H3 and LTX only).
+
+Not offered: 580p / 720p and frames past 81. The 4-step recipe was measured
+only at 480p and 81 frames (research-longlive.md §12.3), and Wan 2.1 T2V-14B was trained at 81
+frames. Image-to-video needs the I2V-14B checkpoints and their own adapters,
+which are not released.
+

@@ -69,7 +69,7 @@ stereo. Frame counts are ffprobe `nb_read_frames`, rates `r_frame_rate`.
 | `duration: 5` (the LTX matrix starts at 6 s) | 400 `invalid_request_error` | PASS, lists 6..20 |
 | 20 s at 50 fps (fast: 6/8/10 s only at 48/50) | 400 | PASS |
 | 20 s on `ltx-2-5-pro` (pro: 6/8/10 s) | 400 | PASS |
-| `/v2/retake` | 403 `permission_error` | PASS |
+| `/v2/retake` | 403 `permission_error` (at the time; retake is served since 7392995, and an empty body is now 400 "video_uri is required") | PASS |
 | wrong key | 401 `authentication_error` | PASS |
 
 ## Observations
