@@ -859,7 +859,7 @@ fn shipped_gateway_config_resolves_every_pool() {
         assert!(ids.contains(model), "alias {alias} → {model} is not served by a pool ({ids:?})");
     }
     // The worker configs name their pool.
-    for (f, pool) in [("runpod.toml", "h3-turbo"), ("runpod-h3-max.toml", "h3-max"), ("runpod-ltx.toml", "ltx"), ("runpod-wan.toml", "wan"), ("runpod-sfwan.toml", "sfwan-live")] {
+    for (f, pool) in [("runpod.toml", "h3-turbo"), ("runpod-h3-max.toml", "h3-max"), ("runpod-ltx.toml", "ltx"), ("runpod-wan.toml", "wan"), ("runpod-sfwan.toml", "sfwan-live"), ("runpod-wan14b.toml", "wan14b")] {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve").join(f);
         let w = Config::from_toml(&std::fs::read_to_string(&p).unwrap(), f).unwrap();
         assert_eq!(w.gateway.pool.as_deref(), Some(pool), "{f}");

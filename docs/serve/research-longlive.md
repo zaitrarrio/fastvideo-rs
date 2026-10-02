@@ -965,7 +965,12 @@ positive pass (above).
 | `wan5b-plug-4step` | 300 + 300 / 0 skipped | 720p: 6.0 s denoise, 19.7 s total, 25× / 8.3× faster than wan-max; 33 % more denoise than FastWan turbo (4 against 3 steps, total +8 %) | coherent, on-prompt; softer than wan-max and more motion; mixed against turbo | **works; keep opt-in.** It is not better than wan-turbo. Its serving argument is that it needs no second checkpoint: the base weights plus about 1.9 GB of adapters give the fast tier (an unmerged, switchable LoRA would let one resident 5B serve wan-max and a fast tier) |
 | `wan14b-plug-4step` | 400 + 400 / 0 skipped | 19.0 s denoise, 22.0 s total at 480p: 25× / 22× faster than base 14B (477 s) | coherent; sharper than base on both prompts | **works; keep opt-in.** We have no 14B tier; the **proposal is a `wan14b-turbo` tier** (or a 14B quality option of wan-turbo at 480p) on this recipe, which brings 14B to the cost of our 5B turbo at 720p |
 
-Catalog proposals (for the owner to decide; nothing was added):
+**Decided (2026-10-02):** the owner took the 14B proposal. `wan14b-plug-4step`
+is in the serve catalog as the untiered `wan14b-turbo`
+(docs/serve/fal-parity.md §6, `configs/serve/runpod-wan14b.toml`); the H3
+proposal is still open.
+
+Catalog proposals (for the owner to decide; nothing was added at the time):
 **`wan14b-plug-4step` as a new 14B fast tier**, and **`h3-plug-4step` as an
 h3-max alternative to Sol-H3 4-step** (the same cost, closer to the base on the
 one base-referenced prompt, but one prompt is not enough). A five-prompt
