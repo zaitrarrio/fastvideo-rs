@@ -1,0 +1,1 @@
+[fastvideo] plug lora h3-plug-4step minimax-h3-few-step/generator_lora.pt: 312 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)

@@ -1,0 +1,148 @@
+{
+ "cells": {
+  "h3-base480-ctl": {
+   "denoise_s": 100.5928034915,
+   "total_s": 103.878470023,
+   "load_s": 118.783480931,
+   "peak_mib": 54965.0,
+   "per_prompt": {
+    "h3-demo": 102.74,
+    "spark-mountain-lake": 98.45
+   }
+  },
+  "h3-base480": {
+   "denoise_s": 98.874205563,
+   "total_s": 102.46596136950001,
+   "load_s": 116.242087375,
+   "peak_mib": 54965.0,
+   "per_prompt": {
+    "h3-demo": 101.18,
+    "spark-mountain-lake": 96.57
+   }
+  },
+  "h3-base768": {
+   "denoise_s": 401.628814441,
+   "total_s": 408.957384968,
+   "load_s": 112.765204671,
+   "peak_mib": 59091.0,
+   "per_prompt": {
+    "spark-mountain-lake": 401.63
+   }
+  },
+  "h3-plug4s": {
+   "denoise_s": 32.873356886,
+   "total_s": 40.062087964999996,
+   "load_s": 116.19005783,
+   "peak_mib": 58948.0,
+   "per_prompt": {
+    "spark-mountain-lake": 32.87
+   }
+  },
+  "h3-plugcfg480": {
+   "denoise_s": 98.498479382,
+   "total_s": 101.791164823,
+   "load_s": 126.358503132,
+   "peak_mib": 55836.5,
+   "per_prompt": {
+    "h3-demo": 100.67,
+    "spark-mountain-lake": 96.33
+   }
+  },
+  "h3-turbos": {
+   "denoise_s": 19.358028886,
+   "total_s": 26.489431586,
+   "load_s": 97.490591186,
+   "peak_mib": 68796.0,
+   "per_prompt": {
+    "spark-mountain-lake": 19.36
+   }
+  },
+  "w14-base": {
+   "denoise_s": 477.239067825,
+   "total_s": 481.2511312905,
+   "load_s": 170.00542816,
+   "peak_mib": 52854.0,
+   "per_prompt": {
+    "beach_dog": 476.83,
+    "spark-mountain-lake": 477.65
+   }
+  },
+  "w14-plug": {
+   "denoise_s": 19.000033876,
+   "total_s": 22.018384055,
+   "load_s": 313.147657659,
+   "peak_mib": 52070.0,
+   "per_prompt": {
+    "beach_dog": 18.9,
+    "city_rain": 19.0,
+    "spark-mountain-lake": 19.03
+   }
+  }
+ },
+ "compare": {
+  "h3-base480--h3-base480-ctl-h3-demo": {
+   "psnr": 18.28,
+   "lpips": 0.259,
+   "lpips_max": 0.354,
+   "sharp": 1.0,
+   "jitter": 1.034,
+   "frames": 124
+  },
+  "h3-base480--h3-base480-ctl-spark-mountain-lake": {
+   "psnr": 17.84,
+   "lpips": 0.308,
+   "lpips_max": 0.353,
+   "sharp": 1.008,
+   "jitter": 0.947,
+   "frames": 124
+  },
+  "h3-base480--h3-plugcfg480-h3-demo": {
+   "psnr": 14.31,
+   "lpips": 0.424,
+   "lpips_max": 0.498,
+   "sharp": 0.996,
+   "jitter": 0.969,
+   "frames": 124
+  },
+  "h3-base480--h3-plugcfg480-spark-mountain-lake": {
+   "psnr": 17.58,
+   "lpips": 0.338,
+   "lpips_max": 0.422,
+   "sharp": 1.116,
+   "jitter": 1.028,
+   "frames": 124
+  },
+  "h3-base768--h3-plug4s-spark-mountain-lake": {
+   "psnr": 15.35,
+   "lpips": 0.537,
+   "lpips_max": 0.547,
+   "sharp": 1.038,
+   "jitter": 0.992,
+   "frames": 124
+  },
+  "h3-base768--h3-turbos-spark-mountain-lake": {
+   "psnr": 13.14,
+   "lpips": 0.597,
+   "lpips_max": 0.65,
+   "sharp": 1.227,
+   "jitter": 1.889,
+   "frames": 124
+  },
+  "w14-base--w14-plug-beach_dog": {
+   "psnr": 8.56,
+   "lpips": 0.696,
+   "lpips_max": 0.718,
+   "sharp": 1.639,
+   "jitter": 0.797,
+   "frames": 81
+  },
+  "w14-base--w14-plug-spark-mountain-lake": {
+   "psnr": 8.9,
+   "lpips": 0.692,
+   "lpips_max": 0.714,
+   "sharp": 1.068,
+   "jitter": 1.381,
+   "frames": 81
+  }
+ }
+}

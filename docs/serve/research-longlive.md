@@ -1,6 +1,6 @@
 # LongLive 1.0 / 2.0 / Plug: method notes, weights, and a port plan
 
-Date: 2026-10-01. Status: research (Phase A). LongLive-1.3B inference is
+Date: 2026-10-01 (Plug results §12: 2026-10-02). Status: research (Phase A). LongLive-1.3B inference is
 implemented on branch `wip/longlive`. It is opt-in and has no GPU run yet. No
 weights are downloaded (§8 says why). Nothing in the default serve path
 changes.
@@ -336,8 +336,8 @@ in writing. That is an owner/legal decision; the port does not depend on it.
 | 2.0 NVFP4 W4A4 | `nvfp4.rs` (FourOverSix/LongLive MSE rule, dequant-beforehand), `nvfp4_gemm.rs` / `nvfp4_linear.rs` (LTX FFN on FP4 tensor cores, sm_120) | Wan linears on the FP4 GEMM; read `model_4o6.pt` codes or quantise BF16; activation quantisation |
 | 2.0 NVFP4 KV cache | bf16 KV | FP4 KV store + dequant (or FP4-aware attention) kernel |
 | 2.0 async decode | TAEHV decode inline per block | decode on a second stream (or the pacer thread), overlapping the next chunk |
-| **Plug** Wan LoRA merge 1.0 + 0.5 | Wan 5B, Wan2.1 14B ports; a merge helper (this branch, f32 host) | key maps for PEFT names (done) and lightx2v names (todo), multi-LoRA weights, 4-step schedules for non-causal Wan |
-| Plug H3 LoRAs | H3 port, FastH3 4-step, an H3 LoRA loader | separate use only; the four-forward runner contract; H3 licence |
+| **Plug** Wan LoRA merge 1.0 + 0.5 | Wan 5B, Wan2.1 14B ports; a merge helper (this branch, f32 host) | **done** (§12): PEFT and lightx2v key maps, multi-adapter merge, UniPC-4 (5B) and LightX2V step-distill Euler (14B) |
+| Plug H3 LoRAs | H3 port, FastH3 4-step, an H3 LoRA loader | **done** (§12): `.pt` reader, separate use, the four-forward grid with the fresh-noise step; H3 licence still applies |
 
 ---
 
@@ -737,3 +737,247 @@ licence stays an owner decision (§4.3: treat as non-commercial).
 setup mistakes: no `FASTVIDEO_TAE_DIR`, then gpucheck's default exact mode
 at 1.37 fps). Build pod ≈ 45 min shared. Downloads, conversion and
 verification on CPU pods ≈ $0.25.
+
+---
+
+## 12. LongLive-Plug: opt-in recipes and GPU check (2026-10-02)
+
+### 12.1 What each recipe runs, and the source for it
+
+Read at the §0 pins: the Plug README, the six cards with their
+`adapter_config.json` / `inference_config*` / `provenance.json` /
+`training_config*`, `LongLive-Plug/{inference.py, model/base.py,
+scripts/merge_lora.py}`, the H3 few-step card's `run_inference.py` and
+`source_snapshot/minimax_h3/{infer_student_4step.py,
+fresh_noise_scheduler_4step.py, cfg_guidance.py}`, and LightX2V's
+`WanStepDistillScheduler` (`ModelTC/LightX2V@8a97c75`).
+
+| recipe | adapters (merge weight; r / α) | sampler | source |
+|---|---|---|---|
+| `h3-plug-4step` | H3 few-step `generator_lora.pt` (1.0; 128 / 128, 312 modules: 50 blocks + 2 refiner blocks, attention and FFN) | `MiniMaxH3Scheduler.set_timesteps(5)`: 4 forwards, video shift 12, audio shift 3. Each step predicts `x0 = x + (1 - t) v`, then re-noises with **fresh** noise to the next point, `t' x0 + (1 - t') n`, video before audio. The last step returns `x0`. No CFG and no negative prompt | `infer_student_4step.py` (`num_inference_steps=NUM_SIGMA_ENDPOINTS=5`), `fresh_noise_scheduler_4step.py`, `provenance.json` (`nfe 4`, `cfg false`, 768 × 1344 × 124) |
+| `h3-plug-cfg` | H3 CFG `adapter_model.safetensors` (1.0; 128 / 128, 312 modules) | the base grid: 50 points, 49 positive forwards, shifts 12 / 3, Euler | `training_config.json` (50 native grid points, `student_conditioning: positive_only`, teacher CFG 3.0); `evaluation_summary.json` (trained scale 1.0, median implied teacher CFG **1.24** at that scale) |
+| `wan5b-plug-4step` | 5B few-step (1.0; 128 / 128) + 5B CFG (0.5; **64 / 64**), 300 modules each | `FlowUniPCMultistepScheduler`, 4 steps, shift 5, guidance 1.0 | README ("4-step, CFG-free"), `inference.py` / `model/base.py` (UniPC rollout), card `inference_config.yaml` |
+| `wan14b-plug-4step` | 14B few-step `generator_lora_lightx2v.safetensors` (1.0; bf16, bare original-Wan names, metadata r = α = 128) + 14B CFG (0.5; 128 / 128), 400 modules each | LightX2V step-distill: `[1000, 750, 500, 250]` mapped onto the shift-5 table, i.e. timesteps 1000 / 937.5 / 833.3 / 625, deterministic Euler `x' = x + (σ' − σ) v`, no CFG | card `inference_config.json` (`denoising_step_list`, `sample_shift 5`, `enable_cfg false`) |
+
+Two facts changed the plan from the brief:
+
+* **The released MiniMax-H3 base is already guidance-distilled.** The
+  official modular pipeline exposes no `guidance_scale` or
+  `negative_prompt`; the student runner refuses them; `dmd_core.py` fails
+  closed on any unconditional call; `cfg_guidance.py` says "the released
+  H3 base is already CFG-distilled". The CFG LoRA distils an *extra*
+  guidance of 3.0 against a text-only reference condition, and the release
+  does not publish that condition. So "base H3 with CFG" has no published
+  form to compare against. Our port does not run one, and the "time
+  saved" from the CFG LoRA is zero against the base as it ships (both use
+  49 positive forwards). Against a hypothetical extra-CFG-3 base it would
+  be 49 of 98 forwards. `h3-plug-cfg` is therefore compared with the base
+  at the same 49 forwards.
+* **The H3 four-forward grid is the one Sol-H3 already uses**
+  (`H3InferenceContract::sol_h3`). Only the transition differs. Our
+  scheduler had only the deterministic Euler step. `h3-plug-4step` adds
+  the student's fresh-noise step (`H3InferenceContract::fresh_noise`). The
+  noise comes from our own seeded generator, so the sample for a given
+  seed differs from upstream's torch draws, as for every other H3 recipe.
+
+Licences: the H3 adapters follow the MiniMax H3 Community Licence
+(territory clause, §4.3). The four Wan adapters are Apache-2.0.
+
+### 12.2 Code (`wip/plug-lora`)
+
+* `fastvideo_loader::pth`: a torch `.pt` reader without Python. The LPIPS
+  port's pickle interpreter moved here and was generalized: nested dicts
+  (`student_lora` beside a config dict), `_rebuild_from_type_v2` (the H3
+  file wraps every tensor in it), bf16 / f16 / f64 storages, and more
+  opcodes. `lpips.rs` re-exports it.
+* `fastvideo_models::plug`: the recipe catalog; LoRA key parsing (PEFT
+  `base_model.model.`, `.default`, lightx2v bare names, `diffusion_model.`);
+  `AdapterConfig` (alpha / r from `adapter_config.json`, else from
+  metadata, else α = r; rank / alpha patterns, DoRA and rsLoRA are
+  refused); `plan_adapter`, which counts matched, skipped and unknown keys
+  per adapter; `delta_scale`; `merge_pair`.
+* H3: the contracts `h3-plug-4step` and `h3-plug-cfg`;
+  `H3JointSchedule.fresh_noise`; `pipeline::fresh_noise_step`;
+  `H3LoraFuse::open_plug`, which reads the `.pt` or safetensors adapter,
+  logs the plan, refuses any skip, and then reuses the FastH3 fuse path
+  (host or device merge, refiner included).
+* Wan: `wan::plug::load_merged_transformer`. It loads the Diffusers
+  transformer, renames each adapter module with
+  `longlive::diffusers_key`, adds every adapter's delta in f32, and stores
+  the result in the base dtype. `WanPipeline::set_step_distill` adds the
+  LightX2V Euler sampler.
+* `fv-gpucheck wan gen --plug <recipe> [--plug-root]`; `h3 gen
+  --h3-recipe h3-plug-4step | h3-plug-cfg`.
+
+Host tests (build pod, all pass): loader 25, models 457, cudarc 513.
+The new tests cover key mapping for every released prefix, the
+matched / skipped / unknown counts (a missing base block, a module family
+without a Diffusers name, a shape mismatch, an unpaired half, a non-LoRA
+key, a declared-rank mismatch), the two-adapter merge math against a
+hand-computed W + 1.0·(α/r)BA + 0.5·(α/r)BA (bf16 and f32 bases,
+untouched tensors byte-identical), adapter_config / metadata alpha, the
+`.pt` reader (root dict, nested dict beside a config, the H3 release's
+`_rebuild_from_type_v2` layout, half floats), the H3 contracts, the
+fresh-noise step, and the LightX2V sigmas (1 / 0.9375 / 0.8333 / 0.625,
+ending on `x0`). The real `generator_lora.pt` pickle (its first 148 KB,
+fetched by HTTP range) parses: 624 tensors under `student_lora`, 312 of
+them `lora_A`.
+
+### 12.3 GPU check
+
+**Setup.** Two RTX PRO 6000 Blackwell Server Edition pods in EUR-IS-1, run
+in parallel ($2.09/hr each, driver 595.91.07, 1.5 TB RAM): `614nezj1d5lnee`
+(H3 768p 4-step, Wan 5B) and `ofxzv506u7rq2j` (Wan 14B, H3 49-forward).
+Both mounted the EU volume `jg48s6o1w0` and wrote nothing to it. Each had
+a 5400 s backstop and a 20 min idle guard. `fv-gpucheck` was built on the
+build pod from `4ebe48d` and run on the runtime image `sha-4eeb801`
+(`@sha256:dccdf956…`) with `--mode fast`, through
+`scripts/serve/e2e/pod.sh` (sidecar exec). Driver, summaries, per-clip
+statistics and sheets: `artifacts/perf/plug-gpucheck/`. Timings are
+medians over the prompts in one warm process (one untimed generation
+first) unless noted. "denoise" is the sampler alone; "total" adds text
+(cached), decode and write. Quality uses `compare-clips` with LPIPS(alex)
+and the policy's sharpness / temporal-jitter ratios (candidate over
+baseline). `clipstats` adds reference-free numbers: mean luma Laplacian
+variance ("sharpness") and mean |frame diff| ("motion"). There is no
+vision judge, so the visual notes come from the contact sheets.
+
+Prompts: H3 used three of the five gate prompts (`h3-demo` seed 0,
+`ltx-frogyoga` and `spark-mountain-lake` seed 42). Wan used `beach_dog`
+and `city_rain` (seed 1024) and `spark-mountain-lake` (seed 42). The
+49- and 50-step references ran on two of these prompts, and the 768p H3
+base on one, without the warm pass.
+
+**Loads: every adapter matched completely.**
+
+| recipe | adapter | modules matched / skipped / unknown keys | merge |
+|---|---|---|---|
+| `h3-plug-4step` | `generator_lora.pt` (f32, r = α = 128) | **312 / 0 / 0** | FastH3 fuse path (no extra time visible in the 136–146 s load) |
+| `h3-plug-cfg` | `adapter_model.safetensors` (f32, 128 / 128) | **312 / 0 / 0** | as above |
+| `wan5b-plug-4step` | few-step (128 / 128) · CFG (64 / 64) at 0.5 | **300 / 0 / 0** each; 300 base weights changed | 86.6 s host |
+| `wan14b-plug-4step` | lightx2v few-step (bf16, 128 / 128) · CFG (128 / 128) at 0.5 | **400 / 0 / 0** each; 400 base weights changed | 175.1 s host |
+
+**H3, 768 × 1344, 124 frames (5 s), 3 prompts.** Our runs carry no
+technique profile (no MXFP8), so these times are not the Phase 3 table's.
+
+| arm | forwards | denoise s | total s | load s | peak GiB |
+|---|---|---|---|---|---|
+| **`h3-plug-4step`** (dense) | 4 | **32.65** | **39.7** | 146 | 57.7 |
+| same, bf16 control (dense kernel cuDNN → fwd2, `FASTVIDEO_CUDNN_SDPA_GRAPH=composite`) | 4 | 33.41 | 40.4 | 136 | 57.7 |
+| FastH3 4-step VSA (`4step-vsa`, the h3-turbo recipe) | 4 | 19.46 | 26.5 | 134 | 67.3 |
+| base H3 (`base`, dense; `spark-mountain-lake` only, no warm pass) | 49 | 401.63 | 409.0 | 113 | 57.7 |
+
+| pair (baseline → candidate) | LPIPS | PSNR dB | sharpness ratio | jitter ratio |
+|---|---|---|---|---|
+| bf16 control: plug-4step → plug-4step (kernel swap only) | 0.34–0.42 | 14.6–19.9 | 1.01–1.08 | 0.97–1.14 |
+| FastH3 4-step VSA → plug-4step | 0.61–0.73 | 9.1–14.3 | 0.79–1.36 | 0.44–0.81 |
+| base (49 forwards) → plug-4step (`spark-mountain-lake`) | 0.537 | 15.4 | **1.04** | **0.99** |
+| base (49 forwards) → FastH3 4-step VSA (`spark-mountain-lake`) | 0.597 | 13.1 | 1.23 | 1.89 |
+
+Reference-free (median over prompts): plug-4step has sharpness 129 and
+motion 6.5; FastH3 4-step VSA has 218 and 13.8. The H3 noise floor is as
+high as Phase 3 found. A kernel swap alone moves a plug-4step clip to
+LPIPS 0.34–0.42 and moves sharpness up to 8 %, and the fresh-noise
+sampler, like FastH3's, ends on equally valid but different samples.
+The sheet (`sheets/h3-768p-f062.jpg`) shows clean frames in every arm.
+On `ltx-frogyoga`, plug-4step keeps the prompt's frogs doing yoga, while
+FastH3 VSA draws a woman doing yoga with frogs around her. Plug-4step is
+softer and calmer than FastH3 VSA on two of the three prompts. On the
+prompt with a 768p base reference, plug-4step stays inside the policy's
+sharpness (0.95–1.08) and jitter (0.85–1.20) ranges against the base. FastH3
+VSA does not: it is 23 % sharper and moves 1.9× as much as the base
+(`sheets/h3-768p-base-f062.jpg`). That is one prompt, at the H3 noise floor
+above. Plug-4step's pod-2 rerun of that prompt reproduced its pod-1 clip
+statistics exactly, so the arms are deterministic across processes. It costs
+the same as Sol-H3 4-step dense (the same 4 dense forwards plus a merged
+LoRA) and **1.68× FastH3 VSA's denoise**, because its attention is dense.
+
+**Wan 2.2 TI2V-5B, 121 frames at 24 fps (5 s), full VAE decode in every arm, 3 prompts.**
+
+| arm | 720p (1280 × 704) denoise / total s | 480p (832 × 480) denoise / total s | load s (720p) |
+|---|---|---|---|
+| **`wan5b-plug-4step`** (UniPC 4, guidance 1) | **5.97 / 19.7** | **2.08 / 7.7** | 142 (merge 87) |
+| same, bf16 control | 6.10 / 19.8 | — | 150 |
+| wan-turbo (FastWan2.2-5B, DMD 3 steps) | 4.47 / 18.2 | 1.56 / 7.2 | 91 |
+| wan-max (UniPC 50, CFG 5, 100 forwards) | 150.24 / 164.0 | 49.05 / 54.7 | 137 |
+
+| pair | LPIPS | PSNR dB | sharpness ratio | jitter ratio |
+|---|---|---|---|---|
+| bf16 control: plug → plug (720p) | 0.023–0.062 | 25.2–31.9 | 0.997–1.000 | 1.00 |
+| wan-max → plug, 720p | 0.67–0.80 | 6.8–10.5 | 0.45–0.70 | 0.63–6.15 |
+| wan-max → wan-turbo, 720p | 0.70–0.76 | 7.8–11.1 | 0.46–1.08 | 0.72–1.98 |
+| wan-max → plug, 480p | 0.68–0.71 | 7.2–11.7 | 0.69–0.75 | 0.36–5.76 |
+| wan-max → wan-turbo, 480p | 0.63–0.77 | 6.9–13.0 | 0.55–0.89 | 0.57–1.85 |
+
+Reference-free medians at 720p (sharpness / motion): plug 331 / 13.9,
+turbo 623 / 5.9, max 1183 / 4.8. At 480p: plug 424 / 9.2, turbo 332 / 6.0,
+max 1150 / 10.4. Unlike H3, Wan 5B is not chaotic: the bf16 control stays
+at LPIPS ≤ 0.06. So the 0.7 LPIPS between the distilled arms and wan-max
+measures genuinely different samples, as expected from different samplers.
+Both fast arms (plug and turbo) "fail" the policy's 0.95 sharpness floor
+against wan-max on most prompts. The 50-step CFG-5 baseline has far more
+high-frequency contrast. Neither fast arm is sharper than the other
+across prompts: plug/turbo sharpness is 0.53, 1.01 and 1.27 at 720p and
+1.28, 0.66 and 1.54 at 480p. The plug clips move more (the eagle and the
+camera on `spark-mountain-lake`), which is where the 6× jitter ratio
+against an almost static wan-max clip comes from. In the sheets
+(`sheets/w5-720p-f060.jpg`, `w5-480p-f060.jpg`) every arm is coherent and
+on-prompt.
+
+**Wan 2.1 T2V-14B, 832 × 480, 81 frames at 16 fps (5 s), full VAE.**
+
+| arm | denoise s | total s | load s | peak GiB |
+|---|---|---|---|---|
+| **`wan14b-plug-4step`** (step-distill Euler, 4 forwards; 3 prompts) | **19.00** (4.75 s / step) | **22.0** | 313 (merge 175) | 50.9 |
+| base 14B (UniPC 50, CFG 5, 100 forwards; 2 prompts, no warm pass) | 477.24 (9.55 s / step) | 481.3 | 170 | 51.6 |
+
+base → plug: LPIPS 0.69–0.70, PSNR 8.6–8.9 dB, sharpness ratio 1.07 and
+1.64, jitter 0.80 and 1.38. That is **25.1× less denoise and 21.9× less
+end to end**, and the plug clips are sharper than the base's on both
+prompts. The base arm also serves as a smoke test of our 14B port on
+real weights. It loads and samples coherent clips; no parity reference was
+run.
+
+**H3, 49 forwards, 480 × 832, 124 frames, 2 prompts (`h3-demo`, `spark-mountain-lake`), no warm pass.**
+
+| arm | denoise s | total s | load s |
+|---|---|---|---|
+| base H3 (`base`, dense) | 98.87 | 102.5 | 116 |
+| **`h3-plug-cfg`** | **98.50** | **101.8** | 126 |
+| base, bf16 control (cuDNN → fwd2) | 100.59 | 103.9 | 119 |
+
+| pair | LPIPS | PSNR dB | sharpness ratio | jitter ratio |
+|---|---|---|---|---|
+| bf16 control: base → base | 0.26–0.31 | 17.8–18.3 | 1.00–1.01 | 0.95–1.03 |
+| base → `h3-plug-cfg` | 0.34–0.42 | 14.3–17.6 | 1.00–1.12 | 0.97–1.03 |
+
+The CFG LoRA moves the clip a little beyond the bf16 floor. Frames stay
+clean (`sheets/h3-480p-49fwd-f062.jpg`); `spark-mountain-lake` gets 12 %
+sharper. It saves no time against our base, which already runs one
+positive pass (above).
+
+### 12.4 Verdicts and catalog proposal
+
+| recipe | modules | speed | quality | verdict |
+|---|---|---|---|---|
+| `h3-plug-4step` | 312 / 0 skipped | 32.7 s denoise at 768p: 12.2× faster than the 49-forward base (401.6 s), 1.68× slower than FastH3 4-step VSA (19.5 s), the same as Sol-H3 4-step dense | inside the sharpness / jitter ranges against the base on the one prompt with a base reference, where FastH3 VSA is not; follows `ltx-frogyoga` where FastH3 VSA does not; otherwise within H3's chaos floor | **works; keep opt-in.** Candidate for **h3-max** (today Sol-H3 4-step, the same cost), not for h3-turbo |
+| `h3-plug-cfg` | 312 / 0 skipped | 98.5 s at 480p, the same 49 forwards as base | small move past the bf16 floor (LPIPS 0.34–0.42 against 0.26–0.31) | **works; no serving value.** The base is already guidance-distilled, so there is nothing to save. Keep opt-in for use with downstream H3 variants |
+| `wan5b-plug-4step` | 300 + 300 / 0 skipped | 720p: 6.0 s denoise, 19.7 s total, 25× / 8.3× faster than wan-max; 33 % more denoise than FastWan turbo (4 against 3 steps, total +8 %) | coherent, on-prompt; softer than wan-max and more motion; mixed against turbo | **works; keep opt-in.** It is not better than wan-turbo. Its serving argument is that it needs no second checkpoint: the base weights plus about 1.9 GB of adapters give the fast tier (an unmerged, switchable LoRA would let one resident 5B serve wan-max and a fast tier) |
+| `wan14b-plug-4step` | 400 + 400 / 0 skipped | 19.0 s denoise, 22.0 s total at 480p: 25× / 22× faster than base 14B (477 s) | coherent; sharper than base on both prompts | **works; keep opt-in.** We have no 14B tier; the **proposal is a `wan14b-turbo` tier** (or a 14B quality option of wan-turbo at 480p) on this recipe, which brings 14B to the cost of our 5B turbo at 720p |
+
+Catalog proposals (for the owner to decide; nothing was added):
+**`wan14b-plug-4step` as a new 14B fast tier**, and **`h3-plug-4step` as an
+h3-max alternative to Sol-H3 4-step** (the same cost, closer to the base on the
+one base-referenced prompt, but one prompt is not enough). A five-prompt
+768p base reference would settle it, at about 7 min per prompt. The H3
+adapters carry the MiniMax H3 licence's territory clause (§4.3).
+
+### 12.5 Spend
+
+GPU: `614nezj1d5lnee` 3747 s and `ofxzv506u7rq2j` 3585 s at $2.09/hr, ≈ **$4.26**.
+Both were deleted (GET 404) after their outputs were pulled. Build pod: a
+share of the shared `fv-build` pod (≈ 40 min of jobs at $0.96/hr). No
+weights were written; the adapters were already on both volumes (§8).
+Balance $64.08 before the first pod, $55.06 after the second (other
+agents ran in parallel).
+

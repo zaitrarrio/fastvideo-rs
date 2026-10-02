@@ -1,0 +1,2 @@
+[fastvideo] plug lora h3-plug-cfg minimax-h3-cfg/adapter_model.safetensors: 312 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+[fastvideo] h3 h3-plug-cfg: fuse 312 pairs rank=128 alpha=128 scale=1 (/workspace/weights/longlive-plug/minimax-h3-cfg/adapter_model.safetensors; licence: MiniMax H3 Community Licence (as MiniMaxAI/MiniMax-H3))

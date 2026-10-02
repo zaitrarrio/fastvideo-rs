@@ -561,6 +561,44 @@ Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
 for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
 
+## LongLive-Plug recipes (opt-in, not in the catalog)
+
+NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base
+weights at load. They are recipes, not techniques: each one fixes a base
+checkpoint, its adapters with their merge weights, and the sampler that the
+adapters were distilled for. `fastvideo_models::plug::PlugRecipe` is the
+catalog. None of them is in the serve catalog, and nothing selects them by
+default.
+
+| recipe | base | adapters (merge weight, rank / alpha) | sampler | licence |
+|---|---|---|---|---|
+| `h3-plug-4step` | `h3-base` (MiniMax-H3) | `longlive-plug/minimax-h3-few-step/generator_lora.pt` (1.0, 128 / 128) | `set_timesteps(5)`: 4 forwards, shifts 12 / 3, dense, predict-x0 then *fresh* re-noise, no CFG | MiniMax H3 Community |
+| `h3-plug-cfg` | `h3-base` | `longlive-plug/minimax-h3-cfg/adapter_model.safetensors` (1.0, 128 / 128) | base grid: 50 points, 49 forwards, shifts 12 / 3, Euler, positive pass only | MiniMax H3 Community |
+| `wan5b-plug-4step` | `wan22-ti2v-5b` | `wan22-ti2v-5b-few-step` (1.0, 128 / 128) + `wan22-ti2v-5b-cfg` (0.5, 64 / 64) | UniPC, 4 steps, shift 5, guidance 1.0 | Apache-2.0 |
+| `wan14b-plug-4step` | `wan21-t2v-14b` | `wan21-t2v-14b-few-step` lightx2v export (1.0, 128 / 128) + `wan21-t2v-14b-cfg` (0.5, 128 / 128) | LightX2V step-distill Euler: `[1000, 750, 500, 250]` warped with shift 5 (1000 / 937.5 / 833.3 / 625), guidance 1.0 | Apache-2.0 |
+
+The merge rule is `W + Σ weight · alpha / rank · B @ A`, accumulated in f32
+and stored in the base dtype. The H3 adapters are used one at a time, as
+both H3 cards ask. The loader reads PEFT safetensors (it strips the
+`base_model.model.` prefix), the lightx2v export (bare original-Wan names),
+and the `.pt` release (`fastvideo_loader::pth`, tensors under
+`student_lora`). Alpha comes from `adapter_config.json`, else from the file
+metadata, else alpha equals the rank. Every load logs, per adapter, how many
+modules matched and how many were skipped or unknown. Any skipped module or
+unknown key fails the load.
+
+How to run them:
+
+```bash
+fv-gpucheck --mode fast h3 gen --weights $W/h3-base --h3-recipe h3-plug-4step --dense ...
+fv-gpucheck --mode fast wan gen --weights $W/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --plug wan5b-plug-4step ...
+fv-gpucheck --mode fast wan gen --weights $W/wan21-t2v-14b --preset wan_t2v_14b --plug wan14b-plug-4step ...
+```
+
+The adapters resolve under `$FASTVIDEO_PLUG_ROOT`, else under
+`<weights>/../longlive-plug/`. Results, verdicts and the catalog proposal:
+docs/serve/research-longlive.md §12.
+
 ## Adding a technique
 
 1. A parameter struct in `techniques/methods.rs` implementing `Technique`

@@ -1,0 +1,284 @@
+{
+ "cells": {
+  "h3-plug4-ctl": {
+   "denoise_s": 33.407198145,
+   "total_s": 40.407045933,
+   "load_s": 136.195705447,
+   "peak_mib": 59110.0,
+   "per_prompt": {
+    "h3-demo": 33.79,
+    "ltx-frogyoga": 33.41,
+    "spark-mountain-lake": 33.25
+   }
+  },
+  "h3-plug4": {
+   "denoise_s": 32.650834335,
+   "total_s": 39.676440897,
+   "load_s": 145.890144397,
+   "peak_mib": 59046.0,
+   "per_prompt": {
+    "h3-demo": 32.8,
+    "ltx-frogyoga": 32.65,
+    "spark-mountain-lake": 32.6
+   }
+  },
+  "h3-turbo": {
+   "denoise_s": 19.457017601,
+   "total_s": 26.54561888,
+   "load_s": 134.148271156,
+   "peak_mib": 68870.0,
+   "per_prompt": {
+    "h3-demo": 20.06,
+    "ltx-frogyoga": 19.46,
+    "spark-mountain-lake": 19.34
+   }
+  },
+  "w5-max480": {
+   "denoise_s": 49.045633521,
+   "total_s": 54.70679428099999,
+   "load_s": 106.440993565,
+   "peak_mib": 38867.0,
+   "per_prompt": {
+    "beach_dog": 49.12,
+    "city_rain": 49.05,
+    "spark-mountain-lake": 49.04
+   }
+  },
+  "w5-max720": {
+   "denoise_s": 150.242121075,
+   "total_s": 163.98664243599998,
+   "load_s": 137.019637656,
+   "peak_mib": 61252.0,
+   "per_prompt": {
+    "beach_dog": 150.29,
+    "city_rain": 150.24,
+    "spark-mountain-lake": 150.07
+   }
+  },
+  "w5-plug480": {
+   "denoise_s": 2.081629295,
+   "total_s": 7.696339408,
+   "load_s": 113.310440413,
+   "peak_mib": 37628.0,
+   "per_prompt": {
+    "beach_dog": 2.08,
+    "city_rain": 2.08,
+    "spark-mountain-lake": 2.08
+   }
+  },
+  "w5-plug720-ctl": {
+   "denoise_s": 6.095152676,
+   "total_s": 19.817338463000002,
+   "load_s": 149.63221924,
+   "peak_mib": 61252.0,
+   "per_prompt": {
+    "beach_dog": 6.07,
+    "city_rain": 6.1,
+    "spark-mountain-lake": 6.11
+   }
+  },
+  "w5-plug720": {
+   "denoise_s": 5.970469696,
+   "total_s": 19.706458777,
+   "load_s": 141.975230406,
+   "peak_mib": 57540.0,
+   "per_prompt": {
+    "beach_dog": 5.94,
+    "city_rain": 5.97,
+    "spark-mountain-lake": 5.98
+   }
+  },
+  "w5-turbo480": {
+   "denoise_s": 1.559862727,
+   "total_s": 7.183542633,
+   "load_s": 85.518421046,
+   "peak_mib": 38876.0,
+   "per_prompt": {
+    "beach_dog": 1.56,
+    "city_rain": 1.56,
+    "spark-mountain-lake": 1.56
+   }
+  },
+  "w5-turbo720": {
+   "denoise_s": 4.471248483,
+   "total_s": 18.199477082999998,
+   "load_s": 91.48614439,
+   "peak_mib": 60132.0,
+   "per_prompt": {
+    "beach_dog": 4.46,
+    "city_rain": 4.47,
+    "spark-mountain-lake": 4.47
+   }
+  }
+ },
+ "compare": {
+  "h3-plug4--h3-plug4-ctl-h3-demo": {
+   "psnr": 14.56,
+   "lpips": 0.417,
+   "lpips_max": 0.483,
+   "sharp": 1.007,
+   "jitter": 0.972,
+   "frames": 124
+  },
+  "h3-plug4--h3-plug4-ctl-ltx-frogyoga": {
+   "psnr": 15.1,
+   "lpips": 0.407,
+   "lpips_max": 0.418,
+   "sharp": 1.052,
+   "jitter": 1.105,
+   "frames": 124
+  },
+  "h3-plug4--h3-plug4-ctl-spark-mountain-lake": {
+   "psnr": 19.88,
+   "lpips": 0.342,
+   "lpips_max": 0.371,
+   "sharp": 1.076,
+   "jitter": 1.138,
+   "frames": 124
+  },
+  "h3-turbo--h3-plug4-h3-demo": {
+   "psnr": 10.36,
+   "lpips": 0.676,
+   "lpips_max": 0.766,
+   "sharp": 1.359,
+   "jitter": 0.805,
+   "frames": 124
+  },
+  "h3-turbo--h3-plug4-ltx-frogyoga": {
+   "psnr": 9.09,
+   "lpips": 0.732,
+   "lpips_max": 0.744,
+   "sharp": 0.791,
+   "jitter": 0.442,
+   "frames": 124
+  },
+  "h3-turbo--h3-plug4-spark-mountain-lake": {
+   "psnr": 14.31,
+   "lpips": 0.612,
+   "lpips_max": 0.645,
+   "sharp": 0.877,
+   "jitter": 0.537,
+   "frames": 124
+  },
+  "w5-max480--w5-plug480-beach_dog": {
+   "psnr": 7.23,
+   "lpips": 0.696,
+   "lpips_max": 0.721,
+   "sharp": 0.688,
+   "jitter": 0.364,
+   "frames": 121
+  },
+  "w5-max480--w5-plug480-city_rain": {
+   "psnr": 10.26,
+   "lpips": 0.706,
+   "lpips_max": 0.78,
+   "sharp": 0.754,
+   "jitter": 0.936,
+   "frames": 121
+  },
+  "w5-max480--w5-plug480-spark-mountain-lake": {
+   "psnr": 11.69,
+   "lpips": 0.679,
+   "lpips_max": 0.69,
+   "sharp": 0.703,
+   "jitter": 5.762,
+   "frames": 121
+  },
+  "w5-max480--w5-turbo480-beach_dog": {
+   "psnr": 6.85,
+   "lpips": 0.755,
+   "lpips_max": 0.781,
+   "sharp": 0.712,
+   "jitter": 0.567,
+   "frames": 121
+  },
+  "w5-max480--w5-turbo480-city_rain": {
+   "psnr": 9.16,
+   "lpips": 0.766,
+   "lpips_max": 0.812,
+   "sharp": 0.894,
+   "jitter": 0.714,
+   "frames": 121
+  },
+  "w5-max480--w5-turbo480-spark-mountain-lake": {
+   "psnr": 12.98,
+   "lpips": 0.63,
+   "lpips_max": 0.645,
+   "sharp": 0.554,
+   "jitter": 1.853,
+   "frames": 121
+  },
+  "w5-max720--w5-plug720-beach_dog": {
+   "psnr": 6.81,
+   "lpips": 0.697,
+   "lpips_max": 0.725,
+   "sharp": 0.701,
+   "jitter": 0.627,
+   "frames": 121
+  },
+  "w5-max720--w5-plug720-city_rain": {
+   "psnr": 10.53,
+   "lpips": 0.674,
+   "lpips_max": 0.7,
+   "sharp": 0.685,
+   "jitter": 2.939,
+   "frames": 121
+  },
+  "w5-max720--w5-plug720-spark-mountain-lake": {
+   "psnr": 9.14,
+   "lpips": 0.797,
+   "lpips_max": 0.844,
+   "sharp": 0.452,
+   "jitter": 6.148,
+   "frames": 121
+  },
+  "w5-max720--w5-turbo720-beach_dog": {
+   "psnr": 7.81,
+   "lpips": 0.76,
+   "lpips_max": 0.798,
+   "sharp": 1.085,
+   "jitter": 0.724,
+   "frames": 121
+  },
+  "w5-max720--w5-turbo720-city_rain": {
+   "psnr": 9.68,
+   "lpips": 0.702,
+   "lpips_max": 0.714,
+   "sharp": 0.806,
+   "jitter": 1.339,
+   "frames": 121
+  },
+  "w5-max720--w5-turbo720-spark-mountain-lake": {
+   "psnr": 11.1,
+   "lpips": 0.755,
+   "lpips_max": 0.773,
+   "sharp": 0.456,
+   "jitter": 1.979,
+   "frames": 121
+  },
+  "w5-plug720--w5-plug720-ctl-beach_dog": {
+   "psnr": 29.27,
+   "lpips": 0.03,
+   "lpips_max": 0.042,
+   "sharp": 1.0,
+   "jitter": 1.0,
+   "frames": 121
+  },
+  "w5-plug720--w5-plug720-ctl-city_rain": {
+   "psnr": 25.21,
+   "lpips": 0.062,
+   "lpips_max": 0.077,
+   "sharp": 0.997,
+   "jitter": 1.003,
+   "frames": 121
+  },
+  "w5-plug720--w5-plug720-ctl-spark-mountain-lake": {
+   "psnr": 31.87,
+   "lpips": 0.023,
+   "lpips_max": 0.035,
+   "sharp": 0.998,
+   "jitter": 1.0,
+   "frames": 121
+  }
+ }
+}
