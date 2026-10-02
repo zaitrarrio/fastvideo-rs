@@ -29,6 +29,8 @@
 #   wan         runpod-serverless   configs/serve/runpod-wan.toml    (fastwan21-1.3b)
 #   sfwan-live  pod                 configs/serve/runpod-sfwan.toml  (sfwan21-1.3b; WebRTC peer
 #                                   sessions and WHIP streams need pods)
+#   wan14b      pod                 configs/serve/runpod-wan14b.toml (wan14b-plug-4step, the
+#                                   `wan14b-turbo` tier; empty until a worker registers)
 #
 # Each pool's `[[pools.models]]` repeat the worker's `[[models]]` (id, family,
 # recipe): the static caps advertised while the pool is scaled to zero.
@@ -81,7 +83,7 @@ ltx = true
 reactor = true
 native = true
 # Every pool's fal apps (the workers mount the same ids).
-fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "fastvideo/ltx-turbo", "fastvideo/fastwan21-1.3b"]
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "fastvideo/ltx-turbo", "fastvideo/fastwan21-1.3b", "fastvideo/wan14b-turbo"]
 
 [limits]
 queue_max = 256
@@ -150,6 +152,21 @@ retries = 0
 id = "sfwan21-1.3b"
 family = "wan"
 recipe = "sfwan21-1.3b"
+
+[[pools]]
+id = "wan14b"
+kind = "pod"
+# The Wan 2.1 T2V-14B fast tier (LongLive-Plug 4-step): FV_POOL_WAN14B_URLS,
+# plus pods that register with gateway.pool = "wan14b" (runpod-wan14b.toml).
+urls = []
+max_queued = 16
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "wan14b-plug-4step"
+family = "wan"
+recipe = "wan14b-turbo"
 
 # ---- BEGIN [autoscale] (crates/fastvideo-autoscale; docs/serve/gateway.md §8) ----
 # Off here. The full example (per-pool SLOs, budgets, prices, schedules, the
