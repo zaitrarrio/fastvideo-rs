@@ -1038,3 +1038,101 @@ time per arm (median over its clips), and prompt adherence from frame
 sheets (for example, frogs on ltx-frogyoga). Analysis:
 `artifacts/perf/plug-five/driver/plugcmp.py`. Defaults are not changed; the
 owner decides.
+
+### 12.7 Five-prompt check against base H3: results
+
+Two RTX PRO 6000 Server Edition pods, one after the other (EUR-IS-1,
+$2.09/hr, driver 595.91.07, EU volume `jg48s6o1w0`, nothing written to it),
+image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-ee9de1a` (main HEAD, pinned
+by digest). Pod `p63ptu6lo1wbgb` ran the control pair after the LTX gate
+(docs/perf/sage-attention.md section 9); pod `ujao4w8j4b4e8e` ran base, plug,
+max and turbo and the 45 base pairs. Rows, compare JSONs, frame hashes, the
+analysis output and the sheet: `artifacts/perf/plug-five/`.
+
+**Determinism.** No arm logged an `sdpa auto` timing or an `attn_sage` line.
+The two `plug` runs, on different pods, are byte-identical on all 16 clips
+(warm-up included; `plug/frames-pod{1,2}.sha`), so the control pair measures
+the one kernel switch.
+
+**Control (`plug` vs `plugfw2`, 15 clips):** LPIPS 0.32-0.51, PSNR
+13.5-21.4 dB, Cmax |ln sharpness| 0.101 and |ln jitter| 0.168, so the rule 2
+bound is sharpness 0.859-1.164 and jitter 0.777-1.287.
+
+Per prompt, median over 3 seeds against the base clip (LPIPS at the same
+seed in brackets):
+
+| prompt | arm | LPIPS | PSNR dB | sharpness ratio | jitter ratio | rule 2 |
+|---|---|---|---|---|---|---|
+| h3-demo | **plug** | **0.663** (0.612) | **10.52** | 1.216 | 1.326 | out (sharpness, jitter) |
+| | max | 0.722 (0.676) | 9.90 | 1.477 | 2.529 | out |
+| | turbo | 0.693 (0.693) | 9.72 | 0.894 | 2.140 | out (jitter) |
+| ltx-multishot | **plug** | **0.719** (0.680) | **11.86** | 0.989 | 1.711 | out (jitter) |
+| | max | 0.735 (0.678) | 11.30 | 1.483 | 2.514 | out |
+| | turbo | 0.722 (0.722) | 9.91 | 1.499 | 2.381 | out |
+| ltx-newsbroadcast | **plug** | **0.693** (0.624) | **11.01** | 1.026 | 1.188 | **in** |
+| | max | 0.775 (0.761) | 9.40 | 1.914 | 2.089 | out |
+| | turbo | 0.747 (0.752) | 9.44 | 1.477 | 2.130 | out |
+| ltx-frogyoga | **plug** | **0.695** (0.660) | 10.15 | 1.032 | 1.325 | out (jitter) |
+| | max | 0.710 (0.693) | **10.28** | 1.411 | 2.584 | out |
+| | turbo | 0.729 (0.729) | 9.14 | 1.296 | 3.621 | out |
+| spark-mountain-lake | **plug** | **0.570** (0.555) | **15.18** | 1.082 | 1.386 | out (jitter) |
+| | max | 0.666 (0.607) | 13.13 | 1.539 | 2.301 | out |
+| | turbo | 0.651 (0.579) | 12.79 | 1.632 | 2.092 | out |
+
+| arm | forwards | denoise s (median) | total s (median) | load s | peak GiB (nvidia-smi) |
+|---|---|---|---|---|---|
+| base | 49 | 409.6 | 417.2 | 147 | 57.8 |
+| **plug** (`h3-plug-4step`) | 4 | **33.27** | **40.59** | 148 | 58.3 |
+| max (`h3-max`, Sol-H3 engine ladder) | 4 | 21.90 | 29.04 | 149 | 58.8 |
+| turbo (`h3-turbo`, FastH3 VSA) | 4 | 19.89 | 27.32 | 164 | 68.4 |
+| plugfw2 (control, other pod) | 4 | 34.24 | 41.42 | | 58.2 |
+
+* **Rule 1: pass, 5 of 5.** plug has the lowest median LPIPS against base on
+  every prompt, and per clip it is closer than max on 13 of 15 (PSNR higher on
+  13 of 15) and closer than turbo on 12 of 15.
+* **Rule 2: fail.** plug's median sharpness and jitter are inside the control
+  band only on ltx-newsbroadcast. Its jitter ratio against base is 1.19-1.71
+  (sharpness 0.99-1.22): plug moves more than the 49-forward base. max and
+  turbo break the band on every prompt and by far more: sharpness 1.41-1.91
+  (max) and jitter 2.09-2.58 (max), 2.09-3.62 (turbo). Per clip, plug's
+  |ln sharpness| is smaller than max's on 15 of 15 and its |ln jitter| on 14
+  of 15.
+* **Look (sheet `h3-768p-f062-base-plug-max-turbo.jpg`, columns base, plug,
+  max, turbo; rows the five prompts at their own seed, t = 2.6 s).** plug keeps
+  base's tone and contrast; max and turbo are visibly more saturated and
+  contrasty (the 1.4-1.9 sharpness ratios). On ltx-newsbroadcast base and plug
+  are both mid-pan across the field at that moment (the prompt's "camera pans
+  right"), max and turbo still hold the reporter close-up. On ltx-frogyoga plug
+  is the only arm with a **frog** instructor ("the senior frog instructor sits
+  cross-legged at the center"); base draws an old man among frogs, max and
+  turbo an elderly woman among frogs. The other three prompts are on-prompt
+  in all four arms.
+* **Cost.** plug is 33.3 s denoise / 40.6 s total against h3-max's 21.9 /
+  29.0 s: **+11.4 s (+52 %) denoise, +40 % per clip**, because it runs all 200
+  attention calls dense and without MXFP8 (h3-max routes 144 of 200 through
+  Sol and uses the MXFP8 linears). It is 12.3x faster than base.
+
+**Verdict (rule as written): FAIL.** Rule 1 passes 5/5, rule 2 fails on 4 of
+5 prompts (plug moves more than base, beyond the rounding-level band).
+
+**Proposal (owner decides; no default changed).** The rule-2 bound is
+rounding noise, and none of the three 4-step arms gets inside it against a
+49-forward base; plug is the closest of the three on every prompt and on
+almost every clip, by LPIPS, PSNR, sharpness and jitter, and it is the
+only arm that follows the frog-yoga prompt. So the choice is cost, not
+quality: (a) keep Sol-H3 (engine ladder) as `h3-max` and offer
+`h3-plug-4step` as an explicit "closest to base" recipe; or (b) make
+`h3-plug-4step` `h3-max` and accept +11 s per 5 s clip; or (c) first run plug
+with the h3-max techniques (MXFP8 linears, the Sol engine ladder on forwards
+1-3), which would bring it to about h3-max's cost, and re-check it against
+this base set (the 5 base clips' statistics are kept, but their frames
+are not; a rerun of base costs ~37 min, ~$1.3). I would recommend (c), then
+(b) if it holds. A looser rule-2 bound (for example h3-max's own spread) is
+not proposed after the fact.
+
+**Spend.** Pod 1 4 344 s (LTX gate, serve check, control pair) and pod 2
+5 346 s at $2.09/hr: ≈ $2.52 + $3.10 = **≈ $5.62** for both sections. Both
+pods were deleted after their outputs were pulled (GET 404). Each had a 5 400 s
+DELETE backstop, the on-pod 20 min idle guard and a local balance watchdog
+(delete below $12). Balance $46.61 before the first pod, $26.79 after the
+second (other agents ran in parallel).

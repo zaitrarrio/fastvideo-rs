@@ -798,3 +798,8 @@ Per prompt: Sage median over 3 seeds / the band from rule 1.
 
 **Verdict `ltx-pro` Sage: PASS** under the calibrated rule. The default stays
 as it is (on for `ltx-pro` on sm_120); nothing to propose.
+
+**Spend.** The gate and the serving check took about 55 min of pod
+`p63ptu6lo1wbgb` (≈ $1.9); the same pod then ran the H3 Plug control pair.
+The whole session (two pods, this section and docs/serve/research-longlive.md
+12.7) cost ≈ $5.62; both pods were deleted (GET 404).
