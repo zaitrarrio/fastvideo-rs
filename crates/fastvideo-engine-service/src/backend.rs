@@ -141,6 +141,10 @@ pub struct BlockStats {
     pub frames: u32,
     /// Wall (or fake-clock) milliseconds for denoise + decode.
     pub block_ms: f64,
+    /// Milliseconds of `block_ms` spent on a prompt-switch KV re-cache
+    /// before this block (LongLive); 0 when there was none.
+    #[serde(default)]
+    pub recache_ms: f64,
 }
 
 /// One GPU's worth of models (design §3.6). Runs on the executor thread.

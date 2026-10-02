@@ -1,5 +1,6 @@
 //! The fal WMA director mount (design §5.6, WP-14): the `DirectorEngine`
-//! seam over `EngineService` clip sessions and `DirectorConfig` from
+//! seam over `EngineService` clip sessions and causal sessions
+//! (docs/serve/director-causal.md), and `DirectorConfig` from
 //! `[director]` + `[protocols]`, on the process's shared WebRTC host
 //! (`crate::rtc`, from `[webrtc]`).
 //!
@@ -9,8 +10,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fastvideo_engine_service::{CancelToken, ClipBuild, ClipSession, EngineService};
-use fastvideo_fal::director::{ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService};
+use fastvideo_engine_service::{CancelToken, CausalControl, CausalSession, ClipBuild, ClipSession, EngineService};
+use fastvideo_fal::director::{
+    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
+};
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{ApiError, JobId, ModelCaps, SessionSpec};
 #[cfg(test)]
@@ -92,11 +95,70 @@ impl DirectorClips for Clips {
     }
 }
 
+/// A causal rollout (LongLive / SF-Wan) under the engine's exclusive
+/// executor lease (docs/serve/director-causal.md). `close` ends it through
+/// the control handle, so it works while `next_block` holds the session.
+pub struct Stream {
+    caps: ModelCaps,
+    spec: SessionSpec,
+    control: CausalControl,
+    session: tokio::sync::Mutex<Option<CausalSession>>,
+}
+
+impl Stream {
+    pub fn new(s: CausalSession) -> Self {
+        Self { caps: s.caps().clone(), spec: s.spec().clone(), control: s.control(), session: tokio::sync::Mutex::new(Some(s)) }
+    }
+}
+
+#[async_trait::async_trait]
+impl DirectorStream for Stream {
+    fn caps(&self) -> &ModelCaps {
+        &self.caps
+    }
+    fn spec(&self) -> &SessionSpec {
+        &self.spec
+    }
+    fn set_prompt(&self, prompt: &str) -> u64 {
+        self.control.set_prompt(prompt)
+    }
+    fn set_seed(&self, seed: u64) {
+        // The rollout draws its noise per reset: restart it with the seed.
+        self.control.set_seed(seed);
+        self.control.reset();
+    }
+    fn set_paused(&self, paused: bool) {
+        self.control.set_paused(paused);
+    }
+    async fn next_block(&self) -> Option<Result<StreamBlock, ApiError>> {
+        let mut g = self.session.lock().await;
+        let r = g.as_mut()?.next_block().await;
+        if r.is_none() {
+            // Ended: release the session (and its lease) now.
+            g.take();
+        }
+        Some(r?.map(|b| StreamBlock {
+            index: b.index,
+            prompt_version: b.prompt_version,
+            frames: b.frames,
+            block_ms: b.stats.block_ms,
+            recache_ms: b.stats.recache_ms,
+        }))
+    }
+    async fn close(&self) {
+        self.control.close();
+    }
+}
+
 #[async_trait::async_trait]
 impl DirectorEngine for EngineDirector {
     async fn open(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorClips>, ApiError> {
         let s = self.0.open_clip_session(spec).await?;
         Ok(Arc::new(Clips::new(s)))
+    }
+    async fn open_stream(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorStream>, ApiError> {
+        let s = self.0.open_causal_session(spec).await?;
+        Ok(Arc::new(Stream::new(s)))
     }
 }
 
@@ -115,7 +177,10 @@ fn h264_backend(s: &str) -> EncoderBackend {
 pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConfig {
     let d = &c.director;
     DirectorConfig {
-        // The H3 apps only: LTX and Wan have no director.
+        // The H3-schema apps (`minimax/h3-*`, and `owner/alias` apps such as
+        // `fastvideo/ltx-turbo` or `fastvideo/longlive`); fal's LTX and Wan
+        // family apps have no director. A causal model's app runs the causal
+        // director (docs/serve/director-causal.md).
         apps: crate::adapters::fal_config(m).apps.into_iter().filter(|a| a.kind().director()).collect(),
         ice_servers: host.ice_servers().to_vec(),
         chunk_seconds: d.chunk_seconds,
@@ -127,6 +192,8 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         ingest: fastvideo_fal::FalConfig::default().ingest,
         work_dir: c.server.state_dir.join("director"),
         heartbeat_timeout: Duration::from_secs(15),
+        causal_chunk_blocks: d.causal_chunk_blocks.max(1),
+        causal_lead_seconds: d.causal_lead_seconds.max(0.5),
         ..DirectorConfig::default()
     }
 }

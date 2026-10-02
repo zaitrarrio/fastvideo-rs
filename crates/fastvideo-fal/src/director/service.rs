@@ -18,7 +18,7 @@ use fastvideo_webrtc::ice::IceServer;
 use fastvideo_webrtc::writer::VideoCodec as WVideoCodec;
 use serde_json::Value;
 
-use super::control::Limits;
+use super::control::{CausalLimits, Limits};
 use super::engine::{frames_for, DirectorEngine};
 use super::info::{app_name, director_info, InfoFacts};
 pub use super::info::{relative_chunk_cost, served_resolutions};
@@ -64,6 +64,13 @@ pub struct DirectorConfig {
     pub work_dir: PathBuf,
     /// Concurrent sessions (`one_session_per_machine`).
     pub max_sessions: usize,
+    /// Causal models: blocks per director chunk (`chunk` message; 4 blocks
+    /// of 12 frames = 3 s at 16 fps).
+    pub causal_chunk_blocks: u32,
+    /// Causal models: video kept queued for playout; above it the rollout
+    /// pauses at the next block boundary, so a prompt update reaches the
+    /// picture within about this lead.
+    pub causal_lead_seconds: f64,
 }
 
 impl Default for DirectorConfig {
@@ -83,6 +90,8 @@ impl Default for DirectorConfig {
             ingest: IngestPolicy::default(),
             work_dir: std::env::temp_dir().join("fv-director"),
             max_sessions: 1,
+            causal_chunk_blocks: 4,
+            causal_lead_seconds: 2.0,
         }
     }
 }
@@ -139,6 +148,21 @@ pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> Resolved
 /// The control limits for a model.
 pub fn limits_for(cfg: &DirectorConfig, caps: &ModelCaps) -> Limits {
     let fps = caps.fps.default;
+    if let Some(StreamCaps::Causal { block_frames, context, .. }) = caps.stream {
+        let block_seconds = f64::from(block_frames) / f64::from(fps.max(1));
+        let chunk_blocks = cfg.causal_chunk_blocks.max(1);
+        let chunk = block_seconds * f64::from(chunk_blocks);
+        return Limits {
+            fps,
+            chunk_seconds: chunk,
+            min_chunk_seconds: chunk,
+            max_chunk_seconds: chunk,
+            resolutions: served_resolutions(caps),
+            script_max_end_images: 0,
+            causal: Some(CausalLimits { block_frames, block_seconds, chunk_blocks, context }),
+            ..Limits::default()
+        };
+    }
     let (min_s, max_s) = match caps.stream {
         Some(StreamCaps::Clip { min_s, max_s }) => (f64::from(min_s), f64::from(max_s)),
         _ => (5.0, 15.0),
@@ -224,10 +248,10 @@ impl DirectorService {
         self.sessions.lock().expect("sessions").values().filter(|s| s.is_open()).count()
     }
 
-    /// The app's model caps (clip streaming required). Causal (SF-Wan)
-    /// models are refused here, so the causal session limits of design §5.2
-    /// (`[streams] causal_*_max_s`) never apply to the director; its own
-    /// `max_session_seconds` bounds clip sessions.
+    /// The app's model caps: clip streaming, or a causal rollout (LongLive,
+    /// SF-Wan; docs/serve/director-causal.md). The director's own
+    /// `max_session_seconds` bounds both kinds of session (the Reactor's
+    /// `[streams] causal_*_max_s` do not apply here).
     pub fn caps_for(&self, ctx: &ServeCtx, app: &FalApp) -> Result<ModelCaps, ApiError> {
         let id = crate::queue::resolve_app_model(ctx, app, crate::Endpoint::TextToVideo)?;
         let caps = ctx
@@ -236,8 +260,8 @@ impl DirectorService {
             .into_iter()
             .find(|c| c.id.0 == id)
             .ok_or_else(|| ApiError::not_found(format!("Application \"{}/director\" not found", app.id)))?;
-        if !matches!(caps.stream, Some(StreamCaps::Clip { .. })) {
-            return Err(ApiError::invalid(format!("model `{}` does not support clip streaming", caps.id)));
+        if !super::info::director_capable(&caps) {
+            return Err(ApiError::invalid(format!("model `{}` supports neither clip streaming nor a causal rollout", caps.id)));
         }
         Ok(caps)
     }
@@ -245,9 +269,13 @@ impl DirectorService {
     /// The per-session facts `session_info` / `/info` report.
     pub fn facts(&self, app: &FalApp, caps: &ModelCaps, audio: bool) -> InfoFacts {
         let limits = limits_for(&self.cfg, caps);
+        let default_chunk_frames = match &limits.causal {
+            Some(c) => c.block_frames * c.chunk_blocks,
+            None => frames_for(caps, limits.fps, limits.chunk_seconds).unwrap_or(caps.frames.default),
+        };
         InfoFacts {
             app: app_name(&app.id),
-            default_chunk_frames: frames_for(caps, limits.fps, limits.chunk_seconds).unwrap_or(caps.frames.default),
+            default_chunk_frames,
             limits,
             max_session_seconds: self.cfg.max_session_seconds,
             audio,
@@ -275,8 +303,9 @@ impl DirectorService {
         }
         let caps = self.caps_for(ctx, app)?;
         let fps = caps.fps.default;
+        let causal = matches!(caps.stream, Some(StreamCaps::Causal { .. }));
         let facts_probe = limits_for(&self.cfg, &caps);
-        let res = if facts_probe.resolutions.contains(&Resolution::R768) {
+        let res = if facts_probe.resolutions.contains(&Resolution::R768) && !causal {
             Resolution::R768
         } else {
             *facts_probe.resolutions.last().ok_or_else(|| ApiError::invalid(format!("model `{}` serves neither 480p nor 768p", caps.id)))?
@@ -287,7 +316,10 @@ impl DirectorService {
         let canvas = (w, h);
         let tracks = TrackSet::for_model(&caps, crop.unwrap_or(canvas), fps, ("video", "audio"), 2, false);
         let audio = tracks.has_audio();
-        let continuity = if caps.supports(Task::I2V) {
+        let continuity = if causal {
+            // One rollout: the KV cache carries continuity.
+            Continuity::HardCut
+        } else if caps.supports(Task::I2V) {
             Continuity::AnchorLastFrame { crossfade_ms: self.cfg.crossfade_ms }
         } else {
             Continuity::Crossfade { ms: self.cfg.crossfade_ms }
@@ -302,7 +334,20 @@ impl DirectorService {
             seed: None,
         };
         // Starting counts as busy: the engine session is held from here.
-        let clips = self.engine.open(spec).await?;
+        let (clips, stream) = if causal {
+            let st = self.engine.open_stream(spec).await?;
+            let clips: Arc<dyn super::engine::DirectorClips> = Arc::new(session::NoClips(st.caps().clone(), st.spec().clone()));
+            (clips, Some(st))
+        } else {
+            (self.engine.open(spec).await?, None)
+        };
+        // Release a causal lease on any refusal below (a clip session goes
+        // with its last reference).
+        let release = |stream: &Option<Arc<dyn super::engine::DirectorStream>>| {
+            if let Some(st) = stream.clone() {
+                tokio::spawn(async move { st.close().await });
+            }
+        };
         let opts = AnswerOptions {
             video: true,
             audio: audio.then_some(AudioLayout::Stereo),
@@ -310,16 +355,23 @@ impl DirectorService {
             video_codecs: video_codecs(self.cfg.h264.compiled(), self.cfg.vp8_fallback),
             ..AnswerOptions::default()
         };
-        let (peer, answer) = self.host.answer(offer, opts).await.map_err(|e| match e {
-            fastvideo_webrtc::WebrtcError::Sdp(e) => ApiError::invalid(format!("invalid offer: {e}")),
-            fastvideo_webrtc::WebrtcError::PeerLimit(n) => ApiError::conflict(format!("peer limit ({n}) reached")).with_retry_after(5),
-            other => ApiError::internal(format!("webrtc: {other}")),
-        })?;
+        let (peer, answer) = match self.host.answer(offer, opts).await {
+            Ok(x) => x,
+            Err(e) => {
+                release(&stream);
+                return Err(match e {
+                    fastvideo_webrtc::WebrtcError::Sdp(e) => ApiError::invalid(format!("invalid offer: {e}")),
+                    fastvideo_webrtc::WebrtcError::PeerLimit(n) => ApiError::conflict(format!("peer limit ({n}) reached")).with_retry_after(5),
+                    other => ApiError::internal(format!("webrtc: {other}")),
+                });
+            }
+        };
         let codec = match peer.video_codec() {
             Some(WVideoCodec::H264) => VideoCodec::H264,
             Some(WVideoCodec::Vp8) => VideoCodec::Vp8,
             None => {
                 peer.close();
+                release(&stream);
                 return Err(ApiError::invalid("the offer has no receivable video we can send (H.264 or VP8)"));
             }
         };
@@ -332,6 +384,7 @@ impl DirectorService {
             cfg: self.cfg.clone(),
             ctx: ctx.clone(),
             clips,
+            stream,
             peer: peer_handle,
             events,
             codec,
@@ -341,7 +394,7 @@ impl DirectorService {
         };
         let svc = self.clone();
         let sid = id.clone();
-        tracing::info!(session = %id, app = %app.id, model = %caps.id, ?codec, audio, "director session starting");
+        tracing::info!(session = %id, app = %app.id, model = %caps.id, ?codec, audio, causal, "director session starting");
         tokio::spawn(async move {
             session::run(init).await;
             svc.sessions.lock().expect("sessions").remove(&sid);
