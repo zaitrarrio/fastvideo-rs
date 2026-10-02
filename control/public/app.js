@@ -39,6 +39,7 @@ const until = (ms) => {
   return m < 0 ? `${-m} min ago` : m < 120 ? `in ${m} min` : `in ${(m / 60).toFixed(1)} h`;
 };
 const dt = (ms) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) + "Z" : "–");
+const dur = (s) => (s === null || s === undefined || isNaN(s) ? "–" : s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 function toast(msg) {
   const t = $("#toast");
   t.textContent = msg;
@@ -370,7 +371,7 @@ function every(ms, fn) {
 // ---------------------------------------------------------------- dashboard
 async function pageDashboard(main) {
   const draw = async () => {
-    const [o, series, bal, costs] = await Promise.all([api("/api/overview"), api("/api/metrics/series?hours=6"), api("/api/balance?hours=24"), api("/api/costs?days=7")]);
+    const [o, series, bal, costs, bp] = await Promise.all([api("/api/overview"), api("/api/metrics/series?hours=6"), api("/api/balance?hours=24"), api("/api/costs?days=7"), api("/api/buildpod").catch((e) => ({ error: e.message, pods: [] }))]);
     const tiles = h(
       "div",
       { class: "tiles" },
@@ -381,10 +382,23 @@ async function pageDashboard(main) {
       tile("Idle burn", `${fmt$(o.idle_burn_per_hr)}/hr`, `${o.idle_pods.length} idle GPU pods (> ${o.policies.idle_min} min)`),
       tile("Open alerts", String(o.alerts.length), o.alerts.filter((a) => a.severity === "critical").length ? `${o.alerts.filter((a) => a.severity === "critical").length} critical` : "none critical"),
     );
+    const resolve = async (a) => {
+      if (!confirm(`Resolve "${a.message}"? It opens again at the next collector pass (each minute) if its condition still holds. (audited)`)) return;
+      await act("resolve", () => api(`/api/alerts/${a.id}/resolve`, { method: "POST" }));
+      draw().catch(() => {});
+    };
     const alerts = card(
       "Alerts",
       o.alerts.length
-        ? o.alerts.map((a) => h("div", { class: `alert sev-${a.severity}` }, h("span", { class: "icon", "aria-hidden": "true" }, a.severity === "critical" ? "!" : a.severity === "warn" ? "▲" : "i"), h("div", {}, h("div", {}, h("b", {}, a.severity), " ", a.message), h("div", { class: "muted small" }, `${a.kind} · since ${ago(a.opened_at)}${a.action ? ` · action: ${a.action}` : ""}`))))
+        ? o.alerts.map((a) =>
+            h(
+              "div",
+              { class: `alert sev-${a.severity}`, "data-alert": a.id },
+              h("span", { class: "icon", "aria-hidden": "true" }, a.severity === "critical" ? "!" : a.severity === "warn" ? "▲" : "i"),
+              h("div", { style: "flex:1" }, h("div", {}, h("b", {}, a.severity), " ", a.message), h("div", { class: "muted small" }, `${a.kind} · since ${ago(a.opened_at)}${a.action ? ` · action: ${a.action}` : ""}`)),
+              h("button", { class: "ghost", title: "Mark resolved", onclick: () => resolve(a) }, "Resolve"),
+            ),
+          )
         : h("div", { class: "muted small" }, "No open alerts."),
     );
     // Top 8 running pods by $/hr get a line; the rest are in the table.
@@ -437,6 +451,7 @@ async function pageDashboard(main) {
       h("div", { class: "muted small", style: "margin:-8px 0 12px" }, `Updated ${ago(o.at)} · metrics from ${series.source}`),
       tiles,
       h("div", { class: "grid g2" }, alerts, clusters),
+      buildPodCard(bp),
       h("div", { class: "grid g2" }, card("Balance, 24 h", balChart), card("Burn $/hr, 24 h", burnChart)),
       h("div", { class: "grid g2" }, card("GPU utilisation, 6 h (top pods by $/hr)", gpuChart), card("CPU utilisation, 6 h", cpuChart)),
       h("div", { class: "grid g2" }, card("Spend per day by owner, 7 days", stackedBars({ cats: days, stacks })), idle),
@@ -444,6 +459,45 @@ async function pageDashboard(main) {
   };
   await draw();
   every(60_000, () => draw().catch(() => {}));
+}
+/** The shared build pod (read only): its own self-stop timers (/healthz) and the controller's backstop. */
+function buildPodCard(bp) {
+  const pol = bp.policy || {};
+  const kv = (rows) => h("dl", { class: "kv" }, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]));
+  const one = (p) => {
+    const hz = p.health;
+    const ss = hz?.self_stop;
+    const jobs = hz?.jobs;
+    return h(
+      "div",
+      { class: "buildpod", "data-pod": p.pod_id },
+      h("h3", {}, h("a", { href: `#/pod/${p.pod_id}` }, p.name || p.pod_id), " ", badge(p.status || "?", statusKind(p.status)), " ", hz ? badge(hz.ready ? "ready" : hz.phase || "setting up", hz.ready ? "good" : "warn") : p.status === "RUNNING" ? badge("no /healthz", "warn") : ""),
+      kv([
+        ["$/hr", fmt$(p.cost_per_hr)],
+        ["up", dur(hz?.uptime_s ?? p.uptime_s)],
+        ["idle", hz ? (hz.jobs_active ? `no (${hz.jobs_active} job(s) running)` : dur(hz.idle_s)) : "–"],
+        ["idle stop in", hz ? (hz.idle_stop_in_s === null || hz.idle_stop_in_s === undefined ? (hz.jobs_active ? "paused: jobs running" : "–") : dur(hz.idle_stop_in_s)) : "–"],
+        ["cap stop in", hz?.max_stop_in_s !== undefined ? `${dur(hz.max_stop_in_s)} (cap ${dur(hz.max_s)} + ${dur(hz.max_grace_s)} grace for running jobs)` : "–"],
+        [
+          "last self-stop",
+          ss && ss.attempts
+            ? h("span", {}, ss.ok ? badge("accepted", "good") : badge("FAILED", "critical"), ` ${ss.reason || ""} ${ss.at ? ago(ss.at * 1000) : ""} · ${ss.attempts} attempt(s)${ss.next_at ? ` · next ${until(ss.next_at * 1000)}` : ""}`, ss.error ? h("div", { class: "small wrap" }, ss.error) : "")
+            : ss
+              ? "none yet"
+              : "– (older build pod server)",
+        ],
+        ["controller backstop", !p.backstop.enabled ? "off" : p.backstop.verdict ? badge(`due: ${p.backstop.verdict}`, "critical") : `cap in ${dur(p.backstop.cap_in_s)}${p.backstop.idle_in_s !== null ? `, idle in ${dur(p.backstop.idle_in_s)}` : ""}`],
+      ]),
+      jobs && jobs.length
+        ? table([{ label: "job", get: (j) => h("code", {}, j.id) }, { label: "agent", get: (j) => j.agent }, { label: "state", get: (j) => j.state }, { label: "for", get: (j) => dur(j.seconds), num: true }], jobs)
+        : h("p", { class: "muted small" }, jobs ? "No jobs running." : hz ? `${hz.jobs_active ?? 0} job(s) running.` : ""),
+    );
+  };
+  return card(
+    "Build pod",
+    h("p", { class: "muted small" }, `Read only. The shared CPU build pod (owner external:build-pod) stops itself when idle and at its cap; the controller's backstop stops it ${pol.max_h ? `past ${pol.max_h} h up` : ""}${pol.idle_grace_min !== undefined ? ` or ${pol.idle_grace_min} min past its own idle stop` : ""} if that failed (Settings → policies).`),
+    bp.error ? h("p", { class: "small" }, bp.error) : bp.pods.length ? bp.pods.map(one) : h("p", { class: "muted small" }, "No build pod (none attributed to external:build-pod)."),
+  );
 }
 function tile(k, v, sub) {
   return h("div", { class: "tile" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v), h("div", { class: "s" }, sub || ""));
@@ -524,12 +578,21 @@ async function pageClusters(main) {
   Promise.all([fvEditor(), api("/api/schemas"), api("/api/schemas/dynamic")]).then(([E, sc, dyn]) => {
     ed = E.createJsonEditor({ parent: edHost, doc: ta.value, schema: sc.schemas["cluster-spec"], dynamic: dyn, onChange: (t) => (ta.value = t) });
   }).catch(() => edHost.replaceChildren(h("textarea", { oninput: (e) => (ta.value = e.target.value) }, ta.value)));
+  const tplList = tpl.templates || [{ id: "tiny-cpu", title: "CPU gateway + 1 fake-engine CPU worker" }, { id: "standard", title: "CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools" }];
   const tplSel = h(
     "select",
-    { onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : "main" }, null, 2); ed?.set(ta.value); } },
-    h("option", { value: "tiny-cpu" }, "tiny-cpu: CPU gateway + 1 fake-engine CPU worker"),
-    h("option", { value: "standard" }, "standard: CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools"),
+    { "aria-label": "Template", onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : tplSel.value === "standard" ? "main" : tplSel.value }, null, 2); ed?.set(ta.value); } },
+    [...tplList].sort((a, b) => (a.id === "tiny-cpu" ? -1 : b.id === "tiny-cpu" ? 1 : 0)).map((x) => h("option", { value: x.id }, `${x.id}: ${x.title}`)),
   );
+  // Add a pool preset to the spec being defined.
+  const presetAdd = presetPicker(tpl.pool_presets || [], (pool) => {
+    let spec;
+    try { spec = JSON.parse(ta.value); } catch { return toast("spec: not JSON"); }
+    spec.pools = [...(spec.pools || []).filter((p) => p.id !== pool.id), pool];
+    ta.value = JSON.stringify(spec, null, 2);
+    ed?.set(ta.value);
+    toast(`pool ${pool.id} added`);
+  });
   const imp = h("textarea", { placeholder: "Paste artifacts/runpod/serve/cluster.json here", style: "min-height:120px", "aria-label": "Script state" });
   const pem = h("textarea", { placeholder: "Optional: cluster.json.admin-key.pem", style: "min-height:60px", "aria-label": "Admin key" });
   const impName = h("input", { placeholder: "name", "aria-label": "Imported cluster name" });
@@ -557,6 +620,7 @@ async function pageClusters(main) {
       card(
         "Define a cluster",
         h("div", { class: "row", style: "margin-bottom:8px" }, tplSel),
+        presetAdd,
         edHost,
         h(
           "div",
@@ -591,6 +655,9 @@ async function pageClusters(main) {
 }
 
 async function pageCluster(main, id) {
+  // Kept across the 10 s redraws: the key list and the gateway output stay up.
+  const gwKeysEl = h("div", { id: "gwKeys", style: "margin-top:8px" });
+  const gwOutEl = h("pre", { id: "gwOut", class: "log", style: "margin-top:8px;max-height:300px" });
   const draw = async () => {
     const r = await api(`/api/clusters/${id}`);
     const c = r.cluster;
@@ -606,7 +673,9 @@ async function pageCluster(main, id) {
       running && btn("Extend…", () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) post("extend", { minutes: Number(m) }, "extend"); }),
       running && c.state.gateway && btn(c.state.gateway_stopped ? "Start gateway" : "Stop gateway", () => post(c.state.gateway_stopped ? "gateway/start" : "gateway/stop", {}, "gateway")),
       running && !c.state.gateway && c.spec.gateway.enabled && btn("Start gateway", () => post("gateway/start", {}, "gateway")),
-      running && btn("Roll to…", () => { const t = prompt("Target: a channel (stable, latest), a git sha or an image", c.spec.image.channel || "stable"); if (t) post("roll", { target: t, gateway: confirm("Move the gateway to the same build too?") }, "roll"); }),
+      running && btn("Roll to…", () => rollDialog(c, post)),
+      running && btn("Restart…", () => restartDialog(c, r.pods, post)),
+      btn("Add pool…", async () => addPoolDialog(c, (await api("/api/templates")).pool_presets || [], () => route())),
       op && btn("Cancel operation", () => confirm("Cancel the running operation? Pods it created stay (the backstops hold them).") && post("cancel", {}, "cancel")),
       !running && btn("Delete definition", async () => { if (confirm(`Delete the definition of ${c.name}?`)) { await act("delete", () => api(`/api/clusters/${c.id}`, { method: "DELETE" })); location.hash = "#/clusters"; } }, "danger"),
     );
@@ -668,17 +737,37 @@ async function pageCluster(main, id) {
       h("div", { id: "opLog" }),
     );
     const gw = c.state.gateway_url;
+    const out = (t) => { $("#gwOut").textContent = t; };
+    // The minted user keys (GET / DELETE /api/clusters/:id/keys, the gateway's admin API).
+    const showKeys = async () => {
+      const j = await act("keys", () => api(`/api/clusters/${c.id}/keys`));
+      const box = $("#gwKeys");
+      box.replaceChildren(table(
+        [
+          { label: "id", get: (k) => k.id },
+          { label: "name", get: (k) => k.name },
+          { label: "prefix", get: (k) => k.prefix },
+          { label: "created", get: (k) => k.created_at || "" },
+          { label: "last used", get: (k) => k.last_used_at || "–" },
+          { label: "", get: (k) => (k.revoked ? badge("revoked", "critical") : h("button", { onclick: async () => { if (!confirm(`Revoke ${k.name} (${k.id})? (audited)`)) return; const r = await act("revoke", () => api(`/api/clusters/${c.id}/keys/${k.id}`, { method: "DELETE" })); out(`revoked ${k.id} on ${r.applied.join(", ")}${r.failed.length ? `; not reached: ${r.failed.map((f) => f.pod).join(", ")} (they read it from D1 within 30 s)` : ""}`); showKeys(); } }, "Revoke")) },
+        ],
+        j.keys,
+        "No minted keys.",
+      ));
+    };
     const tools = card(
       "Gateway",
       gw ? h("p", { class: "small" }, "URL ", h("a", { href: gw, target: "_blank", rel: "noopener" }, gw), " · ", h("a", { href: `${gw}/console`, target: "_blank", rel: "noopener" }, "console")) : h("p", { class: "muted small" }, "No gateway pod."),
       gw && h(
         "div",
         { class: "row" },
-        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); $("#gwOut").textContent = JSON.stringify({ status: j.status, pools: j.pools }, null, 2); } }, "Pools view"),
-        h("button", { onclick: async () => { if (!confirm("Show the gateway's admin token? (audited)")) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); $("#gwOut").textContent = `admin token: ${j.admin_token}\nconsole: ${j.console}`; } }, "Reveal admin token"),
-        h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); $("#gwOut").textContent = `API key (shown once): ${j.api_key}`; } }, "Mint user API key"),
+        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); out(JSON.stringify({ status: j.status, pools: j.pools }, null, 2)); } }, "Pools view"),
+        h("button", { onclick: async () => { if (!confirm("Show the gateway's admin token? (audited)")) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}`); } }, "Reveal admin token"),
+        h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}`); } }, "Mint user API key"),
+        h("button", { onclick: showKeys }, "Keys"),
       ),
-      h("pre", { id: "gwOut", class: "log", style: "margin-top:8px;max-height:300px" }),
+      gwKeysEl,
+      gwOutEl,
     );
     main.replaceChildren(
       h("h1", {}, c.name, " ", badge(c.status, statusKind(c.status))),
@@ -704,6 +793,100 @@ async function showOp(id) {
   const el = $("#opLog");
   if (!el) return;
   el.replaceChildren(h("h3", {}, `${j.operation.kind} ${j.operation.id}`), h("div", { class: "log" }, j.operation.log.map((l) => h("div", {}, `${new Date(l.at).toISOString().slice(11, 19)}  ${l.msg}`))));
+}
+/** A pool preset select + description + "Add pool" (calls onAdd with a copy of the preset's pool). */
+function presetPicker(presets, onAdd, label = "Add pool") {
+  if (!presets.length) return h("span", {});
+  const info = h("p", { class: "muted small", style: "margin:4px 0 0" });
+  const sel = h("select", { "aria-label": "Pool preset", onchange: () => show() }, presets.map((p) => h("option", { value: p.id }, `${p.id}: ${p.title}`)));
+  const show = () => {
+    const p = presets.find((x) => x.id === sel.value);
+    info.replaceChildren(p.description, ` Image ${p.pool.variant}; weights ${p.weights.join(", ")}.`, p.licence ? h("span", {}, " ", badge("licence", "critical"), " ", p.licence) : "");
+  };
+  show();
+  return h(
+    "div",
+    { class: "presets", style: "margin-bottom:8px" },
+    h("div", { class: "row" }, sel, h("button", { onclick: () => { const p = presets.find((x) => x.id === sel.value); if (p.licence && !confirm(`${p.title}: ${p.licence}. Add it anyway?`)) return; onAdd(JSON.parse(JSON.stringify(p.pool))); } }, label)),
+    info,
+  );
+}
+/** A modal with checkboxes; resolves to the checked values (null: cancelled). */
+function pickDialog(title, intro, groups, okLabel, extra) {
+  return new Promise((resolve) => {
+    const dlg = h("dialog", { class: "pick" });
+    const boxes = [];
+    const body = groups.map((g) =>
+      h(
+        "fieldset",
+        {},
+        h("legend", {}, g.label),
+        g.items.map((it) => {
+          const cb = h("input", { type: "checkbox", value: it.value, checked: !!it.checked });
+          boxes.push(cb);
+          return h("label", { class: "pickrow" }, cb, " ", it.label, it.note ? h("span", { class: "muted small" }, ` ${it.note}`) : "");
+        }),
+      ),
+    );
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; dlg.close(); resolve(v); };
+    dlg.append(
+      h("h2", {}, title),
+      intro ? h("p", { class: "muted small" }, intro) : "",
+      extra || "",
+      ...body,
+      h("div", { class: "row", style: "margin-top:10px" }, h("button", { class: "primary", onclick: () => finish(boxes.filter((b) => b.checked).map((b) => b.value)) }, okLabel), h("button", { onclick: () => finish(null) }, "Cancel")),
+    );
+    dlg.addEventListener("close", () => { finish(null); dlg.remove(); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+/** Roll: a target and which pools (and the gateway) move to it. */
+async function rollDialog(c, post) {
+  const target = h("input", { value: c.spec.image.channel || "stable", "aria-label": "Roll target", placeholder: "channel, git sha or image" });
+  const pools = Object.keys(c.state.workers || {}).filter((p) => (c.state.workers[p] || []).length);
+  const groups = [{ label: "Pools (new workers come up beside the old ones, then the old ones drain)", items: pools.map((p) => ({ value: p, label: p, checked: true, note: `${c.state.workers[p].length} worker(s)` })) }];
+  if (c.state.gateway) groups.push({ label: "Gateway", items: [{ value: "__gateway", label: "the gateway too", checked: false, note: "(restarts once, at the end)" }] });
+  const sel = await pickDialog(`Roll ${c.name}`, "Target: a channel (stable, latest), a git sha or an image.", groups, "Roll", h("label", {}, "Target ", target));
+  if (!sel) return;
+  const ps = sel.filter((v) => v !== "__gateway");
+  if (!ps.length && !sel.includes("__gateway")) return toast("nothing chosen");
+  if (!target.value.trim()) return toast("no target");
+  post("roll", { target: target.value.trim(), pools: ps, gateway: sel.includes("__gateway") }, "roll");
+}
+/** Restart: whole pools (and the gateway) or single pods, whether or not their env changed. */
+async function restartDialog(c, pods, post) {
+  const live = pods.filter((p) => p.slot !== "retired");
+  const poolIds = [...new Set(live.filter((p) => p.role === "worker").map((p) => p.pool))];
+  const groups = [
+    { label: "Whole pools", items: [...poolIds.map((p) => ({ value: `pool:${p}`, label: p, note: `${live.filter((x) => x.pool === p).length} pod(s)` })), ...(live.some((p) => p.role === "gateway") ? [{ value: "pool:gateway", label: "gateway" }] : [])] },
+    { label: "Single pods", items: live.map((p) => ({ value: `pod:${p.pod_id}`, label: p.pod_id, note: `${p.role}${p.pool ? ` ${p.pool}` : ""}` })) },
+  ];
+  const sel = await pickDialog(`Restart pods of ${c.name}`, "Rolling: workers first, the gateway last; each must come back before the next. The chosen pods restart even when their env did not change (Env → Apply restarts only the ones that need it).", groups, "Restart");
+  if (!sel) return;
+  const body = { pools: sel.filter((v) => v.startsWith("pool:")).map((v) => v.slice(5)), pods: sel.filter((v) => v.startsWith("pod:")).map((v) => v.slice(4)) };
+  if (!body.pools.length && !body.pods.length) return toast("nothing chosen");
+  post("restart", body, "restart");
+}
+/** Add a pool preset to a defined cluster's spec (the document API: versioned, validated, audited). */
+async function addPoolDialog(c, presets, redraw) {
+  const dlg = h("dialog", {});
+  dlg.append(
+    h("h2", {}, `Add a pool to ${c.name}`),
+    h("p", { class: "muted small" }, "The pool is added to the spec with its preset's count; a running cluster creates its workers on Scale (the gateway learns the pool when it restarts)."),
+    presetPicker(presets.filter((p) => !c.spec.pools.some((x) => x.id === p.pool.id)), async (pool) => {
+      const d = await api(`/api/docs/cluster-spec/${c.id}`);
+      const doc = { ...d.doc, pools: [...d.doc.pools, pool] };
+      await act("add pool", () => api(`/api/docs/cluster-spec/${c.id}`, { method: "PUT", body: { doc, version: d.version } }));
+      dlg.close();
+      redraw();
+    }),
+    h("div", { class: "row" }, h("button", { onclick: () => dlg.close() }, "Close")),
+  );
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
 }
 async function startDialog(c, redraw) {
   const dlg = h("dialog", {});
@@ -738,7 +921,7 @@ async function pageEnv(main) {
   const sel = h("select", { "aria-label": "Cluster", onchange: () => { location.hash = `#/env?cluster=${sel.value}`; } }, clusters.map((c) => h("option", { value: c.id, selected: c.id === cid }, c.name)));
   const parts = [
     h("h1", {}, "Environment"),
-    h("p", { class: "muted small" }, "Resolution: pod > cluster > account > the controller's own keys (which cannot be overridden). Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one."),
+    h("p", { class: "muted small" }, "Resolution: pod > pool > cluster > account > the controller's own keys (which cannot be overridden). A pool's variables reach every worker of that pool (restarts, rolls and scale-ups included), never the gateway. Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one. Key suggestions include the engine's own switches (FASTVIDEO_*, FV_LONGLIVE_*) with what they do."),
     card("Account (every controller cluster)", docPanel("env", "account", { title: "env: account", onSaved: () => refreshEff() })),
   ];
   let refreshEff = async () => {};
@@ -746,6 +929,13 @@ async function pageEnv(main) {
     const eff = await api(`/api/clusters/${cid}/env`);
     parts.push(h("div", { class: "row", style: "margin-bottom:12px" }, h("label", {}, "Cluster", sel)));
     parts.push(card("Cluster", docPanel("env", `cluster:${cid}`, { title: "env: cluster", cluster: cid, onSaved: () => refreshEff() })));
+    const cl = clusters.find((x) => x.id === cid);
+    const poolIds = (cl?.spec.pools || []).map((p) => p.id);
+    if (poolIds.length) {
+      const pool = poolIds.includes(q.get("pool")) ? q.get("pool") : poolIds[0];
+      const psel = h("select", { "aria-label": "Pool", onchange: () => { location.hash = `#/env?cluster=${cid}&pool=${psel.value}`; } }, poolIds.map((p) => h("option", { value: p, selected: p === pool }, p)));
+      parts.push(card("Pool (every worker of one pool)", h("div", { class: "row", style: "margin-bottom:8px" }, h("label", {}, "Pool", psel)), docPanel("env", `pool:${cid}:${pool}`, { title: `env: pool ${pool}`, cluster: cid, onSaved: () => refreshEff() })));
+    }
     const effBox = h("div", {});
     refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/clusters/${cid}/env`), cid));
     effBox.replaceChildren(effView(eff, cid));
@@ -785,7 +975,7 @@ function envTable(env) {
     [
       { label: "name", get: (x) => h("code", {}, x.key) },
       { label: "value", get: (x) => (x.secret ? h("span", { class: "muted" }, "•••••••• secret") : x.runpod_secret_ref ? h("span", {}, h("code", {}, x.value), " ", badge("Runpod secret")) : h("code", {}, x.value)), wrap: true },
-      { label: "source", get: (x) => h("span", {}, badge(x.source, x.source === "pod" ? "serious" : x.source === "cluster" ? "warn" : x.source === "account" ? "good" : ""), x.overrides ? h("span", { class: "muted small" }, ` over ${x.overrides.join(", ")}`) : "") },
+      { label: "source", get: (x) => h("span", {}, badge(x.source, x.source === "pod" ? "serious" : x.source === "pool" ? "warn" : x.source === "cluster" ? "warn" : x.source === "account" ? "good" : ""), x.overrides ? h("span", { class: "muted small" }, ` over ${x.overrides.join(", ")}`) : "") },
     ],
     env,
   );
@@ -932,7 +1122,7 @@ async function pageSettings(main) {
   const parse = (x) => { try { return JSON.parse(x); } catch { return x; } };
   main.replaceChildren(
     h("h1", {}, "Settings"),
-    card("Alert policies", h("p", { class: "muted small" }, "Auto-actions touch controller clusters only, never external pods. The deadline backstop always applies."), docPanel("policies", "default", { title: "policies" })),
+    card("Alert policies", h("p", { class: "muted small" }, "Auto-actions touch controller clusters only, with one exception: the build pod backstop (build_pod_*) stops the shared build pod (owner external:build-pod) when its own self-stop did not happen. No other external pod is touched. The deadline backstop always applies."), docPanel("policies", "default", { title: "policies" })),
     card("External pod attribution (name prefix → owner; first match wins)", docPanel("attribution", "default", { title: "attribution rules" })),
     card(
       "API tokens (scripts/serve/fv-control.sh, agents)",

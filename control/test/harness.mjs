@@ -143,6 +143,8 @@ export function startMock() {
     if (p.startsWith("/cf/")) return json(res, 200, { data: [] });
     // ---- the cluster's pods
     const pm = /^\/pod\/([^/]+)(\/.*)$/.exec(p);
+    // The shared build pod's public /healthz (an external pod: not in m.pods).
+    if (pm && m.buildHealth?.[pm[1]] && pm[2] === "/healthz") return json(res, 200, m.buildHealth[pm[1]]);
     if (pm) {
       const pod = m.pods.get(pm[1]);
       if (!pod || pod.desiredStatus !== "RUNNING") { res.writeHead(502); return res.end("no pod"); }
@@ -165,8 +167,13 @@ export function startMock() {
         if (route === "/fv/v1/admin/keys" && req.method === "POST") {
           if (!admin) return json(res, 401, {});
           m.minted.push(body.name);
-          return json(res, 201, { api_key: "fv_userkey_mock", key: { id: "key_1", name: body.name } });
+          const key = { id: `key_${String(m.minted.length).padStart(12, "0")}`, name: body.name, prefix: "fv_user", created_at: new Date().toISOString(), revoked: false };
+          (m.gwKeys ||= []).push(key);
+          return json(res, 201, { api_key: "fv_userkey_mock", key });
         }
+        if (route === "/fv/v1/admin/keys" && req.method === "GET") return admin ? json(res, 200, { keys: m.gwKeys || [], backend: "d1" }) : json(res, 401, {});
+        const gk = (m.gwKeys || []).find((k) => route === `/fv/v1/admin/keys/${k.id}`);
+        if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return !admin ? json(res, 401, {}) : gk ? ((gk.revoked = true), json(res, 200, { key: gk })) : json(res, 404, { error: { kind: "not_found" } });
         return json(res, 404, {});
       }
       if (route === "/health") return json(res, 200, { state: "AVAILABLE", build: { git_sha: "abcdef1234", image: { digest: env.FV_IMAGE_DIGEST } } });

@@ -168,3 +168,11 @@ summary.fv-thead { cursor: pointer; }
 .env-override { background: color-mix(in srgb, var(--warning) 14%, transparent); }
 .env-conflict td:first-child { box-shadow: inset 3px 0 0 var(--serious); }
 .cm-editor { max-width: 100%; }
+/* roll / restart pickers, pool presets, the build pod card */
+dialog.pick fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; padding: 6px 10px; max-height: 40vh; overflow: auto; }
+dialog.pick legend { font-size: 12px; color: var(--text-muted); padding: 0 4px; }
+.pickrow { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; flex-direction: row; }
+.alert > button { flex: none; align-self: center; }
+.buildpod + .buildpod { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 6px; }
+.buildpod h3 { margin: 4px 0 6px; }
+.presets select { max-width: 100%; }

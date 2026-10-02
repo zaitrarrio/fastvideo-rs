@@ -9,22 +9,23 @@ import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, whoami 
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminGet, adminToken, desiredEnv, envCtx, gatewayPublic, projectSpend } from "./cluster/ops";
 import { gatewaySystemEnv, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
-import { defaultSpec, normalizeSpec, STANDARD_POOLS } from "./cluster/spec";
+import { defaultSpec, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
+import { buildPodStatus } from "./buildpod";
 import { collect } from "./collector";
 import { randomToken, sha256Hex, unb64, x25519Generate, x25519PublicOf, b64 } from "./crypto";
 import type { Env, Vars } from "./env";
 import { deleteVar, listVars, maskRow, resolveView, setVar, type Scope } from "./envvars";
 import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
-import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
+import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
 import { dynamicEnums } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
 import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
-import { audit, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
+import { audit, fetchWithTimeout, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
 
@@ -183,7 +184,15 @@ async function insertCluster(env: Env, spec: ReturnType<typeof normalizeSpec>, s
   return cl;
 }
 
-app.get("/api/templates", (c) => c.json({ standard: defaultSpec("example"), "tiny-cpu": defaultSpec("example", "tiny-cpu"), standard_pools: STANDARD_POOLS }));
+app.get("/api/templates", (c) =>
+  c.json({
+    // Every template as a spec (the keys standard / tiny-cpu as before), their titles, and the pool presets the dashboard can add.
+    ...Object.fromEntries(Object.keys(TEMPLATES).map((k) => [k, defaultSpec("example", k)])),
+    templates: Object.entries(TEMPLATES).map(([id, t]) => ({ id, title: t.title, pools: t.pools })),
+    pool_presets: POOL_PRESETS,
+    standard_pools: STANDARD_POOLS,
+  }),
+);
 app.get("/api/clusters", async (c) => {
   const cls = await listClusters(c.env);
   const out = [];
@@ -218,6 +227,7 @@ app.delete("/api/clusters/:id", async (c) => {
   if (allPods(cl.state).length) throw new HttpError(409, "the cluster has pods: stop it first");
   await c.env.DB.prepare("DELETE FROM clusters WHERE id = ?").bind(cl.id).run();
   await c.env.DB.prepare("DELETE FROM env_vars WHERE scope = 'cluster' AND scope_id = ?").bind(cl.id).run();
+  await c.env.DB.prepare("DELETE FROM env_vars WHERE scope = 'pool' AND scope_id LIKE ?").bind(`${cl.id}:%`).run();
   await auditC(c, { action: "cluster.delete", target: cl.name, before: cl.spec });
   return c.json({ deleted: cl.id });
 });
@@ -233,7 +243,8 @@ const OPS: Record<string, { kind: Parameters<typeof startOp>[2]; params: (b: any
   extend: { kind: "extend", params: (b) => ({ minutes: Number(b.minutes) }) },
   scale: { kind: "scale", params: (b) => ({ pool: String(b.pool || ""), count: Number(b.count) }) },
   roll: { kind: "roll", params: (b) => ({ target: String(b.target || "stable"), pools: Array.isArray(b.pools) ? b.pools.map(String) : undefined, gateway: !!b.gateway }) },
-  restart: { kind: "restart", params: (b) => ({ pods: Array.isArray(b.pods) ? b.pods.map(String) : undefined }) },
+  // pods / pools (a pool id, or "gateway"): restart just those, whether or not their env changed; neither: every pod whose env changed.
+  restart: { kind: "restart", params: (b) => ({ pods: Array.isArray(b.pods) && b.pods.length ? b.pods.map(String) : undefined, pools: Array.isArray(b.pools) && b.pools.length ? b.pools.map(String) : undefined }) },
   "gateway/start": { kind: "gateway-start", params: () => ({}) },
   "gateway/stop": { kind: "gateway-stop", params: () => ({}) },
 };
@@ -272,13 +283,13 @@ app.get("/api/clusters/:id/env", async (c) => {
   const pods = [];
   for (const r of rows.filter((x: any) => x.slot !== "retired")) {
     const des = await desiredEnv(env, cl, ctx, r.role, { pod: r.pod_id, pool: r.pool, image: r.image });
-    pods.push({ pod_id: r.pod_id, role: r.role, pool: r.pool, needs_restart: des.hash !== r.env_hash, env_applied_at: r.env_applied_at, env: await resolveView(env, cl.id, r.pod_id, des.system) });
+    pods.push({ pod_id: r.pod_id, role: r.role, pool: r.pool, needs_restart: des.hash !== r.env_hash, env_applied_at: r.env_applied_at, env: await resolveView(env, cl.id, r.pod_id, des.system, r.role === "worker" ? r.pool : null) });
   }
   // What a new pod of each kind would get (also when the cluster is stopped).
   const preview: Record<string, unknown> = {};
   const img = (k: string) => cl.state.images[k] || cl.state.image || `(${k} image)`;
   if (cl.spec.gateway.enabled) preview.gateway = await resolveView(env, cl.id, null, gatewaySystemEnv(ctx, img("gateway")));
-  for (const p of cl.spec.pools) preview[p.id] = await resolveView(env, cl.id, null, workerSystemEnv(ctx, p, img(p.id)));
+  for (const p of cl.spec.pools) preview[p.id] = await resolveView(env, cl.id, null, workerSystemEnv(ctx, p, img(p.id)), p.id);
   return c.json({ pods, preview, needs_restart: pods.filter((p) => p.needs_restart).map((p) => p.pod_id) });
 });
 app.get("/api/clusters/:id/gateway", async (c) => {
@@ -303,6 +314,30 @@ app.post("/api/clusters/:id/mint-key", async (c) => {
   if (!r.ok || !j.api_key) throw new HttpError(502, `mint refused (${r.status})`);
   await auditC(c, { action: "cluster.mint-key", target: cl.name, after: { key: j.key?.id, name } });
   return c.json({ api_key: j.api_key, key: j.key }, 201);
+});
+
+/** The gateway's minted user keys (its admin API; the same shape as gateway-less clusters', docs/control/gateway-less-auth.md). */
+async function gatewayAdmin(c: C, cl: Cluster, method: string, path: string): Promise<{ status: number; body: any }> {
+  if (!cl.state.gateway_url) throw new HttpError(409, `${cl.name} has no gateway`);
+  const tok = await adminToken(c.env, cl);
+  const r = await fetchWithTimeout(`${cl.state.gateway_url}${path}`, { method, headers: { authorization: `Bearer ${tok}` }, timeoutMs: 20000 });
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+}
+app.get("/api/clusters/:id/keys", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const r = await gatewayAdmin(c, cl, "GET", "/fv/v1/admin/keys");
+  if (r.status !== 200) throw new HttpError(502, `key list refused (${r.status})`);
+  return c.json({ keys: r.body?.keys || [], backend: r.body?.backend });
+});
+app.delete("/api/clusters/:id/keys/:kid", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const kid = c.req.param("kid");
+  if (!/^key_[0-9a-f]{12}$/.test(kid)) throw new HttpError(400, "key id: key_<12 hex>");
+  const r = await gatewayAdmin(c, cl, "DELETE", `/fv/v1/admin/keys/${kid}`);
+  const pod = cl.state.gateway?.pod || "gateway";
+  await auditC(c, { action: "cluster.revoke-key", target: cl.name, after: { key: kid, applied: r.status === 200 ? [pod] : [], failed: r.status === 200 ? [] : [`${pod}:${r.status}`] } });
+  if (r.status !== 200) throw new HttpError(r.status === 404 ? 404 : 502, `revoke refused (${r.status})`);
+  return c.json({ key: r.body?.key, applied: [pod], failed: [] });
 });
 
 /** Import a runpod-cluster.sh state file (artifacts/runpod/serve/cluster.json) and, optionally, its .admin-key.pem. */
@@ -352,23 +387,26 @@ app.post("/api/clusters/import", async (c) => {
 
 // ---------------- env vars
 const scopeOf = (s: string): Scope => {
-  if (s !== "account" && s !== "cluster" && s !== "pod") throw new HttpError(400, "scope: account | cluster | pod");
+  if (s !== "account" && s !== "cluster" && s !== "pool" && s !== "pod") throw new HttpError(400, "scope: account | cluster | pool | pod");
   return s;
 };
 app.get("/api/env/account", async (c) => c.json({ vars: (await listVars(c.env, "account", "")).map(maskRow) }));
 app.get("/api/env/:scope/:sid", async (c) => {
   const scope = scopeOf(c.req.param("scope"));
-  return c.json({ vars: (await listVars(c.env, scope, scope === "account" ? "" : c.req.param("sid"))).map(maskRow) });
+  const sid = scope === "account" ? "" : scope === "pool" ? await poolSid(c.env, c.req.param("sid")) : c.req.param("sid");
+  return c.json({ vars: (await listVars(c.env, scope, sid)).map(maskRow) });
 });
 async function putVar(c: C, scope: Scope, sid: string, key: string) {
   const b = await body<{ value?: string; secret?: boolean }>(c);
   if (scope === "cluster") await getCluster(c.env, sid);
+  if (scope === "pool") sid = await poolSid(c.env, sid);
   const r = await setVar(c.env, scope, sid, key, String(b.value ?? ""), !!b.secret, actor(c));
   await bumpDoc(c.env, "env", scope === "account" ? "account" : `${scope}:${sid}`, actor(c));
   await auditC(c, { action: "env.set", target: `${scope}:${sid || "-"}:${key}`, before: r.before, after: r.after });
   return c.json({ ok: true, ...r.after, key });
 }
 async function delVar(c: C, scope: Scope, sid: string, key: string) {
+  if (scope === "pool") sid = await poolSid(c.env, sid);
   const r = await deleteVar(c.env, scope, sid, key);
   await bumpDoc(c.env, "env", scope === "account" ? "account" : `${scope}:${sid}`, actor(c));
   await auditC(c, { action: "env.delete", target: `${scope}:${sid || "-"}:${key}`, before: r.before });
@@ -378,6 +416,15 @@ app.put("/api/env/account/:key", (c) => putVar(c, "account", "", c.req.param("ke
 app.delete("/api/env/account/:key", (c) => delVar(c, "account", "", c.req.param("key")));
 app.put("/api/env/:scope/:sid/:key", (c) => putVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
 app.delete("/api/env/:scope/:sid/:key", (c) => delVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
+
+// ---------------- the shared build pod (read only: buildpod.ts, its /healthz timers)
+app.get("/api/buildpod", async (c) => {
+  const pol = await policies(c.env);
+  const pods = await buildPodStatus(c.env, pol);
+  // Its self-stop error carries a Runpod reply: scrubbed like every other upstream text.
+  for (const p of pods) if (p.health?.self_stop?.error) p.health.self_stop.error = scrub(c.env, p.health.self_stop.error);
+  return c.json({ pods, policy: { backstop: pol.build_pod_backstop, max_h: pol.build_pod_max_h, idle_grace_min: pol.build_pod_idle_grace_min } });
+});
 
 // ---------------- alerts, policies
 app.get("/api/alerts", async (c) => {
