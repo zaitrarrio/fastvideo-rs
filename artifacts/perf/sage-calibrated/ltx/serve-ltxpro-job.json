@@ -1,0 +1,26 @@
+{
+  "id": "fvjob_9db4a9ea90a147458820561d7b3cfe3d",
+  "status": "succeeded",
+  "model": "ltx-pro",
+  "resolved_model": "ltx25-distill-dense",
+  "width": 1920,
+  "height": 1088,
+  "num_frames": 121,
+  "metrics": {
+    "build_rtf": 4.5224009444628095,
+    "inference_s": 22.800438095,
+    "peak_memory_mb": 44600.379875183105,
+    "queue_s": 0.265867029,
+    "run_s": 73.248935535,
+    "stage_durations": {
+      "audio_decode": 0.296962618,
+      "denoise": 22.800438095,
+      "encode": 0.191980989,
+      "stage1": 6.599985624,
+      "stage2": 12.865765089,
+      "text": 43.225557692,
+      "upsample": 3.334687382,
+      "video_decode": 5.6375395820000005
+    }
+  }
+}
