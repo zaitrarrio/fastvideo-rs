@@ -698,3 +698,108 @@ Each GPU pod had a detached 5 400 s DELETE backstop, an on-pod idle guard
 (20 min at 0 % GPU) and a local balance watchdog (delete below $8.50). The
 balance went from $69.90 to $63.86 over the session. Other agents' pods ran
 at the same time.
+
+## 9. `ltx-pro` under the calibrated rule (2026-10-02)
+
+Owner decision on section 8.5: re-run the LTX-pro Sage gate (the one recipe
+that has Sage on by default) to the section 8.2 standard, and confirm that
+the served `ltx-pro` route really turns Sage on.
+
+### 9.1 Rule, fixed before any run
+
+**Workload.** RTX PRO 6000 (sm_120). `ltx25-distill-dense`, the `ltx-pro`
+route: `fv-gpucheck --techniques ltx2/ltx25_distill_dense ltx2 gen
+--model-version 2.5 --two-stage --dense-stage2`, 1920 x 1088, 121 frames at
+24 fps, `--no-text-cache` (as Phase 3, section 6.3). The three LTX prompts
+(`artifacts/perf/sage-phase3/driver/prompts-ltx3.json`: ltx-multishot,
+ltx-newsbroadcast, ltx-frogyoga), each at seeds 42, 1042 and 2042: 9 clips
+per arm. Stage 1 at 1080p is 8 160 tokens, so both stages are routed.
+
+**Arms**, one warm process each over the 9 clips, kernel picks pinned:
+
+| arm | env | role |
+|---|---|---|
+| `cud` | `FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=cudnn` | bf16 reference |
+| `fw2` | `FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=v2 FASTVIDEO_CUDNN_SDPA_GRAPH=composite` | bf16 control (fwd2) |
+| `sage` | `FASTVIDEO_ATTN_SAGE=2 FASTVIDEO_FLASH_KERNEL=cudnn` | candidate |
+
+**Pairs, deviations, rules 1 and 2:** exactly section 8.2 (control pair
+`cud`/`fw2`, Sage pair `cud`/`sage`; LPIPS mean, PSNR mean, |ln sharpness|,
+|ln jitter|; the same margins and outlier floors), per prompt over its 3
+seeds.
+
+**Verdict: pass** when (i) at least **2 of 3** prompts pass rule 1 (at most
+one prompt out of band, as H3's 4 of 5 allows one), (ii) no prompt breaks
+rule 2, and (iii) the denoise speedup (median over the 9 clips, `sage` vs
+`cud`) is at least 1.10. Analysis: `artifacts/perf/sage-calibrated/driver/calib.py`
+with the prompt list switched to the LTX three (`--prompts`), unchanged
+otherwise.
+
+**If it fails**, the proposal is to turn the `ltx-pro` default off
+(`Ltx2Recipe::sage_attention = false`); the owner decides, nothing is changed
+here.
+
+**Serving check (not part of the verdict).** One `ltx-pro` request through
+`fv-serve` (image `fastvideo-rs-serve:sha-ee9de1a`, main HEAD) with
+`FASTVIDEO_ATTN_SAGE` unset: Sage is on by default if the serve log shows the
+`attn_sage: kernels loaded` and `sdpa: SageAttention2 ... (attn_sage)` lines
+for that job.
+
+### 9.2 Results
+
+One RTX PRO 6000 Server Edition pod (`p63ptu6lo1wbgb`, EUR-IS-1, $2.09/hr,
+driver 595.91.07) on the EU volume `jg48s6o1w0`, nothing written to it.
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-ee9de1a` (main HEAD, the
+debug flavour with `fv-serve` and `fv-gpucheck`; pinned by digest
+`sha256:75625f9a…`), no build-pod binary. Rows, compare JSONs, the analysis
+output and the serve log lines: `artifacts/perf/sage-calibrated/ltx/`.
+
+**Serving: Sage is on by default for `ltx-pro`.** `fv-serve` with one
+`ltx25-distill-dense` model (`recipe = "ltx-pro"`,
+`artifacts/perf/sage-calibrated/ltx/ltxpro.toml`) and `FASTVIDEO_ATTN_SAGE`
+unset. One native job (`POST /fv/v1/jobs`, `model: "ltx-pro"`, 1920x1080,
+5 s) resolved to `ltx25-distill-dense`, ran 1920x1088x121 and logged
+
+    [fastvideo] attn_sage: kernels loaded (cubin sm120, 0.0s, sm120)
+    [fastvideo] sdpa: SageAttention2 INT8 QK / FP8 PV (attn_sage) B=1 H=32 Sq=8160 Sk=8160 D=128
+
+(stage 1 at 8 160 tokens is the first routed call; the line is logged once).
+Its stage timings match the Sage arm below: denoise 22.80 s, stage 1 6.60 s,
+stage 2 12.87 s (the bf16 arm's stage 2 is 15.1 s).
+
+**Determinism.** No arm logged an `sdpa auto` timing (picks pinned). The
+`sage` arm logged its two `attn_sage` lines; `cud` and `fw2` none.
+
+Per prompt: Sage median over 3 seeds / the band from rule 1.
+
+| prompt | LPIPS | PSNR dB | \|ln sharpness\| | \|ln jitter\| | sharpness ratio, Sage (control) | prompt |
+|---|---|---|---|---|---|---|
+| ltx-multishot | 0.221 / 0.233 | 25.41 / 23.78 | 0.013 / 0.028 | 0.009 / 0.046 | 0.995 (0.997) | pass |
+| ltx-newsbroadcast | 0.182 / 0.230 | 22.99 / 21.73 | 0.015 / 0.033 | 0.018 / 0.045 | 1.016 (0.992) | pass |
+| ltx-frogyoga | 0.264 / 0.380 | 21.81 / 17.81 | 0.010 / 0.030 | 0.017 / 0.057 | 0.992 (1.002) | pass |
+
+| arm | denoise s (median of 9) | stage 1 / stage 2 s | total s | wall (9 clips + warm-up + load) |
+|---|---|---|---|---|
+| `cud` | 22.85 | 6.89 / 15.11 | 34.29 | 531 s |
+| `fw2` | 22.74 | 6.93 / 15.05 | 34.33 | 502 s |
+| `sage` | **20.00** | 6.59 / **12.49** | 31.73 | 536 s |
+
+* Rule 1: 3 of 3 prompts inside the band. Rule 2: no outlier. Speed: **1.142x**
+  denoise (stage 2 1.21x), 1.08x total.
+* Sage moves an LTX clip about as far as the bf16 kernel swap: LPIPS
+  0.18-0.31 against 0.16-0.37 for the control, PSNR 21.1-25.5 dB against
+  18.2-26.3 dB. On 7 of 9 clips Sage is a little further than the control
+  (frogyoga s42 and newsbroadcast s2042 go the other way), but every per-prompt
+  median stays inside its band; no softening (Sage sharpness ratio
+  0.99-1.03, jitter 0.98-1.02).
+* The montage `shots/ltx-frogyoga-f060-cud-fw2-sage-x3seeds.jpg` (rows `cud`,
+  `fw2`, `sage`; columns seeds 42 / 1042 / 2042) keeps the same composition
+  per seed in all three arms.
+
+**Verdict `ltx-pro` Sage: PASS** under the calibrated rule. The default stays
+as it is (on for `ltx-pro` on sm_120); nothing to propose.
+
+**Spend.** The gate and the serving check took about 55 min of pod
+`p63ptu6lo1wbgb` (≈ $1.9); the same pod then ran the H3 Plug control pair.
+The whole session (two pods, this section and docs/serve/research-longlive.md
+12.7) cost ≈ $5.62; both pods were deleted (GET 404).

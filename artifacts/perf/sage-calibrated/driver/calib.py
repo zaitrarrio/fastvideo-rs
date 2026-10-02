@@ -4,6 +4,7 @@ before the runs. Reads compare-clips JSONs and the cells' benchmark.json,
 prints the per-prompt table and the verdict per recipe.
 
     calib.py <results dir> [max dense]
+    calib.py --prompts a,b,c --min-pass 2 <results dir> <recipe>   (section 9: LTX)
 
 <results dir>/compare/compare-clips-<recipe>-<a>--<b>-<prompt>-s<seed>.json
 <results dir>/<recipe>-<arm>/benchmark.json
@@ -23,6 +24,7 @@ METRICS = ["lpips", "psnr", "sharp", "jitter"]
 MARGIN = {"lpips": 0.03, "psnr": 1.0, "sharp": 0.02, "jitter": 0.03}
 OUTLIER_ADD = {"lpips": 0.05, "psnr": 3.0, "sharp": 0.02, "jitter": 0.03}
 MIN_SPEEDUP = 1.10
+MIN_PASS = 4
 
 
 def load_pair(root, recipe, a, b):
@@ -121,15 +123,23 @@ def judge(recipe, root):
     except (OSError, ValueError, TypeError) as e:
         speed = float("nan")
         print(f"\ndenoise: unavailable ({e})")
-    ok = passes >= 4 and not outliers and speed >= MIN_SPEEDUP
-    print(f"\nrule 1: {passes}/5 prompts inside the band; rule 2 outliers: {outliers or 'none'}; "
+    ok = passes >= MIN_PASS and not outliers and speed >= MIN_SPEEDUP
+    print(f"\nrule 1: {passes}/{len(PROMPTS)} prompts inside the band; rule 2 outliers: {outliers or 'none'}; "
           f"speed {speed:.3f}x (>= {MIN_SPEEDUP}) -> VERDICT {recipe}: {'PASS' if ok else 'FAIL'}")
     return ok
 
 
 def main():
-    root = sys.argv[1]
-    for r in sys.argv[2:] or ["max", "dense"]:
+    global PROMPTS, MIN_PASS
+    args = sys.argv[1:]
+    while args and args[0].startswith("--"):
+        if args[0] == "--prompts":
+            PROMPTS = args[1].split(",")
+        elif args[0] == "--min-pass":
+            MIN_PASS = int(args[1])
+        args = args[2:]
+    root = args[0]
+    for r in args[1:] or ["max", "dense"]:
         if os.path.isdir(f"{root}/{r}-cud"):
             judge(r, root)
 
