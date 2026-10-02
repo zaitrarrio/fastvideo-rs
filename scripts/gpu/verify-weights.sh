@@ -114,9 +114,9 @@ needs() {
     longlive-1.3b)
       echo "longlive-1.3b:models longlive-1.3b:prompts :longlive-1.3b-safetensors/longlive_base.safetensors :longlive-1.3b-safetensors/lora.safetensors sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler" ;;
     # LongLive-2.0-5B (merged BF16 .pt) on the Wan2.2-TI2V-5B tree. Plus sha:longlive2-5b.
-    longlive2-5b) echo "longlive2-5b $(needs wan22-ti2v-5b)" ;;
+    longlive2-5b) echo ":longlive2-5b $(needs wan22-ti2v-5b)" ;;
     # The two NVFP4 (FourOverSix) checkpoints. Plus their sha: lists.
-    longlive2-5b-nvfp4) echo "longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2" ;;
+    longlive2-5b-nvfp4) echo ":longlive2-5b-nvfp4-s4 :longlive2-5b-nvfp4-s2" ;;
     # The six LongLive-Plug LoRA trees. Plus their sha: lists.
     longlive-plug)
       echo "longlive-plug:minimax-h3-few-step longlive-plug:minimax-h3-cfg longlive-plug:wan21-t2v-14b-few-step longlive-plug:wan21-t2v-14b-cfg longlive-plug:wan22-ti2v-5b-few-step longlive-plug:wan22-ti2v-5b-cfg" ;;
