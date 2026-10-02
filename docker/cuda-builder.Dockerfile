@@ -22,9 +22,16 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:/usr/local/cuda-13.0/bin:${PATH} \
     NVCC=/usr/local/cuda-13.0/bin/nvcc \
     CUDARC_CUDA_VERSION=13000 \
-    LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+    LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64 \
+    RUSTUP_PERMIT_COPY_RENAME=1
+# Install what rust-toolchain.toml asks for in this one layer and pin later
+# layers to it: a later `cargo` would otherwise sync `stable` across overlayfs
+# layers and fail with "Invalid cross-device link" (see gpucheck.Dockerfile).
+COPY rust-toolchain.toml /etc/fastvideo/rust/rust-toolchain.toml
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none \
+    && cd /etc/fastvideo/rust && rustup toolchain install && rustup default stable \
     && rustc --version && nvcc --version
+ENV RUSTUP_TOOLCHAIN=stable
 
 WORKDIR /src
 CMD ["bash"]
