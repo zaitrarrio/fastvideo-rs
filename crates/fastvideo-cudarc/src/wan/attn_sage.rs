@@ -10,24 +10,37 @@
 //! the k32 MMA's operand order. docs/perf/sage-attention.md has the upstream
 //! comparison and the accuracy / speed numbers.
 //!
-//! Knob: `FASTVIDEO_ATTN_SAGE=2` routes the dense self-attention of the DiTs
-//! (`nn::scaled_dot_product_attention`: H3, LTX-2.5, Wan) through
-//! [`dense_sdpa`] when the head dim is 128, the device is sm_89+ and both
-//! sequences are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ` (default 6144: below
-//! that the bf16 kernels are as fast). `=3` (SageAttention3, NVFP4) is
-//! refused: it failed the accuracy tolerance (docs/perf/sage-attention.md).
-//! Unset / `0`: off, nothing here runs.
+//! Routing: the dense self-attention of the DiTs
+//! (`nn::scaled_dot_product_attention`: H3, LTX-2.5, Wan) goes through
+//! [`dense_sdpa`] when it is enabled (below), the head dim is 128, the device
+//! is sm_89+ and both sequences are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ`
+//! (default 6144: below that the bf16 kernels are as fast).
+//!
+//! Enabled, highest precedence first:
+//!
+//! 1. `FASTVIDEO_ATTN_SAGE=2`: on for every model (any sm_89+ device);
+//!    `FASTVIDEO_ATTN_SAGE=0`: off for every model, recipes included. `=3`
+//!    (SageAttention3, NVFP4) is refused: it failed the accuracy tolerance
+//!    (docs/perf/sage-attention.md).
+//! 2. Unset: off, except inside a [`recipe_scope`] a recipe opened with
+//!    `true` on a device where the kernel pays ([`arch_pays`]: sm_120, RTX
+//!    PRO 6000 / RTX 5090). Only the `ltx-pro` model (`ltx25-distill-dense`,
+//!    `Ltx2Recipe::sage_attention`) opens one: the one recipe that passed
+//!    the end-to-end gate (docs/perf/sage-attention.md, Phase 3).
 
 /// Head dim the kernels are written for.
 pub const HEAD_DIM: usize = 128;
 
-/// The `FASTVIDEO_ATTN_SAGE` value: 0 (off) or 2 (on); anything else is off
-/// with a one-time warning.
-pub fn mode() -> u8 {
-    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+/// The `FASTVIDEO_ATTN_SAGE` override: `Some(2)` (on everywhere), `Some(0)`
+/// (off everywhere) or `None` (unset: recipes decide). An unknown value is
+/// off with a one-time warning.
+pub fn forced() -> Option<u8> {
+    static MODE: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
-        match crate::wan::envflag::string_flag("FASTVIDEO_ATTN_SAGE", "0").trim() {
-            "" | "0" | "off" => 0,
+        let v = fastvideo_models::techniques::settings::var("FASTVIDEO_ATTN_SAGE")?;
+        Some(match v.trim().to_ascii_lowercase().as_str() {
+            "" => return None,
+            "0" | "off" => 0,
             "2" | "on" => 2,
             other => {
                 crate::wan::log::info(format_args!(
@@ -36,8 +49,60 @@ pub fn mode() -> u8 {
                 ));
                 0
             }
-        }
+        })
     })
+}
+
+/// Whether a recipe's Sage enablement applies on `(sm_major, sm_minor)`:
+/// sm_120 only (RTX PRO 6000, RTX 5090). On sm_90 / sm_100 the bf16 kernels
+/// (cuDNN, `attn_dc`) are close enough that the lossy kernel does not pay
+/// (docs/perf/sage-attention.md, H100 section).
+pub fn arch_pays(sm_major: i32, sm_minor: i32) -> bool {
+    (sm_major, sm_minor) == (12, 0)
+}
+
+/// The routing decision, without the device: `forced` is [`forced`], `recipe`
+/// whether a [`recipe_scope`] asked for it, `sm` the device's compute
+/// capability. The kernel itself also needs sm_89+.
+pub fn decide(forced: Option<u8>, recipe: bool, sm: (i32, i32)) -> bool {
+    if sm < (8, 9) {
+        return false;
+    }
+    match forced {
+        Some(m) => m == 2,
+        None => recipe && arch_pays(sm.0, sm.1),
+    }
+}
+
+thread_local! {
+    static RECIPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the calling thread is inside a [`recipe_scope`] that asked for Sage.
+pub fn recipe_wants() -> bool {
+    RECIPE.with(|r| r.get())
+}
+
+/// Restores the previous recipe setting when dropped.
+#[must_use = "the recipe setting lasts as long as the guard"]
+pub struct RecipeScope {
+    prev: bool,
+}
+
+impl Drop for RecipeScope {
+    fn drop(&mut self) {
+        RECIPE.with(|r| r.set(self.prev));
+    }
+}
+
+/// A recipe's per-request enablement, for the calling thread (the executor
+/// thread that owns the CUDA device and runs the DiT) until the guard drops.
+/// `FASTVIDEO_ATTN_SAGE` still overrides it, and it only takes effect on
+/// [`arch_pays`] devices.
+pub fn recipe_scope(on: bool) -> RecipeScope {
+    RecipeScope {
+        prev: RECIPE.with(|r| r.replace(on)),
+    }
 }
 
 /// Smallest `Sq` and `Sk` routed to the kernel.
@@ -98,9 +163,14 @@ mod imp {
         device::global_device().is_some_and(|d| (d.sm_major, d.sm_minor) >= (8, 9))
     }
 
-    /// Whether dense DiT attention goes through [`dense_sdpa`].
+    /// Whether dense DiT attention goes through [`dense_sdpa`] ([`super::decide`]).
     pub fn dense_enabled() -> bool {
-        super::mode() == 2 && supported()
+        let forced = super::forced();
+        if forced == Some(0) || (forced.is_none() && !super::recipe_wants()) {
+            return false;
+        }
+        device::global_device()
+            .is_some_and(|d| super::decide(forced, super::recipe_wants(), (d.sm_major, d.sm_minor)))
     }
 
     struct Kernels {
@@ -374,5 +444,40 @@ mod tests {
     #[test]
     fn head_dim_is_the_kernels() {
         assert_eq!(super::HEAD_DIM, 128);
+    }
+
+    #[test]
+    fn recipes_enable_it_on_sm120_only() {
+        use super::decide;
+        // Unset: only a recipe on sm_120.
+        assert!(decide(None, true, (12, 0)));
+        for sm in [(8, 9), (9, 0), (10, 0), (10, 3), (12, 1)] {
+            assert!(!decide(None, true, sm), "{sm:?}");
+        }
+        assert!(!decide(None, false, (12, 0)));
+        // `=0` wins over a recipe; `=2` turns it on everywhere it can run.
+        assert!(!decide(Some(0), true, (12, 0)));
+        assert!(decide(Some(2), false, (9, 0)));
+        assert!(decide(Some(2), false, (12, 0)));
+        // Never below sm_89 (no INT8 / FP8 mma.sync).
+        assert!(!decide(Some(2), true, (8, 6)));
+    }
+
+    #[test]
+    fn recipe_scope_is_per_thread_and_restores() {
+        assert!(!super::recipe_wants());
+        {
+            let _outer = super::recipe_scope(true);
+            assert!(super::recipe_wants());
+            std::thread::spawn(|| assert!(!super::recipe_wants()))
+                .join()
+                .unwrap();
+            {
+                let _inner = super::recipe_scope(false);
+                assert!(!super::recipe_wants());
+            }
+            assert!(super::recipe_wants());
+        }
+        assert!(!super::recipe_wants());
     }
 }

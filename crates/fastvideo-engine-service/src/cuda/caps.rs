@@ -189,6 +189,14 @@ pub struct Ltx2Recipe {
     /// Audio-to-video on this model ([`LtxA2v`]).
     #[serde(default)]
     pub a2v: LtxA2v,
+    /// SageAttention2 (`fastvideo_cudarc::wan::attn_sage`, INT8 QK / FP8 PV)
+    /// on the dense DiT self-attention of this model's two-stage generations,
+    /// on sm_120 only (RTX PRO 6000 / RTX 5090); edits stay bf16.
+    /// `FASTVIDEO_ATTN_SAGE=0|2` overrides it. Set on `ltx25-distill-dense`
+    /// (`ltx-pro`) only: the one recipe that passed the end-to-end gate
+    /// (docs/perf/sage-attention.md, Phase 3: 1080p denoise 1.15x).
+    #[serde(default)]
+    pub sage_attention: bool,
 }
 
 /// How an LTX-2.5 model serves audio-to-video.
@@ -882,6 +890,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         refine_steps: 3,
         ic_lora: None,
         a2v: LtxA2v::Distilled,
+        sage_attention: false,
     }
 }
 
@@ -1055,6 +1064,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "ltx25-distill-two-stage-dense",
             CudaRecipe::Ltx2(Ltx2Recipe {
                 a2v: LtxA2v::Off,
+                sage_attention: true,
                 ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
             }),
         ),
@@ -1422,6 +1432,21 @@ mod tests {
         assert_eq!(t.resolve("fasth3").unwrap().id.as_str(), "fasth3-4step-vsa");
         assert!(t.get(&ModelId::new("fasth3-8step-dense")).unwrap().tier.is_none());
         assert_eq!(t.len(), cat.len());
+    }
+
+    #[test]
+    fn sage_attention_is_ltx_pro_only() {
+        let cat = catalog(&WeightLayout::default());
+        let on: Vec<&str> = cat
+            .iter()
+            .filter(|m| matches!(&m.recipe, CudaRecipe::Ltx2(r) if r.sage_attention))
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(on, ["ltx25-distill-dense"]);
+        assert_eq!(
+            find(&cat, "ltx-pro").unwrap().id.as_str(),
+            "ltx25-distill-dense"
+        );
     }
 
     #[test]
