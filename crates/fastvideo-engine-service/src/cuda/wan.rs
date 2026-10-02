@@ -56,6 +56,16 @@ pub fn load_pipeline(
     recipe: &WanRecipe,
     obs: &mut dyn FnMut(&'static str),
 ) -> Result<WanPipeline, ApiError> {
+    load_pipeline_with_dit(recipe, obs, None)
+}
+
+/// [`load_pipeline`] with the transformer from `dit` (LongLive) instead of
+/// `recipe.weights/transformer`.
+pub fn load_pipeline_with_dit(
+    recipe: &WanRecipe,
+    obs: &mut dyn FnMut(&'static str),
+    dit: Option<fastvideo_cudarc::wan::weights::WeightMap>,
+) -> Result<WanPipeline, ApiError> {
     let _vae = (recipe.decoder != WanDecoder::Auto)
         .then(|| EnvGuard::set("FASTVIDEO_WAN_VAE", recipe.decoder.env_value()));
     let _tae = recipe
@@ -64,10 +74,11 @@ pub fn load_pipeline(
         .filter(|_| std::env::var_os("FASTVIDEO_TAE_DIR").is_none())
         .map(|d| EnvGuard::set("FASTVIDEO_TAE_DIR", &d.to_string_lossy()));
     obs("wan_pipeline");
-    let pipe = WanPipeline::load_with(
+    let pipe = WanPipeline::load_with_dit(
         &recipe.weights,
         &recipe.preset,
         LoadParts { text_encoder: true },
+        dit,
     )
     .map_err(|e| api_err(&format!("wan load {}", recipe.weights.display()), e))?;
     if recipe.decoder == WanDecoder::Taehv && pipe.taehv().is_none() {

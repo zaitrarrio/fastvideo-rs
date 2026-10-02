@@ -612,12 +612,128 @@ Cost:
 
 ## 10. Open items
 
-- Read the real `keys-*.txt` and the dtype from the converter. If
-  `generator_ema` is the better tensor set (the config says
-  `use_ema: false`), nothing changes.
+- ~~Read the real `keys-*.txt` and the dtype~~: done (§11; f32, keys load
+  with nothing skipped).
 - LongLive-1.3B weights licence: owner/legal (§4.3).
 - NVIDIA OML: whether the "API Trial Terms" sentence on the 2.0 cards
   matters for self-hosting (owner).
 - H3 Plug LoRAs: the H3 territory clause blocks serving from US/EU without a
   MiniMax licence (as for H3 itself).
 - The director has no causal mode (§5, §6 A4).
+
+---
+
+## 11. GPU check results (2026-10-02, RTX PRO 6000)
+
+**Setup.** One RTX PRO 6000 Blackwell Server Edition (pod `uhkrvq8551gvsp`,
+EUR-IS-1, driver 595.91.07, $2.09/hr, 29 min), with the EU volume
+`jg48s6o1w0` at `/workspace` (nothing written to it). `fv-gpucheck` was
+built on the build pod from `wip/longlive` and run on the runtime image
+`fastvideo-rs-runtime:sha-4eeb801`
+(`@sha256:dccdf956…`, the Sage Phase 3 image), driven through
+`scripts/serve/e2e/pod.sh` (sidecar exec). Flags: `--mode fast`, 832×480,
+16 fps, `FASTVIDEO_TAE_DIR=$W/auxiliary/tae` (TAEHV decode every block),
+CUDA graphs on unless noted. Prompts: LongLive's
+`prompts/interactive_example.jsonl` line 0. The first prompt runs the
+whole rollout, and the switches at 15 / 30 / 45 s take prompts 1–3.
+Driver, reports, sheets: `artifacts/perf/longlive-gpucheck/`.
+
+**Loading the real checkpoint.** `longlive_base.safetensors` (825 f32
+tensors) is renamed to Diffusers names, and the 300 LoRA modules
+(r = α = 256) are merged at scale 1, with no unknown or skipped keys (32.7 s).
+The whole pipeline loads in 82 s (UMT5 + DiT + merge). The §10 dtype
+question is answered: the base is f32, merged and rounded to bf16.
+
+### 11.1 Throughput (steady state, wall clock; block = 3 latent frames = 12 frames)
+
+| Run | Model | Window / sink / RoPE | 10 s fps | 60 s fps | Block p50 / p90 | KV | Device mem |
+|---|---|---|---:|---:|---|---:|---:|
+| `sf10` / `sf60` | SF-Wan (today's default) | 21 / 15 / rebased | 14.87 | 14.80 (engine 15.09) | 0.795 / 0.795 s | 9871 MiB | 33.2 GB |
+| `sf12_10` / `sf12_60` | SF-Wan | 12 / 3 / abs | 20.86 | 20.38 (20.95) | 0.573 / 0.573 s | 3290 MiB | 33.2 GB |
+| `ll10` / `ll60` | **LongLive-1.3B** (base + LoRA merged) | 12 / 3 / abs | **20.96** | **20.40** (20.97) | 0.572 / 0.573 s | 3290 MiB | 26.4 GB |
+| `ll240` | LongLive-1.3B | 12 / 3 / abs | | 240 s: **20.34** (20.94) | 0.573 / 0.573 s, max 0.606 | 3290 MiB | 27.5 GB, flat |
+| `llrel20` | LongLive-1.3B | 12 / 3 / relativistic | 20 s: 18.03 | | 0.651 / 0.652 s | | |
+| `lleager` | LongLive-1.3B, `graphs=0` | 12 / 3 / abs | 20 s: 17.55 | | 0.645 / 0.648 s | | |
+
+LongLive runs at **+38 % fps over SF-Wan's default** (20.4 against 14.8 fps), and
+above real time at 16 fps. The gain is the shorter window, not the
+weights: SF-Wan with the same 12 / 3 geometry runs at the same speed. TTFF is
+0.42 s warm. §9 estimated 18–20 fps; it came in slightly above that.
+
+### 11.2 Interactive 60 s, switches at 15 / 30 / 45 s
+
+| | `llsw` (re-cache ON) | `llkeep` (re-cache OFF) |
+|---|---|---|
+| fps (60 s) | 19.68 (engine 20.37) | 20.34 (20.93) |
+| Re-cache per switch | **0.392 / 0.391 / 0.390 s** (one t = 0 forward over the 12-frame window) | — |
+| Switch block | 0.965 s (p50 0.573 s): one block late by 0.39 s; p90 unchanged (0.574 s) | 0.57 s |
+| Prompt encode | 0.020–0.022 s (UMT5 resident) | same |
+| `warp_err` / `warp_err_hf` (whole 60 s) | 1.986 / 1.391 | 1.971 / 1.374 |
+| `lum_flicker` (whole 60 s) | 0.649 | 0.544 |
+| ±1 s around 15 / 30 / 45 s: `warp_err` (max) | 1.16 (2.12) / 2.37 (4.07) / 2.38 (3.43) | 1.24 (2.46) / 2.32 (3.71) / 2.18 (3.26) |
+| ±1 s: largest frame-mean luma jump | 0.60 / 3.14 / 4.56 | 0.87 / 2.51 / 1.32 |
+| 5 s segments, `warp_err` range | 1.06–3.03 | 1.06–3.01 |
+
+Metrics come from `scripts/gpu/hd_upscaler_metrics.py`'s definitions
+(Farneback flow, forward–backward consistent pixels) on every frame
+(`wan stream … dump=1`, `driver/drift.py`). For scale: a hard cut gives
+`warp_err` in the tens. The switch windows sit inside the range of the
+normal 5 s segments.
+
+**Continuity and adherence** (`sheets/switch-llsw.jpg`,
+`sheets/switch-llkeep.jpg`: frames −1 s, −0.25 s, +0.25 s, +0.75 s,
++1.5 s and +2.5 s around each switch). Neither mode cuts. Player, table,
+lighting and camera stay continuous through all three switches in both. With
+re-cache the new prompt takes over sooner. At 30 s ("a patron claps", the
+player settles) the arms come down and the clapping hands appear within
+about 1.5 s. Without re-cache the previous prompt's arms-out pose carries
+on past +2.5 s. That is LongLive's claim: the re-cache trades a 0.39 s
+one-off for faster adherence without a cut. The larger luma jump at 45 s
+with re-cache is the scene changing faster (a brighter wide shot), not
+flicker; `lum_flicker` stays in the normal range afterwards.
+
+### 11.3 RoPE, CUDA graphs, long run
+
+- **Graph vs eager through a re-cache** (`llgraph` / `lleager`, 20 s, switch at
+  10 s): the latent hashes of both windows are **bit-identical**
+  (`40f52022…`, `0b8766e0…`). The re-cache is captured correctly: the
+  switch block replays 0.391 s graph against 0.401 s eager. Eager is 11 %
+  slower overall (17.55 fps).
+- **Determinism:** `ll240`'s first six window hashes equal `ll60`'s.
+  `llkeep` (frame dump on) equals `llkeep2` (dump off) in every window.
+- **Absolute vs rebased (infinity) vs relativistic** (20 s, no switch): three
+  different latent streams (`40f52022…` / `27092645…` / `b0aa674f…`), with
+  similar picture statistics (luma 56.8–57.6, sharpness 14.4–14.6). So
+  `RebasedSink` ≡ `Relativistic` holds on the host tests' tiny DiT
+  but not bit-for-bit on real weights in bf16. Relativistic costs 12 %
+  (more kernels per block). `llinf` (rebased, 3 switches) re-caches
+  in 0.389–0.390 s, 19.77 fps. It stays coherent but reframes more (a wider
+  shot from about 40 s, `sheets/llinf.jpg`), and absolute held the framing.
+- **240 s, absolute RoPE, one prompt** (`ll240`, inside the 1024-frame RoPE
+  table): 20.34 fps flat. Memory is flat at 27 478 MiB, luma 56.9–61.9,
+  sharpness 14.4–16.1, and the fresh-state decode MAD 0.020–0.023 in every
+  window. The 24-window sheet (`sheets/ll240.jpg`) shows **no top-band
+  artefact and no banding** over 4 minutes. That is the failure SF-Wan's
+  one-block sink showed by 30–45 s (`docs/serve/e2e/wan.md`, R12). The
+  scene is fairly static (single prompt), so this is a stability result,
+  not a motion-quality one.
+- **One memory step.** `llkeep` stepped +864 MiB once (block 55 of 81) and stayed
+  flat, which tripped the stage's 256 MiB growth check. The identical
+  `llkeep2` (same latents) stayed flat at 27 478 MiB, as did `ll240`. So it is
+  a one-off allocation in the process, not growth per block. Noted, not
+  chased.
+
+### 11.4 Verdict
+
+**Pass.** It runs correctly on the real checkpoint (clean load, every
+run's frame count). Throughput is ≥ SF-Wan (+38 %, real time at 480p), and
+the re-cache works (0.39 s per switch, graph = eager bit for bit, no
+cut). `wip/longlive` merges to main **default-off / opt-in**:
+`SfWanRecipe.longlive` stays `None`, the catalog and fal schemas are
+unchanged, and `FV_LONGLIVE_WEIGHTS` is unset by default. The weights
+licence stays an owner decision (§4.3: treat as non-commercial).
+
+**Cost of the check.** GPU pod 29 min ≈ $1.01 (about 8 min lost to two
+setup mistakes: no `FASTVIDEO_TAE_DIR`, then gpucheck's default exact mode
+at 1.37 fps). Build pod ≈ 45 min shared. Downloads, conversion and
+verification on CPU pods ≈ $0.25.

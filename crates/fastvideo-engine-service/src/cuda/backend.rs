@@ -86,7 +86,7 @@ struct SfWan {
 fn rollout_base(r: &SfWanRecipe, text_cache: Option<&Path>) -> fastvideo_cudarc::wan::stream::RolloutConfig {
     use fastvideo_cudarc::wan::stream::{PromptSwitch, RolloutConfig, RopePolicy};
     let tok = r.wan.weights.join("tokenizer").join("tokenizer.json");
-    RolloutConfig {
+    let base = RolloutConfig {
         flow_shift: r.wan.flow_shift,
         local_attn_frames: r.local_attn_frames as usize,
         sink_frames: r.sink_frames as usize,
@@ -99,7 +99,46 @@ fn rollout_base(r: &SfWanRecipe, text_cache: Option<&Path>) -> fastvideo_cudarc:
         tokenizer_path: tok.is_file().then(|| tok.to_string_lossy().into_owned()),
         text_cache: text_cache.map(Path::to_path_buf),
         ..RolloutConfig::default()
+    };
+    match longlive_config(r) {
+        Some(ll) => ll.rollout(base),
+        None => base,
     }
+}
+
+/// The LongLive settings of a recipe, its window and sink taken from the
+/// recipe (12 and 3 for the release).
+fn longlive_config(r: &SfWanRecipe) -> Option<fastvideo_cudarc::wan::longlive::LongLiveConfig> {
+    let l = r.longlive.as_ref()?;
+    Some(fastvideo_cudarc::wan::longlive::LongLiveConfig {
+        local_attn_frames: r.local_attn_frames as usize,
+        sink_frames: r.sink_frames as usize,
+        global_sink: l.global_sink,
+        recache: l.recache,
+        relative_rope: l.relative_rope,
+        ..fastvideo_cudarc::wan::longlive::LongLiveConfig::interactive()
+    })
+}
+
+/// The LongLive transformer of a recipe (renamed, LoRA merged), if any.
+fn longlive_dit(
+    r: &SfWanRecipe,
+) -> Result<Option<fastvideo_cudarc::wan::weights::WeightMap>, ApiError> {
+    let (Some(l), Some(cfg)) = (r.longlive.as_ref(), longlive_config(r)) else {
+        return Ok(None);
+    };
+    let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(&l.weights, &cfg);
+    if !l.lora {
+        w.lora = None;
+    } else if w.lora.is_none() {
+        return Err(ApiError::engine_failed(format!(
+            "longlive: {} has no lora.safetensors (set lora: false for the base generator)",
+            l.weights.display()
+        )));
+    }
+    let (map, _) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w)
+        .map_err(|e| ApiError::engine_failed(format!("longlive weights {}: {e}", l.weights.display())))?;
+    Ok(Some(map))
 }
 
 /// `EngineBackend` over the fastvideo-cudarc pipelines.
@@ -451,8 +490,10 @@ impl EngineBackend for CudaBackend {
                 let pipe = match self.causal_pipes.get(model) {
                     Some(p) => *p,
                     None => {
-                        let p: &'static _ =
-                            Box::leak(Box::new(super::wan::load_pipeline(&r.wan, &mut stage)?));
+                        let dit = longlive_dit(r)?;
+                        let p: &'static _ = Box::leak(Box::new(super::wan::load_pipeline_with_dit(
+                            &r.wan, &mut stage, dit,
+                        )?));
                         self.causal_pipes.insert(model.clone(), p);
                         p
                     }

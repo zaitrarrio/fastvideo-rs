@@ -33,7 +33,11 @@
 //! the next block. The KV cache is kept ([`PromptSwitch::Keep`], the design's
 //! default: the scene carries over and the new prompt steers it), or cleared
 //! with the stream restarted at block 0 ([`PromptSwitch::Reset`], a hard
-//! cut). [`CausalRollout::reset`] is the explicit restart.
+//! cut), or re-cached ([`PromptSwitch::Recache`], LongLive's KV re-cache:
+//! once per switch, before the next block, the last window of clean latents
+//! is run again under the new prompt and its K/V replace the cache, the
+//! frame sink kept; see [`super::longlive`]). [`CausalRollout::reset`] is the
+//! explicit restart.
 //!
 //! **Graphs** ([`RolloutConfig::graphs`], serve E7): on a CUDA device the
 //! denoise steps and the context pass run on [`super::graph::GraphStream`]
@@ -75,6 +79,16 @@ pub enum PromptSwitch {
     Keep,
     /// Clear the cache and restart at block 0 (a hard cut).
     Reset,
+    /// LongLive's KV re-cache (`_recache_after_switch`,
+    /// [`super::longlive::recache_plan`]): before the next block, the last
+    /// `min(local_attn_frames, frames so far)` clean latent frames run one
+    /// forward at `t = 0` under the new prompt at their own positions, and
+    /// their K/V overwrite the cache. `global_sink`: the sink slots keep the
+    /// first block's keys once the cache has rolled (LongLive's default);
+    /// `false` re-caches them too. The decoder state and the noise stream
+    /// carry on. Several switches before one block re-cache once, with the
+    /// latest prompt.
+    Recache { global_sink: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +170,9 @@ pub struct BlockTimings {
     pub decode_s: f64,
     /// RGB8 packing and the copy down.
     pub rgb_s: f64,
+    /// A prompt-switch KV re-cache ([`PromptSwitch::Recache`]) run before
+    /// the block (0 when none), part of `total_s`.
+    pub recache_s: f64,
     pub total_s: f64,
 }
 
@@ -244,6 +261,16 @@ pub struct CausalRollout<'p> {
     since_recache: usize,
     /// Re-caches since the last reset.
     recaches: usize,
+    /// [`PromptSwitch::Recache`]: the latest clean block latents (covering
+    /// at least the KV window), oldest first.
+    history: std::collections::VecDeque<CudaTensor>,
+    /// A prompt switch is waiting for its re-cache (before the next block).
+    switch_pending: bool,
+    /// Prompt-switch re-caches since the last reset.
+    switch_recaches: usize,
+    /// Wall time of the last prompt-switch re-cache, for the next block's
+    /// timings.
+    last_recache_s: f64,
     /// Re-noise draws since the last reset.
     draw: usize,
     /// Seed of the current run (a reset may change it).
@@ -395,6 +422,17 @@ impl<'p> CausalRollout<'p> {
                 cfg.local_attn_frames
             )));
         }
+        if let PromptSwitch::Recache { global_sink: false } = cfg.prompt_switch {
+            if cfg.rope == RopePolicy::RebasedSink && cfg.sink_frames > 0 {
+                // The re-cached sink holds frames roped at the re-cache's
+                // start, but the rebased sink re-ropes from an un-roped copy
+                // taken at frame 0.
+                return Err(err(
+                    "prompt switch recache with global_sink=false needs rope=absolute or relativistic \
+                     (the rebased sink keeps an un-roped copy of the first sink)",
+                ));
+            }
+        }
         if let Some(rc) = cfg.recache {
             if rc.every_blocks == 0 || rc.keep_frames < fpb || rc.keep_frames + fpb > cfg.local_attn_frames {
                 return Err(err(format!(
@@ -463,6 +501,10 @@ impl<'p> CausalRollout<'p> {
             recent: Default::default(),
             since_recache: 0,
             recaches: 0,
+            history: Default::default(),
+            switch_pending: false,
+            switch_recaches: 0,
+            last_recache_s: 0.0,
             draw: 0,
             seed: cfg.seed,
             noise: None,
@@ -512,8 +554,10 @@ impl<'p> CausalRollout<'p> {
         }
         self.cond = embeds.to_device()?;
         self.prompt_version += 1;
-        if self.cfg.prompt_switch == PromptSwitch::Reset {
-            self.restart(None);
+        match self.cfg.prompt_switch {
+            PromptSwitch::Reset => self.restart(None),
+            PromptSwitch::Recache { .. } => self.switch_pending = self.block > 0,
+            PromptSwitch::Keep => {}
         }
         Ok(self.prompt_version)
     }
@@ -534,6 +578,10 @@ impl<'p> CausalRollout<'p> {
         self.recent.clear();
         self.since_recache = 0;
         self.recaches = 0;
+        self.history.clear();
+        self.switch_pending = false;
+        self.switch_recaches = 0;
+        self.last_recache_s = 0.0;
         self.draw = 0;
         self.noise = None;
         if let Some(s) = seed {
@@ -550,6 +598,17 @@ impl<'p> CausalRollout<'p> {
     /// [`Recache`]s done since the last reset.
     pub fn recaches(&self) -> usize {
         self.recaches
+    }
+
+    /// Prompt-switch KV re-caches ([`PromptSwitch::Recache`]) since the
+    /// last reset.
+    pub fn switch_recaches(&self) -> usize {
+        self.switch_recaches
+    }
+
+    /// A prompt switch waits for its re-cache (done before the next block).
+    pub fn switch_pending(&self) -> bool {
+        self.switch_pending
     }
 
     pub fn prompt_version(&self) -> u64 {
@@ -621,6 +680,7 @@ impl<'p> CausalRollout<'p> {
             return Err(err("causal rollout: TAEHV unloaded"));
         }
         self.maybe_recache()?;
+        self.switch_recache()?;
         let fpb = self.fpb;
         let start = self.pos_block * fpb;
         if self.cfg.rope != RopePolicy::Relativistic {
@@ -705,6 +765,13 @@ impl<'p> CausalRollout<'p> {
                 self.recent.pop_front();
             }
         }
+        if let PromptSwitch::Recache { .. } = self.cfg.prompt_switch {
+            self.history.push_back(cur.clone());
+            while (self.history.len() - 1) * self.fpb >= self.cfg.local_attn_frames {
+                self.history.pop_front();
+            }
+        }
+        let recache_s = std::mem::take(&mut self.last_recache_s);
         Ok(StreamBlock {
             index,
             first_frame,
@@ -717,6 +784,7 @@ impl<'p> CausalRollout<'p> {
                 context_s,
                 decode_s,
                 rgb_s,
+                recache_s,
                 total_s: t_block.elapsed().as_secs_f64(),
             },
         })
@@ -747,6 +815,60 @@ impl<'p> CausalRollout<'p> {
         Ok(())
     }
 
+    /// [`PromptSwitch::Recache`]: when a switch is pending, run LongLive's
+    /// KV re-cache ([`super::longlive::recache_plan`]): the last window of
+    /// clean latents, one forward at `t = 0` under the new prompt from their
+    /// own first frame, the sink slots guarded once the cache has rolled
+    /// (`global_sink`). The cache pointers end where they were, so the next
+    /// block (and in graph mode its graph key) is unchanged.
+    fn switch_recache(&mut self) -> Result<()> {
+        if !std::mem::take(&mut self.switch_pending) {
+            return Ok(());
+        }
+        let PromptSwitch::Recache { global_sink } = self.cfg.prompt_switch else {
+            return Ok(());
+        };
+        let current = self.pos_block * self.fpb;
+        let Some(plan) = super::longlive::recache_plan(current, self.cfg.local_attn_frames, global_sink) else {
+            return Ok(());
+        };
+        let t = Instant::now();
+        let have = self.history.len() * self.fpb;
+        if have < plan.frames {
+            return Err(err(format!(
+                "switch recache: {} latent frames kept, {} needed",
+                have, plan.frames
+            )));
+        }
+        let all = CudaTensor::cat(&self.history.iter().collect::<Vec<_>>(), 2)?;
+        let lat = all.narrow(2, have - plan.frames, plan.frames)?;
+        let dit = self.pipe.transformer();
+        let t0 = CudaTensor::from_vec(vec![0.0f32], vec![1])?;
+        self.cache.set_sink_guard(plan.guard_sink);
+        let r = dit.forward_kv(&lat, &t0, &self.cond, &self.cache, plan.start_frame);
+        self.cache.set_sink_guard(false);
+        r?;
+        // Timed to completion, on whichever stream the forward ran.
+        #[cfg(feature = "cuda")]
+        if let Some(g) = &self.graph {
+            g.gs.synchronize()?;
+        } else {
+            super::device::synchronize().map_err(|e| err(e.to_string()))?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        super::device::synchronize().map_err(|e| err(e.to_string()))?;
+        self.switch_recaches += 1;
+        self.last_recache_s = t.elapsed().as_secs_f64();
+        super::log::info(format_args!(
+            "causal rollout: prompt v{} re-cached frames {}..{} (sink {})",
+            self.prompt_version,
+            plan.start_frame,
+            current,
+            if plan.guard_sink { "kept" } else { "re-cached" }
+        ));
+        Ok(())
+    }
+
     /// What graph mode has done so far (`None`: the rollout runs eagerly).
     pub fn graph_report(&self) -> Option<GraphReport> {
         #[cfg(feature = "cuda")]
@@ -772,6 +894,7 @@ impl<'p> CausalRollout<'p> {
         let gs = self.graph.as_ref().expect("graph mode").gs.clone();
         let (cur, denoise_s, context_s) = gs.scope(|| -> Result<_> {
             self.maybe_recache()?;
+            self.switch_recache()?;
             let (cur, denoise_s, t) = self.graph_block(&hooks, t_block)?;
             // The context pass is queued: draw the next block's noise on the
             // host meanwhile.
