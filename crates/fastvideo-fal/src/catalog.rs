@@ -567,7 +567,22 @@ pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str
         .apps
         .iter()
         .filter(|a| a.is_valid())
-        .map(|a| app_entry(a, Some(&|e| endpoint_caps(a, e, models, alias).is_some())))
+        .map(|a| {
+            let mut e = app_entry(a, Some(&|e| endpoint_caps(a, e, models, alias).is_some()));
+            // A director only where its model is served here and streams
+            // (clip queue or causal rollout).
+            let d = director_caps(a, models, alias);
+            e["director"] = d.is_some().into();
+            if let Some(c) = &d {
+                if matches!(c.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. })) {
+                    e["director_mode"] = "causal".into();
+                }
+                if crate::director::info::is_longlive(c) {
+                    e["licence"] = crate::director::info::LONGLIVE_LICENCE.into();
+                }
+            }
+            e
+        })
         .collect();
     json!({"apps": apps})
 }
@@ -601,7 +616,7 @@ pub fn endpoint_caps(app: &FalApp, e: Endpoint, models: &[ModelCaps], alias: &dy
 /// The caps of the model an app's director runs (the app's own model).
 pub fn director_caps(app: &FalApp, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
     app.kind().director().then_some(())?;
-    endpoint_caps(app, Endpoint::TextToVideo, models, alias)
+    endpoint_caps(app, Endpoint::TextToVideo, models, alias).filter(crate::director::info::director_capable)
 }
 
 fn narrow_enum(schema: &mut Value, field: &str, keep: impl Fn(&Value) -> bool, preferred_default: Option<Value>) {
@@ -749,16 +764,35 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
     } else {
         format!("The resolution of every chunk ({}).", notes.join("; "))
     };
+    let causal = matches!(caps.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. }));
+    let description = if causal {
+        format!("The resolution of the stream: this causal model generates its {} canvas only.", res.join(", "))
+    } else {
+        description
+    };
     let mut props = Map::new();
     props.insert(
         "resolution".into(),
         json!({"type": "string", "enum": res, "default": default, "description": description, "x-fv-labels": labels}),
     );
-    props.insert(
-        "aspect_ratio".into(),
-        json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."}),
-    );
-    object("Director", props, vec!["resolution", "aspect_ratio"], &[])
+    let aspect = if causal {
+        json!({"type": "string", "enum": ["auto", "16:9"], "default": "auto", "description": "This causal model streams 16:9 only (text to video, no opening image)."})
+    } else {
+        json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."})
+    };
+    props.insert("aspect_ratio".into(), aspect);
+    let mut form = object("Director", props, vec!["resolution", "aspect_ratio"], &[]);
+    if causal {
+        let mut d = "A causal streaming model: one continuous rollout; each prompt update applies at the next 0.75 s block (LongLive re-caches its KV window once per switch). Text only: no image, end image or audio conditioning.".to_owned();
+        if crate::director::info::is_longlive(caps) {
+            d.push(' ');
+            d.push_str(crate::director::info::LONGLIVE_LICENCE);
+            form["x-fv-licence"] = crate::director::info::LONGLIVE_LICENCE.into();
+        }
+        form["description"] = d.into();
+        form["x-fv-director-mode"] = "causal".into();
+    }
+    form
 }
 
 pub(crate) fn routes(router: Router<ServeCtx>, cfg: &Arc<FalConfig>) -> Router<ServeCtx> {

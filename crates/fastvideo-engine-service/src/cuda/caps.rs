@@ -299,6 +299,10 @@ pub struct SfWanRecipe {
     pub longlive: Option<LongLiveRecipe>,
 }
 
+/// The extra served name of a LongLive model: the fal app
+/// `fastvideo/longlive` resolves to it (docs/serve/director-causal.md §5).
+pub const LONGLIVE_NAME: &str = "longlive";
+
 /// LongLive settings of an [`SfWanRecipe`] (`wan::longlive::LongLiveConfig`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LongLiveRecipe {
@@ -867,6 +871,11 @@ fn sfwan_caps(id: &str, r: &SfWanRecipe) -> ModelCaps {
     c.stream = Some(StreamCaps::Causal {
         block_frames: r.block_frames,
         target_fps: fps,
+        context: Some(fastvideo_protocol::CausalContext {
+            window_latent_frames: r.local_attn_frames,
+            sink_latent_frames: r.sink_frames,
+            prompt_recache: r.longlive.as_ref().is_some_and(|l| l.recache),
+        }),
     });
     c.knobs = KnobCaps {
         seed: true,
@@ -1338,6 +1347,31 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             if let Some(w) = &e.weights {
                 r.wan.weights = w.clone();
             }
+            // LongLive-1.3B (opt-in): `longlive = "<dir>"` holds the
+            // converted `longlive_base.safetensors` + `lora.safetensors`;
+            // LongLive's window 12 / sink 3, KV re-cache at prompt switches
+            // (`longlive_recache = false`: keep the cache, the ablation).
+            if let Some(dir) = x("longlive").filter(|d| !d.is_empty()) {
+                let flag = |k: &str| -> Result<bool, String> {
+                    match x(k).as_deref() {
+                        None | Some("true") => Ok(true),
+                        Some("false") => Ok(false),
+                        Some(other) => Err(format!("model `{}`: {k} = {other:?} (true | false)", e.id)),
+                    }
+                };
+                r.longlive = Some(LongLiveRecipe {
+                    weights: dir.into(),
+                    lora: true,
+                    recache: flag("longlive_recache")?,
+                    global_sink: true,
+                    relative_rope: false,
+                });
+                r.local_attn_frames = 12;
+                r.sink_frames = 3;
+                if !m.served_names.iter().any(|n| n == LONGLIVE_NAME) {
+                    m.served_names.push(LONGLIVE_NAME.into());
+                }
+            }
         }
     }
     Ok(m)
@@ -1639,13 +1673,14 @@ mod tests {
         assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
         assert_eq!(fw.tier, Some(Tier::Turbo));
         let sf = get("sfwan21-1.3b");
-        assert_eq!(
+        assert!(matches!(
             sf.stream,
             Some(StreamCaps::Causal {
                 block_frames: 12,
-                target_fps: 16
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { prompt_recache: false, .. })
             })
-        );
+        ));
     }
 
     #[test]
@@ -2042,6 +2077,49 @@ mod tests {
         };
         assert_eq!(r.weights, Path::new("/w/h3-8step"));
         assert!(r.dense);
+    }
+
+    /// `[[models]]` turns LongLive on with `longlive = "<dir>"`: window 12,
+    /// sink 3, re-cache, the extra served name `longlive` and the context in
+    /// the caps; without it the SF-Wan entry is unchanged.
+    #[test]
+    fn models_entry_opts_into_longlive() {
+        let layout = WeightLayout::new("/w");
+        let mut e = ModelEntryCfg {
+            id: "longlive-1.3b".into(),
+            family: "wan".into(),
+            recipe: "sfwan21-1.3b".into(),
+            weights: None,
+            resident: true,
+            served_names: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        let plain = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &plain.recipe else { panic!() };
+        assert!(r.longlive.is_none());
+        assert!(!plain.served_names.iter().any(|n| n == LONGLIVE_NAME));
+        e.extra.insert("longlive".into(), "/w/longlive-1.3b-safetensors".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        let l = r.longlive.as_ref().unwrap();
+        assert!(l.recache && l.lora && l.global_sink);
+        assert_eq!((r.local_attn_frames, r.sink_frames), (12, 3));
+        let caps = m.caps();
+        assert!(caps.served_names.iter().any(|n| n == LONGLIVE_NAME), "{:?}", caps.served_names);
+        assert_eq!(
+            caps.stream,
+            Some(StreamCaps::Causal {
+                block_frames: 12,
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+            })
+        );
+        e.extra.insert("longlive_recache".into(), "false".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        assert!(!r.longlive.as_ref().unwrap().recache);
+        e.extra.insert("longlive_recache".into(), "maybe".into());
+        assert!(model_from_config(&layout, &e).is_err());
     }
 
     /// LongLive is opt-in on an SF-Wan recipe: absent from the catalog's
