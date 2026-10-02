@@ -84,6 +84,16 @@ hub	hy15-480-i2v	hy15-480-i2v	33780496799
 hub	hy15-720-t2v	hy15-720-t2v	53384330435
 hub	hy15-720-i2v	hy15-720-i2v	53384305661
 mmaudio	mmaudio-44k-v2	mmaudio-44k-v2	21460000000
+hub	longlive-1.3b	sha:longlive-1.3b	8476402298
+hub	longlive2-5b	sha:longlive2-5b	9999858697
+hub	longlive2-5b-nvfp4-s4	sha:longlive2-5b-nvfp4-s4	2945864769
+hub	longlive2-5b-nvfp4-s2	sha:longlive2-5b-nvfp4-s2	2945864769
+hub	longlive-plug/minimax-h3-few-step	sha:longlive-plug/minimax-h3-few-step	2768406790
+hub	longlive-plug/minimax-h3-cfg	sha:longlive-plug/minimax-h3-cfg	2767312418
+hub	longlive-plug/wan21-t2v-14b-few-step	sha:longlive-plug/wan21-t2v-14b-few-step	1226929535
+hub	longlive-plug/wan21-t2v-14b-cfg	sha:longlive-plug/wan21-t2v-14b-cfg	2453790804
+hub	longlive-plug/wan22-ti2v-5b-few-step	sha:longlive-plug/wan22-ti2v-5b-few-step	1289840234
+hub	longlive-plug/wan22-ti2v-5b-cfg	sha:longlive-plug/wan22-ti2v-5b-cfg	644966189
 hub	auxiliary/upscalers/seedvr2	-	7284343622
 hub	auxiliary/upscalers/flashvsr-v1.1	upscalers	6948393656
 fp8	h3-base/text_encoder_fp8	text-fp8	25950727517
@@ -91,7 +101,10 @@ fp8	ltx25/text_encoder_fp8	text-fp8	12923849944"
 # Composite cells, run once every tree is in place.
 FINAL_CELLS="aux fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo
 ltx25-two-stage ltx25-dev ltx25-a2v-guided ltx25-ic-lora-ingredients ltx25-ref2v ltx2 ltx23 fastwan21-1.3b wan22-ti2v-5b
-fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v mmaudio-44k-v2 upscalers text-fp8"
+fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v mmaudio-44k-v2 upscalers text-fp8
+longlive2-5b longlive2-5b-nvfp4 longlive-plug"
+# longlive-1.3b-safetensors is derived on a CPU pod (scripts/gpu/convert-longlive.py, on wip/longlive until merged;
+# docs/ops/runpod-volumes.md §3); check it with verify-weights.sh longlive-1.3b afterwards.
 SHA_CELLS="sha:ltx25-ic-lora-ingredients sha:fastwan22-ti2v-5b sha:mmaudio-44k-v2 sha:h3-ref2va"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }

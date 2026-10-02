@@ -519,63 +519,41 @@ Not covered without a GPU and weights:
 
 ---
 
-## 8. Downloads: status and ready-to-apply records
+## 8. Downloads: done (2026-10-02)
 
-The owner approved the downloads (relayed by the coordinator). **The session's
-permission check refused the step that would create the CPU fetch pods**
-("Modify Shared Resources"), so per the instructions nothing was worked
-around. No pod was created, nothing was written to either volume, and the
-manifest rows were taken back out. Someone with that permission runs this:
+The owner approved the download ("longlive download approved"). All ten
+Hub trees and the converted 1.3B safetensors are on **both** weight volumes,
+add-only (temp name, SHA-256 check, rename):
 
-```bash
-# per volume: RUNPOD_VOLUME_NAME=fv-weights-b200-us (US) / fv-weights-h3-ltx-hy (EU)
-for d in longlive-1.3b longlive2-5b longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2 \
-         longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg \
-         longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg \
-         longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg; do
-  bash scripts/gpu/fetch-hub-tree.sh "$d" "<revision from the table>"   # second volume: + the first's sha256.txt
-done
-# then on a CPU pod per volume (torch CPU):
-python scripts/gpu/convert-longlive.py /workspace/weights/longlive-1.3b /workspace/weights/longlive-1.3b-safetensors
-```
-
-`weights-manifest.tsv` rows (dest, repo, globs):
-
-```
-longlive-1.3b	Efficient-Large-Model/LongLive-1.3B	README.md models/longlive_base.pt models/lora.pt prompts/interactive_example.jsonl
-longlive2-5b	Efficient-Large-Model/LongLive-2.0-5B	README.md model_bf16.pt
-longlive2-5b-nvfp4-s4	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S4	README.md model_4o6.pt
-longlive2-5b-nvfp4-s2	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S2	README.md model_4o6.pt
-longlive-plug/minimax-h3-few-step	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step	*
-longlive-plug/minimax-h3-cfg	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-cfg	*.json *.md LICENSE NOTICE SHA256SUMS.txt adapter_model.safetensors
-longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-few-step	README.md export_generator_lora.py generator_lora_lightx2v.safetensors inference_config.json provenance.json
-longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
-longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
-longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
-```
-
-- `weights-revisions.tsv`: the §4.1 revisions, basis `recorded`, fetcher
-  `hub`.
-- `weights-sha256.tsv`: the §4.1 LFS SHA-256s, plus the fetcher's
-  `sha256.txt` for the small files and the converter's for
-  `longlive-1.3b-safetensors`.
-- `verify-weights.sh` cells to add:
-  - `longlive-1.3b`: `sha:longlive-1.3b`, the two converted safetensors,
-    and `sfwan21-1.3b`'s needs (text encoder, tokenizer, VAE come from
-    there);
-  - `longlive2-5b`: `sha:longlive2-5b` + `wan22-ti2v-5b`;
-  - `longlive2-5b-nvfp4`;
-  - `longlive-plug`.
-- `docs/ops/runpod-volumes.md`: a row per tree, with the licence column
-  from §4.3.
-
-Cost when run: 10 trees × 2 volumes on cpu3c 8 vCPU ($0.24/hr), a few
-minutes each, plus two convert pods. Under $1.50 in total. The volumes have
-room: about 1.17 / 1.40 TB used of 2 TB (runpod-volumes.md).
+- `scripts/gpu/fetch-hub-tree.sh <dest> <revision>` per tree, one CPU pod
+  at a time per volume. **EU first** (US-CA-2 had no CPU stock at the
+  first attempt), then US with the EU `sha256.txt` as the expected list.
+  Every file matched the Hub (LFS SHA-256 or git blob) at the §4.1
+  revisions. The 11 large files match the §4.1 SHA-256s. US = EU file by
+  file. Logs: `artifacts/runpod/fetch-longlive*-fv-weights-*/`.
+- Bytes per volume: 35 519 236 503 for the Hub trees (§4.1's 35 518 190 070
+  plus small files). `longlive-plug/minimax-h3-few-step` is the whole repo
+  (`*`): `generator_lora.pt` plus 54 small files (code snapshot, recipe,
+  configs, LICENSE) of 941 933 B. No SGLang copy and no duplicate `.pt`
+  LoRA was fetched. In `minimax-h3-cfg`, `*.json` also matched the small
+  `sglang/adapter_config.json`, but not the 2.9 GB SGLang safetensors.
+- `longlive-1.3b-safetensors`: `convert-longlive.py` on a CPU pod per
+  volume. `longlive_base` is **f32**, 825 tensors (5 676 075 416 B), and
+  `lora` is f32, 600 tensors (1 399 924 800 B; the `generator_lora` sub-dict
+  only). The round trip is `torch.equal`. The two volumes' base files
+  differ only in the header's metadata order
+  (docs/ops/runpod-volumes.md §3). That adds 7 076 000 216 B per volume,
+  so about **42.6 GB per volume** in all.
+- Records: `weights-manifest.tsv` (licences in the comment block),
+  `weights-revisions.tsv`, `weights-sha256.tsv` (106 rows),
+  `verify-weights.sh` cells `longlive-1.3b`, `longlive2-5b`,
+  `longlive2-5b-nvfp4` and `longlive-plug` (plus `sha:<dest>`), the
+  `rebuild-volume.sh` plan, and `docs/ops/runpod-volumes.md` rows with the
+  licence column. LongLive-1.3B is recorded as **non-commercial** (§4.3).
 
 ---
 
-## 9. GPU check plan (after the weights land on EU)
+## 9. GPU check plan (weights on EU since 2026-10-02)
 
 One RTX PRO 6000 (96 GB, sm_120) in **EUR-IS-1** on the EU volume
 `jg48s6o1w0`, $2.09/hr. It needs `sfwan21-1.3b`, `auxiliary/tae/taew2_1`,
