@@ -39,8 +39,8 @@ describe("catalog.json", () => {
     expect(new Set(ids).size).toBe(ids.length);
     const fams = CATALOG.families.map((f) => f.id);
     for (const r of CATALOG.recipes) expect(fams).toContain(r.family);
-    for (const p of ["h3-plug-4step", "wan5b-plug-4step", "wan14b-plug-4step"]) expect(CATALOG.recipes.find((r) => r.id === p)?.serve).toBe(false);
-    for (const p of ["ltx-pro", "ltx-draft", "ltx25-ref2v", "ltx25-a2v-guided", "h3-ref2v-turbo", "sfwan21-1.3b"]) expect(CATALOG.recipes.find((r) => r.id === p)?.serve, p).toBe(true);
+    for (const p of ["h3-plug-4step", "wan5b-plug-4step"]) expect(CATALOG.recipes.find((r) => r.id === p)?.serve).toBe(false);
+    for (const p of ["ltx-pro", "ltx-draft", "ltx25-ref2v", "ltx25-a2v-guided", "h3-ref2v-turbo", "sfwan21-1.3b", "wan14b-plug-4step", "wan14b-turbo"]) expect(CATALOG.recipes.find((r) => r.id === p)?.serve, p).toBe(true);
     for (const m of CATALOG.models) expect(CATALOG.recipes.find((r) => r.id === m.recipe)?.serve, m.id).toBe(true);
   });
   it("env key suggestions: the engine's with what they do, plus the keys in use", () => {

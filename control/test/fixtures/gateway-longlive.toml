@@ -45,7 +45,7 @@ native = true
 # runpod.toml and the H3 configs mount the default H3 apps). An app whose
 # model no pool serves answers 404 ("model ... is not served by any pool");
 # the gateway starts and serves the rest (tests/gateway_bases.rs).
-fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3", "fal-ai/ltx-2.3-quality", "fal-ai/wan", "fastvideo/fastwan21-1.3b"]
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3", "fal-ai/ltx-2.3-quality", "fal-ai/wan", "fastvideo/fastwan21-1.3b", "fastvideo/wan14b-turbo"]
 
 [limits]
 queue_max = 256

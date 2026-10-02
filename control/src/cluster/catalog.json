@@ -35,7 +35,8 @@
     { "id": "h3-plug-4step", "family": "h3", "serve": false, "detail": "LongLive-Plug 4-step (fv-gpucheck / CLI only: not in the fv-serve catalog of this build)" },
     { "id": "h3-plug-cfg", "family": "h3", "serve": false, "detail": "LongLive-Plug CFG adapter (fv-gpucheck / CLI only)" },
     { "id": "wan5b-plug-4step", "family": "wan", "serve": false, "detail": "LongLive-Plug Wan 2.2 5B 4-step (fv-gpucheck / CLI only)" },
-    { "id": "wan14b-plug-4step", "family": "wan", "serve": false, "detail": "LongLive-Plug Wan 2.1 14B 4-step (fv-gpucheck / CLI only)" }
+    { "id": "wan14b-plug-4step", "family": "wan", "serve": true, "detail": "catalog model, untiered (Wan 2.1 T2V-14B + LongLive-Plug 4-step, 480p, 81 frames)" },
+    { "id": "wan14b-turbo", "family": "wan", "serve": true, "detail": "alias: wan14b-plug-4step" }
   ],
   "models": [
     { "id": "fasth3", "family": "h3", "recipe": "h3-turbo", "detail": "H3 turbo (pool h3-turbo)" },
@@ -54,7 +55,8 @@
     { "id": "fastwan22-ti2v-5b-taehv", "family": "wan", "recipe": "wan-draft", "detail": "Wan 5B draft" },
     { "id": "fastwan21-1.3b", "family": "wan", "recipe": "fastwan21-1.3b", "detail": "FastWan 1.3B (pool fastwan21)" },
     { "id": "sfwan21-1.3b", "family": "wan", "recipe": "sfwan21-1.3b", "detail": "SF-Wan causal (pool sfwan)" },
-    { "id": "longlive-1.3b", "family": "wan", "recipe": "sfwan21-1.3b", "detail": "LongLive-1.3B causal (pool longlive; NON-COMMERCIAL weights)" }
+    { "id": "longlive-1.3b", "family": "wan", "recipe": "sfwan21-1.3b", "detail": "LongLive-1.3B causal (pool longlive; NON-COMMERCIAL weights)" },
+    { "id": "wan14b-plug-4step", "family": "wan", "recipe": "wan14b-turbo", "detail": "Wan 2.1 14B Plug 4-step (pool wan14b)" }
   ],
   "fal_apps": [
     { "id": "minimax/h3-max", "detail": "H3 max tier (h3-max)" },
@@ -67,7 +69,8 @@
     { "id": "fal-ai/ltx-2.3", "detail": "fal's LTX-2.3: retake-video, extend-video (ltx-pro)" },
     { "id": "fal-ai/ltx-2.3-quality", "detail": "fal's LTX-2.3 quality: ingredient / Ref2V (ltx-ref2v)" },
     { "id": "fal-ai/wan", "detail": "fal's Wan: Wan 2.2 5B tiers (wan)" },
-    { "id": "fastvideo/fastwan21-1.3b", "detail": "FastWan 2.1 1.3B (pool fastwan21)" }
+    { "id": "fastvideo/fastwan21-1.3b", "detail": "FastWan 2.1 1.3B (pool fastwan21)" },
+    { "id": "fastvideo/wan14b-turbo", "detail": "Wan 2.1 14B Plug 4-step, 480p (pool wan14b)" }
   ],
   "engine_env": [
     { "id": "FASTVIDEO_ATTN_SAGE", "detail": "Sage attention: 2 on for every model (sm_89+), 0 off; unset: the recipe decides (ltx-pro on sm_120)" },
