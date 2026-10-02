@@ -542,7 +542,10 @@ impl StreamsCfg {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DirectorCfg {
-    /// `default_chunk_duration` (clamped to the model's clip range).
+    /// `default_chunk_duration`: the chunk length of sessions that send no
+    /// `configure.chunk_duration` (5 or 10 s; default 5). Snapped to the
+    /// nearest length the model serves (a model whose clips stop short of
+    /// 10 s runs 5 s), else clamped to its clip range.
     pub chunk_seconds: f64,
     /// `max_session_seconds` in video time; 0 = unlimited.
     pub max_session_seconds: u64,
@@ -567,7 +570,7 @@ pub struct DirectorCfg {
 impl Default for DirectorCfg {
     fn default() -> Self {
         Self {
-            chunk_seconds: 10.0,
+            chunk_seconds: 5.0,
             max_session_seconds: 0,
             encoder: "auto".into(),
             vp8_fallback: true,

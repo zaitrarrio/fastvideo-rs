@@ -214,8 +214,15 @@ async fn av_session_end_to_end() {
     assert_eq!(info["resolutions"], json!(["480p", "768p"]));
     assert_eq!(info["audio_sample_rate"], 48_000);
     assert_eq!(info["continuation_context_frames"], 1);
+    assert_eq!((info["default_chunk_duration"].as_u64(), info["chunk_seconds"].as_u64()), (Some(5), Some(5)));
+    assert_eq!(info["chunk_duration_options"], json!([5, 10]));
+    assert_eq!(info["chunk_duration_frames"], json!({"5": 124, "10": 243}));
 
     // Strict schemas and ordering rules.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "chunk_duration": 7})).await;
+    let e = c.expect("error").await;
+    assert_eq!(e["code"], "invalid_message");
+    assert!(e["error"].as_str().unwrap().contains("chunk_duration"), "{e}");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "bogus": 1})).await;
     let e = c.expect("error").await;
     assert_eq!((e["code"].as_str(), e["prompt_version"].as_u64()), (Some("invalid_message"), Some(1)));
@@ -230,6 +237,7 @@ async fn av_session_end_to_end() {
     assert_eq!(cfgd["resolution"], "480p");
     assert_eq!(cfgd["has_initial_audio"], false);
     assert_eq!(cfgd["enable_safety_checker"], false);
+    assert_eq!(cfgd["chunk_duration"], 5, "the default chunk");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "again"})).await;
     assert_eq!(c.expect("error").await["code"], "immutable_settings");
 
@@ -308,9 +316,11 @@ async fn video_only_session() {
     let audio = a.media.iter().find(|m| m.kind() == MediaKind::Audio).unwrap();
     assert_eq!(audio.direction(), Direction::Inactive, "{}", c.answer);
     c.expect("session_info").await;
-    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p"})).await;
-    c.expect("configured").await;
-    c.expect("chunk").await;
+    // A 10 s session: 243 frames on H3's 17n+5 grid.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p", "chunk_duration": 10})).await;
+    assert_eq!(c.expect("configured").await["chunk_duration"], 10);
+    let ch0 = c.expect("chunk").await;
+    assert_eq!((ch0["generated_frame_count"].as_u64(), ch0["requested_duration_seconds"].as_f64()), (Some(243), Some(10.0)), "{ch0}");
     c.first_video().await;
     let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
     eprintln!("video-only: {fps:.2} fps (rtp {rtp_fps:.2})");
@@ -566,9 +576,12 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
     assert_eq!(info["continuation_context_frames"], 48, "the KV window (12 latent frames)");
     assert_eq!(info["causal"]["prompt_switch"], "recache");
     assert_eq!(info["causal"]["block_frames"], 12);
+    assert!(info.get("chunk_duration_options").is_none(), "no chunk length to choose: {info}");
 
-    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "seed": 7})).await;
+    // `chunk_duration` is ignored: the director chunk stays 4 blocks (3 s).
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "seed": 7, "chunk_duration": 10})).await;
     let cfgd = c.expect("configured").await;
+    assert_eq!(cfgd["chunk_duration"], 3);
     assert_eq!((cfgd["resolution"].as_str(), cfgd["aspect_ratio"].as_str()), (Some("480p"), Some("16:9")));
     let (chunks, _) = chunks_until(&mut c, |m| m["chunk_index"] == 1).await;
     for (i, ch) in chunks.iter().enumerate() {
@@ -673,6 +686,7 @@ async fn causal_catalog_and_form() {
     assert_eq!(form["properties"]["resolution"]["enum"], json!(["480p"]));
     assert_eq!(form["properties"]["resolution"]["default"], "480p");
     assert_eq!(form["properties"]["aspect_ratio"]["enum"], json!(["auto", "16:9"]));
+    assert!(form["properties"].get("chunk_duration").is_none(), "a causal model has no chunk length: {form}");
     assert!(form["x-fv-licence"].as_str().unwrap().contains("non-commercial"), "{form}");
 }
 
