@@ -23,6 +23,7 @@
 //! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
 //! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
 //! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
+//! | `wan14b-turbo` (served name; untiered) | `wan14b-plug-4step` | Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters merged at load (few-step lightx2v 1.0 + CFG 0.5), LightX2V step-distill Euler 1000/750/500/250 at shift 5, no CFG, full Wan VAE, 832x480x81 @ 16 fps (short edge 480; up to 81 frames); T2V only | none | Owner decision 2026-10-02: the Wan 14B fast tier (19.0 s denoise / 22.0 s total at 480p on RTX PRO 6000, 25x the base; docs/serve/research-longlive.md §12). Untiered so the `wan-turbo` slot (fal's fast-wan app) stays the 5B |
 //! | — | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-turbo`): the published FastWan 1.3B recipe |
 //! | — | `fastwan21-1.3b-taehv` | the 1.3B recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-draft`) |
 //! | — | `sfwan21-1.3b` | SF-Wan 1.3B causal, 4 Self-Forcing steps, shift 5, TAEHV per block | none | Causal streaming (`StreamCaps::Causal`) |
@@ -228,12 +229,17 @@ pub enum WanSampler {
     Dmd { steps: u32 },
     /// UniPC with CFG.
     Unipc { steps: u32, guidance: f32 },
+    /// LightX2V step-distill Euler (`WanPipeline::set_step_distill`): the
+    /// fixed `timesteps` warped with `shift`, one conditional pass per step
+    /// (guidance 1), the LongLive-Plug 14B recipe's sampler.
+    StepDistill { timesteps: Vec<i32>, shift: f64 },
 }
 
 impl WanSampler {
     pub fn steps(&self) -> u32 {
         match self {
             WanSampler::Dmd { steps } | WanSampler::Unipc { steps, .. } => *steps,
+            WanSampler::StepDistill { timesteps, .. } => timesteps.len() as u32,
         }
     }
 }
@@ -279,6 +285,13 @@ pub struct WanRecipe {
     pub negative: String,
     /// Extra dirs holding `taew2_*.safetensors` (`FASTVIDEO_TAE_DIR`).
     pub tae_dir: Option<PathBuf>,
+    /// A LongLive-Plug recipe (`fastvideo_models::plug`, e.g.
+    /// `wan14b-plug-4step`): its adapters merged into `weights/transformer`
+    /// on the host at load (`wan::plug::load_merged_transformer`). The
+    /// adapters resolve under `$FASTVIDEO_PLUG_ROOT`, else
+    /// `<weights>/../longlive-plug` (the volume layout).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plug: Option<String>,
 }
 
 /// SF-Wan causal streaming configuration (`wan::stream::RolloutConfig`).
@@ -571,6 +584,14 @@ impl CudaModel {
                         r.flow_shift,
                         r.decoder.env_value()
                     ),
+                    WanSampler::StepDistill { timesteps, shift } => format!(
+                        "{}{} step-distill Euler {}-step ({}), shift {shift}, no CFG, {} decode",
+                        r.preset,
+                        r.plug.as_deref().map(|p| format!(" + LongLive-Plug {p}")).unwrap_or_default(),
+                        timesteps.len(),
+                        timesteps.iter().map(i32::to_string).collect::<Vec<_>>().join("/"),
+                        r.decoder.env_value()
+                    ),
                 },
             ),
             CudaRecipe::SfWan(r) => (
@@ -603,6 +624,14 @@ impl CudaModel {
 
 /// Frame ceiling of the Wan 5B recipes (fal's `num_frames` 17..=161).
 pub const WAN5B_FRAMES_MAX: u32 = 161;
+/// The public alias of the Wan 2.1 T2V-14B fast tier.
+pub const WAN14B_TURBO: &str = "wan14b-turbo";
+/// The catalog id (and LongLive-Plug recipe) behind [`WAN14B_TURBO`].
+pub const WAN14B_PLUG_RECIPE: &str = "wan14b-plug-4step";
+/// The Wan 2.1 T2V-14B Diffusers tree under the weight root.
+pub const WAN14B_CELL: &str = "wan21-t2v-14b";
+/// Frame ceiling of the 14B tier: Wan 2.1's trained 81 frames (5 s at 16 fps).
+pub const WAN14B_FRAMES_MAX: u32 = 81;
 /// Container frame rates a Wan clip may be muxed at (fal's
 /// `frames_per_second` 4..=60): the frames do not depend on it.
 pub const WAN_FPS_MIN: u32 = 4;
@@ -821,6 +850,11 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
             guidance_2: false,
             ..KnobCaps::all()
         },
+        // A fixed distilled schedule: steps and shift are part of it.
+        WanSampler::StepDistill { .. } => KnobCaps {
+            seed: true,
+            ..KnobCaps::default()
+        },
     };
     ModelCaps {
         id: ModelId::new(id),
@@ -956,6 +990,7 @@ fn fastwan(layout: &WeightLayout, decoder: WanDecoder) -> WanRecipe {
         i2v: false,
         negative: WAN_NEGATIVE_EN.to_owned(),
         tae_dir: Some(layout.tae_dir.clone()),
+        plug: None,
     }
 }
 
@@ -1036,6 +1071,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         i2v: true,
         negative: WAN_NEGATIVE_CN.to_owned(),
         tae_dir: None,
+        plug: None,
     };
     // FastWan2.2 TI2V-5B (FullAttn): the TI2V-5B network DMD-distilled to 3
     // steps (1000/757/522), shift 5, full attention; trained at 704x1280x121.
@@ -1046,6 +1082,32 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         decoder,
         tae_dir: Some(layout.tae_dir.clone()),
         ..wan_max.clone()
+    };
+    // Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters merged at load
+    // (few-step lightx2v at 1.0 + CFG at 0.5), LightX2V step-distill Euler
+    // on 1000/750/500/250 at shift 5, guidance 1: 19.0 s denoise / 22.0 s
+    // total at 832x480x81 on an RTX PRO 6000, 25x the base's 100-forward
+    // UniPC (docs/serve/research-longlive.md §12). Offered at the measured
+    // 480p canvas and Wan 2.1's 81 frames; text-to-video only.
+    let wan14b_plug = WanRecipe {
+        preset: "wan_t2v_14b".to_owned(),
+        weights: layout.at(WAN14B_CELL),
+        sampler: WanSampler::StepDistill {
+            timesteps: fastvideo_models::plug::WAN14B_PLUG_TIMESTEPS.to_vec(),
+            shift: 5.0,
+        },
+        flow_shift: 5.0,
+        vsa: false,
+        decoder: WanDecoder::Full,
+        default: (832, 480, 81, 16),
+        max_area: 832 * 480,
+        short_edges: vec![480],
+        multiple: 16,
+        frames_max: WAN14B_FRAMES_MAX,
+        i2v: false,
+        negative: WAN_NEGATIVE_EN.to_owned(),
+        tae_dir: None,
+        plug: Some(WAN14B_PLUG_RECIPE.to_owned()),
     };
     let sfwan = SfWanRecipe {
         wan: WanRecipe {
@@ -1162,6 +1224,15 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fastwan22-ti2v-5b-dmd3-taehv",
             CudaRecipe::Wan(fastwan22(WanDecoder::Taehv)),
         ),
+        // The Wan 14B fast tier: untiered in the (family, tier) table, whose
+        // Wan turbo slot is the 5B; addressed as `wan14b-turbo` (or its id).
+        CudaModel::new(
+            WAN14B_PLUG_RECIPE,
+            None,
+            WAN14B_PLUG_RECIPE,
+            CudaRecipe::Wan(wan14b_plug),
+        )
+        .with_served_names(&[WAN14B_TURBO]),
         CudaModel::new(
             "fastwan21-1.3b",
             None,
@@ -1681,6 +1752,63 @@ mod tests {
                 context: Some(fastvideo_protocol::CausalContext { prompt_recache: false, .. })
             })
         ));
+    }
+
+    #[test]
+    fn wan14b_turbo_is_the_plug_recipe() {
+        use fastvideo_protocol::*;
+        let layout = WeightLayout::default();
+        let cat = catalog(&layout);
+        let m = find(&cat, WAN14B_TURBO).unwrap();
+        assert_eq!(m.id.as_str(), WAN14B_PLUG_RECIPE);
+        assert_eq!(find(&cat, "wan14b-plug-4step").unwrap().id, m.id);
+        // Untiered: the Wan turbo slot stays the 5B (fal's fast-wan app).
+        assert_eq!(m.tier, None);
+        assert_eq!(find(&cat, "wan-turbo").unwrap().id.as_str(), "fastwan22-ti2v-5b");
+        let CudaRecipe::Wan(r) = &m.recipe else { panic!("{:?}", m.recipe) };
+        assert_eq!(r.preset, "wan_t2v_14b");
+        assert_eq!(r.weights, layout.root.join("wan21-t2v-14b"));
+        assert_eq!(r.plug.as_deref(), Some("wan14b-plug-4step"));
+        let plug = fastvideo_models::plug::PlugRecipe::named(r.plug.as_deref().unwrap()).unwrap();
+        assert_eq!((plug.preset, plug.base), (r.preset.as_str(), "wan21-t2v-14b"));
+        assert_eq!(plug.licence, "Apache-2.0");
+        match (&r.sampler, &plug.sampler) {
+            (
+                WanSampler::StepDistill { timesteps, shift },
+                fastvideo_models::plug::PlugSampler::WanEuler { timesteps: want, shift: s },
+            ) => assert_eq!((timesteps.as_slice(), *shift), (*want, *s)),
+            other => panic!("{other:?}"),
+        }
+        let t = table(&cat);
+        assert_eq!(t.resolve(WAN14B_TURBO).unwrap().id.as_str(), WAN14B_PLUG_RECIPE);
+        let d = m.describe();
+        assert_eq!((d.steps, d.attention.as_str(), d.vae.as_str(), d.profile), (Some(4), "dense", "full", None));
+        assert!(d.summary.contains("wan14b-plug-4step") && d.summary.contains("1000/750/500/250"), "{}", d.summary);
+        let c = m.caps();
+        assert!(c.served_names.iter().any(|n| n == WAN14B_TURBO));
+        assert_eq!(c.tasks, [Task::T2V].into_iter().collect());
+        assert_eq!(c.canvas.short_edges, vec![480]);
+        assert_eq!((c.frames.min, c.frames.max, c.frames.default, c.fps.default), (9, 81, 81, 16));
+        assert_eq!(c.knobs, KnobCaps { seed: true, ..KnobCaps::default() });
+        assert!(!m.requirements().fp8 && !m.requirements().nvfp4);
+        for (ratio, want) in [(Ratio::R16_9, (832, 480)), (Ratio::R9_16, (480, 832))] {
+            let mut req = GenerationRequest::text(ProtocolId::Native, WAN14B_TURBO, "a cat");
+            req.canvas = CanvasSpec::Aspect { ratio, short_edge: 480 };
+            let j = negotiate(&req, &c, &Default::default()).unwrap();
+            assert_eq!((j.width, j.height, j.num_frames, j.fps), (want.0, want.1, 81, 16), "{ratio:?}");
+        }
+        // 14B and the 5B tiers share the process settings (no VSA).
+        assert!(ProcessPlan::for_models(&[m.clone(), find(&cat, "wan-turbo").unwrap()]).is_ok());
+        // `[[models]] recipe = "wan14b-turbo"` binds it.
+        let e = ModelEntryCfg {
+            id: "wan14b".into(),
+            family: "wan".into(),
+            recipe: WAN14B_TURBO.into(),
+            ..Default::default()
+        };
+        let got = model_from_config(&layout, &e).unwrap();
+        assert!(matches!(&got.recipe, CudaRecipe::Wan(w) if w.plug.is_some()));
+        assert!(got.served_names.iter().any(|n| n == WAN14B_TURBO));
     }
 
     #[test]

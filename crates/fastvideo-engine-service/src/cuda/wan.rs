@@ -1,4 +1,5 @@
-//! Wan 2.1 / FastWan / Wan2.2 TI2V-5B (and the bounded SF-Wan clip) on
+//! Wan 2.1 / FastWan / Wan2.2 TI2V-5B / Wan 2.1 T2V-14B with LongLive-Plug
+//! adapters (and the bounded SF-Wan clip) on
 //! `WanPipeline` (WP-11): text encoder, DiT and decoders resident; a
 //! `ResolvedJob` mapped to a `GenerateConfig`, where per-request `fps`,
 //! steps, guidance and flow shift come for free (design §2.2).
@@ -9,7 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
+use fastvideo_cudarc::wan::pipeline::StepDistill;
 use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
+use fastvideo_models::plug::{PlugFamily, PlugRecipe};
 use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob};
 
 use super::caps::{WanDecoder, WanRecipe, WanSampler};
@@ -51,12 +54,65 @@ impl Drop for EnvGuard {
     }
 }
 
-/// Loads a Wan pipeline with the recipe's decoder.
+/// Loads a Wan pipeline with the recipe's decoder, its LongLive-Plug
+/// adapters merged into the transformer (`recipe.plug`) and its sampler.
 pub fn load_pipeline(
     recipe: &WanRecipe,
     obs: &mut dyn FnMut(&'static str),
 ) -> Result<WanPipeline, ApiError> {
-    load_pipeline_with_dit(recipe, obs, None)
+    let dit = match recipe.plug.as_deref() {
+        None => None,
+        Some(name) => Some(load_plug_dit(recipe, name, obs)?),
+    };
+    let mut pipe = load_pipeline_with_dit(recipe, obs, dit)?;
+    pipe.set_step_distill(step_distill(&recipe.sampler));
+    Ok(pipe)
+}
+
+/// The pipeline-wide sampler of a step-distilled recipe.
+pub fn step_distill(sampler: &WanSampler) -> Option<StepDistill> {
+    match sampler {
+        WanSampler::StepDistill { timesteps, shift } => Some(StepDistill {
+            timesteps: timesteps.clone(),
+            shift: *shift,
+        }),
+        _ => None,
+    }
+}
+
+/// `recipe.weights/transformer` with the Plug recipe's adapters merged on
+/// the host (every adapter must match completely, `wan::plug`).
+fn load_plug_dit(
+    recipe: &WanRecipe,
+    name: &str,
+    obs: &mut dyn FnMut(&'static str),
+) -> Result<fastvideo_cudarc::wan::weights::WeightMap, ApiError> {
+    let plug = PlugRecipe::named(name)
+        .filter(|r| r.family == PlugFamily::Wan && r.preset == recipe.preset)
+        .ok_or_else(|| {
+            ApiError::engine_failed(format!(
+                "wan: `{name}` is not a LongLive-Plug recipe for preset {}",
+                recipe.preset
+            ))
+        })?;
+    obs("wan_plug_merge");
+    let (dit, load) =
+        fastvideo_cudarc::wan::plug::load_merged_transformer(&recipe.weights, &plug, None)
+            .map_err(|e| {
+                api_err(
+                    &format!("wan plug {name}"),
+                    fastvideo_cudarc::wan::pipeline::PipelineError::Tensor(e),
+                )
+            })?;
+    tracing::info!(
+        recipe = name,
+        licence = plug.licence,
+        adapters = load.adapters.len(),
+        merged_params = load.merged_params,
+        merge_s = load.seconds,
+        "LongLive-Plug adapters merged"
+    );
+    Ok(dit)
 }
 
 /// [`load_pipeline`] with the transformer from `dit` (LongLive) instead of
@@ -126,11 +182,19 @@ impl WanModel {
             .find(|(a, _)| *a == Anchor::First)
             .map(|(_, p)| p.to_string_lossy().into_owned());
         super::validate::wan(recipe, job)?;
-        let (dmd, steps, guidance) = match recipe.sampler {
-            WanSampler::Dmd { steps } => (true, steps, 1.0),
-            WanSampler::Unipc { steps, guidance } => (false, steps, guidance),
+        // A step-distilled recipe's schedule is fixed (the pipeline's
+        // `set_step_distill`): its steps, shift and guidance 1 are not knobs.
+        let distilled = matches!(recipe.sampler, WanSampler::StepDistill { .. });
+        let (dmd, steps, guidance) = match &recipe.sampler {
+            WanSampler::Dmd { steps } => (true, *steps, 1.0),
+            WanSampler::Unipc { steps, guidance } => (false, *steps, *guidance),
+            WanSampler::StepDistill { timesteps, .. } => (false, timesteps.len() as u32, 1.0),
         };
-        let steps = job.sampling.steps.unwrap_or(steps) as usize;
+        let steps = if distilled {
+            steps
+        } else {
+            job.sampling.steps.unwrap_or(steps)
+        } as usize;
         let tokenizer = recipe.weights.join("tokenizer").join("tokenizer.json");
         Ok(GenerateConfig {
             prompt: job.prompt.clone(),
@@ -143,8 +207,16 @@ impl WanModel {
             width: job.width as usize,
             num_frames: job.num_frames as usize,
             num_inference_steps: steps,
-            guidance_scale: job.sampling.guidance.unwrap_or(guidance),
-            flow_shift: job.sampling.flow_shift.unwrap_or(recipe.flow_shift),
+            guidance_scale: if distilled {
+                guidance
+            } else {
+                job.sampling.guidance.unwrap_or(guidance)
+            },
+            flow_shift: if distilled {
+                recipe.flow_shift
+            } else {
+                job.sampling.flow_shift.unwrap_or(recipe.flow_shift)
+            },
             is_dmd: dmd,
             dmd_steps: dmd.then(|| dmd_steps(steps)),
             seed: job.seed,
@@ -169,7 +241,10 @@ impl WanModel {
 
 /// Planned steps of a job on a recipe.
 pub(crate) fn planned_steps(recipe: &WanRecipe, job: &ResolvedJob) -> u32 {
-    job.sampling.steps.unwrap_or(recipe.sampler.steps())
+    match recipe.sampler {
+        WanSampler::StepDistill { .. } => recipe.sampler.steps(),
+        _ => job.sampling.steps.unwrap_or(recipe.sampler.steps()),
+    }
 }
 
 /// One `generate_to_with_hooks` (no mp4: the engine sink encodes).
