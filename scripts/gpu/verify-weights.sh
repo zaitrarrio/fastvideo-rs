@@ -12,6 +12,8 @@
 #                                      hy15-720-i2v aux text-fp8 upscalers
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
 #                                      ltx25-dev ltx25-a2v-guided ltx2
+#                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
+#                                      longlive-plug
 #                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
@@ -32,7 +34,11 @@
 # means the loader quantizes at load; the cell reports it as INCOMPLETE.
 # A `sha:<dest>` cell checks every file weights-sha256.tsv lists for <dest>
 # (hashes recorded at fetch time): present, the listed size, the listed
-# SHA-256 or md5. It reads the whole of each file (h3-ref2va: 69 GB).
+# SHA-256 or md5 (alternatives a|b accepted). It reads the whole of each file (h3-ref2va: 69 GB).
+# The longlive* cells (docs/serve/research-longlive.md) are composite: their
+# directories / safetensors as above, plus the sha:<dest> lists of their trees
+# (the .pt checkpoints are only checked that way; about 8.5 GB read for
+# longlive-1.3b, 10 GB for longlive2-5b, 5.9 GB for -nvfp4, 13 GB for -plug).
 # Exit status is non-zero on the first cell with a gap; the report names it.
 set -euo pipefail
 
@@ -102,6 +108,18 @@ needs() {
     # ltx2 matrix cells pass as --dit, and the Diffusers parts beside it.
     ltx2)
       echo "ltx2:ltx-2-19b-distilled.safetensors ltx2:text_encoder ltx2:tokenizer ltx2:vae ltx2:audio_vae ltx2:vocoder" ;;
+    # LongLive-1.3B (NON-COMMERCIAL weights): the Hub .pt tree, its converted
+    # safetensors (convert-longlive.py) and SF-Wan's text encoder, tokenizer,
+    # VAE and scheduler (wan stream --longlive). Plus sha:longlive-1.3b(-safetensors).
+    longlive-1.3b)
+      echo "longlive-1.3b:models longlive-1.3b:prompts :longlive-1.3b-safetensors/longlive_base.safetensors :longlive-1.3b-safetensors/lora.safetensors sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler" ;;
+    # LongLive-2.0-5B (merged BF16 .pt) on the Wan2.2-TI2V-5B tree. Plus sha:longlive2-5b.
+    longlive2-5b) echo ":longlive2-5b $(needs wan22-ti2v-5b)" ;;
+    # The two NVFP4 (FourOverSix) checkpoints. Plus their sha: lists.
+    longlive2-5b-nvfp4) echo ":longlive2-5b-nvfp4-s4 :longlive2-5b-nvfp4-s2" ;;
+    # The six LongLive-Plug LoRA trees. Plus their sha: lists.
+    longlive-plug)
+      echo "longlive-plug:minimax-h3-few-step longlive-plug:minimax-h3-cfg longlive-plug:wan21-t2v-14b-few-step longlive-plug:wan21-t2v-14b-cfg longlive-plug:wan22-ti2v-5b-few-step longlive-plug:wan22-ti2v-5b-cfg" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     upscalers) echo "upscalers" ;;
@@ -111,7 +129,18 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug)
+
+# The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
+sha_dests() {
+  case "$1" in
+    longlive-1.3b) echo "longlive-1.3b longlive-1.3b-safetensors" ;;
+    longlive2-5b) echo "longlive2-5b" ;;
+    longlive2-5b-nvfp4) echo "longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2" ;;
+    longlive-plug)
+      echo "longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg" ;;
+  esac
+}
 SHA_LIST="$HERE/weights-sha256.tsv"
 
 if [[ "${1:-}" == "--list" ]]; then
@@ -264,7 +293,9 @@ check_sha_list() {
       md5) got="$(md5sum "$p" | awk '{print $1}')" ;;
       *) echo "  unknown hash $algo for $p" >&2; rc=1; continue ;;
     esac
-    if [[ "$got" != "$hex" ]]; then echo "  ${algo^^} $p: $got, expected $hex" >&2; rc=1; fi
+    # hex may list per-volume alternatives as a|b (a derived file whose bytes
+    # differ by volume only in safetensors metadata order; weights-sha256.tsv says which).
+    if [[ "|$hex|" != *"|$got|"* ]]; then echo "  ${algo^^} $p: $got, expected $hex" >&2; rc=1; fi
   done < <(grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST")
   (( n > 0 )) || { echo "  no weights-sha256.tsv rows for $want" >&2; rc=1; }
   return $rc
@@ -294,6 +325,9 @@ for cell in "$@"; do
     comp="${r#*:}"
     p="$W/${root:+$root/}$comp"
     check_path "$p" || cell_rc=1
+  done
+  for d in $(sha_dests "$cell"); do
+    check_sha_list "$d" || cell_rc=1
   done
   if (( cell_rc == 0 )); then
     echo "weights ok: $cell"

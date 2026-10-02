@@ -101,6 +101,20 @@ pub enum Stage {
         /// The prompt a run's `switch_at` changes to.
         #[arg(long, default_value = "a dog running along a beach at sunset")]
         switch_prompt: String,
+        /// Prompts of successive switches: one per line, or a LongLive
+        /// `interactive_example.jsonl` (`{"prompts": [...]}`, line
+        /// `--switch-prompts-line`), whose first prompt replaces `--prompt`.
+        #[arg(long)]
+        switch_prompts: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        switch_prompts_line: usize,
+        /// LongLive-1.3B: the converted checkpoint dir (`longlive_base.safetensors`,
+        /// `lora.safetensors`) replacing `--weights/transformer`.
+        #[arg(long)]
+        longlive: Option<PathBuf>,
+        /// With `--longlive`: the base generator without the LoRA.
+        #[arg(long)]
+        longlive_no_lora: bool,
         #[arg(long, default_value_t = 1024)]
         seed: u64,
         #[arg(long, default_value_t = 480)]
@@ -111,7 +125,7 @@ pub enum Stage {
         fps: u32,
         #[arg(long)]
         parity: bool,
-        /// `name,seconds=S[,rope=rel|abs][,sink=N][,window=N][,switch_at=S][,switch=keep|reset][,drop_rgb=1]`
+        /// `name,[longlive=1,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
         #[arg(long = "run")]
         runs: Vec<String>,
         /// Video seconds per statistics window.
@@ -251,6 +265,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             preset,
             prompt,
             switch_prompt,
+            switch_prompts,
+            switch_prompts_line,
+            longlive,
+            longlive_no_lora,
             seed,
             height,
             width,
@@ -259,13 +277,22 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             runs,
             window_s,
             device,
-        } => crate::wan_stream::run(
+        } => {
+            let (first, switches) = match switch_prompts {
+                Some(p) => crate::wan_stream::read_switch_prompts(p, *switch_prompts_line)?,
+                None => (None, Vec::new()),
+            };
+            let prompt = first.as_deref().unwrap_or(prompt.as_str());
+            crate::wan_stream::run(
             report,
             &crate::wan_stream::Args {
                 weights,
                 preset,
                 prompt,
                 switch_prompt,
+                switch_prompts: &switches,
+                longlive: longlive.as_deref(),
+                longlive_lora: !*longlive_no_lora,
                 seed: *seed,
                 height: *height,
                 width: *width,
@@ -275,7 +302,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 window_s: *window_s,
                 device,
             },
-        ),
+        )
+        }
         Stage::Oracle {
             weights,
             reference,

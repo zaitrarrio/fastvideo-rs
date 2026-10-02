@@ -119,6 +119,14 @@ The "sha256 source" column says where file hashes can be checked.
 | `fastwan22-ti2v-5b` | FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers @ `3e18704` rec (fetch log) | manifest row | 24 201 770 562 | `weights-sha256.tsv` (15 files, US = EU) → `sha:fastwan22-ti2v-5b` | yes | yes | `fastwan22-ti2v-5b` | apache-2.0 |
 | `wan21-t2v-14b` | Wan-AI/Wan2.1-T2V-14B-Diffusers @ `38ec498` short | manifest row | 80 406 933 703 | Hub LFS 20/20 (sync), not listed | yes | yes | `wan21-t2v-14b` | apache-2.0 |
 | `sfwan21-1.3b` | wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers @ `4b44356` short | manifest row | 28 928 823 445 | Hub LFS 9/9 (sync), not listed | yes | yes | `sfwan21-1.3b` | apache-2.0 |
+| `longlive-1.3b` | Efficient-Large-Model/LongLive-1.3B @ `cda9138` rec | `README.md`, `models/longlive_base.pt`, `models/lora.pt`, `prompts/interactive_example.jsonl` | 8 476 402 298 | `weights-sha256.tsv` (4 files, US = EU) → `sha:longlive-1.3b` | yes | yes | `longlive-1.3b` (LongLive on the SF-Wan causal engine, `wip/longlive`) | **NON-COMMERCIAL: treat as research/evaluation only** (HF card `cc-by-nc-sa-4.0`; card body CC-BY-NC 4.0; the code repo moved to Apache-2.0 on 2025-11-01 but the card was not updated; docs/serve/research-longlive.md §4.3) |
+| `longlive-1.3b-safetensors` | **derived** (§3): `convert-longlive.py` from `longlive-1.3b` | `longlive_base.safetensors` (825 f32 tensors), `lora.safetensors` (600 f32, PEFT rank 256), `keys-*.txt`, `sha256.txt` | 5 676 075 416 + 1 399 924 800 | `weights-sha256.tsv` → `sha:longlive-1.3b-safetensors` (base: per-volume hashes, metadata order only; §3) | yes | yes | `longlive-1.3b` (`wan stream --longlive`, `FV_LONGLIVE_WEIGHTS`) | as `longlive-1.3b` (non-commercial) |
+| `longlive2-5b` | Efficient-Large-Model/LongLive-2.0-5B @ `8521079` rec | `README.md`, `model_bf16.pt` (LoRA merged) | 9 999 858 697 | `weights-sha256.tsv` → `sha:longlive2-5b` | yes | yes | `longlive2-5b` (not ported yet; needs `wan22-ti2v-5b`) | NVIDIA Open Model License (read the card's "API Trial Terms" line before serving) |
+| `longlive2-5b-nvfp4-s4`, `longlive2-5b-nvfp4-s2` | …/LongLive-2.0-5B-NVFP4-S4 @ `427ffb7`, -S2 @ `9ab6c9c` rec | `README.md`, `model_4o6.pt` (FourOverSix NVFP4) each | 2 945 864 769 each | `weights-sha256.tsv` → `sha:longlive2-5b-nvfp4-s{4,2}` | yes | yes | `longlive2-5b-nvfp4` (not ported; Blackwell NVFP4) | NVIDIA Open Model License |
+| `longlive-plug/minimax-h3-few-step` | …/LongLive-Plug-MiniMax-H3-few-step @ `b3686f4` rec | the whole repo (`*`): `generator_lora.pt` 2 767 464 857 + 54 small files (code snapshot, recipe, configs, LICENSE) 941 933 | 2 768 406 790 | `weights-sha256.tsv` (55 files) → `sha:longlive-plug/minimax-h3-few-step` | yes | yes | `longlive-plug` (H3 few-step LoRA; not ported) | MiniMax H3 Community (territory clause as H3: not EU/UK/KR/US without a MiniMax licence) |
+| `longlive-plug/minimax-h3-cfg` | …/LongLive-Plug-MiniMax-H3-cfg @ `de1f4e8` rec | `adapter_model.safetensors` + 10 small files (`*.json` also matched `sglang/adapter_config.json`; the 2.9 GB `sglang/adapter_model.safetensors` is **not** fetched) | 2 767 312 418 | `weights-sha256.tsv` (11 files) → `sha:longlive-plug/minimax-h3-cfg` | yes | yes | `longlive-plug` | MiniMax H3 Community (as above) |
+| `longlive-plug/wan21-t2v-14b-few-step`, `…/wan21-t2v-14b-cfg` | …/LongLive-Plug-Wan2.1-T2V-14B-few-step @ `f125af0`, -cfg @ `32b8aa3` rec | `generator_lora_lightx2v.safetensors` + 4 small; `adapter_model.safetensors` + 7 small | 1 226 929 535; 2 453 790 804 | `weights-sha256.tsv` → `sha:longlive-plug/wan21-t2v-14b-{few-step,cfg}` | yes | yes | `longlive-plug` (+ `wan21-t2v-14b`) | apache-2.0 |
+| `longlive-plug/wan22-ti2v-5b-few-step`, `…/wan22-ti2v-5b-cfg` | …/LongLive-Plug-Wan2.2-TI2V-5B-few-step @ `38a6ec4`, -cfg @ `fa1f928` rec | `adapter_model.safetensors` + 6 / + 7 small | 1 289 840 234; 644 966 189 | `weights-sha256.tsv` → `sha:longlive-plug/wan22-ti2v-5b-{few-step,cfg}` | yes | yes | `longlive-plug` (+ `wan22-ti2v-5b`) | apache-2.0 |
 | `mmaudio-44k-v2` | hkchengrex/MMAudio @ `eb13a1a`, nvidia/bigvgan_v2_44khz_128band_512x @ `95a9d1d`, apple/DFN5B-CLIP-ViT-H-14-384 @ **UNKNOWN** (all fetched from `main`; §3) | upstream `.pth` tree + converted `safetensors/` + `MANIFEST.json` | ~21.46 GB | md5 of the 3 `.pth` (`weights-sha256.tsv` → `sha:mmaudio-44k-v2`); converted files not hashed | yes | yes | `mmaudio-44k-v2` (Wan audio sidecar, V2A/T2A) | **MMAudio cc-by-nc-4.0 (non-commercial)**; BigVGAN MIT; DFN5B not read (Hub API 307) |
 | `auxiliary/tae`, `auxiliary/lpips` | pinned URLs (madebyollin/taehv @ `e589fdd` / `32ac014`, download.pytorch.org, richzhang/PerceptualSimilarity @ `082bb24`) | 6 files | 372 975 478 | `weights-manifest.tsv` rows → `aux` | yes | yes | TAE decoders (H3, LTX, Wan), LPIPS (eval) | taehv MIT; torchvision BSD; LPIPS BSD-2 (from the upstream repos; **UNVERIFIED** here) |
 | `auxiliary/upscalers/seedvr2` | numz/SeedVR2_comfyUI @ `09ced71` rec | `seedvr2_ema_3b_fp16.safetensors`, `ema_vae_fp16.safetensors` | 7 284 343 622 | `verify-weights.sh upscalers` | yes | yes | upscaler benchmark (docs/serve/h3-1080p-and-upscaler.md) | apache-2.0 |
@@ -129,11 +137,11 @@ The "sha256 source" column says where file hashes can be checked.
 
 | | US `s2k01690bi` | EU `jg48s6o1w0` |
 |---|---:|---:|
-| Trees in the table | ~1165.4 GB | ~1217.7 GB (ltx2 +51.61, second upscaler copy +0.69) |
+| Trees in the table | ~1208.0 GB (LongLive +42.60 on 2026-10-02) | ~1260.3 GB (ltx2 +51.61, second upscaler copy +0.69; LongLive +42.60) |
 | EU-only unlisted weight tree (§4) | — | ~77.97 GB |
 | Non-weight data (`upstream/`, `runs/`, `.cache/`) | ~1.78 GB (`runs/`) | ~104.1 GB |
-| **Approx. used** | **~1167 GB** of 2000 | **~1400 GB** of 2000 |
-| What `rebuild-volume.sh` writes on an empty volume | 1165.4 GB | 1165.4 GB |
+| **Approx. used** | **~1210 GB** of 2000 | **~1443 GB** of 2000 |
+| What `rebuild-volume.sh` writes on an empty volume | 1200.9 GB (+35.52 LongLive Hub trees; the 7.08 GB converted tree is a manual step, §3) | 1200.9 GB |
 
 These are sums of recorded figures, not a fresh `du`. The last survey
 (2026-09-27) predates `h3-ref2va`, `ltx25-dev`, the IC-LoRA, `fastwan22`,
@@ -217,6 +225,34 @@ into `.mmaudio-44k-v2.partial-<stamp>` and renames afterwards.
   missed it until 2026-09-27. The manifest's `latent_upsampler/*` and
   `ltx-2.3-22b-distilled-lora-384*.safetensors` globs match nothing at
   `22b09fb`.
+
+### LongLive-1.3B safetensors (`longlive-1.3b-safetensors`)
+
+Written on 2026-10-02 on each volume by `scripts/gpu/convert-longlive.py`
+(`wip/longlive`) from that volume's `longlive-1.3b` tree, on a CPU pod
+(`python:3.12-slim`, 8 vCPU / 32 GB `cpu3g`, CPU torch + safetensors, the
+volume at `/workspace`, a 1 h backstop; the §5.2 pattern):
+
+```bash
+python convert-longlive.py /workspace/weights/longlive-1.3b /workspace/weights/longlive-1.3b-safetensors
+```
+
+It writes `.longlive-1.3b-safetensors.partial-<stamp>`, reads every tensor
+back (`torch.equal`), then renames. Output: `longlive_base.safetensors` (the
+`generator` state dict: 825 tensors, **f32**) and `lora.safetensors`
+(`generator_lora`: 600 tensors, f32, rank 256), with `keys-*.txt` and
+`sha256.txt`. Logs: `artifacts/runpod/convert-longlive-1.3b-fv-weights-*/`.
+
+The two volumes' `longlive_base.safetensors` have **different file
+SHA-256s** (US `113656f2…`, EU `ff64e39c…`). The only difference is the
+order of the two `__metadata__` entries in the JSON header (safetensors
+serializes them from a hash map). The tensor table (sha256 of the sorted
+header without metadata: `ab499911…`) and the tensor data (sha256 of the
+bytes after the header: `ad413c12…`) are identical on both, checked on
+both volumes the same day. `weights-sha256.tsv` lists both file hashes
+(`a|b`). `lora.safetensors` happens to match (`7ec78e63…`). The converter
+now writes a single metadata entry, so a rebuild gives one hash per run
+(a new value; record it).
 
 ### Layout note
 

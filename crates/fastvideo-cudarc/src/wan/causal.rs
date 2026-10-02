@@ -343,6 +343,10 @@ pub struct CausalKvCache {
     layers: Vec<Mutex<KvLayer>>,
     /// Persistent in-place buffers instead of a new tensor per write.
     static_mode: bool,
+    /// LongLive's recompute guard ([`Self::set_sink_guard`]): a write that
+    /// re-runs cached frames (`current_end <= global_end`, `current_start >
+    /// 0`) leaves the sink slots as they are.
+    sink_guard: std::sync::atomic::AtomicBool,
 }
 
 /// One layer's cache pointers (see [`CausalKvCache::pointers`]).
@@ -379,6 +383,7 @@ impl CausalKvCache {
                 .map(|_| Mutex::new(KvLayer::default()))
                 .collect(),
             static_mode: false,
+            sink_guard: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -396,6 +401,32 @@ impl CausalKvCache {
 
     pub fn is_static(&self) -> bool {
         self.static_mode
+    }
+
+    /// LongLive's KV re-cache (`CausalWanSelfAttention.forward`,
+    /// `is_recompute`): while on, a write that re-runs frames already in the
+    /// cache (`current_start > 0` and `current_end <= global_end`) does not
+    /// write the sink slots: the queries still read the sink as it was (the
+    /// frame sink keeps the first prompt's keys, `global_sink = true`). Off
+    /// (the default) every write lands whole, as FastVideo does. Only the
+    /// one-off re-cache forward turns it on.
+    pub fn set_sink_guard(&self, on: bool) {
+        self.sink_guard.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn sink_guard(&self) -> bool {
+        self.sink_guard.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Leading tokens of an `n`-token write at `current_start` (planned as
+    /// `mv` from `global_end`) that the sink guard keeps out of the cache.
+    fn guarded(&self, global_end: usize, current_start: usize, n: usize, mv: &KvMove) -> usize {
+        let recompute = current_start > 0 && current_start + n <= global_end;
+        if self.sink_guard() && recompute {
+            self.spec.sink.saturating_sub(mv.local_start).min(n)
+        } else {
+            0
+        }
     }
 
     /// Static mode: every layer's buffers exist (after the first write).
@@ -521,8 +552,9 @@ impl CausalKvCache {
         let mv = self
             .spec
             .plan(slot.global_end, slot.local_end, current_start, n)?;
+        let skip = self.guarded(slot.global_end, current_start, n, &mv);
         if self.static_mode {
-            return self.update_static(&mut slot, mv, k, v, current_start);
+            return self.update_static(&mut slot, mv, skip, k, v, current_start);
         }
         let keep = |t: Option<&CudaTensor>| -> Result<Option<CudaTensor>> {
             let Some(t) = t else { return Ok(None) };
@@ -547,28 +579,32 @@ impl CausalKvCache {
             } else {
                 Some(t.clone())
             };
-            // Everything before the write position survives.
+            // Everything before the write position survives (with the sink
+            // guard, the guarded sink slots too).
+            let at = mv.local_start + skip;
             match rolled {
-                Some(r) if mv.local_start > 0 => {
-                    if mv.local_start > r.shape[2] {
+                Some(r) if at > 0 => {
+                    if at > r.shape[2] {
                         return Err(msg(format!(
-                            "causal kv: write at {} leaves a gap after {} cached tokens",
-                            mv.local_start, r.shape[2]
+                            "causal kv: write at {at} leaves a gap after {} cached tokens",
+                            r.shape[2]
                         )));
                     }
-                    Ok(Some(r.narrow(2, 0, mv.local_start)?))
+                    Ok(Some(r.narrow(2, 0, at)?))
                 }
                 _ => Ok(None),
             }
         };
         let (k_keep, v_keep) = (keep(slot.k.as_ref())?, keep(slot.v.as_ref())?);
-        if mv.local_start > 0 && k_keep.is_none() {
+        if mv.local_start + skip > 0 && k_keep.is_none() {
             return Err(msg("causal kv: write past an empty cache"));
         }
         let join = |prefix: Option<CudaTensor>, new: &CudaTensor| -> Result<CudaTensor> {
+            let new = if skip > 0 { new.narrow(2, skip, n - skip)? } else { new.clone() };
             match prefix {
-                Some(p) => CudaTensor::cat(&[&p, new], 2),
-                None => Ok(new.clone()),
+                Some(p) if new.shape[2] > 0 => CudaTensor::cat(&[&p, &new], 2),
+                Some(p) => Ok(p),
+                None => Ok(new),
             }
         };
         let k_all = join(k_keep, k)?;
@@ -588,6 +624,7 @@ impl CausalKvCache {
         &self,
         slot: &mut KvLayer,
         mv: KvMove,
+        skip: usize,
         k: &CudaTensor,
         v: &CudaTensor,
         current_start: usize,
@@ -640,14 +677,14 @@ impl CausalKvCache {
             }
             valid = sink + tail;
         }
-        if mv.local_start > valid {
+        if mv.local_start + skip > valid {
             return Err(msg(format!(
                 "causal kv: write at {} leaves a gap after {valid} cached tokens",
-                mv.local_start
+                mv.local_start + skip
             )));
         }
-        copy_tokens(&mut st.k, mv.local_start, k, 0, n)?;
-        copy_tokens(&mut st.v, mv.local_start, v, 0, n)?;
+        copy_tokens(&mut st.k, mv.local_start + skip, k, skip, n - skip)?;
+        copy_tokens(&mut st.v, mv.local_start + skip, v, skip, n - skip)?;
         slot.global_end = current_start + n;
         slot.local_end = mv.local_end;
         let len = mv.local_end - mv.window_start;
@@ -1198,5 +1235,153 @@ mod tests {
             }
         }
         assert!(CausalKvCache::new(spec, 1).advance(0, 20, 0).is_err());
+    }
+
+    /// Keys of `frames` frames from `first` (10 tokens each, one value per
+    /// token: `1000 · tag + frame`), `[1, 1, frames·10, 1]`.
+    fn tagged(first: usize, frames: usize, tag: f32) -> CudaTensor {
+        let data: Vec<f32> = (0..frames * 10).map(|i| 1000.0 * tag + (first + i / 10) as f32).collect();
+        CudaTensor::from_vec(data, vec![1, 1, frames * 10, 1]).unwrap()
+    }
+
+    fn frames_of(t: &CudaTensor) -> Vec<f32> {
+        t.host_cow().unwrap().iter().step_by(10).copied().collect()
+    }
+
+    /// LongLive's re-cache on the cache alone (`window 12`, `sink 3`,
+    /// 3-frame blocks, as `local_attn_size: 12`, `sink_size: 3`): after 15
+    /// frames the cache holds the sink (frames 0-2) and frames 6-14. The
+    /// re-cache runs frames 3-14 (12) at frame 3 under the new prompt with
+    /// the guard: the sink slots stay, slots 3-11 take the new frames 6-14,
+    /// the pointers do not move, and the next block rolls as before.
+    #[test]
+    fn sink_guard_keeps_the_sink_through_a_recache() {
+        for static_mode in [false, true] {
+            let spec = KvSpec::rolling(10, 12, 3, KvRope::Absolute).unwrap();
+            let cache = if static_mode { CausalKvCache::new_static(spec, 1) } else { CausalKvCache::new(spec, 1) };
+            for b in 0..5 {
+                let (start, k) = (b * 3, tagged(b * 3, 3, 1.0));
+                cache.update(0, &k, &k, start * 10).unwrap();
+            }
+            let before = cache.pointers();
+            assert_eq!((before[0].global_end, before[0].local_end), (150, 120));
+            let plan = crate::wan::longlive::recache_plan(15, 12, true).unwrap();
+            assert_eq!((plan.start_frame, plan.frames, plan.guard_sink), (3, 12, true));
+            let k = tagged(plan.start_frame, plan.frames, 2.0);
+            cache.set_sink_guard(plan.guard_sink);
+            let (kw, vw) = cache.update(0, &k, &k, plan.start_frame * 10).unwrap();
+            cache.set_sink_guard(false);
+            assert_eq!(cache.pointers(), before, "static={static_mode}");
+            let want: Vec<f32> = [1000.0, 1001.0, 1002.0]
+                .into_iter()
+                .chain((6..15).map(|f| 2000.0 + f as f32))
+                .collect();
+            assert_eq!(frames_of(&kw), want, "static={static_mode}");
+            assert_eq!(frames_of(&vw), want);
+            // The next block: one block evicted after the sink, new-prompt
+            // frames 9-14 and the block.
+            let k = tagged(15, 3, 3.0);
+            let (kw, _) = cache.update(0, &k, &k, 150).unwrap();
+            let want: Vec<f32> = [1000.0, 1001.0, 1002.0]
+                .into_iter()
+                .chain((9..15).map(|f| 2000.0 + f as f32))
+                .chain((15..18).map(|f| 3000.0 + f as f32))
+                .collect();
+            assert_eq!(frames_of(&kw), want, "static={static_mode}");
+        }
+    }
+
+    /// Before the cache rolls a re-cache starts at frame 0 and rewrites
+    /// everything, the sink too (no `is_recompute` at `current_start == 0`);
+    /// and the guard is inert on ordinary writes.
+    #[test]
+    fn early_recache_rewrites_the_sink() {
+        for static_mode in [false, true] {
+            let spec = KvSpec::rolling(10, 12, 3, KvRope::Absolute).unwrap();
+            let cache = if static_mode { CausalKvCache::new_static(spec, 1) } else { CausalKvCache::new(spec, 1) };
+            for b in 0..2 {
+                let k = tagged(b * 3, 3, 1.0);
+                cache.update(0, &k, &k, b * 30).unwrap();
+            }
+            let plan = crate::wan::longlive::recache_plan(6, 12, true).unwrap();
+            assert_eq!((plan.start_frame, plan.frames, plan.guard_sink), (0, 6, false));
+            let k = tagged(0, 6, 2.0);
+            cache.set_sink_guard(true); // inert at current_start 0
+            let (kw, _) = cache.update(0, &k, &k, 0).unwrap();
+            assert_eq!(frames_of(&kw), (0..6).map(|f| 2000.0 + f as f32).collect::<Vec<_>>());
+            // A new block with the guard on writes whole (not a recompute).
+            let k = tagged(6, 3, 3.0);
+            let (kw, _) = cache.update(0, &k, &k, 60).unwrap();
+            cache.set_sink_guard(false);
+            assert_eq!(frames_of(&kw)[6..], [3006.0, 3007.0, 3008.0]);
+        }
+    }
+
+    /// The re-cache through the tiny causal DiT: a rollout under prompt A,
+    /// a switch to B with the re-cache, more blocks. The allocating and the
+    /// static caches agree bit for bit (graph mode runs the static one), the
+    /// guarded sink keys are untouched in every layer, and the re-cache
+    /// changes what the next block makes (against keeping the cache).
+    #[test]
+    fn recache_through_the_dit() {
+        let (dit, cfg) = tiny_causal_dit();
+        let (c, h, w, fpb) = (cfg.in_channels, 4usize, 6usize, cfg.num_frames_per_block);
+        let frame_tokens = (h / 2) * (w / 2);
+        let text = |phase: f32| {
+            let v: Vec<f32> = (0..cfg.text_len * cfg.text_dim).map(|i| ((i as f32) * 0.11 + phase).cos()).collect();
+            CudaTensor::from_vec(v, vec![1, cfg.text_len, cfg.text_dim]).unwrap()
+        };
+        let (a, b) = (text(0.0), text(1.3));
+        let (window, sink) = (6usize, 2usize);
+        let lat = |blk: usize| {
+            let v: Vec<f32> = (0..c * fpb * h * w).map(|i| ((i as f32) * 0.37 + blk as f32).sin()).collect();
+            CudaTensor::from_vec(v, vec![1, c, fpb, h, w]).unwrap()
+        };
+        let t0 = CudaTensor::from_vec(vec![0.0], vec![1]).unwrap();
+        let t5 = CudaTensor::from_vec(vec![500.0], vec![1]).unwrap();
+        for rope in [KvRope::Absolute, KvRope::RebasedSink, KvRope::Relativistic] {
+            let spec = KvSpec::rolling(frame_tokens, window, sink, rope).unwrap();
+            let run = |cache: &CausalKvCache, recache: bool| -> (Vec<u32>, Vec<f32>, Vec<f32>) {
+                let mut hist = Vec::new();
+                for blk in 0..5 {
+                    dit.forward_kv(&lat(blk), &t5, &a, cache, blk * fpb).unwrap();
+                    dit.forward_kv(&lat(blk), &t0, &a, cache, blk * fpb).unwrap();
+                    hist.push(lat(blk));
+                }
+                let sink_keys = || -> Vec<f32> {
+                    let l = cache.layers[1].lock().unwrap();
+                    let k = l.k.clone().unwrap_or_else(|| l.st.as_ref().expect("written cache").k.clone());
+                    k.narrow(2, 0, sink * frame_tokens).unwrap().host_cow().unwrap().into_owned()
+                };
+                let sink_before = sink_keys();
+                let mut sink_after = sink_before.clone();
+                if recache {
+                    let current = 5 * fpb;
+                    let plan = crate::wan::longlive::recache_plan(current, window, true).unwrap();
+                    assert!(plan.guard_sink);
+                    let all = CudaTensor::cat(&hist.iter().collect::<Vec<_>>(), 2).unwrap();
+                    let x = all.narrow(2, current - plan.frames, plan.frames).unwrap();
+                    let before = cache.pointers();
+                    cache.set_sink_guard(true);
+                    dit.forward_kv(&x, &t0, &b, cache, plan.start_frame).unwrap();
+                    cache.set_sink_guard(false);
+                    assert_eq!(cache.pointers(), before, "{rope:?}");
+                    sink_after = sink_keys();
+                }
+                let mut out = Vec::new();
+                for blk in 5..7 {
+                    let y = dit.forward_kv(&lat(blk), &t5, &b, cache, blk * fpb).unwrap();
+                    out.extend(y.host_cow().unwrap().iter().map(|v| v.to_bits()));
+                    dit.forward_kv(&lat(blk), &t0, &b, cache, blk * fpb).unwrap();
+                }
+                (out, sink_before, sink_after)
+            };
+            let (dyn_out, s0, s1) = run(&CausalKvCache::new(spec, cfg.num_layers), true);
+            assert_eq!(s0, s1, "{rope:?}: the guarded sink moved");
+            let (st_out, ..) = run(&CausalKvCache::new_static(spec, cfg.num_layers), true);
+            assert!(dyn_out == st_out, "{rope:?}: static cache differs through the re-cache");
+            let (keep_out, ..) = run(&CausalKvCache::new(spec, cfg.num_layers), false);
+            assert!(keep_out != dyn_out, "{rope:?}: the re-cache changed nothing");
+        }
     }
 }

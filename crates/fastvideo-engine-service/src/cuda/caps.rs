@@ -291,6 +291,38 @@ pub struct SfWanRecipe {
     pub sink_frames: u32,
     /// Pixel frames per block after the first (3 latent frames).
     pub block_frames: u32,
+    /// LongLive-1.3B on this engine (docs/serve/research-longlive.md):
+    /// the LongLive transformer instead of `wan.weights/transformer`, and
+    /// its prompt-switch KV re-cache. Opt-in (no catalog model sets it);
+    /// pair it with `local_attn_frames: 12`, `sink_frames: 3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longlive: Option<LongLiveRecipe>,
+}
+
+/// LongLive settings of an [`SfWanRecipe`] (`wan::longlive::LongLiveConfig`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LongLiveRecipe {
+    /// The converted checkpoint: `longlive_base.safetensors` and
+    /// `lora.safetensors` (same keys as the Hub's `.pt` files).
+    pub weights: PathBuf,
+    /// Merge `lora.safetensors` (the long-tuned model; off only for the
+    /// base-generator ablation).
+    #[serde(default = "longlive_on")]
+    pub lora: bool,
+    /// KV re-cache at a prompt switch (off: keep the cache, the ablation).
+    #[serde(default = "longlive_on")]
+    pub recache: bool,
+    /// The frame sink survives a re-cache (LongLive's `global_sink: true`).
+    #[serde(default = "longlive_on")]
+    pub global_sink: bool,
+    /// Relative (Infinity) RoPE for rollouts past 1024 latent frames; off:
+    /// absolute RoPE as the released interactive config.
+    #[serde(default)]
+    pub relative_rope: bool,
+}
+
+fn longlive_on() -> bool {
+    true
 }
 
 /// What a model runs.
@@ -542,10 +574,15 @@ impl CudaModel {
                 "causal-kv".to_owned(),
                 "taehv".to_owned(),
                 format!(
-                    "SF-Wan causal rollout, {} Self-Forcing steps per block, KV window {} latent frames, sink {}",
+                    "{} causal rollout, {} Self-Forcing steps per block, KV window {} latent frames, sink {}{}",
+                    if r.longlive.is_some() { "LongLive" } else { "SF-Wan" },
                     r.wan.sampler.steps(),
                     r.local_attn_frames,
-                    r.sink_frames
+                    r.sink_frames,
+                    match &r.longlive {
+                        Some(l) if l.recache => ", KV re-cache at prompt switches",
+                        _ => "",
+                    }
                 ),
             ),
         };
@@ -1017,6 +1054,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         // sink degrades within a minute (docs/ports/wan.md).
         sink_frames: 15,
         block_frames: 12,
+        longlive: None,
     };
     vec![
         CudaModel::new(
@@ -2004,5 +2042,24 @@ mod tests {
         };
         assert_eq!(r.weights, Path::new("/w/h3-8step"));
         assert!(r.dense);
+    }
+
+    /// LongLive is opt-in on an SF-Wan recipe: absent from the catalog's
+    /// recipe (and its JSON), defaults on when a deployment sets it.
+    #[test]
+    fn sfwan_longlive_is_opt_in() {
+        let cat = catalog(&WeightLayout::default());
+        let sf = cat.iter().find(|m| m.id.as_str() == "sfwan21-1.3b").unwrap();
+        let CudaRecipe::SfWan(r) = &sf.recipe else { panic!("sfwan recipe") };
+        assert!(r.longlive.is_none());
+        let mut v = serde_json::to_value(r).unwrap();
+        assert!(v.get("longlive").is_none());
+        v["longlive"] = serde_json::json!({"weights": "/w/longlive-1.3b-safetensors"});
+        v["local_attn_frames"] = 12.into();
+        v["sink_frames"] = 3.into();
+        let ll: SfWanRecipe = serde_json::from_value(v).unwrap();
+        let l = ll.longlive.as_ref().unwrap();
+        assert!(l.lora && l.recache && l.global_sink && !l.relative_rope);
+        assert_eq!(l.weights, PathBuf::from("/w/longlive-1.3b-safetensors"));
     }
 }

@@ -1,0 +1,63 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+01:39:46 HF token: /workspace/hf/token
+01:39:47 Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step@b3686f432d3f20d6d6462a91d4c09ba7f189c0a2: 55 files, 2768406790 bytes -> /workspace/weights/longlive-plug/.minimax-h3-few-step.partial-20261002013946
+01:39:55 downloaded in 8 s; verifying
+01:39:55 ok .gitattributes 1519 11ad7efa24975ee4
+01:39:55 ok ELM_TRANSFER.json 9478 d6c200b4c4054cda
+01:39:55 ok EXPORT_VALIDATION.json 992 0aca7f0d43a1dc1d
+01:39:55 ok LICENSE 17604 59b99642b95ea216
+01:39:55 ok LICENSE-CODE 11357 c71d239df91726fc
+01:39:55 ok NOTICE 413 f7e40d58e9bce7db
+01:39:55 ok README.md 859 35bfe2a0e5c623a4
+01:39:55 ok adapter_config.json 12841 1c21e05244aa7f5f
+01:39:55 ok environment/observed_versions.json 626 8c094a7a2dc59f7e
+01:39:57 ok generator_lora.pt 2767464857 465bd51317544c4d lfs
+01:39:57 ok prompts.example.json 2722 f13223491e2ca00a
+01:39:57 ok provenance.json 7665 c8e125f05a573279
+01:39:57 ok run_inference.py 2640 0dc591479de74ffd
+01:39:57 ok source_hashes.json 4978 39be6b451a047556
+01:39:57 ok source_snapshot/minimax_h3/__init__.py 489 7928c5364f079a90
+01:39:57 ok source_snapshot/minimax_h3/build_prompt_cache.py 23957 5ed06cb54ca28bc7
+01:39:57 ok source_snapshot/minimax_h3/cfg_guidance.py 4394 ee796ccfc5a03aef
+01:39:57 ok source_snapshot/minimax_h3/dmd_4step.py 35562 3d72c4dd3b3793f9
+01:39:57 ok source_snapshot/minimax_h3/dmd_8step.py 34528 77ab7e2c7ce40cad
+01:39:57 ok source_snapshot/minimax_h3/dmd_core.py 21107 4c2cc6909d41356d
+01:39:57 ok source_snapshot/minimax_h3/encode_longlive_prompt_cache.py 13641 7bdd4004bf497315
+01:39:57 ok source_snapshot/minimax_h3/encode_longlive_prompt_cache_v4.py 15299 b39b37977235320b
+01:39:57 ok source_snapshot/minimax_h3/extract_dmd8_inline5.py 17258 9f43ef1bad719a32
+01:39:57 ok source_snapshot/minimax_h3/fresh_noise_scheduler.py 13494 404cbb1e6eb05e5a
+01:39:57 ok source_snapshot/minimax_h3/fresh_noise_scheduler_4step.py 13489 ae6d4887471edb94
+01:39:57 ok source_snapshot/minimax_h3/full_h3_lora.py 6153 ad4b08ff2aae7844
+01:39:57 ok source_snapshot/minimax_h3/infer_base.py 30123 dd6a5ef8aad12ba7
+01:39:57 ok source_snapshot/minimax_h3/infer_student.py 21256 c3dfa6456fcc1d49
+01:39:57 ok source_snapshot/minimax_h3/infer_student_4step.py 43024 3bbb180764ef7447
+01:39:57 ok source_snapshot/minimax_h3/infer_student_8step.py 42970 867252e18cb1c53c
+01:39:57 ok source_snapshot/minimax_h3/longlive_lora.py 5446 4d061332055b2b59
+01:39:57 ok source_snapshot/minimax_h3/longlive_prompt_distributed.py 25206 eff9f6e68cc17f4b
+01:39:57 ok source_snapshot/minimax_h3/longlive_prompt_set.py 16591 ed80195faf3f1614
+01:39:57 ok source_snapshot/minimax_h3/model_provenance.py 5173 8b5409504258657f
+01:39:57 ok source_snapshot/minimax_h3/probe_student_lora_ab.py 17736 6ff009a751dc07c5
+01:39:57 ok source_snapshot/minimax_h3/train_dmd.py 56628 a2f2c71ead08514d
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun.py 43331 5843b7c57eea8c60
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_4step.py 65117 5a751327012031d7
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_4step_autoresume.py 3858 42abbef8788b0d86
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_8step.py 56637 2f0302f973ba0729
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_8step_autoresume.py 3768 21b033ae059b7358
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_v2.py 21573 2ef1d89d400df60a
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_v3.py 18311 ca1905890c1e3c84
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_v4.py 25565 e27328e359c6ff4f
+01:39:57 ok source_snapshot/minimax_h3/train_dmd_longrun_v5.py 15293 14778be13523721a
+01:39:57 ok source_snapshot/minimax_h3/train_utils.py 41027 fd64c02074680470
+01:39:57 ok source_snapshot/minimax_h3/visualize_teacher_x0.py 26565 962f86b0fb699acc
+01:39:57 ok training_config.json 36122 5e05bf1cd3ea98af
+01:39:57 ok training_recipe/audio_candidate_cache.py 5811 234d4a9cfad2952b
+01:39:57 ok training_recipe/audio_data_candidates.py 12160 28cebc27e0c8d914
+01:39:57 ok training_recipe/audio_mixed_conditions.py 2789 2b41ff3d1249ccdd
+01:39:57 ok training_recipe/audio_objectives.py 8953 4e22fd00a67f5e7e
+01:39:57 ok training_recipe/common.py 3056 60d1bd3d7774dca1
+01:39:57 ok training_recipe/train_audio_mixed.py 8337 6193189881a1fef2
+01:39:57 ok training_recipe/train_fresh.py 6442 6b478c00a64c5bb4
+01:39:57 renamed to /workspace/weights/longlive-plug/minimax-h3-few-step; 2768406790 bytes in 10 s

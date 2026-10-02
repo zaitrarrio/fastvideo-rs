@@ -1,0 +1,10 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+01:42:07 HF token: /workspace/hf/token
+01:42:08 Efficient-Large-Model/LongLive-2.0-5B@8521079b863720a57c1a8d9b19c8d9e6ccb04c0f: 2 files, 9999858697 bytes -> /workspace/weights/.longlive2-5b.partial-20261002014207
+01:43:33 downloaded in 86 s; verifying
+01:43:33 ok README.md 5667 05908a73f89611ad
+01:43:51 ok model_bf16.pt 9999853030 ec9063a44ea3c91e lfs
+01:43:51 renamed to /workspace/weights/longlive2-5b; 9999858697 bytes in 103 s

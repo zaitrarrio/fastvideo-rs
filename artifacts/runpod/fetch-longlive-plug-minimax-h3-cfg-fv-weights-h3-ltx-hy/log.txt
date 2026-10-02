@@ -1,0 +1,19 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+01:41:07 HF token: /workspace/hf/token
+01:41:08 Efficient-Large-Model/LongLive-Plug-MiniMax-H3-cfg@de1f4e8c7310917a7bf0417ff041abb8bb7b0927: 11 files, 2767312418 bytes -> /workspace/weights/longlive-plug/.minimax-h3-cfg.partial-20261002014108
+01:41:27 downloaded in 19 s; verifying
+01:41:27 ok ELM_TRANSFER.json 2965 89efe6c736217907
+01:41:27 ok LICENSE 17604 59b99642b95ea216
+01:41:27 ok NOTICE 1208 e63a1b682d13c9c6
+01:41:27 ok README.md 1017 740ece2cb668f54f
+01:41:27 ok SHA256SUMS.txt 858 ff7547fbd2299dfe
+01:41:27 ok adapter_config.json 13661 3b086e1ff87cf75d
+01:41:30 ok adapter_model.safetensors 2767268872 04593217a4e96cca lfs
+01:41:30 ok evaluation_summary.json 1206 849bb2efddcd39af
+01:41:30 ok release_manifest.json 1648 015ba8152d543d1d
+01:41:30 ok sglang/adapter_config.json 1135 d611ea65d5180a8e
+01:41:30 ok training_config.json 2244 9cf643c4d9343d3a
+01:41:30 renamed to /workspace/weights/longlive-plug/minimax-h3-cfg; 2767312418 bytes in 22 s

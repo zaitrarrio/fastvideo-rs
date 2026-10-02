@@ -395,6 +395,19 @@ impl WanPipeline {
 
     /// [`Self::load`] with control over which components are materialized.
     pub fn load_with(root: &Path, preset: &str, parts: LoadParts) -> Result<Self> {
+        Self::load_with_dit(root, preset, parts, None)
+    }
+
+    /// [`Self::load_with`] with the transformer's weights from `dit` (a
+    /// Diffusers-named map, e.g. `wan::longlive::load_transformer_map`)
+    /// instead of `<root>/transformer`; the rest of the tree (text encoder,
+    /// VAE, TAEHV) as usual.
+    pub fn load_with_dit(
+        root: &Path,
+        preset: &str,
+        parts: LoadParts,
+        dit: Option<WeightMap>,
+    ) -> Result<Self> {
         // The DiT runs bf16 activations as FastVideo does (`dit_precision`
         // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
@@ -409,7 +422,10 @@ impl WanPipeline {
                 super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
                     .max(1);
         }
-        let dit = WeightMap::from_dir(&root.join("transformer"))?;
+        let dit = match dit {
+            Some(map) => map,
+            None => WeightMap::from_dir(&root.join("transformer"))?,
+        };
         // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
         // spatial, residual blocks, patchify 2); the preset's built-in
         // config when the file is missing.

@@ -43,6 +43,16 @@ wan21-t2v-14b	Wan-AI/Wan2.1-T2V-14B-Diffusers	38ec498cb3208fb688890f8cc7e94ede2c
 sfwan21-1.3b	wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers	4b44356635ae5e927ca552a220f768022be76004	short	hub
 auxiliary/upscalers/seedvr2	numz/SeedVR2_comfyUI	09ced71023636e9bc8cdf9cdecfb2625d1e691e8	recorded	hub
 auxiliary/upscalers/flashvsr-v1.1	JunhaoZhuang/FlashVSR-v1.1	27561b186ded3402d7c975f4fd722e2885b6135f	recorded	hub
+longlive-1.3b	Efficient-Large-Model/LongLive-1.3B	cda9138d93872ef109d9a74c270184eb3a5acc6e	recorded	hub
+longlive2-5b	Efficient-Large-Model/LongLive-2.0-5B	8521079b863720a57c1a8d9b19c8d9e6ccb04c0f	recorded	hub
+longlive2-5b-nvfp4-s4	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S4	427ffb75f0a3ae82714cd4b3aaa7463839da38a7	recorded	hub
+longlive2-5b-nvfp4-s2	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S2	9ab6c9c70db97e1994d87bca3b8c4ed31e5b62e2	recorded	hub
+longlive-plug/minimax-h3-few-step	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step	b3686f432d3f20d6d6462a91d4c09ba7f189c0a2	recorded	hub
+longlive-plug/minimax-h3-cfg	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-cfg	de1f4e8c7310917a7bf0417ff041abb8bb7b0927	recorded	hub
+longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-few-step	f125af0533b94e2cee0163a7a42bb736d59a1d37	recorded	hub
+longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	32b8aa3d1db3d178a9c82f3731cc917a34fb7693	recorded	hub
+longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	38a6ec4e8f5b644749d3072bfe1ac383d00951c0	recorded	hub
+longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	fa1f9280778aa27c8038fe06e29fb5f2ed6be451	recorded	hub
 h3-ref2va	MiniMaxAI/MiniMax-H3	42ed227ee7df40d41602854ae760620d6eb651fe	recorded	h3-ref2va
 h3-ref2va	lightx2v/Minimax-h3-Turbo	3ec17a324ced54151364f24f8b5fb6bf7e26414f	recorded	h3-ref2va
 mmaudio-44k-v2	hkchengrex/MMAudio	eb13a1a98fdbec91753775c57b074ccdfc60587c	unpinned	mmaudio

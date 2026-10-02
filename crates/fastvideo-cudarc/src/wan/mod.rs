@@ -32,6 +32,7 @@ pub mod inject;
 pub mod kernels;
 pub mod ledger;
 pub mod log;
+pub mod longlive;
 pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]

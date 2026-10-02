@@ -51,3 +51,19 @@ auxiliary/lpips/lpips_v0.1_alex.pth	url:https://raw.githubusercontent.com/richzh
 # runpod.sh's Hub fetch skips auxiliary/ rows; verify-weights.sh upscalers checks each file's size and SHA-256.
 auxiliary/upscalers/seedvr2	numz/SeedVR2_comfyUI	seedvr2_ema_3b_fp16.safetensors ema_vae_fp16.safetensors
 auxiliary/upscalers/flashvsr-v1.1	JunhaoZhuang/FlashVSR-v1.1	diffusion_pytorch_model_streaming_dmd.safetensors LQ_proj_in.ckpt TCDecoder.ckpt Wan2.1_VAE.pth config.json
+# LongLive 1.0 / 2.0 / Plug (docs/serve/research-longlive.md §4, §8): Hub rows, added add-only to both volumes by
+# fetch-hub-tree.sh at the revisions in weights-revisions.tsv; LFS SHA-256 in weights-sha256.tsv (verify-weights.sh
+# sha:<dest>, cells longlive-1.3b, longlive2-5b, longlive2-5b-nvfp4, longlive-plug). Licences: longlive-1.3b NON-COMMERCIAL
+# (HF card CC-BY-NC-SA-4.0; research/evaluation only until the card changes); longlive2-5b* NVIDIA Open Model License;
+# longlive-plug/minimax-h3-* MiniMax H3 Community License (territory clause as H3); longlive-plug/wan* Apache-2.0.
+# longlive-1.3b-safetensors (not a hub row) is derived on each volume by scripts/gpu/convert-longlive.py from longlive-1.3b.
+longlive-1.3b	Efficient-Large-Model/LongLive-1.3B	README.md models/longlive_base.pt models/lora.pt prompts/interactive_example.jsonl
+longlive2-5b	Efficient-Large-Model/LongLive-2.0-5B	README.md model_bf16.pt
+longlive2-5b-nvfp4-s4	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S4	README.md model_4o6.pt
+longlive2-5b-nvfp4-s2	Efficient-Large-Model/LongLive-2.0-5B-NVFP4-S2	README.md model_4o6.pt
+longlive-plug/minimax-h3-few-step	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step	*
+longlive-plug/minimax-h3-cfg	Efficient-Large-Model/LongLive-Plug-MiniMax-H3-cfg	*.json *.md LICENSE NOTICE SHA256SUMS.txt adapter_model.safetensors
+longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-few-step	README.md export_generator_lora.py generator_lora_lightx2v.safetensors inference_config.json provenance.json
+longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
+longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
