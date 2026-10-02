@@ -509,3 +509,86 @@ Every instance was labelled `fv-sage-*`, had a detached wall-clock backstop
 (a DELETE after 1-2 h) and a container-side timeout, and was destroyed as
 soon as its batch finished. Each destroy was checked: the instance list is
 empty.
+
+## 8. Phase 4: merge for ltx-pro, and a calibrated H3 gate (2026-10-02)
+
+Owner decision on section 6.6: do both. (a) Merge the port default-off and
+turn it on for the `ltx-pro` route only. (b) Re-test H3 with a gate that
+judges Sage against the measured bf16 spread instead of single-clip limits.
+
+### 8.1 What is merged (a)
+
+`FASTVIDEO_ATTN_SAGE` is now an override with three states:
+
+| `FASTVIDEO_ATTN_SAGE` | effect |
+|---|---|
+| unset | off, except a recipe that opts in, on sm_120 only |
+| `2` | on for every model, on any sm_89+ device (the old opt-in) |
+| `0` | off for every model, opted-in recipes included |
+
+A recipe opts in per request (`attn_sage::recipe_scope`, a thread-local
+guard on the executor thread that owns the CUDA device). The only recipe
+that does is `ltx25-distill-dense`, the `ltx-pro` model
+(`Ltx2Recipe::sage_attention`), for its two-stage generations. Its edit
+routes (retake, extend) stay bf16, and so do the Ref2V / A2V companions,
+which run other models. The arch check is `(sm_major, sm_minor) == (12, 0)`
+(RTX PRO 6000, RTX 5090). On sm_90 / sm_100 the kernel does not pay
+(section 5), and sm_121 has not been measured. `fv-gpucheck` has no recipe
+scope, so measurements still opt in with `FASTVIDEO_ATTN_SAGE=2`.
+
+### 8.2 The calibrated gate (b): rule, fixed before any run
+
+The single-clip gate (section 6.2) fails a bf16-only control on H3, so its
+limits sit inside H3's noise. The calibrated gate measures that noise per
+prompt and seed and judges Sage against it.
+
+**Workload.** RTX PRO 6000 (sm_120), 768p, 5 s, the five gate prompts
+(`scripts/gpu/prompts-eval.json`), each at 3 seeds: its own (0 for h3-demo,
+42 for the rest), +1000 and +2000. That is 15 clips per arm. Recipes: H3 max
+(`sol-h3`, `h3/sol_h3_4step_engine_ladder`) first, then Sol-H3 4-step dense
+(`h3/sol_h3_4step`).
+
+**Arms.** Each arm is one warm `fv-gpucheck h3 gen` process over the 15
+clips, with its own text and AdaLN caches. Kernel picks are pinned, so no
+arm depends on `auto`'s per-process timing:
+
+| arm | env | role |
+|---|---|---|
+| `cud` | `FASTVIDEO_FLASH_KERNEL=cudnn` | bf16 control 1, the reference (what `auto` picks at the 768p DiT shape) |
+| `fw2` | `FASTVIDEO_FLASH_KERNEL=v2 FASTVIDEO_CUDNN_SDPA_GRAPH=composite` | bf16 control 2: the same math, another bf16 kernel (fwd2) |
+| `sage` | `FASTVIDEO_ATTN_SAGE=2 FASTVIDEO_FLASH_KERNEL=cudnn` | candidate; shapes below 6 144 tokens run as in `cud` |
+
+**Pairs.** For each (prompt, seed) clip, `fv-gpucheck compare-clips` (LPIPS
+alex, PSNR, sharpness and temporal-jitter ratios) on:
+
+* control pair `cud` vs `fw2`: how far a rounding-level kernel change moves
+  that clip (the noise);
+* Sage pair `cud` vs `sage`: how far Sage moves it;
+* (`fw2` vs `sage`, reported only.)
+
+**Deviation per pair**, larger is further: LPIPS mean; PSNR mean (here
+smaller is further); |ln sharpness ratio|; |ln jitter ratio|.
+
+**Per prompt** (C = its 3 control deviations, S = its 3 Sage deviations,
+per metric; P95 / P5 are numpy's linear-interpolated percentiles of C):
+
+1. *Within the noise band:* median(S) <= P95(C) + margin, with margins
+   LPIPS 0.03, |ln sharpness| 0.02, |ln jitter| 0.03; for PSNR,
+   median(S) >= P5(C) - 1.0 dB. The prompt passes when all four metrics do.
+2. *No outlier:* every single Sage clip within max(1.5 x max(C), max(C) +
+   d) per metric, d = LPIPS 0.05, |ln sharpness| 0.02, |ln jitter| 0.03;
+   for PSNR, >= min(C) - 3 dB.
+
+**Verdict per recipe: pass** when (i) at least 4 of 5 prompts pass rule 1,
+(ii) no prompt breaks rule 2, and (iii) the denoise speedup (median over the
+15 clips, `sage` vs `cud`) is at least 1.10 (the old promotion floor).
+
+**Also recorded, not part of the verdict:** the old single-clip gate
+(`fv-gpucheck gate`, `scripts/gpu/gate-policy.toml`) on `cud` vs `sage` and
+on `cud` vs `fw2`, so the two rules can be compared on the same clips; the
+signed median sharpness and jitter ratios (a systematic softening would
+show up there even when the magnitudes pass); a repeat of `cud` on one clip
+in a new process, to check that pinned picks are byte-identical across
+processes.
+
+Driver, analysis script and result rows: `artifacts/perf/sage-calibrated/`.
