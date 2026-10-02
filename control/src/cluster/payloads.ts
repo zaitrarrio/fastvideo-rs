@@ -127,7 +127,7 @@ export interface ClusterSecrets {
   url_signing_key: string;
   admin_recipient?: string; // X25519 public (raw, b64)
   admin_private?: string; // X25519 private (pkcs8, b64)
-  admin_token?: string; // opened from the gateway (or a legacy FV_ADMIN_TOKEN)
+  admin_token?: string; // opened from the gateway, a legacy FV_ADMIN_TOKEN, or the gateway-less workers' FV_ADMIN_TOKEN (made by the controller)
   legacy_admin_token?: boolean; // imported state that passes FV_ADMIN_TOKEN itself
   ingest_token?: string;
   smoke_api_key?: string;
@@ -146,6 +146,7 @@ export const RESERVED_KEYS = new Set([
   "FV_GATEWAY_TOML_B64",
   "FV_WORKER_TOML_B64",
   "FV_WORKER_CONFIG",
+  "FV_WORKER_DIRECT",
   "FV_SERVE_ROLE",
   "FV_PUBLIC_BASE_URL",
   "FV_LOG_SHIP_URL",
@@ -218,6 +219,23 @@ export function gatewaySystemEnv(ctx: EnvCtx, image: string): Record<string, str
   return { ...e, ...logShipEnv(ctx) };
 }
 
+/** Workers serve clients themselves: the spec has no gateway and none runs
+ * (docs/control/gateway-less-auth.md). A gateway started later (gateway/start)
+ * makes them gateway workers again on their next env apply. */
+export function isDirect(spec: ClusterSpec, state: ClusterState): boolean {
+  return !spec.gateway.enabled && !state.gateway;
+}
+
+/** A direct worker's client auth: the spec's auth mode, the cluster's admin
+ * token, minted keys in the shared D1 table (every worker, restarts and new
+ * pods included, sees the same keys). */
+function directEnv(ctx: EnvCtx): Record<string, string> {
+  if (!isDirect(ctx.spec, ctx.state)) return {};
+  const e: Record<string, string> = { FV_WORKER_DIRECT: "1", FV_AUTH_MODE: ctx.spec.gateway.auth, FV_KEY_STORE: "d1" };
+  if (ctx.secrets.admin_token) e.FV_ADMIN_TOKEN = ctx.secrets.admin_token;
+  return e;
+}
+
 export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Record<string, string> {
   const e: Record<string, string> = {
     ...SECRET_ENV_REFS,
@@ -234,7 +252,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  return { ...e, ...logShipEnv(ctx) };
+  return { ...e, ...directEnv(ctx), ...logShipEnv(ctx) };
 }
 
 export function gatewayCreatePayload(name: string, image: string, flavor: string, vcpu: number, diskGb: number, dcs: string[] | null, env: Record<string, string>) {

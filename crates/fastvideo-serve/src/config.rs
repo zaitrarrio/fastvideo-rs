@@ -36,6 +36,7 @@
 //! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker behind the gateway, docs/serve/gateway.md) |
 //! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (gateway ↔ worker; never a user key) |
 //! | `FV_GATEWAY_POOL` | `gateway.pool` (the pool a worker registers in) |
+//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `gateway.direct` (a worker with no gateway in front: clients call it with API keys; docs/control/gateway-less-auth.md) |
 //! | `FV_RUNPOD_API_KEY` (else `RUNPOD_API_KEY`) | `gateway.runpod_api_key` (serverless pools) |
 //! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
 //! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
@@ -648,6 +649,12 @@ pub struct GatewayCfg {
     pub pool: Option<String>,
     /// Worker: register in `gw_workers` (pods; needs D1).
     pub register: bool,
+    /// Worker with no gateway in front (fv-control `gateway.enabled:
+    /// false`, `FV_WORKER_DIRECT`): clients call it directly, so `auth.mode`
+    /// applies as on a standalone server (API keys, the shared minted-key
+    /// store, `FV_ADMIN_TOKEN` for the admin routes) and the internal token
+    /// guards only `/fv/v1/internal/*` (drain and status for the controller).
+    pub direct: bool,
     /// Live caps refresh per pool.
     pub caps_refresh_s: u64,
     /// Metrics + reaper tick.
@@ -685,6 +692,7 @@ impl Default for GatewayCfg {
             internal_token: Secret::default(),
             pool: None,
             register: true,
+            direct: false,
             caps_refresh_s: 60,
             tick_s: 5,
             metrics_window_s: 600,
@@ -1100,6 +1108,9 @@ impl Config {
         if let Some(v) = env.var("FV_GATEWAY_POOL") {
             self.gateway.pool = Some(v);
         }
+        if let Some(v) = env.var("FV_WORKER_DIRECT") {
+            self.gateway.direct = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
         if let Some(v) = env.var("FV_DISPATCH_DO_URL") {
             self.dispatch.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
         }
@@ -1234,6 +1245,17 @@ impl Config {
     /// `[gateway]`, `[[pools]]` and `server.role` checks.
     fn validate_gateway(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
+        if self.gateway.direct {
+            if self.server.role != Role::Worker {
+                return bad("gateway.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
+            }
+            if self.auth.mode == AuthMode::TrustGateway {
+                return bad("gateway.direct: no gateway authenticates the clients, so auth.mode must be keys or none (not trust-gateway)".into());
+            }
+            if self.auth.admin_token.is_empty() {
+                return bad("gateway.direct needs auth.admin_token (FV_ADMIN_TOKEN): every worker of the cluster shares it".into());
+            }
+        }
         if self.server.role == Role::Worker {
             if self.gateway.internal_token.is_empty() {
                 return bad("server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
@@ -1578,5 +1600,26 @@ body_max_mb = 64
         assert!(w.validate().is_err(), "a worker's socket needs its pool");
         w.gateway.pool = Some("h3".into());
         w.validate().unwrap();
+    }
+
+    /// A direct worker (no gateway): a worker, its own client auth, and the
+    /// cluster's admin token.
+    #[test]
+    fn direct_worker_needs_the_worker_role_client_auth_and_an_admin_token() {
+        let mut w = Config::default();
+        w.apply_env(&env(&[("FV_SERVE_ROLE", "worker"), ("FV_INTERNAL_TOKEN", "t"), ("FV_WORKER_DIRECT", "1")])).unwrap();
+        assert!(w.gateway.direct);
+        let e = w.validate().unwrap_err();
+        assert!(e.to_string().contains("FV_ADMIN_TOKEN"), "{e}");
+        w.apply_env(&env(&[("FV_ADMIN_TOKEN", "fvadm_x")])).unwrap();
+        w.validate().unwrap();
+        w.auth.mode = AuthMode::TrustGateway;
+        assert!(w.validate().unwrap_err().to_string().contains("trust-gateway"));
+        w.auth.mode = AuthMode::Keys;
+        w.server.role = Role::Standalone;
+        assert!(w.validate().unwrap_err().to_string().contains("server.role = worker"));
+        let mut d = Config::default();
+        d.apply_env(&env(&[("FV_WORKER_DIRECT", "0")])).unwrap();
+        assert!(!d.gateway.direct);
     }
 }

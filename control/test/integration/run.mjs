@@ -413,10 +413,69 @@ await step("import a runpod-cluster.sh state (and stop it through the controller
   assert.ok(!mock.pods.has(g) && !mock.pods.has(wk));
 });
 
+await step("gateway-less cluster: the controller's admin token on every worker; keys minted, listed and revoked on the workers", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "nogw", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, gateway: { enabled: false } } }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.cluster.id;
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  assert.equal((await call(`/api/clusters/${id}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
+  let op = await waitOp(id, "up");
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
+  assert.equal(mine().length, 1, "no gateway pod");
+  const w1 = mine()[0];
+  assert.equal(w1.env.FV_GATEWAY_TOML_B64, undefined);
+  assert.equal(w1.env.FV_SERVE_ROLE, "worker");
+  assert.equal(w1.env.FV_WORKER_DIRECT, "1");
+  assert.equal(w1.env.FV_KEY_STORE, "d1");
+  assert.equal(w1.env.FV_AUTH_MODE, "keys");
+  assert.match(w1.env.FV_ADMIN_TOKEN, /^fvadm_[0-9a-f]{48}$/);
+  const tok = await call(`/api/clusters/${id}/admin-token`, { method: "POST", body: {}, headers: T() });
+  assert.equal(tok.status, 200, JSON.stringify(tok.j));
+  assert.equal(tok.j.admin_token, w1.env.FV_ADMIN_TOKEN);
+  assert.equal(tok.j.direct, true);
+  assert.equal(tok.j.gateway_url, null);
+  assert.deepEqual(tok.j.workers.map((x) => x.url), [`http://127.0.0.1:${mock.port}/pod/${w1.id}`]);
+  assert.equal(tok.j.console, `http://127.0.0.1:${mock.port}/pod/${w1.id}/console/admin`);
+  const e = (await call(`/api/clusters/${id}/env`, { headers: T() })).j;
+  const wenv = Object.fromEntries(e.pods.find((p) => p.pod_id === w1.id).env.map((v) => [v.key, v]));
+  assert.equal(wenv.FV_ADMIN_TOKEN.value, "••••••••", "masked in the env view");
+  assert.deepEqual(e.needs_restart, []);
+  // Scale-up: the new worker gets the same token (and the same D1 keys).
+  assert.equal((await call(`/api/clusters/${id}/scale`, { method: "POST", body: { pool: "fake", count: 2 }, headers: T() })).status, 202);
+  op = await waitOp(id, "scale");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  const w2 = mine().find((p) => p.id !== w1.id);
+  assert.equal(w2.env.FV_ADMIN_TOKEN, w1.env.FV_ADMIN_TOKEN);
+  const gv = (await call(`/api/clusters/${id}/gateway`, { headers: T() })).j;
+  assert.equal(gv.direct, true);
+  assert.equal(gv.workers.length, 2);
+  assert.ok(gv.workers.every((x) => x.health.ok), JSON.stringify(gv));
+  // Mint on one worker, list, revoke on every worker.
+  const k = await call(`/api/clusters/${id}/mint-key`, { method: "POST", body: { name: "phone" }, headers: T() });
+  assert.equal(k.status, 201, JSON.stringify(k.j));
+  assert.match(k.j.api_key, /^fv_direct_key_/);
+  assert.equal(k.j.propagation_s, 30);
+  const kid = k.j.key.id;
+  const l = await call(`/api/clusters/${id}/keys`, { headers: T() });
+  assert.ok(l.j.keys.some((x) => x.id === kid && x.name === "phone"), JSON.stringify(l.j));
+  assert.equal((await call(`/api/clusters/${id}/keys/nope`, { method: "DELETE", headers: T() })).status, 400);
+  const rv = await call(`/api/clusters/${id}/keys/${kid}`, { method: "DELETE", headers: T() });
+  assert.equal(rv.status, 200, JSON.stringify(rv.j));
+  assert.deepEqual(rv.j.applied.sort(), [w1.id, w2.id].sort());
+  assert.equal(mock.directKeys.find((x) => x.id === kid).revoked, true);
+  assert.equal(mock.directCalls.filter((x) => x.method === "DELETE").length, 2, "the revocation went to every worker");
+  // Stop: no pod left.
+  assert.equal((await call(`/api/clusters/${id}/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "down")).status, "done");
+  assert.equal(mine().length, 0);
+});
+
 await step("audit log; no secret in any response", async () => {
   const a = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
   const actions = new Set(a.map((x) => x.action));
-  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
+  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "cluster.mint-key", "cluster.revoke-key", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
   assert.ok(a.some((x) => x.action === "auth.login" && x.ok === 0), "failed logins are audited");
   const envSet = a.find((x) => x.action === "env.set" && x.target.includes("HF_TOKEN"));
   assert.ok(!envSet.after.includes("hf_supersecret"));

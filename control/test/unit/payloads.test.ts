@@ -10,6 +10,7 @@ import {
   gatewaySystemEnv,
   gatewayToml,
   imageIdentEnv,
+  isDirect,
   isReserved,
   WORKER_BOOT,
   workerCreatePayload,
@@ -97,6 +98,26 @@ describe("env", () => {
     const tiny = defaultSpec("t", "tiny-cpu");
     const e2 = workerSystemEnv({ ...c, spec: tiny }, tiny.pools[0]!, "img");
     expect(Buffer.from(e2.FV_WORKER_TOML_B64!, "base64").toString()).toContain('backend = "fake"');
+  });
+  it("gateway-less worker env: direct client auth with the controller's admin token and the D1 key store", () => {
+    const spec = defaultSpec("t");
+    spec.gateway.enabled = false;
+    const c = ctx({ spec, state: { images: {}, workers: {} }, secrets: { internal_token: "it", url_signing_key: "us", admin_token: "fvadm_ctl" } });
+    expect(isDirect(c.spec, c.state)).toBe(true);
+    const e = workerSystemEnv(c, spec.pools[0]!, "img");
+    expect(e).toMatchObject({ FV_SERVE_ROLE: "worker", FV_WORKER_DIRECT: "1", FV_AUTH_MODE: "keys", FV_KEY_STORE: "d1", FV_ADMIN_TOKEN: "fvadm_ctl", FV_INTERNAL_TOKEN: "it" });
+    expect(e.FV_PUBLIC_BASE_URL).toBe("");
+    spec.gateway.auth = "none";
+    expect(workerSystemEnv(c, spec.pools[0]!, "img").FV_AUTH_MODE).toBe("none");
+    // A gateway started later (gateway/start) takes over: the workers become gateway workers again.
+    const withGw = { ...c, state: { images: {}, workers: {}, gateway: { pod: "g", dph: 0, created: 1, image: "i" }, gateway_url: "https://g-8000.proxy.runpod.net" } };
+    expect(isDirect(withGw.spec, withGw.state)).toBe(false);
+    const g = workerSystemEnv(withGw, spec.pools[0]!, "img");
+    expect(g.FV_WORKER_DIRECT).toBeUndefined();
+    expect(g.FV_ADMIN_TOKEN).toBeUndefined();
+    // A gateway cluster's workers never get the admin token.
+    expect(workerSystemEnv(ctx(), ctx().spec.pools[0]!, "img").FV_ADMIN_TOKEN).toBeUndefined();
+    expect(isReserved("FV_WORKER_DIRECT")).toBe(true);
   });
   it("reserved keys", () => {
     expect(isReserved("FV_INTERNAL_TOKEN")).toBe(true);
