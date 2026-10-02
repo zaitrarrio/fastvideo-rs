@@ -24,6 +24,12 @@
 //! - `a_session_is_admitted_through_the_family_object`: a Reactor session
 //!   through the gateway reserves the GPU on the worker (its batch job waits),
 //!   the signalling goes to the worker's endpoint, stop frees the GPU.
+//!
+//! With `FV_EDGE_URL` + `FV_EDGE_TOKEN` (the Worker's internal token) the
+//! burst, direct-upload and session tests run against a real dispatcher
+//! (staging) instead of the stand-in, under per-run family names; the
+//! direct-upload test then reads the object back through `/dl` with
+//! `FV_EDGE_UPLOAD_KEY`. The tests that need the stand-in's internals skip.
 
 #![cfg(all(feature = "http-client", feature = "openai-videos", feature = "minimax", feature = "fal", feature = "ltxapi"))]
 
@@ -587,8 +593,11 @@ struct Env {
     mock: MockD1,
     arts: PathBuf,
     s3: s3::Mock,
-    d: family_do::FamilyDo,
+    /// The stand-in (`None`: an external dispatcher at `base`).
+    native: Option<family_do::FamilyDo>,
     base: String,
+    token: String,
+    run: String,
     http: Http,
 }
 
@@ -601,8 +610,29 @@ impl Env {
         std::fs::create_dir_all(&arts).unwrap();
         let (s3, _) = s3::Mock::start("AKTEST", "test-secret").await;
         let client = s3::Client { signer: s3.signer.clone(), http: reqwest::Client::builder().no_proxy().build().unwrap() };
+        let run = format!("{:x}", now() % 0xff_ffff);
+        if let Some(base) = std::env::var("FV_EDGE_URL").ok().filter(|s| !s.is_empty()) {
+            let token = std::env::var("FV_EDGE_TOKEN").expect("FV_EDGE_TOKEN with FV_EDGE_URL");
+            return Self { mock: MockD1::new(), arts, s3, native: None, base: base.trim_end_matches('/').to_owned(), token, run, http: Http::new() };
+        }
         let (d, base) = family_do::FamilyDo::start(cfg, client).await;
-        Self { mock: MockD1::new(), arts, s3, d, base, http: Http::new() }
+        Self { mock: MockD1::new(), arts, s3, native: Some(d), base, token: TOKEN.to_owned(), run, http: Http::new() }
+    }
+    fn external(&self) -> bool {
+        self.native.is_none()
+    }
+    /// The stand-in (tests that need it skip on an external dispatcher).
+    fn d(&self) -> &family_do::FamilyDo {
+        self.native.as_ref().expect("the native stand-in")
+    }
+    /// A family's name for this run (unique on an external dispatcher, whose
+    /// objects keep their state).
+    fn fam(&self, f: &str) -> String {
+        if self.external() {
+            format!("{f}-{}", self.run)
+        } else {
+            f.to_owned()
+        }
     }
     fn d1(&self, dead: &Arc<AtomicBool>) -> D1Client {
         D1Client::new(Arc::new(Cuttable { mock: self.mock.clone(), dead: dead.clone() })).with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
@@ -616,11 +646,11 @@ impl Env {
         r["worker"].as_str().unwrap_or_default().to_owned()
     }
     async fn status(&self, family: &str) -> PoolStatus {
-        let r = self.http.0.get(format!("{}/families/{family}/status", self.base)).header("x-fv-internal-token", TOKEN).send().await.unwrap();
+        let r = self.http.0.get(format!("{}/families/{}/status", self.base, self.fam(family))).header("x-fv-internal-token", &self.token).send().await.unwrap();
         r.json().await.unwrap()
     }
     async fn metrics(&self, family: &str) -> FamilyMetrics {
-        let r = self.http.0.get(format!("{}/families/{family}/metrics", self.base)).bearer_auth(ADMIN).send().await.unwrap();
+        let r = self.http.0.get(format!("{}/families/{}/metrics", self.base, self.fam(family))).header("x-fv-internal-token", &self.token).send().await.unwrap();
         r.json().await.unwrap()
     }
     /// Waits until `n` workers are connected to `family`'s object.
@@ -641,7 +671,7 @@ impl Env {
         env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
         env.insert("FV_URL_SIGNING_KEY".to_owned(), "shared-signing-key".to_owned());
         env.insert("FV_STATE_DIR".to_owned(), tmp(tag).display().to_string());
-        env.insert("FV_INTERNAL_TOKEN".to_owned(), TOKEN.to_owned());
+        env.insert("FV_INTERNAL_TOKEN".to_owned(), self.token.clone());
         env.insert("FV_ARTIFACTS_DIR".to_owned(), self.arts.display().to_string());
         env.insert("FV_ADMIN_TOKEN".to_owned(), ADMIN.to_owned());
         env.insert("FV_CF_ACCOUNT_ID".to_owned(), "acct".to_owned());
@@ -681,7 +711,7 @@ impl Env {
         c.engine.fake.models = models.iter().map(|m| m.to_string()).collect();
         c.engine.fake.step_ms = step_ms;
         c.dispatch.do_url = Some(self.base.clone());
-        c.dispatch.families = families.iter().map(|f| f.to_string()).collect();
+        c.dispatch.families = families.iter().map(|f| self.fam(f)).collect();
         c.dispatch.capacity = 1;
         c.dispatch.sessions = 1;
         c.dispatch.status_s = 2;
@@ -703,7 +733,7 @@ impl Env {
                 retries: 1,
                 dispatch: DispatchMode::DurableObject,
                 do_url: Some(self.base.clone()),
-                family: Some((*family).into()),
+                family: Some(self.fam(family)),
                 ..PoolCfg::default()
             })
             .collect();
@@ -817,8 +847,12 @@ async fn multi_family_worker_never_holds_two_jobs() {
         }
     }
     assert_eq!(spans.len(), 2, "both workers took jobs: {spans:?}");
-    let offers: u32 = e.d.inner.lock().unwrap().offers.values().sum();
-    eprintln!("FAMILY-BURST: 12 jobs, {offers} offers, 429 nacks: a {} b {}", e.d.nacks("worker-a", 429), e.d.nacks("worker-b", 429));
+    if let Some(d) = &e.native {
+        let offers: u32 = d.inner.lock().unwrap().offers.values().sum();
+        eprintln!("FAMILY-BURST: 12 jobs, {offers} offers, 429 nacks: a {} b {}", d.nacks("worker-a", 429), d.nacks("worker-b", 429));
+    }
+    let q: Vec<f64> = ids.iter().map(|id| { let j = e.job(id); (j.started_at.unwrap() - j.created_at).as_seconds_f64() }).collect();
+    eprintln!("FAMILY-BURST: queue s {:?}", q.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>());
     let m = e.metrics("h3").await;
     assert_eq!((m.queued, m.running, m.workers), (0, 0, 2), "{m:?}");
     drop((a, b, gw));
@@ -828,6 +862,10 @@ async fn multi_family_worker_never_holds_two_jobs() {
 async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
     init_log();
     let e = Env::new().await;
+    if e.external() {
+        eprintln!("skipped: needs the native stand-in");
+        return;
+    }
     // a serves h3 and ltx; b serves ltx only.
     let a = e.worker("a", &["h3", "ltx"], &["fake-h3-turbo", "fake-ltx-turbo"], 400, false).await;
     let b = e.worker("b", &["ltx"], &["fake-ltx-turbo"], 20, false).await;
@@ -841,13 +879,13 @@ async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
     e.http.wait(&g, &h, |v| v["status"] == "running", Duration::from_secs(30)).await;
     // A stale credit from a (as if a `slots` frame crossed the h3 offer):
     // the ltx object believes a has a free slot, and prefers it (worker-a < worker-b).
-    e.d.inject("ltx", "worker-a", fastvideo_dispatch_proto::WorkerMsg::Slots(fastvideo_dispatch_proto::Slots { free: 1, session_free: 0, offers_seen: 1_000 }));
+    e.d().inject("ltx", "worker-a", fastvideo_dispatch_proto::WorkerMsg::Slots(fastvideo_dispatch_proto::Slots { free: 1, session_free: 0, offers_seen: 1_000 }));
     let t0 = Instant::now();
     let l = e.http.submit(&g, "fake-ltx-turbo", "re-offered").await;
     let v = e.http.finished(&g, &l).await;
     assert_eq!(v["status"], "succeeded", "{v}");
     assert_eq!(e.worker_of(&l), "worker-b", "the job ran on the free GPU");
-    assert!(e.d.nacks("worker-a", 429) >= 1, "a refused the offer");
+    assert!(e.d().nacks("worker-a", 429) >= 1, "a refused the offer");
     let j = e.job(&l);
     let queue = (j.started_at.unwrap() - j.created_at).as_seconds_f64();
     eprintln!("FAMILY-NACK: re-offered after a 429; queue {queue:.3} s, end-to-end {:.3} s", t0.elapsed().as_secs_f64());
@@ -864,6 +902,10 @@ async fn a_missed_ack_requeues_to_another_worker() {
     use tokio_tungstenite::tungstenite::Message;
     init_log();
     let e = Env::new().await;
+    if e.external() {
+        eprintln!("skipped: needs the native stand-in");
+        return;
+    }
     // A "worker" that announces a free slot and never answers an offer.
     let mut req = format!("{}/families/wan/connect", e.base.replace("http://", "ws://")).into_client_request().unwrap();
     req.headers_mut().insert("x-fv-internal-token", TOKEN.parse().unwrap());
@@ -899,7 +941,7 @@ async fn a_missed_ack_requeues_to_another_worker() {
     assert_eq!(e.worker_of(&id), "worker-b");
     let st = e.status("wan").await;
     eprintln!("FAMILY-ACK-TIMEOUT: requeued after the ack deadline; workers {:?}", st.workers.iter().map(|w| (&w.worker_id, w.held)).collect::<Vec<_>>());
-    assert_eq!(e.d.inner.lock().unwrap().offers[&e.job(&id).id.to_string()], 2, "offered twice (the second under a new lease)");
+    assert_eq!(e.d().inner.lock().unwrap().offers[&e.job(&id).id.to_string()], 2, "offered twice (the second under a new lease)");
     silent.abort();
     drop((b, gw));
 }
@@ -908,6 +950,10 @@ async fn a_missed_ack_requeues_to_another_worker() {
 async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
     init_log();
     let e = Env::new().await;
+    if e.external() {
+        eprintln!("skipped: needs the native stand-in");
+        return;
+    }
     let a = e.worker("a", &["wan"], &["fake-wan"], 150, false).await;
     let b = e.worker("b", &["wan"], &["fake-wan"], 150, false).await;
     e.connected("wan", 2).await;
@@ -924,7 +970,7 @@ async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
     }
     let before: BTreeMap<String, String> = ids[..2].iter().map(|id| (id.clone(), e.worker_of(id))).collect();
     let t0 = Instant::now();
-    e.d.redeploy();
+    e.d().redeploy();
     e.connected("wan", 2).await;
     eprintln!("FAMILY-REDEPLOY: workers back in {:.3} s", t0.elapsed().as_secs_f64());
     for id in &ids {
@@ -934,7 +980,7 @@ async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
     for (id, w) in &before {
         assert_eq!(&e.worker_of(id), w, "{id} finished where it ran before the deploy");
     }
-    let offers = e.d.inner.lock().unwrap().offers.clone();
+    let offers = e.d().inner.lock().unwrap().offers.clone();
     for id in &ids {
         let jid = e.job(id).id.to_string();
         assert_eq!(offers.get(&jid).copied().unwrap_or(0), 1, "{id} was offered once: {offers:?}");
@@ -959,8 +1005,19 @@ async fn direct_upload_commits_through_the_family_object() {
     let job = e.job(&id);
     let art = &job.artifacts[0];
     let fastvideo_protocol::ArtifactLocation::Object { bucket, key } = &art.location else { panic!("not an object: {art:?}") };
+    assert!(key.starts_with(&format!("outputs/{}/{}/1-1/", e.fam("wan"), job.id)), "{key}");
+    if e.external() {
+        // Read it back through the Worker (`/dl`, signed with the upload key).
+        let secret = std::env::var("FV_EDGE_UPLOAD_KEY").expect("FV_EDGE_UPLOAD_KEY with FV_EDGE_URL");
+        let cap = fastvideo_dispatch_proto::presign::Cap::Get { key: key.clone() };
+        let url = fastvideo_dispatch_proto::presign::cap_url(&e.base, secret.as_bytes(), &cap, now() + 60_000);
+        let body = e.http.0.get(url).send().await.unwrap().bytes().await.unwrap();
+        assert_eq!(body.len() as u64, art.bytes, "the object in R2");
+        eprintln!("FAMILY-UPLOAD: {bucket}/{key} {} bytes, sha256 {}", body.len(), fastvideo_dispatch_proto::presign::sha256_hex(&body));
+        drop((w, gw));
+        return;
+    }
     assert_eq!(bucket, BUCKET);
-    assert!(key.starts_with(&format!("outputs/wan/{}/1-1/", job.id)), "{key}");
     let st = e.s3.store.lock().unwrap();
     let obj = st.objects.get(key).expect("the object is in the bucket");
     assert_eq!(obj.len() as u64, art.bytes);
@@ -968,7 +1025,7 @@ async fn direct_upload_commits_through_the_family_object() {
     assert!(st.uploads.is_empty(), "no upload left open");
     drop(st);
     // The family object recorded the result (key, bytes, sha256).
-    let r = e.d.with("family:wan", |s| (s.job(&job.id.to_string()).and_then(|j| j.result.clone()), Vec::new())).expect("a result");
+    let r = e.d().with("family:wan", |s| (s.job(&job.id.to_string()).and_then(|j| j.result.clone()), Vec::new())).expect("a result");
     assert_eq!((r.key.as_str(), r.bytes), (key.as_str(), art.bytes));
     assert_eq!(r.sha256, fastvideo_dispatch_proto::presign::sha256_hex(e.s3.store.lock().unwrap().objects.get(key).unwrap()));
     // A cancelled job's upload is aborted.
@@ -1093,7 +1150,7 @@ async fn a_session_is_admitted_through_the_family_object() {
     let (_, jv) = e.http.call("GET", &format!("{g}/fv/v1/jobs/{j}"), None).await;
     assert_eq!(jv["status"], "queued", "the GPU is the session's: {jv}");
     // A second session finds no slot.
-    let sec = e.http.0.post(format!("{}/families/sfwan/sessions", e.base)).header("x-fv-internal-token", TOKEN).json(&json!({"kind": "reactor"})).send().await.unwrap();
+    let sec = e.http.0.post(format!("{}/families/{}/sessions", e.base, e.fam("sfwan"))).header("x-fv-internal-token", &e.token).json(&json!({"kind": "reactor"})).send().await.unwrap();
     assert_eq!(sec.status().as_u16(), 429);
     // The gateway renews the lease from its tick (TTL 60 s here; just check it lives on).
     tokio::time::sleep(Duration::from_millis(1_200)).await;
