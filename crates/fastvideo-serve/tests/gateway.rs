@@ -904,6 +904,9 @@ impl fastvideo_protocol::UrlSigner for SlowStore {
     fn url_for(&self, a: &fastvideo_protocol::Artifact, ttl: Duration) -> url::Url {
         fastvideo_protocol::UrlSigner::url_for(&self.inner, a, ttl)
     }
+    fn url_issued(&self, a: &fastvideo_protocol::Artifact, issued: time::OffsetDateTime, ttl: Duration) -> url::Url {
+        fastvideo_protocol::UrlSigner::url_issued(&self.inner, a, issued, ttl)
+    }
 }
 
 #[async_trait::async_trait]
