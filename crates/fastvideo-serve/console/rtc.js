@@ -2,7 +2,7 @@
 // input, Live stream): full (non-trickle) offers, the Reactor runtime's
 // signalling, and a WHEP player.
 
-import { base, apiKey, keyless } from './common.js';
+import { base, apiKey, keyless, admit, BUSY } from './common.js';
 
 // Resolves once ICE gathering completes (at most `ms`): the servers here
 // take complete offers, as the director's client does.
@@ -54,8 +54,9 @@ const W = '/sessions/' + SID + '/transport/webrtc';
 // offer with `track_mapping`, the polled answer. `onMessage(m)` gets the
 // application messages (`state_update`, `command_error`, …). Returns
 // {pc, command(type, data), close()}.
-export async function reactorWatch({ params = {}, onTrack, onMessage, onState, log = () => {} }) {
-  let r = await reactorCall('POST', '/start_session', params);
+export async function reactorWatch({ params = {}, onTrack, onMessage, onState, log = () => {}, onWait = () => {} }) {
+  // 409 while another streaming session still holds the engine: retried.
+  let r = await admit(() => reactorCall('POST', '/start_session', params), { isBusy: (x, failed) => !failed && BUSY.has(x.status), onWait });
   if (r.status === 404) throw new Error('this server does not mount the Reactor runtime');
   if (r.status !== 200) throw new Error('start_session: HTTP ' + r.status + ' ' + JSON.stringify(r.body));
   const tracks = ((r.body.capabilities && r.body.capabilities.tracks) || []).filter((t) => t.direction === 'recvonly');

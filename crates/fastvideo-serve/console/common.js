@@ -107,6 +107,27 @@ export async function request(method, path, { auth = 'key', token, body, root, f
   return full ? { body: parsed, headers: resp.headers, status: resp.status } : parsed;
 }
 
+// Statuses a session start answers while the engine is still busy: 409 (a
+// streaming session holds the executor; the engine sends `Retry-After`),
+// 429 (busy), 503 (loading). A session just stopped on another page frees
+// its lease a moment later, so starts retry for a while instead of failing.
+export const BUSY = new Set([409, 429, 503]);
+export const ADMIT_WAIT_MS = 20000;
+
+// Runs `attempt()` until it does not report busy (`isBusy(result or error)`)
+// or ADMIT_WAIT_MS passes, calling `onWait(seconds waited)` between tries.
+export async function admit(attempt, { isBusy, onWait = () => {}, every = 1000 } = {}) {
+  const t0 = Date.now();
+  for (;;) {
+    let r; let err = null;
+    try { r = await attempt(); } catch (e) { err = e; }
+    const busy = isBusy(err || r, !!err);
+    if (!busy || Date.now() - t0 > ADMIT_WAIT_MS) { if (err) throw err; return r; }
+    onWait(Math.round((Date.now() - t0) / 1000));
+    await new Promise((res) => setTimeout(res, every));
+  }
+}
+
 // The model metadata headers of a fal result or a director session
 // (`x-fv-tier`, `x-fv-quality`, `x-fv-recipe`, `x-fv-model`): {tier, quality, recipe, model}.
 export function metaHeaders(h) {

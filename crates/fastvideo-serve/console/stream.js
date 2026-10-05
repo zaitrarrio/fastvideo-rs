@@ -19,7 +19,7 @@
 
 import {
   $, el, request, setMsg, topbar, loadAuthMode, needsKey, loadCapabilities, loadCatalog, mountedProtocols, streamKind,
-  recipeText, licenceBanner, modelHref,
+  recipeText, licenceBanner, modelHref, admit, BUSY,
 } from './common.js';
 import { reactorWatch, reactorModel, whepPlay } from './rtc.js';
 
@@ -51,6 +51,12 @@ const current = () => models.find((m) => m.caps.id === $('model').value);
 const answers = (m, name) => !!name && (m.caps.id === name || (m.caps.served_names || []).includes(name));
 // The fal app whose model is this one (its licence, its causal director).
 const appFor = (m) => apps.find((a) => answers(m, a.model));
+
+// The engine is still busy (a session that just ended releases it a moment later).
+function waiting(s) {
+  setState('waiting', 'warn');
+  setMsg('stream-msg', 'The engine is still busy (another streaming session is ending): retrying (' + s + ' s).');
+}
 
 function showStats(rows) {
   $('stream-stats').replaceChildren(...rows.filter(([, v]) => v !== null && v !== undefined && v !== '')
@@ -166,6 +172,7 @@ async function startReactor(m, prompt, params) {
     params,
     onTrack,
     log,
+    onWait: waiting,
     onState: (s) => {
       log('peer ' + s);
       if (s === 'connected') setState('streaming', 'ok');
@@ -202,7 +209,7 @@ async function startWhip(m, prompt, params) {
   const body = { model: m.caps.id, whip_url: whip, prompt, ...params };
   if ($('whip-token').value.trim()) body.whip_token = $('whip-token').value.trim();
   if ($('whip-target').value) body.whip_target = $('whip-target').value;
-  const s = await request('POST', '/fv/v1/streams', { auth: 'bearer', body });
+  const s = await admit(() => request('POST', '/fv/v1/streams', { auth: 'bearer', body }), { isBusy: (e, failed) => failed && BUSY.has(e.status), onWait: waiting });
   const path = '/fv/v1/streams/' + encodeURIComponent(s.id);
   document.body.dataset.stream = s.id;
   log('→ POST /fv/v1/streams: ' + s.id + ' (' + s.mode + ', ' + s.max_seconds + ' s)');
@@ -283,6 +290,7 @@ async function start() {
     markSwitch(v, 'sent', 'warn');
     controls(true);
     setState('connecting', 'warn');
+    setMsg('stream-msg', '');
   } catch (e) {
     setState('failed', 'bad');
     setMsg('stream-msg', e.message, 'bad');

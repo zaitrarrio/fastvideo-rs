@@ -18,6 +18,7 @@
 
 import {
   el, request, setMsg, loadAuthMode, needsKey, poolBadge, poolWarning, loadCatalog, metaHeaders, draftPill, licenceBanner, upload,
+  admit, BUSY,
 } from './common.js';
 import { gathered } from './rtc.js';
 
@@ -83,8 +84,13 @@ export class DirectorClient {
 
     await pc.setLocalDescription(await pc.createOffer());
     await gathered(pc);
-    const r = await request('POST', '/wma/session', {
+    // The same offer is retried while the engine is still busy (a session
+    // stopped a moment ago releases its executor asynchronously).
+    const r = await admit(() => request('POST', '/wma/session', {
       auth: 'key', full: true, body: { app_id: this.appId, sdp: pc.localDescription.sdp, type: 'offer' },
+    }), {
+      isBusy: (e, failed) => failed && BUSY.has(e.status),
+      onWait: (s) => this.onState('waiting', 'The engine is still busy (a previous session is ending): retrying (' + s + ' s).'),
     });
     const answer = r.body;
     // The model behind the session (`x-fv-model`, `x-fv-tier`, `x-fv-recipe`).
@@ -551,9 +557,10 @@ export function mountDirector(root, { app, model }) {
     statePill.textContent = s;
     statePill.className = 'pill' + (s === 'streaming' ? ' ok' : s === 'closed' ? '' : ' warn');
     start.disabled = s !== 'closed' && s !== 'idle';
-    stop.disabled = !(s === 'connecting' || s === 'configuring' || s === 'streaming');
+    stop.disabled = !(s === 'connecting' || s === 'waiting' || s === 'configuring' || s === 'streaming');
     send.disabled = s !== 'streaming';
     if (reason) setMsg(msg, reason);
+    else if (s === 'configuring' && /still busy/.test(msg.textContent)) setMsg(msg, '');
   }
 
   // What the session's `session_info` says it does not take, for this configure.

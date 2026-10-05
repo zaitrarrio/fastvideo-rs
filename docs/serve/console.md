@@ -284,6 +284,12 @@ and fps, bitrate cap, audio) and session length.
 Duplex sessions need the API key on both transports (unless the server runs
 with `FV_AUTH_MODE=none`); the page shows the usual banner without one.
 
+**Busy engine.** A session that was just stopped (on this page or another)
+releases its executor a moment later; until then the engine answers a new
+session 409 (`Retry-After`), 429 or 503. The director, Live stream and
+native stream starts retry for up to 20 s, showing "The engine is still
+busy … retrying", instead of failing.
+
 ## 4c. Live stream page
 
 `/console/stream` (`console/stream.js`, WebRTC helpers in `console/rtc.js`)
