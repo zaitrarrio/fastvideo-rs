@@ -551,7 +551,9 @@ ltx-newsbroadcast, ltx-frogyoga, seed 42), medians, warm process, text
 excluded. Every clip has the generation canvas's size and 121 frames. No clip
 is flat (luma std 27-70) and every clip moves. The "vs 768p" column replaces
 the form labels' estimates (0.4 / 0.9 / 2.2 -> 0.5 / 0.9 / 2.1,
-`director::info::LTX_COST_*`).
+`director::info::LTX_COST_*`). These are 5 s chunks, the director's default
+since `wip/director-chunk`. At 5 s every tier but 480p is slower than real
+time on one RTX PRO 6000 (480p: 5.35 s per 5.0 s played).
 
 **What was not run:** a live fv-serve director session (WebRTC client,
 first-frame latency, delivered fps). This is the generation path the session

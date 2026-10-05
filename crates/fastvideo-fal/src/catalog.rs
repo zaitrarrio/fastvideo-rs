@@ -781,7 +781,42 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
         json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."})
     };
     props.insert("aspect_ratio".into(), aspect);
-    let mut form = object("Director", props, vec!["resolution", "aspect_ratio"], &[]);
+    let mut order = vec!["resolution", "aspect_ratio"];
+    if !causal {
+        // `configure.chunk_duration` (ours): the lengths this model serves,
+        // per resolution where a tier caps them (H3 1080P: 5 s). A causal
+        // model streams without chunks: no such field.
+        let default = f64::from(crate::director::messages::DEFAULT_CHUNK_DURATION);
+        let l = crate::director::info::model_limits(caps, default, 4);
+        let options = l.chunk_options();
+        if !options.is_empty() {
+            let by_res: Map<String, Value> = served.iter().map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options()))).collect();
+            let labels: Map<String, Value> = options
+                .iter()
+                .map(|d| {
+                    let what = if *d <= 5 { "prompt changes land sooner" } else { "fewer joins" };
+                    (d.to_string(), format!("{d} s ({what})").into())
+                })
+                .collect();
+            let mut description = "Seconds per chunk: shorter chunks react to prompt updates sooner, longer ones have fewer joins.".to_owned();
+            if options.len() < crate::director::messages::CHUNK_DURATIONS.len() {
+                description.push_str(&format!(" This model's clips stop short of 10 s: {} s only.", options[0]));
+            }
+            props.insert(
+                "chunk_duration".into(),
+                json!({
+                    "type": "integer",
+                    "enum": options,
+                    "default": l.chunk_seconds.round() as u64,
+                    "description": description,
+                    "x-fv-labels": labels,
+                    "x-fv-options-by-resolution": by_res,
+                }),
+            );
+            order.push("chunk_duration");
+        }
+    }
+    let mut form = object("Director", props, order, &[]);
     if causal {
         let mut d = "A causal streaming model: one continuous rollout; each prompt update applies at the next 0.75 s block (LongLive re-caches its KV window once per switch). Text only: no image, end image or audio conditioning.".to_owned();
         if crate::director::info::is_longlive(caps) {
