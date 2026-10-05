@@ -4,7 +4,8 @@ swapped (design §4.5, research-ltx-api §2): `POST /v2/text-to-video` ->
 202 `{id, created_at}`, poll `GET /v2/text-to-video/{id}` to `completed`,
 download `result.video_url` with no key; the V1 sync body; `/v1/upload`
 then `PUT upload_url` with `required_headers` and the `ltx://` URI as
-`image_uri`; the error bodies and `x-request-id`.
+`image_uri`; the error bodies (401, 400 incl. a retake without
+`video_uri`, 403 on the HDR / reframe stubs, 404) and `x-request-id`.
 """
 
 import re
@@ -103,7 +104,14 @@ def main(s, a):
     err(requests.post(f"{url}/v2/text-to-video", json={k: v for k, v in payload.items() if k != "duration"}, headers=headers, timeout=30), 400, "invalid_request_error")
     err(requests.post(f"{url}/v2/text-to-video", json={**payload, "model": "ltx-2-fast"}, headers=headers, timeout=30), 400, "invalid_request_error")
     err(requests.post(f"{url}/v2/text-to-video", json={**payload, "camera_motion": "dolly_in"}, headers=headers, timeout=30), 400, "invalid_request_error")
-    err(requests.post(f"{url}/v2/retake", json={}, headers=headers, timeout=30), 403, "permission_error")
+    # Retake is served (LTX-2.5 distilled): an empty EditVideoRequest misses
+    # the required video_uri (OAS) -> 400. The 403 permission_error contract
+    # covers the endpoints with no engine path (stubs: HDR, reframe).
+    r = requests.post(f"{url}/v2/retake", json={}, headers=headers, timeout=30)
+    err(r, 400, "invalid_request_error")
+    s.check("video_uri" in r.json()["error"]["message"], r.json())
+    for ep in ("video-to-video-hdr", "video-to-video-reframe"):
+        err(requests.post(f"{url}/v2/{ep}", json={"video_uri": "https://example.com/v.mp4"}, headers=headers, timeout=30), 403, "permission_error")
     err(requests.get(f"{url}/v2/text-to-video/00000000-0000-0000-0000-000000000000", headers=headers, timeout=30), 404, "not_found_error")
     s.ok("error bodies (401, 400, 403, 404)")
 

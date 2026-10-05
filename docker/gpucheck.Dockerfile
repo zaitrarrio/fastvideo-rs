@@ -348,8 +348,10 @@ COPY configs/serve/runpod-wan.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=wan FV_CONFIG=/etc/fv/runpod-wan.toml
 LABEL org.opencontainers.image.description="fv-serve wan (configs/serve/runpod-wan.toml)"
 
+# Also carries runpod-wan14b.toml (the Wan 14B fast tier, same binary):
+# FV_CONFIG=/etc/fv/runpod-wan14b.toml selects it.
 FROM serve-cuda-bin AS serve-wan5b
-COPY configs/serve/runpod-wan5b.toml configs/serve/runpod-fake.toml /etc/fv/
+COPY configs/serve/runpod-wan5b.toml configs/serve/runpod-wan14b.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=wan5b FV_CONFIG=/etc/fv/runpod-wan5b.toml
 LABEL org.opencontainers.image.description="fv-serve wan5b (configs/serve/runpod-wan5b.toml)"
 

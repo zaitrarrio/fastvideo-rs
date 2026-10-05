@@ -1,0 +1,2 @@
+98:[fastvideo] attn_sage: kernels loaded (cubin sm120, 0.0s, sm120)
+99:[fastvideo] sdpa: SageAttention2 INT8 QK / FP8 PV (attn_sage) B=1 H=32 Sq=8160 Sk=8160 D=128
