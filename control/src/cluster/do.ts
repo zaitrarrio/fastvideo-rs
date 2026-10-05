@@ -8,7 +8,6 @@ import type { Env } from "../env";
 import { resolveDigest, resolveClusterImages } from "../ghcr";
 import { runpod } from "../runpod";
 import { HttpError, now, scrub } from "../util";
-import { randomToken } from "../crypto";
 import {
   adminGet,
   LEGACY_ADMIN_SWITCH,
@@ -24,6 +23,7 @@ import {
   workerInternal,
   desiredEnv,
   envCtx,
+  newAdminToken,
 } from "./ops";
 import type { PodRec } from "./payloads";
 import { getCluster, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
@@ -209,8 +209,9 @@ export class ClusterOps implements DurableObject {
       this.log(`images: ${JSON.stringify(c.state.images)}`);
       const s = await secretsOf(env, c);
       // A new gateway makes a new token; an image older than the sealed-token
-      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN.
-      if (s.legacy_admin_token) s.admin_token = `fvadm_${randomToken("", 24)}`;
+      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN, and so do
+      // gateway-less workers (docs/control/gateway-less-auth.md).
+      if (s.legacy_admin_token || !c.spec.gateway.enabled) s.admin_token = newAdminToken();
       else delete s.admin_token;
       await saveSecrets(env, c, s);
       await saveState(env, c, { status: "starting", deadline: now() + c.spec.cap_s * 1000 });

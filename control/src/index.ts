@@ -7,8 +7,8 @@ import { Hono, type Context } from "hono";
 import { DEFAULT_POLICIES, policies } from "./alerts";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
-import { adminGet, adminToken, desiredEnv, envCtx, gatewayPublic, projectSpend } from "./cluster/ops";
-import { gatewaySystemEnv, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
+import { adminAll, adminGet, adminOne, adminTargets, adminToken, desiredEnv, envCtx, gatewayPublic, projectSpend, workerHealth } from "./cluster/ops";
+import { gatewaySystemEnv, isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
 import { defaultSpec, normalizeSpec, STANDARD_POOLS } from "./cluster/spec";
 import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
 import { collect } from "./collector";
@@ -281,8 +281,19 @@ app.get("/api/clusters/:id/env", async (c) => {
   for (const p of cl.spec.pools) preview[p.id] = await resolveView(env, cl.id, null, workerSystemEnv(ctx, p, img(p.id)));
   return c.json({ pods, preview, needs_restart: pods.filter((p) => p.needs_restart).map((p) => p.pod_id) });
 });
+/** Where clients go: the gateway, or each worker of a gateway-less cluster (docs/control/gateway-less-auth.md). */
+function clientUrls(cl: Cluster) {
+  const workers = Object.entries(cl.state.workers || {}).flatMap(([pool, recs]) => recs.map((r) => ({ pod: r.pod, pool, url: r.url || null })));
+  return { direct: isDirect(cl.spec, cl.state), gateway_url: cl.state.gateway_url || null, workers };
+}
 app.get("/api/clusters/:id/gateway", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
+  if (isDirect(cl.spec, cl.state)) {
+    // No gateway: each worker's public /health stands in for the status and pools views.
+    const u = clientUrls(cl);
+    const workers = await Promise.all(u.workers.map(async (w) => ({ ...w, health: await workerHealth(c.env, w.pod) })));
+    return c.json({ url: null, direct: true, workers });
+  }
   const status = await gatewayPublic(c.env, cl, "/fv/v1/status").catch((e) => ({ status: 0, body: { error: (e as Error).message } }));
   const pools = await adminGet(c.env, cl, "/fv/v1/gateway/pools").catch((e) => ({ error: (e as Error).message }));
   return c.json({ url: cl.state.gateway_url || null, status: status.body, pools });
@@ -291,18 +302,37 @@ app.post("/api/clusters/:id/admin-token", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const tok = await adminToken(c.env, cl);
   await auditC(c, { action: "cluster.admin-token.reveal", target: cl.name });
-  return c.json({ admin_token: tok, console: `${cl.state.gateway_url}/console/admin` });
+  const u = clientUrls(cl);
+  const base = u.direct ? u.workers.find((w) => w.url)?.url : cl.state.gateway_url;
+  return c.json({ admin_token: tok, console: base ? `${base}/console/admin` : null, ...u });
 });
 app.post("/api/clusters/:id/mint-key", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const name = String((await body(c)).name || "fv-control");
   if (!/^[A-Za-z0-9 ._-]{1,60}$/.test(name)) throw new HttpError(400, "name: 1-60 characters");
-  const tok = await adminToken(c.env, cl);
-  const r = await fetch(`${cl.state.gateway_url}/fv/v1/admin/keys`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ name }) });
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok || !j.api_key) throw new HttpError(502, `mint refused (${r.status})`);
-  await auditC(c, { action: "cluster.mint-key", target: cl.name, after: { key: j.key?.id, name } });
-  return c.json({ api_key: j.api_key, key: j.key }, 201);
+  const r = await adminOne(c.env, cl, "POST", "/fv/v1/admin/keys", { name });
+  if (r.status !== 201 || !r.body?.api_key) throw new HttpError(502, `mint refused (${r.status})`);
+  await auditC(c, { action: "cluster.mint-key", target: cl.name, after: { key: r.body.key?.id, name } });
+  // Gateway-less: the other workers load the key from D1 within 30 s.
+  return c.json({ api_key: r.body.api_key, key: r.body.key, ...(isDirect(cl.spec, cl.state) ? { minted_on: r.pod, propagation_s: 30 } : {}) }, 201);
+});
+app.get("/api/clusters/:id/keys", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const r = await adminOne(c.env, cl, "GET", "/fv/v1/admin/keys");
+  if (r.status !== 200) throw new HttpError(502, `key list refused (${r.status})`);
+  return c.json({ keys: r.body?.keys || [], backend: r.body?.backend });
+});
+app.delete("/api/clusters/:id/keys/:kid", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const kid = c.req.param("kid");
+  if (!/^key_[0-9a-f]{12}$/.test(kid)) throw new HttpError(400, "key id: key_<12 hex>");
+  adminTargets(cl);
+  // Every worker of a gateway-less cluster at once; one that misses it reads the revocation from D1 within 30 s.
+  const rs = await adminAll(c.env, cl, "DELETE", `/fv/v1/admin/keys/${kid}`);
+  const ok = rs.filter((r) => r.status === 200);
+  await auditC(c, { action: "cluster.revoke-key", target: cl.name, after: { key: kid, applied: ok.map((r) => r.pod), failed: rs.filter((r) => r.status !== 200).map((r) => `${r.pod}:${r.status}`) } });
+  if (!ok.length) throw new HttpError(rs.every((r) => r.status === 404) ? 404 : 502, `revoke refused (${rs.map((r) => r.status).join(",")})`);
+  return c.json({ key: ok[0]!.body?.key, applied: ok.map((r) => r.pod), failed: rs.filter((r) => r.status !== 200).map((r) => ({ pod: r.pod, status: r.status })) });
 });
 
 /** Import a runpod-cluster.sh state file (artifacts/runpod/serve/cluster.json) and, optionally, its .admin-key.pem. */

@@ -668,16 +668,43 @@ async function pageCluster(main, id) {
       h("div", { id: "opLog" }),
     );
     const gw = c.state.gateway_url;
+    // Gateway-less (docs/control/gateway-less-auth.md): clients call each worker; the admin token and keys work on every one.
+    const direct = !gw && !c.spec.gateway.enabled;
+    const wurls = Object.entries(c.state.workers || {}).flatMap(([pool, l]) => l.filter((r) => r.url).map((r) => ({ pool, pod: r.pod, url: r.url })));
+    const reach = !!(gw || (direct && wurls.length));
+    const out = (t) => { $("#gwOut").textContent = t; };
+    const showKeys = async () => {
+      const j = await act("keys", () => api(`/api/clusters/${c.id}/keys`));
+      const box = $("#gwKeys");
+      box.replaceChildren(table(
+        [
+          { label: "id", get: (k) => k.id },
+          { label: "name", get: (k) => k.name },
+          { label: "prefix", get: (k) => k.prefix },
+          { label: "created", get: (k) => k.created_at || "" },
+          { label: "last used", get: (k) => k.last_used_at || "–" },
+          { label: "", get: (k) => (k.revoked ? badge("revoked", "critical") : h("button", { onclick: async () => { if (!confirm(`Revoke ${k.name} (${k.id})? (audited)`)) return; const r = await act("revoke", () => api(`/api/clusters/${c.id}/keys/${k.id}`, { method: "DELETE" })); out(`revoked ${k.id} on ${r.applied.join(", ")}${r.failed.length ? `; not reached: ${r.failed.map((f) => f.pod).join(", ")} (they read it from D1 within 30 s)` : ""}`); showKeys(); } }, "Revoke")) },
+        ],
+        j.keys,
+        "No minted keys.",
+      ));
+    };
     const tools = card(
-      "Gateway",
-      gw ? h("p", { class: "small" }, "URL ", h("a", { href: gw, target: "_blank", rel: "noopener" }, gw), " · ", h("a", { href: `${gw}/console`, target: "_blank", rel: "noopener" }, "console")) : h("p", { class: "muted small" }, "No gateway pod."),
-      gw && h(
+      direct ? "Workers (no gateway)" : "Gateway",
+      gw
+        ? h("p", { class: "small" }, "URL ", h("a", { href: gw, target: "_blank", rel: "noopener" }, gw), " · ", h("a", { href: `${gw}/console`, target: "_blank", rel: "noopener" }, "console"))
+        : direct && wurls.length
+          ? h("div", { class: "small" }, h("p", { class: "muted small" }, "Clients call each worker directly with an API key; the admin token and minted keys work on every worker."), ...wurls.map((w) => h("p", {}, `${w.pool} ${w.pod}: `, h("a", { href: w.url, target: "_blank", rel: "noopener" }, w.url), " · ", h("a", { href: `${w.url}/console`, target: "_blank", rel: "noopener" }, "console"))))
+          : h("p", { class: "muted small" }, direct ? "No workers." : "No gateway pod."),
+      reach && h(
         "div",
         { class: "row" },
-        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); $("#gwOut").textContent = JSON.stringify({ status: j.status, pools: j.pools }, null, 2); } }, "Pools view"),
-        h("button", { onclick: async () => { if (!confirm("Show the gateway's admin token? (audited)")) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); $("#gwOut").textContent = `admin token: ${j.admin_token}\nconsole: ${j.console}`; } }, "Reveal admin token"),
-        h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); $("#gwOut").textContent = `API key (shown once): ${j.api_key}`; } }, "Mint user API key"),
+        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); out(JSON.stringify(j.direct ? { workers: j.workers } : { status: j.status, pools: j.pools }, null, 2)); } }, direct ? "Workers view" : "Pools view"),
+        h("button", { onclick: async () => { if (!confirm(`Show the ${direct ? "cluster" : "gateway"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
+        h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
+        h("button", { onclick: showKeys }, "Keys"),
       ),
+      h("div", { id: "gwKeys", style: "margin-top:8px" }),
       h("pre", { id: "gwOut", class: "log", style: "margin-top:8px;max-height:300px" }),
     );
     main.replaceChildren(
