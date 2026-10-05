@@ -544,14 +544,18 @@ export class ClusterOps implements DurableObject {
     const env = this.env;
     const d = op.data;
     if (op.phase === "init") {
-      const want: string[] | undefined = op.params?.pods;
+      // params: {pods?: string[], pools?: string[] (pool ids, or "gateway")}: those pods (forced); neither: every pod whose env changed.
+      const pods: string[] | undefined = op.params?.pods;
+      const pools: string[] | undefined = op.params?.pools;
+      const chosen = (r: any) => !!pods?.includes(r.pod_id) || !!pools?.includes(r.role === "gateway" ? "gateway" : r.pool);
       const rows = await livePods(env, c.id);
       const ctx = await envCtx(env, c);
       const queue: { pod: string; role: string }[] = [];
       for (const r of rows.filter((x: any) => x.slot !== "retired")) {
-        if (want && !want.includes(r.pod_id)) continue;
+        const forced = !!(pods || pools);
+        if (forced && !chosen(r)) continue;
         const des = await desiredEnv(env, c, ctx, r.role, { pod: r.pod_id, pool: r.pool, image: r.image });
-        if (want || des.hash !== r.env_hash) queue.push({ pod: r.pod_id, role: r.role });
+        if (forced || des.hash !== r.env_hash) queue.push({ pod: r.pod_id, role: r.role });
       }
       // Workers first (the gateway keeps routing to the others), the gateway last.
       queue.sort((a, b) => (a.role === "gateway" ? 1 : 0) - (b.role === "gateway" ? 1 : 0));

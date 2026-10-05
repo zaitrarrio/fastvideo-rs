@@ -7,6 +7,10 @@ import { z } from "zod";
 import type { Policies } from "./alerts";
 import type { ClusterSpec, PoolSpec } from "./cluster/spec";
 
+/** The gateway's `[protocols]` switches (fv-serve ProtocolsCfg; serde denies unknown keys). */
+export const GATEWAY_PROTOCOLS = ["openai_videos", "fastwan", "minimax", "fal", "fal_director", "ltx", "reactor", "native"] as const;
+export type GatewayProtocol = (typeof GATEWAY_PROTOCOLS)[number];
+
 const id = (what: string) =>
   z
     .string()
@@ -17,9 +21,13 @@ const cpuFlavor = z.enum(["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"])
 
 export const ModelRefZ = z
   .object({
-    id: z.string().min(1).describe("Model id the gateway advertises (e.g. fasth3, ltx25-distill-sol)."),
-    family: z.string().min(1).describe("Model family (h3, ltx2, wan)."),
-    recipe: z.string().min(1).describe("Recipe of the family (h3-turbo, ltx-turbo, wan-turbo, …)."),
+    id: z.string().min(1).meta({ "x-dynamic": "model_ids" }).describe("Model id the gateway advertises (e.g. fasth3, ltx25-distill-sol); the worker config's [[models]] id."),
+    family: z.string().min(1).meta({ "x-dynamic": "families" }).describe("Model family (h3, ltx2, wan)."),
+    recipe: z
+      .string()
+      .min(1)
+      .meta({ "x-dynamic": "recipes" })
+      .describe("A tier alias (h3-max, h3-turbo, h3-draft, ltx-pro, ltx-turbo, ltx-draft, wan-max, wan-turbo, wan-draft) or a catalog model id (sfwan21-1.3b, ltx25-a2v-guided, h3-ref2v-turbo, …). The gateway resolves it against the fv-serve CUDA catalog at start and does not start on an unknown one."),
   })
   .strict()
   .describe("A static capability of the pool: what the gateway advertises while the pool has no ready worker.");
@@ -31,7 +39,7 @@ export const PoolSpecZ = z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,30}$/)
       .meta({ "x-dynamic": "variants" })
-      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, gateway (CPU, also carries the fake engine)."),
+      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, gateway (CPU, also carries the fake engine). The pool presets (ltx-pro, ltx-a2v, ltx-ref2v, h3-ref2v, longlive) reuse these images with an inline config_toml."),
     count: z.number().int().min(0).max(8).describe("Worker pods in this pool. Change a running cluster's count with Scale."),
     compute: z.enum(["GPU", "CPU"]).describe("GPU pod, or CPU pod (fake engine, tests)."),
     config: z.string().optional().describe("Worker config inside the image (e.g. /etc/fv/runpod.toml). One of config / config_toml."),
@@ -76,6 +84,27 @@ export const ClusterSpecZ = z
         base: z.enum(["pods", "minimal"]).describe("Gateway config base: pods = configs/serve/gateway-pods.toml; minimal = without the reactor, fal apps and keys newer than older images."),
         github_token: z.boolean().describe("Pass GITHUB_PAT as FV_GITHUB_TOKEN (console promote / rollback)."),
         auth: z.enum(["keys", "none"]).describe("The gateway's user auth mode (FV_AUTH_MODE)."),
+        fal_apps: z
+          .array(z.string().regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).meta({ "x-dynamic": "fal_apps" }))
+          .max(64)
+          .optional()
+          .describe("Replaces the base's [protocols] fal_apps (default: every worker config's apps). An app no pool serves answers 404; the gateway still starts."),
+        protocols: z
+          .object(Object.fromEntries(GATEWAY_PROTOCOLS.map((k) => [k, z.boolean().optional()])) as Record<GatewayProtocol, z.ZodOptional<z.ZodBoolean>>)
+          .strict()
+          .optional()
+          .describe("Overrides single [protocols] switches of the base (openai_videos, fastwan, minimax, fal, fal_director, ltx, reactor, native)."),
+        reactor_model: z
+          .string()
+          .min(1)
+          .nullable()
+          .optional()
+          .meta({ "x-dynamic": "model_ids" })
+          .describe("[gateway] reactor_model. Default: the base's (fasth3) when a pool serves it, else a pool's causal model (sfwan21-1.3b, longlive-1.3b). null: none (the gateway takes the first streaming model of a pod pool)."),
+        aliases: z
+          .record(z.string().min(1).max(80), z.string().min(1).meta({ "x-dynamic": "model_ids" }))
+          .optional()
+          .describe("Replaces the base's [aliases] (MiniMax-H3 → fasth3, …): public model names → model ids."),
       })
       .strict(),
     pools: z.array(PoolSpecZ).describe("Worker pools."),
@@ -140,7 +169,7 @@ export const EnvVarZ = z
     set: z.string().max(32768).optional().meta({ "x-secret": true }).describe("Write-only: a new value for a secret."),
   })
   .strict();
-export const EnvSetZ = z.record(z.string().regex(ENV_KEY_RE).meta({ "x-dynamic": "env_keys" }), EnvVarZ).describe("Environment variables at one level (account, cluster or pod).");
+export const EnvSetZ = z.record(z.string().regex(ENV_KEY_RE).meta({ "x-dynamic": "env_keys" }), EnvVarZ).describe("Environment variables at one level (account, cluster, pool or pod).");
 
 export const TokenCreateZ = z
   .object({

@@ -65,11 +65,11 @@ fi
 export FV_WORKER_ID="\${RUNPOD_POD_ID}"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
-/** The gateway config without the reactor model and fal apps (pools that are not the four standard ones). */
+/** The gateway config without the Reactor model and fal apps (gateway images older than them). */
 export const GATEWAY_BASE_MINIMAL = GATEWAY_BASE_PODS.replace(/^reactor_model = .*\n/m, "")
   .replace(/^fal_director = true$/m, "fal_director = false")
   .replace(/^reactor = true$/m, "reactor = false")
-  .replace(/^# Every pool's fal apps.*\n/m, "")
+  .replace(/^# Every worker config's fal apps[\s\S]*?(?=^fal_apps = )/m, "")
   .replace(/^fal_apps = .*\n/m, "");
 
 /** Keys newer than released gateway images (release 1 = 2cd1ba0; serde
@@ -79,8 +79,61 @@ const stripNewGatewayKeys = (t: string) =>
   t.replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
 
 const tomlStr = (s: string) => JSON.stringify(s);
-export function gatewayToml(spec: ClusterSpec): string {
+
+/** The body lines of `[section]` in a flat TOML text: [first, end) line indices, or null. */
+function sectionRange(lines: string[], section: string): [number, number] | null {
+  const head = lines.findIndex((l) => l.trim() === `[${section}]`);
+  if (head < 0) return null;
+  let end = head + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
+  while (end > head + 1 && lines[end - 1]!.trim() === "") end--; // keep the blank line before the next section
+  return [head + 1, end];
+}
+/** Sets (or, with null, removes) `key = value` in `[section]`; adds the section when it is missing. */
+export function tomlSet(text: string, section: string, key: string, value: string | null): string {
+  const lines = text.split("\n");
+  const r = sectionRange(lines, section);
+  if (!r) return value === null ? text : `${text.replace(/\n*$/, "\n")}\n[${section}]\n${key} = ${value}\n`;
+  const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`);
+  const i = lines.slice(r[0], r[1]).findIndex((l) => re.test(l));
+  if (i >= 0) {
+    if (value === null) lines.splice(r[0] + i, 1);
+    else lines[r[0] + i] = `${key} = ${value}`;
+  } else if (value !== null) lines.splice(r[1], 0, `${key} = ${value}`);
+  return lines.join("\n");
+}
+/** Replaces the body of `[section]` (adds the section when it is missing). */
+function tomlReplaceSection(text: string, section: string, body: string[]): string {
+  const lines = text.split("\n");
+  const r = sectionRange(lines, section);
+  if (!r) return `${text.replace(/\n*$/, "\n")}\n[${section}]\n${body.join("\n")}\n`;
+  lines.splice(r[0], r[1] - r[0], ...body);
+  return lines.join("\n");
+}
+
+/** The gateway's Reactor model: the spec's, else the base's (fasth3) when a pool serves it, else a pool's causal (SF-Wan / LongLive) model; undefined: leave the base as it is. */
+export function reactorModel(spec: ClusterSpec): string | null | undefined {
+  if (spec.gateway.reactor_model !== undefined) return spec.gateway.reactor_model;
+  if (spec.gateway.base === "minimal") return undefined;
+  const models = spec.pools.flatMap((p) => p.models || []);
+  if (models.some((m) => m.id === "fasth3")) return undefined;
+  return models.find((m) => m.family === "wan" && m.recipe === "sfwan21-1.3b")?.id;
+}
+
+/** The base with the spec's gateway overrides (fal apps, protocols, Reactor model, aliases). */
+export function gatewayBase(spec: ClusterSpec): string {
   let t = stripNewGatewayKeys(spec.gateway.base === "minimal" ? GATEWAY_BASE_MINIMAL : GATEWAY_BASE_PODS);
+  const g = spec.gateway;
+  if (g.fal_apps) t = tomlSet(t, "protocols", "fal_apps", `[${g.fal_apps.map(tomlStr).join(", ")}]`);
+  for (const [k, v] of Object.entries(g.protocols || {})) if (typeof v === "boolean") t = tomlSet(t, "protocols", k, String(v));
+  const rm = reactorModel(spec);
+  if (rm !== undefined) t = tomlSet(t, "gateway", "reactor_model", rm === null ? null : tomlStr(rm));
+  if (g.aliases) t = tomlReplaceSection(t, "aliases", Object.entries(g.aliases).map(([a, m]) => `${tomlStr(a)} = ${tomlStr(m)}`));
+  return t;
+}
+
+export function gatewayToml(spec: ClusterSpec): string {
+  let t = gatewayBase(spec);
   if (!t.endsWith("\n")) t += "\n";
   for (const p of spec.pools) {
     t += `\n[[pools]]\nid = ${tomlStr(p.id)}\nkind = "pod"\nurls = []\nmax_queued = ${p.max_queued ?? 32}\ndispatch_timeout_s = 30\njob_timeout_s = ${p.job_timeout_s ?? 1800}\nstale_after_s = ${p.stale_after_s ?? 120}\nretries = 1\n`;

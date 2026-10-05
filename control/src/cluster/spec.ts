@@ -1,8 +1,10 @@
 // A cluster definition (the controller's version of runpod-cluster.sh's
 // fixed shape): one CPU gateway pod in front of pod pools. Defaults match
 // the script (docs/serve/e2e/cluster.md).
-import { validate } from "../schemas";
+import { validate, type GatewayProtocol } from "../schemas";
 import { HttpError } from "../util";
+import CATALOG from "./catalog.json";
+import { WORKER_CONFIGS } from "./worker-configs";
 
 export type RegionId = "eu" | "us";
 export type CpuFlavor = "cpu3c" | "cpu3g" | "cpu3m" | "cpu5c" | "cpu5g" | "cpu5m";
@@ -55,6 +57,14 @@ export interface ClusterSpec {
     base: "pods" | "minimal"; // the gateway TOML (non-pool part)
     github_token: boolean; // FV_GITHUB_TOKEN from GITHUB_PAT (console promote/rollback)
     auth: "keys" | "none";
+    /** Replaces the base's `[protocols] fal_apps` (default: the base's: every worker config's apps). */
+    fal_apps?: string[];
+    /** Overrides single `[protocols]` switches of the base. */
+    protocols?: Partial<Record<GatewayProtocol, boolean>>;
+    /** `[gateway] reactor_model`; null: none (the gateway takes the first streaming model of a pod pool). Default: the base's when a pool serves it, else a pool's causal model. */
+    reactor_model?: string | null;
+    /** Replaces the base's `[aliases]`. */
+    aliases?: Record<string, string>;
   };
   pools: PoolSpec[];
   /** Backstop: every pod is deleted at create + cap_s (extend moves it). */
@@ -92,6 +102,101 @@ export const STANDARD_POOLS: PoolSpec[] = [
   },
 ];
 
+/** A pool the dashboard can add: an image variant plus the worker config it runs. */
+export interface PoolPreset {
+  id: string;
+  title: string;
+  description: string;
+  /** Weight trees (under /workspace/weights on both volumes) the workers load. */
+  weights: string[];
+  /** Set when the weights' licence restricts use. */
+  licence?: string;
+  pool: PoolSpec;
+}
+const inline = (file: string) => {
+  const t = WORKER_CONFIGS[file];
+  if (!t) throw new Error(`no generated worker config ${file} (node gen-configs.mjs)`);
+  return t;
+};
+// The presets reuse the image variants CI builds (docs/serve/images.md); a
+// config the variant's image does not carry rides inline (FV_WORKER_TOML_B64,
+// generated from configs/serve by gen-configs.mjs).
+export const POOL_PRESETS: PoolPreset[] = [
+  { id: "h3-turbo", title: "H3 turbo (fasth3)", description: "MiniMax H3 turbo tier; also the Reactor's clip model.", weights: ["h3-base"], pool: STANDARD_POOLS[0]! },
+  { id: "h3-max", title: "H3 max (Sol-H3)", description: "MiniMax H3 max tier (Sol-H3 4-step ladder).", weights: ["h3-base"], pool: STANDARD_POOLS[1]! },
+  { id: "ltx", title: "LTX turbo", description: "LTX-2.5 turbo tier (Sol stage 2): fal lightricks/ltx-2.5 /fast.", weights: ["ltx25"], pool: STANDARD_POOLS[2]! },
+  { id: "wan", title: "Wan 2.2 5B (turbo + max)", description: "Wan 2.2 TI2V-5B: FastWan turbo and the 50-step max tier; fal-ai/wan.", weights: ["fastwan22-ti2v-5b", "wan22-ti2v-5b"], pool: STANDARD_POOLS[3]! },
+  {
+    id: "ltx-pro",
+    title: "LTX pro (dense)",
+    description: "LTX-2.5 pro tier (ltx25-distill-dense, two-stage dense): fal lightricks/ltx-2.5 /pro and fal-ai/ltx-2.3 retake / extend. Sage attention is on by default on sm_120 (RTX PRO 6000; FASTVIDEO_ATTN_SAGE=0 turns it off).",
+    weights: ["ltx25"],
+    pool: { id: "ltx-pro", variant: "ltx", count: 1, compute: "GPU", config_toml: inline("runpod-ltx-pro.toml"), models: [{ id: "ltx25-distill-dense", family: "ltx2", recipe: "ltx-pro" }], max_queued: 16, job_timeout_s: 3600, stale_after_s: 180 },
+  },
+  {
+    id: "ltx-a2v",
+    title: "LTX guided audio-to-video",
+    description: "The guided A2V companion of ltx-pro (LTX-2.5 dev DiT, multimodal guider): fal lightricks/ltx-2.5 audio-to-video/pro. An 80-96 GB card and ~38 GB of host RAM.",
+    weights: ["ltx25", "ltx25-dev"],
+    pool: { id: "ltx-a2v", variant: "ltx", count: 1, compute: "GPU", config_toml: inline("runpod-ltx-a2v.toml"), container_disk_gb: 60, models: [{ id: "ltx25-a2v-guided", family: "ltx2", recipe: "ltx25-a2v-guided" }], max_queued: 8, job_timeout_s: 3600, stale_after_s: 180 },
+  },
+  {
+    id: "ltx-ref2v",
+    title: "LTX reference-to-video",
+    description: "The Ref2V companion of ltx-pro (Ingredients IC-LoRA): fal fal-ai/ltx-2.3-quality ingredient.",
+    weights: ["ltx25", "ltx25-ic-lora-ingredients"],
+    pool: { id: "ltx-ref2v", variant: "ltx", count: 1, compute: "GPU", config_toml: inline("runpod-ltx-ref2v.toml"), models: [{ id: "ltx25-ref2v", family: "ltx2", recipe: "ltx25-ref2v" }], max_queued: 8, job_timeout_s: 3600, stale_after_s: 180 },
+  },
+  {
+    id: "h3-ref2v",
+    title: "H3 reference-to-video",
+    description: "H3 Ref2VA, turbo and max (the reference companions of h3-turbo / h3-max).",
+    weights: ["h3-base", "h3-ref2va"],
+    pool: {
+      id: "h3-ref2v",
+      variant: "h3-max",
+      count: 1,
+      compute: "GPU",
+      config_toml: inline("runpod-h3-ref2v.toml"),
+      models: [
+        { id: "h3-ref2v-turbo", family: "h3", recipe: "h3-ref2v-turbo" },
+        { id: "h3-ref2v-max", family: "h3", recipe: "h3-ref2v-max" },
+      ],
+      max_queued: 16,
+      job_timeout_s: 3600,
+      stale_after_s: 180,
+    },
+  },
+  {
+    id: "fastwan21",
+    title: "FastWan 2.1 1.3B",
+    description: "FastWan 2.1 T2V 1.3B (480p, 3 DMD steps): fal fastvideo/fastwan21-1.3b.",
+    weights: ["fastwan21-1.3b"],
+    pool: { id: "fastwan21", variant: "wan", count: 1, compute: "GPU", config: "/etc/fv/runpod-wan.toml", models: [{ id: "fastwan21-1.3b", family: "wan", recipe: "fastwan21-1.3b" }], max_queued: 64, job_timeout_s: 900, stale_after_s: 90 },
+  },
+  {
+    id: "sfwan",
+    title: "SF-Wan causal streaming",
+    description: "SF-Wan 1.3B causal rollout: Reactor and native streams (one session per GPU); the cluster's Reactor model when no pool serves fasth3.",
+    weights: ["sfwan21-1.3b"],
+    pool: { id: "sfwan", variant: "sfwan", count: 1, compute: "GPU", config: "/etc/fv/runpod-sfwan.toml", models: [{ id: "sfwan21-1.3b", family: "wan", recipe: "sfwan21-1.3b" }], max_queued: 8, job_timeout_s: 1800, stale_after_s: 60 },
+  },
+  {
+    id: "longlive",
+    title: "LongLive-1.3B causal (NON-COMMERCIAL)",
+    description: "LongLive-1.3B on the SF-Wan engine (window 12, sink 3, KV re-cache at prompt switches): Reactor and native streams. NON-COMMERCIAL licence: research and evaluation only.",
+    weights: ["longlive-1.3b-safetensors", "sfwan21-1.3b"],
+    licence: "LongLive-1.3B weights: CC-BY-NC-SA-4.0 (non-commercial; research / evaluation only)",
+    pool: { id: "longlive", variant: "sfwan", count: 1, compute: "GPU", config_toml: inline("runpod-longlive.toml"), models: [{ id: "longlive-1.3b", family: "wan", recipe: "sfwan21-1.3b" }], max_queued: 8, job_timeout_s: 1800, stale_after_s: 60 },
+  },
+];
+export const presetPool = (id: string): PoolSpec | undefined => {
+  const p = POOL_PRESETS.find((x) => x.id === id || x.pool.id === id)?.pool;
+  return p ? structuredClone(p) : undefined;
+};
+/** Recipes the fv-serve catalog does not have: a pool model with one stops the gateway at start. */
+export const UNSERVABLE_RECIPES = new Set(CATALOG.recipes.filter((r) => !r.serve).map((r) => r.id));
+
 /** A fake-engine worker on a CPU pod (the gateway image carries the fake engine). */
 export const FAKE_CPU_WORKER_TOML = `[server]
 bind = "0.0.0.0:8000"
@@ -127,7 +232,18 @@ queue_max = 8
 body_max_mb = 16
 `;
 
-export function defaultSpec(name: string, template: "standard" | "tiny-cpu" = "standard"): ClusterSpec {
+/** Cluster templates (GET /api/templates): standard, tiny-cpu, and preset groups. */
+export const TEMPLATES: Record<string, { title: string; pools: string[] }> = {
+  standard: { title: "CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools", pools: ["h3-turbo", "h3-max", "ltx", "wan"] },
+  "tiny-cpu": { title: "CPU gateway + 1 fake-engine CPU worker (tests)", pools: [] },
+  ltx: { title: "LTX: turbo, pro, guided A2V and Ref2V pools", pools: ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"] },
+  h3: { title: "H3: turbo, max and Ref2V pools", pools: ["h3-turbo", "h3-max", "h3-ref2v"] },
+  wan: { title: "Wan: 2.2 5B, FastWan 1.3B and SF-Wan streaming pools", pools: ["wan", "fastwan21", "sfwan"] },
+  longlive: { title: "LongLive-1.3B streaming pool (NON-COMMERCIAL weights)", pools: ["longlive"] },
+};
+export type TemplateId = keyof typeof TEMPLATES;
+
+export function defaultSpec(name: string, template: string = "standard"): ClusterSpec {
   const base: ClusterSpec = {
     name,
     image: { channel: "stable" },
@@ -142,6 +258,7 @@ export function defaultSpec(name: string, template: "standard" | "tiny-cpu" = "s
     auto_stop_idle_min: null,
     log_shipping: true,
   };
+  if (template !== "standard" && template !== "tiny-cpu" && TEMPLATES[template]) base.pools = TEMPLATES[template]!.pools.map((p) => presetPool(p)!);
   if (template === "tiny-cpu") {
     base.gateway.base = "minimal";
     base.gateway.github_token = false;
@@ -162,7 +279,7 @@ export function normalizeSpec(input: any): ClusterSpec {
   if (!input || typeof input !== "object") throw new HttpError(400, "spec must be an object");
   const name = String(input.name || "");
   if (!ID_RE.test(name)) throw new HttpError(400, "name: lower-case letters, digits and '-', starting with a letter (max 31)");
-  const d = defaultSpec(name, input.template === "tiny-cpu" ? "tiny-cpu" : "standard");
+  const d = defaultSpec(name, typeof input.template === "string" && TEMPLATES[input.template] ? input.template : "standard");
   const s: ClusterSpec = {
     ...d,
     ...input,
@@ -181,8 +298,10 @@ export function normalizeSpec(input: any): ClusterSpec {
   for (const r of s.regions) if (!REGIONS[r]) throw new HttpError(400, `regions: unknown region ${r} (eu, us)`);
   const ids = new Set<string>();
   s.pools = s.pools.map((p: any, i: number) => {
-    const std = STANDARD_POOLS.find((x) => x.id === p?.id);
-    const q: PoolSpec = { ...(std ? structuredClone(std) : {}), ...p } as PoolSpec;
+    // A standard or preset pool id fills what the entry leaves out; its own config wins.
+    const std = presetPool(String(p?.id ?? ""));
+    if (std && (p?.config || p?.config_toml)) delete std.config, delete std.config_toml;
+    const q: PoolSpec = { ...(std ?? {}), ...p } as PoolSpec;
     if (!ID_RE.test(q.id || "")) throw new HttpError(400, `pools[${i}].id: invalid`);
     if (ids.has(q.id)) throw new HttpError(400, `pools: ${q.id} twice`);
     ids.add(q.id);
@@ -194,6 +313,8 @@ export function normalizeSpec(input: any): ClusterSpec {
     if (q.config_toml && q.config_toml.length > 32768) throw new HttpError(400, `pools[${i}].config_toml: too long`);
     for (const r of q.regions || []) if (!REGIONS[r]) throw new HttpError(400, `pools[${i}].regions: unknown ${r}`);
     if (!(q.models?.length || q.fake_models?.length)) throw new HttpError(400, `pools[${i}]: models or fake_models (the gateway's static caps)`);
+    for (const [j, m] of (q.models || []).entries())
+      if (UNSERVABLE_RECIPES.has(m?.recipe)) throw new HttpError(400, `pools[${i}].models[${j}].recipe: ${m.recipe} is not in the fv-serve catalog of this build (LongLive-Plug recipes run in fv-gpucheck / the CLI); the gateway would refuse to start`);
     return q;
   });
   const num = (k: keyof ClusterSpec, lo: number, hi: number) => {

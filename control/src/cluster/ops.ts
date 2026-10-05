@@ -46,10 +46,10 @@ const poolOf = (c: Cluster, id: string): PoolSpec => {
   return p;
 };
 
-/** The full env a pod gets (system < account < cluster < pod) and its hash. */
+/** The full env a pod gets (system < account < cluster < pool < pod; the gateway has no pool layer) and its hash. */
 export async function desiredEnv(env: Env, c: Cluster, ctx: EnvCtx, role: "gateway" | "worker", rec: { pod?: string; pool?: string; image: string }) {
   const system = role === "gateway" ? gatewaySystemEnv(ctx, rec.image) : workerSystemEnv(ctx, poolOf(c, rec.pool!), rec.image);
-  const full = await resolvePlain(env, c.id, rec.pod ?? null, system);
+  const full = await resolvePlain(env, c.id, rec.pod ?? null, system, role === "worker" ? rec.pool : null);
   return { system, full, hash: (await sha256Hex(canonical(full))).slice(0, 16) };
 }
 

@@ -1,0 +1,61 @@
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 10
+sync_timeout_s = 600
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "remote"
+
+[gateway]
+caps_refresh_s = 60
+tick_s = 5
+metrics_window_s = 600
+watch_poll_ms = 1000
+runpod_api_base = "https://api.runpod.ai/v2"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+"MiniMax-H3-Max" = "sol-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = true
+reactor = false
+native = true
+
+[limits]
+queue_max = 256
+body_max_mb = 64
+
+
+[[pools]]
+id = "fake"
+kind = "pod"
+urls = []
+max_queued = 8
+dispatch_timeout_s = 30
+job_timeout_s = 600
+stale_after_s = 120
+retries = 1
+fake_models = ["fake-wan"]
+
+[autoscale]
+enabled = false
