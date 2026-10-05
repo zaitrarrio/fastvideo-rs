@@ -276,7 +276,8 @@ export function snippetProtocols(mounted, ctx) {
   if (on('openai_videos') && ['t2v', 'i2v'].includes(task)) list.push({ id: 'openai_videos', label: 'OpenAI', title: 'POST /v1/videos' });
   if (on('minimax') && /h3/i.test(String(family || ctx.model || '')) && ['t2v', 'i2v', 'ref2v'].includes(task) && tier) list.push({ id: 'minimax', label: 'MiniMax', title: 'POST /v2/video_generation' });
   if (on('ltx') && /ltx/i.test(String(family || ctx.model || '')) && LTX_MODEL[tier] && ['t2v', 'i2v', 'a2v'].includes(task)) list.push({ id: 'ltx', label: 'LTX API', title: 'POST /v2/{endpoint}' });
-  if (on('reactor') && caps && caps.stream) list.push({ id: 'reactor', label: 'Reactor', title: 'Reactor runtime (when it streams this model)' });
+  const streamsThis = caps && ctx.reactorModel && (caps.id === ctx.reactorModel || (caps.served_names || []).includes(ctx.reactorModel));
+  if (on('reactor') && caps && caps.stream && streamsThis) list.push({ id: 'reactor', label: 'Reactor', title: 'Reactor runtime (it streams this model)' });
   return list;
 }
 

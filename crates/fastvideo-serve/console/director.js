@@ -1,19 +1,20 @@
 // fal director (WMA) client for the console: design §5.6, research-fal §8.
 //
-// Everything that talks to the director lives in this module so WP-14 can
-// finish the wiring in one place. Flow:
+// Everything that talks to the director lives in this module. Flow:
 //   1. POST /wma/ice {app_id}                      -> {ice_servers}
 //   2. RTCPeerConnection, client-created data channel "control", recvonly
 //      video + audio, full (non-trickle) offer after ICE gathering
 //   3. POST /wma/session {app_id, sdp, type:"offer"} -> {session_id, sdp, type:"answer"}
 //   4. POST /wma/session/heartbeat {session_id} every 5 s -> {alive}
 //   5. on channel open the server sends `session_info`; the client checks the
-//      configure against it (`check(info, cfg)`, at most 1.5 s wait), then
+//      configure against it (`check(info, cfg)`; INFO_WAIT_MS at most: a
+//      server that sends none gets the configure unchecked, logged), then
 //      sends `configure` (prompt_version 1) and waits for `configured`
 //   6. `prompt` messages with prompt_version 2, 3, … (replan true/false)
 //   7. `stop` -> `stream_exhausted`, then close
-// 404 / 405 / 501 on the signalling routes means this server has no
-// director yet: the page says so instead of failing.
+// 404 / 405 / 501 on the signalling routes means this server does not
+// mount the director (built without `webrtc`, or `fal_director` off): the
+// page says so instead of failing.
 
 import {
   el, request, setMsg, loadAuthMode, needsKey, poolBadge, poolWarning, loadCatalog, metaHeaders, draftPill, licenceBanner, upload,
@@ -21,6 +22,11 @@ import {
 import { gathered } from './rtc.js';
 
 const HEARTBEAT_MS = 5000;
+// How long `configure` waits for `session_info`. The server sends it the
+// moment the control channel opens, but a busy machine can take seconds:
+// a short wait sent the configure unchecked, and what the session cannot
+// take came back as the server's own error instead of the page's check.
+const INFO_WAIT_MS = 10000;
 const UNAVAILABLE = new Set([404, 405, 501]);
 
 function field(label, node, hint) {
@@ -68,7 +74,10 @@ export class DirectorClient {
     this.pendingConfigure = { ...configure, type: 'configure', prompt_version: 1, protocol_version: 1 };
     this.version = 1;
     this.info = null; this.configureSent = false;
-    dc.onopen = () => { this.onState('configuring'); this.infoWait = setTimeout(() => this.sendConfigure(), 1500); };
+    dc.onopen = () => { this.onState('configuring'); this.infoWait = setTimeout(() => {
+      this.onEvent({ type: 'info_timeout', message: 'no session_info within ' + INFO_WAIT_MS / 1000 + ' s: configure sent unchecked' });
+      this.sendConfigure();
+    }, INFO_WAIT_MS); };
     dc.onmessage = (ev) => this.handle(ev.data);
     dc.onclose = () => this.close('control channel closed');
 
@@ -108,7 +117,7 @@ export class DirectorClient {
   send(msg) {
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('control channel is not open');
     this.dc.send(JSON.stringify(msg));
-    this.onEvent({ type: '→ ' + msg.type, ...msg });
+    this.onEvent({ ...msg, type: '→ ' + msg.type });
   }
 
   // A `prompt` message: `fields` may carry `prompt`, `end_image_url`,
@@ -394,8 +403,8 @@ export function mountDirector(root, { app, model }) {
   const stats = el('dl', { id: 'director-stats' });
   const sessionFacts = el('dl', { id: 'director-session-info' });
   const unavailable = el('div', { class: 'banner', id: 'director-unavailable', hidden: true },
-    'Streaming is not available on this server yet: the director signalling routes (', el('code', {}, '/wma/*'),
-    ') are not mounted. Batch endpoints work; the Director page will connect once the server ships the director.');
+    'Streaming is not available on this server: the director signalling routes (', el('code', {}, '/wma/*'),
+    ') are not mounted (fv-serve needs the webrtc feature and [protocols] fal_director on). Batch endpoints work.');
 
   // Blocks hidden for a causal model (text to video only) or a session
   // that does not take them; `data-cond` names them for the tests.

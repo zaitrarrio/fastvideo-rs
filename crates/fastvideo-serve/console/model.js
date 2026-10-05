@@ -9,6 +9,7 @@ import {
 } from './common.js';
 import { buildForm } from './form.js';
 import { snippets, protocolSnippets, snippetProtocols } from './snippets.js';
+import { reactorModel } from './rtc.js';
 
 topbar('home');
 
@@ -338,10 +339,18 @@ async function boot() {
   form = buildForm(schema, $('form'), { upload, onChange: updateSnippet });
   // The other APIs this server mounts that can run this endpoint's model.
   loadCapabilities().then((caps) => {
-    const entry = caps && (caps.models || []).find((m) => m.caps && (m.caps.id === modelName || (m.caps.served_names || []).includes(modelName)));
-    const tierHit = caps && !entry ? (caps.tiers || []).find((t) => t && (t.name === modelName || t.tier === modelName)) : null;
+    // The model name may be an id, a served name, an alias or a tier alias (`h3-max`).
+    const tierHit = caps ? (caps.tiers || []).find((t) => t && t.alias === modelName) || null : null;
+    const id = (caps && caps.aliases && caps.aliases[modelName]) || (tierHit && tierHit.model) || modelName;
+    const entry = caps && (caps.models || []).find((m) => m.caps && (m.caps.id === id || (m.caps.served_names || []).includes(id)));
     snippetCtx = { model: modelName, entry, tierHit, endpoint: ep, app: known, sub: task };
-    renderProtocolTabs(snippetProtocols(mountedProtocols(caps), snippetCtx));
+    const protos = mountedProtocols(caps);
+    // The Reactor runtime streams one model (`GET /schema`): offered for that one only.
+    const reactor = !protos || protos.reactor ? reactorModel() : Promise.resolve(null);
+    reactor.then((r) => {
+      snippetCtx.reactorModel = r;
+      renderProtocolTabs(snippetProtocols(protos, snippetCtx));
+    });
   });
   $('form').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
   renderHistory();

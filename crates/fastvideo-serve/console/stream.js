@@ -228,7 +228,7 @@ async function startWhip(m, prompt, params) {
         ['pacer', p.ticks != null ? Number(p.effective_fps || 0).toFixed(1) + ' fps out, ' + Number(p.unique_fps || 0).toFixed(1) + ' fps generated, '
           + Number(p.video_seconds || 0).toFixed(1) + ' / ' + (v.max_seconds || '?') + ' s, ' + (p.underruns || 0) + ' underruns' : null],
         ['first frame', st.first_frame_ms != null ? st.first_frame_ms + ' ms' : null],
-        ['ttff', t ? JSON.stringify(t) : null],
+        ['ttff', t ? Object.entries(t).filter(([, x]) => x != null).map(([k, x]) => k.replace(/_ms$/, '').replace(/_/g, ' ') + ' ' + Math.round(Number(x)) + ' ms').join(', ') : null],
         ...stateRows(v.session),
       ]);
       setState(st.state === 'streaming' ? 'streaming' : st.state, st.state === 'streaming' ? 'ok' : st.state === 'closed' ? '' : 'warn');
@@ -272,7 +272,7 @@ async function start() {
   const params = {};
   if ($('seed').value.trim()) params.seed = Number($('seed').value.trim());
   if ($('max-seconds').value) params.max_seconds = Number($('max-seconds').value);
-  switches.clear(); $('timeline').replaceChildren(); version = 0; $('stream-stats').replaceChildren();
+  switches.clear(); $('timeline').replaceChildren(); version = 0; $('stream-stats').replaceChildren(); $('stream-log').replaceChildren();
   setState('starting', 'warn');
   controls(true);
   $('stop').disabled = true;
