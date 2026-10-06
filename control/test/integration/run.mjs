@@ -690,10 +690,14 @@ await step("build pods: policy, placement, up (create / reuse / start / replace)
   assert.deepEqual(plan.candidates.slice(0, 3).map((c) => `${c.flavor}-${c.vcpu}@${c.dc}`), ["cpu3c-32@EU-RO-1", "cpu3c-32@EUR-IS-1", "cpu5c-16@EUR-IS-1"]);
   assert.equal(plan.server.image, "ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-0123456789abcdef");
   // up: EU-RO-1 has no instances after all -> the next candidate.
+  // …and Runpod caps the container disk below the 200 GB asked: one retry with its cap (#41's fix, now here).
   mock.noStockDcs.add("EU-RO-1");
+  mock.cpuDiskCap = 160;
   const up1 = await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() });
   assert.equal(up1.status, 201, JSON.stringify(up1.j));
   mock.noStockDcs.clear();
+  mock.cpuDiskCap = 0;
+  assert.equal(up1.j.pod.disk_gb, 160);
   assert.equal(up1.j.action, "created");
   assert.match(up1.j.token, /^[0-9a-f]{64}$/);
   const bp1 = up1.j.pod;

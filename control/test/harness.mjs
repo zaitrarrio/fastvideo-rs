@@ -90,6 +90,7 @@ export function startMock() {
       const rest = p.slice("/rp/rest".length);
       if (rest === "/pods" && req.method === "POST") {
         if (m.failCreate > 0) { m.failCreate--; return json(res, 500, { error: "There are no instances currently available" }); }
+        if (body.computeType === "CPU" && m.cpuDiskCap && body.containerDiskInGb > m.cpuDiskCap) return json(res, 400, { error: `create pod: Container Disk must be less than or equal to ${m.cpuDiskCap} GB for this instance` });
         if (body.computeType === "CPU" && m.noStockDcs.has((body.dataCenterIds || [])[0])) return json(res, 500, { error: "This machine does not have the resources to deploy your pod. There are no longer any instances available with the requested specifications." });
         const id = newId();
         const cpu = body.computeType === "CPU";

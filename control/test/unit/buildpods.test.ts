@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   acquireLock,
@@ -71,6 +72,9 @@ describe("what a pod runs", () => {
   it("the image pin of build-pod.sh", () => {
     expect(imagePin('X=1\nBASE_IMAGE_TAG="bb-d872f7724765429b"\nIMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"')).toBe("ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d872f7724765429b");
     expect(imagePin("nothing here")).toBeNull();
+    // The real file: what fv-control reads from main.
+    const sh = readFileSync(new URL("../../../scripts/dev/build-pod.sh", import.meta.url), "utf8");
+    expect(imagePin(sh)).toMatch(/^ghcr\.io\/zaitrarrio\/fastvideo-rs-build-base:bb-[0-9a-f]{16}$/);
   });
   it("outdated: another server sha or image at the same ref; other refs (test pods) never", () => {
     const cur = { ref: "main", sha: "aaa", image: "img:1", at: 1 };

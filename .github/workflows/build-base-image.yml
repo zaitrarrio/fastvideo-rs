@@ -32,6 +32,9 @@ jobs:
   image:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    outputs:
+      ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+      built: ${{ steps.exists.outputs.exists != 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,3 +111,33 @@ jobs:
       # Last, so a fresh image is pushed before the pin is fixed in a follow-up commit.
       - name: build-pod.sh and the workflows pin this tag
         run: bash scripts/dev/build-base-tag.sh --check
+
+  # The media tests that need a working ffmpeg (VP8 / H.264 decode at low
+  # latency), inside a freshly built image: Ubuntu 22.04's ffmpeg 4.4.2 failed
+  # them (docker/build-base.Dockerfile, FFMPEG_VERSION). Only when the image
+  # was built in this run; ~2 min of compile.
+  media-tests:
+    needs: image
+    if: needs.image.outputs.built == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    container:
+      image: ${{ needs.image.outputs.ref }}
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg in the image
+        run: |
+          ffmpeg -hide_banner -version | head -1
+          bash scripts/ci/check-build-base.sh compat
+      - name: decode_pipe, ingest, duplex, ingest_whip
+        run: |
+          cargo test --no-fail-fast \
+            -p fastvideo-media --test decode_pipe \
+            -p fastvideo-webrtc --test ingest \
+            -p fastvideo-reactor --test duplex \
+            -p fastvideo-serve --test ingest_whip
