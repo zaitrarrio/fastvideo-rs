@@ -25,6 +25,7 @@ mod gate;
 mod gpu;
 mod h3_stage;
 mod hunyuan15_stage;
+mod sana_video_stage;
 mod sol_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
@@ -346,6 +347,11 @@ enum Cmd {
         #[command(subcommand)]
         stage: ltx2_stage::Stage,
     },
+    /// SANA-Video 2B stages (see `sana_video_stage.rs`).
+    SanaVideo {
+        #[command(subcommand)]
+        stage: sana_video_stage::Stage,
+    },
     /// HunyuanVideo 1.5 stages (see `hunyuan15_stage.rs`).
     Hunyuan {
         #[command(subcommand)]
@@ -652,6 +658,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::H3 { .. } => "h3",
         Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Hunyuan { .. } => "hunyuan",
+        Cmd::SanaVideo { .. } => "sana-video",
         Cmd::Sol { .. } => "sol",
         Cmd::Wan { .. } => "wan",
         Cmd::Mmaudio { .. } => "mmaudio",
@@ -824,6 +831,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::H3 { stage } => h3_stage::run(report, stage),
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
+        Cmd::SanaVideo { stage } => sana_video_stage::run(report, stage),
         Cmd::Sol { stage } => sol_stage::run(report, stage),
         Cmd::Wan { stage } => wan_stage::run(report, stage),
         Cmd::Mmaudio { stage } => mmaudio_stage::run(report, stage),

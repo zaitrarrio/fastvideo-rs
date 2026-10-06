@@ -19,6 +19,7 @@ serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 worker = { version = "=0.8.7", features = ["d1"] }
+base64.workspace = true
 # Pinned to the wasm-bindgen CLI scripts/serve/cf-edge.sh downloads: the two
 # must match exactly.
 wasm-bindgen = "=0.2.129"

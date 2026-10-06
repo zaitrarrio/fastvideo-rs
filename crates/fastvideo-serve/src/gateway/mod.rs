@@ -20,7 +20,7 @@ pub mod routes;
 pub mod runpod;
 pub mod scale;
 pub mod schema;
-pub mod store;
+pub use crate::front::store;
 pub mod tick;
 
 use std::collections::{BTreeMap, HashMap};

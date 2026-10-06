@@ -224,6 +224,7 @@ SANA image and video family and is not implemented here.
 | HunyuanVideo | Official canvas only. The profile's TeaCache is HunyuanVideo-13B and is not applied |
 | LingBot | MoE 30B-A3B per the Hub config, base + 1080p refiner (docs/ports/lingbot.md). `FASTVIDEO_LINGBOT_SOL=fullopt`: EasyCache (base 0.08 / refiner 0.25) + refiner PISA 0.10, layers 0–3 and refiner steps 0, 1, last dense. CP4 / FSDP topology not reproduced. Not GPU-run |
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
+| SANA-Video 2B (public) | Ported (2026-10-06, GPU-unmeasured): `sana_video`, `fv-gpucheck sana-video gen --arm baseline\|full` (EasyCache 0.1, QKV merge, bf16 linear-attention operands). The published 2.77x is for this model; see docs/ports/sana-video.md |
 
 4-step `sol-h3` uses Spark Sol-Attn, not the RTX first-10-dense window (that
 window would make every 4-step forward dense). `sol-h3-rtx` is the 49-forward

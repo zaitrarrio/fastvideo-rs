@@ -43,6 +43,13 @@ pub mod director;
 pub mod arbiter;
 #[cfg(feature = "http-client")]
 pub mod edge_link;
+/// An API front behind the edge Worker (docs/serve/edge-control-plane.md).
+#[cfg(feature = "http-client")]
+pub mod front;
+/// The edge on the host: family objects, the registry and the public front
+/// in one process (tests, the compat suites, `fv-edge-local`).
+#[cfg(feature = "http-client")]
+pub mod edge_host;
 pub mod encoders;
 pub mod flags;
 pub mod gate;
