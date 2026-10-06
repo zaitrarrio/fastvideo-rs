@@ -1,4 +1,4 @@
-# Not yet measured: the rule is docs/serve/research-longlive.md 12.8, fixed before the run.
+# Measured (RTX PRO 6000, image a6f2e52, 5 prompts x 3 seeds, medians): 768p denoise 22.21 s (h3-max 22.11 s, same pod), LPIPS vs base 49 forwards 0.685 (h3-max 0.710); closer than h3-max on 5/5 prompts; rule 2 FAIL as h3-max (docs/serve/research-longlive.md 12.9).
 # LongLive-Plug h3-plug-4step (base H3 + Plug few-step LoRA, fresh-noise 4-step)
 # with h3-max's techniques: the Sol engine route with tau 1.0 / 1.25 / 1.5 on
 # forwards 1-3, MXFP8 linears, BF16 activations (sol_h3_4step_engine_ladder's

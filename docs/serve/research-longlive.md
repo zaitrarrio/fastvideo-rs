@@ -1218,3 +1218,119 @@ the sparse route and MXFP8 move), prompt adherence from a frame sheet, and
 whether `pdense` reproduces 12.7's plug frames (`plug/frames-pod{1,2}.sha`)
 on the newer image. Analysis: `artifacts/perf/plug-fast/driver/pfcmp.py`.
 No default changes; the owner decides.
+
+### 12.9 Plug-fast: results (2026-10-06)
+
+One RTX PRO 6000 Blackwell Server Edition pod, `zmh71ua1r9d48w` (EUR-IS-1,
+$2.09/hr, driver 595.91.07, EU volume `jg48s6o1w0`), image
+`ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-a6f2e52`
+(`@sha256:98e3ef2a…`, main HEAD), 5 100 s DELETE backstop, the on-pod
+20 min idle guard and a local balance watchdog (delete below $15). Rows,
+compare JSONs, frame hashes, the analysis output and the sheet:
+`artifacts/perf/plug-fast/`.
+
+**What ran.** pfast, max and base, in that order, as in 12.8. `pdense` was
+cut: after base and the 30 pairs the pod had 9 minutes left before the
+backstop and the $3 cap. It is not needed for the comparison against
+base, for this reason: **base and max reproduced 12.7 bit for bit.** All 15
+max-vs-base `compare-clips` results (per-frame LPIPS, PSNR, sharpness and
+jitter) are identical to 12.7's; only the compare's own runtime differs. So
+this pod's base clips are 12.7's base clips, and 12.7's `plug` (dense)
+statistics against base still apply. 12.7's plug ran byte-identically on
+two pods. No arm logged an `sdpa auto` timing or an `attn_sage` line.
+pfast logged `plug lora h3-plug-4step …: 312 modules matched, 0 skipped`,
+the engine ladder (`sol_calls` 144 of 200: forward 0 and blocks 0-1 dense,
+tau 1.0 / 1.25 / 1.5 on forwards 1-3) and `mxfp8` on 180 modules, the same as max.
+
+**Correction to 12.7.** 12.7 said that plug ran "without MXFP8". That is
+wrong. On sm_120 the H3 pipeline's default linear precision is MXFP8
+(`QuantMode::default_for_device`), so every 12.7 arm, base included,
+already ran the 180 MXFP8 linears (`quantized_linears` in each
+`benchmark.json`). The only cost difference between 12.7's plug and h3-max
+was attention: 200 dense calls against 56 dense and 144 Sol calls. Base, the
+reference, is base H3 with MXFP8 linears, as in 12.7.
+
+Per prompt, median over 3 seeds against the base clip (LPIPS at the same
+seed in brackets). The `plug (dense)` rows are 12.7's numbers against
+the same base clips:
+
+| prompt | arm | LPIPS | PSNR dB | sharpness ratio | jitter ratio | rule 2 |
+|---|---|---|---|---|---|---|
+| h3-demo | **pfast** | **0.672** (0.628) | **10.56** | 1.182 | 1.401 | out (sharpness 0.167, jitter 0.337) |
+| | max | 0.722 (0.676) | 9.90 | 1.477 | 2.529 | out |
+| | plug (dense, 12.7) | 0.663 (0.612) | 10.52 | 1.216 | 1.326 | out |
+| ltx-multishot | **pfast** | **0.725** (0.685) | **11.87** | 0.988 | 1.744 | out (jitter 0.556) |
+| | max | 0.735 (0.678) | 11.30 | 1.483 | 2.514 | out |
+| | plug (dense, 12.7) | 0.719 (0.680) | 11.86 | 0.989 | 1.711 | out |
+| ltx-newsbroadcast | **pfast** | **0.702** (0.631) | **11.04** | 1.120 | 1.223 | **in** |
+| | max | 0.775 (0.761) | 9.40 | 1.914 | 2.089 | out |
+| | plug (dense, 12.7) | 0.693 (0.624) | 11.01 | 1.026 | 1.188 | in |
+| ltx-frogyoga | **pfast** | **0.688** (0.635) | **10.46** | 1.049 | 1.494 | out (jitter 0.401) |
+| | max | 0.710 (0.693) | 10.28 | 1.411 | 2.584 | out |
+| | plug (dense, 12.7) | 0.695 (0.660) | 10.15 | 1.032 | 1.325 | out |
+| spark-mountain-lake | **pfast** | **0.560** (0.560) | **15.56** | 1.095 | 1.355 | out (jitter 0.304) |
+| | max | 0.666 (0.607) | 13.13 | 1.539 | 2.301 | out |
+| | plug (dense, 12.7) | 0.570 (0.555) | 15.18 | 1.082 | 1.386 | out |
+
+| arm | forwards | attention (dense / Sol calls) | denoise s (median) | total s (median) | load s | peak GiB (nvidia-smi) | pod |
+|---|---|---|---|---|---|---|---|
+| base | 49 | 2 450 / 0 | 413.1 | 420.7 | 181 | 57.8 | this |
+| **pfast** | 4 | 56 / 144 | **22.21** | **29.53** | 161 | 58.8 | this |
+| max (`h3-max`) | 4 | 56 / 144 | 22.11 | 29.49 | 171 | 58.9 | this |
+| plug (dense, 12.7) | 4 | 200 / 0 | 33.27 | 40.59 | 148 | 58.3 | `ujao4w8j4b4e8e` (its max: 21.90 s) |
+
+* **Rule 1: pass, 5 of 5.** pfast has a lower median LPIPS against base than
+  max on every prompt. Per clip it is closer on 13 of 15 (PSNR higher on 13
+  of 15), and its |ln sharpness| and |ln jitter| are smaller than max's on
+  15 of 15 each.
+* **Rule 2: fail.** pfast is inside the band only on ltx-newsbroadcast, like
+  12.7's dense plug. Its jitter ratio against base is 1.22-1.74 and its
+  sharpness ratio 0.99-1.18. max is at 2.09-2.58 and 1.41-1.91.
+* **Verdict (rule as written): FAIL.**
+* **Recommendation rule: met.** R1 holds. R2 holds by its second clause:
+  pfast is no further from base than max on either axis, on 5 of 5 prompts.
+  R3 holds: pfast's denoise is **1.004×** max's (22.21 s against 22.11 s,
+  +0.10 s), and total is 29.53 s against 29.49 s.
+* **What the sparse route costs Plug in quality.** pfast and 12.7's dense
+  plug are close. By median LPIPS pfast is a little further from base on
+  3 prompts (by 0.006-0.009) and a little closer on 2 (by 0.007 and 0.010). Per
+  clip it is closer than dense on 6 of 15. Its jitter ratio is slightly
+  higher on 4 of 5 prompts (by 0.03-0.17), and its sharpness is within
+  0.10. Both are much closer to base than max is. The ladder takes Plug's
+  denoise from 33.27 s to 22.21 s (−33 %), the same saving it gives Sol-H3
+  (its gate: 33.45 s dense to 21.80 s, `sol_h3_4step_engine_ladder.toml`).
+* **Look (sheet `h3-768p-f062-base-plugfast-max.jpg`, columns base,
+  pfast, max; the five prompts at their own seed, t = 2.6 s).** It matches
+  12.7's plug. pfast keeps base's tone and contrast, where max is more
+  saturated and contrasty. On ltx-frogyoga pfast's instructor is a
+  **frog** (base: an old man among frogs; max: an elderly woman among frogs).
+  On ltx-newsbroadcast pfast, like base, is mid-pan across the taped-off
+  field, while max holds the reporter close-up.
+
+**Recommendation (owner decides; no default changed).** Switch `h3-max` from
+Sol-H3 to Plug-fast: recipe `h3-plug-4step` with
+`h3/plug_h3_4step_engine_ladder` (`Recipe::plug_h3_4step_engine_ladder`). It
+costs the same as today's h3-max, within 0.5 %. It is closer to the
+49-forward base on every prompt and on 13 of 15 clips, and on every clip
+less far off on sharpness and motion. It also follows the frog-yoga prompt.
+It still moves more than base (rule 2 as written fails, as it does for
+every 4-step arm measured). Before switching:
+the serve H3 path must find the Plug adapter (`longlive-plug/` beside
+`h3-base` on the volume; EU has it, §8). The 1080p tier of h3-max is
+unmeasured with Plug. The adapters carry the MiniMax H3 licence territory
+clause (§4.3), as the base does.
+
+**Kept.** The 5 base clips' frames (630 files, 799 803 563 bytes, PNG
+frames plus `output.mp4` and audio) are on the EU volume at
+`/workspace/scratch/h3-plug-fast-base-768p-20261006/`. They were written
+under `.tmp-…`, checked against `sha256.txt` and then renamed. The same
+manifest is in `artifacts/perf/plug-fast/base/frames-sha256.txt`. The tree
+is outside `weights/` and is not a weight tree, so it is not in the
+weights manifest. Same-seed MP4s of base, pfast and max (x264 crf 23 + aac)
+are in the session scratchpad (`clips/h3-plug-fast/`).
+
+**Spend.** Pod `zmh71ua1r9d48w` lifetime 4 607 s at $2.09/hr ≈ **$2.67**
+(cap $3). About 11 of those minutes were the image pull before the sidecar
+answered. It was deleted after its outputs were pulled (GET 404). Build
+pod: a few minutes of `cargo test` on the shared `fv-build` pod. Balance:
+$31.18 before the pod, $24.54 after (other agents ran in parallel).
