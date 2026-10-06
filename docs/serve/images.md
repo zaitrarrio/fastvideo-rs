@@ -369,7 +369,7 @@ Shared layers (identical digests), measured on the pushed images:
 | pair | before | after |
 |---|---:|---:|
 | runtime ↔ any CUDA variant | 29.8 MB (Ubuntu only) | **964.3 MB** (all of base-cuda) |
-| runtime ↔ debug | 1546.4 MB | **1019.8 MB** (all of runtime) |
+| runtime ↔ debug | 1546.4 MB | **964.5 MB** guaranteed (base-cuda); the runtime-only layers (≈56 MB) match too when the two workflows hit the same registry cache (all 1019.8 MB on `f692ed2`/`7472073`, base-cuda only on `d940b41`) |
 | CUDA variant ↔ CUDA variant | 998.7 MB (all but the config layer) | **994.7 MB** (all but the config layer) |
 | cpu ↔ everything | 52.3 MB | 52.3 MB (base-os) |
 | **a host pulling runtime + one variant** | 2536 MB | **1050 MB** (−59 %) |
@@ -456,6 +456,10 @@ from the binaries' strings):
 | `libcudnn_adv` / `libcudnn_ext` (dlopened by `libcudnn` only for their APIs) | intentionally absent (unused) |
 | `libcask_profile_interface.so` (cuDNN precompiled engines) | an optional profiling hook, not part of any NVIDIA package |
 | EGL/GL/X11/OpenCL/OptiX/Vulkan-SC libraries (CUPTI / nvperf graphics-interop profiling) | the host driver when present; not used by the activity API |
+
+With cudart (CI runs 37516701535 and 37517976275 on `d940b41`): base-cuda
+**964.5 MB** (+0.2 MB), runtime 1020.0 MB, debug 1050.4 MB, CUDA variants
+994.9 MB, cpu 69.0 MB; all of them on the same base-cuda digests.
 
 Nothing else is missing. base-cuda now fails its build if any library in
 `/usr/local/cuda-13.4/lib64` or any `libcudnn*` has an unresolved `ldd`
