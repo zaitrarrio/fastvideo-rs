@@ -150,6 +150,8 @@ load_releases() {
   RELEASES_CACHE=""
   {
     local page=1 batch all='[]'
+    # Tests: FV_TOOLS_RELEASES_FILE stands in for the API's release list.
+    [[ -n "${FV_TOOLS_RELEASES_FILE:-}" ]] && { all="$(cat "$FV_TOOLS_RELEASES_FILE")"; page=99; }
     while (( page <= 20 )); do
       batch="$(api GET "/repos/$REPO/releases?per_page=100&page=$page")" || die "cannot list releases of $REPO"
       all="$(jq -c --argjson b "$batch" '. + $b' <<<"$all")"
@@ -501,7 +503,8 @@ run_gate() {
 }
 
 # ---- prune ------------------------------------------------------------------
-# Keep the newest N stable tools releases (and a pinned FV_TOOLS_VERSION),
+# Keep the newest N stable tools releases (and the pinned FV_TOOLS_VERSION:
+# the repository variable, or FV_TOOLS_PIN when the token cannot read it),
 # delete older ones and prereleases that are older than 14 days or below the
 # highest stable version, with their tags. Only tags starting tools-v.
 cmd_prune() {
@@ -514,7 +517,7 @@ cmd_prune() {
     esac
   done
   local pin cutoff
-  pin="$(api GET "/repos/$REPO/actions/variables/FV_TOOLS_VERSION" 2>/dev/null | jq -r '.value // empty' || true)"
+  pin="${FV_TOOLS_PIN-$( [[ -n "${FV_TOOLS_RELEASES_FILE:-}" ]] || api GET "/repos/$REPO/actions/variables/FV_TOOLS_VERSION" 2>/dev/null | jq -r '.value // empty' || true)}"
   cutoff="$(date -u -d '14 days ago' +%FT%TZ)"
   local victims
   victims="$(releases | jq -r --argjson keep "$keep" --arg pin "${pin#v}" --arg cut "$cutoff" '
