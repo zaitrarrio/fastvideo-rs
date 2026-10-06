@@ -132,18 +132,18 @@ download_asset() { # <asset id> <dest>
 }
 
 # ---- inputs and version -----------------------------------------------------
-rev_sha() { git -C "$ROOT" rev-parse -q --verify "${1:-HEAD}^{commit}" || die "unknown revision ${1:-HEAD}"; }
+rev_sha() { git -c safe.directory="$ROOT" -C "$ROOT" rev-parse -q --verify "${1:-HEAD}^{commit}" || die "unknown revision ${1:-HEAD}"; }
 
 # sha256 over the git tree entries (mode, blob/gitlink id, path) of INPUTS at
 # a commit: a content hash that needs no checkout of that commit.
 input_hash() {
   local sha; sha="$(rev_sha "${1:-HEAD}")"
-  { echo "$INPUT_SCHEMA"; git -C "$ROOT" ls-tree -r --full-tree "$sha" -- "${INPUTS[@]}"; } | sha256sum | cut -d' ' -f1
+  { echo "$INPUT_SCHEMA"; git -c safe.directory="$ROOT" -C "$ROOT" ls-tree -r --full-tree "$sha" -- "${INPUTS[@]}"; } | sha256sum | cut -d' ' -f1
 }
 
 tools_version() {
   local sha v; sha="$(rev_sha "${1:-HEAD}")"
-  v="$(git -C "$ROOT" show "$sha:Cargo.toml" \
+  v="$(git -c safe.directory="$ROOT" -C "$ROOT" show "$sha:Cargo.toml" \
     | awk '/^\[/{s=($0=="[workspace.package]")} s && /^version *=/{gsub(/.*= *"|".*/,""); print; exit}')"
   [[ "$v" =~ $SEMVER_RE ]] || die "no SemVer [workspace.package] version in Cargo.toml at ${sha:0:12} ('$v')"
   echo "$v"
@@ -336,10 +336,10 @@ cmd_notes() {
   local sha prev range
   sha="$(rev_sha "${1:-HEAD}")"
   prev="$(releases | jq -r '[.[] | select((.draft or .prerelease) | not)] | .[0].source_commit // empty')"
-  if [[ -n "$prev" ]] && ! git -C "$ROOT" cat-file -e "$prev^{commit}" 2>/dev/null; then
-    git -C "$ROOT" fetch -q --deepen=1000 origin 2>/dev/null || true
+  if [[ -n "$prev" ]] && ! git -c safe.directory="$ROOT" -C "$ROOT" cat-file -e "$prev^{commit}" 2>/dev/null; then
+    git -c safe.directory="$ROOT" -C "$ROOT" fetch -q --deepen=1000 origin 2>/dev/null || true
   fi
-  if [[ -n "$prev" ]] && git -C "$ROOT" cat-file -e "$prev^{commit}" 2>/dev/null; then
+  if [[ -n "$prev" ]] && git -c safe.directory="$ROOT" -C "$ROOT" cat-file -e "$prev^{commit}" 2>/dev/null; then
     range="$prev..$sha"
     echo "Changes to the tools' inputs since $(releases | jq -r '[.[] | select((.draft or .prerelease) | not)] | .[0].tag') (${prev:0:12}):"
   else
@@ -347,7 +347,7 @@ cmd_notes() {
     echo "Recent changes to the tools' inputs:"
   fi
   echo
-  git -C "$ROOT" log --no-merges --format='- %h %s' -n 50 "$range" -- "${INPUTS[@]}"
+  git -c safe.directory="$ROOT" -C "$ROOT" log --no-merges --format='- %h %s' -n 50 "$range" -- "${INPUTS[@]}"
 }
 
 # ---- plan / build / upload / publish -----------------------------------------
@@ -435,7 +435,7 @@ cmd_build() {
   rm -rf "$out" && mkdir -p "$out"
   if [[ "$mode" == pod ]]; then
     # The build runs this checkout's recipe; it must be the one the hash covers.
-    cmp -s <(git -C "$ROOT" show "$sha:scripts/dev/release-artifacts-pod.sh") "$ROOT/scripts/dev/release-artifacts-pod.sh" \
+    cmp -s <(git -c safe.directory="$ROOT" -C "$ROOT" show "$sha:scripts/dev/release-artifacts-pod.sh") "$ROOT/scripts/dev/release-artifacts-pod.sh" \
       || die "scripts/dev/release-artifacts-pod.sh here differs from ${sha:0:12}'s (run from a checkout of that commit)"
     FV_RELEASE_VERSION="$v" FV_RELEASE_OUT="$out" bash "$ROOT/scripts/dev/build-pod.sh" release-artifacts "$sha" \
       || die "build failed on the build pod: nothing published"
@@ -454,9 +454,9 @@ cmd_build() {
 
 build_local() {
   local sha="$1" v="$2" out="$3" T shim
-  [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$sha" ]] || die "build --local: this checkout is not ${sha:0:12}"
-  [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "build --local: this checkout has local changes"
-  git -C "$ROOT" submodule update -q --init third_party/cutile-rs
+  [[ "$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse HEAD)" == "$sha" ]] || die "build --local: this checkout is not ${sha:0:12}"
+  [[ -z "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "build --local: this checkout has local changes"
+  git -c safe.directory="$ROOT" -C "$ROOT" submodule update -q --init third_party/cutile-rs
   T="${CARGO_TARGET_DIR:-${FV_BUILD_TARGET_BASE:?CARGO_TARGET_DIR or FV_BUILD_TARGET_BASE (the build pod runner sets it)}/gh-runner}"
   # scripts/gpu/docker.sh build-id wants shasum (perl), which the base image may lack.
   shim="$(mktemp -d)"; CLEANUP+=("rm -rf '$shim'")
@@ -575,10 +575,10 @@ cmd_publish() {
     esac
   done
   [[ -n "$rev" ]] || die "usage: tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run|--no-upload]"
-  git -C "$ROOT" fetch -q origin || true
+  git -c safe.directory="$ROOT" -C "$ROOT" fetch -q origin || true
   local sha; sha="$(rev_sha "$rev")"
   if (( !pre )); then
-    git -C "$ROOT" merge-base --is-ancestor "$sha" origin/main \
+    git -c safe.directory="$ROOT" -C "$ROOT" merge-base --is-ancestor "$sha" origin/main \
       || die "${sha:0:12} is not on origin/main: stable releases come from main (--prerelease for a branch head)"
   fi
   local pflag=(); (( pre )) && pflag=(--prerelease)
@@ -602,8 +602,8 @@ run_gate() {
   if [[ "$mode" == pod ]]; then
     local agent="${FV_TOOLS_TEST_AGENT:-${FV_RELEASE_AGENT:-fv-release}-test}"
     src="${TMPDIR:-/tmp}/fv-tools-gate-${sha:0:12}"
-    git -C "$ROOT" worktree remove --force "$src" >/dev/null 2>&1 || rm -rf "$src"
-    git -C "$ROOT" worktree add -q --detach "$src" "$sha" || return 1
+    git -c safe.directory="$ROOT" -C "$ROOT" worktree remove --force "$src" >/dev/null 2>&1 || rm -rf "$src"
+    git -c safe.directory="$ROOT" -C "$ROOT" worktree add -q --detach "$src" "$sha" || return 1
     CLEANUP+=("git -C '$ROOT' worktree remove --force '$src' >/dev/null 2>&1")
     log "gate 1/3: scripts/serve/check.sh on the build pod (agent $agent)"
     bash "$src/scripts/dev/build-pod.sh" run "$agent" -- CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \

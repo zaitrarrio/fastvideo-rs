@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -2903,6 +2903,119 @@ Audio: male speech, clear voice, quiet room"
       log "skip the 4k5s / 1080p20s cpu cells (512p frames identical: ${same:-no}; FV_OFFLOAD_BIG=${FV_OFFLOAD_BIG:-1})"
     fi
     ;;
+  solbench)
+    # sol-engine's published cells for Wan2.1-T2V-1.3B, Wan2.2-T2V-A14B and
+    # LTX-2.3 HQ (NVlabs/Sana sol-engine models/{wan21_t2v_1_3b,wan22_t2v_a14b,
+    # ltx23}.toml and config/<model>/*.toml), baseline vs optimized, on the
+    # pod's one GPU. docs/ports/sol-wan-ltx23.md has the arms, what each
+    # reproduces, the weight trees and the GPU-minute estimates. Cells skip
+    # (summary.json "weights incomplete") unless verify-weights.sh passes:
+    # wan21-t2v-1.3b, wan22-t2v-a14b and ltx23-hq (ltx23 + ltx23-dev), all on
+    # the EU volume since 2026-10-06.
+    #   FV_CELLS            subset (default below: base + optimized of each)
+    #   FV_SOL_A14B_MOE     FASTVIDEO_WAN_MOE for the A14B cells (default auto:
+    #                       swap on a 96 GB card, both resident on a B200)
+    #   FV_SOL_PROMPTS=5    the 5 sol-engine prompts (default for 1.3B; A14B /
+    #                       LTX default to prompt p0 / the ltx23 prompt only)
+    : "${FV_CELLS:=wan13-sol-base wan13-sol-fullstack a14b-sol-base a14b-sol-fullopt ltx23-hq-base ltx23-hq-fullopt}"
+    sol_wan_prompts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-sol-wan-t2v5.json"
+    wan_neg_cn="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    # p0 of that set (no python3 or jq in the runtime image).
+    sol_p0="Will Smith casually eats noodles, his relaxed demeanor contrasting with the energetic background of a bustling street food market. The scene captures a mix of humor and authenticity. Mid-shot framing, vibrant lighting."
+    # Diffusers' single-shift UniPC sigmas: the sol-engine baselines run
+    # Diffusers' WanPipeline (UniPCMultistepScheduler.from_config(flow_shift=...)).
+    export FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers
+    # bf16 GEMMs and the full Wan VAE, as the reference arms run (on sm_100
+    # FASTVIDEO_WAN_QUANT would otherwise default to mxfp8).
+    export FASTVIDEO_WAN_QUANT=off FASTVIDEO_WAN_VAE=full
+
+    # ---- Wan2.1-T2V-1.3B (models/wan21_t2v_1_3b.toml): 832x480, 81 f @ 16
+    # fps, 50 UniPC steps, CFG 6, shift 3, seed 1024, 5 prompts after one warm
+    # generation. No published number (the profile has none); the arms are
+    # baseline.toml vs wan21_fullstack_sol.toml (EasyCache 0.036 + Sol-Attn
+    # tau 1, 10 dense forwards, layer 0 dense, Morton3D), plus each half.
+    w13=(--weights "$W/wan21-t2v-1.3b" --preset wan_t2v_1_3b --unipc --steps 50 --guidance 6.0
+      --flow-shift 3.0 --fps 16 --height 480 --width 832 --num-frames 81 --seed 1024
+      --negative "$wan_neg_cn" --warm)
+    if [[ "${FV_SOL_PROMPTS:-5}" == 5 ]]; then
+      w13+=(--prompts "$sol_wan_prompts")
+    else
+      w13+=(--prompt "$sol_p0")
+    fi
+    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-base wan21-t2v-1.3b \
+      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-base/frames"
+    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-easycache wan21-t2v-1.3b \
+      env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-easycache/frames"
+    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-attn wan21-t2v-1.3b \
+      env FASTVIDEO_WAN_SOL_ATTN=fullstack \
+      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-attn/frames"
+    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-fullstack wan21-t2v-1.3b \
+      env FASTVIDEO_WAN_SOL_ATTN=fullstack FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-fullstack/frames"
+    for arm in easycache attn fullstack; do
+      compare_cells wan13-sol-base "wan13-sol-$arm"
+      gate_cells wan13-sol-base "wan13-sol-$arm" lossy
+    done
+
+    # ---- Wan2.2-T2V-A14B (models/wan22_t2v_a14b.toml): 1280x720, 81 f @ 16
+    # fps, 40 UniPC steps, shift 12, CFG 4.0 (high-noise expert) / 3.0
+    # (low-noise), boundary 0.875 (26 / 14 steps), seed 1024. Published 1x
+    # GB200: base 449.67 s (denoise 434.93), opt 207.01 s
+    # (config/wan22_t2v_a14b/singlegpu_opt.toml: kernels + EasyCache 0.30 +
+    # PISA 0.10). On a 96 GB card FASTVIDEO_WAN_MOE=auto parks both experts
+    # in pinned host memory and swaps them at the boundary; on a B200 both
+    # stay resident. One prompt, no warm-up generation (a 720p A14B
+    # generation is ~20 min on an RTX PRO 6000; the cold overhead is small
+    # next to it); FV_SOL_PROMPTS=5 runs sol-engine's five after a warm one.
+    a14b=(--weights "$W/wan22-t2v-a14b" --preset wan_2_2_t2v_a14b --unipc --steps 40
+      --guidance 4.0 --guidance-2 3.0 --flow-shift 12.0 --fps 16 --height 720 --width 1280
+      --num-frames 81 --seed 1024 --negative "$wan_neg_cn")
+    if [[ "${FV_SOL_PROMPTS:-1}" == 5 ]]; then
+      a14b+=(--prompts "$sol_wan_prompts" --warm)
+    else
+      a14b+=(--prompt "$sol_p0")
+    fi
+    a14b_moe="FASTVIDEO_WAN_MOE=${FV_SOL_A14B_MOE:-auto}"
+    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-base wan22-t2v-a14b \
+      env "$a14b_moe" \
+      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-base/frames"
+    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-fullopt wan22-t2v-a14b \
+      env "$a14b_moe" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1 \
+      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-fullopt/frames"
+    # Opt-in: both experts resident at MXFP8 (the reference recipe on every
+    # block linear; lossy) instead of the swap.
+    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-mxfp8 wan22-t2v-a14b \
+      env FASTVIDEO_WAN_MOE=both FASTVIDEO_WAN_QUANT=mxfp8 \
+      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-mxfp8/frames"
+    for arm in fullopt mxfp8; do
+      compare_cells a14b-sol-base "a14b-sol-$arm"
+      gate_cells a14b-sol-base "a14b-sol-$arm" lossy
+    done
+
+    # ---- LTX-2.3 HQ (models/ltx23.toml [official_config]): the dev DiT with
+    # the distilled LoRA 384 v1.1 fused at 0.25 (stage 1) / 0.5 (stage 2),
+    # 1920x1088, 241 f @ 24 fps, 15-step res2s stage 1 at CFG 3, the 3-sigma
+    # stage 2, seed 42, the profile's prompt and negative prompt, one warm
+    # generation first (WARMUP=true). Published: 2.40x fullopt / baseline on
+    # 1x GB200, no absolute baseline. fullopt = config/ltx23/fullopt.toml's
+    # techniques we have: stage-1 SCSP (res2s calls 16-28), stage-2 PISA
+    # (sparsity 0.9, block 64, layers 0-1 dense), NVFP4 video FFN, stage-2
+    # midpoint prune (0.5, steps 1-2). Not ours: the KWL Triton fusions.
+    ltx23_prompt="A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail"
+    hq=(--model-version 2.3 --hq --weights "$W/ltx23" --dit "$W/ltx23-dev/ltx-2.3-22b-dev.safetensors"
+      --prompt "$ltx23_prompt" --seed 42 --text streamed --dit-offload resident --warm)
+    hq_up="FASTVIDEO_LTX2_UPSAMPLER=$W/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    FV_GEN_TIMEOUT_S="${FV_SOL_LTX_CAP_S:-2400}" gated_cell ltx23-hq-base ltx23-hq \
+      env "$hq_up" "$BIN" --mode fast ltx2 gen "${hq[@]}" --dense-stage2 \
+        --clip "$RUNS/ltx23-hq-base/frames"
+    FV_GEN_TIMEOUT_S="${FV_SOL_LTX_CAP_S:-2400}" gated_cell ltx23-hq-fullopt ltx23-hq \
+      env "$hq_up" FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1 \
+      "$BIN" --mode fast ltx2 gen "${hq[@]}" --pisa-stage2 \
+        --clip "$RUNS/ltx23-hq-fullopt/frames"
+    compare_cells ltx23-hq-base ltx23-hq-fullopt
+    gate_cells ltx23-hq-base ltx23-hq-fullopt lossy
+    ;;
   hd)
     # H3 at 1080p-class canvases (docs/serve/h3-1080p-and-upscaler.md):
     # h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3 tau ladder) at the
@@ -3040,6 +3153,43 @@ Audio: male speech, clear voice, quiet room"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.
     rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
+    ;;
+  sol-lingbot)
+    # LingBot-Video MoE 30B-A3B vs sol-engine models/lingbot_video.toml
+    # (docs/ports/lingbot.md "Comparison"): base 832x480x121 / 40 steps,
+    # 1920x1088 refiner / 8 steps, guidance 3, seed 42, the three
+    # t2v_val3 prompts. Published (4x GB200): baseline 375.53 s, fullopt
+    # 144.36 s. FV_LINGBOT_RESIDENCY: swap (96 GB cards, default) or both
+    # (B200). FV_LINGBOT_PROMPTS: prompts per arm (default 3).
+    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
+    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-14400}"
+    run_cell lingbot-router "$BIN" --mode fast sol lingbot-router
+    for arm in ${FV_LINGBOT_ARMS:-baseline fullopt}; do
+      gated_cell "lingbot-$arm" lingbot-moe \
+        "$BIN" --mode fast sol lingbot-gen --weights "$W/lingbot-video-moe-30b-a3b" \
+          --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts "${FV_LINGBOT_PROMPTS:-3}" \
+          --arm "$arm" --residency "${FV_LINGBOT_RESIDENCY:-swap}" --seed 42 \
+          --clip "$RUNS/lingbot-$arm/clips"
+    done
+    ;;
+  sol-cosmos3)
+    # Cosmos3-Super 64B T2V vs sol-engine models/cosmos3.toml (docs/ports/cosmos3.md
+    # "Comparison"): 1280x720x189, 35 steps, guidance 6, seed 42, one warmup
+    # request (WARMUP=true). Published (4x GB200): baseline 130.41 s, fullopt
+    # 2.26x. FASTVIDEO_COSMOS3_UND=resident keeps the text tower on the GPU
+    # (B200); unset streams it per prompt (96 GB cards).
+    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
+    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-10800}"
+    c3=(--weights "$W/cosmos3-super" --prompt "$(cat "$SOL_IN/cosmos3-default.txt")"
+      --negative-prompt "$(cat "$SOL_IN/cosmos3-negative.txt")" --seed 42 --warm)
+    for arm in ${FV_COSMOS3_ARMS:-baseline teacache teacache-fp8}; do
+      case "$arm" in
+        teacache-fp8) gated_cell "cosmos3-$arm" cosmos3-super env FASTVIDEO_FP8=1 \
+          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm teacache --clip "$RUNS/cosmos3-$arm/clip" ;;
+        *) gated_cell "cosmos3-$arm" cosmos3-super \
+          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm "$arm" --clip "$RUNS/cosmos3-$arm/clip" ;;
+      esac
+    done
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

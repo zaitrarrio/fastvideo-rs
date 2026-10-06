@@ -33,6 +33,8 @@ pub mod kernels;
 pub mod ledger;
 pub mod log;
 pub mod longlive;
+#[cfg(test)]
+mod manifest_tests;
 pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]
@@ -60,6 +62,7 @@ pub mod tensor;
 pub mod transformer;
 pub mod umt5;
 pub mod vae;
+pub mod vae21_encode;
 pub mod vae22;
 pub mod vsa;
 pub mod weights;

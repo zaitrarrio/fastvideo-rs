@@ -1,358 +1,243 @@
-//! Cosmos3-Super T2V DiT scaffold.
+//! Cosmos3-Super Mixture-of-Transformers (`Cosmos3OmniTransformer`, diffusers
+//! `transformer_cosmos3.py`), text-to-video path.
 //!
-//! Tiny configs exercise patch → AdaLN blocks → unpatch. Super 64B widths
-//! are `TODO(upstream)` — do not load Hub weights here.
+//! Each of the 64 layers holds two towers over one packed sequence
+//! `[text (und) | vision (gen)]`:
 //!
-//! TeaCache is [`SolCosmosTea`] from Predict2 (`cosmos::sol`). This file
-//! does not invent a second cache.
+//! * und (text): `input_layernorm` → `to_q/k/v` → per-head RMS `norm_q/k` →
+//!   rotate-half M-RoPE → **causal** GQA attention over the text only →
+//!   `to_out`; `post_attention_layernorm` → SwiGLU `mlp`;
+//! * gen (vision): `input_layernorm_moe_gen` → `add_q/k/v_proj` →
+//!   `norm_added_q/k` → M-RoPE → full GQA attention over **text keys and
+//!   vision keys** → `to_add_out`; `post_attention_layernorm_moe_gen` →
+//!   `mlp_moe_gen`; finally `norm_moe_gen` → `proj_out`.
+//!
+//! The text tower never reads the vision tokens, so its per-layer K/V are
+//! fixed for a prompt: [`Cosmos3Transformer::und_cache`] runs it once per
+//! prompt (layer weights streamed from the checkpoint unless resident) and
+//! every denoising step runs only the gen tower against the cached keys. This
+//! is exact, not an approximation, and is what makes the 62 GB gen tower the
+//! only resident weight set on a 96 GB card.
 
-use std::sync::{Arc, Mutex};
-
-use fastvideo_models::cosmos::sol::SolCosmosTea;
+use fastvideo_models::cosmos3::rope::rope_tables;
 use fastvideo_models::cosmos3::Cosmos3TransformerConfig;
 
 use crate::wan::nn::{self, Linear};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::wan::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
-struct Attn {
-    to_q: Linear,
-    to_k: Linear,
-    to_v: Linear,
-    to_out: Linear,
-    heads: usize,
-    head_dim: usize,
+fn pinned(v: &[f32], dims: &[usize]) -> Result<CudaTensor> {
+    let mut t = CudaTensor::from_vec(v.to_vec(), dims.to_vec())?;
+    t.pin_device()?;
+    Ok(t)
 }
 
-impl Attn {
-    fn zeros(dim: usize, heads: usize, head_dim: usize) -> Result<Self> {
+fn norm_weight(map: &WeightMap, key: &str, dim: usize) -> Result<CudaTensor> {
+    let mut t = weights::cuda_tensor_shaped(map, key, &[dim])?;
+    t.pin_device()?;
+    Ok(t)
+}
+
+/// Tokens per MLP chunk (`FASTVIDEO_COSMOS3_MLP_CHUNK`, default 8192): bounds
+/// the `[tokens, 25600]` SwiGLU intermediates.
+fn mlp_chunk() -> usize {
+    crate::wan::envflag::usize_flag("FASTVIDEO_COSMOS3_MLP_CHUNK", 8192).max(1)
+}
+
+struct Mlp {
+    gate: Linear,
+    up: Linear,
+    down: Linear,
+}
+
+impl Mlp {
+    fn load(map: &WeightMap, prefix: &str, h: usize, m: usize) -> Result<Self> {
+        let key = |n: &str| weights::join_key(prefix, n);
         Ok(Self {
-            to_q: Linear::zeros(dim, dim, false),
-            to_k: Linear::zeros(dim, dim, false),
-            to_v: Linear::zeros(dim, dim, false),
-            to_out: Linear::zeros(dim, dim, false),
-            heads,
-            head_dim,
+            gate: Linear::load(map, &key("gate_proj"), h, m, false)?,
+            up: Linear::load(map, &key("up_proj"), h, m, false)?,
+            down: Linear::load(map, &key("down_proj"), m, h, false)?,
         })
     }
 
-    fn forward(&self, hidden: &CudaTensor, encoder: Option<&CudaTensor>) -> Result<CudaTensor> {
-        let [b, s, _] = match hidden.shape[..] {
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let [b, s, d] = match x.shape[..] {
             [b, s, d] => [b, s, d],
-            _ => return Err(msg(format!("cosmos3 attn: {:?}", hidden.shape))),
+            _ => return Err(msg(format!("cosmos3 mlp: {:?}", x.shape))),
         };
-        let q = self.to_q.forward(hidden)?;
-        let (k, v, ks) = match encoder {
-            Some(enc) => {
-                let ks = enc.shape[1];
-                (self.to_k.forward(enc)?, self.to_v.forward(enc)?, ks)
-            }
-            None => (self.to_k.forward(hidden)?, self.to_v.forward(hidden)?, s),
-        };
-        let to_bhsd = |t: CudaTensor, seq: usize| -> Result<CudaTensor> {
-            t.reshape(vec![b, seq, self.heads, self.head_dim])?
-                .transpose(1, 2)
-        };
-        let q = to_bhsd(q, s)?;
-        let k = to_bhsd(k, ks)?;
-        let v = to_bhsd(v, ks)?;
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
-        let out = attn
-            .transpose(1, 2)?
-            .reshape(vec![b, s, self.heads * self.head_dim])?;
-        self.to_out.forward(&out)
+        let flat = x.reshape(vec![b * s, d])?;
+        let chunk = mlp_chunk();
+        let mut parts = Vec::new();
+        let mut start = 0;
+        while start < b * s {
+            let n = chunk.min(b * s - start);
+            let xc = flat.narrow(0, start, n)?;
+            let g = self.gate.forward(&xc)?.silu();
+            parts.push(self.down.forward(&g.mul(&self.up.forward(&xc)?)?)?);
+            start += n;
+        }
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        CudaTensor::cat(&refs, 0)?.reshape(vec![b, s, d])
     }
 }
 
-struct Block {
-    ada: Linear,
-    self_attn: Attn,
-    cross_attn: Attn,
-    ff1: Linear,
-    ff2: Linear,
+/// Which weight set of a layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tower {
+    Und,
+    Gen,
 }
 
-impl Block {
-    fn zeros(cfg: &Cosmos3TransformerConfig) -> Result<Self> {
-        let h = cfg.hidden_size();
-        let mlp = cfg.mlp_hidden();
+/// One tower of one layer.
+pub struct TowerLayer {
+    ln_in: CudaTensor,
+    ln_post: CudaTensor,
+    q: Linear,
+    k: Linear,
+    v: Linear,
+    out: Linear,
+    norm_q: Option<CudaTensor>,
+    norm_k: Option<CudaTensor>,
+    mlp: Mlp,
+}
+
+impl TowerLayer {
+    pub fn load(map: &WeightMap, cfg: &Cosmos3TransformerConfig, layer: usize, tower: Tower) -> Result<Self> {
+        let (h, q, kv, m, hd) = (cfg.hidden_size, cfg.q_dim(), cfg.kv_dim(), cfg.intermediate_size, cfg.head_dim);
+        let p = |n: &str| format!("layers.{layer}.{n}");
+        let (ln_in, ln_post, names, norms, mlp) = match tower {
+            Tower::Und => (
+                "input_layernorm",
+                "post_attention_layernorm",
+                ["self_attn.to_q", "self_attn.to_k", "self_attn.to_v", "self_attn.to_out"],
+                cfg.qk_norm_for_text.then_some(["self_attn.norm_q", "self_attn.norm_k"]),
+                "mlp",
+            ),
+            Tower::Gen => (
+                "input_layernorm_moe_gen",
+                "post_attention_layernorm_moe_gen",
+                [
+                    "self_attn.add_q_proj",
+                    "self_attn.add_k_proj",
+                    "self_attn.add_v_proj",
+                    "self_attn.to_add_out",
+                ],
+                Some(["self_attn.norm_added_q", "self_attn.norm_added_k"]),
+                "mlp_moe_gen",
+            ),
+        };
+        let (norm_q, norm_k) = match norms {
+            Some([nq, nk]) => (
+                Some(norm_weight(map, &p(&format!("{nq}.weight")), hd)?),
+                Some(norm_weight(map, &p(&format!("{nk}.weight")), hd)?),
+            ),
+            None => (None, None),
+        };
         Ok(Self {
-            ada: Linear::zeros(h, 6 * h, false),
-            self_attn: Attn::zeros(h, cfg.num_attention_heads, cfg.attention_head_dim)?,
-            cross_attn: Attn::zeros(h, cfg.num_attention_heads, cfg.attention_head_dim)?,
-            ff1: Linear::zeros(h, mlp, false),
-            ff2: Linear::zeros(mlp, h, false),
+            ln_in: norm_weight(map, &p(&format!("{ln_in}.weight")), h)?,
+            ln_post: norm_weight(map, &p(&format!("{ln_post}.weight")), h)?,
+            q: Linear::load(map, &p(names[0]), h, q, false)?,
+            k: Linear::load(map, &p(names[1]), h, kv, false)?,
+            v: Linear::load(map, &p(names[2]), h, kv, false)?,
+            out: Linear::load(map, &p(names[3]), q, h, false)?,
+            norm_q,
+            norm_k,
+            mlp: Mlp::load(map, &p(mlp), h, m)?,
         })
     }
 
-    fn forward(
+    /// `q` `[1, Hq, S, D]` and `k`, `v` `[1, Hkv, S, D]` (q, k normed and rotated).
+    fn qkv(
         &self,
-        hidden: &CudaTensor,
-        encoder: &CudaTensor,
-        temb: &CudaTensor,
-    ) -> Result<CudaTensor> {
-        let mods = self.ada.forward(&temb.silu())?;
-        let h = hidden.shape[2];
-        let shift1 = mods.narrow(mods.rank() - 1, 0, h)?;
-        let scale1 = mods.narrow(mods.rank() - 1, h, h)?;
-        let gate1 = mods.narrow(mods.rank() - 1, 2 * h, h)?;
-        let shift2 = mods.narrow(mods.rank() - 1, 3 * h, h)?;
-        let scale2 = mods.narrow(mods.rank() - 1, 4 * h, h)?;
-        let gate2 = mods.narrow(mods.rank() - 1, 5 * h, h)?;
-
-        let n1 = nn::layer_norm(hidden, 1e-6, None, None)?;
-        let n1 = n1.mul(&scale1.try_add_scalar(1.0)?)?.add(&shift1)?;
-        let sa = self.self_attn.forward(&n1, None)?;
-        let mut hs = hidden.add(&sa.mul(&gate1)?)?;
-
-        let ca = self.cross_attn.forward(&hs, Some(encoder))?;
-        hs = hs.add(&ca)?;
-
-        let n2 = nn::layer_norm(&hs, 1e-6, None, None)?;
-        let n2 = n2.mul(&scale2.try_add_scalar(1.0)?)?.add(&shift2)?;
-        let ff = self.ff2.forward(&self.ff1.forward(&n2)?.gelu_erf())?;
-        hs.add(&ff.mul(&gate2)?)
-    }
-}
-
-struct CosmosTeaRuntime {
-    state: SolCosmosTea,
-    pending_step: Option<usize>,
-    residual: Option<CudaTensor>,
-}
-
-pub struct Cosmos3Transformer {
-    cfg: Cosmos3TransformerConfig,
-    patch: Linear,
-    time1: Linear,
-    time2: Linear,
-    txt_proj: Linear,
-    blocks: Vec<Block>,
-    norm_out: Linear,
-    proj_out: Linear,
-    sol_tea: Arc<Mutex<Option<CosmosTeaRuntime>>>,
-}
-
-impl Cosmos3Transformer {
-    pub fn zeros(cfg: Cosmos3TransformerConfig) -> Result<Self> {
-        let h = cfg.hidden_size();
-        let patch_in = cfg.in_channels * cfg.patch_volume();
-        let blocks = (0..cfg.num_layers)
-            .map(|_| Block::zeros(&cfg))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
-            patch: Linear::zeros(patch_in, h, false),
-            time1: Linear::zeros(256, h, false),
-            time2: Linear::zeros(h, h, false),
-            txt_proj: Linear::zeros(cfg.text_embed_dim, h, false),
-            blocks,
-            norm_out: Linear::zeros(h, 2 * h, false),
-            proj_out: Linear::zeros(h, cfg.out_channels * cfg.patch_volume(), false),
-            sol_tea: Default::default(),
-            cfg,
-        })
-    }
-
-    pub fn config(&self) -> &Cosmos3TransformerConfig {
-        &self.cfg
-    }
-
-    /// Install Predict2 TeaCache (1.15 / start 10 / max 3). Default path is dense.
-    pub fn enable_sol_teacache(&self) {
-        let mut slot = self.sol_tea.lock().expect("cosmos3 sol tea");
-        *slot = Some(CosmosTeaRuntime {
-            state: SolCosmosTea::official(),
-            pending_step: None,
-            residual: None,
-        });
-    }
-
-    pub fn sol_teacache_enabled(&self) -> bool {
-        self.sol_tea.lock().expect("cosmos3 sol tea").is_some()
-    }
-
-    pub fn arm_sol_teacache(&self, step: usize) {
-        let mut slot = self.sol_tea.lock().expect("cosmos3 sol tea");
-        if let Some(runtime) = slot.as_mut() {
-            runtime.pending_step = Some(step);
-        }
-    }
-
-    fn begin_sol_tea(&self, signal: &CudaTensor) -> Result<Option<bool>> {
-        let mut slot = self.sol_tea.lock().expect("cosmos3 sol tea");
-        let Some(runtime) = slot.as_mut() else {
-            return Ok(None);
-        };
-        let Some(step) = runtime.pending_step.take() else {
-            return Ok(None);
-        };
-        let host = signal.host_cow()?;
-        let compute = runtime.state.decide(step, &host);
-        if compute {
-            Ok(Some(false))
-        } else {
-            Ok(Some(true))
-        }
-    }
-
-    fn add_sol_tea_residual(&self, hidden: CudaTensor) -> Result<CudaTensor> {
-        let residual = {
-            let slot = self.sol_tea.lock().expect("cosmos3 sol tea");
-            slot.as_ref()
-                .and_then(|r| r.residual.clone())
-                .expect("cosmos3 sol tea residual")
-        };
-        hidden.add(&residual)
-    }
-
-    fn finish_sol_tea(&self, before: &CudaTensor, after: &CudaTensor) -> Result<()> {
-        let mut slot = self.sol_tea.lock().expect("cosmos3 sol tea");
-        let runtime = slot.as_mut().expect("cosmos3 sol tea");
-        runtime.residual = Some(after.sub(before)?);
-        Ok(())
-    }
-
-    /// `latents` `[B,C,T,H,W]` → `[B, out_c, T, H, W]`.
-    pub fn forward(
-        &self,
-        latents: &CudaTensor,
-        encoder: &CudaTensor,
-        timestep: f32,
-    ) -> Result<CudaTensor> {
-        let [b, c, t, h, w] = match latents.shape[..] {
-            [b, c, t, h, w] => [b, c, t, h, w],
-            _ => {
-                return Err(msg(format!(
-                    "cosmos3 dit: {:?} want [B,C,T,H,W]",
-                    latents.shape
-                )))
+        xn: &CudaTensor,
+        cfg: &Cosmos3TransformerConfig,
+        cos: &CudaTensor,
+        sin: &CudaTensor,
+    ) -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+        let s = xn.shape[1];
+        let (hq, hkv, hd) = (cfg.num_attention_heads, cfg.num_key_value_heads, cfg.head_dim);
+        let proj = |lin: &Linear, heads: usize, norm: Option<&CudaTensor>, rope: bool| -> Result<CudaTensor> {
+            let mut t = lin.forward(xn)?.reshape(vec![1, s, heads, hd])?;
+            if let Some(w) = norm {
+                t = t.rms_norm(w, cfg.rms_norm_eps)?;
             }
-        };
-        if c != self.cfg.in_channels {
-            return Err(msg(format!(
-                "cosmos3 dit channels {c} vs {}",
-                self.cfg.in_channels
-            )));
-        }
-        let [p_t, p_h, p_w] = self.cfg.patch_size;
-        if t % p_t != 0 || h % p_h != 0 || w % p_w != 0 {
-            return Err(msg(format!(
-                "cosmos3 dit: [{t},{h},{w}] not divisible by patch {p_t}x{p_h}x{p_w}"
-            )));
-        }
-        let pe_t = t / p_t;
-        let pe_h = h / p_h;
-        let pe_w = w / p_w;
-        let seq = pe_t * pe_h * pe_w;
-        let patch_in = c * p_t * p_h * p_w;
-
-        let host = latents.host_cow()?;
-        let mut tokens = vec![0f32; b * seq * patch_in];
-        for bi in 0..b {
-            for ti in 0..pe_t {
-                for yi in 0..pe_h {
-                    for xi in 0..pe_w {
-                        let tok = (ti * pe_h + yi) * pe_w + xi;
-                        let mut o = 0usize;
-                        for pt in 0..p_t {
-                            for ph in 0..p_h {
-                                for pw in 0..p_w {
-                                    for ci in 0..c {
-                                        let src = (((bi * c + ci) * t + ti * p_t + pt) * h
-                                            + yi * p_h
-                                            + ph)
-                                            * w
-                                            + xi * p_w
-                                            + pw;
-                                        tokens[(bi * seq + tok) * patch_in + o] = host[src];
-                                        o += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let flat = CudaTensor::from_vec(tokens, vec![b * seq, patch_in])?;
-        let mut hs = self
-            .patch
-            .forward(&flat)?
-            .reshape(vec![b, seq, self.cfg.hidden_size()])?;
-
-        let temb_in = sinusoid_timestep(timestep, 256);
-        let temb = CudaTensor::from_vec(temb_in, vec![1, 256])?;
-        let temb = self.time2.forward(&self.time1.forward(&temb)?.silu())?;
-        let temb = temb.reshape(vec![1, 1, self.cfg.hidden_size()])?;
-        let encoder = self.txt_proj.forward(encoder)?;
-
-        let tea = self.begin_sol_tea(&temb)?;
-        if tea == Some(true) {
-            hs = self.add_sol_tea_residual(hs)?;
-        } else {
-            let before = if tea == Some(false) {
-                Some(hs.clone())
+            let t = t.transpose(1, 2)?;
+            if rope {
+                t.rope_half(cos, sin)
             } else {
-                None
-            };
-            for block in &self.blocks {
-                hs = block.forward(&hs, &encoder, &temb)?;
+                Ok(t)
             }
-            if let Some(before) = before.as_ref() {
-                self.finish_sol_tea(before, &hs)?;
-            }
-        }
-
-        let mods = self.norm_out.forward(&temb.silu())?;
-        let hidden = self.cfg.hidden_size();
-        let shift = mods.narrow(mods.rank() - 1, 0, hidden)?;
-        let scale = mods.narrow(mods.rank() - 1, hidden, hidden)?;
-        let n = nn::layer_norm(&hs, 1e-6, None, None)?;
-        hs = n.mul(&scale.try_add_scalar(1.0)?)?.add(&shift)?;
-        let out = self.proj_out.forward(&hs)?;
-
-        let oc = self.cfg.out_channels;
-        let oh = out.host_cow()?;
-        let mut pixels = vec![0f32; b * oc * t * h * w];
-        for bi in 0..b {
-            for ti in 0..pe_t {
-                for yi in 0..pe_h {
-                    for xi in 0..pe_w {
-                        let tok = (ti * pe_h + yi) * pe_w + xi;
-                        let mut o = 0usize;
-                        for pt in 0..p_t {
-                            for ph in 0..p_h {
-                                for pw in 0..p_w {
-                                    for ci in 0..oc {
-                                        let dst = (((bi * oc + ci) * t + ti * p_t + pt) * h
-                                            + yi * p_h
-                                            + ph)
-                                            * w
-                                            + xi * p_w
-                                            + pw;
-                                        pixels[dst] =
-                                            oh[(bi * seq + tok) * (p_t * p_h * p_w * oc) + o];
-                                        o += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(CudaTensor::from_vec(pixels, vec![b, oc, t, h, w])?)
+        };
+        Ok((
+            proj(&self.q, hq, self.norm_q.as_ref(), true)?,
+            proj(&self.k, hkv, self.norm_k.as_ref(), true)?,
+            proj(&self.v, hkv, None, false)?,
+        ))
     }
 }
 
-fn sinusoid_timestep(t: f32, dim: usize) -> Vec<f32> {
+/// Per-layer text K/V of one prompt (after norm and rotary), `[1, Hkv, L, D]`.
+pub struct UndCache {
+    pub len: usize,
+    pub layers: Vec<(CudaTensor, CudaTensor)>,
+}
+
+/// Rows of an embedding table without materializing it (bf16 or f32 lazily
+/// mapped; any map through its generator / f32 view otherwise).
+fn embed_rows(map: &WeightMap, key: &str, ids: &[u32], vocab: usize, h: usize) -> Result<CudaTensor> {
+    use fastvideo_loader::LazyDType;
+    if let Some(lazy) = map.lazy().filter(|_| map.has_tensor(key)) {
+        let view = lazy.view(key).map_err(|e| msg(e.to_string()))?;
+        if view.shape != [vocab, h] {
+            return Err(msg(format!("{key}: {:?} != [{vocab}, {h}]", view.shape)));
+        }
+        let mut out = Vec::with_capacity(ids.len() * h);
+        for &id in ids {
+            let r = id as usize;
+            if r >= vocab {
+                return Err(msg(format!("token id {r} >= vocab {vocab}")));
+            }
+            match view.dtype {
+                LazyDType::BF16 => {
+                    let b = &view.bytes[r * h * 2..(r + 1) * h * 2];
+                    out.extend(b.chunks_exact(2).map(|c| {
+                        half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32()
+                    }));
+                }
+                LazyDType::F32 => {
+                    let b = &view.bytes[r * h * 4..(r + 1) * h * 4];
+                    out.extend(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+                }
+                other => return Err(msg(format!("{key}: dtype {other:?}"))),
+            }
+        }
+        return CudaTensor::from_vec(out, vec![1, ids.len(), h]);
+    }
+    let table = weights::cuda_tensor_shaped(map, key, &[vocab, h])?;
+    let rows: Vec<usize> = ids.iter().map(|&i| i as usize).collect();
+    table.index_select_rows(&rows)?.reshape(vec![1, ids.len(), h])
+}
+
+fn causal_mask(s: usize) -> Result<CudaTensor> {
+    let mut m = vec![f32::MIN; s * s];
+    for i in 0..s {
+        for j in 0..=i {
+            m[i * s + j] = 0.0;
+        }
+    }
+    pinned(&m, &[1, 1, s, s])
+}
+
+/// `Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0)`.
+pub fn timestep_sinusoid(t: f32, dim: usize) -> Vec<f32> {
     let half = dim / 2;
     let mut out = vec![0f32; dim];
     for i in 0..half {
-        let freq = (10000f64).powf(-(i as f64) / half as f64) as f32;
+        let freq = (-(10000f32.ln()) * i as f32 / half as f32).exp();
         let arg = t * freq;
         out[i] = arg.cos();
         out[half + i] = arg.sin();
@@ -360,32 +245,420 @@ fn sinusoid_timestep(t: f32, dim: usize) -> Vec<f32> {
     out
 }
 
+/// TeaCache instruction for one gen-tower pass.
+pub enum GenCache<'a> {
+    /// Plain forward.
+    Off,
+    /// Run the layers and store `out − in` of the layer stack in the slot.
+    Compute(&'a mut Option<CudaTensor>),
+    /// Skip the layers: `in + slot`.
+    Reuse(&'a Option<CudaTensor>),
+}
+
+pub struct Cosmos3Transformer {
+    pub cfg: Cosmos3TransformerConfig,
+    gen: Vec<TowerLayer>,
+    /// Resident text tower (`FASTVIDEO_COSMOS3_UND=resident`); streamed when `None`.
+    und: Option<Vec<TowerLayer>>,
+    norm_gen: CudaTensor,
+    proj_in: Linear,
+    proj_out: Linear,
+    time_1: (Vec<f32>, Vec<f32>),
+    time_2: (Vec<f32>, Vec<f32>),
+}
+
+fn host_linear(map: &WeightMap, prefix: &str, i: usize, o: usize) -> Result<(Vec<f32>, Vec<f32>)> {
+    let w = weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "weight"), &[o, i])?;
+    let b = weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[o])?;
+    Ok((w.host_cow()?.into_owned(), b.host_cow()?.into_owned()))
+}
+
+fn apply_host(l: &(Vec<f32>, Vec<f32>), x: &[f32]) -> Vec<f32> {
+    use rayon::prelude::*;
+    let (w, b) = l;
+    let i = x.len();
+    (0..b.len())
+        .into_par_iter()
+        .map(|o| w[o * i..(o + 1) * i].iter().zip(x).map(|(a, c)| a * c).sum::<f32>() + b[o])
+        .collect()
+}
+
+impl Cosmos3Transformer {
+    /// Load the gen tower and heads; the text tower too when `und_resident`.
+    pub fn load(cfg: Cosmos3TransformerConfig, map: &WeightMap, und_resident: bool) -> Result<Self> {
+        cfg.validate().map_err(msg)?;
+        let h = cfg.hidden_size;
+        let mut gen = Vec::with_capacity(cfg.num_layers);
+        let mut und = und_resident.then(|| Vec::with_capacity(cfg.num_layers));
+        for i in 0..cfg.num_layers {
+            gen.push(TowerLayer::load(map, &cfg, i, Tower::Gen)?);
+            if let Some(u) = und.as_mut() {
+                u.push(TowerLayer::load(map, &cfg, i, Tower::Und)?);
+            }
+        }
+        Ok(Self {
+            gen,
+            und,
+            norm_gen: norm_weight(map, "norm_moe_gen.weight", h)?,
+            proj_in: Linear::load(map, "proj_in", cfg.patch_latent_dim, h, true)?,
+            proj_out: Linear::load(map, "proj_out", h, cfg.patch_latent_dim, true)?,
+            time_1: host_linear(map, "time_embedder.linear_1", 256, h)?,
+            time_2: host_linear(map, "time_embedder.linear_2", h, h)?,
+            cfg,
+        })
+    }
+
+    /// `time_embedder(time_proj(t))` for the scaled timestep (`t · 0.001`), f32.
+    pub fn time_embed(&self, t: f32) -> Vec<f32> {
+        let f = timestep_sinusoid(t, 256);
+        let hdn: Vec<f32> = apply_host(&self.time_1, &f)
+            .into_iter()
+            .map(|v| v / (1.0 + (-v).exp()))
+            .collect();
+        apply_host(&self.time_2, &hdn)
+    }
+
+    /// Run the text tower over `ids` (positions `0..L` on all axes) and keep
+    /// each layer's rotated keys and values. `map` supplies streamed layers.
+    pub fn und_cache(&self, map: &WeightMap, ids: &[u32]) -> Result<UndCache> {
+        Ok(self.und_caches(map, &[ids])?.remove(0))
+    }
+
+    /// [`Self::und_cache`] for several prompts (cond and uncond) in one pass
+    /// over the layers, so a streamed text tower is read once per request.
+    pub fn und_caches(&self, map: &WeightMap, prompts: &[&[u32]]) -> Result<Vec<UndCache>> {
+        let cfg = &self.cfg;
+        struct Run {
+            x: CudaTensor,
+            cos: CudaTensor,
+            sin: CudaTensor,
+            mask: CudaTensor,
+            layers: Vec<(CudaTensor, CudaTensor)>,
+        }
+        let mut runs = Vec::with_capacity(prompts.len());
+        for ids in prompts {
+            let l = ids.len();
+            if l == 0 {
+                return Err(msg("cosmos3: empty prompt"));
+            }
+            let (pos, _) = fastvideo_models::cosmos3::rope::text_positions(l);
+            let (c, s) = rope_tables(cfg, &pos);
+            runs.push(Run {
+                x: embed_rows(map, "embed_tokens.weight", ids, cfg.vocab_size, cfg.hidden_size)?,
+                cos: pinned(&c, &[l, cfg.head_dim])?,
+                sin: pinned(&s, &[l, cfg.head_dim])?,
+                mask: causal_mask(l)?,
+                layers: Vec::with_capacity(cfg.num_layers),
+            });
+        }
+        let scale = (cfg.head_dim as f32).powf(-0.5);
+        for i in 0..cfg.num_layers {
+            let streamed;
+            let layer = match &self.und {
+                Some(u) => &u[i],
+                None => {
+                    streamed = TowerLayer::load(map, cfg, i, Tower::Und)?;
+                    &streamed
+                }
+            };
+            let last = i + 1 == cfg.num_layers;
+            for run in &mut runs {
+                let xn = run.x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
+                let (q, k, v) = layer.qkv(&xn, cfg, &run.cos, &run.sin)?;
+                if !last {
+                    let a = crate::llm::attn::scaled_dot_product_attention_gqa(
+                        &q,
+                        &k,
+                        &v,
+                        Some(scale),
+                        Some(&run.mask),
+                    )?;
+                    run.x = run.x.add(&layer.out.forward(&a.merge_heads()?)?)?;
+                    let xn = run.x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
+                    run.x = run.x.add(&layer.mlp.forward(&xn)?)?;
+                }
+                run.layers.push((k, v));
+            }
+        }
+        Ok(runs
+            .into_iter()
+            .zip(prompts)
+            .map(|(r, ids)| UndCache { len: ids.len(), layers: r.layers })
+            .collect())
+    }
+
+    /// Gen-tower velocity for `latents` `[1, C, T, H, W]` (DiT latent space)
+    /// at scaled timestep `t` (`int(sigma·1000) · 0.001`). `cos`/`sin` are the
+    /// vision M-RoPE tables `[T·⌈H/p⌉·⌈W/p⌉, head_dim]`.
+    pub fn forward_gen(
+        &self,
+        latents: &CudaTensor,
+        temb: &[f32],
+        und: &UndCache,
+        cos: &CudaTensor,
+        sin: &CudaTensor,
+        cache: GenCache<'_>,
+    ) -> Result<CudaTensor> {
+        let cfg = &self.cfg;
+        let [b, c, t, h, w] = match latents.shape[..] {
+            [b, c, t, h, w] => [b, c, t, h, w],
+            _ => return Err(msg(format!("cosmos3 dit: {:?}", latents.shape))),
+        };
+        if b != 1 || c != cfg.latent_channel {
+            return Err(msg(format!("cosmos3 dit: latents {:?}", latents.shape)));
+        }
+        let p = cfg.latent_patch_size;
+        let (hp, wp) = (h.div_ceil(p), w.div_ceil(p));
+        let n = t * hp * wp;
+        let tokens = patchify(&latents.host_cow()?, c, t, h, w, p);
+        let x = self
+            .proj_in
+            .forward(&CudaTensor::from_vec(tokens, vec![n, cfg.patch_latent_dim])?)?
+            .reshape(vec![1, n, cfg.hidden_size])?;
+        let x = x.add(&pinned(temb, &[1, 1, cfg.hidden_size])?)?;
+        let g = cfg.num_attention_heads / cfg.num_key_value_heads;
+        let scale = (cfg.head_dim as f32).powf(-0.5);
+        let run = |mut x: CudaTensor| -> Result<CudaTensor> {
+            for (i, layer) in self.gen.iter().enumerate() {
+                let xn = x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
+                let (q, k, v) = layer.qkv(&xn, cfg, cos, sin)?;
+                let (ku, vu) = &und.layers[i];
+                let k_all = CudaTensor::cat(&[ku, &k], 2)?.repeat_kv(g)?;
+                let v_all = CudaTensor::cat(&[vu, &v], 2)?.repeat_kv(g)?;
+                let a = nn::scaled_dot_product_attention(&q, &k_all, &v_all, Some(scale))?;
+                x = x.add(&layer.out.forward(&a.merge_heads()?)?)?;
+                let xn = x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
+                x = x.add(&layer.mlp.forward(&xn)?)?;
+            }
+            Ok(x)
+        };
+        let x = match cache {
+            GenCache::Off => run(x)?,
+            GenCache::Compute(slot) => {
+                let out = run(x.clone())?;
+                *slot = Some(out.sub(&x)?);
+                out
+            }
+            GenCache::Reuse(slot) => {
+                let r = slot.as_ref().ok_or_else(|| msg("cosmos3 teacache: reuse before compute"))?;
+                x.add(r)?
+            }
+        };
+        let y = self
+            .proj_out
+            .forward(&x.rms_norm(&self.norm_gen, cfg.rms_norm_eps)?)?;
+        let out = unpatchify(&y.host_cow()?, c, t, h, w, p);
+        CudaTensor::from_vec(out, vec![1, c, t, h, w])
+    }
+}
+
+/// `_patchify_and_pack_latents`: pad H, W up to a multiple of `p`, then
+/// `cthpwq -> thwpqc` → `[T·Hp·Wp, p·p·C]`.
+pub fn patchify(x: &[f32], c: usize, t: usize, h: usize, w: usize, p: usize) -> Vec<f32> {
+    let (hp, wp) = (h.div_ceil(p), w.div_ceil(p));
+    let dim = p * p * c;
+    let mut out = vec![0f32; t * hp * wp * dim];
+    for ti in 0..t {
+        for yi in 0..hp {
+            for xi in 0..wp {
+                let base = ((ti * hp + yi) * wp + xi) * dim;
+                for a in 0..p {
+                    for bb in 0..p {
+                        let (y, xx) = (yi * p + a, xi * p + bb);
+                        if y >= h || xx >= w {
+                            continue;
+                        }
+                        for ci in 0..c {
+                            out[base + (a * p + bb) * c + ci] = x[((ci * t + ti) * h + y) * w + xx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `_unpatchify_and_unpack_latents` for an all-noisy item (crop the padding).
+pub fn unpatchify(y: &[f32], c: usize, t: usize, h: usize, w: usize, p: usize) -> Vec<f32> {
+    let (hp, wp) = (h.div_ceil(p), w.div_ceil(p));
+    let dim = p * p * c;
+    let mut out = vec![0f32; c * t * h * w];
+    for ti in 0..t {
+        for yi in 0..hp {
+            for xi in 0..wp {
+                let base = ((ti * hp + yi) * wp + xi) * dim;
+                for a in 0..p {
+                    for bb in 0..p {
+                        let (yy, xx) = (yi * p + a, xi * p + bb);
+                        if yy >= h || xx >= w {
+                            continue;
+                        }
+                        for ci in 0..c {
+                            out[((ci * t + ti) * h + yy) * w + xx] = y[base + (a * p + bb) * c + ci];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastvideo_models::cosmos3::rope::vision_positions;
 
-    #[test]
-    fn tiny_forward_shapes() {
-        let cfg = Cosmos3TransformerConfig::tiny();
-        let dit = Cosmos3Transformer::zeros(cfg.clone()).unwrap();
-        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
-        let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
-        let out = dit.forward(&x, &enc, 0.5).unwrap();
-        assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    fn seeded(key: &str, shape: &[usize]) -> Vec<f32> {
+        let h = key
+            .bytes()
+            .fold(1469598103934665603u64, |a, b| (a ^ b as u64).wrapping_mul(1099511628211));
+        let n: usize = shape.iter().product();
+        let norm = key.contains("norm") || key.contains("layernorm");
+        (0..n)
+            .map(|i| {
+                let v = ((h.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15)) >> 11) as f64
+                    / (1u64 << 53) as f64) as f32;
+                let u = (v - 0.5) * 0.4;
+                if norm {
+                    1.0 + u
+                } else {
+                    u
+                }
+            })
+            .collect()
     }
 
     #[test]
-    fn sol_teacache_reuses_predict2_window() {
+    fn patchify_pads_and_roundtrips() {
+        let (c, t, h, w, p) = (3, 2, 3, 4, 2);
+        let x: Vec<f32> = (0..c * t * h * w).map(|i| i as f32 + 1.0).collect();
+        let y = patchify(&x, c, t, h, w, p);
+        assert_eq!(y.len(), t * 2 * 2 * p * p * c);
+        // Token (t0, row 1, col 0) covers source row 2 and padding row 3.
+        let tok = 2;
+        let base = tok * p * p * c;
+        assert_eq!(y[base], x[(2) * w]); // (a=0, b=0, c=0) ← row 2, col 0
+        assert_eq!(y[base + 2 * c], 0.0); // (a=1, b=0) is padding
+        assert_eq!(unpatchify(&y, c, t, h, w, p), x);
+    }
+
+    #[test]
+    fn und_cache_equals_joint_causal_text_prefix() {
+        // The cached text K/V must be what a joint pass computes for the
+        // text rows: the text tower never sees vision tokens.
         let cfg = Cosmos3TransformerConfig::tiny();
-        let dit = Cosmos3Transformer::zeros(cfg.clone()).unwrap();
-        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
-        let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
-        dit.enable_sol_teacache();
-        assert!(dit.sol_teacache_enabled());
-        for step in 0..14 {
-            dit.arm_sol_teacache(step);
-            let out = dit.forward(&x, &enc, 0.4).unwrap();
-            assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+        let map = WeightMap::generated(seeded);
+        let dit = Cosmos3Transformer::load(cfg.clone(), &map, true).unwrap();
+        let ids = [3u32, 7, 11, 2];
+        let a = dit.und_cache(&map, &ids).unwrap();
+        let streamed = Cosmos3Transformer::load(cfg.clone(), &map, false).unwrap();
+        let b = streamed.und_cache(&map, &ids).unwrap();
+        assert_eq!(a.layers.len(), cfg.num_layers);
+        for ((ka, va), (kb, vb)) in a.layers.iter().zip(&b.layers) {
+            assert_eq!(ka.shape, vec![1, cfg.num_key_value_heads, 4, cfg.head_dim]);
+            assert_eq!(ka.host_cow().unwrap(), kb.host_cow().unwrap());
+            assert_eq!(va.host_cow().unwrap(), vb.host_cow().unwrap());
         }
+        // Causality: the first token's K/V do not depend on later tokens.
+        let c = dit.und_cache(&map, &ids[..2]).unwrap();
+        for ((kc, _), (ka, _)) in c.layers.iter().zip(&a.layers) {
+            let d = cfg.head_dim;
+            let kc = kc.host_cow().unwrap();
+            let ka = ka.host_cow().unwrap();
+            for hh in 0..cfg.num_key_value_heads {
+                for j in 0..d {
+                    let x = kc[(hh * 2) * d + j];
+                    let y = ka[(hh * 4) * d + j];
+                    assert!((x - y).abs() < 1e-5);
+                }
+            }
+        }
+    }
+
+    /// Golden: `scripts/ref/cosmos3_reference.py`, a NumPy transcription of
+    /// diffusers' joint `[und | gen]` forward (both towers, causal text
+    /// attention). Checks the text-K/V cache decomposition, the interleaved
+    /// M-RoPE, the fps-modulated vision positions and the 2×2 patching.
+    #[test]
+    fn golden_tiny_matches_numpy_reference() {
+        let dir = std::env::temp_dir().join(format!("cosmos3-golden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), include_bytes!("fixtures/tiny_golden.st")).unwrap();
+        let map = WeightMap::load_dir(&dir).unwrap();
+        let cfg = Cosmos3TransformerConfig::tiny();
+        let dit = Cosmos3Transformer::load(cfg.clone(), &map, false).unwrap();
+        let get = |k: &str| {
+            let (shape, v) = map.get_f32(k).unwrap();
+            CudaTensor::from_vec(v, shape).unwrap()
+        };
+        let ids: Vec<u32> = get("test.ids").host_cow().unwrap().iter().map(|&v| v as u32).collect();
+        let lat = get("test.latents");
+        let t = get("test.timestep").host_cow().unwrap()[0] as i64;
+        let und = dit.und_cache(&map, &ids).unwrap();
+        let (_, _, tt, hh, ww) = (lat.shape[0], lat.shape[1], lat.shape[2], lat.shape[3], lat.shape[4]);
+        let grid = [tt, hh.div_ceil(2), ww.div_ceil(2)];
+        let offset = (ids.len() + cfg.temporal_modality_margin) as f32;
+        let pos = vision_positions(&cfg, grid, offset, Some(24.0), 4);
+        let (c, s) = rope_tables(&cfg, &pos);
+        let cos = pinned(&c, &[pos.len(), cfg.head_dim]).unwrap();
+        let sin = pinned(&s, &[pos.len(), cfg.head_dim]).unwrap();
+        let temb = dit.time_embed(fastvideo_models::cosmos3::schedule::transformer_timestep(t, cfg.timestep_scale));
+        let got = dit.forward_gen(&lat, &temb, &und, &cos, &sin, GenCache::Off).unwrap();
+        let want = get("test.expected");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got.shape, want.shape);
+        let mut max = 0f32;
+        for (a, b) in got.host_cow().unwrap().iter().zip(want.host_cow().unwrap().iter()) {
+            max = max.max((a - b).abs());
+        }
+        assert!(max < 2e-4, "max |rust - numpy| = {max}");
+    }
+
+    #[test]
+    fn batched_text_passes_equal_single_passes() {
+        let cfg = Cosmos3TransformerConfig::tiny();
+        let map = WeightMap::generated(seeded);
+        let dit = Cosmos3Transformer::load(cfg, &map, false).unwrap();
+        let (a, b): (&[u32], &[u32]) = (&[1, 2, 3], &[9, 8, 7, 6, 5]);
+        let both = dit.und_caches(&map, &[a, b]).unwrap();
+        for (ids, got) in [a, b].iter().zip(&both) {
+            let one = dit.und_cache(&map, ids).unwrap();
+            assert_eq!(got.len, ids.len());
+            for ((k1, v1), (k2, v2)) in one.layers.iter().zip(&got.layers) {
+                assert_eq!(k1.host_cow().unwrap(), k2.host_cow().unwrap());
+                assert_eq!(v1.host_cow().unwrap(), v2.host_cow().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn gen_forward_shapes_and_teacache_reuse() {
+        let cfg = Cosmos3TransformerConfig::tiny();
+        let map = WeightMap::generated(seeded);
+        let dit = Cosmos3Transformer::load(cfg.clone(), &map, false).unwrap();
+        let und = dit.und_cache(&map, &[1, 2, 3]).unwrap();
+        let (t, h, w) = (2, 3, 4);
+        let pos = vision_positions(&cfg, [t, 2, 2], (3 + cfg.temporal_modality_margin) as f32, Some(24.0), 4);
+        let (c, s) = rope_tables(&cfg, &pos);
+        let cos = pinned(&c, &[pos.len(), cfg.head_dim]).unwrap();
+        let sin = pinned(&s, &[pos.len(), cfg.head_dim]).unwrap();
+        let x: Vec<f32> = (0..cfg.latent_channel * t * h * w).map(|i| (i as f32 * 0.3).sin()).collect();
+        let lat = CudaTensor::from_vec(x, vec![1, cfg.latent_channel, t, h, w]).unwrap();
+        let temb = dit.time_embed(0.5);
+        let mut slot = None;
+        let a = dit
+            .forward_gen(&lat, &temb, &und, &cos, &sin, GenCache::Compute(&mut slot))
+            .unwrap();
+        assert_eq!(a.shape, vec![1, cfg.latent_channel, t, h, w]);
+        assert!(a.host_cow().unwrap().iter().all(|v| v.is_finite()));
+        // Reusing the residual on the same input reproduces the output.
+        let r = dit.forward_gen(&lat, &temb, &und, &cos, &sin, GenCache::Reuse(&slot)).unwrap();
+        for (x, y) in a.host_cow().unwrap().iter().zip(r.host_cow().unwrap().iter()) {
+            assert!((x - y).abs() < 1e-4);
+        }
+        let off = dit.forward_gen(&lat, &temb, &und, &cos, &sin, GenCache::Off).unwrap();
+        assert_eq!(off.host_cow().unwrap(), a.host_cow().unwrap());
     }
 }

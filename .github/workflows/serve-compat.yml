@@ -19,6 +19,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/prebuilt.sh"
       - "scripts/ci/tools-release.sh"
+      - "scripts/ci/check-build-base.sh"
+      - "docker/build-base.Dockerfile"
       - ".github/workflows/serve-compat.yml"
   push:
     branches: ["main"]
@@ -100,6 +102,14 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    # The build base image (docker/build-base.Dockerfile): ffmpeg with libvpx,
+    # python3, Node and Playwright's Chromium (PLAYWRIGHT_BROWSERS_PATH=
+    # /opt/pw-browsers) are in it, so nothing is apt-installed here. The tag is
+    # pinned by scripts/dev/build-base-tag.sh (same as build-pod.sh).
+    container:
+      image: ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d872f7724765429b
+      # Chromium needs more than Docker's 64 MB /dev/shm.
+      options: --shm-size=2g
     strategy:
       fail-fast: false
       matrix:
@@ -107,43 +117,26 @@ jobs:
     env:
       FV_SERVE_BIN: ${{ github.workspace }}/bin/fv-serve
       FV_COMPAT_DIR: ${{ github.workspace }}/compat-clients
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/pw-browsers
       FV_COMPAT_KEEP_LOGS: "1"
       FV_COMPAT_LOGS: ${{ github.workspace }}/compat-logs
     steps:
       - uses: actions/checkout@v4
+      - name: Image has the tools (no installs at run time)
+        run: bash scripts/ci/check-build-base.sh ${{ (matrix.suite == 'fal-director' || matrix.suite == 'console') && 'browser' || 'compat' }}
       - uses: actions/download-artifact@v4
         with:
           name: fv-serve-fake
           path: bin
       - run: chmod +x bin/fv-serve
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: tests/compat/requirements.txt
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: tests/compat/package-lock.json
-      - name: ffmpeg
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-      - name: Pinned clients
-        run: bash tests/compat/run.sh --setup
-      - name: Chromium cache
-        if: matrix.suite == 'fal-director' || matrix.suite == 'console'
+      # The pinned pip/npm clients (tests/compat/requirements.txt,
+      # package-lock.json), cached per image and pins.
+      - name: Client cache
         uses: actions/cache@v4
         with:
-          path: pw-browsers
-          key: pw-${{ runner.os }}-${{ hashFiles('tests/compat/package-lock.json') }}
-      - name: Chromium (Playwright)
-        if: matrix.suite == 'fal-director' || matrix.suite == 'console'
-        run: |
-          cd "$FV_COMPAT_DIR/node"
-          npx --no-install playwright install --with-deps chromium
+          path: compat-clients
+          key: compat-clients-fastvideo-rs-build-base:bb-d872f7724765429b-${{ hashFiles('tests/compat/requirements.txt', 'tests/compat/package.json', 'tests/compat/package-lock.json') }}
+      - name: Pinned clients
+        run: bash tests/compat/run.sh --setup
       - name: Run ${{ matrix.suite }}
         run: bash tests/compat/run.sh ${{ matrix.suite }}
       - uses: actions/upload-artifact@v4

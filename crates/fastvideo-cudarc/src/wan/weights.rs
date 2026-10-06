@@ -28,7 +28,14 @@ pub struct WeightMap {
     /// Official `mlx_h3_dit.safetensors` uses `blocks.{i}.*` / `refiner.{i}.*`
     /// instead of the diffusers names this crate loads. Lookups try the alias.
     mlx_h3: bool,
+    /// A second spelling for keys the map does not hold under the asked
+    /// name ([`WeightMap::with_alias`]): a checkpoint in another naming
+    /// served to a loader that asks for one.
+    alias: Option<std::sync::Arc<KeyAlias>>,
 }
+
+/// Another on-disk name for a key, or `None`.
+pub type KeyAlias = dyn Fn(&str) -> Option<String> + Send + Sync;
 
 impl WeightMap {
     pub fn load_dir(dir: &Path) -> Result<Self> {
@@ -39,6 +46,7 @@ impl WeightMap {
             lazy: None,
             generator: None,
             mlx_h3: false,
+            alias: None,
         })
     }
 
@@ -50,6 +58,7 @@ impl WeightMap {
             lazy: Some(lazy),
             generator: None,
             mlx_h3: false,
+            alias: None,
         })
     }
 
@@ -61,6 +70,7 @@ impl WeightMap {
             lazy: Some(lazy),
             generator: None,
             mlx_h3: false,
+            alias: None,
         })
     }
 
@@ -68,6 +78,17 @@ impl WeightMap {
     /// `blocks.` / `refiner.` keys). Diffusers names still resolve.
     pub fn with_mlx_h3_aliases(mut self) -> Self {
         self.mlx_h3 = true;
+        self
+    }
+
+    /// Answer a key the map lacks with `alias(key)` when the map holds that
+    /// (e.g. LTX-2.3's original VAE names for the diffusers ones the decoder
+    /// asks for, `ltx2::keys::vae_view`). Direct names still win.
+    pub fn with_alias(
+        mut self,
+        alias: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.alias = Some(std::sync::Arc::new(alias));
         self
     }
 
@@ -102,11 +123,23 @@ impl WeightMap {
             lazy: None,
             generator: Some(Box::new(generator)),
             mlx_h3: false,
+            alias: None,
         }
     }
 
     fn has_direct(&self, key: &str) -> bool {
         self.tensors.contains_key(key) || self.lazy.as_ref().is_some_and(|l| l.contains(key))
+    }
+
+    /// Invent values for the keys this map lacks with `generator` (tests: a
+    /// map of real names whose misses are recorded rather than fatal).
+    #[cfg(test)]
+    pub(crate) fn with_generator(
+        mut self,
+        generator: impl Fn(&str, &[usize]) -> Vec<f32> + Send + Sync + 'static,
+    ) -> Self {
+        self.generator = Some(Box::new(generator));
+        self
     }
 
     /// Eager map of host f32 tensors (unit tests and generated fixtures).
@@ -122,6 +155,7 @@ impl WeightMap {
             lazy: None,
             generator: None,
             mlx_h3: false,
+            alias: None,
         }
     }
 
@@ -133,6 +167,7 @@ impl WeightMap {
             lazy: None,
             generator: None,
             mlx_h3: false,
+            alias: None,
         }
     }
 
@@ -186,6 +221,11 @@ impl WeightMap {
                 if self.has_direct(&alias) {
                     return alias;
                 }
+            }
+        }
+        if let Some(alias) = self.alias.as_ref().and_then(|f| f(key)) {
+            if self.has_direct(&alias) {
+                return alias;
             }
         }
         for alias in Self::hunyuan15_aliases(key) {
@@ -463,6 +503,7 @@ mod tests {
             lazy: None,
             generator: None,
             mlx_h3: false,
+            alias: None,
         };
         let err = map.require("no.such.key").unwrap_err();
         assert!(err.to_string().contains("missing weight key"));

@@ -1673,7 +1673,10 @@ impl Decoders {
     /// caller that loads it only around its one call ([`load_upsampler`]).
     pub fn load_without_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
         let open = |sub: &str| {
-            let m = WeightMap::open(&weights.join(sub))?;
+            // LTX-2.3 folders keep the original VAE names (`keys::vae_view`).
+            let m = super::keys::vocoder_view(super::keys::vae_view(WeightMap::open(
+                &weights.join(sub),
+            )?));
             m.prefetch_groups(&[&|k: &str| !k.starts_with("encoder.")]);
             Ok::<_, crate::wan::tensor::TensorError>(m)
         };
@@ -1686,8 +1689,18 @@ impl Decoders {
     }
 }
 
-/// The spatial upsampler's folder under `weights`, when the pack has one.
+/// `FASTVIDEO_LTX2_UPSAMPLER`: a spatial-upsampler file or folder used in
+/// place of the pack's (sol-engine's LTX-2.3 HQ runs
+/// `ltx-2.3-spatial-upscaler-x2-1.1.safetensors`; FastVideo's 2.3 tree ships
+/// an older x2 file under `spatial_upscaler/`).
+pub const UPSAMPLER_ENV: &str = "FASTVIDEO_LTX2_UPSAMPLER";
+
+/// The spatial upsampler's folder under `weights` (or the file / folder
+/// [`UPSAMPLER_ENV`] names), when there is one.
 pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os(UPSAMPLER_ENV).map(PathBuf::from) {
+        return p.exists().then_some(p);
+    }
     ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
         .iter()
         .map(|name| weights.join(name))
@@ -1697,7 +1710,14 @@ pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
 /// The spatial x2 upsampler, or `None` when the config or the pack has none.
 pub fn load_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Option<LatentUpsampler>> {
     match (&cfg.latent_upsampler, upsampler_dir(weights)) {
-        (Some(ucfg), Some(dir)) => Ok(Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?)),
+        (Some(ucfg), Some(p)) => {
+            let map = if p.is_file() {
+                WeightMap::open_files(&[p])?
+            } else {
+                WeightMap::open(&p)?
+            };
+            Ok(Some(LatentUpsampler::load(&map, ucfg)?))
+        }
         _ => Ok(None),
     }
 }
@@ -2372,6 +2392,8 @@ impl TextEncoder {
         // dev DiT lives in its own tree, `ltx25-dev/transformer_full`).
         let map = open_distilled(&self.paths.dit, "connectors")
             .or_else(|e| open_distilled(&self.paths.weights, "connectors").map_err(|_| e))?;
+        // FastVideo's 2.3 folder: `embeddings_connector` for the video one.
+        let map = super::keys::connectors_view(map);
         Ok(TextConnectors::load(
             &map,
             &Keys::connectors(Keys::detect(&map)),
@@ -4588,7 +4610,7 @@ pub(super) fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
     }
     let dir = weights.join("audio_vae");
     if dir.is_dir() {
-        let map = WeightMap::open(&dir)?;
+        let map = super::keys::vae_view(WeightMap::open(&dir)?);
         if map.has_tensor("encoder.conv_in.conv.weight")
             || map.has_tensor("audio_vae.encoder.conv_in.conv.weight")
         {

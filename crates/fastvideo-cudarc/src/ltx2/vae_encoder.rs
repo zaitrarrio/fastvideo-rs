@@ -228,7 +228,7 @@ impl VideoEncoder {
 
     /// Load `encoder.*` and the latent statistics from a Diffusers `vae/`.
     pub fn load(vae_dir: &Path, patch: usize, eps: f64) -> Result<Self> {
-        let map = WeightMap::open(vae_dir).map_err(|e| msg(e.to_string()))?;
+        let map = super::keys::vae_view(WeightMap::open(vae_dir).map_err(|e| msg(e.to_string()))?);
         if !Self::present(&map) {
             return Err(msg(format!(
                 "ltx2 image conditioning: {} has no video encoder (encoder.* keys)",

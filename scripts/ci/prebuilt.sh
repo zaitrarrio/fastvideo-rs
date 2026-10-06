@@ -64,7 +64,7 @@ cmd_fetch() {
   (( $# )) || { log "no sets"; exit 2; }
   [[ "${FV_PREBUILT_DISABLE:-0}" == 1 ]] && fallback "FV_PREBUILT_DISABLE=1"
   local dir="${FV_PREBUILT_DIR:-${RUNNER_TEMP:-/tmp}/prebuilt}" h rel tag exact m
-  h="$(bash "$TR" input-hash HEAD)"
+  h="$(bash "$TR" input-hash HEAD)" || fallback "cannot hash this checkout's tools inputs (git)"
   local args=(--input-hash "$h")
   [[ "${FV_PREBUILT_SELECT:-exact}" == newest ]] && args+=(--newest)
   [[ -n "${FV_TOOLS_VERSION:-}" ]] && args=(--version "${FV_TOOLS_VERSION#v}" --input-hash "$h")

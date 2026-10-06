@@ -14,7 +14,11 @@ on:
       - "rust-toolchain.toml"
       - "scripts/dev/build-base-tag.sh"
       - "scripts/dev/build-pod.sh"
+      - "scripts/ci/check-build-base.sh"
       - ".github/workflows/build-base-image.yml"
+      # They run in the image; the last step checks their pinned tag.
+      - ".github/workflows/serve-compat.yml"
+      - ".github/workflows/gpucheck-t0.yml"
 
 permissions:
   contents: read
@@ -96,6 +100,11 @@ jobs:
             node -e "require(\"playwright\").chromium.launch().then(b => b.close())"
             echo smoke ok'
 
+      - name: CI tool checks pass in the image
+        run: |
+          docker run --rm -v "$PWD/scripts/ci:/ci:ro" "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" \
+            bash /ci/check-build-base.sh browser cuda
+
       # Last, so a fresh image is pushed before the pin is fixed in a follow-up commit.
-      - name: build-pod.sh pins this tag
+      - name: build-pod.sh and the workflows pin this tag
         run: bash scripts/dev/build-base-tag.sh --check
