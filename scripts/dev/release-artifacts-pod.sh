@@ -225,7 +225,7 @@ build_gpucheck_tests() {
   : >"$STAGE/gpucheck-tests/tests.tsv"
   while IFS=$'\t' read -r exe pkg dir kind name; do
     cp "$exe" "$STAGE/gpucheck-tests/bin/"
-    pkg="${pkg##*#}"; pkg="${pkg%@*}"   # registry-style ids: path+file:///…#name@ver
+    pkg="$(basename "$dir")"   # the package ids (path+file:///…#0.1.0) omit the name
     printf '%s\t%s\t%s\t%s\t%s\n' "bin/$(basename "$exe")" "$pkg" "$dir" "$kind" "$name" >>"$STAGE/gpucheck-tests/tests.tsv"
   done <"$OUT/tests.raw"
   printf '%s\n' "$SRC" >"$STAGE/gpucheck-tests/src-root"

@@ -204,8 +204,22 @@ a `::warning::` (CI never deadlocks); the repository variable
 `FV_PREBUILT_DISABLE=1` turns the download off. Pull-request jobs use the
 PR **head** sha (`github.event.pull_request.head.sha`), not the merge ref.
 
-Pod cost per run: the job holds the `fv-release` slot (one of 4) while it
-builds; measured below.
+**Measured (2026-10-06, pod cpu3c 32 vCPU, $0.96/hr):** first run on a fresh
+pod (empty target dir, cold sccache for the no-mold flags) **28 min**
+(oxide 3 min, gpucheck 7, serve-cuda 4, gateway 1.5, fake 4, tests 2,
+vast 3.5, hf-fm 2.7); the next commit (main `0f64377`, after `89fa23b`)
+**8.8 min** with oxide from the volume cache; fetch of all 8 sets (201 MB
+gzip) 20 s. About $0.15 of pod time per incremental commit. Output for
+`0f64377`: serve-cuda 31 MB gz (fv-serve 115.5 MB), serve-gateway 18 MB,
+serve-fake 31 MB, gpucheck 18 MB, gpucheck-vast 10 MB, hf-fm 18 MB (0.12.1),
+gpucheck-tests 84 MB, oxide 0.2 MB; every ELF needs only libc / libm /
+libgcc_s (libstdc++ for the fake build), max `GLIBC_2.35`. Against the image
+CI built for the same commit: `fv-serve --version` identical (git sha, build
+time, build id `6359813b8b741bf5`, profile, features) for the CUDA and the
+gateway binary, `fv-serve.features` identical, sizes within 0.1 % (115.50
+vs 115.39 MB, 58.59 vs 58.66 MB; rustc 1.98.1 on the pod vs the image
+builder's cached stable). The gpucheck-tests binaries pass outside the pod
+(40 + 516 tests, `prebuilt.sh run-tests`).
 
 ## Allowlist
 
