@@ -11,7 +11,12 @@ missing=()
 need() { command -v "$1" >/dev/null || missing+=("$1"); }
 compat() {
   need ffmpeg; need python3; need node; need npm; need openssl
-  if command -v ffmpeg >/dev/null; then ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' libvpx ' || missing+=("ffmpeg libvpx encoder"); fi
+  # Captured first: `| grep -q` under pipefail fails when ffmpeg gets SIGPIPE.
+  if command -v ffmpeg >/dev/null; then
+    local enc
+    enc="$(ffmpeg -hide_banner -encoders 2>/dev/null)"
+    [[ "$enc" == *" libvpx "* ]] || missing+=("ffmpeg libvpx encoder")
+  fi
   python3 -c 'import venv, ensurepip' 2>/dev/null || missing+=("python3 venv/ensurepip")
   python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null || missing+=("python3 >= 3.11 (tests/compat/requirements.txt)")
 }
