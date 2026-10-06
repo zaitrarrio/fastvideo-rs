@@ -160,6 +160,8 @@ upstream error message, audit detail and ingested log line.
 | `RUNPOD_API_KEY` | Runpod REST, GraphQL and the pod log endpoint. It is also passed to each edge worker as `FV_BACKSTOP_API_KEY` for its watchdog |
 | `CLOUDFLARE_API_KEY` | the Analytics Engine SQL API (charts) |
 | `GITHUB_PAT` | `release.yml` dispatch, CI status |
+| `GITHUB_RUNNER_PAT` | optional, build pods (§8a): fine-grained, Administration read/write + Actions read on the repository; mints runner registration tokens, lists and removes runners, reads queued jobs and `scripts/dev/build-pod-server.py` / `build-pod.sh` at `main`. Unset: `GITHUB_PAT` is used |
+| `BUILD_CACHE_R2_ACCESS_KEY_ID`, `BUILD_CACHE_R2_SECRET_ACCESS_KEY` | optional, build pods (§8a): an R2 key scoped to the bucket `fv-build-cache`, put into each build pod's env for sccache and the deps seeds |
 | `CONTROL_KEK` | 32 bytes; AES-256-GCM for cluster secrets and secret env values in D1 (associated data = the row) |
 | `SESSION_SECRET` | 32 bytes; session and CSRF HMACs, passphrase pepper |
 | `OWNER_PASSPHRASE_HASH` | see above |
@@ -482,6 +484,50 @@ read only: the pod's own `/healthz` timers (uptime, idle, time to its idle
 and cap stops), its last self-stop attempt, the running jobs (no command
 lines), and how far the controller's backstop is.
 
+## 8a. Build pods
+
+fv-control manages the CPU build pods (`src/buildpods.ts`; design and the
+numbers: docs/dev/build-pods-fv-control.md). One or more pods, in any Runpod
+datacenter, placed by CPU stock and price (`GET /api/build-pods/plan`); each
+runs `scripts/dev/build-pod-server.py` and the base image pinned in
+`scripts/dev/build-pod.sh` **at `main`** (fetched from GitHub at create time),
+so a branch cannot put its server on a shared pod. The policy (settings key
+`build_pods`, `GET/PUT /api/build-pods/policy`, the dashboard's **Build pods**
+card) is off by default.
+
+- **`up`** (`POST /api/build-pods/up`; `fv-control.sh build-pod up`;
+  `build-pod.sh up`): reuse the least busy running pod, else start a stopped
+  current one, else create one (deleting stopped *outdated* ones first; a
+  running outdated pod is never touched). A D1 lease serialises concurrent
+  calls. Refused below floor + `balance_margin`, above `daily_usd_max` of
+  build-pod spend today, at `max_pods`. Admin callers get the pod token
+  (sealed in D1, audited on every read).
+- **stop / delete** refuse while the pod runs jobs or its GitHub runner is
+  busy, unless `force`; both remove the runner from GitHub first.
+- **Cron:** states from Runpod; per-pod backstop (its own idle stop / cap +
+  `backstop_margin_min`; alert `build_pod`); stop on the balance floor;
+  registers each ready shared pod as a runner (labels `fv-build`,
+  `fv-build-<region>`; a 1-h registration token to the pod's `POST
+  /v1/runner`, never the PAT) and removes the runners of stopped pods and
+  offline `fv-build-<pod>` runners; wakes a pod for queued jobs that need
+  `fv-build` (`wake_on_queue`) or for runs of `wake_workflows`.
+- **Costs:** owner `build-pod:<name>` in `pods`, `cost_daily` and every spend
+  view; alert `build_pod_spend` above `daily_usd_max`; runner or wake errors
+  open `build_pod_runner`.
+- **CI** (`POST /api/ci/build-runner`, a token with scope `ci`): `pod` when
+  an idle `fv-build` runner is online; `wait` (+ `retry_after_s`) while a pod
+  it woke comes up; `github` with the reason otherwise.
+- The legacy pod named `fv-build` (owner `external:build-pod`, created by the
+  old script) keeps the `build_pod_*` policies of §8 until it is gone.
+
+| route | |
+|---|---|
+| `GET /api/build-pods` | every managed pod: state, placement, $/hr, spend today, `/healthz` timers, runner, outdated; the policy |
+| `GET/PUT /api/build-pods/policy`, `GET /api/build-pods/plan?region=` | policy; placement candidates and the server/image at `main` |
+| `POST /api/build-pods/up {region?}`, `POST /api/build-pods {region?, purpose: test, server_ref?}` | a pod (+ its token); a separate test pod |
+| `GET /api/build-pods/<id>`, `GET …/token` (admin), `POST …/start`, `POST …/stop {force?}`, `DELETE …?force=1`, `POST …/runner` | one pod |
+| `POST /api/ci/build-runner {label?, region?, wake?}` | the CI builder choice |
+
 ## 9. Observability
 
 This follows the owner's "lean" guidance.
@@ -688,7 +734,7 @@ source for:
 | `cluster-spec` (with `pool`) | a cluster definition: pools, GPU types, regions and volumes, image channel / sha / ref, counts, backstop (`cap_s`), floors, auto-stop, log shipping |
 | `env` | env vars at one level: `KEY → {value, secret, set?}` |
 | `policies` (with `attribution`) | alert thresholds, auto-actions, attribution rules |
-| `token-create` | API token name, scope (`read` / `admin`) and expiry |
+| `token-create` | API token name, scope (`read` / `admin` / `ci`: only `/api/ci/*`) and expiry |
 | `release-dispatch` | `release.yml` promote / rollback inputs |
 
 Every field carries a `description`, which the editor shows on hover and

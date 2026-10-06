@@ -129,7 +129,7 @@ export async function logout(c: C): Promise<void> {
 }
 
 // ---------------- API tokens
-export async function mintApiToken(env: Env, name: string, scope: "read" | "admin", by: string, ttlDays?: number) {
+export async function mintApiToken(env: Env, name: string, scope: "read" | "admin" | "ci", by: string, ttlDays?: number) {
   const token = randomToken("fvc_", 32);
   const id = `tok_${randomToken("", 6)}`;
   const exp = ttlDays ? now() + ttlDays * 86400_000 : null;
@@ -138,11 +138,11 @@ export async function mintApiToken(env: Env, name: string, scope: "read" | "admi
     .run();
   return { token, id, name, scope, expires_at: exp };
 }
-async function apiTokenActor(env: Env, bearer: string): Promise<{ actor: string; scope: "read" | "admin" } | null> {
+async function apiTokenActor(env: Env, bearer: string): Promise<{ actor: string; scope: "read" | "admin" | "ci" } | null> {
   if (!bearer.startsWith("fvc_")) return null;
   const row = await env.DB.prepare("SELECT id, name, scope, expires_at, revoked_at FROM api_tokens WHERE hash = ?")
     .bind(await sha256Hex(bearer))
-    .first<{ id: string; name: string; scope: "read" | "admin"; expires_at: number | null; revoked_at: number | null }>();
+    .first<{ id: string; name: string; scope: "read" | "admin" | "ci"; expires_at: number | null; revoked_at: number | null }>();
   if (!row || row.revoked_at || (row.expires_at && row.expires_at < now())) return null;
   await env.DB.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").bind(now(), row.id).run();
   return { actor: `token:${row.name}`, scope: row.scope };
@@ -167,7 +167,10 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: Vars }> 
   if (auth.toLowerCase().startsWith("bearer ")) {
     const t = await apiTokenActor(env, auth.slice(7).trim());
     if (!t) throw new HttpError(401, "invalid API token");
-    if (MUTATING.has(method) && t.scope !== "admin") throw new HttpError(403, "read-only token");
+    // A `ci` token (a GitHub workflow's secret) reaches only /api/ci/* (docs/dev/build-pods-fv-control.md §6).
+    if (t.scope === "ci") {
+      if (!c.req.path.startsWith("/api/ci/")) throw new HttpError(403, "a ci token only reaches /api/ci/*");
+    } else if (MUTATING.has(method) && t.scope !== "admin") throw new HttpError(403, "read-only token");
     c.set("actor", t.actor);
     c.set("authKind", "token");
     c.set("scope", t.scope);
