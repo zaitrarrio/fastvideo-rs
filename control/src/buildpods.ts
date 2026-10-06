@@ -217,11 +217,16 @@ export interface Candidate {
   flavor: string;
   vcpu: number;
   ram: number;
-  stock: string | null; // High | Medium | Low | null (none)
+  stock: string | null; // High | Medium | Low | null (not reported)
   price: number | null;
   volume_id?: string;
 }
 const STOCK_RANK: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
+// Runpod answers stockStatus null for most CPU sizes above 2 vCPU even where a
+// create succeeds (observed 2026-10-06 in every DC), so null is "unknown", not
+// "none": such candidates stay in, after any reported stock at the same size, and
+// a create that Runpod refuses falls through to the next candidate.
+const stockRank = (s: string | null) => (s !== null && s in STOCK_RANK ? STOCK_RANK[s]! : 3);
 
 /** `want`: a region (eu, us, ca, ap) or a datacenter id; empty: any. */
 export function matchesRegion(dc: string, want?: string | null): boolean {
@@ -237,7 +242,7 @@ export function rankCandidates(cands: Candidate[], pol: BuildPodsPolicy, want?: 
     return i < 0 ? pol.regions.length : i;
   };
   return cands
-    .filter((c) => c.stock && c.stock in STOCK_RANK)
+    .filter((c) => c.stock === null || c.stock in STOCK_RANK)
     .filter((c) => c.price === null || c.price <= pol.max_dph_per_pod)
     .filter((c) => matchesRegion(c.dc, want))
     .filter((c) => !pol.regions_only || pref(c.dc) < pol.regions.length)
@@ -246,8 +251,9 @@ export function rankCandidates(cands: Candidate[], pol: BuildPodsPolicy, want?: 
         Number(!a.volume_id) - Number(!b.volume_id) ||
         pref(a.dc) - pref(b.dc) ||
         pol.vcpus.indexOf(a.vcpu) - pol.vcpus.indexOf(b.vcpu) ||
+        Number(a.stock === null) - Number(b.stock === null) ||
         pol.flavors.indexOf(a.flavor) - pol.flavors.indexOf(b.flavor) ||
-        STOCK_RANK[a.stock!]! - STOCK_RANK[b.stock!]! ||
+        stockRank(a.stock) - stockRank(b.stock) ||
         (a.price ?? 99) - (b.price ?? 99) ||
         a.dc.localeCompare(b.dc),
     );

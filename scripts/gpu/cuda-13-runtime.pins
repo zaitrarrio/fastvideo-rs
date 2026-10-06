@@ -1,0 +1,11 @@
+# Pins of CUDA packages only the runtime images ship (docker/gpucheck.Dockerfile
+# base-cuda), kept out of cuda-13.pins on purpose: that file is an input of the
+# build-base image tag (scripts/dev/build-base-tag.sh) and of the tools release
+# hash (scripts/ci/tools-release.sh), and neither needs these packages.
+# Same NVIDIA ubuntu2204/x86_64 repository and CUDA 13.4.92 as cuda-13.pins.
+#
+# The CUDA runtime (libcudart): cudarc uses the driver API and does not load
+# it, but CUPTI dlopens libcudart.so, and anything linked against the runtime
+# finds it in base-cuda.
+CUDA_CUDART_PKG=cuda-cudart-13-4=13.4.92-1
+CUDA_CUDART_SONAME=libcudart.so.13
