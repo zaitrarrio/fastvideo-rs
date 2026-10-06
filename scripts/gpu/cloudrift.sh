@@ -28,7 +28,8 @@
 # (artifacts/cloudrift/ledger.tsv).
 #
 # Env: CLOUDRIFT_API_KEY (or /root/.config/fv/cloudrift_api_key);
-# CLOUDRIFT_GPUS (brands, preferred first; default "RTX PRO 6000,RTX 5090,RTX 4090");
+# CLOUDRIFT_GPUS (brands, preferred first; default "RTX PRO 6000,RTX 5090", the only
+# ones allowed: cloudrift-lib.sh);
 # CLOUDRIFT_IMAGE (default the runtime image's :latest; pin a digest);
 # CLOUDRIFT_SSH_KEY (default ~/.ssh/id_ed25519_fv_cloudrift, made if missing);
 # CLOUDRIFT_API_BASE (tests: the mock in scripts/gpu/tests/).
@@ -38,7 +39,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/cloudrift-lib.sh"
 
 IMAGE_DEFAULT="${CLOUDRIFT_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:latest}"
-GPUS="${CLOUDRIFT_GPUS:-RTX PRO 6000,RTX 5090,RTX 4090}"
+GPUS="${CLOUDRIFT_GPUS:-RTX PRO 6000,RTX 5090}"
 MAX_DPH="${CLOUDRIFT_MAX_DPH:-1.5}"
 CAP_S="${CLOUDRIFT_CAP_S:-1800}"
 BOOT_WAIT_S="${CLOUDRIFT_BOOT_WAIT_S:-900}"
@@ -231,7 +232,8 @@ case "${1:-}" in
     log "plan: payload shape OK" ;;
   catalog)
     printf 'variant\tgpu\tgpus\tvram_gb\tusd_hr\tfree_nodes\tdatacenters\tdriver\n'
-    cr_catalog "${CLOUDRIFT_SERVICE:-docker}" | awk -F'\t' '$3 > 0' ;;
+    # Only the allowed instance types (rtxpro6000-*, rtx59-*).
+    cr_catalog "${CLOUDRIFT_SERVICE:-docker}" | awk -F'\t' -v re="$CR_ALLOWED_TYPES_RE" '$3 > 0 && $1 ~ re' ;;
   balance) cr_need_key; echo "$(cr_balance) USD" ;;
   smoke) shift; run_check "${1:-$IMAGE_DEFAULT}" "$SMOKE_STEPS" ;;
   run)

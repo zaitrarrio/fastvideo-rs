@@ -28,6 +28,24 @@ CR_KEY_FILE="${CLOUDRIFT_API_KEY_FILE:-/root/.config/fv/cloudrift_api_key}"
 CR_MIN_BALANCE="${CLOUDRIFT_MIN_BALANCE:-8}"
 CR_LEDGER="${CLOUDRIFT_LEDGER:-$FV_ROOT/artifacts/cloudrift/ledger.tsv}"
 CR_OWNER_TAG="fv-owner:fastvideo-rs"
+# Owner rule (2026-10-06): on CloudRift only RTX PRO 6000 and RTX 5090, i.e.
+# the instance types rtxpro6000-* and rtx59-*. Everything else (V100, RTX 4090,
+# L40S, ...) is refused before any rent, whatever CLOUDRIFT_GPUS says.
+CR_ALLOWED_TYPES_RE='^(rtxpro6000|rtx59)-'
+CR_ALLOWED_BRANDS="RTX PRO 6000,RTX 5090"
+
+# cr_type_allowed <instance type or variant name>
+cr_type_allowed() { [[ "$1" =~ $CR_ALLOWED_TYPES_RE ]]; }
+# cr_check_brands <comma list>: dies on a brand outside the allow-list.
+cr_check_brands() {
+  local b
+  local -a list
+  IFS=',' read -r -a list <<<"$1"
+  for b in "${list[@]}"; do
+    [[ ",$CR_ALLOWED_BRANDS," == *",$b,"* ]] \
+      || die "CloudRift GPU '$b' is not allowed: only $CR_ALLOWED_BRANDS (instance types rtxpro6000-*, rtx59-*; owner rule)"
+  done
+}
 
 cr_ledger() { mkdir -p "$(dirname "$CR_LEDGER")"; printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >>"$CR_LEDGER"; }
 
@@ -114,7 +132,8 @@ cr_catalog() {
 cr_pick() {
   local brands="$1" cap="$2" gpus="${3:-1}" svc="${4:-docker}" cat b line
   local -a order
-  cat="$(cr_catalog "$svc")" || return 1
+  cr_check_brands "$brands"
+  cat="$(cr_catalog "$svc" | awk -F'\t' -v re="$CR_ALLOWED_TYPES_RE" '$1 ~ re')" || return 1
   IFS=',' read -r -a order <<<"$brands"
   for b in "${order[@]}"; do
     line="$(awk -F'\t' -v b="$b" -v cap="$cap" -v g="$gpus" \
@@ -185,6 +204,8 @@ cr_tags() {
 
 # The rent payload of one Docker instance.
 # cr_docker_payload <variant> <dc|""> <name> <image> <command json array> <env json object> <ports json array> <tags json>
+# A public IP is requested either way: whether a rental without one has
+# outbound internet is UNVERIFIED.
 cr_docker_payload() {
   jq -nc --arg it "$1" --arg dc "$2" --arg name "$3" --arg image "$4" --argjson cmd "$5" --argjson env "$6" \
     --argjson ports "$7" --argjson tags "$8" '{
@@ -217,7 +238,8 @@ cr_recipe_image() {
 # The rent payload of one VM.
 # cr_vm_payload <variant> <dc|""> <name> <image url> <cloud-init commands> <ssh public key|""> <tags json>
 # No ports are requested: VMs expose every port on their address (CloudRift
-# docs, "Port availability"), and our services bind to loopback behind a tunnel.
+# docs, "Port availability"). fv-serve binds to the VM's loopback; only Caddy
+# (HTTPS) listens publicly, and only when inbound traffic is wanted.
 cr_vm_payload() {
   jq -nc --arg it "$1" --arg dc "$2" --arg name "$3" --arg img "$4" --arg ci "$5" --arg pk "$6" --argjson tags "$7" '{
       selector: {ByInstanceTypeAndLocation: ({instance_type: $it} + (if $dc == "" then {} else {datacenters: [$dc]} end))},
@@ -229,9 +251,12 @@ cr_vm_payload() {
     }'
 }
 
-# cr_rent <payload> -> the instance id.
+# cr_rent <payload> -> the instance id. The last guard: a payload whose
+# instance type is outside the allow-list is never sent.
 cr_rent() {
-  local resp id
+  local resp id it
+  it="$(jq -r '.selector.ByInstanceTypeAndLocation.instance_type // empty' <<<"$1")"
+  cr_type_allowed "$it" || { log "refusing to rent '$it': only rtxpro6000-* and rtx59-* (RTX PRO 6000, RTX 5090) are allowed on CloudRift"; return 1; }
   resp="$(cr_post instances/rent "$1")" || return 1
   id="$(jq -r '.instance_ids[0] // empty' <<<"$resp")"
   [[ -n "$id" ]] || { log "rent answered without an instance id: $(head -c 300 <<<"$resp")"; return 1; }

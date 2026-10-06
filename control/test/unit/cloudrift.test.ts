@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_POLICIES } from "../../src/alerts";
-import { cloudrift, CLOUDRIFT_API_VERSION, deadlineOf, toInstance } from "../../src/cloudrift";
+import { cloudrift, CLOUDRIFT_API_VERSION, cloudriftTypeAllowed, deadlineOf, toInstance } from "../../src/cloudrift";
 import { cloudriftDecisions, cloudriftOwner, collectCloudrift } from "../../src/collector-cloudrift";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
@@ -64,6 +64,16 @@ describe("CloudRift client", () => {
     ]);
     expect(calls[0]!.headers["x-api-key"]).toBeUndefined();
   });
+  it("refuses GPUs outside the allow-list (RTX PRO 6000, RTX 5090) before any call", async () => {
+    const calls = mockFetch({});
+    for (const g of ["V100 SXM2", "RTX 4090", "v100-6-52-400-generic.1", "rtx49-7c-kn.1"])
+      await expect(cloudrift.price(mkEnv(), g)).rejects.toThrow(/not allowed: only RTX PRO 6000, RTX 5090/);
+    expect(calls).toHaveLength(0);
+    expect(cloudriftTypeAllowed("rtx59-16c-nr.1")).toBe(true);
+    expect(cloudriftTypeAllowed("rtxpro6000-12-100-1500-nr.1")).toBe(true);
+    expect(cloudriftTypeAllowed("rtx49-7c-kn.1")).toBe(false);
+    expect(cloudriftTypeAllowed(null)).toBe(false);
+  });
   it("lists live rentals without asking for credentials; parses tags", async () => {
     const calls = mockFetch({ "instances/list": () => [200, { instances: [inst(), inst({ id: "x", tags: ["other"], instance_name: null })] }] });
     const l = await cloudrift.instances(mkEnv());
@@ -108,6 +118,13 @@ describe("CloudRift backstops (pure)", () => {
     expect(d.alerts[0]!.severity).toBe("critical");
     expect(cloudriftDecisions([ours], 7.5, 8, { ...pol, stop_on_floor: false }, t).terminate).toEqual([]);
     expect(cloudriftDecisions([ours], 12, 8, pol, t).alerts[0]!.kind).toBe("cloudrift_balance_margin");
+  });
+  it("terminates our live rental on a type outside the allow-list; never someone else's", () => {
+    const v100 = { resource_info: { cost_per_hour: 25, instance_type: "v100-6-52-400-generic.1" } };
+    const d = cloudriftDecisions([toInstance(inst(v100)), toInstance(inst({ ...v100, id: "f", tags: [] }))], 50, 8, pol, t - 200_000_000);
+    expect(d.terminate).toEqual([{ id: "i1", why: "type not allowed" }]);
+    expect(d.alerts.map((a) => a.kind)).toEqual(["cloudrift_type"]);
+    expect(cloudriftDecisions([toInstance(inst({ resource_info: { cost_per_hour: 62.4, instance_type: "rtx59-16c-nr.1" } }))], 50, 8, pol, t - 200_000_000).terminate).toEqual([]);
   });
   it("owners", () => {
     expect(cloudriftOwner(toInstance(inst()))).toBe("cloudrift:gpucheck");

@@ -6,22 +6,32 @@ how it compares with Runpod and Vast, and what the repo now has for it:
 `scripts/gpu/cloudrift.sh` for GPU checks, `scripts/serve/cloudrift-worker.sh`
 for fv-serve workers, and a CloudRift provider in fv-control.
 
-**Status (2026-10-06, evening).** The account is funded and the API was
-exercised live with the owner's key (section 10). Every read worked. Every
-**Docker** rental on the only free stock (V100) failed on CloudRift's side
-within seconds, and **volumes cannot be created** in any datacenter. The
-fv-serve path therefore moved to **VM mode** with a **Cloudflare tunnel**
-(owner decisions, below). That path is tested against the mock only; its
-first live run is still to do (section 10). Claims not backed by the docs,
-the spec or a live observation are marked **UNVERIFIED**.
+**Status (2026-10-06).** The account is funded and the API was exercised
+live with the owner's key (section 10). Every read worked. **No allowed GPU
+had stock** (RTX PRO 6000 and RTX 5090 showed 0 free nodes in every
+variant), **volumes cannot be created** in any datacenter, and the owner will
+run the first live worker test when stock exists. Everything below about
+renting is tested against the mock only. Claims not backed by the docs, the
+spec or a live observation are marked **UNVERIFIED**.
 
 Owner decisions (2026-10-06):
 
-- **VM mode** where needed: the VM recipe follows the host's
-  `nvidia_kernel_module_support`, and cloud-init starts the serve container.
-- **TLS:** no plain-HTTP internal token over the internet. The public front
-  is a Cloudflare tunnel (cloudflared on the VM); an SSH tunnel is fine for
-  tests.
+- **GPUs: RTX PRO 6000 and RTX 5090 only**, i.e. the instance types
+  `rtxpro6000-*` and `rtx59-*`. The scripts and fv-control refuse anything
+  else (V100, RTX 4090, L40S, A100, ...) with a clear error, before any rent.
+- **No inbound port by default.** CloudRift's API is HTTPS. A worker in edge
+  mode dials **out** to its family Durable Objects over WSS
+  (`crates/fastvideo-serve/src/edge_link.rs`) and uploads its output to R2
+  over HTTPS, so it needs no inbound port at all. That is the default
+  CloudRift worker.
+- **Inbound only when needed, and only over HTTPS on the worker itself.**
+  Sessions, the WHIP proxy and the `session_ack` public endpoint need it.
+  The worker then runs Caddy with a Let's Encrypt certificate for
+  `<dashed-ip>.sslip.io`, or our own hostname when configured. Never plain
+  HTTP. A Cloudflare tunnel and SSH remain as non-default fallbacks.
+- **VM mode**, with the NVIDIA recipe (proprietary or open driver) chosen per
+  host from `nvidia_kernel_module_support`; cloud-init starts the serve
+  container.
 - **Weights:** a CloudRift persistent volume is the store. The first tree is
   Wan2.2 TI2V-5B (`Wan-AI/Wan2.2-TI2V-5B-Diffusers`, ~34 GB, Apache-2.0),
   add-only and sha256-verified. Anything larger needs the owner. Not done:
@@ -81,7 +91,7 @@ Sources (all read on 2026-10-06):
 |---|---|---|
 | GPU catalog and prices | `instance-types/list` `{selector: "All" \| {ByServiceAndLocation: {services: ["docker"\|"vm"], datacenters?}} \| {ByName: [...]}}` | `instance_types[]`: `name`, `brand_short`, `datacenters[]`, `variants[]`. Each variant has `name`, `gpu_count`, `vram`, `cpu_count`, `dram`, `disk`, **`cost_per_hour` in cents**, `available_nodes`, `available_nodes_per_dc`, `ip_availability_per_dc`, `volume_types_per_dc` (`cost_per_gb_per_month` in cents) |
 | Balance | `account/info` `{}` | `balance`: **cents** live (the spec says USD), plus `pending`, `disputed`, `dispute_fees`, `current_cost_per_hour` |
-| VM images | `recipes/list` `{}` | `groups[].recipes[]`: `name`, `tags` (`nvidia-driver`, `nvidia-driver-proprietary`, `amd-driver`), `details.VirtualMachine.image_url`. The instance type's `nvidia_kernel_module_support` (`ProprietaryOnly` on the V100 hosts) says which NVIDIA recipe boots |
+| VM images | `recipes/list` `{}` | `groups[].recipes[]`: `name`, `tags` (`nvidia-driver`, `nvidia-driver-proprietary`, `amd-driver`), `details.VirtualMachine.image_url`. The instance type's `nvidia_kernel_module_support` (e.g. `ProprietaryOnly`) says which NVIDIA recipe boots |
 | Rent | `instances/rent` (version ≥ 2026-09-08) | `selector: {ByInstanceTypeAndLocation: {instance_type: "<variant name>", datacenters?: [...]}}`, `with_public_ip`, `config` (below), `name?`, `tags?` (free-form strings), `cluster_name?`, `reservation?`, `team_id?`. The answer is `{instance_ids: [...]}` (HTTP 201) |
 | Status | `instances/list` `{selector: {ById \| ByStatus: {statuses} \| ByTags: {all?, any?} \| ByClusterName}, mask?}` | `instances[]`: `id`, `status` (`Initializing`, `Active`, `Deactivating`, `Inactive`, `Failed`), `instance_name`, `tags`, `host_address`, `port_mappings` (pairs of ints), `failure.user_message`, `resource_info.cost_per_hour`, `gpus[]`, `created_at`. The `mask` flags: `with_connection_info`, `with_usage_info`, `with_hardware_info`, `with_credentials` (we never set the last one) |
 | GPU metrics | `instances/metrics` `{selector: {ById}}` | `metrics[].gpus[]`: `gpu_utilization_percent`, `fb_used_mib`, `power_usage_watts`, `temperature_celsius`, … |
@@ -101,9 +111,10 @@ The Docker config of a rental:
   `https://<pod>-8000.proxy.runpod.net`. A Docker rental with
   `with_public_ip: true` exposes its mapped ports on `host_address` over
   plain TCP (the ComfyUI tutorial opens `http://<node IP>:8188` [comfy]).
-  TLS takes a tunnel such as cloudflared, or a TLS terminator in front. The
-  owner chose a Cloudflare tunnel (cloudflared on the VM, section 6); fv-serve
-  then listens on the VM's loopback only. Some datacenters report
+  Our workers need no inbound port by default (they dial out). When one
+  must accept traffic, it terminates TLS itself: Caddy on the VM with a
+  Let's Encrypt certificate (section 6). fv-serve listens on the VM's
+  loopback only. Some datacenters report
   `ip_availability_per_dc.public_ips: false` (observed for
   `ap-east-tw-kn-2`). Rentals there would have no reachable port, so our
   scripts only pick a datacenter that has free stock.
@@ -125,36 +136,26 @@ instance attached [vol].
 ## 2. CloudRift compared with Runpod and Vast
 
 1-GPU on-demand prices from the public catalog (`cloudrift.sh catalog`,
-2026-10-06, in $/hr) and from [price]:
+2026-10-06, in $/hr) and from [price]. **We use only the first two rows**
+(owner rule):
 
-| GPU | CloudRift | Free nodes (public listing) | Runpod (repo figures) | Vast |
+| GPU | CloudRift | Free nodes (2026-10-06, keyed and public) | Runpod (repo figures) | Vast |
 |---|---|---|---|---|
-| RTX PRO 6000 96 GB | 1.34-1.39 (three host types); "upon request" on [price] | 0 | 2.09 (EUR-IS-1, recorded 2026-09-24 in docs/gaps/2026-09-24-phase3-vs-published.md) | marketplace |
-| RTX PRO 6000 Max-Q | 1.55 | 0 | - | marketplace |
-| RTX 5090 32 GB | 0.62-0.65 | 0 | listed | marketplace |
-| RTX 4090 24 GB | 0.39-0.48 | 0 | listed | marketplace |
-| L40S 48 GB | 0.63 | 0 | listed | marketplace |
-| A100 SXM4 80 GB | 1.05 | 0 | listed | marketplace |
-| H100 80 GB / H200 141 GB | "upon request" [price]; **not in the API catalog** | - | our US pools (`REGIONS.us`) | marketplace |
-| B200 | not offered | - | `runpod.sh b200` | marketplace |
-| V100 SXM2/SXM3 | 0.25-0.28 | 1-3 | - | - |
-| AMD MI350X 288 GB | 4.00 | 0 | - | - |
+| RTX PRO 6000 96 GB (`rtxpro6000-*`) | 1.34-1.39 (three host types); "upon request" on [price] | 0 in every variant | 2.09 (EUR-IS-1, recorded 2026-09-24 in docs/gaps/2026-09-24-phase3-vs-published.md) | marketplace |
+| RTX 5090 32 GB (`rtx59-*`) | 0.62-0.65 | 0 in every variant | listed | marketplace |
+| anything else | not used: the scripts and fv-control refuse it (e.g. V100, which had the only free nodes) | - | - | - |
 
-- **Stock.** The unauthenticated listing showed free nodes only for V100,
-  which CUDA 13 does not support, so our CUDA engines cannot run there (the
-  fake engine can). **With the key it is the same (observed 2026-10-06,
-  twice):** V100 SXM2 (`v100-6-52-400-generic`, 1-3 free, `ustx1a_a01`
-  and `usny01_a01`) and V100 SXM3 only. The V100 types report
-  `nvidia_kernel_module_support: ProprietaryOnly`. RTX PRO 6000, H100
-  and H200 at "upon request" suggest capacity by arrangement.
+- **Stock.** On 2026-10-06 neither allowed GPU had a free node, with or
+  without the key. "Upon request" on the pricing page suggests RTX PRO 6000
+  capacity by arrangement.
 - **Regions.** The datacenters in the listing are `ustx1a_a01` and
   `usny01_a01` (USA), `eu-central-it-gv-1` (Italy),
   `ap_northeast_kr_se_1` (Korea) and `ap-east-tw-kn-2` (Taiwan). Most
   types had no datacenter listed at the time.
 - **What fits us.** RTX PRO 6000 at about $1.34-1.39/hr would be about a
   third cheaper than the $2.09/hr recorded on Runpod, if there is stock.
-  RTX 4090/5090 are cheap for CUDA smoke tests (sm89/sm120). There is no
-  B200 and no listed H100/H200. Per-second billing and free egress beat
+  RTX 5090 is cheap for CUDA smoke tests (sm120). There is no B200 and no
+  listed H100/H200. Per-second billing and free egress beat
   Runpod's per-minute billing.
 - **What CloudRift lacks against Runpod.** There is no HTTPS proxy, no
   serverless queue, no secret store, no logs API and no API to patch a
@@ -185,8 +186,8 @@ has volumes, or fall back to B/C. `cloudrift-worker.sh` already mounts one
 (`CLOUDRIFT_VOLUME=<name>`: `/workspace/weights` in the VM, read-only into the
 container with `FV_WEIGHTS`). When a volume exists, record each tree like the
 Runpod ones (CLAUDE.md, docs/gaps/2026-09-27-volume-sync.md), with
-CloudRift's volume id. A real Wan 5B job also needs a GPU that our CUDA 13
-build supports with 24-48 GB; the only stock was V100 16 GB (sm70).
+CloudRift's volume id. A real Wan 5B job also needs RTX PRO 6000 or RTX 5090
+stock, and there was none.
 
 Runpod network volumes cannot be mounted on CloudRift. The options:
 
@@ -213,7 +214,8 @@ listed in a new `scripts/gpu/weights-cloudrift.tsv`.
 | Guard | gpucheck (`cloudrift.sh`) | worker (`cloudrift-worker.sh`) | fv-control |
 |---|---|---|---|
 | Balance floor (Runpod: $8) | `CLOUDRIFT_MIN_BALANCE`, default 8: `account/info` before every rent, and no rental if the balance is unknown | same | `CLOUDRIFT_BALANCE_FLOOR` (default `BALANCE_FLOOR`): critical alert; with `stop_on_floor`, terminates **our** rentals |
-| Price cap | `CLOUDRIFT_MAX_DPH` (1.5), checked on the catalog price **before** the rent | `CLOUDRIFT_MAX_DPH` (1.0) | `GET /api/providers/cloudrift/price?gpu=` |
+| GPU allow-list | only `rtxpro6000-*` / `rtx59-*` (RTX PRO 6000, RTX 5090): another brand in `CLOUDRIFT_GPUS` dies before any call, the catalog pick skips other types, and `cr_rent` never sends one | same | `price?gpu=` answers 400 for others; the cron terminates **our** live rental on another type (`cloudrift_type`, critical) |
+| Price cap | `CLOUDRIFT_MAX_DPH` (1.5), checked on the catalog price **before** the rent | `CLOUDRIFT_MAX_DPH` (1.5) | `GET /api/providers/cloudrift/price?gpu=` |
 | Wall-clock backstop | detached `sleep cap; terminate` (`CLOUDRIFT_CAP_S`, 1800 s), the key only in its env | smoke 1800 s, up 3600 s | the `fv-deadline:<unix>` tag on every rental: the cron terminates our rentals past it |
 | Idle guard | while waiting: GPU under `CLOUDRIFT_IDLE_GPU_PCT` (5%) with no new output for `CLOUDRIFT_IDLE_MIN` (15) minutes means terminate. The container also exits `FV_IDLE_S` (1200 s) after it finishes | - | `pod_idle` alert from `instances/metrics` |
 | Exit trap | terminate on EXIT/INT/TERM, three tries, confirmed through `instances/list` | smoke: same | - |
@@ -264,74 +266,80 @@ wall time, estimated cost) and terminates.
 ### `scripts/serve/cloudrift-worker.sh`: fv-serve
 
 ```
-cloudrift-worker.sh plan [image]               # payload, secrets masked (FV_PLAN_SHOW_BOOT=1: the VM boot too)
-cloudrift-worker.sh smoke [image]              # standalone fake engine through the tunnel: /health, /healthz, one job
-cloudrift-worker.sh up <pool> <image@digest>   # a worker for the gateway's pod pool
+cloudrift-worker.sh plan [image]               # payload, secrets masked (FV_PLAN_ROLE=worker; FV_PLAN_SHOW_BOOT=1: the VM boot)
+cloudrift-worker.sh up <family> <image@digest> # a worker; prints "<id> <how it is reached>"
+cloudrift-worker.sh smoke [image]              # standalone fake engine over HTTPS: /health, /healthz, one job
 cloudrift-worker.sh down <id>
 ```
 
+**Inbound (`CLOUDRIFT_INBOUND`).**
+
+| mode | default for | what is public | use |
+|---|---|---|---|
+| `none` | `up` | nothing: no published port | Edge mode. The worker dials out to the family Durable Objects (`FV_DISPATCH_DO_URL`, https only; `FV_DISPATCH_FAMILIES`, default `<family>`) over WSS and uploads through the part URLs they mint (`FV_DISPATCH_DIRECT_UPLOAD=1`), the settings `scripts/gcp/vm.sh` and fv-control give a worker (docs/serve/dispatch-do-family.md). `FV_DISPATCH_SESSIONS=0`: a session needs a public endpoint |
+| `https` | `smoke` | 443 (and 80 for the ACME challenge), Caddy only | Workers that must accept traffic (sessions, the WHIP proxy, the `session_ack` endpoint) and the smoke. Caddy on the VM with a Let's Encrypt certificate for `<dashed-ip>.sslip.io`, or `CLOUDRIFT_TLS_HOSTNAME` (our own name pointing at the VM), reverse proxy to fv-serve on loopback; `FV_PUBLIC_BASE_URL` is that https URL and sessions default to 1. If the boot cannot find its address, it sets no public URL. It never falls back to plain HTTP |
+| `tunnel-quick`, `tunnel-token` | - | nothing on the VM | Fallbacks: a cloudflared quick tunnel (an `https://*.trycloudflare.com` URL read back over SSH) or a named tunnel (`FV_CF_TUNNEL_TOKEN_FILE`, `CLOUDRIFT_TUNNEL_HOSTNAME`; the repo has no Cloudflare zone today) |
+| `ssh` | - | sshd only | Fallback for tests: `ssh -L` to fv-serve's loopback port |
+
+The SSH public key goes into the rent only for `ssh` and `tunnel-quick` (or
+`CLOUDRIFT_SSH_DEBUG=1`).
+
 **Service (`CLOUDRIFT_SERVICE`).**
 
-- **`vm`**: a CloudRift VM from CloudRift's NVIDIA Ubuntu recipe
+- **`vm`** (default): a CloudRift VM from CloudRift's NVIDIA Ubuntu recipe
   (`recipes/list`). A `ProprietaryOnly` host gets the recipe tagged
-  `nvidia-driver-proprietary` ("Ubuntu 24.04 Server (R580 proprietary,
-  CUDA 12.9)", which says the open-driver images cannot boot on
-  Pascal/Volta). Other hosts get the newest Ubuntu tagged `nvidia-driver`.
-  `CLOUDRIFT_VM_IMAGE_URL` overrides. The rent carries our SSH public key
-  (`ssh_key.PublicKeys`, user `riftuser` as in dstack) and a cloud-init
-  command that writes `/root/fv-boot.sh` and runs it in the background
-  (log: `/var/log/fv-boot.log`). The boot:
+  `nvidia-driver-proprietary` ("Ubuntu 24.04 Server (R580 proprietary, CUDA
+  12.9)", which says the open-driver images do not boot on Pascal/Volta);
+  other hosts get the newest Ubuntu tagged `nvidia-driver` ("Ubuntu 24.04
+  Server (R580, CUDA 13.3)" on 2026-10-06). `CLOUDRIFT_VM_IMAGE_URL`
+  overrides. A cloud-init command writes `/root/fv-boot.sh` and runs it in
+  the background (log `/var/log/fv-boot.log`). The boot:
   1. installs Docker and the NVIDIA container toolkit if the image lacks them;
-  2. `docker run --gpus all -p 127.0.0.1:8000:8000 --env-file <600 file> <image> --config <config>`
+  2. for `https`, finds the public IPv4 (curl, or bash's `/dev/tcp` when curl
+     is missing) and starts Caddy (`CLOUDRIFT_CADDY_IMAGE`, `caddy:2`) on
+     the host network;
+  3. `docker run --gpus all -p 127.0.0.1:8000:8000 --env-file <600 file> <image> --config <config>`
      (the image ENTRYPOINT stays; `CLOUDRIFT_VOLUME` adds the weights mount);
-  3. starts the tunnel and writes `/var/lib/fv/public-url`, then `/var/lib/fv/booted`.
-- **`docker`**: the image runs as a CloudRift Docker rental on a public host
-  port over plain HTTP. Only for `smoke`; `up` refuses it (the internal
-  token would cross the internet in clear) unless
-  `CLOUDRIFT_ALLOW_PLAIN_HTTP=1`.
-- **`auto`** (default): `vm` on `ProprietaryOnly` hosts, else `docker`.
+  4. for the tunnel fallbacks, starts cloudflared;
+  5. writes `/var/lib/fv/public-url` (empty for `none`) and `/var/lib/fv/booted`.
+- **`docker`**: the image as a CloudRift Docker rental with **no published
+  port**, so only with `CLOUDRIFT_INBOUND=none`. Nothing on a Docker
+  rental's host can terminate TLS, so the smoke and the inbound modes refuse
+  it.
 
-**Tunnel (`CLOUDRIFT_TUNNEL`, VM only).**
-
-- **`quick`** (smoke default): a cloudflared quick tunnel. The VM writes
-  its `https://*.trycloudflare.com` URL, and the script reads it over SSH.
-  There is no account and no hostname; the URL changes per boot.
-- **`token`** (up default): a named Cloudflare tunnel run with
-  `FV_CF_TUNNEL_TOKEN_FILE`. The owner creates it in the Cloudflare
-  dashboard with a public hostname pointing to `http://localhost:8000`, and
-  `CLOUDRIFT_TUNNEL_HOSTNAME` names it. `up` prints `https://<hostname>`
-  for the gateway's `FV_POOL_<POOL>_URLS` (static pod pool). The repo has no
-  Cloudflare zone today (only workers.dev), so this needs one.
-- **`ssh`**: nothing public; the smoke forwards a local port with `ssh -L`.
-
-**Docker `CLOUDRIFT_CMD_MODE=exec`** still self-registers in `gw_workers` with
-`FV_PUBLIC_BASE_URL=http://<ip>:<port>`. The per-variant serve images have no
-`curl`, so the IP lookup falls back to bash's `/dev/tcp` (plain HTTP to
-api.ipify.org).
-
-**Secrets.** CloudRift has no secret store: the env file (run key hash,
-internal token, D1/R2 values) and the tunnel token are base64 inside the
-rental's cloud-init, which CloudRift keeps with the rental. On the VM they are
-root-only files. Use scoped, revocable tokens. `plan` masks them.
+**Secrets.** CloudRift has no secret store. The env (run-key hash, internal
+token, D1/R2 values) and any tunnel token sit base64-encoded in the rental's
+cloud-init (VM) or in its Docker env, which CloudRift keeps with the rental.
+On the VM they are root-only files. Use scoped, revocable tokens; `plan`
+masks them.
 
 ### Tests
 
-`bash scripts/gpu/tests/cloudrift.test.sh` (34 checks) runs both scripts
-against `scripts/gpu/tests/cloudrift_mock.py`, a fake API (in the live
-shapes: cents, the extra `account/info` fields, `recipes/list`, VM rents, a
-switch that fails Docker rentals as seen live) that also answers for the
-rented fv-serve, with ssh and rsync stubs. It covers:
+`bash scripts/gpu/tests/cloudrift.test.sh` (44 checks) runs both scripts
+against `scripts/gpu/tests/cloudrift_mock.py`, a fake API in the live shapes:
+cents, the extra `account/info` fields, `recipes/list`, VM rents, and a
+switch that fails Docker rentals as seen live. The mock also answers for the
+rented fv-serve, and ssh and rsync are stubbed. It covers:
 
-- plan without a key (docker and VM; the decoded VM boot is valid bash and
-  shows no secret), and the public catalog;
-- the balance in cents, the balance floor and the price cap (no rent);
-- the gpucheck smoke, results and termination, the idle guard and the
-  detached backstop;
-- the worker smoke in docker and in VM mode (proprietary recipe, SSH key,
-  tunnel URL, `/health`, a job, termination; the run key only as its hash);
+- plan without a key: the default worker (VM, outbound only, no Caddy, no
+  SSH key, sessions 0), Docker (no port), the smoke (Caddy and sslip.io,
+  never `http:`), the decoded boot valid bash with the curl-free IP lookup,
+  and secrets masked;
+- the catalog showing only allowed types;
+- the balance in cents, the floor and the price cap;
+- **the allow-list**: V100 and RTX 4090, both in stock and cheap in the mock,
+  refused by both scripts before any rent, with `cr_rent` refusing on its
+  own;
+- the gpucheck smoke, the idle guard and the backstop;
+- the HTTPS smoke (sslip.io URL, open-driver recipe, no SSH key, a job,
+  termination, the run key only as its hash), our own TLS hostname, and the
+  recipe per driver;
+- the SSH fallback on RTX 5090, and the Docker smoke refused;
 - a Docker platform failure reported and dismissed;
-- `up`: plain HTTP refused, the tunnel token required, the https URL printed,
-  role, pool and internal token in the VM env;
+- `up`: digest pin, `FV_DISPATCH_DO_URL` required and https only, the
+  outbound default (family DO env, sessions 0, no public URL), `https`
+  (sessions on, the sslip.io endpoint), and the tunnel-token fallback (token
+  kept apart from the env, never printed);
 - `reap` sparing a foreign rental, and the key in no output or ledger line.
 
 ## 7. fv-control
@@ -363,7 +371,11 @@ engine alone:
   `resource_info.cost_per_hour` as "currency units". Live it is **cents**
   (25.0 for $0.25/hr), now the default; `usd` remains as an override. The
   balance is read as cents too.
-- Tests: `test/unit/cloudrift.test.ts` (12) and one integration step against
+- **Allow-list:** `GET /api/providers/cloudrift/price?gpu=` answers 400
+  for anything but RTX PRO 6000, RTX 5090 or an `rtxpro6000-*` / `rtx59-*`
+  type. The cron terminates **our** live rental on any other type
+  (`cloudrift_type`, critical) and never touches a foreign one.
+- Tests: `test/unit/cloudrift.test.ts` and one integration step against
   a CloudRift mock in `test/harness.mjs`.
 
 **Plan for CloudRift pools in clusters (not done here).**
@@ -376,8 +388,10 @@ engine alone:
    column.
 3. CloudRift workers can't be PATCHed: `restart` and `roll` re-create them,
    which `roll` already does.
-4. The gateway reaches CloudRift workers at `http://<host>:<port>` (static
-   pool URLs). This needs the TLS decision in section 6 first.
+4. Pools use family Durable Object dispatch: CloudRift workers dial out
+   (`CLOUDRIFT_INBOUND=none`), so the controller needs no URL for them.
+   Session-capable pools use `https` (Caddy on the worker); there are no
+   plain-HTTP pool URLs.
 5. Teach the gateway watchdog's `kill_all` to terminate CloudRift workers
    (a `FV_CLOUDRIFT_PODS` list and the CloudRift key on the gateway).
    Alternatively, rely on the `fv-deadline` tag and the controller cron.
@@ -393,61 +407,65 @@ Settled live on 2026-10-06 (section 10):
 
 - **The unit of `resource_info.cost_per_hour`:** cents. The balance is
   cents too.
-- **Stock with a key:** the same as public; only V100 is free.
+- **Stock with a key:** the same as public. No RTX PRO 6000 or RTX 5090 was
+  free.
 - **The volume API takes an API key:** yes, but no datacenter can create a
   volume.
 - **Tags with `:` in rent:** accepted (`fv-owner:fastvideo-rs`,
   `fv-deadline:<unix>` came back on the listing).
 
-Still open; the first VM run settles 1, 2, 4 and 5:
+Still open; the owner's first VM run on RTX PRO 6000 or RTX 5090 settles
+1-5:
 
-1. A VM's boot time, its `port_mappings` (if any) and whether
-   `ssh riftuser@<host_address>` works with the inline key.
-2. Whether the proprietary recipe image ships Docker and the NVIDIA
-   container toolkit (the boot installs them if not), and its driver
-   version (the boot writes `nvidia-smi.txt`).
-3. Whether Docker rentals work on non-V100 hosts, and whether Docker
-   `command` replaces the ENTRYPOINT (for `exec` mode). Every Docker rental
-   on V100 failed with "Internal provisioning error", even plain
-   `nginx:alpine` with no ports, so nothing about containers was observable.
+1. A VM's boot time, its `port_mappings` (if any), and whether ports 80 and
+   443 are reachable for Caddy's ACME challenge and HTTPS (the CloudRift docs
+   say all VM ports are open).
+2. Whether the open-driver recipe image ships Docker and the NVIDIA container
+   toolkit (the boot installs them if not), and its driver version (the boot
+   writes `nvidia-smi.txt`).
+3. Let's Encrypt issuance time for `<ip>.sslip.io` from a CloudRift address.
 4. The rate of a CloudRift VM pulling from GHCR and the Hub.
-5. Whether the serve image's fake engine with `post_encoder = "nvenc"`
-   works on a V100 with the R580 driver.
-6. Whether an exited container or a halted VM stops billing.
-7. Volume prices, and which datacenter will have volumes.
+5. Whether a VM without a public IP has outbound internet. Until it is
+   known, every rental asks for one; for an outbound-only worker nothing
+   listens on it except the image's own sshd.
+6. Whether Docker rentals work on the allowed hosts. Every Docker rental
+   tried on 2026-10-06 failed with "Internal provisioning error" (section
+   10), so the VM is the default.
+7. Whether an exited container or a halted VM stops billing.
+8. Volume prices, and which datacenter will have volumes.
 
-## 9. First live test: what the owner provides, and a ≤ $3 plan (as planned before the run)
+## 9. Running it (the owner, when RTX PRO 6000 or RTX 5090 stock exists)
 
-**Provide:**
+Every command checks the allow-list, the $8 floor and the price cap, and
+puts a wall-clock backstop and an `fv-deadline` tag on the rental.
 
-- **A CloudRift account with a user API key**, readable as
-  `CLOUDRIFT_API_KEY` or in `/root/.config/fv/cloudrift_api_key` (mode
-  600). A team key works too.
-- **Funding of at least $10.** The scripts refuse to rent below $8, and
-  volumes are deleted at zero.
-- Optionally, CloudRift support's word on RTX PRO 6000 availability
-  ("upon request").
+1. **Read-only ($0).** `cloudrift.sh balance`, then `cloudrift.sh catalog`,
+   which lists only the allowed types with free nodes.
+2. **Serve smoke over HTTPS (fake engine, about $0.10-0.70).**
 
-**Plan (worst case about $2):**
+   ```bash
+   CLOUDRIFT_CAP_S=1800 scripts/serve/cloudrift-worker.sh smoke \
+     ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:<h3-turbo digest>
+   ```
 
-1. **Read-only ($0).** Run `cloudrift.sh balance` and `cloudrift.sh catalog`
-   with the key, then confirm items 4, 5 and 7 through `auth/me` and
-   `instances/list`.
-2. **gpucheck smoke (about $0.20-0.70).**
-   `CLOUDRIFT_GPUS="RTX 4090,RTX 5090,RTX PRO 6000" CLOUDRIFT_MAX_DPH=1.5 CLOUDRIFT_CAP_S=1500 cloudrift.sh smoke ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:<digest>`.
-   At most 25 minutes at $0.39-1.39/hr. It records the rent-to-ssh time
-   (boot plus a 1.6 GB pull), driver version and kernel results, and
-   settles items 1, 2 and 6.
-3. **Serve smoke (about $0.20-0.50).**
-   `CLOUDRIFT_CAP_S=1200 cloudrift-worker.sh smoke ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:<digest>`
-   with the fake engine. It records rent-to-Active, Active-to-`/healthz`
-   (the public port) and one job, and checks the CMD semantics (item 1).
-4. **Termination check ($0).** Run `cloudrift.sh status` (expect nothing
-   live), `instances/list ById` (expect `Inactive`), and confirm the
-   balance delta matches the summaries (item 3).
+   It rents a VM, boots it with Caddy for `<ip>.sslip.io`, waits for
+   `/healthz` over verified HTTPS, checks `/health`, runs one fake job,
+   terminates, and writes `artifacts/cloudrift/serve/smoke-*.json`
+   (rent-to-Active, Active-to-healthz, cost).
+3. **Outbound-only worker (the production shape).**
 
-Every step has a backstop of 25 minutes or less. Step 3 runs only if step 2
-passed. No weights are downloaded.
+   ```bash
+   FV_DISPATCH_DO_URL=https://<fv-edge worker> FV_DISPATCH_FAMILIES=<family> \
+   FV_INTERNAL_TOKEN_FILE=<file, mode 600> CLOUDRIFT_CAP_S=3600 \
+     scripts/serve/cloudrift-worker.sh up <family> ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:<digest>
+   ```
+
+   The worker should appear in the family Durable Object; submit a job
+   through the edge. `cloudrift-worker.sh down <id>` ends it.
+4. **Termination check ($0).** `cloudrift.sh status` (expect nothing live)
+   and a balance delta that matches the summaries.
+
+No weights are downloaded until a CloudRift volume exists (section 3).
 
 ## 10. Live test, 2026-10-06
 
@@ -455,35 +473,25 @@ With the owner's key and $20 on the account (balance `2000`, i.e. cents).
 
 **Reads (all worked).** `auth/me`, `account/info`,
 `account/transactions/list` (API key, although the spec says JWT),
-`instance-types/list` (keyed and public: only V100 free), `recipes/list`,
-`instances/list` and `volumes/list`.
+`instance-types/list` (keyed and public: RTX PRO 6000 and RTX 5090 at 0
+free nodes in every variant), `recipes/list`, `instances/list` and
+`volumes/list`.
 
-**Docker rentals (all failed, $0).** Two runs of
-`cloudrift-worker.sh smoke` (serve image `h3-turbo` by digest,
-`v100-6-52-400-generic.1` at $0.25/hr) and five minimal rents (`nginx:alpine`
-with and without ports, with and without a public IP, both datacenters, V100
-SXM2 and SXM3) all went `Initializing` -> `Failed` in 6-28 s with
-`failure.cause: PlatformError`, "Internal provisioning error. Please retry;
-our team has been notified." Each was on a different host. Usage was 0 s on
-every one. The script's terminate-on-exit dismissed each to `Inactive`, and
-the balance stayed at `2000`.
+**Rentals (all failed, $0).** Before the allow-list existed, the only free
+stock was V100, a type the scripts now **refuse**. Seven Docker rentals were
+tried there: two `cloudrift-worker.sh smoke` runs, and five minimal
+`nginx:alpine` rents with and without ports, with and without a public IP,
+in both datacenters. All seven went `Initializing` -> `Failed` in 6-28 s
+with `failure.cause: PlatformError`, "Internal provisioning error. Please
+retry; our team has been notified." Each was on a different host. Usage was
+0 s on every one. The script's terminate-on-exit dismissed each to
+`Inactive`, and the balance stayed at `2000`. Those hosts also reported
+`nvidia_kernel_module_support: ProprietaryOnly`, which is why the VM recipe
+is chosen per host.
 
 **Volumes (blocked).** See section 3: no Ceph cluster in any datacenter.
 
-**VM run: not done.** The session's permission system refused the rental of
-a VM carrying our SSH key, so the VM path (section 6) is tested against the
-mock only. To run it, with the stock as it was (V100, fake engine only):
+**No VM was rented.** The VM, HTTPS and outbound paths are tested against
+the mock only (section 6); the owner runs section 9 when stock exists.
 
-```bash
-CLOUDRIFT_GPUS="V100 SXM2" CLOUDRIFT_MAX_DPH=0.5 CLOUDRIFT_CAP_S=1800 \
-  scripts/serve/cloudrift-worker.sh smoke ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:<h3-turbo digest>
-```
-
-It picks the proprietary recipe from the host's `ProprietaryOnly`, boots
-the VM, reads the quick-tunnel URL over SSH, checks `/health` and
-`/healthz`, runs one fake job and terminates. It writes
-`artifacts/cloudrift/serve/smoke-*.json` and the ledger. The backstop is
-1800 s; the worst case is about $0.13.
-
-**Spend this round: $0.00.** Every rental failed before it started.
-
+**Spend: $0.00.**

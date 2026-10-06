@@ -11,6 +11,11 @@ import { fetchWithTimeout, HttpError, scrub } from "./util";
 
 /** v0.62.0 (2026-09-09): instances/rent accepts the v062 protocol only; list and terminate accept it too. */
 export const CLOUDRIFT_API_VERSION = "2026-09-08";
+/** Owner rule (2026-10-06): on CloudRift only RTX PRO 6000 and RTX 5090, i.e. the
+ * instance types rtxpro6000-* and rtx59-* (scripts/gpu/cloudrift-lib.sh has the same list). */
+export const CLOUDRIFT_ALLOWED_BRANDS = ["RTX PRO 6000", "RTX 5090"];
+const ALLOWED_TYPE_RE = /^(rtxpro6000|rtx59)-/;
+export const cloudriftTypeAllowed = (instanceType: string | null | undefined) => !!instanceType && ALLOWED_TYPE_RE.test(instanceType);
 /** Every rental fv-control or the repo's scripts make carries this tag (CLAUDE.md: only touch what you created). */
 export const CLOUDRIFT_OWNER_TAG = "fv-owner:fastvideo-rs";
 
@@ -122,13 +127,15 @@ export const cloudrift = {
       throw e;
     }
   },
-  /** 1-GPU on-demand $/hr of an instance type (catalog, public) and its free nodes. */
+  /** 1-GPU on-demand $/hr of an allowed instance type (catalog, public) and its free nodes. */
   async price(env: Env, brandOrVariant: string): Promise<{ variant: string; usd_per_hr: number; free_nodes: number; datacenters: string[] }[]> {
+    if (!CLOUDRIFT_ALLOWED_BRANDS.includes(brandOrVariant) && !cloudriftTypeAllowed(brandOrVariant))
+      throw new HttpError(400, `CloudRift GPU '${brandOrVariant}' is not allowed: only ${CLOUDRIFT_ALLOWED_BRANDS.join(", ")} (instance types rtxpro6000-*, rtx59-*)`);
     const d = await call(env, "instance-types/list", { selector: { ByServiceAndLocation: { services: ["docker"] } } }, { public: true });
     const out: { variant: string; usd_per_hr: number; free_nodes: number; datacenters: string[] }[] = [];
     for (const t of d?.instance_types || [])
       for (const v of t.variants || []) {
-        if ((v.gpu_count ?? 0) !== 1) continue;
+        if ((v.gpu_count ?? 0) !== 1 || !cloudriftTypeAllowed(v.name)) continue;
         if (t.brand_short !== brandOrVariant && v.name !== brandOrVariant && t.name !== brandOrVariant) continue;
         out.push({
           variant: v.name,

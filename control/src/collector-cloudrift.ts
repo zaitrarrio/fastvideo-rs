@@ -4,11 +4,11 @@
 // rentals (tag fv-owner:fastvideo-rs): the fv-deadline:<unix> tag every
 // script sets, and the CloudRift balance floor.
 import type { AlertIn, Policies } from "./alerts";
-import { cloudrift, cloudriftEnabled, type CloudriftInstance } from "./cloudrift";
+import { cloudrift, cloudriftEnabled, cloudriftTypeAllowed, type CloudriftInstance } from "./cloudrift";
 import { defaults, type Env } from "./env";
 import { audit, putSetting, utcDay } from "./util";
 
-export const CLOUDRIFT_ALERT_KINDS = ["cloudrift_deadline", "cloudrift_balance_floor", "cloudrift_balance_margin", "cloudrift_failed"];
+export const CLOUDRIFT_ALERT_KINDS = ["cloudrift_deadline", "cloudrift_balance_floor", "cloudrift_balance_margin", "cloudrift_failed", "cloudrift_type"];
 
 /** The owner a rental is attributed to: cloudrift:<fv-kind> for ours, external:cloudrift otherwise. */
 export function cloudriftOwner(i: CloudriftInstance): string {
@@ -30,6 +30,10 @@ export function cloudriftDecisions(insts: CloudriftInstance[], balance: number, 
     if (i.deadlineMs !== null && t >= i.deadlineMs && (live(i) || i.status === "Failed")) {
       out.terminate.push({ id: i.id, why: "deadline" });
       out.alerts.push({ key: `cloudrift_deadline:${i.id}`, kind: "cloudrift_deadline", severity: "critical", target: i.id, message: `CloudRift ${i.name} passed its deadline (${new Date(i.deadlineMs).toISOString()}): terminating`, action: "terminate" });
+    } else if (live(i) && i.instanceType && !cloudriftTypeAllowed(i.instanceType)) {
+      // Owner rule: only rtxpro6000-* and rtx59-*. The scripts refuse the rest; this catches a rental made elsewhere with our tag.
+      out.terminate.push({ id: i.id, why: "type not allowed" });
+      out.alerts.push({ key: `cloudrift_type:${i.id}`, kind: "cloudrift_type", severity: "critical", target: i.id, message: `CloudRift ${i.name} runs on ${i.instanceType}, outside the allow-list (RTX PRO 6000, RTX 5090): terminating`, action: "terminate" });
     } else if (i.status === "Failed") {
       // A failed rental holds no resources but stays listed until dismissed (terminate).
       out.terminate.push({ id: i.id, why: "failed" });

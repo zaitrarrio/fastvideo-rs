@@ -199,7 +199,7 @@ await step("CloudRift: rentals collected, deadline backstop, balance, terminate 
   const cr = mock.cloudrift;
   assert.equal(cr.instances.find((i) => i.id === "cr-ours-1").status, "Inactive", "past its fv-deadline tag: terminated");
   assert.equal(cr.instances.find((i) => i.id === "cr-ours-2").status, "Active");
-  assert.equal(cr.instances.find((i) => i.id === "cr-foreign").status, "Active", "a foreign rental is never touched");
+  assert.equal(cr.instances.find((i) => i.id === "cr-foreign").status, "Active", "a foreign rental is never touched (even on a type we refuse)");
   assert.ok(cr.calls.filter((c) => c.path !== "instance-types/list").every((c) => c.key && !c.bearer && c.version === "2026-09-08"));
   const pods = (await call("/api/pods", { headers: T() })).j.pods;
   const by = Object.fromEntries(pods.map((p) => [p.pod_id, p]));
@@ -217,6 +217,8 @@ await step("CloudRift: rentals collected, deadline backstop, balance, terminate 
   assert.deepEqual(prov.map((p) => [p.id, p.enabled]), [["runpod", true], ["cloudrift", true]]);
   const price = (await call("/api/providers/cloudrift/price?gpu=RTX%20PRO%206000", { headers: T() })).j;
   assert.equal(price.offers[0].usd_per_hr, 1.3936);
+  // Owner rule: only RTX PRO 6000 and RTX 5090 on CloudRift.
+  assert.equal((await call("/api/providers/cloudrift/price?gpu=V100%20SXM2", { headers: T() })).status, 400);
   assert.equal((await call("/api/providers/cloudrift/instances/cr-foreign/terminate", { method: "POST", body: {}, headers: T() })).status, 403);
   const r = await call("/api/providers/cloudrift/instances/cr-ours-2/terminate", { method: "POST", body: {}, headers: T() });
   assert.equal(r.status, 200, JSON.stringify(r.j));

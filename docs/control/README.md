@@ -451,7 +451,9 @@ The collector runs every minute (`collector.ts`):
   balance is in the overview's `cloudrift` block, separate from Runpod's.
   CloudRift answers money in cents (the balance and `cost_per_hour`, seen
   live 2026-10-06); the client converts to dollars (`CLOUDRIFT_COST_UNIT`
-  defaults to `cents`).
+  defaults to `cents`). Only RTX PRO 6000 and RTX 5090 (`rtxpro6000-*`,
+  `rtx59-*`) are allowed: the price route refuses other GPUs (400), and the
+  cron terminates our live rental on any other type (`cloudrift_type`).
 
 ## 8. Alerts and policies
 

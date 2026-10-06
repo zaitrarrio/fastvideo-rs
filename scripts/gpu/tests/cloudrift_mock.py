@@ -38,7 +38,9 @@ STATE = {
     "jobs": {},
     "catalog": [
         {"name": "rtxpro6000-t", "brand_short": "RTX PRO 6000", "price": 139.36, "free": {"us-t-1": 1}, "driver": "OpenAndProprietary"},
-        {"name": "rtx59-t", "brand_short": "RTX 5090", "price": 65.0, "free": {}, "driver": "OpenAndProprietary"},
+        {"name": "rtx59-t", "brand_short": "RTX 5090", "price": 65.0, "free": {"eu-t-3": 1}, "driver": "OpenAndProprietary"},
+        # Never allowed (owner rule: rtxpro6000-* and rtx59-* only); they have
+        # stock here so the tests show they are refused, not merely sold out.
         {"name": "rtx49-t", "brand_short": "RTX 4090", "price": 39.0, "free": {"eu-t-1": 2}, "driver": "OpenAndProprietary"},
         {"name": "v100-t", "brand_short": "V100 SXM2", "price": 25.0, "free": {"us-t-2": 3}, "driver": "ProprietaryOnly"},
     ],
