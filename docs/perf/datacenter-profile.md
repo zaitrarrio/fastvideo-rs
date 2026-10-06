@@ -958,6 +958,10 @@ deleted. The price was checked before every create. Ledger:
 
 ## Reproduce
 
+As run. The US volume `s2k01690bi` was deleted 2026-10 (EU only,
+docs/ops/runpod-volumes.md): `pod.sh` now refuses it; a rerun needs the EU
+volume `jg48s6o1w0` (and stock in EUR-IS-1) or a rebuilt US volume.
+
 ```bash
 S=<scratch>; export FV_E2E_STATE=$S/b200.json RUNPOD_GPU_TYPES="NVIDIA B200" RUNPOD_GPU_MAX_DPH=6.8 \
   FV_POD_CAP_S=1500 RUNPOD_VOLUME_ID=s2k01690bi FV_E2E_NAME=fv-dcprof-b200- FV_MIN_BALANCE=15 \

@@ -3,20 +3,10 @@
 // the script (docs/serve/e2e/cluster.md).
 import { validate } from "../schemas";
 import { HttpError } from "../util";
+import { regionProblem, type RegionId } from "./regions";
+export * from "./regions";
 
-export type RegionId = "eu" | "us";
 export type CpuFlavor = "cpu3c" | "cpu3g" | "cpu3m" | "cpu5c" | "cpu5g" | "cpu5m";
-export interface RegionDef {
-  volume: string;
-  dc: string;
-  gpus: string[];
-}
-/** CLAUDE.md: the two network volumes (weights live on both). */
-export const REGIONS: Record<RegionId, RegionDef> = {
-  eu: { volume: "jg48s6o1w0", dc: "EUR-IS-1", gpus: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] },
-  us: { volume: "s2k01690bi", dc: "US-CA-2", gpus: ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H200"] },
-};
-
 export interface ModelRef {
   id: string;
   family: string;
@@ -131,7 +121,7 @@ export function defaultSpec(name: string, template: "standard" | "tiny-cpu" = "s
   const base: ClusterSpec = {
     name,
     image: { channel: "stable" },
-    regions: ["eu", "us"],
+    regions: ["eu"],
     gateway: { enabled: true, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 20, base: "pods", github_token: true, auth: "keys" },
     pools: structuredClone(STANDARD_POOLS),
     cap_s: 6000,
@@ -178,7 +168,13 @@ export function normalizeSpec(input: any): ClusterSpec {
   if (img.channel && !/^[a-z][a-z0-9-]{0,30}$/.test(img.channel)) throw new HttpError(400, "image.channel: a lower-case word");
   if (img.sha && !/^[0-9a-f]{7,40}$/.test(img.sha)) throw new HttpError(400, "image.sha: 7-40 hex characters");
   if (img.ref && !/^[a-z0-9.\-]+(:[0-9]+)?\/[a-z0-9._\-/]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?$/.test(img.ref)) throw new HttpError(400, "image.ref: an image reference");
-  for (const r of s.regions) if (!REGIONS[r]) throw new HttpError(400, `regions: unknown region ${r} (eu, us)`);
+  // An unavailable region (us: its volume is gone) is rejected, not dropped:
+  // dropping would silently change where a saved cluster places workers (and
+  // rewrite the stored spec on the next save); a 400 makes the owner choose.
+  for (const r of s.regions) {
+    const why = regionProblem(r);
+    if (why) throw new HttpError(400, `regions: ${why}`);
+  }
   const ids = new Set<string>();
   s.pools = s.pools.map((p: any, i: number) => {
     const std = STANDARD_POOLS.find((x) => x.id === p?.id);
@@ -192,7 +188,10 @@ export function normalizeSpec(input: any): ClusterSpec {
     q.compute = q.compute === "CPU" ? "CPU" : "GPU";
     if (!q.config && !q.config_toml) throw new HttpError(400, `pools[${i}]: config or config_toml`);
     if (q.config_toml && q.config_toml.length > 32768) throw new HttpError(400, `pools[${i}].config_toml: too long`);
-    for (const r of q.regions || []) if (!REGIONS[r]) throw new HttpError(400, `pools[${i}].regions: unknown ${r}`);
+    for (const r of q.regions || []) {
+      const why = regionProblem(r);
+      if (why) throw new HttpError(400, `pools[${i}].regions: ${why}`);
+    }
     if (!(q.models?.length || q.fake_models?.length)) throw new HttpError(400, `pools[${i}]: models or fake_models (the gateway's static caps)`);
     return q;
   });

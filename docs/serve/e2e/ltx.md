@@ -169,7 +169,9 @@ Everything for it is in the repo:
   companion (the `ltx-pro` recipe with the IC-LoRA at stage 1), fal app
   `fal-ai/ltx-2.3-quality`; an 80 GB card suffices (64 GiB live, 70 GiB peak
   in the oracle run at 1536x896x121);
-- pod: `RUNPOD_VOLUME_ID=s2k01690bi RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3"
+- pod (as run; the US volume `s2k01690bi` was deleted 2026-10, so a rerun
+  uses the EU volume `jg48s6o1w0`, the `ltx-pod.sh` default):
+  `RUNPOD_VOLUME_ID=s2k01690bi RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3"
   RUNPOD_GPU_MAX_DPH=3.6 FV_SERVE_TOML=configs/serve/runpod-ltx-ref2v.toml
   bash scripts/serve/e2e/ltx-pod.sh up ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-<sha>`
   (US-CA-2 had no RTX PRO 6000 stock that day);

@@ -27,8 +27,10 @@
 # Registry: the gateway pod and the pools' endpoints are recorded in the D1
 # deployments table (scripts/serve/lib/registry.sh; best effort).
 #
-# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; RUNPOD_VOLUME_ID (default s2k01690bi);
-# RUNPOD_GPU_TYPES (default H100/H200 list); FV_GATEWAY_CPU_FLAVOR (default cpu3c).
+# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; RUNPOD_VOLUME_ID (default jg48s6o1w0, EU; the
+# deleted US volume is refused, scripts/gpu/volumes.sh);
+# RUNPOD_GPU_TYPES (default RTX PRO 6000, then the H100/H200 list: the EU
+# volume pins the endpoints to EUR-IS-1); FV_GATEWAY_CPU_FLAVOR (default cpu3c).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -37,6 +39,9 @@ source "$HERE/../gpu/lib.sh"
 source "$HERE/variants.sh"
 # shellcheck source-path=SCRIPTDIR source=lib/registry.sh
 source "$HERE/lib/registry.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
+source "$HERE/../gpu/volumes.sh"
+fv_check_volume "${RUNPOD_VOLUME_ID:-}"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
@@ -44,7 +49,7 @@ GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 CAP_S="${FV_GATEWAY_CAP_S:-3600}"
 CPU_FLAVOR="${FV_GATEWAY_CPU_FLAVOR:-cpu3c}"
-export RUNPOD_GPU_TYPES="${RUNPOD_GPU_TYPES:-NVIDIA H100 80GB HBM3,NVIDIA H100 NVL,NVIDIA H200}"
+export RUNPOD_GPU_TYPES="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS,NVIDIA H100 80GB HBM3,NVIDIA H100 NVL,NVIDIA H200}"
 OUT_DIR="$FV_ROOT/artifacts/serve/e2e/gateway"
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
 
@@ -292,5 +297,5 @@ cmd_validate() {
 case "${1:-}" in
   validate) shift; cmd_validate "$@" ;;
   down) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; cmd_down ;;
-  *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

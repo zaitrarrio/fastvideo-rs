@@ -265,7 +265,8 @@ so both sides ran on H100. Warm; medians over the five prompts of
 To rerun: the upstream step `oracle:wan22-ti2v` (plus `cells:fv-wan22-5b,fv-wan22-5b-i2v`),
 then `FV_FAMILY=wan FV_PROMPTS=5 FV_CELLS="wan5b-oracle wan5b-oracle-exact wan5b wan5b-taehv wan5b-i2v"
 FV_EXTRA_ENV="FV_ORACLE_URL=https://<upstream pod>-8000.proxy.runpod.net/upstream/<tag>"`
-on `RUNPOD_VOLUME_NAME=fv-weights-b200-us`. The oracle cells run first, so
+on the EU volume (`fv-weights-h3-ltx-hy`, the default; the run above was on
+`fv-weights-b200-us`, deleted 2026-10). The oracle cells run first, so
 the upstream pod can be deleted once the dump is fetched.
 
 Not ported here: the Wan 2.1 encoder (`WanEncoder::load_wan_2_1`) still
@@ -464,13 +465,14 @@ see "Not measured" below. SF-Wan is measured in the next section.
   (`wan5b-{f32act,bf16act,mxfp8}`, `wan14b-{f32act,bf16act,mxfp8}`; image
   `sha-d18eae2` carries them). Their weights are on `fv-weights-b200-us`
   (US-CA-2) only, and that datacenter had no RTX PRO 6000 for the whole
-  hour the driver retried (2026-09-27 04:53–05:53 UTC). To run:
-  `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan FV_PROMPTS=5
+  hour the driver retried (2026-09-27 04:53–05:53 UTC). The US volume was
+  deleted 2026-10; the trees are on EU too. To run (EU, the default volume):
+  `FV_FAMILY=wan FV_PROMPTS=5
   FV_LPIPS=1 FV_CELLS="wan5b-bf16act ..."
   scripts/gpu/runpod-http.sh run <sha>`.
 - SF-Wan on RTX PRO 6000: none was in stock in US-CA-2, so the numbers
-  below are from H100. To rerun: `RUNPOD_VOLUME_NAME=fv-weights-b200-us
-  ORACLE_TARGETS=sfwan13 FV_ORACLE_FAMILY=sfwan UP_AFTER=cells:fv-sfwan13
+  below are from H100. To rerun (EU volume, the default; the US volume was
+  deleted 2026-10): `ORACLE_TARGETS=sfwan13 FV_ORACLE_FAMILY=sfwan UP_AFTER=cells:fv-sfwan13
   UP_IMAGE_TAG=latest FASTVIDEO_DUMP_OPS=0,1,15,29 FV_PROMPTS=5 FV_LPIPS=1
   scripts/gpu/oracle.sh <sha>`. This runs the oracle and the upstream bench
   on one pod, and the oracle and SF-Wan cells on the other.
