@@ -22,10 +22,13 @@
 #                                         raise the version (Cargo.toml +
 #                                         Cargo.lock) by the convention below
 #   tools-release.sh notes <rev>          release notes since the previous release
-#   tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run]
+#   tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run|--no-upload]
 #                                         build on the build pod, test, publish
 #                                         (coordinator only; needs a token with
-#                                         contents:write, see below)
+#                                         contents:write, see below). --dry-run
+#                                         stops after the checks, --no-upload
+#                                         after the build and the tests (the
+#                                         release is staged in $FV_TOOLS_OUT/release)
 #   tools-release.sh prune [--keep N] [--dry-run]
 #                                         delete tools releases beyond the newest
 #                                         N stable ones (default 10) and stale
@@ -342,17 +345,18 @@ cmd_notes() {
 # publish -> verify the download -> prune.
 SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-gateway serve-fake gpucheck-tests"
 cmd_publish() {
-  local rev="" pre=0 dispatch=0 dry=0
+  local rev="" pre=0 dispatch=0 dry=0 upload=1
   while (( $# )); do
     case "$1" in
       --prerelease) pre=1; shift ;;
+      --no-upload) upload=0; shift ;;
       --dispatch) dispatch=1; shift ;;
       --dry-run) dry=1; shift ;;
       -*) die "publish: unknown flag $1" ;;
       *) rev="$1"; shift ;;
     esac
   done
-  [[ -n "$rev" ]] || die "usage: tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run]"
+  [[ -n "$rev" ]] || die "usage: tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run|--no-upload]"
   local sha h v tag latest t0=$SECONDS
   git -C "$ROOT" fetch -q origin || true
   sha="$(rev_sha "$rev")"; h="$(input_hash "$sha")"; v="$(tools_version "$sha")"
@@ -425,21 +429,27 @@ cmd_publish() {
     echo "manifest-sha256: $(sha256 "$rm_json")"
   )"
 
+  printf '%s\n' "$body" >"$out/release/body.md"
+  if (( !upload )); then
+    log "staged $tag in $out/release (built and tested; --no-upload: not published)"
+    return 0
+  fi
+
   # 4. draft (no tag yet) -> assets -> publish; a failure deletes the draft
   local rel id
-  rel="$(api POST "/repos/$REPO/releases" --data-binary @<(jq -n --arg t "$tag" --arg c "$sha" --arg b "$body" \
+  rel="$(api POST "/repos/$REPO/releases" -H 'Content-Type: application/json' --data-binary @<(jq -n --arg t "$tag" --arg c "$sha" --arg b "$body" \
       --argjson pre "$([[ $pre == 1 ]] && echo true || echo false)" \
       '{tag_name: $t, target_commitish: $c, name: $t, body: $b, draft: true, prerelease: $pre}'))" \
     || die "could not create the draft release (needs contents:write)"
   id="$(jq -r .id <<<"$rel")"
   CLEANUP+=("[[ -f '$out/release/.published' ]] || { api DELETE /repos/$REPO/releases/$id >/dev/null && log 'deleted the draft $tag'; }")
-  local f; for f in "$out"/release/*; do
+  local f; for f in "$out"/release/*.tar.gz "$out"/release/manifest.json; do
     log "upload $(basename "$f") ($(du -h "$f" | cut -f1))"
     api POST "$UPLOADS/repos/$REPO/releases/$id/assets?name=$(basename "$f")" \
       -H "Content-Type: $([[ $f == *.json ]] && echo application/json || echo application/gzip)" \
       --data-binary @"$f" >/dev/null || die "upload of $(basename "$f") failed"
   done
-  api PATCH "/repos/$REPO/releases/$id" --data-binary '{"draft": false, "make_latest": "false"}' >/dev/null \
+  api PATCH "/repos/$REPO/releases/$id" -H 'Content-Type: application/json' --data-binary '{"draft": false, "make_latest": "false"}' >/dev/null \
     || die "could not publish the release"
   touch "$out/release/.published"
   load_releases
@@ -528,7 +538,7 @@ cmd_prune() {
 dispatch_images() {
   local wf
   for wf in ${FV_TOOLS_DISPATCH:-serve-image.yml gpucheck-runtime-image.yml vast-pytorch-image.yml}; do
-    if api POST "/repos/$REPO/actions/workflows/$wf/dispatches" --data-binary '{"ref": "main"}' >/dev/null; then
+    if api POST "/repos/$REPO/actions/workflows/$wf/dispatches" -H 'Content-Type: application/json' --data-binary '{"ref": "main"}' >/dev/null; then
       log "dispatched $wf on main"
     else
       log "WARNING: could not dispatch $wf (token needs actions:write); run it by hand"
