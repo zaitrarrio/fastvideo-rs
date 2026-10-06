@@ -18,7 +18,8 @@
 //
 // Its own NVRTC module (sm_89+), loaded only when FASTVIDEO_ATTN_SAGE asks.
 //
-//   attn_sage_colsum_bf16   per-(head, dim) column sums (K smoothing)
+//   attn_sage_colsum_bf16   per-(head, dim) column sum partials (K smoothing)
+//   attn_sage_colsum_reduce the partials added in block order
 //   attn_sage_quant_i8      BHSD bf16 rows -> int8 rows + scales
 //   attn_sage_vmax          per-(head, dim) |V| max (atomicMax on the bits)
 //   attn_sage_vquant        V bf16 -> e4m3, transposed + permuted
@@ -38,15 +39,32 @@ __device__ __forceinline__ float sg_bf16_to_f32(sg_u16 b) {
     return __uint_as_float(((unsigned int)b) << 16);
 }
 
+// Column sums in two passes, so they are the same bits in every run (no
+// float atomics; docs/perf/determinism.md): grid (ceil(rows / rpb), bh), 128
+// threads (one per dim); each block writes its partial to
+// part[(blockIdx.x * bh + head) * 128 + d], and attn_sage_colsum_reduce adds
+// the partials of each (head, dim) in block order into sum [bh, 128].
 extern "C" __global__ void attn_sage_colsum_bf16(
-    const sg_u16* __restrict__ x, float* __restrict__ sum, int rows, int rpb
+    const sg_u16* __restrict__ x, float* __restrict__ part, int rows, int rpb
 ) {
     const long bh = blockIdx.y;
     const int d = threadIdx.x;
     const int r0 = blockIdx.x * rpb, r1 = min(rows, r0 + rpb);
     float acc = 0.f;
     for (int r = r0; r < r1; r++) acc += sg_bf16_to_f32(x[(bh * rows + r) * SG_D + d]);
-    atomicAdd(sum + bh * SG_D + d, acc);
+    part[((long)blockIdx.x * gridDim.y + bh) * SG_D + d] = acc;
+}
+
+// sum[i] = sum over b in [0, nblk) of part[b * n + i], in that order; one
+// thread per (head, dim), n = bh * 128.
+extern "C" __global__ void attn_sage_colsum_reduce(
+    const float* __restrict__ part, float* __restrict__ sum, int nblk, int n
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float acc = 0.f;
+    for (int b = 0; b < nblk; b++) acc += part[(long)b * n + i];
+    sum[i] = acc;
 }
 
 __device__ __forceinline__ unsigned int sg_pack_i8(float x0, float x1, float x2, float x3) {

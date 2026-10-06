@@ -17,6 +17,11 @@
 //! restores the old per-process timing (not reproducible across processes;
 //! for diagnosis only), and `FASTVIDEO_FLASH_KERNEL=v2|cudnn` still fixes the
 //! kernel outright.
+//!
+//! SageAttention2 (`wan::attn_sage`) is decided before this rule, per recipe
+//! and shape (`wan/nn.rs`): when it is on (default for `ltx-pro` on sm_120),
+//! sequences of at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ` on both sides run it,
+//! and only the shorter ones (cross-attention) reach this rule.
 
 /// The kernel the rule picks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

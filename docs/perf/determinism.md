@@ -17,6 +17,7 @@ It did not hold at 1080p. LTX 1080p output differed between pod boots (33.6 to
 | **Conditioning cache miss vs hit** | `ltx2/pipeline.rs` text encode | A fresh encode handed the DiT the connectors' output as it came (bf16 storage with bf16 activations); a cache hit handed it host f32. The first job of a new prompt and the next job of the same prompt could differ (the two I2V jobs of a boot: a miss and a hit) | One representation in every case: f32 values uploaded as an f32 device tensor (`canonical_contexts`) |
 | **H3 `auto` text encoder after its release** | `h3/pipeline.rs`, `h3/text.rs` | `auto` starts resident at weight-only FP8 when the card is empty, and releases the encoder before a denoise that needs the memory (1080p). Later prompts then streamed at bf16, a different function: a prompt's conditioning depended on what the process had run before, and the cache key did not tell the two apart | Without a resident encoder, stream at the numbers the resolved choice stands for (`StreamedFp8Encoder`, the resident FP8 numbers bit for bit); FP8 cache entries are keyed apart |
 | **Float atomics in reductions** | `abs_diff_sum` (TeaCache distance), `ltx_abs_diff_sums` (FBCache distance), `attn_fp8_colsum_*` (FP8 attention's K smoothing) | Per-block partials added with `atomicAdd` in whatever order blocks finished. The cache distances decide skips at a threshold, so a last-bit change can flip a step | Per-block partials, then a second pass in block order (on the host for the two distances, `attn_fp8_colsum_reduce` on the device) |
+| **Float atomics in SageAttention2's K smoothing** | `attn_sage_colsum_bf16` (`wan/attn_sage.cu`; on by default for `ltx-pro` on sm_120) | The per-head column sums of K (subtracted before the INT8 quantization) were added with `atomicAdd` per block, so a last-bit change in the mean could move an INT8 code and the output | Per-block partials, then `attn_sage_colsum_reduce` adds them in block order, as for FP8 attention. `attn_sage_vmax` keeps `atomicMax` on the float bits, which is order-independent |
 | **cuDNN nondeterministic engines** | `wan/cudnn_sdpa.rs` plan build; `wan/conv.rs` transposed conv | The heuristic may rank an engine that declares `CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC` first; backward-data `ALGO_0` (transposed conv: the audio VAE and vocoder upsamplers) accumulates with atomics | SDPA configs with that note are skipped (heuristic order otherwise kept); `ALGO_0` becomes `ALGO_1` |
 
 Checked and found deterministic, no change:
@@ -61,6 +62,27 @@ faster at 23.6k (24 heads) and 1.2 % at 130k (LTX 4K 5 s), and the two tie on
 every cross-attention (keys <= a few thousand). The rule's cost against the
 faster kernel, per shape: see "Results" below (`sdpa_rule` group).
 
+### Where SageAttention2 sits
+
+The dense path in `wan/nn.rs` decides in this order, and every step is a
+pure function of the recipe, the device and the shape (no timing):
+
+1. **Sage** (`wan/attn_sage.rs`) when it is enabled for this request and
+   both the query and key lengths are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ`
+   (6 144). Enabled means: `FASTVIDEO_ATTN_SAGE=2` (any sm_89+), or unset
+   and the recipe opts in on sm_120 (today `ltx25-distill-dense`, the
+   `ltx-pro` two-stage route, on by default), never with
+   `FASTVIDEO_ATTN_SAGE=0`. Its kernel has one variant and fixed reductions.
+2. **The kernel seam** (`[kernels] dense_attention`, else
+   `FASTVIDEO_FLASH_KERNEL`) when it names a kernel.
+3. **`auto`**: Dc on sm_90 / sm_100; on sm_12x with bf16 out, the rule
+   table above; else fwd2 when its grid fills the GPU (a function of the SM
+   count), V1 otherwise.
+
+So under `ltx-pro` on sm_120, the long self-attention runs Sage and the
+cross-attention (text / audio keys, below 6 144) falls to the rule. The
+rule does not change Sage's default.
+
 Regenerating it (offline, e.g. for a new GPU or cuDNN):
 
 ```
@@ -78,6 +100,7 @@ rule stays a pure function of the shape.
 | Setting | Effect |
 |---|---|
 | `FASTVIDEO_FLASH_KERNEL=v1\|v2\|v3\|v3s\|cudnn\|dc` | fixes the dense kernel outright |
+| `FASTVIDEO_ATTN_SAGE=0\|2`, `FASTVIDEO_ATTN_SAGE_MIN_SEQ` | Sage off everywhere / on everywhere (sm_89+); its sequence threshold (default 6 144) |
 | `FASTVIDEO_SDPA_AUTO=timed` | the old per-process timing on sm_12x (not reproducible across processes) |
 | `FASTVIDEO_CONV3D=cudnn\|unfold\|cudnn-bf16`, `FASTVIDEO_CONV3D_TIMED=1` | 3-D conv backend; per-shape timing (not reproducible) |
 | `FASTVIDEO_LTX_VAE_CONV_ALGO=tune` | LTX VAE conv algorithms by timing (not reproducible) |
