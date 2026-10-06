@@ -1,0 +1,28 @@
+[14:28:32] [a2 +2s] set a2 budget 3300s cap 3840s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[14:28:32] [a2 +2s] ▶ wan5b-base (est 480s, hard stop 3298s): env -u FASTVIDEO_WAN_SOL_CACHE /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0 --flow-shift 5.0 --fps 24 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-base/frames
+[14:35:28] [a2 +418s] ok wan5b-base 416s exit=0
+[14:35:31] [a2 +421s] ▶ wan5b-easycache (est 330s, hard stop 2882s): env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0 --flow-shift 5.0 --fps 24 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames
+[14:40:27] [a2 +717s] ok wan5b-easycache 296s exit=0
+[14:40:28] [a2 +718s] ▶ wan14-720p-fullstack (est 900s, hard stop 2583s): env FASTVIDEO_WAN_SOL_ATTN=1 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan21-t2v-14b --preset wan_t2v_14b --unipc --steps 50 --guidance 5.0 --flow-shift 5.0 --height 720 --width 1280 --num-frames 81 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-fullstack/frames
+[14:52:05] [a2 +1415s] ok wan14-720p-fullstack 697s exit=0
+[14:52:07] [a2 +1417s] ▶ wan14-720p-base-s15 (est 900s, hard stop 1885s): env -u FASTVIDEO_WAN_SOL_CACHE /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan21-t2v-14b --preset wan_t2v_14b --unipc --steps 15 --guidance 5.0 --flow-shift 5.0 --height 720 --width 1280 --num-frames 81 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/frames
+[15:04:01] [a2 +2131s] ok wan14-720p-base-s15 714s exit=0
+[15:04:01] [a2 +2131s] ▶ wan5b-opt (est 330s, hard stop 1169s): env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0 --flow-shift 5.0 --fps 24 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-opt/frames
+[15:23:31] [a2 +3301s] FAIL wan5b-opt 1170s exit=124
+[fastvideo] unipc step 4/50 t=987 done in 63839ms
+[fastvideo] unipc step 5/50 t=982 done in 63898ms
+[fastvideo] unipc step 6/50 t=978 done in 63860ms
+[fastvideo] unipc step 7/50 t=973 done in 63871ms
+[fastvideo] unipc step 8/50 t=968 done in 63889ms
+[fastvideo] unipc step 9/50 t=963 done in 63879ms
+[fastvideo] unipc step 10/50 t=957 done in 63874ms
+[fastvideo] unipc step 11/50 t=952 done in 63872ms
+[fastvideo] unipc step 12/50 t=946 done in 63918ms
+[fastvideo] unipc step 13/50 t=940 done in 63911ms
+[fastvideo] unipc step 14/50 t=934 done in 63896ms
+[fastvideo] unipc step 15/50 t=927 done in 63848ms
+[fastvideo] unipc step 16/50 t=921 done in 63859ms
+[fastvideo] unipc step 17/50 t=913 done in 63832ms
+[fastvideo] unipc step 18/50 t=906 done in 63873ms
+[15:23:31] [a2 +3301s] set a2 done
+matrix_exit=0
