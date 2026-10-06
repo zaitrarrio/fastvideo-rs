@@ -6,7 +6,10 @@
 # API (https://api.cloudrift.ai/swagger-ui/, spec /api-docs/openapi.json,
 # rift-server 0.62.1 on 2026-10-06): every call is a POST of
 # {"version": "<date>", "data": {...}} to /api/v1/<path>; the answer is
-# {"version", "data"}. Auth: the X-API-Key header. Prices are in cents.
+# {"version", "data"}. Auth: the X-API-Key header. Money is in cents
+# everywhere, observed live on 2026-10-06: catalog prices,
+# resource_info.cost_per_hour and the account balance (account/info answered
+# 2000 for a $20 top-up although the spec says "Balance in USD").
 #
 # The key comes from CLOUDRIFT_API_KEY or the file CLOUDRIFT_API_KEY_FILE
 # (default /root/.config/fv/cloudrift_api_key). It only ever reaches curl as
@@ -75,7 +78,8 @@ cr_post() {
   rm -f "$out"
 }
 
-cr_balance() { cr_post account/info '{}' | jq -r '.balance // empty'; }
+# The balance in dollars. account/info answers cents (see the header).
+cr_balance() { cr_post account/info '{}' | jq -r 'if .balance == null then empty else (.balance / 100) end'; }
 
 # Refuses (exit 2) when the balance is unknown or below the floor.
 cr_check_balance() {
@@ -88,7 +92,9 @@ cr_check_balance() {
 }
 
 # The catalog (no key needed): one line per variant,
-# "<variant>\t<brand>\t<gpus>\t<vram GB>\t<$/hr>\t<available nodes>\t<datacenters>".
+# "<variant>\t<brand>\t<gpus>\t<vram GB>\t<$/hr>\t<available nodes>\t<datacenters>\t<driver>".
+# <driver> is the type's nvidia_kernel_module_support (e.g. ProprietaryOnly on
+# the V100 hosts; "-" when absent): it decides the VM recipe (cr_recipe_image).
 cr_catalog() {
   local svc="${1:-docker}" sel
   sel="$(jq -nc --arg s "$svc" '{selector: {ByServiceAndLocation: {services: [$s]}}}')"
@@ -96,24 +102,26 @@ cr_catalog() {
     .instance_types[] | . as $t | .variants[]
     | [.name, ($t.brand_short // "?"), (.gpu_count // 0), ((.vram // 0) / 1073741824 | floor),
        ((.cost_per_hour * 100 | round) / 10000), (.available_nodes // 0),
-       ([.available_nodes_per_dc // {} | to_entries[] | select(.value > 0) | .key] | join(","))]
+       ([.available_nodes_per_dc // {} | to_entries[] | select(.value > 0) | .key] | join(",")),
+       ($t.nvidia_kernel_module_support // "-")]
     | @tsv'
 }
 
-# cr_pick <comma list of brands, preferred first> <max $/hr> [gpu count]
-# -> "<variant> <$/hr> <datacenter>" of the first brand with free 1-GPU stock
-# under the cap (cheapest variant of that brand). Returns 1 when none.
+# cr_pick <comma list of brands, preferred first> <max $/hr> [gpu count] [service]
+# -> "<variant> <$/hr> <datacenter> <driver>" of the first brand with free
+# stock under the cap (cheapest variant of that brand; datacenter "-" when the
+# listing names none). Returns 1 when none. service: docker (default) or vm.
 cr_pick() {
-  local brands="$1" cap="$2" gpus="${3:-1}" cat b line
+  local brands="$1" cap="$2" gpus="${3:-1}" svc="${4:-docker}" cat b line
   local -a order
-  cat="$(cr_catalog docker)" || return 1
+  cat="$(cr_catalog "$svc")" || return 1
   IFS=',' read -r -a order <<<"$brands"
   for b in "${order[@]}"; do
     line="$(awk -F'\t' -v b="$b" -v cap="$cap" -v g="$gpus" \
-      '$2 == b && $3 == g && $6 > 0 && $5 + 0 <= cap + 0 { print $5 "\t" $1 "\t" $7 }' <<<"$cat" \
+      '$2 == b && $3 == g && $6 > 0 && $5 + 0 <= cap + 0 { print $5 "\t" $1 "\t" $7 "\t" $8 }' <<<"$cat" \
       | sort -n | head -1)"
     if [[ -n "$line" ]]; then
-      awk -F'\t' '{ split($3, dcs, ","); print $2, $1, dcs[1] }' <<<"$line"
+      awk -F'\t' '{ split($3, dcs, ","); print $2, $1, (dcs[1] == "" ? "-" : dcs[1]), ($4 == "" ? "-" : $4) }' <<<"$line"
       return 0
     fi
   done
@@ -185,6 +193,39 @@ cr_docker_payload() {
       name: $name,
       tags: $tags,
       config: {Docker: {image: $image, command: $cmd, env: ($env | to_entries | map([.key, .value])), ports: $ports}}
+    }'
+}
+
+# cr_recipe_image <driver> -> the VM image URL of CloudRift's NVIDIA Ubuntu
+# recipe for a host (recipes/list). ProprietaryOnly hosts (Pascal/Volta, e.g.
+# the V100 nodes) need the recipe tagged nvidia-driver-proprietary: the
+# open-driver images do not boot there (the recipe's own description). Others
+# get the newest Ubuntu tagged nvidia-driver without it. CLOUDRIFT_VM_IMAGE_URL
+# overrides.
+cr_recipe_image() {
+  local driver="$1"
+  if [[ -n "${CLOUDRIFT_VM_IMAGE_URL:-}" ]]; then printf '%s\n' "$CLOUDRIFT_VM_IMAGE_URL"; return 0; fi
+  cr_post recipes/list '{}' | jq -r --arg d "$driver" '
+    [.groups[]?.recipes[]? | select(.details.VirtualMachine.image_url != null)
+     | select((.tags // []) | index("nvidia-driver"))
+     | select(((.tags // []) | index("nvidia-driver-proprietary") != null) == ($d == "ProprietaryOnly"))
+     | select(.name | test("Ubuntu"))
+     | {u: .details.VirtualMachine.image_url, v: ((.name | capture("Ubuntu (?<v>[0-9]+\\.[0-9]+)").v // "0") | split(".") | map(tonumber)), n: .name}]
+    | sort_by(.v) | last | .u // empty' | grep . || { log "no NVIDIA VM recipe for driver support $driver"; return 1; }
+}
+
+# The rent payload of one VM.
+# cr_vm_payload <variant> <dc|""> <name> <image url> <cloud-init commands> <ssh public key|""> <tags json>
+# No ports are requested: VMs expose every port on their address (CloudRift
+# docs, "Port availability"), and our services bind to loopback behind a tunnel.
+cr_vm_payload() {
+  jq -nc --arg it "$1" --arg dc "$2" --arg name "$3" --arg img "$4" --arg ci "$5" --arg pk "$6" --argjson tags "$7" '{
+      selector: {ByInstanceTypeAndLocation: ({instance_type: $it} + (if $dc == "" then {} else {datacenters: [$dc]} end))},
+      with_public_ip: true,
+      name: $name,
+      tags: $tags,
+      config: {VirtualMachine: ({image_url: $img, cloudinit_commands: $ci}
+        + (if $pk == "" then {} else {ssh_key: {PublicKeys: [$pk]}} end))}
     }'
 }
 

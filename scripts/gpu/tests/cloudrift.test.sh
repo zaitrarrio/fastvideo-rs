@@ -25,6 +25,7 @@ unset CLOUDRIFT_API_KEY
 export FV_ENV_FILE=/dev/null CLOUDRIFT_API_BASE="$M" CLOUDRIFT_API_KEY_FILE="$T/no-key"
 export CLOUDRIFT_LEDGER="$T/ledger.tsv" CLOUDRIFT_SSH_KEY="$T/id_test" CR_POLL_S=0.2 CLOUDRIFT_CAP_S=600
 export CLOUDRIFT_SSH_BIN="$T/bin/ssh" CLOUDRIFT_RSYNC_BIN="$T/bin/rsync" CLOUDRIFT_OUT_DIR="$T/out"
+export CLOUDRIFT_KNOWN_HOSTS="$T/known_hosts" STUB_PUBLIC_URL="$M" CLOUDRIFT_TEST_ALLOW_HTTP_URL=1
 
 # A stand-in key pair (the stubs never read it).
 printf 'not a real key\n' >"$T/id_test"; printf 'ssh-ed25519 AAAATEST fv-cloudrift\n' >"$T/id_test.pub"
@@ -34,9 +35,14 @@ printf 'not a real key\n' >"$T/id_test"; printf 'ssh-ed25519 AAAATEST fv-cloudri
 mkdir -p "$T/bin"
 cat >"$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
-cmd="${*: -1}"
+# The worker's VM: /var/lib/fv/public-url is the mock's port (STUB_PUBLIC_URL).
+cmd="$*"
 case "$cmd" in
-  true) exit 0 ;;
+  *" true") exit 0 ;;
+  *"-L "*) exit 0 ;;
+  *public-url*) echo "${STUB_PUBLIC_URL:-}" ;;
+  *nvidia-smi.txt*) echo "NVIDIA-SMI 580.95 (stub)" ;;
+  *"/var/lib/fv/booted"*) exit 0 ;;
   *"test -f"*) [[ -z "${STUB_NOT_DONE:-}" ]] ;;
   *stat*) echo 100 ;;
   *) exit 0 ;;
@@ -60,12 +66,15 @@ run() { OUT="$("$@" 2>&1)"; RC=$?; ALL_OUT+="$OUT"$'\n'; }
 
 # ---- no key: plan and catalog work, nothing else does
 run bash "$GPU/cloudrift.sh" plan
-check "gpucheck plan: no key, valid payload" bash -c '[[ $0 == 0 ]] && jq -e ".config.Docker.command[0] == \"bash\"" >/dev/null <<<"$(sed -n "/^{/,/^}/p" <<<"$1")"' "$RC" "$OUT"
-run bash "$SERVE/cloudrift-worker.sh" plan
-check "worker plan: args mode, entrypoint kept" bash -c '[[ $0 == 0 ]] && jq -e ".config.Docker.command == [\"--config\", \"/etc/fv/runpod-fake.toml\"]" >/dev/null <<<"$(sed -n "/^{/,/^}/p" <<<"$1")"' "$RC" "$OUT"
+check "gpucheck plan: no key, valid payload" bash -c '[[ $0 == 0 ]] && jq -e ".config.Docker.command[0] == \"bash\"" >/dev/null <<<"$(sed -n "/^{\$/,/^}\$/p" <<<"$1")"' "$RC" "$OUT"
+run env CLOUDRIFT_SERVICE=docker bash "$SERVE/cloudrift-worker.sh" plan
+check "worker plan (docker): args mode, entrypoint kept" bash -c '[[ $0 == 0 ]] && jq -e ".config.Docker.command == [\"--config\", \"/etc/fv/runpod-fake.toml\"]" >/dev/null <<<"$(sed -n "/^{\$/,/^}\$/p" <<<"$1")"' "$RC" "$OUT"
 printf 'FV_CF_API_TOKEN=cf-secret-value-1\nFV_D1_DATABASE_ID=d1-id\nFV_CF_ACCOUNT_ID=acct\n' >"$T/secrets.env"
-run env FV_CLOUDRIFT_SECRETS_FILE="$T/secrets.env" FV_PLAN_ROLE=worker CLOUDRIFT_CMD_MODE=exec bash "$SERVE/cloudrift-worker.sh" plan
-check "worker plan (exec, worker): secrets masked, pool set" bash -c '[[ $0 == 0 && $1 != *cf-secret-value-1* && $1 == *FV_GATEWAY_POOL* && $1 == *"<secret>"* && $1 == *api.ipify.org* ]]' "$RC" "$OUT"
+run env FV_CLOUDRIFT_SECRETS_FILE="$T/secrets.env" FV_PLAN_ROLE=worker CLOUDRIFT_SERVICE=docker CLOUDRIFT_CMD_MODE=exec bash "$SERVE/cloudrift-worker.sh" plan
+check "worker plan (docker exec, worker): secrets masked, pool set, IP lookup without curl" bash -c '[[ $0 == 0 && $1 != *cf-secret-value-1* && $1 == *FV_GATEWAY_POOL* && $1 == *"<secret>"* && $1 == *api.ipify.org* && $1 == */dev/tcp/api.ipify.org/80* ]]' "$RC" "$OUT"
+run env FV_CLOUDRIFT_SECRETS_FILE="$T/secrets.env" FV_PLAN_ROLE=worker CLOUDRIFT_TUNNEL_HOSTNAME=w1.example.test FV_PLAN_SHOW_BOOT=1 bash "$SERVE/cloudrift-worker.sh" plan
+check "worker plan (vm, default): VirtualMachine, loopback publish, token tunnel, nothing secret shown" bash -c '[[ $0 == 0 && $1 == *VirtualMachine* && $1 == *"-p 127.0.0.1:8000:8000"* && $1 == *"FVB_TUNNEL=token"* && $1 == *"tunnel token written, masked"* && $1 != *cf-secret-value-1* && $1 != *"\"Docker\""* ]]' "$RC" "$OUT"
+check "worker plan (vm): the decoded boot is valid bash" bash -c 'b="$(sed -n "/^# \/root\/fv-boot.sh/,\$p" <<<"$0" | sed 1d)"; [[ -n $b ]] && bash -n <<<"$b"' "$OUT"
 printf 'AWS_SECRET=x\n' >"$T/bad.env"
 run env FV_CLOUDRIFT_SECRETS_FILE="$T/bad.env" bash "$SERVE/cloudrift-worker.sh" plan
 check "worker plan: an unknown name in the secrets file is refused" bash -c '[[ $0 != 0 && $1 == *"not a secret this script passes"* ]]' "$RC" "$OUT"
@@ -78,13 +87,13 @@ check "balance without a key: refused" bash -c '[[ $0 != 0 && $1 == *"no CloudRi
 ( umask 077; printf '%s\n' "$KEY" >"$T/key" )
 export CLOUDRIFT_API_KEY_FILE="$T/key"
 run bash "$GPU/cloudrift.sh" balance
-check "balance with the key file" bash -c '[[ $0 == 0 && $1 == "50"* ]]' "$RC" "$OUT"
+check "balance with the key file: cents read as dollars (5000 -> 50)" bash -c '[[ $0 == 0 && $1 == "50 USD" ]]' "$RC" "$OUT"
 
 # ---- guards before any rent
-seed '{"balance": 5}'
+seed '{"balance": 500}'
 run bash "$GPU/cloudrift.sh" smoke
-check "balance floor: no rent below \$8" bash -c '[[ $0 != 0 && $1 == *"below the floor"* && $2 == 0 ]]' "$RC" "$OUT" "$(rents)"
-seed '{"balance": 50}'
+check "balance floor: no rent below \$8 (500 cents = \$5)" bash -c '[[ $0 != 0 && $1 == *"below the floor"* && $2 == 0 ]]' "$RC" "$OUT" "$(rents)"
+seed '{"balance": 5000}'
 run env CLOUDRIFT_MAX_DPH=0.2 bash "$GPU/cloudrift.sh" smoke
 check "price cap: no rent over the cap" bash -c '[[ $0 != 0 && $1 == *"no free 1-GPU stock"* && $2 == 0 ]]' "$RC" "$OUT" "$(rents)"
 
@@ -113,17 +122,39 @@ check "launch: the deadline tag is set" bash -c 'jq -e --arg id "$0" ".instances
 # ---- worker smoke: the public port, a job, terminate
 run bash "$SERVE/cloudrift-worker.sh" smoke
 S="$(state)"
-check "worker smoke: /healthz on the public port, job succeeded" bash -c '[[ $0 == 0 ]] && jq -e ".job.status == \"succeeded\" and (.public_url | startswith(\"http://127.0.0.1:\"))" >/dev/null <<<"$(sed -n "/^{/,/^}/p" <<<"$1")"' "$RC" "$OUT"
+check "worker smoke: /healthz on the public port, job succeeded" bash -c '[[ $0 == 0 ]] && jq -e ".job.status == \"succeeded\" and (.public_url | startswith(\"http://127.0.0.1:\"))" >/dev/null <<<"$(sed -n "/^{\$/,/^}\$/p" <<<"$1")"' "$RC" "$OUT"
 check "worker smoke: terminated; FV_API_KEYS is a hash" bash -c 'jq -e "([.instances[] | select(.status != \"Inactive\")] | length) == 0 and (.rents[-1].config.Docker.env | map(select(.[0] == \"FV_API_KEYS\"))[0][1] | test(\"^[0-9a-f]{64}$\"))" >/dev/null <<<"$0"' "$S"
 
-# ---- worker up: digest pin, internal token, URL for the gateway
+# ---- VM smoke (ProprietaryOnly host): recipe, ssh key, tunnel URL, job, terminate
+run env CLOUDRIFT_GPUS="V100 SXM2" bash "$SERVE/cloudrift-worker.sh" smoke
+S="$(state)"
+check "vm smoke: job succeeded through the VM's tunnel URL" bash -c '[[ $0 == 0 ]] && jq -e ".service == \"vm\" and .tunnel == \"quick\" and .job.status == \"succeeded\" and .health.state == \"AVAILABLE\"" >/dev/null <<<"$(sed -n "/^{\$/,/^}\$/p" <<<"$1")"' "$RC" "$OUT"
+check "vm smoke: proprietary-driver recipe, ssh key, no Docker config, terminated" bash -c 'jq -e ".rents[-1].config.VirtualMachine | (.image_url == \"https://img.test/u24-proprietary.img\") and (.ssh_key.PublicKeys | length == 1) and (.cloudinit_commands | startswith(\"umask 077; echo \"))" >/dev/null <<<"$0" && jq -e "(.rents[-1].config.Docker == null) and ([.instances[] | select(.status != \"Inactive\")] | length) == 0" >/dev/null <<<"$0"' "$S"
+check "vm smoke: the run key reaches the VM only as its hash" bash -c 'env=$(jq -r ".rents[-1].config.VirtualMachine.cloudinit_commands" <<<"$0" | sed -n "s/^umask 077; echo \([^ ]*\) | base64.*/\1/p" | base64 -d | sed -n "s/^FVB_ENV_B64=//p" | base64 -d); grep -Eq "^FV_API_KEYS=[0-9a-f]{64}$" <<<"$env"' "$S"
+run env CLOUDRIFT_GPUS="RTX PRO 6000" CLOUDRIFT_SERVICE=vm bash "$SERVE/cloudrift-worker.sh" plan
+check "vm on an open-driver host would use the newest open recipe" bash -c 'source "$0/cloudrift-lib.sh"; cr_load_key; [[ "$(cr_recipe_image OpenAndProprietary)" == https://img.test/u24-open.img ]]' "$GPU"
+
+# ---- Docker rentals failing on the platform (as live on the V100 hosts)
+seed '{"docker_fails": true}'
+run env CLOUDRIFT_SERVICE=docker bash "$SERVE/cloudrift-worker.sh" smoke
+check "docker smoke: a platform failure is reported and the rental dismissed" bash -c '[[ $0 != 0 && $1 == *"Internal provisioning error"* ]] && jq -e "([.instances[] | select(.status != \"Inactive\")] | length) == 0" >/dev/null <<<"$2"' "$RC" "$OUT" "$(state)"
+seed '{"docker_fails": false}'
+
+# ---- worker up: digest pin, plain HTTP refused, tunnel, internal token, URL for the gateway
 run bash "$SERVE/cloudrift-worker.sh" up h3-turbo ghcr.io/x/y:latest
 check "worker up: refuses an unpinned image" bash -c '[[ $0 != 0 && $1 == *"pin the image digest"* ]]' "$RC" "$OUT"
-( umask 077; printf 'internal-token-abc\n' >"$T/tok" )
-run env FV_INTERNAL_TOKEN_FILE="$T/tok" FV_CLOUDRIFT_SECRETS_FILE="$T/secrets.env" bash "$SERVE/cloudrift-worker.sh" up h3-turbo "ghcr.io/x/y@sha256:$(printf 'a%.0s' $(seq 64))"
+( umask 077; printf 'internal-token-abc\n' >"$T/tok"; printf 'cf-tunnel-token-xyz\n' >"$T/ttok" )
+PIN="ghcr.io/x/y@sha256:$(printf 'a%.0s' $(seq 64))"
+n0="$(rents)"
+run env FV_INTERNAL_TOKEN_FILE="$T/tok" CLOUDRIFT_SERVICE=docker bash "$SERVE/cloudrift-worker.sh" up h3-turbo "$PIN"
+check "worker up (docker): refused, the internal token would cross plain HTTP" bash -c '[[ $0 != 0 && $1 == *"plain HTTP"* && $2 == "$3" ]]' "$RC" "$OUT" "$n0" "$(rents)"
+run env FV_INTERNAL_TOKEN_FILE="$T/tok" CLOUDRIFT_GPUS="V100 SXM2" bash "$SERVE/cloudrift-worker.sh" up h3-turbo "$PIN"
+check "worker up (vm): needs the tunnel token and hostname" bash -c '[[ $0 != 0 && $1 == *FV_CF_TUNNEL_TOKEN_FILE* ]]' "$RC" "$OUT"
+run env FV_INTERNAL_TOKEN_FILE="$T/tok" FV_CLOUDRIFT_SECRETS_FILE="$T/secrets.env" FV_CF_TUNNEL_TOKEN_FILE="$T/ttok" CLOUDRIFT_TUNNEL_HOSTNAME=w1.example.test \
+  CLOUDRIFT_GPUS="V100 SXM2" bash "$SERVE/cloudrift-worker.sh" up h3-turbo "$PIN"
 S="$(state)"
-check "worker up: prints the id and the URL for FV_POOL_H3_TURBO_URLS" bash -c '[[ $0 == 0 && $1 == *"FV_POOL_H3_TURBO_URLS"* && $1 == *"http://127.0.0.1:"* && $1 != *internal-token-abc* && $1 != *cf-secret-value-1* ]]' "$RC" "$OUT"
-check "worker up: role worker, pool, token in env" bash -c 'jq -e ".rents[-1].config.Docker.env | (map(select(.[0] == \"FV_SERVE_ROLE\"))[0][1] == \"worker\") and (map(select(.[0] == \"FV_GATEWAY_POOL\"))[0][1] == \"h3-turbo\") and (map(select(.[0] == \"FV_INTERNAL_TOKEN\"))[0][1] == \"internal-token-abc\")" >/dev/null <<<"$0"' "$S"
+check "worker up (vm): prints the https tunnel URL for FV_POOL_H3_TURBO_URLS, no secret" bash -c '[[ $0 == 0 && $1 == *"FV_POOL_H3_TURBO_URLS"* && $1 == *"https://w1.example.test"* && $1 != *internal-token-abc* && $1 != *cf-secret-value-1* && $1 != *cf-tunnel-token-xyz* ]]' "$RC" "$OUT"
+check "worker up (vm): role worker, pool and token in the VM env; tunnel token written apart" bash -c 'boot=$(jq -r ".rents[-1].config.VirtualMachine.cloudinit_commands" <<<"$0" | sed -n "s/^umask 077; echo \([^ ]*\) | base64.*/\1/p" | base64 -d); env=$(sed -n "s/^FVB_ENV_B64=//p" <<<"$boot" | base64 -d); grep -qx FV_SERVE_ROLE=worker <<<"$env" && grep -qx FV_GATEWAY_POOL=h3-turbo <<<"$env" && grep -qx FV_INTERNAL_TOKEN=internal-token-abc <<<"$env" && ! grep -q cf-tunnel-token-xyz <<<"$env" && grep -q "cf-tunnel-token-xyz.*tunnel-token" <<<"$boot"' "$S"
 
 # ---- status and reap touch only our rentals
 seed "$(jq -nc --argjson s "$(state)" '{instances: ($s.instances + {"foreign": {id: "foreign", status: "Active", tags: ["someone-else"], host_address: "127.0.0.1", port_mappings: []}})}')"

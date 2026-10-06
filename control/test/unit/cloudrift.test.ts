@@ -17,7 +17,7 @@ const inst = (over: any = {}) => ({
   tags: ["fv", "fv-owner:fastvideo-rs", "fv-kind:gpucheck", "fv-deadline:1800000000"],
   host_address: "203.0.113.7",
   created_at: "2026-10-06T00:00:00Z",
-  resource_info: { cost_per_hour: 1.3936, instance_type: "rtxpro6000-11-50-500-1l.1", provider_name: "p" },
+  resource_info: { cost_per_hour: 139.36, instance_type: "rtxpro6000-11-50-500-1l.1", provider_name: "p" },
   gpus: [{ brand_short: "RTX PRO 6000", vram: 1, pci_device_id: 1, pci_vendor_id: 1 }],
   ...over,
 });
@@ -39,7 +39,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("CloudRift client", () => {
   it("posts {version, data} with X-API-Key and no bearer", async () => {
-    const calls = mockFetch({ "account/info": () => [200, { balance: 12.5 }] });
+    // Live shape: cents, plus fields the spec does not list.
+    const calls = mockFetch({ "account/info": () => [200, { balance: 1250, pending: 0.0, disputed: 0, dispute_fees: 0, current_cost_per_hour: null }] });
     expect(await cloudrift.balance(mkEnv())).toBe(12.5);
     expect(calls[0]!.body.version).toBe(CLOUDRIFT_API_VERSION);
     expect(calls[0]!.headers["x-api-key"]).toBe(KEY);
@@ -68,9 +69,11 @@ describe("CloudRift client", () => {
     const l = await cloudrift.instances(mkEnv());
     expect(calls[0]!.body.data.mask.with_credentials).toBeUndefined();
     expect(calls[0]!.body.data.selector.ByStatus.statuses).toContain("Failed");
-    expect(l[0]).toMatchObject({ id: "i1", ours: true, costPerHr: 1.3936, gpu: "RTX PRO 6000", deadlineMs: 1_800_000_000_000, host: "203.0.113.7" });
+    expect(l[0]!.costPerHr).toBeCloseTo(1.3936);
+    expect(l[0]).toMatchObject({ id: "i1", ours: true, gpu: "RTX PRO 6000", deadlineMs: 1_800_000_000_000, host: "203.0.113.7" });
     expect(l[1]).toMatchObject({ id: "x", ours: false, name: "x", deadlineMs: null });
-    expect(toInstance(inst(), "cents").costPerHr).toBeCloseTo(0.013936);
+    expect(toInstance(inst({ resource_info: { cost_per_hour: 25.0 } })).costPerHr).toBeCloseTo(0.25);
+    expect(toInstance(inst({ resource_info: { cost_per_hour: 1.3936 } }), "usd").costPerHr).toBeCloseTo(1.3936);
   });
   it("errors are scrubbed of the key; a 404 terminate counts as done", async () => {
     mockFetch({ "account/info": () => [401, `bad key ${KEY}`], "instances/terminate": () => [404, "gone"] });
@@ -122,7 +125,7 @@ describe("collectCloudrift", () => {
     const terminated: string[] = [];
     let list = [inst(), inst({ id: "i2", tags: ["fv-owner:fastvideo-rs", "fv-deadline:1700000000"], instance_name: "fv-serve-smoke-1" }), inst({ id: "ext", tags: [] })];
     mockFetch({
-      "account/info": () => [200, { balance: 40 }],
+      "account/info": () => [200, { balance: 4000 }],
       "instances/list": () => [200, { instances: list }],
       "instances/metrics": (d) => [200, { metrics: d.selector.ById.map((id: string) => ({ instance_id: id, gpus: [{ gpu_utilization_percent: id === "ext" ? 1 : 60 }] })) }],
       "instances/terminate": (d) => (terminated.push(...d.selector.ById), [201, { terminated: [] }]),

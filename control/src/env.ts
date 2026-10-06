@@ -48,8 +48,9 @@ export interface Env {
   /** The account's default balance floor in $ (CLAUDE.md: stop before $8). */
   BALANCE_FLOOR?: string;
   /** CloudRift: API base (tests: a mock), protocol version, the unit of an
-   * instance's resource_info.cost_per_hour (usd | cents; UNVERIFIED, default
-   * usd) and the CloudRift balance floor in $ (default BALANCE_FLOOR). */
+   * instance's resource_info.cost_per_hour (cents, the live unit on
+   * 2026-10-06, by default; usd only if CloudRift changes it) and the
+   * CloudRift balance floor in $ (default BALANCE_FLOOR). */
   CLOUDRIFT_API?: string;
   CLOUDRIFT_API_VERSION?: string;
   CLOUDRIFT_COST_UNIT?: string;

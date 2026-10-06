@@ -211,7 +211,7 @@ await step("CloudRift: rentals collected, deadline backstop, balance, terminate 
   const aud = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
   assert.ok(aud.some((x) => x.action === "cloudrift.terminate" && x.target === "cr-ours-1" && x.actor === "policy:cloudrift_deadline"), JSON.stringify(aud.slice(0, 3)));
   const ov = (await call("/api/overview", { headers: T() })).j;
-  assert.equal(ov.cloudrift.balance, 30);
+  assert.equal(ov.cloudrift.balance, 30, "account/info's 3000 cents");
   assert.equal(ov.balance, 50, "the Runpod balance is separate");
   const prov = (await call("/api/providers", { headers: T() })).j.providers;
   assert.deepEqual(prov.map((p) => [p.id, p.enabled]), [["runpod", true], ["cloudrift", true]]);
@@ -227,11 +227,11 @@ await step("CloudRift: rentals collected, deadline backstop, balance, terminate 
   assert.ok(!after["cr-ours-2"], "terminated rental marked gone");
   assert.ok(after[worker.id], "Runpod pods are not marked gone by the CloudRift half");
   // The balance floor: below it, our live rentals are terminated (none left), alert critical.
-  cr.balance = 5;
+  cr.balance = 500; // cents: $5
   await call("/api/collect", { method: "POST", body: {}, headers: T() });
   assert.ok((await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "cloudrift_balance_floor"));
   assert.equal(cr.instances.find((i) => i.id === "cr-foreign").status, "Active");
-  cr.balance = 30;
+  cr.balance = 3000;
   await call("/api/collect", { method: "POST", body: {}, headers: T() });
   assert.ok(!(await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "cloudrift_balance_floor"), "resolved");
 });

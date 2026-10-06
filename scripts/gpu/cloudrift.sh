@@ -136,7 +136,8 @@ launch() {
   local image="$1" steps="$2" pick dc deadline pub p
   cr_check_balance
   pick="$(cr_pick "$GPUS" "$MAX_DPH")" || die "no free 1-GPU stock of [$GPUS] under \$$MAX_DPH/hr (cloudrift.sh catalog)"
-  read -r VARIANT DPH dc <<<"$pick"
+  read -r VARIANT DPH dc _ <<<"$pick"
+  [[ "$dc" != - ]] || dc=""
   deadline=$(($(date +%s) + CAP_S))
   pub="$(ssh_pub)"
   p="$(payload "$image" "$VARIANT" "${dc:-}" "$steps" "$pub" "$deadline")"
@@ -229,8 +230,8 @@ case "${1:-}" in
     jq . <<<"$p"
     log "plan: payload shape OK" ;;
   catalog)
-    printf 'variant\tgpu\tgpus\tvram_gb\tusd_hr\tfree_nodes\tdatacenters\n'
-    cr_catalog docker | awk -F'\t' '$3 > 0' ;;
+    printf 'variant\tgpu\tgpus\tvram_gb\tusd_hr\tfree_nodes\tdatacenters\tdriver\n'
+    cr_catalog "${CLOUDRIFT_SERVICE:-docker}" | awk -F'\t' '$3 > 0' ;;
   balance) cr_need_key; echo "$(cr_balance) USD" ;;
   smoke) shift; run_check "${1:-$IMAGE_DEFAULT}" "$SMOKE_STEPS" ;;
   run)

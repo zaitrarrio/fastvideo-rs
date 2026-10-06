@@ -1,7 +1,9 @@
 // CloudRift API (docs/ops/cloudrift.md): rift-server's public REST API at
 // api.cloudrift.ai. Every call is a POST of {version, data} to /api/v1/<path>
 // and answers {version, data}; the key goes in X-API-Key and nowhere else.
-// Catalog prices are cents per hour. Only named fields of an instance are
+// Money is in cents everywhere (observed live on 2026-10-06): catalog prices,
+// resource_info.cost_per_hour and account/info's balance (2000 for a $20
+// top-up, although the spec says "Balance in USD"). Only named fields of an instance are
 // picked: a listing can carry credentials when asked (mask.with_credentials,
 // never set here) and the rental's env is not part of the answer.
 import { type Env } from "./env";
@@ -20,7 +22,7 @@ export interface CloudriftInstance {
   tags: string[];
   host: string | null;
   instanceType: string | null;
-  /** $/hr (resource_info.cost_per_hour; UNVERIFIED whether this field is dollars or cents: see costUnit). */
+  /** $/hr (resource_info.cost_per_hour is cents: 25.0 for a $0.25/hr rental, live 2026-10-06). */
   costPerHr: number;
   gpuCount: number;
   gpu: string | null;
@@ -62,7 +64,7 @@ export function deadlineOf(tags: string[]): number | null {
   return null;
 }
 
-export function toInstance(i: any, costUnit: "usd" | "cents" = "usd"): CloudriftInstance {
+export function toInstance(i: any, costUnit: "usd" | "cents" = "cents"): CloudriftInstance {
   const tags: string[] = Array.isArray(i?.tags) ? i.tags.map(String) : [];
   const raw = Number(i?.resource_info?.cost_per_hour ?? 0);
   return {
@@ -83,11 +85,12 @@ export function toInstance(i: any, costUnit: "usd" | "cents" = "usd"): Cloudrift
 }
 
 export const cloudrift = {
+  /** The balance in $ (account/info answers cents). */
   async balance(env: Env): Promise<number> {
     const d = await call(env, "account/info", {});
     const b = Number(d?.balance);
-    if (!Number.isFinite(b)) throw new HttpError(502, "cloudrift account/info: no balance");
-    return b;
+    if (d?.balance == null || !Number.isFinite(b)) throw new HttpError(502, "cloudrift account/info: no balance");
+    return b / 100;
   },
   /** Live rentals of the account (Initializing, Active, Deactivating, Failed). */
   async instances(env: Env): Promise<CloudriftInstance[]> {
@@ -95,7 +98,7 @@ export const cloudrift = {
       selector: { ByStatus: { statuses: ["Initializing", "Active", "Deactivating", "Failed"] } },
       mask: { with_connection_info: true, with_usage_info: true, with_hardware_info: true },
     });
-    const unit = env.CLOUDRIFT_COST_UNIT === "cents" ? "cents" : "usd";
+    const unit = env.CLOUDRIFT_COST_UNIT === "usd" ? "usd" : "cents";
     return (Array.isArray(d?.instances) ? d.instances : []).map((i: any) => toInstance(i, unit));
   },
   /** Mean GPU utilisation per instance (instances/metrics), percent. */

@@ -449,6 +449,9 @@ The collector runs every minute (`collector.ts`):
   to `cost_daily`. The cron terminates our rentals past their
   `fv-deadline:<unix>` tag or below `CLOUDRIFT_BALANCE_FLOOR`. The CloudRift
   balance is in the overview's `cloudrift` block, separate from Runpod's.
+  CloudRift answers money in cents (the balance and `cost_per_hour`, seen
+  live 2026-10-06); the client converts to dollars (`CLOUDRIFT_COST_UNIT`
+  defaults to `cents`).
 
 ## 8. Alerts and policies
 
