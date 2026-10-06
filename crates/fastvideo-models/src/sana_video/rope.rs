@@ -39,10 +39,10 @@ pub fn rope_tables(
     let seq = f * h * w;
     let mut cos = Vec::with_capacity(seq * head_dim);
     let mut sin = Vec::with_capacity(seq * head_dim);
-    for fi in 0..f {
-        for hi in 0..h {
-            for wi in 0..w {
-                for row in [&at[fi], &ah[hi], &aw[wi]] {
+    for rt in &at {
+        for rh in &ah {
+            for rw in &aw {
+                for row in [rt, rh, rw] {
                     for &a in row {
                         let (c, s) = (a.cos() as f32, a.sin() as f32);
                         cos.extend_from_slice(&[c, c]);

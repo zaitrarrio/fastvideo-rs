@@ -202,7 +202,7 @@ impl SanaVideoTransformerConfig {
         if self.patch_size[0] != 1 {
             return Err("SANA-Video: temporal patch size > 1 is not ported".into());
         }
-        if self.attention_head_dim % 2 != 0 {
+        if !self.attention_head_dim.is_multiple_of(2) {
             return Err("SANA-Video: odd head dim has no rotary layout".into());
         }
         Ok(())
