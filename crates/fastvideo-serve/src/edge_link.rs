@@ -68,6 +68,22 @@ pub struct LinkCfg {
     /// The engine's output directory (`<dir>/<job>/output.mp4`), followed by
     /// direct uploads.
     pub engine_out: PathBuf,
+    /// Model id → family (family sockets announce only their family's
+    /// models; empty: every model on every socket).
+    pub model_families: BTreeMap<String, String>,
+    /// This worker's API front (docs/serve/edge-control-plane.md), computed
+    /// at each hello and status tick.
+    pub front: Option<FrontSource>,
+}
+
+/// Computes the front a worker announces.
+#[derive(Clone)]
+pub struct FrontSource(pub Arc<dyn Fn() -> proto::FrontInfo + Send + Sync>);
+
+impl std::fmt::Debug for FrontSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FrontSource")
+    }
 }
 
 /// What the family links of one process share.
@@ -175,6 +191,23 @@ impl Link {
     fn family(&self) -> &str {
         self.cfg.scope.id()
     }
+    /// The front this socket announces: on a family socket, only the names,
+    /// defaults, Reactor model and failures of this family's models (the
+    /// edge picks a front for a model among its family's workers).
+    fn front(&self) -> Option<proto::FrontInfo> {
+        let mut f = (self.cfg.front.as_ref()?.0)();
+        if matches!(self.cfg.scope, Scope::Family(_)) && !self.cfg.model_families.is_empty() {
+            let fam = self.family().to_owned();
+            let mine = |m: &str| self.cfg.model_families.get(m).is_none_or(|x| *x == fam);
+            f.names.retain(|_, m| mine(m));
+            f.defaults.retain(|_, m| mine(m));
+            f.failed_models.retain(|m, _| mine(m));
+            if f.reactor.as_deref().is_some_and(|m| !mine(m)) {
+                f.reactor = None;
+            }
+        }
+        Some(f)
+    }
     fn slots(&self) -> Slots {
         let (free, session_free) = match &self.fam {
             Some(f) if !self.st.draining() => {
@@ -273,13 +306,24 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
         sha,
         capacity,
         draining: st.draining(),
-        // Family objects place by model; pool objects take any of the pool's.
-        models: if family { st.gate.models().iter().map(|m| m.id.to_string()).collect() } else { Vec::new() },
+        // Family objects place by model (only this family's when the worker
+        // says which family each model is in); pool objects take any of the pool's.
+        models: if family {
+            st.gate
+                .models()
+                .iter()
+                .map(|m| m.id.to_string())
+                .filter(|m| link.cfg.model_families.get(m).is_none_or(|f| f == link.family()))
+                .collect()
+        } else {
+            Vec::new()
+        },
         caps: crate::worker::status_json(st),
         jobs,
         sessions,
         endpoint: if family { link.cfg.endpoint.clone() } else { String::new() },
         slots: family.then(|| link.slots()),
+        front: link.front(),
     };
     (h, finished)
 }
@@ -314,6 +358,7 @@ async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<W
     status.tick().await;
     let mut budget = link.fam.as_ref().map(|f| f.arbiter.subscribe());
     let mut last_slots = link.fam.as_ref().map(|_| link.slots());
+    let mut last_front = link.front();
     loop {
         let changed = async {
             match budget.as_mut() {
@@ -363,9 +408,18 @@ async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<W
             _ = status.tick() => {
                 let s = st.gate.engine().stats();
                 let capacity = link.fam.as_ref().map_or(link.cfg.capacity, |f| f.arbiter.capacity()).max(1);
-                let m = WorkerMsg::Status { running: u32::try_from(s.running).unwrap_or(u32::MAX), draining: st.draining(), capacity };
+                let ready = matches!(st.gate.engine().readiness(), fastvideo_engine_service::Readiness::Ready);
+                let m = WorkerMsg::Status { running: u32::try_from(s.running).unwrap_or(u32::MAX), draining: st.draining(), capacity, ready: Some(ready) };
                 let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
                 sink.send(Message::text(text)).await.map_err(|e| format!("status: {e}"))?;
+                // The front changed (models loaded or failed): announce it.
+                if let Some(now) = link.front() {
+                    if last_front.as_ref() != Some(&now) {
+                        let text = serde_json::to_string(&WorkerMsg::Front(now.clone())).map_err(|e| e.to_string())?;
+                        sink.send(Message::text(text)).await.map_err(|e| format!("front: {e}"))?;
+                        last_front = Some(now);
+                    }
+                }
                 if link.fam.is_some() {
                     // Credits again with the heartbeat (draining changes them).
                     let s = link.slots();

@@ -25,8 +25,11 @@
 //! streaming-session admission ([`SessionReq`], [`DoMsg::SessionOffer`]).
 //! Protocol-1 workers keep working against either kind of object.
 
+pub mod front;
 pub mod presign;
 pub mod sched;
+
+pub use front::FrontInfo;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -114,6 +117,9 @@ impl Scope {
     pub fn session_release_path(&self, id: &str) -> String {
         format!("{}/sessions/{id}/release", self.base_path())
     }
+    pub fn job_wait_path(&self, job: &str) -> String {
+        format!("{}/jobs/{job}/wait", self.base_path())
+    }
 }
 
 /// Whether `s` is a usable pool, worker or job id (path and tag safe).
@@ -180,6 +186,10 @@ pub struct Hello {
     /// dispatcher places by `capacity`).
     #[serde(default)]
     pub slots: Option<Slots>,
+    /// The API front this worker also is (docs/serve/edge-control-plane.md
+    /// §2.4): what the edge routes to it. `None`: not a front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<FrontInfo>,
 }
 
 /// A session a worker holds, as it re-announces it.
@@ -222,6 +232,9 @@ fn one() -> u32 {
 }
 
 /// Worker → dispatcher.
+// `Hello` (with its front) is the large one: one per connection, parsed and
+// dropped, so boxing buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum WorkerMsg {
@@ -238,7 +251,18 @@ pub enum WorkerMsg {
     /// A taken job finished (its D1 row is already terminal).
     Done { job_id: String, attempt: u32, state: String },
     /// Load report (also the liveness heartbeat), every few seconds.
-    Status { #[serde(default)] running: u32, #[serde(default)] draining: bool, #[serde(default = "one")] capacity: u32 },
+    /// `ready`: its models are loaded (a front is routed to only then;
+    /// absent from old workers: ready).
+    Status {
+        #[serde(default)]
+        running: u32,
+        #[serde(default)]
+        draining: bool,
+        #[serde(default = "one")]
+        capacity: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ready: Option<bool>,
+    },
     /// Protocol 2: credits (sent on every change of the worker's arbiter).
     Slots(Slots),
     /// Protocol 2: open a multipart upload for a held job's output; the
@@ -256,6 +280,9 @@ pub enum WorkerMsg {
     SessionNack { session_id: String, lease: u64, #[serde(default)] code: u16, #[serde(default)] message: String },
     /// A session ended on the worker.
     SessionEnd { session_id: String, lease: u64 },
+    /// Its API front changed (models loaded or failed): replaces the
+    /// hello's [`Hello::front`].
+    Front(FrontInfo),
 }
 
 fn one_u16() -> u16 {
@@ -321,6 +348,21 @@ pub enum DoMsg {
     /// The session's lease ended (released, expired, given to another).
     SessionRevoke { session_id: String, #[serde(default)] reason: String },
 }
+
+/// `GET {scope}/jobs/{id}/wait?since=<phase>&wait_ms=<n>`: answered when the
+/// job's phase differs from `since` (at once if it already does), or after
+/// `wait_ms` (at most 30 s). A front's status watcher uses it to see a job
+/// start and finish without polling D1 (docs/serve/edge-control-plane.md §2.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobWait {
+    pub job_id: String,
+    /// `queued` | `pushed` | `running` | `succeeded` | `failed` |
+    /// `cancelled`, or `unknown` (not here, or forgotten).
+    pub phase: String,
+}
+
+/// The longest a job wait holds the request.
+pub const JOB_WAIT_MAX_MS: i64 = 30_000;
 
 /// `POST {scope}/sessions`: admit a streaming session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -392,9 +434,19 @@ pub struct EnqueueReq {
     #[serde(default)]
     pub model: Option<String>,
     /// Replace the envelope of a job waiting for a restage (its inputs now
-    /// in the store) and queue it again.
+    /// in the store) and queue it again; on a job not waiting for one, keep
+    /// the new envelope for a later restage or re-dispatch (a front's
+    /// background copy of its inputs into the store).
     #[serde(default)]
     pub replace: bool,
+    /// The API key (owner) the job runs for: counted per owner in
+    /// [`PoolStatus::owners`] (the edge's in-flight quota).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Admission: refuse (429) when this many jobs of the same model are
+    /// already queued here (0: no limit; the pool's `max_queued`).
+    #[serde(default)]
+    pub max_queued: u32,
 }
 
 /// Answer to an enqueue.
@@ -437,6 +489,16 @@ pub struct WorkerInfo {
     pub endpoint: String,
     #[serde(default)]
     pub proto: u32,
+    /// Its front (what the edge routes to it), if it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<FrontInfo>,
+    /// Its models are loaded (its last status frame).
+    #[serde(default = "yes")]
+    pub ready: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A job the dispatcher failed itself (worker lost after its retries, or
@@ -487,6 +549,9 @@ pub struct PoolStatus {
     /// Protocol 2: live and offered sessions.
     #[serde(default)]
     pub sessions: Vec<SessionInfo>,
+    /// Unfinished jobs per owner (API key id), owners with none left out.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub owners: std::collections::BTreeMap<String, u32>,
 }
 
 /// A session as `status` lists it.
