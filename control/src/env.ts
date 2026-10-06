@@ -10,6 +10,8 @@ export interface Env {
   METRICS?: AnalyticsEngineDataset; // fv_control_metrics
   CLUSTER_OPS: DurableObjectNamespace; // ClusterOps, one per cluster
   ASSETS?: Fetcher; // public/
+  /** The edge Worker as a service binding: a Worker cannot fetch another workers.dev Worker of its account (error 1042). */
+  EDGE?: Fetcher;
 
   // --- secrets (never logged, never returned)
   RUNPOD_API_KEY: string;
@@ -23,6 +25,10 @@ export interface Env {
   SESSION_SECRET: string;
   /** pbkdf2-sha256$<iter>$<salt b64>$<hash b64> of the owner passphrase (passphrase mode). */
   OWNER_PASSPHRASE_HASH?: string;
+  /** The edge Worker's FV_INTERNAL_TOKEN (control_plane = edge: every worker's). */
+  EDGE_INTERNAL_TOKEN?: string;
+  /** The edge Worker's FV_ADMIN_TOKEN (keys, the families view). */
+  EDGE_ADMIN_TOKEN?: string;
 
   // --- vars
   ENVIRONMENT?: string; // staging | production
@@ -47,6 +53,12 @@ export interface Env {
   PUBLIC_URL?: string;
   /** The account's default balance floor in $ (CLAUDE.md: stop before $8). */
   BALANCE_FLOOR?: string;
+  /** control_plane = edge: the edge Worker's public URL (docs/serve/edge-control-plane.md). */
+  EDGE_URL?: string;
+  /** The edge's D1 database id (its `api_keys` and the workers' job store); FV_D1_DATABASE_ID of edge workers. */
+  EDGE_D1_DATABASE_ID?: string;
+  /** The edge's outputs bucket (its OUTPUTS binding): FV_R2_BUCKET of edge workers, whose result URLs are presigned there. Unset: edge workers get no R2. */
+  EDGE_OUTPUTS_BUCKET?: string;
   /** CloudRift: API base (tests: a mock), protocol version, the unit of an
    * instance's resource_info.cost_per_hour (cents, the live unit on
    * 2026-10-06, by default; usd only if CloudRift changes it) and the

@@ -59,6 +59,11 @@ export const PoolSpecZ = z
     max_queued: z.number().int().min(0).max(10000).optional().describe("Gateway admission: queued jobs for this pool."),
     job_timeout_s: z.number().int().min(10).max(86400).optional().describe("Gateway job timeout in seconds."),
     stale_after_s: z.number().int().min(10).max(86400).optional().describe("A running job without a worker heartbeat for this long is lost."),
+    family: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,30}$/)
+      .optional()
+      .describe("control_plane = edge: the family Durable Object every model of this pool queues on. Default: from each model's family (h3 → h3, ltx2 → ltx, causal wan → sfwan, wan → wan; fake models: fake)."),
   })
   .strict()
   .refine((p) => !!(p.config || p.config_toml), { message: "config or config_toml is required", path: ["config"] })
@@ -78,6 +83,10 @@ export const ClusterSpecZ = z
       .refine((i) => [i.channel, i.sha, i.ref].filter(Boolean).length === 1, { message: "exactly one of channel, sha, ref" })
       .describe("Which build the pods run. Resolved to digests at start."),
     regions: z.array(region).min(1).describe("Regions to place GPU workers in, in order (the gateway prefers the first)."),
+    control_plane: z
+      .enum(["gateway", "edge"])
+      .optional()
+      .describe("gateway (default): a CPU gateway pod in front of the pools. edge: no gateway pod; the edge Worker (EDGE_URL) is the only entry point and every worker is an API front behind it (docs/serve/edge-control-plane.md). One edge cluster runs at a time."),
     gateway: z
       .object({
         enabled: z.boolean().describe("Run a gateway pod in front of the pools."),

@@ -10,7 +10,15 @@ const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
 mock.cloudriftKey = SECRETS.CLOUDRIFT_API_KEY;
-const w = await startWorker(mock, { ...SECRETS, OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET) });
+const w = await startWorker(mock, {
+  ...SECRETS,
+  OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
+  // The edge stand-in (test/harness.mjs `/edge/*`).
+  EDGE_URL: `http://127.0.0.1:${mock.port}/edge`,
+  EDGE_INTERNAL_TOKEN: mock.edgeInternal,
+  EDGE_ADMIN_TOKEN: mock.edgeAdmin,
+  EDGE_D1_DATABASE_ID: "d1-edge-staging",
+});
 const B = w.url;
 const bodies = []; // every response body, checked for secrets at the end
 let passed = 0;
@@ -627,6 +635,87 @@ await step("gateway-less cluster: the controller's admin token on every worker; 
   assert.equal((await call(`/api/clusters/${id}/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
   assert.equal((await waitOp(id, "down")).status, "done");
   assert.equal(mine().length, 0);
+});
+
+await step("edge cluster: no gateway pod; fronts behind the edge; register, ready from the families view, keys at the edge, scale, roll, one edge cluster at a time", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const edge = `http://127.0.0.1:${mock.port}/edge`;
+  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "edgy", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, control_plane: "edge" } }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  assert.equal(r.j.cluster.spec.gateway.enabled, false);
+  const id = r.j.cluster.id;
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  assert.equal((await call(`/api/clusters/${id}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
+  let op = await waitOp(id, "up");
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+  assert.ok(op.log.some((l) => /edge .*: up/.test(l.msg)), "the register phase checked the edge");
+  assert.ok(op.log.some((l) => /ready front at the edge: 1\/1/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
+  assert.equal(mine().length, 1, "no gateway pod");
+  const w1 = mine()[0];
+  assert.equal(w1.env.FV_GATEWAY_TOML_B64, undefined);
+  assert.equal(w1.env.FV_DISPATCH_FRONT, "1");
+  assert.equal(w1.env.FV_DISPATCH_DO_URL, edge);
+  assert.equal(w1.env.FV_PUBLIC_BASE_URL, edge);
+  assert.equal(w1.env.FV_INTERNAL_TOKEN, mock.edgeInternal);
+  assert.equal(w1.env.FV_DISPATCH_FAMILIES, "fake");
+  assert.equal(w1.env.FV_D1_DATABASE_ID, "d1-edge-staging");
+  assert.equal(w1.env.FV_WORKER_DIRECT, undefined);
+  assert.equal(w1.env.FV_R2_BUCKET, undefined);
+  assert.match(w1.payload.dockerStartCmd[0], /FV_DISPATCH_ENDPOINT=.*\[watchdog\]/s);
+  // The cluster card and the families view.
+  const detail = (await call(`/api/clusters/${id}`, { headers: T() })).j;
+  assert.equal(detail.edge_url, edge);
+  const gv = (await call(`/api/clusters/${id}/gateway`, { headers: T() })).j;
+  assert.equal(gv.edge, true);
+  assert.equal(gv.url, edge);
+  assert.equal(gv.workers[0].front.ready, true, JSON.stringify(gv));
+  // A second edge cluster is refused while this one runs.
+  const r2 = await call("/api/clusters", { method: "POST", body: { spec: { name: "edgy2", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, control_plane: "edge" } }, headers: T() });
+  assert.equal(r2.status, 201);
+  assert.equal((await call(`/api/clusters/${r2.j.cluster.id}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
+  const op2 = await waitOp(r2.j.cluster.id, "up");
+  assert.equal(op2.status, "failed");
+  assert.match(op2.error, /one edge cluster at a time/);
+  // Keys and the admin token are the edge's.
+  const tok = await call(`/api/clusters/${id}/admin-token`, { method: "POST", body: {}, headers: T() });
+  assert.equal(tok.j.admin_token, mock.edgeAdmin);
+  assert.equal(tok.j.console, `${edge}/console/admin`);
+  const k = await call(`/api/clusters/${id}/mint-key`, { method: "POST", body: { name: "edge-user" }, headers: T() });
+  assert.equal(k.status, 201, JSON.stringify(k.j));
+  assert.match(k.j.api_key, /^fv_edge_key_/);
+  const kid = k.j.key.id;
+  assert.ok((await call(`/api/clusters/${id}/keys`, { headers: T() })).j.keys.some((x) => x.id === kid));
+  const epoch = mock.edgeEpoch;
+  const rv = await call(`/api/clusters/${id}/keys/${kid}`, { method: "DELETE", headers: T() });
+  assert.equal(rv.status, 200, JSON.stringify(rv.j));
+  assert.deepEqual(rv.j.applied, ["edge"]);
+  assert.equal(mock.edgeEpoch, epoch + 1, "one revoke at the edge");
+  // Scale up and down (the drain goes to the front with the edge's internal token).
+  assert.equal((await call(`/api/clusters/${id}/scale`, { method: "POST", body: { pool: "fake", count: 2 }, headers: T() })).status, 202);
+  op = await waitOp(id, "scale");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal(mine().length, 2);
+  const w2 = mine().find((p) => p.id !== w1.id);
+  assert.equal(w2.env.FV_INTERNAL_TOKEN, mock.edgeInternal);
+  assert.equal((await call(`/api/clusters/${id}/scale`, { method: "POST", body: { pool: "fake", count: 1 }, headers: T() })).status, 202);
+  op = await waitOp(id, "scale");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal(mine().length, 1);
+  assert.ok(mock.drained.length >= 1);
+  // Roll to a commit: a new front, then the old one goes.
+  const old = mine()[0].id;
+  assert.equal((await call(`/api/clusters/${id}/roll`, { method: "POST", body: { target: "abcdef1" }, headers: T() })).status, 202);
+  op = await waitOp(id, "roll");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal(mine().length, 1);
+  assert.notEqual(mine()[0].id, old);
+  assert.equal(mine()[0].env.FV_DISPATCH_FRONT, "1");
+  // Stop: no pod left; the other edge cluster may start now.
+  assert.equal((await call(`/api/clusters/${id}/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "down")).status, "done");
+  assert.equal(mine().length, 0);
+  assert.ok(!JSON.stringify(mock.edgeCalls).includes("gateway/pools"));
 });
 
 await step("audit log; no secret in any response", async () => {

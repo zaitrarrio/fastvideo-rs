@@ -26,10 +26,11 @@
 # LTO=off, CODEGEN_UNITS=16, PANIC=unwind (the job env), CUDARC_CUDA_VERSION=
 # 13000, the CUDA 13.4.92 toolkit, toolchain `stable` per rust-toolchain.toml,
 # and no RUSTFLAGS: the pod's mold link-arg is dropped so the system linker
-# links, as in the image. The pod is Debian bookworm (glibc 2.36) while the
-# images are Ubuntu 22.04 (glibc 2.35): every ELF is checked for GLIBC_*
-# symbol versions above FV_REL_MAX_GLIBC (2.35) and the build fails if one
-# appears.
+# links, as in the image. The pod runs the build base image
+# (docker/build-base.Dockerfile, Ubuntu 22.04, glibc 2.35, like the images);
+# every ELF is still checked for GLIBC_* symbol versions above
+# FV_REL_MAX_GLIBC (2.35), as pods on rust:1-bookworm (glibc 2.36) needed.
+# Nothing is installed here: a tool the image lacks fails the run.
 #
 # Env (set by build-pod.sh): FV_REL_SHA, FV_GIT_SHA, FV_BUILD_TIME, FV_BUILD_ID
 # (scripts/gpu/docker.sh build-id at that commit), FV_REL_RUN_ID; optional
@@ -48,7 +49,7 @@ GATEWAY_FEATURES="${FV_GATEWAY_FEATURES:-http-client}"
 MAX_GLIBC="${FV_REL_MAX_GLIBC:-2.35}"
 SRC="$PWD"
 T="$CARGO_TARGET_DIR"
-VOL="$(dirname "$CUDA_HOME")"          # the fv-build volume root
+VOL="${FV_BUILD_VOLUME_DIR:-$(dirname "$CUDA_HOME")}"   # the fv-build volume root
 CACHE="$VOL/release-cache"
 OUT="$T/release-artifacts/$FV_REL_SHA"
 STAGE="$OUT/stage"
@@ -67,34 +68,23 @@ unset GITHUB_SHA
 rm -rf "$T/release-artifacts"
 mkdir -p "$STAGE" "$CACHE"
 
-# apt under the build pod server's lock (build-pod-server.py APT_LOCK): an
-# `apt-get update` here while the server's extras install ran deleted that
-# install's .debs (the image's docker-clean hook), failing it.
-apt_locked() {
-  local lock="${FV_BUILD_APT_LOCK:-/var/lock/fv-apt.lock}"
-  mkdir -p "$(dirname "$lock")"
-  DEBIAN_FRONTEND=noninteractive flock -w 1800 "$lock" apt-get -o DPkg::Lock::Timeout=600 "$@"
-}
-
-# jq (manifest) and binutils (glibc check) are not in rust:1-bookworm by default.
-need_apt=()
-command -v jq >/dev/null || need_apt+=(jq)
-command -v objdump >/dev/null || need_apt+=(binutils)
-if (( ${#need_apt[@]} )); then
-  log "apt: ${need_apt[*]}"
-  apt_locked update -qq >/dev/null
-  apt_locked install -y -qq --no-install-recommends "${need_apt[@]}" >/dev/null
-fi
+# The base image has these; older pods (rust:1-bookworm) installed them with apt.
+for t in jq objdump readelf curl sha256sum; do
+  command -v "$t" >/dev/null || die "$t is missing from the build pod image ${FV_BUILD_IMAGE:-?} (docker/build-base.Dockerfile)"
+done
 
 # ---- prerequisites the image's oxide stage installs with apt ---------------
-# libclang (cutile's bindgen) and the cuda.h / curand.h headers. The volume's
-# toolkit (build-pod-server.py) has cudart but no cuRAND: add the libcurand
-# redist headers into a private overlay of it on the container disk.
+# libclang (cutile's bindgen) and the cuda.h / curand.h headers. The base
+# image's toolkit has them (cuda-driver-dev, cudart-dev, libcurand-dev); a
+# redist toolkit without cuRAND gets the libcurand redist headers in a
+# private overlay of it on the container disk.
 oxide_prereqs() {
-  if ! ldconfig -p | grep -q 'libclang[-.0-9]*\.so'; then
-    log "apt: libclang-dev"
-    apt_locked update -qq >/dev/null
-    apt_locked install -y -qq --no-install-recommends libclang-dev >/dev/null
+  ldconfig -p | grep -q 'libclang[-.0-9]*\.so' \
+    || die "libclang is missing from the build pod image ${FV_BUILD_IMAGE:-?} (docker/build-base.Dockerfile)"
+  [[ -x "$CUDA_HOME/bin/tileiras" ]] || die "no tileiras in $CUDA_HOME"
+  if [[ -f "$CUDA_HOME/include/cuda.h" && -f "$CUDA_HOME/include/curand.h" ]]; then
+    CUDA_OVERLAY="$CUDA_HOME"
+    return 0
   fi
   local redist ver="${FV_BUILD_CUDA_REDIST:-13.4.2}" base="https://developer.download.nvidia.com/compute/cuda/redist/"
   redist="$CACHE/cuda-$ver-libcurand"
@@ -306,10 +296,10 @@ jq -n --arg sha "$FV_REL_SHA" --arg git "$FV_GIT_SHA" --arg bid "$FV_BUILD_ID" -
   --arg nvcc "$("$CUDA_HOME/bin/nvcc" --version | tail -2 | tr '\n' ' ')" \
   --arg tileiras "$("$CUDA_HOME/bin/tileiras" --version 2>&1 | tail -1)" \
   --arg glibc "$(ldd --version | head -1)" --arg maxg "$MAX_GLIBC" --arg oxk "$OXIDE_KEY" --arg hffm "$HF_FM_VERSION" \
-  --arg script "$(sha256sum "$0" | cut -c1-16)" --argjson sets "$sets_json" '{
+  --arg script "$(sha256sum "$0" | cut -c1-16)" --arg image "${FV_BUILD_IMAGE:-unknown image}" --argjson sets "$sets_json" '{
     schema: 1, sha: $sha, git_sha: $git, build_id: $bid, build_time: $btime, run_id: $run,
     created: $created, build_seconds: $secs,
-    builder: {host: "fv-build pod (Runpod CPU, rust:1-bookworm)", rustc: $rustc, cargo: $cargo,
+    builder: {host: "fv-build pod (Runpod CPU, \($image))", rustc: $rustc, cargo: $cargo,
               toolchain: $toolchain, nvcc: $nvcc, tileiras: $tileiras, glibc: $glibc,
               max_glibc_symbol: $maxg, recipe_sha256: $script},
     settings: {CARGO_PROFILE_RELEASE_LTO: "off", CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
