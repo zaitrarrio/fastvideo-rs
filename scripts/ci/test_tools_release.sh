@@ -121,6 +121,19 @@ mkgroup "$tmp/in/d" hf-fm
 check "assemble refuses a set built twice" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm2" >/dev/null 2>&1; echo $?)"
 rm -rf "$tmp/in/d"; rm "$tmp/in/c/hf-fm.tar.gz"
 check "assemble refuses a tarball that differs from its manifest" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm3" >/dev/null 2>&1; echo $?)"
+# run-tests shards: every test exactly once over the shards.
+mkdir -p "$tmp/ut/bin"
+cat >"$tmp/ut/bin/t1" <<'EOF'
+#!/bin/sh
+if [ "$1" = --list ]; then for t in a b c d e; do echo "$t: test"; done; echo "bench_x: bench"; exit 0; fi
+[ "$1" = --exact ] && shift
+for t in "$@"; do echo "ran $t" >>"$RAN"; done
+EOF
+chmod +x "$tmp/ut/bin/t1"
+printf 'bin/t1\tpkg\t.\tlib\tt1\n' >"$tmp/ut/tests.tsv"; git -C "$HERE/../.." rev-parse --show-toplevel >"$tmp/ut/src-root"
+: >"$tmp/ran"
+for k in 1 2 3; do RAN="$tmp/ran" FV_TESTS_SHARD="$k/3" bash "$HERE/prebuilt.sh" run-tests "$tmp/ut" >/dev/null 2>&1; done
+check "run-tests shards cover every test once" "a b c d e" "$(sed 's/ran //' "$tmp/ran" | sort | paste -sd' ')"
 check "unchanged inputs: nothing to publish" 0 "$(
   h="$(bash "$T" input-hash HEAD)"
   jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same.json"

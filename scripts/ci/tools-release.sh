@@ -519,12 +519,16 @@ cmd_build_sets() {
   for set in $sets; do
     jq -e --arg s "$set" '.sets[$s]' "$out/manifest.json" >/dev/null || die "set $set missing from the build"
   done
+  if [[ " $sets " == *" gpucheck-tests "* ]]; then
+    # For the release notes; the tests themselves run here (--test) or in
+    # sharded jobs (tools-release.yml unit-tests).
+    tar -xzOf "$out/gpucheck-tests.tar.gz" ./tests.tsv | wc -l >"$out/gate-unit-tests.count"
+  fi
   if (( test )) && [[ " $sets " == *" gpucheck-tests "* ]]; then
     local d="$out/gate"; rm -rf "$d" && mkdir -p "$d/gpucheck-tests"
     tar -xzf "$out/gpucheck-tests.tar.gz" -C "$d/gpucheck-tests"
     log "gate 2/3: the shipped gpucheck-tests binaries"
     FV_TESTS_ROOT="$ROOT" bash "$HERE/prebuilt.sh" run-tests "$d/gpucheck-tests" || die "unit tests failed"
-    wc -l <"$d/gpucheck-tests/tests.tsv" >"$out/gate-unit-tests.count"
     rm -rf "$d"
   fi
   log "built $sets in $(( SECONDS - t0 ))s into $out"

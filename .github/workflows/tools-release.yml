@@ -134,7 +134,8 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/tools"
 
-  # The GitHub-hosted fallback: set groups and check.sh stages in parallel.
+  # The GitHub-hosted fallback: set groups and check.sh stages in parallel
+  # (.github/actions/tools-deps-run: dependency image, then the command).
   hosted:
     needs: plan
     if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder != 'pod'
@@ -148,15 +149,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Sets (scripts/dev/release-artifacts-pod.sh); OXIDE_STAGE deps-oxide
-          # for the ones that embed the oxide cubins.
+          # Sets (scripts/dev/release-artifacts-pod.sh); deps-oxide for the
+          # ones that embed the oxide cubins.
           - { group: oxide, sets: oxide, oxide: deps-oxide }
           - { group: serve-cuda, sets: serve-cuda, oxide: deps-oxide }
           - { group: serve-cpu, sets: serve-cpu, oxide: deps-oxide }
           - { group: serve-fake, sets: serve-fake, oxide: deps-nooxide }
           - { group: gpucheck, sets: gpucheck, oxide: deps-oxide }
-          # Gate 2 runs here, right after its binaries are built.
-          - { group: gpucheck-tests, sets: gpucheck-tests, oxide: deps-nooxide, test: "--test" }
+          - { group: gpucheck-tests, sets: gpucheck-tests, oxide: deps-nooxide }
           - { group: gpucheck-vast, sets: gpucheck-vast, oxide: deps-nooxide }
           - { group: hf-fm, sets: hf-fm, oxide: deps-nooxide }
           # Gate 1: scripts/serve/check.sh, its two stages side by side.
@@ -164,55 +164,31 @@ jobs:
           - { group: check-test, stage: test, oxide: deps-nooxide }
     env:
       FV_WORK: /mnt/fv-work
-      CACHE_REPO: ghcr.io/${{ github.repository_owner }}/fastvideo-rs-tools-deps
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Work dir and submodule
-        run: |
-          sudo mkdir -p "$FV_WORK" && sudo chown "$(id -u):$(id -g)" "$FV_WORK"
-          git submodule update --init third_party/cutile-rs
-          df -h / /mnt | sed 's/^/  /'
-      # sccache's GitHub Actions cache store needs these in the step env.
-      - name: Actions cache credentials for sccache
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Dependency image (cargo chef, registry layer cache)
-        run: |
-          cache="${CACHE_REPO,,}:cache-${{ matrix.group }}"
-          docker buildx build -f docker/tools-deps.Dockerfile --target deps \
-            --build-arg BASE_IMAGE="$(bash scripts/dev/build-base-tag.sh --image)" \
-            --build-arg GROUP=${{ matrix.group }} --build-arg OXIDE_STAGE=${{ matrix.oxide }} \
-            --cache-from "type=registry,ref=$cache" --cache-from "type=registry,ref=${CACHE_REPO,,}:cache-oxide" \
-            --cache-to "type=registry,ref=$cache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true" \
-            --load -t "fv-tools-deps:${{ matrix.group }}" .
-          docker image ls "fv-tools-deps:${{ matrix.group }}"
       - name: Build ${{ matrix.sets }}
         if: matrix.sets
-        env:
-          FV_BUILD_BASE_IMAGE: fv-tools-deps:${{ matrix.group }}
-          FV_IMAGE_DIRS: "1"
-        run: |
-          bash scripts/ci/in-build-base.sh bash scripts/ci/tools-release.sh build-sets "$GITHUB_SHA" \
-            --sets "${{ matrix.sets }}" --version "${{ needs.plan.outputs.version }}" --out /work/out ${{ matrix.test }}
+        uses: ./.github/actions/tools-deps-run
+        with:
+          group: ${{ matrix.group }}
+          oxide-stage: ${{ matrix.oxide }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          run: >-
+            bash scripts/ci/tools-release.sh build-sets "$GITHUB_SHA" --sets "${{ matrix.sets }}"
+            --version "${{ needs.plan.outputs.version }}" --out /work/out
       - name: check.sh ${{ matrix.stage }}
         if: matrix.stage
+        uses: ./.github/actions/tools-deps-run
         env:
-          FV_BUILD_BASE_IMAGE: fv-tools-deps:${{ matrix.group }}
-          FV_IMAGE_DIRS: "1"
           FV_SERVE_STAGES: ${{ matrix.stage }}
           CARGO_PROFILE_DEV_DEBUG: "0"
-        run: bash scripts/ci/in-build-base.sh bash scripts/serve/check.sh
+        with:
+          group: ${{ matrix.group }}
+          oxide-stage: ${{ matrix.oxide }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          run: bash scripts/serve/check.sh
       - uses: actions/upload-artifact@v4
         if: matrix.sets
         with:
@@ -222,8 +198,42 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-  assemble:
+  # Gate 2, sharded: the shipped gpucheck/cudarc unit-test binaries (the
+  # gpucheck-tests set the hosted job built) against this checkout.
+  unit-tests:
     needs: [plan, hosted]
+    if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder != 'pod'
+    name: unit tests ${{ matrix.shard }}/4
+    runs-on: ${{ vars.FV_TOOLS_HOSTED_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      FV_WORK: /mnt/fv-work
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Work dir
+        run: sudo mkdir -p "$FV_WORK" && sudo chown "$(id -u):$(id -g)" "$FV_WORK"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-set-gpucheck-tests
+          path: ${{ env.FV_WORK }}/ut
+      - name: Shard ${{ matrix.shard }}/4 in the build-base image
+        env:
+          FV_TESTS_SHARD: ${{ matrix.shard }}/4
+        run: |
+          bash scripts/ci/in-build-base.sh bash -c '
+            mkdir -p /work/ut/x && tar -xzf /work/ut/gpucheck-tests.tar.gz -C /work/ut/x
+            FV_TESTS_ROOT=/src bash scripts/ci/prebuilt.sh run-tests /work/ut/x'
+
+  assemble:
+    needs: [plan, hosted, unit-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

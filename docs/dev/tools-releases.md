@@ -163,9 +163,9 @@ When no build pod is idle, the build runs on GitHub-hosted runners, as a
 
 | job | builds / runs |
 |---|---|
-| oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-vast, hf-fm | that set (`tools-release.sh build-sets --sets <set>`) |
-| gpucheck-tests | that set, then runs its unit-test binaries (gate 2) |
-| check-lint, check-test | `FV_SERVE_STAGES=lint|test scripts/serve/check.sh` (gate 1) |
+| `hosted <set>` (oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-tests, gpucheck-vast, hf-fm) | that set (`tools-release.sh build-sets --sets <set>`) |
+| `hosted check-lint`, `hosted check-test` | `FV_SERVE_STAGES=lint\|test scripts/serve/check.sh` (gate 1) |
+| `unit tests k/4` (after the sets) | the shipped gpucheck-tests binaries, a quarter each (`FV_TESTS_SHARD=k/4 prebuilt.sh run-tests`, gate 2) |
 
 then **assemble** (`tools-release.sh assemble`) joins the sets (each exactly
 once, all from the same commit, every sha256), checks `-V` (gate 3) and
@@ -184,7 +184,8 @@ Each job:
    (`mode=max`), so the dependency layer is rebuilt only when Cargo.toml /
    Cargo.lock / the cook recipe change, and oxide only when its inputs do;
 2. runs the real build or check.sh stage in a container of that image with
-   the checkout mounted (`scripts/ci/in-build-base.sh`), so only the
+   the checkout mounted (`.github/actions/tools-deps-run`,
+   `scripts/ci/in-build-base.sh`), so only the
    workspace's own crates compile; rustc goes through **sccache** with the
    **GitHub Actions cache** as its store (`SCCACHE_GHA_ENABLED`, namespace
    `fv-tools-1`), which also covers the workspace crates that did not change.
