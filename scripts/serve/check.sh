@@ -21,6 +21,11 @@
 #                                          # also run the /console browser
 #                                          # tests (tests/console/, headless
 #                                          # Chromium), in the realtime stage
+#   FV_SERVE_STAGES=lint bash scripts/serve/check.sh
+#                                          # stages 1/2 one at a time: lint (check,
+#                                          # clippy, wasm clippy) or test (cargo
+#                                          # test, release.test.sh); default both
+#                                          # (CI runs them as parallel jobs)
 #   FV_SERVE_CUDA=1 bash scripts/serve/check.sh
 #                                          # also type-check the engine's `cuda`
 #                                          # feature (compiles, never runs CUDA)
@@ -95,15 +100,19 @@ if [[ "$REALTIME" == "only" ]]; then
   exit 0
 fi
 
-run cargo check "${PKGS[@]}" --all-targets
-run cargo clippy "${PKGS[@]}" --all-targets --no-deps -- -D warnings
-run cargo test "${PKGS[@]}"
+STAGES=" ${FV_SERVE_STAGES:-lint test} "
+stage() { [[ "$STAGES" == *" $1 "* ]]; }
+if stage lint; then
+  run cargo check "${PKGS[@]}" --all-targets
+  run cargo clippy "${PKGS[@]}" --all-targets --no-deps -- -D warnings
+fi
+stage test && run cargo test "${PKGS[@]}"
 # The Cloudflare Worker / Durable Object dispatcher builds for wasm only
 # (docs/serve/gateway-cloudflare.md; scripts/serve/cf-edge.sh deploys it).
-run cargo clippy -p fastvideo-dispatch-proto -p fastvideo-edge --target wasm32-unknown-unknown --no-deps -- -D warnings
+stage lint && run cargo clippy -p fastvideo-dispatch-proto -p fastvideo-edge --target wasm32-unknown-unknown --no-deps -- -D warnings
 # The release / deployment scripts against a mocked API (docs/serve/releases.md;
 # skips without python3).
-run bash scripts/serve/tests/release.test.sh
+stage test && run bash scripts/serve/tests/release.test.sh
 
 if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets

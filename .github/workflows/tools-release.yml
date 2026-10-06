@@ -7,12 +7,99 @@
 #            workspace version if above the highest release, else its PATCH+1.
 #            It also picks the builder (tools-release.sh pick-runner): a build
 #            pod when an idle self-hosted runner labelled `fv-build` is online,
-#            else a GitHub-hosted runner (owner decision: Option 1, GitHub as
-#            the fallback; vars.FV_BUILD_RUNNER=pod|github forces one).
-#   build    compile every set with the version embedded (`-V`, /health),
-#            then the gate: scripts/serve/check.sh, the shipped gpucheck/cudarc
-#            unit-test binaries, `-V`; stage the release as a workflow artifact.
-#            build-pod: on the pod's runner (its toolchain, sccache, volume
+#            else GitHub-hosted (owner decision: Option 1, GitHub as the
+#            fallback; vars.FV_BUILD_RUNNER=pod|github forces one).
+#   build-pod  one job on the pod's runner: every set, then the gate
+#            (check.sh, the shipped unit-test binaries, `-V`), staged.
+#   hosted   the fallback, in parallel on GitHub-hosted runners
+#            (vars.FV_TOOLS_HOSTED_RUNNER, default ubuntu-latest): one job per
+#            set group plus check.sh's lint and test stages. Each builds a
+#            dependency image (docker/tools-deps.Dockerfile: build-base +
+#            `cargo chef cook` of that group's dependencies + the oxide cache)
+#            with buildx and a GHCR registry layer cache, then runs the real
+#            build (tools-release.sh build-sets) or check.sh stage in it;
+#            rustc goes through sccache with the GitHub Actions cache.
+#   assemble joins the groups' sets (every set once, every sha256), checks
+#            `-V`, and stages the release, after every hosted job passed.
+#   publish  (GitHub-hosted, GITHUB_TOKEN contents:write) draft -> assets ->
+#            publish -> download and check every sha256 -> prune -> dispatch
+#            serve-image, gpucheck-runtime-image, vast-pytorch-image with the
+#            new version (a GITHUB_TOKEN release fires no `release` event for
+#            other workflows; workflow_dispatch does run them).
+#
+# Dry runs build and test everything but never publish: workflow_dispatch
+# with dry_run, and pull requests that change this pipeline (GitHub-hosted
+# only: a pull request never runs on a build pod).
+#
+# The build-pod job waits in the queue while no pod is up (docs/dev/
+# tools-releases.md "Build pod runner"). One release at a time: a newer push
+# to main replaces a queued run; the running one finishes.
+name: tools-release
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    paths:
+      - ".github/workflows/tools-release.yml"
+      - "scripts/ci/tools-release.sh"
+      - "scripts/ci/tools-deps.sh"
+      - "scripts/ci/in-build-base.sh"
+      - "docker/tools-deps.Dockerfile"
+      - "scripts/dev/release-artifacts-pod.sh"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "build and test only: never create a release"
+        type: boolean
+        default: false
+      builder:
+        description: "auto (an idle build pod, else GitHub-hosted), pod or github"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-release-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run == true || github.ref != 'refs/heads/main' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      input_hash: ${{ steps.plan.outputs.input_hash }}
+      builder: ${{ steps.runner.outputs.builder }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Plan (skip when the tools inputs are already released; dry runs build anyway)
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          force=(); [[ "$DRY_RUN" == true ]] && force=(--force)
+          bash scripts/ci/tools-release.sh plan "$GITHUB_SHA" "${force[@]}" | tee plan.json
+          jq -r --arg dry "$DRY_RUN" '"### Tools release plan\n\n" + (if $dry == "true" then "**Dry run**: build and test, no release.\n\n" else "" end) + (if .skip then "Skipped: \(.skip_reason)" else "Build **\(.tag)** (input hash `\(.input_hash[0:16])`, workspace \(.workspace_version), highest release \(if .latest == "" then "none" else .latest end)) \(.skip_reason)" end)' plan.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Builder (a build pod's runner, else GitHub-hosted)
+        id: runner
+        if: steps.plan.outputs.skip == 'false'
+        env:
+          # Fine-grained PAT, Administration: read (GITHUB_TOKEN cannot list runners).
+          FV_RUNNER_READ_TOKEN: ${{ secrets.FV_RUNNER_READ_TOKEN }}
+          FV_BUILD_RUNNER: ${{ github.event_name == 'pull_request' && 'github' || inputs.builder || vars.FV_BUILD_RUNNER || 'auto' }}
+        run: |
+          bash scripts/ci/tools-release.sh pick-runner | jq -r '"Builder: **\(.builder)** (\(.reason))"' >> "$GITHUB_STEP_SUMMARY"
+
+  build-pod: on the pod's runner (its toolchain, sccache, volume
 #            caches). build-hosted: the same `tools-release.sh build --local`
 #            in the build-base image (scripts/dev/build-base-tag.sh, the image
 #            the pods run), so the release is the same recipe and the same
@@ -76,7 +163,7 @@ jobs:
 
   build-pod:
     needs: plan
-    if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder == 'pod'
+    if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder == 'pod' && github.event_name != 'pull_request'
     # A build pod (its runner: build-pod-server.py /v1/runner).
     runs-on: [self-hosted, fv-build]
     timeout-minutes: 180
@@ -105,54 +192,134 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/tools"
 
-  # Fallback: no idle build pod. Same command in the build-base image, run
-  # with `docker run` (not `container:`) so the host disk can be freed first.
-  build-hosted:
+  # The GitHub-hosted fallback: set groups and check.sh stages in parallel.
+  hosted:
     needs: plan
     if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder != 'pod'
+    name: hosted ${{ matrix.group }}
     runs-on: ${{ vars.FV_TOOLS_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 360
+    timeout-minutes: 120
     permissions:
       contents: read
-      packages: read
+      packages: write   # the GHCR layer cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Sets (scripts/dev/release-artifacts-pod.sh); OXIDE_STAGE deps-oxide
+          # for the ones that embed the oxide cubins.
+          - { group: oxide, sets: oxide, oxide: deps-oxide }
+          - { group: serve-cuda, sets: serve-cuda, oxide: deps-oxide }
+          - { group: serve-cpu, sets: serve-cpu, oxide: deps-oxide }
+          - { group: serve-fake, sets: serve-fake, oxide: deps-nooxide }
+          - { group: gpucheck, sets: gpucheck, oxide: deps-oxide }
+          # Gate 2 runs here, right after its binaries are built.
+          - { group: gpucheck-tests, sets: gpucheck-tests, oxide: deps-nooxide, test: "--test" }
+          - { group: gpucheck-vast, sets: gpucheck-vast, oxide: deps-nooxide }
+          - { group: hf-fm, sets: hf-fm, oxide: deps-nooxide }
+          # Gate 1: scripts/serve/check.sh, its two stages side by side.
+          - { group: check-lint, stage: lint, oxide: deps-nooxide }
+          - { group: check-test, stage: test, oxide: deps-nooxide }
+    env:
+      FV_WORK: /mnt/fv-work
+      CACHE_REPO: ghcr.io/${{ github.repository_owner }}/fastvideo-rs-tools-deps
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Free disk space (release + test target dirs need ~25 GB)
+      - name: Work dir and submodule
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost \
-            /usr/share/swift /usr/local/.ghcup
-          docker image prune -af >/dev/null
-          df -h /
-      - name: Build and test in the build-base image
+          sudo mkdir -p "$FV_WORK" && sudo chown "$(id -u):$(id -g)" "$FV_WORK"
+          git submodule update --init third_party/cutile-rs
+          df -h / /mnt | sed 's/^/  /'
+      # sccache's GitHub Actions cache store needs these in the step env.
+      - name: Actions cache credentials for sccache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Dependency image (cargo chef, registry layer cache)
         run: |
-          img="$(bash scripts/dev/build-base-tag.sh --image)"
-          bash scripts/dev/build-base-tag.sh --check
-          mkdir -p "$RUNNER_TEMP/work"
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v "$RUNNER_TEMP/work:/work" -w /src \
-            -e GITHUB_RUN_ID -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW \
-            -e CARGO_TARGET_DIR=/work/target -e FV_TOOLS_TEST_TARGET=/work/target-test \
-            -e FV_BUILD_VOLUME_DIR=/work/vol -e RUSTC_WRAPPER= -e CARGO_TERM_COLOR=never \
-            "$img" bash scripts/ci/tools-release.sh build "$GITHUB_SHA" --local \
-              --version "${{ needs.plan.outputs.version }}" --tag "${{ needs.plan.outputs.tag }}" --out /work/tools
-          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/work/tools"
+          cache="${CACHE_REPO,,}:cache-${{ matrix.group }}"
+          docker buildx build -f docker/tools-deps.Dockerfile --target deps \
+            --build-arg BASE_IMAGE="$(bash scripts/dev/build-base-tag.sh --image)" \
+            --build-arg GROUP=${{ matrix.group }} --build-arg OXIDE_STAGE=${{ matrix.oxide }} \
+            --cache-from "type=registry,ref=$cache" --cache-from "type=registry,ref=${CACHE_REPO,,}:cache-oxide" \
+            --cache-to "type=registry,ref=$cache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true" \
+            --load -t "fv-tools-deps:${{ matrix.group }}" .
+          docker image ls "fv-tools-deps:${{ matrix.group }}"
+      - name: Build ${{ matrix.sets }}
+        if: matrix.sets
+        env:
+          FV_BUILD_BASE_IMAGE: fv-tools-deps:${{ matrix.group }}
+          FV_IMAGE_DIRS: "1"
+        run: |
+          bash scripts/ci/in-build-base.sh bash scripts/ci/tools-release.sh build-sets "$GITHUB_SHA" \
+            --sets "${{ matrix.sets }}" --version "${{ needs.plan.outputs.version }}" --out /work/out ${{ matrix.test }}
+      - name: check.sh ${{ matrix.stage }}
+        if: matrix.stage
+        env:
+          FV_BUILD_BASE_IMAGE: fv-tools-deps:${{ matrix.group }}
+          FV_IMAGE_DIRS: "1"
+          FV_SERVE_STAGES: ${{ matrix.stage }}
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: bash scripts/ci/in-build-base.sh bash scripts/serve/check.sh
+      - uses: actions/upload-artifact@v4
+        if: matrix.sets
+        with:
+          name: tools-set-${{ matrix.group }}
+          path: ${{ env.FV_WORK }}/out/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  assemble:
+    needs: [plan, hosted]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      FV_WORK: /mnt/fv-work
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # release notes
+          persist-credentials: false
+      - name: Work dir
+        run: sudo mkdir -p "$FV_WORK" && sudo chown "$(id -u):$(id -g)" "$FV_WORK"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tools-set-*
+          path: ${{ env.FV_WORK }}/in
+      - name: Join the sets, check -V, stage the release
+        run: |
+          bash scripts/ci/in-build-base.sh bash scripts/ci/tools-release.sh assemble "$GITHUB_SHA" \
+            --version "${{ needs.plan.outputs.version }}" --tag "${{ needs.plan.outputs.tag }}" \
+            --in /work/in --out /work/assembled
       - uses: actions/upload-artifact@v4
         with:
           name: tools-release-${{ needs.plan.outputs.version }}
-          path: ${{ runner.temp }}/work/tools/release/
+          path: ${{ env.FV_WORK }}/assembled/release/
           retention-days: 3
           compression-level: 0
           if-no-files-found: error
 
   publish:
-    needs: [plan, build-pod, build-hosted]
-    # Whichever build ran (the other is skipped) must have succeeded.
+    needs: [plan, build-pod, assemble]
+    # Never in a dry run; whichever build ran (the other is skipped) must have passed.
     if: >-
-      always() && needs.plan.outputs.skip == 'false' &&
-      (needs.build-pod.result == 'success' || needs.build-hosted.result == 'success') &&
-      needs.build-pod.result != 'failure' && needs.build-hosted.result != 'failure'
+      always() && needs.plan.outputs.skip == 'false' && github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' && inputs.dry_run != true &&
+      (needs.build-pod.result == 'success' || needs.assemble.result == 'success') &&
+      needs.build-pod.result != 'failure' && needs.assemble.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

@@ -78,6 +78,40 @@ check "runner: no token to list runners -> github" github "$(env -u FV_TOOLS_RUN
 check "runner: FV_BUILD_RUNNER=pod forces the pod" pod "$(FV_BUILD_RUNNER=pod pick "$tmp/r-none.json")"
 check "runner: FV_BUILD_RUNNER=github forces GitHub" github "$(FV_BUILD_RUNNER=github pick "$tmp/r-idle.json")"
 check "runner: writes builder to GITHUB_OUTPUT" "builder=pod" "$(GITHUB_OUTPUT="$tmp/gho2" pick "$tmp/r-idle.json" >/dev/null; grep '^builder=' "$tmp/gho2")"
+# assemble: per-group builds (the hosted fallback) joined into one release.
+mkgroup() { # dir sets... : a fake build of those sets for HEAD; binaries print the version
+  local dir="$1" set; shift; mkdir -p "$dir"
+  local sets='{}'
+  for set in "$@"; do
+    local st="$tmp/st-$set"; rm -rf "$st"; mkdir -p "$st"
+    case "$set" in
+      serve-cpu) mkdir -p "$st/out"; printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/out/fv-serve"; chmod +x "$st/out/fv-serve" ;;
+      serve-fake) printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/fv-serve"; chmod +x "$st/fv-serve" ;;
+      gpucheck) printf '#!/bin/sh\necho "fv-gpucheck 0.1.11"\n' >"$st/fv-gpucheck"; chmod +x "$st/fv-gpucheck" ;;
+      *) echo "$set" >"$st/$set.txt" ;;
+    esac
+    tar -C "$st" -czf "$dir/$set.tar.gz" .
+    sets="$(jq --arg s "$set" --arg h "$(sha256sum "$dir/$set.tar.gz" | cut -d' ' -f1)" '. + {($s): {tarball: "\($s).tar.gz", sha256: $h, size: 1}}' <<<"$sets")"
+  done
+  jq -n --arg sha "$(git -C "$HERE/../.." rev-parse HEAD)" --argjson sets "$sets" \
+    '{schema: 1, sha: $sha, build_id: "b", build_time: "", oxide_key: "", hf_fetch_model_version: "", build_seconds: 1, sets: $sets}' >"$dir/manifest.json"
+}
+rm -rf "$tmp/in" && mkdir -p "$tmp/in"
+mkgroup "$tmp/in/a" oxide serve-cuda serve-cpu
+mkgroup "$tmp/in/b" serve-fake gpucheck gpucheck-tests
+mkgroup "$tmp/in/c" gpucheck-vast hf-fm
+echo 2 >"$tmp/in/b/gate-unit-tests.count"
+check "assemble joins the groups into one staged release" "8 2" "$(
+  bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm" >/dev/null 2>"$tmp/asm.log"
+  jq -r '"\(.sets | length) \(.tests | capture("the (?<n>[0-9]+) shipped").n)"' "$tmp/asm/release/manifest.json" 2>/dev/null)"
+grep -q "^manifest-sha256: $(sha256sum "$tmp/asm/release/manifest.json" 2>/dev/null | cut -d' ' -f1)$" "$tmp/asm/release/body.md" 2>/dev/null \
+  && echo "ok   (body carries the manifest sha256)" || { echo "FAIL assemble body"; tail -5 "$tmp/asm.log"; fail=1; }
+check "assemble refuses a wrong -V" 2 "$(bash "$T" assemble HEAD --version 0.1.12 --tag tools-v0.1.12 --in "$tmp/in" --out "$tmp/asm4" >/dev/null 2>"$tmp/asm4.log"; echo $?)"
+grep -q "expected 0.1.12" "$tmp/asm4.log" && echo "ok   (because of -V)" || { echo "FAIL -V reason"; tail -3 "$tmp/asm4.log"; fail=1; }
+mkgroup "$tmp/in/d" hf-fm
+check "assemble refuses a set built twice" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm2" >/dev/null 2>&1; echo $?)"
+rm -rf "$tmp/in/d"; rm "$tmp/in/c/hf-fm.tar.gz"
+check "assemble refuses a tarball that differs from its manifest" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm3" >/dev/null 2>&1; echo $?)"
 check "unchanged inputs: nothing to publish" 0 "$(
   h="$(bash "$T" input-hash HEAD)"
   jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same.json"
