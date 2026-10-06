@@ -1,8 +1,10 @@
 # fv-serve images: one per pod variant, published to GHCR and Runpod
 
-Date: 2026-09-28. Build: `docker/gpucheck.Dockerfile` (stages `serve-os` …
-`serve-<variant>`), CI: `.github/workflows/serve-image.yml` +
-`scripts/serve/ci-images.sh`, Runpod publishing:
+Date: 2026-09-28; shared layer stack 2026-10-06 ([Lean runtime
+images](#lean-runtime-images-2026-10-06)). Build: `docker/gpucheck.Dockerfile`
+(stages `base-os`, `base-cuda` … `serve-<variant>`, `runtime`, `serve`), CI:
+`.github/workflows/serve-image.yml` + `scripts/serve/ci-images.sh` +
+`scripts/ci/base-images.sh`, Runpod publishing:
 `scripts/serve/runpod-templates.sh`, variant table: `scripts/serve/variants.sh`.
 
 ## Images
@@ -20,7 +22,7 @@ deploy scripts pull anonymously).
 | wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, the `wan14b-turbo` tier: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
 | cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu`, … | `fv-serve-cpu-pod` |
-| debug (legacy all-in-one) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
+| debug (the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
 
 Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
 `<sha>` tags are immutable. Two release channels move over them
@@ -36,18 +38,30 @@ Releases page shows each cluster pod's build against its channel.
 
 ### Layers
 
+Every runtime image is one stack; the two lower parts are published once per
+content hash and reused by every build (see [Lean runtime
+images](#lean-runtime-images-2026-10-06)):
+
 ```
-ubuntu:22.04                                   all images
-serve-os: ca-certificates, libx264/libvpx/libdav1d runtime libs
-ffmpeg + ffprobe (minimal FFmpeg 4.4 build)    all images
-cuBLAS / cuBLASLt  | cuDNN (no adv) | NVRTC      CUDA variants (3 layers: pulled in parallel)
-fv-serve --features cuda,http-client            CUDA variants (identical binary)
-config + fv-entry + FV_VARIANT/FV_CONFIG        one small layer per variant
+ubuntu:22.04 (pinned by digest)                     every image
+base-os:   ca-certificates + libx264/libvpx/libdav1d  every image
+           ffmpeg + ffprobe (minimal FFmpeg 4.4)
+base-cuda: cuBLASLt                                  every CUDA image
+           cuDNN precompiled engines                 (4 layers, pulled in parallel,
+           cuDNN core (graph, ops, cnn, heuristic,    unchanged until a CUDA pin
+             runtime-compiled + tensor-IR engines)    or the ffmpeg build changes)
+           cuBLAS + NVRTC (+ builtins)
+           ld.so config
+ ├─ serve-cuda-bin: fv-serve --features cuda,http-client  -> serve-<variant>: config + FV_VARIANT
+ ├─ runtime: sshd/rsync/curl, CUPTI, hf-fm, scripts/gpu, oxide, fv-gpucheck
+ │   └─ serve (debug): + configs, deploy/vast/worker.py, fv-serve
+base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)
 ```
 
 The CUDA variants differ only in their last layer (a few KB), so a host that
 has pulled any one of them pulls the next in seconds, and Runpod's host
-image cache covers every family at once. The `cpu` image (fv-control's
+image cache covers every family at once; `fastvideo-rs-runtime` and the
+debug image add only their thin top layers to the same base. The `cpu` image (fv-control's
 fake-engine workers) shares the OS and ffmpeg layers and has no CUDA
 library at all (the smoke check asserts it).
 
