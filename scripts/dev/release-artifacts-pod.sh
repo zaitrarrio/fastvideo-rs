@@ -232,12 +232,19 @@ build_gpucheck_tests() {
   cat "$STAGE/gpucheck-tests/tests.tsv" >&2
 }
 
+# x86-64 host executables / libraries (the CUDA cubins are ELF too: skipped).
+is_host_elf() {
+  [[ "$(head -c4 "$1" | od -An -c | tr -d ' ')" == 177ELF \
+     && "$(od -An -tx1 -j18 -N2 "$1" | tr -d ' ')" == 3e00 ]]
+}
+
 # GLIBC_x.y symbol versions above the images' glibc fail the build.
 check_glibc() {
   local f bad=0 v
   while IFS= read -r -d '' f; do
-    head -c4 "$f" | grep -q $'\x7fELF' || continue
-    v="$(objdump -T "$f" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
+    is_host_elf "$f" || continue
+    v="$( { objdump -T "$f" 2>/dev/null || true; } | { grep -o 'GLIBC_[0-9.]*' || true; } \
+          | sed 's/GLIBC_//' | sort -uV | tail -1)"
     [[ -z "$v" ]] && continue
     if [[ "$(printf '%s\n%s\n' "$v" "$MAX_GLIBC" | sort -V | tail -1)" != "$MAX_GLIBC" ]]; then
       log "FAIL glibc: ${f#"$STAGE"/} needs GLIBC_$v (> $MAX_GLIBC)"; bad=1
@@ -274,7 +281,9 @@ for d in "$STAGE"/*/; do
     serve-cuda) feats="$SERVE_FEATURES" ;; serve-gateway) feats="$GATEWAY_FEATURES" ;;
     serve-fake) feats="fake,full" ;; gpucheck|gpucheck-vast) feats="cuda" ;; hf-fm) feats="cli" ;;
   esac
-  needed="$(find "$d" -type f -print0 | xargs -0 -I{} sh -c 'head -c4 "{}" | grep -q ELF && readelf -d "{}" 2>/dev/null' \
+  needed="$(while IFS= read -r -d '' f; do
+        if is_host_elf "$f"; then readelf -d "$f" 2>/dev/null || true; fi
+      done < <(find "$d" -type f -print0) \
     | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort -u | jq -R -s 'split("\n") | map(select(length > 0))')"
   sets_json="$(jq -c --arg s "$set" --arg tb "$set.tar.gz" --arg sha "$(sha256sum "$OUT/$set.tar.gz" | cut -d' ' -f1)" \
     --argjson size "$(stat -c %s "$OUT/$set.tar.gz")" --arg f "$feats" --argjson files "$files" --argjson needed "$needed" \
