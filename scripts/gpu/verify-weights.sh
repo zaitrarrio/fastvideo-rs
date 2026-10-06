@@ -8,7 +8,7 @@
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
-#                                      sfwan21-1.3b
+#                                      sfwan21-1.3b sana-video-2b-480p
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8 upscalers
@@ -16,6 +16,8 @@
 #                                      ltx25-dev ltx25-a2v-guided ltx2
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
 #                                      longlive-plug
+#                                      wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq
+#                                      lingbot-moe cosmos3-super
 #                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
@@ -82,7 +84,7 @@ needs() {
     fastwan21-1.3b)
       echo "fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer" ;;
     # Wan Diffusers trees (weights-manifest.tsv rows of the same name).
-    wan22-ti2v-5b | fastwan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
+    wan22-ti2v-5b | fastwan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b | wan21-t2v-1.3b)
       echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
     # MMAudio large-44k-v2 V2A (scripts/gpu/fetch-mmaudio.py): the converted
     # safetensors the port reads, plus the upstream .pth tree and the CLIP
@@ -90,6 +92,10 @@ needs() {
     mmaudio-44k-v2)
       local m=mmaudio-44k-v2/safetensors
       echo ":$m/mmaudio_large_44k_v2.safetensors :$m/vae_44k.safetensors :$m/synchformer.safetensors :$m/bigvgan_v2_44k.safetensors :$m/clip_dfn5b_h14_384.safetensors mmaudio-44k-v2:weights mmaudio-44k-v2:ext_weights mmaudio-44k-v2:bigvgan_v2_44khz_128band_512x mmaudio-44k-v2:DFN5B-CLIP-ViT-H-14-384" ;;
+    # SANA-Video 2B 480p Diffusers tree (weights-manifest.tsv sana-video-2b-480p;
+    # docs/ports/sana-video.md). vae/ is the Wan 2.1 VAE, byte-identical.
+    sana-video-2b-480p)
+      echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
     # HunyuanVideo 1.5 Diffusers trees (weights-manifest.tsv rows of the same name).
     hy15-480-t2v | hy15-480-i2v | hy15-720-t2v | hy15-720-i2v)
       echo "$1:transformer $1:vae $1:text_encoder $1:text_encoder_2 $1:tokenizer $1:tokenizer_2 $1:scheduler" ;;
@@ -122,6 +128,24 @@ needs() {
     # The six LongLive-Plug LoRA trees. Plus their sha: lists.
     longlive-plug)
       echo "longlive-plug:minimax-h3-few-step longlive-plug:minimax-h3-cfg longlive-plug:wan21-t2v-14b-few-step longlive-plug:wan21-t2v-14b-cfg longlive-plug:wan22-ti2v-5b-few-step longlive-plug:wan22-ti2v-5b-cfg" ;;
+    # LingBot-Video MoE 30B-A3B: base + 1080p refiner DiTs, Qwen3-VL, Wan 2.1 VAE
+    # (weights-manifest.tsv lingbot-video-moe-30b-a3b; docs/ports/lingbot.md).
+    lingbot-moe)
+      local l=lingbot-video-moe-30b-a3b
+      echo "$l:transformer $l:refiner $l:text_encoder $l:processor $l:vae $l:scheduler" ;;
+    # Cosmos3-Super 64B T2V: the MoT transformer, Wan 2.2 VAE, Qwen2 tokenizer
+    # (weights-manifest.tsv cosmos3-super; docs/ports/cosmos3.md).
+    cosmos3-super)
+      echo "cosmos3-super:transformer cosmos3-super:vae cosmos3-super:text_tokenizer cosmos3-super:scheduler" ;;
+    # Wan2.2 T2V-A14B: the high-noise (transformer) and low-noise
+    # (transformer_2) experts (docs/ports/wan.md "Wan 2.2 T2V-A14B").
+    wan22-t2v-a14b)
+      echo "$1:transformer $1:transformer_2 $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
+    # LTX-2.3 official HQ (sol-engine models/ltx23.toml): the ltx23 tree for
+    # Gemma, the VAEs and the vocoder, plus Lightricks/LTX-2.3's dev DiT, the
+    # distilled LoRA 384 v1.1 and the x2 v1.1 upscaler in ltx23-dev/.
+    ltx23-hq)
+      echo "$(needs ltx23) :ltx23-dev/ltx-2.3-22b-dev.safetensors :ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors :ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     upscalers) echo "upscalers" ;;
@@ -131,7 +155,8 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
+  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super)
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {
