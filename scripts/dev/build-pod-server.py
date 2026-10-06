@@ -19,6 +19,11 @@ On the network volume (FV_BUILD_ROOT, default /workspace/fv-build):
                        (see SEED_RECIPE); a job whose agent has no target dir
                        starts from it
   release-cache/       release-artifacts-pod.sh's oxide cubins and hf-fm
+With FV_BUILD_R2_{ENDPOINT,BUCKET,ACCESS_KEY_ID,SECRET_ACCESS_KEY} (set by
+fv-control, docs/dev/build-pods-fv-control.md §7): sccache uses the R2 bucket
+(S3 backend, prefix sccache/) instead of sccache/, and deps seeds are also
+fetched from / uploaded to deps-seed/ there, so pods in any datacenter share
+them. Without a network volume FV_BUILD_ROOT is on the container disk.
   jobs/<id>.log        job logs; logs/pod.log service log; ledger.tsv
 From the image (docker/build-base.Dockerfile, FV_BUILD_IMAGE): the Rust
 toolchain (RUSTUP_TOOLCHAIN), CUDA 13.4 (CUDA_HOME), sccache, mold, clang,
@@ -141,6 +146,15 @@ EVICT_HOLD_S = float(os.environ.get("FV_BUILD_EVICT_HOLD_MIN", "60")) * 60
 # eviction pass could not free it.
 MIN_FREE_GB = float(os.environ.get("FV_BUILD_MIN_FREE_GB", "2"))
 SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
+# The shared cache on R2 (docs/dev/build-pods-fv-control.md §7), set by
+# fv-control when it has the bucket's key: sccache's S3 backend and the deps
+# seeds (deps-seed/<key>.tar.zst), so pods in any datacenter share them. The
+# key reaches only the sccache server and this process, never a job.
+R2 = {k: os.environ.get(f"FV_BUILD_R2_{v}", "").strip() for k, v in
+      (("endpoint", "ENDPOINT"), ("bucket", "BUCKET"), ("key", "ACCESS_KEY_ID"), ("secret", "SECRET_ACCESS_KEY"))}
+R2_ON = all(R2.values())
+R2_SCCACHE_PREFIX = "sccache/"
+R2_SEED_PREFIX = "deps-seed/"
 # Everything below comes from the base image (docker/build-base.Dockerfile);
 # nothing is installed at boot. A missing tool fails the setup (or, for the
 # browser tools, the extras) with the list of what is missing.
@@ -305,7 +319,8 @@ def job_env(agent=None):
     # which local tests (director, console) must not see. The image's ENV
     # (RUSTUP_HOME, RUSTUP_TOOLCHAIN, PATH, CUDA_HOME, NVCC, PLAYWRIGHT_BROWSERS_PATH,
     # NODE_PATH, LD_LIBRARY_PATH) passes through.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNPOD_")}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("RUNPOD_", "FV_BUILD_R2_", "AWS_")) and k not in ("SCCACHE_BUCKET", "SCCACHE_ENDPOINT")}
     for k in ("FV_BUILD_TOKEN_SHA256", "FV_BUILD_SERVER_B64"):
         env.pop(k, None)
     env.update(
@@ -385,11 +400,22 @@ def sccache_cmd(*args, timeout=30, env=None):
         return 1, str(e)
 
 
+def sccache_server_env():
+    """The jobs' env plus, with R2, sccache's S3 backend on the R2 bucket (one
+    backend: SCCACHE_DIR is then unused). Only the server process gets the key."""
+    env = job_env()
+    if R2_ON:
+        env.update({"SCCACHE_BUCKET": R2["bucket"], "SCCACHE_ENDPOINT": R2["endpoint"], "SCCACHE_REGION": "auto",
+                    "SCCACHE_S3_USE_SSL": "true", "SCCACHE_S3_KEY_PREFIX": R2_SCCACHE_PREFIX,
+                    "AWS_ACCESS_KEY_ID": R2["key"], "AWS_SECRET_ACCESS_KEY": R2["secret"]})
+    return env
+
+
 def sccache_start():
     """Starts the sccache server from this process, not from a job: a server
     a job's first rustc spawned lived in that job's process group, and a
     cancel (killpg) took it down mid-build for every other agent."""
-    rc, out = sccache_cmd("--start-server", timeout=60)
+    rc, out = sccache_cmd("--start-server", timeout=60, env=sccache_server_env())
     if rc != 0 and "already" not in out.lower():
         raise RuntimeError(f"sccache --start-server exited {rc}: {out[-300:]}")
 
@@ -848,6 +874,123 @@ class Job:
                 pass
 
 
+# --------------------------------------------------------------------------- R2 (S3 API)
+# A small SigV4 client (head, get to a file, streamed put) for the deps seeds
+# on R2; sccache talks to R2 itself. Signed like scripts/dev/r2.py (checked
+# against AWS's published examples in test_build_pod_server.py).
+
+
+def _hmac(key, msg):
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def s3_quote(path):
+    return urllib.parse.quote(path, safe="/-_.~")
+
+
+def s3_sign(method, host, path, query, headers, payload_sha, key, secret, when, region="auto", service="s3"):
+    """SigV4 headers (Authorization included) for one request; `when` a UTC datetime."""
+    amz_date = when.strftime("%Y%m%dT%H%M%SZ")
+    date = when.strftime("%Y%m%d")
+    hdrs = {k.lower(): str(v).strip() for k, v in headers.items()}
+    hdrs.update({"host": host, "x-amz-date": amz_date, "x-amz-content-sha256": payload_sha})
+    signed = sorted(hdrs)
+    cq = "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(str(v), safe='-_.~')}"
+                  for k, v in sorted(query.items()))
+    canonical = "\n".join([method, s3_quote(path), cq, "".join(f"{h}:{hdrs[h]}\n" for h in signed), ";".join(signed),
+                           payload_sha])
+    scope = f"{date}/{region}/{service}/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    k = _hmac(("AWS4" + secret).encode("utf-8"), date)
+    for part in (region, service, "aws4_request"):
+        k = _hmac(k, part)
+    sig = hmac.new(k, to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    hdrs["authorization"] = f"AWS4-HMAC-SHA256 Credential={key}/{scope}, SignedHeaders={';'.join(signed)}, Signature={sig}"
+    del hdrs["host"]
+    return hdrs
+
+
+def r2_request(method, key, body=None, length=None, timeout=1800):
+    import datetime
+    u = urllib.parse.urlsplit(R2["endpoint"])
+    path = f"/{R2['bucket']}/{key}"
+    extra = {"content-length": str(length)} if length is not None else {}
+    hdrs = s3_sign(method, u.netloc, path, {}, extra, "UNSIGNED-PAYLOAD", R2["key"], R2["secret"],
+                   datetime.datetime.now(datetime.timezone.utc))
+    hdrs["user-agent"] = USER_AGENT
+    req = urllib.request.Request(f"{u.scheme}://{u.netloc}{s3_quote(path)}", data=body, method=method, headers=hdrs)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def r2_head(key):
+    """True / False (404), None on any other error."""
+    try:
+        with r2_request("HEAD", key, timeout=30):
+            return True
+    except urllib.error.HTTPError as e:
+        return False if e.code == 404 else None
+    except OSError:
+        return None
+
+
+def r2_get_file(key, dest):
+    """Downloads to dest (via a .part file); True when it was there."""
+    part = f"{dest}.part-{uuid.uuid4().hex[:6]}"
+    try:
+        with r2_request("GET", key) as r, open(part, "wb") as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+        os.replace(part, dest)
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            log(f"r2 get {key}: HTTP {e.code}")
+        return False
+    except OSError as e:
+        log(f"r2 get {key}: {e}")
+        return False
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
+
+
+def r2_put_file(key, src):
+    size = os.path.getsize(src)
+    with open(src, "rb") as f:
+        with r2_request("PUT", key, body=f, length=size):
+            pass
+    return size
+
+
+def r2_fetch_seed(key):
+    """The seed `key` from R2 into SEED_DIR (tarball first, metadata last: the
+    metadata's presence means complete). True when it is local now."""
+    if not R2_ON or not key:
+        return False
+    tar, meta = seed_paths(key)
+    os.makedirs(SEED_DIR, exist_ok=True)
+    t0 = time.time()
+    if not r2_get_file(f"{R2_SEED_PREFIX}{key}.json", meta + ".r2"):
+        return False
+    if not r2_get_file(f"{R2_SEED_PREFIX}{key}.tar.zst", tar):
+        os.remove(meta + ".r2")
+        return False
+    os.replace(meta + ".r2", meta)
+    log(f"deps seed {key}: {os.path.getsize(tar) / 1e9:.2f} GB from R2 in {time.time() - t0:.0f}s")
+    return True
+
+
+def r2_upload_seed(key):
+    """A seed built here goes to R2 for pods elsewhere (metadata last)."""
+    tar, meta = seed_paths(key)
+    try:
+        t0 = time.time()
+        n = r2_put_file(f"{R2_SEED_PREFIX}{key}.tar.zst", tar)
+        r2_put_file(f"{R2_SEED_PREFIX}{key}.json", meta)
+        log(f"deps seed {key}: uploaded {n / 1e9:.2f} GB to R2 in {time.time() - t0:.0f}s")
+    except (OSError, urllib.error.URLError) as e:
+        log(f"deps seed {key}: R2 upload failed: {e}")
+
+
 # --------------------------------------------------------------------------- deps seeds
 
 
@@ -913,6 +1056,10 @@ def seed_target(wt, target, write):
         return False
     key = seed_key(wt)
     m = seed_meta(key) if key else None
+    if m is None and key and R2_ON:
+        write(f"[deps seed] {key}: not here; trying R2\n".encode())
+        if r2_fetch_seed(key):
+            m = seed_meta(key)
     if m is None:
         write(f"[deps seed] none for this Cargo.lock yet (key {key}); building without one\n".encode())
         return False
@@ -955,6 +1102,8 @@ def maybe_build_seed(agent, force=False):
     key = seed_key(wt)
     if not key or (seed_meta(key) is not None and not force):
         return None
+    if not force and R2_ON and r2_head(f"{R2_SEED_PREFIX}{key}.json"):
+        return None  # built elsewhere: the next job without a target dir downloads it
     with state_lock:
         if any(j.state in ("queued", "running") for j in seed_building.values()):
             return None
@@ -1146,6 +1295,8 @@ class SeedJob(Job):
         msg = f"deps seed {self.key}: {unpacked / 1e9:.1f} GB -> {size / 1e9:.2f} GB zstd in {time.time() - self.started:.0f}s"
         self.write((msg + "\n").encode())
         log(msg)
+        if R2_ON:
+            threading.Thread(target=r2_upload_seed, args=(self.key,), daemon=True).start()
         seed_gc()
         return 0
 
@@ -1838,6 +1989,8 @@ class Handler(BaseHTTPRequestHandler):
             "local_disk": disk_gb(LOCAL),
             "image": IMAGE, "base": BASE, "rustc": RUSTC_VV.splitlines()[0] if RUSTC_VV else None,
             "sccache": sccache_stats(), "mold": bool(shutil.which("mold")),
+            "r2_cache": {"on": R2_ON, "bucket": R2["bucket"] or None,
+                         "host": urllib.parse.urlsplit(R2["endpoint"]).netloc or None},
             "caches_gb": dict(cache_usage), "deps_seeds": {"enabled": SEED_ON, "keep": SEED_KEEP, "seeds": seed_list(),
                                                            "building": [j.info() for j in seed_building.values()
                                                                         if j.state in ("queued", "running")]},

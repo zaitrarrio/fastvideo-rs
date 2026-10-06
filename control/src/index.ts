@@ -12,6 +12,25 @@ import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type
 import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
 import { buildPodStatus } from "./buildpod";
+import {
+  buildPodsOverview,
+  buildPodsPolicy,
+  buildPodsUp,
+  buildPodToken,
+  buildPodView,
+  ciBuildRunner,
+  cpuCandidates,
+  createBuildPod,
+  currentRef,
+  deleteBuildPodRow,
+  getBuildPod,
+  normalizePolicy,
+  rankCandidates,
+  registerRunner,
+  serverBundle,
+  startBuildPodRow,
+  stopBuildPodRow,
+} from "./buildpods";
 import { collect } from "./collector";
 import { randomToken, sha256Hex } from "./crypto";
 import { defaults, type Env, type Vars } from "./env";
@@ -423,6 +442,80 @@ app.get("/api/buildpod", async (c) => {
   return c.json({ pods, policy: { backstop: pol.build_pod_backstop, max_h: pol.build_pod_max_h, idle_grace_min: pol.build_pod_idle_grace_min } });
 });
 
+// ---------------- build pods managed by fv-control (buildpods.ts, docs/dev/build-pods-fv-control.md)
+const requireAdmin = (c: C) => {
+  if (c.get("scope") !== "admin") throw new HttpError(403, "needs an admin token");
+};
+const podOut = async (c: C, id: string, withToken: boolean) => {
+  const row = await getBuildPod(c.env, id);
+  const view = await buildPodView(c.env, row, await currentRef(c.env));
+  if (!withToken) return { pod: view };
+  requireAdmin(c);
+  await auditC(c, { action: "build_pod.token", target: row.pod_id || row.id, detail: row.name });
+  return { pod: view, token: await buildPodToken(c.env, row) };
+};
+app.get("/api/build-pods", async (c) => c.json(await buildPodsOverview(c.env)));
+app.get("/api/build-pods/policy", async (c) => c.json({ policy: await buildPodsPolicy(c.env), defaults: normalizePolicy({}) }));
+app.put("/api/build-pods/policy", async (c) => {
+  const before = await buildPodsPolicy(c.env);
+  const b = await body<{ policy?: Record<string, unknown> }>(c);
+  const next = normalizePolicy({ ...before, ...(b.policy || {}) } as any);
+  await putSetting(c.env, "build_pods", next, actor(c));
+  await auditC(c, { action: "build_pods.policy", before, after: next });
+  return c.json({ policy: next });
+});
+app.get("/api/build-pods/plan", async (c) => {
+  const pol = await buildPodsPolicy(c.env);
+  const region = c.req.query("region") || null;
+  const ranked = rankCandidates(await cpuCandidates(c.env, pol, region), pol, region);
+  const bundle = await serverBundle(c.env, pol).catch((e) => ({ error: (e as Error).message }));
+  return c.json({ candidates: ranked.slice(0, 15), server: "error" in bundle ? bundle : { ref: bundle.ref, sha: bundle.sha, image: bundle.image, bytes_b64: bundle.b64.length } });
+});
+app.post("/api/build-pods/up", async (c) => {
+  requireAdmin(c);
+  const b = await body<{ region?: string }>(c);
+  const region = typeof b.region === "string" && /^[A-Za-z0-9-]{2,20}$/.test(b.region) ? b.region : null;
+  const up = await buildPodsUp(c.env, actor(c), { region });
+  return c.json({ action: up.action, replaced: up.replaced || [], ...(await podOut(c, up.pod.id, true)) }, up.action === "created" ? 201 : 200);
+});
+app.post("/api/build-pods", async (c) => {
+  requireAdmin(c);
+  const b = await body<{ region?: string; purpose?: string; server_ref?: string }>(c);
+  const pol = await buildPodsPolicy(c.env);
+  const purpose = b.purpose === "shared" ? "shared" : "test";
+  const row = await createBuildPod(c.env, actor(c), pol, { region: b.region || null, purpose, server_ref: b.server_ref });
+  return c.json(await podOut(c, row.id, true), 201);
+});
+app.get("/api/build-pods/:id", async (c) => c.json(await podOut(c, c.req.param("id"), false)));
+app.get("/api/build-pods/:id/token", async (c) => c.json(await podOut(c, c.req.param("id"), true)));
+app.post("/api/build-pods/:id/start", async (c) => {
+  await startBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c));
+  return c.json(await podOut(c, c.req.param("id"), false));
+});
+app.post("/api/build-pods/:id/stop", async (c) => {
+  const b = await body<{ force?: boolean }>(c);
+  const result = await stopBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c), { force: !!b.force, reason: "by hand" });
+  return c.json({ result, ...(await podOut(c, c.req.param("id"), false)) });
+});
+app.delete("/api/build-pods/:id", async (c) => {
+  await deleteBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c), { force: c.req.query("force") === "1" });
+  return c.json(await podOut(c, c.req.param("id"), false));
+});
+app.post("/api/build-pods/:id/runner", async (c) => {
+  const row = await getBuildPod(c.env, c.req.param("id"));
+  const state = await registerRunner(c.env, row);
+  await auditC(c, { action: "build_pod.runner", target: row.pod_id || row.id, detail: state });
+  return c.json({ runner: state });
+});
+// CI (docs §6): an idle runner now, a pod being woken ("wait": poll again), or GitHub-hosted. Scope `ci` tokens reach only /api/ci/*.
+app.post("/api/ci/build-runner", async (c) => {
+  const b = await body<{ label?: string; region?: string; wake?: boolean; workflow?: string; run_id?: number | string }>(c);
+  const region = typeof b.region === "string" && /^[a-z]{2}$/.test(b.region) ? b.region : null;
+  const ans = await ciBuildRunner(c.env, actor(c), { label: b.label, region, wake: b.wake });
+  if (ans.builder === "wait" && ans.pod) await auditC(c, { action: "build_pod.ci_wake", target: ans.pod.id, detail: `${String(b.workflow || "").slice(0, 80)} run ${String(b.run_id || "").slice(0, 20)}: ${ans.reason}` });
+  return c.json(ans);
+});
+
 // ---------------- alerts, policies
 app.get("/api/alerts", async (c) => {
   const open = c.req.query("open") !== "0";
@@ -510,7 +603,7 @@ app.post("/api/tokens", async (c) => {
   const v = validate("token-create", { scope: "admin", ...b });
   if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
   const name = String(b.name);
-  const scope = b.scope === "read" ? "read" : "admin";
+  const scope = b.scope === "read" ? "read" : b.scope === "ci" ? "ci" : "admin";
   const t = await mintApiToken(c.env, name, scope, actor(c), b.ttl_days ? Number(b.ttl_days) : 90);
   await auditC(c, { action: "token.mint", target: t.id, after: { name, scope, expires_at: t.expires_at } });
   return c.json(t, 201);

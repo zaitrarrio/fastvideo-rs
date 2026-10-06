@@ -840,6 +840,106 @@ class SeedTest(unittest.TestCase):
             j.state = "done"
 
 
+class R2CacheTest(unittest.TestCase):
+    """The shared cache on R2 (docs/dev/build-pods-fv-control.md §7): SigV4,
+    the key only in sccache's env, seeds up and down through the S3 API."""
+
+    R2 = {"endpoint": "", "bucket": "fv-build-cache", "key": "AKIDTESTKEY", "secret": "r2-secret-value-xyz"}
+
+    def test_sigv4_matches_aws_published_example(self):
+        import datetime
+        now = datetime.datetime(2013, 5, 24, 0, 0, 0, tzinfo=datetime.timezone.utc)
+        empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        h = bps.s3_sign("GET", "examplebucket.s3.amazonaws.com", "/test.txt", {}, {"Range": "bytes=0-9"}, empty,
+                        "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", now, region="us-east-1")
+        self.assertEqual(h["authorization"],
+                         "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
+                         "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, "
+                         "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+
+    def test_the_key_reaches_sccache_only_never_a_job(self):
+        r2 = dict(self.R2, endpoint="https://acct.r2.cloudflarestorage.com")
+        env = {"FV_BUILD_R2_SECRET_ACCESS_KEY": r2["secret"], "FV_BUILD_R2_ACCESS_KEY_ID": r2["key"],
+               "AWS_SECRET_ACCESS_KEY": "x"}
+        with mock.patch.dict(os.environ, env), mock.patch.dict(bps.R2, r2), mock.patch.object(bps, "R2_ON", True):
+            job = bps.job_env("a")
+            server = bps.sccache_server_env()
+        self.assertFalse([k for k in job if k.startswith(("FV_BUILD_R2_", "AWS_"))])
+        self.assertNotIn(r2["secret"], json.dumps(job))
+        self.assertEqual((server["SCCACHE_BUCKET"], server["SCCACHE_ENDPOINT"], server["SCCACHE_REGION"]),
+                         ("fv-build-cache", "https://acct.r2.cloudflarestorage.com", "auto"))
+        self.assertEqual((server["AWS_ACCESS_KEY_ID"], server["AWS_SECRET_ACCESS_KEY"]), (r2["key"], r2["secret"]))
+        self.assertEqual(server["SCCACHE_S3_KEY_PREFIX"], "sccache/")
+        with mock.patch.object(bps, "R2_ON", False):
+            self.assertNotIn("SCCACHE_BUCKET", bps.sccache_server_env())
+
+    def test_seed_round_trip_through_the_s3_api(self):
+        store, seen = {}, []
+
+        class S3(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _auth(self):
+                seen.append(dict(self.headers))
+                return self.headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256 Credential=AKIDTESTKEY/")
+
+            def do_PUT(self):
+                ok = self._auth()
+                n = int(self.headers["Content-Length"])
+                store[self.path] = self.rfile.read(n)
+                self.send_response(200 if ok else 403)
+                self.end_headers()
+
+            def do_GET(self):
+                if not self._auth() or self.path not in store:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(store[self.path])))
+                self.end_headers()
+                self.wfile.write(store[self.path])
+
+            def do_HEAD(self):
+                self._auth()
+                self.send_response(200 if self.path in store else 404)
+                self.end_headers()
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), S3)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        r2 = dict(self.R2, endpoint=f"http://127.0.0.1:{httpd.server_address[1]}")
+        try:
+            with mock.patch.dict(bps.R2, r2), mock.patch.object(bps, "R2_ON", True):
+                os.makedirs(bps.SEED_DIR, exist_ok=True)
+                tar, meta = bps.seed_paths("feedfacecafe0001")
+                with open(tar, "wb") as f:
+                    f.write(b"zstd-bytes" * 1000)
+                with open(meta, "w") as f:
+                    json.dump({"key": "feedfacecafe0001", "bytes": 10000}, f)
+                bps.r2_upload_seed("feedfacecafe0001")
+                self.assertEqual(set(store), {"/fv-build-cache/deps-seed/feedfacecafe0001.tar.zst",
+                                              "/fv-build-cache/deps-seed/feedfacecafe0001.json"})
+                self.assertTrue(bps.r2_head("deps-seed/feedfacecafe0001.json"))
+                self.assertFalse(bps.r2_head("deps-seed/nope.json"))
+                os.remove(tar)
+                os.remove(meta)
+                self.assertIsNone(bps.seed_meta("feedfacecafe0001"))
+                self.assertTrue(bps.r2_fetch_seed("feedfacecafe0001"))
+                self.assertEqual(bps.seed_meta("feedfacecafe0001")["bytes"], 10000)
+                with open(tar, "rb") as f:
+                    self.assertEqual(f.read(), b"zstd-bytes" * 1000)
+                self.assertFalse(bps.r2_fetch_seed("0000000000000000"))
+                self.assertFalse([n for n in os.listdir(bps.SEED_DIR) if ".part-" in n or n.endswith(".r2")])
+            self.assertNotIn(r2["secret"], json.dumps(seen))
+            self.assertTrue(all({k.lower(): v for k, v in h.items()}.get("x-amz-content-sha256") == "UNSIGNED-PAYLOAD" for h in seen))
+        finally:
+            httpd.shutdown()
+            for n in os.listdir(bps.SEED_DIR):
+                if n.startswith(("feedfacecafe0001", "0000000000000000")):
+                    os.remove(os.path.join(bps.SEED_DIR, n))
+
+
 if __name__ == "__main__":
     try:
         unittest.main(verbosity=2)

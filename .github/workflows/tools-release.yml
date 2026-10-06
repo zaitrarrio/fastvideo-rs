@@ -93,7 +93,11 @@ jobs:
         id: runner
         if: steps.plan.outputs.skip == 'false'
         env:
-          # Fine-grained PAT, Administration: read (GITHUB_TOKEN cannot list runners).
+          # fv-control decides and wakes a build pod (an fv-control token of scope ci,
+          # docs/dev/build-pods-fv-control.md §6); without it, a fine-grained PAT with
+          # Administration: read lists the runners (GITHUB_TOKEN cannot).
+          FV_CONTROL_CI_TOKEN: ${{ secrets.FV_CONTROL_CI_TOKEN }}
+          FV_CONTROL_URL: ${{ vars.FV_CONTROL_URL }}
           FV_RUNNER_READ_TOKEN: ${{ secrets.FV_RUNNER_READ_TOKEN }}
           FV_BUILD_RUNNER: ${{ github.event_name == 'pull_request' && 'github' || inputs.builder || vars.FV_BUILD_RUNNER || 'auto' }}
         run: |

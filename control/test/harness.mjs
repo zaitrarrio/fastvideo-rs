@@ -38,6 +38,18 @@ export function startMock() {
       { id: "extold00001", name: "little_azure_rook", desiredStatus: "EXITED", costPerHr: 4.59, gpuCount: 1, machine: { gpuDisplayName: "H200 SXM", dataCenterId: "EUR-IS-4" }, runtime: null },
     ],
     failCreate: 0,
+    // Build pods (src/buildpods.ts): CPU stock per "<dc>|<instanceId>", repo files, GitHub runners and queued jobs.
+    cpuStock: { "EU-RO-1|cpu3c-32-64": ["High", 0.96], "EUR-IS-1|cpu3c-32-64": ["Low", 0.96], "EUR-IS-1|cpu5c-16-32": ["High", 0.56], "US-CA-2|cpu3c-16-32": ["High", 0.48] },
+    noStockDcs: new Set(), // create answers "no longer any instances available" there
+    repoFiles: {
+      "scripts/dev/build-pod-server.py": "#!/usr/bin/env python3\n# mock build pod server v1\n",
+      "scripts/dev/build-pod.sh": '#!/usr/bin/env bash\nBASE_IMAGE_TAG="bb-0123456789abcdef"\nIMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"\n',
+    },
+    runners: [], // {id, name, status, busy, labels: [{name}]}
+    runnerRegs: [], // POST /v1/runner bodies the pods got (the token checked, then dropped)
+    regTokens: 0,
+    ghQueued: [], // {run_id, path, jobs: [{id, status, labels}]}
+    bp: {}, // pod id -> {jobs_active, idle_s}
     edgeAdmin: "fvadm_edge_mock_admin",
     edgeInternal: "edge-internal-mock-token",
     edgeKeys: [],
@@ -78,6 +90,8 @@ export function startMock() {
       const rest = p.slice("/rp/rest".length);
       if (rest === "/pods" && req.method === "POST") {
         if (m.failCreate > 0) { m.failCreate--; return json(res, 500, { error: "There are no instances currently available" }); }
+        if (body.computeType === "CPU" && m.cpuDiskCap && body.containerDiskInGb > m.cpuDiskCap) return json(res, 400, { error: `create pod: Container Disk must be less than or equal to ${m.cpuDiskCap} GB for this instance` });
+        if (body.computeType === "CPU" && m.noStockDcs.has((body.dataCenterIds || [])[0])) return json(res, 500, { error: "This machine does not have the resources to deploy your pod. There are no longer any instances available with the requested specifications." });
         const id = newId();
         const cpu = body.computeType === "CPU";
         const pod = { id, name: body.name, payload: body, env: body.env, image: body.imageName, desiredStatus: "RUNNING", costPerHr: cpu ? 0.06 * (body.vcpuCount || 2) / 2 : 2.09, created: Date.now() };
@@ -97,13 +111,24 @@ export function startMock() {
         }
         if (req.method === "DELETE") { m.pods.delete(pod.id); return json(res, 200, {}); }
         if (req.method === "POST" && mm[3] === "stop") { pod.desiredStatus = "EXITED"; return json(res, 200, {}); }
-        if (req.method === "POST" && mm[3] === "start") { pod.desiredStatus = "RUNNING"; return json(res, 200, {}); }
+        if (req.method === "POST" && mm[3] === "start") { if (pod.refuseStart) return json(res, 500, { error: "not enough free CPU on the host" }); pod.desiredStatus = "RUNNING"; pod.startedAt = Date.now(); return json(res, 200, {}); }
       }
       return json(res, 404, { error: "no route" });
     }
     if (p === "/rp/graphql") {
       if (bearer !== m.runpodKey) return json(res, 401, { errors: [{ message: "bad key" }] });
       const q = body.query || "";
+      if (q.includes("dataCenters") && q.includes("ramMultiplier"))
+        return json(res, 200, { data: { dataCenters: ["EU-RO-1", "EUR-IS-1", "EU-NL-1", "US-CA-2", "AP-IN-2"].map((id) => ({ id, listed: id !== "AP-IN-2" })), cpuFlavors: [{ id: "cpu3c", ramMultiplier: 2 }, { id: "cpu5c", ramMultiplier: 2 }, { id: "cpu3g", ramMultiplier: 4 }] } });
+      if (q.includes("specifics(")) {
+        const data = {};
+        for (const mm of q.matchAll(/(a\d+): cpuFlavors \{ id specifics\(input: \{dataCenterId: "([^"]+)", instanceId: "([^"]+)"\}\)/g)) {
+          const st = m.cpuStock[`${mm[2]}|${mm[3]}`];
+          const fl = mm[3].split("-")[0];
+          data[mm[1]] = ["cpu3c", "cpu5c", "cpu3g"].map((id) => ({ id, specifics: { stockStatus: id === fl && st ? st[0] : null, securePrice: id === fl && st ? st[1] : 9 } }));
+        }
+        return json(res, 200, { data });
+      }
       if (q.includes("gpuTypes") && !body.variables?.id)
         return json(res, 200, { data: { gpuTypes: [
           { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", displayName: "RTX PRO 6000", memoryInGb: 96, securePrice: 2.09, communityPrice: 1.69, lowestPrice: { stockStatus: "Low" } },
@@ -113,7 +138,7 @@ export function startMock() {
       if (q.includes("gpuTypes")) return json(res, 200, { data: { gpuTypes: [{ id: body.variables?.id, securePrice: body.variables?.id?.includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: "High" } }] } });
       const pods = [...m.pods.values()].map((x) => ({
         id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.computeType === "CPU" ? 0 : 1, vcpuCount: 2,
-        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: "EUR-IS-1" },
+        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EUR-IS-1"])[0] },
         runtime: x.desiredStatus === "RUNNING" ? { uptimeInSeconds: 120, gpus: x.payload.computeType === "CPU" ? [] : [{ id: "g", gpuUtilPercent: 3, memoryUtilPercent: 40 }], container: { cpuPercent: 12, memoryPercent: 20 } } : null,
       }));
       return json(res, 200, { data: { myself: { clientBalance: m.balance, currentSpendPerHr: m.spend, spendLimit: 80, pods: [...pods, ...m.external] } } });
@@ -153,6 +178,30 @@ export function startMock() {
     if (p.startsWith("/gh/")) {
       if (bearer !== m.githubPat) return json(res, 401, { message: "Bad credentials" });
       if (p.endsWith("/dispatches")) { m.dispatches.push(body); res.writeHead(204); return res.end(); }
+      let gm = /^\/gh\/repos\/[^/]+\/[^/]+\/contents\/(.+)$/.exec(p);
+      if (gm) {
+        const f = m.repoFiles[gm[1]];
+        if (f === undefined || url.searchParams.get("ref") !== "main") return json(res, 404, { message: "Not Found" });
+        res.writeHead(200, { "content-type": "text/plain" });
+        return res.end(f);
+      }
+      if (p.endsWith("/actions/runners/registration-token") && req.method === "POST") { m.regTokens++; return json(res, 201, { token: `REGTOKEN${m.regTokens}xyz`, expires_at: new Date(Date.now() + 3600e3).toISOString() }); }
+      if (p.endsWith("/actions/runners") && req.method === "GET") return json(res, 200, { total_count: m.runners.length, runners: m.runners });
+      gm = /\/actions\/runners\/(\d+)$/.exec(p);
+      if (gm && req.method === "DELETE") {
+        const r = m.runners.find((x) => x.id === Number(gm[1]));
+        if (!r) return json(res, 404, {});
+        if (r.busy) return json(res, 422, { message: "busy" });
+        m.runners = m.runners.filter((x) => x !== r);
+        res.writeHead(204);
+        return res.end();
+      }
+      gm = /\/actions\/runs\/(\d+)\/jobs$/.exec(p);
+      if (gm) return json(res, 200, { jobs: (m.ghQueued.find((r) => r.run_id === Number(gm[1]))?.jobs || []).map((j) => ({ ...j, created_at: new Date().toISOString() })) });
+      if (p.endsWith("/actions/runs") && url.searchParams.get("status")) {
+        const st = url.searchParams.get("status");
+        return json(res, 200, { workflow_runs: m.ghQueued.filter((r) => (r.status || "in_progress") === st).map((r) => ({ id: r.run_id, path: r.path, name: r.path, status: st, created_at: new Date().toISOString() })) });
+      }
       if (p.includes("/actions/runs") || p.includes("/runs")) return json(res, 200, { workflow_runs: [{ id: 1, name: "serve-image", event: "push", status: "completed", conclusion: "success", head_sha: "abcdef1234", created_at: new Date().toISOString(), html_url: "https://github.com/x", display_title: "t" }] });
       return json(res, 404, {});
     }
@@ -194,6 +243,24 @@ export function startMock() {
       if (!pod || pod.desiredStatus !== "RUNNING") { res.writeHead(502); return res.end("no pod"); }
       const env = pod.env || {};
       const route = pm[2];
+      if (env.FV_BUILD_TOKEN_SHA256) {
+        // A build pod (scripts/dev/build-pod-server.py): public /healthz, the rest with its token.
+        const st = m.bp[pod.id] || {};
+        if (route === "/healthz") return json(res, 200, { ok: true, ready: true, phase: "ready", boot: Math.floor((pod.startedAt || pod.created) / 1000), uptime_s: 60, idle_s: st.idle_s ?? 30, idle_stop_s: Number(env.FV_BUILD_IDLE_MIN) * 60, max_s: 8 * 3600, jobs_active: st.jobs_active ?? 0, jobs: [] });
+        const sha = wc.subtle ? Buffer.from(await wc.subtle.digest("SHA-256", te.encode(bearer))).toString("hex") : "";
+        if (sha !== env.FV_BUILD_TOKEN_SHA256) return json(res, 401, { error: "unauthorized" });
+        if (route === "/v1/runner" && req.method === "POST") {
+          if (st.noRunner) return json(res, 404, { error: "no such endpoint" });
+          m.runnerRegs.push({ pod: pod.id, ...body, token: body.token?.startsWith("REGTOKEN") ? "<reg>" : "<OTHER>" });
+          m.runners = m.runners.filter((x) => x.name !== body.name);
+          m.runners.push({ id: 100 + m.runnerRegs.length, name: body.name, status: "online", busy: false, labels: ["self-hosted", "Linux", "X64", ...String(body.labels).split(",")].map((name) => ({ name })) });
+          st.runner = body.name;
+          m.bp[pod.id] = st;
+          return json(res, 202, { registering: body.name, labels: body.labels });
+        }
+        if (route === "/v1/runner") return json(res, 200, { phase: st.runner ? "running" : "absent", name: st.runner || null, busy: false });
+        return json(res, 404, {});
+      }
       if (env.FV_WORKER_DIRECT === "1" && route.startsWith("/fv/v1/admin/keys")) {
         // A direct worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
         if (!env.FV_ADMIN_TOKEN || bearer !== env.FV_ADMIN_TOKEN) return json(res, 401, { error: { kind: "unauthorized" } });

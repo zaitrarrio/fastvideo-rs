@@ -27,7 +27,7 @@ export function parseJson<T>(s: string | null | undefined, fallback: T): T {
 /** Removes every secret this Worker holds from a string (error messages from upstreams). */
 export function scrub(env: Env, s: string): string {
   let out = s;
-  for (const v of [env.RUNPOD_API_KEY, env.CLOUDRIFT_API_KEY, env.CLOUDFLARE_API_KEY, env.GITHUB_PAT, env.CONTROL_KEK, env.SESSION_SECRET]) {
+  for (const v of [env.RUNPOD_API_KEY, env.CLOUDRIFT_API_KEY, env.CLOUDFLARE_API_KEY, env.GITHUB_PAT, env.GITHUB_RUNNER_PAT, env.BUILD_CACHE_R2_SECRET_ACCESS_KEY, env.CONTROL_KEK, env.SESSION_SECRET]) {
     if (v && v.length >= 8) out = out.split(v).join("[redacted]");
   }
   return out;

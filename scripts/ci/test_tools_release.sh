@@ -77,6 +77,15 @@ check "runner: busy, offline or other labels only -> github" github "$(pick "$tm
 check "runner: no token to list runners -> github" github "$(env -u FV_TOOLS_RUNNERS_FILE FV_RUNNER_READ_TOKEN= bash "$T" pick-runner 2>/dev/null | jq -r .builder)"
 check "runner: FV_BUILD_RUNNER=pod forces the pod" pod "$(FV_BUILD_RUNNER=pod pick "$tmp/r-none.json")"
 check "runner: FV_BUILD_RUNNER=github forces GitHub" github "$(FV_BUILD_RUNNER=github pick "$tmp/r-idle.json")"
+printf '%s\n' '{"builder":"pod","reason":"1 idle fv-build runner(s) online"}' >"$tmp/fvc-pod"
+printf '%s\n' '{"builder":"wait","reason":"created build pod x","retry_after_s":0}' '{"builder":"wait","reason":"x","retry_after_s":0}' '{"builder":"pod","reason":"1 idle"}' >"$tmp/fvc-wait"
+printf '%s\n' '{"builder":"github","reason":"no idle runner and no pod: disabled"}' >"$tmp/fvc-gh"
+printf '%s\n' '{"builder":"wait","reason":"x","retry_after_s":0}' >"$tmp/fvc-forever"
+fvc() { FV_CONTROL_CI_FILE="$1" bash "$T" pick-runner 2>/dev/null | jq -r .builder; }
+check "runner: fv-control says pod" pod "$(fvc "$tmp/fvc-pod")"
+check "runner: fv-control wakes a pod, then pod" pod "$(fvc "$tmp/fvc-wait")"
+check "runner: fv-control says github" github "$(fvc "$tmp/fvc-gh")"
+check "runner: fv-control still waiting past FV_CONTROL_WAIT_S -> github" github "$(FV_CONTROL_WAIT_S=0 fvc "$tmp/fvc-forever")"
 check "runner: writes builder to GITHUB_OUTPUT" "builder=pod" "$(GITHUB_OUTPUT="$tmp/gho2" pick "$tmp/r-idle.json" >/dev/null; grep '^builder=' "$tmp/gho2")"
 # assemble: per-group builds (the hosted fallback) joined into one release.
 mkgroup() { # dir sets... : a fake build of those sets for HEAD; binaries print the version
