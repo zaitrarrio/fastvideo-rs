@@ -164,24 +164,23 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
     frames.extend(enc.finish().unwrap());
     let mut k = 0u64;
     let start = Instant::now();
-    let mut status = Value::Null;
-    loop {
+    let status = loop {
         for f in &frames {
             peer.send_video(VideoFrame::new(f.data.clone(), k * 3000)).unwrap();
             k += 1;
             let next = start + Duration::from_millis(k * 33);
             pump(&mut peer, &mut video, &mut audio, next.saturating_duration_since(Instant::now())).await;
         }
-        status = json_req(r, "GET", &loc, None).await.1;
+        let status = json_req(r, "GET", &loc, None).await.1;
         if status["session"]["input_frames"].as_u64().unwrap_or(0) >= 30
             && status["output"]["frames_sent"].as_u64().unwrap_or(0) > 30
             && audio > 30
             && video.len() > 30
         {
-            break;
+            break status;
         }
         assert!(start.elapsed() < T, "the echo never caught up: {} video, {audio} audio received; {status}", video.len());
-    }
+    };
     pump(&mut peer, &mut video, &mut audio, Duration::from_millis(500)).await;
     eprintln!("sent {k}; status {status}");
     assert_eq!(status["state"], "streaming", "{status}");
