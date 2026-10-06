@@ -1,0 +1,58 @@
+[19:09:56] [b3 +1s] set b3 budget 2900s cap 3480s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[19:09:58] [b3 +3s] ▶ ltx23-hq-base (est 660s, hard stop 2899s): env FASTVIDEO_LTX2_UPSAMPLER=/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.3 --hq --weights /workspace/weights/ltx23 --dit /workspace/weights/ltx23-dev/ltx-2.3-22b-dev.safetensors --prompt A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail --seed 42 --text streamed --dit-offload resident --warm --dense-stage2 --clip /fvscratch/runs/sol-bench-b3/b70f57c-10061908/ltx23-hq-base/frames
+[19:10:35] [b3 +40s] FAIL ltx23-hq-base 37s exit=2
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 16.25s, upload wait 0.06s, compute starved 16.24s
+[ERROR] stage ltx2 → gpucheck-out/ltx2.json (36.1s)
+error: no text projection in the checkpoint; looked for ["text_embedding_projection.aggregate_embed", "model.diffusion_model.text_embedding_projection.aggregate_embed"] (+ `.weight`)
+[19:10:37] [b3 +42s] ▶ ltx23-hq-fullopt (est 600s, hard stop 2860s): env FASTVIDEO_LTX2_UPSAMPLER=/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.3 --hq --weights /workspace/weights/ltx23 --dit /workspace/weights/ltx23-dev/ltx-2.3-22b-dev.safetensors --prompt A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail --seed 42 --text streamed --dit-offload resident --warm --pisa-stage2 --clip /fvscratch/runs/sol-bench-b3/b70f57c-10061908/ltx23-hq-fullopt/frames
+[19:10:47] [b3 +52s] FAIL ltx23-hq-fullopt 10s exit=2
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 0.61s, upload wait 0.07s, compute starved 0.62s
+[ERROR] stage ltx2 → gpucheck-out/ltx2.json (10.2s)
+error: no text projection in the checkpoint; looked for ["text_embedding_projection.aggregate_embed", "model.diffusion_model.text_embedding_projection.aggregate_embed"] (+ `.weight`)
+[19:10:48] [b3 +53s] ▶ lingbot-router (est 60s, hard stop 2848s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-router
+[19:10:49] [b3 +54s] FAIL lingbot-router 1s exit=2
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[ERROR] stage sol → gpucheck-out/sol.json (0.5s)
+error: DriverError(CUDA_ERROR_UNSUPPORTED_PTX_VERSION, "the provided PTX was compiled with an unsupported toolchain.")
+[19:10:49] [b3 +54s] ▶ lingbot-fullopt (est 1200s, hard stop 2846s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /workspace/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm fullopt --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-b3/b70f57c-10061908/lingbot-fullopt/clips
+[19:13:15] [b3 +200s] FAIL lingbot-fullopt 146s exit=2
+[fastvideo] llm resident layer 25/36
+[fastvideo] llm resident layer 26/36
+[fastvideo] llm resident layer 27/36
+[fastvideo] llm resident layer 28/36
+[fastvideo] llm resident layer 29/36
+[fastvideo] llm resident layer 30/36
+[fastvideo] llm resident layer 31/36
+[fastvideo] llm resident layer 32/36
+[fastvideo] llm resident layer 33/36
+[fastvideo] llm resident layer 34/36
+[fastvideo] llm resident layer 35/36
+[fastvideo] llm resident layer 36/36
+[fastvideo] sdpa: fused mma B=1 H=16 Sq=49017 Sk=49017 D=128
+[ERROR] stage sol → gpucheck-out/sol.json (145.8s)
+error: DriverError(CUDA_ERROR_UNSUPPORTED_PTX_VERSION, "the provided PTX was compiled with an unsupported toolchain.")
+[19:13:15] [b3 +200s] set b3 done

@@ -1,0 +1,1 @@
+{"cell":"cosmos3-baseline-fp8","exit":null,"stopped":"by the driver at 2026-10-06T19:55:02Z: could not finish in the pod budget (1548 s left; load + warm-up + 35-step request about 2100 s)"}

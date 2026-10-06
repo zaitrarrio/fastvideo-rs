@@ -199,7 +199,7 @@ RUNPOD_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:<digest of sha-<main
 RUNPOD_VOLUME_ID=jg48s6o1w0 FV_FAMILY=sol-bench-b1 \
 FV_POD_FILES=$PWD/scripts/gpu/sol-bench-pod.sh FV_POD_SCRIPT=sol-bench-pod.sh \
 FV_EXTRA_ENV="FV_SOL_SET=b1" FV_SKIP_TAE=1 FV_POD_CAP_S=3900 FV_BOOT_WAIT_S=480 \
-FV_AVOID_MACHINES=s3p8exc9lcvi FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|/cold/|\.cache$|text-cache|\.wav$' \
+FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc" FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|/cold/|\.cache$|text-cache|\.wav$' \
   scripts/gpu/runpod-http.sh run <main sha>
 ```
 
@@ -210,3 +210,129 @@ Then:
 ```bash
 python3 scripts/gpu/sol_bench_table.py artifacts/runpod/sol-bench/<date>/*
 ```
+
+## Phase B run plan (2026-10-06, planned before renting)
+
+The ports landed on main in #29, #30 and #31, and their weights reached EU in #35. Main is 0f7edc8.
+
+**Image:** `ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:3ef20591e12597380766606fb33242e9e718858a0a29e80d959619ddcdcdd17e`.
+- This is `sha-b70f57c`, which is also `:latest`.
+- No runtime image was built for 0f7edc8. Nothing between b70f57c and 0f7edc8 touches a path the image workflow builds from: the diff is build-base, build-pod and serve-compat files only.
+- The image's `fv-gpucheck` has `sana-video` and `sol` (`lingbot-gen`, `lingbot-router`, `cosmos3-gen`).
+- Its `scripts/gpu` has the `solbench` family, `sol/` prompts and `prompts-sol-wan-t2v5.json`.
+
+**GPU:** none of these models has a published RTX 5090 or H100 number, so every cell runs on an **RTX PRO 6000**.
+
+**Pods:** six pods in three pairs, (b1, b2), then (b3, b4), then (b5, b6), so at most 2 are up at once. Each pod has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop. Every launch sets `FV_AVOID_MACHINES=s3p8exc9lcvi`.
+
+**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`).
+
+**Precision is pinned to sol-engine's:**
+- Wan arms run with `FASTVIDEO_WAN_QUANT=off`, the full Wan VAE and Diffusers UniPC sigmas.
+- `FASTVIDEO_FP8` is off except in the extra `cosmos3-teacache-fp8` arm.
+- LTX-2.3 fullopt uses NVFP4 because sol-engine's `config/ltx23/fullopt.toml` does.
+
+**Skipped:** the Wan2.2-5B EasyCache + PISA arm (the Pisa5b slowdown found in phase A).
+
+**Prompts:** LingBot and Cosmos3 run one prompt per arm. An arm that does not finish within the budget is reported as incomplete.
+
+Estimates come from `docs/ports/sol-wan-ltx23.md` §"Estimated GPU time", `docs/ports/sana-video.md` and `docs/perf/sol-lingbot-cosmos3-plan.md` §3. The last are FLOP-based, not measured.
+
+| Pod | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|
+| b1 | `sana-baseline`, `sana-full` (832x480x81, 50 steps, warm) | 2.77x ratio only (GB200) | 15 + 12 min |
+|    | `wan13-sol-base`, `wan13-sol-fullstack` (832x480x81, 50 steps, CFG 6, 5 prompts after a warm one) | none published | 12 + 8 min |
+| b2 | `a14b-sol-base`, `a14b-sol-fullopt` (720p, 81 f, 40 steps, expert swap; fullopt = EasyCache + PISA, `singlegpu_opt.toml`) | 449.67 / 207.01 s (1x GB200) | 30 + 15–20 min |
+| b3 | `ltx23-hq-base`, `ltx23-hq-fullopt` (1920x1088x241 HQ, warm) | 2.40x ratio only (GB200) | 11 + 10 min |
+|    | `lingbot-router` (no weights), `lingbot-fullopt` (1 prompt) | 144.36 s (4x GB200) | 1 + 20–25 min |
+| b4 | `lingbot-baseline` (1 prompt) | 375.53 s (4x GB200) | ~40 min |
+| b5 | `cosmos3-baseline` (1-step warm-up + 1 request) | 130.41 s (4x GB200) | ~40 min |
+| b6 | `cosmos3-teacache` (BF16), then `cosmos3-teacache-fp8` (W8A8; theirs is NVFP4 on middle steps) | 2.26x ratio (4x GB200) | ~30 + ~20 min |
+
+**Cost bound:** 6 pods × 65 min × $2.09/h ≈ **$13.6 at most**; expected about $11. The balance before renting was $35.26 (coordinator), with a $10 floor.
+
+
+## Phase B results (2026-10-06)
+
+Every pod ran on an RTX PRO 6000 Blackwell Server (96 GB, sm_120, driver 595.91, **188 GB container RAM**, 32 vCPU) in EUR-IS-1. The image was `sha256:3ef20591…` (`sha-b70f57c`, the binary for main 0f7edc8).
+
+Raw data:
+
+- `artifacts/runpod/sol-bench/2026-10-06-phaseB/<pod set>/<cell>/`
+- `RESULTS.md` and `results.json` in the same directory.
+- Sample clips are gitignored.
+
+**Status: four of the twelve planned arms produced a number. Three models are blocked by bugs in the merged ports, not by measurement.**
+
+| Model | Config | Their HW | Theirs (s) | Our HW | Ours (s) | Ours / theirs | Ours: load / text / denoise / decode (s) | Notes |
+|---|---|---|---:|---|---:|---:|---|---|
+| SANA-Video 2B | 832x480x81, 50 st, cfg 6, baseline | 1x GB200 | — | RTX PRO 6000 (sm_120) | 186.04 | — | 32.65 / 2.58 / 179.59 / 2.25 | theirs: ratio only (2.77x) |
+| SANA-Video 2B | same, EasyCache 0.1 + QKV merge + bf16 linear attn | 1x GB200 | — | RTX PRO 6000 (sm_120) | 87.93 | — | 32.31 / 2.59 / 81.53 / 2.17 | theirs: ratio only (2.77x) |
+| Wan2.1 T2V-1.3B | 832x480x81, 50 st, CFG 6, base (median of 5 prompts) | - | — | RTX PRO 6000 (sm_120) | 92.22 | — | 115.70 / 0.03 / 89.16 / 3.02 | no published number |
+| Wan2.1 T2V-1.3B | same, EasyCache 0.036 + Sol-Attn | - | — | RTX PRO 6000 (sm_120) | 29.09 | — | 118.31 / 0.03 / 26.02 / 3.03 | no published number |
+| Wan2.2 T2V-A14B | 1280x720x81, 40 st, CFG 4/3, base (expert swap) | 1x GB200 | 449.67 | — | — | — | — / — / — / — | not run: exit 137 |
+| Wan2.2 T2V-A14B | same, EasyCache + PISA | 1x GB200 | 207.01 | — | — | — | — / — / — / — | theirs also: kernel fusion; not run: exit 137 |
+| LTX-2.3 HQ | 1920x1088x241, res2s 15 + 3, dense stage 2 | 1x GB200 | — | — | — | — | — / — / — / — | theirs: ratio only (2.40x); not run: exit 2 |
+| LTX-2.3 HQ | same, SCSP + PISA s2 + midpoint prune + NVFP4 FFN | 1x GB200 | — | — | — | — | — / — / — / — | theirs: ratio only (2.40x); not run: exit 2 |
+| LingBot-Video MoE | same, EasyCache + refiner PISA | 4x GB200 | 144.36 | — | — | — | — / — / — / — | theirs: 4 GPUs (CP4); not run: exit 2 |
+| Cosmos3-Super 64B | 1280x720x189, 35 st, CFG 6 | 4x GB200 | 130.41 | — | — | — | — / — / — / — | theirs: 4 GPUs (SP); not run: exit 2 |
+| Cosmos3-Super 64B | same, TeaCache + W8A8 FP8 | 4x GB200 | — | RTX PRO 6000 (sm_120) | 800.74 | — | 0.00 / 115.33 / 660.70 / 22.01 | theirs: 2.26x incl. NVFP4 |
+| Cosmos3-Super 64B | same, no cache, W8A8 FP8 | 4x GB200 | 130.41 | — | — | — | — / — / — / — | theirs: BF16 on 4 GPUs (SP); not run: exit None |
+
+Optimized-arm speedup over our own baseline (same GPU) vs theirs:
+
+| Pair | Ours | Theirs |
+|---|---:|---:|
+| sana-baseline → sana-full | 2.12x | 2.77x |
+| wan13-sol-base → wan13-sol-fullstack | 3.17x | — |
+
+### Notes on the cells that ran
+
+- **SANA-Video 2B.**
+  - Baseline is 186.0 s (179.6 s denoise, 3.59 s per step). The full arm is 87.9 s: 28 of 50 steps reused, so 2.12x against their 2.77x.
+  - Their ratio also counts `torch.compile` and the QKV merge. Ours has the merge and bf16 linear attention, but no compile equivalent.
+  - The stage writes PNG frames only, with no MP4, so there is no sample clip.
+- **Wan2.1 T2V-1.3B.**
+  - Base is 92.2 s and fullstack (EasyCache 0.036 + Sol-Attn) is 29.1 s, a 3.17x speedup.
+  - Both are medians of sol-engine's 5 prompts after one warm generation. sol-engine publishes no number for this model.
+- **Cosmos3-Super 64B, FP8 only.**
+  - The BF16 baseline (`cosmos3-baseline`, b5) finished its 1-step warm-up denoise at 45.6 s per step. It then hit **CUDA out of memory in the VAE decode**, with the DiT still resident.
+  - W8A8 (`FASTVIDEO_FP8=1`) leaves enough room. **TeaCache + FP8 took 800.7 s per request:**
+    - text tower 115.3 s, streamed from the volume each request (234 s in the cold warm-up);
+    - denoise 660.7 s (16 of 35 steps computed, about 41.3 s per computed step);
+    - decode 22.0 s;
+    - load 241.5 s, outside the request.
+  - The FP8 no-cache baseline could not finish in the pod budget, so I stopped it to save about 25 min of pod time. Extrapolated from the measured per-step cost: 115 + 35 × 41.3 + 22 ≈ **1582 s**, so TeaCache is about 1.98x on our FP8 path.
+  - Theirs: 130.41 s BF16 on 4x GB200 (522 GPU-seconds), 2.26x for TeaCache + NVFP4. Our BF16 arms need the decode OOM fixed first.
+
+### Blocked by bugs in the merged ports
+
+These need code fixes, which can't happen on a pod: no compiling.
+
+| Model | Cells | Failure | Where to look |
+|---|---|---|---|
+| Wan2.2 T2V-A14B | `a14b-sol-base`, `a14b-sol-fullopt` (b2, and b2r with `FASTVIDEO_PREFETCH=0`) | the process is SIGKILLed (exit 137) about 2.3 min into load, right after `wan moe: Auto -> both`; the container's 188 GB host-RAM limit OOMs during the two-expert load in all four attempts | `wan/pipeline.rs` loads `transformer` and `transformer_2` (57 GB f32 each on disk) with `UMT5` resident; the host staging likely peaks above 188 GB (not profiled) |
+| LTX-2.3 HQ | `ltx23-hq-base`, `ltx23-hq-fullopt` (b3) | `error: no text projection in the checkpoint; looked for ["text_embedding_projection.aggregate_embed", "model.diffusion_model.text_embedding_projection.aggregate_embed"]`, 10–37 s in | the HQ path loads the dev single-file DiT, which has no text projection; the `ltx23` tree keeps it under `text_embedding_projection/` |
+| LingBot-Video MoE | `lingbot-router`, `lingbot-fullopt` (b3); `lingbot-baseline` (b4) not launched | `DriverError(CUDA_ERROR_UNSUPPORTED_PTX_VERSION)` on the first MoE kernel | `wan/ops.rs` `load_moe_kernels` compiles the MoE kernels to **PTX** with the image's NVRTC 13.4 at run time; the 595.91 driver cannot JIT it. Fix: build them as cubins (AOT, like `kernels.cu`) or have NVRTC emit SASS for the device arch |
+
+### Pods
+
+All phase B pods were created and deleted by this run (UTC):
+
+| Pod | Set | Host | Created → deleted | Outcome |
+|---|---|---|---|---|
+| `ouieg4qm26n2dr` | b2 | lkyvy1sgj4rc | 18:40:33 → 18:50:40 | image never started; replaced |
+| `t9qemie0pqwhwy` | b2 | lkyvy1sgj4rc | 18:50:44 → 18:56:42 | same; driver stopped, pod deleted |
+| `xt8o6n3gis0qtg`, `nknq6xzmayolqs` | b2 | lkyvy1sgj4rc | 18:57:05 / 18:57:53 | deleted on sight (`FV_AVOID_MACHINES`) |
+| `kpv8c8q6xtorj2` | b2 | — | 18:58:39 → 19:08:15 | A14B OOM-killed at load (both arms) |
+| `ny2eovsjco93oc` | b1 | qlfbxqg3mhpi | 18:51:37 → 19:29:05 | 4/4 ok; the container took about 9 min to start |
+| `zfo2ztsbuo3a37` | b3 | th4pa8uzi76t | 19:08:43 → 19:13:48 | LTX-2.3 loader error; LingBot PTX error |
+| `iqxss6zul6d9xb` | b5 | th4pa8uzi76t | 19:14:25 → 19:19:55 | Cosmos3 BF16 decode OOM |
+| `0ybcuq5gwmlutq` | b6 | — | 19:23:00 → 19:55:12 | Cosmos3 TeaCache FP8 ok; FP8 baseline stopped (could not fit) |
+| `9ox00xsl775stb` | b2r | — | 19:29:12 → 19:36:20 | A14B OOM again with prefetch off |
+
+- **Pod time:** about 114 pod-minutes, so about **$4.0** at $2.09/h.
+- **Parallelism and wall clock:** never more than 2 pods at once. Every pod was deleted within 38 min of its creation (b1 37.5 min, b6 32 min, the rest under 11 min).
+- **Balance:** $35.26 before, $31.03 after.
+- **Bad hosts:** host `lkyvy1sgj4rc` behaved like `s3p8exc9lcvi` (no container start after 10 min). Both are in `FV_AVOID_MACHINES` for future runs.
+- **Result mirroring:** `scripts/gpu/sol_bench_mirror.py` copied each finished cell while its pod was still up. b6's results come from that copy, because the driver was stopped before its own fetch.

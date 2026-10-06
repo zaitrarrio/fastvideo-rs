@@ -1,0 +1,391 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12738,"moe":null,"seconds":118.308105766}
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=32760 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=32760 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/50 t=999 done in 2037ms
+[fastvideo] unipc step 2/50 t=992 done in 1695ms
+[fastvideo] unipc step 3/50 t=985 done in 1698ms
+[fastvideo] unipc step 4/50 t=978 done in 1702ms
+[fastvideo] unipc step 5/50 t=971 done in 1705ms
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=32760 blocks=512 sink=0
+[fastvideo] unipc step 6/50 t=963 done in 1212ms
+[fastvideo] unipc step 7/50 t=956 done in 1213ms
+[fastvideo] unipc step 8/50 t=948 done in 1214ms
+[fastvideo] unipc step 9/50 t=939 done in 1215ms
+[fastvideo] unipc step 10/50 t=931 done in 1214ms
+[fastvideo] unipc step 11/50 t=922 done in 1215ms
+[fastvideo] unipc step 12/50 t=913 done in 1214ms
+[fastvideo] unipc step 13/50 t=904 done in 0ms
+[fastvideo] unipc step 14/50 t=894 done in 1214ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 1214ms
+[fastvideo] unipc step 17/50 t=864 done in 0ms
+[fastvideo] unipc step 18/50 t=853 done in 1213ms
+[fastvideo] unipc step 19/50 t=841 done in 0ms
+[fastvideo] unipc step 20/50 t=829 done in 1211ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 0ms
+[fastvideo] unipc step 23/50 t=792 done in 1211ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 0ms
+[fastvideo] unipc step 26/50 t=749 done in 1211ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 0ms
+[fastvideo] unipc step 29/50 t=701 done in 1210ms
+[fastvideo] unipc step 30/50 t=684 done in 0ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 1210ms
+[fastvideo] unipc step 34/50 t=606 done in 13ms
+[fastvideo] unipc step 35/50 t=585 done in 0ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 1225ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 1209ms
+[fastvideo] unipc step 41/50 t=428 done in 0ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 1208ms
+[fastvideo] unipc step 44/50 t=327 done in 0ms
+[fastvideo] unipc step 45/50 t=290 done in 1209ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 1207ms
+[fastvideo] unipc step 48/50 t=160 done in 1206ms
+[fastvideo] unipc step 49/50 t=111 done in 1204ms
+[fastvideo] unipc step 50/50 t=57 done in 1201ms
+[fastvideo] unipc 50 steps done in 36736ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2372ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.12s, 0.04 GiB, synced), ffmpeg feed blocked 0.42s, mp4 tail 0.11s, buffered peak 0.09 GiB of 85.12
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/cold/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/cold (text 0.83s, denoise 36.74s, decode+mp4 3.27s, png 0.12s)
+[fastvideo] generate done in 40975ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.270000466,"decoder":"wan-vae","denoise_s":36.739889044,"step_s":[2.039563996,1.695534713,1.698934549,1.702186619,1.70524849,1.21269817,1.21315736,1.214508511,1.215114452,1.215033211,1.215394152,1.214854382,0.00060439,1.2145603409999999,0.00056223,1.214821882,0.00057425,1.213622261,0.00062445,1.21177496,0.00046003,0.00024689,1.211780739,0.00062052,0.00028215,1.21168943,0.00049049,0.00038859,1.210883219,0.000550141,0.00031002,0.00028811,1.210153699,0.013787437,0.00067864,0.000407141,1.225132576,0.00061449,0.00037478,1.209592128,0.000728941,0.000360421,1.208606658,0.00074853,1.209154968,0.000707251,1.207916767,1.206840087,1.204711026,1.201391044],"text_cache":"miss","text_s":0.833831095,"total_s":40.975845024,"video_encode_s":0.106547836,"video_push_s":0.00008404999999999998,"video_rgb_s":0.054004332000106,"video_vae_s":3.107080307006836,"video_wait_s":0.73946966,"write_s":0.118602442}
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] unipc step 1/50 t=999 done in 1725ms
+[fastvideo] unipc step 2/50 t=992 done in 1730ms
+[fastvideo] unipc step 3/50 t=985 done in 1731ms
+[fastvideo] unipc step 4/50 t=978 done in 1733ms
+[fastvideo] unipc step 5/50 t=971 done in 1735ms
+[fastvideo] unipc step 6/50 t=963 done in 1218ms
+[fastvideo] unipc step 7/50 t=956 done in 1215ms
+[fastvideo] unipc step 8/50 t=948 done in 1216ms
+[fastvideo] unipc step 9/50 t=939 done in 1217ms
+[fastvideo] unipc step 10/50 t=931 done in 1217ms
+[fastvideo] unipc step 11/50 t=922 done in 1217ms
+[fastvideo] unipc step 12/50 t=913 done in 1217ms
+[fastvideo] unipc step 13/50 t=904 done in 0ms
+[fastvideo] unipc step 14/50 t=894 done in 1219ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 1217ms
+[fastvideo] unipc step 17/50 t=864 done in 0ms
+[fastvideo] unipc step 18/50 t=853 done in 1216ms
+[fastvideo] unipc step 19/50 t=841 done in 0ms
+[fastvideo] unipc step 20/50 t=829 done in 1217ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 0ms
+[fastvideo] unipc step 23/50 t=792 done in 1216ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 0ms
+[fastvideo] unipc step 26/50 t=749 done in 1216ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 0ms
+[fastvideo] unipc step 29/50 t=701 done in 1214ms
+[fastvideo] unipc step 30/50 t=684 done in 0ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 1216ms
+[fastvideo] unipc step 34/50 t=606 done in 0ms
+[fastvideo] unipc step 35/50 t=585 done in 0ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 1214ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 1213ms
+[fastvideo] unipc step 41/50 t=428 done in 0ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 1212ms
+[fastvideo] unipc step 44/50 t=327 done in 0ms
+[fastvideo] unipc step 45/50 t=290 done in 1212ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 1210ms
+[fastvideo] unipc step 48/50 t=160 done in 1209ms
+[fastvideo] unipc step 49/50 t=111 done in 1207ms
+[fastvideo] unipc step 50/50 t=57 done in 1203ms
+[fastvideo] unipc 50 steps done in 36608ms
+[fastvideo] vae.decode done in 2184ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.11s, 0.04 GiB, synced), ffmpeg feed blocked 0.41s, mp4 tail 0.10s, buffered peak 0.09 GiB of 85.07
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p0/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p0 (text 0.02s, denoise 36.61s, decode+mp4 3.03s, png 0.11s)
+[fastvideo] generate done in 39803ms
+[INFO] wan/timings/p0 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.03151153,"decoder":"wan-vae","denoise_s":36.610018044,"frames_sha256":"1aaf7bd3cd42e9a480e5baa06579c0053d7f0ba412678a95ede08904722d7447","peak_mib":28492,"step_s":[1.726041682,1.730530233,1.731860294,1.733759315,1.735669076,1.218233512,1.215757132,1.216882983,1.217753422,1.2175455020000001,1.217333603,1.217544982,0.000763371,1.219808234,0.000832821,1.217562883,0.00051913,1.216935553,0.00047585,1.217114872,0.00068034,0.000380851,1.216585102,0.0004852,0.0003616,1.216694172,0.000565621,0.00032202,1.214913801,0.000745401,0.00030663,0.0002409,1.216408532,0.00059157,0.000329141,0.000264501,1.214436401,0.00049361,0.00026744,1.213534121,0.00049469,0.0003112,1.21252041,0.0006235,1.212478821,0.00042976,1.210222219,1.209228119,1.207805757,1.203757616],"text_cache":"hit","text_s":0.018887121,"total_s":39.692140220999995,"video_encode_s":0.104946465,"video_push_s":0.00007248,"video_rgb_s":0.05595365099682503,"video_vae_s":2.9197612419128416,"video_wait_s":0.74045093,"write_s":0.111862829}
+wan gen p0: total 39.69s (text 0.02s, denoise 36.61s, decode 3.03s) png 0.11s peak Some(28492) MiB frames 1aaf7bd3cd42e9a480e5baa06579c0053d7f0ba412678a95ede08904722d7447
+[PASS] wan/frames/p0 {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat/p0 {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p0/frame-040.png","mean":0.30055329370649514,"std":0.2860653157628886} (limits {"std_min":0.02})
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] unipc step 1/50 t=999 done in 1741ms
+[fastvideo] unipc step 2/50 t=992 done in 1750ms
+[fastvideo] unipc step 3/50 t=985 done in 1750ms
+[fastvideo] unipc step 4/50 t=978 done in 1751ms
+[fastvideo] unipc step 5/50 t=971 done in 1753ms
+[fastvideo] unipc step 6/50 t=963 done in 1277ms
+[fastvideo] unipc step 7/50 t=956 done in 1276ms
+[fastvideo] unipc step 8/50 t=948 done in 0ms
+[fastvideo] unipc step 9/50 t=939 done in 1278ms
+[fastvideo] unipc step 10/50 t=931 done in 0ms
+[fastvideo] unipc step 11/50 t=922 done in 0ms
+[fastvideo] unipc step 12/50 t=913 done in 0ms
+[fastvideo] unipc step 13/50 t=904 done in 1280ms
+[fastvideo] unipc step 14/50 t=894 done in 0ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 0ms
+[fastvideo] unipc step 17/50 t=864 done in 0ms
+[fastvideo] unipc step 18/50 t=853 done in 0ms
+[fastvideo] unipc step 19/50 t=841 done in 1282ms
+[fastvideo] unipc step 20/50 t=829 done in 0ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 0ms
+[fastvideo] unipc step 23/50 t=792 done in 0ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 0ms
+[fastvideo] unipc step 26/50 t=749 done in 1283ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 0ms
+[fastvideo] unipc step 29/50 t=701 done in 0ms
+[fastvideo] unipc step 30/50 t=684 done in 0ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 0ms
+[fastvideo] unipc step 34/50 t=606 done in 1280ms
+[fastvideo] unipc step 35/50 t=585 done in 0ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 0ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 0ms
+[fastvideo] unipc step 41/50 t=428 done in 1268ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 0ms
+[fastvideo] unipc step 44/50 t=327 done in 0ms
+[fastvideo] unipc step 45/50 t=290 done in 1260ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 0ms
+[fastvideo] unipc step 48/50 t=160 done in 1253ms
+[fastvideo] unipc step 49/50 t=111 done in 1251ms
+[fastvideo] unipc step 50/50 t=57 done in 1247ms
+[fastvideo] unipc 50 steps done in 24002ms
+[fastvideo] vae.decode done in 2187ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.10s, 0.03 GiB, synced), ffmpeg feed blocked 0.38s, mp4 tail 0.10s, buffered peak 0.09 GiB of 85.06
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p1/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p1 (text 0.03s, denoise 24.00s, decode+mp4 3.03s, png 0.10s)
+[fastvideo] generate done in 27182ms
+[INFO] wan/timings/p1 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.028418838,"decoder":"wan-vae","denoise_s":24.00344209,"frames_sha256":"c982270ced74e931bcf80045943992016a482b1455d69227ec04a5b18858580f","peak_mib":28492,"step_s":[1.7422925089999999,1.7508820950000001,1.7507817540000001,1.751554984,1.753582226,1.277420484,1.276414114,0.00064961,1.278320324,0.000583521,0.00037183,0.00032938,1.2802594059999999,0.00050961,0.00036735,0.00030829,0.000266401,0.00025856,1.282279317,0.00051333,0.00027202,0.0003068,0.00027671,0.00029514,0.00031711,1.283990058,0.00052518,0.000407071,0.00037653,0.0003511,0.00035714,0.0003531,0.00033879,1.280390635,0.000581831,0.00047541,0.00040308,0.0003772,0.00038159,0.00038957,1.268194279,0.000644441,0.00035683,0.00032439,1.260829996,0.000477721,0.00042682,1.2538033419999999,1.251351351,1.247357519],"text_cache":"miss","text_s":0.030645036,"total_s":27.079739623000002,"video_encode_s":0.09691342,"video_push_s":0.00008087,"video_rgb_s":0.058209529998352355,"video_vae_s":2.924206008911133,"video_wait_s":0.742272742,"write_s":0.103117445}
+wan gen p1: total 27.08s (text 0.03s, denoise 24.00s, decode 3.03s) png 0.10s peak Some(28492) MiB frames c982270ced74e931bcf80045943992016a482b1455d69227ec04a5b18858580f
+[PASS] wan/frames/p1 {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat/p1 {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p1/frame-040.png","mean":0.4850184106444835,"std":0.3438211160613591} (limits {"std_min":0.02})
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] unipc step 1/50 t=999 done in 1751ms
+[fastvideo] unipc step 2/50 t=992 done in 1759ms
+[fastvideo] unipc step 3/50 t=985 done in 1755ms
+[fastvideo] unipc step 4/50 t=978 done in 1758ms
+[fastvideo] unipc step 5/50 t=971 done in 1761ms
+[fastvideo] unipc step 6/50 t=963 done in 1261ms
+[fastvideo] unipc step 7/50 t=956 done in 1259ms
+[fastvideo] unipc step 8/50 t=948 done in 0ms
+[fastvideo] unipc step 9/50 t=939 done in 1263ms
+[fastvideo] unipc step 10/50 t=931 done in 0ms
+[fastvideo] unipc step 11/50 t=922 done in 0ms
+[fastvideo] unipc step 12/50 t=913 done in 1265ms
+[fastvideo] unipc step 13/50 t=904 done in 0ms
+[fastvideo] unipc step 14/50 t=894 done in 0ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 0ms
+[fastvideo] unipc step 17/50 t=864 done in 1268ms
+[fastvideo] unipc step 18/50 t=853 done in 0ms
+[fastvideo] unipc step 19/50 t=841 done in 0ms
+[fastvideo] unipc step 20/50 t=829 done in 0ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 0ms
+[fastvideo] unipc step 23/50 t=792 done in 0ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 1271ms
+[fastvideo] unipc step 26/50 t=749 done in 0ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 0ms
+[fastvideo] unipc step 29/50 t=701 done in 0ms
+[fastvideo] unipc step 30/50 t=684 done in 0ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 0ms
+[fastvideo] unipc step 34/50 t=606 done in 0ms
+[fastvideo] unipc step 35/50 t=585 done in 1266ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 0ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 0ms
+[fastvideo] unipc step 41/50 t=428 done in 0ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 1251ms
+[fastvideo] unipc step 44/50 t=327 done in 0ms
+[fastvideo] unipc step 45/50 t=290 done in 0ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 1240ms
+[fastvideo] unipc step 48/50 t=160 done in 0ms
+[fastvideo] unipc step 49/50 t=111 done in 1235ms
+[fastvideo] unipc step 50/50 t=57 done in 1232ms
+[fastvideo] unipc 50 steps done in 22616ms
+[fastvideo] vae.decode done in 2188ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.10s, 0.03 GiB, synced), ffmpeg feed blocked 0.41s, mp4 tail 0.09s, buffered peak 0.09 GiB of 85.06
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p2/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p2 (text 0.03s, denoise 22.62s, decode+mp4 3.02s, png 0.10s)
+[fastvideo] generate done in 25784ms
+[INFO] wan/timings/p2 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.020760835,"decoder":"wan-vae","denoise_s":22.617534688,"frames_sha256":"e8f7f336fd45b6b1c3b36a643b91c37d91a60bc6cca646ad485fb3befb1eab48","peak_mib":28492,"step_s":[1.752416165,1.7592730680000002,1.755613827,1.758180168,1.7617235999999998,1.2619428560000001,1.259824105,0.000699391,1.263907807,0.00064926,0.00031897,1.265281188,0.00070288,0.00042338,0.00033064,0.00033191,1.268119939,0.00060611,0.00032606,0.00028115,0.00028941,0.000291081,0.00027914,0.000317811,1.271309571,0.00052779,0.00037396,0.000296351,0.000277101,0.00030837,0.00028367,0.00026666,0.00028418,0.00029281,1.266238389,0.0005517,0.00033188,0.00029944,0.000289901,0.00031218,0.00028494,0.00028561,1.251408671,0.0004584,0.00028479,0.00025093,1.240912695,0.00060507,1.235268271,1.232895761],"text_cache":"miss","text_s":0.030945406,"total_s":25.685030938,"video_encode_s":0.088853207,"video_push_s":0.00008977900000000002,"video_rgb_s":0.058502585999614005,"video_vae_s":2.925152187347412,"video_wait_s":0.741866103,"write_s":0.099521833}
+wan gen p2: total 25.69s (text 0.03s, denoise 22.62s, decode 3.02s) png 0.10s peak Some(28492) MiB frames e8f7f336fd45b6b1c3b36a643b91c37d91a60bc6cca646ad485fb3befb1eab48
+[PASS] wan/frames/p2 {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat/p2 {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p2/frame-040.png","mean":0.6895148218281449,"std":0.25378848114645597} (limits {"std_min":0.02})
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] unipc step 1/50 t=999 done in 1757ms
+[fastvideo] unipc step 2/50 t=992 done in 1762ms
+[fastvideo] unipc step 3/50 t=985 done in 1765ms
+[fastvideo] unipc step 4/50 t=978 done in 1770ms
+[fastvideo] unipc step 5/50 t=971 done in 1774ms
+[fastvideo] unipc step 6/50 t=963 done in 1228ms
+[fastvideo] unipc step 7/50 t=956 done in 1228ms
+[fastvideo] unipc step 8/50 t=948 done in 1227ms
+[fastvideo] unipc step 9/50 t=939 done in 0ms
+[fastvideo] unipc step 10/50 t=931 done in 1229ms
+[fastvideo] unipc step 11/50 t=922 done in 0ms
+[fastvideo] unipc step 12/50 t=913 done in 0ms
+[fastvideo] unipc step 13/50 t=904 done in 1229ms
+[fastvideo] unipc step 14/50 t=894 done in 0ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 0ms
+[fastvideo] unipc step 17/50 t=864 done in 1229ms
+[fastvideo] unipc step 18/50 t=853 done in 0ms
+[fastvideo] unipc step 19/50 t=841 done in 0ms
+[fastvideo] unipc step 20/50 t=829 done in 0ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 1231ms
+[fastvideo] unipc step 23/50 t=792 done in 0ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 0ms
+[fastvideo] unipc step 26/50 t=749 done in 0ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 1230ms
+[fastvideo] unipc step 29/50 t=701 done in 0ms
+[fastvideo] unipc step 30/50 t=684 done in 0ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 0ms
+[fastvideo] unipc step 34/50 t=606 done in 1230ms
+[fastvideo] unipc step 35/50 t=585 done in 0ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 0ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 1226ms
+[fastvideo] unipc step 41/50 t=428 done in 0ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 0ms
+[fastvideo] unipc step 44/50 t=327 done in 1222ms
+[fastvideo] unipc step 45/50 t=290 done in 0ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 1226ms
+[fastvideo] unipc step 48/50 t=160 done in 0ms
+[fastvideo] unipc step 49/50 t=111 done in 1214ms
+[fastvideo] unipc step 50/50 t=57 done in 1219ms
+[fastvideo] unipc 50 steps done in 26019ms
+[fastvideo] vae.decode done in 2188ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.12s, 0.04 GiB, synced), ffmpeg feed blocked 0.41s, mp4 tail 0.10s, buffered peak 0.09 GiB of 85.06
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p3/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p3 (text 0.02s, denoise 26.02s, decode+mp4 3.03s, png 0.12s)
+[fastvideo] generate done in 29207ms
+[INFO] wan/timings/p3 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.03095783,"decoder":"wan-vae","denoise_s":26.020525545,"frames_sha256":"9e8612183e20238e52a3e30cf6ffa5f7a48bfb7decc084a824ae8b4fc7e16e64","peak_mib":28492,"step_s":[1.758149008,1.7623625010000001,1.765667412,1.770342185,1.775049907,1.228221898,1.228648709,1.227871698,0.00070248,1.229270509,0.000629881,0.00035962,1.229287189,0.00064686,0.00039608,0.00036783,1.229911399,0.000645571,0.00032574,0.00030072,0.0002976,1.23180675,0.000592471,0.00037931,0.00032738,0.00030523,0.00030799,1.23057273,0.00053356,0.00032016,0.00030366,0.000312451,0.00029852,1.230131489,0.00065836,0.00033896,0.00030457,0.00030675,0.00029019,1.226420467,0.000598091,0.00028036,0.00027062,1.222155665,0.00057362,0.00037135,1.226913227,0.000392361,1.214982131,1.2196375640000001],"text_cache":"miss","text_s":0.022575302,"total_s":29.088530094,"video_encode_s":0.099776553,"video_push_s":0.00008063,"video_rgb_s":0.059379662000924,"video_vae_s":2.924740219116211,"video_wait_s":0.741785632,"write_s":0.119216323}
+wan gen p3: total 29.09s (text 0.02s, denoise 26.02s, decode 3.03s) png 0.12s peak Some(28492) MiB frames 9e8612183e20238e52a3e30cf6ffa5f7a48bfb7decc084a824ae8b4fc7e16e64
+[PASS] wan/frames/p3 {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat/p3 {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p3/frame-040.png","mean":0.5077660055148752,"std":0.36262934637905897} (limits {"std_min":0.02})
+[fastvideo] generate preset=wan_t2v_1_3b tiny=false 832x480 frames=81 steps=50 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Sol14b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50 shift=3 sigmas=diffusers
+[fastvideo] unipc step 1/50 t=999 done in 1761ms
+[fastvideo] unipc step 2/50 t=992 done in 1774ms
+[fastvideo] unipc step 3/50 t=985 done in 1785ms
+[fastvideo] unipc step 4/50 t=978 done in 1780ms
+[fastvideo] unipc step 5/50 t=971 done in 1800ms
+[fastvideo] unipc step 6/50 t=963 done in 1221ms
+[fastvideo] unipc step 7/50 t=956 done in 1216ms
+[fastvideo] unipc step 8/50 t=948 done in 1221ms
+[fastvideo] unipc step 9/50 t=939 done in 1218ms
+[fastvideo] unipc step 10/50 t=931 done in 1216ms
+[fastvideo] unipc step 11/50 t=922 done in 0ms
+[fastvideo] unipc step 12/50 t=913 done in 1217ms
+[fastvideo] unipc step 13/50 t=904 done in 0ms
+[fastvideo] unipc step 14/50 t=894 done in 1219ms
+[fastvideo] unipc step 15/50 t=884 done in 0ms
+[fastvideo] unipc step 16/50 t=874 done in 1218ms
+[fastvideo] unipc step 17/50 t=864 done in 0ms
+[fastvideo] unipc step 18/50 t=853 done in 0ms
+[fastvideo] unipc step 19/50 t=841 done in 1225ms
+[fastvideo] unipc step 20/50 t=829 done in 1ms
+[fastvideo] unipc step 21/50 t=817 done in 0ms
+[fastvideo] unipc step 22/50 t=805 done in 1216ms
+[fastvideo] unipc step 23/50 t=792 done in 0ms
+[fastvideo] unipc step 24/50 t=778 done in 0ms
+[fastvideo] unipc step 25/50 t=764 done in 0ms
+[fastvideo] unipc step 26/50 t=749 done in 1215ms
+[fastvideo] unipc step 27/50 t=734 done in 0ms
+[fastvideo] unipc step 28/50 t=718 done in 0ms
+[fastvideo] unipc step 29/50 t=701 done in 0ms
+[fastvideo] unipc step 30/50 t=684 done in 1216ms
+[fastvideo] unipc step 31/50 t=666 done in 0ms
+[fastvideo] unipc step 32/50 t=647 done in 0ms
+[fastvideo] unipc step 33/50 t=627 done in 0ms
+[fastvideo] unipc step 34/50 t=606 done in 0ms
+[fastvideo] unipc step 35/50 t=585 done in 1216ms
+[fastvideo] unipc step 36/50 t=562 done in 0ms
+[fastvideo] unipc step 37/50 t=538 done in 0ms
+[fastvideo] unipc step 38/50 t=512 done in 0ms
+[fastvideo] unipc step 39/50 t=486 done in 0ms
+[fastvideo] unipc step 40/50 t=458 done in 1209ms
+[fastvideo] unipc step 41/50 t=428 done in 0ms
+[fastvideo] unipc step 42/50 t=396 done in 0ms
+[fastvideo] unipc step 43/50 t=363 done in 0ms
+[fastvideo] unipc step 44/50 t=327 done in 1208ms
+[fastvideo] unipc step 45/50 t=290 done in 0ms
+[fastvideo] unipc step 46/50 t=249 done in 0ms
+[fastvideo] unipc step 47/50 t=206 done in 1209ms
+[fastvideo] unipc step 48/50 t=160 done in 0ms
+[fastvideo] unipc step 49/50 t=111 done in 1208ms
+[fastvideo] unipc step 50/50 t=57 done in 1202ms
+[fastvideo] unipc 50 steps done in 30795ms
+[fastvideo] vae.decode done in 2189ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.11s, 0.04 GiB, synced), ffmpeg feed blocked 0.40s, mp4 tail 0.08s, buffered peak 0.09 GiB of 85.06
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p4/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p4 (text 0.03s, denoise 30.80s, decode+mp4 3.01s, png 0.11s)
+[fastvideo] generate done in 33967ms
+[INFO] wan/timings/p4 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.014431831,"decoder":"wan-vae","denoise_s":30.796772366,"frames_sha256":"27099f6161b097e41c0de7ac1b49156559ca2410bb84401bbd1e3ebde47b5692","peak_mib":28492,"step_s":[1.7614804,1.774185466,1.7855525330000002,1.78036401,1.8010132699999999,1.222057135,1.216838323,1.221175544,1.219077074,1.216345852,0.00064218,1.217037983,0.00063,1.219989064,0.00065694,1.218587983,0.000448261,0.00024568,1.225536397,0.00117396,0.000382201,1.216239162,0.000760031,0.00042119,0.00039607,1.215446082,0.00085165,0.000519111,0.00035875,1.216959492,0.00058059,0.000290061,0.00036205,0.00030093,1.216956352,0.000534181,0.0003827,0.00032006,0.00033417,1.209678619,0.00065424,0.00030216,0.00025841,1.208376858,0.00058757,0.00037231,1.209309118,0.00052278,1.208175488,1.202541785],"text_cache":"miss","text_s":0.030689506,"total_s":33.855520379999994,"video_encode_s":0.081594473,"video_push_s":0.00006753000000000001,"video_rgb_s":0.053472715999678996,"video_vae_s":2.926411911010742,"video_wait_s":0.7424831040000001,"write_s":0.111813959}
+wan gen p4: total 33.86s (text 0.03s, denoise 30.80s, decode 3.01s) png 0.11s peak Some(28492) MiB frames 27099f6161b097e41c0de7ac1b49156559ca2410bb84401bbd1e3ebde47b5692
+[PASS] wan/frames/p4 {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat/p4 {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/frames/p4/frame-040.png","mean":0.15821793308095755,"std":0.22710131112096174} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/sol-bench-b1/b70f57c-10061839/wan13-sol-fullstack/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (317.1s)

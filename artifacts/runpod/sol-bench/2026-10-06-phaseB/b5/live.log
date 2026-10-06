@@ -1,0 +1,10 @@
+[19:14:28] [b5 +1s] set b5 budget 2900s cap 3480s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[19:14:29] [b5 +2s] ▶ cosmos3-baseline (est 2400s, hard stop 2899s): env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol cosmos3-gen --weights /workspace/weights/cosmos3-super --prompt A serene mountain lake at sunrise, mist rising off the still water, pine trees reflected on the surface, a small wooden boat drifting slowly, cinematic, high detail --negative-prompt blurry, distorted, low quality, flickering, overexposed, underexposed, low contrast, text artifacts, unstable motion --seed 42 --warm --arm baseline --clip /fvscratch/runs/sol-bench-b5/b70f57c-10061914/cosmos3-baseline/clip
+[19:19:24] [b5 +297s] FAIL cosmos3-baseline 295s exit=2
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: fused mma B=1 H=64 Sq=44160 Sk=44254 D=128
+[fastvideo] cosmos3 step 1/1 t=995 45.58s
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3600 Sk=3600 D=1024 query_chunk=3600
+[ERROR] stage sol → gpucheck-out/sol.json (294.8s)
+error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+[19:19:24] [b5 +297s] set b5 done
