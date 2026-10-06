@@ -15,39 +15,43 @@ use serde_json::json;
 use wasm_bindgen::JsValue;
 use worker::*;
 
-const DO_BINDING: &str = "POOL_SCHEDULER";
-const D1_BINDING: &str = "DB";
+pub(crate) const DO_BINDING: &str = "POOL_SCHEDULER";
+pub(crate) const D1_BINDING: &str = "DB";
 /// R2 bucket for large envelopes (optional; without it everything stays in SQLite).
 const R2_BINDING: &str = "ENVELOPES";
 /// R2 bucket for job outputs (direct uploads; optional).
-const OUTPUTS_BINDING: &str = "OUTPUTS";
+pub(crate) const OUTPUTS_BINDING: &str = "OUTPUTS";
 /// Secret signing edge capability URLs (`/up`, `/dl`); GPU hosts never see it.
-const UPLOAD_KEY: &str = "FV_UPLOAD_SIGNING_KEY";
+pub(crate) const UPLOAD_KEY: &str = "FV_UPLOAD_SIGNING_KEY";
 /// Envelopes larger than this (JSON bytes) are spilled to R2 (`SPILL_BYTES`).
 const SPILL_BYTES: usize = 1 << 20;
 /// Envelope chunk size in SQLite (a DO row / string is at most 2 MB).
 const CHUNK: usize = 1_000_000;
 /// A session admission waits this long for the workers' answers.
 const ADMIT_WAIT: Duration = Duration::from_secs(20);
+/// The registry object's binding (docs/serve/edge-control-plane.md).
+pub(crate) const REGISTRY_BINDING: &str = "REGISTRY";
+/// A family object posts its status to the registry at most this often.
+const REGISTRY_PUSH_MS: i64 = 300;
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     Date::now().as_millis() as i64
 }
 
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn version(env: &Env) -> String {
+pub(crate) fn version(env: &Env) -> String {
     env.var("FV_EDGE_VERSION").map(|v| v.to_string()).unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned())
 }
 
-fn rust_err(e: impl std::fmt::Display) -> Error {
+pub(crate) fn rust_err(e: impl std::fmt::Display) -> Error {
     Error::RustError(e.to_string())
 }
 
 /// The presented token: `x-fv-internal-token`, else `Authorization: Bearer`.
-fn presented(req: &Request) -> Option<String> {
+pub(crate) fn presented(req: &Request) -> Option<String> {
     let h = req.headers();
     if let Ok(Some(t)) = h.get(proto::TOKEN_HEADER) {
         return Some(t);
@@ -55,14 +59,14 @@ fn presented(req: &Request) -> Option<String> {
     h.get("authorization").ok().flatten().and_then(|v| v.strip_prefix("Bearer ").map(str::to_owned))
 }
 
-enum Auth {
+pub(crate) enum Auth {
     Ok,
     Denied,
     NotConfigured,
 }
 
 /// Checks the token against the secrets named (any of them).
-fn check(env: &Env, req: &Request, secrets: &[&str]) -> Auth {
+pub(crate) fn check(env: &Env, req: &Request, secrets: &[&str]) -> Auth {
     let mut configured = false;
     let Some(got) = presented(req) else {
         return if secrets.iter().any(|s| env.secret(s).is_ok()) { Auth::Denied } else { Auth::NotConfigured };
@@ -86,7 +90,7 @@ fn check(env: &Env, req: &Request, secrets: &[&str]) -> Auth {
     }
 }
 
-fn json_err(status: u16, kind: &str, message: &str) -> Result<Response> {
+pub(crate) fn json_err(status: u16, kind: &str, message: &str) -> Result<Response> {
     Ok(Response::from_json(&json!({"error": {"kind": kind, "message": message}}))?.with_status(status))
 }
 
@@ -160,19 +164,24 @@ async fn capability(mut req: Request, env: &Env) -> Result<Response> {
 }
 
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     let path = req.path();
-    if matches!(path.as_str(), "/" | "/healthz") {
-        return Response::from_json(&json!({"object": "fv.edge", "version": version(&env), "proto": proto::PROTO_VERSION}));
-    }
     if matches!(path.as_str(), "/up" | "/dl") {
         return capability(req, &env).await;
     }
+    if path == "/registry" || path.starts_with("/registry/") {
+        return match check(&env, &req, &["FV_INTERNAL_TOKEN", "FV_ADMIN_TOKEN"]) {
+            Auth::Ok => env.durable_object(REGISTRY_BINDING)?.get_by_name("registry")?.fetch_with_request(req).await,
+            Auth::Denied => json_err(401, "unauthorized", "a valid token is required"),
+            Auth::NotConfigured => json_err(503, "loading", "the dispatcher has no token configured"),
+        };
+    }
     let Some(route) = split(&path) else {
-        return json_err(404, "not_found", "no such route");
+        // Everything else is the public front (docs/serve/edge-control-plane.md).
+        return crate::front::handle(req, env, ctx).await;
     };
     let secrets: &[&str] = match route.action.as_str() {
-        "connect" | "enqueue" | "cancel" | "sessions" => &["FV_INTERNAL_TOKEN"],
+        "connect" | "enqueue" | "cancel" | "sessions" | "jobs" => &["FV_INTERNAL_TOKEN"],
         "status" | "metrics" => &["FV_INTERNAL_TOKEN", "FV_ADMIN_TOKEN"],
         _ => return json_err(404, "not_found", "no such route"),
     };
@@ -181,20 +190,24 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Auth::Denied => return json_err(401, "unauthorized", "a valid token is required"),
         Auth::NotConfigured => return json_err(503, "loading", "the dispatcher has no token configured"),
     }
+    family_stub(&env, &route.scope.object_name())?.fetch_with_request(req).await
+}
+
+/// The stub of the scheduler object `name` (`family:wan`, a pool id), at
+/// its location hint (`LOCATIONS`, or the older `POOL_LOCATIONS`:
+/// `{"family:wan": "weur", …}`).
+pub(crate) fn family_stub(env: &Env, name: &str) -> Result<Stub> {
     let ns = env.durable_object(DO_BINDING)?;
-    let name = route.scope.object_name();
-    // `LOCATIONS` (or the older `POOL_LOCATIONS`): {"family:wan": "weur", "h3-turbo": "wnam", …}.
     let hint = ["LOCATIONS", "POOL_LOCATIONS"].iter().find_map(|v| {
         env.var(v)
             .ok()
             .and_then(|v| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&v.to_string()).ok())
-            .and_then(|m| m.get(&name).and_then(|h| h.as_str()).map(str::to_owned))
+            .and_then(|m| m.get(name).and_then(|h| h.as_str()).map(str::to_owned))
     });
-    let stub = match hint {
-        Some(h) => ns.get_by_name_with_location_hint(&name, &h)?,
-        None => ns.get_by_name(&name)?,
-    };
-    stub.fetch_with_request(req).await
+    match hint {
+        Some(h) => ns.get_by_name_with_location_hint(name, &h),
+        None => ns.get_by_name(name),
+    }
 }
 
 /// What a worker socket carries across hibernation.
@@ -233,6 +246,11 @@ pub struct PoolScheduler {
     alarm_at: Cell<Option<i64>>,
     /// Admission calls waiting for a worker's session answer.
     waiters: RefCell<HashMap<String, oneshot::Sender<std::result::Result<SessionGrant, String>>>>,
+    /// Job waits (`jobs/{id}/wait`): woken when the job's row changes.
+    job_waiters: RefCell<HashMap<String, Vec<oneshot::Sender<()>>>>,
+    /// The last status push to the registry, and whether one is owed.
+    pushed_at: Cell<i64>,
+    push_owed: Cell<bool>,
 }
 
 impl PoolScheduler {
@@ -480,10 +498,29 @@ impl PoolScheduler {
             }
         }
         let now = now_ms();
-        let (dirty, pool, wake) = self.with(|s| (s.take_dirty(), s.pool.clone(), s.next_wake(now).map(|t| t.max(now + 1))))?;
+        let (dirty, pool, mut wake) = self.with(|s| (s.take_dirty(), s.pool.clone(), s.next_wake(now).map(|t| t.max(now + 1))))?;
         self.persist(&dirty)?;
         self.record(&pool, &dirty);
         self.drop_spills(&dirty);
+        for j in &dirty.jobs {
+            if let Some(ws) = self.job_waiters.borrow_mut().remove(&j.job_id) {
+                for w in ws {
+                    let _ = w.send(());
+                }
+            }
+        }
+        if !dirty.jobs.is_empty() || !dirty.workers.is_empty() || !dirty.sessions.is_empty() || !dirty.removed_workers.is_empty() {
+            self.push_owed.set(true);
+        }
+        if self.push_owed.get() {
+            if now - self.pushed_at.get() >= REGISTRY_PUSH_MS {
+                self.push_registry(&pool, now)?;
+            } else {
+                // Owed: the alarm pushes it.
+                let t = self.pushed_at.get() + REGISTRY_PUSH_MS;
+                wake = Some(wake.map_or(t, |w| w.min(t)));
+            }
+        }
         // Only ever move the alarm earlier: a later deadline is picked up by
         // the tick that runs anyway (it recomputes), so most events (every
         // enqueue moves the next ack deadline) cost no alarm write.
@@ -494,6 +531,35 @@ impl PoolScheduler {
                 self.alarm_at.set(Some(t));
             }
         }
+        Ok(())
+    }
+
+    /// Posts this family's status to the registry (behind the response).
+    fn push_registry(&self, pool: &str, now: i64) -> Result<()> {
+        let Some(family) = pool.strip_prefix("family:").map(str::to_owned) else {
+            self.push_owed.set(false);
+            return Ok(());
+        };
+        self.push_owed.set(false);
+        self.pushed_at.set(now);
+        let st = self.with(|s| s.status(now))?;
+        let Ok(ns) = self.env.durable_object(REGISTRY_BINDING) else { return Ok(()) };
+        let stub = ns.get_by_name("registry")?;
+        let body = serde_json::to_string(&st).map_err(rust_err)?;
+        self.state.wait_until(async move {
+            let h = Headers::new();
+            let _ = h.set("content-type", "application/json");
+            let mut init = RequestInit::new();
+            init.with_method(Method::Post).with_headers(h).with_body(Some(JsValue::from_str(&body)));
+            match Request::new_with_init(&format!("https://registry/registry/family/{family}"), &init) {
+                Ok(r) => {
+                    if let Err(e) = stub.fetch_with_request(r).await {
+                        console_warn!("registry push for {family}: {e:?}");
+                    }
+                }
+                Err(e) => console_warn!("registry push for {family}: {e:?}"),
+            }
+        });
         Ok(())
     }
 
@@ -749,7 +815,16 @@ impl DurableObject for PoolScheduler {
         if let Ok(pair) = WebSocketRequestResponsePair::new(proto::PING, proto::PONG) {
             state.set_websocket_auto_response(&pair);
         }
-        Self { state, env, sched: RefCell::new(None), alarm_at: Cell::new(None), waiters: RefCell::new(HashMap::new()) }
+        Self {
+            state,
+            env,
+            sched: RefCell::new(None),
+            alarm_at: Cell::new(None),
+            waiters: RefCell::new(HashMap::new()),
+            job_waiters: RefCell::new(HashMap::new()),
+            pushed_at: Cell::new(0),
+            push_owed: Cell::new(false),
+        }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
@@ -788,6 +863,20 @@ impl DurableObject for PoolScheduler {
                 Response::from_json(&st)
             }
             (Method::Get, "metrics", None) => Response::from_json(&self.with(|s| s.metrics(now))?),
+            (Method::Get, "jobs", Some("wait")) => {
+                let id = route.arg.unwrap_or_default();
+                let url = req.url()?;
+                let q = url.query().unwrap_or("");
+                let since = fastvideo_dispatch_proto::front::query_param(q, "since").unwrap_or_default();
+                let wait = fastvideo_dispatch_proto::front::query_param(q, "wait_ms").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).clamp(0, proto::JOB_WAIT_MAX_MS);
+                let phase = |s: &Self| s.with(|x| x.job_phase(&id).to_owned()).unwrap_or_else(|_| "unknown".into());
+                if phase(self) == since && wait > 0 {
+                    let (tx, rx) = oneshot::channel();
+                    self.job_waiters.borrow_mut().entry(id.clone()).or_default().push(tx);
+                    let _ = futures::future::select(rx, Box::pin(Delay::from(Duration::from_millis(wait as u64)))).await;
+                }
+                Response::from_json(&proto::JobWait { job_id: id.clone(), phase: phase(self) })
+            }
             (Method::Post, "sessions", None) if route.arg.is_none() => {
                 let body: SessionReq = match req.json().await {
                     Ok(b) => b,
@@ -823,6 +912,7 @@ impl DurableObject for PoolScheduler {
         let pool = self.pool_name(None)?;
         self.ensure(&pool)?;
         let out = self.with(|s| s.tick(now_ms()))?;
+        // A status push owed to the registry goes out with the tick's apply.
         self.apply(out).await?;
         Response::ok("")
     }

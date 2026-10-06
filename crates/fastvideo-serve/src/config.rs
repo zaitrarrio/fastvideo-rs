@@ -44,7 +44,7 @@
 //! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
 //! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
 //! | `FV_POOL_<ID>_FAMILY` | a durable-object pool's family object |
-//! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued`: an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
+//! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued` (and `FV_DISPATCH_STATUS_S`: `dispatch.status_s`): an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
@@ -1233,6 +1233,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_DISPATCH_MAX_QUEUED").and_then(|v| v.trim().parse().ok()) {
             self.dispatch.max_queued = v;
+        }
+        if let Some(v) = env.var("FV_DISPATCH_STATUS_S").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.status_s = v;
         }
         if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
             self.gateway.runpod_api_key = Secret(v.trim().to_owned());

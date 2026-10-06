@@ -152,6 +152,63 @@ pub fn key_id(digest_hex: &str) -> String {
     format!("key_{}", &digest_hex[..12.min(digest_hex.len())])
 }
 
+/// Query parameter carrying a WHIP session capability: the edge's 307
+/// hand-off of an ingest offer to the admitted worker
+/// (docs/serve/edge-control-plane.md §10 Q3, `FV_EDGE_WHIP=redirect`).
+pub const CAP_PARAM: &str = "fv_cap";
+/// The paths a capability opens on a front.
+pub const CAP_PATH: &str = "/fv/v1/streams/ingest";
+/// How long a capability is good for (the life of a WHIP session's
+/// signalling: offer, trickle ICE, DELETE).
+pub const CAP_TTL_MS: i64 = 6 * 3600 * 1000;
+
+/// What a capability grants: the caller's verdict, until `exp_ms`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCap {
+    pub verdict: Verdict,
+    pub exp_ms: i64,
+}
+
+fn hmac_hex(key: &str, msg: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    let mut m = Hmac::<Sha256>::new_from_slice(key.as_bytes()).expect("hmac accepts any key");
+    m.update(msg);
+    hex(&m.finalize().into_bytes())
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
+/// `hex(json).hex(hmac-sha256)`, keyed by the workers' internal token.
+pub fn sign_cap(key: &str, cap: &SessionCap) -> String {
+    let body = hex(serde_json::to_string(cap).unwrap_or_default().as_bytes());
+    let sig = hmac_hex(key, body.as_bytes());
+    format!("{body}.{sig}")
+}
+
+/// The verdict of a valid, unexpired capability.
+pub fn verify_cap(key: &str, token: &str, now_ms: i64) -> Option<Verdict> {
+    if key.is_empty() {
+        return None;
+    }
+    let (body, sig) = token.split_once('.')?;
+    if !ct_eq(hmac_hex(key, body.as_bytes()).as_bytes(), sig.as_bytes()) {
+        return None;
+    }
+    let cap: SessionCap = serde_json::from_slice(&unhex(body)?).ok()?;
+    (cap.exp_ms > now_ms).then_some(cap.verdict)
+}
+
+/// `url` (with or without a query) plus `name=value` (value URL-safe).
+pub fn with_param(url: &str, name: &str, value: &str) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}{name}={value}")
+}
+
 /// Constant-time equality.
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
@@ -462,6 +519,25 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// fal's proxy (`/fal/proxy` + `x-fal-target-url`) as the request it
+/// stands for: the path and query fv-serve routes it to (the same mapping
+/// as `fastvideo_fal::proxy`), so the edge routes and admits it like a
+/// direct call. `None`: not a fal host.
+pub fn unproxy(target: &str) -> Option<String> {
+    let rest = target.strip_prefix("https://").or_else(|| target.strip_prefix("http://"))?;
+    let (host, pq) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let host = host.split(':').next().unwrap_or(host);
+    Some(match host {
+        "queue.fal.run" | "rest.fal.ai" | "rest.alpha.fal.ai" => pq.to_owned(),
+        "fal.run" => format!("/run{pq}"),
+        "wma.fal.run" => format!("/wma{pq}"),
+        _ => return None,
+    })
 }
 
 // ------------------------------------------------------------------ registry
@@ -837,8 +913,9 @@ pub fn merge_fal_schema(bodies: &[serde_json::Value]) -> serde_json::Value {
 /// The families' demand gauges in the Prometheus text format (the edge's
 /// `/metrics`; the gateway's `fv_pool_*` per family).
 pub fn prometheus(ms: &[crate::FamilyMetrics]) -> String {
+    type Gauge = (&'static str, &'static str, fn(&crate::FamilyMetrics) -> f64);
     let mut out = String::new();
-    let gauges: [(&str, &str, fn(&crate::FamilyMetrics) -> f64); 9] = [
+    let gauges: [Gauge; 9] = [
         ("fv_family_queued", "jobs queued in the family object", |m| f64::from(m.queued)),
         ("fv_family_oldest_queued_seconds", "age of the oldest queued job", |m| m.oldest_queued_ms as f64 / 1e3),
         ("fv_family_running", "jobs pushed or running", |m| f64::from(m.pushed + m.running)),
@@ -863,7 +940,8 @@ pub fn prometheus(ms: &[crate::FamilyMetrics]) -> String {
 /// The edge's quotas (docs/serve/edge-control-plane.md §2.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Quotas {
-    /// Requests per minute per key (0: none).
+    /// Submits (job creations) per minute per key (0: none); status polls
+    /// are not counted (MiniMax's documented 300 creates per minute).
     pub key_rpm: u32,
     /// Unfinished jobs per key over every family (0: none).
     pub key_in_flight: u32,
@@ -936,7 +1014,19 @@ pub fn plan_forward(class: &Class, reg: &Registry, path: &str, query: &str, mode
         Target::FalProxy => {
             let target = fal_target.unwrap_or("");
             let fam = reg.fal_app(target).map(|(_, f)| f.to_owned());
-            reg.pick(fam.as_deref(), "fal", None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no fal front is up"))
+            match fam {
+                Some(f) => reg.pick(Some(&f), "fal", None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no fal front is up")),
+                // No app in the target (fal's token and storage calls): a
+                // front that mounts fal apps.
+                None => reg
+                    .distinct("fal")
+                    .into_iter()
+                    .filter(|x| !x.info.fal_apps.is_empty())
+                    .min_by_key(|x| (x.worker.held, x.worker.worker_id.clone()))
+                    .or_else(|| reg.pick(None, "fal", None, None))
+                    .map(|x| fwd(x, None))
+                    .ok_or_else(|| unavailable("no fal front is up")),
+            }
         }
         Target::Body => {
             let family = match model {
@@ -1305,6 +1395,15 @@ mod tests {
     }
 
     #[test]
+    fn fal_proxy_targets() {
+        assert_eq!(unproxy("https://queue.fal.run/minimax/h3-max/requests/r1/status?logs=1").as_deref(), Some("/minimax/h3-max/requests/r1/status?logs=1"));
+        assert_eq!(unproxy("https://fal.run/minimax/h3-max/director/ice").as_deref(), Some("/run/minimax/h3-max/director/ice"));
+        assert_eq!(unproxy("https://wma.fal.run/session").as_deref(), Some("/wma/session"));
+        assert_eq!(unproxy("https://rest.alpha.fal.ai/storage/upload/initiate?x=1").as_deref(), Some("/storage/upload/initiate?x=1"));
+        assert_eq!(unproxy("https://example.com/x"), None);
+    }
+
+    #[test]
     fn verdicts_and_keys() {
         assert_eq!(parse_authorization("Key abc"), Some(("key", "abc")));
         assert_eq!(parse_authorization("bearer  x "), Some(("bearer", "x")));
@@ -1313,11 +1412,21 @@ mod tests {
         assert_eq!(d.len(), 64);
         assert_eq!(key_id(&d), format!("key_{}", &d[..12]));
         let v = Verdict { v: 1, key: Some("key_1".into()), presented: true, valid: true, scheme: Some("key".into()), deny: None };
-        assert_eq!(Verdict::parse(&v.header()), Some(v));
+        assert_eq!(Verdict::parse(&v.header()), Some(v.clone()));
         let t = worker_tag("pod-1");
         assert_eq!(t.len(), 8);
         assert_eq!(token_tag(&format!("{t}.abc")), Some(t.as_str()));
         assert_eq!(token_tag("plain"), None);
+        let cap = SessionCap { verdict: v.clone(), exp_ms: 2_000 };
+        let tok = sign_cap("secret", &cap);
+        assert_eq!(verify_cap("secret", &tok, 1_000), Some(v.clone()));
+        assert_eq!(verify_cap("secret", &tok, 2_000), None, "expired");
+        assert_eq!(verify_cap("other", &tok, 1_000), None, "wrong key");
+        assert_eq!(verify_cap("", &tok, 1_000), None);
+        let forged = format!("{}.{}", hex(br#"{"verdict":{"v":1,"key":"key_x","valid":true},"exp_ms":9}"#), tok.split_once('.').unwrap().1);
+        assert_eq!(verify_cap("secret", &forged, 1), None, "body swapped");
+        assert_eq!(with_param("/a?x=1", CAP_PARAM, "t"), "/a?x=1&fv_cap=t");
+        assert_eq!(with_param("/a", CAP_PARAM, "t"), "/a?fv_cap=t");
         assert_eq!(query_param("a=1&task_id=12%2034&b", "task_id").as_deref(), Some("12 34"));
     }
 }

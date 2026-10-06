@@ -337,7 +337,7 @@ async fn every_api_through_the_edge() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn keys_quotas_and_admission() {
     init_log();
-    let e = Env::new(|c| c.quotas = Quotas { key_rpm: 40, key_in_flight: 0, invalid_key_rpm: 1000 }).await;
+    let e = Env::new(|c| c.quotas = Quotas { key_rpm: 12, key_in_flight: 0, invalid_key_rpm: 1000 }).await;
     // A slow front: jobs take a while, one slot, at most one queued per model.
     let a = e.front("slow", &[("fake-h3-turbo", "h3")], 200, |c| c.dispatch.max_queued = 1).await;
     let b = e.front("fast", &[("fake-wan", "wan")], 5, |_| {}).await;
@@ -385,10 +385,10 @@ async fn keys_quotas_and_admission() {
     let q = http.poll(&format!("{g}/fv/v1/jobs/{}", ids[1]), bearer(), native_done).await;
     assert_eq!(q["status"], "succeeded", "the queued job ran after the cancel: {q}");
 
-    // The per-key rate limit, in each API's shape.
+    // The per-key submit rate limit, in the API's shape (polls are not counted).
     let mut limited = None;
-    for _ in 0..60 {
-        let (s, v, _) = http.call("GET", &format!("{g}/fv/v1/jobs"), None, bearer()).await;
+    for i in 0..20 {
+        let (s, v, _) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-wan", "prompt": format!("burst {i}")})), bearer()).await;
         if s == 429 {
             limited = Some(v);
             break;
@@ -486,5 +486,35 @@ async fn a_reactor_session_is_admitted_by_the_edge() {
     let jv = http.poll(&format!("{g}/fv/v1/jobs/{jid}"), bearer(), native_done).await;
     assert_eq!(jv["status"], "succeeded", "{jv}");
     assert_eq!(e.edge.registry().counts["sfwan"].sessions, 0);
+    drop(w);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn whip_offers_can_be_handed_to_the_worker() {
+    init_log();
+    // `FV_EDGE_WHIP=redirect` (§10 Q3): the edge admits the session and
+    // answers 307 to the worker with a capability the worker's token layer
+    // takes in place of the internal token, on the ingest paths only.
+    let e = Env::new(|c| c.whip_redirect = true).await;
+    let w = e.front("whip", &[("fake-sfwan", "sfwan")], 5, |_| {}).await;
+    e.fronts(1).await;
+    let g = e.base.clone();
+    let http = &e.http;
+    let (s, v, h) = http.call("POST", &format!("{g}/fv/v1/streams/ingest?model=fake-sfwan"), None, bearer()).await;
+    assert_eq!(s, 307, "{v}");
+    let to = h.get("location").and_then(|l| l.to_str().ok()).unwrap().to_owned();
+    assert!(to.starts_with(&format!("{}/fv/v1/streams/ingest?model=fake-sfwan&fv_cap=", w.base)), "{to}");
+    assert_eq!(e.edge.registry().counts["sfwan"].sessions, 1);
+    let cap = to.split("fv_cap=").nth(1).unwrap().to_owned();
+    let list = format!("{}/fv/v1/streams/ingest", w.base);
+    let (s, _, _) = http.call("GET", &list, None, None).await;
+    assert_eq!(s, 401, "no capability, no internal token");
+    let (s, v, _) = http.call("GET", &format!("{list}?fv_cap={cap}"), None, None).await;
+    assert_ne!(s, 401, "{v}");
+    let bad = format!("{}0", &cap[..cap.len() - 1]);
+    let (s, _, _) = http.call("GET", &format!("{list}?fv_cap={bad}"), None, None).await;
+    assert_eq!(s, 401, "a forged capability");
+    let (s, _, _) = http.call("GET", &format!("{}/fv/v1/jobs?fv_cap={cap}", w.base), None, None).await;
+    assert_eq!(s, 401, "the capability opens the ingest paths only");
     drop(w);
 }

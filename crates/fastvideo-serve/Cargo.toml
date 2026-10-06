@@ -13,6 +13,13 @@ path = "src/lib.rs"
 name = "fv-serve"
 path = "src/main.rs"
 
+# The edge on the host (src/edge_host.rs): local runs and the compat suites'
+# edge mode (FV_COMPAT_EDGE=1).
+[[bin]]
+name = "fv-edge-local"
+path = "src/bin/fv-edge-local.rs"
+required-features = ["http-client"]
+
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-engine-service.workspace = true

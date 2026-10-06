@@ -74,6 +74,9 @@ pub struct EdgeHostCfg {
     pub reactor_model: Option<String>,
     /// Lease of an admitted session without a renew.
     pub session_ttl_ms: i64,
+    /// WHIP ingest offers: answer 307 to the admitted worker with a session
+    /// capability (`FV_EDGE_WHIP=redirect`) instead of proxying the offer.
+    pub whip_redirect: bool,
     pub outputs: Option<Arc<dyn Outputs>>,
 }
 
@@ -95,6 +98,7 @@ impl EdgeHostCfg {
             quotas: Quotas::default(),
             reactor_model: None,
             session_ttl_ms: 1_800_000,
+            whip_redirect: false,
             outputs: None,
         }
     }
@@ -474,6 +478,67 @@ impl EdgeHost {
         }
     }
 
+    /// Director sessions end over their data channel, not HTTP: before
+    /// refusing a session for lack of a GPU, ask the workers whether the
+    /// director sessions bound in `family` still live, and release the
+    /// ended ones. Whether any was released.
+    async fn reclaim(self: &Arc<Self>, family: &str) -> bool {
+        let held: Vec<(String, SessionBinding)> = self
+            .bindings
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|(k, b)| b.family == family && k.starts_with("director:"))
+            .map(|(k, b)| (k.clone(), b.clone()))
+            .collect();
+        let mut freed = false;
+        for (alias, b) in held {
+            let sid = alias.trim_start_matches("director:");
+            let r = self
+                .http
+                .post(format!("{}/wma/session/heartbeat", b.endpoint.trim_end_matches('/')))
+                .header(proto::TOKEN_HEADER, &self.cfg.internal_token)
+                .header(EDGE_AUTH_HEADER, Verdict { v: 1, key: b.owner.clone(), presented: true, valid: b.owner.is_some(), scheme: Some("key".into()), deny: None }.header())
+                .json(&json!({"session_id": sid}))
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
+            let alive = match r {
+                Ok(r) => r.json::<Value>().await.ok().and_then(|v| v.get("alive").and_then(Value::as_bool)).unwrap_or(true),
+                Err(_) => false,
+            };
+            if !alive {
+                self.unbind(&alias);
+                self.release(&b);
+                freed = true;
+            }
+        }
+        freed
+    }
+
+    /// [`EdgeHost::admit`], reclaiming ended director sessions once when
+    /// no GPU has room.
+    async fn admit_or_reclaim(self: &Arc<Self>, family: &str, kind: &str, model: Option<String>, owner: Option<String>) -> Result<SessionGrant, (u16, String)> {
+        match self.admit(family, kind, model.clone(), owner.clone()).await {
+            Err((429, m)) => {
+                if !self.reclaim(family).await {
+                    return Err((429, m));
+                }
+                // The worker reports its freed slot in its next `slots` frame.
+                let mut last = Err((429, m));
+                for _ in 0..25 {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    last = self.admit(family, kind, model.clone(), owner.clone()).await;
+                    if !matches!(last, Err((429, _))) {
+                        break;
+                    }
+                }
+                last
+            }
+            r => r,
+        }
+    }
+
     fn release(self: &Arc<Self>, b: &SessionBinding) {
         let obj = format!("family:{}", b.family);
         self.with(&obj, |s| s.release(&b.session_id, now_ms()));
@@ -744,7 +809,21 @@ async fn public(State(h): State<Arc<EdgeHost>>, req: Request<Body>) -> Response 
     if let Ok(v) = HeaderValue::from_str(&client_addr(&parts.headers)) {
         headers.insert("x-forwarded-for", v);
     }
-    let class = classify(method.as_str(), &path);
+    let mut class = classify(method.as_str(), &path);
+    // fal's proxy: route the request it stands for (admission, bindings and
+    // all), straight to a front's own route.
+    let (path, query, path_q) = match (&class.target, headers.get("x-fal-target-url").and_then(|v| v.to_str().ok()).and_then(front::unproxy)) {
+        (Target::FalProxy, Some(inner)) => {
+            let (p, q) = inner.split_once('?').map(|(p, q)| (p.to_owned(), q.to_owned())).unwrap_or((inner.clone(), String::new()));
+            class = classify(method.as_str(), &p);
+            if class.target == Target::FalProxy {
+                return err(400, "invalid_request", "a proxied request cannot target the proxy");
+            }
+            headers.remove("x-fal-target-url");
+            (p, q, inner)
+        }
+        _ => (path, query, path_q),
+    };
     let t0 = std::time::Instant::now();
     let resp = route(&h, &class, &method, &path, &query, &path_q, &headers, body).await;
     tracing::debug!(method = %method, path = %path, protocol = class.protocol, status = resp.status().as_u16(), ms = t0.elapsed().as_millis() as u64, "edge: request");
@@ -768,10 +847,10 @@ async fn route(h: &Arc<EdgeHost>, class: &Class, method: &Method, path: &str, qu
     if verdict.presented && !verdict.valid && h.over(&format!("bad:{}", client_addr(headers)), h.cfg.quotas.invalid_key_rpm) {
         return reply(Reply { status: 429, kind: "rate_limited", message: "too many requests with an invalid key".into(), retry_after: Some(60) });
     }
-    if let Some(k) = verdict.key.clone() {
+    if let Some(k) = verdict.key.clone().filter(|_| is_submit(method.as_str(), class)) {
         if h.over(&k, h.cfg.quotas.key_rpm) {
-            verdict.deny = Some(front::Deny { kind: "rate_limited".into(), message: "this key's request rate limit is reached".into(), retry_after: Some(10) });
-        } else if is_submit(method.as_str(), class) && h.cfg.quotas.key_in_flight > 0 {
+            verdict.deny = Some(front::Deny { kind: "rate_limited".into(), message: "this key's submit rate limit is reached".into(), retry_after: Some(10) });
+        } else if h.cfg.quotas.key_in_flight > 0 {
             let n = h.registry().owners.get(&k).copied().unwrap_or(0);
             if n >= h.cfg.quotas.key_in_flight {
                 verdict.deny = Some(front::Deny { kind: "rate_limited".into(), message: format!("this key has {n} unfinished jobs (limit {})", h.cfg.quotas.key_in_flight), retry_after: Some(10) });
@@ -831,7 +910,11 @@ async fn edge_route(h: &Arc<EdgeHost>, r: &EdgeRoute, method: &Method, path: &st
     // The caller's identity rides on the fan-outs (the APIs' own auth).
     let verdict = h.verdict(headers);
     match r {
-        EdgeRoute::Root => Json(json!({"server": "fv-edge", "role": "edge", "version": env!("CARGO_PKG_VERSION"), "ready": ready})).into_response(),
+        // FastWan's `GET /` names its model: the FastWan front answers.
+        EdgeRoute::Root => match reg.fronts().find(|x| x.info.defaults.contains_key("fastwan")) {
+            Some(x) => h.forward(&x.info.url, method, path, headers, reqwest::Body::from(Vec::new()), &verdict, Some(Duration::from_secs(15))).await,
+            None => Json(json!({"server": "fv-edge", "role": "edge", "version": env!("CARGO_PKG_VERSION"), "ready": ready})).into_response(),
+        },
         EdgeRoute::Ping => {
             if ready {
                 Json(json!({"status": "healthy"})).into_response()
@@ -953,7 +1036,7 @@ async fn director(h: &Arc<EdgeHost>, op: DirectorOp, method: &Method, path_q: &s
             None => session_error("fal_director", 503, "no worker serves the director right now".into(), Some(10)),
         },
         DirectorOp::Session => {
-            let g = match h.admit(&family, "director", None, verdict.key.clone()).await {
+            let g = match h.admit_or_reclaim(&family, "director", None, verdict.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("fal_director", st, m, Some(10)),
             };
@@ -999,7 +1082,7 @@ async fn director(h: &Arc<EdgeHost>, op: DirectorOp, method: &Method, path_q: &s
             r
         }
         DirectorOp::Start => {
-            let g = match h.admit(&family, "director", None, verdict.key.clone()).await {
+            let g = match h.admit_or_reclaim(&family, "director", None, verdict.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("fal_director", st, m, Some(10)),
             };
@@ -1065,7 +1148,7 @@ async fn reactor(h: &Arc<EdgeHost>, op: &ReactorOp, method: &Method, path_q: &st
                 // One session per caller: the worker answers (busy or idempotent).
                 return h.forward(&b.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60))).await;
             }
-            let g = match h.admit(&family, "reactor", None, verdict.key.clone()).await {
+            let g = match h.admit_or_reclaim(&family, "reactor", None, verdict.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("reactor", if st == 429 { 503 } else { st }, m, Some(10)),
             };
@@ -1128,11 +1211,19 @@ async fn stream(h: &Arc<EdgeHost>, ingest: bool, op: &StreamOp, method: &Method,
             let Some(family) = family else {
                 return session_error("native", 503, "no worker serves this model right now".into(), Some(10));
             };
-            let g = match h.admit(&family, kind, model.clone(), verdict.key.clone()).await {
+            let g = match h.admit_or_reclaim(&family, kind, model.clone(), verdict.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("native", st, m, Some(10)),
             };
             let b = SessionBinding { family, session_id: g.session_id.clone(), lease: g.lease, endpoint: g.endpoint.clone(), kind: kind.into(), owner: verdict.key.clone(), expires_ms: g.expires_ms };
+            if ingest && h.cfg.whip_redirect {
+                // The 307 hand-off: the client re-sends its offer to the
+                // worker with a capability; the lease runs out on its TTL
+                // (or when the worker ends the session).
+                let cap = front::sign_cap(&h.cfg.internal_token, &front::SessionCap { verdict: verdict.clone(), exp_ms: now_ms() + front::CAP_TTL_MS });
+                let to = front::with_param(&format!("{}{path_q}", g.endpoint.trim_end_matches('/')), front::CAP_PARAM, &cap);
+                return (StatusCode::TEMPORARY_REDIRECT, [("location", to)]).into_response();
+            }
             let resp = h.forward(&g.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60))).await;
             if !resp.status().is_success() {
                 h.release(&b);

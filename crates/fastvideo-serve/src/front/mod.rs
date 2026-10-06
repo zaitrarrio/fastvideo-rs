@@ -458,17 +458,27 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         Vec::new()
     };
     let first = local.first().map(|m| m.id.to_string());
-    let defaults: BTreeMap<String, String> = match &first {
-        Some(m) => protocols.iter().filter(|p| !matches!(**p, "serve" | "console")).map(|p| ((*p).to_owned(), m.clone())).collect(),
+    let mut defaults: BTreeMap<String, String> = match &first {
+        Some(m) => protocols.iter().filter(|p| !matches!(**p, "serve" | "console" | "fastwan")).map(|p| ((*p).to_owned(), m.clone())).collect(),
         None => BTreeMap::new(),
     };
+    // FastWan has one model (`GET /` names it): announced only by the
+    // front that serves it.
+    #[cfg(feature = "openai-videos")]
+    if protocols.contains(&"fastwan") {
+        let served: Vec<ModelCaps> = local.iter().map(|m| (*m).clone()).collect();
+        if let Some(m) = fastvideo_openai_videos::fastwan::fastwan_model(&served, None) {
+            defaults.insert("fastwan".into(), m);
+        }
+    }
     let reactor = if protocols.contains(&"reactor") {
-        config
-            .reactor
-            .model
-            .clone()
-            .filter(|m| caps.resolve(m).is_some())
-            .or_else(|| local.iter().find(|m| m.stream.is_some()).map(|m| m.id.to_string()))
+        // The configured Reactor model when this worker serves it (a
+        // worker that does not is no Reactor front), else its first
+        // streaming model.
+        match &config.reactor.model {
+            Some(m) => caps.resolve(m).filter(|c| local.iter().any(|l| l.id == c.id)).map(|_| m.clone()),
+            None => local.iter().find(|m| m.stream.is_some()).map(|m| m.id.to_string()),
+        }
     } else {
         None
     };

@@ -28,3 +28,9 @@
 
 #[cfg(target_arch = "wasm32")]
 mod edge;
+#[cfg(target_arch = "wasm32")]
+mod front;
+#[cfg(target_arch = "wasm32")]
+mod keys;
+#[cfg(target_arch = "wasm32")]
+mod registry;

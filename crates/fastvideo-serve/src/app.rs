@@ -404,7 +404,9 @@ impl App {
         }
         // A worker's jobs came through the gateway, which ran the MiniMax
         // callback challenge when it took the request.
-        callbacks.challenge_done_elsewhere = worker_role && !direct;
+        // A front takes requests itself, so it runs the challenge.
+        callbacks.challenge_done_elsewhere = worker_role && !direct && !front;
+        callbacks.challenge_done_when_dispatched = front;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
@@ -667,7 +669,7 @@ impl App {
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
         if worker_role {
-            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()), direct);
+            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()), direct, front);
         }
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());

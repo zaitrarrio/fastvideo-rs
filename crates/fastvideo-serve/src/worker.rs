@@ -65,9 +65,14 @@ fn internal_path(p: &str) -> bool {
 
 /// Requires the internal token on every non-open route, or with `direct`
 /// only on `/fv/v1/internal/*` (the other routes authenticate clients
-/// themselves).
-pub fn token_layer(router: Router, token: Arc<str>, direct: bool) -> Router {
-    router.layer(axum::middleware::from_fn(move |req: Request<Body>, next: Next| {
+/// themselves). A front (`front`) also takes a WHIP session capability the
+/// edge signed with the token (`?fv_cap=`, the 307 hand-off of an ingest
+/// offer, docs/serve/edge-control-plane.md §10 Q3) on the ingest paths: the
+/// request runs with the capability's verdict, and the answer's `Location`
+/// (the ingest resource) carries the capability on (trickle ICE, `DELETE`).
+pub fn token_layer(router: Router, token: Arc<str>, direct: bool, front: bool) -> Router {
+    use fastvideo_dispatch_proto::front::{verify_cap, with_param, CAP_PARAM, CAP_PATH, EDGE_AUTH_HEADER};
+    router.layer(axum::middleware::from_fn(move |mut req: Request<Body>, next: Next| {
         let token = token.clone();
         async move {
             let path = req.uri().path();
@@ -76,14 +81,31 @@ pub fn token_layer(router: Router, token: Arc<str>, direct: bool) -> Router {
             }
             let ok = req.headers().get(TOKEN_HEADER).is_some_and(|v| ct_eq(v.as_bytes(), token.as_bytes()));
             if ok {
-                next.run(req).await
-            } else {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": {"kind": "unauthorized", "message": "this is a gateway worker: requests need the internal token"}})),
-                )
-                    .into_response()
+                return next.run(req).await;
             }
+            let cap = (front && path.starts_with(CAP_PATH))
+                .then(|| req.uri().query().and_then(|q| fastvideo_dispatch_proto::front::query_param(q, CAP_PARAM)))
+                .flatten();
+            if let Some((tok, v)) = cap.and_then(|t| verify_cap(&token, &t, now_ms()).map(|v| (t, v))) {
+                let hs = req.headers_mut();
+                if let (Ok(t), Ok(a)) = (axum::http::HeaderValue::from_str(&token), axum::http::HeaderValue::from_str(&v.header())) {
+                    hs.insert(TOKEN_HEADER, t);
+                    hs.insert(EDGE_AUTH_HEADER, a);
+                    let mut resp = next.run(req).await;
+                    let loc = resp.headers().get("location").and_then(|l| l.to_str().ok()).filter(|l| l.contains(CAP_PATH)).map(str::to_owned);
+                    if let Some(l) = loc.filter(|l| !l.contains(CAP_PARAM)) {
+                        if let Ok(v) = axum::http::HeaderValue::from_str(&with_param(&l, CAP_PARAM, &tok)) {
+                            resp.headers_mut().insert("location", v);
+                        }
+                    }
+                    return resp;
+                }
+            }
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": {"kind": "unauthorized", "message": "this is a gateway worker: requests need the internal token"}})),
+            )
+                .into_response()
         }
     }))
 }
