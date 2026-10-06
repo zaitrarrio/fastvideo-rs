@@ -60,7 +60,8 @@ Measured (RTX PRO 6000, cuDNN 9.26, median of three synchronized calls):
 cuDNN is 3-10 % faster on self-attention from 27k to 124k tokens, fwd2 1 %
 faster at 23.6k (24 heads) and 1.2 % at 130k (LTX 4K 5 s), and the two tie on
 every cross-attention (keys <= a few thousand). The rule's cost against the
-faster kernel, per shape: see "Results" below (`sdpa_rule` group).
+faster kernel: see "Results" below (end to end against the timed pick;
+the per-shape `sdpa_rule` kernels group is the offline tool).
 
 ### Where SageAttention2 sits
 
@@ -126,4 +127,80 @@ rule stays a pure function of the shape.
 
 ## Results
 
-Pending the GPU session (this section is filled in by it).
+### 2026-10-06: RTX PRO 6000, short configs, three fresh processes each
+
+One RTX PRO 6000 Blackwell Server Edition pod (`8opjl8w358z3tn`, EUR-IS-1,
+driver 595.91.07, $2.09/hr) on the EU weight volume `jg48s6o1w0` (read
+only), image `fastvideo-rs-runtime:sha-6ec6c64` (this branch: the rule,
+the ordered reductions, Sage's ordered column sums). Family
+`runpod-matrix.sh det-short`: each arm three times, every run a new process
+with its own caches (no text, AdaLN or conditioning cache shared between
+runs), plus one `FASTVIDEO_SDPA_AUTO=timed` process per bf16 arm (the old
+pick) as the speed baseline. Hash = sha256 over every frame PNG in order;
+audio = sha256 of `audio.wav`. Logs and hashes:
+`artifacts/runpod/det-short/6ec6c64-10061138/`.
+
+| arm | config | r1 / r2 / r3 | timed control |
+|---|---|---|---|
+| H3 | FastH3 4-step dense, 768x1344, 5 s (124 frames), seed 7, resident FP8 text | **identical** | identical (made the rule's picks this time) |
+| Wan 5B | FastWan2.2 TI2V-5B, 3 steps, 704x1280x121, seed 7, full VAE | **identical** | **different** (cuDNN on the 512-key cross-attention: 0.61 vs 0.63 ms) |
+| LTX dense | LTX-2.5 distilled two-stage, dense stage 2, bf16 attention (`FASTVIDEO_ATTN_SAGE=0`), 1088x1920x97, seed 7 | **identical** (frames and audio) | **different** (cuDNN on the 1 024-key cross-attention: 1.41 vs 1.42 ms) |
+| LTX + Sage | the same with SageAttention2 (`FASTVIDEO_ATTN_SAGE=2`, what `ltx-pro` serves on sm_120) | **identical** (frames and audio) | (not run) |
+
+Reference hashes, **RTX PRO 6000 (sm_120) only**; another GPU type, driver
+or cuDNN gives other bytes (cuBLAS and cuDNN pick per architecture and SM
+count):
+
+| arm | frames sha256 | audio sha256 |
+|---|---|---|
+| H3 | `94a46573fba4fe21f2ab165970cea598f74839bcc772c757fa0e978c0e04fef1` | `cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab` |
+| Wan 5B | `1c95fa6fd705130d33cccf2dd779c59e761045f0c4f71b3091b1323e48c0aefa` | (none) |
+| LTX dense | `8a9e1a65941eac5c52d28ba0114aa3e2091d5ff24d56141c9f161c3afd191b2e` | `ee31308f8fd3164d7cb9a8340118edd51fd5bb0c7a43c3c9eb175a12076c6a90` |
+| LTX + Sage | `9eb5028c255ec9386fa25169d994e99b4fa1f9cbdcf91e7cce28175b4ea8afac` | `eb8b2b2327b73377abf4d3e8a842f2760424859b57e5e6ab50972941395f2215` |
+
+The H200 (sm_90) LTX reference stays `ad76ebfc…` for the serverless fox
+request (docs/gaps/2026-09-27-cold-start.md, the conv3d fix); it is a
+different GPU, request and route and was not re-run here. This branch also
+changes the LTX conditioning to one f32 form for a cache miss and a hit, so
+an H200 re-run may move that hash once; the next H200 session should record
+the new value.
+
+**Picks the rule made** (logged once per shape):
+
+| arm | shape (bh x sq x sk, d) | rule | timed control measured |
+|---|---|---|---|
+| H3 | 56 x 37 751 x 37 751, 128 | cuDNN | cuDNN 102.96 / fwd2 109.52 ms |
+| H3 (audio) | 224 x 1 797 x 1 797, 64 | fwd2 | cuDNN 0.65 / fwd2 0.64 ms |
+| Wan 5B | 24 x 27 280 x 27 280, 128 | cuDNN | cuDNN 23.66 / fwd2 24.96 ms |
+| Wan 5B | 24 x 27 280 x 512, 128 | fwd2 | cuDNN 0.61 / fwd2 0.63 ms -> cuDNN |
+| LTX stage 2 | 32 x 26 520 x 26 520, 128 | cuDNN | cuDNN 28.35 / fwd2 30.70 ms |
+| LTX | 32 x 26 520 x 1 024, 128 | fwd2 | cuDNN 1.41 / fwd2 1.42 ms -> cuDNN |
+| LTX (audio) | 32 x 26 520 x 101, 64 | fwd2 | cuDNN 0.25 / fwd2 0.20 ms |
+
+LTX stage 1 (6 630 tokens) does not fill fwd2's grid and runs V1, a fixed
+pick. Under Sage, both stages' video self-attention (6 630 and 26 520
+tokens) runs `attn_sage`; only the cross-attention reaches the rule.
+
+**Speed cost of the fixed rule** against the timed pick (denoise, s):
+
+| arm | rule r1 / r2 / r3 | timed | steps after the first, rule vs timed |
+|---|---|---|---|
+| H3 | 31.71 / 31.74 / 31.73 | 31.96 | 7.86-7.91 vs 7.89-7.90 per step |
+| Wan 5B | 4.72 / 4.72 / 4.73 | 4.96 | 1.465-1.473 vs 1.467-1.473 per step |
+| LTX dense | 19.67 / 19.39 / 19.94 | 20.08 | |
+| LTX + Sage | 17.88 / 17.74 / 17.89 | | |
+
+None measurable: where the timed pick differs from the rule it is a 0.01-0.02
+ms tie, and the timed process pays its first-call timing (0.2-0.25 s at
+step 1). Sage is 1.10x faster on LTX denoise here, as in sage-attention.md §9.
+
+**LTX conv3d fix, re-verified.** No LTX run logged a `conv3d x=…` timing
+line (the timed backend stays behind `FASTVIDEO_CONV3D_TIMED=1`), and the
+latent upsampler's convolutions (`ltx2 upsample`, the first 128 -> 1024 conv
+of the old H200 tie included) ran the fixed bf16 cuDNN pick: the three
+processes' frames and audio are identical bit for bit.
+
+**Spend:** pod 8opjl8w358z3tn ran 11:38-12:16 UTC (about 38 min, ≈ $1.32),
+deleted by the driver (GET 404); build pod (shared) about 10 min of jobs
+(≈ $0.16). Balance $34.54 -> $31.95 over the session, other agents' pods
+included.

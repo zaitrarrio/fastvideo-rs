@@ -2386,10 +2386,12 @@ Audio: male speech, clear voice, quiet room"
     # Verdicts: each run against r1 of its arm (the timed control too).
     {
       for arm in h3 wan ltx ltx-sage ltx-sol; do
-        ref="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*frames_sha256=\([^ ]*\).*/\1/')"
-        refa="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*audio_sha256=\([^ ]*\).*/\1/')"
+        # (|| true: an arm that did not run has no lines, and pipefail + set -e
+        # would end the family there.)
+        ref="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*frames_sha256=\([^ ]*\).*/\1/' || true)"
+        refa="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*audio_sha256=\([^ ]*\).*/\1/' || true)"
         [[ -n "$ref" ]] || continue
-        grep -hE "^$arm-(r[0-9]+|timed) " "$RUNS/hashes.txt" | while read -r cell fr fh ah; do
+        { grep -hE "^$arm-(r[0-9]+|timed) " "$RUNS/hashes.txt" || true; } | while read -r cell fr fh ah; do
           fh="${fh#frames_sha256=}"; ah="${ah#audio_sha256=}"
           v=DIFFERENT; [[ "$fh" != none && "$fh" == "$ref" && "$ah" == "$refa" ]] && v=IDENTICAL
           printf '%s %s frames %s audio %s\n' "$cell" "$v" "$fh" "$ah"
