@@ -76,6 +76,17 @@ and, once, Node and Playwright's Chromium onto the volume; compat, console
 and `FV_SERVE_UI=1` jobs wait for it. The image is stock `rust:1-bookworm`;
 nothing is baked for us.
 
+**apt on the pod is serialized.** The image's `docker-clean` apt hook deletes
+`/var/cache/apt/archives/*.deb` after every dpkg run and `apt-get update`, so
+a release-artifacts job's `apt-get` running while the extras unpacked ffmpeg
+deleted that install's packages (`extras: failed`, `apt-get install -y exited
+100`, no ffmpeg / libvpx, 2026-10-06). The server and
+`release-artifacts-pod.sh` now take one lock (`flock /var/lock/fv-apt.lock`),
+the server clears the hook (`/etc/apt/apt.conf.d/zz-fv-keep-debs`), and a
+failed install is repaired (`dpkg --configure -a`, `apt-get -f install`) and
+retried up to 3 times. `status` shows `extras.ffmpeg_libvpx`. Anything else
+that runs apt on the pod should take the same lock.
+
 Jobs get: `CUDARC_CUDA_VERSION=13000`, `NVCC` and `CUDA_HOME` pointing at the
 volume's toolkit (so `--features cuda` builds compile the AOT cubins),
 `RUSTC_WRAPPER=sccache`, mold as the linker, and the CI builder's release
