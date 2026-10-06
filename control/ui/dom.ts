@@ -55,3 +55,5 @@ export const store = {
     }
   },
 };
+/** Children without the empty ones (for append / replaceChildren). */
+export const kids = (...xs: (Node | string | null | undefined | false)[]): (Node | string)[] => xs.filter((x): x is Node | string => x !== null && x !== undefined && x !== false);
