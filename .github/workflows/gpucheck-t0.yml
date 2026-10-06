@@ -68,7 +68,7 @@ jobs:
     # here. No GPU and no driver: NVRTC compiles every kernel without one.
     # Tag pinned by scripts/dev/build-base-tag.sh (same as build-pod.sh).
     container:
-      image: ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d872f7724765429b
+      image: ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d124c1066ca42695
     env:
       CUDARC_CUDA_VERSION: "13000"
       LD_LIBRARY_PATH: /usr/local/cuda-13.4/lib64
