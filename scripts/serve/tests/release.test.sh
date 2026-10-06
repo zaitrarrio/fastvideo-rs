@@ -26,7 +26,10 @@ export FV_D1_API_BASE="$M/client/v4" FV_CF_API_TOKEN=test-cf-token
 export RUNPOD_API_BASE="$M/v1" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
 export FV_REGISTRY_API="$M" FV_GITHUB_API="$M" GH_TOKEN=test-gh-token
 export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_CLUSTER_STATE="$T/cluster.json" FV_SERVE_LEDGER="$T/ledger.tsv"
-export FV_DEPLOYED_BY=test FV_POD_CAP_S=1 FV_ROLL_WAIT_S=30 FV_DRAIN_WAIT_S=5
+# FV_POD_CAP_S: runpod-pod.sh's detached backstop deletes the pod that long
+# after `up`; 1 s deleted the mock pod before the checks below on a loaded
+# host (the shared build pod). Nothing here waits for it to fire.
+export FV_DEPLOYED_BY=test FV_POD_CAP_S=300 FV_ROLL_WAIT_S=30 FV_DRAIN_WAIT_S=5
 # The gateway's optional GitHub token (runpod-cluster.sh): a test file, mode 600.
 export FV_GITHUB_TOKEN_FILE="$T/github_token"
 ( umask 077; printf 'test-gh-pat-0929\n' >"$FV_GITHUB_TOKEN_FILE" )
