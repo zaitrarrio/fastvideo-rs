@@ -4424,6 +4424,8 @@ struct MoeKernels {
     copy_f: cudarc::driver::CudaFunction,
     topk_last: cudarc::driver::CudaFunction,
     scatter_add_rows: cudarc::driver::CudaFunction,
+    moe_group_topk: cudarc::driver::CudaFunction,
+    moe_combine: cudarc::driver::CudaFunction,
 }
 
 #[cfg(feature = "cuda")]
@@ -4477,6 +4479,8 @@ fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
         copy_f: module.load_function("copy_f").map_err(err)?,
         topk_last: module.load_function("topk_last").map_err(err)?,
         scatter_add_rows: module.load_function("scatter_add_rows").map_err(err)?,
+        moe_group_topk: module.load_function("moe_group_topk").map_err(err)?,
+        moe_combine: module.load_function("moe_combine").map_err(err)?,
         _module: module,
     }))
 }
@@ -4573,6 +4577,108 @@ pub fn scatter_add_rows_device(
         launch!(dev.stream, &fns.scatter_add_rows, cfg_n(src.len()); src, &idx_d, &w_d, &mut out, &n, &d_i)
             .map_err(err)?;
     }
+    Ok(out)
+}
+
+/// Parameters of [`moe_group_topk_device`] (mirrors
+/// `fastvideo_models::lingbot::RouterSpec`).
+#[derive(Debug, Clone, Copy)]
+pub struct GroupTopk {
+    pub experts: usize,
+    pub top_k: usize,
+    /// `<= 1`: plain top-k.
+    pub n_group: usize,
+    pub topk_group: usize,
+    pub softmax: bool,
+    pub norm: bool,
+    pub scale: f32,
+    pub round_bf16: bool,
+}
+
+/// Group-limited router on device logits `[rows, experts]`; copies the
+/// `[rows, k]` index / weight tables back for host dispatch.
+#[cfg(feature = "cuda")]
+pub fn moe_group_topk_device(
+    logits: &CudaSlice<f32>,
+    bias: &CudaSlice<f32>,
+    p: GroupTopk,
+) -> Result<(Vec<u32>, Vec<f32>)> {
+    check(
+        "moe_group_topk",
+        p.experts > 0
+            && p.experts <= 256
+            && p.top_k > 0
+            && p.top_k <= p.experts
+            && p.n_group <= 64
+            && bias.len() == p.experts
+            && logits.len() % p.experts == 0,
+    )?;
+    let dev = ctx()?;
+    let fns = moe_kernels()?;
+    let rows = logits.len() / p.experts;
+    let k = p.top_k;
+    let mut idx = unsafe { dev.stream.alloc::<u32>((rows * k).max(1)) }.map_err(err)?;
+    let mut val = alloc((rows * k).max(1))?;
+    let (rows_i, e_i, k_i) = (rows as i32, p.experts as i32, k as i32);
+    let (g_i, tg_i) = (p.n_group as i32, p.topk_group as i32);
+    let (sm_i, norm_i, r16_i) = (i32::from(p.softmax), i32::from(p.norm), i32::from(p.round_bf16));
+    let scale = p.scale;
+    if rows > 0 {
+        launch!(dev.stream, &fns.moe_group_topk, cfg_n(rows);
+            logits, bias, &mut idx, &mut val, &rows_i, &e_i, &k_i, &g_i, &tg_i,
+            &sm_i, &norm_i, &scale, &r16_i)
+        .map_err(err)?;
+    }
+    let mut idx_h = dev.stream.memcpy_dtov(&idx).map_err(err)?;
+    let mut val_h = dev.stream.memcpy_dtov(&val).map_err(err)?;
+    idx_h.truncate(rows * k);
+    val_h.truncate(rows * k);
+    super::stats::record_d2h(idx_h.len() + val_h.len());
+    Ok((idx_h, val_h))
+}
+
+/// `out[t, :] = Σ_s w[t·k+s] · ys[pos[t·k+s], :]` for `n` tokens.
+pub fn moe_combine_host(ys: &[f32], pos: &[u32], w: &[f32], n: usize, k: usize, d: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let mut out = vec![0f32; n * d];
+    out.par_chunks_mut(d.max(1)).enumerate().for_each(|(t, row)| {
+        for s in 0..k {
+            let r = t * k + s;
+            let src = &ys[pos[r] as usize * d..][..d];
+            let wr = w[r];
+            for (o, &v) in row.iter_mut().zip(src) {
+                *o += wr * v;
+            }
+        }
+    });
+    out
+}
+
+#[cfg(feature = "cuda")]
+pub fn moe_combine_device(
+    ys: &CudaSlice<f32>,
+    pos: &[u32],
+    w: &[f32],
+    n: usize,
+    k: usize,
+    d: usize,
+) -> Result<CudaSlice<f32>> {
+    check(
+        "moe_combine",
+        d > 0 && pos.len() == n * k && w.len() == n * k && ys.len() % d == 0,
+    )?;
+    let dev = ctx()?;
+    let fns = moe_kernels()?;
+    let mut out = alloc((n * d).max(1))?;
+    if n == 0 {
+        return Ok(out);
+    }
+    let pos_d = dev.stream.memcpy_stod(pos).map_err(err)?;
+    let w_d = dev.stream.memcpy_stod(w).map_err(err)?;
+    super::stats::record_h2d(pos.len() + w.len());
+    let (n_i, k_i, d_i) = (n as i64, k as i64, d as i64);
+    launch!(dev.stream, &fns.moe_combine, cfg_n(n * d); ys, &pos_d, &w_d, &mut out, &n_i, &k_i, &d_i)
+        .map_err(err)?;
     Ok(out)
 }
 
