@@ -173,6 +173,14 @@ try {
   await page.waitForSelector(".alert:has-text('ui test alert')", { state: "detached" });
   assert.ok((await (await fetch(`${B}/api/alerts`, { headers: { authorization: `Bearer ${tok}` } })).json()).alerts.every((a) => a.key !== "ui:test"), "resolved");
   await page.screenshot({ path: `${out}/12-dashboard-buildpod.png`, fullPage: true });
+  // Managed build pods: Up creates one (policy enabled by API), the card shows it with Stop / Delete.
+  await fetch(`${B}/api/build-pods/policy`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ policy: { enabled: true } }) });
+  await page.reload();
+  await page.click("button:text('Up (reuse / start / create)')");
+  await page.waitForSelector(".buildpod[data-bp]", { timeout: 20000 });
+  const mText = await page.textContent(".buildpod[data-bp]");
+  for (const s of ["EU-RO-1", "cpu3c 32 vCPU", "main@", "idle stop 20 min", "Stop", "Delete"]) assert.ok(mText.includes(s), `managed build pod card: ${s} in ${mText}`);
+  await page.screenshot({ path: `${out}/12b-dashboard-build-pods.png`, fullPage: true });
   // Clusters: every template, and a pool preset added to the spec being defined.
   await page.goto(`${B}/#/clusters`);
   await page.waitForSelector("select[aria-label=Template] option[value=ltx]", { state: "attached" });
