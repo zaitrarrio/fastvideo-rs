@@ -32,7 +32,10 @@ async function call(path, { method = "GET", body, headers = {}, raw = false } = 
   try { j = JSON.parse(text); } catch {}
   return raw ? { status: r.status, text, headers: r.headers } : { status: r.status, j, headers: r.headers };
 }
+// FVC_ONLY=<regex>: only the steps matching it (plus login and tokens), for iterating on one.
+const ONLY = process.env.FVC_ONLY ? new RegExp(process.env.FVC_ONLY) : null;
 async function step(name, fn) {
+  if (ONLY && !ONLY.test(name) && !/^(public health|login|API tokens)/.test(name)) return;
   const t = Date.now();
   try {
     await fn();
@@ -672,6 +675,122 @@ await step("a second edge cluster: fronts behind the edge; register, ready from 
   assert.equal((await waitOp(id, "down")).status, "done");
   assert.equal(mine().length, 0);
   assert.ok(!JSON.stringify(mock.edgeCalls).includes("gateway/pools"));
+});
+
+await step("build pods: policy, placement, up (create / reuse / start / replace), token, costs, runner, busy guard, CI wake, queued-job wake, backstop", async () => {
+  mock.balance = 50;
+  const A = { cookie, "x-csrf-token": csrf };
+  const bpRows = () => [...mock.pods.values()].filter((p) => p.env?.FV_BUILD_TOKEN_SHA256);
+  // Off by default: nothing is created.
+  assert.equal((await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() })).status, 403);
+  const pol = await call("/api/build-pods/policy", { method: "PUT", body: { policy: { enabled: true, max_pods: 2 } }, headers: A });
+  assert.equal(pol.j.policy.enabled, true);
+  // Plan: cpu5c-32 has no stock; cpu3c-32 in EU-RO-1 (High) first.
+  const plan = (await call("/api/build-pods/plan", { headers: T() })).j;
+  assert.deepEqual(plan.candidates.slice(0, 3).map((c) => `${c.flavor}-${c.vcpu}@${c.dc}`), ["cpu3c-32@EU-RO-1", "cpu3c-32@EUR-IS-1", "cpu5c-16@EUR-IS-1"]);
+  assert.equal(plan.server.image, "ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-0123456789abcdef");
+  // up: EU-RO-1 has no instances after all -> the next candidate.
+  mock.noStockDcs.add("EU-RO-1");
+  const up1 = await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() });
+  assert.equal(up1.status, 201, JSON.stringify(up1.j));
+  mock.noStockDcs.clear();
+  assert.equal(up1.j.action, "created");
+  assert.match(up1.j.token, /^[0-9a-f]{64}$/);
+  const bp1 = up1.j.pod;
+  assert.equal(bp1.dc, "EUR-IS-1");
+  assert.match(bp1.name, /^fv-build-eu-[0-9a-f]{6}$/);
+  const rp = mock.pods.get(bp1.pod_id);
+  assert.deepEqual([rp.payload.computeType, rp.payload.cpuFlavorIds[0], rp.payload.vcpuCount, rp.payload.dataCenterIds[0]], ["CPU", "cpu3c", 32, "EUR-IS-1"]);
+  const { createHash } = await import("node:crypto");
+  const { gunzipSync } = await import("node:zlib");
+  assert.equal(rp.env.FV_BUILD_TOKEN_SHA256, createHash("sha256").update(up1.j.token).digest("hex"));
+  assert.equal(gunzipSync(Buffer.from(rp.env.FV_BUILD_SERVER_B64, "base64")).toString(), mock.repoFiles["scripts/dev/build-pod-server.py"]);
+  assert.equal(rp.env.FV_BUILD_ROOT, "/root/fvb-cache", "no volume: caches on the container disk");
+  assert.ok(!JSON.stringify(up1.j).includes("FV_BUILD_SERVER_B64"), "the pod env is never returned");
+  // A second up reuses it; the token needs an admin token.
+  const up2 = await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() });
+  assert.equal(up2.j.action, "reused");
+  assert.equal(up2.j.pod.id, bp1.id);
+  const ro = (await call("/api/tokens", { method: "POST", body: { name: "bp-viewer", scope: "read" }, headers: A })).j.token;
+  assert.equal((await call(`/api/build-pods/${bp1.id}/token`, { headers: { authorization: `Bearer ${ro}` } })).status, 403);
+  assert.equal((await call(`/api/build-pods/${bp1.id}`, { headers: { authorization: `Bearer ${ro}` } })).j.pod.phase, "ready");
+  // The cron: owner build-pod:<name> in the ledger; the runner registered with a 1-h token (never the PAT).
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  const pods = (await call("/api/pods", { headers: T() })).j.pods;
+  assert.equal(pods.find((p) => p.pod_id === bp1.pod_id).owner, `build-pod:${bp1.name}`);
+  assert.equal(mock.runnerRegs.length, 1);
+  assert.deepEqual([mock.runnerRegs[0].token, mock.runnerRegs[0].labels, mock.runnerRegs[0].name, mock.runnerRegs[0].repo], ["<reg>", "fv-build,fv-build-eu", `fv-build-${bp1.pod_id}`, "zaitrarrio/fastvideo-rs"]);
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  let ov = (await call("/api/build-pods", { headers: T() })).j;
+  assert.equal(ov.pods.find((p) => p.id === bp1.id).runner.state, "running");
+  assert.equal(ov.secrets.runner_pat, true);
+  // Busy: stop refuses with jobs active, force stops; the runner goes from GitHub.
+  mock.bp[bp1.pod_id] = { ...mock.bp[bp1.pod_id], jobs_active: 2 };
+  const busy = await call(`/api/build-pods/${bp1.id}/stop`, { method: "POST", body: {}, headers: T() });
+  assert.equal(busy.status, 409);
+  assert.match(busy.j.error, /2 job\(s\) active/);
+  assert.equal((await call(`/api/build-pods/${bp1.id}/stop`, { method: "POST", body: { force: true }, headers: T() })).j.pod.state, "stopped");
+  assert.equal(mock.pods.get(bp1.pod_id).desiredStatus, "EXITED");
+  assert.ok(!mock.runners.some((r) => r.name === `fv-build-${bp1.pod_id}`), "runner deregistered");
+  mock.bp[bp1.pod_id].jobs_active = 0;
+  // up starts the stopped (current) pod; the cron registers its runner again.
+  const up3 = await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() });
+  assert.equal(up3.j.action, "started");
+  assert.equal(mock.pods.get(bp1.pod_id).desiredStatus, "RUNNING");
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  assert.equal(mock.runnerRegs.length, 2);
+  // main's server changes: the running pod is left alone (outdated), replaced only once stopped.
+  mock.repoFiles["scripts/dev/build-pod-server.py"] += "# v2\n";
+  assert.equal((await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() })).j.action, "reused");
+  ov = (await call("/api/build-pods", { headers: T() })).j;
+  assert.equal(ov.pods.find((p) => p.id === bp1.id).outdated, true);
+  await call(`/api/build-pods/${bp1.id}/stop`, { method: "POST", body: {}, headers: T() });
+  const up4 = await call("/api/build-pods/up", { method: "POST", body: {}, headers: T() });
+  assert.equal(up4.j.action, "created");
+  assert.deepEqual(up4.j.replaced, [bp1.pod_id]);
+  assert.ok(!mock.pods.has(bp1.pod_id), "the stopped outdated pod was deleted");
+  const bp2 = up4.j.pod;
+  // CI: a ci token reaches only /api/ci/*; an idle runner -> pod.
+  const ci = (await call("/api/tokens", { method: "POST", body: { name: "gh-ci", scope: "ci" }, headers: A })).j.token;
+  const CI = { authorization: `Bearer ${ci}` };
+  assert.equal((await call("/api/overview", { headers: CI })).status, 403);
+  assert.equal((await call(`/api/build-pods/${bp2.id}/token`, { headers: CI })).status, 403);
+  await call("/api/collect", { method: "POST", body: {}, headers: T() }); // registers bp2's runner
+  let ans = (await call("/api/ci/build-runner", { method: "POST", body: { workflow: "tools-release.yml", run_id: 7 }, headers: CI })).j;
+  assert.equal(ans.builder, "pod", JSON.stringify(ans));
+  // No idle runner: the pod's runner is busy -> a second pod is woken ("wait"); at max_pods -> github.
+  mock.runners.forEach((r) => (r.busy = true));
+  ans = (await call("/api/ci/build-runner", { method: "POST", body: {}, headers: CI })).j;
+  assert.equal(ans.builder, "wait", JSON.stringify(ans));
+  assert.equal(bpRows().filter((p) => p.desiredStatus === "RUNNING").length, 2);
+  ans = (await call("/api/ci/build-runner", { method: "POST", body: {}, headers: CI })).j;
+  assert.equal(ans.builder, "wait", "the woken pod is reused while its runner comes up");
+  mock.runners.forEach((r) => (r.busy = false));
+  // Stop everything; a queued fv-build job wakes a pod from the cron.
+  ov = (await call("/api/build-pods", { headers: T() })).j;
+  for (const p of ov.pods.filter((x) => x.state === "running")) assert.equal((await call(`/api/build-pods/${p.id}/stop`, { method: "POST", body: { force: true }, headers: T() })).status, 200);
+  assert.equal(bpRows().filter((p) => p.desiredStatus === "RUNNING").length, 0);
+  mock.ghQueued.push({ run_id: 4242, path: ".github/workflows/tools-release.yml", jobs: [{ id: 1, status: "completed", labels: ["ubuntu-latest"] }, { id: 2, status: "queued", labels: ["self-hosted", "fv-build"] }] });
+  const col = (await call("/api/collect", { method: "POST", body: {}, headers: T() })).j;
+  assert.ok(col.actions.some((a) => /started for 1 queued fv-build job/.test(a)), JSON.stringify(col.actions));
+  mock.ghQueued.length = 0;
+  // Backstop: idle far past its own idle stop -> the cron stops it (alert build_pod).
+  const live = bpRows().find((p) => p.desiredStatus === "RUNNING");
+  mock.bp[live.id] = { ...mock.bp[live.id], idle_s: 3 * 3600 };
+  const col2 = (await call("/api/collect", { method: "POST", body: {}, headers: T() })).j;
+  assert.ok(col2.actions.some((a) => /idle 180 min/.test(a)), JSON.stringify(col2.actions));
+  assert.equal(live.desiredStatus, "EXITED");
+  const al = (await call("/api/alerts", { headers: T() })).j.alerts;
+  assert.ok(al.some((a) => a.kind === "build_pod" && a.target === live.id));
+  // Costs land under build-pod:<name>; audit has the lifecycle.
+  const costs = (await call("/api/costs?days=1", { headers: T() })).j;
+  assert.ok(JSON.stringify(costs).includes("build-pod:fv-build-eu-"), "build pod spend by owner");
+  const acts = new Set((await call("/api/audit?limit=500", { headers: T() })).j.audit.map((x) => x.action));
+  for (const a of ["build_pod.create", "build_pod.stop", "build_pod.start", "build_pod.delete", "build_pod.token", "build_pod.wake", "build_pods.policy", "build_pod.ci_wake"]) assert.ok(acts.has(a), `audit has ${a}`);
+  // Delete what is left (stopped pods), so later steps see no build pods.
+  ov = (await call("/api/build-pods", { headers: T() })).j;
+  for (const p of ov.pods.filter((x) => x.state !== "deleted")) assert.equal((await call(`/api/build-pods/${p.id}?force=1`, { method: "DELETE", headers: T() })).j.pod.state, "deleted");
+  assert.equal(bpRows().length, 0);
 });
 
 await step("audit log; no secret in any response", async () => {

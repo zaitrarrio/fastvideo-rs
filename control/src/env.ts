@@ -17,6 +17,11 @@ export interface Env {
   RUNPOD_API_KEY: string;
   CLOUDFLARE_API_KEY?: string; // Analytics Engine SQL
   GITHUB_PAT?: string;
+  /** Fine-grained PAT, Administration read/write + Actions read: the build pods' GitHub runners (docs/dev/build-pods-fv-control.md). Unset: GITHUB_PAT. */
+  GITHUB_RUNNER_PAT?: string;
+  /** An R2 S3 key scoped to the build cache bucket (sccache + deps seeds), put into build pods' env. Unset: no R2 cache. */
+  BUILD_CACHE_R2_ACCESS_KEY_ID?: string;
+  BUILD_CACHE_R2_SECRET_ACCESS_KEY?: string;
   /** CloudRift API key (docs/ops/cloudrift.md). Unset: the CloudRift provider is off. */
   CLOUDRIFT_API_KEY?: string;
   /** 32+ random bytes, base64: seals cluster secrets and secret env values in D1 (AES-256-GCM). */
@@ -75,7 +80,7 @@ export type Vars = {
   actor: string; // who: access:<email> | owner | token:<name>
   authKind: "access" | "session" | "token" | "ingest";
   sessionId?: string;
-  scope?: "read" | "admin";
+  scope?: "read" | "admin" | "ci";
 };
 
 export const defaults = {

@@ -14,6 +14,7 @@ async function gh(env: Env, path: string, init: RequestInit = {}, token = env.GI
       "x-github-api-version": "2022-11-28",
       "user-agent": "fv-control",
       ...(init.body ? { "content-type": "application/json" } : {}),
+      ...((init.headers as Record<string, string>) || {}),
     },
     timeoutMs: 20000,
   });
