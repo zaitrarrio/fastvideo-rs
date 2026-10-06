@@ -32,6 +32,11 @@ wan22-ti2v-5b	Wan-AI/Wan2.2-TI2V-5B-Diffusers	scheduler/* tokenizer/* text_encod
 fastwan22-ti2v-5b	FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 wan21-t2v-14b	Wan-AI/Wan2.1-T2V-14B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 sfwan21-1.3b	wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
+# sana-video-2b-480p: SANA-Video 2B 480p (Apache-2.0) @ db5f398b13ca086d09a50ce156c20527773841b1, 18.0 GB
+# (transformer 8.23 GB f32, Gemma-2-2B text encoder 5.23 GB, vae 0.51 GB = byte-identical Wan 2.1 VAE,
+# tokenizer 0.04 GB). For the Sol-Engine SANA arm (docs/ports/sana-video.md). NOT yet on the EU volume
+# as of 2026-10-06 (owner approval pending); fetch with fetch-hub-tree.sh, then verify-weights.sh sana-video-2b-480p.
+sana-video-2b-480p	Efficient-Large-Model/SANA-Video_2B_480p_diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 # mmaudio-44k-v2 spans three repos (hkchengrex/MMAudio, nvidia/bigvgan_v2_44khz_128band_512x,
 # apple/DFN5B-CLIP-ViT-H-14-384) plus converted safetensors: fetch it with scripts/gpu/fetch-mmaudio.sh.
 # The row below is the MMAudio part for hf-fm fetchers.

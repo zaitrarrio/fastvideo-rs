@@ -107,6 +107,8 @@ impl Gateway {
             retries: pool.cfg.retries,
             model: Some(env.job.resolved.model.to_string()),
             replace: false,
+            owner: env.job.owner.as_ref().map(|o| o.0.clone()),
+            max_queued: 0,
         };
         let t0 = Instant::now();
         let r = self.edge_req(reqwest::Method::POST, &format!("{base}{}", pool.scope().enqueue_path())).timeout(timeout).json(&body).send().await;
@@ -237,6 +239,8 @@ impl Gateway {
                 retries: p.cfg.retries,
                 model: Some(env.job.resolved.model.to_string()),
                 replace: true,
+                owner: env.job.owner.as_ref().map(|o| o.0.clone()),
+                max_queued: 0,
             };
             let url = format!("{}{}", p.do_base(), p.scope().enqueue_path());
             let resp = self.edge_req(reqwest::Method::POST, &url).timeout(Duration::from_secs(30)).json(&body).send().await.map_err(|e| e.without_url().to_string())?;

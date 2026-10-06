@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -853,6 +853,33 @@ Audio: male speech, clear voice, quiet room"
         --prompt "$PROMPT" \
         --seed "$SEED" \
         --clip "$RUNS/hy15-480-t2v/frames"
+    ;;
+  sana-video)
+    # SANA-Video 2B vs Sol-Engine's published ~2.77x (EasyCache 0.1 + QKV
+    # merge + bf16 linear attention + compile, 1x GB200): 832x480, 81 frames,
+    # 50 steps, cfg 6, warm process. Runs from the CI image's fv-gpucheck; the
+    # tree must already be on the volume (weights-manifest.tsv
+    # sana-video-2b-480p). docs/ports/sana-video.md has the cost and the gates.
+    if ! "$BIN" sana-video --help >/dev/null 2>&1; then
+      log "skip sana-video: fv-gpucheck in this image has no sana-video stage"
+      write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"fv-gpucheck sana-video not in image"}'
+      exit 0
+    fi
+    SANA_W="${FV_SANA_WEIGHTS:-$W/sana-video-2b-480p}"
+    SANA_PROMPT="${FV_SANA_PROMPT:-a corgi running on the beach}"
+    # Two generations per cell (cold + timed warm) at an unmeasured speed.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-2400}"
+    for arm in ${FV_SANA_ARMS:-baseline full}; do
+      gated_cell "sana-$arm" sana-video-2b-480p \
+        "$BIN" --mode fast sana-video gen \
+          --weights "$SANA_W" \
+          --prompt "$SANA_PROMPT" \
+          --arm "$arm" \
+          --seed "${FV_SANA_SEED:-42}" \
+          --warm \
+          --clip "$RUNS/sana-$arm/frames"
+    done
+    compare_cells sana-baseline sana-full
     ;;
   wan)
     # FastWan2.1 1.3B DMD, 3 steps (1000/757/522), 480x832, 81 frames: the
