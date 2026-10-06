@@ -9,8 +9,9 @@ Eviction and disk-full handling: the Evictor against a fake filesystem and
 clock (idle and LRU passes, busy agents, the release agent's hold); LocalFS,
 job start and the HTTP 507 path against a temp dir.
 
-apt: the setup's installs run under one lock, repair dpkg and retry after a
-failure, and clear the image's docker-clean hooks (a fake runner, temp paths).
+Image and caches: setup installs nothing and fails naming a missing tool;
+jobs compile through sccache; sccache stats; deps seeds (key, stripping path
+packages, extraction into a missing target dir, one seed build per key).
 
 Standard library only:
 
@@ -624,81 +625,162 @@ class HttpDiskFullTest(unittest.TestCase):
 
 
 
-class AptTest(unittest.TestCase):
-    """The extras install failed when another apt deleted its .debs mid-unpack
-    (docker-clean); installs are locked, repaired and retried."""
+class ImageSetupTest(unittest.TestCase):
+    """The pod installs nothing: setup checks the image and fails with what is
+    missing; jobs compile through sccache."""
+
+    def tearDown(self):
+        bps.setup_state.update(phase="ready", ready=True, error=None)
+        bps.setup_done.set()
+        bps.extras_state.update(phase="ready", ready=True, error=None)
+        bps.extras_done.set()
+
+    def test_a_missing_tool_fails_the_setup_and_names_it(self):
+        bps.setup_done.clear()
+        bps.setup_state.update(phase="starting", ready=False, error=None)
+        with mock.patch.object(bps, "REQUIRED_TOOLS", ("cargo", "fv-no-such-tool")), \
+                mock.patch.object(bps, "prune_targets"), mock.patch.object(bps, "sccache_start") as start:
+            bps.setup()
+        self.assertEqual(bps.setup_state["phase"], "failed")
+        self.assertIn("missing from the image", bps.setup_state["error"])
+        self.assertIn("fv-no-such-tool", bps.setup_state["error"])
+        self.assertEqual(bps.extras_state["phase"], "skipped")
+        start.assert_not_called()
+        job = bps.Job("x", ["true"], {})
+        os.makedirs(os.path.join(bps.WT_BASE, "x"), exist_ok=True)
+        job.run()
+        self.assertEqual(job.exit, 125)
+        with open(job.log_path) as f:
+            self.assertIn("fv-no-such-tool", f.read())
+
+    def test_jobs_compile_through_sccache(self):
+        which = lambda n, path=None: "/usr/local/bin/" + n if n in ("sccache", "mold") else None
+        with mock.patch.object(bps.shutil, "which", side_effect=which):
+            env = bps.job_env("a")
+        self.assertEqual(env["RUSTC_WRAPPER"], "/usr/local/bin/sccache")
+        self.assertEqual(env["CMAKE_C_COMPILER_LAUNCHER"], "/usr/local/bin/sccache")
+        self.assertEqual(env["SCCACHE_DIR"], os.path.join(bps.ROOT, "sccache"))
+        self.assertEqual(env["CARGO_TARGET_DIR"], os.path.join(bps.TARGET_BASE, "a"))
+        self.assertNotIn("FV_BUILD_SERVER_B64", env)
+        with mock.patch.object(bps.shutil, "which", return_value=None):
+            self.assertNotIn("RUSTC_WRAPPER", bps.job_env("a"))
+
+    def test_sccache_stats(self):
+        out = json.dumps({"stats": {"compile_requests": 10, "requests_executed": 9,
+                                    "cache_hits": {"counts": {"Rust": 6, "C/C++": 1}, "adv_counts": {"x": 99}},
+                                    "cache_misses": {"counts": {"Rust": 3}}, "requests_not_cacheable": 1,
+                                    "cache_errors": {"counts": {}}},
+                          "cache_location": "Local disk: /v/sccache", "cache_size": 2e9, "max_cache_size": 40e9})
+        with mock.patch.object(bps, "sccache_cmd", return_value=(0, out)):
+            st = bps.sccache_stats()
+        self.assertEqual((st["hits"], st["misses"], st["hit_rate"]), (7, 3, 0.7))
+        self.assertEqual((st["cache_size_gb"], st["max_cache_size_gb"], st["errors"]), (2.0, 40.0, 0))
+        with mock.patch.object(bps, "sccache_cmd", return_value=(2, "")):
+            self.assertIsNone(bps.sccache_stats())
+
+
+class SeedTest(unittest.TestCase):
+    """Deps seeds: keyed by Cargo.lock, path packages stripped, extracted into
+    a missing target dir, built once per key."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(dir=TMP)
-        os.makedirs(os.path.join(self.dir, "apt.conf.d"))
-        self.saved = (bps.APT_LOCK, bps.APT_KEEP_DEBS)
-        bps.APT_LOCK = os.path.join(self.dir, "lock", "fv-apt.lock")
-        bps.APT_KEEP_DEBS = os.path.join(self.dir, "apt.conf.d", "zz-fv-keep-debs")
-        self.calls = []
+        self.wt = os.path.join(self.dir, "wt")
+        os.makedirs(self.wt)
+        with open(os.path.join(self.wt, "Cargo.lock"), "w") as f:
+            f.write("version = 4\n")
 
-    def tearDown(self):
-        bps.APT_LOCK, bps.APT_KEEP_DEBS = self.saved
+    def touch(self, *parts, d=False):
+        p = os.path.join(self.dir, *parts)
+        os.makedirs(p if d else os.path.dirname(p), exist_ok=True)
+        if not d:
+            open(p, "w").close()
+        return p
 
-    def runner(self, fail_installs):
-        left = [fail_installs]
+    def test_key_follows_cargo_lock(self):
+        k1 = bps.seed_key(self.wt)
+        self.assertRegex(k1, r"^[0-9a-f]{16}$")
+        self.assertEqual(bps.seed_key(self.wt), k1)
+        with open(os.path.join(self.wt, "Cargo.lock"), "a") as f:
+            f.write("[[package]]\nname = \"itoa\"\n")
+        self.assertNotEqual(bps.seed_key(self.wt), k1)
+        self.assertIsNone(bps.seed_key(os.path.join(self.dir, "none")))
 
-        def run(cmd, env=None):
-            self.calls.append(cmd)
-            if "install" in cmd and "-f" not in cmd and left[0] > 0:
-                left[0] -= 1
-                raise RuntimeError("apt-get install -y exited 100: E: Sub-process /usr/bin/dpkg returned an error code (1)")
-        return run
+    def test_strip_removes_path_packages_only(self):
+        h, h2 = "0123456789abcdef", "fedcba9876543210"
+        keep = [self.touch("t", "release", ".fingerprint", f"serde-{h}", "lib-serde"),
+                self.touch("t", "release", ".fingerprint", f"fastvideo-serve-extra-{h}", "x"),  # registry look-alike
+                self.touch("t", "release", "build", f"ring-{h}", "output"),
+                self.touch("t", "release", "deps", f"libserde-{h}.rlib"),
+                self.touch("t", "release", "deps", f"libc-{h}.d"),
+                self.touch("t", "release", "deps", f"liblibc-{h}.rlib")]
+        gone = [self.touch("t", "release", ".fingerprint", f"fastvideo-serve-{h}", "lib"),
+                self.touch("t", "release", ".fingerprint", f"fastvideo-serve-{h2}", "run-build-script"),
+                self.touch("t", "release", "build", f"fastvideo-serve-{h}", "out", "x"),
+                self.touch("t", "release", "deps", f"libfastvideo_serve-{h}.rlib"),
+                self.touch("t", "release", "deps", f"fastvideo_serve-{h}.d"),
+                self.touch("t", "release", "deps", f"runtime-{h}"),
+                self.touch("t", "release", "fv-serve"),
+                self.touch("t", "release", "fv-serve.d"),
+                self.touch("t", "release", "incremental", "x", "y"),
+                self.touch("t", "debug", ".fingerprint", f"fastvideo-serve-{h}", "lib")]
+        n = bps.strip_path_packages(os.path.join(self.dir, "t"), {"fastvideo-serve"},
+                                    {"fastvideo_serve", "fv_serve", "runtime"})
+        self.assertGreaterEqual(n, len(gone) - 1)
+        for p in keep:
+            self.assertTrue(os.path.exists(p), p)
+        for p in gone:
+            self.assertFalse(os.path.exists(p), p)
 
-    def test_a_failed_install_is_repaired_and_retried(self):
-        bps.apt_install(["ffmpeg"], {}, run=self.runner(1), pause=lambda s: None)
-        names = [" ".join(c[:1] + [a for a in c[1:] if not a.startswith(("-o", "DPkg"))]) for c in self.calls]
-        self.assertEqual(names, [
-            "apt-get update -qq",
-            "apt-get install -y -qq --no-install-recommends ffmpeg",
-            "dpkg --configure -a",
-            "apt-get -f install -y -qq",
-            "apt-get update -qq",
-            "apt-get install -y -qq --no-install-recommends ffmpeg",
-            "apt-get clean",
-        ])
-        self.assertIn("DPkg::Lock::Timeout=600", self.calls[1])
+    def test_no_seed_builds_cold(self):
+        lines = []
+        with mock.patch.object(bps, "SEED_DIR", os.path.join(self.dir, "seeds")):
+            self.assertFalse(bps.seed_target(self.wt, os.path.join(self.dir, "tgt"), lines.append))
+        self.assertIn(b"none for this Cargo.lock", lines[0])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "tgt")))
 
-    def test_gives_up_after_the_tries(self):
-        with self.assertRaises(RuntimeError):
-            bps.apt_install(["ffmpeg"], {}, run=self.runner(99), pause=lambda s: None)
-        installs = [c for c in self.calls if "install" in c and "-f" not in c]
-        self.assertEqual(len(installs), bps.APT_TRIES)
+    @unittest.skipUnless(shutil.which("zstd"), "needs zstd")
+    def test_seed_round_trip(self):
+        seeds = os.path.join(self.dir, "seeds")
+        os.makedirs(seeds)
+        src = os.path.join(self.dir, "src")
+        self.touch("src", "release", "deps", "libserde-0123456789abcdef.rlib")
+        key = bps.seed_key(self.wt)
+        tar, meta = os.path.join(seeds, key + ".tar.zst"), os.path.join(seeds, key + ".json")
+        import subprocess
+        subprocess.run(["tar", "-I", "zstd", "-cf", tar, "-C", src, "."], check=True)
+        with open(meta, "w") as f:
+            json.dump({"bytes": 1, "unpacked_bytes": 1}, f)
+        lines = []
+        tgt = os.path.join(self.dir, "tgt")
+        with mock.patch.object(bps, "SEED_DIR", seeds):
+            self.assertTrue(bps.seed_target(self.wt, tgt, lines.append))
+            self.assertEqual([s["key"] for s in bps.seed_list()], [key])
+        self.assertTrue(os.path.exists(os.path.join(tgt, "release", "deps", "libserde-0123456789abcdef.rlib")))
 
-    def test_docker_clean_hooks_are_cleared_once(self):
-        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)
-        with open(bps.APT_KEEP_DEBS) as f:
-            conf = f.read()
-        self.assertIn("#clear DPkg::Post-Invoke;", conf)
-        self.assertIn("#clear APT::Update::Post-Invoke;", conf)
-        self.assertEqual(os.listdir(os.path.dirname(bps.APT_KEEP_DEBS)), ["zz-fv-keep-debs"])
-        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)  # idempotent
-
-    def test_installs_are_serialized(self):
-        import fcntl
-        order = []
-        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)  # creates the lock file
-        fd = os.open(bps.APT_LOCK, os.O_RDWR)
-        fcntl.flock(fd, fcntl.LOCK_EX)  # another apt (release-artifacts-pod.sh's flock)
-        t = threading.Thread(target=lambda: (bps.apt_install(["ffmpeg"], {}, run=lambda c, env=None: order.append("server"),
-                                                             pause=lambda s: None)))
-        t.start()
-        time.sleep(0.3)
-        order.append("other done")
-        os.close(fd)
-        t.join(5)
-        self.assertEqual(order[0], "other done")
-        self.assertIn("server", order[1:])
-
-    def test_sh_reports_dpkgs_first_errors(self):
-        script = "echo \"dpkg: error processing archive x.deb (--unpack):\"; for i in $(seq 200); do echo \" /tmp/apt/$i.deb\"; done; exit 100"
-        with self.assertRaises(RuntimeError) as cm:
-            bps.sh(["bash", "-c", script])
-        self.assertIn("first errors: dpkg: error processing archive x.deb", str(cm.exception))
+    def test_seed_build_is_skipped_when_present_or_busy(self):
+        seeds = os.path.join(self.dir, "seeds")
+        os.makedirs(seeds)
+        wt = os.path.join(bps.WT_BASE, "seeder")
+        os.makedirs(wt, exist_ok=True)
+        shutil.copy(os.path.join(self.wt, "Cargo.lock"), wt)
+        key = bps.seed_key(wt)
+        started = []
+        with mock.patch.object(bps, "SEED_DIR", seeds), \
+                mock.patch.object(bps.threading, "Thread", side_effect=lambda target, daemon: mock.Mock(start=lambda: started.append(target))):
+            self.assertIsNone(bps.maybe_build_seed(bps.SEED_AGENT))
+            job = bps.maybe_build_seed("seeder")
+            self.assertIsInstance(job, bps.SeedJob)
+            self.assertEqual(job.key, key)
+            self.assertIsNone(bps.maybe_build_seed("seeder"), "one seed build at a time")
+            job.state = "done"
+            for p in bps.seed_paths(key):
+                open(p, "w").write("{}")
+            self.assertIsNone(bps.maybe_build_seed("seeder"), "the seed exists")
+            self.assertIsNotNone(bps.maybe_build_seed("seeder", force=True))
+        self.assertEqual(len(started), 2)
+        for j in list(bps.seed_building.values()):
+            j.state = "done"
 
 
 if __name__ == "__main__":

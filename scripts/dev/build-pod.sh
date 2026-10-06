@@ -24,6 +24,10 @@
 #                                    copy target/<agent>/<path> back (gzip in
 #                                    transit), e.g. release/fv-serve
 #   build-pod.sh clean <agent> [target|worktree|all]   (default all)
+#   build-pod.sh seed <agent> [--force]
+#                                    sync, then build the deps seed of that worktree's
+#                                    Cargo.lock now (jobs also start one after their
+#                                    first success on a Cargo.lock without a seed)
 #   build-pod.sh evict               run the pod's eviction pass now (it also runs
 #                                    every minute: dirs unused > FV_BUILD_EVICT_HOURS,
 #                                    default 6, then LRU target dirs while under
@@ -55,7 +59,9 @@
 # FV_BUILD_FLAVORS (default "cpu5c cpu3c"); FV_BUILD_VCPUS (default 32) and
 # FV_BUILD_VCPUS_FALLBACK (default 16, taken when the first has no stock);
 # FV_BUILD_CONTAINER_GB (default 200: snapshots and target dirs live there);
-# FV_BUILD_IMAGE (default rust:1-bookworm); FV_BUILD_DC / FV_BUILD_VOLUME_GB
+# FV_BUILD_IMAGE (default: the pinned base image, BASE_IMAGE_TAG below);
+# FV_BUILD_POD_ENV (JSON object merged into the pod env, e.g. a throwaway test
+# pod's {"FV_BUILD_ROOT": "/workspace/fv-build-test"}); FV_BUILD_DC / FV_BUILD_VOLUME_GB
 # for volume-create (default EU-RO-1 / 200); FV_BUILD_EVICT_HOURS (6) and
 # FV_BUILD_EVICT_FREE_GB (40), sent to the pod at creation.
 set -euo pipefail
@@ -177,10 +183,9 @@ start_cmd() {
   cat <<'EOF'
 mkdir -p /opt/fvb
 printf '%s' "$FV_BUILD_SERVER_B64" | base64 -d | gunzip >/opt/fvb/server.py
-# python3-venv here, not in the server's setup: installing it there upgrades
-# the python3 the server is running from, and the server restarted (killing
-# jobs) about a minute after every first boot.
-{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv; } >/dev/null 2>&1
+# Nothing is installed here: the base image (docker/build-base.Dockerfile) has
+# python3, curl and every build tool. Fail loudly when it does not.
+command -v python3 >/dev/null || { echo "fv-build: no python3 in image $FV_BUILD_IMAGE (not the build base image?)" >&2; sleep 600; exit 1; }
 # Second wall-clock backstop, independent of the Python server (curl, its own
 # process): 15 min after the server's hard stop (cap + grace), stop, else
 # terminate, else GraphQL podTerminate; every 5 min until the pod is gone.
@@ -207,15 +212,15 @@ payload() {
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
     --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" \
-    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" '{
+    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" --argjson extra "${FV_BUILD_POD_ENV:-{\}}" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
-      env: {FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
+      env: ({FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
             FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace,
-            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf}
+            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf, FV_BUILD_IMAGE: $image} + $extra)
     }'
 }
 
@@ -254,6 +259,7 @@ create_pod() {
   commit_token
   echo "$id" >"$STATE/pod"
   server_sha >"$STATE/pod-server"
+  echo "$IMAGE" >"$STATE/pod-image"
   log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h + ${MAX_GRACE_MIN} min grace, pod-side)"
 }
 
@@ -297,8 +303,8 @@ cmd_up() {
         # A stopped pod restarts with the server it was created with (it is
         # sent in the pod's env); recreate it when this checkout's differs.
         # Nothing is lost: the container disk does not survive a stop anyway.
-        if [[ "$(cat "$STATE/pod-server" 2>/dev/null)" != "$(server_sha)" ]]; then
-          log "stopped pod $id runs an older server; terminating it and creating a new pod"
+        if [[ "$(cat "$STATE/pod-server" 2>/dev/null)" != "$(server_sha)" || "$(jq -r '.imageName // ""' <<<"$pod")" != "$IMAGE" ]]; then
+          log "stopped pod $id runs an older server or image; terminating it and creating a new pod"
           rest DELETE "/pods/$id" >/dev/null || true
           ledger "pod-deleted $id server-update"
           pod=""
@@ -326,6 +332,8 @@ cmd_up() {
   srv_local="$(server_sha)"
   srv_pod="$(svc GET /v1/status | jq -r '.server_sha // ""')"
   [[ "$srv_pod" == "$srv_local" ]] || log "note: pod runs server $srv_pod, this checkout has $srv_local (down + up to update)"
+  [[ "$(jq -r '.imageName // ""' <<<"$(pod_json)")" == "$IMAGE" ]] \
+    || log "note: pod runs image $(jq -r '.imageName // "?"' <<<"$(pod_json)"), this checkout pins $IMAGE (down + up to update)"
 }
 
 cmd_status() {
@@ -345,6 +353,7 @@ cmd_status() {
     st="$(svc GET /v1/status)" || return 0
     jq 'del(.agents)' <<<"$st"
     stop_timers <<<"$st"
+    cache_summary <<<"$st"
     # A server older than eviction has no agent rows.
     if jq -e '.eviction' <<<"$st" >/dev/null; then
       jq -r '"agents on the container disk (\(.local_disk.free_gb // "?") GB free; evict after \(.eviction.idle_hours) h unused, LRU targets below \(.eviction.free_gb_floor) GB free; \(.eviction.protect // [] | join(" ")) held \(.eviction.hold_min // 0) min after use):",
@@ -361,6 +370,22 @@ cmd_status() {
 # Aligned columns from TSV on stdin (`column` is not in every container).
 tsv_table() {
   if command -v column >/dev/null; then column -t -s $'\t'; else tr '\t' ' '; fi
+}
+
+# Image, sccache hit rate, cache sizes and deps seeds, one line each.
+cache_summary() {
+  jq -r 'def gb: if . == null then "?" else "\(.) GB" end;
+    "image: \(.image // "?")  (\(.rustc // "rustc ?"))",
+    (if (.sccache | type) == "object" then
+       "sccache: \(.sccache.hits) hits / \(.sccache.hits + .sccache.misses) cacheable compiles"
+       + " (hit rate \(if .sccache.hit_rate == null then "-" else "\(.sccache.hit_rate * 100 | round) %" end)),"
+       + " \(.sccache.not_cacheable // 0) not cacheable, \(.sccache.errors // 0) errors since boot;"
+       + " cache \(.sccache.cache_size_gb | gb) of \(.sccache.max_cache_size_gb | gb)"
+     else "sccache: NOT RUNNING (\(.sccache))" end),
+    "caches: " + ([(.caches_gb // {}) | to_entries[] | select(.key != "t") | "\(.key) \(.value | gb)"] | join(", ")),
+    "deps seeds (\(if .deps_seeds.enabled then "on" else "off" end), keep \(.deps_seeds.keep)): "
+      + ([.deps_seeds.seeds[]? | "\(.key) \(.gb) GB (\(.unpacked_gb) GB unpacked, used \(.last_used_h_ago) h ago)"] | join("; "))
+      + (if (.deps_seeds.building // []) | length > 0 then "; building: \(.deps_seeds.building | map(.argv[1]) | join(" "))" else "" end)' 2>/dev/null || true
 }
 
 stop_timers() {
@@ -635,6 +660,8 @@ case "${1:-}" in
   cancel) svc POST "/v1/jobs/${2:?job id}/cancel" | jq -c '{id, agent, state}' ;;
   fetch) shift; cmd_fetch "$@" ;;
   clean) svc POST "/v1/agents/$(agent_name "${2:?agent}")/clean" -d "{\"what\":\"${3:-all}\"}" | jq -c . ;;
+  seed) a="$(agent_name "${2:?agent}")"; cmd_sync "$a"
+    svc POST "/v1/agents/$a/seed" -d "{\"force\":$([[ "${3:-}" == --force ]] && echo true || echo false)}" | jq -c . ;;
   evict) FV_BUILD_HTTP_TIMEOUT=900 svc POST /v1/evict | jq -c '.evicted[]' ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
