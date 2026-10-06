@@ -1,0 +1,102 @@
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 10
+sync_timeout_s = 600
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "remote"
+
+[gateway]
+caps_refresh_s = 60
+tick_s = 5
+metrics_window_s = 600
+watch_poll_ms = 1000
+runpod_api_base = "https://api.runpod.ai/v2"
+reactor_model = "fasth3"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+"MiniMax-H3-Max" = "sol-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+# Every worker config's fal apps (the union; the workers mount the same ids;
+# runpod.toml and the H3 configs mount the default H3 apps). An app whose
+# model no pool serves answers 404 ("model ... is not served by any pool");
+# the gateway starts and serves the rest (tests/gateway_bases.rs).
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3", "fal-ai/ltx-2.3-quality", "fal-ai/wan", "fastvideo/fastwan21-1.3b", "fastvideo/wan14b-turbo"]
+
+[limits]
+queue_max = 256
+body_max_mb = 64
+
+
+[[pools]]
+id = "h3-turbo"
+kind = "pod"
+urls = []
+max_queued = 32
+dispatch_timeout_s = 30
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "fasth3"
+family = "h3"
+recipe = "h3-turbo"
+
+[[pools]]
+id = "h3-max"
+kind = "pod"
+urls = []
+max_queued = 16
+dispatch_timeout_s = 30
+job_timeout_s = 3600
+stale_after_s = 180
+retries = 1
+[[pools.models]]
+id = "sol-h3"
+family = "h3"
+recipe = "h3-max"
+
+[[pools]]
+id = "h3-ref2v"
+kind = "pod"
+urls = []
+max_queued = 16
+dispatch_timeout_s = 30
+job_timeout_s = 3600
+stale_after_s = 180
+retries = 1
+[[pools.models]]
+id = "h3-ref2v-turbo"
+family = "h3"
+recipe = "h3-ref2v-turbo"
+[[pools.models]]
+id = "h3-ref2v-max"
+family = "h3"
+recipe = "h3-ref2v-max"
+
+[autoscale]
+enabled = false

@@ -45,5 +45,11 @@ ed25519-dalek.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "process", "io-util"] }
 
+# Headless director client for on-machine smoke runs
+# (docs/serve/director-causal.md).
+[[example]]
+name = "director_client"
+required-features = ["director"]
+
 [lints]
 workspace = true

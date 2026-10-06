@@ -56,6 +56,23 @@ impl RgbFrame {
     pub fn byte_len(width: u32, height: u32) -> usize {
         width as usize * height as usize * 3
     }
+    /// The centre `(w, h)` of the frame (pad-and-crop canvases: LTX
+    /// generates 1920x1088 for 1920x1080). A no-op when the frame already is
+    /// that size or is smaller on either side.
+    pub fn crop_center(&self, w: u32, h: u32) -> RgbFrame {
+        if (self.width, self.height) == (w, h) || w > self.width || h > self.height {
+            return self.clone();
+        }
+        let x0 = ((self.width - w) / 2) as usize;
+        let y0 = ((self.height - h) / 2) as usize;
+        let stride = self.width as usize * 3;
+        let mut out = Vec::with_capacity(Self::byte_len(w, h));
+        for y in 0..h as usize {
+            let row = (y0 + y) * stride + x0 * 3;
+            out.extend_from_slice(&self.data[row..row + w as usize * 3]);
+        }
+        RgbFrame { width: w, height: h, data: out.into(), index: self.index }
+    }
     /// The pixel at `(x, y)`.
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 3]> {
         if x >= self.width || y >= self.height {

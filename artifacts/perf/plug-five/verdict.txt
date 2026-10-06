@@ -1,0 +1,94 @@
+control plug vs plugfw2: 15 clips; LPIPS 0.323-0.507, PSNR 13.49-21.43, Cmax |ln sharp| 0.101 |ln jitter| 0.168 -> bound 0.152 / 0.253 (sharpness 0.859-1.164, jitter 0.777-1.287)
+
+| prompt | arm | LPIPS med (same seed) | PSNR med | sharpness ratio med | jitter ratio med | rule 2 |
+|---|---|---|---|---|---|---|
+| h3-demo | plug | 0.663 (0.612) | 10.52 | 1.216 | 1.326 | out: sharpness |ln| 0.195, jitter |ln| 0.282 |
+| h3-demo | max | 0.722 (0.676) | 9.90 | 1.477 | 2.529 | out: sharpness |ln| 0.390, jitter |ln| 0.928 |
+| h3-demo | turbo | 0.693 (0.693) | 9.72 | 0.894 | 2.140 | out: jitter |ln| 0.761 |
+| ltx-multishot | plug | 0.719 (0.680) | 11.86 | 0.989 | 1.711 | out: jitter |ln| 0.537 |
+| ltx-multishot | max | 0.735 (0.678) | 11.30 | 1.483 | 2.514 | out: sharpness |ln| 0.394, jitter |ln| 0.922 |
+| ltx-multishot | turbo | 0.722 (0.722) | 9.91 | 1.499 | 2.381 | out: sharpness |ln| 0.405, jitter |ln| 0.868 |
+| ltx-newsbroadcast | plug | 0.693 (0.624) | 11.01 | 1.026 | 1.188 | in |
+| ltx-newsbroadcast | max | 0.775 (0.761) | 9.40 | 1.914 | 2.089 | out: sharpness |ln| 0.649, jitter |ln| 0.737 |
+| ltx-newsbroadcast | turbo | 0.747 (0.752) | 9.44 | 1.477 | 2.130 | out: sharpness |ln| 0.390, jitter |ln| 0.756 |
+| ltx-frogyoga | plug | 0.695 (0.660) | 10.15 | 1.032 | 1.325 | out: jitter |ln| 0.281 |
+| ltx-frogyoga | max | 0.710 (0.693) | 10.28 | 1.411 | 2.584 | out: sharpness |ln| 0.344, jitter |ln| 0.949 |
+| ltx-frogyoga | turbo | 0.729 (0.729) | 9.14 | 1.296 | 3.621 | out: sharpness |ln| 0.260, jitter |ln| 1.287 |
+| spark-mountain-lake | plug | 0.570 (0.555) | 15.18 | 1.082 | 1.386 | out: jitter |ln| 0.327 |
+| spark-mountain-lake | max | 0.666 (0.607) | 13.13 | 1.539 | 2.301 | out: sharpness |ln| 0.431, jitter |ln| 0.833 |
+| spark-mountain-lake | turbo | 0.651 (0.579) | 12.79 | 1.632 | 2.092 | out: sharpness |ln| 0.490, jitter |ln| 0.738 |
+
+rule 1: plug closer than max (lower median LPIPS) on 5/5: ['h3-demo', 'ltx-multishot', 'ltx-newsbroadcast', 'ltx-frogyoga', 'spark-mountain-lake']
+rule 2 plug: ['h3-demo: sharpness |ln| 0.195, jitter |ln| 0.282', 'ltx-multishot: jitter |ln| 0.537', 'ltx-frogyoga: jitter |ln| 0.281', 'spark-mountain-lake: jitter |ln| 0.327']
+rule 2 max: ['h3-demo: sharpness |ln| 0.390, jitter |ln| 0.928', 'ltx-multishot: sharpness |ln| 0.394, jitter |ln| 0.922', 'ltx-newsbroadcast: sharpness |ln| 0.649, jitter |ln| 0.737', 'ltx-frogyoga: sharpness |ln| 0.344, jitter |ln| 0.949', 'spark-mountain-lake: sharpness |ln| 0.431, jitter |ln| 0.833']
+rule 2 turbo: ['h3-demo: jitter |ln| 0.761', 'ltx-multishot: sharpness |ln| 0.405, jitter |ln| 0.868', 'ltx-newsbroadcast: sharpness |ln| 0.390, jitter |ln| 0.756', 'ltx-frogyoga: sharpness |ln| 0.260, jitter |ln| 1.287', 'spark-mountain-lake: sharpness |ln| 0.490, jitter |ln| 0.738']
+
+raw (clip: lpips psnr sharp jitter) per arm vs base:
+  plug h3-demo-s0: 0.612 10.86 1.216 1.267
+  plug h3-demo-s1000: 0.677 10.16 1.071 1.326
+  plug h3-demo-s2000: 0.663 10.52 1.228 1.489
+  plug ltx-frogyoga-s42: 0.660 10.88 1.023 1.169
+  plug ltx-frogyoga-s1042: 0.729 9.20 1.037 2.111
+  plug ltx-frogyoga-s2042: 0.695 10.15 1.032 1.325
+  plug ltx-multishot-s42: 0.680 12.08 1.027 1.711
+  plug ltx-multishot-s1042: 0.732 11.86 0.989 1.757
+  plug ltx-multishot-s2042: 0.719 11.77 0.956 1.646
+  plug ltx-newsbroadcast-s42: 0.624 11.01 1.026 0.876
+  plug ltx-newsbroadcast-s1042: 0.717 9.51 1.082 1.188
+  plug ltx-newsbroadcast-s2042: 0.693 11.41 0.952 1.390
+  plug spark-mountain-lake-s42: 0.555 15.96 1.054 0.765
+  plug spark-mountain-lake-s1042: 0.687 12.14 1.082 1.386
+  plug spark-mountain-lake-s2042: 0.570 15.18 1.239 1.434
+  max h3-demo-s0: 0.676 10.32 1.582 2.157
+  max h3-demo-s1000: 0.747 9.63 1.477 2.652
+  max h3-demo-s2000: 0.722 9.90 1.449 2.529
+  max ltx-frogyoga-s42: 0.693 10.60 1.381 1.904
+  max ltx-frogyoga-s1042: 0.710 10.28 1.411 2.584
+  max ltx-frogyoga-s2042: 0.710 9.85 1.449 2.959
+  max ltx-multishot-s42: 0.678 11.23 1.483 2.400
+  max ltx-multishot-s1042: 0.746 11.30 1.456 3.422
+  max ltx-multishot-s2042: 0.735 11.34 1.695 2.514
+  max ltx-newsbroadcast-s42: 0.761 9.81 1.914 1.127
+  max ltx-newsbroadcast-s1042: 0.775 9.40 1.655 2.317
+  max ltx-newsbroadcast-s2042: 0.781 9.30 1.985 2.089
+  max spark-mountain-lake-s42: 0.607 14.90 1.332 1.767
+  max spark-mountain-lake-s1042: 0.696 12.20 1.539 2.547
+  max spark-mountain-lake-s2042: 0.666 13.13 1.750 2.301
+  turbo h3-demo-s0: 0.693 9.72 1.009 2.192
+  turbo h3-demo-s1000: 0.727 9.62 0.845 2.140
+  turbo h3-demo-s2000: 0.688 10.26 0.894 1.910
+  turbo ltx-frogyoga-s42: 0.729 9.03 1.296 3.644
+  turbo ltx-frogyoga-s1042: 0.729 9.14 1.185 3.621
+  turbo ltx-frogyoga-s2042: 0.747 9.19 1.460 3.242
+  turbo ltx-multishot-s42: 0.722 9.91 1.499 2.037
+  turbo ltx-multishot-s1042: 0.719 10.58 1.233 2.635
+  turbo ltx-multishot-s2042: 0.728 8.98 1.538 2.381
+  turbo ltx-newsbroadcast-s42: 0.752 9.44 1.477 1.523
+  turbo ltx-newsbroadcast-s1042: 0.747 9.71 1.287 2.357
+  turbo ltx-newsbroadcast-s2042: 0.730 9.14 1.559 2.130
+  turbo spark-mountain-lake-s42: 0.579 14.47 1.218 1.489
+  turbo spark-mountain-lake-s1042: 0.662 11.99 1.632 2.245
+  turbo spark-mountain-lake-s2042: 0.651 12.79 1.882 2.092
+  control h3-demo-s0: 0.400 14.77 1.047 1.183
+  control h3-demo-s1000: 0.333 16.63 1.003 1.024
+  control h3-demo-s2000: 0.403 14.95 0.979 1.012
+  control ltx-frogyoga-s42: 0.420 15.23 1.053 1.094
+  control ltx-frogyoga-s1042: 0.493 13.49 0.934 0.936
+  control ltx-frogyoga-s2042: 0.323 17.32 0.994 1.161
+  control ltx-multishot-s42: 0.448 15.13 1.002 1.067
+  control ltx-multishot-s1042: 0.506 16.21 0.973 1.072
+  control ltx-multishot-s2042: 0.499 15.99 1.039 1.106
+  control ltx-newsbroadcast-s42: 0.460 15.12 1.042 1.008
+  control ltx-newsbroadcast-s1042: 0.507 15.46 1.018 1.034
+  control ltx-newsbroadcast-s2042: 0.344 18.86 0.981 0.995
+  control spark-mountain-lake-s42: 0.368 18.78 1.040 1.156
+  control spark-mountain-lake-s1042: 0.333 21.43 1.008 0.988
+  control spark-mountain-lake-s2042: 0.366 18.96 0.904 0.892
+
+time base: denoise median 409.606129976 s, total median 417.151819628 s
+time plug: denoise median 33.274147592 s, total median 40.587341542 s
+time max: denoise median 21.90439923 s, total median 29.041304473 s
+time turbo: denoise median 19.890832254 s, total median 27.324725581 s
+time plugfw2: denoise median 34.242673284 s, total median 41.421607697 s
+
+VERDICT h3-plug-4step vs h3-max (rules 1+2): FAIL

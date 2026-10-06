@@ -1,0 +1,232 @@
+{
+ "h3-plug4": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 416.2,
+   "motion": 11.07,
+   "flicker": 12.879,
+   "luma": 45.1
+  },
+  "ltx-frogyoga": {
+   "frames": 124,
+   "sharpness": 128.8,
+   "motion": 6.49,
+   "flicker": 0.308,
+   "luma": 120.4
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 122.9,
+   "motion": 4.56,
+   "flicker": 0.227,
+   "luma": 74.0
+  }
+ },
+ "h3-plug4-ctl": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 411.0,
+   "motion": 10.57,
+   "flicker": 12.406,
+   "luma": 43.5
+  },
+  "ltx-frogyoga": {
+   "frames": 124,
+   "sharpness": 159.8,
+   "motion": 7.05,
+   "flicker": 0.3,
+   "luma": 118.9
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 153.2,
+   "motion": 5.19,
+   "flicker": 0.238,
+   "luma": 72.5
+  }
+ },
+ "h3-turbo": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 217.5,
+   "motion": 13.75,
+   "flicker": 14.079,
+   "luma": 55.0
+  },
+  "ltx-frogyoga": {
+   "frames": 124,
+   "sharpness": 258.2,
+   "motion": 16.89,
+   "flicker": 0.444,
+   "luma": 116.9
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 116.2,
+   "motion": 8.29,
+   "flicker": 0.637,
+   "luma": 74.7
+  }
+ },
+ "w5-max480": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 1149.9,
+   "motion": 23.17,
+   "flicker": 2.381,
+   "luma": 168.3
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 1348.3,
+   "motion": 10.38,
+   "flicker": 2.688,
+   "luma": 57.1
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 932.0,
+   "motion": 2.93,
+   "flicker": 0.237,
+   "luma": 86.7
+  }
+ },
+ "w5-max720": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 457.0,
+   "motion": 21.85,
+   "flicker": 1.495,
+   "luma": 165.4
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 1202.0,
+   "motion": 4.78,
+   "flicker": 0.391,
+   "luma": 41.8
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 1182.5,
+   "motion": 3.59,
+   "flicker": 0.238,
+   "luma": 98.0
+  }
+ },
+ "w5-plug480": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 424.1,
+   "motion": 9.23,
+   "flicker": 0.438,
+   "luma": 88.9
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 423.5,
+   "motion": 8.84,
+   "flicker": 1.369,
+   "luma": 63.3
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 281.8,
+   "motion": 14.44,
+   "flicker": 0.406,
+   "luma": 80.6
+  }
+ },
+ "w5-plug720": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 330.7,
+   "motion": 15.26,
+   "flicker": 0.827,
+   "luma": 73.3
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 672.2,
+   "motion": 13.92,
+   "flicker": 0.816,
+   "luma": 57.7
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 288.9,
+   "motion": 13.8,
+   "flicker": 0.469,
+   "luma": 54.7
+  }
+ },
+ "w5-plug720-ctl": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 328.7,
+   "motion": 15.22,
+   "flicker": 0.811,
+   "luma": 73.3
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 661.8,
+   "motion": 13.96,
+   "flicker": 0.797,
+   "luma": 57.7
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 284.3,
+   "motion": 13.79,
+   "flicker": 0.479,
+   "luma": 54.8
+  }
+ },
+ "w5-turbo480": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 331.5,
+   "motion": 14.24,
+   "flicker": 0.826,
+   "luma": 99.7
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 643.8,
+   "motion": 5.97,
+   "flicker": 0.594,
+   "luma": 74.9
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 182.8,
+   "motion": 5.18,
+   "flicker": 0.177,
+   "luma": 79.4
+  }
+ },
+ "w5-turbo720": {
+  "beach_dog": {
+   "frames": 121,
+   "sharpness": 623.4,
+   "motion": 17.13,
+   "flicker": 0.694,
+   "luma": 102.2
+  },
+  "city_rain": {
+   "frames": 121,
+   "sharpness": 664.8,
+   "motion": 5.92,
+   "flicker": 0.373,
+   "luma": 74.5
+  },
+  "spark-mountain-lake": {
+   "frames": 121,
+   "sharpness": 227.3,
+   "motion": 5.52,
+   "flicker": 0.434,
+   "luma": 75.8
+  }
+ }
+}

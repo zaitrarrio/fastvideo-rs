@@ -567,7 +567,22 @@ pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str
         .apps
         .iter()
         .filter(|a| a.is_valid())
-        .map(|a| app_entry(a, Some(&|e| endpoint_caps(a, e, models, alias).is_some())))
+        .map(|a| {
+            let mut e = app_entry(a, Some(&|e| endpoint_caps(a, e, models, alias).is_some()));
+            // A director only where its model is served here and streams
+            // (clip queue or causal rollout).
+            let d = director_caps(a, models, alias);
+            e["director"] = d.is_some().into();
+            if let Some(c) = &d {
+                if matches!(c.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. })) {
+                    e["director_mode"] = "causal".into();
+                }
+                if crate::director::info::is_longlive(c) {
+                    e["licence"] = crate::director::info::LONGLIVE_LICENCE.into();
+                }
+            }
+            e
+        })
         .collect();
     json!({"apps": apps})
 }
@@ -601,7 +616,7 @@ pub fn endpoint_caps(app: &FalApp, e: Endpoint, models: &[ModelCaps], alias: &dy
 /// The caps of the model an app's director runs (the app's own model).
 pub fn director_caps(app: &FalApp, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
     app.kind().director().then_some(())?;
-    endpoint_caps(app, Endpoint::TextToVideo, models, alias)
+    endpoint_caps(app, Endpoint::TextToVideo, models, alias).filter(crate::director::info::director_capable)
 }
 
 fn narrow_enum(schema: &mut Value, field: &str, keep: impl Fn(&Value) -> bool, preferred_default: Option<Value>) {
@@ -646,15 +661,12 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
             let served = |v: &Value| {
                 Resolution::ALL.iter().chain(&Resolution::BASE).any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
             };
-            // An omitted resolution is 768P, or the model's first tier.
-            let default = if tiers.contains(&Resolution::P768.short_edge()) {
-                Resolution::P768.as_str()
-            } else {
-                match tiers.first() {
-                    Some(480) => Resolution::P480.as_str(),
-                    Some(1080) => Resolution::P1080.as_str(),
-                    _ => Resolution::P768.as_str(),
-                }
+            // An omitted resolution is the model's default (first) tier:
+            // 768P on H3, 1080P on LTX, 480P on h3-draft.
+            let default = match tiers.first() {
+                Some(480) => Resolution::P480.as_str(),
+                Some(1080) => Resolution::P1080.as_str(),
+                _ => Resolution::P768.as_str(),
             };
             narrow_enum(&mut s, "resolution", served, Some(default.into()));
             // Durations within the model's grid (whole seconds).
@@ -728,23 +740,94 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
 /// fields the console sets, with the values the model serves.
 pub fn director_schema(caps: &ModelCaps) -> Value {
     use crate::director::messages::Resolution as R;
-    let res: Vec<&str> = [R::R480, R::R768, R::R1080]
-        .into_iter()
-        .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
-        .map(|r| r.as_str())
-        .collect();
+    use crate::director::info::{relative_chunk_cost, served_resolutions};
+    let served = served_resolutions(caps);
+    let res: Vec<&str> = served.iter().map(|r| r.as_str()).collect();
     // The session's own default: 768p when served, else the last tier.
-    let default = if res.contains(&"768p") { "768p" } else { res.last().copied().unwrap_or("768p") };
+    let default = if served.contains(&R::R768) { "768p" } else { res.last().copied().unwrap_or("768p") };
+    // What a chunk costs next to 768p on this model (the console's labels).
+    let mut labels = Map::new();
+    let mut notes = Vec::new();
+    for r in &served {
+        if let Some(x) = relative_chunk_cost(caps, *r) {
+            let label = if x >= 1.0 {
+                format!("{} (about {x}x slower per chunk)", r.as_str())
+            } else {
+                format!("{} (about {x}x the time per chunk)", r.as_str())
+            };
+            labels.insert(r.as_str().to_owned(), label.into());
+            notes.push(format!("{} takes about {x}x as long per chunk as 768p", r.as_str()));
+        }
+    }
+    let description = if notes.is_empty() {
+        "The resolution of every chunk.".to_owned()
+    } else {
+        format!("The resolution of every chunk ({}).", notes.join("; "))
+    };
+    let causal = matches!(caps.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. }));
+    let description = if causal {
+        format!("The resolution of the stream: this causal model generates its {} canvas only.", res.join(", "))
+    } else {
+        description
+    };
     let mut props = Map::new();
     props.insert(
         "resolution".into(),
-        json!({"type": "string", "enum": res, "default": default, "description": "The resolution of every chunk (1080p takes about 2.5x as long per chunk as 768p)."}),
+        json!({"type": "string", "enum": res, "default": default, "description": description, "x-fv-labels": labels}),
     );
-    props.insert(
-        "aspect_ratio".into(),
-        json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."}),
-    );
-    object("Director", props, vec!["resolution", "aspect_ratio"], &[])
+    let aspect = if causal {
+        json!({"type": "string", "enum": ["auto", "16:9"], "default": "auto", "description": "This causal model streams 16:9 only (text to video, no opening image)."})
+    } else {
+        json!({"type": "string", "enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto", "description": "`auto` sends no aspect_ratio: the session follows the opening image (16:9 without one)."})
+    };
+    props.insert("aspect_ratio".into(), aspect);
+    let mut order = vec!["resolution", "aspect_ratio"];
+    if !causal {
+        // `configure.chunk_duration` (ours): the lengths this model serves,
+        // per resolution where a tier caps them (H3 1080P: 5 s). A causal
+        // model streams without chunks: no such field.
+        let default = f64::from(crate::director::messages::DEFAULT_CHUNK_DURATION);
+        let l = crate::director::info::model_limits(caps, default, 4);
+        let options = l.chunk_options();
+        if !options.is_empty() {
+            let by_res: Map<String, Value> = served.iter().map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options()))).collect();
+            let labels: Map<String, Value> = options
+                .iter()
+                .map(|d| {
+                    let what = if *d <= 5 { "prompt changes land sooner" } else { "fewer joins" };
+                    (d.to_string(), format!("{d} s ({what})").into())
+                })
+                .collect();
+            let mut description = "Seconds per chunk: shorter chunks react to prompt updates sooner, longer ones have fewer joins.".to_owned();
+            if options.len() < crate::director::messages::CHUNK_DURATIONS.len() {
+                description.push_str(&format!(" This model's clips stop short of 10 s: {} s only.", options[0]));
+            }
+            props.insert(
+                "chunk_duration".into(),
+                json!({
+                    "type": "integer",
+                    "enum": options,
+                    "default": l.chunk_seconds.round() as u64,
+                    "description": description,
+                    "x-fv-labels": labels,
+                    "x-fv-options-by-resolution": by_res,
+                }),
+            );
+            order.push("chunk_duration");
+        }
+    }
+    let mut form = object("Director", props, order, &[]);
+    if causal {
+        let mut d = "A causal streaming model: one continuous rollout; each prompt update applies at the next 0.75 s block (LongLive re-caches its KV window once per switch). Text only: no image, end image or audio conditioning.".to_owned();
+        if crate::director::info::is_longlive(caps) {
+            d.push(' ');
+            d.push_str(crate::director::info::LONGLIVE_LICENCE);
+            form["x-fv-licence"] = crate::director::info::LONGLIVE_LICENCE.into();
+        }
+        form["description"] = d.into();
+        form["x-fv-director-mode"] = "causal".into();
+    }
+    form
 }
 
 pub(crate) fn routes(router: Router<ServeCtx>, cfg: &Arc<FalConfig>) -> Router<ServeCtx> {

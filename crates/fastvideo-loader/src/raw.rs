@@ -51,6 +51,11 @@ impl RawTensor {
         }
     }
 
+    /// A tensor from its little-endian element bytes (safetensors layout).
+    pub fn from_le_bytes(shape: Vec<usize>, dtype: RawDType, data: Vec<u8>) -> Self {
+        Self::from_native(shape, dtype, data)
+    }
+
     fn from_native(shape: Vec<usize>, dtype: RawDType, data: Vec<u8>) -> Self {
         let values = if dtype == RawDType::F32 {
             let mut vals = Vec::with_capacity(data.len() / 4);

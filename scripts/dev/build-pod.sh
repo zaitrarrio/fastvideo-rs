@@ -5,7 +5,8 @@
 #
 #   build-pod.sh up                  reuse the running pod, start the stopped one,
 #                                    or create it; wait until the toolchain is ready
-#   build-pod.sh status              pod, $/hr, setup state, jobs, disk
+#   build-pod.sh status              pod, $/hr, setup state, jobs, disk, and the
+#                                    self-stop timers (idle, time to idle / cap stop)
 #   build-pod.sh agents [--sizes]    agent dirs on the volume
 #   build-pod.sh sync <agent>        mirror this worktree (tracked + untracked,
 #                                    not ignored) to worktrees/<agent>/
@@ -31,9 +32,12 @@
 #
 # Money guards: balance floor FV_MIN_BALANCE (default 8 $) checked by `up`;
 # $/hr cap FV_BUILD_MAX_DPH (default 1.5); the pod stops itself after
-# FV_BUILD_IDLE_MIN (default 20) idle minutes and FV_BUILD_MAX_HOURS (default
-# 8) after boot, enforced on the pod so it survives this container; ledger at
-# $FV_BUILD_STATE/ledger.tsv.
+# FV_BUILD_IDLE_MIN (default 20) minutes without jobs and FV_BUILD_MAX_HOURS
+# (default 8) after boot (+ FV_BUILD_MAX_GRACE_MIN, default 30, for a job still
+# running), enforced on the pod so it survives this container; a curl watchdog
+# in the start command repeats the cap 15 min later, and fv-control's cron
+# stops the pod past 9 h or 15 min past a missed idle stop (docs/dev/build-pod.md);
+# ledger at $FV_BUILD_STATE/ledger.tsv.
 #
 # Env: RUNPOD_API_KEY; FV_BUILD_STATE (default ~/.config/fv-build: token,
 # mode 600, never printed); FV_BUILD_VOLUME (default fv-build);
@@ -61,6 +65,7 @@ MAX_DPH="${FV_BUILD_MAX_DPH:-1.5}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
 MAX_HOURS="${FV_BUILD_MAX_HOURS:-8}"
+MAX_GRACE_MIN="${FV_BUILD_MAX_GRACE_MIN:-30}"
 VOLUME_USD_GB_MONTH="0.07"
 LEDGER="$STATE/ledger.tsv"
 TOKEN_FILE="$STATE/token"
@@ -147,6 +152,20 @@ printf '%s' "$FV_BUILD_SERVER_B64" | base64 -d | gunzip >/opt/fvb/server.py
 # the python3 the server is running from, and the server restarted (killing
 # jobs) about a minute after every first boot.
 { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv; } >/dev/null 2>&1
+# Second wall-clock backstop, independent of the Python server (curl, its own
+# process): 15 min after the server's hard stop (cap + grace), stop, else
+# terminate, else GraphQL podTerminate; every 5 min until the pod is gone.
+fvb_rp() { curl -sS --fail-with-body --max-time 30 -A fv-build-pod-backstop/1 -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$@"; }
+fvb_s=$(awk -v h="${FV_BUILD_MAX_HOURS:-8}" -v g="${FV_BUILD_MAX_GRACE_MIN:-30}" 'BEGIN{printf "%d", h*3600 + g*60 + 900}')
+( sleep "$fvb_s"
+  while :; do
+    echo "[backstop] up ${fvb_s}s: stopping pod $RUNPOD_POD_ID" >&2
+    fvb_rp -X POST "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID/stop" \
+      || fvb_rp -X DELETE "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" \
+      || fvb_rp https://api.runpod.io/graphql -d "$(printf '{"query":"mutation { podTerminate(input: {podId: \\"%s\\"}) }"}' "$RUNPOD_POD_ID")"
+    echo "[backstop] exit $?" >&2
+    sleep 300
+  done ) &
 while true; do python3 /opt/fvb/server.py; echo "server exited $?; restarting" >&2; sleep 5; done
 EOF
 }
@@ -158,14 +177,14 @@ payload() {
   jq -n --arg name "$POD_NAME" --arg image "$IMAGE" --arg vol "$vol" --arg dc "$dc" \
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
-    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" '{
+    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
       env: {FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
-            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap}
+            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace}
     }'
 }
 
@@ -204,7 +223,7 @@ create_pod() {
   commit_token
   echo "$id" >"$STATE/pod"
   server_sha >"$STATE/pod-server"
-  log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h, pod-side)"
+  log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h + ${MAX_GRACE_MIN} min grace, pod-side)"
 }
 
 # $2: epoch the pod was (re)started at. Right after a start the proxy can
@@ -291,8 +310,25 @@ cmd_status() {
   if [[ -z "$pod" ]]; then echo "pod $POD_NAME: none"; return 0; fi
   jq -r '"pod \(.id) \(.name) \(.desiredStatus)  $\(.costPerHr)/hr  vcpu=\(.vcpuCount // "?") mem=\(.memoryInGb // "?")GB"' <<<"$pod"
   if [[ "$(jq -r .desiredStatus <<<"$pod")" == RUNNING ]]; then
-    svc GET /v1/status | jq . || true
+    local st
+    st="$(svc GET /v1/status)" || return 0
+    jq . <<<"$st"
+    stop_timers <<<"$st"
   fi
+}
+
+# One line from /v1/status: idle time and when the pod stops itself. Servers
+# before 2026-10-02 lack the *_in_s fields; derive them there.
+stop_timers() {
+  jq -r 'def mins: if . == null then "-" else "\((. / 60) | floor) min" end;
+    (.jobs_active | length) as $n
+    | (.idle_stop_in_s // (if $n > 0 then null else ([.idle_stop_s - .idle_s, 0] | max) end)) as $idle_in
+    | (.max_stop_in_s // ([.max_s - .uptime_s, 0] | max)) as $max_in
+    | "self-stop: up \(.uptime_s | mins), idle \(.idle_s | mins), \($n) job(s) active;"
+      + " idle stop in \(if $idle_in == null then "- (jobs active)" else ($idle_in | mins) end),"
+      + " cap stop in \($max_in | mins)"
+      + (if (.self_stop.error // null) != null then "; LAST STOP ATTEMPT FAILED: \(.self_stop.error)"
+         elif (.self_stop.ok // null) != null then "; stop accepted (\(.self_stop.ok))" else "" end)'
 }
 
 # Mirror tracked + untracked (not ignored) files of this worktree to the pod.

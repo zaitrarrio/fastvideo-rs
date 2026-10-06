@@ -1,0 +1,15 @@
+2026-10-02T01:30:00Z | start: orienting
+2026-10-02T01:33:32Z | CI fix 9bc3fcb pushed on wip/sage2; image workflows dispatched
+2026-10-02T01:40:02Z | per-recipe enablement coded (attn_sage tri-state + recipe_scope; Ltx2Recipe.sage_attention on ltx25-distill-dense); build pod tests starting
+2026-10-02T01:56:30Z | calibrated gate rule committed before any run (48770e3)
+2026-10-02T01:58:15Z | GPU pod w3x68sjrthgyca created (RTX PRO 6000, EUR-IS-1, EU vol jg48s6o1w0, $2.09/hr, backstop 5400 s detached DELETE, idle guard 20 min); balance $69.90
+2026-10-02T01:58:56Z | pod: H3 max gen started (arms cud, fw2, sage x 15 clips), then cmp, then repeat
+2026-10-02T02:11:15Z | max-cud done (586 s wall, pinned cuDNN: no auto timing lines)
+2026-10-02T02:20:43Z | max-fw2 done (588 s)
+2026-10-02T02:30:26Z | max-sage done (553 s); compares running
+2026-10-02T02:35:41Z | max done: results fetched (sha256 46a6de9a…), pod w3x68sjrthgyca deleted (GET 404), lifetime 2238 s ≈ $1.30
+2026-10-02T02:40:19Z | GPU pod 2v5demd2n1fptz created for dense (same spec, backstop 5400 s, idle 20 min); dense gen started
+2026-10-02T02:40:47Z | H3 max calibrated gate: FAIL (rule 1: 2/5 prompts in band — multishot/newsbroadcast/spark LPIPS medians 0.002-0.022 above band; rule 2: newsbroadcast-s42 jitter 1.070 outlier; speed 1.108x). Pooled LPIPS median ctl 0.405 vs sage 0.414, Sage further on 11/15 clips; no softening (sharp ratio med 1.01-1.03). Old gate: control breaks 2/15 single-clip limits, Sage 1/15. Pinned cud repeat byte-identical.
+2026-10-02T02:57:47Z | dense-cud done (781 s)
+2026-10-02T03:07:41Z | CI green on wip/sage2: serve-image 36951512383 (9bc3fcb), gpucheck-runtime-image 36952722101 + vast-pytorch-image 36952722052 (fecffde)
+2026-10-02T03:22:15Z | dense calibrated gate: FAIL (rule 1: 3/5 prompts; rule 2: sharpness outliers on h3-demo, newsbroadcast, spark; speed 1.301x). Old limits: Sage 4/15 clips vs control 1/15. Pod 2v5demd2n1fptz deleted (GET 404), lifetime 2769 s ≈ $1.61; balance $63.86

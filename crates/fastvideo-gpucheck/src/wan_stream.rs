@@ -9,8 +9,9 @@
 //!   per-block carried-state decode against the whole-clip decode of the same
 //!   latents (max abs, PSNR);
 //! * every `--run name,seconds=S[,rope=rel|abs][,sink=N][,window=N]
-//!   [,switch_at=S][,switch=keep|reset][,drop_rgb=1][,recache=EVERY:KEEP]
-//!   [,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]`: a rollout for `S`
+//!   [,switch_at=S[/S2/...]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]
+//!   [,recache=EVERY:KEEP][,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]
+//!   [,longlive=1][,dump=1]`: a rollout for `S`
 //!   seconds of video at `--fps`, blocks handed through a depth-4 channel to
 //!   a consumer thread (the design's executor → pacer hand-off) that measures
 //!   picture statistics per window of video time. Reports time to first
@@ -25,12 +26,27 @@
 //!   window, the streamed frame over its fresh-state decode. `keep_s=S`
 //!   decodes the first `S` seconds of latents again at the end as one clip
 //!   (TAEHV's default 4-latent chunks, one carried state) and compares it
-//!   with the streamed 3-latent blocks frame by frame.
+//!   with the streamed 3-latent blocks frame by frame. `dump=1` writes every
+//!   streamed frame as `frames/<name>/frame-NNNNN.png` (fast PNG, from the
+//!   consumer thread) for offline metrics (`hd_upscaler_metrics.py`'s
+//!   `warp_err` / `lum_flicker`).
+//!
+//! LongLive (`--longlive DIR`, docs/serve/research-longlive.md): the
+//! LongLive-1.3B transformer (the converted `longlive_base` + `lora`
+//! safetensors, renamed and merged by `wan::longlive`) replaces
+//! `--weights/transformer`. `longlive=1` in a run (put it first: later keys
+//! override it) takes LongLive's window 12, sink 3, absolute RoPE and the
+//! prompt-switch KV re-cache (`switch=recache`; `switch=keep` is the
+//! no-re-cache ablation). Several `switch_at` times (`/`-separated) switch
+//! through `--switch-prompts` (one prompt per line, or LongLive's
+//! `interactive_example.jsonl`: `{"prompts": [...]}` on a line, whose first
+//! prompt replaces `--prompt`), else to `--switch-prompt` each time.
 
 use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail};
+use fastvideo_cudarc::wan::longlive::LongLiveConfig;
 use fastvideo_cudarc::wan::stream::{
     CausalRollout, HostBlock, PromptSwitch, Recache, RolloutConfig, RopePolicy,
 };
@@ -45,6 +61,13 @@ pub struct Args<'a> {
     pub preset: &'a str,
     pub prompt: &'a str,
     pub switch_prompt: &'a str,
+    /// Prompts of successive switches (`--switch-prompts`); empty: always
+    /// `switch_prompt`.
+    pub switch_prompts: &'a [String],
+    /// LongLive-1.3B converted checkpoint dir (`--longlive`).
+    pub longlive: Option<&'a std::path::Path>,
+    /// Merge LongLive's `lora.safetensors` (off: the base generator).
+    pub longlive_lora: bool,
     pub seed: u64,
     pub height: usize,
     pub width: usize,
@@ -62,7 +85,7 @@ struct RunSpec {
     rope: RopePolicy,
     sink: usize,
     window: usize,
-    switch_at: Option<f64>,
+    switch_at: Vec<f64>,
     switch: PromptSwitch,
     drop_rgb: bool,
     recache: Option<Recache>,
@@ -70,6 +93,7 @@ struct RunSpec {
     fresh: bool,
     sheet: bool,
     keep_s: f64,
+    dump: bool,
 }
 
 fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
@@ -81,7 +105,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         rope: RopePolicy::RebasedSink,
         sink: RolloutConfig::default().sink_frames,
         window: 21,
-        switch_at: None,
+        switch_at: Vec::new(),
         switch: PromptSwitch::Keep,
         drop_rgb: false,
         recache: None,
@@ -89,6 +113,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         fresh: true,
         sheet: true,
         keep_s: 0.0,
+        dump: false,
     };
     for kv in parts {
         let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("--run {s}: `{kv}` is not key=value"))?;
@@ -104,13 +129,25 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             }
             "sink" => r.sink = v.parse()?,
             "window" => r.window = v.parse()?,
-            "switch_at" => r.switch_at = Some(v.parse()?),
+            "switch_at" => {
+                r.switch_at = v.split('/').map(str::parse).collect::<Result<Vec<f64>, _>>()?;
+                r.switch_at.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            }
             "switch" => {
                 r.switch = match v {
                     "keep" => PromptSwitch::Keep,
                     "reset" => PromptSwitch::Reset,
+                    "recache" => PromptSwitch::Recache { global_sink: true },
+                    "recache_sink" => PromptSwitch::Recache { global_sink: false },
                     _ => bail!("--run {s}: switch={v}"),
                 }
+            }
+            "longlive" if v == "1" => {
+                let ll = LongLiveConfig::interactive();
+                r.window = ll.local_attn_frames;
+                r.sink = ll.sink_frames;
+                r.rope = ll.rope(false);
+                r.switch = ll.prompt_switch();
             }
             "drop_rgb" => r.drop_rgb = v == "1",
             "recache" => {
@@ -121,10 +158,37 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             "fresh" => r.fresh = v == "1",
             "sheet" => r.sheet = v == "1",
             "keep_s" => r.keep_s = v.parse()?,
+            "dump" => r.dump = v == "1",
             _ => bail!("--run {s}: unknown key {k}"),
         }
     }
     Ok(r)
+}
+
+/// `--switch-prompts`: LongLive's `interactive_example.jsonl` (line `line`
+/// is `{"prompts": [p0, p1, ...]}`: `p0` starts the run, the rest are the
+/// switches) or plain text (one switch prompt per non-empty line).
+pub fn read_switch_prompts(path: &std::path::Path, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
+    let text = std::fs::read_to_string(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+    parse_switch_prompts(&text, line).map_err(|e| anyhow!("{}: {e}", path.display()))
+}
+
+fn parse_switch_prompts(text: &str, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if lines.first().is_some_and(|l| l.starts_with('{')) {
+        let l = lines.get(line).ok_or_else(|| anyhow!("no line {line} ({} lines)", lines.len()))?;
+        let v: Value = serde_json::from_str(l)?;
+        let ps: Vec<String> = v["prompts"]
+            .as_array()
+            .ok_or_else(|| anyhow!("line {line}: no \"prompts\" array"))?
+            .iter()
+            .map(|p| p.as_str().map(str::to_string).ok_or_else(|| anyhow!("line {line}: a prompt is not a string")))
+            .collect::<anyhow::Result<_>>()?;
+        let mut it = ps.into_iter();
+        let first = it.next().ok_or_else(|| anyhow!("line {line}: no prompts"))?;
+        return Ok((Some(first), it.collect()));
+    }
+    Ok((None, lines.into_iter().map(str::to_string).collect()))
 }
 
 fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
@@ -148,7 +212,26 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     }
     let tokenizer = tokenizer.to_string_lossy().into_owned();
     let t = Instant::now();
-    let pipe = WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true })
+    let dit = match a.longlive {
+        Some(dir) => {
+            let ll = LongLiveConfig::interactive();
+            let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(dir, &ll);
+            if !a.longlive_lora {
+                w.lora = None;
+            } else if w.lora.is_none() {
+                return Err(anyhow!("--longlive {}: no lora.safetensors (--longlive-no-lora for the base)", dir.display()).into());
+            }
+            let (map, rep) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| anyhow!("{e}"))?;
+            report.note(
+                "longlive_weights",
+                json!({"dir": dir.display().to_string(), "tensors": rep.tensors, "lora_modules_merged": rep.merged,
+                       "lora_scale": w.lora_scale, "skipped": rep.skipped, "seconds": t.elapsed().as_secs_f64()}),
+            );
+            Some(map)
+        }
+        None => None,
+    };
+    let pipe = WanPipeline::load_with_dit(a.weights, a.preset, LoadParts { text_encoder: true }, dit)
         .map_err(|e| anyhow!("load {}: {e}", a.weights.display()))?;
     report.note(
         "load",
@@ -666,6 +749,32 @@ fn write_sheet(path: &std::path::Path, tiles: &[Tile], h: usize, w: usize) -> an
     Ok(())
 }
 
+/// `dump=1`: every frame of a block as `frame-NNNNN.png` (global frame
+/// index), fast compression; errors are logged, not fatal.
+fn dump_frames(dir: &std::path::Path, b: &HostBlock) {
+    let plane = b.height * b.width * 3;
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("dump {}: {e}", dir.display());
+        return;
+    }
+    for i in 0..b.frames {
+        let Some(px) = b.rgb.get(i * plane..(i + 1) * plane) else { break };
+        let path = dir.join(format!("frame-{:05}.png", b.first_frame + i));
+        let res = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|f| {
+            let enc = image::codecs::png::PngEncoder::new_with_quality(
+                std::io::BufWriter::new(f),
+                image::codecs::png::CompressionType::Fast,
+                image::codecs::png::FilterType::NoFilter,
+            );
+            image::ImageEncoder::write_image(enc, px, b.width as u32, b.height as u32, image::ExtendedColorType::Rgb8)
+                .map_err(anyhow::Error::from)
+        });
+        if let Err(e) = res {
+            eprintln!("dump {}: {e}", path.display());
+        }
+    }
+}
+
 /// The first latents decoded again as one clip (TAEHV's default 4-latent
 /// chunks through one carried state, a fresh one) against the streamed
 /// frames (3-latent blocks), per window of video time.
@@ -778,6 +887,7 @@ fn consume(
     fps: f64,
     window_s: f64,
     sheet: bool,
+    dump: Option<std::path::PathBuf>,
 ) -> Consumed {
     let mut prev_last = None;
     let mut windows: Vec<Value> = Vec::new();
@@ -798,6 +908,9 @@ fn consume(
             win_start = (t / window_s).floor() * window_s;
         }
         let p = if b.rgb.is_empty() { Pic::default() } else { block_pic(&b, &mut prev_last) };
+        if let Some(d) = dump.as_ref().filter(|_| !b.rgb.is_empty()) {
+            dump_frames(d, &b);
+        }
         if sheet && x.sample && !b.rgb.is_empty() {
             dims = (b.height, b.width);
             let plane = b.height * b.width * 3;
@@ -842,7 +955,8 @@ fn one_run(
     let tae = pipe.taehv().ok_or_else(|| anyhow!("no TAEHV loaded"))?;
     let (tx, rx) = sync_channel::<(HostBlock, Option<u64>, usize, Extra)>(4);
     let (window_s, sheet) = (a.window_s, r.sheet);
-    let consumer = std::thread::spawn(move || consume(rx, fps, window_s, sheet));
+    let dump = r.dump.then(|| report.dir().join("frames").join(&r.name));
+    let consumer = std::thread::spawn(move || consume(rx, fps, window_s, sheet, dump));
 
     let t_open = Instant::now();
     let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
@@ -851,7 +965,7 @@ fn one_run(
     let mut totals = Vec::new();
     let mut frames = 0usize;
     let mut ttff = None;
-    let mut switch_info = None;
+    let mut switch_info: Vec<Value> = Vec::new();
     let mut mem_first_full = None;
     let mut mem_max = 0u64;
     let mut mems: Vec<f64> = Vec::new();
@@ -863,11 +977,18 @@ fn one_run(
     let (mut keep_lat, mut keep_rgb) = (Vec::new(), Vec::new());
     let mut extra_s = 0.0f64;
     while frames < want_frames {
-        if let Some(at) = r.switch_at.filter(|_| switch_info.is_none()) {
+        if let Some(&at) = r.switch_at.get(switch_info.len()) {
             if frames as f64 / fps >= at {
+                let i = switch_info.len();
+                let p = if a.switch_prompts.is_empty() {
+                    a.switch_prompt
+                } else {
+                    a.switch_prompts[i % a.switch_prompts.len()].as_str()
+                };
                 let t = Instant::now();
-                let v = ro.set_prompt(a.switch_prompt).map_err(|e| anyhow!("{e}"))?;
-                switch_info = Some(json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v}));
+                let v = ro.set_prompt(p).map_err(|e| anyhow!("{e}"))?;
+                switch_info.push(json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v,
+                                        "prompt": p}));
             }
         }
         let mut b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
@@ -886,7 +1007,7 @@ fn one_run(
             mems.push(m as f64);
         }
         let kv_now = ro.kv_bytes();
-        blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20]));
+        blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20, tm.recache_s]));
         // Diagnostics, outside the block's own timings.
         let t_extra = Instant::now();
         let lat_h = host(&b.latents)?;
@@ -945,6 +1066,7 @@ fn one_run(
                "failed": r.failed})
     });
     let recaches = ro.recaches();
+    let switch_recaches = ro.switch_recaches();
     drop(ro);
     drop(tx);
     drop(ring);
@@ -977,7 +1099,7 @@ fn one_run(
         "spec": {"seconds": r.seconds, "rope": format!("{:?}", r.rope), "sink": r.sink, "window": r.window,
                  "switch_at": r.switch_at, "switch": format!("{:?}", r.switch),
                  "recache": r.recache.map(|c| json!({"every_blocks": c.every_blocks, "keep_frames": c.keep_frames})),
-                 "graphs": r.graphs, "fresh": r.fresh, "keep_s": r.keep_s},
+                 "graphs": r.graphs, "fresh": r.fresh, "keep_s": r.keep_s, "dump": r.dump},
         "frames": frames, "consumer_frames": rx_frames, "blocks": totals.len(),
         "open_s": open_s, "ttff_s": ttff, "first_block_s": totals.first(),
         "block_s": {"p50": pct(&mut tt, 0.5), "p90": pct(&mut tt, 0.9), "max": pct(&mut tt, 1.0)},
@@ -987,10 +1109,11 @@ fn one_run(
         "kv_mib_end": kv_bytes >> 20,
         "graph": graph,
         "recaches": recaches,
+        "switch_recaches": switch_recaches,
         "sheet": sheet_path,
         "whole_clip_decode": whole_clip,
         "windows": windows,
-        "block_rows": ["index", "frames", "denoise_s", "context_s", "decode_s", "rgb_s", "total_s", "mem_used_mib", "kv_mib"],
+        "block_rows": ["index", "frames", "denoise_s", "context_s", "decode_s", "rgb_s", "total_s", "mem_used_mib", "kv_mib", "recache_s"],
         "switch": switch_info,
         "per_block": blocks,
     });
@@ -1014,4 +1137,34 @@ fn one_run(
         json!({"min": want_frames}),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn longlive_run_spec() {
+        let r = parse_run("ll,longlive=1,seconds=60,switch_at=15/30/45").unwrap();
+        assert_eq!((r.window, r.sink, r.rope), (12, 3, RopePolicy::Absolute));
+        assert_eq!(r.switch, PromptSwitch::Recache { global_sink: true });
+        assert_eq!(r.switch_at, [15.0, 30.0, 45.0]);
+        let r = parse_run("ll,longlive=1,switch=keep,switch_at=45/15").unwrap();
+        assert_eq!(r.switch, PromptSwitch::Keep);
+        assert_eq!(r.switch_at, [15.0, 45.0]);
+        let r = parse_run("x,switch=recache_sink,rope=rel").unwrap();
+        assert_eq!(r.switch, PromptSwitch::Recache { global_sink: false });
+        assert!(parse_run("x,switch=nope").is_err());
+        assert!(!parse_run("x").unwrap().dump);
+        assert!(parse_run("x,longlive=1,dump=1").unwrap().dump);
+    }
+
+    #[test]
+    fn switch_prompts_from_jsonl_or_lines() {
+        let jsonl = "{\"prompts\": [\"a\", \"b\", \"c\"]}\n{\"prompts\": [\"x\", \"y\"]}\n";
+        assert_eq!(parse_switch_prompts(jsonl, 0).unwrap(), (Some("a".into()), vec!["b".into(), "c".into()]));
+        assert_eq!(parse_switch_prompts(jsonl, 1).unwrap(), (Some("x".into()), vec!["y".into()]));
+        assert!(parse_switch_prompts(jsonl, 2).is_err());
+        assert_eq!(parse_switch_prompts("p1\n\np2\n", 0).unwrap(), (None, vec!["p1".into(), "p2".into()]));
+    }
 }

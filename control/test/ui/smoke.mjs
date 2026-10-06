@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright-core";
-import { hashPassphrase, HERE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
+import { d1Exec, hashPassphrase, HERE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
 
 const out = `${HERE}test-results`;
 mkdirSync(out, { recursive: true });
@@ -151,6 +151,95 @@ try {
   await page.waitForSelector("details summary:has-text('needs restart'), p:has-text('No pods running')");
   await page.screenshot({ path: `${out}/10-env-editor.png`, fullPage: true });
 
+  // ---- the operations controls (wip/ui-dashboard): alert resolve, build pod card, templates and presets,
+  // roll / restart pickers, add pool, key list and revoke, pool env, policy text.
+  const accept = (d) => d.accept();
+  page.on("dialog", accept);
+  mock.buildHealth = { extbuild0001: { ok: true, ready: true, phase: "ready", boot: 1, uptime_s: 3600, idle_s: 0, idle_stop_in_s: null, max_stop_in_s: 25200, idle_stop_s: 1200, max_s: 28800, max_grace_s: 1800, jobs_active: 1, self_stop: { attempts: 2, next_at: null, reason: "idle 20 min", at: Math.floor(Date.now() / 1000) - 600, ok: null, error: "REST stop: HTTP 403 Forbidden" }, jobs: [{ id: "1002-abc", agent: "wt-ui-dash", state: "running", seconds: 42 }] } };
+  d1Exec(w.dir, `INSERT INTO alerts (key, kind, severity, target, message, opened_at, last_seen_at) VALUES ('ui:test', 'pod_down', 'warn', 'x', 'ui test alert', ${Date.now()}, ${Date.now()})`);
+  await page.goto(`${B}/#/`);
+  await page.waitForSelector(".buildpod[data-pod=extbuild0001]");
+  const bpText = await page.textContent(".buildpod[data-pod=extbuild0001]");
+  for (const s of ["cap stop in", "7.0 h", "FAILED", "REST stop: HTTP 403", "wt-ui-dash", "paused: jobs running", "controller backstop", "cap in 8.0 h"]) assert.ok(bpText.includes(s), `build pod card: ${s} in ${bpText}`);
+  await page.click(".alert:has-text('ui test alert') button:text('Resolve')");
+  await page.waitForSelector(".alert:has-text('ui test alert')", { state: "detached" });
+  assert.ok((await (await fetch(`${B}/api/alerts`, { headers: { authorization: `Bearer ${tok}` } })).json()).alerts.every((a) => a.key !== "ui:test"), "resolved");
+  await page.screenshot({ path: `${out}/12-dashboard-buildpod.png`, fullPage: true });
+  // Clusters: every template, and a pool preset added to the spec being defined.
+  await page.goto(`${B}/#/clusters`);
+  await page.waitForSelector("select[aria-label=Template] option[value=ltx]", { state: "attached" });
+  const tpls = await page.$$eval("select[aria-label=Template] option", (els) => els.map((e) => e.value));
+  assert.deepEqual(tpls.sort(), ["h3", "longlive", "ltx", "standard", "tiny-cpu", "wan"]);
+  await page.waitForSelector(".cm-editor");
+  const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString());
+  await page.selectOption("select[aria-label=Template]", "ltx");
+  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"ltx-ref2v"'));
+  await page.selectOption("select[aria-label='Pool preset']", "longlive");
+  assert.match(await page.textContent(".presets"), /NON-COMMERCIAL|non-commercial/);
+  await page.click(".presets button:text('Add pool')");
+  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"id": "longlive"'));
+  assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx,ltx-pro,ltx-a2v,ltx-ref2v,longlive");
+  await page.screenshot({ path: `${out}/13-clusters-presets.png`, fullPage: true });
+  // Cluster: roll picker (cancelled), add a pool, keys, restart picker.
+  await fetch(`${B}/api/clusters/${c.cluster.id}/mint-key`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ name: "ui-key" }) });
+  await page.goto(`${B}/#/cluster/${c.cluster.id}`);
+  await page.waitForSelector("button:text('Roll to…'):not([disabled])");
+  await page.click("button:text('Roll to…')");
+  await page.waitForSelector("dialog.pick label:has-text('fake')");
+  assert.ok(await page.isChecked("dialog.pick input[value=fake]"));
+  assert.ok(await page.isVisible("dialog.pick input[aria-label='Roll target']"));
+  await page.screenshot({ path: `${out}/14-roll-picker.png` });
+  await page.click("dialog.pick button:text('Cancel')");
+  await page.waitForSelector("dialog.pick", { state: "detached" });
+  await page.click("button:text('Add pool…')");
+  await page.waitForSelector("dialog select[aria-label='Pool preset'] option[value=fastwan21]", { state: "attached" });
+  await page.selectOption("dialog select[aria-label='Pool preset']", "fastwan21");
+  await page.click("dialog .presets button:text('Add pool')");
+  for (let i = 0; i < 40; i++) {
+    const d = await (await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
+    if (d.doc.pools.some((p) => p.id === "fastwan21")) break;
+    assert.ok(i < 39, "the pool was added");
+    await page.waitForTimeout(250);
+  }
+  await page.waitForSelector("td:text-is('fastwan21')");
+  await page.click("button:text('Keys')");
+  await page.waitForSelector("#gwKeys td:text('ui-key')");
+  await page.click("#gwKeys button:text('Revoke')");
+  await page.waitForSelector("#gwKeys .badge:text('revoked')");
+  assert.match(await page.textContent("#gwOut"), /revoked key_/);
+  await page.screenshot({ path: `${out}/15-cluster-keys.png`, fullPage: true });
+  await page.click("button:text('Restart…')");
+  await page.waitForSelector("dialog.pick input[value='pool:fake']");
+  assert.ok(await page.isVisible("dialog.pick input[value='pool:gateway']"));
+  await page.check("dialog.pick input[value='pool:fake']");
+  await page.screenshot({ path: `${out}/16-restart-picker.png` });
+  await page.click("dialog.pick button:text('Restart')");
+  await page.waitForSelector("text=running: restart");
+  const ops = await (await fetch(`${B}/api/clusters/${c.cluster.id}/ops`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  assert.deepEqual(JSON.parse(ops.operations.find((o) => o.kind === "restart").params), { pools: ["fake"] });
+  // Env: the pool level, with the engine's keys suggested.
+  await page.goto(`${B}/#/env?cluster=${c.cluster.id}&pool=fake`);
+  await page.waitForSelector("select[aria-label=Pool]");
+  const poolp = ".fv-panel[data-kind=env] >> nth=2";
+  await page.waitForSelector(`${poolp} >> input[aria-label="new key"]`);
+  assert.ok(await page.$(`datalist option[value=FASTVIDEO_ATTN_SAGE]`), "engine env keys suggested");
+  await page.fill(`${poolp} >> input[aria-label="new key"]`, "FASTVIDEO_ATTN_SAGE");
+  await page.click(`${poolp} >> button:text('+ add')`);
+  await page.fill(`${poolp} >> tr[data-key=FASTVIDEO_ATTN_SAGE] input[type=text]`, "0");
+  await page.click(`${poolp} >> button:text('Review & save')`);
+  await page.click(`${poolp} >> button:has-text('Save (v')`);
+  for (let i = 0; i < 40; i++) {
+    const v = await (await fetch(`${B}/api/env/pool/${c.cluster.id}:fake`, { headers: { authorization: `Bearer ${tok}` } })).json();
+    if (v.vars?.some((x) => x.key === "FASTVIDEO_ATTN_SAGE" && x.value === "0")) break;
+    assert.ok(i < 39, "the pool variable was saved");
+    await page.waitForTimeout(250);
+  }
+  await page.screenshot({ path: `${out}/17-env-pool.png`, fullPage: true });
+  await page.goto(`${B}/#/settings`);
+  await page.waitForSelector("text=build pod backstop");
+  assert.ok(!(await page.content()).includes("Auto-actions touch controller clusters only, never external pods"), "the stale policy text is gone");
+  page.off("dialog", accept);
+
   // ---- read-only JSON tree: search and copy.
   const pods = await (await fetch(`${B}/api/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
   await page.goto(`${B}/#/pod/${pods.pods[0].pod_id}`);
@@ -178,7 +267,7 @@ try {
   await pp.fill("#pass", PASSPHRASE);
   await pp.click("button[type=submit]");
   await pp.waitForSelector(".tile");
-  for (const hash of ["#/", "#/clusters", "#/pods", "#/costs", "#/settings"]) {
+  for (const hash of ["#/", "#/clusters", "#/pods", "#/env", "#/costs", "#/settings"]) {
     await pp.goto(`${B}/${hash}`);
     await pp.waitForSelector("h1");
     await pp.waitForTimeout(300);

@@ -1303,6 +1303,7 @@ fn ladder(
             video_rows,
             audio_rows,
             &schedule,
+            0,
             AttnMode::Dense,
             None,
             None,
@@ -1672,11 +1673,13 @@ fn gen(
             is_sol_h3_recipe, is_sol_h3_rtx_recipe, is_sol_h3_spark_recipe,
         };
         use fastvideo_models::h3::sol::H3SolAttnPolicy;
-        let (t, _) = &techniques;
+        let (t, contract) = &techniques;
         let recipe = t.recipe.as_deref();
-        let dense_recipe = recipe.is_some_and(|r| {
-            (is_sol_h3_recipe(r) && !is_sol_h3_spark_recipe(r)) || is_sol_h3_rtx_recipe(r)
-        });
+        // A dense contract (e.g. the LongLive-Plug H3 recipes) loads no gate.
+        let dense_recipe = contract.dense
+            || recipe.is_some_and(|r| {
+                (is_sol_h3_recipe(r) && !is_sol_h3_spark_recipe(r)) || is_sol_h3_rtx_recipe(r)
+            });
         match (t.sol_policy, t.sol()) {
             (H3SolAttnPolicy::Off, _) if options.dense || dense_recipe || t.forces_dense() => {
                 "dense, no gate".to_string()

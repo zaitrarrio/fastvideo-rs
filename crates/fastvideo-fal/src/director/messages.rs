@@ -20,6 +20,13 @@ pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 pub const PROMPT_MAX_CHARS: usize = 50_000;
 /// `script` beat count bounds.
 pub const SCRIPT_MAX_BEATS: usize = 64;
+/// `configure.chunk_duration` values (whole seconds): an extension of
+/// fal's schema, which echoes the session's chunk length as
+/// `configured.chunk_duration` but takes none. Clip models only; a causal
+/// model ignores it.
+pub const CHUNK_DURATIONS: [u32; 2] = [5, 10];
+/// `configure.chunk_duration` when absent (the director's default).
+pub const DEFAULT_CHUNK_DURATION: u32 = 5;
 /// Reserved WMA network-info vocabulary (JS `wma.ts`).
 pub const NETWORK_INFO_REQUEST: &str = "wma.network-info.request";
 pub const NETWORK_INFO_RESPONSE: &str = "wma.network-info.response";
@@ -51,6 +58,10 @@ pub const SERVER_MESSAGE_TYPES: [&str; 16] = [
 pub enum Resolution {
     #[serde(rename = "480p")]
     R480,
+    /// Not in fal's published schema (an extension for models with a 720
+    /// tier, e.g. LTX); clients that do not know it never send it.
+    #[serde(rename = "720p")]
+    R720,
     #[serde(rename = "768p")]
     R768,
     #[serde(rename = "1080p")]
@@ -58,9 +69,13 @@ pub enum Resolution {
 }
 
 impl Resolution {
+    /// Every value, lowest first (the order forms list them in).
+    pub const ALL: [Resolution; 4] = [Resolution::R480, Resolution::R720, Resolution::R768, Resolution::R1080];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Resolution::R480 => "480p",
+            Resolution::R720 => "720p",
             Resolution::R768 => "768p",
             Resolution::R1080 => "1080p",
         }
@@ -68,6 +83,7 @@ impl Resolution {
     pub fn short_edge(self) -> u32 {
         match self {
             Resolution::R480 => 480,
+            Resolution::R720 => 720,
             Resolution::R768 => 768,
             Resolution::R1080 => 1080,
         }
@@ -102,6 +118,14 @@ impl Aspect {
             .into_iter()
             .min_by(|a, b| (a.ratio().ln() - l).abs().total_cmp(&(b.ratio().ln() - l).abs()))
             .unwrap_or(Aspect::Landscape)
+    }
+    /// The protocol's aspect ratio (`CanvasSpec::Aspect`).
+    pub fn as_ratio(self) -> fastvideo_protocol::Ratio {
+        match self {
+            Aspect::Landscape => fastvideo_protocol::Ratio::R16_9,
+            Aspect::Portrait => fastvideo_protocol::Ratio::R9_16,
+            Aspect::Square => fastvideo_protocol::Ratio::R1_1,
+        }
     }
     /// `width / height`.
     pub fn ratio(self) -> f64 {
@@ -178,6 +202,11 @@ pub struct Configure {
     pub script: Option<Vec<ScriptBeat>>,
     #[serde(default)]
     pub protocol_version: Option<u64>,
+    /// Seconds per chunk, one of [`CHUNK_DURATIONS`] (ours, not in fal's
+    /// schema; named after `configured.chunk_duration`). `None`: the
+    /// server's default (`default_chunk_duration`).
+    #[serde(default)]
+    pub chunk_duration: Option<u32>,
 }
 
 /// `prompt` (correlation `/prompt_version`).
@@ -300,6 +329,12 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
     let de = |e: serde_json::Error| invalid(format!("invalid `{ty}` message: {e}"), &v);
     match ty {
         "configure" => {
+            // Checked on the raw value so a wrong type names the field too.
+            match obj.get("chunk_duration") {
+                None | Some(Value::Null) => {}
+                Some(d) if d.as_u64().is_some_and(|d| CHUNK_DURATIONS.iter().any(|&c| u64::from(c) == d)) => {}
+                Some(d) => return Err(invalid(format!("`chunk_duration` must be 5 or 10 (whole seconds), got {d}"), &v)),
+            }
             let m: Configure = serde_json::from_value(v.clone()).map_err(de)?;
             check_version(m.prompt_version, &v)?;
             check_text("prompt", &m.prompt, &v)?;
@@ -513,7 +548,25 @@ mod tests {
         assert_eq!(c.aspect_ratio, Some(Aspect::Landscape));
         assert_eq!(c.memory, Some(3));
         // Nulls are accepted for every nullable field.
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null}"#).is_ok());
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null,"chunk_duration":null}"#).is_ok());
+        assert_eq!(c.chunk_duration, None);
+        for d in CHUNK_DURATIONS {
+            let ClientMessage::Configure(c) = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{d}}}"#)).unwrap() else {
+                panic!()
+            };
+            assert_eq!(c.chunk_duration, Some(d));
+        }
+    }
+
+    #[test]
+    fn every_resolution_round_trips() {
+        for r in Resolution::ALL {
+            let m = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","resolution":"{}"}}"#, r.as_str())).unwrap();
+            let ClientMessage::Configure(c) = m else { panic!() };
+            assert_eq!(c.resolution, Some(r));
+            assert_eq!(r.as_str().trim_end_matches('p').parse::<u32>().unwrap(), r.short_edge());
+        }
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720P"}"#).is_err());
     }
 
     #[test]
@@ -527,13 +580,20 @@ mod tests {
         assert!(parse(r#"{"type":"prompt","prompt_version":2,"prompt":"x","script":[{"offset":0,"prompt":"a","speed":1}]}"#).is_err());
         // Types, enums, ranges.
         assert!(parse(r#"{"type":"configure","prompt_version":"1","prompt":"x"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#).is_err());
+        // 720p is an extension (LTX's tier); tiers nobody serves stay refused.
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"360p"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768P"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"4:3"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":0}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":51}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_bitrate":64000}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","protocol_version":2}"#).is_err());
+        // chunk_duration: whole seconds, 5 or 10.
+        for bad in ["0", "3", "7", "15", "-5", "5.5", "\"5\""] {
+            let e = err(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{bad}}}"#));
+            assert!(e.error.contains("chunk_duration"), "{bad}: {e:?}");
+            assert_eq!(e.prompt_version, Some(1));
+        }
         assert!(parse(r#"{"type":"configure","prompt_version":0,"prompt":"x"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":9007199254740992,"prompt":"x"}"#).is_err());
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":""}"#).is_err());

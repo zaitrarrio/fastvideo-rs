@@ -13,20 +13,24 @@
 # (FV_MIN_BALANCE, default 8 $), a detached backstop that deletes the pod
 # after FV_POD_CAP_S (default 5400 s) even if this shell dies, and a ledger
 # (artifacts/runpod/serve/ledger.tsv). The weight volume (RUNPOD_VOLUME_ID,
-# default s2k01690bi, US-CA-2) is mounted at /workspace and only read.
+# default jg48s6o1w0, EUR-IS-1; the US volume was deleted 2026-10 and is
+# refused, scripts/gpu/volumes.sh) is mounted at /workspace and only read.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
 source "$ROOT/scripts/gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
+source "$ROOT/scripts/gpu/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:-${TMPDIR:-/tmp}/fv-e2e-wan.state}"
-GPUS="${RUNPOD_GPU_TYPES:-NVIDIA H100 80GB HBM3|NVIDIA H100 NVL|NVIDIA H100 PCIe}"
+GPUS="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS|NVIDIA H100 80GB HBM3|NVIDIA H100 NVL|NVIDIA H100 PCIe}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-3.6}"
 CAP_S="${FV_POD_CAP_S:-5400}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
-VOLUME="${RUNPOD_VOLUME_ID:-s2k01690bi}"
+VOLUME="${RUNPOD_VOLUME_ID:-$FV_EU_VOLUME_ID}"
+fv_check_volume "$VOLUME"
 OUT="${FV_E2E_OUT:-$ROOT/artifacts/serve/e2e/wan}"
 LEDGER="$ROOT/artifacts/runpod/serve/ledger.tsv"
 
@@ -191,5 +195,5 @@ case "${1:-}" in
   batch) cmd_batch ;;
   fetch) cmd_fetch ;;
   down) cmd_down ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

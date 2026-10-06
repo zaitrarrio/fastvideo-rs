@@ -160,6 +160,9 @@ def main():
     ok("result + download")
 
     # Handles rebuilt from a stored request id use the app-only path form.
+    # A finished request keeps one result URL (as on fal): wait into the next
+    # second so a URL signed per read (exp = now + ttl) cannot pass by luck.
+    time.sleep(1.1)
     h2 = c.get_handle(APP, h.request_id)
     check(isinstance(h2.status(), Completed), "get_handle status")
     check(c.result(APP, h.request_id)["video"]["url"] == v["url"], "result() by id")

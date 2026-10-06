@@ -555,6 +555,12 @@ pub struct H3InferenceContract {
     /// Dense attention without `to_gate_compress` / VSA (Preview Dense, Sol-H3 1-GPU).
     pub dense: bool,
     pub sigma_source: H3SigmaSource,
+    /// The LongLive-Plug H3 few-step student's transition
+    /// (`fresh_noise_scheduler_4step.py`): predict `x0 = x + sigma v`, then
+    /// draw fresh noise for the next point, `x' = t' x0 + (1 - t') n`, video
+    /// then audio per step, none on the terminal step. `false`: the
+    /// deterministic `MiniMaxH3Scheduler.step` every other recipe runs.
+    pub fresh_noise: bool,
 }
 
 impl H3InferenceContract {
@@ -570,6 +576,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: false,
             sigma_source: H3SigmaSource::Dmd,
+            fresh_noise: false,
         }
     }
 
@@ -588,6 +595,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: false,
             sigma_source: H3SigmaSource::Dmd,
+            fresh_noise: false,
         }
     }
 
@@ -605,6 +613,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: true,
             sigma_source: H3SigmaSource::Dmd,
+            fresh_noise: false,
         }
     }
 
@@ -619,6 +628,7 @@ impl H3InferenceContract {
         Self {
             dmd_denoising_steps: Vec::new(),
             sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
             ..Self::fasth3_4step_vsa()
         }
     }
@@ -629,6 +639,7 @@ impl H3InferenceContract {
         Self {
             dmd_denoising_steps: Vec::new(),
             sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
             ..Self::fasth3_4step_dense()
         }
     }
@@ -656,6 +667,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: true,
             sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
         }
     }
 
@@ -674,6 +686,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: false,
             sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
         }
     }
 
@@ -695,6 +708,7 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: true,
             sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
         }
     }
 
@@ -713,9 +727,32 @@ impl H3InferenceContract {
         }
     }
 
+    /// LongLive-Plug `h3-plug-4step`: base MiniMax-H3 plus the Plug few-step
+    /// LoRA (`Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step`) on
+    /// "its published four-forward configuration": `set_timesteps(5)` on the
+    /// uniform grid, video shift 12, audio shift 3, no CFG
+    /// (`infer_student_4step.py`, `provenance.json` `nfe 4`), dense
+    /// attention, with the student's fresh-noise transition
+    /// ([`Self::fresh_noise`]).
+    pub fn plug_h3_4step() -> Self {
+        Self {
+            fresh_noise: true,
+            ..Self::sol_h3()
+        }
+    }
+
+    /// LongLive-Plug `h3-plug-cfg`: base MiniMax-H3 plus the Plug CFG LoRA
+    /// on the base 50-point grid (49 positive forwards, shifts 12 / 3); the
+    /// adapter was regressed onto CFG-3 teacher trajectories on that grid
+    /// (`training_config.json`).
+    pub fn plug_h3_cfg() -> Self {
+        Self::base(50)
+    }
+
     /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`,
     /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`),
-    /// `sol-h3-spark`, `sol-h3-rtx`, `base`, `base-<N>step`.
+    /// `sol-h3-spark`, `sol-h3-rtx`, `base`, `base-<N>step`, and the
+    /// LongLive-Plug `h3-plug-4step` / `h3-plug-cfg`.
     pub fn named(name: &str) -> Result<Self, String> {
         if let Some(n) = base_recipe_forwards(name) {
             return Ok(Self::base(n + 1));
@@ -730,10 +767,12 @@ impl H3InferenceContract {
             }
             "sol-h3-spark" | "sol_h3_spark" => Ok(Self::sol_h3_spark()),
             "sol-h3-rtx" | "sol_h3_rtx" => Ok(Self::sol_h3_rtx()),
+            "h3-plug-4step" => Ok(Self::plug_h3_4step()),
+            "h3-plug-cfg" => Ok(Self::plug_h3_cfg()),
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step)"
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg)"
             )),
         }
     }
@@ -1454,5 +1493,55 @@ mod tests {
         );
         // FastVideo's floor is still reported for the parity surface.
         assert_eq!(align_num_frames(H3_FASTVIDEO_MIN_DURATION_S * H3_FPS), 124);
+    }
+    #[test]
+    fn plug_contracts_match_the_released_runners() {
+        use super::super::schedule::H3JointSchedule;
+        let four = H3InferenceContract::named("h3-plug-4step").unwrap();
+        assert_eq!(four, H3InferenceContract::plug_h3_4step());
+        // infer_student_4step.py: num_inference_steps=5 -> 4 forwards, shifts 12 / 3.
+        assert_eq!(
+            (four.num_inference_steps, four.transformer_forwards),
+            (5, 4)
+        );
+        assert_eq!(
+            (four.video_scheduler_shift, four.audio_scheduler_shift),
+            (12.0, 3.0)
+        );
+        assert_eq!(four.guidance_scale, 1.0);
+        assert_eq!(four.sigma_source, H3SigmaSource::Uniform);
+        assert!(four.dense && four.vsa_sparsity == 0.0);
+        assert!(four.fresh_noise);
+        // The grid is Sol-H3's (the same published four-forward grid); only the
+        // transition differs.
+        let sol = H3InferenceContract::sol_h3();
+        assert!(!sol.fresh_noise);
+        assert_eq!(
+            H3InferenceContract {
+                fresh_noise: false,
+                ..four.clone()
+            },
+            sol
+        );
+        let s = H3JointSchedule::from_contract(&four).unwrap();
+        assert!(s.fresh_noise);
+        assert_eq!(s.num_steps(), 4);
+        assert_eq!(*s.video.sigmas.last().unwrap(), 0.0);
+
+        let cfg = H3InferenceContract::named("h3-plug-cfg").unwrap();
+        assert_eq!(cfg, H3InferenceContract::base(50));
+        assert_eq!(
+            (cfg.num_inference_steps, cfg.transformer_forwards),
+            (50, 49)
+        );
+        assert_eq!(cfg.guidance_scale, 1.0);
+        assert!(!cfg.fresh_noise);
+        assert!(!H3JointSchedule::from_contract(&cfg).unwrap().fresh_noise);
+        for name in crate::plug::PLUG_RECIPES
+            .iter()
+            .filter(|n| n.starts_with("h3-"))
+        {
+            assert!(H3InferenceContract::named(name).is_ok(), "{name}");
+        }
     }
 }

@@ -1,0 +1,506 @@
+{
+ "h3m-def": {
+  "n": 5,
+  "gen_minus_text_s": [
+   8.87,
+   8.823,
+   8.886
+  ],
+  "total_s": [
+   9.092,
+   9.041,
+   9.111
+  ],
+  "text_s": [
+   0.221,
+   0.206,
+   0.237
+  ],
+  "denoise_s": [
+   6.135,
+   6.106,
+   6.147
+  ],
+  "decode_s": [
+   2.693,
+   2.678,
+   2.703
+  ],
+  "peak_mib_runs2_5": 56012,
+  "peak_mib_all": 56012,
+  "smi_peak_mib": 56013,
+  "load_s": 122.623775712,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 124.0
+  }
+ },
+ "h3m-max": {
+  "n": 5,
+  "gen_minus_text_s": [
+   6.432,
+   6.398,
+   6.445
+  ],
+  "total_s": [
+   6.704,
+   6.642,
+   6.776
+  ],
+  "text_s": [
+   0.284,
+   0.245,
+   0.332
+  ],
+  "denoise_s": [
+   6.136,
+   6.118,
+   6.159
+  ],
+  "decode_s": [
+   0.233,
+   0.219,
+   0.235
+  ],
+  "peak_mib_runs2_5": 53260,
+  "peak_mib_all": 53292,
+  "smi_peak_mib": 53229,
+  "load_s": 124.131551124,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 124.0
+  }
+ },
+ "h3t-def": {
+  "n": 5,
+  "gen_minus_text_s": [
+   9.841,
+   9.745,
+   9.854
+  ],
+  "total_s": [
+   10.075,
+   10.002,
+   10.096
+  ],
+  "text_s": [
+   0.235,
+   0.229,
+   0.257
+  ],
+  "denoise_s": [
+   7.069,
+   6.989,
+   7.084
+  ],
+  "decode_s": [
+   2.713,
+   2.701,
+   2.724
+  ],
+  "peak_mib_runs2_5": 61380,
+  "peak_mib_all": 61700,
+  "smi_peak_mib": 61701,
+  "load_s": 138.802802884,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 124.0
+  }
+ },
+ "h3t-max/tae-fp8attn": {
+  "n": 5,
+  "gen_minus_text_s": [
+   7.085,
+   7.083,
+   7.089
+  ],
+  "total_s": [
+   7.328,
+   7.31,
+   7.333
+  ],
+  "text_s": [
+   0.245,
+   0.221,
+   0.247
+  ],
+  "denoise_s": [
+   6.777,
+   6.768,
+   6.787
+  ],
+  "decode_s": [
+   0.244,
+   0.239,
+   0.245
+  ],
+  "peak_mib_runs2_5": 58692,
+  "peak_mib_all": 58692,
+  "smi_peak_mib": 58949,
+  "load_s": 117.403294581,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 124.0
+  }
+ },
+ "h3t-max/tae": {
+  "n": 5,
+  "gen_minus_text_s": [
+   7.352,
+   7.328,
+   7.371
+  ],
+  "total_s": [
+   7.596,
+   7.559,
+   7.673
+  ],
+  "text_s": [
+   0.257,
+   0.231,
+   0.301
+  ],
+  "denoise_s": [
+   7.043,
+   7.018,
+   7.058
+  ],
+  "decode_s": [
+   0.242,
+   0.232,
+   0.243
+  ],
+  "peak_mib_runs2_5": 58948,
+  "peak_mib_all": 58948,
+  "smi_peak_mib": 58949,
+  "load_s": 117.403294581,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 124.0
+  }
+ },
+ "ltx-def": {
+  "n": 5,
+  "gen_minus_text_s": [
+   10.04,
+   9.685,
+   10.084
+  ],
+  "total_s": [
+   10.115,
+   10.001,
+   14.342
+  ],
+  "text_s": [
+   0.042,
+   0.029,
+   4.657
+  ],
+  "denoise_s": [
+   8.527,
+   8.003,
+   8.571
+  ],
+  "decode_s": [
+   1.464,
+   1.448,
+   1.466
+  ],
+  "peak_mib_runs2_5": 44364,
+  "peak_mib_all": 67692,
+  "smi_peak_mib": 67533,
+  "load_s": 66.057859574,
+  "decoder": null,
+  "text_cache": [
+   "miss",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 768.0,
+   "width": 1280.0,
+   "num_frames": 121.0
+  }
+ },
+ "ltx-max": {
+  "n": 5,
+  "gen_minus_text_s": [
+   7.379,
+   7.25,
+   7.498
+  ],
+  "total_s": [
+   7.438,
+   7.344,
+   7.562
+  ],
+  "text_s": [
+   0.063,
+   0.049,
+   0.094
+  ],
+  "denoise_s": [
+   6.922,
+   6.747,
+   7.034
+  ],
+  "decode_s": [
+   0.401,
+   0.397,
+   0.449
+  ],
+  "peak_mib_runs2_5": 35758,
+  "peak_mib_all": 57346,
+  "smi_peak_mib": 57251,
+  "load_s": 54.768825305,
+  "decoder": null,
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 768.0,
+   "width": 1280.0,
+   "num_frames": 121.0
+  }
+ },
+ "w13-def": {
+  "n": 5,
+  "gen_minus_text_s": [
+   4.851,
+   4.848,
+   4.864
+  ],
+  "total_s": [
+   4.852,
+   4.85,
+   4.865
+  ],
+  "text_s": [
+   0.002,
+   0.001,
+   0.002
+  ],
+  "denoise_s": [
+   1.924,
+   1.922,
+   1.93
+  ],
+  "decode_s": [
+   2.914,
+   2.912,
+   2.918
+  ],
+  "peak_mib_runs2_5": 27788,
+  "peak_mib_all": 27788,
+  "smi_peak_mib": 27789,
+  "load_s": 67.551525443,
+  "decoder": "wan-vae",
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 81.0
+  }
+ },
+ "w13-max": {
+  "n": 5,
+  "gen_minus_text_s": [
+   2.261,
+   2.26,
+   2.29
+  ],
+  "total_s": [
+   2.262,
+   2.261,
+   2.292
+  ],
+  "text_s": [
+   0.001,
+   0.001,
+   0.002
+  ],
+  "denoise_s": [
+   1.987,
+   1.986,
+   1.989
+  ],
+  "decode_s": [
+   0.263,
+   0.262,
+   0.266
+  ],
+  "peak_mib_runs2_5": 21964,
+  "peak_mib_all": 21964,
+  "smi_peak_mib": 21965,
+  "load_s": 36.522075157,
+  "decoder": "taehv",
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 81.0
+  }
+ },
+ "w5-def": {
+  "n": 5,
+  "gen_minus_text_s": [
+   7.114,
+   7.103,
+   7.124
+  ],
+  "total_s": [
+   7.115,
+   7.105,
+   7.125
+  ],
+  "text_s": [
+   0.001,
+   0.001,
+   0.002
+  ],
+  "denoise_s": [
+   1.554,
+   1.551,
+   1.56
+  ],
+  "decode_s": [
+   5.544,
+   5.537,
+   5.55
+  ],
+  "peak_mib_runs2_5": 39108,
+  "peak_mib_all": 39108,
+  "smi_peak_mib": 39109,
+  "load_s": 74.424793272,
+  "decoder": "wan-vae",
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 121.0
+  }
+ },
+ "w5-max": {
+  "n": 5,
+  "gen_minus_text_s": [
+   1.489,
+   1.488,
+   2.969
+  ],
+  "total_s": [
+   1.491,
+   1.489,
+   2.97
+  ],
+  "text_s": [
+   0.001,
+   0.001,
+   0.003
+  ],
+  "denoise_s": [
+   1.376,
+   1.376,
+   1.377
+  ],
+  "decode_s": [
+   0.099,
+   0.098,
+   1.58
+  ],
+  "peak_mib_runs2_5": 21956,
+  "peak_mib_all": 21956,
+  "smi_peak_mib": 21957,
+  "load_s": 54.92166587,
+  "decoder": "taehv",
+  "text_cache": [
+   "hit",
+   "hit",
+   "hit",
+   "hit",
+   "hit"
+  ],
+  "workload": {
+   "height": 480.0,
+   "width": 832.0,
+   "num_frames": 121.0
+  }
+ },
+ "sf-def:wan.json": {
+  "context/device/free_mib": 96545,
+  "context/device/total_mib": 97251
+ },
+ "sf-max:wan.json": {
+  "context/device/free_mib": 96545,
+  "context/device/total_mib": 97251
+ }
+}
+

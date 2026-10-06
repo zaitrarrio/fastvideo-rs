@@ -203,7 +203,7 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
       );
     }
     const nk = el("input", { type: "text", placeholder: "NEW_KEY", pattern: keyS?.pattern, "aria-label": "new key" });
-    const dlist = el("datalist", { id: `dl${++uid}` }, ...dynOptions(o.dyn, keyS?.["x-dynamic"] || "env_keys").filter((x) => !(x.value in v)).map((x) => el("option", { value: x.value })));
+    const dlist = el("datalist", { id: `dl${++uid}` }, ...dynOptions(o.dyn, keyS?.["x-dynamic"] || "env_keys").filter((x) => !(x.value in v)).map((x) => el("option", { value: x.value }, x.detail || "")));
     nk.setAttribute("list", dlist.id);
     const add = el("button", { type: "button", onclick: () => { const k = nk.value.trim(); if (!k || k in v) return; change({ ...v, [k]: { value: "", secret: false } }, true); } }, "+ add");
     wrap.append(el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "key"), el("th", {}, "value"), el("th", {}, ""), el("th", {}, ""))), tbody)), el("div", { class: "row" }, nk, dlist, add));

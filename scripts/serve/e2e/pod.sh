@@ -24,6 +24,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
 source "$ROOT/scripts/gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
+source "$ROOT/scripts/gpu/volumes.sh"
+fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only since 2026-10)
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:?FV_E2E_STATE (state file path) missing}"

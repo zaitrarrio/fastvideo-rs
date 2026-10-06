@@ -279,8 +279,15 @@ async fn av_session(realtime: bool) {
     assert_eq!(info["resolutions"], json!(["480p", "768p"]));
     assert_eq!(info["audio_sample_rate"], 48_000);
     assert_eq!(info["continuation_context_frames"], 1);
+    assert_eq!((info["default_chunk_duration"].as_u64(), info["chunk_seconds"].as_u64()), (Some(5), Some(5)));
+    assert_eq!(info["chunk_duration_options"], json!([5, 10]));
+    assert_eq!(info["chunk_duration_frames"], json!({"5": 124, "10": 243}));
 
     // Strict schemas and ordering rules.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "chunk_duration": 7})).await;
+    let e = c.expect("error").await;
+    assert_eq!(e["code"], "invalid_message");
+    assert!(e["error"].as_str().unwrap().contains("chunk_duration"), "{e}");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "bogus": 1})).await;
     let e = c.expect("error").await;
     assert_eq!((e["code"].as_str(), e["prompt_version"].as_u64()), (Some("invalid_message"), Some(1)));
@@ -295,6 +302,7 @@ async fn av_session(realtime: bool) {
     assert_eq!(cfgd["resolution"], "480p");
     assert_eq!(cfgd["has_initial_audio"], false);
     assert_eq!(cfgd["enable_safety_checker"], false);
+    assert_eq!(cfgd["chunk_duration"], 5, "the default chunk");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "again"})).await;
     assert_eq!(c.expect("error").await["code"], "immutable_settings");
 
@@ -387,9 +395,11 @@ async fn video_only(realtime: bool) {
     let audio = a.media.iter().find(|m| m.kind() == MediaKind::Audio).unwrap();
     assert_eq!(audio.direction(), Direction::Inactive, "{}", c.answer);
     c.expect("session_info").await;
-    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p"})).await;
-    c.expect("configured").await;
-    c.expect("chunk").await;
+    // A 10 s session: 243 frames on H3's 17n+5 grid.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p", "chunk_duration": 10})).await;
+    assert_eq!(c.expect("configured").await["chunk_duration"], 10);
+    let ch0 = c.expect("chunk").await;
+    assert_eq!((ch0["generated_frame_count"].as_u64(), ch0["requested_duration_seconds"].as_f64()), (Some(243), Some(10.0)), "{ch0}");
     c.first_video().await;
     if realtime {
         let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
@@ -632,6 +642,164 @@ async fn late_chunks(realtime: bool) {
     c.assert_rtp_grids();
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
+}
+
+/// The `chunk` messages until one satisfies `done` (other messages are
+/// collected too, by type).
+async fn chunks_until(c: &mut Client, mut done: impl FnMut(&Value) -> bool) -> (Vec<Value>, Vec<Value>) {
+    let deadline = tokio::time::Instant::now() + T;
+    let (mut chunks, mut others) = (Vec::new(), Vec::new());
+    loop {
+        let m = tokio::time::timeout_at(deadline, c.msgs.recv()).await.expect("timed out").expect("closed");
+        if m["type"] == "error" {
+            panic!("unexpected error: {m}");
+        }
+        if m["type"] == "chunk" {
+            let stop = done(&m);
+            chunks.push(m);
+            if stop {
+                return (chunks, others);
+            }
+        } else {
+            others.push(m);
+        }
+    }
+}
+
+/// A causal model (fake LongLive) streams one continuous rollout: chunks of
+/// 4 blocks (48 frames) at 16 fps, video only; a prompt update reaches the
+/// engine once and is applied at the next block with one KV re-cache;
+/// end images are refused; no underruns or late chunks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn causal_session_streams_and_recaches_once_per_switch() {
+    let Some(h264) = h264_or_skip() else { return };
+    let f = fixture(Opts { h264, ..Opts::default() }).await;
+    let mut c = open(&f, "fastvideo/longlive/director").await;
+    let a = Sdp::parse(&c.answer).unwrap();
+    let audio = a.media.iter().find(|m| m.kind() == MediaKind::Audio).unwrap();
+    assert_eq!(audio.direction(), Direction::Inactive, "video only: {}", c.answer);
+
+    let info = c.expect("session_info").await;
+    assert_eq!(info["app"], "fastvideo-longlive-director");
+    assert_eq!(info["fps"], 16);
+    assert_eq!(info["resolutions"], json!(["480p"]));
+    assert_eq!(info["aspect_ratios"], json!(["16:9"]));
+    assert_eq!(info["chunk_seconds"], 3);
+    assert_eq!(info["continuation_context_frames"], 48, "the KV window (12 latent frames)");
+    assert_eq!(info["causal"]["prompt_switch"], "recache");
+    assert_eq!(info["causal"]["block_frames"], 12);
+    assert!(info.get("chunk_duration_options").is_none(), "no chunk length to choose: {info}");
+
+    // `chunk_duration` is ignored: the director chunk stays 4 blocks (3 s).
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "seed": 7, "chunk_duration": 10})).await;
+    let cfgd = c.expect("configured").await;
+    assert_eq!(cfgd["chunk_duration"], 3);
+    assert_eq!((cfgd["resolution"].as_str(), cfgd["aspect_ratio"].as_str()), (Some("480p"), Some("16:9")));
+    let (chunks, _) = chunks_until(&mut c, |m| m["chunk_index"] == 1).await;
+    for (i, ch) in chunks.iter().enumerate() {
+        assert_eq!(ch["chunk_index"], i as u64);
+        assert_eq!(ch["prompt_version"], 1);
+        assert_eq!((ch["generated_frame_count"].as_u64(), ch["presented_frame_count"].as_u64()), (Some(48), Some(48)), "{ch}");
+        assert_eq!(ch["trimmed_context_frames"], 0);
+        assert_eq!(ch["playback_seconds"], 3.0);
+        assert_eq!(ch["causal"]["blocks"], 4);
+        assert_eq!(ch["causal"]["recaches"], 0);
+        assert!(ch["causal"]["generation_fps"].as_f64().unwrap() > 16.0, "faster than real time: {ch}");
+    }
+    c.first_video().await;
+    let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
+    eprintln!("causal: {fps:.2} fps (rtp {rtp_fps:.2})");
+    assert!((fps - 16.0).abs() < 1.6, "video arrives at {fps} fps");
+    assert!((rtp_fps - 16.0).abs() < 0.01, "{rtp_fps}");
+    assert!(c.media.lock().unwrap().audio.is_empty());
+    // Paced: the rollout stays about `causal_lead_seconds` (2 s) ahead.
+    let last = chunks.last().unwrap();
+    assert!(last["buffer_depth_seconds"].as_f64().unwrap() < 4.5, "{last}");
+
+    // A direction change: one prompt to the engine, applied at the next
+    // block, with one re-cache.
+    let before = f.engine_prompts.lock().unwrap().len();
+    assert_eq!(f.engine_prompts.lock().unwrap()[0], "A lighthouse at dusk");
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "The storm arrives"})).await;
+    assert_eq!(c.expect("prompt_pending").await["prompt_version"], 2);
+    let (chunks, others) = chunks_until(&mut c, |m| m["prompt_version"] == 2).await;
+    assert!(others.iter().any(|m| m["type"] == "prompt_applied" && m["prompt_version"] == 2), "{others:?}");
+    let (more, _) = chunks_until(&mut c, |_| true).await;
+    let recaches: u64 = chunks.iter().chain(&more).map(|m| m["causal"]["recaches"].as_u64().unwrap()).sum();
+    assert_eq!(recaches, 1, "one re-cache per switch: {chunks:?} {more:?}");
+    {
+        let p = f.engine_prompts.lock().unwrap();
+        assert_eq!(p.len(), before + 1, "{p:?}");
+        assert_eq!(p.last().unwrap(), "A lighthouse at dusk The storm arrives");
+    }
+    // Text only: end images are refused, the session goes on.
+    c.send(json!({"type": "prompt", "prompt_version": 3, "end_image_url": "https://example.com/e.png"})).await;
+    let rej = c.expect("prompt_rejected").await;
+    assert_eq!((rej["prompt_version"].as_u64(), rej["reason"].as_str()), (Some(3), Some("invalid_image")));
+
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+    let fm = c.expect("session_metrics").await;
+    assert_eq!(fm["final"], true);
+    assert_eq!(fm["gauges"]["underruns"], 0, "{fm}");
+    assert_eq!(fm["causal"]["recaches"], 1, "{fm}");
+    let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
+    assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Stopped))), "{st:?}");
+    // The causal lease is released: a clip session is admitted next.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut c2 = open(&f, "minimax/h3-max/director").await;
+    c2.expect("session_info").await;
+}
+
+/// Causal refusals end the session with clear codes (image conditioning);
+/// a causal model without re-cache (fake SF-Wan) keeps its cache.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn causal_refusals_and_keep_policy() {
+    let Some(h264) = h264_or_skip() else { return };
+    let f = fixture(Opts { h264, ..Opts::default() }).await;
+    let mut c = open(&f, "fastvideo/longlive/director").await;
+    c.expect("session_info").await;
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "image_url": "https://example.com/a.png"})).await;
+    let e = c.expect("error").await;
+    assert_eq!(e["code"], "invalid_initial_image");
+    assert!(e["error"].as_str().unwrap().contains("text-to-video only"), "{e}");
+    let st = wait_closed(&f, &c.session_id, Duration::from_secs(5)).await;
+    assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Error(_)))), "{st:?}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut c = open(&f, "fastvideo/fake-sfwan/director").await;
+    let info = c.expect("session_info").await;
+    assert_eq!(info["causal"]["prompt_switch"], "unknown");
+    assert_eq!(info["continuation_context_frames"], 12);
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "a river"})).await;
+    c.expect("configured").await;
+    c.expect("chunk").await;
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "at night"})).await;
+    let (chunks, _) = chunks_until(&mut c, |m| m["prompt_version"] == 2).await;
+    assert!(chunks.iter().all(|m| m["causal"]["recaches"] == 0), "{chunks:?}");
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// The catalog marks causal directors and the LongLive licence; the form
+/// offers 480p and 16:9 only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn causal_catalog_and_form() {
+    let f = fixture(Opts::default()).await;
+    let r = send(&f.app, req("GET", "/fal/schema", None, None)).await;
+    let cat = r.json();
+    let app = cat["apps"].as_array().unwrap().iter().find(|a| a["id"] == "fastvideo/longlive").unwrap().clone();
+    assert_eq!((app["director"].as_bool(), app["director_mode"].as_str()), (Some(true), Some("causal")), "{app}");
+    assert!(app["licence"].as_str().unwrap().contains("non-commercial"), "{app}");
+    let h3 = cat["apps"].as_array().unwrap().iter().find(|a| a["id"] == "minimax/h3-max").unwrap().clone();
+    assert_eq!(h3["director"], true);
+    assert!(h3.get("director_mode").is_none());
+    let form = send(&f.app, req("GET", "/fal/schema/fastvideo/longlive/director", None, None)).await.json();
+    assert_eq!(form["properties"]["resolution"]["enum"], json!(["480p"]));
+    assert_eq!(form["properties"]["resolution"]["default"], "480p");
+    assert_eq!(form["properties"]["aspect_ratio"]["enum"], json!(["auto", "16:9"]));
+    assert!(form["properties"].get("chunk_duration").is_none(), "a causal model has no chunk length: {form}");
+    assert!(form["x-fv-licence"].as_str().unwrap().contains("non-commercial"), "{form}");
 }
 
 /// `oneshot` returning the raw response (streaming body).

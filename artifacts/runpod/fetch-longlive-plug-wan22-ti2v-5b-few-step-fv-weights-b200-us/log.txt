@@ -1,0 +1,15 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+01:50:30 HF token: /workspace/hf/token
+01:50:31 Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step@38a6ec4e8f5b644749d3072bfe1ac383d00951c0: 7 files, 1289840234 bytes -> /workspace/weights/longlive-plug/.wan22-ti2v-5b-few-step.partial-20261002015030
+01:50:40 downloaded in 9 s; verifying
+01:50:40 ok README.md 699 fe4fd534d5dcfee2
+01:50:40 ok adapter_config.json 9349 d4cd3c2f82deaca2
+01:50:42 ok adapter_model.safetensors 1289824400 69807b3bdfc4d9d1 lfs
+01:50:42 ok inference_config.yaml 586 c30da5b067460807
+01:50:42 ok load_generator_lora.py 706 1457345b422e96c0
+01:50:42 ok provenance.json 2641 386b9b17431e996e
+01:50:42 ok training_config.yaml 1853 8c08a336f3ba7dea
+01:50:42 renamed to /workspace/weights/longlive-plug/wan22-ti2v-5b-few-step; 1289840234 bytes in 12 s

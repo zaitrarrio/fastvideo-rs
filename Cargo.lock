@@ -1219,8 +1219,10 @@ dependencies = [
 name = "fastvideo-dispatch-proto"
 version = "0.1.0"
 dependencies = [
+ "hmac",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1228,6 +1230,7 @@ name = "fastvideo-edge"
 version = "0.1.0"
 dependencies = [
  "fastvideo-dispatch-proto",
+ "futures",
  "js-sys",
  "serde",
  "serde_json",

@@ -231,6 +231,7 @@ fn caps_round_trip() {
         stream: Some(StreamCaps::Causal {
             block_frames: 12,
             target_fps: 16,
+            context: None,
         }),
         ..fastwan()
     };
@@ -238,6 +239,23 @@ fn caps_round_trip() {
     assert_eq!(
         j["stream"],
         json!({"causal": {"block_frames": 12, "target_fps": 16}})
+    );
+    let c = ModelCaps {
+        stream: Some(StreamCaps::Causal {
+            block_frames: 12,
+            target_fps: 16,
+            context: Some(fastvideo_protocol::CausalContext {
+                window_latent_frames: 12,
+                sink_latent_frames: 3,
+                prompt_recache: true,
+            }),
+        }),
+        ..fastwan()
+    };
+    let j = round_trip(&c);
+    assert_eq!(
+        j["stream"]["causal"]["context"],
+        json!({"window_latent_frames": 12, "sink_latent_frames": 3, "prompt_recache": true})
     );
 }
 

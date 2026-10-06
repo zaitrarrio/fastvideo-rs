@@ -185,8 +185,9 @@ mod native_do {
                 Out::Close { worker } => {
                     g.conns.remove(&(pool.to_owned(), worker));
                 }
-                // No spill here (only the Worker has an R2 bucket).
-                Out::PushSpilled { .. } => {}
+                // No spill here (only the Worker has an R2 bucket); no
+                // protocol-2 effects (tests/edge_family.rs has those).
+                _ => {}
             }
         }
         if let Some(s) = g.scheds.get_mut(pool) {

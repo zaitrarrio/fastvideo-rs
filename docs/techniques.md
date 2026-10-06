@@ -546,9 +546,79 @@ SageAttention uses) with per-warp Q scales in the same kernels, and then the
 end-to-end gate. A 1.19x faster dense kernel would save at most about 10% of
 the Sol-H3 dense denoise.
 
+Follow-up (2026-10-01, docs/perf/sage-attention.md): SageAttention2's INT8
+`Q K^T` with FP8 `P V` passes this tolerance on peaked, outlier and real
+FastWan inputs (worst rel-L2 0.044 / 0.021) at 1.5-1.8x over fwd2 on RTX PRO
+6000 at >= 7k tokens. It is ported as `wan::attn_sage`
+(`FASTVIDEO_ATTN_SAGE=2`, branch `wip/sage-attn`). End to end (Phase 3) it
+saves 1.33x of the Sol-H3 dense denoise and 1.13x of h3-max's, but fails the
+H3 five-prompt gate on one prompt per recipe, as does a bf16-only control
+(the gate is at H3's noise floor); it passes on LTX dense stage 2 at 1080p
+(1.15x). SageAttention3 (NVFP4) fails the tolerance (rel-L2 0.19-0.36).
+
+Phase 4 (2026-10-02, docs/perf/sage-attention.md section 8): the port is
+merged on main and is default-off. `FASTVIDEO_ATTN_SAGE` is now an override
+(`2` on everywhere, `0` off everywhere). When it is unset, a recipe may opt
+in per request (`attn_sage::recipe_scope`), on sm_120 only. Only `ltx-pro`
+(`ltx25-distill-dense`, `Ltx2Recipe::sage_attention`) does. A calibrated H3
+gate (3 seeds x 5 prompts, judged against two pinned bf16 control arms)
+fails both H3 recipes, so H3 stays bf16.
+
 Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
 for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
+
+## LongLive-Plug recipes
+
+NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base
+weights at load. They are recipes, not techniques: each one fixes a base
+checkpoint, its adapters with their merge weights, and the sampler that the
+adapters were distilled for. `fastvideo_models::plug::PlugRecipe` is the
+catalog.
+
+**Serving:** `wan14b-plug-4step` is in the serve catalog (owner decision,
+2026-10-02) as the Wan 2.1 T2V-14B fast tier, public name `wan14b-turbo`.
+It runs at 832x480 / 480x832, up to 81 frames at 16 fps, text-to-video only,
+and is not in the `wan-*` tier slots (see docs/serve/fal-parity.md §3). The
+other three recipes stay opt-in (`fv-gpucheck` only).
+
+| recipe | base | adapters (merge weight, rank / alpha) | sampler | licence |
+|---|---|---|---|---|
+| `h3-plug-4step` | `h3-base` (MiniMax-H3) | `longlive-plug/minimax-h3-few-step/generator_lora.pt` (1.0, 128 / 128) | `set_timesteps(5)`: 4 forwards, shifts 12 / 3, dense, predict-x0 then *fresh* re-noise, no CFG | MiniMax H3 Community |
+| `h3-plug-cfg` | `h3-base` | `longlive-plug/minimax-h3-cfg/adapter_model.safetensors` (1.0, 128 / 128) | base grid: 50 points, 49 forwards, shifts 12 / 3, Euler, positive pass only | MiniMax H3 Community |
+| `wan5b-plug-4step` | `wan22-ti2v-5b` | `wan22-ti2v-5b-few-step` (1.0, 128 / 128) + `wan22-ti2v-5b-cfg` (0.5, 64 / 64) | UniPC, 4 steps, shift 5, guidance 1.0 | Apache-2.0 |
+| `wan14b-plug-4step` | `wan21-t2v-14b` | `wan21-t2v-14b-few-step` lightx2v export (1.0, 128 / 128) + `wan21-t2v-14b-cfg` (0.5, 128 / 128) | LightX2V step-distill Euler: `[1000, 750, 500, 250]` warped with shift 5 (1000 / 937.5 / 833.3 / 625), guidance 1.0 | Apache-2.0 |
+
+The merge rule is `W + Σ weight · alpha / rank · B @ A`, accumulated in f32
+and stored in the base dtype. The H3 adapters are used one at a time, as
+both H3 cards ask. The loader reads PEFT safetensors (it strips the
+`base_model.model.` prefix), the lightx2v export (bare original-Wan names),
+and the `.pt` release (`fastvideo_loader::pth`, tensors under
+`student_lora`). Alpha comes from `adapter_config.json`, else from the file
+metadata, else alpha equals the rank. Every load logs, per adapter, how many
+modules matched and how many were skipped or unknown. Any skipped module or
+unknown key fails the load.
+
+How to run them:
+
+```bash
+fv-gpucheck --mode fast h3 gen --weights $W/h3-base --h3-recipe h3-plug-4step --dense ...
+fv-gpucheck --mode fast wan gen --weights $W/wan22-ti2v-5b --preset wan_2_2_ti2v_5b --plug wan5b-plug-4step ...
+fv-gpucheck --mode fast wan gen --weights $W/wan21-t2v-14b --preset wan_t2v_14b --plug wan14b-plug-4step ...
+```
+
+The adapters resolve under `$FASTVIDEO_PLUG_ROOT`, else under
+`<weights>/../longlive-plug/`. Results, verdicts and the catalog proposal:
+docs/serve/research-longlive.md §12.
+
+In fv-serve, a Wan catalog recipe names its Plug recipe
+(`WanRecipe::plug`). The CUDA backend merges the adapters into the
+transformer on the host at load, through the same
+`wan::plug::load_merged_transformer` that `fv-gpucheck` uses, and installs
+the sampler (`WanSampler::StepDistill` → `WanPipeline::set_step_distill`).
+Steps, shift and guidance are then fixed: the model's caps offer only `seed`.
+Serve it with `configs/serve/runpod-wan14b.toml`, or with a `[[models]]` entry
+`recipe = "wan14b-turbo"` whose `weights` are the `wan21-t2v-14b` tree.
 
 ## Adding a technique
 

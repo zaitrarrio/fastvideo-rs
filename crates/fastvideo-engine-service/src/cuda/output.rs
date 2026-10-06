@@ -51,6 +51,8 @@ pub(crate) fn wants_audio(job: &ResolvedJob) -> bool {
 pub(crate) struct Mp4Options {
     pub encoder: FfmpegH264,
     pub quality: u8,
+    /// Fragmented, append-only MP4 (uploaded while written).
+    pub fragmented: bool,
     /// Also write the pipelines' `frame-NNN.png` into the work directory
     /// (identity checks against the CLI).
     pub keep_frames: bool,
@@ -99,6 +101,7 @@ struct Delivery<'c> {
     mp4_path: Option<PathBuf>,
     encoder: FfmpegH264,
     quality: u8,
+    fragmented: bool,
     writer: Option<Mp4Writer>,
     pcm: Option<Pcm>,
     frames: Vec<RgbFrame>,
@@ -135,6 +138,7 @@ impl Delivery<'_> {
             let spec = Mp4Spec {
                 quality: self.quality,
                 encoder: self.encoder,
+                fragmented: self.fragmented,
                 ..Mp4Spec::new(self.out_size.0, self.out_size.1, self.fps, target)
             };
             self.writer = Some(Mp4Writer::create(&path, spec, audio).map_err(sink_err)?);
@@ -303,6 +307,7 @@ pub(crate) fn deliver(
         mp4_path,
         encoder: opts.encoder,
         quality: opts.quality,
+        fragmented: opts.fragmented,
         writer: None,
         pcm: None,
         frames: Vec::new(),
@@ -417,6 +422,7 @@ mod tests {
             mp4_path: None,
             encoder: FfmpegH264::Nvenc,
             quality: 19,
+            fragmented: false,
             writer: None,
             pcm: None,
             frames: Vec::new(),
@@ -459,6 +465,7 @@ mod tests {
             mp4_path: Some(dir.join("output.mp4")),
             encoder: FfmpegH264::Libx264CpuTest,
             quality: 19,
+            fragmented: false,
             writer: None,
             pcm: None,
             frames: Vec::new(),

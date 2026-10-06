@@ -134,6 +134,20 @@ front-end: 120 s of video by default, up to 300 s on request, a `reset`
 restarting the clock within the 300 s ceiling (`docs/serve/design.md`
 §5.2).
 
+### LongLive-1.3B on the causal engine (opt-in, 2026-10-02, RTX PRO 6000)
+
+Raw rollouts (`fv-gpucheck --mode fast wan stream`, 832x480, CUDA graphs, TAEHV
+each block), not through fv-serve. Details: `docs/serve/research-longlive.md` §11.
+Artifacts: `artifacts/perf/longlive-gpucheck/`.
+
+| Metric | SF-Wan default (window 21, sink 15, rebased) | LongLive-1.3B (window 12, sink 3, absolute; `FV_LONGLIVE_WEIGHTS`) |
+|---|---|---|
+| Steady fps, 60 s | 14.80 (block p50 0.795 s) | **20.40** (block p50 0.573 s); 240 s: 20.34 |
+| KV / device memory | 9871 MiB / 33.2 GB | 3290 MiB / 26.4 GB |
+| Prompt switch | no re-cache | KV re-cache **0.39 s** once per switch (block 0.97 s), p90 unchanged; graph = eager bit for bit |
+| Long run | top-band artefacts by 30-45 s with the old 1-block sink (R12) | 240 s single prompt: no banding, memory flat |
+
+
 ## Bugs
 
 1. **SF-Wan served with the relativistic RoPE policy** (`cuda/backend.rs`

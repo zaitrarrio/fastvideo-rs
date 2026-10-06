@@ -336,20 +336,9 @@ pub fn plan(p: &PlanInput<'_>) -> AvatarPlan {
 }
 
 /// Centre-crops an RGB24 frame to `(w, h)` (no-op when it already is, or is
-/// smaller).
+/// smaller): [`RgbFrame::crop_center`].
 pub fn crop_center(f: &RgbFrame, w: u32, h: u32) -> RgbFrame {
-    if (f.width, f.height) == (w, h) || w > f.width || h > f.height {
-        return f.clone();
-    }
-    let x0 = ((f.width - w) / 2) as usize;
-    let y0 = ((f.height - h) / 2) as usize;
-    let stride = f.width as usize * 3;
-    let mut out = Vec::with_capacity(w as usize * h as usize * 3);
-    for y in 0..h as usize {
-        let row = (y0 + y) * stride + x0 * 3;
-        out.extend_from_slice(&f.data[row..row + w as usize * 3]);
-    }
-    RgbFrame { width: w, height: h, data: out.into(), index: f.index }
+    f.crop_center(w, h)
 }
 
 /// Player settings.

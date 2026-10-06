@@ -1,0 +1,172 @@
+# Per-file hashes of weight trees, recorded in this repo at fetch time (not guessed).
+# dest<TAB>path in the tree<TAB>bytes ("-" = not recorded)<TAB>algo:hex
+# Checked by `verify-weights.sh sha:<dest>` (reads every listed file). EU only since 2026-10-06: the
+# US volume (s2k01690bi) was deleted; its recorded US|EU alternatives are kept for a rebuilt US volume
+# (docs/ops/runpod-volumes.md). Sources:
+#   h3-ref2va          artifacts/runpod/fetch-h3-ref2va/{s2k01690bi,jg48s6o1w0}/sha256.txt (US = EU; Hub LFS SHA-256 at the pinned revisions)
+#   fastwan22-ti2v-5b  artifacts/runpod/fetch-fastwan22-ti2v-5b-fv-weights-*/{sha256.txt,log.txt} (US = EU)
+#   ltx25-ic-lora-ingredients  docs/ports/ltx-ref2v.md (Hub LFS oid; both volumes)
+#   mmaudio-44k-v2     the md5s scripts/gpu/fetch-mmaudio.py pins (MMAudio download_utils.py); the
+#                      converted safetensors/ files have no recorded hash
+#   longlive-1.3b, longlive2-5b*, longlive-plug/*  artifacts/runpod/fetch-<dest with / as ->-fv-weights-*/sha256.txt
+#                      (fetch-hub-tree.py: every file = Hub LFS SHA-256 / git blob at the pinned revision; US = EU,
+#                      the US copy checked against the EU list). Bytes from the Hub listing.
+#   longlive-1.3b-safetensors  artifacts/runpod/convert-longlive-1.3b-fv-weights-*/sha256.txt (convert-longlive.py).
+#                      longlive_base.safetensors is listed as US|EU: the two files differ only in the order of the
+#                      two __metadata__ entries in the header; tensor table and data are identical (2026-10-02).
+# Trees with hashes elsewhere: auxiliary/ (weights-manifest.tsv, cell aux), auxiliary/upscalers/
+# (cell upscalers), */text_encoder_fp8 (cell text-fp8), the upscaler file (cell sol-h3-spark).
+h3-ref2va	LICENSE	17604	sha256:59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44
+h3-ref2va	README.md	38406	sha256:f0116a90332496bdfcc827320c603a26b849c73bf804f2674d03682fbbd2334a
+h3-ref2va	model_index.json	2936	sha256:5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2
+h3-ref2va	processor/chat_template.json	5499	sha256:5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce
+h3-ref2va	processor/merges.txt	1671839	sha256:599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3
+h3-ref2va	processor/preprocessor_config.json	390	sha256:27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+h3-ref2va	processor/tokenizer.json	7032403	sha256:a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7
+h3-ref2va	processor/tokenizer_config.json	11003	sha256:a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68
+h3-ref2va	processor/video_preprocessor_config.json	385	sha256:7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13
+h3-ref2va	processor/vocab.json	2776833	sha256:ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910
+h3-ref2va	transformer_ref/config.json	546	sha256:74c11bff524336576096993cbfcdcdc2ef4fa2fa4409df693bdcbc6c666282ae
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors	4825958704	sha256:7a3fcad885f51560e550b2e84c9a8d8b35e62996cfd9076937e992bd23478df9
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors	4702158032	sha256:1638ae1dc8ae26c4ba43ad28a6d851ad8983847324bb2b468719c7c81f219706
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors	4933368192	sha256:1ef3c4954ffe5a664c2e3028e2a3241190d9c159dce6ba1136002c6af1db5353
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors	4567069608	sha256:12d92f2975cfd5c5b786126385c52e5bf64884d4b4d6e60c3ef5d857c3f7469f
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors	4702158080	sha256:304d41ce03d59ac94bceb055935bf4e034df0badf8b0df4ded327c08a288a4cc
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors	4933368232	sha256:12a134b7c76d86edbe8fa2dc315f6cdaf4e1aca1b6ea4dfe4cad92df03d42eeb
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors	4567069608	sha256:b96395261359937c00fb42f4eb29306dc59b1a3368eeba52af4fb66e3e142c69
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors	4702158080	sha256:1897a6bf3b4fc834bb82d73ca02a7afc7d38c07f50ec5382cd54cd2f91b604d1
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors	4933368232	sha256:edfb38235adc96b99f55a401849befce59075a745e99c2d8c63ff358dd36443d
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors	4567069608	sha256:f8710775cf3413670edd7e23861b650a3431a71a6cc14cb1080623ab6b052385
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors	4702158080	sha256:9e18acc09f84edb5b34df9628efa15cfcab8bb76e8e20c1c2e979a107a0f7215
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors	4933368232	sha256:ea2e18228f8bdba1a4e0f32b155e4586df055997c45356213d05b971ba13e2f4
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors	4567069608	sha256:1e12083b1875678f7414ff55b09cd8bb1c30b861243f9bb7ff1e75b6ad3f1bdc
+h3-ref2va	transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors	4644161920	sha256:b340f44b5690cc745d48ae399381ec15b26a4fe25d483f677ccb4960dadb50d4
+h3-ref2va	transformer_ref/diffusion_pytorch_model.safetensors.index.json	64488	sha256:ac30a3b58963f2e735d493475fbb81853a5735ec947619648b3e045acda6783e
+h3-ref2va	Minimax-h3-Turbo/README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-ref2va	Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors	1383677768	sha256:9e642fc8749c74f8da5e2382877ab5c7aa37b9a73b7fd0d6d457bd1b3cb1ae99
+h3-ref2va	Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors	1383677808	sha256:9bac880b1a5d7ac052171cf6cce769f0cceaaa42ffa51de4b8e41143a2bdd2d2
+fastwan22-ti2v-5b	model_index.json	502	sha256:a43fbeeb223895748ee9b266f52c0272ad31e6be3eb664d22dfc097015134ab9
+fastwan22-ti2v-5b	scheduler/scheduler_config.json	820	sha256:571a3eed68bcd943a61b9fea8efa9e141472216ada59f928c8b5128ce24b32e0
+fastwan22-ti2v-5b	text_encoder/config.json	855	sha256:a2bcb24699f6c009a2427432bdd483ef8b2b42a712abc9503759cdc77d171f07
+fastwan22-ti2v-5b	text_encoder/model-00001-of-00003.safetensors	4935812536	sha256:a8e861969c7433e707cc5a74065d795d36cca07ec96eb6763eb4083df7248f58
+fastwan22-ti2v-5b	text_encoder/model-00002-of-00003.safetensors	4983103192	sha256:d57d948ece4837d850b7a859a4415121d57cacf8b9ee1d4db200c67f592902d7
+fastwan22-ti2v-5b	text_encoder/model-00003-of-00003.safetensors	1442935480	sha256:0da9ee284e21d1406df708788db1d502d95d75f69faa25cd26151bf8829b7c5f
+fastwan22-ti2v-5b	text_encoder/model.safetensors.index.json	22476	sha256:31c4c7bcce679eaa0dd4667462394ddb013dc2f748e0bffc893dc9146a320dab
+fastwan22-ti2v-5b	tokenizer/special_tokens_map.json	7079	sha256:456b58fd240a06c743a7c2cf8008bec501240d68ebd1fc4018ea569505fea270
+fastwan22-ti2v-5b	tokenizer/spiece.model	4548313	sha256:e3909a67b780650b35cf529ac782ad2b6b26e6d1f849d3fbb6a872905f452458
+fastwan22-ti2v-5b	tokenizer/tokenizer.json	16837459	sha256:20a46ac256746594ed7e1e3ef733b83fbc5a6f0922aa7480eda961743de080ef
+fastwan22-ti2v-5b	tokenizer/tokenizer_config.json	61758	sha256:1d8d2a216bf8e70ac15b7ddcea566c4dd0433c024b39a58ca5e4c66bd78defbd
+fastwan22-ti2v-5b	transformer/config.json	503	sha256:9ffd02a1f215985805f12ee409dd3deb5fbc2a812ffa555e6027f71d9764ee5d
+fastwan22-ti2v-5b	transformer/diffusion_pytorch_model.safetensors	9999660080	sha256:a1cf4acd5d0242ca0cad68e115064f4ac7e748686c9cf0da050ce87decc6b9bf
+fastwan22-ti2v-5b	vae/config.json	1701	sha256:d996c340fe9a7df5d7371f76a7d8d6956f6c98256080074d8434fa5eeac11360
+fastwan22-ti2v-5b	vae/diffusion_pytorch_model.safetensors	2818777808	sha256:62cd18f19438e35b32ac63020e2852f566e9b02f46b6cdbd87972a356e3c6f4b
+ltx25-ic-lora-ingredients	ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors	1308787472	sha256:ff873a5beada3c579a8137c7c53343916f78bcc9a529ba910143073fe8715e95
+mmaudio-44k-v2	weights/mmaudio_large_44k_v2.pth	-	md5:01ad4464f049b2d7efdaa4c1a59b8dfe
+mmaudio-44k-v2	ext_weights/v1-44.pth	-	md5:fab020275fa44c6589820ce025191600
+mmaudio-44k-v2	ext_weights/synchformer_state_dict.pth	-	md5:5b2f5594b0730f70e41e549b7c94390c
+longlive-1.3b	README.md	7971	sha256:d635a09de9955a77a98858c2e4290da8de898871044a7b381f0edd3458270cc7
+longlive-1.3b	models/longlive_base.pt	5676334208	sha256:10a2aa8fcf89c77d9033f4c117405412a690e289625766619d293f0c5a208ee7
+longlive-1.3b	models/lora.pt	2800056690	sha256:c4e43b87d62d4b0614b496773639f1ab170a7ee486dc23407901e9d3a5ebc07a
+longlive-1.3b	prompts/interactive_example.jsonl	3429	sha256:045910f61158968f92d6ba424741bfcb0bddfe7afce8e12dcf66048e588b3da0
+longlive2-5b	README.md	5667	sha256:05908a73f89611adf60946b1393988801848e472136c2bb85bf2978f80d4717c
+longlive2-5b	model_bf16.pt	9999853030	sha256:ec9063a44ea3c91e8ff55edcdd58dba3f1bcf6ac9091249629cb57fcebe35fd8
+longlive2-5b-nvfp4-s4	README.md	7585	sha256:e9be7426fb13b0660dfa5c7e2ba1b4149ab5b06749700f4d84bab1af42392f6a
+longlive2-5b-nvfp4-s4	model_4o6.pt	2945857184	sha256:b9a2b67bc1a00390d5888cbdd7f3af27c4b5c1d3281c03a895adef97669d3716
+longlive2-5b-nvfp4-s2	README.md	7585	sha256:929cd7998593e556e37b6c3d17d6df8e0fd05808751d14bade7de0b2e970447d
+longlive2-5b-nvfp4-s2	model_4o6.pt	2945857184	sha256:e767e58414fb8d961ea0705f710b3272723a7389dbe6dc50ee1b0dbff68b0469
+longlive-plug/minimax-h3-few-step	.gitattributes	1519	sha256:11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361
+longlive-plug/minimax-h3-few-step	ELM_TRANSFER.json	9478	sha256:d6c200b4c4054cdab11a77c2bb5f2ce051b71732d13c47cc2fa077bffd259b0b
+longlive-plug/minimax-h3-few-step	EXPORT_VALIDATION.json	992	sha256:0aca7f0d43a1dc1d9329611b192c7092242006f4f835a8a4596e9b0f57bc74fd
+longlive-plug/minimax-h3-few-step	LICENSE	17604	sha256:59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44
+longlive-plug/minimax-h3-few-step	LICENSE-CODE	11357	sha256:c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+longlive-plug/minimax-h3-few-step	NOTICE	413	sha256:f7e40d58e9bce7db1e9eeb4fb70b863aea580f1fb29c034da493741b2fe79a14
+longlive-plug/minimax-h3-few-step	README.md	859	sha256:35bfe2a0e5c623a4dc506435cee7dcd394d2cff14a251422149b40af756aac9b
+longlive-plug/minimax-h3-few-step	adapter_config.json	12841	sha256:1c21e05244aa7f5f69d6cd4d237c3917f1dd6e3c99189565ef78ec08e776cb0a
+longlive-plug/minimax-h3-few-step	environment/observed_versions.json	626	sha256:8c094a7a2dc59f7e5fd37d245622e6c8ddf0c640ecbf9ebcb6d9a77109972bc0
+longlive-plug/minimax-h3-few-step	generator_lora.pt	2767464857	sha256:465bd51317544c4d0d9bfb84776927fac599c5e9be055989e9588de4172f3184
+longlive-plug/minimax-h3-few-step	prompts.example.json	2722	sha256:f13223491e2ca00a6b3b26ca90fbfb928e6de925af3e9548cf911b83e595eb36
+longlive-plug/minimax-h3-few-step	provenance.json	7665	sha256:c8e125f05a573279c6673a283c9f5c8b99b41705e9eb2a114cda7ca18b3313ce
+longlive-plug/minimax-h3-few-step	run_inference.py	2640	sha256:0dc591479de74ffdff9edd4ef1f0def1cf23f437110271158f84d2ebf3a40c83
+longlive-plug/minimax-h3-few-step	source_hashes.json	4978	sha256:39be6b451a0475561b2539ec660dd256f4b99aecb9a595d806eac958ebec791f
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/__init__.py	489	sha256:7928c5364f079a90f05d14d9ef8c3949173f1e5caf9010f08779793b3fa50291
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/build_prompt_cache.py	23957	sha256:5ed06cb54ca28bc776d92f6da13b37aaa5baccb9e7e537fbcd37282f871cae98
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/cfg_guidance.py	4394	sha256:ee796ccfc5a03aef1e98054eaf30585d74b190e54308ba1ca192e2373e06df24
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/dmd_4step.py	35562	sha256:3d72c4dd3b3793f91fdcce3d37a809e18be805889fd3cc4bf57d96426eef8d0f
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/dmd_8step.py	34528	sha256:77ab7e2c7ce40cad12b141b1b24467406ff66a7fa420b5a752bdc5d5b74dc2b1
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/dmd_core.py	21107	sha256:4c2cc6909d41356d27c95275a0e32a5a3d96038634cb83e42a270424f6a86164
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/encode_longlive_prompt_cache.py	13641	sha256:7bdd4004bf4973158bac9866975c08b825579ee279c45916bd7789eacd57dc42
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/encode_longlive_prompt_cache_v4.py	15299	sha256:b39b37977235320b541e54d78833088cabd3199c8fe77059399ea8438cabcb29
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/extract_dmd8_inline5.py	17258	sha256:9f43ef1bad719a328f7ece6d14657534ec9cf76ebe91405760fed15d5bed821e
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/fresh_noise_scheduler.py	13494	sha256:404cbb1e6eb05e5a11222b95f86ba5eec88fb09718d32094a04dd4ac834fbcdb
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/fresh_noise_scheduler_4step.py	13489	sha256:ae6d4887471edb94096be0d65dfcd850131f819620d35450a26289dd90a5dc8e
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/full_h3_lora.py	6153	sha256:ad4b08ff2aae784452f5dd3468fc7e571cecb9665ada80ef5f60f04bf8cf4343
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/infer_base.py	30123	sha256:dd6a5ef8aad12ba76c65d74048726fd0f9623a116f216b4a300ef42272d09b93
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/infer_student.py	21256	sha256:c3dfa6456fcc1d49500c5a6445431e0254181f0d5342fa24353dc57e8c18c5d8
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/infer_student_4step.py	43024	sha256:3bbb180764ef744791065e172acf759b65f8ff7b8e85a3ac8cdc9ee59c738db3
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/infer_student_8step.py	42970	sha256:867252e18cb1c53c266d2a3a658453d63e7b9a38711a94ec36bcf88d7f944f5b
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/longlive_lora.py	5446	sha256:4d061332055b2b59dfa7632ca7502f98ecdace283333b28f872b1f74f2c1cb4e
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/longlive_prompt_distributed.py	25206	sha256:eff9f6e68cc17f4b0237990ac79478a45d5a6e846a4b9b812a508cc03faca48d
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/longlive_prompt_set.py	16591	sha256:ed80195faf3f1614c2ec5d3678298505eae00490456ebc365df995324cc33703
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/model_provenance.py	5173	sha256:8b5409504258657fdab9665dbd0a51a09e5503e468a9b0e7eb76ad0c2f55ab20
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/probe_student_lora_ab.py	17736	sha256:6ff009a751dc07c54cf8dedc98b4061f36080eec93c5068996c5bcec448f0150
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd.py	56628	sha256:a2f2c71ead08514d96898019eee6c39536192eeb5b017bb2c7454d1cfb0e7172
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun.py	43331	sha256:5843b7c57eea8c602bd06cae4580d4efae6fc15be4d370b4a2951cf60baf6ecb
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_4step.py	65117	sha256:5a751327012031d7a51e5004dc3d47094d7810e52ed72d05b04b513bedcee1bf
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_4step_autoresume.py	3858	sha256:42abbef8788b0d86ae6d2d6094bec6144d754d355748eefea6a7f189b7bd8918
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_8step.py	56637	sha256:2f0302f973ba0729040687741eed95edbf321bd4c85745ec1ca977fe91c9e7a0
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_8step_autoresume.py	3768	sha256:21b033ae059b73587257f6923db3587ce6b16c18aa4e8b6f5a91a615905d68dd
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_v2.py	21573	sha256:2ef1d89d400df60a86be10b8828ea7c4b87fb96112538bfd25e7baaf5e8bc357
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_v3.py	18311	sha256:ca1905890c1e3c849ccb7f189166d7d7ddaa22b9d6162c629beab8e0b5c65c81
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_v4.py	25565	sha256:e27328e359c6ff4fccd38623fb7eadb84c48f131fb547ca82bd7364c3f2dd44c
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_dmd_longrun_v5.py	15293	sha256:14778be13523721a38fb539d973c6d0ad7eff8054ab146a76adcb684bdd9c7cf
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/train_utils.py	41027	sha256:fd64c02074680470776fa9e8f58578bde7fdb90603d2cad3eab5e9216c6f8e9c
+longlive-plug/minimax-h3-few-step	source_snapshot/minimax_h3/visualize_teacher_x0.py	26565	sha256:962f86b0fb699accecc36eb0b57fdc278835c22731f78f5e4d5fe36c3a33d49f
+longlive-plug/minimax-h3-few-step	training_config.json	36122	sha256:5e05bf1cd3ea98af9e4dbf9ffa756d8bb8ac7b0e495bcc5b3c1b92cecede6c8f
+longlive-plug/minimax-h3-few-step	training_recipe/audio_candidate_cache.py	5811	sha256:234d4a9cfad2952b2f98b76f70c77a46399483e9d6da5030ac80639e1fb4b616
+longlive-plug/minimax-h3-few-step	training_recipe/audio_data_candidates.py	12160	sha256:28cebc27e0c8d914cd716401f9ebb9c03133c5803b362165ddb2e56aa7744274
+longlive-plug/minimax-h3-few-step	training_recipe/audio_mixed_conditions.py	2789	sha256:2b41ff3d1249ccdd7857d7b384476e8b65ec09593a44c810e931c6106d863dfd
+longlive-plug/minimax-h3-few-step	training_recipe/audio_objectives.py	8953	sha256:4e22fd00a67f5e7e7ce03bec2607911079aad7129fc6b50c88cae3385bc1c605
+longlive-plug/minimax-h3-few-step	training_recipe/common.py	3056	sha256:60d1bd3d7774dca1ac1c54234ac05fd2fcb7a0ad1a01450d789fe882f7ad2ef7
+longlive-plug/minimax-h3-few-step	training_recipe/train_audio_mixed.py	8337	sha256:6193189881a1fef24144c4ddf57aa77965bf69308a1392724c826720e8d6c338
+longlive-plug/minimax-h3-few-step	training_recipe/train_fresh.py	6442	sha256:6b478c00a64c5bb405823960f541fa3d0faf4cc14b17db5cc762043a71ddec10
+longlive-plug/minimax-h3-cfg	ELM_TRANSFER.json	2965	sha256:89efe6c7362179075e9f8a5aae5a95f913b0582225644850ab93c96e0f9c436c
+longlive-plug/minimax-h3-cfg	LICENSE	17604	sha256:59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44
+longlive-plug/minimax-h3-cfg	NOTICE	1208	sha256:e63a1b682d13c9c6475e657e6aabbddabee21d5c0d5651aa3231c63ba42a6967
+longlive-plug/minimax-h3-cfg	README.md	1017	sha256:740ece2cb668f54f277e7ec40b8b5160bb56d19a09b5e05b0c2ce9a23a25e923
+longlive-plug/minimax-h3-cfg	SHA256SUMS.txt	858	sha256:ff7547fbd2299dfec056b52de62c051c060ec0cf7ef0b22e428df0431f203875
+longlive-plug/minimax-h3-cfg	adapter_config.json	13661	sha256:3b086e1ff87cf75ded4b25182cd70b216e03feb730dca59093624c42dcbd78c2
+longlive-plug/minimax-h3-cfg	adapter_model.safetensors	2767268872	sha256:04593217a4e96ccad38bf3c510b28b0b7c8207084b0638f8d7c19dd2ee478432
+longlive-plug/minimax-h3-cfg	evaluation_summary.json	1206	sha256:849bb2efddcd39af49e9efc9c896d2289f757a797603cdd95473110f3950f85d
+longlive-plug/minimax-h3-cfg	release_manifest.json	1648	sha256:015ba8152d543d1d74e514901343fcb9bcf61559e1f229bd657985d76deefa05
+longlive-plug/minimax-h3-cfg	sglang/adapter_config.json	1135	sha256:d611ea65d5180a8e8ed2916a6654051625b42003a7203d25b684d1250d26e88d
+longlive-plug/minimax-h3-cfg	training_config.json	2244	sha256:9cf643c4d9343d3a92077cfe025ea7abcb8ae1e2a46c1d7a9c1010b3dfa62086
+longlive-plug/wan21-t2v-14b-few-step	README.md	699	sha256:13b042ec889d8ad2059bda0ec42bc581b6b59511af6299a9fd1181adcc934ce1
+longlive-plug/wan21-t2v-14b-few-step	export_generator_lora.py	4543	sha256:283caa1c5beae89b80318096463f0f9cb5c284ffee7b941873a5fac4bce6fbbe
+longlive-plug/wan21-t2v-14b-few-step	generator_lora_lightx2v.safetensors	1226922392	sha256:743fc9a44e118a09f932ae5a0420c88b46bb6afdf605230f115e93eb710884ba
+longlive-plug/wan21-t2v-14b-few-step	inference_config.json	626	sha256:da9532a93bb63d9f06512c485a13849f65329f75457c2010591a66e4231cd2d0
+longlive-plug/wan21-t2v-14b-few-step	provenance.json	1275	sha256:ab75ec25e69df45effd994af62443a2fc94bf501c125ee154af78975f0dca1d2
+longlive-plug/wan21-t2v-14b-cfg	README.md	875	sha256:b8434a36ae9c46868c15b4a8872db5b225031c9024e17dc93d9e046396e9c29c
+longlive-plug/wan21-t2v-14b-cfg	SHA256SUMS	686	sha256:72ab7c07b5aa44948ac691b60d5dd17b37ef19830a9f3332ce4aebe3edc95771
+longlive-plug/wan21-t2v-14b-cfg	adapter_config.json	11513	sha256:84ed791fb1416cbe581d0f772e867a0d7ec35c851eb4802a44e7166b0311c710
+longlive-plug/wan21-t2v-14b-cfg	adapter_model.safetensors	2453769728	sha256:1a311f6030a74e739d9705347079a131bd5a5579bd693c993026d63e36d4bea0
+longlive-plug/wan21-t2v-14b-cfg	inference_overrides.yaml	375	sha256:048e8950c70043cd371fa5924edf9ea0ab5b7b4a1932efe58a4152a1b2c3c8fb
+longlive-plug/wan21-t2v-14b-cfg	provenance.json	3791	sha256:ca65a950d483f496c6573d3a9d636991660917d4a1d0a1e28bd60a09bfc4f005
+longlive-plug/wan21-t2v-14b-cfg	release_metadata.json	1275	sha256:e94a3ece25f90ddd1bf1f0633ca6e95bbf5905e9542309a32f92bf6e64662e35
+longlive-plug/wan21-t2v-14b-cfg	training_config.yaml	2561	sha256:f0ec25972040e12912f02704d69193085e47b7acc692173ad88339cb13ed4e2b
+longlive-plug/wan22-ti2v-5b-few-step	README.md	699	sha256:fe4fd534d5dcfee2d6f3c185495851ef056393e318e52b5c2d29230f8d9793c5
+longlive-plug/wan22-ti2v-5b-few-step	adapter_config.json	9349	sha256:d4cd3c2f82deaca2a7023474981ea05f6858f72d4a8495df8271f289657ddfb5
+longlive-plug/wan22-ti2v-5b-few-step	adapter_model.safetensors	1289824400	sha256:69807b3bdfc4d9d153a5660dcd70812f9c973eb8bc52861fea19a5e563341316
+longlive-plug/wan22-ti2v-5b-few-step	inference_config.yaml	586	sha256:c30da5b0674608078200422648d8cfc384b03b00a95448cf1aa1a7ee64121113
+longlive-plug/wan22-ti2v-5b-few-step	load_generator_lora.py	706	sha256:1457345b422e96c0995ce9ff3256e1c7471f535af07b2a4eaa7065720d79ee2e
+longlive-plug/wan22-ti2v-5b-few-step	provenance.json	2641	sha256:386b9b17431e996e7527365ad0d7204069114e1e2562041d5f048fdad6e6ea29
+longlive-plug/wan22-ti2v-5b-few-step	training_config.yaml	1853	sha256:8c08a336f3ba7deafc44c496e7d08932baad855c343086f499c85d36a25f850b
+longlive-plug/wan22-ti2v-5b-cfg	README.md	1151	sha256:a2b156caa9be2dbbcccc07f9b0204f488fd2a874310639356b99bd7fe25b54c1
+longlive-plug/wan22-ti2v-5b-cfg	SHA256SUMS	610	sha256:4d7dc7ed2dd8e586c0a686d6c2db03b54e8bd820416edbd38908fd272d1fed12
+longlive-plug/wan22-ti2v-5b-cfg	adapter_config.json	8691	sha256:e22386cbe19168506f036a293a11290b0130f3dab7e3461a093c94fe2fc9980c
+longlive-plug/wan22-ti2v-5b-cfg	adapter_model.safetensors	644949288	sha256:c16212b483e3fd3d3a8a91b9732342777addc23d08ef0be055ff442c650944d4
+longlive-plug/wan22-ti2v-5b-cfg	inference_overrides.yaml	392	sha256:e33c8259c74a4188c4781de0780813c51982e66b68739bc2d5b6127065d9e506
+longlive-plug/wan22-ti2v-5b-cfg	provenance.json	2638	sha256:39cd4f8a99c86db1af0bb30d0818c582f8b5347b3ab11187571b5f3b8cf36281
+longlive-plug/wan22-ti2v-5b-cfg	release_metadata.json	1065	sha256:db32274369ebcf321c99187aa8d6951ec2c64ef8f1a265ccab4628a7694da1a8
+longlive-plug/wan22-ti2v-5b-cfg	training_config.yaml	2354	sha256:72060c553a8137df63c1dee4e3d657abc7d192c9351dfe405ef36995be23290c
+longlive-1.3b-safetensors	longlive_base.safetensors	5676075416	sha256:113656f29f96e42977de04d34784475260b92105ecbc83dbba111cfb345fa476|ff64e39c50dbc044c11d6a242a92a9e357ed16a1c6f0ffaf256630a1813187e1
+longlive-1.3b-safetensors	lora.safetensors	1399924800	sha256:7ec78e6338e0dfdb90c622bfc753820487d74eee6d3a00c081e661c8d8d78199

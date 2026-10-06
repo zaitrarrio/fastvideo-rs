@@ -13,6 +13,7 @@
 
 use fastvideo_cudarc::wan::attn::{self, FlashKernel};
 use fastvideo_cudarc::wan::attn_fp8;
+use fastvideo_cudarc::wan::attn_sage;
 use fastvideo_cudarc::wan::ops;
 use serde_json::json;
 
@@ -293,6 +294,83 @@ pub fn attn_fp8_group(report: &mut Report, seed: &mut u64) -> StageResult<()> {
                 json!({"bf16_ms": bf, "fp8_ms": f8, "speedup": bf / f8, "vs_bf16": js(&e)}),
             );
         }
+    }
+    Ok(())
+}
+
+/// `fv-gpucheck kernels --groups attn_sage`: the SageAttention2-style kernel
+/// ([`attn_sage`], INT8 `Q K^T`, FP8 `P V`) against the bf16 flash kernel and
+/// an f64 host SDPA on the same flat / peaked regimes as `attn_fp8` (same
+/// stated tolerance against bf16), then timed against the bf16 kernel at the
+/// H3 768p, LTX 720p stage-2 and FastWan 480p dense shapes.
+pub fn attn_sage_group(report: &mut Report, seed: &mut u64) -> StageResult<()> {
+    if !attn_sage::supported() {
+        report.note(
+            "attn_sage",
+            json!({"skipped": "needs sm_89+ (INT8 / FP8 mma.sync)"}),
+        );
+        return Ok(());
+    }
+    let d = 128usize;
+    for &(bh, s, peaked) in &[
+        (2usize, 300usize, false),
+        (2, 300, true),
+        (4, 1000, false),
+        (4, 1000, true),
+        (8, 4097, true),
+        (3, 130, true),
+    ] {
+        let (q, k, v) = inputs(seed, bh, s, d, peaked);
+        let shape = [1, bh, s, d];
+        let (q16, k16, v16) = (t16(&q, &shape)?, t16(&k, &shape)?, t16(&v, &shape)?);
+        let bf = attn::device_mma_sdpa_with(&q16, &k16, &v16, None, false, FlashKernel::V2)?
+            .ok_or_else(|| anyhow::anyhow!("bf16 flash kernel did not run"))?;
+        let sg = attn_sage::dense_sdpa(&q16, &k16, &v16, None, false)?
+            .ok_or_else(|| anyhow::anyhow!("attn_sage dense did not run"))?;
+        let sgb = attn_sage::dense_sdpa(&q16, &k16, &v16, None, true)?
+            .ok_or_else(|| anyhow::anyhow!("attn_sage dense (bf16 out) did not run"))?;
+        let (bf, sg, sgb) = (host(&bf)?, host(&sg)?, host(&sgb)?);
+        let e = compare(&sg, &bf);
+        let eb = compare(&sgb, &sg);
+        let mut values = json!({"vs_bf16": js(&e), "bf16_out_vs_f32_out": js(&eb)});
+        if s <= 1000 && bh <= 2 {
+            let exact = sdpa_host(&q, &k, &v, bh, s, s, d);
+            values["sage_vs_f64"] = js(&compare(&sg, &exact));
+            values["bf16_vs_f64"] = js(&compare(&bf, &exact));
+        }
+        let tag = format!(
+            "dense_bh{bh}_s{s}_{}",
+            if peaked { "peaked" } else { "flat" }
+        );
+        report.check(
+            format!("attn_sage_{tag}"),
+            e.rel_l2 <= MAX_REL_L2 && e.cosine >= MIN_COSINE && eb.rel_l2 <= 1e-2,
+            values,
+            json!({"rel_l2": MAX_REL_L2, "cosine": MIN_COSINE, "bf16_out_rel_l2": 1e-2}),
+        )?;
+    }
+    for &(name, h, s) in &[
+        ("h3_768p", 56usize, 37966usize),
+        ("ltx_720p_s2", 32, 14080),
+        ("fastwan_480p", 12, 32760),
+    ] {
+        let n = h * s * d;
+        let mk = |seed: &mut u64| t16(&bf16v(rand(seed, n, 1.0)), &[1, h, s, d]);
+        let (q16, k16, v16) = (mk(seed)?, mk(seed)?, mk(seed)?);
+        let bf = time_ms(3, || {
+            attn::device_mma_sdpa(&q16, &k16, &v16, None, true)?;
+            Ok(())
+        })?;
+        let sg = time_ms(3, || {
+            attn_sage::dense_sdpa(&q16, &k16, &v16, None, true)?;
+            Ok(())
+        })?;
+        let flops = 4.0 * (s as f64) * (s as f64) * (d as f64) * (h as f64);
+        report.note(
+            format!("attn_sage_bench_{name}"),
+            json!({"heads": h, "seq": s, "dense_auto_ms": bf, "sage_ms": sg, "speedup": bf / sg,
+                   "dense_tflops": flops / bf * 1e-9, "sage_tflops": flops / sg * 1e-9}),
+        );
     }
     Ok(())
 }

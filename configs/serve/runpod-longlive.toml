@@ -1,0 +1,73 @@
+# fv-serve on a Runpod pod: LongLive-1.3B causal streaming (the SF-Wan
+# engine with the LongLive transformer and its prompt-switch KV re-cache,
+# docs/serve/research-longlive.md). Secrets as in runpod.toml.
+#
+# LICENCE: the LongLive-1.3B weights are NON-COMMERCIAL (HF card
+# CC-BY-NC-SA-4.0 / CC-BY-NC 4.0): research and evaluation only.
+#
+# Weights: `longlive-1.3b-safetensors` (converted by
+# scripts/gpu/convert-longlive.py) plus SF-Wan's text encoder, tokenizer and
+# VAE (`sfwan21-1.3b`), both on the network volumes. `longlive` is not
+# expanded like `weights`: it is the absolute path under FV_WEIGHTS
+# (/workspace/weights on the pods). The [[models]]-less SF-Wan backend reads
+# FV_LONGLIVE_WEIGHTS instead (docs/serve/director-causal.md).
+#
+# Behind the gateway: FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN, and
+# FV_PUBLIC_BASE_URL as in runpod-sfwan.toml.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+heartbeat_s = 10
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+# LongLive-1.3B: window 12, sink 3, KV re-cache at prompt switches
+# (`longlive_recache = false`: keep the cache, the ablation). Served as
+# `longlive-1.3b` and `longlive`.
+[[models]]
+id = "longlive-1.3b"
+family = "wan"
+recipe = "sfwan21-1.3b"
+weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+resident = true
+longlive = "/workspace/weights/longlive-1.3b-safetensors"
+
+[protocols]
+openai_videos = false
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = true
+native = true
+
+[reactor]
+model = "longlive-1.3b"
+
+[streams]
+causal_default_max_s = 120
+causal_hard_max_s = 300
+
+[limits]
+queue_max = 8
+body_max_mb = 64
+
+[gateway]
+pool = "longlive"

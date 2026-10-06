@@ -199,6 +199,10 @@ impl UrlSigner for LocalArtifactStore {
     fn url_for(&self, a: &Artifact, ttl: Duration) -> Url {
         self.urls.files_url_ttl(&a.id.to_string(), &a.file_name, ttl)
     }
+    fn url_issued(&self, a: &Artifact, issued: OffsetDateTime, ttl: Duration) -> Url {
+        let exp = issued.unix_timestamp() + ttl.as_secs() as i64;
+        self.urls.files_url(&a.id.to_string(), &a.file_name, exp)
+    }
 }
 
 #[async_trait::async_trait]
@@ -443,6 +447,20 @@ impl UrlSigner for S3ArtifactStore {
         };
         self.cfg.presign("GET", &key, ttl, OffsetDateTime::now_utc())
     }
+    /// `X-Amz-Date` = `issued`: the same presigned URL for the same window.
+    /// A window past S3's 7-day presign cap that has outlived the cap gets
+    /// a fresh signature instead of a dead URL.
+    fn url_issued(&self, a: &Artifact, issued: OffsetDateTime, ttl: Duration) -> Url {
+        if issued + ttl.min(S3_MAX_PRESIGN) <= OffsetDateTime::now_utc() {
+            let left = (issued + ttl - OffsetDateTime::now_utc()).max(time::Duration::seconds(1));
+            return self.url_for(a, left.unsigned_abs());
+        }
+        let key = match &a.location {
+            ArtifactLocation::Object { key, .. } => key.clone(),
+            ArtifactLocation::Local(_) => self.key_for(a.id, &a.file_name),
+        };
+        self.cfg.presign("GET", &key, ttl, issued)
+    }
 }
 
 #[async_trait::async_trait]
@@ -638,6 +656,43 @@ mod tests {
         assert_eq!(u.path(), "/vol123/out/x/a%20b.mp4");
         let exp = u.query_pairs().find(|(k, _)| k == "X-Amz-Expires").unwrap().1.into_owned();
         assert_eq!(exp, "604800", "clamped to 7 days");
+
+        // `url_issued`: one URL per (artifact, issue time, ttl), whenever asked.
+        let issued = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let day = Duration::from_secs(86_400);
+        let u1 = s.url_issued(&a, issued, day);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(s.url_issued(&a, issued, day), u1);
+        let q = |u: &Url, k: &str| u.query_pairs().find(|(n, _)| n == k).unwrap().1.into_owned();
+        assert_eq!(q(&u1, "X-Amz-Expires"), "86400");
+        assert_eq!(q(&u1, "X-Amz-Date"), issued.format(time::macros::format_description!("[year][month][day]T[hour][minute][second]Z")).unwrap());
+        // A window that outlived the 7-day presign cap gets a fresh, live URL.
+        let old = OffsetDateTime::now_utc() - time::Duration::days(8);
+        let u = s.url_issued(&a, old, Duration::from_secs(30 * 24 * 3600));
+        assert_ne!(q(&u, "X-Amz-Date"), old.format(time::macros::format_description!("[year][month][day]T[hour][minute][second]Z")).unwrap());
+    }
+
+    #[test]
+    fn local_url_issued_is_stable_and_verifies() {
+        let urls = LocalUrls { public_base: Url::parse("http://localhost:8000").unwrap(), key: UrlKey::new("k") };
+        let store = LocalArtifactStore::new("/tmp/unused", urls.clone());
+        let a = Artifact {
+            id: ArtifactId::new(),
+            mime: "video/mp4".into(),
+            file_name: "x.mp4".into(),
+            bytes: 1,
+            location: ArtifactLocation::Local("/tmp/unused/x.mp4".into()),
+            width: 1, height: 1, frames: 1, fps: 24, audio: None,
+        };
+        let issued = OffsetDateTime::now_utc() - time::Duration::minutes(5);
+        let ttl = Duration::from_secs(3600);
+        let u1 = store.url_issued(&a, issued, ttl);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(store.url_issued(&a, issued, ttl), u1, "same URL a second later");
+        let q = |k: &str| u1.query_pairs().find(|(n, _)| n == k).unwrap().1.into_owned();
+        let exp: i64 = q("exp").parse().unwrap();
+        assert_eq!(exp, issued.unix_timestamp() + 3600);
+        assert!(urls.key.verify(&a.id.to_string(), "x.mp4", exp, &q("sig"), OffsetDateTime::now_utc()));
     }
 
     #[tokio::test]

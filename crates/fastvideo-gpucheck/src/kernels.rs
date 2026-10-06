@@ -2442,6 +2442,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     group(&mut c, "attn_fp8", |c| {
         crate::kernels_attn::attn_fp8_group(c.report, &mut c.seed)
     })?;
+    group(&mut c, "attn_sage", |c| {
+        crate::kernels_attn::attn_sage_group(c.report, &mut c.seed)
+    })?;
 
     group(&mut c, "no_host_fallback", |c| {
         // With a device live, an op without a device path must error, not

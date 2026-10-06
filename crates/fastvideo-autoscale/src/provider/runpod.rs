@@ -734,8 +734,10 @@ mod tests {
             pod: PodConfig {
                 template_id: "tpl".into(),
                 gpu_types: vec!["NVIDIA H100 80GB HBM3".into(), "NVIDIA H200".into()],
+                // Two regions (a hypothetical rebuilt US volume first; the old
+                // US volume s2k01690bi was deleted 2026-10).
                 placements: vec![
-                    Placement { data_center: "US-CA-2".into(), volume_id: "s2k01690bi".into() },
+                    Placement { data_center: "US-CA-2".into(), volume_id: "usrebuilt0".into() },
                     Placement { data_center: "EUR-IS-1".into(), volume_id: "jg48s6o1w0".into() },
                 ],
                 ..PodConfig::default()

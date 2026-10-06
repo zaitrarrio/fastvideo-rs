@@ -40,6 +40,8 @@ pub mod director;
 /// A worker's socket to its pool's Durable Object (`[dispatch] do_url`,
 /// docs/serve/gateway-cloudflare.md).
 #[cfg(feature = "http-client")]
+pub mod arbiter;
+#[cfg(feature = "http-client")]
 pub mod edge_link;
 pub mod encoders;
 pub mod flags;
@@ -72,6 +74,8 @@ pub mod storage;
 pub mod streams;
 pub mod whip;
 /// The worker role behind a gateway (`server.role = "worker"`).
+#[cfg(feature = "http-client")]
+pub mod upload;
 #[cfg(feature = "http-client")]
 pub mod worker;
 

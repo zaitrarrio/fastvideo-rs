@@ -1,0 +1,7 @@
+2026-10-02T02:53:20Z | cell dense-cud rc=0 wall=781s peak=59702MiB sdpa=[] sage_lines=0
+2026-10-02T03:06:33Z | cell dense-fw2 rc=0 wall=793s peak=60238MiB sdpa=[] sage_lines=0
+2026-10-02T03:17:24Z | cell dense-sage rc=0 wall=651s peak=59798MiB sdpa=[] sage_lines=2
+2026-10-02T03:18:43Z | pairs dense-cud--fw2: 30 compares; old gate: gate verdict: "fail"
+2026-10-02T03:20:02Z | pairs dense-cud--sage: 30 compares; old gate: gate verdict: "fail"
+2026-10-02T03:21:21Z | pairs dense-fw2--sage: 30 compares; old gate: gate verdict: "fail"
+ALLDONE

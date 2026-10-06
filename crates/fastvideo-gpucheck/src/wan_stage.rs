@@ -7,8 +7,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::Subcommand;
+use fastvideo_cudarc::wan::pipeline::StepDistill;
 use fastvideo_cudarc::wan::pipeline::WanOutput;
+use fastvideo_cudarc::wan::plug::load_merged_transformer;
 use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
+use fastvideo_models::plug::{PlugFamily, PlugRecipe, PlugSampler};
 use serde_json::json;
 
 use crate::benchmark::PromptSpec;
@@ -87,6 +90,17 @@ pub enum Stage {
         /// from FASTVIDEO_MMAUDIO_WEIGHTS or $FV_WEIGHTS/mmaudio-44k-v2).
         #[arg(long, default_value = "none")]
         audio: String,
+        /// A LongLive-Plug recipe (`wan5b-plug-4step`, `wan14b-plug-4step`;
+        /// fastvideo_models::plug): its adapters merged into `--weights`'s
+        /// transformer at load, and its sampler (steps, shift, guidance 1.0)
+        /// in place of `--steps` / `--unipc` / `--guidance` / `--flow-shift`.
+        /// `--preset` must be the recipe's.
+        #[arg(long)]
+        plug: Option<String>,
+        /// Directory holding the `longlive-plug/*` adapter dirs (default
+        /// `$FASTVIDEO_PLUG_ROOT`, else `<weights>/../longlive-plug`).
+        #[arg(long)]
+        plug_root: Option<PathBuf>,
     },
     /// The open-ended causal SF-Wan rollout (`wan::stream`): `--parity`
     /// against the bounded 81-frame path, then each `--run` for its video
@@ -101,6 +115,20 @@ pub enum Stage {
         /// The prompt a run's `switch_at` changes to.
         #[arg(long, default_value = "a dog running along a beach at sunset")]
         switch_prompt: String,
+        /// Prompts of successive switches: one per line, or a LongLive
+        /// `interactive_example.jsonl` (`{"prompts": [...]}`, line
+        /// `--switch-prompts-line`), whose first prompt replaces `--prompt`.
+        #[arg(long)]
+        switch_prompts: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        switch_prompts_line: usize,
+        /// LongLive-1.3B: the converted checkpoint dir (`longlive_base.safetensors`,
+        /// `lora.safetensors`) replacing `--weights/transformer`.
+        #[arg(long)]
+        longlive: Option<PathBuf>,
+        /// With `--longlive`: the base generator without the LoRA.
+        #[arg(long)]
+        longlive_no_lora: bool,
         #[arg(long, default_value_t = 1024)]
         seed: u64,
         #[arg(long, default_value_t = 480)]
@@ -111,7 +139,7 @@ pub enum Stage {
         fps: u32,
         #[arg(long)]
         parity: bool,
-        /// `name,seconds=S[,rope=rel|abs][,sink=N][,window=N][,switch_at=S][,switch=keep|reset][,drop_rgb=1]`
+        /// `name,[longlive=1,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
         #[arg(long = "run")]
         runs: Vec<String>,
         /// Video seconds per statistics window.
@@ -179,7 +207,27 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             image,
             device,
             audio,
+            plug,
+            plug_root,
         } => {
+            let plug = match plug.as_deref() {
+                None => None,
+                Some(name) => {
+                    let r = PlugRecipe::named(name)
+                        .filter(|r| r.family == PlugFamily::Wan)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("--plug {name}: not a Wan LongLive-Plug recipe")
+                        })?;
+                    if r.preset != preset.as_str() {
+                        return Err(anyhow::anyhow!(
+                            "--plug {name} runs on preset {}, not {preset}",
+                            r.preset
+                        )
+                        .into());
+                    }
+                    Some(r)
+                }
+            };
             match audio.as_str() {
                 "none" => {}
                 "mmaudio" => std::env::set_var("FASTVIDEO_WAN_AUDIO", "mmaudio"),
@@ -207,7 +255,29 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 )
                 .into());
             }
-            let dmd = !*unipc;
+            // A Plug recipe brings its own sampler (guidance 1.0 either way).
+            let (unipc, steps, guidance, flow_shift, step_distill) = match plug
+                .as_ref()
+                .map(|r| &r.sampler)
+            {
+                Some(PlugSampler::WanUniPc { steps, shift }) => (true, *steps, 1.0, *shift, None),
+                Some(PlugSampler::WanEuler { timesteps, shift }) => (
+                    true,
+                    timesteps.len(),
+                    1.0,
+                    *shift,
+                    Some(StepDistill {
+                        timesteps: timesteps.to_vec(),
+                        shift: *shift,
+                    }),
+                ),
+                Some(other) => {
+                    return Err(anyhow::anyhow!("--plug: {other:?} is not a Wan sampler").into())
+                }
+                None => (*unipc, *steps, *guidance, *flow_shift, None),
+            };
+            let (steps, guidance, flow_shift) = (&steps, &guidance, &flow_shift);
+            let dmd = !unipc;
             let base = GenerateConfig {
                 negative_prompt: negative.clone(),
                 height: *height,
@@ -243,6 +313,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     clip_dir,
                     warm: *warm,
                     device,
+                    plug: plug.as_ref(),
+                    plug_root: plug_root.as_deref(),
+                    step_distill,
                 },
             )
         }
@@ -251,6 +324,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             preset,
             prompt,
             switch_prompt,
+            switch_prompts,
+            switch_prompts_line,
+            longlive,
+            longlive_no_lora,
             seed,
             height,
             width,
@@ -259,13 +336,22 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             runs,
             window_s,
             device,
-        } => crate::wan_stream::run(
+        } => {
+            let (first, switches) = match switch_prompts {
+                Some(p) => crate::wan_stream::read_switch_prompts(p, *switch_prompts_line)?,
+                None => (None, Vec::new()),
+            };
+            let prompt = first.as_deref().unwrap_or(prompt.as_str());
+            crate::wan_stream::run(
             report,
             &crate::wan_stream::Args {
                 weights,
                 preset,
                 prompt,
                 switch_prompt,
+                switch_prompts: &switches,
+                longlive: longlive.as_deref(),
+                longlive_lora: !*longlive_no_lora,
                 seed: *seed,
                 height: *height,
                 width: *width,
@@ -275,7 +361,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 window_s: *window_s,
                 device,
             },
-        ),
+        )
+        }
         Stage::Oracle {
             weights,
             reference,
@@ -334,6 +421,9 @@ struct GenArgs<'a> {
     clip_dir: &'a Path,
     warm: bool,
     device: &'a str,
+    plug: Option<&'a PlugRecipe>,
+    plug_root: Option<&'a Path>,
+    step_distill: Option<StepDistill>,
 }
 
 /// SHA-256 over every PNG frame's bytes in order: two clips with the same
@@ -408,12 +498,46 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "vae": std::env::var("FASTVIDEO_WAN_VAE").unwrap_or_else(|_| "auto".into()),
             "cond_cache": std::env::var("FASTVIDEO_WAN_COND_CACHE").map_or(true, |v| !matches!(v.trim(), "0" | "false" | "off")),
             "prompt_set": a.multi.then(|| a.set.iter().map(|p| json!({"name": p.name, "seed": p.seed})).collect::<Vec<_>>()),
+            "plug": a.plug.map(|r| r.name),
+            "step_distill": a.step_distill.as_ref().map(|s| json!({"timesteps": s.timesteps, "shift": s.shift})),
         }),
     );
     let mut load_mem = Some(crate::gpu::PeakMem::start());
     let timer = std::time::Instant::now();
-    let pipe = WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true })
-        .map_err(|e| anyhow::anyhow!("load {}: {e}", a.weights.display()))?;
+    let mut pipe = match a.plug {
+        Some(recipe) => {
+            let (dit, load) = load_merged_transformer(a.weights, recipe, a.plug_root)
+                .map_err(|e| anyhow::anyhow!("plug {}: {e}", recipe.name))?;
+            report.note(
+                "plug",
+                json!({
+                    "recipe": recipe.name,
+                    "licence": recipe.licence,
+                    "adapters": load.adapters.iter().map(|(p, plan)| json!({
+                        "path": p,
+                        "weight": plan.weight,
+                        "alpha": plan.alpha,
+                        "ranks": plan.ranks(),
+                        "matched": plan.matched(),
+                        "skipped": plan.skipped.len(),
+                        "unknown_keys": plan.unknown_keys.len(),
+                    })).collect::<Vec<_>>(),
+                    "merged_params": load.merged_params,
+                    "tensors": load.tensors,
+                    "merge_s": load.seconds,
+                }),
+            );
+            WanPipeline::load_with_dit(
+                a.weights,
+                a.preset,
+                LoadParts { text_encoder: true },
+                Some(dit),
+            )
+        }
+        None => WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true }),
+    }
+    .map_err(|e| anyhow::anyhow!("load {}: {e}", a.weights.display()))?;
+    pipe.set_step_distill(a.step_distill.clone());
     let mut load_s = timer.elapsed().as_secs_f64();
     if fastvideo_cudarc::mmaudio::sidecar::requested() {
         let t = std::time::Instant::now();

@@ -111,6 +111,11 @@ async fn minted_keys_drive_every_api_and_revoke_immediately() {
     // The console learns the auth mode here; no key or token is echoed.
     assert_eq!(caps.json()["auth"], json!({"mode": "keys"}), "{}", caps.text());
     assert!(!caps.text().contains(&key) && !caps.text().contains(ADMIN));
+    // The mounted APIs (the console's snippets and pages follow them).
+    let protos = &caps.json()["protocols"];
+    assert_eq!((protos["native"].as_bool(), protos["fal"].as_bool()), (Some(true), Some(true)), "{protos}");
+    assert_eq!(protos["minimax"].as_bool(), Some(cfg!(feature = "minimax")), "{protos}");
+    assert!(protos.as_object().unwrap().values().all(Value::is_boolean), "{protos}");
     // Keys mode: the unauthenticated probe is refused, so the console keeps asking for a key.
     assert_eq!(call(&r, "GET", "/fv/v1/capabilities", None, None).await.status, 401);
     let mm = call(&r, "GET", "/v2/query/video_generation?task_id=1", Some(format!("Bearer {key}")), None).await;

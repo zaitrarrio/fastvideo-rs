@@ -1,0 +1,11 @@
+2026-10-02T02:53:25Z | start: worktree /home/user/fv-plug on wip/plug-lora (from origin/main c43d62e); read Plug README/cards/H3 runner: H3 4-step = set_timesteps(5) shifts 12/3 + fresh re-noise, no CFG (base H3 is CFG-distilled); 5B = UniPC 4 steps shift 5; 14B few-step = lightx2v Euler [1000,750,500,250] shift 5
+2026-10-02T02:53:25Z | code drafted: loader::pth (moved from lpips), models::plug (recipes/plan/merge), H3 fresh-noise + plug contracts, wan::plug merge + step-distill Euler, gpucheck --plug; next: build pod check/test
+2026-10-02T03:20:48Z | tests on build pod pass (loader 25, models 457, cudarc 513); real generator_lora.pt pickle parses (624 tensors, 312 lora_A; needed _rebuild_from_type_v2); pushed 4ebe48d; release fv-gpucheck built
+2026-10-02T03:20:48Z | GPU pod 614nezj1d5lnee created: RTX PRO 6000, EUR-IS-1, EU volume jg48s6o1w0, $2.09/hr, backstop 5400 s (detached DELETE), idle guard 20 min, balance $64.08; image fastvideo-rs-runtime@sha256:dccdf956 (sha-4eeb801)
+2026-10-02T03:32:12Z | pod chain started: setup, h3a, w5, w14, h3b, h3base (+compare-clips after each)
+2026-10-02T03:47:30Z | H3 768p (3 prompts, warm): h3-plug-4step 312 LoRA modules matched / 0 skipped / 0 unknown, denoise 32.65 s, total 39.7 s, peak 59.5 GB; FastH3 4-step VSA (h3-turbo) denoise 19.46 s total 26.5 s; bf16 control of plug (cuDNN->fwd2) LPIPS 0.34-0.42 sharp 1.01-1.08 jitter 0.97-1.14 (H3 chaos floor)
+2026-10-02T04:08:10Z | second GPU pod ofxzv506u7rq2j created (RTX PRO 6000, EUR-IS-1, EU volume, $2.09/hr, backstop 5400 s, idle guard 20 min) for w14 + H3 49-forward cells; balance $59.2754743343
+2026-10-02T04:09:27Z | pod2 chain started: setup, w14 (plug + base 2 prompts), h3b (480p 49 fwd: base, plug-cfg, base ctl), h3base 768p (spark), h3spark (plug4/turbo on spark)
+2026-10-02T04:23:14Z | pod1 614nezj1d5lnee deleted (GET -> 404), lifetime from ledger; outputs pulled (summary, clipstats, sheets, 9 mp4s); balance $58.0278764565
+2026-10-02T05:08:01Z | pod2 ofxzv506u7rq2j deleted (GET -> 404); outputs pulled (summary, clipstats, 3 sheets, 5 mp4s); balance $55.0599528034
+2026-10-02T05:09:05Z | docs: research-longlive.md §12 (results, verdicts, catalog proposal), techniques.md LongLive-Plug recipe table; artifacts/perf/plug-gpucheck (driver, summaries, clipstats, 6 sheets, reports)

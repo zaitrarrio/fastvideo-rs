@@ -113,7 +113,7 @@ impl FakeModel {
                 multiple: 64,
                 max_area: 3840 * 2176,
                 aspect: (0.25, 4.0),
-                short_edges: vec![1080, 720, 1440, 2160],
+                short_edges: crate::cuda::caps::LTX_SHORT_EDGES.to_vec(),
                 pad_and_crop: true,
                 hd: None,
             },
@@ -223,6 +223,7 @@ impl FakeModel {
         caps.stream = Some(StreamCaps::Causal {
             block_frames: 12,
             target_fps: 16,
+            context: None,
         });
         caps.knobs = KnobCaps {
             seed: true,
@@ -232,6 +233,27 @@ impl FakeModel {
             caps,
             recipe: recipe("causal-4step", 4, "dense", "tiny", "fake: causal block rollout"),
         }
+    }
+
+    /// Causal LongLive-style model (`fake-longlive`, also served as
+    /// `longlive`): SF-Wan's blocks with a 12-frame window, a 3-frame sink and
+    /// a KV re-cache at every prompt switch (one extra step before the block,
+    /// reported in `BlockStats::recache_ms`). Not in the default set.
+    pub fn longlive() -> Self {
+        let mut m = Self::sf_wan();
+        m.caps.id = ModelId::new("fake-longlive");
+        m.caps.served_names = vec!["fake-longlive".into(), "longlive".into()];
+        m.caps.stream = Some(StreamCaps::Causal {
+            block_frames: 12,
+            target_fps: 16,
+            context: Some(fastvideo_protocol::CausalContext {
+                window_latent_frames: 12,
+                sink_latent_frames: 3,
+                prompt_recache: true,
+            }),
+        });
+        m.recipe = recipe("causal-4step-recache", 4, "dense", "tiny", "fake: causal block rollout, KV re-cache at prompt switches");
+        m
     }
 
     /// Every default fake model.
@@ -408,6 +430,10 @@ impl FakeConfig {
 struct FakeCausal {
     spec: CausalSpec,
     block_frames: u32,
+    /// Re-cache the window when the prompt changes between blocks.
+    recache: bool,
+    /// The prompt of the last block (`None` before the first).
+    prompt: Option<String>,
 }
 
 /// The fake engine backend.
@@ -821,7 +847,7 @@ impl EngineBackend for FakeBackend {
 
     fn causal_open(&mut self, s: SessionId, spec: &CausalSpec) -> Result<(), ApiError> {
         let m = self.model(&spec.model)?;
-        let Some(StreamCaps::Causal { block_frames, .. }) = m.caps.stream else {
+        let Some(StreamCaps::Causal { block_frames, context, .. }) = m.caps.stream else {
             return Err(ApiError::invalid_param(
                 "model",
                 format!("`{}` is not a causal model", spec.model),
@@ -835,6 +861,8 @@ impl EngineBackend for FakeBackend {
             FakeCausal {
                 spec: spec.clone(),
                 block_frames,
+                recache: context.is_some_and(|c| c.prompt_recache),
+                prompt: None,
             },
         );
         Ok(())
@@ -849,12 +877,27 @@ impl EngineBackend for FakeBackend {
     ) -> Result<BlockStats, ApiError> {
         let sess = self
             .sessions
-            .get(&s)
+            .get_mut(&s)
             .ok_or_else(|| ApiError::internal(format!("unknown causal session {s}")))?;
         let (w, h, n) = (sess.spec.width, sess.spec.height, sess.block_frames);
+        if input.reset {
+            sess.prompt = None;
+        }
+        // A prompt switch after the first block: re-cache the window (one
+        // step's time), as LongLive does before the block.
+        let switch = sess.prompt.as_ref().is_some_and(|p| *p != input.prompt);
+        let recache = switch && sess.recache;
+        sess.prompt = Some(input.prompt.clone());
         let steps = self.cfg.timing.causal_steps.max(1);
         let clock = self.cfg.clock.clone();
         let t0 = clock.now();
+        let mut recache_ms = 0.0;
+        if recache {
+            clock.sleep(self.cfg.timing.step);
+            ctl.cancel.check()?;
+            recache_ms = (clock.now() - t0).as_secs_f64() * 1e3;
+            tracing::info!(session = %s, block = input.block_index, prompt_version = input.prompt_version, recache_ms, "prompt switch: KV re-cache");
+        }
         for st in 1..=steps {
             clock.sleep(self.cfg.timing.step);
             if input.prompt.contains(&self.cfg.faults.fail_marker) {
@@ -871,6 +914,7 @@ impl EngineBackend for FakeBackend {
             block_index: input.block_index,
             frames: n,
             block_ms: (clock.now() - t0).as_secs_f64() * 1e3,
+            recache_ms,
         })
     }
 

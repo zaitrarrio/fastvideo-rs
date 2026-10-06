@@ -301,6 +301,11 @@ impl Ltx2Model {
         hooks: Hooks<'_>,
     ) -> Result<JobMetrics, ApiError> {
         let req = self.request(job, dir)?;
+        // Per-recipe SageAttention2 (sm_120 only; `FASTVIDEO_ATTN_SAGE`
+        // overrides): the gated two-stage generation, not the edit routes.
+        let _sage = fastvideo_cudarc::wan::attn_sage::recipe_scope(
+            self.recipe.sage_attention && req.two_stage && req.edit.is_none(),
+        );
         let out = self
             .pipe
             .generate_with_hooks(&req, self.use_text_cache, None, hooks)

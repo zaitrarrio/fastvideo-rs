@@ -264,7 +264,19 @@ impl ViewCtx<'_> {
 
 /// Signs artifact download URLs (local HMAC `/files/...` or S3 presign).
 pub trait UrlSigner: Send + Sync {
+    /// A URL valid for `ttl` from now (a fresh signature on every call).
     fn url_for(&self, a: &Artifact, ttl: Duration) -> url::Url;
+
+    /// The URL issued at `issued` and valid for `ttl` after it: the same
+    /// URL on every call with the same arguments, so an API that returns
+    /// the result of a finished job more than once (fal `result()`, the
+    /// handle's `get()`, webhooks) hands out one stable URL. The default
+    /// signs the remaining lifetime from now (not stable); the built-in
+    /// stores override it.
+    fn url_issued(&self, a: &Artifact, issued: OffsetDateTime, ttl: Duration) -> url::Url {
+        let left = (issued + ttl - OffsetDateTime::now_utc()).max(time::Duration::seconds(1));
+        self.url_for(a, left.unsigned_abs())
+    }
 }
 
 /// One batch API (per crate).

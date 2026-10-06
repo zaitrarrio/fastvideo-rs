@@ -1,0 +1,9 @@
+2026-10-02T02:08:41Z | cell max-cud rc=0 wall=586s peak=60071MiB sdpa=[] sage_lines=0
+2026-10-02T02:18:29Z | cell max-fw2 rc=0 wall=588s peak=60319MiB sdpa=[] sage_lines=0
+2026-10-02T02:27:42Z | cell max-sage rc=0 wall=553s peak=60423MiB sdpa=[] sage_lines=2
+2026-10-02T02:28:57Z | pairs max-cud--fw2: 30 compares; old gate: gate verdict: "fail"
+2026-10-02T02:30:12Z | pairs max-cud--sage: 30 compares; old gate: gate verdict: "fail"
+2026-10-02T02:31:26Z | pairs max-fw2--sage: 30 compares; old gate: gate verdict: "fail"
+2026-10-02T02:34:27Z | cell max-cud2 rc=0 wall=181s peak=60039MiB sdpa=[] sage_lines=0
+2026-10-02T02:34:27Z | repeat max cud vs cud2 (new process, spark-mountain-lake-s42): 0 of 124 frames differ
+ALLDONE

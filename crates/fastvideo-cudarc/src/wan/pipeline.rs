@@ -341,6 +341,20 @@ pub struct WanPipeline {
     boundary_ratio: Option<f32>,
     /// Preset name for clear errors (Fun Control / Lucy).
     preset: String,
+    /// A recipe-bound sampler override ([`Self::set_step_distill`]).
+    step_distill: Option<StepDistill>,
+}
+
+/// LightX2V's `WanStepDistillScheduler` (the LongLive-Plug Wan2.1-14B
+/// few-step card's `inference_config.json`): train timesteps warped onto the
+/// shift-`shift` 1000-point table (the Self-Forcing table: `1000, 937.5,
+/// 833.3, 625` for `[1000, 750, 500, 250]` at shift 5), one conditional pass
+/// per step, and a deterministic Euler update `x' = x + (sigma' - sigma) v`
+/// (`sigma' = 0` on the last step, which leaves `x0 = x - sigma v`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepDistill {
+    pub timesteps: Vec<i32>,
+    pub shift: f64,
 }
 
 impl WanPipeline {
@@ -360,6 +374,7 @@ impl WanPipeline {
             tiny: true,
             boundary_ratio: None,
             preset: "tiny".into(),
+            step_distill: None,
         }
     }
 
@@ -385,6 +400,7 @@ impl WanPipeline {
             tiny: false,
             boundary_ratio,
             preset: "custom".into(),
+            step_distill: None,
         }
     }
 
@@ -395,6 +411,19 @@ impl WanPipeline {
 
     /// [`Self::load`] with control over which components are materialized.
     pub fn load_with(root: &Path, preset: &str, parts: LoadParts) -> Result<Self> {
+        Self::load_with_dit(root, preset, parts, None)
+    }
+
+    /// [`Self::load_with`] with the transformer's weights from `dit` (a
+    /// Diffusers-named map, e.g. `wan::longlive::load_transformer_map`)
+    /// instead of `<root>/transformer`; the rest of the tree (text encoder,
+    /// VAE, TAEHV) as usual.
+    pub fn load_with_dit(
+        root: &Path,
+        preset: &str,
+        parts: LoadParts,
+        dit: Option<WeightMap>,
+    ) -> Result<Self> {
         // The DiT runs bf16 activations as FastVideo does (`dit_precision`
         // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
@@ -409,7 +438,10 @@ impl WanPipeline {
                 super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
                     .max(1);
         }
-        let dit = WeightMap::from_dir(&root.join("transformer"))?;
+        let dit = match dit {
+            Some(map) => map,
+            None => WeightMap::from_dir(&root.join("transformer"))?,
+        };
         // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
         // spatial, residual blocks, patchify 2); the preset's built-in
         // config when the file is missing.
@@ -510,7 +542,16 @@ impl WanPipeline {
             tiny: false,
             boundary_ratio,
             preset: preset.to_string(),
+            step_distill: None,
         })
+    }
+
+    /// Run every request on LightX2V's step-distill Euler sampler (a
+    /// LongLive-Plug recipe whose adapters were distilled for it), or clear
+    /// it with `None`. Guidance is 1.0 (one conditional pass per step)
+    /// whatever the request says.
+    pub fn set_step_distill(&mut self, sampler: Option<StepDistill>) {
+        self.step_distill = sampler;
     }
 
     /// Backward-compatible 1.3B load.
@@ -1094,7 +1135,7 @@ impl WanPipeline {
         let encoder_hs = encoder_hs.clone().to_device()?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         // DMD / rCM students are distilled for a single conditional pass.
-        let (guidance, guidance_2) = if cfg.is_dmd || cfg.is_rcm {
+        let (guidance, guidance_2) = if cfg.is_dmd || cfg.is_rcm || self.step_distill.is_some() {
             (1.0, 1.0)
         } else {
             (
@@ -1102,7 +1143,9 @@ impl WanPipeline {
                 cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
             )
         };
-        let n_steps = if cfg.is_rcm {
+        let n_steps = if let Some(sd) = &self.step_distill {
+            sd.timesteps.len()
+        } else if cfg.is_rcm {
             RcmSchedule::new(
                 cfg.num_inference_steps.max(1),
                 cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V),
@@ -1180,6 +1223,15 @@ impl WanPipeline {
             ));
             let _denoise = super::log::StepTimer::start(format!("rcm {} steps", sched.num_steps()));
             rcm_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
+        } else if let Some(sd) = &self.step_distill {
+            let sched = SelfForcingSchedule::new(&sd.timesteps, sd.shift, 1000, true);
+            super::log::info(format_args!(
+                "denoise=step-distill euler timesteps {:?} (shift {})",
+                sched.timesteps, sd.shift
+            ));
+            let _denoise =
+                super::log::StepTimer::start(format!("step-distill {} steps", sched.num_steps()));
+            step_distill_denoise(latents, &encoder_hs, &sched, &mut ctx, observer)
         } else if cfg.is_dmd && self.dit.cfg.causal && causal_ar_enabled() {
             let steps = cfg
                 .dmd_steps
@@ -1890,6 +1942,37 @@ fn dmd_denoise(
     Ok(latents)
 }
 
+/// [`StepDistill`]: deterministic Euler on the warped Self-Forcing table.
+fn step_distill_denoise(
+    mut latents: CudaTensor,
+    encoder_hs: &CudaTensor,
+    sched: &SelfForcingSchedule,
+    ctx: &mut DenoiseCtx<'_>,
+    mut observer: Option<&mut StepObserver<'_>>,
+) -> Result<CudaTensor> {
+    let total = sched.num_steps();
+    for (i, &t) in sched.timesteps.iter().enumerate() {
+        let _step = super::log::StepTimer::start(format!("euler step {}/{total} t={t:.1}", i + 1));
+        let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        let (sigma, next) = step_distill_sigmas(sched, i);
+        latents = CudaTensor::lincomb(&[(1.0, &latents), (next - sigma, &velocity)])?;
+        latents = pin_first_frame(ctx.first_frame, latents)?;
+        super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+        notify(&mut observer, i, total, t, &latents)?;
+    }
+    Ok(latents)
+}
+
+/// `(sigma_i, sigma_{i+1})` of a step-distill schedule, `0` after the last step.
+pub fn step_distill_sigmas(sched: &SelfForcingSchedule, i: usize) -> (f32, f32) {
+    let sigma = sched.sigma(sched.timesteps[i]) as f32;
+    let next = sched
+        .timesteps
+        .get(i + 1)
+        .map_or(0.0, |&t| sched.sigma(t) as f32);
+    (sigma, next)
+}
+
 /// `FASTVIDEO_WAN_CAUSAL_AR` (default on): causal Wan DMD generates the clip
 /// block by block through the KV cache, as FastVideo does. `=0` denoises the
 /// whole clip at once under the block-causal mask (FastWan's DMD sampler).
@@ -2360,6 +2443,39 @@ pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
         )));
     }
     Ok(out.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod step_distill_tests {
+    use super::*;
+
+    #[test]
+    fn lightx2v_sigmas_and_the_euler_update_end_on_x0() {
+        // WanStepDistillScheduler: [1000, 750, 500, 250] at shift 5.
+        let sched = SelfForcingSchedule::new(&[1000, 750, 500, 250], 5.0, 1000, true);
+        let want = [
+            (1.0f32, 0.9375f32),
+            (0.9375, 0.833_333_3),
+            (0.833_333_3, 0.625),
+            (0.625, 0.0),
+        ];
+        for (i, (s, n)) in want.iter().enumerate() {
+            let (gs, gn) = step_distill_sigmas(&sched, i);
+            assert!(
+                (gs - s).abs() < 1e-5 && (gn - n).abs() < 1e-5,
+                "step {i}: {gs} {gn}"
+            );
+        }
+        // A velocity field that is exact for the flow (v = noise - x0) lands
+        // on x0 after the four updates, whatever the grid.
+        let (x0, noise) = (0.75f32, -1.25f32);
+        let mut x = noise; // sigma = 1 at the first step
+        for i in 0..sched.num_steps() {
+            let (s, n) = step_distill_sigmas(&sched, i);
+            x += (n - s) * (noise - x0);
+        }
+        assert!((x - x0).abs() < 1e-5, "{x}");
+    }
 }
 
 #[cfg(test)]

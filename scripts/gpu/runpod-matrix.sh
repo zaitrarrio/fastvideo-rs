@@ -1005,8 +1005,8 @@ Audio: male speech, clear voice, quiet room"
       gate_cells wan13-dmd "wan13-dmd-$arm" lossy
     done
 
-    # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the US
-    # volume, fv-weights-b200-us). One prompt ($PROMPT), the upstream
+    # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the EU
+    # volume, fv-weights-h3-ltx-hy; first run on the US volume, deleted 2026-10). One prompt ($PROMPT), the upstream
     # FastVideo sampling defaults of each checkpoint. The 50-step cells run
     # one generation (no --warm): first-request overhead is small next to
     # 100 forwards, and each cell would otherwise cost twice the time.
