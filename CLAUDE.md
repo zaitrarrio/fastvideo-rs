@@ -31,3 +31,10 @@
   200 GB network volume `fv-build`), not in this container, whose disk is small. Each
   agent gets its own worktree directory and `CARGO_TARGET_DIR` on that volume.
   See `scripts/dev/build-pod.sh` and `docs/dev/build-pod.md`.
+
+## Merging to main
+
+- Sub-agents push their branch and open a PR; they never merge to main.
+- The coordinating session reviews each PR and merges it after pulling the
+  latest main, merging it into the branch and getting CI green on that head.
+  Merges use `--no-ff` (or a fast-forward of an already-merged branch).
