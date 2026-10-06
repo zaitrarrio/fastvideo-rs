@@ -29,10 +29,7 @@ const ADMIN_AUTH: &str = "Bearer fvadm_flags-test-admin";
 const KEY: &str = "sk-flags-test";
 
 fn state_dir(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-serve-flags-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-serve-flags-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn config(dir: &Path, extra: &[(&str, &str)]) -> Config {

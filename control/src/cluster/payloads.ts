@@ -1,7 +1,7 @@
 // Pod payloads and env of a cluster: a port of scripts/serve/runpod-cluster.sh
 // (create_gateway, create_worker, patch_gateway, GATEWAY_BOOT, WORKER_BOOT).
 import { GATEWAY_BASE_PODS } from "./gateway-base";
-import { REGIONS, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
+import { REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -65,11 +65,11 @@ fi
 export FV_WORKER_ID="\${RUNPOD_POD_ID}"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
-/** The gateway config without the reactor model and fal apps (pools that are not the four standard ones). */
+/** The gateway config without the Reactor model and fal apps (gateway images older than them). */
 export const GATEWAY_BASE_MINIMAL = GATEWAY_BASE_PODS.replace(/^reactor_model = .*\n/m, "")
   .replace(/^fal_director = true$/m, "fal_director = false")
   .replace(/^reactor = true$/m, "reactor = false")
-  .replace(/^# Every pool's fal apps.*\n/m, "")
+  .replace(/^# Every worker config's fal apps[\s\S]*?(?=^fal_apps = )/m, "")
   .replace(/^fal_apps = .*\n/m, "");
 
 /** Keys newer than released gateway images (release 1 = 2cd1ba0; serde
@@ -79,8 +79,61 @@ const stripNewGatewayKeys = (t: string) =>
   t.replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
 
 const tomlStr = (s: string) => JSON.stringify(s);
-export function gatewayToml(spec: ClusterSpec): string {
+
+/** The body lines of `[section]` in a flat TOML text: [first, end) line indices, or null. */
+function sectionRange(lines: string[], section: string): [number, number] | null {
+  const head = lines.findIndex((l) => l.trim() === `[${section}]`);
+  if (head < 0) return null;
+  let end = head + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
+  while (end > head + 1 && lines[end - 1]!.trim() === "") end--; // keep the blank line before the next section
+  return [head + 1, end];
+}
+/** Sets (or, with null, removes) `key = value` in `[section]`; adds the section when it is missing. */
+export function tomlSet(text: string, section: string, key: string, value: string | null): string {
+  const lines = text.split("\n");
+  const r = sectionRange(lines, section);
+  if (!r) return value === null ? text : `${text.replace(/\n*$/, "\n")}\n[${section}]\n${key} = ${value}\n`;
+  const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`);
+  const i = lines.slice(r[0], r[1]).findIndex((l) => re.test(l));
+  if (i >= 0) {
+    if (value === null) lines.splice(r[0] + i, 1);
+    else lines[r[0] + i] = `${key} = ${value}`;
+  } else if (value !== null) lines.splice(r[1], 0, `${key} = ${value}`);
+  return lines.join("\n");
+}
+/** Replaces the body of `[section]` (adds the section when it is missing). */
+function tomlReplaceSection(text: string, section: string, body: string[]): string {
+  const lines = text.split("\n");
+  const r = sectionRange(lines, section);
+  if (!r) return `${text.replace(/\n*$/, "\n")}\n[${section}]\n${body.join("\n")}\n`;
+  lines.splice(r[0], r[1] - r[0], ...body);
+  return lines.join("\n");
+}
+
+/** The gateway's Reactor model: the spec's, else the base's (fasth3) when a pool serves it, else a pool's causal (SF-Wan / LongLive) model; undefined: leave the base as it is. */
+export function reactorModel(spec: ClusterSpec): string | null | undefined {
+  if (spec.gateway.reactor_model !== undefined) return spec.gateway.reactor_model;
+  if (spec.gateway.base === "minimal") return undefined;
+  const models = spec.pools.flatMap((p) => p.models || []);
+  if (models.some((m) => m.id === "fasth3")) return undefined;
+  return models.find((m) => m.family === "wan" && m.recipe === "sfwan21-1.3b")?.id;
+}
+
+/** The base with the spec's gateway overrides (fal apps, protocols, Reactor model, aliases). */
+export function gatewayBase(spec: ClusterSpec): string {
   let t = stripNewGatewayKeys(spec.gateway.base === "minimal" ? GATEWAY_BASE_MINIMAL : GATEWAY_BASE_PODS);
+  const g = spec.gateway;
+  if (g.fal_apps) t = tomlSet(t, "protocols", "fal_apps", `[${g.fal_apps.map(tomlStr).join(", ")}]`);
+  for (const [k, v] of Object.entries(g.protocols || {})) if (typeof v === "boolean") t = tomlSet(t, "protocols", k, String(v));
+  const rm = reactorModel(spec);
+  if (rm !== undefined) t = tomlSet(t, "gateway", "reactor_model", rm === null ? null : tomlStr(rm));
+  if (g.aliases) t = tomlReplaceSection(t, "aliases", Object.entries(g.aliases).map(([a, m]) => `${tomlStr(a)} = ${tomlStr(m)}`));
+  return t;
+}
+
+export function gatewayToml(spec: ClusterSpec): string {
+  let t = gatewayBase(spec);
   if (!t.endsWith("\n")) t += "\n";
   for (const p of spec.pools) {
     t += `\n[[pools]]\nid = ${tomlStr(p.id)}\nkind = "pod"\nurls = []\nmax_queued = ${p.max_queued ?? 32}\ndispatch_timeout_s = 30\njob_timeout_s = ${p.job_timeout_s ?? 1800}\nstale_after_s = ${p.stale_after_s ?? 120}\nretries = 1\n`;
@@ -127,7 +180,7 @@ export interface ClusterSecrets {
   url_signing_key: string;
   admin_recipient?: string; // X25519 public (raw, b64)
   admin_private?: string; // X25519 private (pkcs8, b64)
-  admin_token?: string; // opened from the gateway (or a legacy FV_ADMIN_TOKEN)
+  admin_token?: string; // opened from the gateway, a legacy FV_ADMIN_TOKEN, or the gateway-less workers' FV_ADMIN_TOKEN (made by the controller)
   legacy_admin_token?: boolean; // imported state that passes FV_ADMIN_TOKEN itself
   ingest_token?: string;
   smoke_api_key?: string;
@@ -146,6 +199,7 @@ export const RESERVED_KEYS = new Set([
   "FV_GATEWAY_TOML_B64",
   "FV_WORKER_TOML_B64",
   "FV_WORKER_CONFIG",
+  "FV_WORKER_DIRECT",
   "FV_SERVE_ROLE",
   "FV_PUBLIC_BASE_URL",
   "FV_LOG_SHIP_URL",
@@ -218,6 +272,23 @@ export function gatewaySystemEnv(ctx: EnvCtx, image: string): Record<string, str
   return { ...e, ...logShipEnv(ctx) };
 }
 
+/** Workers serve clients themselves: the spec has no gateway and none runs
+ * (docs/control/gateway-less-auth.md). A gateway started later (gateway/start)
+ * makes them gateway workers again on their next env apply. */
+export function isDirect(spec: ClusterSpec, state: ClusterState): boolean {
+  return !spec.gateway.enabled && !state.gateway;
+}
+
+/** A direct worker's client auth: the spec's auth mode, the cluster's admin
+ * token, minted keys in the shared D1 table (every worker, restarts and new
+ * pods included, sees the same keys). */
+function directEnv(ctx: EnvCtx): Record<string, string> {
+  if (!isDirect(ctx.spec, ctx.state)) return {};
+  const e: Record<string, string> = { FV_WORKER_DIRECT: "1", FV_AUTH_MODE: ctx.spec.gateway.auth, FV_KEY_STORE: "d1" };
+  if (ctx.secrets.admin_token) e.FV_ADMIN_TOKEN = ctx.secrets.admin_token;
+  return e;
+}
+
 export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Record<string, string> {
   const e: Record<string, string> = {
     ...SECRET_ENV_REFS,
@@ -234,7 +305,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  return { ...e, ...logShipEnv(ctx) };
+  return { ...e, ...directEnv(ctx), ...logShipEnv(ctx) };
 }
 
 export function gatewayCreatePayload(name: string, image: string, flavor: string, vcpu: number, diskGb: number, dcs: string[] | null, env: Record<string, string>) {
@@ -261,7 +332,8 @@ export interface Placement {
   cpu?: string;
 }
 export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[] {
-  const regions = pool.regions?.length ? pool.regions : spec.regions;
+  // Never place in a region without a weights volume (us since 2026-10), even from an old stored spec.
+  const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
   const out: Placement[] = [];
   if (pool.compute === "CPU") {
     for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) {

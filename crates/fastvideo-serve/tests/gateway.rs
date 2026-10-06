@@ -33,10 +33,7 @@ const TOKEN: &str = "gw-internal-token";
 const ADMIN: &str = "fvadm_gateway_test";
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-gw-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-gw-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// A D1 transport that can be cut (a lost worker stops writing), with an
@@ -273,6 +270,11 @@ fn pool_of(sh: &Shared, external_id: &str) -> String {
     rows.first().and_then(|r| r.get("pool")).and_then(Value::as_str).unwrap_or_default().to_owned()
 }
 
+/// The public status view's state of pool h3's first worker.
+fn h3_worker_state(status: &Value) -> Option<&str> {
+    status["pools"].as_array()?.iter().find(|p| p["id"] == "h3")?["workers"][0]["state"].as_str()
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Vec<Vec<PoolMetrics>>>);
 
@@ -454,10 +456,17 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     assert!(s == 200 || s == 302, "sync answered {s}");
     let _ = hs;
 
-    // Metrics: the tick closed the rows with durations; the scaler saw them.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    let (s, pools, _) = http.call("GET", &format!("{g}/fv/v1/gateway/pools"), None, Some(&format!("Bearer {ADMIN}"))).await;
-    assert_eq!(s, 200, "{pools}");
+    // Metrics: the tick (every second) closes the rows with durations; the
+    // scaler sees them. Waited for, not slept on: a loaded host runs the
+    // tick late.
+    let admin = format!("Bearer {ADMIN}");
+    let pools = http
+        .poll(&format!("{g}/fv/v1/gateway/pools"), Some(&admin), |v| {
+            let Ok(p) = serde_json::from_value::<Vec<PoolMetrics>>(v["pools"].clone()) else { return false };
+            let (Some(h3m), Some(wan)) = (p.iter().find(|m| m.pool == "h3"), p.iter().find(|m| m.pool == "wan")) else { return false };
+            h3m.run_time.count >= 3 && (h3m.queued, h3m.running) == (0, 0) && h3m.workers.ready == 1 && wan.run_time.count >= 1
+        })
+        .await;
     let p: Vec<PoolMetrics> = serde_json::from_value(pools["pools"].clone()).unwrap();
     let h3m = p.iter().find(|m| m.pool == "h3").unwrap();
     assert!(h3m.run_time.count >= 3, "{h3m:?}");
@@ -478,13 +487,14 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     let tok = |r: reqwest::RequestBuilder| r.header("x-fv-internal-token", TOKEN);
     let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/drain", h3.base))).send().await.unwrap().json().await.unwrap();
     assert_eq!(d["draining"], true, "{d}");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // The gateway learns it on its next probe of the worker.
+    http.poll(&format!("{g}/fv/v1/status"), None, |v| h3_worker_state(v) == Some("draining")).await;
     let (s, v, h) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "while drained"})), bearer()).await;
     assert_eq!(s, 503, "{v}");
     assert!(h.get("retry-after").is_some());
     let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/undrain", h3.base))).send().await.unwrap().json().await.unwrap();
     assert_eq!(d["draining"], false, "{d}");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    http.poll(&format!("{g}/fv/v1/status"), None, |v| matches!(h3_worker_state(v), Some("ready" | "busy"))).await;
     let (s, v, _) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "after undrain"})), bearer()).await;
     assert_eq!(s, 202, "{v}");
     drop(gw);
@@ -637,6 +647,93 @@ async fn gateway_with_auth_none_reports_it_and_takes_keyless_jobs() {
     assert!(st["pools"][0]["workers"][0]["last_seen_s"].is_number(), "{st}");
     assert_eq!(st["models"]["fake-h3-turbo"]["state"], "down");
     assert!(!st.to_string().contains(&h3.base));
+}
+
+/// A direct worker: no gateway in front (fv-control `gateway.enabled:
+/// false`, docs/control/gateway-less-auth.md). Minted keys live in the
+/// shared D1 `api_keys` table.
+async fn direct_worker(sh: &Shared, tag: &str) -> Running {
+    let (l, base) = listen().await;
+    let mut c = base_config(tag, sh);
+    c.server.role = Role::Worker;
+    c.gateway.direct = true;
+    c.gateway.register = false;
+    c.server.public_base_url = Some(base.clone());
+    c.server.worker_id = Some(format!("direct-{tag}"));
+    c.auth.key_store = KeyStoreBackend::D1;
+    c.engine.fake.models = vec!["fake-h3-turbo".into()];
+    c.validate().unwrap();
+    serve(c, sh, l, base, Overrides::default()).await
+}
+
+/// Gateway-less workers authenticate clients themselves: no key → 401, the
+/// admin token mints and revokes, a minted key works on every worker (also
+/// on one started later: a restart or a scale-up), a revoked one on none,
+/// and the internal token still guards `/fv/v1/internal/*` only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn direct_workers_take_minted_keys_and_the_admin_token() {
+    let sh = Shared::new();
+    let w1 = direct_worker(&sh, "direct-1").await;
+    let w2 = direct_worker(&sh, "direct-2").await;
+    let http = Http::new();
+    let admin = format!("Bearer {ADMIN}");
+    let caps = |b: &str| format!("{b}/fv/v1/capabilities");
+    let keys = |b: &str| format!("{b}/fv/v1/admin/keys");
+
+    // Open: health. Closed without a key: the APIs. The static FV_API_KEYS key works.
+    assert_eq!(http.call("GET", &format!("{}/health", w1.base), None, None).await.0, 200);
+    let (s, v, _) = http.call("GET", &caps(&w1.base), None, None).await;
+    assert_eq!(s, 401, "{v}");
+    assert!(!v.to_string().contains("internal token"), "a direct worker answers like a server, not like a gateway worker: {v}");
+    assert_eq!(http.call("POST", &format!("{}/minimax/h3-turbo/text-to-video", w1.base), Some(json!({"prompt": "x"})), None).await.0, 401);
+    let (s, v, _) = http.call("GET", &caps(&w1.base), None, bearer()).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["auth"], json!({"mode": "keys"}), "{v}");
+    assert!(!v.to_string().contains(TOKEN) && !v.to_string().contains(ADMIN));
+    // The internal routes keep the internal token (not the admin token).
+    let status = format!("{}/fv/v1/internal/status", w1.base);
+    assert_eq!(http.call("GET", &status, None, Some(&admin)).await.0, 401);
+    let r = http.0.get(&status).header("x-fv-internal-token", TOKEN).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+
+    // Admin routes: the admin token only.
+    assert_eq!(http.call("GET", &keys(&w1.base), None, bearer()).await.0, 401);
+    let (s, v, _) = http.call("GET", &keys(&w1.base), None, Some(&admin)).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["backend"], "d1");
+
+    // Mint on one worker: it works there at once and runs a job.
+    let (s, m, _) = http.call("POST", &keys(&w1.base), Some(json!({"name": "laptop"})), Some(&admin)).await;
+    assert_eq!(s, 201, "{m}");
+    let plain = m["api_key"].as_str().unwrap().to_owned();
+    let kid = m["key"]["id"].as_str().unwrap().to_owned();
+    let (bk, kk) = (format!("Bearer {plain}"), format!("Key {plain}"));
+    assert_eq!(http.call("GET", &caps(&w1.base), None, Some(&bk)).await.0, 200);
+    let (s, sub, _) = http.call("POST", &format!("{}/minimax/h3-turbo/text-to-video", w1.base), Some(json!({"prompt": "a red fox"})), Some(&kk)).await;
+    assert_eq!(s, 200, "{sub}");
+    let rid = sub["request_id"].as_str().unwrap();
+    http.poll(&format!("{}/minimax/h3-turbo/requests/{rid}/status", w1.base), Some(&kk), |v| v["status"] == "COMPLETED").await;
+    // The other worker after its D1 refresh (every 30 s; forced here).
+    w2.app.keys.refresh().await.unwrap();
+    assert_eq!(http.call("GET", &caps(&w2.base), None, Some(&bk)).await.0, 200);
+    // A worker started later (restart, scale-up) loads it at start.
+    let w3 = direct_worker(&sh, "direct-3").await;
+    assert_eq!(http.call("GET", &caps(&w3.base), None, Some(&bk)).await.0, 200);
+
+    // Revoke on every worker (what fv-control does): refused everywhere at once.
+    for w in [&w1, &w2, &w3] {
+        let (s, v, _) = http.call("DELETE", &format!("{}/{kid}", keys(&w.base)), None, Some(&admin)).await;
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["key"]["revoked"], true, "{v}");
+    }
+    for w in [&w1, &w2, &w3] {
+        assert_eq!(http.call("GET", &caps(&w.base), None, Some(&bk)).await.0, 401);
+    }
+    // A worker that never saw the DELETE learns it from D1 (start or refresh).
+    let w4 = direct_worker(&sh, "direct-4").await;
+    assert_eq!(http.call("GET", &caps(&w4.base), None, Some(&bk)).await.0, 401);
+    // The admin token is not a client key.
+    assert_eq!(http.call("GET", &caps(&w1.base), None, Some(&admin)).await.0, 401);
 }
 
 /// With `FV_ADMIN_TOKEN_RECIPIENT`, the admin token is published sealed to
@@ -816,6 +913,9 @@ impl SlowStore {
 impl fastvideo_protocol::UrlSigner for SlowStore {
     fn url_for(&self, a: &fastvideo_protocol::Artifact, ttl: Duration) -> url::Url {
         fastvideo_protocol::UrlSigner::url_for(&self.inner, a, ttl)
+    }
+    fn url_issued(&self, a: &fastvideo_protocol::Artifact, issued: time::OffsetDateTime, ttl: Duration) -> url::Url {
+        fastvideo_protocol::UrlSigner::url_issued(&self.inner, a, issued, ttl)
     }
 }
 

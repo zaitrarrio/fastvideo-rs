@@ -295,3 +295,48 @@ fn pipe_encoder_cloudflare_scale_and_forced_idr_restart() {
     assert_eq!((sps.width, sps.height, sps.level_idc), (1280, 720, 31));
     assert!(sps.is_constrained_baseline());
 }
+
+/// A fragmented MP4 (`Mp4Spec::fragmented`) only grows: every byte on disk
+/// while frames are still being written stays as it was, so it can be
+/// uploaded while it is written (docs/serve/dispatch-do-family.md §7.2);
+/// the result starts with `moov` and decodes in full.
+#[test]
+fn fragmented_mp4_is_append_only() {
+    if !have_ffmpeg() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("frag.mp4");
+    let mut spec = cpu(Mp4Spec::new(128, 72, 24, None));
+    spec.fragmented = true;
+    let mut w = mp4::Mp4Writer::create(&out, spec, None).unwrap();
+    let mut snapshots: Vec<Vec<u8>> = Vec::new();
+    for i in 0..96u64 {
+        w.push(&pattern(128, 72, i)).unwrap();
+        if i % 24 == 23 {
+            // Let ffmpeg write what it has (fragments are cut at keyframes).
+            std::thread::sleep(Duration::from_millis(300));
+            snapshots.push(std::fs::read(&out).unwrap_or_default());
+        }
+    }
+    let path = w.finish().unwrap();
+    let full = std::fs::read(&path).unwrap();
+    let grown = snapshots.iter().filter(|s| !s.is_empty()).count();
+    assert!(grown >= 2, "the file grew while frames were written ({:?})", snapshots.iter().map(Vec::len).collect::<Vec<_>>());
+    for s in &snapshots {
+        assert!(full.len() >= s.len());
+        assert_eq!(&full[..s.len()], &s[..], "bytes written earlier changed (not append-only)");
+    }
+    let info = mp4::inspect(&path).unwrap();
+    assert_eq!(info.top_level.first().map(String::as_str), Some("ftyp"));
+    assert_eq!(info.top_level.get(1).map(String::as_str), Some("moov"), "{:?}", info.top_level);
+    assert!(info.top_level.iter().any(|t| t == "moof"), "{:?}", info.top_level);
+    if tools::ffprobe_available() {
+        let o = std::process::Command::new(tools::ffprobe_bin())
+            .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "96");
+    }
+}

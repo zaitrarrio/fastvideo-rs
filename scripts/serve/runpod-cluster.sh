@@ -80,9 +80,11 @@
 # smoke API key; nothing is printed but by `admin-token`).
 # Ledger: artifacts/runpod/serve/ledger.tsv.
 #
-# Placement: FV_CLUSTER_REGIONS (default "eu us"): eu = volume jg48s6o1w0
-# (EUR-IS-1, RTX PRO 6000 96 GB), us = s2k01690bi (US-CA-2, H100/H200). The
-# gateway prefers the first region's DC. Guards: start needs a balance of at
+# Placement: FV_CLUSTER_REGIONS (default "eu"): eu = volume jg48s6o1w0
+# (EUR-IS-1, RTX PRO 6000 96 GB). us (US-CA-2, H100/H200) is unavailable:
+# its weights volume was deleted 2026-10 (EU only, docs/ops/runpod-volumes.md),
+# so asking for it fails; scripts/gpu/volumes.sh brings it back when US is
+# rebuilt. The gateway prefers the first region's DC. Guards: start needs a balance of at
 # least FV_CLUSTER_MIN_START (default 20 $); a GPU over RUNPOD_GPU_MAX_DPH
 # (default 3.6 $/hr) is refused.
 # shellcheck disable=SC2016 # jq programs use $vars
@@ -96,6 +98,8 @@ source "$HERE/variants.sh"
 source "$HERE/lib/registry.sh"
 # shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
 source "$HERE/../gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
+source "$HERE/../gpu/volumes.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
@@ -106,20 +110,16 @@ CAP_S="${FV_CLUSTER_CAP_S:-6000}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8.25}"
 MIN_START="${FV_CLUSTER_MIN_START:-20}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-3.6}"
-REGIONS="${FV_CLUSTER_REGIONS:-eu us}"
+REGIONS="${FV_CLUSTER_REGIONS:-eu}"
 AUTH_MODE="${FV_CLUSTER_AUTH:-keys}"
 ADMIN_KEY="$STATE.admin-key.pem"
 CPU_FLAVORS="${FV_GATEWAY_CPU_FLAVORS:-cpu3c cpu5c cpu3g}"
 POOLS=(h3-turbo h3-max ltx wan)
 
-region_volume() { case $1 in eu) echo jg48s6o1w0 ;; us) echo s2k01690bi ;; esac; }
-region_dc() { case $1 in eu) echo EUR-IS-1 ;; us) echo US-CA-2 ;; esac; }
-region_gpus() {
-  case $1 in
-    eu) echo "NVIDIA RTX PRO 6000 Blackwell Server Edition" ;;
-    us) echo "NVIDIA H100 80GB HBM3,NVIDIA H100 NVL,NVIDIA H200" ;;
-  esac
-}
+# Regions (scripts/gpu/volumes.sh): us exits with "US weights volume deleted".
+region_volume() { fv_region_volume "$1"; }
+region_dc() { fv_region_dc "$1"; }
+region_gpus() { fv_region_gpus "$1"; }
 pool_config() {
   case $1 in
     h3-turbo) echo /etc/fv/runpod.toml ;;
@@ -290,6 +290,7 @@ create_gateway() {
 # goes to .<slot>[pool] of the state (workers; `roll` uses rolling).
 create_worker() {
   local pool="$1" image="$2" slot="${3:-workers}" region vol dc gpu resp pod dph payload
+  fv_check_regions "$REGIONS" # exits here (not in a subshell) on us
   for region in $REGIONS; do
     vol="$(region_volume "$region")"; dc="$(region_dc "$region")"
     IFS=',' read -r -a gpus <<<"$(region_gpus "$region")"
@@ -689,7 +690,7 @@ cmd_roll() {
 }
 
 case "${1:-}" in
-  up) shift; cmd_up "$@" ;;
+  up) shift; fv_check_regions "$REGIONS"; cmd_up "$@" ;;
   wait | status | smoke | down)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; "cmd_$1" ;;
   admin-token) [[ -s "$STATE" ]] || die "no cluster state ($STATE)"; cmd_admin_token ;;

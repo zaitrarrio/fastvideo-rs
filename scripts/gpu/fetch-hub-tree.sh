@@ -12,8 +12,9 @@
 #   it writes .complete and renames the folder to weights/<dest>. It stops if
 #   weights/<dest> already exists. Nothing else on the volume is touched.
 #
-#   RUNPOD_VOLUME_NAME (default fv-weights-b200-us; fv-weights-h3-ltx-hy for
-#   EU) picks the volume and the pod's datacenter. FV_POD_CAP_S (default 3600)
+#   RUNPOD_VOLUME_NAME (default fv-weights-h3-ltx-hy, EU; the US volume
+#   fv-weights-b200-us was deleted 2026-10 and is refused, EU only,
+#   scripts/gpu/volumes.sh) picks the volume and the pod's datacenter. FV_POD_CAP_S (default 3600)
 #   is a hard wall-clock cap: a detached backstop (setsid, survives this
 #   shell) deletes the pod regardless. FV_MIN_BALANCE (default 8) is the
 #   Runpod balance floor. The pod log and sha256.txt land in
@@ -23,9 +24,12 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-b200-us}"
+VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME}"
+fv_check_volume "$VOL_NAME"
 CAP_S="${FV_POD_CAP_S:-3600}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"

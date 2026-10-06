@@ -143,15 +143,19 @@ pub async fn build_jobs(
 }
 
 /// The minted-key store (`auth.key_store`): D1 table `api_keys`, the file
-/// `state_dir/api_keys.json`, or memory.
-pub async fn build_key_store(c: &Config) -> Result<Arc<fastvideo_serve_kit::KeyStore>, String> {
+/// `state_dir/api_keys.json`, or memory. `d1` replaces the HTTP D1 client
+/// (tests: the mock shared by several workers).
+pub async fn build_key_store(c: &Config, d1: Option<fastvideo_serve_kit::D1Client>) -> Result<Arc<fastvideo_serve_kit::KeyStore>, String> {
     use fastvideo_serve_kit::keys::{FileKeyBackend, KeyBackend, MemoryKeyBackend};
     let backend: Arc<dyn KeyBackend> = match c.key_store_backend() {
         KeyStoreBackend::Memory => Arc::new(MemoryKeyBackend::default()),
         KeyStoreBackend::D1 => {
             #[cfg(feature = "http-client")]
             {
-                let client = fastvideo_serve_kit::D1Client::http(d1_config(c)?).map_err(|e| e.to_string())?;
+                let client = match d1 {
+                    Some(d) => d,
+                    None => fastvideo_serve_kit::D1Client::http(d1_config(c)?).map_err(|e| e.to_string())?,
+                };
                 Arc::new(
                     fastvideo_serve_kit::keys::D1KeyBackend::open(client)
                         .await
@@ -160,6 +164,7 @@ pub async fn build_key_store(c: &Config) -> Result<Arc<fastvideo_serve_kit::KeyS
             }
             #[cfg(not(feature = "http-client"))]
             {
+                let _ = d1;
                 return Err("auth.key_store = d1 needs fv-serve built with `http-client`".into());
             }
         }

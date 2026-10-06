@@ -665,8 +665,9 @@ admin token. `fv-autoscale` runs the same controller outside the gateway
      raised ahead of load, max capped by budget, min back to 0 when idle.
      Recommended scaler: `QUEUE_DELAY` at SLO/2, so Runpod's own scaler is a
      backstop and does not start a worker per short job;
-   - pods: `create` (GPU-type list × region+volume placements, e.g. US-CA-2
-     with `s2k01690bi`, then EUR-IS-1 with `jg48s6o1w0`; out of stock →
+   - pods: `create` (GPU-type list × region+volume placements, e.g.
+     EUR-IS-1 with `jg48s6o1w0` — EU only since the US volume `s2k01690bi`
+     was deleted 2026-10; a rebuilt US volume is another placement; out of stock →
      next; no `allowedCudaVersions` filter; a pod above 1.25 × the price table
      is deleted at once), `drain` (idle ready workers, oldest first), `delete`
      (draining with zero in-flight, re-checked right before `DELETE`;

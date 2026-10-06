@@ -46,7 +46,7 @@ fn init_log() {
 const ADMIN: &str = "fvadm_edge_test";
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("fv-edge-{tag}-{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    tempfile::Builder::new().prefix(&format!("fv-edge-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// The native stand-in for the Durable Object: the same routes, the same
@@ -185,8 +185,9 @@ mod native_do {
                 Out::Close { worker } => {
                     g.conns.remove(&(pool.to_owned(), worker));
                 }
-                // No spill here (only the Worker has an R2 bucket).
-                Out::PushSpilled { .. } => {}
+                // No spill here (only the Worker has an R2 bucket); no
+                // protocol-2 effects (tests/edge_family.rs has those).
+                _ => {}
             }
         }
         if let Some(s) = g.scheds.get_mut(pool) {

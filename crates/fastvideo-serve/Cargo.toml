@@ -74,6 +74,9 @@ bytes.workspace = true
 # Test images (PNG, EXIF-rotated JPEG) in tests/i2v_aspect.rs.
 image.workspace = true
 base64.workspace = true
+# Unique per-test state directories (a shared path let parallel tests
+# rename each other's temporary files).
+tempfile = "3"
 
 [features]
 default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]

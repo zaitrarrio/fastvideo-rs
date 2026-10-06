@@ -27,7 +27,7 @@ use tower::ServiceExt;
 const KEY: &str = "sk-test-fv";
 
 fn config(tag: &str) -> Config {
-    let dir = std::env::temp_dir().join(format!("fv-serve-e2e-{tag}-{}", uuid_like()));
+    let dir = tempfile::Builder::new().prefix(&format!("fv-serve-e2e-{tag}-")).tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "test-signing-key".to_owned());
@@ -39,10 +39,6 @@ fn config(tag: &str) -> Config {
     c.engine.fake.step_ms = 1;
     c.validate().unwrap();
     c
-}
-
-fn uuid_like() -> String {
-    format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>, auth: bool) -> (StatusCode, Value, axum::http::HeaderMap) {
@@ -255,8 +251,11 @@ async fn ping_answers_while_the_app_builds() {
         let _ = stop_rx.await;
     }));
     let http = reqwest::Client::new();
+    // The per-request timeout only turns a hung server into a failure; it is
+    // not a latency budget (a loaded build pod answers in seconds, a hang
+    // never).
     let get = |p: &str| {
-        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(5));
+        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(30));
         async move { req.send().await.unwrap() }
     };
     assert_eq!(get("/ping").await.status(), 204);
@@ -268,14 +267,23 @@ async fn ping_answers_while_the_app_builds() {
     assert!(r.headers().get("retry-after").is_some());
 
     go_tx.send(()).unwrap();
-    let mut ready = false;
-    for _ in 0..400 {
-        if get("/ping").await.status() == 200 {
-            ready = true;
-            break;
+    // /ping answers 204 until the build is done and the engine is ready,
+    // then 200. The build's duration is not what this test checks (the fake
+    // engine loads in a blocking thread, which a loaded host schedules late),
+    // so the wait is bounded generously; every answer on the way must be
+    // 204 or 200.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let ready = loop {
+        let s = get("/ping").await.status();
+        if s == 200 {
+            break true;
+        }
+        assert_eq!(s, 204, "/ping while the app builds");
+        if std::time::Instant::now() >= deadline {
+            break false;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    };
     assert!(ready, "/ping never reached 200 after the build");
     let r = http.get(format!("{base}/fv/v1/capabilities")).bearer_auth(KEY).send().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -399,6 +407,95 @@ fn shipped_configs_parse() {
         n += 1;
     }
     assert!(n >= 2, "configs/serve has {n} configs");
+}
+
+/// The Google Cloud configs (`configs/serve/gcp-*.toml`, scripts/gcp/families.tsv,
+/// docs/serve/deploy-gcp.md): each parses under today's schema, serves the same
+/// `[[models]]`, aliases and `[protocols]` as its Runpod twin, and validates
+/// standalone, as a family Durable Object worker (the env scripts/gcp/vm.sh
+/// `worker` sets) and as a gateway-less direct worker.
+#[test]
+fn gcp_configs_mirror_runpod_and_join_family_dos() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = root.join("configs/serve");
+    let table = std::fs::read_to_string(root.join("scripts/gcp/families.tsv")).unwrap();
+    let load = |f: &str| Config::from_toml(&std::fs::read_to_string(dir.join(f)).unwrap(), f).unwrap_or_else(|e| panic!("{f}: {e}"));
+    let env_of = |kv: &[(&str, &str)]| -> BTreeMap<String, String> { kv.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect() };
+    // Dispatch family of a model family (docs/serve/dispatch-do-family.md §4).
+    let do_family = |model_family: &str| match model_family {
+        "ltx2" => "ltx".to_owned(),
+        f => f.to_owned(),
+    };
+    let mut listed = Vec::new();
+    for line in table.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+        let cols: Vec<&str> = line.split('\t').collect();
+        assert_eq!(cols.len(), 11, "families.tsv: {line}");
+        let (family, cfg, twin, dfam) = (cols[0], cols[1], cols[2], cols[3]);
+        if !cfg.starts_with("gcp-") {
+            assert!(dir.join(cfg).exists(), "{family}: {cfg}");
+            continue;
+        }
+        listed.push(cfg.to_owned());
+        let c = load(cfg);
+        c.validate().unwrap_or_else(|e| panic!("{cfg} (standalone): {e}"));
+        assert_eq!(c.engine.backend, fastvideo_serve::config::EngineBackendKind::Cuda, "{cfg}");
+        assert!(!fastvideo_serve::app::cuda_models(&c).unwrap_or_else(|e| panic!("{cfg}: {e}")).is_empty(), "{cfg}");
+        assert_eq!(c.server.state_dir, std::path::PathBuf::from("/fvstate"), "{cfg}: state on the boot disk, never the read-only weight disk");
+        assert_eq!((c.webrtc.udp_port, c.webrtc.tcp_port), (40010, 40000), "{cfg}: real ports (the VM's firewall rule opens them)");
+        assert_eq!(c.director.chunk_seconds, 5.0, "{cfg}: director chunk");
+        assert!(c.gateway.pool.is_none(), "{cfg}: a GCP worker joins family objects, not a pool socket");
+        // The Runpod twin serves the same thing.
+        let r = load(twin);
+        assert_eq!(serde_json::to_value(&c.models).unwrap(), serde_json::to_value(&r.models).unwrap(), "{cfg} vs {twin}: [[models]]");
+        assert_eq!(c.aliases, r.aliases, "{cfg} vs {twin}: [aliases]");
+        assert_eq!(serde_json::to_value(&c.protocols).unwrap(), serde_json::to_value(&r.protocols).unwrap(), "{cfg} vs {twin}: [protocols]");
+        // The family object the table names is the models' family.
+        for m in &c.models {
+            assert_eq!(do_family(&m.family), dfam, "{cfg}: model {} (family {}) vs dispatch family {dfam}", m.id, m.family);
+        }
+        // A family Durable Object worker (vm.sh worker).
+        let worker = [
+            ("FV_SERVE_ROLE", "worker"),
+            ("FV_INTERNAL_TOKEN", "t"),
+            ("FV_DISPATCH_DO_URL", "https://fv-edge.example.workers.dev"),
+            ("FV_DISPATCH_FAMILIES", dfam),
+            ("FV_DISPATCH_DIRECT_UPLOAD", "1"),
+            ("FV_DISPATCH_CAPACITY", "2"),
+            ("FV_DISPATCH_SESSIONS", "1"),
+            ("FV_JOBS_HEARTBEAT_S", "10"),
+            ("FV_WEIGHTS", "/workspace/weights"),
+            ("FV_PUBLIC_BASE_URL", "https://203-0-113-9.sslip.io"),
+        ];
+        let mut w = load(cfg);
+        w.apply_env(&env_of(&worker)).unwrap();
+        w.validate().unwrap_or_else(|e| panic!("{cfg} (family DO worker): {e}"));
+        assert_eq!(w.server.role, fastvideo_serve::config::Role::Worker);
+        assert_eq!(w.dispatch.families, vec![dfam.to_owned()], "{cfg}");
+        assert!(w.dispatch.direct_upload && w.dispatch.do_url.is_some(), "{cfg}");
+        // Gateway-less: the workers check client keys themselves (D1 key store).
+        let mut direct = worker.to_vec();
+        direct.extend([
+            ("FV_WORKER_DIRECT", "1"),
+            ("FV_AUTH_MODE", "keys"),
+            ("FV_KEY_STORE", "d1"),
+            ("FV_ADMIN_TOKEN", "fvadm_test"),
+            ("FV_CF_ACCOUNT_ID", "a"),
+            ("FV_CF_API_TOKEN", "t"),
+            ("FV_D1_DATABASE_ID", "d"),
+        ]);
+        let mut d = load(cfg);
+        d.apply_env(&env_of(&direct)).unwrap();
+        d.validate().unwrap_or_else(|e| panic!("{cfg} (direct worker): {e}"));
+        assert!(d.gateway.direct && d.auth.key_store == fastvideo_serve::config::KeyStoreBackend::D1, "{cfg}");
+    }
+    // Every gcp-*.toml is in the table (vm.sh can deploy it).
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let n = e.unwrap().file_name().to_string_lossy().into_owned();
+        if n.starts_with("gcp-") && n.ends_with(".toml") {
+            assert!(listed.contains(&n), "{n} is not in scripts/gcp/families.tsv");
+        }
+    }
+    assert_eq!(listed.len(), 4, "{listed:?}");
 }
 
 /// Runpod load balancer with `workers.max > 1` and no shared state (file

@@ -30,13 +30,35 @@
 //!   ([`EnqueueReq::replace`]).
 //! - **Spill**: the host may keep a large envelope outside ([`Sched::enqueue_spilled`],
 //!   e.g. in R2); the push then asks the host to load it ([`Out::PushSpilled`]).
+//!
+//! Protocol 2 (docs/serve/dispatch-do-family.md):
+//!
+//! - **Credits**: a worker that reports [`Slots`] is offered jobs while
+//!   `free − (offers sent − offers seen) > 0`; its own arbiter has the last
+//!   word. A **429 nack** (the arbiter is full: another family holds the GPU)
+//!   puts the job back at once, with no backoff and no bounce limit, and the
+//!   worker gets nothing more until its next `slots` frame.
+//! - **Sessions** ([`Sched::admit`]): offered to a connected worker with a
+//!   free session slot; its ack makes the lease live (the host answers the
+//!   waiting HTTP call on [`Out::SessionReady`]); a nack or an ack timeout
+//!   tries the next worker. Live leases expire without [`Sched::renew`];
+//!   [`Sched::release`] and the worker's `session_end` end them.
+//! - **Uploads**: `upload_init` from the job's current holder (lease-checked)
+//!   asks the host to create a multipart upload ([`Out::CreateUpload`]), then
+//!   to mint part URLs ([`Out::Grant`]); `upload_done` asks it to complete
+//!   the upload ([`Out::CompleteUpload`]) and records the job's result. Uploads
+//!   of jobs that moved on (lost, fenced, failed, cancelled) or that expired
+//!   are aborted ([`Out::AbortUpload`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{DispatchTimings, DoMsg, EnqueueReq, EnqueueResp, FailedJob, Hello, PoolStatus, WorkerInfo, WorkerMsg};
+use crate::{
+    DispatchTimings, DoMsg, EnqueueReq, EnqueueResp, FailedJob, FamilyMetrics, Hello, Part, PoolStatus, SessionGrant, SessionInfo, SessionReq, Slots, WorkerInfo,
+    WorkerMsg,
+};
 
 /// Timeouts, milliseconds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,7 +80,41 @@ pub struct Cfg {
     /// A job re-dispatched after a loss that no worker takes for this long
     /// fails (the gateway path fails it at once when no worker is there).
     pub redispatch_wait_ms: i64,
+    /// A session offer without an ack for this long goes to the next worker.
+    #[serde(default = "d_session_offer")]
+    pub session_offer_timeout_ms: i64,
+    /// Default session lease without a renew.
+    #[serde(default = "d_session_ttl")]
+    pub session_ttl_ms: i64,
+    /// Workers a session admission tries before it answers "no capacity".
+    #[serde(default = "d_session_tries")]
+    pub session_max_tries: u32,
+    /// Part URLs and an open upload live this long.
+    #[serde(default = "d_upload_ttl")]
+    pub upload_ttl_ms: i64,
+    /// Object key prefix of uploads (`{prefix}{scope id}/{job}/{attempt}-{lease}/{name}`).
+    #[serde(default = "d_upload_prefix")]
+    pub upload_prefix: String,
 }
+
+fn d_session_offer() -> i64 {
+    5_000
+}
+fn d_session_ttl() -> i64 {
+    60_000
+}
+fn d_session_tries() -> u32 {
+    3
+}
+fn d_upload_ttl() -> i64 {
+    3_600_000
+}
+fn d_upload_prefix() -> String {
+    "outputs/".into()
+}
+
+/// Ended sessions are kept this long (status, idempotent admits).
+const KEEP_SESSIONS_MS: i64 = 600_000;
 
 impl Default for Cfg {
     fn default() -> Self {
@@ -71,6 +127,11 @@ impl Default for Cfg {
             max_bounce_ms: 180_000,
             keep_finished_ms: 3_600_000,
             redispatch_wait_ms: 120_000,
+            session_offer_timeout_ms: d_session_offer(),
+            session_ttl_ms: d_session_ttl(),
+            session_max_tries: d_session_tries(),
+            upload_ttl_ms: d_upload_ttl(),
+            upload_prefix: d_upload_prefix(),
         }
     }
 }
@@ -149,8 +210,19 @@ pub struct JobRec {
     /// Where the host keeps the envelope when it is not held here.
     #[serde(default)]
     pub spill: Option<String>,
+    /// Protocol 2: the committed output upload.
+    #[serde(default)]
+    pub result: Option<JobResult>,
     #[serde(skip)]
     pub envelope: Option<Value>,
+}
+
+/// A job's committed output object.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobResult {
+    pub key: String,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 impl JobRec {
@@ -174,6 +246,120 @@ pub struct WorkerRec {
     pub disconnected_at: Option<i64>,
     /// Skipped until then (it answered busy, or missed an ack).
     pub full_until: i64,
+    /// Protocol of its last hello.
+    #[serde(default)]
+    pub proto: u32,
+    /// Protocol 2: free job slots it last reported (`None`: protocol 1,
+    /// placed by `capacity`).
+    #[serde(default)]
+    pub credits: Option<u32>,
+    /// Offers sent on its current socket, and how many it had seen when it
+    /// reported `credits`.
+    #[serde(default)]
+    pub offers_sent: u64,
+    #[serde(default)]
+    pub offers_seen: u64,
+    /// Free session slots it last reported.
+    #[serde(default)]
+    pub session_free: u32,
+    /// Its public base URL (sessions).
+    #[serde(default)]
+    pub endpoint: String,
+}
+
+/// A session lease's state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionState {
+    Offered,
+    Live,
+    Ended,
+}
+
+impl SessionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Offered => "offered",
+            SessionState::Live => "live",
+            SessionState::Ended => "ended",
+        }
+    }
+}
+
+/// One streaming session (persisted as JSON).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionRec {
+    pub session_id: String,
+    pub model: Option<String>,
+    pub kind: String,
+    pub owner: Option<String>,
+    pub worker: Option<String>,
+    /// Fencing token: +1 per offer.
+    pub lease: u64,
+    pub state: SessionState,
+    pub created_at: i64,
+    /// Offer ack deadline.
+    pub deadline: Option<i64>,
+    pub ttl_ms: i64,
+    pub expires_at: Option<i64>,
+    /// Workers that refused or timed out.
+    pub tried: Vec<String>,
+    pub endpoint: String,
+    pub end_reason: Option<String>,
+    pub ended_at: Option<i64>,
+}
+
+impl SessionRec {
+    fn grant(&self) -> SessionGrant {
+        SessionGrant {
+            session_id: self.session_id.clone(),
+            lease: self.lease,
+            worker_id: self.worker.clone().unwrap_or_default(),
+            endpoint: self.endpoint.clone(),
+            expires_ms: self.expires_at.unwrap_or(0),
+        }
+    }
+}
+
+/// An output upload's state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadState {
+    /// The host is creating the multipart upload.
+    Creating,
+    Open,
+    /// The host is completing it.
+    Completing,
+    Done,
+}
+
+/// One output upload (persisted as JSON), keyed by its object key.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UploadRec {
+    pub key: String,
+    /// Empty while creating.
+    pub upload_id: String,
+    pub job_id: String,
+    pub attempt: u32,
+    pub lease: u64,
+    pub worker: String,
+    pub state: UploadState,
+    pub content_type: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// What [`Sched::admit`] decided.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Admit {
+    /// Offered to a worker: wait for [`Out::SessionReady`].
+    Pending(String),
+    /// Already live (an idempotent admit).
+    Granted(SessionGrant),
+    /// No worker can take it.
+    Refused(String),
 }
 
 /// An effect for the host.
@@ -186,6 +372,19 @@ pub enum Out {
     /// Load the envelope kept at `key` into `msg` (a [`DoMsg::Job`] with a
     /// null envelope), then send it to the worker.
     PushSpilled { worker: String, key: String, msg: DoMsg },
+    /// Create a multipart upload of `key`, then call
+    /// [`Sched::upload_created`] (with `req` and `parts`).
+    CreateUpload { worker: String, req: u64, key: String, content_type: String, parts: u16 },
+    /// Mint URLs for parts `from .. from + count` of `upload_id`, valid until
+    /// `expires_ms`, and send them as a [`DoMsg::UploadGrant`] for `req`.
+    Grant { worker: String, req: u64, job_id: String, key: String, upload_id: String, from: u16, count: u16, expires_ms: i64 },
+    /// Complete the upload with `parts`, then call [`Sched::upload_completed`]
+    /// with the object's size.
+    CompleteUpload { worker: String, req: u64, key: String, upload_id: String, parts: Vec<Part>, bytes: u64 },
+    /// Abort a multipart upload (best effort).
+    AbortUpload { key: String, upload_id: String },
+    /// Answer the admission call waiting for `session_id`.
+    SessionReady { session_id: String, result: Result<SessionGrant, String> },
 }
 
 /// What changed since the last [`Sched::take_dirty`]: rows to write.
@@ -201,6 +400,10 @@ pub struct Dirty {
     pub dropped_envelopes: Vec<String>,
     /// Spilled envelopes (host keys) no longer needed.
     pub dropped_spills: Vec<String>,
+    pub sessions: Vec<SessionRec>,
+    pub removed_sessions: Vec<String>,
+    pub uploads: Vec<UploadRec>,
+    pub removed_uploads: Vec<String>,
 }
 
 impl Dirty {
@@ -212,6 +415,10 @@ impl Dirty {
             && self.new_envelopes.is_empty()
             && self.dropped_envelopes.is_empty()
             && self.dropped_spills.is_empty()
+            && self.sessions.is_empty()
+            && self.removed_sessions.is_empty()
+            && self.uploads.is_empty()
+            && self.removed_uploads.is_empty()
     }
 }
 
@@ -232,6 +439,12 @@ pub struct Sched {
     dropped_spills: BTreeSet<String>,
     /// (queue_ms, ack_ms, worker_ms) of recent first dispatches.
     timings: VecDeque<(f64, f64, f64)>,
+    sessions: BTreeMap<String, SessionRec>,
+    uploads: BTreeMap<String, UploadRec>,
+    dirty_sessions: BTreeSet<String>,
+    removed_sessions: BTreeSet<String>,
+    dirty_uploads: BTreeSet<String>,
+    removed_uploads: BTreeSet<String>,
 }
 
 const TIMINGS_KEEP: usize = 256;
@@ -254,11 +467,22 @@ impl Sched {
             dropped_envelopes: BTreeSet::new(),
             dropped_spills: BTreeSet::new(),
             timings: VecDeque::new(),
+            sessions: BTreeMap::new(),
+            uploads: BTreeMap::new(),
+            dirty_sessions: BTreeSet::new(),
+            removed_sessions: BTreeSet::new(),
+            dirty_uploads: BTreeSet::new(),
+            removed_uploads: BTreeSet::new(),
         }
     }
 
     /// Rebuilds from persisted rows (envelopes already set on the jobs).
     pub fn restore(pool: impl Into<String>, cfg: Cfg, jobs: Vec<JobRec>, workers: Vec<WorkerRec>) -> Self {
+        Self::restore_all(pool, cfg, jobs, workers, Vec::new(), Vec::new())
+    }
+
+    /// [`Sched::restore`] with protocol-2 sessions and uploads.
+    pub fn restore_all(pool: impl Into<String>, cfg: Cfg, jobs: Vec<JobRec>, workers: Vec<WorkerRec>, sessions: Vec<SessionRec>, uploads: Vec<UploadRec>) -> Self {
         let mut s = Self::new(pool, cfg);
         for j in jobs {
             s.seq = s.seq.max(j.seq);
@@ -267,7 +491,23 @@ impl Sched {
         for w in workers {
             s.workers.insert(w.worker_id.clone(), w);
         }
+        for x in sessions {
+            s.sessions.insert(x.session_id.clone(), x);
+        }
+        for u in uploads {
+            s.uploads.insert(u.key.clone(), u);
+        }
         s
+    }
+
+    pub fn sessions(&self) -> impl Iterator<Item = &SessionRec> {
+        self.sessions.values()
+    }
+    pub fn session(&self, id: &str) -> Option<&SessionRec> {
+        self.sessions.get(id)
+    }
+    pub fn uploads(&self) -> impl Iterator<Item = &UploadRec> {
+        self.uploads.values()
     }
 
     pub fn job(&self, id: &str) -> Option<&JobRec> {
@@ -291,6 +531,8 @@ impl Sched {
             .into_iter()
             .filter_map(|id| self.jobs.get(&id).and_then(|j| j.envelope.clone()).map(|e| (id, e)))
             .collect();
+        let sessions = std::mem::take(&mut self.dirty_sessions).into_iter().filter_map(|id| self.sessions.get(&id).cloned()).collect();
+        let uploads = std::mem::take(&mut self.dirty_uploads).into_iter().filter_map(|id| self.uploads.get(&id).cloned()).collect();
         Dirty {
             jobs,
             workers,
@@ -299,6 +541,10 @@ impl Sched {
             new_envelopes,
             dropped_envelopes: std::mem::take(&mut self.dropped_envelopes).into_iter().collect(),
             dropped_spills: std::mem::take(&mut self.dropped_spills).into_iter().collect(),
+            sessions,
+            removed_sessions: std::mem::take(&mut self.removed_sessions).into_iter().collect(),
+            uploads,
+            removed_uploads: std::mem::take(&mut self.removed_uploads).into_iter().collect(),
         }
     }
 
@@ -311,6 +557,28 @@ impl Sched {
 
     fn held(&self, worker: &str) -> u32 {
         self.jobs.values().filter(|j| matches!(j.phase, Phase::Pushed | Phase::Running) && j.worker.as_deref() == Some(worker)).count() as u32
+    }
+
+    /// Free job slots of a worker as the dispatcher estimates them
+    /// (protocol 2: credits minus offers in flight; protocol 1: capacity
+    /// minus held).
+    fn free_estimate(&self, w: &WorkerRec) -> u32 {
+        match w.credits {
+            Some(c) => {
+                let in_flight = w.offers_sent.saturating_sub(w.offers_seen);
+                c.saturating_sub(u32::try_from(in_flight).unwrap_or(u32::MAX))
+            }
+            None => w.capacity.saturating_sub(self.held(&w.worker_id)),
+        }
+    }
+
+    /// Free session slots of a worker (offers in flight subtracted).
+    fn session_free_estimate(&self, w: &WorkerRec) -> u32 {
+        if w.proto < 2 {
+            return 0;
+        }
+        let offered = self.sessions.values().filter(|x| x.state == SessionState::Offered && x.worker.as_deref() == Some(w.worker_id.as_str())).count() as u32;
+        w.session_free.saturating_sub(offered)
     }
 
     fn position(&self, j: &JobRec) -> u32 {
@@ -377,6 +645,7 @@ impl Sched {
             restage: false,
             envelope: if spill.is_some() { None } else { Some(req.envelope) },
             spill,
+            result: None,
         };
         let held_here = j.envelope.is_some();
         self.jobs.insert(id.clone(), j);
@@ -412,6 +681,7 @@ impl Sched {
             self.drop_envelope(job_id);
         }
         self.touch_job(job_id);
+        out.extend(self.reap_uploads(now));
         (Some(phase), out)
     }
 
@@ -456,9 +726,47 @@ impl Sched {
                     }
                 }
             }
+            WorkerMsg::Slots(sl) => self.slots(worker, sl),
+            WorkerMsg::UploadInit { req, job_id, attempt, lease, name, content_type, parts } => {
+                self.upload_init(worker, req, &job_id, attempt, lease, &name, content_type, parts, now, &mut out)
+            }
+            WorkerMsg::UploadMore { req, job_id, upload_id, from, count } => self.upload_more(worker, req, &job_id, &upload_id, from, count, &mut out),
+            WorkerMsg::UploadDone { req, job_id, attempt: _, lease, upload_id, parts, bytes, sha256 } => {
+                self.upload_done(worker, req, &job_id, lease, &upload_id, parts, bytes, sha256, &mut out)
+            }
+            WorkerMsg::UploadAbort { job_id: _, upload_id } => {
+                let key = self.uploads.values().find(|u| u.upload_id == upload_id && u.worker == worker && u.state != UploadState::Done).map(|u| u.key.clone());
+                if let Some(k) = key {
+                    out.extend(self.drop_upload(&k));
+                }
+            }
+            WorkerMsg::SessionAck { session_id, lease, endpoint } => self.session_ack(worker, &session_id, lease, endpoint, now, &mut out),
+            WorkerMsg::SessionNack { session_id, lease, code: _, message } => {
+                let offered = self.sessions.get(&session_id).is_some_and(|x| x.state == SessionState::Offered && x.worker.as_deref() == Some(worker) && x.lease == lease);
+                if offered {
+                    out.extend(self.session_next(&session_id, Some(&message), now));
+                }
+            }
+            WorkerMsg::SessionEnd { session_id, lease } => {
+                let mine = self.sessions.get(&session_id).is_some_and(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && x.lease == lease);
+                if mine {
+                    self.end_session(&session_id, "ended by the worker", now, &mut out, false);
+                }
+            }
         }
+        out.extend(self.reap_uploads(now));
         out.extend(self.pump(now));
         out
+    }
+
+    fn slots(&mut self, worker: &str, sl: Slots) {
+        if let Some(w) = self.workers.get_mut(worker) {
+            w.credits = Some(sl.free);
+            w.session_free = sl.session_free;
+            w.offers_seen = sl.offers_seen;
+            w.full_until = 0;
+            self.dirty_workers.insert(worker.to_owned());
+        }
     }
 
     fn hello(&mut self, worker: &str, h: Hello, now: i64) -> Vec<Out> {
@@ -475,6 +783,12 @@ impl Sched {
             last_seen: now,
             disconnected_at: None,
             full_until: 0,
+            proto: 0,
+            credits: None,
+            offers_sent: 0,
+            offers_seen: 0,
+            session_free: 0,
+            endpoint: String::new(),
         });
         w.connected = true;
         w.disconnected_at = None;
@@ -486,6 +800,13 @@ impl Sched {
         w.caps = h.caps;
         w.last_seen = now;
         w.full_until = 0;
+        w.proto = h.proto;
+        w.endpoint = h.endpoint;
+        // A new socket: offer counters start again on both sides.
+        w.offers_sent = 0;
+        w.offers_seen = 0;
+        w.credits = h.slots.map(|s| s.free);
+        w.session_free = h.slots.map_or(0, |s| s.session_free);
         self.touch_worker(worker);
 
         let reported: BTreeMap<String, crate::Held> = h.jobs.into_iter().map(|x| (x.job_id.clone(), x)).collect();
@@ -522,6 +843,7 @@ impl Sched {
                             lease: r.lease,
                             restage: false,
                             spill: None,
+                            result: None,
                             envelope: None,
                         },
                     );
@@ -580,7 +902,31 @@ impl Sched {
                 self.lose(&id, &format!("worker {worker} reconnected without the job"), now);
             }
         }
-        out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::Welcome { worker_id: worker.to_owned(), pool: self.pool.clone(), cancel } });
+        // Sessions it re-announces: kept when current, else ended there.
+        let held: BTreeMap<String, u64> = h.sessions.into_iter().map(|x| (x.session_id, x.lease)).collect();
+        let mut end_sessions = Vec::new();
+        for (id, lease) in &held {
+            let current = self.sessions.get(id).is_some_and(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && x.lease == *lease);
+            if !current {
+                end_sessions.push(id.clone());
+                continue;
+            }
+            if self.sessions.get(id).is_some_and(|x| x.state == SessionState::Offered) {
+                // Its ack was lost with the old socket: it holds the GPU.
+                self.session_ack(worker, id, *lease, String::new(), now, &mut out);
+            }
+        }
+        let lost: Vec<String> = self
+            .sessions
+            .values()
+            .filter(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && !held.contains_key(&x.session_id))
+            .map(|x| x.session_id.clone())
+            .collect();
+        for id in lost {
+            self.end_session(&id, "the worker reconnected without it", now, &mut out, false);
+        }
+        out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::Welcome { worker_id: worker.to_owned(), pool: self.pool.clone(), cancel, end_sessions } });
+        out.extend(self.reap_uploads(now));
         out.extend(self.pump(now));
         out
     }
@@ -655,6 +1001,16 @@ impl Sched {
         }
         if !retry {
             self.fail(id, &format!("a worker refused the job: {message}"), now);
+            return;
+        }
+        if code == 429 && self.workers.get(worker).is_some_and(|w| w.credits.is_some()) {
+            // Its arbiter is full (another family holds the GPU): offer it
+            // elsewhere now; this worker waits for its next `slots`.
+            if let Some(w) = self.workers.get_mut(worker) {
+                w.credits = Some(0);
+                self.dirty_workers.insert(worker.to_owned());
+            }
+            self.requeue(id, now, 0);
             return;
         }
         let bounced_out = j.first_push_at.is_some_and(|t| now - t > self.cfg.max_bounce_ms);
@@ -788,6 +1144,29 @@ impl Sched {
                     self.lose(&id, &format!("worker {wid} disconnected {} s ago", away / 1000), now);
                 }
             }
+            let sess: Vec<String> =
+                self.sessions.values().filter(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(wid.as_str())).map(|x| x.session_id.clone()).collect();
+            for id in sess {
+                self.end_session(&id, &format!("worker {wid} disconnected {} s ago", away / 1000), now, &mut out, false);
+            }
+        }
+        // Session offers without an answer, and leases not renewed.
+        let late: Vec<String> =
+            self.sessions.values().filter(|x| x.state == SessionState::Offered && x.deadline.is_some_and(|d| d <= now)).map(|x| x.session_id.clone()).collect();
+        for id in late {
+            out.extend(self.session_next(&id, Some("no answer to the offer"), now));
+        }
+        let expired: Vec<String> =
+            self.sessions.values().filter(|x| x.state == SessionState::Live && x.expires_at.is_some_and(|t| t <= now)).map(|x| x.session_id.clone()).collect();
+        for id in expired {
+            self.end_session(&id, "the lease expired (no renew)", now, &mut out, true);
+        }
+        let old: Vec<String> =
+            self.sessions.values().filter(|x| x.state == SessionState::Ended && x.ended_at.is_some_and(|t| now - t > KEEP_SESSIONS_MS)).map(|x| x.session_id.clone()).collect();
+        for id in old {
+            self.sessions.remove(&id);
+            self.dirty_sessions.remove(&id);
+            self.removed_sessions.insert(id);
         }
         // Re-dispatches no worker took.
         let stuck: Vec<(String, String)> = self
@@ -821,6 +1200,7 @@ impl Sched {
             self.removed_jobs.insert(id.clone());
             self.dropped_envelopes.insert(id);
         }
+        out.extend(self.reap_uploads(now));
         let forget: Vec<String> = self
             .workers
             .values()
@@ -884,8 +1264,32 @@ impl Sched {
                 at(w.full_until);
             }
         }
+        for x in self.sessions.values() {
+            match x.state {
+                SessionState::Offered => {
+                    if let Some(d) = x.deadline {
+                        at(d);
+                    }
+                }
+                SessionState::Live => {
+                    if let Some(e) = x.expires_at {
+                        at(e);
+                    }
+                }
+                SessionState::Ended => {
+                    if let Some(e) = x.ended_at {
+                        at(e + KEEP_SESSIONS_MS + 1);
+                    }
+                }
+            }
+        }
+        for u in self.uploads.values() {
+            if u.state != UploadState::Done {
+                at(u.expires_at);
+            }
+        }
         // Queued jobs waiting for a worker are pushed on the next event
-        // (a hello, an ack, a done); no timer needed for them.
+        // (a hello, an ack, a done, a slots frame); no timer needed for them.
         t
     }
 
@@ -906,11 +1310,14 @@ impl Sched {
                 .values()
                 .filter(|w| w.connected && !w.draining && w.full_until <= now)
                 .filter(|w| w.models.is_empty() || model.as_ref().is_none_or(|m| w.models.contains(m)))
-                .map(|w| (self.held(&w.worker_id), w.capacity, w.worker_id.clone()))
-                .filter(|(held, cap, _)| held < cap)
-                .min_by_key(|(held, _, id)| (*held, id.clone()))
-                .map(|(_, _, id)| id);
-            let Some(w) = pick else { continue };
+                .filter(|w| self.free_estimate(w) > 0)
+                .map(|w| (self.held(&w.worker_id), w.worker_id.clone()))
+                .min();
+            let Some((_, w)) = pick else { continue };
+            if let Some(wr) = self.workers.get_mut(&w) {
+                wr.offers_sent += 1;
+                self.dirty_workers.insert(w.clone());
+            }
             let Some(j) = self.jobs.get_mut(&id) else { continue };
             j.phase = Phase::Pushed;
             j.worker = Some(w.clone());
@@ -945,6 +1352,10 @@ impl Sched {
                 sha: w.sha.clone(),
                 last_seen_ms: w.last_seen,
                 caps: w.caps.clone(),
+                free: self.free_estimate(w),
+                session_free: self.session_free_estimate(w),
+                endpoint: w.endpoint.clone(),
+                proto: w.proto,
             })
             .collect();
         let failed = self
@@ -965,7 +1376,432 @@ impl Sched {
             failed,
             timings: self.timings(),
             dispatcher: String::new(),
+            sessions: self
+                .sessions
+                .values()
+                .filter(|x| x.state != SessionState::Ended)
+                .map(|x| SessionInfo {
+                    session_id: x.session_id.clone(),
+                    state: x.state.as_str().into(),
+                    worker: x.worker.clone(),
+                    lease: x.lease,
+                    kind: x.kind.clone(),
+                    expires_ms: x.expires_at.unwrap_or(0),
+                })
+                .collect(),
         }
+    }
+
+    /// `GET /metrics`: the demand signal of this dispatcher.
+    pub fn metrics(&self, now: i64) -> FamilyMetrics {
+        let count = |p: Phase| self.jobs.values().filter(|j| j.phase == p).count() as u32;
+        let oldest = self.jobs.values().filter(|j| j.phase == Phase::Queued).map(|j| j.enqueued_at).min().map_or(0, |t| (now - t).max(0));
+        let conn: Vec<&WorkerRec> = self.workers.values().filter(|w| w.connected).collect();
+        let t = self.timings();
+        FamilyMetrics {
+            family: self.pool.strip_prefix("family:").unwrap_or(&self.pool).to_owned(),
+            now_ms: now,
+            queued: count(Phase::Queued),
+            oldest_queued_ms: oldest,
+            pushed: count(Phase::Pushed),
+            running: count(Phase::Running),
+            workers: conn.len() as u32,
+            slots_total: conn.iter().filter(|w| !w.draining).map(|w| w.capacity).sum(),
+            slots_free: conn.iter().filter(|w| !w.draining).map(|w| self.free_estimate(w)).sum(),
+            sessions_live: self.sessions.values().filter(|x| x.state == SessionState::Live).count() as u32,
+            session_capacity: conn.iter().filter(|w| !w.draining).map(|w| self.session_free_estimate(w)).sum(),
+            failed_1h: self.jobs.values().filter(|j| j.failed_here && j.phase == Phase::Failed && j.finished_at.is_some_and(|f| now - f <= 3_600_000)).count() as u32,
+            queue_p50_ms: t.queue_p50_ms,
+            ack_p50_ms: t.ack_p50_ms,
+            uploads_open: self.uploads.values().filter(|u| u.state != UploadState::Done).count() as u32,
+        }
+    }
+
+    // ------------------------------------------------------------ sessions
+
+    /// `POST /sessions`: offer a session to a worker with a free session
+    /// slot. `Pending`: the host waits for [`Out::SessionReady`].
+    pub fn admit(&mut self, req: SessionReq, now: i64) -> (Admit, Vec<Out>) {
+        self.seq += 1;
+        let id = req.session_id.clone().filter(|s| crate::valid_id(s)).unwrap_or_else(|| format!("ses-{now:x}-{}", self.seq));
+        if let Some(x) = self.sessions.get(&id) {
+            match x.state {
+                SessionState::Live => return (Admit::Granted(x.grant()), Vec::new()),
+                SessionState::Offered => return (Admit::Pending(id), Vec::new()),
+                SessionState::Ended => {}
+            }
+        }
+        let ttl = if req.ttl_ms > 0 { req.ttl_ms } else { self.cfg.session_ttl_ms };
+        self.sessions.insert(
+            id.clone(),
+            SessionRec {
+                session_id: id.clone(),
+                model: req.model,
+                kind: req.kind,
+                owner: req.owner,
+                worker: None,
+                lease: 0,
+                state: SessionState::Offered,
+                created_at: now,
+                deadline: None,
+                ttl_ms: ttl,
+                expires_at: None,
+                tried: Vec::new(),
+                endpoint: String::new(),
+                end_reason: None,
+                ended_at: None,
+            },
+        );
+        self.dirty_sessions.insert(id.clone());
+        let mut out = Vec::new();
+        match self.offer_session(&id, now, &mut out) {
+            Ok(()) => (Admit::Pending(id), out),
+            Err(why) => {
+                self.finish_session(&id, &why, now);
+                (Admit::Refused(why), out)
+            }
+        }
+    }
+
+    /// Offers session `id` to the next worker; `Err` when none is left.
+    fn offer_session(&mut self, id: &str, now: i64, out: &mut Vec<Out>) -> Result<(), String> {
+        let Some(x) = self.sessions.get(id) else { return Err("unknown session".into()) };
+        if x.tried.len() as u32 >= self.cfg.session_max_tries {
+            return Err(format!("no worker took the session ({} tried)", x.tried.len()));
+        }
+        let (model, tried) = (x.model.clone(), x.tried.clone());
+        let pick = self
+            .workers
+            .values()
+            .filter(|w| w.connected && !w.draining && !tried.contains(&w.worker_id))
+            .filter(|w| w.models.is_empty() || model.as_ref().is_none_or(|m| w.models.contains(m)))
+            .filter(|w| self.session_free_estimate(w) > 0)
+            .map(|w| (self.held(&w.worker_id), w.worker_id.clone()))
+            .min();
+        let Some((_, w)) = pick else {
+            return Err(if tried.is_empty() { "no worker has a free session slot".into() } else { format!("no other worker has a free session slot ({} refused)", tried.len()) });
+        };
+        let x = self.sessions.get_mut(id).expect("checked");
+        x.lease += 1;
+        x.worker = Some(w.clone());
+        x.state = SessionState::Offered;
+        x.deadline = Some(now + self.cfg.session_offer_timeout_ms);
+        let msg = DoMsg::SessionOffer { session_id: id.to_owned(), lease: x.lease, model: x.model.clone(), kind: x.kind.clone(), ttl_ms: x.ttl_ms };
+        self.dirty_sessions.insert(id.to_owned());
+        out.push(Out::Send { worker: w, msg });
+        Ok(())
+    }
+
+    /// The offered worker refused or did not answer: try the next one.
+    fn session_next(&mut self, id: &str, why: Option<&str>, now: i64) -> Vec<Out> {
+        let mut out = Vec::new();
+        if let Some(x) = self.sessions.get_mut(id) {
+            if let Some(w) = x.worker.take() {
+                x.tried.push(w);
+            }
+            x.deadline = None;
+        }
+        self.dirty_sessions.insert(id.to_owned());
+        if let Err(e) = self.offer_session(id, now, &mut out) {
+            let e = match why {
+                Some(w) => format!("{e}; last: {w}"),
+                None => e,
+            };
+            self.finish_session(id, &e, now);
+            out.push(Out::SessionReady { session_id: id.to_owned(), result: Err(e) });
+        }
+        out
+    }
+
+    fn session_ack(&mut self, worker: &str, id: &str, lease: u64, endpoint: String, now: i64, out: &mut Vec<Out>) {
+        let fallback = self.workers.get(worker).map(|w| w.endpoint.clone()).unwrap_or_default();
+        let Some(x) = self.sessions.get_mut(id) else {
+            out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: "unknown session".into() } });
+            return;
+        };
+        let mine = x.worker.as_deref() == Some(worker) && x.lease == lease;
+        match x.state {
+            SessionState::Offered if mine => {
+                x.state = SessionState::Live;
+                x.deadline = None;
+                x.expires_at = Some(now + x.ttl_ms);
+                x.endpoint = if endpoint.is_empty() { fallback } else { endpoint };
+                let g = x.grant();
+                self.dirty_sessions.insert(id.to_owned());
+                out.push(Out::SessionReady { session_id: id.to_owned(), result: Ok(g) });
+            }
+            SessionState::Live if mine => {}
+            _ => out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: "the session is not offered to this worker".into() } }),
+        }
+    }
+
+    fn finish_session(&mut self, id: &str, why: &str, now: i64) {
+        if let Some(x) = self.sessions.get_mut(id) {
+            x.state = SessionState::Ended;
+            x.deadline = None;
+            x.ended_at = Some(now);
+            x.end_reason = Some(why.to_owned());
+            self.dirty_sessions.insert(id.to_owned());
+        }
+    }
+
+    /// Ends a session: the worker is told (`revoke`) unless it ended it, and
+    /// a pending admission is answered.
+    fn end_session(&mut self, id: &str, why: &str, now: i64, out: &mut Vec<Out>, revoke: bool) {
+        let Some(x) = self.sessions.get(id) else { return };
+        if x.state == SessionState::Ended {
+            return;
+        }
+        let (state, worker) = (x.state, x.worker.clone());
+        self.finish_session(id, why, now);
+        if revoke {
+            if let Some(w) = worker {
+                out.push(Out::Send { worker: w, msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: why.to_owned() } });
+            }
+        }
+        if state == SessionState::Offered {
+            out.push(Out::SessionReady { session_id: id.to_owned(), result: Err(why.to_owned()) });
+        }
+    }
+
+    /// Extends a live session's lease (`lease` 0: any).
+    pub fn renew(&mut self, id: &str, lease: u64, now: i64) -> Option<SessionGrant> {
+        let x = self.sessions.get_mut(id)?;
+        if x.state != SessionState::Live || (lease != 0 && lease != x.lease) {
+            return None;
+        }
+        x.expires_at = Some(now + x.ttl_ms);
+        self.dirty_sessions.insert(id.to_owned());
+        Some(self.sessions[id].grant())
+    }
+
+    /// Ends a session on the caller's request; `None` for an unknown one.
+    pub fn release(&mut self, id: &str, now: i64) -> (Option<&'static str>, Vec<Out>) {
+        let mut out = Vec::new();
+        if !self.sessions.contains_key(id) {
+            return (None, out);
+        }
+        self.end_session(id, "released", now, &mut out, true);
+        out.extend(self.pump(now));
+        (Some("ended"), out)
+    }
+
+    // ------------------------------------------------------------- uploads
+
+    /// Whether `worker` holds `job_id` under `lease` now.
+    fn holds(&self, worker: &str, job_id: &str, lease: u64) -> bool {
+        self.jobs.get(job_id).is_some_and(|j| !j.phase.finished() && j.worker.as_deref() == Some(worker) && j.lease == lease)
+    }
+
+    fn grant_err(worker: &str, req: u64, job_id: &str, e: &str) -> Out {
+        Out::Send {
+            worker: worker.to_owned(),
+            msg: DoMsg::UploadGrant {
+                req,
+                job_id: job_id.to_owned(),
+                upload_id: String::new(),
+                key: String::new(),
+                bucket: String::new(),
+                part_urls: Vec::new(),
+                expires_ms: 0,
+                error: Some(e.to_owned()),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upload_init(&mut self, worker: &str, req: u64, job_id: &str, attempt: u32, lease: u64, name: &str, content_type: String, parts: u16, now: i64, out: &mut Vec<Out>) {
+        if !crate::valid_id(name) {
+            out.push(Self::grant_err(worker, req, job_id, "invalid object name"));
+            return;
+        }
+        if !self.holds(worker, job_id, lease) {
+            out.push(Self::grant_err(worker, req, job_id, "this worker does not hold the job under this lease"));
+            return;
+        }
+        let scope = self.pool.strip_prefix("family:").unwrap_or(&self.pool).to_owned();
+        let key = format!("{}{scope}/{job_id}/{attempt}-{lease}/{name}", self.cfg.upload_prefix);
+        let parts = parts.clamp(1, 10_000);
+        match self.uploads.get(&key).map(|u| (u.state, u.upload_id.clone(), u.expires_at)) {
+            Some((UploadState::Open, upload_id, _)) => {
+                // A repeated init (after a reconnect): fresh URLs.
+                let exp = now + self.cfg.upload_ttl_ms;
+                if let Some(u) = self.uploads.get_mut(&key) {
+                    u.expires_at = exp;
+                }
+                self.dirty_uploads.insert(key.clone());
+                out.push(Out::Grant { worker: worker.to_owned(), req, job_id: job_id.to_owned(), key, upload_id, from: 1, count: parts, expires_ms: exp });
+            }
+            Some(_) => out.push(Self::grant_err(worker, req, job_id, "the upload is being created or completed")),
+            None => {
+                self.uploads.insert(
+                    key.clone(),
+                    UploadRec {
+                        key: key.clone(),
+                        upload_id: String::new(),
+                        job_id: job_id.to_owned(),
+                        attempt,
+                        lease,
+                        worker: worker.to_owned(),
+                        state: UploadState::Creating,
+                        content_type: content_type.clone(),
+                        created_at: now,
+                        expires_at: now + self.cfg.upload_ttl_ms,
+                        bytes: 0,
+                        sha256: String::new(),
+                    },
+                );
+                self.dirty_uploads.insert(key.clone());
+                out.push(Out::CreateUpload { worker: worker.to_owned(), req, key, content_type, parts });
+            }
+        }
+    }
+
+    /// The host created (or failed to create) the multipart upload of `key`.
+    pub fn upload_created(&mut self, key: &str, req: u64, parts: u16, result: Result<String, String>, now: i64) -> Vec<Out> {
+        let mut out = Vec::new();
+        let Some(u) = self.uploads.get(key).cloned() else {
+            if let Ok(id) = result {
+                out.push(Out::AbortUpload { key: key.to_owned(), upload_id: id });
+            }
+            return out;
+        };
+        if u.state != UploadState::Creating {
+            return out;
+        }
+        match result {
+            Ok(upload_id) if self.holds(&u.worker, &u.job_id, u.lease) => {
+                let exp = now + self.cfg.upload_ttl_ms;
+                let rec = self.uploads.get_mut(key).expect("checked");
+                rec.upload_id = upload_id.clone();
+                rec.state = UploadState::Open;
+                rec.expires_at = exp;
+                self.dirty_uploads.insert(key.to_owned());
+                out.push(Out::Grant { worker: u.worker, req, job_id: u.job_id, key: key.to_owned(), upload_id, from: 1, count: parts.clamp(1, 10_000), expires_ms: exp });
+            }
+            Ok(upload_id) => {
+                // The job moved on while the upload was being created.
+                self.uploads.remove(key);
+                self.removed_uploads.insert(key.to_owned());
+                out.push(Out::AbortUpload { key: key.to_owned(), upload_id });
+                out.push(Self::grant_err(&u.worker, req, &u.job_id, "the job moved on (lease changed)"));
+            }
+            Err(e) => {
+                self.uploads.remove(key);
+                self.removed_uploads.insert(key.to_owned());
+                out.push(Self::grant_err(&u.worker, req, &u.job_id, &format!("creating the upload failed: {e}")));
+            }
+        }
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upload_more(&mut self, worker: &str, req: u64, job_id: &str, upload_id: &str, from: u16, count: u16, out: &mut Vec<Out>) {
+        let found = self.uploads.values().find(|u| u.upload_id == upload_id && u.state == UploadState::Open).map(|u| (u.key.clone(), u.worker.clone(), u.lease, u.expires_at));
+        match found {
+            Some((key, w, lease, exp)) if w == worker && self.holds(worker, job_id, lease) => {
+                out.push(Out::Grant { worker: worker.to_owned(), req, job_id: job_id.to_owned(), key, upload_id: upload_id.to_owned(), from: from.max(1), count: count.clamp(1, 10_000), expires_ms: exp });
+            }
+            _ => out.push(Self::grant_err(worker, req, job_id, "no open upload of this job for this worker")),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upload_done(&mut self, worker: &str, req: u64, job_id: &str, lease: u64, upload_id: &str, parts: Vec<Part>, bytes: u64, sha256: String, out: &mut Vec<Out>) {
+        let committed = |key: String, ok: bool, bytes: u64, error: Option<String>| Out::Send {
+            worker: worker.to_owned(),
+            msg: DoMsg::UploadCommitted { req, job_id: job_id.to_owned(), key, bucket: String::new(), bytes, ok, error },
+        };
+        let Some(u) = self.uploads.values().find(|u| u.upload_id == upload_id && u.job_id == job_id).cloned() else {
+            out.push(committed(String::new(), false, 0, Some("no such upload".into())));
+            return;
+        };
+        if u.state == UploadState::Done {
+            out.push(committed(u.key, true, u.bytes, None));
+            return;
+        }
+        if u.worker != worker || u.lease != lease || !self.holds(worker, job_id, lease) {
+            out.push(committed(u.key.clone(), false, 0, Some("fenced: the job is held under a newer lease".into())));
+            out.extend(self.drop_upload(&u.key));
+            return;
+        }
+        if u.state != UploadState::Open {
+            return;
+        }
+        let rec = self.uploads.get_mut(&u.key).expect("found");
+        rec.state = UploadState::Completing;
+        rec.bytes = bytes;
+        rec.sha256 = sha256;
+        self.dirty_uploads.insert(u.key.clone());
+        out.push(Out::CompleteUpload { worker: worker.to_owned(), req, key: u.key, upload_id: upload_id.to_owned(), parts, bytes });
+    }
+
+    /// The host completed (`Ok(object size)`) or failed to complete `key`.
+    pub fn upload_completed(&mut self, key: &str, req: u64, result: Result<u64, String>, _now: i64) -> Vec<Out> {
+        let mut out = Vec::new();
+        let Some(u) = self.uploads.get(key).cloned() else { return out };
+        if u.state != UploadState::Completing {
+            return out;
+        }
+        let msg = |ok: bool, bytes: u64, error: Option<String>| DoMsg::UploadCommitted { req, job_id: u.job_id.clone(), key: key.to_owned(), bucket: String::new(), bytes, ok, error };
+        match result {
+            Ok(size) if size == u.bytes => {
+                let rec = self.uploads.get_mut(key).expect("checked");
+                rec.state = UploadState::Done;
+                self.dirty_uploads.insert(key.to_owned());
+                if let Some(j) = self.jobs.get_mut(&u.job_id) {
+                    j.result = Some(JobResult { key: key.to_owned(), bytes: size, sha256: u.sha256.clone() });
+                    self.dirty_jobs.insert(u.job_id.clone());
+                }
+                out.push(Out::Send { worker: u.worker.clone(), msg: msg(true, size, None) });
+            }
+            other => {
+                let e = match other {
+                    Ok(size) => format!("the object has {size} bytes, the worker sent {}", u.bytes),
+                    Err(e) => format!("completing the upload failed: {e}"),
+                };
+                out.push(Out::Send { worker: u.worker.clone(), msg: msg(false, 0, Some(e)) });
+                out.extend(self.drop_upload(key));
+            }
+        }
+        out
+    }
+
+    /// Forgets an unfinished upload and aborts it at the store.
+    fn drop_upload(&mut self, key: &str) -> Vec<Out> {
+        let mut out = Vec::new();
+        if let Some(u) = self.uploads.remove(key) {
+            self.dirty_uploads.remove(key);
+            self.removed_uploads.insert(key.to_owned());
+            if !u.upload_id.is_empty() && u.state != UploadState::Done {
+                out.push(Out::AbortUpload { key: u.key, upload_id: u.upload_id });
+            }
+        }
+        out
+    }
+
+    /// Aborts uploads nobody will complete: expired, or of a job that moved
+    /// to a newer lease or ended without them; forgets finished ones whose
+    /// job is gone.
+    fn reap_uploads(&mut self, now: i64) -> Vec<Out> {
+        let mut out = Vec::new();
+        let stale: Vec<String> = self
+            .uploads
+            .values()
+            .filter(|u| match u.state {
+                UploadState::Done => !self.jobs.contains_key(&u.job_id),
+                UploadState::Creating | UploadState::Completing => u.expires_at <= now,
+                UploadState::Open => {
+                    u.expires_at <= now
+                        || self.jobs.get(&u.job_id).is_none_or(|j| j.lease != u.lease || j.worker.as_deref() != Some(u.worker.as_str()) || j.phase.finished())
+                }
+            })
+            .map(|u| u.key.clone())
+            .collect();
+        for k in stale {
+            out.extend(self.drop_upload(&k));
+        }
+        out
     }
 
     fn timings(&self) -> DispatchTimings {
@@ -1266,4 +2102,335 @@ mod tests {
         s.tick(t.max(7_000 + s.cfg.max_bounce_ms + 2));
         assert_eq!(s.job("b").unwrap().phase, Phase::Failed);
     }
+
+    // ------------------------------------------------------- protocol 2
+
+    fn hello2(id: &str, cap: u32, free: u32, session_free: u32, jobs: Vec<Held>) -> WorkerMsg {
+        WorkerMsg::Hello(Hello {
+            worker_id: id.into(),
+            pool: "family:wan".into(),
+            proto: 2,
+            capacity: cap,
+            jobs,
+            endpoint: format!("https://{id}.example"),
+            slots: Some(Slots { free, session_free, offers_seen: 0 }),
+            ..Hello::default()
+        })
+    }
+    fn slots(s: &mut Sched, w: &str, free: u32, session_free: u32, seen: u64, now: i64) -> Vec<Out> {
+        s.on_msg(w, WorkerMsg::Slots(Slots { free, session_free, offers_seen: seen }), now)
+    }
+    fn ready(out: &[Out]) -> Vec<(String, Result<SessionGrant, String>)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::SessionReady { session_id, result } => Some((session_id.clone(), result.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+    fn session_offers(out: &[Out]) -> Vec<(String, String, u64)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Send { worker, msg: DoMsg::SessionOffer { session_id, lease, .. } } => Some((worker.clone(), session_id.clone(), *lease)),
+                _ => None,
+            })
+            .collect()
+    }
+    fn revokes(out: &[Out]) -> Vec<(String, String)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Send { worker, msg: DoMsg::SessionRevoke { session_id, .. } } => Some((worker.clone(), session_id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn credits_bound_offers_in_flight() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 2, 1, 0, vec![]), 0);
+        let (_, out) = enq(&mut s, "a", 1);
+        assert_eq!(pushes(&out).len(), 1);
+        // One credit, one offer in flight: nothing more although the
+        // capacity is 2.
+        let (_, out) = enq(&mut s, "b", 2);
+        assert!(pushes(&out).is_empty());
+        // A stale report (computed before the offer arrived) changes nothing.
+        let out = slots(&mut s, "w1", 1, 0, 0, 3);
+        assert!(pushes(&out).is_empty());
+        // The worker took `a` and still has one slot (`seen` = 1): `b` goes.
+        ack(&mut s, "w1", "a", 1, 4);
+        let out = slots(&mut s, "w1", 1, 0, 1, 5);
+        assert_eq!(pushes(&out), vec![("w1".into(), "b".into(), 1, false)]);
+        assert_eq!(s.metrics(6).slots_free, 0);
+    }
+
+    #[test]
+    fn arbiter_nack_reoffers_elsewhere_at_once() {
+        // (No stale-worker detection in this test: it spans a long wait.)
+        let cfg = Cfg { stale_after_ms: i64::MAX / 4, ..Cfg::default() };
+        let mut s = Sched::new("family:wan", cfg);
+        s.on_msg("w1", hello2("w1", 1, 1, 0, vec![]), 0);
+        s.on_msg("w2", hello2("w2", 1, 1, 0, vec![]), 0);
+        let (_, out) = enq(&mut s, "a", 0);
+        assert_eq!(pushes(&out)[0].0, "w1");
+        // w1's GPU was taken by another family's job meanwhile.
+        let nack = WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy with family ltx".into() };
+        let out = s.on_msg("w1", nack.clone(), 5);
+        assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)], "no backoff");
+        assert_eq!(s.job("a").unwrap().lease, 2);
+        // w2 is busy too: the job waits (not failed) until a slot frees,
+        // however long that takes.
+        let nack2 = WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy".into() };
+        let out = s.on_msg("w2", nack2, 6);
+        assert!(pushes(&out).is_empty());
+        let late = 6 + s.cfg.max_bounce_ms * 3;
+        assert!(pushes(&s.tick(late)).is_empty());
+        assert_eq!(s.job("a").unwrap().phase, Phase::Queued);
+        let out = slots(&mut s, "w2", 1, 0, 1, late + 1);
+        assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
+        // A late 429 from w2 again: still not failed (no bounce limit).
+        let out = s.on_msg("w2", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy".into() }, late + 2);
+        assert!(pushes(&out).is_empty());
+        assert_eq!(s.job("a").unwrap().phase, Phase::Queued);
+    }
+
+    #[test]
+    fn ack_timeout_requeues_and_fences_the_late_ack_v2() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 1, 1, 0, vec![]), 0);
+        s.on_msg("w2", hello2("w2", 1, 1, 0, vec![]), 0);
+        enq(&mut s, "a", 0);
+        let out = s.tick(s.cfg.ack_timeout_ms);
+        assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
+        let out = s.on_msg("w1", WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 1, worker_ms: 1 }, s.cfg.ack_timeout_ms + 1);
+        assert_eq!(cancels(&out), vec![("w1".into(), "a".into())]);
+    }
+
+    #[test]
+    fn redeploy_reannounce_v2_runs_nothing_twice() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 2, 2, 0, vec![]), 0);
+        enq(&mut s, "run", 0);
+        enq(&mut s, "inflight", 0);
+        ack(&mut s, "w1", "run", 1, 1);
+        let lease_run = s.job("run").unwrap().lease;
+        let jobs: Vec<JobRec> = s.jobs().cloned().collect();
+        let workers: Vec<WorkerRec> = s.workers().cloned().collect();
+        let mut s = Sched::restore_all("family:wan", Cfg::default(), jobs, workers, Vec::new(), Vec::new());
+        s.disconnect("w1", 10);
+        let held = vec![Held { job_id: "run".into(), attempt: 1, lease: lease_run, state: "running".into() }];
+        // Back with one slot left (it runs `run`).
+        let out = s.on_msg("w1", hello2("w1", 2, 1, 0, held), 500);
+        assert_eq!(pushes(&out), vec![("w1".into(), "inflight".into(), 1, false)], "only the offer lost in flight goes again");
+        assert_eq!(s.job("run").unwrap().attempt, 1);
+        assert!(cancels(&out).is_empty());
+    }
+
+    #[test]
+    fn session_admission_ack_renew_expire() {
+        let mut s = Sched::new("family:sfwan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 0);
+        let (a, out) = s.admit(SessionReq { session_id: Some("s1".into()), kind: "director".into(), ..SessionReq::default() }, 10);
+        assert_eq!(a, Admit::Pending("s1".into()));
+        assert_eq!(session_offers(&out), vec![("w1".into(), "s1".into(), 1)]);
+        let out = s.on_msg("w1", WorkerMsg::SessionAck { session_id: "s1".into(), lease: 1, endpoint: String::new() }, 20);
+        let r = ready(&out);
+        let g = r[0].1.clone().unwrap();
+        assert_eq!((g.worker_id.as_str(), g.endpoint.as_str(), g.expires_ms), ("w1", "https://w1.example", 20 + s.cfg.session_ttl_ms));
+        // Idempotent admit of the same id.
+        assert!(matches!(s.admit(SessionReq { session_id: Some("s1".into()), ..SessionReq::default() }, 21).0, Admit::Granted(_)));
+        assert_eq!(s.metrics(22).sessions_live, 1);
+        let g = s.renew("s1", 1, 1_000).unwrap();
+        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1 }, 50_000);
+        assert_eq!(g.expires_ms, 1_000 + s.cfg.session_ttl_ms);
+        assert!(s.renew("s1", 7, 1_001).is_none(), "wrong lease");
+        let out = s.tick(g.expires_ms);
+        assert_eq!(revokes(&out), vec![("w1".into(), "s1".into())]);
+        assert_eq!(s.session("s1").unwrap().state, SessionState::Ended);
+        assert!(s.renew("s1", 0, g.expires_ms + 1).is_none());
+    }
+
+    #[test]
+    fn session_nack_timeout_and_no_capacity() {
+        let mut s = Sched::new("family:sfwan", Cfg::default());
+        // A protocol-1 worker never gets sessions.
+        s.on_msg("v1", hello("v1", 1, vec![]), 0);
+        let (a, _) = s.admit(SessionReq::default(), 1);
+        assert!(matches!(a, Admit::Refused(_)), "{a:?}");
+        s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 2);
+        s.on_msg("w2", hello2("w2", 1, 1, 1, vec![]), 2);
+        let (a, out) = s.admit(SessionReq { session_id: Some("s".into()), ..SessionReq::default() }, 3);
+        assert_eq!(a, Admit::Pending("s".into()));
+        assert_eq!(session_offers(&out)[0].0, "w1");
+        let out = s.on_msg("w1", WorkerMsg::SessionNack { session_id: "s".into(), lease: 1, code: 429, message: "busy".into() }, 4);
+        assert_eq!(session_offers(&out), vec![("w2".into(), "s".into(), 2)]);
+        // w2 never answers: the offer times out and nobody is left.
+        let out = s.tick(4 + s.cfg.session_offer_timeout_ms);
+        let r = ready(&out);
+        assert_eq!(r.len(), 1);
+        assert!(r[0].1.as_ref().unwrap_err().contains("no other worker"), "{r:?}");
+        // A late ack from w2 is revoked.
+        let out = s.on_msg("w2", WorkerMsg::SessionAck { session_id: "s".into(), lease: 2, endpoint: String::new() }, 9_000);
+        assert_eq!(revokes(&out), vec![("w2".into(), "s".into())]);
+    }
+
+    #[test]
+    fn sessions_survive_a_reconnect_and_release_frees_the_slot() {
+        let mut s = Sched::new("family:sfwan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 0);
+        let (_, _) = s.admit(SessionReq { session_id: Some("a".into()), ..SessionReq::default() }, 1);
+        s.on_msg("w1", WorkerMsg::SessionAck { session_id: "a".into(), lease: 1, endpoint: "https://pod-a".into() }, 2);
+        s.disconnect("w1", 3);
+        // Back holding `a` plus a stale session it should drop.
+        let h = WorkerMsg::Hello(Hello {
+            worker_id: "w1".into(),
+            pool: "family:sfwan".into(),
+            proto: 2,
+            sessions: vec![crate::HeldSession { session_id: "a".into(), lease: 1 }, crate::HeldSession { session_id: "old".into(), lease: 4 }],
+            slots: Some(Slots { free: 0, session_free: 0, offers_seen: 0 }),
+            ..Hello::default()
+        });
+        let out = s.on_msg("w1", h, 500);
+        let w = out.iter().find_map(|o| match o {
+            Out::Send { msg: DoMsg::Welcome { end_sessions, .. }, .. } => Some(end_sessions.clone()),
+            _ => None,
+        });
+        assert_eq!(w, Some(vec!["old".to_string()]));
+        assert_eq!(s.session("a").unwrap().state, SessionState::Live);
+        let (st, out) = s.release("a", 600);
+        assert_eq!(st, Some("ended"));
+        assert_eq!(revokes(&out), vec![("w1".into(), "a".into())]);
+        // A worker that is gone past the grace period loses its sessions.
+        s.on_msg("w1", WorkerMsg::Slots(Slots { free: 1, session_free: 1, offers_seen: 0 }), 700);
+        s.admit(SessionReq { session_id: Some("b".into()), ..SessionReq::default() }, 701);
+        s.on_msg("w1", WorkerMsg::SessionAck { session_id: "b".into(), lease: 1, endpoint: String::new() }, 702);
+        s.disconnect("w1", 800);
+        s.tick(800 + s.cfg.reconnect_grace_ms);
+        assert_eq!(s.session("b").unwrap().state, SessionState::Ended);
+    }
+
+    fn creates(out: &[Out]) -> Vec<(String, u64, String)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::CreateUpload { worker, req, key, .. } => Some((worker.clone(), *req, key.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+    fn grants(out: &[Out]) -> Vec<(String, u64, String, u16, u16)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Grant { worker, req, upload_id, from, count, .. } => Some((worker.clone(), *req, upload_id.clone(), *from, *count)),
+                _ => None,
+            })
+            .collect()
+    }
+    fn grant_errors(out: &[Out]) -> Vec<String> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Send { msg: DoMsg::UploadGrant { error: Some(e), .. }, .. } => Some(e.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    fn aborts(out: &[Out]) -> Vec<String> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::AbortUpload { upload_id, .. } => Some(upload_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    fn init(job: &str, lease: u64, req: u64) -> WorkerMsg {
+        WorkerMsg::UploadInit { req, job_id: job.into(), attempt: 1, lease, name: "output.mp4".into(), content_type: "video/mp4".into(), parts: 4 }
+    }
+
+    #[test]
+    fn upload_grant_complete_and_result() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 1, 1, 0, vec![]), 0);
+        enq(&mut s, "a", 0);
+        ack(&mut s, "w1", "a", 1, 1);
+        let out = s.on_msg("w1", init("a", 1, 7), 2);
+        let c = creates(&out);
+        assert_eq!(c, vec![("w1".into(), 7, "outputs/wan/a/1-1/output.mp4".into())]);
+        let key = c[0].2.clone();
+        let out = s.upload_created(&key, 7, 4, Ok("U1".into()), 3);
+        assert_eq!(grants(&out), vec![("w1".into(), 7, "U1".into(), 1, 4)]);
+        let out = s.on_msg("w1", WorkerMsg::UploadMore { req: 8, job_id: "a".into(), upload_id: "U1".into(), from: 5, count: 4 }, 4);
+        assert_eq!(grants(&out), vec![("w1".into(), 8, "U1".into(), 5, 4)]);
+        let parts = vec![Part { n: 1, etag: "e1".into() }, Part { n: 2, etag: "e2".into() }];
+        let done = WorkerMsg::UploadDone { req: 9, job_id: "a".into(), attempt: 1, lease: 1, upload_id: "U1".into(), parts: parts.clone(), bytes: 100, sha256: "ab".into() };
+        let out = s.on_msg("w1", done.clone(), 5);
+        assert!(matches!(&out[..], [Out::CompleteUpload { req: 9, bytes: 100, .. }]), "{out:?}");
+        // A size mismatch would fail; the right size commits.
+        let out = s.upload_completed(&key, 9, Ok(100), 6);
+        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: true, bytes: 100, .. }, .. })));
+        assert_eq!(s.job("a").unwrap().result.as_ref().unwrap().sha256, "ab");
+        // A repeated done is answered from the record (idempotent).
+        let out = s.on_msg("w1", done, 7);
+        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: true, .. }, .. })));
+        // The job ends: nothing is aborted.
+        let out = s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 8);
+        assert!(aborts(&out).is_empty());
+    }
+
+    #[test]
+    fn uploads_are_fenced_and_aborted_when_the_job_moves() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 1, 1, 0, vec![]), 0);
+        s.on_msg("w2", hello2("w2", 1, 1, 0, vec![]), 0);
+        enq(&mut s, "a", 0);
+        ack(&mut s, "w1", "a", 1, 1);
+        // Not the holder, or a stale lease: refused.
+        assert_eq!(grant_errors(&s.on_msg("w2", init("a", 1, 1), 2)).len(), 1);
+        assert_eq!(grant_errors(&s.on_msg("w1", init("a", 9, 2), 2)).len(), 1);
+        let out = s.on_msg("w1", init("a", 1, 3), 3);
+        let key = creates(&out)[0].2.clone();
+        s.upload_created(&key, 3, 2, Ok("U".into()), 4);
+        // w1 is lost; the job goes to w2 under lease 2.
+        s.disconnect("w1", 10);
+        let out = s.tick(10 + s.cfg.reconnect_grace_ms);
+        assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 2, true)]);
+        assert_eq!(aborts(&out), vec!["U".to_string()], "the old holder's upload is aborted");
+        // The old holder's done is fenced.
+        let done = WorkerMsg::UploadDone { req: 5, job_id: "a".into(), attempt: 1, lease: 1, upload_id: "U".into(), parts: vec![], bytes: 1, sha256: String::new() };
+        let out = s.on_msg("w1", done, 20_100);
+        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: false, .. }, .. })), "{out:?}");
+        // An upload created after its job moved on is aborted at once.
+        ack(&mut s, "w2", "a", 2, 20_200);
+        let out = s.on_msg("w2", init("a", 2, 6), 20_300);
+        let k2 = creates(&out)[0].2.clone();
+        s.cancel("a", 20_400);
+        s.on_msg("w2", WorkerMsg::Done { job_id: "a".into(), attempt: 2, state: "cancelled".into() }, 20_500);
+        let out = s.upload_created(&k2, 6, 2, Ok("U2".into()), 20_600);
+        assert_eq!(aborts(&out), vec!["U2".to_string()]);
+        // An open upload that outlives its TTL is aborted by the alarm.
+        slots(&mut s, "w2", 1, 0, 1, 29_999);
+        enq(&mut s, "b", 30_000);
+        let who = s.job("b").unwrap().worker.clone().unwrap();
+        ack(&mut s, &who, "b", 1, 30_001);
+        let out = s.on_msg(&who, init("b", 1, 7), 30_002);
+        let k3 = creates(&out)[0].2.clone();
+        s.upload_created(&k3, 7, 1, Ok("U3".into()), 30_003);
+        let wake = s.next_wake(30_004).unwrap();
+        assert!(wake <= 30_003 + s.cfg.upload_ttl_ms);
+        let out = s.tick(30_003 + s.cfg.upload_ttl_ms);
+        assert_eq!(aborts(&out), vec!["U3".to_string()]);
+    }
+
+    #[test]
+    fn metrics_report_depth_age_and_slots() {
+        let mut s = Sched::new("family:wan", Cfg::default());
+        s.on_msg("w1", hello2("w1", 2, 1, 1, vec![]), 0);
+        enq(&mut s, "a", 100);
+        enq(&mut s, "b", 200);
+        enq(&mut s, "c", 300);
+        let m = s.metrics(1_300);
+        assert_eq!(m.family, "wan");
+        assert_eq!((m.queued, m.pushed, m.workers, m.slots_total, m.slots_free, m.session_capacity), (2, 1, 1, 2, 0, 1));
+        assert_eq!(m.oldest_queued_ms, 1_100);
+    }
+
 }

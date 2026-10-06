@@ -393,10 +393,9 @@ impl Default for PodConfig {
         Self {
             template_id: String::new(),
             gpu_types: Vec::new(),
-            placements: vec![
-                Placement { data_center: "US-CA-2".into(), volume_id: "s2k01690bi".into() },
-                Placement { data_center: "EUR-IS-1".into(), volume_id: "jg48s6o1w0".into() },
-            ],
+            // EU only since 2026-10-06: the US weights volume (s2k01690bi,
+            // US-CA-2) was deleted (docs/ops/runpod-volumes.md).
+            placements: vec![Placement { data_center: "EUR-IS-1".into(), volume_id: "jg48s6o1w0".into() }],
             cloud_type: "SECURE".into(),
             max_lifetime_s: 12.0 * 3600.0,
             boot_timeout_s: 1200.0,
@@ -448,7 +447,8 @@ mod tests {
         assert_eq!(c.pools.len(), 2);
         assert_eq!(c.price(&c.pools[0]), 4.18);
         assert_eq!(c.price(&c.pools[1]), 4.59);
-        assert_eq!(c.pools[1].pod.placements.len(), 2);
+        assert_eq!(c.pools[1].pod.placements.len(), 1);
+        assert_eq!(c.pools[1].pod.placements[0].volume_id, "jg48s6o1w0");
     }
 
     #[test]
@@ -460,7 +460,8 @@ mod tests {
         assert_eq!(names, ["h3-turbo", "wan", "ltx", "sfwan-live"]);
         let live = &c.pools[3];
         assert_eq!(live.kind, PoolKind::Pod);
-        assert_eq!(live.pod.placements[1].volume_id, "jg48s6o1w0");
+        assert_eq!(live.pod.placements.len(), 1);
+        assert_eq!(live.pod.placements[0].volume_id, "jg48s6o1w0");
         assert_eq!(c.price(live), 2.09);
         // 10:00 PDT on a Monday = 17:00 UTC.
         assert_eq!(c.pools[0].scheduled_min(1_790_553_600.0 + 17.0 * 3600.0), 1);

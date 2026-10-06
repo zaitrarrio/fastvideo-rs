@@ -14,7 +14,10 @@
 # and :<variant>-latest (the `latest` channel, docs/serve/releases.md);
 # FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
-# registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv).
+# registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv);
+# FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
+# of build-pod binaries that replace the serve-build / gateway-build stages,
+# so no cargo compile runs; empty: compile in the image).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -53,6 +56,9 @@ build() {
     for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-variants" "$FV_IMAGE:buildcache-gateway"; do
       args+=(--cache-from "type=registry,ref=$c")
     done
+    while IFS= read -r c; do
+      [[ -n "$c" ]] && args+=(--build-context "$c")
+    done <<<"${FV_BUILD_CONTEXTS:-}"
     meta="$(mktemp)"
     log "build serve-$v -> $tags ($COMPRESSION)"
     docker buildx build "$ROOT" -f "$ROOT/docker/gpucheck.Dockerfile" --target "serve-$v" --platform linux/amd64 \

@@ -18,10 +18,10 @@ use fastvideo_webrtc::ice::IceServer;
 use fastvideo_webrtc::writer::VideoCodec as WVideoCodec;
 use serde_json::Value;
 
-use super::control::{CausalLimits, Limits};
+use super::control::Limits;
 use super::engine::{frames_for, DirectorEngine};
 use super::info::{app_name, director_info, InfoFacts};
-pub use super::info::{relative_chunk_cost, served_resolutions};
+pub use super::info::{chunk_frames, model_limits, relative_chunk_cost, served_resolutions};
 use super::media::VideoCodec;
 use super::messages::{Aspect, Resolution};
 use super::session::{self, SessionHandle, SessionInit};
@@ -36,7 +36,9 @@ pub struct DirectorConfig {
     /// ICE servers handed to clients by `/ice` (none of ours is TURN: str0m
     /// has no TURN client, risk R2; the browser may bring its own).
     pub ice_servers: Vec<IceServer>,
-    /// Default chunk duration (`default_chunk_duration`), clamped to the model.
+    /// Default chunk duration (`default_chunk_duration`, 5 s) for sessions
+    /// that send no `chunk_duration`: the nearest length the model serves
+    /// (5 or 10 s), else clamped to its clip range.
     pub chunk_seconds: f64,
     /// `max_session_seconds` in emitted video time; `None` = unlimited.
     pub max_session_seconds: Option<u64>,
@@ -44,8 +46,8 @@ pub struct DirectorConfig {
     pub heartbeat_timeout: Duration,
     /// `configure` must arrive this soon after the control channel opens.
     pub configure_timeout: Duration,
-    /// Built chunks queued behind the one playing (host RAM: one 10 s 768p
-    /// chunk is ~750 MB of RGB).
+    /// Built chunks queued behind the one playing, whatever their length
+    /// (host RAM: one 10 s 768p chunk is ~750 MB of RGB, a 5 s one half).
     pub buffer_chunks: usize,
     /// H.264 backend (NVENC in production, design §0.1).
     pub h264: EncoderBackend,
@@ -78,7 +80,7 @@ impl Default for DirectorConfig {
         Self {
             apps: vec![FalApp::h3(fastvideo_protocol::Tier::Max)],
             ice_servers: vec![IceServer::default_stun()],
-            chunk_seconds: 10.0,
+            chunk_seconds: f64::from(super::messages::DEFAULT_CHUNK_DURATION),
             max_session_seconds: None,
             heartbeat_timeout: Duration::from_secs(15),
             configure_timeout: Duration::from_secs(60),
@@ -145,45 +147,9 @@ pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> Resolved
     (w, h, None)
 }
 
-/// The control limits for a model.
+/// The control limits for a model (see [`model_limits`]).
 pub fn limits_for(cfg: &DirectorConfig, caps: &ModelCaps) -> Limits {
-    let fps = caps.fps.default;
-    if let Some(StreamCaps::Causal { block_frames, context, .. }) = caps.stream {
-        let block_seconds = f64::from(block_frames) / f64::from(fps.max(1));
-        let chunk_blocks = cfg.causal_chunk_blocks.max(1);
-        let chunk = block_seconds * f64::from(chunk_blocks);
-        return Limits {
-            fps,
-            chunk_seconds: chunk,
-            min_chunk_seconds: chunk,
-            max_chunk_seconds: chunk,
-            resolutions: served_resolutions(caps),
-            script_max_end_images: 0,
-            causal: Some(CausalLimits { block_frames, block_seconds, chunk_blocks, context }),
-            ..Limits::default()
-        };
-    }
-    let (min_s, max_s) = match caps.stream {
-        Some(StreamCaps::Clip { min_s, max_s }) => (f64::from(min_s), f64::from(max_s)),
-        _ => (5.0, 15.0),
-    };
-    let max = max_s.min(15.0);
-    let min = min_s.max(5.0).min(max);
-    Limits {
-        fps,
-        chunk_seconds: cfg.chunk_seconds.clamp(min, max),
-        min_chunk_seconds: min,
-        max_chunk_seconds: max,
-        resolutions: served_resolutions(caps),
-        // The H3 1080P tier's clip cap (5 s; 10 s with `h3_1080p_long`).
-        hd_max_chunk_seconds: caps
-            .canvas
-            .hd
-            .filter(|t| t.short_edge == Resolution::R1080.short_edge())
-            .and_then(|t| t.max_frames)
-            .map(|n| (f64::from(n) / f64::from(fps.max(1))).floor()),
-        ..Limits::default()
-    }
+    model_limits(caps, cfg.chunk_seconds, cfg.causal_chunk_blocks)
 }
 
 /// One media stream for every track of the answer (moved to
@@ -276,6 +242,7 @@ impl DirectorService {
         InfoFacts {
             app: app_name(&app.id),
             default_chunk_frames,
+            chunk_frames: chunk_frames(caps, &limits),
             limits,
             max_session_seconds: self.cfg.max_session_seconds,
             audio,
@@ -445,9 +412,64 @@ mod tests {
         let at = l.at(Resolution::R1080);
         assert_eq!((at.min_chunk_seconds, at.chunk_seconds, at.max_chunk_seconds), (5.0, 5.0, 5.0));
         assert_eq!(l.at(Resolution::R768), l);
+        assert_eq!(at.chunk_options(), [5]);
+        assert_eq!(at.with_chunk(Some(10)).chunk_seconds, 5.0, "10 s falls back to the 5 s cap");
         fastvideo_protocol::apply_feature_flags(&mut caps, &|_| true);
         let at = limits_for(&DirectorConfig::default(), &caps).at(Resolution::R1080);
-        assert_eq!((at.chunk_seconds, at.max_chunk_seconds), (10.0, 10.0));
+        assert_eq!((at.chunk_seconds, at.max_chunk_seconds), (5.0, 10.0));
+        assert_eq!(at.chunk_options(), [5, 10]);
+        assert_eq!(at.with_chunk(Some(10)).chunk_seconds, 10.0);
+    }
+
+    fn clip_caps(family: Family, grid: fastvideo_protocol::FrameGrid, fps: u32) -> ModelCaps {
+        let mut caps = ModelCaps::h3("m", false);
+        caps.family = family;
+        caps.fps = fastvideo_protocol::FpsCaps::fixed(fps);
+        caps.stream = Some(StreamCaps::Clip { min_s: grid.min as f32 / fps as f32, max_s: grid.max as f32 / fps as f32 });
+        caps.frames = grid;
+        caps
+    }
+
+    /// Frames per chunk at 5 s and 10 s on every clip family's grid, as
+    /// the CUDA catalog declares them: on the grid, covering the requested
+    /// length, and 5 s only where the clip range stops short of 10 s.
+    #[test]
+    fn chunk_frames_per_model() {
+        use fastvideo_protocol::FrameGrid;
+        let cfg = DirectorConfig::default();
+        let models = [
+            // (name, caps, grid check, want)
+            ("h3 17n+5 @24", ModelCaps::h3("h3", false), (17, 5), vec![(5, 124), (10, 243)]),
+            ("ltx 8k+1 @24", clip_caps(Family::Ltx2, FrameGrid::new(8, 1, 9, 481, 121), 24), (8, 1), vec![(5, 121), (10, 241)]),
+            ("wan2.2-5b 4k+1 @24", clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 161, 121), 24), (4, 1), vec![(5, 121)]),
+            ("fastwan-1.3b 4k+1 @16", clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 129, 81), 16), (4, 1), vec![(5, 81)]),
+        ];
+        for (name, caps, (step, offset), want) in models {
+            let l = limits_for(&cfg, &caps);
+            assert_eq!(l.chunk_seconds, 5.0, "{name}: the default");
+            let got = chunk_frames(&caps, &l);
+            assert_eq!(got, want, "{name}");
+            for (d, n) in got {
+                assert_eq!((n - offset) % step, 0, "{name}: {n} frames off the grid");
+                assert!(n >= d * l.fps, "{name}: {n} frames cover {d} s");
+                assert!(n < (d * l.fps) + step + offset, "{name}: {n} frames, no more than one grid step over {d} s");
+            }
+            let v = director_info(&InfoFacts {
+                app: "a".into(),
+                default_chunk_frames: frames_for(&caps, l.fps, l.chunk_seconds).unwrap(),
+                chunk_frames: chunk_frames(&caps, &l),
+                limits: l.clone(),
+                max_session_seconds: None,
+                audio: false,
+            });
+            assert_eq!(v["default_chunk_duration"], 5, "{name}");
+            assert_eq!(v["chunk_duration_options"], serde_json::json!(l.chunk_options()), "{name}");
+        }
+        // An operator default of 10 s stays 10 where served, 5 where not.
+        let ten = DirectorConfig { chunk_seconds: 10.0, ..DirectorConfig::default() };
+        assert_eq!(limits_for(&ten, &ModelCaps::h3("h3", false)).chunk_seconds, 10.0);
+        let wan = clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 161, 121), 24);
+        assert_eq!(limits_for(&ten, &wan).chunk_seconds, 5.0);
     }
 
     /// LTX two-stage caps as the CUDA catalog declares them (sides multiples
@@ -493,11 +515,13 @@ mod tests {
             assert_eq!((w % 64, h % 64), (0, 0), "{} {}", r.as_str(), a.as_str());
             assert_eq!(crop.is_some(), gen != out);
         }
-        // No 1080p clip cap on LTX; every tier keeps the model's chunk range.
+        // No 1080p clip cap on LTX; every tier keeps the model's chunk range
+        // and both chunk lengths.
         let l = limits_for(&DirectorConfig::default(), &caps);
         assert_eq!(l.hd_max_chunk_seconds, None);
         for r in Resolution::ALL {
             assert_eq!(l.at(r), l);
+            assert_eq!(l.at(r).chunk_options(), [5, 10]);
         }
         // Labels: chunk cost next to 768p.
         assert_eq!(relative_chunk_cost(&caps, Resolution::R768), None);
@@ -518,5 +542,13 @@ mod tests {
         let form = crate::catalog::director_schema(&ModelCaps::h3("h3", false));
         assert_eq!(form["properties"]["resolution"]["enum"], serde_json::json!(["768p"]));
         assert_eq!(form["properties"]["resolution"]["x-fv-labels"], serde_json::json!({}));
+        // chunk_duration: 5 or 10 s (5 default) on clip models.
+        let cd = &crate::catalog::director_schema(&ltx_caps())["properties"]["chunk_duration"];
+        assert_eq!((cd["enum"].clone(), cd["default"].clone()), (serde_json::json!([5, 10]), serde_json::json!(5)));
+        let mut h3 = ModelCaps::h3("h3", false);
+        h3.canvas = h3.canvas.clone().with_h3_1080p();
+        let form = crate::catalog::director_schema(&h3);
+        assert_eq!(form["properties"]["chunk_duration"]["x-fv-options-by-resolution"]["1080p"], serde_json::json!([5]));
+        assert_eq!(form["x-fal-order-properties"], serde_json::json!(["resolution", "aspect_ratio", "chunk_duration"]));
     }
 }

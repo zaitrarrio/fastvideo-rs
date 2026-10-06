@@ -250,6 +250,11 @@ impl UrlSigner for Signer {
     fn url_for(&self, a: &Artifact, ttl: Duration) -> Url {
         Url::parse(&format!("https://fal.fv.test/files/{}/{}?exp={}&sig=00", a.id, a.file_name, ttl.as_secs())).unwrap()
     }
+    // The fixtures show the TTL, as `url_for` does (the window itself is
+    // covered by `result_url_is_stable_for_a_finished_job`).
+    fn url_issued(&self, a: &Artifact, _issued: OffsetDateTime, ttl: Duration) -> Url {
+        self.url_for(a, ttl)
+    }
 }
 
 fn resolved(task: Task) -> ResolvedJob {
@@ -492,4 +497,42 @@ fn timings_split_queue_into_dispatch_and_wait() {
     assert!(v.get("dispatched_at").is_none());
     let back: Job = serde_json::from_value(serde_json::to_value(&j).unwrap()).unwrap();
     assert_eq!(back.dispatched_at, j.dispatched_at);
+}
+
+/// A finished job's result URL is the same on every read (the handle's
+/// `get()`, `result()` by id seconds later, the webhook), as on fal: the
+/// signature is anchored at the job's completion, not at the request time.
+/// Before, `exp` was `now + url_ttl` and two reads in different seconds
+/// differed (fal-client compat "result() by id").
+#[test]
+fn result_url_is_stable_for_a_finished_job() {
+    use fastvideo_fal::queue::{output_json, url_issued_at};
+    use fastvideo_serve_kit::artifacts::{LocalArtifactStore, LocalUrls, UrlKey};
+
+    let base = Url::parse("https://fal.fv.test").unwrap();
+    let store = LocalArtifactStore::new("/tmp/unused", LocalUrls { public_base: base.clone(), key: UrlKey::new("k") });
+    let ttl = Duration::from_secs(86_400);
+    let mut j = job(Task::T2V, "minimax/h3-max/text-to-video");
+    succeed(&mut j);
+    let done = j.completed_at.unwrap();
+    let url_at = |at: OffsetDateTime| {
+        let cx = ViewCtx { now: at, urls: &store, public_base: &base, with_logs: false };
+        output_json(&j, &cx, ttl).unwrap()["video"]["url"].as_str().unwrap().to_owned()
+    };
+    let first = url_at(done + time::Duration::milliseconds(999));
+    for later in [time::Duration::seconds(1), time::Duration::minutes(7), time::Duration::hours(23)] {
+        assert_eq!(url_at(done + later), first, "+{later}");
+    }
+    let exp = (done + ttl).unix_timestamp().to_string();
+    assert!(first.contains(&format!("exp={exp}&")), "{first}");
+    let webhook = webhook_body(&j, &ViewCtx { now: done + time::Duration::seconds(3), urls: &store, public_base: &base, with_logs: false }, ttl).unwrap();
+    assert_eq!(webhook["payload"]["video"]["url"], json!(first), "{webhook}");
+
+    // Past the first window (retention longer than url_ttl) the URL is
+    // re-issued for the next window, still live and stable inside it.
+    assert_eq!(url_issued_at(&j, done + time::Duration::hours(25), ttl), done + ttl);
+    assert_eq!(url_at(done + time::Duration::hours(25)), url_at(done + time::Duration::hours(47)));
+    assert_ne!(url_at(done + time::Duration::hours(25)), first);
+    // A job read before it records a completion falls back to its creation.
+    assert_eq!(url_issued_at(&job(Task::T2V, "x"), now() + time::Duration::seconds(5), ttl), now());
 }

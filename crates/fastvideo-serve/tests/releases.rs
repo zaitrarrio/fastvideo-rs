@@ -33,10 +33,7 @@ const OTHER_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_DIGEST: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-rel-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-rel-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn base_config(tag: &str, arts: &std::path::Path) -> Config {

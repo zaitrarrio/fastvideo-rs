@@ -6,6 +6,12 @@
 //! `ffmpeg` on PATH), else OpenH264 (`--features openh264`); they skip
 //! otherwise. The browser test (`fal.realtime.open` in Chromium) lives in
 //! `director_browser.rs`.
+//!
+//! Each media scenario runs twice. The plain test checks what holds on a
+//! loaded host (protocol, order, the RTP grids, frame and packet counts);
+//! its `realtime_` twin, ignored by default, also measures the delivery
+//! rates (24 fps, 48 kHz) and runs in `scripts/serve/check.sh --realtime`,
+//! serialized after the build (docs/dev/testing.md).
 #![cfg(feature = "director")]
 
 mod director_common;
@@ -95,6 +101,46 @@ impl Client {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    /// Waits until `video` more frames and `audio` more Opus packets have
+    /// arrived (counts, not rates: a loaded host delivers them late).
+    async fn more_media(&self, video: usize, audio: usize) {
+        let (v0, a0) = {
+            let l = self.media.lock().unwrap();
+            (l.video.len(), l.audio.len())
+        };
+        let deadline = Instant::now() + T;
+        loop {
+            let (v, a) = {
+                let l = self.media.lock().unwrap();
+                (l.video.len() - v0, l.audio.len() - a0)
+            };
+            if v >= video && a >= audio {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{v} of {video} video frames, {a} of {audio} audio packets");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// What was received is on the model's clocks, in order: video RTP
+    /// times on the 24 fps grid (3750 ticks of 90 kHz), audio on the 20 ms
+    /// Opus grid (960 samples). A frame or packet lost to load leaves a
+    /// multiple of the step, never an off-grid time.
+    fn assert_rtp_grids(&self) {
+        self.assert_rtp_grids_at(24);
+    }
+
+    /// [`Self::assert_rtp_grids`] for a model at `fps` (90 kHz / `fps`
+    /// ticks per frame).
+    fn assert_rtp_grids_at(&self, fps: u32) {
+        let step = u64::from(90_000 / fps);
+        let l = self.media.lock().unwrap();
+        let bad = l.video.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % step != 0);
+        assert!(bad.is_none(), "video RTP off the {fps} fps grid: {bad:?}");
+        let bad = l.audio.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % 960 != 0);
+        assert!(bad.is_none(), "audio RTP off the 20 ms grid: {bad:?}");
     }
 
     /// Video frames / audio samples per second over `window`, measured
@@ -194,6 +240,21 @@ fn h264_or_skip() -> Option<fastvideo_media::video::EncoderBackend> {
     b
 }
 
+/// The heartbeat route reports a closed session gone (it is dropped from
+/// the registry just after it closes).
+async fn assert_not_alive(f: &Fixture, id: &str) {
+    let deadline = Instant::now() + T;
+    loop {
+        let hb = post(&f.app, "/wma/session/heartbeat", json!({"session_id": id})).await.json();
+        if hb == json!({"alive": false}) {
+            return;
+        }
+        assert_eq!(hb, json!({"alive": true}));
+        assert!(Instant::now() < deadline, "session {id} still alive after it closed");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn wait_closed(f: &Fixture, id: &str, within: Duration) -> Option<SessionState> {
     let h = f.svc.session(id)?;
     let mut rx = h.closed();
@@ -203,6 +264,17 @@ async fn wait_closed(f: &Fixture, id: &str, within: Duration) -> Option<SessionS
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn av_session_end_to_end() {
+    av_session(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_av_session_end_to_end() {
+    av_session(true).await;
+}
+
+/// `realtime`: also measure the A/V delivery rates.
+async fn av_session(realtime: bool) {
     let Some(h264) = h264_or_skip() else { return };
     let f = fixture(Opts { h264, hold_builds: true, ..Opts::default() }).await;
     let mut c = open(&f, "minimax/h3-max/director").await;
@@ -214,8 +286,15 @@ async fn av_session_end_to_end() {
     assert_eq!(info["resolutions"], json!(["480p", "768p"]));
     assert_eq!(info["audio_sample_rate"], 48_000);
     assert_eq!(info["continuation_context_frames"], 1);
+    assert_eq!((info["default_chunk_duration"].as_u64(), info["chunk_seconds"].as_u64()), (Some(5), Some(5)));
+    assert_eq!(info["chunk_duration_options"], json!([5, 10]));
+    assert_eq!(info["chunk_duration_frames"], json!({"5": 124, "10": 243}));
 
     // Strict schemas and ordering rules.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "chunk_duration": 7})).await;
+    let e = c.expect("error").await;
+    assert_eq!(e["code"], "invalid_message");
+    assert!(e["error"].as_str().unwrap().contains("chunk_duration"), "{e}");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "x", "bogus": 1})).await;
     let e = c.expect("error").await;
     assert_eq!((e["code"].as_str(), e["prompt_version"].as_u64()), (Some("invalid_message"), Some(1)));
@@ -230,6 +309,7 @@ async fn av_session_end_to_end() {
     assert_eq!(cfgd["resolution"], "480p");
     assert_eq!(cfgd["has_initial_audio"], false);
     assert_eq!(cfgd["enable_safety_checker"], false);
+    assert_eq!(cfgd["chunk_duration"], 5, "the default chunk");
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "again"})).await;
     assert_eq!(c.expect("error").await["code"], "immutable_settings");
 
@@ -269,13 +349,19 @@ async fn av_session_end_to_end() {
     // Audio (silence) flows from the start; video from the first chunk.
     assert!(c.media.lock().unwrap().audio.first().is_some_and(|a| a.0 <= t_ch0), "audio before the first chunk");
     c.first_video().await;
-    // A/V at 24 fps / 48 kHz.
-    let (fps, rtp_fps, audio_rate, audio_step) = c.rates(Duration::from_secs(4)).await;
-    eprintln!("received: {fps:.2} fps (rtp {rtp_fps:.2}), audio {audio_rate:.0} samples/s, {audio_step} per packet");
-    assert!((fps - 24.0).abs() < 2.4, "video arrives at {fps} fps");
-    assert!((rtp_fps - 24.0).abs() < 0.01, "video RTP advances at {rtp_fps} fps");
-    assert!((audio_rate - 48_000.0).abs() < 4_800.0, "audio arrives at {audio_rate} samples/s");
-    assert_eq!(audio_step, 960.0, "20 ms Opus packets");
+    if realtime {
+        // A/V at 24 fps / 48 kHz.
+        let (fps, rtp_fps, audio_rate, audio_step) = c.rates(Duration::from_secs(4)).await;
+        eprintln!("received: {fps:.2} fps (rtp {rtp_fps:.2}), audio {audio_rate:.0} samples/s, {audio_step} per packet");
+        assert!((fps - 24.0).abs() < 2.4, "video arrives at {fps} fps");
+        assert!((rtp_fps - 24.0).abs() < 0.01, "video RTP advances at {rtp_fps} fps");
+        assert!((audio_rate - 48_000.0).abs() < 4_800.0, "audio arrives at {audio_rate} samples/s");
+        assert_eq!(audio_step, 960.0, "20 ms Opus packets");
+    } else {
+        // Two seconds of media arrive: 48 frames and 100 packets.
+        c.more_media(48, 100).await;
+    }
+    c.assert_rtp_grids();
     assert!(c.answer.contains("stereo=1"), "stereo Opus: {}", c.answer);
     assert!(c.media.lock().unwrap().keyframes > 0);
 
@@ -291,15 +377,23 @@ async fn av_session_end_to_end() {
     assert_eq!(fm["final"], true);
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Stopped))), "{st:?}");
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let hb = post(&f.app, "/wma/session/heartbeat", json!({"session_id": c.session_id})).await;
-    assert_eq!(hb.json(), json!({"alive": false}));
+    assert_not_alive(&f, &c.session_id).await;
     // The executor is free again: a new session is admitted.
     let _c2 = open(&f, "minimax/h3-max/director").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn video_only_session() {
+    video_only(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_video_only_session() {
+    video_only(true).await;
+}
+
+async fn video_only(realtime: bool) {
     let Some(h264) = h264_or_skip() else { return };
     let f = fixture(Opts { h264, ..Opts::default() }).await;
     let mut c = open(&f, "fv/h3-silent/director").await;
@@ -308,14 +402,21 @@ async fn video_only_session() {
     let audio = a.media.iter().find(|m| m.kind() == MediaKind::Audio).unwrap();
     assert_eq!(audio.direction(), Direction::Inactive, "{}", c.answer);
     c.expect("session_info").await;
-    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p"})).await;
-    c.expect("configured").await;
-    c.expect("chunk").await;
+    // A 10 s session: 243 frames on H3's 17n+5 grid.
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "silent film", "resolution": "480p", "chunk_duration": 10})).await;
+    assert_eq!(c.expect("configured").await["chunk_duration"], 10);
+    let ch0 = c.expect("chunk").await;
+    assert_eq!((ch0["generated_frame_count"].as_u64(), ch0["requested_duration_seconds"].as_f64()), (Some(243), Some(10.0)), "{ch0}");
     c.first_video().await;
-    let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
-    eprintln!("video-only: {fps:.2} fps (rtp {rtp_fps:.2})");
-    assert!((fps - 24.0).abs() < 2.4, "{fps}");
-    assert!((rtp_fps - 24.0).abs() < 0.01, "{rtp_fps}");
+    if realtime {
+        let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
+        eprintln!("video-only: {fps:.2} fps (rtp {rtp_fps:.2})");
+        assert!((fps - 24.0).abs() < 2.4, "{fps}");
+        assert!((rtp_fps - 24.0).abs() < 0.01, "{rtp_fps}");
+    } else {
+        c.more_media(48, 0).await;
+    }
+    c.assert_rtp_grids();
     assert!(c.media.lock().unwrap().audio.is_empty(), "no audio on a video-only session");
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
@@ -329,6 +430,16 @@ async fn video_only_session() {
 /// seen on an H100 worker).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn browser_offer_without_a_usable_h264_encoder_gets_vp8() {
+    browser_offer_vp8(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_browser_offer_without_a_usable_h264_encoder_gets_vp8() {
+    browser_offer_vp8(true).await;
+}
+
+async fn browser_offer_vp8(realtime: bool) {
     use fastvideo_media::video::EncoderBackend;
     let f = fixture(Opts { h264: EncoderBackend::OpenH264, ..Opts::default() }).await;
     let mut c = open_with(&f, "fv/h3-silent/director", vec![VideoCodec::H264, VideoCodec::Vp8]).await;
@@ -345,8 +456,13 @@ async fn browser_offer_without_a_usable_h264_encoder_gets_vp8() {
     let codec = if h264 { "H.264" } else if vp8 { "VP8" } else { "unknown" };
     let want = if EncoderBackend::OpenH264.compiled() { "H.264" } else { "VP8" };
     assert_eq!(codec, want, "first video frame {:02x?}", &head[..head.len().min(8)]);
-    let (fps, _, _, _) = c.rates(Duration::from_secs(3)).await;
-    assert!((fps - 24.0).abs() < 2.4, "{codec}: {fps} fps");
+    if realtime {
+        let (fps, _, _, _) = c.rates(Duration::from_secs(3)).await;
+        assert!((fps - 24.0).abs() < 2.4, "{codec}: {fps} fps");
+    } else {
+        c.more_media(48, 0).await;
+    }
+    c.assert_rtp_grids();
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
 }
@@ -431,9 +547,7 @@ async fn heartbeat_expiry_closes_the_session() {
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(5)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::ClientGone))), "{st:?}");
     assert!(t0.elapsed() >= Duration::from_millis(1200), "closed too early: {:?}", t0.elapsed());
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let hb = post(&f.app, "/wma/session/heartbeat", json!({"session_id": c.session_id})).await;
-    assert_eq!(hb.json(), json!({"alive": false}));
+    assert_not_alive(&f, &c.session_id).await;
     // The engine session was released.
     let _again = open(&f, "minimax/h3-max/director").await;
 }
@@ -468,7 +582,8 @@ async fn session_limit_and_runner_sse() {
     assert_eq!(ex["reason"], "session_limit");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::SessionLimit))), "{st:?}");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Gone from the registry: its engine session is released.
+    assert_not_alive(&f, &c.session_id).await;
 
     // Runner side: SSE whose first event is the answer; dropping the
     // response ends the session.
@@ -504,6 +619,16 @@ async fn session_limit_and_runner_sse() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_chunks_report_deadline_missed() {
+    late_chunks(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_late_chunks_report_deadline_missed() {
+    late_chunks(true).await;
+}
+
+async fn late_chunks(realtime: bool) {
     let Some(h264) = h264_or_skip() else { return };
     // Builds slower than real time: each 5 s chunk takes ~7 s.
     let f = fixture(Opts { h264, step: Duration::from_millis(870), ..Opts::default() }).await;
@@ -516,8 +641,13 @@ async fn late_chunks_report_deadline_missed() {
     assert_eq!(d["behavior"], "freeze_video_and_silence_audio_until_ready");
     assert!(d["late_by_seconds"].as_f64().unwrap() > 0.5, "{d}");
     // Audio kept flowing (silence) through the underrun.
-    let (_, _, audio_rate, _) = c.rates(Duration::from_secs(1)).await;
-    assert!(audio_rate > 40_000.0, "{audio_rate}");
+    if realtime {
+        let (_, _, audio_rate, _) = c.rates(Duration::from_secs(1)).await;
+        assert!(audio_rate > 40_000.0, "{audio_rate}");
+    } else {
+        c.more_media(0, 50).await;
+    }
+    c.assert_rtp_grids();
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
 }
@@ -547,9 +677,20 @@ async fn chunks_until(c: &mut Client, mut done: impl FnMut(&Value) -> bool) -> (
 /// A causal model (fake LongLive) streams one continuous rollout: chunks of
 /// 4 blocks (48 frames) at 16 fps, video only; a prompt update reaches the
 /// engine once and is applied at the next block with one KV re-cache;
-/// end images are refused; no underruns or late chunks.
+/// end images are refused. The `realtime_` twin also checks the delivery
+/// and generation rates and that nothing underran.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn causal_session_streams_and_recaches_once_per_switch() {
+    causal_session(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_causal_session_streams_and_recaches_once_per_switch() {
+    causal_session(true).await;
+}
+
+async fn causal_session(realtime: bool) {
     let Some(h264) = h264_or_skip() else { return };
     let f = fixture(Opts { h264, ..Opts::default() }).await;
     let mut c = open(&f, "fastvideo/longlive/director").await;
@@ -566,9 +707,12 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
     assert_eq!(info["continuation_context_frames"], 48, "the KV window (12 latent frames)");
     assert_eq!(info["causal"]["prompt_switch"], "recache");
     assert_eq!(info["causal"]["block_frames"], 12);
+    assert!(info.get("chunk_duration_options").is_none(), "no chunk length to choose: {info}");
 
-    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "seed": 7})).await;
+    // `chunk_duration` is ignored: the director chunk stays 4 blocks (3 s).
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "seed": 7, "chunk_duration": 10})).await;
     let cfgd = c.expect("configured").await;
+    assert_eq!(cfgd["chunk_duration"], 3);
     assert_eq!((cfgd["resolution"].as_str(), cfgd["aspect_ratio"].as_str()), (Some("480p"), Some("16:9")));
     let (chunks, _) = chunks_until(&mut c, |m| m["chunk_index"] == 1).await;
     for (i, ch) in chunks.iter().enumerate() {
@@ -579,13 +723,21 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
         assert_eq!(ch["playback_seconds"], 3.0);
         assert_eq!(ch["causal"]["blocks"], 4);
         assert_eq!(ch["causal"]["recaches"], 0);
-        assert!(ch["causal"]["generation_fps"].as_f64().unwrap() > 16.0, "faster than real time: {ch}");
+        if realtime {
+            assert!(ch["causal"]["generation_fps"].as_f64().unwrap() > 16.0, "faster than real time: {ch}");
+        }
     }
     c.first_video().await;
-    let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
-    eprintln!("causal: {fps:.2} fps (rtp {rtp_fps:.2})");
-    assert!((fps - 16.0).abs() < 1.6, "video arrives at {fps} fps");
-    assert!((rtp_fps - 16.0).abs() < 0.01, "{rtp_fps}");
+    if realtime {
+        let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
+        eprintln!("causal: {fps:.2} fps (rtp {rtp_fps:.2})");
+        assert!((fps - 16.0).abs() < 1.6, "video arrives at {fps} fps");
+        assert!((rtp_fps - 16.0).abs() < 0.01, "{rtp_fps}");
+    } else {
+        // Two seconds of video arrive, on the 16 fps RTP grid.
+        c.more_media(32, 0).await;
+    }
+    c.assert_rtp_grids_at(16);
     assert!(c.media.lock().unwrap().audio.is_empty());
     // Paced: the rollout stays about `causal_lead_seconds` (2 s) ahead.
     let last = chunks.last().unwrap();
@@ -616,12 +768,16 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
     c.expect("stream_exhausted").await;
     let fm = c.expect("session_metrics").await;
     assert_eq!(fm["final"], true);
-    assert_eq!(fm["gauges"]["underruns"], 0, "{fm}");
+    if realtime {
+        // A loaded host generates slower than real time and underruns.
+        assert_eq!(fm["gauges"]["underruns"], 0, "{fm}");
+    }
     assert_eq!(fm["causal"]["recaches"], 1, "{fm}");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Stopped))), "{st:?}");
-    // The causal lease is released: a clip session is admitted next.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The causal lease is released (the session left the registry): a
+    // clip session is admitted next.
+    assert_not_alive(&f, &c.session_id).await;
     let mut c2 = open(&f, "minimax/h3-max/director").await;
     c2.expect("session_info").await;
 }
@@ -640,7 +796,8 @@ async fn causal_refusals_and_keep_policy() {
     assert!(e["error"].as_str().unwrap().contains("text-to-video only"), "{e}");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(5)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Error(_)))), "{st:?}");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Gone from the registry: its engine session is released.
+    assert_not_alive(&f, &c.session_id).await;
 
     let mut c = open(&f, "fastvideo/fake-sfwan/director").await;
     let info = c.expect("session_info").await;
@@ -673,6 +830,7 @@ async fn causal_catalog_and_form() {
     assert_eq!(form["properties"]["resolution"]["enum"], json!(["480p"]));
     assert_eq!(form["properties"]["resolution"]["default"], "480p");
     assert_eq!(form["properties"]["aspect_ratio"]["enum"], json!(["auto", "16:9"]));
+    assert!(form["properties"].get("chunk_duration").is_none(), "a causal model has no chunk length: {form}");
     assert!(form["x-fv-licence"].as_str().unwrap().contains("non-commercial"), "{form}");
 }
 

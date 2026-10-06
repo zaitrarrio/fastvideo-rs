@@ -136,6 +136,9 @@ impl fastvideo_protocol::UrlSigner for R2Mock {
     fn url_for(&self, a: &fastvideo_protocol::Artifact, ttl: Duration) -> url::Url {
         fastvideo_protocol::UrlSigner::url_for(&self.inner, a, ttl)
     }
+    fn url_issued(&self, a: &fastvideo_protocol::Artifact, issued: time::OffsetDateTime, ttl: Duration) -> url::Url {
+        fastvideo_protocol::UrlSigner::url_issued(&self.inner, a, issued, ttl)
+    }
 }
 
 #[async_trait::async_trait]
@@ -197,10 +200,7 @@ struct Shared {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-overhead-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-overhead-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn base_config(tag: &str, sh: &Shared, s: &Scn) -> Config {
