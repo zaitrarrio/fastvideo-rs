@@ -196,6 +196,11 @@ pub struct BlockWeights<B> {
     host: Vec<HostBlock>,
     residency: Residency,
     lookahead: usize,
+    /// Streamed with a ring of one slot per block ([`Self::with_whole_ring`]):
+    /// the first forward after [`Self::release_device`] queues every block's
+    /// copy (each block waits only for its own), and the model then stays on
+    /// the device until the next release. The Wan 2.2 A14B expert swap.
+    whole: bool,
     label: &'static str,
     /// Ledger category of the device ring ([`super::ledger::DIT_RING`]).
     ledger: &'static str,
@@ -211,6 +216,7 @@ impl<B: OffloadBlock> BlockWeights<B> {
             host: Vec::new(),
             residency,
             lookahead: lookahead(),
+            whole: false,
             label,
             ledger: super::ledger::DIT_RING,
             #[cfg(feature = "cuda")]
@@ -236,6 +242,31 @@ impl<B: OffloadBlock> BlockWeights<B> {
     pub fn with_lookahead(mut self, lookahead: usize) -> Self {
         self.lookahead = lookahead.clamp(1, 8);
         self
+    }
+
+    /// Streamed runs: one device slot per block instead of a
+    /// `lookahead + 1` ring, so the whole model comes onto the device on its
+    /// first forward (prefetched block by block behind the compute) and
+    /// stays until [`Self::release_device`]. Weights live in pinned host
+    /// memory between releases, so swapping two such models costs one H2D
+    /// copy of the incoming one and nothing for the outgoing one.
+    pub fn with_whole_ring(mut self) -> Self {
+        self.whole = true;
+        self
+    }
+
+    /// Whether this is a whole-model ring ([`Self::with_whole_ring`]).
+    pub fn is_whole_ring(&self) -> bool {
+        self.whole && self.residency == Residency::Streamed
+    }
+
+    /// Whether the device currently holds a ring (streamed runs).
+    pub fn has_device_ring(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        let held = self.ring.lock().expect("offload ring").is_some();
+        #[cfg(not(feature = "cuda"))]
+        let held = false;
+        held
     }
 
     pub fn residency(&self) -> Residency {
@@ -274,7 +305,11 @@ impl<B: OffloadBlock> BlockWeights<B> {
 
     /// Device slots the ring holds.
     pub fn slots(&self) -> usize {
-        self.lookahead + 1
+        if self.whole {
+            self.blocks.len().max(1)
+        } else {
+            self.lookahead + 1
+        }
     }
 
     /// Add the next block. Streamed: its linears' weights leave the device
@@ -415,6 +450,12 @@ impl<B: OffloadBlock> BlockWeights<B> {
     pub fn describe(&self) -> String {
         match self.residency {
             Residency::Resident => format!("{}: {} blocks resident", self.label, self.len()),
+            Residency::Streamed if self.whole => format!(
+                "{}: {} blocks parked in pinned host memory ({:.2} GiB), on the device as a whole while in use",
+                self.label,
+                self.len(),
+                self.host_bytes() as f64 / GIB,
+            ),
             Residency::Streamed => format!(
                 "{}: {} blocks streamed ({:.2} GiB pinned host, {} device slots x {:.2} GiB, lookahead {})",
                 self.label,
@@ -969,6 +1010,37 @@ mod tests {
         // The skeleton is left untouched by a forward.
         assert_eq!(streamed.skeleton(1).b.weight.numel(), 0);
         assert!(streamed.with(9, |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn whole_ring_is_bit_identical_and_survives_release() {
+        let blocks: Vec<Toy> = (0..4).map(|i| Toy::new(i as f32 + 0.5)).collect();
+        let resident = BlockWeights::resident("toy", blocks.clone());
+        let mut parked = BlockWeights::new("toy", Residency::Streamed).with_whole_ring();
+        for b in blocks {
+            parked.push(b).unwrap();
+        }
+        assert!(parked.is_whole_ring());
+        assert_eq!(parked.slots(), 4);
+        assert!(parked.describe().contains("parked"));
+        let x0 = CudaTensor::from_vec((0..6).map(|i| i as f32 * 0.2 - 0.5).collect(), vec![2, 3])
+            .unwrap();
+        let run = |w: &BlockWeights<Toy>| -> Vec<u32> {
+            let mut outs = Vec::new();
+            for i in [0, 1, 2, 3, 0, 3] {
+                let y = w.with(i, |b| b.forward(&x0)).unwrap();
+                outs.extend(y.host_cow().unwrap().iter().map(|v| v.to_bits()));
+            }
+            outs
+        };
+        let a = run(&resident);
+        assert_eq!(a, run(&parked));
+        // A release (the expert swap) drops the device copy; the next
+        // forward brings the same bits back.
+        parked.release_device();
+        assert!(!parked.has_device_ring());
+        assert_eq!(a, run(&parked));
+        assert!(!BlockWeights::resident("toy", vec![Toy::new(0.0)]).is_whole_ring());
     }
 
     #[test]

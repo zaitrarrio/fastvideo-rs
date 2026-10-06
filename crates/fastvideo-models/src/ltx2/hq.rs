@@ -24,6 +24,23 @@ pub const FRAMES: usize = 241;
 
 pub const FPS: f64 = 24.0;
 
+/// Seed of the official cell (`models/ltx23.toml` `seed = 42`).
+pub const SEED: u64 = 42;
+
+/// Distilled-LoRA strengths fused on the dev DiT for stage 1 / stage 2
+/// (`run_ltx23_common.sh` `SGLANG_LTX2_DISTILLED_LORA_STRENGTH_STAGE_{1,2}`).
+pub const LORA_STRENGTHS: (f64, f64) = (0.25, 0.5);
+
+/// Audio CFG of the HQ cell: the LTX-2 pipelines' default audio guider
+/// (`cfg_scale` 7.0), as the base preset's `fastvideo generate` uses.
+pub const AUDIO_GUIDANCE_SCALE: f32 = 7.0;
+
+/// `models/ltx23/prompts/default.txt` on `sol-engine`.
+pub const PROMPT: &str = "A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail";
+
+/// `models/ltx23/prompts/negative.txt` on `sol-engine`.
+pub const NEGATIVE_PROMPT: &str = "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.";
+
 /// 15-step res2s: 2 evaluations per step except the last (`2·15 − 1`).
 pub const STAGE1_RES2S_CALLS: usize = 29;
 
@@ -88,6 +105,13 @@ mod tests {
         assert_eq!(GUIDANCE_SCALE, 3.0);
         assert_eq!((WIDTH, HEIGHT, FRAMES), (1920, 1088, 241));
         assert_eq!(FPS, 24.0);
+        assert_eq!(SEED, 42);
+        assert_eq!(LORA_STRENGTHS, (0.25, 0.5));
+        assert_eq!(
+            crate::ltx2::lora::stage_strengths(crate::ltx2::config::Ltx2ModelVersion::V23),
+            Some((LORA_STRENGTHS.0 as f32, LORA_STRENGTHS.1 as f32))
+        );
+        assert!(NEGATIVE_PROMPT.ends_with("or AI artifacts."));
         assert_eq!(res2s_num_calls(STAGE1_STEPS), STAGE1_RES2S_CALLS);
         assert_eq!(STAGE1_RES2S_CALLS, 29);
     }
