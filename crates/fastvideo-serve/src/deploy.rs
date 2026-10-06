@@ -317,7 +317,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn weights_alias_links_once() {
-        let base = std::env::temp_dir().join(format!("fv-alias-{}", std::process::id()));
+        let base = tempfile::Builder::new().prefix("fv-alias-").tempdir().unwrap().keep();
         let root = base.join("runpod-volume/weights");
         std::fs::create_dir_all(root.join("h3-base")).unwrap();
         let alias = base.join("workspace/weights");

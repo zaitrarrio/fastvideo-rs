@@ -27,10 +27,7 @@ async fn app(tag: &str) -> App {
 
 /// [`app`] with extra environment (`FV_*`) on top of the defaults.
 async fn app_with(tag: &str, extra: &[(&str, String)]) -> App {
-    let dir = std::env::temp_dir().join(format!(
-        "fv-serve-adapters-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let dir = tempfile::Builder::new().prefix(&format!("fv-serve-adapters-{tag}-")).tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
