@@ -259,6 +259,9 @@ export class ClusterOps implements DurableObject {
     if (op.phase === "patch") {
       await patchGateway(env, c, this.log);
       if (d.failed.length) this.log(`WARNING: no pod for: ${d.failed.join(", ")}`);
+      // Nothing to wait for: no gateway and not one worker (no stock anywhere).
+      if (!c.state.gateway && !Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
+        return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}): stop the cluster or start it again later` };
       await saveState(env, c, { status: "running" });
       op.phase = "wait";
       d.t0 = now();
