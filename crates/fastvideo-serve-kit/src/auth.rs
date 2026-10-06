@@ -30,6 +30,72 @@ pub enum AuthMode {
     Keys,
     /// An upstream gateway (Runpod LB) already authenticated the caller.
     TrustGateway,
+    /// The edge Worker verified the key and forwards its verdict in
+    /// `x-fv-edge-auth` ([`EdgeVerdict`]); this server applies the API's
+    /// policy to it, so a refusal is rendered in the API's own shape
+    /// (docs/serve/edge-control-plane.md §2.2). Only trusted behind the
+    /// internal token (the worker's token layer).
+    TrustEdge,
+}
+
+/// The edge's identity verdict (`x-fv-edge-auth`, JSON; the edge side is
+/// `fastvideo_dispatch_proto::front::Verdict`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct EdgeVerdict {
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub presented: bool,
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub scheme: Option<String>,
+    #[serde(default)]
+    pub deny: Option<EdgeDeny>,
+}
+
+/// A refusal the edge decided (quota, no capacity, unknown model).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct EdgeDeny {
+    pub kind: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub retry_after: Option<u32>,
+}
+
+/// The header carrying [`EdgeVerdict`].
+pub const EDGE_AUTH_HEADER: &str = "x-fv-edge-auth";
+
+impl EdgeVerdict {
+    /// From the request headers (`None`: no verdict, an anonymous caller).
+    pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
+        headers.get(EDGE_AUTH_HEADER).and_then(|v| v.to_str().ok()).and_then(|s| serde_json::from_str(s).ok())
+    }
+
+    fn scheme(&self) -> Option<Scheme> {
+        match self.scheme.as_deref() {
+            Some("key") => Some(Scheme::Key),
+            Some("bearer") => Some(Scheme::Bearer),
+            _ => None,
+        }
+    }
+
+    /// The edge's refusal as the error the API renders.
+    pub fn deny_error(&self) -> Option<ApiError> {
+        let d = self.deny.as_ref()?;
+        let msg = if d.message.is_empty() { d.kind.clone() } else { d.message.clone() };
+        let e = match d.kind.as_str() {
+            "rate_limited" => ApiError::rate_limited(msg),
+            "queue_full" => ApiError::queue_full(msg),
+            "unknown_model" => ApiError::not_found(msg),
+            _ => ApiError::loading(msg),
+        };
+        Some(match d.retry_after {
+            Some(s) => e.with_retry_after(s),
+            None => e,
+        })
+    }
 }
 
 /// An `Authorization` scheme.
@@ -193,6 +259,7 @@ impl Auth {
     pub fn authenticate(&self, p: ProtocolId, headers: &HeaderMap) -> Result<Option<KeyId>, ApiError> {
         match self.mode {
             AuthMode::None | AuthMode::TrustGateway => return Ok(None),
+            AuthMode::TrustEdge => return self.authenticate_edge(p, headers),
             AuthMode::Keys => {}
         }
         let presented = headers
@@ -215,6 +282,30 @@ impl Auth {
                 self.check_key(&key)
                     .map(Some)
                     .ok_or_else(|| ApiError::unauthorized("invalid credentials"))
+            }
+        }
+    }
+}
+
+impl Auth {
+    /// `trust-edge`: the API's policy over the edge's verdict.
+    fn authenticate_edge(&self, p: ProtocolId, headers: &HeaderMap) -> Result<Option<KeyId>, ApiError> {
+        let v = EdgeVerdict::from_headers(headers).unwrap_or_default();
+        if let Some(e) = v.deny_error() {
+            return Err(e);
+        }
+        let owner = || v.key.clone().filter(|_| v.valid).map(KeyId);
+        match self.policy(p) {
+            AuthPolicy::Open => Ok(owner()),
+            AuthPolicy::Require(schemes) => {
+                if !v.presented {
+                    return Err(ApiError::unauthorized("missing credentials"));
+                }
+                if !v.scheme().is_some_and(|s| schemes.contains(&s)) {
+                    let want: Vec<&str> = schemes.iter().map(|s| s.prefix()).collect();
+                    return Err(ApiError::unauthorized(format!("unsupported authorization scheme (expected {})", want.join(" or "))));
+                }
+                owner().map(Some).ok_or_else(|| ApiError::unauthorized("invalid credentials"))
             }
         }
     }
@@ -320,6 +411,34 @@ mod tests {
         store.revoke(&rec.id).await.unwrap();
         assert!(a.authenticate(ProtocolId::Fal, &h(&format!("Key {k}"))).is_err());
         assert!(a.authenticate(ProtocolId::Native, &h(&format!("Bearer {k}"))).is_err());
+    }
+
+    #[test]
+    fn trust_edge_applies_the_policy_to_the_verdict() {
+        let a = Auth::new(AuthMode::TrustEdge, KeyRing::default());
+        let v = |j: &str| {
+            let mut m = HeaderMap::new();
+            m.insert(EDGE_AUTH_HEADER, HeaderValue::from_str(j).unwrap());
+            m
+        };
+        let ok = v(r#"{"v":1,"key":"key_abc","presented":true,"valid":true,"scheme":"key"}"#);
+        assert_eq!(a.authenticate(ProtocolId::Fal, &ok).unwrap().unwrap().0, "key_abc");
+        // fal wants `Key`, MiniMax `Bearer`.
+        assert!(a.authenticate(ProtocolId::MiniMaxV2, &ok).unwrap_err().message.contains("scheme"));
+        let bad = v(r#"{"v":1,"presented":true,"valid":false,"scheme":"bearer"}"#);
+        assert_eq!(a.authenticate(ProtocolId::MiniMaxV2, &bad).unwrap_err().message, "invalid credentials");
+        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &bad).unwrap(), None);
+        // No verdict at all: anonymous.
+        assert_eq!(a.authenticate(ProtocolId::Native, &HeaderMap::new()).unwrap_err().message, "missing credentials");
+        assert_eq!(a.authenticate(ProtocolId::Reactor, &HeaderMap::new()).unwrap(), None);
+        // A refusal the edge decided, in the API's terms.
+        let denied = v(r#"{"v":1,"key":"key_abc","presented":true,"valid":true,"scheme":"bearer","deny":{"kind":"rate_limited","message":"slow down","retry_after":7}}"#);
+        let e = a.authenticate(ProtocolId::MiniMaxV2, &denied).unwrap_err();
+        assert_eq!((e.kind, e.retry_after_s), (fastvideo_protocol::ErrorKind::RateLimited, Some(7)));
+        // A client's own Authorization is ignored in this mode.
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer sk-good"));
+        assert!(Auth::new(AuthMode::TrustEdge, KeyRing::from_plain(["sk-good"])).authenticate(ProtocolId::Native, &h).is_err());
     }
 
     #[test]

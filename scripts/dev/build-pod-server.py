@@ -83,7 +83,9 @@ eviction pass) get HTTP 507 with a "build pod disk full" error instead of a
 """
 
 import collections
+import contextlib
 import errno
+import fcntl
 import gzip
 import hashlib
 import hmac
@@ -139,6 +141,19 @@ NODE_DIR = os.path.join(ROOT, "node-" + NODE_VER)
 PLAYWRIGHT_VER = os.environ.get("FV_BUILD_PLAYWRIGHT_VERSION", "1.56.1")  # tests/compat/package.json
 PW_DIR = os.path.join(ROOT, "playwright-" + PLAYWRIGHT_VER)
 PW_BROWSERS = os.path.join(ROOT, "pw-browsers")
+# apt in the container. rust:1-bookworm's /etc/apt/apt.conf.d/docker-clean
+# deletes /var/cache/apt/archives/*.deb after every dpkg run and every
+# `apt-get update`, so a second apt (a release-artifacts job's jq / binutils /
+# libclang-dev) running while the extras unpack ffmpeg's ~130 packages deleted
+# the downloaded .debs under dpkg ("cannot access archive", "Processing was
+# halted because there were too many errors", exit 100; 2026-10-06). Every apt
+# here and in release-artifacts-pod.sh holds APT_LOCK (flock), docker-clean's
+# hooks are cleared (APT_KEEP_DEBS), and a failed install is repaired
+# (`dpkg --configure -a`, `apt-get -f install`) and retried.
+APT_LOCK = os.environ.get("FV_BUILD_APT_LOCK", "/var/lock/fv-apt.lock")
+APT_KEEP_DEBS = os.environ.get("FV_BUILD_APT_KEEP_DEBS", "/etc/apt/apt.conf.d/zz-fv-keep-debs")
+APT_OPTS = ["-o", "DPkg::Lock::Timeout=600"]
+APT_TRIES = 3
 # Where snapshots, target dirs and CARGO_HOME live (see the docstring).
 TARGETS_ON = os.environ.get("FV_BUILD_TARGETS", "local")
 LOCAL = ROOT if TARGETS_ON == "volume" else os.environ.get("FV_BUILD_LOCAL", "/root/fvb")
@@ -218,10 +233,77 @@ def sh(cmd, **kw):
     kw.pop("stdout", None)
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
     if r.returncode != 0:
-        tail = r.stdout.decode("utf-8", "replace")[-1500:]
-        log(f"{' '.join(cmd)} exited {r.returncode}:\n{tail}")
-        raise RuntimeError(f"{' '.join(cmd[:3])} exited {r.returncode}: {tail[-600:]}")
+        out = r.stdout.decode("utf-8", "replace")
+        tail = out[-1500:]
+        # dpkg's first errors name the cause; its last lines only list the
+        # packages it gave up on.
+        first = [ln.strip() for ln in out.splitlines() if ln.startswith(("E:", "dpkg: error", "dpkg-deb: error"))][:3]
+        head = ("first errors: " + " | ".join(first) + "\n") if first else ""
+        log(f"{' '.join(cmd)} exited {r.returncode}:\n{head}{tail}")
+        raise RuntimeError(f"{' '.join(cmd[:3])} exited {r.returncode}: {head}{tail[-600:]}")
     return r
+
+
+@contextlib.contextmanager
+def apt_lock():
+    """Serializes apt between this server and the jobs (flock on APT_LOCK;
+    release-artifacts-pod.sh takes the same lock)."""
+    os.makedirs(os.path.dirname(APT_LOCK), exist_ok=True)
+    fd = os.open(APT_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def apt_keep_debs():
+    """Clears docker-clean's post-invoke hooks (see APT_LOCK): an apt run that
+    is not ours cannot delete the .debs of an install in progress either."""
+    if os.path.exists(APT_KEEP_DEBS) or not os.path.isdir(os.path.dirname(APT_KEEP_DEBS)):
+        return
+    # Written next to apt.conf.d, not in it (apt reads every name there).
+    tmp = os.path.join(os.path.dirname(os.path.dirname(APT_KEEP_DEBS)), ".fv-keep-debs.tmp")
+    with open(tmp, "w") as f:
+        f.write("// fv-build (build-pod-server.py): keep downloaded .debs until apt is done;\n"
+                "// docker-clean deleted them under a running dpkg. apt_retry cleans up.\n"
+                "#clear DPkg::Post-Invoke;\n#clear APT::Update::Post-Invoke;\n")
+    os.replace(tmp, APT_KEEP_DEBS)
+
+
+def apt_retry(steps, env, what, tries=APT_TRIES, run=None, pause=time.sleep):
+    """Runs the apt commands `steps` (a list of argv) under the apt lock; on a
+    failure repairs dpkg's state and runs them all again, up to `tries` times.
+    Idempotent: installing what is installed is a no-op."""
+    run = run or sh
+    with apt_lock():
+        apt_keep_debs()
+        for attempt in range(1, tries + 1):
+            try:
+                for cmd in steps:
+                    run(cmd, env=env)
+                break
+            except RuntimeError as e:
+                if attempt == tries:
+                    raise
+                log(f"apt: {what} failed (attempt {attempt}/{tries}); dpkg --configure -a, apt-get -f install, retry: {e}")
+                for fix in (["dpkg", "--configure", "-a"], ["apt-get", *APT_OPTS, "-f", "install", "-y", "-qq"]):
+                    try:
+                        run(fix, env=env)
+                    except RuntimeError as fe:
+                        log(f"apt: repair step failed: {fe}")
+                pause(5 * attempt)
+        try:
+            run(["apt-get", "clean"], env=env)
+        except RuntimeError:
+            pass
+
+
+def apt_install(pkgs, env, **kw):
+    """`apt-get update` + `apt-get install` of `pkgs` (see apt_retry)."""
+    apt_retry([["apt-get", *APT_OPTS, "update", "-qq"],
+               ["apt-get", *APT_OPTS, "install", "-y", "-qq", "--no-install-recommends", *pkgs]],
+              env, "install " + " ".join(pkgs), **kw)
 
 
 def job_env(agent=None):
@@ -350,10 +432,7 @@ def setup():
         setup_state["phase"] = "apt"
         need = [p for p, b in (("cmake", "cmake"), ("clang", "clang"), ("mold", "mold"), ("pkg-config", "pkg-config")) if not shutil.which(b)]
         if need:
-            env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-            sh(["apt-get", "update", "-qq"], env=env, stdout=subprocess.DEVNULL)
-            sh(["apt-get", "install", "-y", "-qq", "--no-install-recommends", *need, "libssl-dev", "xz-utils"],
-               env=env, stdout=subprocess.DEVNULL)
+            apt_install([*need, "libssl-dev", "xz-utils"], dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
         install_cuda()
         install_sccache()
         setup_state["phase"] = "rustup"
@@ -419,9 +498,12 @@ def setup_extras():
         t0 = time.time()
         env = dict(job_env(), DEBIAN_FRONTEND="noninteractive")
         extras_state["phase"] = "apt"
-        sh(["apt-get", "update", "-qq"], env=env, stdout=subprocess.DEVNULL)
-        sh(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "ffmpeg", "python3-venv"],
-           env=env, stdout=subprocess.DEVNULL)
+        apt_install(["ffmpeg", "python3-venv"], env)
+        # Debian's ffmpeg has libvpx (ingest / WebRTC VP8 tests); say so if not.
+        enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+        extras_state["ffmpeg_libvpx"] = " libvpx " in enc.stdout
+        if not extras_state["ffmpeg_libvpx"]:
+            log("extras: this ffmpeg has no libvpx encoder; VP8 ingest tests will skip")
         install_node()
         extras_state["phase"] = "playwright"
         if not os.path.exists(os.path.join(PW_DIR, ".fv-ok")):
@@ -433,7 +515,8 @@ def setup_extras():
         pw = os.path.join(PW_DIR, "node_modules", ".bin", "playwright")
         extras_state["phase"] = "chromium"
         sh([pw, "install", "chromium"], env=env, stdout=subprocess.DEVNULL)  # no-op when present
-        sh([pw, "install-deps", "chromium"], env=env, stdout=subprocess.DEVNULL)
+        # install-deps runs apt-get itself.
+        apt_retry([[pw, "install-deps", "chromium"]], env, "playwright install-deps chromium")
         extras_state.update(phase="ready", ready=True)
         log(f"extras ready after {time.time() - t0:.0f}s (ffmpeg, node, playwright chromium)")
     except Exception as e:

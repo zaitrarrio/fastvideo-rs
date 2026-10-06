@@ -1,4 +1,12 @@
-//! The gateway's job store (docs/serve/gateway.md §3): D1 read-through.
+//! The job store of a gateway and of a front behind the edge
+//! (docs/serve/gateway.md §3, docs/serve/edge-control-plane.md §2.4): D1
+//! read-through.
+//!
+//! On a front the same process also runs jobs (the family object may push
+//! a job back to the front that took it): jobs held by the inner
+//! `D1JobStore` (taken here) are always answered from it, and a
+//! [`JobWaiter`] (the family object's job wait) wakes the `watch()`
+//! pollers when a job starts or ends instead of waiting for the next poll.
 //!
 //! The gateway inserts rows (`hold_inserts = false`: no cache, no
 //! `worker`), workers adopt and update them, and every gateway read goes to
@@ -49,6 +57,18 @@ pub struct GatewayJobStore {
     view: Arc<View>,
     behind: std::sync::OnceLock<InsertBehind>,
     pending: Pending,
+    waiter: std::sync::OnceLock<Arc<dyn JobWaiter>>,
+}
+
+/// The front's job store (the same type).
+pub type FrontJobStore = GatewayJobStore;
+
+/// Waits for a job's next dispatch change somewhere else (the family
+/// object's `jobs/{id}/wait`): returns when the job may have changed, or
+/// after a while. The poller then reads D1.
+#[async_trait::async_trait]
+pub trait JobWaiter: Send + Sync + 'static {
+    async fn wait(&self, job: &Job);
 }
 
 /// One `watch()` poller: its channel, and the wake-up a worker's status
@@ -172,7 +192,13 @@ impl GatewayJobStore {
             view: Arc::new(View { fresh: poll, ..View::default() }),
             behind: std::sync::OnceLock::new(),
             pending: Arc::default(),
+            waiter: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Wakes the pollers on dispatch changes (once).
+    pub fn set_waiter(&self, w: Arc<dyn JobWaiter>) {
+        let _ = self.waiter.set(w);
     }
 
     /// Inserts the jobs `f` accepts behind the response (once; see the
@@ -231,7 +257,7 @@ fn fingerprint(j: &Job) -> (String, u32, Option<u32>, usize, usize, bool) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: JobId, w: Arc<Watcher>, watchers: Watchers, every: Duration) {
+async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: JobId, w: Arc<Watcher>, watchers: Watchers, every: Duration, waiter: Option<Arc<dyn JobWaiter>>) {
     let mut seq = 0u64;
     let mut last = None;
     // Woken by a worker's report: the view already holds that job.
@@ -273,9 +299,20 @@ async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: J
         if j.is_terminal() {
             break;
         }
+        let dispatch_change = async {
+            match &waiter {
+                Some(x) => x.wait(&j).await,
+                None => std::future::pending().await,
+            }
+        };
         woke = tokio::select! {
             _ = tokio::time::sleep(every) => false,
             _ = w.wake.notified() => true,
+            // Read D1 now (once it has the change: a short settle).
+            _ = dispatch_change => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                false
+            }
         };
     }
     let mut g = watchers.lock().unwrap_or_else(|p| p.into_inner());
@@ -312,6 +349,9 @@ impl JobStore for GatewayJobStore {
     }
 
     async fn get(&self, id: JobId) -> Option<Job> {
+        if self.inner.holds(id) {
+            return self.inner.get(id).await;
+        }
         if let Some(j) = self.view.get(id) {
             counted("memory");
             return Some(j);
@@ -327,6 +367,9 @@ impl JobStore for GatewayJobStore {
 
     async fn by_external(&self, p: ProtocolId, external_id: &str) -> Option<Job> {
         if let Some(j) = self.view.by_external(p, external_id) {
+            if self.inner.holds(j.id) {
+                return self.inner.get(j.id).await;
+            }
             counted("memory");
             return Some(j);
         }
@@ -367,6 +410,9 @@ impl JobStore for GatewayJobStore {
     }
 
     fn watch(&self, id: JobId) -> Option<watch::Receiver<JobSnapshot>> {
+        if self.inner.holds(id) {
+            return self.inner.watch(id);
+        }
         let mut g = self.watchers.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(w) = g.get(&id) {
             return Some(w.tx.subscribe());
@@ -382,7 +428,7 @@ impl JobStore for GatewayJobStore {
         });
         let w = Arc::new(Watcher { tx, wake: tokio::sync::Notify::new() });
         g.insert(id, w.clone());
-        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, w, self.watchers.clone(), self.poll));
+        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, w, self.watchers.clone(), self.poll, self.waiter.get().cloned()));
         Some(rx)
     }
 

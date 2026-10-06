@@ -95,7 +95,9 @@ pub fn rewrite_own_uploads(ctx: &ServeCtx, req: &mut GenerationRequest) {
         if let MediaRef::Http(u) = m {
             if let Some(t) = own_upload_token(&base, u) {
                 let id = UploadId(t);
-                if ctx.uploads().resolve(&id, now).is_some() {
+                // Ours, or another front's behind the same edge (fetched
+                // through the edge, not over the public URL).
+                if ctx.uploads().resolve(&id, now).is_some() || ctx.uploads().is_remote(&id.0) {
                     *m = MediaRef::Upload(id);
                 }
             }
