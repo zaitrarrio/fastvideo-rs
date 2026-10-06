@@ -9,18 +9,12 @@ on:
   workflow_dispatch:
   push:
     branches: ["**"]
+    # Only when the image's own Dockerfile changes: the slowest image (10-30 min)
+    # used to rebuild on every crates/ change although nothing on Runpod uses it.
+    # Its fv-gpucheck can go stale between Dockerfile changes; rebuild on demand
+    # with workflow_dispatch when a Vast/oracle tier needs current binaries.
     paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
       - "docker/vast-pytorch.Dockerfile"
-      - "docker/gpucheck.Dockerfile"
-      - ".dockerignore"
-      - "scripts/gpu/**"
-      - "scripts/ci/prebuilt.sh"
-      - "scripts/ci/tools-release.sh"
-      - ".github/workflows/vast-pytorch-image.yml"
 
 permissions:
   contents: read

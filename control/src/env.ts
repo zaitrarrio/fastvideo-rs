@@ -15,6 +15,8 @@ export interface Env {
   RUNPOD_API_KEY: string;
   CLOUDFLARE_API_KEY?: string; // Analytics Engine SQL
   GITHUB_PAT?: string;
+  /** CloudRift API key (docs/ops/cloudrift.md). Unset: the CloudRift provider is off. */
+  CLOUDRIFT_API_KEY?: string;
   /** 32+ random bytes, base64: seals cluster secrets and secret env values in D1 (AES-256-GCM). */
   CONTROL_KEK: string;
   /** 32+ random bytes: signs session cookies and CSRF tokens (HMAC-SHA256); also the passphrase pepper. */
@@ -45,6 +47,14 @@ export interface Env {
   PUBLIC_URL?: string;
   /** The account's default balance floor in $ (CLAUDE.md: stop before $8). */
   BALANCE_FLOOR?: string;
+  /** CloudRift: API base (tests: a mock), protocol version, the unit of an
+   * instance's resource_info.cost_per_hour (cents, the live unit on
+   * 2026-10-06, by default; usd only if CloudRift changes it) and the
+   * CloudRift balance floor in $ (default BALANCE_FLOOR). */
+  CLOUDRIFT_API?: string;
+  CLOUDRIFT_API_VERSION?: string;
+  CLOUDRIFT_COST_UNIT?: string;
+  CLOUDRIFT_BALANCE_FLOOR?: string;
   /** "1": the cron does nothing (tests drive it by hand). */
   CRON_DISABLED?: string;
 }
@@ -68,4 +78,5 @@ export const defaults = {
   serveRepo: (e: Env) => e.SERVE_REPO || "ghcr.io/zaitrarrio/fastvideo-rs-serve",
   podUrl: (e: Env, pod: string) => (e.POD_URL_TEMPLATE || "https://{pod}-8000.proxy.runpod.net").replaceAll("{pod}", pod),
   balanceFloor: (e: Env) => Number(e.BALANCE_FLOOR || "8"),
+  cloudriftFloor: (e: Env) => Number(e.CLOUDRIFT_BALANCE_FLOOR || e.BALANCE_FLOOR || "8"),
 };

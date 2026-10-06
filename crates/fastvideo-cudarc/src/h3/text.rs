@@ -881,6 +881,7 @@ mod tests {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
