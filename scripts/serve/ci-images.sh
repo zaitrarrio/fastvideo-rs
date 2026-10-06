@@ -6,6 +6,7 @@
 #                                     appends "<variant> <repo>@<digest> <compressed MB>" to $FV_CI_OUT
 #   ci-images.sh smoke <variant> <ref>   no-GPU checks of a pushed variant image
 #   ci-images.sh size <ref>           compressed size (MB) and layer count of a pushed image
+#   ci-images.sh layers <ref>         "<digest> <MB>" per layer (bottom first)
 #   ci-images.sh summary              markdown table of $FV_CI_OUT (for $GITHUB_STEP_SUMMARY)
 #
 # Env: FV_IMAGE (repo, e.g. ghcr.io/zaitrarrio/fastvideo-rs-serve); FV_SHORT_SHA;
@@ -38,7 +39,7 @@ size() {
 }
 
 build() {
-  local v tags cache_to meta digest ref args=()
+  local v tags cache_to meta digest ref force args=()
   : "${FV_IMAGE:?FV_IMAGE}" "${FV_SHORT_SHA:?FV_SHORT_SHA}"
   mkdir -p "$(dirname "$OUT")"
   for v in "$@"; do
@@ -59,6 +60,10 @@ build() {
     while IFS= read -r c; do
       [[ -n "$c" ]] && args+=(--build-context "$c")
     done <<<"${FV_BUILD_CONTEXTS:-}"
+    # gzip keeps the shared base layers' blobs (scripts/ci/base-images.sh) as
+    # they are, so every image has the same digests; zstd re-encodes them all.
+    force=false
+    [[ "$COMPRESSION" == gzip ]] || force=true
     meta="$(mktemp)"
     log "build serve-$v -> $tags ($COMPRESSION)"
     docker buildx build "$ROOT" -f "$ROOT/docker/gpucheck.Dockerfile" --target "serve-$v" --platform linux/amd64 \
@@ -71,7 +76,7 @@ build() {
       --label "dev.fastvideo.build-id=${FV_BUILD_ID:-unknown}" \
       --label "dev.fastvideo.variant=$v" \
       "${args[@]}" ${cache_to[@]+"${cache_to[@]}"} \
-      --output "type=image,\"name=$tags\",push=true,compression=$COMPRESSION,force-compression=true,oci-mediatypes=true" \
+      --output "type=image,\"name=$tags\",push=true,compression=$COMPRESSION,force-compression=$force,oci-mediatypes=true" \
       --metadata-file "$meta"
     digest="$(jq -r '."containerimage.digest"' "$meta")"
     [[ "$digest" == sha256:* ]] || die "serve-$v: no digest in the build metadata"
@@ -107,7 +112,8 @@ smoke() {
     for x in sshd rsync fv-gpucheck hf-fm tileiras nvcc; do command -v "$x" && bad "$x is in the image"; done
     test -e /opt/fastvideo-rs/scripts && bad "scripts/gpu is in the image"
     test -e /opt/fastvideo-rs/oxide && bad "the oxide directory is in the image"
-    ldconfig -p | grep -E "libcupti|libcudnn_adv" && bad "CUPTI / cudnn_adv present"
+    ldconfig -p | grep -E "libcupti|libcudnn_adv|libcudnn_ext|libnvblas|libnvJitLink" && bad "CUPTI / cudnn_adv / cudnn_ext / nvblas / nvJitLink present"
+    find / -xdev \( -name "*.a" -path "*cuda*" -o -name "cudnn*.h" -o -name "cublas*.h" \) 2>/dev/null | grep . && bad "static CUDA libraries or headers present"
     if [ "$V" = cpu ]; then
       grep -q cuda /opt/fastvideo-rs/bin/fv-serve.features && bad "cpu built with cuda"
       ldconfig -p | grep -E "libcudnn|libcublas|libnvrtc" && bad "CUDA libraries in the cpu image"
@@ -116,7 +122,8 @@ smoke() {
       test "$NVIDIA_DRIVER_CAPABILITIES" = compute,utility,video
       for l in libnvrtc.so.13 libnvrtc.so libcublas.so.13 libcublasLt.so.13 libcublas.so libcudnn.so.9 libcudnn.so \
                libcudnn_graph.so.9 libcudnn_ops.so.9 libcudnn_cnn.so.9 libcudnn_heuristic.so.9 \
-               libcudnn_engines_precompiled.so.9 libcudnn_engines_runtime_compiled.so.9; do
+               libcudnn_engines_precompiled.so.9 libcudnn_engines_runtime_compiled.so.9 \
+               libcudnn_engines_tensor_ir.so.9; do
         ldconfig -p | grep -qE "^[[:space:]]+$l " || bad "missing $l"
       done
       ls /usr/local/cuda-13.4/lib64 | grep -q "libnvrtc-builtins" || bad "missing nvrtc-builtins"
@@ -134,6 +141,17 @@ smoke() {
   [[ "$ok" == 1 ]] || die "$v: /healthz never answered"
 }
 
+# layers <ref> -> "<digest> <MB>" per layer, bottom first (compressed)
+layers() {
+  local raw d
+  raw="$(docker buildx imagetools inspect --raw "$1")"
+  if jq -e '.manifests' >/dev/null <<<"$raw"; then
+    d="$(jq -r '[.manifests[] | select(.platform.architecture == "amd64")][0].digest' <<<"$raw")"
+    raw="$(docker buildx imagetools inspect --raw "${1%@*}@$d")"
+  fi
+  jq -r '.layers[] | "\(.digest) \(.size / 1e6 | . * 10 | floor / 10)"' <<<"$raw"
+}
+
 summary() {
   echo "| variant | image | compressed MB |"
   echo "|---|---|---:|"
@@ -144,6 +162,7 @@ case "${1:-}" in
   build) shift; build "$@" ;;
   smoke) shift; smoke "${1:?variant}" "${2:?image}" ;;
   size) shift; size "${1:?image}" ;;
+  layers) shift; layers "${1:?image}" ;;
   summary) summary ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

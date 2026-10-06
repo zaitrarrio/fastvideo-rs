@@ -45,6 +45,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "docker/gpucheck.Dockerfile"
+      - "scripts/ci/base-images.sh"
       - ".dockerignore"
       - "scripts/gpu/**"
       - "scripts/serve/ci-images.sh"
@@ -118,6 +119,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The shared lower layers (Ubuntu + ffmpeg, + CUDA libraries) as
+      # published images, one per content hash, built here only when missing.
+      # Passing them as named contexts puts this image on the same layer
+      # digests as fastvideo-rs-runtime and every serve variant (docs/serve/images.md "Layers").
+      - name: Shared base images
+        id: base
+        env:
+          FV_BASE_DISABLE: ${{ vars.FV_BASE_DISABLE || '0' }}
+        run: bash scripts/ci/base-images.sh ensure
+
       - name: Build and push (debug / legacy all-in-one)
         id: push
         if: github.event.inputs.debug != 'false'
@@ -129,7 +140,9 @@ jobs:
           platforms: linux/amd64
           push: true
           # Prebuilt: replace oxide, binary, hf-fm and serve-build (no compile).
-          build-contexts: ${{ steps.pre.outputs.contexts }}
+          build-contexts: |
+            ${{ steps.pre.outputs.contexts }}
+            ${{ steps.base.outputs.contexts }}
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
             FV_SERVE_FEATURES=${{ steps.meta.outputs.features }}
@@ -192,7 +205,9 @@ jobs:
           FV_LATEST: ${{ github.ref == 'refs/heads/main' && (github.event.inputs.compression || 'gzip') == 'gzip' && '1' || '0' }}
           FV_COMPRESSION: ${{ github.event.inputs.compression || 'gzip' }}
           FV_CACHE_FROM: ${{ steps.meta.outputs.runtime }}:buildcache ${{ steps.meta.outputs.image }}:buildcache
-          FV_BUILD_CONTEXTS: ${{ steps.pre.outputs.contexts }}
+          FV_BUILD_CONTEXTS: |
+            ${{ steps.pre.outputs.contexts }}
+            ${{ steps.base.outputs.contexts }}
         run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.variants || 'h3-turbo h3-max ltx wan wan5b sfwan cpu' }}
 
       - name: Smoke-check the variant images (no GPU)

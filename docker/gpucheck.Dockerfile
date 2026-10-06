@@ -12,11 +12,10 @@
 # build    Compiles the release binary from the repo (CI path), embedding them.
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
-# runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + pinned CUDA 13.4 libraries (scripts/gpu/cuda-13.pins, CUPTI
-#          included for FASTVIDEO_GPU_TRACE) +
-#          tileiras + rsync/ffmpeg/hf-fm + the binary and scripts. No Python,
-#          no PyTorch, no toolkit: hosts boot quickly.
+# runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): the
+#          shared base-cuda stack (pinned CUDA 13.4 libraries,
+#          scripts/gpu/cuda-13.pins) + CUPTI + ssh/rsync/curl/hf-fm + the
+#          binary and scripts, in thin layers. Layout: "Runtime images" below.
 #
 # Prebuilt binaries (CI default, docs/serve/images.md "Prebuilt binaries"):
 # the build pod compiles every Rust binary and the oxide cubins
@@ -29,6 +28,10 @@
 #   --build-context serve-build=<dir>    <dir>/out/fv-serve{,.features} (serve-build)
 #   --build-context cpu-build=<dir>      <dir>/out/fv-serve{,.features} (cpu-build)
 # Without them (no R2 key, artifacts not built yet) the stages compile here.
+
+# The base of every runtime image, pinned so the shared layers only change
+# when this line does (scripts/ci/base-images.sh hashes it).
+ARG UBUNTU=ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
@@ -123,52 +126,182 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM scratch AS binary
 COPY --from=build /out/ /
 
-FROM ubuntu:22.04 AS runtime
+# ============================================================================
+# Runtime images: one shared layer stack (docs/serve/images.md "Layers").
+#
+#   ubuntu:22.04 (pinned digest)        every image
+#   base-os: ca-certificates + x264/vpx/dav1d runtime libs (1 layer)
+#            + the minimal ffmpeg/ffprobe build below (1 layer)
+#   base-cuda: CUDA 13.4 runtime libraries, four stable layers, largest first:
+#            cuBLASLt | cuDNN precompiled engines | cuDNN core | cuBLAS + NVRTC
+#   ── base-os / base-cuda end here. CI publishes them as
+#      fastvideo-rs-runtime:base-{os,cuda}-<hash> (scripts/ci/base-images.sh)
+#      and passes them back as named build contexts, so every image below,
+#      from any workflow, sits on the SAME layer digests and a host that
+#      pulled one image already has ~95 % of the next.
+#   serve-cuda-bin: fv-serve (one layer) -> serve-<variant>: config (KBs)
+#   serve-cpu: base-os + fv-serve without CUDA
+#   runtime (fv-gpucheck, benchmarks): base-cuda + debug tools (sshd, rsync,
+#            curl) + CUPTI + hf-fm + scripts/gpu + oxide + fv-gpucheck
+#   serve (`debug` flavour, fastvideo-rs-serve:latest/:sha-…): runtime +
+#            fv-serve + every config + deploy/vast/worker.py
+#
+# Not shipped anywhere (measured in docs/serve/images.md): CUDA headers,
+# static libraries, docs, dpkg metadata and the NVIDIA apt keyring;
+# tileiras (only the AOT oxide build uses it; its package drags in nvcc,
+# libnvvm, libnvjitlink and build-essential); Ubuntu's ffmpeg and its ~190
+# shared-library packages; libcudnn_adv (legacy RNN / multi-head attention /
+# CTC API) and libcudnn_ext (causal-conv1d / GNN ops); libnvblas; CUPTI's
+# checkpoint / PC-sampling libraries; Python; compilers.
+#
+# >>> shared base: everything from here to "<<< shared base", the UBUNTU
+# ARG and scripts/gpu/cuda-13.pins are hashed into the base image tag
+# (scripts/ci/base-images.sh hash). Keep image-specific steps out of it.
+
+# ---- ffmpeg: FFmpeg 4.4 (the release Ubuntu 22.04 ships, so the CLI behaves
+# the same), every native component, external libraries limited to what the
+# code asks for: libx264 (cpu-test-x264 fallback, LTX I2V conditioning),
+# libvpx (VP8 for WebRTC peers), libdav1d (AV1 input decode) and NVENC
+# (ffnvcodec: the nv-codec-headers Ubuntu built its ffmpeg with, 11.1: driver >=
+# 470). Nothing autodetected, so no X11/SDL/VA-API/Pulse/... dependencies.
+FROM ${UBUNTU} AS ffmpeg-build
 ARG DEBIAN_FRONTEND=noninteractive
-# CUDA 13.4 runtime libraries from NVIDIA's apt repo, versions pinned in
-# scripts/gpu/cuda-13.pins. 13.4 needs a >= 580 driver; validate.sh's offer
-# filter asks Vast for cuda_vers>=13.0. No Python: weights come through hf-fm.
+ARG FFMPEG_VERSION=4.4.5
+ARG FFMPEG_SHA256=f9514e0d3515aee5a271283df71636e1d1ff7274b15853bcd84e144be416ab07
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential pkg-config nasm curl ca-certificates xz-utils \
+      libx264-dev libvpx-dev libdav1d-dev zlib1g-dev libffmpeg-nvenc-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+ && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+ && mkdir /tmp/ffmpeg && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
+ && cd /tmp/ffmpeg \
+ && ./configure --prefix=/opt/ffmpeg --disable-autodetect --disable-debug --disable-doc --disable-ffplay \
+      --disable-shared --enable-static --enable-gpl --enable-pthreads --enable-zlib \
+      --enable-libx264 --enable-libvpx --enable-libdav1d \
+      --enable-ffnvcodec --enable-nvenc \
+ && make -j"$(nproc)" && make install \
+ && strip /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe \
+ && mkdir -p /out && cp /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /out/ \
+ && /out/ffmpeg -hide_banner -encoders | grep -E ' (h264_nvenc|libx264|libvpx|aac) ' \
+ && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz
+
+
+# ---- CUDA runtime libraries, collected into /out/<layer>/ (copied into
+# base-cuda without apt, the keyring or dpkg metadata). Only what fv-serve and
+# fv-gpucheck load: cudarc dlopens libnvrtc, libcublas(+Lt), libcudnn and
+# (FASTVIDEO_GPU_TRACE only) libcupti; libcudnn dlopens its graph/ops/cnn/
+# heuristic/engine libraries, and the runtime-compiled and tensor-IR engines
+# dlopen libnvrtc. (CUPTI: the cupti-libs stage, outside the shared base.)
+FROM ${UBUNTU} AS cuda-libs
+ARG DEBIAN_FRONTEND=noninteractive
 COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      rsync ffmpeg openssh-server ca-certificates curl wget binutils \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
  && . /etc/fastvideo/cuda-13.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
       "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
-      "$CUDA_TILEIRAS_PKG" "$CUDA_CUPTI_PKG" \
- && apt-mark hold cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 cuda-cupti-13-4 \
  && rm -rf /var/lib/apt/lists/* \
- && rm -f /usr/local/cuda-13.4/targets/x86_64-linux/lib/libcupti_static.a \
-          /usr/local/cuda-13.4/targets/x86_64-linux/lib/libnvperf_host_static.a \
- && echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
- && ldconfig \
- && . /etc/fastvideo/cuda-13.pins \
- && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME" "$CUDA_CUPTI_SONAME"; do \
-      src=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }'); \
-      test -n "$src" && test -e "$src"; \
-      dir=$(dirname "$src"); \
-      unversioned="${soname%.so.*}.so"; \
-      if [ ! -e "$dir/$unversioned" ]; then ln -s "$soname" "$dir/$unversioned"; fi; \
+ && L=/usr/local/cuda-13.4/targets/x86_64-linux/lib G=/usr/lib/x86_64-linux-gnu \
+ && mkdir -p /out/cublaslt /out/cudnn-engines /out/cudnn /out/cublas-nvrtc \
+ && cp -a "$L"/libcublasLt.so.* /out/cublaslt/ \
+ && ln -s "$CUDA_CUBLASLT_SONAME" /out/cublaslt/libcublasLt.so \
+ && cp -a "$G"/libcudnn_engines_precompiled.so.* /out/cudnn-engines/ \
+ && for l in libcudnn libcudnn_graph libcudnn_ops libcudnn_cnn libcudnn_heuristic \
+             libcudnn_engines_runtime_compiled libcudnn_engines_tensor_ir; do \
+      cp -a "$G/$l".so.* /out/cudnn/; \
     done \
+ && ln -s "$CUDA_CUDNN_SONAME" /out/cudnn/libcudnn.so \
+ && cp -a "$L"/libcublas.so.* "$L"/libnvrtc.so.* "$L"/libnvrtc-builtins.so.* /out/cublas-nvrtc/ \
+ && ln -s "$CUDA_CUBLAS_SONAME" /out/cublas-nvrtc/libcublas.so \
+ && ln -s "$CUDA_NVRTC_SONAME" /out/cublas-nvrtc/libnvrtc.so \
+ && ls -la /out/* \
+ && du -sh /out/*
+
+# ---- base-os: what every runtime image (CUDA or not) runs on.
+FROM ${UBUNTU} AS base-os
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates libx264-163 libvpx7 libdav1d5 \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old /var/lib/dpkg/*-old \
+      /var/log/dpkg.log /var/log/apt /var/log/alternatives.log \
+ && mkdir -p /fvstate /var/log
+COPY --from=ffmpeg-build /out/ffmpeg /out/ffprobe /usr/local/bin/
+RUN ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
+ && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -f lavfi -i sine=d=0.1 \
+      -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -y /tmp/t.mp4 \
+ && ffprobe -v error -show_entries stream=codec_name -of csv=p=0 /tmp/t.mp4 | grep -qx h264 \
+ && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' h264_nvenc ' \
+ && rm /tmp/t.mp4
+ENV FV_STATE_DIR=/fvstate \
+    RUST_LOG=info
+LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-rs" \
+      org.opencontainers.image.licenses="Apache-2.0"
+WORKDIR /opt/fastvideo-rs
+
+# ---- base-cuda: base-os + the CUDA 13.4 runtime libraries (not CUPTI, which
+# only the runtime image adds). The pins file stays for provenance and
+# scripts/gpu/remote.sh.
+FROM base-os AS base-cuda
+COPY --from=cuda-libs /out/cublaslt/ /usr/local/cuda-13.4/lib64/
+COPY --from=cuda-libs /out/cudnn-engines/ /usr/lib/x86_64-linux-gnu/
+COPY --from=cuda-libs /out/cudnn/ /usr/lib/x86_64-linux-gnu/
+COPY --from=cuda-libs /out/cublas-nvrtc/ /usr/local/cuda-13.4/lib64/
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
+RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
- && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so|libcupti\.so' \
- && mkdir -p /run/sshd
-# The NVIDIA container runtime injects the driver (libcuda) when these are set.
+ && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so'
+# The NVIDIA container runtime injects the driver (libcuda, and libnvidia-encode
+# for NVENC through the `video` capability) when these are set.
 ENV NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+# <<< shared base
+
+# ---- CUPTI (runtime image only), from its own small package, so building the
+# runtime on a published base-cuda does not fetch the CUDA library packages.
+# libcupti + the nvperf libraries it dlopens for the profiling APIs; not the
+# static libraries, libcheckpoint or libpcsamplingutil.
+FROM ${UBUNTU} AS cupti-libs
+ARG DEBIAN_FRONTEND=noninteractive
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
+ && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+ && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
+ && apt-get update \
+ && . /etc/fastvideo/cuda-13.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades "$CUDA_CUPTI_PKG" \
+ && rm -rf /var/lib/apt/lists/* \
+ && L=/usr/local/cuda-13.4/targets/x86_64-linux/lib \
+ && mkdir -p /out \
+ && cp -a "$L"/libcupti.so* "$L"/libnvperf_host.so "$L"/libnvperf_target.so /out/ \
+ && ls -la /out
+
+# ---- runtime: what a GPU box runs for fv-gpucheck, benchmarks and remote
+# debugging (ghcr.io/zaitrarrio/fastvideo-rs-runtime). base-cuda + thin layers,
+# most stable first. No Python, no PyTorch, no toolkit: hosts boot quickly.
+# scripts/gpu/remote.sh needs ssh/rsync (Vast boxes), curl (fetch-baseline);
+# `ldd`, tar and gzip come with Ubuntu. NVENC needs the driver's `video`
+# capability (base-cuda sets it).
+FROM base-cuda AS runtime
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server rsync curl \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/dpkg.log /var/log/apt \
+ && mkdir -p /run/sshd
+# CUPTI for FASTVIDEO_GPU_TRACE (cudarc `cupti`, loaded lazily; fv-serve's
+# variant images go without it).
+COPY --from=cupti-libs /out/ /usr/local/cuda-13.4/lib64/
+RUN ldconfig && ldconfig -p | grep -q 'libcupti\.so\.13 '
 COPY --from=hf-fm /out/hf-fm /out/hf-fetch-model /usr/local/bin/
 COPY scripts/gpu /opt/fastvideo-rs/scripts/gpu
-# Provenance only: the cubins are already embedded in fv-gpucheck, so the
-# runtime needs no tileiras for them (cuda-tileiras stays pinned above for
-# any cutile JIT use).
+# Provenance only: the cubins are already embedded in fv-gpucheck.
 COPY --from=oxide /out/oxide /opt/fastvideo-rs/oxide
 COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/release/
-LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-rs" \
-      org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)" \
-      org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)"
 WORKDIR /opt/fastvideo-rs
 
 # ---- serve: fv-serve on the runtime image (docs/serve/design.md §6.1, WP-16) --
@@ -195,26 +328,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp /target/release/fv-serve /out/fv-serve \
  && echo "$FV_SERVE_FEATURES" > /out/fv-serve.features
 
-# serve: the legacy all-in-one image (ghcr.io/zaitrarrio/fastvideo-rs-serve
-# :latest / :sha-…), now the debug flavour (ssh, rsync, fv-gpucheck, scripts,
-# CUPTI) and what Vast instances run; Runpod pods and serverless workers run
-# the per-variant images below (docs/serve/images.md). NVENC needs the driver's `video`
-# capability; Ubuntu 22.04's ffmpeg (nv-codec-headers 11.1, driver >= 470,
-# so any driver that runs CUDA 13) is built with h264_nvenc, checked here,
-# and with libvpx, the inter-frame VP8 encoder for peers without H.264 (the
-# Reactor Python SDK, open-source Chromium; fastvideo-media::vp8), also
-# checked with a real encode.
+
+# serve: the `debug` flavour (ghcr.io/zaitrarrio/fastvideo-rs-serve:latest /
+# :sha-…; the legacy all-in-one tags): the runtime image (ssh, rsync,
+# fv-gpucheck, scripts, CUPTI) + fv-serve + every config + the Vast worker.
+# What Vast instances, CloudRift/GCP workers and profiling pods run; Runpod
+# pods and serverless workers run the per-variant images below. It adds only
+# its top layers to the shared stack (docs/serve/images.md).
 # Ports: 8000/http. The ICE ports of design §6.1 (70000/tcp, 70010/udp) are
 # symmetric platform requests above 65535, so they are published by the
 # deploy scripts, not EXPOSEd.
 FROM runtime AS serve
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
-    FV_CONFIG=/etc/fv/runpod.toml \
-    FV_STATE_DIR=/fvstate \
-    RUST_LOG=info
-RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' h264_nvenc ' \
- && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
- && mkdir -p /fvstate /var/log
+ENV FV_CONFIG=/etc/fv/runpod.toml
 COPY configs/serve /etc/fv
 COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
@@ -222,117 +347,8 @@ LABEL org.opencontainers.image.description="fv-serve: FastVideo, MiniMax, fal an
 EXPOSE 8000
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
 
-# ============================================================================
-# Per-variant serve images (docs/serve/images.md). One image per pod variant
-# (configs/serve/*.toml), built from shared layers so a host that pulled one
-# CUDA variant already has everything but a few KB of the next:
-#
-#   ubuntu:22.04                       shared by every variant (and cpu)
-#   serve-os: ca-certificates + the codec runtime libs (x264, vpx, dav1d)
-#   ffmpeg (minimal build, below)      shared by every variant (and cpu)
-#   CUDA libs: cuDNN, cuBLAS, NVRTC    shared by the CUDA variants (three layers,
-#                                      so hosts download them in parallel)
-#   fv-serve (--features cuda,…)       shared by the CUDA variants
-#   variant: config + entrypoint       a few KB per variant
-#
-# Not in these images (the legacy `serve` target above keeps them, published
-# as the `debug` flavour): openssh-server, rsync, fv-gpucheck, the oxide cubin
-# directory (the cubins are embedded in the binary), scripts/gpu, hf-fm, CUPTI
-# (FASTVIDEO_GPU_TRACE only), tileiras (only the AOT build uses it; its
-# package drags in nvcc, libnvjitlink and build-essential), libcudnn_adv
-# (legacy RNN / multi-head attention / CTC API; the SDPA path uses the backend
-# graph API, whose engines are kept), Ubuntu's ffmpeg and its ~150 shared
-# libraries.
-
-# ---- ffmpeg: FFmpeg 4.4 (the release Ubuntu 22.04 ships, so the CLI behaves
-# the same), every native component, external libraries limited to what the
-# code asks for: libx264 (cpu-test-x264 fallback, LTX I2V conditioning),
-# libvpx (VP8 for WebRTC peers), libdav1d (AV1 input decode) and NVENC
-# (ffnvcodec: the nv-codec-headers Ubuntu built its ffmpeg with, 11.1: driver >=
-# 470). Nothing autodetected, so no X11/SDL/VA-API/Pulse/... dependencies.
-FROM ubuntu:22.04 AS ffmpeg-build
-ARG DEBIAN_FRONTEND=noninteractive
-ARG FFMPEG_VERSION=4.4.5
-ARG FFMPEG_SHA256=f9514e0d3515aee5a271283df71636e1d1ff7274b15853bcd84e144be416ab07
-RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential pkg-config nasm curl ca-certificates xz-utils \
-      libx264-dev libvpx-dev libdav1d-dev zlib1g-dev libffmpeg-nvenc-dev \
- && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
- && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
- && mkdir /tmp/ffmpeg && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
- && cd /tmp/ffmpeg \
- && ./configure --prefix=/opt/ffmpeg --disable-autodetect --disable-debug --disable-doc --disable-ffplay \
-      --disable-shared --enable-static --enable-gpl --enable-pthreads --enable-zlib \
-      --enable-libx264 --enable-libvpx --enable-libdav1d \
-      --enable-ffnvcodec --enable-nvenc \
- && make -j"$(nproc)" && make install \
- && strip /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe \
- && mkdir -p /out && cp /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /out/ \
- && /out/ffmpeg -hide_banner -encoders | grep -E ' (h264_nvenc|libx264|libvpx|aac) ' \
- && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz
-
-# ---- CUDA runtime libraries, collected into /out (copied into serve-cuda-base
-# without apt, the keyring or dpkg metadata).
-FROM ubuntu:22.04 AS cuda-libs
-ARG DEBIAN_FRONTEND=noninteractive
-COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates wget \
- && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
- && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
- && apt-get update \
- && . /etc/fastvideo/cuda-13.pins \
- && apt-get install -y --no-install-recommends --allow-downgrades \
-      "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
- && rm -rf /var/lib/apt/lists/* \
- && L=/usr/local/cuda-13.4/targets/x86_64-linux/lib \
- && mkdir -p /out/nvrtc /out/cublas /out/cudnn \
- && cp -a "$L"/libnvrtc.so.* "$L"/libnvrtc-builtins.so.* /out/nvrtc/ \
- && cp -a "$L"/libcublas.so.* "$L"/libcublasLt.so.* /out/cublas/ \
- && cp -a /usr/lib/x86_64-linux-gnu/libcudnn*.so.* /out/cudnn/ \
- && rm -f /out/cudnn/libcudnn_adv.so* \
- && ln -s "$CUDA_NVRTC_SONAME" /out/nvrtc/libnvrtc.so \
- && ln -s "$CUDA_CUBLAS_SONAME" /out/cublas/libcublas.so \
- && ln -s "$CUDA_CUBLASLT_SONAME" /out/cublas/libcublasLt.so \
- && ln -s "$CUDA_CUDNN_SONAME" /out/cudnn/libcudnn.so \
- && ls -la /out/*
-
-# ---- serve-os: what every serve image (CUDA or not) runs on.
-FROM ubuntu:22.04 AS serve-os
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libx264-163 libvpx7 libdav1d5 \
- && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/dpkg.log /var/log/apt \
- && mkdir -p /fvstate /var/log
-COPY --from=ffmpeg-build /out/ffmpeg /out/ffprobe /usr/local/bin/
-RUN ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
- && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -f lavfi -i sine=d=0.1 \
-      -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -y /tmp/t.mp4 \
- && ffprobe -v error -show_entries stream=codec_name -of csv=p=0 /tmp/t.mp4 | grep -qx h264 \
- && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' h264_nvenc ' \
- && rm /tmp/t.mp4
-ENV FV_STATE_DIR=/fvstate \
-    RUST_LOG=info
-LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-rs" \
-      org.opencontainers.image.licenses="Apache-2.0"
-WORKDIR /opt/fastvideo-rs
-
-# ---- serve-cuda-base: serve-os + the CUDA 13.4 runtime libraries fv-serve loads.
-FROM serve-os AS serve-cuda-base
-COPY --from=cuda-libs /out/cublas/ /usr/local/cuda-13.4/lib64/
-COPY --from=cuda-libs /out/cudnn/ /usr/lib/x86_64-linux-gnu/
-COPY --from=cuda-libs /out/nvrtc/ /usr/local/cuda-13.4/lib64/
-RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
- && ldconfig \
- && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so'
-# The NVIDIA container runtime injects the driver (libcuda, and libnvidia-encode
-# for NVENC through the `video` capability) when these are set.
-ENV NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-
-# ---- serve-cuda-bin: the CUDA fv-serve (serve-build above) on serve-cuda-base.
-FROM serve-cuda-base AS serve-cuda-bin
+# ---- serve-cuda-bin: the CUDA fv-serve (serve-build above) on base-cuda.
+FROM base-cuda AS serve-cuda-bin
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
 EXPOSE 8000
@@ -372,8 +388,9 @@ COPY configs/serve/runpod-sfwan.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=sfwan FV_CONFIG=/etc/fv/runpod-sfwan.toml
 LABEL org.opencontainers.image.description="fv-serve sfwan (configs/serve/runpod-sfwan.toml)"
 
+
 # ---- cpu: CPU only. fv-serve without `cuda` (no CUDA libraries at all) on
-# serve-os, with the fake engine: fv-control's fake-engine CPU workers
+# base-os, with the fake engine: fv-control's fake-engine CPU workers
 # (tiny-cpu) and tests. (It replaced the retired gateway image,
 # docs/serve/edge-control-plane.md §9 stage 4.)
 FROM build AS cpu-build
@@ -391,7 +408,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp /target/release/fv-serve /out/fv-serve \
  && echo "$FV_CPU_FEATURES" > /out/fv-serve.features
 
-FROM serve-os AS serve-cpu
+
+FROM base-os AS serve-cpu
 COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
 COPY configs/serve/runpod-fake.toml /etc/fv/

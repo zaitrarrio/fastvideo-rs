@@ -16,6 +16,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "docker/gpucheck.Dockerfile"
+      - "scripts/ci/base-images.sh"
       - ".dockerignore"
       - "scripts/gpu/**"
       - "scripts/ci/prebuilt.sh"
@@ -81,6 +82,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The shared lower layers (Ubuntu + ffmpeg, + CUDA libraries) as
+      # published images, one per content hash, built here only when missing.
+      # Passing them as named contexts puts this image on the same layer
+      # digests as fastvideo-rs-runtime and every serve variant (docs/serve/images.md "Layers").
+      - name: Shared base images
+        id: base
+        env:
+          FV_BASE_DISABLE: ${{ vars.FV_BASE_DISABLE || '0' }}
+        run: bash scripts/ci/base-images.sh ensure
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -91,7 +102,9 @@ jobs:
           push: true
           # Prebuilt: these directories replace the oxide, binary and hf-fm
           # stages, so no compile stage runs. Empty: today's in-image compile.
-          build-contexts: ${{ steps.pre.outputs.contexts }}
+          build-contexts: |
+            ${{ steps.pre.outputs.contexts }}
+            ${{ steps.base.outputs.contexts }}
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
           # Every branch publishes its build-id tag, which is what validate.sh
@@ -118,15 +131,26 @@ jobs:
           docker run --rm "$img" bash -euo pipefail -c '
             test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.meta.outputs.build_id }}"
             . /etc/fastvideo/cuda-13.pins
-            dpkg-query -W cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 cuda-cupti-13-4
-            dpkg-query -W cuda-cupti-13-4 | grep -F "${CUDA_CUPTI_PKG#*=}"
-            dpkg-query -W cuda-nvrtc-13-4 | grep -F "${CUDA_NVRTC_PKG#*=}"
-            dpkg-query -W libcublas-13-4 | grep -F "${CUDA_CUBLAS_PKG#*=}"
-            dpkg-query -W libcudnn9-cuda-13 | grep -F "${CUDA_CUDNN_PKG#*=}"
-            dpkg-query -W cuda-tileiras-13-4 | grep -F "${CUDA_TILEIRAS_PKG#*=}"
-            for lib in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME" "$CUDA_CUPTI_SONAME"; do
-              ldconfig -p | grep -F "$lib" >/dev/null
+            bad() { echo "FAIL: $*"; exit 1; }
+            # The pinned CUDA libraries (no dpkg metadata: they are copied in,
+            # docker/gpucheck.Dockerfile base-cuda), at the pinned versions.
+            for lib in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME" "$CUDA_CUPTI_SONAME" \
+                       libcudnn_graph.so.9 libcudnn_ops.so.9 libcudnn_cnn.so.9 libcudnn_heuristic.so.9 \
+                       libcudnn_engines_precompiled.so.9 libcudnn_engines_runtime_compiled.so.9 libcudnn_engines_tensor_ir.so.9; do
+              ldconfig -p | grep -qE "^[[:space:]]+$lib " || bad "missing $lib"
             done
+            v() { local x="${1#*=}"; echo "${x%-*}"; }
+            for pair in "libnvrtc.so.13:$(v "$CUDA_NVRTC_PKG")" "libcublas.so.13:$(v "$CUDA_CUBLAS_PKG")" \
+                        "libcublasLt.so.13:$(v "$CUDA_CUBLAS_PKG")" "libcudnn.so.9:$(v "$CUDA_CUDNN_PKG" | cut -d. -f1-3)"; do
+              real="$(readlink -f "$(ldconfig -p | grep -m1 -E "^[[:space:]]+${pair%%:*} " | sed "s/.*=> //")")"
+              case "$real" in *".${pair#*:}") echo "${pair%%:*} -> $real" ;; *) bad "${pair%%:*} is $real, pinned ${pair#*:}" ;; esac
+            done
+            for b in target/release/fv-gpucheck /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/hf-fm; do
+              ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
+            done
+            for x in tileiras nvcc python3 gcc; do command -v "$x" && bad "$x is in the image"; done
+            ldconfig -p | grep -E "libcudnn_adv|libcudnn_ext|libnvJitLink" && bad "unused CUDA libraries present"
+            command -v sshd rsync curl hf-fm >/dev/null
             ./target/release/fv-gpucheck --out /tmp/out nvrtc
             grep -q aot_sms /tmp/out/nvrtc.json && echo "embedded cubins present"
             # The oxide Tile-IR NVFP4 GEMM cubins must be embedded for both SMs.

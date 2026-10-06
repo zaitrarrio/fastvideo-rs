@@ -49,7 +49,7 @@ analyze() {  # label [tail_s]
 case "${1:-}" in
   install)
     command -v nsys >/dev/null && { nsys --version; exit 0; }
-    wget -q -O /tmp/nsys.deb "https://developer.download.nvidia.com/devtools/repos/ubuntu2204/amd64/$NSYS_DEB" \
+    curl -fsSL -o /tmp/nsys.deb "https://developer.download.nvidia.com/devtools/repos/ubuntu2204/amd64/$NSYS_DEB" \
       && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/nsys.deb > "$P/nsys-install.log" 2>&1
     rm -f /tmp/nsys.deb
     nsys --version ;;
