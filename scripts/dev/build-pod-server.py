@@ -159,6 +159,9 @@ SCRIPTS = {
     "scripts/gpu/lint.sh",
     "tests/compat/run.sh",
     "tests/console/run.sh",
+    # `build-pod.sh release-artifacts <sha>`: the release binaries the image
+    # workflows COPY instead of compiling (docs/dev/build-pod.md).
+    "scripts/dev/release-artifacts-pod.sh",
 }
 # Jobs that wait for the browser extras (the second setup phase).
 EXTRAS_SCRIPTS = {"tests/compat/run.sh", "tests/console/run.sh"}

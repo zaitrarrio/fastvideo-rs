@@ -31,6 +31,11 @@
 #   build-pod.sh stop                stop the pod (terminate if Runpod refuses a
 #                                    stop); the volume and its caches persist
 #   build-pod.sh down                terminate the pod (volume persists)
+#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"] [--force] [--no-upload] [--keep]
+#                                    build that commit's release binaries on the
+#                                    pod (scripts/dev/release-artifacts-pod.sh),
+#                                    verify and upload them to R2 artifacts/<sha>/
+#                                    for the image workflows (wakes the pod)
 #   build-pod.sh volume-create       create the fv-build volume (once)
 #   build-pod.sh plan                print the pod create payload (no API call)
 #
@@ -377,7 +382,7 @@ cmd_sync() {
   # "tmp: unbound variable" after successful runs. A global path plus an EXIT
   # trap covers die(); the normal path removes the directory itself.
   FV_SYNC_TMP="$tmp"
-  trap 'rm -rf "${FV_SYNC_TMP:-}"' EXIT
+  trap 'rm -rf "${FV_SYNC_TMP:-}"; fv_rel_cleanup' EXIT
   svc GET "/v1/agents/$agent/manifest" >"$tmp/remote"
   {
     git -C "$FV_ROOT" ls-files -z --recurse-submodules
@@ -511,6 +516,100 @@ cmd_down() {
   log "terminated $id (volume kept)"
 }
 
+# ---- release artifacts (docs/dev/build-pod.md "Release artifacts") ----------
+# Build one commit's release binaries on the pod (scripts/dev/release-artifacts-pod.sh),
+# fetch the tarballs + manifest.json, check their sha256s and upload them to
+# R2 under artifacts/<sha>/ (manifest.json last: its presence means complete).
+REL_AGENT="${FV_RELEASE_AGENT:-fv-release}"
+R2_ENV_FILE="${FV_R2_ARTIFACTS_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/r2-build-artifacts-rw.env}"
+# The temporary worktree of a release build; also called from cmd_sync's EXIT trap.
+FV_REL_WT=""
+fv_rel_cleanup() {
+  [[ -n "$FV_REL_WT" ]] || return 0
+  git -C "$FV_ROOT" worktree remove --force "$FV_REL_WT" >/dev/null 2>&1 || rm -rf "$FV_REL_WT"
+}
+r2() { FV_R2_ARTIFACTS_ENV_FILE="$R2_ENV_FILE" python3 "$HERE/r2.py" "$@"; }
+
+cmd_release_artifacts() {
+  local rev="" sets="" force=0 upload=1 keep=0
+  while (( $# )); do
+    case "$1" in
+      --sets) sets="${2:?--sets needs a list}"; shift 2 ;;
+      --force) force=1; shift ;;
+      --no-upload) upload=0; shift ;;
+      --keep) keep=1; shift ;;
+      -*) die "unknown flag $1" ;;
+      *) [[ -z "$rev" ]] || die "one revision only"; rev="$1"; shift ;;
+    esac
+  done
+  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"] [--force] [--no-upload] [--keep]"
+  require_tools git jq python3 sha256sum
+  local sha
+  if ! sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}")"; then
+    git -C "$FV_ROOT" fetch -q origin || true
+    sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}" || git -C "$FV_ROOT" rev-parse -q --verify "origin/$rev^{commit}")" \
+      || die "unknown revision $rev"
+  fi
+  if (( upload )); then
+    [[ -s "$R2_ENV_FILE" ]] || die "no R2 credentials in $R2_ENV_FILE (FV_R2_ARTIFACTS_*; docs/dev/build-pod.md \"Release artifacts\"); --no-upload builds without uploading"
+    local rc=0
+    r2 head "artifacts/$sha/manifest.json" || rc=$?
+    case "$rc" in
+      0) if (( !force )); then log "artifacts/$sha already in R2 (--force rebuilds)"; return 0; fi ;;
+      1) ;;
+      *) die "cannot read the R2 bucket with $R2_ENV_FILE (r2.py exit $rc)" ;;
+    esac
+  fi
+  # One release build per container at a time: they share the pod's
+  # $REL_AGENT snapshot and target dir.
+  exec 9>"$STATE/release.lock"
+  flock -w "${FV_RELEASE_LOCK_WAIT_S:-3600}" 9 || die "another release-artifacts run holds $STATE/release.lock"
+
+  local wt="${TMPDIR:-/tmp}/fv-release-${sha:0:12}" out="${FV_RELEASE_OUT:-$FV_ROOT/artifacts/release/$sha}"
+  local build_id build_time run_id t0=$SECONDS
+  git -C "$FV_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+  git -C "$FV_ROOT" worktree add -q --detach "$wt" "$sha"
+  FV_REL_WT="$wt"
+  trap fv_rel_cleanup EXIT
+  # The image workflows check out submodules too; only cutile-rs is built.
+  git -C "$wt" submodule update -q --init third_party/cutile-rs
+  build_id="$(bash "$wt/scripts/gpu/docker.sh" build-id)"
+  build_time="$(cd "$wt" && TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 3)"
+  # The recipe comes from this checkout (it may postdate <sha>); its hash is
+  # in the manifest (builder.recipe_sha256).
+  install -m 755 "$HERE/release-artifacts-pod.sh" "$wt/scripts/dev/release-artifacts-pod.sh"
+  log "release artifacts for $sha (build id $build_id, run $run_id)"
+
+  cmd_up
+  FV_ROOT="$wt" cmd_sync "$REL_AGENT"
+  local env=(FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" FV_BUILD_ID="$build_id" FV_REL_RUN_ID="$run_id")
+  [[ -n "$sets" ]] && env+=(FV_REL_SETS="$sets")
+  cmd_run "$REL_AGENT" --no-sync -- "${env[@]}" bash scripts/dev/release-artifacts-pod.sh \
+    || die "pod build failed (log above; re-attach with build-pod.sh log <job>)"
+
+  rm -rf "$out" && mkdir -p "$out"
+  cmd_fetch "$REL_AGENT" "release-artifacts/$sha/manifest.json" "$out/manifest.json"
+  chmod -x "$out/manifest.json"
+  [[ "$(jq -r .sha "$out/manifest.json")" == "$sha" ]] || die "manifest is for another sha"
+  local tb want
+  while IFS=$'\t' read -r _ tb want; do
+    cmd_fetch "$REL_AGENT" "release-artifacts/$sha/$tb" "$out/$tb"
+    chmod -x "$out/$tb"
+    [[ "$(sha256sum "$out/$tb" | cut -d' ' -f1)" == "$want" ]] || die "$tb: sha256 differs from the manifest"
+  done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball, .value.sha256] | @tsv' "$out/manifest.json")
+  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out"
+
+  if (( upload )); then
+    while IFS=$'\t' read -r _ tb; do
+      r2 put "artifacts/$sha/$tb" "$out/$tb"
+    done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball] | @tsv' "$out/manifest.json")
+    r2 put "artifacts/$sha/manifest.json" "$out/manifest.json"
+    log "uploaded to R2: artifacts/$sha/ ($(( SECONDS - t0 ))s in all)"
+    (( keep )) || rm -rf "$out"
+  fi
+}
+
 cmd_volume_create() {
   need_key
   [[ -z "$(volume_json)" ]] || die "volume $VOL_NAME already exists"
@@ -534,8 +633,10 @@ case "${1:-}" in
   evict) FV_BUILD_HTTP_TIMEOUT=900 svc POST /v1/evict | jq -c '.evicted[]' ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
+  release-artifacts) shift; cmd_release_artifacts "$@" ;;
   volume-create) cmd_volume_create ;;
   plan) payload "<volume id>" "${FV_BUILD_DC:-EU-RO-1}" "<sha256 of the pod token>" \
     | jq '.env.FV_BUILD_SERVER_B64 |= "<\(length) bytes: gzip+base64 of build-pod-server.py>"' ;;
-  *) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  # The header comment (line 2 up to `set -euo pipefail`) is the usage.
+  *) sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
