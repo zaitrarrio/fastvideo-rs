@@ -62,8 +62,8 @@ protocol on a loaded host and stage 3 keeps every rate assertion unchanged.
 
 | Target | Realtime tests |
 |---|---|
-| `fastvideo-fal --features director,openh264 --test director_e2e` | `realtime_av_session_end_to_end`, `realtime_video_only_session`, `realtime_browser_offer_without_a_usable_h264_encoder_gets_vp8`, `realtime_late_chunks_report_deadline_missed` |
-| `fastvideo-reactor --test runtime` | `realtime_v1_client_av_session`, `realtime_avatar_script_take_streams_in_windows` |
+| `fastvideo-fal --features director,openh264 --test director_e2e` | `realtime_av_session_end_to_end`, `realtime_video_only_session`, `realtime_browser_offer_without_a_usable_h264_encoder_gets_vp8`, `realtime_late_chunks_report_deadline_missed`, `realtime_causal_session_streams_and_recaches_once_per_switch` |
+| `fastvideo-reactor --test runtime` | `realtime_v1_client_av_session`, `realtime_avatar_script_take_streams_in_windows`, `realtime_causal_session_ends_at_its_length_limit` |
 | `fastvideo-media --test decode_pipe` | `realtime_h264_pictures_are_at_most_one_frame_behind` |
 | `tests/console/run.sh` (`FV_SERVE_UI=1`) | the Chromium console tests |
 

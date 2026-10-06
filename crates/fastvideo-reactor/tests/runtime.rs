@@ -586,13 +586,26 @@ async fn causal_session_setters() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn causal_session_ends_at_its_length_limit() {
+    causal_length_limit(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time delivery: scripts/serve/check.sh --realtime"]
+async fn realtime_causal_session_ends_at_its_length_limit() {
+    causal_length_limit(true).await;
+}
+
+/// `realtime`: also check that video reached the peer before the end.
+/// The limit's clock starts when the first frame enters the media
+/// pipeline, not when the peer receives it: on a loaded host the video
+/// encoder (an ffmpeg process) can take longer than the limit to start,
+/// and the session ends, correctly, before any video is sent. Reaching the
+/// limit at all shows that frames flowed.
+async fn causal_length_limit(realtime: bool) {
     use pb::control_server_message::Payload as CS;
     let e = engine(FakeModel::sf_wan(), Duration::ZERO);
     e.wait_ready().await;
-    // Small limits for real time: 3 s by default, 4 s at most. Longer than
-    // a video encoder takes to start (an ffmpeg process: 1-2 s on a loaded
-    // host such as the shared build pod), so video reaches the peer before
-    // the session ends and its connections close.
+    // Small limits: 3 s by default, 4 s at most.
     let (rt, app) = runtime(e, |c| c.causal_limits = CausalLimits { default_max_s: 3, hard_max_s: 4 }).await;
     let (_, _, schema) = call(&app, "GET", "/schema", None).await;
     assert_eq!(schema["x-reactor"]["session_limits"]["default_max_s"], 3, "{schema}");
@@ -618,9 +631,11 @@ async fn causal_session_ends_at_its_length_limit() {
             |s: &Seen| s.control.iter().any(|m| matches!(&m.payload, Some(CS::SessionEnded(e)) if e.reason == want));
         let t0 = Instant::now();
         let mut seen = Seen::default();
-        pump(&mut peer, &mut seen, T, |s| ended(s) && !s.video.is_empty()).await;
+        pump(&mut peer, &mut seen, T, |s| ended(s) && (!realtime || !s.video.is_empty())).await;
         assert!(ended(&seen), "{:?}", seen.control);
-        assert!(!seen.video.is_empty(), "no video received");
+        if realtime {
+            assert!(!seen.video.is_empty(), "no video received");
+        }
         // Not before the limit: the clock starts at the first frame.
         assert!(t0.elapsed() >= Duration::from_secs(u64::from(limit)), "{:?}", t0.elapsed());
         let t1 = Instant::now();
