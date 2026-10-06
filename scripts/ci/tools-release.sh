@@ -476,7 +476,10 @@ run_gate() {
   git -C "$ROOT" worktree add -q --detach "$wt" "$sha" || return 1
   CLEANUP+=("git -C '$ROOT' worktree remove --force '$wt' >/dev/null 2>&1")
   log "gate 1/3: scripts/serve/check.sh on the build pod (agent $agent)"
-  bash "$wt/scripts/dev/build-pod.sh" run "$agent" -- bash scripts/serve/check.sh || { log "check.sh failed"; return 1; }
+  # No debuginfo, no incremental cache: the gate's target dir stays small on
+  # the shared pod's disk (as serve-compat's CI build).
+  bash "$wt/scripts/dev/build-pod.sh" run "$agent" -- CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \
+    bash scripts/serve/check.sh || { log "check.sh failed"; return 1; }
 
   log "gate 2/3: the shipped gpucheck-tests binaries"
   d="$out/gate"; rm -rf "$d" && mkdir -p "$d"
