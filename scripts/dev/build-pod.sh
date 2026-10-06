@@ -39,11 +39,16 @@
 #   build-pod.sh stop [--force]      ask fv-control to stop the pod (refused while jobs
 #                                    or its GitHub runner are busy, unless --force)
 #   build-pod.sh down [--force]      ask fv-control to delete the pod (same guard)
-#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"] [--force] [--no-upload] [--keep]
+#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"]
 #                                    build that commit's release binaries on the
 #                                    pod (scripts/dev/release-artifacts-pod.sh),
-#                                    verify and upload them to R2 artifacts/<sha>/
-#                                    for the image workflows (wakes the pod)
+#                                    fetch and verify them into $FV_RELEASE_OUT;
+#                                    scripts/ci/tools-release.sh publish runs this,
+#                                    tests and publishes a GitHub tools release
+#                                    (docs/dev/tools-releases.md; wakes the pod)
+#   build-pod.sh runner              register the pod's GitHub Actions runner by hand
+#                                    (fv-control does it for every pod it manages;
+#                                    this is the fallback, docs/dev/tools-releases.md)
 #   build-pod.sh plan [region]       fv-control's placement: candidates by stock and price
 #
 # <agent> is any [A-Za-z0-9._-] name; "." means this worktree's directory name.
@@ -126,6 +131,49 @@ cmd_up() {
   local srv_pod
   srv_pod="$(svc GET /v1/status | jq -r '.server_sha // ""')"
   [[ "$srv_pod" == "$(server_sha)" ]] || log "note: the pod runs server $srv_pod (main's, from fv-control); this checkout has $(server_sha)"
+  # fv-control registers the pod's GitHub runner (docs/dev/build-pods-fv-control.md §5).
+}
+
+# ---- GitHub Actions runner (docs/dev/tools-releases.md "Build pod runner") ----
+# A registration token (valid 1 h) from FV_GH_RUNNER_TOKEN_FILE (default
+# ~/.config/fv/gh-runner-token), or minted with a repo-admin PAT from
+# FV_GH_RUNNER_PAT_FILE (default ~/.config/fv/gh-runner-pat; fine-grained,
+# "Administration: write" on the repository). Only the short-lived
+# registration token goes to the pod (request body, never argv, never stored).
+RUNNER_REPO="${FV_GH_RUNNER_REPO:-zaitrarrio/fastvideo-rs}"
+runner_token_source() {
+  local tf="${FV_GH_RUNNER_TOKEN_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-token}"
+  local pf="${FV_GH_RUNNER_PAT_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-pat}"
+  if [[ -s "$tf" ]]; then echo "token:$tf"
+  elif [[ -s "$pf" ]]; then echo "pat:$pf"
+  else return 1
+  fi
+}
+cmd_runner() {
+  local src kind f tok hdr
+  src="$(runner_token_source)" || die "no GitHub runner token: put a registration token (Settings -> Actions -> Runners -> New self-hosted runner, valid 1 h) in ~/.config/fv/gh-runner-token, or a fine-grained PAT with Administration: write on $RUNNER_REPO in ~/.config/fv/gh-runner-pat (docs/dev/tools-releases.md)"
+  kind="${src%%:*}"; f="${src#*:}"
+  if [[ "$kind" == token ]]; then
+    tok="$(tr -d ' \r\n' <"$f")"
+  else
+    hdr="$(umask 077 && mktemp)"
+    printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$(tr -d ' \r\n' <"$f")" >"$hdr"
+    tok="$(curl -sS --fail-with-body -X POST -H @"$hdr" "https://api.github.com/repos/$RUNNER_REPO/actions/runners/registration-token" | jq -r '.token // empty')" || true
+    rm -f "$hdr"
+    [[ -n "$tok" ]] || die "could not mint a runner registration token with $f (needs Administration: write on $RUNNER_REPO)"
+  fi
+  jq -nc --arg t "$tok" --arg r "$RUNNER_REPO" --arg l "${FV_GH_RUNNER_LABELS:-fv-build}" '{token: $t, repo: $r, labels: $l}' \
+    | svc_or_die "runner registration" POST /v1/runner --data-binary @-
+  local st
+  for _ in $(seq 1 60); do
+    st="$(svc GET /v1/runner)"
+    case "$(jq -r .phase <<<"$st")" in
+      running) log "GitHub runner $(jq -r .name <<<"$st") ($(jq -r .labels <<<"$st"), actions/runner $(jq -r '.version // "?"' <<<"$st")) is up for $RUNNER_REPO"; return 0 ;;
+      failed|exited*) die "GitHub runner: $(jq -r '.error // .phase' <<<"$st")" ;;
+    esac
+    sleep 5
+  done
+  die "GitHub runner still $(jq -r .phase <<<"$st") after 5 min"
 }
 
 cmd_status() {
@@ -313,47 +361,32 @@ cmd_down() { bash "$FVC" build-pod delete "$@"; }
 
 # ---- release artifacts (docs/dev/build-pod.md "Release artifacts") ----------
 # Build one commit's release binaries on the pod (scripts/dev/release-artifacts-pod.sh),
-# fetch the tarballs + manifest.json, check their sha256s and upload them to
-# R2 under artifacts/<sha>/ (manifest.json last: its presence means complete).
+# fetch the tarballs + manifest.json and check their sha256s. Publishing (after
+# the tests) is scripts/ci/tools-release.sh publish (docs/dev/tools-releases.md).
 REL_AGENT="${FV_RELEASE_AGENT:-fv-release}"
-R2_ENV_FILE="${FV_R2_ARTIFACTS_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/r2-build-artifacts-rw.env}"
 # The temporary worktree of a release build; also called from cmd_sync's EXIT trap.
 FV_REL_WT=""
 fv_rel_cleanup() {
   [[ -n "$FV_REL_WT" ]] || return 0
   git -C "$FV_ROOT" worktree remove --force "$FV_REL_WT" >/dev/null 2>&1 || rm -rf "$FV_REL_WT"
 }
-r2() { FV_R2_ARTIFACTS_ENV_FILE="$R2_ENV_FILE" python3 "$HERE/r2.py" "$@"; }
-
 cmd_release_artifacts() {
-  local rev="" sets="" force=0 upload=1 keep=0
+  local rev="" sets=""
   while (( $# )); do
     case "$1" in
       --sets) sets="${2:?--sets needs a list}"; shift 2 ;;
-      --force) force=1; shift ;;
-      --no-upload) upload=0; shift ;;
-      --keep) keep=1; shift ;;
+      --keep) shift ;;   # accepted for older callers: the output always stays
       -*) die "unknown flag $1" ;;
       *) [[ -z "$rev" ]] || die "one revision only"; rev="$1"; shift ;;
     esac
   done
-  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"] [--force] [--no-upload] [--keep]"
+  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"]"
   require_tools git jq python3 sha256sum
   local sha
   if ! sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}")"; then
     git -C "$FV_ROOT" fetch -q origin || true
     sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}" || git -C "$FV_ROOT" rev-parse -q --verify "origin/$rev^{commit}")" \
       || die "unknown revision $rev"
-  fi
-  if (( upload )); then
-    [[ -s "$R2_ENV_FILE" ]] || die "no R2 credentials in $R2_ENV_FILE (FV_R2_ARTIFACTS_*; docs/dev/build-pod.md \"Release artifacts\"); --no-upload builds without uploading"
-    local rc=0
-    r2 head "artifacts/$sha/manifest.json" || rc=$?
-    case "$rc" in
-      0) if (( !force )); then log "artifacts/$sha already in R2 (--force rebuilds)"; return 0; fi ;;
-      1) ;;
-      *) die "cannot read the R2 bucket with $R2_ENV_FILE (r2.py exit $rc)" ;;
-    esac
   fi
   # One release build per container at a time: they share the pod's
   # $REL_AGENT snapshot and target dir.
@@ -380,6 +413,7 @@ cmd_release_artifacts() {
   FV_ROOT="$wt" cmd_sync "$REL_AGENT"
   local env=(FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" FV_BUILD_ID="$build_id" FV_REL_RUN_ID="$run_id")
   [[ -n "$sets" ]] && env+=(FV_REL_SETS="$sets")
+  [[ -n "${FV_RELEASE_VERSION:-}" ]] && env+=(FV_RELEASE_VERSION="$FV_RELEASE_VERSION")
   cmd_run "$REL_AGENT" --no-sync -- "${env[@]}" bash scripts/dev/release-artifacts-pod.sh \
     || die "pod build failed (log above; re-attach with build-pod.sh log <job>)"
 
@@ -393,20 +427,12 @@ cmd_release_artifacts() {
     chmod -x "$out/$tb"
     [[ "$(sha256sum "$out/$tb" | cut -d' ' -f1)" == "$want" ]] || die "$tb: sha256 differs from the manifest"
   done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball, .value.sha256] | @tsv' "$out/manifest.json")
-  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out"
-
-  if (( upload )); then
-    while IFS=$'\t' read -r _ tb; do
-      r2 put "artifacts/$sha/$tb" "$out/$tb"
-    done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball] | @tsv' "$out/manifest.json")
-    r2 put "artifacts/$sha/manifest.json" "$out/manifest.json"
-    log "uploaded to R2: artifacts/$sha/ ($(( SECONDS - t0 ))s in all)"
-    (( keep )) || rm -rf "$out"
-  fi
+  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out in $(( SECONDS - t0 ))s"
 }
 
 case "${1:-}" in
   up) cmd_up ;;
+  runner) cmd_runner ;;
   status) cmd_status ;;
   agents) shift; svc GET "/v1/agents$([[ "${1:-}" == --sizes ]] && echo '?sizes=1')" | jq . ;;
   sync) shift; cmd_sync "$@" ;;

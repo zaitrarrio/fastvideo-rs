@@ -10,6 +10,7 @@
 //! | `FV_BUILD_VARIANT` | `FV_BUILD_VARIANT` (images set `FV_VARIANT` at run time instead: the CUDA variants share one binary) |
 //! | `FV_BUILD_FEATURES` | the crate features this build enables |
 //! | `FV_BUILD_PROFILE` | cargo's `PROFILE` |
+//! | `FV_BUILD_VERSION` | `FV_RELEASE_VERSION` (the tools release being built, docs/dev/tools-releases.md), else the package version |
 //!
 //! The image build passes `FV_GIT_SHA` / `FV_BUILD_TIME` as build args
 //! (`.git` is not in the Docker context). The commit time rather than the
@@ -65,10 +66,12 @@ fn main() {
         .collect();
     features.sort();
     let profile = std::env::var("PROFILE").unwrap_or_default();
+    let version = env("FV_RELEASE_VERSION").unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
     println!("cargo:rustc-env=FV_BUILD_GIT_SHA={sha}");
     println!("cargo:rustc-env=FV_BUILD_TIME={time}");
     println!("cargo:rustc-env=FV_BUILD_ID={build_id}");
     println!("cargo:rustc-env=FV_BUILD_VARIANT={variant}");
     println!("cargo:rustc-env=FV_BUILD_FEATURES={}", features.join(","));
     println!("cargo:rustc-env=FV_BUILD_PROFILE={profile}");
+    println!("cargo:rustc-env=FV_BUILD_VERSION={version}");
 }
