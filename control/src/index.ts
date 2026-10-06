@@ -10,7 +10,10 @@ import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
 import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
 import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
-import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
+import { allPods, deleteClusterRow, emptyState, getCluster, insertCluster, isStandalone, listClusters, livePods, newSecrets, STANDALONE, type Cluster } from "./cluster/store";
+import { getDiagnosis } from "./podlogs";
+import { bootPhase, bootRows, getBoot } from "./boottime";
+import { standaloneSpec, standaloneView, STANDALONE_POOL, type LaunchRequest } from "./standalone";
 import { buildPodStatus } from "./buildpod";
 import {
   buildPodsOverview,
@@ -40,10 +43,14 @@ import { listTags } from "./ghcr";
 import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
 import { dynamicEnums } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
+import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
+import { availability, checkSpec } from "./cluster/editor";
 import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
+import { serverlessRoutes } from "./serverless/routes";
+import { serverlessTick } from "./serverless/ops";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
@@ -125,6 +132,7 @@ app.get("/api/overview", async (c) => {
     clusters: clusters.map((cl) => ({
       id: cl.id,
       name: cl.name,
+      kind: isStandalone(cl) ? "standalone" : "cluster",
       status: cl.status,
       deadline: cl.deadline,
       dph: running.filter((p) => p.cluster_id === cl.id).reduce((s, p) => s + (p.cost_per_hr || 0), 0),
@@ -182,6 +190,54 @@ app.get("/api/pods/:id/runpod-logs", async (c) => {
   const s = (x: string[]) => x.slice(-1000).map((line) => scrub(c.env, line));
   return c.json({ source: "runpod", container: s(l.container), system: s(l.system) });
 });
+/** A pod's logs as JSON, oldest first: what fv-serve shipped and the Runpod container / system log the controller captured from boot (podlogs.ts). ?after_id= follows; ?source=runpod|serve|control, ?level=, ?q=, ?since=, ?until=, ?limit= (≤ 2000). */
+app.get("/api/pods/:id/logs", async (c) => {
+  const q = c.req.query();
+  const id = c.req.param("id");
+  const after = q.after_id ? Number(q.after_id) : undefined;
+  const lines = await searchLogs(c.env, {
+    pod: id,
+    text: q.q,
+    level: q.level,
+    source: q.source,
+    since: q.since ? Number(q.since) : undefined,
+    until: q.until ? Number(q.until) : undefined,
+    limit: q.limit ? Number(q.limit) : undefined,
+    after_id: after,
+  });
+  return c.json({ pod: id, lines, next_after_id: lines.length ? lines[lines.length - 1].id : after ?? 0 });
+});
+/** A controller pod's boot timeline (boottime.ts): each phase's time since create and duration, the weight components, the phase it is in. */
+app.get("/api/pods/:id/boot", async (c) => {
+  const bt = await getBoot(c.env, c.req.param("id"));
+  if (!bt) throw new HttpError(404, "not a controller pod");
+  return c.json({ pod_id: c.req.param("id"), phase: bt.t.ready ? null : bootPhase(bt), timeline: bootRows(bt), boot: bt });
+});
+/** A pod's status as JSON: the account view (Runpod state, $/hr, health, utilisation), the controller's record, its boot diagnosis and its cost. */
+app.get("/api/pods/:id/status", async (c) => {
+  const id = c.req.param("id");
+  const [p, ctl, cost, boot] = await Promise.all([
+    c.env.DB.prepare("SELECT * FROM pods WHERE pod_id = ?").bind(id).first<any>(),
+    c.env.DB.prepare("SELECT cp.*, cl.name AS cluster_name, cl.source AS cluster_source FROM cluster_pods cp LEFT JOIN clusters cl ON cl.id = cp.cluster_id WHERE cp.pod_id = ?").bind(id).first<any>(),
+    c.env.DB.prepare("SELECT COALESCE(SUM(usd), 0) AS total, COALESCE(SUM(CASE WHEN day = ? THEN usd ELSE 0 END), 0) AS today, COALESCE(SUM(minutes), 0) AS minutes FROM cost_daily WHERE pod_id = ?").bind(utcDay(now()), id).first<any>(),
+    getDiagnosis(c.env, id),
+  ]);
+  if (!p && !ctl) throw new HttpError(404, "unknown pod");
+  const bt = await getBoot(c.env, id);
+  const lines = await c.env.DB.prepare("SELECT COUNT(*) AS n, MAX(ts) AS last FROM log_lines WHERE pod_id = ?").bind(id).first<{ n: number; last: number | null }>();
+  return c.json({
+    pod_id: id,
+    kind: ctl ? (ctl.cluster_source === STANDALONE ? "standalone" : "cluster") : "external",
+    owner: p?.owner ?? null,
+    runpod: p ? { desired_status: p.desired_status, cost_per_hr: p.cost_per_hr, gpu: p.gpu, dc: p.dc, uptime_s: p.uptime_s, gpu_util: p.gpu_util, cpu: p.cpu, mem: p.mem, health: p.health, build_sha: p.build_sha, last_seen: p.last_seen, gone_at: p.gone_at } : null,
+    controller: ctl ? { cluster_id: ctl.cluster_id, cluster: ctl.cluster_name, pool: ctl.pool, status: ctl.status, image: ctl.image, url: ctl.url, created_at: ctl.created_at, ready_at: ctl.ready_at, deleted_at: ctl.deleted_at } : null,
+    boot,
+    boot_phase: bt && !bt.t.ready ? bootPhase(bt) : null,
+    boot_timeline: bootRows(bt),
+    cost,
+    logs: { lines: lines?.n ?? 0, last_ts: lines?.last ?? null },
+  });
+});
 app.get("/api/metrics/series", async (c) => {
   const hours = Math.min(Math.max(Number(c.req.query("hours") || 6), 1), 24 * 7);
   return c.json(await querySeries(c.env, hours, c.req.query("pod") || undefined));
@@ -209,27 +265,8 @@ app.get("/api/costs", async (c) => {
 
 // ---------------- clusters
 function clusterView(cl: Cluster) {
-  return { id: cl.id, name: cl.name, status: cl.status, deadline: cl.deadline, source: cl.source, created_at: cl.created_at, updated_at: cl.updated_at, created_by: cl.created_by, spec: cl.spec, state: cl.state };
+  return { id: cl.id, name: cl.name, kind: isStandalone(cl) ? "standalone" : "cluster", status: cl.status, deadline: cl.deadline, source: cl.source, created_at: cl.created_at, updated_at: cl.updated_at, created_by: cl.created_by, spec: cl.spec, state: cl.state };
 }
-async function newSecrets(): Promise<{ s: ClusterSecrets; ingestHash: string }> {
-  const ingestToken = randomToken("fvi_", 32);
-  return {
-    s: { internal_token: randomToken(), url_signing_key: randomToken(), ingest_token: ingestToken },
-    ingestHash: await sha256Hex(ingestToken),
-  };
-}
-async function insertCluster(env: Env, spec: ReturnType<typeof normalizeSpec>, state: ClusterState, secrets: ClusterSecrets, ingestHash: string, by: string, source: string, status: string, deadline: number | null): Promise<Cluster> {
-  const id = newId("c");
-  const exists = await env.DB.prepare("SELECT 1 AS x FROM clusters WHERE name = ?").bind(spec.name).first();
-  if (exists) throw new HttpError(409, `a cluster named ${spec.name} exists`);
-  await env.DB.prepare("INSERT INTO clusters (id, name, spec, state, status, deadline, ingest_hash, source, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(id, spec.name, JSON.stringify(spec), JSON.stringify(state), status, deadline, ingestHash, source, now(), now(), by)
-    .run();
-  const cl = await getCluster(env, id);
-  await saveSecrets(env, cl, secrets);
-  return cl;
-}
-
 app.get("/api/templates", (c) =>
   c.json({
     // Every template as a spec (the keys standard / tiny-cpu as before), their titles, and the pool presets the dashboard can add.
@@ -240,7 +277,8 @@ app.get("/api/templates", (c) =>
   }),
 );
 app.get("/api/clusters", async (c) => {
-  const cls = await listClusters(c.env);
+  // Standalone pods are listed under /api/standalone (?all=1: here as well).
+  const cls = (await listClusters(c.env)).filter((cl) => c.req.query("all") === "1" || !isStandalone(cl));
   const out = [];
   for (const cl of cls) out.push({ ...clusterView(cl), op: await currentOp(c.env, cl.id).catch(() => null) });
   return c.json({ clusters: out });
@@ -272,16 +310,30 @@ app.put("/api/clusters/:id/spec", async (c) => {
 app.delete("/api/clusters/:id", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   if (allPods(cl.state).length) throw new HttpError(409, "the cluster has pods: stop it first");
-  await c.env.DB.prepare("DELETE FROM clusters WHERE id = ?").bind(cl.id).run();
-  await c.env.DB.prepare("DELETE FROM env_vars WHERE scope = 'cluster' AND scope_id = ?").bind(cl.id).run();
-  await c.env.DB.prepare("DELETE FROM env_vars WHERE scope = 'pool' AND scope_id LIKE ?").bind(`${cl.id}:%`).run();
+  await deleteClusterRow(c.env, cl.id);
   await auditC(c, { action: "cluster.delete", target: cl.name, before: cl.spec });
   return c.json({ deleted: cl.id });
 });
-app.post("/api/clusters/:id/price", async (c) => {
-  const cl = await getCluster(c.env, c.req.param("id"));
+// Every problem of a draft spec with its field path (the configuration editor; nothing is saved).
+// `id`: an existing cluster (its name is fixed); none: a new one (its name must be free).
+app.post("/api/clusters/validate", async (c) => {
   const b = await body(c);
-  return c.json(await projectSpend(c.env, cl.spec, { hours: Number(b.hours) > 0 ? Number(b.hours) : cl.spec.cap_s / 3600 }));
+  const cl = b.id ? await getCluster(c.env, String(b.id)) : null;
+  return c.json(await checkSpec(c.env, b.spec, cl ? { id: cl.id, name: cl.name } : undefined));
+});
+// The price check of a cluster's saved spec, or of a draft (`spec`; id `new` for one not defined yet),
+// with Runpod's stock per pool (`availability`, null when Runpod did not answer).
+app.post("/api/clusters/:id/price", async (c) => {
+  const id = c.req.param("id");
+  const b = await body(c);
+  const cl = id === "new" ? null : await getCluster(c.env, id);
+  if (!cl && !b.spec) throw new HttpError(400, "spec: the draft to price");
+  const spec = b.spec ? normalizeSpec(cl ? { ...b.spec, name: cl.name } : b.spec) : cl!.spec;
+  const [price, avail] = await Promise.all([
+    projectSpend(c.env, spec, { hours: Number(b.hours) > 0 ? Number(b.hours) : spec.cap_s / 3600 }),
+    b.availability === false ? Promise.resolve(null) : availability(c.env, spec).catch(() => null),
+  ]);
+  return c.json({ ...price, availability: avail });
 });
 
 const OPS: Record<string, { kind: Parameters<typeof startOp>[2]; params: (b: any) => any }> = {
@@ -299,6 +351,7 @@ for (const [path, def] of Object.entries(OPS)) {
     const params = def.params(await body(c));
     // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
     if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec);
+    if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
     return c.json({ operation: r.id, kind: def.kind }, 202);
@@ -400,6 +453,79 @@ app.delete("/api/clusters/:id/keys/:kid", async (c) => {
   return c.json({ key: ok[0]!.body?.key, applied: ok.map((r) => r.pod), failed: rs.filter((r) => r.status !== 200).map((r) => ({ pod: r.pod, status: r.status })) });
 });
 
+
+// ---------------- standalone pods (standalone.ts, docs/control/standalone-pods.md)
+async function standaloneOf(c: C): Promise<Cluster> {
+  const cl = await getCluster(c.env, c.req.param("id")!);
+  if (!isStandalone(cl)) throw new HttpError(404, `${cl.name} is a cluster, not a standalone pod (/api/clusters)`);
+  return cl;
+}
+const standaloneOut = async (c: C, cl: Cluster) => standaloneView(c.env, cl, await currentOp(c.env, cl.id).catch(() => null));
+app.get("/api/standalone", async (c) => {
+  const pods = [];
+  for (const cl of (await listClusters(c.env)).filter(isStandalone)) pods.push(await standaloneOut(c, cl));
+  return c.json({ pods });
+});
+/** Launch: define the pod and start it (start: false only defines it). The same `up` as a cluster: price check, image preflight, placement, wait until ready. */
+app.post("/api/standalone", async (c) => {
+  requireAdmin(c);
+  const b = await body<LaunchRequest & { start?: boolean; skip_image_check?: boolean }>(c);
+  const { spec, env: vars } = standaloneSpec(b);
+  const { s, ingestHash } = await newSecrets();
+  const cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), STANDALONE, "defined", null);
+  for (const v of vars) await setVar(c.env, "cluster", cl.id, v.key, v.value, v.secret, actor(c));
+  await auditC(c, { action: "standalone.launch", target: cl.name, after: { spec, env: vars.map((v) => ({ key: v.key, secret: v.secret, value: v.secret ? "••••••••" : v.value })) } });
+  let operation: string | null = null;
+  if (b.start !== false) {
+    operation = (await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c))).id;
+    await auditC(c, { action: "standalone.start", target: cl.name });
+  }
+  return c.json({ pod: await standaloneOut(c, await getCluster(c.env, cl.id)), operation }, 201);
+});
+app.get("/api/standalone/:id", async (c) => c.json({ pod: await standaloneOut(c, await standaloneOf(c)) }));
+app.post("/api/standalone/:id/start", async (c) => {
+  requireAdmin(c);
+  const cl = await standaloneOf(c);
+  if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
+  assertRegionsAvailable(cl.spec);
+  const b = await body<{ skip_image_check?: boolean }>(c);
+  const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
+  await auditC(c, { action: "standalone.start", target: cl.name });
+  return c.json({ operation: r.id, kind: "up" }, 202);
+});
+/** Stop: the pod is deleted (the GPU and its cost released; logs and costs kept); the definition stays, and start makes a new pod. */
+app.post("/api/standalone/:id/stop", async (c) => {
+  requireAdmin(c);
+  const cl = await standaloneOf(c);
+  const cur = (await currentOp(c.env, cl.id).catch(() => null)) as { kind?: string } | null;
+  if (cur && cur.kind !== "down") await cancelOp(c.env, cl.id, actor(c));
+  const r = await startOp(c.env, cl.id, "down", { reason: "stop" }, actor(c));
+  await auditC(c, { action: "standalone.stop", target: cl.name, before: { status: cl.status, deadline: cl.deadline } });
+  return c.json({ operation: r.id, kind: "down" }, 202);
+});
+app.post("/api/standalone/:id/extend", async (c) => {
+  requireAdmin(c);
+  const cl = await standaloneOf(c);
+  const minutes = Number((await body(c)).minutes);
+  const r = await startOp(c.env, cl.id, "extend", { minutes }, actor(c));
+  await auditC(c, { action: "standalone.extend", target: cl.name, after: { minutes } });
+  return c.json({ operation: r.id, kind: "extend" }, 202);
+});
+/** Delete: stop the pod if there is one (the definition goes when it is gone: 202), else delete the definition now. */
+app.delete("/api/standalone/:id", async (c) => {
+  requireAdmin(c);
+  const cl = await standaloneOf(c);
+  if (allPods(cl.state).length || ["starting", "stopping"].includes(cl.status)) {
+    const cur = (await currentOp(c.env, cl.id).catch(() => null)) as { kind?: string } | null;
+    if (cur) await cancelOp(c.env, cl.id, actor(c));
+    const r = await startOp(c.env, cl.id, "down", { reason: "delete", delete_definition: true }, actor(c));
+    await auditC(c, { action: "standalone.delete", target: cl.name, before: cl.spec, detail: "stopping first" });
+    return c.json({ operation: r.id, kind: "down", deleting: cl.id }, 202);
+  }
+  await deleteClusterRow(c.env, cl.id);
+  await auditC(c, { action: "standalone.delete", target: cl.name, before: cl.spec });
+  return c.json({ deleted: cl.id });
+});
 
 // ---------------- env vars
 const scopeOf = (s: string): Scope => {
@@ -549,7 +675,55 @@ app.get("/api/logs", async (c) => {
       until: q.until ? Number(q.until) : undefined,
       limit: q.limit ? Number(q.limit) : undefined,
       after_id: q.after_id ? Number(q.after_id) : undefined,
+      source: q.source,
     }),
+  });
+});
+// The log explorer (src/logquery.ts): every source in one line shape, filtered server-side, keyset pages.
+app.get("/api/logs/query", async (c) => c.json(await queryLogs(c.env, parseLogQuery(c.req.query()))));
+// New lines since `tail` (the state the previous call returned; none: start now).
+app.get("/api/logs/live", async (c) => {
+  const r = await tailLogs(c.env, parseLogQuery(c.req.query()), decodeTail(c.req.query("tail")));
+  return c.json({ lines: r.lines, tail: encodeTail(r.state) });
+});
+app.get("/api/logs/context", async (c) => {
+  const uid = c.req.query("uid") || "";
+  if (!/^[a-z]:[A-Za-z0-9_:.-]{1,120}$/.test(uid)) throw new HttpError(400, "uid: a line's uid");
+  return c.json(await lineContext(c.env, uid, Number(c.req.query("before") ?? 10), Number(c.req.query("after") ?? 10)));
+});
+app.get("/api/logs/facets", async (c) => c.json(await logFacets(c.env, parseLogQuery(c.req.query()), Number(c.req.query("buckets") || 60))));
+// The filtered result as NDJSON or text, paged server-side (at most 50 000 lines).
+app.get("/api/logs/export", async (c) => {
+  const q = parseLogQuery({ ...c.req.query(), limit: "1000" });
+  const fmt = c.req.query("format") === "txt" ? "txt" : "ndjson";
+  const max = Math.min(Number(c.req.query("max") || 50_000), 50_000);
+  const env = c.env;
+  const enc = new TextEncoder();
+  const line = (l: XLine) =>
+    fmt === "txt"
+      ? `${new Date(l.ts).toISOString()} ${l.level.toUpperCase().padEnd(5)} [${l.source}${l.pod_id ? ` ${l.pod_id}` : ""}${l.pool ? ` ${l.pool}` : ""}] ${l.target ? `${l.target}: ` : ""}${l.msg}${l.fields ? ` ${JSON.stringify(l.fields)}` : ""}\n`
+      : JSON.stringify(l) + "\n";
+  const stream = new ReadableStream({
+    async start(ctl) {
+      let n = 0;
+      let cursor = q.cursor;
+      try {
+        while (n < max) {
+          const r = await queryLogs(env, { ...q, cursor, limit: Math.min(1000, max - n) });
+          for (const l of r.lines) ctl.enqueue(enc.encode(line(l)));
+          n += r.lines.length;
+          if (!r.next) break;
+          cursor = decodeCursor(r.next);
+        }
+      } catch (e) {
+        ctl.enqueue(enc.encode(fmt === "txt" ? `# export stopped: ${(e as Error).message}\n` : JSON.stringify({ error: (e as Error).message }) + "\n"));
+      }
+      ctl.close();
+    },
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
+  return new Response(stream, {
+    headers: { "content-type": fmt === "txt" ? "text/plain; charset=utf-8" : "application/x-ndjson", "content-disposition": `attachment; filename="fv-logs-${stamp}.${fmt === "txt" ? "log" : "ndjson"}"`, "cache-control": "no-store" },
   });
 });
 app.get("/api/logs/download", async (c) => {
@@ -661,6 +835,9 @@ app.post("/api/docs/:kind/:id/restore", async (c) => {
   return c.json(await restoreDoc(c.env, kind, c.req.param("id"), Number(b.audit_id), b.which === "before" ? "before" : "after", { version: b.version, actor: actor(c), ip: clientIp(c) }));
 });
 
+// ---------------- Runpod serverless endpoints (src/serverless/, docs/control/serverless.md)
+app.route("/api/serverless", serverlessRoutes);
+
 app.all("/api/*", () => {
   throw new HttpError(404, "no such route");
 });
@@ -678,6 +855,7 @@ export default {
         console.error("collector failed", scrub(env, (e as Error).message));
       }),
     );
+    ctx.waitUntil(serverlessTick(env).catch((e) => console.error("serverless tick failed", scrub(env, (e as Error).message))));
   },
 } satisfies ExportedHandler<Env>;
 

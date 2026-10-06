@@ -3,6 +3,7 @@
 // Every batch lands in R2 (NDJSON, the archive; bucket lifecycle does the
 // retention), the recent tail in D1 (24 h, searchable), and live-tail
 // WebSockets get it through the cluster's Durable Object.
+import { recordBoot } from "./boottime";
 import { stubFor } from "./cluster/control";
 import { sha256Hex } from "./crypto";
 import type { Env } from "./env";
@@ -81,13 +82,22 @@ export async function ingest(env: Env, req: Request, ctx?: ExecutionContext): Pr
   const stmt = env.DB.prepare("INSERT INTO log_lines (cluster_id, pod_id, ts, level, target, msg, fields) VALUES (?, ?, ?, ?, ?, ?, ?)");
   const stmts = lines.map((l) => stmt.bind(cl.id, pod, l.ts, l.level, l.target ?? null, l.msg, l.fields ? JSON.stringify(l.fields).slice(0, 8192) : null));
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+  // Shipped tracing events also mark boot phases (model resident, warm-up, ready, edge link).
+  await recordBoot(env, pod, cl.id, lines.map((l) => ({ stream: "shipped" as const, ts: l.ts, text: `${l.target ?? ""}: ${l.msg} ${Object.entries(l.fields || {}).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ")}` }))).catch(() => []);
   const fanout = stubFor(env, cl.id).fetch("https://ops/broadcast", { method: "POST", body: JSON.stringify({ pod, lines }) }).catch(() => null);
   if (ctx) ctx.waitUntil(fanout);
   else await fanout;
   return { accepted: lines.length };
 }
 
-export async function searchLogs(env: Env, q: { pod?: string; cluster?: string; text?: string; level?: string; since?: number; until?: number; limit?: number; after_id?: number }) {
+/**
+ * Log lines, oldest first. Without after_id: the newest `limit` lines. With
+ * after_id: the `limit` lines after it (follow a tail by passing the last id
+ * back). source: runpod (the Runpod container / system log the controller
+ * captures, podlogs.ts), control (the controller's own lines about the pod:
+ * boot milestones, boottime.ts) or serve (what fv-serve ships).
+ */
+export async function searchLogs(env: Env, q: { pod?: string; cluster?: string; text?: string; level?: string; since?: number; until?: number; limit?: number; after_id?: number; source?: string }) {
   const where: string[] = [];
   const vals: unknown[] = [];
   if (q.pod) where.push("pod_id = ?"), vals.push(q.pod);
@@ -97,11 +107,15 @@ export async function searchLogs(env: Env, q: { pod?: string; cluster?: string; 
   if (q.since) where.push("ts >= ?"), vals.push(q.since);
   if (q.until) where.push("ts <= ?"), vals.push(q.until);
   if (q.after_id) where.push("id > ?"), vals.push(q.after_id);
+  if (q.source === "runpod") where.push("target LIKE 'runpod.%'");
+  else if (q.source === "control") where.push("target LIKE 'fv-control.%'");
+  else if (q.source === "serve") where.push("(target IS NULL OR (target NOT LIKE 'runpod.%' AND target NOT LIKE 'fv-control.%'))");
   const limit = Math.min(Math.max(q.limit || 200, 1), 2000);
-  const r = await env.DB.prepare(`SELECT id, cluster_id, pod_id, ts, level, target, msg, fields FROM log_lines ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id DESC LIMIT ${limit}`)
+  const r = await env.DB.prepare(`SELECT id, cluster_id, pod_id, ts, level, target, msg, fields FROM log_lines ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id ${q.after_id ? "ASC" : "DESC"} LIMIT ${limit}`)
     .bind(...vals)
     .all<any>();
-  return (r.results || []).reverse().map((x) => ({ ...x, fields: x.fields ? JSON.parse(x.fields) : undefined }));
+  const rows = q.after_id ? r.results || [] : (r.results || []).reverse();
+  return rows.map((x) => ({ ...x, fields: x.fields ? JSON.parse(x.fields) : undefined }));
 }
 
 /** The R2 archive of one pod and day as one NDJSON stream. */

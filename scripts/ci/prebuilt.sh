@@ -30,6 +30,8 @@
 #   prebuilt.sh run-tests <dir>
 #       Run the gpucheck-tests set (gpucheck-t0's unit tests, compiled on the
 #       pod) from the checkout (or $FV_TESTS_ROOT), each in its crate directory.
+#       FV_TESTS_SHARD=k/N runs only every N-th test (k = 1..N), so N jobs
+#       share the run.
 #
 # Env: GH_TOKEN / GITHUB_TOKEN (read access; anonymous works for a public
 # repository); FV_PREBUILT_DIR (default $RUNNER_TEMP/prebuilt);
@@ -125,7 +127,18 @@ cmd_run_tests() {
     n=$((n + 1))
     echo "::group::$pkg ($kind $name)"
     chmod +x "$dir/$bin"
-    if ! (cd "$root/$crate" && CARGO_MANIFEST_DIR="$root/$crate" CARGO_PKG_NAME="$pkg" "$dir/$bin"); then
+    local filt=()
+    if [[ -n "${FV_TESTS_SHARD:-}" ]]; then
+      # Shard k/N: every N-th test of this binary (by its --list order), by
+      # exact name. A shard with no test of this binary skips it.
+      local k="${FV_TESTS_SHARD%/*}" nn="${FV_TESTS_SHARD#*/}"
+      mapfile -t filt < <(cd "$root/$crate" && "$dir/$bin" --list --format terse 2>/dev/null \
+        | sed -n 's/: test$//p' | awk -v k="$k" -v n="$nn" '(NR - 1) % n == k - 1')
+      if (( ${#filt[@]} == 0 )); then echo "(no tests of this binary in shard $FV_TESTS_SHARD)"; echo "::endgroup::"; continue; fi
+      echo "shard $FV_TESTS_SHARD: ${#filt[@]} tests"
+      filt=(--exact "${filt[@]}")
+    fi
+    if ! (cd "$root/$crate" && CARGO_MANIFEST_DIR="$root/$crate" CARGO_PKG_NAME="$pkg" "$dir/$bin" ${filt[@]+"${filt[@]}"}); then
       fail=1; echo "::error title=unit tests::$pkg $kind $name failed"
     fi
     echo "::endgroup::"

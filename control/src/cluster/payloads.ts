@@ -18,6 +18,8 @@ export const SECRET_ENV_REFS: Record<string, string> = {
 // A worker's start command (direct workers): the config from the image, or
 // inline (FV_WORKER_TOML_B64) when the pool has one.
 export const WORKER_BOOT = `set -u
+echo "[fv-boot] start" >&2
+if [ -d /workspace/weights ]; then echo "[fv-boot] volume: /workspace/weights ($(ls /workspace/weights 2>/dev/null | wc -l) trees)" >&2; else echo "[fv-boot] volume: /workspace/weights missing" >&2; fi
 mkdir -p /fvstate
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
   printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml
@@ -32,26 +34,10 @@ fi
 export FV_WORKER_ID="\${RUNPOD_POD_ID}"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
-// An edge front's start command (control_plane = edge,
-// docs/serve/edge-control-plane.md §5.2): the worker's, plus its own
-// endpoint (where the edge forwards) and its own backstop: at the cluster
-// deadline or below the balance floor it deletes itself (fv-control's cron
-// enforces the deadline too).
-export const EDGE_WORKER_BOOT = `set -u
-mkdir -p /fvstate
-if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
-  printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml
-else
-  cp "$FV_WORKER_CONFIG" /fv-worker.toml
-fi
-if grep -q "^\\[gateway\\]" /fv-worker.toml; then
-  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
-else
-  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
-fi
-export FV_WORKER_ID="\${RUNPOD_POD_ID}"
-export FV_DISPATCH_ENDPOINT="https://\${RUNPOD_POD_ID}-8000.proxy.runpod.net"
-(
+// The backstop watchdog (a subshell in the background): at the deadline or
+// below the balance floor the pod deletes itself (fv-control's cron enforces
+// the deadline too). Edge fronts and standalone pods run it.
+const WATCHDOG = `(
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
   bye() {
     echo "[watchdog] $1: deleting \${RUNPOD_POD_ID}" >&2
@@ -72,7 +58,19 @@ export FV_DISPATCH_ENDPOINT="https://\${RUNPOD_POD_ID}-8000.proxy.runpod.net"
     sleep 30
   done
 ) &
-exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
+`;
+const EXEC_SERVE = "exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml";
+const WORKER_PREFIX = WORKER_BOOT.slice(0, WORKER_BOOT.indexOf(EXEC_SERVE));
+
+// An edge front's start command (control_plane = edge,
+// docs/serve/edge-control-plane.md §5.2): the worker's, plus its own
+// endpoint (where the edge forwards) and the backstop watchdog.
+export const EDGE_WORKER_BOOT = `${WORKER_PREFIX}export FV_DISPATCH_ENDPOINT="https://\${RUNPOD_POD_ID}-8000.proxy.runpod.net"
+${WATCHDOG}${EXEC_SERVE}`;
+
+// A standalone pod's start command (docs/control/standalone-pods.md): a
+// direct worker with the backstop watchdog (its deadline and balance floor).
+export const WATCHDOG_WORKER_BOOT = `${WORKER_PREFIX}${WATCHDOG}${EXEC_SERVE}`;
 
 /** FV_IMAGE_REF / FV_IMAGE_DIGEST / FV_RELEASE_CHANNEL (fv_image_env_json). */
 export function imageIdentEnv(image: string, channel?: string): Record<string, string> {
@@ -103,6 +101,14 @@ export interface ClusterState {
   workers: Record<string, PodRec[]>;
   rolling?: Record<string, PodRec[]>;
   retired?: PodRec[];
+  /** Per pool, what the last `up` found (docs/control/README.md §4 "Early failure"): no stock, a failed pod, ready. */
+  pools?: Record<string, PoolStatus>;
+}
+/** A pool's state after `up`: starting, ready, or why it has no serving pod. */
+export interface PoolStatus {
+  status: "starting" | "ready" | "no_stock" | "failed";
+  detail?: string;
+  at: number;
 }
 export interface ClusterSecrets {
   internal_token: string;
@@ -161,6 +167,8 @@ export interface EnvCtx {
   deadlineMs: number;
   runpodApiKey: string;
   ingestUrl?: string;
+  /** A standalone pod (direct, no edge): its own backstop watchdog (deadline, balance floor) like an edge front's. */
+  backstop?: boolean;
 }
 
 function b64utf8(s: string): string {
@@ -217,6 +225,8 @@ function directEnv(ctx: EnvCtx): Record<string, string> {
   if (!isDirect(ctx.spec, ctx.state)) return {};
   const e: Record<string, string> = { FV_WORKER_DIRECT: "1", FV_AUTH_MODE: ctx.spec.auth, FV_KEY_STORE: "d1" };
   if (ctx.secrets.admin_token) e.FV_ADMIN_TOKEN = ctx.secrets.admin_token;
+  // A standalone pod deletes itself at its deadline or below the floor (WATCHDOG_WORKER_BOOT).
+  if (ctx.backstop) Object.assign(e, { FV_CLUSTER_DEADLINE: String(Math.floor(ctx.deadlineMs / 1000)), FV_MIN_BALANCE: String(ctx.spec.min_balance), FV_BACKSTOP_API_KEY: ctx.runpodApiKey });
   return e;
 }
 
@@ -269,8 +279,13 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
   for (const r of regions) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS[r]!.gpus) out.push({ region: r, dc: REGIONS[r]!.dc, gpu: g });
   return out;
 }
+/** The start command for a worker env: an edge front, a worker with the backstop watchdog (standalone), or the plain worker. */
+export function bootFor(env: Record<string, string>): string {
+  if (env.FV_DISPATCH_FRONT === "1") return EDGE_WORKER_BOOT;
+  return env.FV_CLUSTER_DEADLINE && env.FV_BACKSTOP_API_KEY ? WATCHDOG_WORKER_BOOT : WORKER_BOOT;
+}
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
-  const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [env.FV_DISPATCH_FRONT === "1" ? EDGE_WORKER_BOOT : WORKER_BOOT], env };
+  const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [bootFor(env)], env };
   if (pool.compute === "CPU") {
     return {
       ...common,

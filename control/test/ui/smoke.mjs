@@ -77,7 +77,7 @@ try {
   await page.mouse.move(box.x + box.width * 0.9, box.y + box.height / 2);
   assert.equal(await page.isVisible("#tip"), true, "tooltip on hover");
 
-  for (const [hash, heading] of [["#/clusters", "Clusters"], ["#/pods", "Pods"], ["#/env", "Environment"], ["#/logs", "Logs"], ["#/costs", "Costs"], ["#/releases", "Releases"], ["#/settings", "Settings"]]) {
+  for (const [hash, heading] of [["#/clusters", "Clusters"], ["#/pods", "Pods"], ["#/env", "Environment"], ["#/logs", "Logs"], ["#/costs", "Costs"], ["#/releases", "Releases"], ["#/settings", "Settings"], ["#/standalone", "Standalone pods"]]) {
     await page.goto(`${B}/${hash}`);
     await page.waitForSelector(`h1:text('${heading}')`);
     await page.screenshot({ path: `${out}/03-${heading.toLowerCase()}.png`, fullPage: true });
@@ -88,6 +88,7 @@ try {
   await page.screenshot({ path: `${out}/04-cluster.png`, fullPage: true });
   // ---- the smart editor: edit → invalid → error shown → fix → diff → plan → save → history → restore.
   await page.goto(`${B}/#/cluster/${c.cluster.id}`);
+  await page.click("details.rawspec summary");
   await page.waitForSelector(".fv-panel[data-kind=cluster-spec] .fv-form");
   const panel = ".fv-panel[data-kind=cluster-spec]";
   assert.equal(await page.textContent(`${panel} .badge`), "v0");
@@ -186,14 +187,17 @@ try {
   await page.waitForSelector("select[aria-label=Template] option[value=ltx]", { state: "attached" });
   const tpls = await page.$$eval("select[aria-label=Template] option", (els) => els.map((e) => e.value));
   assert.deepEqual(tpls.sort(), ["h3", "longlive", "ltx", "standard", "tiny-cpu", "wan"]);
-  await page.waitForSelector(".cm-editor");
-  const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString());
+  // New cluster from a template on the configuration page; a pool preset added (its licence confirmed).
   await page.selectOption("select[aria-label=Template]", "ltx");
-  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"ltx-ref2v"'));
+  await page.click("button:text('New cluster')");
+  await page.waitForSelector(".cf-pool");
+  assert.deepEqual(await page.$$eval(".cf-pool-head b", (els) => els.map((e) => e.textContent)), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+  // (the page's dialog handler accepts the licence confirm)
   await page.selectOption("select[aria-label='Pool preset']", "longlive");
-  assert.match(await page.textContent(".presets"), /NON-COMMERCIAL|non-commercial/);
-  await page.click(".presets button:text('Add pool')");
-  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"id": "longlive"'));
+  await page.waitForSelector(".cf-pool-head b:text('longlive')");
+  await page.click(".cf-main .tabs button:text('JSON')");
+  await page.waitForSelector(".cf-json .cm-editor");
+  const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cf-json .cm-editor")).state.doc.toString());
   assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx,ltx-pro,ltx-a2v,ltx-ref2v,longlive");
   await page.screenshot({ path: `${out}/13-clusters-presets.png`, fullPage: true });
   // Cluster: roll picker (cancelled), add a pool, keys, restart picker.
@@ -256,6 +260,26 @@ try {
   assert.ok(!(await page.content()).includes("Auto-actions touch controller clusters only, never external pods"), "the stale policy text is gone");
   page.off("dialog", accept);
 
+  // ---- standalone pods: launch from the form (session + CSRF), its page with status, cost and the boot timeline.
+  await page.goto(`${B}/#/standalone`);
+  await page.waitForSelector("input[name=name]");
+  await page.fill("input[name=name]", "ui-solo");
+  await page.fill("input[name=variant]", "cpu");
+  await page.fill("input[name=config]", "/etc/fv/runpod-fake.toml");
+  await page.fill("input[name=fake_models]", "fake-wan");
+  await page.selectOption("select[name=compute]", "CPU");
+  await page.uncheck("input[name=volume]");
+  await page.fill("input[name=image_source]", "stable");
+  await page.click("form button[type=submit]:text('Launch')");
+  await page.waitForSelector("h1:text('ui-solo')");
+  await page.waitForSelector("h2:text('Boot timeline')", { timeout: 60000 });
+  await page.waitForSelector("td:text('Runpod create accepted')", { timeout: 60000 });
+  await page.screenshot({ path: `${out}/12-standalone.png`, fullPage: true });
+  const sp = await (await fetch(`${B}/api/standalone/ui-solo`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  assert.equal(sp.pod.definition.variant, "cpu");
+  assert.equal(sp.pod.definition.compute, "CPU");
+  await fetch(`${B}/api/standalone/ui-solo`, { method: "DELETE", headers: { authorization: `Bearer ${tok}` } });
+
   // ---- read-only JSON tree: search and copy.
   const pods = await (await fetch(`${B}/api/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
   await page.goto(`${B}/#/pod/${pods.pods[0].pod_id}`);
@@ -283,7 +307,7 @@ try {
   await pp.fill("#pass", PASSPHRASE);
   await pp.click("button[type=submit]");
   await pp.waitForSelector(".tile");
-  for (const hash of ["#/", "#/clusters", "#/pods", "#/env", "#/costs", "#/settings"]) {
+  for (const hash of ["#/", "#/clusters", "#/pods", "#/standalone", "#/env", "#/costs", "#/settings"]) {
     await pp.goto(`${B}/${hash}`);
     await pp.waitForSelector("h1");
     await pp.waitForTimeout(300);

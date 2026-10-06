@@ -139,7 +139,7 @@ await step("start: one front worker behind the edge; registered; ready", async (
   assert.equal((await call(`/api/clusters/${cid}/start`, { method: "POST", body: {}, headers: T() })).status, 409, "one operation at a time");
   const op = await waitOp(cid, "up");
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
-  assert.ok(op.log.some((l) => /ready front at the edge: 1\/1/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
+  assert.ok(op.log.some((l) => /ready = a ready front at the edge\) ready 1\/1: fake/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
   const pods = [...mock.pods.values()];
   assert.equal(pods.length, 1, "no gateway pod");
   worker = pods[0];
@@ -364,16 +364,24 @@ await step("log shipping: ingest, search, level filter, live tail, download, aut
   assert.equal((await call("/ingest/v1/logs", { method: "POST", body: { pod: "notmypod1234", lines }, headers: { authorization: `Bearer ${ingestTok}` } })).status, 403);
   const r = await call("/ingest/v1/logs", { method: "POST", body: { pod: worker.id, lines }, headers: { authorization: `Bearer ${ingestTok}` } });
   assert.equal(r.j.accepted, 3);
-  const all = (await call(`/api/logs?pod=${worker.id}&level=trace`, { headers: T() })).j.lines;
+  const all = (await call(`/api/logs?pod=${worker.id}&level=trace&source=serve`, { headers: T() })).j.lines;
   assert.equal(all.length, 3);
   assert.ok(!JSON.stringify(all).includes(SECRETS.RUNPOD_API_KEY), "secrets scrubbed from logs");
-  assert.equal((await call(`/api/logs?pod=${worker.id}&level=warn`, { headers: T() })).j.lines.length, 1);
+  assert.equal((await call(`/api/logs?pod=${worker.id}&level=warn&source=serve`, { headers: T() })).j.lines.length, 1);
   assert.equal((await call(`/api/logs?pod=${worker.id}&level=trace&q=job_abc`, { headers: T() })).j.lines.length, 2);
+  // Logs from boot: the Runpod container and system tail the controller copied (the `up` wait and the cron), once each, scrubbed.
+  const rp = (await call(`/api/pods/${worker.id}/logs?source=runpod`, { headers: T() })).j.lines;
+  // (The mock's container lines are dated 2026-09-29: the cron's 24 h retention drops them; its system line has no date.)
+  assert.ok(rp.some((l) => l.target === "runpod.system" && l.msg === "pulling image"), JSON.stringify(rp));
+  assert.ok(!JSON.stringify(rp).includes(SECRETS.RUNPOD_API_KEY), "secrets scrubbed from captured Runpod logs");
+  const st = (await call(`/api/pods/${worker.id}/status`, { headers: T() })).j;
+  assert.equal(st.kind, "cluster");
+  assert.ok(st.logs.lines >= 4, JSON.stringify(st.logs));
   for (let i = 0; i < 20 && !got.length; i++) await sleep(100);
   assert.equal(got[0]?.lines?.length, 3, "live tail got the batch");
   ws.close();
   const d = await call(`/api/logs/download?pod=${worker.id}`, { headers: T(), raw: true });
-  assert.equal(d.text.trim().split("\n").length, 3);
+  assert.equal(d.text.trim().split("\n").filter((l) => !JSON.parse(l).target?.startsWith("runpod.")).length, 3);
   assert.match(d.headers.get("content-disposition"), /attachment/);
   const nd = await call(`/ingest/v1/logs?pod=${worker.id}`, { method: "POST", body: lines.map((l) => JSON.stringify(l)).join("\n"), headers: { authorization: `Bearer ${ingestTok}`, "content-type": "application/x-ndjson" } });
   assert.equal(nd.j.accepted, 3);
@@ -610,7 +618,7 @@ await step("a second edge cluster: fronts behind the edge; register, ready from 
   let op = await waitOp(id, "up");
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
   assert.ok(op.log.some((l) => /edge .*: up/.test(l.msg)), "the register phase checked the edge");
-  assert.ok(op.log.some((l) => /ready front at the edge: 1\/1/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
+  assert.ok(op.log.some((l) => /ready = a ready front at the edge\) ready 1\/1: fake/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
   assert.equal(mine().length, 1);
   const w1 = mine()[0];
   assert.equal(w1.env.FV_DISPATCH_FRONT, "1");
@@ -795,6 +803,55 @@ await step("build pods: policy, placement, up (create / reuse / start / replace)
   ov = (await call("/api/build-pods", { headers: T() })).j;
   for (const p of ov.pods.filter((x) => x.state !== "deleted")) assert.equal((await call(`/api/build-pods/${p.id}?force=1`, { method: "DELETE", headers: T() })).j.pod.state, "deleted");
   assert.equal(bpRows().length, 0);
+});
+
+await step("standalone pod: launch, the same up (direct, watchdog boot), costs under pod:<name>, status and logs as JSON, stop, start, delete", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  const launch = { name: "solo1", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], channel: "stable", deadline_min: 30, env: { SOLO_FOO: "bar" } };
+  const r = await call("/api/standalone", { method: "POST", body: launch, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.pod.id;
+  let op = await waitOp(id, "up");
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
+  assert.equal(mine().length, 1);
+  const p1 = mine()[0];
+  assert.match(p1.name, /^fv-pod-solo1-/);
+  assert.equal(p1.env.FV_WORKER_DIRECT, "1");
+  assert.equal(p1.env.SOLO_FOO, "bar");
+  assert.ok(Number(p1.env.FV_CLUSTER_DEADLINE) > Date.now() / 1000, "its own backstop deadline");
+  assert.match(p1.payload.dockerStartCmd[0], /\[watchdog\]/);
+  assert.match(p1.payload.dockerStartCmd[0], /\[fv-boot\] start/);
+  // Listed as a standalone pod with its pod, not among clusters.
+  const list = (await call("/api/standalone", { headers: T() })).j.pods;
+  assert.deepEqual(list.map((x) => [x.name, x.pod?.pod_id]), [["solo1", p1.id]]);
+  assert.ok(!(await call("/api/clusters", { headers: T() })).j.clusters.some((c) => c.name === "solo1"));
+  // Costs and owner: the same ledger as cluster pods.
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  const pods = (await call("/api/pods", { headers: T() })).j.pods;
+  assert.equal(pods.find((x) => x.pod_id === p1.id)?.owner, "pod:solo1");
+  const costs = (await call("/api/costs?days=1", { headers: T() })).j;
+  assert.ok(costs.by_owner.some((x) => x.owner === "pod:solo1"), JSON.stringify(costs.by_owner));
+  const st = (await call(`/api/pods/${p1.id}/status`, { headers: T() })).j;
+  assert.equal(st.kind, "standalone");
+  assert.ok(st.boot_timeline.some((x) => x.phase === "ready (at the edge / health)" && x.at), JSON.stringify(st.boot_timeline));
+  const bt = (await call(`/api/pods/${p1.id}/boot`, { headers: T() })).j;
+  assert.ok(bt.boot.t.create && bt.boot.t.ready);
+  const lg = (await call(`/api/pods/${p1.id}/logs?source=control`, { headers: T() })).j;
+  assert.ok(lg.lines.some((l) => /^boot: ready at \+/.test(l.msg)), JSON.stringify(lg.lines));
+  // Stop deletes the pod and keeps the definition; start makes a new one; delete with a pod stops it first.
+  assert.equal((await call("/api/standalone/solo1/stop", { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "down")).status, "done");
+  assert.equal(mine().filter((p) => mock.pods.has(p.id)).length, 0);
+  assert.equal((await call("/api/standalone/solo1", { headers: T() })).j.pod.pod, null);
+  assert.equal((await call("/api/standalone/solo1/start", { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "up")).status, "done");
+  assert.equal((await call("/api/standalone/solo1", { method: "DELETE", headers: T() })).status, 202);
+  for (let i = 0; i < 120 && (await call("/api/standalone/solo1", { headers: T() })).status !== 404; i++) await sleep(500);
+  assert.equal((await call("/api/standalone/solo1", { headers: T() })).status, 404, "the definition goes once the pod is gone");
+  assert.equal([...mock.pods.values()].filter((p) => !before.has(p.id)).length, 0);
 });
 
 await step("audit log; no secret in any response", async () => {
