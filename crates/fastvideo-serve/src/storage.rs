@@ -82,7 +82,9 @@ pub fn d1_options(c: &Config, worker: &str) -> D1Options {
     o.stale_after = (c.jobs.stale_after_s > 0).then(|| Duration::from_secs(c.jobs.stale_after_s));
     o.heartbeat = Duration::from_secs(c.jobs.heartbeat_s.max(1));
     // The gateway inserts rows its workers adopt (docs/serve/gateway.md).
-    o.hold_inserts = c.engine.backend != crate::config::EngineBackendKind::Remote;
+    // So does a front behind the edge: the job it inserts runs wherever the
+    // family object places it (docs/serve/edge-control-plane.md §2.4).
+    o.hold_inserts = c.engine.backend != crate::config::EngineBackendKind::Remote && !c.dispatch.front;
     o
 }
 

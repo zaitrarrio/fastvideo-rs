@@ -485,6 +485,10 @@ impl D1JobStore {
     pub fn cached(&self) -> usize {
         self.lock().jobs.len()
     }
+    /// Whether `id` is held here (this process runs it, or ran it lately).
+    pub fn holds(&self, id: JobId) -> bool {
+        self.lock().jobs.contains_key(&id)
+    }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(|p| p.into_inner())

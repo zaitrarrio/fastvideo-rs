@@ -318,7 +318,14 @@ impl App {
         // A direct worker (no gateway in front, `gateway.direct`) keeps its
         // own API auth; validate() refused trust-gateway for it.
         let direct = worker_role && config.gateway.direct;
-        if worker_role && !direct && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
+        // A front behind the edge: the edge authenticates, this worker
+        // applies each API's policy to its verdict (docs/serve/edge-control-plane.md).
+        let front = worker_role && config.dispatch.front;
+        if front && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustEdge {
+            tracing::info!("dispatch.front: API auth is the edge's (trust-edge); every route needs the internal token");
+            config.auth.mode = fastvideo_serve_kit::AuthMode::TrustEdge;
+        }
+        if worker_role && !direct && !front && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
             tracing::info!("server.role = worker: API auth is the gateway's (trust-gateway); every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
         }
@@ -417,14 +424,33 @@ impl App {
         } else {
             (None, jobs)
         };
+        // A front: the read-through store over the worker's own D1 store,
+        // rows inserted behind the enqueue, pollers woken by the family
+        // object (crate::front).
+        #[cfg(feature = "http-client")]
+        let front_cfg = if front { crate::front::FrontCfg::from_config(&config) } else { None };
+        #[cfg(feature = "http-client")]
+        let front_gate = front_cfg.as_ref().map(|fc| crate::front::FrontGate::new(gate.clone(), fc.clone()));
+        #[cfg(feature = "http-client")]
+        let jobs: Arc<dyn JobStore> = match (&front_cfg, &d1, &front_gate) {
+            (Some(fc), Some(d1s), Some(fg)) => {
+                let store = Arc::new(crate::front::store::FrontJobStore::new(d1s.clone(), Duration::from_millis(config.gateway.watch_poll_ms.max(50))));
+                store.set_insert_behind(Arc::new(|_| true));
+                store.set_waiter(crate::front::DoWaiter::new(fc, fg.families()));
+                store
+            }
+            (Some(_), None, _) => return Err(anyhow!("dispatch.front needs the D1 job store (jobs.backend = d1)")),
+            _ => jobs,
+        };
         #[cfg(not(feature = "http-client"))]
         if gateway_mode || worker_role {
             return Err(anyhow!("gateway mode and the worker role need fv-serve built with `http-client`"));
         }
         #[cfg(feature = "http-client")]
-        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match &gw {
-            Some(g) => g.clone(),
-            None => gate.clone(),
+        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match (&gw, &front_gate) {
+            (Some(g), _) => g.clone(),
+            (None, Some(f)) => f.clone(),
+            (None, None) => gate.clone(),
         };
         #[cfg(not(feature = "http-client"))]
         let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = gate.clone();
@@ -452,6 +478,15 @@ impl App {
         }
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
+        #[cfg(feature = "http-client")]
+        if let (Some(f), Some(fc)) = (&front_gate, &front_cfg) {
+            f.attach(ctx.clone());
+            // Upload tokens carry this front's tag (the edge routes their
+            // PUT and file reads here); other fronts' uploads come through
+            // the edge.
+            ctx.uploads().set_token_prefix(&fastvideo_dispatch_proto::front::worker_tag(&worker));
+            ctx.uploads().set_remote(crate::front::EdgeUploads::new(fc));
+        }
         let admin = Arc::new(admin);
         #[cfg(feature = "http-client")]
         if let Some(g) = &gw {
@@ -591,6 +626,13 @@ impl App {
             // (docs/serve/gateway-cloudflare.md), or one per model family
             // with the GPU's arbiter (docs/serve/dispatch-do-family.md); the
             // internal routes stay.
+            // This pod's own URL (signalling, the edge's forwards); the
+            // public base stays the URL clients see (the edge, behind one).
+            let endpoint = config.dispatch.endpoint.clone().unwrap_or_else(|| base.as_str().to_owned()).trim_end_matches('/').to_owned();
+            let front_source = config.dispatch.front.then(|| {
+                let (cfg, gate, url, id) = (Arc::new(config.clone()), gate.clone(), endpoint.clone(), worker.clone());
+                crate::edge_link::FrontSource(Arc::new(move || crate::front::front_info(&cfg, &gate, &url, &id)))
+            });
             if let Some(do_url) = &config.dispatch.do_url {
                 use fastvideo_dispatch_proto::Scope;
                 let link = |scope: Scope| crate::edge_link::LinkCfg {
@@ -599,8 +641,10 @@ impl App {
                     token: config.gateway.internal_token.expose().to_owned(),
                     capacity: config.dispatch.capacity,
                     status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
-                    endpoint: base.as_str().trim_end_matches('/').to_owned(),
+                    endpoint: endpoint.clone(),
                     engine_out: config.server.state_dir.join("engine-out"),
+                    model_families: config.dispatch.model_families.clone(),
+                    front: front_source.clone(),
                 };
                 if !config.dispatch.families.is_empty() {
                     let fam = crate::edge_link::Family {

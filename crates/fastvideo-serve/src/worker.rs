@@ -15,6 +15,7 @@
 //! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls); with `?wait_s=N&since=<status>` it answers once the status differs from `since` (or after `N` s, at most 60) and D1 has it, adding the `job` (the dispatching gateway's notification, gateway.md §3.5) |
 //! | `DELETE /fv/v1/internal/jobs/{id}` | cancel |
 //! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, `capacity` (executors), `queue_max`, caps, `build` (git sha, variant, image digest, channel) (gateway probes) |
+//! | `GET /fv/v1/internal/uploads/{token}` | an upload this worker holds (another front behind the edge ingests it) |
 //! | `POST /fv/v1/internal/drain`, `…/undrain` | stop / resume taking new jobs and sessions (running work finishes); the `gw_workers` row says `draining` (the autoscaler, gateway.md §8.5) |
 //!
 //! - [`spawn_registration`]: pod workers upsert `gw_workers` every 10 s.
@@ -189,7 +190,41 @@ pub fn routes_shared(st: Arc<WorkerState>) -> Router {
         .route("/fv/v1/internal/status", get(status))
         .route("/fv/v1/internal/drain", post(drain))
         .route("/fv/v1/internal/undrain", post(undrain))
+        .route("/fv/v1/internal/uploads/{token}", get(upload_bytes))
         .with_state(st)
+}
+
+/// `GET /fv/v1/internal/uploads/{token}`: an upload this worker holds, for
+/// another front behind the same edge (docs/serve/edge-control-plane.md §3.6).
+async fn upload_bytes(State(st): State<Arc<WorkerState>>, Path(token): Path<String>) -> Response {
+    let id = fastvideo_protocol::UploadId(token);
+    let Some(f) = st.ctx.uploads().resolve(&id, st.ctx.now()) else {
+        return err(&ApiError::not_found("no such upload here"));
+    };
+    match tokio::fs::File::open(&f.path).await {
+        Ok(file) => {
+            let chunks = futures::stream::unfold(file, |mut file| async move {
+                use tokio::io::AsyncReadExt;
+                let mut buf = vec![0u8; 1 << 16];
+                match file.read(&mut buf).await {
+                    Ok(0) => None,
+                    Ok(n) => {
+                        buf.truncate(n);
+                        Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(buf)), file))
+                    }
+                    Err(e) => Some((Err(e), file)),
+                }
+            });
+            let body = axum::body::Body::from_stream(chunks);
+            let mut r = Response::new(body);
+            if let Some(m) = f.mime.as_deref().and_then(|m| axum::http::HeaderValue::from_str(m).ok()) {
+                r.headers_mut().insert(axum::http::header::CONTENT_TYPE, m);
+            }
+            r.headers_mut().insert(axum::http::header::CONTENT_LENGTH, f.bytes.into());
+            r
+        }
+        Err(e) => err(&ApiError::internal(format!("reading the upload: {e}"))),
+    }
 }
 
 fn readiness_word(r: &Readiness) -> &'static str {
@@ -458,7 +493,8 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
     if st.draining() {
         return err(&ApiError::loading("this worker is draining").with_retry_after(5));
     }
-    if let Err(e) = st.ctx.engine().admit() {
+    // The local engine (a front's own seam enqueues on the dispatcher).
+    if let Err(e) = fastvideo_serve_kit::EngineGate::admit(st.gate.as_ref()) {
         return err(&e);
     }
     let s = st.gate.engine().stats();
@@ -498,7 +534,7 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
         Err(e) => return err(&e.into()),
     };
     st.submitted.lock().unwrap_or_else(|p| p.into_inner()).insert(id);
-    if let Err(e) = st.ctx.engine().submit(&job).await {
+    if let Err(e) = fastvideo_serve_kit::EngineGate::submit(st.gate.as_ref(), &job).await {
         tracing::warn!(job = %id, error = %e.message, "worker: engine refused a dispatched job");
         let _ = apply_event(&st.ctx, id, JobEvent::Failed(e.clone())).await;
         return err(&e);
