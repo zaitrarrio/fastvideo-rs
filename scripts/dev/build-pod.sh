@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Shared CPU build pod (docs/dev/build-pod.md): one Runpod CPU pod plus the
 # `fv-build` network volume, driven over the pod's HTTPS proxy (no SSH).
-# Each agent gets its own worktree snapshot and CARGO_TARGET_DIR on the volume.
+# Each agent gets its own worktree snapshot and CARGO_TARGET_DIR on the pod.
 #
 #   build-pod.sh up                  reuse the running pod, start the stopped one,
 #                                    or create it; wait until the toolchain is ready
-#   build-pod.sh status              pod, $/hr, setup state, jobs, disk, and the
-#                                    self-stop timers (idle, time to idle / cap stop)
-#   build-pod.sh agents [--sizes]    agent dirs on the volume
+#   build-pod.sh status              pod, $/hr, setup state, jobs, disk, the
+#                                    self-stop timers (idle, time to idle / cap stop),
+#                                    and per agent: idle hours, target/snapshot sizes,
+#                                    when eviction takes them; recent evictions
+#   build-pod.sh agents [--sizes]    agent dirs on the pod
 #   build-pod.sh sync <agent>        mirror this worktree (tracked + untracked,
 #                                    not ignored) to worktrees/<agent>/
 #   build-pod.sh run <agent> [--no-sync] -- [K=V ...] <cmd...>
@@ -22,6 +24,10 @@
 #                                    copy target/<agent>/<path> back (gzip in
 #                                    transit), e.g. release/fv-serve
 #   build-pod.sh clean <agent> [target|worktree|all]   (default all)
+#   build-pod.sh evict               run the pod's eviction pass now (it also runs
+#                                    every minute: dirs unused > FV_BUILD_EVICT_HOURS,
+#                                    default 6, then LRU target dirs while under
+#                                    FV_BUILD_EVICT_FREE_GB, default 40, free)
 #   build-pod.sh stop                stop the pod (terminate if Runpod refuses a
 #                                    stop); the volume and its caches persist
 #   build-pod.sh down                terminate the pod (volume persists)
@@ -50,7 +56,8 @@
 # FV_BUILD_VCPUS_FALLBACK (default 16, taken when the first has no stock);
 # FV_BUILD_CONTAINER_GB (default 200: snapshots and target dirs live there);
 # FV_BUILD_IMAGE (default rust:1-bookworm); FV_BUILD_DC / FV_BUILD_VOLUME_GB
-# for volume-create (default EU-RO-1 / 200).
+# for volume-create (default EU-RO-1 / 200); FV_BUILD_EVICT_HOURS (6) and
+# FV_BUILD_EVICT_FREE_GB (40), sent to the pod at creation.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -71,6 +78,8 @@ MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
 MAX_HOURS="${FV_BUILD_MAX_HOURS:-8}"
 MAX_GRACE_MIN="${FV_BUILD_MAX_GRACE_MIN:-30}"
+EVICT_HOURS="${FV_BUILD_EVICT_HOURS:-6}"
+EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-40}"
 VOLUME_USD_GB_MONTH="0.07"
 LEDGER="$STATE/ledger.tsv"
 TOKEN_FILE="$STATE/token"
@@ -131,6 +140,16 @@ svc() {
     "$@" "$(base_url "$(pod_id)")$path"
 }
 
+# svc, dying with the pod's error (e.g. 507 "build pod disk full: ...") on failure.
+svc_or_die() {
+  local what="$1" out rc=0
+  shift
+  out="$(svc "$@" 2>&1)" || rc=$?
+  (( rc == 0 )) && return 0
+  # The pod's JSON error body and curl's own message, in either order.
+  die "$what failed: $(grep -m1 '^{' <<<"$out" | jq -r '.error // empty' 2>/dev/null || true) [$(grep -v '^{' <<<"$out" | head -c 200)]"
+}
+
 agent_name() {
   local a="$1"
   [[ "$a" == . ]] && a="$(basename "$FV_ROOT")"
@@ -182,14 +201,16 @@ payload() {
   jq -n --arg name "$POD_NAME" --arg image "$IMAGE" --arg vol "$vol" --arg dc "$dc" \
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
-    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" '{
+    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" \
+    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
       env: {FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
-            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace}
+            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace,
+            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf}
     }'
 }
 
@@ -317,13 +338,26 @@ cmd_status() {
   if [[ "$(jq -r .desiredStatus <<<"$pod")" == RUNNING ]]; then
     local st
     st="$(svc GET /v1/status)" || return 0
-    jq . <<<"$st"
+    jq 'del(.agents)' <<<"$st"
     stop_timers <<<"$st"
+    # A server older than eviction has no agent rows.
+    if jq -e '.eviction' <<<"$st" >/dev/null; then
+      jq -r '"agents on the container disk (\(.local_disk.free_gb // "?") GB free; evict after \(.eviction.idle_hours) h unused, LRU targets below \(.eviction.free_gb_floor) GB free; \(.eviction.protect // [] | join(" ")) held \(.eviction.hold_min // 0) min after use):",
+        (["agent", "idle_h", "busy", "held", "target_gb", "worktree_gb", "evict_in_h"] | @tsv),
+        (.agents // [] | .[] | [.agent, .idle_h, .busy, (.held // false),
+           (if .target then (.target_gb // "?") else "-" end),
+           (if .worktree then (.worktree_gb // "?") else "-" end), .evict_in_h] | @tsv)' <<<"$st" | tsv_table
+    fi
   fi
 }
 
 # One line from /v1/status: idle time and when the pod stops itself. Servers
 # before 2026-10-02 lack the *_in_s fields; derive them there.
+# Aligned columns from TSV on stdin (`column` is not in every container).
+tsv_table() {
+  if command -v column >/dev/null; then column -t -s $'\t'; else tr '\t' ' '; fi
+}
+
 stop_timers() {
   jq -r 'def mins: if . == null then "-" else "\((. / 60) | floor) min" end;
     (.jobs_active | length) as $n
@@ -383,10 +417,11 @@ PY
     tar -C "$FV_ROOT" --null -T "$tmp/changed" --format=gnu -cf - | gzip -1 >"$tmp/upload.tgz"
     # A first full snapshot (~1400 files, 29 MB) takes about a minute to
     # extract onto the network volume; allow far more than the default 90 s.
-    FV_BUILD_HTTP_TIMEOUT="${FV_BUILD_SYNC_TIMEOUT:-900}" svc PUT "/v1/agents/$agent/files" --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip' >/dev/null
+    FV_BUILD_HTTP_TIMEOUT="${FV_BUILD_SYNC_TIMEOUT:-900}" svc_or_die "sync $agent" PUT "/v1/agents/$agent/files" \
+      --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip'
   fi
   if (( n_deleted > 0 )); then
-    svc POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted" >/dev/null
+    svc_or_die "sync $agent (deletions)" POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted"
   fi
   rm -rf "$tmp"
   FV_SYNC_TMP=""
@@ -595,11 +630,13 @@ case "${1:-}" in
   cancel) svc POST "/v1/jobs/${2:?job id}/cancel" | jq -c '{id, agent, state}' ;;
   fetch) shift; cmd_fetch "$@" ;;
   clean) svc POST "/v1/agents/$(agent_name "${2:?agent}")/clean" -d "{\"what\":\"${3:-all}\"}" | jq -c . ;;
+  evict) FV_BUILD_HTTP_TIMEOUT=900 svc POST /v1/evict | jq -c '.evicted[]' ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
   release-artifacts) shift; cmd_release_artifacts "$@" ;;
   volume-create) cmd_volume_create ;;
   plan) payload "<volume id>" "${FV_BUILD_DC:-EU-RO-1}" "<sha256 of the pod token>" \
     | jq '.env.FV_BUILD_SERVER_B64 |= "<\(length) bytes: gzip+base64 of build-pod-server.py>"' ;;
-  *) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  # The header comment (line 2 up to `set -euo pipefail`) is the usage.
+  *) sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
