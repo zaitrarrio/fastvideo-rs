@@ -174,7 +174,7 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
             let models: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
             json!({
                 "server": "fv-serve",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": crate::build_info::VERSION,
                 "runtime": fastvideo_deploy::runpod::version(),
                 "process_start_unix": boot.unix,
                 "uptime_s": boot.at.elapsed().as_secs_f64(),
