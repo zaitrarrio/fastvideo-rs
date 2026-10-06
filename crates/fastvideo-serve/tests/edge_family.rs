@@ -59,7 +59,7 @@ fn init_log() {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("fv-family-{tag}-{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    tempfile::Builder::new().prefix(&format!("fv-family-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn now() -> i64 {

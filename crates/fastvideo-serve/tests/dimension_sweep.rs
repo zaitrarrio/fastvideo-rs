@@ -237,10 +237,7 @@ fn served_catalog(hd: bool) -> Vec<CudaModel> {
 
 /// `long`: the `h3_1080p_long` experimental flag on (H3 1080P up to 10 s).
 async fn harness_flagged(hd: bool, long: bool) -> Sweep {
-    let dir = std::env::temp_dir().join(format!(
-        "fv-serve-sweep-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let dir = tempfile::Builder::new().prefix("fv-serve-sweep-").tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     let hashes: Vec<String> = (0..KEYS).map(|i| KeyRing::hash_hex(&key(i))).collect();
     env.insert("FV_API_KEYS".to_owned(), hashes.join(","));
@@ -1318,7 +1315,7 @@ async fn the_fake_engine_runs_the_cuda_checks() {
     // A GPU without the 1080P tier: the trained 768x1344 budget applies.
     let cat = served_catalog(false);
     let fc = FakeConfig { timing: FakeTiming { load: Duration::ZERO, step: Duration::ZERO, ..FakeTiming::default() }, mp4: Mp4Mode::Off, ..FakeConfig::cuda_catalog(&cat) };
-    let dir = std::env::temp_dir().join(format!("fv-sweep-wiring-{}", std::process::id()));
+    let dir = tempfile::Builder::new().prefix("fv-sweep-wiring-").tempdir().unwrap().keep();
     let cfg = EngineConfig { output_dir: dir, ..EngineConfig::default() };
     let engine = EngineService::start(cfg, vec![Box::new(FakeBackend::new(fc))]).unwrap();
     engine.wait_ready().await;
