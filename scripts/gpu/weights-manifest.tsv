@@ -76,3 +76,16 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+# sol-engine benchmark trees, fetched to EU 2026-10-06 (owner-approved; docs/ops/runpod-volumes.md §2). Hub rows added
+# add-only by fetch-hub-tree.sh at the revisions in weights-revisions.tsv; every file checked against the Hub (LFS SHA-256 /
+# git blob SHA-1) and its SHA-256 recorded in weights-sha256.tsv (verify-weights.sh sha:<dest>). Names and globs as the
+# port branches (wip/sol-wan-ltx23, wip/sol-lingbot-cosmos). Whole Diffusers trees for the Wan pair: the loaders read
+# <root>/text_encoder and <root>/vae, so the UMT5 / VAE are copies of the same LFS objects in wan21-t2v-14b / wan22-ti2v-5b.
+# ltx23-dev: cell ltx23-hq (with the ltx23 bundle); the LoRA and upscaler were added into the tree with FETCH_ADD_INTO=1, and
+# the EU copy also holds LICENSE (outside the globs). sana-video-2b-480p: fetched 2026-10-06, 14 002 542 321 bytes in its glob
+# files (the "18.0 GB" above is the survey figure); the EU copy also holds LICENSE (outside the globs).
+wan21-t2v-1.3b	Wan-AI/Wan2.1-T2V-1.3B-Diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
+ltx23-dev	Lightricks/LTX-2.3	ltx-2.3-22b-dev.safetensors ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-spatial-upscaler-x2-1.1.safetensors
+wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* transformer_2/* vae/*
+lingbot-video-moe-30b-a3b	robbyant/lingbot-video-moe-30b-a3b	model_index.json scheduler/* transformer/* refiner/* text_encoder/* processor/* vae/*
+cosmos3-super	nvidia/Cosmos3-Super	model_index.json scheduler/* transformer/* vae/* text_tokenizer/*
