@@ -1,0 +1,6 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: fused mma B=1 H=64 Sq=44160 Sk=44254 D=128
+[fastvideo] cosmos3 step 1/1 t=995 45.58s
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3600 Sk=3600 D=1024 query_chunk=3600
+[ERROR] stage sol → gpucheck-out/sol.json (294.8s)
+error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")

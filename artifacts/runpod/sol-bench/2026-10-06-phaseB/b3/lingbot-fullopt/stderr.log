@@ -1,0 +1,40 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] llm resident layer 1/36
+[fastvideo] llm resident layer 2/36
+[fastvideo] llm resident layer 3/36
+[fastvideo] llm resident layer 4/36
+[fastvideo] llm resident layer 5/36
+[fastvideo] llm resident layer 6/36
+[fastvideo] llm resident layer 7/36
+[fastvideo] llm resident layer 8/36
+[fastvideo] llm resident layer 9/36
+[fastvideo] llm resident layer 10/36
+[fastvideo] llm resident layer 11/36
+[fastvideo] llm resident layer 12/36
+[fastvideo] llm resident layer 13/36
+[fastvideo] llm resident layer 14/36
+[fastvideo] llm resident layer 15/36
+[fastvideo] llm resident layer 16/36
+[fastvideo] llm resident layer 17/36
+[fastvideo] llm resident layer 18/36
+[fastvideo] llm resident layer 19/36
+[fastvideo] llm resident layer 20/36
+[fastvideo] llm resident layer 21/36
+[fastvideo] llm resident layer 22/36
+[fastvideo] llm resident layer 23/36
+[fastvideo] llm resident layer 24/36
+[fastvideo] llm resident layer 25/36
+[fastvideo] llm resident layer 26/36
+[fastvideo] llm resident layer 27/36
+[fastvideo] llm resident layer 28/36
+[fastvideo] llm resident layer 29/36
+[fastvideo] llm resident layer 30/36
+[fastvideo] llm resident layer 31/36
+[fastvideo] llm resident layer 32/36
+[fastvideo] llm resident layer 33/36
+[fastvideo] llm resident layer 34/36
+[fastvideo] llm resident layer 35/36
+[fastvideo] llm resident layer 36/36
+[fastvideo] sdpa: fused mma B=1 H=16 Sq=49017 Sk=49017 D=128
+[ERROR] stage sol → gpucheck-out/sol.json (145.8s)
+error: DriverError(CUDA_ERROR_UNSUPPORTED_PTX_VERSION, "the provided PTX was compiled with an unsupported toolchain.")

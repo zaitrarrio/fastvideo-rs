@@ -1,0 +1,17 @@
+{
+  "arm": "teacache",
+  "und_resident": false,
+  "fp8": true,
+  "load_s": 0.00001446,
+  "text_tower_s": 115.326901364,
+  "denoise_s": 660.703500683,
+  "decode_s": 22.011450808,
+  "export_s": 2.511755489,
+  "request_s": 800.743111903,
+  "steps": 35,
+  "steps_computed": 16,
+  "steps_reused": 19,
+  "und_tokens_cond": 94,
+  "und_tokens_uncond": 92,
+  "gen_tokens": 44160
+}

@@ -1,0 +1,7 @@
+[18:39:31] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:3ef20591e12597380766606fb33242e9e718858a0a29e80d959619ddcdcdd17e volume=jg48s6o1w0 dc=EUR-IS-1 cloud=SECURE quoted=$2.09/hr
+[18:39:32] no NVIDIA RTX PRO 6000 Blackwell Server Edition free in EUR-IS-1; retrying in 60s
+[18:40:33] pod ouieg4qm26n2dr  $2.09/hr  (hard cap 3900s)
+[18:50:40] pod ouieg4qm26n2dr never came up; replacing (attempt 1)
+[18:50:42] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:3ef20591e12597380766606fb33242e9e718858a0a29e80d959619ddcdcdd17e volume=jg48s6o1w0 dc=EUR-IS-1 cloud=SECURE quoted=$2.09/hr
+[18:50:44] pod t9qemie0pqwhwy  $2.09/hr  (hard cap 3900s)
+Terminated

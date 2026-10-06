@@ -1,0 +1,3 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan moe: Auto -> both (expert 26.6 GiB bf16, 85.7 GiB free after the text encoder)
+/fvscratch/files/sol-bench-pod.sh: line 94:  1093 Killed                  timeout --signal=TERM --kill-after=15 "$left" "$@"
