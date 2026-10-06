@@ -78,6 +78,13 @@ export const runpod = {
       throw e;
     }
   },
+  /** One pod's state and container uptime (null when it is gone): the boot diagnosis while an `up` waits. */
+  async podRuntime(env: Env, id: string): Promise<{ desiredStatus: string; uptimeS: number | null } | null> {
+    const d = await runpod.gql<any>(env, "query($id: String!) { pod(input: {podId: $id}) { id desiredStatus runtime { uptimeInSeconds } } }", { id });
+    const p = d?.pod;
+    if (!p?.id) return null;
+    return { desiredStatus: String(p.desiredStatus || ""), uptimeS: typeof p.runtime?.uptimeInSeconds === "number" ? p.runtime.uptimeInSeconds : null };
+  },
   create(env: Env, payload: unknown) {
     return runpod.rest(env, "POST", "/pods", payload);
   },

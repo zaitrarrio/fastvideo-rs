@@ -9,12 +9,15 @@ import { collectCloudrift, type CloudriftCollect } from "./collector-cloudrift";
 import { edgeCfg, edgeFamilies, edgeWorkers } from "./cluster/ops";
 import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
-import { listClusters, type Cluster } from "./cluster/store";
+import { isStandalone, listClusters, ownerOf, type Cluster } from "./cluster/store";
+import { checkPod } from "./podlogs";
 import { defaults, type Env } from "./env";
 import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
 import { audit, getSetting, now, putSetting, utcDay } from "./util";
 
+/** Pods whose Runpod log is copied per cron pass (one hapi call each). */
+const LOG_CAPTURE_MAX = 25;
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
 export interface CollectResult {
@@ -42,7 +45,11 @@ export async function collect(env: Env): Promise<CollectResult> {
   // Which pods are the controller's.
   const clusters = await listClusters(env);
   const byId = new Map(clusters.map((c) => [c.id, c]));
-  const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url FROM cluster_pods WHERE deleted_at IS NULL").all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null }>();
+  // Recently deleted controller pods too: Runpod lists a deleted pod for a minute or more, and its
+  // cost must stay with its cluster (not move to external:<prefix> with its whole cost_daily row).
+  const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url, created_at, deleted_at FROM cluster_pods WHERE deleted_at IS NULL OR deleted_at > ?")
+    .bind(t - 6 * 3600_000)
+    .all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null; created_at: number; deleted_at: number | null }>();
   const ctl = new Map((rows.results || []).map((r) => [r.pod_id, r]));
   // Build pods fv-control manages (buildpods.ts): owner build-pod:<name>.
   const managed = await managedPodNames(env);
@@ -74,7 +81,7 @@ export async function collect(env: Env): Promise<CollectResult> {
     const row = ctl.get(p.id);
     const c = row ? byId.get(row.cluster_id) : undefined;
     const bp = managed.get(p.id);
-    const owner = c ? `cluster:${c.name}` : bp ? `build-pod:${bp}` : attribute(p.name, pol.attribution);
+    const owner = c ? ownerOf(c) : bp ? `build-pod:${bp}` : attribute(p.name, pol.attribution);
     const running = p.desiredStatus === "RUNNING";
     const gpus = p.runtime?.gpus || [];
     const gpuUtil = avg(gpus.map((g) => Number(g.gpuUtilPercent ?? 0)));
@@ -152,9 +159,17 @@ export async function collect(env: Env): Promise<CollectResult> {
   }
   for (const r of prev.results || []) if (!seen.has(r.pod_id)) stmts.push(env.DB.prepare("UPDATE pods SET gone_at = ?, desired_status = 'GONE' WHERE pod_id = ?").bind(t, r.pod_id));
   // Controller pods Runpod no longer has: gone (a backstop deleted them, or someone else).
-  for (const [pod] of ctl) if (!seen.has(pod)) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
+  for (const [pod, r] of ctl) if (!r.deleted_at && !seen.has(pod)) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
   await writePodSamples(env, samples);
+
+  // Pod logs from boot (podlogs.ts): every live controller pod's Runpod log tail, whatever its image ships.
+  let captured = 0;
+  for (const x of podInfo) {
+    if (!x.clusterId || ctl.get(x.p.id)?.deleted_at || x.p.desiredStatus === "TERMINATED" || captured >= LOG_CAPTURE_MAX) continue;
+    captured++;
+    await checkPod(env, x.p.id, x.clusterId, ctl.get(x.p.id)?.created_at ?? prevBy.get(x.p.id)?.first_seen ?? t, { broadcast: true, uptimeS: x.p.runtime?.uptimeInSeconds ?? null }).catch(() => null);
+  }
 
   // ---- alerts and actions
   const alerts: AlertIn[] = [];
@@ -166,6 +181,11 @@ export async function collect(env: Env): Promise<CollectResult> {
       alerts.push({ key: `pod_idle:${x.p.id}`, kind: "pod_idle", severity: "warn", target: x.p.id, message: `${x.p.name} (${x.owner}) idle for ${Math.round(idleMin)} min at $${x.p.costPerHr}/hr (GPU ${x.gpuUtil?.toFixed(0)}%, no running jobs)` });
     const c = x.clusterId ? byId.get(x.clusterId) : undefined;
     const limit = c?.spec.auto_stop_idle_min ?? (pol.auto_stop_idle ? pol.auto_stop_idle_min : null);
+    if (c && limit && idleMin >= limit && isStandalone(c)) {
+      // A standalone pod has nothing to drain to: it stops (its definition stays; start makes a new pod).
+      actions.push(await stopCluster(env, c, "idle"));
+      continue;
+    }
     if (c && limit && idleMin >= limit) {
       const rec = Object.values(c.state.workers).flat().find((r) => r.pod === x.p.id);
       if (rec?.pool) {
@@ -181,6 +201,11 @@ export async function collect(env: Env): Promise<CollectResult> {
     }
   }
   for (const c of clusters) {
+    // A pool the last `up` could not bring up (no stock, crash loop, image error, stuck): docs/control/README.md §4.
+    if (["starting", "running", "failed"].includes(c.status))
+      for (const [pool, ps] of Object.entries(c.state.pools || {}))
+        if (ps.status === "no_stock" || ps.status === "failed")
+          alerts.push({ key: `pool_failed:${c.id}:${pool}`, kind: "pool_failed", severity: "warn", target: c.name, message: `${c.name}: pool ${pool} ${ps.status === "no_stock" ? "has no stock" : "failed"}${ps.detail ? `: ${ps.detail.slice(0, 240)}` : ""}` });
     const dph = podInfo.filter((x) => x.clusterId === c.id && x.running).reduce((s, x) => s + Number(x.p.costPerHr || 0), 0);
     if (dph > pol.cluster_dph_max) alerts.push({ key: `cluster_dph:${c.id}`, kind: "cluster_dph", severity: "warn", target: c.name, message: `${c.name} costs $${dph.toFixed(2)}/hr (> $${pol.cluster_dph_max})` });
     for (const r of Object.values(c.state.workers).flat().concat(c.state.gateway ? [c.state.gateway] : [])) {
@@ -240,7 +265,7 @@ export async function collect(env: Env): Promise<CollectResult> {
   const cr = await collectCloudrift(env, t, dtMs, pol).catch((e) => ({ enabled: true, ok: false, error: (e as Error).message, alerts: [], kinds: [], actions: [] }) as unknown as CloudriftCollect);
   alerts.push(...cr.alerts);
   actions.push(...cr.actions);
-  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds]);
+  await syncAlerts(env, alerts, ["pod_idle", "pool_failed", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds]);
 
   // ---- retention
   await env.DB.batch([
@@ -250,6 +275,7 @@ export async function collect(env: Env): Promise<CollectResult> {
     env.DB.prepare("DELETE FROM rate_limits WHERE window < ?").bind(Math.floor(t / 1000 / 3600) - 48),
     env.DB.prepare("DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < ?").bind(t - 30 * 86400_000),
     env.DB.prepare("DELETE FROM pods WHERE gone_at IS NOT NULL AND gone_at < ?").bind(t - 7 * 86400_000),
+    env.DB.prepare("DELETE FROM pod_log_cursors WHERE updated_at < ?").bind(t - 7 * 86400_000),
   ]);
   const { alerts: _a, kinds: _k, actions: _x, ...crSummary } = cr;
   return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions, ...(cr.enabled ? { cloudrift: crSummary } : {}) };

@@ -19,7 +19,7 @@ import {
   type PodRec,
 } from "./payloads";
 import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
-import { podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
+import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
 
 export type Logf = (msg: string) => void;
 
@@ -47,8 +47,11 @@ export async function envCtx(env: Env, c: Cluster, secrets?: ClusterSecrets): Pr
     deadlineMs: c.deadline ?? now(),
     runpodApiKey: env.RUNPOD_API_KEY,
     ingestUrl: ingestUrl(env),
+    backstop: isStandalone(c) && !isEdge(c.spec),
   };
 }
+/** The Runpod pod name: fv-ctl-<cluster>-<pool>-<stamp>, or fv-pod-<name>-<stamp> for a standalone pod. */
+export const runpodName = (c: Cluster, poolId: string) => (isStandalone(c) ? `fv-pod-${c.name}-${stamp()}` : `fv-ctl-${c.name}-${poolId}-${stamp()}`);
 const poolOf = (c: Cluster, id: string): PoolSpec => {
   const p = c.spec.pools.find((x) => x.id === id);
   if (!p) throw new HttpError(404, `no pool ${id} in ${c.name}`);
@@ -122,7 +125,7 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pool: poolId, image });
   for (const pl of workerPlacements(c.spec, pool)) {
-    const payload = workerCreatePayload(`fv-ctl-${c.name}-${poolId}-${stamp()}`, image, pool, pl, full);
+    const payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full);
     let r: any;
     try {
       r = await runpod.create(env, payload);

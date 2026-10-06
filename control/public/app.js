@@ -643,6 +643,7 @@ async function pagePod(main, id) {
       card("Utilisation, 24 h", lineChart({ series: [{ name: "GPU", points: pts.map((x) => [x.t, x.gpu]) }, { name: "CPU", points: pts.map((x) => [x.t, x.cpu]) }, { name: "memory", points: pts.map((x) => [x.t, x.mem]) }], yFmt: (v) => `${Math.round(v)}%` })),
       card("Running jobs, 24 h", lineChart({ series: [{ name: "jobs", points: pts.map((x) => [x.t, x.jobs]) }] })),
     ),
+    r.controller && typeof fvBootTimeline === "function" ? fvBootTimeline(p.pod_id) : null,
     h("div", { class: "grid g2" }, card("Snapshot (JSON)", jsonTree({ pod: p, controller: r.controller, costs: r.costs }, { open: 1 })), card("Metric samples, 24 h (JSON)", jsonTree(series, { open: 1 }))),
   );
 }
