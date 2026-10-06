@@ -861,6 +861,26 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
     }
 }
 
+/// The APIs this build and config mount (`protocols` of
+/// `/fv/v1/capabilities`): the console shows snippets and pages for these
+/// only. `reactor` and `fal_director` also need the WebRTC host, which a
+/// failed bind leaves out (logged at startup).
+pub fn mounted_protocols(config: &Config) -> serde_json::Value {
+    let p = &config.protocols;
+    serde_json::json!({
+        "native": p.native,
+        "fal": cfg!(feature = "fal") && p.fal,
+        "fal_director": cfg!(all(feature = "fal", feature = "webrtc")) && p.fal && p.fal_director,
+        "openai_videos": cfg!(feature = "openai-videos") && p.openai_videos,
+        "fastwan": cfg!(feature = "openai-videos") && p.fastwan,
+        "minimax": cfg!(feature = "minimax") && p.minimax,
+        "ltx": cfg!(feature = "ltxapi") && p.ltx,
+        "reactor": cfg!(feature = "reactor") && p.reactor,
+        // `POST /fv/v1/streams` (publishing to a WHIP endpoint) needs `webrtc` + `http-client`.
+        "streams": p.native && crate::streams::PUBLISHER,
+    })
+}
+
 /// The full router: health + serve-kit files/uploads + native + adapters,
 /// with request metrics and tracing, and the `/console` pages.
 /// `streams` carries the streaming front-ends that are built with their own
@@ -878,7 +898,7 @@ pub fn assemble(
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
-        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits()));
+        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits(), mounted_protocols(config)));
         kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
     }
     let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);
