@@ -229,6 +229,29 @@ impl FlowUniPCMultistepScheduler {
         self.this_order = 0;
     }
 
+    /// Explicit inference sigmas (`set_timesteps(sigmas=...)` with the shift
+    /// already applied by the caller, e.g. the LingBot refiner tail or
+    /// Diffusers' Karras flow sigmas). Timesteps are `sigma * T`, truncated
+    /// to `i64` as the reference's `.to(torch.int64)`; a terminal `0` sigma is
+    /// appended (`final_sigmas_type="zero"`).
+    pub fn set_sigmas(&mut self, sigmas: &[f64]) {
+        let mut sigmas = sigmas.to_vec();
+        let timesteps: Vec<f64> = sigmas
+            .iter()
+            .map(|s| s * f64::from(self.num_train_timesteps))
+            .collect();
+        self.timesteps_i64 = timesteps.iter().map(|t| *t as i64).collect();
+        self.timesteps = timesteps;
+        sigmas.push(0.0);
+        self.sigmas = sigmas;
+        self.history.clear();
+        self.last_sample = None;
+        self.has_last_sample = false;
+        self.step_index = None;
+        self.lower_order_nums = 0;
+        self.this_order = 0;
+    }
+
     pub fn inference_timesteps(&self) -> &[f64] {
         &self.timesteps
     }
