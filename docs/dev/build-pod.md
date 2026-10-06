@@ -87,7 +87,7 @@ if one is missing, the setup fails with `missing from the image <image>:
 | CUDA | 13.4.92 nvcc / NVRTC / tileiras from `scripts/gpu/cuda-13.pins` (the CI builder's pins) + cudart / driver / cuRAND headers for oxide's bindgen |
 | sccache, mold | 0.18.0, 3.0.0 (release binaries, sha256-checked) |
 | build tools | build-essential, clang + libclang, cmake, pkg-config, libssl-dev, git, jq, binutils, zstd, xz |
-| tests | python3 + venv, ffmpeg 4.4 with libvpx, Node v22.23.3, Playwright 1.56.1 + its Chromium and system libraries (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, `NODE_PATH=/opt/playwright/node_modules`) |
+| tests | python3 3.11.14 (python-build-standalone, first on PATH; tests/compat needs >= 3.11) + venv, ffmpeg 4.4 with libvpx, Node v22.23.3, Playwright 1.56.1 + its Chromium and system libraries (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, `NODE_PATH=/opt/playwright/node_modules`) |
 
 `/etc/fastvideo/build-base.json` lists the versions; `status` prints it.
 

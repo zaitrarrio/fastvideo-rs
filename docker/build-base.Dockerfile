@@ -21,7 +21,7 @@
 #     wasm32-unknown-unknown); RUSTUP_TOOLCHAIN pins it, so `stable` in the
 #     toolchain file never triggers a download on the pod
 #   sccache, mold, clang/libclang, cmake, pkg-config
-#   python3 + venv, ffmpeg (with libvpx), Node, Playwright + its Chromium and
+#   python3 (3.11) + venv, ffmpeg (with libvpx), Node, Playwright + its Chromium and
 #     Chromium's system libraries (tests/compat, tests/console, FV_SERVE_UI=1)
 #   jq, curl, binutils, zstd, xz (release-artifacts-pod.sh, the deps seeds)
 FROM ubuntu:22.04
@@ -38,6 +38,11 @@ ARG NODE_VERSION=v22.23.3
 ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 # tests/compat/package.json pins the same Playwright.
 ARG PLAYWRIGHT_VERSION=1.56.1
+# python3 on PATH: CPython 3.11 (python-build-standalone; Ubuntu 22.04 has 3.10,
+# and tests/compat/requirements.txt needs >= 3.11, e.g. websockets 17).
+ARG PYTHON_BUILD=20251014
+ARG PYTHON_VERSION=3.11.14
+ARG PYTHON_SHA256=d0623c777fb89b904b56cd5aba51af29cbb34b1f9d45f0672f90f6dce30fa93e
 
 COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
@@ -67,6 +72,16 @@ RUN cd /tmp \
  && tar -xzf mold.tgz --strip-components=1 -C /usr/local \
  && rm -f sccache.tgz mold.tgz \
  && sccache --version && mold --version
+
+# CPython 3.11 in /opt/python, first on PATH as python3 / python3.11 (apt's own
+# tools keep /usr/bin/python3, 3.10).
+RUN cd /tmp \
+ && curl -fsSL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD}-x86_64-unknown-linux-gnu-install_only.tar.gz" \
+ && echo "${PYTHON_SHA256}  py.tgz" | sha256sum -c - \
+ && mkdir -p /opt/python && tar -xzf py.tgz -C /opt/python --strip-components=1 && rm py.tgz \
+ && ln -s /opt/python/bin/python3.11 /usr/local/bin/python3 \
+ && ln -s /opt/python/bin/python3.11 /usr/local/bin/python3.11 \
+ && python3 -V && python3 -m venv /tmp/v && rm -rf /tmp/v
 
 # Node + Playwright + Chromium (and, through install-deps, its system libraries).
 ENV PATH=/opt/node/bin:$PATH \
