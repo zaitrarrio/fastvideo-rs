@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native API · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/native.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Native API <small>advanced: POST /fv/v1/jobs with every field it takes, on any served model or tier</small></h1>
+  </div>
+  <div id="key-banner" class="banner" hidden>No API key in this browser. <a href="/console/admin">Mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
+  <div id="page-error" class="banner bad" hidden></div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-input">
+      <div class="stage-head"><h2 id="h-input">Request</h2><span class="hint mono" id="endpoint"></span></div>
+      <div class="stage-body">
+        <div class="row">
+          <div><label for="api">API</label><select id="api"></select></div>
+          <div><label for="model">Model or tier</label><select id="model"></select></div>
+          <div><label for="task">Task</label><select id="task"></select></div>
+        </div>
+        <p class="hint" id="model-facts"></p>
+        <form id="form"></form>
+        <div class="actions">
+          <button id="reset" type="button">Reset</button>
+          <span class="grow"></span>
+          <button id="run" class="primary" type="button">Submit</button>
+        </div>
+        <div id="run-msg" class="msg" role="status"></div>
+        <details class="more"><summary>Request body</summary><pre id="body-json">{}</pre></details>
+        <details class="more"><summary>cURL</summary><pre id="curl"></pre></details>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-result">
+      <div class="stage-head"><h2 id="h-result">Result</h2><span id="job-status" class="pill" hidden></span><button id="cancel" class="small" type="button" hidden>Cancel</button></div>
+      <div class="stage-body">
+        <div id="result-quality" class="banner" data-quality="draft" hidden style="margin-top:10px"><b>Draft quality.</b> This tier does not pass the quality gate: a fast preview, not a final render.</div>
+        <div id="video-empty" class="placeholder-video" style="margin-top:10px">Submit a job to see the video here.</div>
+        <video id="video" controls playsinline preload="metadata" hidden style="margin-top:10px"></video>
+        <dl id="facts"></dl>
+        <details class="more"><summary>Job JSON</summary><pre id="job-json">{}</pre></details>
+        <div id="result-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>
