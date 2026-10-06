@@ -103,6 +103,21 @@ hash differ. To change the image: edit the Dockerfile (e.g. bump
 the workflow, then `down` + `up` the pod (`up` recreates a stopped pod whose
 image differs from the pin and notes a running one).
 
+**CI jobs in the image.** The `serve-compat` suite jobs and `gpucheck-t0`'s
+`nvrtc-compile` run in the same image (`container:`, the tag pinned by
+`build-base-tag.sh`): no `apt-get install ffmpeg`, no `playwright install
+--with-deps`, no CUDA apt packages and no setup-python/setup-node at run
+time. Each job first runs `scripts/ci/check-build-base.sh compat|browser|cuda`,
+which fails naming anything missing. Measured on PR #39 (sum of the 10 suite
+jobs; before: three PR runs of 2026-10-06): before 992–1134 s (apt ffmpeg
+22–56 s per job, Chromium + deps 16–19 s, clients 11–21 s); after 1005 s
+with the client cache warm, 1176 s cold. Pulling the image ("Initialize
+containers", 41–67 s per job) costs about what the installs did, so wall
+time is roughly unchanged; what goes away is apt on the runners (the fal-js
+hang of 2026-10-06) and Python/Node/Chromium drift. nvrtc-compile: CUDA apt
+41–58 s → image pull ~56 s; the NVRTC gate passes in the container without a
+GPU or driver.
+
 The image is not used as the CI builder stage (`docker/gpucheck.Dockerfile`,
 `cuda-builder.Dockerfile`): with prebuilt R2 binaries those stages rarely
 run, pulling a 1.6 GB (compressed) image to replace a cached layer is not
