@@ -1,8 +1,10 @@
 # fv-serve images: one per pod variant, published to GHCR and Runpod
 
-Date: 2026-09-28. Build: `docker/gpucheck.Dockerfile` (stages `serve-os` …
-`serve-<variant>`), CI: `.github/workflows/serve-image.yml` +
-`scripts/serve/ci-images.sh`, Runpod publishing:
+Date: 2026-09-28; shared layer stack 2026-10-06 ([Lean runtime
+images](#lean-runtime-images-2026-10-06)). Build: `docker/gpucheck.Dockerfile`
+(stages `base-os`, `base-cuda` … `serve-<variant>`, `runtime`, `serve`), CI:
+`.github/workflows/serve-image.yml` + `scripts/serve/ci-images.sh` +
+`scripts/ci/base-images.sh`, Runpod publishing:
 `scripts/serve/runpod-templates.sh`, variant table: `scripts/serve/variants.sh`.
 
 ## Images
@@ -20,7 +22,7 @@ deploy scripts pull anonymously).
 | wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, the `wan14b-turbo` tier: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
 | cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu`, … | `fv-serve-cpu-pod` |
-| debug (legacy all-in-one) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
+| debug (the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
 
 Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
 `<sha>` tags are immutable. Two release channels move over them
@@ -36,18 +38,30 @@ Releases page shows each cluster pod's build against its channel.
 
 ### Layers
 
+Every runtime image is one stack; the two lower parts are published once per
+content hash and reused by every build (see [Lean runtime
+images](#lean-runtime-images-2026-10-06)):
+
 ```
-ubuntu:22.04                                   all images
-serve-os: ca-certificates, libx264/libvpx/libdav1d runtime libs
-ffmpeg + ffprobe (minimal FFmpeg 4.4 build)    all images
-cuBLAS / cuBLASLt  | cuDNN (no adv) | NVRTC      CUDA variants (3 layers: pulled in parallel)
-fv-serve --features cuda,http-client            CUDA variants (identical binary)
-config + fv-entry + FV_VARIANT/FV_CONFIG        one small layer per variant
+ubuntu:22.04 (pinned by digest)                     every image
+base-os:   ca-certificates + libx264/libvpx/libdav1d  every image
+           ffmpeg + ffprobe (minimal FFmpeg 4.4)
+base-cuda: cuBLASLt                                  every CUDA image
+           cuDNN precompiled engines                 (4 layers, pulled in parallel,
+           cuDNN core (graph, ops, cnn, heuristic,    unchanged until a CUDA pin
+             runtime-compiled + tensor-IR engines)    or the ffmpeg build changes)
+           cuBLAS + NVRTC (+ builtins) + cudart
+           ld.so config
+ ├─ serve-cuda-bin: fv-serve --features cuda,http-client  -> serve-<variant>: config + FV_VARIANT
+ ├─ runtime: sshd/rsync/curl, CUPTI, hf-fm, scripts/gpu, oxide, fv-gpucheck
+ │   └─ serve (debug): + configs, deploy/vast/worker.py, fv-serve
+base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)
 ```
 
 The CUDA variants differ only in their last layer (a few KB), so a host that
 has pulled any one of them pulls the next in seconds, and Runpod's host
-image cache covers every family at once. The `cpu` image (fv-control's
+image cache covers every family at once; `fastvideo-rs-runtime` and the
+debug image add only their thin top layers to the same base. The `cpu` image (fv-control's
 fake-engine workers) shares the OS and ffmpeg layers and has no CUDA
 library at all (the smoke check asserts it).
 
@@ -305,7 +319,9 @@ come out larger), on top of the base image and the CUDA libraries we keep:
   `runtime_compiled`, `tensor_ir`) and the heuristic library; which engine
   serves the unified SDPA node (engine ids 11 and 8,
   docs/gaps/2026-09-27-attention-sm120-cudnn-vsa.md) is not mapped to a
-  library, so all engine libraries stay. Checked: no cuDNN library needs
+  library, so all engine libraries stay. (2026-10-06: `tensor_ir` measured
+  as required, and `libcudnn_ext` dropped; see [Lean runtime
+  images](#lean-runtime-images-2026-10-06).) Checked: no cuDNN library needs
   `libnvJitLink` (DT_NEEDED and dlopen strings), so dropping tileiras's
   `libnvjitlink` is safe.
 - **CUPTI**: loaded lazily by `cudarc/cupti` only for `FASTVIDEO_GPU_TRACE`;
@@ -330,6 +346,161 @@ come out larger), on top of the base image and the CUDA libraries we keep:
 - **Base image**: `ubuntu:22.04` stays (29.8 MB): the binary is built against
   its glibc and the NVIDIA apt pins target it; a distroless/Debian-slim base
   would save ~0-10 MB compressed for a glibc mismatch risk.
+
+## Lean runtime images (2026-10-06)
+
+Owner decision: make the runtime images multi-layer and lean, and remove
+unused components. Branch `wip/lean-runtime-images`; CI runs
+gpucheck-runtime-image 37509025431 (`f692ed2`) and serve-image 37511210976
+(`7472073`, dispatched on the branch). Sizes are compressed (gzip) from the
+registry manifests, linux/amd64.
+
+### Before / after
+
+| image | before | after | change |
+|---|---:|---:|---:|
+| `fastvideo-rs-runtime` (fv-gpucheck) | 1567.3 MB, 8 layers (one 1498.7 MB apt layer) | **1019.8 MB**, 19 layers | −547.5 MB (−35 %) |
+| `fastvideo-rs-serve:latest` / `:sha-…` (debug, the old all-in-one) | 1597.7 MB, 12 layers | **1050.1 MB**, 22 layers | −547.6 MB (−34 %) |
+| `fastvideo-rs-serve:<variant>` ×6 (CUDA) | 998.7 MB, 12 layers | **994.7 MB**, 14 layers | −4.0 MB (`libcudnn_ext`) |
+| `fastvideo-rs-serve:cpu` | 68.4 MB | **69.0 MB**, 8 layers | +0.6 MB (Ubuntu digest pin) |
+
+Shared layers (identical digests), measured on the pushed images:
+
+| pair | before | after |
+|---|---:|---:|
+| runtime ↔ any CUDA variant | 29.8 MB (Ubuntu only) | **964.3 MB** (all of base-cuda) |
+| runtime ↔ debug | 1546.4 MB | **964.5 MB** guaranteed (base-cuda); the runtime-only layers (≈56 MB) match too when the two workflows hit the same registry cache (all 1019.8 MB on `f692ed2`/`7472073`, base-cuda only on `d940b41`) |
+| CUDA variant ↔ CUDA variant | 998.7 MB (all but the config layer) | **994.7 MB** (all but the config layer) |
+| cpu ↔ everything | 52.3 MB | 52.3 MB (base-os) |
+| **a host pulling runtime + one variant** | 2536 MB | **1050 MB** (−59 %) |
+| unique bytes of runtime + debug + all six variants (`:latest` tags before, this branch after) | 2587.5 MB | **1080.5 MB** (−58 %) |
+
+Layers of the CUDA stack (MB): Ubuntu 29.8 · codec libs 3.5 · ffmpeg 19.1 ·
+cuBLASLt 388.2 · cuDNN precompiled engines 204.9 · cuDNN core 213.1 · cuBLAS
++ NVRTC 105.8 (+ cudart since the follow-up, see below) · ld.so config 0.0. Runtime adds sshd/rsync/curl 4.4 · CUPTI
+12.2 · hf-fm 18.0 · scripts 1.4 · oxide 0.2 · fv-gpucheck 19.3; debug adds
+configs + worker.py + fv-serve 30.4; a variant adds fv-serve 30.4 + config.
+
+**Pull time.** Both GPU smokes below were the first pull of these images on
+their hosts: create → first `/ping` 30 s (debug) and 27 s (ltx variant),
+against 64-441 s for the previous variant images in the 2026-09-29 smokes.
+These are two samples on hosts Runpod chose, not a controlled measurement.
+
+### How the layers stay shared across workflows
+
+BuildKit only reuses a layer blob when it gets a cache hit, and the two
+image workflows run on different runners with different caches, so before
+this change the runtime image and the variants each had their own CUDA
+layers. Now `scripts/ci/base-images.sh ensure` (a step in both workflows)
+hashes the `ARG UBUNTU=` line, the Dockerfile between `# >>> shared base`
+and `# <<< shared base`, `scripts/gpu/cuda-13.pins` and `cuda-13-runtime.pins`, and publishes
+`fastvideo-rs-runtime:base-os-<hash>` and `:base-cuda-<hash>` once (7 min,
+first run only; later runs resolve the tags in 1 s). The digests go back
+into the build as named build contexts (`base-os=docker-image://…@sha256:…`,
+the same mechanism the prebuilt binaries use), which replace those stages.
+gzip pushes keep the base blobs as they are (`force-compression` is only
+set for zstd). Ubuntu is pinned by digest, so the base changes only when
+that line, a CUDA pin or the ffmpeg build changes. `FV_BASE_DISABLE=1`
+(repository variable) builds the stages inline instead. If both workflows
+build a new hash at the same moment, the later push wins the tag and the
+earlier images keep their own (valid) base until their next build.
+
+### What was removed, and how it was checked
+
+From the runtime and debug images (dependency closures as measured above,
+in "Size reduction"):
+
+| removed | why it is unused | size |
+|---|---|---|
+| `cuda-tileiras-13-4` + its `cuda-nvcc-13-4` → build-essential, gcc, libnvvm, CCCL headers, libnvjitlink | only the AOT oxide build (`builder`/`oxide` stages) runs tileiras; the cubins are embedded; no runtime JIT (grep: no tileiras call outside `fastvideo-oxide-kernels`) | 231 MB .deb / 866 MB installed |
+| Ubuntu `ffmpeg` (193 packages) | replaced by the shared minimal ffmpeg (x264, vpx, dav1d, NVENC, native AAC), which covers fv-gpucheck's mp4 writer, `ffprobe` and `hd-upscaler.sh` | 117 MB .deb / 396 MB installed |
+| `libcudnn_adv` | legacy RNN / MHA / CTC API, never called (as for the variants since 2026-09-28) | 100.2 MB |
+| `libcudnn_ext` (all images) | exports only `cudnnCausalConv1d*`, `cudnnFFTCausalConv1d*`, `cudnnGnnAgg*` (subquadratic ops), which nothing calls | 3.8 MB |
+| CUPTI `libcheckpoint`, `libpcsamplingutil`, static libraries | the activity API (`FASTVIDEO_GPU_TRACE`) needs `libcupti` (+ `libnvperf_*`, kept) | ~1 MB (+105 MB of `.a` that were already deleted) |
+| `libnvblas`, dpkg/apt metadata, the NVIDIA keyring, `wget`, `binutils` | not loaded; `remote.sh` probes symbols with `grep -a` first, `nsys-pod.sh` now downloads with curl | small |
+
+Kept, because something loads it: cuBLAS + cuBLASLt (`CudaBlas::new` in
+every device), NVRTC + builtins (kernels; cuDNN runtime-compiled and
+tensor-IR engines), cuDNN graph/ops/cnn/heuristic and all three engine
+libraries, CUPTI (runtime/debug only), sshd/rsync/curl (`remote.sh`, Vast).
+No variant drops cuDNN: every CUDA device creates a `Cudnn` handle
+(`wan/device.rs`) and every family's VAE runs cuDNN convolutions.
+
+**`libcudnn_engines_tensor_ir` is required (measured, 2026-10-06).** It is
+the second-largest candidate (75.8 MB). With it moved away on an RTX PRO
+6000 (sm_120), `fv-gpucheck kernels --groups conv,attn3_parity` fails:
+convolutions return `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` and the SDPA
+graphs get no plan (`status 1008: ptrDesc->finalize()`). It stays.
+
+### CUDA runtime (libcudart) and the dependency audit
+
+Owner follow-up (2026-10-06): base-cuda also ships the CUDA runtime,
+`cuda-cudart-13-4` (pinned as `CUDA_CUDART_PKG` / `CUDA_CUDART_SONAME` in
+`scripts/gpu/cuda-13-runtime.pins`, a separate file because `cuda-13.pins`
+is an input of the build-base image tag and of the tools-release hash, which
+should not move for a package only the runtime images ship): `libcudart.so.13.4.92` + `libcudart.so.13` +
+`libcudart.so` in the cuBLAS + NVRTC layer (0.8 MB uncompressed). cudarc
+uses the driver API and does not load it, but CUPTI dlopens `libcudart.so`
+and anything linked against the runtime finds it. Its package's other
+dependencies (`cuda-toolkit-*-config-common`) only carry ld.so/alternatives
+configuration, which base-cuda writes itself.
+
+Audit of every shipped library (DT_NEEDED from `readelf -d`, dlopen names
+from the binaries' strings):
+
+| needs | from |
+|---|---|
+| glibc (`libc`, `libm`, `libdl`, `librt`, `libpthread`, `libutil`, `ld-linux`), `libstdc++.so.6`, `libgcc_s.so.1`, `libz.so.1` | Ubuntu 22.04 base |
+| `libcublasLt.so.13` (cuBLAS, cuDNN precompiled engines), `libnvrtc.so.13` + `libnvrtc-builtins` (cuBLASLt, cuDNN engines), the cuDNN sub-libraries, `libcudart.so` (CUPTI) | base-cuda (CUPTI: runtime image) |
+| `libcuda.so.1` | the host driver (NVIDIA container runtime) |
+| `libcudnn_adv` / `libcudnn_ext` (dlopened by `libcudnn` only for their APIs) | intentionally absent (unused) |
+| `libcask_profile_interface.so` (cuDNN precompiled engines) | an optional profiling hook, not part of any NVIDIA package |
+| EGL/GL/X11/OpenCL/OptiX/Vulkan-SC libraries (CUPTI / nvperf graphics-interop profiling) | the host driver when present; not used by the activity API |
+
+With cudart (CI runs 37516701535 and 37517976275 on `d940b41`): base-cuda
+**964.5 MB** (+0.2 MB), runtime 1020.0 MB, debug 1050.4 MB, CUDA variants
+994.9 MB, cpu 69.0 MB; all of them on the same base-cuda digests.
+
+Nothing else is missing. base-cuda now fails its build if any library in
+`/usr/local/cuda-13.4/lib64` or any `libcudnn*` has an unresolved `ldd`
+dependency, or if `libnvrtc.so`, `libcublas.so`, `libcublasLt.so`,
+`libcudnn.so` or `libcudart.so` is not in the linker cache.
+
+### GPU smoke (2026-10-06, EUR-IS-1, EU volume `jg48s6o1w0` read only)
+
+Two RTX PRO 6000 Blackwell pods (driver 595.91.07, $2.09/hr) on the CI-built
+images, each with a backstop and deleted after: 144 s + 143 s, about
+**$0.17** in total.
+
+1. **debug** `fastvideo-rs-serve@sha256:879910cf…` (= runtime + fv-serve):
+   fv-serve with `runpod-ltx.toml` ready (`ltx25-distill-sol` loaded) 80 s
+   after create; `fv-gpucheck nvrtc` PASS (154 kernels each for sm_90/100/120);
+   `fv-gpucheck kernels --groups conv,attn3_parity,gemm` PASS, 0 failures
+   (cuDNN conv3d, cuDNN SDPA unified graph on engines 8 and 11); CUPTI
+   resolvable; the tensor-IR removal test above.
+2. **ltx variant** `fastvideo-rs-serve@sha256:6ebadbc4…`: ready 67 s after
+   create; one native job (`ltx25-distill-sol`, fox prompt, seed 1)
+   `succeeded`: 1920x1080, 121 frames, H.264 + AAC 48 kHz, 8 465 068 B,
+   inference 19.5 s, R2 + D1 stores.
+
+The other variants differ from ltx only in their config layer.
+
+### The legacy all-in-one target
+
+Not retired, because it is still the default of several tools; it is now
+the `runtime` image + fv-serve and costs a host that has any other CUDA image
+only its top layers (30 MB, plus 56 MB of runtime layers over a variant). It
+is used by: `scripts/serve/vast.sh` and `vast-serverless.sh` (they need
+`deploy/vast/worker.py` and sshd), `cloudrift-worker.sh`, `scripts/gcp/vm.sh`
+(`:latest` defaults), `runpod-pod.sh` / `runpod-endpoint.sh` for the fake
+config (`:stable`), `scripts/serve/e2e/*.sh` and the profiling pods (they
+need fv-serve and fv-gpucheck in one image), `release.sh record-build`
+(the debug ref) and fv-control's all-in-one clusters (`spec.image.ref`, rolled
+by `resolveTarget`). No Runpod template references it: the 13 `fv-serve-*`
+templates all point at variant digests (one, `fv-serve-gateway-pod`, still
+points at the retired gateway image; the owner may delete it). Retiring the
+tags would mean moving each of those defaults to a variant image and giving
+Vast/CloudRift/GCP a variant-plus-worker image; not done here.
 
 ## FlashBoot
 
