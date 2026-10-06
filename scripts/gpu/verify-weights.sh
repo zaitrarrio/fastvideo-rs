@@ -16,6 +16,9 @@
 #                                      ltx25-dev ltx25-a2v-guided ltx2
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
 #                                      longlive-plug
+#                                      wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq
+#                                      (sol-engine benchmark trees; not on the
+#                                      volume until the owner approves the fetch)
 #                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
@@ -82,8 +85,12 @@ needs() {
     fastwan21-1.3b)
       echo "fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer" ;;
     # Wan Diffusers trees (weights-manifest.tsv rows of the same name).
-    wan22-ti2v-5b | fastwan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
+    wan22-ti2v-5b | fastwan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b | wan21-t2v-1.3b)
       echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
+    # Wan2.2 T2V-A14B: the high-noise (transformer) and low-noise
+    # (transformer_2) experts (docs/ports/wan.md "Wan 2.2 T2V-A14B").
+    wan22-t2v-a14b)
+      echo "$1:transformer $1:transformer_2 $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
     # MMAudio large-44k-v2 V2A (scripts/gpu/fetch-mmaudio.py): the converted
     # safetensors the port reads, plus the upstream .pth tree and the CLIP
     # tokenizer. The .pth files are md5-checked at fetch time.
@@ -95,6 +102,11 @@ needs() {
       echo "$1:transformer $1:vae $1:text_encoder $1:text_encoder_2 $1:tokenizer $1:tokenizer_2 $1:scheduler" ;;
     ltx23)
       echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
+    # LTX-2.3 official HQ (sol-engine models/ltx23.toml): the ltx23 tree for
+    # Gemma, the VAEs and the vocoder, plus Lightricks/LTX-2.3's dev DiT, the
+    # distilled LoRA 384 v1.1 and the x2 v1.1 upscaler in ltx23-dev/.
+    ltx23-hq)
+      echo "$(needs ltx23) :ltx23-dev/ltx-2.3-22b-dev.safetensors :ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors :ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" ;;
     # LTX-2.5 reference mode (docs/ports/ltx-ref2v.md; fetch-ltx-iclora.sh).
     ltx25-ic-lora-ingredients)
       echo ":ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors" ;;
@@ -131,7 +143,8 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
+  wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq)
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {

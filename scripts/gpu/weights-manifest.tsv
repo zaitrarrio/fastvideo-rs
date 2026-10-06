@@ -71,3 +71,13 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+# PENDING owner approval (sol-engine benchmark trees, docs/ports/sol-wan-ltx23.md;
+# NOT on any volume yet). Uncomment a row when its tree is fetched to the EU
+# volume, verified and renamed into place (CLAUDE.md), and its revision row in
+# weights-revisions.tsv with it. Sizes: Hub API, 2026-10-06.
+# wan21-t2v-1.3b	Wan-AI/Wan2.1-T2V-1.3B-Diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
+#   28.94 GB; text_encoder/ (22.7 GB) and vae/ are byte-identical to wan21-t2v-14b's (Hub LFS SHA-256).
+# wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* transformer_2/* vae/*
+#   126.20 GB (two float32 experts of 57.15 GB, bf16 UMT5 11.36 GB).
+# ltx23-dev	Lightricks/LTX-2.3	ltx-2.3-22b-dev.safetensors ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-spatial-upscaler-x2-1.1.safetensors
+#   54.75 GB (46.15 + 7.61 + 1.00).

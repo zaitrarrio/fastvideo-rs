@@ -1746,12 +1746,10 @@ impl WanTransformer3D {
     }
 
     pub fn configure_attn_route(&self) {
-        let sol = sol_attn_requested(
-            std::env::var("FASTVIDEO_WAN_SOL_ATTN")
-                .ok()
-                .or_else(|| std::env::var("WAN22_SOL_ATTN").ok())
-                .as_deref(),
-        );
+        let sol_value = std::env::var("FASTVIDEO_WAN_SOL_ATTN")
+            .ok()
+            .or_else(|| std::env::var("WAN22_SOL_ATTN").ok());
+        let sol = sol_attn_requested(sol_value.as_deref());
         let pisa = pisa_requested(
             std::env::var("FASTVIDEO_WAN_PISA")
                 .ok()
@@ -1770,8 +1768,9 @@ impl WanTransformer3D {
             && !self.cfg.causal
             && sol
         {
-            // Wan 2.1 1.3B (T2V / FastWan / TurboWan): 30 layers, 16-channel latents.
-            WanAttnProfile::Sol13b
+            // Wan 2.1 1.3B (T2V / FastWan / TurboWan): 30 layers, 16-channel
+            // latents. `fullstack`: the base model's dense guards.
+            fastvideo_models::wan::sol::sol_13b_profile(sol_value.as_deref())
         } else {
             WanAttnProfile::Off
         };

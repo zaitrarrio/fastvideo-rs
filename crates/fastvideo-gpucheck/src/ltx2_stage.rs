@@ -796,7 +796,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .map_err(|e| anyhow::anyhow!(e))?,
                     tae: ltx_tae_weights.clone(),
                     ic_lora: ic_lora.clone(),
-                    lora_base_host: *guided,
+                    // Stage 1 / stage 2 fuse different LoRA strengths (the
+                    // guided A2V's 0 / 1, the HQ cell's 0.25 / 0.5): keep the
+                    // unfused base in pinned host memory, not a second
+                    // device copy of the DiT.
+                    lora_base_host: *guided || *hq,
                 },
                 &match prompts {
                     Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
