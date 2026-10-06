@@ -231,8 +231,9 @@ one agent-session is a working day with build-pod access. Rates: RTX PRO
 
 **Weights download:** unknown. An **INFERRED** range from the Qwen
 initialisation: a 7-8B backbone is ~15-17 GB in bf16, a 14B one ~28-30 GB,
-a 32B one ~64 GB, plus VAEs and encoders (a few GB). Double that for both
-volumes (US `s2k01690bi`, EU `jg48s6o1w0`). **Needs the owner's approval**
+a 32B one ~64 GB, plus VAEs and encoders (a few GB), on the EU volume
+`jg48s6o1w0` (EU only since 2026-10: the US volume `s2k01690bi` was
+deleted; double it if US is rebuilt). **Needs the owner's approval**
 (CLAUDE.md) once a real size is known. Every tree goes into
 `scripts/gpu/weights-manifest.tsv` and `scripts/gpu/verify-weights.sh`.
 

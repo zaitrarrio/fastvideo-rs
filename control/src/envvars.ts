@@ -1,14 +1,18 @@
-// Environment variables at three levels (docs/control/README.md "Env"):
-// account ("Runpod level", every controller cluster), cluster, pod.
-// Resolution: pod > cluster > account > system (the controller's own keys,
-// which the user layers may not set: RESERVED_KEYS). Secret values are
+// Environment variables at four levels (docs/control/README.md "Env"):
+// account ("Runpod level", every controller cluster), cluster, pool (every
+// worker of one pool of one cluster: survives restarts, rolls and new pods
+// of a scale-up; never the gateway), pod.
+// Resolution: pod > pool > cluster > account > system (the controller's own
+// keys, which the user layers may not set: RESERVED_KEYS). Secret values are
 // sealed in D1 and masked in every response.
 import { isReserved, SECRET_SYSTEM_KEYS } from "./cluster/payloads";
 import { seal, unseal } from "./crypto";
 import type { Env } from "./env";
 import { HttpError, now } from "./util";
 
-export type Scope = "account" | "cluster" | "pod";
+export type Scope = "account" | "cluster" | "pool" | "pod";
+/** The scope_id of a pool's variables: `<cluster id>:<pool id>`. */
+export const poolScopeId = (clusterId: string, pool: string) => `${clusterId}:${pool}`;
 export interface VarRow {
   scope: Scope;
   scope_id: string;
@@ -70,43 +74,44 @@ async function plain(env: Env, r: VarRow): Promise<string> {
   return r.secret ? unseal(env.CONTROL_KEK, r.value, aad(r.scope, r.scope_id, r.key)) : r.value;
 }
 
-/** The user layers of one pod, lowest first. */
-async function layers(env: Env, clusterId: string, podId: string | null): Promise<VarRow[][]> {
-  const acc = await listVars(env, "account", "");
-  const cl = await listVars(env, "cluster", clusterId);
-  const pod = podId ? await listVars(env, "pod", podId) : [];
-  return [acc, cl, pod];
+/** The user layers of one pod, lowest first (`pool`: a worker's pool; the gateway has none). */
+async function layers(env: Env, clusterId: string, podId: string | null, pool?: string | null): Promise<{ scope: Scope; rows: VarRow[] }[]> {
+  const out: { scope: Scope; rows: VarRow[] }[] = [
+    { scope: "account", rows: await listVars(env, "account", "") },
+    { scope: "cluster", rows: await listVars(env, "cluster", clusterId) },
+  ];
+  if (pool) out.push({ scope: "pool", rows: await listVars(env, "pool", poolScopeId(clusterId, pool)) });
+  if (podId) out.push({ scope: "pod", rows: await listVars(env, "pod", podId) });
+  return out;
 }
 
-/** The env a pod gets: system < account < cluster < pod (plain values: only for Runpod payloads). */
-export async function resolvePlain(env: Env, clusterId: string, podId: string | null, system: Record<string, string>): Promise<Record<string, string>> {
+/** The env a pod gets: system < account < cluster < pool < pod (plain values: only for Runpod payloads). */
+export async function resolvePlain(env: Env, clusterId: string, podId: string | null, system: Record<string, string>, pool?: string | null): Promise<Record<string, string>> {
   const out = { ...system };
-  for (const layer of await layers(env, clusterId, podId)) for (const r of layer) if (!isReserved(r.key)) out[r.key] = await plain(env, r);
+  for (const layer of await layers(env, clusterId, podId, pool)) for (const r of layer.rows) if (!isReserved(r.key)) out[r.key] = await plain(env, r);
   return out;
 }
 
 /** The same resolution for display: every value of a secret masked, with its source and what it overrides. */
-export async function resolveView(env: Env, clusterId: string, podId: string | null, system: Record<string, string>): Promise<EffectiveVar[]> {
+export async function resolveView(env: Env, clusterId: string, podId: string | null, system: Record<string, string>, pool?: string | null): Promise<EffectiveVar[]> {
   const m = new Map<string, EffectiveVar>();
   for (const [k, v] of Object.entries(system)) {
     const secret = SECRET_SYSTEM_KEYS.has(k);
     m.set(k, { key: k, value: secret ? MASK : v.length > 200 ? `${v.slice(0, 60)}… (${v.length} chars)` : v, secret, source: "system", runpod_secret_ref: /^\{\{ RUNPOD_SECRET_/.test(v) });
   }
-  const names: Scope[] = ["account", "cluster", "pod"];
-  const ls = await layers(env, clusterId, podId);
-  ls.forEach((layer, i) => {
-    for (const r of layer) {
+  for (const layer of await layers(env, clusterId, podId, pool)) {
+    for (const r of layer.rows) {
       if (isReserved(r.key)) continue;
       const prev = m.get(r.key);
       m.set(r.key, {
         key: r.key,
         value: r.secret ? MASK : r.value,
         secret: !!r.secret,
-        source: names[i]!,
+        source: layer.scope,
         overrides: prev ? [...(prev.overrides || []), prev.source] : undefined,
         runpod_secret_ref: /^\{\{ RUNPOD_SECRET_/.test(r.value) && !r.secret,
       });
     }
-  });
+  }
   return [...m.values()].sort((a, b) => a.key.localeCompare(b.key));
 }

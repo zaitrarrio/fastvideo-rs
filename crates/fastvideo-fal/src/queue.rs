@@ -136,15 +136,33 @@ pub fn status_json(job: &Job, cx: &ViewCtx) -> Value {
     v
 }
 
+/// When the output URL of `job` seen at `now` was issued: its completion
+/// (else its creation), moved forward by whole `ttl` windows until the
+/// window still holds `now`. Every read of a finished job's result inside
+/// one window gets the same URL, as on fal, whose result URLs do not change
+/// between `get()`, `result()` by id and the webhook; with the default
+/// `url_ttl` (24 h) and fal retention (24 h from submit) that is the first
+/// window, so a result has one URL for its whole life.
+pub fn url_issued_at(job: &Job, now: OffsetDateTime, ttl: Duration) -> OffsetDateTime {
+    let base = job.completed_at.unwrap_or(job.created_at);
+    let ttl_s = ttl.as_secs() as i64;
+    let age_s = (now - base).whole_seconds();
+    if ttl_s <= 0 || age_s < 0 {
+        return base;
+    }
+    base + time::Duration::seconds(age_s / ttl_s * ttl_s)
+}
+
 /// The bare output JSON of a succeeded job (fal §3.4, §5.2), or `None`.
 pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> {
     if job.status() != JobStatus::Succeeded {
         return None;
     }
     let a = job.artifacts.first()?;
+    let issued = url_issued_at(job, cx.now, url_ttl);
     let out = VideoOutput {
         video: File {
-            url: cx.urls.url_for(a, url_ttl).to_string(),
+            url: cx.urls.url_issued(a, issued, url_ttl).to_string(),
             content_type: Some(a.mime.clone()),
             file_name: Some(a.file_name.clone()),
             file_size: Some(a.bytes),

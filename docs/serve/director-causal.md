@@ -69,6 +69,10 @@ generation plus the lead, and not behind a deep queue of pre-generated blocks.
 - `fps: 16`, `resolutions: ["480p"]`, `aspect_ratios: ["16:9"]`.
 - `chunk_seconds`, `default_chunk_duration`, `min_chunk_duration` and
   `max_chunk_duration` are the director chunk, 3 s.
+  `configure.chunk_duration` (a clip-model setting,
+  docs/serve/director-chunks.md) is ignored: `configured.chunk_duration`
+  stays 3, and the `chunk_duration_options*`, `chunk_duration_frames` and
+  `chunk_duration_note` keys are absent.
 - `continuation_context_frames` is the KV window in pixel frames (latent
   frames × 4: 48 for LongLive's 12, 84 for SF-Wan's 21).
 - `script_max_end_images: 0`.

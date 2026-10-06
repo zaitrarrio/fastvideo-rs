@@ -406,8 +406,10 @@ depth and age per family; the autoscaler policy takes `queued`,
 
 ## 11. Region
 
-A DO lives in one location (where first used, or its `locationHint`). A
-family DO in `weur` with workers in EUR-IS-1 and US-CA-2 costs the US workers
+A DO lives in one location (where first used, or its `locationHint`). The
+deployment is EU-only now (EUR-IS-1 workers, the EU volume): pin every family
+object to `weur` (`FV_EDGE_POOL_LOCATIONS`). Should workers outside Europe
+come back, a family DO in `weur` with workers in another continent costs them
 about 100–150 ms per message (offer, ack, credit, upload grant). That is
 acceptable: one job costs a handful of messages against a 5–40 s run, and
 part PUTs go to R2 directly, not through the DO. Media never touches the DO.

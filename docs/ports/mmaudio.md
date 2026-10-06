@@ -43,8 +43,9 @@ reads it with PyAV, so both sides condition on the encoded frames.
 
 The fetch is add-only. It stops if the tree already has files, and
 `FETCH_ADD_ONLY=0` re-fetches in place. `RUNPOD_VOLUME_NAME` selects the
-volume. Both `fv-weights-b200-us` (US-CA-2) and `fv-weights-h3-ltx-hy`
-(EUR-IS-1) hold the tree. `verify-weights.sh mmaudio-44k-v2` is the gate.
+volume (default `fv-weights-h3-ltx-hy`, EUR-IS-1, which holds the tree).
+`fv-weights-b200-us` (US-CA-2) held it too until Runpod deleted that volume
+(2026-10); the script refuses it now (EU only). `verify-weights.sh mmaudio-44k-v2` is the gate.
 
 ## Running it
 

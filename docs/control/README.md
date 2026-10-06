@@ -65,7 +65,9 @@ the same thing.
 |---|---|
 | `control/src/index.ts` | routes (the API) and the cron entry |
 | `control/src/auth.ts` | Access JWT, passphrase sessions, CSRF, API tokens |
-| `control/src/cluster/spec.ts` | the cluster definition, templates `standard` and `tiny-cpu` |
+| `control/src/cluster/spec.ts` | the cluster definition, templates and pool presets |
+| `control/src/cluster/catalog.json` | editor suggestions: recipes, model ids, fal apps, engine env keys |
+| `control/gen-configs.mjs` | generates `gateway-base.ts` and `worker-configs.ts` from `configs/serve` |
 | `control/src/cluster/payloads.ts` | the port of runpod-cluster.sh: boot commands, env, pod payloads, gateway TOML |
 | `control/src/cluster/ops.ts` | create / patch / delete, price projection, admin token, probes |
 | `control/src/cluster/do.ts` | `ClusterOps`: the operations |
@@ -220,11 +222,26 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   `<variant>-sha-<sha>`). A ref gives one all-in-one image. Images are
   resolved to digests at start, and `:stable` falls back to `:latest` as
   in the scripts.
-- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000); `us`
-  is `s2k01690bi` in US-CA-2 (H100/H200).
+- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000). The
+  default and the only available region is `["eu"]`. `us` (US-CA-2) is
+  unavailable: Runpod deleted its weights volume (`s2k01690bi`) on about
+  2026-10-05, and the owner chose EU only (2026-10-06). A spec that names
+  `us` is rejected with a 400, not silently trimmed, so a saved cluster never
+  changes placement behind the owner's back. A stored spec that still names
+  `us` cannot start, scale, roll or restart (409) until it is edited, and
+  placement skips `us` in any case. When US is rebuilt, setting
+  `US_VOLUME_ID` in `control/src/cluster/regions.ts` brings the region back
+  (`docs/ops/runpod-volumes.md`).
 - `gateway`: CPU flavors, vCPU, disk, TOML base (`pods` is
   `gateway-pods.toml`; `minimal` drops the reactor and fal apps), auth
-  mode, and `github_token`.
+  mode, and `github_token`. Optional overrides of the base: `fal_apps`
+  (replaces the list; default: every worker config's apps), `protocols`
+  (single `[protocols]` switches), `reactor_model` (default: `fasth3` when
+  a pool serves it, else a pool's causal model such as `sfwan21-1.3b`;
+  `null`: none) and `aliases` (replaces `[aliases]`). A fal app or alias
+  whose model no pool serves answers 404; the gateway still starts
+  (`crates/fastvideo-serve/tests/gateway_bases.rs` starts a gateway on
+  every template's TOML, `control/test/fixtures/`).
 - `pools`: `id`, `variant`, `count`, `compute` GPU/CPU, `config` (a path in
   the image) or `config_toml` (inline, sent as `FV_WORKER_TOML_B64`), GPU
   types, regions, static caps (`models` or `fake_models`), and queue and
@@ -236,7 +253,20 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
 The `standard` template is the script's cluster: a cpu3c gateway and one
 worker each in h3-turbo, h3-max, ltx and wan (wan5b). The `tiny-cpu`
 template is a CPU gateway plus one CPU worker on the gateway image with the
-fake engine.
+fake engine. The `ltx`, `h3`, `wan` and `longlive` templates group the pool
+presets below.
+
+**Pool presets** (`POOL_PRESETS` in `spec.ts`; the dashboard's "Add pool"):
+the four standard pools plus `ltx-pro` (`ltx25-distill-dense`, recipe
+`ltx-pro`; Sage attention on by default on sm_120), `ltx-a2v`, `ltx-ref2v`,
+`h3-ref2v`, `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
+streaming) and `longlive` (LongLive-1.3B on the `sfwan` image;
+**non-commercial** weights). They reuse the image variants CI builds; a
+config the variant's image does not carry rides inline (`config_toml`,
+generated from `configs/serve` by `node gen-configs.mjs`). A pool entry
+with a preset's id and nothing else gets the preset. Recipes outside the
+fv-serve catalog (the LongLive-Plug `*-plug-*` recipes) are refused: the
+gateway resolves every pool model against the catalog at start.
 
 **Operations** (`POST /api/clusters/<id>/<op>`, one at a time per cluster;
 each op's log is in `/api/ops/<id>`):
@@ -248,15 +278,24 @@ each op's log is in `/api/ops/<id>`):
 | `extend {minutes}` | Refused if the account's burn would take the balance below the floor before the new deadline. PATCHes the gateway (its watchdog holds the deadline) |
 | `scale {pool, count}` | Up: projection, create, PATCH the gateway. Down: drain (`POST /fv/v1/internal/drain`), wait until idle (≤ 15 min), drop the pod from the gateway, delete it |
 | `roll {target, pools?, gateway?}` | The 7-step rolling redeploy of `release.sh redeploy`: new workers, gateway sees both, wait for `/health` AVAILABLE with the target digest, drain the old ones, wait until idle, gateway sees only the new ones (plus the image when `gateway`), delete the old ones. Aborts by deleting the new pods and pointing the gateway back. Needs at least 40 min before the deadline and `min_start` |
-| `restart {pods?}` | Rolling env apply: PATCH workers one at a time, then the gateway, each only after the previous one answers again |
+| `restart {pods?, pools?}` | Rolling env apply: PATCH workers one at a time, then the gateway, each only after the previous one answers again. With `pods` and/or `pools` (pool ids, or `gateway`): just those, whether or not their env changed; the dashboard's "Restart…" picks them |
 | `gateway/stop`, `gateway/start` | Runpod stop/start of the gateway pod (same id and URL; container disk and admin token are new). With no gateway, `start` creates one and re-points the workers |
+
+**Gateway-less clusters** (`gateway.enabled: false`): `start` creates only
+the workers, and clients call each one at its pod URL. The controller makes
+the cluster's admin token and passes it to every worker as `FV_ADMIN_TOKEN`
+with `FV_WORKER_DIRECT=1`, so the workers check API keys themselves.
+Minted keys live in the shared D1 `api_keys` table. Minting goes to one
+worker; a revocation goes to all of them. See
+[gateway-less-auth.md](gateway-less-auth.md).
 
 **Parity with the script.** Unit tests check these byte for byte against
 `runpod-cluster.sh`:
 
 - the gateway boot command, with its watchdog;
 - the worker boot command, plus the inline-config branch;
-- the embedded gateway TOML base, against `configs/serve/gateway-pods.toml`.
+- the embedded gateway TOML base, against `configs/serve/gateway-pods.toml`
+  (generated by `control/gen-configs.mjs`).
 
 The payloads are the script's. Workers expose `8000/http` and
 `70000/tcp` (GPU); the network volume is mounted at `/workspace`. The env
@@ -306,9 +345,10 @@ admin_key_pem?, name?}`, or `fv-control.sh import cluster.json
 |---|---|---|
 | account ("Runpod level") | – | every controller cluster's pods |
 | cluster | cluster id | that cluster's pods |
+| pool | `<cluster id>:<pool id>` | every worker of that pool, including new ones (scale-up, roll) and after restarts; never the gateway |
 | pod | Runpod pod id | that pod |
 
-- **Resolution:** pod > cluster > account > system. The system keys
+- **Resolution:** pod > pool > cluster > account > system. The system keys
   (`RESERVED_KEYS` in `payloads.ts`) are the controller's own: tokens,
   deadline, pod list, pool URLs, boot config, `FV_IMAGE_*`,
   `FV_GITHUB_TOKEN`, log shipping. Setting them is refused with 400.
@@ -425,6 +465,13 @@ the owner asked for on 2026-10-02. Otherwise auto-actions never touch
 external pods. Pod health in the pod views comes from the gateway's view
 (ready, loading or down).
 
+The dashboard lists the open alerts with a **Resolve** button
+(`POST /api/alerts/<id>/resolve`, audited); an alert whose condition still
+holds opens again at the next collector pass. Its **Build pod** card is
+read only: the pod's own `/healthz` timers (uptime, idle, time to its idle
+and cap stops), its last self-stop attempt, the running jobs (no command
+lines), and how far the controller's backstop is.
+
 ## 9. Observability
 
 This follows the owner's "lean" guidance.
@@ -479,9 +526,10 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `POST /api/clusters/<id>/{price,start,stop,extend,scale,roll,restart,gateway/start,gateway/stop,cancel}` | operations (202 + operation id) |
 | `GET /api/clusters/<id>/ops`, `/api/ops/<id>` | operation logs |
 | `GET /api/clusters/<id>/env` | effective env per pod (masked), `needs_restart` |
-| `GET /api/clusters/<id>/gateway`, `POST …/admin-token`, `POST …/mint-key` | the gateway's status and pools view; reveal the admin token (audited); mint a user API key |
+| `GET /api/clusters/<id>/gateway`, `POST …/admin-token`, `POST …/mint-key`, `GET …/keys`, `DELETE …/keys/<key_id>` | the gateway's status and pools view (gateway-less: each worker's URL and health); reveal the admin token, with the worker URLs when there is no gateway (audited); mint a user API key; list keys; revoke one (on every worker when there is no gateway; audited) |
+| `GET /api/buildpod` | the shared build pod: its `/healthz` timers (up, idle, idle / cap stop), last self-stop attempt, running jobs, and the backstop's distance (read only) |
 | `POST /api/clusters/import` | adopt a runpod-cluster.sh state |
-| `GET /api/env/account`, `GET /api/env/<scope>/<id>`, `PUT/DELETE /api/env/<scope>/<id>/<KEY>` (`PUT /api/env/account/<KEY>`) | env layers |
+| `GET /api/env/account`, `GET /api/env/<scope>/<id>`, `PUT/DELETE /api/env/<scope>/<id>/<KEY>` (`PUT /api/env/account/<KEY>`; scope `pool`: id `<cluster>:<pool>`) | env layers |
 | `GET /api/alerts`, `POST /api/alerts/<id>/resolve`, `GET/PUT /api/policies` | alerts and policies |
 | `GET /api/logs?pod=&q=&level=&since=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
 | `GET /api/releases`, `/api/images/tags?filter=`, `/api/github/ci`, `POST /api/github/release` | channels, drift, registry, GHCR tags, CI on main, promote/rollback dispatch |
@@ -536,6 +584,9 @@ including the sealed token. The steps cover:
 - scale up and down, with a drain;
 - a roll with the gateway, checking digests;
 - extend, gateway stop and start, admin token and key mint;
+- a gateway-less cluster: the controller's admin token on every worker
+  (also after a scale-up), the workers view, and minting, listing and
+  revoking a key on the workers;
 - GitHub dispatch and CI;
 - the deadline backstop and the balance-floor stop;
 - importing a script state;
@@ -674,7 +725,7 @@ The kinds and ids are:
 - `cluster-spec/<cluster id or name>`
 - `policies/default`
 - `attribution/default` (a slice of the policies)
-- `env/account`, `env/cluster:<id>` and `env/pod:<pod id>`
+- `env/account`, `env/cluster:<id>`, `env/pool:<cluster id or name>:<pool id>` and `env/pod:<pod id>`
 
 Versions live in D1 `doc_versions` (migration `0002`). The check is one
 conditional `UPDATE … WHERE version = ?`. Every other write path bumps

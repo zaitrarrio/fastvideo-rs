@@ -8,7 +8,6 @@ import type { Env } from "../env";
 import { resolveDigest, resolveClusterImages } from "../ghcr";
 import { runpod } from "../runpod";
 import { HttpError, now, scrub } from "../util";
-import { randomToken } from "../crypto";
 import {
   adminGet,
   LEGACY_ADMIN_SWITCH,
@@ -24,6 +23,7 @@ import {
   workerInternal,
   desiredEnv,
   envCtx,
+  newAdminToken,
 } from "./ops";
 import type { PodRec } from "./payloads";
 import { getCluster, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
@@ -209,8 +209,9 @@ export class ClusterOps implements DurableObject {
       this.log(`images: ${JSON.stringify(c.state.images)}`);
       const s = await secretsOf(env, c);
       // A new gateway makes a new token; an image older than the sealed-token
-      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN.
-      if (s.legacy_admin_token) s.admin_token = `fvadm_${randomToken("", 24)}`;
+      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN, and so do
+      // gateway-less workers (docs/control/gateway-less-auth.md).
+      if (s.legacy_admin_token || !c.spec.gateway.enabled) s.admin_token = newAdminToken();
       else delete s.admin_token;
       await saveSecrets(env, c, s);
       await saveState(env, c, { status: "starting", deadline: now() + c.spec.cap_s * 1000 });
@@ -543,14 +544,18 @@ export class ClusterOps implements DurableObject {
     const env = this.env;
     const d = op.data;
     if (op.phase === "init") {
-      const want: string[] | undefined = op.params?.pods;
+      // params: {pods?: string[], pools?: string[] (pool ids, or "gateway")}: those pods (forced); neither: every pod whose env changed.
+      const pods: string[] | undefined = op.params?.pods;
+      const pools: string[] | undefined = op.params?.pools;
+      const chosen = (r: any) => !!pods?.includes(r.pod_id) || !!pools?.includes(r.role === "gateway" ? "gateway" : r.pool);
       const rows = await livePods(env, c.id);
       const ctx = await envCtx(env, c);
       const queue: { pod: string; role: string }[] = [];
       for (const r of rows.filter((x: any) => x.slot !== "retired")) {
-        if (want && !want.includes(r.pod_id)) continue;
+        const forced = !!(pods || pools);
+        if (forced && !chosen(r)) continue;
         const des = await desiredEnv(env, c, ctx, r.role, { pod: r.pod_id, pool: r.pool, image: r.image });
-        if (want || des.hash !== r.env_hash) queue.push({ pod: r.pod_id, role: r.role });
+        if (forced || des.hash !== r.env_hash) queue.push({ pod: r.pod_id, role: r.role });
       }
       // Workers first (the gateway keeps routing to the others), the gateway last.
       queue.sort((a, b) => (a.role === "gateway" ? 1 : 0) - (b.role === "gateway" ? 1 : 0));
