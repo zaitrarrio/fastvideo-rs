@@ -22,7 +22,7 @@
 #                                         raise the workspace version (Cargo.toml +
 #                                         Cargo.lock) for a MINOR/MAJOR change
 #   tools-release.sh notes <rev>          release notes since the previous release
-#   tools-release.sh plan [rev] [--prerelease]
+#   tools-release.sh plan [rev] [--prerelease] [--force]
 #                                         the version/tag a publish would use, or
 #                                         skip (inputs already released); JSON
 #   tools-release.sh build <rev> --local|--pod --version V --tag tools-vV [--out DIR]
@@ -30,6 +30,10 @@
 #   tools-release.sh pick-runner          where tools-release.yml builds: `pod` (an
 #                                         online, idle self-hosted runner labelled
 #                                         fv-build) or `github` (fallback)
+#   tools-release.sh build-sets <rev> --sets "a b" --version V --out DIR [--test]
+#   tools-release.sh assemble <rev> --version V --tag tools-vV --in DIR
+#                                         the GitHub-hosted fallback: some sets per
+#                                         parallel job, then join + -V + stage
 #   tools-release.sh upload <DIR/release> [--dispatch]
 #                                         draft -> assets -> publish -> verify ->
 #                                         prune [-> dispatch the image workflows]
@@ -378,10 +382,11 @@ next_version() {
 # these inputs exists (nothing to build).
 PLAN=""
 cmd_plan() {
-  local rev="HEAD" pre=0
+  local rev="HEAD" pre=0 force=0
   while (( $# )); do
     case "$1" in
       --prerelease) pre=1; shift ;;
+      --force) force=1; shift ;;   # a dry run: build even when released
       -*) die "plan: unknown flag $1" ;;
       *) rev="$1"; shift ;;
     esac
@@ -393,8 +398,12 @@ cmd_plan() {
   if (( pre )); then v="$v-pre.${sha:0:12}"; fi
   tag="$PREFIX$v"
   same="$(releases | jq -r --arg h "$h" '[.[] | select((.draft | not) and .input_hash == $h)] | .[0].tag // empty')"
-  if [[ -n "$same" ]]; then
+  if [[ -n "$same" ]] && (( force )); then
+    why="(forced) the inputs of $same (input hash ${h:0:16}); building anyway"
+  elif [[ -n "$same" ]]; then
     skip=true; why="tools unchanged: ${sha:0:12} has the inputs of $same (input hash ${h:0:16})"
+  elif (( force )) && releases | jq -e --arg t "$tag" 'any(.[]; .tag == $t and (.draft | not))' >/dev/null; then
+    why="(forced) $tag exists"
   elif releases | jq -e --arg t "$tag" 'any(.[]; .tag == $t and (.draft | not))' >/dev/null; then
     die "tag $tag already exists but its inputs differ (input hash ${h:0:16}): another publish raced this one?"
   fi
@@ -460,7 +469,7 @@ cmd_build() {
 }
 
 build_local() {
-  local sha="$1" v="$2" out="$3" T shim
+  local sha="$1" v="$2" out="$3" sets="${4:-}" T shim
   [[ "$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse HEAD)" == "$sha" ]] || die "build --local: this checkout is not ${sha:0:12}"
   [[ -z "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "build --local: this checkout has local changes"
   git -c safe.directory="$ROOT" -C "$ROOT" submodule update -q --init third_party/cutile-rs
@@ -476,12 +485,108 @@ build_local() {
   log "build --local ${sha:0:12} as $v (build id $build_id, CARGO_TARGET_DIR $T)"
   (cd "$ROOT" && CARGO_TARGET_DIR="$T" FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" \
      FV_BUILD_ID="$build_id" FV_REL_RUN_ID="gh-${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)" FV_RELEASE_VERSION="$v" \
-     bash scripts/dev/release-artifacts-pod.sh) || return 1
+     FV_REL_SETS="$sets" bash scripts/dev/release-artifacts-pod.sh) || return 1
   cp "$T/release-artifacts/$sha/"*.tar.gz "$T/release-artifacts/$sha/manifest.json" "$out/"
   local tb want
   while IFS=$'\t' read -r tb want; do
     [[ "$(sha256 "$out/$tb")" == "$want" ]] || { log "$tb: sha256 differs from the manifest"; return 1; }
   done < <(jq -r '.sets[] | [.tarball, .sha256] | @tsv' "$out/manifest.json")
+}
+
+# build-sets <rev> --sets "a b" --version V --out DIR [--test]: some of the
+# sets only (the GitHub-hosted fallback builds them in parallel jobs, one
+# group per job; `assemble` joins them). --test also runs the shipped
+# gpucheck/cudarc unit-test binaries (gate 2) when gpucheck-tests is built.
+cmd_build_sets() {
+  local rev="" sets="" v="" out="" test=0
+  while (( $# )); do
+    case "$1" in
+      --sets) sets="$2"; shift 2 ;;
+      --version) v="$2"; shift 2 ;;
+      --out) out="$2"; shift 2 ;;
+      --test) test=1; shift ;;
+      -*) die "build-sets: unknown flag $1" ;;
+      *) rev="$1"; shift ;;
+    esac
+  done
+  [[ -n "$rev" && -n "$sets" && -n "$out" && "$v" =~ $SEMVER_RE ]] \
+    || die "usage: tools-release.sh build-sets <rev> --sets \"a b\" --version X.Y.Z --out DIR [--test]"
+  local sha set t0=$SECONDS; sha="$(rev_sha "$rev")"
+  for set in $sets; do [[ " $SETS_ALL " == *" $set "* ]] || die "build-sets: unknown set $set"; done
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+  rm -rf "$out" && mkdir -p "$out"
+  build_local "$sha" "$v" "$out" "$sets" || die "build of $sets failed"
+  for set in $sets; do
+    jq -e --arg s "$set" '.sets[$s]' "$out/manifest.json" >/dev/null || die "set $set missing from the build"
+  done
+  if [[ " $sets " == *" gpucheck-tests "* ]]; then
+    # For the release notes; the tests themselves run here (--test) or in
+    # sharded jobs (tools-release.yml unit-tests).
+    tar -xzOf "$out/gpucheck-tests.tar.gz" ./tests.tsv | wc -l >"$out/gate-unit-tests.count"
+  fi
+  if (( test )) && [[ " $sets " == *" gpucheck-tests "* ]]; then
+    local d="$out/gate"; rm -rf "$d" && mkdir -p "$d/gpucheck-tests"
+    tar -xzf "$out/gpucheck-tests.tar.gz" -C "$d/gpucheck-tests"
+    log "gate 2/3: the shipped gpucheck-tests binaries"
+    FV_TESTS_ROOT="$ROOT" bash "$HERE/prebuilt.sh" run-tests "$d/gpucheck-tests" || die "unit tests failed"
+    rm -rf "$d"
+  fi
+  log "built $sets in $(( SECONDS - t0 ))s into $out"
+}
+
+# assemble <rev> --version V --tag T --in DIR [--prerelease] [--out DIR]: join
+# the per-group builds (DIR/*/manifest.json + tarballs) into one release:
+# every set exactly once, the same commit, every sha256; then gate 3 (`-V`)
+# and stage DIR/release like `build`. Gates 1 (check.sh) and 2 (unit tests)
+# ran in their own jobs, which the workflow requires first.
+cmd_assemble() {
+  local rev="" v="" tag="" in="" out="" pre=0
+  while (( $# )); do
+    case "$1" in
+      --version) v="$2"; shift 2 ;;
+      --tag) tag="$2"; shift 2 ;;
+      --in) in="$2"; shift 2 ;;
+      --out) out="$2"; shift 2 ;;
+      --prerelease) pre=1; shift ;;
+      -*) die "assemble: unknown flag $1" ;;
+      *) rev="$1"; shift ;;
+    esac
+  done
+  [[ -n "$rev" && -d "$in" && "$v" =~ $SEMVER_RE && "$tag" == "$PREFIX$v" ]] \
+    || die "usage: tools-release.sh assemble <rev> --version X.Y.Z --tag tools-vX.Y.Z --in DIR [--out DIR]"
+  local sha h ms; sha="$(rev_sha "$rev")"; h="$(input_hash "$sha")"
+  out="${out:-$in/assembled}"; rm -rf "$out" && mkdir -p "$out"
+  mapfile -t ms < <(find "$in" -mindepth 2 -maxdepth 2 -name manifest.json -not -path "$out/*" | LC_ALL=C sort)
+  (( ${#ms[@]} )) || die "assemble: no */manifest.json under $in"
+  jq -e -s --arg sha "$sha" 'all(.[]; .sha == $sha)' "${ms[@]}" >/dev/null || die "assemble: the builds are not all of ${sha:0:12}"
+  # Sets must not repeat across groups; the rest comes from the first build,
+  # with the per-set facts (oxide key, hf-fm version) from whichever has them.
+  jq -e -s '[.[].sets | keys[]] | (length == (unique | length))' "${ms[@]}" >/dev/null || die "assemble: a set was built twice"
+  jq -s '.[0] + {sets: (map(.sets) | add), oxide_key: ([.[].oxide_key | select(. != "" and . != null)][0] // ""),
+         hf_fetch_model_version: ([.[].hf_fetch_model_version | select(. != "" and . != null)][0] // ""),
+         build_seconds: ([.[].build_seconds] | max), groups: length}' "${ms[@]}" >"$out/manifest.json"
+  local m set tb want d f
+  for m in "${ms[@]}"; do d="$(dirname "$m")"; for f in "$d"/*.tar.gz; do cp "$f" "$out/"; done; done
+  for set in $SETS_ALL; do
+    jq -e --arg s "$set" '.sets[$s]' "$out/manifest.json" >/dev/null || die "assemble: set $set missing"
+  done
+  while IFS=$'\t' read -r tb want; do
+    [[ "$(sha256 "$out/$tb")" == "$want" ]] || die "assemble: $tb sha256 differs from its manifest"
+  done < <(jq -r '.sets[] | [.tarball, .sha256] | @tsv' "$out/manifest.json")
+  # Gate 3: every shipped binary reports the version.
+  d="$out/gate"; rm -rf "$d" && mkdir -p "$d"
+  for set in gpucheck serve-cpu serve-fake; do mkdir -p "$d/$set" && tar -xzf "$out/$set.tar.gz" -C "$d/$set"; done
+  local got bin
+  for bin in "$d/serve-cpu/out/fv-serve" "$d/serve-fake/fv-serve" "$d/gpucheck/fv-gpucheck"; do
+    got="$("$bin" -V 2>&1 | head -1)" || true
+    [[ "$got" == *" $v" || "$got" == *" $v "* ]] || die "${bin#"$d/"} -V says '$got', expected $v"
+    log "  ${bin#"$d/"}: $got"
+  done
+  rm -rf "$d"
+  local nt; nt="$(cat "$in"/*/gate-unit-tests.count 2>/dev/null | head -1)"
+  GATE_SUMMARY="scripts/serve/check.sh (lint and test stages) passed in parallel GitHub-hosted jobs in the build-base image; the ${nt:-?} shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v; the builds' fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"
+  stage_release "$sha" "$h" "$v" "$tag" "$pre" "$out"
+  log "assembled $tag from ${#ms[@]} builds into $out/release"
 }
 
 stage_release() {
@@ -774,7 +879,7 @@ case "${1:-}" in
   publish|upload|prune) export FV_TOOLS_WRITE=1 ;;
 esac
 case "${1:-}" in
-  status|list|resolve|fetch|notes|plan|build|publish|upload|prune) auth; load_releases ;;
+  status|list|resolve|fetch|notes|plan|build|assemble|publish|upload|prune) auth; load_releases ;;
 esac
 case "${1:-}" in
   input-hash) shift; input_hash "$@" ;;
@@ -788,6 +893,8 @@ case "${1:-}" in
   plan) shift; cmd_plan "$@"; echo "$PLAN" ;;
   pick-runner) cmd_pick_runner ;;
   build) shift; cmd_build "$@" ;;
+  build-sets) shift; cmd_build_sets "$@" ;;
+  assemble) shift; cmd_assemble "$@" ;;
   upload) shift; cmd_upload "$@" ;;
   publish) shift; cmd_publish "$@" ;;
   prune) shift; cmd_prune "$@" ;;

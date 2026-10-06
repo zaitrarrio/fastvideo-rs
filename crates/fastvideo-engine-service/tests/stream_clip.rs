@@ -525,6 +525,11 @@ async fn reset_cuts_playout_drops_queues_and_restores_defaults() {
         })
     );
     r.until("clip_stopped", |r| r.count("clip_stopped") == 1).await;
+    // The watch state is published at the top of the player's next loop
+    // iteration, after `clip_stopped` went out: wait for it rather than read
+    // a snapshot that may still be the one from before the reset (seen on
+    // a loaded 4-vCPU CI runner).
+    r.until("the reset state", |r| !r.player.state().playing).await;
     let st = r.player.state();
     assert_eq!(
         (st.playing, st.generation_queued, st.playout_queued, st.seed, st.autoplay),
