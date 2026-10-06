@@ -84,6 +84,7 @@ the same thing.
 | `control/src/metrics.ts` | Analytics Engine writes and SQL, the Prometheus parser |
 | `control/src/github.ts`, `ghcr.ts`, `releases.ts` | release dispatch, CI, image tags, drift |
 | `control/migrations/0001_init.sql` | the D1 schema |
+| `control/src/serverless/` | Runpod serverless endpoints ([serverless.md](serverless.md)) |
 | `control/public/` | the dashboard (no framework, SVG charts) |
 
 ## 2. Auth
@@ -297,6 +298,26 @@ with a preset's id and nothing else gets the preset. Recipes outside the
 fv-serve catalog (the LongLive-Plug `*-plug-*` recipes) are refused: a
 worker resolves every pool model against the catalog at start.
 
+**Configuration page** (`#/clusters/new`, `#/cluster/<id>/config`; Clusters →
+New cluster / Configure / Clone; `control/ui/cluster/`). Every spec field as a
+form, or the raw JSON (CodeMirror, the same schema). As you type,
+`POST /api/clusters/validate {spec, id?}` runs the API's own checks (the zod
+schema, then `normalizeSpec`, then the name: fixed for an existing cluster,
+free for a new one) and returns every problem with its field path, shown at
+that field, plus non-blocking warnings. When the spec is valid,
+`POST /api/clusters/<id|new>/price {spec}` prices the draft and adds
+`availability`: per pool, Runpod's stock (`stockStatus`, and
+`maxUnreservedGpuCount` where reported) for each GPU type × data centre it
+may land on, and a warning when pools want more of one GPU in one DC than
+Runpod reports free (the 2026-10-06 start found no RTX PRO 6000 in
+EUR-IS-1 for 2 of 4 pools). Saving shows the diff against the saved spec and
+the plan, and saves with the loaded version (409 on a stale edit). The page
+starts, stops, extends and scales (a pool whose count differs from its
+running workers gets "Scale to N"), follows the running operation's log, and
+shows the effective env of every pod (or what a new worker of each pool
+would get). The cluster page keeps the raw document with history and
+restore.
+
 **Operations** (`POST /api/clusters/<id>/<op>`, one at a time per cluster;
 each op's log is in `/api/ops/<id>`):
 
@@ -420,7 +441,7 @@ from it.
 controller pod (cluster workers and standalone pods) into its own store:
 every minute from the cron, and every 20 s while an `up` waits for the pod.
 New lines only (a per-pod cursor of timestamp and count,
-`pod_log_cursors`), scrubbed, into D1 `log_lines` with target
+`pod_log_cursors`, migration `0007_pod_logs.sql`), scrubbed, into D1 `log_lines` with target
 `runpod.container` / `runpod.system` and into R2 next to the shipped lines.
 So a pod has logs from its first system line (image pull) whatever its
 image ships: an image error, a crash before tracing, an image without log
@@ -459,18 +480,58 @@ That alone has no structure, so **fv-serve also ships its logs**
 - The lines also go to D1 `log_lines`, the searchable 24 h tail, and to
   the cluster's DO for live-tail WebSockets.
 
-Log sources in `/api/logs` and `/api/pods/<id>/logs` (`?source=`): `serve`
-(shipped), `runpod` (captured from boot), `control` (the controller's own
-lines about a pod: boot milestones).
+**Log explorer** (Logs page; `control/ui/logs/`, bundled as `public/logs.js`,
+loaded on that page only). One list over every log fv-control keeps:
 
-**UI** (Logs page):
+| source (`src`) | what | where |
+|---|---|---|
+| `pod` | every D1 log line of a pod: what it ships (target: its tracing target), its Runpod container / system log captured from boot (`runpod.container`, `runpod.system`) and the controller's lines about it (`fv-control.boot`: boot milestones); cluster workers and standalone pods (pool `pod`) | D1 `log_lines`, 24 h |
+| `op` | the operations' step logs; levels inferred from the text | D1 `operations.log` |
+| `audit` | the audit log; failed rows are `error` | D1 `audit` |
+| `runpod` | Runpod's own container/system tail of one pod, read live (a controller pod's tail is also in `pod`, captured from boot) | Runpod, the current tail (seen: ~950 system, ~650 container lines) |
+| `archive` | one pod's R2 NDJSON, older than the D1 tail (they never overlap) | R2, 30 days |
 
-- choose a pod;
-- filter by level and search text (message and fields, so a job id finds
-  its lines);
-- live tail over a WebSocket (`/api/logs/tail?pod=`);
-- download a day's NDJSON from R2 (`/api/logs/download?pod=&day=`);
-- the Runpod tab.
+- **Filters** (all in the URL, so a view is a link): sources, cluster, pool,
+  pod, operation, levels (a set; shift-click a level: it and above), time
+  range (`5m`…`7d` or absolute UTC), and text or a regex (`.*`), case
+  sensitive or not (`Aa`). *filter* mode searches server-side; *find* mode
+  keeps every line and highlights matches (n / N jump).
+- **Order and grouping:** oldest or newest first; sort by level, source or
+  pod; group by pod or level. Pod colors come from the chart palette (both
+  themes); warn and error rows are tinted.
+- **Select:** click (details: every field, links, copy line / JSON / link),
+  shift-click or drag (a range), ctrl-click (add); Ctrl+C copies the
+  selection as text.
+- **Navigate:** a virtualized list that loads older and newer pages as you
+  scroll; a level histogram of the range (click: jump there); jump to a time
+  (`t`); context of N lines around a line (`c`, same pod / operation);
+  pins (this session) and bookmarks (this browser) of lines and views;
+  live tail (`l`) with pause / resume (space) that keeps your scroll
+  position; follow one pod (`f`).
+- **Keys:** j / k (shift: extend), g / G, `/`, n / N (no search: next warn or
+  error), Enter, Esc, c, p, b, f, t, l, space, `?` for the list.
+- **Download:** the filtered result (NDJSON or text, server-side, up to
+  50 000 lines), the loaded lines, the selection, or a pod's raw archive day.
+
+**API** (all GET; same parameters: `src`, `cluster`, `pool`, `pod`, `op`,
+`lv` or `level`, `since` / `until` (unix ms, ISO 8601, or `15m` / `2h` /
+`7d`), `q`, `re=1`, `cs=1`):
+
+| route | |
+|---|---|
+| `/api/logs/query?order=&limit=&cursor=` | one page (≤ 1000) of merged lines `{uid, source, ts, level, cluster_id, cluster, pool, pod_id, pod_name, target, msg, fields}`, ordered by (ts, uid); `next` is the keyset cursor. A regex or case-sensitive search uses the longest literal of the pattern as a LIKE pre-filter (D1 has no REGEXP) and checks in the Worker; it stops at a scan budget and says so (`partial`, `searched_until`) |
+| `/api/logs/live?tail=` | new lines since the state the previous call returned (by ingest id, so a late batch is not missed) |
+| `/api/logs/context?uid=&before=&after=` | N lines around a pod, op or audit line |
+| `/api/logs/facets?buckets=` | a per-level histogram of the range and per-pod counts |
+| `/api/logs/export?format=ndjson\|txt` | the filtered result as a download |
+
+`/api/logs` (the CLI's `fv-control.sh logs`), `/api/logs/tail` (WebSocket)
+and `/api/logs/download` are unchanged, except that `/api/logs` and
+`/api/pods/<id>/logs` take `source=serve|runpod|control` (shipped lines,
+lines captured from boot, the controller's boot milestones) and `after_id`
+to follow forward (oldest first after that id). Migration `0005_log_explorer.sql`
+adds the indexes these use (`log_lines` by cluster and level, `audit` by
+target, `operations` by update time).
 
 ## 6a. Boot timeline
 
@@ -637,6 +698,14 @@ card) is off by default.
 | `POST /api/build-pods/up {region?}`, `POST /api/build-pods {region?, purpose: test, server_ref?}` | a pod (+ its token); a separate test pod |
 | `GET /api/build-pods/<id>`, `GET …/token` (admin), `POST …/start`, `POST …/stop {force?}`, `DELETE …?force=1`, `POST …/runner` | one pod |
 | `POST /api/ci/build-runner {label?, region?, wake?}` | the CI builder choice |
+
+## 8b. Serverless endpoints
+
+fv-control also manages Runpod serverless endpoints of fv-serve (queue or
+load balancer): `src/serverless/`, `/api/serverless/*`, the **Serverless** page,
+`fv-control.sh endpoint …`. Spec, Runpod API quirks, ownership, floor, backstop,
+cost from Runpod billing (owner `serverless:<name>`), logs and the live test:
+[serverless.md](serverless.md).
 
 ## 9. Observability
 

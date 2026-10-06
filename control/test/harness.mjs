@@ -39,6 +39,8 @@ export function startMock() {
     ],
     failCreate: 0,
     // Build pods (src/buildpods.ts): CPU stock per "<dc>|<instanceId>", repo files, GitHub runners and queued jobs.
+    // GPU stock per "<dc>|<gpu type>": [stockStatus, maxUnreservedGpuCount]; unlisted: High, 8.
+    gpuStock: { "EUR-IS-1|NVIDIA RTX PRO 6000 Blackwell Server Edition": ["Low", 2] },
     cpuStock: { "EU-RO-1|cpu3c-32-64": ["High", 0.96], "EUR-IS-1|cpu3c-32-64": ["Low", 0.96], "EUR-IS-1|cpu5c-16-32": ["High", 0.56], "US-CA-2|cpu3c-16-32": ["High", 0.48] },
     noStockDcs: new Set(), // create answers "no longer any instances available" there
     repoFiles: {
@@ -126,6 +128,17 @@ export function startMock() {
           const st = m.cpuStock[`${mm[2]}|${mm[3]}`];
           const fl = mm[3].split("-")[0];
           data[mm[1]] = ["cpu3c", "cpu5c", "cpu3g"].map((id) => ({ id, specifics: { stockStatus: id === fl && st ? st[0] : null, securePrice: id === fl && st ? st[1] : 9 } }));
+        }
+        return json(res, 200, { data });
+      }
+      // Stock per GPU type and data centre (src/cluster/editor.ts): aliased gpuTypes with lowestPrice(dataCenterId).
+      if (q.includes("dataCenterId") && /g\d+: gpuTypes/.test(q)) {
+        const data = {};
+        for (const part of q.split(/(?=g\d+: gpuTypes)/).slice(1)) {
+          const mm = /^(g\d+): gpuTypes\(input: \{id: "([^"]+)"\}\).*dataCenterId: "([^"]+)"/s.exec(part);
+          if (!mm) continue;
+          const st = m.gpuStock[`${mm[3]}|${mm[2]}`] ?? ["High", 8];
+          data[mm[1]] = [{ id: mm[2], securePrice: mm[2].includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: st[0], ...(part.includes("maxUnreservedGpuCount") ? { maxUnreservedGpuCount: st[1] } : {}) } }];
         }
         return json(res, 200, { data });
       }

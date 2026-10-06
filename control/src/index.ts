@@ -43,10 +43,14 @@ import { listTags } from "./ghcr";
 import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
 import { dynamicEnums } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
+import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
+import { availability, checkSpec } from "./cluster/editor";
 import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
+import { serverlessRoutes } from "./serverless/routes";
+import { serverlessTick } from "./serverless/ops";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
@@ -310,10 +314,26 @@ app.delete("/api/clusters/:id", async (c) => {
   await auditC(c, { action: "cluster.delete", target: cl.name, before: cl.spec });
   return c.json({ deleted: cl.id });
 });
-app.post("/api/clusters/:id/price", async (c) => {
-  const cl = await getCluster(c.env, c.req.param("id"));
+// Every problem of a draft spec with its field path (the configuration editor; nothing is saved).
+// `id`: an existing cluster (its name is fixed); none: a new one (its name must be free).
+app.post("/api/clusters/validate", async (c) => {
   const b = await body(c);
-  return c.json(await projectSpend(c.env, cl.spec, { hours: Number(b.hours) > 0 ? Number(b.hours) : cl.spec.cap_s / 3600 }));
+  const cl = b.id ? await getCluster(c.env, String(b.id)) : null;
+  return c.json(await checkSpec(c.env, b.spec, cl ? { id: cl.id, name: cl.name } : undefined));
+});
+// The price check of a cluster's saved spec, or of a draft (`spec`; id `new` for one not defined yet),
+// with Runpod's stock per pool (`availability`, null when Runpod did not answer).
+app.post("/api/clusters/:id/price", async (c) => {
+  const id = c.req.param("id");
+  const b = await body(c);
+  const cl = id === "new" ? null : await getCluster(c.env, id);
+  if (!cl && !b.spec) throw new HttpError(400, "spec: the draft to price");
+  const spec = b.spec ? normalizeSpec(cl ? { ...b.spec, name: cl.name } : b.spec) : cl!.spec;
+  const [price, avail] = await Promise.all([
+    projectSpend(c.env, spec, { hours: Number(b.hours) > 0 ? Number(b.hours) : spec.cap_s / 3600 }),
+    b.availability === false ? Promise.resolve(null) : availability(c.env, spec).catch(() => null),
+  ]);
+  return c.json({ ...price, availability: avail });
 });
 
 const OPS: Record<string, { kind: Parameters<typeof startOp>[2]; params: (b: any) => any }> = {
@@ -659,6 +679,53 @@ app.get("/api/logs", async (c) => {
     }),
   });
 });
+// The log explorer (src/logquery.ts): every source in one line shape, filtered server-side, keyset pages.
+app.get("/api/logs/query", async (c) => c.json(await queryLogs(c.env, parseLogQuery(c.req.query()))));
+// New lines since `tail` (the state the previous call returned; none: start now).
+app.get("/api/logs/live", async (c) => {
+  const r = await tailLogs(c.env, parseLogQuery(c.req.query()), decodeTail(c.req.query("tail")));
+  return c.json({ lines: r.lines, tail: encodeTail(r.state) });
+});
+app.get("/api/logs/context", async (c) => {
+  const uid = c.req.query("uid") || "";
+  if (!/^[a-z]:[A-Za-z0-9_:.-]{1,120}$/.test(uid)) throw new HttpError(400, "uid: a line's uid");
+  return c.json(await lineContext(c.env, uid, Number(c.req.query("before") ?? 10), Number(c.req.query("after") ?? 10)));
+});
+app.get("/api/logs/facets", async (c) => c.json(await logFacets(c.env, parseLogQuery(c.req.query()), Number(c.req.query("buckets") || 60))));
+// The filtered result as NDJSON or text, paged server-side (at most 50 000 lines).
+app.get("/api/logs/export", async (c) => {
+  const q = parseLogQuery({ ...c.req.query(), limit: "1000" });
+  const fmt = c.req.query("format") === "txt" ? "txt" : "ndjson";
+  const max = Math.min(Number(c.req.query("max") || 50_000), 50_000);
+  const env = c.env;
+  const enc = new TextEncoder();
+  const line = (l: XLine) =>
+    fmt === "txt"
+      ? `${new Date(l.ts).toISOString()} ${l.level.toUpperCase().padEnd(5)} [${l.source}${l.pod_id ? ` ${l.pod_id}` : ""}${l.pool ? ` ${l.pool}` : ""}] ${l.target ? `${l.target}: ` : ""}${l.msg}${l.fields ? ` ${JSON.stringify(l.fields)}` : ""}\n`
+      : JSON.stringify(l) + "\n";
+  const stream = new ReadableStream({
+    async start(ctl) {
+      let n = 0;
+      let cursor = q.cursor;
+      try {
+        while (n < max) {
+          const r = await queryLogs(env, { ...q, cursor, limit: Math.min(1000, max - n) });
+          for (const l of r.lines) ctl.enqueue(enc.encode(line(l)));
+          n += r.lines.length;
+          if (!r.next) break;
+          cursor = decodeCursor(r.next);
+        }
+      } catch (e) {
+        ctl.enqueue(enc.encode(fmt === "txt" ? `# export stopped: ${(e as Error).message}\n` : JSON.stringify({ error: (e as Error).message }) + "\n"));
+      }
+      ctl.close();
+    },
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
+  return new Response(stream, {
+    headers: { "content-type": fmt === "txt" ? "text/plain; charset=utf-8" : "application/x-ndjson", "content-disposition": `attachment; filename="fv-logs-${stamp}.${fmt === "txt" ? "log" : "ndjson"}"`, "cache-control": "no-store" },
+  });
+});
 app.get("/api/logs/download", async (c) => {
   const pod = c.req.query("pod") || "";
   const row = await c.env.DB.prepare("SELECT cluster_id FROM cluster_pods WHERE pod_id = ?").bind(pod).first<{ cluster_id: string }>();
@@ -768,6 +835,9 @@ app.post("/api/docs/:kind/:id/restore", async (c) => {
   return c.json(await restoreDoc(c.env, kind, c.req.param("id"), Number(b.audit_id), b.which === "before" ? "before" : "after", { version: b.version, actor: actor(c), ip: clientIp(c) }));
 });
 
+// ---------------- Runpod serverless endpoints (src/serverless/, docs/control/serverless.md)
+app.route("/api/serverless", serverlessRoutes);
+
 app.all("/api/*", () => {
   throw new HttpError(404, "no such route");
 });
@@ -785,6 +855,7 @@ export default {
         console.error("collector failed", scrub(env, (e as Error).message));
       }),
     );
+    ctx.waitUntil(serverlessTick(env).catch((e) => console.error("serverless tick failed", scrub(env, (e as Error).message))));
   },
 } satisfies ExportedHandler<Env>;
 

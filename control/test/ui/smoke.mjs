@@ -88,6 +88,7 @@ try {
   await page.screenshot({ path: `${out}/04-cluster.png`, fullPage: true });
   // ---- the smart editor: edit → invalid → error shown → fix → diff → plan → save → history → restore.
   await page.goto(`${B}/#/cluster/${c.cluster.id}`);
+  await page.click("details.rawspec summary");
   await page.waitForSelector(".fv-panel[data-kind=cluster-spec] .fv-form");
   const panel = ".fv-panel[data-kind=cluster-spec]";
   assert.equal(await page.textContent(`${panel} .badge`), "v0");
@@ -186,14 +187,17 @@ try {
   await page.waitForSelector("select[aria-label=Template] option[value=ltx]", { state: "attached" });
   const tpls = await page.$$eval("select[aria-label=Template] option", (els) => els.map((e) => e.value));
   assert.deepEqual(tpls.sort(), ["h3", "longlive", "ltx", "standard", "tiny-cpu", "wan"]);
-  await page.waitForSelector(".cm-editor");
-  const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString());
+  // New cluster from a template on the configuration page; a pool preset added (its licence confirmed).
   await page.selectOption("select[aria-label=Template]", "ltx");
-  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"ltx-ref2v"'));
+  await page.click("button:text('New cluster')");
+  await page.waitForSelector(".cf-pool");
+  assert.deepEqual(await page.$$eval(".cf-pool-head b", (els) => els.map((e) => e.textContent)), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+  // (the page's dialog handler accepts the licence confirm)
   await page.selectOption("select[aria-label='Pool preset']", "longlive");
-  assert.match(await page.textContent(".presets"), /NON-COMMERCIAL|non-commercial/);
-  await page.click(".presets button:text('Add pool')");
-  await page.waitForFunction(() => window.FVEditor.viewOf(document.querySelector(".cm-editor")).state.doc.toString().includes('"id": "longlive"'));
+  await page.waitForSelector(".cf-pool-head b:text('longlive')");
+  await page.click(".cf-main .tabs button:text('JSON')");
+  await page.waitForSelector(".cf-json .cm-editor");
+  const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cf-json .cm-editor")).state.doc.toString());
   assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx,ltx-pro,ltx-a2v,ltx-ref2v,longlive");
   await page.screenshot({ path: `${out}/13-clusters-presets.png`, fullPage: true });
   // Cluster: roll picker (cancelled), add a pool, keys, restart picker.

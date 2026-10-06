@@ -14,6 +14,7 @@ import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { _app } from "../../src/index";
 import { searchLogs } from "../../src/logs";
+import { parseLogQuery, queryLogs } from "../../src/logquery";
 import { captureRunpodLogs, checkPod, diagnose, getDiagnosis, lineLevel, newSince, parseRunpodLine, PULL_DEADLINE_MS, saveDiagnosis, STUCK_MS } from "../../src/podlogs";
 import { standaloneSpec, STANDALONE_POOL } from "../../src/standalone";
 import { d1 } from "./d1shim";
@@ -426,5 +427,39 @@ describe("no secret in a diagnosis", () => {
     const d = await checkPod(env, "pods", "c_1", Date.now());
     expect(JSON.stringify(d)).not.toContain("rpa_SECRETKEY123");
     expect(JSON.stringify(await getDiagnosis(env, "pods"))).not.toContain("rpa_SECRETKEY123");
+  });
+});
+
+describe("the log explorer (logquery.ts) sees captured Runpod lines and boot milestones", () => {
+  it("as pod lines of the standalone pod, its pool and name resolved; /api/logs source + after_id and /api/logs/query agree", async () => {
+    const { env } = mkEnv({ RUNPOD_HAPI: "https://hapi.test" } as Partial<Env>);
+    const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
+    const call = (path: string) => _app.fetch(new Request(`https://ctl.test${path}`, { headers: admin }), env, { waitUntil() {}, passThroughOnException() {} } as any);
+    await _app.fetch(new Request("https://ctl.test/api/standalone", { method: "POST", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ name: "solo-x", preset: "h3-turbo", start: false }) }), env, {} as any);
+    const cl = await getCluster(env, "solo-x");
+    const t0 = Date.now() - 60_000;
+    await env.DB.prepare("INSERT INTO cluster_pods (pod_id, cluster_id, role, pool, slot, image, created_at, status) VALUES ('podq00000000ab', ?, 'worker', 'pod', 'workers', 'img', ?, 'creating')").bind(cl.id, t0).run();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    globalThis.fetch = vi.fn(async () => json({ container: [`${iso(t0 + 20_000)} [fv-boot] start`, `${iso(t0 + 21_000)} ${CRASH}`], system: [`${iso(t0 + 1000)} create container img`, `${iso(t0 + 2000)} img Pulling from x`, `${iso(t0 + 15_000)} Digest: sha256:abc`] })) as any;
+    expect((await captureRunpodLogs(env, "podq00000000ab", cl.id))?.added).toBe(5);
+    const q = await queryLogs(env, parseLogQuery({ src: "pod", pod: "podq00000000ab", since: "1h" }));
+    const rows = q.lines.map((l) => [l.source, l.target, l.pool, l.cluster]);
+    expect(rows).toContainEqual(["pod", "runpod.system", "pod", "solo-x"]);
+    expect(rows).toContainEqual(["pod", "runpod.container", "pod", "solo-x"]);
+    expect(rows).toContainEqual(["pod", "fv-control.boot", "pod", "solo-x"]);
+    expect(q.lines.find((l) => l.target === "fv-control.boot" && /pull_end/.test(l.msg))?.msg).toBe("boot: pull_end at +15.0 s (pull 13 s)");
+    expect(q.lines.find((l) => l.msg === CRASH)?.level).toBe("error");
+    // By pool (the explorer resolves it through cluster_pods) and cluster.
+    expect((await queryLogs(env, parseLogQuery({ src: "pod", pool: "pod", cluster: cl.id, since: "1h" }))).lines.length).toBe(q.lines.length);
+    // The routes: the explorer's query, and /api/logs with source / after_id.
+    const qr: any = await (await call(`/api/logs/query?src=pod&pod=podq00000000ab&since=1h`)).json();
+    expect(qr.lines.length).toBe(q.lines.length);
+    const rp: any = await (await call(`/api/logs?pod=podq00000000ab&source=runpod&level=trace`)).json();
+    expect(rp.lines.map((l: any) => l.target)).toEqual(["runpod.system", "runpod.system", "runpod.system", "runpod.container", "runpod.container"]);
+    const ctlLines: any = await (await call(`/api/logs?pod=podq00000000ab&source=control`)).json();
+    expect(ctlLines.lines.every((l: any) => l.target === "fv-control.boot")).toBe(true);
+    const after: any = await (await call(`/api/logs?pod=podq00000000ab&level=trace&after_id=${rp.lines[2].id}&limit=1`)).json();
+    expect(after.lines).toHaveLength(1);
+    expect(after.lines[0].id).toBeGreaterThan(rp.lines[2].id);
   });
 });
