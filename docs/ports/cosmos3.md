@@ -115,11 +115,11 @@ NVFP4; ours FP8, so a lower precision gain is expected).
 
 ## Weights
 
-`weights-manifest.tsv` row `cosmos3-super` (proposed): `transformer/`
+On the EU volume `jg48s6o1w0` since 2026-10-06 (PR #35): `weights-manifest.tsv`
+row `cosmos3-super` @ `f543c56225b2e04d0ad141e29655be3a45d9c455`
+(`weights-revisions.tsv`, hashes in `weights-sha256.tsv`): `transformer/`
 128.04 GB, `vae/` 1.41 GB, `text_tokenizer/` + `scheduler/` ≈ 0.02 GB =
-**129.47 GB**. Fetch (owner approval first): `scripts/gpu/fetch-hub-tree.sh
-cosmos3-super f543c56225b2e04d0ad141e29655be3a45d9c455`; verify cell
-`cosmos3-super`.
+**129.47 GB**. Verify cell `cosmos3-super`.
 
 ## GPU benchmark arm (not run)
 

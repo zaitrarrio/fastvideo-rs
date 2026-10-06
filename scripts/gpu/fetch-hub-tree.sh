@@ -21,6 +21,13 @@
 #   artifacts/runpod/fetch-<dest>-<volume>/ ('/' in <dest> becomes '-').
 #   FV_POD_PREFIX (default fv-p0-fetch) starts the pod name; FV_FETCH_VCPU
 #   (default 8) sizes the CPU pod when the datacentre is short of stock.
+#   FETCH_MIN_FREE_GB (default 50) is passed to the pod: the fetch refuses to
+#   start unless the volume keeps that much free after the tree.
+#   FETCH_WORKERS (default 4) is snapshot_download's max_workers; use 1 on a
+#   2 vCPU / 4 GB pod (four parallel 5 GB shards were OOM-killed there). If
+#   fetch.py dies without writing DONE, the pod writes DONE=1 itself.
+#   FETCH_ADD_INTO=1 adds the row's files that an existing weights/<dest>
+#   lacks (temp folder, verified, then renamed in; nothing existing touched).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -50,21 +57,21 @@ bal="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: app
   -d '{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty')"
 awk -v b="$bal" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+0)}' || { echo "balance \$$bal below \$$MIN_BALANCE" >&2; exit 1; }
 log "balance \$$bal; $repo@$rev -> $VOL_NAME:weights/$dest"
-vol="$(rest GET /networkvolumes | jq -r --arg n "$VOL_NAME" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' | head -1)"
+vol="$(rest GET /networkvolumes | jq -r --arg n "$VOL_NAME" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId) \(.size)"' | head -1)"
 [[ -n "$vol" ]] || { echo "no volume named $VOL_NAME" >&2; exit 1; }
-vol_id="${vol% *}"; dc="${vol#* }"
+read -r vol_id dc vol_gb <<<"$vol"
 py_b64="$(base64 -w0 "$HERE/fetch-hub-tree.py")"
 exp_b64=""; [[ -n "$expect" ]] && exp_b64="$(base64 -w0 "$expect")"
-start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /srv/fetch.py && pip install -q --no-cache-dir "huggingface_hub>=0.34" hf_xet >>/srv/log.txt 2>&1 && python /srv/fetch.py; sleep infinity'
+start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /srv/fetch.py && pip install -q --no-cache-dir "huggingface_hub>=0.34" hf_xet >>/srv/log.txt 2>&1 && python /srv/fetch.py; rc=$?; [ -f /srv/DONE ] || { echo "fetch.py exited $rc without DONE (OOM-killed?)" >>/srv/log.txt; echo 1 >/srv/DONE; }; sleep infinity'
 payload="$(jq -n --arg name "${FV_POD_PREFIX:-fv-p0-fetch}-${dest##*/}-$(date -u +%m%d%H%M)" --arg vol "$vol_id" --arg dc "$dc" \
   --arg start "$start" --arg py "$py_b64" --arg repo "$repo" --arg rev "$rev" --arg dest "$dest" \
-  --arg globs "$globs" --arg vcpu "${FV_FETCH_VCPU:-8}" --arg exp "$exp_b64" --arg hf "${HF_TOKEN:-}" '{
+  --arg globs "$globs" --arg minfree "${FETCH_MIN_FREE_GB:-50}" --arg volgb "$vol_gb" --arg workers "${FETCH_WORKERS:-4}" --arg addinto "${FETCH_ADD_INTO:-0}" --arg vcpu "${FV_FETCH_VCPU:-8}" --arg exp "$exp_b64" --arg hf "${HF_TOKEN:-}" '{
     name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
     cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
     containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace",
     dataCenterIds: [$dc], ports: ["8000/http"],
     dockerStartCmd: ["/bin/bash","-lc",$start],
-    env: ({FETCH_PY: $py, FETCH_REPO: $repo, FETCH_REVISION: $rev, FETCH_DEST: $dest, FETCH_GLOBS: $globs}
+    env: ({FETCH_PY: $py, FETCH_REPO: $repo, FETCH_REVISION: $rev, FETCH_DEST: $dest, FETCH_GLOBS: $globs, FETCH_MIN_FREE_GB: $minfree, FETCH_VOLUME_GB: $volgb, FETCH_WORKERS: $workers, FETCH_ADD_INTO: $addinto}
       + (if $exp != "" then {EXPECT_SHA256: $exp} else {} end)
       + (if $hf != "" then {HF_TOKEN: $hf} else {} end))
   }')"
@@ -87,8 +94,11 @@ cleanup() {
 trap cleanup EXIT
 url="https://$id-8000.proxy.runpod.net"
 status=""
+t_start=$SECONDS
 while :; do
   sleep 30
+  # The backstop deletes the pod at CAP_S; stop polling a pod that is gone.
+  (( SECONDS - t_start < CAP_S + 60 )) || { log "cap ${CAP_S}s reached without DONE"; break; }
   status="$(curl -sS --max-time 20 --fail "$url/DONE" 2>/dev/null || true)"
   curl -sS --max-time 20 --fail "$url/log.txt" -o "$OUT/log.txt" 2>/dev/null || true
   [[ -s "$OUT/log.txt" ]] && tail -n 1 "$OUT/log.txt" >&2

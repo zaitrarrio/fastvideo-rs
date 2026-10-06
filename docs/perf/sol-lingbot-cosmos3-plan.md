@@ -1,33 +1,20 @@
-# LingBot-Video MoE and Cosmos3-Super vs sol-engine — GPU plan (not run)
+# LingBot-Video MoE and Cosmos3-Super vs sol-engine — GPU plan (not run yet)
 
 Status 2026-10-06: both ports are code-complete and CPU-tested
-(docs/ports/lingbot.md, docs/ports/cosmos3.md); **nothing has run on a GPU**
-and **no weights are on a volume**. This page is the download list, the
-benchmark arms and the cost estimate the owner approves before anything is
-spent.
+(docs/ports/lingbot.md, docs/ports/cosmos3.md); **nothing has run on a GPU**.
+Both weight trees are on the EU volume (PR #35). This page lists them, the
+benchmark arms and the cost estimate.
 
-## 1. Downloads (owner approval needed; EU volume `jg48s6o1w0`, ~557 GB free)
+## 1. Weights (on the EU volume `jg48s6o1w0`, verified 2026-10-06, PR #35)
 
 | dest (`weights-manifest.tsv`) | Hub repo @ revision | licence | size | contents |
 |---|---|---|---:|---|
 | `lingbot-video-moe-30b-a3b` | `robbyant/lingbot-video-moe-30b-a3b` @ `f2e538f64afe00cc4ae674db2aeb52e2945edfd5` | Apache-2.0 | 129.95 GB | `transformer/` 60.27, `refiner/` 60.27, `text_encoder/` 8.89, `vae/` 0.51, `processor/`, `scheduler/`, `model_index.json` |
 | `cosmos3-super` | `nvidia/Cosmos3-Super` @ `f543c56225b2e04d0ad141e29655be3a45d9c455` | OpenMDW 1.1 (not gated) | 129.47 GB | `transformer/` 128.04 (27 shards), `vae/` 1.41, `text_tokenizer/`, `scheduler/`, `model_index.json` |
-| **total** | | | **259.4 GB** | leaves ≈ 298 GB free |
 
-Not needed for T2V: Cosmos3 `vision_encoder/` (1.19 GB), `sound_tokenizer/`
-(1.99 GB), `assets/`. Neither VAE is reusable from the volume (LingBot's is
-the Wan 2.1 VAE but stored as its own file; Cosmos3's bf16 Wan 2.2 VAE differs
-byte-wise from the TI2V-5B f32 file).
-
-Fetch, one tree at a time (CPU pod, add-only, LFS SHA-256 checked, backstop):
-
-```bash
-scripts/gpu/fetch-hub-tree.sh lingbot-video-moe-30b-a3b f2e538f64afe00cc4ae674db2aeb52e2945edfd5
-scripts/gpu/fetch-hub-tree.sh cosmos3-super f543c56225b2e04d0ad141e29655be3a45d9c455
-```
-
-Then record the revisions in `weights-revisions.tsv`, the hashes in
-`weights-sha256.tsv`, and move the manifest rows out of the "PROPOSED" block.
+Revisions in `weights-revisions.tsv`, per-file hashes in `weights-sha256.tsv`;
+verify cells `lingbot-moe` and `cosmos3-super` (`scripts/gpu/verify-weights.sh`).
+Not fetched (not needed for T2V): Cosmos3 `vision_encoder/`, `sound_tokenizer/`, `assets/`.
 
 ## 2. Arms
 

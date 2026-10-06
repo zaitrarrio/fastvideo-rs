@@ -146,12 +146,11 @@ median, not warm). This port runs **one GPU**, so the comparison is:
 
 ## Weights
 
-`weights-manifest.tsv` row `lingbot-video-moe-30b-a3b` (proposed, not on a
-volume): `transformer/` 60.27 GB, `refiner/` 60.27 GB, `text_encoder/`
-8.89 GB, `vae/` 0.51 GB, `processor/` + `scheduler/` ≈ 0.01 GB = **129.95 GB**.
-Fetch (owner approval first): `scripts/gpu/fetch-hub-tree.sh
-lingbot-video-moe-30b-a3b f2e538f64afe00cc4ae674db2aeb52e2945edfd5`; verify
-cell `lingbot-moe`.
+On the EU volume `jg48s6o1w0` since 2026-10-06 (PR #35): `weights-manifest.tsv`
+row `lingbot-video-moe-30b-a3b` @ `f2e538f64afe00cc4ae674db2aeb52e2945edfd5`
+(`weights-revisions.tsv`, hashes in `weights-sha256.tsv`): `transformer/`
+60.27 GB, `refiner/` 60.27 GB, `text_encoder/` 8.89 GB, `vae/` 0.51 GB,
+`processor/` + `scheduler/` ≈ 0.01 GB = **129.95 GB**. Verify cell `lingbot-moe`.
 
 ## GPU benchmark arm (not run)
 
@@ -174,4 +173,4 @@ docs/perf/sol-lingbot-cosmos3-plan.md.
 | refiner (upsample, chunked Wan 2.1 encode, tail schedule) | landed |
 | EasyCache / PISA arm | landed |
 | device router kernel / MoE combine kernel | landed, type-checked; GPU check pending |
-| GPU run | **not run** (no weights on the volume) |
+| GPU run | **not run** (weights on the EU volume since 2026-10-06) |
