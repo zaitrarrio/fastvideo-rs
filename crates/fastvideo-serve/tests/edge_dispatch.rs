@@ -782,8 +782,13 @@ async fn a_partitioned_worker_is_fenced_out() {
     let sh = Shared::new(&d.token);
     let pool = pool_id("fence");
     let http = Http::new();
-    let a = worker(&sh, "fa", &pool, Some(&d.base), 150, 1).await;
-    let b = worker(&sh, "fb", &pool, Some(&d.base), 150, 1).await;
+    // The job must still be running on the holder when the dispatcher gives
+    // up on it (the grace, 1.5 s here), or there is nothing to fence: its
+    // run time is set here, 4 steps x 1 s, not left to the MP4 encode after
+    // the steps (seconds in a debug build with ffmpeg on PATH, nothing
+    // without it: 4 x 150 ms finished inside the grace).
+    let a = worker(&sh, "fa", &pool, Some(&d.base), 1_000, 1).await;
+    let b = worker(&sh, "fb", &pool, Some(&d.base), 1_000, 1).await;
     connected(&d, &http, &pool, 2).await;
     let gw = gateway(&sh, &pool, DispatchMode::DurableObject, Some(&d.base), &[]).await;
     let g = gw.base.clone();
