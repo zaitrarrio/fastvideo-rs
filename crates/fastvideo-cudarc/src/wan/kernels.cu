@@ -1757,7 +1757,9 @@ extern "C" __global__ void amax_abs(const float* a, float* out, long n) {
 }
 
 // (sum |a - b|, sum |b|) in double: the TeaCache relative-L1 numerator and
-// denominator, so only two scalars leave the device. `out[2]` must be zeroed.
+// denominator. Each block writes its own pair to out[2 * blockIdx.x ..] (no
+// atomics: the caller adds the pairs in block order, so the sums, and the
+// cache decisions made from them, are the same bits in every run).
 extern "C" __global__ void abs_diff_sum(const float* a, const float* b, double* out, long n) {
     extern __shared__ double ads_sm[];
     int tid = threadIdx.x;
@@ -1778,8 +1780,8 @@ extern "C" __global__ void abs_diff_sum(const float* a, const float* b, double* 
         __syncthreads();
     }
     if (tid == 0) {
-        atomicAdd(&out[0], ads_sm[0]);
-        atomicAdd(&out[1], ads_sm[1]);
+        out[2 * blockIdx.x] = ads_sm[0];
+        out[2 * blockIdx.x + 1] = ads_sm[1];
     }
 }
 
@@ -5054,8 +5056,10 @@ extern "C" __global__ void nvfp4_alpha(const float* a_amax, const float* w_amax,
 // ==== region: ltx2 (FBCache distance, midpoint prune gather/scatter) ====
 // Appended as one block so other sections can change without conflicts.
 
-// out[0] += sum |a - b|, out[1] += sum |b| over n values. out is zeroed by the
-// caller; 256 threads per block, grid-stride, one double atomic per block.
+// sum |a - b| and sum |b| over n values, one pair per block at
+// out[2 * blockIdx.x ..] (no atomics; the caller adds the pairs in block
+// order, so the FBCache distance is the same bits in every run); 256 threads
+// per block, grid-stride.
 extern "C" __global__ void ltx_abs_diff_sums(
     const float* a, const float* b, double* out, long n
 ) {
@@ -5079,8 +5083,8 @@ extern "C" __global__ void ltx_abs_diff_sums(
         __syncthreads();
     }
     if (threadIdx.x == 0) {
-        atomicAdd(&out[0], s_num[0]);
-        atomicAdd(&out[1], s_den[0]);
+        out[2 * blockIdx.x] = s_num[0];
+        out[2 * blockIdx.x + 1] = s_den[0];
     }
 }
 

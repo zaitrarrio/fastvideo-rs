@@ -44,28 +44,43 @@ __device__ __forceinline__ unsigned int f8_pack4(float x0, float x1, float x2, f
 }
 #endif
 
-// Column sums of a BHSD [bh, rows, 128] tensor: grid (ceil(rows / rpb), bh),
-// 128 threads (one per dim). `sum` is [bh, 128] and must be zeroed.
+// Column sums of a BHSD [bh, rows, 128] tensor, in two passes so the result
+// is the same bits in every run (no atomics): grid (ceil(rows / rpb), bh),
+// 128 threads (one per dim), each block writes its partial to
+// part[(blockIdx.x * bh + head) * 128 + d]; attn_fp8_colsum_reduce then adds
+// the partials of each (head, dim) in block order into sum [bh, 128].
 extern "C" __global__ void attn_fp8_colsum_bf16(
-    const fv_u16* __restrict__ x, float* __restrict__ sum, int rows, int rpb
+    const fv_u16* __restrict__ x, float* __restrict__ part, int rows, int rpb
 ) {
     const long bh = blockIdx.y;
     const int d = threadIdx.x;
     const int r0 = blockIdx.x * rpb, r1 = min(rows, r0 + rpb);
     float acc = 0.f;
     for (int r = r0; r < r1; r++) acc += f8_bf16_to_f32(x[(bh * rows + r) * F8_D + d]);
-    atomicAdd(sum + bh * F8_D + d, acc);
+    part[((long)blockIdx.x * gridDim.y + bh) * F8_D + d] = acc;
 }
 
 extern "C" __global__ void attn_fp8_colsum_f32(
-    const float* __restrict__ x, float* __restrict__ sum, int rows, int rpb
+    const float* __restrict__ x, float* __restrict__ part, int rows, int rpb
 ) {
     const long bh = blockIdx.y;
     const int d = threadIdx.x;
     const int r0 = blockIdx.x * rpb, r1 = min(rows, r0 + rpb);
     float acc = 0.f;
     for (int r = r0; r < r1; r++) acc += x[(bh * rows + r) * F8_D + d];
-    atomicAdd(sum + bh * F8_D + d, acc);
+    part[((long)blockIdx.x * gridDim.y + bh) * F8_D + d] = acc;
+}
+
+// sum[i] = sum over b in [0, nblk) of part[b * n + i], in that order; one
+// thread per (head, dim), n = bh * 128.
+extern "C" __global__ void attn_fp8_colsum_reduce(
+    const float* __restrict__ part, float* __restrict__ sum, int nblk, int n
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float acc = 0.f;
+    for (int b = 0; b < nblk; b++) acc += part[(long)b * n + i];
+    sum[i] = acc;
 }
 
 // Shared body of the two quantizers: block = 4 warps = 64 rows; warp w owns

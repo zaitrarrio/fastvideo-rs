@@ -788,9 +788,11 @@ pub fn abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f
     check("abs_diff_sum", a.len() == b.len())?;
     let dev = ctx()?;
     let n = a.len() as i64;
-    let mut out = dev.stream.alloc_zeros::<f64>(2).map_err(err)?;
     let threads = 256u32;
     let blocks = a.len().div_ceil(threads as usize).clamp(1, 1024) as u32;
+    // One (diff, prev) pair per block, added here in block order: no
+    // atomics, so the TeaCache distance is the same bits in every run.
+    let mut out = dev.stream.alloc_zeros::<f64>(2 * blocks as usize).map_err(err)?;
     let cfg = LaunchConfig {
         grid_dim: (blocks, 1, 1),
         block_dim: (threads, 1, 1),
@@ -798,8 +800,16 @@ pub fn abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f
     };
     launch!(dev.stream, &dev.kernels.abs_diff_sum, cfg; a, b, &mut out, &n).map_err(err)?;
     let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
-    super::stats::record_d2h(2);
-    Ok((host[0], host[1]))
+    super::stats::record_d2h(2 * blocks as usize);
+    Ok(sum_pairs_in_order(&host))
+}
+
+/// `(Σ pair.0, Σ pair.1)` over `[x0, y0, x1, y1, …]`, left to right: the
+/// fixed-order second pass of the per-block reductions above.
+pub fn sum_pairs_in_order(pairs: &[f64]) -> (f64, f64) {
+    pairs
+        .chunks_exact(2)
+        .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]))
 }
 
 // ---- Video Sparse Attention -------------------------------------------------
@@ -4608,21 +4618,23 @@ mod moe {
 pub fn ltx_abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f64, f64)> {
     check("ltx_abs_diff_sums", a.len() == b.len())?;
     let dev = ctx()?;
-    let mut out = dev.stream.alloc_zeros::<f64>(2).map_err(err)?;
-    if !a.is_empty() {
-        let n = a.len() as i64;
-        let blocks = a.len().div_ceil(256).clamp(1, 4096) as u32;
-        let cfg = LaunchConfig {
-            grid_dim: (blocks, 1, 1),
-            block_dim: (256, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        launch!(dev.stream, &dev.kernels.ltx_abs_diff_sums, cfg; a, b, &mut out, &n)
-            .map_err(err)?;
+    if a.is_empty() {
+        return Ok((0.0, 0.0));
     }
+    let n = a.len() as i64;
+    let blocks = a.len().div_ceil(256).clamp(1, 4096) as u32;
+    // One pair per block, added on the host in block order (no atomics).
+    let mut out = dev.stream.alloc_zeros::<f64>(2 * blocks as usize).map_err(err)?;
+    let cfg = LaunchConfig {
+        grid_dim: (blocks, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.ltx_abs_diff_sums, cfg; a, b, &mut out, &n)
+        .map_err(err)?;
     let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
-    super::stats::record_d2h(4);
-    Ok((host[0], host[1]))
+    super::stats::record_d2h(4 * blocks as usize);
+    Ok(sum_pairs_in_order(&host))
 }
 
 /// Per-row `Σ x²` of a `[rows, d]` buffer.
