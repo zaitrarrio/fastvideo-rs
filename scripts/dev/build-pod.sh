@@ -63,7 +63,8 @@
 # FV_BUILD_POD_ENV (JSON object merged into the pod env, e.g. a throwaway test
 # pod's {"FV_BUILD_ROOT": "/workspace/fv-build-test"}); FV_BUILD_DC / FV_BUILD_VOLUME_GB
 # for volume-create (default EU-RO-1 / 200); FV_BUILD_EVICT_HOURS (6) and
-# FV_BUILD_EVICT_FREE_GB (40), sent to the pod at creation.
+# FV_BUILD_EVICT_FREE_GB (default: a fifth of the container disk, at most 40), sent to
+# the pod at creation; FV_BUILD_CONTAINER_GB_FALLBACK (80) for the fallback vCPU size.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -84,13 +85,17 @@ VCPUS_FALLBACK="${FV_BUILD_VCPUS_FALLBACK-16}"   # "" disables
 BASE_IMAGE_TAG="bb-b49b814e45f9f7d2"
 IMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"
 DISK_GB="${FV_BUILD_CONTAINER_GB:-200}"
+# Runpod caps the container disk by size: 16-vCPU cpu3c/cpu3g pods take at
+# most 80 GB, cpu5c/cpu5g 120 GB (2026-10-06), so the fallback asks for 80.
+DISK_GB_FALLBACK="${FV_BUILD_CONTAINER_GB_FALLBACK:-80}"
 MAX_DPH="${FV_BUILD_MAX_DPH:-1.5}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
 MAX_HOURS="${FV_BUILD_MAX_HOURS:-8}"
 MAX_GRACE_MIN="${FV_BUILD_MAX_GRACE_MIN:-30}"
 EVICT_HOURS="${FV_BUILD_EVICT_HOURS:-6}"
-EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-40}"
+# Default: a fifth of the container disk, at most 40 GB (the server caps it the same way).
+EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-}"
 VOLUME_USD_GB_MONTH="0.07"
 LEDGER="$STATE/ledger.tsv"
 TOKEN_FILE="$STATE/token"
@@ -206,13 +211,14 @@ EOF
 
 # $1 volume id, $2 datacenter, $3 sha256 of the token -> PodCreateInput JSON
 payload() {
-  local vol="$1" dc="$2" hash="$3" flavors_json
+  local vol="$1" dc="$2" hash="$3" flavors_json evf="$EVICT_FREE_GB"
   flavors_json="$(jq -nc --arg f "$FLAVORS" '$f | split(" ") | map(select(. != ""))')"
+  [[ -n "$evf" ]] || evf=$(( DISK_GB / 5 < 40 ? DISK_GB / 5 : 40 ))
   jq -n --arg name "$POD_NAME" --arg image "$IMAGE" --arg vol "$vol" --arg dc "$dc" \
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
     --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" \
-    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" --argjson extra "${FV_BUILD_POD_ENV:-{\}}" '{
+    --arg evh "$EVICT_HOURS" --arg evf "$evf" --argjson extra "${FV_BUILD_POD_ENV:-{\}}" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
@@ -231,12 +237,18 @@ create_pod() {
   # The volume pins the datacenter, and CPU stock there comes and goes (no
   # 32-vCPU cpu5c/cpu3c in EU-RO-1 for 15+ min on 2026-09-28 while 16 had
   # stock): each round tries VCPUS, then the fallback, for a while.
-  local t0=$SECONDS
+  local t0=$SECONDS d cap
   while [[ -z "$created" ]]; do
     for v in $VCPUS $VCPUS_FALLBACK; do
-      if resp="$(VCPUS=$v payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)"; then
-        created=$v
-        break
+      d=$DISK_GB
+      [[ "$v" == "$VCPUS" ]] || d=$(( DISK_GB_FALLBACK < DISK_GB ? DISK_GB_FALLBACK : DISK_GB ))
+      resp="$(VCPUS=$v DISK_GB=$d payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)" && { created=$v; break; }
+      # Too much disk for this size: retry once with the smallest cap Runpod names.
+      cap="$(grep -o 'Container Disk must be less than or equal to [0-9]*' <<<"$resp" | grep -o '[0-9]*$' | sort -n | head -1)"
+      if [[ -n "$cap" ]] && (( cap < d )); then
+        log "${v} vCPU allows at most ${cap} GB container disk; asking for that"
+        d=$cap
+        resp="$(VCPUS=$v DISK_GB=$d payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)" && { created=$v; break; }
       fi
       grep -q "no longer any instances available" <<<"$resp" || die "pod create failed: $(head -c 400 <<<"$resp")"
     done
@@ -246,7 +258,7 @@ create_pod() {
     log "no stock in $dc; retrying in 30s"
     sleep 30
   done
-  [[ "$created" == "$VCPUS" ]] || log "no ${VCPUS}-vCPU stock; took ${created} vCPU"
+  [[ "$created" == "$VCPUS" ]] || log "no ${VCPUS}-vCPU stock; took ${created} vCPU with ${d} GB container disk"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "pod create returned no id: $(head -c 400 <<<"$resp")"
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"

@@ -665,6 +665,43 @@ class ImageSetupTest(unittest.TestCase):
         with mock.patch.object(bps.shutil, "which", return_value=None):
             self.assertNotIn("RUSTC_WRAPPER", bps.job_env("a"))
 
+    def test_each_agent_gets_its_own_sccache_daemon_with_basedirs(self):
+        which = lambda n, path=None: "/usr/local/bin/" + n if n in ("sccache", "mold") else None
+        calls = []
+        with mock.patch.object(bps.shutil, "which", side_effect=which), \
+                mock.patch.object(bps, "SCCACHE_UDS_DIR", os.path.join(TMP, "uds")), \
+                mock.patch.object(bps, "sccache_cmd", side_effect=lambda *a, **kw: (calls.append(kw["env"]), (0, ""))[1]):
+            bps.sccache_daemons.clear()
+            env = bps.job_env("a1")
+            self.assertEqual(env["SCCACHE_SERVER_UDS"], os.path.join(TMP, "uds", "a1.sock"))
+            self.assertNotIn("SCCACHE_SERVER_UDS", bps.job_env())
+            bps.ensure_sccache("a1", env)
+            self.assertEqual(calls[0]["SCCACHE_BASEDIRS"],
+                             os.path.join(bps.WT_BASE, "a1") + ":" + os.path.join(bps.TARGET_BASE, "a1"))
+            open(env["SCCACHE_SERVER_UDS"], "w").close()
+            bps.ensure_sccache("a1", env)
+            self.assertEqual(len(calls), 1, "a running daemon is not restarted")
+            with mock.patch.object(bps, "SCCACHE_PER_AGENT", False):
+                self.assertNotIn("SCCACHE_SERVER_UDS", bps.job_env("a1"))
+        bps.sccache_daemons.clear()
+
+    def test_stats_add_up_over_daemons(self):
+        one = lambda h, m: json.dumps({"stats": {"compile_requests": h + m, "cache_hits": {"counts": {"Rust": h}},
+                                                 "cache_misses": {"counts": {"Rust": m}}, "requests_not_cacheable": 1},
+                                       "cache_size": 1e9, "max_cache_size": 4e10})
+        bps.sccache_daemons.clear()
+        bps.sccache_daemons.update({"a": 0, "b": 0})
+        with mock.patch.object(bps.os.path, "exists", return_value=True), \
+                mock.patch.object(bps, "sccache_cmd", side_effect=[(0, one(1, 1)), (0, one(5, 0)), (0, one(2, 1))]):
+            st = bps.sccache_stats()
+        bps.sccache_daemons.clear()
+        self.assertEqual((st["hits"], st["misses"], st["daemons"], st["not_cacheable"]), (8, 2, 3, 3))
+
+    def test_eviction_floor_scales_with_the_disk(self):
+        self.assertEqual(bps.scaled_floor_gb(40, 200), 40)
+        self.assertEqual(bps.scaled_floor_gb(40, 80), 16)
+        self.assertEqual(bps.scaled_floor_gb(0, 80), 0)
+
     def test_sccache_stats(self):
         out = json.dumps({"stats": {"compile_requests": 10, "requests_executed": 9,
                                     "cache_hits": {"counts": {"Rust": 6, "C/C++": 1}, "adv_counts": {"x": 99}},
