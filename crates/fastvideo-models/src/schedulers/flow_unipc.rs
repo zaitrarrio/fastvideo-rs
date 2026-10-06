@@ -14,6 +14,42 @@ use super::flow_match::apply_shift;
 
 const EPS: f64 = 1e-12;
 
+/// Which flow-UniPC sigma list a Wan base run uses.
+/// `FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers` selects Diffusers' (sol-engine's
+/// baseline, `models/wan2*_*.toml`); the default stays FastVideo's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UniPcSigmas {
+    #[default]
+    FastVideo,
+    Diffusers,
+}
+
+impl UniPcSigmas {
+    pub const ENV: &'static str = "FASTVIDEO_WAN_UNIPC_SIGMAS";
+
+    pub fn parse(v: &str) -> Result<Self, String> {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "" | "fastvideo" | "double" => Ok(Self::FastVideo),
+            "diffusers" | "single" | "sol" => Ok(Self::Diffusers),
+            other => Err(format!(
+                "{}={other}: expected fastvideo or diffusers",
+                Self::ENV
+            )),
+        }
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        std::env::var(Self::ENV).map_or(Ok(Self::FastVideo), |v| Self::parse(&v))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FastVideo => "fastvideo",
+            Self::Diffusers => "diffusers",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UniPcSolverType {
     Bh1,
@@ -127,6 +163,28 @@ impl FlowUniPCMultistepScheduler {
             step_index: None,
             lower_order_nums: 0,
             this_order: 0,
+        }
+    }
+
+    /// Diffusers' `UniPCMultistepScheduler(use_flow_sigmas=True,
+    /// flow_shift=shift)` (what `WanPipeline` and sol-engine's Wan profiles
+    /// run): the training sigmas unshifted, `shift` applied once in
+    /// [`Self::set_timesteps`]. [`Self::new`] is FastVideo's
+    /// `FlowUniPCMultistepScheduler(shift=shift)`, which shifts the training
+    /// sigmas as well, so its inference sigmas are shifted twice (40 steps at
+    /// shift 12: σ₁ 0.99786 vs 0.99778). Same step count, same boundary
+    /// split for the A14B experts (26 / 14), slightly different sigmas.
+    pub fn new_single_shift(num_train_timesteps: i32, shift: f64) -> Self {
+        let mut s = Self::new(num_train_timesteps, 1.0);
+        s.shift = shift;
+        s
+    }
+
+    /// [`UniPcSigmas`] picks the constructor.
+    pub fn with_sigmas(kind: UniPcSigmas, num_train_timesteps: i32, shift: f64) -> Self {
+        match kind {
+            UniPcSigmas::FastVideo => Self::new(num_train_timesteps, shift),
+            UniPcSigmas::Diffusers => Self::new_single_shift(num_train_timesteps, shift),
         }
     }
 
@@ -525,6 +583,41 @@ mod tests {
         assert!((s49 - 0.057673800736665726).abs() < 1e-6, "sigma[49]={s49}");
         assert_eq!(sched.timesteps_i64[0], 999);
         assert_eq!(sched.timesteps_i64.len(), 50);
+    }
+
+    /// numpy float64 of diffusers' `UniPCMultistepScheduler.set_timesteps`
+    /// with `use_flow_sigmas`, for sol-engine's two Wan cells.
+    #[test]
+    fn single_shift_matches_diffusers() {
+        for (steps, shift, s0, s1, s_last) in [
+            (
+                40,
+                12.0,
+                0.999_916_590_21,
+                0.997_782_619_92,
+                0.235_109_533_43,
+            ),
+            (50, 3.0, 0.999_666_444_3, 0.992_907_465_75, 0.057_636_832_19),
+        ] {
+            let mut sched = FlowUniPCMultistepScheduler::new_single_shift(1000, shift);
+            sched.set_timesteps(steps);
+            let s = sched.inference_sigmas();
+            assert_eq!(s.len(), steps + 1);
+            assert!((s[0] - s0).abs() < 1e-6, "{steps}/{shift}: σ0 {}", s[0]);
+            assert!((s[1] - s1).abs() < 1e-6, "{steps}/{shift}: σ1 {}", s[1]);
+            assert!(
+                (s[steps - 1] - s_last).abs() < 1e-6,
+                "{steps}/{shift}: σ_last {}",
+                s[steps - 1]
+            );
+            assert_eq!(s[steps], 0.0);
+        }
+        assert_eq!(
+            UniPcSigmas::parse("diffusers").unwrap(),
+            UniPcSigmas::Diffusers
+        );
+        assert_eq!(UniPcSigmas::parse("").unwrap(), UniPcSigmas::FastVideo);
+        assert!(UniPcSigmas::parse("karras").is_err());
     }
 
     #[test]
