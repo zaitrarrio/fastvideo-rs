@@ -2075,6 +2075,25 @@ pub fn decode_diffvae_and_write(
     })
 }
 
+/// The folder whose shards identify the Gemma encoder for the text cache:
+/// `text_encoder/` itself, or its `gemma/` when only that holds safetensors
+/// (FastVideo's LTX-2.3 tree, which `WeightMap::open` reads recursively; the
+/// HQ timed request failed with "no safetensors files to identify" there).
+fn gemma_identity_dir(text_encoder: &Path) -> PathBuf {
+    let has_shards = |d: &Path| {
+        std::fs::read_dir(d).is_ok_and(|it| {
+            it.filter_map(|e| e.ok())
+                .any(|e| e.path().extension().is_some_and(|x| x == "safetensors"))
+        })
+    };
+    let gemma = text_encoder.join("gemma");
+    if !has_shards(text_encoder) && has_shards(&gemma) {
+        gemma
+    } else {
+        text_encoder.to_path_buf()
+    }
+}
+
 /// The distilled DiT/connectors: the single file, or `component` under a
 /// diffusers root (or the component folder itself).
 ///
@@ -2332,7 +2351,7 @@ impl TextEncoder {
         if self.identity.is_none() {
             let tokenizer = std::fs::read(self.tokenizer_path())
                 .map_err(|e| err(format!("{}: {e}", self.tokenizer_path().display())))?;
-            let text_dir = self.paths.text_root().join("text_encoder");
+            let text_dir = gemma_identity_dir(&self.paths.text_root().join("text_encoder"));
             // `Lightricks/LTX-2` keeps a stale duplicate shard set next to the real
             // one; when the real one is there, it alone identifies the encoder.
             let has_model_set = std::fs::read_dir(&text_dir)
@@ -5015,6 +5034,22 @@ mod tests {
             "/m/diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"
         )));
         assert!(!names_distilled(Path::new("/m/LTX-2.5/transformer")));
+    }
+
+    #[test]
+    fn the_gemma_identity_follows_the_2_3_tree_into_gemma() {
+        let root = std::env::temp_dir().join(format!("fv-ltx-gemma-id-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let te = root.join("text_encoder");
+        std::fs::create_dir_all(te.join("gemma")).unwrap();
+        std::fs::write(te.join("gemma/model-00001-of-00002.safetensors"), b"x").unwrap();
+        // FastVideo's LTX-2.3 tree: shards only under gemma/.
+        assert_eq!(gemma_identity_dir(&te), te.join("gemma"));
+        assert!(super::super::text_cache::weights_identity(&gemma_identity_dir(&te), Some("model-")).is_ok());
+        // Shards in text_encoder/ itself (LTX-2 / 2.5): unchanged.
+        std::fs::write(te.join("model-00001-of-00001.safetensors"), b"y").unwrap();
+        assert_eq!(gemma_identity_dir(&te), te);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
