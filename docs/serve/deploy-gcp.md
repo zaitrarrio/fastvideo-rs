@@ -376,6 +376,19 @@ should come in through that same seam, after #15 merges:
 Estimate: about 500-700 lines plus tests on top of #15. It is worth doing only
 once a GCP pool is wanted beyond tests.
 
+**With the edge control plane** ([edge-control-plane.md](edge-control-plane.md),
+a design merged as #19). The edge Worker becomes the only entry point. It
+picks a ready worker of the model's family and forwards to it with the
+internal token. A GCP worker fits as it is, for three reasons:
+
+- it registers with its family DO, and its `endpoint` is the HTTPS sslip.io
+  URL (§5);
+- the internal token is already in its environment;
+- media still goes to the VM's public IP.
+
+The one addition would be the GCP VMs in fv-control's registry, which is
+step 4 above.
+
 ## 9. Tests
 
 | Test | What | Where it runs |
