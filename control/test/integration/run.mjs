@@ -9,6 +9,7 @@ import { d1Exec, hashPassphrase, PASSPHRASE, SECRETS, startMock, startWorker } f
 const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
+mock.cloudriftKey = SECRETS.CLOUDRIFT_API_KEY;
 const w = await startWorker(mock, { ...SECRETS, OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET) });
 const B = w.url;
 const bodies = []; // every response body, checked for secrets at the end
@@ -191,6 +192,50 @@ await step("the collector: pods, owners, costs, samples, external attribution, a
   await call("/api/collect", { method: "POST", body: {}, headers: T() });
   assert.ok((await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "pod_idle" && a.target === "extgpu00001"), "re-opened");
   assert.ok(mock.pods.has(worker.id) && !mock.log.some((l) => l.method === "DELETE" && l.path.includes("extgpu")), "external pods are never touched");
+});
+
+await step("CloudRift: rentals collected, deadline backstop, balance, terminate only ours", async () => {
+  // The collector step above already ran the cron once.
+  const cr = mock.cloudrift;
+  assert.equal(cr.instances.find((i) => i.id === "cr-ours-1").status, "Inactive", "past its fv-deadline tag: terminated");
+  assert.equal(cr.instances.find((i) => i.id === "cr-ours-2").status, "Active");
+  assert.equal(cr.instances.find((i) => i.id === "cr-foreign").status, "Active", "a foreign rental is never touched (even on a type we refuse)");
+  assert.ok(cr.calls.filter((c) => c.path !== "instance-types/list").every((c) => c.key && !c.bearer && c.version === "2026-09-08"));
+  const pods = (await call("/api/pods", { headers: T() })).j.pods;
+  const by = Object.fromEntries(pods.map((p) => [p.pod_id, p]));
+  assert.equal(by["cr-ours-2"].provider, "cloudrift");
+  assert.equal(by["cr-ours-2"].owner, "cloudrift:serve-h3-turbo");
+  assert.equal(by["cr-foreign"].owner, "external:cloudrift");
+  assert.equal(by[worker.id].provider, "runpod");
+  // The deadline alert resolved itself once the rental was gone (the next cron); the audit keeps the action.
+  const aud = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
+  assert.ok(aud.some((x) => x.action === "cloudrift.terminate" && x.target === "cr-ours-1" && x.actor === "policy:cloudrift_deadline"), JSON.stringify(aud.slice(0, 3)));
+  const ov = (await call("/api/overview", { headers: T() })).j;
+  assert.equal(ov.cloudrift.balance, 30, "account/info's 3000 cents");
+  assert.equal(ov.balance, 50, "the Runpod balance is separate");
+  const prov = (await call("/api/providers", { headers: T() })).j.providers;
+  assert.deepEqual(prov.map((p) => [p.id, p.enabled]), [["runpod", true], ["cloudrift", true]]);
+  const price = (await call("/api/providers/cloudrift/price?gpu=RTX%20PRO%206000", { headers: T() })).j;
+  assert.equal(price.offers[0].usd_per_hr, 1.3936);
+  // Owner rule: only RTX PRO 6000 and RTX 5090 on CloudRift.
+  assert.equal((await call("/api/providers/cloudrift/price?gpu=V100%20SXM2", { headers: T() })).status, 400);
+  assert.equal((await call("/api/providers/cloudrift/instances/cr-foreign/terminate", { method: "POST", body: {}, headers: T() })).status, 403);
+  const r = await call("/api/providers/cloudrift/instances/cr-ours-2/terminate", { method: "POST", body: {}, headers: T() });
+  assert.equal(r.status, 200, JSON.stringify(r.j));
+  assert.equal(cr.instances.find((i) => i.id === "cr-ours-2").status, "Inactive");
+  // A second run of the cron: the rows go, the Runpod pods stay.
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  const after = Object.fromEntries((await call("/api/pods", { headers: T() })).j.pods.map((p) => [p.pod_id, p]));
+  assert.ok(!after["cr-ours-2"], "terminated rental marked gone");
+  assert.ok(after[worker.id], "Runpod pods are not marked gone by the CloudRift half");
+  // The balance floor: below it, our live rentals are terminated (none left), alert critical.
+  cr.balance = 500; // cents: $5
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  assert.ok((await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "cloudrift_balance_floor"));
+  assert.equal(cr.instances.find((i) => i.id === "cr-foreign").status, "Active");
+  cr.balance = 3000;
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  assert.ok(!(await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "cloudrift_balance_floor"), "resolved");
 });
 
 await step("env at three levels: masked view, restart needed, rolling restart", async () => {
