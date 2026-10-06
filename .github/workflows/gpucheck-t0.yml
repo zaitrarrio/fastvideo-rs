@@ -10,6 +10,7 @@ on:
       - "crates/fastvideo-gpucheck/**"
       - "scripts/gpu/**"
       - "scripts/gpu/cuda-13.pins"
+      - "scripts/ci/prebuilt.sh"
       - ".github/workflows/gpucheck-t0.yml"
 
 concurrency:
@@ -27,11 +28,32 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # The unit-test binaries (cargo test --no-run) and the release
+      # `--features cuda` fv-gpucheck (which covers the CUDA type-check),
+      # compiled by the build pod; fallback: cargo here.
+      - name: Prebuilt test binaries from R2
+        id: pre
+        env:
+          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
+          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
+          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
+          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
+          # Pull requests: the head commit (what the build pod built), not the merge ref.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/prebuilt.sh fetch "$SHA" gpucheck-tests gpucheck
+      - name: Unit tests (prebuilt binaries)
+        if: steps.pre.outputs.ok == 'true'
+        run: bash scripts/ci/prebuilt.sh run-tests "${{ steps.pre.outputs.dir }}/gpucheck-tests"
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.pre.outputs.ok != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.pre.outputs.ok != 'true'
       - name: Unit tests
+        if: steps.pre.outputs.ok != 'true'
         run: cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins
       - name: CUDA feature type-check
+        if: steps.pre.outputs.ok != 'true'
         env:
           CUDARC_CUDA_VERSION: "13000"
         run: cargo check -p fastvideo-gpucheck --features cuda
@@ -45,8 +67,21 @@ jobs:
       NVCC: /usr/local/cuda-13.4/bin/nvcc
     steps:
       - uses: actions/checkout@v4
+      - name: Prebuilt fv-gpucheck from R2
+        id: pre
+        env:
+          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
+          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
+          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
+          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
+          # Pull requests: the head commit (what the build pod built), not the merge ref.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/prebuilt.sh fetch "$SHA" gpucheck
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.pre.outputs.ok != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.pre.outputs.ok != 'true'
       - name: Install CUDA 13.4 nvcc + NVRTC + tileiras (no driver, no GPU)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
@@ -57,7 +92,16 @@ jobs:
           sudo apt-get install -y -qq --allow-downgrades \
             "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
             "$CUDA_TILEIRAS_PKG"
+      # NVRTC (installed above) compiles every kernel at run time; the
+      # prebuilt binary's AOT cubins come from the pod's nvcc.
+      - name: Run both compile gates on the prebuilt binary
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          install -m 755 "${{ steps.pre.outputs.dir }}/gpucheck/fv-gpucheck" fv-gpucheck
+          ./fv-gpucheck --out gpucheck-out nvrtc
+          grep -q aot_sms gpucheck-out/nvrtc.json || { echo "no embedded cubins in the prebuilt binary"; exit 1; }
       - name: Build with ahead-of-time cubins, then run both compile gates
+        if: steps.pre.outputs.ok != 'true'
         run: |
           cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee build.log
           grep -q "embedded cubins for sm" build.log || { echo "build.rs did not find nvcc"; exit 1; }
