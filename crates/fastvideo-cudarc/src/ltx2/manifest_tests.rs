@@ -492,7 +492,11 @@ mod ltx23 {
 
     /// Globals plus the first and last block loaded for real, every other
     /// block by index substitution (as [`transformer_against`]).
-    fn dit_against(layout: Layout, published: &Requests, owned: impl Fn(&str) -> bool) -> Vec<String> {
+    fn dit_against(
+        layout: Layout,
+        published: &Requests,
+        owned: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
         let cfg = cfg().transformer;
         let keys = Keys::transformer(layout);
         let (map, seen) = recording();
@@ -566,7 +570,10 @@ mod ltx23 {
     #[test]
     fn connectors_load_from_the_single_file() {
         let _guard = heavy();
-        assert_clean("2.3 connectors (single file)", connectors_23(Layout::SingleFile, &single()));
+        assert_clean(
+            "2.3 connectors (single file)",
+            connectors_23(Layout::SingleFile, &single()),
+        );
     }
 
     #[test]
@@ -576,7 +583,10 @@ mod ltx23 {
         let folder = split_connectors(&s);
         // The probe the pipeline runs on the real folder.
         assert!(folder.contains_key("video_aggregate_embed.weight"));
-        assert_clean("2.3 connectors (FastVideo folder)", connectors_23(Layout::LtxCore, &folder));
+        assert_clean(
+            "2.3 connectors (FastVideo folder)",
+            connectors_23(Layout::LtxCore, &folder),
+        );
     }
 
     /// The VAE asks for diffusers names; the ltx-core view of the folder
@@ -609,7 +619,12 @@ mod ltx23 {
         let mut images = BTreeSet::new();
         for i in 0..4 {
             for r in 0..8 {
-                for leaf in ["conv1.conv.weight", "conv1.conv.bias", "conv2.conv.weight", "conv2.conv.bias"] {
+                for leaf in [
+                    "conv1.conv.weight",
+                    "conv1.conv.bias",
+                    "conv2.conv.weight",
+                    "conv2.conv.bias",
+                ] {
                     images.insert(format!("encoder.down_blocks.{i}.resnets.{r}.{leaf}"));
                     images.insert(format!("encoder.mid_block.resnets.{r}.{leaf}"));
                 }
@@ -656,7 +671,9 @@ mod ltx23 {
                 .map(|(k, shape)| (k.clone(), shape.clone(), vec![0.0; shape.iter().product()])),
         )
         .with_generator(move |key, shape| {
-            sink.lock().expect("lock").insert(key.to_string(), shape.to_vec());
+            sink.lock()
+                .expect("lock")
+                .insert(key.to_string(), shape.to_vec());
             vec![0.0; shape.iter().product()]
         });
         let map = crate::ltx2::keys::vocoder_view(map);

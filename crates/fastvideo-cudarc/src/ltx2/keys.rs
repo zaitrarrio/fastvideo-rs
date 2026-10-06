@@ -134,7 +134,10 @@ impl Keys {
                     && (diffusers.starts_with("video_text_proj_in")
                         || diffusers.starts_with("audio_text_proj_in")) =>
             {
-                format!("text_embedding_projection.{}", self.rename_segments(diffusers))
+                format!(
+                    "text_embedding_projection.{}",
+                    self.rename_segments(diffusers)
+                )
             }
             Layout::SingleFile => format!("{SINGLE_FILE_ROOT}.{}", self.rename_segments(diffusers)),
         }
@@ -240,7 +243,9 @@ pub fn ltx_core_vae_key(diffusers: &str, encoder_mid: usize) -> Option<String> {
         return None;
     }
     if let Some(rest) = diffusers.strip_prefix("encoder.mid_block.resnets.") {
-        return Some(format!("encoder.down_blocks.{encoder_mid}.res_blocks.{rest}"));
+        return Some(format!(
+            "encoder.down_blocks.{encoder_mid}.res_blocks.{rest}"
+        ));
     }
     if let Some(rest) = diffusers.strip_prefix("encoder.down_blocks.") {
         let (i, tail) = indexed(rest)?;
@@ -271,7 +276,11 @@ pub fn vae_view(map: WeightMap) -> WeightMap {
         return map;
     }
     let mid = (0..64)
-        .filter(|i| map.has_tensor(&format!("encoder.down_blocks.{i}.res_blocks.0.conv1.conv.weight")))
+        .filter(|i| {
+            map.has_tensor(&format!(
+                "encoder.down_blocks.{i}.res_blocks.0.conv1.conv.weight"
+            ))
+        })
         .max()
         .unwrap_or(8);
     map.with_alias(move |k| ltx_core_vae_key(k, mid))
@@ -303,12 +312,20 @@ pub fn ltx_core_vocoder_key(diffusers: &str) -> Option<String> {
 /// `map` answering diffusers vocoder names when it holds HiFi-GAN's; as is
 /// otherwise.
 pub fn vocoder_view(map: WeightMap) -> WeightMap {
-    let original = ["vocoder.conv_pre.weight", "conv_pre.weight", "bwe_generator.conv_pre.weight"]
-        .iter()
-        .any(|k| map.has_tensor(k));
-    let diffusers = ["vocoder.conv_in.weight", "conv_in.weight", "vocoder.conv_in.weight_g"]
-        .iter()
-        .any(|k| map.has_tensor(k));
+    let original = [
+        "vocoder.conv_pre.weight",
+        "conv_pre.weight",
+        "bwe_generator.conv_pre.weight",
+    ]
+    .iter()
+    .any(|k| map.has_tensor(k));
+    let diffusers = [
+        "vocoder.conv_in.weight",
+        "conv_in.weight",
+        "vocoder.conv_in.weight_g",
+    ]
+    .iter()
+    .any(|k| map.has_tensor(k));
     if original && !diffusers {
         map.with_alias(ltx_core_vocoder_key)
     } else {
@@ -355,7 +372,10 @@ mod tests {
         );
         // Probing `down_blocks.4` must find nothing: 4 down blocks, then mid.
         assert_eq!(k("encoder.down_blocks.4.resnets.0.conv1.conv.weight"), None);
-        assert_eq!(k("latents_std").as_deref(), Some("per_channel_statistics.std-of-means"));
+        assert_eq!(
+            k("latents_std").as_deref(),
+            Some("per_channel_statistics.std-of-means")
+        );
         assert_eq!(k("decoder.conv_in.conv.weight"), None);
         assert_eq!(
             connector_folder_alias("video_embeddings_connector.learnable_registers").as_deref(),

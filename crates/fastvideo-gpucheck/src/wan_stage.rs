@@ -56,6 +56,11 @@ pub enum Stage {
         unipc: bool,
         #[arg(long, default_value_t = 1.0)]
         guidance: f32,
+        /// Wan 2.2 A14B: the low-noise expert's CFG scale (Diffusers
+        /// `guidance_scale_2`; sol-engine's cell uses 4.0 / 3.0). Default:
+        /// `--guidance`.
+        #[arg(long)]
+        guidance_2: Option<f32>,
         #[arg(long, default_value_t = 8.0)]
         flow_shift: f64,
         #[arg(long, default_value_t = 16)]
@@ -196,6 +201,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             steps,
             unipc,
             guidance,
+            guidance_2,
             flow_shift,
             fps,
             no_mp4,
@@ -285,6 +291,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 num_frames: *num_frames,
                 num_inference_steps: *steps,
                 guidance_scale: *guidance,
+                guidance_scale_2: if plug.is_some() { None } else { *guidance_2 },
                 flow_shift: *flow_shift,
                 is_dmd: dmd,
                 dmd_steps: dmd.then(|| dmd_steps(*steps)),
@@ -394,6 +401,7 @@ fn model_name(preset: &str) -> &'static str {
         "wan_2_2_ti2v_5b" => "Wan2.2-TI2V-5B",
         "fast_wan_2_2_ti2v_5b" => "FastWan2.2-TI2V-5B",
         "wan_t2v_14b" => "Wan2.1-T2V-14B",
+        "wan_2_2_t2v_a14b" => "Wan2.2-T2V-A14B",
         "sf_wan_t2v_1_3b" => "SFWan2.1-T2V-1.3B",
         "wan_t2v_1_3b" => "Wan2.1-T2V-1.3B",
         _ => "FastWan2.1-T2V-1.3B",
@@ -492,7 +500,9 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "weights": a.weights, "preset": a.preset,
             "height": a.base.height, "width": a.base.width, "num_frames": a.base.num_frames,
             "steps": a.base.num_inference_steps, "dmd": a.base.is_dmd, "dmd_steps": a.base.dmd_steps,
-            "guidance": a.base.guidance_scale, "flow_shift": a.base.flow_shift, "warm": a.warm,
+            "guidance": a.base.guidance_scale, "guidance_2": a.base.guidance_scale_2,
+            "flow_shift": a.base.flow_shift, "warm": a.warm,
+            "unipc_sigmas": std::env::var("FASTVIDEO_WAN_UNIPC_SIGMAS").unwrap_or_else(|_| "fastvideo".into()),
             "vsa": fastvideo_cudarc::wan::nn::vsa_enabled(),
             "text_cache": a.base.text_cache,
             "vae": std::env::var("FASTVIDEO_WAN_VAE").unwrap_or_else(|_| "auto".into()),
@@ -549,7 +559,8 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
     }
     report.note(
         "load",
-        json!({"seconds": load_s, "mem_used_mib": crate::gpu::mem_info().map(|(f, t)| (t - f) >> 20)}),
+        json!({"seconds": load_s, "mem_used_mib": crate::gpu::mem_info().map(|(f, t)| (t - f) >> 20),
+               "dit_residency": pipe.dit_residency(), "moe": pipe.moe_plan()}),
     );
     let request = |spec: &PromptSpec| GenerateConfig {
         prompt: spec.prompt.clone(),
@@ -589,6 +600,8 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             .map_err(|e| anyhow::anyhow!("generate {}: {e}", spec.name))?;
         let wall = timer.elapsed().as_secs_f64();
         let peak_mib = mem.stop();
+        // Expert-swap / streaming copy throughput of this generation (logged).
+        pipe.report_offload(&spec.name);
         let counters = fastvideo_cudarc::wan::evalstats::snapshot();
         let t = &out.timings;
         let total = wall - t.write_s;

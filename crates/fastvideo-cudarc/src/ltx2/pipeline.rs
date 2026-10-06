@@ -1689,8 +1689,18 @@ impl Decoders {
     }
 }
 
-/// The spatial upsampler's folder under `weights`, when the pack has one.
+/// `FASTVIDEO_LTX2_UPSAMPLER`: a spatial-upsampler file or folder used in
+/// place of the pack's (sol-engine's LTX-2.3 HQ runs
+/// `ltx-2.3-spatial-upscaler-x2-1.1.safetensors`; FastVideo's 2.3 tree ships
+/// an older x2 file under `spatial_upscaler/`).
+pub const UPSAMPLER_ENV: &str = "FASTVIDEO_LTX2_UPSAMPLER";
+
+/// The spatial upsampler's folder under `weights` (or the file / folder
+/// [`UPSAMPLER_ENV`] names), when there is one.
 pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os(UPSAMPLER_ENV).map(PathBuf::from) {
+        return p.exists().then_some(p);
+    }
     ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
         .iter()
         .map(|name| weights.join(name))
@@ -1700,7 +1710,14 @@ pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
 /// The spatial x2 upsampler, or `None` when the config or the pack has none.
 pub fn load_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Option<LatentUpsampler>> {
     match (&cfg.latent_upsampler, upsampler_dir(weights)) {
-        (Some(ucfg), Some(dir)) => Ok(Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?)),
+        (Some(ucfg), Some(p)) => {
+            let map = if p.is_file() {
+                WeightMap::open_files(&[p])?
+            } else {
+                WeightMap::open(&p)?
+            };
+            Ok(Some(LatentUpsampler::load(&map, ucfg)?))
+        }
         _ => Ok(None),
     }
 }

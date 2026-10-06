@@ -386,6 +386,16 @@ pub enum Stage {
         /// score-route kernel at sparsity 0.9, block 64.
         #[arg(long, default_value_t = false)]
         pisa_stage2: bool,
+        /// LTX-2.3 official HQ (sol-engine `models/ltx23.toml`): the *dev*
+        /// DiT (`--dit …/ltx-2.3-22b-dev.safetensors`, the distilled LoRA
+        /// found beside it fused at 0.25 for stage 1 and 0.5 for stage 2), a
+        /// 15-step res2s stage 1 at CFG 3 (audio CFG 7) on the dev schedule,
+        /// the 3-sigma stage 2, 1920x1088x241 at 24 fps unless
+        /// `--height` / `--width` / `--num-frames` say otherwise, and
+        /// sol-engine's negative prompt unless `--negative-prompt`. Needs
+        /// `--model-version 2.3`; implies `--two-stage`.
+        #[arg(long, default_value_t = false)]
+        hq: bool,
         /// `taeltx2_3_wide.safetensors` (or its directory): decode video with
         /// madebyollin's wide LTX tiny autoencoder instead of the conv VAE,
         /// as sol-engine's LTX-2.5 refiner does. Audio is unchanged.
@@ -669,6 +679,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             sol_stage2,
             dense_stage2,
             pisa_stage2,
+            hq,
             ltx_tae_weights,
             skip_audio_decode,
             sink_check,
@@ -676,6 +687,13 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             if let Some(gib) = device_budget_gib {
                 crate::gpu::set_budget_gib(*gib)?;
             }
+            if *hq && (!matches!(model_version, ModelVersion::V23) || *guided) {
+                return Err(anyhow::anyhow!(
+                    "--hq is the LTX-2.3 dev two-stage HQ cell: pass --model-version 2.3 (not --guided)"
+                )
+                .into());
+            }
+            let two_stage = &(*two_stage || *hq);
             if *guided
                 && !(audio.is_some()
                     && *two_stage
@@ -688,10 +706,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 .into());
             }
             if !*guided
+                && !*hq
                 && (guidance_scale.is_some() || num_inference_steps.is_some() || negative_prompt.is_some())
             {
                 return Err(anyhow::anyhow!(
-                    "--guidance-scale / --num-inference-steps / --negative-prompt need --guided"
+                    "--guidance-scale / --num-inference-steps / --negative-prompt need --guided or --hq"
                 )
                 .into());
             }
@@ -715,13 +734,24 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
                     &model_version.config(),
                     *two_stage,
-                    None,
+                    hq.then_some(3),
                     false,
                     false,
                 ),
             )
             .map_err(|e| anyhow::anyhow!(e))?;
             eprintln!("ltx2 {}", techniques.describe());
+            let geometry = if *hq {
+                use fastvideo_models::ltx2::hq;
+                Ok(Geometry {
+                    height: geometry.height.unwrap_or(hq::HEIGHT),
+                    width: geometry.width.unwrap_or(hq::WIDTH),
+                    num_frames: geometry.num_frames.unwrap_or(hq::FRAMES),
+                    frame_rate: geometry.frame_rate.unwrap_or(hq::FPS),
+                })
+            } else {
+                geometry.resolve()
+            };
             let sol_stage2 = techniques.sol_stage2();
             let pisa_stage2 = &techniques.pisa_stage2();
             let text_cache = if *no_text_cache {
@@ -781,7 +811,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 },
                 clip,
                 device,
-                geometry.resolve()?,
+                geometry?,
                 !*no_mp4,
                 *warm,
                 *two_stage,
@@ -813,6 +843,16 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                             .unwrap_or(fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale),
                         steps: *num_inference_steps,
                         negative_prompt: negative_prompt.clone().unwrap_or_default(),
+                    }),
+                    hq: hq.then(|| GuidedArgs {
+                        guidance_scale: guidance_scale
+                            .unwrap_or(fastvideo_models::ltx2::hq::GUIDANCE_SCALE),
+                        steps: Some(
+                            num_inference_steps.unwrap_or(fastvideo_models::ltx2::hq::STAGE1_STEPS),
+                        ),
+                        negative_prompt: negative_prompt
+                            .clone()
+                            .unwrap_or_else(|| fastvideo_models::ltx2::hq::NEGATIVE_PROMPT.into()),
                     }),
                 },
             )
@@ -2046,10 +2086,24 @@ fn gen(
     );
     let multi = *multi;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
-    let cfg = match &extras.guided {
-        Some(_) => fastvideo_models::ltx2::config::ltx2_5_22b_dev(),
-        None => model_version.config(),
+    let cfg = match (&extras.guided, &extras.hq) {
+        (Some(_), _) => fastvideo_models::ltx2::config::ltx2_5_22b_dev(),
+        // The dev bundle: dynamic-shift schedule, LoRA fused per stage.
+        (None, Some(_)) => fastvideo_models::ltx2::config::ltx2_23_22b(),
+        (None, None) => model_version.config(),
     };
+    report.set(
+        "hq",
+        extras.hq.as_ref().map(|h| {
+            json!({"guidance_scale": h.guidance_scale, "stage1_steps": h.steps, "stage1_sampler": "res2s",
+                   "stage2_sigmas": fastvideo_models::ltx2::hq::STAGE2_SIGMAS,
+                   "lora_strengths": fastvideo_models::ltx2::hq::LORA_STRENGTHS,
+                   "audio_guidance_scale": fastvideo_models::ltx2::hq::AUDIO_GUIDANCE_SCALE,
+                   "upstream": "sol-engine models/ltx23.toml [official_config]"})
+        }),
+    );
+    // The request's sampler knobs: `--guided`, else `--hq`, else distilled.
+    let knobs = extras.guided.as_ref().or(extras.hq.as_ref());
     report.set(
         "guided",
         extras.guided.as_ref().map(|g| {
@@ -2078,15 +2132,15 @@ fn gen(
         mp4,
         two_stage,
         diff_vae,
-        negative_prompt: extras
-            .guided
-            .as_ref()
-            .map(|g| g.negative_prompt.clone())
-            .unwrap_or_default(),
-        guidance_scale: extras.guided.as_ref().map_or(1.0, |g| g.guidance_scale),
-        audio_guidance_scale: 1.0,
-        num_inference_steps: extras.guided.as_ref().and_then(|g| g.steps),
-        refine_steps: None,
+        negative_prompt: knobs.map(|g| g.negative_prompt.clone()).unwrap_or_default(),
+        guidance_scale: knobs.map_or(1.0, |g| g.guidance_scale),
+        audio_guidance_scale: if extras.hq.is_some() {
+            fastvideo_models::ltx2::hq::AUDIO_GUIDANCE_SCALE
+        } else {
+            1.0
+        },
+        num_inference_steps: knobs.and_then(|g| g.steps),
+        refine_steps: extras.hq.as_ref().map(|_| 3),
         sol_stage2,
         pisa_stage2,
         image_path: image.map(Path::to_path_buf),
@@ -2448,6 +2502,8 @@ struct GenExtras {
     edit: Option<fastvideo_cudarc::ltx2::v2v::VideoEdit>,
     /// `--guided` (the dev transformer's guided audio-to-video).
     guided: Option<GuidedArgs>,
+    /// `--hq` (the LTX-2.3 dev two-stage HQ cell).
+    hq: Option<GuidedArgs>,
 }
 
 /// `--guided`'s knobs.
