@@ -55,6 +55,11 @@ export function startMock() {
       { id: "extold00001", name: "little_azure_rook", desiredStatus: "EXITED", costPerHr: 4.59, gpuCount: 1, machine: { gpuDisplayName: "H200 SXM", dataCenterId: "EUR-IS-4" }, runtime: null },
     ],
     failCreate: 0,
+    edgeAdmin: "fvadm_edge_mock_admin",
+    edgeInternal: "edge-internal-mock-token",
+    edgeKeys: [],
+    edgeCalls: [],
+    edgeEpoch: 1,
   };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
@@ -143,6 +148,33 @@ export function startMock() {
     }
     // ---- Cloudflare API (Analytics Engine SQL)
     if (p.startsWith("/cf/")) return json(res, 200, { data: [] });
+    // ---- the edge Worker (control_plane = edge): its fronts are the pods
+    // whose env makes them fronts with the edge's internal token.
+    if (p.startsWith("/edge/")) {
+      const route = p.slice("/edge".length);
+      m.edgeCalls.push({ method: req.method, route });
+      if (route === "/fv/v1/status") return json(res, 200, { object: "fv.status", edge: true, pools: [] });
+      if (bearer !== m.edgeAdmin) return json(res, 401, { error: { kind: "unauthorized" } });
+      if (route === "/fv/v1/edge/families") {
+        const families = {};
+        for (const pod of m.pods.values()) {
+          const env = pod.env || {};
+          if (env.FV_DISPATCH_FRONT !== "1" || env.FV_INTERNAL_TOKEN !== m.edgeInternal || pod.desiredStatus !== "RUNNING") continue;
+          for (const f of String(env.FV_DISPATCH_FAMILIES || "").split(",").filter(Boolean))
+            (families[f] ||= { pool: `family:${f}`, workers: [] }).workers.push({ worker_id: pod.id, connected: true, ready: true, draining: false, held: m.edgeHeld?.[pod.id] || 0, sha: "abcdef1234", front: { url: `http://127.0.0.1:${m.port}/pod/${pod.id}`, ready: true } });
+        }
+        return json(res, 200, { object: "fv.edge.families", families, metrics: {}, key_epoch: m.edgeEpoch });
+      }
+      if (route === "/fv/v1/admin/keys" && req.method === "POST") {
+        const k = { id: `key_${String(m.edgeKeys.length + 1).padStart(12, "e")}`, name: body.name, revoked: false };
+        m.edgeKeys.push(k);
+        return json(res, 201, { api_key: `fv_edge_${k.id}`, key: k });
+      }
+      if (route === "/fv/v1/admin/keys" && req.method === "GET") return json(res, 200, { keys: m.edgeKeys, backend: "d1" });
+      const ek = m.edgeKeys.find((x) => route === `/fv/v1/admin/keys/${x.id}`);
+      if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return ek ? ((ek.revoked = true), m.edgeEpoch++, json(res, 200, { key: ek })) : json(res, 404, {});
+      return json(res, 404, {});
+    }
     // ---- the cluster's pods
     const pm = /^\/pod\/([^/]+)(\/.*)$/.exec(p);
     // The shared build pod's public /healthz (an external pod: not in m.pods).

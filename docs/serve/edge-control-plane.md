@@ -547,6 +547,31 @@ Where the build differs from the design above:
 - Exit: green; fv-control staging deploy from main (or the PR head for
   stage 3, said in the report).
 
+### Stage 2 as built
+
+- `control_plane: "gateway" | "edge"` (default `gateway`). `both` is not
+  built: the gateway's pools would need the family-DO dispatch config, and
+  the stage-3 latency comparison can run against an older gateway cluster
+  instead. `edge` turns `gateway.enabled` off.
+- The edge is fv-control's, not the cluster's: `EDGE_URL`,
+  `EDGE_D1_DATABASE_ID` and the secrets `EDGE_INTERNAL_TOKEN`,
+  `EDGE_ADMIN_TOKEN` (`scripts/serve/fv-control.sh edge-link staging` from
+  `cf-edge.sh`'s state). The edge reads its settings (auth, Reactor model,
+  WHIP mode) from its own deploy vars, so `register` checks that the edge
+  answers the admin token instead of writing settings to D1. The workers'
+  aliases come from their own configs.
+- Worker env as §5.2, with the backstop in the worker boot
+  (`EDGE_WORKER_BOOT`): each pod deletes itself at the deadline or below
+  `min_balance`. `FV_R2_*` are dropped (results go through the edge to its
+  bucket); `FV_D1_DATABASE_ID` is the edge's.
+- `wait`, the pools view, the collector's per-pod jobs and readiness read
+  the families view (`GET /fv/v1/edge/families`, worker id = pod id).
+- Tests: `control/test/unit/edge.test.ts` (spec, families, env, the boot
+  and its watchdog with a curl stand-in, the families view) and an `edge`
+  cluster in `control/test/integration/run.mjs` against an edge stand-in in
+  `test/harness.mjs` (start → register → ready → second edge cluster
+  refused → keys → scale → roll → stop).
+
 ### Stage 3 — live test (owner-approved)
 
 - fv-control staging launches one `edge` cluster in EUR-IS-1 (EU volume

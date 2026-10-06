@@ -16,10 +16,11 @@ import {
   workerPlacements,
   workerSystemEnv,
   type ClusterSecrets,
+  type EdgeCfg,
   type EnvCtx,
   type PodRec,
 } from "./payloads";
-import { REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
+import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
 import { podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
 
 export type Logf = (msg: string) => void;
@@ -29,8 +30,19 @@ const stamp = () => new Date().toISOString().replace(/[-:T]/g, "").slice(4, 14);
 export function ingestUrl(env: Env): string | undefined {
   return env.PUBLIC_URL ? `${env.PUBLIC_URL.replace(/\/$/, "")}/ingest/v1/logs` : undefined;
 }
+/** The edge Worker of control_plane = edge clusters (fv-control's EDGE_* settings); undefined when they are not set. */
+export function edgeCfg(env: Env): EdgeCfg | undefined {
+  if (!env.EDGE_URL || !env.EDGE_INTERNAL_TOKEN || !env.EDGE_ADMIN_TOKEN) return undefined;
+  return { url: env.EDGE_URL.replace(/\/$/, ""), internal_token: env.EDGE_INTERNAL_TOKEN, admin_token: env.EDGE_ADMIN_TOKEN, d1_database_id: env.EDGE_D1_DATABASE_ID || undefined };
+}
+export function requireEdge(env: Env): EdgeCfg {
+  const e = edgeCfg(env);
+  if (!e) throw new HttpError(409, "control_plane = edge: fv-control has no edge (EDGE_URL, EDGE_INTERNAL_TOKEN and EDGE_ADMIN_TOKEN)");
+  return e;
+}
 export async function envCtx(env: Env, c: Cluster, secrets?: ClusterSecrets): Promise<EnvCtx> {
   return {
+    edge: isEdge(c.spec) ? edgeCfg(env) : undefined,
     spec: c.spec,
     state: c.state,
     secrets: secrets ?? (await secretsOf(env, c)),
@@ -221,9 +233,14 @@ export async function deletePod(env: Env, podId: string, log: Logf, why: string)
 }
 
 // ---------------- the gateway's admin token (gateway.md §9)
+/** Where clients and admin calls go: the edge (control_plane = edge) or the gateway. */
+export function frontUrl(env: Env, c: Cluster): string | undefined {
+  return isEdge(c.spec) ? edgeCfg(env)?.url : c.state.gateway_url;
+}
 async function gatewayFetch(env: Env, c: Cluster, path: string, init: RequestInit & { timeoutMs?: number } = {}) {
-  if (!c.state.gateway_url) throw new HttpError(409, `${c.name} has no gateway`);
-  return fetchWithTimeout(`${c.state.gateway_url}${path}`, { timeoutMs: 20000, ...init });
+  const base = isEdge(c.spec) ? requireEdge(env).url : c.state.gateway_url;
+  if (!base) throw new HttpError(409, `${c.name} has no gateway`);
+  return fetchWithTimeout(`${base}${path}`, { timeoutMs: 20000, ...init });
 }
 /** The start of adminToken's error when it has just switched an older gateway image to FV_ADMIN_TOKEN. */
 export const LEGACY_ADMIN_SWITCH = "this gateway image has no sealed admin token route";
@@ -231,6 +248,8 @@ export const LEGACY_ADMIN_SWITCH = "this gateway image has no sealed admin token
 export const DIRECT_ADMIN_NEW = "this gateway-less cluster had no admin token";
 export const newAdminToken = () => `fvadm_${randomToken("", 24)}`;
 export async function adminToken(env: Env, c: Cluster): Promise<string> {
+  // The edge's admin token: keys and the families view are the edge's.
+  if (isEdge(c.spec)) return requireEdge(env).admin_token;
   const s = await secretsOf(env, c);
   if (isDirect(c.spec, c.state)) {
     // No gateway: the controller makes the token and passes it to every
@@ -281,7 +300,12 @@ export interface AdminTarget {
   pool?: string;
 }
 /** Where the admin routes (/fv/v1/admin/*) are: the gateway, or every worker of a gateway-less cluster. */
-export function adminTargets(c: Cluster): AdminTarget[] {
+export function adminTargets(c: Cluster, env?: Env): AdminTarget[] {
+  if (isEdge(c.spec)) {
+    const e = env ? edgeCfg(env) : undefined;
+    if (!e) throw new HttpError(409, "control_plane = edge: fv-control has no edge (EDGE_URL, EDGE_INTERNAL_TOKEN and EDGE_ADMIN_TOKEN)");
+    return [{ url: e.url, pod: "edge" }];
+  }
   if (c.state.gateway_url && c.state.gateway) return [{ url: c.state.gateway_url, pod: c.state.gateway.pod }];
   if (!isDirect(c.spec, c.state)) throw new HttpError(409, `${c.name} has no gateway`);
   const out: AdminTarget[] = [];
@@ -318,7 +342,7 @@ async function adminCall(tok: string, t: AdminTarget, method: string, path: stri
 export async function adminOne(env: Env, c: Cluster, method: string, path: string, body?: unknown): Promise<AdminReply> {
   const tok = await adminToken(env, c);
   let last: AdminReply | null = null;
-  for (const t of adminTargets(c)) {
+  for (const t of adminTargets(c, env)) {
     last = await adminCall(tok, t, method, path, body);
     if (last.status !== 0 && last.status < 500 && last.status !== 401) return last;
   }
@@ -327,7 +351,7 @@ export async function adminOne(env: Env, c: Cluster, method: string, path: strin
 /** The same admin call on every target (a revocation applies on each worker at once instead of at its next D1 refresh, ≤ 30 s). */
 export async function adminAll(env: Env, c: Cluster, method: string, path: string): Promise<AdminReply[]> {
   const tok = await adminToken(env, c);
-  return Promise.all(adminTargets(c).map((t) => adminCall(tok, t, method, path)));
+  return Promise.all(adminTargets(c, env).map((t) => adminCall(tok, t, method, path)));
 }
 
 export async function gatewayPublic(env: Env, c: Cluster, path: string): Promise<{ status: number; body: any }> {
@@ -352,7 +376,8 @@ export async function workerHealth(env: Env, podId: string): Promise<{ ok: boole
 }
 export async function gatewayHealthy(env: Env, c: Cluster): Promise<boolean> {
   try {
-    const r = await gatewayFetch(env, c, "/healthz", { timeoutMs: 15000 });
+    // The edge answers /healthz 503 until a front is ready: its status route says it is up.
+    const r = await gatewayFetch(env, c, isEdge(c.spec) ? "/fv/v1/status" : "/healthz", { timeoutMs: 15000 });
     return r.ok;
   } catch {
     return false;
@@ -360,8 +385,9 @@ export async function gatewayHealthy(env: Env, c: Cluster): Promise<boolean> {
 }
 /** Worker internal routes (drain / status) with the internal token (never logged). */
 export async function workerInternal(env: Env, c: Cluster, podId: string, method: "GET" | "POST", path: string): Promise<any> {
-  const s = await secretsOf(env, c);
-  const r = await fetchWithTimeout(`${defaults.podUrl(env, podId)}${path}`, { method, headers: { "x-fv-internal-token": s.internal_token }, timeoutMs: 20000 });
+  // Edge fronts take the edge's internal token, not the cluster's.
+  const token = isEdge(c.spec) ? requireEdge(env).internal_token : (await secretsOf(env, c)).internal_token;
+  const r = await fetchWithTimeout(`${defaults.podUrl(env, podId)}${path}`, { method, headers: { "x-fv-internal-token": token }, timeoutMs: 20000 });
   if (!r.ok) throw new HttpError(502, `${podId} ${path}: ${r.status}`);
   return r.json().catch(() => ({}));
 }
@@ -373,4 +399,28 @@ export async function workerBusy(env: Env, c: Cluster, podId: string): Promise<n
   } catch {
     return 0;
   }
+}
+
+/** The edge's families view (admin token): each family's workers (worker_id = the pod id) and their readiness. */
+export async function edgeFamilies(env: Env): Promise<any> {
+  const e = requireEdge(env);
+  const r = await fetchWithTimeout(`${e.url}/fv/v1/edge/families`, { headers: { authorization: `Bearer ${e.admin_token}` }, timeoutMs: 20000 });
+  if (!r.ok) throw new HttpError(502, `edge /fv/v1/edge/families: ${r.status}`);
+  return r.json();
+}
+/** Pod id → its edge view (ready, jobs held) from the families view. */
+export function edgeWorkers(view: any): Map<string, { ready: boolean; held: number; families: string[]; sha?: string }> {
+  const out = new Map<string, { ready: boolean; held: number; families: string[]; sha?: string }>();
+  for (const [fam, st] of Object.entries<any>(view?.families || {})) {
+    for (const w of st?.workers || []) {
+      const id = String(w.worker_id || "");
+      if (!id) continue;
+      const cur = out.get(id) || { ready: false, held: 0, families: [] as string[], sha: w.sha || undefined };
+      cur.ready = cur.ready || (!!w.connected && w.ready !== false && !w.draining && !!w.front && w.front.ready !== false);
+      cur.held += Number(w.held || 0);
+      cur.families.push(fam);
+      out.set(id, cur);
+    }
+  }
+  return out;
 }

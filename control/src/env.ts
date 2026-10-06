@@ -21,6 +21,10 @@ export interface Env {
   SESSION_SECRET: string;
   /** pbkdf2-sha256$<iter>$<salt b64>$<hash b64> of the owner passphrase (passphrase mode). */
   OWNER_PASSPHRASE_HASH?: string;
+  /** The edge Worker's FV_INTERNAL_TOKEN (control_plane = edge: every worker's). */
+  EDGE_INTERNAL_TOKEN?: string;
+  /** The edge Worker's FV_ADMIN_TOKEN (keys, the families view). */
+  EDGE_ADMIN_TOKEN?: string;
 
   // --- vars
   ENVIRONMENT?: string; // staging | production
@@ -45,6 +49,10 @@ export interface Env {
   PUBLIC_URL?: string;
   /** The account's default balance floor in $ (CLAUDE.md: stop before $8). */
   BALANCE_FLOOR?: string;
+  /** control_plane = edge: the edge Worker's public URL (docs/serve/edge-control-plane.md). */
+  EDGE_URL?: string;
+  /** The edge's D1 database id (its `api_keys` and the workers' job store); FV_D1_DATABASE_ID of edge workers. */
+  EDGE_D1_DATABASE_ID?: string;
   /** "1": the cron does nothing (tests drive it by hand). */
   CRON_DISABLED?: string;
 }

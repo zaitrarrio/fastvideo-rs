@@ -4,7 +4,8 @@
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
 import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
-import { adminGet, gatewayPublic } from "./cluster/ops";
+import { adminGet, edgeCfg, edgeFamilies, edgeWorkers, gatewayPublic } from "./cluster/ops";
+import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { listClusters, type Cluster } from "./cluster/store";
 import { defaults, type Env } from "./env";
@@ -44,8 +45,19 @@ export async function collect(env: Env): Promise<CollectResult> {
   // Jobs per worker from each running gateway (admin pools view), health, whitelisted metrics.
   const jobs = new Map<string, { running: number; queued: number; ready: boolean; healthy: boolean; sha?: string }>();
   const health = new Map<string, string>();
+  // Edge clusters: each front's jobs from the edge's families view (one read for every edge cluster).
+  if (edgeCfg(env) && clusters.some((c) => isEdge(c.spec) && ["running", "starting"].includes(c.status))) {
+    try {
+      for (const [pod, w] of edgeWorkers(await edgeFamilies(env))) {
+        jobs.set(pod, { running: w.held, queued: 0, ready: w.ready, healthy: true, sha: w.sha });
+        health.set(pod, w.ready ? "ready" : "loading");
+      }
+    } catch {
+      /* the edge is down: pods keep their Runpod-side health */
+    }
+  }
   for (const c of clusters) {
-    if (!c.state.gateway || c.state.gateway_stopped || !["running", "starting"].includes(c.status)) continue;
+    if (isEdge(c.spec) || !c.state.gateway || c.state.gateway_stopped || !["running", "starting"].includes(c.status)) continue;
     try {
       const view = await adminGet(env, c, "/fv/v1/gateway/pools");
       health.set(c.state.gateway.pod, "ready");

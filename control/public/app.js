@@ -736,9 +736,11 @@ async function pageCluster(main, id) {
       ),
       h("div", { id: "opLog" }),
     );
-    const gw = c.state.gateway_url;
+    // control_plane = edge (docs/serve/edge-control-plane.md): the edge Worker is the front.
+    const edge = c.spec.control_plane === "edge";
+    const gw = edge ? r.edge_url : c.state.gateway_url;
     // Gateway-less (docs/control/gateway-less-auth.md): clients call each worker; the admin token and keys work on every one.
-    const direct = !gw && !c.spec.gateway.enabled;
+    const direct = !edge && !gw && !c.spec.gateway.enabled;
     const wurls = Object.entries(c.state.workers || {}).flatMap(([pool, l]) => l.filter((r) => r.url).map((r) => ({ pool, pod: r.pod, url: r.url })));
     const reach = !!(gw || (direct && wurls.length));
     const out = (t) => { $("#gwOut").textContent = t; };
@@ -759,17 +761,17 @@ async function pageCluster(main, id) {
       ));
     };
     const tools = card(
-      direct ? "Workers (no gateway)" : "Gateway",
+      edge ? "Edge (the cluster's only front)" : direct ? "Workers (no gateway)" : "Gateway",
       gw
         ? h("p", { class: "small" }, "URL ", h("a", { href: gw, target: "_blank", rel: "noopener" }, gw), " · ", h("a", { href: `${gw}/console`, target: "_blank", rel: "noopener" }, "console"))
         : direct && wurls.length
           ? h("div", { class: "small" }, h("p", { class: "muted small" }, "Clients call each worker directly with an API key; the admin token and minted keys work on every worker."), ...wurls.map((w) => h("p", {}, `${w.pool} ${w.pod}: `, h("a", { href: w.url, target: "_blank", rel: "noopener" }, w.url), " · ", h("a", { href: `${w.url}/console`, target: "_blank", rel: "noopener" }, "console"))))
-          : h("p", { class: "muted small" }, direct ? "No workers." : "No gateway pod."),
+          : h("p", { class: "muted small" }, edge ? "fv-control has no edge (EDGE_URL)." : direct ? "No workers." : "No gateway pod."),
       reach && h(
         "div",
         { class: "row" },
-        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); out(JSON.stringify(j.direct ? { workers: j.workers } : { status: j.status, pools: j.pools }, null, 2)); } }, direct ? "Workers view" : "Pools view"),
-        h("button", { onclick: async () => { if (!confirm(`Show the ${direct ? "cluster" : "gateway"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
+        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : j.direct ? { workers: j.workers } : { status: j.status, pools: j.pools }, null, 2)); } }, edge ? "Families view" : direct ? "Workers view" : "Pools view"),
+        h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : direct ? "cluster" : "gateway"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
         h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
         h("button", { onclick: showKeys }, "Keys"),
       ),
