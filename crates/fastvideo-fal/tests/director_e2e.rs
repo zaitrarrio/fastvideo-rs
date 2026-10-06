@@ -129,9 +129,16 @@ impl Client {
     /// Opus grid (960 samples). A frame or packet lost to load leaves a
     /// multiple of the step, never an off-grid time.
     fn assert_rtp_grids(&self) {
+        self.assert_rtp_grids_at(24);
+    }
+
+    /// [`Self::assert_rtp_grids`] for a model at `fps` (90 kHz / `fps`
+    /// ticks per frame).
+    fn assert_rtp_grids_at(&self, fps: u32) {
+        let step = 90_000 / fps;
         let l = self.media.lock().unwrap();
-        let bad = l.video.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % 3750 != 0);
-        assert!(bad.is_none(), "video RTP off the 24 fps grid: {bad:?}");
+        let bad = l.video.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % step != 0);
+        assert!(bad.is_none(), "video RTP off the {fps} fps grid: {bad:?}");
         let bad = l.audio.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % 960 != 0);
         assert!(bad.is_none(), "audio RTP off the 20 ms grid: {bad:?}");
     }
@@ -575,7 +582,8 @@ async fn session_limit_and_runner_sse() {
     assert_eq!(ex["reason"], "session_limit");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::SessionLimit))), "{st:?}");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Gone from the registry: its engine session is released.
+    assert_not_alive(&f, &c.session_id).await;
 
     // Runner side: SSE whose first event is the answer; dropping the
     // response ends the session.
@@ -669,9 +677,20 @@ async fn chunks_until(c: &mut Client, mut done: impl FnMut(&Value) -> bool) -> (
 /// A causal model (fake LongLive) streams one continuous rollout: chunks of
 /// 4 blocks (48 frames) at 16 fps, video only; a prompt update reaches the
 /// engine once and is applied at the next block with one KV re-cache;
-/// end images are refused; no underruns or late chunks.
+/// end images are refused. The `realtime_` twin also checks the delivery
+/// and generation rates and that nothing underran.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn causal_session_streams_and_recaches_once_per_switch() {
+    causal_session(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "real-time rates: scripts/serve/check.sh --realtime"]
+async fn realtime_causal_session_streams_and_recaches_once_per_switch() {
+    causal_session(true).await;
+}
+
+async fn causal_session(realtime: bool) {
     let Some(h264) = h264_or_skip() else { return };
     let f = fixture(Opts { h264, ..Opts::default() }).await;
     let mut c = open(&f, "fastvideo/longlive/director").await;
@@ -704,13 +723,21 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
         assert_eq!(ch["playback_seconds"], 3.0);
         assert_eq!(ch["causal"]["blocks"], 4);
         assert_eq!(ch["causal"]["recaches"], 0);
-        assert!(ch["causal"]["generation_fps"].as_f64().unwrap() > 16.0, "faster than real time: {ch}");
+        if realtime {
+            assert!(ch["causal"]["generation_fps"].as_f64().unwrap() > 16.0, "faster than real time: {ch}");
+        }
     }
     c.first_video().await;
-    let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
-    eprintln!("causal: {fps:.2} fps (rtp {rtp_fps:.2})");
-    assert!((fps - 16.0).abs() < 1.6, "video arrives at {fps} fps");
-    assert!((rtp_fps - 16.0).abs() < 0.01, "{rtp_fps}");
+    if realtime {
+        let (fps, rtp_fps, _, _) = c.rates(Duration::from_secs(3)).await;
+        eprintln!("causal: {fps:.2} fps (rtp {rtp_fps:.2})");
+        assert!((fps - 16.0).abs() < 1.6, "video arrives at {fps} fps");
+        assert!((rtp_fps - 16.0).abs() < 0.01, "{rtp_fps}");
+    } else {
+        // Two seconds of video arrive, on the 16 fps RTP grid.
+        c.more_media(32, 0).await;
+    }
+    c.assert_rtp_grids_at(16);
     assert!(c.media.lock().unwrap().audio.is_empty());
     // Paced: the rollout stays about `causal_lead_seconds` (2 s) ahead.
     let last = chunks.last().unwrap();
@@ -741,12 +768,16 @@ async fn causal_session_streams_and_recaches_once_per_switch() {
     c.expect("stream_exhausted").await;
     let fm = c.expect("session_metrics").await;
     assert_eq!(fm["final"], true);
-    assert_eq!(fm["gauges"]["underruns"], 0, "{fm}");
+    if realtime {
+        // A loaded host generates slower than real time and underruns.
+        assert_eq!(fm["gauges"]["underruns"], 0, "{fm}");
+    }
     assert_eq!(fm["causal"]["recaches"], 1, "{fm}");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(10)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Stopped))), "{st:?}");
-    // The causal lease is released: a clip session is admitted next.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The causal lease is released (the session left the registry): a
+    // clip session is admitted next.
+    assert_not_alive(&f, &c.session_id).await;
     let mut c2 = open(&f, "minimax/h3-max/director").await;
     c2.expect("session_info").await;
 }
@@ -765,7 +796,8 @@ async fn causal_refusals_and_keep_policy() {
     assert!(e["error"].as_str().unwrap().contains("text-to-video only"), "{e}");
     let st = wait_closed(&f, &c.session_id, Duration::from_secs(5)).await;
     assert!(matches!(st, None | Some(SessionState::Closed(EndReason::Error(_)))), "{st:?}");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Gone from the registry: its engine session is released.
+    assert_not_alive(&f, &c.session_id).await;
 
     let mut c = open(&f, "fastvideo/fake-sfwan/director").await;
     let info = c.expect("session_info").await;
