@@ -265,7 +265,13 @@ async fn ltx_api_keeps_its_required_resolution() {
 
 #[tokio::test]
 async fn console_director_defaults_to_the_image_aspect() {
+    // The page renders the director schema's aspect_ratio (#14): the clip
+    // director's enum offers `auto` first and defaults to it.
+    let schema = include_str!("../../fastvideo-fal/src/catalog.rs");
+    assert!(
+        schema.contains(r#""enum": ["auto", "16:9", "9:16", "1:1"], "default": "auto""#),
+        "the director form offers `auto` first, by default"
+    );
     let js = include_str!("../console/director.js");
-    assert!(js.contains("['auto', '16:9', '9:16', '1:1']"), "the director form offers `auto` first");
-    assert!(js.contains("if (aspect.value !== 'auto') cfg.aspect_ratio = aspect.value;"), "`auto` sends no aspect_ratio");
+    assert!(js.contains("if (aspect.value && aspect.value !== 'auto') cfg.aspect_ratio = aspect.value;"), "`auto` sends no aspect_ratio");
 }
