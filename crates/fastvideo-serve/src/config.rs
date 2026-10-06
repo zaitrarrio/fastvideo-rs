@@ -44,6 +44,7 @@
 //! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
 //! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
 //! | `FV_POOL_<ID>_FAMILY` | a durable-object pool's family object |
+//! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued` (and `FV_DISPATCH_STATUS_S`: `dispatch.status_s`): an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
@@ -805,11 +806,61 @@ pub struct DispatchCfg {
     pub direct_upload: bool,
     /// Part size of direct uploads, MiB (S3: ≥ 5 except the last).
     pub upload_part_mib: u32,
+    /// Also an API front behind the edge Worker (docs/serve/edge-control-plane.md
+    /// §2.4): `auth.mode` becomes `trust-edge`, and a submit is enqueued on
+    /// the model's family object instead of the local engine.
+    pub front: bool,
+    /// This worker's own base URL (the edge forwards here; sessions'
+    /// signalling goes here). Default: `server.public_base_url`.
+    pub endpoint: Option<String>,
+    /// Model id → the family whose object queues its jobs. A model not
+    /// listed goes to the only family (with one), else is not fronted.
+    pub model_families: BTreeMap<String, String>,
+    /// Front: refuse a submit (429) when this many jobs of its model wait
+    /// in its family object (0: no limit; the pool's `max_queued`).
+    pub max_queued: u32,
+    /// Front: re-dispatches after a worker loss before a job fails.
+    pub retries: u32,
+    /// Front: inputs up to this many bytes per job ride inside the
+    /// envelope (as the gateway's `inline_inputs_max_bytes`).
+    pub inline_inputs_max_bytes: u64,
+    /// Front: large video/audio given as a public URL is fetched by the
+    /// executing worker (as the gateway's `input_passthrough`).
+    pub input_passthrough: bool,
 }
 
 impl Default for DispatchCfg {
     fn default() -> Self {
-        Self { do_url: None, capacity: 2, status_s: 10, families: Vec::new(), sessions: 1, session_exclusive: true, direct_upload: false, upload_part_mib: 8 }
+        Self {
+            do_url: None,
+            capacity: 2,
+            status_s: 10,
+            families: Vec::new(),
+            sessions: 1,
+            session_exclusive: true,
+            direct_upload: false,
+            upload_part_mib: 8,
+            front: false,
+            endpoint: None,
+            model_families: BTreeMap::new(),
+            max_queued: 0,
+            retries: 1,
+            inline_inputs_max_bytes: 8 << 20,
+            input_passthrough: true,
+        }
+    }
+}
+
+impl DispatchCfg {
+    /// The family whose object queues `model`'s jobs.
+    pub fn family_of(&self, model: &str) -> Option<&str> {
+        if let Some(f) = self.model_families.get(model) {
+            return Some(f);
+        }
+        match self.families.as_slice() {
+            [one] => Some(one),
+            _ => None,
+        }
     }
 }
 
@@ -1165,6 +1216,27 @@ impl Config {
         if let Some(v) = env.var("FV_DISPATCH_UPLOAD_PART_MIB").and_then(|v| v.trim().parse().ok()) {
             self.dispatch.upload_part_mib = v;
         }
+        if let Some(v) = env.var("FV_DISPATCH_FRONT") {
+            self.dispatch.front = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_DISPATCH_ENDPOINT") {
+            self.dispatch.endpoint = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
+        }
+        if let Some(v) = env.var("FV_DISPATCH_MODEL_FAMILIES") {
+            // `model=family,model=family`
+            self.dispatch.model_families = v
+                .split([',', ' '])
+                .filter_map(|kv| kv.trim().split_once('='))
+                .map(|(m, f)| (m.trim().to_owned(), f.trim().to_owned()))
+                .filter(|(m, f)| !m.is_empty() && !f.is_empty())
+                .collect();
+        }
+        if let Some(v) = env.var("FV_DISPATCH_MAX_QUEUED").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.max_queued = v;
+        }
+        if let Some(v) = env.var("FV_DISPATCH_STATUS_S").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.status_s = v;
+        }
         if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
             self.gateway.runpod_api_key = Secret(v.trim().to_owned());
         }
@@ -1300,7 +1372,7 @@ impl Config {
             if self.server.role != Role::Worker {
                 return bad("gateway.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
             }
-            if self.auth.mode == AuthMode::TrustGateway {
+            if matches!(self.auth.mode, AuthMode::TrustGateway | AuthMode::TrustEdge) {
                 return bad("gateway.direct: no gateway authenticates the clients, so auth.mode must be keys or none (not trust-gateway)".into());
             }
             if self.auth.admin_token.is_empty() {
@@ -1327,6 +1399,22 @@ impl Config {
             }
             if !self.dispatch.families.is_empty() && self.dispatch.do_url.is_none() {
                 return bad("dispatch.families needs dispatch.do_url (FV_DISPATCH_DO_URL)".into());
+            }
+            if self.dispatch.front {
+                if self.dispatch.families.is_empty() || self.dispatch.do_url.is_none() {
+                    return bad("dispatch.front (FV_DISPATCH_FRONT) needs dispatch.do_url and dispatch.families: a front enqueues on the family objects".into());
+                }
+                if self.gateway.direct {
+                    return bad("dispatch.front and gateway.direct exclude each other: behind the edge, the edge authenticates clients".into());
+                }
+                for (m, f) in &self.dispatch.model_families {
+                    if !self.dispatch.families.contains(f) {
+                        return bad(format!("dispatch.model_families: `{m}` maps to `{f}`, which is not in dispatch.families"));
+                    }
+                }
+                if let Some(e) = &self.dispatch.endpoint {
+                    url::Url::parse(e).map_err(|err| ConfigError::Invalid(format!("dispatch.endpoint `{e}`: {err}")))?;
+                }
             }
             if self.dispatch.direct_upload && self.dispatch.families.is_empty() {
                 return bad("dispatch.direct_upload needs dispatch.families: upload URLs come from the family Durable Objects".into());

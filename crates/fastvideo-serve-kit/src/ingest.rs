@@ -494,16 +494,23 @@ impl Ingestor {
                 (data.len() as u64, d.mime.map(str::to_owned))
             }
             MediaRef::Upload(id) => {
-                let f = self
-                    .uploads
-                    .as_ref()
-                    .and_then(|u| u.resolve(id, now))
-                    .ok_or_else(|| ApiError::invalid_param(param, format!("upload `{id}` was not found or has expired")))?;
-                if f.bytes > lim.max_bytes {
-                    return Err(too_large(param, lim.max_bytes));
+                let local = self.uploads.as_ref().and_then(|u| u.resolve(id, now));
+                let remote = self.uploads.as_ref().filter(|_| local.is_none()).and_then(|u| u.remote_for(&id.0));
+                match (local, remote) {
+                    (Some(f), _) => {
+                        if f.bytes > lim.max_bytes {
+                            return Err(too_large(param, lim.max_bytes));
+                        }
+                        tokio::fs::copy(&f.path, &tmp).await.map_err(io)?;
+                        (f.bytes, f.mime)
+                    }
+                    // Another front behind the edge holds it.
+                    (None, Some(r)) => r.fetch(&id.0, &tmp, lim.max_bytes).await.map_err(|e| {
+                        tracing::info!(upload = %id, error = %e, "ingest: remote upload fetch failed");
+                        ApiError::invalid_param(param, format!("upload `{id}` was not found or has expired"))
+                    })?,
+                    (None, None) => return Err(ApiError::invalid_param(param, format!("upload `{id}` was not found or has expired"))),
                 }
-                tokio::fs::copy(&f.path, &tmp).await.map_err(io)?;
-                (f.bytes, f.mime)
             }
             MediaRef::Http(url) => fetch::fetch_to(url, &lim, policy, &tmp, param).await?,
         };

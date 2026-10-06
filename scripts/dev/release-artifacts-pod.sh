@@ -67,14 +67,23 @@ unset GITHUB_SHA
 rm -rf "$T/release-artifacts"
 mkdir -p "$STAGE" "$CACHE"
 
+# apt under the build pod server's lock (build-pod-server.py APT_LOCK): an
+# `apt-get update` here while the server's extras install ran deleted that
+# install's .debs (the image's docker-clean hook), failing it.
+apt_locked() {
+  local lock="${FV_BUILD_APT_LOCK:-/var/lock/fv-apt.lock}"
+  mkdir -p "$(dirname "$lock")"
+  DEBIAN_FRONTEND=noninteractive flock -w 1800 "$lock" apt-get -o DPkg::Lock::Timeout=600 "$@"
+}
+
 # jq (manifest) and binutils (glibc check) are not in rust:1-bookworm by default.
 need_apt=()
 command -v jq >/dev/null || need_apt+=(jq)
 command -v objdump >/dev/null || need_apt+=(binutils)
 if (( ${#need_apt[@]} )); then
   log "apt: ${need_apt[*]}"
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq --no-install-recommends "${need_apt[@]}" >/dev/null
+  apt_locked update -qq >/dev/null
+  apt_locked install -y -qq --no-install-recommends "${need_apt[@]}" >/dev/null
 fi
 
 # ---- prerequisites the image's oxide stage installs with apt ---------------
@@ -84,8 +93,8 @@ fi
 oxide_prereqs() {
   if ! ldconfig -p | grep -q 'libclang[-.0-9]*\.so'; then
     log "apt: libclang-dev"
-    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null
-    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq --no-install-recommends libclang-dev >/dev/null
+    apt_locked update -qq >/dev/null
+    apt_locked install -y -qq --no-install-recommends libclang-dev >/dev/null
   fi
   local redist ver="${FV_BUILD_CUDA_REDIST:-13.4.2}" base="https://developer.download.nvidia.com/compute/cuda/redist/"
   redist="$CACHE/cuda-$ver-libcurand"

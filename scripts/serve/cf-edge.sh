@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # fv-edge: the Cloudflare Worker + per-pool Durable Object dispatcher
 # (crates/fastvideo-edge, docs/serve/gateway-cloudflare.md "How to run the
-# parallel path"). STAGING ONLY: every Cloudflare resource is named
-# `fv-edge-staging` and nothing else is touched.
+# parallel path") and the public API edge of a cluster without a gateway
+# (docs/serve/edge-control-plane.md: keys, quotas, routing to the fronts,
+# session admission; the `Registry` Durable Object). STAGING ONLY: every
+# Cloudflare resource is named `fv-edge-staging` and nothing else is touched.
+# The staging D1 (`fv-edge-staging`: `edge_jobs`, the workers' job store and
+# `api_keys`) and the outputs bucket are the ones the cluster's workers use
+# (FV_D1_DATABASE_ID = $STATE/d1_id); never `fv-jobs`.
 #
 #   cf-edge.sh build            wasm on the shared build pod (scripts/dev/build-pod.sh;
 #                               FV_EDGE_BUILD=local: local cargo), then wasm-bindgen +
@@ -31,6 +36,10 @@
 # FV_EDGE_SESSION_TTL_MS, FV_EDGE_UPLOAD_TTL_MS, FV_EDGE_ACK_TIMEOUT_MS,
 # FV_EDGE_RECONNECT_GRACE_MS, FV_EDGE_STALE_AFTER_MS, FV_EDGE_REDISPATCH_WAIT_MS,
 # FV_EDGE_SPILL_BYTES (envelopes above it go to R2, default 1 MiB),
+# the public edge's: FV_EDGE_AUTH (keys | none), FV_EDGE_KEY_RPM, FV_EDGE_KEY_IN_FLIGHT
+# (quotas, 0: none), FV_REACTOR_MODEL, FV_EDGE_WHIP (proxy | redirect: WHIP offers
+# proxied, or a 307 to the worker with a session capability), FV_EDGE_API_KEYS_FILE
+# (static keys' SHA-256 list -> secret FV_API_KEYS; minted keys live in D1),
 # FV_EDGE_BUILD_AGENT (build-pod agent name, default this worktree's), FV_EDGE_TOOLS.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,7 +135,9 @@ write_config() {
   {
     printf 'name = "%s"\nmain = "build/index.js"\ncompatibility_date = "%s"\nworkers_dev = true\npreview_urls = false\n\n' "$NAME" "$COMPAT_DATE"
     printf '[[durable_objects.bindings]]\nname = "POOL_SCHEDULER"\nclass_name = "PoolScheduler"\n\n'
+    printf '[[durable_objects.bindings]]\nname = "REGISTRY"\nclass_name = "Registry"\n\n'
     printf '[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["PoolScheduler"]\n\n'
+    printf '[[migrations]]\ntag = "v2"\nnew_sqlite_classes = ["Registry"]\n\n'
     printf '[[d1_databases]]\nbinding = "DB"\ndatabase_name = "%s"\ndatabase_id = "%s"\n\n' "$D1_NAME" "$d1_id"
     printf '[[r2_buckets]]\nbinding = "ENVELOPES"\nbucket_name = "%s"\n\n' "$R2_NAME"
     printf '[[r2_buckets]]\nbinding = "OUTPUTS"\nbucket_name = "%s"\n\n' "$OUT_R2_NAME"
@@ -134,7 +145,11 @@ write_config() {
     printf '[vars]\nFV_EDGE_VERSION = "%s"\n' "$version"
     printf "POOL_LOCATIONS = '%s'\n" "$locations"
     printf 'OUTPUTS_BUCKET = "%s"\n' "$OUT_R2_NAME"
-    [[ -n "${FV_EDGE_SESSION_TTL_MS:-}" ]] && printf 'SESSION_TTL_MS = "%s"\n' "$FV_EDGE_SESSION_TTL_MS"
+    [[ -n "${FV_EDGE_SESSION_TTL_MS:-}" ]] && printf 'SESSION_TTL_MS = "%s"\nFV_EDGE_SESSION_TTL_MS = "%s"\n' "$FV_EDGE_SESSION_TTL_MS" "$FV_EDGE_SESSION_TTL_MS"
+    local v
+    for v in FV_EDGE_AUTH FV_EDGE_KEY_RPM FV_EDGE_KEY_IN_FLIGHT FV_REACTOR_MODEL FV_EDGE_WHIP; do
+      [[ -n "${!v:-}" ]] && printf '%s = "%s"\n' "$v" "${!v}"
+    done
     [[ -n "${FV_EDGE_UPLOAD_TTL_MS:-}" ]] && printf 'UPLOAD_TTL_MS = "%s"\n' "$FV_EDGE_UPLOAD_TTL_MS"
     [[ -n "${FV_EDGE_ACK_TIMEOUT_MS:-}" ]] && printf 'ACK_TIMEOUT_MS = "%s"\n' "$FV_EDGE_ACK_TIMEOUT_MS"
     [[ -n "${FV_EDGE_RECONNECT_GRACE_MS:-}" ]] && printf 'RECONNECT_GRACE_MS = "%s"\n' "$FV_EDGE_RECONNECT_GRACE_MS"
@@ -143,6 +158,13 @@ write_config() {
     [[ -n "${FV_EDGE_SPILL_BYTES:-}" ]] && printf 'SPILL_BYTES = "%s"\n' "$FV_EDGE_SPILL_BYTES"
     true
   } >"$dest"
+}
+
+# FV_EDGE_API_KEYS_FILE (static keys' SHA-256 digests), or nothing.
+api_keys_file() {
+  [[ -z "${FV_EDGE_API_KEYS_FILE:-}" ]] && return 0
+  [[ -s "$FV_EDGE_API_KEYS_FILE" ]] || die "FV_EDGE_API_KEYS_FILE names an empty or missing file"
+  printf '%s' "$FV_EDGE_API_KEYS_FILE"
 }
 
 version_string() {
@@ -162,6 +184,9 @@ cmd_dev() {
   local uk
   uk="$(token_file FV_EDGE_UPLOAD_KEY_FILE upload_key)"
   printf 'FV_INTERNAL_TOKEN=%s\nFV_ADMIN_TOKEN=%s\nFV_UPLOAD_SIGNING_KEY=%s\n' "$(cat "$it")" "$(cat "$at")" "$(cat "$uk")" >"$dir/.dev.vars"
+  local kf
+  kf="$(api_keys_file)"
+  [[ -n "$kf" ]] && printf 'FV_API_KEYS=%s\n' "$(tr '\n' ',' <"$kf")" >>"$dir/.dev.vars"
   log "wrangler dev on 127.0.0.1:$port (state $OUT/dev-state; tokens from $STATE)"
   cd "$dir"
   exec env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
@@ -242,7 +267,7 @@ cmd_deploy() {
   secrets="$STATE/secrets.json.tmp"
   local uk
   uk="$(token_file FV_EDGE_UPLOAD_KEY_FILE upload_key)"
-  python3 -c 'import json,sys; print(json.dumps({"FV_INTERNAL_TOKEN": open(sys.argv[1]).read().strip(), "FV_ADMIN_TOKEN": open(sys.argv[2]).read().strip(), "FV_UPLOAD_SIGNING_KEY": open(sys.argv[3]).read().strip()}))' "$it" "$at" "$uk" >"$secrets"
+  python3 -c 'import json,sys; d={"FV_INTERNAL_TOKEN": open(sys.argv[1]).read().strip(), "FV_ADMIN_TOKEN": open(sys.argv[2]).read().strip(), "FV_UPLOAD_SIGNING_KEY": open(sys.argv[3]).read().strip()}; k=sys.argv[4] and open(sys.argv[4]).read().strip(); k and d.update(FV_API_KEYS=k); print(json.dumps(d))' "$it" "$at" "$uk" "$(api_keys_file)" >"$secrets"
   log "deploying $NAME (version $version)"
   local rc=0
   (cd "$dir" && "$WRANGLER" deploy --secrets-file "$secrets") || rc=$?
