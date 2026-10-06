@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh determinism|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -2304,6 +2304,95 @@ Audio: male speech, clear voice, quiet room"
             [[ "$kind" == frames ]] && [[ "$a" == 0 ]] && got=none
             printf '%s %s %s %s\n' "$c/$run" "$kind" "$([[ -n "$want" && "$got" == "$want" ]] && echo IDENTICAL || echo DIFFERENT)" "$got"
           done <"$f"
+        done
+      done
+    } | tee "$RUNS/determinism.txt" | tee -a "$LOG"
+    ;;
+  det-short)
+    # Short-config bit-identity check (docs/perf/determinism.md "Results"):
+    # every arm runs FV_DET_REPEATS (default 3) times, each in a fresh
+    # process with its own caches (nothing shared on disk between runs), and
+    # the frames (PNG bytes, in path order) and audio.wav are hashed per run.
+    # One more process per model with FASTVIDEO_SDPA_AUTO=timed (the old
+    # per-process timed pick) is the speed baseline. Arms (FV_DET_CELLS
+    # picks; default all but ltx-sol):
+    #   h3      FastH3 4-step dense, 768x1344, 5 s (self-attention 56 x 37 710: rule -> cuDNN)
+    #   wan     FastWan2.2 TI2V-5B, 3 steps, 704x1280x121 (24 x 27 280: rule -> cuDNN)
+    #   ltx     LTX-2.5 distilled two-stage, dense stage 2, bf16 attention
+    #           (FASTVIDEO_ATTN_SAGE=0), 1088x1920x97 (stage 2 32 x 26 520: rule -> cuDNN)
+    #   ltx-sage  the same with SageAttention2 (FASTVIDEO_ATTN_SAGE=2: what
+    #           ltx-pro serves on sm_120 by default)
+    #   ltx-sol the ltx-turbo route (Sol stage 2), same canvas
+    # $RUNS/determinism.txt holds the verdicts, each cell's hashes.json its hashes.
+    reps="${FV_DET_REPEATS:-3}"
+    det_p="${FV_DET_PROMPT:-A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field}"
+    det_on() { [[ " ${FV_DET_CELLS:-h3 wan ltx ltx-sage} " == *" $1 "* ]]; }
+    # sh_hash <cell>: sha256 over every frame PNG under the cell (sorted by
+    # path, warm-up excluded), and of the audio.wav if any; then the PNGs
+    # are deleted but for frame-000.
+    sh_hash() {
+      local c="$RUNS/$1" fh ah n
+      n="$(find "$c" -name 'frame-*.png' ! -path '*/warmup/*' | wc -l)"
+      fh="$(find "$c" -name 'frame-*.png' ! -path '*/warmup/*' -print0 | sort -z | xargs -0 -r cat | sha256sum | cut -d' ' -f1)"
+      ah="$(find "$c" -name 'audio.wav' ! -path '*/warmup/*' -print0 | sort -z | xargs -0 -r cat | sha256sum | cut -d' ' -f1)"
+      (( n == 0 )) && fh=none
+      [[ -z "$(find "$c" -name 'audio.wav' ! -path '*/warmup/*' | head -1)" ]] && ah=none
+      write_json "$c/hashes.json" "$(printf '{"cell":"%s","frames":%s,"frames_sha256":"%s","audio_sha256":"%s"}' "$1" "$n" "$fh" "$ah")"
+      printf '%s frames=%s frames_sha256=%s audio_sha256=%s\n' "$1" "$n" "$fh" "$ah" | tee -a "$RUNS/hashes.txt" | tee -a "$LOG"
+      find "$c" -name 'frame-*.png' ! -name 'frame-000.png' -delete
+    }
+    # args_<arm> <cell dir>: that arm's command for one run, into ARGS.
+    args_h3() {
+      ARGS=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense --seconds 5
+        --prompt "$det_p" --seed 7 --text-encoder resident-fp8 --text-weights "$W/h3-base" --no-text-cache
+        --adaln-cache "$1/adaln.cache" --clip-dir "$1/frames")
+    }
+    args_wan() {
+      ARGS=(env FASTVIDEO_WAN_VAE=full "$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b"
+        --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 7 --height 704 --width 1280
+        --num-frames 121 --prompt "$det_p" --no-text-cache --no-mp4 --clip-dir "$1/frames")
+    }
+    ltx_args() {
+      local c="$1" sage="$2" route="$3"
+      ARGS=(env FASTVIDEO_ATTN_SAGE="$sage" "$BIN" --mode fast --techniques "ltx2/ltx25_distill_$route" ltx2 gen
+        --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" --two-stage "--$route-stage2"
+        --height 1088 --width 1920 --num-frames 97 --frame-rate 24 --text streamed --no-text-cache
+        --prompt "$det_p" --seed 7 --clip "$c/frames")
+    }
+    args_ltx() { ltx_args "$1" 0 dense; }
+    args_ltx-sage() { ltx_args "$1" 2 dense; }
+    args_ltx-sol() { ltx_args "$1" 0 sol; }
+    # sh_arm <arm> <verify cell>: runs r1..rN, then `timed` (not for ltx-sage:
+    # Sage takes the long shapes, so the timed pick only moves cross-attention).
+    sh_arm() {
+      local arm="$1" wcell="$2" i cell timed
+      det_on "$arm" || return 0
+      for i in $(seq 1 "$reps") timed; do
+        [[ "$i" == timed && "$arm" == ltx-sage ]] && continue
+        cell="$arm-r$i" timed=()
+        [[ "$i" == timed ]] && { cell="$arm-timed"; timed=(FASTVIDEO_SDPA_AUTO=timed); }
+        mkdir -p "$RUNS/$cell"
+        "args_$arm" "$RUNS/$cell"
+        gated_cell "$cell" "$wcell" env FASTVIDEO_CACHE="$RUNS/$cell/cache" XDG_CACHE_HOME="$RUNS/$cell/cache" \
+          ${timed[@]+"${timed[@]}"} "${ARGS[@]}"
+        sh_hash "$cell"
+      done
+    }
+    sh_arm h3 fasth3-4step-dense
+    sh_arm wan fastwan22-ti2v-5b
+    sh_arm ltx ltx25-two-stage
+    sh_arm ltx-sage ltx25-two-stage
+    sh_arm ltx-sol ltx25-two-stage
+    # Verdicts: each run against r1 of its arm (the timed control too).
+    {
+      for arm in h3 wan ltx ltx-sage ltx-sol; do
+        ref="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*frames_sha256=\([^ ]*\).*/\1/')"
+        refa="$(grep -h "^$arm-r1 " "$RUNS/hashes.txt" 2>/dev/null | sed 's/.*audio_sha256=\([^ ]*\).*/\1/')"
+        [[ -n "$ref" ]] || continue
+        grep -hE "^$arm-(r[0-9]+|timed) " "$RUNS/hashes.txt" | while read -r cell fr fh ah; do
+          fh="${fh#frames_sha256=}"; ah="${ah#audio_sha256=}"
+          v=DIFFERENT; [[ "$fh" != none && "$fh" == "$ref" && "$ah" == "$refa" ]] && v=IDENTICAL
+          printf '%s %s frames %s audio %s\n' "$cell" "$v" "$fh" "$ah"
         done
       done
     } | tee "$RUNS/determinism.txt" | tee -a "$LOG"
