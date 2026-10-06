@@ -115,8 +115,8 @@ RUN . /etc/fastvideo/cuda-13.pins \
       --arg ffmpeg "$(ffmpeg -version | head -1 | cut -d' ' -f1-3)" \
       --arg nvcc "$(nvcc --version | tail -1)" --arg tileiras "$(tileiras --version 2>&1 | tail -1)" \
       --arg glibc "$(ldd --version | head -1)" \
-      '{rust: $rust, cargo: $cargo, sccache: $sccache, mold: $mold, clang: $clang, cmake: $cmake,
-        python: $python, node: $node, playwright: $playwright, ffmpeg: $ffmpeg, nvcc: $nvcc,
+      '{rust: $rust, cargo: $cargo, sccache: $sccache, mold: $mold, clang: $clang, cmake: $cmake, \
+        python: $python, node: $node, playwright: $playwright, ffmpeg: $ffmpeg, nvcc: $nvcc, \
         tileiras: $tileiras, glibc: $glibc}' >/etc/fastvideo/build-base.json \
  && cat /etc/fastvideo/build-base.json
 
