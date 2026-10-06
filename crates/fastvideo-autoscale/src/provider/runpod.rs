@@ -17,8 +17,6 @@
 //! - [`RunpodBalance`]: GraphQL `myself { clientBalance }`.
 //! - [`RunpodHealthSignals`]: queue signals from `/health` alone, for
 //!   running the controller without a gateway (provider validation).
-//! - [`HttpGatewayPools`]: signals from a gateway's
-//!   `GET /fv/v1/gateway/pools` (an autoscaler outside the gateway process).
 //!
 //! The API key is only ever sent as a header; errors never echo it.
 
@@ -30,7 +28,7 @@ use serde_json::{json, Map, Value};
 
 use super::{ApplyReport, BalanceSource, Provider, ProviderError};
 use crate::config::{PoolConfig, PoolKind};
-use crate::gateway::{GatewayPoolMetrics, GatewaySignals, SignalSource, WorkerRegistry};
+use crate::gateway::{SignalSource, WorkerRegistry};
 use crate::types::{EndpointSettings, PoolDecision, PoolObservation, PoolSignals, Worker, WorkerState};
 
 /// API endpoints and the key.
@@ -332,41 +330,6 @@ impl SignalSource for RunpodHealthSignals {
             });
         }
         out
-    }
-}
-
-/// Signals from a gateway over HTTP (`GET /fv/v1/gateway/pools`, admin token).
-pub struct HttpGatewayPools {
-    http: reqwest::Client,
-    base: String,
-    admin_token: String,
-    sink: GatewaySignals,
-}
-
-impl HttpGatewayPools {
-    pub fn new(base: impl Into<String>, admin_token: impl Into<String>) -> Result<Self, ProviderError> {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().map_err(|e| err("http client", e))?;
-        Ok(Self { http, base: base.into().trim_end_matches('/').to_owned(), admin_token: admin_token.into(), sink: GatewaySignals::default() })
-    }
-}
-
-#[async_trait::async_trait]
-impl SignalSource for HttpGatewayPools {
-    async fn signals(&self, pools: &[String]) -> Vec<PoolSignals> {
-        #[derive(serde::Deserialize)]
-        struct Pools {
-            pools: Vec<GatewayPoolMetrics>,
-        }
-        let r = self.http.get(format!("{}/fv/v1/gateway/pools", self.base)).bearer_auth(&self.admin_token).send().await;
-        match r {
-            Ok(resp) if resp.status().is_success() => match resp.json::<Pools>().await {
-                Ok(p) => self.sink.update(&p.pools),
-                Err(e) => tracing::warn!(error = %e.without_url(), "autoscale: gateway pools body"),
-            },
-            Ok(resp) => tracing::warn!(status = %resp.status(), "autoscale: gateway pools"),
-            Err(e) => tracing::warn!(error = %e.without_url(), "autoscale: gateway pools unreachable"),
-        }
-        self.sink.signals(pools).await
     }
 }
 

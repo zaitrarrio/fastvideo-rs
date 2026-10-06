@@ -9,7 +9,7 @@
 #   wan        runpod-wan.toml               …:wan                              fv-serve-wan-sls / -pod
 #   wan5b      runpod-wan5b.toml             …:wan5b                            fv-serve-wan5b-sls / -pod
 #   sfwan      runpod-sfwan.toml             …:sfwan                            fv-serve-sfwan-sls / -pod
-#   gateway    gateway.toml                  …:gateway (CPU only)               fv-serve-gateway-pod
+#   cpu        runpod-fake.toml              …:cpu (CPU only, fake engine)      fv-serve-cpu-pod
 #   debug      every config (legacy image)   …:latest / :sha-…                  (none)
 
 #
@@ -27,7 +27,7 @@
 #   sfwan      sfwan      runpod-sfwan.toml          in the image
 #   longlive   sfwan      runpod-longlive.toml       inline (LongLive-1.3B; NON-COMMERCIAL weights)
 
-FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan gateway"
+FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan cpu"
 # <preset>:<variant>:<config> for every non-standard preset (the table above).
 FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml"
 FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
@@ -53,7 +53,7 @@ fv_variant_config() {
     wan) echo runpod-wan.toml ;;
     wan5b) echo runpod-wan5b.toml ;;
     sfwan) echo runpod-sfwan.toml ;;
-    gateway) echo gateway.toml ;;
+    cpu) echo runpod-fake.toml ;;
     *) return 1 ;;
   esac
 }
@@ -68,8 +68,8 @@ fv_variant_for_config() {
   return 0
 }
 
-# fv_variant_flavours <variant> -> "sls pod" (gateway: "pod")
-fv_variant_flavours() { [[ "$1" == gateway ]] && echo pod || echo "sls pod"; }
+# fv_variant_flavours <variant> -> "sls pod" (cpu: "pod")
+fv_variant_flavours() { [[ "$1" == cpu ]] && echo pod || echo "sls pod"; }
 
 fv_template_name() { echo "fv-serve-$1-$2"; }
 

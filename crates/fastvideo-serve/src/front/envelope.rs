@@ -1,6 +1,5 @@
-//! The dispatch envelope and its inputs (docs/serve/gateway.md §3, §3.1),
-//! shared by the gateway and the fronts behind the edge
-//! (docs/serve/edge-control-plane.md §2.4).
+//! The dispatch envelope and its inputs: what a front behind the edge
+//! enqueues on a family object (docs/serve/edge-control-plane.md §2.4).
 //!
 //! Envelope (**native**), the body of the worker's
 //! `POST /fv/v1/internal/jobs` and of a family object's push:
@@ -12,23 +11,17 @@
 //! rest go through the artifact store (R2) with a signed URL.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine as _;
-use fastvideo_protocol::{ApiError, Artifact, Job, JobId, MediaKind};
+use fastvideo_protocol::{ApiError, Artifact, Job, MediaKind};
 use fastvideo_serve_kit::artifacts::valid_file_name;
-use fastvideo_serve_kit::d1::{D1Client, Stmt};
 use fastvideo_serve_kit::{ArtifactMeta, ServeCtx};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// `param` of the error a dispatch returns when the worker could not fetch
 /// a passed-through input (HTTP 424 from the worker).
 pub const INPUT_FETCH_FAILED: &str = "dispatch.inputs";
-
-/// Serverless pools inline at most this much: a Runpod `/run` body is
-/// ≤ 10 MB and base64 adds a third.
-pub(crate) const SERVERLESS_INLINE_MAX: u64 = 6 * 1024 * 1024;
 
 /// One input shipped to the worker, by exactly one of `inline`, `source`,
 /// or `url` (with `artifact`).
@@ -71,10 +64,6 @@ impl InputRef {
         } else {
             "none"
         }
-    }
-    /// The copy kept in `gw_dispatch` (D1 rows stay small: never the bytes).
-    pub(crate) fn for_record(&self) -> Self {
-        Self { inline: None, ..self.clone() }
     }
 }
 
@@ -162,42 +151,6 @@ pub(crate) async fn store_many(ctx: &ServeCtx, ttl: Duration, inputs: &mut [Inpu
         inputs[i] = r;
     }
     Ok(())
-}
-
-/// Background copy of the inputs that skipped the store (see the module
-/// docs), then the `gw_dispatch` row points at them. Dropped again when
-/// the row moved on meanwhile (job done, or already re-dispatched).
-pub(crate) async fn stage_for_retry(db: D1Client, ctx: ServeCtx, ttl: Duration, job: JobId, attempt: u32, mut inputs: Vec<InputRef>) {
-    let t0 = Instant::now();
-    let idx: Vec<usize> = (0..inputs.len()).filter(|&i| inputs[i].artifact.is_none()).collect();
-    if idx.is_empty() {
-        return;
-    }
-    if let Err(e) = store_many(&ctx, ttl, &mut inputs, &idx).await {
-        tracing::warn!(job = %job, error = %e.message, "gateway: copying inputs to the store for a re-dispatch failed");
-        return;
-    }
-    let rec: Vec<InputRef> = inputs.iter().map(InputRef::for_record).collect();
-    let body = serde_json::to_string(&rec).unwrap_or_else(|_| "[]".into());
-    let changed = db
-        .query(Stmt::new(
-            "UPDATE gw_dispatch SET inputs = ? WHERE job_id = ? AND attempt = ? AND state = 'active'",
-            vec![json!(body), json!(job.to_string()), json!(attempt)],
-        ))
-        .await
-        .map(|r| r.changes)
-        .unwrap_or(0);
-    if changed == 0 {
-        for i in &idx {
-            if let Some(a) = &inputs[*i].artifact {
-                ctx.artifacts().delete(a).await;
-            }
-        }
-        return;
-    }
-    let s = t0.elapsed().as_secs_f64();
-    metrics::histogram!("fv_gateway_retry_stage_seconds").record(s);
-    tracing::debug!(job = %job, inputs = idx.len(), ms = (s * 1e3) as u64, "gateway: inputs copied to the store for a re-dispatch");
 }
 
 /// The dispatch envelope (see the module docs).

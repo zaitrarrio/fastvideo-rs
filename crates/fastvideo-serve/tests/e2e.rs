@@ -380,23 +380,7 @@ fn shipped_configs_parse() {
             continue;
         }
         let text = std::fs::read_to_string(&p).unwrap();
-        let mut c = Config::from_toml(&text, &p.display().to_string()).unwrap();
-        // The gateway's secrets and pool endpoints come from the environment.
-        if c.engine.backend == fastvideo_serve::config::EngineBackendKind::Remote {
-            let mut env: BTreeMap<String, String> = [
-                ("FV_INTERNAL_TOKEN", "t"),
-                ("FV_CF_ACCOUNT_ID", "a"),
-                ("FV_CF_API_TOKEN", "t"),
-                ("FV_D1_DATABASE_ID", "d"),
-            ]
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v.to_owned()))
-            .collect();
-            for pool in &c.pools {
-                env.insert(format!("{}ENDPOINT", pool.env_prefix()), "ep".into());
-            }
-            c.apply_env(&env).unwrap();
-        }
+        let c = Config::from_toml(&text, &p.display().to_string()).unwrap();
         c.validate().unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         // CUDA configs: every `[[models]]` entry resolves against the
         // catalog and the set shares one process.
@@ -547,7 +531,7 @@ async fn multi_worker_with_shared_jobs_reads_across_workers() {
     use fastvideo_serve::multiworker::{layer, Policy};
     let mock = MockD1::new();
     let db = || D1Client::new(Arc::new(mock.clone()));
-    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false, gateway: false };
+    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false };
     let mut workers = Vec::new();
     for (tag, id) in [("lb-a", "worker-a"), ("lb-b", "worker-b")] {
         let store = D1JobStore::new(db(), D1Options::new(id)).open(time::OffsetDateTime::now_utc()).await.unwrap();

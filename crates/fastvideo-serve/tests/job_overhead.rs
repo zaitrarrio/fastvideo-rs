@@ -1,13 +1,13 @@
-//! Per-job overhead on the fake engine (docs/serve/gateway.md §3.5): one
-//! job end to end on a single server and through the gateway with one pod
-//! worker, with D1 mocked at 0 ms and at 250 ms per call.
+//! Per-job overhead on the fake engine: one job end to end on a single
+//! server, with D1 mocked at 0 ms and at 250 ms per call. (The gateway
+//! rows went with the gateway; the edge path is timed live,
+//! docs/serve/edge-control-plane.md "Stage 3 results".)
 //!
 //! - `overhead_budget_on_the_fake_engine` (always runs): at 0 ms D1 the job
 //!   is visible as finished to a client (status poll, SSE, webhook) within
-//!   the simulated work plus a small margin, on both paths.
+//!   the simulated work plus a small margin.
 //! - `waterfall` (`--ignored --nocapture`): prints the timeline of every
-//!   instrumented point (the `debug` events of the submit pipeline, gateway,
-//!   worker, engine pump, output, store; every D1 call; the R2 mock; the
+//!   instrumented point (the `debug` events of the submit pipeline, engine pump, output, store; every D1 call; the R2 mock; the
 //!   client's poll, SSE and webhook) and the gaps over 100 ms.
 
 #![cfg(feature = "http-client")]
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use fastvideo_serve::config::{Config, EngineBackendKind, JobBackend, KeyStoreBackend, PoolCfg, PoolKind, Role};
+use fastvideo_serve::config::{Config, JobBackend, KeyStoreBackend};
 use fastvideo_serve::{App, Overrides};
 use fastvideo_serve_kit::d1::client::{D1Error, D1Transport, RawReply};
 use fastvideo_serve_kit::d1::mock::MockD1;
@@ -167,7 +167,6 @@ impl fastvideo_serve_kit::ArtifactStore for R2Mock {
 #[derive(Clone, Debug)]
 struct Scn {
     name: &'static str,
-    gateway: bool,
     d1_ms: u64,
     r2_put_ms: u64,
     /// The fake engine writes its MP4 through ffmpeg/libx264 (when present).
@@ -184,8 +183,8 @@ struct Scn {
 }
 
 impl Scn {
-    fn new(name: &'static str, gateway: bool, d1_ms: u64) -> Self {
-        Self { name, gateway, d1_ms, r2_put_ms: 0, x264: false, progress_ms: 1000, heartbeat_s: 60, watch_poll_ms: 1000, poll_ms: 20, step_ms: STEP_MS }
+    fn new(name: &'static str, d1_ms: u64) -> Self {
+        Self { name, d1_ms, r2_put_ms: 0, x264: false, progress_ms: 1000, heartbeat_s: 60, watch_poll_ms: 1000, poll_ms: 20, step_ms: STEP_MS }
     }
     fn work_ms(&self) -> f64 {
         (self.step_ms * STEPS) as f64
@@ -218,6 +217,7 @@ fn base_config(tag: &str, sh: &Shared, s: &Scn) -> Config {
     c.jobs.backend = JobBackend::D1;
     c.jobs.progress_interval_ms = s.progress_ms;
     c.jobs.heartbeat_s = s.heartbeat_s;
+    c.gateway.watch_poll_ms = s.watch_poll_ms;
     c.auth.key_store = KeyStoreBackend::Memory;
     c.server.callbacks_allow_private = true;
     c.protocols.fastwan = false;
@@ -261,10 +261,9 @@ async fn serve(c: Config, sh: &Shared, listener: tokio::net::TcpListener, base: 
     Running { _app: app, base, task }
 }
 
-/// The server the client talks to, and what stands behind it.
+/// The server the client talks to.
 struct Setup {
     entry: Running,
-    _worker: Option<Running>,
 }
 
 async fn setup(s: &Scn) -> Setup {
@@ -275,44 +274,12 @@ async fn setup(s: &Scn) -> Setup {
         r2_put: Duration::from_millis(s.r2_put_ms),
     };
     std::fs::create_dir_all(&sh.arts).unwrap();
-    if !s.gateway {
-        let (l, base) = listen().await;
-        let mut c = base_config("single", &sh, s);
-        c.server.public_base_url = Some(base.clone());
-        engine_config(&mut c, s);
-        c.validate().unwrap();
-        return Setup { entry: serve(c, &sh, l, base).await, _worker: None };
-    }
-    let (wl, wbase) = listen().await;
-    let mut wc = base_config("worker", &sh, s);
-    wc.server.role = Role::Worker;
-    wc.server.public_base_url = Some(wbase.clone());
-    wc.server.worker_id = Some("worker-overhead".into());
-    engine_config(&mut wc, s);
-    wc.validate().unwrap();
-    let worker = serve(wc, &sh, wl, wbase.clone()).await;
-    let (gl, gbase) = listen().await;
-    let mut gc = base_config("gw", &sh, s);
-    gc.engine.backend = EngineBackendKind::Remote;
-    gc.server.public_base_url = Some(gbase.clone());
-    gc.pools = vec![PoolCfg {
-        id: "h3".into(),
-        kind: PoolKind::Pod,
-        urls: vec![wbase],
-        fake_models: vec!["fake-h3-turbo".into()],
-        stale_after_s: 30,
-        retries: 1,
-        ..PoolCfg::default()
-    }];
-    gc.gateway.tick_s = 1;
-    gc.gateway.watch_poll_ms = s.watch_poll_ms;
-    gc.gateway.runpod_api_base = "http://127.0.0.1:9/v2".into();
-    gc.gateway.runpod_api_key = fastvideo_serve::config::Secret("rp-key".into());
-    gc.validate().unwrap();
-    let entry = serve(gc, &sh, gl, gbase).await;
-    // Let a probe see the worker.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    Setup { entry, _worker: Some(worker) }
+    let (l, base) = listen().await;
+    let mut c = base_config("single", &sh, s);
+    c.server.public_base_url = Some(base.clone());
+    engine_config(&mut c, s);
+    c.validate().unwrap();
+    Setup { entry: serve(c, &sh, l, base).await }
 }
 
 // ---- one job -----------------------------------------------------------------
@@ -426,8 +393,8 @@ async fn one_job(s: &Scn) -> (Seen, Vec<Mark>) {
 
 fn print_waterfall(s: &Scn, seen: &Seen, tl: &[Mark]) {
     let Some(t0) = tl.first().map(|m| m.at) else { return };
-    println!("\n=== {} (gateway: {}, D1 {} ms, R2 PUT {} ms, x264: {}, progress {} ms, heartbeat {} s, watch poll {} ms, client poll {} ms, steps 4 x {} ms)",
-        s.name, s.gateway, s.d1_ms, s.r2_put_ms, s.x264, s.progress_ms, s.heartbeat_s, s.watch_poll_ms, s.poll_ms, s.step_ms);
+    println!("\n=== {} (D1 {} ms, R2 PUT {} ms, x264: {}, progress {} ms, heartbeat {} s, watch poll {} ms, client poll {} ms, steps 4 x {} ms)",
+        s.name, s.d1_ms, s.r2_put_ms, s.x264, s.progress_ms, s.heartbeat_s, s.watch_poll_ms, s.poll_ms, s.step_ms);
     let mut prev = t0;
     let mut prev_key = t0;
     let mut gaps = Vec::new();
@@ -462,17 +429,13 @@ fn print_waterfall(s: &Scn, seen: &Seen, tl: &[Mark]) {
 #[ignore = "measurement: prints the per-job waterfall"]
 async fn waterfall() {
     let mut out = Vec::new();
-    let burst_like = Scn { progress_ms: 100, heartbeat_s: 1, watch_poll_ms: 100, poll_ms: 100, x264: true, ..Scn::new("gateway, burst-test settings, x264", true, 250) };
     let scns = [
-        Scn::new("single, D1 0 ms", false, 0),
-        Scn::new("single, D1 250 ms", false, 250),
-        Scn::new("gateway, D1 0 ms", true, 0),
-        Scn::new("gateway, D1 250 ms", true, 250),
-        Scn { step_ms: 300, ..Scn::new("gateway, D1 0 ms, 4 x 300 ms", true, 0) },
-        Scn { step_ms: 300, ..Scn::new("gateway, D1 250 ms, 4 x 300 ms", true, 250) },
-        Scn { r2_put_ms: 1000, ..Scn::new("gateway, D1 250 ms, R2 PUT 1 s", true, 250) },
-        Scn { x264: true, ..Scn::new("single, D1 0 ms, x264", false, 0) },
-        burst_like,
+        Scn::new("single, D1 0 ms", 0),
+        Scn::new("single, D1 250 ms", 250),
+        Scn { step_ms: 300, ..Scn::new("single, D1 250 ms, 4 x 300 ms", 250) },
+        Scn { r2_put_ms: 1000, ..Scn::new("single, D1 250 ms, R2 PUT 1 s", 250) },
+        Scn { x264: true, ..Scn::new("single, D1 0 ms, x264", 0) },
+        Scn { progress_ms: 100, heartbeat_s: 1, watch_poll_ms: 100, poll_ms: 100, x264: true, ..Scn::new("single, burst-test settings, x264", 250) },
     ];
     for s in scns {
         let (seen, tl) = one_job(&s).await;
@@ -488,20 +451,15 @@ async fn waterfall() {
 
 /// The overhead budget: a job's completion reaches the client (status
 /// poll, SSE, webhook) within the simulated work plus a margin (submit,
-/// pump, output, store writes, the client's own 20 ms poll) at 0 ms D1, on
-/// a single server and through the gateway; with D1 at 250 ms, within the
-/// round trips a job needs (the gateway's insert, the worker's adopt, the
-/// terminal write) plus the same margin. The steps (4 x 300 ms) end between
-/// two ticks of the gateway's 1 s watch poll, which a job used to wait for.
+/// pump, output, store writes, the client's own 20 ms poll) at 0 ms D1;
+/// (`rtts`: D1 round trips allowed on top, for slower-D1 rows).
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn overhead_budget_on_the_fake_engine() {
     // Debug build on a loaded CI host: generous next to the ~1 s poll tick
     // and the serial writes this guards against.
     let margin = 400.0;
     for (s, rtts) in [
-        (Scn { step_ms: 300, ..Scn::new("single, D1 0 ms", false, 0) }, 0.0),
-        (Scn { step_ms: 300, ..Scn::new("gateway, D1 0 ms", true, 0) }, 0.0),
-        (Scn { step_ms: 300, ..Scn::new("gateway, D1 250 ms", true, 250) }, 3.0),
+        (Scn { step_ms: 300, ..Scn::new("single, D1 0 ms", 0) }, 0.0),
     ] {
         let (seen, tl) = one_job(&s).await;
         print_waterfall(&s, &seen, &tl);

@@ -64,12 +64,8 @@ native = true
 queue_max = 32
 body_max_mb = 64
 
-# Behind the gateway (docs/serve/gateway.md): FV_SERVE_ROLE=worker and
-# FV_INTERNAL_TOKEN; the worker registers with the gateway's `wan14b` pod
-# pool. Standalone deployments ignore this.
+# As a cluster worker (FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN): its pool.
+# Standalone deployments ignore this.
 [gateway]
 pool = "wan14b"
-tick_s = 5
-metrics_window_s = 600
 watch_poll_ms = 1000
-runpod_api_base = "https://api.runpod.ai/v2"

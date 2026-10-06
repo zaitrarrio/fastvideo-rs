@@ -61,11 +61,6 @@ pub struct Policy {
     pub artifacts: bool,
     /// Minted keys are in D1.
     pub keys: bool,
-    /// This is the gateway (docs/serve/gateway.md §6): cancel/delete go
-    /// through `gw_dispatch`, SSE polls D1 and session signalling follows
-    /// D1 leases, so those routes are served by any replica; only uploads,
-    /// `/fal/proxy` and (without R2) `/files` stay pinned.
-    pub gateway: bool,
 }
 
 impl Policy {
@@ -77,17 +72,12 @@ impl Policy {
             jobs: jobs_kind == "d1",
             artifacts: c.artifact_backend() == ArtifactBackend::S3,
             keys: c.key_store_backend() == KeyStoreBackend::D1,
-            gateway: c.engine.backend == crate::config::EngineBackendKind::Remote,
         }
     }
 
-    /// Whether the route at `path` (of `scope`) is served, with the
-    /// gateway's wider set.
-    pub fn serves_route(&self, scope: Scope, path: &str) -> bool {
-        if self.serves(scope) {
-            return true;
-        }
-        self.gateway && scope == Scope::Pinned && self.jobs && !gateway_pinned(path, self.artifacts)
+    /// Whether the route at `path` (of `scope`) is served.
+    pub fn serves_route(&self, scope: Scope, _path: &str) -> bool {
+        self.serves(scope)
     }
 
     pub fn multi(&self) -> bool {
@@ -121,17 +111,6 @@ impl Policy {
             Scope::Pinned => "it needs the worker that holds the job, upload or session, and a load balancer cannot route to it",
         })
     }
-}
-
-/// Routes a gateway replica still cannot serve for another one: its upload
-/// store is local disk (and `/files` without R2); `/fal/proxy` re-enters the
-/// router past this filter.
-fn gateway_pinned(path: &str, artifacts_shared: bool) -> bool {
-    path.starts_with("/uploads/")
-        || path == "/v1/upload"
-        || path == "/storage/upload/initiate"
-        || path == "/fal/proxy"
-        || (path.starts_with("/files/") && !artifacts_shared)
 }
 
 /// The scope of one §9 route.

@@ -12,10 +12,6 @@
 #                                           build (no rebuild), update the Runpod templates when
 #                                           <channel> is the templates' channel, record it in D1
 #   release.sh rollback [channel] [--to ID] re-promote the channel's previous release
-#   release.sh redeploy <pool|all|gateway> [channel|sha]
-#                                           rolling: a new worker on the target build, wait for
-#                                           ready, drain the old one, delete it (the standing
-#                                           cluster of runpod-cluster.sh)
 #   release.sh reconcile [--dry-run] [--adopt] [--fix]
 #                                           match the account's pods / endpoints / templates to
 #                                           the deployments table: gone rows are marked deleted,
@@ -61,7 +57,6 @@ REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GH_API="${FV_GITHUB_API:-https://api.github.com}"
 GH_REPO="${FV_GITHUB_REPO:-zaitrarrio/fastvideo-rs}"
 TEMPLATE_CHANNEL="${FV_TEMPLATE_CHANNEL:-stable}"
-STATE="${FV_CLUSTER_STATE:-$FV_ROOT/artifacts/runpod/serve/cluster.json}"
 
 # ---- flags ------------------------------------------------------------------
 DRY=0 MODE="" NOTES="" TEMPLATES=1 PARTIAL=0 FORCE=0 TO="" CHANNEL_OPT="" LIMIT=20 PROBE=0 JSON=0 VERIFY=0 ADOPT=0 FIX=0 TPL_UPDATED=0
@@ -447,45 +442,6 @@ cmd_reconcile() {
   echo "reconcile: $n_gone gone$( ((DRY)) && echo " (not marked: dry run)"), $n_unknown unknown$( ((ADOPT && ! DRY)) && echo " (adopted)"), $n_drift drifted"
 }
 
-# ---- redeploy (rolling) -----------------------------------------------------
-
-cmd_redeploy() {
-  local sel="${ARGS[0]:?redeploy <pool|all|gateway> [channel|sha]}" target="${ARGS[1]:-stable}" rel digests pools p kind key img old specs=()
-  [[ -s "$STATE" ]] || die "no cluster state ($STATE): redeploy rolls the standing cluster of runpod-cluster.sh"
-  # A cluster started on per-variant images (`up sha-…` / `up <channel>`)
-  # rolls onto the target's variant images, else onto its all-in-one image.
-  kind="${FV_CLUSTER_IMAGE_KIND:-$(jq -r 'if (.images // {} | length) > 0 then "variant" else "debug" end' "$STATE")}"
-  if [[ "$target" =~ ^[a-z][a-z0-9-]{1,30}$ ]] && fv_d1_available && rel="$(fv_release_current "$target" 2>/dev/null)" && [[ -n "$rel" ]]; then
-    digests="$(jq -c '.digests | fromjson' <<<"$rel")"
-    log "target: $target = release $(jq -r .id <<<"$rel") ($(short "$(jq -r .git_sha <<<"$rel")"))"
-    export FV_RELEASE_CHANNEL="$target"
-  else
-    rel="$(resolve "$target")"
-    digests="$(jq -c .digests <<<"$rel")"
-    log "target: build $(jq -r .short <<<"$rel")"
-  fi
-  if [[ "$sel" == all ]]; then pools="$(jq -r '.workers | keys[]' "$STATE") gateway"; else pools="$sel"; fi
-  for p in $pools; do
-    if [[ "$p" == gateway ]]; then
-      key=debug; [[ "$kind" == variant ]] && key=gateway
-      old="$(jq -r '.gateway.image // .images.gateway // .image' "$STATE")"
-    else
-      jq -e --arg p "$p" '.workers | has($p)' "$STATE" >/dev/null || die "the cluster has no pool $p ($(jq -r '.workers | keys | join(", ")' "$STATE"))"
-      key=debug
-      if [[ "$kind" == variant ]]; then key="$p"; [[ "$p" == wan ]] && key=wan5b; fi
-      old="$(jq -r --arg p "$p" '.workers[$p].image // .images[$p] // .image' "$STATE")"
-    fi
-    img="$(jq -r --arg k "$key" '.[$k] // empty' <<<"$digests")"
-    [[ -n "$img" ]] || die "the target has no $key image"
-    if [[ "$old" == "$img" ]] && ((! FORCE)); then log "$p: already $(dshort "$img")"; continue; fi
-    echo "  $p: $(dshort "$old") -> $(dshort "$img")"
-    specs+=("$p=$img")
-  done
-  ((${#specs[@]})) || { echo "nothing to redeploy"; return 0; }
-  if ((DRY)); then echo "(dry run: nothing changed)"; return 0; fi
-  bash "$HERE/runpod-cluster.sh" roll "${specs[@]}"
-}
-
 # ---- CI ---------------------------------------------------------------------
 
 cmd_record_build() {
@@ -513,7 +469,7 @@ main() {
     deployed) cmd_deployed ;;
     promote) cmd_promote ;;
     rollback) cmd_rollback ;;
-    redeploy) cmd_redeploy ;;
+    redeploy) die "redeploy is gone with runpod-cluster.sh: roll a cluster with fv-control (scripts/serve/fv-control.sh roll)" ;;
     reconcile) cmd_reconcile ;;
     resolve) resolve "${ARGS[0]:?resolve <sha|digest|tag>}" | jq . ;;
     record-build) cmd_record_build ;;

@@ -1,11 +1,8 @@
-# Gateway autoscaler (crates/fastvideo-autoscale; docs/serve/gateway.md §8).
-#
-# Include: append this file's tables to configs/serve/gateway.toml, or point
-# the standalone controller at it (`fv-autoscale --config <this file>`).
-# Pool names are the gateway's `[[pools]] id`s (configs/serve/gateway.toml);
-# a serverless pool without `serverless.endpoint_id` takes the gateway
-# pool's `endpoint_id` (FV_POOL_<ID>_ENDPOINT). The standalone binary needs
-# it set here. Only `[autoscale]` tables are read by `fv-autoscale`.
+# The standalone autoscaler (crates/fastvideo-autoscale):
+# `fv-autoscale --config configs/autoscale.toml`. Its in-gateway mode went
+# with the gateway (docs/serve/edge-control-plane.md §9 stage 4); fv-control
+# clusters scale through fv-control. Every serverless pool needs
+# `serverless.endpoint_id` here. Only `[autoscale]` tables are read.
 #
 # Secrets come from the environment only: RUNPOD_API_KEY (FV_RUNPOD_API_KEY),
 # FV_ADMIN_TOKEN (the admin route), the D1 set for the lease row
