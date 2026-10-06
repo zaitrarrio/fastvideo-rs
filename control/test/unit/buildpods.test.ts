@@ -46,7 +46,7 @@ describe("placement", () => {
   });
 
   const c = (dc: string, flavor: string, vcpu: number, stock: string | null, price = vcpu * 0.03, extra: Partial<Candidate> = {}): Candidate => ({ dc, flavor, vcpu, ram: vcpu * 2, stock, price, ...extra });
-  it("drops candidates without stock or over the $/hr cap; ranks volume, preferred region, size, flavor, stock", () => {
+  it("drops candidates over the $/hr cap; ranks volume, preferred region, size, reported stock, flavor, stock", () => {
     // The live picture of 2026-10-06: no 32-vCPU cpu5c anywhere, cpu3c-32 High in EU-RO-1 / EUR-IS-1.
     const cands = [
       c("US-CA-2", "cpu3c", 16, "High", 0.48),
@@ -58,7 +58,15 @@ describe("placement", () => {
       c("US-IL-1", "cpu3g", 32, "High", 1.6),
     ];
     const r = rankCandidates(cands, pol);
-    expect(r.map((x) => `${x.flavor}-${x.vcpu}@${x.dc}`)).toEqual(["cpu3c-32@EU-RO-1", "cpu3c-32@EUR-IS-1", "cpu5c-16@EUR-IS-1", "cpu3c-16@EU-NL-1", "cpu3c-16@US-CA-2"]);
+    // Unreported stock (null) stays in, after reported stock at the same size: Runpod answers
+    // null for most sizes above 2 vCPU even where a create succeeds.
+    expect(r.map((x) => `${x.flavor}-${x.vcpu}@${x.dc}`)).toEqual(["cpu3c-32@EU-RO-1", "cpu3c-32@EUR-IS-1", "cpu5c-32@EU-RO-1", "cpu5c-16@EUR-IS-1", "cpu3c-16@EU-NL-1", "cpu3c-16@US-CA-2"]);
+    // All unreported (the live picture of 2026-10-06 evening): still a plan, volume DC first.
+    const blind = cands.map((x) => ({ ...x, stock: null }));
+    expect(rankCandidates([...blind, c("EU-RO-1", "cpu3c", 16, null, 0.48, { volume_id: "pxy4hlsnwq" })], pol)[0]).toMatchObject({ dc: "EU-RO-1", volume_id: "pxy4hlsnwq" });
+    expect(rankCandidates(blind, pol)).toHaveLength(6);
+    // A status Runpod might add later and we do not know is still dropped.
+    expect(rankCandidates([c("EU-RO-1", "cpu3c", 32, "Unavailable", 0.96)], pol)).toEqual([]);
     // A DC with a cache volume goes first.
     const v = rankCandidates([...cands, c("EUR-IS-1", "cpu3c", 16, "Medium", 0.48, { volume_id: "jg48s6o1w0" })], pol);
     expect(v[0]).toMatchObject({ dc: "EUR-IS-1", vcpu: 16, volume_id: "jg48s6o1w0" });
