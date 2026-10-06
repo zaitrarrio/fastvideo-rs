@@ -127,10 +127,15 @@ cpu3c-16 also in EU-NL-1 and US-CA-2). Candidates are ordered by:
 2. the preferred regions;
 3. size (`vcpus`, largest first);
 4. the `flavors` order;
-5. stock (High > Medium > Low);
+5. stock (High > Medium > Low > not reported: a reported stock first at the
+   same size, before the `flavors` order);
 6. price.
 
-Candidates without stock or above `max_dph_per_pod` are dropped. fv-control
+Candidates above `max_dph_per_pod`, or with a stock status other than High,
+Medium, Low or null, are dropped. **Null is kept as "unknown"**: Runpod
+answers `stockStatus: null` for most CPU sizes above 2 vCPU even where a
+create succeeds (2026-10-06: every DC, every size from 4 vCPU up), and
+dropping them left `plan` empty. fv-control
 then creates the pod on the first candidate (`dataCenterIds: [dc]`,
 `cpuFlavorIds: [flavor]`). It falls through to the next on "no instances
 available", and retries once with Runpod's container-disk cap when that is
