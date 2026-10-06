@@ -51,6 +51,9 @@ pub struct CudaBackendConfig {
     pub encoder: Mp4Encoder,
     /// NVENC constant quality (`-cq`).
     pub quality: u8,
+    /// Fragmented, append-only MP4 output (docs/serve/dispatch-do-family.md §7.2).
+    #[serde(default)]
+    pub mp4_fragmented: bool,
 }
 
 impl CudaBackendConfig {
@@ -63,6 +66,7 @@ impl CudaBackendConfig {
             keep_frames: false,
             encoder: Mp4Encoder::Nvenc,
             quality: 19,
+            mp4_fragmented: false,
         }
     }
 }
@@ -415,6 +419,7 @@ impl CudaBackend {
                 Mp4Encoder::Libx264CpuTest => FfmpegH264::Libx264CpuTest,
             },
             quality: self.cfg.quality,
+            fragmented: self.cfg.mp4_fragmented,
             keep_frames: self.cfg.keep_frames,
         }
     }

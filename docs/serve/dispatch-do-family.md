@@ -1,7 +1,8 @@
 # Family Durable Objects: one queue per model family, GPU hosts as clients
 
-Status: **design 2026-10-02**, implementation behind the existing opt-in
-(`dispatch = "durable-object"`); the classic gateway path stays the default.
+Status: **design 2026-10-02; implemented 2026-10-02/05** behind the existing
+opt-in (`dispatch = "durable-object"` + `family`); the classic gateway path
+stays the default. Results: §14.
 This document extends the per-pool `PoolScheduler` design and its phases 0–2
 in [gateway-cloudflare.md](gateway-cloudflare.md) (§3, §9). Read that first:
 everything there (push dispatch, ack = adopt, leases as fencing tokens,
@@ -405,8 +406,10 @@ depth and age per family; the autoscaler policy takes `queued`,
 
 ## 11. Region
 
-A DO lives in one location (where first used, or its `locationHint`). A
-family DO in `weur` with workers in EUR-IS-1 and US-CA-2 costs the US workers
+A DO lives in one location (where first used, or its `locationHint`). The
+deployment is EU-only now (EUR-IS-1 workers, the EU volume): pin every family
+object to `weur` (`FV_EDGE_POOL_LOCATIONS`). Should workers outside Europe
+come back, a family DO in `weur` with workers in another continent costs them
 about 100–150 ms per message (offer, ack, credit, upload grant). That is
 acceptable: one job costs a handful of messages against a 5–40 s run, and
 part PUTs go to R2 directly, not through the DO. Media never touches the DO.
@@ -456,4 +459,92 @@ needs no protocol change.
 
 ## 14. Results
 
-(Filled in as the implementation and the staging run land.)
+### 14.1 What was built
+
+| component | where | what |
+|---|---|---|
+| protocol 2 + scheduler | `crates/fastvideo-dispatch-proto` (`lib.rs`, `sched.rs`) | `Scope` (pool / family routes), the frames of §6.1, credit placement (§6.2), 429 arbiter nack → immediate re-offer without backoff or bounce limit, session admission / ack / nack / offer timeout / renew / expiry / release / re-announce, lease-fenced uploads (create → grant → complete, abort on loss / fence / cancel / TTL), `metrics` |
+| presigner | `fastvideo-dispatch-proto::presign` | SigV4 query presigning with extra signed params (`UploadPart`), edge capability URLs (`/up`, `/dl`, HMAC + expiry); pure Rust, builds for wasm32 |
+| Durable Object | `crates/fastvideo-edge/src/edge.rs` | `/families/{f}/…` next to `/pools/{p}/…` (same class, object `family:{f}`); SQLite tables `sessions`, `uploads` (schema 2, additive); R2 multipart through the `OUTPUTS` binding; `/up` and `/dl` checked at the Worker front (no DO hop); S3-presigned mode when `R2_*` secrets exist; admission waits for the worker's answer (20 s); `edge_results` in D1 |
+| worker | `crates/fastvideo-serve/src/{arbiter,edge_link,upload}.rs` | one socket per family, one arbiter per GPU (§6.3), `slots` on every budget change, session offers, re-announce; per-job upload thread that follows the growing output, verify pass, commit through the object; `DirectStore` in front of the artifact store |
+| fragmented MP4 | `fastvideo-media::mp4` (`Mp4Spec::fragmented`), engine-service CUDA delivery, `engine.mp4_fragmented` | append-only MP4; the gate skips the faststart remux unless the job needs a crop or `-an` |
+| gateway | `crates/fastvideo-serve/src/gateway/{edge,proxy,tick}.rs` | `[[pools]] family`: family routes; director / Reactor / native-stream sessions admitted by the object, signalling proxied to the returned endpoint, the object's session id kept in `gw_sessions.body`, renewed by the tick and released when the gateway's lease ends; a family pool keeps only its own models' live caps |
+| deploy | `scripts/serve/cf-edge.sh` | R2 `fv-edge-staging-outputs` (lifecycle: abort incomplete multipart uploads after 1 day, delete objects after 7), `FV_UPLOAD_SIGNING_KEY` secret, `status family:<f>` |
+| GPU driver | `scripts/serve/e2e/do-family-pod.sh` | one worker on two families + a gateway on the e2e pod: burst, kill drill, director session |
+
+fv-control does **not** show the per-family queue depth yet (follow-up): the
+signal is `GET /families/{f}/metrics` (and `cf-edge.sh status family:<f>`);
+adding it to fv-control needs a new Worker secret on its staging deploy,
+which is another service's change.
+
+### 14.2 Tests
+
+- `fastvideo-dispatch-proto`: 29 unit tests (16 new: credits, arbiter nack,
+  v2 ack timeout, v2 redeploy re-announce, sessions ×3, uploads ×2, metrics,
+  presigner ×5).
+- `fastvideo-serve`: `arbiter` (8 threads × 50 rounds of concurrent offers
+  from two families: never more than one taken), `upload` (presigner equal to
+  serve-kit's `S3Config::presign` on R2 / AWS / path-style endpoints).
+- `fastvideo-media`: `fragmented_mp4_is_append_only` (real ffmpeg: every byte
+  on disk while frames are written is unchanged at the end; `ftyp`, `moov`,
+  `moof…`; 96 frames decode).
+- `tests/edge_family.rs` (native family objects + an S3 mock that checks
+  every SigV4 signature): **7/7** — two-family burst (12 jobs, 19–21 offers,
+  7–9 arbiter 429s, no worker ever ran two jobs at once, each job through its
+  own family's pool), 429 → re-offered elsewhere (queue 2 ms), ack timeout →
+  requeue to another worker under a new lease, object restart during jobs →
+  workers back in 0.26 s, every job offered once and finished where it ran,
+  direct upload committed (key, bytes, sha256), tail upload (6 of 7 parts sent
+  while the file grew; a header patch re-sent part 1 only; 31 ms from finish
+  to commit), session admission (Reactor through the gateway; the GPU's batch
+  job waits while the session holds it; a second session gets 429; stop frees
+  the GPU and the job runs).
+- **The same tests against the staging Worker** (`FV_EDGE_URL`, real wasm
+  object, R2 binding): burst, direct upload (object read back through `/dl`,
+  24,721 bytes) and session admission (0.2 s) pass; the four that need the
+  stand-in's internals skip.
+- `FV_SERVE_HEAVY=1 scripts/serve/check.sh` (build pod): check, clippy
+  (native and wasm32) and every test pass except
+  `ingest_whip::whip_ingest_round_trips_the_camera_through_the_echo`. That test
+  needs the VP8 echo encoder to keep real time (it failed with 24 frames sent,
+  612 dropped, in 29 s; the passing run on main took 22 s). It failed only on
+  a loaded shared build pod. The diff touches no ingest, WebRTC or echo code,
+  and every new path in `App::build` is gated on `dispatch.*` settings that
+  test does not set. A re-run on an idle pod is pending: the Runpod balance
+  went negative before it could run.
+
+### 14.3 Staging and one GPU (2026-10-02)
+
+- Staging Worker `fv-edge-staging` version `9e1c237-20261002T115751Z`, family
+  objects hinted to `weur`.
+- One RTX PRO 6000 (EUR-IS-1, EU volume read-only, pod `32l8nou003heyf`,
+  runtime image + this branch's `fv-serve`): one worker with
+  `fastwan22-ti2v-5b` (family `wan`) and `longlive-1.3b` (family `sfwan`) in
+  one process (both non-VSA; `fastwan21-1.3b` cannot share a process with
+  SF-Wan), loaded in 250 s, holding sockets to `family:wan` and
+  `family:sfwan`. A gateway on the same pod.
+- **Burst, 3 + 3 jobs at once**: all 6 succeeded, one after another (capacity
+  1), every output committed through the object (direct upload, fragmented
+  MP4, no remux). From the engine's last frame to the stored result:
+  **1.19–1.67 s** (outputs of 1.0–3.2 MB, a single part each: overlap needs
+  outputs above the 5 MiB part size, so `early` was 0 here).
+- **Bug found and fixed** (fb1bb40): the gateway took a family pool's live
+  caps from its workers' hellos, and a two-family worker reports both
+  families' models, so `p-wan` claimed LongLive and all six jobs went through
+  `family:wan`. A family pool now keeps only its own models; the burst test
+  asserts each job's pool.
+- **Not run on the GPU** (the pod's backstop ended the window, then the
+  Runpod balance went negative): the classic-path baseline, the kill
+  drill, and the LongLive director session through the object. The
+  native and staging tests cover these paths (§14.2).
+- Spend: one pod for 60 min at $2.09/h ≈ **$2.09**; deleted by its backstop
+  (`GET /pods/32l8nou003heyf` → 404).
+
+### 14.4 Before this becomes the default
+
+The criteria of §12.3, plus: the GPU numbers above (classic vs DO time to
+result on outputs larger than a part, a kill drill, a director session), the
+`ingest_whip` re-run on an idle pod, per-family queue depth in fv-control,
+and the production items of gateway-cloudflare.md §9.9 (production Worker on
+`fv-jobs`, the gateway's artifact bucket bound as `OUTPUTS`, a least-privilege
+token, alerts, a deploy runbook).

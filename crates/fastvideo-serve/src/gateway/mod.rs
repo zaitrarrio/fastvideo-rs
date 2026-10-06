@@ -432,6 +432,9 @@ pub struct Lease {
     pub lease_key: Option<String>,
     pub state: String,
     pub created_at: i64,
+    /// A family object's session id (its admission reserved the GPU;
+    /// docs/serve/dispatch-do-family.md §8); kept in `gw_sessions.body`.
+    pub do_session: Option<String>,
 }
 
 /// The gateway (see the module docs).

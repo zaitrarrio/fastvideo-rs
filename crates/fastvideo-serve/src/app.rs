@@ -258,6 +258,7 @@ fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
     } else {
         Mp4Encoder::Nvenc
     };
+    cfg.mp4_fragmented = c.engine.mp4_fragmented;
     let b = CudaBackend::new(cfg).map_err(|e| anyhow!("cuda backend: {e}"))?;
     Ok(Box::new(b))
 }
@@ -304,6 +305,16 @@ impl App {
         };
         let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
         let worker_role = config.server.role == crate::config::Role::Worker;
+        // Direct output uploads through the family objects' part URLs
+        // (docs/serve/dispatch-do-family.md §7): in front of the store.
+        #[cfg(feature = "http-client")]
+        let direct_uploads = (worker_role && config.dispatch.direct_upload && !config.dispatch.families.is_empty())
+            .then(|| crate::upload::Uploads::new(u64::from(config.dispatch.upload_part_mib) << 20));
+        #[cfg(feature = "http-client")]
+        let artifacts: Arc<dyn fastvideo_serve_kit::ArtifactStore> = match &direct_uploads {
+            Some(u) => crate::upload::DirectStore::new(artifacts, u.clone()),
+            None => artifacts,
+        };
         // A direct worker (no gateway in front, `gateway.direct`) keeps its
         // own API auth; validate() refused trust-gateway for it.
         let direct = worker_role && config.gateway.direct;
@@ -339,6 +350,7 @@ impl App {
                 placeholder: config.engine.backend == EngineBackendKind::Fake && config.engine.fake.placeholder_output,
                 encoder,
                 scratch: config.server.state_dir.join("outputs"),
+                fragmented: config.engine.mp4_fragmented,
             },
         );
 
@@ -576,18 +588,35 @@ impl App {
             .with_drain(drained, registration.clone());
             let st = Arc::new(st);
             // Push dispatch: a socket to the pool's Durable Object
-            // (docs/serve/gateway-cloudflare.md); the internal routes stay.
-            if let (Some(do_url), Some(pool)) = (&config.dispatch.do_url, &config.gateway.pool) {
-                background.push(crate::edge_link::spawn(
-                    st.clone(),
-                    crate::edge_link::LinkCfg {
-                        do_url: do_url.clone(),
-                        pool: pool.clone(),
-                        token: config.gateway.internal_token.expose().to_owned(),
-                        capacity: config.dispatch.capacity,
-                        status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
-                    },
-                ));
+            // (docs/serve/gateway-cloudflare.md), or one per model family
+            // with the GPU's arbiter (docs/serve/dispatch-do-family.md); the
+            // internal routes stay.
+            if let Some(do_url) = &config.dispatch.do_url {
+                use fastvideo_dispatch_proto::Scope;
+                let link = |scope: Scope| crate::edge_link::LinkCfg {
+                    do_url: do_url.clone(),
+                    scope,
+                    token: config.gateway.internal_token.expose().to_owned(),
+                    capacity: config.dispatch.capacity,
+                    status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
+                    endpoint: base.as_str().trim_end_matches('/').to_owned(),
+                    engine_out: config.server.state_dir.join("engine-out"),
+                };
+                if !config.dispatch.families.is_empty() {
+                    let fam = crate::edge_link::Family {
+                        arbiter: Arc::new(crate::arbiter::Arbiter::new(
+                            config.dispatch.capacity,
+                            config.dispatch.sessions,
+                            config.dispatch.session_exclusive,
+                        )),
+                        uploads: direct_uploads.clone(),
+                    };
+                    for f in &config.dispatch.families {
+                        background.push(crate::edge_link::spawn(st.clone(), link(Scope::Family(f.clone())), Some(fam.clone())));
+                    }
+                } else if let Some(pool) = &config.gateway.pool {
+                    background.push(crate::edge_link::spawn(st.clone(), link(Scope::Pool(pool.clone())), None));
+                }
             }
             streams = streams.merge(crate::worker::routes_shared(st));
         }
