@@ -1,81 +1,84 @@
-//! Cosmos3-Super FlowMatch Euler schedule.
+//! Cosmos3-Super sampling schedule.
 //!
-//! Predict2 Video2World is EDM and records flow-shift 10 without applying it.
-//! This Super path is FlowMatch, so the published shift is applied.
+//! The Hub `scheduler/scheduler_config.json` is Diffusers'
+//! `UniPCMultistepScheduler` with `use_karras_sigmas`, `use_flow_sigmas`,
+//! `sigma_min = 0.147`, `sigma_max = 200`, `solver_order = 2`, `bh2`,
+//! `predict_x0`, `final_sigmas_type = "zero"`. In `set_timesteps` the Karras
+//! branch runs first:
+//!
+//! ```text
+//! ramp = linspace(0, 1, n);  s = (max^(1/7) + ramp (min^(1/7) - max^(1/7)))^7
+//! sigma = s / (s + 1);       timestep = int64(sigma * 1000)
+//! ```
+//!
+//! and never reaches the `flow_shift` branch, so the `flow_shift=10.0` the
+//! HF example and `models/cosmos3.toml` pass is inert under this config.
 
-use crate::cosmos::sol::OFFICIAL_STEPS;
-use crate::schedulers::FlowMatchEulerDiscreteScheduler;
+use crate::schedulers::FlowUniPCMultistepScheduler;
 
-use super::config::Cosmos3Preset;
+/// Hub scheduler constants.
+pub const KARRAS_SIGMA_MIN: f64 = 0.147;
+pub const KARRAS_SIGMA_MAX: f64 = 200.0;
+pub const KARRAS_RHO: f64 = 7.0;
 
-/// Thin wrapper: FlowMatch Euler with the Super `flow_shift`.
-#[derive(Debug, Clone)]
-pub struct Cosmos3Schedule {
-    pub inner: FlowMatchEulerDiscreteScheduler,
-    pub flow_shift: f64,
-    pub num_inference_steps: usize,
+/// Karras flow sigmas (no terminal zero), rounded to f32 as the scheduler stores them.
+pub fn karras_flow_sigmas(steps: usize, sigma_min: f64, sigma_max: f64) -> Vec<f64> {
+    let n = steps.max(1);
+    let (lo, hi) = (sigma_min.powf(1.0 / KARRAS_RHO), sigma_max.powf(1.0 / KARRAS_RHO));
+    (0..n)
+        .map(|i| {
+            let ramp = if n == 1 { 0.0 } else { i as f64 / (n - 1) as f64 };
+            let s = (hi + ramp * (lo - hi)).powf(KARRAS_RHO);
+            f64::from((s / (s + 1.0)) as f32)
+        })
+        .collect()
 }
 
-impl Cosmos3Schedule {
-    pub fn official() -> Self {
-        Self::new(OFFICIAL_STEPS, Cosmos3Preset::Super64bT2v)
-    }
+/// The configured UniPC (`solver_order 2`, `bh2`, `predict_x0`, lower-order final).
+pub fn unipc(steps: usize) -> FlowUniPCMultistepScheduler {
+    let mut s = FlowUniPCMultistepScheduler::new(1_000, 1.0);
+    s.set_sigmas(&karras_flow_sigmas(steps, KARRAS_SIGMA_MIN, KARRAS_SIGMA_MAX));
+    s
+}
 
-    pub fn new(num_steps: usize, preset: Cosmos3Preset) -> Self {
-        Self::with_shift(num_steps, preset.flow_shift())
-    }
-
-    pub fn with_shift(num_steps: usize, flow_shift: f64) -> Self {
-        let mut inner = FlowMatchEulerDiscreteScheduler::new(1_000, flow_shift);
-        inner.set_timesteps(num_steps.max(1));
-        Self {
-            inner,
-            flow_shift,
-            num_inference_steps: num_steps.max(1),
-        }
-    }
-
-    pub fn num_steps(&self) -> usize {
-        self.num_inference_steps
-    }
-
-    pub fn timesteps(&self) -> &[f64] {
-        self.inner.inference_timesteps()
-    }
-
-    pub fn sigmas(&self) -> &[f64] {
-        self.inner.inference_sigmas()
-    }
+/// The transformer's timestep input: `int64` scheduler timestep × `timestep_scale`.
+pub fn transformer_timestep(t: i64, timestep_scale: f32) -> f32 {
+    t as f32 * timestep_scale
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cosmos::sol::{
-        fp4_linear, official_requested, teacache_requested, TEACACHE_MAX_CONSECUTIVE,
-        TEACACHE_START_STEP, TEACACHE_THRESHOLD,
-    };
-    use crate::schedulers::flow_match::apply_shift;
+
+    const HUB_SCHED: &str = include_str!("hub/super_scheduler_config.json");
 
     #[test]
-    fn official_applies_recorded_flow_shift() {
-        let s = Cosmos3Schedule::official();
-        assert_eq!(s.flow_shift, 10.0);
-        assert_eq!(s.num_steps(), 35);
-        assert_eq!(s.timesteps().len(), 35);
-        assert!((s.sigmas()[0] - apply_shift(1.0, 10.0)).abs() < 1e-9);
-        assert!((s.sigmas().last().copied().unwrap() - 0.0).abs() < 1e-12);
+    fn hub_scheduler_is_karras_flow_unipc() {
+        let v: serde_json::Value = serde_json::from_str(HUB_SCHED).unwrap();
+        assert_eq!(v["_class_name"], "UniPCMultistepScheduler");
+        assert_eq!(v["use_karras_sigmas"], true);
+        assert_eq!(v["use_flow_sigmas"], true);
+        assert_eq!(v["solver_order"], 2);
+        assert_eq!(v["solver_type"], "bh2");
+        assert_eq!(v["predict_x0"], true);
+        assert_eq!(v["final_sigmas_type"], "zero");
+        assert_eq!(v["sigma_min"].as_f64(), Some(KARRAS_SIGMA_MIN));
+        assert_eq!(v["sigma_max"].as_f64(), Some(KARRAS_SIGMA_MAX));
     }
 
     #[test]
-    fn teacache_knobs_are_predict2_sol() {
-        assert_eq!(TEACACHE_THRESHOLD, 1.15);
-        assert_eq!(TEACACHE_START_STEP, 10);
-        assert_eq!(TEACACHE_MAX_CONSECUTIVE, 3);
-        assert!(teacache_requested(Some("teacache")));
-        assert!(official_requested(Some("1")));
-        assert!(fp4_linear(10, 35));
-        assert!(!fp4_linear(0, 35));
-        assert!(!fp4_linear(32, 35));
+    fn official_35_step_schedule() {
+        let s = unipc(35);
+        let sig = s.inference_sigmas();
+        assert_eq!(sig.len(), 36);
+        // First: 200 / 201; last before zero: 0.147 / 1.147.
+        assert!((sig[0] - 200.0 / 201.0).abs() < 1e-6);
+        assert!((sig[34] - 0.147 / 1.147).abs() < 1e-6);
+        assert_eq!(sig[35], 0.0);
+        assert!(sig.windows(2).all(|w| w[1] < w[0]));
+        let ts = s.inference_timesteps_i64();
+        assert_eq!(ts[0], 995);
+        assert_eq!(ts[34], 128);
+        assert!((transformer_timestep(ts[0], 0.001) - 0.995).abs() < 1e-6);
     }
 }

@@ -1,8 +1,11 @@
-//! Cosmos3-Super T2V scaffold. Spec: docs/ports/cosmos3.md.
+//! Cosmos3-Super T2V (64B Mixture-of-Transformers). Spec: docs/ports/cosmos3.md.
 //!
-//! Multi-GPU sequence parallel is out of scope. Single-GPU NVFP4/FP8 is the
-//! intended 96 GB path (`FASTVIDEO_NVFP4=1`, `FASTVIDEO_NVFP4_COSMOS_STEPS`).
+//! Single GPU: the 31B generation tower stays resident (62 GB bf16) and the
+//! text tower is run once per prompt into a K/V cache, streamed layer by
+//! layer from the checkpoint unless `FASTVIDEO_COSMOS3_UND=resident` (B200).
 
+pub mod pipeline;
 pub mod transformer;
 
-pub use transformer::Cosmos3Transformer;
+pub use pipeline::{Cosmos3Pipeline, Cosmos3Request};
+pub use transformer::{Cosmos3Transformer, GenCache, UndCache};

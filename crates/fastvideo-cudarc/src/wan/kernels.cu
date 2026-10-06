@@ -4781,7 +4781,7 @@ extern "C" __global__ void scatter_add_rows(
 // experts get their bias-free scores, L1-normalized (+1e-20) when `norm`,
 // times `scale`, rounded to bf16 when `round16`. Ties keep the lower index
 // (repeated strict argmax), like the host's stable sort. e <= 256, n_group <= 64.
-__device__ __forceinline__ float fv_bf16_rne(float x) {
+__device__ __forceinline__ float fv_moe_round_bf16(float x) {
     unsigned int b = __float_as_uint(x);
     if ((b & 0x7f800000u) == 0x7f800000u) return x;
     b = (b + 0x7fffu + ((b >> 16) & 1u)) & 0xffff0000u;
@@ -4862,7 +4862,7 @@ extern "C" __global__ void moe_group_topk(
         float w = ov[t];
         if (k > 1 && norm) w = w / (z + 1e-20f);
         w *= scale;
-        ov[t] = round16 ? fv_bf16_rne(w) : w;
+        ov[t] = round16 ? fv_moe_round_bf16(w) : w;
     }
 }
 

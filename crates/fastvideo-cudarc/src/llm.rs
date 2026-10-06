@@ -20,7 +20,7 @@ use crate::wan::nn::Linear;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
-mod attn;
+pub(crate) mod attn;
 pub use attn::scaled_dot_product_attention_gqa;
 
 fn msg(s: impl Into<String>) -> TensorError {

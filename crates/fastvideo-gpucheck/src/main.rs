@@ -25,6 +25,7 @@ mod gate;
 mod gpu;
 mod h3_stage;
 mod hunyuan15_stage;
+mod sol_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 #[cfg(feature = "cuda")]
@@ -350,6 +351,11 @@ enum Cmd {
         #[command(subcommand)]
         stage: hunyuan15_stage::Stage,
     },
+    /// Sol-engine LingBot-Video / Cosmos3-Super stages (see `sol_stage.rs`).
+    Sol {
+        #[command(subcommand)]
+        stage: sol_stage::Stage,
+    },
     /// MMAudio stages (see `mmaudio_stage.rs`).
     Mmaudio {
         #[command(subcommand)]
@@ -646,6 +652,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::H3 { .. } => "h3",
         Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Hunyuan { .. } => "hunyuan",
+        Cmd::Sol { .. } => "sol",
         Cmd::Wan { .. } => "wan",
         Cmd::Mmaudio { .. } => "mmaudio",
         Cmd::Llm { .. } => "llm",
@@ -817,6 +824,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::H3 { stage } => h3_stage::run(report, stage),
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
+        Cmd::Sol { stage } => sol_stage::run(report, stage),
         Cmd::Wan { stage } => wan_stage::run(report, stage),
         Cmd::Mmaudio { stage } => mmaudio_stage::run(report, stage),
         Cmd::Llm {

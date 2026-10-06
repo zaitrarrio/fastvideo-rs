@@ -173,8 +173,8 @@ pub struct LingBotTiming {
     pub refiner_denoise_s: f64,
     pub refiner_decode_s: f64,
     pub refiner_export_s: f64,
-    /// Request wall without weight loads: what the published intervals time
-    /// (both models already resident).
+    /// Request wall without weight loads: text encode + both stages + exports,
+    /// what the published interval times (both models already resident).
     pub request_s: f64,
     pub base_steps_computed: usize,
     pub base_steps_reused: usize,
@@ -270,7 +270,11 @@ impl LingBotPipeline {
         };
         std::fs::create_dir_all(out_dir).map_err(terr)?;
 
-        // Text first: the encoder (≈9 GB) leaves before the DiTs arrive.
+        // Swap residency: the previous request left the refiner loaded.
+        if self.residency == Residency::Swap {
+            self.refiner = None;
+        }
+        // Text first: under swap the encoder (≈9 GB) leaves before the DiTs arrive.
         let t = Instant::now();
         if self.text.is_none() {
             self.load_text()?;
@@ -283,7 +287,9 @@ impl LingBotPipeline {
         let do_cfg = request.guidance_scale > 1.0;
         let neg_h = if do_cfg { Some(enc.encode(neg)?) } else { None };
         timing.text_encode_s = t.elapsed().as_secs_f64();
-        self.text = None;
+        if self.residency == Residency::Swap {
+            self.text = None;
+        }
 
         let t = Instant::now();
         if self.dit.is_none() {
@@ -351,7 +357,7 @@ impl LingBotPipeline {
         timing.base_export_s = t.elapsed().as_secs_f64();
 
         let Some(refine) = refine else {
-            timing.request_s = request_start.elapsed().as_secs_f64();
+            timing.request_s = request_start.elapsed().as_secs_f64() + timing.text_encode_s;
             write_timing(out_dir, &timing)?;
             return Ok(timing);
         };
@@ -423,7 +429,8 @@ impl LingBotPipeline {
         let t = Instant::now();
         write_video(&out_dir.join("refined"), request.fps, &rgb)?;
         timing.refiner_export_s = t.elapsed().as_secs_f64();
-        timing.request_s = request_start.elapsed().as_secs_f64() - loads_inside;
+        timing.request_s =
+            request_start.elapsed().as_secs_f64() - loads_inside + timing.text_encode_s;
         write_timing(out_dir, &timing)?;
         Ok(timing)
     }
