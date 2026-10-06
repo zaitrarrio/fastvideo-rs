@@ -1022,12 +1022,13 @@ async fn direct_upload_commits_through_the_family_object() {
         return;
     }
     assert_eq!(bucket, BUCKET);
-    let st = e.s3.store.lock().unwrap();
-    let obj = st.objects.get(key).expect("the object is in the bucket");
-    assert_eq!(obj.len() as u64, art.bytes);
-    assert_eq!(st.bad_signatures, 0);
-    assert!(st.uploads.is_empty(), "no upload left open");
-    drop(st);
+    {
+        let st = e.s3.store.lock().unwrap();
+        let obj = st.objects.get(key).expect("the object is in the bucket");
+        assert_eq!(obj.len() as u64, art.bytes);
+        assert_eq!(st.bad_signatures, 0);
+        assert!(st.uploads.is_empty(), "no upload left open");
+    }
     // The family object recorded the result (key, bytes, sha256).
     let r = e.d().with("family:wan", |s| (s.job(&job.id.to_string()).and_then(|j| j.result.clone()), Vec::new())).expect("a result");
     assert_eq!((r.key.as_str(), r.bytes), (key.as_str(), art.bytes));

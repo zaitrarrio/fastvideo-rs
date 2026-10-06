@@ -7,7 +7,7 @@
 //!   A direct worker (`gateway.direct`, no gateway in front) needs the
 //!   token only on `/fv/v1/internal/*`; its APIs use its own `auth.mode`
 //!   (docs/control/gateway-less-auth.md).
-//! - [`routes`]: `/fv/v1/internal/*`:
+//! - [`routes`][]: `/fv/v1/internal/*`:
 //!
 //! | Route | Behaviour |
 //! |---|---|
