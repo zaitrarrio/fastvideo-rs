@@ -26,7 +26,9 @@
 # 0: none; default H3 only), FV_ORACLE_OWN_TEXT (1: LTX targets also run on our own text
 # contexts, no text injection), FV_ORACLE_RUN_MODE (runtime pod mode: `run`,
 # default, or `all`: fv-gpucheck kernels first, then the oracle cells on the
-# same pod), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
+# same pod), FV_RUNTIME_STOCK_WAIT_S (default 900: no runtime pod by then
+# deletes the upstream pods), FV_ORACLE_EXTRA_ENV (more K=V for the runtime
+# pod's cells), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
 # Logs: $ORACLE_LOG_DIR (default /tmp/claude-0) oracle-*.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -155,9 +157,53 @@ if [[ "${ORACLE_WAIT_FIRST:-0}" == 1 ]]; then
 fi
 log "runtime pod: targets $targets"
 rc=0
-FV_FAMILY="${FV_ORACLE_FAMILY:-oracle}" FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}" \
+# The runtime pod's driver runs in the background so this shell can look
+# after the upstream pods meanwhile:
+# - while the runtime pod is being created or is up, fetch every upstream
+#   pod's keepalive.bin once a minute: their idle watchdogs count that
+#   traffic as busy (runpod-http.sh idle_watchdog net), so a reference pod
+#   whose GPU work is done is not deleted before the runtime pod has its dumps;
+# - no runtime pod within FV_RUNTIME_STOCK_WAIT_S (default 900 s, no stock):
+#   delete the upstream pods at once rather than pay for them to wait;
+# - once the runtime pod publishes ORACLE_REFS_DONE (every dump fetched),
+#   delete the upstream pods; the runtime pod goes on alone.
+rt_family="${FV_ORACLE_FAMILY:-oracle}"
+stock_wait="${FV_RUNTIME_STOCK_WAIT_S:-900}"
+FV_FAMILY="$rt_family" FV_POD_FILE="$work/runtime.pod" FV_CREATE_WAIT_S="$stock_wait" \
+  FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}${FV_ORACLE_EXTRA_ENV:+ $FV_ORACLE_EXTRA_ENV}" \
   FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-5400}" \
-  bash "$HERE/runpod-http.sh" "${FV_ORACLE_RUN_MODE:-run}" "$sha" >"$logs/oracle-rust.log" 2>&1 || rc=$?
+  bash "$HERE/runpod-http.sh" "${FV_ORACLE_RUN_MODE:-run}" "$sha" >"$logs/oracle-rust.log" 2>&1 &
+rt=$!
+t0=$(date +%s)
+released=0
+release_upstream() {
+  local p
+  for p in "${pods[@]}"; do
+    log "delete upstream pod $p ($1)"
+    bash "$HERE/runpod-http.sh" down "$p" >/dev/null 2>&1 || log "WARN: delete of $p failed"
+  done
+  pods=()
+  released=1
+}
+while kill -0 "$rt" 2>/dev/null; do
+  if (( ! released )); then
+    for u in $urls; do
+      curl -sS --max-time 50 -o /dev/null "${u%/upstream/*}/keepalive.bin" 2>/dev/null || true
+    done
+    if [[ ! -s "$work/runtime.pod" ]] && (( $(date +%s) - t0 >= stock_wait )); then
+      release_upstream "no runtime pod after ${stock_wait}s"
+    elif [[ -s "$work/runtime.pod" ]]; then
+      read -r rid rtag <"$work/runtime.pod"
+      if curl -sS --max-time 30 --fail -o /dev/null \
+        "https://$rid-8000.proxy.runpod.net/$rt_family/$rtag/ORACLE_REFS_DONE" 2>/dev/null; then
+        release_upstream "the runtime pod has every reference"
+      fi
+    fi
+  fi
+  sleep 60
+done
+wait "$rt" || rc=$?
+[[ -s "$work/runtime.pod" ]] || log "no runtime pod was created (no stock within ${stock_wait}s?)"
 log "runtime pod finished rc=$rc"
 for image in "${!bg[@]}"; do
   wait "${bg[$image]}" || log "upstream driver $image rc=$?"

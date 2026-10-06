@@ -1,0 +1,237 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "resident-fp8",
+        "device_gib": 22.72038459777832,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 20.28537376,
+        "requested": "ResidentFp8"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.169066192,
+        "dit_residency": "resident",
+        "dit_s": 58.179177872,
+        "refiner_s": 0.097955349,
+        "seconds": 128.358951369,
+        "text_encoder_s": 20.28537376,
+        "video_vae_s": 8.564238738
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.111035376,
+        "decode_s": 6.517500212,
+        "denoise_s": 31.728223446,
+        "load_s": 128.358951369,
+        "peak_mib": 59210,
+        "refine_s": 0.005274199,
+        "step_s": [
+          8.048718251,
+          7.874823313,
+          7.894345177,
+          7.910027032
+        ],
+        "text_cache": "disabled",
+        "text_encoder": "resident-fp8",
+        "text_s": 0.398076485,
+        "total_s": 38.966998637,
+        "video_decode_s": 6.406464836,
+        "video_encode_s": 0.145286547,
+        "video_push_s": 0.00006796,
+        "video_rgb_s": 0.1322927610164707,
+        "video_vae_s": 6.23603396821022,
+        "video_wait_s": 0.272946406,
+        "warm": false,
+        "write_s": 0.148767813
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/frames/frame-062.png",
+        "mean": 0.37885372270195344,
+        "std": 0.2703509041545527
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/frames/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 60.00361129641533,
+        "stages": [
+          {
+            "gib": 49.585301607847214,
+            "stage": "text"
+          },
+          {
+            "gib": 45.955662935972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 60.00361129641533,
+            "stage": "denoise"
+          },
+          {
+            "gib": 44.23448869585991,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 47.856881350278854,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 19.357105255126953,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 19.357105255126953,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.393716812133789,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 10.291299551725388,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/frames/output.mp4",
+      "sequence_length": 37751,
+      "text_tokens": 41,
+      "wav": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/frames/audio.wav"
+    },
+    "request": {
+      "attention": "dense, no gate",
+      "height": 768,
+      "num_frames": 124,
+      "prompt": "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 7,
+      "techniques": {
+        "plan": [],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": null,
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 1344
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 50.364882219582796,
+          "peak_reserved_gib": 51.625,
+          "peak_used_gib": 50.62204962223768,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 50.36529277637601,
+          "peak_reserved_gib": 51.625,
+          "peak_used_gib": 50.36980890110135,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 50.37826966121793,
+          "peak_reserved_gib": 57.125,
+          "peak_used_gib": 55.10415096580982,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 50.46113422792405,
+          "peak_reserved_gib": 51.40625,
+          "peak_used_gib": 50.59278658311814,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 50.47447231691331,
+          "peak_reserved_gib": 53.8125,
+          "peak_used_gib": 51.849016460590065,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 167.820558199,
+  "env": {
+    "FASTVIDEO_CACHE": "/fvscratch/runs/det-short/6ec6c64-10061138/h3-r3/cache"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}
