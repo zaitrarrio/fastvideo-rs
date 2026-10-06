@@ -1,5 +1,9 @@
 # Gateway on Runpod: one CPU gateway in front of two GPU pools
 
+> **Historical (2026-10-06).** The gateway and `scripts/serve/runpod-gateway.sh`
+> were removed ([edge-control-plane.md](../edge-control-plane.md) §9, "Stage 4 as built"). This is
+> the record of a past run.
+
 Date: 2026-09-28. `scripts/serve/runpod-gateway.sh validate` with image
 `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-bd80065`. Raw result:
 `artifacts/serve/e2e/gateway/validate-0928203631.json` (no URLs, keys or

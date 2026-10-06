@@ -1,5 +1,5 @@
 // ClusterOps: one Durable Object per cluster. It runs one operation at a
-// time (up, down, extend, scale, roll, restart, gateway-start/stop) as a
+// time (up, down, extend, scale, roll, restart) as a
 // step machine driven by alarms, so a 30-minute rolling redeploy never
 // depends on one request staying open. It also fans ingested log lines
 // out to live-tail WebSockets (hibernation API).
@@ -9,13 +9,8 @@ import { resolveDigest, resolveClusterImages } from "../ghcr";
 import { runpod } from "../runpod";
 import { HttpError, now, scrub } from "../util";
 import {
-  adminGet,
-  LEGACY_ADMIN_SWITCH,
-  createGateway,
   createWorker,
   deletePod,
-  gatewayHealthy,
-  patchGateway,
   patchWorker,
   projectSpend,
   workerBusy,
@@ -32,7 +27,7 @@ import type { PodRec } from "./payloads";
 import { isEdge } from "./spec";
 import { getCluster, listClusters, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
 
-export type OpKind = "up" | "down" | "extend" | "scale" | "roll" | "restart" | "gateway-start" | "gateway-stop";
+export type OpKind = "up" | "down" | "extend" | "scale" | "roll" | "restart";
 export interface Op {
   id: string;
   cluster: string;
@@ -192,10 +187,8 @@ export class ClusterOps implements DurableObject {
         return this.roll(c, op);
       case "restart":
         return this.restart(c, op);
-      case "gateway-stop":
-        return this.gatewayStop(c, op);
-      case "gateway-start":
-        return this.gatewayStart(c, op);
+      default:
+        return { done: true, error: `unknown operation ${op.kind} (gateway-start / gateway-stop went with the gateway)` };
     }
   }
 
@@ -218,16 +211,15 @@ export class ClusterOps implements DurableObject {
       if (c.spec.image.ref) c.state.image = c.state.images.gateway || Object.values(c.state.images)[0];
       this.log(`images: ${JSON.stringify(c.state.images)}`);
       const s = await secretsOf(env, c);
-      // A new gateway makes a new token; an image older than the sealed-token
-      // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN, and so do
-      // gateway-less workers (docs/control/gateway-less-auth.md).
-      if (isEdge(c.spec)) delete s.admin_token; // the edge's admin token (EDGE_ADMIN_TOKEN)
-      else if (s.legacy_admin_token || !c.spec.gateway.enabled) s.admin_token = newAdminToken();
-      else delete s.admin_token;
+      // Edge clusters use the edge's admin token (EDGE_ADMIN_TOKEN); direct
+      // workers get a fresh one from us as FV_ADMIN_TOKEN
+      // (docs/control/gateway-less-auth.md).
+      if (isEdge(c.spec)) delete s.admin_token;
+      else s.admin_token = newAdminToken();
       await saveSecrets(env, c, s);
       await saveState(env, c, { status: "starting", deadline: now() + c.spec.cap_s * 1000 });
       this.log(`deadline ${new Date(c.deadline!).toISOString()} (${c.spec.cap_s}s)`);
-      op.phase = isEdge(c.spec) ? "register" : c.spec.gateway.enabled ? "gateway" : "workers";
+      op.phase = isEdge(c.spec) ? "register" : "workers";
       d.failed = [];
       return { delayMs: 10 };
     }
@@ -236,11 +228,6 @@ export class ClusterOps implements DurableObject {
       const e = requireEdge(env);
       const view = await edgeFamilies(env);
       this.log(`edge ${e.url}: up (key epoch ${view?.key_epoch ?? "?"}, families ${Object.keys(view?.families || {}).join(", ") || "none yet"})`);
-      op.phase = "workers";
-      return { delayMs: 10 };
-    }
-    if (op.phase === "gateway") {
-      await createGateway(env, c, this.log);
       op.phase = "workers";
       return { delayMs: 10 };
     }
@@ -257,10 +244,9 @@ export class ClusterOps implements DurableObject {
       return { delayMs: 10 };
     }
     if (op.phase === "patch") {
-      await patchGateway(env, c, this.log);
       if (d.failed.length) this.log(`WARNING: no pod for: ${d.failed.join(", ")}`);
-      // Nothing to wait for: no gateway and not one worker (no stock anywhere).
-      if (!c.state.gateway && !Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
+      // Nothing to wait for: not one worker (no stock anywhere).
+      if (!Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
         return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}): stop the cluster or start it again later` };
       await saveState(env, c, { status: "running" });
       op.phase = "wait";
@@ -271,7 +257,7 @@ export class ClusterOps implements DurableObject {
     return { done: true, error: `unknown phase ${op.phase}` };
   }
 
-  /** Until every pool with workers has a ready one (the admin pools view), or each worker's /health says AVAILABLE without a gateway. */
+  /** Until every pool with workers has a ready one: a ready front in the edge's families view, or a direct worker's /health AVAILABLE. */
   private async waitReady(c: Cluster, op: Op, t0: number): Promise<Step> {
     const env = this.env;
     const pools = Object.entries(c.state.workers).filter(([, l]) => l.length);
@@ -292,31 +278,6 @@ export class ClusterOps implements DurableObject {
         }
         this.log(`pools with a ready front at the edge: ${ready}/${pools.length} (${Math.round((now() - t0) / 1000)}s)`);
       }
-    } else if (c.state.gateway) {
-      let view: any = null;
-      try {
-        view = await adminGet(env, c, "/fv/v1/gateway/pools");
-      } catch (e) {
-        if ((e as Error).message.startsWith(LEGACY_ADMIN_SWITCH) && !op.data.legacy_patched) {
-          // adminToken just switched this cluster to FV_ADMIN_TOKEN: restart the gateway with it.
-          op.data.legacy_patched = true;
-          this.log("gateway image predates the sealed admin token route: passing FV_ADMIN_TOKEN and restarting it");
-          await patchGateway(env, c, this.log);
-          return { delayMs: 20_000 };
-        }
-        this.log(`gateway not answering yet (${Math.round((now() - t0) / 1000)}s): ${(e as Error).message.slice(0, 100)}`);
-      }
-      if (view) {
-        await podUpdate(env, c.state.gateway.pod, { ready: true, status: "ready" });
-        for (const [pool, recs] of pools) {
-          const st = (view.state || []).find((x: any) => x.id === pool);
-          const readyUrls = new Set<string>((st?.workers || []).filter((w: any) => w.ready).map((w: any) => String(w.url).replace(/\/$/, "")));
-          let any = false;
-          for (const r of recs) if (r.url && readyUrls.has(r.url.replace(/\/$/, ""))) (any = true), await podUpdate(env, r.pod, { ready: true, status: "ready" });
-          if (any) ready++;
-        }
-        this.log(`pools with a ready worker: ${ready}/${pools.length} (${Math.round((now() - t0) / 1000)}s)`);
-      }
     } else {
       for (const [, recs] of pools) {
         let any = false;
@@ -325,7 +286,7 @@ export class ClusterOps implements DurableObject {
       }
       this.log(`pools with a ready worker: ${ready}/${pools.length}`);
     }
-    if (ready >= pools.length && (pools.length > 0 || c.state.gateway)) return { done: true };
+    if (ready >= pools.length && pools.length > 0) return { done: true };
     if (now() - t0 > READY_WAIT_MS) return { done: true, error: "not every pool became ready (the pods stay up; see the pool view)" };
     return { delayMs: 20_000 };
   }
@@ -381,9 +342,7 @@ export class ClusterOps implements DurableObject {
     this.log(`balance $${acct.balance.toFixed(2)}, account $${acct.spendPerHr.toFixed(2)}/hr; new deadline ${new Date(next).toISOString()}; projected $${projected.toFixed(2)}`);
     if (projected < floor) return { done: true, error: `at $${acct.spendPerHr}/hr the balance would fall below $${floor} before ${new Date(next).toISOString()}` };
     await saveState(env, c, { deadline: next });
-    await patchGateway(env, c, this.log);
-    if (isEdge(c.spec))
-      this.log("edge cluster: fv-control holds the new deadline; each worker's own backstop keeps the launch deadline until it is restarted (Env: apply)");
+    if (isEdge(c.spec)) this.log("fv-control holds the new deadline; each worker's own backstop keeps its launch deadline until it is restarted (Env: apply)");
     return { done: true };
   }
 
@@ -454,7 +413,6 @@ export class ClusterOps implements DurableObject {
       return { delayMs: 10 };
     }
     if (op.phase === "patch") {
-      await patchGateway(env, c, this.log);
       if (d.victims?.length) {
         for (const p of d.victims) await deletePod(env, p, this.log, "scale-down");
         c.state.retired = (c.state.retired || []).filter((r) => !d.victims.includes(r.pod));
@@ -465,7 +423,7 @@ export class ClusterOps implements DurableObject {
     return { done: true, error: `unknown phase ${op.phase}` };
   }
 
-  // ---------------- rolling redeploy (release.sh redeploy / runpod-cluster.sh roll)
+  // ---------------- rolling redeploy
   /** A roll target (channel, commit or image) as the digest of a pool's variant; an all-in-one cluster (image.ref) rolls onto the all-in-one image. */
   private async resolveTarget(c: Cluster, variant: string, target: string): Promise<string> {
     if (target.includes("/")) return resolveDigest(this.env, target);
@@ -477,7 +435,7 @@ export class ClusterOps implements DurableObject {
     const env = this.env;
     const d = op.data;
     if (op.phase === "init") {
-      // params: {target: "stable" | "<sha>" | "<image>", pools?: string[] (default all), gateway?: boolean}
+      // params: {target: "stable" | "<sha>" | "<image>", pools?: string[] (default all)}
       const target = String(op.params?.target || "stable");
       const pools: string[] = op.params?.pools?.length ? op.params.pools : Object.keys(c.state.workers).filter((p) => c.state.workers[p]!.length);
       if (c.state.rolling && Object.keys(c.state.rolling).length) return { done: true, error: "a roll is in progress" };
@@ -490,11 +448,10 @@ export class ClusterOps implements DurableObject {
         if (!spec) return { done: true, error: `no pool ${p}` };
         d.images[p] = await this.resolveTarget(c, spec.variant, target);
       }
-      if (op.params?.gateway && c.state.gateway) d.gateway = await this.resolveTarget(c, "gateway", target);
       d.pools = pools.filter((p) => (c.state.workers[p] || []).some((r) => r.image !== d.images[p]));
-      this.log(`roll to ${target}: pools ${d.pools.join(", ") || "(none change)"}${d.gateway ? ", gateway" : ""}`);
+      this.log(`roll to ${target}: pools ${d.pools.join(", ") || "(none change)"}`);
       d.queue = d.pools.flatMap((p: string) => (c.state.workers[p] || []).map(() => p));
-      op.phase = d.queue.length ? "create" : d.gateway ? "swap" : "done";
+      op.phase = d.queue.length ? "create" : "done";
       if (op.phase === "done") return { done: true };
       return { delayMs: 10 };
     }
@@ -505,7 +462,6 @@ export class ClusterOps implements DurableObject {
         if (!rec) return this.abortRoll(c, op, `no pod for ${p}`);
         return { delayMs: 10 };
       }
-      await patchGateway(env, c, this.log);
       d.t0 = now();
       op.phase = "ready";
       return { delayMs: 15_000 };
@@ -557,7 +513,6 @@ export class ClusterOps implements DurableObject {
       c.state.retired = [...(c.state.retired || []), ...retired];
       delete c.state.rolling;
       await saveState(env, c);
-      await patchGateway(env, c, this.log, d.gateway);
       op.phase = "delete";
       return { delayMs: 10 };
     }
@@ -575,7 +530,6 @@ export class ClusterOps implements DurableObject {
     for (const r of Object.values(c.state.rolling || {}).flat()) await deletePod(this.env, r.pod, this.log, "roll aborted");
     delete c.state.rolling;
     await saveState(this.env, c);
-    await patchGateway(this.env, c, this.log).catch((e) => this.log(`gateway patch after abort failed: ${(e as Error).message}`));
     return { done: true, error: `roll aborted: ${why || "error"} (the old workers keep serving)` };
   }
 
@@ -584,21 +538,19 @@ export class ClusterOps implements DurableObject {
     const env = this.env;
     const d = op.data;
     if (op.phase === "init") {
-      // params: {pods?: string[], pools?: string[] (pool ids, or "gateway")}: those pods (forced); neither: every pod whose env changed.
+      // params: {pods?: string[], pools?: string[]}: those pods (forced); neither: every pod whose env changed.
       const pods: string[] | undefined = op.params?.pods;
       const pools: string[] | undefined = op.params?.pools;
-      const chosen = (r: any) => !!pods?.includes(r.pod_id) || !!pools?.includes(r.role === "gateway" ? "gateway" : r.pool);
+      const chosen = (r: any) => !!pods?.includes(r.pod_id) || !!pools?.includes(r.pool);
       const rows = await livePods(env, c.id);
       const ctx = await envCtx(env, c);
       const queue: { pod: string; role: string }[] = [];
-      for (const r of rows.filter((x: any) => x.slot !== "retired")) {
+      for (const r of rows.filter((x: any) => x.slot !== "retired" && x.role === "worker")) {
         const forced = !!(pods || pools);
         if (forced && !chosen(r)) continue;
-        const des = await desiredEnv(env, c, ctx, r.role, { pod: r.pod_id, pool: r.pool, image: r.image });
+        const des = await desiredEnv(env, c, ctx, "worker", { pod: r.pod_id, pool: r.pool, image: r.image });
         if (forced || des.hash !== r.env_hash) queue.push({ pod: r.pod_id, role: r.role });
       }
-      // Workers first (the gateway keeps routing to the others), the gateway last.
-      queue.sort((a, b) => (a.role === "gateway" ? 1 : 0) - (b.role === "gateway" ? 1 : 0));
       d.queue = queue;
       this.log(`restart: ${queue.map((q) => q.pod).join(", ") || "nothing needs a restart"}`);
       op.phase = "next";
@@ -607,12 +559,9 @@ export class ClusterOps implements DurableObject {
     if (op.phase === "next") {
       const q = d.queue.shift();
       if (!q) return { done: true };
-      if (q.role === "gateway") await patchGateway(env, c, this.log);
-      else {
-        const rec = Object.values(c.state.workers).flat().find((r) => r.pod === q.pod);
-        if (!rec) return { delayMs: 10 };
-        await patchWorker(env, c, rec, this.log);
-      }
+      const rec = Object.values(c.state.workers).flat().find((r) => r.pod === q.pod);
+      if (!rec) return { delayMs: 10 };
+      await patchWorker(env, c, rec, this.log);
       d.current = q;
       d.t0 = now();
       op.phase = "wait";
@@ -620,7 +569,7 @@ export class ClusterOps implements DurableObject {
     }
     if (op.phase === "wait") {
       const q = d.current;
-      const ok = q.role === "gateway" ? await gatewayHealthy(env, c) : (await workerHealth(env, q.pod)).ok;
+      const ok = (await workerHealth(env, q.pod)).ok;
       if (ok) {
         this.log(`${q.pod} is back (${Math.round((now() - d.t0) / 1000)}s)`);
         await podUpdate(env, q.pod, { ready: true, status: "ready" });
@@ -631,44 +580,5 @@ export class ClusterOps implements DurableObject {
       return { delayMs: 15_000 };
     }
     return { done: true, error: `unknown phase ${op.phase}` };
-  }
-
-  // ---------------- the gateway alone
-  private async gatewayStop(c: Cluster, _op: Op): Promise<Step> {
-    if (isEdge(c.spec)) return { done: true, error: "an edge cluster has no gateway" };
-    if (!c.state.gateway) return { done: true, error: "no gateway" };
-    await runpod.stop(this.env, c.state.gateway.pod);
-    c.state.gateway_stopped = true;
-    await saveState(this.env, c);
-    await podUpdate(this.env, c.state.gateway.pod, { status: "stopped" });
-    this.log(`gateway ${c.state.gateway.pod} stopped (its watchdog is off until it starts; the controller's backstop still holds the deadline)`);
-    return { done: true };
-  }
-  private async gatewayStart(c: Cluster, op: Op): Promise<Step> {
-    const env = this.env;
-    if (isEdge(c.spec)) return { done: true, error: "an edge cluster has no gateway (control_plane = edge)" };
-    if (op.phase === "init") {
-      if (c.state.gateway && c.state.gateway_stopped) {
-        await runpod.start(env, c.state.gateway.pod);
-        c.state.gateway_stopped = false;
-        await saveState(env, c);
-        this.log(`gateway ${c.state.gateway.pod} starting`);
-      } else if (!c.state.gateway) {
-        if (!c.state.images.gateway && !c.state.image) c.state.images.gateway = (await resolveClusterImages(env, { ...c.spec, gateway: { ...c.spec.gateway, enabled: true } })).gateway!;
-        await createGateway(env, c, this.log);
-        // The workers render URLs with the gateway's address: they need the new one.
-        for (const r of Object.values(c.state.workers).flat()) await patchWorker(env, c, r, this.log);
-        await patchGateway(env, c, this.log);
-      } else return { done: true, error: "the gateway is running" };
-      op.phase = "wait";
-      op.data.t0 = now();
-      return { delayMs: 15_000 };
-    }
-    if (await gatewayHealthy(env, c)) {
-      await podUpdate(env, c.state.gateway!.pod, { status: "ready", ready: true });
-      return { done: true };
-    }
-    if (now() - op.data.t0 > READY_WAIT_MS) return { done: true, error: "the gateway did not come up" };
-    return { delayMs: 15_000 };
   }
 }

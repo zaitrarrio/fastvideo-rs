@@ -578,7 +578,7 @@ async function pageClusters(main) {
   Promise.all([fvEditor(), api("/api/schemas"), api("/api/schemas/dynamic")]).then(([E, sc, dyn]) => {
     ed = E.createJsonEditor({ parent: edHost, doc: ta.value, schema: sc.schemas["cluster-spec"], dynamic: dyn, onChange: (t) => (ta.value = t) });
   }).catch(() => edHost.replaceChildren(h("textarea", { oninput: (e) => (ta.value = e.target.value) }, ta.value)));
-  const tplList = tpl.templates || [{ id: "tiny-cpu", title: "CPU gateway + 1 fake-engine CPU worker" }, { id: "standard", title: "CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools" }];
+  const tplList = tpl.templates || [{ id: "tiny-cpu", title: "1 fake-engine CPU worker" }, { id: "standard", title: "h3-turbo, h3-max, ltx, wan GPU pools" }];
   const tplSel = h(
     "select",
     { "aria-label": "Template", onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : tplSel.value === "standard" ? "main" : tplSel.value }, null, 2); ed?.set(ta.value); } },
@@ -593,9 +593,6 @@ async function pageClusters(main) {
     ed?.set(ta.value);
     toast(`pool ${pool.id} added`);
   });
-  const imp = h("textarea", { placeholder: "Paste artifacts/runpod/serve/cluster.json here", style: "min-height:120px", "aria-label": "Script state" });
-  const pem = h("textarea", { placeholder: "Optional: cluster.json.admin-key.pem", style: "min-height:60px", "aria-label": "Admin key" });
-  const impName = h("input", { placeholder: "name", "aria-label": "Imported cluster name" });
   main.replaceChildren(
     h("h1", {}, "Clusters"),
     card(
@@ -637,25 +634,12 @@ async function pageClusters(main) {
           h("span", { class: "muted small" }, "Defining starts nothing. Start runs a price check first."),
         ),
       ),
-      card(
-        "Import a runpod-cluster.sh cluster",
-        h("p", { class: "muted small" }, "The state file holds the cluster's internal token; the controller seals it in D1. Without the key pair it can still use a stored admin token."),
-        impName, imp, pem,
-        h("div", { class: "row", style: "margin-top:8px" }, h("button", {
-          onclick: async () => {
-            let st;
-            try { st = JSON.parse(imp.value); } catch { return toast("state: not JSON"); }
-            const j = await act("import", () => api("/api/clusters/import", { method: "POST", body: { name: impName.value || undefined, state: st, admin_key_pem: pem.value || undefined } }));
-            location.hash = `#/cluster/${j.cluster.id}`;
-          },
-        }, "Import")),
-      ),
     ),
   );
 }
 
 async function pageCluster(main, id) {
-  // Kept across the 10 s redraws: the key list and the gateway output stay up.
+  // Kept across the 10 s redraws: the key list and the front output stay up.
   const gwKeysEl = h("div", { id: "gwKeys", style: "margin-top:8px" });
   const gwOutEl = h("pre", { id: "gwOut", class: "log", style: "margin-top:8px;max-height:300px" });
   const draw = async () => {
@@ -671,8 +655,6 @@ async function pageCluster(main, id) {
       !running && btn("Start", () => startDialog(c, draw), "primary"),
       running && btn("Stop (delete pods)", () => confirm(`Delete every pod of ${c.name}?`) && post("stop", {}, "stop"), "danger"),
       running && btn("Extend…", () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) post("extend", { minutes: Number(m) }, "extend"); }),
-      running && c.state.gateway && btn(c.state.gateway_stopped ? "Start gateway" : "Stop gateway", () => post(c.state.gateway_stopped ? "gateway/start" : "gateway/stop", {}, "gateway")),
-      running && !c.state.gateway && c.spec.gateway.enabled && btn("Start gateway", () => post("gateway/start", {}, "gateway")),
       running && btn("Roll to…", () => rollDialog(c, post)),
       running && btn("Restart…", () => restartDialog(c, r.pods, post)),
       btn("Add pool…", async () => addPoolDialog(c, (await api("/api/templates")).pool_presets || [], () => route())),
@@ -736,11 +718,11 @@ async function pageCluster(main, id) {
       ),
       h("div", { id: "opLog" }),
     );
-    // control_plane = edge (docs/serve/edge-control-plane.md): the edge Worker is the front.
-    const edge = c.spec.control_plane === "edge";
-    const gw = edge ? r.edge_url : c.state.gateway_url;
-    // Gateway-less (docs/control/gateway-less-auth.md): clients call each worker; the admin token and keys work on every one.
-    const direct = !edge && !gw && !c.spec.gateway.enabled;
+    // edge (docs/serve/edge-control-plane.md): the edge Worker is the front;
+    // direct (docs/control/gateway-less-auth.md): clients call each worker; the admin token and keys work on every one.
+    const edge = c.spec.control_plane !== "direct";
+    const gw = edge ? r.edge_url : null;
+    const direct = !edge;
     const wurls = Object.entries(c.state.workers || {}).flatMap(([pool, l]) => l.filter((r) => r.url).map((r) => ({ pool, pod: r.pod, url: r.url })));
     const reach = !!(gw || (direct && wurls.length));
     const out = (t) => { $("#gwOut").textContent = t; };
@@ -761,17 +743,17 @@ async function pageCluster(main, id) {
       ));
     };
     const tools = card(
-      edge ? "Edge (the cluster's only front)" : direct ? "Workers (no gateway)" : "Gateway",
+      edge ? "Edge (the cluster's only front)" : "Workers (direct)",
       gw
         ? h("p", { class: "small" }, "URL ", h("a", { href: gw, target: "_blank", rel: "noopener" }, gw), " · ", h("a", { href: `${gw}/console`, target: "_blank", rel: "noopener" }, "console"))
         : direct && wurls.length
           ? h("div", { class: "small" }, h("p", { class: "muted small" }, "Clients call each worker directly with an API key; the admin token and minted keys work on every worker."), ...wurls.map((w) => h("p", {}, `${w.pool} ${w.pod}: `, h("a", { href: w.url, target: "_blank", rel: "noopener" }, w.url), " · ", h("a", { href: `${w.url}/console`, target: "_blank", rel: "noopener" }, "console"))))
-          : h("p", { class: "muted small" }, edge ? "fv-control has no edge (EDGE_URL)." : direct ? "No workers." : "No gateway pod."),
+          : h("p", { class: "muted small" }, edge ? "fv-control has no edge (EDGE_URL)." : "No workers."),
       reach && h(
         "div",
         { class: "row" },
-        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/gateway`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : j.direct ? { workers: j.workers } : { status: j.status, pools: j.pools }, null, 2)); } }, edge ? "Families view" : direct ? "Workers view" : "Pools view"),
-        h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : direct ? "cluster" : "gateway"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
+        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/front`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : { workers: j.workers }, null, 2)); } }, edge ? "Families view" : "Workers view"),
+        h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : "cluster"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
         h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
         h("button", { onclick: showKeys }, "Keys"),
       ),
@@ -851,28 +833,26 @@ function pickDialog(title, intro, groups, okLabel, extra) {
     dlg.showModal();
   });
 }
-/** Roll: a target and which pools (and the gateway) move to it. */
+/** Roll: a target and which pools move to it. */
 async function rollDialog(c, post) {
   const target = h("input", { value: c.spec.image.channel || "stable", "aria-label": "Roll target", placeholder: "channel, git sha or image" });
   const pools = Object.keys(c.state.workers || {}).filter((p) => (c.state.workers[p] || []).length);
   const groups = [{ label: "Pools (new workers come up beside the old ones, then the old ones drain)", items: pools.map((p) => ({ value: p, label: p, checked: true, note: `${c.state.workers[p].length} worker(s)` })) }];
-  if (c.state.gateway) groups.push({ label: "Gateway", items: [{ value: "__gateway", label: "the gateway too", checked: false, note: "(restarts once, at the end)" }] });
   const sel = await pickDialog(`Roll ${c.name}`, "Target: a channel (stable, latest), a git sha or an image.", groups, "Roll", h("label", {}, "Target ", target));
   if (!sel) return;
-  const ps = sel.filter((v) => v !== "__gateway");
-  if (!ps.length && !sel.includes("__gateway")) return toast("nothing chosen");
+  if (!sel.length) return toast("nothing chosen");
   if (!target.value.trim()) return toast("no target");
-  post("roll", { target: target.value.trim(), pools: ps, gateway: sel.includes("__gateway") }, "roll");
+  post("roll", { target: target.value.trim(), pools: sel }, "roll");
 }
-/** Restart: whole pools (and the gateway) or single pods, whether or not their env changed. */
+/** Restart: whole pools or single pods, whether or not their env changed. */
 async function restartDialog(c, pods, post) {
   const live = pods.filter((p) => p.slot !== "retired");
   const poolIds = [...new Set(live.filter((p) => p.role === "worker").map((p) => p.pool))];
   const groups = [
-    { label: "Whole pools", items: [...poolIds.map((p) => ({ value: `pool:${p}`, label: p, note: `${live.filter((x) => x.pool === p).length} pod(s)` })), ...(live.some((p) => p.role === "gateway") ? [{ value: "pool:gateway", label: "gateway" }] : [])] },
+    { label: "Whole pools", items: poolIds.map((p) => ({ value: `pool:${p}`, label: p, note: `${live.filter((x) => x.pool === p).length} pod(s)` })) },
     { label: "Single pods", items: live.map((p) => ({ value: `pod:${p.pod_id}`, label: p.pod_id, note: `${p.role}${p.pool ? ` ${p.pool}` : ""}` })) },
   ];
-  const sel = await pickDialog(`Restart pods of ${c.name}`, "Rolling: workers first, the gateway last; each must come back before the next. The chosen pods restart even when their env did not change (Env → Apply restarts only the ones that need it).", groups, "Restart");
+  const sel = await pickDialog(`Restart pods of ${c.name}`, "Rolling: one pod at a time; each must come back before the next. The chosen pods restart even when their env did not change (Env → Apply restarts only the ones that need it).", groups, "Restart");
   if (!sel) return;
   const body = { pools: sel.filter((v) => v.startsWith("pool:")).map((v) => v.slice(5)), pods: sel.filter((v) => v.startsWith("pod:")).map((v) => v.slice(4)) };
   if (!body.pools.length && !body.pods.length) return toast("nothing chosen");
@@ -883,7 +863,7 @@ async function addPoolDialog(c, presets, redraw) {
   const dlg = h("dialog", {});
   dlg.append(
     h("h2", {}, `Add a pool to ${c.name}`),
-    h("p", { class: "muted small" }, "The pool is added to the spec with its preset's count; a running cluster creates its workers on Scale (the gateway learns the pool when it restarts)."),
+    h("p", { class: "muted small" }, "The pool is added to the spec with its preset's count; a running cluster creates its workers on Scale."),
     presetPicker(presets.filter((p) => !c.spec.pools.some((x) => x.id === p.pool.id)), async (pool) => {
       const d = await api(`/api/docs/cluster-spec/${c.id}`);
       const doc = { ...d.doc, pools: [...d.doc.pools, pool] };
@@ -930,7 +910,7 @@ async function pageEnv(main) {
   const sel = h("select", { "aria-label": "Cluster", onchange: () => { location.hash = `#/env?cluster=${sel.value}`; } }, clusters.map((c) => h("option", { value: c.id, selected: c.id === cid }, c.name)));
   const parts = [
     h("h1", {}, "Environment"),
-    h("p", { class: "muted small" }, "Resolution: pod > pool > cluster > account > the controller's own keys (which cannot be overridden). A pool's variables reach every worker of that pool (restarts, rolls and scale-ups included), never the gateway. Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one. Key suggestions include the engine's own switches (FASTVIDEO_*, FV_LONGLIVE_*) with what they do."),
+    h("p", { class: "muted small" }, "Resolution: pod > pool > cluster > account > the controller's own keys (which cannot be overridden). A pool's variables reach every worker of that pool (restarts, rolls and scale-ups included). Secrets are write-only: they show as ••••, and a new value goes in the Form tab's password field. Runpod applies env only on a restart (PATCH): the effective view marks the pods that need one. Key suggestions include the engine's own switches (FASTVIDEO_*, FV_LONGLIVE_*) with what they do."),
     card("Account (every controller cluster)", docPanel("env", "account", { title: "env: account", onSaved: () => refreshEff() })),
   ];
   let refreshEff = async () => {};
@@ -955,7 +935,7 @@ async function pageEnv(main) {
 function effView(eff, cid) {
   const needs = eff.needs_restart;
   const head = needs.length
-    ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? Workers first, the gateway last; each must come back before the next.`)) { await act("restart", () => api(`/api/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
+    ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? One pod at a time; each must come back before the next.`)) { await act("restart", () => api(`/api/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
     : h("p", { class: "small" }, badge("every pod has its env", "good"));
   if (!eff.pods.length) return h("div", {}, head, h("p", { class: "muted small" }, "No pods running; what a new pod would get:"), Object.entries(eff.preview).map(([k, env]) => h("details", {}, h("summary", {}, k), envTable(env))));
   return h(

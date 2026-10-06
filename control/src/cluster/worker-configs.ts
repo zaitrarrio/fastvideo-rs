@@ -58,8 +58,10 @@ fal_apps = ["lightricks/ltx-2.5", "fal-ai/ltx-2.3"]
 queue_max = 32
 body_max_mb = 64
 
-# Behind the gateway (docs/serve/gateway.md): FV_SERVE_ROLE=worker and
-# FV_INTERNAL_TOKEN (the gateway's value); see runpod-ltx.toml.
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md):
+# FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN (the edge's) and FV_DISPATCH_FRONT=1
+# make it an API front behind the edge Worker; it registers in \`gw_workers\`
+# under \`gateway.pool\`. Standalone deployments ignore this.
 [gateway]
 pool = "ltx-pro"
 `,
@@ -122,11 +124,10 @@ fal_apps = ["lightricks/ltx-2.5"]
 queue_max = 32
 body_max_mb = 64
 
-# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
-# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
-# requires the internal token on every API route, trusts the gateway's
-# authentication, and takes jobs from \`/fv/v1/internal/jobs\` (queue: the
-# gateway's \`kind: http\` envelope). Standalone deployments ignore this.
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md):
+# FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN (the edge's) and FV_DISPATCH_FRONT=1
+# make it an API front behind the edge Worker; it registers in \`gw_workers\`
+# under \`gateway.pool\`. Standalone deployments ignore this.
 [gateway]
 pool = "ltx-a2v"
 `,
@@ -185,11 +186,10 @@ fal_apps = ["fal-ai/ltx-2.3-quality"]
 queue_max = 32
 body_max_mb = 64
 
-# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
-# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
-# requires the internal token on every API route, trusts the gateway's
-# authentication, and takes jobs from \`/fv/v1/internal/jobs\` (queue: the
-# gateway's \`kind: http\` envelope). Standalone deployments ignore this.
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md):
+# FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN (the edge's) and FV_DISPATCH_FRONT=1
+# make it an API front behind the edge Worker; it registers in \`gw_workers\`
+# under \`gateway.pool\`. Standalone deployments ignore this.
 [gateway]
 pool = "ltx-ref2v"
 `,
@@ -276,8 +276,10 @@ body_max_mb = 64
 # (/workspace/weights on the pods). The [[models]]-less SF-Wan backend reads
 # FV_LONGLIVE_WEIGHTS instead (docs/serve/director-causal.md).
 #
-# Behind the gateway: FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN, and
-# FV_PUBLIC_BASE_URL as in runpod-sfwan.toml.
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md):
+# FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN (the edge's) and FV_DISPATCH_FRONT=1
+# make it an API front behind the edge Worker; it registers in \`gw_workers\`
+# under \`gateway.pool\`. Standalone deployments ignore this.
 
 [server]
 bind = "0.0.0.0:8000"

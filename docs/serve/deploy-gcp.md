@@ -286,7 +286,7 @@ bash scripts/gcp/vm.sh wait <vm> <ip> https://<a-b-c-d>.sslip.io   # a worker: p
 ```
 
 What a worker gets. These are the same variables fv-control's
-`workerSystemEnv` and `scripts/serve/edge-gpu-test.sh` give a Runpod worker,
+`workerSystemEnv` gives a Runpod worker,
 and that the CloudRift worker would need for a DO pool:
 
 | Variable | Value |

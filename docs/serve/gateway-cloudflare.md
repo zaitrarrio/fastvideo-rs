@@ -1,5 +1,11 @@
 # Gateway on Cloudflare Workers + Durable Objects (workers-rs): assessment
 
+> **Superseded (2026-10-06).** The fv-serve gateway this page compares
+> against was removed; the edge Worker with family Durable Objects is the only
+> control plane ([edge-control-plane.md](edge-control-plane.md) §9, "Stage 4 as built"). The
+> scripts named below (`runpod-gateway.sh`, `edge-gpu-test.sh`) are gone. Kept
+> as the design record.
+
 Status: design 2026-09-29; **phases 0, 1 and 2 are implemented as a
 parallel path** (the owner: "let's test durable objects as a parallel deployment
 path"): see §9 for the results (phase 2: §9.7–§9.9, with a real GPU

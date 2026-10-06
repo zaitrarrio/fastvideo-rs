@@ -1,5 +1,12 @@
 # fv-serve gateway: one entry point in front of per-family GPU pools
 
+> **Retired (2026-10-06).** The fv-serve gateway (`crates/fastvideo-serve/src/gateway/`,
+> `[engine] backend = "remote"`, `configs/serve/gateway*.toml`,
+> `scripts/serve/runpod-gateway.sh`, `runpod-cluster.sh`) was removed in stage 4 of
+> [edge-control-plane.md](edge-control-plane.md) (§9, "Stage 4 as built"). The edge Worker is the
+> only control plane; fv-control clusters are `edge` or `direct`. This page is
+> kept as the design record; its paths and commands no longer exist.
+
 Status: design + implementation (2026-09-28). Owner of the gateway code:
 `crates/fastvideo-serve/src/gateway/`. The autoscaler lives in
 `crates/fastvideo-autoscale/` (another agent) and plugs in through the

@@ -372,7 +372,7 @@ US is not being rebuilt now. When the owner decides to:
    must equal EU. The FP8 trees are copied from EU (§3).
 4. Verify (§5.6), then switch US back on, one id each:
    - `scripts/gpu/volumes.sh`: `FV_US_VOLUME_ID` and `FV_US_VOLUME_NAME`
-     (every Runpod script, `runpod-cluster.sh` regions, the fetchers);
+     (every Runpod script, the fetchers);
    - `control/src/cluster/regions.ts`: `US_VOLUME_ID` (fv-control's `us`
      region), then add `us` back to the cluster specs that should use it;
    - `configs/autoscale.toml` and the `PodConfig` default in
