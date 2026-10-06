@@ -12,7 +12,6 @@ with `curl`.
 |---|---|
 | `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
-| `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
 | `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` WHIP publish; prompt switches, pause, reset, stop, stats, licence (§4c) |
@@ -44,17 +43,16 @@ the tab is visible (doubling up to 60 s on errors, paused while hidden).
 ages and counts only (no worker URLs, pod or endpoint ids, IPs, tokens or
 probe errors; workers are `w1`, `w2`, … per pool). Single server: one
 `local` pool from the engine (`loading` with `{done, total}`, `ready`,
-`busy`, `draining`, `failed`). Gateway: each pool from the tick's probes
-(pods per worker, including `loading` for a worker still starting;
-serverless from Runpod's `/health` worker counts, `scaled_to_zero` with no
-worker). A model that failed (its load, or the startup capability check:
+`busy`, `draining`, `failed`). (The edge answers its own status from the
+family queues, docs/serve/edge-control-plane.md; the gateway's per-pool
+status went with the gateway.) A model that failed (its load, or the startup capability check:
 a GPU that cannot run it) is `failed` with a `reason`, e.g. "model
 `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80): it needs FP8
 tensor cores (Ada, Hopper or Blackwell: sm89 or newer)"; its pool lists it
 in `failed_models`. Shape (see `crates/fastvideo-serve/src/status.rs`):
 
 ```json
-{"object": "fv.status", "gateway": true, "state": "ready",
+{"object": "fv.status", "gateway": false, "state": "ready",
  "pools": [{"id": "h3", "kind": "pod", "state": "busy", "available": true,
             "models": ["h3-turbo"], "queued": 2, "running": 1, "last_seen_s": 1.4,
             "workers": [{"label": "w1", "state": "busy", "last_seen_s": 1.4,
@@ -84,8 +82,7 @@ Admin calls (`/fv/v1/admin/*`) need the admin token as
   without a volume the state dir is container disk: the token survives a
   restart, not a re-creation. A remote operator can have it sealed to an
   X25519 key instead (`FV_ADMIN_TOKEN_RECIPIENT`,
-  `GET /fv/v1/admin/token/sealed`; the gateway cluster's
-  `runpod-cluster.sh admin-token` does that, docs/serve/gateway.md §9).
+  `GET /fv/v1/admin/token/sealed`).
 
 The server keeps only the token's SHA-256 digest and compares digests in
 constant time.
@@ -374,27 +371,12 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   files: CORS allows any origin by default, preflights included
   (`server.cors_origins` / `FV_CORS_ORIGINS` narrows it; design §9).
 
-## 6. Deployments page
+## 6. Deployments page (removed)
 
-`/console/deployments` (the admin token from the API keys page, this tab
-only) reads `GET /fv/v1/admin/deployments` and `GET /fv/v1/admin/releases`
-on a gateway (a standalone server answers 404: "not a gateway"):
-
-- **Channels**: each channel's current release (build, action, when, by)
-  with **Rollback…**.
-- **Promote a build**: a git sha, digest or tag and a channel. **Plan (dry
-  run)** shows what would happen; **Promote…** shows the same plan in a
-  confirm dialog and, on OK, dispatches the `release` workflow. Rollback
-  does the same with the release it would go back to. Without
-  `FV_GITHUB_TOKEN` on the gateway the pill says "dispatch not
-  configured" and only plans work.
-- **Live**: the gateway and every pod worker with its build (short sha,
-  channel, variant and image digest) and drift against the channel it
-  follows (`ok`, `behind: stable is abc1234`, or `?` when no release names
-  its image); "mixed versions" when a pool runs more than one sha.
-- **Deployments**: live rows of the D1 registry (what the deploy scripts
-  created) with their build, status, age, creator and drift.
-- **History**: the last 50 releases, rolled-back ones marked.
+The Deployments page (`/console/deployments`) was a gateway page and went
+with the gateway (2026-10-06, [edge-control-plane.md](edge-control-plane.md)
+§9). Release channels, promote and rollback are in fv-control's Releases
+page and `scripts/serve/release.sh` ([releases.md](releases.md)).
 
 ## 7. Experimental features
 
@@ -425,14 +407,14 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
 
 - **Storage.** D1 table `feature_flags (name, enabled, updated_at,
   updated_by)`, created on first use (like the release registry tables),
-  when the server has the D1 job store (a gateway always does); otherwise
+  when the server has the D1 job store; otherwise
   `<state_dir>/feature_flags.json`. Every process caches the flags; a
   `PUT` applies at once on the process that took it, the others re-read D1
   every 30 s (the admin list re-reads it on every call).
 - **Enforcement.** Flags act on the model caps
   (`fastvideo_protocol::apply_feature_flags`) through the engine gate every
   API negotiates against, so negotiation refuses what a flag does not
-  allow, on the gateway, before a job exists or reaches a worker. The same
+  allow, before a job exists or reaches a worker. The same
   caps feed `/fal/schema/…` (the console's forms) and
   `/fv/v1/capabilities`. Nothing is added to the dispatch: workers run
   jobs that were already negotiated. The fal director (whose sessions run
@@ -473,9 +455,8 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   through D1; a fake engine on a simulated A100 failing its FP8 models with
   the reason in `/fv/v1/status`), `tests/dimension_sweep.rs` (the sweep
   runs with the flag off and on),
-  `tests/gateway.rs` (status, capabilities and `/healthz` per pool and
-  worker with nothing secret, a killed worker turning `down`, a gateway
-  with auth `none`, the sealed admin token), `admin_token` unit tests
+  `tests/direct_workers.rs` (a direct worker's keys and admin token),
+  `admin_token` unit tests
   (stored once, reused, overridden, sealing) and `console` unit tests (every asset
   referenced is embedded; no inline scripts).
 - Browser: `bash tests/console/run.sh` builds `fv-serve --features

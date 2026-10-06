@@ -19,7 +19,8 @@ describe("JSON Schemas from the zod schemas", () => {
     expect(Object.keys(S).sort()).toEqual(["attribution", "cluster-spec", "env", "policies", "pool", "release-dispatch", "token-create"]);
     const spec = S["cluster-spec"];
     expect(spec.additionalProperties).toBe(false);
-    for (const k of ["name", "image", "regions", "gateway", "pools", "cap_s", "balance_floor"]) expect(spec.required).toContain(k);
+    for (const k of ["name", "image", "regions", "control_plane", "auth", "pools", "cap_s", "balance_floor"]) expect(spec.required).toContain(k);
+    expect(spec.properties.gateway).toBeUndefined();
     const pool = spec.properties.pools.items;
     expect(pool.properties.count.description).toMatch(/Worker pods/);
     expect(pool.properties.gpu_types.items["x-dynamic"]).toBe("gpu_types");
@@ -40,7 +41,7 @@ describe("JSON Schemas from the zod schemas", () => {
     expect((r as any).issues.some((i: any) => /extra/.test(i.message) || i.path.includes("extra"))).toBe(true);
     const two = validate("cluster-spec", { ...defaultSpec("d"), image: { channel: "stable", sha: "abcdef1" } });
     expect((two as any).issues[0].message).toMatch(/exactly one/);
-    expect(() => normalizeSpec({ name: "e", pools: [{ id: "gateway", variant: "gateway", count: 1, compute: "CPU", config: "x", fake_models: ["fake-wan"] }] })).toThrow(/reserved/);
+    expect(() => normalizeSpec({ name: "e", control_plane: "gateway", gateway: { enabled: true }, auth: "open" })).toThrow(/auth/);
   });
   it("the editor's in-browser validator agrees with zod on the schema-expressible cases", () => {
     const spec = S["cluster-spec"];
@@ -54,7 +55,8 @@ describe("JSON Schemas from the zod schemas", () => {
       [{ ...defaultSpec("x"), regions: ["eu", "us"] }, false],
       [{ ...defaultSpec("x"), bogus: true }, false],
       [{ ...defaultSpec("x"), name: "Bad Name" }, false],
-      [{ ...defaultSpec("x"), gateway: { ...defaultSpec("x").gateway, auth: "open" } }, false],
+      [{ ...defaultSpec("x"), auth: "open" }, false],
+      [{ ...defaultSpec("x"), control_plane: "gateway" }, false],
       [{ ...defaultSpec("x"), auto_stop_idle_min: null }, true],
       [{ ...defaultSpec("x"), auto_stop_idle_min: 2 }, false],
       [setAt(defaultSpec("x"), ["pools", 0, "count"], 2.5), false],
@@ -139,8 +141,8 @@ describe("documents: versions, validation, history, restore, secrets", () => {
     const d0 = (await readDoc(env, "cluster-spec", "c_1")) as any;
     const p: any = await planSpec(env, "c_1", { ...d0, pools: [{ ...d0.pools[0], count: 3 }] });
     expect(p.ok).toBe(true);
-    expect(p.actions[0].detail).toMatch(/Start would create 4 pod/);
-    expect(p.projection.cluster_dph).toBeGreaterThan(0.2);
+    expect(p.actions[0].detail).toMatch(/Start would create 3 pod/);
+    expect(p.projection.cluster_dph).toBeGreaterThan(0.1);
     const bad: any = await planSpec(env, "c_1", { ...d0, cap_s: "x" });
     expect(bad.ok).toBe(false);
   });

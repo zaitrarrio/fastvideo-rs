@@ -294,6 +294,7 @@ impl<S: MediaSink> MediaLoop<S> {
             let fresh = tick.video.is_fresh();
             if fresh {
                 self.gauges.fresh_frames.fetch_add(1, Ordering::Relaxed);
+                #[allow(deprecated)] // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
                 let _ = self.gauges.buffered_frames.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
             }
             let frame = match &tick.video {
@@ -352,6 +353,7 @@ impl<S: MediaSink> MediaLoop<S> {
                 let index = p.chunk.index;
                 self.last_index = index;
                 self.played_any = true;
+                #[allow(deprecated)] // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
                 let _ = self.gauges.pending_chunks.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
                 let _ = self.events.send(MediaEvent::ChunkStarted { index, late_by });
             }

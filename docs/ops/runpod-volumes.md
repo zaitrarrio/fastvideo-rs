@@ -24,10 +24,21 @@ recorded source is marked **UNVERIFIED** or **UNKNOWN**.
   nothing needs it.
 - **Owner decision (2026-10-06): EU only for now.** US is not rebuilt. New
   weights go on EU alone (CLAUDE.md); the "both volumes" rule is suspended
-  until the owner rebuilds US. Every script default, `configs/serve/autoscale.toml`
+  until the owner rebuilds US. Every script default, `configs/autoscale.toml`
   and fv-control use EU; asking for the US volume or the `us` region fails
   with "US weights volume deleted 2026-10; EU only, see
   docs/ops/runpod-volumes.md".
+- **Sol-engine benchmark trees added 2026-10-06** (owner-approved, EU only):
+  `sana-video-2b-480p`, `wan21-t2v-1.3b`, `ltx23-dev`, `wan22-t2v-a14b`,
+  `lingbot-video-moe-30b-a3b`, `cosmos3-super` (483.30 GB, §2). Each was
+  fetched add-only by `fetch-hub-tree.sh` (temp folder, every file checked
+  against the Hub at the pinned revision, then renamed), and its cell
+  (`sana-video-2b-480p wan21-t2v-1.3b ltx23-hq wan22-t2v-a14b lingbot-moe
+  cosmos3-super`) passed on a fresh pod. `du -sb /workspace` was then
+  1938.92 GB: **about 61 GB free**. New large trees need space freed or the
+  volume grown first (owner). `statvfs` on the mount reports the whole
+  Runpod cluster (hundreds of PB); `fetch-hub-tree.sh` now passes the
+  volume size so the fetch checks size minus `du` against a 50 GB floor.
 - **Rebuilding US later** (from EU or the Hub): §5, `scripts/gpu/rebuild-volume.sh us`,
   and the switch-back list in §5.0.
 
@@ -159,16 +170,22 @@ The "sha256 source" column says where file hashes can be checked.
 | `auxiliary/tae`, `auxiliary/lpips` | pinned URLs (madebyollin/taehv @ `e589fdd` / `32ac014`, download.pytorch.org, richzhang/PerceptualSimilarity @ `082bb24`) | 6 files | 372 975 478 | `weights-manifest.tsv` rows → `aux` | yes | yes | TAE decoders (H3, LTX, Wan), LPIPS (eval) | taehv MIT; torchvision BSD; LPIPS BSD-2 (from the upstream repos; **UNVERIFIED** here) |
 | `auxiliary/upscalers/seedvr2` | numz/SeedVR2_comfyUI @ `09ced71` rec | `seedvr2_ema_3b_fp16.safetensors`, `ema_vae_fp16.safetensors` | 7 284 343 622 | `verify-weights.sh upscalers` | yes | yes | upscaler benchmark (docs/serve/h3-1080p-and-upscaler.md) | apache-2.0 |
 | `auxiliary/upscalers/flashvsr-v1.1` | JunhaoZhuang/FlashVSR-v1.1 @ `27561b1` rec | 5 files + `model_index.json` | 6 948 393 656 | `verify-weights.sh upscalers` | yes | yes | upscaler benchmark | apache-2.0 |
+| `sana-video-2b-480p` | Efficient-Large-Model/SANA-Video_2B_480p_diffusers @ `db5f398` rec | manifest row (transformer 2 shards, Gemma-2-2B text_encoder, tokenizer, Wan VAE, scheduler, `model_index.json`; the EU copy also holds `LICENSE`, 11 358 B, outside the globs) | 14 002 542 321 | `weights-sha256.tsv` (17 files) → `sha:sana-video-2b-480p` | — | yes (2026-10-06) | SANA-Video 2B (sol-engine benchmark; port on `wip/sol-sana-hunyuan`) | apache-2.0 |
+| `wan21-t2v-1.3b` | Wan-AI/Wan2.1-T2V-1.3B-Diffusers @ `0fad780` rec | manifest row (whole Diffusers tree) | 28 928 887 859 | `weights-sha256.tsv` (19 files) → `sha:wan21-t2v-1.3b` | — | yes (2026-10-06) | `wan21-t2v-1.3b` (`wan_t2v_1_3b` preset). UMT5 / VAE are the same LFS objects as `wan21-t2v-14b`'s (kept as a copy: the loader reads `<root>/text_encoder`) | apache-2.0 |
+| `ltx23-dev` | Lightricks/LTX-2.3 @ `3c6a4e6` rec | `ltx-2.3-22b-dev.safetensors`, `ltx-2.3-22b-distilled-lora-384-1.1.safetensors`, `ltx-2.3-spatial-upscaler-x2-1.1.safetensors` (the EU copy also holds `LICENSE`, 21 399 B, outside the globs; the LoRA and upscaler were added into the tree with `FETCH_ADD_INTO=1`) | 54 750 595 790 | `weights-sha256.tsv` (3 files) → `sha:ltx23-dev` | — | yes (2026-10-06) | `ltx23-hq` (LTX-2.3 HQ two-stage: dev DiT + distilled LoRA 384 v1.1 + x2 v1.1 upscaler here; Gemma, VAEs and vocoder from `ltx23`) | LTX-2 community |
+| `wan22-t2v-a14b` | Wan-AI/Wan2.2-T2V-A14B-Diffusers @ `5be7df9` rec | manifest row (`transformer` + `transformer_2`, 12 shards each, UMT5 bf16, VAE) | 126 199 274 206 | `weights-sha256.tsv` (41 files) → `sha:wan22-t2v-a14b` | — | yes (2026-10-06) | `wan22-t2v-a14b` (two-expert MoE; UMT5 = `wan22-ti2v-5b`'s, VAE = Wan2.1's, kept as copies) | apache-2.0 |
+| `lingbot-video-moe-30b-a3b` | robbyant/lingbot-video-moe-30b-a3b @ `f2e538f` rec | manifest row (`transformer`, `refiner`, Qwen3-VL `text_encoder`, `processor`, Wan 2.1 VAE, scheduler) + `model_index.json` | 129 952 345 105 | `weights-sha256.tsv` (59 files) → `sha:lingbot-video-moe-30b-a3b` | — | yes (2026-10-06) | `lingbot-moe` (`lingbot_moe_30b`, base + 1080p refiner; docs/ports/lingbot.md) | apache-2.0 |
+| `cosmos3-super` | nvidia/Cosmos3-Super @ `f543c56` rec (not gated) | manifest row (`transformer` 27 shards, Wan 2.2 `vae`, Qwen2 `text_tokenizer`, scheduler) + `model_index.json`; `sound_tokenizer`, `vision_encoder` and assets are not fetched (not needed for T2V) | 129 465 061 778 | `weights-sha256.tsv` (40 files) → `sha:cosmos3-super` | — | yes (2026-10-06) | `cosmos3-super` (Cosmos3-Super 64B T2V; docs/ports/cosmos3.md) | OpenMDW 1.1 |
 | `taeh3` (legacy) | copy of `auxiliary/tae/taeh3.safetensors` | `taeh3.safetensors`, `.complete` | 22 709 752 | `4fd022bf…` (= aux row) | yes | yes | nothing required; `auxiliary/tae` is read first | as aux |
 
 **Totals** (weights only, from the table; "~" rows at survey precision):
 
 | | US `s2k01690bi` | EU `jg48s6o1w0` |
 |---|---:|---:|
-| Trees in the table | ~1208.0 GB (LongLive +42.60 on 2026-10-02) | ~1260.3 GB (ltx2 +51.61, second upscaler copy +0.69; LongLive +42.60) |
+| Trees in the table | ~1208.0 GB (LongLive +42.60 on 2026-10-02) | ~1743.6 GB (ltx2 +51.61, second upscaler copy +0.69; LongLive +42.60; sol-engine trees +483.30 on 2026-10-06) |
 | EU-only unlisted weight tree (§4) | — | ~77.97 GB |
 | Non-weight data (`upstream/`, `runs/`, `.cache/`) | ~1.78 GB (`runs/`) | ~104.1 GB |
-| **Approx. used** | **~1210 GB** of 2000 | **~1443 GB** of 2000 |
+| **Approx. used** | **~1210 GB** of 2000 | **1938.92 GB** of 2000 (`du -sb /workspace`, 2026-10-06 after the sol-engine trees; **61.08 GB free**) |
 | What `rebuild-volume.sh` writes on an empty volume | 1200.9 GB (+35.52 LongLive Hub trees; the 7.08 GB converted tree is a manual step, §3) | 1200.9 GB |
 
 These are sums of recorded figures, not a fresh `du`. The US column is
@@ -355,10 +372,10 @@ US is not being rebuilt now. When the owner decides to:
    must equal EU. The FP8 trees are copied from EU (§3).
 4. Verify (§5.6), then switch US back on, one id each:
    - `scripts/gpu/volumes.sh`: `FV_US_VOLUME_ID` and `FV_US_VOLUME_NAME`
-     (every Runpod script, `runpod-cluster.sh` regions, the fetchers);
+     (every Runpod script, the fetchers);
    - `control/src/cluster/regions.ts`: `US_VOLUME_ID` (fv-control's `us`
      region), then add `us` back to the cluster specs that should use it;
-   - `configs/serve/autoscale.toml` and the `PodConfig` default in
+   - `configs/autoscale.toml` and the `PodConfig` default in
      `crates/fastvideo-autoscale/src/config.rs`: a US-CA-2 placement;
    - CLAUDE.md and §1 of this page: restore the both-volumes rule.
 
@@ -498,7 +515,12 @@ argument; a rebuilt US would get the EU lists the same way.) Add the manifest
 row, the revision row in `weights-revisions.tsv`, the per-file hashes in
 `weights-sha256.tsv` (from `artifacts/runpod/fetch-<dest>-<volume>/sha256.txt`),
 a `verify-weights.sh` cell, a line in `rebuild-volume.sh`'s `PLAN`, and a row
-in §2 above.
+in §2 above. `FETCH_ADD_INTO=1 fetch-hub-tree.sh <dest> <rev>` adds a
+row's missing files to an existing tree the same add-only way (temp folder,
+Hub check, then each file renamed in; used for `ltx23-dev` on 2026-10-06).
+On a 2 vCPU / 4 GB CPU pod use `FETCH_WORKERS=1` (four parallel 5 GB shards
+were OOM-killed there). Do not edit `fetch-hub-tree.sh` while a fetch runs:
+bash reads the script as it goes.
 
 ## 7. Money and safety checklist for a rebuild
 

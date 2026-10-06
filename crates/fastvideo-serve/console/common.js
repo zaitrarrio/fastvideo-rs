@@ -436,7 +436,7 @@ export function topbar(active) {
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
         link('/console', 'Models', 'home'), link('/console/stream', 'Live stream', 'stream'), link('/console/live', 'Live input', 'live'),
         link('/console/native', 'Native API', 'native'), link('/console/avatar', 'Avatar', 'avatar'),
-        link('/console/admin', 'API keys', 'admin'), link('/console/deployments', 'Deployments', 'deployments')),
+        link('/console/admin', 'API keys', 'admin')),
       el('span', { class: 'spacer' }), strip, pill, theme),
     panel);
   strip.onclick = () => {

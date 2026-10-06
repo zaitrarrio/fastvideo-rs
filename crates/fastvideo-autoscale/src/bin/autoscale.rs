@@ -1,11 +1,10 @@
-//! `fv-autoscale`: the controller as its own process, next to (or without)
-//! a gateway. Inside the gateway the same controller runs in-process
-//! (docs/serve/gateway.md "Autoscaling").
+//! `fv-autoscale`: the controller as its own process. (The in-gateway
+//! controller and the gateway's pools view went with the gateway,
+//! docs/serve/edge-control-plane.md §9 stage 4.)
 //!
 //! ```text
-//! fv-autoscale --config configs/serve/autoscale.toml
-//!     [--gateway https://gw.example]   signals from GET /fv/v1/gateway/pools (FV_ADMIN_TOKEN);
-//!                                      without it: Runpod /health of each serverless endpoint
+//! fv-autoscale --config configs/autoscale.toml
+//!                                      signals: Runpod /health of each serverless endpoint
 //!     [--live | --dry-run]             override `dry_run`
 //!     [--once]                         one tick, print the report as JSON, exit
 //!     [--admin-bind 127.0.0.1:9090]    serve /fv/v1/admin/autoscale (FV_ADMIN_TOKEN)
@@ -25,7 +24,7 @@ use fastvideo_autoscale::controller::{unix_now, Controller};
 use fastvideo_autoscale::gateway::{MemoryRegistry, SignalSource, WorkerRegistry};
 use fastvideo_autoscale::lease::{Lease, MemoryLease};
 use fastvideo_autoscale::provider::runpod::{
-    HttpGatewayPools, RunpodApi, RunpodBalance, RunpodHealthSignals, RunpodPods, RunpodServerless,
+    RunpodApi, RunpodBalance, RunpodHealthSignals, RunpodPods, RunpodServerless,
 };
 use fastvideo_autoscale::provider::Providers;
 
@@ -69,18 +68,14 @@ async fn main() {
         die("autoscale.enabled is false");
     }
     if let Some(p) = cfg.pools.iter().find(|p| p.kind == PoolKind::Serverless && p.serverless.endpoint_id.is_empty()) {
-        die(format!("pool {}: serverless.endpoint_id is required outside the gateway", p.name));
+        die(format!("pool {}: serverless.endpoint_id is required", p.name));
     }
     let api = RunpodApi::from_env().unwrap_or_else(|e| die(e));
     let admin_token = std::env::var("FV_ADMIN_TOKEN").ok().filter(|s| !s.is_empty());
 
-    let signals: Arc<dyn SignalSource> = match arg(&args, "--gateway") {
-        Some(url) => {
-            let tok = admin_token.clone().unwrap_or_else(|| die("--gateway needs FV_ADMIN_TOKEN"));
-            Arc::new(HttpGatewayPools::new(url, tok).unwrap_or_else(|e| die(e)))
-        }
-        None => Arc::new(RunpodHealthSignals::new(api.clone(), &cfg.pools)),
-    };
+    // The gateway's pools view is gone with the gateway (docs/serve/edge-control-plane.md
+    // §9 stage 4): queue signals come from the endpoints' /health.
+    let signals: Arc<dyn SignalSource> = Arc::new(RunpodHealthSignals::new(api.clone(), &cfg.pools));
 
     let d1 = d1_client();
     let lease: Arc<dyn Lease> = match cfg.lease.backend {

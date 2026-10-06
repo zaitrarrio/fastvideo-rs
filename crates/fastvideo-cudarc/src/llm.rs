@@ -20,8 +20,8 @@ use crate::wan::nn::Linear;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
-mod attn;
-pub use attn::scaled_dot_product_attention_gqa;
+pub(crate) mod attn;
+pub use attn::{scaled_dot_product_attention_gqa, scaled_dot_product_attention_gqa_softcap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -289,6 +289,9 @@ pub struct DecoderConfig {
     /// buffer (`hidden_states *= self.layer_scalar`); 1 when the checkpoint
     /// has none.
     pub layer_scalar: bool,
+    /// Gemma-2: attention logits become `tanh(s / cap) * cap` before the
+    /// mask (`attn_logit_softcapping`). `None` everywhere else.
+    pub attn_softcap: Option<f32>,
 }
 
 impl DecoderConfig {
@@ -339,6 +342,7 @@ impl DecoderConfig {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -369,6 +373,7 @@ impl DecoderConfig {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -396,6 +401,7 @@ impl DecoderConfig {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -427,6 +433,7 @@ impl DecoderConfig {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -464,6 +471,7 @@ impl DecoderConfig {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -522,6 +530,7 @@ impl DecoderConfig {
             attention_k_eq_v: true,
             v_norm: true,
             layer_scalar: true,
+            attn_softcap: None,
         }
     }
 
@@ -814,7 +823,19 @@ impl Layer {
         };
         let k = split(k_h, hkv, dkv, &self.k_norm)?.rope_half(cos, sin)?;
         let v = split(v_h, hkv, dkv, &self.v_norm)?;
-        let a = scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
+        let a = match cfg.attn_softcap {
+            Some(cap) => attn::scaled_dot_product_attention_gqa_softcap(
+                &q,
+                &k,
+                &v,
+                cfg.attn_scale,
+                cap,
+                mask,
+            )?,
+            None => {
+                scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?
+            }
+        };
         let a = self
             .o
             .forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * dq])?)?;
@@ -1996,6 +2017,7 @@ mod tests {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         }
     }
 
@@ -2287,6 +2309,7 @@ mod tests {
             attention_k_eq_v: true,
             v_norm: true,
             layer_scalar: true,
+            attn_softcap: None,
         };
         let ids = [1u32, 3, 0, 2, 5];
         let pos: Vec<u32> = (7..12).collect();

@@ -1,14 +1,16 @@
 // The per-minute cron: one GraphQL call for every pod of the account with
-// its runtime metrics, each controller gateway's admin pools view and
-// whitelisted /metrics, then costs, idle tracking, alerts, the backstops
+// its runtime metrics, the edge's families view (jobs and readiness of every
+// edge front), then costs, idle tracking, alerts, the backstops
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
 import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
-import { adminGet, gatewayPublic } from "./cluster/ops";
+import { collectCloudrift, type CloudriftCollect } from "./collector-cloudrift";
+import { edgeCfg, edgeFamilies, edgeWorkers } from "./cluster/ops";
+import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { listClusters, type Cluster } from "./cluster/store";
 import { defaults, type Env } from "./env";
-import { parseProm, writeAccountSample, writePodSamples, writePoolSamples, type PodSample } from "./metrics";
+import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
 import { audit, getSetting, now, putSetting, utcDay } from "./util";
 
@@ -22,6 +24,7 @@ export interface CollectResult {
   running: number;
   alerts: number;
   actions: string[];
+  cloudrift?: Omit<CloudriftCollect, "alerts" | "kinds" | "actions">;
 }
 
 export async function collect(env: Env): Promise<CollectResult> {
@@ -41,32 +44,22 @@ export async function collect(env: Env): Promise<CollectResult> {
   const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url FROM cluster_pods WHERE deleted_at IS NULL").all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null }>();
   const ctl = new Map((rows.results || []).map((r) => [r.pod_id, r]));
 
-  // Jobs per worker from each running gateway (admin pools view), health, whitelisted metrics.
+  // Jobs per worker and health.
   const jobs = new Map<string, { running: number; queued: number; ready: boolean; healthy: boolean; sha?: string }>();
   const health = new Map<string, string>();
-  for (const c of clusters) {
-    if (!c.state.gateway || c.state.gateway_stopped || !["running", "starting"].includes(c.status)) continue;
+  // Edge clusters: each front's jobs from the edge's families view (one read for every edge cluster).
+  if (edgeCfg(env) && clusters.some((c) => isEdge(c.spec) && ["running", "starting"].includes(c.status))) {
     try {
-      const view = await adminGet(env, c, "/fv/v1/gateway/pools");
-      health.set(c.state.gateway.pod, "ready");
-      const urlToPod = new Map(Object.values(c.state.workers).flat().concat(Object.values(c.state.rolling || {}).flat()).map((r) => [String(r.url || "").replace(/\/$/, ""), r.pod]));
-      for (const p of view.state || [])
-        for (const w of p.workers || []) {
-          const pod = urlToPod.get(String(w.url || "").replace(/\/$/, ""));
-          if (pod) {
-            jobs.set(pod, { running: Number(w.running || 0), queued: Number(w.queued || 0), ready: !!w.ready, healthy: !!w.healthy, sha: w.build?.git_sha });
-            health.set(pod, w.ready ? "ready" : w.healthy ? "loading" : "down");
-          }
-        }
-      const m = await adminGet(env, c, "/metrics").catch(() => "");
-      if (typeof m === "string" && m) writePoolSamples(env, c.id, parseProm(m));
+      for (const [pod, w] of edgeWorkers(await edgeFamilies(env))) {
+        jobs.set(pod, { running: w.held, queued: 0, ready: w.ready, healthy: true, sha: w.sha });
+        health.set(pod, w.ready ? "ready" : "loading");
+      }
     } catch {
-      const pub = await gatewayPublic(env, c, "/healthz").catch(() => null);
-      health.set(c.state.gateway.pod, pub && pub.status === 200 ? "ready" : "down");
+      /* the edge is down: pods keep their Runpod-side health */
     }
   }
 
-  const prev = await env.DB.prepare("SELECT pod_id, idle_since, health, first_seen FROM pods WHERE gone_at IS NULL").all<{ pod_id: string; idle_since: number | null; health: string | null; first_seen: number }>();
+  const prev = await env.DB.prepare("SELECT pod_id, idle_since, health, first_seen FROM pods WHERE gone_at IS NULL AND provider = 'runpod'").all<{ pod_id: string; idle_since: number | null; health: string | null; first_seen: number }>();
   const prevBy = new Map((prev.results || []).map((r) => [r.pod_id, r]));
   const samples: PodSample[] = [];
   const stmts: D1PreparedStatement[] = [];
@@ -189,9 +182,9 @@ export async function collect(env: Env): Promise<CollectResult> {
     for (const r of Object.values(c.state.workers).flat().concat(c.state.gateway ? [c.state.gateway] : [])) {
       const h = health.get(r.pod);
       const born = r.created * 1000;
-      if (h === "down" && t - born > pol.pod_down_min * 60_000) alerts.push({ key: `pod_down:${r.pod}`, kind: "pod_down", severity: "warn", target: r.pod, message: `${c.name}: ${r.pool || "gateway"} pod ${r.pod} is not answering` });
+      if (h === "down" && t - born > pol.pod_down_min * 60_000) alerts.push({ key: `pod_down:${r.pod}`, kind: "pod_down", severity: "warn", target: r.pod, message: `${c.name}: ${r.pool || "legacy gateway"} pod ${r.pod} is not answering` });
     }
-    // Backstop: the deadline (the gateway watchdog and this cron both enforce it).
+    // Backstop: the deadline (each edge worker's watchdog and this cron both enforce it).
     const hasPods = !!c.state.gateway || Object.values(c.state.workers).some((l) => l.length);
     if (hasPods && c.deadline) {
       const left = c.deadline - t;
@@ -231,7 +224,11 @@ export async function collect(env: Env): Promise<CollectResult> {
       actions.push(await stopCluster(env, c, "cluster balance floor"));
     }
   }
-  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod"]);
+  // The second provider (docs/ops/cloudrift.md); its failure never stops the Runpod half.
+  const cr = await collectCloudrift(env, t, dtMs, pol).catch((e) => ({ enabled: true, ok: false, error: (e as Error).message, alerts: [], kinds: [], actions: [] }) as unknown as CloudriftCollect);
+  alerts.push(...cr.alerts);
+  actions.push(...cr.actions);
+  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", ...cr.kinds]);
 
   // ---- retention
   await env.DB.batch([
@@ -242,7 +239,8 @@ export async function collect(env: Env): Promise<CollectResult> {
     env.DB.prepare("DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < ?").bind(t - 30 * 86400_000),
     env.DB.prepare("DELETE FROM pods WHERE gone_at IS NOT NULL AND gone_at < ?").bind(t - 7 * 86400_000),
   ]);
-  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions };
+  const { alerts: _a, kinds: _k, actions: _x, ...crSummary } = cr;
+  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions, ...(cr.enabled ? { cloudrift: crSummary } : {}) };
 }
 
 /** Stops a cluster now (backstop / floor): a `down` operation, cancelling whatever runs; deletes the pods directly if the DO fails. */

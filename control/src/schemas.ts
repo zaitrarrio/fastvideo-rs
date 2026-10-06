@@ -8,10 +8,6 @@ import type { Policies } from "./alerts";
 import { AVAILABLE_REGIONS, type RegionId } from "./cluster/regions";
 import type { ClusterSpec, PoolSpec } from "./cluster/spec";
 
-/** The gateway's `[protocols]` switches (fv-serve ProtocolsCfg; serde denies unknown keys). */
-export const GATEWAY_PROTOCOLS = ["openai_videos", "fastwan", "minimax", "fal", "fal_director", "ltx", "reactor", "native"] as const;
-export type GatewayProtocol = (typeof GATEWAY_PROTOCOLS)[number];
-
 const id = (what: string) =>
   z
     .string()
@@ -24,25 +20,25 @@ const cpuFlavor = z.enum(["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"])
 
 export const ModelRefZ = z
   .object({
-    id: z.string().min(1).meta({ "x-dynamic": "model_ids" }).describe("Model id the gateway advertises (e.g. fasth3, ltx25-distill-sol); the worker config's [[models]] id."),
+    id: z.string().min(1).meta({ "x-dynamic": "model_ids" }).describe("Model id the pool serves (e.g. fasth3, ltx25-distill-sol); the worker config's [[models]] id."),
     family: z.string().min(1).meta({ "x-dynamic": "families" }).describe("Model family (h3, ltx2, wan)."),
     recipe: z
       .string()
       .min(1)
       .meta({ "x-dynamic": "recipes" })
-      .describe("A tier alias (h3-max, h3-turbo, h3-draft, ltx-pro, ltx-turbo, ltx-draft, wan-max, wan-turbo, wan-draft) or a catalog model id (sfwan21-1.3b, ltx25-a2v-guided, h3-ref2v-turbo, …). The gateway resolves it against the fv-serve CUDA catalog at start and does not start on an unknown one."),
+      .describe("A tier alias (h3-max, h3-turbo, h3-draft, ltx-pro, ltx-turbo, ltx-draft, wan-max, wan-turbo, wan-draft) or a catalog model id (sfwan21-1.3b, ltx25-a2v-guided, h3-ref2v-turbo, …). It must be in the fv-serve CUDA catalog."),
   })
   .strict()
-  .describe("A static capability of the pool: what the gateway advertises while the pool has no ready worker.");
+  .describe("A model the pool serves: its family (the edge's family object) and recipe.");
 
 export const PoolSpecZ = z
   .object({
-    id: id("Pool id (the gateway's pool, FV_POOL_<ID>_URLS)"),
+    id: id("Pool id"),
     variant: z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,30}$/)
       .meta({ "x-dynamic": "variants" })
-      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, gateway (CPU, also carries the fake engine). The pool presets (ltx-pro, ltx-a2v, ltx-ref2v, h3-ref2v, longlive) reuse these images with an inline config_toml."),
+      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, cpu (CPU, the fake engine). The pool presets (ltx-pro, ltx-a2v, ltx-ref2v, h3-ref2v, longlive) reuse these images with an inline config_toml."),
     count: z.number().int().min(0).max(8).describe("Worker pods in this pool. Change a running cluster's count with Scale."),
     compute: z.enum(["GPU", "CPU"]).describe("GPU pod, or CPU pod (fake engine, tests)."),
     config: z.string().optional().describe("Worker config inside the image (e.g. /etc/fv/runpod.toml). One of config / config_toml."),
@@ -54,16 +50,21 @@ export const PoolSpecZ = z
     container_disk_gb: z.number().int().min(5).max(500).optional().describe("Container disk in GB (default 40 GPU, 10 CPU)."),
     volume: z.boolean().optional().describe("Mount the region's network volume at /workspace (weights). Default: on for GPU pods."),
     image: z.string().optional().describe("Override: an image reference for this pool (resolved to a digest at start)."),
-    models: z.array(ModelRefZ).optional().describe("The gateway's static caps for this pool."),
-    fake_models: z.array(z.string().meta({ "x-dynamic": "fake_models" })).optional().describe("Fake-engine model ids (fake-wan, fake-h3-turbo, …) as static caps."),
-    max_queued: z.number().int().min(0).max(10000).optional().describe("Gateway admission: queued jobs for this pool."),
-    job_timeout_s: z.number().int().min(10).max(86400).optional().describe("Gateway job timeout in seconds."),
+    models: z.array(ModelRefZ).optional().describe("The models this pool serves (their families and recipes)."),
+    fake_models: z.array(z.string().meta({ "x-dynamic": "fake_models" })).optional().describe("Fake-engine model ids (fake-wan, fake-h3-turbo, …) the pool serves."),
+    max_queued: z.number().int().min(0).max(10000).optional().describe("Admission: jobs of a model of this pool waiting in its family object (FV_DISPATCH_MAX_QUEUED)."),
+    job_timeout_s: z.number().int().min(10).max(86400).optional().describe("Job timeout in seconds (kept for older specs)."),
     stale_after_s: z.number().int().min(10).max(86400).optional().describe("A running job without a worker heartbeat for this long is lost."),
+    family: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,30}$/)
+      .optional()
+      .describe("control_plane = edge: the family Durable Object every model of this pool queues on. Default: from each model's family (h3 → h3, ltx2 → ltx, causal wan → sfwan, wan → wan; fake models: fake)."),
   })
   .strict()
   .refine((p) => !!(p.config || p.config_toml), { message: "config or config_toml is required", path: ["config"] })
-  .refine((p) => !!(p.models?.length || p.fake_models?.length), { message: "models or fake_models (the gateway's static caps) is required", path: ["models"] })
-  .describe("A pool of worker pods behind the gateway.");
+  .refine((p) => !!(p.models?.length || p.fake_models?.length), { message: "models or fake_models (what the pool serves) is required", path: ["models"] })
+  .describe("A pool of worker pods.");
 
 export const ClusterSpecZ = z
   .object({
@@ -77,42 +78,14 @@ export const ClusterSpecZ = z
       .strict()
       .refine((i) => [i.channel, i.sha, i.ref].filter(Boolean).length === 1, { message: "exactly one of channel, sha, ref" })
       .describe("Which build the pods run. Resolved to digests at start."),
-    regions: z.array(region).min(1).describe("Regions to place GPU workers in, in order (the gateway prefers the first)."),
-    gateway: z
-      .object({
-        enabled: z.boolean().describe("Run a gateway pod in front of the pools."),
-        cpu_flavors: z.array(cpuFlavor).min(1).describe("Gateway CPU flavors to try, in order."),
-        vcpu: z.number().int().min(1).max(32).describe("Gateway vCPUs."),
-        container_disk_gb: z.number().int().min(5).max(200).describe("Gateway container disk (GB)."),
-        base: z.enum(["pods", "minimal"]).describe("Gateway config base: pods = configs/serve/gateway-pods.toml; minimal = without the reactor, fal apps and keys newer than older images."),
-        github_token: z.boolean().describe("Pass GITHUB_PAT as FV_GITHUB_TOKEN (console promote / rollback)."),
-        auth: z.enum(["keys", "none"]).describe("The gateway's user auth mode (FV_AUTH_MODE)."),
-        fal_apps: z
-          .array(z.string().regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).meta({ "x-dynamic": "fal_apps" }))
-          .max(64)
-          .optional()
-          .describe("Replaces the base's [protocols] fal_apps (default: every worker config's apps). An app no pool serves answers 404; the gateway still starts."),
-        protocols: z
-          .object(Object.fromEntries(GATEWAY_PROTOCOLS.map((k) => [k, z.boolean().optional()])) as Record<GatewayProtocol, z.ZodOptional<z.ZodBoolean>>)
-          .strict()
-          .optional()
-          .describe("Overrides single [protocols] switches of the base (openai_videos, fastwan, minimax, fal, fal_director, ltx, reactor, native)."),
-        reactor_model: z
-          .string()
-          .min(1)
-          .nullable()
-          .optional()
-          .meta({ "x-dynamic": "model_ids" })
-          .describe("[gateway] reactor_model. Default: the base's (fasth3) when a pool serves it, else a pool's causal model (sfwan21-1.3b, longlive-1.3b). null: none (the gateway takes the first streaming model of a pod pool)."),
-        aliases: z
-          .record(z.string().min(1).max(80), z.string().min(1).meta({ "x-dynamic": "model_ids" }))
-          .optional()
-          .describe("Replaces the base's [aliases] (MiniMax-H3 → fasth3, …): public model names → model ids."),
-      })
-      .strict(),
+    regions: z.array(region).min(1).describe("Regions to place GPU workers in, in order."),
+    control_plane: z
+      .enum(["edge", "direct"])
+      .describe("edge (default): the edge Worker (EDGE_URL) is the only entry point and every worker is an API front behind it (docs/serve/edge-control-plane.md); one edge cluster runs at a time. direct: clients call each worker with an API key (docs/control/gateway-less-auth.md). The gateway pod is retired."),
+    auth: z.enum(["keys", "none"]).describe("direct: the workers' client auth (FV_AUTH_MODE). An edge cluster uses the edge's own setting."),
     pools: z.array(PoolSpecZ).describe("Worker pools."),
     cap_s: z.number().int().min(300).max(7 * 86400).describe("Backstop: every pod is deleted at start + cap_s seconds (Extend moves it)."),
-    min_balance: z.number().min(8).max(10000).describe("The gateway pod's watchdog deletes the cluster below this account balance ($)."),
+    min_balance: z.number().min(8).max(10000).describe("Each edge worker's watchdog deletes its pod below this account balance ($)."),
     balance_floor: z.number().min(8).max(10000).describe("Refuse start / extend / scale-up when the projected balance at the deadline would be below this ($); the cron stops the cluster below it."),
     min_start: z.number().min(8).max(10000).describe("Refuse to start below this balance ($)."),
     max_gpu_dph: z.number().min(0.1).max(50).describe("A GPU pod costing more than this $/hr is deleted right after create."),
@@ -125,11 +98,10 @@ export const ClusterSpecZ = z
     const seen = new Set<string>();
     s.pools.forEach((p, i) => {
       if (seen.has(p.id)) ctx.addIssue({ code: "custom", message: `pool ${p.id} twice`, path: ["pools", i, "id"] });
-      if (p.id === "gateway") ctx.addIssue({ code: "custom", message: "'gateway' is reserved", path: ["pools", i, "id"] });
       seen.add(p.id);
     });
   })
-  .describe("A gateway cluster on Runpod (docs/control/README.md §4).");
+  .describe("A cluster on Runpod (docs/control/README.md §4).");
 
 export const AttributionZ = z
   .array(

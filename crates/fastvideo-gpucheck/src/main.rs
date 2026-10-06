@@ -25,6 +25,8 @@ mod gate;
 mod gpu;
 mod h3_stage;
 mod hunyuan15_stage;
+mod sana_video_stage;
+mod sol_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 #[cfg(feature = "cuda")]
@@ -71,9 +73,18 @@ use clap::{Args, Parser, Subcommand};
 use mode::Mode;
 use report::{Report, StageError, StageResult};
 
+/// `-V` / `--version`: the tools release this binary was built as
+/// (`FV_RELEASE_VERSION` at build time; tags `tools-v<version>`,
+/// docs/dev/tools-releases.md), else the workspace version.
+const VERSION: &str = match option_env!("FV_RELEASE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
 #[command(
     name = "fv-gpucheck",
+    version = VERSION,
     about = "Fail-fast numerical/perf validation for fastvideo-cudarc"
 )]
 struct Cli {
@@ -345,10 +356,20 @@ enum Cmd {
         #[command(subcommand)]
         stage: ltx2_stage::Stage,
     },
+    /// SANA-Video 2B stages (see `sana_video_stage.rs`).
+    SanaVideo {
+        #[command(subcommand)]
+        stage: sana_video_stage::Stage,
+    },
     /// HunyuanVideo 1.5 stages (see `hunyuan15_stage.rs`).
     Hunyuan {
         #[command(subcommand)]
         stage: hunyuan15_stage::Stage,
+    },
+    /// Sol-engine LingBot-Video / Cosmos3-Super stages (see `sol_stage.rs`).
+    Sol {
+        #[command(subcommand)]
+        stage: sol_stage::Stage,
     },
     /// MMAudio stages (see `mmaudio_stage.rs`).
     Mmaudio {
@@ -646,6 +667,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::H3 { .. } => "h3",
         Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Hunyuan { .. } => "hunyuan",
+        Cmd::SanaVideo { .. } => "sana-video",
+        Cmd::Sol { .. } => "sol",
         Cmd::Wan { .. } => "wan",
         Cmd::Mmaudio { .. } => "mmaudio",
         Cmd::Llm { .. } => "llm",
@@ -817,6 +840,8 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::H3 { stage } => h3_stage::run(report, stage),
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
+        Cmd::SanaVideo { stage } => sana_video_stage::run(report, stage),
+        Cmd::Sol { stage } => sol_stage::run(report, stage),
         Cmd::Wan { stage } => wan_stage::run(report, stage),
         Cmd::Mmaudio { stage } => mmaudio_stage::run(report, stage),
         Cmd::Llm {

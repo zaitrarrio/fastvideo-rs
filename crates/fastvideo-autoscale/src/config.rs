@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn committed_example_parses() {
-        let c = AutoscaleConfig::from_toml_document(include_str!("../../../configs/serve/autoscale.toml")).unwrap();
+        let c = AutoscaleConfig::from_toml_document(include_str!("../../../configs/autoscale.toml")).unwrap();
         assert!(c.enabled && c.dry_run);
         assert_eq!(c.lease.backend, LeaseBackend::D1);
         let names: Vec<&str> = c.pools.iter().map(|p| p.name.as_str()).collect();

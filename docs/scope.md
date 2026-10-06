@@ -220,10 +220,11 @@ SANA image and video family and is not implemented here.
 | LTX-2.5 | Ancestral stage 1. Stage-2 and Spark refiner are deterministic Euler (`denoise_cfg` / `denoise`), not ancestral. Stage-2 Sol-Attn: layer 0 dense, layers 1–47 at tau 1 / 1.25 / 1.5. LoRA 0.8 on the **dev** BF16 DiT only — distilled two-stage does not fuse. GB200 first-block cache when `FASTVIDEO_LTX2_FBCACHE=1` (threshold 0.08, warmup 1, max 10 skips, **stage 1 only**; stage 2 / refiner stay disarmed) |
 | LTX-2.5 refiner / Spark | H3×2 upscaler, H3-to-LTX adapter, `encode_audio`, 3-step deterministic joint refine, original PCM muxed |
 | MiniMax-H3 Spark and RTX | 4-step `sol-h3` is Spark Sol-Attn (update 0 dense; later updates layer 0 dense + tau 1 / 1.25 / 1.5). `sol-h3-spark` is VSA 0.9 + Sol-Attn Off. RTX route (`sol-h3-rtx` / `FASTVIDEO_H3_SOL_ATTN=rtx`): first 10 steps and first 2 layers dense, tau 1.0, 49 forwards. `FASTVIDEO_H3_SOL_CACHE=teacache` is the RTX residual controller (threshold 0.10, retain 5, cooldown 1) |
-| Cosmos3-Super | Canvas and TeaCache (threshold 1.15, start step 10, max 3). `fp4_linear` names the middle steps. Those linears are not quantized |
+| Cosmos3-Super | 64B MoT T2V port (`cosmos3`, docs/ports/cosmos3.md): text-tower K/V cached per prompt, gen tower per step, Hub UniPC Karras schedule. TeaCache (threshold 1.15, start step 10, max 3) on the gen stack; precision arm is `FASTVIDEO_FP8` W8A8, not NVFP4. `fv-gpucheck sol cosmos3-gen`; not in the CLI registry. Not GPU-run |
 | HunyuanVideo | Official canvas only. The profile's TeaCache is HunyuanVideo-13B and is not applied |
-| LingBot | Official base canvas only. Cache, PISA, and topology stay dense: the profile names them and does not specify the algorithms |
+| LingBot | MoE 30B-A3B per the Hub config, base + 1080p refiner (docs/ports/lingbot.md). `FASTVIDEO_LINGBOT_SOL=fullopt`: EasyCache (base 0.08 / refiner 0.25) + refiner PISA 0.10, layers 0–3 and refiner steps 0, 1, last dense. CP4 / FSDP topology not reproduced. Not GPU-run |
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
+| SANA-Video 2B (public) | Ported (2026-10-06, GPU-unmeasured): `sana_video`, `fv-gpucheck sana-video gen --arm baseline\|full` (EasyCache 0.1, QKV merge, bf16 linear-attention operands). The published 2.77x is for this model; see docs/ports/sana-video.md |
 
 4-step `sol-h3` uses Spark Sol-Attn, not the RTX first-10-dense window (that
 window would make every 4-step forward dense). `sol-h3-rtx` is the 49-forward
@@ -279,9 +280,12 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LTX2_AUDIO_VAE` | Audio encoder file or directory. Otherwise `audio_vae/` or `ltx-2.5-audio-vae-bf16.safetensors` |
 | `FASTVIDEO_LTX2_TEXT` | `resident`, `streamed`, or `auto` |
 | `FASTVIDEO_LTX_OFFLOAD` | `cpu` gives sol-engine's `--offload cpu` placement. The DiT blocks stream from pinned host memory through 2 device slots. Gemma streams per layer. The connectors, upsampler, video VAE and audio VAE are on the device only around their calls, with a trim after each. The frames are byte-identical to the resident run. Peak 20.4 GiB at 4k5s and 19.0 GiB at 1080p20s, against the reference's 30.4 and 29.1 GiB. `none` (default) leaves each model to its own policy. `ltx2 gen --offload` overrides it. See [ports/ltx25.md](ports/ltx25.md#offload-placement-fastvideo_ltx_offloadcpu) |
-| `FASTVIDEO_DIT_OFFLOAD` | LTX-2 / H3 DiT blocks: `auto` (default), `resident`, or `streamed` |
+| `FASTVIDEO_DIT_OFFLOAD` | LTX-2 / H3 DiT blocks: `auto` (default), `resident`, or `streamed`. Wan DiTs: `streamed` streams the blocks layer by layer (any other value: resident, or the A14B plan below) |
+| `FASTVIDEO_WAN_MOE` | Wan 2.2 A14B experts: `auto` (default: both resident when the free memory after UMT5 covers two bf16 experts plus `FASTVIDEO_WAN_MOE_HEADROOM_GIB`, default 24, else `swap`), `both`, or `swap` (both parked in pinned host memory, swapped at the 0.875 boundary). See [ports/sol-wan-ltx23.md](ports/sol-wan-ltx23.md) |
+| `FASTVIDEO_WAN_UNIPC_SIGMAS` | `fastvideo` (default: FastVideo's double-shifted flow-UniPC sigmas) or `diffusers` (Diffusers' single shift, the sol-engine Wan baselines) |
 | `FASTVIDEO_DEVICE_BUDGET_GIB` | Plan and run as if the card had this many GiB. A phase that peaks above it fails the run |
-| `FASTVIDEO_LTX2_HQ` | 2.3-base 15+3 HQ contract |
+| `FASTVIDEO_LTX2_HQ` | 2.3-base 15+3 HQ contract (`fv-gpucheck ltx2 gen --model-version 2.3 --hq` runs it on the dev DiT) |
+| `FASTVIDEO_LTX2_UPSAMPLER` | Spatial-upsampler file or folder in place of the pack's (`ltx-2.3-spatial-upscaler-x2-1.1.safetensors` for the 2.3 HQ cell) |
 | `FASTVIDEO_LTX2_FBCACHE` | LTX-2.5 stage-1 first-block cache |
 | `FASTVIDEO_LTX2_STAGE1_CACHE` | LTX-2.3 stage-1 SCSP (res2s calls 16–28 of 29) |
 | `FASTVIDEO_LTX2_MIDPOINT_PRUNE` | LTX-2.3 stage-2 feature-norm prune |
@@ -295,7 +299,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_H3_SOL_CACHE` | RTX TeaCache |
 | `FASTVIDEO_H3_UPSCALER` / `FASTVIDEO_H3_LTX_ADAPTER` | Spark bridge checkpoints, if not beside the H3 weights |
 | `FASTVIDEO_WAN_SOL_CACHE` | `easycache`, `teacache` or `taylorseer` (lossy; off by default) |
-| `FASTVIDEO_WAN_SOL_ATTN` | Sol-Attn route: 14B (10 dense forwards, layer 0 dense) and 1.3B (layer 0 dense), Morton3D on the device |
+| `FASTVIDEO_WAN_SOL_ATTN` | Sol-Attn route: 14B (10 dense forwards, layer 0 dense) and 1.3B (layer 0 dense), Morton3D on the device. `fullstack` on the 1.3B: the 14B guards (sol-engine `wan21_fullstack_sol.toml`, the 50-step base model) |
 | `FASTVIDEO_WAN_VAE` | `auto` (TAEHV for distilled presets when found), `full`, `taehv` |
 | `FASTVIDEO_TAE_DIR` | Where the distilled presets look for `taew2_1.safetensors` (`scripts/gpu/fetch_taehv.sh`) |
 | `FASTVIDEO_VAE_CHUNK` | Latent frames per Wan VAE pass (default 2) |

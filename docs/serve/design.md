@@ -1706,17 +1706,18 @@ worker that took the job sees it through. Tests:
 `multi_worker_*` (filtering; a job submitted on one worker polled to
 completion on another over the D1 mock).
 
-### 6.6 One gateway in front of per-family pools
+### 6.6 One entry point in front of per-family pools
 
-`[engine] backend = "remote"` turns fv-serve into the gateway: one URL and
-one API key for every API and model, in front of one worker pool per model
-family (Runpod serverless queue endpoints or pods), with all state in D1 and
-R2 so gateway replicas are interchangeable. Workers run
-`server.role = "worker"` (internal token, `/fv/v1/internal/*`). Design,
-configuration and the autoscaler interface: [`gateway.md`](gateway.md);
-configs `configs/serve/gateway.toml` and the `[gateway] pool` of each worker
-config; tests `crates/fastvideo-serve/tests/gateway.rs` and
-`FV_COMPAT_GATEWAY=1 tests/compat/run.sh`.
+The edge Worker (`crates/fastvideo-edge`, a Cloudflare Worker with one
+Durable Object per model family) is the one URL and API key for every API
+and model. Workers run `server.role = "worker"` with `dispatch.front`: each
+is an API front behind the edge that takes jobs from its family's queue,
+with all state in D1 and R2 ([`edge-control-plane.md`](edge-control-plane.md),
+[`dispatch-do-family.md`](dispatch-do-family.md)). fv-control launches the
+clusters (docs/control/README.md). The fv-serve gateway
+(`[engine] backend = "remote"`, [`gateway.md`](gateway.md)) that held this
+role first was retired on 2026-10-06; tests: `tests/edge_front.rs`,
+`tests/edge_family.rs`.
 
 ---
 
@@ -2236,8 +2237,7 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `POST`/`GET /fv/v1/streams/ingest`, `GET`/`DELETE`/`PATCH /fv/v1/streams/ingest/{id}`, `POST /fv/v1/streams/ingest/{id}/commands` | serve (native WHIP ingest, §5.11) | Mounted when a duplex model is served (feature `webrtc`); static `ingest` beside `/fv/v1/streams/{id}` does not collide |
 | `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
 | `GET /console`, `/console/admin`, `/console/live`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
-| `GET /fv/v1/gateway/pools` | serve (gateway) | Per-pool metrics for the autoscaler (admin token); gateway mode only ([`gateway.md`](gateway.md) §7) |
-| `POST /fv/v1/internal/jobs`, `GET`/`DELETE /fv/v1/internal/jobs/{id}`, `GET /fv/v1/internal/status` | serve (worker role) | Gateway → worker dispatch, cancel and probes; internal token only ([`gateway.md`](gateway.md) §3) |
+| `POST /fv/v1/internal/jobs`, `GET`/`DELETE /fv/v1/internal/jobs/{id}`, `GET /fv/v1/internal/status` | serve (worker role) | Internal dispatch (Runpod queue handler, drain), cancel and probes; internal token only |
 
 **CORS.** One layer outside every route (`app::cors_layer`) answers
 preflights (`OPTIONS` with `Access-Control-Request-Method`) for any path,

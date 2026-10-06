@@ -46,7 +46,6 @@ export async function registry(env: Env, limit = 100): Promise<any[]> {
 /** The release key of a pod's image: its variant (wan pool: wan5b), or `debug` for the all-in-one image. */
 export function releaseKey(c: Cluster, podKey: string): string {
   if (c.spec.image.ref) return "debug";
-  if (podKey === "gateway") return "gateway";
   return c.spec.pools.find((p) => p.id === podKey)?.variant || podKey;
 }
 
@@ -55,7 +54,7 @@ export function clusterDrift(c: Cluster, heads: ReleaseRow[]) {
   const channel = c.spec.image.channel;
   const head = channel ? heads.find((h) => h.channel === channel) : undefined;
   const out: { pod: string; key: string; running: string | null; head: string | null; drift: boolean; sha?: string }[] = [];
-  const recs = [...(c.state.gateway ? [["gateway", c.state.gateway] as const] : []), ...Object.entries(c.state.workers).flatMap(([p, l]) => l.map((r) => [p, r] as const))];
+  const recs = Object.entries(c.state.workers).flatMap(([p, l]) => l.map((r) => [p, r] as const));
   const digestOf = (img?: string) => (img && img.includes("@") ? img.split("@")[1]! : null);
   for (const [key, r] of recs) {
     const rk = releaseKey(c, key);

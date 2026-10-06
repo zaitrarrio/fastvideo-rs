@@ -1,6 +1,6 @@
 // Test harness: a mock of every upstream fv-control talks to (Runpod REST,
-// GraphQL and the log endpoint, GHCR, GitHub, the Cloudflare API) and of the
-// cluster's own pods (an fv-serve gateway and workers, keyed by pod id), plus
+// GraphQL and the log endpoint, CloudRift, GHCR, GitHub, the Cloudflare API) and of the
+// cluster's own pods (fv-serve workers, keyed by pod id) and the edge Worker, plus
 // the Worker itself under `wrangler dev` (workerd, local D1/R2/DO).
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -11,7 +11,6 @@ import { webcrypto as wc } from "node:crypto";
 
 const te = new TextEncoder();
 const b64 = (u) => Buffer.from(u).toString("base64");
-const unb64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
 export const HERE = new URL("..", import.meta.url).pathname;
 
 export async function hashPassphrase(pass, pepper, iter = 100000) {
@@ -22,20 +21,6 @@ export async function hashPassphrase(pass, pepper, iter = 100000) {
   const bits = await wc.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, key, 256);
   return `pbkdf2-sha256$${iter}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
 }
-async function sealFor(plain, recipient) {
-  const eph = await wc.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
-  const epk = new Uint8Array(await wc.subtle.exportKey("raw", eph.publicKey));
-  const rpk = unb64(recipient);
-  const peer = await wc.subtle.importKey("raw", rpk, { name: "X25519" }, false, []);
-  const shared = new Uint8Array(await wc.subtle.deriveBits({ name: "X25519", public: peer }, eph.privateKey, 256));
-  const k = new Uint8Array(await wc.subtle.digest("SHA-512", new Uint8Array([...te.encode("fv-admin-token-v1"), ...shared, ...epk, ...rpk])));
-  const iv = wc.getRandomValues(new Uint8Array(16));
-  const aes = await wc.subtle.importKey("raw", k.subarray(0, 32), "AES-CTR", false, ["encrypt"]);
-  const ct = new Uint8Array(await wc.subtle.encrypt({ name: "AES-CTR", counter: iv, length: 128 }, aes, te.encode(plain)));
-  const mk = await wc.subtle.importKey("raw", k.subarray(32, 64), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const tag = await wc.subtle.sign("HMAC", mk, new Uint8Array([...iv, ...ct]));
-  return { alg: "X25519-SHA512-AES256CTR-HMACSHA256", epk: b64(epk), iv: b64(iv), ct: b64(ct), tag: b64(new Uint8Array(tag)) };
-}
 
 export function startMock() {
   const m = {
@@ -44,10 +29,8 @@ export function startMock() {
     pods: new Map(), // id -> {payload, env, desiredStatus, costPerHr, name, image, created}
     log: [], // every request: {method, path, body}
     dispatches: [],
-    adminToken: "fvadm_mocktoken123",
-    minted: [],
     drained: [],
-    directKeys: [], // gateway-less workers' minted keys (the shared D1 table)
+    directKeys: [], // direct workers' minted keys (the shared D1 table)
     directCalls: [], // {pod, method, route} of their admin calls
     external: [
       { id: "extbuild0001", name: "fv-build", desiredStatus: "RUNNING", costPerHr: 1.12, imageName: "rust:1-bookworm", gpuCount: 0, machine: { gpuDisplayName: "unknown", dataCenterId: "EU-RO-1" }, runtime: { uptimeInSeconds: 3600, gpus: [], container: { cpuPercent: 80, memoryPercent: 10 } } },
@@ -55,6 +38,21 @@ export function startMock() {
       { id: "extold00001", name: "little_azure_rook", desiredStatus: "EXITED", costPerHr: 4.59, gpuCount: 1, machine: { gpuDisplayName: "H200 SXM", dataCenterId: "EUR-IS-4" }, runtime: null },
     ],
     failCreate: 0,
+    edgeAdmin: "fvadm_edge_mock_admin",
+    edgeInternal: "edge-internal-mock-token",
+    edgeKeys: [],
+    edgeCalls: [],
+    edgeEpoch: 1,
+    // CloudRift (docs/ops/cloudrift.md): {version, data} over POST, X-API-Key.
+    cloudrift: {
+      balance: 3000, // cents, as live
+      calls: [],
+      instances: [
+        { id: "cr-ours-1", instance_name: "fv-gpucheck-1006", status: "Active", tags: ["fv", "fv-owner:fastvideo-rs", "fv-kind:gpucheck", `fv-deadline:${Math.floor(Date.now() / 1000) - 60}`], host_address: "203.0.113.7", created_at: new Date(Date.now() - 600_000).toISOString(), resource_info: { cost_per_hour: 139.36, instance_type: "rtxpro6000-11-50-500-1l.1", provider_name: "p" }, gpus: [{ brand_short: "RTX PRO 6000" }] },
+        { id: "cr-ours-2", instance_name: "fv-serve-h3-turbo-1006", status: "Active", tags: ["fv", "fv-owner:fastvideo-rs", "fv-kind:serve-h3-turbo", `fv-deadline:${Math.floor(Date.now() / 1000) + 3600}`], host_address: "203.0.113.8", created_at: new Date().toISOString(), resource_info: { cost_per_hour: 62.4, instance_type: "rtx59-16c-nr.1", provider_name: "p" }, gpus: [{ brand_short: "RTX 5090" }] },
+        { id: "cr-foreign", instance_name: "someone-else", status: "Active", tags: [], host_address: "203.0.113.9", created_at: new Date().toISOString(), resource_info: { cost_per_hour: 25, instance_type: "v100-6-52-400-generic.1", provider_name: "p" }, gpus: [{ brand_short: "V100 SXM2" }] },
+      ],
+    },
   };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
@@ -124,6 +122,23 @@ export function startMock() {
       if (bearer !== m.runpodKey) return json(res, 401, {});
       return json(res, 200, { container: ["2026-09-29T00:00:00Z fv-serve starting", `leak? ${m.runpodKey}`], system: ["pulling image"] });
     }
+    // ---- CloudRift
+    if (p.startsWith("/cr/api/v1/")) {
+      const path = p.slice("/cr/api/v1/".length);
+      const cr = m.cloudrift;
+      cr.calls.push({ path, version: body?.version, key: req.headers["x-api-key"] === m.cloudriftKey, bearer: !!req.headers.authorization });
+      if (!body || !body.version || !("data" in body)) return json(res, 400, "request must be {version, data}");
+      const d = body.data;
+      const ok = (data) => json(res, path === "instances/terminate" ? 201 : 200, { version: body.version, data });
+      if (path === "instance-types/list") return ok({ instance_types: [{ name: "rtxpro6000-11-50-500-1l", brand_short: "RTX PRO 6000", variants: [{ name: "rtxpro6000-11-50-500-1l.1", gpu_count: 1, cost_per_hour: 139.36, available_nodes: 1, available_nodes_per_dc: { "us-x": 1 } }] }] });
+      if (req.headers["x-api-key"] !== m.cloudriftKey) { res.writeHead(401); return res.end("User cannot be authenticated from the request"); }
+      const sel = (s) => cr.instances.filter((i) => (s?.ById ? s.ById.includes(i.id) : s?.ByStatus ? s.ByStatus.statuses.includes(i.status) : true));
+      if (path === "account/info") return ok({ balance: cr.balance, pending: 0.0, disputed: 0, dispute_fees: 0, current_cost_per_hour: null });
+      if (path === "instances/list") return ok({ instances: sel(d.selector) });
+      if (path === "instances/metrics") return ok({ metrics: (d.selector.ById || []).map((id) => ({ instance_id: id, node_id: "n", gpus: [{ gpu_index: "0", gpu_utilization_percent: 50 }] })) });
+      if (path === "instances/terminate") { const t = sel(d.selector); for (const i of t) i.status = "Inactive"; return ok({ terminated: t }); }
+      return json(res, 404, `no route ${path}`);
+    }
     // ---- GHCR
     if (p === "/ghcr/token") return json(res, 200, { token: "anon" });
     let g = /^\/ghcr\/v2\/(.+)\/manifests\/(.+)$/.exec(p);
@@ -133,7 +148,7 @@ export function startMock() {
       return res.end();
     }
     g = /^\/ghcr\/v2\/(.+)\/tags\/list$/.exec(p);
-    if (g) return json(res, 200, { tags: ["latest", "stable", "gateway-stable", "sha-abcdef1", "gateway-sha-abcdef1"] });
+    if (g) return json(res, 200, { tags: ["latest", "stable", "cpu-stable", "sha-abcdef1", "cpu-sha-abcdef1"] });
     // ---- GitHub
     if (p.startsWith("/gh/")) {
       if (bearer !== m.githubPat) return json(res, 401, { message: "Bad credentials" });
@@ -143,6 +158,33 @@ export function startMock() {
     }
     // ---- Cloudflare API (Analytics Engine SQL)
     if (p.startsWith("/cf/")) return json(res, 200, { data: [] });
+    // ---- the edge Worker (control_plane = edge): its fronts are the pods
+    // whose env makes them fronts with the edge's internal token.
+    if (p.startsWith("/edge/")) {
+      const route = p.slice("/edge".length);
+      m.edgeCalls.push({ method: req.method, route });
+      if (route === "/fv/v1/status") return json(res, 200, { object: "fv.status", edge: true, pools: [] });
+      if (bearer !== m.edgeAdmin) return json(res, 401, { error: { kind: "unauthorized" } });
+      if (route === "/fv/v1/edge/families") {
+        const families = {};
+        for (const pod of m.pods.values()) {
+          const env = pod.env || {};
+          if (env.FV_DISPATCH_FRONT !== "1" || env.FV_INTERNAL_TOKEN !== m.edgeInternal || pod.desiredStatus !== "RUNNING") continue;
+          for (const f of String(env.FV_DISPATCH_FAMILIES || "").split(",").filter(Boolean))
+            (families[f] ||= { pool: `family:${f}`, workers: [] }).workers.push({ worker_id: pod.id, connected: true, ready: true, draining: false, held: m.edgeHeld?.[pod.id] || 0, sha: "abcdef1234", front: { url: `http://127.0.0.1:${m.port}/pod/${pod.id}`, ready: true } });
+        }
+        return json(res, 200, { object: "fv.edge.families", families, metrics: {}, key_epoch: m.edgeEpoch });
+      }
+      if (route === "/fv/v1/admin/keys" && req.method === "POST") {
+        const k = { id: `key_${String(m.edgeKeys.length + 1).padStart(12, "e")}`, name: body.name, revoked: false };
+        m.edgeKeys.push(k);
+        return json(res, 201, { api_key: `fv_edge_${k.id}`, key: k });
+      }
+      if (route === "/fv/v1/admin/keys" && req.method === "GET") return json(res, 200, { keys: m.edgeKeys, backend: "d1" });
+      const ek = m.edgeKeys.find((x) => route === `/fv/v1/admin/keys/${x.id}`);
+      if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return ek ? ((ek.revoked = true), m.edgeEpoch++, json(res, 200, { key: ek })) : json(res, 404, {});
+      return json(res, 404, {});
+    }
     // ---- the cluster's pods
     const pm = /^\/pod\/([^/]+)(\/.*)$/.exec(p);
     // The shared build pod's public /healthz (an external pod: not in m.pods).
@@ -152,34 +194,8 @@ export function startMock() {
       if (!pod || pod.desiredStatus !== "RUNNING") { res.writeHead(502); return res.end("no pod"); }
       const env = pod.env || {};
       const route = pm[2];
-      if (env.FV_GATEWAY_TOML_B64) {
-        if (route === "/healthz") return json(res, 200, { status: "ok" });
-        if (route === "/fv/v1/status") return json(res, 200, { object: "fv.status", pools: [] });
-        if (route === "/fv/v1/admin/token/sealed") return env.FV_ADMIN_TOKEN_RECIPIENT ? json(res, 200, await sealFor(m.adminToken, env.FV_ADMIN_TOKEN_RECIPIENT)) : json(res, 404, {});
-        const admin = bearer === (env.FV_ADMIN_TOKEN || m.adminToken);
-        if (route === "/fv/v1/gateway/pools") {
-          if (!admin) return json(res, 401, { error: { kind: "unauthorized" } });
-          const state = Object.entries(env).filter(([k]) => /^FV_POOL_.*_URLS$/.test(k)).map(([k, v]) => ({
-            id: k.slice(8, -5).toLowerCase().replace(/_/g, "-"),
-            workers: v.split(",").map((u) => ({ url: u, ready: true, healthy: true, running: 0, queued: 0, build: { git_sha: "abcdef1234" } })),
-          }));
-          return json(res, 200, { object: "fv.gateway.pools", pools: [], state });
-        }
-        if (route === "/metrics") return admin ? (res.writeHead(200, { "content-type": "text/plain" }), res.end('fv_pool_queued{pool="fake"} 2\nfv_pool_running{pool="fake"} 1\nfv_http_requests_total 9\n')) : json(res, 401, {});
-        if (route === "/fv/v1/admin/keys" && req.method === "POST") {
-          if (!admin) return json(res, 401, {});
-          m.minted.push(body.name);
-          const key = { id: `key_${String(m.minted.length).padStart(12, "0")}`, name: body.name, prefix: "fv_user", created_at: new Date().toISOString(), revoked: false };
-          (m.gwKeys ||= []).push(key);
-          return json(res, 201, { api_key: "fv_userkey_mock", key });
-        }
-        if (route === "/fv/v1/admin/keys" && req.method === "GET") return admin ? json(res, 200, { keys: m.gwKeys || [], backend: "d1" }) : json(res, 401, {});
-        const gk = (m.gwKeys || []).find((k) => route === `/fv/v1/admin/keys/${k.id}`);
-        if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return !admin ? json(res, 401, {}) : gk ? ((gk.revoked = true), json(res, 200, { key: gk })) : json(res, 404, { error: { kind: "not_found" } });
-        return json(res, 404, {});
-      }
       if (env.FV_WORKER_DIRECT === "1" && route.startsWith("/fv/v1/admin/keys")) {
-        // A gateway-less worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
+        // A direct worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
         if (!env.FV_ADMIN_TOKEN || bearer !== env.FV_ADMIN_TOKEN) return json(res, 401, { error: { kind: "unauthorized" } });
         m.directCalls.push({ pod: pod.id, method: req.method, route });
         if (route === "/fv/v1/admin/keys" && req.method === "POST") {
@@ -212,7 +228,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };
@@ -241,6 +257,7 @@ export function d1Exec(dir, sql) {
 export const SECRETS = {
   RUNPOD_API_KEY: "rpa_TESTKEY_0123456789abcdef",
   GITHUB_PAT: "github_pat_TEST_0123456789",
+  CLOUDRIFT_API_KEY: "crk_TEST_0123456789abcdef",
   CLOUDFLARE_API_KEY: "cf_TEST_0123456789abcdef",
   CONTROL_KEK: b64(wc.getRandomValues(new Uint8Array(32))),
   SESSION_SECRET: "sess_" + Buffer.from(wc.getRandomValues(new Uint8Array(24))).toString("hex"),

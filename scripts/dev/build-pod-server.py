@@ -14,11 +14,18 @@ lost when the pod stops; FV_BUILD_TARGETS=volume keeps them on the volume.
   <local>/cargo/               CARGO_HOME; registry/cache and git/db link to the volume
 On the network volume (FV_BUILD_ROOT, default /workspace/fv-build):
   cargo/registry/cache, cargo/git/db   downloaded crates and git checkouts (shared)
-  rustup/              RUSTUP_HOME (toolchains, shared)
   sccache/             SCCACHE_DIR (shared; FV_BUILD_SCCACHE_SIZE, default 40G)
-  cuda-13.4/           CUDA 13.4 nvcc/NVRTC/crt/cudart/cccl/tileiras (redist)
-  tools/               sccache binary
+  deps-seed/<key>.tar.zst  prebuilt dependencies per Cargo.lock + toolchain + image
+                       (see SEED_RECIPE); a job whose agent has no target dir
+                       starts from it
+  release-cache/       release-artifacts-pod.sh's oxide cubins and hf-fm
   jobs/<id>.log        job logs; logs/pod.log service log; ledger.tsv
+From the image (docker/build-base.Dockerfile, FV_BUILD_IMAGE): the Rust
+toolchain (RUSTUP_TOOLCHAIN), CUDA 13.4 (CUDA_HOME), sccache, mold, clang,
+cmake, ffmpeg, Node + Playwright + Chromium. Nothing is installed at boot: the
+setup checks they are there and fails naming what is missing. (rustup/,
+cuda-13.4/, tools/, node-*/, playwright-*/, pw-browsers/ on the volume are
+what pods on rust:1-bookworm installed; unused now.)
 
 Auth: every endpoint but GET /healthz needs "Authorization: Bearer <token>";
 the pod only knows sha256(token) (FV_BUILD_TOKEN_SHA256).
@@ -38,6 +45,9 @@ Endpoints (all JSON unless noted):
   POST /v1/evict                        run an eviction pass now -> {evicted}
   GET  /v1/log?lines=N                  text: tail of logs/pod.log (self-stop attempts etc.)
   POST /v1/stop                         stop the pod now
+  POST /v1/runner                       {token, repo[, labels, name]}: register and start this
+                                        pod's GitHub Actions runner (docs/dev/tools-releases.md)
+  GET  /v1/runner                       the runner's state (no token)
 
 Only these commands run (no shell): cargo {check,build,test,clippy,fmt,doc,
 tree,metadata}, and `bash <script>` for the scripts in SCRIPTS. Environment
@@ -83,7 +93,6 @@ eviction pass) get HTTP 507 with a "build pod disk full" error instead of a
 """
 
 import collections
-import contextlib
 import errno
 import fcntl
 import gzip
@@ -118,7 +127,9 @@ RUNPOD_REST = os.environ.get("FV_BUILD_RUNPOD_REST", "https://rest.runpod.io/v1"
 RUNPOD_GRAPHQL = os.environ.get("FV_BUILD_RUNPOD_GRAPHQL", "https://api.runpod.io/graphql")
 MAX_JOBS = int(os.environ.get("FV_BUILD_MAX_JOBS", "4"))
 EVICT_S = float(os.environ.get("FV_BUILD_EVICT_HOURS", "6")) * 3600  # 0 disables
-EVICT_FREE_GB = float(os.environ.get("FV_BUILD_EVICT_FREE_GB", "40"))  # 0 disables
+# 0 disables. Capped at a fifth of the container disk (a 16-vCPU pod gets
+# 80-120 GB, where 40 GB free would evict half the disk).
+EVICT_FREE_GB = float(os.environ.get("FV_BUILD_EVICT_FREE_GB", "40"))
 EVICT_INTERVAL_S = float(os.environ.get("FV_BUILD_EVICT_INTERVAL_S", "60"))
 # Agents a multi-request client flow needs between its jobs: the release build
 # (build-pod.sh release-artifacts) syncs, runs, then fetches its tarballs from
@@ -130,30 +141,51 @@ EVICT_HOLD_S = float(os.environ.get("FV_BUILD_EVICT_HOLD_MIN", "60")) * 60
 # eviction pass could not free it.
 MIN_FREE_GB = float(os.environ.get("FV_BUILD_MIN_FREE_GB", "2"))
 SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
-SCCACHE_VER = os.environ.get("FV_BUILD_SCCACHE_VERSION", "v0.10.0")
-CUDA_REDIST = os.environ.get("FV_BUILD_CUDA_REDIST", "13.4.2")
-CUDA_DIR = os.path.join(ROOT, "cuda-13.4")
-# Browser / client-compat extras (tests/compat/run.sh, tests/console/run.sh,
-# FV_SERVE_UI=1): Node on the volume, Playwright's Chromium on the volume,
-# ffmpeg + python3-venv + Chromium's system libraries in the container.
-NODE_VER = os.environ.get("FV_BUILD_NODE_VERSION", "v22.23.3")
-NODE_DIR = os.path.join(ROOT, "node-" + NODE_VER)
-PLAYWRIGHT_VER = os.environ.get("FV_BUILD_PLAYWRIGHT_VERSION", "1.56.1")  # tests/compat/package.json
-PW_DIR = os.path.join(ROOT, "playwright-" + PLAYWRIGHT_VER)
-PW_BROWSERS = os.path.join(ROOT, "pw-browsers")
-# apt in the container. rust:1-bookworm's /etc/apt/apt.conf.d/docker-clean
-# deletes /var/cache/apt/archives/*.deb after every dpkg run and every
-# `apt-get update`, so a second apt (a release-artifacts job's jq / binutils /
-# libclang-dev) running while the extras unpack ffmpeg's ~130 packages deleted
-# the downloaded .debs under dpkg ("cannot access archive", "Processing was
-# halted because there were too many errors", exit 100; 2026-10-06). Every apt
-# here and in release-artifacts-pod.sh holds APT_LOCK (flock), docker-clean's
-# hooks are cleared (APT_KEEP_DEBS), and a failed install is repaired
-# (`dpkg --configure -a`, `apt-get -f install`) and retried.
-APT_LOCK = os.environ.get("FV_BUILD_APT_LOCK", "/var/lock/fv-apt.lock")
-APT_KEEP_DEBS = os.environ.get("FV_BUILD_APT_KEEP_DEBS", "/etc/apt/apt.conf.d/zz-fv-keep-debs")
-APT_OPTS = ["-o", "DPkg::Lock::Timeout=600"]
-APT_TRIES = 3
+# Everything below comes from the base image (docker/build-base.Dockerfile);
+# nothing is installed at boot. A missing tool fails the setup (or, for the
+# browser tools, the extras) with the list of what is missing.
+IMAGE = os.environ.get("FV_BUILD_IMAGE", "")
+BASE_INFO = os.environ.get("FV_BUILD_BASE_INFO", "/etc/fastvideo/build-base.json")
+CUDA_DIR = os.environ.get("CUDA_HOME", "/usr/local/cuda-13.4")
+SCCACHE_DIR = os.path.join(ROOT, "sccache")
+# Build tools a job needs; checked at boot.
+REQUIRED_TOOLS = ("cargo", "rustc", "rustup", "cc", "clang", "cmake", "pkg-config", "mold", "sccache", "zstd",
+                  "tar", "du", "jq", "objdump", "readelf", "curl", "git")
+# What tests/compat, tests/console and FV_SERVE_UI=1 need on top.
+EXTRAS_TOOLS = ("ffmpeg", "node", "npm", "python3", "openssl")
+# Deps seeds (docs/dev/build-pod.md "Caches"): a zstd tarball per key (Cargo.lock,
+# rustc, image, recipe) on the volume, holding a target dir with every
+# registry/git dependency of SEED_RECIPE built and every path (workspace)
+# package stripped. A job whose agent has no target dir gets one extracted
+# from it onto the container disk; the first successful job of a key with no
+# seed builds one in the background (agent SEED_AGENT, niced).
+SEED_ON = os.environ.get("FV_BUILD_SEED", "1") == "1"
+SEED_DIR = os.path.join(ROOT, "deps-seed")
+SEED_AGENT = "fv-seed"
+SEED_KEEP = int(os.environ.get("FV_BUILD_SEED_KEEP", "4"))
+SEED_ZSTD_LEVEL = os.environ.get("FV_BUILD_SEED_ZSTD_LEVEL", "3")
+SERVE_CRATES = ("fastvideo-protocol", "fastvideo-engine-service", "fastvideo-media", "fastvideo-webrtc",
+                "fastvideo-serve-kit", "fastvideo-openai-videos", "fastvideo-minimax", "fastvideo-ltxapi",
+                "fastvideo-fal", "fastvideo-reactor", "fastvideo-deploy", "fastvideo-autoscale", "fastvideo-serve",
+                "fastvideo-dispatch-proto", "fastvideo-edge")  # scripts/serve/check.sh's CRATES
+
+
+def _pkgs(names):
+    return [a for n in names for a in ("-p", n)]
+
+
+# What agents build most (docs/dev/build-pod.md one-liners, scripts/serve/check.sh),
+# with --keep-going (--no-fail-fast for test) so one failing workspace crate
+# does not stop the deps.
+# `-p` names that are not workspace members are dropped at build time.
+SEED_RECIPE = (
+    ("cargo", "check", "--keep-going", "--all-targets", *_pkgs(SERVE_CRATES)),
+    ("cargo", "test", "--no-run", "--no-fail-fast", *_pkgs(SERVE_CRATES)),  # test has no --keep-going
+    ("cargo", "check", "--keep-going", "-p", "fastvideo-cudarc", "-p", "fastvideo-gpucheck", "-p", "fastvideo-cli",
+     "--features", "fastvideo-cudarc/cuda,fastvideo-gpucheck/cuda"),
+    ("cargo", "build", "--release", "--keep-going", "-p", "fastvideo-serve", "--features", "cuda,http-client"),
+    ("cargo", "build", "--release", "--keep-going", "-p", "fastvideo-gpucheck", "--features", "cuda"),
+)
 # Where snapshots, target dirs and CARGO_HOME live (see the docstring).
 TARGETS_ON = os.environ.get("FV_BUILD_TARGETS", "local")
 LOCAL = ROOT if TARGETS_ON == "volume" else os.environ.get("FV_BUILD_LOCAL", "/root/fvb")
@@ -161,6 +193,28 @@ WT_BASE = os.path.join(LOCAL, "worktrees")
 TARGET_BASE = os.path.join(LOCAL, "target")
 CARGO_HOME = os.path.join(LOCAL, "cargo")
 LAST_USE = os.path.join(LOCAL, ".last-use")  # <agent>: mtime = last sync / job / fetch
+
+
+def disk_total_gb(path=None):
+    """Size of the filesystem holding `path` (default LOCAL), or of its
+    nearest existing parent (LOCAL is created after this module loads)."""
+    p = os.path.abspath(path or LOCAL)
+    while not os.path.exists(p) and os.path.dirname(p) != p:
+        p = os.path.dirname(p)
+    try:
+        return shutil.disk_usage(p).total / 1e9
+    except OSError:
+        return 0.0
+
+
+def scaled_floor_gb(floor_gb, total_gb):
+    """The eviction floor, at most a fifth of the disk (0 stays 0)."""
+    if floor_gb <= 0 or total_gb <= 0:
+        return floor_gb
+    return round(min(floor_gb, total_gb / 5), 1)
+
+
+EVICT_FREE_GB = scaled_floor_gb(EVICT_FREE_GB, disk_total_gb(LOCAL))
 MAX_UPLOAD = 512 << 20
 MAX_ARTIFACT = 2 << 30
 BOOT = time.time()
@@ -244,79 +298,19 @@ def sh(cmd, **kw):
     return r
 
 
-@contextlib.contextmanager
-def apt_lock():
-    """Serializes apt between this server and the jobs (flock on APT_LOCK;
-    release-artifacts-pod.sh takes the same lock)."""
-    os.makedirs(os.path.dirname(APT_LOCK), exist_ok=True)
-    fd = os.open(APT_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
-
-
-def apt_keep_debs():
-    """Clears docker-clean's post-invoke hooks (see APT_LOCK): an apt run that
-    is not ours cannot delete the .debs of an install in progress either."""
-    if os.path.exists(APT_KEEP_DEBS) or not os.path.isdir(os.path.dirname(APT_KEEP_DEBS)):
-        return
-    # Written next to apt.conf.d, not in it (apt reads every name there).
-    tmp = os.path.join(os.path.dirname(os.path.dirname(APT_KEEP_DEBS)), ".fv-keep-debs.tmp")
-    with open(tmp, "w") as f:
-        f.write("// fv-build (build-pod-server.py): keep downloaded .debs until apt is done;\n"
-                "// docker-clean deleted them under a running dpkg. apt_retry cleans up.\n"
-                "#clear DPkg::Post-Invoke;\n#clear APT::Update::Post-Invoke;\n")
-    os.replace(tmp, APT_KEEP_DEBS)
-
-
-def apt_retry(steps, env, what, tries=APT_TRIES, run=None, pause=time.sleep):
-    """Runs the apt commands `steps` (a list of argv) under the apt lock; on a
-    failure repairs dpkg's state and runs them all again, up to `tries` times.
-    Idempotent: installing what is installed is a no-op."""
-    run = run or sh
-    with apt_lock():
-        apt_keep_debs()
-        for attempt in range(1, tries + 1):
-            try:
-                for cmd in steps:
-                    run(cmd, env=env)
-                break
-            except RuntimeError as e:
-                if attempt == tries:
-                    raise
-                log(f"apt: {what} failed (attempt {attempt}/{tries}); dpkg --configure -a, apt-get -f install, retry: {e}")
-                for fix in (["dpkg", "--configure", "-a"], ["apt-get", *APT_OPTS, "-f", "install", "-y", "-qq"]):
-                    try:
-                        run(fix, env=env)
-                    except RuntimeError as fe:
-                        log(f"apt: repair step failed: {fe}")
-                pause(5 * attempt)
-        try:
-            run(["apt-get", "clean"], env=env)
-        except RuntimeError:
-            pass
-
-
-def apt_install(pkgs, env, **kw):
-    """`apt-get update` + `apt-get install` of `pkgs` (see apt_retry)."""
-    apt_retry([["apt-get", *APT_OPTS, "update", "-qq"],
-               ["apt-get", *APT_OPTS, "install", "-y", "-qq", "--no-install-recommends", *pkgs]],
-              env, "install " + " ".join(pkgs), **kw)
-
-
 def job_env(agent=None):
     # Nothing Runpod-specific reaches jobs: besides the pod-scoped API key,
     # RUNPOD_POD_ID / RUNPOD_PUBLIC_IP / RUNPOD_TCP_PORT_* switch fv-serve's
     # WebRTC ICE and worker identity into "serving on a Runpod pod" mode,
-    # which local tests (director, console) must not see.
+    # which local tests (director, console) must not see. The image's ENV
+    # (RUSTUP_HOME, RUSTUP_TOOLCHAIN, PATH, CUDA_HOME, NVCC, PLAYWRIGHT_BROWSERS_PATH,
+    # NODE_PATH, LD_LIBRARY_PATH) passes through.
     env = {k: v for k, v in os.environ.items() if not k.startswith("RUNPOD_")}
-    env.pop("FV_BUILD_TOKEN_SHA256", None)
+    for k in ("FV_BUILD_TOKEN_SHA256", "FV_BUILD_SERVER_B64"):
+        env.pop(k, None)
     env.update(
         {
             "CARGO_HOME": CARGO_HOME,
-            "RUSTUP_HOME": os.path.join(ROOT, "rustup"),
             "CUDA_HOME": CUDA_DIR,
             "CUDA_PATH": CUDA_DIR,
             "CUDA_TOOLKIT_PATH": CUDA_DIR,
@@ -328,26 +322,28 @@ def job_env(agent=None):
             "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
             "CARGO_PROFILE_RELEASE_PANIC": "unwind",
             "CARGO_TERM_COLOR": "never",
-            "SCCACHE_DIR": os.path.join(ROOT, "sccache"),
+            "SCCACHE_DIR": SCCACHE_DIR,
             "SCCACHE_CACHE_SIZE": SCCACHE_SIZE,
             "SCCACHE_IDLE_TIMEOUT": "0",
-            "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS,
-            "NODE_PATH": os.path.join(PW_DIR, "node_modules"),
+            # The volume root and the image, for release-artifacts-pod.sh.
+            "FV_BUILD_VOLUME_DIR": ROOT,
+            "FV_BUILD_IMAGE": IMAGE,
         }
     )
-    path = [
-        os.path.join(CARGO_HOME, "bin"),
-        "/usr/local/cargo/bin",
-        os.path.join(CUDA_DIR, "bin"),
-        os.path.join(ROOT, "tools"),
-        os.path.join(NODE_DIR, "bin"),
-    ]
+    path = [os.path.join(CARGO_HOME, "bin"), os.path.join(CUDA_DIR, "bin")]
     env["PATH"] = ":".join(path + [env.get("PATH", "/usr/local/bin:/usr/bin:/bin")])
     lib = os.path.join(CUDA_DIR, "lib64")
-    env["LD_LIBRARY_PATH"] = lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
-    sccache = os.path.join(ROOT, "tools", "sccache")
-    if os.path.exists(sccache) and os.environ.get("FV_BUILD_SCCACHE", "1") == "1":
+    if lib not in env.get("LD_LIBRARY_PATH", "").split(":"):
+        env["LD_LIBRARY_PATH"] = lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    sccache = shutil.which("sccache")
+    if sccache and os.environ.get("FV_BUILD_SCCACHE", "1") == "1":
+        # rustc through sccache; cc-rs uses a RUSTC_WRAPPER that is sccache for
+        # C/C++ too (openh264, opus, libwebp ...), and CMake its launcher.
         env["RUSTC_WRAPPER"] = sccache
+        env["CMAKE_C_COMPILER_LAUNCHER"] = sccache
+        env["CMAKE_CXX_COMPILER_LAUNCHER"] = sccache
+    else:
+        env.pop("RUSTC_WRAPPER", None)
     if shutil.which("mold"):
         env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"] = "-C link-arg=-fuse-ld=mold"
     if agent:
@@ -355,173 +351,134 @@ def job_env(agent=None):
     return env
 
 
-def fetch(url, dest):
-    tmp = dest + ".part"
-    with urllib.request.urlopen(url, timeout=600) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f, 1 << 20)
-    os.replace(tmp, dest)
+def missing_tools(names, env):
+    return [n for n in names if not shutil.which(n, path=env.get("PATH"))]
 
 
-def install_cuda():
-    marker = os.path.join(CUDA_DIR, ".fv-redist-" + CUDA_REDIST)
-    if os.path.exists(marker):
-        return
-    setup_state["phase"] = "cuda"
-    base = "https://developer.download.nvidia.com/compute/cuda/redist/"
-    with urllib.request.urlopen(base + f"redistrib_{CUDA_REDIST}.json", timeout=60) as r:
-        index = json.load(r)
-    stage = CUDA_DIR + ".staging"
-    shutil.rmtree(stage, ignore_errors=True)
-    os.makedirs(stage)
-    dl = os.path.join(ROOT, "tmp")
-    os.makedirs(dl, exist_ok=True)
-    for comp in ("cuda_nvcc", "cuda_crt", "cuda_cudart", "cuda_nvrtc", "libnvvm", "cccl", "cuda_tileiras"):
-        rel = index[comp]["linux-x86_64"]["relative_path"]
-        want = index[comp]["linux-x86_64"]["sha256"]
-        path = os.path.join(dl, os.path.basename(rel))
-        fetch(base + rel, path)
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        if h.hexdigest() != want:
-            raise RuntimeError(f"sha256 mismatch for {comp}")
-        sh(["tar", "-xJf", path, "-C", stage, "--strip-components=1"])
-        os.remove(path)
-    lib = os.path.join(stage, "lib")
-    if os.path.isdir(lib) and not os.path.exists(os.path.join(stage, "lib64")):
-        os.symlink("lib", os.path.join(stage, "lib64"))
-    shutil.rmtree(CUDA_DIR, ignore_errors=True)
-    os.replace(stage, CUDA_DIR)
-    open(marker, "w").close()
-    log(f"cuda redist {CUDA_REDIST} installed at {CUDA_DIR}")
+def check_extras(env):
+    """The browser / client-compat tools (no install: the image has them or
+    the extras fail with what is missing)."""
+    missing = missing_tools(EXTRAS_TOOLS, env)
+    pw_mod = os.path.join(env.get("NODE_PATH", "/opt/playwright/node_modules").split(":")[0], "playwright")
+    if not os.path.isdir(pw_mod):
+        missing.append(f"playwright ({pw_mod})")
+    browsers = env.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if not browsers or not any(n.startswith("chromium") for n in (os.listdir(browsers) if os.path.isdir(browsers) else [])):
+        missing.append(f"playwright chromium (PLAYWRIGHT_BROWSERS_PATH={browsers or 'unset'})")
+    if shutil.which("ffmpeg", path=env.get("PATH")):
+        enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, env=env)
+        extras_state["ffmpeg_libvpx"] = " libvpx " in enc.stdout
+        if not extras_state["ffmpeg_libvpx"]:
+            missing.append("ffmpeg's libvpx encoder")
+    return missing
 
 
-def install_sccache():
-    dest = os.path.join(ROOT, "tools", "sccache")
-    ver_marker = dest + "." + SCCACHE_VER
-    if os.path.exists(ver_marker):
-        return
-    setup_state["phase"] = "sccache"
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    name = f"sccache-{SCCACHE_VER}-x86_64-unknown-linux-musl"
-    url = f"https://github.com/mozilla/sccache/releases/download/{SCCACHE_VER}/{name}.tar.gz"
-    tgz = os.path.join(ROOT, "tmp", name + ".tar.gz")
-    os.makedirs(os.path.dirname(tgz), exist_ok=True)
+def sccache_cmd(*args, timeout=30, env=None):
+    """Runs `sccache <args>` with the jobs' sccache settings; (rc, stdout)."""
+    exe = shutil.which("sccache")
+    if not exe:
+        return 127, ""
     try:
-        fetch(url, tgz)
-        with tarfile.open(tgz) as t:
-            member = t.getmember(f"{name}/sccache")
-            with t.extractfile(member) as src, open(dest + ".part", "wb") as out:
-                shutil.copyfileobj(src, out)
-        os.chmod(dest + ".part", 0o755)
-        os.replace(dest + ".part", dest)
-        open(ver_marker, "w").close()
-    except Exception as e:  # sccache is optional
-        log(f"sccache install skipped: {e}")
-    finally:
-        if os.path.exists(tgz):
-            os.remove(tgz)
+        r = subprocess.run([exe, *args], env=env or job_env(), capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+
+
+def sccache_start():
+    """Starts the sccache server from this process, not from a job: a server
+    a job's first rustc spawned lived in that job's process group, and a
+    cancel (killpg) took it down mid-build for every other agent."""
+    rc, out = sccache_cmd("--start-server", timeout=60)
+    if rc != 0 and "already" not in out.lower():
+        raise RuntimeError(f"sccache --start-server exited {rc}: {out[-300:]}")
+
+
+def sccache_stats():
+    """Hit rate since the server started (`sccache --show-stats`), or None."""
+    rc, out = sccache_cmd("--show-stats", "--stats-format=json", timeout=15)
+    if rc != 0:
+        return None
+    try:
+        j = json.loads(out)
+    except ValueError:
+        return None
+    st = j.get("stats", j)
+
+    def total(x):
+        if isinstance(x, dict):
+            return sum(total(v) for k, v in x.items() if k != "adv_counts")
+        return x if isinstance(x, (int, float)) else 0
+
+    hits = total(st.get("cache_hits", {}))
+    misses = total(st.get("cache_misses", {}))
+    return {
+        "compile_requests": st.get("compile_requests"),
+        "requests_executed": st.get("requests_executed"),
+        "hits": hits, "misses": misses,
+        "hit_rate": round(hits / (hits + misses), 3) if hits + misses else None,
+        "not_cacheable": st.get("requests_not_cacheable"),
+        "errors": st.get("cache_errors") if not isinstance(st.get("cache_errors"), dict) else total(st["cache_errors"]),
+        "cache_location": j.get("cache_location"),
+        "cache_size_gb": round(j["cache_size"] / 1e9, 1) if isinstance(j.get("cache_size"), (int, float)) else None,
+        "max_cache_size_gb": round(j["max_cache_size"] / 1e9, 1) if isinstance(j.get("max_cache_size"), (int, float)) else None,
+    }
+
+
+RUSTC_VV = ""
+BASE = {}
 
 
 def setup():
+    """Checks the image (nothing is installed: docker/build-base.Dockerfile has
+    it all) and wires the caches. Fails with what is missing."""
+    global RUSTC_VV, BASE
     try:
-        for d in ("rustup", "sccache", "tools", "jobs", "logs", "tmp"):
+        for d in ("sccache", "jobs", "logs", "tmp", "deps-seed"):
             os.makedirs(os.path.join(ROOT, d), exist_ok=True)
         link_cargo_caches()
-        setup_state["phase"] = "apt"
-        need = [p for p, b in (("cmake", "cmake"), ("clang", "clang"), ("mold", "mold"), ("pkg-config", "pkg-config")) if not shutil.which(b)]
-        if need:
-            apt_install([*need, "libssl-dev", "xz-utils"], dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
-        install_cuda()
-        install_sccache()
-        setup_state["phase"] = "rustup"
+        setup_state["phase"] = "check"
         env = job_env()
-        marker = os.path.join(ROOT, "rustup", ".fv-stable-ok")
-        if not os.path.exists(marker):
-            # --no-self-update: rustup lives in the image, not in CARGO_HOME/bin on
-            # the volume, and its self-update step fails the install otherwise.
-            # Idempotent, so a boot interrupted mid-install just completes it.
-            sh(["rustup", "toolchain", "install", "stable", "--profile", "minimal", "-c", "rustfmt", "-c", "clippy",
-                "--no-self-update"], env=env)
-            open(marker, "w").close()
-        sh(["rustup", "default", "stable"], env=env, stdout=subprocess.DEVNULL)
+        try:
+            with open(BASE_INFO) as f:
+                BASE = json.load(f)
+        except (OSError, ValueError):
+            BASE = {}
+        missing = missing_tools(REQUIRED_TOOLS, env)
+        for f in ("bin/nvcc", "bin/tileiras", "include/cuda.h", "lib64/libnvrtc.so"):
+            if not os.path.exists(os.path.join(CUDA_DIR, f)):
+                missing.append(os.path.join(CUDA_DIR, f))
+        if missing:
+            raise RuntimeError(f"missing from the image {IMAGE or '(FV_BUILD_IMAGE unset)'}: {', '.join(missing)}; "
+                               "the pod installs nothing at boot: add it to docker/build-base.Dockerfile, "
+                               "rebuild (build-base-image workflow) and pin the new tag in build-pod.sh")
+        r = subprocess.run(["rustc", "-vV"], env=env, capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            raise RuntimeError(f"rustc -vV failed (no toolchain in the image?): {(r.stderr or r.stdout)[-400:]}")
+        RUSTC_VV = r.stdout.strip()
+        setup_state["phase"] = "sccache"
+        sccache_start()
         prune_targets()
         setup_state["phase"] = "ready"
         setup_state["ready"] = True
-        log(f"setup complete after {time.time() - BOOT:.0f}s")
+        log(f"setup complete after {time.time() - BOOT:.0f}s ({RUSTC_VV.splitlines()[0]}, image {IMAGE})")
     except Exception as e:
         setup_state["phase"] = "failed"
         setup_state["error"] = str(e)
         log(f"setup failed: {e}")
     finally:
         setup_done.set()
-    if setup_state["ready"]:
-        setup_extras()
-    else:
+    if not setup_state["ready"]:
         extras_state.update(phase="skipped", error="setup failed")
         extras_done.set()
-
-
-def install_node():
-    marker = os.path.join(NODE_DIR, ".fv-ok")
-    if os.path.exists(marker):
         return
-    extras_state["phase"] = "node"
-    base = f"https://nodejs.org/dist/{NODE_VER}/"
-    name = f"node-{NODE_VER}-linux-x64.tar.xz"
-    with urllib.request.urlopen(base + "SHASUMS256.txt", timeout=60) as r:
-        sums = {ln.split()[1]: ln.split()[0] for ln in r.read().decode().splitlines() if len(ln.split()) == 2}
-    path = os.path.join(ROOT, "tmp", name)
-    fetch(base + name, path)
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    if h.hexdigest() != sums.get(name):
-        raise RuntimeError(f"sha256 mismatch for {name}")
-    stage = NODE_DIR + ".staging"
-    shutil.rmtree(stage, ignore_errors=True)
-    os.makedirs(stage)
-    sh(["tar", "-xJf", path, "-C", stage, "--strip-components=1"])
-    os.remove(path)
-    shutil.rmtree(NODE_DIR, ignore_errors=True)
-    os.replace(stage, NODE_DIR)
-    open(marker, "w").close()
-    log(f"node {NODE_VER} installed at {NODE_DIR}")
-
-
-def setup_extras():
-    """Second phase, after the build toolchain is ready: what the browser and
-    client-compat jobs need. Build jobs never wait for it."""
     try:
-        t0 = time.time()
-        env = dict(job_env(), DEBIAN_FRONTEND="noninteractive")
-        extras_state["phase"] = "apt"
-        apt_install(["ffmpeg", "python3-venv"], env)
-        # Debian's ffmpeg has libvpx (ingest / WebRTC VP8 tests); say so if not.
-        enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
-        extras_state["ffmpeg_libvpx"] = " libvpx " in enc.stdout
-        if not extras_state["ffmpeg_libvpx"]:
-            log("extras: this ffmpeg has no libvpx encoder; VP8 ingest tests will skip")
-        install_node()
-        extras_state["phase"] = "playwright"
-        if not os.path.exists(os.path.join(PW_DIR, ".fv-ok")):
-            os.makedirs(PW_DIR, exist_ok=True)
-            sh(["npm", "install", "--prefix", PW_DIR, "--no-audit", "--no-fund", "--loglevel=error",
-                f"playwright@{PLAYWRIGHT_VER}"], env=dict(env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"),
-               stdout=subprocess.DEVNULL)
-            open(os.path.join(PW_DIR, ".fv-ok"), "w").close()
-        pw = os.path.join(PW_DIR, "node_modules", ".bin", "playwright")
-        extras_state["phase"] = "chromium"
-        sh([pw, "install", "chromium"], env=env, stdout=subprocess.DEVNULL)  # no-op when present
-        # install-deps runs apt-get itself.
-        apt_retry([[pw, "install-deps", "chromium"]], env, "playwright install-deps chromium")
-        extras_state.update(phase="ready", ready=True)
-        log(f"extras ready after {time.time() - t0:.0f}s (ffmpeg, node, playwright chromium)")
-    except Exception as e:
-        extras_state.update(phase="failed", error=str(e))
-        log(f"extras setup failed: {e}")
+        missing = check_extras(job_env())
+        if missing:
+            extras_state.update(phase="failed", error="missing from the image: " + ", ".join(missing))
+            log(f"extras: {extras_state['error']}")
+        else:
+            extras_state.update(phase="ready", ready=True)
     finally:
         extras_done.set()
 
@@ -630,7 +587,8 @@ class LocalFS:
         return last_use(agent)
 
     def busy(self, agent):
-        return agent_busy(agent)
+        # The GitHub runner's dirs (target/gh-runner*) are in use while it runs a job.
+        return agent_busy(agent) or (agent.startswith("gh-runner") and runner_busy())
 
     def free_bytes(self):
         return shutil.disk_usage(LOCAL).free
@@ -807,6 +765,20 @@ class Job:
         with self.cond:
             self.cond.notify_all()
 
+    def exec(self, argv, cwd, env):
+        """Runs one command, its output into the job log; its exit status."""
+        try:
+            self.proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         start_new_session=True)
+            for chunk in iter(lambda: self.proc.stdout.read1(65536), b""):
+                self.write(chunk)
+                touch()
+            return self.proc.wait()
+        except OSError as e:
+            self.write(f"failed to start: {e}\n".encode())
+            return 127
+
     def run(self):
         lock = agent_lock(self.agent)
         setup_done.wait()
@@ -815,11 +787,9 @@ class Job:
             self.finish(125)
             return
         if needs_extras(self.argv, self.env_over):
-            if not extras_done.is_set():
-                self.write(f"waiting for the browser extras (phase {extras_state['phase']})\n".encode())
             extras_done.wait()
             if not extras_state["ready"]:
-                self.write(f"browser extras setup failed: {extras_state['error']}\n".encode())
+                self.write(f"browser extras unavailable: {extras_state['error']}\n".encode())
                 self.finish(125)
                 return
         with lock, job_slots:
@@ -834,24 +804,17 @@ class Job:
                 return
             env = job_env(self.agent)
             env.update(self.env_over)
-            # An evicted target dir is simply rebuilt from scratch.
-            os.makedirs(env["CARGO_TARGET_DIR"], exist_ok=True)
             self.state = "running"
             self.started = time.time()
             touch()
             mark_used(self.agent)
+            # A missing target dir (new agent, pod restart, eviction, clean)
+            # starts from the deps seed of this worktree's Cargo.lock, if any.
+            if not os.path.isdir(env["CARGO_TARGET_DIR"]):
+                seed_target(wt, env["CARGO_TARGET_DIR"], self.write)
+            os.makedirs(env["CARGO_TARGET_DIR"], exist_ok=True)
             self.write(f"$ {' '.join(self.argv)}   [agent {self.agent}, CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}]\n".encode())
-            try:
-                self.proc = subprocess.Popen(self.argv, cwd=wt, env=env, stdin=subprocess.DEVNULL,
-                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                             start_new_session=True)
-                for chunk in iter(lambda: self.proc.stdout.read1(65536), b""):
-                    self.write(chunk)
-                    touch()
-                rc = self.proc.wait()
-            except OSError as e:
-                self.write(f"failed to start: {e}\n".encode())
-                rc = 127
+            rc = self.exec(self.argv, wt, env)
             self.write(f"\n[exit {rc} after {time.time() - self.started:.1f}s]\n".encode())
             try:
                 free = shutil.disk_usage(LOCAL).free
@@ -862,6 +825,8 @@ class Job:
             mark_used(self.agent)
             self.finish(rc)
             evict_wake.set()
+        if rc == 0 and self.state != "cancelled":
+            maybe_build_seed(self.agent)
 
     def finish(self, rc):
         self.exit = rc
@@ -881,6 +846,308 @@ class Job:
                 os.killpg(self.proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+# --------------------------------------------------------------------------- deps seeds
+
+
+def seed_key(wt):
+    """The seed a worktree can use: Cargo.lock, the toolchain, the image, the
+    recipe and the flags every job gets. None without a Cargo.lock."""
+    try:
+        with open(os.path.join(wt, "Cargo.lock"), "rb") as f:
+            lock = f.read()
+    except OSError:
+        return None
+    h = hashlib.sha256(lock)
+    env = job_env()
+    for part in (RUSTC_VV, IMAGE, json.dumps(SEED_RECIPE), env.get("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS", ""),
+                 env["CARGO_PROFILE_RELEASE_LTO"], env["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"],
+                 env["CARGO_PROFILE_RELEASE_PANIC"], env["CUDARC_CUDA_VERSION"], "seed-v1"):
+        h.update(b"\0" + part.encode())
+    return h.hexdigest()[:16]
+
+
+def seed_paths(key):
+    base = os.path.join(SEED_DIR, key)
+    return base + ".tar.zst", base + ".json"
+
+
+def seed_meta(key):
+    tar, meta = seed_paths(key)
+    if not os.path.isfile(tar):
+        return None
+    try:
+        with open(meta) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def seed_list():
+    out = []
+    try:
+        names = os.listdir(SEED_DIR)
+    except OSError:
+        return out
+    for n in sorted(names):
+        if n.endswith(".json"):
+            key = n[:-5]
+            m = seed_meta(key)
+            if m is not None:
+                try:
+                    used = os.path.getmtime(seed_paths(key)[1])
+                except OSError:
+                    used = 0
+                out.append({"key": key, "gb": round(m.get("bytes", 0) / 1e9, 2),
+                            "unpacked_gb": round(m.get("unpacked_bytes", 0) / 1e9, 1),
+                            "build_s": m.get("build_s"), "created": m.get("created"),
+                            "last_used_h_ago": round((time.time() - used) / 3600, 1)})
+    return out
+
+
+def seed_target(wt, target, write):
+    """Extracts the worktree's seed into `target` (absent). Never fails the job:
+    without a seed, or without the disk space, it builds cold (sccache)."""
+    if not SEED_ON:
+        return False
+    key = seed_key(wt)
+    m = seed_meta(key) if key else None
+    if m is None:
+        write(f"[deps seed] none for this Cargo.lock yet (key {key}); building without one\n".encode())
+        return False
+    need = m.get("unpacked_bytes", 0) + (MIN_FREE_GB + 10) * 1e9
+    if shutil.disk_usage(LOCAL).free < need:
+        evictor.run_once()
+        if shutil.disk_usage(LOCAL).free < need:
+            write(f"[deps seed] {key}: not enough free disk for {m.get('unpacked_bytes', 0) / 1e9:.1f} GB; building without it\n".encode())
+            return False
+    t0 = time.time()
+    tar, meta = seed_paths(key)
+    # In trash/ (same filesystem): never mistaken for an agent, and a
+    # leftover is cleared at the next boot.
+    tmp = os.path.join(LOCAL, "trash", f"trash-seeding-{os.path.basename(target)}-{uuid.uuid4().hex[:6]}")
+    os.makedirs(tmp)
+    r = subprocess.run(["tar", "-I", "zstd -d -T0", "-xf", tar, "-C", tmp], capture_output=True, text=True)
+    if r.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        write(f"[deps seed] {key}: extract failed ({r.stderr.strip()[-300:]}); building without it\n".encode())
+        log(f"deps seed {key}: extract failed: {r.stderr.strip()[-300:]}")
+        return False
+    os.replace(tmp, target)
+    os.utime(meta)  # last used, for the GC
+    msg = f"[deps seed] {key}: {m.get('unpacked_bytes', 0) / 1e9:.1f} GB of dependencies in {time.time() - t0:.0f}s\n"
+    write(msg.encode())
+    log(f"{os.path.basename(target)}: " + msg.strip())
+    return True
+
+
+seed_building = {}  # key -> SeedJob
+
+
+def maybe_build_seed(agent, force=False):
+    """After a successful job: build the seed of the agent's Cargo.lock in the
+    background if there is none (one seed build at a time). Returns the
+    SeedJob, or None."""
+    if not SEED_ON or agent == SEED_AGENT or not setup_state["ready"]:
+        return None
+    wt = os.path.join(WT_BASE, agent)
+    key = seed_key(wt)
+    if not key or (seed_meta(key) is not None and not force):
+        return None
+    with state_lock:
+        if any(j.state in ("queued", "running") for j in seed_building.values()):
+            return None
+        if POLICY.past_cap(time.time()):
+            return None
+        job = SeedJob(agent, key)
+        seed_building[key] = job
+        jobs[job.id] = job
+    threading.Thread(target=job.run, daemon=True).start()
+    log(f"deps seed {key}: building from {agent}'s worktree (job {job.id})")
+    return job
+
+
+def path_package_names(wt, env):
+    """Package and target names of every path (workspace / vendored) package:
+    cargo decides their freshness by mtimes, so they never go into a seed."""
+    # Not --offline: the full resolve needs every platform's crate metadata
+    # (downloaded once into the volume's registry cache).
+    r = subprocess.run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"],
+                       cwd=wt, env=env,
+                       capture_output=True, text=True, timeout=600)
+    if r.returncode != 0:
+        raise RuntimeError(f"cargo metadata: {r.stderr.strip()[-300:]}")
+    md = json.loads(r.stdout)
+    pkgs, crates, members = set(), set(), set()
+    ws = set(md.get("workspace_members", []))
+    for p in md["packages"]:
+        if p.get("id") in ws:
+            members.add(p["name"])
+        if p.get("source") is None:
+            pkgs.add(p["name"])
+            crates.add(p["name"].replace("-", "_"))
+            for t in p.get("targets", []):
+                crates.add(t["name"].replace("-", "_"))
+    return pkgs, crates, members
+
+
+HASHED = re.compile(r"^(.+)-[0-9a-f]{16}$")
+
+
+def strip_path_packages(target, pkgs, crates=None):
+    """Removes the path packages' units from a target dir: their fingerprints
+    and build-script dirs (by package name), their deps/ outputs (by the unit
+    hashes of those fingerprints: a test target of ours may share a name with
+    a registry crate, e.g. tests/serde.rs), incremental state and final
+    binaries. Returns the number of entries removed. `crates` is unused (kept
+    for callers)."""
+    n = 0
+    for prof in os.listdir(target):
+        pdir = os.path.join(target, prof)
+        if not os.path.isdir(os.path.join(pdir, ".fingerprint")):
+            continue
+        hashes = set()
+        for sub in (".fingerprint", "build"):
+            d = os.path.join(pdir, sub)
+            for e in os.listdir(d) if os.path.isdir(d) else []:
+                m = HASHED.match(e)
+                if m and m.group(1) in pkgs:
+                    hashes.add(e[-16:])
+                    shutil.rmtree(os.path.join(d, e), ignore_errors=True)
+                    n += 1
+        d = os.path.join(pdir, "deps")
+        for e in os.listdir(d) if os.path.isdir(d) else []:
+            m = HASHED.match(e.split(".", 1)[0])
+            if m and e.split(".", 1)[0][-16:] in hashes:
+                p = os.path.join(d, e)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
+                n += 1
+        for e in os.listdir(pdir):  # final binaries, their .d files, incremental state
+            p = os.path.join(pdir, e)
+            if e in ("incremental", "examples") and os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+                n += 1
+            elif os.path.isfile(p) or os.path.islink(p):
+                os.remove(p)
+                n += 1
+    return n
+
+
+def seed_gc(keep=None):
+    """Keeps the SEED_KEEP most recently used seeds (and any being built)."""
+    keep = SEED_KEEP if keep is None else keep
+    seeds = sorted(seed_list(), key=lambda s: s["last_used_h_ago"])
+    for s in seeds[keep:]:
+        if s["key"] in seed_building and seed_building[s["key"]].state in ("queued", "running"):
+            continue
+        for p in seed_paths(s["key"]):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        log(f"deps seed {s['key']}: removed (keeping the {keep} most recently used)")
+
+
+class SeedJob(Job):
+    """Builds the deps seed `key` from a copy of `source`'s worktree: the
+    SEED_RECIPE commands (niced, half the CPUs), path packages stripped, packed
+    with zstd onto the volume (written under a temporary name, then renamed)."""
+
+    def __init__(self, source, key):
+        super().__init__(SEED_AGENT, ["deps-seed", key, "from", source], {})
+        self.source, self.key = source, key
+
+    def run(self):
+        wt = os.path.join(WT_BASE, SEED_AGENT)
+        target = os.path.join(TARGET_BASE, SEED_AGENT)
+        rc = 1
+        with agent_lock(SEED_AGENT), job_slots:
+            if self.state == "cancelled":
+                return self.finish(130)
+            self.state = "running"
+            self.started = time.time()
+            mark_used(SEED_AGENT)
+            try:
+                rc = self.build(wt, target)
+            except Exception as e:
+                self.write(f"\n[deps seed failed: {e}]\n".encode())
+                log(f"deps seed {self.key}: failed: {e}")
+                rc = 1
+            finally:
+                for d in (wt, target):
+                    trash = move_to_trash(d, SEED_AGENT)
+                    if trash:
+                        shutil.rmtree(trash, ignore_errors=True)
+            self.write(f"\n[exit {rc} after {time.time() - self.started:.1f}s]\n".encode())
+            self.finish(rc)
+
+    def build(self, wt, target):
+        for d in (wt, target):
+            trash = move_to_trash(d, SEED_AGENT)
+            if trash:
+                shutil.rmtree(trash, ignore_errors=True)
+        src = os.path.join(WT_BASE, self.source)
+        with agent_lock(self.source):
+            if seed_key(src) != self.key:
+                self.write(b"the source worktree changed its Cargo.lock; skipping\n")
+                return 0
+            shutil.copytree(src, wt, symlinks=True)
+        # A full seed build: ~10 GB of target dir; at most 40 % of a small disk.
+        ensure_free(min(60e9, 0.4 * disk_total_gb() * 1e9))
+        env = job_env(SEED_AGENT)
+        vcpus = cgroup_limits()[0] or 2
+        env["CARGO_BUILD_JOBS"] = str(max(2, int(vcpus) // 2))
+        pkgs, crates, members = path_package_names(wt, env)
+        for argv in SEED_RECIPE:
+            args = list(argv)
+            keep = []
+            i = 0
+            while i < len(args):  # drop `-p X` for X not in this workspace
+                if args[i] == "-p" and i + 1 < len(args):
+                    if args[i + 1] in members:
+                        keep += args[i:i + 2]
+                    i += 2
+                    continue
+                keep.append(args[i])
+                i += 1
+            if "-p" not in keep:
+                continue
+            if self.state == "cancelled":
+                return 130
+            self.write(f"\n$ nice {' '.join(keep)}\n".encode())
+            rc = self.exec(["nice", "-n", "15", *keep], wt, env)
+            self.write(f"[exit {rc}]\n".encode())  # failures in workspace crates are fine
+        if self.state == "cancelled":
+            return 130
+        n = strip_path_packages(target, pkgs)
+        unpacked = du(target, timeout=600) or 0
+        self.write(f"stripped {n} path-package entries; {unpacked / 1e9:.1f} GB of dependencies\n".encode())
+        os.makedirs(SEED_DIR, exist_ok=True)
+        tar, meta = seed_paths(self.key)
+        part = f"{tar}.part-{uuid.uuid4().hex[:6]}"
+        t0 = time.time()
+        r = subprocess.run(["tar", "-I", f"zstd -T0 -{SEED_ZSTD_LEVEL}", "-cf", part, "-C", target, "."],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            os.remove(part) if os.path.exists(part) else None
+            raise RuntimeError(f"tar: {r.stderr.strip()[-300:]}")
+        size = os.path.getsize(part)
+        with open(meta + ".part", "w") as f:
+            json.dump({"key": self.key, "bytes": size, "unpacked_bytes": unpacked, "source": self.source,
+                       "build_s": round(time.time() - self.started), "pack_s": round(time.time() - t0),
+                       "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "rustc": RUSTC_VV.splitlines()[:1],
+                       "image": IMAGE, "recipe": [list(a) for a in SEED_RECIPE]}, f)
+        os.replace(part, tar)
+        os.replace(meta + ".part", meta)
+        msg = f"deps seed {self.key}: {unpacked / 1e9:.1f} GB -> {size / 1e9:.2f} GB zstd in {time.time() - self.started:.0f}s"
+        self.write((msg + "\n").encode())
+        log(msg)
+        seed_gc()
+        return 0
 
 
 def needs_extras(argv, env):
@@ -1048,12 +1315,24 @@ VOLUME_GB = float(os.environ.get("FV_BUILD_VOLUME_GB", "200"))
 volume_usage = {}
 
 
+# The caches, for /v1/status (du of each, with the volume total).
+CACHE_DIRS = {"sccache": SCCACHE_DIR, "cargo_registry": os.path.join(ROOT, "cargo"),
+              "deps_seed": SEED_DIR, "release_cache": os.path.join(ROOT, "release-cache")}
+cache_usage = {}
+
+
 def volume_usage_loop():
     while True:
         t = time.time()
         n = du(ROOT, timeout=900)
         if n is not None:
             volume_usage.update(used_gb=round(n / 1e9, 1), t=t)
+        for name, d in CACHE_DIRS.items():
+            b = du(d, timeout=600) if os.path.isdir(d) else 0
+            cache_usage[name] = round(b / 1e9, 2) if b is not None else None
+        b = du(os.path.join(CARGO_HOME, "registry", "src"), timeout=300)
+        cache_usage["local_registry_src"] = round(b / 1e9, 2) if b is not None else None
+        cache_usage["t"] = round(t)
         time.sleep(900)
 
 
@@ -1237,8 +1516,142 @@ def note_jobs(act, msg):
 cap_warned = set()
 
 
+# ---------------------------------------------------------------- GitHub runner
+# The pod as a self-hosted GitHub Actions runner (labels `fv-build`) for
+# .github/workflows/tools-release.yml: build-pod.sh runner (or `up` with a
+# token source) POSTs a short-lived *registration* token; the runner is
+# downloaded (sha256 from its release notes), configured once per pod (not
+# ephemeral; --replace by name) and kept running. Its credentials live on the
+# container disk under <local>/actions-runner and go with the pod; the
+# registration token is used once and never written to disk or logged. Steps
+# get job_env() (no RUNPOD_*), CARGO_TARGET_DIRs under target/gh-runner*, and
+# a running workflow job counts as activity (no idle stop, no eviction).
+RUNNER_DIR = os.path.join(LOCAL, "actions-runner")
+RUNNER_WORK = os.path.join(LOCAL, "runner-work")
+RUNNER_LOG = os.path.join(ROOT, "logs", "runner.log")
+RUNNER_RELEASE_API = os.environ.get("FV_GH_RUNNER_RELEASE_API", "https://api.github.com/repos/actions/runner/releases/latest")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+LABELS_RE = re.compile(r"^[A-Za-z0-9_.,-]{1,200}$")
+runner_state = {"phase": "absent", "error": None, "name": None, "labels": None, "version": None, "repo": None}
+runner_proc = None
+runner_lock = threading.Lock()
+
+
+def runner_busy():
+    """A workflow job is running on this pod's runner (a Runner.Worker process)."""
+    if runner_proc is None or runner_proc.poll() is not None:
+        return False
+    try:
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        if b"Runner.Worker" in f.read():
+                            return True
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return False
+
+
+def runner_download():
+    """The newest actions/runner linux-x64 build, sha256-checked against the
+    `<!-- BEGIN SHA linux-x64 -->` line of its release notes."""
+    req = urllib.request.Request(RUNNER_RELEASE_API, headers={"User-Agent": USER_AGENT,
+                                                              "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        rel = json.load(r)
+    ver = rel["tag_name"].lstrip("v")
+    m = re.search(r"<!-- BEGIN SHA linux-x64 -->([0-9a-f]{64})<!-- END SHA linux-x64 -->", rel.get("body") or "")
+    if not m:
+        raise RuntimeError(f"actions/runner {ver}: no linux-x64 sha256 in the release notes")
+    name = f"actions-runner-linux-x64-{ver}.tar.gz"
+    url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == name)
+    tmp = RUNNER_DIR + ".part"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    tgz = os.path.join(tmp, name)
+    urllib.request.urlretrieve(url, tgz)
+    h = hashlib.sha256()
+    with open(tgz, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    if h.hexdigest() != m.group(1):
+        raise RuntimeError(f"{name}: sha256 differs from the release notes")
+    sh(["tar", "-xzf", tgz, "-C", tmp])
+    os.remove(tgz)
+    shutil.rmtree(RUNNER_DIR, ignore_errors=True)
+    os.rename(tmp, RUNNER_DIR)
+    return ver
+
+
+def runner_env():
+    env = job_env(None)
+    env.update({"RUNNER_ALLOW_RUNASROOT": "1",
+                # No libicu in the base image; the runner works without it.
+                "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
+                "FV_BUILD_TARGET_BASE": TARGET_BASE, "FV_BUILD_RUNNER": "1"})
+    return env
+
+
+def runner_start(token, repo, labels, name):
+    global runner_proc
+    with runner_lock:
+        try:
+            runner_state.update(phase="installing", error=None, repo=repo, labels=labels, name=name)
+            if not os.path.isfile(os.path.join(RUNNER_DIR, "config.sh")):
+                runner_state["version"] = runner_download()
+            if runner_proc is not None and runner_proc.poll() is None:
+                runner_proc.terminate()
+                runner_proc.wait(timeout=60)
+            # A second registration: config.sh refuses a configured dir, and
+            # removing it remotely needs another token; --replace takes the
+            # name over on GitHub, so only the local config goes.
+            for f in (".runner", ".credentials", ".credentials_rsaparams"):
+                try:
+                    os.remove(os.path.join(RUNNER_DIR, f))
+                except OSError:
+                    pass
+            env = runner_env()
+            os.makedirs(RUNNER_WORK, exist_ok=True)
+            runner_state["phase"] = "configuring"
+            # --replace: the same name from an earlier pod is taken over.
+            r = subprocess.run(["./config.sh", "--unattended", "--url", f"https://github.com/{repo}", "--token", token,
+                                "--name", name, "--labels", labels, "--work", RUNNER_WORK, "--replace",
+                                "--disableupdate"],
+                               cwd=RUNNER_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+            out = r.stdout.decode("utf-8", "replace").replace(token, "<token>")
+            if r.returncode != 0:
+                raise RuntimeError(f"config.sh exited {r.returncode}: {out[-800:]}")
+            os.makedirs(os.path.dirname(RUNNER_LOG), exist_ok=True)
+            logf = open(RUNNER_LOG, "ab")
+            runner_proc = subprocess.Popen(["./run.sh"], cwd=RUNNER_DIR, env=env, stdin=subprocess.DEVNULL,
+                                           stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+            runner_state["phase"] = "running"
+            log(f"github runner {name} ({labels}) registered for {repo}")
+            ledger(f"runner-registered {name} {repo}")
+        except Exception as e:  # reported by GET /v1/runner and status
+            runner_state.update(phase="failed", error=str(e).replace(token, "<token>")[:1000])
+            log(f"github runner: {runner_state['error']}")
+
+
+def runner_info():
+    alive = runner_proc is not None and runner_proc.poll() is None
+    phase = runner_state["phase"]
+    if phase == "running" and not alive:
+        phase = f"exited {runner_proc.poll()}"
+    return {**runner_state, "phase": phase, "busy": runner_busy()}
+
+
 def watch_tick(now):
     act = active_jobs()
+    # A workflow job on the GitHub runner is work: no idle stop meanwhile.
+    global last_activity
+    busy = runner_busy()
+    if busy:
+        with state_lock:
+            last_activity = max(last_activity, now)
     if POLICY.past_cap(now):
         new = [j for j in act if j.id not in cap_warned]
         if new:
@@ -1247,7 +1660,7 @@ def watch_tick(now):
                            "even if this job is still running; new jobs are refused (build-pod.sh up after it is gone)")
             log(f"past the {POLICY.max_s / 3600:g} h cap with {len(act)} active job(s); hard stop in {max(0, left) / 60:.0f} min")
             cap_warned.update(j.id for j in new)
-    reason = POLICY.decide(now, last_activity, len(act))
+    reason = POLICY.decide(now, last_activity, len(act) + int(busy))
     if reason and STOPPER.due(now):
         if act:
             note_jobs(act, f"stopping the pod now ({reason}); this job is killed")
@@ -1342,6 +1755,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_text(200, tail_file(os.path.join(ROOT, "logs", "pod.log"), int(q.get("lines", "200"))))
         if method == "GET" and parts == ["agents"]:
             return self.agents(q.get("sizes") == "1")
+        if method == "GET" and parts == ["runner"]:
+            return self.send_json(200, runner_info())
+        if method == "POST" and parts == ["runner"]:
+            req = json.loads(self.body() or b"{}")
+            token, repo = str(req.get("token", "")), str(req.get("repo", ""))
+            labels = str(req.get("labels") or "fv-build")
+            name = str(req.get("name") or f"fv-build-{os.environ.get('RUNPOD_POD_ID', 'pod')}")
+            if not token or not REPO_RE.match(repo) or not LABELS_RE.match(labels) or not AGENT_RE.match(name):
+                return self.send_json(400, {"error": "need token, repo owner/name, labels [A-Za-z0-9_.,-], name"})
+            touch()
+            threading.Thread(target=runner_start, args=(token, repo, labels, name), daemon=True).start()
+            return self.send_json(202, {"registering": name, "labels": labels})
         if method == "POST" and parts == ["evict"]:
             return self.send_json(200, {"evicted": evictor.run_once()})
         if len(parts) >= 2 and parts[0] == "jobs":
@@ -1377,6 +1802,19 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and action == "artifact":
                 touch()
                 return self.artifact(agent, q.get("path", ""), q.get("gz") == "1")
+            if method == "POST" and action == "seed":
+                # Build the deps seed of this agent's Cargo.lock now (force: rebuild).
+                touch()
+                force = bool(json.loads(self.body() or b"{}").get("force"))
+                if not os.path.isdir(wt):
+                    return self.send_json(409, {"error": f"agent {agent} has no worktree; sync first"})
+                key = seed_key(wt)
+                job = maybe_build_seed(agent, force=force)
+                if job:
+                    return self.send_json(202, job.info())
+                busy = [j.info() for j in seed_building.values() if j.state in ("queued", "running")]
+                return self.send_json(200, {"key": key, "seed": seed_meta(key) if key else None, "building": busy,
+                                            "enabled": SEED_ON})
             if method == "POST" and action == "clean":
                 touch()
                 return self.clean(agent, json.loads(self.body() or b"{}").get("what", "all"))
@@ -1398,7 +1836,12 @@ class Handler(BaseHTTPRequestHandler):
             "volume": {"size_gb": VOLUME_GB, "used_gb": volume_usage.get("used_gb"),
                        "measured_s_ago": round(time.time() - volume_usage["t"]) if "t" in volume_usage else None},
             "local_disk": disk_gb(LOCAL),
-            "sccache": os.path.exists(os.path.join(ROOT, "tools", "sccache")), "mold": bool(shutil.which("mold")),
+            "image": IMAGE, "base": BASE, "rustc": RUSTC_VV.splitlines()[0] if RUSTC_VV else None,
+            "sccache": sccache_stats(), "mold": bool(shutil.which("mold")),
+            "caches_gb": dict(cache_usage), "deps_seeds": {"enabled": SEED_ON, "keep": SEED_KEEP, "seeds": seed_list(),
+                                                           "building": [j.info() for j in seed_building.values()
+                                                                        if j.state in ("queued", "running")]},
+            "runner": runner_info(),
             "server_sha": SERVER_SHA, "self_stop_key": bool(os.environ.get("RUNPOD_API_KEY")),
             "eviction": {
                 "idle_hours": EVICT_S / 3600, "free_gb_floor": EVICT_FREE_GB, "interval_s": EVICT_INTERVAL_S,

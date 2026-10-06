@@ -1,7 +1,8 @@
 # The edge as the only entry point: retiring the fv-serve gateway pod
 
-Status: **stage 1 (edge parity) built, 2026-10-06**; see "Stage 1 as
-built" in §9 for what changed from the design. Stages and their exit
+Status: **stages 1–4 built, 2026-10-06**: the gateway is removed and the
+edge is the only control plane (fv-control `direct` clusters aside); see
+the "as built" notes in §9 for what changed from the design. Stages and their exit
 criteria are in §9; the owner's answers to §10 are recorded there.
 
 The owner's decision: retire the fv-serve gateway pod. fv-control becomes
@@ -340,7 +341,7 @@ Worker and in a native stand-in the tests and the compat mode start.
 ### 5.1 Spec
 
 ```ts
-control_plane: "gateway" | "edge" | "both";   // default "gateway" until stage 4, then "edge" only
+control_plane: "edge" | "direct";   // as built (stage 4); the design had "gateway" | "edge" | "both"
 ```
 
 - `edge`: no gateway pod. `up` phases become `init → workers → register →
@@ -547,6 +548,34 @@ Where the build differs from the design above:
 - Exit: green; fv-control staging deploy from main (or the PR head for
   stage 3, said in the report).
 
+### Stage 2 as built
+
+- `control_plane: "gateway" | "edge"` (default `gateway`). `both` is not
+  built: the gateway's pools would need the family-DO dispatch config, and
+  the stage-3 latency comparison can run against an older gateway cluster
+  instead. `edge` turns `gateway.enabled` off.
+- The edge is fv-control's, not the cluster's: `EDGE_URL`,
+  `EDGE_D1_DATABASE_ID` and the secrets `EDGE_INTERNAL_TOKEN`,
+  `EDGE_ADMIN_TOKEN` (`scripts/serve/fv-control.sh edge-link staging` from
+  `cf-edge.sh`'s state). The edge reads its settings (auth, Reactor model,
+  WHIP mode) from its own deploy vars, so `register` checks that the edge
+  answers the admin token instead of writing settings to D1. The workers'
+  aliases come from their own configs.
+- Worker env as §5.2, with the backstop in the worker boot
+  (`EDGE_WORKER_BOOT`): each pod deletes itself at the deadline or below
+  `min_balance`. `FV_R2_BUCKET` is the edge's outputs bucket
+  (`EDGE_OUTPUTS_BUCKET`: direct uploads land there and the workers presign
+  result URLs for it); `FV_D1_DATABASE_ID` is the edge's. fv-control calls
+  the edge through a service binding (`EDGE`): workers.dev Workers of one
+  account cannot fetch each other (error 1042, found on staging).
+- `wait`, the pools view, the collector's per-pod jobs and readiness read
+  the families view (`GET /fv/v1/edge/families`, worker id = pod id).
+- Tests: `control/test/unit/edge.test.ts` (spec, families, env, the boot
+  and its watchdog with a curl stand-in, the families view) and an `edge`
+  cluster in `control/test/integration/run.mjs` against an edge stand-in in
+  `test/harness.mjs` (start → register → ready → second edge cluster
+  refused → keys → scale → roll → stop).
+
 ### Stage 3 — live test (owner-approved)
 
 - fv-control staging launches one `edge` cluster in EUR-IS-1 (EU volume
@@ -567,6 +596,69 @@ Where the build differs from the design above:
   balance ≥ $15; stop before it would drop below $8. Nothing left idle;
   everything deleted at the end (`GET /pods/<id>` → 404 for each).
 - Exit: every listed check passes; numbers recorded in this document.
+
+### Stage 3 results (2026-10-06, staging)
+
+Setup: fv-edge-staging and fv-control-staging deployed from the stage-2
+branch (#28; the edge code is main's c74c5f5), images `*-sha-c74c5f5`,
+cluster `edgecp-live` (`control_plane: "edge"`, EU / EUR-IS-1, one RTX PRO
+6000 each for `h3-turbo` and `ltx`, `min_balance` 15). Checks:
+`scripts/serve/e2e/edge_live.py <edge url>` with a key minted through
+fv-control; every request went to the edge URL only.
+
+- **CPU dry run first** (`tiny-cpu`, $0.01). It found two problems that
+  are now fixed in #28. First, fv-control could not fetch the edge: a Worker
+  cannot fetch another `workers.dev` Worker of its account (error 1042), so
+  it now uses a service binding. Second, the result URLs of direct uploads
+  were 404: the workers now presign them in the edge's outputs bucket. After
+  the fixes a fake job ran with queue 0.34 s and its result downloaded from R2.
+- **GPU run 1** (13:59–14:44 UTC, 45 min cap):
+  - The h3 front was ready 434 s after its pod was made.
+  - Two `ltx` pods in a row never started their container (no log line,
+    no uptime, for 20 and 22 min), so they were deleted. No stock for a third
+    try at first.
+  - The h3 checks passed: minimax, fal `subscribe`, fal SSE status, OpenAI
+    videos, cancel, fal storage upload through the edge, and Reactor
+    admission.
+  - Key revocation through fv-control: the next request with the key was
+    refused 0.31 s after the revoke returned.
+  - The deadline backstop worked: the h3 pod's own watchdog deleted it at
+    the deadline (Runpod gone at 14:44:53), and the fv-control cron
+    (`deadline backstop`, 14:44:59) deleted the never-started ltx pod.
+- **GPU run 2** (14:49–15:07 UTC): both containers started in about 80 s,
+  and both fronts were ready at the edge after 4.7 min. **Every check
+  passed:**
+  - `/v1/models` merged across both fronts.
+  - Native jobs on both fronts at once: fasth3 done in 33.7 s (queue
+    0.80 s), ltx25-distill-sol done in 63.7 s (queue 0.20 s); outputs
+    downloaded from R2.
+  - MiniMax V2, LTX v2 text-to-video, OpenAI videos (8 s clip).
+  - fal-client `subscribe` on `minimax/h3-turbo` (29.7 s).
+  - fal submit → status every 1.1 s → result by id on
+    `fastvideo/ltx-turbo/text-to-video`.
+  - fal SSE status (`IN_PROGRESS` → `COMPLETED`).
+  - Cancel of a queued job, fal storage upload, Reactor session start /
+    follow / stop.
+- **Latency, edge path**, 10 serial fasth3 text-to-video jobs plus 30 status
+  polls from the test container (EU):
+
+  | | p50 | max |
+  |---|---|---|
+  | submit | 1.05 s | 1.38 s |
+  | queue | 0.25 s | 0.84 s |
+  | to `succeeded` | 30.9 s | 32.5 s |
+  | status poll | 0.59 s | 1.03 s |
+
+  `both` is not built, so there is no same-day gateway comparison. Run 1's
+  8 jobs gave submit p50 0.59 s and queue p50 0.27 s.
+- **Not covered:**
+  - Director and Reactor media: this container has no UDP, so only
+    admission and signalling were checked.
+  - fal webhooks: there is no public receiver here.
+  - The gateway latency comparison.
+- **Spend:** GPU about $4.3 (fv-control counts $3.73 for the cluster),
+  CPU $0.01. Every pod was deleted (`GONE` in Runpod), and the test keys were
+  revoked.
 
 ### Stage 4 — remove the gateway
 
@@ -592,6 +684,72 @@ Only after stage 3 passes:
 - Docs: gateway.md and gateway-cloudflare.md get a "retired" banner and
   point here; references in design.md, console.md, releases.md, images.md,
   e2e/*.md and docs/control are updated.
+
+### Stage 4 as built (2026-10-06)
+
+Branch `wip/edgecp-4`. The gateway is gone; `edge` is the default and only
+front-door control plane, and `direct` (gateway-less workers with their
+own keys, [gateway-less-auth.md](../control/gateway-less-auth.md)) stays
+because it needs no edge.
+
+fv-serve:
+
+- Deleted `src/gateway/*`, `src/autoscale.rs` (the in-gateway hook),
+  `src/releases.rs` and its routes, the `deployments` console page,
+  `EngineBackendKind::Remote`, `[[pools]]` / `[autoscale]` in the config
+  and the `FV_POOL_*` / `FV_RUNPOD_*` env parsing. The `[gateway]` table
+  keeps only what a worker reads: `internal_token`, `pool`, `register`,
+  `direct`, `watch_poll_ms`. fv-serve no longer depends on
+  `fastvideo-autoscale`.
+- Kept: the worker's internal routes, the Runpod queue handler (an
+  executor worker still trusts its caller's auth), worker registration in
+  `gw_workers`, the per-pool DO routes (`/pools/…`) and pool-scope worker
+  sockets, the front (`dispatch.front`) and `FV_WORKER_DIRECT`.
+- Tests: `gateway.rs`, `gateway_burst.rs`, `gateway_bases.rs`,
+  `edge_dispatch.rs` and `releases.rs` deleted; `edge_family.rs` now drives
+  a front worker (`dispatch.front`) through the family DO stand-in (6
+  tests); `job_overhead.rs` keeps the single-server rows; `e2e.rs`
+  `shipped_configs_parse` has no gateway branch.
+- `fastvideo-autoscale` stays as the standalone `fv-autoscale` binary
+  (`configs/autoscale.toml`, moved from `configs/serve/`); its
+  `HttpGatewayPools` source and `--gateway` flag are gone.
+
+Images and CI: the `gateway` variant is now `cpu` (the CPU fake-engine
+worker image fv-control's `tiny-cpu` template runs): Dockerfile stages
+`cpu-build` / `serve-cpu`, build arg `FV_CPU_FEATURES`, prebuilt set
+`serve-cpu`, tags `cpu-<channel>` / `cpu-sha-<sha>`. `release.sh redeploy`
+(a `runpod-cluster.sh` wrapper) is gone; roll a cluster with
+`scripts/serve/fv-control.sh roll`. Deleted scripts: `runpod-gateway.sh`,
+`runpod-cluster.sh`, `edge-gpu-test.sh`, `e2e/do-family-pod.sh`; configs
+`configs/serve/gateway.toml`, `gateway-pods.toml`; the compat suite's
+`FV_COMPAT_GATEWAY` mode.
+
+fv-control:
+
+- `control_plane: "edge" | "direct"` (default `edge`) and a top-level
+  `auth` (`keys` | `none`, direct only) replace the `gateway` block. A
+  stored spec with a `gateway` block is migrated when read and when
+  normalized: `control_plane: "gateway"` or a block without
+  `enabled: false` → `edge`; `enabled: false` → `direct`;
+  `gateway.auth` → `auth`; pool variant `gateway` → `cpu`.
+- Removed: the gateway pod (`createGateway`, `patchGateway`, its TOML
+  bases, `gateway-base.ts` and fixtures), the sealed admin-token flow
+  (X25519), the `gateway-start` / `gateway-stop` operations, `roll
+  gateway: true`, `/api/clusters/import` (runpod-cluster.sh state) and its
+  dashboard card, the gateway branch of the collector (pool Prometheus
+  series), `FV_GATEWAY_TOML_B64` / `FV_CLUSTER_PODS` / `FV_GITHUB_TOKEN` /
+  `FV_POOL_*_URLS` as reserved keys.
+- `GET /api/clusters/:id/front` is the cluster's front view (edge
+  families or direct workers); `/gateway` stays as an alias for older
+  dashboards. A legacy state's gateway pod is still deleted by `down`.
+- Tests: unit 67, integration 24 steps (the `tiny` cluster is now an edge
+  cluster against the edge stand-in), UI smoke, all green.
+
+Left for the owner (deployed resources this branch does not touch): GHCR
+`gateway-*` tags and `buildcache-gateway`, the Runpod template
+`fv-serve-gateway-pod`, R2 prebuilt `serve-gateway` sets, the `gw_*` D1
+tables, and staging fv-control specs that still hold a `gateway` block
+(read as migrated; saving one rewrites it).
 
 ## 10. Questions for the owner
 

@@ -1137,7 +1137,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "fastvideo-autoscale"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastvideo-cudarc",
  "fastvideo-loader",
@@ -1181,7 +1181,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-cudarc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cudarc",
  "fastvideo-loader",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-deploy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-dispatch-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hmac",
  "serde",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-edge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "fastvideo-dispatch-proto",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-engine-service"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastvideo-cudarc",
  "fastvideo-media",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-fal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-gpucheck"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-loader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastvideo-models",
  "libc",
@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-ltxapi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-media"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "audiopus",
  "bytes",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-minimax"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1395,14 +1395,14 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-mlx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mlx-rs",
 ]
 
 [[package]]
 name = "fastvideo-models"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastvideo-ops",
  "rand 0.9.5",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-openai-videos"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1439,14 +1439,14 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-ops"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "fastvideo-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-reactor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-serve"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -1501,7 +1501,6 @@ dependencies = [
  "bytes",
  "clap",
  "ctr",
- "fastvideo-autoscale",
  "fastvideo-deploy",
  "fastvideo-dispatch-proto",
  "fastvideo-engine-service",
@@ -1541,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-serve-kit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1572,7 +1571,7 @@ dependencies = [
 
 [[package]]
 name = "fastvideo-webrtc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "bytes",

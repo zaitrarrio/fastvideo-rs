@@ -13,7 +13,7 @@
 #                  builder there, so no AOT/oxide cubins (binary)          fv-gpucheck, .build-id
 #   hf-fm          cargo install hf-fetch-model --features cli (hf-fm)     out/hf-fm, out/hf-fetch-model
 #   serve-cuda     fv-serve --features $FV_SERVE_FEATURES (serve-build)    out/fv-serve, out/fv-serve.features
-#   serve-gateway  fv-serve --features $FV_GATEWAY_FEATURES (gateway-build) out/fv-serve, out/fv-serve.features
+#   serve-cpu      fv-serve --features $FV_CPU_FEATURES (cpu-build)     out/fv-serve, out/fv-serve.features
 #   serve-fake     serve-compat.yml's debug fv-serve --features fake,full  fv-serve
 #   gpucheck-tests gpucheck-t0.yml's `cargo test -p fastvideo-gpucheck
 #                  -p fastvideo-cudarc --lib --bins`, --no-run            tests.tsv, bin/*
@@ -26,29 +26,30 @@
 # LTO=off, CODEGEN_UNITS=16, PANIC=unwind (the job env), CUDARC_CUDA_VERSION=
 # 13000, the CUDA 13.4.92 toolkit, toolchain `stable` per rust-toolchain.toml,
 # and no RUSTFLAGS: the pod's mold link-arg is dropped so the system linker
-# links, as in the image. The pod is Debian bookworm (glibc 2.36) while the
-# images are Ubuntu 22.04 (glibc 2.35): every ELF is checked for GLIBC_*
-# symbol versions above FV_REL_MAX_GLIBC (2.35) and the build fails if one
-# appears.
+# links, as in the image. The pod runs the build base image
+# (docker/build-base.Dockerfile, Ubuntu 22.04, glibc 2.35, like the images);
+# every ELF is still checked for GLIBC_* symbol versions above
+# FV_REL_MAX_GLIBC (2.35), as pods on rust:1-bookworm (glibc 2.36) needed.
+# Nothing is installed here: a tool the image lacks fails the run.
 #
 # Env (set by build-pod.sh): FV_REL_SHA, FV_GIT_SHA, FV_BUILD_TIME, FV_BUILD_ID
 # (scripts/gpu/docker.sh build-id at that commit), FV_REL_RUN_ID; optional
-# FV_REL_SETS (space list, default all), FV_SERVE_FEATURES (cuda,http-client),
-# FV_GATEWAY_FEATURES (http-client), FV_REL_MAX_GLIBC (2.35).
+# FV_RELEASE_VERSION (the version the binaries report), FV_REL_SETS (space list, default all), FV_SERVE_FEATURES (cuda,http-client),
+# FV_CPU_FEATURES (http-client), FV_REL_MAX_GLIBC (2.35).
 set -euo pipefail
 
 log() { printf '[rel %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
 : "${FV_REL_SHA:?FV_REL_SHA}" "${FV_BUILD_ID:?FV_BUILD_ID}" "${FV_GIT_SHA:?FV_GIT_SHA}" "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR}" "${CUDA_HOME:?CUDA_HOME}"
 [[ "$FV_REL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "FV_REL_SHA must be a full sha"
-ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-gateway serve-fake gpucheck-tests"
+ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cpu serve-fake gpucheck-tests"
 SETS=" ${FV_REL_SETS:-$ALL_SETS} "
 SERVE_FEATURES="${FV_SERVE_FEATURES:-cuda,http-client}"
-GATEWAY_FEATURES="${FV_GATEWAY_FEATURES:-http-client}"
+CPU_FEATURES="${FV_CPU_FEATURES:-http-client}"
 MAX_GLIBC="${FV_REL_MAX_GLIBC:-2.35}"
 SRC="$PWD"
 T="$CARGO_TARGET_DIR"
-VOL="$(dirname "$CUDA_HOME")"          # the fv-build volume root
+VOL="${FV_BUILD_VOLUME_DIR:-$(dirname "$CUDA_HOME")}"   # the fv-build volume root
 CACHE="$VOL/release-cache"
 OUT="$T/release-artifacts/$FV_REL_SHA"
 STAGE="$OUT/stage"
@@ -61,40 +62,32 @@ export CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARG
 export CUDARC_CUDA_VERSION=13000 NVCC="$CUDA_HOME/bin/nvcc"
 # Build identity, as the image build args set it (crates/fastvideo-serve/build.rs).
 export BUILD_ID="$FV_BUILD_ID" FV_BUILD_TIME="${FV_BUILD_TIME:-}"
+# The tools release version the binaries report (`-V`, /health); empty: the
+# workspace version (docs/dev/tools-releases.md "Versioning").
+if [[ -n "${FV_RELEASE_VERSION:-}" ]]; then export FV_RELEASE_VERSION; else unset FV_RELEASE_VERSION; fi
 unset GITHUB_SHA
 
 # Older snapshots of this commit's outputs only (the target dir is reused).
 rm -rf "$T/release-artifacts"
 mkdir -p "$STAGE" "$CACHE"
 
-# apt under the build pod server's lock (build-pod-server.py APT_LOCK): an
-# `apt-get update` here while the server's extras install ran deleted that
-# install's .debs (the image's docker-clean hook), failing it.
-apt_locked() {
-  local lock="${FV_BUILD_APT_LOCK:-/var/lock/fv-apt.lock}"
-  mkdir -p "$(dirname "$lock")"
-  DEBIAN_FRONTEND=noninteractive flock -w 1800 "$lock" apt-get -o DPkg::Lock::Timeout=600 "$@"
-}
-
-# jq (manifest) and binutils (glibc check) are not in rust:1-bookworm by default.
-need_apt=()
-command -v jq >/dev/null || need_apt+=(jq)
-command -v objdump >/dev/null || need_apt+=(binutils)
-if (( ${#need_apt[@]} )); then
-  log "apt: ${need_apt[*]}"
-  apt_locked update -qq >/dev/null
-  apt_locked install -y -qq --no-install-recommends "${need_apt[@]}" >/dev/null
-fi
+# The base image has these; older pods (rust:1-bookworm) installed them with apt.
+for t in jq objdump readelf curl sha256sum; do
+  command -v "$t" >/dev/null || die "$t is missing from the build pod image ${FV_BUILD_IMAGE:-?} (docker/build-base.Dockerfile)"
+done
 
 # ---- prerequisites the image's oxide stage installs with apt ---------------
-# libclang (cutile's bindgen) and the cuda.h / curand.h headers. The volume's
-# toolkit (build-pod-server.py) has cudart but no cuRAND: add the libcurand
-# redist headers into a private overlay of it on the container disk.
+# libclang (cutile's bindgen) and the cuda.h / curand.h headers. The base
+# image's toolkit has them (cuda-driver-dev, cudart-dev, libcurand-dev); a
+# redist toolkit without cuRAND gets the libcurand redist headers in a
+# private overlay of it on the container disk.
 oxide_prereqs() {
-  if ! ldconfig -p | grep -q 'libclang[-.0-9]*\.so'; then
-    log "apt: libclang-dev"
-    apt_locked update -qq >/dev/null
-    apt_locked install -y -qq --no-install-recommends libclang-dev >/dev/null
+  ldconfig -p | grep -q 'libclang[-.0-9]*\.so' \
+    || die "libclang is missing from the build pod image ${FV_BUILD_IMAGE:-?} (docker/build-base.Dockerfile)"
+  [[ -x "$CUDA_HOME/bin/tileiras" ]] || die "no tileiras in $CUDA_HOME"
+  if [[ -f "$CUDA_HOME/include/cuda.h" && -f "$CUDA_HOME/include/curand.h" ]]; then
+    CUDA_OVERLAY="$CUDA_HOME"
+    return 0
   fi
   local redist ver="${FV_BUILD_CUDA_REDIST:-13.4.2}" base="https://developer.download.nvidia.com/compute/cuda/redist/"
   redist="$CACHE/cuda-$ver-libcurand"
@@ -152,7 +145,7 @@ build_oxide() {
   cat "$STAGE/oxide/out/oxide/manifest.tsv" >&2
 }
 
-# The `build` stage's ENV, inherited by serve-build and gateway-build.
+# The `build` stage's ENV, inherited by serve-build and cpu-build.
 with_oxide() { FV_OXIDE_CUBIN_DIR="$OXIDE_DIR" FV_REQUIRE_OXIDE=100,120 "$@"; }
 
 build_gpucheck() {
@@ -265,10 +258,10 @@ check_glibc() {
 
 # ---- build ------------------------------------------------------------------
 OXIDE_DIR=""; OXIDE_KEY=""; HF_FM_VERSION=""
-if want oxide || want gpucheck || want serve-cuda || want serve-gateway; then build_oxide; fi
+if want oxide || want gpucheck || want serve-cuda || want serve-cpu; then build_oxide; fi
 want gpucheck && build_gpucheck
 want serve-cuda && build_serve serve-cuda "$SERVE_FEATURES"
-want serve-gateway && build_serve serve-gateway "$GATEWAY_FEATURES"
+want serve-cpu && build_serve serve-cpu "$CPU_FEATURES"
 want serve-fake && build_serve_fake
 want gpucheck-tests && build_gpucheck_tests
 want gpucheck-vast && build_gpucheck_vast
@@ -287,7 +280,7 @@ for d in "$STAGE"/*/; do
     | jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: {sha256: .[1], size: (.[2]|tonumber), mode: .[3]}}) | from_entries')"
   feats=""
   case "$set" in
-    serve-cuda) feats="$SERVE_FEATURES" ;; serve-gateway) feats="$GATEWAY_FEATURES" ;;
+    serve-cuda) feats="$SERVE_FEATURES" ;; serve-cpu) feats="$CPU_FEATURES" ;;
     serve-fake) feats="fake,full" ;; gpucheck|gpucheck-vast) feats="cuda" ;; hf-fm) feats="cli" ;;
   esac
   needed="$(while IFS= read -r -d '' f; do
@@ -306,16 +299,17 @@ jq -n --arg sha "$FV_REL_SHA" --arg git "$FV_GIT_SHA" --arg bid "$FV_BUILD_ID" -
   --arg nvcc "$("$CUDA_HOME/bin/nvcc" --version | tail -2 | tr '\n' ' ')" \
   --arg tileiras "$("$CUDA_HOME/bin/tileiras" --version 2>&1 | tail -1)" \
   --arg glibc "$(ldd --version | head -1)" --arg maxg "$MAX_GLIBC" --arg oxk "$OXIDE_KEY" --arg hffm "$HF_FM_VERSION" \
-  --arg script "$(sha256sum "$0" | cut -c1-16)" --argjson sets "$sets_json" '{
+  --arg relv "${FV_RELEASE_VERSION:-}" \
+  --arg script "$(sha256sum "$0" | cut -c1-16)" --arg image "${FV_BUILD_IMAGE:-unknown image}" --argjson sets "$sets_json" '{
     schema: 1, sha: $sha, git_sha: $git, build_id: $bid, build_time: $btime, run_id: $run,
     created: $created, build_seconds: $secs,
-    builder: {host: "fv-build pod (Runpod CPU, rust:1-bookworm)", rustc: $rustc, cargo: $cargo,
+    builder: {host: "fv-build pod (Runpod CPU, \($image))", rustc: $rustc, cargo: $cargo,
               toolchain: $toolchain, nvcc: $nvcc, tileiras: $tileiras, glibc: $glibc,
               max_glibc_symbol: $maxg, recipe_sha256: $script},
     settings: {CARGO_PROFILE_RELEASE_LTO: "off", CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
                CARGO_PROFILE_RELEASE_PANIC: "unwind", RUSTFLAGS: "", linker: "cc (system default, no mold)",
                CUDARC_CUDA_VERSION: "13000", FV_REQUIRE_OXIDE: "100,120"},
-    oxide_key: $oxk, hf_fetch_model_version: $hffm, sets: $sets}' >"$OUT/manifest.json"
+    oxide_key: $oxk, hf_fetch_model_version: $hffm, release_version: $relv, sets: $sets}' >"$OUT/manifest.json"
 rm -rf "$STAGE"
 ls -la "$OUT" >&2
 log "done in $(( $(date +%s) - t_start ))s: $OUT"

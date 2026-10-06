@@ -26,7 +26,7 @@ pub enum Owner {
     Reactor,
     /// The `/console` pages (WP-20).
     Console,
-    /// Gateway mode and the worker role (docs/serve/gateway.md).
+    /// The worker role's internal routes (the retired gateway called them).
     Gateway,
 }
 
@@ -136,7 +136,6 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Console, "GET", "/console"),
         r(Console, "GET", "/console/admin"),
         r(Console, "GET", "/console/avatar"),
-        r(Console, "GET", "/console/deployments"),
         r(Console, "GET", "/console/live"),
         r(Console, "GET", "/console/stream"),
         r(Console, "GET", "/console/native"),
@@ -145,14 +144,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/streams/{id}"),
         r(Native, "DELETE", "/fv/v1/streams/{id}"),
         r(Native, "POST", "/fv/v1/streams/{id}/commands"),
-        // Gateway pool metrics (admin token) and the worker role's internal
-        // routes (docs/serve/gateway.md).
-        r(Gateway, "GET", "/fv/v1/gateway/pools"),
-        // Releases and deployments (admin token; src/releases.rs).
-        r(Gateway, "GET", "/fv/v1/admin/releases"),
-        r(Gateway, "GET", "/fv/v1/admin/deployments"),
-        r(Gateway, "POST", "/fv/v1/admin/releases/promote"),
-        r(Gateway, "POST", "/fv/v1/admin/releases/rollback"),
+        // The worker role's internal routes (internal token; src/worker.rs).
         r(Gateway, "POST", "/fv/v1/internal/jobs"),
         r(Gateway, "GET", "/fv/v1/internal/jobs/{id}"),
         r(Gateway, "DELETE", "/fv/v1/internal/jobs/{id}"),

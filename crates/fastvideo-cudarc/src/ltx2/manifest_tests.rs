@@ -411,3 +411,337 @@ fn manifests_hold_the_published_tensor_counts() {
         ]
     );
 }
+
+/// LTX-2.3 (22B): every loader against `Lightricks/LTX-2.3`'s dev pack
+/// (`ltx-2.3-22b-dev.safetensors`; the distilled packs have the same keys and
+/// shapes) and against FastVideo's split of it, the `ltx23` tree on the
+/// volume (`FastVideo/LTX-2.3-Distilled-Diffusers`). The split is derived from
+/// the single file by the rules the manifest's `note` records, so both
+/// layouts are judged against one set of real header names. The first two
+/// GPU attempts on 2.3 died on keys (`prompt_adaln_single`, then
+/// `decoder.mid_block.resnets.0.conv1.conv.weight`).
+mod ltx23 {
+    use super::*;
+
+    use fastvideo_models::ltx2::config::{ltx2_23_22b, ltx2_23_22b_distilled, Ltx2Config};
+
+    use crate::ltx2::keys::{connector_folder_alias, ltx_core_vae_key};
+    use crate::ltx2::latent_upsampler::LatentUpsampler;
+
+    const DIT_ROOT: &str = "model.diffusion_model.";
+
+    fn single() -> Requests {
+        manifest(include_str!("manifests/ltx23_single_file.json"))
+    }
+
+    fn cfg() -> Ltx2Config {
+        ltx2_23_22b()
+    }
+
+    fn is_connector(k: &str) -> bool {
+        k.contains("_embeddings_connector.")
+    }
+
+    /// `prefix.*` of the single file with the prefix stripped.
+    fn strip(published: &Requests, prefix: &str) -> Requests {
+        published
+            .iter()
+            .filter_map(|(k, v)| k.strip_prefix(prefix).map(|r| (r.to_string(), v.clone())))
+            .collect()
+    }
+
+    /// FastVideo `transformer/`: the DiT root without the connectors.
+    fn split_transformer(s: &Requests) -> Requests {
+        strip(s, DIT_ROOT)
+            .into_iter()
+            .filter(|(k, _)| !is_connector(k))
+            .collect()
+    }
+
+    /// FastVideo `text_embedding_projection/`: both connectors (the video one
+    /// as plain `embeddings_connector`) and the two aggregate projections.
+    fn split_connectors(s: &Requests) -> Requests {
+        let mut out = Requests::new();
+        for (k, v) in strip(s, DIT_ROOT) {
+            if let Some(rest) = k.strip_prefix("video_embeddings_connector.") {
+                out.insert(format!("embeddings_connector.{rest}"), v);
+            } else if is_connector(&k) {
+                out.insert(k, v);
+            }
+        }
+        out.extend(strip(s, "text_embedding_projection."));
+        out
+    }
+
+    #[test]
+    fn the_split_tree_has_the_published_component_sizes() {
+        // Tensor counts of the FastVideo folders' own headers (fetched
+        // 2026-10-06 from FastVideo/LTX-2.3-Distilled-Diffusers@22b09fb).
+        let s = single();
+        assert_eq!(s.len(), 5947);
+        assert_eq!(split_transformer(&s).len(), 4186);
+        assert_eq!(split_connectors(&s).len(), 262);
+        assert_eq!(strip(&s, "vae.").len(), 170);
+        assert_eq!(strip(&s, "audio_vae.").len(), 102);
+        assert_eq!(strip(&s, "vocoder.").len(), 1227);
+        assert_eq!(
+            manifest(include_str!("manifests/ltx23_spatial_upscaler_x2.json")).len(),
+            72
+        );
+    }
+
+    /// Globals plus the first and last block loaded for real, every other
+    /// block by index substitution (as [`transformer_against`]).
+    fn dit_against(
+        layout: Layout,
+        published: &Requests,
+        owned: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
+        let cfg = cfg().transformer;
+        let keys = Keys::transformer(layout);
+        let (map, seen) = recording();
+        let last = cfg.num_layers - 1;
+        drop(Ltx2Transformer::load_blocks(&map, &keys, &cfg, &[0, last]).expect("load"));
+        let seen = seen.lock().expect("lock").clone();
+        let block = |i: usize| keys.key(&format!("transformer_blocks.{i}."));
+        let first: Requests = seen
+            .iter()
+            .filter(|(k, _)| k.starts_with(&block(0)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut all = seen.clone();
+        for i in 1..last {
+            all.extend(
+                first
+                    .iter()
+                    .map(|(k, v)| (k.replacen(&block(0), &block(i), 1), v.clone())),
+            );
+        }
+        let mut problems = mismatches(&all, published);
+        problems.extend(unrequested(&all, published, owned));
+        problems
+    }
+
+    #[test]
+    fn dev_dit_loads_from_the_single_file() {
+        let _guard = heavy();
+        let s = single();
+        assert_clean(
+            "2.3 dit (single file)",
+            dit_against(Layout::SingleFile, &s, |k| {
+                k.starts_with(DIT_ROOT) && !is_connector(k)
+            }),
+        );
+    }
+
+    #[test]
+    fn distilled_dit_loads_from_the_split_transformer_folder() {
+        let _guard = heavy();
+        assert_clean(
+            "2.3 dit (FastVideo transformer/)",
+            dit_against(Layout::LtxCore, &split_transformer(&single()), |_| true),
+        );
+    }
+
+    fn connectors_23(layout: Layout, published: &Requests) -> Vec<String> {
+        let (map, seen) = recording();
+        let cfg = cfg().connectors;
+        let keys = Keys::connectors(layout);
+        TextConnectors::load_with_projection(&map, &keys, &cfg, "unused_shared_projection")
+            .expect("load");
+        let seen = seen.lock().expect("lock").clone();
+        // The FastVideo folder names the video connector `embeddings_connector`;
+        // the loader asks for the ltx-core name and the folder's alias answers.
+        let on_disk: Requests = seen
+            .into_iter()
+            .map(|(k, v)| match layout {
+                Layout::LtxCore => (connector_folder_alias(&k).unwrap_or(k), v),
+                _ => (k, v),
+            })
+            .collect();
+        let mut problems = mismatches(&on_disk, published);
+        problems.extend(unrequested(&on_disk, published, |k| match layout {
+            Layout::SingleFile => is_connector(k) || k.starts_with("text_embedding_projection."),
+            _ => true,
+        }));
+        problems
+    }
+
+    #[test]
+    fn connectors_load_from_the_single_file() {
+        let _guard = heavy();
+        assert_clean(
+            "2.3 connectors (single file)",
+            connectors_23(Layout::SingleFile, &single()),
+        );
+    }
+
+    #[test]
+    fn connectors_load_from_the_split_text_embedding_projection() {
+        let _guard = heavy();
+        let s = single();
+        let folder = split_connectors(&s);
+        // The probe the pipeline runs on the real folder.
+        assert!(folder.contains_key("video_aggregate_embed.weight"));
+        assert_clean(
+            "2.3 connectors (FastVideo folder)",
+            connectors_23(Layout::LtxCore, &folder),
+        );
+    }
+
+    /// The VAE asks for diffusers names; the ltx-core view of the folder
+    /// answers them under the original ones.
+    fn on_disk_vae(seen: Requests) -> Requests {
+        seen.into_iter()
+            .map(|(k, v)| (ltx_core_vae_key(&k, 8).unwrap_or(k), v))
+            .collect()
+    }
+
+    #[test]
+    fn video_decoder_loads_from_the_ltx_core_vae() {
+        let _guard = heavy();
+        let published = strip(&single(), "vae.");
+        let (map, seen) = recording();
+        VideoDecoder::load(&map, &cfg().vae).expect("load");
+        let seen = on_disk_vae(seen.lock().expect("lock").clone());
+        let mut problems = mismatches(&seen, &published);
+        problems.extend(unrequested(&seen, &published, |k| {
+            k.starts_with("decoder.") || k.starts_with("per_channel_statistics.")
+        }));
+        assert_clean("2.3 vae decoder", problems);
+    }
+
+    #[test]
+    fn ltx_core_vae_names_cover_the_encoder_too() {
+        // The image-conditioning encoder walks diffusers names by probing; every
+        // ltx-core encoder key must be the image of one diffusers name.
+        let published = strip(&single(), "vae.");
+        let mut images = BTreeSet::new();
+        for i in 0..4 {
+            for r in 0..8 {
+                for leaf in [
+                    "conv1.conv.weight",
+                    "conv1.conv.bias",
+                    "conv2.conv.weight",
+                    "conv2.conv.bias",
+                ] {
+                    images.insert(format!("encoder.down_blocks.{i}.resnets.{r}.{leaf}"));
+                    images.insert(format!("encoder.mid_block.resnets.{r}.{leaf}"));
+                }
+            }
+            for leaf in ["conv.conv.weight", "conv.conv.bias"] {
+                images.insert(format!("encoder.down_blocks.{i}.downsamplers.0.{leaf}"));
+            }
+        }
+        let mapped: BTreeSet<String> = images
+            .iter()
+            .filter_map(|k| ltx_core_vae_key(k, 8))
+            .collect();
+        let missing: Vec<_> = published
+            .keys()
+            .filter(|k| k.starts_with("encoder.down_blocks.") && !mapped.contains(*k))
+            .collect();
+        assert!(missing.is_empty(), "unmapped encoder keys: {missing:?}");
+    }
+
+    #[test]
+    fn audio_vae_loads_from_the_ltx_core_folder() {
+        let published = strip(&single(), "audio_vae.");
+        let (map, seen) = recording();
+        AudioDecoder::load(&map, &cfg().audio_vae).expect("load");
+        AudioEncoder::load(&map, &cfg().audio_vae).expect("load");
+        let seen = on_disk_vae(seen.lock().expect("lock").clone());
+        let mut problems = mismatches(&seen, &published);
+        problems.extend(unrequested(&seen, &published, |_| true));
+        assert_clean("2.3 audio vae", problems);
+    }
+
+    /// The vocoder probes for optional tensors (biases, Snake, BWE), which a
+    /// generated map would answer "yes" to; so this one holds zeros under
+    /// the folder's real names and shapes, seen through the pipeline's
+    /// HiFi-GAN view, and records anything it still has to invent.
+    #[test]
+    fn bwe_vocoder_loads_from_the_folder() {
+        let published = strip(&single(), "vocoder.");
+        let invented = Arc::new(Mutex::new(Requests::new()));
+        let sink = invented.clone();
+        let map = WeightMap::from_f32_tensors(
+            published
+                .iter()
+                .map(|(k, shape)| (k.clone(), shape.clone(), vec![0.0; shape.iter().product()])),
+        )
+        .with_generator(move |key, shape| {
+            sink.lock()
+                .expect("lock")
+                .insert(key.to_string(), shape.to_vec());
+            vec![0.0; shape.iter().product()]
+        });
+        let map = crate::ltx2::keys::vocoder_view(map);
+        Vocoder::load(&map, &cfg().vocoder).expect("load");
+        let invented = invented.lock().expect("lock").clone();
+        assert_clean(
+            "2.3 vocoder",
+            invented
+                .iter()
+                .map(|(k, s)| format!("loader asks for `{k}` {s:?}: not in the folder"))
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn spatial_upscaler_loads_from_the_x2_file() {
+        let published = manifest(include_str!("manifests/ltx23_spatial_upscaler_x2.json"));
+        let (map, seen) = recording();
+        let ucfg = cfg().latent_upsampler.expect("2.3 has an upsampler");
+        LatentUpsampler::load(&map, &ucfg).expect("load");
+        let seen = seen.lock().expect("lock").clone();
+        let mut problems = mismatches(&seen, &published);
+        problems.extend(unrequested(&seen, &published, |_| true));
+        assert_clean("2.3 spatial upscaler", problems);
+    }
+
+    /// The distilled LoRA (rank 384) the HQ recipe fuses at 0.25 / 0.5: every
+    /// pair targets a DiT weight the dev pack has, in the shapes `B·A` needs,
+    /// under the single file's names and under the split folder's.
+    #[test]
+    fn distilled_lora_targets_exist_in_both_layouts() {
+        use fastvideo_models::ltx2::lora::{weight_key_aliases, weight_key_for_lora_a};
+        let lora = manifest(include_str!("manifests/ltx23_distilled_lora_384.json"));
+        let s = single();
+        let split = split_transformer(&s);
+        let mut pairs = 0;
+        let mut problems = Vec::new();
+        for (key, a) in &lora {
+            let Some(stem) = weight_key_for_lora_a(key) else {
+                continue;
+            };
+            pairs += 1;
+            let b = lora.get(&format!("{stem}.lora_B.weight"));
+            let aliases = weight_key_aliases(stem);
+            let base_single = aliases.iter().find_map(|k| s.get(k));
+            let base_split = aliases.iter().find_map(|k| split.get(k));
+            match (b, base_single, base_split) {
+                (Some(b), Some(w), Some(w2)) => {
+                    let (rank, out_in) = (a[0], (w[0], w[1]));
+                    // Rank 384, except the 32-wide gate logits (rank 32).
+                    if w != w2 || rank > 384 || b[1] != rank || (b[0], a[1]) != out_in {
+                        problems.push(format!("{stem}: A {a:?} B {b:?} base {w:?}"));
+                    }
+                }
+                other => problems.push(format!("{stem}: B / single / split = {other:?}")),
+            }
+        }
+        assert_eq!(pairs, 1660);
+        assert_clean("2.3 distilled lora", problems);
+    }
+
+    #[test]
+    fn distilled_and_dev_bundles_share_the_architecture() {
+        let (dev, distilled) = (ltx2_23_22b(), ltx2_23_22b_distilled());
+        assert_eq!(dev.transformer, distilled.transformer);
+        assert_eq!(dev.vae, distilled.vae);
+        assert_eq!(dev.connectors, distilled.connectors);
+        assert!(dev.scheduler.use_dynamic_shifting);
+        assert!(!distilled.scheduler.use_dynamic_shifting);
+    }
+}

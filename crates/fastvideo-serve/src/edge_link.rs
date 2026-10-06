@@ -48,7 +48,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::arbiter::Arbiter;
-use crate::gateway::dispatch::Envelope;
+use crate::front::envelope::Envelope;
 use crate::upload::{UploadSpec, Uploads};
 use crate::worker::WorkerState;
 use fastvideo_serve_kit::EngineGate;
@@ -302,7 +302,7 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
         worker_id: st.worker_id.clone(),
         pool: link.cfg.scope.object_name(),
         proto: proto::PROTO_VERSION,
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: crate::build_info::VERSION.to_owned(),
         sha,
         capacity,
         draining: st.draining(),

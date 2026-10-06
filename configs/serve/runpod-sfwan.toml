@@ -1,11 +1,12 @@
-# fv-serve on a Runpod pod: SF-Wan causal streaming (the gateway's
-# `sfwan-live` pod pool, docs/serve/gateway.md §5). Secrets as in
+# fv-serve on a Runpod pod: SF-Wan causal streaming (the `sfwan` pool
+# preset of fv-control, docs/control/README.md). Secrets as in
 # runpod.toml. Peer WebRTC sessions (Reactor, native streams) need inbound
 # ICE-TCP/UDP, so this pool runs on pods, not serverless workers.
 #
-# Behind the gateway: FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN, and
-# FV_PUBLIC_BASE_URL = this pod's proxy URL (the gateway reaches the pod
-# there; the pod registers itself in `gw_workers` under `gateway.pool`).
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md):
+# FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN (the edge's) and FV_DISPATCH_FRONT=1
+# make it an API front behind the edge Worker; it registers in `gw_workers`
+# under `gateway.pool`. Standalone deployments ignore this.
 
 [server]
 bind = "0.0.0.0:8000"

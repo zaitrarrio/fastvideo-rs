@@ -151,10 +151,15 @@ impl Ltx2TransformerConfig {
         }
     }
 
-    /// LTX-2.3 distilled DiT: 2.5 widths, no keyframe abs-pos table.
+    /// LTX-2.3 DiT (dev and distilled): 2.5 widths, no keyframe abs-pos
+    /// table, and a *biased* video FFN — `ltx-2.3-22b-*.safetensors` carry
+    /// `transformer_blocks.*.ff.net.0.proj.bias` / `ff.net.2.bias` (the 2.5
+    /// DiT drops them). Checked against the published header in
+    /// `ltx2/manifest_tests.rs` (`ltx23`).
     pub fn ltx2_23_22b() -> Self {
         Self {
             use_keyframes_abs_pos_embedding: false,
+            ff_bias: true,
             ..Self::ltx2_5_22b()
         }
     }
@@ -1462,6 +1467,14 @@ mod tests {
         assert!(!c.use_prompt_embeddings && c.use_prompt_adaln_single);
         assert_eq!(c.inner_dim(), 4096);
         assert_eq!(c.num_layers, 48);
+    }
+
+    #[test]
+    fn ltx23_video_ffn_is_biased() {
+        let c = Ltx2TransformerConfig::ltx2_23_22b();
+        assert!(c.ff_bias && c.audio_ff_bias);
+        assert!(ltx2_23_22b().transformer.ff_bias && ltx2_23_22b_distilled().transformer.ff_bias);
+        assert!(!Ltx2TransformerConfig::ltx2_5_22b().ff_bias);
     }
 
     #[test]

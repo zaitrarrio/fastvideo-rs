@@ -3,6 +3,13 @@
 **Status (2026-10-02):** implemented on `wip/gwless-auth`, covered by tests
 (below). A live run on Runpod is listed at the end.
 
+> **Since 2026-10-06** the gateway is retired
+> ([edge-control-plane.md](../serve/edge-control-plane.md) §9, "Stage 4 as
+> built"). This mode is now fv-control's `control_plane: "direct"` (the
+> spec's `gateway.enabled: false` migrates to it), with the client auth in
+> the spec's top-level `auth`; the other mode is `edge`. The gateway-side
+> notes below are history.
+
 A cluster spec with `gateway.enabled: false` launches only workers. Clients
 call each worker at `https://<podId>-8000.proxy.runpod.net`. Before this
 change those workers ran as gateway workers (`FV_SERVE_ROLE=worker`): every
@@ -39,12 +46,10 @@ key table the gateway uses. fv-control makes the admin token.
    - `FV_ADMIN_TOKEN` is required. Config validation fails without it, so
      every worker of the cluster shares one admin token.
    - The worker runs the MiniMax callback challenge itself.
-2. **fv-control** (`isDirect(spec, state)` = no gateway in the spec and none
-   running):
+2. **fv-control** (`isDirect(spec)` = `control_plane: "direct"`):
    - `start` makes `fvadm_<48 hex>` and keeps it in the cluster's sealed
-     secrets as `admin_token`. Each launch gets a new one, as each new
-     gateway does.
-   - The worker env adds `FV_WORKER_DIRECT=1`, `FV_AUTH_MODE=<gateway.auth>`,
+     secrets as `admin_token`. Each launch gets a new one.
+   - The worker env adds `FV_WORKER_DIRECT=1`, `FV_AUTH_MODE=<auth>`,
      `FV_KEY_STORE=d1` and `FV_ADMIN_TOKEN`. The admin token is masked in
      every view, and `FV_WORKER_DIRECT` is a reserved key.
    - Restarts (env apply) and scale-ups render the same env, so new pods get
@@ -54,23 +59,20 @@ key table the gateway uses. fv-control makes the admin token.
    - `POST …/mint-key` calls `/fv/v1/admin/keys` on the first worker that
      answers. That worker accepts the key at once; the others accept it after
      their next D1 reload (≤ 30 s, `propagation_s` in the reply).
-   - `GET …/keys` lists the keys. It works on gateway clusters too.
-   - `DELETE …/keys/<key_id>` revokes. On a gateway-less cluster it sends the
+   - `GET …/keys` lists the keys. It works on edge clusters too (at the edge).
+   - `DELETE …/keys/<key_id>` revokes. On a direct cluster it sends the
      DELETE to every worker, so the key is refused everywhere at once. A
      worker that misses the call reads the revocation from D1 within 30 s.
      The reply lists `applied` and `failed` pods, and the action is audited
      as `cluster.revoke-key`.
-   - `GET …/gateway` returns `{direct: true, workers: [{pod, pool, url,
-     health}]}` in place of the gateway's status and pools views.
-   - The dashboard card becomes "Workers (no gateway)". It lists the worker
+   - `GET …/front` (alias `…/gateway`) returns `{direct: true, workers:
+     [{pod, pool, url, health}]}`.
+   - The dashboard card is "Workers (direct)". It lists the worker
      URLs and consoles and has buttons for the workers view, revealing the
      admin token, minting a key, and listing and revoking keys.
    - A gateway-less cluster launched before this change has no token. The
      first `admin-token` call makes one and answers 409 "restart the workers
      (Env: apply)". The env view then shows the workers as needing a restart.
-   - If `gateway/start` adds a gateway later, the cluster stops being direct.
-     The workers are re-rendered as gateway workers, and the admin token
-     comes from the gateway as before.
 
 ### Why D1, and not keys kept in fv-control and pushed to the workers
 
@@ -99,15 +101,15 @@ key table the gateway uses. fv-control makes the admin token.
 - **New keys:** after a mint, the other workers accept the key within 30 s
   (their D1 reload). Clients that need it at once can use the worker named in
   `minted_on`.
-- **Collector:** the per-minute collector still reads jobs and metrics only
-  from gateways. Gateway-less workers show Runpod's pod data and the ready
+- **Collector:** the per-minute collector reads jobs only from the edge's
+  families view. Direct workers show Runpod's pod data and the ready
   flag from `start`.
 
 ## Tests
 
 - `cargo test -p fastvideo-serve --lib direct_worker`: config validation
   (worker role only, no `trust-gateway`, `FV_ADMIN_TOKEN` required).
-- `cargo test -p fastvideo-serve --features http-client,openai-videos,minimax,fal,ltxapi --test gateway direct_workers`
+- `cargo test -p fastvideo-serve --features http-client,minimax --test direct_workers`
   runs two, then four, direct workers on one mock D1 and checks:
   - without a key the APIs answer 401 and `/health` stays open;
   - the internal routes still need the internal token;
@@ -117,11 +119,10 @@ key table the gateway uses. fv-control makes the admin token.
   - once revoked on every worker it is refused everywhere, also on a new
     worker;
   - the admin token is not accepted as a client key.
-- `control/test/unit/payloads.test.ts`: the direct worker env; a gateway
-  started later turns it back into a gateway worker env; gateway clusters'
-  workers never get the admin token.
-- `control/test/integration/run.mjs`, step "gateway-less cluster" runs
-  start → no gateway pod and the env checked → admin-token reveal → env view
+- `control/test/unit/payloads.test.ts`: the direct worker env (client
+  auth, the controller's admin token, the D1 key store).
+- `control/test/integration/run.mjs`, step "direct cluster" runs
+  start → one pod per worker and the env checked → admin-token reveal → env view
   masked → scale to 2 (same token) → workers view → mint → list → revoke on
   both workers → stop.
 

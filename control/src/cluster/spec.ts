@@ -1,7 +1,7 @@
-// A cluster definition (the controller's version of runpod-cluster.sh's
-// fixed shape): one CPU gateway pod in front of pod pools. Defaults match
-// the script (docs/serve/e2e/cluster.md).
-import { validate, type GatewayProtocol } from "../schemas";
+// A cluster definition: pod pools of fv-serve workers behind the edge
+// Worker (control_plane "edge", docs/serve/edge-control-plane.md), or
+// workers clients call directly ("direct", docs/control/gateway-less-auth.md).
+import { validate } from "../schemas";
 import { HttpError } from "../util";
 import CATALOG from "./catalog.json";
 import { WORKER_CONFIGS } from "./worker-configs";
@@ -16,7 +16,7 @@ export interface ModelRef {
 }
 export interface PoolSpec {
   id: string; // h3-turbo | h3-max | ltx | wan | …
-  variant: string; // image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan5b, gateway (CPU), …
+  variant: string; // image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan5b, cpu (fake engine), …
   count: number; // worker pods
   compute: "GPU" | "CPU";
   config?: string; // the worker config inside the image (/etc/fv/runpod.toml …)
@@ -28,38 +28,29 @@ export interface PoolSpec {
   container_disk_gb?: number;
   volume?: boolean; // mount the region's network volume at /workspace (GPU default true)
   image?: string; // override: an image reference (resolved to a digest)
-  models?: ModelRef[]; // the gateway's static caps
+  models?: ModelRef[]; // the models the pool serves (families, recipe check)
   fake_models?: string[];
   max_queued?: number;
   job_timeout_s?: number;
   stale_after_s?: number;
+  /** control_plane = edge: the family DO this pool's models queue on (default: from each model's family). */
+  family?: string;
 }
+/** edge: the edge Worker is the only front; direct: clients call each worker. (The gateway pod is retired.) */
+export type ControlPlane = "edge" | "direct";
 export interface ClusterSpec {
   name: string;
   /** Image source: a release channel (stable, latest, …), a commit (sha), or one image ref for every pod (all-in-one). */
   image: { channel?: string; sha?: string; ref?: string };
   regions: RegionId[];
-  gateway: {
-    enabled: boolean;
-    cpu_flavors: CpuFlavor[];
-    vcpu: number;
-    container_disk_gb: number;
-    base: "pods" | "minimal"; // the gateway TOML (non-pool part)
-    github_token: boolean; // FV_GITHUB_TOKEN from GITHUB_PAT (console promote/rollback)
-    auth: "keys" | "none";
-    /** Replaces the base's `[protocols] fal_apps` (default: the base's: every worker config's apps). */
-    fal_apps?: string[];
-    /** Overrides single `[protocols]` switches of the base. */
-    protocols?: Partial<Record<GatewayProtocol, boolean>>;
-    /** `[gateway] reactor_model`; null: none (the gateway takes the first streaming model of a pod pool). Default: the base's when a pool serves it, else a pool's causal model. */
-    reactor_model?: string | null;
-    /** Replaces the base's `[aliases]`. */
-    aliases?: Record<string, string>;
-  };
+  /** edge (default): the edge Worker is the cluster's only front; direct: clients call each worker. */
+  control_plane: ControlPlane;
+  /** direct: the workers' client auth (FV_AUTH_MODE). An edge's auth is the edge's own setting. */
+  auth: "keys" | "none";
   pools: PoolSpec[];
   /** Backstop: every pod is deleted at create + cap_s (extend moves it). */
   cap_s: number;
-  /** The gateway pod's watchdog deletes the cluster below this balance. */
+  /** Each pod's watchdog (edge workers) deletes it below this balance; the cron stops the cluster. */
   min_balance: number;
   /** Refuse to start / extend when the projected balance at the deadline would be below this. */
   balance_floor: number;
@@ -184,10 +175,10 @@ export const presetPool = (id: string): PoolSpec | undefined => {
   const p = POOL_PRESETS.find((x) => x.id === id || x.pool.id === id)?.pool;
   return p ? structuredClone(p) : undefined;
 };
-/** Recipes the fv-serve catalog does not have: a pool model with one stops the gateway at start. */
+/** Recipes the fv-serve catalog does not have: a pool model with one cannot be served. */
 export const UNSERVABLE_RECIPES = new Set(CATALOG.recipes.filter((r) => !r.serve).map((r) => r.id));
 
-/** A fake-engine worker on a CPU pod (the gateway image carries the fake engine). */
+/** A fake-engine worker on a CPU pod (the `cpu` image). */
 export const FAKE_CPU_WORKER_TOML = `[server]
 bind = "0.0.0.0:8000"
 state_dir = "/fvstate"
@@ -224,8 +215,8 @@ body_max_mb = 16
 
 /** Cluster templates (GET /api/templates): standard, tiny-cpu, and preset groups. */
 export const TEMPLATES: Record<string, { title: string; pools: string[] }> = {
-  standard: { title: "CPU gateway + h3-turbo, h3-max, ltx, wan GPU pools", pools: ["h3-turbo", "h3-max", "ltx", "wan"] },
-  "tiny-cpu": { title: "CPU gateway + 1 fake-engine CPU worker (tests)", pools: [] },
+  standard: { title: "h3-turbo, h3-max, ltx, wan GPU pools", pools: ["h3-turbo", "h3-max", "ltx", "wan"] },
+  "tiny-cpu": { title: "1 fake-engine CPU worker (tests)", pools: [] },
   ltx: { title: "LTX: turbo, pro, guided A2V and Ref2V pools", pools: ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"] },
   h3: { title: "H3: turbo, max and Ref2V pools", pools: ["h3-turbo", "h3-max", "h3-ref2v"] },
   wan: { title: "Wan: 2.2 5B, FastWan 1.3B and SF-Wan streaming pools", pools: ["wan", "fastwan21", "sfwan"] },
@@ -238,7 +229,8 @@ export function defaultSpec(name: string, template: string = "standard"): Cluste
     name,
     image: { channel: "stable" },
     regions: ["eu"],
-    gateway: { enabled: true, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 20, base: "pods", github_token: true, auth: "keys" },
+    control_plane: "edge",
+    auth: "keys",
     pools: structuredClone(STANDARD_POOLS),
     cap_s: 6000,
     min_balance: 8.25,
@@ -250,12 +242,10 @@ export function defaultSpec(name: string, template: string = "standard"): Cluste
   };
   if (template !== "standard" && template !== "tiny-cpu" && TEMPLATES[template]) base.pools = TEMPLATES[template]!.pools.map((p) => presetPool(p)!);
   if (template === "tiny-cpu") {
-    base.gateway.base = "minimal";
-    base.gateway.github_token = false;
     base.cap_s = 1800;
     base.min_start = 10;
     base.pools = [
-      { id: "fake", variant: "gateway", count: 1, compute: "CPU", config_toml: FAKE_CPU_WORKER_TOML, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 10, volume: false, fake_models: ["fake-wan"], max_queued: 8, job_timeout_s: 600, stale_after_s: 120 },
+      { id: "fake", variant: "cpu", count: 1, compute: "CPU", config_toml: FAKE_CPU_WORKER_TOML, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 10, volume: false, fake_models: ["fake-wan"], max_queued: 8, job_timeout_s: 600, stale_after_s: 120 },
     ];
   }
   return base;
@@ -270,15 +260,23 @@ export function normalizeSpec(input: any): ClusterSpec {
   const name = String(input.name || "");
   if (!ID_RE.test(name)) throw new HttpError(400, "name: lower-case letters, digits and '-', starting with a letter (max 31)");
   const d = defaultSpec(name, typeof input.template === "string" && TEMPLATES[input.template] ? input.template : "standard");
+  // A spec stored before the gateway was retired: its `gateway` block gives
+  // the auth mode and, with the gateway off, direct mode; a gateway
+  // cluster becomes an edge cluster.
+  const legacy = input.gateway && typeof input.gateway === "object" ? input.gateway : null;
+  let plane = input.control_plane;
+  if (plane === "gateway" || (plane === undefined && legacy)) plane = legacy && legacy.enabled === false ? "direct" : "edge";
   const s: ClusterSpec = {
     ...d,
     ...input,
-    gateway: { ...d.gateway, ...(input.gateway || {}) },
+    control_plane: plane ?? d.control_plane,
+    auth: input.auth ?? legacy?.auth ?? d.auth,
     image: input.image ? { ...input.image } : d.image,
     pools: Array.isArray(input.pools) ? input.pools : d.pools,
     regions: Array.isArray(input.regions) && input.regions.length ? input.regions : d.regions,
   };
   delete (s as any).template;
+  delete (s as any).gateway;
   const img = s.image;
   const nSrc = [img.channel, img.sha, img.ref].filter(Boolean).length;
   if (nSrc !== 1) throw new HttpError(400, "image: exactly one of channel, sha, ref");
@@ -298,6 +296,7 @@ export function normalizeSpec(input: any): ClusterSpec {
     const std = presetPool(String(p?.id ?? ""));
     if (std && (p?.config || p?.config_toml)) delete std.config, delete std.config_toml;
     const q: PoolSpec = { ...(std ?? {}), ...p } as PoolSpec;
+    if (q.variant === "gateway") q.variant = "cpu"; // the CPU image's name before the gateway was retired
     if (!ID_RE.test(q.id || "")) throw new HttpError(400, `pools[${i}].id: invalid`);
     if (ids.has(q.id)) throw new HttpError(400, `pools: ${q.id} twice`);
     ids.add(q.id);
@@ -311,9 +310,9 @@ export function normalizeSpec(input: any): ClusterSpec {
       const why = regionProblem(r);
       if (why) throw new HttpError(400, `pools[${i}].regions: ${why}`);
     }
-    if (!(q.models?.length || q.fake_models?.length)) throw new HttpError(400, `pools[${i}]: models or fake_models (the gateway's static caps)`);
+    if (!(q.models?.length || q.fake_models?.length)) throw new HttpError(400, `pools[${i}]: models or fake_models (what the pool serves)`);
     for (const [j, m] of (q.models || []).entries())
-      if (UNSERVABLE_RECIPES.has(m?.recipe)) throw new HttpError(400, `pools[${i}].models[${j}].recipe: ${m.recipe} is not in the fv-serve catalog of this build (LongLive-Plug recipes run in fv-gpucheck / the CLI); the gateway would refuse to start`);
+      if (UNSERVABLE_RECIPES.has(m?.recipe)) throw new HttpError(400, `pools[${i}].models[${j}].recipe: ${m.recipe} is not in the fv-serve catalog of this build (LongLive-Plug recipes run in fv-gpucheck / the CLI)`);
     return q;
   });
   const num = (k: keyof ClusterSpec, lo: number, hi: number) => {
@@ -326,12 +325,45 @@ export function normalizeSpec(input: any): ClusterSpec {
   num("balance_floor", 8, 10000);
   num("min_start", 8, 10000);
   num("max_gpu_dph", 0.1, 50);
-  if (!["keys", "none"].includes(s.gateway.auth)) throw new HttpError(400, "gateway.auth: keys | none");
-  if (!["pods", "minimal"].includes(s.gateway.base)) throw new HttpError(400, "gateway.base: pods | minimal");
-  s.gateway.vcpu = Number(s.gateway.vcpu) || 2;
+  if (!["edge", "direct"].includes(s.control_plane)) throw new HttpError(400, "control_plane: edge | direct (the gateway is retired)");
+  if (!["keys", "none"].includes(s.auth)) throw new HttpError(400, "auth: keys | none");
   s.log_shipping = s.log_shipping !== false;
   // The same schema the editor validates against (src/schemas.ts).
   const v = validate("cluster-spec", s);
   if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".") || "spec"}: ${i.message}`).join("; "), { issues: v.issues });
   return s;
 }
+
+/** A spec stored before the gateway was retired, read as today's: its
+ * `gateway` block gives the auth mode, and direct mode when the gateway was
+ * off; a gateway cluster reads as an edge cluster (normalizeSpec does the
+ * same on the next save). */
+export function migrateSpec(spec: ClusterSpec): ClusterSpec {
+  const any = spec as any;
+  if (!any || typeof any !== "object") return spec;
+  const legacy = any.gateway && typeof any.gateway === "object" ? any.gateway : null;
+  if (any.control_plane === "gateway" || (any.control_plane === undefined && legacy)) any.control_plane = legacy && legacy.enabled === false ? "direct" : "edge";
+  if (any.auth === undefined) any.auth = legacy?.auth ?? "keys";
+  for (const p of any.pools || []) if (p?.variant === "gateway") p.variant = "cpu";
+  delete any.gateway;
+  return spec;
+}
+
+/** The edge family DO a pool's model queues on (docs/serve/edge-control-plane.md §5.2). */
+export function modelFamily(pool: PoolSpec, m?: ModelRef): string {
+  if (pool.family) return pool.family;
+  if (!m) return "fake";
+  if (m.family === "ltx2") return "ltx";
+  if (m.family === "wan" && /^(sfwan|longlive)/.test(m.recipe)) return "sfwan";
+  return m.family;
+}
+
+/** Model id → family for every model a pool serves (fake models included). */
+export function poolModelFamilies(pool: PoolSpec): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of pool.models || []) out[m.id] = modelFamily(pool, m);
+  for (const f of pool.fake_models || []) out[f] = modelFamily(pool);
+  return out;
+}
+
+export const isEdge = (spec: ClusterSpec) => spec.control_plane !== "direct";

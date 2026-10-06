@@ -18,7 +18,7 @@ use thiserror::Error;
 
 use super::clip::{ClipVision, ClipVisionConfig};
 use super::tensor::{CudaTensor, Result as TensorResult, TensorError};
-use super::transformer::WanTransformer3D;
+use super::transformer::{WanBlockResidency, WanTransformer3D};
 use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
@@ -339,6 +339,9 @@ pub struct WanPipeline {
     clip: Option<ClipVision>,
     tiny: bool,
     boundary_ratio: Option<f32>,
+    /// Wan 2.2 A14B: both experts resident, or swapped at the boundary
+    /// (`fastvideo_models::wan::moe`). `None` for single-DiT models.
+    moe: Option<fastvideo_models::wan::moe::MoePlan>,
     /// Preset name for clear errors (Fun Control / Lucy).
     preset: String,
     /// A recipe-bound sampler override ([`Self::set_step_distill`]).
@@ -373,6 +376,7 @@ impl WanPipeline {
             clip: None,
             tiny: true,
             boundary_ratio: None,
+            moe: None,
             preset: "tiny".into(),
             step_distill: None,
         }
@@ -399,6 +403,7 @@ impl WanPipeline {
             clip: None,
             tiny: false,
             boundary_ratio,
+            moe: None,
             preset: "custom".into(),
             step_distill: None,
         }
@@ -480,9 +485,46 @@ impl WanPipeline {
         };
         let text_dir = Some(text_dir);
 
-        let dit_2 = if root.join("transformer_2").is_dir() {
+        // Where the DiT blocks live. A two-expert checkpoint (Wan 2.2 A14B)
+        // keeps both resident when the device has room after the text
+        // encoder, else parks both in pinned host memory and swaps them at
+        // the boundary (`FASTVIDEO_WAN_MOE`). `FASTVIDEO_DIT_OFFLOAD=streamed`
+        // streams any Wan DiT layer by layer instead.
+        let two_experts = root.join("transformer_2").is_dir();
+        let offload =
+            super::offload::DitOffload::from_env_or(None).map_err(PipelineError::Message)?;
+        let (residency, moe) = if offload == super::offload::DitOffload::Streamed {
+            (WanBlockResidency::Streamed, None)
+        } else if two_experts {
+            use fastvideo_models::wan::moe::{self, MoePlan, MoeResidency};
+            let asked = MoeResidency::from_env().map_err(PipelineError::Message)?;
+            let expert = moe::expert_bf16_bytes(&cfg);
+            let free = super::device::free_memory().map(|(f, _)| f);
+            let plan = asked.resolve(expert, moe::headroom_bytes(), free);
+            super::log::info(format_args!(
+                "wan moe: {asked:?} -> {} (expert {:.1} GiB bf16, {} free after the text encoder)",
+                plan.as_str(),
+                expert as f64 / f64::from(1u32 << 30),
+                free.map_or("unknown".into(), |f| format!(
+                    "{:.1} GiB",
+                    f as f64 / f64::from(1u32 << 30)
+                )),
+            ));
+            let r = match plan {
+                MoePlan::Both => WanBlockResidency::Resident,
+                MoePlan::Swap => WanBlockResidency::Parked,
+            };
+            (r, Some(plan))
+        } else {
+            (WanBlockResidency::Resident, None)
+        };
+        let dit_2 = if two_experts {
             let map = WeightMap::from_dir(&root.join("transformer_2"))?;
-            Some(WanTransformer3D::load(cfg.clone(), &map)?)
+            Some(WanTransformer3D::load_with_residency(
+                cfg.clone(),
+                &map,
+                residency,
+            )?)
         } else {
             None
         };
@@ -530,7 +572,7 @@ impl WanPipeline {
         }
         Ok(Self {
             text,
-            dit: WanTransformer3D::load(cfg, &dit)?,
+            dit: WanTransformer3D::load_with_residency(cfg, &dit, residency)?,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
             taehv,
@@ -541,9 +583,29 @@ impl WanPipeline {
             clip,
             tiny: false,
             boundary_ratio,
+            moe,
             preset: preset.to_string(),
             step_distill: None,
         })
+    }
+
+    /// Wan 2.2 A14B placement (`both` / `swap`), `None` for one DiT.
+    pub fn moe_plan(&self) -> Option<&'static str> {
+        self.moe.map(|p| p.as_str())
+    }
+
+    /// Where the (high-noise) DiT's blocks live.
+    pub fn dit_residency(&self) -> &'static str {
+        self.dit.block_residency().as_str()
+    }
+
+    /// Log and reset the block-copy statistics of both experts (streamed or
+    /// parked DiTs; resident ones have none).
+    pub fn report_offload(&self, what: &str) {
+        self.dit.report_offload(what);
+        if let Some(low) = &self.dit_2 {
+            low.report_offload(what);
+        }
     }
 
     /// Run every request on LightX2V's step-distill Euler sampler (a
@@ -1255,11 +1317,15 @@ impl WanPipeline {
             let _denoise = super::log::StepTimer::start(format!("dmd {} steps", steps.len()));
             dmd_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
         } else {
-            let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
+            let sigmas = fastvideo_models::schedulers::UniPcSigmas::from_env()
+                .map_err(PipelineError::Message)?;
+            let mut sched = FlowUniPCMultistepScheduler::with_sigmas(sigmas, 1000, cfg.flow_shift);
             sched.set_timesteps(cfg.num_inference_steps);
             super::log::info(format_args!(
-                "denoise=unipc steps={}",
-                cfg.num_inference_steps
+                "denoise=unipc steps={} shift={} sigmas={}",
+                cfg.num_inference_steps,
+                cfg.flow_shift,
+                sigmas.as_str()
             ));
             let _denoise =
                 super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
@@ -1629,10 +1695,25 @@ fn pin_first_frame(
 
 fn pick_expert<'a>(ctx: &'a DenoiseCtx<'_>, t: f32) -> (&'a WanTransformer3D, f32) {
     if let (Some(ratio), Some(low)) = (ctx.boundary_ratio, ctx.low) {
-        match moe_expert(f64::from(t), ratio, 1000) {
-            MoeExpert::LowNoise => (low, ctx.guidance_2),
-            MoeExpert::HighNoise => (ctx.high, ctx.guidance),
+        let (active, idle, scale) = match moe_expert(f64::from(t), ratio, 1000) {
+            MoeExpert::LowNoise => (low, ctx.high, ctx.guidance_2),
+            MoeExpert::HighNoise => (ctx.high, low, ctx.guidance),
+        };
+        // The A14B swap: the idle expert's device copy goes before the
+        // active one's first forward brings it in (parked models only; a
+        // no-op once it is gone, and for resident experts).
+        if idle.is_on_device() && idle.block_residency() == WanBlockResidency::Parked {
+            super::log::info(format_args!(
+                "wan moe swap at t={t:.1}: parking the {} expert",
+                if std::ptr::eq(idle, ctx.high) {
+                    "high-noise"
+                } else {
+                    "low-noise"
+                }
+            ));
+            idle.park();
         }
+        (active, scale)
     } else {
         (ctx.high, ctx.guidance)
     }

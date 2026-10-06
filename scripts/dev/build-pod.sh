@@ -24,6 +24,10 @@
 #                                    copy target/<agent>/<path> back (gzip in
 #                                    transit), e.g. release/fv-serve
 #   build-pod.sh clean <agent> [target|worktree|all]   (default all)
+#   build-pod.sh seed <agent> [--force]
+#                                    sync, then build the deps seed of that worktree's
+#                                    Cargo.lock now (jobs also start one after their
+#                                    first success on a Cargo.lock without a seed)
 #   build-pod.sh evict               run the pod's eviction pass now (it also runs
 #                                    every minute: dirs unused > FV_BUILD_EVICT_HOURS,
 #                                    default 6, then LRU target dirs while under
@@ -31,11 +35,17 @@
 #   build-pod.sh stop                stop the pod (terminate if Runpod refuses a
 #                                    stop); the volume and its caches persist
 #   build-pod.sh down                terminate the pod (volume persists)
-#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"] [--force] [--no-upload] [--keep]
+#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"]
 #                                    build that commit's release binaries on the
 #                                    pod (scripts/dev/release-artifacts-pod.sh),
-#                                    verify and upload them to R2 artifacts/<sha>/
-#                                    for the image workflows (wakes the pod)
+#                                    fetch and verify them into $FV_RELEASE_OUT;
+#                                    scripts/ci/tools-release.sh publish runs this,
+#                                    tests and publishes a GitHub tools release
+#                                    (docs/dev/tools-releases.md; wakes the pod)
+#   build-pod.sh runner              register and start the pod's GitHub Actions runner
+#                                    (labels fv-build) for tools-release.yml; `up`
+#                                    does it too when a token source exists
+#                                    (docs/dev/tools-releases.md "Build pod runner")
 #   build-pod.sh volume-create       create the fv-build volume (once)
 #   build-pod.sh plan                print the pod create payload (no API call)
 #
@@ -55,9 +65,12 @@
 # FV_BUILD_FLAVORS (default "cpu5c cpu3c"); FV_BUILD_VCPUS (default 32) and
 # FV_BUILD_VCPUS_FALLBACK (default 16, taken when the first has no stock);
 # FV_BUILD_CONTAINER_GB (default 200: snapshots and target dirs live there);
-# FV_BUILD_IMAGE (default rust:1-bookworm); FV_BUILD_DC / FV_BUILD_VOLUME_GB
+# FV_BUILD_IMAGE (default: the pinned base image, BASE_IMAGE_TAG below);
+# FV_BUILD_POD_ENV (JSON object merged into the pod env, e.g. a throwaway test
+# pod's {"FV_BUILD_ROOT": "/workspace/fv-build-test"}); FV_BUILD_DC / FV_BUILD_VOLUME_GB
 # for volume-create (default EU-RO-1 / 200); FV_BUILD_EVICT_HOURS (6) and
-# FV_BUILD_EVICT_FREE_GB (40), sent to the pod at creation.
+# FV_BUILD_EVICT_FREE_GB (default: a fifth of the container disk, at most 40), sent to
+# the pod at creation; FV_BUILD_CONTAINER_GB_FALLBACK (80) for the fallback vCPU size.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -71,15 +84,24 @@ VOL_NAME="${FV_BUILD_VOLUME:-fv-build}"
 FLAVORS="${FV_BUILD_FLAVORS:-cpu5c cpu3c}"
 VCPUS="${FV_BUILD_VCPUS:-32}"
 VCPUS_FALLBACK="${FV_BUILD_VCPUS_FALLBACK-16}"   # "" disables
-IMAGE="${FV_BUILD_IMAGE:-rust:1-bookworm}"
+# The base image (docker/build-base.Dockerfile): toolchains, CUDA, sccache, mold,
+# ffmpeg, Node/Playwright/Chromium. The tag is a content hash of its inputs;
+# `bash scripts/dev/build-base-tag.sh --pin` updates it, and the
+# build-base-image workflow pushes the image and checks this pin.
+BASE_IMAGE_TAG="bb-d124c1066ca42695"
+IMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"
 DISK_GB="${FV_BUILD_CONTAINER_GB:-200}"
+# Runpod caps the container disk by size: 16-vCPU cpu3c/cpu3g pods take at
+# most 80 GB, cpu5c/cpu5g 120 GB (2026-10-06), so the fallback asks for 80.
+DISK_GB_FALLBACK="${FV_BUILD_CONTAINER_GB_FALLBACK:-80}"
 MAX_DPH="${FV_BUILD_MAX_DPH:-1.5}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
 MAX_HOURS="${FV_BUILD_MAX_HOURS:-8}"
 MAX_GRACE_MIN="${FV_BUILD_MAX_GRACE_MIN:-30}"
 EVICT_HOURS="${FV_BUILD_EVICT_HOURS:-6}"
-EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-40}"
+# Default: a fifth of the container disk, at most 40 GB (the server caps it the same way).
+EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-}"
 VOLUME_USD_GB_MONTH="0.07"
 LEDGER="$STATE/ledger.tsv"
 TOKEN_FILE="$STATE/token"
@@ -172,10 +194,9 @@ start_cmd() {
   cat <<'EOF'
 mkdir -p /opt/fvb
 printf '%s' "$FV_BUILD_SERVER_B64" | base64 -d | gunzip >/opt/fvb/server.py
-# python3-venv here, not in the server's setup: installing it there upgrades
-# the python3 the server is running from, and the server restarted (killing
-# jobs) about a minute after every first boot.
-{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 python3-venv; } >/dev/null 2>&1
+# Nothing is installed here: the base image (docker/build-base.Dockerfile) has
+# python3, curl and every build tool. Fail loudly when it does not.
+command -v python3 >/dev/null || { echo "fv-build: no python3 in image $FV_BUILD_IMAGE (not the build base image?)" >&2; sleep 600; exit 1; }
 # Second wall-clock backstop, independent of the Python server (curl, its own
 # process): 15 min after the server's hard stop (cap + grace), stop, else
 # terminate, else GraphQL podTerminate; every 5 min until the pod is gone.
@@ -196,21 +217,22 @@ EOF
 
 # $1 volume id, $2 datacenter, $3 sha256 of the token -> PodCreateInput JSON
 payload() {
-  local vol="$1" dc="$2" hash="$3" flavors_json
+  local vol="$1" dc="$2" hash="$3" flavors_json evf="$EVICT_FREE_GB"
   flavors_json="$(jq -nc --arg f "$FLAVORS" '$f | split(" ") | map(select(. != ""))')"
+  [[ -n "$evf" ]] || evf=$(( DISK_GB / 5 < 40 ? DISK_GB / 5 : 40 ))
   jq -n --arg name "$POD_NAME" --arg image "$IMAGE" --arg vol "$vol" --arg dc "$dc" \
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
     --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" \
-    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" '{
+    --arg evh "$EVICT_HOURS" --arg evf "$evf" --argjson extra "${FV_BUILD_POD_ENV:-{\}}" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
-      env: {FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
+      env: ({FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
             FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace,
-            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf}
+            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf, FV_BUILD_IMAGE: $image} + $extra)
     }'
 }
 
@@ -221,12 +243,21 @@ create_pod() {
   # The volume pins the datacenter, and CPU stock there comes and goes (no
   # 32-vCPU cpu5c/cpu3c in EU-RO-1 for 15+ min on 2026-09-28 while 16 had
   # stock): each round tries VCPUS, then the fallback, for a while.
-  local t0=$SECONDS
+  local t0=$SECONDS d cap
   while [[ -z "$created" ]]; do
     for v in $VCPUS $VCPUS_FALLBACK; do
-      if resp="$(VCPUS=$v payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)"; then
-        created=$v
-        break
+      d=$DISK_GB
+      [[ "$v" == "$VCPUS" ]] || d=$(( DISK_GB_FALLBACK < DISK_GB ? DISK_GB_FALLBACK : DISK_GB ))
+      resp="$(VCPUS=$v DISK_GB=$d payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)" && { created=$v; break; }
+      # Too much disk for this size: retry once with the smallest cap Runpod names.
+      # `|| true`: no match is the normal case (e.g. "no instances available"),
+      # and under `set -eo pipefail` a failed grep here would end the script
+      # before the vCPU fallback and the stock-wait loop ever ran.
+      cap="$(grep -o 'Container Disk must be less than or equal to [0-9]*' <<<"$resp" | grep -o '[0-9]*$' | sort -n | head -1 || true)"
+      if [[ -n "$cap" ]] && (( cap < d )); then
+        log "${v} vCPU allows at most ${cap} GB container disk; asking for that"
+        d=$cap
+        resp="$(VCPUS=$v DISK_GB=$d payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)" && { created=$v; break; }
       fi
       grep -q "no longer any instances available" <<<"$resp" || die "pod create failed: $(head -c 400 <<<"$resp")"
     done
@@ -236,7 +267,7 @@ create_pod() {
     log "no stock in $dc; retrying in 30s"
     sleep 30
   done
-  [[ "$created" == "$VCPUS" ]] || log "no ${VCPUS}-vCPU stock; took ${created} vCPU"
+  [[ "$created" == "$VCPUS" ]] || log "no ${VCPUS}-vCPU stock; took ${created} vCPU with ${d} GB container disk"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "pod create returned no id: $(head -c 400 <<<"$resp")"
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
@@ -249,6 +280,7 @@ create_pod() {
   commit_token
   echo "$id" >"$STATE/pod"
   server_sha >"$STATE/pod-server"
+  echo "$IMAGE" >"$STATE/pod-image"
   log "pod $id at \$$dph/hr (idle stop ${IDLE_MIN} min, cap ${MAX_HOURS} h + ${MAX_GRACE_MIN} min grace, pod-side)"
 }
 
@@ -292,8 +324,8 @@ cmd_up() {
         # A stopped pod restarts with the server it was created with (it is
         # sent in the pod's env); recreate it when this checkout's differs.
         # Nothing is lost: the container disk does not survive a stop anyway.
-        if [[ "$(cat "$STATE/pod-server" 2>/dev/null)" != "$(server_sha)" ]]; then
-          log "stopped pod $id runs an older server; terminating it and creating a new pod"
+        if [[ "$(cat "$STATE/pod-server" 2>/dev/null)" != "$(server_sha)" || "$(jq -r '.imageName // ""' <<<"$pod")" != "$IMAGE" ]]; then
+          log "stopped pod $id runs an older server or image; terminating it and creating a new pod"
           rest DELETE "/pods/$id" >/dev/null || true
           ledger "pod-deleted $id server-update"
           pod=""
@@ -321,6 +353,54 @@ cmd_up() {
   srv_local="$(server_sha)"
   srv_pod="$(svc GET /v1/status | jq -r '.server_sha // ""')"
   [[ "$srv_pod" == "$srv_local" ]] || log "note: pod runs server $srv_pod, this checkout has $srv_local (down + up to update)"
+  [[ "$(jq -r '.imageName // ""' <<<"$(pod_json)")" == "$IMAGE" ]] \
+    || log "note: pod runs image $(jq -r '.imageName // "?"' <<<"$(pod_json)"), this checkout pins $IMAGE (down + up to update)"
+  # The GitHub runner for tools-release.yml, when a token source is set up.
+  if [[ "${FV_BUILD_RUNNER:-auto}" != 0 ]] && runner_token_source >/dev/null; then
+    cmd_runner || log "WARNING: the GitHub runner did not register (build-pod.sh runner; docs/dev/tools-releases.md)"
+  fi
+}
+
+# ---- GitHub Actions runner (docs/dev/tools-releases.md "Build pod runner") ----
+# A registration token (valid 1 h) from FV_GH_RUNNER_TOKEN_FILE (default
+# ~/.config/fv/gh-runner-token), or minted with a repo-admin PAT from
+# FV_GH_RUNNER_PAT_FILE (default ~/.config/fv/gh-runner-pat; fine-grained,
+# "Administration: write" on the repository). Only the short-lived
+# registration token goes to the pod (request body, never argv, never stored).
+RUNNER_REPO="${FV_GH_RUNNER_REPO:-zaitrarrio/fastvideo-rs}"
+runner_token_source() {
+  local tf="${FV_GH_RUNNER_TOKEN_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-token}"
+  local pf="${FV_GH_RUNNER_PAT_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-pat}"
+  if [[ -s "$tf" ]]; then echo "token:$tf"
+  elif [[ -s "$pf" ]]; then echo "pat:$pf"
+  else return 1
+  fi
+}
+cmd_runner() {
+  local src kind f tok hdr
+  src="$(runner_token_source)" || die "no GitHub runner token: put a registration token (Settings -> Actions -> Runners -> New self-hosted runner, valid 1 h) in ~/.config/fv/gh-runner-token, or a fine-grained PAT with Administration: write on $RUNNER_REPO in ~/.config/fv/gh-runner-pat (docs/dev/tools-releases.md)"
+  kind="${src%%:*}"; f="${src#*:}"
+  if [[ "$kind" == token ]]; then
+    tok="$(tr -d ' \r\n' <"$f")"
+  else
+    hdr="$(umask 077 && mktemp)"
+    printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$(tr -d ' \r\n' <"$f")" >"$hdr"
+    tok="$(curl -sS --fail-with-body -X POST -H @"$hdr" "https://api.github.com/repos/$RUNNER_REPO/actions/runners/registration-token" | jq -r '.token // empty')" || true
+    rm -f "$hdr"
+    [[ -n "$tok" ]] || die "could not mint a runner registration token with $f (needs Administration: write on $RUNNER_REPO)"
+  fi
+  jq -nc --arg t "$tok" --arg r "$RUNNER_REPO" --arg l "${FV_GH_RUNNER_LABELS:-fv-build}" '{token: $t, repo: $r, labels: $l}' \
+    | svc_or_die "runner registration" POST /v1/runner --data-binary @-
+  local st
+  for _ in $(seq 1 60); do
+    st="$(svc GET /v1/runner)"
+    case "$(jq -r .phase <<<"$st")" in
+      running) log "GitHub runner $(jq -r .name <<<"$st") ($(jq -r .labels <<<"$st"), actions/runner $(jq -r '.version // "?"' <<<"$st")) is up for $RUNNER_REPO"; return 0 ;;
+      failed|exited*) die "GitHub runner: $(jq -r '.error // .phase' <<<"$st")" ;;
+    esac
+    sleep 5
+  done
+  die "GitHub runner still $(jq -r .phase <<<"$st") after 5 min"
 }
 
 cmd_status() {
@@ -340,6 +420,7 @@ cmd_status() {
     st="$(svc GET /v1/status)" || return 0
     jq 'del(.agents)' <<<"$st"
     stop_timers <<<"$st"
+    cache_summary <<<"$st"
     # A server older than eviction has no agent rows.
     if jq -e '.eviction' <<<"$st" >/dev/null; then
       jq -r '"agents on the container disk (\(.local_disk.free_gb // "?") GB free; evict after \(.eviction.idle_hours) h unused, LRU targets below \(.eviction.free_gb_floor) GB free; \(.eviction.protect // [] | join(" ")) held \(.eviction.hold_min // 0) min after use):",
@@ -356,6 +437,22 @@ cmd_status() {
 # Aligned columns from TSV on stdin (`column` is not in every container).
 tsv_table() {
   if command -v column >/dev/null; then column -t -s $'\t'; else tr '\t' ' '; fi
+}
+
+# Image, sccache hit rate, cache sizes and deps seeds, one line each.
+cache_summary() {
+  jq -r 'def gb: if . == null then "?" else "\(.) GB" end;
+    "image: \(.image // "?")  (\(.rustc // "rustc ?"))",
+    (if (.sccache | type) == "object" then
+       "sccache: \(.sccache.hits) hits / \(.sccache.hits + .sccache.misses) cacheable compiles"
+       + " (hit rate \(if .sccache.hit_rate == null then "-" else "\(.sccache.hit_rate * 100 | round) %" end)),"
+       + " \(.sccache.not_cacheable // 0) not cacheable, \(.sccache.errors // 0) errors since boot;"
+       + " cache \(.sccache.cache_size_gb | gb) of \(.sccache.max_cache_size_gb | gb)"
+     else "sccache: NOT RUNNING (\(.sccache))" end),
+    "caches: " + ([(.caches_gb // {}) | to_entries[] | select(.key != "t") | "\(.key) \(.value | gb)"] | join(", ")),
+    "deps seeds (\(if .deps_seeds.enabled then "on" else "off" end), keep \(.deps_seeds.keep)): "
+      + ([.deps_seeds.seeds[]? | "\(.key) \(.gb) GB (\(.unpacked_gb) GB unpacked, used \(.last_used_h_ago) h ago)"] | join("; "))
+      + (if (.deps_seeds.building // []) | length > 0 then "; building: \(.deps_seeds.building | map(.argv[1]) | join(" "))" else "" end)' 2>/dev/null || true
 }
 
 stop_timers() {
@@ -518,47 +615,32 @@ cmd_down() {
 
 # ---- release artifacts (docs/dev/build-pod.md "Release artifacts") ----------
 # Build one commit's release binaries on the pod (scripts/dev/release-artifacts-pod.sh),
-# fetch the tarballs + manifest.json, check their sha256s and upload them to
-# R2 under artifacts/<sha>/ (manifest.json last: its presence means complete).
+# fetch the tarballs + manifest.json and check their sha256s. Publishing (after
+# the tests) is scripts/ci/tools-release.sh publish (docs/dev/tools-releases.md).
 REL_AGENT="${FV_RELEASE_AGENT:-fv-release}"
-R2_ENV_FILE="${FV_R2_ARTIFACTS_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/r2-build-artifacts-rw.env}"
 # The temporary worktree of a release build; also called from cmd_sync's EXIT trap.
 FV_REL_WT=""
 fv_rel_cleanup() {
   [[ -n "$FV_REL_WT" ]] || return 0
   git -C "$FV_ROOT" worktree remove --force "$FV_REL_WT" >/dev/null 2>&1 || rm -rf "$FV_REL_WT"
 }
-r2() { FV_R2_ARTIFACTS_ENV_FILE="$R2_ENV_FILE" python3 "$HERE/r2.py" "$@"; }
-
 cmd_release_artifacts() {
-  local rev="" sets="" force=0 upload=1 keep=0
+  local rev="" sets=""
   while (( $# )); do
     case "$1" in
       --sets) sets="${2:?--sets needs a list}"; shift 2 ;;
-      --force) force=1; shift ;;
-      --no-upload) upload=0; shift ;;
-      --keep) keep=1; shift ;;
+      --keep) shift ;;   # accepted for older callers: the output always stays
       -*) die "unknown flag $1" ;;
       *) [[ -z "$rev" ]] || die "one revision only"; rev="$1"; shift ;;
     esac
   done
-  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"] [--force] [--no-upload] [--keep]"
+  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"]"
   require_tools git jq python3 sha256sum
   local sha
   if ! sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}")"; then
     git -C "$FV_ROOT" fetch -q origin || true
     sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}" || git -C "$FV_ROOT" rev-parse -q --verify "origin/$rev^{commit}")" \
       || die "unknown revision $rev"
-  fi
-  if (( upload )); then
-    [[ -s "$R2_ENV_FILE" ]] || die "no R2 credentials in $R2_ENV_FILE (FV_R2_ARTIFACTS_*; docs/dev/build-pod.md \"Release artifacts\"); --no-upload builds without uploading"
-    local rc=0
-    r2 head "artifacts/$sha/manifest.json" || rc=$?
-    case "$rc" in
-      0) if (( !force )); then log "artifacts/$sha already in R2 (--force rebuilds)"; return 0; fi ;;
-      1) ;;
-      *) die "cannot read the R2 bucket with $R2_ENV_FILE (r2.py exit $rc)" ;;
-    esac
   fi
   # One release build per container at a time: they share the pod's
   # $REL_AGENT snapshot and target dir.
@@ -585,6 +667,7 @@ cmd_release_artifacts() {
   FV_ROOT="$wt" cmd_sync "$REL_AGENT"
   local env=(FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" FV_BUILD_ID="$build_id" FV_REL_RUN_ID="$run_id")
   [[ -n "$sets" ]] && env+=(FV_REL_SETS="$sets")
+  [[ -n "${FV_RELEASE_VERSION:-}" ]] && env+=(FV_RELEASE_VERSION="$FV_RELEASE_VERSION")
   cmd_run "$REL_AGENT" --no-sync -- "${env[@]}" bash scripts/dev/release-artifacts-pod.sh \
     || die "pod build failed (log above; re-attach with build-pod.sh log <job>)"
 
@@ -598,16 +681,7 @@ cmd_release_artifacts() {
     chmod -x "$out/$tb"
     [[ "$(sha256sum "$out/$tb" | cut -d' ' -f1)" == "$want" ]] || die "$tb: sha256 differs from the manifest"
   done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball, .value.sha256] | @tsv' "$out/manifest.json")
-  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out"
-
-  if (( upload )); then
-    while IFS=$'\t' read -r _ tb; do
-      r2 put "artifacts/$sha/$tb" "$out/$tb"
-    done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball] | @tsv' "$out/manifest.json")
-    r2 put "artifacts/$sha/manifest.json" "$out/manifest.json"
-    log "uploaded to R2: artifacts/$sha/ ($(( SECONDS - t0 ))s in all)"
-    (( keep )) || rm -rf "$out"
-  fi
+  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out in $(( SECONDS - t0 ))s"
 }
 
 cmd_volume_create() {
@@ -622,6 +696,7 @@ cmd_volume_create() {
 
 case "${1:-}" in
   up) cmd_up ;;
+  runner) cmd_runner ;;
   status) cmd_status ;;
   agents) shift; svc GET "/v1/agents$([[ "${1:-}" == --sizes ]] && echo '?sizes=1')" | jq . ;;
   sync) shift; cmd_sync "$@" ;;
@@ -630,6 +705,8 @@ case "${1:-}" in
   cancel) svc POST "/v1/jobs/${2:?job id}/cancel" | jq -c '{id, agent, state}' ;;
   fetch) shift; cmd_fetch "$@" ;;
   clean) svc POST "/v1/agents/$(agent_name "${2:?agent}")/clean" -d "{\"what\":\"${3:-all}\"}" | jq -c . ;;
+  seed) a="$(agent_name "${2:?agent}")"; cmd_sync "$a"
+    svc POST "/v1/agents/$a/seed" -d "{\"force\":$([[ "${3:-}" == --force ]] && echo true || echo false)}" | jq -c . ;;
   evict) FV_BUILD_HTTP_TIMEOUT=900 svc POST /v1/evict | jq -c '.evicted[]' ;;
   stop) cmd_stop ;;
   down) cmd_down ;;

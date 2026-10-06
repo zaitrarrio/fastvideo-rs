@@ -1,0 +1,66 @@
+rule 2 band (12.7 control, fixed): |ln sharp| <= 0.152 (0.859-1.164), |ln jitter| <= 0.253 (0.776-1.288)
+
+| prompt | arm | n | LPIPS med (same seed) | PSNR med | sharpness ratio med | jitter ratio med | rule 2 |
+|---|---|---|---|---|---|---|---|
+| h3-demo | pfast | 3 | 0.672 (0.628) | 10.56 | 1.182 | 1.401 | out: sharpness |ln| 0.167, jitter |ln| 0.337 |
+| h3-demo | max | 3 | 0.722 (0.676) | 9.90 | 1.477 | 2.529 | out: sharpness |ln| 0.390, jitter |ln| 0.928 |
+| h3-demo | pdense | 0 | missing | | | | |
+| ltx-multishot | pfast | 3 | 0.725 (0.685) | 11.87 | 0.988 | 1.744 | out: jitter |ln| 0.556 |
+| ltx-multishot | max | 3 | 0.735 (0.678) | 11.30 | 1.483 | 2.514 | out: sharpness |ln| 0.394, jitter |ln| 0.922 |
+| ltx-multishot | pdense | 0 | missing | | | | |
+| ltx-newsbroadcast | pfast | 3 | 0.702 (0.631) | 11.04 | 1.120 | 1.223 | in |
+| ltx-newsbroadcast | max | 3 | 0.775 (0.761) | 9.40 | 1.914 | 2.089 | out: sharpness |ln| 0.649, jitter |ln| 0.737 |
+| ltx-newsbroadcast | pdense | 0 | missing | | | | |
+| ltx-frogyoga | pfast | 3 | 0.688 (0.635) | 10.46 | 1.049 | 1.494 | out: jitter |ln| 0.401 |
+| ltx-frogyoga | max | 3 | 0.710 (0.693) | 10.28 | 1.411 | 2.584 | out: sharpness |ln| 0.344, jitter |ln| 0.949 |
+| ltx-frogyoga | pdense | 0 | missing | | | | |
+| spark-mountain-lake | pfast | 3 | 0.560 (0.560) | 15.56 | 1.095 | 1.355 | out: jitter |ln| 0.304 |
+| spark-mountain-lake | max | 3 | 0.666 (0.607) | 13.13 | 1.539 | 2.301 | out: sharpness |ln| 0.431, jitter |ln| 0.833 |
+| spark-mountain-lake | pdense | 0 | missing | | | | |
+
+rule 1: pfast closer than max (lower median LPIPS) on 5/5: ['h3-demo', 'ltx-multishot', 'ltx-newsbroadcast', 'ltx-frogyoga', 'spark-mountain-lake']
+rule 2 pfast: ['h3-demo: sharpness |ln| 0.167, jitter |ln| 0.337', 'ltx-multishot: jitter |ln| 0.556', 'ltx-frogyoga: jitter |ln| 0.401', 'spark-mountain-lake: jitter |ln| 0.304']
+rule 2 max: ['h3-demo: sharpness |ln| 0.390, jitter |ln| 0.928', 'ltx-multishot: sharpness |ln| 0.394, jitter |ln| 0.922', 'ltx-newsbroadcast: sharpness |ln| 0.649, jitter |ln| 0.737', 'ltx-frogyoga: sharpness |ln| 0.344, jitter |ln| 0.949', 'spark-mountain-lake: sharpness |ln| 0.431, jitter |ln| 0.833']
+rule 2 pdense: no data
+R2 alt: pfast |ln sharp| and |ln jitter| both <= max's on 5/5: ['h3-demo', 'ltx-multishot', 'ltx-newsbroadcast', 'ltx-frogyoga', 'spark-mountain-lake']
+
+raw (clip: lpips psnr sharp jitter) vs base:
+  pfast h3-demo-s0: 0.628 10.85 1.256 1.366
+  pfast h3-demo-s1000: 0.673 10.27 1.074 1.401
+  pfast h3-demo-s2000: 0.672 10.56 1.182 1.490
+  pfast ltx-frogyoga-s42: 0.635 11.30 1.048 1.211
+  pfast ltx-frogyoga-s1042: 0.730 9.19 1.049 2.231
+  pfast ltx-frogyoga-s2042: 0.688 10.46 1.062 1.494
+  pfast ltx-multishot-s42: 0.685 12.22 1.048 1.744
+  pfast ltx-multishot-s1042: 0.728 11.87 0.977 1.873
+  pfast ltx-multishot-s2042: 0.725 11.83 0.988 1.629
+  pfast ltx-newsbroadcast-s42: 0.631 11.04 1.128 1.039
+  pfast ltx-newsbroadcast-s1042: 0.726 9.58 1.120 1.223
+  pfast ltx-newsbroadcast-s2042: 0.702 11.30 1.076 1.403
+  pfast spark-mountain-lake-s42: 0.560 16.16 1.095 0.878
+  pfast spark-mountain-lake-s1042: 0.685 12.15 1.061 1.355
+  pfast spark-mountain-lake-s2042: 0.560 15.56 1.176 1.402
+  max h3-demo-s0: 0.676 10.32 1.582 2.157
+  max h3-demo-s1000: 0.747 9.63 1.477 2.652
+  max h3-demo-s2000: 0.722 9.90 1.449 2.529
+  max ltx-frogyoga-s42: 0.693 10.60 1.381 1.904
+  max ltx-frogyoga-s1042: 0.710 10.28 1.411 2.584
+  max ltx-frogyoga-s2042: 0.710 9.85 1.449 2.959
+  max ltx-multishot-s42: 0.678 11.23 1.483 2.400
+  max ltx-multishot-s1042: 0.746 11.30 1.456 3.422
+  max ltx-multishot-s2042: 0.735 11.34 1.695 2.514
+  max ltx-newsbroadcast-s42: 0.761 9.81 1.914 1.127
+  max ltx-newsbroadcast-s1042: 0.775 9.40 1.655 2.317
+  max ltx-newsbroadcast-s2042: 0.781 9.30 1.985 2.089
+  max spark-mountain-lake-s42: 0.607 14.90 1.332 1.767
+  max spark-mountain-lake-s1042: 0.696 12.20 1.539 2.547
+  max spark-mountain-lake-s2042: 0.666 13.13 1.750 2.301
+
+time base: denoise median 413.102751427 s, total median 420.68064798 s (5 timed clips)
+time pfast: denoise median 22.207511572 s, total median 29.53239787 s (15 timed clips)
+time max: denoise median 22.111790921 s, total median 29.492015459 s (15 timed clips)
+time pdense: denoise median None s, total median None s (0 timed clips)
+pfast / max denoise: 1.004x (+0.10 s)
+
+VERDICT plug-fast vs h3-max (rules 1+2): FAIL (rule 1 holds, rule 2 fails)
+RECOMMENDATION (R1 True, R2 True, R3 True): switch h3-max to plug-fast (owner decides)

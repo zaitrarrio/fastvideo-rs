@@ -22,8 +22,10 @@ use serde_json::Value;
 
 use crate::config::{Env, ProcessEnv};
 
-/// The package version.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version: the tools release this binary was built as
+/// (`FV_RELEASE_VERSION` at build time, docs/dev/tools-releases.md), else the
+/// package version.
+pub const VERSION: &str = env!("FV_BUILD_VERSION");
 /// Full git sha of the build, or `unknown`.
 pub const GIT_SHA: &str = env!("FV_BUILD_GIT_SHA");
 /// Commit time of the build (`YYYY-MM-DDTHH:MM:SSZ`), or empty.
@@ -190,9 +192,16 @@ mod tests {
     }
 
     #[test]
+    fn version_is_the_release_version_when_built_as_one() {
+        // tools-release.sh builds with FV_RELEASE_VERSION (docs/dev/tools-releases.md).
+        let want = option_env!("FV_RELEASE_VERSION").filter(|v| !v.trim().is_empty()).map(str::trim);
+        assert_eq!(VERSION, want.unwrap_or(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
     fn compiled_half_is_present() {
         let b = BuildInfo::from_env(&env(&[]));
-        assert_eq!(b.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(b.version, env!("FV_BUILD_VERSION"));
         assert!(!b.git_sha.is_empty());
         assert!(b.git_sha == "unknown" || b.git_sha.chars().all(|c| c.is_ascii_hexdigit()), "{}", b.git_sha);
         assert!(b.git_sha_short.len() <= 7 || b.git_sha_short == "unknown");
@@ -224,7 +233,7 @@ mod tests {
         let s = b.summary();
         assert!(s.contains("h3-turbo stable sha256:c782eb378f3f"), "{s}");
         let v = b.long_version();
-        assert!(v.starts_with(env!("CARGO_PKG_VERSION")), "{v}");
+        assert!(v.starts_with(env!("FV_BUILD_VERSION")), "{v}");
         assert!(v.contains(&format!("digest:   {D}")), "{v}");
         assert!(v.contains("variant:  h3-turbo"), "{v}");
     }

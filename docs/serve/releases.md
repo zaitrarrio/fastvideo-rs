@@ -93,9 +93,9 @@ reconcile found it missing) and `meta` (template, config, cluster).
 Writers (best effort: a D1 problem logs one warning and never fails a
 deploy; `FV_REGISTRY=0` turns it off): `runpod-pod.sh` (create, ready after
 `/ping` 200, delete), `runpod-endpoint.sh` (create, ready after the first
-job or LB `/ping`, delete), `runpod-gateway.sh` (the gateway pod; its pools
-through runpod-endpoint.sh with `FV_DEPLOY_POOL`), `runpod-cluster.sh`
-(gateway and workers; ready in `wait`; `roll`; `down`). Detached wall-clock
+job or LB `/ping`, delete). (`runpod-gateway.sh` and `runpod-cluster.sh`
+wrote `gateway` rows until the gateway was retired, 2026-10-06; fv-control
+clusters are not in this registry.) Detached wall-clock
 backstops do not write; reconcile catches what they deleted.
 
 ## CLI: scripts/serve/release.sh
@@ -108,8 +108,6 @@ $R deployed [--probe] [--json]        # live fv-serve pods/endpoints: image, sha
 $R promote 2cd1ba0 stable             # also: a digest, or a tag (`promote latest stable`)
 $R promote 2cd1ba0 stable --dry-run   # the plan: retags, template changes; nothing happens
 $R rollback stable [--to 12]
-$R redeploy h3-turbo stable           # rolling, the standing cluster (below)
-$R redeploy all 3f9e2aa [--dry-run]
 $R reconcile [--dry-run] [--adopt] [--fix]
 $R resolve 2cd1ba0                    # the build's image set (JSON)
 ```
@@ -141,33 +139,12 @@ the channel they follow.
 
 ### Rolling redeploy
 
-`redeploy <pool|all|gateway> [channel|sha]` (default `stable`) rolls the
-standing gateway cluster of `runpod-cluster.sh` (state
-`artifacts/runpod/serve/cluster.json`) through `runpod-cluster.sh roll`:
-
-1. per pool, a second worker on the target image (single-worker pools briefly
-   have two workers);
-2. the gateway gets both URLs (`FV_POOL_<ID>_URLS`; its container restarts);
-3. wait until the new worker's `/health` is `AVAILABLE` and reports the
-   target digest (`FV_ROLL_WAIT_S`, default 1800 s; otherwise the new pods
-   are deleted and the gateway is pointed back);
-4. drain the old worker (`POST /fv/v1/internal/drain`, internal token):
-   running work finishes, nothing new is taken;
-5. wait until it is idle (`/fv/v1/internal/status`: nothing running, queued
-   or in a session; `FV_DRAIN_WAIT_S`, default 900 s, then it goes anyway);
-6. the gateway gets only the new URLs (second restart); `gateway` in the
-   selection moves the gateway pod to the new image in the same PATCH (same
-   pod id, so its URL stays);
-7. delete the old worker.
-
-A cluster started on per-variant images (`runpod-cluster.sh up sha-<commit>`
-or `up stable`) rolls each pod onto the target's image of its variant
-(`wan` → `wan5b`, the gateway → `gateway`) and keeps the state's `images`
-in step; one started on an image reference rolls onto the target's
-all-in-one image (release key `debug`). `FV_CLUSTER_IMAGE_KIND=variant|debug`
-overrides.
-The balance guard (`FV_CLUSTER_MIN_START`) and a deadline check (at least
-`FV_ROLL_MIN_LEFT_S`, 40 min, left) apply. Serverless endpoints are not
+`release.sh redeploy` rolled the standing gateway cluster of
+`runpod-cluster.sh`; both went with the gateway (2026-10-06,
+[edge-control-plane.md](edge-control-plane.md) §9, "Stage 4 as built").
+Roll a cluster with fv-control: `scripts/serve/fv-control.sh roll <cluster>
+[channel|sha]` (new workers on the target, wait until ready, drain the old
+ones, delete them; docs/control/README.md §4). Serverless endpoints are not
 rolled here: an endpoint on a shared template follows the template, which
 `promote … stable` updates, and Runpod rolls its workers.
 
@@ -191,43 +168,18 @@ Locally the same variables come from the environment or `.env`
 reach curl through header file descriptors, and only named fields of Runpod
 objects are ever shown.
 
-## In the gateway and the console
+## In the server and the console
 
-- Workers report `build` in `GET /fv/v1/internal/status`; the gateway keeps
-  it per worker.
-- Public `GET /fv/v1/status` (also `/healthz` and capabilities' `pools`):
-  per pod pool `versions: [{sha, channel, workers}]` (7-character sha and
-  channel only: no digests, image names or ids) and `mixed_versions`; at
-  the top the gateway's own `version` and `mixed_versions` if any pool is
-  mixed. The console's status panel shows it per pool.
-- Admin `GET /fv/v1/gateway/pools`: each worker's full `build` and the
-  gateway's `gateway_build`.
-- Admin release API (`crates/fastvideo-serve/src/releases.rs`; gateway
-  mode, admin token on every route):
-
-  | route | |
-  |---|---|
-  | `GET /fv/v1/admin/releases?channel=&limit=` | heads and history |
-  | `GET /fv/v1/admin/deployments` | registry rows (live), the gateway's and every pod worker's build, drift per row and worker |
-  | `POST /fv/v1/admin/releases/promote` `{target, channel, notes, dry_run}` | validates, then the plan (`dry_run`) or a `release.yml` dispatch (202) |
-  | `POST /fv/v1/admin/releases/rollback` `{channel, to, dry_run}` | picks the target like `release.sh rollback` (409 when there is none) and dispatches it as `to`, so what was shown is what runs |
-
-  The gateway itself never retags or edits templates; the workflow does.
-  Dispatching needs `FV_GITHUB_TOKEN` (a fine-grained token with
-  `actions:write` on the repository; `FV_GITHUB_REPO`, `FV_GITHUB_API`,
-  `FV_RELEASE_WORKFLOW`, `FV_RELEASE_REF`, `FV_TEMPLATE_CHANNEL` adjust
-  it); without it promote / rollback answer 503 and dry runs still work.
-  The token is never returned or logged. The cluster script passes one
-  when `/root/.config/fv/github_token` (or `$FV_GITHUB_TOKEN_FILE`) exists
-  with mode 600 (docs/serve/gateway.md §9); without that file promotion
-  from the console stays off.
-- Console `/console/deployments` (docs/serve/console.md §6): channels with
-  Rollback, Promote with a dry-run plan and a confirm, live builds with
-  drift and the mixed flag, the registry, history.
+- Workers report `build` in `GET /fv/v1/internal/status` and `/health`.
+- The gateway's version summary, its admin release API
+  (`crates/fastvideo-serve/src/releases.rs`: releases, deployments,
+  promote, rollback) and the console's Deployments page were removed with
+  the gateway (2026-10-06). Promote and roll back with `release.sh` or the
+  `release.yml` workflow; fv-control's Releases page dispatches the same
+  workflow (`POST /api/github/release`).
 - After a promotion to `stable`, serverless endpoints on the shared
-  templates roll by themselves (Runpod); pod pools of the standing cluster
-  roll with `release.sh redeploy`, which the console does not start (the
-  cluster's state and its pod-creation secrets live with the operator).
+  templates roll by themselves (Runpod); fv-control clusters roll with
+  `fv-control.sh roll`.
 
 ## Tests
 
@@ -236,14 +188,8 @@ needs curl, jq, python3; no network) starts `mock_api.py` (D1 on SQLite,
 Runpod REST and GraphQL, a registry, GitHub dispatch, fv-serve pods) and a
 `docker` stub, then checks resolve, promote (dry run, dispatch, local,
 partial builds, latest), list / history, rollback (undo stack, `--to`),
-record-build, the registry writes of runpod-pod.sh, deployed, reconcile, a
-rolling redeploy and a gateway move, and that no token appears in any
-output or the ledger. The Rust side: `build_info` unit tests,
+record-build, the registry writes of runpod-pod.sh, deployed and
+reconcile, and that no token appears in any output or the ledger. The Rust side: `build_info` unit tests,
 `tests/version.rs` (`--version` output) and the `/health` assertions in
-`tests/e2e.rs`; `tests/releases.rs` (a gateway over a real worker and a
-stub on another build, the D1 mock and a mock GitHub: the worker's
-`build`, the public summary with nothing more than sha and channel, the
-mixed flag, the admin pools builds, the release routes' admin token, drift,
-promote / rollback dry runs, dispatch and the rollback choice, 503 without
-a token); `status` and `releases` unit tests; and the Deployments step of
-`tests/console/run.sh`.
+`tests/e2e.rs`; and `status` unit tests. (`tests/releases.rs` and the
+console's Deployments step went with the gateway.)

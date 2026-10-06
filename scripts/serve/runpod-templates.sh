@@ -69,12 +69,12 @@ payload() {
                            FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"})}
        else {
          containerDiskInGb: 30, volumeMountPath: "/workspace",
-         ports: (if $v == "gateway" then ["8000/http"] else ["8000/http", "70000/tcp"] end),
+         ports: (if $v == "cpu" then ["8000/http"] else ["8000/http", "70000/tcp"] end),
          env: ($secrets + $ident + {FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", RUST_LOG: "info"}
-               + (if $v == "gateway" then {} else {FV_WEIGHTS: "/workspace/weights", FV_SERVE_FORWARD: "1"} end))}
+               + (if $v == "cpu" then {} else {FV_WEIGHTS: "/workspace/weights", FV_SERVE_FORWARD: "1"} end))}
        end)
     + (if $auth == "" then {} else {containerRegistryAuthId: $auth} end)
-    + (if $mode == "create" then {isServerless: ($flavour == "sls"), category: (if $v == "gateway" then "CPU" else "NVIDIA" end)} else {} end)'
+    + (if $mode == "create" then {isServerless: ($flavour == "sls"), category: (if $v == "cpu" then "CPU" else "NVIDIA" end)} else {} end)'
 }
 
 sync_one() {

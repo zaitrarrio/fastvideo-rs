@@ -4,7 +4,7 @@ import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { deleteVar, listVars, MASK, resolvePlain, resolveView, setVar } from "../../src/envvars";
 import { validateDispatch } from "../../src/github";
-import { aeSeriesSql, parseProm } from "../../src/metrics";
+import { aeSeriesSql } from "../../src/metrics";
 import { clusterDrift } from "../../src/releases";
 import { defaultSpec } from "../../src/cluster/spec";
 import { rateLimit, scrub } from "../../src/util";
@@ -42,7 +42,7 @@ describe("env resolution: pod > cluster > account > system", () => {
     const rows = await listVars(env, "account", "");
     expect(rows.find((r) => r.key === "HF_TOKEN")!.value).not.toContain("hf_secret");
     await expect(setVar(env, "cluster", "c1", "FV_INTERNAL_TOKEN", "x", false, "t")).rejects.toThrow(/controller/);
-    await expect(setVar(env, "cluster", "c1", "FV_POOL_WAN_URLS", "x", false, "t")).rejects.toThrow(/controller/);
+    await expect(setVar(env, "cluster", "c1", "FV_DISPATCH_FAMILIES", "x", false, "t")).rejects.toThrow(/controller/);
     await expect(setVar(env, "cluster", "c1", "bad-key", "x", false, "t")).rejects.toThrow(/invalid/);
     await deleteVar(env, "pod", "p1", "RUST_LOG");
     expect((await resolvePlain(env, "c1", "p1", system)).RUST_LOG).toBe("info,fv=debug");
@@ -50,12 +50,6 @@ describe("env resolution: pod > cluster > account > system", () => {
 });
 
 describe("metrics", () => {
-  it("parses whitelisted Prometheus series only", () => {
-    const t = `# HELP fv_pool_queued x\n# TYPE fv_pool_queued gauge\nfv_pool_queued{pool="wan"} 3\nfv_pool_queued{pool="ltx",x="a\\"b"} 1\nfv_http_request_duration_seconds_bucket{le="1"} 5\nfv_ready 1\nfv_pool_running{pool="wan"} NaN\n`;
-    const s = parseProm(t);
-    expect(s.map((x) => x.name)).toEqual(["fv_pool_queued", "fv_pool_queued", "fv_ready"]);
-    expect(s[1]!.labels).toEqual({ pool: "ltx", x: 'a"b' });
-  });
   it("AE SQL never interpolates an unsafe pod id", () => {
     expect(aeSeriesSql(6, 5, "abc123")).toContain("blob2 = 'abc123'");
     expect(aeSeriesSql(6, 5, "x' OR 1=1 --")).not.toContain("OR 1=1");
@@ -100,8 +94,8 @@ describe("github and releases", () => {
   });
   it("drift against the channel head", () => {
     const spec = defaultSpec("x");
-    const c: any = { spec, state: { images: {}, gateway: { pod: "g", image: "r@sha256:g1" }, workers: { wan: [{ pod: "w", image: "r@sha256:w0" }] } } };
-    const heads: any = [{ channel: "stable", git_sha: "abcdef1234", digests: { gateway: "r@sha256:g1", wan5b: "r@sha256:w1" } }];
+    const c: any = { spec, state: { images: {}, workers: { wan: [{ pod: "w", image: "r@sha256:w0" }], "h3-turbo": [{ pod: "g", image: "r@sha256:g1" }] } } };
+    const heads: any = [{ channel: "stable", git_sha: "abcdef1234", digests: { "h3-turbo": "r@sha256:g1", wan5b: "r@sha256:w1" } }];
     const d = clusterDrift(c, heads);
     expect(d.drift).toBe(true);
     expect(d.pods.find((p) => p.pod === "w")).toMatchObject({ key: "wan5b", running: "sha256:w0", head: "sha256:w1", drift: true });

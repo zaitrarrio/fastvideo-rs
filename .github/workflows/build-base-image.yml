@@ -1,0 +1,143 @@
+# Builds the build pod's base image (docker/build-base.Dockerfile) and pushes it
+# to GHCR as ghcr.io/<owner>/fastvideo-rs-build-base:<content tag>, only when its
+# inputs change (scripts/dev/build-base-tag.sh) and no image has that tag yet.
+# Packages only: nothing of this repository compiles here. docs/dev/build-pod.md.
+name: build-base-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "docker/build-base.Dockerfile"
+      - "scripts/gpu/cuda-13.pins"
+      - "rust-toolchain.toml"
+      - "scripts/dev/build-base-tag.sh"
+      - "scripts/dev/build-pod.sh"
+      - "scripts/ci/check-build-base.sh"
+      - ".github/workflows/build-base-image.yml"
+      # They run in the image; the last step checks their pinned tag.
+      - ".github/workflows/serve-compat.yml"
+      - ".github/workflows/gpucheck-t0.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-base-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    outputs:
+      ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+      built: ${{ steps.exists.outputs.exists != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag
+        id: meta
+        run: |
+          tag="$(bash scripts/dev/build-base-tag.sh)"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-build-base"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "### build base image: \`$image:$tag\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Already built?
+        id: exists
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "image exists; nothing to build" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space
+        if: steps.exists.outputs.exists != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup
+          docker image prune -af >/dev/null
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.exists != 'true'
+
+      - name: Build and push
+        if: steps.exists.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/build-base.Dockerfile
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=fv-build pod base image (docs/dev/build-pod.md)
+
+      # The pod runs no setup: what it needs must be in the image.
+      - name: Smoke test
+        run: |
+          docker run --rm "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" bash -ec '
+            cat /etc/fastvideo/build-base.json
+            for t in cargo rustc rustfmt cargo-clippy sccache mold clang cmake pkg-config nvcc tileiras \
+                     python3 ffmpeg node npm jq zstd objdump readelf curl git; do command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }; done
+            rustup target list --installed | grep -qx wasm32-unknown-unknown
+            test -f "$CUDA_HOME/include/cuda.h" && test -f "$CUDA_HOME/include/curand.h" && test -e "$CUDA_HOME/lib64/libnvrtc.so"
+            ldconfig -p | grep -q "libclang[-.0-9]*\.so"
+            ffmpeg -hide_banner -encoders | grep -q " libvpx "
+            python3 -m venv /tmp/v
+            node -e "require(\"playwright\").chromium.launch().then(b => b.close())"
+            echo smoke ok'
+
+      - name: CI tool checks pass in the image
+        run: |
+          docker run --rm -v "$PWD/scripts/ci:/ci:ro" "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" \
+            bash /ci/check-build-base.sh browser cuda
+
+      # Last, so a fresh image is pushed before the pin is fixed in a follow-up commit.
+      - name: build-pod.sh and the workflows pin this tag
+        run: bash scripts/dev/build-base-tag.sh --check
+
+  # The media tests that need a working ffmpeg (VP8 / H.264 decode at low
+  # latency), inside a freshly built image: Ubuntu 22.04's ffmpeg 4.4.2 failed
+  # them (docker/build-base.Dockerfile, FFMPEG_VERSION). Only when the image
+  # was built in this run; ~2 min of compile.
+  media-tests:
+    needs: image
+    if: needs.image.outputs.built == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    container:
+      image: ${{ needs.image.outputs.ref }}
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg in the image
+        run: |
+          ffmpeg -hide_banner -version | head -1
+          bash scripts/ci/check-build-base.sh compat
+      - name: decode_pipe, ingest, duplex, ingest_whip
+        run: |
+          cargo test --no-fail-fast \
+            -p fastvideo-media --test decode_pipe \
+            -p fastvideo-webrtc --test ingest \
+            -p fastvideo-reactor --test duplex \
+            -p fastvideo-serve --test ingest_whip

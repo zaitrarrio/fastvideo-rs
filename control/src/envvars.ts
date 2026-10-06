@@ -1,7 +1,7 @@
 // Environment variables at four levels (docs/control/README.md "Env"):
 // account ("Runpod level", every controller cluster), cluster, pool (every
 // worker of one pool of one cluster: survives restarts, rolls and new pods
-// of a scale-up; never the gateway), pod.
+// of a scale-up), pod.
 // Resolution: pod > pool > cluster > account > system (the controller's own
 // keys, which the user layers may not set: RESERVED_KEYS). Secret values are
 // sealed in D1 and masked in every response.
@@ -74,7 +74,7 @@ async function plain(env: Env, r: VarRow): Promise<string> {
   return r.secret ? unseal(env.CONTROL_KEK, r.value, aad(r.scope, r.scope_id, r.key)) : r.value;
 }
 
-/** The user layers of one pod, lowest first (`pool`: a worker's pool; the gateway has none). */
+/** The user layers of one pod, lowest first (`pool`: a worker's pool). */
 async function layers(env: Env, clusterId: string, podId: string | null, pool?: string | null): Promise<{ scope: Scope; rows: VarRow[] }[]> {
   const out: { scope: Scope; rows: VarRow[] }[] = [
     { scope: "account", rows: await listVars(env, "account", "") },

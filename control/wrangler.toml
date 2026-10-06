@@ -1,6 +1,7 @@
 # fv-control: the cluster controller (docs/control/README.md).
 # Secrets (wrangler secret put, never here): RUNPOD_API_KEY,
 # CLOUDFLARE_API_KEY, GITHUB_PAT, CONTROL_KEK, SESSION_SECRET,
+# CLOUDRIFT_API_KEY (optional: the CloudRift provider, docs/ops/cloudrift.md),
 # OWNER_PASSPHRASE_HASH. Deploy: scripts/serve/fv-control.sh deploy staging.
 name = "fv-control"
 main = "src/index.ts"
@@ -81,6 +82,12 @@ migrations_dir = "migrations"
 binding = "JOBS_DB"
 database_name = "fv-jobs"
 database_id = "1796e295-a7f0-4402-bbed-ec94ccb27c15"
+
+# The staging edge (control_plane = edge clusters): a service binding, since a
+# Worker cannot fetch another workers.dev Worker of the account (error 1042).
+[[env.staging.services]]
+binding = "EDGE"
+service = "fv-edge-staging"
 
 [[env.staging.r2_buckets]]
 binding = "LOGS"

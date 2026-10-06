@@ -1,5 +1,13 @@
 # Family Durable Objects: one queue per model family, GPU hosts as clients
 
+> **Note (2026-10-06).** The fv-serve gateway described here as the API front
+> was removed (stage 4 of [edge-control-plane.md](edge-control-plane.md), §9, "Stage 4 as built"):
+> the edge Worker is the front and every family's workers are fronts behind it.
+> The gateway-side rows below (`src/gateway/{edge,proxy,tick}.rs`,
+> `scripts/serve/e2e/do-family-pod.sh`, `gateway_burst`) no longer exist; the
+> family DO, the worker sockets and `tests/edge_family.rs` (now driven by a
+> front worker) remain.
+
 Status: **design 2026-10-02; implemented 2026-10-02/05** behind the existing
 opt-in (`dispatch = "durable-object"` + `family`); the classic gateway path
 stays the default. Results: §14.

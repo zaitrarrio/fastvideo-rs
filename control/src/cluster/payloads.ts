@@ -1,7 +1,7 @@
-// Pod payloads and env of a cluster: a port of scripts/serve/runpod-cluster.sh
-// (create_gateway, create_worker, patch_gateway, GATEWAY_BOOT, WORKER_BOOT).
-import { GATEWAY_BASE_PODS } from "./gateway-base";
-import { REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
+// Pod payloads and env of a cluster's workers: edge fronts
+// (docs/serve/edge-control-plane.md §5.2) or direct workers
+// (docs/control/gateway-less-auth.md). (The gateway pod is retired.)
+import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -15,41 +15,8 @@ export const SECRET_ENV_REFS: Record<string, string> = {
   FV_WEBHOOK_ED25519_KEY: "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
 };
 
-// The gateway pod's start command, byte for byte the script's: the config
-// from the env, the watchdog (deadline + balance floor, deletes the workers
-// and itself with FV_BACKSTOP_API_KEY) in the background, fv-serve in front.
-export const GATEWAY_BOOT = `set -u
-mkdir -p /fvstate
-printf "%s" "$FV_GATEWAY_TOML_B64" | base64 -d > /fv-gateway.toml
-export FV_PUBLIC_BASE_URL="https://\${RUNPOD_POD_ID}-8000.proxy.runpod.net"
-(
-  command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
-  api=https://rest.runpod.io/v1
-  kill_all() {
-    echo "[watchdog] $1: deleting \${FV_CLUSTER_PODS:-} and \${RUNPOD_POD_ID}" >&2
-    for p in \${FV_CLUSTER_PODS:-} "$RUNPOD_POD_ID"; do
-      for _ in 1 2 3; do
-        curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "$api/pods/$p" >/dev/null && break
-        sleep 5
-      done
-    done
-  }
-  n=0
-  while :; do
-    if [ "$(date +%s)" -ge "$FV_CLUSTER_DEADLINE" ]; then kill_all deadline; sleep 60; continue; fi
-    if [ $((n % 2)) -eq 0 ]; then
-      b=$(curl -sS --max-time 20 -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" -H "content-type: application/json" \\
-        https://api.runpod.io/graphql -d "{\\"query\\":\\"{ myself { clientBalance } }\\"}" | sed -n "s/.*\\"clientBalance\\":\\([0-9.]*\\).*/\\1/p")
-      if [ -n "$b" ] && awk -v b="$b" -v m="$FV_MIN_BALANCE" "BEGIN{exit !(b+0 < m+0)}"; then kill_all "balance $b below $FV_MIN_BALANCE"; fi
-    fi
-    n=$((n + 1))
-    sleep 30
-  done
-) &
-exec /opt/fastvideo-rs/bin/fv-serve --config /fv-gateway.toml`;
-
-// A worker's start command: the script's, plus an inline config
-// (FV_WORKER_TOML_B64) instead of a file in the image when the pool has one.
+// A worker's start command (direct workers): the config from the image, or
+// inline (FV_WORKER_TOML_B64) when the pool has one.
 export const WORKER_BOOT = `set -u
 mkdir -p /fvstate
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
@@ -65,86 +32,47 @@ fi
 export FV_WORKER_ID="\${RUNPOD_POD_ID}"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
-/** The gateway config without the Reactor model and fal apps (gateway images older than them). */
-export const GATEWAY_BASE_MINIMAL = GATEWAY_BASE_PODS.replace(/^reactor_model = .*\n/m, "")
-  .replace(/^fal_director = true$/m, "fal_director = false")
-  .replace(/^reactor = true$/m, "reactor = false")
-  .replace(/^# Every worker config's fal apps[\s\S]*?(?=^fal_apps = )/m, "")
-  .replace(/^fal_apps = .*\n/m, "");
-
-/** Keys newer than released gateway images (release 1 = 2cd1ba0; serde
- * denies unknown fields). Their values in the base equal the gateway's
- * defaults, so leaving them out is behaviour-neutral on newer images. */
-const stripNewGatewayKeys = (t: string) =>
-  t.replace(/^(inline_inputs_max_bytes|input_passthrough|stage_inputs_for_retry) = .*\n/gm, "");
-
-const tomlStr = (s: string) => JSON.stringify(s);
-
-/** The body lines of `[section]` in a flat TOML text: [first, end) line indices, or null. */
-function sectionRange(lines: string[], section: string): [number, number] | null {
-  const head = lines.findIndex((l) => l.trim() === `[${section}]`);
-  if (head < 0) return null;
-  let end = head + 1;
-  while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end++;
-  while (end > head + 1 && lines[end - 1]!.trim() === "") end--; // keep the blank line before the next section
-  return [head + 1, end];
-}
-/** Sets (or, with null, removes) `key = value` in `[section]`; adds the section when it is missing. */
-export function tomlSet(text: string, section: string, key: string, value: string | null): string {
-  const lines = text.split("\n");
-  const r = sectionRange(lines, section);
-  if (!r) return value === null ? text : `${text.replace(/\n*$/, "\n")}\n[${section}]\n${key} = ${value}\n`;
-  const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`);
-  const i = lines.slice(r[0], r[1]).findIndex((l) => re.test(l));
-  if (i >= 0) {
-    if (value === null) lines.splice(r[0] + i, 1);
-    else lines[r[0] + i] = `${key} = ${value}`;
-  } else if (value !== null) lines.splice(r[1], 0, `${key} = ${value}`);
-  return lines.join("\n");
-}
-/** Replaces the body of `[section]` (adds the section when it is missing). */
-function tomlReplaceSection(text: string, section: string, body: string[]): string {
-  const lines = text.split("\n");
-  const r = sectionRange(lines, section);
-  if (!r) return `${text.replace(/\n*$/, "\n")}\n[${section}]\n${body.join("\n")}\n`;
-  lines.splice(r[0], r[1] - r[0], ...body);
-  return lines.join("\n");
-}
-
-/** The gateway's Reactor model: the spec's, else the base's (fasth3) when a pool serves it, else a pool's causal (SF-Wan / LongLive) model; undefined: leave the base as it is. */
-export function reactorModel(spec: ClusterSpec): string | null | undefined {
-  if (spec.gateway.reactor_model !== undefined) return spec.gateway.reactor_model;
-  if (spec.gateway.base === "minimal") return undefined;
-  const models = spec.pools.flatMap((p) => p.models || []);
-  if (models.some((m) => m.id === "fasth3")) return undefined;
-  return models.find((m) => m.family === "wan" && m.recipe === "sfwan21-1.3b")?.id;
-}
-
-/** The base with the spec's gateway overrides (fal apps, protocols, Reactor model, aliases). */
-export function gatewayBase(spec: ClusterSpec): string {
-  let t = stripNewGatewayKeys(spec.gateway.base === "minimal" ? GATEWAY_BASE_MINIMAL : GATEWAY_BASE_PODS);
-  const g = spec.gateway;
-  if (g.fal_apps) t = tomlSet(t, "protocols", "fal_apps", `[${g.fal_apps.map(tomlStr).join(", ")}]`);
-  for (const [k, v] of Object.entries(g.protocols || {})) if (typeof v === "boolean") t = tomlSet(t, "protocols", k, String(v));
-  const rm = reactorModel(spec);
-  if (rm !== undefined) t = tomlSet(t, "gateway", "reactor_model", rm === null ? null : tomlStr(rm));
-  if (g.aliases) t = tomlReplaceSection(t, "aliases", Object.entries(g.aliases).map(([a, m]) => `${tomlStr(a)} = ${tomlStr(m)}`));
-  return t;
-}
-
-export function gatewayToml(spec: ClusterSpec): string {
-  let t = gatewayBase(spec);
-  if (!t.endsWith("\n")) t += "\n";
-  for (const p of spec.pools) {
-    t += `\n[[pools]]\nid = ${tomlStr(p.id)}\nkind = "pod"\nurls = []\nmax_queued = ${p.max_queued ?? 32}\ndispatch_timeout_s = 30\njob_timeout_s = ${p.job_timeout_s ?? 1800}\nstale_after_s = ${p.stale_after_s ?? 120}\nretries = 1\n`;
-    if (p.fake_models?.length) t += `fake_models = [${p.fake_models.map(tomlStr).join(", ")}]\n`;
-    for (const m of p.models || []) t += `[[pools.models]]\nid = ${tomlStr(m.id)}\nfamily = ${tomlStr(m.family)}\nrecipe = ${tomlStr(m.recipe)}\n`;
+// An edge front's start command (control_plane = edge,
+// docs/serve/edge-control-plane.md §5.2): the worker's, plus its own
+// endpoint (where the edge forwards) and its own backstop: at the cluster
+// deadline or below the balance floor it deletes itself (fv-control's cron
+// enforces the deadline too).
+export const EDGE_WORKER_BOOT = `set -u
+mkdir -p /fvstate
+if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
+  printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml
+else
+  cp "$FV_WORKER_CONFIG" /fv-worker.toml
+fi
+if grep -q "^\\[gateway\\]" /fv-worker.toml; then
+  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
+else
+  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
+fi
+export FV_WORKER_ID="\${RUNPOD_POD_ID}"
+export FV_DISPATCH_ENDPOINT="https://\${RUNPOD_POD_ID}-8000.proxy.runpod.net"
+(
+  command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
+  bye() {
+    echo "[watchdog] $1: deleting \${RUNPOD_POD_ID}" >&2
+    for _ in 1 2 3; do
+      curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >/dev/null && break
+      sleep 5
+    done
   }
-  t += "\n[autoscale]\nenabled = false\n";
-  return t;
-}
-
-export const poolUrlsKey = (pool: string) => `FV_POOL_${pool.toUpperCase().replace(/-/g, "_")}_URLS`;
+  n=0
+  while :; do
+    if [ "$(date +%s)" -ge "$FV_CLUSTER_DEADLINE" ]; then bye deadline; sleep 60; continue; fi
+    if [ $((n % 2)) -eq 0 ]; then
+      b=$(curl -sS --max-time 20 -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" -H "content-type: application/json" \\
+        https://api.runpod.io/graphql -d "{\\"query\\":\\"{ myself { clientBalance } }\\"}" | sed -n "s/.*\\"clientBalance\\":\\([0-9.]*\\).*/\\1/p")
+      if [ -n "$b" ] && awk -v b="$b" -v m="$FV_MIN_BALANCE" "BEGIN{exit !(b+0 < m+0)}"; then bye "balance $b below $FV_MIN_BALANCE"; fi
+    fi
+    n=$((n + 1))
+    sleep 30
+  done
+) &
+exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
 /** FV_IMAGE_REF / FV_IMAGE_DIGEST / FV_RELEASE_CHANNEL (fv_image_env_json). */
 export function imageIdentEnv(image: string, channel?: string): Record<string, string> {
@@ -166,8 +94,9 @@ export interface PodRec {
   url?: string;
 }
 export interface ClusterState {
-  image?: string; // the all-in-one image (script) when there is one
-  images: Record<string, string>; // gateway + per pool
+  image?: string; // the all-in-one image when there is one
+  images: Record<string, string>; // per pool
+  /** A gateway pod of a state from before the gateway was retired: it is only ever deleted. */
   gateway?: PodRec;
   gateway_url?: string;
   gateway_stopped?: boolean;
@@ -178,10 +107,10 @@ export interface ClusterState {
 export interface ClusterSecrets {
   internal_token: string;
   url_signing_key: string;
-  admin_recipient?: string; // X25519 public (raw, b64)
-  admin_private?: string; // X25519 private (pkcs8, b64)
-  admin_token?: string; // opened from the gateway, a legacy FV_ADMIN_TOKEN, or the gateway-less workers' FV_ADMIN_TOKEN (made by the controller)
-  legacy_admin_token?: boolean; // imported state that passes FV_ADMIN_TOKEN itself
+  admin_recipient?: string; // legacy (the retired gateway's sealed admin token): unused
+  admin_private?: string; // legacy: unused
+  admin_token?: string; // direct workers' FV_ADMIN_TOKEN (made by the controller)
+  legacy_admin_token?: boolean; // legacy (imported runpod-cluster.sh state): unused
   ingest_token?: string;
   smoke_api_key?: string;
 }
@@ -192,11 +121,9 @@ export const RESERVED_KEYS = new Set([
   "FV_URL_SIGNING_KEY",
   "FV_BACKSTOP_API_KEY",
   "FV_CLUSTER_DEADLINE",
-  "FV_CLUSTER_PODS",
   "FV_MIN_BALANCE",
   "FV_ADMIN_TOKEN",
   "FV_ADMIN_TOKEN_RECIPIENT",
-  "FV_GATEWAY_TOML_B64",
   "FV_WORKER_TOML_B64",
   "FV_WORKER_CONFIG",
   "FV_WORKER_DIRECT",
@@ -204,21 +131,35 @@ export const RESERVED_KEYS = new Set([
   "FV_PUBLIC_BASE_URL",
   "FV_LOG_SHIP_URL",
   "FV_LOG_SHIP_TOKEN",
-  "FV_GITHUB_TOKEN",
   "FV_IMAGE_REF",
   "FV_IMAGE_DIGEST",
+  "FV_DISPATCH_FRONT",
+  "FV_DISPATCH_DO_URL",
+  "FV_DISPATCH_FAMILIES",
+  "FV_DISPATCH_MODEL_FAMILIES",
+  "FV_DISPATCH_ENDPOINT",
+  "FV_DISPATCH_DIRECT_UPLOAD",
 ]);
-export const isReserved = (k: string) => RESERVED_KEYS.has(k) || /^FV_POOL_[A-Z0-9_]+_URLS$/.test(k);
+export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 /** System env keys whose values are secret (masked in every view). */
-export const SECRET_SYSTEM_KEYS = new Set(["FV_INTERNAL_TOKEN", "FV_URL_SIGNING_KEY", "FV_BACKSTOP_API_KEY", "FV_ADMIN_TOKEN", "FV_LOG_SHIP_TOKEN", "FV_GITHUB_TOKEN"]);
+export const SECRET_SYSTEM_KEYS = new Set(["FV_INTERNAL_TOKEN", "FV_URL_SIGNING_KEY", "FV_BACKSTOP_API_KEY", "FV_ADMIN_TOKEN", "FV_LOG_SHIP_TOKEN"]);
 
+/** The edge Worker a control_plane = edge cluster fronts through (fv-control's EDGE_* settings). */
+export interface EdgeCfg {
+  url: string;
+  internal_token: string;
+  admin_token: string;
+  d1_database_id?: string;
+  /** The edge's outputs bucket: direct uploads land there and the workers presign result URLs for it. */
+  outputs_bucket?: string;
+}
 export interface EnvCtx {
+  edge?: EdgeCfg;
   spec: ClusterSpec;
   state: ClusterState;
   secrets: ClusterSecrets;
   deadlineMs: number;
   runpodApiKey: string;
-  githubPat?: string;
   ingestUrl?: string;
 }
 
@@ -234,49 +175,39 @@ function logShipEnv(ctx: EnvCtx): Record<string, string> {
   return { FV_LOG_SHIP_URL: ctx.ingestUrl, FV_LOG_SHIP_TOKEN: ctx.secrets.ingest_token, FV_LOG_SHIP_LEVEL: ctx.spec.log_level || "info" };
 }
 
-/** Every pod the gateway watchdog deletes besides itself (FV_CLUSTER_PODS). */
-export function workerPodIds(state: ClusterState): string[] {
-  const out: string[] = [];
-  for (const l of Object.values(state.workers || {})) for (const r of l) out.push(r.pod);
-  for (const l of Object.values(state.rolling || {})) for (const r of l) out.push(r.pod);
-  for (const r of state.retired || []) out.push(r.pod);
-  return out;
+/** Workers serve clients themselves (control_plane "direct", docs/control/gateway-less-auth.md). */
+export function isDirect(spec: ClusterSpec, _state?: ClusterState): boolean {
+  return !isEdge(spec);
 }
 
-/** The gateway's system env (create_gateway + patch_gateway). */
-export function gatewaySystemEnv(ctx: EnvCtx, image: string): Record<string, string> {
-  const { spec, state, secrets } = ctx;
+/** An edge front's env (docs/serve/edge-control-plane.md §5.2): the edge's
+ * internal token, its family objects, results through the edge to R2, the
+ * edge's D1 (keys, jobs) instead of the account's job store, no R2
+ * credentials, and the backstop of EDGE_WORKER_BOOT. */
+function edgeEnv(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
+  if (!isEdge(ctx.spec)) return {};
+  const edge = ctx.edge;
+  if (!edge) throw new Error("control_plane = edge needs fv-control's EDGE_URL, EDGE_INTERNAL_TOKEN and EDGE_ADMIN_TOKEN");
+  const fams = poolModelFamilies(pool);
   const e: Record<string, string> = {
-    ...SECRET_ENV_REFS,
-    ...imageIdentEnv(image, spec.image.channel),
-    FV_SERVE_MODE: "http",
-    FV_STATE_DIR: "/fvstate",
-    FV_AUTH_MODE: spec.gateway.auth,
-    FV_INTERNAL_TOKEN: secrets.internal_token,
-    FV_URL_SIGNING_KEY: secrets.url_signing_key,
-    FV_GATEWAY_TOML_B64: b64utf8(gatewayToml(spec)),
+    FV_AUTH_MODE: "trust-edge",
+    FV_INTERNAL_TOKEN: edge.internal_token,
+    FV_PUBLIC_BASE_URL: edge.url,
+    FV_DISPATCH_FRONT: "1",
+    FV_DISPATCH_DO_URL: edge.url,
+    FV_DISPATCH_FAMILIES: [...new Set(Object.values(fams))].sort().join(","),
+    FV_DISPATCH_MODEL_FAMILIES: Object.entries(fams)
+      .map(([m, f]) => `${m}=${f}`)
+      .join(","),
+    FV_DISPATCH_DIRECT_UPLOAD: "1",
+    FV_MP4_FRAGMENTED: "1",
     FV_CLUSTER_DEADLINE: String(Math.floor(ctx.deadlineMs / 1000)),
-    FV_MIN_BALANCE: String(spec.min_balance),
+    FV_MIN_BALANCE: String(ctx.spec.min_balance),
     FV_BACKSTOP_API_KEY: ctx.runpodApiKey,
-    FV_CLUSTER_PODS: workerPodIds(state).join(" "),
-    RUST_LOG: "info",
   };
-  if (secrets.admin_recipient && !secrets.legacy_admin_token) e.FV_ADMIN_TOKEN_RECIPIENT = secrets.admin_recipient;
-  else if (secrets.admin_token) e.FV_ADMIN_TOKEN = secrets.admin_token;
-  if (spec.gateway.github_token && ctx.githubPat) e.FV_GITHUB_TOKEN = ctx.githubPat;
-  const pools = new Set([...Object.keys(state.workers || {}), ...Object.keys(state.rolling || {})]);
-  for (const p of [...pools].sort()) {
-    const urls = [...(state.workers?.[p] || []), ...(state.rolling?.[p] || [])].map((r) => r.url).filter(Boolean);
-    if (urls.length) e[poolUrlsKey(p)] = urls.join(",");
-  }
-  return { ...e, ...logShipEnv(ctx) };
-}
-
-/** Workers serve clients themselves: the spec has no gateway and none runs
- * (docs/control/gateway-less-auth.md). A gateway started later (gateway/start)
- * makes them gateway workers again on their next env apply. */
-export function isDirect(spec: ClusterSpec, state: ClusterState): boolean {
-  return !spec.gateway.enabled && !state.gateway;
+  if (pool.max_queued !== undefined) e.FV_DISPATCH_MAX_QUEUED = String(pool.max_queued);
+  if (edge.d1_database_id) e.FV_D1_DATABASE_ID = edge.d1_database_id;
+  return e;
 }
 
 /** A direct worker's client auth: the spec's auth mode, the cluster's admin
@@ -284,7 +215,7 @@ export function isDirect(spec: ClusterSpec, state: ClusterState): boolean {
  * pods included, sees the same keys). */
 function directEnv(ctx: EnvCtx): Record<string, string> {
   if (!isDirect(ctx.spec, ctx.state)) return {};
-  const e: Record<string, string> = { FV_WORKER_DIRECT: "1", FV_AUTH_MODE: ctx.spec.gateway.auth, FV_KEY_STORE: "d1" };
+  const e: Record<string, string> = { FV_WORKER_DIRECT: "1", FV_AUTH_MODE: ctx.spec.auth, FV_KEY_STORE: "d1" };
   if (ctx.secrets.admin_token) e.FV_ADMIN_TOKEN = ctx.secrets.admin_token;
   return e;
 }
@@ -297,7 +228,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     FV_SERVE_ROLE: "worker",
     FV_INTERNAL_TOKEN: ctx.secrets.internal_token,
     FV_URL_SIGNING_KEY: ctx.secrets.url_signing_key,
-    FV_PUBLIC_BASE_URL: ctx.state.gateway_url || "",
+    FV_PUBLIC_BASE_URL: "",
     FV_WORKER_CONFIG: pool.config || "/fv-worker.toml",
     FV_STATE_DIR: "/fvstate",
     FV_WEIGHTS: "/workspace/weights",
@@ -305,23 +236,16 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  return { ...e, ...directEnv(ctx), ...logShipEnv(ctx) };
-}
-
-export function gatewayCreatePayload(name: string, image: string, flavor: string, vcpu: number, diskGb: number, dcs: string[] | null, env: Record<string, string>) {
-  return {
-    name,
-    imageName: image,
-    computeType: "CPU",
-    cpuFlavorIds: [flavor],
-    vcpuCount: vcpu,
-    containerDiskInGb: diskGb,
-    ports: ["8000/http"],
-    dockerEntrypoint: ["bash", "-c"],
-    dockerStartCmd: [GATEWAY_BOOT],
-    env,
-    ...(dcs ? { dataCenterIds: dcs } : {}),
-  };
+  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx) };
+  // Edge fronts never use the account's (production) bucket: they upload
+  // results through the edge into its outputs bucket and presign their URLs
+  // there (the account's R2 credentials, the edge's bucket); without that
+  // bucket they get no R2 at all.
+  if (isEdge(ctx.spec)) {
+    if (ctx.edge?.outputs_bucket) out.FV_R2_BUCKET = ctx.edge.outputs_bucket;
+    else for (const k of Object.keys(out)) if (k.startsWith("FV_R2_")) delete out[k];
+  }
+  return out;
 }
 
 /** One placement attempt of a worker (a GPU type in a region, or a CPU flavor). */
@@ -346,7 +270,7 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
   return out;
 }
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
-  const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [WORKER_BOOT], env };
+  const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [env.FV_DISPATCH_FRONT === "1" ? EDGE_WORKER_BOOT : WORKER_BOOT], env };
   if (pool.compute === "CPU") {
     return {
       ...common,
