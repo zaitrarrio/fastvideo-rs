@@ -31,6 +31,11 @@ use tower::ServiceExt;
 
 const KEY: &str = "sk-ingest";
 
+/// How long something that must happen may take before the test fails:
+/// a hang limit, not a budget. The echo's encoders are ffmpeg processes,
+/// which start in seconds on a loaded host (the shared build pod).
+const T: Duration = Duration::from_secs(60);
+
 async fn app() -> App {
     let dir = tempfile::Builder::new().prefix("fv-serve-ingest-").tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
@@ -115,7 +120,8 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
 
     let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
     let (pending, sdp) = offer(&host).await;
-    let url = "/fv/v1/streams/ingest?model=fv-echo&scene=a%20desk&max_seconds=60";
+    // The session limit stays well above the hang limit of the camera loop.
+    let url = "/fv/v1/streams/ingest?model=fv-echo&scene=a%20desk&max_seconds=240";
     // Refusals: no key, not SDP, not a duplex model.
     assert_eq!(req(r, "POST", url, Some("application/sdp"), sdp.clone(), false).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(req(r, "POST", url, Some("application/json"), sdp.clone(), true).await.0, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -140,14 +146,16 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
     let (mut video, mut audio) = (Vec::new(), 0usize);
     let t0 = Instant::now();
     loop {
-        match tokio::time::timeout(Duration::from_secs(10), peer.next_event()).await.expect("connect") {
+        match tokio::time::timeout(T, peer.next_event()).await.expect("connect") {
             Some(PeerEvent::Connected) => break,
             Some(PeerEvent::Closed(r)) => panic!("{r:?}"),
-            _ => assert!(t0.elapsed() < Duration::from_secs(10)),
+            _ => assert!(t0.elapsed() < T, "connect timeout"),
         }
     }
     // The camera: blue VP8, pre-encoded, sent in real time until the echo
-    // has shown 30 input frames.
+    // has shown 30 input frames and sent 30 back (polled once per loop of
+    // the 61-frame clip; on a loaded host the encoders' ffmpeg starts late,
+    // so only the hang limit bounds it).
     let mut enc = Vp8Encoder::new(Vp8Config::new(320, 240, 30)).unwrap();
     let mut frames = Vec::new();
     for i in 0..60u64 {
@@ -157,7 +165,7 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
     let mut k = 0u64;
     let start = Instant::now();
     let mut status = Value::Null;
-    for _ in 0..8 {
+    loop {
         for f in &frames {
             peer.send_video(VideoFrame::new(f.data.clone(), k * 3000)).unwrap();
             k += 1;
@@ -165,20 +173,20 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
             pump(&mut peer, &mut video, &mut audio, next.saturating_duration_since(Instant::now())).await;
         }
         status = json_req(r, "GET", &loc, None).await.1;
-        // Enough input shown, and enough output back (on a loaded host the
-        // encoders' ffmpeg starts late).
         if status["session"]["input_frames"].as_u64().unwrap_or(0) >= 30
             && status["output"]["frames_sent"].as_u64().unwrap_or(0) > 30
             && audio > 30
+            && video.len() > 30
         {
             break;
         }
+        assert!(start.elapsed() < T, "the echo never caught up: {} video, {audio} audio received; {status}", video.len());
     }
     pump(&mut peer, &mut video, &mut audio, Duration::from_millis(500)).await;
     eprintln!("sent {k}; status {status}");
     assert_eq!(status["state"], "streaming", "{status}");
     assert_eq!(status["model"], "fv-echo");
-    assert_eq!(status["max_seconds"], 60);
+    assert_eq!(status["max_seconds"], 240);
     assert_eq!(status["session"]["context"]["scene"], "a desk");
     assert!(status["session"]["input_frames"].as_u64().unwrap() >= 30, "{status}");
     assert_eq!(status["ingest"]["codec"], "vp8");
@@ -227,7 +235,7 @@ async fn whip_ingest_round_trips_the_camera_through_the_echo() {
             break;
         }
         assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-        assert!(t0.elapsed() < Duration::from_secs(10), "the echo was not released");
+        assert!(t0.elapsed() < T, "the echo was not released");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
