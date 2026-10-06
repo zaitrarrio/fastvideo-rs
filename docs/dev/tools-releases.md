@@ -100,8 +100,13 @@ already drives the build pod and holds the token; the pod never sees it.
    draft, so a half-uploaded set is never visible.
 5. **Verify**: download every set as a consumer would and check every sha256.
 6. **Prune** (below), and with `--dispatch` start serve-image,
-   gpucheck-runtime-image and vast-pytorch-image on main (needs
-   `actions:write`), so main's images pick up the release right away.
+   gpucheck-runtime-image and vast-pytorch-image (with `tools_version` =
+   the new version) on main (needs `actions:write`), so the images pick up
+   the release right away. Releases created with a workflow's
+   `GITHUB_TOKEN` fire no `release` event for other workflows, so every
+   publisher (this script, and any future publish workflow) must dispatch
+   explicitly; vast-pytorch-image also listens to `release: published`
+   (`tools-v*` only) for releases created with a PAT or from a runner.
 
 **Token**: `~/.config/fv/github_token` (mode 600) in the coordinator
 container, or `FV_GITHUB_TOKEN_FILE`; it needs `contents:write` on this
@@ -119,15 +124,28 @@ The workflows only read, with their own `GITHUB_TOKEN`.
    rollbacks, image workflows only;
 2. else the release built from **exactly this commit's tools inputs**;
 3. else (the commit changed the tools since the last release):
-   - image workflows **on main** (serve-image, gpucheck-runtime-image,
-     vast-pytorch-image): the **highest SemVer** release, with a warning;
-     the image carries `dev.fastvideo.tools=<tag>`, and gpucheck/vast images
+   - image workflows **on main** (serve-image, gpucheck-runtime-image):
+     the **highest SemVer** release, with a warning;
+     the image carries `dev.fastvideo.tools=<tag>`, and gpucheck images
      use the release's build id for `:build-<id>` and the binary's
      `.build-id`, so validate.sh never mistakes it for this commit's binary;
    - test workflows (gpucheck-t0, serve-compat) and image workflows on
      branches, which must run their own code: **compile on the runner** as
      before (with a warning), unless a prerelease for exactly these inputs
      exists (`publish --prerelease <branch head>` from the coordinator).
+
+**vast-pytorch-image is different (owner decision 2026-10-06):** it always
+ships the **newest** tools release (`FV_PREBUILT_SELECT=newest`: highest
+SemVer `tools-v*`, even when an older release matches the commit), or the
+`tools_version` dispatch input / `FV_TOOLS_VERSION` pin, sha256-checked, and
+**never compiles**: with no usable release the job fails with
+`::error title=Prebuilt tools::no usable tools release …`
+(`FV_PREBUILT_REQUIRE=1`). It runs when `docker/vast-pytorch.Dockerfile`
+changes, by hand (`workflow_dispatch`, optional `tools_version`), and for
+every new tools release (dispatch from the publisher, or the `release`
+event). Tags: `:build-<release build id>`, `:tools-v<X.Y.Z>`,
+`:sha-<commit>` and `:latest` (main or a release); labels
+`dev.fastvideo.tools` and `dev.fastvideo.tools-commit`.
 
 **Trade-off** (chosen for simplicity): main never waits for the pod and never
 compiles, but between a tools change landing and its release, main's images

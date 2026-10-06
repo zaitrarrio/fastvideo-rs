@@ -30,6 +30,13 @@ check "exact input hash" "tools-v0.1.9 true" "$(bash "$T" resolve --input-hash a
 check "exact match may be a prerelease" tools-v0.1.11-pre.abc "$(bash "$T" resolve --input-hash bbb | jq -r .tag)"
 check "no exact match: newest, not exact" "tools-v0.1.10 false" "$(bash "$T" resolve --input-hash zzz | jq -r '"\(.tag) \(.exact)"')"
 check "--exact without a match fails" 1 "$(bash "$T" resolve --input-hash zzz --exact 2>/dev/null >/dev/null; echo $?)"
+check "--newest ignores an older exact match" "tools-v0.1.10 false" "$(bash "$T" resolve --input-hash aaa9 --newest | jq -r '"\(.tag) \(.exact)"')"
+check "--newest on the newest's inputs is exact" "tools-v0.1.10 true" "$(bash "$T" resolve --input-hash aaa10 --newest | jq -r '"\(.tag) \(.exact)"')"
+echo '[]' >"$tmp/none.json"
+check "vast mode (newest + require) without a release fails the job" 1 "$(
+  FV_TOOLS_RELEASES_FILE="$tmp/none.json" FV_PREBUILT_SELECT=newest FV_PREBUILT_REQUIRE=1 GITHUB_OUTPUT="$tmp/out" \
+    bash "$HERE/prebuilt.sh" fetch gpucheck-vast hf-fm >"$tmp/req.log" 2>&1; echo $?)"
+grep -q "::error title=Prebuilt tools::no usable tools release" "$tmp/req.log" && echo "ok   (clear ::error)" || { echo "FAIL require message"; cat "$tmp/req.log"; fail=1; }
 check "pin" tools-v0.1.2 "$(bash "$T" resolve --version v0.1.2 | jq -r .tag)"
 check "list order" "0.2.0 0.1.11-pre.abc 0.1.10 0.1.10-pre.old 0.1.9 0.1.2" "$(bash "$T" list | cut -f1 | paste -sd' ')"
 check "prune keeps N stable, drops released prereleases, never other tags" \

@@ -13,6 +13,8 @@
 #         1. FV_TOOLS_VERSION (repository variable, a rollback pin; image
 #            workflows only): that release, whatever its inputs;
 #         2. the release built from exactly HEAD's tools inputs (input hash);
+#         With FV_PREBUILT_SELECT=newest (vast-pytorch-image: it always ships
+#         the newest tools), 2 is skipped: the highest SemVer release, always.
 #         3. none matches (HEAD changed crates/, Cargo.lock, ... since the last
 #            release): FV_PREBUILT_STALE=latest uses the highest SemVer release
 #            anyway, with a warning, and the image is labelled with it (the
@@ -32,8 +34,9 @@
 # Env: GH_TOKEN / GITHUB_TOKEN (read access; anonymous works for a public
 # repository); FV_PREBUILT_DIR (default $RUNNER_TEMP/prebuilt);
 # FV_PREBUILT_FEATURES ("set=features …", e.g. "serve-cuda=cuda,http-client");
-# FV_PREBUILT_STALE; FV_TOOLS_VERSION; FV_PREBUILT_DISABLE=1 (always compile);
-# FV_PREBUILT_REQUIRE=1.
+# FV_PREBUILT_STALE; FV_PREBUILT_SELECT (exact | newest); FV_TOOLS_VERSION;
+# FV_PREBUILT_DISABLE=1 (always compile); FV_PREBUILT_REQUIRE=1 (no fallback:
+# fail the job).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -63,11 +66,15 @@ cmd_fetch() {
   local dir="${FV_PREBUILT_DIR:-${RUNNER_TEMP:-/tmp}/prebuilt}" h rel tag exact m
   h="$(bash "$TR" input-hash HEAD)"
   local args=(--input-hash "$h")
+  [[ "${FV_PREBUILT_SELECT:-exact}" == newest ]] && args+=(--newest)
   [[ -n "${FV_TOOLS_VERSION:-}" ]] && args=(--version "${FV_TOOLS_VERSION#v}" --input-hash "$h")
-  rel="$(bash "$TR" resolve "${args[@]}")" || fallback "no usable tools release (${FV_TOOLS_VERSION:+pin $FV_TOOLS_VERSION, }input hash ${h:0:16})"
+  rel="$(bash "$TR" resolve "${args[@]}")" \
+    || fallback "no usable tools release in ${GITHUB_REPOSITORY:-the repository} (${FV_TOOLS_VERSION:+pin $FV_TOOLS_VERSION, }input hash ${h:0:16}): publish one with scripts/ci/tools-release.sh publish (docs/dev/tools-releases.md)"
   tag="$(jq -r .tag <<<"$rel")"; exact="$(jq -r .exact <<<"$rel")"
   if [[ "$exact" != true ]]; then
-    if [[ -n "${FV_TOOLS_VERSION:-}" ]]; then
+    if [[ "${FV_PREBUILT_SELECT:-exact}" == newest && -z "${FV_TOOLS_VERSION:-}" ]]; then
+      echo "::notice title=Newest tools release::$tag (built from $(jq -r '.source_commit[0:12]' <<<"$rel"))"
+    elif [[ -n "${FV_TOOLS_VERSION:-}" ]]; then
       echo "::notice title=Tools pinned::FV_TOOLS_VERSION=$FV_TOOLS_VERSION: using $tag (built from $(jq -r '.source_commit[0:12]' <<<"$rel")), not this commit's tools sources"
     elif [[ "${FV_PREBUILT_STALE:-compile}" == latest ]]; then
       echo "::warning title=Tools release is older than this commit::this commit's tools inputs (input hash ${h:0:16}) have no release yet; the image uses the newest one, $tag (built from $(jq -r '.source_commit[0:12]' <<<"$rel")), and is labelled with it. Publish one: scripts/ci/tools-release.sh publish <sha>."

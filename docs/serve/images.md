@@ -125,7 +125,7 @@ Each workflow then:
 |---|---|---|
 | serve-image | `oxide gpucheck hf-fm serve-cuda serve-gateway` | every stage with `cargo` / `nvcc` / `tileiras` (debug + 7 variants) |
 | gpucheck-runtime-image | `oxide gpucheck hf-fm` | builder, oxide, build, hf-fm |
-| vast-pytorch-image | `gpucheck-vast hf-fm` | builder, build, hf-fm |
+| vast-pytorch-image | `gpucheck-vast hf-fm`, always from the **newest** tools release (or the pin); no release: the job fails, it never compiles | builder, build, hf-fm |
 | serve-compat (`build` job) | `serve-fake` | the debug `fake,full` fv-serve (toolchain + rust-cache skipped) |
 | gpucheck-t0 | `gpucheck-tests gpucheck` | `cargo test` (runs the pod's test binaries), the CUDA type-check (covered by the release `--features cuda` build), the nvrtc job's release build (runs the prebuilt `fv-gpucheck nvrtc`) |
 | upstream-images, release | none | nothing compiled before either (upstream copies fv-gpucheck from the runtime image; release retags) |

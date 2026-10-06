@@ -3,10 +3,29 @@
 # The oracle flavor (transformers/diffusers) is not published; build it locally
 # with `scripts/gpu/docker.sh vast-oracle` if a parity tier needs it.
 # See scripts/gpu/README.md and docker/vast-pytorch.Dockerfile.
+#
+# Binaries (owner decision 2026-10-06): always the NEWEST tools release
+# (highest SemVer `tools-v*`, docs/dev/tools-releases.md): fv-gpucheck as
+# this Dockerfile builds it (set gpucheck-vast) and hf-fm, sha256-checked,
+# or the version pinned by the dispatch input / repository variable
+# FV_TOOLS_VERSION. Nothing compiles here: without a release the job fails.
+# Runs on a Dockerfile change, by hand, and for every new tools release:
+# `tools-release.sh publish --dispatch` dispatches it (releases created with a
+# GITHUB_TOKEN fire no `release` event for other workflows), and the
+# `release` trigger covers releases published with a PAT or from a runner.
+# Tags: :build-<release build id>, :tools-v<X.Y.Z>, :sha-<commit>, and
+# :latest from main or a release.
 name: vast-pytorch-image
 
 on:
   workflow_dispatch:
+    inputs:
+      tools_version:
+        description: "tools release to use (e.g. 0.1.3); empty: the newest (or vars.FV_TOOLS_VERSION)"
+        required: false
+        default: ""
+  release:
+    types: [published]
   push:
     branches: ["**"]
     # Only when the image's own Dockerfile changes: the slowest image (10-30 min)
@@ -20,12 +39,15 @@ permissions:
   contents: read
   packages: write
 
+# Release-triggered runs share main's group (both move :latest).
 concurrency:
-  group: vast-pytorch-image-${{ github.ref }}
+  group: vast-pytorch-image-${{ github.event_name == 'release' && 'refs/heads/main' || github.ref }}
   cancel-in-progress: true
 
 jobs:
   image:
+    # Only tools releases (tags tools-v*), never other releases.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'tools-v')
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     strategy:
@@ -38,32 +60,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build id and image name
+      - name: Image name
         id: meta
         run: |
-          echo "build_id=$(bash scripts/gpu/docker.sh build-id)" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       # fv-gpucheck as this Dockerfile builds it (no nvcc there: NVRTC at run
-      # time) and hf-fm, from a tools release (docs/dev/tools-releases.md);
-      # fallback: in-image compile.
-      - name: Prebuilt tools (GitHub release)
+      # time) and hf-fm from the newest tools release, or the pinned one;
+      # no release: the job fails (never an in-image compile).
+      - name: Tools release (newest, sha256-checked)
         id: pre
         env:
           GH_TOKEN: ${{ github.token }}
-          # A rollback pin (e.g. 0.1.3); empty: this commit's release, else the newest.
-          FV_TOOLS_VERSION: ${{ vars.FV_TOOLS_VERSION }}
-          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
-          # main: the newest release when this commit's tools have none yet
-          # (labelled); branches build their own code (compile fallback).
-          FV_PREBUILT_STALE: ${{ github.ref == 'refs/heads/main' && 'latest' || 'compile' }}
+          FV_TOOLS_VERSION: ${{ github.event.inputs.tools_version || vars.FV_TOOLS_VERSION }}
+          FV_PREBUILT_SELECT: newest
+          FV_PREBUILT_REQUIRE: "1"
         run: bash scripts/ci/prebuilt.sh fetch gpucheck-vast hf-fm
 
-      # The binary's build id: the release's when prebuilt (see gpucheck-runtime-image.yml).
+      # The binary's build id is the release's (it names the binary inside,
+      # which validate.sh matches against sources).
       - name: Binary build id
         id: bin
-        run: echo "build_id=${{ steps.pre.outputs.build_id || steps.meta.outputs.build_id }}" >> "$GITHUB_OUTPUT"
+        run: echo "build_id=${{ steps.pre.outputs.build_id }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -87,12 +106,14 @@ jobs:
             VAST_PYTORCH_IMAGE=vastai/pytorch:cuda-13.0.3-auto
           tags: |
             ${{ steps.meta.outputs.image }}:build-${{ steps.bin.outputs.build_id }}
+            ${{ steps.meta.outputs.image }}:${{ steps.pre.outputs.tag }}
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
-            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.meta.outputs.image) || '' }}
+            ${{ (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}:latest', steps.meta.outputs.image) || '' }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             dev.fastvideo.build-id=${{ steps.bin.outputs.build_id }}
-            dev.fastvideo.tools=${{ steps.pre.outputs.tag || 'compiled' }}
+            dev.fastvideo.tools=${{ steps.pre.outputs.tag }}
+            dev.fastvideo.tools-commit=${{ steps.pre.outputs.source_commit }}
             dev.fastvideo.flavor=${{ matrix.flavor }}
           cache-from: type=gha,scope=vast-pytorch-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=vast-pytorch-${{ matrix.target }}
@@ -104,9 +125,10 @@ jobs:
           docker run --rm --entrypoint bash "$img" -euo pipefail -c '
             test "$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id)" = "${{ steps.bin.outputs.build_id }}"
             test -x /opt/fastvideo-rs/target/release/fv-gpucheck
+            /opt/fastvideo-rs/target/release/fv-gpucheck -V || true   # tools releases from 0.1.1 report the version
             test -x /venv/main/bin/python
             /venv/main/bin/python -c "import torch; print(torch.__version__)"
             ldconfig -p | grep -E "libnvrtc|libcublas|libcudnn" >/dev/null
           '
           docker image inspect "$img" --format 'size={{.Size}}'
-          echo "::notice title=Vast ${{ matrix.flavor }} image::$img"
+          echo "::notice title=Vast ${{ matrix.flavor }} image::$img (tools ${{ steps.pre.outputs.tag }})"

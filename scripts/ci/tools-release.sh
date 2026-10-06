@@ -12,7 +12,7 @@
 #                                         whether rev needs a release / a bump
 #   tools-release.sh list                 tools releases (version, tag, input hash,
 #                                         source commit), highest version first
-#   tools-release.sh resolve [--version V] [--input-hash H] [--exact]
+#   tools-release.sh resolve [--version V] [--input-hash H] [--exact|--newest]
 #                                         pick a release; prints its JSON
 #                                         (.exact: its input hash is H)
 #   tools-release.sh fetch <tag> <dir> <set>...
@@ -182,14 +182,17 @@ cmd_list() {
 #   --input-hash  prefer the highest release (prereleases too) built from
 #                 exactly these inputs
 #   --exact       fail (exit 1) unless one matches the input hash
+#   --newest      the highest stable SemVer release even when an older one
+#                 matches the input hash (.exact still reports the match)
 #   otherwise     the highest stable SemVer release
 cmd_resolve() {
-  local want_v="" h="" exact=0
+  local want_v="" h="" exact=0 newest=0
   while (( $# )); do
     case "$1" in
       --version) want_v="${2#v}"; shift 2 ;;
       --input-hash) h="$2"; shift 2 ;;
       --exact) exact=1; shift ;;
+      --newest) newest=1; shift ;;
       *) die "resolve: unknown argument $1" ;;
     esac
   done
@@ -199,7 +202,7 @@ cmd_resolve() {
     r="$(jq -c --arg v "$want_v" 'map(select(.version == $v)) | .[0] // empty' <<<"$rels")"
     [[ -n "$r" ]] || { log "no release $PREFIX$want_v"; return 1; }
   else
-    [[ -n "$h" ]] && r="$(jq -c --arg h "$h" 'map(select(.input_hash == $h)) | .[0] // empty' <<<"$rels")"
+    [[ -n "$h" ]] && (( !newest )) && r="$(jq -c --arg h "$h" 'map(select(.input_hash == $h)) | .[0] // empty' <<<"$rels")"
     if [[ -z "${r:-}" ]]; then
       (( exact )) && { log "no tools release built from input hash ${h:0:16}"; return 1; }
       r="$(jq -c 'map(select(.prerelease | not)) | .[0] // empty' <<<"$rels")"
@@ -461,7 +464,7 @@ cmd_publish() {
   cmd_fetch "$tag" "$out/verify" $SETS_ALL && rm -rf "$out/verify"
   log "verified: every set downloads and matches its sha256 ($(( SECONDS - t0 ))s in all)"
   (( pre )) || cmd_prune
-  (( dispatch )) && dispatch_images
+  (( dispatch )) && dispatch_images "$v"
   return 0
 }
 
@@ -540,11 +543,16 @@ cmd_prune() {
   load_releases
 }
 
-# Rebuild the images on main with the new release (needs actions:write).
+# Rebuild the images on main with the new release (needs actions:write). A
+# release created with a workflow's GITHUB_TOKEN fires no `release` event for
+# other workflows, so every publisher dispatches explicitly; vast-pytorch-image
+# (always the newest release) gets the version as its tools_version input.
 dispatch_images() {
-  local wf
+  local v="$1" wf body
   for wf in ${FV_TOOLS_DISPATCH:-serve-image.yml gpucheck-runtime-image.yml vast-pytorch-image.yml}; do
-    if api POST "/repos/$REPO/actions/workflows/$wf/dispatches" -H 'Content-Type: application/json' --data-binary '{"ref": "main"}' >/dev/null; then
+    body='{"ref": "main"}'
+    [[ "$wf" == vast-pytorch-image.yml ]] && body="$(jq -nc --arg v "$v" '{ref: "main", inputs: {tools_version: $v}}')"
+    if api POST "/repos/$REPO/actions/workflows/$wf/dispatches" -H 'Content-Type: application/json' --data-binary "$body" >/dev/null; then
       log "dispatched $wf on main"
     else
       log "WARNING: could not dispatch $wf (token needs actions:write); run it by hand"
