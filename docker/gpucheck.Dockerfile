@@ -251,7 +251,12 @@ COPY --from=cuda-libs /out/cudnn-engines/ /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /out/cudnn/ /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /out/cublas-nvrtc/ /usr/local/cuda-13.4/lib64/
 COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
+# /usr/local/cuda and targets/x86_64-linux/lib: the paths of NVIDIA's apt
+# layout, which older scripts and boxes look in (symlinks, no data).
 RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
+ && ln -s cuda-13.4 /usr/local/cuda \
+ && mkdir -p /usr/local/cuda-13.4/targets/x86_64-linux \
+ && ln -s ../../lib64 /usr/local/cuda-13.4/targets/x86_64-linux/lib \
  && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so'
 # The NVIDIA container runtime injects the driver (libcuda, and libnvidia-encode
