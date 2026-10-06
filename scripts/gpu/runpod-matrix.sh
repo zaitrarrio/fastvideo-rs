@@ -2909,9 +2909,9 @@ Audio: male speech, clear voice, quiet room"
     # ltx23}.toml and config/<model>/*.toml), baseline vs optimized, on the
     # pod's one GPU. docs/ports/sol-wan-ltx23.md has the arms, what each
     # reproduces, the weight trees and the GPU-minute estimates. Cells skip
-    # (summary.json "weights incomplete") until verify-weights.sh passes:
-    # wan21-t2v-1.3b, wan22-t2v-a14b and ltx23-hq (ltx23 + ltx23-dev) are
-    # pending the owner's fetch approval.
+    # (summary.json "weights incomplete") unless verify-weights.sh passes:
+    # wan21-t2v-1.3b, wan22-t2v-a14b and ltx23-hq (ltx23 + ltx23-dev), all on
+    # the EU volume since 2026-10-06.
     #   FV_CELLS            subset (default below: base + optimized of each)
     #   FV_SOL_A14B_MOE     FASTVIDEO_WAN_MOE for the A14B cells (default auto:
     #                       swap on a 96 GB card, both resident on a B200)

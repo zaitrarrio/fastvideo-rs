@@ -2,9 +2,9 @@
 
 Status 2026-10-06. Everything here is checked on the CPU against the
 published checkpoints' tensor headers and configs. **No GPU frame has been
-produced yet for any of the three**: the weights are not on the EU volume
-(see [Weights to fetch](#weights-to-fetch-owner-approval)) and no pod was
-started. The benchmark arms are written and ready
+produced yet for any of the three.** The weights are on the EU volume
+(fetched and verified 2026-10-06; see [Weight trees](#weight-trees)), but no
+pod has run the cells. The benchmark arms are written and ready
 (`runpod-matrix.sh solbench`, [below](#benchmark-arms)).
 
 Sources:
@@ -322,21 +322,23 @@ The estimates are scaled from measured cells:
 | **Default cells** | **~90 min ≈ $3.2** | A14B pair **~30 min ≈ $3.4** |
 | With every opt-in cell | ~125 min ≈ $4.4 | |
 
-### Weights to fetch (owner approval)
+### Weight trees
 
-None of these are on any volume. The rows are in `weights-manifest.tsv` and
-`weights-revisions.tsv` **commented out**. `verify-weights.sh` has the cells
-`wan21-t2v-1.3b`, `wan22-t2v-a14b` and `ltx23-hq`, so the matrix skips cleanly
-until the trees exist.
+All three were fetched to the EU volume (`jg48s6o1w0`) on 2026-10-06,
+owner-approved, and verified. They are recorded as live rows in
+`weights-manifest.tsv`, `weights-revisions.tsv` and `weights-sha256.tsv`
+(PR #35; see `docs/ops/runpod-volumes.md`). The `solbench` cells gate on
+`verify-weights.sh` cells `wan21-t2v-1.3b`, `wan22-t2v-a14b` and `ltx23-hq`.
+The Wan trees were fetched whole: their UMT5 and VAE are copies of the same
+LFS objects as `wan21-t2v-14b`'s.
 
 | Tree (dest) | Hub repo @ revision | Files | Size |
 |---|---|---|---|
-| `wan21-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` @ `0fad780a534b6463e45facd96134c9f345acfa5b` | `model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* vae/*` | 28.94 GB. Alternatively 6.2 GB: transformer 5.68 + vae 0.51 + configs, with `text_encoder/` taken from `wan21-t2v-14b/` (same LFS SHA-256 per shard) |
+| `wan21-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` @ `0fad780a534b6463e45facd96134c9f345acfa5b` | `model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* vae/*` | 28.94 GB |
 | `wan22-t2v-a14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` @ `5be7df9619b54f4e2667b2755bc6a756675b5cd7` | `model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* transformer_2/* vae/*` | 126.20 GB |
 | `ltx23-dev` | `Lightricks/LTX-2.3` @ `3c6a4e66e5d0a684231950b9c74dd4ded7b6fadc` | `ltx-2.3-22b-dev.safetensors ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-spatial-upscaler-x2-1.1.safetensors` | 54.75 GB |
 
-The total is **209.9 GB** (187.2 GB with the shared 1.3B text encoder), of
-about 557 GB free on the EU volume. Licences:
+The total is **209.9 GB**. Licences:
 
 - Wan: Apache-2.0.
 - LTX-2.3: LTX-2 Community License, not gated.

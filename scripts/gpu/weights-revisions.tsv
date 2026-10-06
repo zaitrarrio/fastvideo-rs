@@ -59,7 +59,8 @@ mmaudio-44k-v2	hkchengrex/MMAudio	eb13a1a98fdbec91753775c57b074ccdfc60587c	unpin
 mmaudio-44k-v2	nvidia/bigvgan_v2_44khz_128band_512x	95a9d1dcb12906c03edd938d77b9333d6ded7dfb	unpinned	mmaudio
 mmaudio-44k-v2	apple/DFN5B-CLIP-ViT-H-14-384	unknown	unpinned	mmaudio
 sana-video-2b-480p	Efficient-Large-Model/SANA-Video_2B_480p_diffusers	db5f398b13ca086d09a50ce156c20527773841b1	recorded	hub
-# PENDING owner approval (see weights-manifest.tsv): uncomment with the fetch.
-# wan21-t2v-1.3b	Wan-AI/Wan2.1-T2V-1.3B-Diffusers	0fad780a534b6463e45facd96134c9f345acfa5b	recorded	hub
-# wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	5be7df9619b54f4e2667b2755bc6a756675b5cd7	recorded	hub
-# ltx23-dev	Lightricks/LTX-2.3	3c6a4e66e5d0a684231950b9c74dd4ded7b6fadc	recorded	hub
+wan21-t2v-1.3b	Wan-AI/Wan2.1-T2V-1.3B-Diffusers	0fad780a534b6463e45facd96134c9f345acfa5b	recorded	hub
+ltx23-dev	Lightricks/LTX-2.3	3c6a4e66e5d0a684231950b9c74dd4ded7b6fadc	recorded	hub
+wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	5be7df9619b54f4e2667b2755bc6a756675b5cd7	recorded	hub
+lingbot-video-moe-30b-a3b	robbyant/lingbot-video-moe-30b-a3b	f2e538f64afe00cc4ae674db2aeb52e2945edfd5	recorded	hub
+cosmos3-super	nvidia/Cosmos3-Super	f543c56225b2e04d0ad141e29655be3a45d9c455	recorded	hub
