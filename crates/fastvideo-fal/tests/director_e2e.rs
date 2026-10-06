@@ -135,7 +135,7 @@ impl Client {
     /// [`Self::assert_rtp_grids`] for a model at `fps` (90 kHz / `fps`
     /// ticks per frame).
     fn assert_rtp_grids_at(&self, fps: u32) {
-        let step = 90_000 / fps;
+        let step = u64::from(90_000 / fps);
         let l = self.media.lock().unwrap();
         let bad = l.video.windows(2).find(|w| w[1].1 <= w[0].1 || (w[1].1 - w[0].1) % step != 0);
         assert!(bad.is_none(), "video RTP off the {fps} fps grid: {bad:?}");
