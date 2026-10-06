@@ -2,6 +2,8 @@
 # WP-19: real Runpod serverless (queue) cold starts, driven over REST.
 #
 #   serverless-coldstart.sh up <image> [gpu type] [volume id] [dc]
+#       defaults: RTX PRO 6000, the EU volume jg48s6o1w0, EUR-IS-1 (the US
+#       volume was deleted 2026-10 and is refused, scripts/gpu/volumes.sh).
 #       serverless template + queue endpoint (min 0 / max 1 workers, idle 5 s,
 #       FlashBoot off) whose start command is serverless-worker.sh, inlined so
 #       any runtime image works (also images built before the script existed).
@@ -21,6 +23,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 REST="${RUNPOD_REST:-https://rest.runpod.io/v1}"
 API="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 LEDGER="$ROOT/artifacts/runpod/serverless/ledger.tsv"
@@ -39,7 +43,8 @@ now() { date +%s.%N; }
 ledger() { printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >>"$LEDGER"; }
 
 cmd_up() {
-  local image="$1" gpu="${2:-NVIDIA H200}" vol="${3:-s2k01690bi}" dc="${4:-US-CA-2}" tag tpl ep script
+  local image="$1" gpu="${2:-$FV_EU_GPUS}" vol="${3:-$FV_EU_VOLUME_ID}" dc="${4:-$FV_EU_DC}" tag tpl ep script
+  fv_check_volume "$vol"
   tag="fv-coldstart-$(date -u +%m%d%H%M%S)"
   script="$(cat "$HERE/serverless-worker.sh")"
   tpl="$(rest POST /templates "$(jq -n --arg name "$tag" --arg image "$image" --arg s "$script" '{
@@ -115,5 +120,5 @@ case "${1:-}" in
   wait-idle) shift; cmd_wait_idle "$@" ;;
   retemplate) shift; cmd_retemplate "$@" ;;
   down) shift; cmd_down "$@" ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

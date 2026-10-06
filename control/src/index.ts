@@ -9,7 +9,7 @@ import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, whoami 
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminGet, adminToken, desiredEnv, envCtx, gatewayPublic, projectSpend } from "./cluster/ops";
 import { gatewaySystemEnv, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
-import { defaultSpec, normalizeSpec, STANDARD_POOLS } from "./cluster/spec";
+import { assertRegionsAvailable, defaultSpec, normalizeSpec, STANDARD_POOLS } from "./cluster/spec";
 import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
 import { collect } from "./collector";
 import { randomToken, sha256Hex, unb64, x25519Generate, x25519PublicOf, b64 } from "./crypto";
@@ -241,6 +241,8 @@ for (const [path, def] of Object.entries(OPS)) {
   app.post(`/api/clusters/:id/${path}`, async (c) => {
     const cl = await getCluster(c.env, c.req.param("id"));
     const params = def.params(await body(c));
+    // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
+    if (["up", "scale", "roll", "restart", "gateway-start"].includes(def.kind)) assertRegionsAvailable(cl.spec);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
     return c.json({ operation: r.id, kind: def.kind }, 202);

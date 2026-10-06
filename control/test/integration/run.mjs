@@ -260,6 +260,8 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   assert.deepEqual(dyn.pools, ["fake"]);
   assert.ok(dyn.env_keys.includes("HF_TOKEN"));
   assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "jg48s6o1w0");
+  assert.ok(!dyn.regions.find((r) => r.id === "us"), "us is not offered (its weights volume is gone)");
+  assert.deepEqual(sc.schemas["cluster-spec"].properties.regions.items.enum, ["eu"]);
   const d = (await call(`/api/docs/cluster-spec/${cid}`, { headers: T() })).j;
   assert.equal(d.schema, "cluster-spec");
   const v0 = d.version;
@@ -270,6 +272,9 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   const put400 = await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: { ...d.doc, cap_s: 5 }, version: v0 }, headers: T() });
   assert.equal(put400.status, 400);
   assert.ok(put400.j.issues.length);
+  const putUs = await call(`/api/clusters/${cid}/spec`, { method: "PUT", body: { spec: { ...d.doc, regions: ["eu", "us"] } }, headers: T() });
+  assert.equal(putUs.status, 400, "a spec naming us is rejected");
+  assert.match(JSON.stringify(putUs.j), /US weights volume deleted 2026-10; EU only, see docs\/ops\/runpod-volumes.md/);
   const plan = (await call(`/api/docs/cluster-spec/${cid}/plan`, { method: "POST", body: { doc: { ...d.doc, pools: [{ ...d.doc.pools[0], count: 3 }] } }, headers: T() })).j;
   assert.equal(plan.ok, true);
   assert.ok(plan.projection.cluster_dph > 0);

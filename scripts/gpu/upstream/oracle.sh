@@ -200,7 +200,7 @@ LTX_EXTEND_PROMPT="${FV_LTX_EXTEND_PROMPT:-The camera keeps pushing in slowly ov
 # Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
 # of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
 # i2v's frame-0-at-timestep-0), inputs dumped for `fv-gpucheck wan oracle`.
-# Weights: fv-weights-b200-us.
+# Weights: fv-weights-h3-ltx-hy (EU; fv-weights-b200-us was deleted 2026-10).
 oracle_wan22() {
   oracle_cell wan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
     --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"

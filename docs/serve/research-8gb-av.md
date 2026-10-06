@@ -398,7 +398,8 @@ consumer card. Host RAM: ≥ 32 GB with FP8 blocks (INFERRED).
 - A FP8 loader for `NAVA_fp8.safetensors`, then NVFP4.
 
 Weights: 25.2 GB F32 plus 6.9 GB FP8. Per CLAUDE.md a large new download
-needs owner approval, and the weights go on both volumes. Its prompts are
+needs owner approval, and the weights go on the EU volume (EU only since
+2026-10-06, docs/ops/runpod-volumes.md). Its prompts are
 trained on Chinese dense captions; the card recommends a Qwen3-4B rewriter
 for short or English prompts. It is slow until distilled.
 

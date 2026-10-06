@@ -4,8 +4,9 @@
 #
 #   fetch-mmaudio.sh                 create the pod, wait for DONE, pull the log
 #                                    and key listings, delete the pod
-#   RUNPOD_VOLUME_NAME=fv-weights-b200-us (default) picks the volume; its
-#   datacenter picks the pod's (fv-weights-h3-ltx-hy for EU). The fetch is
+#   RUNPOD_VOLUME_NAME=fv-weights-h3-ltx-hy (default, EU) picks the volume;
+#   its datacenter picks the pod's. The US volume (fv-weights-b200-us) was
+#   deleted 2026-10 and is refused (EU only, scripts/gpu/volumes.sh). The fetch is
 #   add-only: it stops if weights/mmaudio-44k-v2 already has files on that
 #   volume (FETCH_ADD_ONLY=0 re-fetches in place). FV_POD_CAP_S (default 3600) is a hard wall
 #   clock cap: a backstop process deletes the pod regardless.
@@ -15,8 +16,11 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
-VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-b200-us}"
+VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME}"
+fv_check_volume "$VOL_NAME"
 CAP_S="${FV_POD_CAP_S:-3600}"
 OUT="${FETCH_OUT:-$ROOT/artifacts/runpod/fetch-mmaudio}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"

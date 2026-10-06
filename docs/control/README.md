@@ -220,8 +220,16 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   `<variant>-sha-<sha>`). A ref gives one all-in-one image. Images are
   resolved to digests at start, and `:stable` falls back to `:latest` as
   in the scripts.
-- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000); `us`
-  is `s2k01690bi` in US-CA-2 (H100/H200).
+- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000). The
+  default and the only available region is `["eu"]`. `us` (US-CA-2) is
+  unavailable: Runpod deleted its weights volume (`s2k01690bi`) on about
+  2026-10-05, and the owner chose EU only (2026-10-06). A spec that names
+  `us` is rejected with a 400, not silently trimmed, so a saved cluster never
+  changes placement behind the owner's back. A stored spec that still names
+  `us` cannot start, scale, roll or restart (409) until it is edited, and
+  placement skips `us` in any case. When US is rebuilt, setting
+  `US_VOLUME_ID` in `control/src/cluster/regions.ts` brings the region back
+  (`docs/ops/runpod-volumes.md`).
 - `gateway`: CPU flavors, vCPU, disk, TOML base (`pods` is
   `gateway-pods.toml`; `minimal` drops the reactor and fal apps), auth
   mode, and `github_token`.

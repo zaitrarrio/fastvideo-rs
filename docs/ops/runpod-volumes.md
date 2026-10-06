@@ -1,12 +1,35 @@
 # Runpod network volumes: manifest and rebuild
 
-Date: 2026-09-30. This page lists what is on each of our Runpod network
+Date: 2026-09-30; updated 2026-10-06 (§0: the US volume is gone, EU only). This page lists what is on each of our Runpod network
 volumes and how to rebuild them from scratch. Figures come from the repo
 (fetch logs, `docs/gaps/2026-09-27-volume-sync.md` and the port docs), from a
 read-only Runpod API listing of the volumes, and from read-only Hub API reads
 that expand short revisions. Nothing here was measured on the volumes today
 (the balance was negative, so no pods ran). Anything not backed by a
 recorded source is marked **UNVERIFIED** or **UNKNOWN**.
+
+## 0. Status 2026-10-06: EU only
+
+- **The US weights volume is gone.** Runpod deleted `s2k01690bi`
+  (`fv-weights-b200-us`, 2000 GB, US-CA-2) on about **2026-10-05**, while the
+  account balance was negative. Nothing in the repo deleted it. Its data is
+  lost; the US column in §2 records what it held.
+- **The EU volume is intact.** `jg48s6o1w0` (`fv-weights-h3-ltx-hy`,
+  EUR-IS-1) was verified on 2026-10-06: every manifest tree is present and
+  passes its `verify-weights.sh` cell, and every recorded hash
+  (`weights-sha256.tsv`, the `sha:<dest>` cells, `aux`, `upscalers`,
+  `text-fp8`) checks out. About **1.45 TB** of the 2000 GB is used. One
+  unlisted tree was found: `weights/wan/`, **12.46 GB**, not in
+  `weights-manifest.tsv` and read by no cell. Leave it in place (add-only);
+  nothing needs it.
+- **Owner decision (2026-10-06): EU only for now.** US is not rebuilt. New
+  weights go on EU alone (CLAUDE.md); the "both volumes" rule is suspended
+  until the owner rebuilds US. Every script default, `configs/serve/autoscale.toml`
+  and fv-control use EU; asking for the US volume or the `us` region fails
+  with "US weights volume deleted 2026-10; EU only, see
+  docs/ops/runpod-volumes.md".
+- **Rebuilding US later** (from EU or the Hub): §5, `scripts/gpu/rebuild-volume.sh us`,
+  and the switch-back list in §5.0.
 
 Data files beside this page:
 
@@ -22,31 +45,34 @@ Data files beside this page:
 
 | Id | Name | Size | DC | Role |
 |---|---|---:|---|---|
-| `s2k01690bi` | `fv-weights-b200-us` | 2000 GB | US-CA-2 | primary US weights (GPU pods and serverless in US-CA-2 mount it) |
-| `jg48s6o1w0` | `fv-weights-h3-ltx-hy` | 2000 GB | EUR-IS-1 | EU weights (RTX PRO 6000 pods in EUR-IS-1) |
+| ~~`s2k01690bi`~~ | ~~`fv-weights-b200-us`~~ | 2000 GB | US-CA-2 | **deleted by Runpod ~2026-10-05** (negative balance). Was the US weights volume (GPU pods and serverless in US-CA-2). Not rebuilt (§0) |
+| `jg48s6o1w0` | `fv-weights-h3-ltx-hy` | 2000 GB | EUR-IS-1 | **the** weights volume (EU only since 2026-10-06; RTX PRO 6000 pods in EUR-IS-1). Verified 2026-10-06, ~1.45 TB used |
 | `pxy4hlsnwq` | `fv-build` | 200 GB | EU-RO-1 | build caches for the shared build pod (toolchains, sccache, crates). No weights. Section 8 |
 
 Other volumes on the account are **not ours and not covered here**. Nothing
-in this repo refers to their ids or names:
+in this repo refers to their ids or names. Four of them were also gone by
+2026-10-06 (deleted with the US weights volume during the negative balance,
+as far as the listing shows):
 
-| Id | Name | Size | DC |
-|---|---|---:|---|
-| `1nh52zvqku` | strobe | 200 GB | US-KS-2 |
-| `gbfb1w87lc` | strobe-weights | 50 GB | US-KS-2 |
-| `zqe9uhus9s` | realvideo-models | 300 GB | US-NE-1 |
-| `4odffuh7in` | fierce_aquamarine_platypus | 50 GB | US-CA-2 |
-| `weovb2qs46` | fierce_aquamarine_platypus | 50 GB | EUR-IS-4 |
-| `nevbj2zhv8` | systematic_olive_wren | 100 GB | US-NE-1 |
-| `whygavxxyi` | elderly_silver_bobolink | 100 GB | EU-RO-1 |
-| `q3sihbv963` | eastern_ivory_mink | 10 GB | US-CA-2 |
-| `tvlsbglwur` | formal_aqua_ape | 50 GB | US-TX-3 |
+| Id | Name | Size | DC | Status 2026-10-06 |
+|---|---|---:|---|---|
+| `1nh52zvqku` | strobe | 200 GB | US-KS-2 | present |
+| `gbfb1w87lc` | strobe-weights | 50 GB | US-KS-2 | **gone** |
+| `zqe9uhus9s` | realvideo-models | 300 GB | US-NE-1 | present |
+| `4odffuh7in` | fierce_aquamarine_platypus | 50 GB | US-CA-2 | **gone** |
+| `weovb2qs46` | fierce_aquamarine_platypus | 50 GB | EUR-IS-4 | present |
+| `nevbj2zhv8` | systematic_olive_wren | 100 GB | US-NE-1 | present |
+| `whygavxxyi` | elderly_silver_bobolink | 100 GB | EU-RO-1 | present |
+| `q3sihbv963` | eastern_ivory_mink | 10 GB | US-CA-2 | **gone** |
+| `tvlsbglwur` | formal_aqua_ape | 50 GB | US-TX-3 | **gone** |
 
 ### Rules (CLAUDE.md)
 
-- New weights go on **both** weight volumes, never only on a pod's container
-  disk. The two only need to be *eventually* in sync. Landing a tree on one
-  volume first (usually US) and working against it is fine. The copy to the
-  other volume must follow, and a failed copy is retried.
+- New weights go on the **EU** weights volume `jg48s6o1w0`, never only on a
+  pod's container disk. **EU only since 2026-10-06** (owner decision, §0):
+  the earlier rule, both volumes eventually in sync, is suspended until the
+  owner rebuilds US. Do not create, mount or copy to a US volume without the
+  owner.
 - **Add-only.** Write under a temporary name (`<parent>/.<name>.partial-<stamp>`),
   verify (SHA-256), then rename. Never modify or delete existing volume data,
   and never delete a volume. A fetcher may remove only its *own* unfinished
@@ -66,8 +92,8 @@ Network volume storage is $0.07/GB-month for the first 1 TB and $0.05 beyond
 
 | Volume | Size | $/month |
 |---|---:|---:|
-| `fv-weights-b200-us` | 2000 GB | 70 + 50 = **$120** |
-| `fv-weights-h3-ltx-hy` | 2000 GB | **$120** |
+| ~~`fv-weights-b200-us`~~ | deleted ~2026-10-05 | **$0** (was $120) |
+| `fv-weights-h3-ltx-hy` | 2000 GB | 70 + 50 = **$120** |
 | `fv-build` | 200 GB | **$14** |
 
 A volume can grow but cannot shrink. Billing is on the provisioned size, not
@@ -80,7 +106,9 @@ Runpod HTTPS proxy, with no charge recorded in the repo (**UNVERIFIED**).
 
 ## 2. Contents: per-tree manifest
 
-Paths are under `/workspace/weights/` on both weight volumes. Bytes are
+Paths are under `/workspace/weights/` on the weight volume. The **US
+column is history**: what `s2k01690bi` held before Runpod deleted it
+(~2026-10-05). The EU column was re-verified on 2026-10-06 (§0). Bytes are
 exact where a fetch log or `du -sb` recorded them. "~" marks the
 2026-09-27 survey figure (10^9 bytes, 2 decimals). Revisions are the
 40-hex SHAs in `weights-revisions.tsv`, shortened here to 7 characters.
@@ -143,7 +171,9 @@ The "sha256 source" column says where file hashes can be checked.
 | **Approx. used** | **~1210 GB** of 2000 | **~1443 GB** of 2000 |
 | What `rebuild-volume.sh` writes on an empty volume | 1200.9 GB (+35.52 LongLive Hub trees; the 7.08 GB converted tree is a manual step, §3) | 1200.9 GB |
 
-These are sums of recorded figures, not a fresh `du`. The last survey
+These are sums of recorded figures, not a fresh `du`. The US column is
+history (the volume was deleted ~2026-10-05). On 2026-10-06 EU reported
+about 1.45 TB used, including the unlisted `weights/wan/` (12.46 GB, §4). The last survey
 (2026-09-27) predates `h3-ref2va`, `ltx25-dev`, the IC-LoRA, `fastwan22`,
 the upscalers and the FP8 copy to EU. The US volume reported 957.1 GB used
 after the sync, before those roughly 205 GB of additions.
@@ -170,7 +200,7 @@ against `manifest.json`, and only then renames. That took 416 s for 38.9 GB
 (~93 MB/s), about $0.11 of pods. Afterwards run
 `FV_VERIFY_FP8_SHA=1 verify-weights.sh text-fp8`.
 
-**If both volumes are lost, regenerate it** (needs a GPU and a CUDA build of
+**If EU is lost too (US already is), regenerate it** (needs a GPU and a CUDA build of
 `fv-gpucheck`, e.g. the runtime image `ghcr.io/zaitrarrio/fastvideo-rs-runtime`).
 The run used an H200. The minimum GPU memory was not measured
 (**UNVERIFIED**). Write to a temp name, then rename:
@@ -273,11 +303,13 @@ same paths either way. On an old tree, the revision it holds is the
 | EU only | `ltx2/…/text_encoder/diffusion_pytorch_model-000{01..12}-of-00012` | ~51.61 GB | a second Gemma layout outside the manifest glob. The loader reads `model-*`. Not needed |
 | EU only | `upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors` (older top-level path) | 690 592 992 | same bytes as the pinned file (`4f57821f…`). Harmless |
 | EU only | `upstream/`, `runs/`, `.cache/` | ~104.1 GB | not weights. Nothing reads them with `UP_LOCAL=1` (the default) |
-| US only | `runs/` | ~1.78 GB | not weights |
+| EU only | `wan/` (found 2026-10-06) | 12.46 GB | unlisted: not in `weights-manifest.tsv`, read by no cell. Not needed. Leave it (add-only); do not rebuild |
+| US only (gone) | `runs/` | ~1.78 GB | not weights; lost with the volume |
 | layout | the FastH3 LoRA `vsa-datafree` adapter and the upscaler are plain files on EU, HF blobs on US | 0 | same bytes |
 
-Every manifest tree is on both volumes (sync of 2026-09-27, and each later
-addition landed on both).
+Every manifest tree was on both volumes (sync of 2026-09-27, and each later
+addition landed on both) until the US volume was deleted (~2026-10-05).
+On 2026-10-06 every manifest tree and every recorded hash checked out on EU.
 
 **Known gaps:**
 
@@ -309,6 +341,27 @@ addition landed on both).
 
 ## 5. Rebuild a weight volume
 
+### 5.0 Rebuilding US (deferred: owner decision 2026-10-06)
+
+US is not being rebuilt now. When the owner decides to:
+
+1. Get the owner's approval for the downloads (about 1.2 TB) and check the
+   balance (§7).
+2. Create a new volume (§5.1). It gets a new id; `s2k01690bi` never comes
+   back.
+3. Fill it from EU (copy, as the FP8 trees were in 2026-09; §5.4 in
+   reverse) or from the Hub with `rebuild-volume.sh us` (§5.2-5.3), with
+   EU's per-tree `sha256.txt` lists as `FV_REBUILD_EXPECT_DIR` so every file
+   must equal EU. The FP8 trees are copied from EU (§3).
+4. Verify (§5.6), then switch US back on, one id each:
+   - `scripts/gpu/volumes.sh`: `FV_US_VOLUME_ID` and `FV_US_VOLUME_NAME`
+     (every Runpod script, `runpod-cluster.sh` regions, the fetchers);
+   - `control/src/cluster/regions.ts`: `US_VOLUME_ID` (fv-control's `us`
+     region), then add `us` back to the cluster specs that should use it;
+   - `configs/serve/autoscale.toml` and the `PodConfig` default in
+     `crates/fastvideo-autoscale/src/config.rs`: a US-CA-2 placement;
+   - CLAUDE.md and §1 of this page: restore the both-volumes rule.
+
 Needs: the owner's approval (about 1.17 TB of downloads per volume), a Runpod
 balance well above $8, `RUNPOD_API_KEY`, and an `HF_TOKEN` whose account has
 accepted the gates of the auto-gated repos (Lightricks LTX-2.5,
@@ -318,7 +371,8 @@ has one. A fresh volume does not.
 ### 5.1 Create the volume (only if it is gone)
 
 ```bash
-# US: fv-weights-b200-us, US-CA-2. EU: fv-weights-h3-ltx-hy, EUR-IS-1.
+# Owner approval first. US (deleted ~2026-10-05; rebuild deferred, §5.0): fv-weights-b200-us,
+# US-CA-2. EU: fv-weights-h3-ltx-hy, EUR-IS-1.
 curl -sS -X POST https://rest.runpod.io/v1/networkvolumes \
   -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' \
   -d '{"name":"fv-weights-b200-us","size":2000,"dataCenterId":"US-CA-2"}' | jq '{id,name,size,dataCenterId}'
@@ -326,9 +380,10 @@ curl -sS -X POST https://rest.runpod.io/v1/networkvolumes \
 
 Size: 1500 GB would hold the 1165 GB rebuild set with room for about
 another model family ($95/month instead of $120). 2000 GB matches today. A
-new volume gets a **new id**. Update the ids that are hard-coded in scripts
-and docs (`grep -rn s2k01690bi\|jg48s6o1w0 scripts docs configs`). Most
-scripts select the volume by name (`RUNPOD_VOLUME_NAME`).
+new volume gets a **new id**. The scripts take both regions' ids and names
+from `scripts/gpu/volumes.sh`, and fv-control from
+`control/src/cluster/regions.ts` (§5.0 has the full list). Check for any
+other hard-coded id (`grep -rn 's2k01690bi\|jg48s6o1w0' scripts docs configs control crates`).
 
 ### 5.2 Start a cheap CPU pod on it, with a backstop
 
@@ -436,8 +491,10 @@ FV_VERIFY_FP8_SHA=1 bash scripts/gpu/verify-weights.sh text-fp8   # ~40 GB read
 
 `scripts/gpu/fetch-hub-tree.sh <dest> <revision>` (from this container: it
 creates the CPU pod, sets the backstop and deletes the pod afterwards) runs
-against US first with `RUNPOD_VOLUME_NAME=fv-weights-b200-us`. Then run it
-against EU with the US `sha256.txt` as the third argument. Add the manifest
+against the EU volume (`fv-weights-h3-ltx-hy`, the default). EU only since
+2026-10-06: there is no second volume to copy to. (While US existed, it ran
+against US first, then against EU with the US `sha256.txt` as the third
+argument; a rebuilt US would get the EU lists the same way.) Add the manifest
 row, the revision row in `weights-revisions.tsv`, the per-file hashes in
 `weights-sha256.tsv` (from `artifacts/runpod/fetch-<dest>-<volume>/sha256.txt`),
 a `verify-weights.sh` cell, a line in `rebuild-volume.sh`'s `PLAN`, and a row

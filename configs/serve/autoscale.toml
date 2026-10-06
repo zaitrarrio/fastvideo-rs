@@ -100,8 +100,10 @@ budget_usd_per_hr = 9.5
 [autoscale.pools.pod]
 template_id = "REPLACE_SFWAN_POD_TEMPLATE"
 gpu_types = ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+# EU only since 2026-10-06: the US weights volume (s2k01690bi, US-CA-2) was
+# deleted (docs/ops/runpod-volumes.md). Add a US placement back, first, with
+# the rebuilt volume's id when the owner rebuilds it.
 placements = [
-  { data_center = "US-CA-2", volume_id = "s2k01690bi" },
   { data_center = "EUR-IS-1", volume_id = "jg48s6o1w0" },
 ]
 cloud_type = "SECURE"
