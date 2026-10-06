@@ -71,7 +71,12 @@ VOL_NAME="${FV_BUILD_VOLUME:-fv-build}"
 FLAVORS="${FV_BUILD_FLAVORS:-cpu5c cpu3c}"
 VCPUS="${FV_BUILD_VCPUS:-32}"
 VCPUS_FALLBACK="${FV_BUILD_VCPUS_FALLBACK-16}"   # "" disables
-IMAGE="${FV_BUILD_IMAGE:-rust:1-bookworm}"
+# The base image (docker/build-base.Dockerfile): toolchains, CUDA, sccache, mold,
+# ffmpeg, Node/Playwright/Chromium. The tag is a content hash of its inputs;
+# `bash scripts/dev/build-base-tag.sh --pin` updates it, and the
+# build-base-image workflow pushes the image and checks this pin.
+BASE_IMAGE_TAG="bb-52843530cf56b1ba"
+IMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"
 DISK_GB="${FV_BUILD_CONTAINER_GB:-200}"
 MAX_DPH="${FV_BUILD_MAX_DPH:-1.5}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
