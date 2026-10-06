@@ -50,7 +50,7 @@ function toast(msg) {
 const SERIES = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => `var(--series-${i})`);
 
 // ---------------------------------------------------------------- API
-const state = { csrf: null, me: null, timers: [] };
+const state = { csrf: null, me: null, timers: [], cleanups: [] };
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
   if (opts.body !== undefined) {
@@ -241,6 +241,8 @@ function card(title, ...kids) {
 const routes = [
   [/^#?\/?$/, pageDashboard],
   [/^#\/clusters$/, pageClusters],
+  [/^#\/clusters\/new$/, pageClusterConfig],
+  [/^#\/cluster\/([^/]+)\/config$/, pageClusterConfig],
   [/^#\/cluster\/([^/]+)$/, pageCluster],
   [/^#\/pods$/, pagePods],
   [/^#\/pod\/([^/]+)$/, pagePod],
@@ -256,6 +258,7 @@ function clearTimers() {
   for (const t of state.timers) clearInterval(t);
   state.timers = [];
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
+  for (const fn of state.cleanups.splice(0)) { try { fn(); } catch {} }
 }
 async function route() {
   clearTimers();
@@ -342,6 +345,7 @@ let editorLoading = null;
 function fvEditor() {
   if (window.FVEditor) return Promise.resolve(window.FVEditor);
   editorLoading ||= new Promise((res, rej) => {
+    document.head.append(h("link", { rel: "stylesheet", href: "/editor.css" }));
     const sc = document.createElement("script");
     sc.src = "/editor.js";
     sc.onload = () => res(window.FVEditor);
@@ -646,70 +650,46 @@ async function pagePod(main, id) {
 // ---------------------------------------------------------------- clusters
 async function pageClusters(main) {
   const [r, tpl] = await Promise.all([api("/api/clusters"), api("/api/templates")]);
-  const ta = { value: JSON.stringify({ ...tpl["tiny-cpu"], name: "tiny" }, null, 2) };
-  const edHost = h("div", {});
-  let ed = null;
-  Promise.all([fvEditor(), api("/api/schemas"), api("/api/schemas/dynamic")]).then(([E, sc, dyn]) => {
-    ed = E.createJsonEditor({ parent: edHost, doc: ta.value, schema: sc.schemas["cluster-spec"], dynamic: dyn, onChange: (t) => (ta.value = t) });
-  }).catch(() => edHost.replaceChildren(h("textarea", { oninput: (e) => (ta.value = e.target.value) }, ta.value)));
   const tplList = tpl.templates || [{ id: "tiny-cpu", title: "1 fake-engine CPU worker" }, { id: "standard", title: "h3-turbo, h3-max, ltx, wan GPU pools" }];
-  const tplSel = h(
-    "select",
-    { "aria-label": "Template", onchange: () => { ta.value = JSON.stringify({ ...tpl[tplSel.value], name: tplSel.value === "tiny-cpu" ? "tiny" : tplSel.value === "standard" ? "main" : tplSel.value }, null, 2); ed?.set(ta.value); } },
-    [...tplList].sort((a, b) => (a.id === "tiny-cpu" ? -1 : b.id === "tiny-cpu" ? 1 : 0)).map((x) => h("option", { value: x.id }, `${x.id}: ${x.title}`)),
-  );
-  // Add a pool preset to the spec being defined.
-  const presetAdd = presetPicker(tpl.pool_presets || [], (pool) => {
-    let spec;
-    try { spec = JSON.parse(ta.value); } catch { return toast("spec: not JSON"); }
-    spec.pools = [...(spec.pools || []).filter((p) => p.id !== pool.id), pool];
-    ta.value = JSON.stringify(spec, null, 2);
-    ed?.set(ta.value);
-    toast(`pool ${pool.id} added`);
-  });
+  const tplSel = h("select", { "aria-label": "Template", style: "max-width:min(420px, 62vw)" }, [...tplList].sort((a, b) => (a.id === "tiny-cpu" ? -1 : b.id === "tiny-cpu" ? 1 : 0)).map((x) => h("option", { value: x.id }, `${x.id}: ${x.title}`)));
   main.replaceChildren(
     h("h1", {}, "Clusters"),
     card(
       null,
+      h("div", { class: "row", style: "margin-bottom:10px" }, h("button", { class: "primary", onclick: () => { location.hash = `#/clusters/new?template=${encodeURIComponent(tplSel.value)}`; } }, "New cluster"), h("label", { style: "flex-direction:row;align-items:center;gap:6px;min-width:0;max-width:100%" }, "from", tplSel), h("span", { class: "muted small" }, "Defining starts nothing. Start runs a price check first.")),
       table(
         [
           { label: "cluster", get: (c) => h("a", { href: `#/cluster/${c.id}` }, c.name) },
           { label: "status", get: (c) => badge(c.status, statusKind(c.status)) },
           { label: "image", get: (c) => c.spec.image.channel || c.spec.image.sha || "ref" },
-          { label: "pools", get: (c) => c.spec.pools.map((p) => `${p.id}×${p.count}`).join(", ") },
+          { label: "pools", get: (c) => c.spec.pools.map((p) => `${p.id}×${p.count}`).join(", "), wrap: true },
           { label: "deadline", get: (c) => until(c.deadline) },
           { label: "operation", get: (c) => (c.op ? `${c.op.kind} (${c.op.phase})` : "–") },
           { label: "source", get: (c) => c.source },
+          {
+            label: "",
+            get: (c) =>
+              h(
+                "span",
+                { class: "row", style: "flex-wrap:nowrap" },
+                h("a", { class: "btn", href: `#/cluster/${c.id}/config` }, "Configure"),
+                h("a", { class: "btn", href: `#/clusters/new?clone=${c.id}` }, "Clone"),
+                c.status === "running" || c.status === "starting" ? "" : h("button", { class: "ghost danger", onclick: async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; await act("delete", () => api(`/api/clusters/${c.id}`, { method: "DELETE" })); route(); } }, "Delete"),
+              ),
+          },
         ],
         r.clusters,
         "No clusters defined yet.",
       ),
     ),
-    h(
-      "div",
-      { class: "grid g2" },
-      card(
-        "Define a cluster",
-        h("div", { class: "row", style: "margin-bottom:8px" }, tplSel),
-        presetAdd,
-        edHost,
-        h(
-          "div",
-          { class: "row", style: "margin-top:8px" },
-          h("button", {
-            class: "primary",
-            onclick: async () => {
-              let spec;
-              try { spec = JSON.parse(ta.value); } catch (e) { return toast("spec: not JSON"); }
-              const j = await act("define", () => api("/api/clusters", { method: "POST", body: { spec } }));
-              location.hash = `#/cluster/${j.cluster.id}`;
-            },
-          }, "Define"),
-          h("span", { class: "muted small" }, "Defining starts nothing. Start runs a price check first."),
-        ),
-      ),
-    ),
   );
+}
+/** The cluster configuration page (ui/cluster/config.ts in the editor bundle): new, clone (?clone=) or an existing cluster. */
+async function pageClusterConfig(main, id) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  main.replaceChildren(h("p", { class: "muted" }, "loading the editor…"));
+  const E = await fvEditor();
+  await E.openClusterConfig(main, { api, toast, onCleanup: (fn) => state.cleanups.push(fn), id, template: q.get("template") || undefined, clone: q.get("clone") || undefined });
 }
 
 async function pageCluster(main, id) {
@@ -726,6 +706,7 @@ async function pageCluster(main, id) {
     const actions = h(
       "div",
       { class: "row" },
+      h("button", { class: "primary", onclick: () => { location.hash = `#/cluster/${c.id}/config`; } }, "Configure…"),
       !running && btn("Start", () => startDialog(c, draw), "primary"),
       running && btn("Stop (delete pods)", () => confirm(`Delete every pod of ${c.name}?`) && post("stop", {}, "stop"), "danger"),
       running && btn("Extend…", () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) post("extend", { minutes: Number(m) }, "extend"); }),
@@ -849,7 +830,14 @@ async function pageCluster(main, id) {
   const outer = main;
   main = live;
   await draw();
-  outer.replaceChildren(live, card("Spec", h("p", { class: "muted small" }, "Edit the definition: the form and the JSON stay in sync; Review shows the diff and the plan (what would be created, stopped or restarted, and the $/hr against the floor) before saving."), docPanel("cluster-spec", id, { title: "cluster spec", cluster: id })));
+  outer.replaceChildren(
+    live,
+    card(
+      "Spec",
+      h("p", { class: "small" }, h("a", { href: `#/cluster/${id}/config` }, "Configure →"), h("span", { class: "muted" }, " every field with inline checks, price and stock per pool, the diff before saving, Start / Stop / Scale with the live log.")),
+      h("details", { class: "rawspec" }, h("summary", {}, "Raw document, history and restore"), docPanel("cluster-spec", id, { title: "cluster spec", cluster: id })),
+    ),
+  );
   every(10_000, () => draw().catch(() => {}));
 }
 async function showOp(id) {
@@ -1052,66 +1040,23 @@ function envTable(env) {
 }
 
 // ---------------------------------------------------------------- logs
+// The log explorer (ui/logs → public/logs.js): every source, server-side filters in the URL, virtualized list.
+let logsLoading = null;
+function fvLogs() {
+  if (window.FVLogs) return Promise.resolve(window.FVLogs);
+  logsLoading ||= new Promise((res, rej) => {
+    document.head.append(h("link", { rel: "stylesheet", href: "/logs.css" }));
+    const sc = document.createElement("script");
+    sc.src = "/logs.js";
+    sc.onload = () => res(window.FVLogs);
+    sc.onerror = () => { logsLoading = null; rej(new Error("could not load the log explorer")); };
+    document.head.append(sc);
+  });
+  return logsLoading;
+}
 async function pageLogs(main) {
-  const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const pods = (await api("/api/pods?all=1")).pods;
-  let pod = q.get("pod") || "";
-  const podSel = h("select", { "aria-label": "Pod", onchange: () => { location.hash = `#/logs?pod=${podSel.value}`; } }, h("option", { value: "" }, "choose a pod"), pods.map((p) => h("option", { value: p.pod_id, selected: p.pod_id === pod }, `${p.name || p.pod_id} (${p.owner})`)));
-  const level = h("select", { "aria-label": "Level" }, ["trace", "debug", "info", "warn", "error"].map((l) => h("option", { value: l, selected: l === "info" }, l)));
-  const text = h("input", { placeholder: "search (job_id, text…)", "aria-label": "Search" });
-  const out = h("div", { class: "log", id: "logOut" });
-  const status = h("span", { class: "muted small" });
-  const tabs = h("div", { class: "tabs" });
-  let mode = "shipped";
-  let lastId = 0;
-  const line = (l) => h("div", { class: `lv-${l.level}` }, `${new Date(l.ts).toISOString().slice(0, 23)} ${l.level.toUpperCase().padEnd(5)} ${l.target ? l.target + ": " : ""}${l.msg}${l.fields ? " " + JSON.stringify(l.fields) : ""}`);
-  const load = async () => {
-    if (!pod) { out.replaceChildren(h("div", { class: "muted" }, "Pick a pod.")); return; }
-    if (mode === "runpod") {
-      const r = await api(`/api/pods/${pod}/runpod-logs`);
-      out.replaceChildren(...r.container.map((x) => h("div", {}, x)), h("div", { class: "muted" }, "— system —"), ...r.system.map((x) => h("div", { class: "muted" }, x)));
-      status.textContent = `Runpod's own log tail (${r.container.length} lines; not searchable, no history).`;
-      return;
-    }
-    const p = new URLSearchParams({ pod, level: level.value, limit: "500" });
-    if (text.value) p.set("q", text.value);
-    const r = await api(`/api/logs?${p}`);
-    lastId = r.lines.length ? r.lines[r.lines.length - 1].id : 0;
-    out.replaceChildren(...r.lines.map(line));
-    out.scrollTop = out.scrollHeight;
-    status.textContent = `${r.lines.length} lines (D1 tail, last 24 h)`;
-  };
-  const tail = () => {
-    if (state.ws) { state.ws.close(); state.ws = null; tailBtn.textContent = "Live tail"; return; }
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/logs/tail?pod=${encodeURIComponent(pod)}`);
-    state.ws = ws;
-    tailBtn.textContent = "Stop tail";
-    ws.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        const order = ["trace", "debug", "info", "warn", "error"];
-        for (const l of m.lines) if (order.indexOf(l.level) >= order.indexOf(level.value) && (!text.value || JSON.stringify(l).includes(text.value))) out.append(line(l));
-        out.scrollTop = out.scrollHeight;
-      } catch {}
-    };
-    ws.onclose = () => { tailBtn.textContent = "Live tail"; status.textContent = "tail closed"; };
-    ws.onopen = () => { status.textContent = "live"; };
-    state.timers.push(setInterval(() => ws.readyState === 1 && ws.send("ping"), 25000));
-  };
-  const tailBtn = h("button", { onclick: tail, disabled: !pod }, "Live tail");
-  for (const [k, label] of [["shipped", "Shipped (fv-serve)"], ["runpod", "Runpod container log"]]) tabs.append(h("button", { class: mode === k ? "on" : "", onclick: (ev) => { mode = k; for (const b of tabs.children) b.classList.remove("on"); ev.target.classList.add("on"); load(); } }, label));
-  main.replaceChildren(
-    h("h1", {}, "Logs"),
-    card(
-      null,
-      h("div", { class: "row", style: "margin-bottom:10px" }, podSel, level, text, h("button", { onclick: load }, "Search"), tailBtn, pod && h("a", { class: "btn", href: `/api/logs/download?pod=${encodeURIComponent(pod)}&day=${new Date().toISOString().slice(0, 10)}` }, "Download today"), status),
-      tabs,
-      out,
-    ),
-  );
-  text.addEventListener("keydown", (e) => e.key === "Enter" && load());
-  level.addEventListener("change", load);
-  await load().catch((e) => (status.textContent = e.message));
+  const L = await fvLogs();
+  await L.mount(main, { api, toast, onCleanup: (fn) => state.cleanups.push(fn) });
 }
 
 // ---------------------------------------------------------------- costs
