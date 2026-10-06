@@ -596,6 +596,69 @@ Where the build differs from the design above:
   everything deleted at the end (`GET /pods/<id>` → 404 for each).
 - Exit: every listed check passes; numbers recorded in this document.
 
+### Stage 3 results (2026-10-06, staging)
+
+Setup: fv-edge-staging and fv-control-staging deployed from the stage-2
+branch (#28; the edge code is main's c74c5f5), images `*-sha-c74c5f5`,
+cluster `edgecp-live` (`control_plane: "edge"`, EU / EUR-IS-1, one RTX PRO
+6000 each for `h3-turbo` and `ltx`, `min_balance` 15). Checks:
+`scripts/serve/e2e/edge_live.py <edge url>` with a key minted through
+fv-control; every request went to the edge URL only.
+
+- **CPU dry run first** (`tiny-cpu`, $0.01). It found two problems that
+  are now fixed in #28. First, fv-control could not fetch the edge: a Worker
+  cannot fetch another `workers.dev` Worker of its account (error 1042), so
+  it now uses a service binding. Second, the result URLs of direct uploads
+  were 404: the workers now presign them in the edge's outputs bucket. After
+  the fixes a fake job ran with queue 0.34 s and its result downloaded from R2.
+- **GPU run 1** (13:59–14:44 UTC, 45 min cap):
+  - The h3 front was ready 434 s after its pod was made.
+  - Two `ltx` pods in a row never started their container (no log line,
+    no uptime, for 20 and 22 min), so they were deleted. No stock for a third
+    try at first.
+  - The h3 checks passed: minimax, fal `subscribe`, fal SSE status, OpenAI
+    videos, cancel, fal storage upload through the edge, and Reactor
+    admission.
+  - Key revocation through fv-control: the next request with the key was
+    refused 0.31 s after the revoke returned.
+  - The deadline backstop worked: the h3 pod's own watchdog deleted it at
+    the deadline (Runpod gone at 14:44:53), and the fv-control cron
+    (`deadline backstop`, 14:44:59) deleted the never-started ltx pod.
+- **GPU run 2** (14:49–15:07 UTC): both containers started in about 80 s,
+  and both fronts were ready at the edge after 4.7 min. **Every check
+  passed:**
+  - `/v1/models` merged across both fronts.
+  - Native jobs on both fronts at once: fasth3 done in 33.7 s (queue
+    0.80 s), ltx25-distill-sol done in 63.7 s (queue 0.20 s); outputs
+    downloaded from R2.
+  - MiniMax V2, LTX v2 text-to-video, OpenAI videos (8 s clip).
+  - fal-client `subscribe` on `minimax/h3-turbo` (29.7 s).
+  - fal submit → status every 1.1 s → result by id on
+    `fastvideo/ltx-turbo/text-to-video`.
+  - fal SSE status (`IN_PROGRESS` → `COMPLETED`).
+  - Cancel of a queued job, fal storage upload, Reactor session start /
+    follow / stop.
+- **Latency, edge path**, 10 serial fasth3 text-to-video jobs plus 30 status
+  polls from the test container (EU):
+
+  | | p50 | max |
+  |---|---|---|
+  | submit | 1.05 s | 1.38 s |
+  | queue | 0.25 s | 0.84 s |
+  | to `succeeded` | 30.9 s | 32.5 s |
+  | status poll | 0.59 s | 1.03 s |
+
+  `both` is not built, so there is no same-day gateway comparison. Run 1's
+  8 jobs gave submit p50 0.59 s and queue p50 0.27 s.
+- **Not covered:**
+  - Director and Reactor media: this container has no UDP, so only
+    admission and signalling were checked.
+  - fal webhooks: there is no public receiver here.
+  - The gateway latency comparison.
+- **Spend:** GPU about $4.3 (fv-control counts $3.73 for the cluster),
+  CPU $0.01. Every pod was deleted (`GONE` in Runpod), and the test keys were
+  revoked.
+
 ### Stage 4 — remove the gateway
 
 Only after stage 3 passes:
