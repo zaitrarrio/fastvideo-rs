@@ -145,8 +145,13 @@ before (R2 artifacts for PR heads existed only when someone built them).
 prereleases older than 14 days or whose version has been released, each with
 its tag. It refuses anything not tagged `tools-v…`.
 
-## Measured
+## Measured (2026-10-06, build pod cpu3c 32 vCPU, $0.96/hr)
 
-See the PR that introduced this (wip/tools-releases) and docs/dev/build-pod.md
-"Release artifacts" for build times; runner time saved per workflow is in
-docs/serve/images.md "Prebuilt binaries".
+`publish cbff53d --no-upload` (main, would be `tools-v0.1.0`): build 8.1 min
+(incremental: oxide from the volume cache, target dir warm; first build on a
+cold target dir 28 min), gate 1 `check.sh` 14.8 min (cold target dir; it is
+cleaned after to spare the shared disk), gate 2 the 2 shipped test binaries
+(40 + 520 tests) 7.9 min here, gate 3 seconds: about 31 min in all, ~$0.40 of
+pod time. Assets: 8 tarballs, 202 MB, plus a 14 KB manifest. The release
+itself could not be created from the coordinator session: its GitHub proxy
+refuses release writes (see the PR). Runner time saved per workflow: docs/serve/images.md.

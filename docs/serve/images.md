@@ -130,6 +130,17 @@ Each workflow then:
 | gpucheck-t0 | `gpucheck-tests gpucheck` | `cargo test` (runs the pod's test binaries), the CUDA type-check (covered by the release `--features cuda` build), the nvrtc job's release build (runs the prebuilt `fv-gpucheck nvrtc`) |
 | upstream-images, release | none | nothing compiled before either (upstream copies fv-gpucheck from the runtime image; release retags) |
 
+Runner time (2026-10-06 runs, all compiling, since no prebuilt set was ever
+served from R2) and the compile share a release removes: serve-image 23 min
+(debug-image build 12.2 min, most of it cargo/nvcc, plus 1 min freeing
+disk), gpucheck-runtime-image 9.5–11 min (build 7.1 min + 2 min freeing
+disk), vast-pytorch-image 10 min (build 6.3 min), serve-compat build job
+2.8 min (with a warm rust-cache), gpucheck-t0 unit-tests 14.4 min (of which
+running the tests ~8 min) and nvrtc-compile 6.5 min. Expected with an exact
+release: roughly 10, 7–8, 4–5, 2, 6 and 3 min less respectively (estimates
+from the step times; not yet measured on a release, see
+docs/dev/tools-releases.md "Measured").
+
 Pull-request jobs hash the checked-out merge commit. Repository variables:
 `FV_TOOLS_VERSION` (pin the image workflows to one release, e.g. `0.1.3`, for
 a rollback), `FV_PREBUILT_DISABLE=1` (always compile).
