@@ -1194,6 +1194,48 @@ pub fn hidden_states(
     hidden_states_opt(map, cfg, ids, positions, attend, taps, true, true, None)
 }
 
+/// [`hidden_states`] with the streamed layers held at `precision`.
+/// `Native` is [`hidden_states`] on `embed_map`. `Fp8Rows` embeds from
+/// `embed_map` (the checkpoint) and loads each layer from `layer_map` (a
+/// pre-quantized tree, or the checkpoint, quantized per layer exactly as
+/// [`ResidentDecoder::load_with`] does) and drops it after use: the numbers
+/// of a resident FP8 decoder, without keeping it. A process that released
+/// its resident FP8 encoder encodes later prompts with this, so a prompt's
+/// conditioning does not depend on what the process ran before.
+#[allow(clippy::too_many_arguments)]
+pub fn hidden_states_at(
+    embed_map: &WeightMap,
+    layer_map: &WeightMap,
+    cfg: &DecoderConfig,
+    ids: &[u32],
+    positions: &[u32],
+    attend: &[bool],
+    taps: &[usize],
+    precision: WeightPrecision,
+) -> Result<Vec<CudaTensor>> {
+    if precision == WeightPrecision::Native {
+        return hidden_states(embed_map, cfg, ids, positions, attend, taps);
+    }
+    if ids.is_empty() {
+        return Err(msg("llm: empty prompt"));
+    }
+    let embedded = embed(embed_map, cfg, ids)?;
+    encode(
+        cfg,
+        &mut Streamed {
+            map: layer_map,
+            cfg,
+            precision,
+        },
+        embedded,
+        positions,
+        attend,
+        taps,
+        false,
+        None,
+    )
+}
+
 /// Like [`hidden_states`], but starts from pre-built embeddings (vision pads
 /// already scattered) and applies Qwen3-VL mRoPE + DeepStack.
 pub fn hidden_states_multimodal(

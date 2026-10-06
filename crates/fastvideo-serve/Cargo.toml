@@ -13,6 +13,13 @@ path = "src/lib.rs"
 name = "fv-serve"
 path = "src/main.rs"
 
+# The edge on the host (src/edge_host.rs): local runs and the compat suites'
+# edge mode (FV_COMPAT_EDGE=1).
+[[bin]]
+name = "fv-edge-local"
+path = "src/bin/fv-edge-local.rs"
+required-features = ["http-client"]
+
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-engine-service.workspace = true
@@ -91,7 +98,7 @@ webrtc = ["fastvideo-webrtc/str0m", "fastvideo-webrtc/opus", "fastvideo-media/op
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
 # Cloudflare D1 job store, WHIP, Runpod worker.
-http-client = ["dep:reqwest", "dep:tokio-tungstenite", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod", "fastvideo-autoscale/runpod"]
+http-client = ["dep:reqwest", "dep:tokio-tungstenite", "axum/ws", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod", "fastvideo-autoscale/runpod"]
 # Adapter mount points (design §9, src/adapters.rs); on by default once the
 # adapter is on main. `reactor` brings the str0m host (it answers offers).
 openai-videos = ["dep:fastvideo-openai-videos"]

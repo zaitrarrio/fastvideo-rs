@@ -84,6 +84,7 @@ mod imp {
         _module: Arc<cudarc::driver::CudaModule>,
         colsum_bf16: CudaFunction,
         colsum_f32: CudaFunction,
+        colsum_reduce: CudaFunction,
         quant_bf16: CudaFunction,
         quant_tile_f32: CudaFunction,
         fwd_d128: CudaFunction,
@@ -185,6 +186,7 @@ mod imp {
         let k = Kernels {
             colsum_bf16: f("attn_fp8_colsum_bf16")?,
             colsum_f32: f("attn_fp8_colsum_f32")?,
+            colsum_reduce: f("attn_fp8_colsum_reduce")?,
             quant_bf16: f("attn_fp8_quant_bf16")?,
             quant_tile_f32: f("attn_fp8_quant_tile_f32")?,
             fwd_d128: f("attn_fp8_fwd_d128")?,
@@ -216,8 +218,40 @@ mod imp {
         unsafe { dev.stream.alloc::<f32>(n.max(1)) }.map_err(err)
     }
 
-    /// Rows per colsum block (atomics per (head, dim) = rows / this).
+    /// Rows per colsum block (partials per (head, dim) = rows / this).
     const COLSUM_ROWS: usize = 256;
+
+    /// Per-head column sums `[bh, 128]` of a `[bh, rows, 128]` tensor: one
+    /// partial per block of [`COLSUM_ROWS`] rows (`first(part, cfg, rows,
+    /// rpb)` launches the f32 or bf16 reader into `part`), then the partials
+    /// added in block order (`attn_fp8_colsum_reduce`), so the sums do not
+    /// depend on the order blocks finish in.
+    fn colsum(
+        k: &Kernels,
+        bh: usize,
+        rows: usize,
+        first: impl FnOnce(&mut CudaSlice<f32>, LaunchConfig, i32, i32) -> Result<()>,
+    ) -> Result<CudaSlice<f32>> {
+        let dev = ctx()?;
+        let nblk = rows.div_ceil(COLSUM_ROWS).max(1);
+        let n = bh * HEAD_DIM;
+        let mut part = alloc_f32(nblk * n)?;
+        let cfg = LaunchConfig {
+            grid_dim: (nblk as u32, bh as u32, 1),
+            block_dim: (HEAD_DIM as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        first(&mut part, cfg, rows as i32, COLSUM_ROWS as i32)?;
+        let mut sum = zeros_f32(n)?;
+        let (nblk_i, n_i) = (nblk as i32, n as i32);
+        let cfg = LaunchConfig {
+            grid_dim: (n.div_ceil(256) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        launch!(dev.stream, &k.colsum_reduce, cfg; &part, &mut sum, &nblk_i, &n_i).map_err(err)?;
+        Ok(sum)
+    }
 
     /// E4M3 rows of a bf16 `[bh, rows, 128]` tensor, padded to `rows_pad`
     /// (a multiple of 64), with scales per `grp` rows; `smooth` subtracts the
@@ -232,16 +266,14 @@ mod imp {
         smooth: bool,
     ) -> Result<(CudaSlice<u8>, CudaSlice<f32>)> {
         let dev = ctx()?;
-        let mut sum = zeros_f32(bh * HEAD_DIM)?;
-        let (rows_i, rpb) = (rows as i32, COLSUM_ROWS as i32);
-        if smooth {
-            let cfg = LaunchConfig {
-                grid_dim: (rows.div_ceil(COLSUM_ROWS) as u32, bh as u32, 1),
-                block_dim: (HEAD_DIM as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
-            launch!(dev.stream, &k.colsum_bf16, cfg; x, &mut sum, &rows_i, &rpb).map_err(err)?;
-        }
+        let sum = if smooth {
+            colsum(k, bh, rows, |part, cfg, rows_i, rpb| {
+                launch!(dev.stream, &k.colsum_bf16, cfg; x, part, &rows_i, &rpb).map_err(err)
+            })?
+        } else {
+            zeros_f32(bh * HEAD_DIM)?
+        };
+        let rows_i = rows as i32;
         let mut out = alloc_u8(bh * rows_pad * HEAD_DIM)?;
         let mut scales = alloc_f32(bh * rows_pad / grp)?;
         let cfg = LaunchConfig {
@@ -366,14 +398,9 @@ mod imp {
         let seq_i = seq as i32;
         let pad_i = padded as i32;
         // K: column sums over the live rows, then tile-slot quantization.
-        let mut sum = zeros_f32(bh * HEAD_DIM)?;
-        let rpb = COLSUM_ROWS as i32;
-        let cfg = LaunchConfig {
-            grid_dim: (seq.div_ceil(COLSUM_ROWS) as u32, bh as u32, 1),
-            block_dim: (HEAD_DIM as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        launch!(dev.stream, &kern.colsum_f32, cfg; k, &mut sum, &seq_i, &rpb).map_err(err)?;
+        let sum = colsum(&kern, bh, seq, |part, cfg, rows_i, rpb| {
+            launch!(dev.stream, &kern.colsum_f32, cfg; k, part, &rows_i, &rpb).map_err(err)
+        })?;
         let quant = |x: &CudaSlice<f32>,
                      smooth: bool,
                      grp: usize|

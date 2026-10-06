@@ -454,7 +454,7 @@ fn build_transpose_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvTransp
         w: &w,
         dy: &x,
     };
-    let algo = op.pick_algorithm()?;
+    let algo = deterministic_bwd_data_algo(op.pick_algorithm()?, |a| op.get_workspace_size(a).is_ok());
     let workspace_bytes = op.get_workspace_size(algo)?;
     super::log::debug(format_args!(
         "conv-transpose plan x={:?} w={:?} pad={:?} stride={:?} algo={algo:?} workspace={}B",
@@ -469,6 +469,29 @@ fn build_transpose_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvTransp
         workspace_bytes,
         y_shape,
     })
+}
+
+/// The backward-data algorithm a transposed convolution runs: the
+/// heuristic's first choice, unless that is `ALGO_0`, the one backward-data
+/// algorithm cuDNN documents as nondeterministic (it accumulates with
+/// atomics, so the output bits depend on scheduling). Then `ALGO_1` (the
+/// deterministic GEMM form) when cuDNN accepts it for the shape.
+/// `FASTVIDEO_CONV_BWD_DATA_NONDETERMINISTIC=1` keeps the heuristic's pick.
+pub fn deterministic_bwd_data_algo(
+    picked: cudarc::cudnn::sys::cudnnConvolutionBwdDataAlgo_t,
+    accepts: impl Fn(cudarc::cudnn::sys::cudnnConvolutionBwdDataAlgo_t) -> bool,
+) -> cudarc::cudnn::sys::cudnnConvolutionBwdDataAlgo_t {
+    use cudarc::cudnn::sys::cudnnConvolutionBwdDataAlgo_t as B;
+    if picked != B::CUDNN_CONVOLUTION_BWD_DATA_ALGO_0
+        || super::envflag::bool_flag("FASTVIDEO_CONV_BWD_DATA_NONDETERMINISTIC", false)
+    {
+        return picked;
+    }
+    if accepts(B::CUDNN_CONVOLUTION_BWD_DATA_ALGO_1) {
+        B::CUDNN_CONVOLUTION_BWD_DATA_ALGO_1
+    } else {
+        picked
+    }
 }
 
 /// Transposed convolution, PyTorch `ConvTranspose` semantics: `w` is

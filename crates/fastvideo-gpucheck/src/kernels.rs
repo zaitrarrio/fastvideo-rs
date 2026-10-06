@@ -23,6 +23,7 @@ use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
 mod attn3;
+mod determinism;
 mod vsa_dc;
 
 fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
@@ -2252,6 +2253,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // sm_120 dense tuning (fwd3, cuDNN SDPA graphs) and the VSA stage breakdown.
     group(&mut c, "attn3_parity", attn3::parity)?;
     group(&mut c, "attn3_bench", attn3::bench)?;
+    // The offline generator of the fixed dense-SDPA rule (wan::sdpa_rule).
+    group(&mut c, "sdpa_rule", attn3::sdpa_rule)?;
+    // Repeat runs of the order- or selection-sensitive kernels, bit for bit.
+    group(&mut c, "determinism", determinism::run)?;
     group(&mut c, "vsa_stages", attn3::vsa_stages)?;
     group(&mut c, "attn_dc", attn2::dc_parity)?;
     group(&mut c, "vsa_dc", vsa_dc::run)?;
