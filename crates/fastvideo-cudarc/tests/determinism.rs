@@ -137,7 +137,8 @@ fn same_seed_same_bytes_within_one_process() {
 fn determinism_child_digest() {
     let d = digest();
     if std::env::var_os(CHILD_ENV).is_some() {
-        println!("{DIGEST_TAG}{d}");
+        // libtest prints "test <name> ... " on the same line first.
+        println!("\n{DIGEST_TAG}{d}");
     }
 }
 
@@ -156,7 +157,7 @@ fn same_seed_same_bytes_across_processes() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let child = stdout
         .lines()
-        .find_map(|l| l.trim().strip_prefix(DIGEST_TAG))
+        .find_map(|l| l.split(DIGEST_TAG).nth(1).and_then(|r| r.split_whitespace().next()))
         .unwrap_or_else(|| panic!("no digest in the child's output:\n{stdout}"))
         .to_string();
     assert_eq!(digest(), child, "the child process computed a different digest");
