@@ -1,0 +1,66 @@
+# fv-serve on a Google Cloud GPU VM (scripts/gcp/vm.sh, docs/serve/deploy-gcp.md):
+# h3-turbo (FastH3 4-step VSA). One family per VM, one GPU.
+#
+# vm.sh ships this file as instance metadata and mounts it into the pinned
+# serve image, so a config change needs no image rebuild. The weights are a
+# read-only Hyperdisk ML volume at /workspace (FV_WEIGHTS=/workspace/weights);
+# state lives on the boot disk (/fvstate). Secrets come from the environment
+# only (Secret Manager or instance metadata, never this file); with the
+# FV_CF_* / FV_D1_* / FV_R2_* set present, `auto` selects D1 jobs + R2 media.
+#
+# WebRTC: the VM has a public IP and runs the container on the host network,
+# so the ICE ports are real ports (vm.sh opens them to FV_GCP_SOURCE_CIDR);
+# FV_PUBLIC_IP (from the metadata server) is the advertised address.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3"
+family = "h3"
+recipe = "h3-turbo"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = true
+served_names = ["fasth3"]
+continuity = "anchor-last-frame"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = false
+reactor = true
+native = true
+fal_apps = ["minimax/h3-turbo"]
+
+[webrtc]
+udp_port = 40010
+tcp_port = 40000
+
+[limits]
+queue_max = 32
+body_max_mb = 64
