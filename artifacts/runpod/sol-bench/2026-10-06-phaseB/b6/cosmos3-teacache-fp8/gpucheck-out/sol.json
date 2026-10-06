@@ -1,0 +1,84 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "warmup",
+      "ok": true,
+      "values": {
+        "arm": "teacache",
+        "decode_s": 22.026789572,
+        "denoise_s": 40.631394322,
+        "export_s": 2.902623652,
+        "fp8": true,
+        "gen_tokens": 44160,
+        "load_s": 241.510574779,
+        "request_s": 299.640808153,
+        "steps": 1,
+        "steps_computed": 1,
+        "steps_reused": 0,
+        "text_tower_s": 233.887107445,
+        "und_resident": false,
+        "und_tokens_cond": 94,
+        "und_tokens_uncond": 92
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "arm": "teacache",
+        "decode_s": 22.011450808,
+        "denoise_s": 660.703500683,
+        "export_s": 2.511755489,
+        "fp8": true,
+        "gen_tokens": 44160,
+        "load_s": 0.00001446,
+        "peak_mib": 78291,
+        "published_4xgb200": {
+          "baseline_denoise_s": 121.4198,
+          "baseline_s": 130.41,
+          "fullopt_speedup": 2.26
+        },
+        "request_s": 800.743111903,
+        "steps": 35,
+        "steps_computed": 16,
+        "steps_reused": 19,
+        "text_tower_s": 115.326901364,
+        "und_resident": false,
+        "und_tokens_cond": 94,
+        "und_tokens_uncond": 92
+      }
+    },
+    {
+      "limits": {},
+      "name": "steps",
+      "ok": true,
+      "values": {
+        "steps": 35
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast"
+  },
+  "elapsed_s": 1347.971995001,
+  "env": {
+    "FASTVIDEO_FP8": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "sol",
+  "status": "pass"
+}

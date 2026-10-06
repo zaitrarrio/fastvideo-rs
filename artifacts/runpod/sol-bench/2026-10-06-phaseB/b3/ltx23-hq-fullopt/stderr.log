@@ -1,0 +1,58 @@
+ltx2 ltx2 techniques: pisa (transform/Build) [attention_backend from command line]
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+ltx2 gen 1920x1088x241: planned peak 51.71 GiB resident, 17.09 GiB streamed
+[fastvideo] ltx2 dit offload: resident -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":2.67,"viewed_gb":1.14,"prefetch_read_gb":1.14,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1.1,"viewed_gbps":0.42,"window_wait_s":0.0,"fill_s":0.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[fastvideo] ltx2 hq: stage-1 15 steps, stage-2 sigmas [0.909375, 0.725, 0.421875, 0.0], guidance 3, 1920x1088 241f (lora 0.25/0.5 /workspace/weights/ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors)
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 0.61s, upload wait 0.07s, compute starved 0.62s
+[ERROR] stage ltx2 → gpucheck-out/ltx2.json (10.2s)
+error: no text projection in the checkpoint; looked for ["text_embedding_projection.aggregate_embed", "model.diffusion_model.text_embedding_projection.aggregate_embed"] (+ `.weight`)

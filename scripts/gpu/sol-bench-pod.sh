@@ -252,6 +252,11 @@ case "$SET" in
     a14b a14b-sol-base 1800
     a14b a14b-sol-fullopt 900 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
     ;;
+  b2r) # Phase B retry of b2: the A14B load was OOM-killed (exit 137) on a
+    # 188 GB-RAM pod; background read-ahead off (load-time only, same compute).
+    a14b a14b-sol-base 1800 FASTVIDEO_PREFETCH=0
+    a14b a14b-sol-fullopt 900 FASTVIDEO_PREFETCH=0 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
   b3) # Phase B: LTX-2.3 HQ, then LingBot fullopt (one prompt)
     ltx23 ltx23-hq-base 660 --dense-stage2
     ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
@@ -264,9 +269,11 @@ case "$SET" in
   b5) # Phase B: Cosmos3-Super baseline
     cosmos3 cosmos3-baseline baseline 2400
     ;;
-  b6) # Phase B: Cosmos3-Super TeaCache 1.15/10/3 (BF16), then + W8A8 FP8 (theirs: NVFP4 middle steps)
-    cosmos3 cosmos3-teacache teacache 1800
-    cosmos3 cosmos3-teacache-fp8 teacache 1200 FASTVIDEO_FP8=1
+  b6) # Phase B: Cosmos3-Super with W8A8 FP8 (theirs: NVFP4 on middle steps).
+    # BF16 OOMs in the VAE decode on a 96 GB card (b5, 2026-10-06), so both
+    # arms run FP8: TeaCache 1.15/10/3 first, then the no-cache baseline.
+    cosmos3 cosmos3-teacache-fp8 teacache 1500 FASTVIDEO_FP8=1
+    cosmos3 cosmos3-baseline-fp8 baseline 1500 FASTVIDEO_FP8=1
     ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac

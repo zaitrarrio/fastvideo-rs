@@ -1,0 +1,116 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] sana-video/load {"seconds":32.650308567}
+[fastvideo] llm layer 1/26
+[fastvideo] llm layer 2/26
+[fastvideo] llm layer 3/26
+[fastvideo] llm layer 4/26
+[fastvideo] llm layer 5/26
+[fastvideo] llm layer 6/26
+[fastvideo] llm layer 7/26
+[fastvideo] llm layer 8/26
+[fastvideo] llm layer 9/26
+[fastvideo] llm layer 10/26
+[fastvideo] llm layer 11/26
+[fastvideo] llm layer 12/26
+[fastvideo] llm layer 13/26
+[fastvideo] llm layer 14/26
+[fastvideo] llm layer 15/26
+[fastvideo] llm layer 16/26
+[fastvideo] llm layer 17/26
+[fastvideo] llm layer 18/26
+[fastvideo] llm layer 19/26
+[fastvideo] llm layer 20/26
+[fastvideo] llm layer 21/26
+[fastvideo] llm layer 22/26
+[fastvideo] llm layer 23/26
+[fastvideo] llm layer 24/26
+[fastvideo] llm layer 25/26
+[fastvideo] llm layer 26/26
+[fastvideo] llm prefetch: 26 layers, host read+convert 11.54s, upload wait 0.00s, compute starved 11.45s
+[fastvideo] llm layer 1/26
+[fastvideo] llm layer 2/26
+[fastvideo] llm layer 3/26
+[fastvideo] llm layer 4/26
+[fastvideo] llm layer 5/26
+[fastvideo] llm layer 6/26
+[fastvideo] llm layer 7/26
+[fastvideo] llm layer 8/26
+[fastvideo] llm layer 9/26
+[fastvideo] llm layer 10/26
+[fastvideo] llm layer 11/26
+[fastvideo] llm layer 12/26
+[fastvideo] llm layer 13/26
+[fastvideo] llm layer 14/26
+[fastvideo] llm layer 15/26
+[fastvideo] llm layer 16/26
+[fastvideo] llm layer 17/26
+[fastvideo] llm layer 18/26
+[fastvideo] llm layer 19/26
+[fastvideo] llm layer 20/26
+[fastvideo] llm layer 21/26
+[fastvideo] llm layer 22/26
+[fastvideo] llm layer 23/26
+[fastvideo] llm layer 24/26
+[fastvideo] llm layer 25/26
+[fastvideo] llm layer 26/26
+[fastvideo] llm prefetch: 26 layers, host read+convert 0.45s, upload wait 0.01s, compute starved 0.43s
+[fastvideo] sdpa: device dense B=1 H=20 Sq=32760 Sk=8 D=112 query_chunk=32760
+[INFO] sana-video/cold_generation {"decode_s":2.289402993,"denoise_s":180.022455112,"reused_steps":0,"step_s":[3.777028766,3.70563988,3.622338393,3.589162071,3.590496551,3.590997541,3.590384651,3.5890124119999998,3.591166351,3.594922682,3.591765712,3.593095831,3.594301452,3.590897281,3.592314562,3.5924615810000002,3.593969462,3.5940785010000003,3.594527202,3.592166971,3.595023952,3.593938672,3.594068921,3.5957814519999998,3.594447501,3.597456632,3.594705252,3.596021152,3.594855442,3.593849412,3.599282792,3.5966514309999997,3.595892312,3.596381182,3.597143742,3.596830771,3.596768702,3.596788822,3.596822822,3.595935211,3.591388622,3.595605361,3.593148292,3.592769011,3.592642832,3.591436801,3.591182642,3.592978181,3.595729732,3.596062061],"text_s":13.611148549,"total_s":197.589749199,"write_s":1.555841908}
+[fastvideo] llm layer 1/26
+[fastvideo] llm layer 2/26
+[fastvideo] llm layer 3/26
+[fastvideo] llm layer 4/26
+[fastvideo] llm layer 5/26
+[fastvideo] llm layer 6/26
+[fastvideo] llm layer 7/26
+[fastvideo] llm layer 8/26
+[fastvideo] llm layer 9/26
+[fastvideo] llm layer 10/26
+[fastvideo] llm layer 11/26
+[fastvideo] llm layer 12/26
+[fastvideo] llm layer 13/26
+[fastvideo] llm layer 14/26
+[fastvideo] llm layer 15/26
+[fastvideo] llm layer 16/26
+[fastvideo] llm layer 17/26
+[fastvideo] llm layer 18/26
+[fastvideo] llm layer 19/26
+[fastvideo] llm layer 20/26
+[fastvideo] llm layer 21/26
+[fastvideo] llm layer 22/26
+[fastvideo] llm layer 23/26
+[fastvideo] llm layer 24/26
+[fastvideo] llm layer 25/26
+[fastvideo] llm layer 26/26
+[fastvideo] llm prefetch: 26 layers, host read+convert 0.49s, upload wait 0.01s, compute starved 0.48s
+[fastvideo] llm layer 1/26
+[fastvideo] llm layer 2/26
+[fastvideo] llm layer 3/26
+[fastvideo] llm layer 4/26
+[fastvideo] llm layer 5/26
+[fastvideo] llm layer 6/26
+[fastvideo] llm layer 7/26
+[fastvideo] llm layer 8/26
+[fastvideo] llm layer 9/26
+[fastvideo] llm layer 10/26
+[fastvideo] llm layer 11/26
+[fastvideo] llm layer 12/26
+[fastvideo] llm layer 13/26
+[fastvideo] llm layer 14/26
+[fastvideo] llm layer 15/26
+[fastvideo] llm layer 16/26
+[fastvideo] llm layer 17/26
+[fastvideo] llm layer 18/26
+[fastvideo] llm layer 19/26
+[fastvideo] llm layer 20/26
+[fastvideo] llm layer 21/26
+[fastvideo] llm layer 22/26
+[fastvideo] llm layer 23/26
+[fastvideo] llm layer 24/26
+[fastvideo] llm layer 25/26
+[fastvideo] llm layer 26/26
+[fastvideo] llm prefetch: 26 layers, host read+convert 0.48s, upload wait 0.01s, compute starved 0.47s
+[INFO] sana-video/timings {"decode_s":2.246356885,"denoise_s":179.591124178,"generate_s":184.51723559500002,"load_s":32.650308567,"peak_mib":19876,"reused_steps":0,"step_s":[3.519003556,3.593709832,3.594057671,3.591846802,3.591667651,3.5908007619999998,3.601914222,3.593034161,3.591392892,3.591371362,3.592666401,3.593125992,3.592768171,3.592786152,3.593586281,3.592760292,3.592872381,3.592840881,3.593096452,3.5942872809999997,3.594264301,3.5920178529999998,3.592202877,3.5927381670000003,3.592387627,3.593053897,3.592864688,3.594004818,3.592934797,3.592028337,3.591990827,3.594022417,3.595653289,3.594562728,3.589799836,3.594294668,3.593332058,3.593571347,3.593553897,3.593628818,3.591005286,3.5926287869999998,3.593972458,3.5935467770000002,3.594501338,3.595509145,3.595626354,3.595081533,3.593536733,3.593132852],"text_s":2.576966425,"total_s":186.036613885,"warm":true,"write_s":1.5193782900000001}
+[PASS] sana-video/frames {"decoded":81} (limits {"expected":81})
+[PASS] sana-video/middle_frame_not_flat {"frame":"/fvscratch/runs/sol-bench-b1/b70f57c-10061839/sana-baseline/frames/frame_00040.png","mean":0.6492992512736027,"std":0.2297557263866017} (limits {"std_min":0.02})
+[PASS] stage sana-video → gpucheck-out/sana-video.json (416.9s)
