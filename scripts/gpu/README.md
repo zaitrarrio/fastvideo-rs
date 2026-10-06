@@ -56,10 +56,12 @@ FV_PROMPT="a golden retriever on a beach at sunset" scripts/gpu/validate.sh run 
 `gen` is the lean tier: deploy, encode one prompt, generate one clip — no
 kernel, model or parity validation.
 
-`FASTVIDEO_CONV3D` picks the 3-D conv backend: `auto` (default, times each
-candidate once per shape and keeps the winner), `cudnn`, `unfold` or
-`cudnn-bf16`. bf16 only competes in `auto` under fast mode, since it changes
-the numerics.
+`FASTVIDEO_CONV3D` picks the 3-D conv backend: `auto` (default: cuDNN on
+bf16 under bf16 math, cuDNN f32 under f32 math, whatever the timing, so the
+output is the same in every run), `cudnn`, `unfold` or `cudnn-bf16`.
+`FASTVIDEO_CONV3D_TIMED=1` restores the old per-shape timing (bf16 only
+competes under fast mode); it is not reproducible run to run. Every other
+timed kernel pick is fixed the same way (docs/perf/determinism.md).
 
 `FASTVIDEO_VAE_CHUNK` decodes several latent frames per pass instead of one.
 `2` is ~9% faster on an 8s clip and produces identical frames; `4` runs out of

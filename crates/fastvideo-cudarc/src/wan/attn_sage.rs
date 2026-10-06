@@ -176,6 +176,7 @@ mod imp {
     struct Kernels {
         _module: Arc<cudarc::driver::CudaModule>,
         colsum: CudaFunction,
+        colsum_reduce: CudaFunction,
         quant: CudaFunction,
         vmax: CudaFunction,
         vquant: CudaFunction,
@@ -270,6 +271,7 @@ mod imp {
         let f = |name: &str| module.load_function(name).map_err(err);
         let k = Kernels {
             colsum: f("attn_sage_colsum_bf16")?,
+            colsum_reduce: f("attn_sage_colsum_reduce")?,
             quant: f("attn_sage_quant_i8")?,
             vmax: f("attn_sage_vmax")?,
             vquant: f("attn_sage_vquant")?,
@@ -312,12 +314,25 @@ mod imp {
         let mut sum = zeros::<f32>(bh * HEAD_DIM)?;
         let (rows_i, rpb) = (rows as i32, COLSUM_ROWS as i32);
         if smooth {
+            // One partial per block, then the partials added in block order:
+            // the same bits in every run (no float atomics).
+            let nblk = rows.div_ceil(COLSUM_ROWS).max(1);
+            let n = bh * HEAD_DIM;
+            let mut part = alloc::<f32>(nblk * n)?;
             let cfg = LaunchConfig {
-                grid_dim: (rows.div_ceil(COLSUM_ROWS) as u32, bh as u32, 1),
+                grid_dim: (nblk as u32, bh as u32, 1),
                 block_dim: (HEAD_DIM as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
-            launch!(dev.stream, &k.colsum, cfg; x, &mut sum, &rows_i, &rpb).map_err(err)?;
+            launch!(dev.stream, &k.colsum, cfg; x, &mut part, &rows_i, &rpb).map_err(err)?;
+            let (nblk_i, n_i) = (nblk as i32, n as i32);
+            let cfg = LaunchConfig {
+                grid_dim: (n.div_ceil(256) as u32, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            launch!(dev.stream, &k.colsum_reduce, cfg; &part, &mut sum, &nblk_i, &n_i)
+                .map_err(err)?;
         }
         let mut out = alloc::<u8>(bh * rows_pad * HEAD_DIM)?;
         let mut scales = alloc::<f32>(bh * rows_pad / grp)?;
