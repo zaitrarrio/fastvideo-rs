@@ -1667,35 +1667,33 @@ fn generate_lingbot(
         };
         let mut pipe = LingBotPipeline::open(&weights, preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        if weights.join("transformer").is_dir() {
-            pipe.load_dit()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        }
-        if weights.join("vae").is_dir() {
-            pipe.load_vae()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        }
-        let mut request = LingBotRequest::dense_1_3b(opts.prompt, opts.seed);
-        request.preset = preset;
         let official = fastvideo_models::lingbot::sol::official_requested(
             std::env::var("FASTVIDEO_LINGBOT_OFFICIAL").ok().as_deref(),
         );
-        if official {
-            if opts.height.is_none() {
-                request.height = fastvideo_models::lingbot::sol::OFFICIAL_HEIGHT;
-            }
-            if opts.width.is_none() {
-                request.width = fastvideo_models::lingbot::sol::OFFICIAL_WIDTH;
-            }
-            if opts.num_frames.is_none() {
-                request.num_frames = fastvideo_models::lingbot::sol::OFFICIAL_FRAMES;
-            }
-            if opts.num_inference_steps.is_none() {
-                request.num_steps = fastvideo_models::lingbot::sol::OFFICIAL_STEPS;
-            }
-            if opts.guidance_scale.is_none() {
-                request.guidance_scale = fastvideo_models::lingbot::sol::OFFICIAL_GUIDANCE;
-            }
+        // Official: the models/lingbot_video.toml two-stage contract (base +
+        // 1080p refiner). `FASTVIDEO_LINGBOT_REFINE=0` stops after the base.
+        let mut request = if official {
+            LingBotRequest::official(opts.prompt.clone())
+        } else {
+            let mut r = LingBotRequest::dense_1_3b(opts.prompt.clone(), opts.seed);
+            r.preset = preset;
+            r
+        };
+        if !official || opts.seed != 0 {
+            request.seed = opts.seed;
+        }
+        if matches!(
+            std::env::var("FASTVIDEO_LINGBOT_REFINE").ok().as_deref(),
+            Some("0") | Some("off")
+        ) {
+            request.refiner = None;
+        }
+        request.sol = fastvideo_models::lingbot::sol::SolArm::parse(
+            std::env::var("FASTVIDEO_LINGBOT_SOL").ok().as_deref(),
+        )
+        .map_err(FastVideoError::Message)?;
+        if !opts.negative_prompt.is_empty() {
+            request.negative_prompt = Some(opts.negative_prompt.clone());
         }
         if let Some(h) = opts.height {
             request.height = h as usize;
