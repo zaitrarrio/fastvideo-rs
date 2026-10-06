@@ -72,6 +72,47 @@ fn host_gqa_masked(
     scaled_dot_product_attention_masked(q, &k, &v, scale, mask)
 }
 
+/// Gemma-2 attention: `softmax(tanh(scale · QKᵀ / cap) · cap + mask) · V`
+/// (`attn_logit_softcapping`). `q` `[B, Hq, S, D]`, `k`/`v` `[B, Hkv, S, D]`.
+/// Built from tensor ops (device GEMMs when the operands are resident), for
+/// prompt-length sequences: the score matrix is materialized.
+pub fn scaled_dot_product_attention_gqa_softcap(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: f32,
+    cap: f32,
+    mask: &CudaTensor,
+) -> Result<CudaTensor> {
+    let (_b, hq, hkv, _sq, _sk, _d) = gqa_layout(q, k, v)?;
+    if cap <= 0.0 {
+        return Err(msg(format!("softcap attention: cap {cap} must be positive")));
+    }
+    let g = hq / hkv;
+    let (k, v) = if g == 1 {
+        (k.clone(), v.clone())
+    } else {
+        (k.repeat_kv(g)?, v.repeat_kv(g)?)
+    };
+    let scores = q.matmul(&k.transpose(2, 3)?)?.try_mul_scalar(scale)?;
+    let capped = tanh_scaled(&scores, cap)?;
+    let probs = capped.add(mask)?.softmax(-1)?;
+    probs.matmul(&v)
+}
+
+/// `tanh(x / s) · s`, on the device when `x` is resident.
+fn tanh_scaled(x: &CudaTensor, s: f32) -> Result<CudaTensor> {
+    #[cfg(feature = "cuda")]
+    if let Some(d) = x.dev()? {
+        return CudaTensor::from_dev_result(
+            crate::wan::ops::tanh_scaled_device(&d, s)?,
+            x.shape.clone(),
+        );
+    }
+    let host = x.host_cow()?;
+    CudaTensor::from_vec(host.iter().map(|v| (v / s).tanh() * s).collect(), x.shape.clone())
+}
+
 /// Chunked `Q@Kᵀ` + mask + softmax + `P@V` over KV-head groups so K/V stay at
 /// `Hkv`. `None` when no device buffer is available.
 #[cfg(feature = "cuda")]
@@ -149,6 +190,34 @@ mod tests {
 
     fn t(data: Vec<f32>, shape: &[usize]) -> CudaTensor {
         CudaTensor::from_vec(data, shape.to_vec()).unwrap()
+    }
+
+    /// A huge cap is plain attention; a small cap flattens the logits.
+    #[test]
+    fn softcap_limits_logits() {
+        let (b, hq, hkv, s, d) = (1usize, 2, 1, 3, 2);
+        let q = t((0..b * hq * s * d).map(|i| i as f32).collect(), &[b, hq, s, d]);
+        let k = t((0..b * hkv * s * d).map(|i| i as f32 * 0.5).collect(), &[b, hkv, s, d]);
+        let v = t((0..b * hkv * s * d).map(|i| i as f32).collect(), &[b, hkv, s, d]);
+        let mut m = vec![f32::MIN; s * s];
+        for i in 0..s {
+            for j in 0..=i {
+                m[i * s + j] = 0.0;
+            }
+        }
+        let mask = t(m, &[1, 1, s, s]);
+        let plain = scaled_dot_product_attention_gqa(&q, &k, &v, Some(0.7), Some(&mask)).unwrap();
+        let wide =
+            scaled_dot_product_attention_gqa_softcap(&q, &k, &v, 0.7, 1e6, &mask).unwrap();
+        for (x, y) in plain.host_cow().unwrap().iter().zip(wide.host_cow().unwrap().iter()) {
+            assert!((x - y).abs() < 1e-4, "{x} vs {y}");
+        }
+        // cap → 0: all visible logits equal, so each row averages its visible V.
+        let flat = scaled_dot_product_attention_gqa_softcap(&q, &k, &v, 0.7, 1e-6, &mask).unwrap();
+        let f = flat.host_cow().unwrap();
+        // Last row of head 0 sees all three keys: mean of v rows.
+        let mean0 = (0.0 + 2.0 + 4.0) / 3.0;
+        assert!((f[2 * d] - mean0).abs() < 1e-4, "{}", f[2 * d]);
     }
 
     /// Grouped scores must match materializing K/V with `repeat_kv`.
