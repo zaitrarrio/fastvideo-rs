@@ -92,18 +92,20 @@ Weights stay on the network volume (EU `jg48s6o1w0`; the US volume
 
 ## Prebuilt binaries (compile on the build pod, assemble on GitHub)
 
-Since 2026-10-06 (owner decision, option 1b) no image workflow needs to
-compile Rust or CUDA. The shared build pod builds a commit's binaries
-(`scripts/dev/build-pod.sh release-artifacts <sha>`, docs/dev/build-pod.md
-"Release artifacts") and uploads them to the R2 bucket
-`fv-build-artifacts` under `artifacts/<sha>/` (`manifest.json` + one
-tarball per set, deleted after 30 days). Each workflow then:
+Since 2026-10-06 (owner decisions) no image workflow needs to compile Rust
+or CUDA. The shared build pod builds and tests the tools and the
+coordinator publishes them as a SemVer GitHub release, `tools-v<X.Y.Z>`
+(`scripts/ci/tools-release.sh publish`, **docs/dev/tools-releases.md**).
+Each workflow then:
 
-1. **Downloads** (`scripts/ci/prebuilt.sh fetch <sha> <sets>`, read-only R2
-   key from repository secrets) the manifest and the sets it needs, checks
-   the tarballs' and every file's sha256 against the manifest, the build id
-   against `scripts/gpu/docker.sh build-id` and the fv-serve features against
-   the requested ones.
+1. **Resolves and downloads** (`scripts/ci/prebuilt.sh fetch <sets>`, with
+   the job's `GITHUB_TOKEN`): the release pinned by the repository variable
+   `FV_TOOLS_VERSION`, else the one built from exactly this checkout's tools
+   inputs (input hash), else, for the image workflows on main only, the
+   highest SemVer release (warning; the image is labelled
+   `dev.fastvideo.tools=<tag>`). It checks the manifest against the release
+   body, the tarballs' and every file's sha256 against the manifest, and the
+   fv-serve features against the requested ones.
 2. **Assembles** with the extracted directories as **named build contexts
    that replace the compile stages** (`--build-context serve-build=<dir>`,
    `gateway-build`, `binary`, `oxide`, `hf-fm`). The Dockerfiles' `COPY
@@ -113,12 +115,11 @@ tarball per set, deleted after 30 days). Each workflow then:
    as before: no toolkit, no compiler in any runtime image. BuildKit never
    runs a replaced stage or its `builder` parent, so the log shows no
    `cargo` step (the C ffmpeg build stays, from the registry cache).
-3. **Falls back** when anything is missing or does not match (no secrets,
-   not built yet, older than 30 days, other features requested on dispatch):
-   a `::warning::` names the reason and the command to build them, and the
-   job compiles exactly as before. Recommended and implemented as the
-   default so CI never deadlocks on the pod; `FV_PREBUILT_REQUIRE=1` would
-   fail instead.
+3. **Falls back** when there is no usable release (test workflows and
+   branch images whose tools inputs have no release, other features
+   requested on dispatch, a bad checksum): a `::warning::` names the reason,
+   and the job compiles exactly as before, so CI never deadlocks on the pod;
+   `FV_PREBUILT_REQUIRE=1` would fail instead.
 
 | workflow | sets downloaded | what no longer compiles on the runner |
 |---|---|---|
@@ -129,9 +130,9 @@ tarball per set, deleted after 30 days). Each workflow then:
 | gpucheck-t0 | `gpucheck-tests gpucheck` | `cargo test` (runs the pod's test binaries), the CUDA type-check (covered by the release `--features cuda` build), the nvrtc job's release build (runs the prebuilt `fv-gpucheck nvrtc`) |
 | upstream-images, release | none | nothing compiled before either (upstream copies fv-gpucheck from the runtime image; release retags) |
 
-Pull-request jobs use the PR head sha. Repository variables:
-`FV_PREBUILT_WAIT_MIN` (poll R2 that many minutes before falling back,
-default 0), `FV_PREBUILT_DISABLE=1` (always compile).
+Pull-request jobs hash the checked-out merge commit. Repository variables:
+`FV_TOOLS_VERSION` (pin the image workflows to one release, e.g. `0.1.3`, for
+a rollback), `FV_PREBUILT_DISABLE=1` (always compile).
 
 ## Publishing to Runpod
 
@@ -186,8 +187,6 @@ Deploy scripts boot what the templates name:
 | `FV_CF_API_TOKEN` (or `CLOUDFLARE_API_TOKEN`) | release history in D1: `Record the latest release`, `release.yml` | for release history; without it serve-image warns and release.yml fails |
 | `FV_CF_ACCOUNT_ID`, `FV_D1_DATABASE_ID` | the same | no (looked up from the token: first account, database `fv-jobs`) |
 | `RUNPOD_REGISTRY_AUTH_ID` | added to the templates as `containerRegistryAuthId` | only if the GHCR package becomes private |
-| `FV_R2_ARTIFACTS_ENDPOINT` | prebuilt binaries: `https://<account id>.r2.cloudflarestorage.com` | for prebuilt binaries; without the three, every workflow warns and compiles |
-| `FV_R2_ARTIFACTS_ACCESS_KEY_ID`, `FV_R2_ARTIFACTS_SECRET_ACCESS_KEY` | an R2 API token with **Object Read only** on `fv-build-artifacts` (docs/dev/build-pod.md "Release artifacts") | the same |
 
 The Runpod account needs the `fv_*` Runpod secrets the templates reference
 (they already exist for the deploy scripts).

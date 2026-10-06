@@ -17,7 +17,8 @@
 # registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv);
 # FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
 # of build-pod binaries that replace the serve-build / gateway-build stages,
-# so no cargo compile runs; empty: compile in the image).
+# so no cargo compile runs; empty: compile in the image); FV_TOOLS_TAG (the
+# tools release they come from, a `dev.fastvideo.tools` label).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -70,6 +71,7 @@ build() {
       --label "org.opencontainers.image.revision=${GITHUB_SHA:-unknown}" \
       --label "dev.fastvideo.build-id=${FV_BUILD_ID:-unknown}" \
       --label "dev.fastvideo.variant=$v" \
+      --label "dev.fastvideo.tools=${FV_TOOLS_TAG:-compiled}" \
       "${args[@]}" ${cache_to[@]+"${cache_to[@]}"} \
       --output "type=image,\"name=$tags\",push=true,compression=$COMPRESSION,force-compression=true,oci-mediatypes=true" \
       --metadata-file "$meta"

@@ -19,8 +19,9 @@
 #          no PyTorch, no toolkit: hosts boot quickly.
 #
 # Prebuilt binaries (CI default, docs/serve/images.md "Prebuilt binaries"):
-# the build pod compiles every Rust binary and the oxide cubins
-# (scripts/dev/build-pod.sh release-artifacts <sha> -> R2), and the workflows
+# the build pod compiles and tests every Rust binary and the oxide cubins,
+# published as a tools release (`tools-v<X.Y.Z>` on GitHub Releases,
+# scripts/ci/tools-release.sh, docs/dev/tools-releases.md), and the workflows
 # pass the downloaded directories as named build contexts that REPLACE the
 # compile stages, so only the lean stages below run and nothing compiles:
 #   --build-context oxide=<dir>          <dir>/out/oxide/        (stage oxide)
@@ -28,7 +29,7 @@
 #   --build-context hf-fm=<dir>          <dir>/out/hf-fm, hf-fetch-model (hf-fm)
 #   --build-context serve-build=<dir>    <dir>/out/fv-serve{,.features} (serve-build)
 #   --build-context gateway-build=<dir>  <dir>/out/fv-serve{,.features} (gateway-build)
-# Without them (no R2 key, artifacts not built yet) the stages compile here.
+# Without them (no usable tools release) the stages compile here.
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive

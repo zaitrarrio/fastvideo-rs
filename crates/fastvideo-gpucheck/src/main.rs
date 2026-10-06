@@ -72,8 +72,11 @@ use mode::Mode;
 use report::{Report, StageError, StageResult};
 
 #[derive(Parser)]
+// `-V` / `--version`: the tools version (the workspace version; tools
+// releases are tagged `tools-v<version>`, docs/dev/tools-releases.md).
 #[command(
     name = "fv-gpucheck",
+    version,
     about = "Fail-fast numerical/perf validation for fastvideo-cudarc"
 )]
 struct Cli {

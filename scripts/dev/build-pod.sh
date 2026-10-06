@@ -31,11 +31,13 @@
 #   build-pod.sh stop                stop the pod (terminate if Runpod refuses a
 #                                    stop); the volume and its caches persist
 #   build-pod.sh down                terminate the pod (volume persists)
-#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"] [--force] [--no-upload] [--keep]
+#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"]
 #                                    build that commit's release binaries on the
 #                                    pod (scripts/dev/release-artifacts-pod.sh),
-#                                    verify and upload them to R2 artifacts/<sha>/
-#                                    for the image workflows (wakes the pod)
+#                                    fetch and verify them into $FV_RELEASE_OUT;
+#                                    scripts/ci/tools-release.sh publish runs this,
+#                                    tests and publishes a GitHub tools release
+#                                    (docs/dev/tools-releases.md; wakes the pod)
 #   build-pod.sh volume-create       create the fv-build volume (once)
 #   build-pod.sh plan                print the pod create payload (no API call)
 #
@@ -518,47 +520,32 @@ cmd_down() {
 
 # ---- release artifacts (docs/dev/build-pod.md "Release artifacts") ----------
 # Build one commit's release binaries on the pod (scripts/dev/release-artifacts-pod.sh),
-# fetch the tarballs + manifest.json, check their sha256s and upload them to
-# R2 under artifacts/<sha>/ (manifest.json last: its presence means complete).
+# fetch the tarballs + manifest.json and check their sha256s. Publishing (after
+# the tests) is scripts/ci/tools-release.sh publish (docs/dev/tools-releases.md).
 REL_AGENT="${FV_RELEASE_AGENT:-fv-release}"
-R2_ENV_FILE="${FV_R2_ARTIFACTS_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/r2-build-artifacts-rw.env}"
 # The temporary worktree of a release build; also called from cmd_sync's EXIT trap.
 FV_REL_WT=""
 fv_rel_cleanup() {
   [[ -n "$FV_REL_WT" ]] || return 0
   git -C "$FV_ROOT" worktree remove --force "$FV_REL_WT" >/dev/null 2>&1 || rm -rf "$FV_REL_WT"
 }
-r2() { FV_R2_ARTIFACTS_ENV_FILE="$R2_ENV_FILE" python3 "$HERE/r2.py" "$@"; }
-
 cmd_release_artifacts() {
-  local rev="" sets="" force=0 upload=1 keep=0
+  local rev="" sets=""
   while (( $# )); do
     case "$1" in
       --sets) sets="${2:?--sets needs a list}"; shift 2 ;;
-      --force) force=1; shift ;;
-      --no-upload) upload=0; shift ;;
-      --keep) keep=1; shift ;;
+      --keep) shift ;;   # accepted for older callers: the output always stays
       -*) die "unknown flag $1" ;;
       *) [[ -z "$rev" ]] || die "one revision only"; rev="$1"; shift ;;
     esac
   done
-  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"] [--force] [--no-upload] [--keep]"
+  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"]"
   require_tools git jq python3 sha256sum
   local sha
   if ! sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}")"; then
     git -C "$FV_ROOT" fetch -q origin || true
     sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}" || git -C "$FV_ROOT" rev-parse -q --verify "origin/$rev^{commit}")" \
       || die "unknown revision $rev"
-  fi
-  if (( upload )); then
-    [[ -s "$R2_ENV_FILE" ]] || die "no R2 credentials in $R2_ENV_FILE (FV_R2_ARTIFACTS_*; docs/dev/build-pod.md \"Release artifacts\"); --no-upload builds without uploading"
-    local rc=0
-    r2 head "artifacts/$sha/manifest.json" || rc=$?
-    case "$rc" in
-      0) if (( !force )); then log "artifacts/$sha already in R2 (--force rebuilds)"; return 0; fi ;;
-      1) ;;
-      *) die "cannot read the R2 bucket with $R2_ENV_FILE (r2.py exit $rc)" ;;
-    esac
   fi
   # One release build per container at a time: they share the pod's
   # $REL_AGENT snapshot and target dir.
@@ -598,16 +585,7 @@ cmd_release_artifacts() {
     chmod -x "$out/$tb"
     [[ "$(sha256sum "$out/$tb" | cut -d' ' -f1)" == "$want" ]] || die "$tb: sha256 differs from the manifest"
   done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball, .value.sha256] | @tsv' "$out/manifest.json")
-  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out"
-
-  if (( upload )); then
-    while IFS=$'\t' read -r _ tb; do
-      r2 put "artifacts/$sha/$tb" "$out/$tb"
-    done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball] | @tsv' "$out/manifest.json")
-    r2 put "artifacts/$sha/manifest.json" "$out/manifest.json"
-    log "uploaded to R2: artifacts/$sha/ ($(( SECONDS - t0 ))s in all)"
-    (( keep )) || rm -rf "$out"
-  fi
+  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out in $(( SECONDS - t0 ))s"
 }
 
 cmd_volume_create() {
