@@ -11,6 +11,17 @@ git blob SHA-1), writes .complete and sha256.txt, and only then renames the
 temp folder to weights/<DEST>. Refuses to start if weights/<DEST> exists.
 With EXPECT_SHA256 (the sha256.txt of another volume's copy, base64), every
 file must also match that list (the second volume of a sync).
+FETCH_MIN_FREE_GB (default 50): refuse to start unless the volume's free
+space minus the tree's bytes stays at or above this many GB; the free space
+is logged before and after. Runpod network volumes report the whole cluster
+to statvfs (hundreds of PB free), so with FETCH_VOLUME_GB (the volume's size,
+passed by fetch-hub-tree.sh) free = size - `du -sb` of the mount instead.
+
+FETCH_ADD_INTO=1 instead adds the glob files that weights/<DEST> lacks to that
+existing tree, add-only: they are downloaded into <parent>/.<name>.add-partial-<stamp>,
+checked against the Hub the same way, fsync'd, and only then each one is
+renamed into weights/<DEST>/ (refusing any name that already exists there).
+Nothing already in the tree is read, changed or removed; .complete is left as it is.
 
 Progress goes to /srv/log.txt; /srv/DONE holds 0 (ok) or 1; /srv/sha256.txt
 lists "<sha256>  <relative path>" for every file of the tree.
@@ -40,6 +51,17 @@ def log(*a):
         f.write(s + "\n")
 
 
+def free_bytes(path):
+    cap = os.environ.get("FETCH_VOLUME_GB")
+    if cap:
+        import subprocess
+        mount = os.environ.get("FETCH_MOUNT", "/workspace")
+        out = subprocess.run(["du", "-sb", mount], capture_output=True, text=True).stdout
+        return int(float(cap) * 1e9) - int(out.split()[0])
+    st = os.statvfs(path)
+    return st.f_bavail * st.f_frsize
+
+
 def file_hash(path, algo, prefix=b""):
     h = hashlib.new(algo)
     h.update(prefix)
@@ -51,12 +73,15 @@ def file_hash(path, algo, prefix=b""):
 
 def main():
     final = WEIGHTS / DEST
-    if final.exists():
+    add_into = os.environ.get("FETCH_ADD_INTO") == "1"
+    if add_into and not final.is_dir():
+        raise SystemExit(f"FETCH_ADD_INTO: {final} is not an existing tree")
+    if final.exists() and not add_into:
         raise SystemExit(f"{final} exists: add-only fetch refuses to touch it")
     final.parent.mkdir(parents=True, exist_ok=True)
     # This script's own unfinished temp folders for DEST (a failed earlier
     # run); never anything else.
-    for old in final.parent.glob(f".{final.name}.partial-*"):
+    for old in final.parent.glob(f".{final.name}.{'add-' if add_into else ''}partial-*"):
         shutil.rmtree(old, ignore_errors=True)
         log(f"removed own partial {old}")
     # Gated repos: the volume's token when the pod env has none.
@@ -66,13 +91,25 @@ def main():
         log("HF token: /workspace/hf/token")
     from huggingface_hub import HfApi, snapshot_download
 
-    tmp = final.parent / f".{final.name}.partial-{time.strftime('%Y%m%d%H%M%S')}"
+    tmp = final.parent / f".{final.name}.{'add-' if add_into else ''}partial-{time.strftime('%Y%m%d%H%M%S')}"
     info = HfApi().model_info(REPO, revision=REV, files_metadata=True)
     want = [s for s in info.siblings if any(fnmatch.fnmatch(s.rfilename, g) for g in GLOBS)]
+    if add_into:
+        have = [s.rfilename for s in want if (final / s.rfilename).exists()]
+        want = [s for s in want if not (final / s.rfilename).exists()]
+        log(f"FETCH_ADD_INTO: {final} already has {have}; adding {[s.rfilename for s in want]}")
+        if not want:
+            return
     total = sum(s.size or 0 for s in want)
     log(f"{REPO}@{REV}: {len(want)} files, {total} bytes -> {tmp}")
+    free = free_bytes(WEIGHTS)
+    min_free = float(os.environ.get("FETCH_MIN_FREE_GB", "50")) * 1e9
+    log(f"volume free {free} bytes ({free / 1e9:.1f} GB); after this tree {(free - total) / 1e9:.1f} GB")
+    if free - total < min_free:
+        raise SystemExit(f"not enough space: {free} free - {total} < {min_free:.0f} floor; nothing written")
     t0 = time.time()
-    snapshot_download(REPO, revision=REV, local_dir=str(tmp), allow_patterns=GLOBS, max_workers=4)
+    pats = [s.rfilename for s in want] if add_into else GLOBS
+    snapshot_download(REPO, revision=REV, local_dir=str(tmp), allow_patterns=pats, max_workers=int(os.environ.get("FETCH_WORKERS", "4")))
     log(f"downloaded in {time.time() - t0:.0f} s; verifying")
     shutil.rmtree(tmp / ".cache", ignore_errors=True)
     expect = {}
@@ -108,14 +145,28 @@ def main():
         for b in bad:
             log("BAD", b)
         raise SystemExit(f"{len(bad)} problems; {tmp} left in place, not renamed")
-    (tmp / ".complete").write_text(f"{time.time() - t0:.0f}\n")
+    if not add_into:
+        (tmp / ".complete").write_text(f"{time.time() - t0:.0f}\n")
     for fd in [os.open(tmp / l.split("  ", 1)[1], os.O_RDONLY) for l in lines]:
         os.fsync(fd)
         os.close(fd)
+    if add_into:
+        for s in want:
+            dst = final / s.rfilename
+            if dst.exists():
+                raise SystemExit(f"{dst} appeared during the fetch; {tmp} left in place")
+        for s in want:
+            dst = final / s.rfilename
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            (tmp / s.rfilename).rename(dst)
+            log(f"added {dst}")
+        shutil.rmtree(tmp)  # now empty of files: only this run's own folder
+        log(f"added {len(want)} files, {total} bytes in {time.time() - t0:.0f} s; volume free {free_bytes(WEIGHTS)} bytes")
+        return
     if final.exists():
         raise SystemExit(f"{final} appeared during the fetch; {tmp} left in place")
     tmp.rename(final)
-    log(f"renamed to {final}; {total} bytes in {time.time() - t0:.0f} s")
+    log(f"renamed to {final}; {total} bytes in {time.time() - t0:.0f} s; volume free {free_bytes(WEIGHTS)} bytes")
 
 
 if __name__ == "__main__":
