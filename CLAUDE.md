@@ -2,12 +2,15 @@
 
 ## Model weights and network volumes
 
-- New weights always go on **both** Runpod network volumes: US `s2k01690bi`
-  (US-CA-2) and EU `jg48s6o1w0` (EUR-IS-1), and never only on a pod's
-  container disk. The volumes need only be *eventually* in sync: landing a
-  tree on one volume first (usually US) and building/testing against it is
-  fine; the copy to the other volume must follow, and a failed copy is
-  retried, not a reason to stop work.
+- New weights go on the EU Runpod network volume `jg48s6o1w0`
+  (`fv-weights-h3-ltx-hy`, EUR-IS-1), and never only on a pod's container
+  disk. **EU only (owner decision, 2026-10-06):** Runpod deleted the US volume
+  `s2k01690bi` (`fv-weights-b200-us`, US-CA-2) on about 2026-10-05 while the
+  account balance was negative, and the owner chose not to rebuild it for
+  now. The earlier "both volumes" rule (US and EU, eventually in sync) is
+  suspended until the owner rebuilds US; do not create, mount or copy to a US
+  volume without the owner. The rebuild plan (from EU or the Hub) is in
+  `docs/ops/runpod-volumes.md` §5 and `scripts/gpu/rebuild-volume.sh`.
 - Writes are add-only: new folders, written under a temporary name, verified
   (sha256) and then renamed. Never modify or delete existing volume data, and
   never delete a volume.

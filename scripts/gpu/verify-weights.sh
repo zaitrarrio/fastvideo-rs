@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Verify that a weight tree is complete for a model cell before any GPU time is
-# spent on it. Runs on the box (no Python needed).
+# spent on it. Runs on the box (no Python needed), against whatever volume is
+# mounted. Volumes: EU only since 2026-10-06 (jg48s6o1w0; every cell passed
+# there that day); the US volume s2k01690bi was deleted (docs/ops/runpod-volumes.md).
 #
 #   verify-weights.sh <cell>...        cells: fasth3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark

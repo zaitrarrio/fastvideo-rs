@@ -348,8 +348,9 @@ Estimates are agent-days of implementation plus GPU hours on one RTX PRO
 
 **(A) LongLive-1.3B on the SF-Wan engine.** Code is done on `wip/longlive`
 (§7).
-1. Weights: fetch per §4.1 to both volumes, run `convert-longlive.py` on
-   each, and record manifest, revisions and hashes (rows ready in §8). About
+1. Weights: fetch per §4.1 to the EU volume (EU only since 2026-10-06; it
+   was both volumes before the US volume was deleted), run `convert-longlive.py` on
+   it, and record manifest, revisions and hashes (rows ready in §8). About
    1 hour, under $1 of CPU pods.
 2. GPU check (§9): about 1 hour, about $2–4.
 3. Upstream parity (optional): run `LL1/interactive_inference.py` on the

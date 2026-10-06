@@ -24,7 +24,7 @@ Auth: every endpoint but GET /healthz needs "Authorization: Bearer <token>";
 the pod only knows sha256(token) (FV_BUILD_TOKEN_SHA256).
 
 Endpoints (all JSON unless noted):
-  GET  /healthz                         {ok, ready, phase, boot}  (no auth)
+  GET  /healthz                         {ok, ready, phase, boot, timers, self_stop, jobs}  (no auth)
   GET  /v1/status                       setup state, jobs, idle timer, disk
   GET  /v1/agents[?sizes=1]             agent dirs (sizes via du, slow)
   GET  /v1/agents/<a>/manifest          text: path\\tsize\\tmtime per file
@@ -882,6 +882,11 @@ def active_jobs():
     return [j for j in list(jobs.values()) if j.state in ("running", "queued")]
 
 
+def public_jobs():
+    """The active jobs for /healthz: id, agent, state and seconds only."""
+    return [{k: i[k] for k in ("id", "agent", "state", "seconds")} for i in (j.info() for j in active_jobs())]
+
+
 def public_timers(now):
     act = active_jobs()
     return {**POLICY.timers(now, last_activity, len(act)), "jobs_active": len(act), "idle_stop_s": IDLE_S,
@@ -982,9 +987,12 @@ class Handler(BaseHTTPRequestHandler):
         q = dict(urllib.parse.parse_qsl(u.query))
         parts = [p for p in u.path.split("/") if p]
         if method == "GET" and parts == ["healthz"]:
-            # Timers without auth, for external backstops (docs/dev/build-pod.md).
+            # Timers without auth, for external backstops and fv-control's
+            # build pod card (docs/dev/build-pod.md): the last self-stop
+            # attempt and the active jobs (no argv, logs or paths).
             return self.send_json(200, {"ok": True, "ready": setup_state["ready"], "phase": setup_state["phase"],
-                                        "boot": round(BOOT), **public_timers(time.time())})
+                                        "boot": round(BOOT), **public_timers(time.time()),
+                                        "self_stop": STOPPER.info(), "jobs": public_jobs()})
         if not self.authed():
             return self.send_json(401, {"error": "unauthorized"})
         # No touch() here: only job events and work requests (sync, job

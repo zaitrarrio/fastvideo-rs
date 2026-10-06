@@ -201,6 +201,14 @@ class WatchTest(unittest.TestCase):
         bps.watch_tick(30 * M)
         self.assertEqual(len(self.calls), 2)
 
+    def test_public_jobs_carry_no_argv(self):
+        j = self._job("running")
+        j.argv, j.started, j.ended, j.exit = ["cargo", "test", "--secret-ish"], 0.0, None, None
+        self._job("done")
+        out = bps.public_jobs()
+        self.assertEqual([x["id"] for x in out], [j.id])
+        self.assertEqual(set(out[0]), {"id", "agent", "state", "seconds"})
+
     def test_cap_warns_running_jobs_then_kills_them_after_the_grace(self):
         j = self._job("running")
         bps.last_activity = 8 * H
@@ -243,8 +251,10 @@ class HttpTest(unittest.TestCase):
         for k in ("idle_s", "idle_stop_in_s", "max_stop_in_s", "max_grace_s", "self_stop"):
             self.assertIn(k, st)
         hz = self.get("/healthz", auth=False)
-        for k in ("idle_s", "idle_stop_in_s", "max_stop_in_s", "jobs_active", "uptime_s"):
+        for k in ("idle_s", "idle_stop_in_s", "max_stop_in_s", "jobs_active", "uptime_s", "self_stop", "jobs"):
             self.assertIn(k, hz)
+        self.assertIn("attempts", hz["self_stop"])
+        self.assertIsInstance(hz["jobs"], list)
 
     def test_job_submit_past_the_cap_is_refused(self):
         orig = bps.POLICY

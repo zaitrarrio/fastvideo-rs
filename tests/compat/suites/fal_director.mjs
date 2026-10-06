@@ -181,6 +181,7 @@ try {
     const info = await next(type("session_info"), "session_info");
     mark("session_info");
     check(info.fps === 24 && info.audio_sample_rate === 48000, "session_info constants");
+    check(info.default_chunk_duration === 5 && JSON.stringify(info.chunk_duration_options) === "[5,10]", `chunk_duration options ${JSON.stringify(info.chunk_duration_options)}`);
     out.info = { fps: info.fps, resolutions: info.resolutions, app: info.app };
 
     // Strict schema: an extra property is refused as a diagnostic.
@@ -190,7 +191,7 @@ try {
 
     handle.send({ type: "configure", prompt_version: 1, prompt: "A lighthouse keeper climbs the stairs at dusk", resolution: res, aspect_ratio: "16:9", memory: 3, protocol_version: 1 });
     const cfgd = await next(type("configured"), "configured");
-    check(cfgd.prompt_version === 1 && cfgd.resolution === res, `configured ${JSON.stringify(cfgd)}`);
+    check(cfgd.prompt_version === 1 && cfgd.resolution === res && cfgd.chunk_duration === 5, `configured ${JSON.stringify(cfgd)}`);
     const ch0 = await next((m) => m.type === "chunk" && m.chunk_index === 0, "chunk 0", 90000);
     mark("chunk 0");
     check(ch0.generated_frame_count > 0 && ch0.route === "unknown", "chunk 0 fields");

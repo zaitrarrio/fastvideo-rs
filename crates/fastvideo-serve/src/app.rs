@@ -304,7 +304,10 @@ impl App {
         };
         let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
         let worker_role = config.server.role == crate::config::Role::Worker;
-        if worker_role && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
+        // A direct worker (no gateway in front, `gateway.direct`) keeps its
+        // own API auth; validate() refused trust-gateway for it.
+        let direct = worker_role && config.gateway.direct;
+        if worker_role && !direct && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
             tracing::info!("server.role = worker: API auth is the gateway's (trust-gateway); every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
         }
@@ -355,7 +358,7 @@ impl App {
         } else {
             KeyRing::from_hash_list(config.auth.keys.expose()).map_err(|e| anyhow!(e))?
         };
-        let key_store = storage::build_key_store(&config).await.map_err(|e| anyhow!(e))?;
+        let key_store = storage::build_key_store(&config, ov.d1.clone()).await.map_err(|e| anyhow!(e))?;
         if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() && key_store.list().is_empty() {
             tracing::warn!("auth.mode = keys with no FV_API_KEYS and no minted keys: keyed APIs answer 401 until a key is minted (/console/admin)");
         }
@@ -382,7 +385,7 @@ impl App {
         }
         // A worker's jobs came through the gateway, which ran the MiniMax
         // callback challenge when it took the request.
-        callbacks.challenge_done_elsewhere = worker_role;
+        callbacks.challenge_done_elsewhere = worker_role && !direct;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
@@ -591,7 +594,7 @@ impl App {
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
         if worker_role {
-            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()));
+            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()), direct);
         }
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());

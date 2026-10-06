@@ -3,6 +3,11 @@
 # Runs ON a CPU pod that mounts the volume at /workspace
 # (docs/ops/runpod-volumes.md "Rebuild a weight volume").
 #
+# EU only since 2026-10-06: the US volume (s2k01690bi) was deleted by Runpod.
+# `us` stays a rebuild target for when the owner rebuilds it: create a new
+# volume first (docs/ops/runpod-volumes.md §5), then run this on a pod that
+# mounts it, and set FV_US_VOLUME_ID / FV_US_VOLUME_NAME in volumes.sh.
+#
 #   rebuild-volume.sh <us|eu> --dry-run   print the plan (works anywhere: no volume,
 #                                         no GPU, no network; shows each tree's state
 #                                         when $FV_WEIGHTS is readable)
@@ -36,15 +41,19 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$HERE/weights-manifest.tsv"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 REVS="$HERE/weights-revisions.tsv"
 W="${FV_WEIGHTS:-/workspace/weights}"
 LOGDIR="${FV_REBUILD_LOG:-/srv/rebuild}"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 side="${1:-}"; shift || true
 case "$side" in
-  us) VOL_ID=s2k01690bi; VOL_NAME=fv-weights-b200-us; VOL_DC=US-CA-2 ;;
-  eu) VOL_ID=jg48s6o1w0; VOL_NAME=fv-weights-h3-ltx-hy; VOL_DC=EUR-IS-1 ;;
+  # us: the volume being rebuilt (a new id; s2k01690bi was deleted 2026-10).
+  us) VOL_ID="${FV_US_VOLUME_ID:-new US volume, id not set in volumes.sh}"
+      VOL_NAME="${FV_US_VOLUME_NAME:-$FV_US_DELETED_VOLUME_NAME}"; VOL_DC=$FV_US_DC ;;
+  eu) VOL_ID=$FV_EU_VOLUME_ID; VOL_NAME=$FV_EU_VOLUME_NAME; VOL_DC=$FV_EU_DC ;;
   *) usage ;;
 esac
 DRY=0; DEEP=0; ONLY=""
