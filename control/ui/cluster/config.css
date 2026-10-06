@@ -1,0 +1,68 @@
+/* The cluster configuration page (ui/cluster/config.ts); tokens from app.css. */
+.cf-head { margin-bottom: 6px; }
+.cf-head h1 { margin: 4px 0 2px; }
+.cf-sub { margin: 0 0 10px; }
+.cf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 14px; align-items: start; }
+.cf-side { position: sticky; top: 64px; max-height: calc(100vh - 76px); overflow: auto; display: flex; flex-direction: column; }
+.cf-side .card { margin-bottom: 10px; }
+.cf-main .tabs { margin-bottom: 10px; }
+.cf-section h2 { margin-bottom: 6px; }
+.cf-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px 16px; }
+.cf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cf-field.wide { grid-column: 1 / -1; }
+.cf-field > label { font-weight: 600; color: var(--text-primary); font-size: 12.5px; }
+.cf-field input[type=text], .cf-field input[type=number], .cf-field select, .cf-field textarea { width: 100%; }
+.cf-field .row input[type=number] { width: 110px; }
+.cf-help { font-size: 11.5px; color: var(--text-muted); }
+.cf-err { font-size: 12px; color: var(--critical-text); font-weight: 500; }
+.cf-err:empty { display: none; }
+.cf-err-block { margin: 4px 0; }
+.cf-field.has-err > input, .cf-field.has-err > select, .cf-field.has-err > textarea, .cf-field.has-err > .cf-seg, .cf-field.has-err > div > .cf-seg, .cf-field.has-err > .row input, td.has-err input { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(--critical); }
+.cf-toggle { flex-direction: row; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; }
+.cf-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; width: fit-content; }
+.cf-seg button { border: 0; border-radius: 0; padding: 5px 12px; background: var(--surface-1); color: var(--text-secondary); }
+.cf-seg button + button { border-left: 1px solid var(--border); }
+.cf-seg button[aria-checked="true"] { background: var(--accent); color: #fff; }
+.cf-multi { display: flex; flex-wrap: wrap; gap: 6px; }
+.cf-multi .fv-chip { text-align: left; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cf-pools { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.cf-pool { border: 1px solid var(--border); border-radius: 9px; background: var(--surface-1); }
+.cf-pool.has-err { border-color: var(--critical); }
+.cf-pool-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; }
+.cf-pool-body { padding: 4px 12px 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.cf-preset { margin: 0; padding: 6px 12px 0; }
+.cf-caret { padding: 2px 6px; }
+.cf-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.cf-stepper button { border: 0; border-radius: 0; padding: 2px 9px; }
+.cf-stepper input.cf-count { width: 46px; border: 0; border-radius: 0; text-align: center; padding: 3px 2px; -moz-appearance: textfield; }
+.cf-stepper input.cf-count::-webkit-inner-spin-button { display: none; }
+.cf-stepper.has-err { border-color: var(--critical); }
+.cf-stockhint { font-size: 12px; padding: 4px 12px 6px; }
+.cf-stockhint.critical { color: var(--critical-text); }
+.cf-stockhint.warn { color: var(--serious); }
+.cf-models table { width: 100%; }
+.cf-models td { padding: 2px 4px; border: 0; }
+.cf-models th { padding: 2px 4px; }
+.cf-models input { width: 100%; min-width: 90px; }
+.cf-toml { min-height: 160px; font-size: 12px; }
+.cf-issuelist { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; }
+.cf-issue { cursor: pointer; margin: 2px 0; }
+.cf-issue.err { color: var(--critical-text); }
+.cf-issue.warn { color: var(--serious); }
+.cf-issue code { color: inherit; opacity: .85; }
+.cf-big { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.cf-stock table td { padding: 3px 6px; font-size: 12.5px; }
+.cf-stock td.wrap { white-space: normal; }
+.cf-stockwarn { margin: 4px 0; }
+.cf-changes .fv-diff { max-height: 36vh; }
+.cf-oplines { max-height: 300px; }
+.cf-envtable td.wrap { white-space: normal; word-break: break-all; }
+.cf-env details { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.cf-env summary { cursor: pointer; }
+dialog.cf-review { max-width: min(860px, 94vw); width: 860px; }
+dialog.cf-review .fv-diff { max-height: 46vh; }
+@media (max-width: 1000px) {
+  .cf-grid { grid-template-columns: minmax(0, 1fr); }
+  .cf-side { position: static; max-height: none; }
+}
