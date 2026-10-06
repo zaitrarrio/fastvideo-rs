@@ -232,6 +232,9 @@ fn one() -> u32 {
 }
 
 /// Worker → dispatcher.
+// `Hello` (with its front) is the large one: one per connection, parsed and
+// dropped, so boxing buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum WorkerMsg {

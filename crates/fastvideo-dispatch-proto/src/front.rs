@@ -1359,7 +1359,7 @@ mod tests {
         assert_eq!(p("GET", &format!("/files/{up}/x.png"), None).unwrap().url, "https://b");
         let gone = format!("{}.abc", worker_tag("left"));
         assert_eq!(p("PUT", &format!("/uploads/{gone}"), None).unwrap_err().status, 404);
-        assert_eq!(p("GET", "/fv/v1/jobs/j1", None).unwrap().family.is_empty(), false);
+        assert!(!p("GET", "/fv/v1/jobs/j1", None).unwrap().family.is_empty());
         assert!(is_submit("POST", &classify("POST", "/fv/v1/jobs")));
         assert!(!is_submit("GET", &classify("GET", "/fv/v1/jobs/x")));
         let mut empty = Registry::default();

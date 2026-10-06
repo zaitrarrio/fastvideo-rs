@@ -461,6 +461,15 @@ async fn a_reactor_session_is_admitted_by_the_edge() {
     // One GPU: Reactor sessions (sfwan) and batch jobs (wan) share its slot.
     let w = e.front("rt", &[("fake-sfwan", "sfwan"), ("fake-wan", "wan")], 5, |_| {}).await;
     e.fronts(1).await;
+    // Each family socket announces only its family's models.
+    let t0 = Instant::now();
+    while e.edge.registry().fronts().count() < 2 && t0.elapsed() < Duration::from_secs(10) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let reg = e.edge.registry();
+    assert_eq!(reg.family_of_name("fake-wan"), Some("wan"), "{reg:?}");
+    assert_eq!(reg.family_of_name("fake-sfwan"), Some("sfwan"));
+    assert_eq!(reg.reactor_family(None), Some("sfwan"));
     let g = e.base.clone();
     let http = &e.http;
     let (s, v, _) = http.call("POST", &format!("{g}/start_session"), Some(json!({})), bearer()).await;

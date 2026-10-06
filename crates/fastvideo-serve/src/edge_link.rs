@@ -191,6 +191,23 @@ impl Link {
     fn family(&self) -> &str {
         self.cfg.scope.id()
     }
+    /// The front this socket announces: on a family socket, only the names,
+    /// defaults, Reactor model and failures of this family's models (the
+    /// edge picks a front for a model among its family's workers).
+    fn front(&self) -> Option<proto::FrontInfo> {
+        let mut f = (self.cfg.front.as_ref()?.0)();
+        if matches!(self.cfg.scope, Scope::Family(_)) && !self.cfg.model_families.is_empty() {
+            let fam = self.family().to_owned();
+            let mine = |m: &str| self.cfg.model_families.get(m).is_none_or(|x| *x == fam);
+            f.names.retain(|_, m| mine(m));
+            f.defaults.retain(|_, m| mine(m));
+            f.failed_models.retain(|m, _| mine(m));
+            if f.reactor.as_deref().is_some_and(|m| !mine(m)) {
+                f.reactor = None;
+            }
+        }
+        Some(f)
+    }
     fn slots(&self) -> Slots {
         let (free, session_free) = match &self.fam {
             Some(f) if !self.st.draining() => {
@@ -306,7 +323,7 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
         sessions,
         endpoint: if family { link.cfg.endpoint.clone() } else { String::new() },
         slots: family.then(|| link.slots()),
-        front: link.cfg.front.as_ref().map(|f| (f.0)()),
+        front: link.front(),
     };
     (h, finished)
 }
@@ -341,7 +358,7 @@ async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<W
     status.tick().await;
     let mut budget = link.fam.as_ref().map(|f| f.arbiter.subscribe());
     let mut last_slots = link.fam.as_ref().map(|_| link.slots());
-    let mut last_front = link.cfg.front.as_ref().map(|f| (f.0)());
+    let mut last_front = link.front();
     loop {
         let changed = async {
             match budget.as_mut() {
@@ -396,8 +413,7 @@ async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<W
                 let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
                 sink.send(Message::text(text)).await.map_err(|e| format!("status: {e}"))?;
                 // The front changed (models loaded or failed): announce it.
-                if let Some(f) = &link.cfg.front {
-                    let now = (f.0)();
+                if let Some(now) = link.front() {
                     if last_front.as_ref() != Some(&now) {
                         let text = serde_json::to_string(&WorkerMsg::Front(now.clone())).map_err(|e| e.to_string())?;
                         sink.send(Message::text(text)).await.map_err(|e| format!("front: {e}"))?;
