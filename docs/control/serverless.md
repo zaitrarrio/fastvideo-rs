@@ -2,7 +2,7 @@
 
 Status: 2026-10-06, branch `feat/fvc-serverless`. Code: `control/src/serverless/`
 (`spec.ts`, `payloads.ts`, `runpod-sls.ts`, `ops.ts`, `routes.ts`), migration
-`control/migrations/0005_serverless.sql`, the **Serverless** page
+`control/migrations/0006_serverless.sql`, the **Serverless** page
 (`control/public/serverless.js`), the CLI `scripts/serve/fv-control.sh endpoint …`.
 
 fv-control creates, updates, scales, invokes and deletes Runpod serverless
@@ -73,7 +73,7 @@ Runpod quirks found live, and handled:
 ## 3. Ownership and money
 
 - **Only endpoints fv-control made.** Every one is a row in
-  `serverless_endpoints` (migration 0005; the row stays after delete, for the
+  `serverless_endpoints` (migration 0006; the row stays after delete, for the
   ledger). Routes resolve `:id` as the row id (`se_…`), the Runpod endpoint id or
   the live name, and answer 404 for anything else. Before acting on Runpod
   they also check its name is still `fvc-…` (403 otherwise). `GET
