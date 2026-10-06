@@ -197,6 +197,25 @@ without publishing (`plan --force`); GitHub keeps a pull request's Actions
 cache entries to that pull request, so main's first run after a merge starts
 with the registry layers but an empty sccache.
 
+**Measured** (PR #43 dry runs on `ubuntu-latest`, 4 vCPU; wall-clock from
+the run's start to assemble's end, publish skipped):
+
+| run | caches | total | longest job chain |
+|---|---|---|---|
+| 37520216831 | cold: new cache epoch (no GHCR layers, empty sccache) | **23.2 min** | serve-cuda 14.2 min → unit tests 4/4 7.4 min → assemble 1.3 min |
+| 37518098664 | warm: dependency layers and sccache from earlier runs | **15.9 min** | serve-cuda 7.9 min → unit tests 4/4 5.8 min → assemble 1.2 min |
+| 37523202035 | warm, after merging main a3cd6ee | **17.3 min** | serve-cuda 9.8 min → unit tests 4/4 6.0 min → assemble 1.1 min |
+
+Per job, warm (cold): oxide 2.3 (4.8) min, serve-cuda 7.9 (14.2),
+serve-cpu 3.7 (10.3), serve-fake 2.5 (7.7), gpucheck 7.3 (11.5),
+gpucheck-tests 3.4 (4.9), gpucheck-vast 2.7 (6.8), hf-fm 2.5 (7.2),
+check-lint 3.1 (6.0), check-test 7.7 (12.0), unit-test shards 1.7–5.8
+(2.1–7.4). A warm job spends ~1.5–2 min on the base image pull and loading
+its dependency image into Docker; serve-cuda and gpucheck also rerun
+fastvideo-cudarc's build script (nvcc AOT cubins), which sccache cannot cache.
+Before this layout the same work ran serially in one job (the release build
+alone took 28 min cold on the 32-vCPU pod).
+
 ## Build pod runner
 
 The build pod is a **self-hosted runner** with the label `fv-build`,
