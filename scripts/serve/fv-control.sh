@@ -81,7 +81,9 @@ cmd_build_pod() {
       while (( $# )); do case "$1" in --region) region="${2:?--region eu|us|ca|ap|<DC>}"; shift 2 ;; --no-wait) wait=0; shift ;; *) die "build-pod up [--region R] [--no-wait]" ;; esac; done
       local tries=0
       until api_s POST /api/build-pods/up "$(jq -nc --arg r "$region" 'if $r == "" then {} else {region: $r} end')"; do
-        [[ "$API_CODE" == 409 ]] && jq -e '.error | test("in progress")' <<<"$API_OUT" >/dev/null 2>&1 && (( tries++ < 30 )) || die "build-pod up: $(api_err)"
+        if ! { [[ "$API_CODE" == 409 ]] && jq -e '.error | test("in progress")' <<<"$API_OUT" >/dev/null 2>&1 && (( tries++ < 30 )); }; then
+          die "build-pod up: $(api_err)"
+        fi
         sleep 10
       done
       out="$API_OUT"

@@ -71,6 +71,7 @@ STATE="${FV_BUILD_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv-build}"
 # build-base-image workflow pushes the image and checks this pin. fv-control
 # creates new pods with the pin on main (docs/dev/build-pods-fv-control.md).
 BASE_IMAGE_TAG="bb-d872f7724765429b"
+# shellcheck disable=SC2034  # fv-control reads the pin (control/src/buildpods.ts imagePin)
 IMAGE="ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG"
 AUTH_FILE="$STATE/auth-header"
 FVC="$HERE/../serve/fv-control.sh"

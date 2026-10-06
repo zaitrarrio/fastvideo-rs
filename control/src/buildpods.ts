@@ -877,12 +877,14 @@ export async function buildPodsTick(env: Env, pods: RunpodPod[], balance: number
         alerts.push({ key: `build_pod_runner:${r.id}`, kind: "build_pod_runner", severity: "warn", target: r.pod_id || r.id, message: `${r.name}: runner: ${scrub(env, (e as Error).message).slice(0, 200)}` });
       }
     }
-    // Offline fv-build-<pod> runners whose pod does not run (the container disk, and the runner's credentials, are gone).
+    // Offline runners of our pods that do not run (the container disk, and the runner's credentials, are gone).
+    // Only pods this controller created: a runner of another pod is never touched.
     const runningIds = new Set(pods.filter((p) => p.desiredStatus === "RUNNING").map((p) => p.id));
-    if (rows.some((r) => r.runner_name) || t % (15 * 60_000) < 60_000) {
+    const ours = new Set((await env.DB.prepare("SELECT pod_id FROM build_pods WHERE pod_id IS NOT NULL AND created_at > ?").bind(t - 30 * 86400_000).all<{ pod_id: string }>()).results?.map((x) => x.pod_id) || []);
+    if (ours.size && t % (15 * 60_000) < 60_000) {
       for (const g of await getRunners().catch(() => [] as GhRunner[])) {
         const m = /^fv-build-([a-z0-9]{8,20})$/.exec(g.name);
-        if (m && g.status === "offline" && !g.busy && !runningIds.has(m[1]!)) {
+        if (m && ours.has(m[1]!) && g.status === "offline" && !g.busy && !runningIds.has(m[1]!)) {
           await deleteRunner(env, g.id).catch(() => {});
           actions.push(`runner ${g.name} removed (offline, pod not running)`);
         }
