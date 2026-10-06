@@ -24,7 +24,7 @@ recorded source is marked **UNVERIFIED** or **UNKNOWN**.
   nothing needs it.
 - **Owner decision (2026-10-06): EU only for now.** US is not rebuilt. New
   weights go on EU alone (CLAUDE.md); the "both volumes" rule is suspended
-  until the owner rebuilds US. Every script default, `configs/serve/autoscale.toml`
+  until the owner rebuilds US. Every script default, `configs/autoscale.toml`
   and fv-control use EU; asking for the US volume or the `us` region fails
   with "US weights volume deleted 2026-10; EU only, see
   docs/ops/runpod-volumes.md".
@@ -375,7 +375,7 @@ US is not being rebuilt now. When the owner decides to:
      (every Runpod script, `runpod-cluster.sh` regions, the fetchers);
    - `control/src/cluster/regions.ts`: `US_VOLUME_ID` (fv-control's `us`
      region), then add `us` back to the cluster specs that should use it;
-   - `configs/serve/autoscale.toml` and the `PodConfig` default in
+   - `configs/autoscale.toml` and the `PodConfig` default in
      `crates/fastvideo-autoscale/src/config.rs`: a US-CA-2 placement;
    - CLAUDE.md and §1 of this page: restore the both-volumes rule.
 
