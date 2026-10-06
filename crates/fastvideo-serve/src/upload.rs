@@ -442,6 +442,11 @@ impl UrlSigner for DirectStore {
     fn url_for(&self, a: &Artifact, ttl: Duration) -> url::Url {
         self.inner.signer().url_for(a, ttl)
     }
+    // Delegated too: the trait default re-signs on every call, which would
+    // give a finished fal request a new result URL per read (#12).
+    fn url_issued(&self, a: &Artifact, issued: time::OffsetDateTime, ttl: Duration) -> url::Url {
+        self.inner.signer().url_issued(a, issued, ttl)
+    }
 }
 
 #[async_trait::async_trait]
@@ -519,6 +524,43 @@ mod tests {
                 assert_eq!(a.as_str(), b, "{endpoint} {key}");
             }
         }
+    }
+
+    /// A direct-upload store hands out the inner store's stable result URL
+    /// (fal `get()`, `result()` by id and the webhook agree, #12), not a
+    /// fresh signature per read.
+    #[test]
+    fn direct_store_result_urls_are_stable() {
+        use fastvideo_protocol::{Artifact, ArtifactId, ArtifactLocation, UrlSigner};
+        use fastvideo_serve_kit::{ArtifactStore, S3ArtifactStore};
+        let inner = std::sync::Arc::new(S3ArtifactStore::new(S3Config {
+            endpoint: url::Url::parse("https://acct.r2.cloudflarestorage.com").unwrap(),
+            region: "auto".into(),
+            bucket: "outs".into(),
+            access_key: "AK".into(),
+            secret_key: "SK".into(),
+            path_style: true,
+            prefix: String::new(),
+        }));
+        let store = super::DirectStore::new(inner.clone(), super::Uploads::new(8 << 20));
+        let a = Artifact {
+            id: ArtifactId::new(),
+            mime: "video/mp4".into(),
+            file_name: "output.mp4".into(),
+            bytes: 1,
+            location: ArtifactLocation::Object { bucket: "outs".into(), key: "outputs/h3/j/1-1/output.mp4".into() },
+            width: 1,
+            height: 1,
+            frames: 1,
+            fps: 24,
+            audio: None,
+        };
+        let issued = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
+        let day = Duration::from_secs(86_400);
+        let u1 = store.signer().url_issued(&a, issued, day);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(store.signer().url_issued(&a, issued, day), u1, "same URL a second later");
+        assert_eq!(u1, inner.url_issued(&a, issued, day), "the inner store's URL");
     }
 
     #[test]
