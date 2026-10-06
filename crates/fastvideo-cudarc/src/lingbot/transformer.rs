@@ -556,8 +556,9 @@ impl Block {
     }
 }
 
-/// Cached RoPE tables of one `(text_len, grid)` shape.
-type RopeCache = Option<((usize, usize, usize, usize), CudaTensor, CudaTensor)>;
+/// Cached RoPE tables per `(text_len, grid)` shape: the two CFG branches
+/// (prompt and negative lengths) each keep theirs.
+type RopeCache = Vec<((usize, usize, usize, usize), CudaTensor, CudaTensor)>;
 
 pub struct LingBotTransformer {
     pub cfg: LingBotTransformerConfig,
@@ -592,7 +593,7 @@ impl LingBotTransformer {
             text_2: Linear::zeros(d, d, true),
             blocks,
             proj_out: Linear::zeros(d, cfg.out_patch_dim(), true),
-            rope: Mutex::new(None),
+            rope: Mutex::new(Vec::new()),
             cfg,
         })
     }
@@ -615,7 +616,7 @@ impl LingBotTransformer {
             text_2: Linear::load(map, "text_embedder.linear_2", d, d, true)?,
             blocks,
             proj_out: Linear::load(map, "proj_out", d, cfg.out_patch_dim(), true)?,
-            rope: Mutex::new(None),
+            rope: Mutex::new(Vec::new()),
             cfg,
         })
     }
@@ -640,17 +641,18 @@ impl LingBotTransformer {
     fn rope_for(&self, text_len: usize, gt: usize, gh: usize, gw: usize) -> Result<(CudaTensor, CudaTensor)> {
         let key = (text_len, gt, gh, gw);
         let mut slot = self.rope.lock().map_err(|_| msg("lingbot rope cache poisoned"))?;
-        if let Some((k, c, s)) = slot.as_ref() {
-            if *k == key {
-                return Ok((c.clone(), s.clone()));
-            }
+        if let Some((_, c, s)) = slot.iter().find(|(k, _, _)| *k == key) {
+            return Ok((c.clone(), s.clone()));
         }
         let pos = joint_positions(text_len, gt, gh, gw);
         let (c, s) = rope_tables(&self.cfg, &pos);
         let hd = self.cfg.head_dim();
         let c = vec_tensor(&c, &[pos.len(), hd])?;
         let s = vec_tensor(&s, &[pos.len(), hd])?;
-        *slot = Some((key, c.clone(), s.clone()));
+        if slot.len() >= 2 {
+            slot.remove(0);
+        }
+        slot.push((key, c.clone(), s.clone()));
         Ok((c, s))
     }
 

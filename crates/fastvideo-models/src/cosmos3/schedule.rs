@@ -21,7 +21,8 @@ pub const KARRAS_SIGMA_MIN: f64 = 0.147;
 pub const KARRAS_SIGMA_MAX: f64 = 200.0;
 pub const KARRAS_RHO: f64 = 7.0;
 
-/// Karras flow sigmas (no terminal zero), rounded to f32 as the scheduler stores them.
+/// Karras flow sigmas (no terminal zero) in f64, as `set_timesteps` derives the
+/// int64 timesteps from them before storing the sigmas as f32.
 pub fn karras_flow_sigmas(steps: usize, sigma_min: f64, sigma_max: f64) -> Vec<f64> {
     let n = steps.max(1);
     let (lo, hi) = (sigma_min.powf(1.0 / KARRAS_RHO), sigma_max.powf(1.0 / KARRAS_RHO));
@@ -29,7 +30,7 @@ pub fn karras_flow_sigmas(steps: usize, sigma_min: f64, sigma_max: f64) -> Vec<f
         .map(|i| {
             let ramp = if n == 1 { 0.0 } else { i as f64 / (n - 1) as f64 };
             let s = (hi + ramp * (lo - hi)).powf(KARRAS_RHO);
-            f64::from((s / (s + 1.0)) as f32)
+            s / (s + 1.0)
         })
         .collect()
 }

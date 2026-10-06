@@ -74,7 +74,11 @@ start and image pull ~10 min, weight load ~5 min per 60 GB from the volume.
 | Cosmos3 baseline only (warmup + 1) | ≈ 25 | ≈ 2.8 | ≈ 50 | ≈ 1.7 |
 | Cosmos3, 3 arms | ≈ 40 | ≈ 4.5 | ≈ 95 | ≈ 3.3 |
 
-Expected single-GPU results if the estimates hold: LingBot baseline ≈ 570 s
+TeaCache bound: with start step 10 and at most 3 reuses in a row, a
+35-step run computes between 17 and 35 steps (17 when the accumulated
+time-embedding distance never reaches 1.15 inside a run of 3); the table
+assumes ≈ 26 (1.35×). FP8 W8A8 speeds up only the linears (≈ 40 % of the
+work). Expected single-GPU results if the estimates hold: LingBot baseline ≈ 570 s
 (B200) / ≈ 1850 s (PRO 6000) per prompt vs 375.53 s on 4× GB200 (1502
 GPU-s); Cosmos3 baseline ≈ 510 s (B200) / ≈ 1700 s (PRO 6000) vs 130.41 s on
 4× GB200 (522 GPU-s).
