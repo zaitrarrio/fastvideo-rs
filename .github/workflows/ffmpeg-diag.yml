@@ -1,0 +1,37 @@
+# TEMPORARY (fix/build-base-ffmpeg): the four media test binaries in the build
+# base image with its ffmpeg, then with a static ffmpeg 6.0.1 via FV_FFMPEG.
+name: ffmpeg-diag
+on:
+  push:
+    branches: ["fix/build-base-ffmpeg"]
+    paths: [".github/workflows/ffmpeg-diag.yml"]
+jobs:
+  diag:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d872f7724765429b
+      options: --shm-size=2g
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - run: ffmpeg -hide_banner -version | head -3; which -a ffmpeg ffprobe; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; ldd "$(command -v ffmpeg)" | grep -E "avcodec|vpx|x264|cuda" || true
+      - name: build test binaries
+        run: cargo test --no-run -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip 2>&1 | tail -5
+      - name: image ffmpeg
+        continue-on-error: true
+        run: cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast 2>&1 | grep -E "^test |test result|panicked|Error|error" | head -80
+      - name: image ffmpeg without LD_LIBRARY_PATH
+        continue-on-error: true
+        run: env -u LD_LIBRARY_PATH cargo test -p fastvideo-media --test decode_pipe --no-fail-fast 2>&1 | grep -E "^test |test result|panicked" | head -40
+      - name: static ffmpeg 6.0.1
+        continue-on-error: true
+        run: |
+          curl -fsSL -o /tmp/ff.tar.xz https://johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0.1-amd64-static.tar.xz
+          echo "28268bf402f1083833ea269331587f60a242848880073be8016501d864bd07a5  /tmp/ff.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+          export FV_FFMPEG=/tmp/ff/ffmpeg FV_FFPROBE=/tmp/ff/ffprobe PATH=/tmp/ff:$PATH
+          cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast 2>&1 | grep -E "^test |test result|panicked" | head -80
