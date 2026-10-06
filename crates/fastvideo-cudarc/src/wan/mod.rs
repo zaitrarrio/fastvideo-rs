@@ -10,6 +10,7 @@ pub mod attn;
 #[cfg(feature = "cuda")]
 pub mod attn_dc;
 pub mod attn_fp8;
+pub mod attn_sage;
 pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]
@@ -31,6 +32,7 @@ pub mod inject;
 pub mod kernels;
 pub mod ledger;
 pub mod log;
+pub mod longlive;
 pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]
@@ -40,6 +42,7 @@ pub mod nvfp4_linear;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;
+pub mod plug;
 pub mod quant;
 pub mod resident;
 pub mod sla;

@@ -19,6 +19,64 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// An adapter file as a weight map plus its safetensors metadata. A `.pt`
+/// (`torch.save`) is read whole, its LoRA keys normalized to
+/// `<module>.lora_{A,B}.weight`; a safetensors file is mapped.
+fn open_adapter_map(path: &Path) -> Result<(WeightMap, HashMap<String, String>)> {
+    let is_pt = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e == "pt" || e == "pth");
+    if !is_pt {
+        let map = WeightMap::open_files(&[path.to_path_buf()])?;
+        let metadata = map.lazy().map(|l| l.metadata().clone()).unwrap_or_default();
+        return Ok((map, metadata));
+    }
+    let tensors = fastvideo_loader::pth::read_pth_nested(
+        path,
+        &["student_lora", "generator_lora", "state_dict"],
+        |_| true,
+    )
+    .map_err(|e| msg(e.to_string()))?;
+    let mut raw = HashMap::new();
+    for (key, t) in tensors {
+        let name = match fastvideo_models::plug::lora_key(&key) {
+            Some((module, side)) => format!(
+                "{module}.lora_{}.weight",
+                if side == fastvideo_models::plug::LoraSide::A {
+                    "A"
+                } else {
+                    "B"
+                }
+            ),
+            None => key,
+        };
+        if raw
+            .insert(
+                name.clone(),
+                fastvideo_loader::RawTensor::from_f32(t.shape, t.data),
+            )
+            .is_some()
+        {
+            return Err(msg(format!(
+                "{}: two tensors normalize to {name}",
+                path.display()
+            )));
+        }
+    }
+    Ok((WeightMap::from_raw_tensors(raw), HashMap::new()))
+}
+
+/// Every tensor name of an adapter map, sorted.
+fn adapter_keys(map: &WeightMap) -> Vec<String> {
+    let mut keys: Vec<String> = match map.lazy() {
+        Some(l) => l.keys().map(str::to_string).collect(),
+        None => map.raw_keys(),
+    };
+    keys.sort();
+    keys
+}
+
 #[derive(Clone)]
 struct Pair {
     b: Vec<f32>,
@@ -57,6 +115,75 @@ impl H3LoraFuse {
         let plan =
             plan_from_keys(&keys, lazy.metadata(), &adapter.display().to_string()).map_err(msg)?;
         Self::from_plan(base, &adapter_map, adapter, plan, alpha, scale)
+    }
+
+    /// A LongLive-Plug H3 adapter ([`fastvideo_models::plug`]): `explicit`,
+    /// else the recipe's file beside `root` (`../longlive-plug/<dir>/`). The
+    /// `.pt` release (`generator_lora.pt`, tensors under `student_lora`) is
+    /// read without Python; the safetensors one is mapped. Alpha comes from
+    /// the directory's `adapter_config.json` (else the file's metadata, else
+    /// `alpha = rank`). Every LoRA module must match a base parameter: the
+    /// planner's matched / skipped / unknown counts are logged and any skip
+    /// is an error.
+    pub fn open_plug(
+        base: &WeightMap,
+        root: &Path,
+        recipe: &fastvideo_models::plug::PlugRecipe,
+        explicit: Option<&Path>,
+    ) -> Result<Self> {
+        use fastvideo_models::plug::{plan_adapter, AdapterConfig, PLUG_ROOT_ENV};
+        let [spec] = recipe.adapters.as_slice() else {
+            return Err(msg(format!(
+                "{}: the H3 Plug adapters are used one at a time, got {}",
+                recipe.name,
+                recipe.adapters.len()
+            )));
+        };
+        let path = match explicit {
+            Some(p) => p.to_path_buf(),
+            None => {
+                let env = std::env::var_os(PLUG_ROOT_ENV).map(std::path::PathBuf::from);
+                spec.resolve(root, env.as_deref()).map_err(msg)?
+            }
+        };
+        let (adapter_map, metadata) = open_adapter_map(&path)?;
+        let config_json = path
+            .parent()
+            .map(|d| d.join("adapter_config.json"))
+            .filter(|p| p.is_file())
+            .map(|p| std::fs::read_to_string(&p).map_err(|e| msg(format!("{}: {e}", p.display()))))
+            .transpose()?;
+        let config = AdapterConfig::from_sources(config_json.as_deref(), &metadata).map_err(msg)?;
+        let keys: Vec<(String, Vec<usize>)> = adapter_keys(&adapter_map)
+            .into_iter()
+            .map(|k| {
+                let shape = adapter_map.shape(&k).unwrap_or_default();
+                (k, shape)
+            })
+            .collect();
+        let report = plan_adapter(
+            &format!("{} {}/{}", recipe.name, spec.dir, spec.file),
+            &keys,
+            config,
+            spec.weight,
+            &|m| Some(format!("{m}.weight")),
+            &|p| base.shape(p),
+        )
+        .map_err(msg)?;
+        crate::wan::log::info(format_args!("plug lora {}", report.summary()));
+        report.require_complete().map_err(msg)?;
+        let names: Vec<String> = keys.into_iter().map(|(k, _)| k).collect();
+        let plan =
+            plan_from_keys(&names, &HashMap::new(), &path.display().to_string()).map_err(msg)?;
+        let rank = report.ranks().first().copied().unwrap_or(1);
+        let alpha = config.alpha.unwrap_or(rank as f64);
+        if alpha.fract() != 0.0 || alpha < 1.0 {
+            return Err(msg(format!(
+                "{}: alpha {alpha} is not a positive integer",
+                path.display()
+            )));
+        }
+        Self::from_plan(base, &adapter_map, &path, plan, alpha as u32, spec.weight)
     }
 
     fn from_plan(

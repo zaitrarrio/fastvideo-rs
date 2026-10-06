@@ -5,7 +5,7 @@
 //   cluster-spec/<cluster id>   the cluster definition
 //   policies/default            alert thresholds and auto-actions (with attribution)
 //   attribution/default         external pod attribution rules (a slice of policies)
-//   env/account | env/cluster:<id> | env/pod:<pod id>   env vars at one level
+//   env/account | env/cluster:<id> | env/pool:<cluster id>:<pool> | env/pod:<pod id>   env vars at one level
 // Secrets never leave the Worker: an env document shows a secret as
 // {value: null, secret: true}; a new value goes in the write-only `set`.
 import { DEFAULT_POLICIES, policies, type Policies } from "./alerts";
@@ -39,9 +39,19 @@ export async function bumpDoc(env: Env, kind: DocKind, id: string, by: string, e
 
 function envScope(id: string): { scope: Scope; sid: string } {
   if (id === "account") return { scope: "account", sid: "" };
+  const p = /^pool:([A-Za-z0-9_-]{1,64}):([a-z][a-z0-9-]{0,30})$/.exec(id);
+  if (p) return { scope: "pool", sid: `${p[1]}:${p[2]}` };
   const m = /^(cluster|pod):([A-Za-z0-9_-]{1,64})$/.exec(id);
-  if (!m) throw new HttpError(400, "env id: account | cluster:<id> | pod:<id>");
+  if (!m) throw new HttpError(400, "env id: account | cluster:<id> | pool:<cluster id>:<pool> | pod:<id>");
   return { scope: m[1] as Scope, sid: m[2]! };
+}
+/** `<cluster id or name>:<pool>` → `<cluster id>:<pool>`, for a pool of the cluster's spec. */
+export async function poolSid(env: Env, sid: string): Promise<string> {
+  const m = /^([A-Za-z0-9_-]{1,64}):([a-z][a-z0-9-]{0,30})$/.exec(sid);
+  if (!m) throw new HttpError(400, "pool scope: <cluster>:<pool>");
+  const c = await getCluster(env, m[1]!);
+  if (!c.spec.pools.some((p) => p.id === m[2])) throw new HttpError(404, `no pool ${m[2]} in ${c.name}`);
+  return `${c.id}:${m[2]}`;
 }
 export type EnvDoc = Record<string, { value: string | null; secret: boolean; set?: string }>;
 async function readEnvDoc(env: Env, id: string): Promise<EnvDoc> {
@@ -69,6 +79,7 @@ export async function readDoc(env: Env, kind: DocKind, id: string): Promise<unkn
 export async function canonicalId(env: Env, kind: DocKind, id: string): Promise<string> {
   if (kind === "cluster-spec") return (await getCluster(env, id)).id;
   if (kind === "env" && id.startsWith("cluster:")) return `cluster:${(await getCluster(env, id.slice(8))).id}`;
+  if (kind === "env" && id.startsWith("pool:")) return `pool:${await poolSid(env, id.slice(5))}`;
   return id;
 }
 

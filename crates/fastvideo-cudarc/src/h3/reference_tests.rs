@@ -225,6 +225,7 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
         video_rows,
         audio_rows,
         &schedule,
+        0,
         AttnMode::Dense,
         None,
         None,

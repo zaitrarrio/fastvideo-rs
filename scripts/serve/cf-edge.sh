@@ -12,7 +12,8 @@
 #   cf-edge.sh deploy           D1 `fv-edge-staging` and R2 `fv-edge-staging-envelopes`
 #                               (created once), secrets, wrangler deploy
 #                               -> https://fv-edge-staging.<subdomain>.workers.dev
-#   cf-edge.sh status [pool..]  the Worker's version and each pool's dispatcher status
+#   cf-edge.sh status [pool|family:<f>..]  the Worker's version and each pool's or
+#                               family's dispatcher status (families: and metrics)
 #   cf-edge.sh down             delete the Worker (and its Durable Objects), the D1
 #                               database and the R2 bucket; needs FV_EDGE_CONFIRM=fv-edge-staging
 #   cf-edge.sh check-token      what the Cloudflare token can read (never printed)
@@ -21,10 +22,13 @@
 #   internal_token   the Worker's FV_INTERNAL_TOKEN (gateway + workers); made on first
 #                    deploy unless FV_EDGE_INTERNAL_TOKEN_FILE names the gateway's
 #   admin_token      FV_ADMIN_TOKEN (read-only status); FV_EDGE_ADMIN_TOKEN_FILE likewise
+#   upload_key       FV_UPLOAD_SIGNING_KEY (edge capability URLs for output parts; never
+#                    given to GPU hosts)
 #   url, d1_id       what deploy created
 # Cloudflare token: FV_CF_TOKEN_FILE (default /root/.config/fv/cf_api_token), read from
 # the file into wrangler's environment and curl header files only; never printed.
-# Env: FV_EDGE_POOL_LOCATIONS ('{"h3-turbo":"weur"}'), FV_EDGE_ACK_TIMEOUT_MS,
+# Env: FV_EDGE_POOL_LOCATIONS ('{"h3-turbo":"weur","family:wan":"weur"}'; object names),
+# FV_EDGE_SESSION_TTL_MS, FV_EDGE_UPLOAD_TTL_MS, FV_EDGE_ACK_TIMEOUT_MS,
 # FV_EDGE_RECONNECT_GRACE_MS, FV_EDGE_STALE_AFTER_MS, FV_EDGE_REDISPATCH_WAIT_MS,
 # FV_EDGE_SPILL_BYTES (envelopes above it go to R2, default 1 MiB),
 # FV_EDGE_BUILD_AGENT (build-pod agent name, default this worktree's), FV_EDGE_TOOLS.
@@ -35,6 +39,9 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 NAME="fv-edge-staging"
 D1_NAME="fv-edge-staging"
 R2_NAME="fv-edge-staging-envelopes"
+# Job outputs of direct uploads (docs/serve/dispatch-do-family.md §7); its
+# lifecycle aborts incomplete multipart uploads after 1 day, objects go after 7.
+OUT_R2_NAME="fv-edge-staging-outputs"
 COMPAT_DATE="2026-09-01"
 WRANGLER_VERSION="4.143.0"
 ESBUILD_VERSION="0.28.2"
@@ -122,9 +129,13 @@ write_config() {
     printf '[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["PoolScheduler"]\n\n'
     printf '[[d1_databases]]\nbinding = "DB"\ndatabase_name = "%s"\ndatabase_id = "%s"\n\n' "$D1_NAME" "$d1_id"
     printf '[[r2_buckets]]\nbinding = "ENVELOPES"\nbucket_name = "%s"\n\n' "$R2_NAME"
+    printf '[[r2_buckets]]\nbinding = "OUTPUTS"\nbucket_name = "%s"\n\n' "$OUT_R2_NAME"
     printf '[observability]\nenabled = true\n\n'
     printf '[vars]\nFV_EDGE_VERSION = "%s"\n' "$version"
     printf "POOL_LOCATIONS = '%s'\n" "$locations"
+    printf 'OUTPUTS_BUCKET = "%s"\n' "$OUT_R2_NAME"
+    [[ -n "${FV_EDGE_SESSION_TTL_MS:-}" ]] && printf 'SESSION_TTL_MS = "%s"\n' "$FV_EDGE_SESSION_TTL_MS"
+    [[ -n "${FV_EDGE_UPLOAD_TTL_MS:-}" ]] && printf 'UPLOAD_TTL_MS = "%s"\n' "$FV_EDGE_UPLOAD_TTL_MS"
     [[ -n "${FV_EDGE_ACK_TIMEOUT_MS:-}" ]] && printf 'ACK_TIMEOUT_MS = "%s"\n' "$FV_EDGE_ACK_TIMEOUT_MS"
     [[ -n "${FV_EDGE_RECONNECT_GRACE_MS:-}" ]] && printf 'RECONNECT_GRACE_MS = "%s"\n' "$FV_EDGE_RECONNECT_GRACE_MS"
     [[ -n "${FV_EDGE_STALE_AFTER_MS:-}" ]] && printf 'STALE_AFTER_MS = "%s"\n' "$FV_EDGE_STALE_AFTER_MS"
@@ -148,7 +159,9 @@ cmd_dev() {
   local it at
   it="$(token_file FV_EDGE_INTERNAL_TOKEN_FILE internal_token)"
   at="$(token_file FV_EDGE_ADMIN_TOKEN_FILE admin_token)"
-  printf 'FV_INTERNAL_TOKEN=%s\nFV_ADMIN_TOKEN=%s\n' "$(cat "$it")" "$(cat "$at")" >"$dir/.dev.vars"
+  local uk
+  uk="$(token_file FV_EDGE_UPLOAD_KEY_FILE upload_key)"
+  printf 'FV_INTERNAL_TOKEN=%s\nFV_ADMIN_TOKEN=%s\nFV_UPLOAD_SIGNING_KEY=%s\n' "$(cat "$it")" "$(cat "$at")" "$(cat "$uk")" >"$dir/.dev.vars"
   log "wrangler dev on 127.0.0.1:$port (state $OUT/dev-state; tokens from $STATE)"
   cd "$dir"
   exec env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
@@ -211,6 +224,13 @@ cmd_deploy() {
     cf -X POST "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets" -d "{\"name\":\"$R2_NAME\"}" |
       python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get("success") else "R2 bucket create failed: %s (the token needs Account > Workers R2 Storage > Edit)" % d.get("errors"))'
   fi
+  if ! cf "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$OUT_R2_NAME" | python3 -c 'import sys,json; sys.exit(0 if json.load(sys.stdin).get("success") else 1)'; then
+    log "creating R2 bucket $OUT_R2_NAME"
+    cf -X POST "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets" -d "{\"name\":\"$OUT_R2_NAME\"}" |
+      python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get("success") else "R2 bucket create failed: %s" % d.get("errors"))'
+    "$WRANGLER" r2 bucket lifecycle add "$OUT_R2_NAME" fv-outputs-staging "" --abort-multipart-days 1 --expire-days 7 --force >&2 ||
+      log "warning: the lifecycle rule on $OUT_R2_NAME was not set"
+  fi
   local dir="$OUT/deploy" version
   version="$(version_string)"
   mkdir -p "$dir"
@@ -220,7 +240,9 @@ cmd_deploy() {
   it="$(token_file FV_EDGE_INTERNAL_TOKEN_FILE internal_token)"
   at="$(token_file FV_EDGE_ADMIN_TOKEN_FILE admin_token)"
   secrets="$STATE/secrets.json.tmp"
-  python3 -c 'import json,sys; print(json.dumps({"FV_INTERNAL_TOKEN": open(sys.argv[1]).read().strip(), "FV_ADMIN_TOKEN": open(sys.argv[2]).read().strip()}))' "$it" "$at" >"$secrets"
+  local uk
+  uk="$(token_file FV_EDGE_UPLOAD_KEY_FILE upload_key)"
+  python3 -c 'import json,sys; print(json.dumps({"FV_INTERNAL_TOKEN": open(sys.argv[1]).read().strip(), "FV_ADMIN_TOKEN": open(sys.argv[2]).read().strip(), "FV_UPLOAD_SIGNING_KEY": open(sys.argv[3]).read().strip()}))' "$it" "$at" "$uk" >"$secrets"
   log "deploying $NAME (version $version)"
   local rc=0
   (cd "$dir" && "$WRANGLER" deploy --secrets-file "$secrets") || rc=$?
@@ -245,8 +267,14 @@ cmd_status() {
   hdr="$(mktemp)"
   printf 'Authorization: Bearer %s\n' "$(cat "$at")" >"$hdr"
   for p in "$@"; do
-    echo "pool $p:"
-    curl -sS --max-time 10 -H @"$hdr" "$url/pools/$p/status" | python3 -m json.tool || true
+    if [[ "$p" == family:* ]]; then
+      echo "family ${p#family:}:"
+      curl -sS --max-time 10 -H @"$hdr" "$url/families/${p#family:}/status" | python3 -m json.tool || true
+      curl -sS --max-time 10 -H @"$hdr" "$url/families/${p#family:}/metrics" | python3 -m json.tool || true
+    else
+      echo "pool $p:"
+      curl -sS --max-time 10 -H @"$hdr" "$url/pools/$p/status" | python3 -m json.tool || true
+    fi
   done
   rm -f "$hdr"
 }

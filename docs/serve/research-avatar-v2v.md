@@ -409,8 +409,9 @@ Estimates are **INFERRED** from this repo's own history:
 
 "Session" means one agent session (a working day of an agent with build-pod
 access). Every download over a few GB needs the owner's approval (CLAUDE.md).
-Every new tree goes to both volumes and into `weights-manifest.tsv` and
-`verify-weights.sh`.
+Every new tree goes to the EU volume (EU only since 2026-10-06; the US
+volume was deleted, docs/ops/runpod-volumes.md §0) and into
+`weights-manifest.tsv` and `verify-weights.sh`.
 
 ### P0: infrastructure plus wins on weights we already serve
 

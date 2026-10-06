@@ -1,0 +1,75 @@
+# fv-serve on Runpod: the Wan 2.1 T2V-14B fast tier, `wan14b-turbo`
+# (catalog id `wan14b-plug-4step`; docs/serve/research-longlive.md §12).
+# Secrets as in runpod.toml.
+#
+# Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters (few-step lightx2v at
+# 1.0 + CFG at 0.5, Apache-2.0) merged into the transformer at load, then the
+# LightX2V step-distill Euler sampler: 4 forwards (timesteps 1000 / 750 / 500
+# / 250 at shift 5), no CFG. 832x480 (or 480x832), up to 81 frames at 16 fps,
+# text-to-video only. RTX PRO 6000: 19.0 s denoise / 22.0 s end to end, 25x
+# the base 14B's 100-forward UniPC; about 51 GB peak; the load reads the
+# 14B transformer and merges the adapters on the host (~5 min).
+#
+# Weights (both Runpod volumes, scripts/gpu/weights-manifest.tsv):
+#   ${FV_WEIGHTS}/wan21-t2v-14b                          base, Wan-AI/Wan2.1-T2V-14B-Diffusers
+#   ${FV_WEIGHTS}/longlive-plug/wan21-t2v-14b-few-step   generator_lora_lightx2v.safetensors
+#   ${FV_WEIGHTS}/longlive-plug/wan21-t2v-14b-cfg        adapter_model.safetensors
+# The adapters resolve beside the base (`<weights>/../longlive-plug`);
+# FASTVIDEO_PLUG_ROOT overrides the directory.
+#
+# Public names: `wan14b-turbo` and `wan14b-plug-4step` on /fv/v1/jobs and
+# /v1/videos; fal queue app `fastvideo/wan14b-turbo` (H3-schema app on this
+# model, as `fastvideo/fastwan21-1.3b` for the 1.3B: 480P, 5 s).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "wan14b-plug-4step"
+family = "wan"
+recipe = "wan14b-turbo"
+weights = "${FV_WEIGHTS}/wan21-t2v-14b"
+resident = true
+
+[protocols]
+fal_apps = ["fastvideo/wan14b-turbo"]
+openai_videos = true
+fastwan = false
+minimax = false
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+# Behind the gateway (docs/serve/gateway.md): FV_SERVE_ROLE=worker and
+# FV_INTERNAL_TOKEN; the worker registers with the gateway's `wan14b` pod
+# pool. Standalone deployments ignore this.
+[gateway]
+pool = "wan14b"
+tick_s = 5
+metrics_window_s = 600
+watch_poll_ms = 1000
+runpod_api_base = "https://api.runpod.ai/v2"

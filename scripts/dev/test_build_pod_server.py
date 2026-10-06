@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Tests for build-pod-server.py's disk eviction and disk-full handling.
+"""Unit tests for the build pod's server (scripts/dev/build-pod-server.py).
+
+Self-stop: idle / cap decisions on a fake clock, the stop fallback chain and
+its retry schedule, the User-Agent the Runpod calls send, and that status /
+health polls do not count as activity.
+
+Eviction and disk-full handling: the Evictor against a fake filesystem and
+clock (idle and LRU passes, busy agents, the release agent's hold); LocalFS,
+job start and the HTTP 507 path against a temp dir.
+
+Standard library only:
 
     python3 scripts/dev/test_build_pod_server.py
-
-Standard library only. The Evictor runs against a fake filesystem and clock;
-LocalFS, job start and the HTTP 507 path run against a temp dir.
 """
 
-import hashlib
+import http.server
 import importlib.util
 import json
 import os
@@ -22,21 +29,262 @@ from collections import namedtuple
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix="fvb-test-")
-TOKEN = "test-token"
-os.environ.update(
-    FV_BUILD_ROOT=os.path.join(TMP, "volume"),
-    FV_BUILD_LOCAL=os.path.join(TMP, "local"),
-    FV_BUILD_TOKEN_SHA256=hashlib.sha256(TOKEN.encode()).hexdigest(),
-    FV_BUILD_TARGETS="local",
-)
-_spec = importlib.util.spec_from_file_location(
-    "build_pod_server", os.path.join(os.path.dirname(os.path.abspath(__file__)), "build-pod-server.py"))
-srv = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(srv)
+TOKEN = "t" * 16
+os.environ.update({
+    "FV_BUILD_ROOT": os.path.join(TMP, "vol"),
+    "FV_BUILD_LOCAL": os.path.join(TMP, "local"),
+    "FV_BUILD_TOKEN_SHA256": __import__("hashlib").sha256(TOKEN.encode()).hexdigest(),
+    "FV_BUILD_SKIP_SETUP": "1",
+    "FV_BUILD_NO_WATCHDOG": "1",
+    "FV_BUILD_TARGETS": "local",
+})
+for k in ("RUNPOD_API_KEY", "RUNPOD_POD_ID"):
+    os.environ.pop(k, None)
+_spec = importlib.util.spec_from_file_location("bps", os.path.join(HERE, "build-pod-server.py"))
+bps = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bps)
+srv = bps  # the eviction tests' name for the module
+for _d in (os.path.join(TMP, "vol", "logs"), os.path.join(TMP, "vol", "jobs"), bps.WT_BASE, bps.TARGET_BASE):
+    os.makedirs(_d, exist_ok=True)
 
 GB = 1e9
 H = 3600
+M = 60
+
+
+class PolicyTest(unittest.TestCase):
+    def setUp(self):
+        self.p = bps.StopPolicy(boot=1000.0, idle_s=20 * M, max_s=8 * H, grace_s=30 * M)
+
+    def test_idle_needs_no_jobs_and_the_full_window(self):
+        t0 = 1000.0
+        self.assertIsNone(self.p.decide(t0 + 19 * M, t0, 0))
+        self.assertTrue(self.p.decide(t0 + 20 * M, t0, 0).startswith("idle 20 min"))
+        # A queued or running job holds the idle stop off however long it runs.
+        self.assertIsNone(self.p.decide(t0 + 5 * H, t0, 1))
+
+    def test_idle_counts_from_the_last_activity(self):
+        t0 = 1000.0
+        self.assertIsNone(self.p.decide(t0 + 2 * H, t0 + 2 * H - 10 * M, 0))
+        self.assertIsNotNone(self.p.decide(t0 + 2 * H, t0 + 2 * H - 21 * M, 0))
+
+    def test_cap_without_jobs_stops_at_once(self):
+        t = 1000.0 + 8 * H
+        self.assertIsNone(self.p.decide(t - 1, t - 1, 0))
+        self.assertTrue(self.p.decide(t, t, 0).startswith("wall-clock cap 8h"))
+
+    def test_cap_with_jobs_waits_for_the_grace_then_stops_anyway(self):
+        t = 1000.0 + 8 * H
+        self.assertTrue(self.p.past_cap(t))
+        self.assertIsNone(self.p.decide(t + 29 * M, t, 2))
+        r = self.p.decide(t + 30 * M, t, 2)
+        self.assertIn("grace", r)
+        self.assertIn("2 job(s)", r)
+
+    def test_timers(self):
+        t0 = 1000.0
+        x = self.p.timers(t0 + H, t0 + H - 5 * M, 0)
+        self.assertEqual((x["uptime_s"], x["idle_s"], x["idle_stop_in_s"], x["max_stop_in_s"]), (H, 5 * M, 15 * M, 7 * H))
+        busy = self.p.timers(t0 + H, t0, 1)
+        self.assertEqual((busy["idle_s"], busy["idle_stop_in_s"], busy["max_stop_in_s"]), (0, None, 7 * H + 30 * M))
+        late = self.p.timers(t0 + 9 * H, t0, 0)
+        self.assertEqual((late["idle_stop_in_s"], late["max_stop_in_s"]), (0, 0))
+
+
+class StopperTest(unittest.TestCase):
+    def test_falls_back_rest_stop_terminate_then_graphql(self):
+        seen = []
+
+        def call(method, url, body):
+            seen.append((method, url, body and body["query"].split("(")[0]))
+            if len(seen) < 3:
+                raise RuntimeError("HTTP 403 Forbidden: error code: 1010")
+            return {"data": {}}
+
+        s = bps.Stopper(call=call, pod="pod1")
+        self.assertTrue(s.attempt("idle 20 min", 100.0))
+        self.assertEqual(seen, [
+            ("POST", bps.RUNPOD_REST + "/pods/pod1/stop", None),
+            ("DELETE", bps.RUNPOD_REST + "/pods/pod1", None),
+            ("POST", bps.RUNPOD_GRAPHQL, "mutation { podStop"),
+        ])
+        self.assertEqual(s.info()["ok"], "GraphQL podStop")
+        # Still alive 10 min after an accepted call: try again.
+        self.assertFalse(s.due(100.0 + 599))
+        self.assertTrue(s.due(100.0 + 600))
+
+    def test_failures_back_off_and_keep_retrying(self):
+        def call(method, url, body):
+            raise RuntimeError("HTTP 403 Forbidden: error code: 1010")
+
+        s = bps.Stopper(call=call, pod="pod1")
+        now, gaps = 0.0, []
+        for _ in range(6):
+            self.assertFalse(s.attempt("cap", now))
+            gaps.append(s.next_at - now)
+            now = s.next_at
+        self.assertEqual(gaps, [60, 120, 240, 480, 600, 600])
+        info = s.info()
+        self.assertEqual(info["attempts"], 6)
+        self.assertIn("1010", info["error"])
+        self.assertIn("GraphQL podTerminate", info["error"])
+
+    def test_graphql_errors_count_as_failures(self):
+        os.environ["RUNPOD_API_KEY"] = "k"
+        try:
+            with _FakeRunpod({"errors": [{"message": "not authorized"}]}) as srv:
+                with self.assertRaisesRegex(RuntimeError, "not authorized"):
+                    bps.runpod_call("POST", srv.url + "/graphql", {"query": "x"})
+        finally:
+            os.environ.pop("RUNPOD_API_KEY")
+
+    def test_calls_send_an_explicit_user_agent_and_report_the_body(self):
+        os.environ["RUNPOD_API_KEY"] = "k"
+        try:
+            with _FakeRunpod({}, status=403, body=b"error code: 1010") as srv:
+                with self.assertRaisesRegex(RuntimeError, "HTTP 403.*error code: 1010"):
+                    bps.runpod_call("POST", srv.url + "/pods/x/stop")
+                self.assertTrue(srv.seen[-1]["ua"].startswith("fv-build-pod/"))
+                self.assertNotIn("Python-urllib", srv.seen[-1]["ua"])
+                self.assertEqual(srv.seen[-1]["auth"], "Bearer k")
+        finally:
+            os.environ.pop("RUNPOD_API_KEY")
+
+
+class _FakeRunpod:
+    def __init__(self, reply, status=200, body=None):
+        self.reply, self.status, self.body, self.seen = reply, status, body, []
+
+    def __enter__(self):
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def handle_any(self):
+                n = int(self.headers.get("content-length") or 0)
+                self.rfile.read(n)
+                outer.seen.append({"ua": self.headers.get("user-agent", ""), "auth": self.headers.get("authorization")})
+                b = outer.body if outer.body is not None else json.dumps(outer.reply).encode()
+                self.send_response(outer.status)
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            do_GET = do_POST = do_DELETE = handle_any
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *a):
+        self.srv.shutdown()
+
+
+class WatchTest(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.orig = (bps.POLICY, bps.STOPPER, bps.last_activity)
+        bps.POLICY = bps.StopPolicy(boot=0.0, idle_s=20 * M, max_s=8 * H, grace_s=30 * M)
+        bps.STOPPER = bps.Stopper(call=lambda *a: self.calls.append(a), pod="pod1")
+        bps.last_activity = 0.0
+        bps.jobs.clear()
+        bps.cap_warned.clear()
+
+    def tearDown(self):
+        bps.POLICY, bps.STOPPER, bps.last_activity = self.orig
+        bps.jobs.clear()
+
+    def _job(self, state):
+        j = bps.Job.__new__(bps.Job)
+        j.id, j.state, j.agent = f"j{len(bps.jobs)}", state, "a"
+        j.log_path = os.path.join(TMP, j.id + ".log")
+        j.cond = threading.Condition()
+        open(j.log_path, "wb").close()
+        bps.jobs[j.id] = j
+        return j
+
+    def test_idle_stop_fires_once_then_rechecks_after_ten_minutes(self):
+        self.assertIsNone(bps.watch_tick(19 * M))
+        self.assertTrue(bps.watch_tick(20 * M).startswith("idle"))
+        self.assertEqual(len(self.calls), 1)
+        bps.watch_tick(25 * M)
+        self.assertEqual(len(self.calls), 1)
+        bps.watch_tick(30 * M)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_public_jobs_carry_no_argv(self):
+        j = self._job("running")
+        j.argv, j.started, j.ended, j.exit = ["cargo", "test", "--secret-ish"], 0.0, None, None
+        self._job("done")
+        out = bps.public_jobs()
+        self.assertEqual([x["id"] for x in out], [j.id])
+        self.assertEqual(set(out[0]), {"id", "agent", "state", "seconds"})
+
+    def test_cap_warns_running_jobs_then_kills_them_after_the_grace(self):
+        j = self._job("running")
+        bps.last_activity = 8 * H
+        self.assertIsNone(bps.watch_tick(8 * H + 1))
+        with open(j.log_path) as f:
+            self.assertIn("passed its 8 h cap", f.read())
+        self.assertEqual(self.calls, [])
+        self.assertIn("grace", bps.watch_tick(8 * H + 30 * M))
+        self.assertEqual(len(self.calls), 1)
+        with open(j.log_path) as f:
+            self.assertIn("this job is killed", f.read())
+
+
+class HttpTest(unittest.TestCase):
+    """Status and health polls must not reset the idle timer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), bps.Handler)
+        cls.url = f"http://127.0.0.1:{cls.srv.server_address[1]}"
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def get(self, path, auth=True):
+        req = urllib.request.Request(self.url + path, headers={"Authorization": "Bearer " + TOKEN} if auth else {})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read().decode()
+            return json.loads(body) if r.headers.get("content-type", "").startswith("application/json") else body
+
+    def test_polls_do_not_touch(self):
+        bps.last_activity = 12345.0
+        st = self.get("/v1/status")
+        self.get("/healthz", auth=False)
+        self.get("/v1/agents")
+        self.get("/v1/log?lines=5")
+        self.assertEqual(bps.last_activity, 12345.0)
+        for k in ("idle_s", "idle_stop_in_s", "max_stop_in_s", "max_grace_s", "self_stop"):
+            self.assertIn(k, st)
+        hz = self.get("/healthz", auth=False)
+        for k in ("idle_s", "idle_stop_in_s", "max_stop_in_s", "jobs_active", "uptime_s", "self_stop", "jobs"):
+            self.assertIn(k, hz)
+        self.assertIn("attempts", hz["self_stop"])
+        self.assertIsInstance(hz["jobs"], list)
+
+    def test_job_submit_past_the_cap_is_refused(self):
+        orig = bps.POLICY
+        bps.POLICY = bps.StopPolicy(boot=0.0, idle_s=20 * M, max_s=1, grace_s=30 * M)
+        try:
+            os.makedirs(os.path.join(bps.WT_BASE, "agent1"), exist_ok=True)
+            req = urllib.request.Request(self.url + "/v1/agents/agent1/jobs", method="POST",
+                                         data=json.dumps({"argv": ["cargo", "check"]}).encode(),
+                                         headers={"Authorization": "Bearer " + TOKEN})
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=10)
+            self.assertEqual(cm.exception.code, 503)
+        finally:
+            bps.POLICY = orig
 
 
 class FakeFS:
@@ -84,10 +332,58 @@ class Clock:
         return self.t
 
 
-def evictor(fs, clock, hours=6, free_gb=40):
+def evictor(fs, clock, hours=6, free_gb=40, protect=("fv-release",), hold_min=60):
     logs = []
-    ev = srv.Evictor(fs, clock=clock, evict_s=hours * H, min_free=free_gb * GB, log=logs.append)
+    ev = srv.Evictor(fs, clock=clock, evict_s=hours * H, min_free=free_gb * GB, log=logs.append,
+                     protect=protect, hold_s=hold_min * M)
     return ev, logs
+
+
+class ReleaseHoldTest(unittest.TestCase):
+    """The release agent (build-pod.sh release-artifacts: sync, job, then
+    fetches from target/fv-release/) is not evicted while its flow runs."""
+
+    def test_between_the_job_and_the_fetch_it_is_held(self):
+        c = Clock()
+        # The release job just finished (no job in flight); the disk is short.
+        fs = FakeFS(10, {"fv-release": (60, 0.1, c.t - 2 * M), "other": (20, 0.1, c.t - 30 * M)})
+        ev, _ = evictor(fs, c)
+        ev.run_once()
+        self.assertEqual(fs.removed, [("other", "target")])
+        self.assertTrue(fs.has("fv-release", "target"))
+
+    def test_while_its_job_runs_it_is_kept_whatever_its_age(self):
+        c = Clock()
+        fs = FakeFS(5, {"fv-release": (60, 0.1, c.t - 9 * H)})
+        fs.busy_set.add("fv-release")
+        ev, _ = evictor(fs, c, hold_min=0)
+        self.assertEqual(ev.run_once(), [])
+
+    def test_after_the_hold_it_goes_last_under_pressure(self):
+        c = Clock()
+        # fv-release is the least recently used, but goes after the others.
+        fs = FakeFS(10, {"fv-release": (60, 0.1, c.t - 3 * H), "a": (20, 0.1, c.t - 2 * H),
+                         "b": (20, 0.1, c.t - 1 * H)})
+        ev, _ = evictor(fs, c, free_gb=45)
+        ev.run_once()
+        self.assertEqual(fs.removed, [("a", "target"), ("b", "target")])
+        ev2, _ = evictor(fs, c, free_gb=100)
+        ev2.run_once()
+        self.assertEqual(fs.removed[-1], ("fv-release", "target"))
+
+    def test_idle_eviction_still_applies_after_the_hold(self):
+        c = Clock()
+        fs = FakeFS(150, {"fv-release": (60, 0.1, c.t - 7 * H)})
+        ev, _ = evictor(fs, c)
+        ev.run_once()
+        self.assertEqual(fs.removed, [("fv-release", "target"), ("fv-release", "worktree")])
+
+    def test_other_agents_are_not_held(self):
+        c = Clock()
+        fs = FakeFS(10, {"recent": (30, 0.1, c.t - 1 * M)})
+        ev, _ = evictor(fs, c)
+        ev.run_once()
+        self.assertEqual(fs.removed, [("recent", "target")])
 
 
 class EvictorTest(unittest.TestCase):
@@ -219,6 +515,30 @@ class LocalFSTest(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(srv.TARGET_BASE, "new")))
         self.assertEqual(os.listdir(os.path.join(srv.LOCAL, "trash")), [], "removal is synchronous")
 
+    def test_volume_and_release_cache_are_never_evicted(self):
+        # The release build's caches on the volume (release-cache/) and the
+        # volume's other trees are outside eviction's reach, under any
+        # pressure, and a protected agent is kept within its hold.
+        cache = os.path.join(srv.ROOT, "release-cache", "curand")
+        os.makedirs(cache, exist_ok=True)
+        self.make_agent("fv-release", 0.1)
+        self.make_agent("someone", 3)
+        ev = srv.Evictor(srv.LocalFS(), evict_s=6 * H, min_free=1e18, log=lambda m: None)
+        done = ev.run_once()
+        self.assertEqual([(e["agent"], e["what"]) for e in done], [("someone", "target")])
+        self.assertTrue(os.path.isdir(cache))
+        self.assertTrue(os.path.isdir(os.path.join(srv.TARGET_BASE, "fv-release")))
+        self.assertFalse(srv.LocalFS().remove("..", "target"))
+        self.assertFalse(srv.LocalFS().remove("release-cache/..", "target"))
+        self.assertTrue(os.path.isdir(cache))
+
+    def test_eviction_does_not_count_as_activity(self):
+        self.make_agent("idle", 9)
+        srv.last_activity = 12345.0
+        srv.Evictor(srv.LocalFS(), evict_s=6 * H, min_free=0, log=lambda m: None).run_once()
+        self.assertFalse(os.path.exists(os.path.join(srv.TARGET_BASE, "idle")))
+        self.assertEqual(srv.last_activity, 12345.0, "the self-stop idle timer is untouched")
+
     def test_remove_refuses_while_the_agent_lock_is_held(self):
         self.make_agent("locked", 9)
         with srv.agent_lock("locked"):
@@ -296,6 +616,7 @@ class HttpDiskFullTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["eviction"]["idle_hours"], 6)
         self.assertEqual(body["eviction"]["free_gb_floor"], 40)
+        self.assertEqual((body["eviction"]["protect"], body["eviction"]["hold_min"]), (["fv-release"], 60))
         self.assertIsInstance(body["agents"], list)
 
 

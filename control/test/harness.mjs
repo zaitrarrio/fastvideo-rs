@@ -47,6 +47,8 @@ export function startMock() {
     adminToken: "fvadm_mocktoken123",
     minted: [],
     drained: [],
+    directKeys: [], // gateway-less workers' minted keys (the shared D1 table)
+    directCalls: [], // {pod, method, route} of their admin calls
     external: [
       { id: "extbuild0001", name: "fv-build", desiredStatus: "RUNNING", costPerHr: 1.12, imageName: "rust:1-bookworm", gpuCount: 0, machine: { gpuDisplayName: "unknown", dataCenterId: "EU-RO-1" }, runtime: { uptimeInSeconds: 3600, gpus: [], container: { cpuPercent: 80, memoryPercent: 10 } } },
       { id: "extgpu00001", name: "fv-b200-bench-x", desiredStatus: "RUNNING", costPerHr: 6.79, imageName: "ghcr.io/x@sha256:1", gpuCount: 1, machine: { gpuDisplayName: "B200", dataCenterId: "US-CA-2" }, runtime: { uptimeInSeconds: 600, gpus: [{ id: "g", gpuUtilPercent: 2, memoryUtilPercent: 5 }], container: { cpuPercent: 1, memoryPercent: 4 } } },
@@ -143,6 +145,8 @@ export function startMock() {
     if (p.startsWith("/cf/")) return json(res, 200, { data: [] });
     // ---- the cluster's pods
     const pm = /^\/pod\/([^/]+)(\/.*)$/.exec(p);
+    // The shared build pod's public /healthz (an external pod: not in m.pods).
+    if (pm && m.buildHealth?.[pm[1]] && pm[2] === "/healthz") return json(res, 200, m.buildHealth[pm[1]]);
     if (pm) {
       const pod = m.pods.get(pm[1]);
       if (!pod || pod.desiredStatus !== "RUNNING") { res.writeHead(502); return res.end("no pod"); }
@@ -165,8 +169,27 @@ export function startMock() {
         if (route === "/fv/v1/admin/keys" && req.method === "POST") {
           if (!admin) return json(res, 401, {});
           m.minted.push(body.name);
-          return json(res, 201, { api_key: "fv_userkey_mock", key: { id: "key_1", name: body.name } });
+          const key = { id: `key_${String(m.minted.length).padStart(12, "0")}`, name: body.name, prefix: "fv_user", created_at: new Date().toISOString(), revoked: false };
+          (m.gwKeys ||= []).push(key);
+          return json(res, 201, { api_key: "fv_userkey_mock", key });
         }
+        if (route === "/fv/v1/admin/keys" && req.method === "GET") return admin ? json(res, 200, { keys: m.gwKeys || [], backend: "d1" }) : json(res, 401, {});
+        const gk = (m.gwKeys || []).find((k) => route === `/fv/v1/admin/keys/${k.id}`);
+        if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return !admin ? json(res, 401, {}) : gk ? ((gk.revoked = true), json(res, 200, { key: gk })) : json(res, 404, { error: { kind: "not_found" } });
+        return json(res, 404, {});
+      }
+      if (env.FV_WORKER_DIRECT === "1" && route.startsWith("/fv/v1/admin/keys")) {
+        // A gateway-less worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
+        if (!env.FV_ADMIN_TOKEN || bearer !== env.FV_ADMIN_TOKEN) return json(res, 401, { error: { kind: "unauthorized" } });
+        m.directCalls.push({ pod: pod.id, method: req.method, route });
+        if (route === "/fv/v1/admin/keys" && req.method === "POST") {
+          const k = { id: `key_${String(m.directKeys.length + 1).padStart(12, "0")}`, name: body.name, revoked: false };
+          m.directKeys.push(k);
+          return json(res, 201, { api_key: `fv_direct_${k.id}`, key: k });
+        }
+        if (route === "/fv/v1/admin/keys" && req.method === "GET") return json(res, 200, { keys: m.directKeys, backend: "d1" });
+        const k = m.directKeys.find((x) => route === `/fv/v1/admin/keys/${x.id}`);
+        if (req.method === "DELETE") return k ? ((k.revoked = true), json(res, 200, { key: k })) : json(res, 404, {});
         return json(res, 404, {});
       }
       if (route === "/health") return json(res, 200, { state: "AVAILABLE", build: { git_sha: "abcdef1234", image: { digest: env.FV_IMAGE_DIGEST } } });

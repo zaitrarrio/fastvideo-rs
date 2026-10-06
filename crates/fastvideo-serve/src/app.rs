@@ -258,6 +258,7 @@ fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
     } else {
         Mp4Encoder::Nvenc
     };
+    cfg.mp4_fragmented = c.engine.mp4_fragmented;
     let b = CudaBackend::new(cfg).map_err(|e| anyhow!("cuda backend: {e}"))?;
     Ok(Box::new(b))
 }
@@ -304,7 +305,20 @@ impl App {
         };
         let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
         let worker_role = config.server.role == crate::config::Role::Worker;
-        if worker_role && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
+        // Direct output uploads through the family objects' part URLs
+        // (docs/serve/dispatch-do-family.md §7): in front of the store.
+        #[cfg(feature = "http-client")]
+        let direct_uploads = (worker_role && config.dispatch.direct_upload && !config.dispatch.families.is_empty())
+            .then(|| crate::upload::Uploads::new(u64::from(config.dispatch.upload_part_mib) << 20));
+        #[cfg(feature = "http-client")]
+        let artifacts: Arc<dyn fastvideo_serve_kit::ArtifactStore> = match &direct_uploads {
+            Some(u) => crate::upload::DirectStore::new(artifacts, u.clone()),
+            None => artifacts,
+        };
+        // A direct worker (no gateway in front, `gateway.direct`) keeps its
+        // own API auth; validate() refused trust-gateway for it.
+        let direct = worker_role && config.gateway.direct;
+        if worker_role && !direct && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
             tracing::info!("server.role = worker: API auth is the gateway's (trust-gateway); every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
         }
@@ -336,6 +350,7 @@ impl App {
                 placeholder: config.engine.backend == EngineBackendKind::Fake && config.engine.fake.placeholder_output,
                 encoder,
                 scratch: config.server.state_dir.join("outputs"),
+                fragmented: config.engine.mp4_fragmented,
             },
         );
 
@@ -355,7 +370,7 @@ impl App {
         } else {
             KeyRing::from_hash_list(config.auth.keys.expose()).map_err(|e| anyhow!(e))?
         };
-        let key_store = storage::build_key_store(&config).await.map_err(|e| anyhow!(e))?;
+        let key_store = storage::build_key_store(&config, ov.d1.clone()).await.map_err(|e| anyhow!(e))?;
         if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() && key_store.list().is_empty() {
             tracing::warn!("auth.mode = keys with no FV_API_KEYS and no minted keys: keyed APIs answer 401 until a key is minted (/console/admin)");
         }
@@ -382,7 +397,7 @@ impl App {
         }
         // A worker's jobs came through the gateway, which ran the MiniMax
         // callback challenge when it took the request.
-        callbacks.challenge_done_elsewhere = worker_role;
+        callbacks.challenge_done_elsewhere = worker_role && !direct;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
@@ -573,25 +588,42 @@ impl App {
             .with_drain(drained, registration.clone());
             let st = Arc::new(st);
             // Push dispatch: a socket to the pool's Durable Object
-            // (docs/serve/gateway-cloudflare.md); the internal routes stay.
-            if let (Some(do_url), Some(pool)) = (&config.dispatch.do_url, &config.gateway.pool) {
-                background.push(crate::edge_link::spawn(
-                    st.clone(),
-                    crate::edge_link::LinkCfg {
-                        do_url: do_url.clone(),
-                        pool: pool.clone(),
-                        token: config.gateway.internal_token.expose().to_owned(),
-                        capacity: config.dispatch.capacity,
-                        status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
-                    },
-                ));
+            // (docs/serve/gateway-cloudflare.md), or one per model family
+            // with the GPU's arbiter (docs/serve/dispatch-do-family.md); the
+            // internal routes stay.
+            if let Some(do_url) = &config.dispatch.do_url {
+                use fastvideo_dispatch_proto::Scope;
+                let link = |scope: Scope| crate::edge_link::LinkCfg {
+                    do_url: do_url.clone(),
+                    scope,
+                    token: config.gateway.internal_token.expose().to_owned(),
+                    capacity: config.dispatch.capacity,
+                    status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
+                    endpoint: base.as_str().trim_end_matches('/').to_owned(),
+                    engine_out: config.server.state_dir.join("engine-out"),
+                };
+                if !config.dispatch.families.is_empty() {
+                    let fam = crate::edge_link::Family {
+                        arbiter: Arc::new(crate::arbiter::Arbiter::new(
+                            config.dispatch.capacity,
+                            config.dispatch.sessions,
+                            config.dispatch.session_exclusive,
+                        )),
+                        uploads: direct_uploads.clone(),
+                    };
+                    for f in &config.dispatch.families {
+                        background.push(crate::edge_link::spawn(st.clone(), link(Scope::Family(f.clone())), Some(fam.clone())));
+                    }
+                } else if let Some(pool) = &config.gateway.pool {
+                    background.push(crate::edge_link::spawn(st.clone(), link(Scope::Pool(pool.clone())), None));
+                }
             }
             streams = streams.merge(crate::worker::routes_shared(st));
         }
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
         if worker_role {
-            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()));
+            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()), direct);
         }
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
@@ -829,6 +861,26 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
     }
 }
 
+/// The APIs this build and config mount (`protocols` of
+/// `/fv/v1/capabilities`): the console shows snippets and pages for these
+/// only. `reactor` and `fal_director` also need the WebRTC host, which a
+/// failed bind leaves out (logged at startup).
+pub fn mounted_protocols(config: &Config) -> serde_json::Value {
+    let p = &config.protocols;
+    serde_json::json!({
+        "native": p.native,
+        "fal": cfg!(feature = "fal") && p.fal,
+        "fal_director": cfg!(all(feature = "fal", feature = "webrtc")) && p.fal && p.fal_director,
+        "openai_videos": cfg!(feature = "openai-videos") && p.openai_videos,
+        "fastwan": cfg!(feature = "openai-videos") && p.fastwan,
+        "minimax": cfg!(feature = "minimax") && p.minimax,
+        "ltx": cfg!(feature = "ltxapi") && p.ltx,
+        "reactor": cfg!(feature = "reactor") && p.reactor,
+        // `POST /fv/v1/streams` (publishing to a WHIP endpoint) needs `webrtc` + `http-client`.
+        "streams": p.native && crate::streams::PUBLISHER,
+    })
+}
+
 /// The full router: health + serve-kit files/uploads + native + adapters,
 /// with request metrics and tracing, and the `/console` pages.
 /// `streams` carries the streaming front-ends that are built with their own
@@ -846,7 +898,7 @@ pub fn assemble(
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
-        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits()));
+        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits(), mounted_protocols(config)));
         kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
     }
     let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);

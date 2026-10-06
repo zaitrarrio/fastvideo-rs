@@ -17,14 +17,22 @@
 //! Everything is JSON text frames, tagged by `"t"`. The dispatch envelope
 //! (`{"job", "inputs", "attempt", "pool"}`, gateway.md §3) rides as an
 //! opaque JSON value: the dispatcher never looks inside it.
+//!
+//! **Protocol 2** (docs/serve/dispatch-do-family.md): one dispatcher per
+//! model *family* (`/families/{family}/…`, object name `family:{family}`),
+//! credit-based offers ([`WorkerMsg::Slots`]), direct output uploads through
+//! URLs the dispatcher mints ([`WorkerMsg::UploadInit`] …, [`presign`]) and
+//! streaming-session admission ([`SessionReq`], [`DoMsg::SessionOffer`]).
+//! Protocol-1 workers keep working against either kind of object.
 
+pub mod presign;
 pub mod sched;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Protocol version announced in [`Hello::proto`].
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 
 /// Header carrying the internal token (the same secret as the gateway's
 /// `x-fv-internal-token`).
@@ -49,6 +57,63 @@ pub fn cancel_path(pool: &str, job: &str) -> String {
 }
 pub fn status_path(pool: &str) -> String {
     format!("/pools/{pool}/status")
+}
+
+/// Where a dispatcher lives: a pool (protocol 1 routes) or a model family.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Scope {
+    Pool(String),
+    Family(String),
+}
+
+impl Scope {
+    /// Route prefix: `/pools/{pool}` or `/families/{family}`.
+    pub fn base_path(&self) -> String {
+        match self {
+            Scope::Pool(p) => format!("/pools/{p}"),
+            Scope::Family(f) => format!("/families/{f}"),
+        }
+    }
+    /// The Durable Object's name (`{pool}` or `family:{family}`).
+    pub fn object_name(&self) -> String {
+        match self {
+            Scope::Pool(p) => p.clone(),
+            Scope::Family(f) => format!("family:{f}"),
+        }
+    }
+    /// The bare pool or family id.
+    pub fn id(&self) -> &str {
+        match self {
+            Scope::Pool(p) | Scope::Family(p) => p,
+        }
+    }
+    pub fn is_family(&self) -> bool {
+        matches!(self, Scope::Family(_))
+    }
+    pub fn connect_path(&self) -> String {
+        format!("{}/connect", self.base_path())
+    }
+    pub fn enqueue_path(&self) -> String {
+        format!("{}/enqueue", self.base_path())
+    }
+    pub fn cancel_path(&self, job: &str) -> String {
+        format!("{}/cancel/{job}", self.base_path())
+    }
+    pub fn status_path(&self) -> String {
+        format!("{}/status", self.base_path())
+    }
+    pub fn metrics_path(&self) -> String {
+        format!("{}/metrics", self.base_path())
+    }
+    pub fn sessions_path(&self) -> String {
+        format!("{}/sessions", self.base_path())
+    }
+    pub fn session_renew_path(&self, id: &str) -> String {
+        format!("{}/sessions/{id}/renew", self.base_path())
+    }
+    pub fn session_release_path(&self, id: &str) -> String {
+        format!("{}/sessions/{id}/release", self.base_path())
+    }
 }
 
 /// Whether `s` is a usable pool, worker or job id (path and tag safe).
@@ -103,6 +168,53 @@ pub struct Hello {
     /// jobs finished while it was disconnected (reconcile, §3.3).
     #[serde(default)]
     pub jobs: Vec<Held>,
+    /// Protocol 2: sessions it holds from this dispatcher (re-announced
+    /// after a reconnect).
+    #[serde(default)]
+    pub sessions: Vec<HeldSession>,
+    /// Protocol 2: its public base URL (signalling for sessions goes there
+    /// directly; media flows client ↔ GPU).
+    #[serde(default)]
+    pub endpoint: String,
+    /// Protocol 2: its credits at connect time (absent: protocol 1, the
+    /// dispatcher places by `capacity`).
+    #[serde(default)]
+    pub slots: Option<Slots>,
+}
+
+/// A session a worker holds, as it re-announces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldSession {
+    pub session_id: String,
+    pub lease: u64,
+}
+
+/// A worker's credits for one dispatcher (docs/serve/dispatch-do-family.md §6.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Slots {
+    /// Jobs its arbiter would take now.
+    pub free: u32,
+    /// Sessions its arbiter would take now.
+    #[serde(default)]
+    pub session_free: u32,
+    /// Offers ([`DoMsg::Job`]) received from this dispatcher on this socket
+    /// when `free` was computed.
+    #[serde(default)]
+    pub offers_seen: u64,
+}
+
+/// One uploaded part (S3 `CompleteMultipartUpload`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Part {
+    pub n: u16,
+    pub etag: String,
+}
+
+/// A part URL of a grant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartUrl {
+    pub n: u16,
+    pub url: String,
 }
 
 fn one() -> u32 {
@@ -127,6 +239,27 @@ pub enum WorkerMsg {
     Done { job_id: String, attempt: u32, state: String },
     /// Load report (also the liveness heartbeat), every few seconds.
     Status { #[serde(default)] running: u32, #[serde(default)] draining: bool, #[serde(default = "one")] capacity: u32 },
+    /// Protocol 2: credits (sent on every change of the worker's arbiter).
+    Slots(Slots),
+    /// Protocol 2: open a multipart upload for a held job's output; the
+    /// answer is a [`DoMsg::UploadGrant`] with `req`.
+    UploadInit { req: u64, job_id: String, attempt: u32, lease: u64, name: String, #[serde(default)] content_type: String, #[serde(default = "one_u16")] parts: u16 },
+    /// More (or fresh) part URLs: parts `from .. from + count`.
+    UploadMore { req: u64, job_id: String, upload_id: String, from: u16, count: u16 },
+    /// Every part is uploaded: complete it. Answer: [`DoMsg::UploadCommitted`].
+    UploadDone { req: u64, job_id: String, attempt: u32, lease: u64, upload_id: String, parts: Vec<Part>, bytes: u64, sha256: String },
+    /// Give the upload up.
+    UploadAbort { job_id: String, upload_id: String },
+    /// The arbiter reserved the GPU for the offered session.
+    SessionAck { session_id: String, lease: u64, #[serde(default)] endpoint: String },
+    /// The offered session was refused (busy, draining).
+    SessionNack { session_id: String, lease: u64, #[serde(default)] code: u16, #[serde(default)] message: String },
+    /// A session ended on the worker.
+    SessionEnd { session_id: String, lease: u64 },
+}
+
+fn one_u16() -> u16 {
+    1
 }
 
 /// Dispatcher → worker.
@@ -135,7 +268,15 @@ pub enum WorkerMsg {
 pub enum DoMsg {
     /// Answer to [`WorkerMsg::Hello`]: the jobs it reported that it must
     /// drop (the dispatcher gave them to another worker meanwhile).
-    Welcome { worker_id: String, pool: String, #[serde(default)] cancel: Vec<String> },
+    Welcome {
+        worker_id: String,
+        pool: String,
+        #[serde(default)]
+        cancel: Vec<String>,
+        /// Protocol 2: re-announced sessions the dispatcher ended meanwhile.
+        #[serde(default)]
+        end_sessions: Vec<String>,
+    },
     /// A job to take: ack or nack. `lease` is its fencing token: the worker
     /// writes the job's row only while no newer lease holds it, so a worker
     /// the dispatcher gave up on cannot overwrite its successor.
@@ -145,6 +286,96 @@ pub enum DoMsg {
     Cancel { job_id: String },
     /// Take no new jobs (running ones finish).
     Drain { on: bool },
+    /// Answer to [`WorkerMsg::UploadInit`] / [`WorkerMsg::UploadMore`]:
+    /// `error` set means no upload (fenced, unknown job, storage error).
+    UploadGrant {
+        req: u64,
+        job_id: String,
+        #[serde(default)]
+        upload_id: String,
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        bucket: String,
+        #[serde(default)]
+        part_urls: Vec<PartUrl>,
+        #[serde(default)]
+        expires_ms: i64,
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// Answer to [`WorkerMsg::UploadDone`].
+    UploadCommitted {
+        req: u64,
+        job_id: String,
+        key: String,
+        #[serde(default)]
+        bucket: String,
+        bytes: u64,
+        ok: bool,
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// Reserve the GPU for a streaming session (ack or nack).
+    SessionOffer { session_id: String, lease: u64, #[serde(default)] model: Option<String>, #[serde(default)] kind: String, ttl_ms: i64 },
+    /// The session's lease ended (released, expired, given to another).
+    SessionRevoke { session_id: String, #[serde(default)] reason: String },
+}
+
+/// `POST {scope}/sessions`: admit a streaming session.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionReq {
+    /// Idempotency: the same id answers the same live session.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// `director` | `reactor` | `stream` | …
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// Lease length without a renew (0: the dispatcher's default).
+    #[serde(default)]
+    pub ttl_ms: i64,
+}
+
+/// An admitted session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionGrant {
+    pub session_id: String,
+    pub lease: u64,
+    pub worker_id: String,
+    /// The GPU worker's public base URL: signalling goes there.
+    pub endpoint: String,
+    pub expires_ms: i64,
+}
+
+/// `GET {scope}/metrics`: the family's demand signal (fv-control, autoscaler).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FamilyMetrics {
+    pub family: String,
+    pub now_ms: i64,
+    pub queued: u32,
+    /// Age of the oldest queued job (0: none).
+    pub oldest_queued_ms: i64,
+    pub pushed: u32,
+    pub running: u32,
+    /// Connected workers.
+    pub workers: u32,
+    /// Sum of connected workers' capacities, and the dispatcher's estimate
+    /// of their free job slots.
+    pub slots_total: u32,
+    pub slots_free: u32,
+    pub sessions_live: u32,
+    /// Connected workers' free session slots.
+    pub session_capacity: u32,
+    pub failed_1h: u32,
+    pub queue_p50_ms: f64,
+    pub ack_p50_ms: f64,
+    /// Open output uploads.
+    #[serde(default)]
+    pub uploads_open: u32,
 }
 
 /// `POST /pools/{pool}/enqueue`.
@@ -196,6 +427,16 @@ pub struct WorkerInfo {
     pub last_seen_ms: i64,
     #[serde(default)]
     pub caps: Value,
+    /// Protocol 2: the dispatcher's estimate of its free job slots, its
+    /// free session slots and its public endpoint.
+    #[serde(default)]
+    pub free: u32,
+    #[serde(default)]
+    pub session_free: u32,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub proto: u32,
 }
 
 /// A job the dispatcher failed itself (worker lost after its retries, or
@@ -243,6 +484,20 @@ pub struct PoolStatus {
     /// Worker build of the dispatcher (the Worker script version).
     #[serde(default)]
     pub dispatcher: String,
+    /// Protocol 2: live and offered sessions.
+    #[serde(default)]
+    pub sessions: Vec<SessionInfo>,
+}
+
+/// A session as `status` lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub state: String,
+    pub worker: Option<String>,
+    pub lease: u64,
+    pub kind: String,
+    pub expires_ms: i64,
 }
 
 impl PoolStatus {

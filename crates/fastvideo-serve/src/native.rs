@@ -3,7 +3,7 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier; causal models also `stream_limits`, design §5.2), tier bindings and aliases: what every public id maps to (risk R10); `auth.mode` (`none` \| `keys` \| `trust-gateway`, no secrets) |
+//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier; causal models also `stream_limits`, design §5.2), tier bindings and aliases: what every public id maps to (risk R10); `auth.mode` (`none` \| `keys` \| `trust-gateway`, no secrets); `protocols`: which APIs this server mounts (`native`, `fal`, `fal_director`, `openai_videos`, `fastwan`, `minimax`, `ltx`, `reactor`, `streams`), for the console |
 //! | `POST /fv/v1/jobs` | Submit `{model, prompt, ...}` → 202 job object |
 //! | `GET /fv/v1/jobs` | Caller's jobs, newest first (`status`, `model`, `limit`, `after`, `order`, `protocol`) |
 //! | `GET /fv/v1/jobs/{id}` | Job object (with `protocol` and `metrics`: stage timings from the engine) |
@@ -594,10 +594,18 @@ fn flagged_canvases(body: &mut Value, served: &[fastvideo_protocol::ModelCaps]) 
 pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
 
 /// The native routes; `causal` is advertised as each causal model's
-/// `stream_limits`.
-pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration, causal: CausalLimits) -> Router<ServeCtx> {
+/// `stream_limits`, and `protocols` (which APIs this server mounts, for the
+/// console's snippets and pages) as the capabilities' `protocols`.
+pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration, causal: CausalLimits, protocols: Value) -> Router<ServeCtx> {
     let _ = sync_timeout;
-    routes_with(Arc::new(move || capabilities(&gate, &causal)), body_max)
+    routes_with(
+        Arc::new(move || {
+            let mut v = capabilities(&gate, &causal);
+            v["protocols"] = protocols.clone();
+            v
+        }),
+        body_max,
+    )
 }
 
 /// The native routes with `/fv/v1/capabilities` from `caps` (the gateway

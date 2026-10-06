@@ -50,6 +50,8 @@ describe("JSON Schemas from the zod schemas", () => {
       [{ ...defaultSpec("x"), cap_s: 1 }, false],
       [{ ...defaultSpec("x"), regions: ["mars"] }, false],
       [{ ...defaultSpec("x"), regions: [] }, false],
+      [{ ...defaultSpec("x"), regions: ["us"] }, false],
+      [{ ...defaultSpec("x"), regions: ["eu", "us"] }, false],
       [{ ...defaultSpec("x"), bogus: true }, false],
       [{ ...defaultSpec("x"), name: "Bad Name" }, false],
       [{ ...defaultSpec("x"), gateway: { ...defaultSpec("x").gateway, auth: "open" } }, false],

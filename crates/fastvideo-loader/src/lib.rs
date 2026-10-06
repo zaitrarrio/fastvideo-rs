@@ -2,6 +2,7 @@
 
 mod lazy;
 pub mod prefetch;
+pub mod pth;
 mod raw;
 mod writer;
 

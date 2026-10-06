@@ -12,8 +12,37 @@
 #   gateway    gateway.toml                  …:gateway (CPU only)               fv-serve-gateway-pod
 #   debug      every config (legacy image)   …:latest / :sha-…                  (none)
 
+#
+# Pool presets (fv-control's POOL_PRESETS, control/src/cluster/spec.ts): more
+# worker configs on the same images. A config the variant's image does not
+# carry rides inline (FV_WORKER_TOML_B64); fv-control's unit tests keep this
+# list and the presets in step.
+#
+#   preset     variant    config                     how
+#   ltx-pro    ltx        runpod-ltx-pro.toml        inline (ltx25-distill-dense, recipe ltx-pro)
+#   ltx-a2v    ltx        runpod-ltx-a2v.toml        inline (guided audio-to-video)
+#   ltx-ref2v  ltx        runpod-ltx-ref2v.toml      inline (reference-to-video)
+#   h3-ref2v   h3-max     runpod-h3-ref2v.toml       inline (H3 Ref2VA)
+#   fastwan21  wan        runpod-wan.toml            in the image
+#   sfwan      sfwan      runpod-sfwan.toml          in the image
+#   longlive   sfwan      runpod-longlive.toml       inline (LongLive-1.3B; NON-COMMERCIAL weights)
+
 FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan gateway"
+# <preset>:<variant>:<config> for every non-standard preset (the table above).
+FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml"
 FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
+
+# fv_preset <preset> -> "<variant> <config>" (a pool preset), or status 1
+fv_preset() {
+  local x
+  for x in $FV_POOL_PRESETS; do
+    [[ "${x%%:*}" == "$1" ]] || continue
+    x="${x#*:}"
+    echo "${x%%:*} ${x#*:}"
+    return 0
+  done
+  return 1
+}
 
 # fv_variant_config <variant> -> config file name
 fv_variant_config() {

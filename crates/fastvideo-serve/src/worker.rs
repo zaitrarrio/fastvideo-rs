@@ -4,7 +4,10 @@
 //! - [`token_layer`]: every route but health, `/metrics` and the signed
 //!   `/files` / `/uploads` needs `x-fv-internal-token` (the gateway's
 //!   shared secret); API auth itself is the gateway's (`trust-gateway`).
-//! - [`routes`]: `/fv/v1/internal/*`:
+//!   A direct worker (`gateway.direct`, no gateway in front) needs the
+//!   token only on `/fv/v1/internal/*`; its APIs use its own `auth.mode`
+//!   (docs/control/gateway-less-auth.md).
+//! - [`routes`][]: `/fv/v1/internal/*`:
 //!
 //! | Route | Behaviour |
 //! |---|---|
@@ -54,12 +57,20 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Requires the internal token on every non-open route.
-pub fn token_layer(router: Router, token: Arc<str>) -> Router {
+/// Whether a direct worker needs the internal token for `p`.
+fn internal_path(p: &str) -> bool {
+    p == "/fv/v1/internal" || p.starts_with("/fv/v1/internal/")
+}
+
+/// Requires the internal token on every non-open route, or with `direct`
+/// only on `/fv/v1/internal/*` (the other routes authenticate clients
+/// themselves).
+pub fn token_layer(router: Router, token: Arc<str>, direct: bool) -> Router {
     router.layer(axum::middleware::from_fn(move |req: Request<Body>, next: Next| {
         let token = token.clone();
         async move {
-            if req.method() == axum::http::Method::OPTIONS || open_path(req.uri().path()) {
+            let path = req.uri().path();
+            if req.method() == axum::http::Method::OPTIONS || open_path(path) || (direct && !internal_path(path)) {
                 return next.run(req).await;
             }
             let ok = req.headers().get(TOKEN_HEADER).is_some_and(|v| ct_eq(v.as_bytes(), token.as_bytes()));

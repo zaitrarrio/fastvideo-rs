@@ -14,7 +14,16 @@
 //! 20 ms crossfades) and hands it to the playout thread ([`super::media`]).
 //! It keeps at most `buffer_chunks` built chunks queued ahead of the one
 //! playing.
+//!
+//! On a causal model (LongLive, SF-Wan) there are no chunk builds: one
+//! rollout ([`DirectorStream`]) runs for the session, every block goes to
+//! playout as it arrives, a `chunk` is reported every `causal_chunk_blocks`
+//! blocks, and the control's direction is handed to the engine block by
+//! block (`set_prompt`, applied at the next block boundary). The rollout is
+//! paused while more than `causal_lead_seconds` of video is queued
+//! (docs/serve/director-causal.md).
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -29,8 +38,8 @@ use fastvideo_webrtc::host::{CloseReason, PeerEvent, PeerHandle};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::control::{ChunkPlan, Control};
-use super::engine::{ChunkBuild, DirectorClips};
+use super::control::{CausalLimits, ChunkPlan, Control};
+use super::engine::{ChunkBuild, DirectorClips, DirectorStream, StreamBlock};
 use super::info::{session_info, InfoFacts};
 use super::media::{self, MediaCmd, MediaConfig, MediaEvent, MediaGauges, MediaSink, PreparedChunk, VideoCodec};
 use super::messages::{self as m, ClientMessage, ErrorCode, RejectReason, ScriptBeat};
@@ -119,6 +128,8 @@ pub struct SessionInit {
     pub cfg: Arc<DirectorConfig>,
     pub ctx: ServeCtx,
     pub clips: Arc<dyn DirectorClips>,
+    /// The causal rollout of a causal model (`clips` is then [`NoClips`]).
+    pub stream: Option<Arc<dyn DirectorStream>>,
     pub peer: PeerHandle,
     pub events: mpsc::UnboundedReceiver<PeerEvent>,
     pub codec: VideoCodec,
@@ -167,6 +178,38 @@ impl Phase {
     }
 }
 
+/// The blocks of the director chunk being reported.
+#[derive(Default)]
+struct ChunkAcc {
+    blocks: u32,
+    first_block: u64,
+    frames: u32,
+    gen_ms: f64,
+    recache_ms: f64,
+    recaches: u32,
+    prompt_version: u64,
+}
+
+/// A causal session's rollout state.
+struct Causal {
+    stream: Arc<dyn DirectorStream>,
+    limits: CausalLimits,
+    /// The prompt last handed to the engine (`None` before the first).
+    engine_prompt: Option<String>,
+    /// `(engine version, client prompt_version)`, ascending.
+    versions: VecDeque<(u64, u64)>,
+    /// `prompt_applied` owed once a block of that engine version arrives.
+    owed: VecDeque<(u64, Vec<Value>)>,
+    /// Blocks received.
+    blocks: u64,
+    /// Frames handed to playout.
+    pushed_frames: u64,
+    acc: ChunkAcc,
+    paused: bool,
+    recaches: u64,
+    recache_ms: f64,
+}
+
 struct Session {
     init: SessionInit,
     control: Control,
@@ -178,8 +221,11 @@ struct Session {
     build_rx: mpsc::UnboundedReceiver<Result<Built, ApiError>>,
     building: bool,
     anchor: Option<PathBuf>,
-    /// The configured canvas (`None` until `configure`).
+    /// The configured generation canvas (`None` until `configure`).
     canvas: Option<(u32, u32)>,
+    /// The delivered size when the generation canvas is padded (LTX):
+    /// frames are centre-cropped to it.
+    crop: Option<(u32, u32)>,
     dir: PathBuf,
     started: Instant,
     info_sent: bool,
@@ -194,6 +240,8 @@ struct Session {
     video_seconds: f64,
     underruns: u64,
     ending: Option<EndReason>,
+    causal: Option<Causal>,
+    block_rx: mpsc::UnboundedReceiver<Result<StreamBlock, ApiError>>,
 }
 
 fn ms(d: f64) -> f64 {
@@ -228,6 +276,45 @@ pub async fn run(init: SessionInit) {
     let (build_tx, build_rx) = mpsc::unbounded_channel();
     let control = Control::new(init.facts.limits.clone());
     let clips = init.clips.clone();
+    let (block_tx, block_rx) = mpsc::unbounded_channel();
+    let causal = match (&init.stream, &init.facts.limits.causal) {
+        (Some(st), Some(limits)) => {
+            // The rollout's blocks, forwarded to the session loop.
+            let st2 = st.clone();
+            tokio::spawn(async move {
+                loop {
+                    match st2.next_block().await {
+                        Some(r) => {
+                            if block_tx.send(r).is_err() {
+                                return;
+                            }
+                        }
+                        None => {
+                            let _ = block_tx.send(Err(ApiError::engine_failed("the causal rollout ended")));
+                            return;
+                        }
+                    }
+                }
+            });
+            Some(Causal {
+                stream: st.clone(),
+                limits: limits.clone(),
+                engine_prompt: None,
+                versions: VecDeque::new(),
+                owed: VecDeque::new(),
+                blocks: 0,
+                pushed_frames: 0,
+                acc: ChunkAcc::default(),
+                paused: false,
+                recaches: 0,
+                recache_ms: 0.0,
+            })
+        }
+        _ => {
+            drop(block_tx);
+            None
+        }
+    };
     let mut s = Session {
         init,
         control,
@@ -240,6 +327,7 @@ pub async fn run(init: SessionInit) {
         building: false,
         anchor: None,
         canvas: None,
+        crop: None,
         dir,
         started: Instant::now(),
         info_sent: false,
@@ -253,6 +341,8 @@ pub async fn run(init: SessionInit) {
         video_seconds: 0.0,
         underruns: 0,
         ending: None,
+        causal,
+        block_rx,
     };
     handle.set_state(SessionState::Ready);
     let reason = s.run_loop().await;
@@ -286,6 +376,7 @@ impl Session {
                     None => self.end(EndReason::ClientGone),
                 },
                 Some(b) = self.build_rx.recv() => self.on_built(b),
+                Some(b) = self.block_rx.recv() => self.on_block(b),
                 Some(e) = self.media_rx.recv() => self.on_media(e),
                 _ = tick.tick() => self.on_tick(),
                 _ = handle.end.notified() => self.end(EndReason::ClientGone),
@@ -316,6 +407,7 @@ impl Session {
                 }
             }
         }
+        self.throttle();
         if self.last_metrics.elapsed() >= Duration::from_secs(10) && self.control.is_configured() {
             let v = self.session_metrics(false);
             self.send(v);
@@ -449,12 +541,23 @@ impl Session {
                     }
                 }
                 let aspect = c.aspect_ratio.unwrap_or(m::Aspect::Landscape);
-                self.canvas = Some(canvas_for(self.clips.caps(), res, aspect));
+                let (w, h, crop) = canvas_for(self.clips.caps(), res, aspect);
+                tracing::info!(session = %self.init.handle.id, res = res.as_str(), aspect = aspect.as_str(), "director canvas: generate {w}x{h}, deliver {:?}", crop.unwrap_or((w, h)));
+                self.canvas = Some((w, h));
+                self.crop = crop;
                 if let Some(b) = c.audio_bitrate {
                     let _ = self.media.send(MediaCmd::AudioBitrate(b));
                 }
                 let reply = self.control.configure(&c, image, end_image, script_images);
                 self.send(reply);
+                if let Some(cz) = &self.causal {
+                    // Seed before the first prompt (it restarts the rollout),
+                    // then block 0's direction starts generation.
+                    if let Some(seed) = self.control.settings().and_then(|s| s.seed) {
+                        cz.stream.set_seed(seed);
+                    }
+                    self.causal_next();
+                }
             }
             ClientMessage::Prompt(p) => {
                 if let Err(out) = self.control.precheck_prompt(&p) {
@@ -481,6 +584,15 @@ impl Session {
                 for o in self.control.prompt(&p, end_image, script_images) {
                     self.send(o);
                 }
+                // Causal: a replanning update goes to the engine now (the
+                // next block it starts); an appended one waits its turn.
+                let append = match &p.script {
+                    Some(_) => p.script_mode == Some(m::ScriptMode::Append),
+                    None => p.replan == Some(false),
+                };
+                if self.causal.is_some() && !append {
+                    self.causal_next();
+                }
             }
         }
     }
@@ -490,7 +602,7 @@ impl Session {
     }
 
     fn maybe_dispatch(&mut self) {
-        if self.building || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
+        if self.causal.is_some() || self.building || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
             return;
         }
         // Built chunks queued behind the one playing.
@@ -514,6 +626,15 @@ impl Session {
             last_frame: plan.end_image.clone(),
         };
         self.building = true;
+        tracing::info!(
+            session = %self.init.handle.id,
+            chunk = plan.index,
+            prompt_version = plan.prompt_version,
+            seconds = plan.seconds,
+            ready = self.chunks_ready,
+            started = self.chunks_started,
+            "director: chunk dispatched"
+        );
         let clips = self.clips.clone();
         let tx = self.build_tx.clone();
         let fps = self.clips.spec().fps;
@@ -524,6 +645,7 @@ impl Session {
         };
         let anchor_path = self.anchoring().then(|| self.dir.join(format!("anchor-{}.png", plan.index)));
         let dir = self.dir.clone();
+        let crop = self.crop;
         tokio::spawn(async move {
             let t0 = Instant::now();
             let out = clips.build(build).await;
@@ -532,7 +654,7 @@ impl Session {
                 Err(e) => Err(e),
                 Ok(out) => {
                     let t1 = Instant::now();
-                    let prep = Prep { fps, audio, trimmed, crossfade, anchor_path, dir };
+                    let prep = Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop };
                     let prepared = tokio::task::spawn_blocking(move || prepare(plan, out, prep))
                         .await
                         .map_err(|e| ApiError::internal(format!("chunk preparation panicked: {e}")))
@@ -600,6 +722,7 @@ impl Session {
                 "classified_ms": ms(b.gen_s + b.prep_s),
             },
         });
+        tracing::info!(session = %self.init.handle.id, chunk = b.plan.index, generation_s = b.gen_s, prepare_s = b.prep_s, frames = presented, lead_s, "director: chunk built");
         self.send(chunk);
         self.send(json!({
             "type": "chunk_metrics",
@@ -621,18 +744,209 @@ impl Session {
         let _ = self.media.send(MediaCmd::Chunk(b.chunk));
     }
 
+    /// Causal: the control's direction for the next block the engine
+    /// starts; a changed prompt goes to the engine (applied at its next
+    /// block boundary), and the `prompt_applied` it carries is owed until a
+    /// block generated with it arrives.
+    fn causal_next(&mut self) {
+        if self.ending.is_some() {
+            return;
+        }
+        let Some((plan, applied)) = self.control.next_chunk() else { return };
+        let Some(cz) = self.causal.as_mut() else { return };
+        if cz.engine_prompt.as_deref() != Some(plan.prompt.as_str()) {
+            let v = cz.stream.set_prompt(&plan.prompt);
+            tracing::info!(session = %self.init.handle.id, engine_version = v, prompt_version = plan.prompt_version, "director: prompt to the causal engine");
+            cz.engine_prompt = Some(plan.prompt);
+            cz.versions.push_back((v, plan.prompt_version));
+            if !applied.is_empty() {
+                cz.owed.push_back((v, applied));
+            }
+        } else {
+            // The same text: nothing changes in the picture, applied now.
+            if let Some(last) = cz.versions.back_mut() {
+                last.1 = last.1.max(plan.prompt_version);
+            }
+            for a in applied {
+                self.send(a);
+            }
+        }
+    }
+
+    /// Causal: pause the rollout while `causal_lead_seconds` of video is
+    /// queued for playout, resume below it.
+    fn throttle(&mut self) {
+        let fps = f64::from(self.clips.spec().fps.max(1));
+        let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
+        let lead_target = self.init.cfg.causal_lead_seconds;
+        let Some(cz) = self.causal.as_mut() else { return };
+        let lead = cz.pushed_frames.saturating_sub(fresh) as f64 / fps;
+        let pause = lead >= lead_target;
+        if pause != cz.paused {
+            cz.paused = pause;
+            cz.stream.set_paused(pause);
+        }
+    }
+
+    /// Causal: one block of the rollout, straight to playout.
+    fn on_block(&mut self, r: Result<StreamBlock, ApiError>) {
+        let b = match r {
+            Ok(b) => b,
+            Err(e) => {
+                if self.ending.is_none() && !self.control.is_stopped() {
+                    self.fail(ErrorCode::GenerationFailed, e.message, None);
+                }
+                return;
+            }
+        };
+        if self.ending.is_some() || self.control.is_stopped() || b.frames.is_empty() {
+            return;
+        }
+        let fps = f64::from(self.clips.spec().fps.max(1));
+        let id = self.init.handle.id.clone();
+        let Some(cz) = self.causal.as_mut() else { return };
+        // `prompt_applied` for every version this block carries.
+        let mut out = Vec::new();
+        while cz.owed.front().is_some_and(|(v, _)| *v <= b.prompt_version) {
+            out.extend(cz.owed.pop_front().map(|x| x.1).unwrap_or_default());
+        }
+        while cz.versions.len() > 1 && cz.versions[1].0 <= b.prompt_version {
+            cz.versions.pop_front();
+        }
+        let version = cz.versions.front().filter(|(v, _)| *v <= b.prompt_version).map_or(1, |x| x.1);
+        let block = cz.blocks;
+        cz.blocks += 1;
+        let n = b.frames.len() as u32;
+        if cz.acc.blocks == 0 {
+            cz.acc.first_block = block;
+        }
+        cz.acc.blocks += 1;
+        cz.acc.frames += n;
+        cz.acc.gen_ms += b.block_ms;
+        cz.acc.prompt_version = cz.acc.prompt_version.max(version);
+        if b.recache_ms > 0.0 {
+            cz.acc.recache_ms += b.recache_ms;
+            cz.acc.recaches += 1;
+            cz.recaches += 1;
+            cz.recache_ms += b.recache_ms;
+            tracing::info!(session = %id, block, prompt_version = version, recache_ms = b.recache_ms, "director: KV re-cache before block");
+        }
+        cz.pushed_frames += u64::from(n);
+        let chunk_blocks = cz.limits.chunk_blocks.max(1);
+        let done = cz.acc.blocks >= chunk_blocks;
+        let acc = if done { Some(std::mem::take(&mut cz.acc)) } else { None };
+        for o in out {
+            self.send(o);
+        }
+        let _ = self.media.send(MediaCmd::Chunk(PreparedChunk { index: block as u32, frames: b.frames, audio: None }));
+        if let Some(acc) = acc {
+            self.causal_chunk(acc, fps);
+        }
+        // The next block's direction, then the pacing.
+        self.causal_next();
+        self.throttle();
+    }
+
+    /// Causal: the `chunk` / `chunk_metrics` of a full director chunk.
+    fn causal_chunk(&mut self, acc: ChunkAcc, fps: f64) {
+        let Some(cz) = self.causal.as_ref() else { return };
+        let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
+        let lead_s = cz.pushed_frames.saturating_sub(fresh) as f64 / fps;
+        let chunk_s = f64::from(cz.limits.block_frames * cz.limits.chunk_blocks.max(1)) / fps;
+        let paused = cz.paused;
+        let gen_s = acc.gen_ms / 1000.0;
+        let playback = f64::from(acc.frames) / fps;
+        self.gen_ema = Some(match self.gen_ema {
+            None => gen_s,
+            Some(e) => 0.7 * e + 0.3 * gen_s,
+        });
+        let est = self.gen_ema.unwrap_or(gen_s);
+        let now = Instant::now();
+        let interval = self.last_ready.map(|t| ms(now.duration_since(t).as_secs_f64()));
+        self.last_ready = Some(now);
+        let gen_ms = ms(gen_s);
+        self.phases[0].1.push(gen_ms);
+        self.phases[1].1.push(0.0);
+        let index = self.chunks_ready;
+        let depth_chunks = (lead_s / chunk_s).ceil() as u32;
+        let pace = if gen_s > 0.0 { f64::from(acc.frames) / gen_s } else { 0.0 };
+        let causal = json!({
+            "blocks": acc.blocks,
+            "first_block": acc.first_block,
+            "block_ms_mean": ms(gen_s / f64::from(acc.blocks.max(1))),
+            "generation_fps": (pace * 100.0).round() / 100.0,
+            "recaches": acc.recaches,
+            "recache_ms": ms(acc.recache_ms / 1000.0),
+            "paused": paused,
+        });
+        self.send(json!({
+            "type": "chunk",
+            "chunk_index": index,
+            "prompt_version": acc.prompt_version,
+            "requested_duration_seconds": chunk_s,
+            "generated_frame_count": acc.frames,
+            "trimmed_context_frames": 0,
+            "presented_frame_count": acc.frames,
+            "native_playable_frame_count": acc.frames,
+            "playback_seconds": playback,
+            "generation_seconds": gen_s,
+            "next_generation_estimate_seconds": est,
+            "buffer_depth_seconds": lead_s,
+            "buffer_depth_chunks": depth_chunks,
+            "scheduling_lead_ms": ms(lead_s),
+            "scheduling_slack_ms": ms(lead_s - est),
+            "route": "unknown",
+            "hard_cut": false,
+            "dispatch": {
+                "overhead_ms": 0.0,
+                "wall_ms": gen_ms,
+                "phases_ms": {"generate": gen_ms, "prepare": 0.0},
+                "classified_ms": gen_ms,
+            },
+            "causal": causal,
+        }));
+        self.send(json!({
+            "type": "chunk_metrics",
+            "chunk_index": index,
+            "route": "unknown",
+            "units": "ms",
+            "gauges": {
+                "buffer_depth_ms": ms(lead_s),
+                "buffer_depth_chunks": depth_chunks,
+                "generated_frames": acc.frames,
+                "presented_frames": acc.frames,
+            },
+            "phases_ms": {"generate": gen_ms, "prepare": 0.0},
+            "chunk_consumable_ready_ms": ms(now.duration_since(self.started).as_secs_f64()),
+            "chunk_consumable_interval_ms": interval,
+        }));
+        self.chunks_ready += 1;
+    }
+
     fn on_media(&mut self, e: MediaEvent) {
         match e {
             MediaEvent::ChunkStarted { index, late_by } => {
                 self.chunks_started += 1;
+                if self.causal.is_none() {
+                    tracing::info!(session = %self.init.handle.id, chunk = index, late_by = late_by.unwrap_or(0.0), "director: chunk playout started");
+                }
                 self.init.handle.set_state(SessionState::Streaming);
                 if let Some(late) = late_by {
+                    // Causal playout units are blocks: name their chunk.
+                    let chunk = match &self.causal {
+                        Some(cz) => index / cz.limits.chunk_blocks.max(1),
+                        None => index,
+                    };
                     if index > 0 {
-                        self.send(m::deadline_missed(index, late));
+                        tracing::info!(session = %self.init.handle.id, chunk, playout_unit = index, late_by = late, "director: deadline missed");
+                        self.send(m::deadline_missed(chunk, late));
                     }
                 }
             }
-            MediaEvent::Underrun { .. } => self.underruns += 1,
+            MediaEvent::Underrun { after } => {
+                self.underruns += 1;
+                tracing::info!(session = %self.init.handle.id, after, underruns = self.underruns, "director: playout underrun (holding the last frame)");
+            }
             MediaEvent::Emitted { video_seconds } => {
                 self.video_seconds = video_seconds;
                 if let Some(max) = self.init.facts.max_session_seconds {
@@ -651,7 +965,16 @@ impl Session {
         let g = &self.gauges;
         let phases: serde_json::Map<String, Value> =
             self.phases.iter().map(|(n, p)| ((*n).to_owned(), p.summary())).collect();
-        json!({
+        let causal = self.causal.as_ref().map(|cz| {
+            json!({
+                "blocks": cz.blocks,
+                "recaches": cz.recaches,
+                "recache_ms_total": ms(cz.recache_ms / 1000.0),
+                "paused": cz.paused,
+                "video_dropped": g.video_dropped.load(Ordering::Relaxed),
+            })
+        });
+        let mut v = json!({
             "type": "session_metrics",
             "units": "ms",
             "history_limit": Phase::LIMIT,
@@ -668,7 +991,11 @@ impl Session {
             },
             "phases": phases,
             "final": final_,
-        })
+        });
+        if let Some(c) = causal {
+            v["causal"] = c;
+        }
+        v
     }
 
     async fn finish(&mut self, reason: EndReason) {
@@ -685,7 +1012,11 @@ impl Session {
         self.init.peer.close();
         // Release the engine session now, even if a build is in flight.
         self.clips.close().await;
-        self.clips = Arc::new(Released(self.clips.caps().clone(), self.clips.spec().clone()));
+        if let Some(cz) = &self.causal {
+            tracing::info!(session = %h.id, blocks = cz.blocks, recaches = cz.recaches, underruns = self.underruns, "director causal rollout closing");
+            cz.stream.close().await;
+        }
+        self.clips = Arc::new(NoClips(self.clips.caps().clone(), self.clips.spec().clone()));
         self.init.clips = self.clips.clone();
         let _ = tokio::fs::remove_dir_all(&self.dir).await;
         h.set_state(SessionState::Closed(reason));
@@ -693,11 +1024,12 @@ impl Session {
     }
 }
 
-/// Placeholder left behind once the engine session is released.
-struct Released(ModelCaps, SessionSpec);
+/// No clip session: left behind once the engine session is released, and
+/// what a causal session holds instead (its builds always fail).
+pub(super) struct NoClips(pub(super) ModelCaps, pub(super) SessionSpec);
 
 #[async_trait::async_trait]
-impl DirectorClips for Released {
+impl DirectorClips for NoClips {
     fn caps(&self) -> &ModelCaps {
         &self.0
     }
@@ -721,16 +1053,22 @@ struct Prep {
     /// Where to write the last frame for the next chunk's anchor.
     anchor_path: Option<PathBuf>,
     dir: PathBuf,
+    /// Centre-crop every frame to this size (pad-and-crop canvases).
+    crop: Option<(u32, u32)>,
 }
 
 /// Chunk preparation (blocking): anchor PNG, trim, wire audio, fades.
 fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<Built, ApiError> {
-    let Prep { fps, audio, trimmed, crossfade, anchor_path, dir } = p;
+    let Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop } = p;
     let mut frames = out.frames;
     let generated = frames.len() as u32;
     if generated == 0 {
         return Err(ApiError::engine_failed("the engine produced no frames"));
     }
+    // The anchor is the uncropped last frame: the next chunk is generated on
+    // the same padded canvas, so its first frame matches pixel for pixel
+    // (a cropped anchor would be scaled up to cover the canvas: a zoom at
+    // every join).
     let anchor = match anchor_path {
         Some(p) => {
             std::fs::create_dir_all(&dir).map_err(|e| ApiError::internal(format!("session dir: {e}")))?;
@@ -757,6 +1095,11 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
         None
     };
     frames.drain(..trimmed as usize);
+    if let Some((w, h)) = crop {
+        for f in &mut frames {
+            *f = f.crop_center(w, h);
+        }
+    }
     let index = plan.index;
     Ok(Built {
         plan,
@@ -768,4 +1111,40 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
         prep_s: 0.0,
         ready_at: Instant::now(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fastvideo_protocol::RgbFrame;
+
+    /// A pad-and-crop chunk: frames delivered centre-cropped, the anchor
+    /// saved uncropped (the next chunk generates on the padded canvas).
+    #[test]
+    fn prepare_crops_frames_and_keeps_the_anchor_uncropped() {
+        let dir = std::env::temp_dir().join(format!("fv-director-prep-{}", uuid::Uuid::new_v4()));
+        let frame = |i: u64| {
+            let mut data = Vec::with_capacity(8 * 6 * 3);
+            for y in 0..6u8 {
+                for x in 0..8u8 {
+                    data.extend_from_slice(&[x, y, i as u8]);
+                }
+            }
+            RgbFrame::new(8, 6, data.into(), i).unwrap()
+        };
+        let plan = ChunkPlan { index: 1, prompt: "p".into(), seconds: 5.0, first_image: None, end_image: None, prompt_version: 1 };
+        let out = super::super::engine::ChunkOutput { frames: (0..3).map(frame).collect(), audio: None };
+        let anchor_path = dir.join("anchor-1.png");
+        let prep = Prep { fps: 24, audio: false, trimmed: 1, crossfade: None, anchor_path: Some(anchor_path.clone()), dir: dir.clone(), crop: Some((6, 4)) };
+        let b = prepare(plan, out, prep).unwrap();
+        assert_eq!((b.generated, b.trimmed), (3, 1));
+        assert_eq!(b.chunk.frames.len(), 2);
+        for f in &b.chunk.frames {
+            assert_eq!((f.width, f.height), (6, 4));
+            assert_eq!(f.pixel(0, 0), Some([1, 1, f.index as u8]));
+        }
+        let anchor = image::open(b.anchor.as_ref().unwrap()).unwrap().to_rgb8();
+        assert_eq!(anchor.dimensions(), (8, 6));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

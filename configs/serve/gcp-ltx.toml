@@ -1,0 +1,54 @@
+# fv-serve on a Google Cloud GPU VM: ltx (LTX-2.5 distilled two-stage, Sol
+# stage 2: the ltx-turbo tier). Layout, roles, secrets and ports as in
+# gcp-h3-turbo.toml; [[models]] and [protocols] as in runpod-ltx.toml.
+# Family Durable Object: ltx.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "ltx25-distill-sol"
+family = "ltx2"
+recipe = "ltx-turbo"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = true
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+fal_apps = ["fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3"]
+
+[director]
+chunk_seconds = 5.0
+
+[webrtc]
+udp_port = 40010
+tcp_port = 40000
+
+[limits]
+queue_max = 32
+body_max_mb = 64

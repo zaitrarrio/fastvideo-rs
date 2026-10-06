@@ -1,8 +1,8 @@
 # fv-serve console
 
-Browser pages served by `fv-serve` itself for minting API keys and trying the
-fal-compatible endpoints, modelled on fal.ai model pages (Playground + API
-tabs). They are static files embedded in the binary
+Browser pages served by `fv-serve` itself for minting API keys, trying the
+fal-compatible endpoints (modelled on fal.ai model pages: Playground + API
+tabs), live directing and streaming, and the native API's own fields. They are static files embedded in the binary
 (`crates/fastvideo-serve/console/`, `include_str!`): no build step, no CDN,
 scripts from the server's own origin only (strict CSP). Everything they do
 goes through the public APIs, so anything the console does can also be done
@@ -10,11 +10,13 @@ with `curl`.
 
 | Page | What it does |
 |---|---|
-| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, list of mounted fal apps and endpoints. With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
+| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/deployments` | Admin, gateway only: release channels (`stable`, `latest`) with Rollback, Promote a build, the gateway's and every pod worker's build with drift and a mixed-versions flag, the deployment registry and the release history ([releases.md](releases.md)) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
-| `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page |
+| `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
+| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` WHIP publish; prompt switches, pause, reset, stop, stats, licence (§4c) |
+| `/console/native` | Native API: `POST /fv/v1/jobs` with the fields only it takes, on any served model or tier alias (§4d) |
 | `/console/live` | Live input: publish the camera and microphone (`getUserMedia`) to a duplex model and watch its output, over native WHIP ingest or the Reactor runtime (§4b) |
 | `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
 
@@ -160,25 +162,73 @@ settings".
   sends `PUT …/cancel`.
 - **Requests**: the last 50 requests are kept in this browser; click one to
   reload its inputs and result.
+- **Tier, quality, recipe**: the result's `x-fv-tier`, `x-fv-quality` and
+  `x-fv-recipe` headers (`crates/fastvideo-fal/src/queue.rs`) are shown with
+  the facts and kept in the history. A tier that does not pass the quality
+  gate (`x-fv-quality: draft`) gets a "Draft quality" banner above the
+  video and a pill in the history.
+- **Reference limits**: on reference to video, `x-fv-min-references` /
+  `x-fv-max-references` of the schema bound the image, video and audio
+  lists together: a counter shows the total, the drop zones close at the
+  maximum, and Run refuses fewer than the minimum.
 - **API tab**: cURL (queue submit / status / result, and `/run` sync),
   Python `fal_client` (`FAL_RUN_HOST` / `FAL_QUEUE_RUN_HOST`; https only) and
   JavaScript `@fal-ai/client` (`requestMiddleware` rewriting fal's hosts to
-  this server) for the current inputs.
+  this server) for the current inputs; then the same request on every
+  other API the server mounts (`protocols` of the capabilities) that can
+  run the endpoint's model: native `/fv/v1/jobs`, OpenAI `/v1/videos`
+  (text / image to video), MiniMax `/v2/video_generation` (H3 tiers),
+  the LTX API `/v2/{endpoint}` (LTX tiers) and the Reactor runtime (stream
+  models). Each body uses only the fields that API's parser takes; fal
+  inputs with no counterpart are listed in a comment. A server that does
+  not report `protocols` (older, or the gateway) gets native and OpenAI.
 
 ## 4. Director page
 
-The director page (opening prompt, resolution, aspect ratio, seed, memory,
-start image, Start/Stop, next-prompt box with replan, a prompt timeline with
-pending/applied/rejected states, the WebRTC video element and an event log)
-implements the client side of design §5.6 in one module,
+The director page implements the client side of design §5.6 in one module,
 `console/director.js` (`DirectorClient`): `POST /wma/ice`, a client-created
 `control` data channel with recv-only video and audio, a non-trickle offer to
 `POST /wma/session`, heartbeats every 5 s, `configure` then versioned
 `prompt` messages, `stop`. The server side is the fal director (WP-14,
 `fastvideo-fal::director`), mounted when fv-serve is built with `webrtc`
 and `protocols.fal_director` is on. Otherwise the signalling routes answer
-404/405/501 and the page shows "Streaming is not available on this server
-yet".
+404/405/501 and the page shows "Streaming is not available on this
+server".
+
+The form follows what the server advertises:
+
+- **Schema** (`GET /fal/schema/{app}/director`): the resolutions (labelled
+  with their cost next to 768p) and aspect ratios; nothing is assumed
+  before it loads, and without it no resolution or aspect is sent (the
+  session's defaults). Any other property it lists (an enum or a bounded
+  integer) gets a control and is sent in `configure` under its name: the
+  clip director's **chunk size** `chunk_duration` (5 s / 10 s, narrowed per
+  resolution by `x-fv-options-by-resolution`; the `configured` echo is the
+  length the session runs). `x-fv-director-mode: "causal"` (and the
+  catalog's `director_mode`) switch to **causal mode**: text only (no image,
+  end image or audio fields), the 480p / 16:9 form, the model's note.
+  `x-fv-licence` (and the catalog's `licence`) shows a licence banner: the
+  LongLive-1.3B weights are non-commercial.
+- **Configure** (messages.rs): opening prompt, resolution, aspect ratio,
+  seed, memory, first-frame image, last-frame image, driving audio, audio
+  bitrate, and a **script** of beats (`offset` in whole seconds, a prompt, a
+  keyframe end image and / or audio per beat). Images and audio take a URL
+  or a file uploaded through the fal storage API.
+- **session_info**, sent when the control channel opens, is checked before
+  `configure` goes out (it waits up to 10 s for it; without one the configure
+  goes out unchecked and the event log says so): a driving audio the session does not
+  take (`audio_conditioning: false`), a resolution or aspect it does not
+  serve, too many beats or keyframes are refused in the page. Its facts
+  (fps, chunk, scripts, audio conditioning, causal block size and prompt
+  switch) are under "Session info", and it hides the prompt-time fields the
+  session does not take.
+- **Direct**: the next prompt with replan, an end image, audio with its
+  behaviour (`replace` / `queue`), or a script with `script_mode` (`replace`
+  / `append`); a script is sent on its own (the server refuses it with a
+  prompt or end image). The timeline shows pending / applied / rejected.
+- **Stream**: the session's model, tier and recipe (`x-fv-model`,
+  `x-fv-tier`, `x-fv-recipe` of `/wma/session`, draft flagged), the chunk
+  length, chunks, buffer, generation time and (causal) the KV re-cache time.
 
 ## 4b. Script avatar page
 
@@ -233,6 +283,63 @@ and fps, bitrate cap, audio) and session length.
 
 Duplex sessions need the API key on both transports (unless the server runs
 with `FV_AUTH_MODE=none`); the page shows the usual banner without one.
+
+**Busy engine.** A session that was just stopped (on this page or another)
+releases its executor a moment later; until then the engine answers a new
+session 409 (`Retry-After`), 429 or 503. The director, Live stream and
+native stream starts retry for up to 20 s, showing "The engine is still
+busy … retrying", instead of failing.
+
+## 4c. Live stream page
+
+`/console/stream` (`console/stream.js`, WebRTC helpers in `console/rtc.js`)
+runs a **causal** model (`stream.causal` in `GET /fv/v1/capabilities`:
+SF-Wan, LongLive) as one continuous rollout steered by prompt switches. The
+facts line shows its block size and fps, canvas, recipe and the
+session-length rule (`stream_limits`: 120 s by default, at most 300 s; a
+reset restarts the clock); a fal app whose director runs the model in
+causal mode is linked, and a licence the server advertises for it (the
+catalog app's `licence`) is shown as a banner.
+
+- **Transport**:
+  - *Reactor runtime* (plays in the page), offered when the runtime streams
+    this model (`GET /schema` `info.title`; `[reactor] model`, e.g.
+    `FV_REACTOR_MODEL=fake-sfwan`): `/start_session` (`seed`,
+    `max_seconds`), recv-only transceivers per output track, the `data` and
+    `control` channels, `set_prompt` with the opening prompt, `get_state`
+    every second, `/stop_session` on Stop.
+  - *Native stream*: `POST /fv/v1/streams` (`model`, `whip_url`,
+    `whip_token`, `whip_target`, `prompt`, `seed`, `max_seconds`) publishes
+    H.264 to a WHIP endpoint (a relay: MediaMTX, Cloudflare Stream); the
+    page plays the relay's **WHEP** URL when given. It polls
+    `GET /fv/v1/streams/{id}` (state, output, pacer, TTFF, the session) and
+    Stop sends `DELETE`. Offered when the build can publish
+    (`protocols.streams`).
+- **Direct**: Switch prompt (`set_prompt`, applied at the next block
+  boundary; the timeline marks a switch applied when the session reports
+  its prompt), Pause / Resume (`set_paused`), Reset (`reset`).
+
+## 4d. Native API page
+
+`/console/native` (`console/native.js`) submits `POST /fv/v1/jobs` with
+the fields only the native API takes (NativeBody,
+`crates/fastvideo-serve/src/native.rs`), on any served model, tier alias
+(`tiers` of the capabilities, e.g. `ltx-draft` where a worker binds it:
+tiers with no fal endpoint are usable here) or alias. The form follows the
+model's caps: its tasks (text, image, keyframes, reference, audio to
+video, retake, extend), canvas tiers (`aspect_ratio` + `short_edge`, or
+`size`), frame range and fps (`seconds` or `num_frames`), reference limit,
+and the knobs it honours (`negative_prompt`, `seed`, `steps`, `guidance`,
+`reference_strength` / `reference_lora_strength`); retake (`video_url`,
+`start_s`, `end_s`, `retake_mode`, optional `audio_url`) and extend
+(`extend_s`, `extend_at`, `context_s`). The result shows the job's tier
+(draft flagged), recipe, canvas, frames, seed and metrics.
+
+`flow_shift` and `guidance_scale_2` are not native fields: with the
+**OpenAI `/v1/videos`** API chosen, they appear on models whose knobs honour
+them, and the job is submitted there. No API takes an `audio_out` or
+`callback` field (audio follows the model; MiniMax's `callback_url` is in
+its snippet on the model page).
 
 ## 5. Calling a server behind the Runpod proxy
 
@@ -357,7 +464,8 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   validation); `fastvideo-serve` `tests/console.rs` (full router: admin
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
   and content types, `/fal/schema`, `auth.mode` in capabilities, the keyless
-  flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining),
+  flow under `FV_AUTH_MODE=none`, `/fv/v1/status` ready / busy / draining,
+  the `protocols` of capabilities),
   `tests/flags.rs` (the `h3_1080p_long` flag through the admin API; 1080P
   over 5 s refused on fal, native and `/v1/videos` with the flag off and
   accepted up to 10 s with it on; the fal form's duration cap and
@@ -397,8 +505,22 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   model shows input frames, the `<video>` shows the magenta overlay border
   around the camera's picture (centre colours match), the overlay counter
   advances, and Stop ends it; also that both transports refuse a request
-  without the key. `FV_CONSOLE_TESTS=live_echo bash tests/console/run.sh`
-  runs one of them.
+  without the key. Then `tests/console/ui_gaps.cjs` (also in the CI
+  `console` suite): served models with tier and recipe, the mounted APIs,
+  no H3 tabs on an unserved app; a result's tier and recipe and a draft
+  result flagged (`x-fv-quality` added in the browser); the reference limits
+  and the per-API snippets; the clip director (schema resolutions, the
+  chunk size narrowed per resolution (`FV_FAKE_H3_1080P=1`: 5 s only at
+  1080p), sent in `configure` and echoed by `configured`; model, tier and recipe from the session headers;
+  driving audio refused from `session_info`; a script-only prompt); the
+  causal director (`fastvideo/fake-sfwan`: text-only 480p form, chunks, a
+  prompt applied, a mocked licence banner); Live stream over the Reactor
+  runtime (`FV_REACTOR_MODEL=fake-sfwan`: 832x480 video, a switch applied,
+  stop) and the native `/fv/v1/streams` transport to a mock WHIP endpoint
+  (create, `set_prompt` through `/commands`, stats, Stop → `DELETE`); the
+  Native API page (tier aliases, a job with steps and guidance, retake
+  fields, `flow_shift` through `/v1/videos`).
+  `FV_CONSOLE_TESTS=live_echo bash tests/console/run.sh` runs one of them.
 
 With the fake engine and no ffmpeg the "video" is a small placeholder file,
 so the player shows the URL but cannot play it; with ffmpeg on `PATH` the fake

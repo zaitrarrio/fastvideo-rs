@@ -1,0 +1,11 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 97887 MiB
+2026-10-02T10:37:11Z | weights present
+2026-10-02T10:59:02Z | cell ltx-cud rc=0 wall=531s peak=68335MiB auto_lines=0 sage_lines=0 frames_dirs=10
+2026-10-02T11:07:24Z | cell ltx-fw2 rc=0 wall=502s peak=68293MiB auto_lines=0 sage_lines=0 frames_dirs=10
+2026-10-02T11:16:20Z | cell ltx-sage rc=0 wall=536s peak=68303MiB auto_lines=0 sage_lines=2 frames_dirs=10
+2026-10-02T11:19:53Z | pairs ltx-cud--fw2: 9 compares
+2026-10-02T11:22:02Z | pairs ltx-cud--sage: 9 compares
+2026-10-02T11:24:05Z | pairs ltx-fw2--sage: 9 compares
+2026-10-02T11:31:02Z | cell plug rc=0 wall=802s peak=60396MiB auto_lines=0 sage_lines=0 frames_dirs=16
+2026-10-02T11:44:40Z | cell plugfw2 rc=0 wall=817s peak=59621MiB auto_lines=0 sage_lines=0 frames_dirs=16
+2026-10-02T11:46:51Z | pairs plug--plugfw2: 15 compares

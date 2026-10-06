@@ -1,0 +1,136 @@
+## h3t-def
+[INFO] h3/cold_generation {"audio_decode_s":0.135870771,"decode_s":2.7575264059999998,"denoise_s":7.001651504,"refine_s":0.004450448,"step_s":[1.745195702,1.7576269359999999,1.7590481119999999,1.739636932],"text_cache":"miss","tex
+[INFO] h3/load {"audio_vae_s":0.167407683,"dit_residency":"resident","dit_s":53.648923418,"refiner_s":0.402932894,"seconds":138.802802884,"text_encoder_s":21.179779527,"video_vae_s":10.305748891}
+[INFO] h3/text_encoder {"chosen":"resident-fp8","device_gib":22.72038459777832,"free_gib_before_load":94.28277587890625,"load_seconds":21.179779527,"requested":"ResidentFp8"}
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] h3 dit offload: resident -> resident (resident plan 64.6 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+## h3t-max
+[INFO] h3/load {"audio_vae_s":0.220655189,"dit_residency":"resident","dit_s":48.579364728,"refiner_s":0.104828405,"seconds":117.403294581,"text_encoder_s":17.685915005,"video_vae_s":0.134517136}
+[INFO] h3/text_encoder {"chosen":"resident-fp8","device_gib":22.72038459777832,"free_gib_before_load":94.28277587890625,"load_seconds":17.685915005,"requested":"ResidentFp8"}
+[fastvideo] attn_fp8: kernels loaded (cubin sm120, 0.0s, sm120)
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] h3 arm fasth3_4step_vsa: h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default) [attention_backend from profile]
+[fastvideo] h3 arm fasth3_4step_vsa_fp8attn: h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default); fp8_attention (vsa; Q K^T e4m3, P V bf16) [attention_backend from profile
+[fastvideo] h3 dit offload: resident -> resident (resident plan 64.6 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+## h3m-def
+[INFO] h3/load {"audio_vae_s":0.133616176,"dit_residency":"resident","dit_s":54.478998868,"refiner_s":0.100256515,"seconds":122.623775712,"text_encoder_s":14.987078718,"video_vae_s":8.839090719}
+[INFO] h3/text_encoder {"chosen":"resident-fp8","device_gib":22.72038459777832,"free_gib_before_load":94.28277587890625,"load_seconds":14.987078718,"requested":"ResidentFp8"}
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] h3 dit offload: resident -> resident (resident plan 60.0 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+## h3m-max
+[INFO] h3/load {"audio_vae_s":0.241365293,"dit_residency":"resident","dit_s":63.954102522,"refiner_s":0.30298947,"seconds":124.131551124,"text_encoder_s":18.461288265,"video_vae_s":0.204611975}
+[INFO] h3/text_encoder {"chosen":"resident-fp8","device_gib":22.72038459777832,"free_gib_before_load":94.28277587890625,"load_seconds":18.461288265,"requested":"ResidentFp8"}
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] h3 dit offload: resident -> resident (resident plan 60.0 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+## ltx-def
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx vae: channels-last bf16 decoder (0.01s to convert weights)
+[fastvideo] ltx2 dit offload: resident -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_sol
+[fastvideo] ltx2 text: dropped resident Gemma (contexts already encoded)
+[fastvideo] ltx2 text: resident, 20.3 GiB on device, loaded in 3.3s
+[fastvideo] ltx2 text: resident, 20.3 GiB on device, loaded in 45.5s
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=1024 d=128: cuDNN 0.87 ms, flash_mma_fwd2 0.87 ms -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=126 d=64: cuDNN 0.15 ms, flash_mma_fwd2 0.12 ms -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=15360 d=128: cuDNN 10.77 ms, flash_mma_fwd2 10.66 ms -> flash_mma_fwd2
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+## ltx-max
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 dit offload: resident -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 nvfp4: video FFN on NVFP4 tensor cores (cuBLASLt VEC16_UE4M3, TE static_6 rule, RHT / SR off; 72.0 MiB per block vs 256.0 MiB bf16)
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_sol_nvfp4
+[fastvideo] ltx2 technique setting FASTVIDEO_NVFP4=static_6 (nvfp4)
+[fastvideo] ltx2 text: dropped resident Gemma (contexts already encoded)
+[fastvideo] ltx2 text: resident, 20.3 GiB on device, loaded in 36.8s
+[fastvideo] ltx2 vae=taehv (/workspace/weights/auxiliary/tae/taeltx2_3_wide.safetensors)
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=1024 d=128: cuDNN 0.87 ms, flash_mma_fwd2 0.85 ms -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=126 d=64: cuDNN 0.15 ms, flash_mma_fwd2 0.12 ms -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x): bh=32 sq=15360 sk=15360 d=128: cuDNN 10.74 ms, flash_mma_fwd2 10.62 ms -> flash_mma_fwd2
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+## w5-def
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.571396648,"decoder":"wan-vae","denoise_s":1.638544486,"step_s":[0.605977369,0.516272698,0.516161698],"text_cache":"miss","text_s":0.459055989,"total_s":
+[INFO] wan/timings/r1 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.53745181,"decoder":"wan-vae","denoise_s":1.550792427,"frames_sha256":"625e64d53f162839222f1236e79231f256cc32a1da7839fca9046a75e8d7c8e5","peak_mib":37732,"ste
+[INFO] wan/timings/r2 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.540538334,"decoder":"wan-vae","denoise_s":1.552268073,"frames_sha256":"625e64d53f162839222f1236e79231f256cc32a1da7839fca9046a75e8d7c8e5","peak_mib":37732,"st
+[INFO] wan/timings/r3 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.544390405,"decoder":"wan-vae","denoise_s":1.554425616,"frames_sha256":"625e64d53f162839222f1236e79231f256cc32a1da7839fca9046a75e8d7c8e5","peak_mib":37732,"st
+[INFO] wan/timings/r4 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.549771244,"decoder":"wan-vae","denoise_s":1.557967474,"frames_sha256":"625e64d53f162839222f1236e79231f256cc32a1da7839fca9046a75e8d7c8e5","peak_mib":37732,"st
+[INFO] wan/timings/r5 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.55037194,"decoder":"wan-vae","denoise_s":1.560498152,"frames_sha256":"625e64d53f162839222f1236e79231f256cc32a1da7839fca9046a75e8d7c8e5","peak_mib":39108,"ste
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x52 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa: device dense B=1 H=1 Sq=1560 Sk=1560 D=1024 query_chunk=1560
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=12090 Sk=12090 D=128
+## w5-max
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.138147305,"decoder":"taehv","denoise_s":1.5197602300000002,"step_s":[0.604515533,0.457897067,0.457207319],"text_cache":"hit","text_s":0.323105528,"total
+[INFO] wan/timings/r1 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.098204013,"decoder":"taehv","denoise_s":1.3762000269999999,"frames_sha256":"63acf29d2cce34014e548afc1e80b17661266e3fb49380d67a54ffa76fea11c6","peak_mib":2195
+[INFO] wan/timings/r2 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.099085342,"decoder":"taehv","denoise_s":1.376759883,"frames_sha256":"63acf29d2cce34014e548afc1e80b17661266e3fb49380d67a54ffa76fea11c6","peak_mib":21956,"step
+[INFO] wan/timings/r3 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":1.580154544,"decoder":"taehv","denoise_s":1.376031955,"frames_sha256":"63acf29d2cce34014e548afc1e80b17661266e3fb49380d67a54ffa76fea11c6","peak_mib":21956,"step
+[INFO] wan/timings/r4 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.098744118,"decoder":"taehv","denoise_s":1.376743313,"frames_sha256":"63acf29d2cce34014e548afc1e80b17661266e3fb49380d67a54ffa76fea11c6","peak_mib":21956,"step
+[INFO] wan/timings/r5 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.09880785,"decoder":"taehv","denoise_s":1.376417529,"frames_sha256":"63acf29d2cce34014e548afc1e80b17661266e3fb49380d67a54ffa76fea11c6","peak_mib":21956,"step_
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x52 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=12090 Sk=12090 D=128
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+[fastvideo] taehv.decode done in 1539ms
+[fastvideo] taehv.decode done in 54ms
+[fastvideo] taehv.decode done in 55ms
+## w13-def
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.987517235,"decoder":"wan-vae","denoise_s":2.187122992,"step_s":[0.901270905,0.64304902,0.642674905],"text_cache":"miss","text_s":0.526560369,"total_s":5
+[INFO] wan/timings/r1 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.918424697,"decoder":"wan-vae","denoise_s":1.929571504,"frames_sha256":"b02f06077de31975aeec0502b7e42f5ec3558c323eee65762a6bace2b3358e9a","peak_mib":27692,"st
+[INFO] wan/timings/r2 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.914428224,"decoder":"wan-vae","denoise_s":1.925127936,"frames_sha256":"b02f06077de31975aeec0502b7e42f5ec3558c323eee65762a6bace2b3358e9a","peak_mib":27692,"st
+[INFO] wan/timings/r3 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.915441755,"decoder":"wan-vae","denoise_s":1.923779441,"frames_sha256":"b02f06077de31975aeec0502b7e42f5ec3558c323eee65762a6bace2b3358e9a","peak_mib":27692,"st
+[INFO] wan/timings/r4 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.9144065340000003,"decoder":"wan-vae","denoise_s":1.922342736,"frames_sha256":"b02f06077de31975aeec0502b7e42f5ec3558c323eee65762a6bace2b3358e9a","peak_mib":27
+[INFO] wan/timings/r5 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.91230446,"decoder":"wan-vae","denoise_s":1.922830001,"frames_sha256":"b02f06077de31975aeec0502b7e42f5ec3558c323eee65762a6bace2b3358e9a","peak_mib":27788,"ste
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa auto (sm_12x): bh=12 sq=32760 sk=512 d=128: cuDNN 0.42 ms, flash_mma_fwd2 0.40 ms -> flash_mma_fwd2
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, , workspace 0 B)
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] vsa fine kernel: Mma (sm12, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+## w13-max
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.332669491,"decoder":"taehv","denoise_s":2.349293717,"step_s":[1.023088323,0.663267059,0.662853334],"text_cache":"hit","text_s":0.33168656,"total_s":3.11
+[INFO] wan/timings/r1 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.265944708,"decoder":"taehv","denoise_s":1.9890133479999998,"frames_sha256":"ad71a8a59423eb285f90c62eadaa8b7d3570c802bf5b3d09894044cb270c4994","peak_mib":2180
+[INFO] wan/timings/r2 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.262469431,"decoder":"taehv","denoise_s":1.988388711,"frames_sha256":"ad71a8a59423eb285f90c62eadaa8b7d3570c802bf5b3d09894044cb270c4994","peak_mib":21804,"step
+[INFO] wan/timings/r3 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.262740984,"decoder":"taehv","denoise_s":1.9868245340000001,"frames_sha256":"ad71a8a59423eb285f90c62eadaa8b7d3570c802bf5b3d09894044cb270c4994","peak_mib":2196
+[INFO] wan/timings/r4 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.262620272,"decoder":"taehv","denoise_s":1.985655672,"frames_sha256":"ad71a8a59423eb285f90c62eadaa8b7d3570c802bf5b3d09894044cb270c4994","peak_mib":21964,"step
+[INFO] wan/timings/r5 {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.262815835,"decoder":"taehv","denoise_s":1.98555554,"frames_sha256":"ad71a8a59423eb285f90c62eadaa8b7d3570c802bf5b3d09894044cb270c4994","peak_mib":21964,"step_
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa auto (sm_12x): bh=12 sq=32760 sk=512 d=128: cuDNN 0.41 ms, flash_mma_fwd2 0.40 ms -> flash_mma_fwd2
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+[fastvideo] taehv.decode done in 102ms
+## sf-def
+[INFO] wan/run/r1 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.820122657,"p50":0.780289935,"p90":0.783714652},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r2 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.821077796,"p50":0.781603139,"p90":0.785574532},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r3 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.832936235,"p50":0.781879773,"p90":0.787093909},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r4 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.841678749,"p50":0.782740312,"p90":0.785972167},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r5 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.832881175,"p50":0.783411419,"p90":0.786962338},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/warm {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.848489064,"p50":0.779456727,"p90":0.783467359},"blocks":14,"consumer_frames":165,
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+## sf-max
+[INFO] wan/run/r1 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.845150957,"p50":0.778439516,"p90":0.78351247},"blocks":14,"consumer_frames":165,"di
+[INFO] wan/run/r2 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.858618843,"p50":0.779663119,"p90":0.785222068},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r3 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.840588658,"p50":0.779628529,"p90":0.784275508},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r4 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.842351987,"p50":0.780365447,"p90":0.784743204},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/r5 {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.841956603,"p50":0.780662069,"p90":0.785614033},"blocks":14,"consumer_frames":165,"d
+[INFO] wan/run/warm {"block_rows":["index","frames","denoise_s","context_s","decode_s","rgb_s","total_s","mem_used_mib","kv_mib"],"block_s":{"max":0.868897645,"p50":0.778295053,"p90":0.781726171},"blocks":14,"consumer_frames":165,
+[fastvideo] FASTVIDEO_WAN_QUANT=mxfp8: MXFP8 (E4M3, one E8M0 scale per 32 values) recipe on the attention + FFN linears of all 30 blocks
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+

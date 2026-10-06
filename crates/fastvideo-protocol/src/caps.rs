@@ -504,12 +504,40 @@ impl KnobCaps {
 #[serde(rename_all = "snake_case")]
 pub enum StreamCaps {
     /// SF-Wan block rollout.
-    Causal { block_frames: u32, target_fps: u32 },
+    Causal {
+        block_frames: u32,
+        target_fps: u32,
+        /// The rollout's attention context (KV window, frame sink, prompt
+        /// switch policy) when the backend knows it; absent on the wire
+        /// otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<CausalContext>,
+    },
     /// Clip-queue playout (H3, LTX, FastWan): clip length bounds in seconds.
     Clip { min_s: f32, max_s: f32 },
     /// Duplex: the model reads client input tracks while it streams
     /// (real-time V2V, live avatars; design §5.11).
     Duplex(crate::ingest::DuplexCaps),
+}
+
+/// What a causal model attends to and what a prompt switch does
+/// ([`StreamCaps::Causal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CausalContext {
+    /// Rolling KV window in latent frames (LongLive: 12, SF-Wan: 21).
+    pub window_latent_frames: u32,
+    /// Latent frames pinned at the head of the window (the frame sink).
+    pub sink_latent_frames: u32,
+    /// A prompt switch re-caches the window under the new prompt (LongLive's
+    /// KV re-cache); `false`: the cache is kept.
+    pub prompt_recache: bool,
+}
+
+impl CausalContext {
+    /// The window in pixel frames (4 per latent frame).
+    pub fn window_pixel_frames(&self) -> u32 {
+        self.window_latent_frames * 4
+    }
 }
 
 impl StreamCaps {

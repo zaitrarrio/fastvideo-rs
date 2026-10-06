@@ -5,21 +5,32 @@
 // else (the `_check*` assignments at the bottom fail `tsc` when they drift).
 import { z } from "zod";
 import type { Policies } from "./alerts";
+import { AVAILABLE_REGIONS, type RegionId } from "./cluster/regions";
 import type { ClusterSpec, PoolSpec } from "./cluster/spec";
+
+/** The gateway's `[protocols]` switches (fv-serve ProtocolsCfg; serde denies unknown keys). */
+export const GATEWAY_PROTOCOLS = ["openai_videos", "fastwan", "minimax", "fal", "fal_director", "ltx", "reactor", "native"] as const;
+export type GatewayProtocol = (typeof GATEWAY_PROTOCOLS)[number];
 
 const id = (what: string) =>
   z
     .string()
     .regex(/^[a-z][a-z0-9-]{0,30}$/)
     .describe(`${what}: lower-case letters, digits and '-', starting with a letter (max 31).`);
-const region = z.enum(["eu", "us"]).describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000); us = volume s2k01690bi in US-CA-2 (H100 / H200).");
+const region = z
+  .enum(AVAILABLE_REGIONS as [RegionId, ...RegionId[]])
+  .describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
 const cpuFlavor = z.enum(["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"]).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
 
 export const ModelRefZ = z
   .object({
-    id: z.string().min(1).describe("Model id the gateway advertises (e.g. fasth3, ltx25-distill-sol)."),
-    family: z.string().min(1).describe("Model family (h3, ltx2, wan)."),
-    recipe: z.string().min(1).describe("Recipe of the family (h3-turbo, ltx-turbo, wan-turbo, …)."),
+    id: z.string().min(1).meta({ "x-dynamic": "model_ids" }).describe("Model id the gateway advertises (e.g. fasth3, ltx25-distill-sol); the worker config's [[models]] id."),
+    family: z.string().min(1).meta({ "x-dynamic": "families" }).describe("Model family (h3, ltx2, wan)."),
+    recipe: z
+      .string()
+      .min(1)
+      .meta({ "x-dynamic": "recipes" })
+      .describe("A tier alias (h3-max, h3-turbo, h3-draft, ltx-pro, ltx-turbo, ltx-draft, wan-max, wan-turbo, wan-draft) or a catalog model id (sfwan21-1.3b, ltx25-a2v-guided, h3-ref2v-turbo, …). The gateway resolves it against the fv-serve CUDA catalog at start and does not start on an unknown one."),
   })
   .strict()
   .describe("A static capability of the pool: what the gateway advertises while the pool has no ready worker.");
@@ -31,12 +42,12 @@ export const PoolSpecZ = z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,30}$/)
       .meta({ "x-dynamic": "variants" })
-      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, gateway (CPU, also carries the fake engine)."),
+      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan, gateway (CPU, also carries the fake engine). The pool presets (ltx-pro, ltx-a2v, ltx-ref2v, h3-ref2v, longlive) reuse these images with an inline config_toml."),
     count: z.number().int().min(0).max(8).describe("Worker pods in this pool. Change a running cluster's count with Scale."),
     compute: z.enum(["GPU", "CPU"]).describe("GPU pod, or CPU pod (fake engine, tests)."),
     config: z.string().optional().describe("Worker config inside the image (e.g. /etc/fv/runpod.toml). One of config / config_toml."),
     config_toml: z.string().max(32768).optional().describe("An inline worker config (sent as FV_WORKER_TOML_B64) instead of a file in the image."),
-    gpu_types: z.array(z.string().meta({ "x-dynamic": "gpu_types" })).optional().describe("Runpod GPU type ids to try, in order. Default: the region's (RTX PRO 6000 in eu; H100 80GB, H100 NVL, H200 in us)."),
+    gpu_types: z.array(z.string().meta({ "x-dynamic": "gpu_types" })).optional().describe("Runpod GPU type ids to try, in order. Default: the region's (RTX PRO 6000 in eu)."),
     regions: z.array(region).optional().describe("Regions to try, in order. Default: the cluster's."),
     cpu_flavors: z.array(cpuFlavor).optional().describe("CPU pods: flavors to try, in order."),
     vcpu: z.number().int().min(1).max(32).optional().describe("CPU pods: vCPUs."),
@@ -76,6 +87,27 @@ export const ClusterSpecZ = z
         base: z.enum(["pods", "minimal"]).describe("Gateway config base: pods = configs/serve/gateway-pods.toml; minimal = without the reactor, fal apps and keys newer than older images."),
         github_token: z.boolean().describe("Pass GITHUB_PAT as FV_GITHUB_TOKEN (console promote / rollback)."),
         auth: z.enum(["keys", "none"]).describe("The gateway's user auth mode (FV_AUTH_MODE)."),
+        fal_apps: z
+          .array(z.string().regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).meta({ "x-dynamic": "fal_apps" }))
+          .max(64)
+          .optional()
+          .describe("Replaces the base's [protocols] fal_apps (default: every worker config's apps). An app no pool serves answers 404; the gateway still starts."),
+        protocols: z
+          .object(Object.fromEntries(GATEWAY_PROTOCOLS.map((k) => [k, z.boolean().optional()])) as Record<GatewayProtocol, z.ZodOptional<z.ZodBoolean>>)
+          .strict()
+          .optional()
+          .describe("Overrides single [protocols] switches of the base (openai_videos, fastwan, minimax, fal, fal_director, ltx, reactor, native)."),
+        reactor_model: z
+          .string()
+          .min(1)
+          .nullable()
+          .optional()
+          .meta({ "x-dynamic": "model_ids" })
+          .describe("[gateway] reactor_model. Default: the base's (fasth3) when a pool serves it, else a pool's causal model (sfwan21-1.3b, longlive-1.3b). null: none (the gateway takes the first streaming model of a pod pool)."),
+        aliases: z
+          .record(z.string().min(1).max(80), z.string().min(1).meta({ "x-dynamic": "model_ids" }))
+          .optional()
+          .describe("Replaces the base's [aliases] (MiniMax-H3 → fasth3, …): public model names → model ids."),
       })
       .strict(),
     pools: z.array(PoolSpecZ).describe("Worker pools."),
@@ -123,6 +155,9 @@ export const PoliciesZ = z
     stop_on_floor: z.boolean().describe("Auto-action (default on): stop controller clusters below the balance floor."),
     pod_down_min: z.number().min(1).max(1440).describe("Alert when a controller pod has not answered this many minutes."),
     attribution: AttributionZ,
+    build_pod_backstop: z.boolean().describe("Auto-action (default on): stop the shared build pod (external:build-pod) when its own self-stop did not happen."),
+    build_pod_max_h: z.number().min(0).max(72).describe("…when it has been up this many hours (0: off; its own cap is 8 h + 30 min grace)."),
+    build_pod_idle_grace_min: z.number().min(0).max(1440).describe("…or idle (no jobs, per its /healthz) this many minutes past its own idle stop."),
   })
   .strict()
   .describe("Alert thresholds and auto-actions (docs/control/README.md §8).");
@@ -137,7 +172,7 @@ export const EnvVarZ = z
     set: z.string().max(32768).optional().meta({ "x-secret": true }).describe("Write-only: a new value for a secret."),
   })
   .strict();
-export const EnvSetZ = z.record(z.string().regex(ENV_KEY_RE).meta({ "x-dynamic": "env_keys" }), EnvVarZ).describe("Environment variables at one level (account, cluster or pod).");
+export const EnvSetZ = z.record(z.string().regex(ENV_KEY_RE).meta({ "x-dynamic": "env_keys" }), EnvVarZ).describe("Environment variables at one level (account, cluster, pool or pod).");
 
 export const TokenCreateZ = z
   .object({

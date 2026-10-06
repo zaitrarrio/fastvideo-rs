@@ -1,0 +1,24 @@
+{
+ "name": "ltx3",
+ "source": "NVlabs/Sana sol-engine @ 6c2f582ba9681dfe352ae4ca23b6f0030cf120cf: the benchmark prompts it ships, each with the seed its runner uses",
+ "prompts": [
+  {
+   "name": "ltx-multishot",
+   "seed": 42,
+   "source": "models/ltx25/prompts/p01_multishot.txt (run_ltx25_gpu.sh LTX25_SEED default 42)",
+   "prompt": "A wide shot frames a rainy city intersection at dusk, neon signs reflecting on wet asphalt. A young woman in a yellow raincoat walks toward camera, gripping a folded newspaper, while cars hiss past behind her. Soft synth music and distant traffic fill the air. A hard cut transitions to a medium close-up of her face under the hood, raindrops catching the neon as she looks off-screen left; the synth score continues across the cut, traffic muffled. She whispers, \"He's late.\" Another hard cut jumps to a low-angle shot of a man's scuffed boots stepping into a puddle at the curb; the music drops to a low drone. He lifts his head into frame \u2014 short dark hair, soaked jacket \u2014 and smiles toward her off-screen as a bus rumbles past."
+  },
+  {
+   "name": "ltx-newsbroadcast",
+   "seed": 42,
+   "source": "models/ltx25/prompts/p02_newsbroadcast.txt (seed 42)",
+   "prompt": "EXT. SMALL TOWN STREET \u2013 MORNING \u2013 LIVE NEWS BROADCAST\nThe shot opens on a news reporter standing in front of a row of cordoned-off cars, yellow caution tape fluttering behind him. The light is warm, early sun reflecting off the camera lens. The faint hum of chatter and distant drilling fills the air.\nThe reporter, composed but visibly excited, looks directly into the camera, microphone in hand.\nReporter (live):\n\"Thank you, Sylvia. And yes \u2014 this is a sentence I never thought I'd say on live television \u2014 but this morning, here in the quiet town of New Castle, Vermont\u2026 black gold has been found!\"\nHe gestures slightly toward the field behind him.\nReporter (grinning):\n\"If my cameraman can pan over, you'll see what all the excitement's about.\"\nThe camera pans right, slowly revealing a construction site surrounded by workers in hard hats. A beat of silence \u2014 then, with a sudden roar, a geyser of oil erupts from the ground, blasting upward in a violent plume.\nWorkers cheer and scramble, the black stream glistening in the morning light. The camera shakes slightly, trying to stay focused through the chaos.\nReporter (off-screen, shouting over the noise):\n\"There it is, folks \u2014 the moment New Castle will never forget!\"\nThe camera catches the sunlight gleaming off the oil mist before pulling back, revealing the entire scene \u2014 the small-town skyline silhouetted against the wild fountain of oil."
+  },
+  {
+   "name": "ltx-frogyoga",
+   "seed": 42,
+   "source": "models/ltx25/prompts/p03_frogyoga.txt (seed 42)",
+   "prompt": "The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits cross-legged at the center, eyes closed, voice deep and calm. \"We are one with the pond.\" All the frogs answer softly: \"Ommm\u2026\" \"We are one with the mud.\" \"Ommm\u2026\" He smiles faintly. \"We are one with the flies.\" A pause.\nThe camera pans to the side towards one frog who twitches, eyes darting. Suddenly its tongue snaps out, catching a fly mid-air and pulling it into its mouth.\nThe master exhales slowly, still serene. \"But we do not chase the flies\u2026\" Beat. \"not during class.\"\nThe guilty frog lowers its head in shame, folding its hands back into a meditative pose. The other frogs resume their chant: \"Ommm\u2026\" Camera holds for a moment on the embarrassed frog, eyes closed too tightly, pretending nothing happened."
+  }
+ ]
+}

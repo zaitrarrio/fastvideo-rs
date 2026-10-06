@@ -29,7 +29,7 @@ $B fetch $A release/fv-serve              # -> artifacts/build-pod/$A/release/fv
 $B run $A -- cargo build --release -p fastvideo-gpucheck --features cuda
 $B fetch $A release/fv-gpucheck
 $B run $A -- bash tests/compat/run.sh      # client-compat suites (Node + Chromium on the pod)
-$B status                                 # pod, $/hr, setup, jobs, disk, per-agent sizes + eviction
+$B status                                 # pod, $/hr, setup, jobs, disk, self-stop timers, per-agent sizes + eviction
 $B cancel <job>                           # cancel a job whose client died
 $B clean $A target                        # drop your target dir when you are done
 $B evict                                  # run the eviction pass now (see Limits)
@@ -125,14 +125,51 @@ stock comes and goes: on 2026-09-28 there was no 32-vCPU cpu5c/cpu3c/cpu3g/
 cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
 16 vCPU, and retries both every 30 s for `FV_BUILD_STOCK_WAIT_S` (900).
 
-- The pod stops itself after `FV_BUILD_IDLE_MIN` (default 20) minutes with no
-  request and no running job, and `FV_BUILD_MAX_HOURS` (default 8) after boot
-  regardless. Both run on the pod, so they fire even if every agent container
-  is gone. It uses the pod-scoped `RUNPOD_API_KEY` Runpod injects (verified:
-  every pod had `RUNPOD_API_KEY` and `RUNPOD_POD_ID`, `status` shows
-  `self_stop_key: true`; the idle stop itself has not fired on a real pod
-  yet, since the pod was never idle for 20 min). Runpod does *stop* a pod
-  with a network volume (verified); the terminate fallback stays for safety.
+- **Self-stop, three layers** (`status` prints a `self-stop:` line: uptime,
+  idle time, time to the idle and the cap stop, and the last failed attempt):
+  1. *The pod's server* (`build-pod-server.py`, `StopPolicy` / `Stopper`).
+     **Idle:** `FV_BUILD_IDLE_MIN` (default 20) minutes with no queued or
+     running job and no work request (sync, job submit, artifact fetch,
+     clean). Status, health, agent listings, manifests and job-log polls do
+     **not** count, so a monitor polling `status` cannot keep the pod alive.
+     **Cap:** `FV_BUILD_MAX_HOURS` (default 8) after boot it stops at once if
+     no job is active; otherwise it refuses new jobs (HTTP 503), writes a
+     warning into the active jobs' logs and stops `FV_BUILD_MAX_GRACE_MIN`
+     (default 30) later even if they still run. The stop tries REST stop,
+     REST terminate, GraphQL `podStop`, GraphQL `podTerminate` with the
+     pod-scoped `RUNPOD_API_KEY`, logs every failure with its HTTP status and
+     body (`GET /v1/log`, and Runpod's container log), and retries 1, 2, 4 …
+     10 min apart; 10 min after an accepted call it tries again if the pod
+     still runs.
+  2. *A curl watchdog in the pod's start command*, a separate process: 15 min
+     after the server's hard stop (cap + grace + 15 min = 8 h 45 min) it
+     stops / terminates the pod every 5 min until it is gone.
+  3. *fv-control's per-minute cron* (`control/src/buildpod.ts`, independent
+     of the pod and of this container): a `RUNNING` pod attributed
+     `external:build-pod` is stopped (terminated if the stop is refused)
+     once Runpod reports it up ≥ 9 h (`build_pod_max_h`), or once its public
+     `/healthz` shows no jobs and idle ≥ its idle stop + 15 min
+     (`build_pod_idle_grace_min`). Alert kind `build_pod`, audited.
+     Its dashboard shows the same timers read only (Dashboard → Build pod):
+     the public `/healthz` carries the timers, the last self-stop attempt
+     (`self_stop`) and the active jobs (`jobs`: id, agent, state, seconds;
+     no command lines).
+  The volume keeps everything worth keeping, so a terminate costs nothing
+  but the container disk (which a stop loses too); `up` recreates.
+- **Incident 2026-10-02 (why the layers exist).** Pod `jactz9o1k6x58u` ran
+  9 h+ ($0.96/hr): idle from ~05:15 to ~10:30 UTC and past its 8 h cap,
+  without stopping. Its container log shows the watchdog *did* fire, 65
+  times from 04:24 on (`self-stop (idle 20 min)`, later `self-stop
+  (wall-clock cap 8h)`), and every call failed: `POST /pods/<id>/stop
+  failed: HTTP Error 403` and the same for `DELETE`. Cause: Cloudflare in
+  front of `rest.runpod.io` and `api.runpod.io` answers Python's default
+  `User-Agent: Python-urllib/3.x` with 403 `error code: 1010` (reproduced
+  with the account key: 403 with the default agent, 200 with any explicit
+  one). The old code did not log the response body, so the 403 looked like
+  a permission problem. No self-stop had ever worked; earlier pods were
+  stopped by hand. Second, lesser flaw: every authenticated request,
+  `status` polls included, reset the idle timer. Fixed as above; the
+  server's unit tests are `python3 scripts/dev/test_build_pod_server.py`.
 - `up` refuses to run below a $8 balance (`FV_MIN_BALANCE`) and deletes a pod
   created above `FV_BUILD_MAX_DPH` (default $1.50/hr).
 - Ledger: `~/.config/fv-build/ledger.tsv` (local) and `ledger.tsv` on the
@@ -154,7 +191,15 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
   job or fetch) for more than `FV_BUILD_EVICT_HOURS` (6), then, while the
   container disk has less than `FV_BUILD_EVICT_FREE_GB` (40) free, target dirs
   in least-recently-used order. An agent with a job running or queued is never
-  touched. Each eviction goes to `logs/pod.log` and `status`
+  touched. The release agent **`fv-release`** (`FV_BUILD_EVICT_PROTECT`; its
+  `release-artifacts` run syncs, builds, then fetches the tarballs from its
+  target dir) is also kept for `FV_BUILD_EVICT_HOLD_MIN` (60) after its last
+  sync, job or fetch, and goes last under disk pressure (its target dir is
+  the incremental cache of consecutive release builds). Only
+  `target/<agent>` and `worktrees/<agent>` on the container disk are ever
+  evicted: the volume (`release-cache/`, sccache, toolchains, crates) never
+  is. Eviction is not activity: it never delays the idle self-stop. Each
+  eviction goes to `logs/pod.log` and `status`
   (`eviction.recent`). An evicted target dir only costs a cold build (sccache
   refills it); an evicted snapshot is re-sent by the next `run`. `sync` and
   `run` that still find less than `FV_BUILD_MIN_FREE_GB` (2) free after a pass
@@ -171,7 +216,10 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
 - **No GPU:** CUDA code compiles (nvcc cubins, NVRTC sources, type-checks)
   but never runs here. Kernel and model runs stay on GPU pods
   (`scripts/gpu/runpod-http.sh`).
-- **Server updates:** the service code is sent at pod creation. After
+- **Server updates:** the service code is sent at pod creation (so is the
+  start command with its curl watchdog). The self-stop fix of 2026-10-02
+  (server `957ae128b12e` → the next sha) reaches the build pod at its next
+  creation: `up` recreates a stopped pod whose server is older. After
   changing `build-pod-server.py`, `down` then `up` (the volume keeps all
   caches); `up` prints a note when the pod runs an older server, and
   recreates (rather than starts) a *stopped* pod whose server is older.

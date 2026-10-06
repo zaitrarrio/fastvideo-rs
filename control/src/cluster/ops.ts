@@ -11,6 +11,7 @@ import {
   canonical,
   gatewayCreatePayload,
   gatewaySystemEnv,
+  isDirect,
   workerCreatePayload,
   workerPlacements,
   workerSystemEnv,
@@ -45,10 +46,10 @@ const poolOf = (c: Cluster, id: string): PoolSpec => {
   return p;
 };
 
-/** The full env a pod gets (system < account < cluster < pod) and its hash. */
+/** The full env a pod gets (system < account < cluster < pool < pod; the gateway has no pool layer) and its hash. */
 export async function desiredEnv(env: Env, c: Cluster, ctx: EnvCtx, role: "gateway" | "worker", rec: { pod?: string; pool?: string; image: string }) {
   const system = role === "gateway" ? gatewaySystemEnv(ctx, rec.image) : workerSystemEnv(ctx, poolOf(c, rec.pool!), rec.image);
-  const full = await resolvePlain(env, c.id, rec.pod ?? null, system);
+  const full = await resolvePlain(env, c.id, rec.pod ?? null, system, role === "worker" ? rec.pool : null);
   return { system, full, hash: (await sha256Hex(canonical(full))).slice(0, 16) };
 }
 
@@ -224,8 +225,21 @@ async function gatewayFetch(env: Env, c: Cluster, path: string, init: RequestIni
   if (!c.state.gateway_url) throw new HttpError(409, `${c.name} has no gateway`);
   return fetchWithTimeout(`${c.state.gateway_url}${path}`, { timeoutMs: 20000, ...init });
 }
+/** The start of adminToken's error when it has just switched an older gateway image to FV_ADMIN_TOKEN. */
+export const LEGACY_ADMIN_SWITCH = "this gateway image has no sealed admin token route";
+/** The start of adminToken's error when a gateway-less cluster had no token yet (launched before the controller made one). */
+export const DIRECT_ADMIN_NEW = "this gateway-less cluster had no admin token";
+export const newAdminToken = () => `fvadm_${randomToken("", 24)}`;
 export async function adminToken(env: Env, c: Cluster): Promise<string> {
   const s = await secretsOf(env, c);
+  if (isDirect(c.spec, c.state)) {
+    // No gateway: the controller makes the token and passes it to every
+    // worker as FV_ADMIN_TOKEN (docs/control/gateway-less-auth.md).
+    if (s.admin_token) return s.admin_token;
+    s.admin_token = newAdminToken();
+    await saveSecrets(env, c, s);
+    throw new HttpError(409, `${DIRECT_ADMIN_NEW}; the controller made one: restart the workers (Env: apply) to use it`);
+  }
   if (s.admin_token) {
     const r = await gatewayFetch(env, c, "/fv/v1/gateway/pools", { headers: { authorization: `Bearer ${s.admin_token}` } }).catch(() => null);
     if (!(r && r.status === 401 && s.admin_recipient && s.admin_private)) return s.admin_token;
@@ -239,11 +253,11 @@ export async function adminToken(env: Env, c: Cluster): Promise<string> {
     // every view), as runpod-cluster.sh did before. It applies on the gateway's
     // next restart (the env view shows it as needing one).
     if (!s.legacy_admin_token) {
-      s.admin_token = `fvadm_${randomToken("", 24)}`;
+      s.admin_token = newAdminToken();
       s.legacy_admin_token = true;
       await saveSecrets(env, c, s);
     }
-    throw new HttpError(409, "this gateway image has no sealed admin token route; the cluster now passes FV_ADMIN_TOKEN: restart the gateway (Env: apply) to use it");
+    throw new HttpError(409, `${LEGACY_ADMIN_SWITCH}; the cluster now passes FV_ADMIN_TOKEN: restart the gateway (Env: apply) to use it`);
   }
   if (!r.ok) throw new HttpError(503, `the gateway did not publish its sealed admin token (${r.status}; not up yet?)`);
   const tok = await openSealedToken((await r.json()) as SealedToken, s.admin_private, s.admin_recipient);
@@ -259,6 +273,63 @@ export async function adminGet(env: Env, c: Cluster, path: string): Promise<any>
   const ct = r.headers.get("content-type") || "";
   return ct.includes("json") ? r.json() : r.text();
 }
+
+// ---------------- admin calls on the gateway, or on the workers when there is none
+export interface AdminTarget {
+  url: string;
+  pod: string;
+  pool?: string;
+}
+/** Where the admin routes (/fv/v1/admin/*) are: the gateway, or every worker of a gateway-less cluster. */
+export function adminTargets(c: Cluster): AdminTarget[] {
+  if (c.state.gateway_url && c.state.gateway) return [{ url: c.state.gateway_url, pod: c.state.gateway.pod }];
+  if (!isDirect(c.spec, c.state)) throw new HttpError(409, `${c.name} has no gateway`);
+  const out: AdminTarget[] = [];
+  for (const [pool, recs] of Object.entries(c.state.workers || {})) for (const r of recs) if (r.url) out.push({ url: r.url.replace(/\/$/, ""), pod: r.pod, pool });
+  if (!out.length) throw new HttpError(409, `${c.name} has no workers`);
+  return out;
+}
+export interface AdminReply {
+  pod: string;
+  status: number;
+  body: any;
+}
+async function adminCall(tok: string, t: AdminTarget, method: string, path: string, body?: unknown): Promise<AdminReply> {
+  try {
+    const r = await fetchWithTimeout(`${t.url}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${tok}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      timeoutMs: 20000,
+    });
+    const text = await r.text();
+    let j: any = text;
+    try {
+      j = JSON.parse(text);
+    } catch {
+      /* not JSON */
+    }
+    return { pod: t.pod, status: r.status, body: j };
+  } catch (e) {
+    return { pod: t.pod, status: 0, body: { error: (e as Error).message.slice(0, 160) } };
+  }
+}
+/** One admin call: the gateway, or the first worker that answers (the keys are in D1, shared by all of them). */
+export async function adminOne(env: Env, c: Cluster, method: string, path: string, body?: unknown): Promise<AdminReply> {
+  const tok = await adminToken(env, c);
+  let last: AdminReply | null = null;
+  for (const t of adminTargets(c)) {
+    last = await adminCall(tok, t, method, path, body);
+    if (last.status !== 0 && last.status < 500 && last.status !== 401) return last;
+  }
+  return last!;
+}
+/** The same admin call on every target (a revocation applies on each worker at once instead of at its next D1 refresh, ≤ 30 s). */
+export async function adminAll(env: Env, c: Cluster, method: string, path: string): Promise<AdminReply[]> {
+  const tok = await adminToken(env, c);
+  return Promise.all(adminTargets(c).map((t) => adminCall(tok, t, method, path)));
+}
+
 export async function gatewayPublic(env: Env, c: Cluster, path: string): Promise<{ status: number; body: any }> {
   const r = await gatewayFetch(env, c, path);
   const t = await r.text();

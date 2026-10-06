@@ -1,0 +1,59 @@
+2026-10-01T20:30:24Z | lipsync venv exit=0
+2026-10-01T20:32:22Z | cell a rc=1 wall=118s peak=9383MiB
+2026-10-01T20:37:19Z | upscaler setup exit=0 426s: 49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb  /root/p3/up/RealESRGAN_x2plus.pth
+2026-10-01T20:37:53Z | cell h3max-bf16 rc=0 wall=311s peak=60135MiB
+2026-10-01T20:42:42Z | cell h3max-sage rc=0 wall=289s peak=60583MiB
+2026-10-01T20:43:24Z | gate h3max-bf16--h3max-sage: gate verdict: "fail"
+2026-10-01T20:49:45Z | cell h3dense-bf16 rc=0 wall=381s peak=59749MiB
+2026-10-01T20:55:12Z | cell h3dense-sage rc=0 wall=327s peak=59335MiB
+2026-10-01T20:55:54Z | gate h3dense-bf16--h3dense-sage: gate verdict: "fail"
+2026-10-01T21:00:52Z | cell h3turbo-bf16 rc=0 wall=298s peak=68935MiB
+2026-10-01T21:05:46Z | cell h3turbo-sage rc=0 wall=294s peak=68903MiB
+2026-10-01T21:06:28Z | gate h3turbo-bf16--h3turbo-sage: gate verdict: "fail"
+2026-10-01T21:13:21Z | cell h3dense-ctl rc=0 wall=383s peak=59493MiB
+2026-10-01T21:14:03Z | gate h3dense-bf16--h3dense-ctl: gate verdict: "fail"
+2026-10-01T21:14:10Z | lipsync h3max-bf16 exit=0
+2026-10-01T21:14:17Z | lipsync h3max-sage exit=0
+2026-10-01T21:14:25Z | lipsync h3dense-bf16 exit=0
+2026-10-01T21:14:32Z | lipsync h3dense-sage exit=0
+2026-10-01T21:14:40Z | lipsync h3turbo-bf16 exit=0
+2026-10-01T21:14:48Z | lipsync h3turbo-sage exit=0
+2026-10-01T21:17:30Z | cell ltx896x512-bf16 rc=0 wall=162s peak=67391MiB
+2026-10-01T21:19:57Z | cell ltx896x512-sage rc=0 wall=147s peak=67391MiB
+2026-10-01T21:20:14Z | gate ltx896x512-bf16--ltx896x512-sage: gate verdict: "fail"
+2026-10-01T21:23:10Z | cell ltx1280x768-bf16 rc=0 wall=176s peak=67943MiB
+2026-10-01T21:26:03Z | cell ltx1280x768-sage rc=0 wall=173s peak=67975MiB
+2026-10-01T21:26:28Z | gate ltx1280x768-bf16--ltx1280x768-sage: gate verdict: "fail"
+2026-10-01T21:29:24Z | cell ltx1408x768-bf16 rc=0 wall=176s peak=67975MiB
+2026-10-01T21:32:17Z | cell ltx1408x768-sage rc=0 wall=173s peak=68007MiB
+2026-10-01T21:32:44Z | gate ltx1408x768-bf16--ltx1408x768-sage: gate verdict: "fail"
+2026-10-01T21:38:07Z | cell ltx1920x1088-bf16 rc=0 wall=323s peak=68263MiB
+2026-10-01T21:43:29Z | cell ltx1920x1088-sage rc=0 wall=322s peak=68071MiB
+2026-10-01T21:44:08Z | gate ltx1920x1088-bf16--ltx1920x1088-sage: gate verdict: "fail"
+2026-10-01T21:48:35Z | cell ltx1920x1088d-bf16 rc=0 wall=267s peak=68103MiB
+2026-10-01T21:52:25Z | cell ltx1920x1088d-sage rc=0 wall=230s peak=68263MiB
+2026-10-01T21:53:04Z | gate ltx1920x1088d-bf16--ltx1920x1088d-sage: gate verdict: "pass"
+2026-10-01T21:59:26Z | cell ltx384-s1 rc=2 wall=62s peak=39037MiB
+2026-10-01T22:01:32Z | cell ltx768-2s rc=0 wall=126s peak=68007MiB
+2026-10-01T22:01:32Z | lanczos-x2 ltx-multishot 0.0s (incl. PNG io)
+2026-10-01T22:01:32Z | lanczos-x2 ltx-newsbroadcast 0.0s (incl. PNG io)
+2026-10-01T22:01:32Z | lanczos-x2 ltx-frogyoga 0.0s (incl. PNG io)
+2026-10-01T22:01:34Z | esrgan exit=1 
+2026-10-01T22:01:37Z | flashvsr exit=1 peak=0MiB 
+2026-10-01T22:03:50Z | cell ltx384-s1 rc=0 wall=119s peak=68863MiB
+2026-10-01T22:03:51Z | lanczos-x2 ltx-multishot 1.7s (incl. PNG io)
+2026-10-01T22:03:53Z | lanczos-x2 ltx-newsbroadcast 1.8s (incl. PNG io)
+2026-10-01T22:03:55Z | lanczos-x2 ltx-frogyoga 1.8s (incl. PNG io)
+2026-10-01T22:06:35Z | esrgan exit=0 {"src": "/root/p3/e/ltx384-s1/frames/ltx-frogyoga", "write": true, "frames": 121, "in": "672x384", "out": "1344x768", "read_s": 0.79, "model_s": 4.032, "write_s": 46.4, "fps": 30.0, "peak_alloc_gib": 4.25}
+2026-10-01T22:06:37Z | flashvsr exit=1 peak=0MiB 
+2026-10-01T22:06:46Z | compare ltx768-2s--lanczos-x2-ltx-multishot exit=0
+2026-10-01T22:06:54Z | compare ltx768-2s--esrgan-x2-ltx-multishot exit=0
+2026-10-01T22:07:02Z | compare ltx768-2s--lanczos-x2-ltx-newsbroadcast exit=0
+2026-10-01T22:07:10Z | compare ltx768-2s--esrgan-x2-ltx-newsbroadcast exit=0
+2026-10-01T22:07:18Z | compare ltx768-2s--lanczos-x2-ltx-frogyoga exit=0
+2026-10-01T22:07:26Z | compare ltx768-2s--esrgan-x2-ltx-frogyoga exit=0
+2026-10-01T22:07:56Z | modelscope install exit=0
+2026-10-01T22:11:09Z | flashvsr exit=0 peak=18491MiB {"event": "run", "clip": "ltx-frogyoga", "scale": 2.0, "tag": "", "size": "1280x768", "frames_in": 121, "frames_model": 121, "frames_out": 117, "prep_s": 2.81, "model_s": 5.1, "fps_out": 22.95, "peak_alloc_gib": 13.03}
+2026-10-01T22:11:19Z | compare ltx768-2s--fvsr-x2-ltx-multishot exit=0
+2026-10-01T22:11:28Z | compare ltx768-2s--fvsr-x2-ltx-newsbroadcast exit=0
+2026-10-01T22:11:37Z | compare ltx768-2s--fvsr-x2-ltx-frogyoga exit=0

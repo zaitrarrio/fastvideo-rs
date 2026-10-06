@@ -13,6 +13,11 @@
 //!   (`1080p` without the H3 1080P tier → `invalid_input`), `audio_url` → `invalid_initial_audio`
 //!   (target audio arrives with E10), script beats with audio →
 //!   `invalid_initial_script`; these are session failures.
+//! - `chunk_duration` (5 or 10 s, default 5; ours) sets the session's chunk
+//!   length on a clip model. A model or 1080p tier whose clip range cannot
+//!   hold it falls back to the nearest length it serves (see
+//!   [`Limits::chunk_options`]); `configured.chunk_duration` echoes what the
+//!   session runs. A causal model ignores it (no chunks to size).
 //! - `prompt` before `configured` → `error{code:"not_configured"}`.
 //! - Versions: a `prompt` whose version is ≤ the last one seen gets
 //!   `prompt_rejected{reason:"stale_prompt_version"}`; gaps are allowed.
@@ -35,14 +40,19 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::messages::{self as m, Aspect, Configure, ErrorCode, Prompt, RejectReason, Resolution, ScriptBeat, ScriptMode};
+use super::messages::{self as m, Aspect, Configure, ErrorCode, Prompt, RejectReason, Resolution, ScriptBeat, ScriptMode, CHUNK_DURATIONS};
+
+/// How refusals name a causal model.
+const CAUSAL_MODEL: &str = "this causal streaming model (LongLive / SF-Wan)";
 
 /// Server-side limits and defaults (our `session_info` constants).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Limits {
     /// Model frame rate (24 for H3).
     pub fps: u32,
-    /// Default chunk duration (`default_chunk_duration`, 10 s).
+    /// Seconds per chunk: the default (`default_chunk_duration`, 5 s) in a
+    /// model's limits, the session's choice (`configure.chunk_duration`)
+    /// once configured.
     pub chunk_seconds: f64,
     pub min_chunk_seconds: f64,
     pub max_chunk_seconds: f64,
@@ -58,6 +68,22 @@ pub struct Limits {
     /// The longest chunk at 1080p (the H3 1080P tier's clip cap: 5 s, or
     /// 10 s with the `h3_1080p_long` experimental flag). `None`: no cap.
     pub hd_max_chunk_seconds: Option<f64>,
+    /// A causal model (one continuous rollout; docs/serve/director-causal.md).
+    pub causal: Option<CausalLimits>,
+}
+
+/// The block structure of a causal director session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CausalLimits {
+    /// Pixel frames per block (12 for SF-Wan / LongLive).
+    pub block_frames: u32,
+    /// `block_frames / fps` (0.75 s).
+    pub block_seconds: f64,
+    /// Blocks per director chunk: one `chunk` message, and how long an
+    /// appended (`replan:false`) direction holds.
+    pub chunk_blocks: u32,
+    /// The model's KV window and prompt-switch policy, when known.
+    pub context: Option<fastvideo_protocol::CausalContext>,
 }
 
 impl Limits {
@@ -72,13 +98,50 @@ impl Limits {
         }
         l
     }
+
+    /// The `chunk_duration` values these limits serve: those of
+    /// [`CHUNK_DURATIONS`] within `min..=max` (LTX, H3: 5 and 10; Wan 2.2
+    /// 5B at 161 frames / 24 fps, FastWan 1.3B at 129 / 16 fps, and the H3
+    /// 1080P tier without `h3_1080p_long`: 5 only). Empty on a causal model.
+    pub fn chunk_options(&self) -> Vec<u32> {
+        if self.causal.is_some() {
+            return Vec::new();
+        }
+        let fits = |d: u32| {
+            let d = f64::from(d);
+            d >= self.min_chunk_seconds - 1e-6 && d <= self.max_chunk_seconds + 1e-6
+        };
+        CHUNK_DURATIONS.into_iter().filter(|&d| fits(d)).collect()
+    }
+
+    /// Seconds per chunk for `seconds` requested: the nearest served option
+    /// (the shorter on a tie), else (a model whose clip range holds neither
+    /// 5 nor 10 s) the request clamped to `min..=max`.
+    pub fn chunk_for(&self, seconds: f64) -> f64 {
+        let options = self.chunk_options();
+        let nearest = options.iter().copied().min_by(|&a, &b| (f64::from(a) - seconds).abs().total_cmp(&(f64::from(b) - seconds).abs()));
+        match nearest {
+            Some(d) => f64::from(d),
+            None => seconds.clamp(self.min_chunk_seconds, self.max_chunk_seconds),
+        }
+    }
+
+    /// These limits with the session's `chunk_duration` (`None`: the
+    /// default). A causal model keeps its own (the setting is ignored).
+    pub fn with_chunk(&self, chunk_duration: Option<u32>) -> Limits {
+        let mut l = self.clone();
+        if l.causal.is_none() {
+            l.chunk_seconds = l.chunk_for(chunk_duration.map_or(l.chunk_seconds, f64::from));
+        }
+        l
+    }
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             fps: 24,
-            chunk_seconds: 10.0,
+            chunk_seconds: 5.0,
             min_chunk_seconds: 5.0,
             max_chunk_seconds: 15.0,
             deck_size: 6,
@@ -88,6 +151,7 @@ impl Default for Limits {
             resolutions: vec![Resolution::R768],
             default_memory: 12,
             hd_max_chunk_seconds: None,
+            causal: None,
         }
     }
 }
@@ -125,6 +189,8 @@ struct Planned {
     persist: Option<String>,
     /// Which script (group id) planned this chunk.
     script: Option<u64>,
+    /// Causal sessions: blocks this entry directs (1 on clip models).
+    blocks: u32,
 }
 
 /// The chunk the session should build next.
@@ -147,11 +213,16 @@ pub struct Segment {
     pub seconds: f64,
     pub text: Option<usize>,
     pub end_image: Option<usize>,
+    /// Causal blocks this segment covers (1 on clip models).
+    pub blocks: u32,
 }
 
 /// Cuts a script into chunks (see the module docs). `Err` explains why the
 /// timing is infeasible.
 pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Option<usize>), String> {
+    if let Some(c) = &l.causal {
+        return Ok(plan_script_blocks(beats, c));
+    }
     let mut order: Vec<usize> = (0..beats.len()).collect();
     order.sort_by_key(|&i| beats[i].offset);
     let ends: Vec<usize> = order.iter().copied().filter(|&i| beats[i].end_image_url.is_some()).collect();
@@ -192,7 +263,7 @@ pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Op
             }
             continue;
         }
-        let mut gap = b - pos;
+        let gap = b - pos;
         if gap < l.min_chunk_seconds {
             if end.is_some() {
                 return Err(format!(
@@ -203,21 +274,78 @@ pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Op
             // A text beat inside the next chunk directs from the one after.
             continue;
         }
-        while gap > l.max_chunk_seconds {
-            let cut = l.chunk_seconds.min(gap - l.min_chunk_seconds).max(l.min_chunk_seconds);
-            segs.push(Segment { seconds: cut, text: text_at(pos), end_image: None });
+        let Some(parts) = split_gap(gap, l) else {
+            if end.is_some() {
+                return Err(format!(
+                    "the end image at {b}s leaves {gap}s that cannot be cut into {}..{}s chunks",
+                    l.min_chunk_seconds, l.max_chunk_seconds
+                ));
+            }
+            // A text beat that cannot end a chunk here directs from the next.
+            continue;
+        };
+        let n = parts.len();
+        for (k, cut) in parts.into_iter().enumerate() {
+            segs.push(Segment { seconds: cut, text: text_at(pos), end_image: if k + 1 == n { end } else { None }, blocks: 1 });
             pos += cut;
-            gap -= cut;
         }
-        segs.push(Segment { seconds: gap, text: text_at(pos), end_image: end });
         pos = b;
     }
     if segs.is_empty() {
-        segs.push(Segment { seconds: l.chunk_seconds, text: text_at(0.0), end_image: None });
+        segs.push(Segment { seconds: l.chunk_seconds, text: text_at(0.0), end_image: None, blocks: 1 });
     }
     // The direction that stays current after the script: its last text beat.
     let last_text = order.iter().copied().rfind(|&i| beats[i].prompt.is_some());
     Ok((segs, last_text))
+}
+
+/// Cuts `gap` seconds into chunks: whole chunks of the session's length
+/// while more than one and a half chunks remain and the rest stays at
+/// least `min`, then the remainder (10 s chunks: 10, 10, 12 for 32 s, as
+/// before 5 s became the default; 5 s chunks: 5, 5, 6 for 16 s and 5, 5
+/// for 10 s). `None` when no cut fits `min..=max` (a 7 s gap under the
+/// 5 s 1080p cap).
+fn split_gap(gap: f64, l: &Limits) -> Option<Vec<f64>> {
+    const EPS: f64 = 1e-9;
+    let c = l.chunk_seconds;
+    let tail = (1.5 * c).min(l.max_chunk_seconds);
+    let mut out = Vec::new();
+    let mut gap = gap;
+    while c > 0.0 && gap > tail + EPS && gap - c >= l.min_chunk_seconds - EPS {
+        out.push(c);
+        gap -= c;
+    }
+    if gap < l.min_chunk_seconds - EPS || gap > l.max_chunk_seconds + EPS {
+        return None;
+    }
+    out.push(gap);
+    Some(out)
+}
+
+/// A text-only script on a causal model's block clock: the beat at offset
+/// `t` s switches at block `round(t / block_seconds)` after the script's
+/// start (about one block of tolerance); the last direction holds one block
+/// and then stays current. End-image beats are refused before this.
+pub fn plan_script_blocks(beats: &[ScriptBeat], c: &CausalLimits) -> (Vec<Segment>, Option<usize>) {
+    let bs = c.block_seconds.max(1e-3);
+    let mut order: Vec<usize> = (0..beats.len()).collect();
+    order.sort_by_key(|&i| beats[i].offset);
+    let text_at = |t: u64| -> Option<usize> { order.iter().copied().rfind(|&i| beats[i].prompt.is_some() && beats[i].offset <= t) };
+    let mut points: Vec<u64> = std::iter::once(0).chain(order.iter().map(|&i| beats[i].offset)).collect();
+    points.dedup();
+    let block = |t: u64| (t as f64 / bs).round() as u64;
+    let mut segs = Vec::new();
+    for w in points.windows(2) {
+        let n = block(w[1]).saturating_sub(block(w[0]));
+        if n == 0 {
+            continue;
+        }
+        let n = n.min(u64::from(u32::MAX)) as u32;
+        segs.push(Segment { seconds: f64::from(n) * bs, text: text_at(w[0]), end_image: None, blocks: n });
+    }
+    let last = *points.last().unwrap_or(&0);
+    segs.push(Segment { seconds: bs, text: text_at(last), end_image: None, blocks: 1 });
+    (segs, order.iter().copied().rfind(|&i| beats[i].prompt.is_some()))
 }
 
 /// The control state of one director session.
@@ -312,6 +440,20 @@ impl Control {
         if c.audio_url.is_some() {
             return fail(ErrorCode::InvalidInitialAudio, "target-audio conditioning (`audio_url`) is not supported by this server yet".into());
         }
+        if self.limits.causal.is_some() {
+            if c.image_url.is_some() {
+                return fail(ErrorCode::InvalidInitialImage, format!("{CAUSAL_MODEL} is text-to-video only: `image_url` (image conditioning) is not supported"));
+            }
+            if c.end_image_url.is_some() {
+                return fail(ErrorCode::InvalidInitialImage, format!("{CAUSAL_MODEL} is text-to-video only: `end_image_url` is not supported"));
+            }
+            if let Some(a) = c.aspect_ratio.filter(|a| *a != Aspect::Landscape) {
+                return fail(ErrorCode::InvalidInput, format!("aspect ratio {} is not served: {CAUSAL_MODEL} generates its 16:9 canvas only", a.as_str()));
+            }
+            if c.script.iter().flatten().any(|b| b.end_image_url.is_some()) {
+                return fail(ErrorCode::InvalidInitialScript, format!("script end images are not supported: {CAUSAL_MODEL} is text-to-video only"));
+            }
+        }
         if let Some(script) = &c.script {
             if c.end_image_url.is_some() || c.audio_url.is_some() {
                 return fail(ErrorCode::InvalidInitialScript, "`script` cannot be combined with `end_image_url` or `audio_url`; place them in the script".into());
@@ -319,7 +461,7 @@ impl Control {
             if script.iter().any(|b| b.audio_url.is_some()) {
                 return fail(ErrorCode::InvalidInitialScript, "script audio beats are not supported by this server yet".into());
             }
-            if let Err(e) = plan_script(script, &self.limits.at(res)) {
+            if let Err(e) = plan_script(script, &self.limits.at(res).with_chunk(c.chunk_duration)) {
                 return fail(ErrorCode::InvalidInitialScript, e);
             }
         }
@@ -337,8 +479,9 @@ impl Control {
             seed: c.seed.map(|s| s as u64),
             has_initial_image: image.is_some(),
         };
-        // 1080p: chunks within the tier's clip cap.
-        self.limits = self.limits.at(settings.resolution);
+        // 1080p: chunks within the tier's clip cap; then the session's
+        // chunk length (ignored on a causal model).
+        self.limits = self.limits.at(settings.resolution).with_chunk(c.chunk_duration);
         self.premise = c.prompt.clone();
         self.current_version = c.prompt_version;
         self.last_version = c.prompt_version;
@@ -369,6 +512,7 @@ impl Control {
                 announce: Vec::new(),
                 persist: None,
                 script: None,
+                blocks: 1,
             });
         }
         reply
@@ -395,6 +539,7 @@ impl Control {
                 },
                 persist: if k + 1 == n { last_text.and_then(|i| script[i].prompt.clone()) } else { None },
                 script: Some(group),
+                blocks: s.blocks.max(1),
             })
             .collect()
     }
@@ -417,6 +562,11 @@ impl Control {
         self.last_version = v;
         if p.audio_url.is_some() || p.audio_behavior.is_some() {
             return Err(vec![m::prompt_rejected(v, RejectReason::InvalidAudio, "target-audio conditioning is not supported by this server yet")]);
+        }
+        if self.limits.causal.is_some()
+            && (p.end_image_url.is_some() || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
+        {
+            return Err(vec![m::prompt_rejected(v, RejectReason::InvalidImage, format!("end images are not supported: {CAUSAL_MODEL} is text-to-video only"))]);
         }
         if let Some(script) = &p.script {
             if p.prompt.is_some() || p.end_image_url.is_some() {
@@ -475,6 +625,8 @@ impl Control {
             announce: vec![Announce { version: v, script: None }],
             persist: p.prompt.clone(),
             script: None,
+            // Causal: an appended direction holds one director chunk.
+            blocks: self.limits.causal.as_ref().map_or(1, |c| c.chunk_blocks.max(1)),
         };
         if p.replan != Some(false) {
             // replace-pending: undispatched plans (and their versions) go.
@@ -505,7 +657,20 @@ impl Control {
         let index = self.next_index;
         self.next_index += 1;
         let first_image = if index == 0 { self.initial_image.take() } else { None };
-        let (plan, announce) = match self.deck.pop_front() {
+        // A causal entry directs several blocks: hand out one block's share,
+        // announcing it once and persisting its direction with the last.
+        let next = match self.deck.front_mut() {
+            Some(f) if f.blocks > 1 => {
+                let mut share = f.clone();
+                share.blocks = 1;
+                share.persist = None;
+                f.blocks -= 1;
+                f.announce.clear();
+                Some(share)
+            }
+            _ => self.deck.pop_front(),
+        };
+        let (plan, announce) = match next {
             Some(p) => {
                 if p.direction.is_some() || p.version > self.current_version {
                     self.current_version = self.current_version.max(p.version);
@@ -584,6 +749,9 @@ mod tests {
         assert_eq!((e.0["code"].as_str(), e.1), (Some("invalid_input"), true));
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"480p"}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_input");
+        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#).unwrap_err();
+        assert_eq!(e.0["code"], "invalid_input");
+        assert!(e.0["error"].as_str().unwrap().contains("served: 768p"), "{}", e.0);
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_initial_audio");
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":0,"audio_url":"https://a"}]}"#).unwrap_err();
@@ -600,14 +768,14 @@ mod tests {
         assert_eq!(
             r,
             json!({"type":"configured","prompt_version":1,"enable_safety_checker":false,"aspect_ratio":"16:9","memory":3,
-                   "chunk_duration":10,"audio_bitrate":null,"resolution":"768p","has_initial_image":true,
+                   "chunk_duration":5,"audio_bitrate":null,"resolution":"768p","has_initial_image":true,
                    "has_initial_audio":false,"acceleration":null})
         );
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"again"}"#).unwrap_err();
         assert_eq!((e.0["code"].as_str(), e.1), (Some("immutable_settings"), false));
         let (p0, applied) = c.next_chunk().unwrap();
         assert!(applied.is_empty());
-        assert_eq!((p0.index, p0.prompt.as_str(), p0.seconds, p0.prompt_version), (0, "A sitcom", 10.0, 1));
+        assert_eq!((p0.index, p0.prompt.as_str(), p0.seconds, p0.prompt_version), (0, "A sitcom", 5.0, 1));
         assert_eq!(p0.first_image, Some(PathBuf::from("first.png")));
         let (p1, _) = c.next_chunk().unwrap();
         assert_eq!((p1.index, p1.first_image.clone()), (1, None));
@@ -657,9 +825,217 @@ mod tests {
         assert!(c.next_chunk().is_none());
     }
 
+    fn causal_limits() -> Limits {
+        Limits {
+            fps: 16,
+            chunk_seconds: 3.0,
+            min_chunk_seconds: 3.0,
+            max_chunk_seconds: 3.0,
+            resolutions: vec![Resolution::R480],
+            script_max_end_images: 0,
+            causal: Some(CausalLimits {
+                block_frames: 12,
+                block_seconds: 0.75,
+                chunk_blocks: 4,
+                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+            }),
+            ..Limits::default()
+        }
+    }
+
+    /// A causal model refuses image, end-image and audio conditioning,
+    /// other aspects and resolutions, with clear codes.
+    #[test]
+    fn causal_refusals() {
+        let mut c = Control::new(causal_limits());
+        assert_eq!(c.default_resolution(), Resolution::R480);
+        let refused = [
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#, "invalid_initial_image", "image_url"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#, "invalid_initial_image", "end_image_url"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#, "invalid_initial_audio", "audio"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"9:16"}"#, "invalid_input", "16:9"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"1:1"}"#, "invalid_input", "16:9"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768p"}"#, "invalid_input", "served: 480p"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":4,"end_image_url":"e"}]}"#, "invalid_initial_script", "end images"),
+        ];
+        for (msg, code, needle) in refused {
+            let e = configure(&mut c, msg).unwrap_err();
+            assert_eq!((e.0["code"].as_str(), e.1), (Some(code), true), "{msg}");
+            assert!(e.0["error"].as_str().unwrap().contains(needle), "{}", e.0);
+        }
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","aspect_ratio":"16:9","resolution":"480p"}"#).unwrap();
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"end_image_url":"e.png"}"#);
+        assert_eq!((out[0]["type"].as_str(), out[0]["reason"].as_str()), (Some("prompt_rejected"), Some("invalid_image")));
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"script":[{"offset":3,"end_image_url":"e"}]}"#);
+        assert_eq!(out[0]["reason"], "invalid_image");
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"audio_url":"a.wav"}"#);
+        assert_eq!(out[0]["reason"], "invalid_audio");
+    }
+
+    /// Causal: one plan per block; a replanning prompt takes the next block,
+    /// an appended one holds a director chunk (4 blocks), the direction
+    /// persists; scripts switch on the block clock.
+    #[test]
+    fn causal_blocks_follow_prompts_and_scripts() {
+        let mut c = Control::new(causal_limits());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        let (b0, a) = c.next_chunk().unwrap();
+        assert_eq!((b0.prompt.as_str(), b0.prompt_version, a.len()), ("P", 1, 0));
+        assert_eq!(types(&prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A"}"#)), ["prompt_pending"]);
+        let (b1, a) = c.next_chunk().unwrap();
+        assert_eq!((b1.prompt.as_str(), b1.prompt_version), ("P A", 2));
+        assert_eq!(a, vec![json!({"type":"prompt_applied","prompt_version":2})]);
+        // Every direction holds a director chunk (4 blocks) before an
+        // appended one takes over: A's 3 remaining blocks, B for 4, then C
+        // (announced once each), and C stays.
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"prompt":"B","replan":false}"#);
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"prompt":"C","replan":false}"#);
+        let mut seen = Vec::new();
+        for _ in 0..12 {
+            let (p, a) = c.next_chunk().unwrap();
+            seen.push((p.prompt.clone(), a.len()));
+        }
+        let want: Vec<(String, usize)> = [("P A", 0), ("P A", 0), ("P A", 0), ("P B", 1), ("P B", 0), ("P B", 0), ("P B", 0), ("P C", 1), ("P C", 0), ("P C", 0), ("P C", 0), ("P C", 0)]
+            .iter()
+            .map(|(p, n)| ((*p).to_owned(), *n))
+            .collect();
+        assert_eq!(seen, want);
+        // A script: beats at 0, 3 and 6 s → 4 blocks, 4 blocks, then "z" stays.
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":5,"script":[{"offset":0,"prompt":"x"},{"offset":3,"prompt":"y"},{"offset":6,"prompt":"z"}]}"#);
+        assert_eq!(types(&out), ["prompt_pending"]);
+        let got: Vec<String> = (0..10).map(|_| c.next_chunk().unwrap().0.prompt).collect();
+        assert_eq!(got, ["P x", "P x", "P x", "P x", "P y", "P y", "P y", "P y", "P z", "P z"]);
+        let (segs, last) = plan_script_blocks(
+            &serde_json::from_value::<Vec<ScriptBeat>>(json!([{"offset": 2, "prompt": "late"}, {"offset": 1_000_000_000, "prompt": "far"}])).unwrap(),
+            c.limits().causal.as_ref().unwrap(),
+        );
+        assert_eq!(segs.iter().map(|s| s.blocks).collect::<Vec<_>>(), [3, 1_333_333_330, 1]);
+        assert_eq!((segs[0].text, last), (None, Some(1)));
+    }
+
+    /// `chunk_duration`: 5 s by default, 10 s on request, for every chunk
+    /// the session plans (continuations, end images, replans).
+    #[test]
+    fn chunk_duration_default_and_explicit() {
+        let mut c = Control::new(Limits::default());
+        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        assert_eq!(r["chunk_duration"], 5);
+        assert_eq!(c.limits().chunk_seconds, 5.0);
+        for _ in 0..3 {
+            assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
+        }
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","end_image_url":"e.png"}"#);
+        assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
+
+        let mut c = Control::new(Limits::default());
+        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10,"end_image_url":"e.png"}"#).unwrap();
+        assert_eq!(r["chunk_duration"], 10);
+        let (p0, _) = c.next_chunk().unwrap();
+        assert_eq!((p0.seconds, p0.end_image.clone()), (10.0, Some(PathBuf::from("e.png"))));
+        assert_eq!(c.next_chunk().unwrap().0.seconds, 10.0);
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
+        assert_eq!(c.next_chunk().unwrap().0.seconds, 10.0);
+        // Explicit 5 is the default.
+        let mut c = Control::new(Limits::default());
+        assert_eq!(configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":5}"#).unwrap()["chunk_duration"], 5);
+        // Other values never reach the control: `invalid_message` at parse.
+        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":7}"#).is_err());
+    }
+
+    /// Options and fallbacks: a model whose clip range cannot hold 10 s
+    /// (Wan 5B: 161 frames at 24 fps) serves 5 s only and runs a 10 s
+    /// request at 5 s; the H3 1080P tier (5 s cap) likewise at 1080p; a
+    /// causal model ignores the setting.
+    #[test]
+    fn chunk_options_and_fallbacks() {
+        let l = Limits::default();
+        assert_eq!(l.chunk_options(), [5, 10]);
+        assert_eq!((l.with_chunk(None).chunk_seconds, l.with_chunk(Some(10)).chunk_seconds), (5.0, 10.0));
+        let wan = Limits { max_chunk_seconds: 161.0 / 24.0, ..Limits::default() };
+        assert_eq!(wan.chunk_options(), [5]);
+        assert_eq!(wan.with_chunk(Some(10)).chunk_seconds, 5.0);
+        let mut c = Control::new(wan);
+        assert_eq!(configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#).unwrap()["chunk_duration"], 5);
+        assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
+        // H3 with the 1080P tier (cap 5 s): 10 s at 768p, 5 s at 1080p.
+        let h3 = Limits { resolutions: vec![Resolution::R768, Resolution::R1080], hd_max_chunk_seconds: Some(5.0), ..Limits::default() };
+        assert_eq!(h3.at(Resolution::R1080).chunk_options(), [5]);
+        assert_eq!(h3.at(Resolution::R768).chunk_options(), [5, 10]);
+        let mut c = Control::new(h3.clone());
+        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","resolution":"1080p","chunk_duration":10}"#).unwrap();
+        assert_eq!((r["chunk_duration"].as_u64(), c.next_chunk().unwrap().0.seconds), (Some(5), 5.0));
+        let mut c = Control::new(h3);
+        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","resolution":"768p","chunk_duration":10}"#).unwrap();
+        assert_eq!(r["chunk_duration"], 10);
+        // A clip range below 5 s (no option): the request clamped.
+        let short = Limits { min_chunk_seconds: 2.0, max_chunk_seconds: 2.0, chunk_seconds: 2.0, ..Limits::default() };
+        assert!(short.chunk_options().is_empty());
+        assert_eq!(short.with_chunk(Some(10)).chunk_seconds, 2.0);
+        // Causal: ignored, the director chunk stays 3 s.
+        let causal = causal_limits();
+        assert!(causal.chunk_options().is_empty());
+        let mut c = Control::new(causal);
+        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#).unwrap();
+        assert_eq!(r["chunk_duration"], 3);
+        assert_eq!(c.limits().chunk_seconds, 3.0);
+    }
+
+    /// Scripts at 5 s chunks: long gaps cut into 5 s chunks with a 5..10 s
+    /// tail, end images landing exactly on their beats.
+    #[test]
+    fn scripts_plan_five_second_chunks() {
+        let l = Limits::default();
+        let beats: Vec<ScriptBeat> = serde_json::from_value(json!([
+            {"offset": 0, "prompt": "open"},
+            {"offset": 8, "end_image_url": "e8.png"},
+            {"offset": 12, "prompt": "turn"},
+            {"offset": 40, "end_image_url": "e40.png", "prompt": "arrive"},
+        ]))
+        .unwrap();
+        let (segs, last) = plan_script(&beats, &l).unwrap();
+        let secs: Vec<f64> = segs.iter().map(|s| s.seconds).collect();
+        assert_eq!(secs, [8.0, 5.0, 5.0, 5.0, 5.0, 5.0, 7.0]);
+        assert_eq!(secs.iter().sum::<f64>(), 40.0);
+        assert!(secs.iter().all(|&x| (l.min_chunk_seconds..=10.0).contains(&x)), "{secs:?}");
+        assert_eq!((segs[0].end_image, segs[6].end_image, last), (Some(1), Some(3), Some(3)));
+        // "turn" (12 s) directs the first chunk starting at or after it (13 s).
+        let texts: Vec<Option<usize>> = segs.iter().map(|s| s.text).collect();
+        assert_eq!(texts, [Some(0), Some(0), Some(2), Some(2), Some(2), Some(2), Some(2)]);
+        // Gaps 5..10 s stay one chunk; 11 s splits 5 + 6; under 5 s refused.
+        for (end, want) in [(5u64, vec![5.0]), (7, vec![7.0]), (9, vec![9.0]), (10, vec![5.0, 5.0]), (11, vec![5.0, 6.0]), (16, vec![5.0, 5.0, 6.0])] {
+            let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": end, "end_image_url": "e"}])).unwrap();
+            let got: Vec<f64> = plan_script(&b, &l).unwrap().0.iter().map(|s| s.seconds).collect();
+            assert_eq!(got, want, "end image at {end}s");
+        }
+        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 4, "end_image_url": "e"}])).unwrap();
+        assert!(plan_script(&b, &l).is_err());
+        // Under the 5 s 1080p cap only multiples of 5 s can end on an image;
+        // a text beat that cannot end a chunk directs from the next one.
+        let hd = Limits { hd_max_chunk_seconds: Some(5.0), ..Limits::default() }.at(Resolution::R1080);
+        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 7, "end_image_url": "e"}])).unwrap();
+        assert!(plan_script(&b, &hd).unwrap_err().contains("cannot be cut"));
+        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 0, "prompt": "a"}, {"offset": 7, "prompt": "b"}, {"offset": 15, "end_image_url": "e"}])).unwrap();
+        let (segs, _) = plan_script(&b, &hd).unwrap();
+        assert_eq!(segs.iter().map(|s| (s.seconds, s.text)).collect::<Vec<_>>(), [(5.0, Some(0)), (5.0, Some(0)), (5.0, Some(1))]);
+        // Text only: one default chunk.
+        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 0, "prompt": "x"}])).unwrap();
+        assert_eq!(plan_script(&b, &l).unwrap().0[0].seconds, 5.0);
+        // The session's chunk length drives a configured script.
+        let mut c = Control::new(Limits::default());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10,"script":[{"offset":0,"prompt":"a"},{"offset":30,"end_image_url":"e.png"}]}"#).unwrap();
+        let got: Vec<f64> = (0..3).map(|_| c.next_chunk().unwrap().0.seconds).collect();
+        assert_eq!(got, [10.0, 10.0, 10.0]);
+        let mut c = Control::new(Limits::default());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","script":[{"offset":0,"prompt":"a"},{"offset":30,"end_image_url":"e.png"}]}"#).unwrap();
+        let got: Vec<f64> = (0..6).map(|_| c.next_chunk().unwrap().0.seconds).collect();
+        assert_eq!(got, [5.0; 6]);
+    }
+
+    /// The 10 s planning (`chunk_duration: 10`), as before 5 s became the
+    /// default.
     #[test]
     fn scripts_plan_chunks_at_beats() {
-        let l = Limits::default();
+        let l = Limits { chunk_seconds: 10.0, ..Limits::default() };
         let beats: Vec<ScriptBeat> = serde_json::from_value(json!([
             {"offset": 0, "prompt": "open"},
             {"offset": 8, "end_image_url": "e8.png"},
@@ -687,7 +1063,7 @@ mod tests {
         let mut c = Control::new(l);
         configure(
             &mut c,
-            r#"{"type":"configure","prompt_version":1,"prompt":"P","script":[{"offset":0,"prompt":"open"},{"offset":8,"end_image_url":"e8.png"}]}"#,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10,"script":[{"offset":0,"prompt":"open"},{"offset":8,"end_image_url":"e8.png"}]}"#,
         )
         .unwrap();
         let (p0, _) = c.next_chunk().unwrap();

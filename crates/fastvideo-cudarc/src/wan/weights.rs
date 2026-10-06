@@ -125,6 +125,28 @@ impl WeightMap {
         }
     }
 
+    /// Eager map of tensors in their own dtypes (a checkpoint renamed or
+    /// merged on the host, e.g. `wan::longlive`).
+    pub fn from_raw_tensors(tensors: HashMap<String, RawTensor>) -> Self {
+        Self {
+            tensors,
+            lazy: None,
+            generator: None,
+            mlx_h3: false,
+        }
+    }
+
+    /// Keys of an eager map's own tensors (empty for a lazy or generated map;
+    /// a lazy map lists its keys through [`Self::lazy`]).
+    pub fn raw_keys(&self) -> Vec<String> {
+        self.tensors.keys().cloned().collect()
+    }
+
+    /// Take an eager map's tensors out (empty for a lazy or generated map).
+    pub fn into_raw_tensors(self) -> HashMap<String, RawTensor> {
+        self.tensors
+    }
+
     fn mlx_h3_alias(key: &str) -> Option<String> {
         if let Some(rest) = key.strip_prefix("transformer_blocks.") {
             return Some(format!("blocks.{rest}"));

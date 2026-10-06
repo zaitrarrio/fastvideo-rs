@@ -2,7 +2,8 @@
 // except the two rules that already exist in the cluster script: the
 // deadline backstop and the balance floor, which stop controller clusters.
 // Auto-actions only ever touch pods of controller clusters, never
-// external pods (CLAUDE.md: only touch pods you created).
+// external pods (CLAUDE.md: only touch pods you created), with one
+// owner-requested exception: the shared build pod's backstop (buildpod.ts).
 import type { Env } from "./env";
 import { getSetting, now } from "./util";
 
@@ -17,6 +18,9 @@ export interface Policies {
   stop_on_floor: boolean; // auto-action (default on): stop every controller cluster below the floor
   pod_down_min: number; // alert: a controller pod unhealthy this long
   attribution: { prefix: string; owner: string }[]; // external pods by name prefix
+  build_pod_backstop: boolean; // auto-action (default on): stop the build pod past the limits below (buildpod.ts)
+  build_pod_max_h: number; // …up this many hours (its own cap is 8 h + 30 min grace)
+  build_pod_idle_grace_min: number; // …or idle this many minutes past its own idle stop (per its /healthz)
 }
 export const DEFAULT_POLICIES: Policies = {
   idle_gpu_pct: 5,
@@ -37,6 +41,9 @@ export const DEFAULT_POLICIES: Policies = {
     { prefix: "fv-edge", owner: "external:edge" },
     { prefix: "loom-", owner: "external:loom" },
   ],
+  build_pod_backstop: true,
+  build_pod_max_h: 9,
+  build_pod_idle_grace_min: 15,
 };
 export const policies = (env: Env) => getSetting<Policies>(env, "policies", DEFAULT_POLICIES);
 
