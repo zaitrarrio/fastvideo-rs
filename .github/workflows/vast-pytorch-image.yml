@@ -18,6 +18,8 @@ on:
       - "docker/gpucheck.Dockerfile"
       - ".dockerignore"
       - "scripts/gpu/**"
+      - "scripts/ci/prebuilt.sh"
+      - "scripts/dev/r2.py"
       - ".github/workflows/vast-pytorch-image.yml"
 
 permissions:
@@ -49,6 +51,19 @@ jobs:
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # fv-gpucheck as this Dockerfile builds it (no nvcc there: NVRTC at run
+      # time) and hf-fm, compiled by the build pod; fallback: in-image compile.
+      - name: Prebuilt binaries (R2)
+        id: pre
+        env:
+          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
+          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
+          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
+          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
+          FV_PREBUILT_BUILD_ID: ${{ steps.meta.outputs.build_id }}
+        run: bash scripts/ci/prebuilt.sh fetch "$GITHUB_SHA" gpucheck-vast hf-fm
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -65,6 +80,7 @@ jobs:
           target: ${{ matrix.target }}
           platforms: linux/amd64
           push: true
+          build-contexts: ${{ steps.pre.outputs.contexts }}
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
             VAST_PYTORCH_IMAGE=vastai/pytorch:cuda-13.0.3-auto
