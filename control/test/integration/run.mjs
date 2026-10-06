@@ -1,6 +1,6 @@
 // Integration test: the Worker under `wrangler dev` (workerd, local D1, R2,
 // Durable Objects) against mocked Runpod / GHCR / GitHub / Cloudflare APIs
-// and mocked gateway and worker pods (test/harness.mjs).
+// and mocked worker pods and edge Worker (test/harness.mjs).
 //   node test/integration/run.mjs            (npm run test:integration)
 //   FVC_UI=1 …                               also keep it up for test/ui/smoke.mjs
 import assert from "node:assert/strict";
@@ -111,7 +111,7 @@ await step("define a tiny CPU cluster; price check", async () => {
   assert.equal((await call("/api/clusters", { method: "POST", body: { spec: { name: "Bad!" } }, headers: T() })).status, 400);
   const p = await call(`/api/clusters/${cid}/price`, { method: "POST", body: {}, headers: T() });
   assert.equal(p.j.ok, true);
-  assert.equal(p.j.pods.length, 2);
+  assert.equal(p.j.pods.length, 1);
   assert.ok(p.j.cluster_dph < 0.5);
 });
 
@@ -128,42 +128,36 @@ await step("the balance floor refuses a start", async () => {
   mock.balance = 50;
 });
 
-let gw, worker;
-await step("start: gateway, worker, gateway gets the worker URLs; ready", async () => {
+let worker;
+await step("start: one front worker behind the edge; registered; ready", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
   const s = await call(`/api/clusters/${cid}/start`, { method: "POST", body: {}, headers: T() });
   assert.equal(s.status, 202);
   assert.equal((await call(`/api/clusters/${cid}/start`, { method: "POST", body: {}, headers: T() })).status, 409, "one operation at a time");
   const op = await waitOp(cid, "up");
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
+  assert.ok(op.log.some((l) => /ready front at the edge: 1\/1/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
   const pods = [...mock.pods.values()];
-  assert.equal(pods.length, 2);
-  gw = pods.find((p) => p.env.FV_GATEWAY_TOML_B64);
-  worker = pods.find((p) => p !== gw);
-  // The gateway payload: CPU, the script's boot command and env.
-  assert.equal(gw.payload.computeType, "CPU");
-  assert.deepEqual(gw.payload.ports, ["8000/http"]);
-  assert.match(gw.payload.dockerStartCmd[0], /\[watchdog\]/);
-  assert.equal(gw.env.FV_BACKSTOP_API_KEY, SECRETS.RUNPOD_API_KEY);
-  assert.ok(gw.env.FV_ADMIN_TOKEN_RECIPIENT);
-  assert.equal(gw.env.FV_ADMIN_TOKEN, undefined);
-  assert.match(gw.image, /@sha256:/);
-  assert.match(gw.env.FV_LOG_SHIP_URL, /\/ingest\/v1\/logs$/);
-  assert.ok(Number(gw.env.FV_CLUSTER_DEADLINE) > Date.now() / 1000);
-  assert.equal(gw.patches, 1, "patched once with the worker URLs");
-  assert.equal(gw.env.FV_POOL_FAKE_URLS, `http://127.0.0.1:${mock.port}/pod/${worker.id}`);
-  assert.equal(gw.env.FV_CLUSTER_PODS, worker.id);
-  assert.equal(gw.env.FV_GITHUB_TOKEN, undefined, "tiny-cpu does not pass the GitHub token");
-  // The worker: CPU, fake engine config inline, internal token, public URL = the gateway.
+  assert.equal(pods.length, 1, "no gateway pod");
+  worker = pods[0];
+  const edge = `http://127.0.0.1:${mock.port}/edge`;
+  // The worker: CPU, the boot command (watchdog), fake engine config inline, a front behind the edge.
   assert.equal(worker.payload.computeType, "CPU");
+  assert.match(worker.payload.dockerStartCmd[0], /\[watchdog\]/);
   assert.equal(worker.env.FV_SERVE_ROLE, "worker");
-  assert.equal(worker.env.FV_INTERNAL_TOKEN, gw.env.FV_INTERNAL_TOKEN);
+  assert.equal(worker.env.FV_DISPATCH_FRONT, "1");
+  assert.equal(worker.env.FV_INTERNAL_TOKEN, mock.edgeInternal);
+  assert.equal(worker.env.FV_PUBLIC_BASE_URL, edge);
+  assert.equal(worker.env.FV_ADMIN_TOKEN, undefined);
+  assert.equal(worker.env.FV_GATEWAY_TOML_B64, undefined);
+  assert.equal(worker.env.FV_GITHUB_TOKEN, undefined);
+  assert.match(worker.env.FV_LOG_SHIP_URL, /\/ingest\/v1\/logs$/);
+  assert.ok(Number(worker.env.FV_CLUSTER_DEADLINE) > Date.now() / 1000);
   assert.match(Buffer.from(worker.env.FV_WORKER_TOML_B64, "base64").toString(), /backend = "fake"/);
-  assert.equal(worker.env.FV_PUBLIC_BASE_URL, `http://127.0.0.1:${mock.port}/pod/${gw.id}`);
-  assert.match(worker.image, /gateway-stable/.test(worker.image) ? /./ : /@sha256:/);
+  assert.match(worker.image, /@sha256:/);
   const c = await call(`/api/clusters/${cid}`, { headers: T() });
   assert.equal(c.j.cluster.status, "running");
-  assert.equal(c.j.pods.filter((p) => p.status === "ready").length, 2);
+  assert.equal(c.j.pods.filter((p) => p.status === "ready").length, 1);
 });
 
 await step("the collector: pods, owners, costs, samples, external attribution, alerts", async () => {
@@ -172,7 +166,7 @@ await step("the collector: pods, owners, costs, samples, external attribution, a
   assert.equal(r.j.balance, 50);
   const pods = (await call("/api/pods", { headers: T() })).j.pods;
   const by = Object.fromEntries(pods.map((p) => [p.pod_id, p]));
-  assert.equal(by[gw.id].owner, "cluster:tiny");
+  assert.equal(by[worker.id].owner, "cluster:tiny");
   assert.equal(by[worker.id].health, "ready");
   assert.equal(by[worker.id].jobs_running, 0);
   assert.equal(by.extbuild0001.owner, "external:build-pod");
@@ -252,29 +246,24 @@ await step("env at three levels: masked view, restart needed, rolling restart", 
   assert.equal((await call(`/api/env/pod/${worker.id}/RUST_LOG`, { method: "PUT", body: { value: "debug" }, headers: T() })).status, 200);
   assert.equal((await call(`/api/env/cluster/${cid}/FV_INTERNAL_TOKEN`, { method: "PUT", body: { value: "x" }, headers: T() })).status, 400);
   const e = (await call(`/api/clusters/${cid}/env`, { headers: T() })).j;
-  assert.deepEqual(e.needs_restart.sort(), [gw.id, worker.id].sort());
+  assert.deepEqual(e.needs_restart, [worker.id]);
   const wenv = Object.fromEntries(e.pods.find((p) => p.pod_id === worker.id).env.map((v) => [v.key, v]));
   assert.equal(wenv.RUST_LOG.value, "debug");
   assert.equal(wenv.RUST_LOG.source, "pod");
   assert.equal(wenv.HF_TOKEN.value, "••••••••");
   assert.equal(wenv.FV_INTERNAL_TOKEN.secret, true);
-  const genv = Object.fromEntries(e.pods.find((p) => p.pod_id === gw.id).env.map((v) => [v.key, v]));
-  assert.equal(genv.RUST_LOG.value, "warn");
-  assert.equal(genv.FV_BACKSTOP_API_KEY.value, "••••••••");
   const s = await call(`/api/clusters/${cid}/restart`, { method: "POST", body: {}, headers: T() });
   assert.equal(s.status, 202);
   const op = await waitOp(cid, "restart");
   assert.equal(op.status, "done", JSON.stringify(op.log));
   assert.equal(mock.pods.get(worker.id).env.RUST_LOG, "debug");
   assert.equal(mock.pods.get(worker.id).env.HF_TOKEN, "hf_supersecret");
-  assert.equal(mock.pods.get(gw.id).env.RUST_LOG, "warn");
-  // Workers first, the gateway last.
-  const patches = mock.log.filter((l) => l.method === "PATCH").slice(-2).map((l) => l.path.split("/").pop());
-  assert.deepEqual(patches, [worker.id, gw.id]);
+  const patches = mock.log.filter((l) => l.method === "PATCH").slice(-1).map((l) => l.path.split("/").pop());
+  assert.deepEqual(patches, [worker.id]);
   assert.deepEqual((await call(`/api/clusters/${cid}/env`, { headers: T() })).j.needs_restart, []);
 });
 
-await step("pool env: every worker of the pool, never the gateway; restart by pool or pod", async () => {
+await step("pool env: every worker of the pool; restart by pool or pod", async () => {
   assert.equal((await call(`/api/env/pool/${cid}:fake/FASTVIDEO_ATTN_SAGE`, { method: "PUT", body: { value: "0" }, headers: T() })).status, 200);
   // By cluster name too; an unknown pool is refused; reserved keys too.
   assert.equal((await call(`/api/env/pool/tiny:fake/POOL_SECRET`, { method: "PUT", body: { value: "pool_s3cret_value", secret: true }, headers: T() })).status, 200);
@@ -285,22 +274,17 @@ await step("pool env: every worker of the pool, never the gateway; restart by po
   const doc = (await call(`/api/docs/env/pool:${cid}:fake`, { headers: T() })).j;
   assert.deepEqual(doc.doc.POOL_SECRET, { value: null, secret: true });
   const e = (await call(`/api/clusters/${cid}/env`, { headers: T() })).j;
-  assert.deepEqual(e.needs_restart, [worker.id], "the gateway has no pool layer");
+  assert.deepEqual(e.needs_restart, [worker.id]);
   const wenv = Object.fromEntries(e.pods.find((p) => p.pod_id === worker.id).env.map((v) => [v.key, v]));
   assert.equal(wenv.FASTVIDEO_ATTN_SAGE.source, "pool");
   assert.equal(wenv.POOL_SECRET.value, "••••••••");
-  assert.ok(!e.pods.find((p) => p.pod_id === gw.id).env.some((v) => v.key === "FASTVIDEO_ATTN_SAGE"));
   assert.ok(e.preview.fake.some((v) => v.key === "FASTVIDEO_ATTN_SAGE" && v.source === "pool"), "a new worker of the pool gets it");
-  const gwPatches = () => mock.log.filter((l) => l.method === "PATCH" && l.path.endsWith(gw.id)).length;
-  const g0 = gwPatches();
   await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
   assert.equal((await call(`/api/clusters/${cid}/restart`, { method: "POST", body: { pools: ["fake"] }, headers: T() })).status, 202);
   let op = await waitOp(cid, "restart");
   assert.equal(op.status, "done", JSON.stringify(op.log));
   assert.equal(mock.pods.get(worker.id).env.FASTVIDEO_ATTN_SAGE, "0");
   assert.equal(mock.pods.get(worker.id).env.POOL_SECRET, "pool_s3cret_value");
-  assert.equal(mock.pods.get(gw.id).env.FASTVIDEO_ATTN_SAGE, undefined);
-  assert.equal(gwPatches(), g0, "the gateway was not restarted");
   // A chosen pod restarts even when its env did not change.
   const p0 = mock.pods.get(worker.id).patches;
   await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
@@ -308,11 +292,10 @@ await step("pool env: every worker of the pool, never the gateway; restart by po
   op = await waitOp(cid, "restart");
   assert.equal(op.status, "done", JSON.stringify(op.log));
   assert.equal(mock.pods.get(worker.id).patches, p0 + 1);
-  assert.equal(gwPatches(), g0);
   await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
 });
 
-await step("templates and pool presets; gateway overrides in the spec", async () => {
+await step("templates and pool presets; a legacy gateway block migrates", async () => {
   const tp = (await call("/api/templates", { headers: T() })).j;
   assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "wan", "longlive"]);
   for (const id of ["ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"]) assert.ok(tp.pool_presets.some((p) => p.id === id), id);
@@ -323,7 +306,9 @@ await step("templates and pool presets; gateway overrides in the spec", async ()
   const s = r.j.cluster.spec;
   assert.deepEqual(s.pools.map((p) => p.id), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
   assert.match(s.pools[1].config_toml, /recipe = "ltx-pro"/);
-  assert.deepEqual(s.gateway.fal_apps, ["lightricks/ltx-2.5", "fal-ai/ltx-2.3"]);
+  assert.equal(s.gateway, undefined, "the retired gateway block is dropped");
+  assert.equal(s.control_plane, "edge");
+  assert.equal(s.auth, "keys");
   // A bare preset id fills in; a Plug recipe is refused.
   const ok = await call(`/api/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [...s.pools, { id: "longlive", count: 0 }] } }, headers: T() });
   assert.equal(ok.status, 200, JSON.stringify(ok.j));
@@ -454,66 +439,63 @@ await step("scale a pool up and down (drain first)", async () => {
   assert.equal((await call(`/api/clusters/${cid}/scale`, { method: "POST", body: { pool: "fake", count: 2 }, headers: T() })).status, 202);
   let op = await waitOp(cid, "scale");
   assert.equal(op.status, "done", JSON.stringify(op.log));
-  assert.equal(mock.pods.size, 3);
-  assert.equal(mock.pods.get(gw.id).env.FV_POOL_FAKE_URLS.split(",").length, 2);
-  const grown = [...mock.pods.values()].find((p) => p.id !== gw.id && p.id !== worker.id);
+  assert.equal(mock.pods.size, 2);
+  const grown = [...mock.pods.values()].find((p) => p.id !== worker.id);
+  assert.equal(grown.env.FV_DISPATCH_FRONT, "1");
   assert.equal(grown.env.FASTVIDEO_ATTN_SAGE, "0", "a scale-up worker gets the pool env");
   await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'scale'");
   assert.equal((await call(`/api/clusters/${cid}/scale`, { method: "POST", body: { pool: "fake", count: 1 }, headers: T() })).status, 202);
   op = await waitOp(cid, "scale", 90000);
   assert.equal(op.status, "done", JSON.stringify(op.log));
-  assert.equal(mock.pods.size, 2);
+  assert.equal(mock.pods.size, 1);
   assert.equal(mock.drained.length, 1);
-  assert.equal(mock.pods.get(gw.id).env.FV_POOL_FAKE_URLS.split(",").length, 1);
-  worker = [...mock.pods.values()].find((p) => p.id !== gw.id);
+  worker = [...mock.pods.values()][0];
 });
 
-await step("rolling redeploy to a commit, gateway included", async () => {
+await step("rolling redeploy to a commit", async () => {
   const old = worker.id;
-  assert.equal((await call(`/api/clusters/${cid}/roll`, { method: "POST", body: { target: "abcdef1", gateway: true }, headers: T() })).status, 202);
+  assert.equal((await call(`/api/clusters/${cid}/roll`, { method: "POST", body: { target: "abcdef1" }, headers: T() })).status, 202);
   const op = await waitOp(cid, "roll", 120000);
   assert.equal(op.status, "done", JSON.stringify(op.log));
   assert.ok(!mock.pods.has(old), "old worker deleted");
   assert.ok(mock.drained.includes(old), "old worker drained first");
-  const nw = [...mock.pods.values()].find((p) => p.id !== gw.id);
+  assert.equal(mock.pods.size, 1);
+  const nw = [...mock.pods.values()][0];
   assert.match(nw.image, /@sha256:/);
-  assert.equal(nw.env.FV_IMAGE_DIGEST, "sha256:" + Buffer.from("gateway-sha-abcdef1").toString("hex").padEnd(64, "0").slice(0, 64));
-  assert.equal(mock.pods.get(gw.id).image, nw.image, "the gateway moved to the same build (same pod id)");
-  assert.equal(mock.pods.get(gw.id).env.FV_POOL_FAKE_URLS, `http://127.0.0.1:${mock.port}/pod/${nw.id}`);
+  assert.equal(nw.env.FV_IMAGE_DIGEST, "sha256:" + Buffer.from("cpu-sha-abcdef1").toString("hex").padEnd(64, "0").slice(0, 64));
   assert.equal(nw.env.FASTVIDEO_ATTN_SAGE, "0", "a rolled worker keeps the pool env");
   worker = nw;
 });
 
-await step("extend; stop and start the gateway; admin token and key minting through the gateway", async () => {
-  const before = Number(mock.pods.get(gw.id).env.FV_CLUSTER_DEADLINE);
+await step("extend; the edge's admin token; keys minted, listed and revoked at the edge", async () => {
+  const before = (await call(`/api/clusters/${cid}`, { headers: T() })).j.cluster.deadline;
+  const wdl = mock.pods.get(worker.id).env.FV_CLUSTER_DEADLINE;
   assert.equal((await call(`/api/clusters/${cid}/extend`, { method: "POST", body: { minutes: 30 }, headers: T() })).status, 202);
-  assert.equal((await waitOp(cid, "extend")).status, "done");
-  assert.equal(Number(mock.pods.get(gw.id).env.FV_CLUSTER_DEADLINE), before + 1800);
-  assert.equal((await call(`/api/clusters/${cid}/gateway/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
-  assert.equal((await waitOp(cid, "gateway-stop")).status, "done");
-  assert.equal(mock.pods.get(gw.id).desiredStatus, "EXITED");
-  assert.equal((await call(`/api/clusters/${cid}/gateway/start`, { method: "POST", body: {}, headers: T() })).status, 202);
-  assert.equal((await waitOp(cid, "gateway-start")).status, "done");
-  assert.equal(mock.pods.get(gw.id).desiredStatus, "RUNNING");
+  const op = await waitOp(cid, "extend");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal((await call(`/api/clusters/${cid}`, { headers: T() })).j.cluster.deadline, before + 1800_000);
+  assert.equal(mock.pods.get(worker.id).env.FV_CLUSTER_DEADLINE, wdl, "the worker keeps its launch deadline until restarted");
+  assert.equal((await call(`/api/clusters/${cid}/gateway/stop`, { method: "POST", body: {}, headers: T() })).status, 404, "the gateway operations are gone");
   const tok = await call(`/api/clusters/${cid}/admin-token`, { method: "POST", body: {}, headers: T() });
-  assert.equal(tok.j.admin_token, mock.adminToken, "opened the sealed token");
+  assert.equal(tok.status, 200, JSON.stringify(tok.j));
+  assert.equal(tok.j.admin_token, mock.edgeAdmin);
   const k = await call(`/api/clusters/${cid}/mint-key`, { method: "POST", body: { name: "laptop" }, headers: T() });
-  assert.equal(k.status, 201);
-  assert.deepEqual(mock.minted, ["laptop"]);
-  // List and revoke through the gateway's admin API (audited).
+  assert.equal(k.status, 201, JSON.stringify(k.j));
+  // List and revoke at the edge (audited).
   const ks = await call(`/api/clusters/${cid}/keys`, { headers: T() });
   assert.equal(ks.status, 200, JSON.stringify(ks.j));
-  assert.deepEqual(ks.j.keys.map((x) => x.name), ["laptop"]);
-  const kid = ks.j.keys[0].id;
+  assert.ok(ks.j.keys.some((x) => x.name === "laptop"));
+  const kid = k.j.key.id;
   assert.equal((await call(`/api/clusters/${cid}/keys/not-a-key`, { method: "DELETE", headers: T() })).status, 400);
   assert.equal((await call(`/api/clusters/${cid}/keys/key_999999999999`, { method: "DELETE", headers: T() })).status, 404);
   const rv = await call(`/api/clusters/${cid}/keys/${kid}`, { method: "DELETE", headers: T() });
   assert.equal(rv.status, 200, JSON.stringify(rv.j));
-  assert.deepEqual(rv.j.applied, [gw.id]);
-  assert.equal((await call(`/api/clusters/${cid}/keys`, { headers: T() })).j.keys[0].revoked, true);
+  assert.deepEqual(rv.j.applied, ["edge"]);
+  assert.equal((await call(`/api/clusters/${cid}/keys`, { headers: T() })).j.keys.find((x) => x.id === kid).revoked, true);
   assert.ok((await call("/api/audit", { headers: T() })).j.audit.some((a) => a.action === "cluster.revoke-key" && a.after.includes(kid)));
-  const gv = (await call(`/api/clusters/${cid}/gateway`, { headers: T() })).j;
-  assert.equal(gv.pools.state[0].id, "fake");
+  const fv = (await call(`/api/clusters/${cid}/front`, { headers: T() })).j;
+  assert.equal(fv.edge, true);
+  assert.equal(fv.workers[0].front.ready, true, JSON.stringify(fv));
 });
 
 await step("GitHub: release dispatch, CI status; image tags", async () => {
@@ -524,7 +506,7 @@ await step("GitHub: release dispatch, CI status; image tags", async () => {
   assert.equal((await call("/api/github/release", { method: "POST", body: { action: "promote", target: "$(x)" }, headers: T() })).status, 400);
   const ci = (await call("/api/github/ci", { headers: T() })).j;
   assert.equal(ci.main[0].conclusion, "success");
-  assert.ok((await call("/api/images/tags?filter=gateway", { headers: T() })).j.tags.includes("gateway-stable"));
+  assert.ok((await call("/api/images/tags?filter=cpu", { headers: T() })).j.tags.includes("cpu-stable"));
 });
 
 await step("deadline backstop: the cron stops a cluster past its deadline", async () => {
@@ -543,7 +525,7 @@ await step("the balance floor stops running clusters", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
   assert.equal((await call(`/api/clusters/${cid}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
   assert.equal((await waitOp(cid, "up")).status, "done");
-  assert.equal(mock.pods.size, 2);
+  assert.equal(mock.pods.size, 1);
   await d1Exec(w.dir, "DELETE FROM operations");
   mock.balance = 7.5;
   const r = await call("/api/collect", { method: "POST", body: {}, headers: T() });
@@ -554,33 +536,9 @@ await step("the balance floor stops running clusters", async () => {
   mock.balance = 50;
 });
 
-await step("import a runpod-cluster.sh state (and stop it through the controller)", async () => {
-  const mk = async (body) => (await (await fetch(`http://127.0.0.1:${mock.port}/rp/rest/pods`, { method: "POST", headers: { authorization: `Bearer ${SECRETS.RUNPOD_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify(body) })).json()).id;
-  const g = await mk({ name: "fv-cluster-gw-1", computeType: "CPU", env: { FV_GATEWAY_TOML_B64: "eA==", FV_ADMIN_TOKEN: "fvadm_legacy" }, imageName: "ghcr.io/x@sha256:" + "a".repeat(64) });
-  const wk = await mk({ name: "fv-cluster-wan-1", computeType: "GPU", env: { FV_INTERNAL_TOKEN: "legacytok" }, imageName: "ghcr.io/x@sha256:" + "b".repeat(64) });
-  mock.adminToken = "fvadm_legacy";
-  const state = {
-    image: "ghcr.io/x@sha256:" + "a".repeat(64), images: {}, internal_token: "legacytok", url_signing_key: "sig", admin_token: "fvadm_legacy", auth: "keys", min_balance: "8.25",
-    deadline: Math.floor(Date.now() / 1000) + 3600, gateway: { pod: g, cpu: "cpu3c", dph: 0.06, created: 1, dc: "EUR-IS-1", image: "ghcr.io/x@sha256:" + "a".repeat(64) },
-    gateway_url: `http://127.0.0.1:${mock.port}/pod/${g}`, workers: { wan: { pod: wk, gpu: "RTX", dc: "EUR-IS-1", dph: 2.09, created: 1, image: "ghcr.io/x@sha256:" + "b".repeat(64), url: `http://127.0.0.1:${mock.port}/pod/${wk}` } },
-  };
-  const r = await call("/api/clusters/import", { method: "POST", body: { name: "legacy", state }, headers: T() });
-  assert.equal(r.status, 201, JSON.stringify(r.j));
-  const id = r.j.cluster.id;
-  assert.equal(r.j.cluster.status, "running");
-  assert.ok(!JSON.stringify(r.j).includes("legacytok"));
-  const tok = await call(`/api/clusters/${id}/admin-token`, { method: "POST", body: {}, headers: T() });
-  assert.equal(tok.j.admin_token, "fvadm_legacy");
-  const e = (await call(`/api/clusters/${id}/env`, { headers: T() })).j;
-  assert.equal(e.needs_restart.length, 2, "log shipping and the controller's env are new to the imported pods");
-  assert.equal((await call(`/api/clusters/${id}/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
-  assert.equal((await waitOp(id, "down")).status, "done");
-  assert.ok(!mock.pods.has(g) && !mock.pods.has(wk));
-});
-
-await step("gateway-less cluster: the controller's admin token on every worker; keys minted, listed and revoked on the workers", async () => {
+await step("direct cluster: the controller's admin token on every worker; keys minted, listed and revoked on the workers", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
-  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "nogw", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, gateway: { enabled: false } } }, headers: T() });
+  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "nogw", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, control_plane: "direct" } }, headers: T() });
   assert.equal(r.status, 201, JSON.stringify(r.j));
   const id = r.j.cluster.id;
   const before = new Set(mock.pods.keys());
@@ -588,10 +546,10 @@ await step("gateway-less cluster: the controller's admin token on every worker; 
   assert.equal((await call(`/api/clusters/${id}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
   let op = await waitOp(id, "up");
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
-  assert.equal(mine().length, 1, "no gateway pod");
+  assert.equal(mine().length, 1);
   const w1 = mine()[0];
-  assert.equal(w1.env.FV_GATEWAY_TOML_B64, undefined);
   assert.equal(w1.env.FV_SERVE_ROLE, "worker");
+  assert.equal(w1.env.FV_DISPATCH_FRONT, undefined);
   assert.equal(w1.env.FV_WORKER_DIRECT, "1");
   assert.equal(w1.env.FV_KEY_STORE, "d1");
   assert.equal(w1.env.FV_AUTH_MODE, "keys");
@@ -600,7 +558,6 @@ await step("gateway-less cluster: the controller's admin token on every worker; 
   assert.equal(tok.status, 200, JSON.stringify(tok.j));
   assert.equal(tok.j.admin_token, w1.env.FV_ADMIN_TOKEN);
   assert.equal(tok.j.direct, true);
-  assert.equal(tok.j.gateway_url, null);
   assert.deepEqual(tok.j.workers.map((x) => x.url), [`http://127.0.0.1:${mock.port}/pod/${w1.id}`]);
   assert.equal(tok.j.console, `http://127.0.0.1:${mock.port}/pod/${w1.id}/console/admin`);
   const e = (await call(`/api/clusters/${id}/env`, { headers: T() })).j;
@@ -613,7 +570,7 @@ await step("gateway-less cluster: the controller's admin token on every worker; 
   assert.equal(op.status, "done", JSON.stringify(op.log));
   const w2 = mine().find((p) => p.id !== w1.id);
   assert.equal(w2.env.FV_ADMIN_TOKEN, w1.env.FV_ADMIN_TOKEN);
-  const gv = (await call(`/api/clusters/${id}/gateway`, { headers: T() })).j;
+  const gv = (await call(`/api/clusters/${id}/front`, { headers: T() })).j;
   assert.equal(gv.direct, true);
   assert.equal(gv.workers.length, 2);
   assert.ok(gv.workers.every((x) => x.health.ok), JSON.stringify(gv));
@@ -637,12 +594,12 @@ await step("gateway-less cluster: the controller's admin token on every worker; 
   assert.equal(mine().length, 0);
 });
 
-await step("edge cluster: no gateway pod; fronts behind the edge; register, ready from the families view, keys at the edge, scale, roll, one edge cluster at a time", async () => {
+await step("a second edge cluster: fronts behind the edge; register, ready from the families view, keys at the edge, scale, roll, one edge cluster at a time", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
   const edge = `http://127.0.0.1:${mock.port}/edge`;
   const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "edgy", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, control_plane: "edge" } }, headers: T() });
   assert.equal(r.status, 201, JSON.stringify(r.j));
-  assert.equal(r.j.cluster.spec.gateway.enabled, false);
+  assert.equal(r.j.cluster.spec.control_plane, "edge");
   const id = r.j.cluster.id;
   const before = new Set(mock.pods.keys());
   const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
@@ -651,9 +608,8 @@ await step("edge cluster: no gateway pod; fronts behind the edge; register, read
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
   assert.ok(op.log.some((l) => /edge .*: up/.test(l.msg)), "the register phase checked the edge");
   assert.ok(op.log.some((l) => /ready front at the edge: 1\/1/.test(l.msg)), JSON.stringify(op.log.slice(-4)));
-  assert.equal(mine().length, 1, "no gateway pod");
+  assert.equal(mine().length, 1);
   const w1 = mine()[0];
-  assert.equal(w1.env.FV_GATEWAY_TOML_B64, undefined);
   assert.equal(w1.env.FV_DISPATCH_FRONT, "1");
   assert.equal(w1.env.FV_DISPATCH_DO_URL, edge);
   assert.equal(w1.env.FV_PUBLIC_BASE_URL, edge);
@@ -667,7 +623,7 @@ await step("edge cluster: no gateway pod; fronts behind the edge; register, read
   const detail = (await call(`/api/clusters/${id}`, { headers: T() })).j;
   assert.equal(detail.edge_url, edge);
   const gv = (await call(`/api/clusters/${id}/gateway`, { headers: T() })).j;
-  assert.equal(gv.edge, true);
+  assert.equal(gv.edge, true, "the old /gateway path still answers (an alias of /front)");
   assert.equal(gv.url, edge);
   assert.equal(gv.workers[0].front.ready, true, JSON.stringify(gv));
   // A second edge cluster is refused while this one runs.
@@ -721,15 +677,15 @@ await step("edge cluster: no gateway pod; fronts behind the edge; register, read
 await step("audit log; no secret in any response", async () => {
   const a = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
   const actions = new Set(a.map((x) => x.action));
-  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "cluster.mint-key", "cluster.revoke-key", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
+  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.admin-token.reveal", "cluster.mint-key", "cluster.revoke-key", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
   assert.ok(a.some((x) => x.action === "auth.login" && x.ok === 0), "failed logins are audited");
   const envSet = a.find((x) => x.action === "env.set" && x.target.includes("HF_TOKEN"));
   assert.ok(!envSet.after.includes("hf_supersecret"));
   const all = bodies.join("\n");
   for (const [k, v] of Object.entries(SECRETS)) assert.ok(!all.includes(v), `${k} leaked into a response`);
   assert.ok(!all.includes("hf_supersecret"), "a secret env value leaked");
-  assert.ok(!all.includes(gw.env.FV_INTERNAL_TOKEN), "a cluster internal token leaked");
-  assert.ok(!all.includes(gw.env.FV_LOG_SHIP_TOKEN), "an ingest token leaked");
+  assert.ok(!all.includes(mock.edgeInternal), "the edge's internal token leaked");
+  assert.ok(!all.includes(worker.env.FV_LOG_SHIP_TOKEN), "an ingest token leaked");
 });
 
 await step("login rate limit", async () => {

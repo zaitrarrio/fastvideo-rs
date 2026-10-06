@@ -33,17 +33,12 @@
 //! | `FV_R2_BUCKET`, `FV_R2_ENDPOINT`, `FV_R2_ACCESS_KEY_ID`, `FV_R2_SECRET_ACCESS_KEY` | `artifacts.s3.*` (R2: region `auto`) |
 //! | `FV_S3_ENDPOINT`, `FV_S3_REGION`, `FV_S3_BUCKET`, `FV_S3_ACCESS_KEY_ID`, `FV_S3_SECRET_ACCESS_KEY` | `artifacts.s3.*` (generic S3) |
 //! | `FV_LOG_FORMAT` (`text` \| `json`), `RUST_LOG` | logging |
-//! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker behind the gateway, docs/serve/gateway.md) |
-//! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (gateway ↔ worker; never a user key) |
-//! | `FV_GATEWAY_POOL` | `gateway.pool` (the pool a worker registers in) |
-//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `gateway.direct` (a worker with no gateway in front: clients call it with API keys; docs/control/gateway-less-auth.md) |
-//! | `FV_RUNPOD_API_KEY` (else `RUNPOD_API_KEY`) | `gateway.runpod_api_key` (serverless pools) |
-//! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
-//! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
-//! | `FV_POOL_<ID>_DISPATCH` (`gateway` \| `durable-object`), `FV_POOL_<ID>_DO_URL` | a pod pool's dispatch path (docs/serve/gateway-cloudflare.md) |
+//! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker of a cluster: an edge front, a direct worker or an executor; docs/serve/edge-control-plane.md) |
+//! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (edge ↔ worker; never a user key) |
+//! | `FV_GATEWAY_POOL` | `gateway.pool` (a worker's pool: its `gw_workers` row, the per-pool object socket) |
+//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `gateway.direct` (clients call the worker with API keys; docs/control/gateway-less-auth.md) |
 //! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
 //! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
-//! | `FV_POOL_<ID>_FAMILY` | a durable-object pool's family object |
 //! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued` (and `FV_DISPATCH_STATUS_S`: `dispatch.status_s`): an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
@@ -313,9 +308,6 @@ pub enum EngineBackendKind {
     Fake,
     /// CudaBackend (WP-11; `--features cuda`).
     Cuda,
-    /// Gateway mode: no local engine; jobs go to the `[[pools]]`
-    /// (docs/serve/gateway.md).
-    Remote,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -649,53 +641,28 @@ impl Default for ReactorCfg {
     }
 }
 
-/// `[gateway]`: the gateway's settings (`engine.backend = "remote"`) and a
-/// worker's link to it (`server.role = "worker"`), docs/serve/gateway.md.
+/// `[gateway]`: a worker's cluster settings (`server.role = "worker"`). The
+/// name is the retired gateway's (docs/serve/edge-control-plane.md §9); its
+/// gateway-only keys are gone.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewayCfg {
-    /// Shared gateway ↔ worker secret (`FV_INTERNAL_TOKEN`).
+    /// The cluster's shared secret (`FV_INTERNAL_TOKEN`): the edge's and
+    /// fv-control's calls to the worker.
     pub internal_token: Secret,
-    /// Worker: the pool it registers in (`FV_GATEWAY_POOL`); pod workers
-    /// with a public base URL upsert `gw_workers` so gateways find them.
+    /// Worker: its pool (`FV_GATEWAY_POOL`); pod workers with a public base
+    /// URL upsert their `gw_workers` row.
     pub pool: Option<String>,
     /// Worker: register in `gw_workers` (pods; needs D1).
     pub register: bool,
-    /// Worker with no gateway in front (fv-control `gateway.enabled:
-    /// false`, `FV_WORKER_DIRECT`): clients call it directly, so `auth.mode`
+    /// A direct worker (fv-control `control_plane: "direct"`,
+    /// `FV_WORKER_DIRECT`): clients call it directly, so `auth.mode`
     /// applies as on a standalone server (API keys, the shared minted-key
     /// store, `FV_ADMIN_TOKEN` for the admin routes) and the internal token
     /// guards only `/fv/v1/internal/*` (drain and status for the controller).
     pub direct: bool,
-    /// Live caps refresh per pool.
-    pub caps_refresh_s: u64,
-    /// Metrics + reaper tick.
-    pub tick_s: u64,
-    /// Window of the duration metrics.
-    pub metrics_window_s: u64,
     /// D1 poll for SSE and sync waits.
     pub watch_poll_ms: u64,
-    /// Runpod queue API base (`https://api.runpod.ai/v2`; tests: the simulator).
-    pub runpod_api_base: String,
-    /// `FV_RUNPOD_API_KEY` / `RUNPOD_API_KEY`.
-    pub runpod_api_key: Secret,
-    /// The model of the Reactor routes on the gateway (default: the first
-    /// stream-capable model of a pod pool).
-    pub reactor_model: Option<String>,
-    /// Inputs up to this many bytes (all of a job's together) travel inside
-    /// the dispatch request (base64) instead of through the artifact store
-    /// (R2): no store round trip on the submit path. 0: always the store.
-    /// Serverless pools cap it at 6 MiB (a Runpod `/run` body is ≤ 10 MB).
-    pub inline_inputs_max_bytes: u64,
-    /// Video and audio inputs too large to inline that the client gave as
-    /// a public URL are fetched by the worker from that URL (the ingestion
-    /// SSRF guard, checked against the gateway's SHA-256) instead of
-    /// through the store.
-    pub input_passthrough: bool,
-    /// After a dispatch, copy the inputs that did not go through the store
-    /// into it in the background (off the submit path), so a re-dispatch
-    /// after a worker loss has them (pools with `retries > 0`).
-    pub stage_inputs_for_retry: bool,
 }
 
 impl Default for GatewayCfg {
@@ -705,79 +672,9 @@ impl Default for GatewayCfg {
             pool: None,
             register: true,
             direct: false,
-            caps_refresh_s: 60,
-            tick_s: 5,
-            metrics_window_s: 600,
             watch_poll_ms: 1000,
-            runpod_api_base: "https://api.runpod.ai/v2".into(),
-            runpod_api_key: Secret::default(),
-            reactor_model: None,
-            inline_inputs_max_bytes: 8 * 1024 * 1024,
-            input_passthrough: true,
-            stage_inputs_for_retry: true,
         }
     }
-}
-
-/// How a pool's workers are reached.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PoolKind {
-    /// A Runpod serverless queue endpoint (`/run` with the native envelope).
-    #[default]
-    RunpodServerless,
-    /// Pods addressed by URL (static `urls` plus registered workers).
-    Pod,
-}
-
-/// One `[[pools]]` entry.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PoolCfg {
-    pub id: String,
-    pub kind: PoolKind,
-    /// Serverless: the Runpod endpoint id.
-    pub endpoint_id: Option<String>,
-    /// Pods: worker base URLs.
-    pub urls: Vec<String>,
-    /// Admission: queued jobs of this pool (0: no limit).
-    pub max_queued: u32,
-    /// Stream sessions of this pool (0: one per pod worker; serverless: none).
-    pub max_streams: u32,
-    pub dispatch_timeout_s: u64,
-    pub job_timeout_s: u64,
-    /// A job without a worker heartbeat for this long is lost.
-    pub stale_after_s: u64,
-    /// Re-dispatches after a worker loss.
-    pub retries: u32,
-    /// Extra aliases → model ids served here.
-    pub aliases: BTreeMap<String, String>,
-    /// Static caps: worker-style `[[models]]` entries (CUDA catalog).
-    pub models: Vec<ModelCfg>,
-    /// Static caps for fake pools (tests): fake model ids.
-    pub fake_models: Vec<String>,
-    /// Pod pools: `gateway` (the gateway calls the workers, default) or
-    /// `durable-object` (the gateway enqueues to the pool's Durable Object,
-    /// which pushes to the workers' sockets; docs/serve/gateway-cloudflare.md).
-    pub dispatch: DispatchMode,
-    /// `dispatch = "durable-object"`: the fv-edge Worker's base URL.
-    pub do_url: Option<String>,
-    /// `dispatch = "durable-object"`: the model family whose Durable Object
-    /// takes this pool's jobs and sessions (`/families/{family}/…`,
-    /// docs/serve/dispatch-do-family.md); unset: the pool's own object
-    /// (`/pools/{id}/…`).
-    pub family: Option<String>,
-}
-
-/// How a pool's jobs reach its workers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DispatchMode {
-    /// The gateway posts each job to a worker (docs/serve/gateway.md §3).
-    #[default]
-    Gateway,
-    /// The pool's Durable Object pushes it over the worker's WebSocket.
-    DurableObject,
 }
 
 /// `[dispatch]` of a worker: the socket to its pool's Durable Object, or
@@ -864,39 +761,6 @@ impl DispatchCfg {
     }
 }
 
-impl Default for PoolCfg {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            kind: PoolKind::RunpodServerless,
-            endpoint_id: None,
-            urls: Vec::new(),
-            max_queued: 64,
-            max_streams: 0,
-            dispatch_timeout_s: 30,
-            job_timeout_s: 3600,
-            stale_after_s: 90,
-            retries: 1,
-            aliases: BTreeMap::new(),
-            models: Vec::new(),
-            fake_models: Vec::new(),
-            dispatch: DispatchMode::Gateway,
-            do_url: None,
-            family: None,
-        }
-    }
-}
-
-impl PoolCfg {
-    /// `FV_POOL_<ID>_…` prefix for this pool.
-    pub fn env_prefix(&self) -> String {
-        format!(
-            "FV_POOL_{}_",
-            self.id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect::<String>()
-        )
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogCfg {
@@ -934,9 +798,6 @@ pub struct Config {
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
     pub gateway: GatewayCfg,
-    pub pools: Vec<PoolCfg>,
-    /// The gateway's autoscaler (docs/serve/gateway.md §8; configs/serve/autoscale.toml).
-    pub autoscale: fastvideo_autoscale::AutoscaleConfig,
     /// A worker's socket to its pool's Durable Object (docs/serve/gateway-cloudflare.md).
     pub dispatch: DispatchCfg,
 }
@@ -1237,39 +1098,6 @@ impl Config {
         if let Some(v) = env.var("FV_DISPATCH_STATUS_S").and_then(|v| v.trim().parse().ok()) {
             self.dispatch.status_s = v;
         }
-        if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
-            self.gateway.runpod_api_key = Secret(v.trim().to_owned());
-        }
-        if let Some(v) = env.var("FV_RUNPOD_API_BASE") {
-            self.gateway.runpod_api_base = v;
-        }
-        for p in &mut self.pools {
-            let pre = p.env_prefix();
-            if let Some(v) = env.var(&format!("{pre}ENDPOINT")) {
-                p.endpoint_id = Some(v.trim().to_owned());
-            }
-            if let Some(v) = env.var(&format!("{pre}URLS")) {
-                p.urls = v.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
-            }
-            match env.var(&format!("{pre}DISPATCH")).as_deref().map(str::trim) {
-                Some("gateway") => p.dispatch = DispatchMode::Gateway,
-                Some("durable-object") => p.dispatch = DispatchMode::DurableObject,
-                _ => {}
-            }
-            if let Some(v) = env.var(&format!("{pre}DO_URL")) {
-                p.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
-            }
-            if let Some(v) = env.var(&format!("{pre}FAMILY")) {
-                p.family = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
-            }
-            if let Some(w) = env.var("FV_WEIGHTS") {
-                for m in &mut p.models {
-                    if let Some(x) = &mut m.weights {
-                        *x = x.replace("${FV_WEIGHTS}", &w);
-                    }
-                }
-            }
-        }
         if let Some(v) = env.var("FV_LOG_FORMAT") {
             self.log.format = v;
         }
@@ -1365,7 +1193,7 @@ impl Config {
         self.validate_gateway()
     }
 
-    /// `[gateway]`, `[[pools]]` and `server.role` checks.
+    /// `[gateway]`, `[dispatch]` and `server.role` checks.
     fn validate_gateway(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
         if self.gateway.direct {
@@ -1373,7 +1201,7 @@ impl Config {
                 return bad("gateway.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
             }
             if matches!(self.auth.mode, AuthMode::TrustGateway | AuthMode::TrustEdge) {
-                return bad("gateway.direct: no gateway authenticates the clients, so auth.mode must be keys or none (not trust-gateway)".into());
+                return bad("gateway.direct: nothing in front authenticates the clients, so auth.mode must be keys or none (not trust-gateway or trust-edge)".into());
             }
             if self.auth.admin_token.is_empty() {
                 return bad("gateway.direct needs auth.admin_token (FV_ADMIN_TOKEN): every worker of the cluster shares it".into());
@@ -1382,9 +1210,6 @@ impl Config {
         if self.server.role == Role::Worker {
             if self.gateway.internal_token.is_empty() {
                 return bad("server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
-            }
-            if self.engine.backend == EngineBackendKind::Remote {
-                return bad("a worker needs a local engine (engine.backend = fake | cuda)".into());
             }
             if let Some(u) = &self.dispatch.do_url {
                 url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
@@ -1421,56 +1246,6 @@ impl Config {
             }
             if self.dispatch.direct_upload && !(5..=1024).contains(&self.dispatch.upload_part_mib) {
                 return bad("dispatch.upload_part_mib must be 5..=1024 (S3 multipart parts)".into());
-            }
-        }
-        if self.engine.backend != EngineBackendKind::Remote {
-            return Ok(());
-        }
-        if self.pools.is_empty() {
-            return bad("engine.backend = remote (gateway) needs at least one [[pools]] entry".into());
-        }
-        if self.gateway.internal_token.is_empty() {
-            return bad("engine.backend = remote (gateway) needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
-        }
-        if self.job_backend() != JobBackend::D1 {
-            return bad("engine.backend = remote (gateway): jobs must be in D1, shared with the workers (FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID)".into());
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        for p in &self.pools {
-            if p.id.is_empty() || !p.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-                return bad(format!("pools: id `{}` must be non-empty [A-Za-z0-9_-]", p.id));
-            }
-            if !seen.insert(p.id.clone()) {
-                return bad(format!("pools: duplicate id `{}`", p.id));
-            }
-            if p.models.is_empty() && p.fake_models.is_empty() {
-                return bad(format!("pools.{}: list the models it serves (`models` or `fake_models`: the static caps)", p.id));
-            }
-            match p.kind {
-                PoolKind::RunpodServerless if p.endpoint_id.as_deref().unwrap_or("").is_empty() => {
-                    return bad(format!("pools.{}: a runpod-serverless pool needs endpoint_id ({}ENDPOINT)", p.id, p.env_prefix()));
-                }
-                PoolKind::Pod => {
-                    for u in &p.urls {
-                        url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("pools.{}: url `{u}`: {e}", p.id)))?;
-                    }
-                }
-                _ => {}
-            }
-            if p.dispatch == DispatchMode::DurableObject {
-                // Serverless pools stay on the gateway path: Runpod scales
-                // and reaps their workers from its own queue, which a pushed
-                // job would bypass (docs/serve/gateway-cloudflare.md §3.2).
-                if p.kind != PoolKind::Pod {
-                    return bad(format!("pools.{}: dispatch = \"durable-object\" is for pod pools only (serverless pools use the Runpod queue)", p.id));
-                }
-                let u = p.do_url.as_deref().unwrap_or("");
-                url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("pools.{}: do_url `{u}` ({}DO_URL): {e}", p.id, p.env_prefix())))?;
-                if let Some(f) = &p.family {
-                    if !fastvideo_dispatch_proto::valid_id(f) {
-                        return bad(format!("pools.{}: family `{f}` is not a valid family id", p.id));
-                    }
-                }
             }
         }
         Ok(())
@@ -1724,32 +1499,7 @@ body_max_mb = 64
     }
 
     #[test]
-    fn durable_object_dispatch_is_for_pod_pools_with_a_url() {
-        let gateway = |kind: PoolKind, dispatch: DispatchMode, do_url: Option<&str>| {
-            let mut c = Config::default();
-            c.engine.backend = EngineBackendKind::Remote;
-            c.gateway.internal_token = Secret("t".into());
-            c.jobs.d1 = D1Cfg { account_id: Some("a".into()), database_id: Some("d".into()), api_token: Secret("x".into()), ..D1Cfg::default() };
-            c.pools = vec![PoolCfg {
-                id: "h3".into(),
-                kind,
-                endpoint_id: Some("ep".into()),
-                fake_models: vec!["fake-h3-turbo".into()],
-                dispatch,
-                do_url: do_url.map(str::to_owned),
-                ..PoolCfg::default()
-            }];
-            c
-        };
-        gateway(PoolKind::Pod, DispatchMode::DurableObject, Some("https://edge.example")).validate().unwrap();
-        gateway(PoolKind::Pod, DispatchMode::Gateway, None).validate().unwrap();
-        assert!(gateway(PoolKind::Pod, DispatchMode::DurableObject, None).validate().is_err(), "needs do_url");
-        let e = gateway(PoolKind::RunpodServerless, DispatchMode::DurableObject, Some("https://edge.example")).validate().unwrap_err();
-        assert!(e.to_string().contains("pod pools only"), "{e}");
-        // Env: the pool's dispatch and URL, and the worker's socket.
-        let mut c = gateway(PoolKind::Pod, DispatchMode::Gateway, None);
-        c.apply_env(&env(&[("FV_POOL_H3_DISPATCH", "durable-object"), ("FV_POOL_H3_DO_URL", "https://edge.example")])).unwrap();
-        assert_eq!((c.pools[0].dispatch, c.pools[0].do_url.as_deref()), (DispatchMode::DurableObject, Some("https://edge.example")));
+    fn a_workers_object_socket_needs_its_pool_or_families() {
         let mut w = Config::default();
         w.server.role = Role::Worker;
         w.gateway.internal_token = Secret("t".into());

@@ -1,6 +1,6 @@
 // Test harness: a mock of every upstream fv-control talks to (Runpod REST,
 // GraphQL and the log endpoint, CloudRift, GHCR, GitHub, the Cloudflare API) and of the
-// cluster's own pods (an fv-serve gateway and workers, keyed by pod id), plus
+// cluster's own pods (fv-serve workers, keyed by pod id) and the edge Worker, plus
 // the Worker itself under `wrangler dev` (workerd, local D1/R2/DO).
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -11,7 +11,6 @@ import { webcrypto as wc } from "node:crypto";
 
 const te = new TextEncoder();
 const b64 = (u) => Buffer.from(u).toString("base64");
-const unb64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
 export const HERE = new URL("..", import.meta.url).pathname;
 
 export async function hashPassphrase(pass, pepper, iter = 100000) {
@@ -22,20 +21,6 @@ export async function hashPassphrase(pass, pepper, iter = 100000) {
   const bits = await wc.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, key, 256);
   return `pbkdf2-sha256$${iter}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
 }
-async function sealFor(plain, recipient) {
-  const eph = await wc.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
-  const epk = new Uint8Array(await wc.subtle.exportKey("raw", eph.publicKey));
-  const rpk = unb64(recipient);
-  const peer = await wc.subtle.importKey("raw", rpk, { name: "X25519" }, false, []);
-  const shared = new Uint8Array(await wc.subtle.deriveBits({ name: "X25519", public: peer }, eph.privateKey, 256));
-  const k = new Uint8Array(await wc.subtle.digest("SHA-512", new Uint8Array([...te.encode("fv-admin-token-v1"), ...shared, ...epk, ...rpk])));
-  const iv = wc.getRandomValues(new Uint8Array(16));
-  const aes = await wc.subtle.importKey("raw", k.subarray(0, 32), "AES-CTR", false, ["encrypt"]);
-  const ct = new Uint8Array(await wc.subtle.encrypt({ name: "AES-CTR", counter: iv, length: 128 }, aes, te.encode(plain)));
-  const mk = await wc.subtle.importKey("raw", k.subarray(32, 64), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const tag = await wc.subtle.sign("HMAC", mk, new Uint8Array([...iv, ...ct]));
-  return { alg: "X25519-SHA512-AES256CTR-HMACSHA256", epk: b64(epk), iv: b64(iv), ct: b64(ct), tag: b64(new Uint8Array(tag)) };
-}
 
 export function startMock() {
   const m = {
@@ -44,10 +29,8 @@ export function startMock() {
     pods: new Map(), // id -> {payload, env, desiredStatus, costPerHr, name, image, created}
     log: [], // every request: {method, path, body}
     dispatches: [],
-    adminToken: "fvadm_mocktoken123",
-    minted: [],
     drained: [],
-    directKeys: [], // gateway-less workers' minted keys (the shared D1 table)
+    directKeys: [], // direct workers' minted keys (the shared D1 table)
     directCalls: [], // {pod, method, route} of their admin calls
     external: [
       { id: "extbuild0001", name: "fv-build", desiredStatus: "RUNNING", costPerHr: 1.12, imageName: "rust:1-bookworm", gpuCount: 0, machine: { gpuDisplayName: "unknown", dataCenterId: "EU-RO-1" }, runtime: { uptimeInSeconds: 3600, gpus: [], container: { cpuPercent: 80, memoryPercent: 10 } } },
@@ -165,7 +148,7 @@ export function startMock() {
       return res.end();
     }
     g = /^\/ghcr\/v2\/(.+)\/tags\/list$/.exec(p);
-    if (g) return json(res, 200, { tags: ["latest", "stable", "gateway-stable", "sha-abcdef1", "gateway-sha-abcdef1"] });
+    if (g) return json(res, 200, { tags: ["latest", "stable", "cpu-stable", "sha-abcdef1", "cpu-sha-abcdef1"] });
     // ---- GitHub
     if (p.startsWith("/gh/")) {
       if (bearer !== m.githubPat) return json(res, 401, { message: "Bad credentials" });
@@ -211,34 +194,8 @@ export function startMock() {
       if (!pod || pod.desiredStatus !== "RUNNING") { res.writeHead(502); return res.end("no pod"); }
       const env = pod.env || {};
       const route = pm[2];
-      if (env.FV_GATEWAY_TOML_B64) {
-        if (route === "/healthz") return json(res, 200, { status: "ok" });
-        if (route === "/fv/v1/status") return json(res, 200, { object: "fv.status", pools: [] });
-        if (route === "/fv/v1/admin/token/sealed") return env.FV_ADMIN_TOKEN_RECIPIENT ? json(res, 200, await sealFor(m.adminToken, env.FV_ADMIN_TOKEN_RECIPIENT)) : json(res, 404, {});
-        const admin = bearer === (env.FV_ADMIN_TOKEN || m.adminToken);
-        if (route === "/fv/v1/gateway/pools") {
-          if (!admin) return json(res, 401, { error: { kind: "unauthorized" } });
-          const state = Object.entries(env).filter(([k]) => /^FV_POOL_.*_URLS$/.test(k)).map(([k, v]) => ({
-            id: k.slice(8, -5).toLowerCase().replace(/_/g, "-"),
-            workers: v.split(",").map((u) => ({ url: u, ready: true, healthy: true, running: 0, queued: 0, build: { git_sha: "abcdef1234" } })),
-          }));
-          return json(res, 200, { object: "fv.gateway.pools", pools: [], state });
-        }
-        if (route === "/metrics") return admin ? (res.writeHead(200, { "content-type": "text/plain" }), res.end('fv_pool_queued{pool="fake"} 2\nfv_pool_running{pool="fake"} 1\nfv_http_requests_total 9\n')) : json(res, 401, {});
-        if (route === "/fv/v1/admin/keys" && req.method === "POST") {
-          if (!admin) return json(res, 401, {});
-          m.minted.push(body.name);
-          const key = { id: `key_${String(m.minted.length).padStart(12, "0")}`, name: body.name, prefix: "fv_user", created_at: new Date().toISOString(), revoked: false };
-          (m.gwKeys ||= []).push(key);
-          return json(res, 201, { api_key: "fv_userkey_mock", key });
-        }
-        if (route === "/fv/v1/admin/keys" && req.method === "GET") return admin ? json(res, 200, { keys: m.gwKeys || [], backend: "d1" }) : json(res, 401, {});
-        const gk = (m.gwKeys || []).find((k) => route === `/fv/v1/admin/keys/${k.id}`);
-        if (route.startsWith("/fv/v1/admin/keys/") && req.method === "DELETE") return !admin ? json(res, 401, {}) : gk ? ((gk.revoked = true), json(res, 200, { key: gk })) : json(res, 404, { error: { kind: "not_found" } });
-        return json(res, 404, {});
-      }
       if (env.FV_WORKER_DIRECT === "1" && route.startsWith("/fv/v1/admin/keys")) {
-        // A gateway-less worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
+        // A direct worker: its admin routes take the cluster's FV_ADMIN_TOKEN.
         if (!env.FV_ADMIN_TOKEN || bearer !== env.FV_ADMIN_TOKEN) return json(res, 401, { error: { kind: "unauthorized" } });
         m.directCalls.push({ pod: pod.id, method: req.method, route });
         if (route === "/fv/v1/admin/keys" && req.method === "POST") {

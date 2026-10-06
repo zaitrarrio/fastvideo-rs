@@ -133,7 +133,7 @@ vm_sa_email() { echo "${FV_GCP_SA_EMAIL:-fv-vm@$PROJECT.iam.gserviceaccount.com}
 
 # The family Durable Object worker settings (docs/serve/dispatch-do-family.md
 # §12): the same variables fv-control's workerSystemEnv and
-# scripts/serve/edge-gpu-test.sh give a Runpod worker. Checked before spending.
+# a Runpod worker gets. Checked before spending.
 worker_check() {
   local family="$1"
   [[ "$family" != fake ]] || [[ -n "${FV_DISPATCH_FAMILIES:-}" ]] || die "worker fake: set FV_DISPATCH_FAMILIES (the fake config has no family)"

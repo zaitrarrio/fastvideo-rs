@@ -48,9 +48,8 @@
 # prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5); FV_FLASHBOOT
 # (0 = off, the default; 1 = FlashBoot; priority = PRIORITY_FLASHBOOT, LB
 # only, the queue API has a boolean); FV_EXTRA_ENV_JSON
-# (a JSON object merged into the queue template's env, e.g. the gateway
-# worker role {"FV_SERVE_ROLE":"worker","FV_INTERNAL_TOKEN":"…"}, see
-# scripts/serve/runpod-gateway.sh).
+# (a JSON object merged into the queue template's env, e.g. the worker
+# role {"FV_SERVE_ROLE":"worker","FV_INTERNAL_TOKEN":"…"}).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh

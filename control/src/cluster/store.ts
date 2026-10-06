@@ -3,7 +3,7 @@ import { seal, unseal } from "../crypto";
 import type { Env } from "../env";
 import { HttpError, now, parseJson } from "../util";
 import type { ClusterSecrets, ClusterState, PodRec } from "./payloads";
-import type { ClusterSpec } from "./spec";
+import { migrateSpec, type ClusterSpec } from "./spec";
 
 export interface ClusterRow {
   id: string;
@@ -39,7 +39,7 @@ export function fromRow(r: ClusterRow): Cluster {
   return {
     id: r.id,
     name: r.name,
-    spec: parseJson<ClusterSpec>(r.spec, {} as ClusterSpec),
+    spec: migrateSpec(parseJson<ClusterSpec>(r.spec, {} as ClusterSpec)),
     state: { ...emptyState(), ...parseJson<ClusterState>(r.state, emptyState()) },
     status: r.status,
     deadline: r.deadline,

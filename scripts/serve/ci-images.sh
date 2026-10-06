@@ -10,13 +10,13 @@
 #
 # Env: FV_IMAGE (repo, e.g. ghcr.io/zaitrarrio/fastvideo-rs-serve); FV_SHORT_SHA;
 # FV_BUILD_ID; FV_SERVE_FEATURES (default cuda,http-client);
-# FV_GATEWAY_FEATURES (default http-client); FV_LATEST=1 also tags :<variant>
+# FV_CPU_FEATURES (default http-client); FV_LATEST=1 also tags :<variant>
 # and :<variant>-latest (the `latest` channel, docs/serve/releases.md);
 # FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
 # registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv);
 # FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
-# of build-pod binaries that replace the serve-build / gateway-build stages,
+# of build-pod binaries that replace the serve-build / cpu-build stages,
 # so no cargo compile runs; empty: compile in the image).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,14 +46,14 @@ build() {
     [[ "${FV_LATEST:-0}" == 1 ]] && tags+=",$FV_IMAGE:$v,$FV_IMAGE:$v-latest"
     [[ "$COMPRESSION" == gzip ]] || tags="${tags//:$v-sha-/:$v-$COMPRESSION-sha-}"
     # One registry cache per build graph: the CUDA variants share everything
-    # up to the variant stage (h3-turbo exports it), the gateway has its own.
+    # up to the variant stage (h3-turbo exports it), cpu has its own.
     cache_to=()
     case "$v" in
       h3-turbo) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-variants,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
-      gateway) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-gateway,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
+      cpu) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-cpu,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
     esac
     args=()
-    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-variants" "$FV_IMAGE:buildcache-gateway"; do
+    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-variants" "$FV_IMAGE:buildcache-cpu"; do
       args+=(--cache-from "type=registry,ref=$c")
     done
     while IFS= read -r c; do
@@ -66,7 +66,7 @@ build() {
       --build-arg "FV_GIT_SHA=${GITHUB_SHA:-unknown}" \
       --build-arg "FV_BUILD_TIME=${FV_BUILD_TIME:-}" \
       --build-arg "FV_SERVE_FEATURES=${FV_SERVE_FEATURES:-cuda,http-client}" \
-      --build-arg "FV_GATEWAY_FEATURES=${FV_GATEWAY_FEATURES:-http-client}" \
+      --build-arg "FV_CPU_FEATURES=${FV_CPU_FEATURES:-http-client}" \
       --label "org.opencontainers.image.revision=${GITHUB_SHA:-unknown}" \
       --label "dev.fastvideo.build-id=${FV_BUILD_ID:-unknown}" \
       --label "dev.fastvideo.variant=$v" \
@@ -89,7 +89,7 @@ smoke() {
   docker run --rm "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
   # the baked config parses; CUDA variants have the CUDA libraries, the
-  # gateway none; none has the debug tooling.
+  # cpu image none; none has the debug tooling.
   docker run --rm --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
     for b in /opt/fastvideo-rs/bin/fv-serve /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
@@ -108,10 +108,10 @@ smoke() {
     test -e /opt/fastvideo-rs/scripts && bad "scripts/gpu is in the image"
     test -e /opt/fastvideo-rs/oxide && bad "the oxide directory is in the image"
     ldconfig -p | grep -E "libcupti|libcudnn_adv" && bad "CUPTI / cudnn_adv present"
-    if [ "$V" = gateway ]; then
-      grep -q cuda /opt/fastvideo-rs/bin/fv-serve.features && bad "gateway built with cuda"
-      ldconfig -p | grep -E "libcudnn|libcublas|libnvrtc" && bad "CUDA libraries in the gateway"
-      test -e /usr/local/cuda-13.4 && bad "/usr/local/cuda-13.4 in the gateway"
+    if [ "$V" = cpu ]; then
+      grep -q cuda /opt/fastvideo-rs/bin/fv-serve.features && bad "cpu built with cuda"
+      ldconfig -p | grep -E "libcudnn|libcublas|libnvrtc" && bad "CUDA libraries in the cpu image"
+      test -e /usr/local/cuda-13.4 && bad "/usr/local/cuda-13.4 in the cpu image"
     else
       test "$NVIDIA_DRIVER_CAPABILITIES" = compute,utility,video
       for l in libnvrtc.so.13 libnvrtc.so libcublas.so.13 libcublasLt.so.13 libcublas.so libcudnn.so.9 libcudnn.so \

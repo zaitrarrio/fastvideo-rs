@@ -1,16 +1,16 @@
 // The per-minute cron: one GraphQL call for every pod of the account with
-// its runtime metrics, each controller gateway's admin pools view and
-// whitelisted /metrics, then costs, idle tracking, alerts, the backstops
+// its runtime metrics, the edge's families view (jobs and readiness of every
+// edge front), then costs, idle tracking, alerts, the backstops
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
 import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
 import { collectCloudrift, type CloudriftCollect } from "./collector-cloudrift";
-import { adminGet, edgeCfg, edgeFamilies, edgeWorkers, gatewayPublic } from "./cluster/ops";
+import { edgeCfg, edgeFamilies, edgeWorkers } from "./cluster/ops";
 import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { listClusters, type Cluster } from "./cluster/store";
 import { defaults, type Env } from "./env";
-import { parseProm, writeAccountSample, writePodSamples, writePoolSamples, type PodSample } from "./metrics";
+import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
 import { audit, getSetting, now, putSetting, utcDay } from "./util";
 
@@ -44,7 +44,7 @@ export async function collect(env: Env): Promise<CollectResult> {
   const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url FROM cluster_pods WHERE deleted_at IS NULL").all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null }>();
   const ctl = new Map((rows.results || []).map((r) => [r.pod_id, r]));
 
-  // Jobs per worker from each running gateway (admin pools view), health, whitelisted metrics.
+  // Jobs per worker and health.
   const jobs = new Map<string, { running: number; queued: number; ready: boolean; healthy: boolean; sha?: string }>();
   const health = new Map<string, string>();
   // Edge clusters: each front's jobs from the edge's families view (one read for every edge cluster).
@@ -56,27 +56,6 @@ export async function collect(env: Env): Promise<CollectResult> {
       }
     } catch {
       /* the edge is down: pods keep their Runpod-side health */
-    }
-  }
-  for (const c of clusters) {
-    if (isEdge(c.spec) || !c.state.gateway || c.state.gateway_stopped || !["running", "starting"].includes(c.status)) continue;
-    try {
-      const view = await adminGet(env, c, "/fv/v1/gateway/pools");
-      health.set(c.state.gateway.pod, "ready");
-      const urlToPod = new Map(Object.values(c.state.workers).flat().concat(Object.values(c.state.rolling || {}).flat()).map((r) => [String(r.url || "").replace(/\/$/, ""), r.pod]));
-      for (const p of view.state || [])
-        for (const w of p.workers || []) {
-          const pod = urlToPod.get(String(w.url || "").replace(/\/$/, ""));
-          if (pod) {
-            jobs.set(pod, { running: Number(w.running || 0), queued: Number(w.queued || 0), ready: !!w.ready, healthy: !!w.healthy, sha: w.build?.git_sha });
-            health.set(pod, w.ready ? "ready" : w.healthy ? "loading" : "down");
-          }
-        }
-      const m = await adminGet(env, c, "/metrics").catch(() => "");
-      if (typeof m === "string" && m) writePoolSamples(env, c.id, parseProm(m));
-    } catch {
-      const pub = await gatewayPublic(env, c, "/healthz").catch(() => null);
-      health.set(c.state.gateway.pod, pub && pub.status === 200 ? "ready" : "down");
     }
   }
 
@@ -203,9 +182,9 @@ export async function collect(env: Env): Promise<CollectResult> {
     for (const r of Object.values(c.state.workers).flat().concat(c.state.gateway ? [c.state.gateway] : [])) {
       const h = health.get(r.pod);
       const born = r.created * 1000;
-      if (h === "down" && t - born > pol.pod_down_min * 60_000) alerts.push({ key: `pod_down:${r.pod}`, kind: "pod_down", severity: "warn", target: r.pod, message: `${c.name}: ${r.pool || "gateway"} pod ${r.pod} is not answering` });
+      if (h === "down" && t - born > pol.pod_down_min * 60_000) alerts.push({ key: `pod_down:${r.pod}`, kind: "pod_down", severity: "warn", target: r.pod, message: `${c.name}: ${r.pool || "legacy gateway"} pod ${r.pod} is not answering` });
     }
-    // Backstop: the deadline (the gateway watchdog and this cron both enforce it).
+    // Backstop: the deadline (each edge worker's watchdog and this cron both enforce it).
     const hasPods = !!c.state.gateway || Object.values(c.state.workers).some((l) => l.length);
     if (hasPods && c.deadline) {
       const left = c.deadline - t;

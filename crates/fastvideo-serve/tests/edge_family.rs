@@ -1,6 +1,7 @@
 //! Family Durable Objects (docs/serve/dispatch-do-family.md) on the fake
 //! engine: fake-engine workers that serve several families through one
-//! arbiter, a gateway whose pools name a family, and a native stand-in for
+//! arbiter (one of them also an API front that enqueues on the family
+//! objects, as behind the edge), and a native stand-in for
 //! the family objects (the shared scheduler behind the Worker's routes, with
 //! session admission and direct uploads against a local S3 mock that checks
 //! SigV4 presigned URLs).
@@ -21,12 +22,12 @@
 //! - `tail_upload_overlaps_the_write_and_resends_only_changed_parts`: the
 //!   upload thread sends parts while the file grows; a header patched at the
 //!   end costs part 1 only.
-//! - `a_session_is_admitted_through_the_family_object`: a Reactor session
-//!   through the gateway reserves the GPU on the worker (its batch job waits),
-//!   the signalling goes to the worker's endpoint, stop frees the GPU.
+//!
+//! Session admission through the family objects is tested with the edge in
+//! `tests/edge_front.rs` (the edge admits sessions, not the fronts).
 //!
 //! With `FV_EDGE_URL` + `FV_EDGE_TOKEN` (the Worker's internal token) the
-//! burst, direct-upload and session tests run against a real dispatcher
+//! burst and direct-upload tests run against a real dispatcher
 //! (staging) instead of the stand-in, under per-run family names; the
 //! direct-upload test then reads the object back through `/dl` with
 //! `FV_EDGE_UPLOAD_KEY`. The tests that need the stand-in's internals skip.
@@ -40,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fastvideo_dispatch_proto::{FamilyMetrics, PoolStatus};
-use fastvideo_serve::config::{Config, DispatchMode, EngineBackendKind, JobBackend, KeyStoreBackend, PoolCfg, PoolKind, Role};
+use fastvideo_serve::config::{Config, JobBackend, KeyStoreBackend, Role};
 use fastvideo_serve::{App, Overrides};
 use fastvideo_serve_kit::d1::client::{D1Error, D1Transport, RawReply};
 use fastvideo_serve_kit::d1::mock::MockD1;
@@ -613,10 +614,11 @@ impl Env {
         let run = format!("{:x}", now() % 0xff_ffff);
         if let Some(base) = std::env::var("FV_EDGE_URL").ok().filter(|s| !s.is_empty()) {
             let token = std::env::var("FV_EDGE_TOKEN").expect("FV_EDGE_TOKEN with FV_EDGE_URL");
-            return Self { mock: MockD1::new(), arts, s3, native: None, base: base.trim_end_matches('/').to_owned(), token, run, http: Http::new() };
+            let http = Http::new(&token);
+            return Self { mock: MockD1::new(), arts, s3, native: None, base: base.trim_end_matches('/').to_owned(), token, run, http };
         }
         let (d, base) = family_do::FamilyDo::start(cfg, client).await;
-        Self { mock: MockD1::new(), arts, s3, native: Some(d), base, token: TOKEN.to_owned(), run, http: Http::new() }
+        Self { mock: MockD1::new(), arts, s3, native: Some(d), base, token: TOKEN.to_owned(), run, http: Http::new(TOKEN) }
     }
     fn external(&self) -> bool {
         self.native.is_none()
@@ -719,27 +721,36 @@ impl Env {
         self.serve(c).await
     }
 
-    /// A gateway with one durable-object pool per (pool, family, models).
-    async fn gateway(&self, pools: &[(&str, &str, &[&str])]) -> Running {
-        let mut c = self.base_config("gw");
-        c.engine.backend = EngineBackendKind::Remote;
-        c.pools = pools
-            .iter()
-            .map(|(id, family, models)| PoolCfg {
-                id: (*id).into(),
-                kind: PoolKind::Pod,
-                fake_models: models.iter().map(|m| m.to_string()).collect(),
-                stale_after_s: 3,
-                retries: 1,
-                dispatch: DispatchMode::DurableObject,
-                do_url: Some(self.base.clone()),
-                family: Some(self.fam(family)),
-                ..PoolCfg::default()
-            })
-            .collect();
-        c.gateway.tick_s = 1;
+    /// A worker that is also an API front: it serves `families` like
+    /// [`Env::worker`] and enqueues every submit on its model's family
+    /// object (docs/serve/edge-control-plane.md §2.4), as the retired
+    /// gateway did. Requests to it carry the edge's headers ([`Http`]).
+    async fn front(&self, tag: &str, families: &[&str], models: &[&str], step_ms: u64, direct: bool) -> Running {
+        let mut c = self.base_config(tag);
+        c.server.role = Role::Worker;
+        c.server.worker_id = Some(format!("worker-{tag}"));
+        c.engine.fake.models = models.iter().map(|m| m.to_string()).collect();
+        c.engine.fake.step_ms = step_ms;
+        c.dispatch.do_url = Some(self.base.clone());
+        c.dispatch.families = families.iter().map(|f| self.fam(f)).collect();
+        c.dispatch.model_families = models.iter().map(|m| (m.to_string(), self.fam(family_of(m)))).collect();
+        c.dispatch.capacity = 1;
+        c.dispatch.sessions = 1;
+        c.dispatch.status_s = 2;
+        c.dispatch.direct_upload = direct;
+        c.dispatch.front = true;
         c.gateway.watch_poll_ms = 100;
         self.serve(c).await
+    }
+}
+
+/// The family of a fake model (`fake-h3-turbo` → `h3`).
+fn family_of(model: &str) -> &'static str {
+    match model {
+        m if m.starts_with("fake-h3") => "h3",
+        m if m.starts_with("fake-ltx") => "ltx",
+        "fake-sfwan" => "sfwan",
+        _ => "wan",
     }
 }
 
@@ -759,14 +770,23 @@ impl Running {
     }
 }
 
-struct Http(reqwest::Client);
+/// A client of the fronts: it sends what the edge forwards (the internal
+/// token and the edge's verdict for the test key).
+struct Http(reqwest::Client, String, String);
 
 impl Http {
-    fn new() -> Self {
-        Self(reqwest::Client::builder().no_proxy().build().unwrap())
+    fn new(token: &str) -> Self {
+        use fastvideo_dispatch_proto::front::{key_digest, key_id, Verdict};
+        let v = Verdict { v: 1, key: Some(key_id(&key_digest(KEY))), presented: true, valid: true, scheme: Some("bearer".into()), deny: None };
+        Self(reqwest::Client::builder().no_proxy().build().unwrap(), token.to_owned(), v.header())
     }
     async fn call(&self, method: &str, url: &str, body: Option<Value>) -> (u16, Value) {
-        let mut r = self.0.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url).header("authorization", format!("Bearer {KEY}"));
+        let mut r = self
+            .0
+            .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url)
+            .header("authorization", format!("Bearer {KEY}"))
+            .header("x-fv-internal-token", &self.1)
+            .header(fastvideo_dispatch_proto::front::EDGE_AUTH_HEADER, &self.2);
         if let Some(b) = body {
             r = r.json(&b);
         }
@@ -796,17 +816,10 @@ impl Http {
     }
 }
 
-/// Waits until the gateway sees every pool available.
-async fn available(http: &Http, g: &str, n: usize) {
-    let t0 = Instant::now();
-    loop {
-        let (_, v) = http.call("GET", &format!("{g}/fv/v1/status"), None).await;
-        if v["pools"].as_array().is_some_and(|a| a.iter().filter(|p| p["available"] == true).count() >= n) {
-            return;
-        }
-        assert!(t0.elapsed() < Duration::from_secs(20), "pools never available: {v}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+/// Whether `job` (an external id) went through `family`'s object (the stand-in's view).
+fn in_family(e: &Env, family: &str, id: &str) -> bool {
+    let jid = e.job(id).id.to_string();
+    e.d().with(&format!("family:{family}"), |s| (s.job(&jid).is_some(), Vec::new()))
 }
 
 // ----------------------------------------------------------------- tests
@@ -816,13 +829,11 @@ async fn multi_family_worker_never_holds_two_jobs() {
     init_log();
     let e = Env::new().await;
     let models: &[&str] = &["fake-h3-turbo", "fake-ltx-turbo"];
-    let a = e.worker("a", &["h3", "ltx"], models, 20, false).await;
+    let a = e.front("a", &["h3", "ltx"], models, 20, false).await;
     let b = e.worker("b", &["h3", "ltx"], models, 20, false).await;
     e.connected("h3", 2).await;
     e.connected("ltx", 2).await;
-    let gw = e.gateway(&[("p-h3", "h3", &["fake-h3-turbo"]), ("p-ltx", "ltx", &["fake-ltx-turbo"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 2).await;
+    let g = a.base.clone();
 
     // A burst on both families at once.
     let subs = (0..12).map(|i| {
@@ -837,10 +848,10 @@ async fn multi_family_worker_never_holds_two_jobs() {
         let j = e.job(id);
         let (s, c) = (j.started_at.unwrap().unix_timestamp_nanos(), j.completed_at.unwrap().unix_timestamp_nanos());
         spans.entry(e.worker_of(id)).or_default().push((s, c));
-        // Each job went through its own family's pool (and object).
-        let want = if i % 2 == 0 { "p-h3" } else { "p-ltx" };
-        let row = e.mock.sql("SELECT d.pool AS pool FROM gw_dispatch d JOIN jobs j ON j.id = d.job_id WHERE j.external_id = ?", &[json!(id)]).unwrap();
-        assert_eq!(row[0]["pool"], want, "{v}");
+        // Each job went through its own family's object.
+        if !e.external() {
+            assert!(in_family(&e, if i % 2 == 0 { "h3" } else { "ltx" }, id), "{v}");
+        }
     }
     // Each worker ran its jobs one after another: its one slot was never
     // given to two families at once.
@@ -859,7 +870,7 @@ async fn multi_family_worker_never_holds_two_jobs() {
     eprintln!("FAMILY-BURST: queue s {:?}", q.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>());
     let m = e.metrics("h3").await;
     assert_eq!((m.queued, m.running, m.workers), (0, 0, 2), "{m:?}");
-    drop((a, b, gw));
+    drop((a, b));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
@@ -871,13 +882,11 @@ async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
         return;
     }
     // a serves h3 and ltx; b serves ltx only.
-    let a = e.worker("a", &["h3", "ltx"], &["fake-h3-turbo", "fake-ltx-turbo"], 400, false).await;
+    let a = e.front("a", &["h3", "ltx"], &["fake-h3-turbo", "fake-ltx-turbo"], 400, false).await;
     let b = e.worker("b", &["ltx"], &["fake-ltx-turbo"], 20, false).await;
     e.connected("h3", 1).await;
     e.connected("ltx", 2).await;
-    let gw = e.gateway(&[("p-h3", "h3", &["fake-h3-turbo"]), ("p-ltx", "ltx", &["fake-ltx-turbo"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 2).await;
+    let g = a.base.clone();
     // a's GPU is busy with an h3 job.
     let h = e.http.submit(&g, "fake-h3-turbo", "long").await;
     e.http.wait(&g, &h, |v| v["status"] == "running", Duration::from_secs(30)).await;
@@ -896,7 +905,7 @@ async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
     assert!(queue < 1.0, "no backoff after an arbiter nack: {queue}");
     let hv = e.http.finished(&g, &h).await;
     assert_eq!(hv["status"], "succeeded");
-    drop((a, b, gw));
+    drop((a, b));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
@@ -929,9 +938,14 @@ async fn a_missed_ack_requeues_to_another_worker() {
         }
     });
     e.connected("wan", 1).await;
-    let gw = e.gateway(&[("p-wan", "wan", &["fake-wan"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 1).await;
+    // The front ("zz-front", after the silent worker in the object's order)
+    // drains itself: it submits but takes no job, so the silent worker gets
+    // the offer.
+    let f = e.front("zz-front", &["wan"], &["fake-wan"], 5, false).await;
+    e.connected("wan", 2).await;
+    let (s, _) = e.http.call("POST", &format!("{}/fv/v1/internal/drain", f.base), None).await;
+    assert_eq!(s, 200);
+    let g = f.base.clone();
     let id = e.http.submit(&g, "fake-wan", "acked late").await;
     // The silent worker got the offer; nobody else is there yet.
     let t0 = Instant::now();
@@ -947,7 +961,7 @@ async fn a_missed_ack_requeues_to_another_worker() {
     eprintln!("FAMILY-ACK-TIMEOUT: requeued after the ack deadline; workers {:?}", st.workers.iter().map(|w| (&w.worker_id, w.held)).collect::<Vec<_>>());
     assert_eq!(e.d().inner.lock().unwrap().offers[&e.job(&id).id.to_string()], 2, "offered twice (the second under a new lease)");
     silent.abort();
-    drop((b, gw));
+    drop((b, f));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -958,12 +972,10 @@ async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
         eprintln!("skipped: needs the native stand-in");
         return;
     }
-    let a = e.worker("a", &["wan"], &["fake-wan"], 150, false).await;
+    let a = e.front("a", &["wan"], &["fake-wan"], 150, false).await;
     let b = e.worker("b", &["wan"], &["fake-wan"], 150, false).await;
     e.connected("wan", 2).await;
-    let gw = e.gateway(&[("p-wan", "wan", &["fake-wan"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 1).await;
+    let g = a.base.clone();
     let mut ids = Vec::new();
     for i in 0..4 {
         ids.push(e.http.submit(&g, "fake-wan", &format!("deploy {i}")).await);
@@ -991,18 +1003,16 @@ async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
     }
     let st = e.status("wan").await;
     assert!(st.failed.is_empty(), "{:?}", st.failed);
-    drop((a, b, gw));
+    drop((a, b));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn direct_upload_commits_through_the_family_object() {
     init_log();
     let e = Env::new().await;
-    let w = e.worker("up", &["wan"], &["fake-wan"], 5, true).await;
+    let w = e.front("up", &["wan"], &["fake-wan"], 5, true).await;
     e.connected("wan", 1).await;
-    let gw = e.gateway(&[("p-wan", "wan", &["fake-wan"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 1).await;
+    let g = w.base.clone();
     let id = e.http.submit(&g, "fake-wan", "direct upload").await;
     let v = e.http.finished(&g, &id).await;
     assert_eq!(v["status"], "succeeded", "{v}");
@@ -1018,7 +1028,7 @@ async fn direct_upload_commits_through_the_family_object() {
         let body = e.http.0.get(url).send().await.unwrap().bytes().await.unwrap();
         assert_eq!(body.len() as u64, art.bytes, "the object in R2");
         eprintln!("FAMILY-UPLOAD: {bucket}/{key} {} bytes, sha256 {}", body.len(), fastvideo_dispatch_proto::presign::sha256_hex(&body));
-        drop((w, gw));
+        drop(w);
         return;
     }
     assert_eq!(bucket, BUCKET);
@@ -1043,7 +1053,7 @@ async fn direct_upload_commits_through_the_family_object() {
         assert!(t0.elapsed() < Duration::from_secs(10), "an upload stayed open");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    drop((w, gw));
+    drop(w);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1124,47 +1134,4 @@ async fn tail_upload_overlaps_the_write_and_resends_only_changed_parts() {
     }
     assert!(c.stats.bytes_early >= 5 * part, "most parts went while the file grew: {:?}", c.stats);
     assert_eq!(c.stats.bytes_resent, part);
-}
-
-#[cfg(feature = "reactor")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn a_session_is_admitted_through_the_family_object() {
-    init_log();
-    let e = Env::new().await;
-    // One GPU: Reactor sessions (sfwan) and batch jobs (wan) share its slot.
-    let w = e.worker("rt", &["sfwan", "wan"], &["fake-sfwan", "fake-wan"], 5, false).await;
-    e.connected("sfwan", 1).await;
-    e.connected("wan", 1).await;
-    let gw = e.gateway(&[("sfwan-live", "sfwan", &["fake-sfwan"]), ("p-wan", "wan", &["fake-wan"])]).await;
-    let g = gw.base.clone();
-    available(&e.http, &g, 2).await;
-
-    let t0 = Instant::now();
-    let (s, v) = e.http.call("POST", &format!("{g}/start_session"), Some(json!({}))).await;
-    assert_eq!(s, 200, "{v}");
-    eprintln!("FAMILY-SESSION: admitted and started in {:.3} s", t0.elapsed().as_secs_f64());
-    let st = e.status("sfwan").await;
-    assert_eq!(st.sessions.len(), 1, "{st:?}");
-    assert_eq!((st.sessions[0].state.as_str(), st.sessions[0].worker.as_deref()), ("live", Some("worker-rt")));
-    let rows = e.mock.sql("SELECT target, body, state FROM gw_sessions WHERE kind = 'reactor'", &[]).unwrap();
-    assert_eq!(rows[0]["target"], w.base.as_str(), "signalling goes to the worker's endpoint");
-    assert!(rows[0]["body"].as_str().unwrap().contains(&st.sessions[0].session_id));
-    // While the session holds the GPU, a batch job waits.
-    let j = e.http.submit(&g, "fake-wan", "after the session").await;
-    tokio::time::sleep(Duration::from_millis(1_500)).await;
-    let (_, jv) = e.http.call("GET", &format!("{g}/fv/v1/jobs/{j}"), None).await;
-    assert_eq!(jv["status"], "queued", "the GPU is the session's: {jv}");
-    // A second session finds no slot.
-    let sec = e.http.0.post(format!("{}/families/{}/sessions", e.base, e.fam("sfwan"))).header("x-fv-internal-token", &e.token).json(&json!({"kind": "reactor"})).send().await.unwrap();
-    assert_eq!(sec.status().as_u16(), 429);
-    // The gateway renews the lease from its tick (TTL 60 s here; just check it lives on).
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
-    assert_eq!(e.status("sfwan").await.sessions.len(), 1);
-    // Stop: the lease ends on both sides and the job runs.
-    let (s, _) = e.http.call("POST", &format!("{g}/stop_session"), Some(json!({"reason": "done"}))).await;
-    assert_eq!(s, 200);
-    let jv = e.http.finished(&g, &j).await;
-    assert_eq!(jv["status"], "succeeded", "{jv}");
-    assert!(e.status("sfwan").await.sessions.is_empty());
-    drop((w, gw));
 }

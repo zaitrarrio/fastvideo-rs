@@ -13,7 +13,7 @@
 #                  builder there, so no AOT/oxide cubins (binary)          fv-gpucheck, .build-id
 #   hf-fm          cargo install hf-fetch-model --features cli (hf-fm)     out/hf-fm, out/hf-fetch-model
 #   serve-cuda     fv-serve --features $FV_SERVE_FEATURES (serve-build)    out/fv-serve, out/fv-serve.features
-#   serve-gateway  fv-serve --features $FV_GATEWAY_FEATURES (gateway-build) out/fv-serve, out/fv-serve.features
+#   serve-cpu      fv-serve --features $FV_CPU_FEATURES (cpu-build)     out/fv-serve, out/fv-serve.features
 #   serve-fake     serve-compat.yml's debug fv-serve --features fake,full  fv-serve
 #   gpucheck-tests gpucheck-t0.yml's `cargo test -p fastvideo-gpucheck
 #                  -p fastvideo-cudarc --lib --bins`, --no-run            tests.tsv, bin/*
@@ -35,17 +35,17 @@
 # Env (set by build-pod.sh): FV_REL_SHA, FV_GIT_SHA, FV_BUILD_TIME, FV_BUILD_ID
 # (scripts/gpu/docker.sh build-id at that commit), FV_REL_RUN_ID; optional
 # FV_REL_SETS (space list, default all), FV_SERVE_FEATURES (cuda,http-client),
-# FV_GATEWAY_FEATURES (http-client), FV_REL_MAX_GLIBC (2.35).
+# FV_CPU_FEATURES (http-client), FV_REL_MAX_GLIBC (2.35).
 set -euo pipefail
 
 log() { printf '[rel %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
 : "${FV_REL_SHA:?FV_REL_SHA}" "${FV_BUILD_ID:?FV_BUILD_ID}" "${FV_GIT_SHA:?FV_GIT_SHA}" "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR}" "${CUDA_HOME:?CUDA_HOME}"
 [[ "$FV_REL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "FV_REL_SHA must be a full sha"
-ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-gateway serve-fake gpucheck-tests"
+ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cpu serve-fake gpucheck-tests"
 SETS=" ${FV_REL_SETS:-$ALL_SETS} "
 SERVE_FEATURES="${FV_SERVE_FEATURES:-cuda,http-client}"
-GATEWAY_FEATURES="${FV_GATEWAY_FEATURES:-http-client}"
+CPU_FEATURES="${FV_CPU_FEATURES:-http-client}"
 MAX_GLIBC="${FV_REL_MAX_GLIBC:-2.35}"
 SRC="$PWD"
 T="$CARGO_TARGET_DIR"
@@ -142,7 +142,7 @@ build_oxide() {
   cat "$STAGE/oxide/out/oxide/manifest.tsv" >&2
 }
 
-# The `build` stage's ENV, inherited by serve-build and gateway-build.
+# The `build` stage's ENV, inherited by serve-build and cpu-build.
 with_oxide() { FV_OXIDE_CUBIN_DIR="$OXIDE_DIR" FV_REQUIRE_OXIDE=100,120 "$@"; }
 
 build_gpucheck() {
@@ -255,10 +255,10 @@ check_glibc() {
 
 # ---- build ------------------------------------------------------------------
 OXIDE_DIR=""; OXIDE_KEY=""; HF_FM_VERSION=""
-if want oxide || want gpucheck || want serve-cuda || want serve-gateway; then build_oxide; fi
+if want oxide || want gpucheck || want serve-cuda || want serve-cpu; then build_oxide; fi
 want gpucheck && build_gpucheck
 want serve-cuda && build_serve serve-cuda "$SERVE_FEATURES"
-want serve-gateway && build_serve serve-gateway "$GATEWAY_FEATURES"
+want serve-cpu && build_serve serve-cpu "$CPU_FEATURES"
 want serve-fake && build_serve_fake
 want gpucheck-tests && build_gpucheck_tests
 want gpucheck-vast && build_gpucheck_vast
@@ -277,7 +277,7 @@ for d in "$STAGE"/*/; do
     | jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: {sha256: .[1], size: (.[2]|tonumber), mode: .[3]}}) | from_entries')"
   feats=""
   case "$set" in
-    serve-cuda) feats="$SERVE_FEATURES" ;; serve-gateway) feats="$GATEWAY_FEATURES" ;;
+    serve-cuda) feats="$SERVE_FEATURES" ;; serve-cpu) feats="$CPU_FEATURES" ;;
     serve-fake) feats="fake,full" ;; gpucheck|gpucheck-vast) feats="cuda" ;; hf-fm) feats="cli" ;;
   esac
   needed="$(while IFS= read -r -d '' f; do

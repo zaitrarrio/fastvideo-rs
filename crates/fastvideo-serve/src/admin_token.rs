@@ -19,7 +19,7 @@
 //! `k = SHA-512("fv-admin-token-v1" ‖ s ‖ epk ‖ recipient)`; `ct` =
 //! AES-256-CTR(`k[0..32]`, `iv`) of the token; `tag` =
 //! HMAC-SHA256(`k[32..64]`, `iv ‖ ct`). Everything a stock `openssl` CLI can
-//! open (`scripts/serve/runpod-cluster.sh admin-token`).
+//! open (fv-control).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

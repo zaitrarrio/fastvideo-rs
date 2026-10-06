@@ -11,16 +11,14 @@
 #   fv-control.sh price|start|stop <name>
 #   fv-control.sh extend <name> <minutes>
 #   fv-control.sh scale <name> <pool> <count>
-#   fv-control.sh roll <name> <channel|sha|image> [--gateway]
+#   fv-control.sh roll <name> <channel|sha|image>
 #   fv-control.sh restart <name>               rolling restart of the pods whose env changed
-#   fv-control.sh gateway-start|gateway-stop <name>
 #   fv-control.sh wait <name>                  until the running operation ends; prints its log
 #   fv-control.sh env <account|cluster <name>|pod <id>>            list
 #   fv-control.sh env-set <account|cluster <name>|pod <id>> KEY VALUE [--secret]
 #   fv-control.sh env-unset <account|cluster <name>|pod <id>> KEY
 #   fv-control.sh effective-env <name>         per pod, masked; which pods need a restart
 #   fv-control.sh logs <pod> [search] [level]
-#   fv-control.sh import <cluster.json> [admin-key.pem] [name]
 #   fv-control.sh promote <sha> [channel] [--dry-run] | rollback [channel] [--dry-run]
 #   fv-control.sh api <METHOD> <path> [json]  anything else
 #   fv-control.sh deploy staging               build, migrate and deploy the Worker (wrangler)
@@ -63,10 +61,9 @@ case "$cmd" in
     else api POST /api/clusters "$(jq -c '{spec: .}' "${1:?spec.json}")"; fi | jq .cluster.id ;;
   price) api POST "/api/clusters/${1:?name}/price" '{}' | jq . ;;
   start | stop | restart) api POST "/api/clusters/${1:?name}/$cmd" '{}' | jq -c . ;;
-  gateway-start | gateway-stop) api POST "/api/clusters/${1:?name}/gateway/${cmd#gateway-}" '{}' | jq -c . ;;
   extend) api POST "/api/clusters/${1:?name}/extend" "$(jq -nc --argjson m "${2:?minutes}" '{minutes: $m}')" | jq -c . ;;
   scale) api POST "/api/clusters/${1:?name}/scale" "$(jq -nc --arg p "${2:?pool}" --argjson n "${3:?count}" '{pool: $p, count: $n}')" | jq -c . ;;
-  roll) api POST "/api/clusters/${1:?name}/roll" "$(jq -nc --arg t "${2:?target}" --argjson g "$([[ "${3:-}" == --gateway ]] && echo true || echo false)" '{target: $t, gateway: $g}')" | jq -c . ;;
+  roll) api POST "/api/clusters/${1:?name}/roll" "$(jq -nc --arg t "${2:?target}" '{target: $t}')" | jq -c . ;;
   wait)
     while :; do
       op="$(api GET "/api/clusters/${1:?name}/ops" | jq -c '.operations[0]')"
@@ -85,9 +82,6 @@ case "$cmd" in
   logs)
     q="pod=${1:?pod}&level=${3:-info}&limit=500"; [[ -n "${2:-}" ]] && q+="&q=$(jq -rn --arg s "$2" '$s|@uri')"
     api GET "/api/logs?$q" | jq -r '.lines[] | "\(.ts / 1000 | todate) \(.level | ascii_upcase) \(.target // ""): \(.msg) \(.fields // {} | tojson)"' ;;
-  import)
-    body="$(jq -nc --slurpfile s "${1:?cluster.json}" --arg pem "$([[ -n "${2:-}" ]] && cat "$2")" --arg n "${3:-}" '{state: $s[0]} + (if $pem != "" then {admin_key_pem: $pem} else {} end) + (if $n != "" then {name: $n} else {} end)')"
-    api POST /api/clusters/import "$body" | jq '{id: .cluster.id, name: .cluster.name, note}' ;;
   promote) api POST /api/github/release "$(jq -nc --arg t "${1:?sha}" --arg c "${2:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "promote", target: $t, channel: $c, dry_run: $d}')" | jq . ;;
   rollback) api POST /api/github/release "$(jq -nc --arg c "${1:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "rollback", channel: (if $c == "--dry-run" then "stable" else $c end), dry_run: $d}')" | jq . ;;
   api) api "${1:?METHOD}" "${2:?path}" "${3:-}" ;;

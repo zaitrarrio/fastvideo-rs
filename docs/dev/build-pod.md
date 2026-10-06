@@ -249,7 +249,7 @@ replaces (so GitHub uses the extracted directory as a named build context):
 | `gpucheck-vast` | the same without nvcc and oxide, exactly as `vast-pytorch.Dockerfile` builds it today (its builder's `NVCC=/usr/local/cuda-13.0/bin/nvcc` does not exist, so its binary NVRTC-compiles at run time) | stage `binary` (vast-pytorch.Dockerfile) |
 | `hf-fm` | `cargo install hf-fetch-model --features cli` (unpinned, as in the image; version in the manifest) | stage `hf-fm` (both Dockerfiles) |
 | `serve-cuda` | `cargo build --release -p fastvideo-serve --features cuda,http-client` | stage `serve-build` |
-| `serve-gateway` | `… --features http-client` | stage `gateway-build` |
+| `serve-cpu` | `… --features http-client` (CPU fake-engine worker; named `serve-gateway` before the gateway was retired) | stage `cpu-build` |
 | `serve-fake` | serve-compat's debug `--features fake,full` build, same `--config` opt-levels | serve-compat `build` job |
 | `gpucheck-tests` | `cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins --no-run` + `tests.tsv` | gpucheck-t0 `unit-tests` job |
 

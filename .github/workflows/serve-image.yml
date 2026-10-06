@@ -3,7 +3,7 @@
 #   :latest / :sha-<sha>                 the legacy all-in-one `serve` target (the
 #                                        debug flavour: ssh, rsync, fv-gpucheck, scripts)
 #   :<variant> / :<variant>-sha-<sha>    one slim image per pod variant
-#                                        (h3-turbo h3-max ltx wan wan5b sfwan gateway)
+#                                        (h3-turbo h3-max ltx wan wan5b sfwan cpu)
 # then, on main, records the build as the `latest` release in D1 (with a
 # Cloudflare token secret) and, only when the repository variable
 # FV_TEMPLATE_CHANNEL is `latest`, points the Runpod templates
@@ -22,7 +22,7 @@ on:
       variants:
         description: "variant images to build (space list)"
         required: false
-        default: "h3-turbo h3-max ltx wan wan5b sfwan gateway"
+        default: "h3-turbo h3-max ltx wan wan5b sfwan cpu"
       compression:
         description: "variant layer compression: gzip or zstd (zstd tags get a -zstd- infix)"
         required: false
@@ -85,7 +85,7 @@ jobs:
           echo "build_time=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "features=${{ github.event.inputs.features || 'cuda,http-client' }}" >> "$GITHUB_OUTPUT"
 
-      # Every Rust binary these images carry (fv-serve CUDA + gateway,
+      # Every Rust binary these images carry (fv-serve CUDA + cpu,
       # fv-gpucheck, the oxide cubins, hf-fm), compiled by the build pod
       # (scripts/dev/build-pod.sh release-artifacts) and verified against its
       # manifest. Without them every image compiles as before, with a warning.
@@ -98,8 +98,8 @@ jobs:
           FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
           FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
           FV_PREBUILT_BUILD_ID: ${{ steps.meta.outputs.build_id }}
-          FV_PREBUILT_FEATURES: serve-cuda=${{ steps.meta.outputs.features }} serve-gateway=http-client
-        run: bash scripts/ci/prebuilt.sh fetch "$GITHUB_SHA" oxide gpucheck hf-fm serve-cuda serve-gateway
+          FV_PREBUILT_FEATURES: serve-cuda=${{ steps.meta.outputs.features }} serve-cpu=http-client
+        run: bash scripts/ci/prebuilt.sh fetch "$GITHUB_SHA" oxide gpucheck hf-fm serve-cuda serve-cpu
 
       - name: Free disk space
         if: steps.pre.outputs.ok != 'true'
@@ -193,7 +193,7 @@ jobs:
           FV_COMPRESSION: ${{ github.event.inputs.compression || 'gzip' }}
           FV_CACHE_FROM: ${{ steps.meta.outputs.runtime }}:buildcache ${{ steps.meta.outputs.image }}:buildcache
           FV_BUILD_CONTEXTS: ${{ steps.pre.outputs.contexts }}
-        run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.variants || 'h3-turbo h3-max ltx wan wan5b sfwan gateway' }}
+        run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.variants || 'h3-turbo h3-max ltx wan wan5b sfwan cpu' }}
 
       - name: Smoke-check the variant images (no GPU)
         run: |

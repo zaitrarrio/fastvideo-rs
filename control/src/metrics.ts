@@ -1,47 +1,9 @@
 // Time series (docs/control/README.md "Observability"): per-minute pod
-// samples and gateway pool series go to Workers Analytics Engine
+// samples go to Workers Analytics Engine
 // (dataset fv_control_metrics) when it is bound, else to D1 pod_samples
 // (24 h). Charts read AE through its SQL API (CLOUDFLARE_API_KEY).
 import { defaults, type Env } from "./env";
 import { fetchWithTimeout } from "./util";
-
-/** The only gateway /metrics series the controller keeps. */
-export const PROM_WHITELIST = new Set([
-  "fv_ready",
-  "fv_pool_queued",
-  "fv_pool_running",
-  "fv_pool_workers",
-  "fv_pool_available",
-  "fv_pool_streams",
-  "fv_pool_oldest_queued_seconds",
-  "fv_pool_submitted_total",
-  "fv_gateway_dispatched_total",
-  "fv_gateway_lost_total",
-  "fv_gateway_redispatched_total",
-  "fv_jobs_submitted_total",
-  "fv_jobs_finished_total",
-]);
-
-export interface PromSample {
-  name: string;
-  labels: Record<string, string>;
-  value: number;
-}
-/** Prometheus text exposition, whitelisted series only (no histograms). */
-export function parseProm(text: string, whitelist: Set<string> = PROM_WHITELIST): PromSample[] {
-  const out: PromSample[] = [];
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{([^}]*)\})?\s+([^\s]+)/.exec(line);
-    if (!m || !whitelist.has(m[1]!)) continue;
-    const labels: Record<string, string> = {};
-    if (m[3]) for (const lm of m[3].matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g)) labels[lm[1]!] = lm[2]!.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-    const v = Number(m[4]);
-    if (Number.isFinite(v)) out.push({ name: m[1]!, labels, value: v });
-  }
-  return out;
-}
 
 export interface PodSample {
   at: number;
@@ -81,23 +43,6 @@ export async function writePodSamples(env: Env, samples: PodSample[]): Promise<v
 }
 export function writeAccountSample(env: Env, balance: number, spend: number) {
   env.METRICS?.writeDataPoint({ indexes: ["account"], blobs: ["account"], doubles: [balance, spend] });
-}
-export function writePoolSamples(env: Env, clusterId: string, samples: PromSample[]) {
-  if (!env.METRICS) return;
-  const byPool = new Map<string, Record<string, number>>();
-  for (const s of samples) {
-    const pool = s.labels.pool || "_";
-    const m = byPool.get(pool) || {};
-    m[s.name] = (m[s.name] || 0) + s.value;
-    byPool.set(pool, m);
-  }
-  for (const [pool, m] of byPool) {
-    env.METRICS.writeDataPoint({
-      indexes: [`${clusterId}:${pool}`],
-      blobs: ["pool", clusterId, pool],
-      doubles: [m.fv_pool_queued ?? -1, m.fv_pool_running ?? -1, m.fv_pool_workers ?? -1, m.fv_pool_available ?? -1, m.fv_pool_oldest_queued_seconds ?? -1, m.fv_pool_submitted_total ?? -1, m.fv_gateway_lost_total ?? -1],
-    });
-  }
 }
 
 export interface SeriesPoint {

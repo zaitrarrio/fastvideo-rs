@@ -1501,7 +1501,6 @@ dependencies = [
  "bytes",
  "clap",
  "ctr",
- "fastvideo-autoscale",
  "fastvideo-deploy",
  "fastvideo-dispatch-proto",
  "fastvideo-engine-service",

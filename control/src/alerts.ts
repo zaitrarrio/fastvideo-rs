@@ -37,7 +37,7 @@ export const DEFAULT_POLICIES: Policies = {
     { prefix: "fv-cluster-", owner: "external:runpod-cluster.sh" },
     { prefix: "fv-b200", owner: "external:b200-bench" },
     { prefix: "fv-serve-", owner: "external:fv-serve-deploys" },
-    { prefix: "fv-gw-", owner: "external:runpod-gateway.sh" },
+    { prefix: "fv-gw-", owner: "external:gateway-retired" },
     { prefix: "fv-edge", owner: "external:edge" },
     { prefix: "loom-", owner: "external:loom" },
   ],

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { EDGE_WORKER_BOOT, isDirect, isReserved, WORKER_BOOT, workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { edgeWorkers } from "../../src/cluster/ops";
 import { defaultSpec, isEdge, modelFamily, normalizeSpec, poolModelFamilies, presetPool } from "../../src/cluster/spec";
+void defaultSpec;
 
 const EDGE = { url: "https://fv-edge-staging.example.workers.dev", internal_token: "edge-it", admin_token: "fvadm_edge", d1_database_id: "d1-edge" };
 const edgeSpec = (template = "standard") => normalizeSpec({ name: "e1", template, control_plane: "edge" });
@@ -23,13 +24,10 @@ const ctx = (over: Partial<EnvCtx> = {}): EnvCtx => ({
 });
 
 describe("spec", () => {
-  it("control_plane defaults to gateway; edge turns the gateway pod off", () => {
-    expect(normalizeSpec({ name: "g1" }).control_plane).toBe("gateway");
-    expect(normalizeSpec({ name: "g1" }).gateway.enabled).toBe(true);
-    const s = edgeSpec();
-    expect(isEdge(s)).toBe(true);
-    expect(s.gateway.enabled).toBe(false);
-    expect(normalizeSpec({ name: "e2", control_plane: "edge", gateway: { enabled: true } }).gateway.enabled).toBe(false);
+  it("control_plane defaults to edge; direct is the other mode", () => {
+    expect(normalizeSpec({ name: "g1" }).control_plane).toBe("edge");
+    expect(isEdge(edgeSpec())).toBe(true);
+    expect(isEdge(normalizeSpec({ name: "d1", control_plane: "direct" }))).toBe(false);
     expect(() => normalizeSpec({ name: "e3", control_plane: "both" })).toThrow(/control_plane/);
     expect(() => normalizeSpec({ name: "e4", control_plane: "edge", pools: [{ ...presetPool("ltx"), family: "Bad" }] })).toThrow();
   });
@@ -81,11 +79,12 @@ describe("worker env", () => {
     expect(() => workerSystemEnv(ctx({ edge: undefined }), h3, "img")).toThrow(/EDGE_URL/);
     for (const k of ["FV_DISPATCH_FRONT", "FV_DISPATCH_DO_URL", "FV_DISPATCH_FAMILIES", "FV_DISPATCH_MODEL_FAMILIES", "FV_DISPATCH_ENDPOINT"]) expect(isReserved(k)).toBe(true);
   });
-  it("a gateway cluster's workers are unchanged", () => {
-    const spec = defaultSpec("g");
-    const e = workerSystemEnv({ ...ctx(), spec, state: { images: {}, workers: {}, gateway_url: "https://gw" } }, spec.pools[0]!, "img");
+  it("a direct cluster's workers run the plain boot and their own client auth", () => {
+    const spec = normalizeSpec({ name: "d", control_plane: "direct" });
+    const e = workerSystemEnv({ ...ctx(), spec, secrets: { internal_token: "cluster-it", url_signing_key: "us", admin_token: "fvadm_c" } }, spec.pools[0]!, "img");
     expect(e.FV_DISPATCH_FRONT).toBeUndefined();
     expect(e.FV_INTERNAL_TOKEN).toBe("cluster-it");
+    expect(e.FV_WORKER_DIRECT).toBe("1");
     expect(e.FV_R2_BUCKET).toBeDefined();
     const pl = workerPlacements(spec, spec.pools[0]!)[0]!;
     expect(workerCreatePayload("n", "img", spec.pools[0]!, pl, e).dockerStartCmd).toEqual([WORKER_BOOT]);
