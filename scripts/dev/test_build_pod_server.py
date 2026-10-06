@@ -9,6 +9,9 @@ Eviction and disk-full handling: the Evictor against a fake filesystem and
 clock (idle and LRU passes, busy agents, the release agent's hold); LocalFS,
 job start and the HTTP 507 path against a temp dir.
 
+apt: the setup's installs run under one lock, repair dpkg and retry after a
+failure, and clear the image's docker-clean hooks (a fake runner, temp paths).
+
 Standard library only:
 
     python3 scripts/dev/test_build_pod_server.py
@@ -618,6 +621,84 @@ class HttpDiskFullTest(unittest.TestCase):
         self.assertEqual(body["eviction"]["free_gb_floor"], 40)
         self.assertEqual((body["eviction"]["protect"], body["eviction"]["hold_min"]), (["fv-release"], 60))
         self.assertIsInstance(body["agents"], list)
+
+
+
+class AptTest(unittest.TestCase):
+    """The extras install failed when another apt deleted its .debs mid-unpack
+    (docker-clean); installs are locked, repaired and retried."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(dir=TMP)
+        os.makedirs(os.path.join(self.dir, "apt.conf.d"))
+        self.saved = (bps.APT_LOCK, bps.APT_KEEP_DEBS)
+        bps.APT_LOCK = os.path.join(self.dir, "lock", "fv-apt.lock")
+        bps.APT_KEEP_DEBS = os.path.join(self.dir, "apt.conf.d", "zz-fv-keep-debs")
+        self.calls = []
+
+    def tearDown(self):
+        bps.APT_LOCK, bps.APT_KEEP_DEBS = self.saved
+
+    def runner(self, fail_installs):
+        left = [fail_installs]
+
+        def run(cmd, env=None):
+            self.calls.append(cmd)
+            if "install" in cmd and "-f" not in cmd and left[0] > 0:
+                left[0] -= 1
+                raise RuntimeError("apt-get install -y exited 100: E: Sub-process /usr/bin/dpkg returned an error code (1)")
+        return run
+
+    def test_a_failed_install_is_repaired_and_retried(self):
+        bps.apt_install(["ffmpeg"], {}, run=self.runner(1), pause=lambda s: None)
+        names = [" ".join(c[:1] + [a for a in c[1:] if not a.startswith(("-o", "DPkg"))]) for c in self.calls]
+        self.assertEqual(names, [
+            "apt-get update -qq",
+            "apt-get install -y -qq --no-install-recommends ffmpeg",
+            "dpkg --configure -a",
+            "apt-get -f install -y -qq",
+            "apt-get update -qq",
+            "apt-get install -y -qq --no-install-recommends ffmpeg",
+            "apt-get clean",
+        ])
+        self.assertIn("DPkg::Lock::Timeout=600", self.calls[1])
+
+    def test_gives_up_after_the_tries(self):
+        with self.assertRaises(RuntimeError):
+            bps.apt_install(["ffmpeg"], {}, run=self.runner(99), pause=lambda s: None)
+        installs = [c for c in self.calls if "install" in c and "-f" not in c]
+        self.assertEqual(len(installs), bps.APT_TRIES)
+
+    def test_docker_clean_hooks_are_cleared_once(self):
+        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)
+        with open(bps.APT_KEEP_DEBS) as f:
+            conf = f.read()
+        self.assertIn("#clear DPkg::Post-Invoke;", conf)
+        self.assertIn("#clear APT::Update::Post-Invoke;", conf)
+        self.assertEqual(os.listdir(os.path.dirname(bps.APT_KEEP_DEBS)), ["zz-fv-keep-debs"])
+        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)  # idempotent
+
+    def test_installs_are_serialized(self):
+        import fcntl
+        order = []
+        bps.apt_install(["jq"], {}, run=self.runner(0), pause=lambda s: None)  # creates the lock file
+        fd = os.open(bps.APT_LOCK, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)  # another apt (release-artifacts-pod.sh's flock)
+        t = threading.Thread(target=lambda: (bps.apt_install(["ffmpeg"], {}, run=lambda c, env=None: order.append("server"),
+                                                             pause=lambda s: None)))
+        t.start()
+        time.sleep(0.3)
+        order.append("other done")
+        os.close(fd)
+        t.join(5)
+        self.assertEqual(order[0], "other done")
+        self.assertIn("server", order[1:])
+
+    def test_sh_reports_dpkgs_first_errors(self):
+        script = "echo \"dpkg: error processing archive x.deb (--unpack):\"; for i in $(seq 200); do echo \" /tmp/apt/$i.deb\"; done; exit 100"
+        with self.assertRaises(RuntimeError) as cm:
+            bps.sh(["bash", "-c", script])
+        self.assertIn("first errors: dpkg: error processing archive x.deb", str(cm.exception))
 
 
 if __name__ == "__main__":

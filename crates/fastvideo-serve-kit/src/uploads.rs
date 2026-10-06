@@ -109,6 +109,19 @@ pub struct UploadStore {
     /// Largest accepted upload (LTX: 200 MB).
     pub max_bytes: u64,
     meta: Mutex<HashMap<String, Meta>>,
+    /// Prepended to new tokens (`{prefix}.{random}`): behind the edge, the
+    /// routing tag of this front (docs/serve/edge-control-plane.md §3.6).
+    prefix: std::sync::RwLock<String>,
+    /// Uploads another front holds (edge mode).
+    remote: std::sync::RwLock<Option<Arc<dyn RemoteUploads>>>,
+}
+
+/// Fetches an upload this process does not hold (another front behind the
+/// same edge issued its ticket).
+#[async_trait::async_trait]
+pub trait RemoteUploads: Send + Sync + 'static {
+    /// Writes the upload `token` to `dst`; returns its size and type.
+    async fn fetch(&self, token: &str, dst: &std::path::Path, max_bytes: u64) -> Result<(u64, Option<String>), String>;
 }
 
 impl std::fmt::Debug for UploadStore {
@@ -143,7 +156,35 @@ impl UploadStore {
             file_ttl: Duration::from_secs(24 * 3600),
             max_bytes: 200 * 1024 * 1024,
             meta: Mutex::new(meta),
+            prefix: std::sync::RwLock::default(),
+            remote: std::sync::RwLock::default(),
         })
+    }
+
+    /// New tokens start with `{prefix}.` (empty: no prefix).
+    pub fn set_token_prefix(&self, prefix: &str) {
+        *self.prefix.write().unwrap_or_else(|p| p.into_inner()) = prefix.to_owned();
+    }
+
+    /// Where uploads this process does not hold come from.
+    pub fn set_remote(&self, r: Arc<dyn RemoteUploads>) {
+        *self.remote.write().unwrap_or_else(|p| p.into_inner()) = Some(r);
+    }
+
+    /// Whether another front behind the same edge issued `token` (it
+    /// carries another `{tag}.` prefix and a remote source is set).
+    pub fn is_remote(&self, token: &str) -> bool {
+        let tagged = token.split_once('.').is_some_and(|(t, r)| t.len() == 8 && t.bytes().all(|b| b.is_ascii_hexdigit()) && !r.is_empty());
+        tagged && self.remote_for(token).is_some()
+    }
+
+    /// The remote source, unless `token` is one of ours.
+    pub fn remote_for(&self, token: &str) -> Option<Arc<dyn RemoteUploads>> {
+        let prefix = self.prefix.read().unwrap_or_else(|p| p.into_inner()).clone();
+        if !prefix.is_empty() && token.starts_with(&format!("{prefix}.")) {
+            return None;
+        }
+        self.remote.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -162,7 +203,8 @@ impl UploadStore {
         content_type: Option<&str>,
         now: OffsetDateTime,
     ) -> std::io::Result<UploadTicket> {
-        let token = crate::random_token();
+        let prefix = self.prefix.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let token = if prefix.is_empty() { crate::random_token() } else { format!("{prefix}.{}", crate::random_token()) };
         let file_name = file_name
             .map(sanitize_name)
             .filter(|n| valid_file_name(n))
