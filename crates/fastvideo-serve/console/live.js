@@ -20,6 +20,7 @@
 //   5. POST /stop_session
 
 import { $, el, base, apiKey, request, setMsg, topbar, loadAuthMode, needsKey } from './common.js';
+import { gathered } from './rtc.js';
 
 topbar('live');
 
@@ -92,16 +93,6 @@ async function media() {
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   $('local').srcObject = stream;
   return stream;
-}
-
-function gathered(pc) {
-  return new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    const t = setTimeout(resolve, 3000);
-    pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
-    });
-  });
 }
 
 function attachRemote(pc) {

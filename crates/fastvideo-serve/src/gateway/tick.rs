@@ -159,6 +159,7 @@ impl Gateway {
             }
         }
         self.expire_leases().await;
+        self.edge_sessions_sync().await;
         let metrics = self.compute_metrics(&counts, now, counted_at).await;
         for s in self.scalers() {
             s.observe(&metrics).await;
@@ -440,6 +441,26 @@ impl Gateway {
         // on stop. Anything idle for 10 min is closed.
         let cutoff_director = now_ms() - 60_000;
         let cutoff_any = now_ms() - 600_000;
+        // Family objects' sessions of the leases about to end: released
+        // there after the update.
+        let ending: Vec<(String, String)> = match self
+            .db
+            .query(Stmt::new(
+                "SELECT pool, body FROM gw_sessions WHERE state = 'live' AND body IS NOT NULL AND ((kind = 'director' AND updated_at < ?) OR updated_at < ?)",
+                vec![json!(cutoff_director), json!(cutoff_any)],
+            ))
+            .await
+        {
+            Ok(r) => r
+                .rows
+                .iter()
+                .filter_map(|r| {
+                    let pool = r.get("pool").and_then(Value::as_str)?.to_owned();
+                    Some((pool, super::edge::do_session_of(r.get("body").and_then(Value::as_str))?))
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
         let _ = self
             .db
             .query(Stmt::new(
@@ -447,8 +468,13 @@ impl Gateway {
                 vec![json!(cutoff_director), json!(cutoff_any)],
             ))
             .await;
-        let mut g = self.leases.lock().unwrap_or_else(|p| p.into_inner());
-        g.retain(|_, l| l.created_at > cutoff_any);
+        {
+            let mut g = self.leases.lock().unwrap_or_else(|p| p.into_inner());
+            g.retain(|_, l| l.created_at > cutoff_any);
+        }
+        for (pool, sid) in ending {
+            self.edge_release(&pool, &sid).await;
+        }
     }
 
     async fn compute_metrics(&self, counts: &BTreeMap<String, (u32, u32, i64)>, now: i64, counted_at: Instant) -> Vec<PoolMetrics> {

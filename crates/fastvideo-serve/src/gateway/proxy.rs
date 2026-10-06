@@ -113,10 +113,10 @@ impl Gateway {
         let r = self
             .db
             .query(Stmt::new(
-                "INSERT INTO gw_sessions (id, pool, kind, target, ref, owner, lease_key, state, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'live', ?, ?) ON CONFLICT(id) DO UPDATE SET pool = excluded.pool, \
+                "INSERT INTO gw_sessions (id, pool, kind, target, ref, owner, lease_key, state, created_at, updated_at, body) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?) ON CONFLICT(id) DO UPDATE SET pool = excluded.pool, \
                  kind = excluded.kind, target = excluded.target, ref = excluded.ref, owner = excluded.owner, \
-                 lease_key = excluded.lease_key, state = 'live', updated_at = excluded.updated_at",
+                 lease_key = excluded.lease_key, state = 'live', updated_at = excluded.updated_at, body = excluded.body",
                 vec![
                     json!(l.id),
                     json!(l.pool),
@@ -127,6 +127,7 @@ impl Gateway {
                     l.lease_key.as_ref().map_or(Value::Null, |v| json!(v)),
                     json!(now),
                     json!(now),
+                    super::edge::do_session_body(l.do_session.as_deref()).map_or(Value::Null, |v| json!(v)),
                 ],
             ))
             .await;
@@ -148,6 +149,7 @@ impl Gateway {
             lease_key: s("lease_key"),
             state: s("state").unwrap_or_default(),
             created_at: r.get("created_at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+            do_session: super::edge::do_session_of(s("body").as_deref()),
         }
     }
 
@@ -174,6 +176,12 @@ impl Gateway {
     }
 
     pub(crate) async fn lease_end(&self, id: &str) {
+        // A family object's session: give the GPU back there too.
+        if let Some(l) = self.lease_get(id).await {
+            if let Some(sid) = &l.do_session {
+                self.edge_release(&l.pool, sid).await;
+            }
+        }
         let _ = self
             .db
             .query(Stmt::new("UPDATE gw_sessions SET state = 'ended', updated_at = ? WHERE id = ?", vec![json!(now_ms()), json!(id)]))
@@ -248,6 +256,67 @@ fn peer_worker_or_503(gw: &Gateway, pool: &Pool, session: bool) -> Result<String
             Some(10),
         )
     })
+}
+
+/// The worker for a new session: admitted by the pool's family object
+/// (it reserves the GPU and returns the worker's endpoint), else the
+/// gateway's own pick. `Err((status, message, retry-after))`.
+async fn session_target(gw: &Gateway, pool: &Pool, kind: &str, owner: Option<&str>) -> Result<(String, Option<String>), (StatusCode, String, Option<u32>)> {
+    if pool.edge_sessions() {
+        let g = gw.edge_admit(pool, kind, None, owner).await.map_err(|e| (StatusCode::from_u16(e.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE), e.message, e.retry_after))?;
+        if g.endpoint.is_empty() {
+            gw.edge_release(pool.id(), &g.session_id).await;
+            return Err((StatusCode::SERVICE_UNAVAILABLE, format!("the worker admitted for pool `{}` announced no public endpoint", pool.id()), Some(10)));
+        }
+        return Ok((g.endpoint.trim_end_matches('/').to_owned(), Some(g.session_id)));
+    }
+    if !pool.is_pod() {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, format!("pool `{}` is a serverless pool: WebRTC peer sessions need a pod pool", pool.id()), None));
+    }
+    gw.pick_session_worker(pool).map(|w| (w, None)).ok_or_else(|| (StatusCode::TOO_MANY_REQUESTS, format!("pool `{}` has no free worker for a session", pool.id()), Some(10)))
+}
+
+/// An SSE session admitted by a family object: its lease is renewed while
+/// the stream is open and released when it closes.
+fn hold_while_streaming(gw: Arc<Gateway>, pool: String, sid: String, resp: Response) -> Response {
+    struct Guard {
+        gw: Arc<Gateway>,
+        pool: String,
+        sid: String,
+        renew: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.renew.abort();
+            let (gw, pool, sid) = (self.gw.clone(), self.pool.clone(), self.sid.clone());
+            tokio::spawn(async move { gw.edge_release(&pool, &sid).await });
+        }
+    }
+    let renew = {
+        let (gw, pool, sid) = (gw.clone(), pool.clone(), sid.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                if !gw.edge_renew(&pool, &sid).await {
+                    break;
+                }
+            }
+        })
+    };
+    let guard = Guard { gw, pool, sid, renew };
+    let (parts, body) = resp.into_parts();
+    let stream = body.into_data_stream().map(move |c| {
+        let _ = &guard;
+        c
+    });
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+/// Gives a session the gateway did not keep back to its family object.
+async fn unadmit(gw: &Gateway, pool: &Pool, sid: &Option<String>) {
+    if let Some(sid) = sid {
+        gw.edge_release(pool.id(), sid).await;
+    }
 }
 
 fn proxy_error(e: String) -> Response {
@@ -332,16 +401,23 @@ async fn wma_session(State(ctx): State<ServeCtx>, axum::Extension(d): Dir, heade
         Ok(p) => p,
         Err(e) => return bridge_error(api_status(&e), e.message, None),
     };
-    let w = match peer_worker_or_503(&d.gw, pool, true) {
-        Ok(w) => w,
-        Err(r) => return r,
+    let (w, dos) = match session_target(&d.gw, pool, "director", owner.as_deref()).await {
+        Ok(x) => x,
+        Err((st, m, ra)) => return bridge_error(st, m, ra),
     };
     let (status, hs, v) = match d.gw.forward_json(Method::POST, &format!("{w}/wma/session"), &headers, raw).await {
         Ok(x) => x,
-        Err(e) => return proxy_error(e),
+        Err(e) => {
+            unadmit(&d.gw, pool, &dos).await;
+            return proxy_error(e);
+        }
     };
+    let sid = v.get("session_id").and_then(Value::as_str).filter(|_| status.is_success());
+    if sid.is_none() {
+        unadmit(&d.gw, pool, &dos).await;
+    }
     if status.is_success() {
-        if let Some(sid) = v.get("session_id").and_then(Value::as_str) {
+        if let Some(sid) = sid {
             d.gw.lease_put(Lease {
                 id: sid.to_owned(),
                 pool: pool.id().to_owned(),
@@ -352,6 +428,7 @@ async fn wma_session(State(ctx): State<ServeCtx>, axum::Extension(d): Dir, heade
                 lease_key: None,
                 state: "live".into(),
                 created_at: now_ms(),
+                do_session: dos.clone(),
             })
             .await;
         }
@@ -396,12 +473,19 @@ async fn start_session(State(ctx): State<ServeCtx>, axum::Extension(d): Dir, hea
         Ok(p) => p,
         Err(e) => return bridge_error(api_status(&e), e.message, None),
     };
-    let w = match peer_worker_or_503(&d.gw, pool, true) {
-        Ok(w) => w,
-        Err(r) => return r,
+    let (w, dos) = match session_target(&d.gw, pool, "director", None).await {
+        Ok(x) => x,
+        Err((st, m, ra)) => return bridge_error(st, m, ra),
     };
     // SSE for the session's life: no timeout.
-    d.gw.forward(Method::POST, &format!("{w}/start-session"), &headers, raw, None).await.unwrap_or_else(proxy_error)
+    let r = d.gw.forward(Method::POST, &format!("{w}/start-session"), &headers, raw, None).await;
+    match (r, dos) {
+        (Ok(resp), Some(sid)) if resp.status().is_success() => hold_while_streaming(d.gw.clone(), pool.id().to_owned(), sid, resp),
+        (r, dos) => {
+            unadmit(&d.gw, pool, &dos).await;
+            r.unwrap_or_else(proxy_error)
+        }
+    }
 }
 
 async fn info(State(ctx): State<ServeCtx>, axum::Extension(d): Dir, method: Method, headers: HeaderMap, raw: Bytes) -> Response {
@@ -490,13 +574,21 @@ async fn rt_start(State(s): State<RtState>, headers: HeaderMap, raw: Bytes) -> R
     if !pool.is_pod() {
         return rt_detail(StatusCode::SERVICE_UNAVAILABLE, format!("pool `{}` is serverless: Reactor sessions need a pod pool", pool.id()), None);
     }
-    let Some(w) = s.gw.pick_session_worker(pool) else {
-        return rt_detail(StatusCode::SERVICE_UNAVAILABLE, format!("pool `{}` has no free worker for a session", pool.id()), Some(10));
+    let owner_key = key.strip_prefix("reactor:").filter(|o| *o != "anon").map(str::to_owned);
+    let (w, dos) = match session_target(&s.gw, pool, "reactor", owner_key.as_deref()).await {
+        Ok(x) => x,
+        Err((_, m, ra)) => return rt_detail(StatusCode::SERVICE_UNAVAILABLE, m, ra),
     };
     let (status, _, v) = match s.gw.forward_json(Method::POST, &format!("{w}/start_session"), &headers, raw).await {
         Ok(x) => x,
-        Err(e) => return proxy_error(e),
+        Err(e) => {
+            unadmit(&s.gw, pool, &dos).await;
+            return proxy_error(e);
+        }
     };
+    if !status.is_success() {
+        unadmit(&s.gw, pool, &dos).await;
+    }
     if status.is_success() {
         let sid = v.get("session_id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let owner = key.strip_prefix("reactor:").filter(|o| *o != "anon").map(str::to_owned);
@@ -512,6 +604,7 @@ async fn rt_start(State(s): State<RtState>, headers: HeaderMap, raw: Bytes) -> R
             lease_key: Some(key),
             state: "live".into(),
             created_at: now_ms(),
+            do_session: dos,
         })
         .await;
     }
@@ -614,15 +707,23 @@ async fn st_create(State(ctx): State<ServeCtx>, axum::Extension(s): Ss, headers:
         return native_error(&ApiError::queue_full(format!("pool `{}` is at its stream limit", pool.id())).with_retry_after(10));
     }
     if pool.is_pod() {
-        let Some(w) = s.gw.pick_session_worker(pool) else {
-            return native_error(&ApiError::queue_full(format!("pool `{}` has no free worker for a stream", pool.id())).with_retry_after(10));
+        let (w, dos) = match session_target(&s.gw, pool, "stream", owner.as_deref()).await {
+            Ok(x) => x,
+            Err((_, m, ra)) => return native_error(&ApiError::queue_full(m).with_retry_after(ra.unwrap_or(10))),
         };
         let (status, hs, v) = match s.gw.forward_json(Method::POST, &format!("{w}/fv/v1/streams"), &headers, raw).await {
             Ok(x) => x,
-            Err(e) => return proxy_error(e),
+            Err(e) => {
+                unadmit(&s.gw, pool, &dos).await;
+                return proxy_error(e);
+            }
         };
+        let id = v.get("id").and_then(Value::as_str).filter(|_| status.is_success());
+        if id.is_none() {
+            unadmit(&s.gw, pool, &dos).await;
+        }
         if status.is_success() {
-            if let Some(id) = v.get("id").and_then(Value::as_str) {
+            if let Some(id) = id {
                 s.gw.lease_put(Lease {
                     id: id.to_owned(),
                     pool: pool.id().to_owned(),
@@ -633,6 +734,7 @@ async fn st_create(State(ctx): State<ServeCtx>, axum::Extension(s): Ss, headers:
                     lease_key: None,
                     state: "live".into(),
                     created_at: now_ms(),
+                    do_session: dos,
                 })
                 .await;
             }
@@ -668,6 +770,7 @@ async fn st_create(State(ctx): State<ServeCtx>, axum::Extension(s): Ss, headers:
         lease_key: None,
         state: "live".into(),
         created_at: now_ms(),
+        do_session: None,
     })
     .await;
     (StatusCode::CREATED, Json(json!({"id": id, "object": "fv.stream", "state": "starting", "model": model, "pool": pool.id()}))).into_response()

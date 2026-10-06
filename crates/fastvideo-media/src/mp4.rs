@@ -59,12 +59,18 @@ pub struct Mp4Spec {
     /// `None` writes a video-only file.
     pub audio: Option<AudioTarget>,
     pub faststart: bool,
+    /// Fragmented MP4 (`+frag_keyframe+empty_moov+default_base_moof`): the
+    /// file only grows (no faststart rewrite, no header patch), so it can be
+    /// uploaded while it is written (docs/serve/dispatch-do-family.md §7.2).
+    /// Takes precedence over `faststart`.
+    #[serde(default)]
+    pub fragmented: bool,
 }
 
 impl Mp4Spec {
     /// NVENC at quality 19, with the audio target given.
     pub fn new(width: u32, height: u32, fps: u32, audio: Option<AudioTarget>) -> Self {
-        Self { width, height, fps, quality: 19, encoder: FfmpegH264::Nvenc, audio, faststart: true }
+        Self { width, height, fps, quality: 19, encoder: FfmpegH264::Nvenc, audio, faststart: true, fragmented: false }
     }
 
     /// What hosted H3 returns on fal: 24 fps, AAC-LC stereo 32 kHz, faststart.
@@ -72,6 +78,9 @@ impl Mp4Spec {
         Self::new(width, height, 24, Some(AudioTarget::FAL_H3))
     }
 }
+
+/// `-movflags` of a fragmented, append-only MP4 ([`Mp4Spec::fragmented`]).
+pub const FRAGMENTED_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
 
 /// Streams RGB24 frames into ffmpeg; audio (already known) is staged in a
 /// side file first, as the engine writer does.
@@ -116,7 +125,9 @@ impl Mp4Writer {
         }
         cmd.args(spec.encoder.file_args(spec.quality))
             .args(["-r", &spec.fps.to_string()]);
-        if spec.faststart {
+        if spec.fragmented {
+            cmd.args(["-movflags", FRAGMENTED_MOVFLAGS]);
+        } else if spec.faststart {
             cmd.args(["-movflags", "+faststart"]);
         }
         cmd.arg(out).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());

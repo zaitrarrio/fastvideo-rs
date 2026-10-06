@@ -3,6 +3,9 @@
 // Primary fields come first; properties marked `x-fv-advanced` go under
 // "Additional settings". `x-fv-media` string / array properties become drop
 // zones that upload through `upload(file) -> url` and also take pasted URLs.
+// `x-fv-min-references` / `x-fv-max-references` (reference-to-video) bound
+// the reference lists together: a counter shows the total, the drop zones
+// close at the maximum, and `validate()` refuses fewer than the minimum.
 
 import { el } from './common.js';
 
@@ -24,9 +27,11 @@ function previewNode(kind, src) {
   return null;
 }
 
-function mediaField(name, prop, { upload, onChange, multiple }) {
+function mediaField(name, prop, { upload, onChange, multiple, room }) {
   const kind = prop['x-fv-media'];
-  const max = multiple ? prop.maxItems || 12 : 1;
+  const own = multiple ? prop.maxItems || 12 : 1;
+  // `room()`: how many more items the form's shared reference budget allows.
+  const cap = () => (room ? Math.min(own, items.length + Math.max(0, room())) : own);
   const items = []; // {url, preview, name, busy}
   const list = el('div', { class: 'media-items' });
   const file = el('input', { type: 'file', accept: ACCEPT[kind] || '', multiple: multiple || undefined, hidden: true, 'data-field-file': name });
@@ -46,12 +51,14 @@ function mediaField(name, prop, { upload, onChange, multiple }) {
         el('button', { type: 'button', class: 'rm', title: 'Remove', onclick: () => { items.splice(i, 1); render(); onChange(); } }, '×'));
       return node;
     }));
-    drop.hidden = items.length >= max;
-    urlInput.parentElement && (urlInput.parentElement.hidden = items.length >= max);
+    const full = items.length >= cap();
+    drop.hidden = full;
+    urlInput.parentElement && (urlInput.parentElement.hidden = full);
+    node.dataset.full = String(full);
   }
 
   async function addFiles(files) {
-    for (const f of [...files].slice(0, max - items.length)) {
+    for (const f of [...files].slice(0, multiple ? Math.max(0, cap() - items.length) : 1)) {
       if (!multiple) items.length = 0;
       const it = { name: f.name, preview: URL.createObjectURL(f), busy: true, url: '' };
       items.push(it); render();
@@ -75,7 +82,7 @@ function mediaField(name, prop, { upload, onChange, multiple }) {
     const u = urlInput.value.trim();
     if (!u) return;
     if (!multiple) items.length = 0;
-    if (items.length < max) items.push({ url: u });
+    if (items.length < cap()) items.push({ url: u });
     urlInput.value = ''; render(); onChange();
   };
   urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addUrl.click(); } });
@@ -84,6 +91,8 @@ function mediaField(name, prop, { upload, onChange, multiple }) {
   render();
   return {
     node,
+    count: () => items.length,
+    refresh: render,
     get() {
       const urls = items.filter((i) => !i.busy && i.url).map((i) => i.url);
       return multiple ? urls : urls[0] ?? null;
@@ -172,8 +181,28 @@ export function buildForm(schema, root, { upload, onChange: notify = () => {} })
       f.setMax(cap);
     }
   };
-  const onChange = () => { applyLimits(); notify(); };
   const order = schema['x-fal-order-properties'] || Object.keys(props);
+  // The reference lists share `x-fv-max-references` (and need at least
+  // `x-fv-min-references` in all).
+  const minRefs = Number.isFinite(schema['x-fv-min-references']) ? schema['x-fv-min-references'] : null;
+  const maxRefs = Number.isFinite(schema['x-fv-max-references']) ? schema['x-fv-max-references'] : null;
+  const lists = order.filter((n) => props[n] && props[n]['x-fv-media'] && baseType(props[n]) === 'array');
+  const refNames = minRefs !== null || maxRefs !== null
+    ? (lists.some((n) => n.startsWith('reference_')) ? lists.filter((n) => n.startsWith('reference_')) : lists)
+    : [];
+  const refCount = () => refNames.reduce((n, k) => n + (fields[k] ? fields[k].count() : 0), 0);
+  const room = refNames.length && maxRefs !== null ? () => maxRefs - refCount() : null;
+  const refCounter = refNames.length ? el('p', { class: 'hint ref-count', 'data-ref-count': '0' }) : null;
+  const renderRefs = () => {
+    if (!refCounter) return;
+    const n = refCount();
+    refCounter.dataset.refCount = String(n);
+    refCounter.textContent = n + (maxRefs !== null ? ' / ' + maxRefs : '') + ' reference' + (n === 1 ? '' : 's') + ' in all'
+      + (minRefs ? ' (at least ' + minRefs + ': image, video or audio)' : '') + '.';
+    refCounter.className = 'hint ref-count' + ((minRefs && n < minRefs) || (maxRefs !== null && n > maxRefs) ? ' bad' : '');
+    for (const k of refNames) if (fields[k]) fields[k].refresh();
+  };
+  const onChange = () => { applyLimits(); renderRefs(); notify(); };
   const required = new Set(schema.required || []);
   const fields = {};
   const primary = el('div', { class: 'primary-fields' });
@@ -185,7 +214,7 @@ export function buildForm(schema, root, { upload, onChange: notify = () => {} })
     if (!prop) continue;
     const media = prop['x-fv-media'];
     const f = media
-      ? mediaField(name, prop, { upload, onChange, multiple: baseType(prop) === 'array' })
+      ? mediaField(name, prop, { upload, onChange, multiple: baseType(prop) === 'array', room: refNames.includes(name) ? room : null })
       : scalarField(name, prop, { onChange });
     fields[name] = { ...f, prop };
     const label = f.inline ? null : el('label', { for: 'f-' + name },
@@ -195,6 +224,7 @@ export function buildForm(schema, root, { upload, onChange: notify = () => {} })
     const block = el('div', { class: 'field-block', 'data-block': name }, label, f.node, media || prop['x-fv-multiline'] ? help : null);
     if (!media && !prop['x-fv-multiline'] && !f.inline) block.title = prop.description || '';
     const target = prop['x-fv-advanced'] ? advancedBody : primary;
+    if (refCounter && name === refNames[0]) target.append(refCounter);
     // Short scalar fields (selects, sliders) share a row.
     const short = !media && !prop['x-fv-multiline'] && !f.inline && !prop['x-fv-advanced'];
     if (short) {
@@ -206,6 +236,17 @@ export function buildForm(schema, root, { upload, onChange: notify = () => {} })
   }
   root.replaceChildren(primary, advancedBody.childNodes.length ? advanced : '');
   applyLimits();
+  renderRefs();
+
+  // Null when the form can be submitted, else why not.
+  function validate() {
+    if (refNames.length) {
+      const n = refCount();
+      if (minRefs && n < minRefs) return 'Add at least ' + minRefs + ' reference' + (minRefs === 1 ? '' : 's') + ' (image, video or audio).';
+      if (maxRefs !== null && n > maxRefs) return 'At most ' + maxRefs + ' references in all (now ' + n + ').';
+    }
+    return null;
+  }
 
   function values() {
     const out = {};
@@ -231,6 +272,7 @@ export function buildForm(schema, root, { upload, onChange: notify = () => {} })
   }
   return {
     values,
+    validate,
     setValues,
     reset: () => setValues({}),
     busy: () => Object.values(fields).some((f) => f.busy && f.busy()),

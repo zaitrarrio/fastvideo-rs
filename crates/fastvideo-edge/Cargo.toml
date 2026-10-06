@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 fastvideo-dispatch-proto = { path = "../fastvideo-dispatch-proto" }
+futures = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 
