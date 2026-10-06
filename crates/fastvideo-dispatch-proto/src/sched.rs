@@ -213,6 +213,9 @@ pub struct JobRec {
     /// Protocol 2: the committed output upload.
     #[serde(default)]
     pub result: Option<JobResult>,
+    /// The API key it runs for (the edge's in-flight quota).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     #[serde(skip)]
     pub envelope: Option<Value>,
 }
@@ -265,6 +268,16 @@ pub struct WorkerRec {
     /// Its public base URL (sessions).
     #[serde(default)]
     pub endpoint: String,
+    /// Its API front (what the edge routes to it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<crate::FrontInfo>,
+    /// Its models are loaded (its last status frame; absent: ready).
+    #[serde(default = "yes")]
+    pub ready: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A session lease's state.
@@ -614,9 +627,34 @@ impl Sched {
             let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: false };
             return (resp, out);
         }
+        if req.replace && self.jobs.get(&req.job_id).is_some_and(|j| !j.phase.finished()) {
+            // Not waiting for a restage: keep the new envelope (inputs now
+            // in the store) for a later restage or re-dispatch.
+            let id = req.job_id.clone();
+            let j = self.jobs.get_mut(&id).expect("checked");
+            if let Some(old) = j.spill.take() {
+                self.dropped_spills.insert(old);
+            }
+            j.envelope = if spill.is_some() { None } else { Some(req.envelope) };
+            j.spill = spill;
+            if j.envelope.is_some() {
+                self.new_envelopes.insert(id.clone());
+            }
+            self.touch_job(&id);
+            let j = &self.jobs[&id];
+            let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: true };
+            return (resp, Vec::new());
+        }
         if let Some(j) = self.jobs.get(&req.job_id) {
             let resp = EnqueueResp { job_id: j.job_id.clone(), state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: true };
             return (resp, Vec::new());
+        }
+        if req.max_queued > 0 {
+            let queued = self.jobs.values().filter(|j| j.phase == Phase::Queued && j.model == req.model).count();
+            if queued >= req.max_queued as usize {
+                let resp = EnqueueResp { job_id: req.job_id, state: "refused".into(), worker: None, position: queued as u32, duplicate: false };
+                return (resp, Vec::new());
+            }
         }
         self.seq += 1;
         let id = req.job_id.clone();
@@ -646,6 +684,7 @@ impl Sched {
             envelope: if spill.is_some() { None } else { Some(req.envelope) },
             spill,
             result: None,
+            owner: req.owner,
         };
         let held_here = j.envelope.is_some();
         self.jobs.insert(id.clone(), j);
@@ -717,16 +756,25 @@ impl Sched {
                     }
                 }
             }
-            WorkerMsg::Status { running: _, draining, capacity } => {
+            WorkerMsg::Status { running: _, draining, capacity, ready } => {
                 if let Some(w) = self.workers.get_mut(worker) {
-                    if w.draining != draining || w.capacity != capacity.max(1) {
+                    let ready = ready.unwrap_or(true);
+                    if w.draining != draining || w.capacity != capacity.max(1) || w.ready != ready {
                         w.draining = draining;
                         w.capacity = capacity.max(1);
+                        w.ready = ready;
                         self.dirty_workers.insert(worker.to_owned());
                     }
                 }
             }
             WorkerMsg::Slots(sl) => self.slots(worker, sl),
+            WorkerMsg::Front(f) => {
+                if let Some(w) = self.workers.get_mut(worker) {
+                    w.ready = f.ready;
+                    w.front = Some(f);
+                    self.dirty_workers.insert(worker.to_owned());
+                }
+            }
             WorkerMsg::UploadInit { req, job_id, attempt, lease, name, content_type, parts } => {
                 self.upload_init(worker, req, &job_id, attempt, lease, &name, content_type, parts, now, &mut out)
             }
@@ -789,6 +837,8 @@ impl Sched {
             offers_seen: 0,
             session_free: 0,
             endpoint: String::new(),
+            front: None,
+            ready: true,
         });
         w.connected = true;
         w.disconnected_at = None;
@@ -802,6 +852,8 @@ impl Sched {
         w.full_until = 0;
         w.proto = h.proto;
         w.endpoint = h.endpoint;
+        w.ready = h.front.as_ref().is_none_or(|f| f.ready);
+        w.front = h.front;
         // A new socket: offer counters start again on both sides.
         w.offers_sent = 0;
         w.offers_seen = 0;
@@ -844,6 +896,7 @@ impl Sched {
                             restage: false,
                             spill: None,
                             result: None,
+                            owner: None,
                             envelope: None,
                         },
                     );
@@ -1356,8 +1409,16 @@ impl Sched {
                 session_free: self.session_free_estimate(w),
                 endpoint: w.endpoint.clone(),
                 proto: w.proto,
+                front: w.front.clone(),
+                ready: w.ready,
             })
             .collect();
+        let mut owners = BTreeMap::new();
+        for j in self.jobs.values().filter(|j| !j.phase.finished()) {
+            if let Some(o) = &j.owner {
+                *owners.entry(o.clone()).or_insert(0u32) += 1;
+            }
+        }
         let failed = self
             .jobs
             .values()
@@ -1389,7 +1450,13 @@ impl Sched {
                     expires_ms: x.expires_at.unwrap_or(0),
                 })
                 .collect(),
+            owners,
         }
+    }
+
+    /// A job's phase for a [`crate::JobWait`] (`unknown` when not here).
+    pub fn job_phase(&self, id: &str) -> &'static str {
+        self.jobs.get(id).map_or("unknown", |j| j.phase.as_str())
     }
 
     /// `GET /metrics`: the demand signal of this dispatcher.
@@ -1829,7 +1896,7 @@ mod tests {
         WorkerMsg::Hello(Hello { worker_id: id.into(), pool: "p".into(), capacity: cap, jobs, ..Hello::default() })
     }
     fn enq(s: &mut Sched, id: &str, now: i64) -> (EnqueueResp, Vec<Out>) {
-        s.enqueue(EnqueueReq { job_id: id.into(), envelope: json!({"job": {"id": id}}), retries: 1, model: None, replace: false }, now)
+        s.enqueue(EnqueueReq { job_id: id.into(), envelope: json!({"job": {"id": id}}), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, now)
     }
     fn pushes(out: &[Out]) -> Vec<(String, String, u32, bool)> {
         out.iter()
@@ -2047,17 +2114,17 @@ mod tests {
         let mut s = Sched::new("p", Cfg::default());
         let mut h = Hello { worker_id: "w1".into(), pool: "p".into(), capacity: 4, models: vec!["m1".into()], ..Hello::default() };
         s.on_msg("w1", WorkerMsg::Hello(h.clone()), 0);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "x".into(), envelope: json!({}), retries: 0, model: Some("m2".into()), replace: false }, 1);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "x".into(), envelope: json!({}), retries: 0, model: Some("m2".into()), replace: false, owner: None, max_queued: 0 }, 1);
         assert!(pushes(&out).is_empty());
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "y".into(), envelope: json!({}), retries: 0, model: Some("m1".into()), replace: false }, 2);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "y".into(), envelope: json!({}), retries: 0, model: Some("m1".into()), replace: false, owner: None, max_queued: 0 }, 2);
         assert_eq!(pushes(&out).len(), 1);
         h.draining = true;
         h.jobs = vec![Held { job_id: "y".into(), attempt: 1, lease: 1, state: "queued".into() }];
         s.on_msg("w1", WorkerMsg::Hello(h), 3);
         assert_eq!(s.job("y").unwrap().phase, Phase::Running);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "z".into(), envelope: json!({}), retries: 0, model: None, replace: false }, 4);
+        let (_, out) = s.enqueue(EnqueueReq { job_id: "z".into(), envelope: json!({}), retries: 0, model: None, replace: false, owner: None, max_queued: 0 }, 4);
         assert!(pushes(&out).is_empty());
-        let out = s.on_msg("w1", WorkerMsg::Status { running: 1, draining: false, capacity: 4 }, 5);
+        let out = s.on_msg("w1", WorkerMsg::Status { running: 1, draining: false, capacity: 4, ready: None }, 5);
         assert_eq!(pushes(&out).len(), 1);
     }
 
@@ -2079,7 +2146,7 @@ mod tests {
     fn restage_after_424_and_spilled_envelopes() {
         let mut s = Sched::new("p", Cfg::default());
         s.on_msg("w1", hello("w1", 1, vec![]), 0);
-        let (_, out) = s.enqueue_spilled(EnqueueReq { job_id: "a".into(), envelope: json!(null), retries: 1, model: None, replace: false }, Some("env/a".into()), 0);
+        let (_, out) = s.enqueue_spilled(EnqueueReq { job_id: "a".into(), envelope: json!(null), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, Some("env/a".into()), 0);
         // A spilled envelope is pushed through the host.
         assert!(matches!(&out[..], [Out::PushSpilled { key, .. }] if key == "env/a"));
         let out = s.on_msg("w1", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 1);
@@ -2087,7 +2154,7 @@ mod tests {
         assert_eq!(s.status(2).restage, vec!["a".to_string()]);
         // Not pushed again until the gateway replaces the envelope.
         assert!(pushes(&s.tick(5_000)).is_empty());
-        let (r, out) = s.enqueue(EnqueueReq { job_id: "a".into(), envelope: json!({"stored": true}), retries: 1, model: None, replace: true }, 6_000);
+        let (r, out) = s.enqueue(EnqueueReq { job_id: "a".into(), envelope: json!({"stored": true}), retries: 1, model: None, replace: true, owner: None, max_queued: 0 }, 6_000);
         assert!(!r.duplicate);
         assert_eq!(pushes(&out), vec![("w1".into(), "a".into(), 1, false)]);
         assert_eq!(s.job("a").unwrap().lease, 2);
@@ -2095,7 +2162,7 @@ mod tests {
         assert_eq!(d.dropped_spills, vec!["env/a".to_string()]);
         assert!(s.status(7_000).restage.is_empty());
         // A restage that never comes fails after the bounce limit.
-        s.enqueue(EnqueueReq { job_id: "b".into(), envelope: json!({}), retries: 1, model: None, replace: false }, 7_000);
+        s.enqueue(EnqueueReq { job_id: "b".into(), envelope: json!({}), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, 7_000);
         s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 7_001);
         s.on_msg("w1", WorkerMsg::Nack { job_id: "b".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 7_002);
         let t = s.next_wake(7_003).unwrap();
@@ -2242,7 +2309,7 @@ mod tests {
         assert!(matches!(s.admit(SessionReq { session_id: Some("s1".into()), ..SessionReq::default() }, 21).0, Admit::Granted(_)));
         assert_eq!(s.metrics(22).sessions_live, 1);
         let g = s.renew("s1", 1, 1_000).unwrap();
-        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1 }, 50_000);
+        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1, ready: None }, 50_000);
         assert_eq!(g.expires_ms, 1_000 + s.cfg.session_ttl_ms);
         assert!(s.renew("s1", 7, 1_001).is_none(), "wrong lease");
         let out = s.tick(g.expires_ms);
@@ -2433,4 +2500,48 @@ mod tests {
         assert_eq!(m.oldest_queued_ms, 1_100);
     }
 
+    /// Edge control plane: per-model admission, owners in flight, the
+    /// envelope update of a front's background input copy, job phases.
+    #[test]
+    fn admission_owners_and_envelope_updates() {
+        let mut s = Sched::new("family:h3", Cfg::default());
+        let req = |id: &str, owner: &str, model: &str| EnqueueReq {
+            job_id: id.into(),
+            envelope: json!({"v": 1}),
+            retries: 1,
+            model: Some(model.into()),
+            replace: false,
+            owner: Some(owner.into()),
+            max_queued: 2,
+        };
+        assert_eq!(s.enqueue(req("a", "key_1", "m"), 1).0.state, "queued");
+        assert_eq!(s.enqueue(req("b", "key_1", "m"), 2).0.state, "queued");
+        // A third of the same model is refused; another model is not.
+        assert_eq!(s.enqueue(req("c", "key_2", "m"), 3).0.state, "refused");
+        assert!(s.job("c").is_none());
+        assert_eq!(s.enqueue(req("d", "key_2", "other"), 4).0.state, "queued");
+        let st = s.status(5);
+        assert_eq!(st.owners.get("key_1"), Some(&2));
+        assert_eq!(st.owners.get("key_2"), Some(&1));
+        // `replace` on a queued job keeps the new envelope, no new job.
+        let (r, out) = s.enqueue(EnqueueReq { envelope: json!({"v": 2}), replace: true, ..req("a", "key_1", "m") }, 6);
+        assert!(r.duplicate && out.is_empty());
+        assert_eq!(s.job("a").unwrap().envelope, Some(json!({"v": 2})));
+        assert_eq!(s.job_phase("a"), "queued");
+        assert_eq!(s.job_phase("zz"), "unknown");
+        s.cancel("a", 7);
+        assert_eq!(s.job_phase("a"), "cancelled");
+        assert_eq!(s.status(8).owners.get("key_1"), Some(&1));
+    }
+
+    #[test]
+    fn fronts_and_readiness_ride_on_the_worker() {
+        let mut s = Sched::new("family:h3", Cfg::default());
+        let f = crate::FrontInfo { url: "https://w1".into(), names: [("fasth3".to_owned(), "fasth3".to_owned())].into(), ready: false, ..Default::default() };
+        s.on_msg("w1", WorkerMsg::Hello(Hello { worker_id: "w1".into(), pool: "family:h3".into(), front: Some(f), ..Hello::default() }), 1);
+        let w = &s.status(2).workers[0];
+        assert!(!w.ready && w.front.as_ref().unwrap().names.contains_key("fasth3"));
+        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1, ready: Some(true) }, 3);
+        assert!(s.status(4).workers[0].ready);
+    }
 }

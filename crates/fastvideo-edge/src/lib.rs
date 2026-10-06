@@ -23,8 +23,21 @@
 //! the scheduler's timers: ack deadlines, lost workers (re-dispatch once,
 //! then fail), backoffs and cleanup.
 //!
+//! Every other request goes to the public front (`front`,
+//! docs/serve/edge-control-plane.md): API keys (D1 `api_keys`, admin routes
+//! in `keys`), quotas, routing to the GPU workers that are API fronts,
+//! session admission through the family objects, and the `Registry`
+//! Durable Object (`registry`) that holds the families' status, the key
+//! epoch and session bindings.
+//!
 //! On the host this crate is empty: build it with
 //! `scripts/serve/cf-edge.sh build` (wasm32-unknown-unknown).
 
 #[cfg(target_arch = "wasm32")]
 mod edge;
+#[cfg(target_arch = "wasm32")]
+mod front;
+#[cfg(target_arch = "wasm32")]
+mod keys;
+#[cfg(target_arch = "wasm32")]
+mod registry;

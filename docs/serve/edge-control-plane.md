@@ -1,8 +1,8 @@
 # The edge as the only entry point: retiring the fv-serve gateway pod
 
-Status: **design 2026-10-06 (phase 1), for review.** Nothing here is built
-yet. Stages and their exit criteria are in §9; the owner's open questions
-are in §10.
+Status: **stage 1 (edge parity) built, 2026-10-06**; see "Stage 1 as
+built" in §9 for what changed from the design. Stages and their exit
+criteria are in §9; the owner's answers to §10 are recorded there.
 
 The owner's decision: retire the fv-serve gateway pod. fv-control becomes
 the only control plane for the model-family stacks, and one public
@@ -481,6 +481,57 @@ One PR per stage, each green before the next.
   scripts/serve/check.sh` on the build pod.
 - Exit: all of the above green; the edge staging deploy from the PR head
   only if the owner asks (otherwise after merge).
+
+### Stage 1 as built
+
+Code: `fastvideo_dispatch_proto::front` (classification, verdicts, the
+registry view and front choice, quotas, session bindings, merges,
+capabilities); `fastvideo_edge::{front, keys, registry}` (the Worker's
+public front, admin keys over D1, the `Registry` DO) next to the family DO
+in `edge.rs`; `fastvideo_serve::front` (`FrontGate`, the envelope and
+store moved out of `gateway/`, which re-exports them); the native stand-in
+`fastvideo_serve::edge_host` and its binary `fv-edge-local`. Deploy:
+`scripts/serve/cf-edge.sh` adds the `REGISTRY` binding (migration `v2`) and
+the edge's vars.
+
+Answers to §10 (each a switch the owner can flip):
+
+| Q | Default | Switch |
+|---|---|---|
+| 1 serverless pools | dropped (fronts must be reachable workers) | — (stage 4 removes them) |
+| 2 clusters | one edge per cluster; staging uses the edge's D1 `fv-edge-staging` and its outputs bucket, shared with the workers (never `fv-jobs`) | fv-control (stage 2) |
+| 3 WHIP | the offer is proxied, `Location` rewritten to the edge | `FV_EDGE_WHIP=redirect`: 307 to the admitted worker with `?fv_cap=` (HMAC of the caller's verdict keyed by the internal token, 6 h); the worker's token layer takes it on `/fv/v1/streams/ingest*` only and carries it on the answer's `Location` |
+| 4 revocation | 15 s key cache per isolate; a revoke at the edge (or `POST /fv/v1/admin/keys/invalidate`, admin token, for keys revoked elsewhere) bumps the registry's `key_epoch`, and every isolate drops its key cache on its next registry read (≤ 2 s); no per-request DO round trip | — |
+| 5 console | served at the edge URL (forwarded to a front) | — |
+| 6 `/v1/models`, `/fal/schema` | merged across families at the edge | — |
+
+Where the build differs from the design above:
+
+- **Uploads stay on the front that issued them.** Upload tokens carry the
+  issuing worker's tag (`{tag}.…`); the edge routes `PUT /uploads`,
+  `/files` and `/fv/v1/internal/uploads` by that tag, and a job that lands on
+  another front fetches the input through the edge
+  (`GET /fv/v1/internal/uploads/{token}`, internal token). No R2 staging
+  of client uploads in stage 1; results still go straight to R2.
+- **The per-key rate counts submits only** (`key_rpm`, default 300/min),
+  not polls: the compat suites poll faster than any sane submit limit.
+  `key_in_flight` (default 30) comes from the family objects' `owners`
+  counts; per-model `max_queued` is enforced in the DO (`EnqueueReq`).
+  Limits are per isolate (a fixed one-minute window), so a key spread over
+  many colos gets more; good enough for abuse control, not billing.
+- **Sessions**: admitted through the family DO and bound in the registry by
+  the id clients use (`director:{sid}`, `reactor:{key|ip}`, `stream:{id}`,
+  `ingest:{id}`); follow-ups renew the lease, stop/DELETE releases it. When
+  admission is refused the edge first asks the workers whether their bound
+  director sessions are still alive (`/wma/session/heartbeat`) and
+  reclaims dead ones. In `FV_EDGE_WHIP=redirect` mode the edge never sees
+  the ingest id, so that lease ends on its TTL or when the worker reports
+  the session ended.
+- **Revocation** is the epoch above, not a per-request check.
+- `wrangler dev` covers the Worker's own paths (keys, registry, a job
+  through a front); the protocol suites run against the native stand-in
+  (`FV_COMPAT_EDGE=1`), which shares every decision with the Worker through
+  `fastvideo_dispatch_proto::front`.
 
 ### Stage 2 — fv-control
 
