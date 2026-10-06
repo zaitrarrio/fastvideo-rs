@@ -18,7 +18,8 @@
 #                                FV_GCP_DIRECT=1 adds the gateway-less settings
 #                                (FV_WORKER_DIRECT, FV_ADMIN_TOKEN, D1 keys);
 #                                prints "<vm> <ip> <public base url>"
-#   vm.sh wait <vm> <ip>         wait for /ping 200; fail early on a FAILED line
+#   vm.sh wait <vm> <ip> [url]   wait for /ping 200 on http://<ip>:8000, or on the
+#                                base URL `worker` printed; fail early on a FAILED line
 #   vm.sh down <vm>              delete the VM and its firewall rule (ours only)
 #   vm.sh reap [--dry-run]       delete our VMs past their fv-deadline label or
 #                                stopped (TERMINATED), then our orphan firewall
@@ -542,7 +543,7 @@ main() {
       vm_up "$@" ;;
     secrets-push) secrets_push ;;
     gc) vm_gc ;;
-    *) sed -n '2,71p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,72p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
   esac
 }
 

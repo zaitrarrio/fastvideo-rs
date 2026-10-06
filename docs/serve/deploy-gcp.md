@@ -282,6 +282,7 @@ bash scripts/gcp/vm.sh down "$VM"
 # A worker on the h3 family Durable Object (gateway behind the DO, or gateway-less)
 FV_DISPATCH_DO_URL=https://<fv-edge worker> FV_GCP_SECRETS=secret-manager \
   bash scripts/gcp/vm.sh worker h3-turbo ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:<digest>
+bash scripts/gcp/vm.sh wait <vm> <ip> https://<a-b-c-d>.sslip.io   # a worker: port 8000 is closed
 ```
 
 What a worker gets. These are the same variables fv-control's
