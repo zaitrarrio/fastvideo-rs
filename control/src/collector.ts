@@ -4,6 +4,7 @@
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
 import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
+import { collectCloudrift, type CloudriftCollect } from "./collector-cloudrift";
 import { adminGet, edgeCfg, edgeFamilies, edgeWorkers, gatewayPublic } from "./cluster/ops";
 import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
@@ -23,6 +24,7 @@ export interface CollectResult {
   running: number;
   alerts: number;
   actions: string[];
+  cloudrift?: Omit<CloudriftCollect, "alerts" | "kinds" | "actions">;
 }
 
 export async function collect(env: Env): Promise<CollectResult> {
@@ -78,7 +80,7 @@ export async function collect(env: Env): Promise<CollectResult> {
     }
   }
 
-  const prev = await env.DB.prepare("SELECT pod_id, idle_since, health, first_seen FROM pods WHERE gone_at IS NULL").all<{ pod_id: string; idle_since: number | null; health: string | null; first_seen: number }>();
+  const prev = await env.DB.prepare("SELECT pod_id, idle_since, health, first_seen FROM pods WHERE gone_at IS NULL AND provider = 'runpod'").all<{ pod_id: string; idle_since: number | null; health: string | null; first_seen: number }>();
   const prevBy = new Map((prev.results || []).map((r) => [r.pod_id, r]));
   const samples: PodSample[] = [];
   const stmts: D1PreparedStatement[] = [];
@@ -243,7 +245,11 @@ export async function collect(env: Env): Promise<CollectResult> {
       actions.push(await stopCluster(env, c, "cluster balance floor"));
     }
   }
-  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod"]);
+  // The second provider (docs/ops/cloudrift.md); its failure never stops the Runpod half.
+  const cr = await collectCloudrift(env, t, dtMs, pol).catch((e) => ({ enabled: true, ok: false, error: (e as Error).message, alerts: [], kinds: [], actions: [] }) as unknown as CloudriftCollect);
+  alerts.push(...cr.alerts);
+  actions.push(...cr.actions);
+  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", ...cr.kinds]);
 
   // ---- retention
   await env.DB.batch([
@@ -254,7 +260,8 @@ export async function collect(env: Env): Promise<CollectResult> {
     env.DB.prepare("DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < ?").bind(t - 30 * 86400_000),
     env.DB.prepare("DELETE FROM pods WHERE gone_at IS NOT NULL AND gone_at < ?").bind(t - 7 * 86400_000),
   ]);
-  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions };
+  const { alerts: _a, kinds: _k, actions: _x, ...crSummary } = cr;
+  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions, ...(cr.enabled ? { cloudrift: crSummary } : {}) };
 }
 
 /** Stops a cluster now (backstop / floor): a `down` operation, cancelling whatever runs; deletes the pods directly if the DO fails. */

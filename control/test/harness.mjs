@@ -1,5 +1,5 @@
 // Test harness: a mock of every upstream fv-control talks to (Runpod REST,
-// GraphQL and the log endpoint, GHCR, GitHub, the Cloudflare API) and of the
+// GraphQL and the log endpoint, CloudRift, GHCR, GitHub, the Cloudflare API) and of the
 // cluster's own pods (an fv-serve gateway and workers, keyed by pod id), plus
 // the Worker itself under `wrangler dev` (workerd, local D1/R2/DO).
 import { spawn, execFileSync } from "node:child_process";
@@ -60,6 +60,16 @@ export function startMock() {
     edgeKeys: [],
     edgeCalls: [],
     edgeEpoch: 1,
+    // CloudRift (docs/ops/cloudrift.md): {version, data} over POST, X-API-Key.
+    cloudrift: {
+      balance: 3000, // cents, as live
+      calls: [],
+      instances: [
+        { id: "cr-ours-1", instance_name: "fv-gpucheck-1006", status: "Active", tags: ["fv", "fv-owner:fastvideo-rs", "fv-kind:gpucheck", `fv-deadline:${Math.floor(Date.now() / 1000) - 60}`], host_address: "203.0.113.7", created_at: new Date(Date.now() - 600_000).toISOString(), resource_info: { cost_per_hour: 139.36, instance_type: "rtxpro6000-11-50-500-1l.1", provider_name: "p" }, gpus: [{ brand_short: "RTX PRO 6000" }] },
+        { id: "cr-ours-2", instance_name: "fv-serve-h3-turbo-1006", status: "Active", tags: ["fv", "fv-owner:fastvideo-rs", "fv-kind:serve-h3-turbo", `fv-deadline:${Math.floor(Date.now() / 1000) + 3600}`], host_address: "203.0.113.8", created_at: new Date().toISOString(), resource_info: { cost_per_hour: 62.4, instance_type: "rtx59-16c-nr.1", provider_name: "p" }, gpus: [{ brand_short: "RTX 5090" }] },
+        { id: "cr-foreign", instance_name: "someone-else", status: "Active", tags: [], host_address: "203.0.113.9", created_at: new Date().toISOString(), resource_info: { cost_per_hour: 25, instance_type: "v100-6-52-400-generic.1", provider_name: "p" }, gpus: [{ brand_short: "V100 SXM2" }] },
+      ],
+    },
   };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
@@ -128,6 +138,23 @@ export function startMock() {
     if (p.startsWith("/rp/hapi/pod/")) {
       if (bearer !== m.runpodKey) return json(res, 401, {});
       return json(res, 200, { container: ["2026-09-29T00:00:00Z fv-serve starting", `leak? ${m.runpodKey}`], system: ["pulling image"] });
+    }
+    // ---- CloudRift
+    if (p.startsWith("/cr/api/v1/")) {
+      const path = p.slice("/cr/api/v1/".length);
+      const cr = m.cloudrift;
+      cr.calls.push({ path, version: body?.version, key: req.headers["x-api-key"] === m.cloudriftKey, bearer: !!req.headers.authorization });
+      if (!body || !body.version || !("data" in body)) return json(res, 400, "request must be {version, data}");
+      const d = body.data;
+      const ok = (data) => json(res, path === "instances/terminate" ? 201 : 200, { version: body.version, data });
+      if (path === "instance-types/list") return ok({ instance_types: [{ name: "rtxpro6000-11-50-500-1l", brand_short: "RTX PRO 6000", variants: [{ name: "rtxpro6000-11-50-500-1l.1", gpu_count: 1, cost_per_hour: 139.36, available_nodes: 1, available_nodes_per_dc: { "us-x": 1 } }] }] });
+      if (req.headers["x-api-key"] !== m.cloudriftKey) { res.writeHead(401); return res.end("User cannot be authenticated from the request"); }
+      const sel = (s) => cr.instances.filter((i) => (s?.ById ? s.ById.includes(i.id) : s?.ByStatus ? s.ByStatus.statuses.includes(i.status) : true));
+      if (path === "account/info") return ok({ balance: cr.balance, pending: 0.0, disputed: 0, dispute_fees: 0, current_cost_per_hour: null });
+      if (path === "instances/list") return ok({ instances: sel(d.selector) });
+      if (path === "instances/metrics") return ok({ metrics: (d.selector.ById || []).map((id) => ({ instance_id: id, node_id: "n", gpus: [{ gpu_index: "0", gpu_utilization_percent: 50 }] })) });
+      if (path === "instances/terminate") { const t = sel(d.selector); for (const i of t) i.status = "Inactive"; return ok({ terminated: t }); }
+      return json(res, 404, `no route ${path}`);
     }
     // ---- GHCR
     if (p === "/ghcr/token") return json(res, 200, { token: "anon" });
@@ -244,7 +271,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };
@@ -273,6 +300,7 @@ export function d1Exec(dir, sql) {
 export const SECRETS = {
   RUNPOD_API_KEY: "rpa_TESTKEY_0123456789abcdef",
   GITHUB_PAT: "github_pat_TEST_0123456789",
+  CLOUDRIFT_API_KEY: "crk_TEST_0123456789abcdef",
   CLOUDFLARE_API_KEY: "cf_TEST_0123456789abcdef",
   CONTROL_KEK: b64(wc.getRandomValues(new Uint8Array(32))),
   SESSION_SECRET: "sess_" + Buffer.from(wc.getRandomValues(new Uint8Array(24))).toString("hex"),

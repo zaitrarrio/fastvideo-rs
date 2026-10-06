@@ -31,6 +31,7 @@ pub mod ltx2;
 pub mod matrixgame;
 pub mod mmaudio;
 pub mod pisa_attn;
+pub mod sana_video;
 pub mod sd35;
 pub mod sink;
 pub mod sol_attn;

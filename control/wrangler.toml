@@ -1,6 +1,7 @@
 # fv-control: the cluster controller (docs/control/README.md).
 # Secrets (wrangler secret put, never here): RUNPOD_API_KEY,
 # CLOUDFLARE_API_KEY, GITHUB_PAT, CONTROL_KEK, SESSION_SECRET,
+# CLOUDRIFT_API_KEY (optional: the CloudRift provider, docs/ops/cloudrift.md),
 # OWNER_PASSPHRASE_HASH. Deploy: scripts/serve/fv-control.sh deploy staging.
 name = "fv-control"
 main = "src/index.ts"

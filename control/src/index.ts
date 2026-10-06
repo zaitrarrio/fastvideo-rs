@@ -14,7 +14,7 @@ import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, s
 import { buildPodStatus } from "./buildpod";
 import { collect } from "./collector";
 import { randomToken, sha256Hex, unb64, x25519Generate, x25519PublicOf, b64 } from "./crypto";
-import type { Env, Vars } from "./env";
+import { defaults, type Env, type Vars } from "./env";
 import { deleteVar, listVars, maskRow, resolveView, setVar, type Scope } from "./envvars";
 import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
@@ -25,7 +25,8 @@ import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
-import { audit, fetchWithTimeout, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
+import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
+import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
 
@@ -112,7 +113,34 @@ app.get("/api/overview", async (c) => {
       cost_today: (costToday.results || []).filter((r: any) => r.cluster_id === cl.id).reduce((s: number, r: any) => s + r.usd, 0),
     })),
     policies: pol,
+    cloudrift: cloudriftEnabled(env) ? await cloudriftView(env) : null,
   });
+});
+
+// ---------------- providers (Runpod is the primary; CloudRift, docs/ops/cloudrift.md)
+async function cloudriftView(env: Env) {
+  const acct = await getSetting<{ at: number | null; balance: number | null; spend_per_hr: number; running: number }>(env, "cloudrift_account", { at: null, balance: null, spend_per_hr: 0, running: 0 });
+  const floor = defaults.cloudriftFloor(env);
+  return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
+}
+app.get("/api/providers", async (c) =>
+  c.json({ providers: [{ id: "runpod", enabled: true }, { id: "cloudrift", enabled: cloudriftEnabled(c.env), ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) }] }),
+);
+app.get("/api/providers/cloudrift/price", async (c) => {
+  const gpu = c.req.query("gpu") || "";
+  if (!gpu) throw new HttpError(400, "gpu: a brand (RTX PRO 6000) or a variant name");
+  return c.json({ gpu, offers: await cloudrift.price(c.env, gpu) });
+});
+/** Terminates one of our CloudRift rentals (tag fv-owner:fastvideo-rs); others are refused. */
+app.post("/api/providers/cloudrift/instances/:id/terminate", async (c) => {
+  const id = c.req.param("id");
+  if (!cloudriftEnabled(c.env)) throw new HttpError(400, "CloudRift is not configured (CLOUDRIFT_API_KEY)");
+  const inst = (await cloudrift.instances(c.env)).find((i) => i.id === id);
+  if (!inst) throw new HttpError(404, "no live CloudRift rental with that id");
+  if (!inst.ours) throw new HttpError(403, `not ours: only rentals tagged ${CLOUDRIFT_OWNER_TAG} are touched`);
+  const ok = await cloudrift.terminate(c.env, id);
+  await auditC(c, { action: "cloudrift.terminate", target: id, after: { name: inst.name, ok } });
+  return c.json({ id, terminated: ok });
 });
 
 app.get("/api/pods", async (c) => {

@@ -817,6 +817,7 @@ mod tests {
             attention_k_eq_v: false,
             v_norm: false,
             layer_scalar: false,
+            attn_softcap: None,
         };
         let prompt = PaddedPrompt::from_ids(&[2, 7, 9, 4], 32).unwrap();
         let streamed = HiddenStack::encode(&weights(), &cfg, &prompt).unwrap();
