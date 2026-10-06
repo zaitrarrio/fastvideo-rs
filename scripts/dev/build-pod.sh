@@ -250,7 +250,10 @@ create_pod() {
       [[ "$v" == "$VCPUS" ]] || d=$(( DISK_GB_FALLBACK < DISK_GB ? DISK_GB_FALLBACK : DISK_GB ))
       resp="$(VCPUS=$v DISK_GB=$d payload "$vol" "$dc" "$hash" | rest POST /pods @- 2>&1)" && { created=$v; break; }
       # Too much disk for this size: retry once with the smallest cap Runpod names.
-      cap="$(grep -o 'Container Disk must be less than or equal to [0-9]*' <<<"$resp" | grep -o '[0-9]*$' | sort -n | head -1)"
+      # `|| true`: no match is the normal case (e.g. "no instances available"),
+      # and under `set -eo pipefail` a failed grep here would end the script
+      # before the vCPU fallback and the stock-wait loop ever ran.
+      cap="$(grep -o 'Container Disk must be less than or equal to [0-9]*' <<<"$resp" | grep -o '[0-9]*$' | sort -n | head -1 || true)"
       if [[ -n "$cap" ]] && (( cap < d )); then
         log "${v} vCPU allows at most ${cap} GB container disk; asking for that"
         d=$cap
