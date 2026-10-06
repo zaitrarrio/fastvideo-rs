@@ -18,20 +18,21 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
-      - run: ffmpeg -hide_banner -version | head -3; which -a ffmpeg ffprobe; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; ldd "$(command -v ffmpeg)" | grep -E "avcodec|vpx|x264|cuda" || true
+      - run: |
+          echo "::notice::$(ffmpeg -hide_banner -version | head -1) | $(which -a ffmpeg | tr '\n' ' ') | LD_LIBRARY_PATH=$LD_LIBRARY_PATH | $(ldd "$(command -v ffmpeg)" | grep -E 'avcodec|vpx|x264|cuda' | tr '\n' ' ')"
       - name: build test binaries
         run: cargo test --no-run -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip 2>&1 | tail -5
       - name: image ffmpeg
-        continue-on-error: true
-        run: cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast 2>&1 | grep -E "^test |test result|panicked|Error|error" | head -80
+        if: always()
+        run: cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast > /tmp/o1.txt 2>&1; rc=$?; grep -E "FAILED|panicked|test result" /tmp/o1.txt | head -30 | sed 's/^/::notice title=image-ffmpeg::/'; exit $rc
       - name: image ffmpeg without LD_LIBRARY_PATH
-        continue-on-error: true
-        run: env -u LD_LIBRARY_PATH cargo test -p fastvideo-media --test decode_pipe --no-fail-fast 2>&1 | grep -E "^test |test result|panicked" | head -40
+        if: always()
+        run: env -u LD_LIBRARY_PATH cargo test -p fastvideo-media --test decode_pipe --no-fail-fast > /tmp/o2.txt 2>&1; rc=$?; grep -E "FAILED|panicked|test result" /tmp/o2.txt | head -20 | sed 's/^/::notice title=no-ldpath::/'; exit $rc
       - name: static ffmpeg 6.0.1
-        continue-on-error: true
+        if: always()
         run: |
           curl -fsSL -o /tmp/ff.tar.xz https://johnvansickle.com/ffmpeg/old-releases/ffmpeg-6.0.1-amd64-static.tar.xz
           echo "28268bf402f1083833ea269331587f60a242848880073be8016501d864bd07a5  /tmp/ff.tar.xz" | sha256sum -c -
           mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
           export FV_FFMPEG=/tmp/ff/ffmpeg FV_FFPROBE=/tmp/ff/ffprobe PATH=/tmp/ff:$PATH
-          cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast 2>&1 | grep -E "^test |test result|panicked" | head -80
+          cargo test -p fastvideo-media --test decode_pipe -p fastvideo-webrtc --test ingest -p fastvideo-reactor --test duplex -p fastvideo-serve --test ingest_whip --no-fail-fast > /tmp/o3.txt 2>&1; rc=$?; grep -E "FAILED|panicked|test result" /tmp/o3.txt | head -30 | sed 's/^/::notice title=ffmpeg-6.0.1::/'; exit $rc
