@@ -656,14 +656,43 @@ run_gate() {
 # recipe and gate). Listing runners needs "Administration: read", which a
 # workflow's GITHUB_TOKEN cannot have: the token comes from FV_RUNNER_READ_TOKEN
 # (a repository secret, fine-grained PAT, Administration: read only); without
-# it the choice is `github`. FV_BUILD_RUNNER=pod|github (a repository variable)
-# forces it. Writes builder=..., reason=... to $GITHUB_OUTPUT; prints JSON.
+# it the choice is `github`. With FV_CONTROL_CI_TOKEN (an fv-control API token
+# of scope ci, docs/dev/build-pods-fv-control.md §6) fv-control decides instead:
+# `pod` for an idle runner; it wakes a build pod and answers `wait` while that
+# comes up (polled for FV_CONTROL_WAIT_S, default 180 s); else `github`. The
+# Administration-read PAT is then not needed. FV_BUILD_RUNNER=pod|github (a
+# repository variable) forces it. Writes builder=..., reason=... to $GITHUB_OUTPUT; prints JSON.
 cmd_pick_runner() {
   local mode="${FV_BUILD_RUNNER:-auto}" label="${FV_RUNNER_LABEL:-fv-build}" builder="" reason="" runners="" n
   case "$mode" in
     pod|github) builder="$mode"; reason="FV_BUILD_RUNNER=$mode" ;;
     auto|"")
-      if [[ -n "${FV_TOOLS_RUNNERS_FILE:-}" ]]; then
+      if [[ -n "${FV_CONTROL_CI_TOKEN:-}${FV_CONTROL_CI_FILE:-}" ]]; then
+        local ans="" b="" h="" t0=$SECONDS n=0
+        if [[ -z "${FV_CONTROL_CI_FILE:-}" ]]; then h="$(umask 077 && mktemp)"; printf 'Authorization: Bearer %s\n' "$FV_CONTROL_CI_TOKEN" >"$h"; fi
+        while :; do
+          n=$((n + 1))
+          if [[ -n "${FV_CONTROL_CI_FILE:-}" ]]; then   # tests: line n is the n-th answer (the last repeats)
+            ans="$(sed -n "${n}p" "$FV_CONTROL_CI_FILE")"; [[ -n "$ans" ]] || ans="$(tail -n1 "$FV_CONTROL_CI_FILE")"
+          else
+            ans="$(curl -sS --fail-with-body --max-time 120 -H @"$h" -H 'content-type: application/json' -X POST \
+              "${FV_CONTROL_URL:-https://fv-control-staging.maximalize.workers.dev}/api/ci/build-runner" \
+              -d "$(jq -nc --arg l "$label" --arg w "${GITHUB_WORKFLOW:-}" --arg r "${GITHUB_RUN_ID:-}" '{label: $l, workflow: $w, run_id: $r}')" 2>/dev/null)" || ans=""
+          fi
+          b="$(jq -r '.builder // empty' <<<"$ans" 2>/dev/null || true)"
+          if [[ "$b" == wait ]] && (( SECONDS - t0 < ${FV_CONTROL_WAIT_S:-180} )); then
+            log "fv-control: $(jq -r .reason <<<"$ans")"
+            sleep "$(jq -r '.retry_after_s // 15' <<<"$ans")"
+            continue
+          fi
+          break
+        done
+        [[ -n "$h" ]] && rm -f "$h"
+        if [[ "$b" == pod ]]; then builder=pod; else builder=github; fi
+        reason="fv-control: $(jq -r '.reason // empty' <<<"$ans" 2>/dev/null || true)"
+        [[ "$b" == wait ]] && reason="fv-control: the woken pod's runner was not online within ${FV_CONTROL_WAIT_S:-180}s"
+        [[ -n "$ans" ]] || reason="fv-control did not answer"
+      elif [[ -n "${FV_TOOLS_RUNNERS_FILE:-}" ]]; then
         runners="$(cat "$FV_TOOLS_RUNNERS_FILE")"   # tests
       elif [[ -n "${FV_RUNNER_READ_TOKEN:-}" ]]; then
         local h; h="$(umask 077 && mktemp)"
@@ -679,7 +708,7 @@ cmd_pick_runner() {
         if (( n > 0 )); then builder=pod; reason="$n idle $label runner(s) online"
         else builder=github; reason="no idle $label runner online"
         fi
-      else
+      elif [[ -z "$builder" ]]; then
         builder=github
       fi ;;
     *) die "FV_BUILD_RUNNER must be auto, pod or github (got $mode)" ;;

@@ -149,7 +149,7 @@ export const EnvSetZ = z.record(z.string().regex(ENV_KEY_RE).meta({ "x-dynamic":
 export const TokenCreateZ = z
   .object({
     name: z.string().regex(/^[A-Za-z0-9._-]{1,40}$/).describe("A name for the token (1-40 of A-Z a-z 0-9 . _ -)."),
-    scope: z.enum(["read", "admin"]).describe("read: GET only; admin: everything but minting tokens."),
+    scope: z.enum(["read", "admin", "ci"]).describe("read: GET only; admin: everything but minting tokens; ci: only /api/ci/* (a GitHub workflow secret)."),
     ttl_days: z.number().int().min(1).max(365).optional().describe("Expiry in days (default 90)."),
   })
   .strict();

@@ -8,6 +8,16 @@ own source snapshot and `CARGO_TARGET_DIR` on the pod's container disk, so
 agents build in parallel without sharing a cargo lock or clobbering each
 other's artifacts; the toolchains and the compile cache live on the volume.
 
+**Status (2026-10-06, branch `wip/fvc-build-pods`):** fv-control manages the
+build pods: it creates, starts, stops and deletes them (one or more, in any
+region, by CPU stock and price), registers each as a GitHub runner, wakes one
+for queued `fv-build` jobs and books their cost like any controller pod.
+`build-pod.sh up|stop|down` ask fv-control; the script makes no Runpod call
+and cannot delete a pod. Design and what changed:
+[build-pods-fv-control.md](build-pods-fv-control.md). The sections below on
+the pod's API, caches, eviction and self-stop are unchanged; where they say
+`up` creates or recreates a pod, fv-control now does it (from main's server
+and image pin, replacing an outdated pod only once it is stopped).
 **Status (2026-10-06):** in use; the pod now runs the prebuilt base image
 ([Base image](#base-image)) with persistent dependency caches ([Caches](#caches)).
 **Status (2026-09-28):** in use. The `fv-build` volume (`pxy4hlsnwq`,
@@ -21,7 +31,7 @@ behaviour.
 B=scripts/dev/build-pod.sh
 A=$(basename "$PWD")          # agent name: your worktree's directory ("." works too)
 
-$B up                                     # reuse / start / create; waits until ready
+$B up                                     # fv-control: reuse / start / create; waits until ready
 $B run $A -- cargo check -p fastvideo-serve --all-targets
 $B run $A -- bash scripts/serve/check.sh
 $B run $A -- cargo check -p fastvideo-cudarc -p fastvideo-gpucheck -p fastvideo-cli \
@@ -37,7 +47,7 @@ $B seed $A                                # build the deps seed of your Cargo.lo
 $B cancel <job>                           # cancel a job whose client died
 $B clean $A target                        # drop your target dir when you are done
 $B evict                                  # run the eviction pass now (see Limits)
-$B stop                                   # when nobody needs it (it also stops itself)
+$B stop                                   # when nobody needs it (it also stops itself); fv-control refuses while busy
 ```
 
 `run` syncs first (only files whose size or mtime changed; deletions are
@@ -315,11 +325,13 @@ scripts and tests still execute code, so the token is the real boundary.
 
 ## Auth
 
-`up` generates a fresh random token per pod and keeps it in
-`~/.config/fv-build/` (mode 600, never printed). The pod only receives its
-SHA-256. Every worktree in this container shares that directory, so all local
-agents can use the pod. A session in another container has no token: it must
-not recreate a pod another session is using; ask, or wait for it to stop.
+fv-control generates a random token per pod, keeps it sealed in its D1
+(AES-GCM under `CONTROL_KEK`) and gives it only to admin callers: `up`
+(`fv-control.sh build-pod up`) writes it to `~/.config/fv-build/` (`pod`,
+`auth-header`, mode 600, never printed). The pod only receives its SHA-256.
+Any session with an admin fv-control token (`~/.config/fv/fv-control-token`)
+can use any build pod (`fv-control.sh build-pod token <id>`); nobody needs
+the Runpod key to build, and nobody but fv-control can replace a pod.
 
 ## Costs and money guards
 
@@ -384,10 +396,11 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
   stopped by hand. Second, lesser flaw: every authenticated request,
   `status` polls included, reset the idle timer. Fixed as above; the
   server's unit tests are `python3 scripts/dev/test_build_pod_server.py`.
-- `up` refuses to run below a $8 balance (`FV_MIN_BALANCE`) and deletes a pod
-  created above `FV_BUILD_MAX_DPH` (default $1.50/hr).
-- Ledger: `~/.config/fv-build/ledger.tsv` (local) and `ledger.tsv` on the
-  volume (pod-side stops).
+- fv-control's `build_pods` policy guards money: `up` refuses below the
+  account floor + `balance_margin`, above `daily_usd_max` of build-pod spend
+  today, or at `max_pods`; a pod created above `max_dph_per_pod` ($1.50/hr)
+  is deleted at once. Costs are in fv-control's ledger (owner
+  `build-pod:<name>`); `ledger.tsv` on the volume still records pod-side stops.
 
 ## Limits
 

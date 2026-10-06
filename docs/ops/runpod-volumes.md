@@ -554,8 +554,10 @@ pod-side ledger (the local copy is in `~/.config/fv-build/ledger.tsv`).
 Rebuild:
 
 ```bash
-scripts/dev/build-pod.sh volume-create   # POST /networkvolumes {name: fv-build, size: 200, dataCenterId: EU-RO-1}
-scripts/dev/build-pod.sh up              # first boot installs everything onto the volume
+# Runpod console (or POST /networkvolumes {name: fv-build, size: 200, dataCenterId: EU-RO-1}),
+# then map it in fv-control's build_pods policy: {"volumes": {"EU-RO-1": "<volume id>"}}
+# (build-pod.sh volume-create is gone: fv-control manages build pods, docs/dev/build-pods-fv-control.md)
+scripts/dev/build-pod.sh up              # fv-control places a pod on it
 ```
 
 Cold timings (2026-09-28, docs/dev/build-pod.md): about 2 min from first boot

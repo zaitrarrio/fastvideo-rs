@@ -209,15 +209,24 @@ the same as every `/v1/*` call):
   check `GET /v1/runner` → `busy` (or the runner's `busy` in the GitHub
   API) first.
 
-**Registering** (`build-pod.sh runner`; `build-pod.sh up` does it too when a
-token source exists, `FV_BUILD_RUNNER=0` skips): the coordinator sends a
+**Registering: fv-control does it** for every build pod it manages
+(docs/dev/build-pods-fv-control.md §5): it holds the repo-admin PAT
+(`GITHUB_RUNNER_PAT`), sends a fresh registration token to `/v1/runner` once
+the pod is ready (labels `fv-build`, `fv-build-<region>`), and removes the
+runner when the pod stops or is deleted. It also wakes a pod for queued
+`fv-build` jobs, and `pick-runner` asks it (`FV_CONTROL_CI_TOKEN`, a token of
+scope `ci`) instead of listing runners: `pod` for an idle runner, a pod woken
+and waited for (up to `FV_CONTROL_WAIT_S`, 180 s), else `github`. The manual
+fallback below needs no fv-control.
+
+**By hand** (`build-pod.sh runner`): the coordinator sends a
 **registration token** (valid 1 h, used once, never written on the pod) from
 
 - `~/.config/fv/gh-runner-token`: a token from the repository's Settings →
   Actions → Runners → *New self-hosted runner* (the `--token` value), or
 - `~/.config/fv/gh-runner-pat`: a fine-grained PAT for this repository with
   **Administration: read and write**, with which `build-pod.sh` mints one
-  (`POST /repos/{repo}/actions/runners/registration-token`) at every `up`.
+  (`POST /repos/{repo}/actions/runners/registration-token`).
 
 Without either, `build-pod.sh runner` fails and says so. The build job waits
 in GitHub's queue while no runner is online (up to 24 h): start the pod
