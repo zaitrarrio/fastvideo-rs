@@ -29,9 +29,10 @@ $B fetch $A release/fv-serve              # -> artifacts/build-pod/$A/release/fv
 $B run $A -- cargo build --release -p fastvideo-gpucheck --features cuda
 $B fetch $A release/fv-gpucheck
 $B run $A -- bash tests/compat/run.sh      # client-compat suites (Node + Chromium on the pod)
-$B status                                 # pod, $/hr, setup, running jobs, disk, self-stop timers
+$B status                                 # pod, $/hr, setup, jobs, disk, self-stop timers, per-agent sizes + eviction
 $B cancel <job>                           # cancel a job whose client died
 $B clean $A target                        # drop your target dir when you are done
+$B evict                                  # run the eviction pass now (see Limits)
 $B stop                                   # when nobody needs it (it also stops itself)
 ```
 
@@ -47,7 +48,8 @@ connection.
 | Path | What |
 |---|---|
 | container disk `/root/fvb/worktrees/<agent>/` | the agent's snapshot: tracked + untracked, non-ignored files (submodules included) |
-| container disk `/root/fvb/target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental while the pod runs) |
+| container disk `/root/fvb/target/<agent>/` | that agent's `CARGO_TARGET_DIR` (incremental while the pod runs; evicted when unused, see Limits) |
+| container disk `/root/fvb/.last-use/<agent>` | stamp of the agent's last sync, job or fetch (what eviction goes by) |
 | container disk `/root/fvb/cargo/` | `CARGO_HOME`; its `registry/cache` and `git/db` link to the volume |
 | volume `cargo/registry/cache`, `cargo/git/db` | downloaded crates and git checkouts (shared) |
 | volume `rustup/` | shared `RUSTUP_HOME` (stable + rustfmt + clippy, per `rust-toolchain.toml`) |
@@ -83,12 +85,153 @@ not the fat-LTO hour. Pass `CARGO_PROFILE_RELEASE_LTO=fat
 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort` for a
 workspace-profile build.
 
+## Release artifacts (prebuilt binaries for the image workflows)
+
+Owner decision 2026-10-06 (option 1b): **the build pod compiles, R2 hands
+off, GitHub assembles.** Every Rust binary and the oxide cubins the images
+and CI jobs need are compiled here; the GitHub workflows download them and
+only run the lean Docker stages (and the tests), no `cargo`. The pod has no
+Docker daemon, so the images themselves are still assembled on GitHub.
+
+```bash
+B=scripts/dev/build-pod.sh
+$B release-artifacts HEAD          # or a sha / origin/main; wakes the pod (`up`)
+$B release-artifacts <sha> --force # rebuild and re-upload
+$B release-artifacts <sha> --no-upload --keep   # build + verify only, into artifacts/release/<sha>/
+$B release-artifacts <sha> --sets "serve-fake gpucheck-tests"   # a subset
+```
+
+What it does:
+
+1. Resolves the revision to a full sha; skips if `artifacts/<sha>/manifest.json`
+   is already in R2 (`--force` rebuilds). One run per container at a time
+   (`flock` on `~/.config/fv-build/release.lock`).
+2. Checks the sha out into a temporary local worktree (plus the
+   `third_party/cutile-rs` submodule), computes the build identity the
+   workflows compute (`scripts/gpu/docker.sh build-id`, the commit time),
+   `up`s the pod and syncs the snapshot to the fixed agent dir **`fv-release`**
+   (one target dir reused across shas, so consecutive commits build
+   incrementally). Eviction (see Limits) never takes `fv-release` while its
+   job runs or within an hour of its last sync, job or fetch, and never
+   touches `release-cache/` on the volume.
+3. Runs `bash scripts/dev/release-artifacts-pod.sh` (allowlisted) on the pod.
+   The recipe is the driving checkout's copy (its hash is in the manifest), so
+   older shas build too.
+4. Fetches the tarballs and `manifest.json`, checks every tarball's sha256,
+   uploads them to R2, `manifest.json` last (its presence means "complete").
+
+The sets, each a tarball whose root is laid out like the Docker stage it
+replaces (so GitHub uses the extracted directory as a named build context):
+
+| set | built as | replaces / used by |
+|---|---|---|
+| `oxide` | `fv-oxide-aot --sm 100,120` (cached on the volume by its inputs, like the image's layer cache) | stage `oxide` (gpucheck.Dockerfile) |
+| `gpucheck` | `cargo build --release -p fastvideo-gpucheck --features cuda`, oxide embedded (`FV_REQUIRE_OXIDE=100,120`); checked with `fv-gpucheck nvrtc` | stage `binary`; gpucheck-t0 nvrtc gates |
+| `gpucheck-vast` | the same without nvcc and oxide, exactly as `vast-pytorch.Dockerfile` builds it today (its builder's `NVCC=/usr/local/cuda-13.0/bin/nvcc` does not exist, so its binary NVRTC-compiles at run time) | stage `binary` (vast-pytorch.Dockerfile) |
+| `hf-fm` | `cargo install hf-fetch-model --features cli` (unpinned, as in the image; version in the manifest) | stage `hf-fm` (both Dockerfiles) |
+| `serve-cuda` | `cargo build --release -p fastvideo-serve --features cuda,http-client` | stage `serve-build` |
+| `serve-gateway` | `… --features http-client` | stage `gateway-build` |
+| `serve-fake` | serve-compat's debug `--features fake,full` build, same `--config` opt-levels | serve-compat `build` job |
+| `gpucheck-tests` | `cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins --no-run` + `tests.tsv` | gpucheck-t0 `unit-tests` job |
+
+**Same settings as the image builder:** `CARGO_PROFILE_RELEASE_LTO=off`,
+`CODEGEN_UNITS=16`, `PANIC=unwind`, `CUDARC_CUDA_VERSION=13000`, CUDA
+13.4.92 (the redist the pod installs, same version the apt pins name), the
+`stable` toolchain of `rust-toolchain.toml`, **no RUSTFLAGS** (the script
+drops the pod's mold link-arg, so the system linker links, as in the image),
+and `FV_GIT_SHA` / `FV_BUILD_TIME` / `BUILD_ID` as the workflows pass them,
+so `fv-serve --version` reports the same build. The pod is Debian bookworm
+(glibc 2.36) and the images Ubuntu 22.04 (glibc 2.35): the script fails if
+any ELF needs a `GLIBC_` symbol newer than 2.35. The oxide build needs
+libclang and cuRAND headers the volume's toolkit lacks: the script installs
+`libclang-dev` and unpacks the `libcurand` redist headers (sha256-checked)
+into `release-cache/` on the volume and a private toolkit overlay.
+
+**R2 layout** (bucket `fv-build-artifacts`, account `Maximal`):
+
+```
+artifacts/<sha>/manifest.json        sha, build_id, build_time, run_id, builder (rustc -vV,
+                                     cargo, nvcc, tileiras, glibc, recipe hash), settings,
+                                     per set: tarball, sha256, size, features, NEEDED libs,
+                                     and every file's sha256/size/mode
+artifacts/<sha>/<set>.tar.gz         one per set (gzip, reproducible tar: sorted, owner 0,
+                                     mtime = commit time)
+```
+
+**Retention:** a lifecycle rule (`expire-artifacts-30d`) deletes every object
+30 days after upload and aborts incomplete multipart uploads after 1 day. A
+commit older than that falls back to compiling (or is rebuilt with
+`release-artifacts <sha>`).
+
+**Credentials:** the upload uses an S3 (SigV4) key scoped to this one bucket,
+read from `~/.config/fv/r2-build-artifacts-rw.env` (mode 600, never printed,
+never on argv; `FV_R2_ARTIFACTS_ENV_FILE` overrides):
+
+```
+FV_R2_ARTIFACTS_ENDPOINT=https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com
+FV_R2_ARTIFACTS_ACCESS_KEY_ID=…
+FV_R2_ARTIFACTS_SECRET_ACCESS_KEY=…
+```
+
+`scripts/dev/r2.py` (stdlib only: `head|get|put|ls`) is the client on both
+sides; `python3 scripts/dev/test_r2.py` checks its signer against AWS's
+published SigV4 examples. **Creating the keys (owner, once):** the
+Cloudflare API token in `/root/.config/fv/cf_api_token` can manage buckets but
+not create API tokens, so R2 S3 keys cannot be minted from here. In the
+Cloudflare dashboard → R2 → *Manage R2 API tokens* → *Create API token*:
+
+1. `fv-build-artifacts-rw`: permission **Object Read & Write**, *Apply to
+   specific buckets only* → `fv-build-artifacts`, TTL forever. Put its
+   Access Key ID / Secret Access Key and the account's S3 endpoint into
+   `~/.config/fv/r2-build-artifacts-rw.env` on the machine that runs
+   `release-artifacts` (the coordinator's container), `chmod 600`.
+2. `fv-build-artifacts-ro`: permission **Object Read only**, same bucket.
+   Add it to the GitHub repository (Settings → Secrets and variables →
+   Actions) as `FV_R2_ARTIFACTS_ENDPOINT`, `FV_R2_ARTIFACTS_ACCESS_KEY_ID`,
+   `FV_R2_ARTIFACTS_SECRET_ACCESS_KEY`.
+
+**Trigger: the coordinator builds before it pushes.** Whoever pushes a
+commit that CI will build runs `release-artifacts` for it first:
+the coordinating session after a merge, before `git push origin main`
+(`build-pod.sh release-artifacts HEAD && git push origin HEAD:main`), and an
+agent before pushing a PR head whose workflows it wants fast. It wakes the
+pod (`up`: start, create, or fail with the reason, e.g. the balance floor)
+and takes ~1–3 min when only a few crates changed, longer after a pod stop
+(empty target dir; sccache refills it). Chosen over the alternatives because
+it needs no new moving part: a GitHub workflow cannot wake the pod or reach
+its token (it lives only in this container), and fv-control polling GitHub
+would need the pod token and the R2 write key in the Worker and a job queue
+on the pod for commits nobody waits for. If the build was skipped or is
+still running, the workflows **fall back** to today's in-image compile with
+a `::warning::` (CI never deadlocks); the repository variable
+`FV_PREBUILT_WAIT_MIN` makes them poll R2 that long first, and
+`FV_PREBUILT_DISABLE=1` turns the download off. Pull-request jobs use the
+PR **head** sha (`github.event.pull_request.head.sha`), not the merge ref.
+
+**Measured (2026-10-06, pod cpu3c 32 vCPU, $0.96/hr):** first run on a fresh
+pod (empty target dir, cold sccache for the no-mold flags) **28 min**
+(oxide 3 min, gpucheck 7, serve-cuda 4, gateway 1.5, fake 4, tests 2,
+vast 3.5, hf-fm 2.7); the next commit (main `0f64377`, after `89fa23b`)
+**8.8 min** with oxide from the volume cache; fetch of all 8 sets (201 MB
+gzip) 20 s. About $0.15 of pod time per incremental commit. Output for
+`0f64377`: serve-cuda 31 MB gz (fv-serve 115.5 MB), serve-gateway 18 MB,
+serve-fake 31 MB, gpucheck 18 MB, gpucheck-vast 10 MB, hf-fm 18 MB (0.12.1),
+gpucheck-tests 84 MB, oxide 0.2 MB; every ELF needs only libc / libm /
+libgcc_s (libstdc++ for the fake build), max `GLIBC_2.35`. Against the image
+CI built for the same commit: `fv-serve --version` identical (git sha, build
+time, build id `6359813b8b741bf5`, profile, features) for the CUDA and the
+gateway binary, `fv-serve.features` identical, sizes within 0.1 % (115.50
+vs 115.39 MB, 58.59 vs 58.66 MB; rustc 1.98.1 on the pod vs the image
+builder's cached stable). The gpucheck-tests binaries pass outside the pod
+(40 + 516 tests, `prebuilt.sh run-tests`).
+
 ## Allowlist
 
 The service runs no shell. Allowed: `cargo check|build|test|clippy|fmt|doc|
 tree|metadata` (not `--target-dir` / `--manifest-path`), `bash
 scripts/serve/check.sh`, `bash scripts/gpu/lint.sh`, `bash
-tests/compat/run.sh`, `bash tests/console/run.sh`. Jobs see no `RUNPOD_*`
+tests/compat/run.sh`, `bash tests/console/run.sh`, `bash
+scripts/dev/release-artifacts-pod.sh` (release artifacts, above). Jobs see no `RUNPOD_*`
 variables (they would switch fv-serve's ICE into "serving on a Runpod pod"
 mode in local tests). Environment overrides:
 `CUDARC_CUDA_VERSION`, `FV_*`, `RUST_LOG`, `RUST_BACKTRACE`, `RUSTFLAGS`,
@@ -179,10 +322,31 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
   Measured: `FV_SERVE_HEAVY=1 FV_SERVE_UI=1 check.sh` leaves **~45 GB**
   (debug, every feature combination); release fv-serve + fv-gpucheck + the
   CUDA check **2.6 GB**; other agents' test targets 13–21 GB. Three heavy
-  agents fill it, so `clean <agent> target` when done. `status` shows
-  `local_disk` and the volume's usage (a du every 15 min; the volume held
-  ~110 GB, mostly sccache and target dirs of the first, volume-mode pod,
-  which boot now removes).
+  agents fill it (on 2026-09-29 nine finished agents had left 185 GB and
+  27 GB free), so `clean <agent> target` when done. `status` shows
+  `local_disk`, the volume's usage (a du every 15 min) and a per-agent table:
+  idle hours, target/snapshot sizes (a du every 5 min), and hours until
+  eviction.
+- **Eviction** (automatic, on the pod): every minute and after each job, the
+  server removes the target dir and snapshot of every agent unused (no sync,
+  job or fetch) for more than `FV_BUILD_EVICT_HOURS` (6), then, while the
+  container disk has less than `FV_BUILD_EVICT_FREE_GB` (40) free, target dirs
+  in least-recently-used order. An agent with a job running or queued is never
+  touched. The release agent **`fv-release`** (`FV_BUILD_EVICT_PROTECT`; its
+  `release-artifacts` run syncs, builds, then fetches the tarballs from its
+  target dir) is also kept for `FV_BUILD_EVICT_HOLD_MIN` (60) after its last
+  sync, job or fetch, and goes last under disk pressure (its target dir is
+  the incremental cache of consecutive release builds). Only
+  `target/<agent>` and `worktrees/<agent>` on the container disk are ever
+  evicted: the volume (`release-cache/`, sccache, toolchains, crates) never
+  is. Eviction is not activity: it never delays the idle self-stop. Each
+  eviction goes to `logs/pod.log` and `status`
+  (`eviction.recent`). An evicted target dir only costs a cold build (sccache
+  refills it); an evicted snapshot is re-sent by the next `run`. `sync` and
+  `run` that still find less than `FV_BUILD_MIN_FREE_GB` (2) free after a pass
+  fail with `build pod disk full: …` (HTTP 507). The eviction settings are
+  sent at pod creation (`up`); the logic has unit tests,
+  `python3 scripts/dev/test_build_pod_server.py`.
 - **Network volume I/O** is slow for many small files, which is why only
   large-file caches (sccache, `.crate`s, toolchains) live there.
 - **Concurrency:** 4 jobs at once (`FV_BUILD_MAX_JOBS`), one per agent; more

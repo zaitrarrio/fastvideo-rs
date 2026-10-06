@@ -153,6 +153,19 @@ fn resolution_change_is_padded_into_the_same_size() {
 
 #[test]
 fn h264_pictures_are_at_most_one_frame_behind() {
+    one_frame_behind(false);
+}
+
+/// The same, and each picture comes out within 250 ms: a latency, which a
+/// loaded host cannot keep (scripts/serve/check.sh --realtime runs it
+/// serialized; docs/dev/testing.md).
+#[test]
+#[ignore = "real-time latency: scripts/serve/check.sh --realtime"]
+fn realtime_h264_pictures_are_at_most_one_frame_behind() {
+    one_frame_behind(true);
+}
+
+fn one_frame_behind(realtime: bool) {
     if !codecs().contains(&InputVideoCodec::H264) {
         return;
     }
@@ -189,7 +202,9 @@ fn h264_pictures_are_at_most_one_frame_behind() {
     assert_eq!(got.len(), enc.len());
     assert!(got.iter().enumerate().all(|(i, p)| p.pts_us == i as u64));
     eprintln!("h264 decode latency, worst once started: {worst:?}");
-    assert!(worst < Duration::from_millis(250), "{worst:?}");
+    if realtime {
+        assert!(worst < Duration::from_millis(250), "{worst:?}");
+    }
 }
 
 #[test]

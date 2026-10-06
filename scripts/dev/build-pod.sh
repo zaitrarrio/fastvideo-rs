@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Shared CPU build pod (docs/dev/build-pod.md): one Runpod CPU pod plus the
 # `fv-build` network volume, driven over the pod's HTTPS proxy (no SSH).
-# Each agent gets its own worktree snapshot and CARGO_TARGET_DIR on the volume.
+# Each agent gets its own worktree snapshot and CARGO_TARGET_DIR on the pod.
 #
 #   build-pod.sh up                  reuse the running pod, start the stopped one,
 #                                    or create it; wait until the toolchain is ready
-#   build-pod.sh status              pod, $/hr, setup state, jobs, disk, and the
-#                                    self-stop timers (idle, time to idle / cap stop)
-#   build-pod.sh agents [--sizes]    agent dirs on the volume
+#   build-pod.sh status              pod, $/hr, setup state, jobs, disk, the
+#                                    self-stop timers (idle, time to idle / cap stop),
+#                                    and per agent: idle hours, target/snapshot sizes,
+#                                    when eviction takes them; recent evictions
+#   build-pod.sh agents [--sizes]    agent dirs on the pod
 #   build-pod.sh sync <agent>        mirror this worktree (tracked + untracked,
 #                                    not ignored) to worktrees/<agent>/
 #   build-pod.sh run <agent> [--no-sync] -- [K=V ...] <cmd...>
@@ -22,9 +24,18 @@
 #                                    copy target/<agent>/<path> back (gzip in
 #                                    transit), e.g. release/fv-serve
 #   build-pod.sh clean <agent> [target|worktree|all]   (default all)
+#   build-pod.sh evict               run the pod's eviction pass now (it also runs
+#                                    every minute: dirs unused > FV_BUILD_EVICT_HOURS,
+#                                    default 6, then LRU target dirs while under
+#                                    FV_BUILD_EVICT_FREE_GB, default 40, free)
 #   build-pod.sh stop                stop the pod (terminate if Runpod refuses a
 #                                    stop); the volume and its caches persist
 #   build-pod.sh down                terminate the pod (volume persists)
+#   build-pod.sh release-artifacts <sha|ref> [--sets "a b"] [--force] [--no-upload] [--keep]
+#                                    build that commit's release binaries on the
+#                                    pod (scripts/dev/release-artifacts-pod.sh),
+#                                    verify and upload them to R2 artifacts/<sha>/
+#                                    for the image workflows (wakes the pod)
 #   build-pod.sh volume-create       create the fv-build volume (once)
 #   build-pod.sh plan                print the pod create payload (no API call)
 #
@@ -45,7 +56,8 @@
 # FV_BUILD_VCPUS_FALLBACK (default 16, taken when the first has no stock);
 # FV_BUILD_CONTAINER_GB (default 200: snapshots and target dirs live there);
 # FV_BUILD_IMAGE (default rust:1-bookworm); FV_BUILD_DC / FV_BUILD_VOLUME_GB
-# for volume-create (default EU-RO-1 / 200).
+# for volume-create (default EU-RO-1 / 200); FV_BUILD_EVICT_HOURS (6) and
+# FV_BUILD_EVICT_FREE_GB (40), sent to the pod at creation.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -66,6 +78,8 @@ MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 IDLE_MIN="${FV_BUILD_IDLE_MIN:-20}"
 MAX_HOURS="${FV_BUILD_MAX_HOURS:-8}"
 MAX_GRACE_MIN="${FV_BUILD_MAX_GRACE_MIN:-30}"
+EVICT_HOURS="${FV_BUILD_EVICT_HOURS:-6}"
+EVICT_FREE_GB="${FV_BUILD_EVICT_FREE_GB:-40}"
 VOLUME_USD_GB_MONTH="0.07"
 LEDGER="$STATE/ledger.tsv"
 TOKEN_FILE="$STATE/token"
@@ -126,6 +140,16 @@ svc() {
     "$@" "$(base_url "$(pod_id)")$path"
 }
 
+# svc, dying with the pod's error (e.g. 507 "build pod disk full: ...") on failure.
+svc_or_die() {
+  local what="$1" out rc=0
+  shift
+  out="$(svc "$@" 2>&1)" || rc=$?
+  (( rc == 0 )) && return 0
+  # The pod's JSON error body and curl's own message, in either order.
+  die "$what failed: $(grep -m1 '^{' <<<"$out" | jq -r '.error // empty' 2>/dev/null || true) [$(grep -v '^{' <<<"$out" | head -c 200)]"
+}
+
 agent_name() {
   local a="$1"
   [[ "$a" == . ]] && a="$(basename "$FV_ROOT")"
@@ -177,14 +201,16 @@ payload() {
   jq -n --arg name "$POD_NAME" --arg image "$IMAGE" --arg vol "$vol" --arg dc "$dc" \
     --argjson flavors "$flavors_json" --arg vcpu "$VCPUS" --arg disk "$DISK_GB" --arg cmd "$(start_cmd)" \
     --arg hash "$hash" --arg srv "$(gzip -9c "$HERE/build-pod-server.py" | base64 -w0)" \
-    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" '{
+    --arg idle "$IDLE_MIN" --arg cap "$MAX_HOURS" --arg grace "$MAX_GRACE_MIN" \
+    --arg evh "$EVICT_HOURS" --arg evf "$EVICT_FREE_GB" '{
       name: $name, imageName: $image, computeType: "CPU", cloudType: "SECURE",
       cpuFlavorIds: $flavors, cpuFlavorPriority: "custom", vcpuCount: ($vcpu|tonumber),
       containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
       env: {FV_BUILD_TOKEN_SHA256: $hash, FV_BUILD_SERVER_B64: $srv,
-            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace}
+            FV_BUILD_IDLE_MIN: $idle, FV_BUILD_MAX_HOURS: $cap, FV_BUILD_MAX_GRACE_MIN: $grace,
+            FV_BUILD_EVICT_HOURS: $evh, FV_BUILD_EVICT_FREE_GB: $evf}
     }'
 }
 
@@ -312,13 +338,26 @@ cmd_status() {
   if [[ "$(jq -r .desiredStatus <<<"$pod")" == RUNNING ]]; then
     local st
     st="$(svc GET /v1/status)" || return 0
-    jq . <<<"$st"
+    jq 'del(.agents)' <<<"$st"
     stop_timers <<<"$st"
+    # A server older than eviction has no agent rows.
+    if jq -e '.eviction' <<<"$st" >/dev/null; then
+      jq -r '"agents on the container disk (\(.local_disk.free_gb // "?") GB free; evict after \(.eviction.idle_hours) h unused, LRU targets below \(.eviction.free_gb_floor) GB free; \(.eviction.protect // [] | join(" ")) held \(.eviction.hold_min // 0) min after use):",
+        (["agent", "idle_h", "busy", "held", "target_gb", "worktree_gb", "evict_in_h"] | @tsv),
+        (.agents // [] | .[] | [.agent, .idle_h, .busy, (.held // false),
+           (if .target then (.target_gb // "?") else "-" end),
+           (if .worktree then (.worktree_gb // "?") else "-" end), .evict_in_h] | @tsv)' <<<"$st" | tsv_table
+    fi
   fi
 }
 
 # One line from /v1/status: idle time and when the pod stops itself. Servers
 # before 2026-10-02 lack the *_in_s fields; derive them there.
+# Aligned columns from TSV on stdin (`column` is not in every container).
+tsv_table() {
+  if command -v column >/dev/null; then column -t -s $'\t'; else tr '\t' ' '; fi
+}
+
 stop_timers() {
   jq -r 'def mins: if . == null then "-" else "\((. / 60) | floor) min" end;
     (.jobs_active | length) as $n
@@ -343,7 +382,7 @@ cmd_sync() {
   # "tmp: unbound variable" after successful runs. A global path plus an EXIT
   # trap covers die(); the normal path removes the directory itself.
   FV_SYNC_TMP="$tmp"
-  trap 'rm -rf "${FV_SYNC_TMP:-}"' EXIT
+  trap 'rm -rf "${FV_SYNC_TMP:-}"; fv_rel_cleanup' EXIT
   svc GET "/v1/agents/$agent/manifest" >"$tmp/remote"
   {
     git -C "$FV_ROOT" ls-files -z --recurse-submodules
@@ -378,10 +417,11 @@ PY
     tar -C "$FV_ROOT" --null -T "$tmp/changed" --format=gnu -cf - | gzip -1 >"$tmp/upload.tgz"
     # A first full snapshot (~1400 files, 29 MB) takes about a minute to
     # extract onto the network volume; allow far more than the default 90 s.
-    FV_BUILD_HTTP_TIMEOUT="${FV_BUILD_SYNC_TIMEOUT:-900}" svc PUT "/v1/agents/$agent/files" --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip' >/dev/null
+    FV_BUILD_HTTP_TIMEOUT="${FV_BUILD_SYNC_TIMEOUT:-900}" svc_or_die "sync $agent" PUT "/v1/agents/$agent/files" \
+      --data-binary @"$tmp/upload.tgz" -H 'content-type: application/gzip'
   fi
   if (( n_deleted > 0 )); then
-    svc POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted" >/dev/null
+    svc_or_die "sync $agent (deletions)" POST "/v1/agents/$agent/delete" --data-binary @"$tmp/deleted"
   fi
   rm -rf "$tmp"
   FV_SYNC_TMP=""
@@ -476,6 +516,100 @@ cmd_down() {
   log "terminated $id (volume kept)"
 }
 
+# ---- release artifacts (docs/dev/build-pod.md "Release artifacts") ----------
+# Build one commit's release binaries on the pod (scripts/dev/release-artifacts-pod.sh),
+# fetch the tarballs + manifest.json, check their sha256s and upload them to
+# R2 under artifacts/<sha>/ (manifest.json last: its presence means complete).
+REL_AGENT="${FV_RELEASE_AGENT:-fv-release}"
+R2_ENV_FILE="${FV_R2_ARTIFACTS_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/r2-build-artifacts-rw.env}"
+# The temporary worktree of a release build; also called from cmd_sync's EXIT trap.
+FV_REL_WT=""
+fv_rel_cleanup() {
+  [[ -n "$FV_REL_WT" ]] || return 0
+  git -C "$FV_ROOT" worktree remove --force "$FV_REL_WT" >/dev/null 2>&1 || rm -rf "$FV_REL_WT"
+}
+r2() { FV_R2_ARTIFACTS_ENV_FILE="$R2_ENV_FILE" python3 "$HERE/r2.py" "$@"; }
+
+cmd_release_artifacts() {
+  local rev="" sets="" force=0 upload=1 keep=0
+  while (( $# )); do
+    case "$1" in
+      --sets) sets="${2:?--sets needs a list}"; shift 2 ;;
+      --force) force=1; shift ;;
+      --no-upload) upload=0; shift ;;
+      --keep) keep=1; shift ;;
+      -*) die "unknown flag $1" ;;
+      *) [[ -z "$rev" ]] || die "one revision only"; rev="$1"; shift ;;
+    esac
+  done
+  [[ -n "$rev" ]] || die "usage: build-pod.sh release-artifacts <sha|ref> [--sets \"a b\"] [--force] [--no-upload] [--keep]"
+  require_tools git jq python3 sha256sum
+  local sha
+  if ! sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}")"; then
+    git -C "$FV_ROOT" fetch -q origin || true
+    sha="$(git -C "$FV_ROOT" rev-parse -q --verify "$rev^{commit}" || git -C "$FV_ROOT" rev-parse -q --verify "origin/$rev^{commit}")" \
+      || die "unknown revision $rev"
+  fi
+  if (( upload )); then
+    [[ -s "$R2_ENV_FILE" ]] || die "no R2 credentials in $R2_ENV_FILE (FV_R2_ARTIFACTS_*; docs/dev/build-pod.md \"Release artifacts\"); --no-upload builds without uploading"
+    local rc=0
+    r2 head "artifacts/$sha/manifest.json" || rc=$?
+    case "$rc" in
+      0) if (( !force )); then log "artifacts/$sha already in R2 (--force rebuilds)"; return 0; fi ;;
+      1) ;;
+      *) die "cannot read the R2 bucket with $R2_ENV_FILE (r2.py exit $rc)" ;;
+    esac
+  fi
+  # One release build per container at a time: they share the pod's
+  # $REL_AGENT snapshot and target dir.
+  exec 9>"$STATE/release.lock"
+  flock -w "${FV_RELEASE_LOCK_WAIT_S:-3600}" 9 || die "another release-artifacts run holds $STATE/release.lock"
+
+  local wt="${TMPDIR:-/tmp}/fv-release-${sha:0:12}" out="${FV_RELEASE_OUT:-$FV_ROOT/artifacts/release/$sha}"
+  local build_id build_time run_id t0=$SECONDS
+  git -C "$FV_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+  git -C "$FV_ROOT" worktree add -q --detach "$wt" "$sha"
+  FV_REL_WT="$wt"
+  trap fv_rel_cleanup EXIT
+  # The image workflows check out submodules too; only cutile-rs is built.
+  git -C "$wt" submodule update -q --init third_party/cutile-rs
+  build_id="$(bash "$wt/scripts/gpu/docker.sh" build-id)"
+  build_time="$(cd "$wt" && TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 3)"
+  # The recipe comes from this checkout (it may postdate <sha>); its hash is
+  # in the manifest (builder.recipe_sha256).
+  install -m 755 "$HERE/release-artifacts-pod.sh" "$wt/scripts/dev/release-artifacts-pod.sh"
+  log "release artifacts for $sha (build id $build_id, run $run_id)"
+
+  cmd_up
+  FV_ROOT="$wt" cmd_sync "$REL_AGENT"
+  local env=(FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" FV_BUILD_ID="$build_id" FV_REL_RUN_ID="$run_id")
+  [[ -n "$sets" ]] && env+=(FV_REL_SETS="$sets")
+  cmd_run "$REL_AGENT" --no-sync -- "${env[@]}" bash scripts/dev/release-artifacts-pod.sh \
+    || die "pod build failed (log above; re-attach with build-pod.sh log <job>)"
+
+  rm -rf "$out" && mkdir -p "$out"
+  cmd_fetch "$REL_AGENT" "release-artifacts/$sha/manifest.json" "$out/manifest.json"
+  chmod -x "$out/manifest.json"
+  [[ "$(jq -r .sha "$out/manifest.json")" == "$sha" ]] || die "manifest is for another sha"
+  local tb want
+  while IFS=$'\t' read -r _ tb want; do
+    cmd_fetch "$REL_AGENT" "release-artifacts/$sha/$tb" "$out/$tb"
+    chmod -x "$out/$tb"
+    [[ "$(sha256sum "$out/$tb" | cut -d' ' -f1)" == "$want" ]] || die "$tb: sha256 differs from the manifest"
+  done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball, .value.sha256] | @tsv' "$out/manifest.json")
+  log "fetched and verified $(jq '.sets | length' "$out/manifest.json") sets ($(du -sh "$out" | cut -f1)) into $out"
+
+  if (( upload )); then
+    while IFS=$'\t' read -r _ tb; do
+      r2 put "artifacts/$sha/$tb" "$out/$tb"
+    done < <(jq -r '.sets | to_entries[] | [.key, .value.tarball] | @tsv' "$out/manifest.json")
+    r2 put "artifacts/$sha/manifest.json" "$out/manifest.json"
+    log "uploaded to R2: artifacts/$sha/ ($(( SECONDS - t0 ))s in all)"
+    (( keep )) || rm -rf "$out"
+  fi
+}
+
 cmd_volume_create() {
   need_key
   [[ -z "$(volume_json)" ]] || die "volume $VOL_NAME already exists"
@@ -496,10 +630,13 @@ case "${1:-}" in
   cancel) svc POST "/v1/jobs/${2:?job id}/cancel" | jq -c '{id, agent, state}' ;;
   fetch) shift; cmd_fetch "$@" ;;
   clean) svc POST "/v1/agents/$(agent_name "${2:?agent}")/clean" -d "{\"what\":\"${3:-all}\"}" | jq -c . ;;
+  evict) FV_BUILD_HTTP_TIMEOUT=900 svc POST /v1/evict | jq -c '.evicted[]' ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
+  release-artifacts) shift; cmd_release_artifacts "$@" ;;
   volume-create) cmd_volume_create ;;
   plan) payload "<volume id>" "${FV_BUILD_DC:-EU-RO-1}" "<sha256 of the pod token>" \
     | jq '.env.FV_BUILD_SERVER_B64 |= "<\(length) bytes: gzip+base64 of build-pod-server.py>"' ;;
-  *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  # The header comment (line 2 up to `set -euo pipefail`) is the usage.
+  *) sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

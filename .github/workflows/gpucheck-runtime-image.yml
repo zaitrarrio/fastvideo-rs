@@ -18,6 +18,8 @@ on:
       - "docker/gpucheck.Dockerfile"
       - ".dockerignore"
       - "scripts/gpu/**"
+      - "scripts/ci/prebuilt.sh"
+      - "scripts/dev/r2.py"
       - ".github/workflows/gpucheck-runtime-image.yml"
 
 permissions:
@@ -33,16 +35,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
-      # The runner has ~14 GB free; builder + oxide + build stages need more.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup
-          docker image prune -af >/dev/null
-          df -h /
-
-      # third_party/cutile-rs compiles the oxide Tile-IR cubins the binary embeds.
+      # third_party/cutile-rs compiles the oxide Tile-IR cubins the binary embeds
+      # (fallback path only; with prebuilt binaries nothing compiles here).
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -54,6 +48,30 @@ jobs:
           echo "build_id=$(bash scripts/gpu/docker.sh build-id)" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-runtime" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # fv-gpucheck, the oxide cubins and hf-fm compiled by the build pod
+      # (scripts/dev/build-pod.sh release-artifacts), from R2. Without them the
+      # image compiles them as before, with a warning (docs/serve/images.md).
+      - name: Prebuilt binaries (R2)
+        id: pre
+        env:
+          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
+          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
+          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
+          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
+          FV_PREBUILT_BUILD_ID: ${{ steps.meta.outputs.build_id }}
+        run: bash scripts/ci/prebuilt.sh fetch "$GITHUB_SHA" oxide gpucheck hf-fm
+
+      # The runner has ~14 GB free; builder + oxide + build stages need more.
+      - name: Free disk space
+        if: steps.pre.outputs.ok != 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup
+          docker image prune -af >/dev/null
+          df -h /
 
       - uses: docker/setup-buildx-action@v3
 
@@ -71,6 +89,9 @@ jobs:
           target: runtime
           platforms: linux/amd64
           push: true
+          # Prebuilt: these directories replace the oxide, binary and hf-fm
+          # stages, so no compile stage runs. Empty: today's in-image compile.
+          build-contexts: ${{ steps.pre.outputs.contexts }}
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
           # Every branch publishes its build-id tag, which is what validate.sh

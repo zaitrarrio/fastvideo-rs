@@ -23,10 +23,7 @@ use tower::ServiceExt;
 const KEY: &str = "sk-ltx";
 
 fn config(tag: &str) -> Config {
-    let dir = std::env::temp_dir().join(format!(
-        "fv-serve-ltx-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let dir = tempfile::Builder::new().prefix(&format!("fv-serve-ltx-{tag}-")).tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());

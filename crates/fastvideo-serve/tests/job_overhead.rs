@@ -200,10 +200,7 @@ struct Shared {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "fv-overhead-{tag}-{:x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ))
+    tempfile::Builder::new().prefix(&format!("fv-overhead-{tag}-")).tempdir().unwrap().keep()
 }
 
 fn base_config(tag: &str, sh: &Shared, s: &Scn) -> Config {

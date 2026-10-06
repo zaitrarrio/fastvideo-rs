@@ -12,6 +12,10 @@
 # Built by scripts/gpu/docker.sh and .github/workflows/vast-pytorch-image.yml.
 # Do not override ENTRYPOINT/CMD — Vast's base image owns SSH / Jupyter supervisord.
 #
+# CI passes the build pod's prebuilt fv-gpucheck and hf-fm as named build
+# contexts (`binary=…`, `hf-fm=…`) that replace the compile stages below
+# (docs/serve/images.md "Prebuilt binaries"); without them they compile here.
+#
 # ARG VAST_PYTORCH_IMAGE pins the base. Prefer a cuda-13.* tag so it matches the
 # CUDA 13.0 libraries cudarc loads (driver floor cuda_vers>=13.0).
 

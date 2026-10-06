@@ -48,7 +48,7 @@ fn bases() -> Vec<(String, String)> {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("fv-gwb-{tag}-{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    tempfile::Builder::new().prefix(&format!("fv-gwb-{tag}-")).tempdir().unwrap().keep()
 }
 
 /// A base as the pod gets it: secrets and pool endpoints from the env.
