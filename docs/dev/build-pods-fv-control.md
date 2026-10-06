@@ -250,10 +250,10 @@ POST /api/ci/build-runner {workflow, run_id, sha, wait_s?: 0..240}
   boot takes 80 s, plus the runner registration). Polling, not one long
   request: Workers' request time, and the plan job's own timeout, stay
   short.
-- `pick-runner` change (on #32's side, after both merge): if
-  `FV_CONTROL_CI_TOKEN` is set, call the endpoint, else keep the read-token
-  path. It is about 15 lines of bash. This branch adds the endpoint; the
-  read-token path keeps working unchanged.
+- `pick-runner` (`scripts/ci/tools-release.sh`, merged from #32): with
+  `FV_CONTROL_CI_TOKEN` it asks this endpoint and polls while the answer is
+  `wait`; without it, it lists runners with `FV_RUNNER_READ_TOKEN` as
+  before. `tools-release.yml` passes both secrets and `vars.FV_CONTROL_URL`.
 
 Workflows on `pull_request` must still never use `fv-build` (#32's safety
 rule). fv-control only wakes for jobs; it does not decide which code runs.
@@ -366,8 +366,10 @@ granularity is too coarse for per-crate caching.
    cannot mint R2 keys), then `wrangler secret put
    BUILD_CACHE_R2_ACCESS_KEY_ID` / `BUILD_CACHE_R2_SECRET_ACCESS_KEY`.
    Also a lifecycle rule "expire after 30 days" on the bucket.
-3. **CI** (after #32 merges): an fv-control API token with scope `ci` as
-   repo secret `FV_CONTROL_CI_TOKEN`. Then `FV_RUNNER_READ_TOKEN` can go.
+3. **CI**: an fv-control API token with scope `ci` (Settings → tokens) as
+   the repo secret `FV_CONTROL_CI_TOKEN`, and the repo variable
+   `FV_CONTROL_URL` if the controller is not the staging URL. Then
+   `FV_RUNNER_READ_TOKEN` can go.
    Behind Cloudflare Access, also an Access service token for it.
 4. **Agents**: their `~/.config/fv/fv-control-token` must be an **admin**
    token: `up` returns the pod token only to admin callers.
@@ -383,5 +385,5 @@ granularity is too coarse for per-crate caching.
    `build-pod.sh up` (now via fv-control) creates a managed pod; the legacy
    pod stops itself when idle and is left to the backstop. Deleting the
    legacy pod is the owner's call.
-4. After #32: the `pick-runner` call (§6), and `wake_on_queue` covers
-   anything that still queues.
+4. With `FV_CONTROL_CI_TOKEN` set, tools releases build on a woken pod;
+   `wake_on_queue` covers anything that still queues for `fv-build`.
