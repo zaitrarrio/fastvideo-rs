@@ -1229,6 +1229,7 @@ dependencies = [
 name = "fastvideo-edge"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fastvideo-dispatch-proto",
  "futures",
  "js-sys",
