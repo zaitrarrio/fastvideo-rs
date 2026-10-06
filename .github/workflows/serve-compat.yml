@@ -17,6 +17,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "scripts/ci/prebuilt.sh"
       - ".github/workflows/serve-compat.yml"
   push:
     branches: ["main"]
@@ -58,11 +59,33 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      # The same debug fake build, compiled by the build pod
+      # (scripts/dev/build-pod.sh release-artifacts); fallback: cargo here.
+      - name: Prebuilt fv-serve (fake) from R2
+        id: pre
+        env:
+          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
+          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
+          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
+          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
+          # Pull requests: the head commit (what the build pod built), not the merge ref.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/prebuilt.sh fetch "$SHA" serve-fake
+      - name: Use the prebuilt fv-serve
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          mkdir -p target/debug
+          install -m 755 "${{ steps.pre.outputs.dir }}/serve-fake/fv-serve" target/debug/fv-serve
+          target/debug/fv-serve --version
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.pre.outputs.ok != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.pre.outputs.ok != 'true'
         with:
           shared-key: serve-compat
       - name: Build fv-serve --features fake,full
+        if: steps.pre.outputs.ok != 'true'
         run: |
           cargo build -p fastvideo-serve --features fake,full --bin fv-serve \
             --config 'profile.dev.package.openh264-sys2.opt-level=3' \
