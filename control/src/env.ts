@@ -10,6 +10,8 @@ export interface Env {
   METRICS?: AnalyticsEngineDataset; // fv_control_metrics
   CLUSTER_OPS: DurableObjectNamespace; // ClusterOps, one per cluster
   ASSETS?: Fetcher; // public/
+  /** The edge Worker as a service binding: a Worker cannot fetch another workers.dev Worker of its account (error 1042). */
+  EDGE?: Fetcher;
 
   // --- secrets (never logged, never returned)
   RUNPOD_API_KEY: string;
@@ -53,6 +55,8 @@ export interface Env {
   EDGE_URL?: string;
   /** The edge's D1 database id (its `api_keys` and the workers' job store); FV_D1_DATABASE_ID of edge workers. */
   EDGE_D1_DATABASE_ID?: string;
+  /** The edge's outputs bucket (its OUTPUTS binding): FV_R2_BUCKET of edge workers, whose result URLs are presigned there. Unset: edge workers get no R2. */
+  EDGE_OUTPUTS_BUCKET?: string;
   /** "1": the cron does nothing (tests drive it by hand). */
   CRON_DISABLED?: string;
 }

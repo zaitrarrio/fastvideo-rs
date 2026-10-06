@@ -82,6 +82,12 @@ binding = "JOBS_DB"
 database_name = "fv-jobs"
 database_id = "1796e295-a7f0-4402-bbed-ec94ccb27c15"
 
+# The staging edge (control_plane = edge clusters): a service binding, since a
+# Worker cannot fetch another workers.dev Worker of the account (error 1042).
+[[env.staging.services]]
+binding = "EDGE"
+service = "fv-edge-staging"
+
 [[env.staging.r2_buckets]]
 binding = "LOGS"
 bucket_name = "fv-control-logs"

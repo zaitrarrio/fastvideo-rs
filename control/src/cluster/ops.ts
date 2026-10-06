@@ -33,7 +33,7 @@ export function ingestUrl(env: Env): string | undefined {
 /** The edge Worker of control_plane = edge clusters (fv-control's EDGE_* settings); undefined when they are not set. */
 export function edgeCfg(env: Env): EdgeCfg | undefined {
   if (!env.EDGE_URL || !env.EDGE_INTERNAL_TOKEN || !env.EDGE_ADMIN_TOKEN) return undefined;
-  return { url: env.EDGE_URL.replace(/\/$/, ""), internal_token: env.EDGE_INTERNAL_TOKEN, admin_token: env.EDGE_ADMIN_TOKEN, d1_database_id: env.EDGE_D1_DATABASE_ID || undefined };
+  return { url: env.EDGE_URL.replace(/\/$/, ""), internal_token: env.EDGE_INTERNAL_TOKEN, admin_token: env.EDGE_ADMIN_TOKEN, d1_database_id: env.EDGE_D1_DATABASE_ID || undefined, outputs_bucket: env.EDGE_OUTPUTS_BUCKET || undefined };
 }
 export function requireEdge(env: Env): EdgeCfg {
   const e = edgeCfg(env);
@@ -233,12 +233,21 @@ export async function deletePod(env: Env, podId: string, log: Logf, why: string)
 }
 
 // ---------------- the gateway's admin token (gateway.md §9)
+/** A request to the edge: through the EDGE service binding when there is one (a
+ * Worker cannot fetch another workers.dev Worker of the same account, error
+ * 1042), else over the Internet (tests, a custom domain). */
+export async function edgeFetch(env: Env, url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
+  if (!env.EDGE) return fetchWithTimeout(url, init);
+  const { timeoutMs, ...rest } = init;
+  return env.EDGE.fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs ?? 20000) } as RequestInit);
+}
 /** Where clients and admin calls go: the edge (control_plane = edge) or the gateway. */
 export function frontUrl(env: Env, c: Cluster): string | undefined {
   return isEdge(c.spec) ? edgeCfg(env)?.url : c.state.gateway_url;
 }
 async function gatewayFetch(env: Env, c: Cluster, path: string, init: RequestInit & { timeoutMs?: number } = {}) {
-  const base = isEdge(c.spec) ? requireEdge(env).url : c.state.gateway_url;
+  if (isEdge(c.spec)) return edgeFetch(env, `${requireEdge(env).url}${path}`, { timeoutMs: 20000, ...init });
+  const base = c.state.gateway_url;
   if (!base) throw new HttpError(409, `${c.name} has no gateway`);
   return fetchWithTimeout(`${base}${path}`, { timeoutMs: 20000, ...init });
 }
@@ -318,9 +327,9 @@ export interface AdminReply {
   status: number;
   body: any;
 }
-async function adminCall(tok: string, t: AdminTarget, method: string, path: string, body?: unknown): Promise<AdminReply> {
+async function adminCall(env: Env, tok: string, t: AdminTarget, method: string, path: string, body?: unknown): Promise<AdminReply> {
   try {
-    const r = await fetchWithTimeout(`${t.url}${path}`, {
+    const r = await (t.pod === "edge" ? edgeFetch : (_e: Env, u: string, i: RequestInit & { timeoutMs?: number }) => fetchWithTimeout(u, i))(env, `${t.url}${path}`, {
       method,
       headers: { authorization: `Bearer ${tok}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -343,7 +352,7 @@ export async function adminOne(env: Env, c: Cluster, method: string, path: strin
   const tok = await adminToken(env, c);
   let last: AdminReply | null = null;
   for (const t of adminTargets(c, env)) {
-    last = await adminCall(tok, t, method, path, body);
+    last = await adminCall(env, tok, t, method, path, body);
     if (last.status !== 0 && last.status < 500 && last.status !== 401) return last;
   }
   return last!;
@@ -351,7 +360,7 @@ export async function adminOne(env: Env, c: Cluster, method: string, path: strin
 /** The same admin call on every target (a revocation applies on each worker at once instead of at its next D1 refresh, ≤ 30 s). */
 export async function adminAll(env: Env, c: Cluster, method: string, path: string): Promise<AdminReply[]> {
   const tok = await adminToken(env, c);
-  return Promise.all(adminTargets(c, env).map((t) => adminCall(tok, t, method, path)));
+  return Promise.all(adminTargets(c, env).map((t) => adminCall(env, tok, t, method, path)));
 }
 
 export async function gatewayPublic(env: Env, c: Cluster, path: string): Promise<{ status: number; body: any }> {
@@ -404,7 +413,7 @@ export async function workerBusy(env: Env, c: Cluster, podId: string): Promise<n
 /** The edge's families view (admin token): each family's workers (worker_id = the pod id) and their readiness. */
 export async function edgeFamilies(env: Env): Promise<any> {
   const e = requireEdge(env);
-  const r = await fetchWithTimeout(`${e.url}/fv/v1/edge/families`, { headers: { authorization: `Bearer ${e.admin_token}` }, timeoutMs: 20000 });
+  const r = await edgeFetch(env, `${e.url}/fv/v1/edge/families`, { headers: { authorization: `Bearer ${e.admin_token}` }, timeoutMs: 20000 });
   if (!r.ok) throw new HttpError(502, `edge /fv/v1/edge/families: ${r.status}`);
   return r.json();
 }

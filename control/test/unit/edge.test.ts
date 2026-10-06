@@ -70,6 +70,10 @@ describe("worker env", () => {
       FV_BACKSTOP_API_KEY: "rpa_KEY",
     });
     expect(Object.keys(e).filter((k) => k.startsWith("FV_R2_"))).toEqual([]);
+    // With the edge's outputs bucket: the account's R2 credentials, the edge's bucket.
+    const e2 = workerSystemEnv(ctx({ edge: { ...EDGE, outputs_bucket: "fv-edge-staging-outputs" } }), h3, "img");
+    expect(e2.FV_R2_BUCKET).toBe("fv-edge-staging-outputs");
+    expect(e2.FV_R2_ACCESS_KEY_ID).toBe("{{ RUNPOD_SECRET_fv_r2_access_key_id }}");
     expect(e.FV_WORKER_DIRECT).toBeUndefined();
     expect(e.FV_ADMIN_TOKEN).toBeUndefined();
     expect(e.FV_CF_API_TOKEN).toBe("{{ RUNPOD_SECRET_fv_cf_api_token }}");

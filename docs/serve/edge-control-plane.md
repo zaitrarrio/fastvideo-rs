@@ -562,8 +562,11 @@ Where the build differs from the design above:
   aliases come from their own configs.
 - Worker env as §5.2, with the backstop in the worker boot
   (`EDGE_WORKER_BOOT`): each pod deletes itself at the deadline or below
-  `min_balance`. `FV_R2_*` are dropped (results go through the edge to its
-  bucket); `FV_D1_DATABASE_ID` is the edge's.
+  `min_balance`. `FV_R2_BUCKET` is the edge's outputs bucket
+  (`EDGE_OUTPUTS_BUCKET`: direct uploads land there and the workers presign
+  result URLs for it); `FV_D1_DATABASE_ID` is the edge's. fv-control calls
+  the edge through a service binding (`EDGE`): workers.dev Workers of one
+  account cannot fetch each other (error 1042, found on staging).
 - `wait`, the pools view, the collector's per-pod jobs and readiness read
   the families view (`GET /fv/v1/edge/families`, worker id = pod id).
 - Tests: `control/test/unit/edge.test.ts` (spec, families, env, the boot

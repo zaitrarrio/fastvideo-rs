@@ -266,6 +266,8 @@ export interface EdgeCfg {
   internal_token: string;
   admin_token: string;
   d1_database_id?: string;
+  /** The edge's outputs bucket: direct uploads land there and the workers presign result URLs for it. */
+  outputs_bucket?: string;
 }
 export interface EnvCtx {
   edge?: EdgeCfg;
@@ -392,9 +394,14 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
   const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx) };
-  // Edge fronts write results through the edge to its bucket and keep their
-  // own files local: not the account's (production) R2 bucket.
-  if (isEdge(ctx.spec)) for (const k of Object.keys(out)) if (k.startsWith("FV_R2_")) delete out[k];
+  // Edge fronts never use the account's (production) bucket: they upload
+  // results through the edge into its outputs bucket and presign their URLs
+  // there (the account's R2 credentials, the edge's bucket); without that
+  // bucket they get no R2 at all.
+  if (isEdge(ctx.spec)) {
+    if (ctx.edge?.outputs_bucket) out.FV_R2_BUCKET = ctx.edge.outputs_bucket;
+    else for (const k of Object.keys(out)) if (k.startsWith("FV_R2_")) delete out[k];
+  }
   return out;
 }
 
