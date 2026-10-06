@@ -1,0 +1,11 @@
+# One row per fv-serve family a GCP VM serves (docs/serve/deploy-gcp.md). Read by
+# scripts/gcp/{vm,e2e,weights}.sh and by crates/fastvideo-serve/tests/e2e.rs
+# (gcp_configs_*), which checks every config against today's fv-serve schema,
+# against its Runpod twin, and as a family Durable Object worker.
+# Columns (tab separated; '-' = none):
+# family	config	runpod_twin	dispatch_family	verify_cells	weight_trees	machine	fal_app	minimax_model	served	reactor_mode
+h3-turbo	gcp-h3-turbo.toml	runpod.toml	h3	fasth3-4step-vsa aux	h3-base FastH3-4-step-Preview-v1-LoRA	g4-standard-48	minimax/h3-turbo	MiniMax-H3	fasth3	av
+h3-max	gcp-h3-max.toml	runpod-h3-max.toml	h3	sol-h3 aux	h3-base FastH3-4-step-Preview-v1-LoRA	g4-standard-48	minimax/h3-max	MiniMax-H3-Max	sol-h3	av
+ltx	gcp-ltx.toml	runpod-ltx.toml	ltx	ltx25-two-stage aux	ltx25	g4-standard-48	fastvideo/ltx-turbo	ltx25-distill-sol	ltx25-distill-sol	av
+wan	gcp-wan.toml	runpod-wan.toml	wan	fastwan21-1.3b aux	fastwan21-1.3b	g4-standard-48	fastvideo/fastwan21-1.3b	fastwan21-1.3b	fastwan21-1.3b	video
+fake	runpod-fake.toml	-	-	-	-	g2-standard-8	minimax/h3-turbo	MiniMax-H3	fake-h3-turbo	av
