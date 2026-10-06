@@ -139,7 +139,7 @@ UMT5, 720p activations and the VAE decode do not fit 94.97 GiB with a margin.
     cache of the f32 shards while loading. **Use a pod with at least 96 GB of
     RAM.**
 - **`both`.** Both experts resident. This is the default (`auto`) when the
-  free memory after UMT5 covers 2 × 26.6 GiB + 24 GiB of headroom
+  free memory after UMT5 covers 2 × 26.6 GiB + 36 GiB of headroom
   (`FASTVIDEO_WAN_MOE_HEADROOM_GIB`): B200 and H200, not the PRO 6000.
 - **FP8 alternative.** `FASTVIDEO_WAN_MOE=both FASTVIDEO_WAN_QUANT=mxfp8` puts
   the reference MXFP8 recipe on every block linear (about 13.7 GiB per

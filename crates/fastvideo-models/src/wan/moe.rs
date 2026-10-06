@@ -32,7 +32,10 @@ pub const ENV: &str = "FASTVIDEO_WAN_MOE";
 pub const HEADROOM_ENV: &str = "FASTVIDEO_WAN_MOE_HEADROOM_GIB";
 /// Activations, workspaces and the VAE decode at 720x1280x81 with CFG
 /// batched: generous, so `auto` errs toward the swap on a 96 GB card.
-pub const DEFAULT_HEADROOM_GIB: f64 = 24.0;
+/// 24 GiB was not: on an RTX PRO 6000 85.7 GiB was free after the text
+/// encoder, `auto` kept both experts (32.5 GiB left), and the full-VAE decode
+/// ran out of memory after a complete 40-step denoise (sol-bench phase B2).
+pub const DEFAULT_HEADROOM_GIB: f64 = 36.0;
 
 const GIB: f64 = (1u64 << 30) as f64;
 
@@ -178,6 +181,13 @@ mod tests {
         let pro6000 = ((94.97 - 21.2 - 0.6) * GIB) as u64;
         assert_eq!(
             MoeResidency::Auto.resolve(expert, head, Some(pro6000)),
+            MoePlan::Swap
+        );
+        // What the RTX PRO 6000 pod reported (phase B2): 85.7 GiB free after
+        // the text encoder. Both experts left 32.5 GiB and the decode OOMed.
+        let measured = (85.7 * GIB) as u64;
+        assert_eq!(
+            MoeResidency::Auto.resolve(expert, head, Some(measured)),
             MoePlan::Swap
         );
         // B200: 178.4 GiB.
