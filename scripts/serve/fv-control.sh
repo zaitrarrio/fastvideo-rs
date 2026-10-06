@@ -28,6 +28,12 @@
 #   fv-control.sh build-pod stop [--force] [<id>]   (default: the one in $FV_BUILD_STATE; refused while busy)
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
+#   fv-control.sh endpoint list [--all]       Runpod serverless endpoints fv-control made (docs/control/serverless.md)
+#   fv-control.sh endpoint create <spec.json|-> | create <name> [variant]   (defaults: cpu = CPU fake engine)
+#   fv-control.sh endpoint show <name|id> | update <name|id> <json> | scale <name|id> <max> [min]
+#   fv-control.sh endpoint extend <name|id> <minutes> | delete <name|id> | logs <name|id> [worker]
+#   fv-control.sh endpoint invoke <name|id> ['<input json>'] [--async]   queue: /runsync (default {"kind":"info"});
+#                                              lb: invoke <name|id> '{"method":"GET","path":"/ping"}'
 #   fv-control.sh api <METHOD> <path> [json]  anything else
 #   fv-control.sh deploy staging               build, migrate and deploy the Worker (wrangler)
 #   fv-control.sh edge-link staging            give the Worker the staging edge (EDGE_URL, EDGE_D1_DATABASE_ID,
@@ -116,6 +122,40 @@ cmd_build_pod() {
     *) die "build-pod up|status|list|stop|start|delete|token|plan|policy" ;;
   esac
 }
+ep_line() { jq -r '.endpoints[]? // .endpoint | select(. != null) | "\(.name)  \(.endpoint_id // "-")  \(.mode)  \(.status)  \(.spec.variant)/\(.spec.compute)  workers \(.workers // 0) (\(.spec.workers_min)..\(.spec.workers_max))  $\(.live_dph // 0)/hr  billed $\(.cost_usd * 1000 | round / 1000)\(if .deadline then "  \(.deadline_action) at " + (.deadline / 1000 | todate) else "" end)\(if .last_error then "  ERROR " + .last_error else "" end)"'; }
+cmd_endpoint() {
+  local sub="${1:-list}"; shift || true
+  local id body
+  case "$sub" in
+    list) api GET "/api/serverless$([[ "${1:-}" == --all ]] && echo '?all=1')" | ep_line ;;
+    create)
+      if [[ -f "${1:-}" || "${1:-}" == - ]]; then body="$(jq -c '{spec: .}' "${1/#-//dev/stdin}")"
+      else body="$(jq -nc --arg n "${1:?spec.json or a name}" --arg v "${2:-cpu}" '{spec: {name: $n, variant: $v}}')"; fi
+      api_s POST /api/serverless "$body" || die "create: $(api_err)"; ep_line <<<"$API_OUT" ;;
+    show) api GET "/api/serverless/${1:?name|id}" | jq '{endpoint: (.endpoint | del(.spec)), spec: .endpoint.spec, runpod: .runpod, health, stats, jobs: [.jobs[] | {id, route, status, cold, delay_ms, exec_ms, wall_ms}], costs}' ;;
+    update) api_s PUT "/api/serverless/${1:?name|id}" "$(jq -c '{spec: .}' <<<"${2:?json (merged over the spec)}")" || die "update: $(api_err)"; ep_line <<<"$API_OUT" ;;
+    scale) api_s POST "/api/serverless/${1:?name|id}/scale" "$(jq -nc --argjson max "${2:?workers_max}" --arg min "${3:-}" '{workers_max: $max} + (if $min == "" then {} else {workers_min: ($min|tonumber)} end)')" || die "scale: $(api_err)"; ep_line <<<"$API_OUT" ;;
+    extend) api_s POST "/api/serverless/${1:?name|id}/extend" "$(jq -nc --argjson m "${2:?minutes}" '{minutes: $m}')" || die "extend: $(api_err)"; ep_line <<<"$API_OUT" ;;
+    delete) api_s DELETE "/api/serverless/${1:?name|id}" || die "delete: $(api_err)"; ep_line <<<"$API_OUT"; [[ "$API_CODE" == 202 ]] && echo "(deleting: the cron retries every minute)" >&2 ;;
+    invoke)
+      id="${1:?name|id}"; shift
+      local input='{"kind":"info"}' async=false out jid
+      while (( $# )); do case "$1" in --async) async=true; shift ;; *) input="$1"; shift ;; esac; done
+      # An lb endpoint takes {method, path, body}; a queue endpoint the job input.
+      if jq -e 'has("path") and (has("kind") | not)' <<<"$input" >/dev/null 2>&1; then body="$input"
+      else body="$(jq -nc --argjson i "$input" --argjson a "$async" '{input: $i, sync: ($a | not)}')"; fi
+      api_s POST "/api/serverless/$id/invoke" "$body" || die "invoke: $(api_err)"
+      out="$API_OUT"
+      if [[ "$(jq -r '.done' <<<"$out")" == false ]]; then
+        jid="$(jq -r .job <<<"$out")"
+        echo "job $(jq -r .runpod_job <<<"$out") $(jq -r .status <<<"$out"): polling" >&2
+        until [[ "$(jq -r '.job.finished_at // "null"' <<<"$out")" != null ]]; do sleep 3; out="$(api GET "/api/serverless/$id/jobs/$jid")"; done
+      fi
+      jq . <<<"$out" ;;
+    logs) api GET "/api/serverless/${1:?name|id}/logs${2:+?worker=$2}" | jq -r '"workers: \(.workers | join(" ")); worker \(.worker // "-")", (.system[]? // empty), (.container[]? // empty), (.stored[]? | "\(.ts / 1000 | todate) \(.msg)")' ;;
+    *) die "endpoint list|create|show|update|scale|extend|delete|invoke|logs" ;;
+  esac
+}
 scope_path() { # account | cluster <name> | pod <id>  -> /api/env/…, shifts
   case "$1" in
     account) echo "/api/env/account" ;;
@@ -161,6 +201,7 @@ case "$cmd" in
   promote) api POST /api/github/release "$(jq -nc --arg t "${1:?sha}" --arg c "${2:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "promote", target: $t, channel: $c, dry_run: $d}')" | jq . ;;
   rollback) api POST /api/github/release "$(jq -nc --arg c "${1:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "rollback", channel: (if $c == "--dry-run" then "stable" else $c end), dry_run: $d}')" | jq . ;;
   build-pod) cmd_build_pod "$@" ;;
+  endpoint) cmd_endpoint "$@" ;;
   api) api "${1:?METHOD}" "${2:?path}" "${3:-}" ;;
   deploy)
     [[ "${1:-}" == staging ]] || die "deploy staging (production: add an [env.production] block first)"
@@ -181,5 +222,5 @@ case "$cmd" in
       python3 -c 'import json,sys; d=sys.argv[1]; r=lambda f: open(f"{d}/{f}").read().strip(); print(json.dumps({"EDGE_URL": r("url"), "EDGE_D1_DATABASE_ID": r("d1_id"), "EDGE_INTERNAL_TOKEN": r("internal_token"), "EDGE_ADMIN_TOKEN": r("admin_token"), "EDGE_OUTPUTS_BUCKET": sys.argv[2]}))' "$st" "${FV_EDGE_OUTPUTS_BUCKET:-fv-edge-staging-outputs}" >"$tmp"
       npx wrangler secret bulk "$tmp" --env staging >/dev/null)
     echo "fv-control staging: edge $(cat "$st/url")" ;;
-  *) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

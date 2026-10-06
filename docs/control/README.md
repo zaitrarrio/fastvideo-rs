@@ -79,6 +79,7 @@ the same thing.
 | `control/src/metrics.ts` | Analytics Engine writes and SQL, the Prometheus parser |
 | `control/src/github.ts`, `ghcr.ts`, `releases.ts` | release dispatch, CI, image tags, drift |
 | `control/migrations/0001_init.sql` | the D1 schema |
+| `control/src/serverless/` | Runpod serverless endpoints ([serverless.md](serverless.md)) |
 | `control/public/` | the dashboard (no framework, SVG charts) |
 
 ## 2. Auth
@@ -588,6 +589,14 @@ card) is off by default.
 | `POST /api/build-pods/up {region?}`, `POST /api/build-pods {region?, purpose: test, server_ref?}` | a pod (+ its token); a separate test pod |
 | `GET /api/build-pods/<id>`, `GET …/token` (admin), `POST …/start`, `POST …/stop {force?}`, `DELETE …?force=1`, `POST …/runner` | one pod |
 | `POST /api/ci/build-runner {label?, region?, wake?}` | the CI builder choice |
+
+## 8b. Serverless endpoints
+
+fv-control also manages Runpod serverless endpoints of fv-serve (queue or
+load balancer): `src/serverless/`, `/api/serverless/*`, the **Serverless** page,
+`fv-control.sh endpoint …`. Spec, Runpod API quirks, ownership, floor, backstop,
+cost from Runpod billing (owner `serverless:<name>`), logs and the live test:
+[serverless.md](serverless.md).
 
 ## 9. Observability
 
