@@ -38,7 +38,10 @@
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
 # FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
-# unpacked on the pod into /fvscratch/files/<basename>; run mode only).
+# unpacked on the pod into /fvscratch/files/<basename>; run mode only),
+# FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
+# image's runpod-matrix.sh with the same environment, e.g. sol-bench-pod.sh;
+# it skips the default weight gate).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Bash reads a script as it runs; a runs lasts hours, so run from a private
@@ -180,8 +183,11 @@ fi
 # kernels mode needs no weights (and may run without a volume).
 if [ "$mode" != kernels ]; then
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
+# A pod script (FV_POD_SCRIPT) gates each of its cells on its own trees.
+if [ -z "${FV_POD_SCRIPT:-}" ]; then
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
+fi
 # Tiny-autoencoder weights (taeh3, taeltx2_3_wide) onto the container disk;
 # the matrix's *-taeh3 / *-taehv cells read them from \$SCRATCH/tae.
 if [ "${FV_SKIP_TAE:-0}" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
@@ -198,7 +204,7 @@ if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     ${FV_PROMPTS:+FV_PROMPTS="$FV_PROMPTS"} ${FV_LPIPS:+FV_LPIPS=$FV_LPIPS} \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
-    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
+    bash ${FV_POD_SCRIPT:+/fvscratch/files/}${FV_POD_SCRIPT:-/opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh} $FAMILY >"\$OUT/matrix.out" 2>&1
   echo "matrix_exit=\$?" >>"\$OUT/matrix.out"
 fi
 echo "done $tag" >"\$OUT/DONE"
