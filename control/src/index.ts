@@ -7,9 +7,9 @@ import { Hono, type Context } from "hono";
 import { DEFAULT_POLICIES, policies } from "./alerts";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
-import { adminAll, adminGet, adminOne, adminTargets, adminToken, desiredEnv, envCtx, gatewayPublic, projectSpend, workerHealth } from "./cluster/ops";
+import { adminAll, adminGet, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgeWorkers, envCtx, gatewayPublic, projectSpend, workerHealth } from "./cluster/ops";
 import { gatewaySystemEnv, isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
-import { assertRegionsAvailable, defaultSpec, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
+import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { allPods, emptyState, getCluster, listClusters, livePods, saveSecrets, saveSpec, type Cluster } from "./cluster/store";
 import { buildPodStatus } from "./buildpod";
 import { collect } from "./collector";
@@ -241,7 +241,8 @@ app.get("/api/clusters/:id", async (c) => {
   const ops = await c.env.DB.prepare("SELECT id, kind, status, params, error, actor, created_at, updated_at FROM operations WHERE cluster_id = ? ORDER BY created_at DESC LIMIT 20").bind(cl.id).all<any>();
   const heads = await releaseHeads(c.env);
   const live = await c.env.DB.prepare("SELECT * FROM pods WHERE cluster_id = ? AND gone_at IS NULL").bind(cl.id).all<any>();
-  return c.json({ cluster: clusterView(cl), pods, live: live.results || [], ops: ops.results || [], op: await currentOp(c.env, cl.id).catch(() => null), drift: clusterDrift(cl, heads.heads) });
+  const edge_url = isEdge(cl.spec) ? edgeCfg(c.env)?.url || null : undefined;
+  return c.json({ cluster: clusterView(cl), ...(edge_url !== undefined ? { edge_url } : {}), pods, live: live.results || [], ops: ops.results || [], op: await currentOp(c.env, cl.id).catch(() => null), drift: clusterDrift(cl, heads.heads) });
 });
 app.put("/api/clusters/:id/spec", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
@@ -323,12 +324,22 @@ app.get("/api/clusters/:id/env", async (c) => {
   return c.json({ pods, preview, needs_restart: pods.filter((p) => p.needs_restart).map((p) => p.pod_id) });
 });
 /** Where clients go: the gateway, or each worker of a gateway-less cluster (docs/control/gateway-less-auth.md). */
-function clientUrls(cl: Cluster) {
+function clientUrls(cl: Cluster, env?: Env) {
   const workers = Object.entries(cl.state.workers || {}).flatMap(([pool, recs]) => recs.map((r) => ({ pod: r.pod, pool, url: r.url || null })));
-  return { direct: isDirect(cl.spec, cl.state), gateway_url: cl.state.gateway_url || null, workers };
+  const edge = isEdge(cl.spec) && env ? edgeCfg(env)?.url || null : null;
+  return { direct: isDirect(cl.spec, cl.state), gateway_url: cl.state.gateway_url || null, ...(isEdge(cl.spec) ? { edge_url: edge } : {}), workers };
 }
 app.get("/api/clusters/:id/gateway", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
+  if (isEdge(cl.spec)) {
+    // The edge is the front: its public status and its families view, with each pod's place in it.
+    const url = edgeCfg(c.env)?.url || null;
+    const status = await gatewayPublic(c.env, cl, "/fv/v1/status").catch((e) => ({ status: 0, body: { error: (e as Error).message } }));
+    const families = await edgeFamilies(c.env).catch((e) => ({ error: (e as Error).message }));
+    const fronts = edgeWorkers(families);
+    const workers = clientUrls(cl, c.env).workers.map((w) => ({ ...w, front: fronts.get(w.pod) || null }));
+    return c.json({ url, edge: true, status: status.body, families, workers });
+  }
   if (isDirect(cl.spec, cl.state)) {
     // No gateway: each worker's public /health stands in for the status and pools views.
     const u = clientUrls(cl);
@@ -343,8 +354,8 @@ app.post("/api/clusters/:id/admin-token", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const tok = await adminToken(c.env, cl);
   await auditC(c, { action: "cluster.admin-token.reveal", target: cl.name });
-  const u = clientUrls(cl);
-  const base = u.direct ? u.workers.find((w) => w.url)?.url : cl.state.gateway_url;
+  const u = clientUrls(cl, c.env);
+  const base = u.edge_url ?? (u.direct ? u.workers.find((w) => w.url)?.url : cl.state.gateway_url);
   return c.json({ admin_token: tok, console: base ? `${base}/console/admin` : null, ...u });
 });
 app.post("/api/clusters/:id/mint-key", async (c) => {
@@ -367,7 +378,7 @@ app.delete("/api/clusters/:id/keys/:kid", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const kid = c.req.param("kid");
   if (!/^key_[0-9a-f]{12}$/.test(kid)) throw new HttpError(400, "key id: key_<12 hex>");
-  adminTargets(cl);
+  adminTargets(cl, c.env);
   // Every worker of a gateway-less cluster at once; one that misses it reads the revocation from D1 within 30 s.
   const rs = await adminAll(c.env, cl, "DELETE", `/fv/v1/admin/keys/${kid}`);
   const ok = rs.filter((r) => r.status === 200);

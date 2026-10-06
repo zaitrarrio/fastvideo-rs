@@ -24,9 +24,13 @@ import {
   desiredEnv,
   envCtx,
   newAdminToken,
+  edgeFamilies,
+  edgeWorkers,
+  requireEdge,
 } from "./ops";
 import type { PodRec } from "./payloads";
-import { getCluster, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
+import { isEdge } from "./spec";
+import { getCluster, listClusters, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
 
 export type OpKind = "up" | "down" | "extend" | "scale" | "roll" | "restart" | "gateway-start" | "gateway-stop";
 export interface Op {
@@ -201,6 +205,12 @@ export class ClusterOps implements DurableObject {
     const d = op.data;
     if (op.phase === "init") {
       if (c.state.gateway || Object.values(c.state.workers).some((l) => l.length)) return { done: true, error: "the cluster has pods already: stop it first" };
+      if (isEdge(c.spec)) {
+        requireEdge(env);
+        // v1: one edge, one cluster behind it (docs/serve/edge-control-plane.md §10 Q2).
+        const other = (await listClusters(env)).find((x) => x.id !== c.id && isEdge(x.spec) && (["starting", "running", "stopping"].includes(x.status) || Object.values(x.state.workers || {}).some((l) => l.length)));
+        if (other) return { done: true, error: `the edge already fronts cluster ${other.name} (${other.status}): one edge cluster at a time` };
+      }
       const proj = await projectSpend(env, c.spec, { hours: c.spec.cap_s / 3600 });
       this.log(`balance $${proj.balance.toFixed(2)}, account $${proj.account_spend_per_hr.toFixed(2)}/hr, cluster ~$${proj.cluster_dph.toFixed(2)}/hr; projected $${proj.projected_balance.toFixed(2)} at the deadline (floor $${proj.floor})`);
       if (!proj.ok && !op.params?.skip_price_check) return { done: true, error: proj.reasons.join("; ") };
@@ -211,13 +221,22 @@ export class ClusterOps implements DurableObject {
       // A new gateway makes a new token; an image older than the sealed-token
       // route (legacy) gets a fresh one from us as FV_ADMIN_TOKEN, and so do
       // gateway-less workers (docs/control/gateway-less-auth.md).
-      if (s.legacy_admin_token || !c.spec.gateway.enabled) s.admin_token = newAdminToken();
+      if (isEdge(c.spec)) delete s.admin_token; // the edge's admin token (EDGE_ADMIN_TOKEN)
+      else if (s.legacy_admin_token || !c.spec.gateway.enabled) s.admin_token = newAdminToken();
       else delete s.admin_token;
       await saveSecrets(env, c, s);
       await saveState(env, c, { status: "starting", deadline: now() + c.spec.cap_s * 1000 });
       this.log(`deadline ${new Date(c.deadline!).toISOString()} (${c.spec.cap_s}s)`);
-      op.phase = c.spec.gateway.enabled ? "gateway" : "workers";
+      op.phase = isEdge(c.spec) ? "register" : c.spec.gateway.enabled ? "gateway" : "workers";
       d.failed = [];
+      return { delayMs: 10 };
+    }
+    if (op.phase === "register") {
+      // The edge answers and takes our admin token before any GPU is paid for.
+      const e = requireEdge(env);
+      const view = await edgeFamilies(env);
+      this.log(`edge ${e.url}: up (key epoch ${view?.key_epoch ?? "?"}, families ${Object.keys(view?.families || {}).join(", ") || "none yet"})`);
+      op.phase = "workers";
       return { delayMs: 10 };
     }
     if (op.phase === "gateway") {
@@ -240,6 +259,9 @@ export class ClusterOps implements DurableObject {
     if (op.phase === "patch") {
       await patchGateway(env, c, this.log);
       if (d.failed.length) this.log(`WARNING: no pod for: ${d.failed.join(", ")}`);
+      // Nothing to wait for: no gateway and not one worker (no stock anywhere).
+      if (!c.state.gateway && !Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
+        return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}): stop the cluster or start it again later` };
       await saveState(env, c, { status: "running" });
       op.phase = "wait";
       d.t0 = now();
@@ -254,7 +276,23 @@ export class ClusterOps implements DurableObject {
     const env = this.env;
     const pools = Object.entries(c.state.workers).filter(([, l]) => l.length);
     let ready = 0;
-    if (c.state.gateway) {
+    if (isEdge(c.spec)) {
+      // The edge's families view: a pool is ready when one of its pods is a ready front.
+      let fronts: ReturnType<typeof edgeWorkers> | null = null;
+      try {
+        fronts = edgeWorkers(await edgeFamilies(env));
+      } catch (e) {
+        this.log(`edge not answering (${Math.round((now() - t0) / 1000)}s): ${(e as Error).message.slice(0, 100)}`);
+      }
+      if (fronts) {
+        for (const [, recs] of pools) {
+          let any = false;
+          for (const r of recs) if (fronts.get(r.pod)?.ready) (any = true), await podUpdate(env, r.pod, { ready: true, status: "ready" });
+          if (any) ready++;
+        }
+        this.log(`pools with a ready front at the edge: ${ready}/${pools.length} (${Math.round((now() - t0) / 1000)}s)`);
+      }
+    } else if (c.state.gateway) {
       let view: any = null;
       try {
         view = await adminGet(env, c, "/fv/v1/gateway/pools");
@@ -344,6 +382,8 @@ export class ClusterOps implements DurableObject {
     if (projected < floor) return { done: true, error: `at $${acct.spendPerHr}/hr the balance would fall below $${floor} before ${new Date(next).toISOString()}` };
     await saveState(env, c, { deadline: next });
     await patchGateway(env, c, this.log);
+    if (isEdge(c.spec))
+      this.log("edge cluster: fv-control holds the new deadline; each worker's own backstop keeps the launch deadline until it is restarted (Env: apply)");
     return { done: true };
   }
 
@@ -595,6 +635,7 @@ export class ClusterOps implements DurableObject {
 
   // ---------------- the gateway alone
   private async gatewayStop(c: Cluster, _op: Op): Promise<Step> {
+    if (isEdge(c.spec)) return { done: true, error: "an edge cluster has no gateway" };
     if (!c.state.gateway) return { done: true, error: "no gateway" };
     await runpod.stop(this.env, c.state.gateway.pod);
     c.state.gateway_stopped = true;
@@ -605,6 +646,7 @@ export class ClusterOps implements DurableObject {
   }
   private async gatewayStart(c: Cluster, op: Op): Promise<Step> {
     const env = this.env;
+    if (isEdge(c.spec)) return { done: true, error: "an edge cluster has no gateway (control_plane = edge)" };
     if (op.phase === "init") {
       if (c.state.gateway && c.state.gateway_stopped) {
         await runpod.start(env, c.state.gateway.pod);
