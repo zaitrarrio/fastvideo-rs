@@ -1,7 +1,8 @@
 # The edge as the only entry point: retiring the fv-serve gateway pod
 
-Status: **stage 1 (edge parity) built, 2026-10-06**; see "Stage 1 as
-built" in §9 for what changed from the design. Stages and their exit
+Status: **stages 1–4 built, 2026-10-06**: the gateway is removed and the
+edge is the only control plane (fv-control `direct` clusters aside); see
+the "as built" notes in §9 for what changed from the design. Stages and their exit
 criteria are in §9; the owner's answers to §10 are recorded there.
 
 The owner's decision: retire the fv-serve gateway pod. fv-control becomes
@@ -340,7 +341,7 @@ Worker and in a native stand-in the tests and the compat mode start.
 ### 5.1 Spec
 
 ```ts
-control_plane: "gateway" | "edge" | "both";   // default "gateway" until stage 4, then "edge" only
+control_plane: "edge" | "direct";   // as built (stage 4); the design had "gateway" | "edge" | "both"
 ```
 
 - `edge`: no gateway pod. `up` phases become `init → workers → register →
@@ -683,6 +684,72 @@ Only after stage 3 passes:
 - Docs: gateway.md and gateway-cloudflare.md get a "retired" banner and
   point here; references in design.md, console.md, releases.md, images.md,
   e2e/*.md and docs/control are updated.
+
+### Stage 4 as built (2026-10-06)
+
+Branch `wip/edgecp-4`. The gateway is gone; `edge` is the default and only
+front-door control plane, and `direct` (gateway-less workers with their
+own keys, [gateway-less-auth.md](../control/gateway-less-auth.md)) stays
+because it needs no edge.
+
+fv-serve:
+
+- Deleted `src/gateway/*`, `src/autoscale.rs` (the in-gateway hook),
+  `src/releases.rs` and its routes, the `deployments` console page,
+  `EngineBackendKind::Remote`, `[[pools]]` / `[autoscale]` in the config
+  and the `FV_POOL_*` / `FV_RUNPOD_*` env parsing. The `[gateway]` table
+  keeps only what a worker reads: `internal_token`, `pool`, `register`,
+  `direct`, `watch_poll_ms`. fv-serve no longer depends on
+  `fastvideo-autoscale`.
+- Kept: the worker's internal routes, the Runpod queue handler (an
+  executor worker still trusts its caller's auth), worker registration in
+  `gw_workers`, the per-pool DO routes (`/pools/…`) and pool-scope worker
+  sockets, the front (`dispatch.front`) and `FV_WORKER_DIRECT`.
+- Tests: `gateway.rs`, `gateway_burst.rs`, `gateway_bases.rs`,
+  `edge_dispatch.rs` and `releases.rs` deleted; `edge_family.rs` now drives
+  a front worker (`dispatch.front`) through the family DO stand-in (6
+  tests); `job_overhead.rs` keeps the single-server rows; `e2e.rs`
+  `shipped_configs_parse` has no gateway branch.
+- `fastvideo-autoscale` stays as the standalone `fv-autoscale` binary
+  (`configs/autoscale.toml`, moved from `configs/serve/`); its
+  `HttpGatewayPools` source and `--gateway` flag are gone.
+
+Images and CI: the `gateway` variant is now `cpu` (the CPU fake-engine
+worker image fv-control's `tiny-cpu` template runs): Dockerfile stages
+`cpu-build` / `serve-cpu`, build arg `FV_CPU_FEATURES`, prebuilt set
+`serve-cpu`, tags `cpu-<channel>` / `cpu-sha-<sha>`. `release.sh redeploy`
+(a `runpod-cluster.sh` wrapper) is gone; roll a cluster with
+`scripts/serve/fv-control.sh roll`. Deleted scripts: `runpod-gateway.sh`,
+`runpod-cluster.sh`, `edge-gpu-test.sh`, `e2e/do-family-pod.sh`; configs
+`configs/serve/gateway.toml`, `gateway-pods.toml`; the compat suite's
+`FV_COMPAT_GATEWAY` mode.
+
+fv-control:
+
+- `control_plane: "edge" | "direct"` (default `edge`) and a top-level
+  `auth` (`keys` | `none`, direct only) replace the `gateway` block. A
+  stored spec with a `gateway` block is migrated when read and when
+  normalized: `control_plane: "gateway"` or a block without
+  `enabled: false` → `edge`; `enabled: false` → `direct`;
+  `gateway.auth` → `auth`; pool variant `gateway` → `cpu`.
+- Removed: the gateway pod (`createGateway`, `patchGateway`, its TOML
+  bases, `gateway-base.ts` and fixtures), the sealed admin-token flow
+  (X25519), the `gateway-start` / `gateway-stop` operations, `roll
+  gateway: true`, `/api/clusters/import` (runpod-cluster.sh state) and its
+  dashboard card, the gateway branch of the collector (pool Prometheus
+  series), `FV_GATEWAY_TOML_B64` / `FV_CLUSTER_PODS` / `FV_GITHUB_TOKEN` /
+  `FV_POOL_*_URLS` as reserved keys.
+- `GET /api/clusters/:id/front` is the cluster's front view (edge
+  families or direct workers); `/gateway` stays as an alias for older
+  dashboards. A legacy state's gateway pod is still deleted by `down`.
+- Tests: unit 67, integration 24 steps (the `tiny` cluster is now an edge
+  cluster against the edge stand-in), UI smoke, all green.
+
+Left for the owner (deployed resources this branch does not touch): GHCR
+`gateway-*` tags and `buildcache-gateway`, the Runpod template
+`fv-serve-gateway-pod`, R2 prebuilt `serve-gateway` sets, the `gw_*` D1
+tables, and staging fv-control specs that still hold a `gateway` block
+(read as migrated; saving one rewrites it).
 
 ## 10. Questions for the owner
 

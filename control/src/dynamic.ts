@@ -34,10 +34,10 @@ export async function gpuTypes(env: Env): Promise<GpuType[]> {
 }
 
 /** Image variants CI builds (scripts/serve/variants.sh); the pool presets reuse them. */
-export const VARIANTS = ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "gateway"];
+export const VARIANTS = ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "cpu"];
 const variantDetail = (v: string) => {
   const ps = POOL_PRESETS.filter((p) => p.pool.variant === v).map((p) => p.id);
-  return v === "gateway" ? "CPU: the gateway, and the fake engine" : ps.length ? `presets: ${ps.join(", ")}` : "";
+  return v === "cpu" ? "CPU: the fake engine" : ps.length ? `presets: ${ps.join(", ")}` : "";
 };
 /** Env keys with what they do: the engine's (catalog.json) and the controller-facing serve ones. */
 export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]) {

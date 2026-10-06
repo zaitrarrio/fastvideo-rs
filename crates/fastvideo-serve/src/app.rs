@@ -33,15 +33,12 @@ pub struct Overrides {
     pub jobs: Option<Arc<dyn JobStore>>,
     /// Use this engine instead of building one from `[engine]`.
     pub engine: Option<EngineService>,
-    /// Use this D1 connection for the D1 job store (and the gateway's
-    /// tables) instead of the HTTP API from `[jobs.d1]` (tests: the mock).
+    /// Use this D1 connection for the D1 job store instead of the HTTP API
+    /// from `[jobs.d1]` (tests: the mock).
     pub d1: Option<fastvideo_serve_kit::D1Client>,
     /// Use this artifact store instead of the configured one (tests: a
     /// store with R2-like latency).
     pub artifacts: Option<Arc<dyn fastvideo_serve_kit::ArtifactStore>>,
-    /// Autoscaler hooks for gateway mode (docs/serve/gateway.md §7).
-    #[cfg(feature = "http-client")]
-    pub scalers: Vec<Arc<dyn crate::gateway::scale::PoolScaler>>,
 }
 
 /// A built server.
@@ -61,9 +58,6 @@ pub struct App {
     /// The Reactor local runtime, when mounted (feature `reactor`).
     #[cfg(feature = "reactor")]
     pub reactor: Option<fastvideo_reactor::Reactor>,
-    /// Gateway mode (`engine.backend = "remote"`): the pools.
-    #[cfg(feature = "http-client")]
-    pub gateway: Option<Arc<crate::gateway::Gateway>>,
     /// This process's worker id (D1 `worker` column).
     pub worker_id: String,
     /// Experimental feature flags (`/fv/v1/admin/flags`, crate::flags).
@@ -142,12 +136,6 @@ pub fn build_engine_with_clock(
             }
             vec![Box::new(FakeBackend::new(fc))]
         }
-        EngineBackendKind::Remote => {
-            // Gateway mode: no local models. An idle engine keeps the
-            // drain/shutdown paths uniform; the gateway is the ServeCtx's
-            // engine gate.
-            vec![Box::new(FakeBackend::new(FakeConfig::default().with_models(&[])))]
-        }
         EngineBackendKind::Cuda => {
             // WP-11: the CudaBackend from `[[models]]` (one GPU).
             #[cfg(feature = "cuda")]
@@ -173,7 +161,7 @@ pub fn build_engine_with_clock(
             ));
         }
     };
-    if c.engine.echo_model && c.engine.backend != EngineBackendKind::Remote {
+    if c.engine.echo_model {
         // The loopback duplex model on its own executor (design §5.11).
         backends.push(Box::new(fastvideo_engine_service::EchoBackend));
     }
@@ -205,7 +193,7 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
 }
 
 /// `[[models]]`-style entries resolved against the CUDA catalog (CPU-only:
-/// no weights are read). The gateway uses it for a pool's static caps.
+/// no weights are read).
 pub fn catalog_models(entries: &[crate::config::ModelCfg]) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
     use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, WeightLayout};
     let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
@@ -303,7 +291,6 @@ impl App {
             Some(a) => a,
             None => storage::build_artifacts(&config, &base, &key).map_err(|e| anyhow!(e))?,
         };
-        let gateway_mode = config.engine.backend == EngineBackendKind::Remote;
         let worker_role = config.server.role == crate::config::Role::Worker;
         // Direct output uploads through the family objects' part URLs
         // (docs/serve/dispatch-do-family.md §7): in front of the store.
@@ -315,7 +302,7 @@ impl App {
             Some(u) => crate::upload::DirectStore::new(artifacts, u.clone()),
             None => artifacts,
         };
-        // A direct worker (no gateway in front, `gateway.direct`) keeps its
+        // A direct worker (clients call it, `gateway.direct`) keeps its
         // own API auth; validate() refused trust-gateway for it.
         let direct = worker_role && config.gateway.direct;
         // A front behind the edge: the edge authenticates, this worker
@@ -326,7 +313,7 @@ impl App {
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustEdge;
         }
         if worker_role && !direct && !front && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
-            tracing::info!("server.role = worker: API auth is the gateway's (trust-gateway); every route needs the internal token");
+            tracing::info!("server.role = worker (an executor: neither a front nor direct): every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
         }
         let (jobs, d1, jobs_kind) = match ov.jobs {
@@ -409,23 +396,6 @@ impl App {
         callbacks.challenge_done_when_dispatched = front;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
-        // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
-        // and a D1 read-through job store.
-        #[cfg(feature = "http-client")]
-        let (gw, jobs) = if gateway_mode {
-            let d1s = d1.clone().ok_or_else(|| anyhow!("engine.backend = remote needs the D1 job store"))?;
-            let store = Arc::new(crate::gateway::store::GatewayJobStore::new(
-                d1s.clone(),
-                Duration::from_millis(config.gateway.watch_poll_ms.max(50)),
-            ));
-            let gw = crate::gateway::Gateway::build(&config, d1s.client().clone(), store.clone()).await?;
-            for s in &ov.scalers {
-                gw.add_scaler(s.clone());
-            }
-            (Some(gw), store as Arc<dyn JobStore>)
-        } else {
-            (None, jobs)
-        };
         // A front: the read-through store over the worker's own D1 store,
         // rows inserted behind the enqueue, pollers woken by the family
         // object (crate::front).
@@ -445,14 +415,13 @@ impl App {
             _ => jobs,
         };
         #[cfg(not(feature = "http-client"))]
-        if gateway_mode || worker_role {
-            return Err(anyhow!("gateway mode and the worker role need fv-serve built with `http-client`"));
+        if worker_role {
+            return Err(anyhow!("the worker role needs fv-serve built with `http-client`"));
         }
         #[cfg(feature = "http-client")]
-        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match (&gw, &front_gate) {
-            (Some(g), _) => g.clone(),
-            (None, Some(f)) => f.clone(),
-            (None, None) => gate.clone(),
+        let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match &front_gate {
+            Some(f) => f.clone(),
+            None => gate.clone(),
         };
         #[cfg(not(feature = "http-client"))]
         let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = gate.clone();
@@ -490,46 +459,6 @@ impl App {
             ctx.uploads().set_remote(crate::front::EdgeUploads::new(fc));
         }
         let admin = Arc::new(admin);
-        #[cfg(feature = "http-client")]
-        if let Some(g) = &gw {
-            g.attach(ctx.clone());
-            let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone())
-                .merge(crate::admin_token::routes(sealed_admin.clone()))
-                .merge(crate::flags::routes(flags.clone(), admin.clone()));
-            let d1_client = d1.as_ref().map(|d| d.client().clone());
-            let autoscale = crate::autoscale::start(&config, g, d1_client, admin.clone(), &worker)?;
-            let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
-            let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
-            let key_maintenance = key_store.spawn_maintenance(refresh, Duration::from_secs(30));
-            // First probes before serving, then the tick loop.
-            g.tick().await;
-            let tick = g.spawn_tick();
-            let mut background = vec![tick, flags_refresh];
-            if let Some((admin_routes, handle)) = autoscale {
-                router = router.merge(admin_routes);
-                background.push(handle);
-            }
-            return Ok(App {
-                config,
-                ctx,
-                gate,
-                router,
-                d1,
-                keys: key_store,
-                admin_token_generated,
-                admin_token_source: admin_token_source.clone(),
-                #[cfg(feature = "reactor")]
-                reactor: None,
-                gateway: Some(g.clone()),
-                worker_id: worker,
-                flags,
-                registration: None,
-                sweeper,
-                key_maintenance,
-                background,
-            });
-        }
-
         // Streaming front-ends that own sockets answer offers on one shared
         // WebRTC host (the Reactor runtime, the fal director, native WHIP
         // ingest): they share the `[webrtc]` ports.
@@ -697,8 +626,6 @@ impl App {
             admin_token_source,
             #[cfg(feature = "reactor")]
             reactor,
-            #[cfg(feature = "http-client")]
-            gateway: None,
             worker_id: worker,
             flags,
             #[cfg(feature = "http-client")]
@@ -722,14 +649,9 @@ impl App {
         Ok(())
     }
 
-    /// `FV-SERVE READY …` on stdout once ready: the gateway's pools, or the
-    /// engine's models ([`announce_ready`]).
+    /// `FV-SERVE READY …` on stdout once the engine's models are ready
+    /// ([`announce_ready`]).
     fn announce(&self) {
-        #[cfg(feature = "http-client")]
-        if let Some(g) = &self.gateway {
-            println!("FV-SERVE READY gateway pools={}", g.pools.iter().map(|p| p.id().to_owned()).collect::<Vec<_>>().join(","));
-            return;
-        }
         announce_ready(self.gate.clone());
     }
 
@@ -742,16 +664,10 @@ impl App {
         #[cfg(feature = "reactor")]
         let reactor = self.reactor.clone();
         #[cfg(feature = "http-client")]
-        let gw = self.gateway.clone();
-        #[cfg(feature = "http-client")]
         let registration = self.registration.clone();
         async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
-            #[cfg(feature = "http-client")]
-            if let Some(g) = &gw {
-                g.stop_admission();
-            }
             #[cfg(feature = "http-client")]
             if let Some(r) = &registration {
                 gate.stop_admission();

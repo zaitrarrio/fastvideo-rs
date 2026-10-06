@@ -19,7 +19,7 @@ deploy scripts pull anonymously).
 | wan (wan-turbo) | `runpod-wan.toml` | `:wan`, … | `fv-serve-wan-sls` / `-pod` |
 | wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, the `wan14b-turbo` tier: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
-| gateway (CPU only) | `gateway.toml` | `:gateway`, … | `fv-serve-gateway-pod` |
+| cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu`, … | `fv-serve-cpu-pod` |
 | debug (legacy all-in-one) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
 
 Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
@@ -31,10 +31,8 @@ promoted (`scripts/serve/release.sh promote <sha>`), and is what deploys
 and the Runpod templates follow. Deploy tooling pins digests. Every image's
 `fv-serve --version` and `/health` (`build`) report its git sha and build
 time; the templates' env adds the image digest and channel. A worker
-reports the same in its internal status, so the gateway shows each pool's
-build (`/fv/v1/status`: short sha and channel; the admin pools route and
-the console's Deployments page: everything) and flags a pool whose
-workers run different builds.
+reports the same in its internal status and `/health`; fv-control's
+Releases page shows each cluster pod's build against its channel.
 
 ### Layers
 
@@ -49,8 +47,9 @@ config + fv-entry + FV_VARIANT/FV_CONFIG        one small layer per variant
 
 The CUDA variants differ only in their last layer (a few KB), so a host that
 has pulled any one of them pulls the next in seconds, and Runpod's host
-image cache covers every family at once. The gateway shares the OS and
-ffmpeg layers and has no CUDA library at all (the smoke check asserts it).
+image cache covers every family at once. The `cpu` image (fv-control's
+fake-engine workers) shares the OS and ffmpeg layers and has no CUDA
+library at all (the smoke check asserts it).
 
 **Per-family binaries.** `fastvideo-serve` has no per-family cargo features
 (`cuda` pulls every `fastvideo-cudarc` pipeline: Wan, LTX-2, H3, MMAudio,
@@ -109,10 +108,10 @@ Each workflow then:
    fv-serve features against the requested ones.
 2. **Assembles** with the extracted directories as **named build contexts
    that replace the compile stages** (`--build-context serve-build=<dir>`,
-   `gateway-build`, `binary`, `oxide`, `hf-fm`). The Dockerfiles' `COPY
+   `cpu-build`, `binary`, `oxide`, `hf-fm`). The Dockerfiles' `COPY
    --from=<stage>` lines take the prebuilt files unchanged, so the lean
    runtime stages (`runtime`, `serve-os`, `serve-cuda-base`,
-   `serve-cuda-bin`, `serve-<variant>`, `serve-gateway`, `serve`) are exactly
+   `serve-cuda-bin`, `serve-<variant>`, `serve-cpu`, `serve`) are exactly
    as before: no toolkit, no compiler in any runtime image. BuildKit never
    runs a replaced stage or its `builder` parent, so the log shows no
    `cargo` step (the C ffmpeg build stays, from the registry cache).
@@ -124,7 +123,7 @@ Each workflow then:
 
 | workflow | sets downloaded | what no longer compiles on the runner |
 |---|---|---|
-| serve-image | `oxide gpucheck hf-fm serve-cuda serve-gateway` | every stage with `cargo` / `nvcc` / `tileiras` (debug + 7 variants) |
+| serve-image | `oxide gpucheck hf-fm serve-cuda serve-cpu` | every stage with `cargo` / `nvcc` / `tileiras` (debug + 7 variants) |
 | gpucheck-runtime-image | `oxide gpucheck hf-fm` | builder, oxide, build, hf-fm |
 | vast-pytorch-image | `gpucheck-vast hf-fm`, always from the **newest** tools release (or the pin); no release: the job fails, it never compiles | builder, build, hf-fm |
 | serve-compat (`build` job) | `serve-fake` | the debug `fake,full` fv-serve (toolchain + rust-cache skipped) |
@@ -165,7 +164,7 @@ only when the repository variable `FV_TEMPLATE_CHANNEL` is `latest`):
 it creates or updates the serverless template (`isServerless`,
 `FV_SERVE_MODE=runpod-queue`, `FV_WEIGHTS=/runpod-volume/weights`,
 trust-gateway auth, 20 GB disk) and the pod template (HTTP mode, ports
-8000/http + 70000/tcp, `/workspace` volume mount, 30 GB disk); the gateway
+8000/http + 70000/tcp, `/workspace` volume mount, 30 GB disk); `cpu`
 gets a CPU pod template only. Images are referenced **by digest**. Secrets are
 Runpod secret references (`{{ RUNPOD_SECRET_fv_* }}`), never values. If the
 registry ever goes private, create a Runpod registry auth for GHCR once and set
@@ -178,15 +177,13 @@ Deploy scripts boot what the templates name:
 - `scripts/serve/runpod-endpoint.sh`: for a variant config
   (`FV_SERVE_CONFIG=/etc/fv/runpod-wan.toml`, or `FV_VARIANT=wan`) with no
   explicit image, the queue endpoint is created **on the published template**
-  itself (`down` never deletes it); with `FV_EXTRA_ENV_JSON` (gateway worker
-  role) or for load-balancer endpoints, a per-run template/endpoint boots the
+  itself (`down` never deletes it); with `FV_EXTRA_ENV_JSON` (worker role)
+  or for load-balancer endpoints, a per-run template/endpoint boots the
   template's image digest. `[image]` / `FV_SERVE_IMAGE` still override; the
   fake config boots the all-in-one `:stable` (`:latest` until the first
   promotion).
 - `scripts/serve/runpod-pod.sh`: the pod boots the image of
   `fv-serve-<variant>-pod`.
-- `scripts/serve/runpod-gateway.sh validate` without an image: each pool its
-  variant image, the gateway pod the CPU `gateway` image.
 - Without templates (no API key, not yet synced) the scripts fall back to the
   GHCR variant tag (`:wan`, …).
 

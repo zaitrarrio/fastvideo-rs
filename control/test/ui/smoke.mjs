@@ -13,7 +13,15 @@ mkdirSync(out, { recursive: true });
 const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
-const w = await startWorker(mock, { ...SECRETS, OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET) });
+const w = await startWorker(mock, {
+  ...SECRETS,
+  OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
+  // The edge stand-in (test/harness.mjs `/edge/*`): clusters run behind the edge.
+  EDGE_URL: `http://127.0.0.1:${mock.port}/edge`,
+  EDGE_INTERNAL_TOKEN: mock.edgeInternal,
+  EDGE_ADMIN_TOKEN: mock.edgeAdmin,
+  EDGE_D1_DATABASE_ID: "d1-edge-staging",
+});
 const B = w.url;
 let browser;
 const fail = (e) => {
@@ -210,7 +218,7 @@ try {
   await page.screenshot({ path: `${out}/15-cluster-keys.png`, fullPage: true });
   await page.click("button:text('Restart…')");
   await page.waitForSelector("dialog.pick input[value='pool:fake']");
-  assert.ok(await page.isVisible("dialog.pick input[value='pool:gateway']"));
+  assert.ok(!(await page.$("dialog.pick input[value='pool:gateway']")), "no gateway pool to restart");
   await page.check("dialog.pick input[value='pool:fake']");
   await page.screenshot({ path: `${out}/16-restart-picker.png` });
   await page.click("dialog.pick button:text('Restart')");

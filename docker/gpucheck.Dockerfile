@@ -28,7 +28,7 @@
 #   --build-context binary=<dir>         <dir>/fv-gpucheck{,.build-id} (binary)
 #   --build-context hf-fm=<dir>          <dir>/out/hf-fm, hf-fetch-model (hf-fm)
 #   --build-context serve-build=<dir>    <dir>/out/fv-serve{,.features} (serve-build)
-#   --build-context gateway-build=<dir>  <dir>/out/fv-serve{,.features} (gateway-build)
+#   --build-context cpu-build=<dir>      <dir>/out/fv-serve{,.features} (cpu-build)
 # Without them (no usable tools release) the stages compile here.
 
 FROM ubuntu:22.04 AS builder
@@ -228,9 +228,9 @@ ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
 # (configs/serve/*.toml), built from shared layers so a host that pulled one
 # CUDA variant already has everything but a few KB of the next:
 #
-#   ubuntu:22.04                       shared by every variant (and the gateway)
+#   ubuntu:22.04                       shared by every variant (and cpu)
 #   serve-os: ca-certificates + the codec runtime libs (x264, vpx, dav1d)
-#   ffmpeg (minimal build, below)      shared by every variant (and the gateway)
+#   ffmpeg (minimal build, below)      shared by every variant (and cpu)
 #   CUDA libs: cuDNN, cuBLAS, NVRTC    shared by the CUDA variants (three layers,
 #                                      so hosts download them in parallel)
 #   fv-serve (--features cuda,…)       shared by the CUDA variants
@@ -373,10 +373,12 @@ COPY configs/serve/runpod-sfwan.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=sfwan FV_CONFIG=/etc/fv/runpod-sfwan.toml
 LABEL org.opencontainers.image.description="fv-serve sfwan (configs/serve/runpod-sfwan.toml)"
 
-# ---- gateway: CPU only. fv-serve without `cuda` (no CUDA libraries at all)
-# on serve-os; ffmpeg stays for input probing.
-FROM build AS gateway-build
-ARG FV_GATEWAY_FEATURES=http-client
+# ---- cpu: CPU only. fv-serve without `cuda` (no CUDA libraries at all) on
+# serve-os, with the fake engine: fv-control's fake-engine CPU workers
+# (tiny-cpu) and tests. (It replaced the retired gateway image,
+# docs/serve/edge-control-plane.md §9 stage 4.)
+FROM build AS cpu-build
+ARG FV_CPU_FEATURES=http-client
 ARG BUILD_ID=unknown
 ARG FV_GIT_SHA=unknown
 ARG FV_BUILD_TIME=
@@ -385,16 +387,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
-    cargo build --release -p fastvideo-serve --features "$FV_GATEWAY_FEATURES" \
+    cargo build --release -p fastvideo-serve --features "$FV_CPU_FEATURES" \
  && mkdir -p /out \
  && cp /target/release/fv-serve /out/fv-serve \
- && echo "$FV_GATEWAY_FEATURES" > /out/fv-serve.features
+ && echo "$FV_CPU_FEATURES" > /out/fv-serve.features
 
-FROM serve-os AS serve-gateway
-COPY --from=gateway-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
+FROM serve-os AS serve-cpu
+COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
-COPY configs/serve/gateway.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=gateway FV_CONFIG=/etc/fv/gateway.toml
-LABEL org.opencontainers.image.description="fv-serve gateway, CPU only (configs/serve/gateway.toml)"
+COPY configs/serve/runpod-fake.toml /etc/fv/
+ENV FV_VARIANT=cpu FV_CONFIG=/etc/fv/runpod-fake.toml
+LABEL org.opencontainers.image.description="fv-serve cpu: fake engine, CPU only (configs/serve/runpod-fake.toml)"
 EXPOSE 8000
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]

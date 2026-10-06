@@ -1,5 +1,10 @@
 # Gateway cluster: a CPU gateway and four GPU pod pools (manual-testing deployment)
 
+> **Historical (2026-10-06).** The gateway, `scripts/serve/runpod-cluster.sh` and
+> `configs/serve/gateway-pods.toml` were removed; fv-control runs clusters
+> behind the edge ([edge-control-plane.md](../edge-control-plane.md) §9, "Stage 4 as built"). This
+> is the record of a past run.
+
 Date: 2026-09-28. `scripts/serve/runpod-cluster.sh up` with image
 `ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:33ec255cc547a5d28a938c9873cdb301f45cb263ac6d6dbb457b6dabff48348f`
 (tag `sha-6ce80bd`: the newest green serve image when this ran. Main was then

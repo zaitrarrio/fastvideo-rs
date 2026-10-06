@@ -9,7 +9,7 @@
 //! ```json
 //! {
 //!   "object": "fv.status",
-//!   "gateway": true,
+//!   "gateway": false,
 //!   "state": "ready",
 //!   "pools": [{
 //!     "id": "h3", "kind": "pod", "state": "busy", "available": true,
@@ -36,8 +36,8 @@
 //! 7-character git sha and the release channel only: no digests, image
 //! names or ids) and sets `mixed_versions` when they run more than one sha;
 //! the top level has this server's own `version` and `mixed_versions` when
-//! any pool is mixed. The admin route `/fv/v1/gateway/pools` has the full
-//! builds.
+//! any pool is mixed. (`gateway` is always false since the gateway was
+//! retired; the field stays for older consoles.)
 
 use std::collections::BTreeMap;
 

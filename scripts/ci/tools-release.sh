@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tools releases on GitHub Releases (docs/dev/tools-releases.md): the build
-# pod's prebuilt binaries (fv-serve cuda/gateway/fake, fv-gpucheck,
+# pod's prebuilt binaries (fv-serve cuda/cpu/fake, fv-gpucheck,
 # gpucheck-vast, hf-fm, the gpucheck unit-test binaries, the oxide cubins),
 # published as one SemVer release per tested set, `tools-v<MAJOR.MINOR.PATCH>`,
 # and consumed by the image workflows instead of compiling.
@@ -356,7 +356,7 @@ cmd_notes() {
 #     plan -> build --local on the build pod's self-hosted runner -> upload
 #     from a GitHub-hosted job with the job's GITHUB_TOKEN;
 #   the coordinator by hand: publish = plan -> build --pod -> upload.
-SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-gateway serve-fake gpucheck-tests"
+SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cpu serve-fake gpucheck-tests"
 
 # next_version <workspace version> <highest released version or "">: the
 # workspace version when it is above the highest release (a manual bump in
@@ -620,14 +620,14 @@ run_gate() {
 
   log "gate 2/3: the shipped gpucheck-tests binaries"
   d="$out/gate"; rm -rf "$d" && mkdir -p "$d"
-  local set; for set in gpucheck-tests gpucheck serve-gateway serve-fake; do
+  local set; for set in gpucheck-tests gpucheck serve-cpu serve-fake; do
     mkdir -p "$d/$set" && tar -xzf "$out/$set.tar.gz" -C "$d/$set"
   done
   FV_TESTS_ROOT="$src" bash "$HERE/prebuilt.sh" run-tests "$d/gpucheck-tests" || { log "unit tests failed"; return 1; }
 
   log "gate 3/3: binaries report $v"
   local got bin note=""
-  for bin in "$d/serve-gateway/out/fv-serve" "$d/serve-fake/fv-serve" "$d/gpucheck/fv-gpucheck"; do
+  for bin in "$d/serve-cpu/out/fv-serve" "$d/serve-fake/fv-serve" "$d/gpucheck/fv-gpucheck"; do
     got="$("$bin" -V 2>&1 | head -1)" || true
     if [[ "$bin" == */fv-gpucheck && "$got" == *"unexpected argument"* ]]; then
       # fv-gpucheck learned -V with the tools releases; older commits lack it.

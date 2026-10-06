@@ -208,7 +208,7 @@ export async function planSpec(env: Env, rawId: string, doc: unknown) {
     for (const p of next.pools) {
       const have = c.state.workers[p.id]?.length || 0;
       const was = cur.pools.find((x) => x.id === p.id);
-      if (!was) actions.push({ action: "create", target: p.id, detail: `new pool: ${p.count} worker(s) on Scale; the gateway restarts to learn it` });
+      if (!was) actions.push({ action: "create", target: p.id, detail: `new pool: ${p.count} worker(s) on Scale` });
       else if (p.count > have) actions.push({ action: "create", target: p.id, detail: `${p.count - have} more worker(s) (Scale ${p.id} to ${p.count})` });
       else if (p.count < have) actions.push({ action: "delete", target: p.id, detail: `${have - p.count} worker(s) drained and deleted (Scale ${p.id} to ${p.count})` });
       if (was && (was.variant !== p.variant || was.image !== p.image)) actions.push({ action: "roll", target: p.id, detail: `image of ${p.id} changes: Roll` });
@@ -220,12 +220,13 @@ export async function planSpec(env: Env, rawId: string, doc: unknown) {
     const ctx = await envCtx(env, shadow);
     for (const r of (await livePods(env, c.id)).filter((x: any) => x.slot !== "retired")) {
       if (r.role === "worker" && !next.pools.some((p) => p.id === r.pool)) continue;
-      const d = await desiredEnv(env, shadow, ctx, r.role, { pod: r.pod_id, pool: r.pool, image: r.image });
+      if (r.role !== "worker") continue;
+      const d = await desiredEnv(env, shadow, ctx, "worker", { pod: r.pod_id, pool: r.pool, image: r.image });
       if (d.hash !== r.env_hash) actions.push({ action: "restart", target: r.pod_id, detail: `${r.role}${r.pool ? ` ${r.pool}` : ""}: its env changes (Env: apply with a rolling restart)` });
     }
     if (next.cap_s !== cur.cap_s) warnings.push("cap_s applies at the next start; move a running cluster's deadline with Extend");
   } else {
-    const n = next.pools.reduce((s, p) => s + p.count, 0) + (next.gateway.enabled ? 1 : 0);
+    const n = next.pools.reduce((s, p) => s + p.count, 0);
     actions.push({ action: "none", target: c.name, detail: `the cluster is stopped: nothing changes now; Start would create ${n} pod(s)` });
   }
   const hours = running && c.deadline ? Math.max(0.1, (c.deadline - now()) / 3_600_000) : next.cap_s / 3600;

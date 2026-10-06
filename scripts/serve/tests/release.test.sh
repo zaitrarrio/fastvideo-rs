@@ -25,16 +25,13 @@ export FV_ENV_FILE=/dev/null
 export FV_D1_API_BASE="$M/client/v4" FV_CF_API_TOKEN=test-cf-token
 export RUNPOD_API_BASE="$M/v1" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
 export FV_REGISTRY_API="$M" FV_GITHUB_API="$M" GH_TOKEN=test-gh-token
-export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_CLUSTER_STATE="$T/cluster.json" FV_SERVE_LEDGER="$T/ledger.tsv"
+export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_SERVE_LEDGER="$T/ledger.tsv"
 # FV_POD_CAP_S: runpod-pod.sh's detached backstop deletes the pod that long
 # after `up`; 1 s deleted the mock pod before the checks below on a loaded
 # host (the shared build pod). Nothing here waits for it to fire.
-export FV_DEPLOYED_BY=test FV_POD_CAP_S=300 FV_ROLL_WAIT_S=30 FV_DRAIN_WAIT_S=5
-# The gateway's optional GitHub token (runpod-cluster.sh): a test file, mode 600.
-export FV_GITHUB_TOKEN_FILE="$T/github_token"
-( umask 077; printf 'test-gh-pat-0929\n' >"$FV_GITHUB_TOKEN_FILE" )
+export FV_DEPLOYED_BY=test FV_POD_CAP_S=300
 REPO=ghcr.io/zaitrarrio/fastvideo-rs-serve
-KEYS="debug h3-turbo h3-max ltx wan wan5b sfwan gateway"
+KEYS="debug h3-turbo h3-max ltx wan wan5b sfwan cpu"
 
 # `docker buildx imagetools create --tag <repo>:<tag> <repo>@<digest>` moves the mock's tag.
 mkdir -p "$T/bin"
@@ -68,7 +65,7 @@ tpls='{}'
 for v in $KEYS; do
   [[ "$v" == debug ]] && continue
   for f in sls pod; do
-    [[ "$v" == gateway && "$f" == sls ]] && continue
+    [[ "$v" == cpu && "$f" == sls ]] && continue
     tpls="$(jq -c --arg id "tpl-$v-$f" --arg n "fv-serve-$v-$f" '. + {($id): {id: $id, name: $n, imageName: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
   done
 done
@@ -96,7 +93,7 @@ check "promote dispatch: no tag moved" test -z "$(tag stable)"
 out="$(rel promote "${A:0:7}" stable --local --notes "first stable")"
 check "promote --local: release 1 recorded" bash -c 'grep -q "release 1: stable = aaaaaaa (promote)" <<<"$0"' "$out"
 check "promote: :stable and :<variant>-stable point at the build" \
-  test "$(tag stable) $(tag h3-turbo-stable) $(tag gateway-stable)" = "$(jq -r '.debug, .["h3-turbo"], .gateway' <<<"$DA" | xargs)"
+  test "$(tag stable) $(tag h3-turbo-stable) $(tag cpu-stable)" = "$(jq -r '.debug, .["h3-turbo"], .cpu' <<<"$DA" | xargs)"
 check "promote: stable does not move the legacy :<variant> tags" test -z "$(tag h3-turbo)"
 check "promote: every template boots the build, with its identity env" \
   test "$(state | jq -r --arg d "$(jq -r .wan <<<"$DA")" '[.templates[] | select(.name | startswith("fv-serve-wan-"))
@@ -116,7 +113,7 @@ check "promote to latest: :latest, :<v>-latest and :<v>; templates untouched" \
   "$(state)" "$(jq -r '.debug, .wan, .wan' <<<"$DB" | xargs)"
 
 out="$(bash "$SERVE/release.sh" promote "${C:0:7}" stable --local 2>&1)"
-check "promote: a build missing variants is refused" bash -c '[[ "$0" == *"has no image for: h3-max ltx wan wan5b sfwan gateway"* ]]' "$out"
+check "promote: a build missing variants is refused" bash -c '[[ "$0" == *"has no image for: h3-max ltx wan wan5b sfwan cpu"* ]]' "$out"
 check "promote: refused, nothing moved" test "$(tag stable)" = "$(jq -r .debug <<<"$DB")"
 
 # --- list / history ------------------------------------------------------------
@@ -205,56 +202,9 @@ out="$(rel reconcile --fix)"
 check "reconcile: a changed image is flagged and --fix records it" \
   bash -c 'grep -q "^drifted   pod stray1" <<<"$0" && [[ "$1" == "sha256:0ther" ]]' "$out" "$(sql "SELECT digest FROM deployments WHERE id = 'pod:stray1'" | jq -r '.[0].digest')"
 
-# --- redeploy (rolling) ------------------------------------------------------------
-now=$(date +%s)
-curl -sS -X POST "$M/__seed" -d "{\"pods\": {
-  \"gw1\": {\"id\": \"gw1\", \"name\": \"fv-cluster-gw-1\", \"imageName\": \"$REPO@$(jq -r .debug <<<"$DA")\", \"desiredStatus\": \"RUNNING\", \"env\": {}},
-  \"old-h3\": {\"id\": \"old-h3\", \"name\": \"fv-cluster-h3-turbo-1\", \"imageName\": \"$REPO@$(jq -r .debug <<<"$DA")\", \"desiredStatus\": \"RUNNING\", \"env\": {}},
-  \"old-wan\": {\"id\": \"old-wan\", \"name\": \"fv-cluster-wan-1\", \"imageName\": \"$REPO@$(jq -r .debug <<<"$DA")\", \"desiredStatus\": \"RUNNING\", \"env\": {}}}}" >/dev/null
-jq -n --arg img "$REPO@$(jq -r .debug <<<"$DA")" --argjson dl "$((now + 6000))" '{image: $img, internal_token: "test-internal-token",
-  url_signing_key: "k", admin_token: "fvadm_x", auth: "none", deadline: $dl, gateway_url: "https://gw1-8000.proxy.runpod.net",
-  gateway: {pod: "gw1", cpu: "cpu3c", dph: 0.1, created: 1, dc: "EUR-IS-1", image: $img},
-  workers: {"h3-turbo": {pod: "old-h3", gpu: "g", dc: "EUR-IS-1", dph: 1, created: 1, url: "https://old-h3-8000.proxy.runpod.net"},
-            wan: {pod: "old-wan", gpu: "g", dc: "EUR-IS-1", dph: 1, created: 1, url: "https://old-wan-8000.proxy.runpod.net", image: $img}}}' >"$T/cluster.json"
-npods="$(state | jq '.pods | length')"
-out="$(rel redeploy h3-turbo stable --dry-run)"
-check "redeploy --dry-run: the plan (stable is B now)" bash -c 'grep -q "h3-turbo: .* -> '"$(jq -r .debug <<<"$DB" | cut -c8-19)"'" <<<"$0" && grep -q "dry run" <<<"$0"' "$out"
-check "redeploy --dry-run: no pod created" test "$(state | jq '.pods | length')" = "$npods"
-rel redeploy h3-turbo stable >"$T/roll.out" 2>&1
-NEW="$(jq -r '.workers["h3-turbo"].pod' "$T/cluster.json")"
-check "redeploy: the pool's worker is a new pod on B" \
-  test "$NEW/$(jq -r '.workers["h3-turbo"].image' "$T/cluster.json")" = "$NEW/$REPO@$(jq -r .debug <<<"$DB")"
-check "redeploy: the old worker was drained, then deleted" \
-  test "$(state | jq -c '[.drains, (.pods | has("old-h3")), (.pods | has("old-wan"))]')" = '[["old-h3"],false,true]'
-check "redeploy: the gateway saw both workers, then only the new one" \
-  test "$(state | jq -r '.pods.gw1.env.FV_POOL_H3_TURBO_URLS')" = "https://$NEW-8000.proxy.runpod.net"
-check "redeploy: the gateway gets FV_GITHUB_TOKEN from the mode-600 token file" \
-  test "$(state | jq -r '.pods.gw1.env.FV_GITHUB_TOKEN')" = test-gh-pat-0929
-check "redeploy: two gateway restarts, no image change" \
-  test "$(state | jq -c '[.patches[] | select(.id == "gw1") | .keys]')" = '[["env"],["env"]]'
-check "redeploy: the registry has the new pod ready and the old one deleted" \
-  test "$(sql "SELECT runpod_id, status, channel FROM deployments WHERE pool = 'h3-turbo' OR runpod_id = 'old-h3' ORDER BY created_at" | jq -c 'map([.status, .channel])')" = '[["ready","stable"]]'
-check "redeploy: the state has no roll leftovers" test "$(jq -c '[.rolling, (.retired | length)]' "$T/cluster.json")" = '[null,0]'
-rel redeploy gateway stable >/dev/null 2>>"$T/stderr.log"
-check "redeploy gateway: same pod, new image" \
-  test "$(state | jq -r '.pods.gw1.imageName') $(jq -r .gateway.image "$T/cluster.json")" = "$REPO@$(jq -r .debug <<<"$DB") $REPO@$(jq -r .debug <<<"$DB")"
-out="$(bash "$SERVE/release.sh" redeploy all stable 2>&1)"
-check "redeploy all: only what is behind (wan)" bash -c 'grep -q "  wan: " <<<"$0" && ! grep -q "  h3-turbo: " <<<"$0" && ! grep -q "  gateway: " <<<"$0"' "$out"
-
-# A cluster on per-variant images rolls onto the target's variant images.
-curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"old-wan5b\": {\"id\": \"old-wan5b\", \"name\": \"fv-cluster-wan-2\", \"imageName\": \"$REPO@$(jq -r .wan5b <<<"$DA")\", \"desiredStatus\": \"RUNNING\", \"env\": {}}}}" >/dev/null
-jq --arg w "$REPO@$(jq -r .wan5b <<<"$DA")" --arg g "$REPO@$(jq -r .gateway <<<"$DA")" \
-  '.images = {gateway: $g, wan: $w} | .workers = {wan: {pod: "old-wan5b", url: "https://old-wan5b-8000.proxy.runpod.net", image: $w}} | .gateway.image = $g' \
-  "$T/cluster.json" >"$T/c2.json" && mv "$T/c2.json" "$T/cluster.json"
-out="$(bash "$SERVE/release.sh" redeploy all stable 2>&1)"
-check "redeploy (per-variant cluster): wan -> wan5b image, gateway -> gateway image, images kept in step" \
-  test "$(jq -r '.workers.wan.image, .images.wan, .gateway.image, .images.gateway' "$T/cluster.json" | xargs)" \
-  = "$REPO@$(jq -r .wan5b <<<"$DB") $REPO@$(jq -r .wan5b <<<"$DB") $REPO@$(jq -r .gateway <<<"$DB") $REPO@$(jq -r .gateway <<<"$DB")"
-
 # --- secrets -------------------------------------------------------------------
 all="$(cat "$T"/*.out "$T/stderr.log" 2>/dev/null)"
 check "no secret in any output" bash -c '! grep -Eq "test-cf-token|test-runpod-key|test-gh-token|test-gh-pat|test-internal-token|never-print-me" <<<"$0"' "$all"
-check "the GitHub token is not in the cluster state" bash -c '! grep -q "test-gh-pat" "$0"' "$T/cluster.json"
 check "no secret in the ledger" bash -c '! grep -Eq "test-|never-print-me" "$0"' "$T/ledger.tsv"
 
 printf '\nrelease.test: %d passed, %d failed\n' "$PASS" "$FAIL"

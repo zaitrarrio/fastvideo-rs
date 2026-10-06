@@ -15,7 +15,7 @@ $T bump feature           # only for a MINOR/MAJOR change: Cargo.toml + Cargo.lo
 $T publish origin/main    # by hand from the coordinator (plan + build --pod + upload)
 $T list                   # releases, highest version first
 $T resolve [--version 0.1.3] [--input-hash H] [--exact]
-$T fetch tools-v0.1.0 /tmp/t serve-gateway    # download + verify sha256
+$T fetch tools-v0.1.0 /tmp/t serve-cpu    # download + verify sha256
 $T prune --dry-run        # retention (publish runs it)
 ```
 
@@ -27,7 +27,7 @@ $T prune --dry-run        # retention (publish runs it)
   --prerelease`): `tools-v<version>-pre.<sha12>`; they are only ever picked
   by an exact input-hash match, never as "latest".
 - **Assets**: one gzip tarball per set (`oxide gpucheck gpucheck-vast hf-fm
-  serve-cuda serve-gateway serve-fake gpucheck-tests`, about 200 MB in all;
+  serve-cuda serve-cpu serve-fake gpucheck-tests`, about 200 MB in all;
   the sets and their build settings are in docs/dev/build-pod.md "Release
   artifacts") and `manifest.json`: version, tag, input hash, inputs, source
   commit, build id/time, builder (rustc, cargo, nvcc, tileiras, glibc,
@@ -45,7 +45,7 @@ pick by SemVer, not by GitHub's flag or by date.
 ## Versioning
 
 Every binary reports the release version: `fv-serve -V` / `--version`, the
-`version` of fv-serve's `/health` (and the gateway, worker and edge routes),
+`version` of fv-serve's `/health` (and the worker and edge routes),
 `fv-gpucheck -V`. The build passes it as `FV_RELEASE_VERSION`
 (crates/fastvideo-serve/build.rs, `option_env!` in fv-gpucheck); a local
 build without it reports the workspace version (`[workspace.package]
@@ -107,7 +107,7 @@ newer push replaces a queued run, the running one finishes:
      `scripts/serve/check.sh` (check + clippy + tests of the serve crates,
      target `target/gh-runner-test`, no debuginfo); the **shipped**
      gpucheck/cudarc unit-test binaries (`gpucheck-tests`) against the
-     commit's sources; `-V` of the shipped fv-serve (gateway, fake) and
+     commit's sources; `-V` of the shipped fv-serve (cpu, fake) and
      fv-gpucheck must print V;
    - the staged release (tarballs, `manifest.json`, `body.md`) becomes a
      workflow artifact (3 days).

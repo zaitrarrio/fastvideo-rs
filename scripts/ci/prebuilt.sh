@@ -47,7 +47,7 @@ log() { printf '[prebuilt %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 # set -> the Dockerfile stage its directory replaces (a named build context)
 declare -A CONTEXT=(
   [oxide]=oxide [gpucheck]=binary [gpucheck-vast]=binary [hf-fm]=hf-fm
-  [serve-cuda]=serve-build [serve-gateway]=gateway-build
+  [serve-cuda]=serve-build [serve-cpu]=cpu-build
 )
 
 fallback() {

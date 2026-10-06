@@ -1,5 +1,4 @@
 // GHCR (public package, anonymous pull token): tag -> digest, tag lists.
-// Mirrors resolve_digest in scripts/serve/runpod-cluster.sh.
 import type { ClusterSpec } from "./cluster/spec";
 import { defaults, type Env } from "./env";
 import { fetchWithTimeout, HttpError } from "./util";
@@ -67,7 +66,6 @@ export async function resolveClusterImages(env: Env, spec: ClusterSpec): Promise
       throw e;
     }
   };
-  if (spec.gateway.enabled) out.gateway = await imageFor("gateway");
   for (const p of spec.pools) out[p.id] = await imageFor(p.variant, p.image);
   return out;
 }

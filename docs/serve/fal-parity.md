@@ -558,8 +558,8 @@ Deviations kept (each a server limit, named in the schema descriptions):
   I2V. `fastwan22-ti2v-5b-taehv` (TAEHV `taew2_2`) is `wan-draft`. All three
   5B tiers run without VSA, so they share one process.
 - `fastwan21-1.3b` and `fastwan21-1.3b-taehv` are untiered ids now (they
-  were `wan-turbo` / `wan-draft`); `configs/serve/runpod-wan.toml` and
-  `configs/serve/gateway.toml` name `recipe = "fastwan21-1.3b"`. A
+  were `wan-turbo` / `wan-draft`); `configs/serve/runpod-wan.toml` names
+  `recipe = "fastwan21-1.3b"`. A
   `[[models]] family = "wan"` entry without `recipe` resolves to the 5B
   turbo.
 
@@ -658,7 +658,7 @@ catalog as the Wan 14B fast tier.
 | Measured | RTX PRO 6000: 19.0 s denoise, 22.0 s total at 832x480x81; 25x / 22x faster than the base 14B (UniPC 50, CFG 5); peak 50.9 GiB; load 313 s (adapter merge 175 s on the host) |
 | Licence | Apache-2.0 (base and adapters) |
 | Weights | `wan21-t2v-14b`, `longlive-plug/wan21-t2v-14b-{few-step,cfg}` on both volumes (scripts/gpu/weights-manifest.tsv) |
-| Config | `configs/serve/runpod-wan14b.toml` (standalone or gateway worker of the `wan14b` pod pool in `configs/serve/gateway.toml`) |
+| Config | `configs/serve/runpod-wan14b.toml` (standalone, or a cluster worker of a `wan14b` pool behind the edge) |
 
 Wires:
 
