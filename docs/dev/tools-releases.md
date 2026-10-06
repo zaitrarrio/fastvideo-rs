@@ -180,7 +180,7 @@ Each job:
    recipe (`scripts/ci/tools-deps.sh`), into `/target`; the groups that
    embed the oxide cubins also get the oxide stage (cubins in
    `/vol/release-cache`, keyed by the kernel crate and cutile-rs). Layer
-   cache: GHCR, `ghcr.io/<owner>/fastvideo-rs-tools-deps:cache-<group>`
+   cache: GHCR, `ghcr.io/<owner>/fastvideo-rs-tools-deps:cache-<epoch>-<group>`
    (`mode=max`), so the dependency layer is rebuilt only when Cargo.toml /
    Cargo.lock / the cook recipe change, and oxide only when its inputs do;
 2. runs the real build or check.sh stage in a container of that image with
@@ -188,7 +188,7 @@ Each job:
    `scripts/ci/in-build-base.sh`), so only the
    workspace's own crates compile; rustc goes through **sccache** with the
    **GitHub Actions cache** as its store (`SCCACHE_GHA_ENABLED`, namespace
-   `fv-tools-1`), which also covers the workspace crates that did not change.
+   `fv-tools-<epoch>`; `FV_CACHE_EPOCH` in tools-release.yml starts both afresh), which also covers the workspace crates that did not change.
 
 `.git` stays on the host (the Docker context has none), which is why the
 real build is a `docker run` and not a Dockerfile stage. Pull requests that

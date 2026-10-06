@@ -47,11 +47,12 @@ runs:
         OXIDE_STAGE: ${{ inputs.oxide-stage }}
       run: |
         repo="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-tools-deps"
+        e="${FV_CACHE_EPOCH:-1}"   # bump (tools-release.yml env) to start every cache afresh
         docker buildx build -f docker/tools-deps.Dockerfile --target deps \
           --build-arg BASE_IMAGE="$(bash scripts/dev/build-base-tag.sh --image)" \
           --build-arg GROUP="$GROUP" --build-arg OXIDE_STAGE="$OXIDE_STAGE" \
-          --cache-from "type=registry,ref=$repo:cache-$GROUP" --cache-from "type=registry,ref=$repo:cache-oxide" \
-          --cache-to "type=registry,ref=$repo:cache-$GROUP,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true" \
+          --cache-from "type=registry,ref=$repo:cache-$e-$GROUP" --cache-from "type=registry,ref=$repo:cache-$e-oxide" \
+          --cache-to "type=registry,ref=$repo:cache-$e-$GROUP,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true" \
           --load -t "fv-tools-deps:$GROUP" .
     - name: Run in it
       shell: bash

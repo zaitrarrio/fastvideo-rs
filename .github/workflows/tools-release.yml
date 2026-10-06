@@ -65,6 +65,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # The hosted fallback's cache generation (GHCR layer cache refs and the
+  # sccache namespace): bump to start every cache afresh.
+  FV_CACHE_EPOCH: "2"
   DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run == true || github.ref != 'refs/heads/main' }}
 
 jobs:

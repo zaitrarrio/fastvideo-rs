@@ -45,7 +45,7 @@ done < <(env)
 args+=(-e RUSTC_WRAPPER=/usr/local/bin/sccache)
 if [[ -n "${ACTIONS_RESULTS_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
   args+=(-e SCCACHE_GHA_ENABLED=on -e ACTIONS_CACHE_SERVICE_V2=on
-         -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN -e "SCCACHE_GHA_VERSION=${FV_SCCACHE_GHA_VERSION:-fv-tools-1}")
+         -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN -e "SCCACHE_GHA_VERSION=fv-tools-${FV_CACHE_EPOCH:-1}")
 else
   echo "::notice title=sccache::no Actions cache credentials in the job env: sccache uses a local dir only"
   args+=(-e SCCACHE_DIR=/work/sccache)
