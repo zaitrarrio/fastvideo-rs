@@ -24,6 +24,9 @@
 #   fv-control.sh promote <sha> [channel] [--dry-run] | rollback [channel] [--dry-run]
 #   fv-control.sh api <METHOD> <path> [json]  anything else
 #   fv-control.sh deploy staging               build, migrate and deploy the Worker (wrangler)
+#   fv-control.sh edge-link staging            give the Worker the staging edge (EDGE_URL, EDGE_D1_DATABASE_ID,
+#                                              EDGE_OUTPUTS_BUCKET, EDGE_INTERNAL_TOKEN, EDGE_ADMIN_TOKEN) from
+#                                              scripts/serve/cf-edge.sh's state (FV_EDGE_STATE); never printed
 #
 # Env: FV_CONTROL_URL (default https://fv-control-staging.maximalize.workers.dev),
 # FV_CONTROL_TOKEN_FILE (default ~/.config/fv/fv-control-token, mode 600).
@@ -97,5 +100,15 @@ case "$cmd" in
     if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -r /root/.config/fv/cf_api_token ]]; then CLOUDFLARE_API_TOKEN="$(cat /root/.config/fv/cf_api_token)"; export CLOUDFLARE_API_TOKEN; fi
     npx wrangler d1 migrations apply fv-control --remote --env staging
     npx wrangler deploy --env staging ;;
+  edge-link)
+    [[ "${1:-}" == staging ]] || die "edge-link staging"
+    st="${FV_EDGE_STATE:-$HOME/.config/fv-edge-staging}"
+    for f in url internal_token admin_token d1_id; do [[ -s "$st/$f" ]] || die "no $st/$f: run scripts/serve/cf-edge.sh deploy first"; done
+    cd "$HERE/../../control"
+    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -r /root/.config/fv/cf_api_token ]]; then CLOUDFLARE_API_TOKEN="$(cat /root/.config/fv/cf_api_token)"; export CLOUDFLARE_API_TOKEN; fi
+    (umask 077; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+      python3 -c 'import json,sys; d=sys.argv[1]; r=lambda f: open(f"{d}/{f}").read().strip(); print(json.dumps({"EDGE_URL": r("url"), "EDGE_D1_DATABASE_ID": r("d1_id"), "EDGE_INTERNAL_TOKEN": r("internal_token"), "EDGE_ADMIN_TOKEN": r("admin_token"), "EDGE_OUTPUTS_BUCKET": sys.argv[2]}))' "$st" "${FV_EDGE_OUTPUTS_BUCKET:-fv-edge-staging-outputs}" >"$tmp"
+      npx wrangler secret bulk "$tmp" --env staging >/dev/null)
+    echo "fv-control staging: edge $(cat "$st/url")" ;;
   *) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
