@@ -35,6 +35,7 @@ Endpoints (all JSON unless noted):
   POST /v1/jobs/<id>/cancel
   GET  /v1/agents/<a>/artifact?path=P[&gz=1]   file under target/<a> (binary)
   POST /v1/agents/<a>/clean             {what: target|worktree|all}
+  POST /v1/evict                        run an eviction pass now -> {evicted}
   GET  /v1/log?lines=N                  text: tail of logs/pod.log (self-stop attempts etc.)
   POST /v1/stop                         stop the pod now
 
@@ -62,8 +63,27 @@ call it is retried 10 min later should the pod still be running. All calls send
 an explicit User-Agent: Cloudflare in front of rest.runpod.io and
 api.runpod.io answers Python's default "Python-urllib/3.x" with 403 "error
 code: 1010", which is why no self-stop ever worked before 2026-10-02.
+
+Eviction (the container disk fills up with agents' target dirs): a background
+pass every FV_BUILD_EVICT_INTERVAL_S (60) seconds, and after every job,
+removes the target dir and snapshot of each agent unused for more than
+FV_BUILD_EVICT_HOURS (default 6; last sync, job or fetch), then, while the
+disk has less than FV_BUILD_EVICT_FREE_GB (default 40) free, target dirs in
+least-recently-used order. An agent with a job running or queued is never
+touched. The release agent (FV_BUILD_EVICT_PROTECT, default fv-release: the
+`build-pod.sh release-artifacts` flow syncs, runs, then fetches its tarballs
+from target/fv-release/) is also kept for FV_BUILD_EVICT_HOLD_MIN (default 60)
+after its last use, and goes last under disk pressure. Only target/<agent>
+and worktrees/<agent> are ever evicted: the volume (release-cache/, caches,
+toolchains) never is. Each eviction is logged and listed in /v1/status; an
+evicted target dir just means the next job builds cold (sccache on the volume
+refills it). Sync and job requests that find the disk full (after an
+eviction pass) get HTTP 507 with a "build pod disk full" error instead of a
+500.
 """
 
+import collections
+import errno
 import gzip
 import hashlib
 import hmac
@@ -95,7 +115,18 @@ USER_AGENT = "fv-build-pod/1 (+scripts/dev/build-pod-server.py)"
 RUNPOD_REST = os.environ.get("FV_BUILD_RUNPOD_REST", "https://rest.runpod.io/v1")
 RUNPOD_GRAPHQL = os.environ.get("FV_BUILD_RUNPOD_GRAPHQL", "https://api.runpod.io/graphql")
 MAX_JOBS = int(os.environ.get("FV_BUILD_MAX_JOBS", "4"))
-TARGET_TTL_DAYS = float(os.environ.get("FV_BUILD_TARGET_TTL_DAYS", "14"))
+EVICT_S = float(os.environ.get("FV_BUILD_EVICT_HOURS", "6")) * 3600  # 0 disables
+EVICT_FREE_GB = float(os.environ.get("FV_BUILD_EVICT_FREE_GB", "40"))  # 0 disables
+EVICT_INTERVAL_S = float(os.environ.get("FV_BUILD_EVICT_INTERVAL_S", "60"))
+# Agents a multi-request client flow needs between its jobs: the release build
+# (build-pod.sh release-artifacts) syncs, runs, then fetches its tarballs from
+# target/fv-release/release-artifacts/. Kept within EVICT_HOLD_S of their last
+# use (sync, job, fetch) as if busy, and evicted last under disk pressure.
+EVICT_PROTECT = frozenset(os.environ.get("FV_BUILD_EVICT_PROTECT", "fv-release").split())
+EVICT_HOLD_S = float(os.environ.get("FV_BUILD_EVICT_HOLD_MIN", "60")) * 60
+# Sync and job requests are refused (507) below this much free disk, after an
+# eviction pass could not free it.
+MIN_FREE_GB = float(os.environ.get("FV_BUILD_MIN_FREE_GB", "2"))
 SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
 SCCACHE_VER = os.environ.get("FV_BUILD_SCCACHE_VERSION", "v0.10.0")
 CUDA_REDIST = os.environ.get("FV_BUILD_CUDA_REDIST", "13.4.2")
@@ -114,6 +145,7 @@ LOCAL = ROOT if TARGETS_ON == "volume" else os.environ.get("FV_BUILD_LOCAL", "/r
 WT_BASE = os.path.join(LOCAL, "worktrees")
 TARGET_BASE = os.path.join(LOCAL, "target")
 CARGO_HOME = os.path.join(LOCAL, "cargo")
+LAST_USE = os.path.join(LOCAL, ".last-use")  # <agent>: mtime = last sync / job / fetch
 MAX_UPLOAD = 512 << 20
 MAX_ARTIFACT = 2 << 30
 BOOT = time.time()
@@ -430,10 +462,9 @@ def link_cargo_caches():
 
 
 def prune_targets():
-    """Drop target dirs untouched for FV_BUILD_TARGET_TTL_DAYS (volume space),
-    including those an earlier volume-mode pod left on the volume."""
-    cutoff = time.time() - TARGET_TTL_DAYS * 86400
-    prune_dir(TARGET_BASE, WT_BASE, cutoff)
+    """An eviction pass, and the snapshots and target dirs an earlier
+    volume-mode pod left on the volume."""
+    evictor.run_once()
     if LOCAL != ROOT:
         # Snapshots and target dirs a volume-mode pod left behind are dead
         # weight for a local-mode one (tens of GB after a few check.sh runs).
@@ -446,16 +477,220 @@ def prune_targets():
                 threading.Thread(target=shutil.rmtree, args=(trash, True), daemon=True).start()
 
 
-def prune_dir(tdir, wdir, cutoff):
-    for a in os.listdir(tdir):
-        stamp = os.path.join(wdir, a, ".fv-build-last-run")
+# --------------------------------------------------------------------------- eviction
+
+
+def agent_lock(agent):
+    return agent_locks.setdefault(agent, threading.Lock())
+
+
+def agent_busy(agent):
+    return any(j.agent == agent and j.state in ("running", "queued") for j in list(jobs.values()))
+
+
+def mark_used(agent):
+    """Record that `agent` used its dirs now (sync, job start/end, fetch)."""
+    try:
+        os.makedirs(LAST_USE, exist_ok=True)
+        p = os.path.join(LAST_USE, agent)
+        with open(p, "a"):
+            pass
+        os.utime(p)
+    except OSError:
+        pass
+
+
+def last_use(agent):
+    """Epoch of the agent's last use: its stamp, else (a pre-stamp or
+    restarted server) its old worktree stamp or the dirs' mtimes."""
+    for p in (os.path.join(LAST_USE, agent), os.path.join(WT_BASE, agent, ".fv-build-last-run"),
+              os.path.join(WT_BASE, agent), os.path.join(TARGET_BASE, agent)):
         try:
-            last = os.path.getmtime(stamp)
+            return os.path.getmtime(p)
         except OSError:
-            last = os.path.getmtime(os.path.join(tdir, a))
-        if last < cutoff:
-            log(f"pruning target/{a} (unused {TARGET_TTL_DAYS:g} days)")
-            shutil.rmtree(os.path.join(tdir, a), ignore_errors=True)
+            pass
+    return 0.0
+
+
+def move_to_trash(d, agent):
+    """Rename `d` out of the way (same filesystem, instant); returns the
+    trash path to delete, or None when `d` does not exist."""
+    if not os.path.isdir(d):
+        return None
+    trash = os.path.join(LOCAL, "trash" if LOCAL != ROOT else "tmp", f"trash-{agent}-{uuid.uuid4().hex[:6]}")
+    os.replace(d, trash)
+    return trash
+
+
+KIND_DIR = {"target": "target", "worktree": "worktrees"}
+
+
+class LocalFS:
+    """The container disk as the Evictor sees it (tests use a fake)."""
+
+    def path(self, agent, kind):
+        return os.path.join(TARGET_BASE if kind == "target" else WT_BASE, agent)
+
+    def agents(self):
+        names = set()
+        for d in (WT_BASE, TARGET_BASE):
+            try:
+                names.update(n for n in os.listdir(d) if AGENT_RE.match(n))
+            except OSError:
+                pass
+        return names
+
+    def has(self, agent, kind):
+        return os.path.isdir(self.path(agent, kind))
+
+    def last_use(self, agent):
+        return last_use(agent)
+
+    def busy(self, agent):
+        return agent_busy(agent)
+
+    def free_bytes(self):
+        return shutil.disk_usage(LOCAL).free
+
+    def remove(self, agent, kind):
+        """Delete the dir unless the agent has a job in flight (whose runner
+        holds the agent lock). Synchronous, so free_bytes() sees the result.
+        Only ever a direct child of target/ or worktrees/ on the container
+        disk (never the volume's caches or release-cache/)."""
+        base = TARGET_BASE if kind == "target" else WT_BASE
+        if not AGENT_RE.match(agent) or os.path.dirname(os.path.realpath(self.path(agent, kind))) != os.path.realpath(base):
+            return False
+        lock = agent_lock(agent)
+        if not lock.acquire(blocking=False):
+            return False
+        try:
+            if agent_busy(agent):
+                return False
+            trash = move_to_trash(self.path(agent, kind), agent)
+        finally:
+            lock.release()
+        if trash:
+            shutil.rmtree(trash, ignore_errors=True)
+        agent_sizes.pop(agent, None)
+        return True
+
+
+class Evictor:
+    """Frees the container disk. One pass: (1) the target dir and snapshot of
+    every agent idle for more than `evict_s`; (2) while free space is under
+    `min_free` bytes, target dirs in least-recently-used order (snapshots are
+    ~0.1 GB, not worth a rebuild's sync). Agents with a job in flight are
+    skipped, and fs.remove re-checks that under the agent lock. A `protect`ed
+    agent used within `hold_s` is skipped too (a release build between its
+    job and its fetches), and goes last in the LRU order."""
+
+    def __init__(self, fs, clock=time.time, evict_s=EVICT_S, min_free=EVICT_FREE_GB * 1e9, log=log,
+                 protect=EVICT_PROTECT, hold_s=EVICT_HOLD_S):
+        self.fs, self.clock, self.evict_s, self.min_free, self.log = fs, clock, evict_s, min_free, log
+        self.protect, self.hold_s = frozenset(protect), hold_s
+        self.recent = collections.deque(maxlen=50)
+        self.last_pass = None
+        self.warned = float("-inf")
+        self.lock = threading.Lock()
+
+    def held(self, agent, now):
+        """A protected agent used within the hold (its flow may continue)."""
+        return agent in self.protect and now - self.fs.last_use(agent) < self.hold_s
+
+    def keep(self, agent, now):
+        return self.fs.busy(agent) or self.held(agent, now)
+
+    def run_once(self):
+        with self.lock:
+            done = []
+            now = self.clock()
+            if self.evict_s > 0:
+                for agent in sorted(self.fs.agents()):
+                    idle = now - self.fs.last_use(agent)
+                    if idle <= self.evict_s or self.keep(agent, now):
+                        continue
+                    for kind in ("target", "worktree"):
+                        if self.fs.has(agent, kind):
+                            self._evict(agent, kind, f"unused {idle / 3600:.1f} h > {self.evict_s / 3600:g} h", done)
+            if self.min_free > 0 and self.fs.free_bytes() < self.min_free:
+                lru = sorted((a for a in self.fs.agents() if self.fs.has(a, "target") and not self.keep(a, now)),
+                             key=lambda a: (a in self.protect, self.fs.last_use(a), a))
+                for agent in lru:
+                    free = self.fs.free_bytes()
+                    if free >= self.min_free:
+                        break
+                    self._evict(agent, "target",
+                                f"disk pressure: {free / 1e9:.1f} GB free < {self.min_free / 1e9:g} GB", done)
+                if self.fs.free_bytes() < self.min_free and (done or now - self.warned > 600):
+                    self.warned = now
+                    self.log(f"eviction: still {self.fs.free_bytes() / 1e9:.1f} GB free "
+                             f"(< {self.min_free / 1e9:g} GB); the rest is in use")
+            self.last_pass = self.clock()
+            return done
+
+    def _evict(self, agent, kind, reason, done):
+        before = self.fs.free_bytes()
+        if not self.fs.remove(agent, kind):
+            self.log(f"eviction skipped {KIND_DIR[kind]}/{agent}: job in flight")
+            return
+        freed = max(0, self.fs.free_bytes() - before)
+        ev = {"t": round(self.clock()), "agent": agent, "what": kind, "reason": reason,
+              "freed_gb": round(freed / 1e9, 1)}
+        self.recent.append(ev)
+        done.append(ev)
+        self.log(f"evicted {KIND_DIR[kind]}/{agent} ({reason}); freed {freed / 1e9:.1f} GB")
+
+
+evictor = Evictor(LocalFS())
+evict_wake = threading.Event()
+
+
+def evict_loop():
+    while True:
+        evict_wake.wait(EVICT_INTERVAL_S)
+        evict_wake.clear()
+        try:
+            evictor.run_once()
+        except Exception as e:  # keep the loop alive
+            log(f"eviction pass failed: {e!r}")
+
+
+# Per-agent dir sizes for /v1/status (du is too slow to run per request).
+agent_sizes = {}
+
+
+def agent_sizes_loop():
+    while True:
+        for a in sorted(LocalFS().agents()):
+            t = du(os.path.join(TARGET_BASE, a), timeout=300)
+            w = du(os.path.join(WT_BASE, a), timeout=60)
+            agent_sizes[a] = {"target_gb": round(t / 1e9, 1) if t is not None else None,
+                              "worktree_gb": round(w / 1e9, 2) if w is not None else None, "t": time.time()}
+        time.sleep(300)
+
+
+class DiskFull(Exception):
+    pass
+
+
+def disk_full_msg(free=None):
+    if free is None:
+        free = shutil.disk_usage(LOCAL).free
+    return (f"build pod disk full: {free / 1e9:.1f} GB free on the container disk after an eviction pass "
+            f"(dirs of agents with a job in flight are never evicted). See build-pod.sh status (agents, sizes); "
+            f"free space with build-pod.sh clean <agent> target, or retry when running jobs finish")
+
+
+def ensure_free(need_bytes):
+    """Raise DiskFull unless `need_bytes` are free, running an eviction pass
+    first when they are not."""
+    if shutil.disk_usage(LOCAL).free >= need_bytes:
+        return
+    evictor.run_once()
+    free = shutil.disk_usage(LOCAL).free
+    if free < need_bytes:
+        log(f"refusing request: {free / 1e9:.1f} GB free < {need_bytes / 1e9:.1f} GB")
+        raise DiskFull(disk_full_msg(free))
 
 
 # --------------------------------------------------------------------------- jobs
@@ -490,7 +725,7 @@ class Job:
             self.cond.notify_all()
 
     def run(self):
-        lock = agent_locks.setdefault(self.agent, threading.Lock())
+        lock = agent_lock(self.agent)
         setup_done.wait()
         if not setup_state["ready"]:
             self.write(f"build pod setup failed: {setup_state['error']}\n".encode())
@@ -509,15 +744,19 @@ class Job:
                 self.finish(130)
                 return
             wt = os.path.join(WT_BASE, self.agent)
+            if not os.path.isdir(wt):
+                # Evicted between the sync and this job (disk pressure).
+                self.write(f"agent {self.agent} has no worktree (evicted?); run again, which syncs first\n".encode())
+                self.finish(125)
+                return
             env = job_env(self.agent)
             env.update(self.env_over)
+            # An evicted target dir is simply rebuilt from scratch.
+            os.makedirs(env["CARGO_TARGET_DIR"], exist_ok=True)
             self.state = "running"
             self.started = time.time()
             touch()
-            try:
-                open(os.path.join(wt, ".fv-build-last-run"), "w").close()
-            except OSError:
-                pass
+            mark_used(self.agent)
             self.write(f"$ {' '.join(self.argv)}   [agent {self.agent}, CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}]\n".encode())
             try:
                 self.proc = subprocess.Popen(self.argv, cwd=wt, env=env, stdin=subprocess.DEVNULL,
@@ -531,7 +770,15 @@ class Job:
                 self.write(f"failed to start: {e}\n".encode())
                 rc = 127
             self.write(f"\n[exit {rc} after {time.time() - self.started:.1f}s]\n".encode())
+            try:
+                free = shutil.disk_usage(LOCAL).free
+                if rc != 0 and free < MIN_FREE_GB * 1e9 * 2:
+                    self.write(f"[{disk_full_msg(free)}]\n".encode())
+            except OSError:
+                pass
+            mark_used(self.agent)
             self.finish(rc)
+            evict_wake.set()
 
     def finish(self, rc):
         self.exit = rc
@@ -1012,6 +1259,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_text(200, tail_file(os.path.join(ROOT, "logs", "pod.log"), int(q.get("lines", "200"))))
         if method == "GET" and parts == ["agents"]:
             return self.agents(q.get("sizes") == "1")
+        if method == "POST" and parts == ["evict"]:
+            return self.send_json(200, {"evicted": evictor.run_once()})
         if len(parts) >= 2 and parts[0] == "jobs":
             job = jobs.get(parts[1])
             if not job:
@@ -1027,6 +1276,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "bad agent name"})
             wt = os.path.join(WT_BASE, agent)
             action = parts[2]
+            if action in ("manifest", "files", "delete", "jobs", "artifact"):
+                mark_used(agent)
             if method == "GET" and action == "manifest":
                 return self.send_text(200, manifest(wt) if os.path.isdir(wt) else "")
             if method == "PUT" and action == "files":
@@ -1035,7 +1286,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and action == "delete":
                 touch()
                 paths = [p for p in self.body(64 << 20).decode().split("\0") if p]
-                with agent_locks.setdefault(agent, threading.Lock()):
+                with agent_lock(agent):
                     n = delete_paths(wt, paths) if os.path.isdir(wt) else 0
                 return self.send_json(200, {"deleted": n})
             if method == "POST" and action == "jobs":
@@ -1066,15 +1317,34 @@ class Handler(BaseHTTPRequestHandler):
             "local_disk": disk_gb(LOCAL),
             "sccache": os.path.exists(os.path.join(ROOT, "tools", "sccache")), "mold": bool(shutil.which("mold")),
             "server_sha": SERVER_SHA, "self_stop_key": bool(os.environ.get("RUNPOD_API_KEY")),
+            "eviction": {
+                "idle_hours": EVICT_S / 3600, "free_gb_floor": EVICT_FREE_GB, "interval_s": EVICT_INTERVAL_S,
+                "protect": sorted(EVICT_PROTECT), "hold_min": EVICT_HOLD_S / 60,
+                "last_pass_s_ago": round(time.time() - evictor.last_pass) if evictor.last_pass else None,
+                "recent": list(evictor.recent)[-10:],
+            },
+            "agents": self.agent_rows(),
             "jobs_active": running, "jobs_recent": recent,
         })
 
+    def agent_rows(self):
+        now = time.time()
+        rows = []
+        for a in sorted(LocalFS().agents()):
+            idle = now - last_use(a)
+            sz = agent_sizes.get(a, {})
+            rows.append({
+                "agent": a, "idle_h": round(idle / 3600, 2), "busy": agent_busy(a), "held": evictor.held(a, now),
+                "target": os.path.isdir(os.path.join(TARGET_BASE, a)), "target_gb": sz.get("target_gb"),
+                "worktree": os.path.isdir(os.path.join(WT_BASE, a)), "worktree_gb": sz.get("worktree_gb"),
+                "evict_in_h": round(max(0.0, EVICT_S - idle) / 3600, 2) if EVICT_S > 0 else None,
+            })
+        return rows
+
     def agents(self, sizes):
-        names = sorted(set(os.listdir(WT_BASE)) | set(os.listdir(TARGET_BASE)))
         out = []
-        for a in names:
-            stamp = os.path.join(WT_BASE, a, ".fv-build-last-run")
-            e = {"agent": a, "last_run": int(os.path.getmtime(stamp)) if os.path.exists(stamp) else None}
+        for a in sorted(LocalFS().agents()):
+            e = {"agent": a, "last_run": int(last_use(a)) or None}
             if sizes:
                 e["worktree_bytes"] = du(os.path.join(WT_BASE, a))
                 e["target_bytes"] = du(os.path.join(TARGET_BASE, a))
@@ -1087,6 +1357,8 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("content-length") or 0)
             if n > MAX_UPLOAD:
                 return self.send_json(413, {"error": f"upload over {MAX_UPLOAD >> 20} MiB"})
+            # The tarball, plus its extracted files (source compresses ~4x).
+            ensure_free(MIN_FREE_GB * 1e9 + 5 * n)
             with open(tmp, "wb") as f:
                 left = n
                 while left:
@@ -1096,7 +1368,7 @@ class Handler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     left -= len(chunk)
             os.makedirs(wt, exist_ok=True)
-            with agent_locks.setdefault(agent, threading.Lock()):
+            with agent_lock(agent):
                 count = extract(tmp, wt)
             return self.send_json(200, {"extracted": count})
         except (ValueError, tarfile.TarError) as e:
@@ -1117,6 +1389,7 @@ class Handler(BaseHTTPRequestHandler):
         touch()
         if not os.path.isdir(wt):
             return self.send_json(409, {"error": f"agent {agent} has no worktree; sync first"})
+        ensure_free(MIN_FREE_GB * 1e9)
         job = Job(agent, argv, env)
         jobs[job.id] = job
         threading.Thread(target=job.run, daemon=True).start()
@@ -1189,10 +1462,8 @@ class Handler(BaseHTTPRequestHandler):
         if what in ("worktree", "all"):
             dirs.append(os.path.join(WT_BASE, agent))
         for d in dirs:
-            if os.path.isdir(d):
-                # Same filesystem as the dir, so the rename is instant.
-                trash = os.path.join(LOCAL, "trash" if LOCAL != ROOT else "tmp", f"trash-{agent}-{uuid.uuid4().hex[:6]}")
-                os.replace(d, trash)
+            trash = move_to_trash(d, agent)
+            if trash:
                 threading.Thread(target=shutil.rmtree, args=(trash, True), daemon=True).start()
         return self.send_json(200, {"cleaned": [os.path.relpath(d, LOCAL) for d in dirs]})
 
@@ -1202,9 +1473,15 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:  # keep the service alive
-            log(f"{method} {self.path}: {e!r}")
+            if not isinstance(e, DiskFull):
+                log(f"{method} {self.path}: {e!r}")
             try:
-                self.send_json(500, {"error": str(e)})
+                if isinstance(e, DiskFull):
+                    self.send_json(507, {"error": str(e)})
+                elif isinstance(e, OSError) and e.errno == errno.ENOSPC:
+                    self.send_json(507, {"error": disk_full_msg()})
+                else:
+                    self.send_json(500, {"error": str(e)})
             except Exception:
                 pass
 
@@ -1248,6 +1525,8 @@ def main():
     else:
         threading.Thread(target=setup, daemon=True).start()
     threading.Thread(target=volume_usage_loop, daemon=True).start()
+    threading.Thread(target=agent_sizes_loop, daemon=True).start()
+    threading.Thread(target=evict_loop, daemon=True).start()
     if os.environ.get("FV_BUILD_NO_WATCHDOG") != "1":
         threading.Thread(target=watchdog, daemon=True).start()
     ThreadingHTTPServer.daemon_threads = True
