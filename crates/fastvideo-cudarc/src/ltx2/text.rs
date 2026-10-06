@@ -434,7 +434,17 @@ pub struct TextConnectors {
 
 impl TextConnectors {
     pub fn load(map: &WeightMap, keys: &Keys, cfg: &Ltx2ConnectorsConfig) -> Result<Self> {
-        Self::load_with_projection(map, keys, cfg, &keys.text_proj_in(map)?)
+        // Only LTX-2.0's shared projection has a name to probe for. 2.3 / 2.5
+        // load `video_text_proj_in` / `audio_text_proj_in` through `keys.key`
+        // (in the single file `text_embedding_projection.{video,audio}_aggregate_embed`);
+        // probing them for the shared `aggregate_embed` failed the 2.3 HQ path on
+        // the dev single file (sol-bench phase B).
+        let shared = if cfg.per_modality_projections {
+            String::new()
+        } else {
+            keys.text_proj_in(map)?
+        };
+        Self::load_with_projection(map, keys, cfg, &shared)
     }
 
     /// [`Self::load`] with the text projection's module prefix given, not

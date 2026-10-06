@@ -142,38 +142,30 @@ mod imp {
     }
 
     fn load() -> Result<Kernels> {
-        use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
+        use cudarc::nvrtc::CompileOptions;
         let dev = ctx()?;
         let timer = std::time::Instant::now();
         if let Some((module, origin)) = load_embedded(&dev)? {
             return finish(&dev, module, origin, timer);
         }
-        let mut last = None;
-        let mut ptx = None;
-        for arch in crate::wan::hopper::nvrtc_arches(dev.sm_major, dev.sm_minor) {
-            let opts = CompileOptions {
-                arch: Some(arch),
-                use_fast_math: Some(true),
-                ftz: Some(true),
-                options: vec!["-std=c++17".into()],
-                ..Default::default()
-            };
-            match compile_ptx_with_opts(SRC, opts) {
-                Ok(p) => {
-                    ptx = Some(p);
-                    break;
-                }
-                Err(e) => last = Some(format!("arch={arch}: {e}")),
-            }
-        }
-        let ptx = ptx.ok_or_else(|| {
-            err(format!(
-                "nvrtc: {}",
-                last.unwrap_or_else(|| "no candidate arch".into())
-            ))
-        })?;
-        let module = dev.ctx.load_module(ptx).map_err(err)?;
-        finish(&dev, module, "nvrtc".into(), timer)
+        // SASS first (`nvrtc_sass`): this module's NVRTC PTX is what a
+        // driver older than the box's NVRTC refuses.
+        let opts = CompileOptions {
+            use_fast_math: Some(true),
+            ftz: Some(true),
+            options: vec!["-std=c++17".into()],
+            ..Default::default()
+        };
+        let (module, origin) = crate::wan::nvrtc_sass::load_for_device(
+            &dev.ctx,
+            dev.sm_major,
+            dev.sm_minor,
+            SRC,
+            &opts,
+            "attn-fp8",
+        )
+        .map_err(err)?;
+        finish(&dev, module, origin.to_string(), timer)
     }
 
     fn finish(

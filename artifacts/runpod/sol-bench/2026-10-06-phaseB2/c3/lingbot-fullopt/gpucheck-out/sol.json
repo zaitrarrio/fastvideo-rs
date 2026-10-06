@@ -1,0 +1,23 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast"
+  },
+  "elapsed_s": 1005.500692811,
+  "env": {},
+  "error": "error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")",
+  "git_sha": null,
+  "stage": "sol",
+  "status": "error"
+}

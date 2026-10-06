@@ -36,6 +36,12 @@ fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
 }
 
+/// Return the pool's cached free memory to the driver between phases
+/// ([`crate::wan::device::trim_pool`]).
+fn trim() -> Result<()> {
+    crate::wan::device::trim_pool().map_err(terr)
+}
+
 fn terr(e: impl std::fmt::Display) -> PipelineError {
     PipelineError::Message(e.to_string())
 }
@@ -271,8 +277,8 @@ impl LingBotPipeline {
         std::fs::create_dir_all(out_dir).map_err(terr)?;
 
         // Swap residency: the previous request left the refiner loaded.
-        if self.residency == Residency::Swap {
-            self.refiner = None;
+        if self.residency == Residency::Swap && self.refiner.take().is_some() {
+            trim()?;
         }
         // Text first: under swap the encoder (≈9 GB) leaves before the DiTs arrive.
         let t = Instant::now();
@@ -289,6 +295,7 @@ impl LingBotPipeline {
         timing.text_encode_s = t.elapsed().as_secs_f64();
         if self.residency == Residency::Swap {
             self.text = None;
+            trim()?;
         }
 
         let t = Instant::now();
@@ -364,11 +371,13 @@ impl LingBotPipeline {
 
         // ---- refiner stage ----
         if self.residency == Residency::Swap {
+            // The base DiT leaves in hundreds of pieces; the pool keeps them
+            // (`wan::device` release threshold) and the refiner's weights did
+            // not fit between them: CUDA out of memory right after the base
+            // stage on a 96 GB card (sol-bench phase B2). Hand them back first.
+            // The 1080p VAE encode below also runs before the refiner arrives.
             self.dit = None;
-            let t = Instant::now();
-            self.load_refiner()?;
-            timing.load_refiner_s = t.elapsed().as_secs_f64();
-            loads_inside += timing.load_refiner_s;
+            trim()?;
         }
         let t = Instant::now();
         let (sample, _, _) = host_refiner::training_frame_budget(bf, f64::from(request.fps), request.fps, 4);
@@ -379,6 +388,7 @@ impl LingBotPipeline {
         let encoder = self.vae_encoder.as_ref().ok_or_else(|| msg("vae encoder not loaded"))?;
         let z = encoder.encode_mean(&video)?;
         drop(video);
+        trim()?;
         let vae = self.vae.as_ref().expect("loaded");
         let x_up = vae.normalize_latents(&z).map_err(terr)?.host_cow()?.into_owned();
         let rshape = self.latent_shape(sample, refine.height, refine.width);
@@ -390,6 +400,12 @@ impl LingBotPipeline {
         let start = host_refiner::noised_start(&x_up, &rnoise, refine.t_thresh as f32);
         drop((x_up, rnoise));
         timing.refiner_prepare_s = t.elapsed().as_secs_f64();
+        if self.residency == Residency::Swap {
+            let t = Instant::now();
+            self.load_refiner()?;
+            timing.load_refiner_s = t.elapsed().as_secs_f64();
+            loads_inside += timing.load_refiner_s;
+        }
 
         let t = Instant::now();
         let rdit = self.refiner.as_ref().ok_or_else(|| msg("refiner not loaded"))?;
@@ -424,7 +440,7 @@ impl LingBotPipeline {
         timing.refiner_sparse_steps = rstats.sparse;
 
         let t = Instant::now();
-        let rgb = decode_rgb(vae, rlat, rshape)?;
+        let rgb = decode_rgb(self.vae.as_ref().expect("loaded"), rlat, rshape)?;
         timing.refiner_decode_s = t.elapsed().as_secs_f64();
         let t = Instant::now();
         write_video(&out_dir.join("refined"), request.fps, &rgb)?;

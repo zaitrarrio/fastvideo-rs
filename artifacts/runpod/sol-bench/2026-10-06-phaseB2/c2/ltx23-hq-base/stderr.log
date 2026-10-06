@@ -1,0 +1,155 @@
+ltx2 ltx2 techniques: none [attention_backend from command line]
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+ltx2 gen 1920x1088x241: planned peak 51.71 GiB resident, 17.09 GiB streamed
+[fastvideo] ltx2 dit offload: resident -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":3.76,"viewed_gb":1.14,"prefetch_read_gb":1.14,"prefetch_skipped_gb":0.00,"prefetch_busy_s":19.5,"viewed_gbps":0.30,"window_wait_s":0.0,"fill_s":0.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":1.0,"mem_mode":false,"prefetch":true}
+[fastvideo] ltx2 hq: stage-1 15 steps, stage-2 sigmas [0.909375, 0.725, 0.421875, 0.0], guidance 3, 1920x1088 241f (lora 0.25/0.5 /workspace/weights/ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors)
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 16.10s, upload wait 0.06s, compute starved 16.03s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 15.59s, upload wait 0.06s, compute starved 15.61s
+[fastvideo] ltx2 memory text: peak 8.37 GiB used, 8.44 GiB reserved; 2.20 GiB live after; ledger: vae 2.12 | activations 6.25 | pool_reserved 0.07 | non_pool 0.69 | total 9.05 GiB
+[fastvideo] ltx2 dit: loaded block 8/48 (84.0 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (75.9 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (67.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (59.7 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (51.6 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (43.5 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 lora: attached 1660 weights, fused at strength 0.25, unfused base on the host (pinned) (/workspace/weights/ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors)
+[fastvideo] load/io ltx2 dit {"wall_s":67.49,"viewed_gb":45.59,"prefetch_read_gb":7.60,"prefetch_skipped_gb":0.00,"prefetch_busy_s":55.7,"viewed_gbps":0.68,"window_wait_s":0.0,"fill_s":7.8,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15810 sk=15810 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15810 sk=1024 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15810 sk=251 d=64 -> flash_mma_fwd2
+[fastvideo] ltx2 res2s step 1/15 sigma 1.000000 calls 2 (7.53s)
+[fastvideo] ltx2 res2s step 2/15 sigma 0.995284 calls 4 (7.54s)
+[fastvideo] ltx2 res2s step 3/15 sigma 0.989844 calls 6 (7.59s)
+[fastvideo] ltx2 res2s step 4/15 sigma 0.983500 calls 8 (7.63s)
+[fastvideo] ltx2 res2s step 5/15 sigma 0.976005 calls 10 (7.65s)
+[fastvideo] ltx2 res2s step 6/15 sigma 0.967016 calls 12 (7.68s)
+[fastvideo] ltx2 res2s step 7/15 sigma 0.956035 calls 14 (7.68s)
+[fastvideo] ltx2 res2s step 8/15 sigma 0.942319 calls 16 (7.72s)
+[fastvideo] ltx2 res2s step 9/15 sigma 0.924701 calls 18 (7.74s)
+[fastvideo] ltx2 res2s step 10/15 sigma 0.901238 calls 20 (7.75s)
+[fastvideo] ltx2 res2s step 11/15 sigma 0.868445 calls 22 (7.77s)
+[fastvideo] ltx2 res2s step 12/15 sigma 0.819374 calls 24 (7.79s)
+[fastvideo] ltx2 res2s step 13/15 sigma 0.737904 calls 26 (7.79s)
+[fastvideo] ltx2 res2s step 14/15 sigma 0.576135 calls 28 (7.80s)
+[fastvideo] ltx2 res2s step 15/15 sigma 0.100000 calls 29 (3.91s)
+[fastvideo] ltx2 memory stage1: peak 53.72 GiB used, 54.53 GiB reserved; 51.75 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | activations 2.05 | pool_reserved 0.81 | non_pool 0.76 | total 54.48 GiB
+[fastvideo] ltx2 memory upsample: peak 57.27 GiB used, 57.91 GiB reserved; 53.21 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | upsampler 0.00 (max 1.85) | activations 3.75 | pool_reserved 0.64 | non_pool 0.76 | total 58.03 GiB
+[fastvideo] ltx2 upsample 2.85s → latent grid [31, 34, 60]
+[fastvideo] ltx2: set_lora_strength 0.5 (resident DiT)
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=63240 sk=63240 d=128 -> cuDNN
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=63240 sk=1024 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=63240 sk=251 d=64 -> flash_mma_fwd2
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 0 copies, h2d 38132 MiB in 1746 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (13.93s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (13.72s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (13.77s)
+[fastvideo] ltx2 memory stage2: peak 60.94 GiB used, 63.41 GiB reserved; 53.21 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | activations 9.28 | pool_reserved 2.46 | non_pool 0.77 | total 61.71 GiB
+[fastvideo] ltx2 video decode 9.45s: vae 9.41s, rgb 0.78s, push 0.00s, wait 2.63s
+[fastvideo] video writer: 241 frames, png deferred (0 inline, 241 after the mp4 in 1.03s, 0.58 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 1.41 GiB of 417.59
+[fastvideo] ltx2 video decode + mp4 9.45s (mp4 tail 0.00s); png frames after it 1.03s
+[fastvideo] ltx2 memory decode: peak 73.72 GiB used, 87.16 GiB reserved; 55.09 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | activations 22.06 | pool_reserved 13.43 | non_pool 0.77 | total 74.49 GiB
+[INFO] ltx2/warmup {"seconds":311.003494413}
+[fastvideo] ltx2 hq: stage-1 15 steps, stage-2 sigmas [0.909375, 0.725, 0.421875, 0.0], guidance 3, 1920x1088 241f (lora 0.25/0.5 /workspace/weights/ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors)
+[ERROR] stage ltx2 → gpucheck-out/ltx2.json (332.8s)
+error: /workspace/weights/ltx23/text_encoder: no safetensors files to identify

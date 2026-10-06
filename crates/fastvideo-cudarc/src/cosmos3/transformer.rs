@@ -23,6 +23,7 @@ use fastvideo_models::cosmos3::rope::rope_tables;
 use fastvideo_models::cosmos3::Cosmos3TransformerConfig;
 
 use crate::wan::nn::{self, Linear};
+use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{self, WeightMap};
 
@@ -48,6 +49,7 @@ fn mlp_chunk() -> usize {
     crate::wan::envflag::usize_flag("FASTVIDEO_COSMOS3_MLP_CHUNK", 8192).max(1)
 }
 
+#[derive(Clone)]
 struct Mlp {
     gate: Linear,
     up: Linear,
@@ -93,6 +95,7 @@ pub enum Tower {
 }
 
 /// One tower of one layer.
+#[derive(Clone)]
 pub struct TowerLayer {
     ln_in: CudaTensor,
     ln_post: CudaTensor,
@@ -180,6 +183,84 @@ impl TowerLayer {
     }
 }
 
+impl OffloadBlock for TowerLayer {
+    /// The seven linears, in one fixed order; norms stay resident.
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        for l in [
+            &mut self.q,
+            &mut self.k,
+            &mut self.v,
+            &mut self.out,
+            &mut self.mlp.gate,
+            &mut self.mlp.up,
+            &mut self.mlp.down,
+        ] {
+            f(l)?;
+        }
+        Ok(())
+    }
+}
+
+/// Where the gen tower's layers live (`FASTVIDEO_COSMOS3_GEN`).
+///
+/// `resident`: on the device for good. `parked`: in pinned host memory, on
+/// the device as a whole from the first layer of a request's first forward
+/// until [`Cosmos3Transformer::park_gen`] (the Wan 2.2 A14B expert swap's
+/// mechanism, `wan::offload` whole ring), so the VAE decode gets the 62 GB
+/// back. `auto` (default): parked when the bf16 gen tower plus
+/// [`DECODE_HEADROOM_GIB`] does not fit in the free device memory at load
+/// (a 96 GB card in BF16; sol-bench phase B's BF16 decode ran out of memory
+/// with the tower resident), resident otherwise (FP8 on 96 GB, or 192 GB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenResidency {
+    Resident,
+    Parked,
+}
+
+/// What the Wan 2.2 decode of the official 1280x720x189 canvas needs beside the
+/// DiT, with margin: it decoded with 31 GB of FP8 gen tower resident on a
+/// 96 GB card and not with the 62 GB bf16 one.
+pub const DECODE_HEADROOM_GIB: f64 = 40.0;
+
+impl GenResidency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Resident => "resident",
+            Self::Parked => "parked",
+        }
+    }
+
+    /// `FASTVIDEO_COSMOS3_GEN` for a gen tower of `bytes` on the device.
+    pub fn from_env(bytes: u64, free: Option<u64>) -> Result<Self> {
+        let asked = std::env::var("FASTVIDEO_COSMOS3_GEN").unwrap_or_default();
+        Self::resolve(asked.trim(), bytes, free)
+    }
+
+    pub fn resolve(asked: &str, bytes: u64, free: Option<u64>) -> Result<Self> {
+        match asked {
+            "resident" => Ok(Self::Resident),
+            "parked" | "park" => Ok(Self::Parked),
+            "" | "auto" => Ok(match free {
+                Some(free) if (bytes as f64) + DECODE_HEADROOM_GIB * GIB > free as f64 => Self::Parked,
+                _ => Self::Resident,
+            }),
+            other => Err(msg(format!(
+                "FASTVIDEO_COSMOS3_GEN={other}: expected auto, resident or parked"
+            ))),
+        }
+    }
+}
+
+const GIB: f64 = (1u64 << 30) as f64;
+
+/// Device bytes of one gen tower's linears: bf16, or one byte per weight
+/// under `FASTVIDEO_FP8` (W8A8).
+pub fn gen_linear_bytes(cfg: &Cosmos3TransformerConfig, fp8: bool) -> u64 {
+    let (h, q, kv, m) = (cfg.hidden_size, cfg.q_dim(), cfg.kv_dim(), cfg.intermediate_size);
+    let per_layer = (h * q + 2 * h * kv + q * h + 3 * h * m) as u64;
+    per_layer * cfg.num_layers as u64 * if fp8 { 1 } else { 2 }
+}
+
 /// Per-layer text K/V of one prompt (after norm and rotary), `[1, Hkv, L, D]`.
 pub struct UndCache {
     pub len: usize,
@@ -257,7 +338,8 @@ pub enum GenCache<'a> {
 
 pub struct Cosmos3Transformer {
     pub cfg: Cosmos3TransformerConfig,
-    gen: Vec<TowerLayer>,
+    gen: BlockWeights<TowerLayer>,
+    gen_residency: GenResidency,
     /// Resident text tower (`FASTVIDEO_COSMOS3_UND=resident`); streamed when `None`.
     und: Option<Vec<TowerLayer>>,
     norm_gen: CudaTensor,
@@ -286,18 +368,40 @@ fn apply_host(l: &(Vec<f32>, Vec<f32>), x: &[f32]) -> Vec<f32> {
 impl Cosmos3Transformer {
     /// Load the gen tower and heads; the text tower too when `und_resident`.
     pub fn load(cfg: Cosmos3TransformerConfig, map: &WeightMap, und_resident: bool) -> Result<Self> {
+        let fp8 = crate::wan::envflag::bool_flag("FASTVIDEO_FP8", false);
+        let free = crate::wan::device::free_memory().map(|(f, _)| f);
+        let residency = GenResidency::from_env(gen_linear_bytes(&cfg, fp8), free)?;
+        Self::load_with(cfg, map, und_resident, residency)
+    }
+
+    /// [`Self::load`] with the gen tower's residency given.
+    pub fn load_with(
+        cfg: Cosmos3TransformerConfig,
+        map: &WeightMap,
+        und_resident: bool,
+        gen_residency: GenResidency,
+    ) -> Result<Self> {
         cfg.validate().map_err(msg)?;
         let h = cfg.hidden_size;
-        let mut gen = Vec::with_capacity(cfg.num_layers);
+        let mut gen = match gen_residency {
+            GenResidency::Resident => BlockWeights::new("cosmos3 gen", Residency::Resident),
+            GenResidency::Parked => {
+                BlockWeights::new("cosmos3 gen", Residency::Streamed).with_whole_ring()
+            }
+        };
         let mut und = und_resident.then(|| Vec::with_capacity(cfg.num_layers));
         for i in 0..cfg.num_layers {
-            gen.push(TowerLayer::load(map, &cfg, i, Tower::Gen)?);
+            gen.push(TowerLayer::load(map, &cfg, i, Tower::Gen)?)?;
             if let Some(u) = und.as_mut() {
                 u.push(TowerLayer::load(map, &cfg, i, Tower::Und)?);
             }
         }
+        if gen_residency == GenResidency::Parked {
+            crate::wan::log::info(format_args!("{}", gen.describe()));
+        }
         Ok(Self {
             gen,
+            gen_residency,
             und,
             norm_gen: norm_weight(map, "norm_moe_gen.weight", h)?,
             proj_in: Linear::load(map, "proj_in", cfg.patch_latent_dim, h, true)?,
@@ -306,6 +410,27 @@ impl Cosmos3Transformer {
             time_2: host_linear(map, "time_embedder.linear_2", h, h)?,
             cfg,
         })
+    }
+
+    /// Where the gen tower lives.
+    pub fn gen_residency(&self) -> GenResidency {
+        self.gen_residency
+    }
+
+    /// A parked gen tower: let its device copy go (it stays in pinned host
+    /// memory; the next [`Self::forward_gen`] brings it back, layer by layer
+    /// behind the compute). Waits for the kernels that read it. A no-op when
+    /// resident.
+    pub fn park_gen(&self) {
+        if self.gen.is_whole_ring() {
+            self.gen.report("request");
+            self.gen.release_device();
+        }
+    }
+
+    /// Whether the gen tower's weights are on the device now.
+    pub fn gen_on_device(&self) -> bool {
+        !self.gen.residency().is_streamed() || self.gen.has_device_ring()
     }
 
     /// `time_embedder(time_proj(t))` for the scaled timestep (`t · 0.001`), f32.
@@ -419,16 +544,18 @@ impl Cosmos3Transformer {
         let g = cfg.num_attention_heads / cfg.num_key_value_heads;
         let scale = (cfg.head_dim as f32).powf(-0.5);
         let run = |mut x: CudaTensor| -> Result<CudaTensor> {
-            for (i, layer) in self.gen.iter().enumerate() {
-                let xn = x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
-                let (q, k, v) = layer.qkv(&xn, cfg, cos, sin)?;
-                let (ku, vu) = &und.layers[i];
-                let k_all = CudaTensor::cat(&[ku, &k], 2)?.repeat_kv(g)?;
-                let v_all = CudaTensor::cat(&[vu, &v], 2)?.repeat_kv(g)?;
-                let a = nn::scaled_dot_product_attention(&q, &k_all, &v_all, Some(scale))?;
-                x = x.add(&layer.out.forward(&a.merge_heads()?)?)?;
-                let xn = x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
-                x = x.add(&layer.mlp.forward(&xn)?)?;
+            for i in 0..self.gen.len() {
+                x = self.gen.with(i, |layer| {
+                    let xn = x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
+                    let (q, k, v) = layer.qkv(&xn, cfg, cos, sin)?;
+                    let (ku, vu) = &und.layers[i];
+                    let k_all = CudaTensor::cat(&[ku, &k], 2)?.repeat_kv(g)?;
+                    let v_all = CudaTensor::cat(&[vu, &v], 2)?.repeat_kv(g)?;
+                    let a = nn::scaled_dot_product_attention(&q, &k_all, &v_all, Some(scale))?;
+                    let x = x.add(&layer.out.forward(&a.merge_heads()?)?)?;
+                    let xn = x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
+                    x.add(&layer.mlp.forward(&xn)?)
+                })?;
             }
             Ok(x)
         };
@@ -631,6 +758,57 @@ mod tests {
                 assert_eq!(v1.host_cow().unwrap(), v2.host_cow().unwrap());
             }
         }
+    }
+
+    /// Parking the gen tower for the decode moves weights, not math: a
+    /// parked tower gives the resident one's bits, before and after a park.
+    #[test]
+    fn parked_gen_tower_matches_resident() {
+        let cfg = Cosmos3TransformerConfig::tiny();
+        let map = WeightMap::generated(seeded);
+        let resident = Cosmos3Transformer::load_with(cfg.clone(), &map, false, GenResidency::Resident).unwrap();
+        let parked = Cosmos3Transformer::load_with(cfg.clone(), &map, false, GenResidency::Parked).unwrap();
+        assert_eq!(resident.gen_residency(), GenResidency::Resident);
+        assert_eq!(parked.gen_residency(), GenResidency::Parked);
+        let und = resident.und_cache(&map, &[4, 5, 6]).unwrap();
+        let (t, h, w) = (2, 4, 4);
+        let pos = vision_positions(&cfg, [t, 2, 2], (3 + cfg.temporal_modality_margin) as f32, Some(24.0), 4);
+        let (c, s) = rope_tables(&cfg, &pos);
+        let cos = pinned(&c, &[pos.len(), cfg.head_dim]).unwrap();
+        let sin = pinned(&s, &[pos.len(), cfg.head_dim]).unwrap();
+        let x: Vec<f32> = (0..cfg.latent_channel * t * h * w).map(|i| (i as f32 * 0.17).cos()).collect();
+        let lat = CudaTensor::from_vec(x, vec![1, cfg.latent_channel, t, h, w]).unwrap();
+        let temb = resident.time_embed(0.7);
+        let bits = |d: &Cosmos3Transformer| -> Vec<u32> {
+            let y = d.forward_gen(&lat, &temb, &und, &cos, &sin, GenCache::Off).unwrap();
+            y.host_cow().unwrap().iter().map(|v| v.to_bits()).collect()
+        };
+        let want = bits(&resident);
+        assert_eq!(want, bits(&parked));
+        parked.park_gen();
+        assert_eq!(want, bits(&parked));
+        resident.park_gen();
+        assert!(resident.gen_on_device());
+        assert_eq!(want, bits(&resident));
+    }
+
+    #[test]
+    fn gen_residency_auto_parks_bf16_on_96_gb_only() {
+        let cfg = Cosmos3TransformerConfig::super_64b();
+        let bf16 = gen_linear_bytes(&cfg, false);
+        let fp8 = gen_linear_bytes(&cfg, true);
+        // docs/ports/cosmos3.md: the gen tower is 62.4 GB in bf16.
+        assert!((bf16 as f64 / 1e9 - 62.4).abs() < 1.0, "{bf16}");
+        let free_96 = Some(94u64 << 30);
+        let free_192 = Some(185u64 << 30);
+        let r = |a: &str, b: u64, f: Option<u64>| GenResidency::resolve(a, b, f).unwrap();
+        assert_eq!(r("", bf16, free_96), GenResidency::Parked);
+        assert_eq!(r("auto", fp8, free_96), GenResidency::Resident);
+        assert_eq!(r("", bf16, free_192), GenResidency::Resident);
+        assert_eq!(r("", bf16, None), GenResidency::Resident);
+        assert_eq!(r("resident", bf16, free_96), GenResidency::Resident);
+        assert_eq!(r("parked", fp8, free_192), GenResidency::Parked);
+        assert!(GenResidency::resolve("swap", bf16, free_96).is_err());
     }
 
     #[test]

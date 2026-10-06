@@ -1,0 +1,1 @@
+{"cell":"a14b-sol-fullopt","exit":null,"stopped":"pod deleted at 2026-10-06T21:56:09Z: base OOMed in the VAE decode with both experts + UMT5 resident; fullopt would too"}

@@ -275,6 +275,36 @@ case "$SET" in
     cosmos3 cosmos3-teacache-fp8 teacache 1500 FASTVIDEO_FP8=1
     cosmos3 cosmos3-baseline-fp8 baseline 1500 FASTVIDEO_FP8=1
     ;;
+  # ---- phase B2 (2026-10-06): the four blocked ports fixed on
+  # fix/phaseb-blocked-ports; same cells and pins as phase B.
+  c1) # Wan2.2 T2V-A14B (b2): experts now load lazily (no 2 x 57 GB host copy)
+    a14b a14b-sol-base 1800
+    a14b a14b-sol-fullopt 900 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
+  c2) # LTX-2.3 HQ (per-modality text projection fix), then LingBot fullopt (MoE kernels as SASS)
+    ltx23 ltx23-hq-base 660 --dense-stage2
+    ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
+    lingbot fullopt 1200
+    ;;
+  c3) # LingBot: router check, baseline (b4), then fullopt if the budget
+    # still allows (c2 was stopped in LTX-2.3 fullopt's PISA stage 2 before
+    # reaching it; refiner PISA uses the same score-route kernel)
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
+    lingbot baseline 2400
+    lingbot fullopt 1200
+    ;;
+  c4) # LTX-2.3 HQ base again (text-cache key fix), then Cosmos3-Super BF16
+    # (gen tower parked for the decode), then BF16 TeaCache if it still fits.
+    ltx23 ltx23-hq-base 660 --dense-stage2
+    cosmos3 cosmos3-baseline baseline 2400
+    cosmos3 cosmos3-teacache teacache 1500
+    ;;
+  c6) # Wan2.2 T2V-A14B base again: c1's base finished its denoise and ran out
+    # of memory in the decode with both experts resident (MoE headroom 36 GiB
+    # now: the experts swap on this card)
+    a14b a14b-sol-base 1900
+    ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac
 log "set $SET done"

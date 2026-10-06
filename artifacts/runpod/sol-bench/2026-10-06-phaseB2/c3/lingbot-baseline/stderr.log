@@ -1,0 +1,83 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] llm resident layer 1/36
+[fastvideo] llm resident layer 2/36
+[fastvideo] llm resident layer 3/36
+[fastvideo] llm resident layer 4/36
+[fastvideo] llm resident layer 5/36
+[fastvideo] llm resident layer 6/36
+[fastvideo] llm resident layer 7/36
+[fastvideo] llm resident layer 8/36
+[fastvideo] llm resident layer 9/36
+[fastvideo] llm resident layer 10/36
+[fastvideo] llm resident layer 11/36
+[fastvideo] llm resident layer 12/36
+[fastvideo] llm resident layer 13/36
+[fastvideo] llm resident layer 14/36
+[fastvideo] llm resident layer 15/36
+[fastvideo] llm resident layer 16/36
+[fastvideo] llm resident layer 17/36
+[fastvideo] llm resident layer 18/36
+[fastvideo] llm resident layer 19/36
+[fastvideo] llm resident layer 20/36
+[fastvideo] llm resident layer 21/36
+[fastvideo] llm resident layer 22/36
+[fastvideo] llm resident layer 23/36
+[fastvideo] llm resident layer 24/36
+[fastvideo] llm resident layer 25/36
+[fastvideo] llm resident layer 26/36
+[fastvideo] llm resident layer 27/36
+[fastvideo] llm resident layer 28/36
+[fastvideo] llm resident layer 29/36
+[fastvideo] llm resident layer 30/36
+[fastvideo] llm resident layer 31/36
+[fastvideo] llm resident layer 32/36
+[fastvideo] llm resident layer 33/36
+[fastvideo] llm resident layer 34/36
+[fastvideo] llm resident layer 35/36
+[fastvideo] llm resident layer 36/36
+[fastvideo] sdpa: fused mma B=1 H=16 Sq=49017 Sk=49017 D=128
+[fastvideo] moe kernels: nvrtc sass sm_120
+[fastvideo] lingbot base step 1/40 t=999 13.40s
+[fastvideo] lingbot base step 2/40 t=991 12.82s
+[fastvideo] lingbot base step 3/40 t=982 12.81s
+[fastvideo] lingbot base step 4/40 t=973 12.80s
+[fastvideo] lingbot base step 5/40 t=963 12.80s
+[fastvideo] lingbot base step 6/40 t=954 12.80s
+[fastvideo] lingbot base step 7/40 t=944 12.80s
+[fastvideo] lingbot base step 8/40 t=933 12.80s
+[fastvideo] lingbot base step 9/40 t=922 12.80s
+[fastvideo] lingbot base step 10/40 t=911 12.80s
+[fastvideo] lingbot base step 11/40 t=899 12.80s
+[fastvideo] lingbot base step 12/40 t=887 12.80s
+[fastvideo] lingbot base step 13/40 t=874 12.81s
+[fastvideo] lingbot base step 14/40 t=861 12.81s
+[fastvideo] lingbot base step 15/40 t=847 12.80s
+[fastvideo] lingbot base step 16/40 t=832 12.80s
+[fastvideo] lingbot base step 17/40 t=817 12.81s
+[fastvideo] lingbot base step 18/40 t=801 12.80s
+[fastvideo] lingbot base step 19/40 t=785 12.81s
+[fastvideo] lingbot base step 20/40 t=767 12.82s
+[fastvideo] lingbot base step 21/40 t=749 12.81s
+[fastvideo] lingbot base step 22/40 t=730 12.82s
+[fastvideo] lingbot base step 23/40 t=710 12.81s
+[fastvideo] lingbot base step 24/40 t=688 12.81s
+[fastvideo] lingbot base step 25/40 t=666 12.81s
+[fastvideo] lingbot base step 26/40 t=642 12.82s
+[fastvideo] lingbot base step 27/40 t=617 13.34s
+[fastvideo] lingbot base step 28/40 t=590 12.81s
+[fastvideo] lingbot base step 29/40 t=562 12.82s
+[fastvideo] lingbot base step 30/40 t=531 12.82s
+[fastvideo] lingbot base step 31/40 t=499 12.82s
+[fastvideo] lingbot base step 32/40 t=465 13.38s
+[fastvideo] lingbot base step 33/40 t=428 12.83s
+[fastvideo] lingbot base step 34/40 t=388 12.85s
+[fastvideo] lingbot base step 35/40 t=345 12.86s
+[fastvideo] lingbot base step 36/40 t=299 12.86s
+[fastvideo] lingbot base step 37/40 t=249 12.87s
+[fastvideo] lingbot base step 38/40 t=195 12.89s
+[fastvideo] lingbot base step 39/40 t=136 12.92s
+[fastvideo] lingbot base step 40/40 t=71 13.00s
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.04s, 0.03 GiB, synced), ffmpeg feed blocked 0.17s, mp4 tail 0.19s, buffered peak 0.14 GiB of 87.01
+[ERROR] stage sol → gpucheck-out/sol.json (1068.6s)
+error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")

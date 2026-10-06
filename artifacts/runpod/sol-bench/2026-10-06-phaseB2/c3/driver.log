@@ -1,0 +1,7 @@
+[21:34:36] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:f4b14b0726586412fea02578947d051b45e366df88c15812408e278075e0eb90 volume=jg48s6o1w0 dc=EUR-IS-1 cloud=SECURE quoted=$2.09/hr
+[21:34:37] pod i1nhh8dyc7ib4o  $2.09/hr  (hard cap 3900s)
+[21:38:44] pod: [21:38:26] [c3 +4s] ▶ lingbot-baseline (est 2400s, hard stop 3297s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /workspace/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm baseline --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-c3/ad94673-10062134/lingbot-baseline/clips
+[21:56:40] pod: [21:56:33] [c3 +1091s] ▶ lingbot-fullopt (est 1200s, hard stop 2227s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /workspace/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm fullopt --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-c3/ad94673-10062134/lingbot-fullopt/clips
+[22:13:45] results → /home/user/wt-phaseb-fix/artifacts/runpod/sol-bench-c3/ad94673-10062134
+[22:13:45] destroy pod i1nhh8dyc7ib4o
+cat: /home/user/wt-phaseb-fix/artifacts/runpod/sol-bench-c3/ad94673-10062134/weights.log: No such file or directory

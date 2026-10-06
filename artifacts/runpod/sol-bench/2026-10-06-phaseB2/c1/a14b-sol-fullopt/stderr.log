@@ -1,0 +1,17 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan moe: Auto -> both (expert 26.6 GiB bf16, 85.7 GiB free after the text encoder)
+[fastvideo] wan load: host peak RSS 59.2 GiB (lazy dit x2)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":64578,"moe":"both","seconds":380.227871698}
+[fastvideo] generate preset=wan_2_2_t2v_a14b tiny=false 1280x720 frames=81 steps=40 dmd=false rcm=false latent=1x16x21x90x160 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: PisaA14b
+[fastvideo] wan a14b easycache: threshold 0.3 start 5 tail 3 max_reuse 1 (block-0 fresh, blocks 1-39 residual)
+[fastvideo] wan attn route: PisaA14b
+[fastvideo] wan a14b easycache: threshold 0.3 start 5 tail 3 max_reuse 1 (block-0 fresh, blocks 1-39 residual)
+[fastvideo] denoise=unipc steps=40 shift=12 sigmas=diffusers
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=40 sq=75600 sk=75600 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=1 H=40 Sq=75600 Sk=75600 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=40 sq=75600 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/40 t=999 done in 35305ms
+[fastvideo] unipc step 2/40 t=997 done in 35501ms
+[fastvideo] pisa kernel: route=score sparsity=0.9 block=64 tokens=75600 approx_remainder first-order

@@ -1,0 +1,18 @@
+{
+  "arm": "baseline",
+  "und_resident": false,
+  "gen_residency": "parked",
+  "fp8": false,
+  "load_s": 143.650442582,
+  "text_tower_s": 122.15911774,
+  "denoise_s": 46.296930005,
+  "decode_s": 22.040187557,
+  "export_s": 0.722808132,
+  "request_s": 191.36740027,
+  "steps": 1,
+  "steps_computed": 1,
+  "steps_reused": 0,
+  "und_tokens_cond": 94,
+  "und_tokens_uncond": 92,
+  "gen_tokens": 44160
+}

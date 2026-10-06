@@ -2573,18 +2573,20 @@ mod tests {
 
     /// Deterministic small weights for every key the loader asks for.
     fn generated_map() -> WeightMap {
-        WeightMap::generated(|key, shape| {
-            let n: usize = shape.iter().product();
-            let seed = key.bytes().fold(0x9e37_79b9u32, |h, b| {
-                h.rotate_left(5) ^ u32::from(b).wrapping_mul(0x0100_0193)
-            });
-            (0..n)
-                .map(|i| {
-                    let x = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(seed);
-                    ((x >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.2
-                })
-                .collect()
-        })
+        WeightMap::generated(generated_values)
+    }
+
+    fn generated_values(key: &str, shape: &[usize]) -> Vec<f32> {
+        let n: usize = shape.iter().product();
+        let seed = key.bytes().fold(0x9e37_79b9u32, |h, b| {
+            h.rotate_left(5) ^ u32::from(b).wrapping_mul(0x0100_0193)
+        });
+        (0..n)
+            .map(|i| {
+                let x = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(seed);
+                ((x >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.2
+            })
+            .collect()
     }
 
     fn ramp(shape: &[usize], k: f32) -> CudaTensor {
@@ -2674,5 +2676,58 @@ mod tests {
         resident.park();
         assert!(resident.is_on_device());
         assert_eq!(want, bits(&resident));
+    }
+
+    /// The A14B experts load through the lazy store (`WeightMap::open`)
+    /// rather than the eager copy of the whole directory: same checkpoint on
+    /// disk (f32, as the published A14B experts are), same output bits.
+    #[test]
+    fn lazy_and_eager_checkpoints_give_the_same_dit() {
+        use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
+        use std::sync::{Arc, Mutex};
+        let cfg = WanVideoArchConfig::tiny();
+        let seen: Arc<Mutex<Vec<(String, Vec<usize>, Vec<f32>)>>> = Arc::default();
+        let sink = seen.clone();
+        let recorder = WeightMap::generated(move |key, shape| {
+            let v = generated_values(key, shape);
+            sink.lock().unwrap().push((key.to_string(), shape.to_vec(), v.clone()));
+            v
+        });
+        drop(WanTransformer3D::load(cfg.clone(), &recorder).unwrap());
+        let mut tensors = seen.lock().unwrap().clone();
+        tensors.sort_by(|a, b| a.0.cmp(&b.0));
+        tensors.dedup_by(|a, b| a.0 == b.0);
+
+        let dir = std::env::temp_dir().join(format!("fv-wan-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let specs: Vec<TensorSpec> = tensors
+            .iter()
+            .map(|(k, s, _)| TensorSpec::new(k.clone(), LazyDType::F32, s.clone()))
+            .collect();
+        let mut w = SafetensorsWriter::create(
+            &dir.join("diffusion_pytorch_model.safetensors"),
+            &specs,
+            &[],
+        )
+        .unwrap();
+        for (k, _, v) in &tensors {
+            let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+            w.write(k, &bytes).unwrap();
+        }
+        w.finish().unwrap();
+
+        let eager = WanTransformer3D::load(cfg.clone(), &WeightMap::from_dir(&dir).unwrap()).unwrap();
+        let lazy_map = WeightMap::open(&dir).unwrap();
+        assert!(lazy_map.lazy().is_some());
+        let lazy = WanTransformer3D::load(cfg, &lazy_map).unwrap();
+        let (t, h, w) = (3, 4, 4);
+        let lat = ramp(&[2, 4, t, h, w], 0.31);
+        let enc = ramp(&[2, 8, 16], 0.17);
+        let bits = |d: &WanTransformer3D| -> Vec<u32> {
+            let y = d.forward(&lat, &ts(vec![900.0, 900.0]), &enc).unwrap();
+            y.host_cow().unwrap().iter().map(|v| v.to_bits()).collect()
+        };
+        assert_eq!(bits(&eager), bits(&lazy));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

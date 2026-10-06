@@ -336,3 +336,108 @@ All phase B pods were created and deleted by this run (UTC):
 - **Balance:** $35.26 before, $31.03 after.
 - **Bad hosts:** host `lkyvy1sgj4rc` behaved like `s3p8exc9lcvi` (no container start after 10 min). Both are in `FV_AVOID_MACHINES` for future runs.
 - **Result mirroring:** `scripts/gpu/sol_bench_mirror.py` copied each finished cell while its pod was still up. b6's results come from that copy, because the driver was stopped before its own fetch.
+
+## Phase B2 (unblocked ports): run plan (2026-10-06, planned before renting)
+
+The four ports that blocked phase B are fixed on `fix/phaseb-blocked-ports`:
+
+| Block | Root cause | Fix |
+|---|---|---|
+| Wan2.2 T2V-A14B, exit 137 at load | `WanPipeline::load_with_dit` read `transformer/` and `transformer_2/` with the **eager** loader, which copies every tensor of a directory into host memory (2 × 57 GB f32), and held the first copy for the whole load while UMT5 (21 GB f32) and the second expert loaded. With the mapped shards that passes the 188 GB container limit. | A two-expert checkpoint opens its experts with the lazy store (`WeightMap::open`): tensors stay in the mapped shards and go to the device one at a time as bf16, the bits the eager path uploads. The load logs its host peak (`VmHWM`). `FASTVIDEO_WAN_DIT_LAZY=0/1` overrides. |
+| LTX-2.3 HQ, `no text projection` | `TextConnectors::load` always probed for LTX-2.0's **shared** `text_embedding_projection.aggregate_embed`. 2.3 has per-modality projections; the dev single file holds them as `text_embedding_projection.{video,audio}_aggregate_embed` (manifest `ltx23_single_file.json`), so the probe failed although the weights were there. | The probe runs only for shared-projection configs. |
+| LingBot MoE, `CUDA_ERROR_UNSUPPORTED_PTX_VERSION` | `load_moe_kernels` NVRTC-compiled the MoE region of `kernels.cu` to PTX at run time; the image's NVRTC 13.4 writes PTX newer than driver 595.91 can JIT. | `wan::nvrtc_sass`: NVRTC emits SASS (`nvrtcGetCUBIN`) for the device's own SM, PTX only as the fallback. The other run-time NVRTC paths (kernels.cu, attn_fp8, attn_sage, attn_dc fallbacks) go through it too. |
+| Cosmos3-Super BF16, decode OOM | The 62.4 GB bf16 gen tower stayed resident through the Wan 2.2 decode, with the pool still holding the denoise activations. | `FASTVIDEO_COSMOS3_GEN=auto` parks the bf16 gen tower in pinned host memory on a 96 GB card (the A14B swap's whole-ring offload). Before the decode the pipeline drops the text K/V and TeaCache residuals, releases the tower and trims the pool. The next request brings the tower back behind the first step's compute; that copy is inside the request time. |
+
+**Image:** the CI runtime image for the branch head, pinned by digest (recorded in the results).
+
+**GPU and region:** RTX PRO 6000 only, EUR-IS-1, the EU volume `jg48s6o1w0`. `FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc"`.
+
+**Pins:** as phase B. Wan: `FASTVIDEO_WAN_QUANT=off`, Diffusers UniPC sigmas, the full VAE. `FASTVIDEO_FP8` off everywhere (Cosmos3 is BF16 this time). LTX-2.3 fullopt keeps NVFP4, as sol-engine's `fullopt.toml` does.
+
+**Pods:** at most 2 up at once. Each has 55 min of cell budget, a 64-min self-delete and a 65-min local backstop; a cell whose estimate no longer fits is recorded as skipped.
+
+| Pod set | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|
+| c1 | `a14b-sol-base`, `a14b-sol-fullopt` | 449.67 / 207.01 s (1x GB200) | 30 + 15–20 min |
+| c2 | `ltx23-hq-base`, `ltx23-hq-fullopt`, `lingbot-router`, `lingbot-fullopt` | 2.40x ratio; 144.36 s (4x GB200) | 11 + 10 + 1 + 20–25 min |
+| c3 | `lingbot-baseline` | 375.53 s (4x GB200) | ~40 min |
+| c4 | `cosmos3-baseline` (BF16), then `cosmos3-teacache` (BF16) if it fits | 130.41 s (4x GB200), 2.26x | ~40 + ~25 min |
+
+Order: (c1, c2) together, then (c3, c4).
+
+**Money:** the balance was $30.55 before renting, with a $10 floor; it is checked before each pod. Four pods at ≤ 65 min × $2.09/h is $9.1 at most; expected about $6. The owner's aim is about $5, so c4's TeaCache arm is the first thing dropped, and a pod whose cells are done is deleted at once.
+
+## Phase B2 results (2026-10-06)
+
+Every pod was an RTX PRO 6000 Blackwell Server (96 GB, sm_120, driver 595.91, 188 GB container RAM) in EUR-IS-1. The images were the CI runtime images of `fix/phaseb-blocked-ports`:
+
+| Image | Commit | Used by |
+|---|---|---|
+| `sha256:f4b14b07…` | ad94673 (the four fixes) | c1, c2, c3 |
+| `sha256:da9e0244…` | a5e3675 (+ LTX-2.3 text-cache key) | c4 |
+| `sha256:15d60d38…` | 679dfda (+ A14B swap headroom, LingBot pool trims) | c6 |
+
+Raw data:
+
+- `artifacts/runpod/sol-bench/2026-10-06-phaseB2/<pod set>/<cell>/` (each set's `driver.log` beside it).
+- `RESULTS.md` and `results.json` in the same directory.
+- Clips are gitignored.
+
+**Status: three of the four blocked models now produce a number (A14B base, LTX-2.3 HQ base, Cosmos3 BF16 baseline).** LingBot gets past its PTX block and through the whole base stage, then runs out of memory entering the 1080p refiner; that fix is on the branch but has not been on a GPU. Both PISA arms that reached their sparse attention (LTX-2.3 fullopt stage 2, A14B fullopt) hit a slow PISA score-route kernel on sm_120 and were stopped.
+
+| Model | Config | Their HW | Theirs (s) | Our HW | Ours (s) | Ours / theirs | Ours: load / text / denoise / decode (s) | Notes |
+|---|---|---|---:|---|---:|---:|---|---|
+| Wan2.2 T2V-A14B | 1280x720x81, 40 st, CFG 4/3, base (expert swap) | 1x GB200 | 449.67 | RTX PRO 6000 (sm_120) | 1441.74 | 3.21x | 314.66 / 1.15 / 1432.79 / 7.77 | first request after load; c6 |
+| Wan2.2 T2V-A14B | same, EasyCache + PISA | 1x GB200 | 207.01 | — | — | — | — | not run: c1 stopped it (PISA route, and the decode OOM fixed later) |
+| LTX-2.3 HQ | 1920x1088x241, res2s 15 + 3, dense stage 2 | 1x GB200 | — | RTX PRO 6000 (sm_120) | 213.39 | — | 15.41 / 49.03 / 153.11 / 9.87 | theirs: ratio only (2.40x); text: cache miss (streamed Gemma); c4 |
+| LTX-2.3 HQ | same, SCSP + PISA s2 + midpoint prune + NVFP4 FFN | 1x GB200 | — | — | — | — | — | not run: stage-2 PISA step 1 over 10 min (dense: 13.3 s) |
+| LingBot-Video MoE | 480p 121 f 40 st + 1080p refiner 8 st, 1 prompt | 4x GB200 | 375.53 | — | — | — | — | base stage done (40 steps, 514.6 s); OOM entering the refiner |
+| LingBot-Video MoE | same, EasyCache + refiner PISA | 4x GB200 | 144.36 | — | — | — | — | base stage done (19 of 40 steps reused, 271.5 s); OOM entering the refiner |
+| Cosmos3-Super 64B | 1280x720x189, 35 st, CFG 6, BF16 | 4x GB200 | 130.41 | RTX PRO 6000 (sm_120) | 1608.56 | 12.33x | 0.00 / 1.55 / 1584.09 / 21.97 | theirs: 4 GPUs (SP), 522 GPU-s; gen tower parked; c4 |
+| Cosmos3-Super 64B | same, TeaCache 1.15/10/3 (BF16) | 4x GB200 | — | — | — | — | — | skipped by the budget gate (1500 s estimate, 815 s left) |
+
+### Notes on the cells that ran
+
+- **Wan2.2 T2V-A14B base, 1441.7 s (theirs 449.67 s on one GB200, 3.21x).**
+  - The lazy expert load peaks at 59.2 GiB of host RSS with both experts on the device (c1). With the swap it is 111.2 GiB, which includes 52.3 GiB of pinned expert copies (c6). Phase B was killed above 188 GB.
+  - c1 kept both experts resident (`auto`, 24 GiB headroom): 37.5 s per step, then the full-VAE decode ran out of memory with 32.5 GiB left. With a 36 GiB headroom `auto` swaps the experts on this card. c6 ran 35.8 s per step, one expert swap at t=865, and a 7.8 s decode.
+  - Load is 314.7 s, outside the request, as in phase A's 14B cells. The prompt went through UMT5 in the request (1.15 s).
+- **LTX-2.3 HQ base, 213.4 s.**
+  - text 49.0 s (Gemma streamed, cache miss), stage 1 110.7 s (15 res2s steps at 7.5 s), stage 2 42.4 s (3 steps at 13.3 s), decode + mp4 9.6 s; peak 73.8 GiB allocated.
+  - c2's first try ran the whole warm-up and then failed the timed request on the text-cache key (`text_encoder/` has its shards under `gemma/`), fixed in a5e3675.
+  - sol-engine publishes only the 2.40x fullopt ratio, so there is no ratio without our fullopt.
+- **Cosmos3-Super BF16 baseline, 1608.6 s (theirs 130.41 s on 4x GB200).**
+  - The gen tower parks in pinned host memory before the decode and comes back behind the next request's first step: step 1 is 46.3 s against 45.25 s for the rest.
+  - The decode (22.0 s) no longer runs out of memory.
+  - BF16 is 45.3 s per step against 41.3 s for phase B's W8A8.
+  - The text tower took 1.55 s because its weights were in the page cache after the warm-up (122 s cold).
+- **LingBot-Video MoE.**
+  - `lingbot-router` passes (0 differing expert sets, max weight error 0.0), and the MoE kernels load as `nvrtc sass sm_120`.
+  - Both arms then finish the 480p base stage and write its clip. Baseline: 40 steps at 12.8 s, 514.6 s. Fullopt: EasyCache reuses 19 of 40 steps, 271.5 s, 1.90x on the base stage.
+  - Both runs then hit CUDA out of memory entering the 1080p refiner. Under `swap` the base DiT was freed into the pool and the refiner loaded straight after, and the 1080p VAE encode ran with the refiner resident.
+  - 679dfda trims the pool after each model leaves and encodes before the refiner loads. That is type-checked and unit-tested, not GPU-tested.
+
+### Still blocked
+
+| Cells | Error | Where |
+|---|---|---|
+| `lingbot-baseline`, `lingbot-fullopt` | `DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")` entering the refiner (ad94673) | fix in 679dfda (`lingbot/pipeline.rs`), not yet run on a GPU |
+| `ltx23-hq-fullopt`, `a14b-sol-fullopt` | no error: the stage-2 / sparse-step PISA attention (`pisa kernel: route=score sparsity=0.9 block=64`, 63 240 and 75 600 tokens) took over 10 min for one LTX step that is 13.3 s dense | `wan::ops::pisa_attn_device` on sm_120: the same slowdown as phase A's `wan5b-opt` (63.9 s per step) |
+| `cosmos3-teacache` (BF16) | not run, budget | fix-free: needs a pod of its own (~25 min) |
+
+### Pods
+
+All phase B2 pods were created and deleted by this run (UTC):
+
+| Pod | Set | Created → deleted | Minutes | Outcome |
+|---|---|---|---:|---|
+| `5kfyyhtm4m1ush` | c1 | 21:13:13 → 21:56:10 | 43.0 | A14B load fixed; base OOMed in the decode; deleted during fullopt |
+| `kvh9t13pz5tcqo` | c2 | 21:13:15 → 21:34 | 20.8 | LTX-2.3 projection fixed; text-cache key error; fullopt stuck in PISA, deleted |
+| `i1nhh8dyc7ib4o` | c3 | 21:34:37 → 22:13:45 | 39.1 | LingBot router ok; both arms OOM at the refiner |
+| `yesv8pqin8xfl8` | c4 | 21:58:40 → 22:47:35 | 48.9 | LTX-2.3 HQ base ok; Cosmos3 BF16 baseline ok; TeaCache skipped |
+| `zxrdpi7oiqwxz3` | c6 | 22:24:28 → 23:00:14 | 35.8 | A14B base ok |
+
+- **Pod time:** 187.6 pod-minutes at $2.09/h = **$6.53**, over the ~$5 aim. The overrun went on two reruns that new bugs made necessary (c4's LTX, c6's A14B).
+- **Parallelism and wall clock:** never more than 2 pods at once; every pod was deleted within 49 min of creation. No backstop fired.
+- **Balance:** $30.55 before (20:55), $22.23 after (23:01). Other sessions' pods were also running in that window, so the drop is not all this run.
+- **Hosts:** no pod landed on `s3p8exc9lcvi` or `lkyvy1sgj4rc`.

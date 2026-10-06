@@ -1,0 +1,142 @@
+{
+ "a14b-sol-base": {
+  "cell": "a14b-sol-base",
+  "run": "c6",
+  "summary": {
+   "cell": "a14b-sol-base",
+   "exit": 0,
+   "seconds": 1769,
+   "estimate_s": 1900,
+   "ended": "2026-10-06T22:59:56Z"
+  },
+  "total_s": 1441.741671115,
+  "load_s": 314.66407362,
+  "text_s": 1.147473271,
+  "denoise_s": 1432.788502415,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 7.7738313869999995,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 74008,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_WAN_MOE": "auto",
+   "FASTVIDEO_WAN_QUANT": "off",
+   "FASTVIDEO_WAN_UNIPC_SIGMAS": "diffusers",
+   "FASTVIDEO_WAN_VAE": "full"
+  }
+ },
+ "a14b-sol-fullopt": {
+  "cell": "a14b-sol-fullopt",
+  "run": "c1",
+  "summary": {
+   "cell": "a14b-sol-fullopt",
+   "exit": null,
+   "stopped": "pod deleted at 2026-10-06T21:56:09Z: base OOMed in the VAE decode with both experts + UMT5 resident; fullopt would too"
+  }
+ },
+ "ltx23-hq-base": {
+  "cell": "ltx23-hq-base",
+  "run": "c4",
+  "summary": {
+   "cell": "ltx23-hq-base",
+   "exit": 0,
+   "seconds": 525,
+   "estimate_s": 660,
+   "ended": "2026-10-06T22:14:19Z"
+  },
+  "total_s": 213.392853967,
+  "load_s": 15.414274648,
+  "text_s": 49.026190813,
+  "denoise_s": 153.10892902199998,
+  "stage_1_s": 110.687098751,
+  "stage_2_s": 39.998274862,
+  "decode_s": 9.867328156,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 90484,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_LTX2_UPSAMPLER": "/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+  }
+ },
+ "ltx23-hq-fullopt": {
+  "cell": "ltx23-hq-fullopt",
+  "run": "c2",
+  "summary": {
+   "cell": "ltx23-hq-fullopt",
+   "exit": null,
+   "stopped": "pod deleted at 2026-10-06T21:33:30Z: stage-2 PISA score route, step 1 over 10 min (dense 13.9 s)"
+  }
+ },
+ "lingbot-baseline": {
+  "cell": "lingbot-baseline",
+  "run": "c3",
+  "summary": {
+   "cell": "lingbot-baseline",
+   "exit": 2,
+   "seconds": 1069,
+   "estimate_s": 2400,
+   "ended": "2026-10-06T21:56:15Z"
+  }
+ },
+ "lingbot-fullopt": {
+  "cell": "lingbot-fullopt",
+  "run": "c3",
+  "summary": {
+   "cell": "lingbot-fullopt",
+   "exit": 2,
+   "seconds": 1005,
+   "estimate_s": 1200,
+   "ended": "2026-10-06T22:13:18Z"
+  }
+ },
+ "lingbot-router": {
+  "cell": "lingbot-router",
+  "run": "c3",
+  "summary": {
+   "cell": "lingbot-router",
+   "exit": 0,
+   "seconds": 1,
+   "estimate_s": 60,
+   "ended": "2026-10-06T21:38:25Z"
+  }
+ },
+ "cosmos3-baseline": {
+  "cell": "cosmos3-baseline",
+  "run": "c4",
+  "summary": {
+   "cell": "cosmos3-baseline",
+   "exit": 0,
+   "seconds": 1956,
+   "estimate_s": 2400,
+   "ended": "2026-10-06T22:46:56Z"
+  },
+  "total_s": 1608.556241755,
+  "text_s": 1.553844637,
+  "denoise_s": 1584.091285232,
+  "decode_s": 21.965099607,
+  "load_s": 5.3e-06,
+  "peak_mib": 83785,
+  "gpu": "RTX PRO 6000",
+  "warm": true,
+  "detail": {
+   "steps": 35,
+   "steps_computed": 35,
+   "steps_reused": 0,
+   "fp8": false
+  }
+ },
+ "cosmos3-teacache": {
+  "cell": "cosmos3-teacache",
+  "run": "c4",
+  "summary": {
+   "cell": "cosmos3-teacache",
+   "exit": null,
+   "skipped": "budget",
+   "estimate_s": 1500,
+   "left_s": 815
+  }
+ }
+}

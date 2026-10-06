@@ -1,0 +1,19 @@
+[21:15:41] [c1 +2s] set c1 budget 3300s cap 3840s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:15:43] [c1 +4s] ▶ a14b-sol-base (est 1800s, hard stop 3298s): env FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers FASTVIDEO_WAN_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_WAN_MOE=auto /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-t2v-a14b --preset wan_2_2_t2v_a14b --unipc --steps 40 --guidance 4.0 --guidance-2 3.0 --flow-shift 12.0 --fps 16 --height 720 --width 1280 --num-frames 81 --seed 1024 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --prompt Will Smith casually eats noodles, his relaxed demeanor contrasting with the energetic background of a bustling street food market. The scene captures a mix of humor and authenticity. Mid-shot framing, vibrant lighting. --clip-dir /fvscratch/runs/sol-bench-c1/ad94673-10062113/a14b-sol-base/frames
+[21:46:20] [c1 +1841s] FAIL a14b-sol-base 1837s exit=2
+[fastvideo] unipc step 32/40 t=776 done in 37650ms
+[fastvideo] unipc step 33/40 t=749 done in 37635ms
+[fastvideo] unipc step 34/40 t=717 done in 37612ms
+[fastvideo] unipc step 35/40 t=678 done in 37599ms
+[fastvideo] unipc step 36/40 t=631 done in 37670ms
+[fastvideo] unipc step 37/40 t=571 done in 37631ms
+[fastvideo] unipc step 38/40 t=492 done in 37566ms
+[fastvideo] unipc step 39/40 t=386 done in 37552ms
+[fastvideo] unipc step 40/40 t=235 done in 37580ms
+[fastvideo] unipc 40 steps done in 1499798ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=14400 Sk=14400 D=384 query_chunk=14400
+[fastvideo] vae.decode done in 312ms
+[fastvideo] generate done in 1502666ms
+[ERROR] stage wan → gpucheck-out/wan.json (1836.2s)
+error: generate default: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+[21:46:37] [c1 +1858s] ▶ a14b-sol-fullopt (est 900s, hard stop 1459s): env FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers FASTVIDEO_WAN_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_WAN_MOE=auto FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /workspace/weights/wan22-t2v-a14b --preset wan_2_2_t2v_a14b --unipc --steps 40 --guidance 4.0 --guidance-2 3.0 --flow-shift 12.0 --fps 16 --height 720 --width 1280 --num-frames 81 --seed 1024 --negative 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 --prompt Will Smith casually eats noodles, his relaxed demeanor contrasting with the energetic background of a bustling street food market. The scene captures a mix of humor and authenticity. Mid-shot framing, vibrant lighting. --clip-dir /fvscratch/runs/sol-bench-c1/ad94673-10062113/a14b-sol-fullopt/frames
