@@ -108,26 +108,21 @@ newer push replaces a queued run, the running one finishes:
    - else `github`;
    - the repository variable **`FV_BUILD_RUNNER`** = `pod` | `github`
      forces it (`auto` by default).
-2. **build**, the same command either way,
-   `tools-release.sh build $GITHUB_SHA --local --version V --tag tools-vV`:
-   - **build-pod** (`runs-on: [self-hosted, fv-build]`): on a build pod's
-     runner, with its toolchain, sccache and volume caches (the fast path:
-     ~8 min incremental + the gate);
-   - **build-hosted** (`runs-on: vars.FV_TOOLS_HOSTED_RUNNER || ubuntu-latest`;
-     set the variable to a larger runner's label to speed it up): frees the
-     host's disk, then `docker run`s the command in the **build-base image**
-     (`scripts/dev/build-base-tag.sh --image`, the image the pods run, so
-     the same toolchain, CUDA and tools), with cold caches (expect well over
-     an hour on a 4-vCPU runner). Same recipe and the same gate, so the
-     release is the same either way (only absolute source paths inside the
-     binaries differ).
+2. **build**, one of:
+   - **build-pod** (`runs-on: [self-hosted, fv-build]`): one job on a build
+     pod's runner, `tools-release.sh build $GITHUB_SHA --local --version V
+     --tag tools-vV`, with the pod's toolchain, sccache and volume caches
+     (~8 min incremental, then the gate);
+   - **hosted** (the fallback; `runs-on: vars.FV_TOOLS_HOSTED_RUNNER ||
+     ubuntu-latest`), see "GitHub-hosted fallback" below: one job per set
+     group and per check.sh stage, in parallel, then **assemble**.
 
-   Then, in both:
+   Then, either way (on the hosted path spread over the jobs):
    - every set in release mode (scripts/dev/release-artifacts-pod.sh, as
      `build-pod.sh release-artifacts` runs it) with `FV_RELEASE_VERSION=V`,
      the `fv-gpucheck nvrtc` gate (AOT cubins + oxide cubins for sm_100/120
      embedded), the glibc ≤ 2.35 check, target dir `target/gh-runner` (pod)
-     or `/work/target` (hosted);
+     or the dependency image's `/target` (hosted);
    - **test gate** (any failure: nothing is published):
      `scripts/serve/check.sh` (check + clippy + tests of the serve crates,
      target `target/gh-runner-test`, no debuginfo); the **shipped**
@@ -160,6 +155,46 @@ actions:write for `--dispatch`; read into a mode-600 header file, never on a
 command line, never printed). The coordinator session's GitHub proxy refuses
 release writes (2026-10-06), so this path needs another session type or
 machine; `--no-upload` stops after the gate.
+
+## GitHub-hosted fallback
+
+When no build pod is idle, the build runs on GitHub-hosted runners, as a
+**matrix** of parallel jobs (`hosted <group>` in tools-release.yml):
+
+| job | builds / runs |
+|---|---|
+| oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-vast, hf-fm | that set (`tools-release.sh build-sets --sets <set>`) |
+| gpucheck-tests | that set, then runs its unit-test binaries (gate 2) |
+| check-lint, check-test | `FV_SERVE_STAGES=lint|test scripts/serve/check.sh` (gate 1) |
+
+then **assemble** (`tools-release.sh assemble`) joins the sets (each exactly
+once, all from the same commit, every sha256), checks `-V` (gate 3) and
+stages the release; publish runs only after every job passed.
+
+Each job:
+
+1. builds a **dependency image** with buildx, `docker/tools-deps.Dockerfile`
+   on the build-base image (`scripts/dev/build-base-tag.sh --image`, the
+   image the pods run): `cargo chef cook` of exactly that group's
+   dependencies, same profile, features, target dir and environment as the
+   recipe (`scripts/ci/tools-deps.sh`), into `/target`; the groups that
+   embed the oxide cubins also get the oxide stage (cubins in
+   `/vol/release-cache`, keyed by the kernel crate and cutile-rs). Layer
+   cache: GHCR, `ghcr.io/<owner>/fastvideo-rs-tools-deps:cache-<group>`
+   (`mode=max`), so the dependency layer is rebuilt only when Cargo.toml /
+   Cargo.lock / the cook recipe change, and oxide only when its inputs do;
+2. runs the real build or check.sh stage in a container of that image with
+   the checkout mounted (`scripts/ci/in-build-base.sh`), so only the
+   workspace's own crates compile; rustc goes through **sccache** with the
+   **GitHub Actions cache** as its store (`SCCACHE_GHA_ENABLED`, namespace
+   `fv-tools-1`), which also covers the workspace crates that did not change.
+
+`.git` stays on the host (the Docker context has none), which is why the
+real build is a `docker run` and not a Dockerfile stage. Pull requests that
+change the pipeline, and `workflow_dispatch` with `dry_run`, run all of this
+without publishing (`plan --force`); GitHub keeps a pull request's Actions
+cache entries to that pull request, so main's first run after a merge starts
+with the registry layers but an empty sccache.
 
 ## Build pod runner
 

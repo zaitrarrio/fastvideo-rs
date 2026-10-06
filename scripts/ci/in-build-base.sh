@@ -53,6 +53,8 @@ fi
 : >"$W/.github-output"
 rc=0
 docker run "${args[@]}" "$img" bash -c '
+  # git 2.34 (Ubuntu 22.04) honours safe.directory only in the global config.
+  git config --global --add safe.directory "*"
   sccache --start-server >/dev/null 2>&1 || true
   rc=0; "$@" || rc=$?
   sccache --show-stats 2>/dev/null | sed -n "1,14p" || true

@@ -485,7 +485,7 @@ build_local() {
   log "build --local ${sha:0:12} as $v (build id $build_id, CARGO_TARGET_DIR $T)"
   (cd "$ROOT" && CARGO_TARGET_DIR="$T" FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" \
      FV_BUILD_ID="$build_id" FV_REL_RUN_ID="gh-${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)" FV_RELEASE_VERSION="$v" \
-     ${sets:+FV_REL_SETS="$sets"} bash scripts/dev/release-artifacts-pod.sh) || return 1
+     FV_REL_SETS="$sets" bash scripts/dev/release-artifacts-pod.sh) || return 1
   cp "$T/release-artifacts/$sha/"*.tar.gz "$T/release-artifacts/$sha/manifest.json" "$out/"
   local tb want
   while IFS=$'\t' read -r tb want; do
