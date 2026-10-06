@@ -36,11 +36,15 @@
 //! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker behind the gateway, docs/serve/gateway.md) |
 //! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (gateway ↔ worker; never a user key) |
 //! | `FV_GATEWAY_POOL` | `gateway.pool` (the pool a worker registers in) |
+//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `gateway.direct` (a worker with no gateway in front: clients call it with API keys; docs/control/gateway-less-auth.md) |
 //! | `FV_RUNPOD_API_KEY` (else `RUNPOD_API_KEY`) | `gateway.runpod_api_key` (serverless pools) |
 //! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
 //! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
 //! | `FV_POOL_<ID>_DISPATCH` (`gateway` \| `durable-object`), `FV_POOL_<ID>_DO_URL` | a pod pool's dispatch path (docs/serve/gateway-cloudflare.md) |
 //! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
+//! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
+//! | `FV_POOL_<ID>_FAMILY` | a durable-object pool's family object |
+//! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
@@ -375,6 +379,10 @@ pub struct EngineCfg {
     /// models (design §5.11): it re-shows the client's camera with an
     /// overlay, so WebRTC ingest is testable end to end without a GPU.
     pub echo_model: bool,
+    /// Write batch MP4s fragmented (append-only, `+frag_keyframe+empty_moov`)
+    /// instead of faststart, so a direct upload can follow the file while it
+    /// is written (docs/serve/dispatch-do-family.md §7.2).
+    pub mp4_fragmented: bool,
 }
 
 impl Default for EngineCfg {
@@ -386,6 +394,7 @@ impl Default for EngineCfg {
             fake: FakeCfg::default(),
             post_encoder: "auto".into(),
             echo_model: false,
+            mp4_fragmented: false,
         }
     }
 }
@@ -542,7 +551,10 @@ impl StreamsCfg {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DirectorCfg {
-    /// `default_chunk_duration` (clamped to the model's clip range).
+    /// `default_chunk_duration`: the chunk length of sessions that send no
+    /// `configure.chunk_duration` (5 or 10 s; default 5). Snapped to the
+    /// nearest length the model serves (a model whose clips stop short of
+    /// 10 s runs 5 s), else clamped to its clip range.
     pub chunk_seconds: f64,
     /// `max_session_seconds` in video time; 0 = unlimited.
     pub max_session_seconds: u64,
@@ -556,17 +568,25 @@ pub struct DirectorCfg {
     pub buffer_chunks: usize,
     /// Video bitrate in bit/s; 0 = by canvas.
     pub video_bitrate: u32,
+    /// Causal models (LongLive, SF-Wan): blocks per director `chunk`
+    /// (4 blocks of 12 frames = 3 s at 16 fps).
+    pub causal_chunk_blocks: u32,
+    /// Causal models: seconds of video kept queued for playout; above it the
+    /// rollout pauses at the next block boundary (prompt latency).
+    pub causal_lead_seconds: f64,
 }
 
 impl Default for DirectorCfg {
     fn default() -> Self {
         Self {
-            chunk_seconds: 10.0,
+            chunk_seconds: 5.0,
             max_session_seconds: 0,
             encoder: "auto".into(),
             vp8_fallback: true,
             buffer_chunks: 1,
             video_bitrate: 0,
+            causal_chunk_blocks: 4,
+            causal_lead_seconds: 2.0,
         }
     }
 }
@@ -640,6 +660,12 @@ pub struct GatewayCfg {
     pub pool: Option<String>,
     /// Worker: register in `gw_workers` (pods; needs D1).
     pub register: bool,
+    /// Worker with no gateway in front (fv-control `gateway.enabled:
+    /// false`, `FV_WORKER_DIRECT`): clients call it directly, so `auth.mode`
+    /// applies as on a standalone server (API keys, the shared minted-key
+    /// store, `FV_ADMIN_TOKEN` for the admin routes) and the internal token
+    /// guards only `/fv/v1/internal/*` (drain and status for the controller).
+    pub direct: bool,
     /// Live caps refresh per pool.
     pub caps_refresh_s: u64,
     /// Metrics + reaper tick.
@@ -677,6 +703,7 @@ impl Default for GatewayCfg {
             internal_token: Secret::default(),
             pool: None,
             register: true,
+            direct: false,
             caps_refresh_s: 60,
             tick_s: 5,
             metrics_window_s: 600,
@@ -734,6 +761,11 @@ pub struct PoolCfg {
     pub dispatch: DispatchMode,
     /// `dispatch = "durable-object"`: the fv-edge Worker's base URL.
     pub do_url: Option<String>,
+    /// `dispatch = "durable-object"`: the model family whose Durable Object
+    /// takes this pool's jobs and sessions (`/families/{family}/…`,
+    /// docs/serve/dispatch-do-family.md); unset: the pool's own object
+    /// (`/pools/{id}/…`).
+    pub family: Option<String>,
 }
 
 /// How a pool's jobs reach its workers.
@@ -747,21 +779,37 @@ pub enum DispatchMode {
     DurableObject,
 }
 
-/// `[dispatch]` of a worker: the socket to its pool's Durable Object.
+/// `[dispatch]` of a worker: the socket to its pool's Durable Object, or
+/// one socket per model family (docs/serve/dispatch-do-family.md).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DispatchCfg {
     /// The fv-edge Worker's base URL (`https://…`); unset: no socket.
     pub do_url: Option<String>,
-    /// Jobs this worker takes at once (running + waiting on its GPU).
+    /// Jobs this worker takes at once (running + waiting on its GPU),
+    /// across every family it serves (the arbiter's budget).
     pub capacity: u32,
     /// Status (heartbeat) frame interval.
     pub status_s: u64,
+    /// The families whose Durable Objects this worker serves (protocol 2:
+    /// credits, the arbiter, sessions, direct uploads); empty: the single
+    /// per-pool socket of `gateway.pool`.
+    pub families: Vec<String>,
+    /// Streaming sessions this worker admits through the family objects
+    /// (0: none).
+    pub sessions: u32,
+    /// A session holds the whole GPU (no batch job while it is live).
+    pub session_exclusive: bool,
+    /// Upload outputs straight to R2 through part URLs the family object
+    /// mints, overlapped with the encode (no R2 credentials needed here).
+    pub direct_upload: bool,
+    /// Part size of direct uploads, MiB (S3: ≥ 5 except the last).
+    pub upload_part_mib: u32,
 }
 
 impl Default for DispatchCfg {
     fn default() -> Self {
-        Self { do_url: None, capacity: 2, status_s: 10 }
+        Self { do_url: None, capacity: 2, status_s: 10, families: Vec::new(), sessions: 1, session_exclusive: true, direct_upload: false, upload_part_mib: 8 }
     }
 }
 
@@ -783,6 +831,7 @@ impl Default for PoolCfg {
             fake_models: Vec::new(),
             dispatch: DispatchMode::Gateway,
             do_url: None,
+            family: None,
         }
     }
 }
@@ -976,6 +1025,9 @@ impl Config {
         if let Some(v) = env.var("FV_ECHO_MODEL") {
             self.engine.echo_model = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
+        if let Some(v) = env.var("FV_MP4_FRAGMENTED") {
+            self.engine.mp4_fragmented = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
         if let Some(v) = env.var("FV_URL_SIGNING_KEY") {
             self.artifacts.signing_key = Secret(v);
         }
@@ -1092,11 +1144,26 @@ impl Config {
         if let Some(v) = env.var("FV_GATEWAY_POOL") {
             self.gateway.pool = Some(v);
         }
+        if let Some(v) = env.var("FV_WORKER_DIRECT") {
+            self.gateway.direct = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
         if let Some(v) = env.var("FV_DISPATCH_DO_URL") {
             self.dispatch.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
         }
         if let Some(v) = env.var("FV_DISPATCH_CAPACITY").and_then(|v| v.trim().parse().ok()) {
             self.dispatch.capacity = v;
+        }
+        if let Some(v) = env.var("FV_DISPATCH_FAMILIES") {
+            self.dispatch.families = v.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+        }
+        if let Some(v) = env.var("FV_DISPATCH_SESSIONS").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.sessions = v;
+        }
+        if let Some(v) = env.var("FV_DISPATCH_DIRECT_UPLOAD") {
+            self.dispatch.direct_upload = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_DISPATCH_UPLOAD_PART_MIB").and_then(|v| v.trim().parse().ok()) {
+            self.dispatch.upload_part_mib = v;
         }
         if let Some(v) = env.var("FV_RUNPOD_API_KEY").or_else(|| env.var("RUNPOD_API_KEY")) {
             self.gateway.runpod_api_key = Secret(v.trim().to_owned());
@@ -1119,6 +1186,9 @@ impl Config {
             }
             if let Some(v) = env.var(&format!("{pre}DO_URL")) {
                 p.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
+            }
+            if let Some(v) = env.var(&format!("{pre}FAMILY")) {
+                p.family = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
             }
             if let Some(w) = env.var("FV_WEIGHTS") {
                 for m in &mut p.models {
@@ -1226,6 +1296,17 @@ impl Config {
     /// `[gateway]`, `[[pools]]` and `server.role` checks.
     fn validate_gateway(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
+        if self.gateway.direct {
+            if self.server.role != Role::Worker {
+                return bad("gateway.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
+            }
+            if self.auth.mode == AuthMode::TrustGateway {
+                return bad("gateway.direct: no gateway authenticates the clients, so auth.mode must be keys or none (not trust-gateway)".into());
+            }
+            if self.auth.admin_token.is_empty() {
+                return bad("gateway.direct needs auth.admin_token (FV_ADMIN_TOKEN): every worker of the cluster shares it".into());
+            }
+        }
         if self.server.role == Role::Worker {
             if self.gateway.internal_token.is_empty() {
                 return bad("server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
@@ -1235,9 +1316,23 @@ impl Config {
             }
             if let Some(u) = &self.dispatch.do_url {
                 url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
-                if self.gateway.pool.as_deref().unwrap_or("").is_empty() {
-                    return bad("dispatch.do_url needs gateway.pool (FV_GATEWAY_POOL): the pool whose Durable Object this worker connects to".into());
+                if self.dispatch.families.is_empty() && self.gateway.pool.as_deref().unwrap_or("").is_empty() {
+                    return bad("dispatch.do_url needs gateway.pool (FV_GATEWAY_POOL, the pool whose Durable Object this worker connects to) or dispatch.families (FV_DISPATCH_FAMILIES)".into());
                 }
+            }
+            for f in &self.dispatch.families {
+                if !fastvideo_dispatch_proto::valid_id(f) {
+                    return bad(format!("dispatch.families: `{f}` is not a valid family id ([A-Za-z0-9._-])"));
+                }
+            }
+            if !self.dispatch.families.is_empty() && self.dispatch.do_url.is_none() {
+                return bad("dispatch.families needs dispatch.do_url (FV_DISPATCH_DO_URL)".into());
+            }
+            if self.dispatch.direct_upload && self.dispatch.families.is_empty() {
+                return bad("dispatch.direct_upload needs dispatch.families: upload URLs come from the family Durable Objects".into());
+            }
+            if self.dispatch.direct_upload && !(5..=1024).contains(&self.dispatch.upload_part_mib) {
+                return bad("dispatch.upload_part_mib must be 5..=1024 (S3 multipart parts)".into());
             }
         }
         if self.engine.backend != EngineBackendKind::Remote {
@@ -1283,6 +1378,11 @@ impl Config {
                 }
                 let u = p.do_url.as_deref().unwrap_or("");
                 url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("pools.{}: do_url `{u}` ({}DO_URL): {e}", p.id, p.env_prefix())))?;
+                if let Some(f) = &p.family {
+                    if !fastvideo_dispatch_proto::valid_id(f) {
+                        return bad(format!("pools.{}: family `{f}` is not a valid family id", p.id));
+                    }
+                }
             }
         }
         Ok(())
@@ -1570,5 +1670,26 @@ body_max_mb = 64
         assert!(w.validate().is_err(), "a worker's socket needs its pool");
         w.gateway.pool = Some("h3".into());
         w.validate().unwrap();
+    }
+
+    /// A direct worker (no gateway): a worker, its own client auth, and the
+    /// cluster's admin token.
+    #[test]
+    fn direct_worker_needs_the_worker_role_client_auth_and_an_admin_token() {
+        let mut w = Config::default();
+        w.apply_env(&env(&[("FV_SERVE_ROLE", "worker"), ("FV_INTERNAL_TOKEN", "t"), ("FV_WORKER_DIRECT", "1")])).unwrap();
+        assert!(w.gateway.direct);
+        let e = w.validate().unwrap_err();
+        assert!(e.to_string().contains("FV_ADMIN_TOKEN"), "{e}");
+        w.apply_env(&env(&[("FV_ADMIN_TOKEN", "fvadm_x")])).unwrap();
+        w.validate().unwrap();
+        w.auth.mode = AuthMode::TrustGateway;
+        assert!(w.validate().unwrap_err().to_string().contains("trust-gateway"));
+        w.auth.mode = AuthMode::Keys;
+        w.server.role = Role::Standalone;
+        assert!(w.validate().unwrap_err().to_string().contains("server.role = worker"));
+        let mut d = Config::default();
+        d.apply_env(&env(&[("FV_WORKER_DIRECT", "0")])).unwrap();
+        assert!(!d.gateway.direct);
     }
 }

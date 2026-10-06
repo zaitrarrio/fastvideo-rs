@@ -1,0 +1,31 @@
+2026-10-02T01:34:04Z | start: balance $70.89; manifest/revision rows committed on wip/longlive-weights; starting fetch loops (US then EU)
+2026-10-02T01:35:20Z | US longlive-1.3b: FAILED
+2026-10-02T01:36:30Z | US-CA-2 had no CPU stock for fetch pods (500 'no longer any instances'); loops stopped, no pods created; restarting EU-first, US second (checked against EU sha256), patient retries
+2026-10-02T01:37:28Z | EU longlive-1.3b: ok (4 files sha256-verified vs Hub)
+2026-10-02T01:38:08Z | EU longlive2-5b: ok (2 files sha256-verified vs Hub)
+2026-10-02T01:38:46Z | EU longlive2-5b-nvfp4-s4: ok (2 files sha256-verified vs Hub)
+2026-10-02T01:39:22Z | EU longlive2-5b-nvfp4-s2: ok (2 files sha256-verified vs Hub)
+2026-10-02T01:40:29Z | EU longlive-plug/minimax-h3-few-step: ok (55 files sha256-verified vs Hub)
+2026-10-02T01:40:43Z | US longlive-1.3b: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:41:13Z | EU longlive-1.3b-safetensors converted (pod q2u9cbzc9i2ht4 deleted, 404): base 825 f32 tensors 5676075416 B, lora 600 f32 tensors 1399924800 B, torch.equal round trip ok
+2026-10-02T01:41:37Z | EU longlive-plug/minimax-h3-cfg: ok (11 files sha256-verified vs Hub)
+2026-10-02T01:42:43Z | EU longlive-plug/wan21-t2v-14b-few-step: ok (5 files sha256-verified vs Hub)
+2026-10-02T01:43:17Z | GPU pod uhkrvq8551gvsp created: RTX PRO 6000, EUR-IS-1, EU volume jg48s6o1w0, $2.09/hr, backstop 5400 s (detached DELETE), idle guard 20 min, balance $70.71; image fastvideo-rs-runtime@sha256:dccdf956 (sha-4eeb801)
+2026-10-02T01:43:50Z | EU longlive-plug/wan21-t2v-14b-cfg: ok (8 files sha256-verified vs Hub)
+2026-10-02T01:43:58Z | US longlive2-5b: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:44:33Z | US longlive2-5b-nvfp4-s4: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:44:58Z | EU longlive-plug/wan22-ti2v-5b-few-step: ok (7 files sha256-verified vs Hub)
+2026-10-02T01:45:11Z | US longlive-1.3b-safetensors converted (pod izug9hdcpurgbm deleted, 404). longlive_base.safetensors file sha differs US 113656f2 vs EU ff64e39c: ONLY the __metadata__ key order in the header differs (safetensors HashMap); tensor header sha ab499911 and data sha ad413c12 identical on both (read-only check pod e2q7ci5awfj5s9 deleted 404 + GPU pod). lora.safetensors identical (7ec78e63)
+2026-10-02T01:45:40Z | US longlive2-5b-nvfp4-s2: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:46:06Z | EU longlive-plug/wan22-ti2v-5b-cfg: ok (8 files sha256-verified vs Hub)
+2026-10-02T01:46:46Z | US longlive-plug/minimax-h3-few-step: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:47:52Z | US longlive-plug/minimax-h3-cfg: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:48:59Z | US longlive-plug/wan21-t2v-14b-few-step: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:50:05Z | US longlive-plug/wan21-t2v-14b-cfg: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:51:12Z | US longlive-plug/wan22-ti2v-5b-few-step: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:52:19Z | US longlive-plug/wan22-ti2v-5b-cfg: ok (vs Hub + EU sha256.txt)
+2026-10-02T01:53:49Z | first GPU attempts lost ~8 min: no FASTVIDEO_TAE_DIR (fixed: $W/auxiliary/tae), then gpucheck default exact mode (gemm=F32, 1.37 fps); restarted with --mode fast, LongLive cell first
+2026-10-02T01:58:48Z | verify-weights.sh on BOTH volumes (read-only CPU pods, all deleted 404): longlive-1.3b ok, longlive2-5b ok, longlive2-5b-nvfp4 weights ok: longlive2-5b-nvfp4 weights ok: longlive2-5b-nvfp4 , longlive-plug ok (cells incl. sha: lists). Two cell bugs found and fixed on the way. LongLive real checkpoint loads: 825 tensors, 300 LoRA modules merged, 0 skipped, load 82 s
+2026-10-02T01:59:07Z | merged weights records to main: 2394940 (manifest, revisions, sha256 x106, verify cells, rebuild plan, runpod-volumes.md, research §8)
+2026-10-02T02:03:27Z | results so far (RTX PRO 6000, 832x480, fast mode, CUDA graphs): SF-Wan w21/s15 14.87 fps (10 s) / 14.80 (60 s); SF-Wan w12/s3/abs 20.86 / 20.38; LongLive-1.3B 20.96 / 20.40; llsw (3 re-cache switches) 19.68 fps, block max 0.966 s; llkeep 20.34 but no_device_memory_growth FAIL (+864 MiB at end); rerun + remaining runs started
+2026-10-02T02:12:20Z | GPU pod uhkrvq8551gvsp deleted (GET -> 404); balance $68.0324065977

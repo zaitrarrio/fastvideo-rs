@@ -11,10 +11,12 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use fastvideo_engine_service::{
-    ClipBuild, ClipSession, EngineBackend, EngineConfig, EngineService, FakeBackend, FakeConfig, FakeModel, FakeTiming,
-    Mp4Mode, Readiness,
+    CausalControl, CausalSession, ClipBuild, ClipSession, EngineBackend, EngineConfig, EngineService, FakeBackend,
+    FakeConfig, FakeModel, FakeTiming, Mp4Mode, Readiness,
 };
-use fastvideo_fal::director::{ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService};
+use fastvideo_fal::director::{
+    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
+};
 use fastvideo_fal::{router_with, FalApp, FalConfig};
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{ApiError, Job, JobId, ModelCaps, SessionSpec, Tier};
@@ -51,9 +53,67 @@ pub fn silent_app() -> FalApp {
     FalApp { id: "fv/h3-silent".into(), model: "fake-h3-silent".into(), tier: None }
 }
 
+/// The fake LongLive app (`fastvideo/longlive`: served name `longlive`).
+pub fn longlive_app() -> FalApp {
+    FalApp::from_id("fastvideo/longlive")
+}
+
+/// The fake SF-Wan app (no re-cache, no window in its caps).
+pub fn sfwan_app() -> FalApp {
+    FalApp::from_id("fastvideo/fake-sfwan")
+}
+
+/// A causal rollout over the engine's `CausalSession` (as fv-serve's).
+pub struct Stream {
+    caps: ModelCaps,
+    spec: SessionSpec,
+    control: CausalControl,
+    session: tokio::sync::Mutex<Option<CausalSession>>,
+    /// Every `set_prompt` (the engine's view), for the tests.
+    pub prompts: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl DirectorStream for Stream {
+    fn caps(&self) -> &ModelCaps {
+        &self.caps
+    }
+    fn spec(&self) -> &SessionSpec {
+        &self.spec
+    }
+    fn set_prompt(&self, prompt: &str) -> u64 {
+        self.prompts.lock().unwrap().push(prompt.to_owned());
+        self.control.set_prompt(prompt)
+    }
+    fn set_seed(&self, seed: u64) {
+        self.control.set_seed(seed);
+        self.control.reset();
+    }
+    fn set_paused(&self, paused: bool) {
+        self.control.set_paused(paused);
+    }
+    async fn next_block(&self) -> Option<Result<StreamBlock, ApiError>> {
+        let mut g = self.session.lock().await;
+        let r = g.as_mut()?.next_block().await;
+        if r.is_none() {
+            g.take();
+        }
+        Some(r?.map(|b| StreamBlock {
+            index: b.index,
+            prompt_version: b.prompt_version,
+            frames: b.frames,
+            block_ms: b.stats.block_ms,
+            recache_ms: b.stats.recache_ms,
+        }))
+    }
+    async fn close(&self) {
+        self.control.close();
+    }
+}
+
 /// `DirectorEngine` over `EngineService` (what fv-serve does), with a
 /// test gate in front of every chunk build (see [`Opts::hold_builds`]).
-pub struct EngineDirector(pub EngineService, pub tokio::sync::watch::Receiver<bool>);
+pub struct EngineDirector(pub EngineService, pub tokio::sync::watch::Receiver<bool>, pub Arc<std::sync::Mutex<Vec<String>>>);
 
 /// The clip session, released by `close` (the build future may outlive it).
 pub struct Clips {
@@ -112,6 +172,16 @@ impl DirectorEngine for EngineDirector {
             gate: self.1.clone(),
         }))
     }
+    async fn open_stream(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorStream>, ApiError> {
+        let s = self.0.open_causal_session(spec).await?;
+        Ok(Arc::new(Stream {
+            caps: s.caps().clone(),
+            spec: s.spec().clone(),
+            control: s.control(),
+            session: tokio::sync::Mutex::new(Some(s)),
+            prompts: self.2.clone(),
+        }))
+    }
 }
 
 /// Model table + aliases; batch submit is not used here.
@@ -157,6 +227,8 @@ pub struct Fixture {
     pub dir: PathBuf,
     /// Opens the chunk-build gate (see [`Opts::hold_builds`]).
     pub builds: tokio::sync::watch::Sender<bool>,
+    /// The prompts causal sessions handed to the engine, in order.
+    pub engine_prompts: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Fixture {
@@ -186,6 +258,10 @@ pub struct Opts {
     /// act while chunk 0 is dispatched but not yet built, whatever the
     /// machine's speed.
     pub hold_builds: bool,
+    /// Fake denoise steps per causal block (each `step` long; a re-cache
+    /// adds one step).
+    pub causal_steps: u32,
+    pub causal_lead_seconds: f64,
 }
 
 impl Default for Opts {
@@ -199,6 +275,8 @@ impl Default for Opts {
             lan: false,
             public_base: "https://fal.fv.test".into(),
             hold_builds: false,
+            causal_steps: 4,
+            causal_lead_seconds: 2.0,
         }
     }
 }
@@ -206,8 +284,8 @@ impl Default for Opts {
 pub async fn fixture(o: Opts) -> Fixture {
     let dir = std::env::temp_dir().join(format!("fv-director-{}", uuid::Uuid::new_v4().simple()));
     let fake = FakeConfig {
-        models: vec![h3_av(), h3_silent()],
-        timing: FakeTiming { step: o.step, ..FakeTiming::default() },
+        models: vec![h3_av(), h3_silent(), FakeModel::longlive(), FakeModel::sf_wan()],
+        timing: FakeTiming { step: o.step, causal_steps: o.causal_steps, ..FakeTiming::default() },
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
@@ -231,7 +309,8 @@ pub async fn fixture(o: Opts) -> Fixture {
     };
     let host = RtcHost::bind(hcfg).await.unwrap();
     let dcfg = DirectorConfig {
-        apps: vec![FalApp::h3(Tier::Max), silent_app()],
+        apps: vec![FalApp::h3(Tier::Max), silent_app(), longlive_app(), sfwan_app()],
+        causal_lead_seconds: o.causal_lead_seconds,
         ice_servers: Vec::new(),
         chunk_seconds: o.chunk_seconds,
         max_session_seconds: o.max_session_seconds,
@@ -241,10 +320,11 @@ pub async fn fixture(o: Opts) -> Fixture {
         ..DirectorConfig::default()
     };
     let (builds, gate) = tokio::sync::watch::channel(!o.hold_builds);
-    let svc = DirectorService::new(dcfg, host, Arc::new(EngineDirector(engine.clone(), gate)));
-    let fal = FalConfig { apps: vec![FalApp::h3(Tier::Max), silent_app()], ..FalConfig::default() };
+    let engine_prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let svc = DirectorService::new(dcfg, host, Arc::new(EngineDirector(engine.clone(), gate, engine_prompts.clone())));
+    let fal = FalConfig { apps: vec![FalApp::h3(Tier::Max), silent_app(), longlive_app(), sfwan_app()], ..FalConfig::default() };
     let app = router_with(ctx.clone(), fal, fastvideo_fal::director::routes(svc.clone())).merge(ctx.routes().with_state(()));
-    Fixture { ctx, engine, svc, app, dir, builds }
+    Fixture { ctx, engine, svc, app, dir, builds, engine_prompts }
 }
 
 pub struct Resp {

@@ -15,7 +15,7 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
-//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
+//! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
 //! | (`ltx-pro` Ref2V) | `ltx25-ref2v` | the `ltx-pro` recipe plus the Ingredients IC-LoRA fused at stage 1 (`ICLoraPipeline`): reference-to-video only, one reference sheet, 1536x896 default | `ltx2/ltx25_distill_dense` | The LTX reference mode (docs/ports/ltx-ref2v.md); `route_task` sends `ltx-pro` Ref2V requests here |
@@ -23,6 +23,7 @@
 //! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
 //! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
 //! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
+//! | `wan14b-turbo` (served name; untiered) | `wan14b-plug-4step` | Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters merged at load (few-step lightx2v 1.0 + CFG 0.5), LightX2V step-distill Euler 1000/750/500/250 at shift 5, no CFG, full Wan VAE, 832x480x81 @ 16 fps (short edge 480; up to 81 frames); T2V only | none | Owner decision 2026-10-02: the Wan 14B fast tier (19.0 s denoise / 22.0 s total at 480p on RTX PRO 6000, 25x the base; docs/serve/research-longlive.md §12). Untiered so the `wan-turbo` slot (fal's fast-wan app) stays the 5B |
 //! | — | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-turbo`): the published FastWan 1.3B recipe |
 //! | — | `fastwan21-1.3b-taehv` | the 1.3B recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-draft`) |
 //! | — | `sfwan21-1.3b` | SF-Wan 1.3B causal, 4 Self-Forcing steps, shift 5, TAEHV per block | none | Causal streaming (`StreamCaps::Causal`) |
@@ -189,6 +190,14 @@ pub struct Ltx2Recipe {
     /// Audio-to-video on this model ([`LtxA2v`]).
     #[serde(default)]
     pub a2v: LtxA2v,
+    /// SageAttention2 (`fastvideo_cudarc::wan::attn_sage`, INT8 QK / FP8 PV)
+    /// on the dense DiT self-attention of this model's two-stage generations,
+    /// on sm_120 only (RTX PRO 6000 / RTX 5090); edits stay bf16.
+    /// `FASTVIDEO_ATTN_SAGE=0|2` overrides it. Set on `ltx25-distill-dense`
+    /// (`ltx-pro`) only: the one recipe that passed the end-to-end gate
+    /// (docs/perf/sage-attention.md, Phase 3: 1080p denoise 1.15x).
+    #[serde(default)]
+    pub sage_attention: bool,
 }
 
 /// How an LTX-2.5 model serves audio-to-video.
@@ -220,12 +229,17 @@ pub enum WanSampler {
     Dmd { steps: u32 },
     /// UniPC with CFG.
     Unipc { steps: u32, guidance: f32 },
+    /// LightX2V step-distill Euler (`WanPipeline::set_step_distill`): the
+    /// fixed `timesteps` warped with `shift`, one conditional pass per step
+    /// (guidance 1), the LongLive-Plug 14B recipe's sampler.
+    StepDistill { timesteps: Vec<i32>, shift: f64 },
 }
 
 impl WanSampler {
     pub fn steps(&self) -> u32 {
         match self {
             WanSampler::Dmd { steps } | WanSampler::Unipc { steps, .. } => *steps,
+            WanSampler::StepDistill { timesteps, .. } => timesteps.len() as u32,
         }
     }
 }
@@ -271,6 +285,13 @@ pub struct WanRecipe {
     pub negative: String,
     /// Extra dirs holding `taew2_*.safetensors` (`FASTVIDEO_TAE_DIR`).
     pub tae_dir: Option<PathBuf>,
+    /// A LongLive-Plug recipe (`fastvideo_models::plug`, e.g.
+    /// `wan14b-plug-4step`): its adapters merged into `weights/transformer`
+    /// on the host at load (`wan::plug::load_merged_transformer`). The
+    /// adapters resolve under `$FASTVIDEO_PLUG_ROOT`, else
+    /// `<weights>/../longlive-plug` (the volume layout).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plug: Option<String>,
 }
 
 /// SF-Wan causal streaming configuration (`wan::stream::RolloutConfig`).
@@ -283,6 +304,42 @@ pub struct SfWanRecipe {
     pub sink_frames: u32,
     /// Pixel frames per block after the first (3 latent frames).
     pub block_frames: u32,
+    /// LongLive-1.3B on this engine (docs/serve/research-longlive.md):
+    /// the LongLive transformer instead of `wan.weights/transformer`, and
+    /// its prompt-switch KV re-cache. Opt-in (no catalog model sets it);
+    /// pair it with `local_attn_frames: 12`, `sink_frames: 3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longlive: Option<LongLiveRecipe>,
+}
+
+/// The extra served name of a LongLive model: the fal app
+/// `fastvideo/longlive` resolves to it (docs/serve/director-causal.md §5).
+pub const LONGLIVE_NAME: &str = "longlive";
+
+/// LongLive settings of an [`SfWanRecipe`] (`wan::longlive::LongLiveConfig`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LongLiveRecipe {
+    /// The converted checkpoint: `longlive_base.safetensors` and
+    /// `lora.safetensors` (same keys as the Hub's `.pt` files).
+    pub weights: PathBuf,
+    /// Merge `lora.safetensors` (the long-tuned model; off only for the
+    /// base-generator ablation).
+    #[serde(default = "longlive_on")]
+    pub lora: bool,
+    /// KV re-cache at a prompt switch (off: keep the cache, the ablation).
+    #[serde(default = "longlive_on")]
+    pub recache: bool,
+    /// The frame sink survives a re-cache (LongLive's `global_sink: true`).
+    #[serde(default = "longlive_on")]
+    pub global_sink: bool,
+    /// Relative (Infinity) RoPE for rollouts past 1024 latent frames; off:
+    /// absolute RoPE as the released interactive config.
+    #[serde(default)]
+    pub relative_rope: bool,
+}
+
+fn longlive_on() -> bool {
+    true
 }
 
 /// What a model runs.
@@ -527,6 +584,14 @@ impl CudaModel {
                         r.flow_shift,
                         r.decoder.env_value()
                     ),
+                    WanSampler::StepDistill { timesteps, shift } => format!(
+                        "{}{} step-distill Euler {}-step ({}), shift {shift}, no CFG, {} decode",
+                        r.preset,
+                        r.plug.as_deref().map(|p| format!(" + LongLive-Plug {p}")).unwrap_or_default(),
+                        timesteps.len(),
+                        timesteps.iter().map(i32::to_string).collect::<Vec<_>>().join("/"),
+                        r.decoder.env_value()
+                    ),
                 },
             ),
             CudaRecipe::SfWan(r) => (
@@ -534,10 +599,15 @@ impl CudaModel {
                 "causal-kv".to_owned(),
                 "taehv".to_owned(),
                 format!(
-                    "SF-Wan causal rollout, {} Self-Forcing steps per block, KV window {} latent frames, sink {}",
+                    "{} causal rollout, {} Self-Forcing steps per block, KV window {} latent frames, sink {}{}",
+                    if r.longlive.is_some() { "LongLive" } else { "SF-Wan" },
                     r.wan.sampler.steps(),
                     r.local_attn_frames,
-                    r.sink_frames
+                    r.sink_frames,
+                    match &r.longlive {
+                        Some(l) if l.recache => ", KV re-cache at prompt switches",
+                        _ => "",
+                    }
                 ),
             ),
         };
@@ -554,6 +624,14 @@ impl CudaModel {
 
 /// Frame ceiling of the Wan 5B recipes (fal's `num_frames` 17..=161).
 pub const WAN5B_FRAMES_MAX: u32 = 161;
+/// The public alias of the Wan 2.1 T2V-14B fast tier.
+pub const WAN14B_TURBO: &str = "wan14b-turbo";
+/// The catalog id (and LongLive-Plug recipe) behind [`WAN14B_TURBO`].
+pub const WAN14B_PLUG_RECIPE: &str = "wan14b-plug-4step";
+/// The Wan 2.1 T2V-14B Diffusers tree under the weight root.
+pub const WAN14B_CELL: &str = "wan21-t2v-14b";
+/// Frame ceiling of the 14B tier: Wan 2.1's trained 81 frames (5 s at 16 fps).
+pub const WAN14B_FRAMES_MAX: u32 = 81;
 /// Container frame rates a Wan clip may be muxed at (fal's
 /// `frames_per_second` 4..=60): the frames do not depend on it.
 pub const WAN_FPS_MIN: u32 = 4;
@@ -673,9 +751,15 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
             multiple: if r.two_stage { 64 } else { 32 },
             max_area: 3840 * 2176,
             aspect: (0.25, 4.0),
-            // The LTX API tiers; the first is the default (1080 is generated
-            // at 1088 and cropped back, ltx §3.1).
-            short_edges: vec![1080, 720, 1440, 2160],
+            // The first is the default (1080 is generated at 1088 and cropped
+            // back, ltx §3.1). 720 / 1440 / 2160 are the other LTX API tiers
+            // (that protocol keeps its own list, `fastvideo_ltxapi::models::
+            // ResTier`); 480 and 768 are ours, for the real-time director and
+            // the batch APIs whose schemas offer them (native, /v1/videos,
+            // fal H3-schema apps on LTX). Two-stage sizes off the multiple of
+            // 64 are generated padded and cropped back (480p 16:9: 854x480
+            // from 896x512), like 1080.
+            short_edges: LTX_SHORT_EDGES.to_vec(),
             pad_and_crop: true,
             hd: None,
         },
@@ -691,6 +775,9 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         recipe: None,
     }
 }
+
+/// LTX-2.5's canvas tiers, the default first (see `ltx2_caps`).
+pub const LTX_SHORT_EDGES: [u32; 6] = [1080, 480, 720, 768, 1440, 2160];
 
 /// Stage-1 bucket of the Ingredients IC-LoRA (model card: trained at
 /// 768x448, 121 frames, 24 fps); the two-stage output is twice that.
@@ -763,6 +850,11 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
             guidance_2: false,
             ..KnobCaps::all()
         },
+        // A fixed distilled schedule: steps and shift are part of it.
+        WanSampler::StepDistill { .. } => KnobCaps {
+            seed: true,
+            ..KnobCaps::default()
+        },
     };
     ModelCaps {
         id: ModelId::new(id),
@@ -813,6 +905,11 @@ fn sfwan_caps(id: &str, r: &SfWanRecipe) -> ModelCaps {
     c.stream = Some(StreamCaps::Causal {
         block_frames: r.block_frames,
         target_fps: fps,
+        context: Some(fastvideo_protocol::CausalContext {
+            window_latent_frames: r.local_attn_frames,
+            sink_latent_frames: r.sink_frames,
+            prompt_recache: r.longlive.as_ref().is_some_and(|l| l.recache),
+        }),
     });
     c.knobs = KnobCaps {
         seed: true,
@@ -873,6 +970,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         refine_steps: 3,
         ic_lora: None,
         a2v: LtxA2v::Distilled,
+        sage_attention: false,
     }
 }
 
@@ -892,6 +990,7 @@ fn fastwan(layout: &WeightLayout, decoder: WanDecoder) -> WanRecipe {
         i2v: false,
         negative: WAN_NEGATIVE_EN.to_owned(),
         tae_dir: Some(layout.tae_dir.clone()),
+        plug: None,
     }
 }
 
@@ -972,6 +1071,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         i2v: true,
         negative: WAN_NEGATIVE_CN.to_owned(),
         tae_dir: None,
+        plug: None,
     };
     // FastWan2.2 TI2V-5B (FullAttn): the TI2V-5B network DMD-distilled to 3
     // steps (1000/757/522), shift 5, full attention; trained at 704x1280x121.
@@ -982,6 +1082,32 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         decoder,
         tae_dir: Some(layout.tae_dir.clone()),
         ..wan_max.clone()
+    };
+    // Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters merged at load
+    // (few-step lightx2v at 1.0 + CFG at 0.5), LightX2V step-distill Euler
+    // on 1000/750/500/250 at shift 5, guidance 1: 19.0 s denoise / 22.0 s
+    // total at 832x480x81 on an RTX PRO 6000, 25x the base's 100-forward
+    // UniPC (docs/serve/research-longlive.md §12). Offered at the measured
+    // 480p canvas and Wan 2.1's 81 frames; text-to-video only.
+    let wan14b_plug = WanRecipe {
+        preset: "wan_t2v_14b".to_owned(),
+        weights: layout.at(WAN14B_CELL),
+        sampler: WanSampler::StepDistill {
+            timesteps: fastvideo_models::plug::WAN14B_PLUG_TIMESTEPS.to_vec(),
+            shift: 5.0,
+        },
+        flow_shift: 5.0,
+        vsa: false,
+        decoder: WanDecoder::Full,
+        default: (832, 480, 81, 16),
+        max_area: 832 * 480,
+        short_edges: vec![480],
+        multiple: 16,
+        frames_max: WAN14B_FRAMES_MAX,
+        i2v: false,
+        negative: WAN_NEGATIVE_EN.to_owned(),
+        tae_dir: None,
+        plug: Some(WAN14B_PLUG_RECIPE.to_owned()),
     };
     let sfwan = SfWanRecipe {
         wan: WanRecipe {
@@ -999,6 +1125,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         // sink degrades within a minute (docs/ports/wan.md).
         sink_frames: 15,
         block_frames: 12,
+        longlive: None,
     };
     vec![
         CudaModel::new(
@@ -1046,6 +1173,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "ltx25-distill-two-stage-dense",
             CudaRecipe::Ltx2(Ltx2Recipe {
                 a2v: LtxA2v::Off,
+                sage_attention: true,
                 ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
             }),
         ),
@@ -1096,6 +1224,15 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fastwan22-ti2v-5b-dmd3-taehv",
             CudaRecipe::Wan(fastwan22(WanDecoder::Taehv)),
         ),
+        // The Wan 14B fast tier: untiered in the (family, tier) table, whose
+        // Wan turbo slot is the 5B; addressed as `wan14b-turbo` (or its id).
+        CudaModel::new(
+            WAN14B_PLUG_RECIPE,
+            None,
+            WAN14B_PLUG_RECIPE,
+            CudaRecipe::Wan(wan14b_plug),
+        )
+        .with_served_names(&[WAN14B_TURBO]),
         CudaModel::new(
             "fastwan21-1.3b",
             None,
@@ -1281,6 +1418,31 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             if let Some(w) = &e.weights {
                 r.wan.weights = w.clone();
             }
+            // LongLive-1.3B (opt-in): `longlive = "<dir>"` holds the
+            // converted `longlive_base.safetensors` + `lora.safetensors`;
+            // LongLive's window 12 / sink 3, KV re-cache at prompt switches
+            // (`longlive_recache = false`: keep the cache, the ablation).
+            if let Some(dir) = x("longlive").filter(|d| !d.is_empty()) {
+                let flag = |k: &str| -> Result<bool, String> {
+                    match x(k).as_deref() {
+                        None | Some("true") => Ok(true),
+                        Some("false") => Ok(false),
+                        Some(other) => Err(format!("model `{}`: {k} = {other:?} (true | false)", e.id)),
+                    }
+                };
+                r.longlive = Some(LongLiveRecipe {
+                    weights: dir.into(),
+                    lora: true,
+                    recache: flag("longlive_recache")?,
+                    global_sink: true,
+                    relative_rope: false,
+                });
+                r.local_attn_frames = 12;
+                r.sink_frames = 3;
+                if !m.served_names.iter().any(|n| n == LONGLIVE_NAME) {
+                    m.served_names.push(LONGLIVE_NAME.into());
+                }
+            }
         }
     }
     Ok(m)
@@ -1413,6 +1575,21 @@ mod tests {
         assert_eq!(t.resolve("fasth3").unwrap().id.as_str(), "fasth3-4step-vsa");
         assert!(t.get(&ModelId::new("fasth3-8step-dense")).unwrap().tier.is_none());
         assert_eq!(t.len(), cat.len());
+    }
+
+    #[test]
+    fn sage_attention_is_ltx_pro_only() {
+        let cat = catalog(&WeightLayout::default());
+        let on: Vec<&str> = cat
+            .iter()
+            .filter(|m| matches!(&m.recipe, CudaRecipe::Ltx2(r) if r.sage_attention))
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(on, ["ltx25-distill-dense"]);
+        assert_eq!(
+            find(&cat, "ltx-pro").unwrap().id.as_str(),
+            "ltx25-distill-dense"
+        );
     }
 
     #[test]
@@ -1567,13 +1744,71 @@ mod tests {
         assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
         assert_eq!(fw.tier, Some(Tier::Turbo));
         let sf = get("sfwan21-1.3b");
-        assert_eq!(
+        assert!(matches!(
             sf.stream,
             Some(StreamCaps::Causal {
                 block_frames: 12,
-                target_fps: 16
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { prompt_recache: false, .. })
             })
-        );
+        ));
+    }
+
+    #[test]
+    fn wan14b_turbo_is_the_plug_recipe() {
+        use fastvideo_protocol::*;
+        let layout = WeightLayout::default();
+        let cat = catalog(&layout);
+        let m = find(&cat, WAN14B_TURBO).unwrap();
+        assert_eq!(m.id.as_str(), WAN14B_PLUG_RECIPE);
+        assert_eq!(find(&cat, "wan14b-plug-4step").unwrap().id, m.id);
+        // Untiered: the Wan turbo slot stays the 5B (fal's fast-wan app).
+        assert_eq!(m.tier, None);
+        assert_eq!(find(&cat, "wan-turbo").unwrap().id.as_str(), "fastwan22-ti2v-5b");
+        let CudaRecipe::Wan(r) = &m.recipe else { panic!("{:?}", m.recipe) };
+        assert_eq!(r.preset, "wan_t2v_14b");
+        assert_eq!(r.weights, layout.root.join("wan21-t2v-14b"));
+        assert_eq!(r.plug.as_deref(), Some("wan14b-plug-4step"));
+        let plug = fastvideo_models::plug::PlugRecipe::named(r.plug.as_deref().unwrap()).unwrap();
+        assert_eq!((plug.preset, plug.base), (r.preset.as_str(), "wan21-t2v-14b"));
+        assert_eq!(plug.licence, "Apache-2.0");
+        match (&r.sampler, &plug.sampler) {
+            (
+                WanSampler::StepDistill { timesteps, shift },
+                fastvideo_models::plug::PlugSampler::WanEuler { timesteps: want, shift: s },
+            ) => assert_eq!((timesteps.as_slice(), *shift), (*want, *s)),
+            other => panic!("{other:?}"),
+        }
+        let t = table(&cat);
+        assert_eq!(t.resolve(WAN14B_TURBO).unwrap().id.as_str(), WAN14B_PLUG_RECIPE);
+        let d = m.describe();
+        assert_eq!((d.steps, d.attention.as_str(), d.vae.as_str(), d.profile), (Some(4), "dense", "full", None));
+        assert!(d.summary.contains("wan14b-plug-4step") && d.summary.contains("1000/750/500/250"), "{}", d.summary);
+        let c = m.caps();
+        assert!(c.served_names.iter().any(|n| n == WAN14B_TURBO));
+        assert_eq!(c.tasks, [Task::T2V].into_iter().collect());
+        assert_eq!(c.canvas.short_edges, vec![480]);
+        assert_eq!((c.frames.min, c.frames.max, c.frames.default, c.fps.default), (9, 81, 81, 16));
+        assert_eq!(c.knobs, KnobCaps { seed: true, ..KnobCaps::default() });
+        assert!(!m.requirements().fp8 && !m.requirements().nvfp4);
+        for (ratio, want) in [(Ratio::R16_9, (832, 480)), (Ratio::R9_16, (480, 832))] {
+            let mut req = GenerationRequest::text(ProtocolId::Native, WAN14B_TURBO, "a cat");
+            req.canvas = CanvasSpec::Aspect { ratio, short_edge: 480 };
+            let j = negotiate(&req, &c, &Default::default()).unwrap();
+            assert_eq!((j.width, j.height, j.num_frames, j.fps), (want.0, want.1, 81, 16), "{ratio:?}");
+        }
+        // 14B and the 5B tiers share the process settings (no VSA).
+        assert!(ProcessPlan::for_models(&[m.clone(), find(&cat, "wan-turbo").unwrap()]).is_ok());
+        // `[[models]] recipe = "wan14b-turbo"` binds it.
+        let e = ModelEntryCfg {
+            id: "wan14b".into(),
+            family: "wan".into(),
+            recipe: WAN14B_TURBO.into(),
+            ..Default::default()
+        };
+        let got = model_from_config(&layout, &e).unwrap();
+        assert!(matches!(&got.recipe, CudaRecipe::Wan(w) if w.plug.is_some()));
+        assert!(got.served_names.iter().any(|n| n == WAN14B_TURBO));
     }
 
     #[test]
@@ -1970,5 +2205,67 @@ mod tests {
         };
         assert_eq!(r.weights, Path::new("/w/h3-8step"));
         assert!(r.dense);
+    }
+
+    /// `[[models]]` turns LongLive on with `longlive = "<dir>"`: window 12,
+    /// sink 3, re-cache, the extra served name `longlive` and the context in
+    /// the caps; without it the SF-Wan entry is unchanged.
+    #[test]
+    fn models_entry_opts_into_longlive() {
+        let layout = WeightLayout::new("/w");
+        let mut e = ModelEntryCfg {
+            id: "longlive-1.3b".into(),
+            family: "wan".into(),
+            recipe: "sfwan21-1.3b".into(),
+            weights: None,
+            resident: true,
+            served_names: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        let plain = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &plain.recipe else { panic!() };
+        assert!(r.longlive.is_none());
+        assert!(!plain.served_names.iter().any(|n| n == LONGLIVE_NAME));
+        e.extra.insert("longlive".into(), "/w/longlive-1.3b-safetensors".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        let l = r.longlive.as_ref().unwrap();
+        assert!(l.recache && l.lora && l.global_sink);
+        assert_eq!((r.local_attn_frames, r.sink_frames), (12, 3));
+        let caps = m.caps();
+        assert!(caps.served_names.iter().any(|n| n == LONGLIVE_NAME), "{:?}", caps.served_names);
+        assert_eq!(
+            caps.stream,
+            Some(StreamCaps::Causal {
+                block_frames: 12,
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+            })
+        );
+        e.extra.insert("longlive_recache".into(), "false".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        assert!(!r.longlive.as_ref().unwrap().recache);
+        e.extra.insert("longlive_recache".into(), "maybe".into());
+        assert!(model_from_config(&layout, &e).is_err());
+    }
+
+    /// LongLive is opt-in on an SF-Wan recipe: absent from the catalog's
+    /// recipe (and its JSON), defaults on when a deployment sets it.
+    #[test]
+    fn sfwan_longlive_is_opt_in() {
+        let cat = catalog(&WeightLayout::default());
+        let sf = cat.iter().find(|m| m.id.as_str() == "sfwan21-1.3b").unwrap();
+        let CudaRecipe::SfWan(r) = &sf.recipe else { panic!("sfwan recipe") };
+        assert!(r.longlive.is_none());
+        let mut v = serde_json::to_value(r).unwrap();
+        assert!(v.get("longlive").is_none());
+        v["longlive"] = serde_json::json!({"weights": "/w/longlive-1.3b-safetensors"});
+        v["local_attn_frames"] = 12.into();
+        v["sink_frames"] = 3.into();
+        let ll: SfWanRecipe = serde_json::from_value(v).unwrap();
+        let l = ll.longlive.as_ref().unwrap();
+        assert!(l.lora && l.recache && l.global_sink && !l.relative_rope);
+        assert_eq!(l.weights, PathBuf::from("/w/longlive-1.3b-safetensors"));
     }
 }

@@ -1,0 +1,247 @@
+/workspace/weights/FastH3-4-step-Preview-v1-LoRA:
+total 12699
+drwxrwxrwx  4 root root 3000635 Sep 24 18:40 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+-rw-rw-rw-  1 root root       3 Sep 24 00:45 .complete
+-rw-rw-rw-  1 root root       4 Sep 24 00:45 .fetch.pid
+lrwxrwxrwx  1 root root     173 Sep 24 18:40 dense-datafree -> /workspace/weights/FastH3-4-step-Preview-v1-LoRA/models--FastVideo--FastVideo-FastH3-4-step-Preview-v1-LoRA/snapshots/f509e629374cac104e7f62daecce6d1488a3041d/dense-datafree
+drwxrwxrwx  5 root root 3000138 Sep 24 00:45 models--FastVideo--FastVideo-FastH3-4-step-Preview-v1-LoRA
+drwxrwxrwx  2 root root 3000497 Sep 24 16:32 vsa-datafree
+
+/workspace/weights/auxiliary/lpips:
+total 243595
+drwxrwxrwx 2 root root   2023309 Sep 27 15:38 .
+drwxrwxrwx 5 root root   3001360 Sep 28 21:17 ..
+-rw-rw-rw- 1 root root        16 Sep 27 15:38 .complete
+-rw-rw-rw- 1 root root 244408911 Sep 27 15:38 alexnet-owt-7be5be79.pth
+-rw-rw-rw- 1 root root      6009 Sep 27 15:38 lpips_v0.1_alex.pth
+
+/workspace/weights/fastwan22-ti2v-5b:
+total 17668
+drwxrwxrwx  7 root root 3002253 Sep 28 19:30 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+-rw-rw-rw-  1 root root       4 Sep 28 19:30 .complete
+-rw-rw-rw-  1 root root     502 Sep 28 19:27 model_index.json
+drwxrwxrwx  2 root root   82000 Sep 28 19:27 scheduler
+drwxrwxrwx  2 root root 3001058 Sep 28 19:27 text_encoder
+drwxrwxrwx  2 root root 2002046 Sep 28 19:27 tokenizer
+drwxrwxrwx  2 root root 3000931 Sep 28 19:28 transformer
+drwxrwxrwx  2 root root 3000262 Sep 28 19:28 vae
+
+/workspace/weights/h3-base:
+total 12732
+drwxrwxrwx  5 root root 3015830 Sep 27 19:50 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+-rw-rw-rw-  1 root root       5 Sep 24 01:14 .complete
+-rw-rw-rw-  1 root root       4 Sep 24 00:45 .fetch.pid
+drwxrwxrwx  3 root root       1 Sep 24 00:45 .locks
+lrwxrwxrwx  1 root root     117 Sep 24 01:14 audio_vae -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/audio_vae
+lrwxrwxrwx  1 root root     124 Sep 24 01:14 model_index.json -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/model_index.json
+drwxrwxrwx  5 root root 3013413 Sep 24 00:45 models--MiniMaxAI--MiniMax-H3
+lrwxrwxrwx  1 root root     120 Sep 24 01:14 text_encoder -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/text_encoder
+drwxrwxrwx  2 root root 3002416 Sep 27 19:42 text_encoder_fp8
+lrwxrwxrwx  1 root root     117 Sep 24 01:14 tokenizer -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/tokenizer
+lrwxrwxrwx  1 root root     119 Sep 24 01:14 transformer -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/transformer
+lrwxrwxrwx  1 root root     111 Sep 24 01:14 vae -> /workspace/weights/h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe/vae
+
+/workspace/weights/longlive-plug/minimax-h3-cfg:
+total 2709294
+drwxrwxrwx 3 root root    3000257 Oct  2 01:41 .
+drwxrwxrwx 8 root root    3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root          3 Oct  2 01:41 .complete
+-rw-rw-rw- 1 root root       2965 Oct  2 01:41 ELM_TRANSFER.json
+-rw-rw-rw- 1 root root      17604 Oct  2 01:41 LICENSE
+-rw-rw-rw- 1 root root       1208 Oct  2 01:41 NOTICE
+-rw-rw-rw- 1 root root       1017 Oct  2 01:41 README.md
+-rw-rw-rw- 1 root root        858 Oct  2 01:41 SHA256SUMS.txt
+-rw-rw-rw- 1 root root      13661 Oct  2 01:41 adapter_config.json
+-rw-rw-rw- 1 root root 2767268872 Oct  2 01:41 adapter_model.safetensors
+-rw-rw-rw- 1 root root       1206 Oct  2 01:41 evaluation_summary.json
+-rw-rw-rw- 1 root root       1648 Oct  2 01:41 release_manifest.json
+drwxrwxrwx 2 root root    1000110 Oct  2 01:41 sglang
+-rw-rw-rw- 1 root root       2244 Oct  2 01:41 training_config.json
+
+/workspace/weights/longlive-plug/minimax-h3-few-step:
+total 2710668
+drwxrwxrwx 5 root root    3000257 Oct  2 01:39 .
+drwxrwxrwx 8 root root    3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root          3 Oct  2 01:39 .complete
+-rw-rw-rw- 1 root root       1519 Oct  2 01:39 .gitattributes
+-rw-rw-rw- 1 root root       9478 Oct  2 01:39 ELM_TRANSFER.json
+-rw-rw-rw- 1 root root        992 Oct  2 01:39 EXPORT_VALIDATION.json
+-rw-rw-rw- 1 root root      17604 Oct  2 01:39 LICENSE
+-rw-rw-rw- 1 root root      11357 Oct  2 01:39 LICENSE-CODE
+-rw-rw-rw- 1 root root        413 Oct  2 01:39 NOTICE
+-rw-rw-rw- 1 root root        859 Oct  2 01:39 README.md
+-rw-rw-rw- 1 root root      12841 Oct  2 01:39 adapter_config.json
+drwxrwxrwx 2 root root      62600 Oct  2 01:39 environment
+-rw-rw-rw- 1 root root 2767464857 Oct  2 01:39 generator_lora.pt
+-rw-rw-rw- 1 root root       2722 Oct  2 01:39 prompts.example.json
+-rw-rw-rw- 1 root root       7665 Oct  2 01:39 provenance.json
+-rw-rw-rw- 1 root root       2640 Oct  2 01:39 run_inference.py
+-rw-rw-rw- 1 root root       4978 Oct  2 01:39 source_hashes.json
+drwxrwxrwx 3 root root    1076618 Oct  2 01:39 source_snapshot
+-rw-rw-rw- 1 root root      36122 Oct  2 01:39 training_config.json
+drwxrwxrwx 2 root root    1004643 Oct  2 01:39 training_recipe
+
+/workspace/weights/longlive-plug/wan21-t2v-14b-cfg:
+total 2402144
+drwxrwxrwx 2 root root    3000228 Oct  2 01:43 .
+drwxrwxrwx 8 root root    3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root          3 Oct  2 01:43 .complete
+-rw-rw-rw- 1 root root        875 Oct  2 01:43 README.md
+-rw-rw-rw- 1 root root        686 Oct  2 01:43 SHA256SUMS
+-rw-rw-rw- 1 root root      11513 Oct  2 01:43 adapter_config.json
+-rw-rw-rw- 1 root root 2453769728 Oct  2 01:43 adapter_model.safetensors
+-rw-rw-rw- 1 root root        375 Oct  2 01:43 inference_overrides.yaml
+-rw-rw-rw- 1 root root       3791 Oct  2 01:43 provenance.json
+-rw-rw-rw- 1 root root       1275 Oct  2 01:43 release_metadata.json
+-rw-rw-rw- 1 root root       2561 Oct  2 01:43 training_config.yaml
+
+/workspace/weights/longlive-plug/wan21-t2v-14b-few-step:
+total 1204036
+drwxrwxrwx 2 root root    3000114 Oct  2 01:42 .
+drwxrwxrwx 8 root root    3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root          2 Oct  2 01:42 .complete
+-rw-rw-rw- 1 root root        699 Oct  2 01:42 README.md
+-rw-rw-rw- 1 root root       4543 Oct  2 01:42 export_generator_lora.py
+-rw-rw-rw- 1 root root 1226922392 Oct  2 01:42 generator_lora_lightx2v.safetensors
+-rw-rw-rw- 1 root root        626 Oct  2 01:42 inference_config.json
+-rw-rw-rw- 1 root root       1275 Oct  2 01:42 provenance.json
+
+/workspace/weights/longlive-plug/wan22-ti2v-5b-cfg:
+total 634797
+drwxrwxrwx 2 root root   2061508 Oct  2 01:45 .
+drwxrwxrwx 8 root root   3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root         3 Oct  2 01:45 .complete
+-rw-rw-rw- 1 root root      1151 Oct  2 01:45 README.md
+-rw-rw-rw- 1 root root       610 Oct  2 01:45 SHA256SUMS
+-rw-rw-rw- 1 root root      8691 Oct  2 01:45 adapter_config.json
+-rw-rw-rw- 1 root root 644949288 Oct  2 01:45 adapter_model.safetensors
+-rw-rw-rw- 1 root root       392 Oct  2 01:45 inference_overrides.yaml
+-rw-rw-rw- 1 root root      2638 Oct  2 01:45 provenance.json
+-rw-rw-rw- 1 root root      1065 Oct  2 01:45 release_metadata.json
+-rw-rw-rw- 1 root root      2354 Oct  2 01:45 training_config.yaml
+
+/workspace/weights/longlive-plug/wan22-ti2v-5b-few-step:
+total 1265474
+drwxrwxrwx 2 root root    3000120 Oct  2 01:44 .
+drwxrwxrwx 8 root root    3001038 Oct  2 01:45 ..
+-rw-rw-rw- 1 root root          3 Oct  2 01:44 .complete
+-rw-rw-rw- 1 root root        699 Oct  2 01:44 README.md
+-rw-rw-rw- 1 root root       9349 Oct  2 01:44 adapter_config.json
+-rw-rw-rw- 1 root root 1289824400 Oct  2 01:44 adapter_model.safetensors
+-rw-rw-rw- 1 root root        586 Oct  2 01:44 inference_config.yaml
+-rw-rw-rw- 1 root root        706 Oct  2 01:44 load_generator_lora.py
+-rw-rw-rw- 1 root root       2641 Oct  2 01:44 provenance.json
+-rw-rw-rw- 1 root root       1853 Oct  2 01:44 training_config.yaml
+
+/workspace/weights/wan21-t2v-14b:
+total 17719
+drwxrwxrwx  8 root root 3007488 Sep 27 15:42 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+drwxrwxrwx  3 root root 1001437 Sep 27 15:41 .cache
+-rw-rw-rw-  1 root root       3 Sep 27 15:42 .complete
+-rw-rw-rw-  1 root root     400 Sep 27 15:41 model_index.json
+drwxrwxrwx  2 root root   75100 Sep 27 15:41 scheduler
+drwxrwxrwx  2 root root 3002116 Sep 27 15:42 text_encoder
+drwxrwxrwx  2 root root 2002046 Sep 27 15:41 tokenizer
+drwxrwxrwx  2 root root 3005322 Sep 27 15:42 transformer
+drwxrwxrwx  2 root root 2048407 Sep 27 15:42 vae
+
+/workspace/weights/wan22-ti2v-5b:
+total 18647
+drwxrwxrwx  8 root root 3003185 Sep 27 15:41 .
+drwxrwxrwx 33 root root 4000122 Oct  2 01:39 ..
+drwxrwxrwx  3 root root 1000893 Sep 27 15:39 .cache
+-rw-rw-rw-  1 root root       3 Sep 27 15:41 .complete
+-rw-rw-rw-  1 root root     499 Sep 27 15:39 model_index.json
+drwxrwxrwx  2 root root   82000 Sep 27 15:39 scheduler
+drwxrwxrwx  2 root root 3001058 Sep 27 15:41 text_encoder
+drwxrwxrwx  2 root root 2002046 Sep 27 15:39 tokenizer
+drwxrwxrwx  2 root root 3001862 Sep 27 15:41 transformer
+drwxrwxrwx  2 root root 3000262 Sep 27 15:41 vae
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 97887 MiB
+               total        used        free      shared  buff/cache   available
+Mem:            1511         143         347          31        1019        1322
+Swap:              0           0           0
+256
+2026-10-02T03:32:13Z | venv exit=0
+2026-10-02T03:37:20Z | cell h3-plug4 rc=0 wall=307s peak=59557MiB
+    [fastvideo] plug lora h3-plug-4step minimax-h3-few-step/generator_lora.pt: 312 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+    [fastvideo] h3 h3-plug-4step: fuse 312 pairs rank=128 alpha=128 scale=1 (/workspace/weights/longlive-plug/minimax-h3-few-step/generator_lora.pt; licence: MiniMax H3 Community Licence (as MiniMaxAI/MiniMax-H3))
+2026-10-02T03:42:19Z | cell h3-plug4-ctl rc=0 wall=299s peak=59525MiB
+    [fastvideo] plug lora h3-plug-4step minimax-h3-few-step/generator_lora.pt: 312 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+    [fastvideo] h3 h3-plug-4step: fuse 312 pairs rank=128 alpha=128 scale=1 (/workspace/weights/longlive-plug/minimax-h3-few-step/generator_lora.pt; licence: MiniMax H3 Community Licence (as MiniMaxAI/MiniMax-H3))
+2026-10-02T03:46:22Z | cell h3-turbo rc=0 wall=243s peak=70045MiB
+    [fastvideo] h3 fasth3-preview vsa-datafree: fuse 362 pairs rank=64 strength=1 diffs=82 set_weight=50 (/workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors)
+2026-10-02T03:46:28Z | cmp h3-plug4--h3-plug4-ctl-h3-demo rc=0
+2026-10-02T03:46:33Z | cmp h3-plug4--h3-plug4-ctl-ltx-frogyoga rc=0
+2026-10-02T03:46:39Z | cmp h3-plug4--h3-plug4-ctl-spark-mountain-lake rc=0
+2026-10-02T03:46:45Z | cmp h3-turbo--h3-plug4-h3-demo rc=0
+2026-10-02T03:46:50Z | cmp h3-turbo--h3-plug4-ltx-frogyoga rc=0
+2026-10-02T03:46:56Z | cmp h3-turbo--h3-plug4-spark-mountain-lake rc=0
+2026-10-02T03:50:40Z | cell w5-plug720 rc=0 wall=224s peak=60133MiB
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1) (/workspace/weights/longlive-plug/wan22-ti2v-5b-few-step/adapter_model.safetensors)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5) (/workspace/weights/longlive-plug/wan22-ti2v-5b-cfg/adapter_model.safetensors)
+    [fastvideo] plug wan5b-plug-4step: 300 base parameters merged of 825 tensors in 86.6 s
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+2026-10-02T03:54:32Z | cell w5-plug720-ctl rc=0 wall=232s peak=61253MiB
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1) (/workspace/weights/longlive-plug/wan22-ti2v-5b-few-step/adapter_model.safetensors)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5) (/workspace/weights/longlive-plug/wan22-ti2v-5b-cfg/adapter_model.safetensors)
+    [fastvideo] plug wan5b-plug-4step: 300 base parameters merged of 825 tensors in 79.7 s
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+2026-10-02T03:57:20Z | cell w5-turbo720 rc=0 wall=168s peak=60325MiB
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+2026-10-02T04:07:53Z | cell w5-max720 rc=0 wall=633s peak=61253MiB
+    [fastvideo] denoise=unipc steps=50
+    [fastvideo] denoise=unipc steps=50
+    [fastvideo] denoise=unipc steps=50
+2026-10-02T04:10:19Z | cell w5-plug480 rc=0 wall=146s peak=37629MiB
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-few-step/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1) (/workspace/weights/longlive-plug/wan22-ti2v-5b-few-step/adapter_model.safetensors)
+    [fastvideo] plug lora wan5b-plug-4step wan22-ti2v-5b-cfg/adapter_model.safetensors: 300 modules matched, 0 skipped, 0 unknown keys (rank [64], alpha 64, weight 0.5, scale 0.5) (/workspace/weights/longlive-plug/wan22-ti2v-5b-cfg/adapter_model.safetensors)
+    [fastvideo] plug wan5b-plug-4step: 300 base parameters merged of 825 tensors in 58.8 s
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+    [fastvideo] denoise=unipc steps=4
+2026-10-02T04:12:16Z | cell w5-turbo480 rc=0 wall=117s peak=38877MiB
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+    [fastvideo] denoise=dmd steps=3
+2026-10-02T04:16:49Z | cell w5-max480 rc=0 wall=273s peak=39717MiB
+    [fastvideo] denoise=unipc steps=50
+    [fastvideo] denoise=unipc steps=50
+    [fastvideo] denoise=unipc steps=50
+2026-10-02T04:16:57Z | cmp w5-max720--w5-plug720-beach_dog rc=0
+2026-10-02T04:17:02Z | cmp w5-max720--w5-plug720-city_rain rc=0
+2026-10-02T04:17:06Z | cmp w5-max720--w5-plug720-spark-mountain-lake rc=0
+2026-10-02T04:17:11Z | cmp w5-plug720--w5-plug720-ctl-beach_dog rc=0
+2026-10-02T04:17:16Z | cmp w5-plug720--w5-plug720-ctl-city_rain rc=0
+2026-10-02T04:17:21Z | cmp w5-plug720--w5-plug720-ctl-spark-mountain-lake rc=0
+2026-10-02T04:17:26Z | cmp w5-max720--w5-turbo720-beach_dog rc=0
+2026-10-02T04:17:31Z | cmp w5-max720--w5-turbo720-city_rain rc=0
+2026-10-02T04:17:36Z | cmp w5-max720--w5-turbo720-spark-mountain-lake rc=0
+2026-10-02T04:17:39Z | cmp w5-max480--w5-plug480-beach_dog rc=0
+2026-10-02T04:17:42Z | cmp w5-max480--w5-plug480-city_rain rc=0
+2026-10-02T04:17:45Z | cmp w5-max480--w5-plug480-spark-mountain-lake rc=0
+2026-10-02T04:17:48Z | cmp w5-max480--w5-turbo480-beach_dog rc=0
+2026-10-02T04:17:51Z | cmp w5-max480--w5-turbo480-city_rain rc=0
+2026-10-02T04:17:54Z | cmp w5-max480--w5-turbo480-spark-mountain-lake rc=0
+CHAIN-DONE
+2026-10-02T04:18:44Z | sheet h3-768p-f062 ok
+2026-10-02T04:18:44Z | sheet w5-720p-f060 ok
+2026-10-02T04:18:44Z | sheet w5-480p-f060 ok

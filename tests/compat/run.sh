@@ -18,7 +18,7 @@
 #   fal-webhook   fal webhooks (fal-client + @fal-ai/client) verified with the JWKS + Ed25519
 #   fal-director  @fal-ai/client alpha fal.realtime.open(wma) in headless Chromium
 #   reactor       reactor_sdk (Python) local mode: A/V, video-only, causal
-#   console       the /console Playwright smoke (tests/console/smoke.cjs)
+#   console       the /console Playwright smoke (tests/console/smoke.cjs, ui_gaps.cjs)
 #
 # Client versions are pinned in tests/compat/requirements.txt and
 # tests/compat/package-lock.json; the venv and node_modules are cached under
@@ -427,7 +427,11 @@ suite_reactor() {
 suite_console() {
   # tests/console/smoke.cjs starts its own fv-serve (default config) from
   # FV_SERVE_BIN; playwright resolves from the pinned node_modules.
-  FV_SERVE_BIN="$BIN" NODE_PATH="$NODE_DIR/node_modules" timeout 900 node "$ROOT/tests/console/smoke.cjs"
+  local rc=0
+  FV_SERVE_BIN="$BIN" NODE_PATH="$NODE_DIR/node_modules" timeout 900 node "$ROOT/tests/console/smoke.cjs" || rc=1
+  # Live stream, Native API, causal / script director, tier and draft, reference limits.
+  FV_SERVE_BIN="$BIN" NODE_PATH="$NODE_DIR/node_modules" timeout 600 node "$ROOT/tests/console/ui_gaps.cjs" || rc=1
+  return $rc
 }
 
 # --------------------------------------------------------------------- run

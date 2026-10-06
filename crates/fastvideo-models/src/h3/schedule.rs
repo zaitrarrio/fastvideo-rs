@@ -247,6 +247,8 @@ impl H3RowTimesteps {
 pub struct H3JointSchedule {
     pub video: H3Schedule,
     pub audio: H3Schedule,
+    /// Step with fresh re-noising ([`H3InferenceContract::fresh_noise`]).
+    pub fresh_noise: bool,
 }
 
 impl H3JointSchedule {
@@ -272,7 +274,11 @@ impl H3JointSchedule {
         {
             return Err("contract grid-point / forward counts disagree with its ladder".into());
         }
-        Ok(Self { video, audio })
+        Ok(Self {
+            video,
+            audio,
+            fresh_noise: contract.fresh_noise,
+        })
     }
 
     pub fn fasth3_8step() -> Self {

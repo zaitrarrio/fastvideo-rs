@@ -31,7 +31,7 @@ pub mod stream;
 
 pub use av::{Pcm, RgbFrame};
 pub use caps::{
-    apply_feature_flags, AudioCaps, CanvasCaps, FpsCaps, FrameGrid, HdTier, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
+    apply_feature_flags, AudioCaps, CanvasCaps, CausalContext, FpsCaps, FrameGrid, HdTier, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
     FLAG_H3_1080P_LONG, H3_1080P_LONG_MAX_S, H3_1080P_MAX_S,
 };
 pub use error::{ApiError, ErrorKind, GapId};

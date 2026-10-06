@@ -31,6 +31,11 @@ pub struct OutputPolicy {
     pub encoder: FfmpegH264,
     /// Where finalized files are staged before the artifact store takes them.
     pub scratch: PathBuf,
+    /// The engine writes fragmented MP4s (`engine.mp4_fragmented`): they need
+    /// no faststart remux, so the file the engine wrote is stored as is
+    /// unless the job needs a crop or `-an` (a direct upload has then
+    /// already sent most of it, docs/serve/dispatch-do-family.md §7.2).
+    pub fragmented: bool,
 }
 
 /// [`EngineGate`] over [`EngineService`].
@@ -226,11 +231,12 @@ async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, po
             let needs_post = post.crop.is_some() || post.drop_audio;
             let dst = dir.join("final.mp4");
             let (src2, dst2, enc) = (src.clone(), dst.clone(), policy.encoder);
+            let keep_fragmented = policy.fragmented && !needs_post;
             tracing::debug!(job = %id, "output: finalize start");
             // Off the async runtime: the checks read the file and may run
             // ffmpeg once (the probe is cached per process).
             let out = tokio::task::spawn_blocking(move || -> Result<PathBuf, ApiError> {
-                if !needs_post && (!ffmpeg_ok() || mp4::finalize_is_noop(&src2, &post)) {
+                if keep_fragmented || (!needs_post && (!ffmpeg_ok() || mp4::finalize_is_noop(&src2, &post))) {
                     return Ok(src2);
                 }
                 mp4::finalize_with(&src2, &dst2, &post, enc).map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;

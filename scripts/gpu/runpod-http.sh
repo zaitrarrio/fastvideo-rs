@@ -51,10 +51,16 @@ fi
 HERE="${FV_HTTP_HERE:-$HERE}"
 # shellcheck source-path=SCRIPTDIR source=runpod-price.sh
 source "$HERE/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
-VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy fv-weights-b200-us}"
+# EU only since 2026-10 (scripts/gpu/volumes.sh); the US name joins the list
+# again once FV_US_VOLUME_NAME is set there.
+VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME${FV_US_VOLUME_NAME:+ $FV_US_VOLUME_NAME}}"
+# shellcheck disable=SC2086 # a space-separated list of names
+fv_check_volume $VOL_NAME "${RUNPOD_VOLUME_ID:-}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-5}"
 CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
@@ -72,7 +78,7 @@ rest() {
 proxy() { curl -sS --max-time 30 --fail "https://$1-8000.proxy.runpod.net/$2"; }
 
 # The weight volume to mount. RUNPOD_VOLUME_NAME may list several volumes
-# (space-separated, e.g. "fv-weights-h3-ltx-hy fv-weights-b200-us"); the first
+# (space-separated, e.g. "fv-weights-h3-ltx-hy <a rebuilt US volume>"); the first
 # whose datacenter currently reports stock for $GPU wins, else the first.
 volume() {
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then

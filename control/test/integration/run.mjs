@@ -183,7 +183,13 @@ await step("the collector: pods, owners, costs, samples, external attribution, a
   await d1Exec(w.dir, `UPDATE pods SET idle_since = ${Date.now() - 3600_000} WHERE pod_id = 'extgpu00001'`);
   await call("/api/collect", { method: "POST", body: {}, headers: T() });
   const al = (await call("/api/alerts", { headers: T() })).j.alerts;
-  assert.ok(al.some((a) => a.kind === "pod_idle" && a.target === "extgpu00001"), JSON.stringify(al));
+  const idleAlert = al.find((a) => a.kind === "pod_idle" && a.target === "extgpu00001");
+  assert.ok(idleAlert, JSON.stringify(al));
+  // Resolve: closed now, open again at the next pass while the pod is still idle.
+  assert.equal((await call(`/api/alerts/${idleAlert.id}/resolve`, { method: "POST", body: {}, headers: T() })).status, 200);
+  assert.ok(!(await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.id === idleAlert.id));
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  assert.ok((await call("/api/alerts", { headers: T() })).j.alerts.some((a) => a.kind === "pod_idle" && a.target === "extgpu00001"), "re-opened");
   assert.ok(mock.pods.has(worker.id) && !mock.log.some((l) => l.method === "DELETE" && l.path.includes("extgpu")), "external pods are never touched");
 });
 
@@ -213,6 +219,91 @@ await step("env at three levels: masked view, restart needed, rolling restart", 
   const patches = mock.log.filter((l) => l.method === "PATCH").slice(-2).map((l) => l.path.split("/").pop());
   assert.deepEqual(patches, [worker.id, gw.id]);
   assert.deepEqual((await call(`/api/clusters/${cid}/env`, { headers: T() })).j.needs_restart, []);
+});
+
+await step("pool env: every worker of the pool, never the gateway; restart by pool or pod", async () => {
+  assert.equal((await call(`/api/env/pool/${cid}:fake/FASTVIDEO_ATTN_SAGE`, { method: "PUT", body: { value: "0" }, headers: T() })).status, 200);
+  // By cluster name too; an unknown pool is refused; reserved keys too.
+  assert.equal((await call(`/api/env/pool/tiny:fake/POOL_SECRET`, { method: "PUT", body: { value: "pool_s3cret_value", secret: true }, headers: T() })).status, 200);
+  assert.equal((await call(`/api/env/pool/${cid}:nope/X`, { method: "PUT", body: { value: "1" }, headers: T() })).status, 404);
+  assert.equal((await call(`/api/env/pool/${cid}:fake/FV_INTERNAL_TOKEN`, { method: "PUT", body: { value: "x" }, headers: T() })).status, 400);
+  const keys = (await call(`/api/env/pool/${cid}:fake`, { headers: T() })).j.vars.map((v) => v.key);
+  assert.deepEqual(keys.sort(), ["FASTVIDEO_ATTN_SAGE", "POOL_SECRET"]);
+  const doc = (await call(`/api/docs/env/pool:${cid}:fake`, { headers: T() })).j;
+  assert.deepEqual(doc.doc.POOL_SECRET, { value: null, secret: true });
+  const e = (await call(`/api/clusters/${cid}/env`, { headers: T() })).j;
+  assert.deepEqual(e.needs_restart, [worker.id], "the gateway has no pool layer");
+  const wenv = Object.fromEntries(e.pods.find((p) => p.pod_id === worker.id).env.map((v) => [v.key, v]));
+  assert.equal(wenv.FASTVIDEO_ATTN_SAGE.source, "pool");
+  assert.equal(wenv.POOL_SECRET.value, "••••••••");
+  assert.ok(!e.pods.find((p) => p.pod_id === gw.id).env.some((v) => v.key === "FASTVIDEO_ATTN_SAGE"));
+  assert.ok(e.preview.fake.some((v) => v.key === "FASTVIDEO_ATTN_SAGE" && v.source === "pool"), "a new worker of the pool gets it");
+  const gwPatches = () => mock.log.filter((l) => l.method === "PATCH" && l.path.endsWith(gw.id)).length;
+  const g0 = gwPatches();
+  await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
+  assert.equal((await call(`/api/clusters/${cid}/restart`, { method: "POST", body: { pools: ["fake"] }, headers: T() })).status, 202);
+  let op = await waitOp(cid, "restart");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal(mock.pods.get(worker.id).env.FASTVIDEO_ATTN_SAGE, "0");
+  assert.equal(mock.pods.get(worker.id).env.POOL_SECRET, "pool_s3cret_value");
+  assert.equal(mock.pods.get(gw.id).env.FASTVIDEO_ATTN_SAGE, undefined);
+  assert.equal(gwPatches(), g0, "the gateway was not restarted");
+  // A chosen pod restarts even when its env did not change.
+  const p0 = mock.pods.get(worker.id).patches;
+  await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
+  assert.equal((await call(`/api/clusters/${cid}/restart`, { method: "POST", body: { pods: [worker.id] }, headers: T() })).status, 202);
+  op = await waitOp(cid, "restart");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  assert.equal(mock.pods.get(worker.id).patches, p0 + 1);
+  assert.equal(gwPatches(), g0);
+  await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'restart'");
+});
+
+await step("templates and pool presets; gateway overrides in the spec", async () => {
+  const tp = (await call("/api/templates", { headers: T() })).j;
+  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "wan", "longlive"]);
+  for (const id of ["ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"]) assert.ok(tp.pool_presets.some((p) => p.id === id), id);
+  assert.match(tp.pool_presets.find((p) => p.id === "longlive").licence, /non-commercial/i);
+  assert.equal(tp.ltx.pools.length, 4);
+  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "ltxs", template: "ltx", gateway: { fal_apps: ["lightricks/ltx-2.5", "fal-ai/ltx-2.3"], protocols: { fastwan: true }, reactor_model: null } } }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const s = r.j.cluster.spec;
+  assert.deepEqual(s.pools.map((p) => p.id), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+  assert.match(s.pools[1].config_toml, /recipe = "ltx-pro"/);
+  assert.deepEqual(s.gateway.fal_apps, ["lightricks/ltx-2.5", "fal-ai/ltx-2.3"]);
+  // A bare preset id fills in; a Plug recipe is refused.
+  const ok = await call(`/api/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [...s.pools, { id: "longlive", count: 0 }] } }, headers: T() });
+  assert.equal(ok.status, 200, JSON.stringify(ok.j));
+  assert.equal(ok.j.cluster.spec.pools[4].variant, "sfwan");
+  const bad = await call(`/api/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [{ ...s.pools[0], models: [{ id: "x", family: "h3", recipe: "h3-plug-4step" }] }] } }, headers: T() });
+  assert.equal(bad.status, 400);
+  assert.match(bad.j.error, /not in the fv-serve catalog/);
+  // Its pool env and suggestions.
+  assert.equal((await call(`/api/env/pool/ltxs:ltx-pro/FASTVIDEO_ATTN_SAGE`, { method: "PUT", body: { value: "0" }, headers: T() })).status, 200);
+  const dyn = (await call(`/api/schemas/dynamic?cluster=${r.j.cluster.id}`, { headers: T() })).j;
+  assert.ok(dyn.recipes.some((x) => x.id === "wan5b-plug-4step" && /NOT servable/.test(x.detail)));
+  assert.ok(dyn.fal_apps.some((x) => x.id === "fal-ai/ltx-2.3-quality"));
+  assert.ok(dyn.model_ids.some((x) => x.id === "ltx25-distill-dense"));
+  assert.match(dyn.env_keys.find((k) => k.id === "FASTVIDEO_ATTN_SAGE").detail, /in use: (cluster|pool)/);
+  assert.equal(dyn.variants.find((v) => v.id === "ltx").detail, "presets: ltx, ltx-pro, ltx-a2v, ltx-ref2v");
+  // Deleting the definition drops its pool env.
+  assert.equal((await call(`/api/clusters/${r.j.cluster.id}`, { method: "DELETE", headers: T() })).status, 200);
+  assert.equal(JSON.parse(d1Exec(w.dir, `SELECT COUNT(*) AS n FROM env_vars WHERE scope = 'pool' AND scope_id LIKE '${r.j.cluster.id}:%'`))[0].results[0].n, 0);
+});
+
+await step("the build pod card: its /healthz timers, last self-stop, jobs, the backstop's distance", async () => {
+  mock.buildHealth = { extbuild0001: { ok: true, ready: true, phase: "ready", boot: 1, uptime_s: 3600, idle_s: 0, idle_stop_in_s: null, max_stop_in_s: 25200, idle_stop_s: 1200, max_s: 28800, max_grace_s: 1800, jobs_active: 1, self_stop: { attempts: 1, next_at: null, reason: "idle 20 min", at: 1000, ok: null, error: `REST stop: HTTP 403 ${SECRETS.RUNPOD_API_KEY}` }, jobs: [{ id: "1002-abc", agent: "wt-ui-dash", state: "running", seconds: 42 }] } };
+  const r = (await call("/api/buildpod", { headers: T() })).j;
+  assert.equal(r.pods.length, 1);
+  const p = r.pods[0];
+  assert.equal(p.pod_id, "extbuild0001");
+  assert.equal(p.health.jobs[0].agent, "wt-ui-dash");
+  assert.equal(p.backstop.cap_in_s, 9 * 3600 - 3600);
+  assert.equal(p.backstop.idle_in_s, null, "jobs running: no idle countdown");
+  assert.equal(p.backstop.verdict, null);
+  assert.ok(!JSON.stringify(r).includes(SECRETS.RUNPOD_API_KEY), "the self-stop error is scrubbed");
+  assert.equal(r.policy.max_h, 9);
+  assert.ok(!mock.log.some((l) => l.path.includes("extbuild0001") && l.method !== "GET"), "read only");
 });
 
 await step("log shipping: ingest, search, level filter, live tail, download, auth", async () => {
@@ -258,8 +349,11 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   assert.equal(dyn.gpu_types.length, 3);
   assert.equal(dyn.gpu_types[0].secure_price, 2.09, "sorted by price");
   assert.deepEqual(dyn.pools, ["fake"]);
-  assert.ok(dyn.env_keys.includes("HF_TOKEN"));
+  assert.ok(dyn.env_keys.some((k) => k.id === "HF_TOKEN" && /in use/.test(k.detail)));
+  assert.ok(dyn.env_keys.some((k) => k.id === "FASTVIDEO_WAN_AUDIO" && /mmaudio/.test(k.detail)));
   assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "jg48s6o1w0");
+  assert.ok(!dyn.regions.find((r) => r.id === "us"), "us is not offered (its weights volume is gone)");
+  assert.deepEqual(sc.schemas["cluster-spec"].properties.regions.items.enum, ["eu"]);
   const d = (await call(`/api/docs/cluster-spec/${cid}`, { headers: T() })).j;
   assert.equal(d.schema, "cluster-spec");
   const v0 = d.version;
@@ -270,6 +364,9 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   const put400 = await call(`/api/docs/cluster-spec/${cid}`, { method: "PUT", body: { doc: { ...d.doc, cap_s: 5 }, version: v0 }, headers: T() });
   assert.equal(put400.status, 400);
   assert.ok(put400.j.issues.length);
+  const putUs = await call(`/api/clusters/${cid}/spec`, { method: "PUT", body: { spec: { ...d.doc, regions: ["eu", "us"] } }, headers: T() });
+  assert.equal(putUs.status, 400, "a spec naming us is rejected");
+  assert.match(JSON.stringify(putUs.j), /US weights volume deleted 2026-10; EU only, see docs\/ops\/runpod-volumes.md/);
   const plan = (await call(`/api/docs/cluster-spec/${cid}/plan`, { method: "POST", body: { doc: { ...d.doc, pools: [{ ...d.doc.pools[0], count: 3 }] } }, headers: T() })).j;
   assert.equal(plan.ok, true);
   assert.ok(plan.projection.cluster_dph > 0);
@@ -306,6 +403,8 @@ await step("scale a pool up and down (drain first)", async () => {
   assert.equal(op.status, "done", JSON.stringify(op.log));
   assert.equal(mock.pods.size, 3);
   assert.equal(mock.pods.get(gw.id).env.FV_POOL_FAKE_URLS.split(",").length, 2);
+  const grown = [...mock.pods.values()].find((p) => p.id !== gw.id && p.id !== worker.id);
+  assert.equal(grown.env.FASTVIDEO_ATTN_SAGE, "0", "a scale-up worker gets the pool env");
   await d1Exec(w.dir, "DELETE FROM operations WHERE kind = 'scale'");
   assert.equal((await call(`/api/clusters/${cid}/scale`, { method: "POST", body: { pool: "fake", count: 1 }, headers: T() })).status, 202);
   op = await waitOp(cid, "scale", 90000);
@@ -328,6 +427,7 @@ await step("rolling redeploy to a commit, gateway included", async () => {
   assert.equal(nw.env.FV_IMAGE_DIGEST, "sha256:" + Buffer.from("gateway-sha-abcdef1").toString("hex").padEnd(64, "0").slice(0, 64));
   assert.equal(mock.pods.get(gw.id).image, nw.image, "the gateway moved to the same build (same pod id)");
   assert.equal(mock.pods.get(gw.id).env.FV_POOL_FAKE_URLS, `http://127.0.0.1:${mock.port}/pod/${nw.id}`);
+  assert.equal(nw.env.FASTVIDEO_ATTN_SAGE, "0", "a rolled worker keeps the pool env");
   worker = nw;
 });
 
@@ -347,6 +447,18 @@ await step("extend; stop and start the gateway; admin token and key minting thro
   const k = await call(`/api/clusters/${cid}/mint-key`, { method: "POST", body: { name: "laptop" }, headers: T() });
   assert.equal(k.status, 201);
   assert.deepEqual(mock.minted, ["laptop"]);
+  // List and revoke through the gateway's admin API (audited).
+  const ks = await call(`/api/clusters/${cid}/keys`, { headers: T() });
+  assert.equal(ks.status, 200, JSON.stringify(ks.j));
+  assert.deepEqual(ks.j.keys.map((x) => x.name), ["laptop"]);
+  const kid = ks.j.keys[0].id;
+  assert.equal((await call(`/api/clusters/${cid}/keys/not-a-key`, { method: "DELETE", headers: T() })).status, 400);
+  assert.equal((await call(`/api/clusters/${cid}/keys/key_999999999999`, { method: "DELETE", headers: T() })).status, 404);
+  const rv = await call(`/api/clusters/${cid}/keys/${kid}`, { method: "DELETE", headers: T() });
+  assert.equal(rv.status, 200, JSON.stringify(rv.j));
+  assert.deepEqual(rv.j.applied, [gw.id]);
+  assert.equal((await call(`/api/clusters/${cid}/keys`, { headers: T() })).j.keys[0].revoked, true);
+  assert.ok((await call("/api/audit", { headers: T() })).j.audit.some((a) => a.action === "cluster.revoke-key" && a.after.includes(kid)));
   const gv = (await call(`/api/clusters/${cid}/gateway`, { headers: T() })).j;
   assert.equal(gv.pools.state[0].id, "fake");
 });
@@ -413,10 +525,69 @@ await step("import a runpod-cluster.sh state (and stop it through the controller
   assert.ok(!mock.pods.has(g) && !mock.pods.has(wk));
 });
 
+await step("gateway-less cluster: the controller's admin token on every worker; keys minted, listed and revoked on the workers", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const r = await call("/api/clusters", { method: "POST", body: { spec: { name: "nogw", template: "tiny-cpu", image: { channel: "stable" }, cap_s: 3600, gateway: { enabled: false } } }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.cluster.id;
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  assert.equal((await call(`/api/clusters/${id}/start`, { method: "POST", body: {}, headers: T() })).status, 202);
+  let op = await waitOp(id, "up");
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-5)));
+  assert.equal(mine().length, 1, "no gateway pod");
+  const w1 = mine()[0];
+  assert.equal(w1.env.FV_GATEWAY_TOML_B64, undefined);
+  assert.equal(w1.env.FV_SERVE_ROLE, "worker");
+  assert.equal(w1.env.FV_WORKER_DIRECT, "1");
+  assert.equal(w1.env.FV_KEY_STORE, "d1");
+  assert.equal(w1.env.FV_AUTH_MODE, "keys");
+  assert.match(w1.env.FV_ADMIN_TOKEN, /^fvadm_[0-9a-f]{48}$/);
+  const tok = await call(`/api/clusters/${id}/admin-token`, { method: "POST", body: {}, headers: T() });
+  assert.equal(tok.status, 200, JSON.stringify(tok.j));
+  assert.equal(tok.j.admin_token, w1.env.FV_ADMIN_TOKEN);
+  assert.equal(tok.j.direct, true);
+  assert.equal(tok.j.gateway_url, null);
+  assert.deepEqual(tok.j.workers.map((x) => x.url), [`http://127.0.0.1:${mock.port}/pod/${w1.id}`]);
+  assert.equal(tok.j.console, `http://127.0.0.1:${mock.port}/pod/${w1.id}/console/admin`);
+  const e = (await call(`/api/clusters/${id}/env`, { headers: T() })).j;
+  const wenv = Object.fromEntries(e.pods.find((p) => p.pod_id === w1.id).env.map((v) => [v.key, v]));
+  assert.equal(wenv.FV_ADMIN_TOKEN.value, "••••••••", "masked in the env view");
+  assert.deepEqual(e.needs_restart, []);
+  // Scale-up: the new worker gets the same token (and the same D1 keys).
+  assert.equal((await call(`/api/clusters/${id}/scale`, { method: "POST", body: { pool: "fake", count: 2 }, headers: T() })).status, 202);
+  op = await waitOp(id, "scale");
+  assert.equal(op.status, "done", JSON.stringify(op.log));
+  const w2 = mine().find((p) => p.id !== w1.id);
+  assert.equal(w2.env.FV_ADMIN_TOKEN, w1.env.FV_ADMIN_TOKEN);
+  const gv = (await call(`/api/clusters/${id}/gateway`, { headers: T() })).j;
+  assert.equal(gv.direct, true);
+  assert.equal(gv.workers.length, 2);
+  assert.ok(gv.workers.every((x) => x.health.ok), JSON.stringify(gv));
+  // Mint on one worker, list, revoke on every worker.
+  const k = await call(`/api/clusters/${id}/mint-key`, { method: "POST", body: { name: "phone" }, headers: T() });
+  assert.equal(k.status, 201, JSON.stringify(k.j));
+  assert.match(k.j.api_key, /^fv_direct_key_/);
+  assert.equal(k.j.propagation_s, 30);
+  const kid = k.j.key.id;
+  const l = await call(`/api/clusters/${id}/keys`, { headers: T() });
+  assert.ok(l.j.keys.some((x) => x.id === kid && x.name === "phone"), JSON.stringify(l.j));
+  assert.equal((await call(`/api/clusters/${id}/keys/nope`, { method: "DELETE", headers: T() })).status, 400);
+  const rv = await call(`/api/clusters/${id}/keys/${kid}`, { method: "DELETE", headers: T() });
+  assert.equal(rv.status, 200, JSON.stringify(rv.j));
+  assert.deepEqual(rv.j.applied.sort(), [w1.id, w2.id].sort());
+  assert.equal(mock.directKeys.find((x) => x.id === kid).revoked, true);
+  assert.equal(mock.directCalls.filter((x) => x.method === "DELETE").length, 2, "the revocation went to every worker");
+  // Stop: no pod left.
+  assert.equal((await call(`/api/clusters/${id}/stop`, { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "down")).status, "done");
+  assert.equal(mine().length, 0);
+});
+
 await step("audit log; no secret in any response", async () => {
   const a = (await call("/api/audit?limit=500", { headers: T() })).j.audit;
   const actions = new Set(a.map((x) => x.action));
-  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
+  for (const want of ["auth.login", "token.mint", "cluster.define", "cluster.up", "env.set", "cluster.restart", "cluster.scale", "cluster.roll", "cluster.extend", "release.promote", "cluster.stop", "cluster.import", "cluster.admin-token.reveal", "cluster.mint-key", "cluster.revoke-key", "doc.save", "doc.restore"]) assert.ok(actions.has(want), `audit has ${want}`);
   assert.ok(a.some((x) => x.action === "auth.login" && x.ok === 0), "failed logins are audited");
   const envSet = a.find((x) => x.action === "env.set" && x.target.includes("HF_TOKEN"));
   assert.ok(!envSet.after.includes("hf_supersecret"));

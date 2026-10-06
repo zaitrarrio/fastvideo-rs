@@ -1,0 +1,13 @@
+  WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPSConnectionPool(host='files.pythonhosted.org', port=443): Read timed out. (read timeout=15)")': /packages/33/23/885b3a3b510c305f1d84421913935e19b6a48b93d173a0541674c1e88c2a/huggingface_hub-2.1.1-py3-none-any.whl.metadata
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+01:39:47 HF token: /workspace/hf/token
+01:39:47 Efficient-Large-Model/LongLive-1.3B@cda9138d93872ef109d9a74c270184eb3a5acc6e: 4 files, 8476402298 bytes -> /workspace/weights/.longlive-1.3b.partial-20261002013947
+01:40:12 downloaded in 25 s; verifying
+01:40:12 ok README.md 7971 d635a09de9955a77
+01:40:22 ok models/longlive_base.pt 5676334208 10a2aa8fcf89c77d lfs
+01:40:26 ok models/lora.pt 2800056690 c4e43b87d62d4b06 lfs
+01:40:26 ok prompts/interactive_example.jsonl 3429 045910f61158968f
+01:40:26 renamed to /workspace/weights/longlive-1.3b; 8476402298 bytes in 39 s

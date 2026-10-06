@@ -60,6 +60,7 @@ use fastvideo_models::h3::reference::{
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use fastvideo_models::h3::sol::H3SolAttnPolicy;
 use fastvideo_models::h3::techniques::{H3Attention, H3Techniques};
+use fastvideo_models::plug::PlugRecipe;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -396,6 +397,7 @@ fn contract_from_inference_json(path: &Path) -> Result<H3InferenceContract> {
             vsa_tile_size: 64,
             dense,
             sigma_source: H3SigmaSource::Dmd,
+            fresh_noise: false,
         }),
     }
 }
@@ -528,6 +530,44 @@ pub fn scheduler_step(
     ])?)
 }
 
+/// The generator of step `step`'s fresh noise (video rows first, then audio
+/// rows, as the reference draws them from one request generator).
+pub fn fresh_noise_rng(seed: u64, step: usize) -> rand::rngs::StdRng {
+    rand::rngs::StdRng::seed_from_u64(
+        seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xF5E5_0000_0000_0000 | step as u64),
+    )
+}
+
+/// One step of the LongLive-Plug H3 few-step student
+/// (`FreshNoiseMiniMaxH3Scheduler.step`): `x0 = x + (1 - t) v`, then
+/// `t' x0 + (1 - t') n` with fresh standard-normal `n` from `rng`; the
+/// terminal step returns `x0` and draws nothing. Torch's sampler is not
+/// reproduced, so a seed names a different (equally valid) sample.
+pub fn fresh_noise_step(
+    schedule: &H3Schedule,
+    step: usize,
+    sample: &CudaTensor,
+    velocity: &CudaTensor,
+    rng: Option<&mut rand::rngs::StdRng>,
+) -> Result<CudaTensor> {
+    let c = schedule.step_coeffs(step).map_err(msg)?;
+    let clean = CudaTensor::lincomb(&[(1.0, sample), (c.sigma_from_timestep, velocity)])?;
+    let next = step + 1;
+    if next >= schedule.num_steps() {
+        return Ok(clean);
+    }
+    let rng = rng.ok_or_else(|| msg("h3 fresh noise: a non-terminal step needs a generator"))?;
+    let t_next = schedule.timesteps[next];
+    let noise: Vec<f32> = (0..sample.numel())
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
+    let noise = CudaTensor::from_vec(noise, sample.shape.clone())?.to_device()?;
+    Ok(CudaTensor::lincomb(&[
+        (t_next, &clean),
+        (1.0 - t_next, &noise),
+    ])?)
+}
+
 /// The 8-forward ladder. `observe(step, video_rows, audio_rows)` sees the
 /// state after each step; the last call holds the clean latent rows.
 #[allow(clippy::too_many_arguments)]
@@ -538,6 +578,7 @@ pub fn denoise(
     video_rows: CudaTensor,
     audio_rows: CudaTensor,
     schedule: &H3JointSchedule,
+    seed: u64,
     mode: AttnMode<'_>,
     cond_rows: Option<&CudaTensor>,
     cond_audio_rows: Option<&CudaTensor>,
@@ -581,8 +622,14 @@ pub fn denoise(
             cond_rows,
             cond_audio_rows,
         )?;
-        video = scheduler_step(&schedule.video, step, &video, &v_video)?;
-        audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
+        if schedule.fresh_noise {
+            let mut rng = (step + 1 < schedule.num_steps()).then(|| fresh_noise_rng(seed, step));
+            video = fresh_noise_step(&schedule.video, step, &video, &v_video, rng.as_mut())?;
+            audio = fresh_noise_step(&schedule.audio, step, &audio, &v_audio, rng.as_mut())?;
+        } else {
+            video = scheduler_step(&schedule.video, step, &video, &v_video)?;
+            audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
+        }
         if dumping {
             crate::wan::dump::tensor(&format!("video_vel_step{:02}", step + 1), &v_video)?;
             crate::wan::dump::tensor(&format!("video_step{:02}", step + 1), &video)?;
@@ -848,10 +895,11 @@ impl H3Pipeline {
         {
             // A fused adapter rebuilds the AdaLN table from the projections;
             // otherwise a valid cache file means they are never read.
-            let adapter = options
-                .recipe
-                .as_deref()
-                .is_some_and(|r| FastH3PreviewVariant::from_recipe(r).is_some() || is_sol_h3_recipe(r));
+            let adapter = options.recipe.as_deref().is_some_and(|r| {
+                FastH3PreviewVariant::from_recipe(r).is_some()
+                    || is_sol_h3_recipe(r)
+                    || PlugRecipe::is_plug(r)
+            });
             let skip_adaln = !adapter && options.adaln_cache.as_deref().is_some_and(Path::is_file);
             let adaln = |k: &str| k.contains(".adaln_proj.");
             let refiner = |k: &str| k.starts_with("token_refiner") || k.starts_with("context_embedder") || k.starts_with("refiner.");
@@ -1039,6 +1087,26 @@ impl H3Pipeline {
                     fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
                 ));
             }
+            Some(fuse)
+        } else if let Some(plug) = options.recipe.as_deref().and_then(PlugRecipe::named) {
+            if options.ref2va {
+                return Err(msg(format!(
+                    "recipe {}: the LongLive-Plug H3 adapters are T2VA (base transformer), not Ref2VA",
+                    plug.name
+                )));
+            }
+            let fuse =
+                super::lora::H3LoraFuse::open_plug(&map, root, &plug, options.adapter.as_deref())?;
+            crate::wan::log::info(format_args!(
+                "h3 {}: fuse {} pairs rank={} alpha={} scale={} ({}; licence: {})",
+                plug.name,
+                fuse.pairs_total,
+                fuse.rank,
+                fuse.alpha,
+                fuse.effective_scale(),
+                fuse.path,
+                plug.licence
+            ));
             Some(fuse)
         } else {
             None
@@ -1829,6 +1897,7 @@ impl H3Pipeline {
             video_rows,
             audio_rows,
             &self.schedule,
+            request.seed,
             mode,
             cond_rows.as_ref(),
             cond_audio_rows.as_ref(),
@@ -2732,5 +2801,48 @@ mod tests {
         assert!(dit_loads_vsa_gate(&spark, None));
         assert!(!dit_loads_vsa_gate(&spark, Some(false)));
         assert!(sol.dense && !spark.dense);
+    }
+    #[test]
+    fn fresh_noise_step_renoises_to_the_next_grid_point() {
+        // The published four-forward grid, video shift 12.
+        let s = H3Schedule::uniform(5, 12.0).unwrap();
+        assert_eq!(s.num_steps(), 4);
+        let xs = vec![0.5f32, -1.0, 2.0, 0.0];
+        let vs = vec![1.0f32, 0.25, -0.5, 3.0];
+        let x = CudaTensor::from_vec(xs.clone(), vec![2, 2]).unwrap();
+        let v = CudaTensor::from_vec(vs.clone(), vec![2, 2]).unwrap();
+        for step in 0..4 {
+            let c = s.step_coeffs(step).unwrap();
+            let x0: Vec<f32> = xs
+                .iter()
+                .zip(&vs)
+                .map(|(x, v)| x + c.sigma_from_timestep * v)
+                .collect();
+            let mut rng = fresh_noise_rng(7, step);
+            let got = fresh_noise_step(&s, step, &x, &v, Some(&mut rng)).unwrap();
+            let got = got.host_cow().unwrap().to_vec();
+            let want: Vec<f32> = if step == 3 {
+                x0.clone()
+            } else {
+                let mut again = fresh_noise_rng(7, step);
+                let t = s.timesteps[step + 1];
+                x0.iter()
+                    .map(|x0| {
+                        let n: f32 = again.sample(StandardNormal);
+                        t * x0 + (1.0 - t) * n
+                    })
+                    .collect()
+            };
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g - w).abs() <= 1e-5, "step {step}: {g} vs {w}");
+            }
+        }
+        // The terminal step draws nothing; earlier ones need the generator.
+        assert!(fresh_noise_step(&s, 3, &x, &v, None).is_ok());
+        assert!(fresh_noise_step(&s, 0, &x, &v, None).is_err());
+        // Each step has its own stream.
+        let a: f32 = fresh_noise_rng(7, 0).sample(StandardNormal);
+        let b: f32 = fresh_noise_rng(7, 1).sample(StandardNormal);
+        assert_ne!(a, b);
     }
 }

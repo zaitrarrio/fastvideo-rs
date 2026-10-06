@@ -1,0 +1,116 @@
+{
+ "h3-base480": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 415.0,
+   "motion": 12.08,
+   "flicker": 10.944,
+   "luma": 60.2
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 205.3,
+   "motion": 6.47,
+   "flicker": 0.669,
+   "luma": 78.6
+  }
+ },
+ "h3-base480-ctl": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 456.0,
+   "motion": 12.72,
+   "flicker": 11.657,
+   "luma": 61.4
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 207.1,
+   "motion": 6.0,
+   "flicker": 0.449,
+   "luma": 80.3
+  }
+ },
+ "h3-base768": {
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 80.7,
+   "motion": 4.92,
+   "flicker": 0.169,
+   "luma": 81.2
+  }
+ },
+ "h3-plug4s": {
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 122.9,
+   "motion": 4.56,
+   "flicker": 0.227,
+   "luma": 74.0
+  }
+ },
+ "h3-plugcfg480": {
+  "h3-demo": {
+   "frames": 124,
+   "sharpness": 434.3,
+   "motion": 12.37,
+   "flicker": 12.408,
+   "luma": 64.0
+  },
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 246.4,
+   "motion": 6.49,
+   "flicker": 0.371,
+   "luma": 81.3
+  }
+ },
+ "h3-turbos": {
+  "spark-mountain-lake": {
+   "frames": 124,
+   "sharpness": 116.2,
+   "motion": 8.29,
+   "flicker": 0.637,
+   "luma": 74.7
+  }
+ },
+ "w14-base": {
+  "beach_dog": {
+   "frames": 81,
+   "sharpness": 365.8,
+   "motion": 13.99,
+   "flicker": 1.106,
+   "luma": 159.3
+  },
+  "spark-mountain-lake": {
+   "frames": 81,
+   "sharpness": 680.3,
+   "motion": 11.75,
+   "flicker": 1.048,
+   "luma": 83.2
+  }
+ },
+ "w14-plug": {
+  "beach_dog": {
+   "frames": 81,
+   "sharpness": 598.4,
+   "motion": 10.94,
+   "flicker": 0.56,
+   "luma": 150.9
+  },
+  "city_rain": {
+   "frames": 81,
+   "sharpness": 797.5,
+   "motion": 9.5,
+   "flicker": 0.385,
+   "luma": 78.8
+  },
+  "spark-mountain-lake": {
+   "frames": 81,
+   "sharpness": 1178.0,
+   "motion": 16.13,
+   "flicker": 0.394,
+   "luma": 86.6
+  }
+ }
+}

@@ -6,7 +6,10 @@ path"): see §9 for the results (phase 2: §9.7–§9.9, with a real GPU
 worker and a production-readiness checklist) and §10 for how to run it. The fv-serve
 gateway path stays the default and unchanged; a pod pool opts in with
 `dispatch = "durable-object"`. A staging Worker runs at
-`https://fv-edge-staging.maximalize.workers.dev`. The owner asked: "on queue handling, what if we use workers-rs to
+`https://fv-edge-staging.maximalize.workers.dev`. **Next step (2026-10-02):
+one Durable Object per model *family* with credit-based dispatch, a
+per-host arbiter, direct overlapped uploads to R2 and session admission:
+[dispatch-do-family.md](dispatch-do-family.md).** The owner asked: "on queue handling, what if we use workers-rs to
 implement the gateway and Durable Objects?" This document answers that
 question against the gateway in [gateway.md](gateway.md)
 (`crates/fastvideo-serve/src/gateway/`).
@@ -725,6 +728,11 @@ Before production:
 - [ ] load: one DO per pool handles about 10 enqueues per second in this setup; shard a pool per region above that
 - [ ] the real-GPU queue time with the gateway on its CPU pod (§9.8 ran it from the agent container, whose egress proxy dominated)
 - [ ] rollback: set the pool back to `dispatch = "gateway"` (the workers keep their internal routes; they need their public URL again)
+
+Next: the per-family design ([dispatch-do-family.md](dispatch-do-family.md))
+covers streams and sessions (DO admission, GPU endpoint returned), direct
+output uploads without R2 credentials on GPU hosts, multi-family workers and
+the per-family queue-depth signal.
 
 ## 10. How to run the parallel path
 
