@@ -4,6 +4,7 @@
 // and retention (docs/control/README.md "Cost model", "Alerts").
 import { attribute, policies, syncAlerts, type AlertIn } from "./alerts";
 import { buildPodHealth, buildPodVerdict, stopBuildPod } from "./buildpod";
+import { buildPodsTick, managedPodNames } from "./buildpods";
 import { collectCloudrift, type CloudriftCollect } from "./collector-cloudrift";
 import { edgeCfg, edgeFamilies, edgeWorkers } from "./cluster/ops";
 import { isEdge } from "./cluster/spec";
@@ -43,6 +44,8 @@ export async function collect(env: Env): Promise<CollectResult> {
   const byId = new Map(clusters.map((c) => [c.id, c]));
   const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url FROM cluster_pods WHERE deleted_at IS NULL").all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null }>();
   const ctl = new Map((rows.results || []).map((r) => [r.pod_id, r]));
+  // Build pods fv-control manages (buildpods.ts): owner build-pod:<name>.
+  const managed = await managedPodNames(env);
 
   // Jobs per worker and health.
   const jobs = new Map<string, { running: number; queued: number; ready: boolean; healthy: boolean; sha?: string }>();
@@ -70,7 +73,8 @@ export async function collect(env: Env): Promise<CollectResult> {
     seen.add(p.id);
     const row = ctl.get(p.id);
     const c = row ? byId.get(row.cluster_id) : undefined;
-    const owner = c ? `cluster:${c.name}` : attribute(p.name, pol.attribution);
+    const bp = managed.get(p.id);
+    const owner = c ? `cluster:${c.name}` : bp ? `build-pod:${bp}` : attribute(p.name, pol.attribution);
     const running = p.desiredStatus === "RUNNING";
     const gpus = p.runtime?.gpus || [];
     const gpuUtil = avg(gpus.map((g) => Number(g.gpuUtilPercent ?? 0)));
@@ -210,6 +214,14 @@ export async function collect(env: Env): Promise<CollectResult> {
       actions.push(`build pod ${x.p.id}: ${result} (${why})`);
       await audit(env, { actor: "policy:build_pod_backstop", action: "pod.stop", target: x.p.id, detail: `${why}: ${result}` });
     }
+  // Managed build pods (buildpods.ts): states, per-pod backstop, floor, runners, wake on queued CI jobs.
+  try {
+    const bt = await buildPodsTick(env, pods, balance, { stopOnFloor: pol.stop_on_floor, floor });
+    alerts.push(...bt.alerts);
+    actions.push(...bt.actions);
+  } catch (e) {
+    alerts.push({ key: "build_pods_tick", kind: "build_pod_runner", severity: "warn", message: `build pods: ${(e as Error).message.slice(0, 200)}` });
+  }
   const today = await env.DB.prepare("SELECT COALESCE(SUM(usd), 0) AS usd FROM cost_daily WHERE day = ?").bind(day).first<{ usd: number }>();
   if ((today?.usd || 0) > pol.daily_spend_max) alerts.push({ key: "daily_spend", kind: "daily_spend", severity: "warn", message: `spend today $${today!.usd.toFixed(2)} (> $${pol.daily_spend_max})` });
   if (balance < floor) {
@@ -228,7 +240,7 @@ export async function collect(env: Env): Promise<CollectResult> {
   const cr = await collectCloudrift(env, t, dtMs, pol).catch((e) => ({ enabled: true, ok: false, error: (e as Error).message, alerts: [], kinds: [], actions: [] }) as unknown as CloudriftCollect);
   alerts.push(...cr.alerts);
   actions.push(...cr.actions);
-  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", ...cr.kinds]);
+  await syncAlerts(env, alerts, ["pod_idle", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds]);
 
   // ---- retention
   await env.DB.batch([

@@ -371,7 +371,7 @@ function every(ms, fn) {
 // ---------------------------------------------------------------- dashboard
 async function pageDashboard(main) {
   const draw = async () => {
-    const [o, series, bal, costs, bp] = await Promise.all([api("/api/overview"), api("/api/metrics/series?hours=6"), api("/api/balance?hours=24"), api("/api/costs?days=7"), api("/api/buildpod").catch((e) => ({ error: e.message, pods: [] }))]);
+    const [o, series, bal, costs, bp, bpm] = await Promise.all([api("/api/overview"), api("/api/metrics/series?hours=6"), api("/api/balance?hours=24"), api("/api/costs?days=7"), api("/api/buildpod").catch((e) => ({ error: e.message, pods: [] })), api("/api/build-pods").catch((e) => ({ error: e.message, pods: [] }))]);
     const tiles = h(
       "div",
       { class: "tiles" },
@@ -451,16 +451,90 @@ async function pageDashboard(main) {
       h("div", { class: "muted small", style: "margin:-8px 0 12px" }, `Updated ${ago(o.at)} · metrics from ${series.source}`),
       tiles,
       h("div", { class: "grid g2" }, alerts, clusters),
-      buildPodCard(bp),
+      bp.pods.length ? buildPodCard(bp) : "",
       h("div", { class: "grid g2" }, card("Balance, 24 h", balChart), card("Burn $/hr, 24 h", burnChart)),
       h("div", { class: "grid g2" }, card("GPU utilisation, 6 h (top pods by $/hr)", gpuChart), card("CPU utilisation, 6 h", cpuChart)),
       h("div", { class: "grid g2" }, card("Spend per day by owner, 7 days", stackedBars({ cats: days, stacks })), idle),
+      buildPodsCard(bpm, () => draw().catch(() => {})),
     );
   };
   await draw();
   every(60_000, () => draw().catch(() => {}));
 }
-/** The shared build pod (read only): its own self-stop timers (/healthz) and the controller's backstop. */
+/** Build pods managed by fv-control (docs/dev/build-pods-fv-control.md): up, stop, start, delete; runner, spend, timers. */
+function buildPodsCard(bpm, redraw) {
+  const pol = bpm.policy || {};
+  const call = async (label, path, opts) => {
+    try {
+      return await act(label, () => api(path, opts));
+    } catch (e) {
+      // Busy (jobs or a workflow job on its runner): ask before forcing.
+      if (/busy/.test(e.message) && confirm(`${e.message}\n\nForce it? Running jobs are killed. (audited)`)) {
+        const force = opts.method === "DELETE" ? { path: `${path}?force=1` } : { body: { ...(opts.body || {}), force: true } };
+        return act(label, () => api(force.path || path, { ...opts, ...(force.body ? { body: force.body } : {}) }));
+      }
+      return null;
+    }
+  };
+  const after = () => setTimeout(redraw, 800);
+  const one = (p) => {
+    const hz = p.health;
+    const running = p.state === "running";
+    return h(
+      "div",
+      { class: "buildpod", "data-bp": p.id },
+      h(
+        "h3",
+        {},
+        p.pod_id ? h("a", { href: `#/pod/${p.pod_id}` }, p.name) : p.name,
+        " ",
+        badge(p.state, statusKind(p.state === "running" ? "RUNNING" : p.state === "stopped" ? "EXITED" : p.state)),
+        " ",
+        running ? badge(p.phase || "starting", p.phase === "ready" ? "good" : "warn") : "",
+        " ",
+        p.outdated ? badge("outdated: replaced when stopped", "warn") : "",
+        p.purpose === "test" ? badge("test", "warn") : "",
+      ),
+      h("dl", { class: "kv" }, ...[
+        ["where", `${p.dc || "?"} · ${p.flavor || "?"} ${p.vcpu || "?"} vCPU · ${p.disk_gb || "?"} GB${p.volume_id ? ` · volume ${p.volume_id}` : ""}`],
+        ["$/hr · today", `${fmt$(p.cost_per_hr)} · ${fmt$(p.spend_today)}`],
+        ["runs", `${p.server} · ${String(p.image).split(":").pop()}`],
+        ["limits", `idle stop ${p.limits.idle_min} min · cap ${p.limits.max_h} h + ${p.limits.max_grace_min} min`],
+        ["timers", hz ? `up ${dur(hz.uptime_s)} · ${hz.jobs_active ? `${hz.jobs_active} job(s) running` : `idle ${dur(hz.idle_s)}`}${hz.idle_stop_in_s != null ? ` · idle stop in ${dur(hz.idle_stop_in_s)}` : ""}` : "–"],
+        ["runner", `${p.runner.state || "none"}${p.runner.name ? ` · ${p.runner.name}` : ""}${p.runner.labels ? ` · ${p.runner.labels}` : ""}${p.runner.error ? ` · ${p.runner.error}` : ""}`],
+        ["error", p.last_error],
+      ].filter(([, v]) => v).flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
+      h(
+        "div",
+        { class: "row" },
+        running ? h("button", { onclick: async () => { if (confirm(`Stop ${p.name}? The container disk (target dirs) is lost; caches stay. (audited)`)) { await call("stop", `/api/build-pods/${p.id}/stop`, { method: "POST", body: {} }); after(); } } }, "Stop") : "",
+        p.state === "stopped" ? h("button", { onclick: async () => { await call("start", `/api/build-pods/${p.id}/start`, { method: "POST", body: {} }); after(); } }, "Start") : "",
+        p.state !== "deleted" ? h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}? (audited)`)) { await call("delete", `/api/build-pods/${p.id}`, { method: "DELETE" }); after(); } } }, "Delete") : "",
+      ),
+    );
+  };
+  const live = (bpm.pods || []).filter((p) => p.state !== "deleted");
+  return card(
+    "Build pods",
+    h(
+      "p",
+      { class: "muted small" },
+      pol.enabled
+        ? `Managed by fv-control: up to ${pol.max_pods} running, ≤ ${fmt$(pol.max_dph_per_pod)}/hr each, ${fmt$(bpm.spend_today || 0)} of ${fmt$(pol.daily_usd_max)} today; [${(pol.flavors || []).join(" ")}] × [${(pol.vcpus || []).join(" ")}] vCPU, regions ${(pol.regions || []).join(" ") || "any"}${pol.regions_only ? " only" : " first"}; GitHub runner ${pol.runner ? (bpm.secrets?.runner_pat ? "on" : "on, but no GITHUB_RUNNER_PAT") : "off"}${pol.wake_on_queue ? ", woken by queued jobs" : ""}; R2 cache ${bpm.secrets?.r2_cache ? "on" : "off"}.`
+        : "Build pods are off (build_pods.enabled). Agents use scripts/dev/build-pod.sh up, which asks fv-control for a pod.",
+    ),
+    h("div", { class: "row" }, h("button", { class: "primary", disabled: !pol.enabled, onclick: async () => { const r = await call("up", "/api/build-pods/up", { method: "POST", body: {} }); if (r) toast(`up: ${r.action} ${r.pod.name}`); after(); } }, "Up (reuse / start / create)")),
+    bpm.error ? h("p", { class: "small" }, bpm.error) : live.length ? live.map(one) : h("p", { class: "muted small" }, "No managed build pod."),
+    h("details", {}, h("summary", { class: "small" }, "Policy (build_pods)"), docJson(pol, async (next) => { await act("policy", () => api("/api/build-pods/policy", { method: "PUT", body: { policy: next } })); after(); })),
+  );
+}
+/** A JSON textarea with a Save button (the build pods policy). */
+function docJson(value, onSave) {
+  const ta = h("textarea", { rows: 18, style: "width:100%;font-family:var(--mono, monospace)" });
+  ta.value = JSON.stringify(value, null, 2);
+  return h("div", {}, ta, h("button", { onclick: async () => { let v; try { v = JSON.parse(ta.value); } catch (e) { toast(`policy: ${e.message}`); return; } await onSave(v); } }, "Save"));
+}
+/** The legacy shared build pod (read only): its own self-stop timers (/healthz) and the controller's backstop. */
 function buildPodCard(bp) {
   const pol = bp.policy || {};
   const kv = (rows) => h("dl", { class: "kv" }, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]));
