@@ -160,7 +160,7 @@ async fn healthz(State(h): State<Health>) -> Response {
             "draining": stats.draining,
         },
         "stores": {"jobs": h.jobs_backend, "artifacts": h.artifacts_backend},
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::build_info::VERSION,
         "build": BuildInfo::current().json(),
     });
     let code = if phase == Phase::Ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
@@ -229,7 +229,7 @@ async fn root(State(h): State<Health>) -> Response {
     Json(json!({
         "model": h.served_name(),
         "server": "fv-serve",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::build_info::VERSION,
         "git_sha": BuildInfo::current().git_sha,
     }))
     .into_response()

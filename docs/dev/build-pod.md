@@ -206,24 +206,29 @@ workspace-profile build.
 
 ## Release artifacts (prebuilt binaries for the image workflows)
 
-Owner decision 2026-10-06 (option 1b): **the build pod compiles, R2 hands
-off, GitHub assembles.** Every Rust binary and the oxide cubins the images
-and CI jobs need are compiled here; the GitHub workflows download them and
-only run the lean Docker stages (and the tests), no `cargo`. The pod has no
-Docker daemon, so the images themselves are still assembled on GitHub.
+Owner decisions 2026-10-06: **the build pod compiles and tests, GitHub
+Releases hand off, GitHub assembles** (R2 is no longer used). Every Rust
+binary and the oxide cubins the images and CI jobs need are compiled here,
+tested, and published as a SemVer **tools release** (`tools-v<X.Y.Z>`); the
+GitHub workflows download it and only run the lean Docker stages (and the
+tests), no `cargo`. The pod has no Docker daemon, so the images themselves
+are still assembled on GitHub. Publishing, versioning, retention and how the
+workflows pick a release: **docs/dev/tools-releases.md**.
 
 ```bash
 B=scripts/dev/build-pod.sh
-$B release-artifacts HEAD          # or a sha / origin/main; wakes the pod (`up`)
-$B release-artifacts <sha> --force # rebuild and re-upload
-$B release-artifacts <sha> --no-upload --keep   # build + verify only, into artifacts/release/<sha>/
+# Published automatically by .github/workflows/tools-release.yml on pushes to main
+# that change the tools, built and tested on this pod as a self-hosted runner:
+$B runner                          # register the pod's runner (`up` does it when a token source exists)
+bash scripts/ci/tools-release.sh status            # does HEAD need a release? the next tag
+bash scripts/ci/tools-release.sh publish origin/main   # by hand: build + test + publish (coordinator)
+$B release-artifacts <sha>         # build + verify only, into artifacts/release/<sha>/ ($FV_RELEASE_OUT)
 $B release-artifacts <sha> --sets "serve-fake gpucheck-tests"   # a subset
 ```
 
-What it does:
+What `release-artifacts` does:
 
-1. Resolves the revision to a full sha; skips if `artifacts/<sha>/manifest.json`
-   is already in R2 (`--force` rebuilds). One run per container at a time
+1. Resolves the revision to a full sha. One run per container at a time
    (`flock` on `~/.config/fv-build/release.lock`).
 2. Checks the sha out into a temporary local worktree (plus the
    `third_party/cutile-rs` submodule), computes the build identity the
@@ -235,9 +240,10 @@ What it does:
    touches `release-cache/` on the volume.
 3. Runs `bash scripts/dev/release-artifacts-pod.sh` (allowlisted) on the pod.
    The recipe is the driving checkout's copy (its hash is in the manifest), so
-   older shas build too.
-4. Fetches the tarballs and `manifest.json`, checks every tarball's sha256,
-   uploads them to R2, `manifest.json` last (its presence means "complete").
+   older shas build too; `tools-release.sh publish` insists it is the
+   commit's own copy (the recipe is one of the release's inputs).
+4. Fetches the tarballs and `manifest.json` and checks every tarball's
+   sha256. `tools-release.sh publish` then runs the tests and uploads them.
 
 The sets, each a tarball whose root is laid out like the Docker stage it
 replaces (so GitHub uses the extracted directory as a named build context):
@@ -268,66 +274,12 @@ naming a missing tool (on a redist toolkit without cuRAND it still unpacks
 the `libcurand` redist headers into `release-cache/` and an overlay).
 `builder.host` in the manifest names the image.
 
-**R2 layout** (bucket `fv-build-artifacts`, account `Maximal`):
-
-```
-artifacts/<sha>/manifest.json        sha, build_id, build_time, run_id, builder (rustc -vV,
-                                     cargo, nvcc, tileiras, glibc, recipe hash), settings,
-                                     per set: tarball, sha256, size, features, NEEDED libs,
-                                     and every file's sha256/size/mode
-artifacts/<sha>/<set>.tar.gz         one per set (gzip, reproducible tar: sorted, owner 0,
-                                     mtime = commit time)
-```
-
-**Retention:** a lifecycle rule (`expire-artifacts-30d`) deletes every object
-30 days after upload and aborts incomplete multipart uploads after 1 day. A
-commit older than that falls back to compiling (or is rebuilt with
-`release-artifacts <sha>`).
-
-**Credentials:** the upload uses an S3 (SigV4) key scoped to this one bucket,
-read from `~/.config/fv/r2-build-artifacts-rw.env` (mode 600, never printed,
-never on argv; `FV_R2_ARTIFACTS_ENV_FILE` overrides):
-
-```
-FV_R2_ARTIFACTS_ENDPOINT=https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com
-FV_R2_ARTIFACTS_ACCESS_KEY_ID=…
-FV_R2_ARTIFACTS_SECRET_ACCESS_KEY=…
-```
-
-`scripts/dev/r2.py` (stdlib only: `head|get|put|ls`) is the client on both
-sides; `python3 scripts/dev/test_r2.py` checks its signer against AWS's
-published SigV4 examples. **Creating the keys (owner, once):** the
-Cloudflare API token in `/root/.config/fv/cf_api_token` can manage buckets but
-not create API tokens, so R2 S3 keys cannot be minted from here. In the
-Cloudflare dashboard → R2 → *Manage R2 API tokens* → *Create API token*:
-
-1. `fv-build-artifacts-rw`: permission **Object Read & Write**, *Apply to
-   specific buckets only* → `fv-build-artifacts`, TTL forever. Put its
-   Access Key ID / Secret Access Key and the account's S3 endpoint into
-   `~/.config/fv/r2-build-artifacts-rw.env` on the machine that runs
-   `release-artifacts` (the coordinator's container), `chmod 600`.
-2. `fv-build-artifacts-ro`: permission **Object Read only**, same bucket.
-   Add it to the GitHub repository (Settings → Secrets and variables →
-   Actions) as `FV_R2_ARTIFACTS_ENDPOINT`, `FV_R2_ARTIFACTS_ACCESS_KEY_ID`,
-   `FV_R2_ARTIFACTS_SECRET_ACCESS_KEY`.
-
-**Trigger: the coordinator builds before it pushes.** Whoever pushes a
-commit that CI will build runs `release-artifacts` for it first:
-the coordinating session after a merge, before `git push origin main`
-(`build-pod.sh release-artifacts HEAD && git push origin HEAD:main`), and an
-agent before pushing a PR head whose workflows it wants fast. It wakes the
-pod (`up`: start, create, or fail with the reason, e.g. the balance floor)
-and takes ~1–3 min when only a few crates changed, longer after a pod stop
-(empty target dir; sccache refills it). Chosen over the alternatives because
-it needs no new moving part: a GitHub workflow cannot wake the pod or reach
-its token (it lives only in this container), and fv-control polling GitHub
-would need the pod token and the R2 write key in the Worker and a job queue
-on the pod for commits nobody waits for. If the build was skipped or is
-still running, the workflows **fall back** to today's in-image compile with
-a `::warning::` (CI never deadlocks); the repository variable
-`FV_PREBUILT_WAIT_MIN` makes them poll R2 that long first, and
-`FV_PREBUILT_DISABLE=1` turns the download off. Pull-request jobs use the
-PR **head** sha (`github.event.pull_request.head.sha`), not the merge ref.
+**Manifest** (`manifest.json`, the release's copy adds the version, tag,
+input hash, source commit and test summary; docs/dev/tools-releases.md):
+sha, build_id, build_time, run_id, builder (rustc -vV, cargo, nvcc, tileiras,
+glibc, recipe hash), settings, and per set: tarball, sha256, size, features,
+NEEDED libs, and every file's sha256/size/mode. Each `<set>.tar.gz` is a
+reproducible gzip tar (sorted, owner 0, mtime = commit time).
 
 **Measured (2026-10-06, pod cpu3c 32 vCPU, $0.96/hr):** first run on a fresh
 pod (empty target dir, cold sccache for the no-mold flags) **28 min**

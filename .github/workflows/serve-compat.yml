@@ -18,6 +18,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/ci/prebuilt.sh"
+      - "scripts/ci/tools-release.sh"
       - "scripts/ci/check-build-base.sh"
       - "docker/build-base.Dockerfile"
       - ".github/workflows/serve-compat.yml"
@@ -61,19 +62,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      # The same debug fake build, compiled by the build pod
-      # (scripts/dev/build-pod.sh release-artifacts); fallback: cargo here.
-      - name: Prebuilt fv-serve (fake) from R2
+      # The same debug fake build from the tools release built from exactly
+      # this checkout's tools inputs (docs/dev/tools-releases.md); a pull
+      # request that changes them has none, so cargo runs here.
+      - name: Prebuilt fv-serve (fake, tools release)
         id: pre
         env:
-          FV_R2_ARTIFACTS_ENDPOINT: ${{ secrets.FV_R2_ARTIFACTS_ENDPOINT }}
-          FV_R2_ARTIFACTS_ACCESS_KEY_ID: ${{ secrets.FV_R2_ARTIFACTS_ACCESS_KEY_ID }}
-          FV_R2_ARTIFACTS_SECRET_ACCESS_KEY: ${{ secrets.FV_R2_ARTIFACTS_SECRET_ACCESS_KEY }}
-          FV_PREBUILT_WAIT_MIN: ${{ vars.FV_PREBUILT_WAIT_MIN || '0' }}
+          GH_TOKEN: ${{ github.token }}
           FV_PREBUILT_DISABLE: ${{ vars.FV_PREBUILT_DISABLE || '0' }}
-          # Pull requests: the head commit (what the build pod built), not the merge ref.
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: bash scripts/ci/prebuilt.sh fetch "$SHA" serve-fake
+        run: bash scripts/ci/prebuilt.sh fetch serve-fake
       - name: Use the prebuilt fv-serve
         if: steps.pre.outputs.ok == 'true'
         run: |

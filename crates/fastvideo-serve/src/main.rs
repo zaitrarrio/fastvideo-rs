@@ -38,7 +38,10 @@ fn init_tracing(c: &Config) {
 /// `--version` prints the build identity (git sha, build time, variant,
 /// image; docs/serve/releases.md), `-V` the package version only.
 fn parse_args() -> Args {
-    let matches = Args::command().long_version(BuildInfo::current_long_version()).get_matches();
+    let matches = Args::command()
+        .version(fastvideo_serve::build_info::VERSION)
+        .long_version(BuildInfo::current_long_version())
+        .get_matches();
     Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
 

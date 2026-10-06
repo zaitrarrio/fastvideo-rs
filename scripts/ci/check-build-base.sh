@@ -6,6 +6,8 @@
 #   check-build-base.sh compat     ffmpeg with libvpx, python3 + venv, node, npm, openssl
 #   check-build-base.sh browser    compat + Playwright's Chromium under PLAYWRIGHT_BROWSERS_PATH
 #   check-build-base.sh cuda       nvcc, NVRTC, tileiras of CUDA 13.4
+#   check-build-base.sh prebuilt   what scripts/ci/prebuilt.sh / tools-release.sh
+#                                  need to fetch and verify a tools release
 set -uo pipefail
 missing=()
 need() { command -v "$1" >/dev/null || missing+=("$1"); }
@@ -30,6 +32,8 @@ for p in "$@"; do
     cuda)
       c="${CUDA_HOME:-/usr/local/cuda-13.4}"
       for f in bin/nvcc bin/tileiras lib64/libnvrtc.so include/nvrtc.h; do [[ -e "$c/$f" ]] || missing+=("$c/$f"); done ;;
+    prebuilt)
+      for t in git curl jq sha256sum tar gzip find diff sort; do need "$t"; done ;;
     *) echo "check-build-base.sh: unknown profile $p" >&2; exit 2 ;;
   esac
 done
