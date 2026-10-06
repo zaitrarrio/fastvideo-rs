@@ -1142,3 +1142,79 @@ pods were deleted after their outputs were pulled (GET 404). Each had a 5 400 s
 DELETE backstop, the on-pod 20 min idle guard and a local balance watchdog
 (delete below $12). Balance $46.61 before the first pod, $26.79 after the
 second (other agents ran in parallel).
+
+### 12.8 Plug with the h3-max techniques ("plug-fast"): rule, fixed before any run
+
+Owner decision on 12.7 (2026-10-06): option (c). Run `h3-plug-4step` with
+h3-max's techniques and re-check it against base H3.
+
+**Recipe.** `profiles/h3/plug_h3_4step_engine_ladder.toml`
+(`--techniques h3/plug_h3_4step_engine_ladder`) is the `h3-plug-4step`
+recipe (the Plug few-step LoRA merged at load, 4 forwards, fresh-noise
+transition) with the `[techniques]` of `h3/sol_h3_4step_engine_ladder`,
+unchanged: the Sol engine route (forward 0 and blocks 0-1 dense, tau 1.0 /
+1.25 / 1.5 on forwards 1-3, prefix sink), MXFP8 linears and BF16
+activations. The serve crate names it (`PLUG_H3_4STEP_PROFILE`,
+`Recipe::plug_h3_4step_engine_ladder`), but no catalog tier uses it and no
+default changes. The GPU run uses the runtime image of main (`a6f2e52`),
+which predates the profile, so it passes the same set as
+`--techniques h3/sol_h3_4step_engine_ladder --h3-recipe h3-plug-4step`
+(the command-line recipe overrides the profile's). The host test
+`plug_engine_ladder_is_h3_max_techniques_on_the_plug_recipe` checks that
+both forms resolve to the same route, plan and settings as h3-max.
+
+**Workload.** As 12.6: one RTX PRO 6000 in EUR-IS-1 with the EU volume
+`jg48s6o1w0` (read only for weights), 768 × 1344, 124 frames (5 s), the
+five gate prompts at their own seed (0 for h3-demo, 42 for the rest) and
++1000 / +2000 (`artifacts/perf/sage-calibrated/driver/prompts-5x3.json`).
+Every arm runs in one pod, one `fv-gpucheck h3 gen` process per arm, with
+`FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=cudnn`, `--mode fast
+--text-encoder resident-fp8 --dit-offload resident` and its own text cache.
+
+| arm | flags | forwards | clips |
+|---|---|---|---|
+| `pfast` (the candidate) | `--techniques h3/sol_h3_4step_engine_ladder --h3-recipe h3-plug-4step` | 4 | 15, warm |
+| `max` (`h3-max` as served) | `--techniques h3/sol_h3_4step_engine_ladder --h3-recipe sol-h3` | 4 | 15, warm |
+| `base` (the reference) | `--h3-recipe base --dense` | 49 | 5 (own seed), no warm |
+| `pdense` (12.7's plug, cost reference) | `--h3-recipe h3-plug-4step --dense` | 4 | 5 (own seed), warm; 15 if the pod-hour budget allows |
+
+Order: pfast, max, base, pdense. Base frames are kept this time, on the EU
+volume outside the weights trees (a new `/workspace/scratch/` folder,
+written under a temporary name, sha256 manifest, then renamed), with the
+same-seed MP4s in the session's scratchpad. The $3 cap for this task allows
+about 85 pod-minutes; pdense is the arm that gets cut.
+
+**Pairs.** As 12.6: `compare-clips` (LPIPS alex, PSNR, sharpness and jitter
+ratios, candidate over base) of each 4-step clip against its prompt's base
+clip; per prompt and arm the median over its seeds.
+
+**Rule (verdict).**
+
+1. *Closer than h3-max:* `pfast`'s median LPIPS against base is lower than
+   `max`'s (same pod) on **at least 4 of 5** prompts.
+2. *No outlier beyond the control:* on every prompt `pfast`'s median
+   |ln sharpness ratio| ≤ **0.152** and median |ln jitter ratio| ≤
+   **0.253**. That is 12.7's control band, max(1.5 × Cmax, Cmax + d) from
+   the 15 `plug`/`plugfw2` kernel-swap clips, taken as a fixed constant. It is
+   not re-measured; the 15-clip control would cost ~14 pod-minutes.
+
+**Verdict:** PASS when 1 and 2 both hold (as 12.6).
+
+**Recommendation rule (also fixed now, separate from the verdict).** 12.7
+showed that no 4-step arm got inside the rule-2 band against a 49-forward
+base. So the switch is judged against the incumbent, h3-max, as well:
+recommend making `pfast` the `h3-max` recipe when
+
+* R1: rule 1 holds;
+* R2: rule 2 holds, **or** `pfast`'s median |ln sharpness| and median |ln
+  jitter| are each ≤ `max`'s on at least 4 of 5 prompts (no further from
+  base than h3-max on either axis);
+* R3: `pfast`'s denoise median ≤ **1.10 ×** `max`'s on the same pod.
+
+Otherwise keep Sol-H3 as `h3-max`. Reported but not in either rule: denoise
+and total medians of every arm (`pfast` against `max` and against
+`pdense`), the same-seed pair per prompt, `pdense` against `pfast` (what
+the sparse route and MXFP8 move), prompt adherence from a frame sheet, and
+whether `pdense` reproduces 12.7's plug frames (`plug/frames-pod{1,2}.sha`)
+on the newer image. Analysis: `artifacts/perf/plug-fast/driver/pfcmp.py`.
+No default changes; the owner decides.
