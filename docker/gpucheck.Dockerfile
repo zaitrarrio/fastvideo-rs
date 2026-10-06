@@ -133,7 +133,7 @@ COPY --from=build /out/ /
 #   base-os: ca-certificates + x264/vpx/dav1d runtime libs (1 layer)
 #            + the minimal ffmpeg/ffprobe build below (1 layer)
 #   base-cuda: CUDA 13.4 runtime libraries, four stable layers, largest first:
-#            cuBLASLt | cuDNN precompiled engines | cuDNN core | cuBLAS + NVRTC
+#            cuBLASLt | cuDNN precompiled engines | cuDNN core | cuBLAS + NVRTC + cudart
 #   ── base-os / base-cuda end here. CI publishes them as
 #      fastvideo-rs-runtime:base-{os,cuda}-<hash> (scripts/ci/base-images.sh)
 #      and passes them back as named build contexts, so every image below,
@@ -192,7 +192,10 @@ RUN curl -fsSL -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPE
 # fv-gpucheck load: cudarc dlopens libnvrtc, libcublas(+Lt), libcudnn and
 # (FASTVIDEO_GPU_TRACE only) libcupti; libcudnn dlopens its graph/ops/cnn/
 # heuristic/engine libraries, and the runtime-compiled and tensor-IR engines
-# dlopen libnvrtc. (CUPTI: the cupti-libs stage, outside the shared base.)
+# dlopen libnvrtc; plus the CUDA runtime libcudart (CUPTI dlopens it; for
+# anything linked against it). Their DT_NEEDED closure is glibc, libstdc++,
+# libgcc_s and zlib (Ubuntu base) and each other; the driver (libcuda) comes
+# from the host. base-cuda checks this with ldd. (CUPTI: the cupti-libs stage, outside the shared base.)
 FROM ${UBUNTU} AS cuda-libs
 ARG DEBIAN_FRONTEND=noninteractive
 COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
@@ -203,7 +206,7 @@ RUN apt-get update \
  && apt-get update \
  && . /etc/fastvideo/cuda-13.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
-      "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
+      "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" "$CUDA_CUDART_PKG" \
  && rm -rf /var/lib/apt/lists/* \
  && L=/usr/local/cuda-13.4/targets/x86_64-linux/lib G=/usr/lib/x86_64-linux-gnu \
  && mkdir -p /out/cublaslt /out/cudnn-engines /out/cudnn /out/cublas-nvrtc \
@@ -215,8 +218,9 @@ RUN apt-get update \
       cp -a "$G/$l".so.* /out/cudnn/; \
     done \
  && ln -s "$CUDA_CUDNN_SONAME" /out/cudnn/libcudnn.so \
- && cp -a "$L"/libcublas.so.* "$L"/libnvrtc.so.* "$L"/libnvrtc-builtins.so.* /out/cublas-nvrtc/ \
+ && cp -a "$L"/libcublas.so.* "$L"/libnvrtc.so.* "$L"/libnvrtc-builtins.so.* "$L"/libcudart.so.* /out/cublas-nvrtc/ \
  && ln -s "$CUDA_CUBLAS_SONAME" /out/cublas-nvrtc/libcublas.so \
+ && ln -s "$CUDA_CUDART_SONAME" /out/cublas-nvrtc/libcudart.so \
  && ln -s "$CUDA_NVRTC_SONAME" /out/cublas-nvrtc/libnvrtc.so \
  && ls -la /out/* \
  && du -sh /out/*
@@ -258,7 +262,13 @@ RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && mkdir -p /usr/local/cuda-13.4/targets/x86_64-linux \
  && ln -s ../../lib64 /usr/local/cuda-13.4/targets/x86_64-linux/lib \
  && ldconfig \
- && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so'
+ && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so|libcudart\.so' \
+ && for n in libnvrtc.so libcublas.so libcublasLt.so libcudnn.so libcudart.so; do \
+      ldconfig -p | grep -qE "^[[:space:]]+$n " || { echo "missing $n"; exit 1; }; \
+    done \
+ && for f in /usr/local/cuda-13.4/lib64/*.so.* /usr/lib/x86_64-linux-gnu/libcudnn*.so.*; do \
+      if ldd "$f" | grep 'not found'; then echo "unresolved dependency of $f"; exit 1; fi; \
+    done
 # The NVIDIA container runtime injects the driver (libcuda, and libnvidia-encode
 # for NVENC through the `video` capability) when these are set.
 ENV NVIDIA_VISIBLE_DEVICES=all \

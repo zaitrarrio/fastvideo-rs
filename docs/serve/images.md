@@ -366,7 +366,7 @@ Shared layers (identical digests), measured on the pushed images:
 
 Layers of the CUDA stack (MB): Ubuntu 29.8 · codec libs 3.5 · ffmpeg 19.1 ·
 cuBLASLt 388.2 · cuDNN precompiled engines 204.9 · cuDNN core 213.1 · cuBLAS
-+ NVRTC 105.8 · ld.so config 0.0. Runtime adds sshd/rsync/curl 4.4 · CUPTI
++ NVRTC 105.8 (+ cudart since the follow-up, see below) · ld.so config 0.0. Runtime adds sshd/rsync/curl 4.4 · CUPTI
 12.2 · hf-fm 18.0 · scripts 1.4 · oxide 0.2 · fv-gpucheck 19.3; debug adds
 configs + worker.py + fv-serve 30.4; a variant adds fv-serve 30.4 + config.
 
@@ -420,6 +420,34 @@ the second-largest candidate (75.8 MB). With it moved away on an RTX PRO
 6000 (sm_120), `fv-gpucheck kernels --groups conv,attn3_parity` fails:
 convolutions return `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` and the SDPA
 graphs get no plan (`status 1008: ptrDesc->finalize()`). It stays.
+
+### CUDA runtime (libcudart) and the dependency audit
+
+Owner follow-up (2026-10-06): base-cuda also ships the CUDA runtime,
+`cuda-cudart-13-4` (pinned as `CUDA_CUDART_PKG` / `CUDA_CUDART_SONAME` in
+`scripts/gpu/cuda-13.pins`): `libcudart.so.13.4.92` + `libcudart.so.13` +
+`libcudart.so` in the cuBLAS + NVRTC layer (0.8 MB uncompressed). cudarc
+uses the driver API and does not load it, but CUPTI dlopens `libcudart.so`
+and anything linked against the runtime finds it. Its package's other
+dependencies (`cuda-toolkit-*-config-common`) only carry ld.so/alternatives
+configuration, which base-cuda writes itself.
+
+Audit of every shipped library (DT_NEEDED from `readelf -d`, dlopen names
+from the binaries' strings):
+
+| needs | from |
+|---|---|
+| glibc (`libc`, `libm`, `libdl`, `librt`, `libpthread`, `libutil`, `ld-linux`), `libstdc++.so.6`, `libgcc_s.so.1`, `libz.so.1` | Ubuntu 22.04 base |
+| `libcublasLt.so.13` (cuBLAS, cuDNN precompiled engines), `libnvrtc.so.13` + `libnvrtc-builtins` (cuBLASLt, cuDNN engines), the cuDNN sub-libraries, `libcudart.so` (CUPTI) | base-cuda (CUPTI: runtime image) |
+| `libcuda.so.1` | the host driver (NVIDIA container runtime) |
+| `libcudnn_adv` / `libcudnn_ext` (dlopened by `libcudnn` only for their APIs) | intentionally absent (unused) |
+| `libcask_profile_interface.so` (cuDNN precompiled engines) | an optional profiling hook, not part of any NVIDIA package |
+| EGL/GL/X11/OpenCL/OptiX/Vulkan-SC libraries (CUPTI / nvperf graphics-interop profiling) | the host driver when present; not used by the activity API |
+
+Nothing else is missing. base-cuda now fails its build if any library in
+`/usr/local/cuda-13.4/lib64` or any `libcudnn*` has an unresolved `ldd`
+dependency, or if `libnvrtc.so`, `libcublas.so`, `libcublasLt.so`,
+`libcudnn.so` or `libcudart.so` is not in the linker cache.
 
 ### GPU smoke (2026-10-06, EUR-IS-1, EU volume `jg48s6o1w0` read only)
 

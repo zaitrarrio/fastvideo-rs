@@ -11,10 +11,14 @@ CUDA_CUBLAS_PKG=libcublas-13-4=13.8.0.4-1
 CUDA_CUDNN_PKG=libcudnn9-cuda-13=9.26.0.51-1
 # CUPTI for FASTVIDEO_GPU_TRACE (cudarc `cupti`, loaded lazily; optional at run time).
 CUDA_CUPTI_PKG=cuda-cupti-13-4=13.4.92-1
+# The CUDA runtime (libcudart): shipped in base-cuda for anything that links or
+# dlopens it (CUPTI dlopens libcudart.so); cudarc itself uses the driver API.
+CUDA_CUDART_PKG=cuda-cudart-13-4=13.4.92-1
 CUDA_NVRTC_SONAME=libnvrtc.so.13
 CUDA_CUBLAS_SONAME=libcublas.so.13
 CUDA_CUBLASLT_SONAME=libcublasLt.so.13
 CUDA_CUDNN_SONAME=libcudnn.so.9
 CUDA_CUPTI_SONAME=libcupti.so.13
+CUDA_CUDART_SONAME=libcudart.so.13
 CUDA_HOME=/usr/local/cuda-13.4
 CUDARC_CUDA_VERSION=13000

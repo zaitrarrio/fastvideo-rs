@@ -120,7 +120,7 @@ smoke() {
       test -e /usr/local/cuda-13.4 && bad "/usr/local/cuda-13.4 in the cpu image"
     else
       test "$NVIDIA_DRIVER_CAPABILITIES" = compute,utility,video
-      for l in libnvrtc.so.13 libnvrtc.so libcublas.so.13 libcublasLt.so.13 libcublas.so libcudnn.so.9 libcudnn.so \
+      for l in libnvrtc.so.13 libnvrtc.so libcublas.so.13 libcublasLt.so.13 libcublas.so libcudnn.so.9 libcudnn.so libcudart.so.13 libcudart.so \
                libcudnn_graph.so.9 libcudnn_ops.so.9 libcudnn_cnn.so.9 libcudnn_heuristic.so.9 \
                libcudnn_engines_precompiled.so.9 libcudnn_engines_runtime_compiled.so.9 \
                libcudnn_engines_tensor_ir.so.9; do
