@@ -87,7 +87,7 @@ if one is missing, the setup fails with `missing from the image <image>:
 | CUDA | 13.4.92 nvcc / NVRTC / tileiras from `scripts/gpu/cuda-13.pins` (the CI builder's pins) + cudart / driver / cuRAND headers for oxide's bindgen |
 | sccache, mold | 0.18.0, 3.0.0 (release binaries, sha256-checked) |
 | build tools | build-essential, clang + libclang, cmake, pkg-config, libssl-dev, git, jq, binutils, zstd, xz |
-| tests | python3 + venv, ffmpeg 4.4 with libvpx, Node v22.23.3, Playwright 1.56.1 + its Chromium and system libraries (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, `NODE_PATH=/opt/playwright/node_modules`) |
+| tests | python3 3.11.14 (python-build-standalone, first on PATH; tests/compat needs >= 3.11) + venv, ffmpeg 4.4 with libvpx, Node v22.23.3, Playwright 1.56.1 + its Chromium and system libraries (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, `NODE_PATH=/opt/playwright/node_modules`) |
 
 `/etc/fastvideo/build-base.json` lists the versions; `status` prints it.
 
@@ -102,6 +102,21 @@ hash differ. To change the image: edit the Dockerfile (e.g. bump
 `RUST_VERSION`), `bash scripts/dev/build-base-tag.sh --pin`, push, wait for
 the workflow, then `down` + `up` the pod (`up` recreates a stopped pod whose
 image differs from the pin and notes a running one).
+
+**CI jobs in the image.** The `serve-compat` suite jobs and `gpucheck-t0`'s
+`nvrtc-compile` run in the same image (`container:`, the tag pinned by
+`build-base-tag.sh`): no `apt-get install ffmpeg`, no `playwright install
+--with-deps`, no CUDA apt packages and no setup-python/setup-node at run
+time. Each job first runs `scripts/ci/check-build-base.sh compat|browser|cuda`,
+which fails naming anything missing. Measured on PR #39 (sum of the 10 suite
+jobs; before: three PR runs of 2026-10-06): before 992–1134 s (apt ffmpeg
+22–56 s per job, Chromium + deps 16–19 s, clients 11–21 s); after 1005 s
+with the client cache warm, 1176 s cold. Pulling the image ("Initialize
+containers", 41–67 s per job) costs about what the installs did, so wall
+time is roughly unchanged; what goes away is apt on the runners (the fal-js
+hang of 2026-10-06) and Python/Node/Chromium drift. nvrtc-compile: CUDA apt
+41–58 s → image pull ~56 s; the NVRTC gate passes in the container without a
+GPU or driver.
 
 The image is not used as the CI builder stage (`docker/gpucheck.Dockerfile`,
 `cuda-builder.Dockerfile`): with prebuilt R2 binaries those stages rarely
