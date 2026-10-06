@@ -1,0 +1,132 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"mem_used_mib":21794,"seconds":121.299853605}
+[fastvideo] generate preset=wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=50 dmd=false rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=24 sq=27280 sk=27280 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=24 sq=27280 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/50 t=999 done in 3225ms
+[fastvideo] unipc step 2/50 t=995 done in 2975ms
+[fastvideo] unipc step 3/50 t=991 done in 2983ms
+[fastvideo] unipc step 4/50 t=987 done in 2989ms
+[fastvideo] unipc step 5/50 t=982 done in 2995ms
+[fastvideo] unipc step 6/50 t=978 done in 3000ms
+[fastvideo] unipc step 7/50 t=973 done in 3001ms
+[fastvideo] unipc step 8/50 t=968 done in 3001ms
+[fastvideo] unipc step 9/50 t=963 done in 3000ms
+[fastvideo] unipc step 10/50 t=957 done in 0ms
+[fastvideo] unipc step 11/50 t=952 done in 3009ms
+[fastvideo] unipc step 12/50 t=946 done in 0ms
+[fastvideo] unipc step 13/50 t=940 done in 3000ms
+[fastvideo] unipc step 14/50 t=934 done in 0ms
+[fastvideo] unipc step 15/50 t=927 done in 0ms
+[fastvideo] unipc step 16/50 t=921 done in 3009ms
+[fastvideo] unipc step 17/50 t=913 done in 0ms
+[fastvideo] unipc step 18/50 t=906 done in 0ms
+[fastvideo] unipc step 19/50 t=898 done in 3009ms
+[fastvideo] unipc step 20/50 t=890 done in 0ms
+[fastvideo] unipc step 21/50 t=882 done in 0ms
+[fastvideo] unipc step 22/50 t=873 done in 0ms
+[fastvideo] unipc step 23/50 t=864 done in 3008ms
+[fastvideo] unipc step 24/50 t=854 done in 0ms
+[fastvideo] unipc step 25/50 t=844 done in 0ms
+[fastvideo] unipc step 26/50 t=833 done in 0ms
+[fastvideo] unipc step 27/50 t=821 done in 3009ms
+[fastvideo] unipc step 28/50 t=809 done in 0ms
+[fastvideo] unipc step 29/50 t=797 done in 0ms
+[fastvideo] unipc step 30/50 t=783 done in 0ms
+[fastvideo] unipc step 31/50 t=769 done in 3012ms
+[fastvideo] unipc step 32/50 t=753 done in 0ms
+[fastvideo] unipc step 33/50 t=737 done in 0ms
+[fastvideo] unipc step 34/50 t=720 done in 0ms
+[fastvideo] unipc step 35/50 t=701 done in 3007ms
+[fastvideo] unipc step 36/50 t=681 done in 0ms
+[fastvideo] unipc step 37/50 t=660 done in 0ms
+[fastvideo] unipc step 38/50 t=637 done in 0ms
+[fastvideo] unipc step 39/50 t=612 done in 3011ms
+[fastvideo] unipc step 40/50 t=585 done in 0ms
+[fastvideo] unipc step 41/50 t=555 done in 0ms
+[fastvideo] unipc step 42/50 t=523 done in 3008ms
+[fastvideo] unipc step 43/50 t=487 done in 0ms
+[fastvideo] unipc step 44/50 t=448 done in 0ms
+[fastvideo] unipc step 45/50 t=405 done in 3011ms
+[fastvideo] unipc step 46/50 t=357 done in 0ms
+[fastvideo] unipc step 47/50 t=302 done in 3011ms
+[fastvideo] unipc step 48/50 t=241 done in 3011ms
+[fastvideo] unipc step 49/50 t=172 done in 3014ms
+[fastvideo] unipc step 50/50 t=92 done in 3012ms
+[fastvideo] unipc 50 steps done in 72334ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3520 Sk=3520 D=1024 query_chunk=3520
+[fastvideo] vae.decode done in 11922ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.11s, 0.10 GiB, synced), ffmpeg feed blocked 0.31s, mp4 tail 0.05s, buffered peak 0.30 GiB of 85.13
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames/cold/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames/cold (text 1.20s, denoise 72.34s, decode+mp4 13.75s, png 0.11s)
+[fastvideo] generate done in 87440ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":13.751549931,"decoder":"wan-vae","denoise_s":72.338885211,"step_s":[3.229926488,2.9755002900000003,2.9836721920000002,2.989500369,2.996015088,3.000852555,3.001325595,3.001042845,3.000123924,0.000549821,3.009124526,0.000517541,3.000406484,0.000514591,0.000550641,3.009174616,0.000685111,0.00043132,3.009717357,0.000506201,0.000417041,0.00041699,3.008301615,0.000515901,0.000423701,0.00040989,3.009591957,0.000513331,0.0004186,0.000416381,3.012681031,0.00050054,0.000423161,0.000428431,3.007374213,0.000504021,0.000698001,0.000427251,3.011143718,0.000510691,0.000386881,3.008829255,0.000473251,0.000398201,3.011311738,0.000481191,3.0118285,3.01153186,3.014298453,3.012906771],"text_cache":"miss","text_s":1.203598516,"total_s":87.44100012,"video_encode_s":0.045213082,"video_push_s":0.00006463000000000001,"video_rgb_s":0.09751227501275676,"video_vae_s":13.671606658935545,"video_wait_s":1.7569495529999999,"write_s":0.110945072}
+[fastvideo] generate preset=wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=50 dmd=false rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50
+[fastvideo] unipc step 1/50 t=999 done in 3011ms
+[fastvideo] unipc step 2/50 t=995 done in 3010ms
+[fastvideo] unipc step 3/50 t=991 done in 3014ms
+[fastvideo] unipc step 4/50 t=987 done in 3018ms
+[fastvideo] unipc step 5/50 t=982 done in 3017ms
+[fastvideo] unipc step 6/50 t=978 done in 3015ms
+[fastvideo] unipc step 7/50 t=973 done in 3019ms
+[fastvideo] unipc step 8/50 t=968 done in 3020ms
+[fastvideo] unipc step 9/50 t=963 done in 3021ms
+[fastvideo] unipc step 10/50 t=957 done in 0ms
+[fastvideo] unipc step 11/50 t=952 done in 3019ms
+[fastvideo] unipc step 12/50 t=946 done in 0ms
+[fastvideo] unipc step 13/50 t=940 done in 3020ms
+[fastvideo] unipc step 14/50 t=934 done in 0ms
+[fastvideo] unipc step 15/50 t=927 done in 0ms
+[fastvideo] unipc step 16/50 t=921 done in 3019ms
+[fastvideo] unipc step 17/50 t=913 done in 0ms
+[fastvideo] unipc step 18/50 t=906 done in 0ms
+[fastvideo] unipc step 19/50 t=898 done in 3023ms
+[fastvideo] unipc step 20/50 t=890 done in 0ms
+[fastvideo] unipc step 21/50 t=882 done in 0ms
+[fastvideo] unipc step 22/50 t=873 done in 0ms
+[fastvideo] unipc step 23/50 t=864 done in 3020ms
+[fastvideo] unipc step 24/50 t=854 done in 0ms
+[fastvideo] unipc step 25/50 t=844 done in 0ms
+[fastvideo] unipc step 26/50 t=833 done in 0ms
+[fastvideo] unipc step 27/50 t=821 done in 3019ms
+[fastvideo] unipc step 28/50 t=809 done in 0ms
+[fastvideo] unipc step 29/50 t=797 done in 0ms
+[fastvideo] unipc step 30/50 t=783 done in 0ms
+[fastvideo] unipc step 31/50 t=769 done in 3019ms
+[fastvideo] unipc step 32/50 t=753 done in 0ms
+[fastvideo] unipc step 33/50 t=737 done in 0ms
+[fastvideo] unipc step 34/50 t=720 done in 0ms
+[fastvideo] unipc step 35/50 t=701 done in 3018ms
+[fastvideo] unipc step 36/50 t=681 done in 0ms
+[fastvideo] unipc step 37/50 t=660 done in 0ms
+[fastvideo] unipc step 38/50 t=637 done in 0ms
+[fastvideo] unipc step 39/50 t=612 done in 3019ms
+[fastvideo] unipc step 40/50 t=585 done in 0ms
+[fastvideo] unipc step 41/50 t=555 done in 0ms
+[fastvideo] unipc step 42/50 t=523 done in 3017ms
+[fastvideo] unipc step 43/50 t=487 done in 0ms
+[fastvideo] unipc step 44/50 t=448 done in 0ms
+[fastvideo] unipc step 45/50 t=405 done in 3017ms
+[fastvideo] unipc step 46/50 t=357 done in 0ms
+[fastvideo] unipc step 47/50 t=302 done in 3018ms
+[fastvideo] unipc step 48/50 t=241 done in 3019ms
+[fastvideo] unipc step 49/50 t=172 done in 3019ms
+[fastvideo] unipc step 50/50 t=92 done in 3015ms
+[fastvideo] unipc 50 steps done in 72453ms
+[fastvideo] vae.decode done in 11907ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.11s, 0.10 GiB, synced), ffmpeg feed blocked 0.33s, mp4 tail 0.05s, buffered peak 0.30 GiB of 85.07
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames (text 0.01s, denoise 72.45s, decode+mp4 13.71s, png 0.11s)
+[fastvideo] generate done in 86321ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":13.71387734,"decoder":"wan-vae","denoise_s":72.454229869,"frames_sha256":"d1e8818bfab9ebdd01d0a706e65994c82b0a3777e1c66e16bf3018175a2161d4","peak_mib":60652,"step_s":[3.01196339,3.010703559,3.014397833,3.018849989,3.017900649,3.015781425,3.019782231,3.020318111,3.021771204,0.00047587,3.01933278,0.000510921,3.020959752,0.000513171,0.000388051,3.01968339,0.000530101,0.0003956,3.023225226,0.000509421,0.00037906,0.000366211,3.020994722,0.000484221,0.00040975,0.000407421,3.01983987,0.000513851,0.000407191,0.00041008,3.019985951,0.000484991,0.000414291,0.0004636,3.01894462,0.000478191,0.0003824,0.000368581,3.01964383,0.000508621,0.00038632,3.017016147,0.000485051,0.00037858,3.017853078,0.000507331,3.018776089,3.019752501,3.0190493,3.015950385],"text_cache":"hit","text_s":0.006017898,"total_s":86.209411445,"video_encode_s":0.048075366,"video_push_s":0.00005237,"video_rgb_s":0.08791168001566307,"video_vae_s":13.657769912719726,"video_wait_s":1.7574341139999998,"write_s":0.112106403}
+wan gen default: total 86.21s (text 0.01s, denoise 72.45s, decode 13.71s) png 0.11s peak Some(60652) MiB frames d1e8818bfab9ebdd01d0a706e65994c82b0a3777e1c66e16bf3018175a2161d4
+[PASS] wan/frames {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/frames/frame-060.png","mean":0.6582953829520002,"std":0.2450803415709308} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan5b-easycache/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (295.9s)
