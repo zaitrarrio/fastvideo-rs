@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Policies } from "./alerts";
 import { AVAILABLE_REGIONS, type RegionId } from "./cluster/regions";
 import type { ClusterSpec, PoolSpec } from "./cluster/spec";
+import { EndpointSpecZ } from "./serverless/spec";
 
 const id = (what: string) =>
   z
@@ -175,6 +176,7 @@ export const SCHEMAS = {
   env: EnvSetZ,
   "token-create": TokenCreateZ,
   "release-dispatch": ReleaseDispatchZ,
+  "serverless-endpoint": EndpointSpecZ,
 } as const;
 export type SchemaName = keyof typeof SCHEMAS;
 

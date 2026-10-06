@@ -44,6 +44,8 @@ import { jsonSchemas, validate } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
+import { serverlessRoutes } from "./serverless/routes";
+import { serverlessTick } from "./serverless/ops";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
@@ -661,6 +663,9 @@ app.post("/api/docs/:kind/:id/restore", async (c) => {
   return c.json(await restoreDoc(c.env, kind, c.req.param("id"), Number(b.audit_id), b.which === "before" ? "before" : "after", { version: b.version, actor: actor(c), ip: clientIp(c) }));
 });
 
+// ---------------- Runpod serverless endpoints (src/serverless/, docs/control/serverless.md)
+app.route("/api/serverless", serverlessRoutes);
+
 app.all("/api/*", () => {
   throw new HttpError(404, "no such route");
 });
@@ -678,6 +683,7 @@ export default {
         console.error("collector failed", scrub(env, (e as Error).message));
       }),
     );
+    ctx.waitUntil(serverlessTick(env).catch((e) => console.error("serverless tick failed", scrub(env, (e as Error).message))));
   },
 } satisfies ExportedHandler<Env>;
 
