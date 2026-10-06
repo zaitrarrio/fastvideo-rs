@@ -96,13 +96,38 @@ On every push to main (and by hand, on main only), one run at a time; a
 newer push replaces a queued run, the running one finishes:
 
 1. **plan** (GitHub-hosted, seconds): `tools-release.sh plan $GITHUB_SHA`.
-   Skip when the input hash is released; else the version above.
-2. **build** on the **build pod** (`runs-on: [self-hosted, fv-build]`):
+   Skip when the input hash is released; else the version above. Then the
+   **builder** (`tools-release.sh pick-runner`, owner decision: build pods
+   first, GitHub-hosted as the fallback):
+   - `pod` when at least one self-hosted runner labelled `fv-build` is
+     **online and idle**. Listing runners needs *Administration: read*,
+     which a workflow's `GITHUB_TOKEN` cannot have, so it uses the
+     repository secret **`FV_RUNNER_READ_TOKEN`** (a fine-grained PAT for
+     this repository with only *Administration: read*); without it the
+     choice is always `github`;
+   - else `github`;
+   - the repository variable **`FV_BUILD_RUNNER`** = `pod` | `github`
+     forces it (`auto` by default).
+2. **build**, the same command either way,
    `tools-release.sh build $GITHUB_SHA --local --version V --tag tools-vV`:
+   - **build-pod** (`runs-on: [self-hosted, fv-build]`): on a build pod's
+     runner, with its toolchain, sccache and volume caches (the fast path:
+     ~8 min incremental + the gate);
+   - **build-hosted** (`runs-on: vars.FV_TOOLS_HOSTED_RUNNER || ubuntu-latest`;
+     set the variable to a larger runner's label to speed it up): frees the
+     host's disk, then `docker run`s the command in the **build-base image**
+     (`scripts/dev/build-base-tag.sh --image`, the image the pods run, so
+     the same toolchain, CUDA and tools), with cold caches (expect well over
+     an hour on a 4-vCPU runner). Same recipe and the same gate, so the
+     release is the same either way (only absolute source paths inside the
+     binaries differ).
+
+   Then, in both:
    - every set in release mode (scripts/dev/release-artifacts-pod.sh, as
      `build-pod.sh release-artifacts` runs it) with `FV_RELEASE_VERSION=V`,
      the `fv-gpucheck nvrtc` gate (AOT cubins + oxide cubins for sm_100/120
-     embedded), the glibc ≤ 2.35 check, target dir `target/gh-runner`;
+     embedded), the glibc ≤ 2.35 check, target dir `target/gh-runner` (pod)
+     or `/work/target` (hosted);
    - **test gate** (any failure: nothing is published):
      `scripts/serve/check.sh` (check + clippy + tests of the serve crates,
      target `target/gh-runner-test`, no debuginfo); the **shipped**
@@ -111,7 +136,7 @@ newer push replaces a queued run, the running one finishes:
      fv-gpucheck must print V;
    - the staged release (tarballs, `manifest.json`, `body.md`) becomes a
      workflow artifact (3 days).
-3. **publish** (GitHub-hosted, the job's `GITHUB_TOKEN` with
+3. **publish** (whichever build ran must have passed; GitHub-hosted, the job's `GITHUB_TOKEN` with
    `contents: write`, `actions: write`): `tools-release.sh upload stage
    --dispatch`: a draft release (no tag yet) → upload → publish (creates the
    tag; a failure before that deletes the draft) → download every set and
@@ -150,6 +175,39 @@ workflow job counts as pod activity (no idle stop; the 8 h cap still
 applies) and its `target/gh-runner*` dirs are not evicted meanwhile. The
 runner's credentials live in `<local>/actions-runner` on the container disk
 and go with the pod. `GET /v1/runner` (and `build-pod.sh status`) shows it.
+
+**Pod-side contract** (for whatever manages the pods: today `build-pod.sh`,
+next fv-control, which will own the pods' lifecycle and keep the PAT as a
+Worker secret). The pod's server (build-pod-server.py) is reached over the
+pod's HTTPS proxy with the pod token (`Authorization: Bearer <pod token>`,
+the same as every `/v1/*` call):
+
+- `POST /v1/runner` with JSON `{"token": "<registration token>", "repo":
+  "<owner>/<name>", "labels": "fv-build" (optional, default fv-build;
+  `[A-Za-z0-9_.,-]`), "name": "<runner name>" (optional, default
+  `fv-build-<RUNPOD_POD_ID>`)}` → `202 {"registering": name, "labels"}`;
+  `400` on a missing token or a bad repo/labels/name. Registration runs in
+  the background: download (sha256-checked), `config.sh --unattended
+  --replace --disableupdate`, then `run.sh`. Posting again re-registers
+  (the running runner is stopped first).
+- `GET /v1/runner` → `{phase: absent|installing|configuring|running|failed|exited <rc>,
+  error, name, labels, version, repo, busy}`; also under `runner` in
+  `GET /v1/status`. Poll until `running` (or `failed`).
+- **The token**: a *registration* token (`POST
+  /repos/{owner}/{repo}/actions/runners/registration-token` with the PAT;
+  valid 1 h, single use). Send that, never the PAT: the PAT stays with the
+  caller. The pod passes it to `config.sh` once, keeps it out of its logs
+  and error messages (replaced by `<token>`) and never writes it to disk;
+  only the runner's own credentials stay in `<local>/actions-runner` on the
+  container disk, gone with the pod.
+- Labels: `fv-build` is what tools-release.yml targets; give pods in other
+  regions or sizes extra labels if workflows should pick them, but keep
+  `fv-build` on every pod that may build releases. Names must be unique per
+  pod (the default is).
+- While a workflow job runs on the runner the pod counts as busy (no idle
+  stop; its own 8 h cap still applies). A manager that stops pods should
+  check `GET /v1/runner` → `busy` (or the runner's `busy` in the GitHub
+  API) first.
 
 **Registering** (`build-pod.sh runner`; `build-pod.sh up` does it too when a
 token source exists, `FV_BUILD_RUNNER=0` skips): the coordinator sends a

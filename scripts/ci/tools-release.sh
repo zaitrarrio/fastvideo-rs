@@ -27,6 +27,9 @@
 #                                         skip (inputs already released); JSON
 #   tools-release.sh build <rev> --local|--pod --version V --tag tools-vV [--out DIR]
 #                                         compile + test gate + stage DIR/release
+#   tools-release.sh pick-runner          where tools-release.yml builds: `pod` (an
+#                                         online, idle self-hosted runner labelled
+#                                         fv-build) or `github` (fallback)
 #   tools-release.sh upload <DIR/release> [--dispatch]
 #                                         draft -> assets -> publish -> verify ->
 #                                         prune [-> dispatch the image workflows]
@@ -440,6 +443,10 @@ cmd_build() {
     FV_RELEASE_VERSION="$v" FV_RELEASE_OUT="$out" bash "$ROOT/scripts/dev/build-pod.sh" release-artifacts "$sha" \
       || die "build failed on the build pod: nothing published"
   else
+    # In a container the checkout belongs to another uid: let every git below
+    # (docker.sh build-id, build scripts, submodules) read it. Command-line
+    # scope (GIT_CONFIG_*), this build only.
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
     build_local "$sha" "$v" "$out" || die "build failed: nothing published"
   fi
   local m="$out/manifest.json" set
@@ -642,6 +649,46 @@ run_gate() {
   return 0
 }
 
+# ---- runner choice --------------------------------------------------------------
+# pick-runner: `pod` when at least one self-hosted runner with the label
+# FV_RUNNER_LABEL (default fv-build) is online and idle, else `github` (the
+# build then runs on a GitHub-hosted runner in the build-base image, same
+# recipe and gate). Listing runners needs "Administration: read", which a
+# workflow's GITHUB_TOKEN cannot have: the token comes from FV_RUNNER_READ_TOKEN
+# (a repository secret, fine-grained PAT, Administration: read only); without
+# it the choice is `github`. FV_BUILD_RUNNER=pod|github (a repository variable)
+# forces it. Writes builder=..., reason=... to $GITHUB_OUTPUT; prints JSON.
+cmd_pick_runner() {
+  local mode="${FV_BUILD_RUNNER:-auto}" label="${FV_RUNNER_LABEL:-fv-build}" builder="" reason="" runners="" n
+  case "$mode" in
+    pod|github) builder="$mode"; reason="FV_BUILD_RUNNER=$mode" ;;
+    auto|"")
+      if [[ -n "${FV_TOOLS_RUNNERS_FILE:-}" ]]; then
+        runners="$(cat "$FV_TOOLS_RUNNERS_FILE")"   # tests
+      elif [[ -n "${FV_RUNNER_READ_TOKEN:-}" ]]; then
+        local h; h="$(umask 077 && mktemp)"
+        printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$FV_RUNNER_READ_TOKEN" >"$h"
+        runners="$(curl -sS --fail-with-body -H @"$h" "$API/repos/$REPO/actions/runners?per_page=100" 2>/dev/null)" || runners=""
+        rm -f "$h"
+        [[ -n "$runners" ]] || reason="could not list the runners with FV_RUNNER_READ_TOKEN"
+      else
+        reason="no FV_RUNNER_READ_TOKEN secret: cannot see the build pods' runners"
+      fi
+      if [[ -n "$runners" ]]; then
+        n="$(jq --arg l "$label" '[.runners[]? | select(.status == "online" and (.busy | not) and any(.labels[]?; .name == $l))] | length' <<<"$runners")"
+        if (( n > 0 )); then builder=pod; reason="$n idle $label runner(s) online"
+        else builder=github; reason="no idle $label runner online"
+        fi
+      else
+        builder=github
+      fi ;;
+    *) die "FV_BUILD_RUNNER must be auto, pod or github (got $mode)" ;;
+  esac
+  [[ -n "${GITHUB_OUTPUT:-}" ]] && printf 'builder=%s\nreason=%s\n' "$builder" "$reason" >>"$GITHUB_OUTPUT"
+  log "builder: $builder ($reason)"
+  jq -nc --arg b "$builder" --arg r "$reason" '{builder: $b, reason: $r}'
+}
+
 # ---- prune ------------------------------------------------------------------
 # Keep the newest N stable tools releases (and the pinned FV_TOOLS_VERSION:
 # the repository variable, or FV_TOOLS_PIN when the token cannot read it),
@@ -710,6 +757,7 @@ case "${1:-}" in
   bump) shift; cmd_bump "$@" ;;
   notes) shift; cmd_notes "$@" ;;
   plan) shift; cmd_plan "$@"; echo "$PLAN" ;;
+  pick-runner) cmd_pick_runner ;;
   build) shift; cmd_build "$@" ;;
   upload) shift; cmd_upload "$@" ;;
   publish) shift; cmd_publish "$@" ;;

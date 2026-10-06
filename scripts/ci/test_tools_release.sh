@@ -64,6 +64,20 @@ jq -n '{tag: "tools-v0.1.11", version: "0.1.11", source_commit: "abc", sets: {ox
 printf 'notes\nmanifest-sha256: %s\n' "$(sha256sum "$tmp/stage/manifest.json" | cut -d' ' -f1)" >"$tmp/stage/body.md"
 check "upload refuses a tampered tarball" 2 "$(FV_GITHUB_TOKEN_FILE=/dev/null bash "$T" upload "$tmp/stage" >"$tmp/up.log" 2>&1; echo $?)"
 grep -q "oxide.tar.gz missing or its sha256 differs" "$tmp/up.log" && echo "ok   (said why)" || { echo "FAIL upload message"; cat "$tmp/up.log"; fail=1; }
+# Builder choice: an online, idle fv-build runner -> pod; else GitHub-hosted.
+runner() { # name status busy labels...
+  local n="$1" st="$2" b="$3"; shift 3
+  jq -n --arg n "$n" --arg s "$st" --argjson b "$b" --args '{name: $n, status: $s, busy: $b, labels: ($ARGS.positional | map({name: .}))}' "$@"
+}
+pick() { FV_TOOLS_RUNNERS_FILE="$1" bash "$T" pick-runner 2>/dev/null | jq -r .builder; }
+{ runner p1 online false self-hosted fv-build; runner p2 online true self-hosted fv-build; } | jq -s '{runners: .}' >"$tmp/r-idle.json"
+{ runner p2 online true self-hosted fv-build; runner p3 offline false self-hosted fv-build; runner x online false self-hosted other; } | jq -s '{runners: .}' >"$tmp/r-none.json"
+check "runner: an idle online fv-build runner -> pod" pod "$(pick "$tmp/r-idle.json")"
+check "runner: busy, offline or other labels only -> github" github "$(pick "$tmp/r-none.json")"
+check "runner: no token to list runners -> github" github "$(env -u FV_TOOLS_RUNNERS_FILE FV_RUNNER_READ_TOKEN= bash "$T" pick-runner 2>/dev/null | jq -r .builder)"
+check "runner: FV_BUILD_RUNNER=pod forces the pod" pod "$(FV_BUILD_RUNNER=pod pick "$tmp/r-none.json")"
+check "runner: FV_BUILD_RUNNER=github forces GitHub" github "$(FV_BUILD_RUNNER=github pick "$tmp/r-idle.json")"
+check "runner: writes builder to GITHUB_OUTPUT" "builder=pod" "$(GITHUB_OUTPUT="$tmp/gho2" pick "$tmp/r-idle.json" >/dev/null; grep '^builder=' "$tmp/gho2")"
 check "unchanged inputs: nothing to publish" 0 "$(
   h="$(bash "$T" input-hash HEAD)"
   jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same.json"

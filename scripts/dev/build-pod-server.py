@@ -1605,6 +1605,14 @@ def runner_start(token, repo, labels, name):
             if runner_proc is not None and runner_proc.poll() is None:
                 runner_proc.terminate()
                 runner_proc.wait(timeout=60)
+            # A second registration: config.sh refuses a configured dir, and
+            # removing it remotely needs another token; --replace takes the
+            # name over on GitHub, so only the local config goes.
+            for f in (".runner", ".credentials", ".credentials_rsaparams"):
+                try:
+                    os.remove(os.path.join(RUNNER_DIR, f))
+                except OSError:
+                    pass
             env = runner_env()
             os.makedirs(RUNNER_WORK, exist_ok=True)
             runner_state["phase"] = "configuring"
