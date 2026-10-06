@@ -16,7 +16,8 @@
 #
 # Env:
 #   GCP_SA_KEY_JSON   the service-account key JSON (as downloaded), or its
-#                     base64; or GCP_SA_KEY_FILE, a path to the key file
+#                     base64; or GCP_SA_KEY_FILE, a path to the key file;
+#                     else /root/.config/fv/gcp_sa_key.json when readable
 #   GCP_PROJECT       default: the key's project_id
 #   FV_GCP_SCOPE      default https://www.googleapis.com/auth/cloud-platform
 #   FV_GCP_STATE      token cache directory (default ~/.cache/fastvideo-rs/gcp)
@@ -29,7 +30,8 @@ _gcp_log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 # The key JSON on stdout (never logged). Accepts raw JSON, base64 JSON or a file.
 gcp_key_json() {
-  local k="${GCP_SA_KEY_JSON:-}"
+  local k="${GCP_SA_KEY_JSON:-}" default_file="${FV_GCP_KEY_DEFAULT:-/root/.config/fv/gcp_sa_key.json}"
+  if [[ -z "$k" && -z "${GCP_SA_KEY_FILE:-}" && -r "$default_file" ]]; then GCP_SA_KEY_FILE="$default_file"; fi
   if [[ -z "$k" && -n "${GCP_SA_KEY_FILE:-}" ]]; then
     [[ -r "$GCP_SA_KEY_FILE" ]] || { _gcp_log "GCP_SA_KEY_FILE is not readable"; return 1; }
     k="$(cat "$GCP_SA_KEY_FILE")"
@@ -67,18 +69,25 @@ _gcp_jwt() {
   printf '%s.%s' "$input" "$sig"
 }
 
+# The token cache file of one key (by account and token endpoint, so two
+# keys never share a token).
+gcp_token_cache() {
+  printf '%s' "$FV_GCP_STATE/token-$(jq -r '.client_email + " " + (.token_uri // "")' <<<"$1" | sha256sum | cut -c1-16)"
+}
+
 # gcp_token: a valid access token on stdout (cached). Callers capture it and
 # hand it to curl through gcp_curl_auth; it is never echoed to the terminal.
 gcp_token() {
-  local cache="$FV_GCP_STATE/token" now exp tok key jwt resp
+  local cache now exp tok key jwt resp
   now="$(date +%s)"
+  key="$(gcp_key_json)" || return 1
+  cache="$(gcp_token_cache "$key")"
   if [[ -r "$cache" ]]; then
     exp="$(head -1 "$cache")"
     if [[ "$exp" =~ ^[0-9]+$ ]] && (( exp - 300 > now )); then
       sed -n 2p "$cache"; return 0
     fi
   fi
-  key="$(gcp_key_json)" || return 1
   jwt="$(_gcp_jwt "$key" "$FV_GCP_SCOPE" "$now")" || { _gcp_log "JWT signing failed (bad private_key?)"; return 1; }
   resp="$(curl -sS --max-time 30 -X POST "$(jq -r '.token_uri // "https://oauth2.googleapis.com/token"' <<<"$key")" \
     -H 'content-type: application/x-www-form-urlencoded' \
@@ -133,8 +142,8 @@ _gcp_check() {
   project="$(gcp_project)"
   [[ -n "$project" ]] || { _gcp_log "no GCP_PROJECT and no project_id in the key"; return 1; }
   gcp_token >/dev/null || return 1
-  exp="$(head -1 "$FV_GCP_STATE/token")"
-  resp="$(gcp_curl_auth -sS --max-time 30 "https://compute.googleapis.com/compute/v1/projects/$project?fields=name,defaultServiceAccount")" || return 1
+  exp="$(head -1 "$(gcp_token_cache "$(gcp_key_json)")")"
+  resp="$(gcp_curl_auth -sS --max-time 30 "${FV_GCP_COMPUTE_API:-https://compute.googleapis.com/compute/v1}/projects/$project?fields=name,defaultServiceAccount")" || return 1
   if jq -e '.name' >/dev/null 2>&1 <<<"$resp"; then
     echo "gcp auth ok: project=$project sa=$email token_valid_s=$(( exp - $(date +%s) )) compute_api=enabled"
   else
@@ -148,6 +157,6 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   case "${1:-}" in
     check) _gcp_check ;;
     self-test) _gcp_self_test ;;
-    *) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
   esac
 fi

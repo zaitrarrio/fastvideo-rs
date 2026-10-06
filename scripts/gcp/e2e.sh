@@ -3,7 +3,7 @@
 # docs/serve/deploy-gcp.md): one VM per family config, the API matrix
 # against each, timings under artifacts/serve/gcp-e2e/<stamp>/, teardown.
 #
-#   e2e.sh [family...]     default: h3-turbo h3-max ltx-turbo wan-turbo
+#   e2e.sh [family...]     default: h3-turbo h3-max ltx wan (scripts/gcp/families.tsv)
 #
 # Per family (VM from scripts/gcp/vm.sh, weights on the zone's Hyperdisk ML):
 #   boot     create -> first /ping -> /ping 200 (the startup verifies the
@@ -12,7 +12,7 @@
 #            (GPU, NVENC probe, jobs/artifacts backends)
 #   fal      scripts/serve/fal-queue-smoke.sh text-to-video and image-to-video
 #   minimax  MiniMax V2 create -> query loop -> download content.url
-#   ltx      LTX API v2 async text-to-video + v1 sync (ltx-turbo only)
+#   ltx      LTX API v2 async text-to-video + v1 sync (ltx only)
 #   openai   FastVideo /v1/videos create -> retrieve -> content
 #   native   /fv/v1/jobs submit -> poll -> content
 #   live     the fal director (tests/compat/suites/fal_director.mjs; h3-max,
@@ -40,9 +40,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=vm.sh
 source "$HERE/vm.sh"
+VM_ROLE=serve # e2e drives standalone VMs with a per-run API key
+CAP_S="$(cap_s)"
 
 FAMILIES=("$@")
-[[ ${#FAMILIES[@]} -gt 0 ]] || FAMILIES=(h3-turbo h3-max ltx-turbo wan-turbo)
+[[ ${#FAMILIES[@]} -gt 0 ]] || FAMILIES=(h3-turbo h3-max ltx wan)
 BUDGET="${FV_GCP_BUDGET_USD:-40}"
 PARALLEL="${FV_GCP_E2E_PARALLEL:-1}"
 DISK_MODE="${FV_GCP_E2E_DISK:-auto}"
@@ -56,26 +58,10 @@ VMS_FILE="$OUT/vms.txt"
 : >"$VMS_FILE"
 CREATED_DISK=0
 
-family_fal_app() {
-  case "$1" in
-    h3-turbo) echo minimax/h3-turbo ;; h3-max) echo minimax/h3-max ;;
-    ltx-turbo) echo fastvideo/ltx25-distill-sol ;; wan-turbo) echo fastvideo/fastwan21-1.3b ;;
-    fake) echo minimax/h3-turbo ;;
-  esac
-}
-family_minimax_model() {
-  case "$1" in
-    h3-turbo) echo MiniMax-H3 ;; h3-max) echo MiniMax-H3-Max ;;
-    ltx-turbo) echo ltx25-distill-sol ;; wan-turbo) echo fastwan21-1.3b ;; fake) echo MiniMax-H3 ;;
-  esac
-}
-family_served() {
-  case "$1" in
-    h3-turbo) echo fasth3 ;; h3-max) echo sol-h3 ;; ltx-turbo) echo ltx25-distill-sol ;;
-    wan-turbo) echo fastwan21-1.3b ;; fake) echo fake-h3-turbo ;;
-  esac
-}
-family_reactor_mode() { case "$1" in wan-turbo) echo video ;; *) echo av ;; esac; }
+family_fal_app() { gcp_family "$1" fal_app; }
+family_minimax_model() { gcp_family "$1" minimax_model; }
+family_served() { gcp_family "$1" served; }
+family_reactor_mode() { gcp_family "$1" reactor_mode; }
 
 # ------------------------------------------------------------------ budget
 hdml_hr() { awk -v g="${FV_GCP_HDML_GB:-600}" -v t="${FV_GCP_HDML_MIBS:-1200}" -v a="$GCP_HDML_GIB_HR" -v b="$GCP_HDML_MIBS_HR" 'BEGIN{printf "%.4f", g*a + t*b}'; }
@@ -153,7 +139,7 @@ download() {
 }
 
 run_family_checks() {
-  local fam="$1" name="$2" ip="$3" key="$4" dir="$5" base="http://$3:8000" C="$5/checks.jsonl" t0 r st body id url bytes
+  local fam="$1" name="$2" base="$3" key="$4" dir="$5" C="$5/checks.jsonl" t0 r st body id url bytes
   local bearer="Authorization: Bearer $key"
   : >"$C"
   # probe
@@ -192,8 +178,8 @@ run_family_checks() {
     check "$C" minimax 0 "$(jq -nc --arg r "$(head -c 400 <<<"$r")" '{submit: $r}')"
   fi
 
-  # LTX API (ltx-turbo only)
-  if [[ "$fam" == ltx-turbo ]]; then
+  # LTX API (ltx only)
+  if [[ "$fam" == ltx ]]; then
     t0="$(now)"
     r="$(curl -sS --max-time 60 -H "$bearer" -H 'content-type: application/json' \
       -d "$(jq -nc --arg p "$PROMPT" '{prompt: $p, model: "ltx-2-5-fast", duration: 6, resolution: "1920x1080"}')" "$base/v2/text-to-video" || true)"
@@ -296,20 +282,20 @@ run_family() {
   machine="$(family_machine "$fam")"
   local bench=0; [[ "$machine" == g4-* ]] && bench="${FV_GCP_ENCODE_BENCH:-1}"
   t_create="$(now)"
-  FV_GCP_RUN="$(date -u +%m%d%H%M%S)" FV_GCP_ENCODE_BENCH="$bench" vm_up "$fam" || { jq -nc --arg f "$fam" '{family: $f, error: "vm create failed"}' >"$dir/results.json"; return 1; }
+  VM_ROLE=serve FV_GCP_RUN="$(date -u +%m%d%H%M%S)" FV_GCP_ENCODE_BENCH="$bench" vm_up "$fam" || { jq -nc --arg f "$fam" '{family: $f, error: "vm create failed"}' >"$dir/results.json"; return 1; }
   echo "$VM_NAME" >>"$VMS_FILE"
   # tag the ledger line with this run for the spend estimate
   gcp_ledger "vm-created $VM_NAME usd_per_hr=$VM_DPH e2e=$STAMP family=$fam"
   if [[ "$DRY" == 1 ]]; then
-    log "dry run: would wait for $VM_NAME, then run probe fal minimax$([[ $fam == ltx-turbo ]] && echo ' ltx') openai native live$([[ $bench == 1 ]] && echo ' encode') against http://$VM_IP:8000"
+    log "dry run: would wait for $VM_NAME, then run probe fal minimax$([[ $fam == ltx ]] && echo ' ltx') openai native live$([[ $bench == 1 ]] && echo ' encode') against $VM_URL"
     vm_down "$VM_NAME"; touch "$OUT/.down-$VM_NAME"
     jq -nc --arg f "$fam" --arg vm "$VM_NAME" --arg m "$VM_MACHINE" --arg p "$VM_PROV" --arg d "$VM_DPH" '{family: $f, vm: $vm, machine: $m, provisioning: $p, usd_per_hr: ($d|tonumber), dry_run: true}' >"$dir/results.json"
     return 0
   fi
   local rc=0
-  if timings="$(vm_wait "$VM_NAME" "$VM_IP")"; then
+  if timings="$(vm_wait "$VM_NAME" "$VM_IP" "$VM_URL")"; then
     [[ "$(secrets_mode)" == metadata ]] && vm_scrub_secrets "$VM_NAME"
-    FV_GCP_ENCODE_BENCH="$bench" run_family_checks "$fam" "$VM_NAME" "$VM_IP" "$VM_KEY" "$dir" || rc=1
+    FV_GCP_ENCODE_BENCH="$bench" run_family_checks "$fam" "$VM_NAME" "$VM_URL" "$VM_KEY" "$dir" || rc=1
   else
     timings='{"error": "not ready"}'; rc=1
   fi

@@ -1,16 +1,28 @@
 # fv-serve on a Google Cloud GPU VM (scripts/gcp/vm.sh, docs/serve/deploy-gcp.md):
-# h3-turbo (FastH3 4-step VSA). One family per VM, one GPU.
+# h3-turbo (FastH3 4-step VSA). One family per VM, one GPU. The [[models]]
+# and [protocols] repeat configs/serve/runpod.toml (a test keeps them equal:
+# crates/fastvideo-serve/tests/e2e.rs gcp_configs_*).
 #
-# vm.sh ships this file as instance metadata and mounts it into the pinned
-# serve image, so a config change needs no image rebuild. The weights are a
-# read-only Hyperdisk ML volume at /workspace (FV_WEIGHTS=/workspace/weights);
-# state lives on the boot disk (/fvstate). Secrets come from the environment
-# only (Secret Manager or instance metadata, never this file); with the
-# FV_CF_* / FV_D1_* / FV_R2_* set present, `auto` selects D1 jobs + R2 media.
+# vm.sh ships this file as instance metadata and the startup script mounts it
+# into the pinned serve image, so a config change needs no image rebuild. The
+# weights are a read-only Hyperdisk ML volume at /workspace
+# (FV_WEIGHTS=/workspace/weights); state lives on the boot disk (/fvstate).
+# Secrets come from the environment only (Secret Manager or instance
+# metadata, never this file); with the FV_CF_* / FV_D1_* / FV_R2_* set
+# present, `auto` selects D1 jobs + R2 media.
+#
+# Roles (set by vm.sh through the environment, not here):
+#   vm.sh up      standalone: FV_API_KEYS (the run key's SHA-256)
+#   vm.sh worker  a family Durable Object worker, like a Runpod or CloudRift
+#                 one: FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN,
+#                 FV_DISPATCH_DO_URL, FV_DISPATCH_FAMILIES=h3,
+#                 FV_DISPATCH_DIRECT_UPLOAD=1 (docs/serve/dispatch-do-family.md);
+#                 plus FV_WORKER_DIRECT=1, FV_ADMIN_TOKEN and FV_KEY_STORE=d1
+#                 for a gateway-less cluster (docs/control/gateway-less-auth.md).
 #
 # WebRTC: the VM has a public IP and runs the container on the host network,
-# so the ICE ports are real ports (vm.sh opens them to FV_GCP_SOURCE_CIDR);
-# FV_PUBLIC_IP (from the metadata server) is the advertised address.
+# so the ICE ports are real ports (vm.sh opens them in the VM's firewall
+# rule); FV_PUBLIC_IP (from the metadata server) is the advertised address.
 
 [server]
 bind = "0.0.0.0:8000"
@@ -41,6 +53,8 @@ weights = "${FV_WEIGHTS}/h3-base"
 resident = true
 served_names = ["fasth3"]
 continuity = "anchor-last-frame"
+i2v_encoder = "auto"
+warmup = true
 
 [aliases]
 "MiniMax-H3" = "fasth3"
@@ -55,7 +69,11 @@ fal_director = true
 ltx = false
 reactor = true
 native = true
-fal_apps = ["minimax/h3-turbo"]
+
+# Director sessions: 5 s chunks unless the session asks for 10 s
+# (docs/serve/director-chunks.md; the fv-serve default, stated here).
+[director]
+chunk_seconds = 5.0
 
 [webrtc]
 udp_port = 40010

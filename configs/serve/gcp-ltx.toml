@@ -1,6 +1,7 @@
-# fv-serve on a Google Cloud GPU VM: ltx-turbo (LTX-2.5 distilled two-stage,
-# Sol stage 2). Layout, secrets and ports as in gcp-h3-turbo.toml. The fal
-# app id's last segment names the served model.
+# fv-serve on a Google Cloud GPU VM: ltx (LTX-2.5 distilled two-stage, Sol
+# stage 2: the ltx-turbo tier). Layout, roles, secrets and ports as in
+# gcp-h3-turbo.toml; [[models]] and [protocols] as in runpod-ltx.toml.
+# Family Durable Object: ltx.
 
 [server]
 bind = "0.0.0.0:8000"
@@ -39,7 +40,10 @@ fal_director = true
 ltx = true
 reactor = true
 native = true
-fal_apps = ["fastvideo/ltx25-distill-sol"]
+fal_apps = ["fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3"]
+
+[director]
+chunk_seconds = 5.0
 
 [webrtc]
 udp_port = 40010

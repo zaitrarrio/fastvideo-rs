@@ -6,12 +6,17 @@
 # Role (metadata `fv-role`):
 #   serve     NVIDIA driver check (>= 580), NVENC library, Docker + NVIDIA
 #             container toolkit; mount the weight disk read-only at
-#             /mnt/fvw; verify-weights.sh for `fv-verify-cells`; run
-#             `fv-image` with --gpus all on the host network with the
-#             `fv-config` TOML; mirror the container log to the serial
-#             console (that is where the admin-token banner is read); then,
-#             when `fv-encode-bench` = 1, wait for `fv-encode-bench-src` and
-#             run the NVENC vs x264 comparison on that clip.
+#             /mnt/fvw; verify-weights.sh (shipped as metadata, run on the
+#             host: the per-variant serve images carry no scripts) for
+#             `fv-verify-cells`; run `fv-image` with --gpus all on the host
+#             network with the `fv-config` TOML and the `fv-env` environment
+#             (standalone, or a family Durable Object worker); with `fv-tls`
+#             = sslip, Caddy terminates TLS on 443 for <ip>.sslip.io; mirror
+#             the container log to the serial console (that is where the
+#             admin-token banner is read); an idle watchdog deletes the VM
+#             after `fv-idle-s` at 0 % GPU; then, when `fv-encode-bench` = 1,
+#             wait for `fv-encode-bench-src` and run the NVENC vs x264
+#             comparison on that clip.
 #   populate  (CPU VM) format + mount the work disk read-write, download the
 #             `fv-trees` rows from the Hugging Face Hub at their revisions,
 #             the auxiliary/ files (pinned URL + SHA-256) and MMAudio, run
@@ -107,18 +112,68 @@ mount_disk() {
   say "DISK $1 mounted $mode at /mnt/fvw ($(df -h /mnt/fvw | awk 'NR==2{print $3" used of "$2}'))"
 }
 
-# verify <cells...>: verify-weights.sh from the metadata copy (populate) or
-# from the image (serve/quantize).
+# The verify scripts and their tables from metadata into /opt/fv/scripts
+# (verify-weights.sh reads the manifest and weights-sha256.tsv next to itself).
+install_scripts() {
+  mkdir -p /opt/fv/scripts
+  attr fv-script-verify-weights >/opt/fv/scripts/verify-weights.sh || return 1
+  attr fv-script-verify-safetensors >/opt/fv/scripts/verify-safetensors.sh || return 1
+  attr fv-manifest >/opt/fv/scripts/weights-manifest.tsv || return 1
+  attr fv-sha256 >/opt/fv/scripts/weights-sha256.tsv || true
+  chmod +x /opt/fv/scripts/*.sh
+}
+
+# verify <cells...>: verify-weights.sh on the host against /mnt/fvw/weights.
 verify_cells() {
   local out rc
-  if [[ -n "$IMAGE" ]] && command -v docker >/dev/null; then
-    out="$(docker run --rm --entrypoint bash -e FV_WEIGHTS=/workspace/weights -v /mnt/fvw:/workspace:ro "$IMAGE" \
-      /opt/fastvideo-rs/scripts/gpu/verify-weights.sh "$@" 2>&1)"; rc=$?
-  else
-    out="$(FV_WEIGHTS=/mnt/fvw/weights bash /opt/fv/scripts/verify-weights.sh "$@" 2>&1)"; rc=$?
-  fi
+  [[ -f /opt/fv/scripts/verify-weights.sh ]] || install_scripts || { say "verify scripts missing from metadata"; return 1; }
+  out="$(FV_WEIGHTS=/mnt/fvw/weights bash /opt/fv/scripts/verify-weights.sh "$@" 2>&1)"; rc=$?
   printf '%s\n' "$out" | sed 's/^/FV-GCP verify: /' >/dev/ttyS0 2>/dev/null || true
   return $rc
+}
+
+# The VM's own access token (metadata server) on stdout.
+vm_token() { md instance/service-accounts/default/token | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'; }
+
+# Delete this VM through the Compute API (its service account needs
+# compute.instances.delete on itself); power off when refused, so the GPU
+# stops billing and `vm.sh reap` deletes the stopped VM.
+self_delete() {
+  local why="$1" project zone name tok
+  say "SELF-DELETE ($why)"
+  project="$(md project/project-id)"; zone="$(md instance/zone | awk -F/ '{print $NF}')"; name="$(md instance/name)"
+  tok="$(vm_token 2>/dev/null || true)"
+  if [[ -n "$tok" ]] && curl -sf --max-time 30 -X DELETE -K <(printf 'header = "Authorization: Bearer %s"\n' "$tok") \
+      "https://compute.googleapis.com/compute/v1/projects/$project/zones/$zone/instances/$name" >/dev/null; then
+    say "SELF-DELETE requested"; sleep 120
+  fi
+  say "SELF-DELETE refused or slow: powering off (reap deletes stopped VMs)"
+  sync; poweroff
+}
+
+# Idle watchdog: `fv-idle-s` seconds at 0 % GPU -> self_delete. 0 = off.
+idle_watchdog() {
+  local limit idle=0 u
+  limit="$(attr fv-idle-s || echo 1800)"
+  if ! [[ "$limit" =~ ^[0-9]+$ ]] || (( limit == 0 )); then say "idle watchdog off"; return 0; fi
+  say "idle watchdog: delete after ${limit}s at 0% GPU"
+  while sleep 30; do
+    u="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    if [[ "${u:-0}" == 0 ]]; then idle=$((idle + 30)); else idle=0; fi
+    if (( idle >= limit )); then self_delete "idle ${idle}s at 0% GPU"; return; fi
+  done
+}
+
+# TLS in front of fv-serve: Caddy with a Let's Encrypt certificate for
+# <dashed-ip>.sslip.io (a public wildcard DNS name for any IP), reverse proxy
+# to 127.0.0.1:8000. Prints the public base URL. UNVERIFIED live.
+tls_front() {
+  local ip="$1" host image
+  host="${ip//./-}.sslip.io"
+  image="$(attr fv-caddy-image || echo caddy:2)"
+  docker run -d --name fv-tls --restart unless-stopped --network host -v /var/lib/fv-caddy:/data "$image" \
+    caddy reverse-proxy --from "$host" --to 127.0.0.1:8000 >/dev/null || { say "WARNING: Caddy did not start (TLS off)"; return 1; }
+  echo "https://$host"
 }
 
 # Secrets into a mode-600 env file: Secret Manager (lower-case ids, the
@@ -163,14 +218,17 @@ role_serve() {
   fi
   install -d -m 700 /etc/fv-gcp /var/lib/fvstate
   attr fv-config >/etc/fv-gcp/serve.toml || fail "no fv-config metadata"
-  local env=/etc/fv-gcp/env ip
+  local env=/etc/fv-gcp/env ip base
   ( umask 077; : >"$env" )
   ip="$(md instance/network-interfaces/0/access-configs/0/external-ip)"
+  base="http://$ip:8000"
+  if [[ "$(attr fv-tls || echo none)" == sslip ]]; then base="$(tls_front "$ip")" || base="http://$ip:8000"; fi
   attr fv-env | python3 -c 'import json,sys
 for k, v in json.load(sys.stdin).items(): print(f"{k}={v}")' >>"$env"
   {
     echo "FV_PUBLIC_IP=$ip"
-    echo "FV_PUBLIC_BASE_URL=http://$ip:8000"
+    echo "FV_PUBLIC_BASE_URL=$base"
+    echo "FV_WORKER_ID=gce-$(md instance/name)"
     echo "NVIDIA_DRIVER_CAPABILITIES=compute,utility,video"
   } >>"$env"
   write_secret_env "$env"
@@ -182,7 +240,10 @@ for k, v in json.load(sys.stdin).items(): print(f"{k}={v}")' >>"$env"
   # The container log (including the one-time admin-token banner) goes to
   # the serial console; read it with `vm.sh ssh-free-logs <vm> --banner`.
   systemd-run --unit fv-serial-log --collect bash -c 'docker logs -f fv-serve 2>&1 | sed -u "s/^/fv-serve: /" >/dev/ttyS0' >/dev/null
-  say "STARTED fv-serve in $((SECONDS - t0))s public=http://$ip:8000"
+  say "STARTED fv-serve in $((SECONDS - t0))s public=$base role=$(grep -q '^FV_SERVE_ROLE=worker' "$env" && echo worker || echo standalone)"
+  # Its own unit: the guest agent's startup-script unit may stop leftover children.
+  systemd-run --unit fv-idle --collect bash -c "MD=$MD; $(declare -f md attr say self_delete vm_token idle_watchdog); idle_watchdog" >/dev/null \
+    || say "WARNING: idle watchdog not started"
   for _ in $(seq 1 1440); do
     if [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/ping)" == 200 ]]; then
       say "READY after $(( $(date +%s) - $(cat "$STAMP/started") ))s from boot"; break
@@ -250,9 +311,7 @@ encode_bench_loop() {
 role_populate() {
   mount_disk fv-work rw
   mkdir -p /opt/fv/scripts /mnt/fvw/weights
-  attr fv-script-verify-weights >/opt/fv/scripts/verify-weights.sh
-  attr fv-script-verify-safetensors >/opt/fv/scripts/verify-safetensors.sh
-  attr fv-manifest >/opt/fv/scripts/weights-manifest.tsv
+  install_scripts || fail "verify scripts missing from metadata"
   attr fv-mmaudio-py >/opt/fv/scripts/fetch-mmaudio.py
   say "installing python venv + huggingface_hub"
   apt_quiet update
@@ -296,7 +355,7 @@ role_populate() {
   done < <(grep -E '^auxiliary/' /opt/fv/scripts/weights-manifest.tsv)
   for d in /mnt/fvw/weights/auxiliary/*/; do [[ -d "$d" ]] && date +%s >"$d/.complete"; done
   # MMAudio: three repos + safetensors conversion (fetch-mmaudio.py; CPU torch).
-  if [[ "$(attr fv-mmaudio || echo 1)" == 1 && ! -f /mnt/fvw/weights/mmaudio-44k-v2/.complete ]]; then
+  if [[ "$(attr fv-mmaudio || echo 0)" == 1 && ! -f /mnt/fvw/weights/mmaudio-44k-v2/.complete ]]; then
     say "MMAUDIO fetch + convert"
     /opt/fv/venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu >>/var/log/fv-pip.log 2>&1
     mkdir -p /var/log/fv-mmaudio

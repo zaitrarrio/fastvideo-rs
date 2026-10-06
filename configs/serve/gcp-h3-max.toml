@@ -1,5 +1,6 @@
 # fv-serve on a Google Cloud GPU VM: h3-max (Sol-H3 tau ladder). Layout,
-# secrets and ports as in gcp-h3-turbo.toml.
+# roles, secrets and ports as in gcp-h3-turbo.toml; [[models]] and
+# [protocols] as in runpod-h3-max.toml. Family Durable Object: h3.
 
 [server]
 bind = "0.0.0.0:8000"
@@ -28,9 +29,10 @@ family = "h3"
 recipe = "h3-max"
 weights = "${FV_WEIGHTS}/h3-base"
 resident = true
+i2v_encoder = "auto"
+warmup = true
 
 [aliases]
-"MiniMax-H3" = "sol-h3"
 "MiniMax-H3-Max" = "sol-h3"
 
 [protocols]
@@ -42,7 +44,9 @@ fal_director = true
 ltx = false
 reactor = true
 native = true
-fal_apps = ["minimax/h3-max"]
+
+[director]
+chunk_seconds = 5.0
 
 [webrtc]
 udp_port = 40010

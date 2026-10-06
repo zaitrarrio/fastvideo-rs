@@ -15,9 +15,10 @@ source "$GCP_LIB_DIR/../gpu/lib.sh"
 source "$GCP_LIB_DIR/auth.sh"
 
 DRY="${FV_GCP_DRY_RUN:-0}"
-COMPUTE="https://compute.googleapis.com/compute/v1"
-STORAGE="https://storage.googleapis.com/storage/v1"
-SECRETS_API="https://secretmanager.googleapis.com/v1"
+# API bases: overridable for scripts/gcp/tests (a local mock of the APIs).
+COMPUTE="${FV_GCP_COMPUTE_API:-https://compute.googleapis.com/compute/v1}"
+STORAGE="${FV_GCP_STORAGE_API:-https://storage.googleapis.com/storage/v1}"
+SECRETS_API="${FV_GCP_SECRETS_API:-https://secretmanager.googleapis.com/v1}"
 
 if [[ "$DRY" == 1 ]]; then
   PROJECT="${GCP_PROJECT:-$( (gcp_project 2>/dev/null) || true)}"
@@ -25,7 +26,10 @@ if [[ "$DRY" == 1 ]]; then
 else
   PROJECT="${GCP_PROJECT:-}"
 fi
-REGION="${GCP_REGION:-us-central1}"
+# EU by default (the deployment is EU-only since 2026-10-06, CLAUDE.md, and the
+# family Durable Objects live in `weur`): europe-west4-b offers G4 (RTX PRO
+# 6000), A3 High (H100) and G2 (L4) (docs/serve/deploy-gcp.md, Regions).
+REGION="${GCP_REGION:-europe-west4}"
 ZONE="${GCP_ZONE:-${REGION}-b}"
 [[ "$ZONE" == "$REGION"-* ]] || REGION="${ZONE%-*}"
 NETWORK="${FV_GCP_NETWORK:-default}"
@@ -35,6 +39,22 @@ NETWORK="${FV_GCP_NETWORK:-default}"
 FV_OWNER_LABEL="fastvideo-rs"
 GCP_LEDGER="${FV_GCP_LEDGER:-$FV_ROOT/artifacts/gcp/ledger.tsv}"
 GCP_OUT="${FV_GCP_OUT:-$FV_ROOT/artifacts/gcp}"
+GCP_FAMILIES_TSV="$GCP_LIB_DIR/families.tsv"
+
+# gcp_family <family> <column>: a field of scripts/gcp/families.tsv ('-' is
+# printed empty); fails for an unknown family. Columns: config runpod_twin
+# dispatch_family verify_cells weight_trees machine fal_app minimax_model
+# served reactor_mode.
+gcp_family() {
+  local col
+  case "$2" in
+    config) col=2 ;; runpod_twin) col=3 ;; dispatch_family) col=4 ;; verify_cells) col=5 ;;
+    weight_trees) col=6 ;; machine) col=7 ;; fal_app) col=8 ;; minimax_model) col=9 ;;
+    served) col=10 ;; reactor_mode) col=11 ;; *) return 2 ;;
+  esac
+  awk -F'\t' -v f="$1" -v c="$col" '$1 == f { v = $c; found = 1; if (v == "-") v = ""; print v; exit } END { exit !found }' "$GCP_FAMILIES_TSV"
+}
+gcp_families() { awk -F'\t' '!/^#/ && NF > 1 { print $1 }' "$GCP_FAMILIES_TSV"; }
 
 # The Ubuntu accelerator image ships the NVIDIA R580 driver (>= 580.95.05, the
 # minimum Compute Engine lists for G4, A3 High and G2 with CUDA 13). DLVM
@@ -63,7 +83,7 @@ gcp_redact() {
       then .payload.data = "<redacted>"
       else . end)
     | (if (.metadata.items? // null) != null then
-        .metadata.items |= map(if .key == "startup-script" or (.key|startswith("fv-script-")) or .key == "fv-config" or .key == "fv-mmaudio-py" or .key == "fv-manifest"
+        .metadata.items |= map(if .key == "startup-script" or (.key|startswith("fv-script-")) or .key == "fv-config" or .key == "fv-mmaudio-py" or .key == "fv-manifest" or .key == "fv-sha256" or .key == "fv-trees"
           then .value = "<\(.value|length) chars: \(.value|split("\n")|.[0][0:60])...>" else . end)
       else . end)
   ' 2>/dev/null || cat
@@ -127,7 +147,8 @@ gce_wait() {
   return 1
 }
 
-# Resource labels for everything we create.
+# Resource labels for everything we create. VMs also carry fv-deadline
+# (unix seconds): `vm.sh reap` deletes ours past it (label-based reaper).
 gcp_labels() {
   local kind="$1" run="${2:-}" extra="${3:-{\}}"
   jq -nc --arg o "$FV_OWNER_LABEL" --arg k "$kind" --arg r "$run" --argjson x "$extra" \
@@ -160,18 +181,22 @@ gcp_resolve_digest() {
 
 # --- prices -------------------------------------------------------------------
 # On-demand and Spot $/hr for the whole machine (GPU + vCPU + RAM), Linux, no
-# disks. us-central1 and europe-west4, from the Cloud Billing catalog as
-# published by gcloud-compute.com (last update 2026-09-27; the official
+# disks, from the Cloud Billing catalog as published by gcloud-compute.com
+# (pages last updated 2026-10-04, read 2026-10-06; the official
 # cloud.google.com/compute/gpus-pricing page renders prices client-side and
-# could not be fetched). Spot prices move; treat them as estimates.
+# could not be read). Spot prices move; treat them as estimates.
 # machine<TAB>region<TAB>ondemand<TAB>spot
 GCP_PRICES="g4-standard-48	us-central1	4.4999	1.7716
 g4-standard-48	europe-west4	4.9499	2.2091
+g4-standard-48	europe-north1	4.9499	2.11
+g4-standard-48	europe-west1	4.9499	2.35
 g4-standard-96	us-central1	8.9999	3.5433
 a3-highgpu-1g	us-central1	11.0612	6.6203
 a3-highgpu-1g	europe-west4	14.0676	7.6891
+a3-highgpu-1g	europe-west1	12.17	7.6891
 g2-standard-8	us-central1	0.8536	0.5121
 g2-standard-8	europe-west4	0.8972	0.5383
+g2-standard-8	europe-west1	0.9399	0.547
 g2-standard-16	us-central1	1.1472	0.6882
 g2-standard-16	europe-west4	1.2058	0.7234
 g2-standard-24	us-central1	2.0008	1.2003
@@ -192,7 +217,8 @@ gcp_price() {
 }
 
 # Disk $/GiB-hour and throughput $/(MiB/s)-hour (us-central1 list prices,
-# cloud.google.com/compute/disks-image-pricing, fetched 2026-09-28).
+# cloud.google.com/compute/disks-image-pricing, fetched 2026-09-28; Hyperdisk
+# ML re-checked 2026-10-06). European rates are UNVERIFIED (expect ~10% more).
 GCP_HDML_GIB_HR=0.000109589
 GCP_HDML_MIBS_HR=0.000164384
 GCP_HDB_GIB_HR=0.000109589

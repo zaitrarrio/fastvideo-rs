@@ -1,6 +1,10 @@
-# fv-serve on a Google Cloud GPU VM: wan-turbo (FastWan2.1 1.3B DMD 3-step,
-# VSA). Layout, secrets and ports as in gcp-h3-turbo.toml. The fal app id's
-# last segment names the served model. Small enough for an L4 (G2).
+# fv-serve on a Google Cloud GPU VM: wan (FastWan2.1 1.3B DMD 3-step, VSA).
+# Layout, roles, secrets and ports as in gcp-h3-turbo.toml; [[models]] and
+# [protocols] as in runpod-wan.toml. Family Durable Object: wan. Small
+# enough for an L4 (G2): FV_GCP_MACHINE_WAN=g2-standard-16.
+#
+# Not the `wan-turbo` tier: since the 5B FastWan2.2 became wan-turbo
+# (runpod-wan5b.toml), this model is named by its catalog id.
 
 [server]
 bind = "0.0.0.0:8000"
@@ -26,14 +30,12 @@ post_encoder = "auto"
 [[models]]
 id = "fastwan21-1.3b"
 family = "wan"
-recipe = "wan-turbo"
+recipe = "fastwan21-1.3b"
 weights = "${FV_WEIGHTS}/fastwan21-1.3b"
 resident = true
 
-[aliases]
-"fastwan-1.3b" = "fastwan21-1.3b"
-
 [protocols]
+fal_apps = ["fastvideo/fastwan21-1.3b"]
 openai_videos = true
 fastwan = true
 minimax = true
@@ -42,7 +44,9 @@ fal_director = true
 ltx = false
 reactor = true
 native = true
-fal_apps = ["fastvideo/fastwan21-1.3b"]
+
+[director]
+chunk_seconds = 5.0
 
 [webrtc]
 udp_port = 40010
