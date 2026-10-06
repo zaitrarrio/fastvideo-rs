@@ -321,19 +321,37 @@ impl Cosmos3Transformer {
     /// Run the text tower over `ids` (positions `0..L` on all axes) and keep
     /// each layer's rotated keys and values. `map` supplies streamed layers.
     pub fn und_cache(&self, map: &WeightMap, ids: &[u32]) -> Result<UndCache> {
+        Ok(self.und_caches(map, &[ids])?.remove(0))
+    }
+
+    /// [`Self::und_cache`] for several prompts (cond and uncond) in one pass
+    /// over the layers, so a streamed text tower is read once per request.
+    pub fn und_caches(&self, map: &WeightMap, prompts: &[&[u32]]) -> Result<Vec<UndCache>> {
         let cfg = &self.cfg;
-        let l = ids.len();
-        if l == 0 {
-            return Err(msg("cosmos3: empty prompt"));
+        struct Run {
+            x: CudaTensor,
+            cos: CudaTensor,
+            sin: CudaTensor,
+            mask: CudaTensor,
+            layers: Vec<(CudaTensor, CudaTensor)>,
         }
-        let mut x = embed_rows(map, "embed_tokens.weight", ids, cfg.vocab_size, cfg.hidden_size)?;
-        let (pos, _) = fastvideo_models::cosmos3::rope::text_positions(l);
-        let (c, s) = rope_tables(cfg, &pos);
-        let cos = pinned(&c, &[l, cfg.head_dim])?;
-        let sin = pinned(&s, &[l, cfg.head_dim])?;
-        let mask = causal_mask(l)?;
+        let mut runs = Vec::with_capacity(prompts.len());
+        for ids in prompts {
+            let l = ids.len();
+            if l == 0 {
+                return Err(msg("cosmos3: empty prompt"));
+            }
+            let (pos, _) = fastvideo_models::cosmos3::rope::text_positions(l);
+            let (c, s) = rope_tables(cfg, &pos);
+            runs.push(Run {
+                x: embed_rows(map, "embed_tokens.weight", ids, cfg.vocab_size, cfg.hidden_size)?,
+                cos: pinned(&c, &[l, cfg.head_dim])?,
+                sin: pinned(&s, &[l, cfg.head_dim])?,
+                mask: causal_mask(l)?,
+                layers: Vec::with_capacity(cfg.num_layers),
+            });
+        }
         let scale = (cfg.head_dim as f32).powf(-0.5);
-        let mut layers = Vec::with_capacity(cfg.num_layers);
         for i in 0..cfg.num_layers {
             let streamed;
             let layer = match &self.und {
@@ -343,18 +361,30 @@ impl Cosmos3Transformer {
                     &streamed
                 }
             };
-            let xn = x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
-            let (q, k, v) = layer.qkv(&xn, cfg, &cos, &sin)?;
             let last = i + 1 == cfg.num_layers;
-            if !last {
-                let a = crate::llm::attn::scaled_dot_product_attention_gqa(&q, &k, &v, Some(scale), Some(&mask))?;
-                x = x.add(&layer.out.forward(&a.merge_heads()?)?)?;
-                let xn = x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
-                x = x.add(&layer.mlp.forward(&xn)?)?;
+            for run in &mut runs {
+                let xn = run.x.rms_norm(&layer.ln_in, cfg.rms_norm_eps)?;
+                let (q, k, v) = layer.qkv(&xn, cfg, &run.cos, &run.sin)?;
+                if !last {
+                    let a = crate::llm::attn::scaled_dot_product_attention_gqa(
+                        &q,
+                        &k,
+                        &v,
+                        Some(scale),
+                        Some(&run.mask),
+                    )?;
+                    run.x = run.x.add(&layer.out.forward(&a.merge_heads()?)?)?;
+                    let xn = run.x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
+                    run.x = run.x.add(&layer.mlp.forward(&xn)?)?;
+                }
+                run.layers.push((k, v));
             }
-            layers.push((k, v));
         }
-        Ok(UndCache { len: l, layers })
+        Ok(runs
+            .into_iter()
+            .zip(prompts)
+            .map(|(r, ids)| UndCache { len: ids.len(), layers: r.layers })
+            .collect())
     }
 
     /// Gen-tower velocity for `latents` `[1, C, T, H, W]` (DiT latent space)
@@ -584,6 +614,23 @@ mod tests {
             max = max.max((a - b).abs());
         }
         assert!(max < 2e-4, "max |rust - numpy| = {max}");
+    }
+
+    #[test]
+    fn batched_text_passes_equal_single_passes() {
+        let cfg = Cosmos3TransformerConfig::tiny();
+        let map = WeightMap::generated(seeded);
+        let dit = Cosmos3Transformer::load(cfg, &map, false).unwrap();
+        let (a, b): (&[u32], &[u32]) = (&[1, 2, 3], &[9, 8, 7, 6, 5]);
+        let both = dit.und_caches(&map, &[a, b]).unwrap();
+        for (ids, got) in [a, b].iter().zip(&both) {
+            let one = dit.und_cache(&map, ids).unwrap();
+            assert_eq!(got.len, ids.len());
+            for ((k1, v1), (k2, v2)) in one.layers.iter().zip(&got.layers) {
+                assert_eq!(k1.host_cow().unwrap(), k2.host_cow().unwrap());
+                assert_eq!(v1.host_cow().unwrap(), v2.host_cow().unwrap());
+            }
+        }
     }
 
     #[test]

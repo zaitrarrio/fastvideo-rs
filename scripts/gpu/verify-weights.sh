@@ -16,6 +16,7 @@
 #                                      ltx25-dev ltx25-a2v-guided ltx2
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
 #                                      longlive-plug
+#                                      lingbot-moe cosmos3-super (proposed trees, not on a volume yet)
 #                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
@@ -122,6 +123,15 @@ needs() {
     # The six LongLive-Plug LoRA trees. Plus their sha: lists.
     longlive-plug)
       echo "longlive-plug:minimax-h3-few-step longlive-plug:minimax-h3-cfg longlive-plug:wan21-t2v-14b-few-step longlive-plug:wan21-t2v-14b-cfg longlive-plug:wan22-ti2v-5b-few-step longlive-plug:wan22-ti2v-5b-cfg" ;;
+    # LingBot-Video MoE 30B-A3B: base + 1080p refiner DiTs, Qwen3-VL, Wan 2.1 VAE
+    # (weights-manifest.tsv lingbot-video-moe-30b-a3b; docs/ports/lingbot.md).
+    lingbot-moe)
+      local l=lingbot-video-moe-30b-a3b
+      echo "$l:transformer $l:refiner $l:text_encoder $l:processor $l:vae $l:scheduler" ;;
+    # Cosmos3-Super 64B T2V: the MoT transformer, Wan 2.2 VAE, Qwen2 tokenizer
+    # (weights-manifest.tsv cosmos3-super; docs/ports/cosmos3.md).
+    cosmos3-super)
+      echo "cosmos3-super:transformer cosmos3-super:vae cosmos3-super:text_tokenizer cosmos3-super:scheduler" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     upscalers) echo "upscalers" ;;
@@ -131,7 +141,8 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
-  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug)
+  ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
+  lingbot-moe cosmos3-super)
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {

@@ -220,9 +220,9 @@ SANA image and video family and is not implemented here.
 | LTX-2.5 | Ancestral stage 1. Stage-2 and Spark refiner are deterministic Euler (`denoise_cfg` / `denoise`), not ancestral. Stage-2 Sol-Attn: layer 0 dense, layers 1–47 at tau 1 / 1.25 / 1.5. LoRA 0.8 on the **dev** BF16 DiT only — distilled two-stage does not fuse. GB200 first-block cache when `FASTVIDEO_LTX2_FBCACHE=1` (threshold 0.08, warmup 1, max 10 skips, **stage 1 only**; stage 2 / refiner stay disarmed) |
 | LTX-2.5 refiner / Spark | H3×2 upscaler, H3-to-LTX adapter, `encode_audio`, 3-step deterministic joint refine, original PCM muxed |
 | MiniMax-H3 Spark and RTX | 4-step `sol-h3` is Spark Sol-Attn (update 0 dense; later updates layer 0 dense + tau 1 / 1.25 / 1.5). `sol-h3-spark` is VSA 0.9 + Sol-Attn Off. RTX route (`sol-h3-rtx` / `FASTVIDEO_H3_SOL_ATTN=rtx`): first 10 steps and first 2 layers dense, tau 1.0, 49 forwards. `FASTVIDEO_H3_SOL_CACHE=teacache` is the RTX residual controller (threshold 0.10, retain 5, cooldown 1) |
-| Cosmos3-Super | Canvas and TeaCache (threshold 1.15, start step 10, max 3). `fp4_linear` names the middle steps. Those linears are not quantized |
+| Cosmos3-Super | 64B MoT T2V port (`cosmos3`, docs/ports/cosmos3.md): text-tower K/V cached per prompt, gen tower per step, Hub UniPC Karras schedule. TeaCache (threshold 1.15, start step 10, max 3) on the gen stack; precision arm is `FASTVIDEO_FP8` W8A8, not NVFP4. `fv-gpucheck sol cosmos3-gen`; not in the CLI registry. Not GPU-run |
 | HunyuanVideo | Official canvas only. The profile's TeaCache is HunyuanVideo-13B and is not applied |
-| LingBot | Official base canvas only. Cache, PISA, and topology stay dense: the profile names them and does not specify the algorithms |
+| LingBot | MoE 30B-A3B per the Hub config, base + 1080p refiner (docs/ports/lingbot.md). `FASTVIDEO_LINGBOT_SOL=fullopt`: EasyCache (base 0.08 / refiner 0.25) + refiner PISA 0.10, layers 0–3 and refiner steps 0, 1, last dense. CP4 / FSDP topology not reproduced. Not GPU-run |
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
 
 4-step `sol-h3` uses Spark Sol-Attn, not the RTX first-10-dense window (that

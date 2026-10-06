@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -3013,6 +3013,43 @@ Audio: male speech, clear voice, quiet room"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.
     rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
+    ;;
+  sol-lingbot)
+    # LingBot-Video MoE 30B-A3B vs sol-engine models/lingbot_video.toml
+    # (docs/ports/lingbot.md "Comparison"): base 832x480x121 / 40 steps,
+    # 1920x1088 refiner / 8 steps, guidance 3, seed 42, the three
+    # t2v_val3 prompts. Published (4x GB200): baseline 375.53 s, fullopt
+    # 144.36 s. FV_LINGBOT_RESIDENCY: swap (96 GB cards, default) or both
+    # (B200). FV_LINGBOT_PROMPTS: prompts per arm (default 3).
+    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
+    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-14400}"
+    run_cell lingbot-router "$BIN" --mode fast sol lingbot-router
+    for arm in ${FV_LINGBOT_ARMS:-baseline fullopt}; do
+      gated_cell "lingbot-$arm" lingbot-moe \
+        "$BIN" --mode fast sol lingbot-gen --weights "$W/lingbot-video-moe-30b-a3b" \
+          --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts "${FV_LINGBOT_PROMPTS:-3}" \
+          --arm "$arm" --residency "${FV_LINGBOT_RESIDENCY:-swap}" --seed 42 \
+          --clip "$RUNS/lingbot-$arm/clips"
+    done
+    ;;
+  sol-cosmos3)
+    # Cosmos3-Super 64B T2V vs sol-engine models/cosmos3.toml (docs/ports/cosmos3.md
+    # "Comparison"): 1280x720x189, 35 steps, guidance 6, seed 42, one warmup
+    # request (WARMUP=true). Published (4x GB200): baseline 130.41 s, fullopt
+    # 2.26x. FASTVIDEO_COSMOS3_UND=resident keeps the text tower on the GPU
+    # (B200); unset streams it per prompt (96 GB cards).
+    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
+    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-10800}"
+    c3=(--weights "$W/cosmos3-super" --prompt "$(cat "$SOL_IN/cosmos3-default.txt")"
+      --negative-prompt "$(cat "$SOL_IN/cosmos3-negative.txt")" --seed 42 --warm)
+    for arm in ${FV_COSMOS3_ARMS:-baseline teacache teacache-fp8}; do
+      case "$arm" in
+        teacache-fp8) gated_cell "cosmos3-$arm" cosmos3-super env FASTVIDEO_FP8=1 \
+          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm teacache --clip "$RUNS/cosmos3-$arm/clip" ;;
+        *) gated_cell "cosmos3-$arm" cosmos3-super \
+          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm "$arm" --clip "$RUNS/cosmos3-$arm/clip" ;;
+      esac
+    done
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

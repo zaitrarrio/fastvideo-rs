@@ -169,13 +169,18 @@ impl Cosmos3Pipeline {
         let cond_ids = prompt::token_ids(&tok, &request.prompt, false, f, h, w, fps).map_err(msg)?;
         let do_cfg = request.guidance_scale > 1.0;
         let neg = request.negative_prompt.as_deref().unwrap_or("");
-        let cond = dit.und_cache(&self.map, &cond_ids)?;
-        let uncond = if do_cfg {
-            let ids = prompt::token_ids(&tok, neg, true, f, h, w, fps).map_err(msg)?;
-            Some(dit.und_cache(&self.map, &ids)?)
+        let uncond_ids = if do_cfg {
+            Some(prompt::token_ids(&tok, neg, true, f, h, w, fps).map_err(msg)?)
         } else {
             None
         };
+        let mut lists: Vec<&[u32]> = vec![&cond_ids];
+        if let Some(u) = &uncond_ids {
+            lists.push(u);
+        }
+        let mut caches = dit.und_caches(&self.map, &lists)?;
+        let uncond = if do_cfg { caches.pop() } else { None };
+        let cond = caches.pop().ok_or_else(|| msg("cosmos3: no text cache"))?;
         timing.und_tokens_cond = cond.len;
         timing.und_tokens_uncond = uncond.as_ref().map_or(0, |u| u.len);
         timing.text_tower_s = t.elapsed().as_secs_f64();

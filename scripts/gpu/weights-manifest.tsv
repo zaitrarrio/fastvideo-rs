@@ -71,3 +71,11 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+# PROPOSED (2026-10-06, not on any volume; large download needs the owner's approval, CLAUDE.md). Sol-engine
+# comparison trees (docs/ports/lingbot.md, docs/ports/cosmos3.md). Fetch with fetch-hub-tree.sh <dest> <revision>:
+#   lingbot-video-moe-30b-a3b @ f2e538f64afe00cc4ae674db2aeb52e2945edfd5, Apache-2.0, 129.95 GB
+#     (transformer 60.27 + refiner 60.27 + text_encoder 8.89 + vae 0.51 + processor/scheduler 0.01)
+#   cosmos3-super @ f543c56225b2e04d0ad141e29655be3a45d9c455, OpenMDW 1.1, 129.47 GB
+#     (transformer 128.04 + vae 1.41 + text_tokenizer 0.02; sound_tokenizer / vision_encoder / assets not needed for T2V)
+lingbot-video-moe-30b-a3b	robbyant/lingbot-video-moe-30b-a3b	model_index.json scheduler/* transformer/* refiner/* text_encoder/* processor/* vae/*
+cosmos3-super	nvidia/Cosmos3-Super	model_index.json scheduler/* transformer/* vae/* text_tokenizer/*
