@@ -82,7 +82,7 @@ VCPUS_FALLBACK="${FV_BUILD_VCPUS_FALLBACK-16}"   # "" disables
 # ffmpeg, Node/Playwright/Chromium. The tag is a content hash of its inputs;
 # `bash scripts/dev/build-base-tag.sh --pin` updates it, and the
 # build-base-image workflow pushes the image and checks this pin.
-BASE_IMAGE_TAG="bb-3253a535c0b2586a"
+BASE_IMAGE_TAG="bb-d872f7724765429b"
 IMAGE="${FV_BUILD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-build-base:$BASE_IMAGE_TAG}"
 DISK_GB="${FV_BUILD_CONTAINER_GB:-200}"
 # Runpod caps the container disk by size: 16-vCPU cpu3c/cpu3g pods take at

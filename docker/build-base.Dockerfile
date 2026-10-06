@@ -73,16 +73,6 @@ RUN cd /tmp \
  && rm -f sccache.tgz mold.tgz \
  && sccache --version && mold --version
 
-# CPython 3.11 in /opt/python, first on PATH as python3 / python3.11 (apt's own
-# tools keep /usr/bin/python3, 3.10).
-RUN cd /tmp \
- && curl -fsSL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD}-x86_64-unknown-linux-gnu-install_only.tar.gz" \
- && echo "${PYTHON_SHA256}  py.tgz" | sha256sum -c - \
- && mkdir -p /opt/python && tar -xzf py.tgz -C /opt/python --strip-components=1 && rm py.tgz \
- && ln -s /opt/python/bin/python3.11 /usr/local/bin/python3 \
- && ln -s /opt/python/bin/python3.11 /usr/local/bin/python3.11 \
- && python3 -V && python3 -m venv /tmp/v && rm -rf /tmp/v
-
 # Node + Playwright + Chromium (and, through install-deps, its system libraries).
 ENV PATH=/opt/node/bin:$PATH \
     PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
@@ -96,6 +86,16 @@ RUN cd /tmp \
  && /opt/playwright/node_modules/.bin/playwright install --with-deps chromium \
  && rm -rf /var/lib/apt/lists/* /root/.npm \
  && node -e "require('playwright')"
+
+# CPython 3.11 in /opt/python, first on PATH as python3 (after every apt step:
+# apt's maintainer scripts keep Ubuntu's /usr/bin/python3, 3.10). On PATH, not
+# symlinked: a venv made through a symlink elsewhere has no working ensurepip.
+RUN cd /tmp \
+ && curl -fsSL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/cpython-${PYTHON_VERSION}%2B${PYTHON_BUILD}-x86_64-unknown-linux-gnu-install_only.tar.gz" \
+ && echo "${PYTHON_SHA256}  py.tgz" | sha256sum -c - \
+ && mkdir -p /opt/python && tar -xzf py.tgz -C /opt/python --strip-components=1 && rm py.tgz
+ENV PATH=/opt/python/bin:$PATH
+RUN python3 -V && python3 -m venv /tmp/v && /tmp/v/bin/python -m pip --version && rm -rf /tmp/v
 
 # Rust: what rust-toolchain.toml lists, at RUST_VERSION. RUSTUP_TOOLCHAIN makes
 # every cargo/rustc use it, whatever the toolchain file's channel says (no
