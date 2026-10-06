@@ -1002,6 +1002,81 @@ fn unview(x: CudaTensor, b: usize) -> Result<CudaTensor> {
     x.reshape_owned(vec![b, n, d])
 }
 
+impl super::offload::OffloadBlock for WanBlock {
+    /// Every linear, in one fixed order. Quantized, LoRA and NVFP4 linears
+    /// (and absent optional ones) stay in the skeleton.
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        for attn in [&mut self.attn1, &mut self.attn2] {
+            f(&mut attn.q_or_qkv)?;
+            if let Some(kv) = attn.kv.as_mut() {
+                f(kv)?;
+            }
+            f(&mut attn.to_out)?;
+            for extra in [&mut attn.add_k, &mut attn.add_v, &mut attn.proj_l] {
+                if let Some(l) = extra.as_mut() {
+                    f(l)?;
+                }
+            }
+        }
+        if let Some(g) = self.gate.as_mut() {
+            f(g)?;
+        }
+        f(&mut self.ffn.proj)?;
+        f(&mut self.ffn.out)
+    }
+}
+
+/// The DiT blocks, shared by the clones of one model (the device ring and
+/// the pinned host copy are per model, not per clone).
+#[derive(Clone)]
+struct WanBlocks(std::sync::Arc<super::offload::BlockWeights<WanBlock>>);
+
+impl std::fmt::Debug for WanBlocks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.describe())
+    }
+}
+
+impl std::ops::Deref for WanBlocks {
+    type Target = super::offload::BlockWeights<WanBlock>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl WanBlocks {
+    fn resident(blocks: Vec<WanBlock>) -> Self {
+        Self(std::sync::Arc::new(super::offload::BlockWeights::resident(
+            "wan dit", blocks,
+        )))
+    }
+}
+
+/// Where a Wan DiT's blocks live ([`WanTransformer3D::load_with_residency`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WanBlockResidency {
+    /// On the device for the whole run (every model before the A14B swap).
+    #[default]
+    Resident,
+    /// `FASTVIDEO_DIT_OFFLOAD=streamed`: pinned host memory, copied one
+    /// block ahead (`FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD`) of the computing one.
+    Streamed,
+    /// Pinned host memory between uses, the whole model on the device while
+    /// in use: the A14B expert that is not denoising stays parked
+    /// ([`WanTransformer3D::park`]).
+    Parked,
+}
+
+impl WanBlockResidency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Resident => "resident",
+            Self::Streamed => "streamed",
+            Self::Parked => "parked",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WanTransformer3D {
     pub cfg: WanVideoArchConfig,
@@ -1011,7 +1086,9 @@ pub struct WanTransformer3D {
     time_proj: Linear,
     text_embedder: MlpEmbed,
     image_embedder: Option<ImageEmbedder>,
-    blocks: Vec<WanBlock>,
+    /// Resident, layerwise-streamed, or parked (the A14B expert swap):
+    /// [`super::offload::BlockWeights`].
+    blocks: WanBlocks,
     proj_out: Linear,
     scale_shift_table: CudaTensor, // [1, 2, dim]
     freq_dim: usize,
@@ -1258,9 +1335,11 @@ impl WanTransformer3D {
     fn try_zeros(cfg: WanVideoArchConfig) -> Result<Self> {
         let dim = cfg.hidden_size();
         let p = cfg.patch_size;
-        let blocks = (0..cfg.num_layers)
-            .map(|_| WanBlock::zeros(&cfg))
-            .collect::<Result<Vec<_>>>()?;
+        let blocks = WanBlocks::resident(
+            (0..cfg.num_layers)
+                .map(|_| WanBlock::zeros(&cfg))
+                .collect::<Result<Vec<_>>>()?,
+        );
         Ok(Self {
             patch_weight: pinned(CudaTensor::zeros(&[dim, cfg.in_channels, p[0], p[1], p[2]]))?,
             patch_bias: pinned(CudaTensor::zeros(&[dim]))?,
@@ -1291,22 +1370,47 @@ impl WanTransformer3D {
     }
 
     pub fn from_map(cfg: WanVideoArchConfig, map: &WeightMap) -> Result<Self> {
+        Self::load_with_residency(cfg, map, WanBlockResidency::Resident)
+    }
+
+    /// [`Self::load`] with the blocks resident, streamed or parked
+    /// ([`WanBlockResidency`]). Streamed and parked blocks leave the device
+    /// as each one loads, so loading holds one block there at a time.
+    pub fn load_with_residency(
+        cfg: WanVideoArchConfig,
+        map: &WeightMap,
+        residency: WanBlockResidency,
+    ) -> Result<Self> {
         let dim = cfg.hidden_size();
         let p = cfg.patch_size;
         let plan =
             super::quant::WanQuantPlan::from_env(cfg.num_layers).map_err(TensorError::Message)?;
         plan.announce();
+        let mut weights = match residency {
+            WanBlockResidency::Resident => {
+                super::offload::BlockWeights::new("wan dit", super::offload::Residency::Resident)
+            }
+            WanBlockResidency::Streamed => {
+                super::offload::BlockWeights::new("wan dit", super::offload::Residency::Streamed)
+            }
+            WanBlockResidency::Parked => {
+                super::offload::BlockWeights::new("wan dit", super::offload::Residency::Streamed)
+                    .with_whole_ring()
+            }
+        };
         // Each block is quantized as it loads, so its bf16 weights are freed
         // before the next block's arrive.
-        let blocks = (0..cfg.num_layers)
-            .map(|i| {
-                let mut block = WanBlock::load(map, &format!("blocks.{i}"), &cfg)?;
-                if let Some(kind) = plan.block(i) {
-                    block.quantize(kind, &cfg)?;
-                }
-                Ok(block)
-            })
-            .collect::<Result<Vec<_>>>()?;
+        for i in 0..cfg.num_layers {
+            let mut block = WanBlock::load(map, &format!("blocks.{i}"), &cfg)?;
+            if let Some(kind) = plan.block(i) {
+                block.quantize(kind, &cfg)?;
+            }
+            weights.push(block)?;
+        }
+        if residency != WanBlockResidency::Resident {
+            super::log::info(format_args!("{}", weights.describe()));
+        }
+        let blocks = WanBlocks(std::sync::Arc::new(weights));
         let image_embedder = match (cfg.image_dim, cfg.added_kv_proj_dim) {
             (Some(in_dim), Some(out_dim)) => Some(ImageEmbedder::load(
                 map,
@@ -1367,6 +1471,42 @@ impl WanTransformer3D {
             time_cache: Default::default(),
             cfg,
         })
+    }
+
+    /// Where the blocks live.
+    pub fn block_residency(&self) -> WanBlockResidency {
+        if self.blocks.is_whole_ring() {
+            WanBlockResidency::Parked
+        } else if self.blocks.residency().is_streamed() {
+            WanBlockResidency::Streamed
+        } else {
+            WanBlockResidency::Resident
+        }
+    }
+
+    /// A parked model ([`WanBlockResidency::Parked`]): let its blocks' device
+    /// copy go (they stay in pinned host memory; the next forward brings
+    /// them back, block by block behind the compute). Waits for the kernels
+    /// that read them. A no-op for resident and streamed models.
+    pub fn park(&self) {
+        if self.blocks.is_whole_ring() {
+            self.blocks.release_device();
+        }
+    }
+
+    /// Whether a parked model's blocks are on the device now.
+    pub fn is_on_device(&self) -> bool {
+        !self.blocks.residency().is_streamed() || self.blocks.has_device_ring()
+    }
+
+    /// Bytes of block weight in pinned host memory (0 when resident).
+    pub fn host_block_bytes(&self) -> u64 {
+        self.blocks.host_bytes()
+    }
+
+    /// Log and reset the block-copy statistics (streamed and parked models).
+    pub fn report_offload(&self, what: &str) -> super::offload::OffloadStats {
+        self.blocks.report(what)
     }
 
     /// `[B, C, T, H, W]` → `[B, seq, dim]` via a stride-`p` conv per frame.
@@ -1606,12 +1746,10 @@ impl WanTransformer3D {
     }
 
     pub fn configure_attn_route(&self) {
-        let sol = sol_attn_requested(
-            std::env::var("FASTVIDEO_WAN_SOL_ATTN")
-                .ok()
-                .or_else(|| std::env::var("WAN22_SOL_ATTN").ok())
-                .as_deref(),
-        );
+        let sol_value = std::env::var("FASTVIDEO_WAN_SOL_ATTN")
+            .ok()
+            .or_else(|| std::env::var("WAN22_SOL_ATTN").ok());
+        let sol = sol_attn_requested(sol_value.as_deref());
         let pisa = pisa_requested(
             std::env::var("FASTVIDEO_WAN_PISA")
                 .ok()
@@ -1630,8 +1768,9 @@ impl WanTransformer3D {
             && !self.cfg.causal
             && sol
         {
-            // Wan 2.1 1.3B (T2V / FastWan / TurboWan): 30 layers, 16-channel latents.
-            WanAttnProfile::Sol13b
+            // Wan 2.1 1.3B (T2V / FastWan / TurboWan): 30 layers, 16-channel
+            // latents. `fullstack`: the base model's dense guards.
+            fastvideo_models::wan::sol::sol_13b_profile(sol_value.as_deref())
         } else {
             WanAttnProfile::Off
         };
@@ -1875,10 +2014,8 @@ impl WanTransformer3D {
             }
         }
         let embedded = self.text_embedder.forward_gelu(encoder)?;
-        let kv = self
-            .blocks
-            .iter()
-            .map(|b| b.attn2.cross_kv(&embedded))
+        let kv = (0..self.blocks.len())
+            .map(|i| self.blocks.with(i, |b| b.attn2.cross_kv(&embedded)))
             .collect::<Result<Vec<_>>>()?;
         let prepared = std::sync::Arc::new(PreparedText {
             encoder: encoder.clone(),
@@ -1927,10 +2064,8 @@ impl WanTransformer3D {
             .time_proj
             .forward(&temb.silu())?
             .reshape(vec![b, 6, dim])?;
-        let e = self
-            .blocks
-            .iter()
-            .map(|blk| timestep_proj.add(&blk.scale_shift_table))
+        let e = (0..self.blocks.len())
+            .map(|i| timestep_proj.add(&self.blocks.skeleton(i).scale_shift_table))
             .collect::<Result<Vec<_>>>()?;
         let prepared = std::sync::Arc::new(PreparedTime {
             key: key.clone().unwrap_or_default(),
@@ -1967,7 +2102,8 @@ impl WanTransformer3D {
         // No live device means a CPU run, where VSA has no device path: fall
         // back to dense rather than failing to upload a tiling. Say so, rather
         // than silently running dense while the caller believes VSA is on.
-        if super::device::global_device().is_none() || !self.blocks.iter().any(|b| b.gate.is_some())
+        if super::device::global_device().is_none()
+            || !(0..self.blocks.len()).any(|i| self.blocks.skeleton(i).gate.is_some())
         {
             static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             super::log::info_once(
@@ -2120,35 +2256,39 @@ impl WanTransformer3D {
         if tea == Some(true) {
             hidden = self.add_sol_tea_residual(hidden)?;
         } else if self.sol_a14b_enabled() {
-            hidden = self.blocks[0].forward(
-                &hidden,
-                &encoder,
-                cond(0),
-                &rope,
-                image.as_ref(),
-                mask.as_ref(),
-                vsa.as_deref(),
-                ar.as_ref(),
-                None,
-                self.attn_plan(0, morton_grid),
-            )?;
+            hidden = self.blocks.with(0, |block| {
+                block.forward(
+                    &hidden,
+                    &encoder,
+                    cond(0),
+                    &rope,
+                    image.as_ref(),
+                    mask.as_ref(),
+                    vsa.as_deref(),
+                    ar.as_ref(),
+                    None,
+                    self.attn_plan(0, morton_grid),
+                )
+            })?;
             match self.begin_a14b_tail(&hidden)? {
                 Some(true) => hidden = self.add_a14b_residual(hidden)?,
                 reuse => {
                     let prefix = hidden.clone();
-                    for (layer, block) in self.blocks.iter().enumerate().skip(1) {
-                        hidden = block.forward(
-                            &hidden,
-                            &encoder,
-                            cond(layer),
-                            &rope,
-                            image.as_ref(),
-                            mask.as_ref(),
-                            vsa.as_deref(),
-                            ar.as_ref(),
-                            None,
-                            self.attn_plan(layer, morton_grid),
-                        )?;
+                    for layer in 1..self.blocks.len() {
+                        hidden = self.blocks.with(layer, |block| {
+                            block.forward(
+                                &hidden,
+                                &encoder,
+                                cond(layer),
+                                &rope,
+                                image.as_ref(),
+                                mask.as_ref(),
+                                vsa.as_deref(),
+                                ar.as_ref(),
+                                None,
+                                self.attn_plan(layer, morton_grid),
+                            )
+                        })?;
                     }
                     if reuse == Some(false) {
                         self.finish_a14b_tail(&prefix, &hidden)?;
@@ -2165,19 +2305,21 @@ impl WanTransformer3D {
                 )?;
                 super::dump::tensor(&super::dump::named("timestep_proj"), &timestep_proj)?;
             }
-            for (layer, block) in self.blocks.iter().enumerate() {
-                hidden = block.forward(
-                    &hidden,
-                    &encoder,
-                    cond(layer),
-                    &rope,
-                    image.as_ref(),
-                    mask.as_ref(),
-                    vsa.as_deref(),
-                    ar.as_ref(),
-                    None,
-                    self.attn_plan(layer, morton_grid),
-                )?;
+            for layer in 0..self.blocks.len() {
+                hidden = self.blocks.with(layer, |block| {
+                    block.forward(
+                        &hidden,
+                        &encoder,
+                        cond(layer),
+                        &rope,
+                        image.as_ref(),
+                        mask.as_ref(),
+                        vsa.as_deref(),
+                        ar.as_ref(),
+                        None,
+                        self.attn_plan(layer, morton_grid),
+                    )
+                })?;
                 if dump_blocks {
                     super::dump::rows_strided(
                         &super::dump::named(&format!("block_{layer}")),
@@ -2359,28 +2501,30 @@ impl WanTransformer3D {
         let time = &time.0;
         let encoder = &text.embedded;
         let dump_blocks = super::dump::blocks();
-        for (layer, block) in self.blocks.iter().enumerate() {
+        for layer in 0..self.blocks.len() {
             let op = dump_blocks && super::dump::op_blocks().contains(&layer);
             super::dump::set_op_block(op.then_some(layer));
-            hidden = block.forward(
-                &hidden,
-                encoder,
-                BlockCond {
-                    e: &time.e[layer],
-                    cross_kv: text.kv.as_ref().map(|kv| &kv[layer]),
-                },
-                rope,
-                None,
-                None,
-                None,
-                None,
-                Some(super::causal::KvAt {
-                    cache,
-                    layer,
-                    current_start: start_frame * frame_tokens,
-                }),
-                AttnPlan::default(),
-            )?;
+            hidden = self.blocks.with(layer, |block| {
+                block.forward(
+                    &hidden,
+                    encoder,
+                    BlockCond {
+                        e: &time.e[layer],
+                        cross_kv: text.kv.as_ref().map(|kv| &kv[layer]),
+                    },
+                    rope,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(super::causal::KvAt {
+                        cache,
+                        layer,
+                        current_start: start_frame * frame_tokens,
+                    }),
+                    AttnPlan::default(),
+                )
+            })?;
             super::dump::set_op_block(None);
             if dump_blocks {
                 super::dump::rows_strided(
@@ -2494,5 +2638,41 @@ mod tests {
         assert!(a.iter().zip(b.iter()).any(|(x, y)| (x - y).abs() > 1e-4));
         // A timestep count that is neither the batch nor batch x frames is refused.
         assert!(dit.forward(&lat, &ts(vec![1.0, 2.0]), &enc).is_err());
+    }
+
+    /// The A14B expert swap and layerwise streaming move weights, not math:
+    /// a parked or streamed DiT gives the resident one's bits, before and
+    /// after a park (CFG batch of two, the text K/V cache on).
+    #[test]
+    fn parked_and_streamed_blocks_match_resident() {
+        let cfg = WanVideoArchConfig::tiny();
+        let map = generated_map();
+        let resident = WanTransformer3D::load(cfg.clone(), &map).unwrap();
+        let parked =
+            WanTransformer3D::load_with_residency(cfg.clone(), &map, WanBlockResidency::Parked)
+                .unwrap();
+        let streamed =
+            WanTransformer3D::load_with_residency(cfg, &map, WanBlockResidency::Streamed).unwrap();
+        assert_eq!(resident.block_residency(), WanBlockResidency::Resident);
+        assert_eq!(parked.block_residency(), WanBlockResidency::Parked);
+        assert_eq!(streamed.block_residency(), WanBlockResidency::Streamed);
+        assert_eq!(resident.host_block_bytes(), 0);
+        assert!(parked.host_block_bytes() > 0);
+        let (t, h, w) = (3, 4, 4);
+        let lat = ramp(&[2, 4, t, h, w], 0.29);
+        let enc = ramp(&[2, 8, 16], 0.13);
+        let bits = |d: &WanTransformer3D| -> Vec<u32> {
+            let y = d.forward(&lat, &ts(vec![700.0, 700.0]), &enc).unwrap();
+            y.host_cow().unwrap().iter().map(|v| v.to_bits()).collect()
+        };
+        let want = bits(&resident);
+        assert_eq!(want, bits(&parked));
+        parked.park();
+        assert_eq!(want, bits(&parked));
+        assert_eq!(want, bits(&streamed));
+        // Parking a resident model does nothing.
+        resident.park();
+        assert!(resident.is_on_device());
+        assert_eq!(want, bits(&resident));
     }
 }
