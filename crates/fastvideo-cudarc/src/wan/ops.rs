@@ -4401,8 +4401,9 @@ pub fn scatter_add_rows_host(
     out
 }
 
+/// The MoE region of `kernels.cu` as its own NVRTC source (LingBot MoE).
 #[cfg(feature = "cuda")]
-fn moe_kernel_src() -> String {
+pub fn moe_kernel_src() -> String {
     const ALL: &str = include_str!("kernels.cu");
     let start = ALL
         .find("// ==== region: moe ====")
@@ -4446,33 +4447,28 @@ fn moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
 
 #[cfg(feature = "cuda")]
 fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
-    use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
+    use cudarc::nvrtc::CompileOptions;
     let dev = ctx()?;
     let src = moe_kernel_src();
-    let mut last = None;
-    let mut ptx = None;
-    for arch in super::hopper::nvrtc_arches(dev.sm_major, dev.sm_minor) {
-        let opts = CompileOptions {
-            arch: Some(arch),
-            use_fast_math: Some(true),
-            ftz: Some(true),
-            ..Default::default()
-        };
-        match compile_ptx_with_opts(&src, opts) {
-            Ok(p) => {
-                ptx = Some(p);
-                break;
-            }
-            Err(e) => last = Some(format!("arch={arch}: {e}")),
-        }
-    }
-    let ptx = ptx.ok_or_else(|| {
-        err(format!(
-            "moe nvrtc: {}",
-            last.unwrap_or_else(|| "no candidate arch".into())
-        ))
-    })?;
-    let module = dev.ctx.load_module(ptx).map_err(err)?;
+    let opts = CompileOptions {
+        use_fast_math: Some(true),
+        ftz: Some(true),
+        ..Default::default()
+    };
+    // SASS for the device's own SM, not PTX: the image's NVRTC writes PTX
+    // newer than a pod's driver may JIT (CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
+    // sol-bench phase B LingBot); see `nvrtc_sass`.
+    let (module, origin) = super::nvrtc_sass::load_for_device(
+        &dev.ctx,
+        dev.sm_major,
+        dev.sm_minor,
+        &src,
+        &opts,
+        "moe",
+    )
+    .map_err(|e| err(format!("moe kernels: {e}")))?;
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    super::log::info_once(&SAID, format_args!("moe kernels: {origin}"));
     Ok(std::rc::Rc::new(MoeKernels {
         rope_real: module.load_function("rope_real").map_err(err)?,
         sigmoid_f: module.load_function("sigmoid_f").map_err(err)?,

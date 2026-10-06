@@ -336,3 +336,33 @@ All phase B pods were created and deleted by this run (UTC):
 - **Balance:** $35.26 before, $31.03 after.
 - **Bad hosts:** host `lkyvy1sgj4rc` behaved like `s3p8exc9lcvi` (no container start after 10 min). Both are in `FV_AVOID_MACHINES` for future runs.
 - **Result mirroring:** `scripts/gpu/sol_bench_mirror.py` copied each finished cell while its pod was still up. b6's results come from that copy, because the driver was stopped before its own fetch.
+
+## Phase B2 (unblocked ports): run plan (2026-10-06, planned before renting)
+
+The four ports that blocked phase B are fixed on `fix/phaseb-blocked-ports`:
+
+| Block | Root cause | Fix |
+|---|---|---|
+| Wan2.2 T2V-A14B, exit 137 at load | `WanPipeline::load_with_dit` read `transformer/` and `transformer_2/` with the **eager** loader, which copies every tensor of a directory into host memory (2 × 57 GB f32), and held the first copy for the whole load while UMT5 (21 GB f32) and the second expert loaded. With the mapped shards that passes the 188 GB container limit. | A two-expert checkpoint opens its experts with the lazy store (`WeightMap::open`): tensors stay in the mapped shards and go to the device one at a time as bf16, the bits the eager path uploads. The load logs its host peak (`VmHWM`). `FASTVIDEO_WAN_DIT_LAZY=0/1` overrides. |
+| LTX-2.3 HQ, `no text projection` | `TextConnectors::load` always probed for LTX-2.0's **shared** `text_embedding_projection.aggregate_embed`. 2.3 has per-modality projections; the dev single file holds them as `text_embedding_projection.{video,audio}_aggregate_embed` (manifest `ltx23_single_file.json`), so the probe failed although the weights were there. | The probe runs only for shared-projection configs. |
+| LingBot MoE, `CUDA_ERROR_UNSUPPORTED_PTX_VERSION` | `load_moe_kernels` NVRTC-compiled the MoE region of `kernels.cu` to PTX at run time; the image's NVRTC 13.4 writes PTX newer than driver 595.91 can JIT. | `wan::nvrtc_sass`: NVRTC emits SASS (`nvrtcGetCUBIN`) for the device's own SM, PTX only as the fallback. The other run-time NVRTC paths (kernels.cu, attn_fp8, attn_sage, attn_dc fallbacks) go through it too. |
+| Cosmos3-Super BF16, decode OOM | The 62.4 GB bf16 gen tower stayed resident through the Wan 2.2 decode, with the pool still holding the denoise activations. | `FASTVIDEO_COSMOS3_GEN=auto` parks the bf16 gen tower in pinned host memory on a 96 GB card (the A14B swap's whole-ring offload). Before the decode the pipeline drops the text K/V and TeaCache residuals, releases the tower and trims the pool. The next request brings the tower back behind the first step's compute; that copy is inside the request time. |
+
+**Image:** the CI runtime image for the branch head, pinned by digest (recorded in the results).
+
+**GPU and region:** RTX PRO 6000 only, EUR-IS-1, the EU volume `jg48s6o1w0`. `FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc"`.
+
+**Pins:** as phase B. Wan: `FASTVIDEO_WAN_QUANT=off`, Diffusers UniPC sigmas, the full VAE. `FASTVIDEO_FP8` off everywhere (Cosmos3 is BF16 this time). LTX-2.3 fullopt keeps NVFP4, as sol-engine's `fullopt.toml` does.
+
+**Pods:** at most 2 up at once. Each has 55 min of cell budget, a 64-min self-delete and a 65-min local backstop; a cell whose estimate no longer fits is recorded as skipped.
+
+| Pod set | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|
+| c1 | `a14b-sol-base`, `a14b-sol-fullopt` | 449.67 / 207.01 s (1x GB200) | 30 + 15–20 min |
+| c2 | `ltx23-hq-base`, `ltx23-hq-fullopt`, `lingbot-router`, `lingbot-fullopt` | 2.40x ratio; 144.36 s (4x GB200) | 11 + 10 + 1 + 20–25 min |
+| c3 | `lingbot-baseline` | 375.53 s (4x GB200) | ~40 min |
+| c4 | `cosmos3-baseline` (BF16), then `cosmos3-teacache` (BF16) if it fits | 130.41 s (4x GB200), 2.26x | ~40 + ~25 min |
+
+Order: (c1, c2) together, then (c3, c4).
+
+**Money:** the balance was $30.55 before renting, with a $10 floor; it is checked before each pod. Four pods at ≤ 65 min × $2.09/h is $9.1 at most; expected about $6. The owner's aim is about $5, so c4's TeaCache arm is the first thing dropped, and a pod whose cells are done is deleted at once.

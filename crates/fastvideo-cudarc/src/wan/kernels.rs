@@ -19,7 +19,7 @@ use super::device::{DeviceError, Result};
 /// in the binary); the runtime falls back to NVRTC from this same string
 /// when it is not. Keeping them one file is what makes the two paths
 /// provably the same code.
-const KERNEL_SRC: &str = include_str!("kernels.cu");
+pub(crate) const KERNEL_SRC: &str = include_str!("kernels.cu");
 
 /// Declares [`KernelFns`] and [`KERNEL_NAMES`] from one list, so a kernel
 /// can't be compiled but not loaded (or vice versa).
@@ -226,19 +226,25 @@ kernel_fns!(
 /// first; an NVRTC too old to know it (libnvrtc 12.x on Blackwell) gets the
 /// forward-compatible fallback instead of an error, and the arch actually used
 /// is returned so the banner can say so.
+/// NVRTC options for `kernels.cu`. Parity with PyTorch's CUDA build: IEEE
+/// div/sqrt, denormals kept, FMA contraction on. Must match build.rs's nvcc flags.
+fn reference_options() -> CompileOptions {
+    CompileOptions {
+        use_fast_math: Some(false),
+        ftz: Some(false),
+        prec_div: Some(true),
+        prec_sqrt: Some(true),
+        fmad: Some(true),
+        ..Default::default()
+    }
+}
+
 pub fn compile_ptx(sm_major: i32, sm_minor: i32) -> Result<(cudarc::nvrtc::Ptx, &'static str)> {
     let mut last = None;
     for arch in super::hopper::nvrtc_arches(sm_major, sm_minor) {
         let opts = CompileOptions {
             arch: Some(arch),
-            // Parity with PyTorch's CUDA build: IEEE div/sqrt, denormals kept,
-            // FMA contraction on. Must match build.rs's nvcc flags.
-            use_fast_math: Some(false),
-            ftz: Some(false),
-            prec_div: Some(true),
-            prec_sqrt: Some(true),
-            fmad: Some(true),
-            ..Default::default()
+            ..reference_options()
         };
         match compile_ptx_with_opts(KERNEL_SRC, opts) {
             Ok(ptx) => return Ok((ptx, arch)),
@@ -407,10 +413,19 @@ impl KernelFns {
                 return Ok((fns, KernelOrigin::Ptx(k.sm)));
             }
         }
-        let (ptx, arch) = compile_ptx(sm_major, sm_minor)?;
-        let module = ctx.load_module(ptx)?;
+        // SASS for this SM first, PTX second (`nvrtc_sass`): a driver older
+        // than the image's NVRTC cannot JIT that NVRTC's PTX.
+        let (module, origin) = super::nvrtc_sass::load_for_device(
+            ctx,
+            sm_major,
+            sm_minor,
+            KERNEL_SRC,
+            &reference_options(),
+            "kernels",
+        )
+        .map_err(DeviceError::Message)?;
         let fns = Self::load(&module)?.attach_oxide(ctx, want);
-        Ok((fns, KernelOrigin::Nvrtc(arch)))
+        Ok((fns, KernelOrigin::Nvrtc(origin.arch)))
     }
 
     /// NVRTC only — what the compile gate exercises for each named arch.

@@ -74,6 +74,8 @@ impl Cosmos3Request {
 pub struct Cosmos3Timing {
     pub arm: String,
     pub und_resident: bool,
+    /// `resident` or `parked` (`FASTVIDEO_COSMOS3_GEN`).
+    pub gen_residency: String,
     pub fp8: bool,
     pub load_s: f64,
     pub text_tower_s: f64,
@@ -246,6 +248,22 @@ impl Cosmos3Pipeline {
         timing.denoise_s = t.elapsed().as_secs_f64();
 
         let t = Instant::now();
+        // Give the decode the device: the text K/V, rotary tables and TeaCache
+        // residuals go, a parked gen tower leaves (the next request's first
+        // step brings it back), and the pool's cached denoise activations are
+        // returned. With the 62 GB bf16 tower resident the Wan 2.2 decode of
+        // the official canvas ran out of memory on 96 GB (sol-bench phase B).
+        drop((cond, uncond, rope_c, rope_u, res_c, res_u));
+        dit.park_gen();
+        crate::wan::device::trim_pool().map_err(terr)?;
+        timing.gen_residency = dit.gen_residency().as_str().into();
+        if let Some((free, _)) = crate::wan::device::free_memory() {
+            crate::wan::log::info(format_args!(
+                "cosmos3 decode: {:.1} GiB free (gen tower {})",
+                free as f64 / f64::from(1u32 << 30),
+                timing.gen_residency,
+            ));
+        }
         let vae = self.vae.as_ref().expect("loaded");
         let z = vae
             .scale_latents(&CudaTensor::from_vec(latents, shape)?)

@@ -275,6 +275,26 @@ case "$SET" in
     cosmos3 cosmos3-teacache-fp8 teacache 1500 FASTVIDEO_FP8=1
     cosmos3 cosmos3-baseline-fp8 baseline 1500 FASTVIDEO_FP8=1
     ;;
+  # ---- phase B2 (2026-10-06): the four blocked ports fixed on
+  # fix/phaseb-blocked-ports; same cells and pins as phase B.
+  c1) # Wan2.2 T2V-A14B (b2): experts now load lazily (no 2 x 57 GB host copy)
+    a14b a14b-sol-base 1800
+    a14b a14b-sol-fullopt 900 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
+  c2) # LTX-2.3 HQ (per-modality text projection fix), then LingBot fullopt (MoE kernels as SASS)
+    ltx23 ltx23-hq-base 660 --dense-stage2
+    ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
+    lingbot fullopt 1200
+    ;;
+  c3) # LingBot baseline (b4)
+    lingbot baseline 2400
+    ;;
+  c4) # Cosmos3-Super BF16 (gen tower parked for the decode), then BF16
+    # TeaCache only if it still fits the budget.
+    cosmos3 cosmos3-baseline baseline 2400
+    cosmos3 cosmos3-teacache teacache 1500
+    ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac
 log "set $SET done"

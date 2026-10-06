@@ -20,6 +20,7 @@ pub mod device;
 pub mod dump;
 pub mod envflag;
 pub mod graph;
+pub mod hostmem;
 pub mod evalstats;
 #[cfg(feature = "cuda")]
 pub mod fp8;
@@ -41,6 +42,8 @@ pub mod nvfp4;
 pub mod nvfp4_gemm;
 #[cfg(feature = "cuda")]
 pub mod nvfp4_linear;
+#[cfg(feature = "cuda")]
+pub mod nvrtc_sass;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;

@@ -576,6 +576,29 @@ mod ltx23 {
         );
     }
 
+    /// What the HQ path runs (`load_connectors` with `--dit` the dev single
+    /// file): `TextConnectors::load` itself, not the probe-free entry. Phase B
+    /// died here on a probe for LTX-2.0's shared `aggregate_embed`.
+    #[test]
+    fn hq_connectors_load_from_the_dev_single_file() {
+        let _guard = heavy();
+        let (map, seen) = recording();
+        TextConnectors::load(
+            &map,
+            &Keys::connectors(Layout::SingleFile),
+            &cfg().connectors,
+        )
+        .expect("2.3 connectors from the single file");
+        let seen = seen.lock().expect("lock").clone();
+        for k in [
+            "text_embedding_projection.video_aggregate_embed.weight",
+            "text_embedding_projection.audio_aggregate_embed.weight",
+        ] {
+            assert!(seen.contains_key(k), "{k} not requested");
+        }
+        assert_clean("2.3 HQ connectors", mismatches(&seen, &single()));
+    }
+
     #[test]
     fn connectors_load_from_the_split_text_embedding_projection() {
         let _guard = heavy();

@@ -2493,6 +2493,34 @@ pub fn nvrtc(report: &mut Report, archs: &[(i32, i32)]) -> StageResult<()> {
             json!({"seconds": secs, "error": err, "kernels": k::KERNEL_NAMES.len()}),
             json!({}),
         )?;
+        // The LingBot MoE kernels as SASS for the real SM, the path
+        // `ops::load_moe_kernels` takes first (`nvrtc_sass`): NVRTC's PTX is
+        // newer than some pods' drivers can JIT.
+        if let Some(arch) = fastvideo_cudarc::wan::nvrtc_sass::sass_arch(maj, min) {
+            let timer = std::time::Instant::now();
+            let opts = cudarc::nvrtc::CompileOptions {
+                use_fast_math: Some(true),
+                ftz: Some(true),
+                ..Default::default()
+            };
+            let result = fastvideo_cudarc::wan::nvrtc_sass::compile_cubin(
+                &ops::moe_kernel_src(),
+                &opts,
+                arch,
+            );
+            let secs = timer.elapsed().as_secs_f64();
+            let (ok, detail) = match &result {
+                // An ELF image, not PTX text.
+                Ok(c) => (c.starts_with(b"\x7fELF"), json!({"bytes": c.len()})),
+                Err(e) => (false, json!({"error": e})),
+            };
+            report.check(
+                format!("moe_sass_{arch}"),
+                ok,
+                json!({"seconds": secs, "detail": detail}),
+                json!({}),
+            )?;
+        }
     }
     Ok(())
 }

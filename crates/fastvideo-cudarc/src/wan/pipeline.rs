@@ -443,9 +443,27 @@ impl WanPipeline {
                 super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
                     .max(1);
         }
+        // A two-expert checkpoint (Wan 2.2 A14B) is 2 x 57 GB of f32 on
+        // disk. The eager map copies a whole directory into host memory and
+        // the first one is held for the whole load, so with UMT5 and the
+        // mapped shards the host peak passed a 188 GB container limit (sol-bench
+        // phase B, exit 137). Its experts are opened lazily instead: tensors stay
+        // in the mapped shards and go to the device one at a time as bf16, the
+        // same bits the eager path uploads (`weights::fill_bf16`).
+        // `FASTVIDEO_WAN_DIT_LAZY=1` opens a one-DiT checkpoint the same way,
+        // `=0` keeps an A14B on the eager path.
+        let two_experts = root.join("transformer_2").is_dir();
+        let lazy_dit = super::envflag::bool_flag("FASTVIDEO_WAN_DIT_LAZY", two_experts);
+        let open_dit = |dir: &Path| -> Result<WeightMap> {
+            Ok(if lazy_dit {
+                WeightMap::open(dir)?
+            } else {
+                WeightMap::from_dir(dir)?
+            })
+        };
         let dit = match dit {
             Some(map) => map,
-            None => WeightMap::from_dir(&root.join("transformer"))?,
+            None => open_dit(&root.join("transformer"))?,
         };
         // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
         // spatial, residual blocks, patchify 2); the preset's built-in
@@ -490,7 +508,6 @@ impl WanPipeline {
         // encoder, else parks both in pinned host memory and swaps them at
         // the boundary (`FASTVIDEO_WAN_MOE`). `FASTVIDEO_DIT_OFFLOAD=streamed`
         // streams any Wan DiT layer by layer instead.
-        let two_experts = root.join("transformer_2").is_dir();
         let offload =
             super::offload::DitOffload::from_env_or(None).map_err(PipelineError::Message)?;
         let (residency, moe) = if offload == super::offload::DitOffload::Streamed {
@@ -519,7 +536,7 @@ impl WanPipeline {
             (WanBlockResidency::Resident, None)
         };
         let dit_2 = if two_experts {
-            let map = WeightMap::from_dir(&root.join("transformer_2"))?;
+            let map = open_dit(&root.join("transformer_2"))?;
             Some(WanTransformer3D::load_with_residency(
                 cfg.clone(),
                 &map,
@@ -570,9 +587,16 @@ impl WanPipeline {
                 default_taehv_dirs(root)
             )));
         }
+        let dit = WanTransformer3D::load_with_residency(cfg, &dit, residency)?;
+        super::log::info(format_args!(
+            "wan load: host peak RSS {} ({} dit{})",
+            super::hostmem::peak_rss_human(),
+            if lazy_dit { "lazy" } else { "eager" },
+            if two_experts { " x2" } else { "" },
+        ));
         Ok(Self {
             text,
-            dit: WanTransformer3D::load_with_residency(cfg, &dit, residency)?,
+            dit,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
             taehv,

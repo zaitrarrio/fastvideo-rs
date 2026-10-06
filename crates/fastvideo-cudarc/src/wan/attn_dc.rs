@@ -109,9 +109,17 @@ fn load_module(
         fmad: Some(true),
         ..Default::default()
     };
-    let ptx = cudarc::nvrtc::compile_ptx_with_opts(SRC, opts)
-        .map_err(|e| msg(format!("nvrtc {arch}: {e}")))?;
-    Ok(Some((ctx.load_module(ptx).map_err(err)?, "nvrtc")))
+    // The arch-specific SASS (sm_90a / sm_100a) first, then its PTX: NVRTC
+    // PTX newer than the driver does not load (`nvrtc_sass`).
+    let sass = arch.strip_prefix("compute_").and_then(|a| match a {
+        "90a" => Some("sm_90a"),
+        "100a" => Some("sm_100a"),
+        "103a" => Some("sm_103a"),
+        _ => None,
+    });
+    let (module, origin) = super::nvrtc_sass::load(ctx, SRC, &opts, sass, &[arch], "attn-dc")
+        .map_err(msg)?;
+    Ok(Some((module, if origin.sass { "nvrtc sass" } else { "nvrtc" })))
 }
 
 fn load(ctx: &Arc<cudarc::driver::CudaContext>, sm: u32) -> Result<Option<DcDense>> {
