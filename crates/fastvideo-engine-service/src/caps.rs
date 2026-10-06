@@ -39,6 +39,11 @@ use serde::{Deserialize, Serialize};
 pub const SOL_H3_4STEP_PROFILE: &str = "h3/sol_h3_4step_engine_ladder";
 /// The dense Sol-H3 4-step route, selectable as an explicit profile.
 pub const SOL_H3_4STEP_DENSE_PROFILE: &str = "h3/sol_h3_4step";
+/// LongLive-Plug `h3-plug-4step` with h3-max's techniques (Sol engine
+/// ladder, MXFP8; docs/serve/research-longlive.md §12.8). In no catalog tier:
+/// a recipe `h3-plug-4step` with this profile is the h3-max alternative the
+/// owner can switch to.
+pub const PLUG_H3_4STEP_PROFILE: &str = "h3/plug_h3_4step_engine_ladder";
 
 /// The LTX-2 frame rates the engine serves (serve E4): 24, and 25 / 48 / 50,
 /// validated at 1080p on the LTX-2.5 distilled two-stage (exact frame count,
@@ -132,6 +137,20 @@ impl Recipe {
             profile: Some(SOL_H3_4STEP_DENSE_PROFILE.into()),
             attention: "dense".into(),
             summary: "Sol-H3 4-step, dense attention (explicit profile)".into(),
+            ..Self::sol_h3_4step()
+        }
+    }
+
+    /// LongLive-Plug H3 4-step on h3-max's techniques (§12.8 of
+    /// docs/serve/research-longlive.md). Not in the catalog; what an
+    /// `h3-max` switch to the Plug adapter would serve.
+    pub fn plug_h3_4step_engine_ladder() -> Self {
+        Self {
+            name: "h3-plug-4step".into(),
+            profile: Some(PLUG_H3_4STEP_PROFILE.into()),
+            summary: "LongLive-Plug H3 4-step (fresh-noise sampler), Sol engine route \
+                      tau 1.0/1.25/1.5 on forwards 1-3, MXFP8"
+                .into(),
             ..Self::sol_h3_4step()
         }
     }
@@ -485,5 +504,9 @@ mod tests {
             let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
             assert!(text.contains("recipe = \"sol-h3\""), "{p} must run the sol-h3 recipe");
         }
+        let p = Recipe::plug_h3_4step_engine_ladder();
+        let f = root.join(format!("{}.toml", p.profile.as_deref().unwrap()));
+        let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        assert!(text.contains(&format!("recipe = \"{}\"", p.name)), "{PLUG_H3_4STEP_PROFILE}");
     }
 }
