@@ -33,6 +33,8 @@ pub mod kernels;
 pub mod ledger;
 pub mod log;
 pub mod longlive;
+#[cfg(test)]
+mod manifest_tests;
 pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]

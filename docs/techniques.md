@@ -250,6 +250,7 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/fasth3_4step_dense` | `4step-dense` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step` | `sol-h3` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step_engine` | `sol-h3` | `sol_attn` (engine, prefix sink), `mxfp8`, `bf16_activations` |
+| `h3/plug_h3_4step_engine_ladder` | `h3-plug-4step` | `h3/sol_h3_4step_engine_ladder`'s techniques (Sol engine route, tau 1.0 / 1.25 / 1.5 on forwards 1-3, `mxfp8`, `bf16_activations`) on the LongLive-Plug recipe; opt-in, docs/serve/research-longlive.md §12.8 |
 | `h3/fasth3_8step_sol` | `8step` | `sol_attn` (tau 1.0, text sink, no dense step or block), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_teacache` | `8step` | `vsa`, `teacache` (threshold 1.0, retain 3, cooldown 3: only steps 3-4 can reuse), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_sol_teacache` | `8step` | both of the above |

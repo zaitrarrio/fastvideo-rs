@@ -126,6 +126,19 @@ impl Keys {
         match self.layout {
             Layout::Diffusers => diffusers.to_string(),
             Layout::LtxCore => self.rename_segments(diffusers),
+            // The per-modality text projections (2.3 / 2.5) sit outside the
+            // DiT root in the single file, beside it rather than under it:
+            // `text_embedding_projection.{video,audio}_aggregate_embed`.
+            Layout::SingleFile
+                if self.component == Component::Connectors
+                    && (diffusers.starts_with("video_text_proj_in")
+                        || diffusers.starts_with("audio_text_proj_in")) =>
+            {
+                format!(
+                    "text_embedding_projection.{}",
+                    self.rename_segments(diffusers)
+                )
+            }
             Layout::SingleFile => format!("{SINGLE_FILE_ROOT}.{}", self.rename_segments(diffusers)),
         }
     }
@@ -181,9 +194,212 @@ impl Keys {
     }
 }
 
+/// FastVideo's LTX-2.3 `text_embedding_projection/` folder names the video
+/// connector `embeddings_connector`; the single file and the loader say
+/// `video_embeddings_connector`. The alias a map of that folder answers with.
+pub fn connector_folder_alias(key: &str) -> Option<String> {
+    key.strip_prefix("video_embeddings_connector.")
+        .map(|rest| format!("embeddings_connector.{rest}"))
+}
+
+/// Whether a connectors map is FastVideo's 2.3 folder (see [`connector_folder_alias`]).
+pub fn is_connector_folder(map: &WeightMap) -> bool {
+    map.has_tensor("embeddings_connector.learnable_registers")
+        && !map.has_tensor("video_embeddings_connector.learnable_registers")
+}
+
+/// The original (`ltx-core`) name of a video- or audio-VAE tensor the
+/// loaders ask for by its diffusers name, or `None` when the two agree.
+///
+/// `ltx-2.3-22b-*.safetensors` (`vae.*`, `audio_vae.*`) and FastVideo's
+/// `vae/` / `audio_vae/` folders keep the original names. diffusers'
+/// converter renames, it does not reshape: the decoder's flat block list
+/// (`up_blocks.0` res, `.1` upsampler, `.2` res, …) becomes `mid_block` plus
+/// `up_blocks.{i}` = (upsampler, resnets); the encoder's flat list becomes
+/// `down_blocks.{i}` = (resnets, downsampler) plus `mid_block`, the last entry
+/// of the flat list (`encoder_mid`, 8 for the 2.3 / 2.5 geometry); and the
+/// latent statistics are `per_channel_statistics.{mean,std}-of-means`.
+pub fn ltx_core_vae_key(diffusers: &str, encoder_mid: usize) -> Option<String> {
+    match diffusers {
+        "latents_mean" => return Some("per_channel_statistics.mean-of-means".into()),
+        "latents_std" => return Some("per_channel_statistics.std-of-means".into()),
+        _ => {}
+    }
+    let indexed = |rest: &str| -> Option<(usize, String)> {
+        let (i, tail) = rest.split_once('.')?;
+        Some((i.parse().ok()?, tail.to_string()))
+    };
+    if let Some(rest) = diffusers.strip_prefix("decoder.mid_block.resnets.") {
+        return Some(format!("decoder.up_blocks.0.res_blocks.{rest}"));
+    }
+    if let Some(rest) = diffusers.strip_prefix("decoder.up_blocks.") {
+        let (i, tail) = indexed(rest)?;
+        if let Some(t) = tail.strip_prefix("upsamplers.0.") {
+            return Some(format!("decoder.up_blocks.{}.{t}", 2 * i + 1));
+        }
+        if let Some(t) = tail.strip_prefix("resnets.") {
+            return Some(format!("decoder.up_blocks.{}.res_blocks.{t}", 2 * i + 2));
+        }
+        return None;
+    }
+    if let Some(rest) = diffusers.strip_prefix("encoder.mid_block.resnets.") {
+        return Some(format!(
+            "encoder.down_blocks.{encoder_mid}.res_blocks.{rest}"
+        ));
+    }
+    if let Some(rest) = diffusers.strip_prefix("encoder.down_blocks.") {
+        let (i, tail) = indexed(rest)?;
+        // The mid entry is reachable as `mid_block` only: the encoder counts
+        // its down blocks by probing, and must stop before it.
+        if 2 * i >= encoder_mid {
+            return None;
+        }
+        if let Some(t) = tail.strip_prefix("downsamplers.0.") {
+            return Some(format!("encoder.down_blocks.{}.{t}", 2 * i + 1));
+        }
+        if let Some(t) = tail.strip_prefix("resnets.") {
+            return Some(format!("encoder.down_blocks.{}.res_blocks.{t}", 2 * i));
+        }
+    }
+    None
+}
+
+/// Whether a VAE map (video or audio) keeps the original names.
+pub fn is_ltx_core_vae(map: &WeightMap) -> bool {
+    map.has_tensor("per_channel_statistics.mean-of-means") && !map.has_tensor("latents_mean")
+}
+
+/// `map` answering diffusers VAE names when it holds the original ones; as
+/// is otherwise. The encoder's mid entry is the last flat `down_blocks` entry.
+pub fn vae_view(map: WeightMap) -> WeightMap {
+    if !is_ltx_core_vae(&map) {
+        return map;
+    }
+    let mid = (0..64)
+        .filter(|i| {
+            map.has_tensor(&format!(
+                "encoder.down_blocks.{i}.res_blocks.0.conv1.conv.weight"
+            ))
+        })
+        .max()
+        .unwrap_or(8);
+    map.with_alias(move |k| ltx_core_vae_key(k, mid))
+}
+
+/// The original name of a vocoder tensor the loader asks for by its
+/// diffusers name (`LTX2Vocoder` / the BWE generator), or `None` when they
+/// agree. `ltx-2.3-22b-*.safetensors` `vocoder.*` and FastVideo's `vocoder/`
+/// folder keep HiFi-GAN's names: `conv_pre` / `conv_post`, `ups`,
+/// `resblocks`, `act_post` for diffusers' `conv_in` / `conv_out`,
+/// `upsamplers`, `resnets`, `act_out`, under both `vocoder.` and
+/// `bwe_generator.`.
+pub fn ltx_core_vocoder_key(diffusers: &str) -> Option<String> {
+    let renamed: Vec<&str> = diffusers
+        .split('.')
+        .map(|seg| match seg {
+            "conv_in" => "conv_pre",
+            "conv_out" => "conv_post",
+            "upsamplers" => "ups",
+            "resnets" => "resblocks",
+            "act_out" => "act_post",
+            other => other,
+        })
+        .collect();
+    let out = renamed.join(".");
+    (out != diffusers).then_some(out)
+}
+
+/// `map` answering diffusers vocoder names when it holds HiFi-GAN's; as is
+/// otherwise.
+pub fn vocoder_view(map: WeightMap) -> WeightMap {
+    let original = [
+        "vocoder.conv_pre.weight",
+        "conv_pre.weight",
+        "bwe_generator.conv_pre.weight",
+    ]
+    .iter()
+    .any(|k| map.has_tensor(k));
+    let diffusers = [
+        "vocoder.conv_in.weight",
+        "conv_in.weight",
+        "vocoder.conv_in.weight_g",
+    ]
+    .iter()
+    .any(|k| map.has_tensor(k));
+    if original && !diffusers {
+        map.with_alias(ltx_core_vocoder_key)
+    } else {
+        map
+    }
+}
+
+/// `map` answering `video_embeddings_connector.*` when it is FastVideo's 2.3
+/// connectors folder; as is otherwise.
+pub fn connectors_view(map: WeightMap) -> WeightMap {
+    if is_connector_folder(&map) {
+        map.with_alias(connector_folder_alias)
+    } else {
+        map
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ltx_core_vae_names() {
+        let k = |s: &str| ltx_core_vae_key(s, 8);
+        assert_eq!(
+            k("decoder.mid_block.resnets.1.conv2.conv.weight").as_deref(),
+            Some("decoder.up_blocks.0.res_blocks.1.conv2.conv.weight")
+        );
+        assert_eq!(
+            k("decoder.up_blocks.0.upsamplers.0.conv.conv.weight").as_deref(),
+            Some("decoder.up_blocks.1.conv.conv.weight")
+        );
+        assert_eq!(
+            k("decoder.up_blocks.3.resnets.5.conv1.conv.bias").as_deref(),
+            Some("decoder.up_blocks.8.res_blocks.5.conv1.conv.bias")
+        );
+        assert_eq!(
+            k("encoder.down_blocks.2.downsamplers.0.conv.conv.weight").as_deref(),
+            Some("encoder.down_blocks.5.conv.conv.weight")
+        );
+        assert_eq!(
+            k("encoder.mid_block.resnets.0.conv1.conv.weight").as_deref(),
+            Some("encoder.down_blocks.8.res_blocks.0.conv1.conv.weight")
+        );
+        // Probing `down_blocks.4` must find nothing: 4 down blocks, then mid.
+        assert_eq!(k("encoder.down_blocks.4.resnets.0.conv1.conv.weight"), None);
+        assert_eq!(
+            k("latents_std").as_deref(),
+            Some("per_channel_statistics.std-of-means")
+        );
+        assert_eq!(k("decoder.conv_in.conv.weight"), None);
+        assert_eq!(
+            connector_folder_alias("video_embeddings_connector.learnable_registers").as_deref(),
+            Some("embeddings_connector.learnable_registers")
+        );
+        assert_eq!(connector_folder_alias("audio_embeddings_connector.x"), None);
+        assert_eq!(
+            ltx_core_vocoder_key("bwe_generator.resnets.3.convs1.2.weight").as_deref(),
+            Some("bwe_generator.resblocks.3.convs1.2.weight")
+        );
+        assert_eq!(
+            ltx_core_vocoder_key("vocoder.act_out.upsample.filter").as_deref(),
+            Some("vocoder.act_post.upsample.filter")
+        );
+        assert_eq!(ltx_core_vocoder_key("mel_stft.mel_basis"), None);
+        assert_eq!(
+            Keys::connectors(Layout::SingleFile).key("video_text_proj_in.weight"),
+            "text_embedding_projection.video_aggregate_embed.weight"
+        );
+        assert_eq!(
+            Keys::connectors(Layout::SingleFile).key("audio_connector.learnable_registers"),
+            "model.diffusion_model.audio_embeddings_connector.learnable_registers"
+        );
+    }
 
     #[test]
     fn diffusers_names_pass_through() {

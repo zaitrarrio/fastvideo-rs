@@ -1,0 +1,9 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 97887 MiB, 19331 MiB
+2026-10-06T13:11:48Z | weights present
+2026-10-06T13:22:49Z | cell pfast rc=0 wall=641s peak=60205MiB sdpa_auto=0 sage=0 sol=2 mxfp8=3 frames_dirs=16
+2026-10-06T13:33:38Z | cell max rc=0 wall=649s peak=60333MiB sdpa_auto=0 sage=0 sol=2 mxfp8=3 frames_dirs=16
+2026-10-06T14:11:46Z | cell base rc=0 wall=2288s peak=59181MiB sdpa_auto=0 sage=0 sol=0 mxfp8=1 frames_dirs=5
+2026-10-06T14:13:55Z | basecmp pfast: 15 compares
+2026-10-06T14:16:03Z | basecmp max: 15 compares
+2026-10-06T14:16:23Z | keepbase: /workspace/scratch/h3-plug-fast-base-768p-20261006 (799803563 bytes, 630 files, sha256 ok)
+CHAIN1-DONE

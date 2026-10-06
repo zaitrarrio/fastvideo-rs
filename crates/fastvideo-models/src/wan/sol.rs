@@ -52,8 +52,22 @@ pub enum WanAttnRoute {
 pub fn sol_attn_requested(value: Option<&str>) -> bool {
     matches!(
         value.map(str::trim),
-        Some("1") | Some("sol") | Some("true") | Some("on")
+        Some("1") | Some("sol") | Some("true") | Some("on") | Some("fullstack")
     )
+}
+
+/// The 1.3B route for a `FASTVIDEO_WAN_SOL_ATTN` value. `fullstack` is
+/// sol-engine's `config/wan21_t2v_1_3b/wan21_fullstack_sol.toml` for the
+/// 50-step base model: the 14B guards (first 10 forwards dense, layer 0
+/// dense, tau 1.0, Morton3D), i.e. [`WanAttnProfile::Sol14b`]'s route. Any
+/// other "on" value keeps [`WanAttnProfile::Sol13b`] (no dense forwards, the
+/// DMD students' setting).
+pub fn sol_13b_profile(value: Option<&str>) -> WanAttnProfile {
+    if value.map(str::trim) == Some("fullstack") {
+        WanAttnProfile::Sol14b
+    } else {
+        WanAttnProfile::Sol13b
+    }
 }
 
 pub fn pisa_requested(value: Option<&str>) -> bool {
@@ -169,6 +183,18 @@ pub fn morton3d_inverse(perm: &[usize]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sol_13b_fullstack_takes_the_base_model_guards() {
+        assert!(sol_attn_requested(Some("fullstack")));
+        assert_eq!(sol_13b_profile(Some("fullstack")), WanAttnProfile::Sol14b);
+        assert_eq!(sol_13b_profile(Some("1")), WanAttnProfile::Sol13b);
+        // wan21_fullstack_sol.toml: WAN22_SOL_DENSE_STEPS=10, DENSE_LAYERS=0.
+        let p = sol_13b_profile(Some("fullstack"));
+        assert_eq!(route(p, 9, 5), WanAttnRoute::Dense);
+        assert_eq!(route(p, 10, 0), WanAttnRoute::Dense);
+        assert_eq!(route(p, 10, 29), WanAttnRoute::Sol { tau: 1.0 });
+    }
 
     #[test]
     fn sol_13b_has_no_dense_forwards_but_keeps_layer_zero() {
