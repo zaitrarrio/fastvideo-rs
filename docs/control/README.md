@@ -402,6 +402,13 @@ The collector runs every minute (`collector.ts`):
   - idle burn;
   - per-cluster $/hr and cost today;
   - spend per day by owner (7 days).
+- **CloudRift (second provider, docs/ops/cloudrift.md §7).** With
+  `CLOUDRIFT_API_KEY` set, the same cron lists CloudRift rentals. Their rows
+  in `pods` have `provider = 'cloudrift'` and owner `cloudrift:<fv-kind>`
+  (ours, tag `fv-owner:fastvideo-rs`) or `external:cloudrift`, and costs go
+  to `cost_daily`. The cron terminates our rentals past their
+  `fv-deadline:<unix>` tag or below `CLOUDRIFT_BALANCE_FLOOR`. The CloudRift
+  balance is in the overview's `cloudrift` block, separate from Runpod's.
 
 ## 8. Alerts and policies
 
