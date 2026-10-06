@@ -33,12 +33,17 @@ export interface PoolSpec {
   max_queued?: number;
   job_timeout_s?: number;
   stale_after_s?: number;
+  /** control_plane = edge: the family DO this pool's models queue on (default: from each model's family). */
+  family?: string;
 }
+export type ControlPlane = "gateway" | "edge";
 export interface ClusterSpec {
   name: string;
   /** Image source: a release channel (stable, latest, …), a commit (sha), or one image ref for every pod (all-in-one). */
   image: { channel?: string; sha?: string; ref?: string };
   regions: RegionId[];
+  /** gateway (default): a gateway pod in front; edge: the edge Worker is the only front (no gateway pod). */
+  control_plane?: ControlPlane;
   gateway: {
     enabled: boolean;
     cpu_flavors: CpuFlavor[];
@@ -326,6 +331,10 @@ export function normalizeSpec(input: any): ClusterSpec {
   num("balance_floor", 8, 10000);
   num("min_start", 8, 10000);
   num("max_gpu_dph", 0.1, 50);
+  s.control_plane = s.control_plane ?? "gateway";
+  if (!["gateway", "edge"].includes(s.control_plane)) throw new HttpError(400, "control_plane: gateway | edge");
+  // The edge is the front: no gateway pod (gateway.* settings other than auth do not apply).
+  if (s.control_plane === "edge") s.gateway.enabled = false;
   if (!["keys", "none"].includes(s.gateway.auth)) throw new HttpError(400, "gateway.auth: keys | none");
   if (!["pods", "minimal"].includes(s.gateway.base)) throw new HttpError(400, "gateway.base: pods | minimal");
   s.gateway.vcpu = Number(s.gateway.vcpu) || 2;
@@ -335,3 +344,22 @@ export function normalizeSpec(input: any): ClusterSpec {
   if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".") || "spec"}: ${i.message}`).join("; "), { issues: v.issues });
   return s;
 }
+
+/** The edge family DO a pool's model queues on (docs/serve/edge-control-plane.md §5.2). */
+export function modelFamily(pool: PoolSpec, m?: ModelRef): string {
+  if (pool.family) return pool.family;
+  if (!m) return "fake";
+  if (m.family === "ltx2") return "ltx";
+  if (m.family === "wan" && /^(sfwan|longlive)/.test(m.recipe)) return "sfwan";
+  return m.family;
+}
+
+/** Model id → family for every model a pool serves (fake models included). */
+export function poolModelFamilies(pool: PoolSpec): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of pool.models || []) out[m.id] = modelFamily(pool, m);
+  for (const f of pool.fake_models || []) out[f] = modelFamily(pool);
+  return out;
+}
+
+export const isEdge = (spec: ClusterSpec) => spec.control_plane === "edge";

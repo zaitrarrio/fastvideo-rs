@@ -654,6 +654,48 @@ mod tests {
         }
     }
 
+    /// `h3/plug_h3_4step_engine_ladder` is h3-max's technique set on the
+    /// LongLive-Plug recipe: the same Sol route, plan and settings as
+    /// `h3/sol_h3_4step_engine_ladder`, and the same resolution as that
+    /// profile with `--h3-recipe h3-plug-4step` on the command line (the
+    /// form research-longlive.md 12.8 ran).
+    #[test]
+    fn plug_engine_ladder_is_h3_max_techniques_on_the_plug_recipe() {
+        let none = |_: &str| None;
+        let load = |n: &str| Profile::parse(crate::techniques::builtin::get(n).unwrap()).unwrap();
+        let (plug, max) = (
+            load("h3/plug_h3_4step_engine_ladder"),
+            load("h3/sol_h3_4step_engine_ladder"),
+        );
+        assert_eq!(plug.recipe.as_deref(), Some("h3-plug-4step"));
+        assert_eq!(plug.settings().unwrap(), max.settings().unwrap());
+        let c = contract("h3-plug-4step");
+        assert!(c.fresh_noise && c.dense && c.transformer_forwards == 4);
+        let a = H3Techniques::resolve(None, &c, false, Some(&plug), &none).unwrap();
+        let b = H3Techniques::resolve(Some("h3-plug-4step"), &c, false, Some(&max), &none).unwrap();
+        let m = H3Techniques::resolve(None, &contract("sol-h3"), false, Some(&max), &none).unwrap();
+        for t in [&a, &b] {
+            assert_eq!(t.recipe.as_deref(), Some("h3-plug-4step"));
+        }
+        for t in [&a, &b] {
+            assert_eq!(t.attention, m.attention);
+            assert_eq!(t.sol_policy, H3SolAttnPolicy::Engine);
+            assert_eq!(t.plan.names(), m.plan.names());
+            assert!(t.teacache.is_none() && !t.forces_dense() && !t.fp8_attention.any());
+        }
+        let s = a.sol().unwrap();
+        for step in 0..4 {
+            for layer in [0, 1, 2, 49] {
+                assert_eq!(
+                    technique_route(s, step, layer).unwrap(),
+                    technique_route(m.sol().unwrap(), step, layer).unwrap()
+                );
+            }
+        }
+        // Ref2VA has no prefix sink, as for h3-max.
+        assert!(H3Techniques::resolve(None, &c, true, Some(&plug), &none).is_err());
+    }
+
     /// OFF: listing a technique with `enabled = false` resolves exactly like
     /// not listing it.
     #[test]
