@@ -210,3 +210,43 @@ Then:
 ```bash
 python3 scripts/gpu/sol_bench_table.py artifacts/runpod/sol-bench/<date>/*
 ```
+
+## Phase B run plan (2026-10-06, planned before renting)
+
+The ports landed on main in #29, #30 and #31, and their weights reached EU in #35. Main is 0f7edc8.
+
+**Image:** `ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:3ef20591e12597380766606fb33242e9e718858a0a29e80d959619ddcdcdd17e`.
+- This is `sha-b70f57c`, which is also `:latest`.
+- No runtime image was built for 0f7edc8. Nothing between b70f57c and 0f7edc8 touches a path the image workflow builds from: the diff is build-base, build-pod and serve-compat files only.
+- The image's `fv-gpucheck` has `sana-video` and `sol` (`lingbot-gen`, `lingbot-router`, `cosmos3-gen`).
+- Its `scripts/gpu` has the `solbench` family, `sol/` prompts and `prompts-sol-wan-t2v5.json`.
+
+**GPU:** none of these models has a published RTX 5090 or H100 number, so every cell runs on an **RTX PRO 6000**.
+
+**Pods:** six pods in three pairs, (b1, b2), then (b3, b4), then (b5, b6), so at most 2 are up at once. Each pod has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop. Every launch sets `FV_AVOID_MACHINES=s3p8exc9lcvi`.
+
+**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`).
+
+**Precision is pinned to sol-engine's:**
+- Wan arms run with `FASTVIDEO_WAN_QUANT=off`, the full Wan VAE and Diffusers UniPC sigmas.
+- `FASTVIDEO_FP8` is off except in the extra `cosmos3-teacache-fp8` arm.
+- LTX-2.3 fullopt uses NVFP4 because sol-engine's `config/ltx23/fullopt.toml` does.
+
+**Skipped:** the Wan2.2-5B EasyCache + PISA arm (the Pisa5b slowdown found in phase A).
+
+**Prompts:** LingBot and Cosmos3 run one prompt per arm. An arm that does not finish within the budget is reported as incomplete.
+
+Estimates come from `docs/ports/sol-wan-ltx23.md` §"Estimated GPU time", `docs/ports/sana-video.md` and `docs/perf/sol-lingbot-cosmos3-plan.md` §3. The last are FLOP-based, not measured.
+
+| Pod | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|
+| b1 | `sana-baseline`, `sana-full` (832x480x81, 50 steps, warm) | 2.77x ratio only (GB200) | 15 + 12 min |
+|    | `wan13-sol-base`, `wan13-sol-fullstack` (832x480x81, 50 steps, CFG 6, 5 prompts after a warm one) | none published | 12 + 8 min |
+| b2 | `a14b-sol-base`, `a14b-sol-fullopt` (720p, 81 f, 40 steps, expert swap; fullopt = EasyCache + PISA, `singlegpu_opt.toml`) | 449.67 / 207.01 s (1x GB200) | 30 + 15–20 min |
+| b3 | `ltx23-hq-base`, `ltx23-hq-fullopt` (1920x1088x241 HQ, warm) | 2.40x ratio only (GB200) | 11 + 10 min |
+|    | `lingbot-router` (no weights), `lingbot-fullopt` (1 prompt) | 144.36 s (4x GB200) | 1 + 20–25 min |
+| b4 | `lingbot-baseline` (1 prompt) | 375.53 s (4x GB200) | ~40 min |
+| b5 | `cosmos3-baseline` (1-step warm-up + 1 request) | 130.41 s (4x GB200) | ~40 min |
+| b6 | `cosmos3-teacache` (BF16), then `cosmos3-teacache-fp8` (W8A8; theirs is NVFP4 on middle steps) | 2.26x ratio (4x GB200) | ~30 + ~20 min |
+
+**Cost bound:** 6 pods × 65 min × $2.09/h ≈ **$13.6 at most**; expected about $11. The balance before renting was $35.26 (coordinator), with a $10 floor.

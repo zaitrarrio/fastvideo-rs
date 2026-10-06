@@ -149,6 +149,71 @@ wan14() { # <name> <est> <steps> <env...>
       --prompt "$PROMPT" --seed "$SEED" --clip-dir "$RUNS/$name/frames"
 }
 
+# ---- phase B (models merged 2026-10-06: #29 SANA, #30 LingBot/Cosmos3, #31
+# Wan 1.3B / A14B / LTX-2.3). Arguments mirror runpod-matrix.sh's solbench,
+# sana-video, sol-lingbot and sol-cosmos3 families on main (0f7edc8).
+SOL_IN=/opt/fastvideo-rs/scripts/gpu/sol
+sol_wan_prompts=/opt/fastvideo-rs/scripts/gpu/prompts-sol-wan-t2v5.json
+sol_p0="Will Smith casually eats noodles, his relaxed demeanor contrasting with the energetic background of a bustling street food market. The scene captures a mix of humor and authenticity. Mid-shot framing, vibrant lighting."
+# Wan reference arms: Diffusers' UniPC sigmas, bf16 GEMMs, the full Wan VAE
+# (pins FASTVIDEO_WAN_QUANT=off: sm_100 would default to MXFP8).
+wan_ref=(FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers FASTVIDEO_WAN_QUANT=off FASTVIDEO_WAN_VAE=full)
+# SANA-Video 2B (sol-engine sana_video 2B line): 832x480, 81 f, 50 steps,
+# cfg 6, warm; arms baseline | full (EasyCache 0.1 + QKV merge + bf16 linear attn).
+sana() { # <arm> <est>
+  cell "sana-$1" sana-video-2b-480p "$2" \
+    "$BIN" --mode fast sana-video gen --weights "$W/sana-video-2b-480p" \
+      --prompt "a corgi running on the beach" --arm "$1" --seed 42 --warm --clip "$RUNS/sana-$1/frames"
+}
+# Wan2.1-T2V-1.3B (models/wan21_t2v_1_3b.toml): 832x480, 81 f @ 16 fps, 50
+# UniPC steps, CFG 6, shift 3, 5 prompts after one warm generation.
+wan13() { # <name> <est> <env...>
+  local name="$1" est="$2"; shift 2
+  cell "$name" wan21-t2v-1.3b "$est" env "${wan_ref[@]}" "$@" \
+    "$BIN" --mode fast wan gen --weights "$W/wan21-t2v-1.3b" --preset wan_t2v_1_3b --unipc --steps 50 \
+      --guidance 6.0 --flow-shift 3.0 --fps 16 --height 480 --width 832 --num-frames 81 --seed 1024 \
+      --negative "$wan_neg_cn" --warm --prompts "$sol_wan_prompts" --clip-dir "$RUNS/$name/frames"
+}
+# Wan2.2-T2V-A14B (models/wan22_t2v_a14b.toml): 1280x720, 81 f, 40 steps,
+# shift 12, CFG 4 / 3, boundary 0.875; one prompt, one request after load;
+# experts swapped at the boundary on a 96 GB card (FASTVIDEO_WAN_MOE=auto).
+a14b() { # <name> <est> <env...>
+  local name="$1" est="$2"; shift 2
+  cell "$name" wan22-t2v-a14b "$est" env "${wan_ref[@]}" FASTVIDEO_WAN_MOE=auto "$@" \
+    "$BIN" --mode fast wan gen --weights "$W/wan22-t2v-a14b" --preset wan_2_2_t2v_a14b --unipc --steps 40 \
+      --guidance 4.0 --guidance-2 3.0 --flow-shift 12.0 --fps 16 --height 720 --width 1280 --num-frames 81 \
+      --seed 1024 --negative "$wan_neg_cn" --prompt "$sol_p0" --clip-dir "$RUNS/$name/frames"
+}
+# LTX-2.3 HQ (models/ltx23.toml): dev DiT + distilled LoRA 0.25 / 0.5,
+# 1920x1088, 241 f, 15-step res2s stage 1 + 3-sigma stage 2, seed 42, warm.
+ltx23_prompt="A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail"
+ltx23() { # <name> <est> <stage-2 flag> <env...>
+  local name="$1" est="$2" s2="$3"; shift 3
+  cell "$name" ltx23-hq "$est" env \
+    FASTVIDEO_LTX2_UPSAMPLER="$W/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" "$@" \
+    "$BIN" --mode fast ltx2 gen --model-version 2.3 --hq --weights "$W/ltx23" \
+      --dit "$W/ltx23-dev/ltx-2.3-22b-dev.safetensors" --prompt "$ltx23_prompt" --seed 42 \
+      --text streamed --dit-offload resident --warm "$s2" --clip "$RUNS/$name/frames"
+}
+# LingBot-Video MoE (models/lingbot_video.toml): base 832x480x121 / 40 steps +
+# 1080p refiner / 8 steps, CFG 3, seed 42; one prompt (val3 #0), base and
+# refiner swapped on a 96 GB card.
+lingbot() { # <arm> <est>
+  cell "lingbot-$1" lingbot-moe "$2" \
+    "$BIN" --mode fast sol lingbot-gen --weights "$W/lingbot-video-moe-30b-a3b" \
+      --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts 1 --arm "$1" --residency swap --seed 42 \
+      --clip "$RUNS/lingbot-$1/clips"
+}
+# Cosmos3-Super (models/cosmos3.toml): 1280x720x189, 35 steps, CFG 6, seed 42,
+# one 1-step warm-up request (WARMUP=true), then the timed request.
+cosmos3() { # <name> <arm> <est> <env...>
+  local name="$1" arm="$2" est="$3"; shift 3
+  cell "$name" cosmos3-super "$est" env "$@" \
+    "$BIN" --mode fast sol cosmos3-gen --weights "$W/cosmos3-super" --prompt "$(cat "$SOL_IN/cosmos3-default.txt")" \
+      --negative-prompt "$(cat "$SOL_IN/cosmos3-negative.txt")" --seed 42 --warm --arm "$arm" \
+      --clip "$RUNS/$name/clip"
+}
+
 log "set $SET budget ${BUDGET_S}s cap ${CAP_S}s $(head -1 "$RUNS/sysinfo.txt")"
 case "$SET" in
   a1) # Phase A, instance 1 (RTX 5090 cells; PRO 6000 when no 5090 is free)
@@ -176,6 +241,32 @@ case "$SET" in
     # cache), so the 50-step denoise is 50/15 of this one (docs/perf/sol-bench.md).
     wan14 wan14-720p-base-s15 900 15 -u FASTVIDEO_WAN_SOL_CACHE
     wan5b wan5b-opt 330 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
+    ;;
+  b1) # Phase B: SANA-Video 2B + Wan2.1 1.3B
+    sana baseline 900
+    sana full 720
+    wan13 wan13-sol-base 720
+    wan13 wan13-sol-fullstack 480 FASTVIDEO_WAN_SOL_ATTN=fullstack FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack
+    ;;
+  b2) # Phase B: Wan2.2 T2V-A14B (config/wan22_t2v_a14b/singlegpu_opt.toml: EasyCache 0.30 + PISA 0.10)
+    a14b a14b-sol-base 1800
+    a14b a14b-sol-fullopt 900 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
+  b3) # Phase B: LTX-2.3 HQ, then LingBot fullopt (one prompt)
+    ltx23 ltx23-hq-base 660 --dense-stage2
+    ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
+    lingbot fullopt 1200
+    ;;
+  b4) # Phase B: LingBot baseline (one prompt)
+    lingbot baseline 2400
+    ;;
+  b5) # Phase B: Cosmos3-Super baseline
+    cosmos3 cosmos3-baseline baseline 2400
+    ;;
+  b6) # Phase B: Cosmos3-Super TeaCache 1.15/10/3 (BF16), then + W8A8 FP8 (theirs: NVFP4 middle steps)
+    cosmos3 cosmos3-teacache teacache 1800
+    cosmos3 cosmos3-teacache-fp8 teacache 1200 FASTVIDEO_FP8=1
     ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac
