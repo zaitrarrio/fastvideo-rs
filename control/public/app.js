@@ -50,7 +50,7 @@ function toast(msg) {
 const SERIES = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => `var(--series-${i})`);
 
 // ---------------------------------------------------------------- API
-const state = { csrf: null, me: null, timers: [] };
+const state = { csrf: null, me: null, timers: [], cleanups: [] };
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
   if (opts.body !== undefined) {
@@ -256,6 +256,7 @@ function clearTimers() {
   for (const t of state.timers) clearInterval(t);
   state.timers = [];
   if (state.ws) { try { state.ws.close(); } catch {} state.ws = null; }
+  for (const fn of state.cleanups.splice(0)) { try { fn(); } catch {} }
 }
 async function route() {
   clearTimers();
@@ -1052,66 +1053,23 @@ function envTable(env) {
 }
 
 // ---------------------------------------------------------------- logs
+// The log explorer (ui/logs → public/logs.js): every source, server-side filters in the URL, virtualized list.
+let logsLoading = null;
+function fvLogs() {
+  if (window.FVLogs) return Promise.resolve(window.FVLogs);
+  logsLoading ||= new Promise((res, rej) => {
+    document.head.append(h("link", { rel: "stylesheet", href: "/logs.css" }));
+    const sc = document.createElement("script");
+    sc.src = "/logs.js";
+    sc.onload = () => res(window.FVLogs);
+    sc.onerror = () => { logsLoading = null; rej(new Error("could not load the log explorer")); };
+    document.head.append(sc);
+  });
+  return logsLoading;
+}
 async function pageLogs(main) {
-  const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const pods = (await api("/api/pods?all=1")).pods;
-  let pod = q.get("pod") || "";
-  const podSel = h("select", { "aria-label": "Pod", onchange: () => { location.hash = `#/logs?pod=${podSel.value}`; } }, h("option", { value: "" }, "choose a pod"), pods.map((p) => h("option", { value: p.pod_id, selected: p.pod_id === pod }, `${p.name || p.pod_id} (${p.owner})`)));
-  const level = h("select", { "aria-label": "Level" }, ["trace", "debug", "info", "warn", "error"].map((l) => h("option", { value: l, selected: l === "info" }, l)));
-  const text = h("input", { placeholder: "search (job_id, text…)", "aria-label": "Search" });
-  const out = h("div", { class: "log", id: "logOut" });
-  const status = h("span", { class: "muted small" });
-  const tabs = h("div", { class: "tabs" });
-  let mode = "shipped";
-  let lastId = 0;
-  const line = (l) => h("div", { class: `lv-${l.level}` }, `${new Date(l.ts).toISOString().slice(0, 23)} ${l.level.toUpperCase().padEnd(5)} ${l.target ? l.target + ": " : ""}${l.msg}${l.fields ? " " + JSON.stringify(l.fields) : ""}`);
-  const load = async () => {
-    if (!pod) { out.replaceChildren(h("div", { class: "muted" }, "Pick a pod.")); return; }
-    if (mode === "runpod") {
-      const r = await api(`/api/pods/${pod}/runpod-logs`);
-      out.replaceChildren(...r.container.map((x) => h("div", {}, x)), h("div", { class: "muted" }, "— system —"), ...r.system.map((x) => h("div", { class: "muted" }, x)));
-      status.textContent = `Runpod's own log tail (${r.container.length} lines; not searchable, no history).`;
-      return;
-    }
-    const p = new URLSearchParams({ pod, level: level.value, limit: "500" });
-    if (text.value) p.set("q", text.value);
-    const r = await api(`/api/logs?${p}`);
-    lastId = r.lines.length ? r.lines[r.lines.length - 1].id : 0;
-    out.replaceChildren(...r.lines.map(line));
-    out.scrollTop = out.scrollHeight;
-    status.textContent = `${r.lines.length} lines (D1 tail, last 24 h)`;
-  };
-  const tail = () => {
-    if (state.ws) { state.ws.close(); state.ws = null; tailBtn.textContent = "Live tail"; return; }
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/logs/tail?pod=${encodeURIComponent(pod)}`);
-    state.ws = ws;
-    tailBtn.textContent = "Stop tail";
-    ws.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        const order = ["trace", "debug", "info", "warn", "error"];
-        for (const l of m.lines) if (order.indexOf(l.level) >= order.indexOf(level.value) && (!text.value || JSON.stringify(l).includes(text.value))) out.append(line(l));
-        out.scrollTop = out.scrollHeight;
-      } catch {}
-    };
-    ws.onclose = () => { tailBtn.textContent = "Live tail"; status.textContent = "tail closed"; };
-    ws.onopen = () => { status.textContent = "live"; };
-    state.timers.push(setInterval(() => ws.readyState === 1 && ws.send("ping"), 25000));
-  };
-  const tailBtn = h("button", { onclick: tail, disabled: !pod }, "Live tail");
-  for (const [k, label] of [["shipped", "Shipped (fv-serve)"], ["runpod", "Runpod container log"]]) tabs.append(h("button", { class: mode === k ? "on" : "", onclick: (ev) => { mode = k; for (const b of tabs.children) b.classList.remove("on"); ev.target.classList.add("on"); load(); } }, label));
-  main.replaceChildren(
-    h("h1", {}, "Logs"),
-    card(
-      null,
-      h("div", { class: "row", style: "margin-bottom:10px" }, podSel, level, text, h("button", { onclick: load }, "Search"), tailBtn, pod && h("a", { class: "btn", href: `/api/logs/download?pod=${encodeURIComponent(pod)}&day=${new Date().toISOString().slice(0, 10)}` }, "Download today"), status),
-      tabs,
-      out,
-    ),
-  );
-  text.addEventListener("keydown", (e) => e.key === "Enter" && load());
-  level.addEventListener("change", load);
-  await load().catch((e) => (status.textContent = e.message));
+  const L = await fvLogs();
+  await L.mount(main, { api, toast, onCleanup: (fn) => state.cleanups.push(fn) });
 }
 
 // ---------------------------------------------------------------- costs

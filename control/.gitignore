@@ -4,3 +4,7 @@ dist/
 .dev.vars
 test-results/
 public/editor.js
+public/logs.js
+public/logs.css
+public/editor.css
+node_modules
