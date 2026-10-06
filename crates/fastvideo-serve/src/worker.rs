@@ -282,7 +282,7 @@ pub fn status_json(st: &WorkerState) -> Value {
         "capacity": s.executors.max(1),
         "queue_max": st.queue_max,
         "models": models,
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::build_info::VERSION,
         // Git sha, build time, variant, image and channel (docs/serve/releases.md).
         "build": crate::build_info::BuildInfo::current().json(),
     })

@@ -42,6 +42,10 @@
 #                                    scripts/ci/tools-release.sh publish runs this,
 #                                    tests and publishes a GitHub tools release
 #                                    (docs/dev/tools-releases.md; wakes the pod)
+#   build-pod.sh runner              register and start the pod's GitHub Actions runner
+#                                    (labels fv-build) for tools-release.yml; `up`
+#                                    does it too when a token source exists
+#                                    (docs/dev/tools-releases.md "Build pod runner")
 #   build-pod.sh volume-create       create the fv-build volume (once)
 #   build-pod.sh plan                print the pod create payload (no API call)
 #
@@ -348,6 +352,52 @@ cmd_up() {
   [[ "$srv_pod" == "$srv_local" ]] || log "note: pod runs server $srv_pod, this checkout has $srv_local (down + up to update)"
   [[ "$(jq -r '.imageName // ""' <<<"$(pod_json)")" == "$IMAGE" ]] \
     || log "note: pod runs image $(jq -r '.imageName // "?"' <<<"$(pod_json)"), this checkout pins $IMAGE (down + up to update)"
+  # The GitHub runner for tools-release.yml, when a token source is set up.
+  if [[ "${FV_BUILD_RUNNER:-auto}" != 0 ]] && runner_token_source >/dev/null; then
+    cmd_runner || log "WARNING: the GitHub runner did not register (build-pod.sh runner; docs/dev/tools-releases.md)"
+  fi
+}
+
+# ---- GitHub Actions runner (docs/dev/tools-releases.md "Build pod runner") ----
+# A registration token (valid 1 h) from FV_GH_RUNNER_TOKEN_FILE (default
+# ~/.config/fv/gh-runner-token), or minted with a repo-admin PAT from
+# FV_GH_RUNNER_PAT_FILE (default ~/.config/fv/gh-runner-pat; fine-grained,
+# "Administration: write" on the repository). Only the short-lived
+# registration token goes to the pod (request body, never argv, never stored).
+RUNNER_REPO="${FV_GH_RUNNER_REPO:-zaitrarrio/fastvideo-rs}"
+runner_token_source() {
+  local tf="${FV_GH_RUNNER_TOKEN_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-token}"
+  local pf="${FV_GH_RUNNER_PAT_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fv/gh-runner-pat}"
+  if [[ -s "$tf" ]]; then echo "token:$tf"
+  elif [[ -s "$pf" ]]; then echo "pat:$pf"
+  else return 1
+  fi
+}
+cmd_runner() {
+  local src kind f tok hdr
+  src="$(runner_token_source)" || die "no GitHub runner token: put a registration token (Settings -> Actions -> Runners -> New self-hosted runner, valid 1 h) in ~/.config/fv/gh-runner-token, or a fine-grained PAT with Administration: write on $RUNNER_REPO in ~/.config/fv/gh-runner-pat (docs/dev/tools-releases.md)"
+  kind="${src%%:*}"; f="${src#*:}"
+  if [[ "$kind" == token ]]; then
+    tok="$(tr -d ' \r\n' <"$f")"
+  else
+    hdr="$(umask 077 && mktemp)"
+    printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$(tr -d ' \r\n' <"$f")" >"$hdr"
+    tok="$(curl -sS --fail-with-body -X POST -H @"$hdr" "https://api.github.com/repos/$RUNNER_REPO/actions/runners/registration-token" | jq -r '.token // empty')" || true
+    rm -f "$hdr"
+    [[ -n "$tok" ]] || die "could not mint a runner registration token with $f (needs Administration: write on $RUNNER_REPO)"
+  fi
+  jq -nc --arg t "$tok" --arg r "$RUNNER_REPO" --arg l "${FV_GH_RUNNER_LABELS:-fv-build}" '{token: $t, repo: $r, labels: $l}' \
+    | svc_or_die "runner registration" POST /v1/runner --data-binary @-
+  local st
+  for _ in $(seq 1 60); do
+    st="$(svc GET /v1/runner)"
+    case "$(jq -r .phase <<<"$st")" in
+      running) log "GitHub runner $(jq -r .name <<<"$st") ($(jq -r .labels <<<"$st"), actions/runner $(jq -r '.version // "?"' <<<"$st")) is up for $RUNNER_REPO"; return 0 ;;
+      failed|exited*) die "GitHub runner: $(jq -r '.error // .phase' <<<"$st")" ;;
+    esac
+    sleep 5
+  done
+  die "GitHub runner still $(jq -r .phase <<<"$st") after 5 min"
 }
 
 cmd_status() {
@@ -614,6 +664,7 @@ cmd_release_artifacts() {
   FV_ROOT="$wt" cmd_sync "$REL_AGENT"
   local env=(FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" FV_BUILD_ID="$build_id" FV_REL_RUN_ID="$run_id")
   [[ -n "$sets" ]] && env+=(FV_REL_SETS="$sets")
+  [[ -n "${FV_RELEASE_VERSION:-}" ]] && env+=(FV_RELEASE_VERSION="$FV_RELEASE_VERSION")
   cmd_run "$REL_AGENT" --no-sync -- "${env[@]}" bash scripts/dev/release-artifacts-pod.sh \
     || die "pod build failed (log above; re-attach with build-pod.sh log <job>)"
 
@@ -642,6 +693,7 @@ cmd_volume_create() {
 
 case "${1:-}" in
   up) cmd_up ;;
+  runner) cmd_runner ;;
   status) cmd_status ;;
   agents) shift; svc GET "/v1/agents$([[ "${1:-}" == --sizes ]] && echo '?sizes=1')" | jq . ;;
   sync) shift; cmd_sync "$@" ;;

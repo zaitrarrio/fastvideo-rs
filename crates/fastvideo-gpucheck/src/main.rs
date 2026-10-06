@@ -72,12 +72,18 @@ use clap::{Args, Parser, Subcommand};
 use mode::Mode;
 use report::{Report, StageError, StageResult};
 
+/// `-V` / `--version`: the tools release this binary was built as
+/// (`FV_RELEASE_VERSION` at build time; tags `tools-v<version>`,
+/// docs/dev/tools-releases.md), else the workspace version.
+const VERSION: &str = match option_env!("FV_RELEASE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
-// `-V` / `--version`: the tools version (the workspace version; tools
-// releases are tagged `tools-v<version>`, docs/dev/tools-releases.md).
 #[command(
     name = "fv-gpucheck",
-    version,
+    version = VERSION,
     about = "Fail-fast numerical/perf validation for fastvideo-cudarc"
 )]
 struct Cli {

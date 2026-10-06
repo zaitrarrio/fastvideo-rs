@@ -42,6 +42,28 @@ check "list order" "0.2.0 0.1.11-pre.abc 0.1.10 0.1.10-pre.old 0.1.9 0.1.2" "$(b
 check "prune keeps N stable, drops released prereleases, never other tags" \
   "tools-v0.1.9 tools-v0.1.2 tools-v0.1.10-pre.old" \
   "$(FV_TOOLS_KEEP=1 FV_GITHUB_TOKEN_FILE=/dev/null bash "$T" prune --dry-run 2>&1 | sed -n 's/.*prune (dry run): //p' | paste -sd' ')"
+# Version rule: the workspace version when above the highest release, else its PATCH + 1.
+w="$(bash "$T" version HEAD)"
+plan() { bash "$T" plan HEAD "$@" 2>/dev/null; }
+check "version: highest release 0.1.10 >= workspace $w -> 0.1.11" "tools-v0.1.11 false" "$(plan | jq -r '"\(.tag) \(.skip)"')"
+echo '[]' >"$tmp/empty.json"
+check "version: no release yet -> the workspace version" "tools-v$w" "$(FV_TOOLS_RELEASES_FILE="$tmp/empty.json" plan | jq -r .tag)"
+jq '[.[] | select(.tag_name == "v1.0.0")] + [{tag_name: "tools-v0.0.9", id: 3, draft: false, prerelease: false, html_url: "u",
+     created_at: "2026-01-01T00:00:00Z", body: "input-hash: zzz", assets: []}]' "$tmp/rels.json" >"$tmp/low.json"
+check "version: workspace above the highest release (a manual bump) -> it" "tools-v$w" "$(FV_TOOLS_RELEASES_FILE="$tmp/low.json" plan | jq -r .tag)"
+check "version: drafts and prereleases do not count (0.2.0 draft, 0.1.11-pre)" "0.1.10" "$(plan | jq -r .latest)"
+check "prerelease tag" "tools-v0.1.11-pre.$(git -C "$HERE/../.." rev-parse HEAD | cut -c1-12)" "$(plan --prerelease | jq -r .tag)"
+check "plan writes GITHUB_OUTPUT" "version=0.1.11" "$(GITHUB_OUTPUT="$tmp/gho" plan >/dev/null; grep '^version=' "$tmp/gho")"
+check "skip-if-unchanged: the inputs of a release" "true tools-v0.1.10" "$(
+  h="$(bash "$T" input-hash HEAD)"
+  jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same0.json"
+  FV_TOOLS_RELEASES_FILE="$tmp/same0.json" plan | jq -r '"\(.skip) \(.skip_reason | capture("of (?<t>tools-v[^ ]+)").t)"')"
+# upload refuses a stage whose tarball no longer matches its manifest (before any API write).
+mkdir -p "$tmp/stage" && echo data >"$tmp/stage/oxide.tar.gz"
+jq -n '{tag: "tools-v0.1.11", version: "0.1.11", source_commit: "abc", sets: {oxide: {tarball: "oxide.tar.gz", sha256: "0000"}}}' >"$tmp/stage/manifest.json"
+printf 'notes\nmanifest-sha256: %s\n' "$(sha256sum "$tmp/stage/manifest.json" | cut -d' ' -f1)" >"$tmp/stage/body.md"
+check "upload refuses a tampered tarball" 2 "$(FV_GITHUB_TOKEN_FILE=/dev/null bash "$T" upload "$tmp/stage" >"$tmp/up.log" 2>&1; echo $?)"
+grep -q "oxide.tar.gz missing or its sha256 differs" "$tmp/up.log" && echo "ok   (said why)" || { echo "FAIL upload message"; cat "$tmp/up.log"; fail=1; }
 check "unchanged inputs: nothing to publish" 0 "$(
   h="$(bash "$T" input-hash HEAD)"
   jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same.json"

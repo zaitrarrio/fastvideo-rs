@@ -228,7 +228,7 @@ async fn healthz(State(h): State<HealthState>) -> Response {
             "models": cat.table.models().map(|m| m.id.0.clone()).collect::<Vec<_>>(),
             "pools": public_pools(&h.gw),
             "stores": {"jobs": "d1"},
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::build_info::VERSION,
             "build": crate::build_info::BuildInfo::current().json(),
         })),
     )
@@ -238,7 +238,7 @@ async fn healthz(State(h): State<HealthState>) -> Response {
 async fn root(State(h): State<HealthState>) -> Response {
     let cat = h.gw.catalog();
     let model = h.root_model.clone().or_else(|| cat.table.models().next().map(|m| m.served_names.first().cloned().unwrap_or_else(|| m.id.0.clone())));
-    Json(json!({"model": model, "server": "fv-serve", "role": "gateway", "version": env!("CARGO_PKG_VERSION")})).into_response()
+    Json(json!({"model": model, "server": "fv-serve", "role": "gateway", "version": crate::build_info::VERSION})).into_response()
 }
 
 async fn metrics_text(State(h): State<HealthState>) -> Response {

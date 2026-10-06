@@ -2,15 +2,17 @@
 
 Owner decisions 2026-10-06: the prebuilt tool binaries are distributed as
 **GitHub Releases** (R2 bucket `fv-build-artifacts` retired), versioned with
-**SemVer**, and published only after they compiled and passed their tests on
-the build pod. Image workflows assemble images from a release instead of
-compiling.
+**SemVer**, and **released automatically when a push to main changed them**,
+after they compiled and passed their tests **on the build pod** (a
+self-hosted GitHub runner): `.github/workflows/tools-release.yml`. Image
+workflows assemble images from a release instead of compiling.
 
 ```bash
 T=scripts/ci/tools-release.sh
-$T status                 # version, input hash, newest release; "ready" / "bump first" / "released"
-$T bump fix               # or feature / breaking: Cargo.toml + Cargo.lock (commit + merge it)
-$T publish origin/main    # coordinator: build on the pod, test, publish tools-v<version>
+$T status                 # version, input hash, newest release, the next tag
+$T plan origin/main       # what tools-release.yml would do: skip, or the version/tag
+$T bump feature           # only for a MINOR/MAJOR change: Cargo.toml + Cargo.lock, in the PR
+$T publish origin/main    # by hand from the coordinator (plan + build --pod + upload)
 $T list                   # releases, highest version first
 $T resolve [--version 0.1.3] [--input-hash H] [--exact]
 $T fetch tools-v0.1.0 /tmp/t serve-gateway    # download + verify sha256
@@ -42,10 +44,13 @@ pick by SemVer, not by GitHub's flag or by date.
 
 ## Versioning
 
-The tools version is the workspace version (`[workspace.package] version` in
-`Cargo.toml`), so every binary already reports it: `fv-serve -V` /
-`--version`, `fv-gpucheck -V`, and `version` in fv-serve's `/health`. hf-fm is
-third-party (its own version is in the manifest).
+Every binary reports the release version: `fv-serve -V` / `--version`, the
+`version` of fv-serve's `/health` (and the gateway, worker and edge routes),
+`fv-gpucheck -V`. The build passes it as `FV_RELEASE_VERSION`
+(crates/fastvideo-serve/build.rs, `option_env!` in fv-gpucheck); a local
+build without it reports the workspace version (`[workspace.package]
+version` in `Cargo.toml`). hf-fm is third-party (its version is in the
+manifest).
 
 | change | 1.0 and later | 0.x (now) |
 |---|---|---|
@@ -53,17 +58,25 @@ third-party (its own version is in the manifest).
 | backwards-compatible feature: new model/recipe/arm, flag, endpoint | MINOR | PATCH |
 | fix or perf, no interface change | PATCH | PATCH |
 
-0.x follows Cargo's rule (`0.y` is the compatibility line). The first release
-is `tools-v0.1.0`. Commit subjects here are not Conventional Commits, so the
-bump is explicit: whoever lands a change to the tools' inputs (or the
-coordinator before publishing) runs `tools-release.sh bump
-breaking|feature|fix` and commits `Cargo.toml` + `Cargo.lock`; the release
-notes list the commits since the previous tag. `publish` checks it:
+0.x follows Cargo's rule (`0.y` is the compatibility line).
 
-- inputs unchanged since a release (same input hash) → nothing to publish;
-- inputs changed and the version is not above the highest release →
-  **refused** ("bump it");
-- the tag exists → **refused**.
+**The release version needs no human step** (`tools-release.sh plan`):
+
+- inputs unchanged since a release (same input hash) → **skip**: nothing
+  builds;
+- else the **workspace version** if it is above the highest `tools-v*`
+  release (someone ran `tools-release.sh bump breaking|feature` in their PR
+  for a MINOR/MAJOR change);
+- else **the highest release's PATCH + 1** (0.x too).
+
+Nothing is committed back to main: the version lives in the tag, the
+manifest and the binaries. So a PATCH needs nothing; a feature or a breaking
+change needs the `bump` (Cargo.toml + Cargo.lock) merged with it, and if it is
+forgotten the release is a PATCH (fix by bumping in a follow-up: the next
+release takes the bumped version). Release notes list the commits that
+touched the inputs since the previous tag. A tag that already exists with
+other inputs stops the run (a race); prereleases (`--prerelease`) are
+`tools-v<next>-pre.<sha12>`.
 
 ## Inputs (when the tools "changed")
 
@@ -77,44 +90,86 @@ not inputs: with releases they only assemble images. Not covered: the
 `stable` toolchain moving under an unchanged `rust-toolchain.toml` and the
 unpinned hf-fetch-model; both are recorded in the manifest.
 
-## Publishing (build, test, then publish)
+## Publishing (tools-release.yml: build, test, then publish)
 
-`tools-release.sh publish <rev>` runs in the coordinator's container, which
-already drives the build pod and holds the token; the pod never sees it.
+On every push to main (and by hand, on main only), one run at a time; a
+newer push replaces a queued run, the running one finishes:
 
-1. Checks: stable releases only from commits on `origin/main` (`--prerelease`
-   for others); the local recipe equals the commit's; the version/tag rules
-   above.
-2. **Build**: `build-pod.sh release-artifacts <sha>` (agent `fv-release`, or
-   `$FV_RELEASE_AGENT`): every set in release mode on the pod, the
-   `fv-gpucheck nvrtc` gate (AOT cubins + oxide cubins for sm_100/120
-   embedded), the glibc ≤ 2.35 check; fetched and sha256-checked.
-3. **Test gate** (any failure: nothing is uploaded):
-   `scripts/serve/check.sh` (check + clippy + tests of the serve crates) on the
-   pod in its own target dir (agent `<release agent>-test`); the **shipped**
-   gpucheck/cudarc unit-test binaries (`gpucheck-tests` set) run here against
-   the commit's sources (`prebuilt.sh run-tests`); `-V` of the shipped
-   fv-serve (gateway, fake) and fv-gpucheck must print the version.
-4. **Publish**: a draft release (no tag yet) → upload the tarballs and
-   `manifest.json` → publish (creates the tag). Any failure deletes the
-   draft, so a half-uploaded set is never visible.
-5. **Verify**: download every set as a consumer would and check every sha256.
-6. **Prune** (below), and with `--dispatch` start serve-image,
-   gpucheck-runtime-image and vast-pytorch-image (with `tools_version` =
-   the new version) on main (needs `actions:write`), so the images pick up
-   the release right away. Releases created with a workflow's
-   `GITHUB_TOKEN` fire no `release` event for other workflows, so every
-   publisher (this script, and any future publish workflow) must dispatch
-   explicitly; vast-pytorch-image also listens to `release: published`
-   (`tools-v*` only) for releases created with a PAT or from a runner.
+1. **plan** (GitHub-hosted, seconds): `tools-release.sh plan $GITHUB_SHA`.
+   Skip when the input hash is released; else the version above.
+2. **build** on the **build pod** (`runs-on: [self-hosted, fv-build]`):
+   `tools-release.sh build $GITHUB_SHA --local --version V --tag tools-vV`:
+   - every set in release mode (scripts/dev/release-artifacts-pod.sh, as
+     `build-pod.sh release-artifacts` runs it) with `FV_RELEASE_VERSION=V`,
+     the `fv-gpucheck nvrtc` gate (AOT cubins + oxide cubins for sm_100/120
+     embedded), the glibc ≤ 2.35 check, target dir `target/gh-runner`;
+   - **test gate** (any failure: nothing is published):
+     `scripts/serve/check.sh` (check + clippy + tests of the serve crates,
+     target `target/gh-runner-test`, no debuginfo); the **shipped**
+     gpucheck/cudarc unit-test binaries (`gpucheck-tests`) against the
+     commit's sources; `-V` of the shipped fv-serve (gateway, fake) and
+     fv-gpucheck must print V;
+   - the staged release (tarballs, `manifest.json`, `body.md`) becomes a
+     workflow artifact (3 days).
+3. **publish** (GitHub-hosted, the job's `GITHUB_TOKEN` with
+   `contents: write`, `actions: write`): `tools-release.sh upload stage
+   --dispatch`: a draft release (no tag yet) → upload → publish (creates the
+   tag; a failure before that deletes the draft) → download every set and
+   check every sha256 → prune → dispatch serve-image,
+   gpucheck-runtime-image and vast-pytorch-image (`tools_version` = V) on
+   main. A release created with `GITHUB_TOKEN` fires no `release` event for
+   other workflows, so dispatching is explicit; vast-pytorch-image also
+   listens to `release: published` (`tools-v*`) for releases made with a PAT
+   or from a runner.
 
-**Token**: `~/.config/fv/github_token` (mode 600) in the coordinator
-container, or `FV_GITHUB_TOKEN_FILE`; it needs `contents:write` on this
-repository (and `actions:write` for `--dispatch`). The script reads it into
-a mode-600 header file that curl reads (never on a command line, never
-printed, removed on exit) and sends it only to `api.github.com` /
-`uploads.github.com`. It is not copied to the build pod or anywhere else.
-The workflows only read, with their own `GITHUB_TOKEN`.
+**Tokens**: none is stored on the shared pod. The build job has a read-only
+`GITHUB_TOKEN` and checks out with `persist-credentials: false`; the publish
+job (with write access) runs on GitHub's hosted runner. The pod's runner
+holds only its own runner credentials (below).
+
+**By hand** (`tools-release.sh publish <rev>`, the coordinator): the same
+plan, `build --pod` (`build-pod.sh release-artifacts` + jobs on the pod, the
+unit-test binaries run in the coordinator's container), then `upload`, with
+`~/.config/fv/github_token` or `FV_GITHUB_TOKEN_FILE` (contents:write,
+actions:write for `--dispatch`; read into a mode-600 header file, never on a
+command line, never printed). The coordinator session's GitHub proxy refuses
+release writes (2026-10-06), so this path needs another session type or
+machine; `--no-upload` stops after the gate.
+
+## Build pod runner
+
+The build pod is a **self-hosted runner** with the label `fv-build`,
+registered **once per pod** (not ephemeral: a pod lives hours and runs one
+tools release at a time; `--replace` takes over the name
+`fv-build-<pod id>` from an earlier pod; GitHub drops offline runners after
+14 days). build-pod-server.py (`POST /v1/runner`) downloads the newest
+actions/runner, checks its sha256 against the release notes, configures it
+with the registration token and keeps `run.sh` running; steps see the pod's
+job environment (toolchain, CUDA, sccache; no `RUNPOD_*`). A running
+workflow job counts as pod activity (no idle stop; the 8 h cap still
+applies) and its `target/gh-runner*` dirs are not evicted meanwhile. The
+runner's credentials live in `<local>/actions-runner` on the container disk
+and go with the pod. `GET /v1/runner` (and `build-pod.sh status`) shows it.
+
+**Registering** (`build-pod.sh runner`; `build-pod.sh up` does it too when a
+token source exists, `FV_BUILD_RUNNER=0` skips): the coordinator sends a
+**registration token** (valid 1 h, used once, never written on the pod) from
+
+- `~/.config/fv/gh-runner-token`: a token from the repository's Settings →
+  Actions → Runners → *New self-hosted runner* (the `--token` value), or
+- `~/.config/fv/gh-runner-pat`: a fine-grained PAT for this repository with
+  **Administration: read and write**, with which `build-pod.sh` mints one
+  (`POST /repos/{repo}/actions/runners/registration-token`) at every `up`.
+
+Without either, `build-pod.sh runner` fails and says so. The build job waits
+in GitHub's queue while no runner is online (up to 24 h): start the pod
+(`build-pod.sh up`) after merging a tools change, or let the next `up` pick
+it up.
+
+**Safety**: only `tools-release.yml` (push to main, dispatch on main) runs on
+`fv-build`; no workflow on `pull_request` may use it (a fork's code would
+run on the shared pod). Keep "Require approval for all outside
+collaborators" on for Actions.
 
 ## Consuming (the workflows)
 
@@ -130,9 +185,9 @@ The workflows only read, with their own `GITHUB_TOKEN`.
      use the release's build id for `:build-<id>` and the binary's
      `.build-id`, so validate.sh never mistakes it for this commit's binary;
    - test workflows (gpucheck-t0, serve-compat) and image workflows on
-     branches, which must run their own code: **compile on the runner** as
-     before (with a warning), unless a prerelease for exactly these inputs
-     exists (`publish --prerelease <branch head>` from the coordinator).
+     branches, which must run their own code: **compile on the GitHub
+     runner** as before (with a warning), unless a prerelease for exactly
+     these inputs exists (`publish --prerelease <branch head>`).
 
 **vast-pytorch-image is different (owner decision 2026-10-06):** it always
 ships the **newest** tools release (`FV_PREBUILT_SELECT=newest`: highest
@@ -147,18 +202,19 @@ event). Tags: `:build-<release build id>`, `:tools-v<X.Y.Z>`,
 `:sha-<commit>` and `:latest` (main or a release); labels
 `dev.fastvideo.tools` and `dev.fastvideo.tools-commit`.
 
-**Trade-off** (chosen for simplicity): main never waits for the pod and never
-compiles, but between a tools change landing and its release, main's images
-carry the previous release's binaries (labelled). `publish --dispatch`
-rebuilds them as soon as the release is out; the coordinator runs `publish`
-after merging a tools change. The alternative (images wait/poll for their
-exact release) blocks main's images on the coordinator and was not chosen.
+**Trade-off** (chosen for simplicity): main's image workflows never wait for
+the pod and never compile, but between a tools change landing and its
+release (~30–40 min, longer while the pod is down), main's images carry the
+previous release's binaries (labelled). tools-release.yml dispatches the
+image workflows as soon as the release is out, so they then rebuild with
+it. The alternative (images wait/poll for their exact release) blocks
+main's images on the pod and was not chosen.
 Pull requests that change the tools compile on the runner, as they did
 before (R2 artifacts for PR heads existed only when someone built them).
 
 ## Retention
 
-`prune` (run by every stable publish) keeps the newest `FV_TOOLS_KEEP`
+`prune` (run by every stable upload) keeps the newest `FV_TOOLS_KEEP`
 (default 10) stable releases plus the pinned `FV_TOOLS_VERSION`, and deletes
 prereleases older than 14 days or whose version has been released, each with
 its tag. It refuses anything not tagged `tools-v…`.

@@ -201,9 +201,12 @@ are still assembled on GitHub. Publishing, versioning, retention and how the
 workflows pick a release: **docs/dev/tools-releases.md**.
 
 ```bash
-bash scripts/ci/tools-release.sh status            # does HEAD need a release / a bump?
-bash scripts/ci/tools-release.sh publish origin/main   # build + test + publish (coordinator)
 B=scripts/dev/build-pod.sh
+# Published automatically by .github/workflows/tools-release.yml on pushes to main
+# that change the tools, built and tested on this pod as a self-hosted runner:
+$B runner                          # register the pod's runner (`up` does it when a token source exists)
+bash scripts/ci/tools-release.sh status            # does HEAD need a release? the next tag
+bash scripts/ci/tools-release.sh publish origin/main   # by hand: build + test + publish (coordinator)
 $B release-artifacts <sha>         # build + verify only, into artifacts/release/<sha>/ ($FV_RELEASE_OUT)
 $B release-artifacts <sha> --sets "serve-fake gpucheck-tests"   # a subset
 ```

@@ -302,7 +302,7 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
         worker_id: st.worker_id.clone(),
         pool: link.cfg.scope.object_name(),
         proto: proto::PROTO_VERSION,
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: crate::build_info::VERSION.to_owned(),
         sha,
         capacity,
         draining: st.draining(),

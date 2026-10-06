@@ -242,6 +242,46 @@ class WatchTest(unittest.TestCase):
             self.assertIn("this job is killed", f.read())
 
 
+class RunnerTest(unittest.TestCase):
+    """The GitHub runner: a job on it is activity; its dirs are busy meanwhile."""
+
+    def setUp(self):
+        self.orig = (bps.POLICY, bps.STOPPER, bps.last_activity, bps.runner_busy)
+        bps.POLICY = bps.StopPolicy(boot=0.0, idle_s=20 * M, max_s=8 * H, grace_s=30 * M)
+        self.calls = []
+        bps.STOPPER = bps.Stopper(call=lambda *a: self.calls.append(a), pod="pod1")
+        bps.last_activity = 0.0
+        bps.jobs.clear()
+
+    def tearDown(self):
+        bps.POLICY, bps.STOPPER, bps.last_activity, bps.runner_busy = self.orig
+
+    def test_a_runner_job_keeps_the_pod_up_until_the_cap(self):
+        bps.runner_busy = lambda: True
+        self.assertIsNone(bps.watch_tick(60 * M))
+        self.assertEqual(bps.last_activity, 60 * M)
+        self.assertEqual(self.calls, [])
+        self.assertIn("grace", bps.watch_tick(8 * H + 30 * M))
+
+    def test_an_idle_runner_does_not(self):
+        bps.runner_busy = lambda: False
+        self.assertTrue(bps.watch_tick(20 * M).startswith("idle"))
+
+    def test_runner_dirs_are_busy_only_while_it_works(self):
+        fs = bps.LocalFS()
+        bps.runner_busy = lambda: True
+        self.assertTrue(fs.busy("gh-runner"))
+        self.assertTrue(fs.busy("gh-runner-test"))
+        self.assertFalse(fs.busy("someone-else"))
+        bps.runner_busy = lambda: False
+        self.assertFalse(fs.busy("gh-runner"))
+
+    def test_no_runner_process_is_not_busy(self):
+        bps.runner_busy = self.orig[3]
+        bps.runner_proc = None
+        self.assertFalse(bps.runner_busy())
+
+
 class HttpTest(unittest.TestCase):
     """Status and health polls must not reset the idle timer."""
 
@@ -275,6 +315,20 @@ class HttpTest(unittest.TestCase):
             self.assertIn(k, hz)
         self.assertIn("attempts", hz["self_stop"])
         self.assertIsInstance(hz["jobs"], list)
+
+    def test_runner_registration_validates_and_never_echoes_the_token(self):
+        def post(body):
+            req = urllib.request.Request(self.url + "/v1/runner", method="POST", data=json.dumps(body).encode(),
+                                         headers={"Authorization": "Bearer " + TOKEN})
+            return urllib.request.urlopen(req, timeout=10)
+        for bad in ({"repo": "a/b"}, {"token": "t", "repo": "not a repo"},
+                    {"token": "t", "repo": "a/b", "labels": "x y"}):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                post(bad)
+            self.assertEqual(cm.exception.code, 400)
+        st = self.get("/v1/runner")
+        self.assertIn("phase", st)
+        self.assertNotIn("token", st)
 
     def test_job_submit_past_the_cap_is_refused(self):
         orig = bps.POLICY

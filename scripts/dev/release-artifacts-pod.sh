@@ -34,7 +34,7 @@
 #
 # Env (set by build-pod.sh): FV_REL_SHA, FV_GIT_SHA, FV_BUILD_TIME, FV_BUILD_ID
 # (scripts/gpu/docker.sh build-id at that commit), FV_REL_RUN_ID; optional
-# FV_REL_SETS (space list, default all), FV_SERVE_FEATURES (cuda,http-client),
+# FV_RELEASE_VERSION (the version the binaries report), FV_REL_SETS (space list, default all), FV_SERVE_FEATURES (cuda,http-client),
 # FV_GATEWAY_FEATURES (http-client), FV_REL_MAX_GLIBC (2.35).
 set -euo pipefail
 
@@ -62,6 +62,9 @@ export CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARG
 export CUDARC_CUDA_VERSION=13000 NVCC="$CUDA_HOME/bin/nvcc"
 # Build identity, as the image build args set it (crates/fastvideo-serve/build.rs).
 export BUILD_ID="$FV_BUILD_ID" FV_BUILD_TIME="${FV_BUILD_TIME:-}"
+# The tools release version the binaries report (`-V`, /health); empty: the
+# workspace version (docs/dev/tools-releases.md "Versioning").
+if [[ -n "${FV_RELEASE_VERSION:-}" ]]; then export FV_RELEASE_VERSION; else unset FV_RELEASE_VERSION; fi
 unset GITHUB_SHA
 
 # Older snapshots of this commit's outputs only (the target dir is reused).
@@ -296,6 +299,7 @@ jq -n --arg sha "$FV_REL_SHA" --arg git "$FV_GIT_SHA" --arg bid "$FV_BUILD_ID" -
   --arg nvcc "$("$CUDA_HOME/bin/nvcc" --version | tail -2 | tr '\n' ' ')" \
   --arg tileiras "$("$CUDA_HOME/bin/tileiras" --version 2>&1 | tail -1)" \
   --arg glibc "$(ldd --version | head -1)" --arg maxg "$MAX_GLIBC" --arg oxk "$OXIDE_KEY" --arg hffm "$HF_FM_VERSION" \
+  --arg relv "${FV_RELEASE_VERSION:-}" \
   --arg script "$(sha256sum "$0" | cut -c1-16)" --arg image "${FV_BUILD_IMAGE:-unknown image}" --argjson sets "$sets_json" '{
     schema: 1, sha: $sha, git_sha: $git, build_id: $bid, build_time: $btime, run_id: $run,
     created: $created, build_seconds: $secs,
@@ -305,7 +309,7 @@ jq -n --arg sha "$FV_REL_SHA" --arg git "$FV_GIT_SHA" --arg bid "$FV_BUILD_ID" -
     settings: {CARGO_PROFILE_RELEASE_LTO: "off", CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
                CARGO_PROFILE_RELEASE_PANIC: "unwind", RUSTFLAGS: "", linker: "cc (system default, no mold)",
                CUDARC_CUDA_VERSION: "13000", FV_REQUIRE_OXIDE: "100,120"},
-    oxide_key: $oxk, hf_fetch_model_version: $hffm, sets: $sets}' >"$OUT/manifest.json"
+    oxide_key: $oxk, hf_fetch_model_version: $hffm, release_version: $relv, sets: $sets}' >"$OUT/manifest.json"
 rm -rf "$STAGE"
 ls -la "$OUT" >&2
 log "done in $(( $(date +%s) - t_start ))s: $OUT"

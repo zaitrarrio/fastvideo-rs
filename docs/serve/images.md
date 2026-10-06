@@ -93,9 +93,10 @@ Weights stay on the network volume (EU `jg48s6o1w0`; the US volume
 ## Prebuilt binaries (compile on the build pod, assemble on GitHub)
 
 Since 2026-10-06 (owner decisions) no image workflow needs to compile Rust
-or CUDA. The shared build pod builds and tests the tools and the
-coordinator publishes them as a SemVer GitHub release, `tools-v<X.Y.Z>`
-(`scripts/ci/tools-release.sh publish`, **docs/dev/tools-releases.md**).
+or CUDA. When a push to main changes the tools, `tools-release.yml` builds
+and tests them on the shared build pod (a self-hosted runner) and publishes
+a SemVer GitHub release, `tools-v<X.Y.Z>`, then dispatches the image
+workflows (**docs/dev/tools-releases.md**).
 Each workflow then:
 
 1. **Resolves and downloads** (`scripts/ci/prebuilt.sh fetch <sets>`, with

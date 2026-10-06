@@ -19,16 +19,21 @@
 #                                         download manifest.json + the sets, check
 #                                         every sha256, extract to <dir>/<set>/
 #   tools-release.sh bump <breaking|feature|fix>
-#                                         raise the version (Cargo.toml +
-#                                         Cargo.lock) by the convention below
+#                                         raise the workspace version (Cargo.toml +
+#                                         Cargo.lock) for a MINOR/MAJOR change
 #   tools-release.sh notes <rev>          release notes since the previous release
+#   tools-release.sh plan [rev] [--prerelease]
+#                                         the version/tag a publish would use, or
+#                                         skip (inputs already released); JSON
+#   tools-release.sh build <rev> --local|--pod --version V --tag tools-vV [--out DIR]
+#                                         compile + test gate + stage DIR/release
+#   tools-release.sh upload <DIR/release> [--dispatch]
+#                                         draft -> assets -> publish -> verify ->
+#                                         prune [-> dispatch the image workflows]
 #   tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run|--no-upload]
-#                                         build on the build pod, test, publish
-#                                         (coordinator only; needs a token with
-#                                         contents:write, see below). --dry-run
-#                                         stops after the checks, --no-upload
-#                                         after the build and the tests (the
-#                                         release is staged in $FV_TOOLS_OUT/release)
+#                                         plan + build --pod + upload, by hand from
+#                                         the coordinator (the default publisher is
+#                                         .github/workflows/tools-release.yml)
 #   tools-release.sh prune [--keep N] [--dry-run]
 #                                         delete tools releases beyond the newest
 #                                         N stable ones (default 10) and stale
@@ -42,9 +47,10 @@
 # weights layout the tools need; MINOR = a backwards-compatible feature (model,
 # recipe, arm, flag, endpoint); PATCH = fixes and perf with no interface
 # change. In 0.x (now): breaking -> MINOR, feature or fix -> PATCH.
-# `publish` refuses when the inputs changed since the highest release but the
-# version is not above it, or when the tag exists; it does nothing when the
-# inputs did not change.
+# The release version needs no human step: the workspace version when it is
+# above the highest release (a `bump` merged in the PR), else that release's
+# PATCH + 1; the build embeds it (FV_RELEASE_VERSION -> `-V`, /health), so
+# nothing is committed back. Inputs unchanged since a release: nothing to do.
 #
 # Env: FV_GITHUB_REPO (default $GITHUB_REPOSITORY or zaitrarrio/fastvideo-rs);
 # auth: FV_GITHUB_TOKEN_FILE (publish/prune default ~/.config/fv/github_token,
@@ -84,7 +90,10 @@ HDR=""
 auth() {
   [[ -n "$HDR" ]] && return 0
   local tok="" f="${FV_GITHUB_TOKEN_FILE:-}"
-  if [[ -z "$f" && "${FV_TOOLS_WRITE:-0}" == 1 ]]; then f="${XDG_CONFIG_HOME:-$HOME/.config}/fv/github_token"; fi
+  # Writes: the job's token in a workflow, else the coordinator's token file.
+  if [[ -z "$f" && "${FV_TOOLS_WRITE:-0}" == 1 && -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
+    f="${XDG_CONFIG_HOME:-$HOME/.config}/fv/github_token"
+  fi
   if [[ -n "$f" ]]; then
     [[ -r "$f" ]] || die "no token file $f (FV_GITHUB_TOKEN_FILE)"
     tok="$(tr -d ' \r\n' <"$f")"
@@ -261,10 +270,8 @@ cmd_status() {
     echo "latest      $(jq -r '"\(.tag) (\(.source_commit[0:12]), input \(.input_hash[0:16]))"' <<<"$r")"
     if [[ "$(jq -r .exact <<<"$r")" == true ]]; then
       echo "state       released as $(jq -r .tag <<<"$r") (inputs unchanged)"
-    elif version_gt "$v" "$(jq -r .version <<<"$r")"; then
-      echo "state       inputs changed, version bumped: ready to publish $PREFIX$v"
     else
-      echo "state       inputs changed since $(jq -r .tag <<<"$r"): bump the version first (tools-release.sh bump breaking|feature|fix)"
+      echo "state       inputs changed since $(jq -r .tag <<<"$r"): the next publish is $PREFIX$(next_version "$v" "$(releases | jq -r '[.[] | select((.draft or .prerelease) | not)] | .[0].version // empty')")"
     fi
   else
     echo "latest      (none)"
@@ -343,12 +350,218 @@ cmd_notes() {
   git -C "$ROOT" log --no-merges --format='- %h %s' -n 50 "$range" -- "${INPUTS[@]}"
 }
 
-# ---- publish ------------------------------------------------------------------
-# Publisher: the coordinator container (it drives the build pod and holds the
-# token; the pod never sees it). Steps: checks -> build on the pod
-# (build-pod.sh release-artifacts) -> tests -> draft release + assets ->
-# publish -> verify the download -> prune.
+# ---- plan / build / upload / publish -----------------------------------------
+# Two publishers share these stages (docs/dev/tools-releases.md):
+#   .github/workflows/tools-release.yml (the default, on every push to main):
+#     plan -> build --local on the build pod's self-hosted runner -> upload
+#     from a GitHub-hosted job with the job's GITHUB_TOKEN;
+#   the coordinator by hand: publish = plan -> build --pod -> upload.
 SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-gateway serve-fake gpucheck-tests"
+
+# next_version <workspace version> <highest released version or "">: the
+# workspace version when it is above the highest release (a manual bump in
+# the PR), else that release's PATCH + 1 (0.x too). No commit back to main:
+# the build embeds the version (FV_RELEASE_VERSION).
+next_version() {
+  local w="$1" l="$2"
+  if [[ -z "$l" ]] || version_gt "$w" "$l"; then echo "$w"; return 0; fi
+  [[ "$l" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || die "highest release $l is not X.Y.Z"
+  echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$(( BASH_REMATCH[3] + 1 ))"
+}
+
+# plan <rev> [--prerelease]: what a publish of rev would do, as JSON
+# {sha, input_hash, workspace_version, latest, version, tag, prerelease, skip,
+# skip_reason}; also key=value lines to $GITHUB_OUTPUT. skip: a release with
+# these inputs exists (nothing to build).
+PLAN=""
+cmd_plan() {
+  local rev="HEAD" pre=0
+  while (( $# )); do
+    case "$1" in
+      --prerelease) pre=1; shift ;;
+      -*) die "plan: unknown flag $1" ;;
+      *) rev="$1"; shift ;;
+    esac
+  done
+  local sha h w latest v tag same skip=false why=""
+  sha="$(rev_sha "$rev")"; h="$(input_hash "$sha")"; w="$(tools_version "$sha")"
+  latest="$(releases | jq -r '[.[] | select((.draft or .prerelease) | not)] | .[0].version // empty')"
+  v="$(next_version "$w" "$latest")"
+  if (( pre )); then v="$v-pre.${sha:0:12}"; fi
+  tag="$PREFIX$v"
+  same="$(releases | jq -r --arg h "$h" '[.[] | select((.draft | not) and .input_hash == $h)] | .[0].tag // empty')"
+  if [[ -n "$same" ]]; then
+    skip=true; why="tools unchanged: ${sha:0:12} has the inputs of $same (input hash ${h:0:16})"
+  elif releases | jq -e --arg t "$tag" 'any(.[]; .tag == $t and (.draft | not))' >/dev/null; then
+    die "tag $tag already exists but its inputs differ (input hash ${h:0:16}): another publish raced this one?"
+  fi
+  PLAN="$(jq -nc --arg sha "$sha" --arg h "$h" --arg w "$w" --arg l "$latest" --arg v "$v" --arg t "$tag" \
+    --argjson pre "$([[ $pre == 1 ]] && echo true || echo false)" --argjson skip "$skip" --arg why "$why" \
+    '{sha: $sha, input_hash: $h, workspace_version: $w, latest: $l, version: $v, tag: $t, prerelease: $pre,
+      skip: $skip, skip_reason: $why}')"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$PLAN" >>"$GITHUB_OUTPUT"
+  fi
+  if [[ "$skip" == true ]]; then log "$why; nothing to publish"; else log "plan: $tag from ${sha:0:12} (input hash ${h:0:16}; workspace $w; highest release ${latest:-none})"; fi
+}
+
+# build <rev> --pod|--local --version V --tag T [--prerelease] [--out DIR]:
+# compile every set, run the gate, and stage the release in DIR/release
+# (tarballs, manifest.json, body.md). Nothing is uploaded.
+#   --local  on this machine (the build pod's GitHub runner): this checkout
+#            must be rev, clean; scripts/dev/release-artifacts-pod.sh runs here
+#            with CARGO_TARGET_DIR (default $FV_BUILD_TARGET_BASE/gh-runner),
+#            the gate's check.sh in <that>-test.
+#   --pod    from the coordinator: build-pod.sh release-artifacts + its jobs.
+cmd_build() {
+  local rev="" mode="" v="" tag="" pre=0 out=""
+  while (( $# )); do
+    case "$1" in
+      --pod) mode=pod; shift ;;
+      --local) mode=local; shift ;;
+      --version) v="$2"; shift 2 ;;
+      --tag) tag="$2"; shift 2 ;;
+      --prerelease) pre=1; shift ;;
+      --out) out="$2"; shift 2 ;;
+      -*) die "build: unknown flag $1" ;;
+      *) rev="$1"; shift ;;
+    esac
+  done
+  [[ -n "$rev" && -n "$mode" && "$v" =~ $SEMVER_RE && "$tag" == "$PREFIX$v" ]] \
+    || die "usage: tools-release.sh build <rev> --pod|--local --version X.Y.Z --tag tools-vX.Y.Z [--prerelease] [--out DIR]"
+  local sha h t0=$SECONDS
+  sha="$(rev_sha "$rev")"; h="$(input_hash "$sha")"
+  out="${out:-${FV_TOOLS_OUT:-$ROOT/artifacts/tools-release/$sha}}"
+  rm -rf "$out" && mkdir -p "$out"
+  if [[ "$mode" == pod ]]; then
+    # The build runs this checkout's recipe; it must be the one the hash covers.
+    cmp -s <(git -C "$ROOT" show "$sha:scripts/dev/release-artifacts-pod.sh") "$ROOT/scripts/dev/release-artifacts-pod.sh" \
+      || die "scripts/dev/release-artifacts-pod.sh here differs from ${sha:0:12}'s (run from a checkout of that commit)"
+    FV_RELEASE_VERSION="$v" FV_RELEASE_OUT="$out" bash "$ROOT/scripts/dev/build-pod.sh" release-artifacts "$sha" \
+      || die "build failed on the build pod: nothing published"
+  else
+    build_local "$sha" "$v" "$out" || die "build failed: nothing published"
+  fi
+  local m="$out/manifest.json" set
+  [[ "$(jq -r .sha "$m")" == "$sha" ]] || die "build manifest is for $(jq -r .sha "$m")"
+  for set in $SETS_ALL; do
+    jq -e --arg s "$set" '.sets[$s]' "$m" >/dev/null || die "set $set missing from the build"
+  done
+  run_gate "$sha" "$v" "$out" "$mode" || die "tests failed: nothing published"
+  stage_release "$sha" "$h" "$v" "$tag" "$pre" "$out"
+  log "staged $tag in $out/release: built and tested in $(( SECONDS - t0 ))s"
+}
+
+build_local() {
+  local sha="$1" v="$2" out="$3" T shim
+  [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$sha" ]] || die "build --local: this checkout is not ${sha:0:12}"
+  [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "build --local: this checkout has local changes"
+  git -C "$ROOT" submodule update -q --init third_party/cutile-rs
+  T="${CARGO_TARGET_DIR:-${FV_BUILD_TARGET_BASE:?CARGO_TARGET_DIR or FV_BUILD_TARGET_BASE (the build pod runner sets it)}/gh-runner}"
+  # scripts/gpu/docker.sh build-id wants shasum (perl), which the base image may lack.
+  shim="$(mktemp -d)"; CLEANUP+=("rm -rf '$shim'")
+  if ! command -v shasum >/dev/null; then
+    printf '#!/bin/sh\n[ "$1" = -a ] && shift 2\nexec sha256sum "$@"\n' >"$shim/shasum"; chmod +x "$shim/shasum"
+  fi
+  local build_id build_time
+  build_id="$(PATH="$shim:$PATH" bash "$ROOT/scripts/gpu/docker.sh" build-id)"
+  build_time="$(cd "$ROOT" && TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+  log "build --local ${sha:0:12} as $v (build id $build_id, CARGO_TARGET_DIR $T)"
+  (cd "$ROOT" && CARGO_TARGET_DIR="$T" FV_REL_SHA="$sha" FV_GIT_SHA="$sha" FV_BUILD_TIME="$build_time" \
+     FV_BUILD_ID="$build_id" FV_REL_RUN_ID="gh-${GITHUB_RUN_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)" FV_RELEASE_VERSION="$v" \
+     bash scripts/dev/release-artifacts-pod.sh) || return 1
+  cp "$T/release-artifacts/$sha/"*.tar.gz "$T/release-artifacts/$sha/manifest.json" "$out/"
+  local tb want
+  while IFS=$'\t' read -r tb want; do
+    [[ "$(sha256 "$out/$tb")" == "$want" ]] || { log "$tb: sha256 differs from the manifest"; return 1; }
+  done < <(jq -r '.sets[] | [.tarball, .sha256] | @tsv' "$out/manifest.json")
+}
+
+stage_release() {
+  local sha="$1" h="$2" v="$3" tag="$4" pre="$5" out="$6" m="$6/manifest.json" rm_json="$6/release/manifest.json" set tb
+  mkdir -p "$out/release"
+  jq --arg tag "$tag" --arg v "$v" --arg h "$h" --arg schema "$INPUT_SCHEMA" --arg repo "$REPO" \
+     --argjson inputs "$(printf '%s\n' "${INPUTS[@]}" | jq -R . | jq -s .)" \
+     --argjson pre "$([[ $pre == 1 ]] && echo true || echo false)" \
+     --arg gate "$GATE_SUMMARY" --arg by "${GITHUB_WORKFLOW:+github:$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID:-}}" --arg host "$(hostname)" \
+     --arg at "$(date -u +%FT%TZ)" '
+    {schema: 2, tag: $tag, version: $v, prerelease: $pre, input_hash: $h, input_schema: $schema, inputs: $inputs,
+     source_commit: .sha, repo: $repo, build_id: .build_id, build_time: .build_time,
+     tests: $gate, built_by: (if $by != "" then $by else $host end), staged_at: $at} + (del(.schema, .sha, .git_sha))' "$m" >"$rm_json"
+  for set in $SETS_ALL; do
+    tb="$(jq -r --arg s "$set" '.sets[$s].tarball' "$m")"
+    cp "$out/$tb" "$out/release/$tb"
+  done
+  {
+    echo "Tools $v: the build pod's prebuilt binaries, compiled and tested at ${sha}."
+    echo
+    cmd_notes "$sha"
+    echo
+    echo "Sets: $(jq -r '.sets | to_entries | map("\(.key) (\(.value.size / 1048576 | floor) MB)") | join(", ")' "$rm_json")"
+    echo "Tests: $GATE_SUMMARY"
+    echo "Verify: scripts/ci/tools-release.sh fetch $tag <dir> <set>... (docs/dev/tools-releases.md)"
+    echo
+    echo "input-hash: $h"
+    echo "source-commit: $sha"
+    echo "manifest-sha256: $(sha256 "$rm_json")"
+  } >"$out/release/body.md"
+}
+
+# upload <stage dir> [--dispatch]: draft (no tag yet) -> assets -> publish ->
+# download and verify every sha256 -> prune -> dispatch the image workflows.
+# A failure before publishing deletes the draft. Needs contents:write (and
+# actions:write for --dispatch): the workflow job's GITHUB_TOKEN, or the
+# coordinator's token file.
+cmd_upload() {
+  local dir="" dispatch=0
+  while (( $# )); do
+    case "$1" in
+      --dispatch) dispatch=1; shift ;;
+      -*) die "upload: unknown flag $1" ;;
+      *) dir="$1"; shift ;;
+    esac
+  done
+  [[ -n "$dir" && -f "$dir/manifest.json" && -f "$dir/body.md" ]] || die "usage: tools-release.sh upload <stage dir (manifest.json, body.md, tarballs)> [--dispatch]"
+  local m="$dir/manifest.json" tag v sha pre f t0=$SECONDS
+  tag="$(jq -r .tag "$m")"; v="$(jq -r .version "$m")"; sha="$(jq -r .source_commit "$m")"; pre="$(jq -r '.prerelease // false' "$m")"
+  [[ "$tag" == "$PREFIX$v" && "$v" =~ $SEMVER_RE ]] || die "upload: bad tag/version in $m"
+  grep -q "^manifest-sha256: $(sha256 "$m")$" "$dir/body.md" || die "upload: body.md does not match manifest.json"
+  # Every tarball the manifest names, with its sha256, before anything is created.
+  local tb want
+  while IFS=$'\t' read -r tb want; do
+    [[ -f "$dir/$tb" && "$(sha256 "$dir/$tb")" == "$want" ]] || die "upload: $tb missing or its sha256 differs from the manifest"
+  done < <(jq -r '.sets[] | [.tarball, .sha256] | @tsv' "$m")
+  if releases | jq -e --arg t "$tag" 'any(.[]; .tag == $t and (.draft | not))' >/dev/null \
+     || api GET "/repos/$REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
+    die "tag $tag already exists"
+  fi
+  local rel id
+  rel="$(api POST "/repos/$REPO/releases" -H 'Content-Type: application/json' --data-binary @<(jq -n --arg t "$tag" --arg c "$sha" \
+      --rawfile b "$dir/body.md" --argjson pre "$pre" \
+      '{tag_name: $t, target_commitish: $c, name: $t, body: $b, draft: true, prerelease: $pre}'))" \
+    || die "could not create the draft release (needs contents:write)"
+  id="$(jq -r .id <<<"$rel")"
+  CLEANUP+=("[[ -f '$dir/.published' ]] || { api DELETE /repos/$REPO/releases/$id >/dev/null && log 'deleted the draft $tag'; }")
+  for f in "$dir"/*.tar.gz "$m"; do
+    log "upload $(basename "$f") ($(du -h "$f" | cut -f1))"
+    api POST "$UPLOADS/repos/$REPO/releases/$id/assets?name=$(basename "$f")" \
+      -H "Content-Type: $([[ $f == *.json ]] && echo application/json || echo application/gzip)" \
+      --data-binary @"$f" >/dev/null || die "upload of $(basename "$f") failed"
+  done
+  api PATCH "/repos/$REPO/releases/$id" -H 'Content-Type: application/json' --data-binary '{"draft": false, "make_latest": "false"}' >/dev/null \
+    || die "could not publish the release"
+  touch "$dir/.published"
+  load_releases
+  log "published $(releases | jq -r --arg t "$tag" '.[] | select(.tag == $t) | .url')"
+  # What consumers will download, checked the way they check it.
+  cmd_fetch "$tag" "$dir/verify" $SETS_ALL && rm -rf "$dir/verify"
+  log "verified: every set downloads and matches its sha256 ($(( SECONDS - t0 ))s)"
+  [[ "$pre" == true ]] || cmd_prune
+  (( dispatch )) && dispatch_images "$v"
+  return 0
+}
+
+# publish <rev> (the coordinator, by hand): plan -> build --pod -> upload.
 cmd_publish() {
   local rev="" pre=0 dispatch=0 dry=0 upload=1
   while (( $# )); do
@@ -362,134 +575,55 @@ cmd_publish() {
     esac
   done
   [[ -n "$rev" ]] || die "usage: tools-release.sh publish <rev> [--prerelease] [--dispatch] [--dry-run|--no-upload]"
-  local sha h v tag latest t0=$SECONDS
   git -C "$ROOT" fetch -q origin || true
-  sha="$(rev_sha "$rev")"; h="$(input_hash "$sha")"; v="$(tools_version "$sha")"
+  local sha; sha="$(rev_sha "$rev")"
   if (( !pre )); then
     git -C "$ROOT" merge-base --is-ancestor "$sha" origin/main \
       || die "${sha:0:12} is not on origin/main: stable releases come from main (--prerelease for a branch head)"
   fi
-  # The build runs this checkout's recipe; it must be the one the hash covers.
-  cmp -s <(git -C "$ROOT" show "$sha:scripts/dev/release-artifacts-pod.sh") "$ROOT/scripts/dev/release-artifacts-pod.sh" \
-    || die "scripts/dev/release-artifacts-pod.sh here differs from ${sha:0:12}'s (run from a checkout of that commit's recipe)"
-  local same
-  same="$(releases | jq -r --arg h "$h" '[.[] | select((.draft | not) and .input_hash == $h)] | .[0].tag // empty')"
-  if [[ -n "$same" ]]; then
-    log "tools unchanged: ${sha:0:12} has the inputs of $same (input hash ${h:0:16}); nothing to publish"
-    return 0
-  fi
-  latest="$(releases | jq -r '[.[] | select((.draft or .prerelease) | not)] | .[0].version // empty')"
-  if (( pre )); then
-    tag="$PREFIX$v-pre.${sha:0:12}"
-  else
-    tag="$PREFIX$v"
-    if [[ -n "$latest" ]] && ! version_gt "$v" "$latest"; then
-      die "the tools changed since $PREFIX$latest (input hash ${h:0:16}) but the version is $v: bump it (tools-release.sh bump breaking|feature|fix), merge, publish"
-    fi
-  fi
-  if releases | jq -e --arg t "$tag" 'any(.[]; .tag == $t and (.draft | not))' >/dev/null \
-     || api GET "/repos/$REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
-    die "tag $tag already exists: bump the version"
-  fi
-  log "publishing $tag from ${sha:0:12} (input hash ${h:0:16}; previous ${latest:-none})"
+  local pflag=(); (( pre )) && pflag=(--prerelease)
+  cmd_plan "$sha" "${pflag[@]}"
+  [[ "$(jq -r .skip <<<"$PLAN")" == true ]] && return 0
   (( dry )) && { log "dry run: stop before building"; return 0; }
-
-  # 1. build on the pod (fetched and sha256-checked into $out)
-  local out="${FV_TOOLS_OUT:-$ROOT/artifacts/tools-release/$sha}"
-  FV_RELEASE_OUT="$out" bash "$ROOT/scripts/dev/build-pod.sh" release-artifacts "$sha" --keep \
-    || die "build failed on the build pod: nothing published"
-  local m="$out/manifest.json"
-  [[ "$(jq -r .sha "$m")" == "$sha" ]] || die "pod manifest is for $(jq -r .sha "$m")"
-  local set; for set in $SETS_ALL; do
-    jq -e --arg s "$set" '.sets[$s]' "$m" >/dev/null || die "set $set missing from the build"
-  done
-
-  # 2. tests: the gate before anything is uploaded
-  run_gate "$sha" "$v" "$out" || die "tests failed: nothing published"
-
-  # 3. manifest + notes
-  local rm_json="$out/release/manifest.json" body
-  mkdir -p "$out/release"
-  jq --arg tag "$tag" --arg v "$v" --arg h "$h" --arg schema "$INPUT_SCHEMA" --arg repo "$REPO" \
-     --argjson inputs "$(printf '%s\n' "${INPUTS[@]}" | jq -R . | jq -s .)" \
-     --arg gate "$GATE_SUMMARY" --arg by "$(hostname)" --arg at "$(date -u +%FT%TZ)" '
-    {schema: 2, tag: $tag, version: $v, input_hash: $h, input_schema: $schema, inputs: $inputs,
-     source_commit: .sha, repo: $repo, build_id: .build_id, build_time: .build_time,
-     tests: $gate, published_by: $by, published_at: $at} + (del(.schema, .sha, .git_sha))' "$m" >"$rm_json"
-  local tb; for set in $SETS_ALL; do
-    tb="$(jq -r --arg s "$set" '.sets[$s].tarball' "$m")"
-    cp "$out/$tb" "$out/release/$tb"
-  done
-  body="$(
-    echo "Tools $v: the build pod's prebuilt binaries, compiled and tested at ${sha}."
-    echo
-    echo "$(cmd_notes "$sha")"
-    echo
-    echo "Sets: $(jq -r '.sets | to_entries | map("\(.key) (\(.value.size / 1048576 | floor) MB)") | join(", ")' "$rm_json")"
-    echo "Tests: $GATE_SUMMARY"
-    echo "Verify: scripts/ci/tools-release.sh fetch $tag <dir> <set>... (docs/dev/tools-releases.md)"
-    echo
-    echo "input-hash: $h"
-    echo "source-commit: $sha"
-    echo "manifest-sha256: $(sha256 "$rm_json")"
-  )"
-
-  printf '%s\n' "$body" >"$out/release/body.md"
-  if (( !upload )); then
-    log "staged $tag in $out/release (built and tested; --no-upload: not published)"
-    return 0
-  fi
-
-  # 4. draft (no tag yet) -> assets -> publish; a failure deletes the draft
-  local rel id
-  rel="$(api POST "/repos/$REPO/releases" -H 'Content-Type: application/json' --data-binary @<(jq -n --arg t "$tag" --arg c "$sha" --arg b "$body" \
-      --argjson pre "$([[ $pre == 1 ]] && echo true || echo false)" \
-      '{tag_name: $t, target_commitish: $c, name: $t, body: $b, draft: true, prerelease: $pre}'))" \
-    || die "could not create the draft release (needs contents:write)"
-  id="$(jq -r .id <<<"$rel")"
-  CLEANUP+=("[[ -f '$out/release/.published' ]] || { api DELETE /repos/$REPO/releases/$id >/dev/null && log 'deleted the draft $tag'; }")
-  local f; for f in "$out"/release/*.tar.gz "$out"/release/manifest.json; do
-    log "upload $(basename "$f") ($(du -h "$f" | cut -f1))"
-    api POST "$UPLOADS/repos/$REPO/releases/$id/assets?name=$(basename "$f")" \
-      -H "Content-Type: $([[ $f == *.json ]] && echo application/json || echo application/gzip)" \
-      --data-binary @"$f" >/dev/null || die "upload of $(basename "$f") failed"
-  done
-  api PATCH "/repos/$REPO/releases/$id" -H 'Content-Type: application/json' --data-binary '{"draft": false, "make_latest": "false"}' >/dev/null \
-    || die "could not publish the release"
-  touch "$out/release/.published"
-  load_releases
-  log "published $(releases | jq -r --arg t "$tag" '.[] | select(.tag == $t) | .url')"
-
-  # 5. verify what consumers will download
-  cmd_fetch "$tag" "$out/verify" $SETS_ALL && rm -rf "$out/verify"
-  log "verified: every set downloads and matches its sha256 ($(( SECONDS - t0 ))s in all)"
-  (( pre )) || cmd_prune
-  (( dispatch )) && dispatch_images "$v"
-  return 0
+  local v tag out="${FV_TOOLS_OUT:-$ROOT/artifacts/tools-release/$sha}"
+  v="$(jq -r .version <<<"$PLAN")"; tag="$(jq -r .tag <<<"$PLAN")"
+  cmd_build "$sha" --pod --version "$v" --tag "$tag" "${pflag[@]}" --out "$out"
+  (( upload )) || { log "--no-upload: $tag stays staged in $out/release"; return 0; }
+  local dflag=(); (( dispatch )) && dflag=(--dispatch)
+  cmd_upload "$out/release" "${dflag[@]}"
 }
 
-# The gate: the serve crates' CPU gate on the pod (scripts/serve/check.sh, in
-# its own target dir), the shipped gpucheck/cudarc unit-test binaries run here
+# The gate: the serve crates' CPU gate (scripts/serve/check.sh, in its own
+# target dir, no debuginfo), the shipped gpucheck/cudarc unit-test binaries
 # against the commit's sources, and every shipped binary reporting the version.
 GATE_SUMMARY=""
 run_gate() {
-  local sha="$1" v="$2" out="$3" wt agent="${FV_TOOLS_TEST_AGENT:-${FV_RELEASE_AGENT:-fv-release}-test}" d
-  wt="${TMPDIR:-/tmp}/fv-tools-gate-${sha:0:12}"
-  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
-  git -C "$ROOT" worktree add -q --detach "$wt" "$sha" || return 1
-  CLEANUP+=("git -C '$ROOT' worktree remove --force '$wt' >/dev/null 2>&1")
-  log "gate 1/3: scripts/serve/check.sh on the build pod (agent $agent)"
-  # No debuginfo, no incremental cache: the gate's target dir stays small on
-  # the shared pod's disk (as serve-compat's CI build).
-  bash "$wt/scripts/dev/build-pod.sh" run "$agent" -- CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \
-    bash scripts/serve/check.sh || { log "check.sh failed"; return 1; }
+  local sha="$1" v="$2" out="$3" mode="$4" src d where
+  if [[ "$mode" == pod ]]; then
+    local agent="${FV_TOOLS_TEST_AGENT:-${FV_RELEASE_AGENT:-fv-release}-test}"
+    src="${TMPDIR:-/tmp}/fv-tools-gate-${sha:0:12}"
+    git -C "$ROOT" worktree remove --force "$src" >/dev/null 2>&1 || rm -rf "$src"
+    git -C "$ROOT" worktree add -q --detach "$src" "$sha" || return 1
+    CLEANUP+=("git -C '$ROOT' worktree remove --force '$src' >/dev/null 2>&1")
+    log "gate 1/3: scripts/serve/check.sh on the build pod (agent $agent)"
+    bash "$src/scripts/dev/build-pod.sh" run "$agent" -- CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \
+      bash scripts/serve/check.sh || { log "check.sh failed"; return 1; }
+    where="on the build pod"
+  else
+    src="$ROOT"
+    local tt="${FV_TOOLS_TEST_TARGET:-${CARGO_TARGET_DIR:-$FV_BUILD_TARGET_BASE/gh-runner}-test}"
+    log "gate 1/3: scripts/serve/check.sh here (CARGO_TARGET_DIR $tt)"
+    (cd "$ROOT" && env -u FV_RELEASE_VERSION CARGO_TARGET_DIR="$tt" CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \
+       bash scripts/serve/check.sh) || { log "check.sh failed"; return 1; }
+    where="on the build pod's runner"
+  fi
 
   log "gate 2/3: the shipped gpucheck-tests binaries"
   d="$out/gate"; rm -rf "$d" && mkdir -p "$d"
   local set; for set in gpucheck-tests gpucheck serve-gateway serve-fake; do
     mkdir -p "$d/$set" && tar -xzf "$out/$set.tar.gz" -C "$d/$set"
   done
-  FV_TESTS_ROOT="$wt" bash "$HERE/prebuilt.sh" run-tests "$d/gpucheck-tests" || { log "unit tests failed"; return 1; }
+  FV_TESTS_ROOT="$src" bash "$HERE/prebuilt.sh" run-tests "$d/gpucheck-tests" || { log "unit tests failed"; return 1; }
 
   log "gate 3/3: binaries report $v"
   local got bin note=""
@@ -504,7 +638,7 @@ run_gate() {
   done
   local ntests; ntests="$(wc -l <"$d/gpucheck-tests/tests.tsv")"
   rm -rf "$d"
-  GATE_SUMMARY="scripts/serve/check.sh passed on the build pod; the $ntests shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v$note; the build's fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"
+  GATE_SUMMARY="scripts/serve/check.sh passed $where; the $ntests shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v$note; the build's fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"
   return 0
 }
 
@@ -561,10 +695,10 @@ dispatch_images() {
 }
 
 case "${1:-}" in
-  publish|prune) export FV_TOOLS_WRITE=1 ;;
+  publish|upload|prune) export FV_TOOLS_WRITE=1 ;;
 esac
 case "${1:-}" in
-  status|list|resolve|fetch|notes|publish|prune) auth; load_releases ;;
+  status|list|resolve|fetch|notes|plan|build|publish|upload|prune) auth; load_releases ;;
 esac
 case "${1:-}" in
   input-hash) shift; input_hash "$@" ;;
@@ -575,6 +709,9 @@ case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
   bump) shift; cmd_bump "$@" ;;
   notes) shift; cmd_notes "$@" ;;
+  plan) shift; cmd_plan "$@"; echo "$PLAN" ;;
+  build) shift; cmd_build "$@" ;;
+  upload) shift; cmd_upload "$@" ;;
   publish) shift; cmd_publish "$@" ;;
   prune) shift; cmd_prune "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
