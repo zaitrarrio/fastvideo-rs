@@ -1,6 +1,9 @@
 # Build pods managed by fv-control (design)
 
-**Status (2026-10-06):** design, branch `wip/fvc-build-pods`. Owner decision:
+**Status (2026-10-06):** implemented on branch `wip/fvc-build-pods`
+(control/src/buildpods.ts, the pod server's R2 cache, `fv-control.sh
+build-pod`, `build-pod.sh` as a client); tested against mocks (unit,
+integration, UI), not yet on staging or a live pod. Owner decision:
 fv-control manages the whole lifecycle of the CPU build pods, as it does for
 GPU pods. Today `scripts/dev/build-pod.sh` creates, starts, stops and deletes
 one shared pod pinned to the `fv-build` volume (`pxy4hlsnwq`, EU-RO-1), and
