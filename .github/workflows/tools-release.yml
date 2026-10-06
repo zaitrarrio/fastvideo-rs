@@ -1,0 +1,182 @@
+# Tools releases (docs/dev/tools-releases.md): on every push to main, publish a
+# SemVer GitHub release `tools-v<X.Y.Z>` of the prebuilt tool binaries when,
+# and only when, their inputs changed, they compiled, and they passed the gate.
+#
+#   plan     (GitHub-hosted, seconds) tools input hash of the commit; a release
+#            with it exists -> stop, nothing builds. Else the version: the
+#            workspace version if above the highest release, else its PATCH+1.
+#            It also picks the builder (tools-release.sh pick-runner): a build
+#            pod when an idle self-hosted runner labelled `fv-build` is online,
+#            else a GitHub-hosted runner (owner decision: Option 1, GitHub as
+#            the fallback; vars.FV_BUILD_RUNNER=pod|github forces one).
+#   build    compile every set with the version embedded (`-V`, /health),
+#            then the gate: scripts/serve/check.sh, the shipped gpucheck/cudarc
+#            unit-test binaries, `-V`; stage the release as a workflow artifact.
+#            build-pod: on the pod's runner (its toolchain, sccache, volume
+#            caches). build-hosted: the same `tools-release.sh build --local`
+#            in the build-base image (scripts/dev/build-base-tag.sh, the image
+#            the pods run), so the release is the same recipe and the same
+#            gate either way. No token is left on a pod (read-only job token,
+#            not persisted).
+#   publish  (GitHub-hosted, GITHUB_TOKEN contents:write) draft -> assets ->
+#            publish -> download and check every sha256 -> prune -> dispatch
+#            serve-image, gpucheck-runtime-image, vast-pytorch-image with the
+#            new version (a GITHUB_TOKEN release fires no `release` event for
+#            other workflows; workflow_dispatch does run them).
+#
+# The build job waits in the queue while the build pod is down: `build-pod.sh
+# up` starts it and registers the runner (docs/dev/tools-releases.md "Build
+# pod runner"). One release at a time: a newer push to main replaces a queued
+# run; the running one finishes.
+name: tools-release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      input_hash: ${{ steps.plan.outputs.input_hash }}
+      builder: ${{ steps.runner.outputs.builder }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Plan (skip when the tools inputs are already released)
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/ci/tools-release.sh plan "$GITHUB_SHA" | tee plan.json
+          jq -r '"### Tools release plan\n\n" + (if .skip then "Skipped: \(.skip_reason)" else "Build and publish **\(.tag)** (input hash `\(.input_hash[0:16])`, workspace \(.workspace_version), highest release \(if .latest == "" then "none" else .latest end))" end)' plan.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Builder (a build pod's runner, else GitHub-hosted)
+        id: runner
+        if: steps.plan.outputs.skip == 'false'
+        env:
+          # Fine-grained PAT, Administration: read (GITHUB_TOKEN cannot list runners).
+          FV_RUNNER_READ_TOKEN: ${{ secrets.FV_RUNNER_READ_TOKEN }}
+          FV_BUILD_RUNNER: ${{ vars.FV_BUILD_RUNNER || 'auto' }}
+        run: |
+          bash scripts/ci/tools-release.sh pick-runner | jq -r '"Builder: **\(.builder)** (\(.reason))"' >> "$GITHUB_STEP_SUMMARY"
+
+  build-pod:
+    needs: plan
+    if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder == 'pod'
+    # A build pod (its runner: build-pod-server.py /v1/runner).
+    runs-on: [self-hosted, fv-build]
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Release notes walk the history since the previous release; no
+          # token is left in .git/config on the shared pod.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build and test on the build pod
+        run: |
+          bash scripts/ci/tools-release.sh build "$GITHUB_SHA" --local \
+            --version "${{ needs.plan.outputs.version }}" --tag "${{ needs.plan.outputs.tag }}" \
+            --out "$RUNNER_TEMP/tools"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-release-${{ needs.plan.outputs.version }}
+          path: ${{ runner.temp }}/tools/release/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tools"
+
+  # Fallback: no idle build pod. Same command in the build-base image, run
+  # with `docker run` (not `container:`) so the host disk can be freed first.
+  build-hosted:
+    needs: plan
+    if: needs.plan.outputs.skip == 'false' && needs.plan.outputs.builder != 'pod'
+    runs-on: ${{ vars.FV_TOOLS_HOSTED_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space (release + test target dirs need ~25 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost \
+            /usr/share/swift /usr/local/.ghcup
+          docker image prune -af >/dev/null
+          df -h /
+      - name: Build and test in the build-base image
+        run: |
+          img="$(bash scripts/dev/build-base-tag.sh --image)"
+          bash scripts/dev/build-base-tag.sh --check
+          mkdir -p "$RUNNER_TEMP/work"
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v "$RUNNER_TEMP/work:/work" -w /src \
+            -e GITHUB_RUN_ID -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW \
+            -e CARGO_TARGET_DIR=/work/target -e FV_TOOLS_TEST_TARGET=/work/target-test \
+            -e FV_BUILD_VOLUME_DIR=/work/vol -e RUSTC_WRAPPER= -e CARGO_TERM_COLOR=never \
+            "$img" bash scripts/ci/tools-release.sh build "$GITHUB_SHA" --local \
+              --version "${{ needs.plan.outputs.version }}" --tag "${{ needs.plan.outputs.tag }}" --out /work/tools
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/work/tools"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-release-${{ needs.plan.outputs.version }}
+          path: ${{ runner.temp }}/work/tools/release/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build-pod, build-hosted]
+    # Whichever build ran (the other is skipped) must have succeeded.
+    if: >-
+      always() && needs.plan.outputs.skip == 'false' &&
+      (needs.build-pod.result == 'success' || needs.build-hosted.result == 'success') &&
+      needs.build-pod.result != 'failure' && needs.build-hosted.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: tools-release-${{ needs.plan.outputs.version }}
+          path: stage
+      - name: Publish, verify, prune, dispatch the image workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/tools-release.sh upload stage --dispatch
+      - name: Summary
+        run: |
+          {
+            echo "### Tools release ${{ needs.plan.outputs.tag }}"
+            echo
+            echo "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${{ needs.plan.outputs.tag }}"
+            echo
+            jq -r '"Source \(.source_commit[0:12]), input hash \(.input_hash[0:16]), \(.sets | length) sets.\n\nTests: \(.tests)"' stage/manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"

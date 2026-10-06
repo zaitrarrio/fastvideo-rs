@@ -913,7 +913,7 @@ async fn edge_route(h: &Arc<EdgeHost>, r: &EdgeRoute, method: &Method, path: &st
         // FastWan's `GET /` names its model: the FastWan front answers.
         EdgeRoute::Root => match reg.fronts().find(|x| x.info.defaults.contains_key("fastwan")) {
             Some(x) => h.forward(&x.info.url, method, path, headers, reqwest::Body::from(Vec::new()), &verdict, Some(Duration::from_secs(15))).await,
-            None => Json(json!({"server": "fv-edge", "role": "edge", "version": env!("CARGO_PKG_VERSION"), "ready": ready})).into_response(),
+            None => Json(json!({"server": "fv-edge", "role": "edge", "version": crate::build_info::VERSION, "ready": ready})).into_response(),
         },
         EdgeRoute::Ping => {
             if ready {
@@ -924,12 +924,12 @@ async fn edge_route(h: &Arc<EdgeHost>, r: &EdgeRoute, method: &Method, path: &st
         }
         EdgeRoute::Health => {
             let (c, status, state) = if ready { (StatusCode::OK, "ok", "AVAILABLE") } else { (StatusCode::SERVICE_UNAVAILABLE, "unavailable", "UNAVAILABLE") };
-            (c, Json(json!({"status": status, "model_loaded": ready, "state": state, "edge": true, "version": env!("CARGO_PKG_VERSION")}))).into_response()
+            (c, Json(json!({"status": status, "model_loaded": ready, "state": state, "edge": true, "version": crate::build_info::VERSION}))).into_response()
         }
         EdgeRoute::Healthz => {
             let st = front::status_body(&reg, version, now_ms());
             let c = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
-            (c, Json(json!({"state": if ready { "ready" } else { "unavailable" }, "edge": true, "pools": st["pools"], "version": env!("CARGO_PKG_VERSION")}))).into_response()
+            (c, Json(json!({"state": if ready { "ready" } else { "unavailable" }, "edge": true, "pools": st["pools"], "version": crate::build_info::VERSION}))).into_response()
         }
         EdgeRoute::Status => Json(front::status_body(&reg, version, now_ms())).into_response(),
         EdgeRoute::Capabilities => {

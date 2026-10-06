@@ -45,6 +45,9 @@ Endpoints (all JSON unless noted):
   POST /v1/evict                        run an eviction pass now -> {evicted}
   GET  /v1/log?lines=N                  text: tail of logs/pod.log (self-stop attempts etc.)
   POST /v1/stop                         stop the pod now
+  POST /v1/runner                       {token, repo[, labels, name]}: register and start this
+                                        pod's GitHub Actions runner (docs/dev/tools-releases.md)
+  GET  /v1/runner                       the runner's state (no token)
 
 Only these commands run (no shell): cargo {check,build,test,clippy,fmt,doc,
 tree,metadata}, and `bash <script>` for the scripts in SCRIPTS. Environment
@@ -584,7 +587,8 @@ class LocalFS:
         return last_use(agent)
 
     def busy(self, agent):
-        return agent_busy(agent)
+        # The GitHub runner's dirs (target/gh-runner*) are in use while it runs a job.
+        return agent_busy(agent) or (agent.startswith("gh-runner") and runner_busy())
 
     def free_bytes(self):
         return shutil.disk_usage(LOCAL).free
@@ -1512,8 +1516,142 @@ def note_jobs(act, msg):
 cap_warned = set()
 
 
+# ---------------------------------------------------------------- GitHub runner
+# The pod as a self-hosted GitHub Actions runner (labels `fv-build`) for
+# .github/workflows/tools-release.yml: build-pod.sh runner (or `up` with a
+# token source) POSTs a short-lived *registration* token; the runner is
+# downloaded (sha256 from its release notes), configured once per pod (not
+# ephemeral; --replace by name) and kept running. Its credentials live on the
+# container disk under <local>/actions-runner and go with the pod; the
+# registration token is used once and never written to disk or logged. Steps
+# get job_env() (no RUNPOD_*), CARGO_TARGET_DIRs under target/gh-runner*, and
+# a running workflow job counts as activity (no idle stop, no eviction).
+RUNNER_DIR = os.path.join(LOCAL, "actions-runner")
+RUNNER_WORK = os.path.join(LOCAL, "runner-work")
+RUNNER_LOG = os.path.join(ROOT, "logs", "runner.log")
+RUNNER_RELEASE_API = os.environ.get("FV_GH_RUNNER_RELEASE_API", "https://api.github.com/repos/actions/runner/releases/latest")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+LABELS_RE = re.compile(r"^[A-Za-z0-9_.,-]{1,200}$")
+runner_state = {"phase": "absent", "error": None, "name": None, "labels": None, "version": None, "repo": None}
+runner_proc = None
+runner_lock = threading.Lock()
+
+
+def runner_busy():
+    """A workflow job is running on this pod's runner (a Runner.Worker process)."""
+    if runner_proc is None or runner_proc.poll() is not None:
+        return False
+    try:
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        if b"Runner.Worker" in f.read():
+                            return True
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return False
+
+
+def runner_download():
+    """The newest actions/runner linux-x64 build, sha256-checked against the
+    `<!-- BEGIN SHA linux-x64 -->` line of its release notes."""
+    req = urllib.request.Request(RUNNER_RELEASE_API, headers={"User-Agent": USER_AGENT,
+                                                              "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        rel = json.load(r)
+    ver = rel["tag_name"].lstrip("v")
+    m = re.search(r"<!-- BEGIN SHA linux-x64 -->([0-9a-f]{64})<!-- END SHA linux-x64 -->", rel.get("body") or "")
+    if not m:
+        raise RuntimeError(f"actions/runner {ver}: no linux-x64 sha256 in the release notes")
+    name = f"actions-runner-linux-x64-{ver}.tar.gz"
+    url = next(a["browser_download_url"] for a in rel["assets"] if a["name"] == name)
+    tmp = RUNNER_DIR + ".part"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    tgz = os.path.join(tmp, name)
+    urllib.request.urlretrieve(url, tgz)
+    h = hashlib.sha256()
+    with open(tgz, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    if h.hexdigest() != m.group(1):
+        raise RuntimeError(f"{name}: sha256 differs from the release notes")
+    sh(["tar", "-xzf", tgz, "-C", tmp])
+    os.remove(tgz)
+    shutil.rmtree(RUNNER_DIR, ignore_errors=True)
+    os.rename(tmp, RUNNER_DIR)
+    return ver
+
+
+def runner_env():
+    env = job_env(None)
+    env.update({"RUNNER_ALLOW_RUNASROOT": "1",
+                # No libicu in the base image; the runner works without it.
+                "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
+                "FV_BUILD_TARGET_BASE": TARGET_BASE, "FV_BUILD_RUNNER": "1"})
+    return env
+
+
+def runner_start(token, repo, labels, name):
+    global runner_proc
+    with runner_lock:
+        try:
+            runner_state.update(phase="installing", error=None, repo=repo, labels=labels, name=name)
+            if not os.path.isfile(os.path.join(RUNNER_DIR, "config.sh")):
+                runner_state["version"] = runner_download()
+            if runner_proc is not None and runner_proc.poll() is None:
+                runner_proc.terminate()
+                runner_proc.wait(timeout=60)
+            # A second registration: config.sh refuses a configured dir, and
+            # removing it remotely needs another token; --replace takes the
+            # name over on GitHub, so only the local config goes.
+            for f in (".runner", ".credentials", ".credentials_rsaparams"):
+                try:
+                    os.remove(os.path.join(RUNNER_DIR, f))
+                except OSError:
+                    pass
+            env = runner_env()
+            os.makedirs(RUNNER_WORK, exist_ok=True)
+            runner_state["phase"] = "configuring"
+            # --replace: the same name from an earlier pod is taken over.
+            r = subprocess.run(["./config.sh", "--unattended", "--url", f"https://github.com/{repo}", "--token", token,
+                                "--name", name, "--labels", labels, "--work", RUNNER_WORK, "--replace",
+                                "--disableupdate"],
+                               cwd=RUNNER_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+            out = r.stdout.decode("utf-8", "replace").replace(token, "<token>")
+            if r.returncode != 0:
+                raise RuntimeError(f"config.sh exited {r.returncode}: {out[-800:]}")
+            os.makedirs(os.path.dirname(RUNNER_LOG), exist_ok=True)
+            logf = open(RUNNER_LOG, "ab")
+            runner_proc = subprocess.Popen(["./run.sh"], cwd=RUNNER_DIR, env=env, stdin=subprocess.DEVNULL,
+                                           stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+            runner_state["phase"] = "running"
+            log(f"github runner {name} ({labels}) registered for {repo}")
+            ledger(f"runner-registered {name} {repo}")
+        except Exception as e:  # reported by GET /v1/runner and status
+            runner_state.update(phase="failed", error=str(e).replace(token, "<token>")[:1000])
+            log(f"github runner: {runner_state['error']}")
+
+
+def runner_info():
+    alive = runner_proc is not None and runner_proc.poll() is None
+    phase = runner_state["phase"]
+    if phase == "running" and not alive:
+        phase = f"exited {runner_proc.poll()}"
+    return {**runner_state, "phase": phase, "busy": runner_busy()}
+
+
 def watch_tick(now):
     act = active_jobs()
+    # A workflow job on the GitHub runner is work: no idle stop meanwhile.
+    global last_activity
+    busy = runner_busy()
+    if busy:
+        with state_lock:
+            last_activity = max(last_activity, now)
     if POLICY.past_cap(now):
         new = [j for j in act if j.id not in cap_warned]
         if new:
@@ -1522,7 +1660,7 @@ def watch_tick(now):
                            "even if this job is still running; new jobs are refused (build-pod.sh up after it is gone)")
             log(f"past the {POLICY.max_s / 3600:g} h cap with {len(act)} active job(s); hard stop in {max(0, left) / 60:.0f} min")
             cap_warned.update(j.id for j in new)
-    reason = POLICY.decide(now, last_activity, len(act))
+    reason = POLICY.decide(now, last_activity, len(act) + int(busy))
     if reason and STOPPER.due(now):
         if act:
             note_jobs(act, f"stopping the pod now ({reason}); this job is killed")
@@ -1617,6 +1755,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_text(200, tail_file(os.path.join(ROOT, "logs", "pod.log"), int(q.get("lines", "200"))))
         if method == "GET" and parts == ["agents"]:
             return self.agents(q.get("sizes") == "1")
+        if method == "GET" and parts == ["runner"]:
+            return self.send_json(200, runner_info())
+        if method == "POST" and parts == ["runner"]:
+            req = json.loads(self.body() or b"{}")
+            token, repo = str(req.get("token", "")), str(req.get("repo", ""))
+            labels = str(req.get("labels") or "fv-build")
+            name = str(req.get("name") or f"fv-build-{os.environ.get('RUNPOD_POD_ID', 'pod')}")
+            if not token or not REPO_RE.match(repo) or not LABELS_RE.match(labels) or not AGENT_RE.match(name):
+                return self.send_json(400, {"error": "need token, repo owner/name, labels [A-Za-z0-9_.,-], name"})
+            touch()
+            threading.Thread(target=runner_start, args=(token, repo, labels, name), daemon=True).start()
+            return self.send_json(202, {"registering": name, "labels": labels})
         if method == "POST" and parts == ["evict"]:
             return self.send_json(200, {"evicted": evictor.run_once()})
         if len(parts) >= 2 and parts[0] == "jobs":
@@ -1691,6 +1841,7 @@ class Handler(BaseHTTPRequestHandler):
             "caches_gb": dict(cache_usage), "deps_seeds": {"enabled": SEED_ON, "keep": SEED_KEEP, "seeds": seed_list(),
                                                            "building": [j.info() for j in seed_building.values()
                                                                         if j.state in ("queued", "running")]},
+            "runner": runner_info(),
             "server_sha": SERVER_SHA, "self_stop_key": bool(os.environ.get("RUNPOD_API_KEY")),
             "eviction": {
                 "idle_hours": EVICT_S / 3600, "free_gb_floor": EVICT_FREE_GB, "interval_s": EVICT_INTERVAL_S,

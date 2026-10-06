@@ -18,8 +18,9 @@
 #          binary and scripts, in thin layers. Layout: "Runtime images" below.
 #
 # Prebuilt binaries (CI default, docs/serve/images.md "Prebuilt binaries"):
-# the build pod compiles every Rust binary and the oxide cubins
-# (scripts/dev/build-pod.sh release-artifacts <sha> -> R2), and the workflows
+# the build pod compiles and tests every Rust binary and the oxide cubins,
+# published as a tools release (`tools-v<X.Y.Z>` on GitHub Releases,
+# scripts/ci/tools-release.sh, docs/dev/tools-releases.md), and the workflows
 # pass the downloaded directories as named build contexts that REPLACE the
 # compile stages, so only the lean stages below run and nothing compiles:
 #   --build-context oxide=<dir>          <dir>/out/oxide/        (stage oxide)
@@ -27,7 +28,7 @@
 #   --build-context hf-fm=<dir>          <dir>/out/hf-fm, hf-fetch-model (hf-fm)
 #   --build-context serve-build=<dir>    <dir>/out/fv-serve{,.features} (serve-build)
 #   --build-context cpu-build=<dir>      <dir>/out/fv-serve{,.features} (cpu-build)
-# Without them (no R2 key, artifacts not built yet) the stages compile here.
+# Without them (no usable tools release) the stages compile here.
 
 # The base of every runtime image, pinned so the shared layers only change
 # when this line does (scripts/ci/base-images.sh hashes it).
