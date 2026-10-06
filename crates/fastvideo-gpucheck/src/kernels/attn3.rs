@@ -298,6 +298,131 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
     Ok(())
 }
 
+/// `sdpa_rule`: the offline generator of the fixed dense-SDPA rule
+/// (`fastvideo_cudarc::wan::sdpa_rule`). For every shape below it times
+/// cuDNN's plan and `flash_mma_fwd2` (bf16 in and out, median of three
+/// synchronized calls after a warm-up) and reports the faster, the margin,
+/// what the rule picks and what that costs against the faster. The check
+/// fails when the rule's pick is more than `FV_SDPA_RULE_TOL` (default 2 %)
+/// slower than the faster kernel at a shape where the margin is real;
+/// `rule_suggestion` lists the shapes to move. `FV_SDPA_RULE_SHAPES` limits
+/// the run to named shapes.
+pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
+    use fastvideo_cudarc::wan::sdpa_rule as rule;
+    let dev = dev()?;
+    if dev.sm_major < 8 {
+        c.report
+            .note("sdpa_rule_skipped", json!({"sm_major": dev.sm_major, "needs": "sm80+"}));
+        return Ok(());
+    }
+    let tol = std::env::var("FV_SDPA_RULE_TOL")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.02);
+    let only = std::env::var("FV_SDPA_RULE_SHAPES").unwrap_or_default();
+    // H3 at 1920x1088, 5 s: text + video + audio rows in one joint sequence.
+    let h3_1080 = fastvideo_models::h3::config::H3Geometry::new(1088, 1920, 124)
+        .map(|g| g.video_rows() + g.audio_rows() + 256)
+        .unwrap_or(0);
+    let h3_768 = fastvideo_models::h3::config::H3Geometry::new(768, 1344, 124)
+        .map(|g| g.video_rows() + g.audio_rows() + 256)
+        .unwrap_or(0);
+    // (name, bh, sq, sk). LTX 1080p 6 s: stage 1 at 17 x 30 x 19 = 9 690
+    // tokens, stage 2 at 34 x 60 x 19 = 38 760; text contexts 1 024 tokens,
+    // 151 audio tokens. The boundaries of the rule's rows at +-1 %.
+    let shapes: Vec<(String, usize, usize, usize)> = vec![
+        ("ltx1080_s1_self".into(), 32, 9_690, 9_690),
+        ("ltx1080_s1_text".into(), 32, 9_690, 1_024),
+        ("ltx1080_s1_a2v".into(), 32, 9_690, 151),
+        ("ltx1080_s2_self".into(), 32, 38_760, 38_760),
+        ("ltx1080_s2_text".into(), 32, 38_760, 1_024),
+        ("ltx1080_s2_a2v".into(), 32, 38_760, 151),
+        ("ltx1080_audio_text".into(), 32, 151, 1_024),
+        ("ltx1080_v2a".into(), 32, 151, 38_760),
+        ("ltx720_s2_self".into(), 32, 17_480, 17_480),
+        ("ltx512p".into(), 32, 6_144, 6_144),
+        ("h3_768p".into(), 56, h3_768, h3_768),
+        ("h3_1080p".into(), 56, h3_1080, h3_1080),
+        ("wan_580p".into(), 24, 23_616, 23_616),
+        ("wan_720p".into(), 24, 27_280, 27_280),
+        ("wan_cross".into(), 24, 27_280, 512),
+        ("edge_24k_lo".into(), 32, 24_330, 24_330),
+        ("edge_24k_hi".into(), 32, 24_822, 24_822),
+        ("ltx_1080p20s".into(), 32, 124_440, 124_440),
+        ("ltx_4k5s".into(), 32, 130_560, 130_560),
+    ];
+    let mut suggestions = Vec::new();
+    let mut worst = 0.0f64;
+    let scale = 1.0 / (D as f32).sqrt();
+    for (name, bh, sq, sk) in shapes {
+        if sq == 0 || (!only.is_empty() && !only.split(',').any(|s| s.trim() == name)) {
+            continue;
+        }
+        let q = repeat_heads_bf16(&structured_head(c, sq), bh)?;
+        let k = repeat_heads_bf16(&structured_head(c, sk), bh)?;
+        let v = repeat_heads_bf16(&c.rand(sk * D, 1.0), bh)?;
+        let (qt, kt, vt) = (
+            CudaTensor::from_device_slice_bf16(q.clone(), vec![1, bh, sq, D])?,
+            CudaTensor::from_device_slice_bf16(k.clone(), vec![1, bh, sk, D])?,
+            CudaTensor::from_device_slice_bf16(v.clone(), vec![1, bh, sk, D])?,
+        );
+        let v2 = median3(&mut || {
+            attn::device_mma_sdpa_with(&qt, &kt, &vt, None, true, FlashKernel::V2)?
+                .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
+            Ok(())
+        })?;
+        let cudnn = match cudnn_sdpa::plan_for_graph(SdpaGraph::Unified, 0, bh, sq, sk, D) {
+            Ok(plan) => {
+                let mut out16 = unsafe { dev.stream.alloc::<bf16>(bh * sq * D) }?;
+                Some((
+                    median3(&mut || {
+                        cudnn_sdpa::execute(&plan, &q, &k, &v, &mut out16, scale)?;
+                        Ok(())
+                    })?,
+                    plan.info.clone(),
+                ))
+            }
+            Err(_) => None,
+        };
+        let picked = rule::pick(dev.sm_major, sq, sk, D);
+        let (best_kernel, best) = match &cudnn {
+            Some((t, _)) if *t < v2 => (rule::DensePick::Cudnn, *t),
+            _ => (rule::DensePick::V2, v2),
+        };
+        let rule_s = match (picked, &cudnn) {
+            (rule::DensePick::Cudnn, Some((t, _))) => *t,
+            _ => v2,
+        };
+        // Sub-50 us differences are timer noise, not a margin.
+        let loss = if rule_s - best < 50e-6 { 0.0 } else { rule_s / best - 1.0 };
+        worst = worst.max(loss);
+        if loss > tol {
+            suggestions.push(format!("{name} (sq {sq}, sk {sk}): {} is {:.1} % faster", best_kernel.name(), loss * 100.0));
+        }
+        c.report.check(
+            format!("sdpa_rule_{name}"),
+            loss <= tol,
+            json!({
+                "bh": bh, "sq": sq, "sk": sk,
+                "v2_ms": v2 * 1e3,
+                "cudnn_ms": cudnn.as_ref().map(|(t, _)| t * 1e3),
+                "cudnn_plan": cudnn.as_ref().map(|(_, p)| p.clone()),
+                "faster": best_kernel.name(),
+                "margin": cudnn.as_ref().map(|(t, _)| (v2 - t) / v2.max(*t)),
+                "rule": picked.name(),
+                "rule_loss": loss,
+            }),
+            json!({"rule_loss_max": tol}),
+        )?;
+    }
+    c.report.note(
+        "sdpa_rule_table",
+        json!({"rule": rule::describe(), "sm_major": dev.sm_major, "worst_rule_loss": worst,
+               "rule_suggestion": suggestions}),
+    );
+    Ok(())
+}
+
 /// VSA workloads: (name, heads, token grid, sparsities).
 const VSA_WORKLOADS: &[(&str, usize, (usize, usize, usize), &[f64])] = &[
     ("fasth3_768p", 56, (37, 24, 42), &[0.8, 0.9]),

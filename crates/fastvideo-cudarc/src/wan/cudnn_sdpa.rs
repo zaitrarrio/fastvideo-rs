@@ -448,6 +448,55 @@ fn engine_index(cfg: &Desc) -> Option<i64> {
     eng.get_i64(A::CUDNN_ATTR_ENGINE_GLOBAL_INDEX).ok()
 }
 
+/// The engine's numerical notes (`CUDNN_ATTR_ENGINE_NUMERICAL_NOTE`), as
+/// raw `cudnnBackendNumericalNote_t` values; `None` when cuDNN will not say.
+fn numerical_notes(cfg: &Desc) -> Option<Vec<u32>> {
+    let eng = Desc::new(DT::CUDNN_BACKEND_ENGINE_DESCRIPTOR).ok()?;
+    let mut n = 0i64;
+    let mut p = eng.0;
+    let st = unsafe {
+        raw::get(
+            cfg.0,
+            A::CUDNN_ATTR_ENGINECFG_ENGINE as u32,
+            T::CUDNN_TYPE_BACKEND_DESCRIPTOR as u32,
+            1,
+            &mut n,
+            &mut p as *mut cudnnBackendDescriptor_t as *mut c_void,
+        )
+    };
+    if st != raw::STATUS_SUCCESS {
+        return None;
+    }
+    let mut notes = [0u32; 16];
+    let mut count = 0i64;
+    let st = unsafe {
+        raw::get(
+            eng.0,
+            A::CUDNN_ATTR_ENGINE_NUMERICAL_NOTE as u32,
+            T::CUDNN_TYPE_NUMERICAL_NOTE as u32,
+            notes.len() as i64,
+            &mut count,
+            notes.as_mut_ptr() as *mut c_void,
+        )
+    };
+    if st != raw::STATUS_SUCCESS {
+        return None;
+    }
+    Some(notes[..(count.max(0) as usize).min(notes.len())].to_vec())
+}
+
+/// Whether a config's engine says its results may differ run to run
+/// (`CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC`: atomics, split reductions).
+/// Such configs are skipped unless `FASTVIDEO_CUDNN_SDPA_NONDETERMINISTIC=1`.
+fn is_nondeterministic(notes: &[u32]) -> bool {
+    notes.contains(&(sys::cudnnBackendNumericalNote_t::CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC as u32))
+}
+
+fn allow_nondeterministic() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_CUDNN_SDPA_NONDETERMINISTIC", false))
+}
+
 fn plan_json(plan: &Desc) -> String {
     let mut buf = vec![0u8; 4096];
     let mut n = 0i64;
@@ -522,8 +571,16 @@ fn build(
             continue;
         }
         // Configs in heuristic order; `want_cfg` skips that many that finalize.
+        // Engines that declare themselves nondeterministic are passed over
+        // (the heuristic's order is otherwise kept, so the pick is the same
+        // in every process).
         let mut skipped = 0usize;
         for (i, cfg) in cfgs.iter().take(count).enumerate() {
+            let notes = numerical_notes(cfg).unwrap_or_default();
+            if is_nondeterministic(&notes) && !allow_nondeterministic() {
+                last = format!("{mode:?} config {i}: engine is nondeterministic");
+                continue;
+            }
             let plan = Desc::new(DT::CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
             plan.set(A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
             plan.set_desc(A::CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, &[cfg])?;
@@ -536,7 +593,7 @@ fn build(
                     let ws = plan.get_i64(A::CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE)?;
                     let json = plan_json(&plan);
                     let info = format!(
-                        "graph {} {mode:?} config {i} of {count}, engine {}, {}",
+                        "graph {} {mode:?} config {i} of {count}, engine {}, numerical notes {notes:?}, {}",
                         kind.name(),
                         engine_index(cfg).map_or("?".into(), |e| e.to_string()),
                         json.chars().take(400).collect::<String>()

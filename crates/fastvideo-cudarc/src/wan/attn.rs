@@ -221,8 +221,8 @@ pub fn flash_v2_default() -> bool {
 /// sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench` (two pods): 104.8-105.0
 /// vs 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 ms at LTX 1080p
 /// 20 s, but 766.6-769.0 vs 757.2-759.9 ms at 4K 5 s (engine 11, heuristic
-/// mode A config 0), hence the per-shape pick. `FASTVIDEO_FLASH_KERNEL=v2`
-/// (or `=cudnn`) fixes the kernel.
+/// mode A config 0), hence the per-shape rule ([`super::sdpa_rule`]).
+/// `FASTVIDEO_FLASH_KERNEL=v2` (or `=cudnn`) fixes the kernel.
 pub fn cudnn_default(sm_major: i32) -> bool {
     CUDNN_DEFAULT_ON && sm_major == 12
 }
@@ -231,12 +231,58 @@ pub fn cudnn_default(sm_major: i32) -> bool {
 /// LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step).
 const CUDNN_DEFAULT_ON: bool = true;
 
-/// `auto` on sm_12x, bf16 out: the first call of each `(bh, sq, sk, d)`
-/// times cuDNN's plan (after one warm-up execution) against flash_mma_fwd2 on
-/// these very inputs and caches the faster; later calls run the winner. A
-/// shape cuDNN has no plan for is V2. The pick is logged once per shape.
+/// `auto` on sm_12x, bf16 out: the fixed per-shape rule
+/// ([`super::sdpa_rule::pick`]), so a shape runs the same kernel in every
+/// process (the two kernels round 1-2 bf16 ulp apart). A shape cuDNN has no
+/// plan for is V2. The pick is logged once per shape.
+/// `FASTVIDEO_SDPA_AUTO=timed` restores the old first-call timing
+/// ([`timed_cudnn_or_v2`]), which is not reproducible across processes.
 #[cfg(feature = "cuda")]
 fn auto_cudnn_or_v2(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    use super::sdpa_rule::{self, AutoMode, DensePick};
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    if sdpa_rule::auto_mode() == AutoMode::Timed {
+        return timed_cudnn_or_v2(q, k, v, scale);
+    }
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2);
+    };
+    let sm_major = super::device::global_device().map_or(0, |dev| dev.sm_major);
+    let rule = sdpa_rule::pick(sm_major, sq, sk, d);
+    let kernel = match rule {
+        DensePick::Cudnn if super::cudnn_sdpa::has_plan(b * h, sq, sk, d) => FlashKernel::Cudnn,
+        _ => FlashKernel::V2,
+    };
+    static LOGGED: OnceLock<Mutex<HashSet<(usize, usize, usize, usize)>>> = OnceLock::new();
+    if LOGGED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("sdpa rule log")
+        .insert((b * h, sq, sk, d))
+    {
+        super::log::info(format_args!(
+            "sdpa auto (sm_{sm_major}x rule): bh={} sq={sq} sk={sk} d={d} -> {}",
+            b * h,
+            if kernel == FlashKernel::Cudnn { "cuDNN" } else { "flash_mma_fwd2" }
+        ));
+    }
+    device_mma_sdpa_with(q, k, v, scale, true, kernel)
+}
+
+/// `FASTVIDEO_SDPA_AUTO=timed`: the first call of each `(bh, sq, sk, d)`
+/// times cuDNN's plan (after one warm-up execution) against flash_mma_fwd2 on
+/// these very inputs and caches the faster; later calls run the winner. Where
+/// the two are within noise the winner differs between processes, and so do
+/// the output bytes: a diagnostic, not a default. The offline table
+/// generator is `fv-gpucheck kernels --groups sdpa_rule`.
+#[cfg(feature = "cuda")]
+fn timed_cudnn_or_v2(
     q: &CudaTensor,
     k: &CudaTensor,
     v: &CudaTensor,
@@ -272,7 +318,7 @@ fn auto_cudnn_or_v2(
         let (oc, tc) = timed(FlashKernel::Cudnn)?;
         let (o2, t2) = timed(FlashKernel::V2)?;
         super::log::info(format_args!(
-            "sdpa auto (sm_12x): bh={} sq={sq} sk={sk} d={d}: cuDNN {:.2} ms, flash_mma_fwd2 {:.2} ms -> {}",
+            "sdpa auto (sm_12x timed): bh={} sq={sq} sk={sk} d={d}: cuDNN {:.2} ms, flash_mma_fwd2 {:.2} ms -> {}",
             b * h,
             tc * 1e3,
             t2 * 1e3,
