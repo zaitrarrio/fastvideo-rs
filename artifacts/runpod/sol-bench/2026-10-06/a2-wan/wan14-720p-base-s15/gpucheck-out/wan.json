@@ -1,0 +1,117 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "mem_used_mib": 37314,
+        "seconds": 167.508439702
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 7.758606584,
+        "decoder": "wan-vae",
+        "denoise_s": 536.620305005,
+        "frames_sha256": "a31cad6abcb3d50bd0250844fb843fb69875c450ec649f19bde33de9ee0f3e5d",
+        "peak_mib": 71532,
+        "step_s": [
+          35.672914391,
+          35.689906554,
+          35.788737969,
+          35.80427135,
+          35.797461991,
+          35.801926807,
+          35.801872456,
+          35.80444586,
+          35.815496915,
+          35.802351088,
+          35.789329529,
+          35.781267159,
+          35.76758715,
+          35.768386081,
+          35.734164395
+        ],
+        "text_cache": "miss",
+        "text_s": 0.95633695,
+        "total_s": 545.364729859,
+        "video_encode_s": 0.04427728,
+        "video_push_s": 0.00007646000000000001,
+        "video_rgb_s": 0.06494231799540227,
+        "video_vae_s": 7.679242599487305,
+        "video_wait_s": 1.482330884,
+        "write_s": 0.084669816
+      }
+    },
+    {
+      "limits": {
+        "expected": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 81,
+        "written": 81
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/frames/frame-040.png",
+        "mean": 0.30031290310987313,
+        "std": 0.2403840097750727
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": false,
+      "dmd_steps": null,
+      "flow_shift": 5.0,
+      "guidance": 5.0,
+      "height": 720,
+      "num_frames": 81,
+      "plug": null,
+      "preset": "wan_t2v_14b",
+      "prompt_set": null,
+      "step_distill": null,
+      "steps": 15,
+      "text_cache": "/fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/text-cache",
+      "vae": "auto",
+      "vsa": false,
+      "warm": false,
+      "weights": "/workspace/weights/wan21-t2v-14b",
+      "width": 1280
+    }
+  },
+  "elapsed_s": 713.633970237,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}

@@ -1,0 +1,36 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"mem_used_mib":37314,"seconds":167.508439702}
+[fastvideo] generate preset=wan_t2v_14b tiny=false 1280x720 frames=81 steps=15 dmd=false rcm=false latent=1x16x21x90x160 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=unipc steps=15
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=80 sq=75600 sk=75600 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=2 H=40 Sq=75600 Sk=75600 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=80 sq=75600 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/15 t=999 done in 35672ms
+[fastvideo] unipc step 2/15 t=985 done in 35689ms
+[fastvideo] unipc step 3/15 t=970 done in 35788ms
+[fastvideo] unipc step 4/15 t=952 done in 35804ms
+[fastvideo] unipc step 5/15 t=932 done in 35797ms
+[fastvideo] unipc step 6/15 t=909 done in 35801ms
+[fastvideo] unipc step 7/15 t=882 done in 35801ms
+[fastvideo] unipc step 8/15 t=851 done in 35804ms
+[fastvideo] unipc step 9/15 t=813 done in 35815ms
+[fastvideo] unipc step 10/15 t=769 done in 35802ms
+[fastvideo] unipc step 11/15 t=714 done in 35789ms
+[fastvideo] unipc step 12/15 t=645 done in 35781ms
+[fastvideo] unipc step 13/15 t=555 done in 35767ms
+[fastvideo] unipc step 14/15 t=434 done in 35768ms
+[fastvideo] unipc step 15/15 t=263 done in 35734ms
+[fastvideo] unipc 15 steps done in 536619ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=14400 Sk=14400 D=384 query_chunk=14400
+[fastvideo] vae.decode done in 6204ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.08s, 0.06 GiB, synced), ffmpeg feed blocked 0.23s, mp4 tail 0.04s, buffered peak 0.21 GiB of 85.14
+[fastvideo] wrote mp4 /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/frames (text 0.96s, denoise 536.62s, decode+mp4 7.76s, png 0.08s)
+[fastvideo] generate done in 545449ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":7.758606584,"decoder":"wan-vae","denoise_s":536.620305005,"frames_sha256":"a31cad6abcb3d50bd0250844fb843fb69875c450ec649f19bde33de9ee0f3e5d","peak_mib":71532,"step_s":[35.672914391,35.689906554,35.788737969,35.80427135,35.797461991,35.801926807,35.801872456,35.80444586,35.815496915,35.802351088,35.789329529,35.781267159,35.76758715,35.768386081,35.734164395],"text_cache":"miss","text_s":0.95633695,"total_s":545.364729859,"video_encode_s":0.04427728,"video_push_s":0.00007646000000000001,"video_rgb_s":0.06494231799540227,"video_vae_s":7.679242599487305,"video_wait_s":1.482330884,"write_s":0.084669816}
+wan gen default: total 545.36s (text 0.96s, denoise 536.62s, decode 7.76s) png 0.08s peak Some(71532) MiB frames a31cad6abcb3d50bd0250844fb843fb69875c450ec649f19bde33de9ee0f3e5d
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/frames/frame-040.png","mean":0.30031290310987313,"std":0.2403840097750727} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/sol-bench-a2/c74c5f5-10061422/wan14-720p-base-s15/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (713.6s)

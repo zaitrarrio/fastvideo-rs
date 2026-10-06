@@ -112,8 +112,10 @@ h3() { # <name> <est> <warm 0|1> <env...> -- (the sol-h3-rtx recipe)
   local wf=(); [[ $warm == 1 ]] && wf=(--warm)
   cell "$name" h3-base "$est" env "$@" \
     "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
-      --adaln-cache "$RUNS/h3-768p-adaln.cache" --clip-dir "$RUNS/$name/frames" "${h3_common[@]}" "${wf[@]}"
+      --adaln-cache "$RUNS/h3-768p-adaln.cache" --clip-dir "$RUNS/$name/frames" "${h3_common[@]}" "${wf[@]}" \
+      ${H3_EXTRA[@]+"${H3_EXTRA[@]}"}
 }
+H3_EXTRA=()
 # LTX-2.5 distilled two-stage at sol-engine's RTX 5090 workloads
 # (models/ltx25/RTX5090: 4k5s, 1080p20s), Sol stage 2, BF16 or NVFP4 video FFN.
 ltx() { # <name> <est> <workload> <profile>
@@ -157,6 +159,14 @@ case "$SET" in
     ltx ltx25-1080p20s-sol-nvfp4 420 1080p20s ltx2/ltx25_distill_sol_nvfp4
     # Dense last (owner priority); one request after load, load excluded.
     h3 h3-768p-dense 690 0 FASTVIDEO_H3_SOL_ATTN=off
+    ;;
+  a3) # Phase A, instance 1 follow-up: H3 with BF16 linears as sol-engine's
+    # rtx5090_{dense,fullopt}.toml (our H3 default on sm_100+ is MXFP8 since
+    # c054278), and the prompt encoded in every request (no text cache), so E2E
+    # includes text encoding as theirs does.
+    H3_EXTRA=(--no-text-cache)
+    h3 h3-768p-fullopt-bf16 480 1 FASTVIDEO_H3_QUANT=off FASTVIDEO_H3_SOL_CACHE=teacache
+    h3 h3-768p-dense-bf16 760 0 FASTVIDEO_H3_QUANT=off FASTVIDEO_H3_SOL_ATTN=off
     ;;
   a2) # Phase A, instance 2 (RTX PRO 6000)
     wan5b wan5b-base 480 -u FASTVIDEO_WAN_SOL_CACHE

@@ -39,6 +39,8 @@
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
 # FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
 # unpacked on the pod into /fvscratch/files/<basename>; run mode only),
+# FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
+# is deleted at once and created again),
 # FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
 # image's runpod-matrix.sh with the same environment, e.g. sol-bench-pod.sh;
 # it skips the default weight gate).
@@ -281,15 +283,31 @@ create_pod() {
   # Capacity in the volume's datacenter comes and goes; retry instead of failing.
   local t0 wait="${FV_CREATE_WAIT_S:-3600}"
   t0=$(date +%s)
-  until resp="$(rest POST /pods "$payload" 2>&1)"; do
-    if [[ "$resp" != *"no instances currently available"* ]] || (( $(date +%s) - t0 >= wait )); then
-      die "pod create failed: $resp"
+  # FV_AVOID_MACHINES: Runpod machine ids a pod is deleted from on sight (a
+  # host that never starts the image; 2026-10-06 s3p8exc9lcvi took five pods).
+  while :; do
+    until resp="$(rest POST /pods "$payload" 2>&1)"; do
+      if [[ "$resp" != *"no instances currently available"* && "$resp" != *"does not have the resources"* ]] \
+        || (( $(date +%s) - t0 >= wait )); then
+        die "pod create failed: $resp"
+      fi
+      log "no $GPU free in $dc; retrying in 60s"
+      sleep 60
+    done
+    id="$(jq -r '.id // empty' <<<"$resp")"
+    [[ -n "$id" ]] || die "pod create returned no id: $resp"
+    local machine
+    machine="$(jq -r '.machineId // empty' <<<"$resp")"
+    [[ -n "$machine" ]] || machine="$(rest GET "/pods/$id" 2>/dev/null | jq -r '.machineId // empty' 2>/dev/null || true)"
+    if [[ -n "$machine" && " ${FV_AVOID_MACHINES:-} " == *" $machine "* ]]; then
+      rest DELETE "/pods/$id" >/dev/null || true
+      (( $(date +%s) - t0 < wait )) || die "only avoided hosts ($machine) offered within ${wait}s"
+      log "pod $id landed on avoided host $machine; deleted, retrying in 45s"
+      sleep 45
+      continue
     fi
-    log "no $GPU free in $dc; retrying in 60s"
-    sleep 60
+    break
   done
-  id="$(jq -r '.id // empty' <<<"$resp")"
-  [[ -n "$id" ]] || die "pod create returned no id: $resp"
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
   if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
     rest DELETE "/pods/$id" >/dev/null || true

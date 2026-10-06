@@ -1,0 +1,29 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"mem_used_mib":21794,"seconds":78.45922009}
+[fastvideo] generate preset=wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=50 dmd=false rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] wan attn route: Pisa5b
+[fastvideo] wan sol easycache: threshold 0.036 retain 7 cooldown 1 steps 50 (cond decides, uncond follows)
+[fastvideo] denoise=unipc steps=50
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=24 sq=27280 sk=27280 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=24 sq=27280 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/50 t=999 done in 3225ms
+[fastvideo] unipc step 2/50 t=995 done in 2978ms
+[fastvideo] pisa kernel: route=score sparsity=0.9 block=64 tokens=27280 approx_remainder first-order
+[fastvideo] unipc step 3/50 t=991 done in 63863ms
+[fastvideo] unipc step 4/50 t=987 done in 63839ms
+[fastvideo] unipc step 5/50 t=982 done in 63898ms
+[fastvideo] unipc step 6/50 t=978 done in 63860ms
+[fastvideo] unipc step 7/50 t=973 done in 63871ms
+[fastvideo] unipc step 8/50 t=968 done in 63889ms
+[fastvideo] unipc step 9/50 t=963 done in 63879ms
+[fastvideo] unipc step 10/50 t=957 done in 63874ms
+[fastvideo] unipc step 11/50 t=952 done in 63872ms
+[fastvideo] unipc step 12/50 t=946 done in 63918ms
+[fastvideo] unipc step 13/50 t=940 done in 63911ms
+[fastvideo] unipc step 14/50 t=934 done in 63896ms
+[fastvideo] unipc step 15/50 t=927 done in 63848ms
+[fastvideo] unipc step 16/50 t=921 done in 63859ms
+[fastvideo] unipc step 17/50 t=913 done in 63832ms
+[fastvideo] unipc step 18/50 t=906 done in 63873ms
