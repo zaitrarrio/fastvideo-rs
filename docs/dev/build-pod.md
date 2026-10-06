@@ -115,13 +115,25 @@ Rust dependencies are rebuilt only when `Cargo.lock`, the toolchain (image)
 or the job flags change:
 
 1. **sccache** (`RUSTC_WRAPPER`, `sccache/` on the volume, 40 GB). The server
-   starts the sccache server itself at boot. Before, the first job's rustc
-   spawned it inside that job's process group, so cancelling that job
+   starts the sccache daemon itself at boot.
+   *Our own crates do not hit across agents* (tried 2026-10-06): sccache
+   0.18 hashes a rustc call's cwd, its arguments and every `CARGO_*` variable
+   (`CARGO_MANIFEST_DIR`, `CARGO_MANIFEST_PATH`) verbatim, and its
+   `SCCACHE_BASEDIRS` path stripping applies to C/C++ only (`src/compiler/rust.rs`
+   has no basedirs). One daemon per agent with `SCCACHE_BASEDIRS=<worktree>:<target>`
+   gave 0 hits for the 18 workspace crates of a new agent's release fv-serve
+   (210 s, against 201 s with one shared daemon), so it was dropped. A stable
+   path per agent would need a mount namespace per job (`CAP_SYS_ADMIN`),
+   which a Runpod container does not have; `--remap-path-prefix` does not
+   change cwd or `CARGO_MANIFEST_DIR`. The deps seed covers the
+   dependencies; our crates compile once per agent, then incrementally.
+   Before, the first job's rustc spawned it inside that job's process group, so cancelling that job
    (`killpg`) killed the cache server under everyone else's build. cc-rs
    (OpenH264, Opus, libwebp …) uses sccache because `RUSTC_WRAPPER` is
    sccache, and CMake builds get `CMAKE_{C,CXX}_COMPILER_LAUNCHER`. `status`
    prints `sccache: <hits> hits / <n> cacheable compiles (hit rate …)` since
-   boot. Not cacheable by design: incremental (debug workspace) crates,
+   boot. Not cacheable by design: incremental
+   (debug workspace) crates, workspace crates of another agent (above),
    proc-macros/bins/dylibs, build-script runs, nvcc in `fastvideo-cudarc`'s
    build script.
    *Audit of the old setup:* `RUSTC_WRAPPER` was set only if the volume's
@@ -349,7 +361,7 @@ not recreate a pod another session is using; ask, or wait for it to stop.
 | **Pod (default): cpu5c, 32 vCPU / 64 GB** | **$1.12/hr** (never allocated on 2026-09-28) |
 | fallback: cpu3c, 32 vCPU / 64 GB | $0.96/hr (what `up` got every time) |
 | cpu3g, 32 vCPU / 128 GB (`FV_BUILD_FLAVORS=cpu3g`) | $1.28/hr |
-| cpu5c / cpu3c, 16 vCPU / 32 GB (automatic fallback, `FV_BUILD_VCPUS_FALLBACK`) | $0.56 / $0.48/hr |
+| cpu5c / cpu3c, 16 vCPU / 32 GB (automatic fallback, `FV_BUILD_VCPUS_FALLBACK`) | $0.56 / $0.48/hr; container disk at most 120 / 80 GB, so the fallback asks for `FV_BUILD_CONTAINER_GB_FALLBACK` (80) and, if Runpod names a lower cap, retries with it |
 | Volume `fv-build`, 200 GB in EU-RO-1 | $0.07/GB/month = **$14/month** |
 
 32 vCPUs keep parallel rustc and the per-SM nvcc cubin compiles busy; 64 GB
@@ -424,7 +436,9 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
 - **Eviction** (automatic, on the pod): every minute and after each job, the
   server removes the target dir and snapshot of every agent unused (no sync,
   job or fetch) for more than `FV_BUILD_EVICT_HOURS` (6), then, while the
-  container disk has less than `FV_BUILD_EVICT_FREE_GB` (40) free, target dirs
+  container disk has less than `FV_BUILD_EVICT_FREE_GB` free (default a fifth
+  of the container disk, at most 40 GB: 40 on 200 GB, 16 on an 80 GB fallback
+  pod; the server applies the same cap to the actual disk), target dirs
   in least-recently-used order. An agent with a job running or queued is never
   touched. The release agent **`fv-release`** (`FV_BUILD_EVICT_PROTECT`; its
   `release-artifacts` run syncs, builds, then fetches the tarballs from its
@@ -485,6 +499,7 @@ included).
 | incremental (touch `main.rs`), fv-serve / fv-gpucheck | 15 s / 16 s | 10 s / 11 s |
 | new agent (empty target dir, as after a pod restart or eviction), fv-serve / fv-gpucheck | 447 s / 153 s (warm sccache) | 187–206 s / 80–82 s (deps seed: 3.6 GB extracted in 4–6 s, then 18 crates compiled instead of 60+) |
 | after adding one dependency (`humansize` to fastvideo-serve) | 38 s | 33 s |
+| new agent, one sccache daemon per agent with `SCCACHE_BASEDIRS` (tried, dropped) | — | 210 s, 0 sccache hits on the 18 workspace crates (shared daemon: 201 s) |
 | deps seed build (background, `nice`, 8 jobs) | — | 326 s; 3.6 GB → 0.88 GB zstd |
 | sccache hit rate | not reported | 0 % on the cold pod; 92 % (6265 / 6836) on a second pod over the same volume |
 
@@ -499,7 +514,9 @@ cpu5c pod (16 vCPU, $0.56/hr) because cpu3c had no stock. The first seed run
 showed a stripping bug (a test target `tests/serde.rs` named like the
 registry crate `serde` took serde's rlib out of the seed, and 60 crates
 recompiled); stripping now goes by the unit hashes of the path packages'
-fingerprints, with a unit test. Spend: about $0.7 of pod time.
+fingerprints, with a unit test. Spend: about $1.1 of pod time over both rounds
+(the `SCCACHE_BASEDIRS` trial included); the test roots were removed afterwards
+(checked: only `fv-build/` is left at the volume root).
 
 ## Measured (2026-09-28)
 

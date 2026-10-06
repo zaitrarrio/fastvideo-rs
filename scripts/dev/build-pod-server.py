@@ -145,14 +145,6 @@ IMAGE = os.environ.get("FV_BUILD_IMAGE", "")
 BASE_INFO = os.environ.get("FV_BUILD_BASE_INFO", "/etc/fastvideo/build-base.json")
 CUDA_DIR = os.environ.get("CUDA_HOME", "/usr/local/cuda-13.4")
 SCCACHE_DIR = os.path.join(ROOT, "sccache")
-# One sccache daemon per agent (a Unix socket each), started with
-# SCCACHE_BASEDIRS = that agent's worktree and target dir: sccache then keys
-# our own crates by paths relative to them, so agent B hits what agent A (or
-# the deps-seed build) compiled. One shared daemon cannot do that: basedirs is
-# daemon-wide. All daemons share SCCACHE_DIR. FV_BUILD_SCCACHE_BASEDIRS=0: one
-# shared daemon, absolute paths (workspace crates never hit across agents).
-SCCACHE_PER_AGENT = os.environ.get("FV_BUILD_SCCACHE_BASEDIRS", "1") == "1"
-SCCACHE_UDS_DIR = os.environ.get("FV_BUILD_SCCACHE_UDS_DIR", "/tmp/fv-sccache")
 # Build tools a job needs; checked at boot.
 REQUIRED_TOOLS = ("cargo", "rustc", "rustup", "cc", "clang", "cmake", "pkg-config", "mold", "sccache", "zstd",
                   "tar", "du", "jq", "objdump", "readelf", "curl", "git")
@@ -201,8 +193,13 @@ LAST_USE = os.path.join(LOCAL, ".last-use")  # <agent>: mtime = last sync / job 
 
 
 def disk_total_gb(path=None):
+    """Size of the filesystem holding `path` (default LOCAL), or of its
+    nearest existing parent (LOCAL is created after this module loads)."""
+    p = os.path.abspath(path or LOCAL)
+    while not os.path.exists(p) and os.path.dirname(p) != p:
+        p = os.path.dirname(p)
     try:
-        return shutil.disk_usage(path or LOCAL).total / 1e9
+        return shutil.disk_usage(p).total / 1e9
     except OSError:
         return 0.0
 
@@ -214,7 +211,7 @@ def scaled_floor_gb(floor_gb, total_gb):
     return round(min(floor_gb, total_gb / 5), 1)
 
 
-EVICT_FREE_GB = scaled_floor_gb(EVICT_FREE_GB, disk_total_gb(LOCAL) if os.path.isdir(LOCAL) else 0.0)
+EVICT_FREE_GB = scaled_floor_gb(EVICT_FREE_GB, disk_total_gb(LOCAL))
 MAX_UPLOAD = 512 << 20
 MAX_ARTIFACT = 2 << 30
 BOOT = time.time()
@@ -348,35 +345,7 @@ def job_env(agent=None):
         env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"] = "-C link-arg=-fuse-ld=mold"
     if agent:
         env["CARGO_TARGET_DIR"] = os.path.join(TARGET_BASE, agent)
-        if SCCACHE_PER_AGENT and "RUSTC_WRAPPER" in env:
-            env["SCCACHE_SERVER_UDS"] = sccache_uds(agent)
     return env
-
-
-def sccache_uds(agent):
-    return os.path.join(SCCACHE_UDS_DIR, agent + ".sock")
-
-
-sccache_daemons = {}  # agent -> start time (per-agent daemons this server started)
-sccache_lock = threading.Lock()
-
-
-def ensure_sccache(agent, env):
-    """Starts `agent`'s sccache daemon (SCCACHE_BASEDIRS = its worktree and
-    target dir) unless it runs. Its socket is in the job env (job_env)."""
-    uds = env.get("SCCACHE_SERVER_UDS")
-    if not uds:
-        return
-    with sccache_lock:
-        if agent in sccache_daemons and os.path.exists(uds):
-            return
-        os.makedirs(SCCACHE_UDS_DIR, exist_ok=True)
-        denv = dict(env, SCCACHE_BASEDIRS=":".join((os.path.join(WT_BASE, agent), env["CARGO_TARGET_DIR"])))
-        rc, out = sccache_cmd("--start-server", timeout=120, env=denv)
-        if rc != 0 and "already" not in out.lower():
-            log(f"sccache daemon for {agent}: --start-server exited {rc}: {out[-300:]}")
-            return
-        sccache_daemons[agent] = time.time()
 
 
 def missing_tools(names, env):
@@ -402,8 +371,7 @@ def check_extras(env):
 
 
 def sccache_cmd(*args, timeout=30, env=None):
-    """Runs `sccache <args>` with the jobs' sccache settings (the shared
-    daemon unless `env` names an agent's socket); (rc, stdout)."""
+    """Runs `sccache <args>` with the jobs' sccache settings; (rc, stdout)."""
     exe = shutil.which("sccache")
     if not exe:
         return 127, ""
@@ -424,55 +392,19 @@ def sccache_start():
 
 
 def sccache_stats():
-    """Hit rate since boot over the shared daemon and every agent's daemon
-    (`sccache --show-stats`), or None when the shared one does not answer."""
-    outs = []
-    targets = [None] + sorted(sccache_daemons)
-    for agent in targets:
-        env = None
-        if agent:
-            if not os.path.exists(sccache_uds(agent)):
-                continue  # never start a daemon just to read its stats
-            env = dict(job_env(), SCCACHE_SERVER_UDS=sccache_uds(agent))
-        rc, out = sccache_cmd("--show-stats", "--stats-format=json", timeout=15, env=env)
-        if rc == 0:
-            try:
-                outs.append(json.loads(out))
-            except ValueError:
-                pass
-        elif agent is None:
-            return None
-    if not outs:
+    """Hit rate since the server started (`sccache --show-stats`), or None."""
+    rc, out = sccache_cmd("--show-stats", "--stats-format=json", timeout=15)
+    if rc != 0:
         return None
-    merged = sum_stats(outs)
-    merged["daemons"] = len(outs)
-    return merged
-
-
-def sum_stats(outs):
-    j = outs[0]
-    agg = {}
-    for o in outs:
-        st = o.get("stats", o)
-        for k in ("compile_requests", "requests_executed", "requests_not_cacheable"):
-            agg[k] = agg.get(k, 0) + (st.get(k) or 0)
-        for k in ("cache_hits", "cache_misses", "cache_errors"):
-            agg.setdefault(k, []).append(st.get(k, {}))
-    st = {k: v for k, v in agg.items() if not isinstance(v, list)}
-    for k in ("cache_hits", "cache_misses", "cache_errors"):
-        st[k] = {"parts": agg[k]}
-    return one_stats({"stats": st, "cache_location": j.get("cache_location"),
-                      "cache_size": j.get("cache_size"), "max_cache_size": j.get("max_cache_size")})
-
-
-def one_stats(j):
+    try:
+        j = json.loads(out)
+    except ValueError:
+        return None
     st = j.get("stats", j)
 
     def total(x):
         if isinstance(x, dict):
             return sum(total(v) for k, v in x.items() if k != "adv_counts")
-        if isinstance(x, list):
-            return sum(total(v) for v in x)
         return x if isinstance(x, (int, float)) else 0
 
     hits = total(st.get("cache_hits", {}))
@@ -877,7 +809,6 @@ class Job:
             if not os.path.isdir(env["CARGO_TARGET_DIR"]):
                 seed_target(wt, env["CARGO_TARGET_DIR"], self.write)
             os.makedirs(env["CARGO_TARGET_DIR"], exist_ok=True)
-            ensure_sccache(self.agent, env)
             self.write(f"$ {' '.join(self.argv)}   [agent {self.agent}, CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}]\n".encode())
             rc = self.exec(self.argv, wt, env)
             self.write(f"\n[exit {rc} after {time.time() - self.started:.1f}s]\n".encode())
@@ -1166,8 +1097,6 @@ class SeedJob(Job):
         env = job_env(SEED_AGENT)
         vcpus = cgroup_limits()[0] or 2
         env["CARGO_BUILD_JOBS"] = str(max(2, int(vcpus) // 2))
-        os.makedirs(target, exist_ok=True)
-        ensure_sccache(SEED_AGENT, env)
         pkgs, crates, members = path_package_names(wt, env)
         for argv in SEED_RECIPE:
             args = list(argv)
