@@ -7,6 +7,13 @@ at the survey, both resized to 2000 GB by the owner before the sync).
 - EU: `fv-weights-h3-ltx-hy`, id `jg48s6o1w0`, EUR-IS-1.
 - US: `fv-weights-b200-us`, id `s2k01690bi`, US-CA-2.
 
+> **2026-10-06: EU only.** Runpod deleted the US volume (`s2k01690bi`) on
+> about 2026-10-05 while the balance was negative; the owner chose not to
+> rebuild it for now. This page is the record of the 2026-09-27 sync. Its
+> copy-and-verify method still applies when US is rebuilt (from EU or the
+> Hub); until then new weights go on EU only. See
+> [docs/ops/runpod-volumes.md](../ops/runpod-volumes.md) §0 and §5.0.
+
 ## Sync result (done 2026-09-27)
 
 **Every tree in `weights-manifest.tsv` is now on both volumes with the same

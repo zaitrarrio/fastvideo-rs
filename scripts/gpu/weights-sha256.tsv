@@ -1,6 +1,8 @@
 # Per-file hashes of weight trees, recorded in this repo at fetch time (not guessed).
 # dest<TAB>path in the tree<TAB>bytes ("-" = not recorded)<TAB>algo:hex
-# Checked by `verify-weights.sh sha:<dest>` (reads every listed file). Sources:
+# Checked by `verify-weights.sh sha:<dest>` (reads every listed file). EU only since 2026-10-06: the
+# US volume (s2k01690bi) was deleted; its recorded US|EU alternatives are kept for a rebuilt US volume
+# (docs/ops/runpod-volumes.md). Sources:
 #   h3-ref2va          artifacts/runpod/fetch-h3-ref2va/{s2k01690bi,jg48s6o1w0}/sha256.txt (US = EU; Hub LFS SHA-256 at the pinned revisions)
 #   fastwan22-ti2v-5b  artifacts/runpod/fetch-fastwan22-ti2v-5b-fv-weights-*/{sha256.txt,log.txt} (US = EU)
 #   ltx25-ic-lora-ingredients  docs/ports/ltx-ref2v.md (Hub LFS oid; both volumes)

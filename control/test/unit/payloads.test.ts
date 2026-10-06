@@ -21,7 +21,7 @@ import {
   workerSystemEnv,
   type EnvCtx,
 } from "../../src/cluster/payloads";
-import { defaultSpec, normalizeSpec, POOL_PRESETS, TEMPLATES } from "../../src/cluster/spec";
+import { assertRegionsAvailable, AVAILABLE_REGIONS, defaultSpec, normalizeSpec, POOL_PRESETS, REGIONS, TEMPLATES, type RegionId } from "../../src/cluster/spec";
 import CATALOG from "../../src/cluster/catalog.json";
 import { OUTPUTS } from "../../gen-configs.mjs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
@@ -143,7 +143,12 @@ describe("payloads and TOML", () => {
     const spec = defaultSpec("s");
     const pl = workerPlacements(spec, spec.pools[0]!);
     expect(pl[0]).toEqual({ region: "eu", dc: "EUR-IS-1", gpu: "NVIDIA RTX PRO 6000 Blackwell Server Edition" });
-    expect(pl.map((p) => p.dc)).toContain("US-CA-2");
+    expect(spec.regions).toEqual(["eu"]);
+    expect(pl.map((p) => p.dc)).not.toContain("US-CA-2");
+    // An old stored spec that still lists us never places there (its volume is gone).
+    const old = { ...spec, regions: ["eu", "us"] as RegionId[] };
+    expect(workerPlacements(old, old.pools[0]!).every((p) => p.region === "eu" && p.dc === "EUR-IS-1")).toBe(true);
+    expect(workerPlacements({ ...spec, regions: ["us"] }, spec.pools[0]!)).toEqual([]);
     const w = workerCreatePayload("n", "img", spec.pools[0]!, pl[0]!, {});
     expect(w).toMatchObject({ computeType: "GPU", cloudType: "SECURE", gpuCount: 1, networkVolumeId: "jg48s6o1w0", volumeMountPath: "/workspace", ports: ["8000/http", "70000/tcp"] });
     const tiny = defaultSpec("t", "tiny-cpu");
@@ -176,6 +181,11 @@ describe("spec", () => {
     expect(() => normalizeSpec({ name: "a", image: { channel: "stable", sha: "abcdef1" } })).toThrow(/exactly one/);
     expect(() => normalizeSpec({ name: "a", balance_floor: 5 })).toThrow(/balance_floor/);
     expect(() => normalizeSpec({ name: "a", regions: ["mars"] })).toThrow(/region/);
+    expect(() => normalizeSpec({ name: "a", regions: ["eu", "us"] })).toThrow(/US weights volume deleted 2026-10; EU only, see docs\/ops\/runpod-volumes.md/);
+    expect(() => normalizeSpec({ name: "a", regions: ["us"] })).toThrow(/region us is unavailable/);
+    expect(() => normalizeSpec({ name: "a", pools: [{ id: "wan", regions: ["us"] }] })).toThrow(/pools\[0\]\.regions: region us is unavailable/);
+    expect(normalizeSpec({ name: "a", regions: ["eu"] }).regions).toEqual(["eu"]);
+    expect(normalizeSpec({ name: "a" }).regions).toEqual(["eu"]);
     const t = normalizeSpec({ name: "tiny", template: "tiny-cpu" });
     expect(t.pools[0]!.compute).toBe("CPU");
     expect(normalizeSpec({ name: "a", pools: [{ id: "wan", count: 2 }] }).pools[0]).toMatchObject({ id: "wan", variant: "wan5b", count: 2 });
@@ -326,5 +336,24 @@ describe("templates and pool presets", () => {
   });
   it("refuses recipes the fv-serve catalog does not have (the gateway would not start)", () => {
     expect(() => normalizeSpec({ name: "p", pools: [{ id: "plug", variant: "h3-turbo", config: "/etc/fv/runpod.toml", models: [{ id: "fasth3-plug", family: "h3", recipe: "h3-plug-4step" }] }] })).toThrow(/not in the fv-serve catalog/);
+  });
+});
+
+describe("regions: EU only (US weights volume deleted 2026-10)", () => {
+  it("us is known but unavailable; eu is the only available region", () => {
+    expect(AVAILABLE_REGIONS).toEqual(["eu"]);
+    expect(REGIONS.us.volume).toBe("");
+    expect(REGIONS.us.dc).toBe("US-CA-2");
+    expect(REGIONS.eu).toMatchObject({ volume: "jg48s6o1w0", dc: "EUR-IS-1" });
+    expect(defaultSpec("x").regions).toEqual(["eu"]);
+    expect(defaultSpec("x", "tiny-cpu").regions).toEqual(["eu"]);
+  });
+  it("a stored spec with us cannot start (409, clear message); an eu spec can", () => {
+    const s = { ...defaultSpec("x"), regions: ["eu", "us"] as RegionId[] };
+    expect(() => assertRegionsAvailable(s)).toThrow(/US weights volume deleted 2026-10/);
+    const p = defaultSpec("x");
+    p.pools[0]!.regions = ["us"];
+    expect(() => assertRegionsAvailable(p)).toThrow(/region us is unavailable/);
+    expect(() => assertRegionsAvailable(defaultSpec("x"))).not.toThrow();
   });
 });

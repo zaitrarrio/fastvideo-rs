@@ -12,12 +12,16 @@
 #   runpod.sh rtx6000   one PRO 6000 on the CI image for HEAD: weight gate,
 #                       then H3 / FastH3 / LTX-2.5 parity cells
 #   runpod.sh b200      US volume + H3/FastH3/LTX fetch + 1× B200 warm E2E
+#                       (refused while the US volume is unset: it was deleted
+#                       2026-10, EU only; scripts/gpu/volumes.sh)
 #   runpod.sh offers    probe B200 / PRO 6000 stock (US DCs)
 #   runpod.sh status    volume / pods / cost
 #   runpod.sh reap      destroy fv-* GPU and fetch pods (keeps the volume)
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=scripts/gpu/volumes.sh
+source "$(dirname "${BASH_SOURCE[0]}")/volumes.sh"
 
 RUNPOD_API_BASE="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 RUNPOD_GQL="${RUNPOD_GQL:-https://api.runpod.io/graphql}"
@@ -30,13 +34,14 @@ fi
 RP_IMAGE="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:latest}"
 RP_FETCH_IMAGE="${RUNPOD_FETCH_IMAGE:-$RP_IMAGE}"
 RP_GPU_TYPE="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
-RP_VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy}"
+RP_VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME}"
+fv_check_volume "$RP_VOL_NAME" # the deleted US volume: refuse, never re-create it here
 RP_VOL_GB="${RUNPOD_VOLUME_GB:-1000}"
 RP_MAX_GPU_PODS=3
 RP_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-20}"
 RP_B200_TYPE="${RUNPOD_B200_TYPE:-NVIDIA B200}"
-RP_B200_VOL_NAME="${RUNPOD_B200_VOLUME_NAME:-fv-weights-b200-us}"
-RP_EUR_VOLUME_KEEP="jg48s6o1w0"
+RP_B200_VOL_NAME="${RUNPOD_B200_VOLUME_NAME:-$FV_US_VOLUME_NAME}" # empty while US is unavailable
+RP_EUR_VOLUME_KEEP="$FV_EU_VOLUME_ID"
 RP_B200_DESTS="${RUNPOD_FETCH_DESTS:-h3-8step h3-base FastH3-4-step-Preview-v1-LoRA upscaler h3-to-ltx ltx2 ltx25 ltx23}"
 RP_US_DCS="${RUNPOD_US_DCS:-US-CA-2 US-CA-1 US-GA-1 US-GA-2 US-TX-3 US-IL-1 US-KS-2 US-WA-1 US-NC-1 US-OR-1 US-DE-1 US-NE-1 US-MD-1 US-MO-2 US-NC-2 US-TX-1 US-TX-4}"
 MOUNT="/workspace"
@@ -915,6 +920,9 @@ cmd_offers() {
 }
 
 cmd_b200() {
+  # The B200 run needs the US volume; while it is unset, refuse rather than
+  # create a new 2 TB US volume and fetch into it (owner decision 2026-10-06).
+  fv_us_available || fv_us_gone
   require_tools curl jq ssh rsync python3 git
   rp_load_key
   [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
@@ -1036,7 +1044,7 @@ cmd_rtx6000() {
   rp_log "rtx6000 done → $out"
 }
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;

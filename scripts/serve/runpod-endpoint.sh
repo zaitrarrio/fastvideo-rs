@@ -39,8 +39,9 @@
 # pool, when there is one).
 #
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_VARIANT; FV_SERVE_CONFIG (default
-# /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default s2k01690bi,
-# fv-weights-b200-us) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
+# /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default jg48s6o1w0,
+# fv-weights-h3-ltx-hy, EUR-IS-1; the US volume s2k01690bi was deleted
+# 2026-10 and is refused, scripts/gpu/volumes.sh) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
 # fv-serve as FV_WORKERS_MAX); FV_ENDPOINT_PREFIX (endpoint/template name
@@ -58,6 +59,8 @@ source "$HERE/../gpu/lib.sh"
 source "$HERE/variants.sh"
 # shellcheck source-path=SCRIPTDIR source=lib/registry.sh
 source "$HERE/lib/registry.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
+source "$HERE/../gpu/volumes.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
@@ -73,7 +76,8 @@ pick_image() {
   else fv_default_image
   fi
 }
-VOLUME="${RUNPOD_VOLUME_ID:-s2k01690bi}"
+VOLUME="${RUNPOD_VOLUME_ID:-$FV_EU_VOLUME_ID}"
+fv_check_volume "$VOLUME"
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA GeForce RTX 4090,NVIDIA RTX 6000 Ada Generation}"
 CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
 CAP_S="${FV_ENDPOINT_CAP_S:-1800}"
@@ -390,5 +394,5 @@ case "${1:-}" in
     echo "# queue endpoint (REST v1 POST /endpoints)"; endpoint_payload "<template id>" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}"
     echo "# load balancer (REST v2 POST /serverless)"
     RUNPOD_API_KEY="${RUNPOD_API_KEY:-}" lb_payload "$img" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}" ;;
-  *) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

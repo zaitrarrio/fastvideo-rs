@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Fetch an LTX-2.5 IC-LoRA onto both weight volumes, add-only, with CPU pods
+# Fetch an LTX-2.5 IC-LoRA onto the weight volumes, add-only, with CPU pods
 # driven through the Runpod REST API and the pods' HTTPS proxy (no SSH).
+# EU only since 2026-10 (the US volume was deleted; scripts/gpu/volumes.sh):
+# while FV_US_VOLUME_NAME is unset, the default run is one Hub fetch onto the
+# EU volume, probe covers EU only, and `hub fv-weights-b200-us` is refused.
 #
 #   fetch-ltx-iclora.sh probe     per volume: drop this script's stale partial
 #                                 folders, report Hub access (HTTP status per file)
-#   fetch-ltx-iclora.sh           1. a CPU pod on the US volume (fv-weights-b200-us)
+#   fetch-ltx-iclora.sh           (with a US volume) 1. a CPU pod on the US volume
 #                                    pulls the pinned Hub revision into
 #                                    weights/<dest>.partial-*, checks SHA-256 against
 #                                    the Hub's LFS oid, renames it to weights/<dest>
@@ -28,6 +31,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 CAP_S="${FV_POD_CAP_S:-3600}"
 PREFIX="${FV_POD_PREFIX:-fv-ltxi}"
@@ -110,7 +115,7 @@ wait_done() {
 
 if [[ "${1:-}" == probe ]]; then
   # Remove this script's stale partial folders and report Hub access (no fetch).
-  for name in fv-weights-b200-us fv-weights-h3-ltx-hy; do
+  for name in $FV_US_VOLUME_NAME $FV_EU_VOLUME_NAME; do
     p="$(start probe "$name")"; pods+=("$p")
     log "$name: $(wait_done "$p")"
   done
@@ -118,16 +123,25 @@ if [[ "${1:-}" == probe ]]; then
 fi
 if [[ "${1:-}" == hub ]]; then
   [[ -n "${2:-}" ]] || { log "usage: $0 hub <volume name>"; exit 2; }
+  fv_check_volume "$2"
   p="$(start hub "$2")"; pods+=("$p")
   j="$(wait_done "$p")"; echo "$j" >"$OUT/hub-$2.json"; log "$2: $j"
   [[ "$(jq -r .ok <<<"$j")" == true ]] || exit 1
   log "ok: $2 carries $IC_DEST ($(jq -c .bytes <<<"$j"))"
   exit 0
 fi
-us="$(start hub fv-weights-b200-us)"; pods+=("$us")
+if ! fv_us_available; then
+  log "EU only (US weights volume deleted 2026-10): one Hub fetch onto $FV_EU_VOLUME_NAME"
+  p="$(start hub "$FV_EU_VOLUME_NAME")"; pods+=("$p")
+  j="$(wait_done "$p")"; echo "$j" >"$OUT/eu.json"; log "EU: $j"
+  [[ "$(jq -r .ok <<<"$j")" == true ]] || exit 1
+  log "ok: $FV_EU_VOLUME_NAME carries $IC_DEST ($(jq -c .bytes <<<"$j"))"
+  exit 0
+fi
+us="$(start hub "$FV_US_VOLUME_NAME")"; pods+=("$us")
 jus="$(wait_done "$us")"; echo "$jus" >"$OUT/us.json"; log "US: $jus"
 [[ "$(jq -r .ok <<<"$jus")" == true ]] || exit 1
-eu="$(start copy fv-weights-h3-ltx-hy "https://$us-8000.proxy.runpod.net")"; pods+=("$eu")
+eu="$(start copy "$FV_EU_VOLUME_NAME" "https://$us-8000.proxy.runpod.net")"; pods+=("$eu")
 jeu="$(wait_done "$eu")"; echo "$jeu" >"$OUT/eu.json"; log "EU: $jeu"
 [[ "$(jq -r .ok <<<"$jeu")" == true ]] || exit 1
 [[ "$(jq -c .sha256 <<<"$jus")" == "$(jq -c .sha256 <<<"$jeu")" ]] || { log "US/EU sha256 differ"; exit 1; }

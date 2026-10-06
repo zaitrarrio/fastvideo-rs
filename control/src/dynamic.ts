@@ -6,7 +6,7 @@
 // and those in use) and the controller's reserved keys.
 import CATALOG from "./cluster/catalog.json";
 import { RESERVED_KEYS } from "./cluster/payloads";
-import { POOL_PRESETS, REGIONS } from "./cluster/spec";
+import { POOL_PRESETS, REGIONS, regionAvailable, STANDARD_POOLS } from "./cluster/spec";
 import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
@@ -60,7 +60,9 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
   const pools = clusterId ? (await getCluster(env, clusterId).catch(() => null))?.spec.pools.map((p) => p.id) ?? [] : [...new Set(clusters.flatMap((c) => c.spec.pools.map((p) => p.id)))];
   return {
     gpu_types: gpus,
-    regions: Object.entries(REGIONS).map(([id, r]) => ({ id, dc: r.dc, volume: r.volume, gpus: r.gpus })),
+    regions: Object.entries(REGIONS)
+      .filter(([id]) => regionAvailable(id))
+      .map(([id, r]) => ({ id, dc: r.dc, volume: r.volume, gpus: r.gpus })),
     cpu_flavors: Object.entries(CPU_DPH_PER_VCPU).map(([id, per]) => ({ id, dph_per_vcpu: per })),
     channels: channels.map((ch) => {
       const h = heads.heads.find((x: any) => x.channel === ch);

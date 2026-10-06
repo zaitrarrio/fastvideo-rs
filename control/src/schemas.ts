@@ -5,6 +5,7 @@
 // else (the `_check*` assignments at the bottom fail `tsc` when they drift).
 import { z } from "zod";
 import type { Policies } from "./alerts";
+import { AVAILABLE_REGIONS, type RegionId } from "./cluster/regions";
 import type { ClusterSpec, PoolSpec } from "./cluster/spec";
 
 /** The gateway's `[protocols]` switches (fv-serve ProtocolsCfg; serde denies unknown keys). */
@@ -16,7 +17,9 @@ const id = (what: string) =>
     .string()
     .regex(/^[a-z][a-z0-9-]{0,30}$/)
     .describe(`${what}: lower-case letters, digits and '-', starting with a letter (max 31).`);
-const region = z.enum(["eu", "us"]).describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000); us = volume s2k01690bi in US-CA-2 (H100 / H200).");
+const region = z
+  .enum(AVAILABLE_REGIONS as [RegionId, ...RegionId[]])
+  .describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
 const cpuFlavor = z.enum(["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"]).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
 
 export const ModelRefZ = z
@@ -44,7 +47,7 @@ export const PoolSpecZ = z
     compute: z.enum(["GPU", "CPU"]).describe("GPU pod, or CPU pod (fake engine, tests)."),
     config: z.string().optional().describe("Worker config inside the image (e.g. /etc/fv/runpod.toml). One of config / config_toml."),
     config_toml: z.string().max(32768).optional().describe("An inline worker config (sent as FV_WORKER_TOML_B64) instead of a file in the image."),
-    gpu_types: z.array(z.string().meta({ "x-dynamic": "gpu_types" })).optional().describe("Runpod GPU type ids to try, in order. Default: the region's (RTX PRO 6000 in eu; H100 80GB, H100 NVL, H200 in us)."),
+    gpu_types: z.array(z.string().meta({ "x-dynamic": "gpu_types" })).optional().describe("Runpod GPU type ids to try, in order. Default: the region's (RTX PRO 6000 in eu)."),
     regions: z.array(region).optional().describe("Regions to try, in order. Default: the cluster's."),
     cpu_flavors: z.array(cpuFlavor).optional().describe("CPU pods: flavors to try, in order."),
     vcpu: z.number().int().min(1).max(32).optional().describe("CPU pods: vCPUs."),

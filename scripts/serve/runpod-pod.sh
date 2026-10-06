@@ -43,6 +43,9 @@ source "$HERE/variants.sh"
 source "$HERE/lib/registry.sh"
 # shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
 source "$HERE/../gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
+source "$HERE/../gpu/volumes.sh"
+fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only since 2026-10)
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"

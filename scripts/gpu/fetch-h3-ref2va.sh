@@ -3,7 +3,8 @@
 # one weight volume, add-only, with a CPU pod driven through the Runpod REST
 # API and the pod's HTTPS proxy (no SSH). Same pattern as fetch-mmaudio.sh.
 #
-#   fetch-h3-ref2va.sh <volume id>     s2k01690bi (US) or jg48s6o1w0 (EU)
+#   fetch-h3-ref2va.sh <volume id>     jg48s6o1w0 (EU; the US volume s2k01690bi
+#                                      was deleted 2026-10 and is refused)
 #
 # The pod runs scripts/gpu/fetch-h3-ref2va.py: it refuses when
 # weights/h3-ref2va exists, downloads into weights/.h3-ref2va.partial-<stamp>,
@@ -14,8 +15,11 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=volumes.sh
+source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 VOL_ID="${1:?volume id}"
+fv_check_volume "$VOL_ID"
 CAP_S="${FV_POD_CAP_S:-5400}"
 OUT="${FETCH_OUT:-$ROOT/artifacts/runpod/fetch-h3-ref2va/$VOL_ID}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"

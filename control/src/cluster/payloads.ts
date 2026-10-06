@@ -1,7 +1,7 @@
 // Pod payloads and env of a cluster: a port of scripts/serve/runpod-cluster.sh
 // (create_gateway, create_worker, patch_gateway, GATEWAY_BOOT, WORKER_BOOT).
 import { GATEWAY_BASE_PODS } from "./gateway-base";
-import { REGIONS, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
+import { REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -332,7 +332,8 @@ export interface Placement {
   cpu?: string;
 }
 export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[] {
-  const regions = pool.regions?.length ? pool.regions : spec.regions;
+  // Never place in a region without a weights volume (us since 2026-10), even from an old stored spec.
+  const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
   const out: Placement[] = [];
   if (pool.compute === "CPU") {
     for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) {
