@@ -14,6 +14,7 @@
 #   base-images.sh hash        the content hash: the `ARG UBUNTU=` line, the
 #                              Dockerfile between "# >>> shared base" and
 #                              "# <<< shared base", scripts/gpu/cuda-13.pins
+#                              and scripts/gpu/cuda-13-runtime.pins
 #   base-images.sh ensure      resolve both tags; build + push the missing
 #                              ones (base-cuda on top of the published base-os);
 #                              append "contexts" (name=docker-image://repo@digest
@@ -43,7 +44,7 @@ cmd_hash() {
   local section
   section="$(sed -n '/^# >>> shared base/,/^# <<< shared base/p' "$DOCKERFILE")"
   [[ -n "$section" ]] || { log "no shared base section in $DOCKERFILE"; exit 2; }
-  { grep -m1 '^ARG UBUNTU=' "$DOCKERFILE"; printf '%s\n' "$section"; cat "$ROOT/scripts/gpu/cuda-13.pins"; } \
+  { grep -m1 '^ARG UBUNTU=' "$DOCKERFILE"; printf '%s\n' "$section"; cat "$ROOT/scripts/gpu/cuda-13.pins" "$ROOT/scripts/gpu/cuda-13-runtime.pins"; } \
     | sha256sum | cut -c1-16
 }
 

@@ -156,7 +156,7 @@ COPY --from=build /out/ /
 # checkpoint / PC-sampling libraries; Python; compilers.
 #
 # >>> shared base: everything from here to "<<< shared base", the UBUNTU
-# ARG and scripts/gpu/cuda-13.pins are hashed into the base image tag
+# ARG, scripts/gpu/cuda-13.pins and cuda-13-runtime.pins are hashed into the base image tag
 # (scripts/ci/base-images.sh hash). Keep image-specific steps out of it.
 
 # ---- ffmpeg: FFmpeg 4.4 (the release Ubuntu 22.04 ships, so the CLI behaves
@@ -199,13 +199,13 @@ RUN curl -fsSL -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPE
 # from the host. base-cuda checks this with ldd. (CUPTI: the cupti-libs stage, outside the shared base.)
 FROM ${UBUNTU} AS cuda-libs
 ARG DEBIAN_FRONTEND=noninteractive
-COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
+COPY scripts/gpu/cuda-13.pins scripts/gpu/cuda-13-runtime.pins /etc/fastvideo/
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates wget \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
- && . /etc/fastvideo/cuda-13.pins \
+ && . /etc/fastvideo/cuda-13.pins && . /etc/fastvideo/cuda-13-runtime.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
       "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" "$CUDA_CUDART_PKG" \
  && rm -rf /var/lib/apt/lists/* \
@@ -255,7 +255,7 @@ COPY --from=cuda-libs /out/cublaslt/ /usr/local/cuda-13.4/lib64/
 COPY --from=cuda-libs /out/cudnn-engines/ /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /out/cudnn/ /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /out/cublas-nvrtc/ /usr/local/cuda-13.4/lib64/
-COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
+COPY scripts/gpu/cuda-13.pins scripts/gpu/cuda-13-runtime.pins /etc/fastvideo/
 # /usr/local/cuda and targets/x86_64-linux/lib: the paths of NVIDIA's apt
 # layout, which older scripts and boxes look in (symlinks, no data).
 RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \

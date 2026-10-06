@@ -393,7 +393,7 @@ image workflows run on different runners with different caches, so before
 this change the runtime image and the variants each had their own CUDA
 layers. Now `scripts/ci/base-images.sh ensure` (a step in both workflows)
 hashes the `ARG UBUNTU=` line, the Dockerfile between `# >>> shared base`
-and `# <<< shared base` and `scripts/gpu/cuda-13.pins`, and publishes
+and `# <<< shared base`, `scripts/gpu/cuda-13.pins` and `cuda-13-runtime.pins`, and publishes
 `fastvideo-rs-runtime:base-os-<hash>` and `:base-cuda-<hash>` once (7 min,
 first run only; later runs resolve the tags in 1 s). The digests go back
 into the build as named build contexts (`base-os=docker-image://…@sha256:…`,
@@ -436,7 +436,9 @@ graphs get no plan (`status 1008: ptrDesc->finalize()`). It stays.
 
 Owner follow-up (2026-10-06): base-cuda also ships the CUDA runtime,
 `cuda-cudart-13-4` (pinned as `CUDA_CUDART_PKG` / `CUDA_CUDART_SONAME` in
-`scripts/gpu/cuda-13.pins`): `libcudart.so.13.4.92` + `libcudart.so.13` +
+`scripts/gpu/cuda-13-runtime.pins`, a separate file because `cuda-13.pins`
+is an input of the build-base image tag and of the tools-release hash, which
+should not move for a package only the runtime images ship): `libcudart.so.13.4.92` + `libcudart.so.13` +
 `libcudart.so` in the cuBLAS + NVRTC layer (0.8 MB uncompressed). cudarc
 uses the driver API and does not load it, but CUPTI dlopens `libcudart.so`
 and anything linked against the runtime finds it. Its package's other

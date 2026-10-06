@@ -139,7 +139,7 @@ jobs:
           docker pull "$img"
           docker run --rm "$img" bash -euo pipefail -c '
             test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.bin.outputs.build_id }}"
-            . /etc/fastvideo/cuda-13.pins
+            . /etc/fastvideo/cuda-13.pins; . /etc/fastvideo/cuda-13-runtime.pins
             bad() { echo "FAIL: $*"; exit 1; }
             # The pinned CUDA libraries (no dpkg metadata: they are copied in,
             # docker/gpucheck.Dockerfile base-cuda), at the pinned versions.
