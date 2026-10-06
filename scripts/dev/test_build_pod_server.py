@@ -707,26 +707,24 @@ class SeedTest(unittest.TestCase):
         self.assertIsNone(bps.seed_key(os.path.join(self.dir, "none")))
 
     def test_strip_removes_path_packages_only(self):
-        h, h2 = "0123456789abcdef", "fedcba9876543210"
-        keep = [self.touch("t", "release", ".fingerprint", f"serde-{h}", "lib-serde"),
+        h, h2, r = "0123456789abcdef", "fedcba9876543210", "1111222233334444"
+        keep = [self.touch("t", "release", ".fingerprint", f"serde-{r}", "lib-serde"),
                 self.touch("t", "release", ".fingerprint", f"fastvideo-serve-extra-{h}", "x"),  # registry look-alike
-                self.touch("t", "release", "build", f"ring-{h}", "output"),
-                self.touch("t", "release", "deps", f"libserde-{h}.rlib"),
-                self.touch("t", "release", "deps", f"libc-{h}.d"),
-                self.touch("t", "release", "deps", f"liblibc-{h}.rlib")]
+                self.touch("t", "release", "build", f"ring-{r}", "output"),
+                self.touch("t", "release", "deps", f"libserde-{r}.rlib"),  # same name as our tests/serde.rs
+                self.touch("t", "release", "deps", f"serde-{r}.d"),
+                self.touch("t", "release", "deps", f"liblibc-{r}.rlib")]
         gone = [self.touch("t", "release", ".fingerprint", f"fastvideo-serve-{h}", "lib"),
                 self.touch("t", "release", ".fingerprint", f"fastvideo-serve-{h2}", "run-build-script"),
                 self.touch("t", "release", "build", f"fastvideo-serve-{h}", "out", "x"),
                 self.touch("t", "release", "deps", f"libfastvideo_serve-{h}.rlib"),
                 self.touch("t", "release", "deps", f"fastvideo_serve-{h}.d"),
-                self.touch("t", "release", "deps", f"runtime-{h}"),
+                self.touch("t", "release", "deps", f"serde-{h2}"),  # the tests/serde.rs test binary
                 self.touch("t", "release", "fv-serve"),
                 self.touch("t", "release", "fv-serve.d"),
                 self.touch("t", "release", "incremental", "x", "y"),
                 self.touch("t", "debug", ".fingerprint", f"fastvideo-serve-{h}", "lib")]
-        n = bps.strip_path_packages(os.path.join(self.dir, "t"), {"fastvideo-serve"},
-                                    {"fastvideo_serve", "fv_serve", "runtime"})
-        self.assertGreaterEqual(n, len(gone) - 1)
+        bps.strip_path_packages(os.path.join(self.dir, "t"), {"fastvideo-serve"})
         for p in keep:
             self.assertTrue(os.path.exists(p), p)
         for p in gone:

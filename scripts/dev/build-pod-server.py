@@ -170,11 +170,12 @@ def _pkgs(names):
 
 
 # What agents build most (docs/dev/build-pod.md one-liners, scripts/serve/check.sh),
-# with --keep-going so one failing workspace crate does not stop the deps.
+# with --keep-going (--no-fail-fast for test) so one failing workspace crate
+# does not stop the deps.
 # `-p` names that are not workspace members are dropped at build time.
 SEED_RECIPE = (
     ("cargo", "check", "--keep-going", "--all-targets", *_pkgs(SERVE_CRATES)),
-    ("cargo", "test", "--no-run", "--keep-going", *_pkgs(SERVE_CRATES)),
+    ("cargo", "test", "--no-run", "--no-fail-fast", *_pkgs(SERVE_CRATES)),  # test has no --keep-going
     ("cargo", "check", "--keep-going", "-p", "fastvideo-cudarc", "-p", "fastvideo-gpucheck", "-p", "fastvideo-cli",
      "--features", "fastvideo-cudarc/cuda,fastvideo-gpucheck/cuda"),
     ("cargo", "build", "--release", "--keep-going", "-p", "fastvideo-serve", "--features", "cuda,http-client"),
@@ -942,7 +943,10 @@ def maybe_build_seed(agent, force=False):
 def path_package_names(wt, env):
     """Package and target names of every path (workspace / vendored) package:
     cargo decides their freshness by mtimes, so they never go into a seed."""
-    r = subprocess.run(["cargo", "metadata", "--format-version", "1", "--offline"], cwd=wt, env=env,
+    # Not --offline: the full resolve needs every platform's crate metadata
+    # (downloaded once into the volume's registry cache).
+    r = subprocess.run(["cargo", "metadata", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"],
+                       cwd=wt, env=env,
                        capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError(f"cargo metadata: {r.stderr.strip()[-300:]}")
@@ -963,28 +967,36 @@ def path_package_names(wt, env):
 HASHED = re.compile(r"^(.+)-[0-9a-f]{16}$")
 
 
-def strip_path_packages(target, pkgs, crates):
-    """Removes the path packages' units (and incremental state, binaries) from a
-    target dir; returns the number of entries removed."""
+def strip_path_packages(target, pkgs, crates=None):
+    """Removes the path packages' units from a target dir: their fingerprints
+    and build-script dirs (by package name), their deps/ outputs (by the unit
+    hashes of those fingerprints: a test target of ours may share a name with
+    a registry crate, e.g. tests/serde.rs), incremental state and final
+    binaries. Returns the number of entries removed. `crates` is unused (kept
+    for callers)."""
     n = 0
     for prof in os.listdir(target):
         pdir = os.path.join(target, prof)
         if not os.path.isdir(os.path.join(pdir, ".fingerprint")):
             continue
-        for sub, names in ((".fingerprint", pkgs), ("build", pkgs)):
+        hashes = set()
+        for sub in (".fingerprint", "build"):
             d = os.path.join(pdir, sub)
             for e in os.listdir(d) if os.path.isdir(d) else []:
                 m = HASHED.match(e)
-                if m and m.group(1) in names:
+                if m and m.group(1) in pkgs:
+                    hashes.add(e[-16:])
                     shutil.rmtree(os.path.join(d, e), ignore_errors=True)
                     n += 1
         d = os.path.join(pdir, "deps")
         for e in os.listdir(d) if os.path.isdir(d) else []:
             m = HASHED.match(e.split(".", 1)[0])
-            name = m.group(1) if m else None
-            if name and (name in crates or (name.startswith("lib") and name[3:] in crates)):
+            if m and e.split(".", 1)[0][-16:] in hashes:
                 p = os.path.join(d, e)
-                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
                 n += 1
         for e in os.listdir(pdir):  # final binaries, their .d files, incremental state
             p = os.path.join(pdir, e)
@@ -1082,7 +1094,7 @@ class SeedJob(Job):
             self.write(f"[exit {rc}]\n".encode())  # failures in workspace crates are fine
         if self.state == "cancelled":
             return 130
-        n = strip_path_packages(target, pkgs, crates)
+        n = strip_path_packages(target, pkgs)
         unpacked = du(target, timeout=600) or 0
         self.write(f"stripped {n} path-package entries; {unpacked / 1e9:.1f} GB of dependencies\n".encode())
         os.makedirs(SEED_DIR, exist_ok=True)
