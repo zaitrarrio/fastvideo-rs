@@ -14,8 +14,9 @@
 //   - The clip director: schema-driven resolution, the session's model,
 //     tier and recipe, session_info, a configure the session cannot take
 //     (driving audio) refused before it is sent, a script-only prompt, the
-//     chunk size selector (the schema's `chunk_duration`, or a mocked one on
-//     a server without it) narrowed per resolution and sent in configure.
+//     chunk size selector (the schema's `chunk_duration`; FV_FAKE_H3_1080P
+//     gives h3-turbo a 1080p tier that serves 5 s only) narrowed per
+//     resolution, sent in configure and echoed by `configured`.
 //   - The causal director (fastvideo/fake-sfwan): text-only 480p / 16:9
 //     form, chunks and an applied prompt; a licence (mocked: LongLive is not
 //     in the fake set) shown as a non-commercial banner.
@@ -76,7 +77,7 @@ async function startServer() {
   Object.assign(env, {
     FV_BIND: '127.0.0.1:' + port, FV_STATE_DIR: state, FV_JOB_STORE: 'memory', FV_ENGINE: 'fake',
     FV_URL_SIGNING_KEY: 'ui-gaps', FV_API_KEYS: crypto.createHash('sha256').update(KEY).digest('hex'),
-    FV_REACTOR_MODEL: 'fake-sfwan', FV_STREAM_STUN: 'none', RUST_LOG: 'warn',
+    FV_REACTOR_MODEL: 'fake-sfwan', FV_STREAM_STUN: 'none', FV_FAKE_H3_1080P: '1', RUST_LOG: 'warn',
   });
   const srv = { origin, state, logs: '', exited: null };
   srv.proc = spawn(BIN, ['--config', cfg], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -213,33 +214,27 @@ async function references(page, origin) {
 }
 
 async function clipDirector(page, origin) {
+  // The clip director's chunk size (`chunk_duration`, docs/serve/director-causal.md
+  // and the director chunk protocol): served on h3-turbo, 5 s only at 1080p.
   const schema = await (await fetch(origin + '/fal/schema/minimax/h3-turbo/director')).json();
-  const served = schema.properties && schema.properties.chunk_duration;
-  if (!served) {
-    // A server without the chunk size (before wip/director-chunk): the same shape, mocked.
-    // 480p is listed too so the per-resolution narrowing runs (Start goes back to the default).
-    const resolution = { ...schema.properties.resolution, enum: [...new Set(['480p', ...schema.properties.resolution.enum])] };
-    await page.route('**/fal/schema/minimax/h3-turbo/director', (r) => r.fulfill({ json: { ...schema, properties: { ...schema.properties, resolution, chunk_duration: {
-      type: 'integer', enum: [5, 10], default: 5, description: 'Seconds per chunk.',
-      'x-fv-labels': { 5: '5 s (prompt changes land sooner)', 10: '10 s (fewer joins)' }, 'x-fv-options-by-resolution': { '768p': [5, 10], '480p': [5] },
-    } } } }));
-  }
+  const chunk = schema.properties && schema.properties.chunk_duration;
+  check(chunk && Array.isArray(chunk.enum) && chunk.enum.includes(10), 'the director schema advertises chunk_duration', schema.properties);
   await page.goto(origin + '/console/models/minimax/h3-turbo/director');
   await page.waitForFunction(resolutionReady, null, { timeout: T });
   const res = await page.$$eval('#director-resolution option', (o) => o.map((x) => x.value));
   check(res.length && schema.properties.resolution.enum.every((r) => res.includes(r)), 'resolutions from the schema', res);
   await page.waitForSelector('#director-chunk-duration', { timeout: T });
   const opts = () => page.$$eval('#director-chunk-duration option', (o) => o.map((x) => x.value).join(','));
-  const by = (served || {})['x-fv-options-by-resolution'] || { '768p': [5, 10], '480p': [5] };
-  const narrow = Object.entries(by).find(([, v]) => v.length === 1);
-  if (narrow && res.includes(narrow[0])) {
-    await page.selectOption('#director-resolution', narrow[0]);
-    check((await opts()) === String(narrow[1][0]), 'the chunk sizes narrow per resolution', await opts());
-    step('director: at ' + narrow[0] + ' the chunk size narrows to ' + (await opts()));
-    await page.selectOption('#director-resolution', schema.properties.resolution.default);
-  }
+  check((await opts()) === chunk.enum.join(','), 'the chunk sizes from the schema', await opts());
+  const narrow = Object.entries(chunk['x-fv-options-by-resolution'] || {}).find(([r, v]) => v.length < chunk.enum.length && res.includes(r));
+  check(narrow, 'a resolution that serves fewer chunk sizes (1080p with FV_FAKE_H3_1080P)', chunk['x-fv-options-by-resolution']);
+  await page.selectOption('#director-resolution', narrow[0]);
+  check((await opts()) === narrow[1].join(','), 'the chunk sizes narrow per resolution', await opts());
+  check(/not served at/.test(await page.textContent('[data-note="chunk_duration"]')), 'the missing size is explained');
+  step('director: at ' + narrow[0] + ' the chunk size narrows to ' + (await opts()));
+  await page.selectOption('#director-resolution', schema.properties.resolution.default);
   await page.selectOption('#director-chunk-duration', '10');
-  step('director: resolutions ' + res.join('/') + ' from the schema; chunk size options ' + (await opts()) + (served ? '' : ' (mocked)'));
+  step('director: resolutions ' + res.join('/') + ', chunk sizes ' + (await opts()) + ' from the schema');
 
   // A configure the session cannot take is stopped before it is sent.
   await page.click('#director-more summary');
@@ -250,24 +245,13 @@ async function clipDirector(page, origin) {
   await page.fill('#director-audio', '');
   await page.waitForFunction(() => !document.getElementById('director-start').disabled, null, { timeout: T });
   await page.click('#director-start');
-  if (!served) {
-    // A server without the field answers invalid_message; the configure sent is what is checked.
-    await page.waitForFunction(() => /"type":"→ configure"/.test(document.getElementById('director-log').textContent), null, { timeout: T });
-    const sent = await page.$$eval('#director-log div', (d) => d.map((x) => x.textContent).find((t) => t.includes('"type":"→ configure"')));
-    check(/"chunk_duration":10/.test(sent), 'configure carries chunk_duration', sent);
-    step('director: configure carries chunk_duration 10 (this server has no chunk size yet)');
-    await page.click('#director-stop');
-    await page.waitForFunction(() => !document.getElementById('director-start').disabled, null, { timeout: T });
-    await page.unroute('**/fal/schema/minimax/h3-turbo/director');
-    await page.reload();
-    await page.waitForFunction(resolutionReady, null, { timeout: T });
-    await page.click('#director-start');
-  }
   await page.waitForFunction(directorState, 'streaming', { timeout: T });
   await page.waitForSelector('#director-stats dd', { timeout: T });
   const stats = await page.textContent('#director-stats');
   check(/fake-h3-turbo/.test(stats) && /turbo/.test(stats) && /4step-vsa/.test(stats), 'the session\'s model, tier and recipe (x-fv-* headers)', stats);
-  if (served) check(/chunk length10 s/.test(stats), 'the chunk length the session runs (configured.chunk_duration)', stats);
+  const sent = await page.$$eval('#director-log div', (d) => d.map((x) => x.textContent).find((t) => t.includes('"type":"→ configure"')));
+  check(/"chunk_duration":10/.test(sent), 'configure carries chunk_duration', sent);
+  check(/chunk length10 s/.test(stats), 'the chunk length the session runs (configured.chunk_duration)', stats);
   const info = await page.textContent('#director-session-info');
   check(/audio conditioningno/.test(info) && /scripts/.test(info), 'session_info facts', info);
   // A script is sent on its own.

@@ -510,8 +510,8 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   no H3 tabs on an unserved app; a result's tier and recipe and a draft
   result flagged (`x-fv-quality` added in the browser); the reference limits
   and the per-API snippets; the clip director (schema resolutions, the
-  chunk size narrowed per resolution and sent in `configure`, mocked on a
-  server without it; model, tier and recipe from the session headers;
+  chunk size narrowed per resolution (`FV_FAKE_H3_1080P=1`: 5 s only at
+  1080p), sent in `configure` and echoed by `configured`; model, tier and recipe from the session headers;
   driving audio refused from `session_info`; a script-only prompt); the
   causal director (`fastvideo/fake-sfwan`: text-only 480p form, chunks, a
   prompt applied, a mocked licence banner); Live stream over the Reactor
