@@ -1673,7 +1673,10 @@ impl Decoders {
     /// caller that loads it only around its one call ([`load_upsampler`]).
     pub fn load_without_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
         let open = |sub: &str| {
-            let m = WeightMap::open(&weights.join(sub))?;
+            // LTX-2.3 folders keep the original VAE names (`keys::vae_view`).
+            let m = super::keys::vocoder_view(super::keys::vae_view(WeightMap::open(
+                &weights.join(sub),
+            )?));
             m.prefetch_groups(&[&|k: &str| !k.starts_with("encoder.")]);
             Ok::<_, crate::wan::tensor::TensorError>(m)
         };
@@ -2372,6 +2375,8 @@ impl TextEncoder {
         // dev DiT lives in its own tree, `ltx25-dev/transformer_full`).
         let map = open_distilled(&self.paths.dit, "connectors")
             .or_else(|e| open_distilled(&self.paths.weights, "connectors").map_err(|_| e))?;
+        // FastVideo's 2.3 folder: `embeddings_connector` for the video one.
+        let map = super::keys::connectors_view(map);
         Ok(TextConnectors::load(
             &map,
             &Keys::connectors(Keys::detect(&map)),
@@ -4588,7 +4593,7 @@ pub(super) fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
     }
     let dir = weights.join("audio_vae");
     if dir.is_dir() {
-        let map = WeightMap::open(&dir)?;
+        let map = super::keys::vae_view(WeightMap::open(&dir)?);
         if map.has_tensor("encoder.conv_in.conv.weight")
             || map.has_tensor("audio_vae.encoder.conv_in.conv.weight")
         {
