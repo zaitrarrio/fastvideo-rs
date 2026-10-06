@@ -77,7 +77,7 @@ try {
   await page.mouse.move(box.x + box.width * 0.9, box.y + box.height / 2);
   assert.equal(await page.isVisible("#tip"), true, "tooltip on hover");
 
-  for (const [hash, heading] of [["#/clusters", "Clusters"], ["#/pods", "Pods"], ["#/env", "Environment"], ["#/logs", "Logs"], ["#/costs", "Costs"], ["#/releases", "Releases"], ["#/settings", "Settings"]]) {
+  for (const [hash, heading] of [["#/clusters", "Clusters"], ["#/pods", "Pods"], ["#/env", "Environment"], ["#/logs", "Logs"], ["#/costs", "Costs"], ["#/releases", "Releases"], ["#/settings", "Settings"], ["#/standalone", "Standalone pods"]]) {
     await page.goto(`${B}/${hash}`);
     await page.waitForSelector(`h1:text('${heading}')`);
     await page.screenshot({ path: `${out}/03-${heading.toLowerCase()}.png`, fullPage: true });
@@ -256,6 +256,26 @@ try {
   assert.ok(!(await page.content()).includes("Auto-actions touch controller clusters only, never external pods"), "the stale policy text is gone");
   page.off("dialog", accept);
 
+  // ---- standalone pods: launch from the form (session + CSRF), its page with status, cost and the boot timeline.
+  await page.goto(`${B}/#/standalone`);
+  await page.waitForSelector("input[name=name]");
+  await page.fill("input[name=name]", "ui-solo");
+  await page.fill("input[name=variant]", "cpu");
+  await page.fill("input[name=config]", "/etc/fv/runpod-fake.toml");
+  await page.fill("input[name=fake_models]", "fake-wan");
+  await page.selectOption("select[name=compute]", "CPU");
+  await page.uncheck("input[name=volume]");
+  await page.fill("input[name=image_source]", "stable");
+  await page.click("form button[type=submit]:text('Launch')");
+  await page.waitForSelector("h1:text('ui-solo')");
+  await page.waitForSelector("h2:text('Boot timeline')", { timeout: 60000 });
+  await page.waitForSelector("td:text('Runpod create accepted')", { timeout: 60000 });
+  await page.screenshot({ path: `${out}/12-standalone.png`, fullPage: true });
+  const sp = await (await fetch(`${B}/api/standalone/ui-solo`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  assert.equal(sp.pod.definition.variant, "cpu");
+  assert.equal(sp.pod.definition.compute, "CPU");
+  await fetch(`${B}/api/standalone/ui-solo`, { method: "DELETE", headers: { authorization: `Bearer ${tok}` } });
+
   // ---- read-only JSON tree: search and copy.
   const pods = await (await fetch(`${B}/api/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
   await page.goto(`${B}/#/pod/${pods.pods[0].pod_id}`);
@@ -283,7 +303,7 @@ try {
   await pp.fill("#pass", PASSPHRASE);
   await pp.click("button[type=submit]");
   await pp.waitForSelector(".tile");
-  for (const hash of ["#/", "#/clusters", "#/pods", "#/env", "#/costs", "#/settings"]) {
+  for (const hash of ["#/", "#/clusters", "#/pods", "#/standalone", "#/env", "#/costs", "#/settings"]) {
     await pp.goto(`${B}/${hash}`);
     await pp.waitForSelector("h1");
     await pp.waitForTimeout(300);

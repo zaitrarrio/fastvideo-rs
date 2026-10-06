@@ -28,6 +28,18 @@
 #   fv-control.sh build-pod stop [--force] [<id>]   (default: the one in $FV_BUILD_STATE; refused while busy)
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
+#   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
+#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1]
+#                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
+#                     [--max-dph X] [--no-start] [--wait] [--json FILE]
+#                                              a standalone pod (docs/control/standalone-pods.md): one pod, not part of a
+#                                              cluster, with the cluster pods' price check, image preflight, backstops,
+#                                              cost ledger (owner pod:<name>) and logs from boot
+#   fv-control.sh pod list | status <name> | start <name> | stop <name> | extend <name> <min> | delete <name> | wait <name>
+#   fv-control.sh pod logs <name|pod id> [--source runpod|serve] [--follow]
+#   fv-control.sh boot <pod id | cluster or standalone name>
+#                                              each pod's boot timeline: create, machine, image pull, container, fv-serve,
+#                                              volume, weights per component, warm-up, ready (and the phase it is in)
 #   fv-control.sh api <METHOD> <path> [json]  anything else
 #   fv-control.sh deploy staging               build, migrate and deploy the Worker (wrangler)
 #   fv-control.sh edge-link staging            give the Worker the staging edge (EDGE_URL, EDGE_D1_DATABASE_ID,
@@ -116,6 +128,77 @@ cmd_build_pod() {
     *) die "build-pod up|status|list|stop|start|delete|token|plan|policy" ;;
   esac
 }
+sp_line() { jq -r '.pods[]? // .pod | select(. != null) | "\(.name)  \(.status)  \(.pod.pod_id // "-")  \(.definition.variant) \(.definition.image | tostring)  \(.pod.gpu // .definition.gpu_types[0]? // .definition.compute) \(.pod.dc // .definition.dc)  $\(.pod.cost_per_hr // 0)/hr  today $\(.cost.today * 100 | round / 100) total $\(.cost.total * 100 | round / 100)  deadline \(if .deadline then (.deadline / 1000 | todate) else "-" end)\(if .pod.boot then "  boot: " + .pod.boot.phase else "" end)\(if .pool_status and .pool_status.status != "ready" and .pool_status.status != "starting" then "  " + .pool_status.status + ": " + (.pool_status.detail // "") else "" end)\(if .op then "  op " + .op.kind + "/" + .op.phase else "" end)"'; }
+sp_wait() { # <name>: until no operation runs; prints the last operation's log
+  local name="$1" op
+  while :; do
+    op="$(api GET "/api/standalone/$name" | jq -c '.pod.op')"
+    [[ "$op" == null ]] && break
+    sleep 10
+  done
+  api GET "/api/clusters/$name/ops" | jq -r '.operations[0] | "\(.kind) \(.status) \(.error // "")", (.log[] | "  \(.at / 1000 | todate) \(.msg)")'
+}
+cmd_pod() {
+  local sub="${1:-list}"; shift || true
+  local name body
+  case "$sub" in
+    launch)
+      name="${1:?pod launch <name> [options]}"; shift
+      local json="" wait=0 kv k v
+      body="$(jq -nc --arg n "$name" '{name: $n, env: {}}')"
+      while (( $# )); do
+        case "$1" in
+          --preset) body="$(jq -c --arg v "${2:?}" '.preset = $v' <<<"$body")"; shift 2 ;;
+          --variant) body="$(jq -c --arg v "${2:?}" '.variant = $v' <<<"$body")"; shift 2 ;;
+          --config) body="$(jq -c --arg v "${2:?}" '.config = $v' <<<"$body")"; shift 2 ;;
+          --config-toml) body="$(jq -c --rawfile v "${2:?}" '.config_toml = $v' <<<"$body")"; shift 2 ;;
+          --channel) body="$(jq -c --arg v "${2:?}" '.channel = $v' <<<"$body")"; shift 2 ;;
+          --sha) body="$(jq -c --arg v "${2:?}" '.sha = $v' <<<"$body")"; shift 2 ;;
+          --image) body="$(jq -c --arg v "${2:?}" '.image = $v' <<<"$body")"; shift 2 ;;
+          --gpu) body="$(jq -c --arg v "${2:?}" '.gpu_types = ((.gpu_types // []) + [$v])' <<<"$body")"; shift 2 ;;
+          --cpu) if [[ -n "${2:-}" && "${2:-}" != --* ]]; then body="$(jq -c --arg v "$2" '.compute = "CPU" | .cpu_flavors = [$v]' <<<"$body")"; shift 2; else body="$(jq -c '.compute = "CPU"' <<<"$body")"; shift; fi ;;
+          --region) body="$(jq -c --arg v "${2:?}" '.region = $v' <<<"$body")"; shift 2 ;;
+          --no-volume) body="$(jq -c '.volume = false' <<<"$body")"; shift ;;
+          --env | --secret-env)
+            kv="${2:?$1 K=V}"; k="${kv%%=*}"; v="${kv#*=}"
+            [[ "$v" == @* ]] && v="$(cat "${v#@}")"
+            body="$(jq -c --arg k "$k" --arg v "$v" --argjson s "$([[ "$1" == --secret-env ]] && echo true || echo false)" '.env[$k] = {value: $v, secret: $s}' <<<"$body")"; shift 2 ;;
+          --deadline-min) body="$(jq -c --argjson v "${2:?}" '.deadline_min = $v' <<<"$body")"; shift 2 ;;
+          --idle-stop-min) body="$(jq -c --argjson v "${2:?}" '.idle_stop_min = $v' <<<"$body")"; shift 2 ;;
+          --max-dph) body="$(jq -c --argjson v "${2:?}" '.max_gpu_dph = $v' <<<"$body")"; shift 2 ;;
+          --no-start) body="$(jq -c '.start = false' <<<"$body")"; shift ;;
+          --wait) wait=1; shift ;;
+          --json) json="${2:?}"; shift 2 ;;
+          *) die "pod launch: unknown option $1" ;;
+        esac
+      done
+      [[ -n "$json" ]] && body="$(jq -c --slurpfile f "$json" '. * $f[0]' <<<"$body")"
+      api_s POST /api/standalone "$body" || die "pod launch: $(api_err)"
+      sp_line <<<"$API_OUT"
+      jq -r 'if .operation then "operation \(.operation) (fv-control.sh pod wait \(.pod.name))" else empty end' <<<"$API_OUT" >&2
+      (( wait )) && sp_wait "$name" ;;
+    list) api GET /api/standalone | sp_line ;;
+    status) api GET "/api/standalone/${1:?name}" | jq '.pod' ;;
+    start) api_s POST "/api/standalone/${1:?name}/start" '{}' || die "start: $(api_err)"; jq -c . <<<"$API_OUT" ;;
+    stop) api_s POST "/api/standalone/${1:?name}/stop" '{}' || die "stop: $(api_err)"; jq -c . <<<"$API_OUT" ;;
+    extend) api_s POST "/api/standalone/${1:?name}/extend" "$(jq -nc --argjson m "${2:?minutes}" '{minutes: $m}')" || die "extend: $(api_err)"; jq -c . <<<"$API_OUT" ;;
+    delete) api_s DELETE "/api/standalone/${1:?name}" || die "delete: $(api_err)"; jq -c . <<<"$API_OUT" ;;
+    wait) sp_wait "${1:?name}" ;;
+    logs)
+      local id="${1:?pod logs <name|pod id>}" src="" follow=0 after=0 out; shift
+      while (( $# )); do case "$1" in --source) src="${2:?runpod|serve}"; shift 2 ;; --follow|-f) follow=1; shift ;; *) die "pod logs: unknown option $1" ;; esac; done
+      # A standalone pod's name → its current (or last) pod id.
+      if ! [[ "$id" =~ ^[a-z0-9]{14}$ ]]; then id="$(api GET "/api/standalone/$id" | jq -r '.pod.pod.pod_id // empty')"; [[ -n "$id" ]] || die "no pod (start it, or pass a pod id)"; fi
+      while :; do
+        out="$(api GET "/api/pods/$id/logs?limit=500${src:+&source=$src}$( (( after )) && echo "&after_id=$after")")"
+        jq -r '.lines[] | "\(.ts / 1000 | todate) \(.level | ascii_upcase) \(.target // ""): \(.msg)"' <<<"$out"
+        after="$(jq -r '.next_after_id' <<<"$out")"
+        (( follow )) || break
+        sleep 5
+      done ;;
+    *) die "pod launch|list|status|start|stop|extend|delete|wait|logs" ;;
+  esac
+}
 scope_path() { # account | cluster <name> | pod <id>  -> /api/env/…, shifts
   case "$1" in
     account) echo "/api/env/account" ;;
@@ -161,6 +244,14 @@ case "$cmd" in
   promote) api POST /api/github/release "$(jq -nc --arg t "${1:?sha}" --arg c "${2:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "promote", target: $t, channel: $c, dry_run: $d}')" | jq . ;;
   rollback) api POST /api/github/release "$(jq -nc --arg c "${1:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "rollback", channel: (if $c == "--dry-run" then "stable" else $c end), dry_run: $d}')" | jq . ;;
   build-pod) cmd_build_pod "$@" ;;
+  pod) cmd_pod "$@" ;;
+  boot)
+    t="${1:?boot <pod id | cluster or standalone name>}"
+    if [[ "$t" =~ ^[a-z0-9]{14}$ ]]; then ids="$t"; else ids="$(api GET "/api/clusters/$t" | jq -r '.cluster.state.workers // {} | [.[][] | .pod] | join(" ")')"; fi
+    [[ -n "$ids" ]] || die "no pods (a pod id works for deleted pods too)"
+    for id in $ids; do
+      api GET "/api/pods/$id/boot" | jq -r '"\(.pod_id)\(if .phase then "  (now: \(.phase.phase) for \(.phase.since_s) s)" else "" end)", (.timeline[] | select(.at != null) | "  \(.t_s | tostring | (" " * (7 - length)) + .) s  \(if .took_s != null then "+\(.took_s) s" else "" end | . + (" " * (10 - length)))  \(.phase)\(if .detail then "  (\(.detail))" else "" end)")'
+    done ;;
   api) api "${1:?METHOD}" "${2:?path}" "${3:-}" ;;
   deploy)
     [[ "${1:-}" == staging ]] || die "deploy staging (production: add an [env.production] block first)"
@@ -181,5 +272,5 @@ case "$cmd" in
       python3 -c 'import json,sys; d=sys.argv[1]; r=lambda f: open(f"{d}/{f}").read().strip(); print(json.dumps({"EDGE_URL": r("url"), "EDGE_D1_DATABASE_ID": r("d1_id"), "EDGE_INTERNAL_TOKEN": r("internal_token"), "EDGE_ADMIN_TOKEN": r("admin_token"), "EDGE_OUTPUTS_BUCKET": sys.argv[2]}))' "$st" "${FV_EDGE_OUTPUTS_BUCKET:-fv-edge-staging-outputs}" >"$tmp"
       npx wrangler secret bulk "$tmp" --env staging >/dev/null)
     echo "fv-control staging: edge $(cat "$st/url")" ;;
-  *) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

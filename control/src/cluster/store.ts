@@ -1,7 +1,7 @@
 // Clusters in D1: spec, state and sealed secrets.
-import { seal, unseal } from "../crypto";
+import { randomToken, seal, sha256Hex, unseal } from "../crypto";
 import type { Env } from "../env";
-import { HttpError, now, parseJson } from "../util";
+import { HttpError, newId, now, parseJson } from "../util";
 import type { ClusterSecrets, ClusterState, PodRec } from "./payloads";
 import { migrateSpec, type ClusterSpec } from "./spec";
 
@@ -34,6 +34,39 @@ export interface Cluster {
 }
 
 export const emptyState = (): ClusterState => ({ images: {}, workers: {} });
+
+/** clusters.source of a standalone pod (docs/control/standalone-pods.md): a one-pool direct cluster. */
+export const STANDALONE = "standalone";
+export const isStandalone = (c: { source: string }) => c.source === STANDALONE;
+/** The cost owner of a controller pod: cluster:<name>, or pod:<name> for a standalone pod. */
+export const ownerOf = (c: { name: string; source: string }) => (isStandalone(c) ? `pod:${c.name}` : `cluster:${c.name}`);
+
+/** A new cluster's secrets: internal token, URL-signing key, log ingest token (and its hash for the ingest lookup). */
+export async function newSecrets(): Promise<{ s: ClusterSecrets; ingestHash: string }> {
+  const ingestToken = randomToken("fvi_", 32);
+  return {
+    s: { internal_token: randomToken(), url_signing_key: randomToken(), ingest_token: ingestToken },
+    ingestHash: await sha256Hex(ingestToken),
+  };
+}
+/** Inserts a cluster (or a standalone pod: source = standalone) with sealed secrets; 409 on a taken name. */
+export async function insertCluster(env: Env, spec: ClusterSpec, state: ClusterState, secrets: ClusterSecrets, ingestHash: string, by: string, source: string, status: string, deadline: number | null): Promise<Cluster> {
+  const id = newId("c");
+  const exists = await env.DB.prepare("SELECT 1 AS x FROM clusters WHERE name = ?").bind(spec.name).first();
+  if (exists) throw new HttpError(409, `a cluster or standalone pod named ${spec.name} exists`);
+  await env.DB.prepare("INSERT INTO clusters (id, name, spec, state, status, deadline, ingest_hash, source, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, spec.name, JSON.stringify(spec), JSON.stringify(state), status, deadline, ingestHash, source, now(), now(), by)
+    .run();
+  const cl = await getCluster(env, id);
+  await saveSecrets(env, cl, secrets);
+  return cl;
+}
+/** Deletes a definition and its env layers (it must have no pods). */
+export async function deleteClusterRow(env: Env, id: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM clusters WHERE id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM env_vars WHERE scope = 'cluster' AND scope_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM env_vars WHERE scope = 'pool' AND scope_id LIKE ?").bind(`${id}:%`).run();
+}
 
 export function fromRow(r: ClusterRow): Cluster {
   return {

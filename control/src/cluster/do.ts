@@ -23,9 +23,13 @@ import {
   edgeWorkers,
   requireEdge,
 } from "./ops";
-import type { PodRec } from "./payloads";
+import { markReady } from "../boottime";
+import { checkPod } from "../podlogs";
+import type { PodRec, PoolStatus } from "./payloads";
+import { checkImages } from "./preflight";
 import { isEdge } from "./spec";
-import { getCluster, listClusters, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
+import { deleteClusterRow, getCluster, listClusters, podUpdate, saveSpec, saveState, secretsOf, saveSecrets, livePods, type Cluster } from "./store";
+import { NO_STOCK_RETRY_MS, READY_WAIT_MS, SUMMARY_EVERY_MS, summarize, upOutcome, type PoolView } from "./upwait";
 
 export type OpKind = "up" | "down" | "extend" | "scale" | "roll" | "restart";
 export interface Op {
@@ -41,7 +45,8 @@ export interface Op {
 }
 type Step = { done: true; error?: string } | { delayMs: number };
 
-const READY_WAIT_MS = 30 * 60_000;
+/** Re-placements of a pod on a slow host (pull deadline) per pool and `up`. */
+const MAX_REPLACE = 2;
 const DRAIN_WAIT_MS = 15 * 60_000;
 const RESTART_WAIT_MS = 15 * 60_000;
 
@@ -210,6 +215,16 @@ export class ClusterOps implements DurableObject {
       c.state.images = await resolveClusterImages(env, c.spec);
       if (c.spec.image.ref) c.state.image = c.state.images.gateway || Object.values(c.state.images)[0];
       this.log(`images: ${JSON.stringify(c.state.images)}`);
+      // Image preflight (preflight.ts): an image that cannot run this spec is refused before any pod is paid for.
+      const pf = await checkImages(env, c.spec, c.state.images);
+      const revs = Object.entries(pf.revisions).filter(([, r]) => r).map(([img, r]) => `${img.split("@")[1]?.slice(7, 19) || img}=${r!.slice(0, 7)}`);
+      if (revs.length) this.log(`image revisions: ${revs.join(", ")}`);
+      for (const w of pf.warnings) this.log(`WARNING: ${w}`);
+      if (pf.errors.length) {
+        if (!op.params?.skip_image_check) return { done: true, error: `image preflight: ${pf.errors.join("; ")}` };
+        this.log(`WARNING: image preflight overridden (skip_image_check): ${pf.errors.join("; ")}`);
+      }
+      c.state.pools = {};
       const s = await secretsOf(env, c);
       // Edge clusters use the edge's admin token (EDGE_ADMIN_TOKEN); direct
       // workers get a fresh one from us as FV_ADMIN_TOKEN
@@ -235,8 +250,9 @@ export class ClusterOps implements DurableObject {
       for (const p of c.spec.pools) {
         if (d.failed.includes(p.id)) continue;
         if ((c.state.workers[p.id]?.length || 0) < p.count) {
-          const rec = await createWorker(env, c, p.id, c.state.images[p.id] || c.state.image!, "workers", this.log);
+          const rec = await this.createFor(c, p.id);
           if (!rec) d.failed.push(p.id);
+          await saveState(env, c);
           return { delayMs: 10 };
         }
       }
@@ -244,7 +260,8 @@ export class ClusterOps implements DurableObject {
       return { delayMs: 10 };
     }
     if (op.phase === "patch") {
-      if (d.failed.length) this.log(`WARNING: no pod for: ${d.failed.join(", ")}`);
+      if (d.failed.length)
+        this.log(`NO STOCK: ${d.failed.join(", ")} got no pod (${d.failed.map((p: string) => c.state.pools?.[p]?.detail || "no stock").join("; ")}); retried every ${NO_STOCK_RETRY_MS / 60000} min while the other pools start, else the operation fails naming them`);
       // Nothing to wait for: not one worker (no stock anywhere).
       if (!Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
         return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}): stop the cluster or start it again later` };
@@ -257,38 +274,102 @@ export class ClusterOps implements DurableObject {
     return { done: true, error: `unknown phase ${op.phase}` };
   }
 
-  /** Until every pool with workers has a ready one: a ready front in the edge's families view, or a direct worker's /health AVAILABLE. */
+  /** createWorker for `up`, recording the pool's status (starting, or no stock with the last reason). */
+  private async createFor(c: Cluster, poolId: string): Promise<PodRec | null> {
+    let last = "";
+    const rec = await createWorker(this.env, c, poolId, c.state.images[poolId] || c.state.image!, "workers", (m) => {
+      if (/: no .* in /.test(m)) last = m.slice(poolId.length + 2);
+      this.log(m);
+    });
+    (c.state.pools ||= {})[poolId] = rec ? { status: "starting", at: now() } : { status: "no_stock", detail: last || "no stock", at: now() };
+    return rec;
+  }
+
+  /**
+   * Until no pool is starting: a pool is ready when one of its pods is (a
+   * ready front in the edge's families view, or a direct worker's /health
+   * AVAILABLE). Every 20 s each starting pod's Runpod log is captured and
+   * diagnosed (podlogs.ts): a crash loop, an image error or a pod stuck
+   * without output fails it at once (deleted: the log is kept), instead of
+   * a silent 30-minute wait. Pools without stock are retried while others
+   * start. The operation then fails naming each pool that did not come up.
+   */
   private async waitReady(c: Cluster, op: Op, t0: number): Promise<Step> {
     const env = this.env;
-    const pools = Object.entries(c.state.workers).filter(([, l]) => l.length);
-    let ready = 0;
+    const d = op.data;
+    const pools = c.spec.pools.filter((p) => p.count > 0 || (c.state.workers[p.id] || []).length);
+    const st = (c.state.pools ||= {});
+    let fronts: ReturnType<typeof edgeWorkers> | null = null;
     if (isEdge(c.spec)) {
-      // The edge's families view: a pool is ready when one of its pods is a ready front.
-      let fronts: ReturnType<typeof edgeWorkers> | null = null;
       try {
         fronts = edgeWorkers(await edgeFamilies(env));
       } catch (e) {
         this.log(`edge not answering (${Math.round((now() - t0) / 1000)}s): ${(e as Error).message.slice(0, 100)}`);
       }
-      if (fronts) {
-        for (const [, recs] of pools) {
-          let any = false;
-          for (const r of recs) if (fronts.get(r.pod)?.ready) (any = true), await podUpdate(env, r.pod, { ready: true, status: "ready" });
-          if (any) ready++;
-        }
-        this.log(`pools with a ready front at the edge: ${ready}/${pools.length} (${Math.round((now() - t0) / 1000)}s)`);
-      }
-    } else {
-      for (const [, recs] of pools) {
-        let any = false;
-        for (const r of recs) if ((await workerHealth(env, r.pod)).ok) (any = true), await podUpdate(env, r.pod, { ready: true, status: "ready" });
-        if (any) ready++;
-      }
-      this.log(`pools with a ready worker: ${ready}/${pools.length}`);
     }
-    if (ready >= pools.length && pools.length > 0) return { done: true };
-    if (now() - t0 > READY_WAIT_MS) return { done: true, error: "not every pool became ready (the pods stay up; see the pool view)" };
-    return { delayMs: 20_000 };
+    for (const p of pools) {
+      const recs = c.state.workers[p.id] || [];
+      const cur: PoolStatus = st[p.id] || (st[p.id] = { status: recs.length ? "starting" : "no_stock", at: now() });
+      if (cur.status === "ready" || cur.status === "failed") continue;
+      if (!recs.length) continue; // no stock: retried below
+      let ready = false;
+      for (const r of recs) {
+        const ok = isEdge(c.spec) ? !!fronts?.get(r.pod)?.ready : (await workerHealth(env, r.pod)).ok;
+        if (ok) {
+          ready = true;
+          await podUpdate(env, r.pod, { ready: true, status: "ready" });
+          await markReady(env, r.pod, c.id).catch(() => {});
+        }
+      }
+      if (ready) {
+        st[p.id] = { status: "ready", at: now() };
+        continue;
+      }
+      // Not ready yet: what does each pod's boot look like?
+      const notes: string[] = [];
+      for (const r of [...recs]) {
+        const rt = await runpod.podRuntime(env, r.pod).catch(() => undefined);
+        const diag: { phase: string; detail: string; fatal: boolean; replace?: boolean } | null = rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
+        if (!diag) continue;
+        if (diag.fatal) {
+          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; deleting it (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
+          await podUpdate(env, r.pod, { status: "failed" });
+          await deletePod(env, r.pod, this.log, `${p.id} ${diag.phase}`);
+          c.state.workers[p.id] = (c.state.workers[p.id] || []).filter((x) => x.pod !== r.pod);
+          // A slow host (pull deadline): place a new pod, at most MAX_REPLACE times per pool.
+          const n = ((d.replaced ||= {})[p.id] || 0) as number;
+          if (diag.replace && n < MAX_REPLACE) {
+            d.replaced[p.id] = n + 1;
+            const rec = await this.createFor(c, p.id);
+            this.log(rec ? `${p.id}: re-placed as ${rec.pod} (${n + 1}/${MAX_REPLACE})` : `${p.id}: no stock to re-place`);
+            if (rec) continue;
+          }
+          notes.push(`${diag.phase}: ${diag.detail}`);
+        } else notes.push(`${diag.phase}${diag.detail ? `: ${diag.detail}` : ""}`);
+      }
+      st[p.id] = (c.state.workers[p.id] || []).length ? { status: "starting", detail: notes.join("; ") || undefined, at: now() } : { status: "failed", detail: notes.join("; ") || "every pod failed", at: now() };
+    }
+    // Pools without stock: another try while the others are still starting.
+    const starting = pools.some((p) => st[p.id]?.status === "starting");
+    if (starting && now() - (d.lastRetry || t0) >= NO_STOCK_RETRY_MS) {
+      d.lastRetry = now();
+      for (const p of pools.filter((x) => st[x.id]?.status === "no_stock")) {
+        const rec = await this.createFor(c, p.id);
+        this.log(rec ? `${p.id}: stock found on retry: pod ${rec.pod}` : `${p.id}: still no stock`);
+      }
+    }
+    await saveState(env, c);
+    const views: PoolView[] = pools.map((p) => ({ id: p.id, status: st[p.id]?.status || "no_stock", detail: st[p.id]?.detail }));
+    const line = summarize(views);
+    if (line !== d.lastSummary || now() - (d.lastSummaryAt || 0) >= SUMMARY_EVERY_MS) {
+      this.log(`${isEdge(c.spec) ? "pools (ready = a ready front at the edge)" : "pools"} ${line} (${Math.round((now() - t0) / 1000)}s)`);
+      d.lastSummary = line;
+      d.lastSummaryAt = now();
+    }
+    const out = upOutcome(views, now() - t0, READY_WAIT_MS);
+    if (!out.done) return { delayMs: 20_000 };
+    if (out.error && !views.some((v) => v.status === "ready" || v.status === "starting")) await saveState(env, c, { status: "failed" });
+    return out.error ? { done: true, error: out.error } : { done: true };
   }
 
   // ---------------- down
@@ -325,7 +406,13 @@ export class ClusterOps implements DurableObject {
     const images = c.state.images;
     c.state = { images, workers: {} };
     await saveState(env, c, { status: left.length ? "failed" : "stopped", deadline: null });
-    return left.length ? { done: true, error: `still present: ${left.join(" ")}` } : { done: true };
+    if (left.length) return { done: true, error: `still present: ${left.join(" ")}` };
+    // DELETE of a standalone pod that still had one: the definition goes once the pod is gone.
+    if (op.params?.delete_definition) {
+      await deleteClusterRow(env, c.id);
+      this.log(`definition ${c.name} deleted`);
+    }
+    return { done: true };
   }
 
   // ---------------- extend

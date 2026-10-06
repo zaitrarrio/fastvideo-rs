@@ -73,6 +73,11 @@ the same thing.
 | `control/src/cluster/payloads.ts` | boot commands, env, pod payloads (edge and direct workers) |
 | `control/src/cluster/ops.ts` | create / patch / delete, price projection, admin token, probes |
 | `control/src/cluster/do.ts` | `ClusterOps`: the operations |
+| `control/src/cluster/preflight.ts` | image preflight: each image's revision against the features the spec needs (§4) |
+| `control/src/cluster/upwait.ts` | the early verdict of `up`: per-pool status, summary, outcome (§4) |
+| `control/src/podlogs.ts` | Runpod container / system log capture from boot, the boot diagnosis (§6) |
+| `control/src/boottime.ts` | the boot timeline of every controller pod (§6a) |
+| `control/src/standalone.ts`, `control/public/standalone.js` | standalone pods ([standalone-pods.md](standalone-pods.md)) |
 | `control/src/collector.ts` | the per-minute snapshot, costs, alerts, backstops, retention |
 | `control/src/envvars.ts` | env layers |
 | `control/src/logs.ts` | ingest, search, download |
@@ -304,6 +309,41 @@ each op's log is in `/api/ops/<id>`):
 | `roll {target, pools?}` | Rolling redeploy: new workers, wait for `/health` AVAILABLE with the target digest (edge: ready at the edge), drain the old ones, wait until idle, delete them. Aborts by deleting the new pods. Needs at least 40 min before the deadline and `min_start` |
 | `restart {pods?, pools?}` | Rolling env apply: PATCH workers one at a time, each only after the previous one answers again. With `pods` and/or `pools`: just those, whether or not their env changed; the dashboard's "Restart…" picks them |
 
+**Image preflight** (`cluster/preflight.ts`, every `start`, before any pod
+is made). Each image's `org.opencontainers.image.revision` label is checked
+with GitHub's compare API against the commits that introduced what the spec
+asks of it: an edge cluster needs the edge fronts (73d770d, 2026-10-06), and
+an older image is **refused**; a direct cluster without direct workers
+(6764df8) or log shipping (7ca2e4a) gets a warning. A label or answer that
+cannot be read is a warning, never a refusal. `start {skip_image_check:
+true}` overrides a refusal (logged).
+
+Why: on 2026-10-06 the owner's edge cluster `h3-and-ltx` started on channel
+`stable` = 2cd1ba0 (2026-09-29), a build from before the edge fronts. Its
+fv-serve exits at config load on `FV_AUTH_MODE=trust-edge` ("unknown variant
+`trust-edge`, expected one of `none`, `keys`, `trust-gateway`", exit 2,
+reproduced from the image's binary), before tracing and log shipping start:
+the two RTX PRO 6000 pods crash-looped for 14 min with no log and no ready
+front. (The CPU pool had no `cpu-stable` tag and fell back to `cpu-latest`,
+a post-edge build, so it came up: "1/3".) `stable` must be promoted to a
+post-edge build (an owner decision) before edge clusters can use it.
+
+**Early failure** (`cluster/upwait.ts`, `waitReady` in `cluster/do.ts`).
+Each pool of an `up` is `starting`, `ready`, `failed` or `no_stock`
+(`state.pools`, shown in `GET /api/clusters/<id>` and as the `pool_failed`
+alert). While it waits, every 20 s the controller captures and diagnoses each
+starting pod's Runpod log (§6): a **crash loop** (an fv-serve exit line, a
+missing entrypoint, a panic twice in the tail), an **image error** (pull
+denied, manifest unknown) or a pod **stuck** without container output for 15
+min fails that pod at once: it is deleted (its log and timeline are kept)
+and its pool is `failed` when it has no pod left. A pull still running 6 min
+after it started is a slow host: the pod is deleted and **re-placed** (twice
+at most). Pools without stock are retried every 3 min while others start.
+The wait ends as soon as nothing is starting, not after 30 min, and its error
+names every pool that did not come up and why. Its progress line lists the
+pools by state (`ready 1/5: fake | starting: h3-max (pulling) | failed:
+h3-turbo (crash loop: …) | no stock: h3-ref2v`).
+
 **Direct clusters** (`control_plane: "direct"`): `start` creates only
 the workers, and clients call each one at its pod URL. The controller makes
 the cluster's admin token and passes it to every worker as `FV_ADMIN_TOKEN`
@@ -370,12 +410,25 @@ workers, the backstop (`FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`,
 **What Runpod exposes:** the public REST API has no log route
 (`/v1/pods/<id>/logs` is 400). The console's endpoint
 `https://hapi.runpod.net/v1/pod/<id>/logs` answers with the API key:
-`{container: [...], system: [...]}`, the tail only (about 70 lines each),
-with no history or search. It is undocumented. The controller shows it as
-"Runpod container log" for any pod, including external ones, and scrubs
-secrets from it.
+`{container: [...], system: [...]}`, a tail only (seen on 2026-10-06: the
+whole system log, ~950 lines, and ~650 container lines), with no search, and
+gone with the pod. It is undocumented. The controller shows it as "Runpod
+container log" for any pod, including external ones, and scrubs secrets
+from it.
 
-That is not enough, so **fv-serve ships its logs**
+**Logs from boot** (`podlogs.ts`). The controller copies that tail of every
+controller pod (cluster workers and standalone pods) into its own store:
+every minute from the cron, and every 20 s while an `up` waits for the pod.
+New lines only (a per-pod cursor of timestamp and count,
+`pod_log_cursors`), scrubbed, into D1 `log_lines` with target
+`runpod.container` / `runpod.system` and into R2 next to the shipped lines.
+So a pod has logs from its first system line (image pull) whatever its
+image ships: an image error, a crash before tracing, an image without log
+shipping. The same tail gives the pod's boot diagnosis (`pulling`,
+`starting`, `running`, `error`, `crashloop`, `image_error`, `stuck`,
+`slow_pull`) in `GET /api/pods/<id>/status`.
+
+That alone has no structure, so **fv-serve also ships its logs**
 (`crates/fastvideo-serve/src/log_ship.rs`, off by default):
 
 - A tracing layer turns each event into
@@ -406,6 +459,10 @@ That is not enough, so **fv-serve ships its logs**
 - The lines also go to D1 `log_lines`, the searchable 24 h tail, and to
   the cluster's DO for live-tail WebSockets.
 
+Log sources in `/api/logs` and `/api/pods/<id>/logs` (`?source=`): `serve`
+(shipped), `runpod` (captured from boot), `control` (the controller's own
+lines about a pod: boot milestones).
+
 **UI** (Logs page):
 
 - choose a pod;
@@ -414,6 +471,55 @@ That is not enough, so **fv-serve ships its logs**
 - live tail over a WebSocket (`/api/logs/tail?pod=`);
 - download a day's NDJSON from R2 (`/api/logs/download?pod=&day=`);
 - the Runpod tab.
+
+## 6a. Boot timeline
+
+Every controller pod has a boot timeline (`boottime.ts`, `cluster_pods.boot`):
+when each phase happened, from the lines the controller already sees.
+
+| phase | source |
+|---|---|
+| Runpod create accepted | the controller's record (`created_at`) |
+| machine assigned | first system line (`create container …`) |
+| image pull start / end | system `… Pulling from …` / `Digest:` or `Status: … up to date` |
+| container start | system `start container …: begin` |
+| boot script, volume visible | the boot command's `[fv-boot] start` and `[fv-boot] volume: /workspace/weights (N trees)` (stderr) |
+| fv-serve process start | fv-serve's first line (`fv_serve: fv-serve <version>`) |
+| connected to the edge | `edge_link: worker: connected to the dispatcher` |
+| weights per component | the engine's `[fastvideo] load/io <family> <component> {wall_s, viewed_gb, viewed_gbps}` (text encoder, DiT) and the vision tower line; `loading` / `model resident … seconds=` for the whole model |
+| warm-up done | `warmup done … seconds=` |
+| fv-serve READY | `FV-SERVE READY` |
+| ready | the `up` wait: a ready front at the edge, or `/health` AVAILABLE |
+
+Shipped tracing events mark the same phases. Each new milestone is written
+to the pod's log (`fv-control.boot`, e.g. `boot: pull_end at +22.0 s (pull
+21 s)`). It is served as `GET /api/pods/<id>/boot` (rows: phase, seconds
+after create, duration, detail; and the phase the pod is in now), in
+`/status`, on the pod page and the standalone page, and by
+`fv-control.sh boot <pod | cluster | standalone name>`.
+
+**Measured 2026-10-06** (one RTX PRO 6000 in EUR-IS-1, h3-turbo, from
+Runpod's logs sampled every 5 s; seconds after create):
+
+| phase | latest b51ddcd (edge front) | stable 2cd1ba0 (direct) |
+|---|---|---|
+| machine assigned / pull start | 0 / +1 | +1 / +2 |
+| image pull end | +22 (21 s) | +22 (20 s, not cached) |
+| container start / fv-serve start | +24 / +25 | +23 / +24 |
+| weights: text encoder | 41.3 s, 25.95 GB at 0.63 GB/s | 32.2 s at 0.81 GB/s |
+| weights: vision tower | 1.09 GiB in 21.1 s | 13.1 s |
+| weights: DiT | 169.9 s, 98.76 GB at 0.58 GB/s | 120.6 s at 0.82 GB/s |
+| every component resident | +208 (load 181.5 s, 108.7 GB) | +156 (load 129.7 s) |
+| warm-up done = READY | +269 (60.3 s) | +216 (60.2 s) |
+| ready | ~+274 (at the edge) | ~+218 (/health) |
+
+Both images are ~1 GB compressed (stable: 12 layers, two of 439 and 422 MB;
+latest: 14 layers, largest 388 MB); the variants of a channel share every
+layer but one, the two channels none. The pull is ~20 s; the boot is the
+weights read from the network volume at 0.6-0.8 GB/s (two thirds) and the
+60 s warm-up. The earlier 10-19 min boots (docs/serve/e2e/cluster.md) were
+pulls of the retired all-in-one image on slow hosts; the pull deadline
+re-places such a pod (§4).
 
 ## 7. Cost model
 
@@ -428,7 +534,10 @@ The collector runs every minute (`collector.ts`):
 - **Cost accrues for RUNNING pods**: `costPerHr × elapsed` since the last
   sample, capped at 5 min, into `cost_daily(day, pod)`, along with minutes
   and idle minutes. Volume storage of stopped pods is not counted.
-- **Attribution:** a controller pod gets `cluster:<name>`. Anything else
+- **Attribution:** a controller pod gets `cluster:<name>` (a standalone pod
+  `pod:<name>`), also for a few hours after the controller deleted it: Runpod
+  lists a deleted pod for a minute or more, and its cost row must not move to
+  `external:<prefix>`. Anything else
   is external, matched by name prefix (`attribution` policy: `fv-build`
   → `external:build-pod`, `fv-cluster-` → `external:runpod-cluster.sh` (retired script),
   `fv-b200` → `external:b200-bench`, `loom-` → `external:loom`, …). Failing
@@ -469,6 +578,7 @@ and resolve every minute.
 | `balance_floor` | balance < floor ($8), or < a cluster's own `balance_floor` | on | `stop_on_floor` (**on**): stop controller clusters |
 | `deadline` | < 15 min to a cluster's deadline (info); passed (critical) | on | **always**: stop the cluster |
 | `pod_down` | a controller pod not answering for `pod_down_min` (10) | on | – |
+| `pool_failed` | a pool the last `up` could not bring up: no stock, or its pods failed (crash loop, image error, stuck) | on | – (the `up` already deleted the failed pods) |
 | `build_pod` | the shared build pod (`external:build-pod`) up ≥ `build_pod_max_h` (9 h), or idle (no jobs, per its public `/healthz`) `build_pod_idle_grace_min` (15) past its own idle stop | on | `build_pod_backstop` (**on**): stop it, terminate if the stop is refused (`src/buildpod.ts`, docs/dev/build-pod.md) |
 
 Everything is notify-only except the two rules the scripts already had:
@@ -574,6 +684,8 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 |---|---|
 | `GET /api/overview` | the dashboard numbers, clusters, open alerts, idle pods |
 | `GET /api/pods`, `/api/pods/<id>`, `/api/pods/<id>/runpod-logs` | account pods with owner, health, utilisation, jobs, cost |
+| `GET /api/pods/<id>/status`, `/api/pods/<id>/boot`, `/api/pods/<id>/logs?after_id=&source=` | a controller pod's status (boot diagnosis, phase, timeline, cost), its boot timeline, its logs as JSON (oldest first, `next_after_id` to follow) |
+| `GET/POST /api/standalone`, `GET/DELETE /api/standalone/<id>`, `POST …/{start,stop,extend}` | standalone pods ([standalone-pods.md](standalone-pods.md)) |
 | `GET /api/metrics/series?hours=&pod=`, `/api/balance?hours=`, `/api/costs?days=` | time series and cost breakdowns |
 | `GET/POST /api/clusters`, `GET /api/templates`, `GET/DELETE /api/clusters/<id>`, `PUT …/spec` | definitions |
 | `POST /api/clusters/<id>/{price,start,stop,extend,scale,roll,restart,cancel}` | operations (202 + operation id) |
@@ -583,7 +695,7 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET /api/buildpod` | the shared build pod: its `/healthz` timers (up, idle, idle / cap stop), last self-stop attempt, running jobs, and the backstop's distance (read only) |
 | `GET /api/env/account`, `GET /api/env/<scope>/<id>`, `PUT/DELETE /api/env/<scope>/<id>/<KEY>` (`PUT /api/env/account/<KEY>`; scope `pool`: id `<cluster>:<pool>`) | env layers |
 | `GET /api/alerts`, `POST /api/alerts/<id>/resolve`, `GET/PUT /api/policies` | alerts and policies |
-| `GET /api/logs?pod=&q=&level=&since=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
+| `GET /api/logs?pod=&q=&level=&since=&source=&after_id=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
 | `GET /api/releases`, `/api/images/tags?filter=`, `/api/github/ci`, `POST /api/github/release` | channels, drift, registry, GHCR tags, CI on main, promote/rollback dispatch |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/<id>`, `GET /api/audit` | tokens and audit |
 | `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` | JSON Schemas and live values (section 13) |
@@ -616,9 +728,15 @@ npm run test:ui               # headless Chromium (npx playwright-core install c
 - attribution, alert lifecycle and rate limits;
 - secret scrubbing;
 - release dispatch validation;
-- drift.
+- drift;
+- `standalone.test.ts`: the image preflight (revision label, compare,
+  refusing the stable = 2cd1ba0 edge case), Runpod log capture (cursor,
+  scrubbing, sources, paging), the boot diagnosis (crash loop with the real
+  2cd1ba0 line, image error, pulling, stuck, slow pull), the early verdict of
+  `up`, the boot timeline from the measured lines, standalone specs and
+  routes (auth, CSRF, delete with a pod), no secret in a diagnosis.
 
-**Integration** (`test/integration/run.mjs`, 24 steps) runs the Worker
+**Integration** (`test/integration/run.mjs`, 26 steps) runs the Worker
 under `wrangler dev` (workerd with local D1, R2 and DO) against
 `test/harness.mjs`. The harness mocks Runpod REST, GraphQL and hapi, GHCR,
 GitHub and the Cloudflare API, and simulates worker pods and the edge
@@ -641,6 +759,10 @@ Worker (families view, keys, admin token). The steps cover:
 - GitHub dispatch and CI;
 - the deadline backstop and the balance-floor stop;
 - a second edge cluster: register, scale, roll, one edge cluster at a time;
+- a standalone pod: launch, up through the real Durable Object, the
+  watchdog boot, owner `pod:<name>`, status, boot timeline, logs, stop,
+  start, delete;
+- logs from boot: the Runpod tail captured once, scrubbed;
 - the audit log, and that no secret appears in any response.
 
 **UI:** login, the dashboard with its charts and tooltip, every page, a
