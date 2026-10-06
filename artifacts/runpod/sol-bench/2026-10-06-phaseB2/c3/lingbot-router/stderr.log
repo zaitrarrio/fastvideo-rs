@@ -1,0 +1,6 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] moe kernels: nvrtc sass sm_120
+[INFO] sol/router {"device_ms":390.605928,"different_sets":0,"max_w_err":0.0,"tokens":65536}
+[PASS] sol/router_sets {"different_sets":0} (limits {"max":65})
+[PASS] sol/router_weights {"max_w_err":0.0} (limits {"max":0.02})
+[PASS] stage sol → gpucheck-out/sol.json (0.8s)

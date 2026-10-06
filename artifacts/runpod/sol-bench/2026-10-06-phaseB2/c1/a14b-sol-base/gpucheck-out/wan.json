@@ -1,0 +1,62 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "dit_residency": "resident",
+        "mem_used_mib": 64578,
+        "moe": "both",
+        "seconds": 332.843658097
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": false,
+      "dmd_steps": null,
+      "flow_shift": 12.0,
+      "guidance": 4.0,
+      "guidance_2": 3.0,
+      "height": 720,
+      "num_frames": 81,
+      "plug": null,
+      "preset": "wan_2_2_t2v_a14b",
+      "prompt_set": null,
+      "step_distill": null,
+      "steps": 40,
+      "text_cache": "/fvscratch/runs/sol-bench-c1/ad94673-10062113/a14b-sol-base/text-cache",
+      "unipc_sigmas": "diffusers",
+      "vae": "full",
+      "vsa": false,
+      "warm": false,
+      "weights": "/workspace/weights/wan22-t2v-a14b",
+      "width": 1280
+    }
+  },
+  "elapsed_s": 1836.195617046,
+  "env": {
+    "FASTVIDEO_WAN_MOE": "auto",
+    "FASTVIDEO_WAN_QUANT": "off",
+    "FASTVIDEO_WAN_UNIPC_SIGMAS": "diffusers",
+    "FASTVIDEO_WAN_VAE": "full"
+  },
+  "error": "error: generate default: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")",
+  "git_sha": null,
+  "stage": "wan",
+  "status": "error"
+}

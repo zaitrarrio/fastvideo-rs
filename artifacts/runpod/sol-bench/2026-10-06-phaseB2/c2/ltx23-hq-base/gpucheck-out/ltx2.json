@@ -1,0 +1,125 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "warmup",
+      "ok": true,
+      "values": {
+        "seconds": 311.003494413
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "diff_vae": false,
+    "guided": null,
+    "hq": {
+      "audio_guidance_scale": 7.0,
+      "guidance_scale": 3.0,
+      "lora_strengths": [
+        0.25,
+        0.5
+      ],
+      "stage1_sampler": "res2s",
+      "stage1_steps": 15,
+      "stage2_sigmas": [
+        0.909375,
+        0.725,
+        0.421875,
+        0.0
+      ],
+      "upstream": "sol-engine models/ltx23.toml [official_config]"
+    },
+    "memory_plan": {
+      "peak_gib": 51.714607894420624,
+      "phases": [
+        {
+          "gib": 44.26939219236374,
+          "phase": "text"
+        },
+        {
+          "gib": 43.32958263158798,
+          "phase": "stage1"
+        },
+        {
+          "gib": 43.17426556348801,
+          "phase": "upsample"
+        },
+        {
+          "gib": 51.714607894420624,
+          "phase": "stage2"
+        },
+        {
+          "gib": 7.683491885662079,
+          "phase": "decode"
+        }
+      ],
+      "streamed": {
+        "peak_gib": 17.08645725250244,
+        "phases": [
+          {
+            "gib": 9.641241550445557,
+            "phase": "text"
+          },
+          {
+            "gib": 8.7014319896698,
+            "phase": "stage1"
+          },
+          {
+            "gib": 10.062938868999481,
+            "phase": "upsample"
+          },
+          {
+            "gib": 17.08645725250244,
+            "phase": "stage2"
+          },
+          {
+            "gib": 7.683491885662079,
+            "phase": "decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "model_version": "2.3",
+    "request": {
+      "cond_images": [],
+      "diff_vae": false,
+      "frame_rate": 24.0,
+      "height": 1088,
+      "image": null,
+      "num_frames": 241,
+      "pisa_stage2": false,
+      "prompt": "A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail",
+      "prompt_set": null,
+      "seed": 42,
+      "sol_stage2": false,
+      "two_stage": true,
+      "width": 1920
+    },
+    "sink_check": false,
+    "skip_audio_decode": false,
+    "two_stage": true,
+    "video_vae": {
+      "decoder": "conv_vae"
+    }
+  },
+  "elapsed_s": 332.801925287,
+  "env": {
+    "FASTVIDEO_LTX2_UPSAMPLER": "/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+  },
+  "error": "error: /workspace/weights/ltx23/text_encoder: no safetensors files to identify",
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "error"
+}

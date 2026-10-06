@@ -1,0 +1,52 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] cosmos3 gen: 64 blocks parked in pinned host memory (58.12 GiB), on the device as a whole while in use
+[fastvideo] sdpa: fused mma B=1 H=64 Sq=44160 Sk=44254 D=128
+[fastvideo] cosmos3 step 1/1 t=995 46.30s
+[fastvideo] cosmos3 gen offload request: 64 block copies, 58.1 GiB H2D, 56.5 GB/s, copy 1.10s of which 100.0% hidden behind compute (exposed 0.00s, worst stall 0.0 ms)
+[fastvideo] cosmos3 decode: 92.1 GiB free (gen tower parked)
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3600 Sk=3600 D=1024 query_chunk=3600
+[fastvideo] video writer: 189 frames, png deferred (0 inline, 189 after the mp4 in 0.16s, 0.16 GiB, synced), ffmpeg feed blocked 0.51s, mp4 tail 0.56s, buffered peak 0.49 GiB of 86.87
+[fastvideo] cosmos3 timing {"arm":"baseline","und_resident":false,"gen_residency":"parked","fp8":false,"load_s":143.650442582,"text_tower_s":122.15911774,"denoise_s":46.296930005,"decode_s":22.040187557,"export_s":0.722808132,"request_s":191.36740027,"steps":1,"steps_computed":1,"steps_reused":0,"und_tokens_cond":94,"und_tokens_uncond":92,"gen_tokens":44160}
+[INFO] sol/warmup {"arm":"baseline","decode_s":22.040187557,"denoise_s":46.296930005,"export_s":0.722808132,"fp8":false,"gen_residency":"parked","gen_tokens":44160,"load_s":143.650442582,"request_s":191.36740027,"steps":1,"steps_computed":1,"steps_reused":0,"text_tower_s":122.15911774,"und_resident":false,"und_tokens_cond":94,"und_tokens_uncond":92}
+[fastvideo] cosmos3 step 1/35 t=995 46.29s
+[fastvideo] cosmos3 step 2/35 t=994 45.26s
+[fastvideo] cosmos3 step 3/35 t=993 45.25s
+[fastvideo] cosmos3 step 4/35 t=992 45.25s
+[fastvideo] cosmos3 step 5/35 t=991 45.27s
+[fastvideo] cosmos3 step 6/35 t=990 45.24s
+[fastvideo] cosmos3 step 7/35 t=988 45.24s
+[fastvideo] cosmos3 step 8/35 t=986 45.26s
+[fastvideo] cosmos3 step 9/35 t=984 45.23s
+[fastvideo] cosmos3 step 10/35 t=981 45.22s
+[fastvideo] cosmos3 step 11/35 t=978 45.24s
+[fastvideo] cosmos3 step 12/35 t=975 45.27s
+[fastvideo] cosmos3 step 13/35 t=970 45.23s
+[fastvideo] cosmos3 step 14/35 t=965 45.25s
+[fastvideo] cosmos3 step 15/35 t=958 45.23s
+[fastvideo] cosmos3 step 16/35 t=950 45.26s
+[fastvideo] cosmos3 step 17/35 t=941 45.23s
+[fastvideo] cosmos3 step 18/35 t=929 45.23s
+[fastvideo] cosmos3 step 19/35 t=915 45.22s
+[fastvideo] cosmos3 step 20/35 t=898 45.23s
+[fastvideo] cosmos3 step 21/35 t=877 45.22s
+[fastvideo] cosmos3 step 22/35 t=852 45.22s
+[fastvideo] cosmos3 step 23/35 t=822 45.22s
+[fastvideo] cosmos3 step 24/35 t=785 45.23s
+[fastvideo] cosmos3 step 25/35 t=742 45.23s
+[fastvideo] cosmos3 step 26/35 t=693 45.22s
+[fastvideo] cosmos3 step 27/35 t=636 45.26s
+[fastvideo] cosmos3 step 28/35 t=572 45.22s
+[fastvideo] cosmos3 step 29/35 t=504 45.22s
+[fastvideo] cosmos3 step 30/35 t=432 45.21s
+[fastvideo] cosmos3 step 31/35 t=361 45.20s
+[fastvideo] cosmos3 step 32/35 t=292 45.19s
+[fastvideo] cosmos3 step 33/35 t=229 45.18s
+[fastvideo] cosmos3 step 34/35 t=174 45.19s
+[fastvideo] cosmos3 step 35/35 t=128 45.17s
+[fastvideo] cosmos3 gen offload request: 64 block copies, 58.1 GiB H2D, 56.6 GB/s, copy 1.10s of which 100.0% hidden behind compute (exposed 0.00s, worst stall 0.0 ms)
+[fastvideo] cosmos3 decode: 86.7 GiB free (gen tower parked)
+[fastvideo] video writer: 189 frames, png deferred (0 inline, 189 after the mp4 in 0.20s, 0.21 GiB, synced), ffmpeg feed blocked 0.53s, mp4 tail 0.60s, buffered peak 0.49 GiB of 86.67
+[fastvideo] cosmos3 timing {"arm":"baseline","und_resident":false,"gen_residency":"parked","fp8":false,"load_s":5.3e-6,"text_tower_s":1.553844637,"denoise_s":1584.091285232,"decode_s":21.965099607,"export_s":0.797647644,"request_s":1608.556241755,"steps":35,"steps_computed":35,"steps_reused":0,"und_tokens_cond":94,"und_tokens_uncond":92,"gen_tokens":44160}
+[INFO] sol/timings {"arm":"baseline","decode_s":21.965099607,"denoise_s":1584.091285232,"export_s":0.797647644,"fp8":false,"gen_residency":"parked","gen_tokens":44160,"load_s":5.3e-6,"peak_mib":83785,"published_4xgb200":{"baseline_denoise_s":121.4198,"baseline_s":130.41,"fullopt_speedup":2.26},"request_s":1608.556241755,"steps":35,"steps_computed":35,"steps_reused":0,"text_tower_s":1.553844637,"und_resident":false,"und_tokens_cond":94,"und_tokens_uncond":92}
+[PASS] sol/steps {"steps":35} (limits {})
+[PASS] stage sol → gpucheck-out/sol.json (1956.5s)

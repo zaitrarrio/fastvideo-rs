@@ -1,0 +1,19 @@
+[21:13:51] [c2 +2s] set c2 budget 3300s cap 3840s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:13:56] [c2 +7s] ▶ ltx23-hq-base (est 660s, hard stop 3298s): env FASTVIDEO_LTX2_UPSAMPLER=/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.3 --hq --weights /workspace/weights/ltx23 --dit /workspace/weights/ltx23-dev/ltx-2.3-22b-dev.safetensors --prompt A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail --seed 42 --text streamed --dit-offload resident --warm --dense-stage2 --clip /fvscratch/runs/sol-bench-c2/ad94673-10062113/ltx23-hq-base/frames
+[21:19:29] [c2 +340s] FAIL ltx23-hq-base 333s exit=2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=63240 sk=1024 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=63240 sk=251 d=64 -> flash_mma_fwd2
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 0 copies, h2d 38132 MiB in 1746 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (13.93s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (13.72s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (13.77s)
+[fastvideo] ltx2 memory stage2: peak 60.94 GiB used, 63.41 GiB reserved; 53.21 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | activations 9.28 | pool_reserved 2.46 | non_pool 0.77 | total 61.71 GiB
+[fastvideo] ltx2 video decode 9.45s: vae 9.41s, rgb 0.78s, push 0.00s, wait 2.63s
+[fastvideo] video writer: 241 frames, png deferred (0 inline, 241 after the mp4 in 1.03s, 0.58 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 1.41 GiB of 417.59
+[fastvideo] ltx2 video decode + mp4 9.45s (mp4 tail 0.00s); png frames after it 1.03s
+[fastvideo] ltx2 memory decode: peak 73.72 GiB used, 87.16 GiB reserved; 55.09 GiB live after; ledger: vae 2.12 | dit_nonlinear 49.55 | activations 22.06 | pool_reserved 13.43 | non_pool 0.77 | total 74.49 GiB
+[INFO] ltx2/warmup {"seconds":311.003494413}
+[fastvideo] ltx2 hq: stage-1 15 steps, stage-2 sigmas [0.909375, 0.725, 0.421875, 0.0], guidance 3, 1920x1088 241f (lora 0.25/0.5 /workspace/weights/ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors)
+[ERROR] stage ltx2 → gpucheck-out/ltx2.json (332.8s)
+error: /workspace/weights/ltx23/text_encoder: no safetensors files to identify
+[21:19:45] [c2 +356s] ▶ ltx23-hq-fullopt (est 600s, hard stop 2960s): env FASTVIDEO_LTX2_UPSAMPLER=/workspace/weights/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.3 --hq --weights /workspace/weights/ltx23 --dit /workspace/weights/ltx23-dev/ltx-2.3-22b-dev.safetensors --prompt A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail --seed 42 --text streamed --dit-offload resident --warm --pisa-stage2 --clip /fvscratch/runs/sol-bench-c2/ad94673-10062113/ltx23-hq-fullopt/frames

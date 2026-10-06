@@ -287,13 +287,23 @@ case "$SET" in
     cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
     lingbot fullopt 1200
     ;;
-  c3) # LingBot baseline (b4)
+  c3) # LingBot: router check, baseline (b4), then fullopt if the budget
+    # still allows (c2 was stopped in LTX-2.3 fullopt's PISA stage 2 before
+    # reaching it; refiner PISA uses the same score-route kernel)
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
     lingbot baseline 2400
+    lingbot fullopt 1200
     ;;
-  c4) # Cosmos3-Super BF16 (gen tower parked for the decode), then BF16
-    # TeaCache only if it still fits the budget.
+  c4) # LTX-2.3 HQ base again (text-cache key fix), then Cosmos3-Super BF16
+    # (gen tower parked for the decode), then BF16 TeaCache if it still fits.
+    ltx23 ltx23-hq-base 660 --dense-stage2
     cosmos3 cosmos3-baseline baseline 2400
     cosmos3 cosmos3-teacache teacache 1500
+    ;;
+  c6) # Wan2.2 T2V-A14B base again: c1's base finished its denoise and ran out
+    # of memory in the decode with both experts resident (MoE headroom 36 GiB
+    # now: the experts swap on this card)
+    a14b a14b-sol-base 1900
     ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac

@@ -1,0 +1,39 @@
+[21:38:23] [c3 +1s] set c3 budget 3300s cap 3840s NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:38:24] [c3 +2s] ▶ lingbot-router (est 60s, hard stop 3299s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-router
+[21:38:25] [c3 +3s] ok lingbot-router 1s exit=0
+[21:38:26] [c3 +4s] ▶ lingbot-baseline (est 2400s, hard stop 3297s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /workspace/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm baseline --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-c3/ad94673-10062134/lingbot-baseline/clips
+[21:56:15] [c3 +1073s] FAIL lingbot-baseline 1069s exit=2
+[fastvideo] lingbot base step 30/40 t=531 12.82s
+[fastvideo] lingbot base step 31/40 t=499 12.82s
+[fastvideo] lingbot base step 32/40 t=465 13.38s
+[fastvideo] lingbot base step 33/40 t=428 12.83s
+[fastvideo] lingbot base step 34/40 t=388 12.85s
+[fastvideo] lingbot base step 35/40 t=345 12.86s
+[fastvideo] lingbot base step 36/40 t=299 12.86s
+[fastvideo] lingbot base step 37/40 t=249 12.87s
+[fastvideo] lingbot base step 38/40 t=195 12.89s
+[fastvideo] lingbot base step 39/40 t=136 12.92s
+[fastvideo] lingbot base step 40/40 t=71 13.00s
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.04s, 0.03 GiB, synced), ffmpeg feed blocked 0.17s, mp4 tail 0.19s, buffered peak 0.14 GiB of 87.01
+[ERROR] stage sol → gpucheck-out/sol.json (1068.6s)
+error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+[21:56:33] [c3 +1091s] ▶ lingbot-fullopt (est 1200s, hard stop 2227s): /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /workspace/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm fullopt --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-c3/ad94673-10062134/lingbot-fullopt/clips
+[22:13:18] [c3 +2096s] FAIL lingbot-fullopt 1005s exit=2
+[fastvideo] lingbot base step 30/40 t=531 12.82s
+[fastvideo] lingbot base step 31/40 t=499 (reused) 0.01s
+[fastvideo] lingbot base step 32/40 t=465 13.47s
+[fastvideo] lingbot base step 33/40 t=428 (reused) 0.01s
+[fastvideo] lingbot base step 34/40 t=388 12.84s
+[fastvideo] lingbot base step 35/40 t=345 (reused) 0.01s
+[fastvideo] lingbot base step 36/40 t=299 12.85s
+[fastvideo] lingbot base step 37/40 t=249 12.87s
+[fastvideo] lingbot base step 38/40 t=195 12.89s
+[fastvideo] lingbot base step 39/40 t=136 12.91s
+[fastvideo] lingbot base step 40/40 t=71 12.99s
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.04s, 0.03 GiB, synced), ffmpeg feed blocked 0.16s, mp4 tail 0.18s, buffered peak 0.14 GiB of 87.01
+[ERROR] stage sol → gpucheck-out/sol.json (1005.5s)
+error: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+[22:13:18] [c3 +2096s] set c3 done
+matrix_exit=0

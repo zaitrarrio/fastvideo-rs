@@ -1,0 +1,56 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan moe: Auto -> both (expert 26.6 GiB bf16, 85.7 GiB free after the text encoder)
+[fastvideo] wan load: host peak RSS 59.2 GiB (lazy dit x2)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":64578,"moe":"both","seconds":332.843658097}
+[fastvideo] generate preset=wan_2_2_t2v_a14b tiny=false 1280x720 frames=81 steps=40 dmd=false rcm=false latent=1x16x21x90x160 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=unipc steps=40 shift=12 sigmas=diffusers
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=80 sq=75600 sk=75600 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=2 H=40 Sq=75600 Sk=75600 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=80 sq=75600 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] unipc step 1/40 t=999 done in 35468ms
+[fastvideo] unipc step 2/40 t=997 done in 35659ms
+[fastvideo] unipc step 3/40 t=995 done in 36374ms
+[fastvideo] unipc step 4/40 t=993 done in 37330ms
+[fastvideo] unipc step 5/40 t=990 done in 37580ms
+[fastvideo] unipc step 6/40 t=988 done in 37775ms
+[fastvideo] unipc step 7/40 t=985 done in 37803ms
+[fastvideo] unipc step 8/40 t=982 done in 37802ms
+[fastvideo] unipc step 9/40 t=979 done in 37895ms
+[fastvideo] unipc step 10/40 t=976 done in 37906ms
+[fastvideo] unipc step 11/40 t=972 done in 37854ms
+[fastvideo] unipc step 12/40 t=969 done in 37765ms
+[fastvideo] unipc step 13/40 t=965 done in 37723ms
+[fastvideo] unipc step 14/40 t=961 done in 37680ms
+[fastvideo] unipc step 15/40 t=956 done in 37624ms
+[fastvideo] unipc step 16/40 t=952 done in 37494ms
+[fastvideo] unipc step 17/40 t=947 done in 37458ms
+[fastvideo] unipc step 18/40 t=941 done in 37559ms
+[fastvideo] unipc step 19/40 t=936 done in 37507ms
+[fastvideo] unipc step 20/40 t=929 done in 37499ms
+[fastvideo] unipc step 21/40 t=922 done in 37399ms
+[fastvideo] unipc step 22/40 t=915 done in 37464ms
+[fastvideo] unipc step 23/40 t=907 done in 37467ms
+[fastvideo] unipc step 24/40 t=898 done in 37545ms
+[fastvideo] unipc step 25/40 t=888 done in 37517ms
+[fastvideo] unipc step 26/40 t=877 done in 37659ms
+[fastvideo] unipc step 27/40 t=865 done in 37710ms
+[fastvideo] unipc step 28/40 t=852 done in 37660ms
+[fastvideo] unipc step 29/40 t=837 done in 37684ms
+[fastvideo] unipc step 30/40 t=819 done in 37732ms
+[fastvideo] unipc step 31/40 t=799 done in 37686ms
+[fastvideo] unipc step 32/40 t=776 done in 37650ms
+[fastvideo] unipc step 33/40 t=749 done in 37635ms
+[fastvideo] unipc step 34/40 t=717 done in 37612ms
+[fastvideo] unipc step 35/40 t=678 done in 37599ms
+[fastvideo] unipc step 36/40 t=631 done in 37670ms
+[fastvideo] unipc step 37/40 t=571 done in 37631ms
+[fastvideo] unipc step 38/40 t=492 done in 37566ms
+[fastvideo] unipc step 39/40 t=386 done in 37552ms
+[fastvideo] unipc step 40/40 t=235 done in 37580ms
+[fastvideo] unipc 40 steps done in 1499798ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=14400 Sk=14400 D=384 query_chunk=14400
+[fastvideo] vae.decode done in 312ms
+[fastvideo] generate done in 1502666ms
+[ERROR] stage wan → gpucheck-out/wan.json (1836.2s)
+error: generate default: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
