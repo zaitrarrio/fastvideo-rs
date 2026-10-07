@@ -64,5 +64,5 @@ pub mod wan;
 pub use backend::{install_process_plan, CudaBackend, CudaBackendConfig, Mp4Encoder};
 pub use caps::{
     catalog, find, gate_h3_1080p, model_from_config, CudaModel, ModelEntryCfg, CudaRecipe, H3Recipe, Ltx2Recipe, LtxStage2, LtxVersion, ProcessPlan,
-    SfWanRecipe, WanDecoder, WanRecipe, WanSampler, WeightLayout,
+    SfWanRecipe, WanDecoder, WanRecipe, WanSampler, WarmupMode, WeightLayout, WARMUP_ENV,
 };

@@ -6,8 +6,16 @@
 //! Loop: warm-load the resident models, then repeatedly
 //! 1. release causal sessions their owners closed (`causal_close`);
 //! 2. take the next dispatch (a job, or one block of the leased causal
-//!    session), parking on the work condvar when there is none;
+//!    session); with none, one background warm-up run when a resident model
+//!    still wants one (fast boot B), else park on the work condvar;
 //! 3. run it.
+//!
+//! Background warm-up never shares the GPU with a job: it runs on this
+//! thread, only while nothing is queued and no session holds the executor,
+//! and any arriving job or session trips its cancel token
+//! ([`crate::service::State::yield_warmups`]), so it stops at its next step
+//! and the job runs; the cancelled run is retried once the executor is idle
+//! again.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +24,8 @@ use fastvideo_protocol::{ApiError, ModelId};
 
 use crate::backend::{ClipSink, CollectSink, EngineBackend, LoadEvent, NullSink, SessionId};
 use crate::cancel::{is_cancel, OutputMode, StepControl, StepEvent};
-use crate::pool::Residency;
+use crate::cancel::CancelToken;
+use crate::pool::{Residency, Warmup};
 use crate::scheduler::{Dispatch, QueueItem};
 use crate::service::{EngineEvent, Shared};
 use crate::stream::causal::CausalShared;
@@ -30,20 +39,21 @@ pub(crate) fn run(sh: Arc<Shared>, idx: usize, mut backend: Box<dyn EngineBacken
             .map(|e| e.model.clone())
             .collect()
     };
-    for m in warm {
+    for m in &warm {
         // A failure is recorded in the pool (readiness `Failed`).
-        let _ = load(&sh, idx, backend.as_mut(), &m);
+        let _ = load(&sh, idx, backend.as_mut(), m);
     }
+    let mut warmups = Warmups::new(&sh, idx, backend.as_ref(), &warm);
     loop {
-        let (closing, work) = {
+        let (closing, work, warm_run) = {
             let mut st = sh.lock();
             loop {
                 if st.shutdown {
-                    break (std::mem::take(&mut st.to_close[idx]), None);
+                    break (std::mem::take(&mut st.to_close[idx]), None, None);
                 }
                 let closing = std::mem::take(&mut st.to_close[idx]);
                 if !closing.is_empty() {
-                    break (closing, None);
+                    break (closing, None, None);
                 }
                 if let Some(d) = st.sched.next_for(idx) {
                     if let Dispatch::Job(it) = &d {
@@ -54,7 +64,18 @@ pub(crate) fn run(sh: Arc<Shared>, idx: usize, mut backend: Box<dyn EngineBacken
                         st.publish_positions();
                         sh.changed(&st);
                     }
-                    break (Vec::new(), Some(d));
+                    break (Vec::new(), Some(d), None);
+                }
+                // Idle: a background warm-up run, unless a session holds
+                // this executor or the engine is draining.
+                if !st.draining && st.sched.exec(idx).session.is_none() {
+                    if let Some((model, name)) = warmups.next(&st.pool, idx) {
+                        let token = CancelToken::new();
+                        st.warmup_cancel[idx] = Some(token.clone());
+                        st.pool.set_warmup(idx, &model, Warmup::Running);
+                        sh.changed(&st);
+                        break (Vec::new(), None, Some((model, name, token)));
+                    }
                 }
                 st = sh.work_cv.wait(st).unwrap_or_else(|p| p.into_inner());
             }
@@ -62,10 +83,13 @@ pub(crate) fn run(sh: Arc<Shared>, idx: usize, mut backend: Box<dyn EngineBacken
         for s in closing {
             backend.causal_close(s);
         }
-        match work {
-            Some(Dispatch::Job(it)) => run_job(&sh, idx, backend.as_mut(), it),
-            Some(Dispatch::Causal(sid)) => causal_turn(&sh, backend.as_mut(), sid),
-            None => {
+        match (work, warm_run) {
+            (Some(Dispatch::Job(it)), _) => run_job(&sh, idx, backend.as_mut(), it),
+            (Some(Dispatch::Causal(sid)), _) => causal_turn(&sh, backend.as_mut(), sid),
+            (None, Some((model, name, token))) => {
+                warmups.run(&sh, idx, backend.as_mut(), &model, &name, &token)
+            }
+            (None, None) => {
                 if sh.lock().shutdown {
                     break;
                 }
@@ -75,6 +99,111 @@ pub(crate) fn run(sh: Arc<Shared>, idx: usize, mut backend: Box<dyn EngineBacken
     let mut st = sh.lock();
     st.alive -= 1;
     sh.changed(&st);
+}
+
+/// The background warm-up runs left on this executor (fast boot B).
+struct Warmups {
+    /// Per model, in declaration order: the runs not done yet.
+    left: Vec<(ModelId, std::collections::VecDeque<String>)>,
+    /// Per model: when its first run started, time on the GPU, runs done.
+    started: std::collections::BTreeMap<ModelId, (Instant, f64, Vec<String>, u32)>,
+}
+
+impl Warmups {
+    fn new(sh: &Shared, idx: usize, backend: &dyn EngineBackend, models: &[ModelId]) -> Self {
+        let mut st = sh.lock();
+        let mut left = Vec::new();
+        for m in models {
+            if st.pool.state(idx, m) != Some(&Residency::Resident) {
+                continue;
+            }
+            let runs = backend.warmup_pending(m);
+            if !runs.is_empty() {
+                st.pool.set_warmup(idx, m, Warmup::Pending);
+                left.push((m.clone(), runs.into_iter().collect()));
+            }
+        }
+        sh.changed(&st);
+        Self {
+            left,
+            started: Default::default(),
+        }
+    }
+
+    /// The next run: the first model, still resident, with runs left.
+    fn next(&mut self, pool: &crate::pool::ModelPool, idx: usize) -> Option<(ModelId, String)> {
+        // A model that left the GPU (swap mode) drops its warm-up.
+        self.left
+            .retain(|(m, runs)| !runs.is_empty() && pool.state(idx, m) == Some(&Residency::Resident));
+        self.left
+            .first()
+            .and_then(|(m, runs)| runs.front().map(|r| (m.clone(), r.clone())))
+    }
+
+    fn run(
+        &mut self,
+        sh: &Shared,
+        idx: usize,
+        backend: &mut dyn EngineBackend,
+        model: &ModelId,
+        name: &str,
+        token: &CancelToken,
+    ) {
+        let entry = self.started.entry(model.clone()).or_insert_with(|| {
+            let runs: Vec<String> = self
+                .left
+                .iter()
+                .find(|(m, _)| m == model)
+                .map(|(_, r)| r.iter().cloned().collect())
+                .unwrap_or_default();
+            tracing::info!(model = %model, runs = %runs.join(", "), "warmup started (background)");
+            (Instant::now(), 0.0, Vec::new(), 0)
+        });
+        let t = Instant::now();
+        let r = backend.warmup_run(model, name, token);
+        let took = t.elapsed().as_secs_f64();
+        entry.1 += took;
+        let mut st = sh.lock();
+        st.warmup_cancel[idx] = None;
+        let runs = self.left.iter_mut().find(|(m, _)| m == model).map(|(_, r)| r);
+        let state = match r {
+            Ok(what) => {
+                entry.2.push(what);
+                if let Some(runs) = runs {
+                    runs.pop_front();
+                    if runs.is_empty() {
+                        tracing::info!(
+                            model = %model,
+                            seconds = entry.1,
+                            elapsed_s = entry.0.elapsed().as_secs_f64(),
+                            yielded = entry.3,
+                            runs = %entry.2.join(", "),
+                            "warmup done (background)"
+                        );
+                        Warmup::Done
+                    } else {
+                        Warmup::Pending
+                    }
+                } else {
+                    Warmup::Done
+                }
+            }
+            Err(e) if is_cancel(&e) => {
+                entry.3 += 1;
+                tracing::info!(model = %model, run = name, after_s = took, "warmup yielded to a job (background)");
+                Warmup::Pending
+            }
+            Err(e) => {
+                tracing::warn!(model = %model, run = name, error = %e, "warmup failed; serving without it");
+                if let Some(runs) = runs {
+                    runs.clear();
+                }
+                Warmup::Failed
+            }
+        };
+        st.pool.set_warmup(idx, model, state);
+        sh.changed(&st);
+    }
 }
 
 /// Loads `model` on this executor, tracking residency in the pool.

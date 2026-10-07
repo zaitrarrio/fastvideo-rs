@@ -386,6 +386,29 @@ describe("boot timeline", () => {
     expect(at("ready (at the edge / health)").at).toBeNull();
     expect(bootPhase(b as any, T("2026-10-06T21:55:10Z"))).toEqual({ phase: "serve_ready", since_s: 3 });
   });
+  it("a background warm-up (fast boot B): ready first, then warm-up started/done (background), rows in time order", () => {
+    const t0 = T("2026-10-07T10:00:00Z");
+    const at = (s: number) => t0 + s * 1000;
+    const b: any = { t: { create: t0 } };
+    foldBoot(b, [
+      { stream: "container", ts: at(60), text: "2026-10-07T10:01:00Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fasth3 seconds=40.2" },
+      { stream: "container", ts: at(60.1), text: "FV-SERVE READY models=fasth3" },
+      { stream: "container", ts: at(60.2), text: "2026-10-07T10:01:00Z  INFO fastvideo_engine_service::executor: warmup started (background) model=fasth3 runs=i2v, t2v" },
+      { stream: "container", ts: at(121), text: "2026-10-07T10:02:01Z  INFO fastvideo_engine_service::executor: warmup done (background) model=fasth3 seconds=60.5 elapsed_s=60.8 yielded=0 runs=i2v 1344x768x124 34.1s, t2v 1344x768x124 26.4s" },
+    ]);
+    b.t.ready = at(61);
+    expect(b).toMatchObject({ warmup_mode: "background", warmup_s: 60.5, load_s: 40.2 });
+    const rows = bootRows(b);
+    const names = rows.filter((r) => r.at !== null).map((r) => r.phase);
+    expect(names).toEqual(["Runpod create accepted", "weights: every component resident", "fv-serve READY", "warm-up started (background)", "ready (at the edge / health)", "warm-up done (background)"]);
+    expect(rows.find((r) => r.phase === "warm-up done (background)")).toMatchObject({ t_s: 121, took_s: 60, detail: "warm-up 60.5 s" });
+    expect(bootPhase(b, at(130))).toEqual({ phase: "warmup_done", since_s: 9 });
+    // The old blocking warm-up keeps its label.
+    const old: any = { t: { create: t0 } };
+    foldBoot(old, [{ stream: "container", ts: at(100), text: "INFO fastvideo_engine_service::cuda::backend: warmup done model=fasth3 seconds=60.3 runs=i2v" }]);
+    expect(old.warmup_mode).toBe("blocking");
+    expect(bootRows(old).some((r) => r.phase === "warm-up done")).toBe(true);
+  });
   it("shipped tracing events (as the ingest renders them) mark the same phases", () => {
     const b = { t: {} };
     foldBoot(b, [

@@ -93,6 +93,8 @@ async fn batch_job_end_to_end_with_file_store() {
         (&v["status"], &v["model_loaded"], &v["state"]),
         (&json!("ok"), &json!(true), &json!("AVAILABLE"))
     );
+    // Fast boot B: no background warm-up on the fake engine.
+    assert_eq!(v["warmup"], "off");
     // Build identity (docs/serve/releases.md): the compiled-in git sha and
     // the package version, the same object on /healthz.
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
