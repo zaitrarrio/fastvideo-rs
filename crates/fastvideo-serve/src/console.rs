@@ -31,6 +31,7 @@ pub const ASSETS: &[(&str, &str, &str)] = &[
     ("admin.js", "text/javascript; charset=utf-8", include_str!("../console/admin.js")),
     ("model.js", "text/javascript; charset=utf-8", include_str!("../console/model.js")),
     ("form.js", "text/javascript; charset=utf-8", include_str!("../console/form.js")),
+    ("trace.js", "text/javascript; charset=utf-8", include_str!("../console/trace.js")),
     ("snippets.js", "text/javascript; charset=utf-8", include_str!("../console/snippets.js")),
     ("director.js", "text/javascript; charset=utf-8", include_str!("../console/director.js")),
     ("avatar.js", "text/javascript; charset=utf-8", include_str!("../console/avatar.js")),

@@ -33,6 +33,7 @@
           <form id="form"></form>
           <div class="actions">
             <button id="reset" type="button">Reset</button>
+            <label class="check" title="Trace this request end to end: click, edge, pod, queue, GPU stages, upload, polls, video bytes (docs/serve/tracing.md). Recorded off the critical path; the waterfall shows in the Trace tab."><input type="checkbox" id="trace-on"> Trace</label>
             <span class="grow"></span>
             <button id="run" class="primary" type="button">Run</button>
           </div>
@@ -52,6 +53,7 @@
               <button type="button" role="tab" data-rtab="preview" aria-selected="true">Preview</button>
               <button type="button" role="tab" data-rtab="json" aria-selected="false">JSON</button>
               <button type="button" role="tab" data-rtab="logs" aria-selected="false">Logs</button>
+              <button type="button" role="tab" data-rtab="trace" aria-selected="false" id="trace-tab" hidden>Trace</button>
             </div>
           </div>
           <div data-rpanel="preview">
@@ -66,6 +68,7 @@
           </div>
           <div data-rpanel="json" hidden><pre id="output-json">{}</pre></div>
           <div data-rpanel="logs" hidden><div id="logs" class="logs"><div class="lv">No logs yet.</div></div></div>
+          <div data-rpanel="trace" hidden><div id="trace-view" class="trace-view"><div class="hint">Tick Trace and run a request.</div></div></div>
           <div id="result-msg" class="msg" role="status"></div>
         </div>
       </section>

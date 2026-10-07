@@ -8,6 +8,7 @@ import {
   loadCapabilities, mountedProtocols, BASE_PATH,
 } from './common.js';
 import { buildForm } from './form.js';
+import { ClientTrace, TRACE_KEY, analyze } from './trace.js';
 import { snippets, protocolSnippets, snippetProtocols } from './snippets.js';
 import { reactorModel } from './rtc.js';
 
@@ -153,11 +154,12 @@ function resetResult(text) {
 
 async function fetchResult(c) {
   try {
-    const r = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id), { full: true });
+    const r = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id), { full: true, trace: c.trace, traceName: 'result' });
     const out = r.body;
     const meta = metaHeaders(r.headers);
     $('output-json').textContent = JSON.stringify(out, null, 2);
     const url = out && out.video && out.video.url;
+    if (c.trace && url) watchVideo(c, url);
     showVideo(url);
     renderFacts(out, c, meta);
     status('COMPLETED');
@@ -180,7 +182,7 @@ async function fetchResult(c) {
 async function poll(c) {
   if (current !== c) return;
   try {
-    const st = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id) + '/status?logs=1');
+    const st = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id) + '/status?logs=1', { trace: c.trace, traceName: 'poll' });
     if (current !== c) return;
     status(st.status);
     if (st.logs) renderLogs(st.logs);
@@ -205,9 +207,71 @@ async function poll(c) {
   c.timer = setTimeout(() => poll(c), 700);
 }
 
-function track(id, sub, t0) {
+// ---- tracing (docs/serve/tracing.md) -------------------------------------------
+// Marks only while the request runs; the beacon, the pod's events and the
+// waterfall come after the video is playable, in an idle callback.
+const traceOn = () => { try { return localStorage.getItem(TRACE_KEY) === '1' || /[?&]trace=1/.test(location.search); } catch { return false; } };
+$('trace-on').checked = traceOn();
+$('trace-on').onchange = () => { try { localStorage.setItem(TRACE_KEY, $('trace-on').checked ? '1' : '0'); } catch { /* private mode */ } };
+
+function watchVideo(c, url) {
+  const v = $('video');
+  const tr = c.trace;
+  const once = (ev, name) => v.addEventListener(ev, () => {
+    if (tr.marks[name]) return;
+    tr.point(name);
+    if (name === 'canplay') {
+      tr.resource(url);
+      tr.spanMs('e2e', tr.marks.click, tr.marks.canplay);
+      const later = globalThis.requestIdleCallback || ((f) => setTimeout(f, 50));
+      later(() => shipTrace(c));
+    }
+  }, { once: true });
+  tr.point('video_src');
+  once('loadstart', 'video_loadstart');
+  once('loadedmetadata', 'video_metadata');
+  once('canplay', 'canplay');
+}
+
+async function shipTrace(c) {
+  const tr = c.trace;
+  const path = '/fv/v1/traces/' + tr.id;
+  const body = JSON.stringify({ events: tr.events });
+  try {
+    if (!(navigator.sendBeacon && navigator.sendBeacon(base() + path + '/events', body))) {
+      await fetch(base() + path + '/events', { method: 'POST', body, keepalive: true });
+    }
+  } catch { /* best effort */ }
+  let server = [];
+  try {
+    const d = await request('GET', path, { auth: null });
+    server = (d && d.events) || [];
+  } catch { /* tracing off on the server */ }
+  const own = new Set(tr.events.map((e) => e.name + e.t_wall_ns));
+  renderTrace(analyze([...tr.events, ...server.filter((e) => !(e.host === 'client' && own.has(e.name + e.t_wall_ns)))]), tr.id);
+}
+
+function renderTrace(res, id) {
+  $('trace-tab').hidden = false;
+  const total = res.totalMs || 1;
+  const pct = (ms) => Math.max(0, Math.min(100, (ms / total) * 100));
+  const rows = res.rows.map((r) => el('div', { class: 'trace-row', 'data-comp': r.comp, title: r.host + (r.uncertMs ? ' (±' + r.uncertMs.toFixed(1) + ' ms)' : '') },
+    el('span', { class: 'mono t' }, r.startMs.toFixed(1)),
+    el('span', { class: 'mono d' }, r.durMs ? r.durMs.toFixed(1) : '·'),
+    el('span', { class: 'n' }, r.comp + '.' + r.name + (r.arg != null ? ' [' + r.arg + ']' : '') + (r.clock === 'gpu' ? ' (gpu)' : '')),
+    el('span', { class: 'bar' }, el('i', { style: 'left:' + pct(r.startMs) + '%;width:' + Math.max(0.3, pct(r.durMs)) + '%' }))));
+  const ph = res.phases.map((p) => el('div', { class: 'trace-row' }, el('span', { class: 'mono d' }, p.ms.toFixed(1)), el('span', { class: 'n' }, p.from + ' → ' + p.to)));
+  const offs = Object.entries(res.offsets).map(([h, o]) => h + ' ' + (o.offset / 1e6).toFixed(1) + ' ms ± ' + (o.uncert / 1e6).toFixed(1));
+  $('trace-view').replaceChildren(
+    el('p', { class: 'hint mono' }, 'trace ' + id + ' · total ' + total.toFixed(1) + ' ms · unaccounted ' + res.unaccountedMs.toFixed(1) + ' ms'),
+    el('p', { class: 'hint' }, 'clocks vs ' + res.reference + ': ' + offs.join('; ')),
+    el('h3', {}, 'Critical path (ms)'), ...ph,
+    el('h3', {}, 'Waterfall (start ms from the click, duration ms)'), ...rows);
+}
+
+function track(id, sub, t0, trace) {
   if (current && current.timer) clearTimeout(current.timer);
-  current = { id, sub, t0: t0 || Date.now() };
+  current = { id, sub, t0: t0 || Date.now(), trace: trace || null };
   renderHistory();
   poll(current);
 }
@@ -296,11 +360,13 @@ async function run() {
   resetResult('Submitting…');
   status('SUBMITTING');
   const t0 = Date.now();
+  const trace = clickTrace;
+  clickTrace = null;
   try {
-    const sub = await request('POST', '/' + endpointId, { auth: 'key', body: input });
+    const sub = await request('POST', '/' + endpointId, { auth: 'key', body: input, trace, traceName: 'submit' });
     setMsg('run-msg', 'Queued as ' + sub.request_id + '.', 'ok');
     saveHistory({ request_id: sub.request_id, app, sub: task, input, created_at: t0, status: 'IN_QUEUE' });
-    track(sub.request_id, task, t0);
+    track(sub.request_id, task, t0, trace);
   } catch (e) {
     status('FAILED');
     $('video-empty').textContent = 'Not submitted.';
@@ -309,7 +375,13 @@ async function run() {
     $('run').disabled = false;
   }
 }
-$('run').onclick = run;
+// The click is the trace's origin: marked before anything else runs.
+let clickTrace = null;
+$('run').onclick = () => {
+  clickTrace = $('trace-on').checked ? new ClientTrace() : null;
+  if (clickTrace) clickTrace.point('click');
+  run();
+};
 $('form').addEventListener('submit', (e) => e.preventDefault());
 $('reset').onclick = () => form && form.reset();
 

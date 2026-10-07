@@ -326,6 +326,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
           <form id="form"></form>
           <div class="actions">
             <button id="reset" type="button">Reset</button>
+            <label class="check" title="Trace this request end to end: click, edge, pod, queue, GPU stages, upload, polls, video bytes (docs/serve/tracing.md). Recorded off the critical path; the waterfall shows in the Trace tab."><input type="checkbox" id="trace-on"> Trace</label>
             <span class="grow"></span>
             <button id="run" class="primary" type="button">Run</button>
           </div>
@@ -345,6 +346,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
               <button type="button" role="tab" data-rtab="preview" aria-selected="true">Preview</button>
               <button type="button" role="tab" data-rtab="json" aria-selected="false">JSON</button>
               <button type="button" role="tab" data-rtab="logs" aria-selected="false">Logs</button>
+              <button type="button" role="tab" data-rtab="trace" aria-selected="false" id="trace-tab" hidden>Trace</button>
             </div>
           </div>
           <div data-rpanel="preview">
@@ -359,6 +361,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
           </div>
           <div data-rpanel="json" hidden><pre id="output-json">{}</pre></div>
           <div data-rpanel="logs" hidden><div id="logs" class="logs"><div class="lv">No logs yet.</div></div></div>
+          <div data-rpanel="trace" hidden><div id="trace-view" class="trace-view"><div class="hint">Tick Trace and run a request.</div></div></div>
           <div id="result-msg" class="msg" role="status"></div>
         </div>
       </section>
@@ -1043,22 +1046,29 @@ export class HttpError extends Error {
 // fetch JSON. \`auth\`: 'key' (fal \`Key\`), 'bearer', 'admin' (bearer with the
 // admin token) or null. Throws HttpError on non-2xx. \`full: true\` resolves
 // \`{body, headers, status}\` instead of the body (for the \`x-fv-*\` headers).
-export async function request(method, path, { auth = 'key', token, body, root, full = false } = {}) {
+// \`trace\` (a trace.js ClientTrace): the request carries its headers and is
+// recorded as span \`traceName\` (docs/serve/tracing.md).
+export async function request(method, path, { auth = 'key', token, body, root, full = false, trace = null, traceName = 'request' } = {}) {
   const headers = { Accept: 'application/json' };
+  if (trace) Object.assign(headers, trace.headers());
   const secret = token ?? (auth === 'admin' ? session.get(K.admin) : apiKey());
   // An open server (auth mode \`none\`) gets no API key; the admin token still goes to admin routes.
   if (auth && secret && (auth === 'admin' || !openServer)) headers.Authorization = (auth === 'key' ? 'Key ' : 'Bearer ') + secret;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const url = /^https?:/.test(path) ? path : (root || base()) + path;
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const t0 = trace ? trace.now() : 0;
   let resp;
   try {
-    resp = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    resp = await fetch(url, { method, headers, body: payload });
   } catch (e) {
     throw new HttpError(0, 'Could not reach ' + (root || base()) + ' (' + e.message + ')');
   }
+  const tHead = trace ? trace.now() : 0;
   const text = await resp.text();
   let parsed = text;
   try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  if (trace) trace.http(traceName, t0, tHead, trace.now(), resp.status, resp.headers, parsed);
   if (!resp.ok) throw new HttpError(resp.status, parsed);
   return full ? { body: parsed, headers: resp.headers, status: resp.status } : parsed;
 }
@@ -1598,6 +1608,16 @@ h3.sub { font-size: 13px; margin: 14px 0 0; color: var(--muted); font-weight: 60
 .ref-count { font-family: var(--mono); margin: 10px 0 0; }
 .banner[data-quality="draft"] { color: var(--ink); background: color-mix(in srgb, var(--warn) 9%, var(--panel)); }
 .banner[data-quality="draft"] b { color: var(--warn); }
+
+/* Request trace waterfall (model page, docs/serve/tracing.md). */
+.trace-view h3 { font-size: 13px; margin: 12px 0 4px; }
+.trace-row { display: grid; grid-template-columns: 64px 64px minmax(160px, 260px) 1fr; gap: 6px; align-items: center; font-size: 12px; line-height: 18px; }
+.trace-row .t, .trace-row .d { text-align: right; }
+.trace-row .bar { position: relative; height: 10px; background: var(--line, rgba(127,127,127,.15)); border-radius: 2px; }
+.trace-row .bar i { position: absolute; top: 0; bottom: 0; background: var(--accent, #4b7bec); border-radius: 2px; }
+.trace-row[data-comp="gpu"] .bar i { background: #20bf6b; }
+.trace-row[data-comp="client"] .bar i { background: #a55eea; }
+.trace-row[data-comp="edge"] .bar i { background: #fa8231; }
 ` },
   "director.js": { type: "text/javascript; charset=utf-8", body: `// fal director (WMA) client for the console: design §5.6, research-fal §8.
 //
@@ -3037,6 +3057,7 @@ import {
   loadCapabilities, mountedProtocols, BASE_PATH,
 } from './common.js';
 import { buildForm } from './form.js';
+import { ClientTrace, TRACE_KEY, analyze } from './trace.js';
 import { snippets, protocolSnippets, snippetProtocols } from './snippets.js';
 import { reactorModel } from './rtc.js';
 
@@ -3182,11 +3203,12 @@ function resetResult(text) {
 
 async function fetchResult(c) {
   try {
-    const r = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id), { full: true });
+    const r = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id), { full: true, trace: c.trace, traceName: 'result' });
     const out = r.body;
     const meta = metaHeaders(r.headers);
     $('output-json').textContent = JSON.stringify(out, null, 2);
     const url = out && out.video && out.video.url;
+    if (c.trace && url) watchVideo(c, url);
     showVideo(url);
     renderFacts(out, c, meta);
     status('COMPLETED');
@@ -3209,7 +3231,7 @@ async function fetchResult(c) {
 async function poll(c) {
   if (current !== c) return;
   try {
-    const st = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id) + '/status?logs=1');
+    const st = await request('GET', '/' + app + '/requests/' + encodeURIComponent(c.id) + '/status?logs=1', { trace: c.trace, traceName: 'poll' });
     if (current !== c) return;
     status(st.status);
     if (st.logs) renderLogs(st.logs);
@@ -3234,9 +3256,71 @@ async function poll(c) {
   c.timer = setTimeout(() => poll(c), 700);
 }
 
-function track(id, sub, t0) {
+// ---- tracing (docs/serve/tracing.md) -------------------------------------------
+// Marks only while the request runs; the beacon, the pod's events and the
+// waterfall come after the video is playable, in an idle callback.
+const traceOn = () => { try { return localStorage.getItem(TRACE_KEY) === '1' || /[?&]trace=1/.test(location.search); } catch { return false; } };
+$('trace-on').checked = traceOn();
+$('trace-on').onchange = () => { try { localStorage.setItem(TRACE_KEY, $('trace-on').checked ? '1' : '0'); } catch { /* private mode */ } };
+
+function watchVideo(c, url) {
+  const v = $('video');
+  const tr = c.trace;
+  const once = (ev, name) => v.addEventListener(ev, () => {
+    if (tr.marks[name]) return;
+    tr.point(name);
+    if (name === 'canplay') {
+      tr.resource(url);
+      tr.spanMs('e2e', tr.marks.click, tr.marks.canplay);
+      const later = globalThis.requestIdleCallback || ((f) => setTimeout(f, 50));
+      later(() => shipTrace(c));
+    }
+  }, { once: true });
+  tr.point('video_src');
+  once('loadstart', 'video_loadstart');
+  once('loadedmetadata', 'video_metadata');
+  once('canplay', 'canplay');
+}
+
+async function shipTrace(c) {
+  const tr = c.trace;
+  const path = '/fv/v1/traces/' + tr.id;
+  const body = JSON.stringify({ events: tr.events });
+  try {
+    if (!(navigator.sendBeacon && navigator.sendBeacon(base() + path + '/events', body))) {
+      await fetch(base() + path + '/events', { method: 'POST', body, keepalive: true });
+    }
+  } catch { /* best effort */ }
+  let server = [];
+  try {
+    const d = await request('GET', path, { auth: null });
+    server = (d && d.events) || [];
+  } catch { /* tracing off on the server */ }
+  const own = new Set(tr.events.map((e) => e.name + e.t_wall_ns));
+  renderTrace(analyze([...tr.events, ...server.filter((e) => !(e.host === 'client' && own.has(e.name + e.t_wall_ns)))]), tr.id);
+}
+
+function renderTrace(res, id) {
+  $('trace-tab').hidden = false;
+  const total = res.totalMs || 1;
+  const pct = (ms) => Math.max(0, Math.min(100, (ms / total) * 100));
+  const rows = res.rows.map((r) => el('div', { class: 'trace-row', 'data-comp': r.comp, title: r.host + (r.uncertMs ? ' (±' + r.uncertMs.toFixed(1) + ' ms)' : '') },
+    el('span', { class: 'mono t' }, r.startMs.toFixed(1)),
+    el('span', { class: 'mono d' }, r.durMs ? r.durMs.toFixed(1) : '·'),
+    el('span', { class: 'n' }, r.comp + '.' + r.name + (r.arg != null ? ' [' + r.arg + ']' : '') + (r.clock === 'gpu' ? ' (gpu)' : '')),
+    el('span', { class: 'bar' }, el('i', { style: 'left:' + pct(r.startMs) + '%;width:' + Math.max(0.3, pct(r.durMs)) + '%' }))));
+  const ph = res.phases.map((p) => el('div', { class: 'trace-row' }, el('span', { class: 'mono d' }, p.ms.toFixed(1)), el('span', { class: 'n' }, p.from + ' → ' + p.to)));
+  const offs = Object.entries(res.offsets).map(([h, o]) => h + ' ' + (o.offset / 1e6).toFixed(1) + ' ms ± ' + (o.uncert / 1e6).toFixed(1));
+  $('trace-view').replaceChildren(
+    el('p', { class: 'hint mono' }, 'trace ' + id + ' · total ' + total.toFixed(1) + ' ms · unaccounted ' + res.unaccountedMs.toFixed(1) + ' ms'),
+    el('p', { class: 'hint' }, 'clocks vs ' + res.reference + ': ' + offs.join('; ')),
+    el('h3', {}, 'Critical path (ms)'), ...ph,
+    el('h3', {}, 'Waterfall (start ms from the click, duration ms)'), ...rows);
+}
+
+function track(id, sub, t0, trace) {
   if (current && current.timer) clearTimeout(current.timer);
-  current = { id, sub, t0: t0 || Date.now() };
+  current = { id, sub, t0: t0 || Date.now(), trace: trace || null };
   renderHistory();
   poll(current);
 }
@@ -3325,11 +3409,13 @@ async function run() {
   resetResult('Submitting…');
   status('SUBMITTING');
   const t0 = Date.now();
+  const trace = clickTrace;
+  clickTrace = null;
   try {
-    const sub = await request('POST', '/' + endpointId, { auth: 'key', body: input });
+    const sub = await request('POST', '/' + endpointId, { auth: 'key', body: input, trace, traceName: 'submit' });
     setMsg('run-msg', 'Queued as ' + sub.request_id + '.', 'ok');
     saveHistory({ request_id: sub.request_id, app, sub: task, input, created_at: t0, status: 'IN_QUEUE' });
-    track(sub.request_id, task, t0);
+    track(sub.request_id, task, t0, trace);
   } catch (e) {
     status('FAILED');
     $('video-empty').textContent = 'Not submitted.';
@@ -3338,7 +3424,13 @@ async function run() {
     $('run').disabled = false;
   }
 }
-$('run').onclick = run;
+// The click is the trace's origin: marked before anything else runs.
+let clickTrace = null;
+$('run').onclick = () => {
+  clickTrace = $('trace-on').checked ? new ClientTrace() : null;
+  if (clickTrace) clickTrace.point('click');
+  run();
+};
 $('form').addEventListener('submit', (e) => e.preventDefault());
 $('reset').onclick = () => form && form.reset();
 
@@ -4608,5 +4700,249 @@ $('transport').onchange = showTransport;
 window.addEventListener('beforeunload', () => { if (live) live.close(); });
 
 load();
+` },
+  "trace.js": { type: "text/javascript; charset=utf-8", body: `// Request tracing in the console and the bench (docs/serve/tracing.md).
+//
+// Two halves, both without side effects at import (the CLI tools
+// scripts/serve/trace-bench.mjs and trace-report.mjs import this module in
+// Node):
+//
+// - \`ClientTrace\`: one trace from the click. Marks are \`performance.now()\`
+//   reads pushed into an array; nothing is sent, formatted or rendered
+//   until the video is playable, and then only in an idle callback
+//   (\`navigator.sendBeacon\`). Every request of the trace carries
+//   \`traceparent\` + \`x-fv-trace: 1\`; each answer's \`x-fv-trace-t\` (the
+//   pod's receive/send ns) and \`x-fv-edge-t\` (the edge's, ms) become
+//   NTP-style clock samples.
+// - \`analyze(events)\`: aligns the hosts' clocks (minimum-delay sample per
+//   host, ± half its delay), builds the waterfall, the critical-path phases
+//   and the unaccounted gaps.
+
+const hex = (n) => {
+  const b = new Uint8Array(n / 2);
+  globalThis.crypto.getRandomValues(b);
+  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+};
+
+const nowMs = () => globalThis.performance.timeOrigin + globalThis.performance.now();
+const ns = (ms) => Math.round(ms * 1e6);
+
+// Whether the console traces its runs (the Trace switch, \`?trace=1\`).
+export const TRACE_KEY = 'fv.trace';
+
+export class ClientTrace {
+  constructor({ host = 'client' } = {}) {
+    this.id = hex(32);
+    this.span = hex(16);
+    this.host = host;
+    this.events = [];
+    this.marks = {};
+  }
+
+  // Headers for every request of this trace.
+  headers() {
+    return { traceparent: '00-' + this.id + '-' + this.span + '-01', 'x-fv-trace': '1' };
+  }
+
+  // A point now (or at \`atMs\`, a wall-clock ms).
+  point(name, attrs, atMs) {
+    const t = atMs ?? nowMs();
+    this.marks[name] = t;
+    this.events.push({ trace: this.id, host: this.host, comp: 'client', name, clock: 'host', t_wall_ns: ns(t), dur_ns: 0, attrs });
+    return t;
+  }
+
+  // A span between two wall-clock ms.
+  spanMs(name, startMs, endMs, attrs) {
+    this.events.push({ trace: this.id, host: this.host, comp: 'client', name, clock: 'host', t_wall_ns: ns(startMs), dur_ns: Math.max(0, ns(endMs - startMs)), attrs });
+  }
+
+  now() { return nowMs(); }
+
+  // One HTTP exchange: \`t0\` before fetch, \`tHead\` when the headers arrived,
+  // \`tEnd\` when the body was read (wall ms). \`headers\` a Headers-like
+  // object; \`body\` the parsed answer (its \`status\` is kept: fal's
+  // IN_QUEUE / IN_PROGRESS / COMPLETED).
+  http(name, t0, tHead, tEnd, status, headers, body) {
+    const attrs = { status };
+    if (body && typeof body === 'object' && typeof body.status === 'string') attrs.job_status = body.status;
+    const get = (k) => (headers && typeof headers.get === 'function' ? headers.get(k) : null);
+    const pod = get('x-fv-trace-t');
+    const edge = get('x-fv-edge-t');
+    const sync = [];
+    if (pod && pod.includes(';')) {
+      const [t1, t2] = pod.split(';').map(Number);
+      if (Number.isFinite(t1) && Number.isFinite(t2)) sync.push({ peer: 'pod', t0: ns(t0), t1, t2, t3: ns(tHead) });
+    }
+    if (edge && edge.includes(';')) {
+      const [a, b] = edge.split(';').map(Number);
+      if (Number.isFinite(a) && Number.isFinite(b)) sync.push({ peer: 'edge', t0: ns(t0), t1: a * 1e6, t2: b * 1e6, t3: ns(tHead) });
+    }
+    if (sync.length) attrs.sync = sync;
+    this.spanMs(name, t0, tHead, attrs);
+    if (tEnd > tHead) this.spanMs(name + '.body', tHead, tEnd);
+  }
+
+  // Resource Timing of \`url\` (the video): request start, first byte, last byte.
+  resource(url) {
+    const perf = globalThis.performance;
+    if (!perf || typeof perf.getEntriesByName !== 'function') return;
+    const list = perf.getEntriesByName(url);
+    const e = list[list.length - 1];
+    if (!e) return;
+    const o = perf.timeOrigin;
+    // Cross-origin without Timing-Allow-Origin: only start and end are known.
+    const first = e.responseStart > 0 ? e.responseStart : null;
+    this.spanMs('video_fetch', o + e.startTime, o + e.responseEnd, { bytes: e.transferSize || e.encodedBodySize || null, ttfb_known: first !== null });
+    if (first !== null) {
+      this.spanMs('video_ttfb', o + e.startTime, o + first);
+      this.spanMs('video_bytes', o + first, o + e.responseEnd);
+    }
+  }
+}
+
+// ---- analysis -----------------------------------------------------------------
+
+// Spans that contain other steps: drawn, but not counted as "accounted".
+const ENVELOPES = new Set(['client:e2e', 'engine:run', 'edge:request', 'store:terminal', 'client:wait_poll']);
+
+// NTP estimate from (t0, t1, t2, t3): offset = remote − local, delay = round trip − remote time.
+function estimate(s) {
+  const offset = ((s.t1 - s.t0) + (s.t2 - s.t3)) / 2;
+  const delay = (s.t3 - s.t0) - (s.t2 - s.t1);
+  return { offset, delay: Math.max(0, delay) };
+}
+
+function best(samples) {
+  let b = null;
+  for (const s of samples) {
+    const e = estimate(s);
+    if (!b || e.delay < b.delay) b = { ...e, n: samples.length };
+  }
+  return b;
+}
+
+// events: every host's events of one trace. Returns {offsets, rows, phases, gaps, totals}.
+export function analyze(events, { reference } = {}) {
+  const hosts = [...new Set(events.map((e) => e.host || 'unknown'))];
+  const podHost = hosts.find((h) => h.startsWith('pod:')) || null;
+  const clientSamples = { pod: [], edge: [] };
+  const edgePod = [];
+  for (const e of events) {
+    const sync = e.attrs && e.attrs.sync;
+    if (!sync) continue;
+    for (const s of Array.isArray(sync) ? sync : [sync]) {
+      if (!s || !Number.isFinite(s.t0)) continue;
+      if (e.host === 'edge' && s.peer === 'front') edgePod.push(s);
+      else if (s.peer === 'pod') clientSamples.pod.push(s);
+      else if (s.peer === 'edge') clientSamples.edge.push(s);
+    }
+  }
+  // Offsets of each host relative to the reference clock (the client's when present).
+  const ref = reference || (hosts.includes('client') ? 'client' : podHost || hosts[0]);
+  const off = { [ref]: { offset: 0, uncert: 0, via: 'reference' } };
+  const cp = best(clientSamples.pod);
+  const ce = best(clientSamples.edge);
+  const ep = best(edgePod);
+  if (ref === 'client') {
+    if (ce) off.edge = { offset: ce.offset, uncert: ce.delay / 2, via: 'client↔edge, ' + ce.n + ' samples' };
+    if (podHost && cp) off[podHost] = { offset: cp.offset, uncert: cp.delay / 2, via: 'client↔pod, ' + cp.n + ' samples' };
+    else if (podHost && ce && ep) off[podHost] = { offset: ce.offset + ep.offset, uncert: (ce.delay + ep.delay) / 2, via: 'client↔edge↔pod' };
+  } else if (ref === podHost && ep) {
+    off.edge = { offset: -ep.offset, uncert: ep.delay / 2, via: 'edge↔pod, ' + ep.n + ' samples' };
+  }
+  const rows = [];
+  for (const e of events) {
+    const o = off[e.host];
+    if (!o) continue; // a host we cannot align is left out of the waterfall
+    const t = e.t_wall_ns - o.offset;
+    rows.push({ start: t, end: t + (e.dur_ns || 0), dur: e.dur_ns || 0, comp: e.comp, name: e.name, host: e.host, clock: e.clock || 'host', arg: e.arg, attrs: e.attrs, uncert: o.uncert });
+  }
+  const click = rows.find((r) => r.comp === 'client' && r.name === 'click');
+  const t0 = click ? click.start : Math.min(...rows.map((r) => r.start));
+  for (const r of rows) { r.startMs = (r.start - t0) / 1e6; r.durMs = r.dur / 1e6; r.endMs = r.startMs + r.durMs; r.uncertMs = r.uncert / 1e6; }
+  rows.sort((a, b) => a.start - b.start || b.dur - a.dur);
+  const endRow = rows.find((r) => r.comp === 'client' && r.name === 'canplay') || rows.find((r) => r.comp === 'client' && r.name === 'video_fetch');
+  const endMs = endRow ? endRow.endMs : Math.max(...rows.map((r) => r.endMs));
+
+  // Unaccounted: [0, end] not covered by any non-envelope step.
+  const iv = rows.filter((r) => r.dur > 0 && !ENVELOPES.has(r.comp + ':' + r.name)).map((r) => [Math.max(0, r.startMs), Math.min(endMs, r.endMs)]).filter(([a, b]) => b > a).sort((a, b) => a[0] - b[0]);
+  const gaps = [];
+  let cur = 0;
+  for (const [a, b] of iv) {
+    if (a > cur + 0.05) gaps.push({ startMs: cur, endMs: a, durMs: a - cur });
+    cur = Math.max(cur, b);
+  }
+  if (endMs > cur + 0.05) gaps.push({ startMs: cur, endMs, durMs: endMs - cur });
+  for (const g of gaps) {
+    const before = rows.filter((r) => r.endMs <= g.startMs + 0.01 && r.dur > 0).sort((a, b) => b.endMs - a.endMs)[0];
+    const after = rows.find((r) => r.startMs >= g.endMs - 0.01);
+    g.after = before ? before.comp + '.' + before.name : 'start';
+    g.before = after ? after.comp + '.' + after.name : 'end';
+  }
+  const unaccounted = gaps.reduce((s, g) => s + g.durMs, 0);
+  return { reference: ref, offsets: off, rows, gaps, unaccountedMs: unaccounted, totalMs: endMs, phases: phases(rows, endMs) };
+}
+
+// The critical path as consecutive phases between anchor events (ms from the click).
+export function phases(rows, endMs) {
+  const first = (pred) => rows.find(pred);
+  const last = (pred) => [...rows].reverse().find(pred);
+  const is = (c, n) => (r) => r.comp === c && r.name === n;
+  const submit = first(is('client', 'submit'));
+  const podPost = first((r) => r.comp === 'http' && r.name === 'post');
+  const qwait = first(is('queue', 'wait'));
+  const run = first(is('engine', 'run'));
+  const gpuFirst = first((r) => r.comp === 'gpu');
+  const gpuLast = last((r) => r.comp === 'gpu');
+  const terminal = first(is('store', 'terminal'));
+  const done = terminal ? terminal.endMs : null;
+  const seen = first((r) => r.comp === 'client' && r.name === 'poll' && r.attrs && r.attrs.job_status === 'COMPLETED');
+  const result = first(is('client', 'result'));
+  const vf = first(is('client', 'video_fetch'));
+  const vttfb = first(is('client', 'video_ttfb'));
+  const canplay = first(is('client', 'canplay'));
+  const a = [
+    ['click', 0],
+    ['submit sent', submit && submit.startMs],
+    ['pod received', podPost && podPost.startMs],
+    ['pod answered (queued)', podPost && podPost.endMs],
+    ['submit answer at client', submit && submit.endMs],
+    ['engine dequeued', qwait && qwait.endMs],
+    ['GPU first mark', gpuFirst && gpuFirst.startMs],
+    ['GPU last mark', gpuLast && gpuLast.endMs],
+    ['engine run end', run && run.endMs],
+    ['job terminal (stored)', done],
+    ['client saw COMPLETED', seen && seen.endMs],
+    ['result answer at client', result && result.endMs],
+    ['video first byte', vttfb ? vttfb.endMs : null],
+    ['video last byte', vf && vf.endMs],
+    ['video playable', canplay ? canplay.startMs : endMs],
+  ].filter(([, t]) => t !== null && t !== undefined && Number.isFinite(t));
+  const out = [];
+  for (let i = 1; i < a.length; i++) out.push({ from: a[i - 1][0], to: a[i][0], ms: a[i][1] - a[i - 1][1], atMs: a[i][1] });
+  return out;
+}
+
+// Plain-text waterfall (the CLI report).
+export function textReport(res, { width = 60 } = {}) {
+  const lines = [];
+  const scale = res.totalMs > 0 ? width / res.totalMs : 0;
+  lines.push('reference clock: ' + res.reference + '; total ' + res.totalMs.toFixed(1) + ' ms; unaccounted ' + res.unaccountedMs.toFixed(1) + ' ms');
+  for (const [h, o] of Object.entries(res.offsets)) lines.push('  ' + h + ': offset ' + (o.offset / 1e6).toFixed(2) + ' ms ± ' + (o.uncert / 1e6).toFixed(2) + ' ms (' + o.via + ')');
+  lines.push('');
+  lines.push('start ms   dur ms     step');
+  for (const r of res.rows) {
+    const bar = ' '.repeat(Math.max(0, Math.floor(r.startMs * scale))) + (r.dur > 0 ? '█'.repeat(Math.max(1, Math.round(r.durMs * scale))) : '|');
+    lines.push(r.startMs.toFixed(1).padStart(9) + ' ' + r.durMs.toFixed(2).padStart(9) + '  ' + (r.comp + '.' + r.name + (r.arg != null ? '[' + r.arg + ']' : '') + (r.clock === 'gpu' ? ' (gpu)' : '')).padEnd(34) + ' ' + bar);
+  }
+  lines.push('');
+  lines.push('critical path:');
+  for (const p of res.phases) lines.push('  ' + p.ms.toFixed(1).padStart(9) + ' ms  ' + p.from + ' → ' + p.to);
+  lines.push('');
+  lines.push('unaccounted gaps (> 0.05 ms):');
+  for (const g of res.gaps.filter((x) => x.durMs >= 1).sort((a, b) => b.durMs - a.durMs).slice(0, 12)) lines.push('  ' + g.durMs.toFixed(1).padStart(9) + ' ms at ' + g.startMs.toFixed(1) + ' (after ' + g.after + ', before ' + g.before + ')');
+  return lines.join('\\n');
+}
 ` },
 };

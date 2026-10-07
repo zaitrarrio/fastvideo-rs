@@ -221,8 +221,19 @@ fn passthrough_sources(req: &GenerationRequest, staged: &fastvideo_protocol::Sta
 }
 
 /// Looks a job up by its wire id for `owner` (other owners' jobs are 404).
+///
+/// A traced request (docs/serve/tracing.md) records the lookup as
+/// `store.lookup` with the job's status as its argument (0 queued ..
+/// 4 cancelled, -1 unknown), so the trace shows which poll first saw the
+/// job terminal.
 pub async fn find_job<P: BatchProtocol + ?Sized>(ctx: &ServeCtx, proto: &P, external_id: &str, owner: Option<&KeyId>) -> Result<Job, ApiError> {
-    match ctx.jobs().by_external(proto.id(), external_id).await {
+    let trace = fastvideo_trace::current();
+    let t0 = trace.map(|_| fastvideo_trace::now_ns());
+    let found = ctx.jobs().by_external(proto.id(), external_id).await;
+    if let (Some(t), Some(s)) = (trace, t0) {
+        t.span_since(fastvideo_trace::Comp::Store, "lookup", s, found.as_ref().map_or(-1, status_code));
+    }
+    match found {
         Some(j) if j.owner.is_none() || j.owner.as_ref() == owner => Ok(j),
         _ => Err(ApiError::not_found(format!("`{external_id}` was not found"))),
     }
@@ -325,13 +336,7 @@ fn lookup<P: BatchProtocol, V: JobView>(proto: Arc<P>, view: Arc<V>, param: &'st
                     .any(|(k, v)| k == "logs" && matches!(v.as_str(), "1" | "true"));
                 let reply = async {
                     let owner = ctx.auth().authenticate(proto.id(), &headers)?;
-                    let t_find = fastvideo_trace::current().map(|_| fastvideo_trace::now_ns());
                     let job = find_job(&ctx, &*proto, &ext, owner.as_ref()).await?;
-                    if let (Some(t), Some(s)) = (fastvideo_trace::current(), t_find) {
-                        // arg: the job's status (0 queued .. 4 cancelled), so the
-                        // trace shows which poll first saw it terminal.
-                        t.span_since(fastvideo_trace::Comp::Store, "lookup", s, status_code(&job));
-                    }
                     let cx = ctx.view_ctx(with_logs);
                     Ok::<_, ApiError>(match *which {
                         Which::Status => view.status_reply(&job, &cx),
