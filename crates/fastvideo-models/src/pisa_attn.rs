@@ -121,7 +121,14 @@ pub fn global_h_bar(k: &[f32], v: &[f32], tokens: usize, dim: usize) -> Vec<f32>
 
 /// PISA exact-or-approx for one head: selected blocks exact, remainder
 /// zeroth-order plus the paper Phase-3 first-order term
-/// \(q_t\bar H\sum_{j\in\mathcal{U}}\alpha_{t,j}\).
+/// \(s\,q_t\bar H\sum_{j\in\mathcal{U}}\alpha_{t,j}\).
+///
+/// The first-order term is the Taylor step of the softmax logit
+/// \(s\,q\cdot k\) around the pooled key:
+/// \(\sum_{n\in j} e^{s q\cdot k_n} v_n \approx e^{s q\cdot\bar k_j}(\sum_n v_n + s\,q H_j)\),
+/// so it carries the softmax scale \(s\) (`scale`). Until 2026-10-07 it was
+/// applied without \(s\) (\(\sqrt{d}\) = 11.3x too large at head dim 128),
+/// which turned real-model PISA outputs into noise (sol-bench phase B3).
 pub fn pisa_attn_head(
     q: &[f32],
     k: &[f32],
@@ -251,7 +258,7 @@ fn pisa_attn_head_remainder(
                     for e in 0..dim {
                         qh += qi[e] * h_bar[e * dim + col];
                     }
-                    acc[d] += tail * qh;
+                    acc[d] += tail * scale * qh;
                 }
             }
             let dst = &mut out[(q_start + t) * dim..(q_start + t + 1) * dim];

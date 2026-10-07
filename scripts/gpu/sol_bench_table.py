@@ -36,6 +36,7 @@ PUBLISHED = {
     "ltx23-hq-base": ("LTX-2.3 HQ", "1920x1088x241, res2s 15 + 3, dense stage 2", "1x GB200", None, "theirs: ratio only (2.40x)"),
     "ltx23-hq-fullopt": ("LTX-2.3 HQ", "same, SCSP + PISA s2 + midpoint prune + NVFP4 FFN", "1x GB200", None, "theirs: ratio only (2.40x)"),
     "lingbot-baseline": ("LingBot-Video MoE", "480p 121 f 40 st + 1080p refiner 8 st, 1 prompt", "4x GB200", 375.53, "theirs: 4 GPUs (CP4)"),
+    "lingbot-baseline-rs3": ("LingBot-Video MoE", "480p 121 f 40 st + 1080p refiner 8 st, 1 prompt (refiner: 3 of 8 st measured, x8/3)", "4x GB200", 375.53, "theirs: 4 GPUs (CP4)"),
     "lingbot-fullopt": ("LingBot-Video MoE", "same, EasyCache + refiner PISA", "4x GB200", 144.36, "theirs: 4 GPUs (CP4)"),
     "cosmos3-baseline": ("Cosmos3-Super 64B", "1280x720x189, 35 st, CFG 6", "4x GB200", 130.41, "theirs: 4 GPUs (SP)"),
     "cosmos3-teacache": ("Cosmos3-Super 64B", "same, TeaCache 1.15/10/3 (BF16)", "4x GB200", None, "theirs: 2.26x incl. NVFP4"),
@@ -53,6 +54,7 @@ PAIRS = [
     ("a14b-sol-base", "a14b-sol-fullopt", 449.67 / 207.01),
     ("ltx23-hq-base", "ltx23-hq-fullopt", 2.40),
     ("lingbot-baseline", "lingbot-fullopt", 375.53 / 144.36),
+    ("lingbot-baseline-rs3", "lingbot-fullopt", 375.53 / 144.36),
     ("cosmos3-baseline", "cosmos3-teacache", 2.26),
     ("cosmos3-baseline", "cosmos3-teacache-fp8", 2.26),
     ("cosmos3-baseline-fp8", "cosmos3-teacache-fp8", None),
@@ -119,6 +121,16 @@ def load(run_dirs):
                                peak_mib=t.get("peak_mib"), gpu="RTX PRO 6000", warm=False,
                                detail={k: r0.get(k) for k in ("base_denoise_s", "refiner_denoise_s", "refiner_prepare_s",
                                                               "base_steps_reused", "refiner_steps_computed", "refiner_sparse_steps")})
+                    # Baseline measured on fewer refiner steps (every dense CFG
+                    # step costs the same): scale the refiner denoise to the
+                    # official 8 (docs/perf/sol-bench.md, phase B3).
+                    rsteps = r0.get("refiner_steps") or 0
+                    if c.name.endswith("-rs3") and rsteps and r0.get("refiner_denoise_s"):
+                        rd = r0["refiner_denoise_s"]
+                        row["measured_total_s"] = row["total_s"]
+                        row["total_s"] = row["total_s"] - rd + rd * 8 / rsteps
+                        row["denoise_s"] = row["denoise_s"] - rd + rd * 8 / rsteps
+                        row["extrapolated"] = f"refiner denoise x8/{rsteps}"
                 else:  # Cosmos3
                     row.update(total_s=t.get("request_s"), text_s=t.get("text_tower_s"), denoise_s=t.get("denoise_s"),
                                decode_s=t.get("decode_s"), load_s=t.get("load_s"), peak_mib=t.get("peak_mib"),
