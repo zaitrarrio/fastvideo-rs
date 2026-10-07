@@ -319,15 +319,20 @@ case "$SET" in
   d2) # Cosmos3-Super BF16 + TeaCache 1.15/10/3 (skipped for budget in c4)
     cosmos3 cosmos3-teacache teacache 1800
     ;;
-  e1) # PISA fixed (fix/pisa-sm120-phaseb3): device parity first, then
-    # Wan2.2 TI2V-5B EasyCache + PISA and LingBot fullopt (refiner PISA)
+  e1) # PISA fixed (fix/pisa-sm120-phaseb3): device parity + timing first,
+    # then LTX-2.3 HQ fullopt (PISA stage 2) and A14B fullopt (EasyCache + PISA)
     cell pisa-parity wan22-ti2v-5b 240 "$BIN" --mode fast kernels --groups pisa
-    wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
-    lingbot fullopt 2400
-    ;;
-  e2) # PISA fixed: LTX-2.3 HQ fullopt (PISA stage 2), then A14B fullopt
     ltx23 ltx23-hq-fullopt 900 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
     a14b a14b-sol-fullopt 1500 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
+  f1) # LingBot baseline again: d1 ran all 3 refiner steps, then ran out of
+    # memory in the 1080p decode with the refiner resident (fixed on the branch)
+    lingbot baseline 2000 -rs3 --refiner-steps 1
+    ;;
+  f2) # PISA + LingBot decode fix: Wan2.2 TI2V-5B EasyCache + PISA, then
+    # LingBot fullopt (EasyCache + refiner PISA)
+    wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
+    lingbot fullopt 2400
     ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac

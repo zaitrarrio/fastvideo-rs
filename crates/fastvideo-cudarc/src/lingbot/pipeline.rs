@@ -438,6 +438,15 @@ impl LingBotPipeline {
         timing.refiner_steps_computed = rstats.computed;
         timing.refiner_steps_reused = rstats.reused;
         timing.refiner_sparse_steps = rstats.sparse;
+        // The 1080p decode (121 frames) does not fit beside the 60 GB
+        // refiner on a 96 GB card (phase B3 d1: out of memory after the
+        // last refiner step). Under swap the refiner leaves before the
+        // decode; the next request loads it again either way.
+        drop((rtext_c, rtext_u));
+        if self.residency == Residency::Swap {
+            self.refiner = None;
+        }
+        trim()?;
 
         let t = Instant::now();
         let rgb = decode_rgb(self.vae.as_ref().expect("loaded"), rlat, rshape)?;
