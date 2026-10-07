@@ -371,6 +371,27 @@ when fv-serve runs on a Runpod pod or load-balancer endpoint
   files: CORS allows any origin by default, preflights included
   (`server.cors_origins` / `FV_CORS_ORIGINS` narrows it; design §9).
 
+## 5a. Embedded console
+
+Another server may serve these pages unchanged under a path prefix for one
+backend: fv-control does, for a Runpod serverless endpoint at
+`/serverless/<endpoint id>/console` (docs/control/serverless.md §5b), and
+answers the API calls under the same prefix. It adds `<meta>` tags to each
+page's `<head>`, which `common.js` reads (fv-serve itself sends none, so
+nothing changes on a pod):
+
+| tag | effect |
+|---|---|
+| `<meta name="fv-console-base" content="/serverless/<id>">` | the API base is `origin + prefix` (the Server URL field is fixed, `fv.base` is ignored); console links (`page()`, `modelHref`, the top bar) go under the prefix; the model page reads its endpoint after the prefix; the request history is kept per prefix (`fv.history:<prefix>`) |
+| `<meta name="fv-console-off" content="stream,live,avatar,director,admin">` | those pages lose their links (`pageOn()`: top bar, the home page's Live column, the director task) |
+| `<meta name="fv-console-note" content="…">` | a banner under the top bar |
+
+The embedding server also rewrites the pages' static `href="/console…"` /
+`src="/console…"` attributes under the prefix (the CSP's `base-uri 'none'`
+rules out a `<base>` tag). fv-control bundles a copy of these files: after
+changing one, run `node gen-configs.mjs` in `control/` (its unit tests fail
+while the copy is stale).
+
 ## 6. Deployments page (removed)
 
 The Deployments page (`/console/deployments`) was a gateway page and went
