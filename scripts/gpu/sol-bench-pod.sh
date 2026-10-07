@@ -334,6 +334,18 @@ case "$SET" in
     wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
     lingbot fullopt 2400
     ;;
+  g1) # PISA first-order term with the softmax scale (e1's clips were noise:
+    # the term was sqrt(128) too large). Parity, LTX-2.3 fullopt, the same with
+    # the zeroth-order remainder only (A/B of the term), then Wan2.2-5B opt.
+    cell pisa-parity wan22-ti2v-5b 240 "$BIN" --mode fast kernels --groups pisa
+    ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    ltx23 ltx23-hq-fullopt-zeroth 600 --pisa-stage2 FASTVIDEO_PISA_FIRST_ORDER=0 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
+    ;;
+  g2) # A14B fullopt and LingBot fullopt with the scaled first-order term
+    a14b a14b-sol-fullopt 1300 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    lingbot fullopt 1800
+    ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac
 log "set $SET done"

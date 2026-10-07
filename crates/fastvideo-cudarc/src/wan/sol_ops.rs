@@ -237,8 +237,10 @@ fn global_h_bar(k: &[f32], v: &[f32], tokens: usize, dim: usize) -> Vec<f32> {
     fastvideo_models::pisa_attn::global_h_bar(k, v, tokens, dim)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_first_order(
     q: &[f32],
+    scale: f32,
     h_bar: &[f32],
     coarse: &Partials,
     merged: &mut Partials,
@@ -272,7 +274,7 @@ fn apply_first_order(
             for e in 0..dim {
                 qh += qi[e] * h_bar[e * dim + d];
             }
-            acc[d] += tail * qh;
+            acc[d] += tail * scale * qh;
         }
     }
 }
@@ -328,7 +330,7 @@ pub fn pisa_attn_bhsd_device_alg(
         let fine = fine_partials(qh, kh, vh, &lists, tokens, dim, scale, false);
         let (mut merged, _) = lse_merge(&coarse, &fine, dim, false);
         let h_bar = global_h_bar(kh, vh, tokens, dim);
-        apply_first_order(qh, &h_bar, &coarse, &mut merged, tokens, dim, false);
+        apply_first_order(qh, scale, &h_bar, &coarse, &mut merged, tokens, dim, false);
         for t in 0..tokens {
             if merged.l[t] > 0.0 {
                 let inv = 1.0 / merged.l[t];

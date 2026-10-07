@@ -2086,6 +2086,8 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             ("t2048_sp0.5", 2, 2048, 0.5),
             ("t4100_sp0.9", 2, 4100, 0.9),
             ("t4033_sp0.75", 1, 4033, 0.75),
+            // 313 blocks: five 64-block route groups (bitmap words 0-9).
+            ("t20000_sp0.9", 1, 20_000, 0.9),
         ] {
             let q = structured(c, bh, tokens);
             let k = structured(c, bh, tokens);

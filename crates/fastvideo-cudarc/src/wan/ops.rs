@@ -4011,6 +4011,7 @@ pub fn pisa_fused_device(
     let mut out16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
     let (is16, t_i, nt_i) = (0i32, tokens as i32, n as i32);
     let sl2 = scale * LOG2_E;
+    let fo = pisa_first_order_weight(scale);
     let cfg = LaunchConfig {
         grid_dim: (n as u32, bh as u32, 1),
         block_dim: (128, 1, 1),
@@ -4019,9 +4020,21 @@ pub fn pisa_fused_device(
     };
     launch!(dev.stream, &dev.kernels.pisa_mma_fwd, cfg;
         &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &sel, &hbar,
-        &mut out, &mut out16, &is16, &t_i, &nt_i, &sl2)
+        &mut out, &mut out16, &is16, &t_i, &nt_i, &sl2, &fo)
     .map_err(err)?;
     Ok(out)
+}
+
+/// Weight of PISA's first-order term: the softmax scale (the Taylor step of
+/// the logit `scale * q.k`), or 0 with `FASTVIDEO_PISA_FIRST_ORDER=0`
+/// (zeroth-order remainder only, `pisa_attn_head_zeroth`).
+#[cfg(feature = "cuda")]
+fn pisa_first_order_weight(scale: f32) -> f32 {
+    if crate::wan::envflag::string_flag("FASTVIDEO_PISA_FIRST_ORDER", "1") == "0" {
+        0.0
+    } else {
+        scale
+    }
 }
 
 /// The multi-launch PISA route (scalar fine / coarse partials, one CTA per
@@ -4108,6 +4121,7 @@ pub fn pisa_attn_device_legacy(
         bh,
         tokens,
         dim,
+        pisa_first_order_weight(scale),
     )?;
     sol_normalize_partials_device(&l, &acc, bh * tokens, dim)
 }
@@ -4469,6 +4483,7 @@ fn sol_pisa_first_order_device(
     bh: usize,
     tokens: usize,
     dim: usize,
+    fo: f32,
 ) -> Result<()> {
     let dev = ctx()?;
     let cfg = LaunchConfig {
@@ -4478,7 +4493,7 @@ fn sol_pisa_first_order_device(
     };
     let (seq_i, dim_i) = (tokens as i64, dim as i32);
     launch!(dev.stream, &dev.kernels.sol_pisa_first_order, cfg;
-        q, h, coarse_m, coarse_l, merged_m, acc, &seq_i, &dim_i)
+        q, h, coarse_m, coarse_l, merged_m, acc, &seq_i, &dim_i, &fo)
     .map_err(err)?;
     Ok(())
 }

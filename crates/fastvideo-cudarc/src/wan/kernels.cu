@@ -2577,7 +2577,7 @@ extern "C" __global__ void sol_global_h_bar(
 
 extern "C" __global__ void sol_pisa_first_order(
     const float* q, const float* h_bar, const float* coarse_m, const float* coarse_l,
-    const float* merged_m, float* acc, long seq, int dim
+    const float* merged_m, float* acc, long seq, int dim, float fo
 ) {
     int t = blockIdx.x;
     long bh = blockIdx.y;
@@ -2592,7 +2592,8 @@ extern "C" __global__ void sol_pisa_first_order(
     const float* hb = h_bar + bh * (long)dim * dim;
     float qh = 0.0f;
     for (int e = 0; e < dim; e++) qh += qi[e] * hb[e * dim + d];
-    acc[(bh * seq + t) * (long)dim + d] += tail * qh;
+    // fo: the softmax scale (the logit's Taylor step), 0 = zeroth order only.
+    acc[(bh * seq + t) * (long)dim + d] += tail * fo * qh;
 }
 
 // Tensor-core fine partials: `vsa_mma_attn` body, sentinel-truncated list,
@@ -2992,7 +2993,8 @@ __device__ __forceinline__ void sol_mma_fwd_body(
 ,
     unsigned char* smem,
     const unsigned int* __restrict__ pisa_sel = nullptr,
-    const unsigned short* __restrict__ pisa_h = nullptr
+    const unsigned short* __restrict__ pisa_h = nullptr,
+    float pisa_fo = 0.f
 ) {
     float* colsum = reinterpret_cast<float*>(smem + 2 * MMA_TILEB);   // [4][64]
     float* colmask = colsum + 4 * 64;                                // [64]
@@ -3269,15 +3271,18 @@ __device__ __forceinline__ void sol_mma_fwd_body(
     l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
     l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
     l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
-    if constexpr (PISA) {
-        // First-order term: o += diag(tail) Q H_bar. H_bar's 128 rows fill
-        // sK (rows 0-63) and sV (rows 64-127); Q's A fragments, scaled per
+    if constexpr (PISA) if (pisa_fo != 0.f) {
+        // First-order term: o += diag(tail * s) Q H_bar, s = `pisa_fo`, the
+        // softmax scale (the Taylor step of the logit s q.k; 0 = off).
+        // H_bar's 128 rows fill sK (rows 0-63) and sV (rows 64-127); Q's A fragments, scaled per
         // row by tail (a0/a2 row g, a1/a3 row g + 8), are the P operand of
         // two P @ V mmas over the two 64-row halves of the contraction.
         tl0 += __shfl_xor_sync(0xffffffffu, tl0, 1);
         tl0 += __shfl_xor_sync(0xffffffffu, tl0, 2);
         tl1 += __shfl_xor_sync(0xffffffffu, tl1, 1);
         tl1 += __shfl_xor_sync(0xffffffffu, tl1, 2);
+        tl0 *= pisa_fo;
+        tl1 *= pisa_fo;
         mma_cp_wait<0>();
         __syncthreads();
         const unsigned short* Hh = pisa_h + bh * (long)MMA_DIM * MMA_DIM;
@@ -3386,15 +3391,15 @@ extern "C" __global__ void __launch_bounds__(128, 2) pisa_mma_fwd(
     const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
     const unsigned int* __restrict__ sel, const unsigned short* __restrict__ hbar,
     float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
-    int T, int NT, float sl2
+    int T, int NT, float sl2, float fo
 ) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[SOL_FWD_SMEM];
     sol_mma_fwd_body<2, true>(qb, kb, vb, kc, vc, nullptr, out, out_bf16, out_is_bf16,
-        nullptr, 0, nullptr, 0, T, NT, NT, NT, sl2, smem, sel, hbar);
+        nullptr, 0, nullptr, 0, T, NT, NT, NT, sl2, smem, sel, hbar, fo);
 #else
     (void)qb; (void)kb; (void)vb; (void)kc; (void)vc; (void)sel; (void)hbar; (void)out;
-    (void)out_bf16; (void)out_is_bf16; (void)T; (void)NT; (void)sl2;
+    (void)out_bf16; (void)out_is_bf16; (void)T; (void)NT; (void)sl2; (void)fo;
     __trap();
 #endif
 }

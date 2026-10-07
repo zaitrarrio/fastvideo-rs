@@ -121,16 +121,16 @@ def load(run_dirs):
                                peak_mib=t.get("peak_mib"), gpu="RTX PRO 6000", warm=False,
                                detail={k: r0.get(k) for k in ("base_denoise_s", "refiner_denoise_s", "refiner_prepare_s",
                                                               "base_steps_reused", "refiner_steps_computed", "refiner_sparse_steps")})
-                # Baseline measured on fewer refiner steps (every dense CFG
-                # step costs the same): scale the refiner denoise to the
-                # official 8 (docs/perf/sol-bench.md, phase B3).
-                rsteps = r0.get("refiner_steps") or 0
-                if c.name.endswith("-rs3") and rsteps and r0.get("refiner_denoise_s"):
-                    rd = r0["refiner_denoise_s"]
-                    row["measured_total_s"] = row["total_s"]
-                    row["total_s"] = row["total_s"] - rd + rd * 8 / rsteps
-                    row["denoise_s"] = row["denoise_s"] - rd + rd * 8 / rsteps
-                    row["extrapolated"] = f"refiner denoise x8/{rsteps}"
+                    # Baseline measured on fewer refiner steps (every dense CFG
+                    # step costs the same): scale the refiner denoise to the
+                    # official 8 (docs/perf/sol-bench.md, phase B3).
+                    rsteps = r0.get("refiner_steps") or 0
+                    if c.name.endswith("-rs3") and rsteps and r0.get("refiner_denoise_s"):
+                        rd = r0["refiner_denoise_s"]
+                        row["measured_total_s"] = row["total_s"]
+                        row["total_s"] = row["total_s"] - rd + rd * 8 / rsteps
+                        row["denoise_s"] = row["denoise_s"] - rd + rd * 8 / rsteps
+                        row["extrapolated"] = f"refiner denoise x8/{rsteps}"
                 else:  # Cosmos3
                     row.update(total_s=t.get("request_s"), text_s=t.get("text_tower_s"), denoise_s=t.get("denoise_s"),
                                decode_s=t.get("decode_s"), load_s=t.get("load_s"), peak_mib=t.get("peak_mib"),
