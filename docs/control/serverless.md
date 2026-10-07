@@ -1,7 +1,7 @@
 # fv-control: Runpod serverless endpoints
 
 Status: 2026-10-06, branch `feat/fvc-serverless`. Code: `control/src/serverless/`
-(`spec.ts`, `payloads.ts`, `runpod-sls.ts`, `ops.ts`, `routes.ts`; since
+(`spec.ts`, `payloads.ts`, `runpod-sls.ts`, `ops.ts`, `routes.ts`, `cancel.ts`, `console.ts`; since
 2026-10-07, branch `claude/serverless-presets`, model-first: `presets.ts`,
 `serves.ts`, `examples.ts`, with `control/src/presets.ts`, `gpus.ts`,
 `volumes.ts`, §1a), migration
@@ -230,6 +230,8 @@ Runpod quirks found live, and handled:
 | `GET /api/serverless/<id>/queue` | queued and running now (`/health`) |
 | `POST /api/serverless/<id>/purge {confirm, expected?}` | drop every queued job; `confirm` is the endpoint's name, `expected` the count you saw (409 when the queue grew past it) |
 | `GET /api/serverless/<id>/logs?worker=` | a worker's log tail (also stored) |
+| `DELETE /api/serverless/<id>/console-cache` | forget the console's cached capabilities and schemas (§5b) |
+| `/serverless/<endpoint id>/console…` and the API under it | fv-serve's console for the endpoint (§5b) |
 | `POST /api/serverless/tick` | the tick now, billing included |
 
 ```bash
@@ -258,7 +260,9 @@ their logs, the spec editor, recent invokes, cost per day and audit. Its
 **Queue** card cancels a job (a pasted Runpod job id, or Cancel on an
 unfinished invoke) and purges the queue: the dialog shows the queued and
 running counts and takes the endpoint's name; the outcome follows the job's
-status (and the fv-serve cancel's queue job) until both finish.
+status (and the fv-serve cancel's queue job) until both finish. **Open
+console** opens fv-serve's console for the endpoint in a new tab, and
+**Refresh console cache** forgets its cached capabilities and schemas (§5b).
 
 ## 5a. Cancel and purge
 
@@ -308,6 +312,77 @@ to 0): `POST /v2/lp85qdnkl6dqtz/purge-queue` answered
 `{"removed":0,"status":"completed"}`, `/health` after it
 `inQueue: 0, inProgress: 0`. The 4 stuck jobs were already gone: fv-control's
 last health of the endpoint (03:00 UTC, row marked deleted) said `inQueue: 0`.
+
+## 5b. Console
+
+The endpoint page's **Open console** opens fv-serve's own browser console
+(docs/serve/console.md: the model pages with their Playground and API tabs,
+the Native API page, the status strip) for that endpoint at
+`/serverless/<endpoint id>/console`, served by fv-control. A queue endpoint
+has no HTTP server the browser can reach, so fv-control answers every call
+the pages make under the same prefix and turns the work into Runpod jobs.
+Code: `control/src/serverless/console.ts`; tests: `test/unit/console.test.ts`,
+the integration step "serverless console", `test/ui/console.mjs`.
+
+**The pages** are the files `crates/fastvideo-serve/console/` holds,
+bundled unchanged (`node gen-configs.mjs` writes
+`src/serverless/console-assets.ts`; a unit test fails when it is stale).
+fv-control only adds three `<meta>` tags to each page's head and moves its
+`/console` links under the prefix; the console's `common.js` reads them
+(docs/serve/console.md "Embedded console"): `fv-console-base` (the prefix:
+the API base and every page link, the server URL fixed, its own request
+history), `fv-console-off` (the pages not served, so their links go) and
+`fv-console-note` (a banner saying where the requests run). The pages keep
+fv-serve's CSP.
+
+**Auth.** Behind fv-control's login like `/api` (Access, the session cookie,
+an `fvc_` token; a read token only reads). The console sends no CSRF
+token, so a cookie session's POST / PUT / DELETE needs an `Origin` header
+naming fv-control (the pages' own fetches send it; the cookie is
+`SameSite=Strict` as well). The Runpod key never leaves fv-control. The
+cached capabilities say `auth.mode: "none"`, so the console asks for no API
+key. A page opened without a session goes to the dashboard's login.
+
+| the console calls | fv-control |
+|---|---|
+| pages, `/console/assets/*` | the bundled files |
+| `GET /fv/v1/capabilities`, `GET /fal/schema`, `GET /fal/schema/<endpoint>` | a cached reply (D1 `settings`, key `slsc:<row>:<image>:<path>`, 30 min). A miss runs one queue job `{"kind":"http","method":"GET","path":…}` and waits up to 25 s for it; past that the page gets 503 "a worker is starting (cold start)" and the job stays pending, so a reload a minute later finds it (never a second job). Opening the home page starts the capabilities and catalog jobs at once. A stale entry is served as is and refreshed in the background only while a worker is up: opening the console never wakes a worker once the cache is filled. **Refresh console cache** on the endpoint page drops it. A new image (another digest) starts a new cache. |
+| `GET /fv/v1/status` | synthesised (`crates/fastvideo-serve/src/status.rs` shape): one pool named after the endpoint, `kind: runpod-serverless`, its state from Runpod's `/health` worker counts (idle / ready → `ready`, running → `busy`, initializing → `loading`, none → `scaled_to_zero`; a scaled-down or deleted endpoint is `down`), queued and running jobs, the models and names from the cached capabilities. The model page then warns before a cold start as it does for any scaled-to-zero pool. No job. |
+| a submit: `POST /fv/v1/jobs`, `/v1/videos`, `/v2/video_generation`, a fal `POST /<app>/<endpoint>` | one `/run` job `{"kind":"http","method":"POST","path","headers":{"content-type"},"body" (JSON) or "body_b64","wait":true,"timeout_s":<execution_timeout_s>}` plus the API's `cancel_path` (native, OpenAI, MiniMax). The reply comes at once, in the API's shape, with the **Runpod job id as the job's id** (`id`, `request_id`, `task_id`); every later call of the page names that id. With a worker up fv-control waits up to 3 s first, so a request fv-serve refuses (422 …) comes back as fv-serve's own answer. Recorded as an invoke (route `console:<api>`, the input with long strings elided), audited `serverless.console`, refused below the balance floor + margin and on an endpoint that is not `active`. |
+| status and results: `GET /fv/v1/jobs/<id>`, `/v1/videos/<id>`, `/v2/query/video_generation?task_id=`, `/<app>/requests/<id>[/status]` | Runpod's `/status` of the queue job (no job is started) and the shared job store: `JOBS_DB`, fv-serve's D1 `jobs` row of the fv-serve job (its id is in the waiting job's progress, `{state, poll_path}`), for the state, progress, queue position and logs while it runs. The finished reply is the worker's own: the waiting job's output is the last status body fv-serve gave (fal: the result body), shown with the id swapped. Without a store row (no `JOBS_DB`, or the worker keeps jobs in memory) the in-flight view comes from Runpod's state alone (queued / running, no progress or logs). A failed or timed-out queue job, or one Runpod no longer has (about 30 min after it ended), shows as failed with Runpod's message. |
+| `GET /v1/videos/<id>/content` | the finished video's URL fetched by fv-control (a presigned R2 URL sends no CORS headers to the page's `fetch`) |
+| cancel: `DELETE /fv/v1/jobs/<id>`, `/v1/videos/<id>`, `/v2/video_generation/<id>`, `PUT /<app>/requests/<id>/cancel` | §5a's cancel of the queue job. A running native / OpenAI / MiniMax job stops through its `cancel_path`; a fal job's cancel route is a `PUT` under its app (a `cancel_path` is a `DELETE`), so fv-control sends it as one more queue job after Runpod stopped the waiting one (the same one-worker limit as §5a). |
+| `POST /storage/upload/initiate`, then `PUT` | uploads go to R2 (the `LOGS` bucket, `console-uploads/<row>/…`, at most 64 MB; swept after a day), through an fv-control upload URL (15 min). The `file_url` the job gets is `<PUBLIC_URL>/serverless-uploads/<signed token>/<name>`: public, the HMAC-signed token (24 h) is the capability, so the worker can fetch it. Nothing lands on one worker's disk. Request bodies themselves are at most 8 MB (a Runpod job input is at most 10 MB): send files as URLs. |
+| other API GETs (`/v1/…`, `/v2/…`, `/fv/v1/…`, e.g. MiniMax's `/v1/files/retrieve`) | not faithful from the store: one queue job, waited up to 25 s, its reply as is |
+| live pages and routes (`/console/stream`, `live`, `avatar`, a model's `director`, `admin`; `/fv/v1/streams`, `/wma/*`, Reactor's `/schema`, `/fv/v1/admin/*`) | off in v1, with a note: WebRTC / WHIP sessions need a server the browser reaches, and API keys are fv-control's. |
+
+**Why submits wait.** A queue worker runs one job at a time
+(`crates/fastvideo-deploy/src/runpod/worker.rs`, concurrency 1), and Runpod
+stops a worker that has no job after `idle_timeout_s`. A fire-and-forget
+submit (no `wait`) would leave the fv-serve job running on a worker Runpod
+counts as idle, so it could be stopped under the job. Waiting keeps the
+queue job (and the worker) busy until the fv-serve job ends, gives the final
+reply as the job's output, and lets a Runpod cancel reach the fv-serve job.
+The cost: while one generation runs, other queue jobs of the console (a
+schema not cached yet, a fal cancel) wait for it, or for a second worker
+when `workers_max` allows one. The fv-serve id is not needed promptly: the
+page uses the Runpod job id.
+
+**Media.** The finished replies carry the worker's own URLs. With the
+endpoint's R2 secrets set (`FV_R2_*`, `SECRET_ENV_REFS`; the default), they
+are presigned R2 URLs the browser plays. Without them (local artifacts)
+the URLs point at the worker itself and do not play.
+
+Not in v1: the result headers fv-serve sets beside a fal result
+(`x-fv-tier`, `x-fv-quality`, …) are not in a queue job's output, so the
+model page shows no tier or draft pill; MiniMax's file download is the
+fallback GET above.
+
+**Load-balancer endpoints.** The same pages, the cached capabilities and
+schemas (fetched from the load balancer), the synthesised status (from
+fv-control's worker count: polling the worker would keep it awake) and the
+R2 uploads; every other call goes on to `https://<id>.api.runpod.ai` with
+the Runpod key, its own URLs in JSON replies pointing back to the prefix.
 
 ## 6. The edge
 

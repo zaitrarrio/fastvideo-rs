@@ -89,7 +89,13 @@
       ),
       e.last_error ? h("p", { class: "small", style: "color:var(--critical-text)" }, e.last_error) : null,
       h("p", { class: "small muted" }, "Image ", e.image || "–", e.urls ? h("span", {}, " · ", Object.entries(e.urls).map(([k, u]) => h("span", {}, `${k} `, h("code", {}, u), " "))) : null),
-      h("div", { class: "row", style: "margin-top:6px" }, h("a", { class: "btn", href: "#/serverless" }, "← all endpoints"), h("a", { class: "btn", href: `#/logs?q=&pod=${(d.runpod?.workers || [])[0]?.id || ""}` }, "Log explorer")),
+      h("div", { class: "row", style: "margin-top:6px" },
+        h("a", { class: "btn", href: "#/serverless" }, "← all endpoints"),
+        h("a", { class: "btn", href: `#/logs?q=&pod=${(d.runpod?.workers || [])[0]?.id || ""}` }, "Log explorer"),
+        // fv-serve's console for this endpoint, served by fv-control (docs/control/serverless.md "Console").
+        live && e.endpoint_id ? h("a", { class: "btn primary", id: "open-console", href: `/serverless/${encodeURIComponent(e.endpoint_id)}/console`, target: "_blank", rel: "noopener", title: "Models, Playground and API tabs, Native API: each request runs as a queue job" }, "Open console") : null,
+        live && e.endpoint_id ? h("button", { title: "Forget the console's cached capabilities and schemas: the next page load asks a worker again", onclick: async () => { await act("console cache", () => api(`/api/serverless/${e.id}/console-cache`, { method: "DELETE" })); } }, "Refresh console cache") : null,
+      ),
     );
     if (!live) {
       main.replaceChildren(head, jobsCard(d, null), costCard(d), auditCard(d));

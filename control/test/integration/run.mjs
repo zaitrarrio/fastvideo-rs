@@ -4,7 +4,7 @@
 //   node test/integration/run.mjs            (npm run test:integration)
 //   FVC_UI=1 …                               also keep it up for test/ui/smoke.mjs
 import assert from "node:assert/strict";
-import { d1Exec, hashPassphrase, jobInsert, JOBS_TABLE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
+import { d1Exec, fakeServe, hashPassphrase, jobInsert, JOBS_TABLE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
 
 const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
@@ -18,6 +18,10 @@ const w = await startWorker(mock, {
   EDGE_INTERNAL_TOKEN: mock.edgeInternal,
   EDGE_ADMIN_TOKEN: mock.edgeAdmin,
   EDGE_D1_DATABASE_ID: "d1-edge-staging",
+  // The serverless console: no wait for a warm worker's own submit reply; quick polls.
+  CONSOLE_SUBMIT_WAIT_MS: "0",
+  CONSOLE_POLL_MS: "100",
+  CONSOLE_CACHE_WAIT_MS: "5000",
 });
 const B = w.url;
 const bodies = []; // every response body, checked for secrets at the end
@@ -347,6 +351,125 @@ await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the 
   assert.match(await cli("endpoint", "presets"), /^h3-ref2v\th3-max \+ inline config\t>= 80 GB\tweights: h3-base,h3-ref2va\n  serves: h3-ref2v-turbo \[ref2v\]/m);
   assert.match(await cli("endpoint", "serves", "r2v-lb"), /"MiniMax-H3-Turbo"/);
   for (const e of [q.j.endpoint, lb.j.endpoint]) assert.equal((await call(`/api/serverless/${e.id}`, { method: "DELETE", headers: T() })).status, 200);
+});
+
+await step("serverless console: pages behind the login, cached capabilities, synthesised status, fal and native jobs as queue jobs, store-backed polls, cancel, uploads", async () => {
+  const now = Date.now();
+  const EID = "rpcons0000001";
+  const spec = JSON.stringify({ name: "cons", mode: "queue", variant: "cpu", compute: "CPU", workers_min: 0, workers_max: 1, execution_timeout_s: 600 });
+  d1Exec(w.dir, `INSERT INTO serverless_endpoints (id, name, endpoint_id, template_id, mode, spec, image, status, created_at, created_by, updated_at) VALUES ('se_cons', 'cons', '${EID}', 'tpl', 'queue', '${spec}', 'ghcr.io/x/serve@sha256:0123456789abcdef', 'active', ${now}, 'owner', ${now})`);
+  d1Exec(w.dir, JOBS_TABLE, "fv-jobs");
+  await settle();
+  const q = mock.queue;
+  q.onRun = fakeServe(mock, { steps: 1 });
+  q.workers = 1;
+  const ran0 = q.ran.length;
+  const S = `/serverless/${EID}`;
+  const own = { cookie, origin: B };
+  // Login first: a page goes to the dashboard's login, an API call is refused.
+  const anon = await fetch(`${B}${S}/console`, { redirect: "manual" });
+  assert.equal(anon.status, 302);
+  assert.match(anon.headers.get("location"), /#\/serverless$/);
+  assert.equal((await call(`${S}/fv/v1/status`)).status, 401);
+  assert.equal((await call("/serverless/nope-endpoint/console", { headers: own })).status, 404);
+  // The page: fv-serve's console under the prefix (its CSP, the embedding tags), the assets unchanged.
+  const page = await call(`${S}/console`, { headers: own, raw: true });
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-security-policy"), /script-src 'self'/);
+  assert.ok(page.text.includes(`<meta name="fv-console-base" content="${S}">`));
+  assert.ok(page.text.includes(`src="${S}/console/assets/home.js"`));
+  const js = await call(`${S}/console/assets/common.js`, { headers: own, raw: true });
+  assert.equal(js.headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.equal((await call(`${S}/console/stream`, { headers: own, raw: true })).status, 404);
+  // Capabilities: the page load started the cache jobs; the call finds them (no extra job), then the cache.
+  const caps = await call(`${S}/fv/v1/capabilities`, { headers: own });
+  assert.equal(caps.status, 200, JSON.stringify(caps.j));
+  assert.equal(caps.j.auth.mode, "none");
+  assert.equal(caps.j.models[0].caps.id, "fake-wan");
+  const cat = await call(`${S}/fal/schema`, { headers: own });
+  assert.equal(cat.j.apps[0].id, "fastvideo/fake-wan");
+  const capsJobs = () => q.ran.slice(ran0).filter((r) => r.input.method === "GET" && r.input.path === "/fv/v1/capabilities").length;
+  assert.equal(capsJobs(), 1);
+  assert.match((await call(`${S}/fv/v1/capabilities`, { headers: own })).headers.get("x-fv-console-cache"), /^cache; age=/);
+  assert.equal(capsJobs(), 1);
+  // Status: one pool from Runpod's health, the model names from the cached capabilities.
+  const st = await call(`${S}/fv/v1/status`, { headers: own });
+  assert.equal(st.j.object, "fv.status");
+  assert.equal(st.j.pools[0].kind, "runpod-serverless");
+  assert.equal(st.j.state, "ready");
+  assert.equal(st.j.names["fake-wan-alias"], "fake-wan");
+  q.workers = 0;
+  assert.equal((await call(`${S}/fv/v1/status`, { headers: own })).j.state, "scaled_to_zero");
+  // fal: a submit needs this origin (the console sends no CSRF token).
+  const falBody = { prompt: "a red fox", seed: 7 };
+  assert.equal((await call(`${S}/fastvideo/fake-wan/text-to-video`, { method: "POST", body: falBody, headers: { cookie } })).status, 403);
+  assert.equal((await call(`${S}/fastvideo/fake-wan/text-to-video`, { method: "POST", body: falBody, headers: { cookie, origin: "https://evil.example" } })).status, 403);
+  const sub = await call(`${S}/fastvideo/fake-wan/text-to-video`, { method: "POST", body: falBody, headers: own });
+  assert.equal(sub.status, 200, JSON.stringify(sub.j));
+  const rid = sub.j.request_id;
+  assert.match(rid, /^mock-run-/);
+  assert.equal(sub.j.status_url, `${B}${S}/fastvideo/fake-wan/requests/${rid}/status`);
+  const env = q.ran.at(-1);
+  assert.deepEqual(env.input, { kind: "http", method: "POST", path: "/fastvideo/fake-wan/text-to-video", headers: { "content-type": "application/json" }, body: falBody, wait: true, timeout_s: 600 });
+  assert.equal(env.policy.executionTimeout, 600_000);
+  // In flight: the worker took it (its progress names the fal request); the shared job store has its logs.
+  const s1 = await call(`${S}/fastvideo/fake-wan/requests/${rid}/status?logs=1`, { headers: own });
+  assert.equal(s1.j.status, "IN_QUEUE");
+  d1Exec(w.dir, jobInsert({ id: "00000000-cccc-4bbb-8ccc-000000000001", ext: "f-sim-1", api: "fal", status: "running", at: now, progress: 0.5 }), "fv-jobs");
+  await settle();
+  const s2 = await call(`${S}/fastvideo/fake-wan/requests/${rid}/status?logs=1`, { headers: own });
+  assert.equal(s2.j.status, "IN_PROGRESS", JSON.stringify(s2.j));
+  const s3 = await call(`${S}/fastvideo/fake-wan/requests/${rid}/status?logs=1`, { headers: own });
+  assert.equal(s3.j.status, "COMPLETED");
+  const result = await call(`${S}/fastvideo/fake-wan/requests/${rid}`, { headers: own });
+  assert.equal(result.status, 200);
+  assert.equal(result.j.video.url, `http://127.0.0.1:${mock.port}/media/f-sim-1.mp4`);
+  assert.equal(result.j.seed, 42);
+  // The endpoint page lists it as a console job.
+  const jobs = (await call("/api/serverless/cons/jobs", { headers: T() })).j.jobs;
+  assert.ok(jobs.some((j) => j.job_id === rid && j.route === "console:fal" && j.status === "COMPLETED"));
+  // Native: submit, poll to the worker's own final view; a refused one; cancel.
+  const nat = await call(`${S}/fv/v1/jobs`, { method: "POST", body: { model: "fake-wan", task: "t2v", prompt: "a cat" }, headers: own });
+  assert.equal(nat.status, 202);
+  assert.equal(nat.j.status, "queued");
+  let view = null;
+  for (let i = 0; i < 6 && view?.status !== "succeeded"; i++) view = (await call(`${S}/fv/v1/jobs/${nat.j.id}`, { headers: own })).j;
+  assert.equal(view.status, "succeeded");
+  assert.equal(view.id, nat.j.id);
+  assert.match(view.output.url, /\/media\/fvjob_sim/);
+  const refused = await call(`${S}/fv/v1/jobs`, { method: "POST", body: { model: "fake-wan" }, headers: own });
+  const rv = (await call(`${S}/fv/v1/jobs/${refused.j.id}`, { headers: own })).j;
+  assert.equal(rv.status, "failed");
+  assert.equal(rv.error.message, "prompt is required");
+  q.onRun = fakeServe(mock, { steps: 50 });
+  const long = await call(`${S}/fv/v1/jobs`, { method: "POST", body: { model: "fake-wan", prompt: "long" }, headers: own });
+  assert.equal((await call(`${S}/fv/v1/jobs/${long.j.id}`, { headers: own })).j.status, "queued");
+  const del = await call(`${S}/fv/v1/jobs/${long.j.id}`, { method: "DELETE", headers: own });
+  assert.equal(del.status, 200, JSON.stringify(del.j));
+  assert.equal(del.j.status, "cancelled");
+  assert.equal((await call(`${S}/fv/v1/jobs/${long.j.id}`, { headers: own })).j.status, "cancelled");
+  // Uploads: an fv-control PUT URL; the worker reads it back through a signed public URL.
+  const init = await call(`${S}/storage/upload/initiate?storage_type=fal-cdn-v3`, { method: "POST", body: { content_type: "image/png", file_name: "cat.png" }, headers: own });
+  assert.equal(init.status, 200, JSON.stringify(init.j));
+  const put = await fetch(init.j.upload_url, { method: "PUT", headers: { "content-type": "image/png", cookie, origin: B }, body: "PNGBYTES" });
+  assert.equal(put.status, 200);
+  const got = await fetch(init.j.file_url);
+  assert.equal(got.status, 200);
+  assert.equal(got.headers.get("content-type"), "image/png");
+  assert.equal(await got.text(), "PNGBYTES");
+  assert.equal((await fetch(init.j.file_url.replace(/\/serverless-uploads\/[^.]+/, "/serverless-uploads/eyJ4IjoxfQ"))).status, 403);
+  // A read-only token sees the status but cannot submit; live and admin routes are off.
+  const ro = (await call("/api/tokens", { method: "POST", body: { name: "console-viewer", scope: "read" }, headers: { cookie, "x-csrf-token": csrf } })).j.token;
+  assert.equal((await call(`${S}/fv/v1/status`, { headers: { authorization: `Bearer ${ro}` } })).status, 200);
+  assert.equal((await call(`${S}/fv/v1/jobs`, { method: "POST", body: { prompt: "x" }, headers: { authorization: `Bearer ${ro}` } })).status, 403);
+  assert.equal((await call(`${S}/fv/v1/admin/keys`, { headers: own })).status, 404);
+  // The endpoint page's "Refresh console cache".
+  const cc = await call("/api/serverless/cons/console-cache", { method: "DELETE", headers: T() });
+  assert.equal(cc.status, 200);
+  assert.ok(cc.j.dropped >= 2);
+  q.onRun = undefined;
+  const a = (await call("/api/audit?limit=80", { headers: T() })).j.audit;
+  assert.ok(a.some((x) => x.action === "serverless.console" && x.target === "cons"));
 });
 
 await step("CLI: fv-control.sh jobs, job-cancel, jobs-cancel-queued, endpoint cancel and purge", async () => {

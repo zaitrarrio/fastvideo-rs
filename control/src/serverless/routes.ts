@@ -30,6 +30,7 @@ import {
 } from "./ops";
 import { sls } from "./runpod-sls";
 import { cancelSlsJob, purgeSlsQueue } from "./cancel";
+import { clearConsoleCache } from "./console";
 import { parseOr400 } from "../schemas";
 import { checkName } from "../names";
 import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, placementIssues } from "./spec";
@@ -223,6 +224,13 @@ serverlessRoutes.post("/:id/purge", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
   const x = parseOr400("serverless-purge", await body(c));
   return c.json(await purgeSlsQueue(c.env, who(c), row, x));
+});
+/** The serverless console's cached capabilities and schemas (src/serverless/console.ts): dropped, so the next page load asks a worker again. */
+serverlessRoutes.delete("/:id/console-cache", async (c) => {
+  const row = await getRow(c.env, c.req.param("id"));
+  const dropped = await clearConsoleCache(c.env, row);
+  await audit(c.env, { ...who(c), action: "serverless.console_cache", target: row.name, after: { dropped } });
+  return c.json({ dropped, console: `/serverless/${row.endpoint_id || row.id}/console` });
 });
 /** A worker's Runpod log tail; also stored in the log store (log_lines, cluster_id serverless:<id>, pod_id = worker). */
 serverlessRoutes.get("/:id/logs", async (c) => {

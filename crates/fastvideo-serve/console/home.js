@@ -1,11 +1,17 @@
 import {
   $, el, store, K, base, apiKey, request, setMsg, loadCatalog, appTasks, modelHref, topbar, refreshConnPill,
-  loadAuthMode, resetAuthMode, keyless, recipeText, streamKind, mountedProtocols,
+  loadAuthMode, resetAuthMode, keyless, recipeText, streamKind, mountedProtocols, BASE_PATH, page, pageOn,
 } from './common.js';
 
 topbar('home');
 
 $('base').value = store.get(K.base);
+// An embedded console (common.js BASE_PATH) talks to its own prefix only.
+if (BASE_PATH) {
+  $('base').value = base();
+  $('base').readOnly = true;
+  $('base').nextElementSibling.textContent = 'Fixed: this console is served for one backend.';
+}
 $('apikey').value = apiKey();
 
 async function check() {
@@ -51,7 +57,7 @@ async function check() {
 }
 
 $('connect').onclick = () => {
-  store.set(K.base, $('base').value.trim().replace(/\/+$/, ''));
+  if (!BASE_PATH) store.set(K.base, $('base').value.trim().replace(/\/+$/, ''));
   if (!keyless()) store.set(K.key, $('apikey').value.trim());
   resetAuthMode();
   refreshConnPill();
@@ -81,9 +87,9 @@ async function renderServed(caps) {
     const kind = streamKind(m);
     const l = m.stream_limits;
     const live = kind === 'causal'
-      ? el('span', {}, el('a', { href: '/console/stream?model=' + encodeURIComponent(c.id), 'data-live': c.id }, 'Live stream'),
+      ? el('span', {}, pageOn('stream') ? el('a', { href: page('/console/stream?model=' + encodeURIComponent(c.id)), 'data-live': c.id }, 'Live stream') : 'causal stream',
         l ? el('small', { class: 'hint' }, ' ' + l.default_max_s + ' s default, ' + l.hard_max_s + ' s max' + (l.reset_restarts_clock ? '; reset restarts the clock' : '')) : '')
-      : kind === 'duplex' ? el('a', { href: '/console/live' }, 'Live input') : kind === 'clip' ? 'clip stream' : '–';
+      : kind === 'duplex' ? (pageOn('live') ? el('a', { href: page('/console/live') }, 'Live input') : 'duplex stream') : kind === 'clip' ? 'clip stream' : '–';
     const lic = licences[c.id] || (c.served_names || []).map((n) => licences[n]).find(Boolean) || m.licence;
     return el('tr', { 'data-model': c.id },
       el('td', { class: 'mono' }, c.id, aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
@@ -91,7 +97,7 @@ async function renderServed(caps) {
       el('td', { 'data-recipe': '' }, el('div', { class: 'mono' }, c.recipe || ''), el('div', { class: 'hint' }, recipeText(m.recipe))),
       el('td', {}, (c.tasks || []).join(', ')),
       el('td', {}, live),
-      el('td', {}, el('a', { href: '/console/native?model=' + encodeURIComponent(c.id) }, 'Native API')));
+      el('td', {}, el('a', { href: page('/console/native?model=' + encodeURIComponent(c.id)) }, 'Native API')));
   });
   box.replaceChildren(...rows);
   $('served-table').hidden = !rows.length;

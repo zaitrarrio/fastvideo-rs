@@ -284,7 +284,8 @@ export function startMock() {
       if (qm[2] === "run" && req.method === "POST") {
         const id = `mock-run-${q.ran.length + 1}`;
         q.ran.push(body);
-        q.jobs.set(id, { id, status: "IN_QUEUE" });
+        // q.onRun(input): the states the job goes through, one per status poll (a simulated worker, fakeServe()); none: queued for good.
+        q.jobs.set(id, { id, status: "IN_QUEUE", plan: q.onRun ? q.onRun(body.input, id) : undefined });
         return json(res, 200, { id, status: "IN_QUEUE" });
       }
       const j = q.jobs.get(decodeURIComponent(qm[3] || qm[4] || ""));
@@ -292,8 +293,16 @@ export function startMock() {
       if (qm[4] && req.method === "POST") {
         if (j.status === "IN_QUEUE") q.queued = Math.max(0, q.queued - 1);
         j.status = "CANCELLED";
-      }
-      return json(res, 200, j);
+        j.plan = undefined;
+      } else if (j.plan?.length) Object.assign(j, j.plan.shift());
+      const { plan: _plan, ...view } = j;
+      return json(res, 200, view);
+    }
+    // ---- media a simulated worker's results point at (R2 presigned URLs stand-in)
+    if (p.startsWith("/media/")) {
+      m.media = (m.media || 0) + 1;
+      res.writeHead(200, { "content-type": "video/mp4" });
+      return res.end(Buffer.from("00000018667479706d703432", "hex"));
     }
     // ---- the edge Worker (control_plane = edge): its fronts are the pods
     // whose env makes them fronts with the edge's internal token.
@@ -434,4 +443,66 @@ export function jobInsert(j) {
   const q = (v) => (v === null || v === undefined ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
   const job = JSON.stringify({ id: j.id, started_at: j.started ?? null, cancel_requested: false, request_echo: { model: j.model, image_url: "https://pod/files/x?sig=SIGNED_URL_SECRET" } });
   return `INSERT INTO jobs (id, protocol, external_id, owner, status, model, resolved_model, task, progress, created_at, updated_at, expires_at, worker, job) VALUES (${[j.id, j.api || "native", j.ext, "key_000000000001", j.status, j.model || "fake-wan", "fake-wan", "t2v", j.progress ?? 0, j.at, j.at, j.at + 86400_000, j.worker ?? null, job].map(q).join(", ")})`;
+}
+
+/**
+ * A simulated fv-serve queue worker for the serverless console (src/serverless/console.ts): what each
+ * `kind: http` job's status polls show (mock.queue.onRun = fakeServe(mock)). GETs answer at once; a
+ * waiting submit is queued, then running (progress `{state, poll_path}`, as dispatch.rs reports it),
+ * then done with the worker's final reply (`steps` polls each). Results point at the mock's /media/.
+ */
+export function fakeServe(mock, { steps = 2 } = {}) {
+  const media = (id) => `http://127.0.0.1:${mock.port}/media/${id}.mp4`;
+  const caps = {
+    object: "fv.capabilities",
+    auth: { mode: "trust-gateway" },
+    protocols: { native: true, fal: true, openai_videos: true, minimax: false, reactor: false },
+    models: [{ caps: { id: "fake-wan", served_names: ["fake-wan"], tier: "turbo", tasks: ["t2v", "i2v"], knobs: { seed: true, steps: true }, frames: { min: 9, max: 81, step: 4, offset: 1 }, fps: { default: 16, allowed: [16] }, canvas: { short_edges: [480] } }, recipe: { steps: 4 } }],
+    tiers: [],
+    aliases: { "fake-wan-alias": "fake-wan" },
+  };
+  const catalog = { apps: [{ id: "fastvideo/fake-wan", model: "fake-wan", endpoints: [{ sub: "text-to-video", title: "Text to video" }, { sub: "image-to-video", title: "Image to video" }] }] };
+  const schema = (sub) => ({
+    type: "object",
+    title: sub,
+    required: sub === "image-to-video" ? ["prompt", "image_url"] : ["prompt"],
+    properties: { prompt: { type: "string", title: "Prompt" }, ...(sub === "image-to-video" ? { image_url: { type: "string", title: "Image", "x-fv-media": "image" } } : {}), seed: { type: "integer", title: "Seed" } },
+  });
+  const reply = (status, body) => ({ status: "COMPLETED", output: { status, headers: { "content-type": "application/json" }, body, elapsed_s: 0.01 } });
+  let n = 0;
+  return (input) => {
+    if (!input || input.kind !== "http") return [{ status: "COMPLETED", output: { engine: "fake" } }];
+    const p = String(input.path || "");
+    const method = String(input.method || "POST").toUpperCase();
+    mock.served = [...(mock.served || []), `${method} ${p}`];
+    if (method === "GET") {
+      if (p === "/fv/v1/capabilities") return [reply(200, caps)];
+      if (p === "/fal/schema") return [reply(200, catalog)];
+      const s = /^\/fal\/schema\/fastvideo\/fake-wan\/(.+)$/.exec(p);
+      if (s) return [reply(200, schema(s[1]))];
+      return [reply(404, { error: { kind: "not_found", message: `no route ${p}` } })];
+    }
+    if (method !== "POST") return [reply(202, { status: "CANCELLATION_REQUESTED" })];
+    const b = input.body || {};
+    const k = ++n;
+    const hold = (x) => Array.from({ length: steps }, () => x);
+    if (!b.prompt) return [reply(422, { error: { kind: "invalid_request", message: "prompt is required" } })];
+    if (p === "/fv/v1/jobs" || p === "/v1/videos") {
+      const id = p === "/fv/v1/jobs" ? `fvjob_sim${k}` : `video_sim${k}`;
+      const pp = `${p}/${id}`;
+      const final = p === "/fv/v1/jobs"
+        ? { id, object: "fv.job", status: "succeeded", model: b.model, task: b.task || "t2v", output: { url: media(id), mime: "video/mp4", width: 832, height: 480, frames: 33, fps: 16 }, metrics: { inference_s: 1.25 } }
+        : { id, object: "video", status: "completed", model: b.model, progress: 100, url: media(id) };
+      return [...hold({ status: "IN_PROGRESS", output: { state: "queued", poll_path: pp } }), ...hold({ status: "IN_PROGRESS", output: { state: "running", poll_path: pp } }), { status: "COMPLETED", output: { status: 200, headers: {}, body: final, submit: { id, status: "queued" }, poll_path: pp, elapsed_s: 2 } }];
+    }
+    // fal: POST /{app}/{sub}
+    const id = `f-sim-${k}`;
+    const app = p.split("/").slice(1, 3).join("/");
+    const sp = `/${app}/requests/${id}/status`;
+    return [
+      ...hold({ status: "IN_PROGRESS", output: { state: "in_queue", poll_path: sp } }),
+      ...hold({ status: "IN_PROGRESS", output: { state: "in_progress", poll_path: sp } }),
+      { status: "COMPLETED", output: { status: 200, headers: { "content-type": "application/json" }, body: { video: { url: media(id), content_type: "video/mp4", file_name: `${id}.mp4`, file_size: 12 }, seed: 42, timings: { inference: 1.25 } }, submit: { request_id: id }, poll_path: sp, elapsed_s: 2 } },
+    ];
+  };
 }
