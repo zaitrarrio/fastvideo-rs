@@ -8,7 +8,50 @@ import { runpod } from "../runpod";
 import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { workerPlacements } from "./payloads";
-import { normalizeSpec, POOL_PRESETS, type ClusterSpec } from "./spec";
+import { gpuTypes } from "../dynamic";
+import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
+
+/**
+ * Checks that need live data (the Runpod GPU catalog, 5-minute cache): a
+ * GPU type Runpod does not offer in Secure Cloud (fv-control creates SECURE
+ * pods), and a $/hr cap below every GPU type a pool may use (each pod would
+ * be deleted right after create). None when the catalog is unreachable.
+ */
+export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (string | number)[] = []): Promise<{ issues: Issue[]; warnings: Issue[] }> {
+  const issues: Issue[] = [];
+  const warnings: Issue[] = [];
+  const cat = await gpuTypes(env).catch(() => []);
+  if (!cat.length) return { issues, warnings };
+  const price = new Map(cat.map((g) => [g.id, g.secure_price]));
+  spec.pools.forEach((p, i) => {
+    if (p.compute !== "GPU") return;
+    const regions = p.regions?.length ? p.regions : spec.regions;
+    const gpus = p.gpu_types?.length ? p.gpu_types : [...new Set(regions.flatMap((r) => REGIONS[r]?.gpus || []))];
+    (p.gpu_types || []).forEach((g, j) => {
+      if (price.has(g) && price.get(g) === null) issues.push({ path: [...prefix, "pools", i, "gpu_types", j], message: `${g} is not offered in Secure Cloud (fv-control creates Secure pods)` });
+    });
+    const known = gpus.map((g) => price.get(g)).filter((x): x is number => typeof x === "number");
+    if (!known.length || !p.count) return;
+    const cheapest = Math.min(...known);
+    if (cheapest > spec.max_gpu_dph) issues.push({ path: [...prefix, "max_gpu_dph"], message: `below every GPU type pool ${p.id} may use (cheapest $${cheapest.toFixed(2)}/hr): each pod would be deleted right after create` });
+    else if (Math.max(...known) > spec.max_gpu_dph) warnings.push({ path: [...prefix, "pools", i, "gpu_types"], message: `some GPU types of ${p.id} cost more than max_gpu_dph ($${spec.max_gpu_dph}/hr): a pod placed on one is deleted` });
+  });
+  // GPU types against the regions' data centres (Runpod's stock): a pool none of whose types has stock there is a warning
+  // (stock moves by the minute; a definition may wait for it), shown before Start.
+  const pairs = new Map<string, { dc: string; gpu: string }>();
+  const plan = spec.pools.filter((p) => p.compute === "GPU" && p.count > 0).map((p) => ({ p, pls: workerPlacements(spec, p).filter((x) => x.dc && x.gpu) }));
+  for (const { pls } of plan) for (const x of pls) pairs.set(`${x.dc}|${x.gpu}`, { dc: x.dc!, gpu: x.gpu! });
+  const st = pairs.size ? await gpuStock(env, [...pairs.values()]).catch(() => null) : null;
+  if (st)
+    for (const { p, pls } of plan) {
+      const i = spec.pools.indexOf(p);
+      if (pls.length && pls.every((x) => !st.get(`${x.dc}|${x.gpu}`)?.stock && !(st.get(`${x.dc}|${x.gpu}`)?.max_available ?? 0)))
+        warnings.push({ path: [...prefix, "pools", i, "gpu_types"], message: `${p.id}: none of its GPU types has stock in ${[...new Set(pls.map((x) => x.dc))].join(", ")} now (${[...new Set(pls.map((x) => x.gpu))].join(", ")})` });
+    }
+  // Dedupe (one max_gpu_dph message per pool is enough, the first one per path).
+  const seen = new Set<string>();
+  return { issues: issues.filter((x) => (seen.has(x.path.join(".") + x.message) ? false : (seen.add(x.path.join(".") + x.message), true))), warnings };
+}
 
 /** "pools[2].models[0].recipe: …" → ["pools", 2, "models", 0, "recipe"]. */
 export function pathOf(msg: string): { path: (string | number)[]; message: string } {
@@ -51,11 +94,16 @@ export async function checkSpec(env: Env, doc: unknown, existing?: { id: string;
   }
   const name = (doc as any)?.name;
   if (existing && name !== existing.name) add({ path: ["name"], message: `the name is fixed (${existing.name}); clone the cluster to use another name` });
-  if (!existing && typeof name === "string" && name) {
+  if (!existing && typeof name === "string" && name && !issues.some((i) => i.path[0] === "name")) {
     const taken = await env.DB.prepare("SELECT id FROM clusters WHERE name = ?").bind(name).first<{ id: string }>();
-    if (taken) add({ path: ["name"], message: `a cluster named ${name} exists` });
+    if (taken) add({ path: ["name"], message: `a cluster or standalone pod named ${name} exists` });
   }
   const warnings: Issue[] = [];
+  if (normalized) {
+    const live = await liveSpecIssues(env, normalized);
+    live.issues.forEach(add);
+    warnings.push(...live.warnings);
+  }
   if (normalized) {
     const s = normalized;
     if (!s.pools.length) warnings.push({ path: ["pools"], message: "no pools: Start would create nothing" });
@@ -63,7 +111,6 @@ export async function checkSpec(env: Env, doc: unknown, existing?: { id: string;
       if (p.count === 0) warnings.push({ path: ["pools", i, "count"], message: `${p.id}: 0 workers (Start skips it; Scale adds workers later)` });
       const pre = POOL_PRESETS.find((x) => x.id === p.id);
       if (pre?.licence) warnings.push({ path: ["pools", i, "id"], message: pre.licence });
-      if (p.compute === "CPU" && p.models?.length) warnings.push({ path: ["pools", i, "compute"], message: `${p.id}: CPU pods run the fake engine only` });
     });
     if (s.cap_s > 6 * 3600) warnings.push({ path: ["cap_s"], message: `the backstop is ${(s.cap_s / 3600).toFixed(1)} h away from Start` });
     if (!s.log_shipping) warnings.push({ path: ["log_shipping"], message: "log shipping off: only Runpod's short tail of each pod will be visible" });
@@ -103,7 +150,7 @@ let stockCache: { at: number; key: string; v: Map<string, Omit<PlacementStock, "
 /** Tests: forget the 60 s stock cache. */
 export const clearStockCache = () => void (stockCache = null);
 
-async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): Promise<Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>> {
+export async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): Promise<Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>> {
   const key = pairs.map((p) => `${p.dc}|${p.gpu}`).sort().join(",");
   if (stockCache && stockCache.key === key && Date.now() - stockCache.at < 60_000) return stockCache.v;
   const out = new Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>();

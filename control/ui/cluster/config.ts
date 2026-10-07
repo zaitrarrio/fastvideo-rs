@@ -7,7 +7,8 @@
 // the effective env of every pod.
 import { badge, copyText, h, kids, type Api } from "../dom";
 import { createJsonEditor, type Dynamic, type JsonEditor } from "../editor";
-import type { Issue, Schema } from "../schema";
+import { askExtend } from "../forms/dialogs";
+import { schemaAt, unwrap, type Issue, type Schema } from "../schema";
 import { renderDiff } from "../view";
 import "./config.css";
 
@@ -66,7 +67,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     spec = clone(saved);
   } else if (o.clone) {
     const c = await api(`/api/clusters/${encodeURIComponent(o.clone)}`);
-    spec = { ...clone(c.cluster.spec), name: `${c.cluster.name}-copy`.slice(0, 31) };
+    spec = { ...clone(c.cluster.spec), name: `${c.cluster.name}-copy`.slice(0, 31).replace(/-+$/, "") };
   } else {
     const t = o.template && tpl[o.template] ? o.template : "tiny-cpu";
     spec = { ...clone(tpl[t]), name: "" };
@@ -86,7 +87,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   const el = {
     title: h("h1", {}),
     sub: h("p", { class: "muted small cf-sub" }),
-    form: h("div", { class: "cf-form" }),
+    form: h("div", { class: "cf-form", "data-schema-form": "cluster-spec" }),
     json: h("div", { class: "cf-json", hidden: true }),
     tabs: h("div", { class: "tabs", role: "tablist" }),
     issues: h("div", { class: "cf-issues" }),
@@ -136,8 +137,11 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
             try {
               spec = JSON.parse(t);
               jsonOk = true;
-            } catch {
+            } catch (e) {
               jsonOk = false;
+              issues = [{ path: [], message: `not valid JSON: ${(e as Error).message}` }];
+              drawIssues();
+              el.save.disabled = true;
               return;
             }
             changed(false);
@@ -165,7 +169,8 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     return s?.description || (s?.anyOf || []).map(res).find((x: any) => x?.description)?.description || "";
   };
   function text(path: Path, o2: { placeholder?: string; list?: string; optional?: boolean; disabled?: boolean; mono?: boolean } = {}) {
-    const inp = h("input", { type: "text", value: getAt(spec, path) ?? "", placeholder: o2.placeholder, list: o2.list, disabled: o2.disabled, spellcheck: "false", class: o2.mono ? "mono" : "", "aria-label": path.join(".") });
+    const sch = unwrap(schemaAt(schemas["cluster-spec"]!, path), schemas["cluster-spec"]!) || {};
+    const inp = h("input", { type: "text", value: getAt(spec, path) ?? "", placeholder: o2.placeholder, list: o2.list, disabled: o2.disabled, spellcheck: "false", class: o2.mono ? "mono" : "", "aria-label": path.join("."), pattern: sch.pattern, maxlength: sch.maxLength });
     inp.addEventListener("input", () => {
       setAt(spec, path, inp.value === "" && o2.optional ? undefined : inp.value);
       changed();
@@ -175,7 +180,11 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   function num(path: Path, o2: { min?: number; max?: number; step?: number; optional?: boolean; scale?: number; placeholder?: string } = {}) {
     const sc = o2.scale ?? 1;
     const cur = getAt(spec, path);
-    const inp = h("input", { type: "number", value: cur === undefined || cur === null ? "" : String(cur / sc), min: o2.min, max: o2.max, step: o2.step ?? "any", placeholder: o2.placeholder, "aria-label": path.join(".") });
+    // The range comes from the schema (the server's own limits); the caller's step is a convenience.
+    const sch = unwrap(schemaAt(schemas["cluster-spec"]!, path), schemas["cluster-spec"]!) || {};
+    const lo = sch.minimum !== undefined ? sch.minimum / sc : o2.min;
+    const hi = sch.maximum !== undefined && sch.maximum < 9e15 ? sch.maximum / sc : o2.max;
+    const inp = h("input", { type: "number", value: cur === undefined || cur === null ? "" : String(cur / sc), min: lo, max: hi, step: o2.step ?? (sch.type === "integer" && sc === 1 ? 1 : "any"), placeholder: o2.placeholder, "aria-label": path.join("."), inputmode: "decimal" });
     inp.addEventListener("input", () => {
       if (inp.value === "") setAt(spec, path, o2.optional ? undefined : null);
       else setAt(spec, path, Math.round(Number(inp.value) * sc * 1000) / 1000);
@@ -183,13 +192,16 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     });
     return inp;
   }
-  function select(path: Path, opts: [string, string][], o2: { optional?: boolean; onSet?: () => void } = {}) {
+  /** A schema enum's values at a path (the coverage test: an enum is a select, never free text). */
+  const enumOf = (path: Path): any[] => (unwrap(schemaAt(schemas["cluster-spec"]!, path), schemas["cluster-spec"]!)?.enum as any[]) || [];
+  function select(path: Path, opts: [any, string][], o2: { optional?: boolean; onSet?: () => void; num?: boolean } = {}) {
     const cur = getAt(spec, path);
-    const sel = h("select", { "aria-label": path.join(".") }, ...(o2.optional ? [h("option", { value: "" }, "(default)")] : []), ...opts.map(([v, l]) => h("option", { value: v }, l)));
-    if (cur !== undefined && !opts.some(([v]) => v === cur)) sel.append(h("option", { value: cur }, `${cur} (unknown)`));
-    sel.value = cur ?? "";
+    const sel = h("select", { "aria-label": path.join(".") }, ...(o2.optional ? [h("option", { value: "" }, "(default)")] : []), ...opts.map(([v, l]) => h("option", { value: String(v) }, l)));
+    // A value no longer offered (a channel that is gone, a variant renamed) stays visible, flagged, and fails the check.
+    if (cur !== undefined && !opts.some(([v]) => v === cur)) sel.append(h("option", { value: String(cur), class: "ff-stale" }, `${cur} (not available: pick another)`));
+    sel.value = cur === undefined ? "" : String(cur);
     sel.addEventListener("change", () => {
-      setAt(spec, path, sel.value === "" && o2.optional ? undefined : sel.value);
+      setAt(spec, path, sel.value === "" && o2.optional ? undefined : o2.num ? Number(sel.value) : sel.value);
       changed();
       o2.onSet?.();
     });
@@ -275,13 +287,10 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       { hidden: true },
       datalist("cf-channels", (dyn.channels || []).map((c: any) => ({ id: c.id, detail: c.sha ? `at ${c.sha}` : "" }))),
       datalist("cf-shas", (dyn.shas || []).map((x: string) => ({ id: x }))),
-      datalist("cf-model-ids", dyn.model_ids || []),
-      datalist("cf-families", (dyn.families || []).map((x: any) => (typeof x === "string" ? { id: x } : x))),
-      datalist("cf-recipes", dyn.recipes || []),
-      datalist("cf-fake", (dyn.fake_models || []).map((x: string) => ({ id: x }))),
+      datalist("cf-config-paths", (dyn.config_paths || []).map((x: string) => ({ id: x }))),
     );
     const imgKind = s.image?.channel !== undefined ? "channel" : s.image?.sha !== undefined ? "sha" : s.image?.ref !== undefined ? "ref" : "channel";
-    const imgInput = imgKind === "channel" ? text(["image", "channel"], { list: "cf-channels", placeholder: "stable" }) : imgKind === "sha" ? text(["image", "sha"], { list: "cf-shas", placeholder: "git sha (7-40 hex)", mono: true }) : text(["image", "ref"], { placeholder: "ghcr.io/owner/repo:tag or @sha256:…", mono: true });
+    const imgInput = imgKind === "channel" ? select(["image", "channel"], (dyn.channels || []).map((c: any) => [c.id, `${c.id}${c.sha ? ` (at ${c.sha})` : ""}`])) : imgKind === "sha" ? text(["image", "sha"], { list: "cf-shas", placeholder: "git sha (7-40 hex)", mono: true }) : text(["image", "ref"], { placeholder: "ghcr.io/owner/repo:tag or @sha256:…", mono: true });
     const imgHelp =
       imgKind === "channel"
         ? `Per-variant images <variant>-${s.image?.channel || "<channel>"}${(dyn.channels || []).find((c: any) => c.id === s.image?.channel)?.sha ? `, now at ${(dyn.channels || []).find((c: any) => c.id === s.image?.channel).sha}` : ""}; resolved to digests at Start.`
@@ -300,7 +309,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
               [],
               "Start from",
               (() => {
-                const sel = h("select", { "aria-label": "Template" }, h("option", { value: "" }, "(keep the current pools)"), ...(tpl.templates || []).map((t: any) => h("option", { value: t.id }, `${t.id}: ${t.title}`)));
+                const sel = h("select", { "aria-label": "Template", "data-schema-ignore": "" }, h("option", { value: "" }, "(keep the current pools)"), ...(tpl.templates || []).map((t: any) => h("option", { value: t.id }, `${t.id}: ${t.title}`)));
                 sel.addEventListener("change", () => {
                   if (!sel.value) return;
                   const name = spec.name;
@@ -390,7 +399,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         "Logs",
         null,
         fieldBox(["log_shipping"], "Shipping", toggle(["log_shipping"], "pods ship their logs to fv-control (searchable on the Logs page)"), describe(["log_shipping"])),
-        fieldBox(["log_level"], "Most verbose level shipped", select(["log_level"], ["trace", "debug", "info", "warn", "error"].map((l) => [l, l]), { optional: true }), "Default: info."),
+        fieldBox(["log_level"], "Most verbose level shipped", select(["log_level"], enumOf(["log_level"]).map((l) => [l, l]), { optional: true }), "Default: info."),
       ),
     );
     markIssues();
@@ -408,7 +417,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       const v = sel.value;
       if (!v) return;
       let pool: any;
-      if (v === "__blank") pool = { id: uniqueId("pool"), variant: "ltx", count: 1, compute: "GPU", config: "/etc/fv/runpod.toml", models: [{ id: "", family: "", recipe: "" }] };
+      if (v === "__blank") pool = { id: uniqueId("pool"), variant: "ltx", count: 1, compute: "GPU", config: "/etc/fv/runpod-ltx.toml", models: [{ id: "ltx25-distill-sol", family: "ltx2", recipe: "ltx-turbo" }] };
       else if (v === "__cpu") pool = { id: uniqueId("fake"), variant: "cpu", count: 1, compute: "CPU", config_toml: (tpl["tiny-cpu"]?.pools?.[0]?.config_toml as string) || "", cpu_flavors: ["cpu3c"], vcpu: 2, volume: false, fake_models: ["fake-wan"] };
       else {
         const pr = presets.find((x) => x.id === v)!;
@@ -521,25 +530,38 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
             h(
               "tr",
               { "data-path": `pools.${i}.models.${j}` },
-              h("td", { "data-path": `pools.${i}.models.${j}.id` }, text(["pools", i, "models", j, "id"], { list: "cf-model-ids" })),
-              h("td", { "data-path": `pools.${i}.models.${j}.family` }, text(["pools", i, "models", j, "family"], { list: "cf-families" })),
-              h("td", { "data-path": `pools.${i}.models.${j}.recipe` }, text(["pools", i, "models", j, "recipe"], { list: "cf-recipes" })),
+              h(
+                "td",
+                { "data-path": `pools.${i}.models.${j}.id` },
+                // A catalog model: choosing it fills its family and recipe (both checked against it by the server).
+                select(["pools", i, "models", j, "id"], enumOf(["pools", 0, "models", 0, "id"]).map((m) => [m, m]), {
+                  onSet: () => {
+                    const m = (dyn.catalog_models || []).find((x: any) => x.id === spec.pools[i].models[j].id);
+                    if (m) Object.assign(spec.pools[i].models[j], { family: m.family, recipe: m.recipe });
+                    drawForm();
+                    changed();
+                  },
+                }),
+              ),
+              h("td", { "data-path": `pools.${i}.models.${j}.family` }, select(["pools", i, "models", j, "family"], enumOf(["pools", 0, "models", 0, "family"]).map((x) => [x, x]))),
+              h(
+                "td",
+                { "data-path": `pools.${i}.models.${j}.recipe` },
+                select(
+                  ["pools", i, "models", j, "recipe"],
+                  enumOf(["pools", 0, "models", 0, "recipe"])
+                    .filter((r) => !p.models[j]?.family || (dyn.recipes || []).find((x: any) => x.id === r)?.detail?.startsWith(p.models[j].family) !== false)
+                    .map((r) => [r, r]),
+                ),
+              ),
               h("td", {}, h("button", { type: "button", class: "ghost small", title: "Remove", onclick: () => { spec.pools[i].models.splice(j, 1); if (!spec.pools[i].models.length) delete spec.pools[i].models; drawForm(); changed(); } }, "✕")),
             ),
           ),
         ),
       ),
-      h("button", { type: "button", class: "small", onclick: () => { (spec.pools[i].models ||= []).push({ id: "", family: "", recipe: "" }); drawForm(); changed(); } }, "+ model"),
+      h("button", { type: "button", class: "small", onclick: () => { const m = (dyn.catalog_models || [])[0] || { id: "fasth3", family: "h3", recipe: "h3-turbo" }; (spec.pools[i].models ||= []).push({ ...m }); drawForm(); changed(); } }, "+ model"),
     );
-    const fakeModels = (() => {
-      const inp = h("input", { type: "text", value: (p.fake_models || []).join(", "), list: "cf-fake", placeholder: "fake-wan, fake-h3-turbo", spellcheck: "false" });
-      inp.addEventListener("input", () => {
-        const v = inp.value.split(/[,\s]+/).filter(Boolean);
-        setAt(spec, P("fake_models"), v.length ? v : undefined);
-        changed();
-      });
-      return inp;
-    })();
+    const fakeModels = multi(P("fake_models"), enumOf(["pools", 0, "fake_models", 0]).map((x) => ({ id: x, label: x })), { optional: true });
     const cfg = (() => {
       const seg = h("div", { class: "cf-seg", role: "radiogroup" });
       for (const [k, l] of [["file", "file in the image"], ["toml", "inline TOML"]] as const)
@@ -567,7 +589,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
           ),
         );
       let ctl: HTMLElement;
-      if (cfgKind === "file") ctl = text(P("config"), { placeholder: "/etc/fv/runpod.toml", mono: true });
+      if (cfgKind === "file") ctl = text(P("config"), { placeholder: "/etc/fv/runpod.toml", mono: true, list: "cf-config-paths" });
       else {
         const ta = h("textarea", { class: "cf-toml", spellcheck: "false", rows: "10", "aria-label": `pools.${i}.config_toml` }, p.config_toml || "");
         ta.addEventListener("input", () => {
@@ -597,14 +619,14 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         ? fieldBox(P("cpu_flavors"), "CPU flavors (in order)", multi(P("cpu_flavors"), (dyn.cpu_flavors || []).map((f: any) => ({ id: f.id, label: f.id, detail: `$${f.dph_per_vcpu}/vCPU·hr` })), { optional: true }), describe(["pools", 0, "cpu_flavors"]), true)
         : fieldBox(P("gpu_types"), "GPU types (in order; none: the regions')", multi(P("gpu_types"), gpuOpts(), { optional: true }), describe(["pools", 0, "gpu_types"]), true),
       fieldBox(P("regions"), "Regions (none: the cluster's)", multi(P("regions"), (dyn.regions || []).map((r: any) => ({ id: r.id, label: r.id, detail: r.dc })), { optional: true }), null, true),
-      isCpu ? fieldBox(P("vcpu"), "vCPUs", num(P("vcpu"), { min: 1, max: 32, step: 1, optional: true, placeholder: "2" })) : null,
+      isCpu ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,
       fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
       fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),
       fieldBox(P("image"), "Image override", text(P("image"), { optional: true, mono: true, placeholder: "(the variant's image)" }), describe(["pools", 0, "image"])),
-      spec.control_plane !== "direct" ? fieldBox(P("family"), "Edge family", text(P("family"), { optional: true, placeholder: "(from the models)" }), describe(["pools", 0, "family"])) : null,
+      spec.control_plane !== "direct" ? fieldBox(P("family"), "Edge family", select(P("family"), enumOf(["pools", 0, "family"]).map((v) => [v, v]), { optional: true }), describe(["pools", 0, "family"])) : null,
       fieldBox(P("config"), "Worker config", cfg, "A path inside the image, or a whole worker config sent inline (FV_WORKER_TOML_B64).", true),
       fieldBox(P("models"), "Models", models, describe(["pools", 0, "models"]), true),
-      fieldBox(P("fake_models"), "Fake-engine models", fakeModels, "Comma-separated (CPU pools / tests).", true),
+      fieldBox(P("fake_models"), "Fake-engine models", fakeModels, "The fake engine's models (CPU pools, tests).", true),
       fieldBox(P("max_queued"), "Max queued", num(P("max_queued"), { min: 0, max: 10000, step: 1, optional: true }), describe(["pools", 0, "max_queued"])),
       fieldBox(P("job_timeout_s"), "Job timeout (s)", num(P("job_timeout_s"), { min: 10, max: 86400, step: 10, optional: true })),
       fieldBox(P("stale_after_s"), "Stale after (s)", num(P("stale_after_s"), { min: 10, max: 86400, step: 10, optional: true }), describe(["pools", 0, "stale_after_s"])),
@@ -865,7 +887,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         { class: "row", style: "margin-top:8px" },
         !running ? b("Start", () => runOp("start", {}, `Start ${c.name}? Price check: ${price ? `${fmt$(price.cluster_dph)}/hr, ${price.ok ? "within the floor" : "REFUSED: " + price.reasons.join("; ")}` : "runs first"}.${dirty ? "\n\nYour unsaved edits are NOT used: Start uses the saved spec." : ""}`), "primary", dirty) : null,
         running ? b("Stop", () => runOp("stop", {}, `Stop ${c.name}: delete every pod?`), "danger") : null,
-        running ? b("Extend…", () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) runOp("extend", { minutes: Number(m) }, `Extend ${c.name} by ${m} min?`); }) : null,
+        running ? b("Extend…", async () => { const m = await askExtend(api, `Extend ${c.name}`); if (m) runOp("extend", { minutes: m }, `Extend ${c.name} by ${m} min?`); }) : null,
         op ? b("Cancel operation", () => runOp("cancel", {}, "Cancel the running operation? Pods it created stay (the backstops hold them).")) : null,
         b("Clone", () => (location.hash = `#/clusters/new?clone=${id}`)),
         !running ? b("Delete", async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; try { await api(`/api/clusters/${id}`, { method: "DELETE" }); toast("deleted"); location.hash = "#/clusters"; } catch (e) { toast((e as Error).message); } }, "danger") : null,

@@ -10,7 +10,6 @@
   const slsKind = (st) => (st === "active" ? "good" : st === "creating" || st === "deleting" || st === "scaled-down" ? "warn" : st === "failed" || st === "gone" ? "critical" : "");
   const ms = (v) => (v === null || v === undefined ? "–" : v < 1000 ? `${Math.round(v)} ms` : dur(v / 1000));
   const pre = (v) => h("pre", { class: "log", style: "max-height:320px;overflow:auto;white-space:pre-wrap" }, typeof v === "string" ? v : JSON.stringify(v, null, 2));
-  const field = (label, input, help) => h("label", { class: "small", style: "display:flex;flex-direction:column;gap:3px;min-width:160px" }, h("span", { class: "muted" }, label), input, help ? h("span", { class: "muted small" }, help) : null);
   const workersLine = (hh) => {
     const w = hh?.workers;
     if (!w) return "–";
@@ -47,6 +46,7 @@
         h("div", { class: "row", style: "margin-top:8px" }, h("a", { class: "btn", href: q.get("all") ? "#/serverless" : "#/serverless?all=1" }, q.get("all") ? "Recent only" : "Show all (deleted too)"), h("button", { onclick: async () => { await act("tick", () => api("/api/serverless/tick", { method: "POST" })); route(); } }, "Refresh health and billing")),
       ),
       createCard(defs.spec),
+      card("Policy", h("p", { class: "small muted" }, "Limits over every endpoint fv-control manages."), docPanel("serverless-policy", "default", { title: "serverless policy" })),
     );
     every(15000, async () => {
       if (!location.hash.startsWith("#/serverless") || location.hash.includes("ep=")) return;
@@ -55,86 +55,11 @@
     });
   }
 
+  /** The new-endpoint form (ui/forms/serverless.ts): every field bound to the serverless-endpoint schema, a JSON tab, Create off until valid. */
   function createCard(def) {
-    const v = (id) => document.getElementById(id);
-    const inp = (id, value, attrs = {}) => h("input", { id, value: value ?? "", ...attrs });
-    const sel = (id, opts, cur) => h("select", { id }, opts.map((o) => h("option", { value: o, selected: o === cur }, o)));
-    const out = h("div", { class: "small", style: "margin-top:8px" });
-    const json = h("textarea", { rows: 18, style: "width:100%;font-family:var(--mono, monospace);font-size:12px", "aria-label": "Spec JSON" });
-    json.value = JSON.stringify(def, null, 2);
-    const lines = (s) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
-    const fromForm = () => {
-      const variant = v("sv_variant").value;
-      const spec = {
-        name: v("sv_name").value.trim(),
-        mode: v("sv_mode").value,
-        variant,
-        image: { [v("sv_imgkind").value]: v("sv_img").value.trim() },
-        workers_min: Number(v("sv_wmin").value),
-        workers_max: Number(v("sv_wmax").value),
-        idle_timeout_s: Number(v("sv_idle").value),
-        execution_timeout_s: Number(v("sv_exec").value),
-        flashboot: v("sv_fb").checked,
-        scaler_type: v("sv_scaler").value,
-        scaler_value: Number(v("sv_scalerv").value),
-        deadline_min: v("sv_deadline").value ? Number(v("sv_deadline").value) : null,
-        deadline_action: v("sv_dact").value,
-      };
-      if (variant !== "cpu") {
-        const g = lines(v("sv_gpus").value);
-        if (g.length) spec.gpu_types = g;
-        spec.network_volume = v("sv_vol").value || null;
-      }
-      const dcs = lines(v("sv_dcs").value);
-      if (dcs.length) spec.data_centers = dcs;
-      if (v("sv_config").value.trim()) spec.config = v("sv_config").value.trim();
-      return spec;
-    };
-    let mode = "form";
-    const form = h(
-      "div",
-      { class: "row", style: "flex-wrap:wrap;gap:10px;align-items:flex-start" },
-      field("name", inp("sv_name", "", { placeholder: "e.g. fake-test", pattern: "[a-z][a-z0-9-]{0,30}" }), "the Runpod endpoint is fvc-<name>"),
-      field("variant", sel("sv_variant", ["cpu", "h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan"], "cpu"), "cpu: CPU workers, fake engine"),
-      field("mode", sel("sv_mode", ["queue", "lb"], "queue"), "lb: GPU only"),
-      field("image", h("div", { class: "row" }, sel("sv_imgkind", ["channel", "sha", "ref"], "channel"), inp("sv_img", "stable", { style: "width:120px" }))),
-      field("GPU types (priority order)", h("textarea", { id: "sv_gpus", rows: 3, placeholder: "NVIDIA RTX PRO 6000 Blackwell Server Edition\nNVIDIA GeForce RTX 5090" }), "GPU variants; default RTX PRO 6000"),
-      field("data centers", inp("sv_dcs", "", { placeholder: "default: the volume's" })),
-      field("network volume", sel("sv_vol", ["jg48s6o1w0", ""], "jg48s6o1w0"), "EU weights (GPU variants)"),
-      field("config in image", inp("sv_config", "", { placeholder: "default: the variant's" })),
-      field("workers min / max", h("div", { class: "row" }, inp("sv_wmin", "0", { type: "number", min: 0, max: 4, style: "width:60px" }), inp("sv_wmax", "1", { type: "number", min: 0, max: 8, style: "width:60px" }))),
-      field("idle timeout s", inp("sv_idle", "5", { type: "number", min: 1, style: "width:80px" })),
-      field("execution timeout s", inp("sv_exec", "1800", { type: "number", min: 10, style: "width:90px" })),
-      field("scaler", h("div", { class: "row" }, sel("sv_scaler", ["QUEUE_DELAY", "REQUEST_COUNT"], "QUEUE_DELAY"), inp("sv_scalerv", "4", { type: "number", min: 0.5, step: 0.5, style: "width:60px" }))),
-      field("FlashBoot", h("input", { id: "sv_fb", type: "checkbox" })),
-      field("backstop (min) / action", h("div", { class: "row" }, inp("sv_deadline", "120", { type: "number", min: 5, style: "width:70px" }), sel("sv_dact", ["delete", "scale0"], "delete"))),
-    );
-    const jsonBox = h("div", { hidden: true }, json, h("p", { class: "small muted" }, "The full spec (GET /api/schemas/serverless-endpoint); missing fields take the variant's defaults."));
-    const toggle = h("button", { class: "ghost", onclick: () => {
-      if (mode === "form") { try { json.value = JSON.stringify({ ...JSON.parse(json.value), ...fromForm() }, null, 2); } catch { json.value = JSON.stringify(fromForm(), null, 2); } }
-      mode = mode === "form" ? "json" : "form";
-      form.hidden = mode === "json";
-      jsonBox.hidden = mode === "form";
-      toggle.textContent = mode === "form" ? "Edit as JSON" : "Back to the form";
-    } }, "Edit as JSON");
-    const spec = () => (mode === "form" ? fromForm() : JSON.parse(json.value));
-    const validateBtn = h("button", { onclick: async () => {
-      try {
-        const r = await api("/api/serverless/validate", { method: "POST", body: { spec: spec() } });
-        out.replaceChildren(r.ok ? h("div", {}, badge("valid", "good"), " with the defaults filled:", pre(r.spec)) : h("div", {}, badge("invalid", "critical"), " ", r.error));
-      } catch (e) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, e.message)); }
-    } }, "Validate");
-    const createBtn = h("button", { class: "primary", onclick: async () => {
-      let s;
-      try { s = spec(); } catch (e) { return toast(`spec: ${e.message}`); }
-      if (!confirm(`Create the Runpod serverless endpoint fvc-${s.name}? Workers bill while they run.`)) return;
-      createBtn.disabled = true;
-      try {
-        const r = await act("create", () => api("/api/serverless", { method: "POST", body: { spec: s } }));
-        location.hash = `#/serverless?ep=${r.endpoint.id}`;
-      } catch (e) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, e.message)); } finally { createBtn.disabled = false; }
-    } }, "Create endpoint");
-    return card("New endpoint", form, jsonBox, h("div", { class: "row", style: "margin-top:10px" }, toggle, validateBtn, createBtn), out);
+    const host = h("div", { class: "muted small" }, "loading the form…");
+    fvEditor().then((E) => E.mountEndpointForm(host, { api, toast, defaults: def, onCreated: (id) => { location.hash = `#/serverless?ep=${id}`; } })).catch((e) => host.replaceChildren(h("p", { class: "small" }, e.message)));
+    return card("New endpoint", host);
   }
 
   async function pageEndpoint(main, id) {
@@ -170,13 +95,12 @@
       return;
     }
     // Scale / extend / delete.
-    const wmin = h("input", { type: "number", min: 0, max: 4, value: e.spec.workers_min, style: "width:60px", "aria-label": "workers min" });
-    const wmax = h("input", { type: "number", min: 0, max: 8, value: e.spec.workers_max, style: "width:60px", "aria-label": "workers max" });
+    const scaleHost = h("div", { class: "muted small" }, "loading…");
+    fvEditor().then((E) => E.mountScaleForm(scaleHost, { api, toast, endpoint: e, onDone: () => route() })).catch((err) => scaleHost.replaceChildren(h("p", { class: "small" }, err.message)));
     const ctl = card(
       "Scale",
       h("div", { class: "row", style: "flex-wrap:wrap" },
-        field("workers min", wmin), field("workers max", wmax),
-        h("button", { class: "primary", onclick: async () => { await act("scale", () => api(`/api/serverless/${e.id}/scale`, { method: "POST", body: { workers_min: Number(wmin.value), workers_max: Number(wmax.value) } })); route(); } }, "Apply"),
+        scaleHost,
         h("button", { onclick: async () => { await act("scale to 0", () => api(`/api/serverless/${e.id}/scale`, { method: "POST", body: { workers_min: 0, workers_max: 0 } })); route(); } }, "Scale to 0"),
         h("button", { onclick: async () => { await act("extend", () => api(`/api/serverless/${e.id}/extend`, { method: "POST", body: { minutes: 30 } })); route(); } }, "Backstop +30 min"),
         h("button", { class: "danger", onclick: async () => {
@@ -252,18 +176,11 @@
       out);
   }
 
+  /** The spec as JSON (ui/forms/serverless.ts mountSpecEditor): checked as you type against the schema and the server's validator; Save off while invalid. */
   function specCard(e) {
-    const ta = h("textarea", { rows: 14, style: "width:100%;font-family:var(--mono, monospace);font-size:12px", "aria-label": "Endpoint spec" });
-    ta.value = JSON.stringify(e.spec, null, 2);
-    return card("Spec",
-      h("p", { class: "small muted" }, "Image, env and config update the template (Runpod rolls the workers); scaling and placement update the endpoint. Mode, compute, volume and CPU flavors need a new endpoint."),
-      ta,
-      h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "primary", onclick: async () => {
-        let s;
-        try { s = JSON.parse(ta.value); } catch (err) { return toast(`spec: ${err.message}`); }
-        await act("update", () => api(`/api/serverless/${e.id}`, { method: "PUT", body: { spec: s } }));
-        route();
-      } }, "Save")));
+    const host = h("div", { class: "muted small" }, "loading the editor…");
+    fvEditor().then((E) => E.mountSpecEditor(host, { api, toast, endpoint: e, onSaved: () => route() })).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
+    return card("Spec", h("p", { class: "small muted" }, "Image, env and config update the template (Runpod rolls the workers); scaling and placement update the endpoint. Mode, compute, volume and CPU flavors need a new endpoint."), host);
   }
 
   function jobsCard(d) {

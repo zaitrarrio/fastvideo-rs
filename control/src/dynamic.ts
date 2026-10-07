@@ -11,6 +11,9 @@ import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
 import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
+import { ENV_VALUE_TYPES, FAKE_MODELS, RUNPOD_DATA_CENTERS, VARIANTS } from "./enums";
+import { listTags } from "./ghcr";
+import { knownVolumes, SLS_RESERVED } from "./serverless/spec";
 
 export interface GpuType {
   id: string;
@@ -33,8 +36,7 @@ export async function gpuTypes(env: Env): Promise<GpuType[]> {
   return list;
 }
 
-/** Image variants CI builds (scripts/serve/variants.sh); the pool presets reuse them. */
-export const VARIANTS = ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "cpu"];
+export { VARIANTS, FAKE_MODELS } from "./enums";
 const variantDetail = (v: string) => {
   const ps = POOL_PRESETS.filter((p) => p.pool.variant === v).map((p) => p.id);
   return v === "cpu" ? "CPU: the fake engine" : ps.length ? `presets: ${ps.join(", ")}` : "";
@@ -47,15 +49,27 @@ export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]
   for (const [k, v] of use) if (!out.some((o) => o.id === k)) out.push({ id: k, detail: `in use: ${v.join(", ")}` });
   return out;
 }
-export const FAKE_MODELS = ["fake-h3-max", "fake-h3-turbo", "fake-sol-h3", "fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"];
+
+let tagCache: { at: number; shas: string[] } | null = null;
+/** Commits with serve images in GHCR (tags <variant>-sha-<sha7>), newest first as the registry lists them; 5-minute cache, 4 s budget. */
+async function imageShas(env: Env): Promise<string[]> {
+  if (tagCache && Date.now() - tagCache.at < 300_000) return tagCache.shas;
+  const tags = await Promise.race([listTags(env), new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))]);
+  const shas = [...new Set(tags.map((t) => /(?:^|-)sha-([0-9a-f]{7,40})$/.exec(t)?.[1]).filter((x): x is string => !!x))].reverse().slice(0, 50);
+  tagCache = { at: Date.now(), shas };
+  return shas;
+}
 
 export async function dynamicEnums(env: Env, clusterId?: string) {
-  const [gpus, heads, clusters, keys] = await Promise.all([
+  const [gpus, heads, clusters, keys, tagShas, endpoints] = await Promise.all([
     gpuTypes(env).catch(() => [] as GpuType[]),
     releaseHeads(env).catch(() => ({ available: false, heads: [] as any[], history: [] })),
     listClusters(env),
     env.DB.prepare("SELECT key, scope, COUNT(*) AS n FROM env_vars GROUP BY key, scope ORDER BY key").all<{ key: string; scope: string; n: number }>(),
+    imageShas(env).catch(() => [] as string[]),
+    env.DB.prepare("SELECT name FROM serverless_endpoints WHERE deleted_at IS NULL ORDER BY name").all<{ name: string }>().catch(() => ({ results: [] as { name: string }[] })),
   ]);
+  const vols = knownVolumes();
   const channels = [...new Set(["stable", "latest", ...heads.heads.map((h: any) => h.channel)])];
   const pools = clusterId ? (await getCluster(env, clusterId).catch(() => null))?.spec.pools.map((p) => p.id) ?? [] : [...new Set(clusters.flatMap((c) => c.spec.pools.map((p) => p.id)))];
   return {
@@ -68,11 +82,18 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
       const h = heads.heads.find((x: any) => x.channel === ch);
       return { id: ch, sha: h?.git_sha?.slice(0, 7) ?? null, promoted_at: h?.promoted_at ?? null, digests: h?.digests ?? {} };
     }),
-    shas: [...new Set(heads.history.map((h: any) => String(h.git_sha).slice(0, 7)))].slice(0, 20),
+    shas: [...new Set([...heads.history.map((h: any) => String(h.git_sha).slice(0, 7)), ...tagShas.map((x) => x.slice(0, 7))])].slice(0, 60),
+    releases: heads.history.slice(0, 30).map((h: any) => ({ id: String(h.id), detail: `${h.channel} → ${String(h.git_sha).slice(0, 7)} (${h.action})` })),
+    volumes: vols.map((v) => ({ id: v.id, dc: v.dc, region: v.region, detail: `${v.region} weights volume in ${v.dc}` })),
+    data_centers: RUNPOD_DATA_CENTERS.map((dc) => ({ id: dc, detail: vols.some((v) => v.dc === dc) ? "weights volume here" : "" })),
+    dc_prefixes: [...new Set(RUNPOD_DATA_CENTERS.flatMap((dc) => [dc.split("-")[0]!, dc.split("-").slice(0, 2).join("-"), dc]))].sort(),
+    config_paths: [...new Set([...POOL_PRESETS, ...STANDARD_POOLS.map((pool) => ({ pool }))].map((p) => p.pool.config).filter((x): x is string => !!x).concat(["/etc/fv/runpod-fake.toml"]))].sort(),
+    endpoints: (endpoints.results || []).map((e) => e.name),
     variants: VARIANTS.map((v) => ({ id: v, detail: variantDetail(v) })),
     pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}` })),
     fake_models: FAKE_MODELS,
     models: POOL_PRESETS.flatMap((p) => p.pool.models || []),
+    catalog_models: CATALOG.models.map((m) => ({ id: m.id, family: m.family, recipe: m.recipe })),
     model_ids: CATALOG.models.map((m) => ({ id: m.id, detail: `${m.family} · ${m.recipe} · ${m.detail}` })),
     families: CATALOG.families,
     recipes: CATALOG.recipes.map((r) => ({ id: r.id, detail: `${r.family}${r.serve ? "" : " · NOT servable"} · ${r.detail}` })),
@@ -80,6 +101,8 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
     pools,
     clusters: clusters.map((c) => ({ id: c.id, name: c.name })),
     env_keys: envKeyOptions(keys.results || []),
-    reserved_env_keys: [...RESERVED_KEYS, "FV_POOL_<ID>_URLS"],
+    reserved_env_keys: [...RESERVED_KEYS],
+    sls_reserved_env_keys: [...SLS_RESERVED],
+    env_types: ENV_VALUE_TYPES,
   };
 }
