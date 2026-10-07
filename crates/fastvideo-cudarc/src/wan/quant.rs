@@ -894,7 +894,7 @@ impl QuantLayout {
 
     /// The inverse of [`Self::encode`] (rebuilt with [`Self::new`]).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() % 4 != 0 || bytes.len() < 16 {
+        if !bytes.len().is_multiple_of(4) || bytes.len() < 16 {
             return Err(msg(format!("quant layout of {} bytes", bytes.len())));
         }
         let w: Vec<u32> = bytes

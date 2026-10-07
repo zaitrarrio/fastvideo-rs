@@ -2351,7 +2351,7 @@ impl H3Transformer {
         lora: &mut Option<super::lora::H3LoraFuse>,
         residency: Residency,
     ) -> Result<Self> {
-        if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
+        if cfg.rotary_dim() > cfg.attention_head_dim || !cfg.freq_dim.is_multiple_of(2) {
             return Err(msg(format!(
                 "h3 dit: {} rotary channels of a {}-wide head",
                 cfg.rotary_dim(),

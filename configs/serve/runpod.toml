@@ -54,8 +54,11 @@ served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 # Image-to-video text: keep the Qwen-VL vision tower resident beside the
 # resident text encoder (`auto`: when it fits; `stream` reads it from the
-# volume per request, same bytes). `warmup` runs one I2V + one T2V job
-# before readiness so the first request pays no setup.
+# volume per request, same bytes). `warmup` runs one I2V + one T2V job so
+# later requests pay no setup: in the background after readiness (the pod
+# takes jobs once the weights are resident; a job cancels the warm-up run in
+# flight at its next step and runs first). `warmup = "blocking"` (or
+# FV_WARMUP=blocking) warms up before readiness instead, as before 2026-10-07.
 i2v_encoder = "auto"
 warmup = true
 # The native 1080P tier (fal `resolution: "1080P"`, native `short_edge: 1080`

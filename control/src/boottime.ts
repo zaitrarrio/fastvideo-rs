@@ -11,6 +11,12 @@
 // pull 21 s, container start +24 s, model load 181 s (text encoder 41 s,
 // DiT 170 s at ~0.6 GB/s from the network volume), warm-up 60 s, ready at
 // the edge ~4.6 min after create.
+//
+// Fast boot B (2026-10-07): fv-serve reports ready once the weights are
+// resident and warms up in the background ("warmup started (background)",
+// "warmup done (background) … seconds="), so `serve_ready` / `ready` come
+// before `warmup_start` / `warmup_done`; rows are in time order and the
+// warm-up rows say "(background)".
 import type { Env } from "./env";
 import { now, parseJson } from "./util";
 
@@ -27,6 +33,7 @@ export const MILESTONES = [
   "edge_link", // connected to the edge's family dispatcher (edge fronts)
   "load_start", // the engine starts loading the model
   "model_resident", // every component loaded
+  "warmup_start", // background warm-up began (after ready; fast boot B)
   "warmup_done",
   "serve_ready", // FV-SERVE READY
   "ready", // ready at the edge (or /health AVAILABLE): what the controller waits for
@@ -45,11 +52,13 @@ export interface Boot {
   components?: Record<string, Component>;
   load_s?: number;
   warmup_s?: number;
+  /** `background`: the warm-up ran after ready (fast boot B); else it held readiness. */
+  warmup_mode?: "background" | "blocking";
   volume?: string;
 }
 
 /** What one log line says about the boot: a milestone, or a component load. */
-export function bootMatch(stream: "system" | "container" | "shipped", text: string): { m?: Milestone; component?: [string, Omit<Component, "at">]; load_s?: number; warmup_s?: number; volume?: string } | null {
+export function bootMatch(stream: "system" | "container" | "shipped", text: string): { m?: Milestone; component?: [string, Omit<Component, "at">]; load_s?: number; warmup_s?: number; warmup_mode?: "background" | "blocking"; volume?: string } | null {
   if (stream === "system") {
     if (/^create container /.test(text)) return { m: "machine" };
     if (/ Pulling from /.test(text)) return { m: "pull_start" };
@@ -70,7 +79,8 @@ export function bootMatch(stream: "system" | "container" | "shipped", text: stri
   }
   if ((x = /\] \S+ \S+ encoder: .*?vision tower ([\d.]+) GiB loaded in ([\d.]+) s/.exec(text))) return { component: ["vision_tower", { wall_s: Number(x[2]), gb: Number(x[1]) * 1.073741824 }] };
   if ((x = /model resident\b.*?seconds=([\d.]+)/.exec(text))) return { m: "model_resident", load_s: Number(x[1]) };
-  if ((x = /warmup done\b.*?seconds=([\d.]+)/.exec(text))) return { m: "warmup_done", warmup_s: Number(x[1]) };
+  if (/warmup started \(background\)/.test(text)) return { m: "warmup_start", warmup_mode: "background" };
+  if ((x = /warmup done\b.*?seconds=([\d.]+)/.exec(text))) return { m: "warmup_done", warmup_s: Number(x[1]), warmup_mode: /warmup done \(background\)/.test(text) ? "background" : "blocking" };
   if (/^FV-SERVE READY|fastvideo_serve::app: ready\b/.test(text)) return { m: "serve_ready" };
   return null;
 }
@@ -88,6 +98,7 @@ export function foldBoot(boot: Boot, lines: { stream: "system" | "container" | "
     if (r.component && !boot.components?.[r.component[0]]) (boot.components ||= {})[r.component[0]] = { ...r.component[1], at: l.ts };
     if (r.load_s !== undefined && boot.load_s === undefined) boot.load_s = r.load_s;
     if (r.warmup_s !== undefined && boot.warmup_s === undefined) boot.warmup_s = r.warmup_s;
+    if (r.warmup_mode && (!boot.warmup_mode || r.warmup_mode === "background")) boot.warmup_mode = r.warmup_mode;
     if (r.volume && !boot.volume) boot.volume = r.volume;
   }
   return added;
@@ -114,6 +125,7 @@ const PHASE_LABEL: Record<Milestone, string> = {
   edge_link: "connected to the edge dispatcher",
   load_start: "weights: load start",
   model_resident: "weights: every component resident",
+  warmup_start: "warm-up started (background)",
   warmup_done: "warm-up done",
   serve_ready: "fv-serve READY",
   ready: "ready (at the edge / health)",
@@ -124,14 +136,17 @@ export function bootRows(boot: Boot | null): BootRow[] {
   const t0 = boot.t.create ?? Math.min(...Object.values(boot.t).filter((x): x is number => typeof x === "number"));
   const rows: BootRow[] = [];
   let prev: number | null = null;
-  for (const m of MILESTONES) {
+  // Time order (a background warm-up ends after ready); phases not reached yet keep their place at the end.
+  const order = MILESTONES.map((m, i) => ({ m, i, at: boot.t[m] })).sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || a.i - b.i).map((o) => o.m);
+  for (const m of order) {
     const at = boot.t[m] ?? null;
     const detail =
       m === "pull_end" && boot.t.pull_start !== undefined && at !== null ? `pull ${Math.round((at - boot.t.pull_start) / 1000)} s` :
       m === "volume" ? boot.volume :
       m === "model_resident" && boot.load_s !== undefined ? `load ${boot.load_s.toFixed(1)} s` :
       m === "warmup_done" && boot.warmup_s !== undefined ? `warm-up ${boot.warmup_s.toFixed(1)} s` : undefined;
-    rows.push({ phase: PHASE_LABEL[m], at, t_s: at !== null && Number.isFinite(t0) ? Math.round((at - t0) / 100) / 10 : null, took_s: at !== null && prev !== null ? Math.round((at - prev) / 100) / 10 : null, ...(detail ? { detail } : {}) });
+    const label = m === "warmup_done" && boot.warmup_mode === "background" ? "warm-up done (background)" : PHASE_LABEL[m];
+    rows.push({ phase: label, at, t_s: at !== null && Number.isFinite(t0) ? Math.round((at - t0) / 100) / 10 : null, took_s: at !== null && prev !== null ? Math.round((at - prev) / 100) / 10 : null, ...(detail ? { detail } : {}) });
     if (m === "load_start")
       for (const [name, c] of Object.entries(boot.components || {}).sort((a, b) => a[1].at - b[1].at))
         rows.push({ phase: `weights: ${name}`, at: c.at, t_s: Number.isFinite(t0) ? Math.round((c.at - t0) / 100) / 10 : null, took_s: c.wall_s, detail: [c.gb !== undefined ? `${c.gb.toFixed(1)} GB` : null, c.gbps !== undefined ? `${c.gbps.toFixed(2)} GB/s` : null].filter(Boolean).join(" at ") || undefined });

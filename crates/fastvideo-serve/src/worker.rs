@@ -270,6 +270,9 @@ pub fn status_json(st: &WorkerState) -> Value {
         "worker_id": st.worker_id,
         "pool": st.pool,
         "readiness": readiness_word(&engine.readiness()),
+        // Fast boot B: `warming` while a ready model warms up in the
+        // background (jobs still run at once), `warm`, or `off`.
+        "warmup": engine.warmup(),
         // Models this worker failed (the startup capability check: a GPU
         // that cannot run the model) and why; the gateway shows them in
         // `/fv/v1/status` and dispatches nothing here.
