@@ -36,21 +36,57 @@ for (let i = 2; i < process.argv.length; i++) {
   else throw new Error('unknown argument ' + a);
 }
 mkdirSync(o.out, { recursive: true });
-const browser = await chromium.launch();
-const ctx = await browser.newContext();
+// Behind an egress proxy (HTTPS_PROXY), Chromium goes through it too.
+const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
+const browser = await chromium.launch(proxy ? { proxy: { server: proxy } } : {});
+// FV_BROWSER_IGNORE_TLS=1: a sandbox whose egress proxy re-signs TLS with its own CA.
+const ctx = await browser.newContext({ ignoreHTTPSErrors: process.env.FV_BROWSER_IGNORE_TLS === '1' });
 await ctx.addInitScript(([key]) => {
   localStorage.setItem('fv.trace', '1');
   if (key) localStorage.setItem('fv.key', key);
 }, [o.key || '']);
 const page = await ctx.newPage();
+page.on('requestfailed', (r) => console.error('request failed: ' + r.url().slice(0, 120) + ' ' + (r.failure() || {}).errorText));
+// FV_BROWSER_RELAY=1: requests to --base go through Node's fetch (a sandbox
+// whose egress refuses some of the browser's requests). Browser-side times
+// then include the relay; the bench client's times are the reference.
+if (process.env.FV_BROWSER_RELAY === '1') {
+  await page.route(o.base + '/**', async (route) => {
+    const q = route.request();
+    // FV_BROWSER_LOCAL_CONSOLE=1: this checkout's console scripts instead of the pod's.
+    const asset = process.env.FV_BROWSER_LOCAL_CONSOLE === '1' && q.url().match(/\/console\/assets\/([a-z]+\.(?:js|css))$/);
+    if (asset) {
+      const body = readFileSync(join(HERE, '../../crates/fastvideo-serve/console', asset[1]));
+      await route.fulfill({ status: 200, headers: { 'content-type': asset[1].endsWith('.css') ? 'text/css' : 'text/javascript' }, body });
+      return;
+    }
+    const h = { ...q.headers() };
+    delete h.host;
+    const r = await fetch(q.url(), { method: q.method(), headers: h, body: ['GET', 'HEAD'].includes(q.method()) ? undefined : q.postDataBuffer() });
+    const headers = {};
+    r.headers.forEach((v, k) => { if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(k)) headers[k] = v; });
+    await route.fulfill({ status: r.status, headers, body: Buffer.from(await r.arrayBuffer()) });
+  });
+}
 for (let i = 0; i < o.n; i++) {
-  await page.goto(o.base + '/console/models/' + o.page, { waitUntil: 'networkidle' });
+  await page.goto(o.base + '/console/models/' + o.page, { waitUntil: 'load' });
   await page.waitForSelector('[data-input=prompt]');
   await page.fill('[data-input=prompt]', o.prompt);
   for (const [k, v] of o.sets) await page.selectOption('[data-input=' + k + ']', v).catch(() => page.fill('[data-input=' + k + ']', v));
   await page.evaluate(() => { globalThis.__fvLastTrace = null; });
   await page.click('#run');
-  await page.waitForFunction(() => globalThis.__fvLastTrace, null, { timeout: 300_000 });
+  try {
+    await page.waitForFunction(() => globalThis.__fvLastTrace, null, { timeout: 300_000 });
+  } catch (e) {
+    // What the page shows instead (status, messages, the player's state).
+    const st = await page.evaluate(() => {
+      const v = document.getElementById('video');
+      const t = (id) => (document.getElementById(id) || {}).textContent;
+      return { status: t('result-status'), run: t('run-msg'), result: t('result-msg'), empty: t('video-empty'), src: v && v.src, ready: v && v.readyState, err: v && v.error && v.error.code };
+    });
+    console.error('no trace: ' + JSON.stringify(st));
+    throw e;
+  }
   const t = await page.evaluate(() => globalThis.__fvLastTrace);
   await new Promise((r) => setTimeout(r, 500));
   const d = await (await fetch(o.base + '/fv/v1/traces/' + t.id)).json();

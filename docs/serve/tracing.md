@@ -109,6 +109,7 @@ a job status; `attrs` carries clock-sync samples and details.
 | `client.video_src`, `video_loadstart`, `video_metadata` | browser | player events |
 | `client.video_fetch`, `video_ttfb`, `video_bytes` | browser | Resource Timing of the video (TTFB needs `Timing-Allow-Origin` on cross-origin storage, else only start/end) |
 | `client.canplay` | browser | the video can play (end of the waterfall) |
+| `client.video_error` | browser | the player cannot play the file (e.g. no H.264 in a bare Chromium): ends the waterfall instead, the trace still ships |
 | `client.e2e` | browser | click → canplay |
 | `engine.timeline.overflow` | pod | marks beyond the 256 preallocated (count) |
 
@@ -188,3 +189,17 @@ cache); the summary has per-metric median / p90 for both, the median
 difference and its 95 % bootstrap interval (the noise estimate), the
 per-step and per-phase median / p90 of the traced runs, the unaccounted
 time and the largest `dropped` count seen.
+
+The console's own click: `scripts/serve/trace-browser.mjs --base URL --page
+<fal endpoint> --key-file F --set resolution=480P --n 3` (headless
+Chromium with Playwright: ticks Trace, clicks Run, waits for the Trace
+tab). `FV_BROWSER_RELAY=1` relays the page's requests through Node and
+`FV_BROWSER_LOCAL_CONSOLE=1` serves this checkout's console scripts (both
+for sandboxes; see the bench doc).
+
+## Results
+
+[bench/e2e-warm-trace.md](bench/e2e-warm-trace.md): H3 turbo 480P / 768P on
+an RTX PRO 6000, pod direct. Overhead A/B: every traced − untraced median
+difference is inside its 95 % bootstrap interval (denoise +6.5 ms of 7.1 s
+at 480P, +14.5 ms of 19.2 s at 768P); 0 events dropped.

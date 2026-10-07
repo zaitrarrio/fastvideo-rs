@@ -231,6 +231,16 @@ function watchVideo(c, url) {
   once('loadstart', 'video_loadstart');
   once('loadedmetadata', 'video_metadata');
   once('canplay', 'canplay');
+  // A browser that cannot play the file (no H.264 in a bare Chromium) still
+  // ships the trace: the bytes arrived, `video_error` instead of `canplay`.
+  v.addEventListener('error', () => {
+    if (tr.marks.canplay || tr.marks.video_error) return;
+    tr.point('video_error', { code: v.error ? v.error.code : null });
+    tr.resource(url);
+    tr.spanMs('e2e', tr.marks.click, tr.marks.video_error);
+    const later = globalThis.requestIdleCallback || ((f) => setTimeout(f, 50));
+    later(() => shipTrace(c));
+  }, { once: true });
 }
 
 async function shipTrace(c) {

@@ -3280,6 +3280,16 @@ function watchVideo(c, url) {
   once('loadstart', 'video_loadstart');
   once('loadedmetadata', 'video_metadata');
   once('canplay', 'canplay');
+  // A browser that cannot play the file (no H.264 in a bare Chromium) still
+  // ships the trace: the bytes arrived, \`video_error\` instead of \`canplay\`.
+  v.addEventListener('error', () => {
+    if (tr.marks.canplay || tr.marks.video_error) return;
+    tr.point('video_error', { code: v.error ? v.error.code : null });
+    tr.resource(url);
+    tr.spanMs('e2e', tr.marks.click, tr.marks.video_error);
+    const later = globalThis.requestIdleCallback || ((f) => setTimeout(f, 50));
+    later(() => shipTrace(c));
+  }, { once: true });
 }
 
 async function shipTrace(c) {
@@ -4864,7 +4874,7 @@ export function analyze(events, { reference } = {}) {
   const t0 = click ? click.start : Math.min(...rows.map((r) => r.start));
   for (const r of rows) { r.startMs = (r.start - t0) / 1e6; r.durMs = r.dur / 1e6; r.endMs = r.startMs + r.durMs; r.uncertMs = r.uncert / 1e6; }
   rows.sort((a, b) => a.start - b.start || b.dur - a.dur);
-  const endRow = rows.find((r) => r.comp === 'client' && r.name === 'canplay') || rows.find((r) => r.comp === 'client' && r.name === 'video_fetch');
+  const endRow = rows.find((r) => r.comp === 'client' && r.name === 'canplay') || rows.find((r) => r.comp === 'client' && r.name === 'video_fetch') || rows.find((r) => r.comp === 'client' && r.name === 'video_error');
   const endMs = endRow ? endRow.endMs : Math.max(...rows.map((r) => r.endMs));
 
   // Unaccounted: [0, end] not covered by any non-envelope step.
@@ -4920,7 +4930,9 @@ export function phases(rows, endMs) {
     ['video first byte', vttfb ? vttfb.endMs : null],
     ['video last byte', vf && vf.endMs],
     ['video playable', canplay ? canplay.startMs : endMs],
-  ].filter(([, t]) => t !== null && t !== undefined && Number.isFinite(t));
+  ].filter(([, t]) => t !== null && t !== undefined && Number.isFinite(t))
+    // In time order: the engine can start before the submit answer reaches the client.
+    .sort((x, y) => x[1] - y[1]);
   const out = [];
   for (let i = 1; i < a.length; i++) out.push({ from: a[i - 1][0], to: a[i][0], ms: a[i][1] - a[i - 1][1], atMs: a[i][1] });
   return out;
