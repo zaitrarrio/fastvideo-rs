@@ -351,7 +351,7 @@ export const BuildPodsPolicyZ = z
     regions: uniq(z.string().regex(/^[A-Z]{2,4}(-[A-Z0-9]+)*$/, { message: "a data centre or its prefix: EU, EUR-IS, US-CA-2" }).meta({ "x-dynamic": "dc_prefixes" })).describe("Preferred data centres or prefixes (EU, EUR-IS, US-CA-2 …)."),
     regions_only: z.boolean().describe("Only the preferred regions (else they go first)."),
     volumes: z
-      .record(z.enum(RUNPOD_DATA_CENTERS).meta({ "x-dynamic": "data_centers" }), z.string().regex(/^[a-z0-9]{6,40}$/, { message: "a Runpod network volume id" }))
+      .partialRecord(z.enum(RUNPOD_DATA_CENTERS).meta({ "x-dynamic": "data_centers" }), z.string().regex(/^[a-z0-9]{6,40}$/, { message: "a Runpod network volume id" }))
       .describe("Data centre → a build-cache network volume id there (optional)."),
     idle_min: z.number().min(5).max(240).meta({ "x-unit": "min" }).describe("The pod stops itself after this many idle minutes."),
     max_h: z.number().min(0.5).max(24).meta({ "x-unit": "h" }).describe("Its cap: it stops after this many hours up."),

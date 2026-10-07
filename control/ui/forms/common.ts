@@ -65,3 +65,9 @@ export async function preflight(api: Api, body: { spec?: unknown; launch?: unkno
   }
 }
 export const issuesOf = (r: any): Issue[] => (Array.isArray(r?.issues) ? r.issues : r?.error ? [{ path: [], message: r.error }] : []);
+
+/** The server's own check of a schema (POST /api/schemas/<name>/validate): refinements the JSON Schema cannot say. */
+export const schemaRemote = (api: Api, name: string) => async (v: unknown) => {
+  const r = await api(`/api/schemas/${name}/validate`, { method: "POST", body: { doc: v } });
+  return { issues: (r.issues || []) as Issue[] };
+};

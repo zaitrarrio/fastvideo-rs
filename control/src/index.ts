@@ -49,7 +49,7 @@ import { checkImages } from "./cluster/preflight";
 import { resolveClusterImages } from "./ghcr";
 import { assertNameFree, checkName } from "./names";
 import { mapLaunchIssues } from "./standalone";
-import { issuesText, jsonSchemas, parseOr400, validate, type Issue } from "./schemas";
+import { issuesText, jsonSchemas, parseOr400, validate, type Issue, type SchemaName } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
@@ -862,6 +862,13 @@ app.post("/api/preflight", async (c) => {
   return c.json({ ok: pf.errors.length === 0, ...pf, images });
 });
 app.get("/api/schemas/dynamic", async (c) => c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined)));
+/** Any schema's own check (refinements included) on a draft, without acting: the forms' cross-field rules. */
+app.post("/api/schemas/:name/validate", async (c) => {
+  const name = c.req.param("name") as SchemaName;
+  if (!jsonSchemas()[name]) throw new HttpError(404, "no such schema");
+  const v = validate(name, (await body<any>(c)).doc);
+  return c.json({ ok: v.ok, issues: v.ok ? [] : v.issues });
+});
 app.get("/api/schemas/:name", (c) => {
   const s = jsonSchemas()[c.req.param("name")];
   if (!s) throw new HttpError(404, "no such schema");

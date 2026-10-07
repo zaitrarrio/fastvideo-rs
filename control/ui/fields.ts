@@ -154,6 +154,8 @@ interface Field {
   remote: string[];
   warn: string[];
   sync: () => void;
+  /** The draw it belongs to (prune() drops the fields of earlier draws). */
+  gen: number;
 }
 export interface Form {
   el: HTMLElement;
@@ -167,7 +169,7 @@ export interface Form {
   problems(): Issue[];
   /** Re-run every check (e.g. after fields were redrawn). */
   check(): void;
-  /** Forget fields whose element left the DOM (after a redraw). */
+  /** End of a redraw: forget the fields of the earlier draws. */
   prune(): void;
   ready(): Promise<boolean>;
 }
@@ -177,6 +179,7 @@ export function createForm(o: FormOptions): Form {
   const root = o.schema;
   let value = clone(o.value) ?? {};
   const fields = new Map<string, Field>();
+  let gen = 0;
   let remoteIssues: Issue[] = [];
   let remoteWarnings: Issue[] = [];
   let remotePending = !!o.remote;
@@ -208,7 +211,7 @@ export function createForm(o: FormOptions): Form {
     const place = (i: Issue, warn: boolean) => {
       for (let n = i.path.length; n >= 0; n--) {
         const f = fields.get(key(i.path.slice(0, n)));
-        if (f && f.box.isConnected) {
+        if (f) {
           const msg = (n < i.path.length ? `${i.path.slice(n).join(".")}: ` : "") + i.message;
           (warn ? f.warn : f.remote).push(msg);
           return true;
@@ -265,7 +268,7 @@ export function createForm(o: FormOptions): Form {
       const k = `${key(i.path)}|${i.message}`;
       if (!seen.has(k)) seen.add(k), out.push(i);
     };
-    for (const f of fields.values()) if (f.box.isConnected) for (const m of [...f.local, ...f.async]) add({ path: f.path, message: m });
+    for (const f of fields.values()) for (const m of [...f.local, ...f.async]) add({ path: f.path, message: m });
     for (const i of remoteIssues) add(i);
     return out;
   }
@@ -273,7 +276,7 @@ export function createForm(o: FormOptions): Form {
   function focus(p: Path) {
     for (let n = p.length; n >= 0; n--) {
       const f = fields.get(key(p.slice(0, n)));
-      if (f && f.box.isConnected) {
+      if (f) {
         f.box.scrollIntoView({ block: "center", behavior: "smooth" });
         (f.box.querySelector<HTMLElement>("[data-ctl]") || f.box.querySelector<HTMLElement>("input,select,textarea,button"))?.focus({ preventScroll: true });
         return;
@@ -517,7 +520,7 @@ export function createForm(o: FormOptions): Form {
     const err = el("div", { class: "cf-err", role: "alert", id: `${id}-err`, hidden: true });
     const box = el("div", { class: `cf-field ff-field${opts.wide || kind === "chips" || kind === "record" || kind === "textarea" ? " wide" : ""}`, "data-path": key(path), "data-schema": o.schemaName, "data-kind": kind });
     if (rule) box.dataset.ruleId = `${id}-rule`;
-    const f: Field = { path, box, err, opts, control: box, local: [], async: [], remote: [], warn: [], sync: () => {} };
+    const f: Field = { path, box, err, opts, control: box, local: [], async: [], remote: [], warn: [], sync: () => {}, gen };
     const { ctl, sync } = control(f, kind, s);
     f.control = ctl;
     f.sync = sync;
@@ -582,8 +585,10 @@ export function createForm(o: FormOptions): Form {
       runRemote();
     },
     prune() {
-      for (const [k, f] of fields) if (!f.box.isConnected) fields.delete(k);
-      paint();
+      // Called at the end of a redraw: the fields made by earlier draws are gone (the new ones may not be in the document yet).
+      for (const [k, f] of fields) if (f.gen < gen) fields.delete(k);
+      gen++;
+      queueMicrotask(paint);
     },
     ready: () => (remotePending ? new Promise<boolean>((r) => readyWaiters.push(r)) : Promise.resolve(ok())),
   };

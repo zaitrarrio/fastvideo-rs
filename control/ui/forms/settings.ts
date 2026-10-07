@@ -4,13 +4,13 @@
 // live channels and the target from the commits with images.
 import { h } from "../dom";
 import { createForm, type Api } from "../fields";
-import { loadDyn, loadSchemas } from "./common";
+import { loadDyn, loadSchemas, schemaRemote } from "./common";
 
 export async function mountTokenForm(host: HTMLElement, o: { api: Api; toast: (m: string) => void; onMinted: (r: any) => void }) {
   const { api } = o;
   const schemas = await loadSchemas(api);
   const mint = h("button", { type: "button", class: "primary" }, "Mint token");
-  const f = createForm({ schemaName: "token-create", schema: schemas["token-create"]!, api, value: { name: "", scope: "read", ttl_days: 90 }, submit: mint });
+  const f = createForm({ schemaName: "token-create", schema: schemas["token-create"]!, api, value: { name: "", scope: "read", ttl_days: 90 }, submit: mint, remote: schemaRemote(api, "token-create") });
   mint.addEventListener("click", async () => {
     if (!f.ok()) return;
     try {
@@ -33,7 +33,7 @@ export async function mountReleaseForm(host: HTMLElement, o: { api: Api; toast: 
   const { api } = o;
   const [schemas, dyn] = await Promise.all([loadSchemas(api), loadDyn(api)]);
   const go = h("button", { type: "button", class: "primary" }, "Dispatch release.yml");
-  const f = createForm({ schemaName: "release-dispatch", schema: schemas["release-dispatch"]!, dyn, api, value: { action: "promote", channel: "stable", dry_run: true }, submit: go });
+  const f = createForm({ schemaName: "release-dispatch", schema: schemas["release-dispatch"]!, dyn, api, value: { action: "promote", channel: "stable", dry_run: true }, submit: go, remote: schemaRemote(api, "release-dispatch") });
   const body = h("div", {});
   const draw = () => {
     const promote = f.get(["action"]) === "promote";
