@@ -14,6 +14,7 @@ import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
 import { ENV_VALUE_TYPES, FAKE_MODELS, RUNPOD_DATA_CENTERS, VARIANTS } from "./enums";
 import { listTags } from "./ghcr";
 import { knownVolumes, SLS_RESERVED } from "./serverless/spec";
+import { SLS_PRESETS } from "./serverless/presets";
 
 export interface GpuType {
   id: string;
@@ -91,6 +92,7 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
     endpoints: (endpoints.results || []).map((e) => e.name),
     variants: VARIANTS.map((v) => ({ id: v, detail: variantDetail(v) })),
     pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}` })),
+    sls_presets: SLS_PRESETS.map((p) => ({ id: p.id, detail: `${p.title} · ${p.variant}${p.config_toml ? " + inline config" : ""}${p.min_vram_gb ? ` · ≥ ${p.min_vram_gb} GB GPU` : ""}${p.licence ? ` · ${p.licence}` : ""}` })),
     fake_models: FAKE_MODELS,
     models: POOL_PRESETS.flatMap((p) => p.pool.models || []),
     catalog_models: CATALOG.models.map((m) => ({ id: m.id, family: m.family, recipe: m.recipe })),

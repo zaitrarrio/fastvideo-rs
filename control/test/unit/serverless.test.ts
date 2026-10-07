@@ -67,7 +67,9 @@ describe("serverless spec", () => {
     expect(() => normalizeEndpointSpec({ name: "x", env: { FV_SERVE_MODE: "http" } })).toThrow(/set by fv-control/);
     expect(() => normalizeEndpointSpec({ name: "x", env: { FV_R2_SECRET_ACCESS_KEY: "s" } })).toThrow(/set by fv-control/);
     expect(() => normalizeEndpointSpec({ name: "x", image: { channel: "stable", sha: "abcdef0" } })).toThrow(/exactly one/);
-    expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb" })).toThrow(/REQUEST_COUNT/);
+    // A load balancer's default scaler is REQUEST_COUNT; asking for QUEUE_DELAY is refused.
+    expect(normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb" })).toMatchObject({ scaler_type: "REQUEST_COUNT", scaler_value: 1 });
+    expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb", scaler_type: "QUEUE_DELAY" })).toThrow(/REQUEST_COUNT/);
     expect(normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1 }).mode).toBe("lb");
   });
   it("is the same schema /api/schemas serves (the cluster specs' framework)", () => {

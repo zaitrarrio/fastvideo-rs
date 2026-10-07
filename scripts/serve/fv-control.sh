@@ -41,7 +41,11 @@
 #                                              each pod's boot timeline: create, machine, image pull, container, fv-serve,
 #                                              volume, weights per component, warm-up, ready (and the phase it is in)
 #   fv-control.sh endpoint list [--all]       Runpod serverless endpoints fv-control made (docs/control/serverless.md)
-#   fv-control.sh endpoint create <spec.json|-> | create <name> [variant]   (defaults: cpu = CPU fake engine)
+#   fv-control.sh endpoint create <spec.json|-> | create <name> --preset P [--mode queue|lb] | create <name> [variant]
+#                                              model-first: a preset (endpoint presets) sets variant, config, weights,
+#                                              GPU; a bare variant is a custom endpoint (default cpu = CPU fake engine)
+#   fv-control.sh endpoint presets             what each preset serves (models, tasks, API names), GPU memory, weights
+#   fv-control.sh endpoint serves <name|id>    what an endpoint serves (derived; preset or inferred) and its test invokes
 #   fv-control.sh endpoint show <name|id> | update <name|id> <json> | scale <name|id> <max> [min]
 #   fv-control.sh endpoint extend <name|id> <minutes> | delete <name|id> | logs <name|id> [worker]
 #   fv-control.sh endpoint invoke <name|id> ['<input json>'] [--async]   queue: /runsync (default {"kind":"info"});
@@ -221,8 +225,21 @@ cmd_endpoint() {
     list) api GET "/api/serverless$([[ "${1:-}" == --all ]] && echo '?all=1')" | ep_line ;;
     create)
       if [[ -f "${1:-}" || "${1:-}" == - ]]; then body="$(jq -c '{spec: .}' "${1/#-//dev/stdin}")"
-      else body="$(jq -nc --arg n "${1:?spec.json or a name}" --arg v "${2:-cpu}" '{spec: {name: $n, variant: $v}}')"; fi
+      else
+        local name="${1:?spec.json or a name}" preset="" variant="" mode=""; shift
+        while (( $# )); do case "$1" in
+          --preset) preset="${2:?--preset P (endpoint presets)}"; shift 2 ;;
+          --mode) mode="${2:?--mode queue|lb}"; shift 2 ;;
+          -*) die "endpoint create: unknown option $1" ;;
+          *) variant="$1"; shift ;;
+        esac; done
+        [[ -n "$preset" && -n "$variant" ]] && die "endpoint create: --preset or a variant, not both"
+        body="$(jq -nc --arg n "$name" --arg p "$preset" --arg v "${variant:-cpu}" --arg m "$mode" \
+          '{spec: ({name: $n} + (if $p != "" then {preset: $p} else {variant: $v} end) + (if $m != "" then {mode: $m} else {} end))}')"
+      fi
       api_s POST /api/serverless "$body" || die "create: $(api_err)"; ep_line <<<"$API_OUT" ;;
+    presets) api GET /api/serverless/presets | jq -r '.presets[] | "\(.id)\t\(.variant)\(if .inline_config then " + inline config" else "" end)\t>= \(.min_vram_gb) GB\tweights: \(.weights | join(","))\n  serves: \([.serves.models[] | "\(.id) [\(.tasks | join(","))]"] | join("; "))\n  API names: \([.serves.aliases[] | "\(.name)->\(.model)"] | join(", "))\n  APIs: \(.serves.protocols | join(", "))"' ;;
+    serves) api GET "/api/serverless/${1:?name|id}/serves" | jq '{preset, preset_inferred, models: [.serves.models[] | {id, recipe, tier, tasks}], aliases: .serves.aliases, protocols: .serves.protocols, fal_apps: .serves.fal_apps, weights: .serves.weights, examples: [.examples[] | {label, invoke}]}' ;;
     show) api GET "/api/serverless/${1:?name|id}" | jq '{endpoint: (.endpoint | del(.spec)), spec: .endpoint.spec, runpod: .runpod, health, stats, jobs: [.jobs[] | {id, route, status, cold, delay_ms, exec_ms, wall_ms}], costs}' ;;
     update) api_s PUT "/api/serverless/${1:?name|id}" "$(jq -c '{spec: .}' <<<"${2:?json (merged over the spec)}")" || die "update: $(api_err)"; ep_line <<<"$API_OUT" ;;
     scale) api_s POST "/api/serverless/${1:?name|id}/scale" "$(jq -nc --argjson max "${2:?workers_max}" --arg min "${3:-}" '{workers_max: $max} + (if $min == "" then {} else {workers_min: ($min|tonumber)} end)')" || die "scale: $(api_err)"; ep_line <<<"$API_OUT" ;;

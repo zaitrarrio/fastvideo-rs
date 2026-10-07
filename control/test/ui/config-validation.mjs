@@ -103,6 +103,18 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   });
   await page.click(`${SV} .tabs button:text('Form')`);
   await audit();
+  // Model-first: the preset is a select, and the Serves panel follows it live.
+  assert.equal(await page.$eval(`${SV} [data-ctl][data-path="preset"]`, (e) => e.tagName), "SELECT");
+  await page.waitForSelector(`${SV} [data-serves] tr[data-model="fake-wan"]`);
+  await page.selectOption(`${SV} [data-ctl][data-path="preset"]`, JSON.stringify("h3-ref2v"));
+  await page.waitForSelector(`${SV} [data-serves] tr[data-model="h3-ref2v-turbo"]`);
+  assert.match(await page.textContent(`${SV} [data-serves]`), /MiniMax-H3-Turbo → h3-ref2v-turbo/);
+  assert.ok(await page.$(`${SV} details summary:text-matches("Advanced / custom", "i")`), "variant and config sit under Advanced with a preset");
+  await page.waitForFunction((s) => !document.querySelector(s).disabled, create, { timeout: 15000 });
+  await shot("04a-serverless-preset-h3-ref2v");
+  await audit();
+  await page.selectOption(`${SV} [data-ctl][data-path="preset"]`, JSON.stringify("cpu"));
+  await page.waitForSelector(`${SV} [data-serves] tr[data-model="fake-wan"]`);
 
   // ---------------------------------------------------------------- settings: tokens, policies
   await go("#/settings");

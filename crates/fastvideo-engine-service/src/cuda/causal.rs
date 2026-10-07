@@ -354,7 +354,10 @@ impl EngineBackend for CausalCudaBackend {
 
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
         if model.as_str() != self.id {
-            return Err(ApiError::invalid_param("model", format!("`{model}` is not served here")));
+            return Err(ApiError::invalid_param(
+                "model",
+                format!("`{model}` is not served here (served: {}; aliases: none)", self.id),
+            ));
         }
         if self.driver.is_some() {
             return Ok(());

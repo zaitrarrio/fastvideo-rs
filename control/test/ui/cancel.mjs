@@ -118,6 +118,20 @@ export async function cancelUiChecks({ page, B, out, tiny, w, mock }) {
   // ---- serverless: the Queue card
   await go("#/serverless?ep=se_uiq");
   await page.waitForSelector('h2:text("Queue: cancel and purge")');
+  // What it serves (the incident's spec: h3-max, no config): the inferred preset, sol-h3, and test invokes built from it.
+  await page.waitForSelector('[data-serves] tr[data-model="sol-h3"]');
+  assert.match(await page.textContent("[data-serves]"), /preset h3-max \(inferred/);
+  const opts = await page.$$eval('select[aria-label="Example request"] option', (os) => os.map((o) => o.textContent));
+  assert.ok(opts.some((o) => /^MiniMax V2 · t2v · Max \(sol-h3\)/.test(o)), opts.join("\n"));
+  assert.ok(!opts.some((o) => /MiniMax-H3-Turbo/.test(o)), "h3-max serves no MiniMax-H3-Turbo");
+  const mm = opts.findIndex((o) => /^MiniMax V2 · i2v/.test(o));
+  await page.selectOption('select[aria-label="Example request"]', String(mm));
+  await page.fill('input[aria-label="Reference image URL"]', "https://example.com/first.jpg");
+  assert.ok(!(await page.isVisible('input[aria-label="Audio URL"]')), "an image example asks for no audio");
+  const inv = JSON.parse(await page.inputValue('textarea[aria-label="Invoke input"]'));
+  assert.equal(inv.kind, "http");
+  assert.equal(inv.body.content[1].image_url.url, "https://example.com/first.jpg");
+  await shot("09a-sls-serves-and-examples");
   await page.click('button:has-text("Cancel a job…")');
   await page.waitForSelector('dialog [data-schema-form="serverless-cancel"]');
   assert.ok(["SELECT", "radiogroup"].includes(await page.$eval('dialog [data-ctl][data-path="fv_api"]', (e) => (e.tagName === "SELECT" ? "SELECT" : e.getAttribute("role")))), "the API is a select or segmented control, never free text");
