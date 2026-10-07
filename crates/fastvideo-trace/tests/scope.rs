@@ -4,7 +4,8 @@ use fastvideo_trace::{current, current_traceparent, scope, Trace};
 
 #[tokio::test]
 async fn scope_sets_current_for_the_task_only() {
-    let t = Trace::from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").unwrap();
+    let t =
+        Trace::from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").unwrap();
     let inner = scope(t, async {
         let seen = current();
         let tp = current_traceparent();
@@ -14,7 +15,10 @@ async fn scope_sets_current_for_the_task_only() {
     })
     .await;
     assert_eq!(inner.0, Some(t));
-    assert_eq!(inner.1.as_deref(), Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"));
+    assert_eq!(
+        inner.1.as_deref(),
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    );
     assert_eq!(inner.2, None);
     assert_eq!(current(), None);
 }

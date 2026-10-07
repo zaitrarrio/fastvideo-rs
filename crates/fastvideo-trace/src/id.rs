@@ -71,7 +71,10 @@ pub struct Trace {
 impl Trace {
     /// A new trace (random id, no parent).
     pub fn new_root() -> Self {
-        Self { id: TraceId::random(), parent: 0 }
+        Self {
+            id: TraceId::random(),
+            parent: 0,
+        }
     }
 
     /// Parses `traceparent` (version 00 layout; later versions are read the
@@ -100,7 +103,10 @@ impl Trace {
 
     /// The same trace with `span` as the parent of what follows.
     pub fn child(&self, span: u64) -> Self {
-        Self { id: self.id, parent: span }
+        Self {
+            id: self.id,
+            parent: span,
+        }
     }
 
     /// A point event now. Hot path: a clock read and a channel push.
@@ -128,7 +134,13 @@ impl Trace {
     /// A guard that records a span from now until it is dropped.
     #[inline]
     pub fn span(&self, comp: Comp, name: &'static str) -> Span {
-        Span { trace: *self, comp, name, start: now_ns(), arg: 0 }
+        Span {
+            trace: *self,
+            comp,
+            name,
+            start: now_ns(),
+            arg: 0,
+        }
     }
 }
 
@@ -151,7 +163,8 @@ impl Span {
 
 impl Drop for Span {
     fn drop(&mut self) {
-        self.trace.span_since(self.comp, self.name, self.start, self.arg);
+        self.trace
+            .span_since(self.comp, self.name, self.start, self.arg);
     }
 }
 
@@ -167,7 +180,10 @@ mod tests {
         assert_eq!(t.parent, 0x00f067aa0ba902b7);
         assert_eq!(t.traceparent(t.parent), v);
         // Unsampled is still parsed; policy decides.
-        assert!(Trace::from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00").is_some());
+        assert!(
+            Trace::from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
+                .is_some()
+        );
     }
 
     #[test]
@@ -188,6 +204,9 @@ mod tests {
     #[test]
     fn random_ids_differ() {
         assert_ne!(TraceId::random(), TraceId::random());
-        assert_eq!(TraceId::parse_hex(&TraceId::random().hex()).map(|t| t.hex().len()), Some(32));
+        assert_eq!(
+            TraceId::parse_hex(&TraceId::random().hex()).map(|t| t.hex().len()),
+            Some(32)
+        );
     }
 }

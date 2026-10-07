@@ -24,7 +24,10 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use fastvideo_trace::{decide, mode, new_span_id, now_ns, wall_ns, Comp, Event, Mode, OPT_IN_HEADER, TIME_HEADER, TRACEPARENT};
+use fastvideo_trace::{
+    decide, mode, new_span_id, now_ns, wall_ns, Comp, Event, Mode, OPT_IN_HEADER, TIME_HEADER,
+    TRACEPARENT,
+};
 
 /// Events one POST may carry.
 const MAX_INGEST_EVENTS: usize = 2000;
@@ -33,7 +36,10 @@ const MAX_INGEST_BYTES: usize = 512 * 1024;
 
 /// Names this host (`pod:<id>`) and wires the log shipper.
 pub fn install(worker_id: &str) {
-    let pod = std::env::var("RUNPOD_POD_ID").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| worker_id.to_owned());
+    let pod = std::env::var("RUNPOD_POD_ID")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| worker_id.to_owned());
     fastvideo_trace::set_host(format!("pod:{pod}"));
     if std::env::var("FV_TRACE_LOG").ok().is_none_or(|v| v != "0") {
         fastvideo_trace::set_sink(|e: &Event| {
@@ -77,7 +83,10 @@ fn span_name(method: &Method, path: &str) -> &'static str {
 }
 
 fn query_opt_in(q: Option<&str>) -> bool {
-    q.is_some_and(|q| q.split('&').any(|kv| matches!(kv, "fv_trace=1" | "fv_trace=true")))
+    q.is_some_and(|q| {
+        q.split('&')
+            .any(|kv| matches!(kv, "fv_trace=1" | "fv_trace=true"))
+    })
 }
 
 /// The tracing middleware (see the module docs).
@@ -87,7 +96,11 @@ pub async fn layer(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
     let h = req.headers();
-    let opt = if query_opt_in(req.uri().query()) { Some("1") } else { h.get(OPT_IN_HEADER).and_then(|v| v.to_str().ok()) };
+    let opt = if query_opt_in(req.uri().query()) {
+        Some("1")
+    } else {
+        h.get(OPT_IN_HEADER).and_then(|v| v.to_str().ok())
+    };
     if m == Mode::OptIn && opt.is_none() {
         return next.run(req).await;
     }
@@ -128,16 +141,32 @@ fn valid_id(id: &str) -> Option<String> {
 
 async fn get_trace(Path(id): Path<String>) -> Response {
     if mode() == Mode::Off {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": {"message": "tracing is off (FV_TRACE=off)"}}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": {"message": "tracing is off (FV_TRACE=off)"}})),
+        )
+            .into_response();
     }
     let Some(id) = valid_id(&id) else {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": {"message": "a trace id is 32 hex digits"}}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": {"message": "a trace id is 32 hex digits"}})),
+        )
+            .into_response();
     };
     // The snapshot waits (briefly) for the drain: off the async runtime.
-    let dump = tokio::task::spawn_blocking(move || fastvideo_trace::snapshot(&id, Duration::from_secs(2))).await.ok().flatten();
+    let dump =
+        tokio::task::spawn_blocking(move || fastvideo_trace::snapshot(&id, Duration::from_secs(2)))
+            .await
+            .ok()
+            .flatten();
     match dump {
         Some(d) => Json(d).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": {"message": "no events for this trace here"}}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": {"message": "no events for this trace here"}})),
+        )
+            .into_response(),
     }
 }
 
@@ -182,9 +211,17 @@ async fn post_events(Path(id): Path<String>, body: Bytes) -> Response {
     }
     let n = events.len();
     if fastvideo_trace::ingest(events) {
-        (StatusCode::ACCEPTED, Json(serde_json::json!({"accepted": n}))).into_response()
+        (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"accepted": n})),
+        )
+            .into_response()
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"accepted": 0, "dropped": n}))).into_response()
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"accepted": 0, "dropped": n})),
+        )
+            .into_response()
     }
 }
 
@@ -195,7 +232,10 @@ mod tests {
     #[test]
     fn span_names() {
         assert_eq!(span_name(&Method::GET, "/files/a/b.mp4"), "get_file");
-        assert_eq!(span_name(&Method::GET, "/v1/videos/x/content"), "get_content");
+        assert_eq!(
+            span_name(&Method::GET, "/v1/videos/x/content"),
+            "get_content"
+        );
         assert_eq!(span_name(&Method::POST, "/fv/v1/jobs"), "post");
         assert_eq!(span_name(&Method::GET, "/fv/v1/jobs/x"), "get");
         assert!(query_opt_in(Some("a=1&fv_trace=1")));

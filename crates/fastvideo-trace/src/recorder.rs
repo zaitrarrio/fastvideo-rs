@@ -83,7 +83,16 @@ pub struct Rec {
 
 impl Rec {
     pub fn point(trace: TraceId, comp: Comp, name: &'static str, t_ns: u64, arg: i64) -> Self {
-        Self { trace, comp, clock: Clock::Host, name, stage: "", t_ns, dur_ns: 0, arg }
+        Self {
+            trace,
+            comp,
+            clock: Clock::Host,
+            name,
+            stage: "",
+            t_ns,
+            dur_ns: 0,
+            arg,
+        }
     }
 }
 
@@ -167,7 +176,15 @@ pub struct Parked(#[allow(dead_code)] Receiver<Msg>);
 impl Recorder {
     fn channel(capacity: usize) -> (Self, Receiver<Msg>) {
         let (tx, rx) = sync_channel(capacity.max(1));
-        (Self { tx, sent: AtomicU64::new(0), dropped: AtomicU64::new(0), capacity: capacity.max(1) as u64 }, rx)
+        (
+            Self {
+                tx,
+                sent: AtomicU64::new(0),
+                dropped: AtomicU64::new(0),
+                capacity: capacity.max(1) as u64,
+            },
+            rx,
+        )
     }
 
     /// A recorder whose channel is never drained: what `emit` does when the
@@ -206,7 +223,11 @@ impl Recorder {
     }
 
     pub fn stats(&self) -> Stats {
-        Stats { sent: self.sent.load(Ordering::Relaxed), dropped: self.dropped.load(Ordering::Relaxed), capacity: self.capacity }
+        Stats {
+            sent: self.sent.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            capacity: self.capacity,
+        }
     }
 
     /// Waits (up to `timeout`) until everything sent before this call is
@@ -225,7 +246,8 @@ impl Recorder {
                 Err(_) => return false,
             }
         }
-        rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_ok()
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .is_ok()
     }
 }
 
@@ -234,7 +256,10 @@ impl Recorder {
 fn anchor() -> &'static (Instant, i64) {
     static A: OnceLock<(Instant, i64)> = OnceLock::new();
     A.get_or_init(|| {
-        let wall = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
         (Instant::now(), wall)
     })
 }
@@ -278,7 +303,13 @@ impl Store {
                 }
             }
             self.order.push_back(e.trace.clone());
-            self.traces.insert(e.trace.clone(), TraceBuf { events: Vec::new(), truncated: 0 });
+            self.traces.insert(
+                e.trace.clone(),
+                TraceBuf {
+                    events: Vec::new(),
+                    truncated: 0,
+                },
+            );
         }
         let b = self.traces.get_mut(&e.trace).expect("inserted above");
         if b.events.len() >= MAX_EVENTS {
@@ -326,10 +357,17 @@ pub fn started() -> bool {
 /// (`FV_TRACE_BUFFER` records, default 65 536; `FV_TRACE_FILE`: JSON lines).
 pub fn global() -> &'static Recorder {
     G.get_or_init(|| {
-        let cap = std::env::var("FV_TRACE_BUFFER").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_CAPACITY);
+        let cap = std::env::var("FV_TRACE_BUFFER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_CAPACITY);
         let (r, rx) = Recorder::channel(cap);
-        let file = std::env::var("FV_TRACE_FILE").ok().filter(|p| !p.is_empty());
-        let spawned = std::thread::Builder::new().name("fv-trace-drain".into()).spawn(move || drain(rx, file));
+        let file = std::env::var("FV_TRACE_FILE")
+            .ok()
+            .filter(|p| !p.is_empty());
+        let spawned = std::thread::Builder::new()
+            .name("fv-trace-drain".into())
+            .spawn(move || drain(rx, file));
         if let Err(e) = spawned {
             eprintln!("fv-trace: cannot start the drain thread ({e}); trace events are dropped");
         }
@@ -339,7 +377,11 @@ pub fn global() -> &'static Recorder {
 
 /// Formats one record (on the drain thread).
 fn format(r: &Rec) -> Event {
-    let name = if r.stage.is_empty() { r.name.to_owned() } else { format!("{}.{}", r.stage, r.name) };
+    let name = if r.stage.is_empty() {
+        r.name.to_owned()
+    } else {
+        format!("{}.{}", r.stage, r.name)
+    };
     Event {
         trace: r.trace.hex(),
         host: host().to_owned(),
@@ -358,11 +400,17 @@ fn format(r: &Rec) -> Event {
 }
 
 fn drain(rx: Receiver<Msg>, file: Option<String>) {
-    let mut out = file.and_then(|p| match std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-        Ok(f) => Some(std::io::BufWriter::new(f)),
-        Err(e) => {
-            eprintln!("fv-trace: FV_TRACE_FILE {p}: {e}");
-            None
+    let mut out = file.and_then(|p| {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&p)
+        {
+            Ok(f) => Some(std::io::BufWriter::new(f)),
+            Err(e) => {
+                eprintln!("fv-trace: FV_TRACE_FILE {p}: {e}");
+                None
+            }
         }
     });
     let mut batch: Vec<Event> = Vec::with_capacity(256);
@@ -421,7 +469,13 @@ pub fn snapshot(id: &str, wait: Duration) -> Option<TraceDump> {
     let b = s.traces.get(&id)?;
     let mut events = b.events.clone();
     events.sort_by_key(|e| (e.t_wall_ns, e.dur_ns));
-    Some(TraceDump { trace: id, host: host().to_owned(), events, truncated: b.truncated, stats: G.get().map(Recorder::stats).unwrap_or_default() })
+    Some(TraceDump {
+        trace: id,
+        host: host().to_owned(),
+        events,
+        truncated: b.truncated,
+        stats: G.get().map(Recorder::stats).unwrap_or_default(),
+    })
 }
 
 /// The ids of the traces in memory, newest last.
@@ -466,7 +520,15 @@ mod tests {
             let mut s = t.span(Comp::Adapter, "parse");
             s.arg(3);
         }
-        let ok = global().defer(move || vec![Rec { stage: "denoise", name: "step", clock: Clock::Device, dur_ns: 5, ..Rec::point(t.id, Comp::Gpu, "", 1, 2) }]);
+        let ok = global().defer(move || {
+            vec![Rec {
+                stage: "denoise",
+                name: "step",
+                clock: Clock::Device,
+                dur_ns: 5,
+                ..Rec::point(t.id, Comp::Gpu, "", 1, 2)
+            }]
+        });
         assert!(ok);
         ingest(vec![Event {
             trace: t.id.hex(),
@@ -481,7 +543,11 @@ mod tests {
             attrs: None,
         }]);
         let d = snapshot(&t.id.hex(), Duration::from_secs(5)).expect("trace stored");
-        let names: Vec<_> = d.events.iter().map(|e| (e.comp.as_str(), e.name.as_str(), e.clock.as_str())).collect();
+        let names: Vec<_> = d
+            .events
+            .iter()
+            .map(|e| (e.comp.as_str(), e.name.as_str(), e.clock.as_str()))
+            .collect();
         assert!(names.contains(&("http", "recv", "host")), "{names:?}");
         assert!(names.contains(&("adapter", "parse", "host")), "{names:?}");
         assert!(names.contains(&("gpu", "denoise.step", "gpu")), "{names:?}");

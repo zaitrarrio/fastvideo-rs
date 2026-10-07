@@ -760,6 +760,10 @@ async function fallback(env: ConsoleEnv, row: SlsRow, c: ConsoleCtx, path: strin
   return err(504, "timeout", `GET ${path} waits as Runpod job ${id} (no worker answered in time); try again`);
 }
 
+/** Tracing headers a load-balancer endpoint's requests pass on, and its answers' clock samples (docs/serve/tracing.md). */
+export const TRACE_REQ = ["traceparent", "x-fv-trace"] as const;
+export const TRACE_RESP = ["traceparent", "x-fv-trace-t", "server-timing"] as const;
+
 /** A load-balancer endpoint: the request goes on to https://<id>.api.runpod.ai with the Runpod key; its own URLs in JSON replies point back here. */
 async function lbForward(env: SlsEnv, row: SlsRow, req: Request, pathAndQuery: string, base: string): Promise<Response> {
   const lb = slsBases(env).lb(row.endpoint_id!);
@@ -767,11 +771,16 @@ async function lbForward(env: SlsEnv, row: SlsRow, req: Request, pathAndQuery: s
   const headers: Record<string, string> = { authorization: `Bearer ${env.RUNPOD_API_KEY}`, accept: req.headers.get("accept") || "*/*" };
   const ct = req.headers.get("content-type");
   if (ct) headers["content-type"] = ct;
+  // Request tracing (docs/serve/tracing.md): the opt-in and the trace id go on.
+  for (const k of TRACE_REQ) {
+    const v = req.headers.get(k);
+    if (v) headers[k] = v;
+  }
   const body = method === "GET" || method === "HEAD" ? undefined : await req.arrayBuffer();
   if (body && body.byteLength > BODY_MAX) return err(413, "payload_too_large", `at most ${BODY_MAX >> 20} MB`);
   const r = await fetchWithTimeout(`${lb}${pathAndQuery}`, { method, headers, body, redirect: "manual", timeoutMs: 150_000 });
   const out = new Headers();
-  for (const k of ["content-type", "content-length", "retry-after", "x-fal-request-id", "x-fv-tier", "x-fv-quality", "x-fv-recipe", "x-fv-model"]) {
+  for (const k of ["content-type", "content-length", "retry-after", "x-fal-request-id", "x-fv-tier", "x-fv-quality", "x-fv-recipe", "x-fv-model", ...TRACE_RESP]) {
     const v = r.headers.get(k);
     if (v) out.set(k, v);
   }

@@ -19,7 +19,12 @@ fn site(trace: Option<&Trace>, i: i64) -> i64 {
 fn untraced_requests_never_start_the_recorder() {
     // A request without the opt-in header, in each mode but `all`.
     for mode in [Mode::Off, Mode::OptIn] {
-        assert!(decide(mode, Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"), None).is_none());
+        assert!(decide(
+            mode,
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            None
+        )
+        .is_none());
     }
     assert!(current().is_none(), "no trace outside a traced request");
     let t0 = Instant::now();
@@ -29,7 +34,10 @@ fn untraced_requests_never_start_the_recorder() {
     }
     let took = t0.elapsed();
     std::hint::black_box(acc);
-    assert!(!started(), "the recorder (and its thread) exist only once something is traced");
+    assert!(
+        !started(),
+        "the recorder (and its thread) exist only once something is traced"
+    );
     // 10 M untraced call sites: a branch each (well under 1 s even unoptimised).
     assert!(took < Duration::from_secs(5), "{took:?}");
 }

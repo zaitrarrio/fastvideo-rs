@@ -19,17 +19,28 @@ async fn a_traced_job_records_queue_run_stages_and_device_steps() {
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
     let _drive = Driver::new(&clock);
     let t = Trace::new_root();
-    let mut h = e.submit_traced(JobId::new(), wan("traced"), Priority::Batch, Some(t)).await.unwrap();
+    let mut h = e
+        .submit_traced(JobId::new(), wan("traced"), Priority::Batch, Some(t))
+        .await
+        .unwrap();
     let evs = until_terminal(&mut h).await;
-    assert!(matches!(evs.last(), Some(EngineEvent::Finished(_))), "{evs:?}");
+    assert!(
+        matches!(evs.last(), Some(EngineEvent::Finished(_))),
+        "{evs:?}"
+    );
 
-    let d = fastvideo_trace::snapshot(&t.id.hex(), Duration::from_secs(10)).expect("trace recorded");
+    let d =
+        fastvideo_trace::snapshot(&t.id.hex(), Duration::from_secs(10)).expect("trace recorded");
     let has = |comp: &str, name: &str| d.events.iter().any(|e| e.comp == comp && e.name == name);
     assert!(has("queue", "wait"), "{:#?}", d.events);
     assert!(has("engine", "run"));
     assert!(has("engine", "text_encode"));
     // Device spans: one per denoise step, each the scripted 1 s step.
-    let steps: Vec<_> = d.events.iter().filter(|e| e.comp == "gpu" && e.name == "denoise.step").collect();
+    let steps: Vec<_> = d
+        .events
+        .iter()
+        .filter(|e| e.comp == "gpu" && e.name == "denoise.step")
+        .collect();
     assert_eq!(steps.len(), 3, "{:#?}", d.events);
     for (i, s) in steps.iter().enumerate() {
         assert_eq!(s.clock, "gpu");
@@ -37,9 +48,17 @@ async fn a_traced_job_records_queue_run_stages_and_device_steps() {
         assert_eq!(s.dur_ns, 1_000_000_000, "step {}", i + 1);
     }
     // Host spans of the same steps exist too (host clock).
-    assert_eq!(d.events.iter().filter(|e| e.comp == "engine" && e.name == "denoise.step").count(), 3);
+    assert_eq!(
+        d.events
+            .iter()
+            .filter(|e| e.comp == "engine" && e.name == "denoise.step")
+            .count(),
+        3
+    );
     // Resolved off the engine's thread, by the drain.
-    assert!(fastvideo_engine_service::fake::marks_resolved_on().iter().any(|n| n == "fv-trace-drain"));
+    assert!(fastvideo_engine_service::fake::marks_resolved_on()
+        .iter()
+        .any(|n| n == "fv-trace-drain"));
     assert_eq!(d.stats.dropped, 0);
 }
 
@@ -49,8 +68,14 @@ async fn an_untraced_job_records_nothing() {
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
     let _drive = Driver::new(&clock);
     let before = fastvideo_trace::recent().len();
-    let mut h = e.submit(JobId::new(), wan("plain"), Priority::Batch).await.unwrap();
-    assert!(matches!(until_terminal(&mut h).await.last(), Some(EngineEvent::Finished(_))));
+    let mut h = e
+        .submit(JobId::new(), wan("plain"), Priority::Batch)
+        .await
+        .unwrap();
+    assert!(matches!(
+        until_terminal(&mut h).await.last(),
+        Some(EngineEvent::Finished(_))
+    ));
     if fastvideo_trace::started() {
         fastvideo_trace::global().flush(Duration::from_secs(5));
     }

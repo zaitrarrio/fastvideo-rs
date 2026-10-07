@@ -83,7 +83,10 @@ pub struct Timeline {
 
 impl std::fmt::Debug for Timeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Timeline").field("trace", &self.trace.id).field("marks", &self.labels.len()).finish()
+        f.debug_struct("Timeline")
+            .field("trace", &self.trace.id)
+            .field("marks", &self.labels.len())
+            .finish()
     }
 }
 
@@ -91,19 +94,36 @@ impl Timeline {
     /// Room for `cap` marks (stage boundaries + steps + a few).
     pub fn new(trace: Trace, pool: Box<dyn MarkPool>, cap: usize) -> Self {
         let cap = cap.min(pool.capacity()).max(2);
-        Self { trace, pool, labels: Vec::with_capacity(cap), cap, stage: "", overflow: 0 }
+        Self {
+            trace,
+            pool,
+            labels: Vec::with_capacity(cap),
+            cap,
+            stage: "",
+            overflow: 0,
+        }
     }
 
     fn push(&mut self, kind: Kind, stage: &'static str, arg: i64) {
         // Keep the last slot for the end mark.
-        let room = if kind == Kind::End { self.cap } else { self.cap - 1 };
+        let room = if kind == Kind::End {
+            self.cap
+        } else {
+            self.cap - 1
+        };
         if self.labels.len() >= room {
             self.overflow += 1;
             return;
         }
         let host_ns = now_ns();
         let device = self.pool.record(self.labels.len());
-        self.labels.push(Label { kind, stage, arg, host_ns, device });
+        self.labels.push(Label {
+            kind,
+            stage,
+            arg,
+            host_ns,
+            device,
+        });
     }
 
     /// The run's trace.
@@ -148,7 +168,13 @@ impl Timeline {
             let l = self.labels[i];
             match l.kind {
                 // A stage whose next mark is its step 2 is its step 1.
-                Kind::Stage if self.labels.get(i + 1).is_some_and(|x| x.kind == Kind::Step && x.stage == l.stage && x.arg == 2) => (l.stage, "step", 1),
+                Kind::Stage
+                    if self.labels.get(i + 1).is_some_and(|x| {
+                        x.kind == Kind::Step && x.stage == l.stage && x.arg == 2
+                    }) =>
+                {
+                    (l.stage, "step", 1)
+                }
                 Kind::Stage | Kind::Mark => ("", l.stage, 0),
                 Kind::Step => (l.stage, "step", l.arg),
                 Kind::Tail => (l.stage, "tail", 0),
@@ -158,17 +184,42 @@ impl Timeline {
         for i in 0..n.saturating_sub(1) {
             let (stage, name, arg) = name_of(i);
             let (a, b) = (self.labels[i].host_ns, self.labels[i + 1].host_ns);
-            out.push(Rec { trace: id, comp: Comp::Engine, clock: Clock::Host, name, stage, t_ns: a, dur_ns: b.saturating_sub(a), arg });
+            out.push(Rec {
+                trace: id,
+                comp: Comp::Engine,
+                clock: Clock::Host,
+                name,
+                stage,
+                t_ns: a,
+                dur_ns: b.saturating_sub(a),
+                arg,
+            });
         }
         // Device spans: every mark recorded, elapsed times available.
         let g: Option<Vec<u64>> = if n >= 2 && self.labels.iter().all(|l| l.device) {
-            (0..n).map(|i| if i == 0 { Some(0) } else { self.pool.elapsed_ns(0, i) }).collect()
+            (0..n)
+                .map(|i| {
+                    if i == 0 {
+                        Some(0)
+                    } else {
+                        self.pool.elapsed_ns(0, i)
+                    }
+                })
+                .collect()
         } else {
             None
         };
         if let Some(g) = g {
             let h0 = self.labels[0].host_ns;
-            let lag = (0..n).map(|i| self.labels[i].host_ns.saturating_sub(h0).saturating_sub(g[i])).max().unwrap_or(0);
+            let lag = (0..n)
+                .map(|i| {
+                    self.labels[i]
+                        .host_ns
+                        .saturating_sub(h0)
+                        .saturating_sub(g[i])
+                })
+                .max()
+                .unwrap_or(0);
             for i in 0..n - 1 {
                 let (stage, name, arg) = name_of(i);
                 out.push(Rec {
@@ -185,7 +236,13 @@ impl Timeline {
         }
         if self.overflow > 0 {
             let t = self.labels.last().map_or(0, |l| l.host_ns);
-            out.push(Rec::point(id, Comp::Engine, "timeline.overflow", t, i64::from(self.overflow)));
+            out.push(Rec::point(
+                id,
+                Comp::Engine,
+                "timeline.overflow",
+                t,
+                i64::from(self.overflow),
+            ));
         }
         out
     }
@@ -204,7 +261,8 @@ mod tests {
             64
         }
         fn record(&mut self, _: usize) -> bool {
-            self.recorded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.recorded
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             true
         }
         fn elapsed_ns(&self, from: usize, to: usize) -> Option<u64> {
@@ -215,7 +273,13 @@ mod tests {
     #[test]
     fn segments_are_named_and_placed() {
         let recorded = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut t = Timeline::new(Trace::new_root(), Box::new(Scripted { recorded: recorded.clone() }), 16);
+        let mut t = Timeline::new(
+            Trace::new_root(),
+            Box::new(Scripted {
+                recorded: recorded.clone(),
+            }),
+            16,
+        );
         t.stage("text");
         t.stage("denoise");
         for k in 1..=3 {
@@ -226,7 +290,11 @@ mod tests {
         t.push(Kind::End, "", 0);
         assert_eq!(recorded.load(std::sync::atomic::Ordering::Relaxed), 8);
         let recs = t.resolve();
-        let gpu: Vec<_> = recs.iter().filter(|r| r.comp == Comp::Gpu).map(|r| (r.stage, r.name, r.arg, r.dur_ns)).collect();
+        let gpu: Vec<_> = recs
+            .iter()
+            .filter(|r| r.comp == Comp::Gpu)
+            .map(|r| (r.stage, r.name, r.arg, r.dur_ns))
+            .collect();
         assert_eq!(
             gpu,
             vec![

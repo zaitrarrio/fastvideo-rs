@@ -83,10 +83,6 @@ impl EdgeTrace {
         self.push(name, start_ms, now - start_ms, None);
     }
 
-    pub fn point(&self, name: &str) {
-        self.push(name, now_ms(), 0, None);
-    }
-
     /// The forward to `front`: a span plus the NTP-style sample from the
     /// front's `x-fv-trace-t` (`<recv ns>;<send ns>` on its clock).
     pub fn forwarded(&self, front: &str, start_ms: i64, resp: &Response) {

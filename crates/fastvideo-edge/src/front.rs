@@ -376,6 +376,10 @@ async fn route(
         v.deny = fwd.deny.clone();
     }
     let body = if matches!(method, Method::Get | Method::Head) { None } else { body };
+    if let Some(tr) = tr {
+        // The front's parent span is this hop (docs/serve/tracing.md).
+        h.set("traceparent", &tr.traceparent())?;
+    }
     let t_fwd = now_ms();
     let r = forward(env, &fwd.url, method, path_q, h, body, &v).await;
     if let (Some(tr), Ok(resp)) = (tr, r.as_ref()) {

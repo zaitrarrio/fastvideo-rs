@@ -69,7 +69,10 @@ pub fn set_mode(m: Mode) {
 }
 
 fn truthy(v: &str) -> bool {
-    matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes")
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "on" | "yes"
+    )
 }
 
 /// Whether a request is traced, and under which id: `traceparent` (when
@@ -84,7 +87,11 @@ pub fn decide(mode: Mode, traceparent: Option<&str>, opt_in: Option<&str>) -> Op
     if !wanted {
         return None;
     }
-    Some(traceparent.and_then(Trace::from_traceparent).unwrap_or_else(Trace::new_root))
+    Some(
+        traceparent
+            .and_then(Trace::from_traceparent)
+            .unwrap_or_else(Trace::new_root),
+    )
 }
 
 #[cfg(test)]
@@ -95,11 +102,17 @@ mod tests {
 
     #[test]
     fn opt_in_needs_the_flag() {
-        assert!(decide(Mode::OptIn, Some(TP), None).is_none(), "a bare traceparent does not opt in");
+        assert!(
+            decide(Mode::OptIn, Some(TP), None).is_none(),
+            "a bare traceparent does not opt in"
+        );
         assert!(decide(Mode::OptIn, None, Some("0")).is_none());
         let t = decide(Mode::OptIn, Some(TP), Some("1")).unwrap();
         assert_eq!(t.id.hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
-        assert!(decide(Mode::OptIn, Some("junk"), Some("true")).is_some(), "a new root when traceparent is bad");
+        assert!(
+            decide(Mode::OptIn, Some("junk"), Some("true")).is_some(),
+            "a new root when traceparent is bad"
+        );
     }
 
     #[test]

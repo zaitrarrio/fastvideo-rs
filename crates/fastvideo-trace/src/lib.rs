@@ -30,8 +30,8 @@ mod timeline;
 pub use id::{new_span_id, Span, Trace, TraceId};
 pub use policy::{decide, mode, set_mode, Mode, OPT_IN_HEADER, TIME_HEADER, TRACEPARENT};
 pub use recorder::{
-    global, ingest, now_ns, recent, set_host, set_sink, snapshot, started, wall_ns, Clock, Comp, Event, Parked, Rec,
-    Recorder, Stats, TraceDump,
+    global, ingest, now_ns, recent, set_host, set_sink, snapshot, started, wall_ns, Clock, Comp,
+    Event, Parked, Rec, Recorder, Stats, TraceDump,
 };
 pub use timeline::{HostMarks, MarkPool, Timeline};
 
