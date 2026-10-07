@@ -11,7 +11,7 @@
 #                                      sfwan21-1.3b sana-video-2b-480p
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
-#                                      hy15-720-i2v aux text-fp8 upscalers
+#                                      hy15-720-i2v aux text-fp8 dit-prequant upscalers
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
 #                                      ltx25-dev ltx25-a2v-guided ltx2
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
@@ -36,6 +36,11 @@
 # manifest's SHA-256 and the model's size and full length, plus the model's
 # SHA-256 when FV_VERIFY_FP8_SHA=1 (about 40 GB read). A missing tree only
 # means the loader quantizes at load; the cell reports it as INCOMPLETE.
+# The `dit-prequant` cell checks the optional pre-quantized resident H3 DiT
+# trees (`fv-gpucheck quantize-dit`, fast boot A) in h3-base/: the manifest's
+# SHA-256 and the model's size and full length, plus the model's SHA-256 when
+# FV_VERIFY_DIT_SHA=1 (about 26 GB read). A missing tree only means the
+# loader quantizes at load; the cell reports it as INCOMPLETE.
 # A `sha:<dest>` cell checks every file weights-sha256.tsv lists for <dest>
 # (hashes recorded at fetch time): present, the listed size, the listed
 # SHA-256 or md5 (alternatives a|b accepted). It reads the whole of each file (h3-ref2va: 69 GB).
@@ -148,13 +153,14 @@ needs() {
       echo "$(needs ltx23) :ltx23-dev/ltx-2.3-22b-dev.safetensors :ltx23-dev/ltx-2.3-22b-distilled-lora-384-1.1.safetensors :ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
+    dit-prequant) echo "dit-prequant" ;;
     upscalers) echo "upscalers" ;;
     *) return 1 ;;
   esac
 }
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers
+  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super)
 
@@ -276,6 +282,29 @@ check_text_fp8() {
   return $rc
 }
 
+# dit-prequant: the fast-boot trees as written on EU by `fv-gpucheck
+# quantize-dit` (docs/gaps/2026-10-07-fast-boot.md). rel<TAB>bytes<TAB>sha256.
+DIT_PREQUANT_TREES="h3-base/transformer_prequant_4step-vsa_mxfp8/manifest.json	3809	e80ec8c23a1e18581eef48c2c0e7d95f181072e0af4eae8c611f0c710945ceee
+h3-base/transformer_prequant_4step-vsa_mxfp8/model.safetensors	27288660164	d3dcc7b3ff3b05783cbab37e95cc1c3e8113b750400bc27db14a1a37ae6ddc18
+h3-base/transformer_prequant_sol-h3_mxfp8/manifest.json	3809	6dc6db7d53469e8b2b230b36b957e8f7b3aef76a9a0e0cef04c571f90c2aeeef
+h3-base/transformer_prequant_sol-h3_mxfp8/model.safetensors	23435142712	cf58b8d2f264509a61df819026b9f63cf1955f6476a5519b8300717cfc7849f3"
+check_dit_prequant() {
+  local rc=0 rel size sha p got
+  while IFS=$'\t' read -r rel size sha; do
+    p="$W/$rel"
+    if [[ ! -f "$p" ]]; then echo "  MISSING $p" >&2; rc=1; continue; fi
+    got="$(wc -c <"$p" | tr -d ' ')"
+    if [[ "$got" != "$size" ]]; then echo "  SIZE $p: $got, expected $size" >&2; rc=1; continue; fi
+    if [[ "$p" == *.safetensors ]]; then
+      bash "$HERE/verify-safetensors.sh" "$p" >/dev/null || rc=1
+      [[ "${FV_VERIFY_DIT_SHA:-0}" == 1 ]] || continue
+    fi
+    got="$(sha256sum "$p" | awk '{print $1}')"
+    if [[ "$got" != "$sha" ]]; then echo "  SHA256 $p: $got, expected $sha" >&2; rc=1; fi
+  done <<<"$DIT_PREQUANT_TREES"
+  return $rc
+}
+
 # upscalers: the auxiliary/upscalers/ trees (weights-manifest.tsv Hub rows at
 # the revisions pinned there). rel<TAB>bytes<TAB>sha256: the Hub's LFS SHA-256;
 # the two small JSON files hashed at the pinned revision.
@@ -335,6 +364,10 @@ for cell in "$@"; do
   fi
   if [[ "$cell" == upscalers ]]; then
     if check_upscalers; then echo "weights ok: upscalers"; else echo "weights INCOMPLETE: upscalers" >&2; fail=1; fi
+    continue
+  fi
+  if [[ "$cell" == dit-prequant ]]; then
+    if check_dit_prequant; then echo "weights ok: dit-prequant"; else echo "weights INCOMPLETE: dit-prequant" >&2; fail=1; fi
     continue
   fi
   if [[ "$cell" == text-fp8 ]]; then

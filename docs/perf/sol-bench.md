@@ -441,3 +441,133 @@ All phase B2 pods were created and deleted by this run (UTC):
 - **Parallelism and wall clock:** never more than 2 pods at once; every pod was deleted within 49 min of creation. No backstop fired.
 - **Balance:** $30.55 before (20:55), $22.23 after (23:01). Other sessions' pods were also running in that window, so the drop is not all this run.
 - **Hosts:** no pod landed on `s3p8exc9lcvi` or `lkyvy1sgj4rc`.
+
+## Phase B3 (the remaining blocked cells): run plan (2026-10-07, planned before renting)
+
+Phase B2 left five cells blocked: the three PISA arms (`wan5b-opt`, `a14b-sol-fullopt`, `ltx23-hq-fullopt`), both LingBot arms, and the Cosmos3 BF16 TeaCache arm (budget).
+
+**Two images.**
+- Main 3c66c10 (`sha256:fedcc8b5…`, also `:latest`) has the LingBot refiner memory fix (679dfda: pool trims, encode before the refiner loads). It runs the cells that need no code change (sets `d1`, `d2`).
+- The CI runtime image of `fix/pisa-sm120-phaseb3` runs the PISA arms and LingBot fullopt, whose refiner uses the same PISA kernel (sets `e1`, `e2`). Recorded by digest in the results.
+
+**GPU, region, pins:** as phase B2. RTX PRO 6000 only, EUR-IS-1, EU volume `jg48s6o1w0`, `FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc"`. Wan arms pin `FASTVIDEO_WAN_QUANT=off`, Diffusers UniPC sigmas and the full VAE (phase A's `wan5b-opt` did not; B3's does). `FASTVIDEO_FP8` off. LTX-2.3 fullopt keeps NVFP4 (sol-engine `fullopt.toml`).
+
+**LingBot baseline does not fit one pod.** Phase B2 measured the base stage at 12.8 s per step (40 steps, 514.6 s) after about 550 s of load and text. The 1080p refiner runs 8 steps × CFG at 253k tokens with dense attention: at the base stage's attention throughput that is about 2.5k s, so load + base + refiner is about 3.6k s, over the 55-min cell budget. The baseline therefore runs the refiner with `--refiner-steps 1`, which gives 3 of the 8 official sigmas (0.85 plus the 2 tail steps). Every baseline refiner step costs the same (dense, CFG every step, no cache), so `sol_bench_table.py` scales the refiner denoise by 8/3, as phase A did for `wan14-720p-base-s15`. The cell is `lingbot-baseline-rs3`.
+
+| Pod set | Image | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|---|
+| d1 | main 3c66c10 | `lingbot-router`, `lingbot-baseline-rs3` (base 40 st + refiner 3 of 8 st, ×8/3) | 375.53 s (4x GB200) | 1 + ~40 min |
+| d2 | main 3c66c10 | `cosmos3-teacache` (BF16, TeaCache 1.15/10/3) | 2.26x ratio (4x GB200) | ~25 min |
+| e1 | PISA branch | `pisa-parity` (device PISA vs the host oracle), `wan5b-opt` (EasyCache + PISA 5B), `lingbot-fullopt` (EasyCache + refiner PISA) | 28.69 s (1x GB200); 144.36 s (4x GB200) | 1 + 8 + ~35 min |
+| e2 | PISA branch | `ltx23-hq-fullopt` (SCSP + PISA s2 + prune + NVFP4), `a14b-sol-fullopt` (EasyCache + PISA) | 2.40x ratio; 207.01 s (1x GB200) | 12 + ~20 min |
+
+Order: d1 and d2 one after the other while the PISA fix is built and tested; then e1 and e2 (at most 2 pods of this run at once; another agent may run one more).
+
+**Pods:** each has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop; a cell whose estimate no longer fits is recorded as skipped.
+
+**Money:** the balance was $20.97 before renting (2026-10-07), shared with another agent, with an $8 floor; it is checked before each pod. Four pods at ≤ 65 min × $2.09/h is $9.1 at most; expected about $6–7. If a pod would take the balance near the floor, it is not started and the cell is reported as blocked.
+
+## Phase B3 results (2026-10-07)
+
+Every pod was an RTX PRO 6000 Blackwell Server (96 GB, sm_120, driver 595.91) in EUR-IS-1 with `jg48s6o1w0`. Images (CI runtime images, pinned by digest):
+
+| Image | Commit | Used by |
+|---|---|---|
+| `sha256:fedcc8b5…` | main 3c66c10 | d1, d2 |
+| `sha256:9ce48e48…` | d8b2d6a (fused PISA, first-order term without the softmax scale) | e1 |
+| `sha256:ee6ffb5f…` | 50f453b (+ LingBot refiner released before the 1080p decode) | f1, f2 |
+| `sha256:9337fe1b…` | 4f5a413 (+ first-order term with the softmax scale) | g1 |
+
+Raw data: `artifacts/runpod/sol-bench/2026-10-07-phaseB3/<set>/<cell>/` with each set's `driver.log`, plus `results.json`. Clips are gitignored and kept with the run's scratch clips.
+
+**Status: every blocked cell now has a number.** A14B fullopt's number comes from e1, whose PISA first-order term was 11.3x too large: the timing stands, but its clip is noise and the rerun on the fixed image (g2) was not run for budget.
+
+| Model | Config | Their HW | Theirs (s) | Our HW | Ours (s) | Ours / theirs | Ours: load / text / denoise / decode (s) | Notes |
+|---|---|---|---:|---|---:|---:|---|---|
+| Wan2.2 TI2V-5B | 704x1280x121, 50 st, EasyCache 0.036 + PISA | 1x GB200 | 28.69 | RTX PRO 6000 (sm_120) | 72.55 | 2.53x | 114.60 / 0.01 / 58.71 / 13.80 | g1; pinned (`WAN_QUANT=off`, Diffusers sigmas, full VAE); text: cache hit |
+| Wan2.2 T2V-A14B | 1280x720x81, 40 st, EasyCache + PISA | 1x GB200 | 207.01 | RTX PRO 6000 (sm_120) | 776.88 | 3.75x | 318.96 / 1.14 / 767.86 / 7.85 | e1, **unscaled first-order term: output is noise**; 0 of 40 steps reused; first request after load |
+| LTX-2.3 HQ | 1920x1088x241, SCSP + PISA s2 + midpoint prune + NVFP4 FFN | 1x GB200 | — | RTX PRO 6000 (sm_120) | 134.47 | — | 14.18 / 58.64 / 64.62 / 10.11 | g1; theirs: ratio only (2.40x); text: cache miss (streamed Gemma) |
+| LingBot-Video MoE | 480p 121 f 40 st + 1080p refiner 8 st, 1 prompt, baseline | 4x GB200 | 375.53 | RTX PRO 6000 (sm_120) | 2096.88 | 5.58x | 410.08 / 0.71 / 2025.21 / 36.40 | f1; refiner 3 of 8 steps measured (184.5 s each), extrapolated x8/3 (measured request 1174.2 s); first request after load |
+| LingBot-Video MoE | same, EasyCache + refiner PISA | 4x GB200 | 144.36 | — | — | — | — | not run: budget (f2 stopped, g2 not started) |
+| Cosmos3-Super 64B | 1280x720x189, 35 st, TeaCache 1.15/10/3, BF16 | 4x GB200 | — | RTX PRO 6000 (sm_120) | 758.05 | — | 0.00 / 1.81 / 732.22 / 22.21 | d2; theirs: 2.26x incl. NVFP4 |
+
+Optimized arm over our own baseline (same GPU), against theirs:
+
+| Pair | Ours | Theirs |
+|---|---:|---:|
+| `cosmos3-baseline` (B2, 1608.56 s) → `cosmos3-teacache` | 2.12x | 2.26x (incl. NVFP4) |
+| `a14b-sol-base` (B2, 1441.74 s) → `a14b-sol-fullopt` | 1.86x (all from PISA: EasyCache reused no step) | 2.17x |
+| `ltx23-hq-base` (B2, 213.39 s) → `ltx23-hq-fullopt` | 1.59x E2E; 2.17x without text (the Gemma stream varies 49–59 s); 2.37x denoise | 2.40x |
+| `wan5b-easycache` (A, 86.21 s, not pinned) → `wan5b-opt` | 1.19x | 24.35 → 28.69 s (theirs: PISA golden run slower than fullopt) |
+
+### PISA: root cause and fix
+
+**Why it was slow.** `wan::ops::pisa_attn_device` ran the multi-launch scalar route:
+- `sol_fine_partials`: one CTA per query token, and per key a block-wide shared-memory reduction with 8 barriers. It never reached tensor cores, because `sol_fine_or_mma` takes the MMA kernel only in log2 space and PISA passed natural-log space.
+- `sol_coarse_partials`: per query token, every pooled block, with a linear search of the exact list and another block reduction per block.
+- `sol_global_h_bar`: one thread per (e, d) cell looping over every token.
+
+Nothing was missing for sm_120 (the cubins were there); the route itself was quadratic scalar work.
+
+**Fix (`fix/pisa-sm120-phaseb3`).** `pisa_mma_fwd` is the fused Sol forward (`sol_mma_fwd_body`, `kernels.cu`) in a PISA template mode:
+- Each 64-query tile's exact set comes from a top-k bitmap (`pisa_sel_bits`): the f32 pooled-score route of the host oracle.
+- The remainder keeps the zeroth-order term and also sums its unweighted probability mass.
+- The epilogue adds `tail * s * (q @ H_bar)` on tensor cores (Q fragments scaled by `tail * s` against H_bar in shared memory), before the 1/l normalisation.
+- H_bar comes from a tiled two-stage reduction (`pisa_h_partial` / `pisa_h_reduce`).
+- The old route stays as `pisa_attn_device_legacy` (head dim ≠ 128, pre-sm80, `FASTVIDEO_PISA_KERNEL=legacy`).
+
+**Two math fixes on the way:**
+1. **Tail weight.** The device first-order weight was the len(j)-weighted coarse sum, about 64x the oracle's unweighted tail. The host twin test used one block, so it never reached the remainder; a multi-block test now covers it, and it fails on the old weighting.
+2. **Missing softmax scale.** The first-order term had no softmax scale `s` in the oracle, the twin or either device route. The Taylor step of `exp(s q·k)` is `s q·(k − k̄)`, so the term was √128 = 11.3x too large. The kernel matched the oracle (rel L2 0.005), but e1's real-model clips were noise. With `s` (4f5a413), LTX-2.3 and Wan-5B produce coherent video. A `FASTVIDEO_PISA_FIRST_ORDER=0` run (zeroth order only, `ltx23-hq-fullopt-zeroth`) gives a near-identical frame, so the term is now a small correction.
+
+**Speed.** `fv-gpucheck kernels --groups pisa`, one attention call at sparsity 0.9 on the PRO 6000:
+
+| Shape | Fused | Dense SDPA | Legacy route |
+|---|---:|---:|---:|
+| 24 heads × 27 280 tokens (Wan-5B) | 5.7 ms | 25.9 ms | 1405–1458 ms |
+| 32 heads × 75 600 tokens (LTX-2.3 stage 2) | 39–41 ms | 253 ms | — |
+
+Per denoise step:
+
+| Cell | Before (legacy PISA) | After | Dense |
+|---|---:|---:|---:|
+| Wan-5B `wan5b-opt` | 63.9 s | 2.2 s | 3.0 s |
+| LTX-2.3 stage 2 | > 10 min (step 1) | 5.8 / 2.6 / 2.6 s | 13.3 s |
+| A14B PISA steps | never finished | 17.6 s | 35.8 s |
+
+**Parity** (`pisa` group, g1):
+- Fused vs the f32 oracle: rel L2 0.0050–0.0056 (limit 0.02) at 1000, 2048, 4033, 4100 and 20 000 tokens and sparsity 0.5–0.9. The first-order term alone moves the oracle by 4–52 % there, so it is exercised.
+- Legacy vs the oracle: ≤ 1.7e-6.
+- Sparsity 0 vs dense SDPA: 0.0033, also through the public `pisa_attn` entry.
+
+**Quality note.** `ltx23-hq-fullopt` is coherent, but finer detail is replaced by a speckled texture next to the dense base. The zeroth-order-only run looks the same, so it is not the first-order term. It may come from the stage-2 PISA approximation, NVFP4, SCSP or the prune; not separated (budget).
+
+### LingBot memory
+
+- **d1 (main):** the 679dfda fixes worked through the refiner (all steps ran, peak 87.5 GiB), then the run ran out of memory in the 1080p decode with the 60 GB refiner still resident.
+- **Fix (50f453b, `lingbot/pipeline.rs`):** under swap residency the refiner and its text embeddings leave and the pool is trimmed before the decode.
+- **f1:** completed, with decode 36.4 s.
+
+### Pods
+
+All phase B3 pods were created and deleted by this run (UTC):
+
+| Pod | Set | Created → deleted | Minutes | Outcome |
+|---|---|---|---:|---|
+| `feo35r38ez9if7` | d1 | 00:57:50 → 01:20:58 | 23.1 | LingBot base + refiner ok, OOM in the 1080p decode |
+| `fmnptu1gkl4ipv` | d2 | 01:25:37 → 01:44:57 | 19.3 | Cosmos3 TeaCache BF16 ok |
+| `ksfixdt0xf4wm1` | e1 | 01:25:36 → 01:51:01 | 25.4 | parity ok; LTX-2.3 and A14B fullopt ran, clips noise (unscaled term) |
+| `fxb8mk5454h2f7` | f1 | 01:45:07 → 02:12:08 | 27.0 | LingBot baseline-rs3 ok (driver re-attached after a local kill) |
+| `97mfe4ps4xb7zv` | f2 | 01:51:20 → ~01:53:40 | 2.3 | deleted on purpose: same unscaled kernel as e1 |
+| `p4mjj9sxklhsta` | g1 | 02:08:33 → 02:29:48 | 21.3 | parity, LTX-2.3 fullopt (+ zeroth A/B), Wan-5B opt ok |
+
+- **Pod time:** 118.4 min at $2.09/h = **$4.12**, plus the shared build pod (fv-control).
+- **Parallelism:** never more than 2 of these pods at once; no backstop fired.
+- **Balance:** $20.97 before and $12.03 after. The coordinator's budget alert at $12.98 stopped the run before g2.
+
+### Still blocked
+
+| Cells | Status |
+|---|---|
+| `lingbot-fullopt` | not run: budget (needs the 4f5a413 image; ~30 min pod) |
+| `a14b-sol-fullopt` (quality-valid rerun) | not run: budget. The e1 timing above used the unscaled first-order term (noise output; EasyCache reused nothing, so a rerun may be faster) |

@@ -51,8 +51,8 @@ pub use caps::{
 };
 pub use fastvideo_protocol::Tier;
 pub use clock::{Clock, ManualClock, SystemClock};
-pub use fake::{FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, JobValidator, Mp4Mode};
-pub use pool::{ModelPool, Readiness, Residency};
+pub use fake::{FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, FakeWarmup, JobValidator, Mp4Mode};
+pub use pool::{ModelPool, Readiness, Residency, Warmup};
 pub use scheduler::Priority;
 pub use service::{
     CancelOutcome, EngineConfig, EngineEvent, EngineService, EngineStats, JobHandle,

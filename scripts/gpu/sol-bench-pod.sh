@@ -198,11 +198,12 @@ ltx23() { # <name> <est> <stage-2 flag> <env...>
 # LingBot-Video MoE (models/lingbot_video.toml): base 832x480x121 / 40 steps +
 # 1080p refiner / 8 steps, CFG 3, seed 42; one prompt (val3 #0), base and
 # refiner swapped on a 96 GB card.
-lingbot() { # <arm> <est>
-  cell "lingbot-$1" lingbot-moe "$2" \
+lingbot() { # <arm> <est> [cell suffix] [extra lingbot-gen args...]
+  local arm="$1" est="$2" sfx="${3:-}"; shift 2; (( $# )) && shift
+  cell "lingbot-$arm$sfx" lingbot-moe "$est" \
     "$BIN" --mode fast sol lingbot-gen --weights "$W/lingbot-video-moe-30b-a3b" \
-      --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts 1 --arm "$1" --residency swap --seed 42 \
-      --clip "$RUNS/lingbot-$1/clips"
+      --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts 1 --arm "$arm" --residency swap --seed 42 \
+      --clip "$RUNS/lingbot-$arm$sfx/clips" "$@"
 }
 # Cosmos3-Super (models/cosmos3.toml): 1280x720x189, 35 steps, CFG 6, seed 42,
 # one 1-step warm-up request (WARMUP=true), then the timed request.
@@ -304,6 +305,46 @@ case "$SET" in
     # of memory in the decode with both experts resident (MoE headroom 36 GiB
     # now: the experts swap on this card)
     a14b a14b-sol-base 1900
+    ;;
+  # ---- phase B3 (2026-10-07): the remaining blocked cells.
+  d1) # LingBot baseline on main (pool trims + encode before the refiner, 679dfda).
+    # A full baseline (base 40 steps + 8 dense 1080p refiner steps at 253k
+    # tokens, ~2.5k s of refiner alone) cannot fit one 1-hour pod, so the
+    # refiner runs --refiner-steps 1, i.e. 3 of the 8 official sigmas (0.85 +
+    # 2 tail): every baseline refiner step costs the same (dense, CFG), and
+    # sol_bench_table.py scales the refiner denoise by 8/3 (as wan14 base-s15).
+    cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
+    lingbot baseline 2700 -rs3 --refiner-steps 1
+    ;;
+  d2) # Cosmos3-Super BF16 + TeaCache 1.15/10/3 (skipped for budget in c4)
+    cosmos3 cosmos3-teacache teacache 1800
+    ;;
+  e1) # PISA fixed (fix/pisa-sm120-phaseb3): device parity + timing first,
+    # then LTX-2.3 HQ fullopt (PISA stage 2) and A14B fullopt (EasyCache + PISA)
+    cell pisa-parity wan22-ti2v-5b 240 "$BIN" --mode fast kernels --groups pisa
+    ltx23 ltx23-hq-fullopt 900 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    a14b a14b-sol-fullopt 1500 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    ;;
+  f1) # LingBot baseline again: d1 ran all 3 refiner steps, then ran out of
+    # memory in the 1080p decode with the refiner resident (fixed on the branch)
+    lingbot baseline 2000 -rs3 --refiner-steps 1
+    ;;
+  f2) # PISA + LingBot decode fix: Wan2.2 TI2V-5B EasyCache + PISA, then
+    # LingBot fullopt (EasyCache + refiner PISA)
+    wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
+    lingbot fullopt 2400
+    ;;
+  g1) # PISA first-order term with the softmax scale (e1's clips were noise:
+    # the term was sqrt(128) too large). Parity, LTX-2.3 fullopt, the same with
+    # the zeroth-order remainder only (A/B of the term), then Wan2.2-5B opt.
+    cell pisa-parity wan22-ti2v-5b 240 "$BIN" --mode fast kernels --groups pisa
+    ltx23 ltx23-hq-fullopt 600 --pisa-stage2 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    ltx23 ltx23-hq-fullopt-zeroth 600 --pisa-stage2 FASTVIDEO_PISA_FIRST_ORDER=0 FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1
+    wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
+    ;;
+  g2) # A14B fullopt and LingBot fullopt with the scaled first-order term
+    a14b a14b-sol-fullopt 1300 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1
+    lingbot fullopt 1800
     ;;
   *) log "unknown set $SET"; exit 2 ;;
 esac

@@ -678,6 +678,8 @@ pub struct H3LoadTimings {
     pub vision_s: f64,
     pub refiner_s: f64,
     pub dit_s: f64,
+    /// The refiner and DiT came from a pre-quantized tree ([`super::dit_tree`]).
+    pub dit_from_tree: bool,
     pub video_vae_s: f64,
     pub audio_vae_s: f64,
 }
@@ -703,6 +705,103 @@ fn uses_vsa(
 /// snapshot actually ships them. Dense Sol-H3 / MiniMax-H3 stay ungated.
 fn dit_loads_vsa_gate(contract: &H3InferenceContract, mlx_vsa_capable: Option<bool>) -> bool {
     contract.vsa_sparsity > 0.0 && mlx_vsa_capable.unwrap_or(true)
+}
+
+/// What a pre-quantized DiT tree ([`super::dit_tree`]) for this load must
+/// have been built from, or `None` when the load has no stored form: a
+/// LongLive-Plug or Ref2VA adapter, or process settings that change how
+/// linears load (affine, NVFP4, process-wide FP8). Resolves the adapter
+/// exactly as the load does, without opening it.
+fn dit_tree_identity(
+    root: &Path,
+    options: &H3PipelineOptions,
+    schedule: &H3JointSchedule,
+    cfg: &H3TransformerConfig,
+    with_gate: bool,
+) -> Result<Option<super::dit_tree::Identity>> {
+    if crate::wan::affine::bits_from_env().is_some() || fastvideo_models::nvfp4::from_env().is_some() {
+        return Ok(None);
+    }
+    #[cfg(feature = "cuda")]
+    let route = if crate::wan::nn::Linear::device_bf16_route() {
+        "device-bf16"
+    } else if crate::wan::stats::device_expected() {
+        // Process-wide FASTVIDEO_FP8 or f32 GEMM math: not stored.
+        return Ok(None);
+    } else {
+        "f32"
+    };
+    #[cfg(not(feature = "cuda"))]
+    let route = "f32";
+    let name = options.recipe.as_deref();
+    let spec = if let Some(variant) = name.and_then(FastH3PreviewVariant::from_recipe) {
+        let strength =
+            preview_lora_strength(std::env::var(FASTH3_LORA_STRENGTH_ENV).ok().as_deref())
+                .map_err(msg)?;
+        Some(variant.adapter_spec(strength))
+    } else if name.is_some_and(is_sol_h3_recipe) {
+        if name.is_some_and(sol_h3_forces_ref2va) {
+            return Ok(None);
+        }
+        if name.is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe) {
+            Some(fastvideo_models::h3::spark::spark_adapter_spec())
+        } else {
+            Some(SolH3AdapterSpec::t2v_i2v())
+        }
+    } else if name.is_some_and(|r| PlugRecipe::named(r).is_some()) {
+        return Ok(None);
+    } else {
+        None
+    };
+    let (adapter, scale) = match spec {
+        Some(spec) => {
+            // An adapter that cannot be found fails the checkpoint load with
+            // its own message; here it only means "no tree".
+            let Ok(path) = spec.resolve(root, options.adapter.as_deref()) else {
+                return Ok(None);
+            };
+            (Some(super::dit_tree::adapter_entry(root, &path)?), spec.scale)
+        }
+        None => (None, 1.0f32),
+    };
+    let quant = crate::wan::quant::QuantMode::from_env().map_err(msg)?;
+    Ok(Some(super::dit_tree::Identity {
+        recipe: name.unwrap_or("auto").to_owned(),
+        quant: quant.as_str().into(),
+        with_gate,
+        num_layers: cfg.num_layers,
+        num_refiner_layers: cfg.num_refiner_layers,
+        hidden_size: cfg.hidden_size,
+        timesteps: (0..schedule.num_steps())
+            .map(|i| {
+                [
+                    schedule.video.timesteps[i].to_bits(),
+                    schedule.audio.timesteps[i].to_bits(),
+                ]
+            })
+            .collect(),
+        keyframe_t: fastvideo_models::h3::packing::KEYFRAME_NOISE_AUG.to_bits(),
+        adapter,
+        adapter_scale: scale.to_bits(),
+        linear_route: route.into(),
+    }))
+}
+
+/// [`dit_tree_identity`] for `fv-gpucheck quantize-dit`: the identity of
+/// loading `root` with `options`, resolved as the load resolves it.
+pub fn dit_tree_identity_for(
+    root: &Path,
+    options: &H3PipelineOptions,
+) -> Result<Option<super::dit_tree::Identity>> {
+    let contract = resolve_contract(root, options.recipe.as_deref())?;
+    let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
+    dit_tree_identity(
+        root,
+        options,
+        &schedule,
+        &H3TransformerConfig::fasth3_8step(),
+        dit_loads_vsa_gate(&contract, None),
+    )
 }
 
 fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
@@ -781,6 +880,14 @@ pub fn keep_auto_encoder(free_bytes: Option<u64>, rows: usize) -> bool {
 }
 
 impl H3Pipeline {
+    /// The text refiner's and DiT's resident state ([`super::dit_tree`]):
+    /// what `fv-gpucheck quantize-dit` stores and compares.
+    pub fn export_dit(&self, w: &mut super::dit_tree::TreeWriter) -> Result<()> {
+        self.refiner.export(w)?;
+        self.model.export(w)?;
+        Ok(())
+    }
+
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
@@ -892,7 +999,25 @@ impl H3Pipeline {
                 (WeightMap::open(&dit)?, None)
             }
         };
-        {
+        // Fast boot (A): the recipe's resident DiT, pre-merged and
+        // pre-quantized beside `transformer/` (`super::dit_tree`), when a
+        // valid one is there; otherwise the checkpoint as below.
+        let dit_tree = if mlx.is_none() && !options.ref2va {
+            let identity = dit_tree_identity(
+                root,
+                &options,
+                &schedule,
+                &cfg,
+                dit_loads_vsa_gate(&contract, None),
+            )?;
+            match super::dit_tree::select(root, &root.join("transformer"), identity.as_ref())? {
+                Some((dir, _)) => Some(super::dit_tree::TreeReader::open(&dir)?),
+                None => None,
+            }
+        } else {
+            None
+        };
+        if dit_tree.is_none() {
             // A fused adapter rebuilds the AdaLN table from the projections;
             // otherwise a valid cache file means they are never read.
             let adapter = options.recipe.as_deref().is_some_and(|r| {
@@ -1007,7 +1132,10 @@ impl H3Pipeline {
             .recipe
             .as_deref()
             .and_then(FastH3PreviewVariant::from_recipe);
-        let mut lora = if let Some(variant) = preview {
+        let mut lora = if dit_tree.is_some() {
+            // The tree holds the merged (and quantized) weights already.
+            None
+        } else if let Some(variant) = preview {
             // FastH3 Preview v1 = base MiniMax-H3 + one Preview LoRA
             // (`run_fasth3_lora_preview_*_datafree.sh`).
             let has_gate = map.has_tensor("transformer_blocks.0.attn.to_gate_compress.weight");
@@ -1225,15 +1353,21 @@ impl H3Pipeline {
         let timer = Instant::now();
         let refiner = booking.track(
             crate::wan::ledger::TEXT_REFINER,
-            || H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency),
+            || match &dit_tree {
+                Some(tree) => H3TextRefiner::from_tree(&cfg, tree, residency),
+                None => H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency),
+            },
             |_| None,
         )?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
         let model = booking.track(
             crate::wan::ledger::DIT_NONLINEAR,
-            || {
-                H3Transformer::load_with_residency(
+            || match &dit_tree {
+                Some(tree) => {
+                    H3Transformer::from_tree(cfg.clone(), tree, &schedule, with_gate, residency)
+                }
+                None => H3Transformer::load_with_residency(
                     cfg.clone(),
                     &map,
                     &schedule,
@@ -1241,7 +1375,7 @@ impl H3Pipeline {
                     options.adaln_cache.as_deref(),
                     &mut lora,
                     residency,
-                )
+                ),
             },
             |_| None,
         )?;
@@ -1279,6 +1413,8 @@ impl H3Pipeline {
             }
         }
         timed(&mut load_timings.dit_s, timer);
+        load_timings.dit_from_tree = dit_tree.is_some();
+        drop(dit_tree);
         drop(map);
         crate::wan::weights::log_load_io("h3 dit", &io_base, io_timer.elapsed().as_secs_f64());
         // Streamed: the decoders are loaded by each decode (the reference makes

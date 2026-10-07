@@ -158,6 +158,27 @@ pub trait EngineBackend: Send + 'static {
         Recipe::default()
     }
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError>;
+    /// Background warm-up (fast boot B): the warm-up runs a resident model
+    /// still wants after [`Self::load`] returned, in order. The executor
+    /// runs them with [`Self::warmup_run`] only while it has no other work,
+    /// one at a time on its own thread (never beside a job), and cancels
+    /// the one running when a job arrives; a cancelled run is retried
+    /// later. **Addition to design §3.6**; the default has none (a backend
+    /// that warms up inside `load` reports ready after it, as before).
+    fn warmup_pending(&self, _model: &ModelId) -> Vec<String> {
+        Vec::new()
+    }
+    /// Runs warm-up `name` of `model` (one of [`Self::warmup_pending`]),
+    /// observing `cancel` at its steps (a cancelled run returns the
+    /// `Cancelled` error). Returns a short description for the log.
+    fn warmup_run(
+        &mut self,
+        model: &ModelId,
+        name: &str,
+        _cancel: &crate::cancel::CancelToken,
+    ) -> Result<String, ApiError> {
+        Err(ApiError::internal(format!("model `{model}` has no warm-up `{name}`")))
+    }
     /// Frees a model (swap mode, R18). **Addition to design §3.6**; the
     /// default does nothing.
     fn unload(&mut self, _model: &ModelId) {}

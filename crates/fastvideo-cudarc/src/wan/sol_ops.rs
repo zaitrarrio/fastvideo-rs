@@ -42,6 +42,9 @@ struct Partials {
     m: Vec<f32>,
     l: Vec<f32>,
     acc: Vec<f32>,
+    /// Unweighted probability sum (coarse remainder only: PISA's
+    /// first-order weight), in the row's `m` units.
+    tail: Vec<f32>,
 }
 
 impl Partials {
@@ -50,6 +53,7 @@ impl Partials {
             m: vec![f32::NEG_INFINITY; rows],
             l: vec![0.0; rows],
             acc: vec![0.0; rows * dim],
+            tail: vec![0.0; rows],
         }
     }
 }
@@ -60,6 +64,7 @@ fn pow2(x: f32) -> f32 {
 }
 
 /// Online-softmax fold. `log2` uses `2^x` (Sol); otherwise `e^x` (PISA / SLA).
+/// Returns `(alpha, p)`: the rescale of the old state and the new term.
 fn fold(
     acc: &mut [f32],
     row_sum: &mut f32,
@@ -68,7 +73,7 @@ fn fold(
     weight: f32,
     val: &[f32],
     log2: bool,
-) {
+) -> (f32, f32) {
     let new_max = row_max.max(score);
     let (alpha, p) = if log2 {
         (pow2(*row_max - new_max), pow2(score - new_max))
@@ -80,6 +85,7 @@ fn fold(
     }
     *row_sum = *row_sum * alpha + p * weight;
     *row_max = new_max;
+    (alpha, p)
 }
 
 fn lse_merge(a: &Partials, b: &Partials, dim: usize, log2: bool) -> (Partials, Vec<f32>) {
@@ -211,7 +217,7 @@ fn coarse_partials(
                     s += qr[d] * kcj[d];
                 }
                 s *= scale;
-                fold(
+                let (alpha, pr) = fold(
                     acc,
                     &mut p.l[qi],
                     &mut p.m[qi],
@@ -220,6 +226,7 @@ fn coarse_partials(
                     &vc[j * dim..(j + 1) * dim],
                     log2,
                 );
+                p.tail[qi] = p.tail[qi] * alpha + pr;
             }
         }
     }
@@ -230,8 +237,10 @@ fn global_h_bar(k: &[f32], v: &[f32], tokens: usize, dim: usize) -> Vec<f32> {
     fastvideo_models::pisa_attn::global_h_bar(k, v, tokens, dim)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_first_order(
     q: &[f32],
+    scale: f32,
     h_bar: &[f32],
     coarse: &Partials,
     merged: &mut Partials,
@@ -246,14 +255,14 @@ fn apply_first_order(
             } else {
                 0.0
             };
-            coarse.l[t] * s
+            coarse.tail[t] * s
         } else {
             let s = if coarse.m[t].is_finite() {
                 (coarse.m[t] - merged.m[t]).exp()
             } else {
                 0.0
             };
-            coarse.l[t] * s
+            coarse.tail[t] * s
         };
         if tail <= 0.0 {
             continue;
@@ -265,7 +274,7 @@ fn apply_first_order(
             for e in 0..dim {
                 qh += qi[e] * h_bar[e * dim + d];
             }
-            acc[d] += tail * qh;
+            acc[d] += tail * scale * qh;
         }
     }
 }
@@ -321,7 +330,7 @@ pub fn pisa_attn_bhsd_device_alg(
         let fine = fine_partials(qh, kh, vh, &lists, tokens, dim, scale, false);
         let (mut merged, _) = lse_merge(&coarse, &fine, dim, false);
         let h_bar = global_h_bar(kh, vh, tokens, dim);
-        apply_first_order(qh, &h_bar, &coarse, &mut merged, tokens, dim, false);
+        apply_first_order(qh, scale, &h_bar, &coarse, &mut merged, tokens, dim, false);
         for t in 0..tokens {
             if merged.l[t] > 0.0 {
                 let inv = 1.0 / merged.l[t];
@@ -641,6 +650,24 @@ mod tests {
         let want = pisa_attn_bhsd(&q, &k, &v, b, h, t, d, 0.9, scale).unwrap();
         let err = max_abs(&got, &want);
         assert!(err < 3e-5, "max abs {err}");
+    }
+
+    /// Several KV blocks with most of them unselected: the zeroth-order
+    /// remainder and the first-order tail term both contribute (a single
+    /// block, as above, never reaches them).
+    #[test]
+    fn pisa_device_alg_matches_models_oracle_with_a_remainder() {
+        for (t, sparsity) in [(300usize, 0.9f64), (520, 0.75), (640, 0.5)] {
+            let (b, h, d) = (1usize, 2usize, 8usize);
+            let q = seeded(b * h * t * d, 0.11);
+            let k = seeded(b * h * t * d, 0.17);
+            let v = seeded(b * h * t * d, 0.23);
+            let scale = (d as f32).sqrt().recip();
+            let got = pisa_attn_bhsd_device_alg(&q, &k, &v, b, h, t, d, sparsity, scale).unwrap();
+            let want = pisa_attn_bhsd(&q, &k, &v, b, h, t, d, sparsity, scale).unwrap();
+            let err = max_abs(&got, &want);
+            assert!(err < 3e-5, "t {t} sparsity {sparsity}: max abs {err}");
+        }
     }
 
     #[test]
