@@ -41,7 +41,7 @@ pub(crate) fn run(sh: Arc<Shared>, idx: usize, mut backend: Box<dyn EngineBacken
     };
     for m in &warm {
         // A failure is recorded in the pool (readiness `Failed`).
-        let _ = load(&sh, idx, backend.as_mut(), m);
+        let _ = load(&sh, idx, backend.as_mut(), m, true);
     }
     let mut warmups = Warmups::new(&sh, idx, backend.as_ref(), &warm);
     loop {
@@ -207,7 +207,11 @@ impl Warmups {
 }
 
 /// Loads `model` on this executor, tracking residency in the pool.
-fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelId) -> Result<(), ApiError> {
+/// `boot`: a resident model loaded at start. Its background warm-up runs
+/// are marked pending in the same critical section that makes it resident,
+/// so nobody can see it ready with its warm-up not yet known (the readiness
+/// probe and `warmup()` read the pool under the same lock).
+fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelId, boot: bool) -> Result<(), ApiError> {
     {
         let mut st = sh.lock();
         st.pool.set(
@@ -249,6 +253,9 @@ fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelI
         Ok(()) => {
             st.pool.set(idx, model, Residency::Resident);
             st.sched.exec_mut(idx).resident.insert(model.clone());
+            if boot && !backend.warmup_pending(model).is_empty() {
+                st.pool.set_warmup(idx, model, Warmup::Pending);
+            }
         }
         Err(e) => {
             tracing::error!(executor = idx, model = %model, error = %e, "model load failed");
@@ -279,7 +286,7 @@ fn swap_in(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &Mod
         st.pool.set(idx, &m, Residency::Unloaded);
         sh.changed(&st);
     }
-    load(sh, idx, backend, model)
+    load(sh, idx, backend, model, false)
 }
 
 /// Marks per traced run: stage boundaries, every denoise step, a few more.
