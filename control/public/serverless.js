@@ -91,7 +91,7 @@
       h("div", { class: "row", style: "margin-top:6px" }, h("a", { class: "btn", href: "#/serverless" }, "← all endpoints"), h("a", { class: "btn", href: `#/logs?q=&pod=${(d.runpod?.workers || [])[0]?.id || ""}` }, "Log explorer")),
     );
     if (!live) {
-      main.replaceChildren(head, jobsCard(d), costCard(d), auditCard(d));
+      main.replaceChildren(head, jobsCard(d, null), costCard(d), auditCard(d));
       return;
     }
     // Scale / extend / delete.
@@ -111,7 +111,7 @@
       ),
       h("p", { class: "small muted" }, "Scaling up (or creating) needs the balance above the floor plus the serverless margin. The cron scales every endpoint to 0 below the floor, and runs the backstop at its time."),
     );
-    main.replaceChildren(head, ctl, invokeCard(e), workersCard(e, d), specCard(e), jobsCard(d), costCard(d), auditCard(d));
+    main.replaceChildren(head, ctl, invokeCard(e), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
     every(10000, async () => {
       if (!location.hash.includes(`ep=${id}`)) return;
       const f = await api(`/api/serverless/${encodeURIComponent(id)}`).catch(() => null);
@@ -160,6 +160,84 @@
       ta, h("div", { class: "row", style: "margin-top:6px" }, go), out);
   }
 
+  // ---- cancel and purge (docs/control/serverless.md "Cancel and purge"). The outcome survives the page's redraws.
+  const outcomes = new Map();
+  const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
+  function renderOutcome(epId) {
+    const box = document.getElementById("slsCancelOut");
+    const o = outcomes.get(epId);
+    if (!box || !o) return;
+    if (o.purge) {
+      const p = o.purge;
+      box.replaceChildren(h("p", {}, badge("purged", "good"), ` removed ${p.removed ?? "?"} queued job(s); queue ${p.queued_before} → ${p.queued_after ?? "?"}, ${p.in_progress ?? "?"} running. ${p.note}`));
+      return;
+    }
+    const r = o.cancel;
+    const kind = (st) => (st === "CANCELLED" || st === "COMPLETED" ? "good" : st === "FAILED" || st === "TIMED_OUT" ? "critical" : "warn");
+    const fvLine = r.fv_cancel?.sent
+      ? h("div", {}, "fv-serve job ", h("code", {}, r.fv_job.id), ` (${r.fv_job.api}): ${r.fv_cancel.route} sent as queue job ${r.fv_cancel.runpod_job || "?"} `, o.fvStatus ? badge(o.fvStatus, kind(o.fvStatus)) : null, ` · ${r.fv_cancel.reason}`)
+      : h("div", { class: "muted" }, r.fv_job ? `fv-serve job ${r.fv_job.id} (${r.fv_job.api}): ` : "fv-serve: ", r.fv_cancel?.reason || "");
+    box.replaceChildren(
+      h("div", { class: "row", style: "flex-wrap:wrap;gap:10px" }, h("code", {}, r.runpod_job), h("span", {}, `${r.before} →`), badge(o.status || r.status, kind(o.status || r.status)), h("span", { class: "muted" }, r.note)),
+      fvLine,
+    );
+  }
+  async function followCancel(e, r) {
+    const o = { cancel: r, status: r.status, fvStatus: null };
+    outcomes.set(e.id, o);
+    renderOutcome(e.id);
+    // Status updates: the job's row (and the fv-serve cancel's queue job) until both finish, ~3 min at most.
+    for (let i = 0; i < 60; i++) {
+      const doneJob = !r.job || TERMINAL.includes(o.status);
+      const doneFv = !r.fv_cancel?.job || TERMINAL.includes(o.fvStatus);
+      if (doneJob && doneFv) break;
+      await new Promise((res) => setTimeout(res, 3000));
+      if (outcomes.get(e.id) !== o) return;
+      if (!doneJob) o.status = (await api(`/api/serverless/${e.id}/jobs/${r.job}`).catch(() => null))?.job?.status || o.status;
+      if (!doneFv) o.fvStatus = (await api(`/api/serverless/${e.id}/jobs/${r.fv_cancel.job}`).catch(() => null))?.job?.status || o.fvStatus;
+      renderOutcome(e.id);
+    }
+  }
+  async function cancelJob(e, job) {
+    const x = await (await fvEditor()).askSlsCancel(api, e.name, job || "");
+    if (!x) return;
+    const { job: id, ...rest } = x;
+    try {
+      const r = await act("cancel", () => api(`/api/serverless/${e.id}/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST", body: rest }));
+      followCancel(e, r);
+      route(); // the queue, the invokes and the audit as they are now (the outcome stays)
+    } catch (err) {
+      const box = document.getElementById("slsCancelOut");
+      if (box) box.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message));
+    }
+  }
+  async function purge(e) {
+    let q;
+    try { q = await api(`/api/serverless/${e.id}/queue`); } catch (err) { return toast(`queue: ${err.message}`); }
+    const x = await (await fvEditor()).askPurge(api, e.name, q.queued, q.in_progress);
+    if (!x) return;
+    try {
+      const r = await act("purge", () => api(`/api/serverless/${e.id}/purge`, { method: "POST", body: x }));
+      outcomes.set(e.id, { purge: r });
+      renderOutcome(e.id);
+      route();
+    } catch (err) {
+      const box = document.getElementById("slsCancelOut");
+      if (box) box.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message));
+    }
+  }
+  function queueCard(e, hh) {
+    const out = h("div", { id: "slsCancelOut", class: "small", style: "margin-top:8px" });
+    const c = card("Queue: cancel and purge",
+      h("p", { class: "small muted" }, `Now: ${queueLine(hh)}. Cancel drops a queued job, or has the worker running it stop it; a job that reached a worker also gets fv-serve's cancel (DELETE of the job it created) as a queue job when fv-control knows that job. Purge drops every queued job; running ones stay.`),
+      h("div", { class: "row" },
+        h("button", { onclick: () => cancelJob(e) }, "Cancel a job…"),
+        h("button", { class: "danger", disabled: e.mode !== "queue", onclick: () => purge(e) }, `Purge queue (${hh?.jobs?.inQueue ?? "?"} queued)…`)),
+      out);
+    setTimeout(() => renderOutcome(e.id));
+    return c;
+  }
+
   function workersCard(e, d) {
     const ws = d.runpod?.workers || [];
     const out = h("div", {});
@@ -183,17 +261,20 @@
     return card("Spec", h("p", { class: "small muted" }, "Image, env and config update the template (Runpod rolls the workers); scaling and placement update the endpoint. Mode, compute, volume and CPU flavors need a new endpoint."), host);
   }
 
-  function jobsCard(d) {
+  function jobsCard(d, e) {
+    const open = (j) => j.job_id && !j.finished_at && !/^cancel:/.test(j.route);
     return card("Recent invokes",
       table([
         { label: "when", get: (j) => ago(j.submitted_at) },
         { label: "route", get: (j) => j.route },
+        { label: "Runpod job", get: (j) => (j.job_id ? h("code", {}, j.job_id) : "–") },
         { label: "status", get: (j) => j.status },
         { label: "cold", get: (j) => (j.cold ? "yes" : "") },
         { label: "queue wait", get: (j) => ms(j.delay_ms), num: true },
         { label: "exec", get: (j) => ms(j.exec_ms), num: true },
         { label: "end to end", get: (j) => ms(j.wall_ms), num: true },
         { label: "by", get: (j) => j.actor },
+        { label: "", get: (j) => (e && (open(j) || (j.route === "runsync" || j.route === "run") && /"kind":"http"/.test(j.input || "") && j.status === "COMPLETED" && !/"wait":true/.test(j.input || "")) ? h("button", { class: "ghost", onclick: () => cancelJob(e, j.job_id) }, "Cancel") : "") },
       ], d.jobs || [], "No test invokes yet."));
   }
   function costCard(d) {

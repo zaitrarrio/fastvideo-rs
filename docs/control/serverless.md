@@ -133,6 +133,9 @@ Runpod quirks found live, and handled:
 | `POST /api/serverless/<id>/scale {workers_min?, workers_max?}`, `POST …/extend {minutes}` | |
 | `DELETE /api/serverless/<id>` | 200 deleted, 202 deleting (the tick retries) |
 | `POST /api/serverless/<id>/invoke {input?, sync?}` (queue) / `{method, path, body?}` (lb) | a test request; `GET …/jobs`, `GET …/jobs/<job>` polls one |
+| `POST /api/serverless/<id>/jobs/<job>/cancel {fv_job?, fv_api?, stop_fv_job?}` | cancel one job: a Runpod job id (any job of the endpoint, also one fv-control did not submit) or an invoke's number (§5a) |
+| `GET /api/serverless/<id>/queue` | queued and running now (`/health`) |
+| `POST /api/serverless/<id>/purge {confirm, expected?}` | drop every queued job; `confirm` is the endpoint's name, `expected` the count you saw (409 when the queue grew past it) |
 | `GET /api/serverless/<id>/logs?worker=` | a worker's log tail (also stored) |
 | `POST /api/serverless/tick` | the tick now, billing included |
 
@@ -143,6 +146,8 @@ fv-control.sh endpoint list | show fake-test
 fv-control.sh endpoint invoke fake-test                     # {"kind":"info"}; polls when /runsync returns IN_QUEUE
 fv-control.sh endpoint invoke fake-test '{"kind":"http","method":"POST","path":"/fv/v1/jobs","body":{"model":"fake-wan","prompt":"a fox","seed":1},"wait":true}'
 fv-control.sh endpoint scale fake-test 0 | extend fake-test 60 | logs fake-test | delete fake-test
+fv-control.sh endpoint cancel fake-test <runpod job id | invoke number> [--fv-job ID [--fv-api API]] [--no-fv]
+fv-control.sh endpoint purge fake-test [--yes]             # shows queued / running, asks for the name
 ```
 
 The **Serverless** page (`#/serverless`) lists the endpoints (status, workers,
@@ -150,7 +155,60 @@ queue, $/hr, cost today and billed, backstop). It creates one from a form or the
 JSON (validate first), and per endpoint shows health, cold start and warm
 queue wait, scale / scale to 0 / backstop +30 min / delete, a test invoke with
 presets (info, capabilities, a fake job; LB: ping, capabilities), workers and
-their logs, the spec editor, recent invokes, cost per day and audit.
+their logs, the spec editor, recent invokes, cost per day and audit. Its
+**Queue** card cancels a job (a pasted Runpod job id, or Cancel on an
+unfinished invoke) and purges the queue: the dialog shows the queued and
+running counts and takes the endpoint's name; the outcome follows the job's
+status (and the fv-serve cancel's queue job) until both finish.
+
+## 5a. Cancel and purge
+
+Admin only (a read token gets 403; a session needs the CSRF header), every
+input checked by the `serverless-cancel` / `serverless-purge` schemas,
+audited as `serverless.cancel` / `serverless.purge`.
+
+**One job.** `POST /v2/<id>/cancel/<job>` (`src/serverless/cancel.ts`):
+
+| the job was | what happens |
+|---|---|
+| `IN_QUEUE` | Runpod drops it. No worker saw it, so no fv-serve job exists. |
+| `IN_PROGRESS` | Runpod lists it on the worker's job-stop long poll; the worker cancels the queue job (`crates/fastvideo-deploy/src/runpod/worker.rs`). An http job waiting on the fv-serve job it created `DELETE`s its `cancel_path` then (`dispatch.rs`), and that fv-serve job stops at its next denoise step. fv-control's invokes get the owning API's route as `cancel_path` whenever they wait (`withCancelPath`: `/fv/v1/jobs/{id}`, `/v1/videos/{id}`, `/video/{id}`, `/v2/video_generation/{id}`). |
+| `COMPLETED` / `FAILED` / … | nothing to cancel on Runpod. A fire-and-forget submit (no `wait`) still has its fv-serve job running in the worker. |
+
+**The fv-serve job.** fv-control finds its id in the queue job's output
+(the submit reply; with `wait`, `submit`; while waiting, the progress
+output's `poll_path`), or takes `fv_job` (+ `fv_api`) for a job submitted
+elsewhere. When the job reached a worker, the worker did not stop it itself
+(no `cancel_path`, or the queue job already finished) and the output does
+not show it finished, fv-control sends the owning API's cancel as one more
+queue job, `/run {"kind": "http", "method": "DELETE", "path": "/fv/v1/jobs/<id>"}`,
+recorded as an invoke (route `cancel:<api>`) whose status the page polls.
+Two limits, said in the reply:
+
+- fv-serve jobs live in the worker's process. With no worker up the job
+  ended with it, so nothing is sent (and nothing scales a worker up).
+- With several workers up the DELETE can land on another one, which answers
+  404. There is no way to address one queue worker; with `workers_max: 1`
+  it is always the right one.
+
+fal ids (the cancel route needs the app) and LTX (no cancel route) are not
+offered here; `fv_api` is `native`, `openai_videos`, `fastwan` or
+`minimax_v2`.
+
+A job id fv-control did not submit is recorded as an invoke (route
+`external`), so its status shows on the page and polls like the others.
+
+**Purge.** `POST /v2/<id>/purge-queue` answers `{"removed": N, "status":
+"completed"}` and drops queued jobs only; running ones finish (cancel them
+one by one). fv-control reads `/health` before (refusing when the queue grew
+past `expected`) and after, and polls its own waiting invokes. Load-balancer
+endpoints have no queue: both calls answer 409.
+
+Live check (2026-10-07, staging endpoint `h3-max2`, `lp85qdnkl6dqtz`, scaled
+to 0): `POST /v2/lp85qdnkl6dqtz/purge-queue` answered
+`{"removed":0,"status":"completed"}`, `/health` after it
+`inQueue: 0, inProgress: 0`. The 4 stuck jobs were already gone: fv-control's
+last health of the endpoint (03:00 UTC, row marked deleted) said `inQueue: 0`.
 
 ## 6. The edge
 

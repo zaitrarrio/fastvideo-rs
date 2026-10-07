@@ -4,7 +4,7 @@
 //   node test/integration/run.mjs            (npm run test:integration)
 //   FVC_UI=1 …                               also keep it up for test/ui/smoke.mjs
 import assert from "node:assert/strict";
-import { d1Exec, hashPassphrase, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
+import { d1Exec, hashPassphrase, jobInsert, JOBS_TABLE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
 
 const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
@@ -50,6 +50,14 @@ async function step(name, fn) {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** After `wrangler d1 execute` on another local D1, workerd can drop the next connection: wait until it answers twice. */
+async function settle() {
+  let ok = 0;
+  for (let i = 0; i < 40 && ok < 2; i++) {
+    ok = (await fetch(`${B}/healthz`).then((r) => r.ok).catch(() => false)) ? ok + 1 : 0;
+    await sleep(250);
+  }
+}
 let cookie = "";
 let csrf = "";
 let token = "";
@@ -161,6 +169,139 @@ await step("start: one front worker behind the edge; registered; ready", async (
   const c = await call(`/api/clusters/${cid}`, { headers: T() });
   assert.equal(c.j.cluster.status, "running");
   assert.equal(c.j.pods.filter((p) => p.status === "ready").length, 1);
+});
+
+await step("jobs: the Jobs view from the edge's D1, cancel by id at the worker that holds it, cancel all queued; admin only", async () => {
+  const now = Date.now();
+  const pid = worker.id;
+  const U = (n) => `0000000${n}-aaaa-4bbb-8ccc-dddddddddddd`;
+  for (const db of ["fv-edge", "fv-jobs"]) d1Exec(w.dir, JOBS_TABLE, db);
+  d1Exec(w.dir, [
+    jobInsert({ id: U(1), ext: "fvjob_run1", status: "running", worker: pid, at: now - 60_000, started: new Date(now - 50_000).toISOString(), progress: 0.4 }),
+    jobInsert({ id: U(2), ext: "video_gen_q1", api: "openai_videos", status: "queued", worker: null, at: now - 15_000 }),
+    jobInsert({ id: U(3), ext: "fvjob_q2", status: "queued", worker: pid, at: now - 5_000 }),
+    jobInsert({ id: U(4), ext: "fvjob_done", status: "succeeded", worker: pid, at: now - 120_000 }),
+    jobInsert({ id: U(5), ext: "fvjob_foreign", status: "running", worker: "foreignpod0001", at: now - 10_000 }),
+  ].join(";\n"), "fv-edge");
+  await settle();
+  const ro = (await call("/api/tokens", { method: "POST", body: { name: "jobs-viewer", scope: "read" }, headers: { cookie, "x-csrf-token": csrf } })).j.token;
+  const v = await call(`/api/clusters/${cid}/jobs`, { headers: { authorization: `Bearer ${ro}` } });
+  assert.equal(v.status, 200, JSON.stringify(v.j));
+  assert.equal(v.j.source, "edge");
+  assert.deepEqual(v.j.jobs.map((j) => j.external_id), ["fvjob_q2", "video_gen_q1", "fvjob_run1", "fvjob_done"]);
+  assert.deepEqual(v.j.counts, { queued: 2, running: 1, succeeded: 1 });
+  const run = v.j.jobs.find((j) => j.external_id === "fvjob_run1");
+  assert.equal(run.pool, "fake");
+  assert.equal(run.api, "native");
+  assert.ok(run.started_at > now - 60_000, "started time from the job record");
+  assert.equal(v.j.jobs.find((j) => j.external_id === "video_gen_q1").worker, null, "queued at the edge");
+  assert.ok(!JSON.stringify(v.j).includes("SIGNED_URL_SECRET"), "the job record (signed URLs) never leaves fv-control");
+  assert.deepEqual((await call(`/api/clusters/${cid}/jobs?status=queued`, { headers: T() })).j.jobs.map((j) => j.external_id), ["fvjob_q2", "video_gen_q1"]);
+  const bad = await call(`/api/clusters/${cid}/jobs?status=queued,stuck`, { headers: T() });
+  assert.equal(bad.status, 400);
+  assert.match(bad.j.error, /statuses: queued, running/);
+  // Cancel by id: admin only, CSRF on a cookie session.
+  assert.equal((await call("/api/jobs/fvjob_run1/cancel", { method: "POST", body: {}, headers: { authorization: `Bearer ${ro}` } })).status, 403);
+  assert.equal((await call("/api/jobs/fvjob_run1/cancel", { method: "POST", body: {}, headers: { cookie } })).status, 403);
+  mock.internalJobs[U(1)] = [200, { id: U(1), status: "running", cancel_requested: true }];
+  const c1 = await call("/api/jobs/fvjob_run1/cancel", { method: "POST", body: {}, headers: { cookie, "x-csrf-token": csrf } });
+  assert.equal(c1.status, 200, JSON.stringify(c1.j));
+  assert.equal(c1.j.via, "internal");
+  assert.equal(c1.j.pod, pid);
+  assert.equal(c1.j.cancel_requested, true);
+  assert.deepEqual(mock.internalCancels.at(-1), { pod: pid, id: U(1) }, "straight to the worker that holds it, by the internal id");
+  assert.equal((await call("/api/jobs/fvjob_done/cancel", { method: "POST", body: {}, headers: T() })).j.note, "already succeeded: nothing to cancel");
+  const foreign = await call("/api/jobs/fvjob_foreign/cancel", { method: "POST", body: {}, headers: T() });
+  assert.equal(foreign.status, 403);
+  assert.match(foreign.j.error, /did not create/);
+  assert.equal((await call("/api/jobs/fvjob_nope/cancel", { method: "POST", body: {}, headers: T() })).status, 404);
+  assert.equal((await call(`/api/jobs/${encodeURIComponent("bad id")}/cancel`, { method: "POST", body: {}, headers: T() })).status, 400);
+  // A worker that does not know the job and no other route: a readable 502.
+  const miss = await call("/api/jobs/fvjob_q2/cancel", { method: "POST", body: {}, headers: T() });
+  assert.equal(miss.status, 502);
+  assert.match(miss.j.error, /fvjob_q2 \(native, tiny\): internal .*404 job `.*` was not found/);
+  // Cancel all queued: the one on the worker and the one still queued at the edge (through the front).
+  mock.internalJobs[U(2)] = [200, { id: U(2), status: "cancelled" }];
+  mock.internalJobs[U(3)] = [200, { id: U(3), status: "cancelled" }];
+  const cq = await call(`/api/clusters/${cid}/jobs/cancel-queued`, { method: "POST", body: { max: 10 }, headers: T() });
+  assert.equal(cq.status, 200, JSON.stringify(cq.j));
+  assert.equal(cq.j.queued, 2);
+  assert.equal(cq.j.cancelled, 2);
+  assert.ok(mock.internalCancels.some((x) => x.id === U(2) && x.pod === pid), "the edge-queued job went through a live front");
+  assert.equal((await call(`/api/clusters/${cid}/jobs/cancel-queued`, { method: "POST", body: { max: 0 }, headers: T() })).status, 400);
+  const one = await call(`/api/jobs/${U(1)}`, { headers: T() });
+  assert.equal(one.j.job.external_id, "fvjob_run1");
+  const a = (await call("/api/audit?limit=50", { headers: T() })).j.audit;
+  assert.ok(a.some((x) => x.action === "job.cancel" && x.target === "tiny" && x.ok === 1));
+  assert.ok(a.some((x) => x.action === "jobs.cancel-queued"));
+});
+
+await step("serverless: cancel a pasted job id and a fire-and-forget submit's fv-serve job; purge with the name and the queued count", async () => {
+  const now = Date.now();
+  const spec = JSON.stringify({ name: "qmock", mode: "queue", variant: "cpu", compute: "CPU", workers_min: 0, workers_max: 1 });
+  d1Exec(w.dir, `INSERT INTO serverless_endpoints (id, name, endpoint_id, template_id, mode, spec, status, created_at, created_by, updated_at, deleted_at) VALUES ('se_qmock', 'qmock', 'rpqmock000001', 'tpl', 'queue', '${spec}', 'active', ${now}, 'owner', ${now}, NULL)`);
+  const q = mock.queue;
+  q.jobs.set("rp-queued-1", { id: "rp-queued-1", status: "IN_QUEUE" });
+  q.jobs.set("rp-ff-1", { id: "rp-ff-1", status: "COMPLETED", output: { status: 202, body: { id: "fvjob_ff", status: "queued" } } });
+  q.queued = 4;
+  q.workers = 1;
+  await settle();
+  d1Exec(w.dir, `INSERT INTO serverless_jobs (endpoint, job_id, route, status, cold, submitted_at, finished_at, input, output, actor) VALUES ('se_qmock', 'rp-ff-1', 'run', 'COMPLETED', 0, ${now}, ${now}, '{"kind":"http","method":"POST","path":"/fv/v1/jobs","body":{"model":"fake-wan"}}', '{"status":202,"body":{"id":"fvjob_ff","status":"queued"}}', 'owner')`);
+  await settle();
+  const ro = (await call("/api/tokens", { method: "POST", body: { name: "sls-viewer", scope: "read" }, headers: { cookie, "x-csrf-token": csrf } })).j.token;
+  assert.equal((await call("/api/serverless/qmock/jobs/rp-queued-1/cancel", { method: "POST", body: {}, headers: { authorization: `Bearer ${ro}` } })).status, 403);
+  const c1 = await call("/api/serverless/qmock/jobs/rp-queued-1/cancel", { method: "POST", body: {}, headers: { cookie, "x-csrf-token": csrf } });
+  assert.equal(c1.status, 200, JSON.stringify(c1.j));
+  assert.equal(c1.j.before, "IN_QUEUE");
+  assert.equal(c1.j.status, "CANCELLED");
+  // Its status polls like an invoke's.
+  assert.equal((await call(`/api/serverless/qmock/jobs/${c1.j.job}`, { headers: T() })).j.job.status, "CANCELLED");
+  const c2 = await call("/api/serverless/qmock/jobs/rp-ff-1/cancel", { method: "POST", body: {}, headers: T() });
+  assert.equal(c2.status, 200, JSON.stringify(c2.j));
+  assert.equal(c2.j.fv_cancel.sent, true);
+  assert.equal(c2.j.fv_cancel.route, "DELETE /fv/v1/jobs/fvjob_ff");
+  assert.deepEqual(q.ran.at(-1).input, { kind: "http", method: "DELETE", path: "/fv/v1/jobs/fvjob_ff" });
+  const bad = await call("/api/serverless/qmock/jobs/rp-nope/cancel", { method: "POST", body: {}, headers: T() });
+  assert.equal(bad.status, 404);
+  assert.match(bad.j.error, /Runpod has no job rp-nope on qmock/);
+  assert.equal((await call("/api/serverless/qmock/jobs/rp-nope/cancel", { method: "POST", body: { fv_api: "ltx" }, headers: T() })).status, 400);
+  // Purge: the queue first, the name to confirm, the count seen.
+  const qq = await call("/api/serverless/qmock/queue", { headers: T() });
+  assert.equal(qq.j.queued, 3);
+  const wrong = await call("/api/serverless/qmock/purge", { method: "POST", body: { confirm: "nope" }, headers: T() });
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.j.error, /type the endpoint's name \(qmock\)/);
+  assert.equal((await call("/api/serverless/qmock/purge", { method: "POST", body: { confirm: "qmock", expected: 1 }, headers: T() })).status, 409);
+  assert.equal(q.purges, 0);
+  const pg = await call("/api/serverless/qmock/purge", { method: "POST", body: { confirm: "qmock", expected: 3 }, headers: T() });
+  assert.equal(pg.status, 200, JSON.stringify(pg.j));
+  assert.equal(pg.j.removed, 3);
+  assert.equal(pg.j.queued_after, 0);
+  const a = (await call("/api/audit?limit=50", { headers: T() })).j.audit;
+  assert.ok(a.some((x) => x.action === "serverless.purge" && x.target === "qmock"));
+  assert.ok(a.filter((x) => x.action === "serverless.cancel").length >= 2);
+});
+
+await step("CLI: fv-control.sh jobs, job-cancel, jobs-cancel-queued, endpoint cancel and purge", async () => {
+  // Async: the mocks run in this process, so a blocking exec would starve them.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
+  writeFileSync(`${dir}/token`, token, { mode: 0o600 });
+  const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+  const list = await cli("jobs", "tiny", "--status", "running,succeeded");
+  assert.match(list, /^JOB\tAPI\tSTATUS/m);
+  assert.match(list, /fvjob_run1\tnative\trunning\tfake-wan\tfake\t/);
+  assert.match(await cli("jobs", worker.id), /fvjob_done/, "a pod id narrows to that pod");
+  mock.internalJobs["0000000" + "1-aaaa-4bbb-8ccc-dddddddddddd"] = [200, { status: "running", cancel_requested: true }];
+  assert.match(await cli("job-cancel", "fvjob_run1"), /fvjob_run1 \(native, tiny\): running, cancel requested via internal on /);
+  assert.match(await cli("jobs-cancel-queued", "tiny", "--yes"), /^$|cancelled/);
+  mock.queue.jobs.set("rp-cli-1", { id: "rp-cli-1", status: "IN_QUEUE" });
+  mock.queue.queued = 2;
+  assert.match(await cli("endpoint", "cancel", "qmock", "rp-cli-1"), /rp-cli-1: IN_QUEUE -> CANCELLED \(cancelled\); removed from the queue/);
+  assert.match(await cli("endpoint", "purge", "qmock", "--yes"), /removed 1 \(Runpod: completed\); queued 1 -> 0/);
 });
 
 await step("the collector: pods, owners, costs, samples, external attribution, alerts", async () => {

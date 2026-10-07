@@ -29,7 +29,8 @@ browser / fv-control.sh / agents ──► Worker fv-control-staging (Hono, Type
                                        │  static dashboard (public/, Workers static assets)
          cron * * * * * ──────────────►│  collector.ts: snapshot every pod, costs, alerts, backstops
                                        ├─► D1 fv-control   clusters, pods, env, costs, alerts, audit, log tail
-                                       ├─► D1 fv-jobs      releases, deployments (read only)
+                                       ├─► D1 fv-jobs      releases, deployments; direct workers' jobs (read only)
+                                       ├─► D1 edge's       edge workers' jobs (EDGE_DB, read only)
                                        ├─► R2 fv-control-logs   log archive (NDJSON, 30-day lifecycle)
                                        ├─► Analytics Engine fv_control_metrics   per-minute samples
                                        └─► Durable Object ClusterOps (one per cluster)
@@ -217,8 +218,11 @@ Resources, created once:
 - DO class `ClusterOps` (SQLite-backed).
 - Cron `* * * * *`.
 
-`wrangler.toml` binds D1 `fv-jobs` read-only as `JOBS_DB`, for releases
-and the deployment registry. `PUBLIC_URL` is the address pods ship logs
+`wrangler.toml` binds D1 `fv-jobs` read-only as `JOBS_DB`, for releases,
+the deployment registry and direct workers' jobs, and the edge's D1
+(`fv-edge-staging`, the database `EDGE_D1_DATABASE_ID` names) read-only as
+`EDGE_DB`, for edge workers' jobs (the Jobs view, §8c). The default (dev)
+environment binds local stand-ins of both. `PUBLIC_URL` is the address pods ship logs
 to.
 
 A production controller would be an `[env.production]` block with its own
@@ -712,6 +716,69 @@ load balancer): `src/serverless/`, `/api/serverless/*`, the **Serverless** page,
 cost from Runpod billing (owner `serverless:<name>`), logs and the live test:
 [serverless.md](serverless.md).
 
+## 8c. Jobs (clusters and standalone pods)
+
+fv-serve jobs of a cluster or standalone pod: listed, cancelled one by one
+or all queued ones at once (`src/jobs.ts`, `public/jobs.js`).
+
+**Where they are.** Every worker writes its jobs to a D1 `jobs` table
+(`crates/fastvideo-serve-kit/src/d1/schema.rs`): `id` is fv-serve's internal
+uuid, `external_id` the id the client got, `protocol` the API that owns it,
+`worker` the pod that holds it. Edge clusters write to the edge's D1
+(`EDGE_DB`), direct clusters and standalone pods to fv-jobs (`JOBS_DB`). The
+edge itself lists no jobs (its families view has counts only, and its admin
+token is not an API key, so the public list routes do not serve it), so
+fv-control reads D1. A cluster's jobs are its pods' (`cluster_pods`, history
+included) plus, for an edge cluster, the jobs still queued at the edge (no
+worker yet) from its first `up` until its last pod went (one running edge
+cluster per edge). The full job record (signed URLs, the request) never
+leaves fv-control; a database no worker wrote to yet has no table and lists
+nothing.
+
+**How a cancel is routed.** Straight to the pod that holds the job,
+`DELETE https://<pod>-8000.proxy.runpod.net/fv/v1/internal/jobs/<internal id>`
+with the internal token (the edge's for edge fronts, the cluster's for
+direct workers). It is keyed by the internal id, so it serves every API
+(native, fal, OpenAI videos, FastWan, MiniMax, LTX), and runs serve-kit's
+`cancel_job`: a queued job is cancelled at once, a running one gets
+`cancel_requested` and stops at its next denoise step; a finished one is
+left alone. On an edge front it goes through the engine seam
+(`FrontGate::cancel`): a job held there stops locally, any other through the
+family object's cancel, so a job queued at the edge (no worker) goes to any
+live front, and so does one whose holder does not know it. Fallback: the
+owning API's public route (`DELETE /fv/v1/jobs/{id}`, `DELETE /v1/videos/{id}`,
+`DELETE /video/{id}`, `DELETE /v2/video_generation/{id}`,
+`PUT /<fal app>/requests/{id}/cancel`; `src/jobapi.ts`) through the edge or on
+the pod. It needs the owner's API key where auth is on (the edge does not take
+its admin token as a key), so it only helps on `auth: none` workers. A pod
+that is gone took its jobs with it; fv-control says so instead of calling
+anything. Jobs on pods fv-control did not create are refused (403).
+
+| route | |
+|---|---|
+| `GET /api/clusters/<id>/jobs?status=&pool=&pod=&limit=` | jobs newest first (status, API, model, pool, worker, submitted / started, progress, cancel requested, the API's own cancel route) and the count per status; `<id>` is a cluster or standalone pod (name or id) |
+| `GET /api/jobs/<job>[?cluster=]` | one job by any of its ids, with its cluster |
+| `POST /api/jobs/<job>/cancel {cluster?}` | cancel one (`cluster` only when the id matches jobs of two); 502 with every attempt when nothing reached it |
+| `POST /api/clusters/<id>/jobs/cancel-queued {pool?, max?}` | cancel every queued job (100 by default, 200 at most), one cancel each |
+
+Admin only, CSRF on sessions, schemas `jobs-query`, `job-cancel`,
+`jobs-cancel-queued`; audited as `job.cancel` and `jobs.cancel-queued`.
+
+The **Jobs** card on each cluster page and standalone pod page (and the
+**Jobs** page, `#/jobs`) lists queued and running jobs (or all recent),
+refreshes every 10 s, and has Cancel per job, **Cancel all queued (N)…** (a
+dialog with the count and an optional pool) and **Cancel by id…** (any id an
+API gave out).
+
+```bash
+fv-control.sh jobs tiny [--status queued,running] [--pool fake] [--limit 50]   # also a standalone pod name or a pod id
+fv-control.sh job-cancel fvjob_9f2c41d0a7b34e1d [--cluster tiny]
+fv-control.sh jobs-cancel-queued tiny [--pool fake] [--yes]
+```
+
+Serverless endpoints have their own cancel and purge:
+[serverless.md §5a](serverless.md#5a-cancel-and-purge).
+
 ## 9. Observability
 
 This follows the owner's "lean" guidance.
@@ -766,6 +833,7 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET /api/clusters/<id>/ops`, `/api/ops/<id>` | operation logs |
 | `GET /api/clusters/<id>/env` | effective env per pod (masked), `needs_restart` |
 | `GET /api/clusters/<id>/front` (alias `…/gateway`), `POST …/admin-token`, `POST …/mint-key`, `GET …/keys`, `DELETE …/keys/<key_id>` | the cluster's front: the edge's status and families view, or each direct worker's URL and health; reveal the admin token (the edge's, or a direct cluster's with the worker URLs; audited); mint a user API key; list keys; revoke one (at the edge, or on every direct worker; audited) |
+| `GET /api/clusters/<id>/jobs`, `POST …/jobs/cancel-queued`, `GET /api/jobs/<job>`, `POST /api/jobs/<job>/cancel` | fv-serve jobs and cancel (§8c) |
 | `GET /api/buildpod` | the shared build pod: its `/healthz` timers (up, idle, idle / cap stop), last self-stop attempt, running jobs, and the backstop's distance (read only) |
 | `GET /api/env/account`, `GET /api/env/<scope>/<id>`, `PUT/DELETE /api/env/<scope>/<id>/<KEY>` (`PUT /api/env/account/<KEY>`; scope `pool`: id `<cluster>:<pool>`) | env layers |
 | `GET /api/alerts`, `POST /api/alerts/<id>/resolve`, `GET/PUT /api/policies` | alerts and policies |
@@ -809,8 +877,15 @@ npm run test:ui               # headless Chromium (npx playwright-core install c
   2cd1ba0 line, image error, pulling, stuck, slow pull), the early verdict of
   `up`, the boot timeline from the measured lines, standalone specs and
   routes (auth, CSRF, delete with a pod), no secret in a diagnosis.
+- `cancel.test.ts`: each API's cancel route and the default `cancel_path`,
+  finding the fv-serve job in a queue job's output, serverless cancel
+  (queued, running with `cancel_path`, fire-and-forget with one or no
+  worker, a pasted id) and purge (confirmation, a grown queue) against a
+  mocked Runpod queue API, the Jobs view and cancel routing (holder, any
+  front for an edge-queued job, the API fallback, a gone pod, a foreign pod,
+  direct clusters' token, cancel all queued) against mocked jobs D1s.
 
-**Integration** (`test/integration/run.mjs`, 26 steps) runs the Worker
+**Integration** (`test/integration/run.mjs`, 29 steps) runs the Worker
 under `wrangler dev` (workerd with local D1, R2 and DO) against
 `test/harness.mjs`. The harness mocks Runpod REST, GraphQL and hapi, GHCR,
 GitHub and the Cloudflare API, and simulates worker pods and the edge
@@ -836,12 +911,21 @@ Worker (families view, keys, admin token). The steps cover:
 - a standalone pod: launch, up through the real Durable Object, the
   watchdog boot, owner `pod:<name>`, status, boot timeline, logs, stop,
   start, delete;
+- jobs: the Jobs view from the edge's D1 (a local stand-in), cancel by id
+  at the worker that holds it, cancel all queued, admin only; serverless
+  cancel (a pasted id, a fire-and-forget submit's fv-serve job) and purge
+  against the harness's Runpod queue API; the CLI's `jobs`, `job-cancel`,
+  `jobs-cancel-queued`, `endpoint cancel` and `endpoint purge`;
 - logs from boot: the Runpod tail captured once, scrubbed;
 - the audit log, and that no secret appears in any response.
 
 **UI:** login, the dashboard with its charts and tooltip, every page, a
 secret env var set through the UI and never rendered, dark mode, and no
-horizontal scroll at 390 px. Screenshots go to `control/test-results/`.
+horizontal scroll at 390 px. `test/ui/cancel.mjs` (run by `explorer.mjs`):
+the Jobs card (cancel one, all queued, by id with an invalid id refused
+inline), the Jobs page at phone width, and the serverless Queue card (cancel,
+purge with a wrong then the right name), every dialog passing the coverage
+audit. Screenshots go to `control/test-results/` (`SHOTS=<dir>`).
 
 **fv-serve:** the `log_ship` unit tests (config from env, JSON lines with
 span fields, dropping when full), run on the build pod.

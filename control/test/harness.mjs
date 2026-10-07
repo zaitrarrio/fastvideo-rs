@@ -57,6 +57,11 @@ export function startMock() {
     edgeKeys: [],
     edgeCalls: [],
     edgeEpoch: 1,
+    // Runpod's serverless queue API (api.runpod.ai/v2/<endpoint>/…): jobs by id, the queue, the live workers, /run bodies.
+    queue: { jobs: new Map(), queued: 0, running: 0, workers: 0, ran: [], purges: 0 },
+    // Workers' internal job route (DELETE /fv/v1/internal/jobs/{id}): the answer per job id, and the calls.
+    internalJobs: {},
+    internalCancels: [],
     // CloudRift (docs/ops/cloudrift.md): {version, data} over POST, X-API-Key.
     cloudrift: {
       balance: 3000, // cents, as live
@@ -220,6 +225,33 @@ export function startMock() {
     }
     // ---- Cloudflare API (Analytics Engine SQL)
     if (p.startsWith("/cf/")) return json(res, 200, { data: [] });
+    // ---- Runpod's serverless queue API
+    const qm = /^\/rpq\/v2\/([^/]+)\/(health|run|purge-queue|status\/(.+)|cancel\/(.+))$/.exec(p);
+    if (qm) {
+      if (bearer !== m.runpodKey) return json(res, 401, { error: "unauthorized" });
+      const q = m.queue;
+      if (qm[2] === "health") return json(res, 200, { jobs: { inQueue: q.queued, inProgress: q.running, completed: 3, failed: 0, retried: 0 }, workers: { idle: q.workers, running: 0, ready: 0, initializing: 0, throttled: 0, unhealthy: 0 } });
+      if (qm[2] === "purge-queue" && req.method === "POST") {
+        const removed = q.queued;
+        q.queued = 0;
+        q.purges++;
+        for (const j of q.jobs.values()) if (j.status === "IN_QUEUE") j.status = "CANCELLED";
+        return json(res, 200, { removed, status: "completed" });
+      }
+      if (qm[2] === "run" && req.method === "POST") {
+        const id = `mock-run-${q.ran.length + 1}`;
+        q.ran.push(body);
+        q.jobs.set(id, { id, status: "IN_QUEUE" });
+        return json(res, 200, { id, status: "IN_QUEUE" });
+      }
+      const j = q.jobs.get(decodeURIComponent(qm[3] || qm[4] || ""));
+      if (!j) return json(res, 404, { error: "request does not exist" });
+      if (qm[4] && req.method === "POST") {
+        if (j.status === "IN_QUEUE") q.queued = Math.max(0, q.queued - 1);
+        j.status = "CANCELLED";
+      }
+      return json(res, 200, j);
+    }
     // ---- the edge Worker (control_plane = edge): its fronts are the pods
     // whose env makes them fronts with the edge's internal token.
     if (p.startsWith("/edge/")) {
@@ -293,6 +325,13 @@ export function startMock() {
       if (req.headers["x-fv-internal-token"] !== env.FV_INTERNAL_TOKEN) return json(res, 401, {});
       if (route === "/fv/v1/internal/drain") { m.drained.push(pod.id); return json(res, 200, { draining: true }); }
       if (route === "/fv/v1/internal/status") return json(res, 200, { stats: { running: 0, queued_batch: 0, queued_stream: 0, sessions: 0 } });
+      const ij = /^\/fv\/v1\/internal\/jobs\/([^/]+)$/.exec(route);
+      if (ij && req.method === "DELETE") {
+        const id = decodeURIComponent(ij[1]);
+        m.internalCancels.push({ pod: pod.id, id });
+        const a = m.internalJobs[id];
+        return a ? json(res, a[0], a[1]) : json(res, 404, { error: { kind: "not_found", message: `job \`${id}\` was not found` } });
+      }
       return json(res, 404, {});
     }
     json(res, 404, { error: `mock: no route ${p}` });
@@ -308,7 +347,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };
@@ -330,8 +369,9 @@ export async function startWorker(mock, secrets) {
   throw new Error(`wrangler dev did not start:\n${out.slice(-3000)}`);
 }
 
-export function d1Exec(dir, sql) {
-  return execFileSync(join(HERE, "node_modules/.bin/wrangler"), ["d1", "execute", "fv-control", "--local", "--persist-to", dir, "--json", "--command", sql], { cwd: HERE, stdio: "pipe", env: { ...process.env, CI: "1" } }).toString();
+/** SQL on a local D1 of the Worker: fv-control (default), fv-jobs or fv-edge (the jobs D1s, wrangler.toml). */
+export function d1Exec(dir, sql, db = "fv-control") {
+  return execFileSync(join(HERE, "node_modules/.bin/wrangler"), ["d1", "execute", db, "--local", "--persist-to", dir, "--json", "--command", sql], { cwd: HERE, stdio: "pipe", env: { ...process.env, CI: "1" } }).toString();
 }
 
 export const SECRETS = {
@@ -343,3 +383,12 @@ export const SECRETS = {
   SESSION_SECRET: "sess_" + Buffer.from(wc.getRandomValues(new Uint8Array(24))).toString("hex"),
 };
 export const PASSPHRASE = "test passphrase for the owner 42";
+
+/** The jobs table fv-serve workers write (crates/fastvideo-serve-kit/src/d1/schema.rs), for the local fv-jobs / fv-edge. */
+export const JOBS_TABLE = "CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY NOT NULL, protocol TEXT NOT NULL, external_id TEXT NOT NULL, owner TEXT, status TEXT NOT NULL, model TEXT NOT NULL, resolved_model TEXT NOT NULL, task TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, completed_at INTEGER, expires_at INTEGER NOT NULL, worker TEXT, version INTEGER NOT NULL DEFAULT 0, job TEXT NOT NULL, UNIQUE (protocol, external_id))";
+/** One jobs row (a worker's D1 write) as SQL. */
+export function jobInsert(j) {
+  const q = (v) => (v === null || v === undefined ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
+  const job = JSON.stringify({ id: j.id, started_at: j.started ?? null, cancel_requested: false, request_echo: { model: j.model, image_url: "https://pod/files/x?sig=SIGNED_URL_SECRET" } });
+  return `INSERT INTO jobs (id, protocol, external_id, owner, status, model, resolved_model, task, progress, created_at, updated_at, expires_at, worker, job) VALUES (${[j.id, j.api || "native", j.ext, "key_000000000001", j.status, j.model || "fake-wan", "fake-wan", "t2v", j.progress ?? 0, j.at, j.at, j.at + 86400_000, j.worker ?? null, job].map(q).join(", ")})`;
+}

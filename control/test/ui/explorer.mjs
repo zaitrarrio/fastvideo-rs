@@ -215,6 +215,11 @@ try {
     const { configValidationChecks } = await import("./config-validation.mjs");
     await configValidationChecks({ page, B, api, raw, out, tiny });
   }
+  if (process.env.CANCEL_UI !== "0") {
+    const { cancelUiChecks } = await import("./cancel.mjs");
+    await cancelUiChecks({ page, B, out, tiny, w, mock });
+    console.log("ok   UI cancel: Jobs card (cancel one, all queued, by id), Jobs page, serverless cancel and purge");
+  }
   assert.deepEqual(errors.filter((e) => !/favicon|Failed to load resource/.test(e)), [], "no console errors");
   console.log(`ok   UI explorer: filters in the URL, virtualized list, selection + copy, context, pins, find, regex, level sort, ops/audit sources, follow + live tail, phone width (screenshots in ${out})`);
   await browser.close();

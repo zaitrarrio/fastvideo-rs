@@ -827,6 +827,7 @@ async function pageCluster(main, id) {
   await draw();
   outer.replaceChildren(
     live,
+    fvJobsCard(id),
     card(
       "Spec",
       h("p", { class: "small" }, h("a", { href: `#/cluster/${id}/config` }, "Configure →"), h("span", { class: "muted" }, " every field with inline checks, price and stock per pool, the diff before saving, Start / Stop / Scale with the live log.")),

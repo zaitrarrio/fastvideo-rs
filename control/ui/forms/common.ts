@@ -48,6 +48,11 @@ export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOf
   roll: { schema: "roll", fields: [["target"], ["pools"]] },
   "mint-key": { schema: "mint-key", fields: [["name"]] },
   "serverless-scale": { schema: "serverless-scale", fields: [["workers_min"], ["workers_max"]] },
+  "serverless-cancel": { schema: "serverless-cancel", fields: [["job"], ["fv_job"], ["fv_api"], ["stop_fv_job"]] },
+  "serverless-purge": { schema: "serverless-purge", fields: [["confirm"]], notOffered: { expected: "set from the queued count the dialog shows (a purge is refused when the queue grew since)" } },
+  "job-cancel": { schema: "job-cancel", fields: [["job"], ["cluster"]] },
+  "jobs-cancel-queued": { schema: "jobs-cancel-queued", fields: [["pool"], ["max"]] },
+  "jobs-query": { schema: "jobs-query", fields: [], notOffered: { status: "the Jobs card's status buttons", pool: "the Jobs card lists every pool (each row says its pool); API and CLI filter", pod: "the pod pages link to their own view; API and CLI filter", limit: "the card shows the latest 100; API and CLI" } },
 };
 
 export interface Preflight {

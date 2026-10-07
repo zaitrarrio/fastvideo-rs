@@ -5,7 +5,9 @@
 export interface Env {
   // --- bindings
   DB: D1Database; // fv-control
-  JOBS_DB?: D1Database; // fv-jobs (releases, deployments), read only
+  JOBS_DB?: D1Database; // fv-jobs (releases, deployments; direct workers' jobs), read only
+  /** The edge's D1 (EDGE_D1_DATABASE_ID): edge workers' jobs, read only (the Jobs view, src/jobs.ts). */
+  EDGE_DB?: D1Database;
   LOGS: R2Bucket; // fv-control-logs
   METRICS?: AnalyticsEngineDataset; // fv_control_metrics
   CLUSTER_OPS: DurableObjectNamespace; // ClusterOps, one per cluster
