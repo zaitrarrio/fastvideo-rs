@@ -3301,6 +3301,8 @@ async function shipTrace(c) {
 }
 
 function renderTrace(res, id) {
+  // For scripts driving the page (scripts/serve/trace-browser.mjs).
+  globalThis.__fvLastTrace = { id, totalMs: res.totalMs, unaccountedMs: res.unaccountedMs };
   $('trace-tab').hidden = false;
   const total = res.totalMs || 1;
   const pct = (ms) => Math.max(0, Math.min(100, (ms / total) * 100));
