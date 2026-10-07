@@ -191,6 +191,56 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: Vars }> 
   return next();
 };
 
+/**
+ * Guards /serverless/<endpoint>/*, the serverless console (src/serverless/console.ts). Same identities as
+ * /api (Access, an fvc_ token, the session cookie), but the pages are fv-serve's console and send no CSRF
+ * token: a cookie session's mutating request needs an Origin header naming this origin instead (the
+ * console's own fetches send it; the cookie is SameSite=Strict too). Any other Authorization header (an
+ * fv-serve API key a browser kept) is ignored: the proxy holds no fv-serve keys. A page without a session
+ * goes to the dashboard's login.
+ */
+export const requireConsoleAuth: MiddlewareHandler<{ Bindings: Env; Variables: Vars }> = async (c, next) => {
+  const env = c.env;
+  const method = c.req.method.toUpperCase();
+  const page = method === "GET" && /\/console(\/|$)/.test(c.req.path) && !c.req.path.includes("/console/assets/");
+  const refuse = (status: number, message: string) => (page && status === 401 ? c.redirect("/#/serverless", 302) : c.json({ error: { kind: status === 401 ? "unauthorized" : "forbidden", message } }, status as 401));
+  if (accessMode(env)) {
+    const jwt = c.req.header("cf-access-jwt-assertion") || cookie(c, "CF_Authorization");
+    if (!jwt) return refuse(401, "Cloudflare Access token missing");
+    try {
+      const id = await verifyAccessJwt(env, jwt);
+      c.set("actor", `access:${id.email}`);
+    } catch (e) {
+      return refuse(e instanceof HttpError ? e.status : 401, (e as Error).message);
+    }
+    c.set("authKind", "access");
+    c.set("scope", "admin");
+    return next();
+  }
+  const auth = c.req.header("authorization") || "";
+  if (/^bearer fvc_/i.test(auth)) {
+    const t = await apiTokenActor(env, auth.slice(7).trim());
+    if (!t || t.scope === "ci") return refuse(401, "invalid API token");
+    c.set("actor", t.actor);
+    c.set("authKind", "token");
+    c.set("scope", t.scope);
+    return next();
+  }
+  const s = await sessionFromCookie(c);
+  if (!s) return refuse(401, "login required (fv-control)");
+  if (MUTATING.has(method)) {
+    const origin = c.req.header("origin");
+    if (!origin || origin !== new URL(c.req.url).origin) return refuse(403, "cross-origin request refused (no Origin header naming this origin)");
+    const site = c.req.header("sec-fetch-site");
+    if (site && site !== "same-origin") return refuse(403, "cross-site request refused");
+  }
+  c.set("actor", s.actor);
+  c.set("authKind", "session");
+  c.set("sessionId", s.id);
+  c.set("scope", "admin");
+  return next();
+};
+
 export async function whoami(c: C) {
   const env = c.env;
   if (accessMode(env)) {

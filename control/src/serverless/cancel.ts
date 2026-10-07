@@ -24,6 +24,8 @@ export interface SlsCancelIn {
   job: string;
   fv_job?: string;
   fv_api?: FvApi;
+  /** A fal job's endpoint id (its cancel route is under its app; the serverless console sets it). */
+  fv_model?: string;
   stop_fv_job?: boolean;
 }
 export interface FvCancel {
@@ -82,7 +84,7 @@ export async function cancelSlsJob(env: SlsEnv, who: Actor, row: SlsRow, x: SlsC
   // The fv-serve side.
   const input = rec ? parseJson<any>(rec.input, null) : null;
   const found = fvJobOf(input, before?.output ?? (rec ? parseJson<any>(rec.output, rec.output) : null));
-  const fv = x.fv_job ? { id: x.fv_job, api: (x.fv_api || "native") as FvApi, done: false } : found;
+  const fv = x.fv_job ? { id: x.fv_job, api: (x.fv_api || "native") as FvApi, done: false, model: x.fv_model ?? null } : found;
   const fvCancel = await stopFvJob(env, who, row, eid, { fv, beforeStatus, input, want: x.stop_fv_job !== false, explicit: !!x.fv_job });
 
   // Record the outcome: fv-control's row, or a row for a job submitted elsewhere (so its status shows and polls).
@@ -114,7 +116,7 @@ async function stopFvJob(
   who: Actor,
   row: SlsRow,
   eid: string,
-  o: { fv: { id: string; api: FvApi; done: boolean } | null; beforeStatus: string; input: any; want: boolean; explicit: boolean },
+  o: { fv: { id: string; api: FvApi; done: boolean; model?: string | null } | null; beforeStatus: string; input: any; want: boolean; explicit: boolean },
 ): Promise<FvCancel> {
   const { fv } = o;
   if (!fv) return { sent: false, reason: o.input && o.input.kind !== "http" && !o.input.path ? `a ${o.input.kind || "?"} job creates no fv-serve job` : "no fv-serve job id is known (give fv_job to cancel one)" };
@@ -123,7 +125,7 @@ async function stopFvJob(
   if (fv.done && !o.explicit) return { ...base, sent: false, reason: "the fv-serve job had already finished" };
   if (o.beforeStatus === "IN_QUEUE") return { ...base, sent: false, reason: "the queue job never reached a worker" };
   if (o.beforeStatus === "IN_PROGRESS" && o.input?.cancel_path && !o.explicit) return { ...base, sent: false, reason: `the worker DELETEs ${o.input.cancel_path} itself when it stops the queue job (cancel_path)` };
-  const route = cancelRoute(fv.api, fv.id);
+  const route = cancelRoute(fv.api, fv.id, fv.model);
   if (!route) return { ...base, sent: false, reason: `no cancel route for ${fv.api}` };
   const health = await sls.health(env, eid).catch(() => null);
   if (health && readyWorkers(health) === 0) return { ...base, sent: false, reason: "no worker is up: fv-serve jobs live in the worker's process, so the job ended with it" };

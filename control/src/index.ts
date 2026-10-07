@@ -5,7 +5,7 @@
 // Object per cluster (cluster/do.ts).
 import { Hono, type Context } from "hono";
 import { DEFAULT_POLICIES, policies } from "./alerts";
-import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, whoami } from "./auth";
+import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
 import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
@@ -55,7 +55,8 @@ import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
 import { cancelJobRow, cancelQueued, findJob, jobOf, listJobs } from "./jobs";
 import { serverlessRoutes } from "./serverless/routes";
-import { serverlessTick } from "./serverless/ops";
+import { getRow, serverlessTick } from "./serverless/ops";
+import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
@@ -938,6 +939,20 @@ app.route("/api/serverless", serverlessRoutes);
 app.all("/api/*", () => {
   throw new HttpError(404, "no such route");
 });
+
+// ---------------- the serverless console (src/serverless/console.ts, docs/control/serverless.md "Console"):
+// fv-serve's console for one endpoint, its API calls turned into Runpod jobs. Uploads are read back by the
+// workers through a signed URL (public: the token is the capability).
+app.get("/serverless-uploads/:token/:name", (c) => uploadGet(c.env, c.req.param("token")));
+app.use("/serverless/*", requireConsoleAuth);
+const consoleRoute = async (c: C) => {
+  const ep = c.req.param("ep") || "";
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(ep)) throw new HttpError(404, "no such endpoint");
+  const row = await getRow(c.env, ep);
+  return consoleRequest(c.env, c.req.raw, row, { ep, who: { actor: actor(c), ip: clientIp(c) }, readOnly: c.get("scope") === "read", waitUntil: (p) => c.executionCtx.waitUntil(p) });
+};
+app.all("/serverless/:ep", consoleRoute);
+app.all("/serverless/:ep/*", consoleRoute);
 app.all("*", async (c) => {
   if (c.env.ASSETS) return c.env.ASSETS.fetch(c.req.raw);
   return c.text("not found", 404);
@@ -953,6 +968,8 @@ export default {
       }),
     );
     ctx.waitUntil(serverlessTick(env).catch((e) => console.error("serverless tick failed", scrub(env, (e as Error).message))));
+    // The serverless console's uploads (R2 console-uploads/): gone after a day, checked hourly.
+    if (new Date().getUTCMinutes() === 7) ctx.waitUntil(sweepUploads(env).catch(() => 0));
   },
 } satisfies ExportedHandler<Env>;
 

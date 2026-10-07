@@ -31,9 +31,28 @@ function wrap(get) {
 export const store = wrap(() => localStorage);
 export const session = wrap(() => sessionStorage);
 
-export const K = { base: 'fv.base', key: 'fv.key', admin: 'fv.admin', history: 'fv.history', theme: 'fv.theme' };
+// Embedding (docs/serve/console.md "Embedded console"): a server that serves
+// these pages under a path prefix for one fixed backend (fv-control's
+// serverless proxy, `/serverless/<endpoint>`) adds to each page's <head>
+//   <meta name="fv-console-base" content="/serverless/<endpoint>">  pages and API under this prefix, server URL fixed
+//   <meta name="fv-console-off" content="stream,live,avatar,admin,director">  pages it does not serve (no links to them)
+//   <meta name="fv-console-note" content="…">  a note shown under the top bar
+// fv-serve itself sends none of them: prefix '', every page on.
+const meta = (name) => { const m = document.querySelector('meta[name="' + name + '"]'); return m ? m.content || '' : ''; };
+export const BASE_PATH = meta('fv-console-base').replace(/\/+$/, '');
+const OFF = new Set(meta('fv-console-off').split(',').map((s) => s.trim()).filter(Boolean));
+// False when the embedding server does not serve that page (`stream`, `live`, `avatar`, `admin`, `director`).
+export const pageOn = (name) => !OFF.has(name);
+// A console page's path (`/console/...`) under the prefix.
+export const page = (path) => BASE_PATH + path;
 
+// An embedded console keeps its own history (one browser origin may host several).
+export const K = { base: 'fv.base', key: 'fv.key', admin: 'fv.admin', history: 'fv.history' + (BASE_PATH ? ':' + BASE_PATH : ''), theme: 'fv.theme' };
+
+// The API base: the configured server URL, else this page's origin; an
+// embedded console always talks to its own prefix.
 export function base() {
+  if (BASE_PATH) return location.origin + BASE_PATH;
   const b = store.get(K.base).trim().replace(/\/+$/, '');
   return b || location.origin;
 }
@@ -246,11 +265,11 @@ export function appTasks(app) {
   const list = Array.isArray(app.endpoints)
     ? app.endpoints.map((e) => ({ sub: e.sub, title: e.title || e.sub, tag: app.tier ? null : e.tier || null }))
     : [];
-  if (app.director === true) list.push(directorTask(app));
+  if (app.director === true && pageOn('director')) list.push(directorTask(app));
   return list;
 }
 
-export const modelHref = (app, sub) => '/console/models/' + app + '/' + sub;
+export const modelHref = (app, sub) => page('/console/models/' + app + '/' + sub);
 
 function applyTheme(t) {
   if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
@@ -416,7 +435,7 @@ export function poolBadge(name) {
 // The top bar: brand, nav, status strip, connection pill, theme toggle.
 export function topbar(active) {
   applyTheme(store.get(K.theme));
-  const link = (href, text, id) => el('a', { href, 'aria-current': active === id ? 'page' : undefined }, text);
+  const link = (href, text, id) => (pageOn(id) ? el('a', { href: page(href), 'aria-current': active === id ? 'page' : undefined }, text) : null);
   const pill = el('span', { id: 'conn', class: 'pill' });
   connPill(pill);
   loadAuthMode().then(() => refreshConnPill());
@@ -432,7 +451,7 @@ export function topbar(active) {
   const panel = el('div', { id: 'status-panel', class: 'status-panel', hidden: true });
   const bar = el('header', { class: 'topbar' },
     el('div', { class: 'topbar-in' },
-      el('a', { class: 'brand', href: '/console' }, 'fv-serve', el('small', {}, 'console')),
+      el('a', { class: 'brand', href: page('/console') }, 'fv-serve', el('small', {}, 'console')),
       el('nav', { class: 'topnav', 'aria-label': 'Console' },
         link('/console', 'Models', 'home'), link('/console/stream', 'Live stream', 'stream'), link('/console/live', 'Live input', 'live'),
         link('/console/native', 'Native API', 'native'), link('/console/avatar', 'Avatar', 'avatar'),
@@ -446,6 +465,8 @@ export function topbar(active) {
   onStatus((st) => renderStatus(strip, panel, st));
   startStatusPolling();
   document.body.prepend(bar);
+  const note = meta('fv-console-note');
+  if (note) bar.after(el('div', { class: 'page', id: 'embed-note', role: 'note' }, el('div', { class: 'banner' }, note)));
   return bar;
 }
 

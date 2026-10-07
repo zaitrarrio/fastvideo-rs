@@ -5,7 +5,7 @@
 import {
   $, el, store, K, base, request, setMsg, ago, copyText, loadCatalog, appTasks, modelHref, topbar,
   loadAuthMode, needsKey, poolBadge, poolWarning, upload, metaHeaders, draftPill, licenceBanner,
-  loadCapabilities, mountedProtocols,
+  loadCapabilities, mountedProtocols, BASE_PATH,
 } from './common.js';
 import { buildForm } from './form.js';
 import { snippets, protocolSnippets, snippetProtocols } from './snippets.js';
@@ -13,7 +13,7 @@ import { reactorModel } from './rtc.js';
 
 topbar('home');
 
-const parts = location.pathname.replace(/\/+$/, '').split('/').slice(3).map(decodeURIComponent);
+const parts = location.pathname.slice(BASE_PATH.length).replace(/\/+$/, '').split('/').slice(3).map(decodeURIComponent);
 // The sub-path may have several segments (`text-to-video/fast`).
 const [owner, alias] = parts;
 const task = parts.slice(2).join('/');
