@@ -29,7 +29,10 @@ import {
 } from "../enums";
 
 /** The CUDA versions the serve images run on (docs/serve/images.md): the driver must offer 13.0. */
-export const DEFAULT_CUDA = ["13.0"];
+// No CUDA filter by default: Runpod's allowedCudaVersions is a host filter, and "13.0" alone hid the
+// EUR-IS-1 RTX PRO 6000 hosts (driver 595.x) so workers never started (docs/serve/e2e/ltx.md, h3-max.md;
+// staging h3-max2, 2026-10-07). The images check the driver (>= 580) themselves.
+export const DEFAULT_CUDA: string[] = [];
 export { CUDA_VERSIONS, SLS_CPU_FLAVORS };
 
 /** The weights volumes fv-control may mount (CLAUDE.md: EU only; a region without a volume is unavailable). */
@@ -108,7 +111,7 @@ export const EndpointSpecZ = z
     execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
     scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"], { error: (i) => enumMessage("a Runpod scaler type", i.input, ["QUEUE_DELAY", "REQUEST_COUNT"]) }).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
     scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
-    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer (default 13.0, what the images need); [] drops the filter."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer (default: no filter, any CUDA; the images check the driver themselves). Setting one can leave workers unplaced."),
     container_disk_gb: z.number().int().min(5).max(200).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB)."),
     deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
