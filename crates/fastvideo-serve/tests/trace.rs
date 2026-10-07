@@ -171,7 +171,7 @@ async fn every_adapter_records_the_whole_path_under_the_callers_trace() {
         &r,
         "POST",
         "/fv/v1/jobs",
-        Some(json!({"model": "h3-turbo", "prompt": "a fox", "short_edge": 768})),
+        Some(json!({"model": "h3-turbo", "prompt": "a fox", "aspect_ratio": "16:9", "short_edge": 768})),
         bearer,
         Some(&tp(id)),
     )
