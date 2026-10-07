@@ -28,6 +28,11 @@ use crate::WorkerInfo;
 pub const EDGE_AUTH_HEADER: &str = "x-fv-edge-auth";
 /// The request id the edge mints (or keeps from the client).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
+/// A traced hop's clock sample, `<recv wall ns>;<send wall ns>` on the
+/// answering host (docs/serve/tracing.md "Clock alignment").
+pub const TRACE_TIME_HEADER: &str = "x-fv-trace-t";
+/// The tracing opt-in header; the edge passes it on to the front.
+pub const TRACE_OPT_IN_HEADER: &str = "x-fv-trace";
 
 fn yes() -> bool {
     true
@@ -442,6 +447,9 @@ pub fn classify(method: &str, path: &str) -> Class {
             ("GET", 3, "jobs") => return c("native", T::Any),
             ("GET" | "DELETE", 4, "jobs") => return c("native", T::Job(s(3).to_owned())),
             ("GET", 5, "jobs") if s(4) == "content" => return c("native", T::Job(s(3).to_owned())),
+            // Request traces (docs/serve/tracing.md): any front.
+            ("GET", 4, "traces") => return c("native", T::Any),
+            ("POST", 5, "traces") if s(4) == "events" => return c("native", T::Any),
             _ => {}
         }
         if s(2) == "streams" {

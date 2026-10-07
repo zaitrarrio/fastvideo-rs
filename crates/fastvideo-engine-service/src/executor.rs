@@ -282,16 +282,24 @@ fn swap_in(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &Mod
     load(sh, idx, backend, model)
 }
 
+/// Marks per traced run: stage boundaries, every denoise step, a few more.
+const TIMELINE_MARKS: usize = 256;
+
 fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: QueueItem) {
-    let Some((tx, cancel, job, mode)) = ({
+    let Some((tx, cancel, job, mode, trace, queued_ns)) = ({
         let st = sh.lock();
         st.jobs
             .get(&it.job)
-            .map(|e| (e.tx.clone(), e.cancel.clone(), e.job.clone(), e.mode.clone()))
+            .map(|e| (e.tx.clone(), e.cancel.clone(), e.job.clone(), e.mode.clone(), e.trace, e.queued_ns))
     }) else {
         sh.lock().sched.finish(idx);
         return;
     };
+    // docs/serve/tracing.md: queue wait (submit to dequeue) and the run.
+    let t_run = trace.map(|t| {
+        t.span_since(fastvideo_trace::Comp::Queue, "wait", queued_ns, idx as i64);
+        fastvideo_trace::now_ns()
+    });
     let _ = tx.send(EngineEvent::Started);
     let t0 = Instant::now();
     let result = (|| {
@@ -302,20 +310,28 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
             swap_in(sh, idx, backend, &job.model)?;
         }
         let etx = tx.clone();
-        let ctl = StepControl::new(cancel.clone(), mode.clone(), move |ev| {
+        let mut ctl = StepControl::new(cancel.clone(), mode.clone(), move |ev| {
             let _ = etx.send(match ev {
                 StepEvent::Stage(name) => EngineEvent::Stage { name },
                 StepEvent::Progress { step, total } => EngineEvent::Progress { step, total },
                 StepEvent::Log(l) => EngineEvent::Log(l),
             });
         });
+        if let Some(t) = trace {
+            // Marks storage is allocated here, before the run.
+            let pool = backend.marks(TIMELINE_MARKS).unwrap_or_else(|| Box::new(fastvideo_trace::HostMarks));
+            ctl = ctl.with_timeline(fastvideo_trace::Timeline::new(t, pool, TIMELINE_MARKS));
+        }
         let mut collect = CollectSink::default();
         let mut null = NullSink;
         let sink: &mut dyn ClipSink = match mode {
             OutputMode::Frames => &mut collect,
             OutputMode::File { .. } => &mut null,
         };
-        let mut out = backend.generate(&job, sink, &ctl)?;
+        let generated = backend.generate(&job, sink, &ctl);
+        // Device marks resolve on the trace drain thread, not here.
+        ctl.finish_timeline();
+        let mut out = generated?;
         if mode == OutputMode::Frames {
             if out.frames.is_none() {
                 out.frames = Some(std::mem::take(&mut collect.frames));
@@ -333,6 +349,9 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
         }
         Ok(out)
     })();
+    if let (Some(t), Some(s)) = (trace, t_run) {
+        t.span_since(fastvideo_trace::Comp::Engine, "run", s, i64::from(result.is_ok()));
+    }
     let ev = match result {
         Ok(out) => EngineEvent::Finished(out),
         Err(e) if is_cancel(&e) => EngineEvent::Cancelled,

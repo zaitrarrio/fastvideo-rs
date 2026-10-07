@@ -397,7 +397,7 @@ impl EdgeHost {
         let mut r = self.http.request(m, format!("{}{path_q}", url.trim_end_matches('/')));
         for (k, v) in headers {
             let n = k.as_str();
-            if DROP_REQ.contains(&n) || n.starts_with("x-fv-") || n == "authorization" {
+            if DROP_REQ.contains(&n) || (n.starts_with("x-fv-") && n != front::TRACE_OPT_IN_HEADER) || n == "authorization" {
                 continue;
             }
             r = r.header(n, v.as_bytes());

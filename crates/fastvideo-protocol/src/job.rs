@@ -337,6 +337,11 @@ pub struct Job {
     /// §3). Empty on most jobs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_sources: Vec<(std::path::PathBuf, String)>,
+    /// W3C `traceparent` of a traced request (docs/serve/tracing.md): the
+    /// dispatch, the engine and the output path record under its trace id.
+    /// `None` (and absent on the wire) for untraced jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 impl Job {
@@ -370,6 +375,7 @@ impl Job {
             callback: None,
             cancel_requested: false,
             input_sources: Vec::new(),
+            trace: None,
         }
     }
 

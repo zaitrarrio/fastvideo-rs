@@ -37,6 +37,7 @@ pub mod sink;
 pub mod sol_attn;
 pub mod stable_audio;
 pub mod text_encode;
+pub mod timing;
 pub mod vae;
 pub mod wan;
 pub mod world_fuse;

@@ -182,6 +182,12 @@ pub trait EngineBackend: Send + 'static {
     /// Frees a model (swap mode, R18). **Addition to design §3.6**; the
     /// default does nothing.
     fn unload(&mut self, _model: &ModelId) {}
+    /// Device timing marks for a traced run (docs/serve/tracing.md): `cap`
+    /// preallocated marks recorded on the device's work queue (CUDA events
+    /// on the compute stream). `None`: host times only.
+    fn marks(&mut self, _cap: usize) -> Option<Box<dyn fastvideo_trace::MarkPool>> {
+        None
+    }
     fn generate(
         &mut self,
         job: &ResolvedJob,

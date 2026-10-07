@@ -22,6 +22,7 @@ required-features = ["http-client"]
 
 [dependencies]
 fastvideo-protocol.workspace = true
+fastvideo-trace.workspace = true
 fastvideo-engine-service.workspace = true
 fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true

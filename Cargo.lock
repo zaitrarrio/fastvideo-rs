@@ -1248,6 +1248,7 @@ dependencies = [
  "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
+ "fastvideo-trace",
  "image",
  "serde",
  "serde_json",
@@ -1381,6 +1382,7 @@ dependencies = [
  "fastvideo-models",
  "fastvideo-protocol",
  "fastvideo-serve-kit",
+ "fastvideo-trace",
  "image",
  "serde",
  "serde_json",
@@ -1512,6 +1514,7 @@ dependencies = [
  "fastvideo-protocol",
  "fastvideo-reactor",
  "fastvideo-serve-kit",
+ "fastvideo-trace",
  "fastvideo-webrtc",
  "futures",
  "hmac",
@@ -1550,6 +1553,7 @@ dependencies = [
  "fastvideo-engine-service",
  "fastvideo-media",
  "fastvideo-protocol",
+ "fastvideo-trace",
  "futures",
  "hmac",
  "image",
@@ -1566,6 +1570,16 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "fastvideo-trace"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 

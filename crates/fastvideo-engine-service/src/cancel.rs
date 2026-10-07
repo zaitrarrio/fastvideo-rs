@@ -173,6 +173,8 @@ pub struct StepControl {
     pub cancel: CancelToken,
     pub mode: OutputMode,
     emit: Emit,
+    /// A traced run's stage/step marks (docs/serve/tracing.md).
+    timeline: Option<Mutex<fastvideo_trace::Timeline>>,
 }
 
 impl fmt::Debug for StepControl {
@@ -194,6 +196,43 @@ impl StepControl {
             cancel,
             mode,
             emit: Arc::new(emit),
+            timeline: None,
+        }
+    }
+
+    /// Marks every stage and step of this run on `t` (a traced job).
+    pub fn with_timeline(mut self, t: fastvideo_trace::Timeline) -> Self {
+        self.timeline = Some(Mutex::new(t));
+        self
+    }
+
+    /// Whether this run is traced.
+    pub fn traced(&self) -> bool {
+        self.timeline.is_some()
+    }
+
+    /// This run's trace, if it is traced.
+    pub fn trace(&self) -> Option<fastvideo_trace::Trace> {
+        self.timeline.as_ref().map(|t| lock(t).trace())
+    }
+
+    #[inline]
+    fn timeline(&self, f: impl FnOnce(&mut fastvideo_trace::Timeline)) {
+        if let Some(t) = &self.timeline {
+            f(&mut lock(t));
+        }
+    }
+
+    /// A named boundary on the run's timeline only (no engine event): e.g.
+    /// `encode` after the last decoded frame.
+    pub fn mark(&self, name: &'static str) {
+        self.timeline(|t| t.mark(name));
+    }
+
+    /// Ends the run's timeline and hands it to the trace drain.
+    pub fn finish_timeline(&mut self) {
+        if let Some(t) = self.timeline.take() {
+            t.into_inner().unwrap_or_else(|p| p.into_inner()).finish();
         }
     }
 
@@ -205,11 +244,13 @@ impl StepControl {
     /// Reports step `step/total`, then fails with `Cancelled` if the token
     /// is tripped.
     pub fn step(&self, step: u32, total: u32) -> Result<(), ApiError> {
+        self.timeline(|t| t.step(step, total));
         (self.emit)(StepEvent::Progress { step, total });
         self.cancel.check()
     }
 
     pub fn stage(&self, name: &'static str) {
+        self.timeline(|t| t.stage(name));
         (self.emit)(StepEvent::Stage(name));
     }
 

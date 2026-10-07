@@ -159,9 +159,12 @@ impl FrontGate {
         self.http.request(m, format!("{}{path}", self.cfg.do_url)).header(TOKEN_HEADER, &self.cfg.token)
     }
 
-    async fn enqueue(&self, scope: &Scope, body: &EnqueueReq) -> Result<EnqueueResp, ApiError> {
-        let r = self
-            .req(reqwest::Method::POST, &scope.enqueue_path())
+    async fn enqueue(&self, scope: &Scope, body: &EnqueueReq, trace: Option<fastvideo_trace::Trace>) -> Result<EnqueueResp, ApiError> {
+        let mut rb = self.req(reqwest::Method::POST, &scope.enqueue_path());
+        if let Some(t) = trace {
+            rb = rb.header(fastvideo_trace::TRACEPARENT, t.traceparent(fastvideo_trace::new_span_id()));
+        }
+        let r = rb
             .timeout(Duration::from_secs(30))
             .json(body)
             .send()
@@ -200,7 +203,7 @@ impl FrontGate {
         let Ok(v) = serde_json::to_value(&env) else { return };
         req.envelope = v;
         req.replace = true;
-        match self.enqueue(&scope, &req).await {
+        match self.enqueue(&scope, &req, None).await {
             Ok(_) => tracing::debug!(job = %env.job.id, ms = t0.elapsed().as_millis() as u64, "front: envelope with stored inputs on the dispatcher"),
             Err(e) => tracing::warn!(job = %env.job.id, error = %e.message, "front: replacing the envelope failed"),
         }
@@ -229,13 +232,22 @@ impl EngineGate for FrontGate {
 
     async fn submit(&self, job: &Job) -> Result<(), ApiError> {
         let t0 = Instant::now();
+        let trace = crate::gate::job_trace(job);
+        let t_stage = trace.map(|_| fastvideo_trace::now_ns());
         let ctx = self.ctx()?;
         let model = job.resolved.model.to_string();
         let scope = self.scope_of(&model)?;
         let d = &self.cfg.dispatch;
         let inputs = envelope::plan_inputs(ctx, job, d.inline_inputs_max_bytes, d.input_passthrough, self.cfg.input_url_ttl).await?;
         let stage_s = t0.elapsed().as_secs_f64();
-        let env = Envelope { job: job.clone(), inputs, attempt: 1, pool: Some(scope.id().to_owned()) };
+        if let (Some(t), Some(s)) = (trace, t_stage) {
+            t.span_since(fastvideo_trace::Comp::Front, "stage_inputs", s, inputs.len() as i64);
+        }
+        let mut job = job.clone();
+        if job.trace.is_none() {
+            job.trace = trace.map(|t| t.traceparent(t.parent));
+        }
+        let env = Envelope { job, inputs, attempt: 1, pool: Some(scope.id().to_owned()) };
         let body = EnqueueReq {
             job_id: job.id.to_string(),
             envelope: serde_json::to_value(&env).map_err(|e| ApiError::internal(format!("encoding the envelope: {e}")))?,
@@ -246,7 +258,13 @@ impl EngineGate for FrontGate {
             max_queued: d.max_queued,
         };
         let t1 = Instant::now();
-        let resp = self.enqueue(&scope, &body).await?;
+        let t_enq = trace.map(|_| fastvideo_trace::now_ns());
+        let resp = self.enqueue(&scope, &body, trace).await;
+        if let (Some(t), Some(s)) = (trace, t_enq) {
+            // The hop to the family object (edge DO) and back.
+            t.span_since(fastvideo_trace::Comp::Front, "do_enqueue", s, i64::from(resp.is_ok()));
+        }
+        let resp = resp?;
         let enqueue_s = t1.elapsed().as_secs_f64();
         let family = scope.id().to_owned();
         for (phase, v) in [("stage_inputs", stage_s), ("enqueue", enqueue_s)] {

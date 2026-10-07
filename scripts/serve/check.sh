@@ -45,6 +45,7 @@ done
 
 CRATES=(
   fastvideo-protocol
+  fastvideo-trace
   fastvideo-engine-service
   fastvideo-media
   fastvideo-webrtc

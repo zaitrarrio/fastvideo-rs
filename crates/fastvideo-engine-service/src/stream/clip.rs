@@ -195,6 +195,7 @@ impl ClipSession {
             Priority::Stream,
             Some(self.executor),
             Some(OutputMode::Frames),
+            None,
         )
     }
 

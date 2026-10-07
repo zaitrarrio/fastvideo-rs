@@ -93,6 +93,9 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Serve, "GET", "/metrics"),
         // Public status view (single server and gateway, src/status.rs).
         r(Serve, "GET", "/fv/v1/status"),
+        // Request traces (docs/serve/tracing.md, src/trace_http.rs).
+        r(Serve, "GET", "/fv/v1/traces/{id}"),
+        r(Serve, "POST", "/fv/v1/traces/{id}/events"),
         r(ServeKit, "GET", "/files/{artifact}/{name}"),
         r(ServeKit, "PUT", "/uploads/{token}"),
         // FastVideo /v1/videos family and FastWan (§4.1-4.2).

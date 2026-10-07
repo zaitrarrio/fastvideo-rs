@@ -748,6 +748,10 @@ impl EngineBackend for FakeBackend {
         }
     }
 
+    fn marks(&mut self, cap: usize) -> Option<Box<dyn fastvideo_trace::MarkPool>> {
+        Some(Box::new(FakeMarks { clock: self.cfg.clock.clone(), at: Vec::with_capacity(cap) }))
+    }
+
     fn warmup_pending(&self, model: &ModelId) -> Vec<String> {
         match &self.cfg.warmup {
             Some(w) if self.loaded.contains(model) => w.runs.clone(),
@@ -907,6 +911,44 @@ impl EngineBackend for FakeBackend {
 
     fn causal_close(&mut self, s: SessionId) {
         self.sessions.remove(&s);
+    }
+}
+
+/// The fake engine's device marks (docs/serve/tracing.md): its clock (a
+/// manual clock in tests) stands in for CUDA event times, so the device
+/// spans of a fake run are its scripted step times. Like CUDA events they
+/// are recorded during the run and read after it, on the trace drain
+/// thread ([`marks_resolved_on`] tells the tests which thread that was).
+struct FakeMarks {
+    clock: Arc<dyn Clock>,
+    at: Vec<Duration>,
+}
+
+static RESOLVED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The threads that read fake device marks so far (tests).
+pub fn marks_resolved_on() -> Vec<String> {
+    RESOLVED_ON.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+impl fastvideo_trace::MarkPool for FakeMarks {
+    fn capacity(&self) -> usize {
+        self.at.capacity()
+    }
+    fn record(&mut self, i: usize) -> bool {
+        // Within the reserved capacity: no allocation.
+        if i != self.at.len() || self.at.len() == self.at.capacity() {
+            return false;
+        }
+        self.at.push(self.clock.now());
+        true
+    }
+    fn elapsed_ns(&self, from: usize, to: usize) -> Option<u64> {
+        if from == 0 && to == 1 {
+            let name = std::thread::current().name().unwrap_or("?").to_owned();
+            RESOLVED_ON.lock().unwrap_or_else(|p| p.into_inner()).push(name);
+        }
+        Some(self.at.get(to)?.saturating_sub(*self.at.get(from)?).as_nanos() as u64)
     }
 }
 
