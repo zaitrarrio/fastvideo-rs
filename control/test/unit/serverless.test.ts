@@ -32,6 +32,7 @@ import {
   endpointUpdatePayload,
 } from "../../src/serverless/payloads";
 import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, specDiff } from "../../src/serverless/spec";
+import { CUDA_VERSIONS } from "../../src/enums";
 import { d1 } from "./d1shim";
 
 const IMG = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "a".repeat(64);
@@ -44,9 +45,9 @@ describe("serverless spec", () => {
     expect(s.gpu_types).toBeUndefined();
     expect(s.data_centers).toBeUndefined();
   });
-  it("GPU defaults: the EU volume, its data center, RTX PRO 6000 Server, CUDA 13.0", () => {
+  it("GPU defaults: the EU volume, its data center, RTX PRO 6000 Server, no CUDA filter", () => {
     const s = normalizeEndpointSpec({ name: "h3", variant: "h3-turbo" });
-    expect(s).toMatchObject({ compute: "GPU", network_volume: "jg48s6o1w0", data_centers: ["EUR-IS-1"], gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpu_count: 1, allowed_cuda: ["13.0"] });
+    expect(s).toMatchObject({ compute: "GPU", network_volume: "jg48s6o1w0", data_centers: ["EUR-IS-1"], gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpu_count: 1, allowed_cuda: [] });
   });
   it("GPU types keep their priority order; a 5090 fallback is allowed", () => {
     const s = normalizeEndpointSpec({ name: "h3", variant: "h3-turbo", gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA GeForce RTX 5090"] });
@@ -118,9 +119,17 @@ describe("serverless payloads", () => {
       workersMin: 0, workersMax: 1, idleTimeout: 5, flashboot: false, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
     });
     expect(endpointCreatePayload(gpu, "tpl2")).toEqual({
-      name: "fvc-h3", templateId: "tpl2", computeType: "GPU", gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpuCount: 1, allowedCudaVersions: ["13.0"],
+      name: "fvc-h3", templateId: "tpl2", computeType: "GPU", gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpuCount: 1,
       networkVolumeId: "jg48s6o1w0", dataCenterIds: ["EUR-IS-1"], workersMin: 0, workersMax: 2, idleTimeout: 5, flashboot: true, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
     });
+  });
+  it("CUDA: no filter on create by default; an update clears an old filter; an explicit filter is kept", () => {
+    // "13.0" alone hid the EUR-IS-1 RTX PRO 6000 hosts, so workers never started (staging h3-max2, 2026-10-07).
+    expect((endpointCreatePayload(gpu, "t") as any).allowedCudaVersions).toBeUndefined();
+    expect((endpointUpdatePayload(gpu) as any).allowedCudaVersions).toEqual([...CUDA_VERSIONS]);
+    const pinned = normalizeEndpointSpec({ name: "pin", variant: "h3-max", allowed_cuda: ["12.8"] } as any);
+    expect((endpointCreatePayload(pinned, "t") as any).allowedCudaVersions).toEqual(["12.8"]);
+    expect((endpointUpdatePayload(pinned) as any).allowedCudaVersions).toEqual(["12.8"]);
   });
   it("load balancer: REST v2 shape, catalog pools in the spec's order, HTTP mode", () => {
     const lb = normalizeEndpointSpec({ name: "lb", variant: "wan", mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1, gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA GeForce RTX 5090"], config: "/etc/fv/runpod-wan.toml" });

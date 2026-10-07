@@ -1,3 +1,4 @@
+import { CUDA_VERSIONS } from "../enums";
 // Runpod payloads of a serverless endpoint (docs/control/serverless.md),
 // the same shapes scripts/serve/runpod-endpoint.sh and runpod-templates.sh
 // proved: a serverless template (REST v1 POST /templates) plus a queue
@@ -106,6 +107,8 @@ export function endpointCreatePayload(spec: EndpointSpec, templateId: string) {
  * flavors and vCPUs are v2 fields, changed only by a new endpoint. */
 export function endpointUpdatePayload(spec: EndpointSpec) {
   const { computeType: _c, ...f } = endpointFields(spec) as Record<string, unknown>;
+  // An empty allowed_cuda must also clear a filter set earlier: PATCH with every version Runpod knows.
+  if (spec.compute === "GPU" && !(spec.allowed_cuda ?? []).length) f.allowedCudaVersions = [...CUDA_VERSIONS];
   if (spec.compute === "CPU") {
     delete f.cpuFlavorIds;
     delete f.vcpuCount;
