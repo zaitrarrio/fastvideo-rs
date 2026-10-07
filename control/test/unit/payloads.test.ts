@@ -104,7 +104,7 @@ describe("spec", () => {
     expect(() => normalizeSpec({ name: "a", regions: ["mars"] })).toThrow(/region/);
     expect(() => normalizeSpec({ name: "a", regions: ["eu", "us"] })).toThrow(/US weights volume deleted 2026-10; EU only, see docs\/ops\/runpod-volumes.md/);
     expect(() => normalizeSpec({ name: "a", regions: ["us"] })).toThrow(/region us is unavailable/);
-    expect(() => normalizeSpec({ name: "a", pools: [{ id: "wan", regions: ["us"] }] })).toThrow(/pools\[0\]\.regions: region us is unavailable/);
+    expect(() => normalizeSpec({ name: "a", pools: [{ id: "wan", regions: ["us"] }] })).toThrow(/pools\.0\.regions\.0: region us is unavailable/);
     expect(normalizeSpec({ name: "a", regions: ["eu"] }).regions).toEqual(["eu"]);
     expect(normalizeSpec({ name: "a" }).regions).toEqual(["eu"]);
     const t = normalizeSpec({ name: "tiny", template: "tiny-cpu" });

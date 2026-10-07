@@ -104,7 +104,11 @@ export function unwrap(s: Schema | undefined, root: Schema): Schema | undefined 
   const alts = s.anyOf || s.oneOf;
   if (Array.isArray(alts)) {
     const nn = alts.map((b: Schema) => resolve(b, root)).filter((b: Schema | undefined) => b && b.type !== "null");
-    if (nn.length === 1) return { ...nn[0], description: s.description ?? nn[0]!.description, nullable: true };
+    if (nn.length === 1) {
+      // The outer node's own hints (x-dynamic, x-unit, x-rule …) apply to the non-null branch.
+      const { anyOf: _a, oneOf: _o, ...outer } = s;
+      return { ...nn[0], ...outer, description: s.description ?? nn[0]!.description, nullable: true };
+    }
   }
   return s;
 }

@@ -44,8 +44,12 @@ import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, read
 import { dynamicEnums } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
 import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
-import { availability, checkSpec } from "./cluster/editor";
-import { jsonSchemas, validate } from "./schemas";
+import { availability, checkSpec, liveSpecIssues } from "./cluster/editor";
+import { checkImages } from "./cluster/preflight";
+import { resolveClusterImages } from "./ghcr";
+import { assertNameFree, checkName } from "./names";
+import { mapLaunchIssues } from "./standalone";
+import { issuesText, jsonSchemas, parseOr400, validate, type Issue, type SchemaName } from "./schemas";
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
@@ -286,6 +290,9 @@ app.get("/api/clusters", async (c) => {
 app.post("/api/clusters", async (c) => {
   const b = await body(c);
   const spec = normalizeSpec(b.spec || b);
+  await assertNameFree(c.env, "cluster", spec.name);
+  const live = await liveSpecIssues(c.env, spec);
+  if (live.issues.length) throw new HttpError(400, issuesText(live.issues, "spec"), { issues: live.issues });
   const { s, ingestHash } = await newSecrets();
   const cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), "controller", "defined", null);
   await auditC(c, { action: "cluster.define", target: cl.name, after: spec });
@@ -339,9 +346,9 @@ app.post("/api/clusters/:id/price", async (c) => {
 const OPS: Record<string, { kind: Parameters<typeof startOp>[2]; params: (b: any) => any }> = {
   start: { kind: "up", params: (b) => ({ skip_price_check: false, ...(b.confirm_over_floor ? {} : {}) }) },
   stop: { kind: "down", params: () => ({ reason: "stop" }) },
-  extend: { kind: "extend", params: (b) => ({ minutes: Number(b.minutes) }) },
-  scale: { kind: "scale", params: (b) => ({ pool: String(b.pool || ""), count: Number(b.count) }) },
-  roll: { kind: "roll", params: (b) => ({ target: String(b.target || "stable"), pools: Array.isArray(b.pools) ? b.pools.map(String) : undefined }) },
+  extend: { kind: "extend", params: (b) => parseOr400("extend", { minutes: b.minutes }) },
+  scale: { kind: "scale", params: (b) => parseOr400("scale", { pool: b.pool, count: b.count }) },
+  roll: { kind: "roll", params: (b) => parseOr400("roll", { target: b.target ?? "stable", ...(Array.isArray(b.pools) ? { pools: b.pools } : {}) }) },
   // pods / pools: restart just those, whether or not their env changed; neither: every pod whose env changed.
   restart: { kind: "restart", params: (b) => ({ pods: Array.isArray(b.pods) && b.pods.length ? b.pods.map(String) : undefined, pools: Array.isArray(b.pools) && b.pools.length ? b.pools.map(String) : undefined }) },
 };
@@ -351,6 +358,8 @@ for (const [path, def] of Object.entries(OPS)) {
     const params = def.params(await body(c));
     // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
     if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec);
+    for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
+      if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
@@ -426,8 +435,7 @@ app.post("/api/clusters/:id/admin-token", async (c) => {
 });
 app.post("/api/clusters/:id/mint-key", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
-  const name = String((await body(c)).name || "fv-control");
-  if (!/^[A-Za-z0-9 ._-]{1,60}$/.test(name)) throw new HttpError(400, "name: 1-60 characters");
+  const name = parseOr400("mint-key", { name: (await body(c)).name ?? "fv-control" }).name;
   const r = await adminOne(c.env, cl, "POST", "/fv/v1/admin/keys", { name });
   if (r.status !== 201 || !r.body?.api_key) throw new HttpError(502, `mint refused (${r.status})`);
   await auditC(c, { action: "cluster.mint-key", target: cl.name, after: { key: r.body.key?.id, name } });
@@ -466,11 +474,40 @@ app.get("/api/standalone", async (c) => {
   for (const cl of (await listClusters(c.env)).filter(isStandalone)) pods.push(await standaloneOut(c, cl));
   return c.json({ pods });
 });
+/** Every problem of a draft launch request, path-anchored in the request's own fields (the launch form; nothing is saved). */
+app.post("/api/standalone/validate", async (c) => {
+  const b = await body<any>(c);
+  const issues: Issue[] = [];
+  let spec = null;
+  try {
+    spec = standaloneSpec(b).spec;
+  } catch (e) {
+    const ex = e as HttpError;
+    issues.push(...mapLaunchIssues((ex.extra?.issues as Issue[]) || [{ path: [], message: ex.message }]));
+  }
+  if (typeof b?.name === "string" && !issues.some((i) => i.path[0] === "name")) {
+    const r = await checkName(c.env, "cluster", b.name);
+    if (!r.ok && r.problem) issues.push({ path: ["name"], message: r.problem });
+  }
+  const warnings: Issue[] = [];
+  if (spec) {
+    const live = await liveSpecIssues(c.env, spec);
+    issues.push(...mapLaunchIssues(live.issues));
+    warnings.push(...mapLaunchIssues(live.warnings));
+  }
+  return c.json({ ok: !issues.length, issues, warnings, spec: issues.length ? null : spec });
+});
 /** Launch: define the pod and start it (start: false only defines it). The same `up` as a cluster: price check, image preflight, placement, wait until ready. */
 app.post("/api/standalone", async (c) => {
   requireAdmin(c);
   const b = await body<LaunchRequest & { start?: boolean; skip_image_check?: boolean }>(c);
   const { spec, env: vars } = standaloneSpec(b);
+  await assertNameFree(c.env, "cluster", spec.name);
+  const live = await liveSpecIssues(c.env, spec);
+  if (live.issues.length) {
+    const issues = mapLaunchIssues(live.issues);
+    throw new HttpError(400, issuesText(issues), { issues });
+  }
   const { s, ingestHash } = await newSecrets();
   const cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), STANDALONE, "defined", null);
   for (const v of vars) await setVar(c.env, "cluster", cl.id, v.key, v.value, v.secret, actor(c));
@@ -506,7 +543,7 @@ app.post("/api/standalone/:id/stop", async (c) => {
 app.post("/api/standalone/:id/extend", async (c) => {
   requireAdmin(c);
   const cl = await standaloneOf(c);
-  const minutes = Number((await body(c)).minutes);
+  const { minutes } = parseOr400("extend", { minutes: (await body(c)).minutes });
   const r = await startOp(c.env, cl.id, "extend", { minutes }, actor(c));
   await auditC(c, { action: "standalone.extend", target: cl.name, after: { minutes } });
   return c.json({ operation: r.id, kind: "extend" }, 202);
@@ -585,7 +622,9 @@ app.get("/api/build-pods/policy", async (c) => c.json({ policy: await buildPodsP
 app.put("/api/build-pods/policy", async (c) => {
   const before = await buildPodsPolicy(c.env);
   const b = await body<{ policy?: Record<string, unknown> }>(c);
-  const next = normalizePolicy({ ...before, ...(b.policy || {}) } as any);
+  const merged = { ...before, ...(b.policy || {}) };
+  parseOr400("build-pods-policy", merged);
+  const next = normalizePolicy(merged as any);
   await putSetting(c.env, "build_pods", next, actor(c));
   await auditC(c, { action: "build_pods.policy", before, after: next });
   return c.json({ policy: next });
@@ -759,8 +798,9 @@ app.get("/api/images/tags", async (c) => {
 app.get("/api/github/ci", async (c) => c.json(await ciStatus(c.env)));
 app.post("/api/github/release", async (c) => {
   const b = await body(c);
-  const v = validate("release-dispatch", b);
-  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
+  parseOr400("release-dispatch", b);
+  const known = (await dynamicEnums(c.env)).channels.map((x) => x.id);
+  if (b.channel && !known.includes(b.channel)) throw new HttpError(400, `channel: one of ${known.join(", ")}`, { issues: [{ path: ["channel"], message: `one of ${known.join(", ")}` }] });
   const r = await dispatchRelease(c.env, b);
   await auditC(c, { action: `release.${b.action}`, target: b.channel || "stable", after: r.inputs });
   return c.json(r, 202);
@@ -777,6 +817,7 @@ app.post("/api/tokens", async (c) => {
   const v = validate("token-create", { scope: "admin", ...b });
   if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
   const name = String(b.name);
+  await assertNameFree(c.env, "token", name);
   const scope = b.scope === "read" ? "read" : b.scope === "ci" ? "ci" : "admin";
   const t = await mintApiToken(c.env, name, scope, actor(c), b.ttl_days ? Number(b.ttl_days) : 90);
   await auditC(c, { action: "token.mint", target: t.id, after: { name, scope, expires_at: t.expires_at } });
@@ -796,7 +837,38 @@ app.post("/api/collect", async (c) => c.json(await collect(c.env)));
 
 // ---------------- schemas and editable documents (src/schemas.ts, src/docs.ts)
 app.get("/api/schemas", (c) => c.json({ schemas: jsonSchemas(), documents: SCHEMA_OF }));
+/** A name's pattern, reserved names and uniqueness (the forms check as you type; every create path enforces the same). */
+app.get("/api/names/:kind", async (c) => c.json(await checkName(c.env, c.req.param("kind"), c.req.query("name") || "")));
+/**
+ * The image preflight before a save or launch (preflight.ts, the check `up` runs before any pod is paid for):
+ * each pool's image resolves to a digest, and that build has what the spec asks of it. Body: {spec} (a cluster spec),
+ * {launch} (a standalone launch request) or {endpoint} (a serverless spec: its variant and image).
+ */
+app.post("/api/preflight", async (c) => {
+  const b = await body<any>(c);
+  let spec;
+  if (b.launch) spec = standaloneSpec(b.launch).spec;
+  else if (b.endpoint) {
+    const e = b.endpoint;
+    spec = normalizeSpec({ name: "preflight", image: e.image, control_plane: "direct", pools: [{ id: "endpoint", variant: e.variant, compute: e.variant === "cpu" ? "CPU" : "GPU", count: 1, config: "/etc/fv/runpod.toml", ...(e.variant === "cpu" ? { fake_models: ["fake-wan"] } : { models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
+  } else spec = normalizeSpec(b.spec || {});
+  let images: Record<string, string>;
+  try {
+    images = await resolveClusterImages(c.env, spec);
+  } catch (e) {
+    return c.json({ ok: false, errors: [`image: ${scrub(c.env, (e as Error).message)}`], warnings: [], images: {}, revisions: {} });
+  }
+  const pf = await checkImages(c.env, spec, images);
+  return c.json({ ok: pf.errors.length === 0, ...pf, images });
+});
 app.get("/api/schemas/dynamic", async (c) => c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined)));
+/** Any schema's own check (refinements included) on a draft, without acting: the forms' cross-field rules. */
+app.post("/api/schemas/:name/validate", async (c) => {
+  const name = c.req.param("name") as SchemaName;
+  if (!jsonSchemas()[name]) throw new HttpError(404, "no such schema");
+  const v = validate(name, (await body<any>(c)).doc);
+  return c.json({ ok: v.ok, issues: v.ok ? [] : v.issues });
+});
 app.get("/api/schemas/:name", (c) => {
   const s = jsonSchemas()[c.req.param("name")];
   if (!s) throw new HttpError(404, "no such schema");

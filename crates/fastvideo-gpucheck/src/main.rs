@@ -598,6 +598,40 @@ enum Cmd {
         #[arg(long)]
         verify_only: bool,
     },
+    /// Fast boot (A): build the pre-quantized resident DiT tree of a served
+    /// H3 model (`h3-turbo`, `h3-max`, a catalog id) beside its
+    /// `transformer/`: load it as fv-serve does, store every resident
+    /// refiner/DiT tensor into a new temporary directory, hash it, load it
+    /// back and require byte-identical state, then (with `--finalize`)
+    /// rename it into place. Only adds files; refuses an existing tree.
+    /// Run it as fv-serve runs the model: `--mode fast --techniques <the
+    /// model's profile>` (h3-turbo: `h3/fasth3_4step_vsa`), e.g.
+    /// `fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa quantize-dit
+    /// --model h3-turbo --weights-root /workspace/weights --finalize`.
+    #[cfg(feature = "cuda")]
+    QuantizeDit {
+        /// Tier alias or catalog id.
+        #[arg(long)]
+        model: String,
+        /// The weights root (`$FV_WEIGHTS`, holding `h3-base/`).
+        #[arg(long)]
+        weights_root: PathBuf,
+        /// Temporary directory to write (default `<tree>.tmp-<pid>` beside it).
+        #[arg(long)]
+        tmp: Option<PathBuf>,
+        /// Skip hashing the source shards into the manifest.
+        #[arg(long)]
+        no_hash: bool,
+        /// Skip the identity check after writing.
+        #[arg(long)]
+        no_verify: bool,
+        /// Only check an existing tree (`--tmp`, else the final name).
+        #[arg(long)]
+        verify_only: bool,
+        /// Rename the verified temporary directory to the tree name.
+        #[arg(long)]
+        finalize: bool,
+    },
     /// Diff our text encoder and one DiT step against an external reference.
     Oracle {
         #[arg(long)]
@@ -684,6 +718,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::EvictCache { .. } => "evict-cache",
         #[cfg(feature = "cuda")]
         Cmd::QuantizeTextEncoder { .. } => "quantize-text-encoder",
+        #[cfg(feature = "cuda")]
+        Cmd::QuantizeDit { .. } => "quantize-dit",
         Cmd::TaehvDevice { .. } => "taehv-device",
     }
 }
@@ -1009,6 +1045,25 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             !*no_hash,
             !*no_verify,
             *verify_only,
+        ),
+        #[cfg(feature = "cuda")]
+        Cmd::QuantizeDit {
+            model,
+            weights_root,
+            tmp,
+            no_hash,
+            no_verify,
+            verify_only,
+            finalize,
+        } => coldstart::quantize_dit(
+            report,
+            model,
+            weights_root,
+            tmp.as_deref(),
+            !*no_hash,
+            !*no_verify,
+            *verify_only,
+            *finalize,
         ),
         Cmd::Oracle {
             weights,

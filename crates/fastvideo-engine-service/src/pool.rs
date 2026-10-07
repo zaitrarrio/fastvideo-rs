@@ -42,6 +42,30 @@ pub enum Residency {
     Failed(ApiError),
 }
 
+/// A resident model's warm-up (fast boot B). Readiness does not wait for it:
+/// a model reports ready once its weights are resident and warms up in the
+/// background, yielding to every job.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Warmup {
+    /// No background warm-up (none configured, or it ran inside the load).
+    #[default]
+    Off,
+    /// Runs left; waiting for the executor to be idle.
+    Pending,
+    /// A warm-up run is on the GPU (a job cancels it).
+    Running,
+    Done,
+    /// A run failed (logged); the model serves without the rest.
+    Failed,
+}
+
+impl Warmup {
+    pub fn is_warming(self) -> bool {
+        matches!(self, Warmup::Pending | Warmup::Running)
+    }
+}
+
 /// One row of the pool.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PoolEntry {
@@ -50,6 +74,8 @@ pub struct PoolEntry {
     /// Counted by readiness.
     pub warm: bool,
     pub state: Residency,
+    #[serde(default)]
+    pub warmup: Warmup,
 }
 
 /// Residency of every (executor, model).
@@ -73,8 +99,32 @@ impl ModelPool {
                 model,
                 warm,
                 state,
+                warmup: Warmup::Off,
             },
         );
+    }
+
+    pub fn set_warmup(&mut self, executor: usize, model: &ModelId, w: Warmup) {
+        if let Some(e) = self.entries.get_mut(&(executor, model.clone())) {
+            e.warmup = w;
+        }
+    }
+
+    /// `warming` while any resident model has warm-up left, else `warm` when
+    /// one warmed up in the background, else `off`.
+    pub fn warmup_summary(&self) -> &'static str {
+        let mut any = false;
+        for e in self.entries.values() {
+            if e.warmup.is_warming() {
+                return "warming";
+            }
+            any |= e.warmup != Warmup::Off;
+        }
+        if any {
+            "warm"
+        } else {
+            "off"
+        }
     }
 
     pub fn set(&mut self, executor: usize, model: &ModelId, state: Residency) {
@@ -175,6 +225,12 @@ mod tests {
         p.set(1, &a, Residency::Resident);
         assert_eq!(p.readiness(), Readiness::Ready);
         assert_eq!(p.resident_models(), vec![a.clone()]);
+        assert_eq!(p.warmup_summary(), "off");
+        p.set_warmup(0, &a, Warmup::Pending);
+        assert_eq!(p.readiness(), Readiness::Ready, "warm-up does not hold readiness");
+        assert_eq!(p.warmup_summary(), "warming");
+        p.set_warmup(0, &a, Warmup::Done);
+        assert_eq!(p.warmup_summary(), "warm");
         p.set(1, &a, Residency::Failed(ApiError::engine_failed("oom")));
         assert!(matches!(p.readiness(), Readiness::Failed(m) if m.contains("oom")));
         assert_eq!(p.model_state(&a), Some(Residency::Resident));

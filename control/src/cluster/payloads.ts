@@ -121,32 +121,7 @@ export interface ClusterSecrets {
   smoke_api_key?: string;
 }
 
-/** Keys the controller owns: user env layers may not set them. */
-export const RESERVED_KEYS = new Set([
-  "FV_INTERNAL_TOKEN",
-  "FV_URL_SIGNING_KEY",
-  "FV_BACKSTOP_API_KEY",
-  "FV_CLUSTER_DEADLINE",
-  "FV_MIN_BALANCE",
-  "FV_ADMIN_TOKEN",
-  "FV_ADMIN_TOKEN_RECIPIENT",
-  "FV_WORKER_TOML_B64",
-  "FV_WORKER_CONFIG",
-  "FV_WORKER_DIRECT",
-  "FV_SERVE_ROLE",
-  "FV_PUBLIC_BASE_URL",
-  "FV_LOG_SHIP_URL",
-  "FV_LOG_SHIP_TOKEN",
-  "FV_IMAGE_REF",
-  "FV_IMAGE_DIGEST",
-  "FV_DISPATCH_FRONT",
-  "FV_DISPATCH_DO_URL",
-  "FV_DISPATCH_FAMILIES",
-  "FV_DISPATCH_MODEL_FAMILIES",
-  "FV_DISPATCH_ENDPOINT",
-  "FV_DISPATCH_DIRECT_UPLOAD",
-]);
-export const isReserved = (k: string) => RESERVED_KEYS.has(k);
+export { RESERVED_KEYS, isReserved } from "../enums";
 /** System env keys whose values are secret (masked in every view). */
 export const SECRET_SYSTEM_KEYS = new Set(["FV_INTERNAL_TOKEN", "FV_URL_SIGNING_KEY", "FV_BACKSTOP_API_KEY", "FV_ADMIN_TOKEN", "FV_LOG_SHIP_TOKEN"]);
 

@@ -11,7 +11,7 @@ use common::*;
 use fastvideo_engine_service::fake::{audio_len, decode_frame_index};
 use fastvideo_engine_service::{
     CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, FakeConfig, FakeFaults, FakeModel,
-    FakeTiming, ManualClock, Mp4Mode, Priority, Readiness, Residency, Tier,
+    FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority, Readiness, Residency, Tier, Warmup,
     SOL_H3_4STEP_PROFILE,
 };
 use fastvideo_protocol::{
@@ -775,4 +775,88 @@ async fn drain_cancels_running_after_grace() {
     assert_eq!(av.last(), Some(&EngineEvent::Cancelled), "{av:?}");
     assert!(tokio::time::timeout(T, s.next_block()).await.unwrap().is_none());
     tick.abort();
+}
+
+/// Fast boot B: with a background warm-up the engine reports ready as soon
+/// as the weights are resident; a job that arrives during the warm-up
+/// cancels the run in flight at its next step and runs first; the warm-up
+/// never shares the executor with a job; it resumes when the executor is
+/// idle; and the first job's output equals the same job's output after the
+/// warm-up (same seed, same bytes).
+#[tokio::test]
+async fn background_warmup_is_ready_first_and_yields_to_jobs() {
+    let clock = Arc::new(ManualClock::new());
+    let journal = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let fake = FakeConfig {
+        warmup: Some(FakeWarmup {
+            runs: vec!["i2v".into(), "t2v".into()],
+            steps: 10,
+            step: Duration::from_secs(1),
+        }),
+        journal: Some(journal.clone()),
+        ..manual_fake(&clock)
+    }
+    .with_models(&["fake-wan"]);
+    let e = start(EngineConfig::default(), vec![fake]);
+    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(e.warmup(), "warming", "ready before the warm-up ran");
+
+    // The warm-up's first run is on the executor (parked on its first step).
+    sleepers(&clock, 1).await;
+    assert_eq!(
+        e.pool().entries().map(|p| p.warmup).collect::<Vec<_>>(),
+        vec![Warmup::Running]
+    );
+    let mut first = e.submit_frames(JobId::new(), wan("first"), Priority::Batch).await.unwrap();
+    // The run in flight finishes its step, sees the cancel and yields.
+    clock.advance(Duration::from_secs(1));
+    let drive = Driver::new(&clock);
+    let first = until_terminal(&mut first).await;
+    let EngineEvent::Finished(first) = first.last().unwrap().clone() else {
+        panic!("first job: {first:?}")
+    };
+    // Idle again: the warm-up resumes and completes.
+    let warm = tokio::time::timeout(T, async {
+        while e.warmup() != "warm" {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(warm.is_ok(), "the warm-up never completed");
+    assert_eq!(e.readiness(), Readiness::Ready);
+    let after = e
+        .submit_frames(JobId::new(), wan("first"), Priority::Batch)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    drop(drive);
+    assert_eq!(after.frames, first.frames, "a job during warm-up renders what a warm job renders");
+    assert_eq!(after.audio, first.audio);
+
+    let j = journal.lock().unwrap().clone();
+    // Never two things on the executor at once: strict begin/end pairs.
+    for pair in j.chunks(2) {
+        let (b, en) = (&pair[0], &pair[1]);
+        assert!(b.starts_with("begin ") && en.starts_with("end ") && b[6..] == en[4..], "overlap in {j:?}");
+    }
+    let order: Vec<&str> = j.iter().filter(|l| l.starts_with("begin ")).map(|l| &l[6..]).collect();
+    assert_eq!(
+        order,
+        [
+            "warmup fake-wan i2v",    // cancelled by the job
+            "generate fake-wan first", // the job runs first
+            "warmup fake-wan i2v",    // retried while idle
+            "warmup fake-wan t2v",
+            "generate fake-wan first",
+        ]
+    );
+}
+
+/// Without a configured warm-up nothing runs after the load and the state is `off`.
+#[tokio::test]
+async fn no_warmup_reports_off() {
+    let e = ready(EngineConfig::default(), fast_fake().with_models(&["fake-wan"])).await;
+    assert_eq!(e.warmup(), "off");
 }

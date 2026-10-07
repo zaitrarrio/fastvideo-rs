@@ -146,8 +146,9 @@ try {
   await page.goto(`${B}/#/env?cluster=${c.cluster.id}`);
   const envp = ".fv-panel[data-kind=env]";
   await page.waitForSelector(`${envp} .fv-table`);
-  await page.fill(`${envp} input[aria-label="new key"]`, "HF_TOKEN");
-  await page.click(`${envp} button:text('+ add')`);
+  await page.click(`${envp} button:text('+ variable')`);
+  await page.fill(`${envp} input[aria-label="variable name"]`, "HF_TOKEN");
+  await page.press(`${envp} input[aria-label="variable name"]`, "Tab");
   await page.check(`${envp} tr[data-key=HF_TOKEN] input[type=checkbox]`);
   await page.fill(`${envp} tr[data-key=HF_TOKEN] input[type=password]`, "hf_editor_secret");
   await page.click(`${envp} .tabs button:text('JSON')`);
@@ -205,12 +206,12 @@ try {
   await page.goto(`${B}/#/cluster/${c.cluster.id}`);
   await page.waitForSelector("button:text('Roll to…'):not([disabled])");
   await page.click("button:text('Roll to…')");
-  await page.waitForSelector("dialog.pick label:has-text('fake')");
-  assert.ok(await page.isChecked("dialog.pick input[value=fake]"));
-  assert.ok(await page.isVisible("dialog.pick input[aria-label='Roll target']"));
+  await page.waitForSelector("dialog.ff-dialog .fv-chip:has-text('fake')");
+  assert.equal(await page.getAttribute("dialog.ff-dialog .fv-chip:has-text('fake')", "aria-pressed"), "true");
+  assert.ok(await page.isVisible("dialog.ff-dialog [data-ctl][data-path=target]"));
   await page.screenshot({ path: `${out}/14-roll-picker.png` });
-  await page.click("dialog.pick button:text('Cancel')");
-  await page.waitForSelector("dialog.pick", { state: "detached" });
+  await page.click("dialog.ff-dialog button:text('Cancel')");
+  await page.waitForSelector("dialog.ff-dialog", { state: "detached" });
   await page.click("button:text('Add pool…')");
   await page.waitForSelector("dialog select[aria-label='Pool preset'] option[value=fastwan21]", { state: "attached" });
   await page.selectOption("dialog select[aria-label='Pool preset']", "fastwan21");
@@ -241,11 +242,13 @@ try {
   await page.goto(`${B}/#/env?cluster=${c.cluster.id}&pool=fake`);
   await page.waitForSelector("select[aria-label=Pool]");
   const poolp = ".fv-panel[data-kind=env] >> nth=2";
-  await page.waitForSelector(`${poolp} >> input[aria-label="new key"]`);
+  await page.waitForSelector(`${poolp} >> button:text('+ variable')`);
   assert.ok(await page.$(`datalist option[value=FASTVIDEO_ATTN_SAGE]`), "engine env keys suggested");
-  await page.fill(`${poolp} >> input[aria-label="new key"]`, "FASTVIDEO_ATTN_SAGE");
-  await page.click(`${poolp} >> button:text('+ add')`);
-  await page.fill(`${poolp} >> tr[data-key=FASTVIDEO_ATTN_SAGE] input[type=text]`, "0");
+  await page.click(`${poolp} >> button:text('+ variable')`);
+  await page.fill(`${poolp} >> input[aria-label="variable name"]`, "FASTVIDEO_ATTN_SAGE");
+  await page.press(`${poolp} >> input[aria-label="variable name"]`, "Tab");
+  // A known engine key: a select of the values the engine accepts.
+  await page.selectOption(`${poolp} >> tr[data-key=FASTVIDEO_ATTN_SAGE] select`, "0");
   await page.click(`${poolp} >> button:text('Review & save')`);
   await page.click(`${poolp} >> button:has-text('Save (v')`);
   for (let i = 0; i < 40; i++) {
@@ -262,15 +265,15 @@ try {
 
   // ---- standalone pods: launch from the form (session + CSRF), its page with status, cost and the boot timeline.
   await page.goto(`${B}/#/standalone`);
-  await page.waitForSelector("input[name=name]");
-  await page.fill("input[name=name]", "ui-solo");
-  await page.fill("input[name=variant]", "cpu");
-  await page.fill("input[name=config]", "/etc/fv/runpod-fake.toml");
-  await page.fill("input[name=fake_models]", "fake-wan");
-  await page.selectOption("select[name=compute]", "CPU");
-  await page.uncheck("input[name=volume]");
-  await page.fill("input[name=image_source]", "stable");
-  await page.click("form button[type=submit]:text('Launch')");
+  const SL = '[data-schema-form="standalone-launch"]';
+  await page.waitForSelector(`${SL} [data-ctl][data-path=name]`);
+  await page.fill(`${SL} [data-ctl][data-path=name]`, "ui-solo");
+  // Custom: the cpu variant with the fake config and fake-wan (what "custom" starts with), CPU, no volume.
+  await page.selectOption(`${SL} [data-ctl][data-path=preset]`, "");
+  await page.waitForSelector(`${SL} select[data-ctl][data-path=variant]`);
+  assert.equal(await page.inputValue(`${SL} [data-ctl][data-path=config]`), "/etc/fv/runpod-fake.toml");
+  await page.waitForFunction((s) => !document.querySelector(`${s} button[type=submit]`).disabled, SL, { timeout: 15000 });
+  await page.click(`${SL} button[type=submit]:text('Launch')`);
   await page.waitForSelector("h1:text('ui-solo')");
   await page.waitForSelector("h2:text('Boot timeline')", { timeout: 60000 });
   await page.waitForSelector("td:text('Runpod create accepted')", { timeout: 60000 });

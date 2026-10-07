@@ -311,29 +311,72 @@ impl CudaBackend {
             .ok_or_else(|| ApiError::invalid(format!("model `{id}` is not served by this GPU")))
     }
 
-    /// `warmup = true`: one image-to-video and one text-to-video job at the
-    /// default canvas and length, through the same `generate` a request
-    /// takes (MP4 encode included), before the model is reported ready. The
-    /// first request then does not pay kernel compilation, plan search and
+    /// Blocking warm-up (`warmup = "blocking"`, the behaviour before fast
+    /// boot B): one image-to-video and one text-to-video job at the default
+    /// canvas and length, through the same `generate` a request takes (MP4
+    /// encode included), before the model is reported ready. The first
+    /// request then does not pay kernel compilation, plan search and
     /// allocator growth. A failure is logged, not fatal: the model still
-    /// serves.
+    /// serves. The default (background) runs the same jobs through
+    /// [`EngineBackend::warmup_run`] after readiness instead.
     fn warmup(&mut self, m: &CudaModel) {
         let t0 = std::time::Instant::now();
-        let dir = self.cfg.work_dir.join(format!("warmup-{}", uuid::Uuid::new_v4()));
-        let r = self.warmup_jobs(m, &dir);
-        remove_dir(&dir);
-        match r {
-            Ok(runs) => tracing::info!(
+        let mut runs = Vec::new();
+        let mut failed = None;
+        for name in Self::warmup_names(m) {
+            match self.warmup_one(m, &name, &crate::cancel::CancelToken::new()) {
+                Ok(what) => runs.push(what),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        match failed {
+            None => tracing::info!(
                 model = %m.id,
                 seconds = t0.elapsed().as_secs_f64(),
                 runs = %runs.join(", "),
                 "warmup done"
             ),
-            Err(e) => tracing::warn!(model = %m.id, error = %e, "warmup failed; serving without it"),
+            Some(e) => tracing::warn!(model = %m.id, error = %e, "warmup failed; serving without it"),
         }
     }
 
-    fn warmup_jobs(&mut self, m: &CudaModel, dir: &Path) -> Result<Vec<String>, ApiError> {
+    /// The warm-up runs of `m`, in order: `i2v` then `t2v`, each when the
+    /// model takes that task (a Ref2VA-only model takes neither).
+    fn warmup_names(m: &CudaModel) -> Vec<String> {
+        use fastvideo_protocol::Task;
+        let caps = m.caps();
+        [("i2v", Task::I2V), ("t2v", Task::T2V)]
+            .into_iter()
+            .filter(|(_, t)| caps.supports(*t))
+            .map(|(n, _)| n.to_owned())
+            .collect()
+    }
+
+    /// One warm-up generation (`i2v` or `t2v`) under `cancel`, in a scratch
+    /// directory removed afterwards. A fixed prompt and seed at the default
+    /// canvas and length: the same work as the first real request.
+    fn warmup_one(
+        &mut self,
+        m: &CudaModel,
+        name: &str,
+        cancel: &crate::cancel::CancelToken,
+    ) -> Result<String, ApiError> {
+        let dir = self.cfg.work_dir.join(format!("warmup-{}", uuid::Uuid::new_v4()));
+        let r = self.warmup_job(m, name, &dir, cancel);
+        remove_dir(&dir);
+        r
+    }
+
+    fn warmup_job(
+        &mut self,
+        m: &CudaModel,
+        name: &str,
+        dir: &Path,
+        cancel: &crate::cancel::CancelToken,
+    ) -> Result<String, ApiError> {
         use fastvideo_protocol::{
             canvas_for_aspect, Anchor, AudioPlan, PostProcess, SamplingOverrides, Task,
         };
@@ -342,18 +385,25 @@ impl CudaBackend {
         let (width, height) = canvas_for_aspect(&caps.canvas, 16.0 / 9.0, short);
         std::fs::create_dir_all(dir)
             .map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
-        // A smooth gradient: something for the vision tower and the keyframe
-        // encoder to look at.
-        let image = dir.join("first.png");
-        image::RgbImage::from_fn(width, height, |x, y| {
-            image::Rgb([
-                (x * 255 / width.max(1)) as u8,
-                (y * 255 / height.max(1)) as u8,
-                128,
-            ])
-        })
-        .save(&image)
-        .map_err(|e| ApiError::internal(format!("{}: {e}", image.display())))?;
+        let (task, keyframes) = match name {
+            "i2v" => {
+                // A smooth gradient: something for the vision tower and the
+                // keyframe encoder to look at.
+                let image = dir.join("first.png");
+                image::RgbImage::from_fn(width, height, |x, y| {
+                    image::Rgb([
+                        (x * 255 / width.max(1)) as u8,
+                        (y * 255 / height.max(1)) as u8,
+                        128,
+                    ])
+                })
+                .save(&image)
+                .map_err(|e| ApiError::internal(format!("{}: {e}", image.display())))?;
+                (Task::I2V, vec![(Anchor::First, image)])
+            }
+            "t2v" => (Task::T2V, Vec::new()),
+            other => return Err(ApiError::internal(format!("unknown warm-up run `{other}`"))),
+        };
         let audio = match &caps.audio {
             Some(a) if !a.via_sidecar => AudioPlan::Native {
                 rate: a.native_rate,
@@ -361,7 +411,7 @@ impl CudaBackend {
             },
             _ => AudioPlan::None,
         };
-        let job = |task: Task, keyframes: Vec<(Anchor, PathBuf)>| ResolvedJob {
+        let j = ResolvedJob {
             model: m.id.clone(),
             task,
             prompt: "A calm lake at sunrise, mist over the water, birds calling.".into(),
@@ -384,32 +434,17 @@ impl CudaBackend {
             recipe: caps.recipe.clone(),
             edit: None,
         };
-        let mut runs = Vec::new();
-        for (name, j) in [
-            ("i2v", job(Task::I2V, vec![(Anchor::First, image.clone())])),
-            ("t2v", job(Task::T2V, Vec::new())),
-        ] {
-            // A Ref2VA-only model takes neither; it skips the warmup.
-            if !caps.supports(j.task) {
-                continue;
-            }
-            let t = std::time::Instant::now();
-            let ctl = StepControl::detached(
-                crate::cancel::CancelToken::new(),
-                OutputMode::File {
-                    dir: dir.join(name),
-                },
-            );
-            std::fs::create_dir_all(dir.join(name))
-                .map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
-            self.generate(&j, &mut crate::backend::NullSink, &ctl)?;
-            runs.push(format!(
-                "{name} {width}x{height}x{} {:.1}s",
-                j.num_frames,
-                t.elapsed().as_secs_f64()
-            ));
-        }
-        Ok(runs)
+        let t = std::time::Instant::now();
+        let out = dir.join(name);
+        std::fs::create_dir_all(&out)
+            .map_err(|e| ApiError::internal(format!("{}: {e}", out.display())))?;
+        let ctl = StepControl::detached(cancel.clone(), OutputMode::File { dir: out });
+        self.generate(&j, &mut crate::backend::NullSink, &ctl)?;
+        Ok(format!(
+            "{name} {width}x{height}x{} {:.1}s",
+            j.num_frames,
+            t.elapsed().as_secs_f64()
+        ))
     }
 
     fn mp4_options(&self) -> Mp4Options {
@@ -513,11 +548,33 @@ impl EngineBackend for CudaBackend {
         obs(LoadEvent::Progress { done: 1, total: 1 });
         tracing::info!(model = %model, seconds = t0.elapsed().as_secs_f64(), "model resident");
         self.loaded.insert(model.clone(), loaded);
-        if matches!(&m.recipe, CudaRecipe::H3(r) if r.warmup) {
+        if matches!(&m.recipe, CudaRecipe::H3(r) if super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Blocking) {
             obs(LoadEvent::Stage("warmup"));
             self.warmup(&m);
         }
         Ok(())
+    }
+
+    fn warmup_pending(&self, model: &ModelId) -> Vec<String> {
+        match self.models.get(model) {
+            Some(m @ CudaModel { recipe: CudaRecipe::H3(r), .. })
+                if self.loaded.contains_key(model)
+                    && super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Background =>
+            {
+                Self::warmup_names(m)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn warmup_run(
+        &mut self,
+        model: &ModelId,
+        name: &str,
+        cancel: &crate::cancel::CancelToken,
+    ) -> Result<String, ApiError> {
+        let m = self.model(model)?.clone();
+        self.warmup_one(&m, name, cancel)
     }
 
     fn unload(&mut self, model: &ModelId) {

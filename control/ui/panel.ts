@@ -8,7 +8,7 @@ import { renderDiff } from "./view";
 
 export type Api = (path: string, opts?: { method?: string; body?: unknown }) => Promise<any>;
 export interface PanelOptions {
-  kind: "cluster-spec" | "policies" | "attribution" | "env";
+  kind: "cluster-spec" | "policies" | "attribution" | "env" | "build-pods" | "serverless-policy";
   id: string;
   title?: string;
   api: Api;
@@ -75,6 +75,8 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
   const tabForm = h("button", { type: "button", class: "on", onclick: () => switchTo("form") }, "Form");
   const tabJson = h("button", { type: "button", onclick: () => switchTo("json") }, "JSON");
   const dirtyTag = h("span", { class: "muted small" });
+  // Off while the document is invalid (the JSON does not parse, or the schema / the server refuse it).
+  const reviewBtn = h("button", { type: "button", class: "primary", disabled: true, onclick: () => openReview() }, o.kind === "cluster-spec" ? "Review, plan & save" : "Review & save") as HTMLButtonElement;
   host.replaceChildren(
     h(
       "div",
@@ -88,7 +90,7 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
         { class: "row fv-bar" },
         h("button", { type: "button", onclick: () => { if (mode === "json" && !editor.format()) say("not valid JSON"); } }, "Format"),
         h("button", { type: "button", onclick: () => runValidate(true) }, "Validate"),
-        h("button", { type: "button", class: "primary", onclick: () => openReview() }, o.kind === "cluster-spec" ? "Review, plan & save" : "Review & save"),
+        reviewBtn,
         h("button", { type: "button", onclick: () => openHistory() }, "History"),
         h("button", { type: "button", class: "ghost", onclick: () => reload() }, "Revert"),
         status,
@@ -155,6 +157,18 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
     vt = setTimeout(() => runValidate(false), 600);
   }
   function showIssues(list: Issue[]) {
+    // Each problem at its field in the form too.
+    for (const r of formHost.querySelectorAll<HTMLElement>(".fv-row.has-srv")) r.classList.remove("has-srv", "has-err");
+    for (const e of formHost.querySelectorAll<HTMLElement>(".fv-srv")) e.remove();
+    for (const i of list) {
+      for (let n = i.path.length; n > 0; n--) {
+        const row = formHost.querySelector<HTMLElement>(`[data-path="${CSS.escape(i.path.slice(0, n).join("."))}"]`);
+        if (!row) continue;
+        row.classList.add("has-srv", "has-err");
+        row.append(h("div", { class: "cf-err fv-srv", role: "alert" }, (n < i.path.length ? `${i.path.slice(n).join(".")}: ` : "") + i.message));
+        break;
+      }
+    }
     issuesBox.replaceChildren(
       ...list.map((i) =>
         h(
@@ -178,6 +192,7 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
   async function runValidate(explicit: boolean): Promise<boolean> {
     if (!jsonValid) {
       status.textContent = "invalid JSON";
+      reviewBtn.disabled = true;
       showIssues(serverIssues.length ? serverIssues : [{ path: [], message: "the JSON does not parse" }]);
       editor.relint();
       return false;
@@ -189,10 +204,13 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
       editor.relint();
       status.textContent = r.ok ? "✓ valid" : `${serverIssues.length} problem(s)`;
       status.className = `fv-status small ${r.ok ? "ok" : "bad"}`;
+      reviewBtn.disabled = !r.ok;
+      reviewBtn.title = r.ok ? "" : `${serverIssues.length} problem(s): see the list`;
       if (explicit && r.ok) say("valid");
       return r.ok;
     } catch (e) {
       status.textContent = (e as Error).message;
+      reviewBtn.disabled = true;
       return false;
     }
   }

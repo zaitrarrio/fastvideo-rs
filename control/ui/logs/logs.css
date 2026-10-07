@@ -98,3 +98,5 @@
   .lx-who { width: 90px; }
   .lx-list { height: 60vh; }
 }
+.lx-err { color: var(--critical-text); align-self: center; }
+.lx-time[aria-invalid="true"] { border-color: var(--critical) !important; }

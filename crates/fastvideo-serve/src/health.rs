@@ -7,7 +7,10 @@
 //!   [`crate::app::serve_while_building`] until these routes exist.
 //! - `GET /health`: the merged FastVideo / FastWan / Reactor body
 //!   `{"status":"ok","model_loaded":true,"state":"AVAILABLE"}`; 503 with
-//!   `model_loaded:false` until ready. Plus `version` and `build` (git sha,
+//!   `model_loaded:false` until ready. Plus `warmup`: `warming` while a
+//!   ready model still warms up in the background (fast boot B; jobs run
+//!   at once and the warm-up yields to them), `warm` after, `off` when
+//!   none runs in the background. Plus `version` and `build` (git sha,
 //!   build time, variant, image ref / tag / digest, release channel:
 //!   [`crate::build_info`], docs/serve/releases.md).
 //! - `GET /healthz`: `{state, loaded, loading, models, engine, jobs, version,
@@ -113,9 +116,10 @@ async fn health(State(h): State<Health>) -> Response {
         Phase::Draining => "draining",
     };
     let build = BuildInfo::current();
+    let warmup = h.gate.engine().warmup();
     (
         code,
-        Json(json!({"status": status, "model_loaded": ready, "state": state, "version": build.version, "build": build.json()})),
+        Json(json!({"status": status, "model_loaded": ready, "state": state, "warmup": warmup, "version": build.version, "build": build.json()})),
     )
         .into_response()
 }
@@ -146,10 +150,17 @@ async fn healthz(State(h): State<Health>) -> Response {
         Readiness::Failed(m) => Some(m),
         _ => None,
     };
+    let warming: Vec<String> = pool
+        .entries()
+        .filter(|e| e.warmup.is_warming())
+        .map(|e| e.model.0.clone())
+        .collect();
     let body = json!({
         "state": state,
         "loaded": loaded,
         "loading": loading,
+        "warmup": pool.warmup_summary(),
+        "warming": warming,
         "error": failed,
         "models": engine.caps().models().map(|m| m.id.0.clone()).collect::<Vec<_>>(),
         "engine": {

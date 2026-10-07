@@ -790,6 +790,138 @@ impl QuantWeight {
             .ok_or_else(|| msg("quantized linear: device weight on a host run"))?;
         Ok(self.layout.forward_host(blob, &self.scales, x, m))
     }
+
+    /// The blob's bytes as the GEMM reads them (downloaded from the device,
+    /// or the host copy): what a pre-quantized tree stores
+    /// ([`crate::h3::dit_tree`]).
+    pub fn blob_bytes(&self) -> Result<Vec<u8>> {
+        #[cfg(feature = "cuda")]
+        if let Some(b) = &self.blob_dev {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let words = dev
+                .stream
+                .memcpy_dtov(b.as_ref())
+                .map_err(|e| msg(e.to_string()))?;
+            let mut out = Vec::with_capacity(words.len() * 2);
+            for w in words {
+                out.extend_from_slice(&w.to_bits().to_le_bytes());
+            }
+            return Ok(out);
+        }
+        self.blob_host
+            .as_ref()
+            .map(|b| b.as_ref().clone())
+            .ok_or_else(|| msg("quantized linear: blob is streamed out"))
+    }
+
+    /// The weight [`Self::blob_bytes`] and [`Self::scales`] describe, on the
+    /// device when one is expected (as [`Self::from_host`] and the device
+    /// quantizer leave it), else on the host. No quantization runs: the
+    /// bytes are the ones the load-time quantizer wrote.
+    pub fn from_blob(layout: QuantLayout, scales: Vec<f32>, blob: &[u8]) -> Result<Self> {
+        if blob.len() != layout.blob_bytes || scales.len() != layout.sections.len() {
+            return Err(msg(format!(
+                "quant blob {} bytes / {} scales for a layout of {} bytes / {} sections",
+                blob.len(),
+                scales.len(),
+                layout.blob_bytes,
+                layout.sections.len()
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if super::stats::device_expected() {
+            if let Some(dev) = super::device::global_device() {
+                let blob_dev = match super::stage_upload::upload_bf16_bytes(blob)? {
+                    Some(s) => s,
+                    None => {
+                        let words: Vec<half::bf16> = blob
+                            .chunks_exact(2)
+                            .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
+                            .collect();
+                        super::stats::record_h2d(words.len() / 2);
+                        dev.stream
+                            .memcpy_stod(&words)
+                            .map_err(|e| msg(e.to_string()))?
+                    }
+                };
+                // As the device quantizer: at least one slot, zero past the sections.
+                let mut padded = scales.clone();
+                padded.resize(scales.len().max(1), 0.0);
+                let scales_dev = dev
+                    .stream
+                    .memcpy_stod(&padded)
+                    .map_err(|e| msg(e.to_string()))?;
+                return Ok(Self {
+                    layout: std::sync::Arc::new(layout),
+                    scales,
+                    scales_dev: Some(std::sync::Arc::new(scales_dev)),
+                    blob_dev: Some(std::sync::Arc::new(blob_dev)),
+                    blob_host: None,
+                });
+            }
+        }
+        Ok(Self {
+            layout: std::sync::Arc::new(layout),
+            scales,
+            #[cfg(feature = "cuda")]
+            scales_dev: None,
+            #[cfg(feature = "cuda")]
+            blob_dev: None,
+            blob_host: Some(std::sync::Arc::new(blob.to_vec())),
+        })
+    }
+}
+
+impl QuantLayout {
+    /// `[version, kind, in_dim, sections, (rows, quantized)...]` as
+    /// little-endian u32: how a pre-quantized tree records the layout.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut words = vec![
+            1u32,
+            match self.kind {
+                QuantKind::W8A8 => 0,
+                QuantKind::Mxfp8 => 1,
+            },
+            self.in_dim as u32,
+            self.sections.len() as u32,
+        ];
+        for s in &self.sections {
+            words.push(s.rows as u32);
+            words.push(u32::from(s.quantized));
+        }
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// The inverse of [`Self::encode`] (rebuilt with [`Self::new`]).
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if !bytes.len().is_multiple_of(4) || bytes.len() < 16 {
+            return Err(msg(format!("quant layout of {} bytes", bytes.len())));
+        }
+        let w: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let n = w[3] as usize;
+        if w[0] != 1 || w.len() != 4 + 2 * n {
+            return Err(msg(format!(
+                "quant layout v{} with {} words",
+                w[0],
+                w.len()
+            )));
+        }
+        let kind = match w[1] {
+            0 => QuantKind::W8A8,
+            1 => QuantKind::Mxfp8,
+            k => return Err(msg(format!("quant layout kind {k}"))),
+        };
+        let sections = (0..n)
+            .map(|i| Section {
+                rows: w[4 + 2 * i] as usize,
+                quantized: w[5 + 2 * i] != 0,
+            })
+            .collect();
+        Self::new(kind, w[2] as usize, sections)
+    }
 }
 
 // ---------------------------------------------------------------------------

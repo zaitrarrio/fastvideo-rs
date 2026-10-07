@@ -1,0 +1,31 @@
+/* Schema-bound forms (ui/fields.ts); tokens from app.css, field layout from cluster/config.css. */
+.ff-rule { font-size: 11.5px; line-height: 1.35; }
+.ff-req { color: var(--critical-text); }
+.ff-warn { color: var(--serious); font-size: 12px; }
+.ff-warn[hidden], .cf-err[hidden] { display: none; }
+.ff-num { display: inline-flex; align-items: center; gap: 6px; }
+.ff-num input[type=number] { width: 120px; }
+.ff-unit { white-space: nowrap; }
+.ff-field.has-err > input, .ff-field.has-err > select, .ff-field.has-err > textarea, .ff-field.has-err .ff-num input, .ff-field.has-err .ff-combo input, .ff-field.has-err > .cf-seg { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(--critical); }
+.ff-field [aria-invalid="true"]:focus { outline: 2px solid var(--critical); }
+.ff-combo { display: block; }
+.ff-combo input { width: 100%; }
+.ff-stale { color: var(--serious); }
+.fv-chip.ff-stale { border-style: dashed; }
+.ff-summary { margin-top: 8px; }
+.ff-summary p { margin: 4px 0; }
+.ff-issues { margin: 2px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--critical-text); }
+.ff-issues a { color: inherit; text-decoration: underline; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ff-env table { width: 100%; }
+.ff-env td { vertical-align: top; padding: 3px 4px; }
+.ff-env td input[type=text], .ff-env td input[type=password], .ff-env td select { width: 100%; min-width: 90px; }
+.ff-env tr.has-err input { border-color: var(--critical); }
+.ff-env td.fv-grow { width: 60%; }
+.ff-dialog { width: min(520px, 94vw); }
+.ff-dialog .cf-fields { grid-template-columns: 1fr; }
+.ff-seg button:focus-visible, .fv-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:disabled, button[disabled] { opacity: .55; cursor: not-allowed; }
+.ff-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: 12px 16px; }
+.ff-section { margin: 4px 0 10px; }
+.ff-section > h3 { margin: 6px 0 6px; font-size: 13px; }
+@media (max-width: 600px) { .ff-num input[type=number] { width: 100px; } .ff-env td { display: block; width: 100% !important; } .ff-env thead { display: none; } .ff-env tr { display: block; border-bottom: 1px solid var(--border); padding: 4px 0; } }

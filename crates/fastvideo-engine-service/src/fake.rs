@@ -376,6 +376,21 @@ pub struct FakeConfig {
     /// Per-model requirements for that check. A model not listed: FP8 for
     /// the H3 family (as the shipped H3 recipes), nothing special otherwise.
     pub requirements: BTreeMap<ModelId, crate::device::Requirements>,
+    /// Background warm-up runs every loaded model wants (fast boot B);
+    /// `None`: no warm-up.
+    pub warmup: Option<FakeWarmup>,
+    /// When set, `generate` and warm-up runs append `begin <what>` /
+    /// `end <what>` here (tests check that they never overlap).
+    pub journal: Option<Arc<std::sync::Mutex<Vec<String>>>>,
+}
+
+/// The fake's background warm-up: `runs` per model, each `steps` steps of
+/// `step` on the clock, observing cancellation at every step.
+#[derive(Clone, Debug)]
+pub struct FakeWarmup {
+    pub runs: Vec<String>,
+    pub steps: u32,
+    pub step: Duration,
 }
 
 impl Default for FakeConfig {
@@ -395,6 +410,8 @@ impl Default for FakeConfig {
             validator: None,
             device_profile: None,
             requirements: BTreeMap::new(),
+            warmup: None,
+            journal: None,
         }
     }
 }
@@ -485,6 +502,12 @@ impl FakeBackend {
                 .map(|s| s.success())
                 .unwrap_or(false)
         })
+    }
+
+    fn note(&self, what: String) {
+        if let Some(j) = &self.cfg.journal {
+            j.lock().unwrap_or_else(|p| p.into_inner()).push(what);
+        }
     }
 
     fn step_time(&self, job: &ResolvedJob, steps: u32) -> Duration {
@@ -725,6 +748,39 @@ impl EngineBackend for FakeBackend {
         }
     }
 
+    fn warmup_pending(&self, model: &ModelId) -> Vec<String> {
+        match &self.cfg.warmup {
+            Some(w) if self.loaded.contains(model) => w.runs.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn warmup_run(
+        &mut self,
+        model: &ModelId,
+        name: &str,
+        cancel: &crate::cancel::CancelToken,
+    ) -> Result<String, ApiError> {
+        let w = self
+            .cfg
+            .warmup
+            .clone()
+            .ok_or_else(|| ApiError::internal("no fake warm-up configured"))?;
+        let what = format!("warmup {model} {name}");
+        self.note(format!("begin {what}"));
+        let ctl = StepControl::detached(cancel.clone(), OutputMode::Frames);
+        let mut r = ctl.check();
+        for s in 1..=w.steps {
+            if r.is_err() {
+                break;
+            }
+            self.cfg.clock.sleep(w.step);
+            r = ctl.step(s, w.steps);
+        }
+        self.note(format!("end {what}"));
+        r.map(|()| what)
+    }
+
     fn generate(
         &mut self,
         job: &ResolvedJob,
@@ -769,80 +825,11 @@ impl EngineBackend for FakeBackend {
         }
         let frames_out = job.output_frames();
 
-        ctl.stage("text_encode");
-        ctl.check()?;
-        ctl.stage("denoise");
-        for s in 1..=steps {
-            clock.sleep(step);
-            if fail && s >= self.cfg.faults.fail_at_step {
-                return Err(ApiError::engine_failed(format!(
-                    "injected failure at step {s}/{steps}"
-                )));
-            }
-            ctl.step(s, steps)?;
-        }
-        let denoise_s = (clock.now() - t0).as_secs_f64();
-
-        ctl.stage("decode");
-        // Batch jobs (`OutputMode::File`) drop what goes to the sink, so the
-        // frames are rendered only for a stream build or the MP4. Rendering
-        // them for nothing cost seconds per 1344x768 clip in debug builds,
-        // enough to time tests out on a loaded host.
-        let to_sink = matches!(ctl.mode, OutputMode::Frames);
-        let mp4_dir = match &ctl.mode {
-            OutputMode::File { dir } if self.ffmpeg_available() => Some(dir.clone()),
-            _ => None,
-        };
-        let audio = match job.audio {
-            _ if !to_sink && mp4_dir.is_none() => None,
-            AudioPlan::Native { rate, channels } => Some(render_audio(
-                job.seed,
-                frames_out,
-                job.fps,
-                rate,
-                channels,
-            )),
-            _ => None,
-        };
-        let render = |i: u32| render_frame(job.seed, &job.prompt, job.width, job.height, i as u64);
-        const CHUNK: u32 = 8;
-        let mut i = 0;
-        while to_sink && i < frames_out {
-            let end = (i + CHUNK).min(frames_out);
-            let chunk: Vec<RgbFrame> = (i..end).map(render).collect();
-            out.frames(&chunk);
-            i = end;
-        }
-        if let (true, Some(a)) = (to_sink, &audio) {
-            out.audio(a);
-        }
-        ctl.check()?;
-
-        let mut metrics = JobMetrics::default();
-        metrics.stage_durations.insert("denoise".into(), denoise_s);
-        metrics.inference_s = Some(denoise_s);
-        if job.duration_s() > 0.0 {
-            metrics.build_rtf = Some(denoise_s / job.duration_s());
-        }
-        let mp4 = match &mp4_dir {
-            Some(dir) => {
-                ctl.stage("mux");
-                Some(write_mp4(
-                    &self.cfg.ffmpeg,
-                    dir,
-                    job,
-                    (0..frames_out).map(render),
-                    audio.as_ref(),
-                )?)
-            }
-            _ => None,
-        };
-        Ok(ClipOutput {
-            mp4,
-            frames: None,
-            audio: None,
-            metrics,
-        })
+        let what = format!("generate {} {}", job.model, job.prompt);
+        self.note(format!("begin {what}"));
+        let r = self.generate_inner(job, out, ctl, steps, step, clock, t0, fail, frames_out);
+        self.note(format!("end {what}"));
+        r
     }
 
     fn causal_open(&mut self, s: SessionId, spec: &CausalSpec) -> Result<(), ApiError> {
@@ -920,6 +907,97 @@ impl EngineBackend for FakeBackend {
 
     fn causal_close(&mut self, s: SessionId) {
         self.sessions.remove(&s);
+    }
+}
+
+impl FakeBackend {
+    #[allow(clippy::too_many_arguments)]
+    fn generate_inner(
+        &mut self,
+        job: &ResolvedJob,
+        out: &mut dyn ClipSink,
+        ctl: &StepControl,
+        steps: u32,
+        step: Duration,
+        clock: Arc<dyn Clock>,
+        t0: Duration,
+        fail: bool,
+        frames_out: u32,
+    ) -> Result<ClipOutput, ApiError> {
+        ctl.stage("text_encode");
+        ctl.check()?;
+        ctl.stage("denoise");
+        for s in 1..=steps {
+            clock.sleep(step);
+            if fail && s >= self.cfg.faults.fail_at_step {
+                return Err(ApiError::engine_failed(format!(
+                    "injected failure at step {s}/{steps}"
+                )));
+            }
+            ctl.step(s, steps)?;
+        }
+        let denoise_s = (clock.now() - t0).as_secs_f64();
+
+        ctl.stage("decode");
+        // Batch jobs (`OutputMode::File`) drop what goes to the sink, so the
+        // frames are rendered only for a stream build or the MP4. Rendering
+        // them for nothing cost seconds per 1344x768 clip in debug builds,
+        // enough to time tests out on a loaded host.
+        let to_sink = matches!(ctl.mode, OutputMode::Frames);
+        let mp4_dir = match &ctl.mode {
+            OutputMode::File { dir } if self.ffmpeg_available() => Some(dir.clone()),
+            _ => None,
+        };
+        let audio = match job.audio {
+            _ if !to_sink && mp4_dir.is_none() => None,
+            AudioPlan::Native { rate, channels } => Some(render_audio(
+                job.seed,
+                frames_out,
+                job.fps,
+                rate,
+                channels,
+            )),
+            _ => None,
+        };
+        let render = |i: u32| render_frame(job.seed, &job.prompt, job.width, job.height, i as u64);
+        const CHUNK: u32 = 8;
+        let mut i = 0;
+        while to_sink && i < frames_out {
+            let end = (i + CHUNK).min(frames_out);
+            let chunk: Vec<RgbFrame> = (i..end).map(render).collect();
+            out.frames(&chunk);
+            i = end;
+        }
+        if let (true, Some(a)) = (to_sink, &audio) {
+            out.audio(a);
+        }
+        ctl.check()?;
+
+        let mut metrics = JobMetrics::default();
+        metrics.stage_durations.insert("denoise".into(), denoise_s);
+        metrics.inference_s = Some(denoise_s);
+        if job.duration_s() > 0.0 {
+            metrics.build_rtf = Some(denoise_s / job.duration_s());
+        }
+        let mp4 = match &mp4_dir {
+            Some(dir) => {
+                ctl.stage("mux");
+                Some(write_mp4(
+                    &self.cfg.ffmpeg,
+                    dir,
+                    job,
+                    (0..frames_out).map(render),
+                    audio.as_ref(),
+                )?)
+            }
+            _ => None,
+        };
+        Ok(ClipOutput {
+            mp4,
+            frames: None,
+            audio: None,
+            metrics,
+        })
     }
 }
 

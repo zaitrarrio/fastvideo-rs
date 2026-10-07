@@ -60,6 +60,42 @@ pub struct Linear {
     lora: Option<LinearLora>,
 }
 
+/// A linear's resident weight as bytes ([`Linear::snapshot`]).
+#[derive(Clone, Debug)]
+pub struct LinearSnapshot {
+    pub in_dim: usize,
+    pub out_dim: usize,
+    pub weight: SnapshotWeight,
+    pub bias: Option<Vec<f32>>,
+}
+
+/// How a [`LinearSnapshot`] holds its weight.
+#[derive(Clone, Debug)]
+pub enum SnapshotWeight {
+    /// Device bf16 `[out, in]`, little-endian bits.
+    Bf16(Vec<u8>),
+    /// f32 `[out, in]` (a host run, or a linear off the bf16 route).
+    F32(Vec<f32>),
+    /// A reference FP8 recipe weight: layout, per-section scales and the
+    /// blob as the GEMM reads it.
+    Quant {
+        layout: super::quant::QuantLayout,
+        scales: Vec<f32>,
+        blob: Vec<u8>,
+    },
+}
+
+/// A stored weight as [`Linear::from_snapshot`] takes it (borrowed bytes).
+pub enum SnapshotRef<'a> {
+    Bf16(&'a [u8]),
+    F32(&'a [u8]),
+    Quant {
+        layout: super::quant::QuantLayout,
+        scales: Vec<f32>,
+        blob: &'a [u8],
+    },
+}
+
 /// `benchmark.json` recipe name of a reference FP8 weight.
 pub fn quant_label(kind: super::quant::QuantKind) -> &'static str {
     match kind {
@@ -1000,6 +1036,163 @@ impl Linear {
         self.quant = Some(super::quant::QuantWeight::from_host(layout, &w)?);
         self.weight = empty;
         Ok(())
+    }
+
+    /// What this linear holds, as bytes: the pre-quantized DiT tree
+    /// ([`crate::h3::dit_tree`]) stores it and [`Self::from_snapshot`]
+    /// rebuilds the same linear from it without reading the checkpoint,
+    /// merging an adapter or quantizing. Only plain (bf16 / f32) and
+    /// reference-recipe (W8A8 / MXFP8) linears have one; weight-only FP8,
+    /// affine, NVFP4 and resident-LoRA linears are refused.
+    pub fn snapshot(&self) -> Result<LinearSnapshot> {
+        if self.lora.is_some()
+            || self.weight_affine.is_some()
+            || self.weight_fp8_rows.is_some()
+            || self.nvfp4_act.is_some()
+        {
+            return Err(msg(
+                "snapshot: only plain bf16/f32 and W8A8/MXFP8 linears can be stored",
+            ));
+        }
+        let bias = self
+            .bias
+            .as_ref()
+            .map(|b| b.host_cow().map(|v| v.into_owned()))
+            .transpose()?;
+        let weight = if let Some(q) = &self.quant {
+            SnapshotWeight::Quant {
+                layout: (*q.layout).clone(),
+                scales: q.scales.clone(),
+                blob: q.blob_bytes()?,
+            }
+        } else {
+            #[cfg(feature = "cuda")]
+            let bf16 = match &self.weight_bf16 {
+                Some(w) => {
+                    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+                    let v = dev
+                        .stream
+                        .memcpy_dtov(w.as_ref())
+                        .map_err(|e| msg(e.to_string()))?;
+                    Some(v.iter().flat_map(|x| x.to_bits().to_le_bytes()).collect())
+                }
+                None => None,
+            };
+            #[cfg(not(feature = "cuda"))]
+            let bf16: Option<Vec<u8>> = None;
+            match bf16 {
+                Some(b) => SnapshotWeight::Bf16(b),
+                None => {
+                    if self.weight.numel() != self.in_dim * self.out_dim {
+                        return Err(msg("snapshot: the weight is streamed out"));
+                    }
+                    SnapshotWeight::F32(self.weight.host_cow()?.into_owned())
+                }
+            }
+        };
+        Ok(LinearSnapshot {
+            in_dim: self.in_dim,
+            out_dim: self.out_dim,
+            weight,
+            bias,
+        })
+    }
+
+    /// The linear a [`Self::snapshot`] describes. `weight` borrows the stored
+    /// bytes (a view into the mapped tree); a bf16 or quantized weight goes
+    /// straight to the device through the pinned stage on a device run.
+    pub fn from_snapshot(
+        in_dim: usize,
+        out_dim: usize,
+        weight: SnapshotRef<'_>,
+        bias: Option<Vec<f32>>,
+    ) -> Result<Self> {
+        if bias.as_ref().is_some_and(|b| b.len() != out_dim) {
+            return Err(msg(format!("snapshot bias for {out_dim} rows")));
+        }
+        let mut bias = bias
+            .map(|b| CudaTensor::from_vec(b, vec![out_dim]))
+            .transpose()?;
+        match weight {
+            SnapshotRef::Quant {
+                layout,
+                scales,
+                blob,
+            } => {
+                if layout.in_dim != in_dim || layout.out_dim != out_dim {
+                    return Err(msg(format!(
+                        "snapshot layout [{}, {}] for a {out_dim}x{in_dim} linear",
+                        layout.out_dim, layout.in_dim
+                    )));
+                }
+                if let Some(b) = &mut bias {
+                    b.pin_device()?;
+                }
+                Ok(Self {
+                    weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+                    bias,
+                    in_dim,
+                    out_dim,
+                    #[cfg(feature = "cuda")]
+                    weight_bf16: None,
+                    quant: Some(super::quant::QuantWeight::from_blob(layout, scales, blob)?),
+                    f32_island: false,
+                    weight_fp8_rows: None,
+                    weight_affine: None,
+                    nvfp4_act: None,
+                    lora: None,
+                })
+            }
+            SnapshotRef::Bf16(bytes) => {
+                if bytes.len() != 2 * in_dim * out_dim {
+                    return Err(msg(format!(
+                        "snapshot bf16 weight of {} bytes for {out_dim}x{in_dim}",
+                        bytes.len()
+                    )));
+                }
+                #[cfg(feature = "cuda")]
+                if Self::device_bf16_route() {
+                    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+                    let slice = match super::stage_upload::upload_bf16_bytes(bytes)? {
+                        Some(s) => s,
+                        None => {
+                            let host: Vec<half::bf16> = bytes
+                                .chunks_exact(2)
+                                .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
+                                .collect();
+                            stats::record_h2d(host.len() / 2);
+                            dev.stream
+                                .memcpy_stod(&host)
+                                .map_err(|e| msg(e.to_string()))?
+                        }
+                    };
+                    return Self::from_device_bf16_bias(slice, bias, in_dim, out_dim);
+                }
+                let w: Vec<f32> = bytes
+                    .chunks_exact(2)
+                    .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
+                    .collect();
+                Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
+            }
+            SnapshotRef::F32(bytes) => {
+                if bytes.len() != 4 * in_dim * out_dim {
+                    return Err(msg(format!(
+                        "snapshot f32 weight of {} bytes for {out_dim}x{in_dim}",
+                        bytes.len()
+                    )));
+                }
+                let w: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
+            }
+        }
+    }
+
+    /// Whether this linear runs in f32 under bf16 activations.
+    pub fn is_f32_island(&self) -> bool {
+        self.f32_island
     }
 
     /// The quantized linear on an MXFP8 activation a fused producer already

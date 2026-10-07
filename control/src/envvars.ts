@@ -8,6 +8,7 @@
 import { isReserved, SECRET_SYSTEM_KEYS } from "./cluster/payloads";
 import { seal, unseal } from "./crypto";
 import type { Env } from "./env";
+import { envValueProblem } from "./enums";
 import { HttpError, now } from "./util";
 
 export type Scope = "account" | "cluster" | "pool" | "pod";
@@ -35,11 +36,15 @@ export const MASK = "••••••••";
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const aad = (scope: string, id: string, key: string) => `env:${scope}:${id}:${key}`;
 
-export function validateVar(key: string, value: unknown) {
+export function validateVar(key: string, value: unknown, secret = false) {
   if (!KEY_RE.test(key)) throw new HttpError(400, `invalid variable name: ${key}`);
   if (isReserved(key)) throw new HttpError(400, `${key} is set by the controller and cannot be overridden`);
   if (typeof value !== "string") throw new HttpError(400, "value must be a string");
   if (value.length > 32768) throw new HttpError(400, "value too long (32 KiB max)");
+  if (!secret) {
+    const why = envValueProblem(key, value);
+    if (why) throw new HttpError(400, why);
+  }
 }
 
 export async function listVars(env: Env, scope: Scope, scopeId: string): Promise<VarRow[]> {
@@ -51,7 +56,7 @@ export function maskRow(r: VarRow) {
 }
 
 export async function setVar(env: Env, scope: Scope, scopeId: string, key: string, value: string, secret: boolean, by: string) {
-  validateVar(key, value);
+  validateVar(key, value, secret);
   const before = await env.DB.prepare("SELECT secret, value FROM env_vars WHERE scope = ? AND scope_id = ? AND key = ?").bind(scope, scopeId, key).first<{ secret: number; value: string }>();
   const stored = secret ? await seal(env.CONTROL_KEK, value, aad(scope, scopeId, key)) : value;
   await env.DB.prepare(

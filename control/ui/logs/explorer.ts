@@ -98,24 +98,24 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
 
   // ---- DOM
   const el = {
-    search: h("input", { type: "search", class: "lx-search", placeholder: "Search messages and fields  ( / )", "aria-label": "Search", value: view.q, spellcheck: "false" }),
+    search: h("input", { type: "search", "data-path": "q", class: "lx-search", placeholder: "Search messages and fields  ( / )", "aria-label": "Search", value: view.q, spellcheck: "false" }),
     re: h("button", { type: "button", class: "lx-tog", title: "Regular expression", "aria-pressed": String(view.re) }, ".*"),
     cs: h("button", { type: "button", class: "lx-tog", title: "Case sensitive", "aria-pressed": String(view.cs) }, "Aa"),
-    mode: h("select", { "aria-label": "Search mode", title: "Filter: only matching lines (server-side). Find: every line, matches highlighted; n / N jump." }, h("option", { value: "filter" }, "filter"), h("option", { value: "find" }, "find")),
-    cluster: h("select", { "aria-label": "Cluster" }),
-    pool: h("select", { "aria-label": "Pool" }),
-    pod: h("select", { "aria-label": "Pod" }),
+    mode: h("select", { "data-schema-ignore": "", "aria-label": "Search mode", title: "Filter: only matching lines (server-side). Find: every line, matches highlighted; n / N jump." }, h("option", { value: "filter" }, "filter"), h("option", { value: "find" }, "find")),
+    cluster: h("select", { "data-path": "cluster", "aria-label": "Cluster" }),
+    pool: h("select", { "data-path": "pool", "aria-label": "Pool" }),
+    pod: h("select", { "data-path": "pod", "aria-label": "Pod" }),
     sources: h("div", { class: "lx-chips", role: "group", "aria-label": "Sources" }),
     levels: h("div", { class: "lx-chips", role: "group", "aria-label": "Levels" }),
     ranges: h("div", { class: "lx-chips", role: "group", "aria-label": "Time range" }),
-    from: h("input", { class: "lx-time", placeholder: "from (UTC)", "aria-label": "From", title: "UTC: 2026-10-06 12:00, 12:00 (today), unix ms, or relative: 15m, 2h, 7d" }),
-    to: h("input", { class: "lx-time", placeholder: "to (now)", "aria-label": "To", title: "UTC; empty: now (live tail possible)" }),
-    order: h("select", { "aria-label": "Time order" }, h("option", { value: "asc" }, "oldest first"), h("option", { value: "desc" }, "newest first")),
-    sort: h("select", { "aria-label": "Sort" }, h("option", { value: "time" }, "sort: time"), h("option", { value: "level" }, "sort: level"), h("option", { value: "source" }, "sort: source"), h("option", { value: "pod" }, "sort: pod")),
-    group: h("select", { "aria-label": "Group" }, h("option", { value: "none" }, "no grouping"), h("option", { value: "pod" }, "group: pod"), h("option", { value: "level" }, "group: level")),
+    from: h("input", { "data-path": "from", class: "lx-time", placeholder: "from (UTC)", "aria-label": "From", title: "UTC: 2026-10-06 12:00, 12:00 (today), unix ms, or relative: 15m, 2h, 7d" }),
+    to: h("input", { "data-path": "to", class: "lx-time", placeholder: "to (now)", "aria-label": "To", title: "UTC; empty: now (live tail possible)" }),
+    order: h("select", { "data-path": "order", "aria-label": "Time order" }, h("option", { value: "asc" }, "oldest first"), h("option", { value: "desc" }, "newest first")),
+    sort: h("select", { "data-schema-ignore": "", "aria-label": "Sort" }, h("option", { value: "time" }, "sort: time"), h("option", { value: "level" }, "sort: level"), h("option", { value: "source" }, "sort: source"), h("option", { value: "pod" }, "sort: pod")),
+    group: h("select", { "data-schema-ignore": "", "aria-label": "Group" }, h("option", { value: "none" }, "no grouping"), h("option", { value: "pod" }, "group: pod"), h("option", { value: "level" }, "group: level")),
     live: h("button", { type: "button", class: "lx-live", title: "Live tail (l); pause / resume: space" }),
-    jump: h("input", { class: "lx-time", placeholder: "jump to time ( t )", "aria-label": "Jump to time", title: "UTC: 2026-10-06 12:00, 12:00 (today), or 10m (ago)" }),
-    ctx: h("input", { type: "number", min: "0", max: "200", class: "lx-ctx", "aria-label": "Context lines", title: "Lines of context before and after (c)", value: String(view.ctx) }),
+    jump: h("input", { "data-schema-ignore": "", class: "lx-time", placeholder: "jump to time ( t )", "aria-label": "Jump to time", title: "UTC: 2026-10-06 12:00, 12:00 (today), or 10m (ago)" }),
+    ctx: h("input", { type: "number", "data-path": "ctx", min: "0", max: "200", step: "1", class: "lx-ctx", "aria-label": "Context lines", title: "Lines of context before and after (c)", value: String(view.ctx) }),
     hist: h("div", { class: "lx-hist", "aria-label": "Lines over time" }),
     pins: h("div", { class: "lx-pins" }),
     list: h("div", { class: "lx-list", tabindex: "0", role: "listbox", "aria-label": "Log lines", "aria-multiselectable": "true" }),
@@ -148,7 +148,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
     h("button", { type: "button", title: "Copy a link to this view", onclick: () => copyText(location.href).then(() => toast("link copied")) }, "Copy link"),
     h("button", { type: "button", title: "Keyboard shortcuts (?)", onclick: () => el.help.showModal() }, "?"),
   );
-  host.replaceChildren(h("div", { class: "lx" }, h("div", { class: "lx-head" }, h("h1", {}, "Logs"), el.status), bar1, bar2, bar3, el.hist, el.pins, main), el.help);
+  host.replaceChildren(h("div", { class: "lx", "data-schema-form": "log-query" }, h("div", { class: "lx-head" }, h("h1", {}, "Logs"), el.status), bar1, bar2, bar3, el.hist, el.pins, main), el.help);
   el.help.append(
     h("h2", {}, "Keyboard"),
     h(
@@ -307,6 +307,38 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
     });
   timeInput(el.from, "from");
   timeInput(el.to, "to");
+  // As you type: a time the server would refuse (log-query schema: from / to) and a regex that does not compile show at once.
+  const timeOk = (v: string) => !v.trim() || /^\d+(m|h|d)$/.test(v.trim()) || parseJump(v) !== null;
+  const mark = (inp: HTMLInputElement, msg: string | null) => {
+    inp.setAttribute("aria-invalid", String(!!msg));
+    inp.classList.toggle("bad", !!msg);
+    const tip = inp.nextElementSibling?.classList.contains("lx-err") ? (inp.nextElementSibling as HTMLElement) : null;
+    if (msg && !tip) inp.after(h("span", { class: "lx-err small", role: "alert" }, msg));
+    else if (tip) msg ? (tip.textContent = msg) : tip.remove();
+  };
+  for (const [inp, what] of [[el.from, "from"], [el.to, "to"], [el.jump, "jump"]] as const)
+    inp.addEventListener("input", () => mark(inp, timeOk(inp.value) ? null : `${what}: UTC 2026-10-06 12:00, 12:00, unix ms, or 15m / 2h / 7d`));
+  const reCheck = () => {
+    let msg: string | null = null;
+    if (view.re && el.search.value) {
+      if (el.search.value.length > 300) msg = "regex: at most 300 characters";
+      else
+        try {
+          new RegExp(el.search.value);
+        } catch (e) {
+          msg = `regex: ${(e as Error).message.replace(/^Invalid regular expression: /, "")}`;
+        }
+    }
+    el.search.setAttribute("aria-invalid", String(!!msg));
+    el.search.title = msg || "";
+    const box = el.search.parentElement!;
+    const tip = box.nextElementSibling?.classList.contains("lx-err") ? (box.nextElementSibling as HTMLElement) : null;
+    if (msg && !tip) box.after(h("span", { class: "lx-err small", role: "alert" }, msg));
+    else if (tip) msg ? (tip.textContent = msg) : tip.remove();
+    return !msg;
+  };
+  el.search.addEventListener("input", reCheck);
+  el.re.addEventListener("click", () => setTimeout(reCheck));
   el.jump.addEventListener("keydown", (ev) => {
     if (ev.key !== "Enter") return;
     const t = parseJump(el.jump.value);
@@ -316,7 +348,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
   let searchT: any;
   el.search.addEventListener("input", () => {
     clearTimeout(searchT);
-    searchT = setTimeout(() => update({ q: el.search.value }, view.mode === "filter"), view.mode === "filter" ? 450 : 120);
+    searchT = setTimeout(() => (view.re && !reCheck() ? undefined : update({ q: el.search.value }, view.mode === "filter")), view.mode === "filter" ? 450 : 120);
   });
   el.search.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") {

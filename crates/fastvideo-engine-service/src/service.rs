@@ -158,9 +158,21 @@ pub(crate) struct State {
     pub draining: bool,
     pub shutdown: bool,
     pub alive: usize,
+    /// Per executor: the cancel token of the background warm-up run on its
+    /// GPU now (fast boot B). Any arriving work trips it.
+    pub warmup_cancel: Vec<Option<CancelToken>>,
 }
 
 impl State {
+    /// A job or session arrived: every background warm-up run yields (it is
+    /// cancelled at its next step and retried when the executor is idle).
+    /// Warm-up tokens carry no callbacks, so tripping them under the lock is safe.
+    pub fn yield_warmups(&mut self) {
+        for t in self.warmup_cancel.iter().flatten() {
+            t.cancel();
+        }
+    }
+
     /// Sends `Queued{position}` to every queued job whose position changed.
     pub fn publish_positions(&mut self) {
         for (job, pos) in self.sched.positions() {
@@ -271,6 +283,7 @@ impl Shared {
                 },
             );
             st.publish_positions();
+            st.yield_warmups();
             self.changed(&st);
         }
         let weak: Weak<Shared> = Arc::downgrade(self);
@@ -394,6 +407,7 @@ impl Shared {
         if let Some(cs) = causal {
             st.causal.insert(sid, cs);
         }
+        st.yield_warmups();
         self.changed(&st);
         Ok((exec, caps))
     }
@@ -432,6 +446,7 @@ impl Drop for Inner {
     fn drop(&mut self) {
         let mut st = self.shared.lock();
         st.shutdown = true;
+        st.yield_warmups();
         self.shared.changed(&st);
     }
 }
@@ -500,6 +515,7 @@ impl EngineService {
                 draining: false,
                 shutdown: false,
                 alive: n,
+                warmup_cancel: vec![None; n],
             }),
             work_cv: Condvar::new(),
             changed: Notify::new(),
@@ -553,6 +569,13 @@ impl EngineService {
             Err(_) => None,
         };
         r.unwrap_or_else(|| self.readiness())
+    }
+
+    /// `warming` while a resident model still warms up in the background,
+    /// `warm` once it has, `off` when nothing warms up in the background
+    /// (fast boot B; readiness does not wait for it).
+    pub fn warmup(&self) -> &'static str {
+        self.shared().lock().pool.warmup_summary()
     }
 
     /// Residency of every (executor, model).
@@ -661,6 +684,7 @@ impl EngineService {
         let sessions: Vec<Arc<CausalShared>> = {
             let mut st = sh.lock();
             st.draining = true;
+            st.yield_warmups();
             for it in st.sched.clear() {
                 if let Some(e) = st.jobs.remove(&it.job) {
                     let _ = e.tx.send(EngineEvent::Cancelled);
@@ -689,6 +713,7 @@ impl EngineService {
         {
             let mut st = sh.lock();
             st.shutdown = true;
+            st.yield_warmups();
             sh.changed(&st);
         }
         if sh.wait_until(Duration::from_secs(10), |st| st.alive == 0).await {

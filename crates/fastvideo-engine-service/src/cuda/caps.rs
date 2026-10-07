@@ -128,10 +128,17 @@ pub struct H3Recipe {
     /// `resident`, or `stream` (read from the volume per request).
     #[serde(default = "auto_str")]
     pub i2v_encoder: String,
-    /// Run one text-to-video and one image-to-video generation at the default
-    /// canvas after the load, before the model is reported ready.
+    /// Run one image-to-video and one text-to-video generation at the
+    /// default canvas after the load. By default in the background (fast
+    /// boot B): the model reports ready once its weights are resident, and
+    /// the warm-up runs while the GPU is idle, yielding to every job.
     #[serde(default)]
     pub warmup: bool,
+    /// `warmup = "blocking"`: the old behaviour, warm-up inside the load and
+    /// ready after it. `FV_WARMUP=blocking|background|off` overrides at run
+    /// time ([`WarmupMode::of`]).
+    #[serde(default)]
+    pub warmup_blocking: bool,
     /// The opt-in native 1080P tier (short edge 1080, generated at
     /// 1920x1088 and cropped; docs/serve/h3-1080p-and-upscaler.md). Offered
     /// only when the GPU passes the tier's memory plan ([`gate_h3_1080p`]).
@@ -950,7 +957,49 @@ fn h3(
         ref_weights: None,
         i2v_encoder: auto_str(),
         warmup: false,
+        warmup_blocking: false,
         hd_1080p: false,
+    }
+}
+
+/// How an H3 model warms up (fast boot B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarmupMode {
+    Off,
+    /// Inside the load: ready after the warm-up (the behaviour before fast boot B).
+    Blocking,
+    /// Ready after the load; warm-up while idle, yielding to jobs.
+    Background,
+}
+
+/// `FV_WARMUP`: overrides the config's warm-up mode for every model.
+pub const WARMUP_ENV: &str = "FV_WARMUP";
+
+impl WarmupMode {
+    /// The recipe's mode, with `FV_WARMUP` (`blocking`, `background`, `off`)
+    /// applied to a model that has a warm-up; an unknown value keeps the
+    /// recipe's (and says so).
+    pub fn of(r: &H3Recipe) -> Self {
+        Self::resolve(r, std::env::var(WARMUP_ENV).ok().as_deref())
+    }
+
+    pub fn resolve(r: &H3Recipe, env: Option<&str>) -> Self {
+        // The variable picks how, never whether: a model without a
+        // configured warm-up stays without one.
+        if !r.warmup {
+            return Self::Off;
+        }
+        let configured = if r.warmup_blocking { Self::Blocking } else { Self::Background };
+        match env.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            None | Some("") => configured,
+            Some("blocking" | "block" | "sync") => Self::Blocking,
+            Some("background" | "bg" | "async") => Self::Background,
+            Some("off" | "0" | "false" | "none") => Self::Off,
+            Some(other) => {
+                tracing::warn!("{WARMUP_ENV}={other}: expected blocking|background|off; keeping {configured:?}");
+                configured
+            }
+        }
     }
 }
 
@@ -1351,11 +1400,15 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                 r.i2v_encoder = t;
             }
             if let Some(w) = x("warmup") {
-                r.warmup = match w.as_str() {
-                    "true" => true,
-                    "false" => false,
+                (r.warmup, r.warmup_blocking) = match w.as_str() {
+                    "true" | "background" => (true, false),
+                    "blocking" => (true, true),
+                    "false" => (false, false),
                     other => {
-                        return Err(format!("model `{}`: warmup = {other:?} (true | false)", e.id))
+                        return Err(format!(
+                            "model `{}`: warmup = {other:?} (true | \"background\" | \"blocking\" | false)",
+                            e.id
+                        ))
                     }
                 };
             }
@@ -2156,6 +2209,18 @@ mod tests {
         assert!(h3(&with("warmup", "true")).unwrap().warmup);
         assert!(!h3(&with("warmup", "false")).unwrap().warmup);
         assert!(h3(&with("warmup", "yes")).is_err());
+        // Fast boot B: `true` warms up in the background; "blocking" is the
+        // old ready-after-warm-up behaviour; FV_WARMUP overrides either.
+        let bg = h3(&with("warmup", "true")).unwrap();
+        let blocking = h3(&with("warmup", "blocking")).unwrap();
+        assert_eq!(WarmupMode::resolve(&bg, None), WarmupMode::Background);
+        assert_eq!(WarmupMode::resolve(&h3(&with("warmup", "background")).unwrap(), None), WarmupMode::Background);
+        assert_eq!(WarmupMode::resolve(&blocking, None), WarmupMode::Blocking);
+        assert_eq!(WarmupMode::resolve(&bg, Some("blocking")), WarmupMode::Blocking);
+        assert_eq!(WarmupMode::resolve(&blocking, Some("background")), WarmupMode::Background);
+        assert_eq!(WarmupMode::resolve(&bg, Some("off")), WarmupMode::Off);
+        assert_eq!(WarmupMode::resolve(&bg, Some("bogus")), WarmupMode::Background);
+        assert_eq!(WarmupMode::resolve(r, Some("background")), WarmupMode::Off, "no warm-up configured stays off");
         assert!(r.hd_1080p);
         assert!(!h3(&with("h3_1080p", "false")).unwrap().hd_1080p);
         assert!(h3(&with("h3_1080p", "true")).unwrap().hd_1080p);
