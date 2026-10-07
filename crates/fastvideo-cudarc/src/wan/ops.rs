@@ -3888,9 +3888,148 @@ pub fn sol_attn_multipass_device(
 }
 
 /// PISA on device: top-k of pooled scores, remainder + first-order term.
+///
+/// Head dim 128 on sm80+ (every PISA model: Wan 5B / A14B, LTX-2.3,
+/// LingBot) runs the fused tensor-core route ([`pisa_fused_device`]);
+/// anything else, or `FASTVIDEO_PISA_KERNEL=legacy`, the multi-launch
+/// scalar route ([`pisa_attn_device_legacy`]).
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn pisa_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    tokens: usize,
+    dim: usize,
+    sparsity: f64,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let legacy = crate::wan::envflag::string_flag("FASTVIDEO_PISA_KERNEL", "fused") == "legacy";
+    if !legacy && dim == SOL_HEAD_DIM && dev.sm_major >= 8 && batch * heads <= 65_535 {
+        return pisa_fused_device(q, k, v, batch * heads, tokens, dim, sparsity, scale);
+    }
+    pisa_attn_device_legacy(q, k, v, batch, heads, tokens, dim, sparsity, scale)
+}
+
+/// Fused PISA (head dim 128, sm80+): the selection is the f32 score route
+/// of [`fastvideo_models::pisa_attn::score_route_mask`] (pooled means,
+/// `q_bar @ k_bar^T * scale`, top-`keep` per query block) packed into a
+/// bitmap; `pisa_h_partial` / `pisa_h_reduce` build H_bar; then one
+/// `pisa_mma_fwd` CTA per (64-query tile, head) runs the Sol mainloop on
+/// bf16 operands (exact selected blocks, zeroth-order remainder, first-order
+/// tail term). No host traffic but the block plan, no `[bh, T, dim]` f32
+/// partials.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn pisa_fused_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    sparsity: f64,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    use fastvideo_models::pisa_attn::keep_for_sparsity;
+    use fastvideo_models::sol_attn::{num_blocks, SolThresh, LOG2_E, ROUTE_GROUP};
+    for (name, x) in [("pisa q", q), ("pisa k", k), ("pisa v", v)] {
+        sol_geometry(name, x.len(), bh, tokens, dim)?;
+    }
+    let dev = ctx()?;
+    let n = num_blocks(tokens);
+    let keep = keep_for_sparsity(n, sparsity).max(1);
+    let words = 2 * n.div_ceil(ROUTE_GROUP);
+    // Selection: f32 pooled means and scores, as the host oracle.
+    let (slot_src, block_sizes) = super::sol_ops::sequential_plan(tokens);
+    let plan = vsa_plan_upload(
+        &slot_src,
+        &block_sizes,
+        fastvideo_models::sol_attn::BLOCK_SIZE,
+    )?;
+    let q_bar = vsa_tile_mean_device(q, &plan, bh, tokens, dim)?;
+    let kc = vsa_tile_mean_device(k, &plan, bh, tokens, dim)?;
+    let mut scores = alloc(bh * n * n)?;
+    super::device::matmul_linear_wt_strided_batched_f32(
+        &q_bar,
+        &kc,
+        &mut scores,
+        bh,
+        n,
+        dim,
+        n,
+        scale,
+    )
+    .map_err(err)?;
+    drop(q_bar);
+    let lists = vsa_topk_device(&scores, bh * n, n, keep)?;
+    drop(scores);
+    let mut sel = dev.stream.alloc_zeros::<u32>(bh * n * words).map_err(err)?;
+    let (rows_i, keep_i, words_i) = ((bh * n) as i64, keep as i32, words as i32);
+    let cfg = LaunchConfig {
+        grid_dim: ((bh * n) as u32, 1, 1),
+        block_dim: (128, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.pisa_sel_bits, cfg;
+        &lists, &mut sel, &rows_i, &keep_i, &words_i)
+    .map_err(err)?;
+    drop(lists);
+    // H_bar (f32 partials over 16-block chunks, reduced in order, bf16).
+    const H_BLOCKS: usize = 16;
+    let chunks = n.div_ceil(H_BLOCKS);
+    let mut part = alloc(bh * chunks * SOL_HEAD_DIM * SOL_HEAD_DIM)?;
+    let (seq_i, n_i, chunks_i) = (tokens as i64, n as i32, chunks as i32);
+    let cfg = LaunchConfig {
+        grid_dim: (chunks as u32, bh as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.pisa_h_partial, cfg;
+        k, v, &kc, &mut part, &seq_i, &n_i, &chunks_i)
+    .map_err(err)?;
+    drop(kc);
+    let mut hbar = unsafe {
+        dev.stream
+            .alloc::<half::bf16>(bh * SOL_HEAD_DIM * SOL_HEAD_DIM)
+    }
+    .map_err(err)?;
+    let cfg = LaunchConfig {
+        grid_dim: ((SOL_HEAD_DIM * SOL_HEAD_DIM / 256) as u32, bh as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.pisa_h_reduce, cfg; &part, &mut hbar, &chunks_i, &n_i)
+        .map_err(err)?;
+    drop(part);
+    // bf16 operands + pooled Kc (mean) / Vc (sum); the thresholds are unused.
+    let prep = sol_prep_device(q, k, v, bh, tokens, dim, 0.0, scale, SolThresh::Diag)?;
+    let mut out = alloc(bh * tokens * SOL_HEAD_DIM)?;
+    let mut out16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+    let (is16, t_i, nt_i) = (0i32, tokens as i32, n as i32);
+    let sl2 = scale * LOG2_E;
+    let cfg = LaunchConfig {
+        grid_dim: (n as u32, bh as u32, 1),
+        block_dim: (128, 1, 1),
+        // Static shared memory (the Sol forward's 34.4 KB): two CTAs per SM.
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.pisa_mma_fwd, cfg;
+        &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &sel, &hbar,
+        &mut out, &mut out16, &is16, &t_i, &nt_i, &sl2)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// The multi-launch PISA route (scalar fine / coarse partials, one CTA per
+/// query token): the fallback for head dims other than 128 and pre-sm80
+/// GPUs. Tens of times slower than [`pisa_fused_device`] at video lengths.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn pisa_attn_device_legacy(
     q: &CudaSlice<f32>,
     k: &CudaSlice<f32>,
     v: &CudaSlice<f32>,
@@ -3929,8 +4068,21 @@ pub fn pisa_attn_device(
     let lists = vsa_topk_device(&scores, bh * n, n, keep)?;
     let (fine_m, fine_l, fine_acc) =
         sol_fine_partials_device(q, k, v, &lists, bh, tokens, dim, n, keep, 64, 64, scale, 0)?;
-    let (coarse_m, coarse_l, coarse_acc) = sol_coarse_partials_device(
-        q, &kc, &vc, &lists, &plan, bh, tokens, dim, n, keep, scale, 0,
+    let mut coarse_tail = fill_device(bh * tokens, 0.0)?;
+    let (coarse_m, coarse_l, coarse_acc) = sol_coarse_partials_tail_device(
+        q,
+        &kc,
+        &vc,
+        &lists,
+        &plan,
+        bh,
+        tokens,
+        dim,
+        n,
+        keep,
+        scale,
+        0,
+        Some(&mut coarse_tail),
     )?;
     let (m, l, mut acc) = sol_lse_combine_device(
         &coarse_m,
@@ -3944,7 +4096,19 @@ pub fn pisa_attn_device(
         0,
     )?;
     let h = sol_global_h_bar_device(k, v, &kc, bh, tokens, dim, n, 64)?;
-    sol_pisa_first_order_device(q, &h, &coarse_m, &coarse_l, &m, &mut acc, bh, tokens, dim)?;
+    // The first-order weight is the remainder's UNWEIGHTED probability mass
+    // (the oracle's `tail`), not its len(j)-weighted softmax sum.
+    sol_pisa_first_order_device(
+        q,
+        &h,
+        &coarse_m,
+        &coarse_tail,
+        &m,
+        &mut acc,
+        bh,
+        tokens,
+        dim,
+    )?;
     sol_normalize_partials_device(&l, &acc, bh * tokens, dim)
 }
 
@@ -4146,12 +4310,44 @@ fn sol_coarse_partials_device(
     scale: f32,
     log2_space: i32,
 ) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    sol_coarse_partials_tail_device(
+        q, kc, vc, lists, plan, bh, tokens, dim, n, max_keep, scale, log2_space, None,
+    )
+}
+
+/// [`sol_coarse_partials_device`]; `tail` (`[bh, T]`) also receives each
+/// row's unweighted remainder probability sum, in the row's `m` units.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_coarse_partials_tail_device(
+    q: &CudaSlice<f32>,
+    kc: &CudaSlice<f32>,
+    vc: &CudaSlice<f32>,
+    lists: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    n: usize,
+    max_keep: usize,
+    scale: f32,
+    log2_space: i32,
+    tail: Option<&mut CudaSlice<f32>>,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
     let dev = ctx()?;
     let (mut m, mut l, mut acc) = sol_alloc_partials(bh, tokens, dim)?;
     let cfg = sol_partials_cfg(tokens, bh, dim);
     let (seq_i, dim_i, n_i, mk_i) = (tokens as i64, dim as i32, n as i32, max_keep as i32);
+    let mut dummy;
+    let (tail, has_tail) = match tail {
+        Some(t) => (t, 1i32),
+        None => {
+            dummy = alloc(1)?;
+            (&mut dummy, 0i32)
+        }
+    };
     launch!(dev.stream, &dev.kernels.sol_coarse_partials, cfg;
-        q, kc, vc, lists, &plan.block_sizes, &mut m, &mut l, &mut acc,
+        q, kc, vc, lists, &plan.block_sizes, &mut m, &mut l, &mut acc, tail, &has_tail,
         &seq_i, &dim_i, &n_i, &mk_i, &scale, &log2_space)
     .map_err(err)?;
     Ok((m, l, acc))

@@ -321,7 +321,7 @@ case "$SET" in
     ;;
   e1) # PISA fixed (fix/pisa-sm120-phaseb3): device parity first, then
     # Wan2.2 TI2V-5B EasyCache + PISA and LingBot fullopt (refiner PISA)
-    cell pisa-parity wan22-ti2v-5b 60 "$BIN" --mode fast kernels-fp8 --only pisa
+    cell pisa-parity wan22-ti2v-5b 240 "$BIN" --mode fast kernels --groups pisa
     wan5b wan5b-opt 600 "${wan_ref[@]}" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=5b FASTVIDEO_WAN_PISA=1
     lingbot fullopt 2400
     ;;

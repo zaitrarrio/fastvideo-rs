@@ -2457,6 +2457,7 @@ extern "C" __global__ void sol_fine_partials(
 extern "C" __global__ void sol_coarse_partials(
     const float* q, const float* kc, const float* vc, const unsigned int* lists,
     const int* block_sizes, float* m_out, float* l_out, float* acc_out,
+    float* tail_out, int has_tail,
     long seq, int dim, int n, int max_keep, float scale, int log2_space
 ) {
     int t = blockIdx.x;
@@ -2470,7 +2471,7 @@ extern "C" __global__ void sol_coarse_partials(
     int qi = t / 64;
     if (qi >= nq) return;
     const unsigned int* list = lists + (bh * (long)nq + qi) * max_keep;
-    float m = SOL_NEG, l = 0.0f, acc = 0.0f;
+    float m = SOL_NEG, l = 0.0f, acc = 0.0f, tail = 0.0f;
     for (int j = 0; j < n; j++) {
         int exact = 0;
         for (int s = 0; s < max_keep; s++) {
@@ -2496,12 +2497,14 @@ extern "C" __global__ void sol_coarse_partials(
         float vv = tid < dim ? vcj[tid] : 0.0f;
         acc = acc * alpha + p * vv;
         l = l * alpha + p * wgt;
+        tail = tail * alpha + p;
         m = nm;
         __syncthreads();
     }
     if (tid == 0) {
         m_out[bh * seq + t] = m;
         l_out[bh * seq + t] = l;
+        if (has_tail) tail_out[bh * seq + t] = tail;
     }
     if (tid < dim) acc_out[(bh * seq + t) * (long)dim + tid] = acc;
 }
@@ -2581,6 +2584,7 @@ extern "C" __global__ void sol_pisa_first_order(
     if (t >= seq) return;
     int d = threadIdx.x;
     if (d >= dim) return;
+    // coarse_l: the remainder's unweighted probability sum (coarse tail).
     float cm = coarse_m[bh * seq + t];
     float tail = (cm == SOL_NEG) ? 0.0f : coarse_l[bh * seq + t] * expf(cm - merged_m[bh * seq + t]);
     if (tail <= 0.0f) return;
@@ -2962,7 +2966,20 @@ template <int V> __device__ __forceinline__ float sol_ex2(float x) {
     if constexpr (V >= 2) return fa_exp2(x); else return exp2f(x);
 }
 
-template <int V>
+// PISA mode (`PISA = true`, `pisa_mma_fwd`): the same mainloop with the
+// exact set of query tile qt read from a top-k bitmap `pisa_sel`
+// `[bh, NT, 2*G]` (bit b of word 2g + w = KV block 64g + 32w + b selected)
+// instead of the threshold / local / sink rule; the remainder keeps the
+// zeroth-order term (pooled columns, len(j)-weighted row sum, P @ Vc) and
+// also sums its unweighted probabilities into `tail`. The epilogue adds the
+// paper's Phase-3 first-order term tail * (q @ H_bar) on tensor cores, with
+// H_bar `pisa_h` `[bh, 128, 128]` bf16, before the 1/l normalisation:
+// `fastvideo_models::pisa_attn::pisa_attn_head` in one CTA per query tile.
+__device__ __forceinline__ unsigned int pisa_scale_bf16x2(unsigned int x, float s) {
+    return mma_pack_bf16_rn(__uint_as_float(x << 16) * s, __uint_as_float(x & 0xffff0000u) * s);
+}
+
+template <int V, bool PISA = false>
 __device__ __forceinline__ void sol_mma_fwd_body(
     const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
     const unsigned short* __restrict__ vb,
@@ -2973,7 +2990,9 @@ __device__ __forceinline__ void sol_mma_fwd_body(
     unsigned int* __restrict__ route_dbg, int has_dbg,
     int T, int NT, int sink_lo, int sink_hi, float sl2
 ,
-    unsigned char* smem
+    unsigned char* smem,
+    const unsigned int* __restrict__ pisa_sel = nullptr,
+    const unsigned short* __restrict__ pisa_h = nullptr
 ) {
     float* colsum = reinterpret_cast<float*>(smem + 2 * MMA_TILEB);   // [4][64]
     float* colmask = colsum + 4 * 64;                                // [64]
@@ -2992,8 +3011,9 @@ __device__ __forceinline__ void sol_mma_fwd_body(
     const unsigned short* Vh = vb + bh * (long)T * MMA_DIM;
     const unsigned short* KCh = kc + bh * (long)NT * MMA_DIM;
     const unsigned short* VCh = vc + bh * (long)NT * MMA_DIM;
-    const float th = thr[bh * NT + qt];
+    const float th = PISA ? 0.f : thr[bh * NT + qt];
     const int G = (NT + 63) >> 6;
+    const unsigned int* sel_row = PISA ? pisa_sel + (bh * NT + qt) * 2L * G : nullptr;
     const float NEG = __int_as_float(0xff800000);
 
     // Q -> registers through sK (rows >= qlen are zeros).
@@ -3015,6 +3035,7 @@ __device__ __forceinline__ void sol_mma_fwd_body(
     #pragma unroll
     for (int n = 0; n < 16; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
     float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;   // m raw units; l per-thread partials
+    float tl0 = 0.f, tl1 = 0.f;                      // PISA: unweighted remainder mass
     float s[8][4];
     unsigned int pa[4][4];
 
@@ -3038,7 +3059,9 @@ __device__ __forceinline__ void sol_mma_fwd_body(
         // (b) raw route scores S = Q Kc^T.
         sol_qk<V>(sK, qf, s, lane);
 
-        // (c) column sums over live rows (reduce_route_columns).
+        // (c) column sums over live rows (reduce_route_columns); PISA routes
+        // from its bitmap instead.
+        if constexpr (!PISA) {
         #pragma unroll
         for (int n = 0; n < 8; n++) {
             float p0 = (ok0 ? s[n][0] : 0.f) + (ok1 ? s[n][2] : 0.f);
@@ -3053,6 +3076,7 @@ __device__ __forceinline__ void sol_mma_fwd_body(
                 colsum[warp * 64 + n * 8 + 2 * t + 1] = p1;
             }
         }
+        }
         __syncthreads();
 
         // (d) route decision + ascending ballot compaction (warp 0).
@@ -3063,7 +3087,9 @@ __device__ __forceinline__ void sol_mma_fwd_body(
                 const int off = word * 32 + lane, kbk = gs + off;
                 const bool valid = off < vb_cnt;
                 bool ex = false;
-                if (valid) {
+                if constexpr (PISA) {
+                    ex = valid && ((sel_row[2 * gi + word] >> lane) & 1u);
+                } else if (valid) {
                     const float cs = ((colsum[off] + colsum[64 + off]) + colsum[128 + off]) + colsum[192 + off];
                     const float cm = __fdiv_rn(__fmul_rn(cs, sl2), (float)qlen);
                     const int dist = qt > kbk ? qt - kbk : kbk - qt;
@@ -3121,7 +3147,7 @@ __device__ __forceinline__ void sol_mma_fwd_body(
             const float a0 = sol_ex2<V>((m0 - sf0) * sl2), a1 = sol_ex2<V>((m1 - sf1) * sl2);
             const float ms0 = sf0 * sl2, ms1 = sf1 * sl2;
             m0 = mn0; m1 = mn1;
-            float ls0 = 0.f, ls1 = 0.f;
+            float ls0 = 0.f, ls1 = 0.f, ts0 = 0.f, ts1 = 0.f;
             #pragma unroll
             for (int n = 0; n < 8; n++) {
                 const int c0 = n * 8 + 2 * t;
@@ -3133,9 +3159,17 @@ __device__ __forceinline__ void sol_mma_fwd_body(
                 s[n][3] = sol_ex2<V>(s[n][3] * sl2 - ms1);
                 ls0 += s[n][0] * w0 + s[n][1] * w1;
                 ls1 += s[n][2] * w0 + s[n][3] * w1;
+                if constexpr (PISA) {
+                    ts0 += s[n][0] + s[n][1];
+                    ts1 += s[n][2] + s[n][3];
+                }
             }
             l0 = l0 * a0 + ls0;
             l1 = l1 * a1 + ls1;
+            if constexpr (PISA) {
+                tl0 = tl0 * a0 + ts0;
+                tl1 = tl1 * a1 + ts1;
+            }
             #pragma unroll
             for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
             #pragma unroll
@@ -3208,6 +3242,7 @@ __device__ __forceinline__ void sol_mma_fwd_body(
             }
             l0 = l0 * a0 + ls0;
             l1 = l1 * a1 + ls1;
+            if constexpr (PISA) { tl0 *= a0; tl1 *= a1; }
             #pragma unroll
             for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
             #pragma unroll
@@ -3234,6 +3269,34 @@ __device__ __forceinline__ void sol_mma_fwd_body(
     l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
     l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
     l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
+    if constexpr (PISA) {
+        // First-order term: o += diag(tail) Q H_bar. H_bar's 128 rows fill
+        // sK (rows 0-63) and sV (rows 64-127); Q's A fragments, scaled per
+        // row by tail (a0/a2 row g, a1/a3 row g + 8), are the P operand of
+        // two P @ V mmas over the two 64-row halves of the contraction.
+        tl0 += __shfl_xor_sync(0xffffffffu, tl0, 1);
+        tl0 += __shfl_xor_sync(0xffffffffu, tl0, 2);
+        tl1 += __shfl_xor_sync(0xffffffffu, tl1, 1);
+        tl1 += __shfl_xor_sync(0xffffffffu, tl1, 2);
+        mma_cp_wait<0>();
+        __syncthreads();
+        const unsigned short* Hh = pisa_h + bh * (long)MMA_DIM * MMA_DIM;
+        mma_load_tile_rows(sK, Hh, 64, tid);
+        mma_load_tile_rows(sV, Hh + 64L * MMA_DIM, 64, tid);
+        mma_cp_commit();
+        mma_cp_wait<0>();
+        __syncthreads();
+        unsigned int qa[2][4][4];
+        #pragma unroll
+        for (int k8 = 0; k8 < 8; k8++) {
+            qa[k8 >> 2][k8 & 3][0] = pisa_scale_bf16x2(qf[k8][0], tl0);
+            qa[k8 >> 2][k8 & 3][1] = pisa_scale_bf16x2(qf[k8][1], tl1);
+            qa[k8 >> 2][k8 & 3][2] = pisa_scale_bf16x2(qf[k8][2], tl0);
+            qa[k8 >> 2][k8 & 3][3] = pisa_scale_bf16x2(qf[k8][3], tl1);
+        }
+        sol_pv<V>(sK, qa[0], o, lane);
+        sol_pv<V>(sV, qa[1], o, lane);
+    }
     const bool bad0 = (l0 == 0.f) || ((__float_as_uint(l0) & 0x7fffffffu) > 0x7f800000u);
     const bool bad1 = (l1 == 0.f) || ((__float_as_uint(l1) & 0x7fffffffu) > 0x7f800000u);
     const float inv0 = bad0 ? 1.f : 1.f / l0, inv1 = bad1 ? 1.f : 1.f / l1;
@@ -3312,6 +3375,118 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd_x4f(
 
 ) {
     SOL_FWD_ENTRY(2)
+}
+
+// PISA score route, fused (see the PISA mode of `sol_mma_fwd_body`): one
+// CTA per (64-query tile, batch*head), the x4f schedule (ex2.approx), bf16
+// operands from sol_prep_kv / sol_prep_q.
+extern "C" __global__ void __launch_bounds__(128, 2) pisa_mma_fwd(
+    const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
+    const unsigned short* __restrict__ vb,
+    const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
+    const unsigned int* __restrict__ sel, const unsigned short* __restrict__ hbar,
+    float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
+    int T, int NT, float sl2
+) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[SOL_FWD_SMEM];
+    sol_mma_fwd_body<2, true>(qb, kb, vb, kc, vc, nullptr, out, out_bf16, out_is_bf16,
+        nullptr, 0, nullptr, 0, T, NT, NT, NT, sl2, smem, sel, hbar);
+#else
+    (void)qb; (void)kb; (void)vb; (void)kc; (void)vc; (void)sel; (void)hbar; (void)out;
+    (void)out_bf16; (void)out_is_bf16; (void)T; (void)NT; (void)sl2;
+    __trap();
+#endif
+}
+
+// PISA top-k lists `[rows, keep]` (vsa_topk) -> selection bitmap
+// `[rows, words]` (zeroed by the caller): bit j % 32 of word j / 32 = block j.
+extern "C" __global__ void pisa_sel_bits(
+    const unsigned int* __restrict__ lists, unsigned int* __restrict__ bits,
+    long rows, int keep, int words
+) {
+    const long row = blockIdx.x;
+    if (row >= rows) return;
+    for (int i = threadIdx.x; i < keep; i += blockDim.x) {
+        const unsigned int j = lists[row * keep + i];
+        if (j != SOL_SENTINEL && (int)(j >> 5) < words) atomicOr(bits + row * words + (j >> 5), 1u << (j & 31));
+    }
+}
+
+// PISA global first-order statistic H_bar = (1/n) sum_t (k_t - kc_{t/64}) v_t^T
+// (`fastvideo_models::pisa_attn::global_h_bar`), stage 1: CTA (c, bh) sums
+// the tokens of blocks [16c, 16c + 16) into part[bh][c] `[128, 128]` f32.
+// 256 threads, each owning 8 rows e x 8 columns d; 32 tokens staged per pass.
+// (Replaces sol_global_h_bar's one-thread-per-cell loop over every token.)
+#define PISA_H_BLOCKS 16
+extern "C" __global__ void __launch_bounds__(256) pisa_h_partial(
+    const float* __restrict__ k, const float* __restrict__ v, const float* __restrict__ kc,
+    float* __restrict__ part, long seq, int n, int chunks
+) {
+    __shared__ __align__(16) float sdk[32][128];
+    __shared__ __align__(16) float sv[32][128];
+    const int c = blockIdx.x, tid = threadIdx.x;
+    const long bh = blockIdx.y;
+    if (c >= chunks) return;
+    const int e0 = (tid >> 4) * 8, d0 = (tid & 15) * 8;
+    float acc[8][8];
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        #pragma unroll
+        for (int j = 0; j < 8; j++) acc[i][j] = 0.f;
+    }
+    const long t_begin = (long)c * PISA_H_BLOCKS * 64;
+    const long t_end = min(seq, t_begin + PISA_H_BLOCKS * 64L);
+    for (long t0 = t_begin; t0 < t_end; t0 += 32) {
+        const int rows = (int)min(32L, t_end - t0);
+        __syncthreads();
+        for (int i = tid; i < 32 * 32; i += 256) {
+            const int r = i >> 5, c4 = (i & 31) * 4;
+            float4 dk = make_float4(0.f, 0.f, 0.f, 0.f), vv = dk;
+            if (r < rows) {
+                const long tok = t0 + r;
+                const long idx = (bh * seq + tok) * 128 + c4;
+                const float4 kk = *reinterpret_cast<const float4*>(k + idx);
+                const float4 mm = *reinterpret_cast<const float4*>(kc + (bh * n + tok / 64) * 128 + c4);
+                dk = make_float4(kk.x - mm.x, kk.y - mm.y, kk.z - mm.z, kk.w - mm.w);
+                vv = *reinterpret_cast<const float4*>(v + idx);
+            }
+            *reinterpret_cast<float4*>(&sdk[r][c4]) = dk;
+            *reinterpret_cast<float4*>(&sv[r][c4]) = vv;
+        }
+        __syncthreads();
+        for (int r = 0; r < rows; r++) {
+            const float4 a0 = *reinterpret_cast<const float4*>(&sdk[r][e0]);
+            const float4 a1 = *reinterpret_cast<const float4*>(&sdk[r][e0 + 4]);
+            const float4 b0 = *reinterpret_cast<const float4*>(&sv[r][d0]);
+            const float4 b1 = *reinterpret_cast<const float4*>(&sv[r][d0 + 4]);
+            const float a[8] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
+            const float b[8] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
+            #pragma unroll
+            for (int i = 0; i < 8; i++) {
+                #pragma unroll
+                for (int j = 0; j < 8; j++) acc[i][j] = fmaf(a[i], b[j], acc[i][j]);
+            }
+        }
+    }
+    float* out = part + (bh * chunks + c) * 16384L;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        *reinterpret_cast<float4*>(out + (e0 + i) * 128 + d0) = make_float4(acc[i][0], acc[i][1], acc[i][2], acc[i][3]);
+        *reinterpret_cast<float4*>(out + (e0 + i) * 128 + d0 + 4) = make_float4(acc[i][4], acc[i][5], acc[i][6], acc[i][7]);
+    }
+}
+
+// Stage 2: H_bar[bh] = bf16((sum over chunks, in order) / n), row e, column d.
+extern "C" __global__ void pisa_h_reduce(
+    const float* __restrict__ part, unsigned short* __restrict__ hbar, int chunks, int n
+) {
+    const long bh = blockIdx.y;
+    const int cell = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cell >= 16384) return;
+    float acc = 0.f;
+    for (int c = 0; c < chunks; c++) acc += part[(bh * chunks + c) * 16384L + cell];
+    hbar[bh * 16384L + cell] = sol_bf16_rn(n > 0 ? acc / (float)n : 0.f);
 }
 // ==== end region: sol ====
 

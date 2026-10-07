@@ -2046,6 +2046,164 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         Ok(())
     })?;
 
+    group(&mut c, "pisa", |c| {
+        // PISA score route (`route=score`, block 64) on the device against
+        // the f32 host oracle `fastvideo_models::pisa_attn::pisa_attn_bhsd`
+        // (exact selected blocks, zeroth-order remainder, first-order tail
+        // term): the fused tensor-core route (`pisa_mma_fwd`, bf16 operands)
+        // and the multi-launch legacy route (f32). Data is "structured"
+        // (per-block bases + noise) so the top-k is not a coin flip. Then
+        // the speed of fused PISA 0.9 vs the legacy route and dense SDPA at
+        // the Wan2.2-5B and LTX-2.3 stage-2 token counts.
+        use fastvideo_models::pisa_attn::{pisa_attn_bhsd, pisa_attn_head_zeroth};
+        use fastvideo_models::sol_attn::num_blocks;
+        const D: usize = 128;
+        let dev = dev()?;
+        if dev.sm_major < 8 {
+            c.report.note(
+                "pisa_skipped",
+                json!({"sm_major": dev.sm_major, "needs": "sm80+ (bf16 mma.sync)"}),
+            );
+            return Ok(());
+        }
+        let sc = 1.0 / (D as f32).sqrt();
+        let structured = |c: &mut Ctx<'_>, bh: usize, tokens: usize| -> Vec<f32> {
+            let n = num_blocks(tokens);
+            let base = c.rand(bh * n * D, 1.5);
+            let common = c.rand(bh * n * D, 1.5);
+            let noise = c.rand(bh * tokens * D, 0.3);
+            (0..bh * tokens * D)
+                .map(|i| {
+                    let (h, t, d) = (i / (tokens * D), (i / D) % tokens, i % D);
+                    let b = t / 64;
+                    let src = if b % 4 < 2 { &common } else { &base };
+                    src[(h * n + b) * D + d] + noise[i]
+                })
+                .collect()
+        };
+        for (tag, bh, tokens, sp) in [
+            ("t1000_sp0.9", 2usize, 1000usize, 0.9f64),
+            ("t2048_sp0.5", 2, 2048, 0.5),
+            ("t4100_sp0.9", 2, 4100, 0.9),
+            ("t4033_sp0.75", 1, 4033, 0.75),
+        ] {
+            let q = structured(c, bh, tokens);
+            let k = structured(c, bh, tokens);
+            let v = c.rand(bh * tokens * D, 1.0);
+            let want =
+                pisa_attn_bhsd(&q, &k, &v, 1, bh, tokens, D, sp, sc).map_err(anyhow::Error::msg)?;
+            // How far the first-order term moves the output: a route that
+            // dropped it would miss the oracle by about this much.
+            let stride = tokens * D;
+            let zeroth: Vec<f32> = (0..bh)
+                .flat_map(|h| {
+                    let r = h * stride..(h + 1) * stride;
+                    pisa_attn_head_zeroth(&q[r.clone()], &k[r.clone()], &v[r], tokens, D, sp, sc)
+                })
+                .collect();
+            let (qd, kd, vd) = (up(&q)?, up(&k)?, up(&v)?);
+            let fused = down(&ops::pisa_fused_device(
+                &qd, &kd, &vd, bh, tokens, D, sp, sc,
+            )?)?;
+            let first_order = diff(&zeroth, &want);
+            let d = diff(&fused, &want);
+            c.report.check(
+                format!("pisa_fused_vs_oracle_{tag}"),
+                d.within(2e-2),
+                json!({"diff": d.to_json(), "first_order_term": first_order.to_json()}),
+                json!({"rel_l2": 2e-2}),
+            )?;
+            let legacy = down(&ops::pisa_attn_device_legacy(
+                &qd, &kd, &vd, 1, bh, tokens, D, sp, sc,
+            )?)?;
+            c.cmp(
+                &format!("pisa_legacy_vs_oracle_{tag}"),
+                &legacy,
+                &want,
+                1e-3,
+            )?;
+        }
+        // Sparsity 0: every block is selected, so PISA is dense attention.
+        let (bh, seq) = (2usize, 1100usize);
+        let n = bh * seq * D;
+        let (q, k, v) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0));
+        let want = ref_sdpa(&q, &k, &v, bh, seq, seq, D, sc);
+        let (qd, kd, vd) = (up(&q)?, up(&k)?, up(&v)?);
+        let got = down(&ops::pisa_fused_device(&qd, &kd, &vd, bh, seq, D, 0.0, sc)?)?;
+        c.cmp("pisa_fused_sparsity0_vs_sdpa", &got, &want, 5e-3)?;
+        // The public entry (BHSD tensors) takes the fused route.
+        let shape = [1, bh, seq, D];
+        let (qt, kt, vt) = (
+            t(q.clone(), &shape)?,
+            t(k.clone(), &shape)?,
+            t(v.clone(), &shape)?,
+        );
+        let entry = fastvideo_cudarc::pisa_attn::pisa_attn(&qt, &kt, &vt, 0.0, Some(sc))?;
+        c.cmp(
+            "pisa_entry_sparsity0_vs_sdpa",
+            &host_of(&entry)?,
+            &want,
+            5e-3,
+        )?;
+
+        // Speed: Wan2.2 TI2V-5B (24 heads, 27 280 tokens at 704x1280x121)
+        // and LTX-2.3 HQ stage 2 (32 heads, 75 600 tokens). One warm-up,
+        // then the median of three (legacy: one call, it is the slow path).
+        let median =
+            |f: &mut dyn FnMut() -> anyhow::Result<()>, reps: usize| -> anyhow::Result<f64> {
+                f()?;
+                dev.synchronize()?;
+                let mut ts = Vec::new();
+                for _ in 0..reps {
+                    let t0 = std::time::Instant::now();
+                    f()?;
+                    dev.synchronize()?;
+                    ts.push(t0.elapsed().as_secs_f64());
+                }
+                ts.sort_by(|a, b| a.total_cmp(b));
+                Ok(ts[ts.len() / 2])
+            };
+        for (bh, tokens, with_legacy) in [(24usize, 27_280usize, true), (32, 75_600, false)] {
+            let n = bh * tokens * D;
+            let (q, k, v) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0));
+            let (qd, kd, vd) = (up(&q)?, up(&k)?, up(&v)?);
+            let fused_s = median(
+                &mut || {
+                    ops::pisa_fused_device(&qd, &kd, &vd, bh, tokens, D, 0.9, sc)?;
+                    Ok(())
+                },
+                3,
+            )?;
+            let legacy_s = if with_legacy {
+                let t0 = std::time::Instant::now();
+                ops::pisa_attn_device_legacy(&qd, &kd, &vd, 1, bh, tokens, D, 0.9, sc)?;
+                dev.synchronize()?;
+                Some(t0.elapsed().as_secs_f64())
+            } else {
+                None
+            };
+            drop((qd, kd, vd));
+            let shape = [1, bh, tokens, D];
+            let (qt, kt, vt) = (t(q, &shape)?, t(k, &shape)?, t(v, &shape)?);
+            let dense_s = median(
+                &mut || {
+                    fastvideo_cudarc::wan::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+                    Ok(())
+                },
+                3,
+            )?;
+            c.report.check(
+                format!("pisa_time_bh{bh}_t{tokens}"),
+                fused_s < dense_s,
+                json!({"fused_s": fused_s, "dense_sdpa_s": dense_s, "legacy_s": legacy_s,
+                       "dense_over_fused": dense_s / fused_s,
+                       "legacy_over_fused": legacy_s.map(|l| l / fused_s)}),
+                json!({"fused_s": "< dense_sdpa_s"}),
+            )?;
+        }
+        Ok(())
+    })?;
+
     group(&mut c, "attention", |c| {
         // Includes the Wan VAE mid-block shape (one 384-wide head) and a small
         // score budget that forces the chunked in-place path.

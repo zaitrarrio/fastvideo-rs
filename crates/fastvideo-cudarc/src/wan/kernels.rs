@@ -149,6 +149,10 @@ kernel_fns!(
     sol_mma_fwd,
     sol_mma_fwd_x4,
     sol_mma_fwd_x4f,
+    pisa_mma_fwd,
+    pisa_sel_bits,
+    pisa_h_partial,
+    pisa_h_reduce,
     // ---- attn2 region (Phase 3b attention kernels) ----
     flash_mma_fwd2_d64,
     flash_mma_fwd2_d128,
