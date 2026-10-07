@@ -16,7 +16,9 @@
 // resident and warms up in the background ("warmup started (background)",
 // "warmup done (background) … seconds="), so `serve_ready` / `ready` come
 // before `warmup_start` / `warmup_done`; rows are in time order and the
-// warm-up rows say "(background)".
+// warm-up rows say "(background)". Measured 2026-10-07 (h3-turbo, d708c91,
+// RTX PRO 6000, EUR-IS-1): READY +158 s with the background warm-up, +88 s
+// with the pre-quantized DiT tree too (docs/gaps/2026-10-07-fast-boot.md).
 import type { Env } from "./env";
 import { now, parseJson } from "./util";
 

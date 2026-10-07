@@ -285,7 +285,9 @@ check_text_fp8() {
 # dit-prequant: the fast-boot trees as written on EU by `fv-gpucheck
 # quantize-dit` (docs/gaps/2026-10-07-fast-boot.md). rel<TAB>bytes<TAB>sha256.
 DIT_PREQUANT_TREES="h3-base/transformer_prequant_4step-vsa_mxfp8/manifest.json	3809	e80ec8c23a1e18581eef48c2c0e7d95f181072e0af4eae8c611f0c710945ceee
-h3-base/transformer_prequant_4step-vsa_mxfp8/model.safetensors	27288660164	d3dcc7b3ff3b05783cbab37e95cc1c3e8113b750400bc27db14a1a37ae6ddc18"
+h3-base/transformer_prequant_4step-vsa_mxfp8/model.safetensors	27288660164	d3dcc7b3ff3b05783cbab37e95cc1c3e8113b750400bc27db14a1a37ae6ddc18
+h3-base/transformer_prequant_sol-h3_mxfp8/manifest.json	3809	6dc6db7d53469e8b2b230b36b957e8f7b3aef76a9a0e0cef04c571f90c2aeeef
+h3-base/transformer_prequant_sol-h3_mxfp8/model.safetensors	23435142712	cf58b8d2f264509a61df819026b9f63cf1955f6476a5519b8300717cfc7849f3"
 check_dit_prequant() {
   local rc=0 rel size sha p got
   while IFS=$'\t' read -r rel size sha; do
