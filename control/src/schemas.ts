@@ -20,6 +20,7 @@ import {
   ENV_KEY_MESSAGE,
   ENV_KEY_RULE,
   envValueProblem,
+  enumMessage,
   FAKE_MODELS,
   IMAGE_REF_RE,
   isReserved,
@@ -63,8 +64,8 @@ const region = z
   .enum(AVAILABLE_REGIONS as [RegionId, ...RegionId[]], { error: () => EU_ONLY })
   .meta({ "x-dynamic": "regions" })
   .describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
-const cpuFlavor = z.enum(CPU_FLAVORS).meta({ "x-dynamic": "cpu_flavors" }).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
-const gpuType = z.enum(RUNPOD_GPU_TYPES).meta({ "x-dynamic": "gpu_types" }).describe("A Runpod GPU type id.");
+const cpuFlavor = z.enum(CPU_FLAVORS, { error: (i) => enumMessage("a Runpod CPU flavor", i.input, CPU_FLAVORS) }).meta({ "x-dynamic": "cpu_flavors" }).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
+const gpuType = z.enum(RUNPOD_GPU_TYPES, { error: (i) => enumMessage("a Runpod GPU type id", i.input, RUNPOD_GPU_TYPES) }).meta({ "x-dynamic": "gpu_types" }).describe("A Runpod GPU type id.");
 const imageRef = z.string().max(300).regex(IMAGE_REF_RE, { message: "an image reference: registry/repo[:tag][@sha256:<64 hex>]" }).meta({ "x-rule": "registry/repo[:tag][@sha256:<64 hex>], lower-case" });
 const configPath = z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).meta({ "x-rule": "an absolute path ending in .toml, e.g. /etc/fv/runpod.toml", "x-dynamic": "config_paths" });
 const channel = z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" });
@@ -351,7 +352,7 @@ export const BuildPodsPolicyZ = z
     regions: uniq(z.string().regex(/^[A-Z]{2,4}(-[A-Z0-9]+)*$/, { message: "a data centre or its prefix: EU, EUR-IS, US-CA-2" }).meta({ "x-dynamic": "dc_prefixes" })).describe("Preferred data centres or prefixes (EU, EUR-IS, US-CA-2 …)."),
     regions_only: z.boolean().describe("Only the preferred regions (else they go first)."),
     volumes: z
-      .partialRecord(z.enum(RUNPOD_DATA_CENTERS).meta({ "x-dynamic": "data_centers" }), z.string().regex(/^[a-z0-9]{6,40}$/, { message: "a Runpod network volume id" }))
+      .partialRecord(z.enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) }).meta({ "x-dynamic": "data_centers" }), z.string().regex(/^[a-z0-9]{6,40}$/, { message: "a Runpod network volume id" }))
       .describe("Data centre → a build-cache network volume id there (optional)."),
     idle_min: z.number().min(5).max(240).meta({ "x-unit": "min" }).describe("The pod stops itself after this many idle minutes."),
     max_h: z.number().min(0.5).max(24).meta({ "x-unit": "h" }).describe("Its cap: it stops after this many hours up."),

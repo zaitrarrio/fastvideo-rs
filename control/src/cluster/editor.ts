@@ -36,6 +36,18 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
     if (cheapest > spec.max_gpu_dph) issues.push({ path: [...prefix, "max_gpu_dph"], message: `below every GPU type pool ${p.id} may use (cheapest $${cheapest.toFixed(2)}/hr): each pod would be deleted right after create` });
     else if (Math.max(...known) > spec.max_gpu_dph) warnings.push({ path: [...prefix, "pools", i, "gpu_types"], message: `some GPU types of ${p.id} cost more than max_gpu_dph ($${spec.max_gpu_dph}/hr): a pod placed on one is deleted` });
   });
+  // GPU types against the regions' data centres (Runpod's stock): a pool none of whose types has stock there is a warning
+  // (stock moves by the minute; a definition may wait for it), shown before Start.
+  const pairs = new Map<string, { dc: string; gpu: string }>();
+  const plan = spec.pools.filter((p) => p.compute === "GPU" && p.count > 0).map((p) => ({ p, pls: workerPlacements(spec, p).filter((x) => x.dc && x.gpu) }));
+  for (const { pls } of plan) for (const x of pls) pairs.set(`${x.dc}|${x.gpu}`, { dc: x.dc!, gpu: x.gpu! });
+  const st = pairs.size ? await gpuStock(env, [...pairs.values()]).catch(() => null) : null;
+  if (st)
+    for (const { p, pls } of plan) {
+      const i = spec.pools.indexOf(p);
+      if (pls.length && pls.every((x) => !st.get(`${x.dc}|${x.gpu}`)?.stock && !(st.get(`${x.dc}|${x.gpu}`)?.max_available ?? 0)))
+        warnings.push({ path: [...prefix, "pools", i, "gpu_types"], message: `${p.id}: none of its GPU types has stock in ${[...new Set(pls.map((x) => x.dc))].join(", ")} now (${[...new Set(pls.map((x) => x.gpu))].join(", ")})` });
+    }
   // Dedupe (one max_gpu_dph message per pool is enough, the first one per path).
   const seen = new Set<string>();
   return { issues: issues.filter((x) => (seen.has(x.path.join(".") + x.message) ? false : (seen.add(x.path.join(".") + x.message), true))), warnings };
@@ -138,7 +150,7 @@ let stockCache: { at: number; key: string; v: Map<string, Omit<PlacementStock, "
 /** Tests: forget the 60 s stock cache. */
 export const clearStockCache = () => void (stockCache = null);
 
-async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): Promise<Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>> {
+export async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): Promise<Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>> {
   const key = pairs.map((p) => `${p.dc}|${p.gpu}`).sort().join(",");
   if (stockCache && stockCache.key === key && Date.now() - stockCache.at < 60_000) return stockCache.v;
   const out = new Map<string, Omit<PlacementStock, "dc" | "gpu" | "cpu">>();

@@ -152,3 +152,35 @@ export function nameProblem(kind: NameKind, name: unknown): string | null {
   if ((RESERVED_NAMES[kind] as readonly string[]).includes(name)) return `"${name}" is reserved (a route uses it)`;
   return null;
 }
+
+// ---------------------------------------------------------------- close matches
+const tokens = (s: string) => s.toLowerCase().replace(/^nvidia\s+|geforce\s+/g, "").split(/[^a-z0-9.]+/).filter(Boolean);
+/** The allowed values closest to a wrong one (shared tokens, then the shortest): "RTX 6000 PRO" → the RTX PRO 6000 Server Edition first. */
+export function closeMatches(input: string, allowed: readonly string[], n = 3): string[] {
+  const want = new Set(tokens(String(input)));
+  if (!want.size) return [];
+  const scored = allowed
+    .map((a) => {
+      const t = tokens(a);
+      const hit = t.filter((x) => want.has(x)).length;
+      const partial = [...want].filter((w) => t.some((x) => x !== w && (x.includes(w) || w.includes(x)))).length;
+      return { a, score: hit * 2 + partial, len: a.length };
+    })
+    .filter((x) => x.score > 0)
+    .sort((x, y) => y.score - x.score || x.len - y.len);
+  if (scored.length) return scored.slice(0, n).map((x) => x.a);
+  // No shared word: the longest common prefix (cpu3x → cpu3c, cpu3g, cpu3m).
+  const lc = String(input).toLowerCase();
+  const pre = (a: string) => {
+    let i = 0;
+    while (i < a.length && i < lc.length && a[i]!.toLowerCase() === lc[i]) i++;
+    return i;
+  };
+  const best = Math.max(0, ...allowed.map(pre));
+  return best >= 3 ? allowed.filter((a) => pre(a) === best).slice(0, n) : [];
+}
+/** "not a Runpod GPU type id: did you mean …" for an enum refusal. */
+export function enumMessage(what: string, input: unknown, allowed: readonly string[]): string {
+  const near = typeof input === "string" ? closeMatches(input, allowed) : [];
+  return `${JSON.stringify(input)} is not ${what}${near.length ? `; did you mean ${near.map((x) => JSON.stringify(x)).join(" or ")}?` : ` (${allowed.length} allowed: ${allowed.slice(0, 6).join(", ")}…)`}`;
+}

@@ -178,7 +178,7 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
     await audit(env, { actor: who.actor, ip: who.ip, action: "serverless.create", target: spec.name, after: { endpoint: ep, template: tpl, image, spec } });
     return await reload(env, id);
   } catch (e) {
-    const msg = scrub(env, (e as Error).message).slice(0, 500);
+    const msg = scrub(env, (e as Error).message).slice(0, 4000);
     // Nothing half-made stays behind: the endpoint, then the template.
     if (ep) await sls.deleteEndpoint(env, ep).catch(() => {});
     if (tpl) await sls.deleteTemplate(env, tpl).catch(() => {});
@@ -267,7 +267,7 @@ export async function finishDelete(env: Env, row: SlsRow, actor: string): Promis
     await audit(env, { actor, action: "serverless.deleted", target: row.name, after: { endpoint: row.endpoint_id, template: row.own_template ? row.template_id : null } });
     return true;
   } catch (e) {
-    await patchRow(env, row.id, { last_error: scrub(env, (e as Error).message).slice(0, 500) });
+    await patchRow(env, row.id, { last_error: scrub(env, (e as Error).message).slice(0, 4000) });
     return false;
   }
 }

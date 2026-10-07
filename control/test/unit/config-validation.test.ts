@@ -271,3 +271,80 @@ describe("UI coverage", () => {
     for (const k of ["family", "vcpu", "fake_models", "log_level", "variant"]) expect(src).not.toMatch(new RegExp(`text\\(P\\("${k}"\\)`));
   });
 });
+
+// ---------------------------------------------------------------- the staging failures of 2026-10-07
+import { closeMatches } from "../../src/enums";
+import { readableProblem, runpodErrorText } from "../../src/runpoderr";
+import { placementIssues } from "../../src/serverless/spec";
+
+describe("serverless GPU types (staging rows scale2, scale, testing)", () => {
+  // What the owner typed: free-text GPU names Runpod refused at POST /endpoints.
+  const OWNER = [
+    { name: "scale2", variant: "h3-turbo", gpu_types: ["RTX 6000 PRO", "H100"] },
+    { name: "scale", variant: "h3-turbo", gpu_types: ["RTX 6000 PRO", "H100"] },
+    { name: "testing", variant: "ltx", gpu_types: ["H100", "RTX PRO 6000"] },
+  ];
+  it("each is refused before Runpod, at gpu_types, with the id to use", () => {
+    for (const spec of OWNER) {
+      let err: any;
+      try {
+        normalizeEndpointSpec(spec);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, spec.name).toBeTruthy();
+      const paths = err.extra.issues.map((i: any) => i.path.join("."));
+      expect(paths).toEqual(expect.arrayContaining(["gpu_types.0", "gpu_types.1"]));
+      expect(err.message).toMatch(/did you mean "NVIDIA RTX PRO 6000 Blackwell Server Edition"/);
+      expect(err.message).toMatch(/"H100" is not a Runpod GPU type id; did you mean "NVIDIA H100/);
+    }
+  });
+  it("close matches put the server card first", () => {
+    expect(closeMatches("RTX 6000 PRO", RUNPOD_GPU_TYPES)[0]).toBe("NVIDIA RTX PRO 6000 Blackwell Server Edition");
+    expect(closeMatches("RTX PRO 6000", RUNPOD_GPU_TYPES)[0]).toBe("NVIDIA RTX PRO 6000 Blackwell Server Edition");
+    expect(closeMatches("H100", RUNPOD_GPU_TYPES)).toEqual(expect.arrayContaining(["NVIDIA H100 NVL"]));
+    expect(closeMatches("rtx 5090", RUNPOD_GPU_TYPES)[0]).toBe("NVIDIA GeForce RTX 5090");
+  });
+  it("the corrected spec is valid", () => {
+    expect(normalizeEndpointSpec({ name: "scale2", variant: "h3-turbo", gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] }).gpu_types).toEqual(["NVIDIA RTX PRO 6000 Blackwell Server Edition"]);
+  });
+  it("GPU types against the volume's data centre: H100 only on the EU volume is refused, a mix warns", async () => {
+    const stock = async (pairs: { dc: string; gpu: string }[]) => new Map(pairs.map((p) => [`${p.dc}|${p.gpu}`, p.gpu.includes("RTX PRO 6000") ? { stock: "Low", max_available: 2 } : { stock: null, max_available: 0 }]));
+    const h100 = normalizeEndpointSpec({ name: "h", variant: "h3-turbo", gpu_types: ["NVIDIA H100 80GB HBM3"] });
+    const r1 = await placementIssues(h100, stock);
+    expect(r1.issues[0]!.message).toMatch(/none of NVIDIA H100 80GB HBM3 is offered in EUR-IS-1/);
+    const mix = normalizeEndpointSpec({ name: "m", variant: "h3-turbo", gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA H100 80GB HBM3"] });
+    const r2 = await placementIssues(mix, stock);
+    expect(r2.issues).toEqual([]);
+    expect(r2.warnings.map((w) => w.path.join("."))).toEqual(["gpu_types.1"]);
+    // CPU endpoints and Runpod not answering: nothing.
+    expect((await placementIssues(defaultEndpointSpec("c", "cpu"), stock)).issues).toEqual([]);
+    expect((await placementIssues(h100, async () => Promise.reject(new Error("down")))).issues).toEqual([]);
+  });
+});
+
+describe("Runpod errors made readable", () => {
+  const ALLOWED = RUNPOD_GPU_TYPES.map((g) => `'${g}'`).join(", ");
+  it("the enum problem names the field, our value, the close match, then the list (nothing cut)", () => {
+    const body = { error: "request body validation failed", problems: [`At /endpoints/properties/gpuTypeIds/items/enum: value must be one of ${ALLOWED}`] };
+    const t = runpodErrorText(body, JSON.stringify({ name: "fvc-scale2", gpuTypeIds: ["RTX 6000 PRO", "H100"] }));
+    expect(t.startsWith('gpuTypeIds: Runpod refused "RTX 6000 PRO" (did you mean "NVIDIA RTX PRO 6000 Blackwell Server Edition"')).toBe(true);
+    expect(t).toContain('"H100" (did you mean "NVIDIA H100');
+    expect(t).toContain("Tesla V100-SXM2-16GB");
+    expect(t).toContain("(request body validation failed)");
+  });
+  it("other enums Runpod checks: dataCenterIds, cpuFlavorIds, allowedCudaVersions, scalerType", () => {
+    expect(readableProblem("At /endpoints/properties/dataCenterIds/items/enum: value must be one of 'EU-RO-1', 'EUR-IS-1'", { dataCenterIds: ["EU-IS-1"] })).toMatch(/^dataCenterIds: Runpod refused "EU-IS-1" \(did you mean "EUR-IS-1"/);
+    expect(readableProblem("At /endpoints/properties/scalerType/enum: value must be one of 'QUEUE_DELAY', 'REQUEST_COUNT'", { scalerType: "QUEUE" })).toMatch(/scalerType: Runpod refused "QUEUE" \(did you mean "QUEUE_DELAY"/);
+    expect(readableProblem("something else")).toBe("something else");
+    expect(runpodErrorText({ error: "plain" })).toBe("plain");
+    // Our own schema refuses the same values first, with the same hint.
+    for (const [spec, re] of [
+      [{ name: "a", variant: "h3-turbo", data_centers: ["EU-IS-1"] }, /data_centers\.0: "EU-IS-1" is not a Runpod data centre/],
+      [{ name: "a", cpu_flavors: ["cpu3x"] }, /cpu_flavors\.0: "cpu3x" is not a Runpod serverless CPU flavor; did you mean/],
+      [{ name: "a", variant: "h3-turbo", allowed_cuda: ["13"] }, /allowed_cuda\.0: "13" is not a CUDA version/],
+      [{ name: "a", scaler_type: "QUEUE" }, /scaler_type: "QUEUE" is not a Runpod scaler type; did you mean "QUEUE_DELAY"/],
+    ] as const)
+      expect(() => normalizeEndpointSpec(spec)).toThrow(re);
+  });
+});

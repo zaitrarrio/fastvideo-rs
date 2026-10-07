@@ -30,7 +30,8 @@ import {
 import { sls } from "./runpod-sls";
 import { parseOr400 } from "../schemas";
 import { checkName } from "../names";
-import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec } from "./spec";
+import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, placementIssues } from "./spec";
+import { gpuStock } from "../cluster/editor";
 
 type App = { Bindings: Env; Variables: Vars };
 type C = Context<App>;
@@ -83,14 +84,20 @@ serverlessRoutes.post("/validate", async (c) => {
   const nameIssue = typeof doc?.name === "string" && !b.id ? await checkName(c.env, "endpoint", doc.name).then((r) => (r.taken ? [{ path: ["name"], message: r.problem! }] : [])) : [];
   try {
     const spec = normalizeEndpointSpec(doc);
-    if (nameIssue.length) return c.json({ ok: false, error: nameIssue[0]!.message, issues: nameIssue });
-    return c.json({ ok: true, spec, raw_issues: raw.ok ? [] : raw.issues });
+    const place = await placementIssues(spec, (pairs) => gpuStock(c.env, pairs));
+    const issues = [...nameIssue, ...place.issues];
+    if (issues.length) return c.json({ ok: false, error: issues[0]!.message, issues, warnings: place.warnings });
+    return c.json({ ok: true, spec, raw_issues: raw.ok ? [] : raw.issues, warnings: place.warnings });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message, issues: [...((e as HttpError).extra?.issues as any[] ?? []), ...nameIssue] });
   }
 });
 serverlessRoutes.post("/", async (c) => {
   const b = await body(c);
+  // GPU types against the data centres (live stock): refused before anything is made on Runpod.
+  const draft = normalizeEndpointSpec(b.spec ?? b);
+  const place = await placementIssues(draft, (pairs) => gpuStock(c.env, pairs));
+  if (place.issues.length) throw new HttpError(400, place.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: place.issues });
   const row = await createEndpoint(c.env, who(c), b.spec ?? b);
   return c.json({ endpoint: rowView(row) }, 201);
 });

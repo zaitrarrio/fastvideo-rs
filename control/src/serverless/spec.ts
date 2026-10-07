@@ -15,6 +15,7 @@ import {
   CUDA_VERSIONS,
   ENV_KEY_MESSAGE,
   envValueProblem,
+  enumMessage,
   IMAGE_REF_RE,
   NAME_MAX,
   NAME_RE,
@@ -94,20 +95,20 @@ export const EndpointSpecZ = z
     config: z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).optional().meta({ "x-dynamic": "config_paths", "x-rule": "an absolute path ending in .toml" }).describe("A worker config inside the image (FV_CONFIG). Default: the variant's baked config."),
     config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("An inline worker config (FV_WORKER_TOML_B64) instead of a file in the image."),
     env: z.record(z.string().regex(ENV_KEY, { message: ENV_KEY_MESSAGE }).refine((k) => !SLS_RESERVED.has(k), { message: "is set by fv-control" }).meta({ "x-dynamic": "env_keys" }), z.string().max(4096)).optional().describe("Extra env for the workers (plain values; never a secret: use Runpod secrets)."),
-    gpu_types: uniq(z.enum(RUNPOD_GPU_TYPES).meta({ "x-dynamic": "gpu_types" })).min(1).max(12).optional().describe("GPU workers: Runpod GPU type ids, in priority order. Default: the EU volume's (RTX PRO 6000 Server)."),
+    gpu_types: uniq(z.enum(RUNPOD_GPU_TYPES, { error: (i) => enumMessage("a Runpod GPU type id", i.input, RUNPOD_GPU_TYPES) }).meta({ "x-dynamic": "gpu_types" })).min(1).max(12).optional().describe("GPU workers: Runpod GPU type ids, in priority order. Default: the EU volume's (RTX PRO 6000 Server)."),
     gpu_count: z.number().int().min(1).max(8).optional().meta({ "x-unit": "GPUs" }).describe("GPUs per worker (default 1)."),
-    cpu_flavors: uniq(z.enum(SLS_CPU_FLAVORS).meta({ "x-dynamic": "cpu_flavors" })).min(1).optional().describe("CPU workers: flavors in priority order (default cpu3c, cpu5c)."),
+    cpu_flavors: uniq(z.enum(SLS_CPU_FLAVORS, { error: (i) => enumMessage("a Runpod serverless CPU flavor", i.input, SLS_CPU_FLAVORS) }).meta({ "x-dynamic": "cpu_flavors" })).min(1).optional().describe("CPU workers: flavors in priority order (default cpu3c, cpu5c)."),
     vcpu: z.literal(CPU_VCPUS).optional().meta({ "x-unit": "vCPU" }).describe("CPU workers: vCPUs per worker (default 2)."),
-    data_centers: uniq(z.enum(RUNPOD_DATA_CENTERS).meta({ "x-dynamic": "data_centers" })).min(1).max(30).optional().describe("Runpod data centers the workers may run in. With a network volume: its data center only. Default: the volume's, or any."),
+    data_centers: uniq(z.enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) }).meta({ "x-dynamic": "data_centers" })).min(1).max(30).optional().describe("Runpod data centers the workers may run in. With a network volume: its data center only. Default: the volume's, or any."),
     network_volume: z.string().regex(/^[a-z0-9]{6,16}$/, { message: "a Runpod network volume id" }).nullable().meta({ "x-dynamic": "volumes" }).describe("A weights network volume mounted at /runpod-volume (EU jg48s6o1w0; CLAUDE.md), or null. Default: the EU volume for GPU workers, none for CPU."),
     workers_min: z.number().int().min(0).max(4).meta({ "x-unit": "workers" }).describe("Always-on workers (billed while idle). 0 scales to zero."),
     workers_max: z.number().int().min(0).max(8).meta({ "x-unit": "workers" }).describe("Most workers at once."),
     idle_timeout_s: z.number().int().min(5).max(3600).meta({ "x-unit": "s" }).describe("A worker without a job this long is stopped (Runpod: 5-3600 s)."),
     flashboot: z.boolean().describe("Runpod FlashBoot (faster warm starts; docs/serve/images.md §FlashBoot)."),
     execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
-    scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"]).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
+    scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"], { error: (i) => enumMessage("a Runpod scaler type", i.input, ["QUEUE_DELAY", "REQUEST_COUNT"]) }).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
     scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
-    allowed_cuda: uniq(z.enum(CUDA_VERSIONS)).optional().describe("GPU workers: CUDA versions a host may offer (default 13.0, what the images need); [] drops the filter."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer (default 13.0, what the images need); [] drops the filter."),
     container_disk_gb: z.number().int().min(5).max(200).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB)."),
     deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
@@ -213,4 +214,37 @@ export function specDiff(a: EndpointSpec, b: EndpointSpec): { template: boolean;
     ["gpu_types", "gpu_count", "data_centers", "workers_min", "workers_max", "idle_timeout_s", "flashboot", "execution_timeout_s", "scaler_type", "scaler_value", "allowed_cuda"] as const
   ).some((k) => j(a[k]) !== j(b[k]));
   return { template, endpoint, recreate, scaleUp: b.workers_max > a.workers_max || b.workers_min > a.workers_min };
+}
+
+/**
+ * A GPU endpoint's GPU types against the data centres it may run in (with a
+ * volume: the volume's, EUR-IS-1 for the EU weights volume), from Runpod's
+ * stock per (type, data centre). A type with no stock anywhere it may run is
+ * a warning; when none of the types has stock there it is an error (the
+ * workers could never start: e.g. H100 only, on the EU volume). Nothing when
+ * Runpod does not answer.
+ */
+export async function placementIssues(
+  spec: EndpointSpec,
+  stockOf: (pairs: { dc: string; gpu: string }[]) => Promise<Map<string, { stock: string | null; max_available: number | null }>>,
+): Promise<{ issues: SpecIssue[]; warnings: SpecIssue[] }> {
+  const issues: SpecIssue[] = [];
+  const warnings: SpecIssue[] = [];
+  if (spec.compute !== "GPU") return { issues, warnings };
+  const vol = knownVolumes().find((v) => v.id === spec.network_volume);
+  const dcs = spec.data_centers?.length ? spec.data_centers : vol ? [vol.dc] : [];
+  const gpus = spec.gpu_types?.length ? spec.gpu_types : [...REGIONS.eu.gpus];
+  if (!dcs.length) return { issues, warnings };
+  let st: Map<string, { stock: string | null; max_available: number | null }>;
+  try {
+    st = await stockOf(gpus.flatMap((gpu) => dcs.map((dc) => ({ dc, gpu }))));
+  } catch {
+    return { issues, warnings };
+  }
+  const offered = (g: string) => dcs.some((dc) => { const x = st.get(`${dc}|${g}`); return !!x?.stock || (x?.max_available ?? 0) > 0; });
+  const none = gpus.filter((g) => !offered(g));
+  const where = vol ? `${dcs.join(", ")} (the ${vol.region} volume ${vol.id}'s data centre)` : dcs.join(", ");
+  if (none.length === gpus.length) issues.push({ path: ["gpu_types"], message: `none of ${gpus.join(", ")} is offered in ${where}: the workers could never start (pick a GPU type Runpod has there, e.g. ${REGIONS.eu.gpus[0]})` });
+  else for (const g of none) warnings.push({ path: ["gpu_types", gpus.indexOf(g)], message: `${g}: Runpod reports no stock in ${where}; the other types are tried first only in order` });
+  return { issues, warnings };
 }

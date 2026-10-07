@@ -19,7 +19,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const out = h("div", { class: "small", style: "margin-top:8px" });
   const remote = async (v: any) => {
     const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v } });
-    return { issues: r.ok ? [] : issuesOf(r) };
+    return { issues: r.ok ? [] : issuesOf(r), warnings: r.warnings || [] };
   };
   let f: Form;
   let mode: "form" | "json" = "form";
