@@ -1,0 +1,597 @@
+{
+  "label": "fresh-480P",
+  "base": "https://ef3e9xcucs7nfd-8000.proxy.runpod.net",
+  "endpoint": "minimax/h3-turbo/text-to-video",
+  "input": {
+    "resolution": "480P",
+    "duration": 5
+  },
+  "fresh_prompt": true,
+  "n": 4,
+  "ab": {
+    "e2e_ms": {
+      "traced": {
+        "n": 4,
+        "median": 14401.103393554688,
+        "p90": 16527.95183105469,
+        "min": 13385.704833984375,
+        "max": 17146.43310546875
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "seen_terminal_ms": {
+      "traced": {
+        "n": 4,
+        "median": 13479.79296875,
+        "p90": 15589.295727539064,
+        "min": 12699.0439453125,
+        "max": 16312.695556640625
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "submit_ms": {
+      "traced": {
+        "n": 4,
+        "median": 1149.12158203125,
+        "p90": 1632.7640625000001,
+        "min": 527.41259765625,
+        "max": 1712.826416015625
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "inference_ms": {
+      "traced": {
+        "n": 4,
+        "median": 7118.898121,
+        "p90": 7124.4878975,
+        "min": 7102.852221,
+        "max": 7126.090013
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "denoise_ms": {
+      "traced": {
+        "n": 4,
+        "median": 7118.898121,
+        "p90": 7124.4878975,
+        "min": 7102.852221,
+        "max": 7126.090013
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "video_decode_ms": {
+      "traced": {
+        "n": 4,
+        "median": 2730.3636965,
+        "p90": 2732.4431959,
+        "min": 2728.4620349999996,
+        "max": 2732.737393
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "encode_ms": {
+      "traced": {
+        "n": 4,
+        "median": 139.59166199999999,
+        "p90": 237.93955920000002,
+        "min": 131.76327099999997,
+        "max": 278.66256
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    },
+    "engine_total_ms": {
+      "traced": {
+        "n": 4,
+        "median": 10613.9361835,
+        "p90": 10668.006331900002,
+        "min": 10587.799518,
+        "max": 10683.912616000001
+      },
+      "untraced": {
+        "n": 0,
+        "median": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "diff_median": null,
+      "diff_ci95": null
+    }
+  },
+  "steps": {
+    "client.e2e": {
+      "n": 4,
+      "median": 14401.103393500001,
+      "p90": 16527.9518306,
+      "min": 13385.704834,
+      "max": 17146.433105,
+      "count": 1
+    },
+    "client.click": {
+      "n": 4,
+      "median": 0,
+      "p90": 0,
+      "min": 0,
+      "max": 0,
+      "count": 1
+    },
+    "client.submit": {
+      "n": 4,
+      "median": 1149.121582,
+      "p90": 1632.7640624,
+      "min": 527.412598,
+      "max": 1712.826416,
+      "count": 1
+    },
+    "http.post": {
+      "n": 4,
+      "median": 345.276065,
+      "p90": 457.9212777,
+      "min": 285.231393,
+      "max": 490.121841,
+      "count": 1
+    },
+    "adapter.validate": {
+      "n": 4,
+      "median": 0.02462,
+      "p90": 0.025886,
+      "min": 0.02422,
+      "max": 0.02633,
+      "count": 1
+    },
+    "adapter.ingest_negotiate": {
+      "n": 4,
+      "median": 0.011465,
+      "p90": 0.012583,
+      "min": 0.00922,
+      "max": 0.01285,
+      "count": 1
+    },
+    "store.insert": {
+      "n": 4,
+      "median": 296.010484,
+      "p90": 359.812913,
+      "min": 277.804775,
+      "max": 382.319738,
+      "count": 1
+    },
+    "queue.submit": {
+      "n": 4,
+      "median": 0.104106,
+      "p90": 0.14758700000000002,
+      "min": 0.098151,
+      "max": 0.164081,
+      "count": 1
+    },
+    "queue.wait": {
+      "n": 4,
+      "median": 0.108746,
+      "p90": 0.11833300000000001,
+      "min": 0.097801,
+      "max": 0.119521,
+      "count": 1
+    },
+    "store.get": {
+      "n": 4,
+      "median": 0.01447,
+      "p90": 0.015968,
+      "min": 0.01145,
+      "max": 0.01649,
+      "count": 1
+    },
+    "engine.run": {
+      "n": 4,
+      "median": 10613.558406,
+      "p90": 10667.6291515,
+      "min": 10587.405044,
+      "max": 10683.533452,
+      "count": 1
+    },
+    "engine.text": {
+      "n": 4,
+      "median": 498.599037,
+      "p90": 522.0207423,
+      "min": 467.650825,
+      "max": 531.607623,
+      "count": 1
+    },
+    "gpu.text (gpu)": {
+      "n": 4,
+      "median": 498.560226,
+      "p90": 522.0115840000001,
+      "min": 467.637756,
+      "max": 531.603454,
+      "count": 1
+    },
+    "client.submit.body": {
+      "n": 4,
+      "median": 0.505493,
+      "p90": 1.8991454000000003,
+      "min": 0.372559,
+      "max": 2.448242,
+      "count": 1
+    },
+    "engine.denoise.step": {
+      "n": 4,
+      "median": 7118.869780999999,
+      "p90": 7124.468194499999,
+      "min": 7102.827991,
+      "max": 7126.079733,
+      "count": 4
+    },
+    "gpu.denoise.step (gpu)": {
+      "n": 4,
+      "median": 7118.8712925,
+      "p90": 7124.474142399999,
+      "min": 7102.83197,
+      "max": 7126.087218999999,
+      "count": 4
+    },
+    "client.poll": {
+      "n": 4,
+      "median": 2950.9948725,
+      "p90": 7812.4291502000015,
+      "min": 2715.339842,
+      "max": 9848.950439,
+      "count": 12.5
+    },
+    "http.get": {
+      "n": 4,
+      "median": 2.7664225,
+      "p90": 2.9477005999999997,
+      "min": 1.895804,
+      "max": 3.0246349999999995,
+      "count": 13.5
+    },
+    "store.lookup": {
+      "n": 4,
+      "median": 0.19440500000000002,
+      "p90": 0.2083414,
+      "min": 0.13066,
+      "max": 0.21308200000000002,
+      "count": 13.5
+    },
+    "client.poll.body": {
+      "n": 4,
+      "median": 7.2216795000000005,
+      "p90": 13.259400100000004,
+      "min": 5.599367,
+      "max": 15.448243000000003,
+      "count": 12.5
+    },
+    "engine.denoise.tail": {
+      "n": 4,
+      "median": 28.154839000000003,
+      "p90": 28.8134562,
+      "min": 27.698741,
+      "max": 29.07822,
+      "count": 1
+    },
+    "gpu.denoise.tail (gpu)": {
+      "n": 4,
+      "median": 28.149902,
+      "p90": 28.8089356,
+      "min": 27.685058,
+      "max": 29.074219,
+      "count": 1
+    },
+    "gpu.audio_decode (gpu)": {
+      "n": 4,
+      "median": 69.908692,
+      "p90": 70.9939454,
+      "min": 69.365235,
+      "max": 71.399414,
+      "count": 1
+    },
+    "engine.audio_decode": {
+      "n": 4,
+      "median": 69.868836,
+      "p90": 70.95466929999999,
+      "min": 69.325073,
+      "max": 71.360086,
+      "count": 1
+    },
+    "engine.video_decode": {
+      "n": 4,
+      "median": 2737.6894645,
+      "p90": 2739.6635198000004,
+      "min": 2733.402437,
+      "max": 2739.862739,
+      "count": 1
+    },
+    "gpu.video_decode (gpu)": {
+      "n": 4,
+      "median": 2737.738281,
+      "p90": 2739.7120113,
+      "min": 2733.441406,
+      "max": 2739.910644,
+      "count": 1
+    },
+    "post.encode_busy": {
+      "n": 4,
+      "median": 512.293231,
+      "p90": 522.4584039,
+      "min": 506.065617,
+      "max": 524.152395,
+      "count": 1
+    },
+    "engine.encode_tail": {
+      "n": 4,
+      "median": 139.793088,
+      "p90": 238.15110790000003,
+      "min": 131.998882,
+      "max": 278.870452,
+      "count": 1
+    },
+    "gpu.encode_tail (gpu)": {
+      "n": 4,
+      "median": 139.76367199999999,
+      "p90": 238.12138650000003,
+      "min": 131.975586,
+      "max": 278.84082,
+      "count": 1
+    },
+    "engine.finished": {
+      "n": 4,
+      "median": 0,
+      "p90": 0,
+      "min": 0,
+      "max": 0,
+      "count": 1
+    },
+    "post.finalize": {
+      "n": 4,
+      "median": 0.5838490000000001,
+      "p90": 0.602762,
+      "min": 0.538234,
+      "max": 0.604844,
+      "count": 1
+    },
+    "store.terminal": {
+      "n": 4,
+      "median": 1468.6984444999998,
+      "p90": 1610.8167647,
+      "min": 853.889818,
+      "max": 1642.57481,
+      "count": 1
+    },
+    "upload.artifact_put": {
+      "n": 4,
+      "median": 1149.9715125,
+      "p90": 1293.8311856,
+      "min": 579.200714,
+      "max": 1348.339499,
+      "count": 1
+    },
+    "store.terminal_write": {
+      "n": 4,
+      "median": 284.4044325,
+      "p90": 347.2523009,
+      "min": 267.323596,
+      "max": 370.003808,
+      "count": 1
+    },
+    "client.result": {
+      "n": 4,
+      "median": 278.8793945,
+      "p90": 406.4813968,
+      "min": 170.309326,
+      "max": 458.235352,
+      "count": 1
+    },
+    "client.result.body": {
+      "n": 4,
+      "median": 0.4395755,
+      "p90": 0.5517576,
+      "min": 0.395264,
+      "max": 0.5979,
+      "count": 1
+    },
+    "client.video_fetch": {
+      "n": 4,
+      "median": 517.9022215,
+      "p90": 671.3991211000001,
+      "min": 414.168213,
+      "max": 724.501465,
+      "count": 1
+    },
+    "client.video_ttfb": {
+      "n": 4,
+      "median": 378.7390135,
+      "p90": 562.7471189,
+      "min": 235.911621,
+      "max": 619.498535,
+      "count": 1
+    },
+    "client.video_bytes": {
+      "n": 4,
+      "median": 111.08471700000001,
+      "p90": 211.82937020000003,
+      "min": 87.017334,
+      "max": 252.39917,
+      "count": 1
+    },
+    "client.canplay": {
+      "n": 4,
+      "median": 0,
+      "p90": 0,
+      "min": 0,
+      "max": 0,
+      "count": 1
+    }
+  },
+  "phases": {
+    "click → submit sent": {
+      "n": 4,
+      "median": 0.027264000000000004,
+      "p90": 0.15825920000000004,
+      "min": 0.016384,
+      "max": 0.211712
+    },
+    "submit sent → pod received": {
+      "n": 4,
+      "median": 282.768768,
+      "p90": 1043.0294016,
+      "min": 171.666176,
+      "max": 1325.715456
+    },
+    "pod received → pod answered (queued)": {
+      "n": 4,
+      "median": 345.276065,
+      "p90": 457.9212777,
+      "min": 285.231393,
+      "max": 490.121841
+    },
+    "pod answered (queued) → submit answer at client": {
+      "n": 4,
+      "median": 129.7029755000001,
+      "p90": 529.8338135000001,
+      "min": 70.51502899999991,
+      "max": 679.736666
+    },
+    "submit answer at client → engine dequeued": {
+      "n": 4,
+      "median": -129.80502000000013,
+      "p90": -73.29613140000009,
+      "min": -679.8193190000001,
+      "max": -70.65870899999999
+    },
+    "engine dequeued → GPU first mark": {
+      "n": 4,
+      "median": 0.555110000000127,
+      "p90": 0.6246077999999897,
+      "min": 0.5403110000000879,
+      "max": 0.6487349999999878
+    },
+    "GPU first mark → GPU last mark": {
+      "n": 4,
+      "median": 10612.972248,
+      "p90": 10667.0776233,
+      "min": 10586.878882,
+      "max": 10683.01362
+    },
+    "GPU last mark → engine run end": {
+      "n": 4,
+      "median": -0.017581000000063796,
+      "p90": -0.013823400000364926,
+      "min": -0.020658000001276378,
+      "max": -0.012462000000596163
+    },
+    "engine run end → job terminal (stored)": {
+      "n": 4,
+      "median": 1469.3537404999997,
+      "p90": 1611.4764064000005,
+      "min": 854.5229710000003,
+      "max": 1643.2454530000014
+    },
+    "job terminal (stored) → client saw COMPLETED": {
+      "n": 4,
+      "median": 302.88885599999867,
+      "p90": 3030.3490162000007,
+      "min": -288.7989289999987,
+      "max": 4188.820879000001
+    },
+    "client saw COMPLETED → result answer at client": {
+      "n": 4,
+      "median": 279.59114099999806,
+      "p90": 407.00779840000035,
+      "min": 170.75544100000116,
+      "max": 458.72773300000154
+    },
+    "result answer at client → video first byte": {
+      "n": 4,
+      "median": 379.21309100000235,
+      "p90": 563.3979845000003,
+      "min": 236.43339899999773,
+      "max": 620.2133269999995
+    },
+    "video first byte → video last byte": {
+      "n": 4,
+      "median": 111.08471699999973,
+      "p90": 211.82937020000065,
+      "min": 87.01733400000012,
+      "max": 252.3991700000006
+    },
+    "video last byte → video playable": {
+      "n": 4,
+      "median": 0.000016000001778593287,
+      "p90": 0.00008659999930387132,
+      "min": -0.000019999999494757503,
+      "max": 0.0001069999980245484
+    }
+  },
+  "unaccounted_ms": {
+    "n": 4,
+    "median": 64.88464299999747,
+    "p90": 166.083957999999,
+    "min": 0,
+    "max": 181.7459199999994
+  },
+  "dropped_max": 0,
+  "offsets": {
+    "client": {
+      "offset_ms": 0,
+      "uncert_ms": 0
+    },
+    "pod:ef3e9xcucs7nfd": {
+      "offset_ms": 47.321344,
+      "uncert_ms": 72.63872
+    }
+  }
+}

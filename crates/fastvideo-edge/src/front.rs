@@ -212,7 +212,9 @@ fn over(who: &str, limit: u32) -> bool {
 async fn forward(env: &Env, url: &str, method: Method, path_q: &str, h: &Headers, body: Option<JsValue>, verdict: &Verdict) -> Result<Response> {
     let out = Headers::new();
     for (k, v) in h.entries() {
-        if DROP_REQ.contains(&k.as_str()) || k.starts_with("x-fv-") {
+        // Client `x-fv-*` headers never pass (the verdict is the edge's),
+        // except the tracing opt-in (docs/serve/tracing.md).
+        if DROP_REQ.contains(&k.as_str()) || (k.starts_with("x-fv-") && k != proto::front::TRACE_OPT_IN_HEADER) {
             continue;
         }
         out.append(&k, &v)?;
@@ -283,16 +285,32 @@ pub async fn handle(mut req: Request, env: Env, ctx: Context) -> Result<Response
         }
     }
     let t0 = now_ms();
-    let resp = route(&mut req, &env, &ctx, &class, method.clone(), &path, &query, &path_q, &h).await;
+    // docs/serve/tracing.md: an opted-in request's edge steps.
+    let tr = crate::trace::EdgeTrace::from_request(&env, &h, &query);
+    let resp = route(&mut req, &env, &ctx, &class, method.clone(), &path, &query, &path_q, &h, tr.as_ref()).await;
     console_log!(
         "{}",
         json!({"edge": "request", "method": method.as_ref(), "path": path, "protocol": class.protocol, "status": resp.as_ref().map(|r| r.status_code()).unwrap_or(500), "ms": now_ms() - t0})
     );
-    resp
+    match (tr, resp) {
+        (Some(tr), Ok(r)) => tr.finish(r, t0, &env, &ctx),
+        (_, resp) => resp,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn route(req: &mut Request, env: &Env, ctx: &Context, class: &Class, method: Method, path: &str, query: &str, path_q: &str, h: &Headers) -> Result<Response> {
+async fn route(
+    req: &mut Request,
+    env: &Env,
+    ctx: &Context,
+    class: &Class,
+    method: Method,
+    path: &str,
+    query: &str,
+    path_q: &str,
+    h: &Headers,
+    tr: Option<&crate::trace::EdgeTrace>,
+) -> Result<Response> {
     if let Target::Edge(r) = &class.target {
         return edge_route(req, env, r, method, path, h).await;
     }
@@ -302,12 +320,20 @@ async fn route(req: &mut Request, env: &Env, ctx: &Context, class: &Class, metho
     if class.protocol == "internal" && !is_internal(env, h) {
         return json_err(401, "unauthorized", "a valid token is required");
     }
+    let t_auth = now_ms();
     let mut v = verdict(env, h).await;
+    if let Some(tr) = tr {
+        tr.span("auth", t_auth);
+    }
     let q = quotas(env);
     if v.presented && !v.valid && over(&format!("bad:{}", client_addr(h)), q.invalid_key_rpm) {
         return reply(Reply { status: 429, kind: "rate_limited", message: "too many requests with an invalid key".into(), retry_after: Some(60) });
     }
+    let t_reg = now_ms();
     let reg = registry(env).await?;
+    if let Some(tr) = tr {
+        tr.span("registry", t_reg);
+    }
     if let Some(k) = v.key.clone().filter(|_| is_submit(method.as_ref(), class)) {
         if over(&k, q.key_rpm) {
             v.deny = Some(f::Deny { kind: "rate_limited".into(), message: "this key's submit rate limit is reached".into(), retry_after: Some(10) });
@@ -324,8 +350,12 @@ async fn route(req: &mut Request, env: &Env, ctx: &Context, class: &Class, metho
         Target::Stream { ingest, op } => return stream(req, env, &reg, *ingest, op, method, path_q, h, &v).await,
         _ => {}
     }
+    let t_body = now_ms();
     let (body, model) = if class.target == Target::Body {
         let b = req.bytes().await?;
+        if let Some(tr) = tr {
+            tr.span("body_read", t_body);
+        }
         if b.len() > BODY_MAX {
             return json_err(413, "payload_too_large", "the body is too large");
         }
@@ -346,7 +376,16 @@ async fn route(req: &mut Request, env: &Env, ctx: &Context, class: &Class, metho
         v.deny = fwd.deny.clone();
     }
     let body = if matches!(method, Method::Get | Method::Head) { None } else { body };
-    forward(env, &fwd.url, method, path_q, h, body, &v).await
+    if let Some(tr) = tr {
+        // The front's parent span is this hop (docs/serve/tracing.md).
+        h.set("traceparent", &tr.traceparent())?;
+    }
+    let t_fwd = now_ms();
+    let r = forward(env, &fwd.url, method, path_q, h, body, &v).await;
+    if let (Some(tr), Ok(resp)) = (tr, r.as_ref()) {
+        tr.forwarded(&fwd.url, t_fwd, resp);
+    }
+    r
 }
 
 /// Every family object's status and metrics (registry families).

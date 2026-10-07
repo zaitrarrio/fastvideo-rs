@@ -14,6 +14,7 @@ members = [
     # fv-serve (docs/serve/design.md §2). CPU-only by default; only
     # fastvideo-engine-service reaches CUDA, behind its `cuda` feature.
     "crates/fastvideo-protocol",
+    "crates/fastvideo-trace",
     "crates/fastvideo-engine-service",
     "crates/fastvideo-media",
     "crates/fastvideo-webrtc",
@@ -97,6 +98,7 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 fastvideo-protocol = { path = "crates/fastvideo-protocol" }
+fastvideo-trace = { path = "crates/fastvideo-trace" }
 fastvideo-engine-service = { path = "crates/fastvideo-engine-service" }
 fastvideo-media = { path = "crates/fastvideo-media" }
 fastvideo-webrtc = { path = "crates/fastvideo-webrtc" }

@@ -45,6 +45,7 @@ done
 
 CRATES=(
   fastvideo-protocol
+  fastvideo-trace
   fastvideo-engine-service
   fastvideo-media
   fastvideo-webrtc
@@ -113,6 +114,8 @@ stage lint && run cargo clippy -p fastvideo-dispatch-proto -p fastvideo-edge --t
 # The release / deployment scripts against a mocked API (docs/serve/releases.md;
 # skips without python3).
 stage test && run bash scripts/serve/tests/release.test.sh
+# The trace waterfall analysis (console/trace.js; docs/serve/tracing.md).
+stage test && run node --test scripts/serve/tests/trace-analyze.test.mjs
 
 if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets

@@ -106,22 +106,29 @@ export class HttpError extends Error {
 // fetch JSON. `auth`: 'key' (fal `Key`), 'bearer', 'admin' (bearer with the
 // admin token) or null. Throws HttpError on non-2xx. `full: true` resolves
 // `{body, headers, status}` instead of the body (for the `x-fv-*` headers).
-export async function request(method, path, { auth = 'key', token, body, root, full = false } = {}) {
+// `trace` (a trace.js ClientTrace): the request carries its headers and is
+// recorded as span `traceName` (docs/serve/tracing.md).
+export async function request(method, path, { auth = 'key', token, body, root, full = false, trace = null, traceName = 'request' } = {}) {
   const headers = { Accept: 'application/json' };
+  if (trace) Object.assign(headers, trace.headers());
   const secret = token ?? (auth === 'admin' ? session.get(K.admin) : apiKey());
   // An open server (auth mode `none`) gets no API key; the admin token still goes to admin routes.
   if (auth && secret && (auth === 'admin' || !openServer)) headers.Authorization = (auth === 'key' ? 'Key ' : 'Bearer ') + secret;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const url = /^https?:/.test(path) ? path : (root || base()) + path;
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const t0 = trace ? trace.now() : 0;
   let resp;
   try {
-    resp = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    resp = await fetch(url, { method, headers, body: payload });
   } catch (e) {
     throw new HttpError(0, 'Could not reach ' + (root || base()) + ' (' + e.message + ')');
   }
+  const tHead = trace ? trace.now() : 0;
   const text = await resp.text();
   let parsed = text;
   try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  if (trace) trace.http(traceName, t0, tHead, trace.now(), resp.status, resp.headers, parsed);
   if (!resp.ok) throw new HttpError(resp.status, parsed);
   return full ? { body: parsed, headers: resp.headers, status: resp.status } : parsed;
 }

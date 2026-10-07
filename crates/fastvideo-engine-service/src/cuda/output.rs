@@ -347,8 +347,18 @@ pub(crate) fn deliver(
             .with_sink(&port);
         f(hooks)
     };
+    // docs/serve/tracing.md: the pipeline is done (its last frames are
+    // with the writer); what follows is the encoder's tail.
+    ctl.mark("encode_tail");
     // The port is gone, so is its relay: the detached feed is complete.
     let feed_busy_s = d.reattach();
+    if let Some(t) = ctl.trace() {
+        // The encoder fed during the decode on its own thread: its busy
+        // time, as a span ending now (its exact placement is not kept).
+        let busy = (feed_busy_s.max(d.encode_s) * 1e9) as u64;
+        let now = fastvideo_trace::now_ns();
+        t.span_since(fastvideo_trace::Comp::Post, "encode_busy", now.saturating_sub(busy), d.count as i64);
+    }
     let mut metrics = metrics?;
     ctl.check()?;
     if d.count != u64::from(job.num_frames) {
@@ -389,6 +399,22 @@ pub(crate) fn deliver(
 }
 
 /// Removes a job's work directory (after a cancel or a failure).
+/// Device marks for a traced run: CUDA events on the compute stream
+/// (docs/serve/tracing.md "GPU timing").
+pub(crate) struct CudaMarks(pub fastvideo_cudarc::timing::EventMarks);
+
+impl fastvideo_trace::MarkPool for CudaMarks {
+    fn capacity(&self) -> usize {
+        self.0.len()
+    }
+    fn record(&mut self, i: usize) -> bool {
+        self.0.record(i)
+    }
+    fn elapsed_ns(&self, from: usize, to: usize) -> Option<u64> {
+        self.0.elapsed_ns(from, to)
+    }
+}
+
 pub(crate) fn remove_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }

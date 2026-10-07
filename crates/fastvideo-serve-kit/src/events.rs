@@ -40,16 +40,26 @@ pub struct FinishedOutput {
 /// discard any output. Status changes fire the job's callback.
 pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job, ApiError> {
     let now = ctx.now();
-    let before = ctx
+    let current = ctx
         .jobs()
         .get(id)
         .await
-        .ok_or_else(|| ApiError::not_found(format!("job {id} not found")))?
-        .status();
+        .ok_or_else(|| ApiError::not_found(format!("job {id} not found")))?;
+    let before = current.status();
+    // docs/serve/tracing.md: the output path of a traced job.
+    let trace = matches!(ev, JobEvent::Finished(_))
+        .then(|| current.trace.as_deref().and_then(fastvideo_trace::Trace::from_traceparent).or_else(fastvideo_trace::current))
+        .flatten();
+    drop(current);
     let job = match ev {
         JobEvent::Finished(out) => {
             tracing::debug!(job = %id, "job: storing the output");
+            let t_put = trace.map(|_| fastvideo_trace::now_ns());
+            let bytes = if trace.is_some() { std::fs::metadata(&out.file).map(|m| m.len() as i64).unwrap_or(0) } else { 0 };
             let art = ctx.artifacts().put(&out.file, out.meta).await;
+            if let (Some(t), Some(s)) = (trace, t_put) {
+                t.span_since(fastvideo_trace::Comp::Upload, "artifact_put", s, bytes);
+            }
             tracing::debug!(job = %id, "job: output stored");
             let art = match art {
                 Ok(a) => a,
@@ -69,6 +79,7 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
             let accepted = Arc::new(Mutex::new(false));
             let acc = accepted.clone();
             let a2 = art.clone();
+            let t_store = trace.map(|_| fastvideo_trace::now_ns());
             let j = match ctx
                 .jobs()
                 .update(id, Box::new(move |j| {
@@ -85,6 +96,9 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
                     return Err(e.into());
                 }
             };
+            if let (Some(t), Some(s)) = (trace, t_store) {
+                t.span_since(fastvideo_trace::Comp::Store, "terminal_write", s, 0);
+            }
             if !*accepted.lock().unwrap_or_else(|p| p.into_inner()) {
                 ctx.artifacts().delete(&art).await;
             }

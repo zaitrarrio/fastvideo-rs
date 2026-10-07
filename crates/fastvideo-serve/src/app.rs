@@ -281,6 +281,7 @@ impl App {
             .with_context(|| format!("creating {}", config.server.state_dir.display()))?;
         let base = public_base(&config)?;
         let worker = worker_id(&config);
+        crate::trace_http::install(&worker);
         let key = if config.artifacts.signing_key.is_empty() {
             tracing::warn!("FV_URL_SIGNING_KEY is not set: /files URLs die with this process");
             UrlKey::random()
@@ -884,6 +885,9 @@ pub fn assemble(
     if config.server.console {
         r = r.merge(console::routes());
     }
+    // docs/serve/tracing.md: what this process recorded under a trace, and
+    // events posted in by the edge and the browser.
+    r = r.merge(crate::trace_http::routes());
     let r = r.route_layer(axum::middleware::from_fn(metrics::track));
     // Behind a load balancer with several workers: only the routes every
     // worker can answer (design §6.2).
@@ -894,7 +898,9 @@ pub fn assemble(
             "server.workers_max > 1: serving only routes any worker can answer"
         );
     }
-    let r = crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http());
+    let r = crate::multiworker::layer(r, policy, &config.protocols.fal_apps)
+        .layer(axum::middleware::from_fn(crate::trace_http::layer))
+        .layer(TraceLayer::new_for_http());
     match cors_layer(&config.server.cors_origins) {
         Some(cors) => r.layer(cors),
         None => r,
@@ -903,7 +909,7 @@ pub fn assemble(
 
 /// Response headers a cross-origin page may read: the FastVideo metric
 /// headers, our tier/recipe metadata and the fal request id.
-const CORS_EXPOSE: [&str; 11] = [
+const CORS_EXPOSE: [&str; 14] = [
     "x-request-id",
     "x-model",
     "x-inference-time-s",
@@ -915,6 +921,10 @@ const CORS_EXPOSE: [&str; 11] = [
     "x-fal-request-id",
     "content-disposition",
     "content-length",
+    // Request tracing (docs/serve/tracing.md).
+    "traceparent",
+    "x-fv-trace-t",
+    "server-timing",
 ];
 
 /// CORS for every route (`server.cors_origins`, config validated): answers

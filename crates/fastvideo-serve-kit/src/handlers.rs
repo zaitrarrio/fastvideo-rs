@@ -132,6 +132,15 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     request_echo: serde_json::Value,
     policy: &IngestPolicy,
 ) -> Result<Job, ApiError> {
+    // docs/serve/tracing.md: the request's trace (set by the HTTP layer).
+    let trace = fastvideo_trace::current();
+    let mark = || trace.map(|_| fastvideo_trace::now_ns()).unwrap_or(0);
+    let span = |name: &'static str, comp: fastvideo_trace::Comp, since: u64| {
+        if let Some(t) = trace {
+            t.span_since(comp, name, since, 0);
+        }
+    };
+    let t_validate = mark();
     ctx.engine().admit()?;
     ctx.safety().check_request(&req)?;
     let models = ctx.engine().models();
@@ -141,8 +150,10 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     // (H3 reference-to-video) goes to the tier's companion for that task.
     let caps = fastvideo_protocol::route_task(caps, req.task, &models);
     precheck(&req, caps)?;
+    span("validate", fastvideo_trace::Comp::Adapter, t_validate);
     let id = JobId::new();
     let dir = ctx.inputs_dir(id);
+    let t_ingest = mark();
     let resolved = async {
         let staged = ctx.ingestor().stage(&req, policy, &dir, ctx.now()).await?;
         negotiate_noted(&req, caps, &staged).map(|(r, n)| (r, n, passthrough_sources(&req, &staged)))
@@ -155,6 +166,7 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
             return Err(e);
         }
     };
+    span("ingest_negotiate", fastvideo_trace::Comp::Adapter, t_ingest);
     let now = ctx.now();
     let pid = proto.id();
     let mut job = Job::new(id, pid, proto.new_external_id(id), resolved, now, ctx.config().retention(pid));
@@ -162,22 +174,29 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     job.request_echo = request_echo;
     job.callback = req.callback.clone();
     job.input_sources = sources;
+    job.trace = trace.map(|t| t.traceparent(t.parent));
     for n in notes {
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));
     }
     tracing::debug!(job = %id, "job: submit accepted, recording");
+    let t_insert = mark();
     if let Err(e) = ctx.jobs().insert(job.clone()).await {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(e.into());
     }
+    span("insert", fastvideo_trace::Comp::Store, t_insert);
     tracing::debug!(job = %id, "job: recorded");
+    let t_submit = mark();
     if let Err(e) = ctx.engine().submit(&job).await {
         ctx.jobs().remove(id).await;
         return Err(e);
     }
+    span("submit", fastvideo_trace::Comp::Queue, t_submit);
     tracing::debug!(job = %id, "job: submitted to the engine");
+    let t_reread = mark();
     let job = ctx.jobs().get(id).await.unwrap_or(job);
+    span("get", fastvideo_trace::Comp::Store, t_reread);
     ctx.notify(&job);
     Ok(job)
 }
@@ -202,8 +221,19 @@ fn passthrough_sources(req: &GenerationRequest, staged: &fastvideo_protocol::Sta
 }
 
 /// Looks a job up by its wire id for `owner` (other owners' jobs are 404).
+///
+/// A traced request (docs/serve/tracing.md) records the lookup as
+/// `store.lookup` with the job's status as its argument (0 queued ..
+/// 4 cancelled, -1 unknown), so the trace shows which poll first saw the
+/// job terminal.
 pub async fn find_job<P: BatchProtocol + ?Sized>(ctx: &ServeCtx, proto: &P, external_id: &str, owner: Option<&KeyId>) -> Result<Job, ApiError> {
-    match ctx.jobs().by_external(proto.id(), external_id).await {
+    let trace = fastvideo_trace::current();
+    let t0 = trace.map(|_| fastvideo_trace::now_ns());
+    let found = ctx.jobs().by_external(proto.id(), external_id).await;
+    if let (Some(t), Some(s)) = (trace, t0) {
+        t.span_since(fastvideo_trace::Comp::Store, "lookup", s, found.as_ref().map_or(-1, status_code));
+    }
+    match found {
         Some(j) if j.owner.is_none() || j.owner.as_ref() == owner => Ok(j),
         _ => Err(ApiError::not_found(format!("`{external_id}` was not found"))),
     }
@@ -240,6 +270,8 @@ where
                     external_id: None,
                 };
                 let fail = |e: ApiError| error_reply(&*proto, &e, &ecx);
+                let trace = fastvideo_trace::current();
+                let t_parse = trace.map(|_| fastvideo_trace::now_ns());
                 let reply = async {
                     let owner = ctx.auth().authenticate(proto.id(), &headers)?;
                     let echo: serde_json::Value = if body.is_empty() {
@@ -252,6 +284,9 @@ where
                         .map_err(|e| ApiError::invalid(e.to_string()))?;
                     let ncx = normalize_ctx(&ctx, owner.clone(), &headers, query, rid.clone());
                     let req = endpoint.normalize(parsed, &ncx)?;
+                    if let (Some(t), Some(s)) = (trace, t_parse) {
+                        t.span_since(fastvideo_trace::Comp::Adapter, "parse", s, body.len() as i64);
+                    }
                     let job = submit_request(&ctx, &*proto, req, owner, echo, &opts.ingest).await?;
                     match opts.wait {
                         None => Ok(endpoint.submit_reply(&job, &ctx.view_ctx(false))),
@@ -315,6 +350,19 @@ fn lookup<P: BatchProtocol, V: JobView>(proto: Arc<P>, view: Arc<V>, param: &'st
             }
         },
     )
+}
+
+/// A job's status as a trace argument: 0 queued, 1 running, 2 succeeded,
+/// 3 failed, 4 cancelled.
+pub fn status_code(job: &Job) -> i64 {
+    use fastvideo_protocol::JobStatus::*;
+    match job.status() {
+        Queued => 0,
+        Running => 1,
+        Succeeded => 2,
+        Failed => 3,
+        Cancelled => 4,
+    }
 }
 
 /// `GET` status handler; the job's wire id is the path parameter `param`.

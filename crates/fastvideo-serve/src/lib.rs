@@ -70,6 +70,7 @@ pub mod shutdown;
 pub mod status;
 pub mod storage;
 pub mod streams;
+pub mod trace_http;
 pub mod whip;
 /// The worker role behind a gateway (`server.role = "worker"`).
 #[cfg(feature = "http-client")]

@@ -8,6 +8,7 @@ description = "fv-serve shared HTTP glue: ServeCtx, auth, job/artifact/upload st
 
 [dependencies]
 fastvideo-protocol.workspace = true
+fastvideo-trace.workspace = true
 fastvideo-engine-service.workspace = true
 fastvideo-media.workspace = true
 async-trait.workspace = true

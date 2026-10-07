@@ -592,6 +592,9 @@ pub async fn submit_generation(
     job.owner = owner;
     job.request_echo = echo;
     job.callback = req.callback.clone();
+    // docs/serve/tracing.md: the request's trace (set by the HTTP layer).
+    let trace = fastvideo_trace::current();
+    job.trace = trace.map(|t| t.traceparent(t.parent));
     for n in notes {
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));
@@ -599,14 +602,23 @@ pub async fn submit_generation(
     if !req.accepted_noop.is_empty() {
         tracing::debug!(job = %id, fields = ?req.accepted_noop, "accepted no-op fields");
     }
+    let t_insert = trace.map(|_| fastvideo_trace::now_ns());
     if let Err(e) = ctx.jobs().insert(job.clone()).await {
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(e.into());
     }
+    if let (Some(t), Some(s)) = (trace, t_insert) {
+        t.span_since(fastvideo_trace::Comp::Store, "insert", s, 0);
+    }
     // The `queued` callback goes out before the engine can move the job on,
     // so the receiver always sees queued -> running -> terminal in order.
     ctx.notify(&job);
-    if let Err(e) = ctx.engine().submit(&job).await {
+    let t_submit = trace.map(|_| fastvideo_trace::now_ns());
+    let submitted = ctx.engine().submit(&job).await;
+    if let (Some(t), Some(s)) = (trace, t_submit) {
+        t.span_since(fastvideo_trace::Comp::Queue, "submit", s, 0);
+    }
+    if let Err(e) = submitted {
         // The receiver already saw `queued`: close the sequence with `failed`.
         let (now, err) = (ctx.now(), e.clone());
         if let Ok(j) = ctx.jobs().update(id, Box::new(move |j| {

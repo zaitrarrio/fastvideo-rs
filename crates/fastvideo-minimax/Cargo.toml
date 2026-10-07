@@ -8,6 +8,7 @@ description = "fv-serve adapter: MiniMax V2 video generation (create, query, lis
 
 [dependencies]
 fastvideo-protocol.workspace = true
+fastvideo-trace.workspace = true
 fastvideo-serve-kit.workspace = true
 fastvideo-models.workspace = true
 axum.workspace = true

@@ -145,6 +145,10 @@ pub(crate) struct JobEntry {
     pub mode: OutputMode,
     pub last_pos: Option<u32>,
     pub running: bool,
+    /// The job's trace (docs/serve/tracing.md) and when it was queued
+    /// (`fastvideo_trace::now_ns`), for the queue-wait span.
+    pub trace: Option<fastvideo_trace::Trace>,
+    pub queued_ns: u64,
 }
 
 pub(crate) struct State {
@@ -250,8 +254,10 @@ impl Shared {
         prio: Priority,
         pin: Option<usize>,
         mode: Option<OutputMode>,
+        trace: Option<fastvideo_trace::Trace>,
     ) -> Result<JobHandle, ApiError> {
         let cancel = CancelToken::new();
+        let queued_ns = trace.map_or(0, |_| fastvideo_trace::now_ns());
         let (tx, rx) = mpsc::unbounded_channel();
         {
             let mut st = self.lock();
@@ -280,6 +286,8 @@ impl Shared {
                     mode,
                     last_pos: None,
                     running: false,
+                    trace,
+                    queued_ns,
                 },
             );
             st.publish_positions();
@@ -595,7 +603,20 @@ impl EngineService {
         r: ResolvedJob,
         prio: Priority,
     ) -> Result<JobHandle, ApiError> {
-        self.shared().submit(job, r, prio, None, None)
+        self.shared().submit(job, r, prio, None, None, None)
+    }
+
+    /// [`submit`](Self::submit) under a request's trace: the queue wait,
+    /// the run, every stage and denoise step (host and device times) are
+    /// recorded under it (docs/serve/tracing.md).
+    pub async fn submit_traced(
+        &self,
+        job: JobId,
+        r: ResolvedJob,
+        prio: Priority,
+        trace: Option<fastvideo_trace::Trace>,
+    ) -> Result<JobHandle, ApiError> {
+        self.shared().submit(job, r, prio, None, None, trace)
     }
 
     /// Like [`submit`](Self::submit) with the output collected in memory
@@ -607,7 +628,7 @@ impl EngineService {
         prio: Priority,
     ) -> Result<JobHandle, ApiError> {
         self.shared()
-            .submit(job, r, prio, None, Some(OutputMode::Frames))
+            .submit(job, r, prio, None, Some(OutputMode::Frames), None)
     }
 
     /// Cancels by id (for routes that only know the job id).

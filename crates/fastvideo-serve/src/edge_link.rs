@@ -534,6 +534,12 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
         }
     };
     let id = env.job.id;
+    // docs/serve/tracing.md: the family object's offer reached this worker.
+    let trace = crate::gate::job_trace(&env.job);
+    let t_take = trace.map(|t| {
+        t.point(fastvideo_trace::Comp::Worker, "offer", i64::from(attempt));
+        fastvideo_trace::now_ns()
+    });
     if id.to_string() != job_id {
         release(&link);
         link.handle.send(nack(false, 400, "the envelope is for another job".into()));
@@ -542,6 +548,9 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
     let file_name = crate::adapters::artifact_file_name(&env.job);
     let resp = crate::worker::take_envelope(&st, env, takeover, Some(lease)).await;
     let code = resp.status().as_u16();
+    if let (Some(t), Some(s)) = (trace, t_take) {
+        t.span_since(fastvideo_trace::Comp::Worker, "take", s, i64::from(code));
+    }
     if resp.status().is_success() {
         let worker_ms = t0.elapsed().as_millis() as u64;
         link.taken.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (attempt, lease));

@@ -586,6 +586,11 @@ impl EngineBackend for CudaBackend {
         }
     }
 
+    fn marks(&mut self, cap: usize) -> Option<Box<dyn fastvideo_trace::MarkPool>> {
+        let m = fastvideo_cudarc::timing::EventMarks::new(cap)?;
+        Some(Box::new(super::output::CudaMarks(m)))
+    }
+
     fn generate(
         &mut self,
         job: &ResolvedJob,

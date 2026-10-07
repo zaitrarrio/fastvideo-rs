@@ -178,3 +178,13 @@ h3.sub { font-size: 13px; margin: 14px 0 0; color: var(--muted); font-weight: 60
 .ref-count { font-family: var(--mono); margin: 10px 0 0; }
 .banner[data-quality="draft"] { color: var(--ink); background: color-mix(in srgb, var(--warn) 9%, var(--panel)); }
 .banner[data-quality="draft"] b { color: var(--warn); }
+
+/* Request trace waterfall (model page, docs/serve/tracing.md). */
+.trace-view h3 { font-size: 13px; margin: 12px 0 4px; }
+.trace-row { display: grid; grid-template-columns: 64px 64px minmax(160px, 260px) 1fr; gap: 6px; align-items: center; font-size: 12px; line-height: 18px; }
+.trace-row .t, .trace-row .d { text-align: right; }
+.trace-row .bar { position: relative; height: 10px; background: var(--line, rgba(127,127,127,.15)); border-radius: 2px; }
+.trace-row .bar i { position: absolute; top: 0; bottom: 0; background: var(--accent, #4b7bec); border-radius: 2px; }
+.trace-row[data-comp="gpu"] .bar i { background: #20bf6b; }
+.trace-row[data-comp="client"] .bar i { background: #a55eea; }
+.trace-row[data-comp="edge"] .bar i { background: #fa8231; }

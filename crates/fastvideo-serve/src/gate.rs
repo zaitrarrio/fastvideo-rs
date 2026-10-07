@@ -119,12 +119,15 @@ impl EngineGate for ServiceGate {
 
     async fn submit(&self, job: &Job) -> Result<(), ApiError> {
         let ctx = self.ctx()?.clone();
-        let handle = self.engine.submit(job.id, job.resolved.clone(), Priority::Batch).await?;
+        // docs/serve/tracing.md: the job's trace (a dispatched job carries
+        // it in its envelope), else the request's.
+        let trace = job_trace(job);
+        let handle = self.engine.submit_traced(job.id, job.resolved.clone(), Priority::Batch, trace).await?;
         metrics::counter!("fv_jobs_submitted_total", "api" => job.protocol.as_str()).increment(1);
         let output = self.output.clone();
         let (id, api, resolved) = (job.id, job.protocol.as_str(), job.resolved.clone());
         let name = crate::adapters::artifact_file_name(job);
-        tokio::spawn(pump(ctx, id, api, resolved, name, handle.events, output));
+        tokio::spawn(pump(ctx, id, api, resolved, name, handle.events, output, trace));
         Ok(())
     }
 
@@ -133,7 +136,14 @@ impl EngineGate for ServiceGate {
     }
 }
 
+/// A job's trace: its `traceparent` (set at submit, carried by dispatch),
+/// else the current request's.
+pub fn job_trace(job: &Job) -> Option<fastvideo_trace::Trace> {
+    job.trace.as_deref().and_then(fastvideo_trace::Trace::from_traceparent).or_else(fastvideo_trace::current)
+}
+
 /// Maps a job's engine events onto the store until its terminal event.
+#[allow(clippy::too_many_arguments)]
 async fn pump(
     ctx: ServeCtx,
     id: JobId,
@@ -142,6 +152,7 @@ async fn pump(
     file_name: String,
     mut events: tokio::sync::mpsc::UnboundedReceiver<EngineEvent>,
     output: OutputPolicy,
+    trace: Option<fastvideo_trace::Trace>,
 ) {
     let started = std::time::Instant::now();
     let mut ended = false;
@@ -160,10 +171,21 @@ async fn pump(
             EngineEvent::Log(l) => JobEvent::Log(l),
             EngineEvent::Failed(e) => JobEvent::Failed(e),
             EngineEvent::Cancelled => JobEvent::Cancelled,
-            EngineEvent::Finished(out) => match finish(id, &resolved, &file_name, out, &output).await {
-                Ok(f) => JobEvent::Finished(f),
-                Err(e) => JobEvent::Failed(e),
-            },
+            EngineEvent::Finished(out) => {
+                // The engine's result reached the async side: post-processing next.
+                let t_post = trace.map(|t| {
+                    t.point(fastvideo_trace::Comp::Engine, "finished", 0);
+                    fastvideo_trace::now_ns()
+                });
+                let r = finish(id, &resolved, &file_name, out, &output).await;
+                if let (Some(t), Some(s)) = (trace, t_post) {
+                    t.span_since(fastvideo_trace::Comp::Post, "finalize", s, i64::from(r.is_ok()));
+                }
+                match r {
+                    Ok(f) => JobEvent::Finished(f),
+                    Err(e) => JobEvent::Failed(e),
+                }
+            }
         };
         let terminal = matches!(ev, JobEvent::Finished(_) | JobEvent::Failed(_) | JobEvent::Cancelled);
         let status = match &ev {
@@ -172,8 +194,17 @@ async fn pump(
             JobEvent::Cancelled => "cancelled",
             _ => "",
         };
-        if let Err(e) = apply_event(&ctx, id, ev).await {
+        let t_apply = trace.filter(|_| terminal).map(|_| fastvideo_trace::now_ns());
+        let applied = match trace.filter(|_| terminal) {
+            Some(t) => fastvideo_trace::scope(t, apply_event(&ctx, id, ev)).await,
+            None => apply_event(&ctx, id, ev).await,
+        };
+        if let Err(e) = applied {
             tracing::warn!(job = %id, error = %e, "applying engine event failed");
+        }
+        if let (Some(t), Some(s)) = (trace, t_apply) {
+            // Upload + terminal store write: the job is visible as done from here.
+            t.span_since(fastvideo_trace::Comp::Store, "terminal", s, 0);
         }
         if terminal {
             metrics::counter!("fv_jobs_finished_total", "api" => api, "status" => status).increment(1);
