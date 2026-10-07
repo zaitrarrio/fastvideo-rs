@@ -7,12 +7,29 @@
 import { z } from "zod";
 import { REGIONS, regionAvailable, type RegionId } from "../cluster/regions";
 import { HttpError } from "../util";
+import { zIssues } from "../zissues";
+import {
+  CHANNEL_RE,
+  CONFIG_PATH_RE,
+  CPU_VCPUS,
+  CUDA_VERSIONS,
+  ENV_KEY_MESSAGE,
+  envValueProblem,
+  IMAGE_REF_RE,
+  NAME_MAX,
+  NAME_RE,
+  NAME_RULE,
+  RESERVED_NAMES,
+  RUNPOD_DATA_CENTERS,
+  RUNPOD_GPU_TYPES,
+  SHA_RE,
+  SLS_CPU_FLAVORS,
+  VARIANTS,
+} from "../enums";
 
 /** The CUDA versions the serve images run on (docs/serve/images.md): the driver must offer 13.0. */
 export const DEFAULT_CUDA = ["13.0"];
-export const CUDA_VERSIONS = ["13.0", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1", "12.0", "11.8"] as const;
-/** Runpod serverless CPU flavors (REST v1 EndpointCreateInput.cpuFlavorIds). */
-export const SLS_CPU_FLAVORS = ["cpu3c", "cpu3g", "cpu5c", "cpu5g"] as const;
+export { CUDA_VERSIONS, SLS_CPU_FLAVORS };
 
 /** The weights volumes fv-control may mount (CLAUDE.md: EU only; a region without a volume is unavailable). */
 export function knownVolumes(): { id: string; dc: string; region: RegionId }[] {
@@ -46,47 +63,53 @@ export const SLS_RESERVED = new Set([
   "FV_WEBHOOK_ED25519_KEY",
 ]);
 
-const ID = /^[a-z][a-z0-9-]{0,30}$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const uniq = <T extends z.ZodType>(item: T) => z.array(item).refine((a) => new Set(a.map((x) => JSON.stringify(x))).size === a.length, { message: "each value once" });
 
 export const EndpointSpecZ = z
   .object({
-    name: z.string().regex(ID).describe("Endpoint name: lower-case letters, digits and '-', starting with a letter (max 31). The Runpod endpoint is fvc-<name>."),
+    name: z
+      .string()
+      .min(1)
+      .max(NAME_MAX)
+      .regex(NAME_RE, { message: NAME_RULE })
+      .refine((v) => !(RESERVED_NAMES.endpoint as readonly string[]).includes(v), { message: `reserved (a route uses it): not ${RESERVED_NAMES.endpoint.join(", ")}` })
+      .meta({ "x-rule": `${NAME_RULE}; unique among the live endpoints; not ${RESERVED_NAMES.endpoint.join(", ")}`, "x-name": "endpoint" })
+      .describe("Endpoint name. The Runpod endpoint is fvc-<name>."),
     mode: z.enum(["queue", "lb"]).describe("queue: Runpod's job queue (/run, /runsync; fv-serve runs FV_SERVE_MODE=runpod-queue and takes the native job envelope). lb: Runpod's load balancer in front of fv-serve's HTTP server (port 8000, /ping); GPU only."),
     image: z
       .object({
-        channel: z.string().regex(/^[a-z][a-z0-9-]{0,30}$/).meta({ "x-dynamic": "channels" }).optional().describe("Release channel (stable, latest, …): the image <variant>-<channel>."),
-        sha: z.string().regex(/^[0-9a-f]{7,40}$/).meta({ "x-dynamic": "shas" }).optional().describe("A git commit: the image <variant>-sha-<sha7>."),
-        ref: z.string().regex(/^[a-z0-9.\-]+(:[0-9]+)?\/[a-z0-9._\-/]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?$/).optional().describe("An image reference."),
+        channel: z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" }).optional().describe("Release channel (stable, latest, …): the image <variant>-<channel>."),
+        sha: z.string().regex(SHA_RE, { message: "7-40 lower-case hex characters" }).meta({ "x-dynamic": "shas" }).optional().describe("A git commit: the image <variant>-sha-<sha7>."),
+        ref: z.string().max(300).regex(IMAGE_REF_RE, { message: "an image reference: registry/repo[:tag][@sha256:<64 hex>]" }).optional().describe("An image reference."),
       })
       .strict()
       .refine((i) => [i.channel, i.sha, i.ref].filter(Boolean).length === 1, { message: "exactly one of channel, sha, ref" })
       .describe("Which build the workers run; resolved to a digest at create and update, as clusters resolve theirs."),
     variant: z
-      .string()
-      .regex(/^[a-z0-9][a-z0-9-]{0,30}$/)
+      .enum(VARIANTS)
       .meta({ "x-dynamic": "variants" })
       .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan (GPU) or cpu (the fake engine, CPU workers)."),
     compute: z.enum(["GPU", "CPU"]).describe("GPU or CPU workers (CPU: the cpu variant, fake engine)."),
-    config: z.string().regex(/^\/[A-Za-z0-9._/-]+\.toml$/).optional().describe("A worker config inside the image (FV_CONFIG). Default: the variant's baked config."),
-    config_toml: z.string().max(32768).optional().describe("An inline worker config (FV_WORKER_TOML_B64) instead of a file in the image."),
-    env: z.record(z.string().regex(ENV_KEY), z.string().max(4096)).optional().describe("Extra env for the workers (plain values; never a secret: use Runpod secrets)."),
-    gpu_types: z.array(z.string().min(3).max(80).meta({ "x-dynamic": "gpu_types" })).min(1).max(12).optional().describe("GPU workers: Runpod GPU type ids, in priority order. Default: the EU volume's (RTX PRO 6000 Server)."),
-    gpu_count: z.number().int().min(1).max(8).optional().describe("GPUs per worker (default 1)."),
-    cpu_flavors: z.array(z.enum(SLS_CPU_FLAVORS)).min(1).optional().describe("CPU workers: flavors in priority order (default cpu3c, cpu5c)."),
-    vcpu: z.number().int().min(1).max(32).optional().describe("CPU workers: vCPUs per worker (default 2)."),
-    data_centers: z.array(z.string().regex(/^[A-Z]{2,3}-[A-Z]{2,3}-\d{1,2}$/)).max(30).optional().describe("Runpod data centers the workers may run in. With a network volume: its data center only. Default: the volume's, or any."),
-    network_volume: z.string().regex(/^[a-z0-9]{6,16}$/).nullable().describe("A weights network volume mounted at /runpod-volume (EU jg48s6o1w0; CLAUDE.md), or null. Default: the EU volume for GPU workers, none for CPU."),
-    workers_min: z.number().int().min(0).max(4).describe("Always-on workers (billed while idle). 0 scales to zero."),
-    workers_max: z.number().int().min(0).max(8).describe("Most workers at once."),
-    idle_timeout_s: z.number().int().min(1).max(3600).describe("A worker without a job this long is stopped."),
+    config: z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).optional().meta({ "x-dynamic": "config_paths", "x-rule": "an absolute path ending in .toml" }).describe("A worker config inside the image (FV_CONFIG). Default: the variant's baked config."),
+    config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("An inline worker config (FV_WORKER_TOML_B64) instead of a file in the image."),
+    env: z.record(z.string().regex(ENV_KEY, { message: ENV_KEY_MESSAGE }).refine((k) => !SLS_RESERVED.has(k), { message: "is set by fv-control" }).meta({ "x-dynamic": "env_keys" }), z.string().max(4096)).optional().describe("Extra env for the workers (plain values; never a secret: use Runpod secrets)."),
+    gpu_types: uniq(z.enum(RUNPOD_GPU_TYPES).meta({ "x-dynamic": "gpu_types" })).min(1).max(12).optional().describe("GPU workers: Runpod GPU type ids, in priority order. Default: the EU volume's (RTX PRO 6000 Server)."),
+    gpu_count: z.number().int().min(1).max(8).optional().meta({ "x-unit": "GPUs" }).describe("GPUs per worker (default 1)."),
+    cpu_flavors: uniq(z.enum(SLS_CPU_FLAVORS).meta({ "x-dynamic": "cpu_flavors" })).min(1).optional().describe("CPU workers: flavors in priority order (default cpu3c, cpu5c)."),
+    vcpu: z.literal(CPU_VCPUS).optional().meta({ "x-unit": "vCPU" }).describe("CPU workers: vCPUs per worker (default 2)."),
+    data_centers: uniq(z.enum(RUNPOD_DATA_CENTERS).meta({ "x-dynamic": "data_centers" })).min(1).max(30).optional().describe("Runpod data centers the workers may run in. With a network volume: its data center only. Default: the volume's, or any."),
+    network_volume: z.string().regex(/^[a-z0-9]{6,16}$/, { message: "a Runpod network volume id" }).nullable().meta({ "x-dynamic": "volumes" }).describe("A weights network volume mounted at /runpod-volume (EU jg48s6o1w0; CLAUDE.md), or null. Default: the EU volume for GPU workers, none for CPU."),
+    workers_min: z.number().int().min(0).max(4).meta({ "x-unit": "workers" }).describe("Always-on workers (billed while idle). 0 scales to zero."),
+    workers_max: z.number().int().min(0).max(8).meta({ "x-unit": "workers" }).describe("Most workers at once."),
+    idle_timeout_s: z.number().int().min(5).max(3600).meta({ "x-unit": "s" }).describe("A worker without a job this long is stopped (Runpod: 5-3600 s)."),
     flashboot: z.boolean().describe("Runpod FlashBoot (faster warm starts; docs/serve/images.md §FlashBoot)."),
-    execution_timeout_s: z.number().int().min(10).max(86400).describe("A job running longer fails (executionTimeoutMs)."),
+    execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
     scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"]).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
-    scaler_value: z.number().min(0.5).max(3600).describe("The scaler's value (seconds or jobs per worker)."),
-    allowed_cuda: z.array(z.enum(CUDA_VERSIONS)).optional().describe("GPU workers: CUDA versions a host may offer (default 13.0, what the images need); [] drops the filter."),
-    container_disk_gb: z.number().int().min(5).max(200).describe("Container disk per worker (GB)."),
-    deadline_min: z.number().int().min(5).max(7 * 1440).nullable().describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
+    scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS)).optional().describe("GPU workers: CUDA versions a host may offer (default 13.0, what the images need); [] drops the filter."),
+    container_disk_gb: z.number().int().min(5).max(200).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB)."),
+    deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
   })
   .strict()
@@ -107,7 +130,10 @@ export const EndpointSpecZ = z
       if (!v) add("network_volume", `unknown or unavailable volume (${knownVolumes().map((x) => x.id).join(", ") || "none"}; the US volume was deleted 2026-10, CLAUDE.md)`);
       else if (s.data_centers && s.data_centers.some((d) => d !== v.dc)) add("data_centers", `a worker with volume ${v.id} must run in ${v.dc}`);
     }
-    for (const k of Object.keys(s.env || {})) if (SLS_RESERVED.has(k)) add("env", `${k} is set by fv-control`);
+    for (const [k, v] of Object.entries(s.env || {})) {
+      const why = envValueProblem(k, v);
+      if (why) ctx.addIssue({ code: "custom", message: why, path: ["env", k] });
+    }
   })
   .describe("A Runpod serverless endpoint of fv-serve workers (docs/control/serverless.md).");
 
@@ -125,11 +151,11 @@ export function defaultEndpointSpec(name: string, variant = "cpu"): EndpointSpec
     name,
     mode: "queue",
     image: { channel: "stable" },
-    variant,
+    variant: variant as EndpointSpec["variant"],
     compute: cpu ? "CPU" : "GPU",
-    ...(cpu ? { cpu_flavors: ["cpu3c", "cpu5c"] as EndpointSpec["cpu_flavors"], vcpu: 2 } : { gpu_types: [...(REGIONS.eu.gpus || [])], gpu_count: 1, allowed_cuda: [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"] }),
+    ...(cpu ? { cpu_flavors: ["cpu3c", "cpu5c"] as EndpointSpec["cpu_flavors"], vcpu: 2 } : { gpu_types: [...(REGIONS.eu.gpus || [])] as EndpointSpec["gpu_types"], gpu_count: 1, allowed_cuda: [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"] }),
     network_volume: cpu || !eu ? null : eu.id,
-    ...(cpu || !eu ? {} : { data_centers: [eu.dc] }),
+    ...(cpu || !eu ? {} : { data_centers: [eu.dc] as EndpointSpec["data_centers"] }),
     workers_min: 0,
     workers_max: 1,
     idle_timeout_s: 5,
@@ -147,7 +173,7 @@ export function defaultEndpointSpec(name: string, variant = "cpu"): EndpointSpec
 export function checkEndpointSpec(doc: unknown): { ok: true; value: EndpointSpec } | { ok: false; issues: SpecIssue[] } {
   const r = EndpointSpecZ.safeParse(doc);
   if (r.success) return { ok: true, value: r.data };
-  return { ok: false, issues: r.error.issues.map((i) => ({ path: i.path.map((p) => (typeof p === "symbol" ? String(p) : p)) as (string | number)[], message: i.message })) };
+  return { ok: false, issues: zIssues(r.error) };
 }
 
 /** Fills the variant's defaults under what the input gives, then validates; throws 400 with every issue. */

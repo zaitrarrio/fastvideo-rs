@@ -17,6 +17,7 @@
 // budget of rows and says how far it got (`partial`, `searched_until`).
 import type { Env } from "./env";
 import { runpod } from "./runpod";
+import { validate } from "./schemas";
 import { HttpError, now, parseJson, scrub } from "./util";
 
 export const LEVELS = ["trace", "debug", "info", "warn", "error"] as const;
@@ -97,6 +98,10 @@ const csv = (v?: string) => (v ? v.split(",").map((x) => x.trim()).filter(Boolea
 const ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 /** The query from URL parameters (the same names the UI keeps in its URL). */
 export function parseLogQuery(p: Record<string, string | undefined>, t = now()): LogQuery {
+  // The filter fields' shapes (src/schemas.ts LogQueryZ, what the explorer's controls are bound to); empty values are "unset".
+  const given = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== ""));
+  const v = validate("log-query", given);
+  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: v.issues });
   const srcs = csv(p.src || p.sources);
   for (const s of srcs) if (!SOURCES.includes(s as Source)) throw new HttpError(400, `src: ${SOURCES.join(", ")}`);
   let levels: Level[];

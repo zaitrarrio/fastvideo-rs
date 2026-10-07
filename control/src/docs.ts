@@ -13,14 +13,16 @@ import { desiredEnv, envCtx, projectSpend } from "./cluster/ops";
 import { isReserved } from "./cluster/payloads";
 import { normalizeSpec, type ClusterSpec } from "./cluster/spec";
 import { allPods, getCluster, livePods, saveSpec, type Cluster } from "./cluster/store";
+import { buildPodsPolicy, normalizePolicy } from "./buildpods";
 import type { Env } from "./env";
+import { normalizeSlsPolicy, slsPolicy } from "./serverless/ops";
 import { deleteVar, listVars, setVar, type Scope } from "./envvars";
 import { validate, type Issue, type SchemaName } from "./schemas";
 import { audit, HttpError, now, parseJson, putSetting } from "./util";
 
-export type DocKind = "cluster-spec" | "policies" | "attribution" | "env";
-export const DOC_KINDS: DocKind[] = ["cluster-spec", "policies", "attribution", "env"];
-export const SCHEMA_OF: Record<DocKind, SchemaName> = { "cluster-spec": "cluster-spec", policies: "policies", attribution: "attribution", env: "env" };
+export type DocKind = "cluster-spec" | "policies" | "attribution" | "env" | "build-pods" | "serverless-policy";
+export const DOC_KINDS: DocKind[] = ["cluster-spec", "policies", "attribution", "env", "build-pods", "serverless-policy"];
+export const SCHEMA_OF: Record<DocKind, SchemaName> = { "cluster-spec": "cluster-spec", policies: "policies", attribution: "attribution", env: "env", "build-pods": "build-pods-policy", "serverless-policy": "serverless-policy" };
 
 export async function docVersion(env: Env, kind: DocKind, id: string): Promise<number> {
   const r = await env.DB.prepare("SELECT version FROM doc_versions WHERE kind = ? AND id = ?").bind(kind, id).first<{ version: number }>();
@@ -73,6 +75,10 @@ export async function readDoc(env: Env, kind: DocKind, id: string): Promise<unkn
     return (await policies(env)).attribution;
   }
   if (kind === "env") return readEnvDoc(env, id);
+  if (kind === "build-pods" || kind === "serverless-policy") {
+    if (id !== "default") throw new HttpError(404, `${kind}/default only`);
+    return kind === "build-pods" ? buildPodsPolicy(env) : slsPolicy(env);
+  }
   throw new HttpError(404, `no document kind ${kind}`);
 }
 /** Canonical document id (a cluster by name resolves to its id). */
@@ -127,6 +133,14 @@ async function writeDoc(env: Env, kind: DocKind, id: string, doc: any, by: strin
     const c = await getCluster(env, id);
     c.spec = doc as ClusterSpec;
     await saveSpec(env, c);
+    return {};
+  }
+  if (kind === "build-pods") {
+    await putSetting(env, "build_pods", normalizePolicy(doc), by);
+    return {};
+  }
+  if (kind === "serverless-policy") {
+    await putSetting(env, "serverless", normalizeSlsPolicy(doc), by);
     return {};
   }
   if (kind === "policies" || kind === "attribution") {

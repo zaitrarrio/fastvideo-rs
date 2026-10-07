@@ -28,6 +28,8 @@ import {
   DEFAULT_SLS_POLICY,
 } from "./ops";
 import { sls } from "./runpod-sls";
+import { parseOr400 } from "../schemas";
+import { checkName } from "../names";
 import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec } from "./spec";
 
 type App = { Bindings: Env; Variables: Vars };
@@ -65,7 +67,9 @@ serverlessRoutes.get("/policy", async (c) => c.json({ policy: await slsPolicy(c.
 serverlessRoutes.put("/policy", async (c) => {
   const before = await slsPolicy(c.env);
   const b = await body<{ policy?: object }>(c);
-  const next = normalizeSlsPolicy({ ...before, ...(b.policy || b) });
+  const merged = { ...before, ...(b.policy || b) };
+  parseOr400("serverless-policy", merged);
+  const next = normalizeSlsPolicy(merged);
   await putSetting(c.env, "serverless", next, c.get("actor"));
   await audit(c.env, { ...who(c), action: "serverless.policy", before, after: next });
   return c.json({ policy: next });
@@ -75,10 +79,14 @@ serverlessRoutes.post("/validate", async (c) => {
   const b = await body(c);
   const doc = b.spec ?? b;
   const raw = checkEndpointSpec(doc);
+  // A new endpoint's name must be free (`id`: an existing endpoint being edited keeps its own).
+  const nameIssue = typeof doc?.name === "string" && !b.id ? await checkName(c.env, "endpoint", doc.name).then((r) => (r.taken ? [{ path: ["name"], message: r.problem! }] : [])) : [];
   try {
-    return c.json({ ok: true, spec: normalizeEndpointSpec(doc), raw_issues: raw.ok ? [] : raw.issues });
+    const spec = normalizeEndpointSpec(doc);
+    if (nameIssue.length) return c.json({ ok: false, error: nameIssue[0]!.message, issues: nameIssue });
+    return c.json({ ok: true, spec, raw_issues: raw.ok ? [] : raw.issues });
   } catch (e) {
-    return c.json({ ok: false, error: (e as Error).message, issues: (e as HttpError).extra?.issues ?? [] });
+    return c.json({ ok: false, error: (e as Error).message, issues: [...((e as HttpError).extra?.issues as any[] ?? []), ...nameIssue] });
   }
 });
 serverlessRoutes.post("/", async (c) => {
@@ -116,13 +124,14 @@ serverlessRoutes.put("/:id", async (c) => {
 });
 serverlessRoutes.post("/:id/scale", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
-  const b = await body<{ workers_min?: number; workers_max?: number }>(c);
-  if (b.workers_min === undefined && b.workers_max === undefined) throw new HttpError(400, "workers_min and/or workers_max");
+  const raw = await body<{ workers_min?: number; workers_max?: number }>(c);
+  const b = parseOr400("serverless-scale", { ...(raw.workers_min !== undefined ? { workers_min: raw.workers_min } : {}), ...(raw.workers_max !== undefined ? { workers_max: raw.workers_max } : {}) });
   return c.json({ endpoint: rowView(await scaleEndpoint(c.env, who(c), row, b)) });
 });
 serverlessRoutes.post("/:id/extend", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
-  return c.json({ endpoint: rowView(await extendEndpoint(c.env, who(c), row, Number((await body(c)).minutes))) });
+  const { minutes } = parseOr400("extend", { minutes: (await body(c)).minutes });
+  return c.json({ endpoint: rowView(await extendEndpoint(c.env, who(c), row, minutes)) });
 });
 serverlessRoutes.delete("/:id", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
