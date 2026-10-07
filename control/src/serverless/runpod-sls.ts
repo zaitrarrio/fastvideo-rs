@@ -1,7 +1,7 @@
 // Runpod's serverless APIs (docs/control/serverless.md "Runpod API"):
 //   REST v1 rest.runpod.io/v1   /templates, /endpoints, /billing/endpoints
 //   REST v2 api.runpod.io/v2    /serverless (load-balancer create), /catalog/gpus
-//   queue   api.runpod.ai/v2    /<id>/health, /run, /runsync, /status/<job>, /cancel/<job>
+//   queue   api.runpod.ai/v2    /<id>/health, /run, /runsync, /status/<job>, /cancel/<job>, /purge-queue
 //   LB      https://<id>.api.runpod.ai/<path>
 //   GraphQL myself { clientBalance endpoints { … pods } } (live workers and their $/hr)
 // The API key only goes in an Authorization header; every upstream text is
@@ -113,7 +113,10 @@ export const sls = {
   /** Runpod holds /runsync up to ~90 s, then answers with the job still IN_QUEUE / IN_PROGRESS. */
   runsync: (env: SlsEnv, id: string, body: unknown) => ok(env, `${slsBases(env).queue}/${enc(id)}/runsync`, { method: "POST", body: json(body), timeoutMs: 100000 }),
   status: (env: SlsEnv, id: string, job: string) => ok(env, `${slsBases(env).queue}/${enc(id)}/status/${enc(job)}`, { timeoutMs: 20000 }),
+  /** Cancels a queued job, or tells the worker running it to stop (its job-stop long poll): {id, status}. */
   cancel: (env: SlsEnv, id: string, job: string) => ok(env, `${slsBases(env).queue}/${enc(id)}/cancel/${enc(job)}`, { method: "POST", timeoutMs: 20000 }),
+  /** Drops every queued job (running ones are not touched): {removed, status}. */
+  purge: (env: SlsEnv, id: string) => ok(env, `${slsBases(env).queue}/${enc(id)}/purge-queue`, { method: "POST", timeoutMs: 30000 }),
 
   // ---- the load balancer (https://<id>.api.runpod.ai)
   lb: (env: SlsEnv, id: string, method: string, path: string, body?: unknown) =>

@@ -46,6 +46,14 @@
 #   fv-control.sh endpoint extend <name|id> <minutes> | delete <name|id> | logs <name|id> [worker]
 #   fv-control.sh endpoint invoke <name|id> ['<input json>'] [--async]   queue: /runsync (default {"kind":"info"});
 #                                              lb: invoke <name|id> '{"method":"GET","path":"/ping"}'
+#   fv-control.sh endpoint cancel <name|id> <job> [--fv-job ID [--fv-api native|openai_videos|fastwan|minimax_v2]] [--no-fv]
+#                                              cancel a job (a Runpod job id, also one fv-control did not submit, or the
+#                                              invoke number); a job a worker took also gets the fv-serve cancel (kind http)
+#   fv-control.sh endpoint purge <name|id> [--yes]   drop every queued job (shows the count, asks for the name)
+#   fv-control.sh jobs <cluster|pod name|pod id> [--status queued,running,…] [--pool P] [--limit N]
+#                                              recent and running fv-serve jobs (the jobs D1): status, API, model, times
+#   fv-control.sh job-cancel <job> [--cluster NAME]   cancel one fv-serve job by any of its ids (routed to its worker)
+#   fv-control.sh jobs-cancel-queued <cluster|pod name> [--pool P] [--yes]   cancel every queued job
 #   fv-control.sh api <METHOD> <path> [json]  anything else
 #   fv-control.sh deploy staging               build, migrate and deploy the Worker (wrangler)
 #   fv-control.sh edge-link staging            give the Worker the staging edge (EDGE_URL, EDGE_D1_DATABASE_ID,
@@ -236,8 +244,64 @@ cmd_endpoint() {
       fi
       jq . <<<"$out" ;;
     logs) api GET "/api/serverless/${1:?name|id}/logs${2:+?worker=$2}" | jq -r '"workers: \(.workers | join(" ")); worker \(.worker // "-")", (.system[]? // empty), (.container[]? // empty), (.stored[]? | "\(.ts / 1000 | todate) \(.msg)")' ;;
-    *) die "endpoint list|create|show|update|scale|extend|delete|invoke|logs" ;;
+    cancel)
+      id="${1:?endpoint cancel <name|id> <job>}"; local job="${2:?endpoint cancel <name|id> <job>}"; shift 2
+      body='{}'
+      while (( $# )); do case "$1" in
+        --fv-job) body="$(jq -c --arg v "${2:?--fv-job ID}" '. + {fv_job: $v}' <<<"$body")"; shift 2 ;;
+        --fv-api) body="$(jq -c --arg v "${2:?--fv-api API}" '. + {fv_api: $v}' <<<"$body")"; shift 2 ;;
+        --no-fv) body="$(jq -c '. + {stop_fv_job: false}' <<<"$body")"; shift ;;
+        *) die "endpoint cancel: unknown option $1" ;;
+      esac; done
+      api_s POST "/api/serverless/$id/jobs/$job/cancel" "$body" || die "cancel: $(api_err)"
+      jq -r '"\(.runpod_job): \(.before) -> \(.status)\(if .cancelled then " (cancelled)" else "" end); \(.note)",
+        (if .fv_job then "fv-serve job \(.fv_job.api) \(.fv_job.id): \(if .fv_cancel.sent then "\(.fv_cancel.route) sent as queue job \(.fv_cancel.runpod_job) (fv-control #\(.fv_cancel.job)); " else "" end)\(.fv_cancel.reason)" else "fv-serve: \(.fv_cancel.reason)" end)' <<<"$API_OUT" ;;
+    purge)
+      id="${1:?endpoint purge <name|id>}"; local yes=0 q n name
+      [[ "${2:-}" == --yes ]] && yes=1
+      name="$(api GET "/api/serverless/$id" | jq -r .endpoint.name)"
+      q="$(api GET "/api/serverless/$id/queue")"; n="$(jq -r .queued <<<"$q")"
+      echo "$name: $n queued, $(jq -r .in_progress <<<"$q") running (a purge drops the queued ones only)" >&2
+      if (( ! yes )); then
+        [[ -t 0 ]] || die "purge: pass --yes (no terminal to confirm on)"
+        read -r -p "type the endpoint name to purge its queue: " ans; [[ "$ans" == "$name" ]] || die "purge: not confirmed"
+      fi
+      api_s POST "/api/serverless/$id/purge" "$(jq -nc --arg c "$name" --argjson e "$n" '{confirm: $c, expected: $e}')" || die "purge: $(api_err)"
+      jq -r '"removed \(.removed // "?") (Runpod: \(.status // "?")); queued \(.queued_before) -> \(.queued_after // "?"), running \(.in_progress // "?"); \(.note)"' <<<"$API_OUT" ;;
+    *) die "endpoint list|create|show|update|scale|extend|delete|invoke|logs|cancel|purge" ;;
   esac
+}
+# A cluster or standalone pod name, or a pod id -> "<cluster id>[&pod=<pod id>]".
+jobs_scope() {
+  local cid=""
+  if [[ "$1" =~ ^[a-z0-9]{14}$ ]]; then
+    if api_s GET "/api/pods/$1"; then cid="$(jq -r '.controller.cluster_id // empty' <<<"$API_OUT")"; fi
+    # Not collected yet: a live worker in some cluster's state.
+    [[ -n "$cid" ]] || cid="$(api GET "/api/clusters?all=1" | jq -r --arg p "$1" 'first(.clusters[] | select([.state.workers[]?[]?.pod] | index($p)) | .id) // empty')"
+  fi
+  if [[ -n "$cid" ]]; then
+    echo "$cid&pod=$1"
+  else
+    api_s GET "/api/clusters/$1" || die "no cluster, standalone pod or controller pod $1"
+    jq -r .cluster.id <<<"$API_OUT"
+  fi
+}
+job_line() { jq -r '.jobs[] | [.external_id, .api, .status + (if .cancel_requested and .status == "running" then " (cancel requested)" else "" end), .model, (.pool // "-"), (.worker // "edge queue"), (.created_at / 1000 | floor | todate), (if .started_at then (.started_at / 1000 | floor | todate) else "-" end)] | @tsv'; }
+cmd_jobs() {
+  local who="${1:?jobs <cluster|pod name|pod id> [--status …] [--pool P] [--limit N]}"; shift
+  local qs="" sc cid out
+  while (( $# )); do case "$1" in
+    --status) qs+="&status=${2:?--status queued,running,…}"; shift 2 ;;
+    --pool) qs+="&pool=${2:?--pool P}"; shift 2 ;;
+    --limit) qs+="&limit=${2:?--limit N}"; shift 2 ;;
+    *) die "jobs: unknown option $1" ;;
+  esac; done
+  sc="$(jobs_scope "$who")"; cid="${sc%%&*}"; [[ "$sc" == *"&"* ]] && qs+="&${sc#*&}"
+  api_s GET "/api/clusters/$cid/jobs?${qs#&}" || die "jobs: $(api_err)"
+  out="$API_OUT"
+  jq -r '"\(.cluster.name) (\(.cluster.kind), \(.cluster.control_plane); jobs D1: \(.source)): " + ([.counts | to_entries[] | "\(.value) \(.key)"] | join(", "))' <<<"$out" >&2
+  printf 'JOB\tAPI\tSTATUS\tMODEL\tPOOL\tWORKER\tSUBMITTED\tSTARTED\n'
+  job_line <<<"$out"
 }
 scope_path() { # account | cluster <name> | pod <id>  -> /api/env/…, shifts
   case "$1" in
@@ -293,6 +357,25 @@ case "$cmd" in
       api GET "/api/pods/$id/boot" | jq -r '"\(.pod_id)\(if .phase then "  (now: \(.phase.phase) for \(.phase.since_s) s)" else "" end)", (.timeline[] | select(.at != null) | "  \(.t_s | tostring | (" " * (7 - length)) + .) s  \(if .took_s != null then "+\(.took_s) s" else "" end | . + (" " * (10 - length)))  \(.phase)\(if .detail then "  (\(.detail))" else "" end)")'
     done ;;
   endpoint) cmd_endpoint "$@" ;;
+  jobs) cmd_jobs "$@" ;;
+  job-cancel)
+    jid="${1:?job-cancel <job> [--cluster NAME]}"; shift
+    body='{}'
+    [[ "${1:-}" == --cluster ]] && body="$(jq -nc --arg c "${2:?--cluster NAME}" '{cluster: $c}')"
+    api_s POST "/api/jobs/$jid/cancel" "$body" || die "job-cancel: $(api_err)"
+    jq -r '"\(.external_id) (\(.api), \(.cluster)): \(.status)\(if .cancel_requested then ", cancel requested" else "" end) via \(.via // "-")\(if .pod then " on \(.pod)" else "" end); \(.note)"' <<<"$API_OUT" ;;
+  jobs-cancel-queued)
+    who="${1:?jobs-cancel-queued <cluster|pod name> [--pool P] [--yes]}"; shift
+    pool="" yes=0
+    while (( $# )); do case "$1" in --pool) pool="${2:?--pool P}"; shift 2 ;; --yes) yes=1; shift ;; *) die "jobs-cancel-queued: unknown option $1" ;; esac; done
+    cid="$(jobs_scope "$who")"; cid="${cid%%&*}"
+    api_s GET "/api/clusters/$cid/jobs?status=queued&limit=500${pool:+&pool=$pool}" || die "jobs: $(api_err)"
+    n="$(jq '.jobs | length' <<<"$API_OUT")"
+    echo "$who: $n queued job(s)${pool:+ in pool $pool}" >&2
+    (( n )) || exit 0
+    if (( ! yes )); then [[ -t 0 ]] || die "pass --yes (no terminal to confirm on)"; read -r -p "cancel all $n? [y/N] " ans; [[ "$ans" == y* ]] || die "not confirmed"; fi
+    api_s POST "/api/clusters/$cid/jobs/cancel-queued" "$(jq -nc --arg p "$pool" '(if $p == "" then {} else {pool: $p} end)')" || die "cancel-queued: $(api_err)"
+    jq -r '"cancelled \(.cancelled) of \(.queued)", (.failed[] | "  not cancelled: \(.job) (\(.api)): \(.note)")' <<<"$API_OUT" ;;
   api) api "${1:?METHOD}" "${2:?path}" "${3:-}" ;;
   deploy)
     [[ "${1:-}" == staging ]] || die "deploy staging (production: add an [env.production] block first)"

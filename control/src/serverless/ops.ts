@@ -11,6 +11,7 @@ import { audit, getSetting, HttpError, newId, now, parseJson, putSetting, scrub,
 import { endpointCreatePayload, endpointName, endpointUpdatePayload, invokeBody, lbPools, SLS_PREFIX, templateCreatePayload, templateName, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "./payloads";
 import { balanceFloor, sls, type LiveEndpoint, type SlsEnv } from "./runpod-sls";
 import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
+import { defaultCancelPath } from "../jobapi";
 
 export interface SlsRow {
   id: string;
@@ -273,8 +274,8 @@ export async function finishDelete(env: Env, row: SlsRow, actor: string): Promis
 }
 
 // ---------------------------------------------------------------- test invoke
-const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"]);
-const clip = (env: Env, v: unknown, n = 8000) => (v === undefined || v === null ? null : scrub(env, typeof v === "string" ? v : JSON.stringify(v)).slice(0, n));
+export const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"]);
+export const clip = (env: Env, v: unknown, n = 8000) => (v === undefined || v === null ? null : scrub(env, typeof v === "string" ? v : JSON.stringify(v)).slice(0, n));
 export interface InvokeIn {
   input?: unknown; // queue: the job input (default {kind: "info"})
   sync?: boolean; // queue: /runsync (default) or /run
@@ -282,9 +283,17 @@ export interface InvokeIn {
   path?: string; // lb (default /ping)
   body?: unknown; // lb
 }
-function readyWorkers(h: any): number {
+export function readyWorkers(h: any): number {
   const w = h?.workers || {};
   return Number(w.idle || 0) + Number(w.ready || 0) + Number(w.running || 0);
+}
+/** An http job that waits on the fv-serve job it creates gets that API's cancel route as `cancel_path`
+ * (unless it names one): a Runpod cancel then stops the fv-serve job too (the worker's job-stop). */
+export function withCancelPath(input: any): any {
+  const http = input?.kind === "http" || (input?.kind === undefined && typeof input?.path === "string");
+  if (!http || !input.wait || input.cancel_path || String(input.method || "POST").toUpperCase() !== "POST") return input;
+  const cp = defaultCancelPath(String(input.path || ""));
+  return cp ? { ...input, cancel_path: cp } : input;
 }
 export async function invoke(env: SlsEnv, who: Actor, row: SlsRow, x: InvokeIn) {
   if (!["active"].includes(row.status) || !row.endpoint_id) throw new HttpError(409, `endpoint is ${row.status}${row.status === "scaled-down" ? " (scale it up first)" : ""}`);
@@ -306,7 +315,7 @@ export async function invoke(env: SlsEnv, who: Actor, row: SlsRow, x: InvokeIn) 
   }
   const input = x.input ?? { kind: "info" };
   if (typeof input !== "object" || Array.isArray(input) || JSON.stringify(input).length > 65536) throw new HttpError(400, "input: a JSON object (64 KiB max)");
-  const body = invokeBody(input, spec.execution_timeout_s);
+  const body = invokeBody(withCancelPath(input), spec.execution_timeout_s);
   const j = x.sync === false ? await sls.run(env, row.endpoint_id, body) : await sls.runsync(env, row.endpoint_id, body);
   const wall = now() - t0;
   const status = String(j?.status || "?");
@@ -314,7 +323,7 @@ export async function invoke(env: SlsEnv, who: Actor, row: SlsRow, x: InvokeIn) 
   const ins = await env.DB.prepare(
     "INSERT INTO serverless_jobs (endpoint, job_id, route, status, cold, submitted_at, finished_at, delay_ms, exec_ms, wall_ms, worker_id, input, output, error, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
   )
-    .bind(row.id, j?.id ?? null, x.sync === false ? "run" : "runsync", status, cold ? 1 : 0, t0, done ? now() : null, j?.delayTime ?? null, j?.executionTime ?? null, done ? wall : null, j?.workerId ?? null, clip(env, input, 2000), clip(env, j?.output), clip(env, j?.error, 2000), who.actor)
+    .bind(row.id, j?.id ?? null, x.sync === false ? "run" : "runsync", status, cold ? 1 : 0, t0, done ? now() : null, j?.delayTime ?? null, j?.executionTime ?? null, done ? wall : null, j?.workerId ?? null, clip(env, body.input, 2000), clip(env, j?.output), clip(env, j?.error, 2000), who.actor)
     .first<{ id: number }>();
   await audit(env, { actor: who.actor, ip: who.ip, action: "serverless.invoke", target: row.name, after: { job: j?.id, status, wall_ms: wall, cold } });
   return { job: ins?.id, runpod_job: j?.id ?? null, status, done, cold, wall_ms: wall, delay_ms: j?.delayTime ?? null, exec_ms: j?.executionTime ?? null, worker_id: j?.workerId ?? null, output: j?.output ?? null, error: j?.error ? clip(env, j.error, 2000) : null };

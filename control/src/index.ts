@@ -53,6 +53,7 @@ import { issuesText, jsonSchemas, parseOr400, validate, type Issue, type SchemaN
 import { querySeries } from "./metrics";
 import { clusterDrift, registry, releaseHeads } from "./releases";
 import { runpod } from "./runpod";
+import { cancelJobRow, cancelQueued, findJob, jobOf, listJobs } from "./jobs";
 import { serverlessRoutes } from "./serverless/routes";
 import { serverlessTick } from "./serverless/ops";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
@@ -423,6 +424,30 @@ async function frontView(c: any) {
   const workers = await Promise.all(u.workers.map(async (w) => ({ ...w, health: await workerHealth(c.env, w.pod) })));
   return c.json({ url: null, direct: true, workers });
 }
+// ---------------- jobs of clusters and standalone pods (src/jobs.ts; docs/control/README.md "Jobs")
+app.get("/api/clusters/:id/jobs", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const q = parseOr400("jobs-query", Object.fromEntries(Object.entries(c.req.query()).filter(([, v]) => v !== "")));
+  return c.json(await listJobs(c.env, cl, q));
+});
+app.post("/api/clusters/:id/jobs/cancel-queued", async (c) => {
+  const cl = await getCluster(c.env, c.req.param("id"));
+  const x = parseOr400("jobs-cancel-queued", await body(c));
+  return c.json(await cancelQueued(c.env, { actor: actor(c), ip: clientIp(c) }, cl, x));
+});
+/** One job by any of its ids (the API's own, or fv-serve's internal uuid); the full job record never leaves fv-control. */
+app.get("/api/jobs/:job", async (c) => {
+  const x = parseOr400("job-cancel", { job: c.req.param("job"), ...(c.req.query("cluster") ? { cluster: c.req.query("cluster") } : {}) });
+  const { c: cl, row } = await findJob(c.env, x.job, x.cluster);
+  return c.json({ cluster: { id: cl.id, name: cl.name }, job: await jobOf(c.env, cl, row) });
+});
+app.post("/api/jobs/:job/cancel", async (c) => {
+  const x = parseOr400("job-cancel", { ...(await body(c)), job: c.req.param("job") });
+  const { c: cl, row } = await findJob(c.env, x.job, x.cluster);
+  const r = await cancelJobRow(c.env, { actor: actor(c), ip: clientIp(c) }, cl, row);
+  if (!r.ok) throw new HttpError(502, `cancel ${r.external_id} (${r.api}, ${cl.name}): ${r.note}`, { result: r });
+  return c.json(r);
+});
 app.get("/api/clusters/:id/front", frontView);
 app.get("/api/clusters/:id/gateway", frontView);
 app.post("/api/clusters/:id/admin-token", async (c) => {

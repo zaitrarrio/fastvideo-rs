@@ -16,7 +16,7 @@ const S = jsonSchemas() as Record<string, any>;
 
 describe("JSON Schemas from the zod schemas", () => {
   it("covers every editable document, with descriptions and live-value hints", () => {
-    expect(Object.keys(S).sort()).toEqual(["attribution", "build-pods-policy", "cluster-spec", "env", "extend", "log-query", "mint-key", "policies", "pool", "release-dispatch", "roll", "scale", "serverless-endpoint", "serverless-policy", "serverless-scale", "standalone-launch", "token-create"]);
+    expect(Object.keys(S).sort()).toEqual(["attribution", "build-pods-policy", "cluster-spec", "env", "extend", "job-cancel", "jobs-cancel-queued", "jobs-query", "log-query", "mint-key", "policies", "pool", "release-dispatch", "roll", "scale", "serverless-cancel", "serverless-endpoint", "serverless-policy", "serverless-purge", "serverless-scale", "standalone-launch", "token-create"]);
     const spec = S["cluster-spec"];
     expect(spec.additionalProperties).toBe(false);
     for (const k of ["name", "image", "regions", "control_plane", "auth", "pools", "cap_s", "balance_floor"]) expect(spec.required).toContain(k);

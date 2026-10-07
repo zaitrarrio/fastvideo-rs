@@ -5,7 +5,7 @@ import { openClusterConfig } from "./cluster/config";
 import { createJsonEditor } from "./editor";
 import { auditForms, controlKind, createForm, formDialog } from "./fields";
 import { renderForm } from "./form";
-import { askExtend, askKeyName, askRoll, askScale } from "./forms/dialogs";
+import { askCancelQueued, askExtend, askJobCancel, askKeyName, askPurge, askRoll, askScale, askSlsCancel } from "./forms/dialogs";
 import { mountEndpointForm, mountScaleForm, mountSpecEditor } from "./forms/serverless";
 import { mountReleaseForm, mountTokenForm } from "./forms/settings";
 import { mountLaunchForm } from "./forms/standalone";
@@ -37,5 +37,9 @@ import { diffLines, renderDiff, renderTree } from "./view";
   askScale,
   askRoll,
   askKeyName,
+  askSlsCancel,
+  askPurge,
+  askJobCancel,
+  askCancelQueued,
   viewOf: (dom: HTMLElement) => EditorView.findFromDOM(dom),
 };

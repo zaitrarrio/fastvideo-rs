@@ -422,10 +422,59 @@ export const SlsScaleZ = z
     if (s.workers_min !== undefined && s.workers_max !== undefined && s.workers_min > s.workers_max) ctx.addIssue({ code: "custom", path: ["workers_min"], message: "at most workers_max" });
   });
 
+const csvOf = (xs: readonly string[]) => new RegExp(`^(${xs.join("|")})(,(${xs.join("|")}))*$`);
+// ---- cancelling jobs (docs/control/serverless.md "Cancel and purge", docs/control/README.md "Jobs")
+/** A job id as the APIs mint them: a Runpod job id, fv-serve's internal uuid, fvjob_…, a fal uuid, MiniMax digits, video_gen_…. */
+export const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,127}$/; // `\-`: valid in an HTML pattern (the v flag) too
+const JOB_ID_RULE = "letters, digits, _ . : -; at most 128 characters";
+const jobId = (what: string) => z.string().regex(JOB_ID_RE, { message: JOB_ID_RULE }).meta({ "x-rule": JOB_ID_RULE }).describe(what);
+/** The fv-serve APIs whose job ids fv-control can cancel through a serverless queue job (fal needs the app path, LTX has no cancel). */
+export const SLS_FV_APIS = ["native", "openai_videos", "fastwan", "minimax_v2"] as const;
+/** fv-serve job statuses (the jobs D1 `status`). */
+export const JOB_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export const SlsCancelZ = z
+  .object({
+    job: jobId("The Runpod job id (any job of this endpoint, also one fv-control did not submit), or the number of one of fv-control's test invokes."),
+    fv_job: jobId("The fv-serve job the queue job created, when fv-control cannot find it in the job's output (a job submitted elsewhere).").optional(),
+    fv_api: z.enum(SLS_FV_APIS).optional().describe("The API that owns fv_job: native DELETE /fv/v1/jobs/{id} (default), openai_videos DELETE /v1/videos/{id}, fastwan DELETE /video/{id}, minimax_v2 DELETE /v2/video_generation/{id}."),
+    stop_fv_job: z.boolean().optional().describe("Also send the fv-serve cancel as a queue job (kind http) when the job already reached a worker and a worker is up (default on)."),
+  })
+  .strict()
+  .describe("Cancel one job of a serverless endpoint (POST /api/serverless/:id/jobs/:job/cancel).");
+export const SlsPurgeZ = z
+  .object({
+    confirm: z.string().min(1).max(NAME_MAX).describe("The endpoint's name, typed to confirm: every queued job is dropped (running ones are not)."),
+    expected: z.number().int().min(0).max(100000).optional().meta({ "x-unit": "jobs" }).describe("The queued count you saw; refused when the queue grew past it since (default: no check)."),
+  })
+  .strict()
+  .describe("Purge a serverless endpoint's queue (POST /api/serverless/:id/purge).");
+export const JobCancelZ = z
+  .object({
+    job: jobId("A job id from any API (fvjob_…, a fal request id, a MiniMax task id, video_gen_…, or fv-serve's internal uuid)."),
+    cluster: z.string().regex(/^[A-Za-z0-9_.\-]{1,80}$/, { message: "a cluster or standalone pod name or id" }).optional().meta({ "x-dynamic": "clusters" }).describe("Only when the id is ambiguous: the cluster or standalone pod that ran it."),
+  })
+  .strict()
+  .describe("Cancel one fv-serve job of a cluster or standalone pod (POST /api/jobs/:job/cancel).");
+export const JobsQueryZ = z
+  .object({
+    status: z.string().regex(csvOf(JOB_STATUSES), { message: `statuses: ${JOB_STATUSES.join(", ")}` }).optional().meta({ "x-enum-list": JOB_STATUSES }).describe("Statuses, comma-separated (default: every status)."),
+    pool: z.string().regex(/^[A-Za-z0-9_.\-]{1,80}$/, { message: "a pool id" }).optional().meta({ "x-dynamic": "pools" }).describe("Only this pool's pods."),
+    pod: z.string().regex(/^[A-Za-z0-9]{1,40}$/, { message: "a pod id" }).optional().describe("Only this pod."),
+    limit: z.string().regex(/^\d{1,3}$/, { message: "1-500 jobs" }).optional().describe("At most this many jobs (default 100, at most 500)."),
+  })
+  .strict()
+  .describe("The Jobs view's filters (GET /api/clusters/:id/jobs).");
+export const JobsCancelQueuedZ = z
+  .object({
+    pool: z.string().regex(/^[A-Za-z0-9_.\-]{1,80}$/, { message: "a pool id" }).optional().meta({ "x-dynamic": "pools" }).describe("Only this pool's queued jobs (default: every pool)."),
+    max: z.number().int().min(1).max(200).optional().meta({ "x-unit": "jobs" }).describe("Cancel at most this many (default 100)."),
+  })
+  .strict()
+  .describe("Cancel every queued job of a cluster or standalone pod (POST /api/clusters/:id/jobs/cancel-queued).");
+
 /** A time in the log explorer: now, unix s / ms, an ISO date (UTC unless it says), HH:MM (today) or relative (15m, 2h, 7d). */
 export const TIME_RE = /^(now|-?\d+(\.\d+)?\s*(s|m|min|h|d|w)|\d{10,13}|\d{4}-\d{2}-\d{2}([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?|\d{1,2}:\d{2}(:\d{2})?)$/;
 const TIME_RULE = "UTC 2026-10-06 12:00, 12:00 (today), unix ms, or 15m / 2h / 7d (ago)";
-const csvOf = (xs: readonly string[]) => new RegExp(`^(${xs.join("|")})(,(${xs.join("|")}))*$`);
 /** The log explorer's filters (GET /api/logs/query; logquery.ts parseLogQuery checks them with this schema). */
 export const LogQueryZ = z
   .object({
@@ -469,6 +518,11 @@ export const SCHEMAS = {
   roll: RollZ,
   "mint-key": MintKeyZ,
   "log-query": LogQueryZ,
+  "serverless-cancel": SlsCancelZ,
+  "serverless-purge": SlsPurgeZ,
+  "job-cancel": JobCancelZ,
+  "jobs-query": JobsQueryZ,
+  "jobs-cancel-queued": JobsCancelQueuedZ,
 } as const;
 export type SchemaName = keyof typeof SCHEMAS;
 

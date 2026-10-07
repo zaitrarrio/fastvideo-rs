@@ -151,6 +151,7 @@ function fvBootTimeline(podId) {
           ),
         ),
         p.pod ? fvBootTimeline(p.pod.pod_id) : null,
+        fvJobsCard(p.id),
         card(last ? `Operation: ${last.kind} ${last.status}${last.error ? `: ${last.error}` : ""}` : "Operation", last ? h("div", { class: "log" }, last.log.slice(-60).map((l) => h("div", {}, `${dt(l.at).slice(11)} ${l.msg}`))) : h("p", { class: "muted small" }, "None yet.")),
         card(
           "Log tail (shipped and Runpod, from boot)",

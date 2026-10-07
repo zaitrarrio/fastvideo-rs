@@ -44,6 +44,18 @@ database_name = "fv-control"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
+# The jobs D1s the Jobs view reads (src/jobs.ts), local stand-ins here:
+# fv-jobs (direct workers, standalone pods; also releases) and the edge's.
+[[d1_databases]]
+binding = "JOBS_DB"
+database_name = "fv-jobs"
+database_id = "00000000-0000-0000-0000-000000000001"
+
+[[d1_databases]]
+binding = "EDGE_DB"
+database_name = "fv-edge"
+database_id = "00000000-0000-0000-0000-000000000002"
+
 [[r2_buckets]]
 binding = "LOGS"
 bucket_name = "fv-control-logs"
@@ -84,6 +96,12 @@ migrations_dir = "migrations"
 binding = "JOBS_DB"
 database_name = "fv-jobs"
 database_id = "1796e295-a7f0-4402-bbed-ec94ccb27c15"
+
+# The edge's D1 (EDGE_D1_DATABASE_ID): edge workers' jobs, read only (the Jobs view).
+[[env.staging.d1_databases]]
+binding = "EDGE_DB"
+database_name = "fv-edge-staging"
+database_id = "a375f088-b904-48ce-9d33-a972074402a2"
 
 # The staging edge (control_plane = edge clusters): a service binding, since a
 # Worker cannot fetch another workers.dev Worker of the account (error 1042).

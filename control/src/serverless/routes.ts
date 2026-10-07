@@ -28,6 +28,7 @@ import {
   DEFAULT_SLS_POLICY,
 } from "./ops";
 import { sls } from "./runpod-sls";
+import { cancelSlsJob, purgeSlsQueue } from "./cancel";
 import { parseOr400 } from "../schemas";
 import { checkName } from "../names";
 import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, placementIssues } from "./spec";
@@ -157,6 +158,25 @@ serverlessRoutes.get("/:id/jobs", async (c) => {
 serverlessRoutes.get("/:id/jobs/:job", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
   return c.json({ job: await pollJob(c.env, row, Number(c.req.param("job"))) });
+});
+/** Cancel one job: fv-control's invoke number or any Runpod job id of the endpoint (docs/control/serverless.md "Cancel and purge"). */
+serverlessRoutes.post("/:id/jobs/:job/cancel", async (c) => {
+  const row = await getRow(c.env, c.req.param("id"));
+  const x = parseOr400("serverless-cancel", { ...(await body(c)), job: c.req.param("job") });
+  return c.json(await cancelSlsJob(c.env, who(c), row, x));
+});
+/** The queue right now (the purge dialog shows it before asking). */
+serverlessRoutes.get("/:id/queue", async (c) => {
+  const row = await getRow(c.env, c.req.param("id"));
+  if (!row.endpoint_id || row.deleted_at) throw new HttpError(409, `endpoint is ${row.status}`);
+  const h = await sls.health(c.env, row.endpoint_id);
+  return c.json({ queued: Number(h?.jobs?.inQueue ?? 0), in_progress: Number(h?.jobs?.inProgress ?? 0), workers: h?.workers ?? null });
+});
+/** Drop every queued job; `confirm` is the endpoint's name. */
+serverlessRoutes.post("/:id/purge", async (c) => {
+  const row = await getRow(c.env, c.req.param("id"));
+  const x = parseOr400("serverless-purge", await body(c));
+  return c.json(await purgeSlsQueue(c.env, who(c), row, x));
 });
 /** A worker's Runpod log tail; also stored in the log store (log_lines, cluster_id serverless:<id>, pod_id = worker). */
 serverlessRoutes.get("/:id/logs", async (c) => {
