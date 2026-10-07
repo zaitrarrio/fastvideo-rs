@@ -441,3 +441,28 @@ All phase B2 pods were created and deleted by this run (UTC):
 - **Parallelism and wall clock:** never more than 2 pods at once; every pod was deleted within 49 min of creation. No backstop fired.
 - **Balance:** $30.55 before (20:55), $22.23 after (23:01). Other sessions' pods were also running in that window, so the drop is not all this run.
 - **Hosts:** no pod landed on `s3p8exc9lcvi` or `lkyvy1sgj4rc`.
+
+## Phase B3 (the remaining blocked cells): run plan (2026-10-07, planned before renting)
+
+Phase B2 left five cells blocked: the three PISA arms (`wan5b-opt`, `a14b-sol-fullopt`, `ltx23-hq-fullopt`), both LingBot arms, and the Cosmos3 BF16 TeaCache arm (budget).
+
+**Two images.**
+- Main 3c66c10 (`sha256:fedcc8b5…`, also `:latest`) has the LingBot refiner memory fix (679dfda: pool trims, encode before the refiner loads). It runs the cells that need no code change (sets `d1`, `d2`).
+- The CI runtime image of `fix/pisa-sm120-phaseb3` runs the PISA arms and LingBot fullopt, whose refiner uses the same PISA kernel (sets `e1`, `e2`). Recorded by digest in the results.
+
+**GPU, region, pins:** as phase B2. RTX PRO 6000 only, EUR-IS-1, EU volume `jg48s6o1w0`, `FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc"`. Wan arms pin `FASTVIDEO_WAN_QUANT=off`, Diffusers UniPC sigmas and the full VAE (phase A's `wan5b-opt` did not; B3's does). `FASTVIDEO_FP8` off. LTX-2.3 fullopt keeps NVFP4 (sol-engine `fullopt.toml`).
+
+**LingBot baseline does not fit one pod.** Phase B2 measured the base stage at 12.8 s per step (40 steps, 514.6 s) after about 550 s of load and text. The 1080p refiner runs 8 steps × CFG at 253k tokens with dense attention: at the base stage's attention throughput that is about 2.5k s, so load + base + refiner is about 3.6k s, over the 55-min cell budget. The baseline therefore runs the refiner with `--refiner-steps 1`, which gives 3 of the 8 official sigmas (0.85 plus the 2 tail steps). Every baseline refiner step costs the same (dense, CFG every step, no cache), so `sol_bench_table.py` scales the refiner denoise by 8/3, as phase A did for `wan14-720p-base-s15`. The cell is `lingbot-baseline-rs3`.
+
+| Pod set | Image | Cells (in order) | Theirs | Est. cell wall |
+|---|---|---|---|---|
+| d1 | main 3c66c10 | `lingbot-router`, `lingbot-baseline-rs3` (base 40 st + refiner 3 of 8 st, ×8/3) | 375.53 s (4x GB200) | 1 + ~40 min |
+| d2 | main 3c66c10 | `cosmos3-teacache` (BF16, TeaCache 1.15/10/3) | 2.26x ratio (4x GB200) | ~25 min |
+| e1 | PISA branch | `pisa-parity` (device PISA vs the host oracle), `wan5b-opt` (EasyCache + PISA 5B), `lingbot-fullopt` (EasyCache + refiner PISA) | 28.69 s (1x GB200); 144.36 s (4x GB200) | 1 + 8 + ~35 min |
+| e2 | PISA branch | `ltx23-hq-fullopt` (SCSP + PISA s2 + prune + NVFP4), `a14b-sol-fullopt` (EasyCache + PISA) | 2.40x ratio; 207.01 s (1x GB200) | 12 + ~20 min |
+
+Order: d1 and d2 one after the other while the PISA fix is built and tested; then e1 and e2 (at most 2 pods of this run at once; another agent may run one more).
+
+**Pods:** each has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop; a cell whose estimate no longer fits is recorded as skipped.
+
+**Money:** the balance was $20.97 before renting (2026-10-07), shared with another agent, with an $8 floor; it is checked before each pod. Four pods at ≤ 65 min × $2.09/h is $9.1 at most; expected about $6–7. If a pod would take the balance near the floor, it is not started and the cell is reported as blocked.
