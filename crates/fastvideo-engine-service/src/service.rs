@@ -222,7 +222,7 @@ impl Shared {
         if self.caps.get(model).is_none() {
             return Err(ApiError::invalid_param(
                 "model",
-                format!("model `{model}` is not served here"),
+                format!("model `{model}` is not served here ({})", self.caps.served_summary()),
             ));
         }
         match st.pool.model_state(model) {
@@ -354,7 +354,10 @@ impl Shared {
             .get(&spec.model)
             .cloned()
             .ok_or_else(|| {
-                ApiError::invalid_param("model", format!("model `{}` is not served here", spec.model))
+                ApiError::invalid_param(
+                    "model",
+                    format!("model `{}` is not served here ({})", spec.model, self.caps.served_summary()),
+                )
             })?;
         let ok = match &caps.stream {
             Some(StreamCaps::Causal { .. }) => is_causal && !duplex,

@@ -8,6 +8,7 @@ import { createJsonEditor } from "../editor";
 import { createForm, type Api, type FieldOpts, type Form } from "../fields";
 import type { Issue, Path } from "../schema";
 import { issuesOf, loadDyn, loadSchemas, preflight } from "./common";
+import { servesPanel } from "./serves";
 
 const pretty = (v: unknown) => JSON.stringify(v, null, 2);
 
@@ -17,8 +18,11 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const schema = schemas["serverless-endpoint"]!;
   const create = h("button", { type: "button", class: "primary" }, "Create endpoint");
   const out = h("div", { class: "small", style: "margin-top:8px" });
+  // What it serves, live: the validator derives it from the preset or config (src/serverless/serves.ts).
+  const servesBox = h("div", { class: "small muted" }, "Serves: checking…");
   const remote = async (v: any) => {
     const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v } });
+    servesBox.replaceChildren(servesPanel(r.serving));
     return { issues: r.ok ? [] : issuesOf(r), warnings: r.warnings || [] };
   };
   let f: Form;
@@ -34,28 +38,63 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const src = () => (f.get(["image", "sha"]) !== undefined ? "sha" : f.get(["image", "ref"]) !== undefined ? "ref" : "channel");
   const volOpts = [...(dyn.volumes || []).map((v: any) => ({ value: v.id, detail: `${v.dc} (weights)` })), { value: null, label: "none" }];
   const F = (p: Path, fo: FieldOpts = {}) => f.field(p, fo);
+  const presetOpts = (dyn.sls_presets || []).map((p: any) => ({ value: p.id, detail: p.detail }));
+  /** A preset (or a variant, for a custom endpoint) brings its defaults: variant, config, compute, GPU / CPU fields, volume, disk, timeout; the name stays. */
+  const takeDefaults = async (q: string) => {
+    const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}`)).spec;
+    for (const k of ["variant", "config", "config_toml", "compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "network_volume", "data_centers", "container_disk_gb", "execution_timeout_s"]) f.set([k], d[k], true);
+    if (d.compute === "CPU") f.set(["mode"], "queue", true);
+  };
+  let advanced = false;
   function draw() {
     const cpu = f.get(["compute"]) === "CPU";
+    const custom = !f.get(["preset"]);
     const s = src();
+    // Custom endpoints name their variant and config; with a preset they sit under "Advanced" (read-only: the preset sets them).
+    const imageFields = [
+      F(["variant"], {
+        label: "Image variant",
+        allowUnset: false,
+        onSet: async (v) => {
+          // A variant switch takes that variant's defaults (compute, GPU / CPU fields, volume), keeping the name.
+          await takeDefaults(`variant=${encodeURIComponent(v)}`);
+          f.set(["preset"], undefined, true);
+          f.set(["config"], undefined, true);
+          f.set(["config_toml"], undefined, true);
+          draw();
+        },
+      }),
+      F(["compute"], { label: "Compute", onSet: () => draw(), help: "cpu: CPU workers (fake engine); the CUDA variants need GPUs." }),
+      F(["config"], { label: "Worker config in the image", placeholder: "default: the variant's", help: f.get(["config_toml"]) ? "An inline config is set (the JSON tab)." : "Default: the variant's baked config. A config the image does not carry goes inline (the JSON tab's config_toml)." }),
+    ];
     formBody.replaceChildren(
       h(
         "div",
         { class: "cf-fields" },
         F(["name"], { label: "Name", nameCheck: "endpoint", placeholder: "e.g. fake-test", help: h("span", {}, "The Runpod endpoint is ", h("code", {}, `fvc-${f.get(["name"]) || "<name>"}`), "; unique among the live endpoints.") }),
-        F(["variant"], {
-          label: "Image variant",
-          allowUnset: false,
+        F(["preset"], {
+          label: "Serves (preset)",
+          options: presetOpts,
+          unsetLabel: "custom (Advanced: variant + config)",
+          allowUnset: true,
           onSet: async (v) => {
-            // A variant switch takes that variant's defaults (compute, GPU / CPU fields, volume), keeping the name.
-            const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&variant=${encodeURIComponent(v)}`)).spec;
-            for (const k of ["compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "network_volume", "data_centers"]) f.set([k], d[k], true);
-            if (d.compute === "CPU") f.set(["mode"], "queue", true);
+            if (v) await takeDefaults(`preset=${encodeURIComponent(v)}`);
+            else advanced = true;
             draw();
           },
+          help: "What the endpoint serves: the preset sets the image variant, the worker config (in the image or inline), the weights and GPU it needs. Below: what that is, live.",
         }),
-        F(["compute"], { label: "Compute", onSet: () => draw(), help: "cpu: CPU workers (fake engine); the CUDA variants need GPUs." }),
-        F(["mode"], { label: "Mode", onSet: (v) => (v === "lb" && f.set(["scaler_type"], "REQUEST_COUNT", true), draw()) }),
+        F(["mode"], { label: "Mode", onSet: (v) => (v === "lb" ? f.set(["scaler_type"], "REQUEST_COUNT", true) : f.set(["scaler_type"], "QUEUE_DELAY", true), draw()) }),
       ),
+      h("div", { class: "ff-section", style: "margin-top:8px" }, h("h3", {}, "Serves"), servesBox),
+      custom
+        ? h("div", { class: "cf-fields", style: "margin-top:10px" }, ...imageFields)
+        : h(
+            "details",
+            { open: advanced || undefined, style: "margin-top:8px", ontoggle: (e: Event) => (advanced = (e.target as HTMLDetailsElement).open) },
+            h("summary", { class: "small" }, "Advanced / custom: image variant and config (set by the preset; pick custom above to change them)"),
+            h("div", { class: "cf-fields", style: "margin-top:6px" }, ...imageFields),
+          ),
       h(
         "div",
         { class: "cf-fields", style: "margin-top:10px" },
@@ -72,7 +111,6 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
           ),
         ),
         s === "channel" ? F(["image", "channel"], { label: "Channel", allowUnset: false }) : s === "sha" ? F(["image", "sha"], { label: "Commit" }) : F(["image", "ref"], { label: "Image reference" }),
-        F(["config"], { label: "Worker config in the image", placeholder: "default: the variant's", help: "Default: the variant's baked config." }),
       ),
       h(
         "div",
@@ -80,7 +118,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         ...(cpu
           ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs per worker" })]
           : [F(["gpu_types"], { label: "GPU types (priority order)" }), F(["gpu_count"], { label: "GPUs per worker", unsetLabel: "1" }), F(["allowed_cuda"], { label: "CUDA versions a host may offer", help: "The images need 13.0." })]),
-        F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume jg48s6o1w0 (CLAUDE.md: EU only). With a volume the workers run in its data centre." }),
+        F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume jg48s6o1w0 (CLAUDE.md: EU only): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
         F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : "Any of these (none: any)." }),
       ),
       h(

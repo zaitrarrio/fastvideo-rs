@@ -25,8 +25,10 @@ import {
   RUNPOD_GPU_TYPES,
   SHA_RE,
   SLS_CPU_FLAVORS,
+  SLS_PRESET_IDS,
   VARIANTS,
 } from "../enums";
+import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 
 /** The CUDA versions the serve images run on (docs/serve/images.md): the driver must offer 13.0. */
 // No CUDA filter by default: Runpod's allowedCudaVersions is a host filter, and "13.0" alone hid the
@@ -81,6 +83,11 @@ export const EndpointSpecZ = z
       .meta({ "x-rule": `${NAME_RULE}; unique among the live endpoints; not ${RESERVED_NAMES.endpoint.join(", ")}`, "x-name": "endpoint" })
       .describe("Endpoint name. The Runpod endpoint is fvc-<name>."),
     mode: z.enum(["queue", "lb"]).describe("queue: Runpod's job queue (/run, /runsync; fv-serve runs FV_SERVE_MODE=runpod-queue and takes the native job envelope). lb: Runpod's load balancer in front of fv-serve's HTTP server (port 8000, /ping); GPU only."),
+    preset: z
+      .enum(SLS_PRESET_IDS, { error: (i) => enumMessage("a preset", i.input, SLS_PRESET_IDS) })
+      .optional()
+      .meta({ "x-dynamic": "sls_presets" })
+      .describe("What the endpoint serves (GET /api/serverless/presets): the preset sets the image variant, the worker config (in the image or inline), the weights it needs and sensible GPU, disk and timeouts. Without one: a custom endpoint (variant + config)."),
     image: z
       .object({
         channel: z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" }).optional().describe("Release channel (stable, latest, …): the image <variant>-<channel>."),
@@ -93,10 +100,10 @@ export const EndpointSpecZ = z
     variant: z
       .enum(VARIANTS)
       .meta({ "x-dynamic": "variants" })
-      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan (GPU) or cpu (the fake engine, CPU workers)."),
+      .describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan (GPU) or cpu (the fake engine, CPU workers). Set by the preset; a custom endpoint names it."),
     compute: z.enum(["GPU", "CPU"]).describe("GPU or CPU workers (CPU: the cpu variant, fake engine)."),
-    config: z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).optional().meta({ "x-dynamic": "config_paths", "x-rule": "an absolute path ending in .toml" }).describe("A worker config inside the image (FV_CONFIG). Default: the variant's baked config."),
-    config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("An inline worker config (FV_WORKER_TOML_B64) instead of a file in the image."),
+    config: z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).optional().meta({ "x-dynamic": "config_paths", "x-rule": "an absolute path ending in .toml" }).describe("Custom: a worker config inside the image (FV_CONFIG; it must be one the variant's image carries). Default: the variant's baked config. Set by the preset."),
+    config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("Custom: an inline worker config (FV_WORKER_TOML_B64) instead of a file in the image; queue and load-balancer endpoints alike. Set by the preset."),
     env: z.record(z.string().regex(ENV_KEY, { message: ENV_KEY_MESSAGE }).refine((k) => !SLS_RESERVED.has(k), { message: "is set by fv-control" }).meta({ "x-dynamic": "env_keys" }), z.string().max(4096)).optional().describe("Extra env for the workers (plain values; never a secret: use Runpod secrets)."),
     gpu_types: uniq(z.enum(RUNPOD_GPU_TYPES, { error: (i) => enumMessage("a Runpod GPU type id", i.input, RUNPOD_GPU_TYPES) }).meta({ "x-dynamic": "gpu_types" })).min(1).max(12).optional().describe("GPU workers: Runpod GPU type ids, in priority order. Default: the EU volume's (RTX PRO 6000 Server)."),
     gpu_count: z.number().int().min(1).max(8).optional().meta({ "x-unit": "GPUs" }).describe("GPUs per worker (default 1)."),
@@ -121,7 +128,13 @@ export const EndpointSpecZ = z
     const add = (path: string, message: string) => ctx.addIssue({ code: "custom", message, path: [path] });
     if (s.workers_min > s.workers_max) add("workers_min", "workers_min is above workers_max");
     if (s.config && s.config_toml) add("config", "one of config / config_toml");
-    if (s.mode === "lb" && s.config_toml) add("config_toml", "load-balancer endpoints take a config file in the image (config), not an inline one");
+    // An inline config works in both modes: the template's start (payloads.ts SLS_BOOT) decodes FV_WORKER_TOML_B64.
+    const p = s.preset ? slsPreset(s.preset) : undefined;
+    if (p) {
+      const own = presetOwned(p);
+      for (const k of PRESET_OWNED) if (s[k] !== undefined && s[k] !== own[k]) add(k, `set by preset ${p.id} (${k === "config_toml" ? "its inline config" : JSON.stringify(own[k] ?? "the image's default")}): leave it out, or drop preset for a custom endpoint`);
+      if (p.id !== "cpu" && s.compute === "GPU" && s.network_volume === null) add("network_volume", `preset ${p.id} loads weights from the volume: network_volume ${knownVolumes()[0]?.id ?? "(none available)"}`);
+    }
     if (s.mode === "lb" && s.scaler_type !== "REQUEST_COUNT") add("scaler_type", "load-balancer endpoints scale by REQUEST_COUNT");
     if (s.compute === "CPU") {
       if (s.mode === "lb") add("mode", "load-balancer endpoints are GPU only");
@@ -147,8 +160,14 @@ export interface SpecIssue {
   message: string;
 }
 
-/** The defaults for a variant: CPU fake-engine workers for `cpu`, one GPU worker on the EU volume otherwise. */
-export function defaultEndpointSpec(name: string, variant = "cpu"): EndpointSpec {
+/** The defaults for a preset (its variant, config, disk and timeout), or for a bare variant: CPU fake-engine workers for `cpu`, one GPU worker on the EU volume otherwise. */
+export function defaultEndpointSpec(name: string, variant = "cpu", preset?: string): EndpointSpec {
+  const p = slsPreset(preset);
+  if (p) {
+    const d = defaultEndpointSpec(name, p.variant);
+    delete d.config, delete d.config_toml;
+    return { ...d, preset: p.id, compute: p.compute, ...(p.config ? { config: p.config } : {}), ...(p.config_toml ? { config_toml: p.config_toml } : {}), container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s };
+  }
   const cpu = variant === "cpu";
   const eu = knownVolumes()[0];
   return {
@@ -183,11 +202,15 @@ export function checkEndpointSpec(doc: unknown): { ok: true; value: EndpointSpec
 /** Fills the variant's defaults under what the input gives, then validates; throws 400 with every issue. */
 export function normalizeEndpointSpec(input: any): EndpointSpec {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "spec must be an object");
-  const variant = typeof input.variant === "string" ? input.variant : "cpu";
-  const d = defaultEndpointSpec(String(input.name ?? ""), variant);
-  const compute = input.compute === "CPU" || input.compute === "GPU" ? input.compute : d.compute;
+  // A preset sets the variant, compute and config (the schema refuses an input that changes them).
+  const p = slsPreset(input.preset);
+  const variant = p ? p.variant : typeof input.variant === "string" ? input.variant : "cpu";
+  const d = defaultEndpointSpec(String(input.name ?? ""), variant, p?.id);
+  const compute = !p && (input.compute === "CPU" || input.compute === "GPU") ? input.compute : d.compute;
   // A compute other than the variant's default drops the other kind's defaults.
   const base: any = { ...d, compute };
+  // A load balancer scales by request count: its default scaler.
+  if (input.mode === "lb" && input.scaler_type === undefined) Object.assign(base, { scaler_type: "REQUEST_COUNT", scaler_value: input.scaler_value ?? 1 });
   if (compute !== d.compute) {
     for (const k of ["gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "data_centers"]) delete base[k];
     if (compute === "CPU") Object.assign(base, { cpu_flavors: ["cpu3c", "cpu5c"], vcpu: 2, network_volume: null });

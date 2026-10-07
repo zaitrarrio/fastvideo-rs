@@ -59,6 +59,8 @@ export function startMock() {
     edgeEpoch: 1,
     // Runpod's serverless queue API (api.runpod.ai/v2/<endpoint>/…): jobs by id, the queue, the live workers, /run bodies.
     queue: { jobs: new Map(), queued: 0, running: 0, workers: 0, ran: [], purges: 0 },
+    // Runpod serverless endpoints and templates (REST v1 /templates, /endpoints; REST v2 /serverless).
+    sls: { templates: new Map(), endpoints: new Map() },
     // Workers' internal job route (DELETE /fv/v1/internal/jobs/{id}): the answer per job id, and the calls.
     internalJobs: {},
     internalCancels: [],
@@ -119,6 +121,47 @@ export function startMock() {
         if (req.method === "DELETE") { m.pods.delete(pod.id); return json(res, 200, {}); }
         if (req.method === "POST" && mm[3] === "stop") { pod.desiredStatus = "EXITED"; return json(res, 200, {}); }
         if (req.method === "POST" && mm[3] === "start") { if (pod.refuseStart) return json(res, 500, { error: "not enough free CPU on the host" }); pod.desiredStatus = "RUNNING"; pod.startedAt = Date.now(); return json(res, 200, {}); }
+      }
+      // Serverless templates and endpoints (src/serverless/runpod-sls.ts).
+      const sls = m.sls;
+      if (rest === "/templates" && req.method === "POST") {
+        const id = `tpl${newId()}`;
+        sls.templates.set(id, { id, ...body });
+        return json(res, 200, { id, ...body });
+      }
+      let st = /^\/templates\/([^/]+)$/.exec(rest);
+      if (st) {
+        const t = sls.templates.get(st[1]);
+        if (!t) return json(res, 400, { error: "template not found" });
+        if (req.method === "PATCH") { Object.assign(t, body); t.patches = (t.patches || 0) + 1; return json(res, 200, t); }
+        if (req.method === "DELETE") { sls.templates.delete(st[1]); return json(res, 200, {}); }
+      }
+      if (rest === "/endpoints" && req.method === "POST") {
+        const id = newId();
+        sls.endpoints.set(id, { id, ...body, workers: [] });
+        return json(res, 200, { id, name: body.name });
+      }
+      st = /^\/endpoints\/([^/]+)$/.exec(rest);
+      if (st) {
+        const e = sls.endpoints.get(st[1]);
+        if (!e) return json(res, 404, { error: "endpoint not found" });
+        if (req.method === "GET") return json(res, 200, e);
+        if (req.method === "PATCH") { Object.assign(e, body); return json(res, 200, e); }
+        if (req.method === "DELETE") { sls.endpoints.delete(st[1]); return json(res, 200, {}); }
+      }
+      return json(res, 404, { error: "no route" });
+    }
+    if (p.startsWith("/rp/rest2/")) {
+      if (bearer !== m.runpodKey) return json(res, 401, { error: "bad key" });
+      const rest = p.slice("/rp/rest2".length);
+      if (rest === "/catalog/gpus") return json(res, 200, { gpus: [{ id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", pool: "BLACKWELL_96" }, { id: "NVIDIA H100 80GB HBM3", pool: "HOPPER_141" }] });
+      if (rest === "/serverless" && req.method === "POST") {
+        // v2 makes the endpoint's template itself.
+        const id = newId();
+        const tid = `tpl${newId()}`;
+        m.sls.templates.set(tid, { id: tid, v2: true, name: `${body.name}-template`, imageName: body.image, env: body.env, args: body.args });
+        m.sls.endpoints.set(id, { id, name: body.name, templateId: tid, v2: body, workers: [] });
+        return json(res, 200, { id, name: body.name, templateId: tid });
       }
       return json(res, 404, { error: "no route" });
     }
@@ -356,7 +399,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };

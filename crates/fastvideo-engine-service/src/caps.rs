@@ -362,6 +362,24 @@ impl CapabilityTable {
     }
 
     /// `(alias, model id)` pairs to merge into a serve alias map.
+    /// `served: <model ids>; aliases: <name> -> <model>, …` (tier aliases
+    /// and served names other than the id): what a not-served error tells
+    /// the client this server does serve.
+    pub fn served_summary(&self) -> String {
+        let ids: Vec<&str> = self.models.keys().map(ModelId::as_str).collect();
+        let mut aliases: Vec<String> = self.tiers.values().map(|b| format!("{} -> {}", b.alias, b.model.as_str())).collect();
+        for e in self.models.values() {
+            for n in &e.caps.served_names {
+                if n != e.caps.id.as_str() {
+                    aliases.push(format!("{n} -> {}", e.caps.id.as_str()));
+                }
+            }
+        }
+        let list = |v: &[String]| if v.is_empty() { "none".to_owned() } else { v.join(", ") };
+        let ids: Vec<String> = ids.into_iter().map(str::to_owned).collect();
+        format!("served: {}; aliases: {}", list(&ids), list(&aliases))
+    }
+
     pub fn tier_aliases(&self) -> Vec<(String, ModelId)> {
         self.tiers
             .values()
@@ -411,6 +429,15 @@ mod tests {
         assert_eq!(parse_tier_alias("ltx-draft"), Some((Family::Ltx2, Tier::Draft)));
         assert_eq!(tier_alias(Family::MmAudio, Tier::Max), None);
         assert_eq!(parse_tier_alias("nope"), None);
+    }
+
+    /// The not-served error's list: model ids and the tier aliases bound to them.
+    #[test]
+    fn served_summary_lists_ids_and_aliases() {
+        let t = CapabilityTable::build(vec![vec![(h3("sol-h3", Some(Tier::Max)), Recipe::default())]], &BTreeMap::new()).unwrap();
+        assert_eq!(t.served_summary(), "served: sol-h3; aliases: h3-max -> sol-h3");
+        let empty = CapabilityTable::build(vec![], &BTreeMap::new()).unwrap();
+        assert_eq!(empty.served_summary(), "served: none; aliases: none");
     }
 
     #[test]

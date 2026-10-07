@@ -38,7 +38,7 @@ export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOf
   },
   "serverless-endpoint": {
     schema: "serverless-endpoint",
-    fields: [["name"], ["mode"], ["image", "channel"], ["image", "sha"], ["image", "ref"], ["variant"], ["compute"], ["config"], ["env"], ["gpu_types"], ["gpu_count"], ["cpu_flavors"], ["vcpu"], ["data_centers"], ["network_volume"], ["workers_min"], ["workers_max"], ["idle_timeout_s"], ["flashboot"], ["execution_timeout_s"], ["scaler_type"], ["scaler_value"], ["allowed_cuda"], ["container_disk_gb"], ["deadline_min"], ["deadline_action"]],
+    fields: [["name"], ["preset"], ["mode"], ["image", "channel"], ["image", "sha"], ["image", "ref"], ["variant"], ["compute"], ["config"], ["env"], ["gpu_types"], ["gpu_count"], ["cpu_flavors"], ["vcpu"], ["data_centers"], ["network_volume"], ["workers_min"], ["workers_max"], ["idle_timeout_s"], ["flashboot"], ["execution_timeout_s"], ["scaler_type"], ["scaler_value"], ["allowed_cuda"], ["container_disk_gb"], ["deadline_min"], ["deadline_action"]],
     notOffered: { config_toml: "the JSON tab (an inline worker config)" },
   },
   "token-create": { schema: "token-create", fields: [["name"], ["scope"], ["ttl_days"]] },

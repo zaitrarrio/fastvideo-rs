@@ -20,7 +20,7 @@
   async function pageServerless(main) {
     const q = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (q.get("ep")) return pageEndpoint(main, q.get("ep"));
-    const [list, defs] = await Promise.all([api(`/api/serverless${q.get("all") ? "?all=1" : ""}`), api("/api/serverless/defaults?name=fake&variant=cpu")]);
+    const [list, defs] = await Promise.all([api(`/api/serverless${q.get("all") ? "?all=1" : ""}`), api("/api/serverless/defaults?name=fake&preset=cpu")]);
     const eps = list.endpoints || [];
     main.replaceChildren(
       card(
@@ -31,7 +31,7 @@
             { label: "endpoint", get: (e) => h("a", { href: `#/serverless?ep=${e.id}` }, e.name) },
             { label: "Runpod id", get: (e) => e.endpoint_id || "–" },
             { label: "status", get: (e) => badge(e.status, slsKind(e.status)) },
-            { label: "mode", get: (e) => `${e.mode} · ${e.spec.variant}/${e.spec.compute}` },
+            { label: "mode", get: (e) => `${e.mode} · ${e.spec.preset ? `preset ${e.spec.preset}` : `${e.spec.variant}/${e.spec.compute}`}` },
             { label: "workers", get: (e) => `${e.workers ?? 0} (${e.spec.workers_min}..${e.spec.workers_max})` },
             { label: "queue", get: (e) => queueLine(e.health) },
             { label: "$/hr now", get: (e) => fmt$(e.live_dph, 3), num: true },
@@ -75,6 +75,7 @@
         kv("status", badge(e.status, slsKind(e.status))),
         kv("Runpod", `${e.runpod_name} · ${e.endpoint_id || "–"}`),
         kv("mode", `${e.mode} · ${e.spec.variant} · ${e.spec.compute}`),
+        kv("serves", d.serving ? `${d.serving.preset ? `preset ${d.serving.preset}${d.serving.preset_inferred ? " (inferred)" : ""}` : "custom"}: ${(d.serving.serves.models || []).map((m) => m.id).join(", ") || "?"}` : "–"),
         kv("workers", workersLine(hh)),
         kv("queue", queueLine(hh)),
         kv("jobs (Runpod)", hh?.jobs ? `${hh.jobs.completed || 0} done, ${hh.jobs.failed || 0} failed` : "–"),
@@ -117,7 +118,7 @@
       ),
       h("p", { class: "small muted" }, "Scaling up (or creating) needs the balance above the floor plus the serverless margin. The cron scales every endpoint to 0 below the floor, and runs the backstop at its time."),
     );
-    main.replaceChildren(head, ctl, invokeCard(e), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
+    main.replaceChildren(head, ctl, servesCard(e, d), invokeCard(e, d.serving), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
     every(10000, async () => {
       if (!location.hash.includes(`ep=${id}`)) return;
       const f = await api(`/api/serverless/${encodeURIComponent(id)}`).catch(() => null);
@@ -127,29 +128,28 @@
     });
   }
 
-  function invokeCard(e) {
+  /** What the endpoint serves, derived from its preset or config (src/serverless/serves.ts); checked against a running worker on demand. */
+  function servesCard(e, d) {
+    const host = h("div", { class: "muted small" }, "loading…");
+    fvEditor().then((E) => host.replaceChildren(E.servesPanel(d.serving, { check: () => api(`/api/serverless/${e.id}/serves/check`, { method: "POST" }) }))).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
+    return card("Serves", h("p", { class: "small muted" }, "Derived from the preset or worker config before any worker boots. The check reads a running worker's /fv/v1/capabilities (it never starts one)."), host);
+  }
+
+  function invokeCard(e, serving) {
     const out = h("div", { class: "small", style: "margin-top:8px" });
-    const ta = h("textarea", { rows: 4, style: "width:100%;font-family:var(--mono, monospace);font-size:12px", "aria-label": "Invoke input" });
-    ta.value = e.mode === "lb" ? JSON.stringify({ method: "GET", path: "/ping" }) : JSON.stringify({ kind: "info" });
-    const presets = e.mode === "lb"
-      ? [["ping", { method: "GET", path: "/ping" }], ["capabilities", { method: "GET", path: "/fv/v1/capabilities" }]]
-      : [["info", { kind: "info" }], ["capabilities", { kind: "http", method: "GET", path: "/fv/v1/capabilities" }], ["fake job", { kind: "http", method: "POST", path: "/fv/v1/jobs", body: { model: "fake-wan", prompt: "a red fox trotting through fresh snow", seed: 1 }, wait: true }]];
     const show = (r) => out.replaceChildren(
       h("div", { class: "row", style: "flex-wrap:wrap;gap:14px" },
-        badge(r.status, /COMPLETED|HTTP 2/.test(r.status || "") ? "good" : /FAILED|TIMED_OUT|HTTP [45]/.test(r.status || "") ? "critical" : "warn"),
+        badge(r.status || (r.error ? "error" : "?"), /COMPLETED|HTTP 2/.test(r.status || "") ? "good" : /FAILED|TIMED_OUT|HTTP [45]/.test(r.status || "") || (!r.status && r.error) ? "critical" : "warn"),
         r.cold ? badge("cold start", "warn") : null,
         h("span", {}, "queue wait ", h("b", {}, ms(r.delay_ms))), h("span", {}, "execution ", h("b", {}, ms(r.exec_ms))), h("span", {}, "end to end ", h("b", {}, ms(r.wall_ms))),
         r.worker_id ? h("span", { class: "muted" }, `worker ${r.worker_id}`) : null),
       r.error ? h("p", { style: "color:var(--critical-text)" }, typeof r.error === "string" ? r.error : JSON.stringify(r.error)) : null,
       r.output !== undefined && r.output !== null ? pre(typeof r.output === "string" ? (() => { try { return JSON.parse(r.output); } catch { return r.output; } })() : r.output) : null,
     );
-    const go = h("button", { class: "primary", onclick: async () => {
-      let x;
-      try { x = JSON.parse(ta.value); } catch (err) { return toast(`input: ${err.message}`); }
-      go.disabled = true;
+    const send = async (body) => {
       out.replaceChildren(h("span", { class: "muted" }, "submitted… (a cold start can take minutes; Runpod holds /runsync ~90 s, then this polls)"));
       try {
-        let r = await api(`/api/serverless/${e.id}/invoke`, { method: "POST", body: e.mode === "lb" ? x : { input: x } });
+        let r = await api(`/api/serverless/${e.id}/invoke`, { method: "POST", body });
         show(r);
         if (r.done === false && r.job) {
           for (let i = 0; i < 400; i++) {
@@ -159,11 +159,12 @@
             if (j.finished_at) break;
           }
         }
-      } catch (err) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message)); } finally { go.disabled = false; }
-    } }, "Send");
-    return card("Test invoke", h("p", { class: "small muted" }, e.mode === "lb" ? "A request through Runpod's load balancer ({method, path, body})." : "A queue job with the native envelope (/runsync): info, http (one request into fv-serve's router) or stream."),
-      h("div", { class: "row", style: "margin-bottom:6px" }, presets.map(([n, v]) => h("button", { class: "ghost", onclick: () => { ta.value = JSON.stringify(v, null, 1); } }, n))),
-      ta, h("div", { class: "row", style: "margin-top:6px" }, go), out);
+      } catch (err) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message)); }
+    };
+    const host = h("div", { class: "muted small" }, "loading the examples…");
+    fvEditor().then((E) => E.mountInvokePicker(host, { api, endpoint: e, examples: serving?.examples || [], onResult: show, send })).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
+    return card("Test invoke", h("p", { class: "small muted" }, e.mode === "lb" ? "A request through Runpod's load balancer ({method, path, body}). The examples are what this endpoint serves, per model, task and API; edit the JSON freely." : "A queue job with the native envelope (/runsync): info, http (one request into fv-serve's router; wait: true polls the job it creates) or stream. The examples are what this endpoint serves, per model, task and API; edit the JSON freely."),
+      host, out);
   }
 
   // ---- cancel and purge (docs/control/serverless.md "Cancel and purge"). The outcome survives the page's redraws.

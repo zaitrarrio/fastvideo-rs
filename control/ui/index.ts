@@ -7,6 +7,7 @@ import { auditForms, controlKind, createForm, formDialog } from "./fields";
 import { renderForm } from "./form";
 import { askCancelQueued, askExtend, askJobCancel, askKeyName, askPurge, askRoll, askScale, askSlsCancel } from "./forms/dialogs";
 import { mountEndpointForm, mountScaleForm, mountSpecEditor } from "./forms/serverless";
+import { mountInvokePicker, servesPanel } from "./forms/serves";
 import { mountReleaseForm, mountTokenForm } from "./forms/settings";
 import { mountLaunchForm } from "./forms/standalone";
 import { openDocPanel } from "./panel";
@@ -31,6 +32,8 @@ import { diffLines, renderDiff, renderTree } from "./view";
   mountEndpointForm,
   mountSpecEditor,
   mountScaleForm,
+  mountInvokePicker,
+  servesPanel,
   mountTokenForm,
   mountReleaseForm,
   askExtend,

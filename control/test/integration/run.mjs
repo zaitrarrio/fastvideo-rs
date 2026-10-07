@@ -286,6 +286,73 @@ await step("serverless: cancel a pasted job id and a fire-and-forget submit's fv
   assert.ok(a.filter((x) => x.action === "serverless.cancel").length >= 2);
 });
 
+await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the ref2v config inline; what it serves, its examples; a 5090 and a custom config not in the image are refused", async () => {
+  const ref2v = new URL("../../../configs/serve/runpod-h3-ref2v.toml", import.meta.url);
+  const { readFileSync } = await import("node:fs");
+  const want = readFileSync(ref2v, "utf8");
+  // The catalog: every preset with what it serves.
+  const cat = await call("/api/serverless/presets", { headers: T() });
+  assert.equal(cat.status, 200);
+  const pr = cat.j.presets.find((p) => p.id === "h3-ref2v");
+  assert.deepEqual(pr.serves.models.map((m) => m.id), ["h3-ref2v-turbo", "h3-ref2v-max"]);
+  assert.ok(pr.inline_config && pr.min_vram_gb === 80);
+  assert.ok(cat.j.presets.some((p) => p.id === "cpu"));
+  // The validator: field-level refusals, and what it serves (live in the form).
+  const v5090 = await call("/api/serverless/validate", { method: "POST", body: { spec: { name: "r2v-x", preset: "h3-ref2v", gpu_types: ["NVIDIA GeForce RTX 5090"] } }, headers: T() });
+  assert.equal(v5090.j.ok, false);
+  assert.ok(v5090.j.issues.some((i) => i.path.join(".") === "gpu_types.0" && /32 GB.*at least 80 GB/.test(i.message)), JSON.stringify(v5090.j.issues));
+  const vimg = await call("/api/serverless/validate", { method: "POST", body: { spec: { name: "r2v-x", variant: "h3-max", config: "/etc/fv/runpod-h3-ref2v.toml" } }, headers: T() });
+  assert.ok(vimg.j.issues.some((i) => i.path[0] === "config" && /not in it \(preset h3-ref2v sends that config inline\)/.test(i.message)), JSON.stringify(vimg.j.issues));
+  const vok = await call("/api/serverless/validate", { method: "POST", body: { spec: { name: "r2v-x", preset: "h3-ref2v", mode: "lb" } }, headers: T() });
+  assert.equal(vok.j.ok, true, JSON.stringify(vok.j));
+  assert.ok(vok.j.serving.serves.aliases.some((a) => a.name === "MiniMax-H3-Turbo" && a.model === "h3-ref2v-turbo"));
+  // The incident's spec (h3-max, no config): the preset is inferred, and MiniMax-H3-Turbo is not among its names.
+  const vmax = await call("/api/serverless/validate", { method: "POST", body: { spec: { name: "r2v-x", variant: "h3-max", mode: "lb" } }, headers: T() });
+  assert.equal(vmax.j.serving.preset, "h3-max");
+  assert.equal(vmax.j.serving.preset_inferred, true);
+  assert.ok(!vmax.j.serving.serves.aliases.some((a) => a.name === "MiniMax-H3-Turbo"));
+  // Create: queue (REST v1 template + endpoint) and lb (REST v2, then the template gets the boot).
+  const tplOf = (id) => [...mock.sls.templates.values()].find((t) => t.id === id);
+  const q = await call("/api/serverless", { method: "POST", body: { spec: { name: "r2v-q", preset: "h3-ref2v" } }, headers: T() });
+  assert.equal(q.status, 201, JSON.stringify(q.j));
+  assert.equal(q.j.endpoint.spec.preset, "h3-ref2v");
+  const qt = tplOf(q.j.endpoint.template_id);
+  assert.equal(Buffer.from(qt.env.FV_WORKER_TOML_B64, "base64").toString(), want, "the queue template carries the ref2v config");
+  assert.deepEqual(qt.dockerEntrypoint.slice(0, 2), ["/bin/sh", "-c"]);
+  assert.equal(qt.env.FV_SERVE_MODE, "runpod-queue");
+  const lb = await call("/api/serverless", { method: "POST", body: { spec: { name: "r2v-lb", preset: "h3-ref2v", mode: "lb" } }, headers: T() });
+  assert.equal(lb.status, 201, JSON.stringify(lb.j));
+  const lt = tplOf(lb.j.endpoint.template_id);
+  assert.equal(Buffer.from(lt.env.FV_WORKER_TOML_B64, "base64").toString(), want, "the lb template carries the ref2v config");
+  assert.ok(lt.patches >= 1 && lt.dockerEntrypoint[2].includes("FV_WORKER_TOML_B64"), "the lb template got the boot that decodes it");
+  assert.equal(lt.env.FV_SERVE_MODE, "http");
+  // The endpoint page: what it serves and ready-made invokes in the endpoint's mode.
+  const page = await call(`/api/serverless/${lb.j.endpoint.id}`, { headers: T() });
+  const ex = page.j.serving.examples.find((e) => e.api === "minimax" && e.model === "h3-ref2v-turbo");
+  assert.equal(ex.invoke.path, "/v2/video_generation");
+  assert.equal(ex.invoke.body.model, "MiniMax-H3-Turbo");
+  assert.deepEqual(ex.needs, ["image_url"]);
+  const qpage = await call(`/api/serverless/${q.j.endpoint.id}/serves`, { headers: T() });
+  assert.equal(qpage.j.examples.find((e) => e.api === "minimax" && e.model === "h3-ref2v-turbo").invoke.input.kind, "http");
+  // A preset switch on update drops the old preset's config; a 5090 on update is refused.
+  assert.equal((await call(`/api/serverless/${q.j.endpoint.id}`, { method: "PUT", body: { spec: { gpu_types: ["NVIDIA GeForce RTX 5090"] } }, headers: T() })).status, 400);
+  const sw = await call(`/api/serverless/${q.j.endpoint.id}`, { method: "PUT", body: { spec: { preset: "h3-max" } }, headers: T() });
+  assert.equal(sw.status, 200, JSON.stringify(sw.j));
+  assert.equal(sw.j.endpoint.spec.config_toml, undefined);
+  assert.equal(tplOf(q.j.endpoint.template_id).env.FV_WORKER_TOML_B64, undefined);
+  // The CLI: the preset catalog.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
+  writeFileSync(`${dir}/token`, token, { mode: 0o600 });
+  const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+  assert.match(await cli("endpoint", "presets"), /^h3-ref2v\th3-max \+ inline config\t>= 80 GB\tweights: h3-base,h3-ref2va\n  serves: h3-ref2v-turbo \[ref2v\]/m);
+  assert.match(await cli("endpoint", "serves", "r2v-lb"), /"MiniMax-H3-Turbo"/);
+  for (const e of [q.j.endpoint, lb.j.endpoint]) assert.equal((await call(`/api/serverless/${e.id}`, { method: "DELETE", headers: T() })).status, 200);
+});
+
 await step("serverless console: pages behind the login, cached capabilities, synthesised status, fal and native jobs as queue jobs, store-backed polls, cancel, uploads", async () => {
   const now = Date.now();
   const EID = "rpcons0000001";

@@ -1,9 +1,13 @@
 # fv-control: Runpod serverless endpoints
 
 Status: 2026-10-06, branch `feat/fvc-serverless`. Code: `control/src/serverless/`
-(`spec.ts`, `payloads.ts`, `runpod-sls.ts`, `ops.ts`, `routes.ts`, `cancel.ts`, `console.ts`), migration
+(`spec.ts`, `payloads.ts`, `runpod-sls.ts`, `ops.ts`, `routes.ts`, `cancel.ts`, `console.ts`; since
+2026-10-07, branch `claude/serverless-presets`, model-first: `presets.ts`,
+`serves.ts`, `examples.ts`, with `control/src/presets.ts`, `gpus.ts`,
+`volumes.ts`, §1a), migration
 `control/migrations/0006_serverless.sql`, the **Serverless** page
-(`control/public/serverless.js`), the CLI `scripts/serve/fv-control.sh endpoint …`.
+(`control/public/serverless.js`, `control/ui/forms/serverless.ts`,
+`serves.ts`), the CLI `scripts/serve/fv-control.sh endpoint …`.
 
 fv-control creates, updates, scales, invokes and deletes Runpod serverless
 endpoints of fv-serve: one image variant behind Runpod's **queue** (`/run`,
@@ -17,15 +21,17 @@ ownership, money guards, cost and health on top.
 
 A JSON document, validated by one zod schema (`EndpointSpecZ`, served as
 `GET /api/schemas/serverless-endpoint`, the same framework as cluster specs).
-Missing fields take the variant's defaults (`GET /api/serverless/defaults?variant=`).
+Missing fields take the preset's defaults (`GET /api/serverless/defaults?preset=`), or for a
+custom endpoint the variant's (`?variant=`). §1a says what a preset is and what is checked.
 
 | field | default | |
 |---|---|---|
 | `name` | | `[a-z][a-z0-9-]{0,30}`; the Runpod endpoint is `fvc-<name>` |
-| `mode` | `queue` | `queue` or `lb` (GPU, `scaler_type: REQUEST_COUNT`) |
+| `mode` | `queue` | `queue` or `lb` (GPU, `scaler_type: REQUEST_COUNT`, the default for `lb`) |
+| `preset` | none (custom) | what it serves (§1a): sets `variant`, `compute`, `config` / `config_toml`, disk and timeout; `cpu` is the fake engine |
 | `image` | `{channel: stable}` | one of `channel`, `sha`, `ref`; resolved to a digest like cluster images (`<variant>-<channel>`, `:stable` → `:latest` before the first promotion) |
-| `variant`, `compute` | `cpu` → `CPU` | `cpu` (fake engine) runs on CPU workers; the CUDA variants on GPU |
-| `config` / `config_toml` | the variant's baked config | a config file in the image (`FV_CONFIG`) or inline (`FV_WORKER_TOML_B64`) |
+| `variant`, `compute` | the preset's; custom: `cpu` → `CPU` | `cpu` (fake engine) runs on CPU workers; the CUDA variants on GPU |
+| `config` / `config_toml` | the preset's; custom: the variant's baked config | a config file the image carries (`FV_CONFIG`) or inline (`FV_WORKER_TOML_B64`), in both modes |
 | `env` | | plain extra env; keys fv-control sets (serve mode, image identity, the `{{ RUNPOD_SECRET_fv_* }}` references, …) are refused |
 | `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1, `["13.0"]` | GPU types in priority order |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
@@ -40,6 +46,91 @@ An update merges a partial spec over the stored one. Image, env, config and
 disk patch the **template** (Runpod rolls the workers); scaling, timeouts,
 GPU types and data centers patch the **endpoint**; `mode`, `compute`,
 `network_volume` and a CPU endpoint's flavors / vCPUs need a new endpoint (409).
+
+## 1a. Model-first: presets, what an endpoint serves, the checks
+
+**The incident (2026-10-07).** An endpoint `ref2va` (lb, variant `h3-max`, no
+config) was meant to serve H3 reference-to-video. Its workers ran the h3-max
+image's baked config (`runpod-h3-max.toml`: `sol-h3` only, alias
+`MiniMax-H3-Max`), so a MiniMax ref2v request naming `MiniMax-H3-Turbo` got
+"model `MiniMax-H3-Turbo` is not served here". The spec was image-first;
+nothing said what it would serve, the ref2v config exists only inline, and
+load balancers refused inline configs.
+
+**Presets.** `preset` takes an id from the one catalog cluster pools use
+(`control/src/presets.ts` `POOL_PRESETS`, re-exported by `cluster/spec.ts`;
+`serverless/presets.ts` adds `cpu`, the fake engine): `h3-turbo`, `h3-max`,
+`h3-ref2v`, `ltx`, `ltx-pro`, `ltx-a2v`, `ltx-ref2v`, `wan`, `fastwan21`,
+`sfwan`, `longlive`, `cpu`. A preset sets the variant, compute and config (a
+config file the image carries, left unset when it is the image's baked default
+so the image's own entrypoint runs it; otherwise inline), the container disk
+(`ltx-a2v`: 60 GB) and the execution timeout (the pool's job timeout). An input
+may repeat those fields but not change them (`variant: set by preset
+h3-ref2v …`). An update that names another preset drops the old preset's
+config; one that names a variant or config without a preset becomes custom
+(`preset: null` too). `GET /api/serverless/presets` lists each preset with
+what it serves, its weight trees and least GPU memory. Raw `variant` /
+`config` / `config_toml` remain the custom path ("Advanced / custom" in the
+form), checked the same way.
+
+**Inline configs on load balancers.** The refusal was not a Runpod limit:
+`FV_WORKER_TOML_B64` is an env var, and the template's start (`SLS_BOOT`,
+`payloads.ts`) decodes it. Runpod's v2 create (the only API that makes a
+load balancer) has no entrypoint field, so after create fv-control patches the
+v2-made template with that start (`v2TemplateBoot`), as it already did for CPU
+queue endpoints; a template update sets it too. A load balancer's config
+*file* still rides v2's `args` (`--config <path>` to the image's `fv-entry`).
+With `workers_min: 0` no worker runs before the patch; with a warm worker
+Runpod rolls it onto the patched template.
+
+**What it serves** (`serverless/serves.ts`), derived before any worker boots
+from the config the spec runs: the preset's, the inline one, a file of the
+image or the variant's baked default. The image contents are generated from
+`docker/gpucheck.Dockerfile`'s `serve-<variant>` stages
+(`control/src/cluster/image-configs.ts`, `node gen-configs.mjs`; the unit
+tests fail when stale). It lists the models (recipe, tier, tasks, resident,
+weight trees), the API names (config `[aliases]` and the MiniMax names, which
+resolve as the MiniMax adapter does: a config alias, else the canonical tier
+alias, else the H3 model of that tier), the mounted APIs (fv-serve's
+`[protocols]` defaults filled in) and fal apps. Tasks and tiers per recipe
+mirror `crates/fastvideo-engine-service/src/cuda/caps.rs`. A spec without a
+preset whose variant and config match one shows that preset as **inferred**
+(the `ref2va` spec reads as `h3-max`, serving `sol-h3`, no `MiniMax-H3-Turbo`);
+otherwise "custom". Stored specs are not migrated: those without `preset` keep
+working unchanged. `POST /api/serverless/<id>/serves/check` compares the
+derived models with a running worker's `/fv/v1/capabilities` (a recorded
+invoke; it refuses when no worker is up rather than start one) and names what
+is missing or extra.
+
+**Checks before create and before an update that changes what it serves**
+(`servingIssues`; field-level issues in the form and the 400's `issues`; a
+scale never runs them, so a scale to 0 always works):
+
+| check | data source |
+|---|---|
+| a `config` path is a file the variant's image carries (else: which preset sends it inline) | `image-configs.ts`, generated from the Dockerfile; skipped (a warning) for an `image.ref` |
+| GPU presets have a network volume; a custom config that loads weights too | the preset, the config's `weights = "${FV_WEIGHTS}/<tree>"` |
+| every weight tree is on the volume | a static list per volume (`control/src/volumes.ts`): the EU volume's trees from `docs/ops/runpod-volumes.md` (per-volume table) and `scripts/gpu/weights-manifest.tsv`; a unit test checks every manifest row and every preset's trees are in it. fv-control cannot list a volume without a pod. A new tree is added there with its manifest row |
+| each GPU type has the memory the preset needs (`h3-*`, `ltx*`: 80 GB, so no RTX 5090 / 48 GB cards; `wan`: 32; 1.3B models: 24) | `presets.ts` `min_vram_gb` (conservative), `control/src/gpus.ts` (Runpod's `memoryInGb` per GPU type id; a unit test covers every type in the enum) |
+| the data centres are the volume's (EUR-IS-1 for the EU volume) | the schema (`spec.ts`), as before |
+| licence (LongLive: non-commercial) | a warning |
+
+**Test invokes** (`serverless/examples.ts`): the endpoint page's Test invoke
+offers ready-made requests per model × task × API, built from what it serves
+and shaped for the mode: queue, the native envelope `{"kind": "http", method,
+path, body, "wait": true}` (the worker waits on the job it creates:
+`crates/fastvideo-deploy/src/runpod/mod.rs` `HttpJob`); lb, `{method, path,
+body}`, whose reply is the job's id (the example says where to poll). The
+bodies are the ones the e2e scripts proved (`scripts/serve/e2e/ref2v.py`
+`t_minimax` and `t_fal_turbo`, `ltx_e2e.py`): e.g. "MiniMax V2 · ref2v · Turbo
+(h3-ref2v-turbo) · MiniMax-H3-Turbo, 768P 5 s". A task that needs media (i2v,
+ref2v, a2v) gets a URL field the worker must be able to fetch. The JSON stays
+editable. Streams (SF-Wan, LongLive) have no job examples (capabilities only).
+
+**Not done.** An `h3-all` preset (one worker, `[engine] swap = true`, FL2VA and
+Ref2VA): it needs a new worker config whose three-DiT swap (memory on a 96 GB
+card, swap latency) was never measured on a GPU, so it is left for a GPU run.
+`h3-ref2v` already swaps its two Ref2VA DiTs.
 
 ## 2. Runpod API (checked live 2026-10-06)
 
@@ -126,8 +217,10 @@ Runpod quirks found live, and handled:
 |---|---|
 | `GET /api/serverless[?all=1&external=1]` | endpoints (live and deleted in the last day; `all`: every one), cost today, the policy |
 | `POST /api/serverless {spec}` | create (201) |
-| `POST /api/serverless/validate {spec}` | validate; the spec with defaults filled |
-| `GET /api/serverless/defaults?name=&variant=`, `GET/PUT /api/serverless/policy` | |
+| `POST /api/serverless/validate {spec, id?}` | validate (schema, §1a checks, GPU stock); the spec with defaults filled, `serving` (what it serves, the preset given or inferred, the examples) |
+| `GET /api/serverless/defaults?name=&preset=` (or `&variant=`), `GET/PUT /api/serverless/policy` | |
+| `GET /api/serverless/presets` | every preset: variant, config, weights, least GPU memory, what it serves |
+| `GET /api/serverless/<id>/serves`, `POST …/serves/check` | what it serves and its test invokes; the check against a running worker's capabilities |
 | `GET /api/serverless/<id>` | the row, Runpod's view (workers), `/health`, recent jobs and their stats, cost per day, audit |
 | `PUT /api/serverless/<id> {spec}` | update (merged over the stored spec) |
 | `POST /api/serverless/<id>/scale {workers_min?, workers_max?}`, `POST …/extend {minutes}` | |
@@ -142,7 +235,10 @@ Runpod quirks found live, and handled:
 | `POST /api/serverless/tick` | the tick now, billing included |
 
 ```bash
-fv-control.sh endpoint create fake-test                    # cpu variant, CPU workers, 0..1, delete after 2 h
+fv-control.sh endpoint presets                             # what each preset serves, GPU memory, weights
+fv-control.sh endpoint create r2v --preset h3-ref2v --mode lb   # model-first: H3 reference-to-video behind a load balancer
+fv-control.sh endpoint serves r2v                           # models, API names (MiniMax-H3-Turbo -> h3-ref2v-turbo), examples
+fv-control.sh endpoint create fake-test                    # custom: cpu variant, CPU workers, 0..1, delete after 2 h
 fv-control.sh endpoint create spec.json                     # or a full spec
 fv-control.sh endpoint list | show fake-test
 fv-control.sh endpoint invoke fake-test                     # {"kind":"info"}; polls when /runsync returns IN_QUEUE
@@ -154,9 +250,12 @@ fv-control.sh endpoint purge fake-test [--yes]             # shows queued / runn
 
 The **Serverless** page (`#/serverless`) lists the endpoints (status, workers,
 queue, $/hr, cost today and billed, backstop). It creates one from a form or the spec
-JSON (validate first), and per endpoint shows health, cold start and warm
-queue wait, scale / scale to 0 / backstop +30 min / delete, a test invoke with
-presets (info, capabilities, a fake job; LB: ping, capabilities), workers and
+JSON (validate first): the preset comes first, and a **Serves** panel shows
+what the endpoint will serve, live, as you pick (variant and config sit under
+"Advanced / custom"). Per endpoint it shows health, cold start and warm
+queue wait, what it serves (preset or inferred, with the check against a
+running worker), scale / scale to 0 / backstop +30 min / delete, a test invoke
+with a picker of the examples it serves (§1a) and the JSON, workers and
 their logs, the spec editor, recent invokes, cost per day and audit. Its
 **Queue** card cancels a job (a pasted Runpod job id, or Cancel on an
 unfinished invoke) and purges the queue: the dialog shows the queued and

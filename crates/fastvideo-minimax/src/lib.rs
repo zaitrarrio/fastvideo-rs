@@ -262,21 +262,64 @@ impl MiniMax {
     /// Also returns the tier the name resolved through (`None` for explicit
     /// config or name aliases), so a result can be marked with its tier even
     /// when the engine's caps carry no tag.
+    ///
+    /// A name that reaches no model is refused with what this server does
+    /// serve: its model ids and the MiniMax names that resolve here.
     pub fn resolve_caps<'a>(
         &self,
         name: &str,
         alias: &dyn Fn(&str) -> Option<String>,
         models: &'a [ModelCaps],
     ) -> Result<(&'a ModelCaps, Option<Tier>), ApiError> {
+        let not_served = || {
+            ApiError::invalid_param(
+                "model",
+                format!("model `{name}` is not served here ({})", self.served_summary(alias, models)),
+            )
+        };
+        self.resolve_with(name, alias, models, &not_served)
+    }
+
+    /// `served: <model ids>; aliases: <name> -> <model>, …`: the served
+    /// models and every MiniMax name (and `minimax.models` entry) that
+    /// resolves to one of them, for the not-served error.
+    pub fn served_summary(&self, alias: &dyn Fn(&str) -> Option<String>, models: &[ModelCaps]) -> String {
+        let quiet = || ApiError::internal("");
+        let mut names: Vec<String> = Vec::new();
+        let candidates = MiniMaxModel::ALL
+            .iter()
+            .map(|m| m.as_str().to_owned())
+            .chain(self.cfg.models.keys().cloned());
+        for n in candidates {
+            if let Ok((c, _)) = self.resolve_with(&n, alias, models, &quiet) {
+                let line = format!("{n} -> {}", c.id.as_str());
+                if !names.contains(&line) {
+                    names.push(line);
+                }
+            }
+        }
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        let list = |v: Vec<String>| if v.is_empty() { "none".to_owned() } else { v.join(", ") };
+        format!(
+            "served: {}; aliases: {}",
+            list(ids.into_iter().map(str::to_owned).collect()),
+            list(names)
+        )
+    }
+
+    fn resolve_with<'a>(
+        &self,
+        name: &str,
+        alias: &dyn Fn(&str) -> Option<String>,
+        models: &'a [ModelCaps],
+        not_served: &dyn Fn() -> ApiError,
+    ) -> Result<(&'a ModelCaps, Option<Tier>), ApiError> {
         if let Some(target) = self.cfg.models.get(name) {
-            return resolve_model(target, alias, models).map(|c| (c, None));
+            return resolve_model(target, alias, models).map(|c| (c, None)).map_err(|_| not_served());
         }
         if alias(name).is_some() {
-            return resolve_model(name, alias, models).map(|c| (c, None));
+            return resolve_model(name, alias, models).map(|c| (c, None)).map_err(|_| not_served());
         }
-        let not_served = || {
-            ApiError::invalid_param("model", format!("model `{name}` is not served here"))
-        };
         let model = MiniMaxModel::parse(name).ok_or_else(not_served)?;
         let tier = model.tier().unwrap_or(Tier::Max);
         let canonical = match tier {
@@ -394,5 +437,27 @@ mod tests {
         assert_eq!(MiniMaxModel::H3Max.min_duration(), 5);
         assert_eq!(Resolution::parse("2K").map(|r| r.short_edge()), Some(1440));
         assert_eq!(Resolution::parse("720P"), None);
+    }
+
+    /// A name no model answers is refused with what is served: the h3-max
+    /// worker (sol-h3 alone) asked for `MiniMax-H3-Turbo`.
+    #[test]
+    fn not_served_lists_what_is() {
+        let mm = MiniMax::default();
+        let models = vec![ModelCaps::h3("sol-h3", false).with_tier(Tier::Max, "h3-max")];
+        let alias = |n: &str| (n == "MiniMax-H3-Max").then(|| "sol-h3".to_owned());
+        let e = mm.resolve_caps("MiniMax-H3-Turbo", &alias, &models).unwrap_err();
+        assert_eq!(e.param.as_deref(), Some("model"));
+        assert!(
+            e.message.starts_with("model `MiniMax-H3-Turbo` is not served here (served: sol-h3; aliases: "),
+            "{}",
+            e.message
+        );
+        assert!(e.message.contains("MiniMax-H3-Max -> sol-h3"), "{}", e.message);
+        assert!(!e.message.contains("MiniMax-H3-Turbo ->"), "{}", e.message);
+        // What does resolve still does.
+        assert_eq!(mm.resolve_caps("MiniMax-H3-Max", &alias, &models).unwrap().0.id.as_str(), "sol-h3");
+        let e = mm.resolve_caps("nope", &|_: &str| -> Option<String> { None }, &[]).unwrap_err();
+        assert!(e.message.ends_with("(served: none; aliases: none)"), "{}", e.message);
     }
 }

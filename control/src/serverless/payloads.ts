@@ -141,9 +141,13 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
     timeout: spec.execution_timeout_s * 1000,
   };
 }
-/** What a v2-made queue endpoint's template gets after create (REST v1 PATCH /templates): the boot of a named config. */
+/** What a v2-made template gets after create (REST v1 PATCH /templates): the boot of a named config. A queue
+ * endpoint's config (a file or inline), and a load balancer's inline config: v2 create has no entrypoint field,
+ * and the image's entrypoint (fv-entry) knows FV_CONFIG but not FV_WORKER_TOML_B64. A load balancer's config
+ * file rides v2's `args` instead (`--config <path>` to fv-entry). */
 export function v2TemplateBoot(spec: EndpointSpec) {
-  return spec.mode === "queue" && (spec.config || spec.config_toml) ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : null;
+  const boot = spec.mode === "queue" ? !!(spec.config || spec.config_toml) : !!spec.config_toml;
+  return boot ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : null;
 }
 /** Runpod catalog pools for the spec's GPU types, in the spec's order (unknown types are dropped). */
 export function lbPools(gpuTypes: string[], catalog: { id: string; pool: string | null }[]): string[] {
