@@ -73,6 +73,7 @@ try {
   const cookie = login.headers.get("set-cookie").split(";")[0];
   const { csrf } = await login.json();
   const tok = (await (await fetch(`${B}/api/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
+  const raw = (p, body, method) => fetch(B + p, { method: method || (body ? "POST" : "GET"), headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const api = (p, body, method) => fetch(B + p, { method: method || (body ? "POST" : "GET"), headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
   // A tiny cluster that ran (its operations and audit rows), and a defined h3/ltx cluster with seeded pod lines.
   const tiny = await api("/api/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
@@ -209,6 +210,10 @@ try {
   if (process.env.CLUSTER_UI !== "0") {
     const { clusterEditorChecks } = await import("./cluster-config.mjs");
     await clusterEditorChecks({ page, B, api, out, tiny, big });
+  }
+  if (process.env.CONFIG_UI !== "0") {
+    const { configValidationChecks } = await import("./config-validation.mjs");
+    await configValidationChecks({ page, B, api, raw, out, tiny });
   }
   assert.deepEqual(errors.filter((e) => !/favicon|Failed to load resource/.test(e)), [], "no console errors");
   console.log(`ok   UI explorer: filters in the URL, virtualized list, selection + copy, context, pins, find, regex, level sort, ops/audit sources, follow + live tail, phone width (screenshots in ${out})`);

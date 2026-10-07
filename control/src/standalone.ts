@@ -13,49 +13,14 @@ import { validateVar } from "./envvars";
 import { bootRows, getBoot } from "./boottime";
 import { getDiagnosis } from "./podlogs";
 import { HttpError, utcDay } from "./util";
+import type { z } from "zod";
+import { parseOr400, type StandaloneLaunchZ } from "./schemas";
 
 /** The single pool's id inside a standalone pod's spec. */
 export const STANDALONE_POOL = "pod";
 
-export interface LaunchRequest {
-  name: string;
-  /** A pool preset (GET /api/templates pool_presets: h3-turbo, ltx-pro, …): variant, config and models. */
-  preset?: string;
-  /** Without a preset: the image variant and what it runs. */
-  variant?: string;
-  config?: string;
-  config_toml?: string;
-  models?: { id: string; family: string; recipe: string }[];
-  fake_models?: string[];
-  /** Image: exactly one of a channel (stable, latest), a commit sha, or an image reference / digest. */
-  channel?: string;
-  sha?: string;
-  image?: string;
-  compute?: "GPU" | "CPU";
-  /** GPU types in placement order (default: the region's). */
-  gpu_types?: string[];
-  gpu_type?: string;
-  cpu_flavors?: string[];
-  vcpu?: number;
-  /** Region (eu) or its data centre (EUR-IS-1). */
-  region?: string;
-  dc?: string;
-  /** Mount the region's weights volume at /workspace (GPU default true, CPU default false). */
-  volume?: boolean;
-  container_disk_gb?: number;
-  /** Env of the pod (its definition's cluster-level layer, so it survives stop / start): {KEY: "value"} or {KEY: {value, secret}}. Reserved controller keys are refused. */
-  env?: Record<string, string | { value: string; secret?: boolean }>;
-  /** Backstop: the pod is deleted this many minutes after the start (the cron and its own watchdog). Default 60. */
-  deadline_min?: number;
-  /** Stop after this many idle minutes (GPU < the idle threshold, no jobs). */
-  idle_stop_min?: number | null;
-  max_gpu_dph?: number;
-  min_balance?: number;
-  balance_floor?: number;
-  min_start?: number;
-  auth?: "keys" | "none";
-  log_level?: ClusterSpec["log_level"];
-}
+/** A launch request (the schema: src/schemas.ts StandaloneLaunchZ, GET /api/schemas/standalone-launch). */
+export type LaunchRequest = z.infer<typeof StandaloneLaunchZ>;
 
 /** The region of a region id or a data centre id. */
 export function regionOf(x: { region?: string; dc?: string }): RegionId {
@@ -69,13 +34,10 @@ export function regionOf(x: { region?: string; dc?: string }): RegionId {
 /** A launch request → the env it sets (validated) and a normalized one-pool direct cluster spec. */
 export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: { key: string; value: string; secret: boolean }[] } {
   if (!input || typeof input !== "object") throw new HttpError(400, "body: a launch request");
-  const nSrc = [input.channel, input.sha, input.image].filter(Boolean).length;
-  if (nSrc > 1) throw new HttpError(400, "image: at most one of channel, sha, image");
+  input = parseOr400("standalone-launch", input);
   const base: Partial<PoolSpec> = input.preset ? presetPool(input.preset) ?? {} : {};
-  if (input.preset && !base.variant) throw new HttpError(400, `preset: no pool preset ${input.preset} (GET /api/templates)`);
-  if (!input.preset && !input.variant) throw new HttpError(400, "preset or variant");
   const region = regionOf(input);
-  const compute = input.compute ?? base.compute ?? "GPU";
+  const compute = input.compute ?? base.compute ?? (input.variant === "cpu" ? "CPU" : "GPU");
   const pool: PoolSpec = {
     ...(base as PoolSpec),
     id: STANDALONE_POOL,
@@ -94,16 +56,14 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
   if (input.fake_models) pool.fake_models = input.fake_models;
   const gpus = input.gpu_types?.length ? input.gpu_types : input.gpu_type ? [input.gpu_type] : undefined;
   if (gpus) pool.gpu_types = gpus;
-  if (input.cpu_flavors) pool.cpu_flavors = input.cpu_flavors as PoolSpec["cpu_flavors"];
-  if (input.vcpu !== undefined) pool.vcpu = Number(input.vcpu);
+  if (input.cpu_flavors) pool.cpu_flavors = input.cpu_flavors;
+  if (input.vcpu !== undefined) pool.vcpu = input.vcpu;
   if (input.container_disk_gb !== undefined) pool.container_disk_gb = Number(input.container_disk_gb);
   pool.volume = input.volume ?? (compute === "GPU" ? (base.volume ?? true) : false);
   // An image reference is the pool's own image (resolved to a digest at start); the channel / sha the spec's source.
   if (input.image) pool.image = input.image;
-  const deadlineMin = Number(input.deadline_min ?? 60);
-  if (!Number.isFinite(deadlineMin) || deadlineMin < 5 || deadlineMin > 7 * 24 * 60) throw new HttpError(400, "deadline_min: 5-10080");
-  const idle = input.idle_stop_min === undefined || input.idle_stop_min === null ? null : Number(input.idle_stop_min);
-  if (idle !== null && !(Number.isFinite(idle) && idle >= 5 && idle <= 24 * 60)) throw new HttpError(400, "idle_stop_min: 5-1440, or null");
+  const deadlineMin = input.deadline_min ?? 60;
+  const idle = input.idle_stop_min ?? null;
   const spec = normalizeSpec({
     name: input.name,
     image: input.sha ? { sha: input.sha } : { channel: input.channel || "stable" },
@@ -115,7 +75,7 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
     ...(input.max_gpu_dph !== undefined ? { max_gpu_dph: Number(input.max_gpu_dph) } : {}),
     ...(input.min_balance !== undefined ? { min_balance: Number(input.min_balance) } : {}),
     ...(input.balance_floor !== undefined ? { balance_floor: Number(input.balance_floor) } : {}),
-    min_start: input.min_start !== undefined ? Number(input.min_start) : 10,
+    min_start: input.min_start ?? Math.max(10, input.balance_floor ?? 8),
     auto_stop_idle_min: idle,
     log_shipping: true,
     ...(input.log_level ? { log_level: input.log_level } : {}),
@@ -124,7 +84,7 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
   for (const [key, v] of Object.entries(input.env || {})) {
     const value = typeof v === "string" ? v : String(v?.value ?? "");
     try {
-      validateVar(key, value);
+      validateVar(key, value, typeof v === "object" && !!v?.secret);
     } catch (e) {
       throw new HttpError(400, `env: ${(e as Error).message}`);
     }
@@ -189,4 +149,21 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     op: op || null,
     last_op: lastOp || null,
   };
+}
+
+/** A cluster-spec issue (normalizeSpec, the live checks) at the launch request's own field, for the launch form. */
+export function mapLaunchIssues(issues: { path: (string | number)[]; message: string }[]): { path: (string | number)[]; message: string }[] {
+  const TOP: Record<string, string> = { cap_s: "deadline_min", auto_stop_idle_min: "idle_stop_min", regions: "region" };
+  const IMG: Record<string, string> = { channel: "channel", sha: "sha", ref: "image" };
+  return issues.map((i) => {
+    const [a, b, c, ...rest] = i.path;
+    let path: (string | number)[];
+    if (a === "pools" && b === 0 && typeof c === "string") path = [c === "regions" ? "region" : c, ...rest];
+    else if (a === "pools") path = [];
+    else if (a === "image" && typeof b === "string") path = [IMG[b] || "channel"];
+    else if (typeof a === "string") path = [TOP[a] || a, ...(TOP[a] ? [] : i.path.slice(1))];
+    else path = i.path;
+    const message = a === "cap_s" ? i.message.replace(/\b(\d+)\b/g, (m) => (Number(m) >= 60 ? `${Number(m) / 60} min` : m)) : i.message;
+    return { path, message };
+  });
 }

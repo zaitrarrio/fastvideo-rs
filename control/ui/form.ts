@@ -5,7 +5,8 @@
 // key / value / secret table with write-only secret inputs.
 import type { Dynamic } from "./editor";
 import { dynOptions } from "./editor";
-import { resolve, unwrap, type Json, type Path, type Schema } from "./schema";
+import { CLOSED_SOURCES, controlKind, envEditor, ruleOf } from "./fields";
+import { resolve, unwrap, validate, type Json, type Path, type Schema } from "./schema";
 
 type Change = (v: any) => void;
 let uid = 0;
@@ -49,7 +50,7 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
   function node(s: Schema | undefined, v: any, path: Path, change: (v: any, rerender?: boolean) => void, top = false): HTMLElement {
     const u = unwrap(s, root) || {};
     const ty = typeOf(u);
-    if (ty === "object" && u.additionalProperties && typeof u.additionalProperties === "object" && !u.properties) return envTable(u, v || {}, change);
+    if (ty === "object" && u.additionalProperties && typeof u.additionalProperties === "object" && !u.properties) return envTable(u, v || {}, change, path);
     if (ty === "object") return objectForm(u, v || {}, path, change, top);
     if (ty === "array") {
       const it = unwrap(u.items, root);
@@ -64,11 +65,15 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
     for (const [k, ps] of Object.entries<Schema>(u.properties || {})) {
       const pu = unwrap(ps, root) || {};
       const id = `f${++uid}`;
+      const err = el("div", { class: "cf-err", role: "alert" });
       const onChange = (x: any, rr = false) => {
         const next = { ...v };
         if (x === undefined) delete next[k];
         else next[k] = x;
         v = next;
+        // This field's own rules, as you type (the server's validator adds the cross-field ones).
+        err.textContent = x === undefined ? (req.has(k) ? "required" : "") : validate(ps, x, root).map((i) => (i.path.length ? `${i.path.join(".")}: ` : "") + i.message).join("; ");
+        row.classList.toggle("has-err", !!err.textContent);
         change(next, rr);
       };
       const ctl = node(ps, v[k], [...path, k], onChange);
@@ -76,7 +81,8 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
       const lab = el("label", { for: id, title: pu.description || "" }, k, req.has(k) ? "" : el("span", { class: "muted" }, " (optional)"));
       const firstInput = ctl.matches("input,select,textarea") ? ctl : ctl.querySelector("input,select,textarea");
       if (firstInput && !firstInput.id) firstInput.id = id;
-      const row = el("div", { class: `fv-row${complex ? " wide" : ""}`, "data-path": [...path, k].join(".") }, lab, ctl, pu.description ? el("div", { class: "fv-help" }, pu.description) : null);
+      const rule = ruleOf(ps, root);
+      const row = el("div", { class: `fv-row${complex ? " wide" : ""}`, "data-path": [...path, k].join("."), "data-kind": controlKind(ps, root) }, lab, rule ? el("div", { class: "fv-help ff-rule" }, rule) : null, ctl, err, pu.description ? el("div", { class: "fv-help" }, pu.description) : null);
       box.append(row);
     }
     return box;
@@ -94,18 +100,24 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
     }
     if (ty === "number" || ty === "integer") {
       const inp = el("input", { type: "number", step: ty === "integer" ? 1 : "any", value: v ?? "", min: u.minimum, max: u.maximum !== undefined && u.maximum < 9e15 ? u.maximum : undefined, oninput: () => change(optional(inp.value === "" ? "" : Number(inp.value))) });
-      return inp;
+      return u["x-unit"] ? el("span", { class: "ff-num" }, inp, el("span", { class: "ff-unit muted small" }, u["x-unit"])) : inp;
     }
     if (u["x-secret"]) {
       const inp = el("input", { type: "password", autocomplete: "new-password", placeholder: "write-only: type a new value", value: "", oninput: () => change(inp.value === "" ? undefined : inp.value) });
       return inp;
     }
     const src = u["x-dynamic"];
-    if (u.maxLength && u.maxLength > 1000 && !u.pattern) {
+    if (src && CLOSED_SOURCES.has(src) && ty === "string") {
+      // A live list that is the whole choice: a select; a value no longer offered stays, flagged.
+      const opts = dynOptions(o.dyn, src);
+      const sel = el("select", { onchange: () => change(optional(sel.value)) }, el("option", { value: "" }, "—"), ...opts.map((x) => el("option", { value: x.value, selected: x.value === v }, [x.value, x.detail].filter(Boolean).join(" — "))), ...(v && !opts.some((x) => x.value === v) ? [el("option", { value: v, selected: true, class: "ff-stale" }, `${v} (not available)`)] : []));
+      return sel;
+    }
+    if (u["x-ui"] === "textarea" || (u.maxLength && u.maxLength > 1000 && !u.pattern)) {
       const ta = el("textarea", { rows: 6, value: v ?? "", oninput: () => change(optional(ta.value)) });
       return ta;
     }
-    const inp = el("input", { type: "text", value: v ?? "", pattern: u.pattern, oninput: () => change(optional(inp.value)) });
+    const inp = el("input", { type: "text", value: v ?? "", pattern: u.pattern, maxlength: u.maxLength, spellcheck: "false", oninput: () => change(optional(inp.value)) });
     if (src) {
       const dl = el("datalist", { id: `dl${++uid}` }, ...dynOptions(o.dyn, src).map((x) => el("option", { value: x.value }, [x.detail, x.info].filter(Boolean).join(" · "))));
       inp.setAttribute("list", dl.id);
@@ -182,32 +194,20 @@ export function renderForm(host: HTMLElement, o: FormOptions): FormHandle {
     );
     return wrap;
   }
-  function envTable(u: Schema, v: Record<string, any>, change: (v: any, rr?: boolean) => void): HTMLElement {
-    const keyS = unwrap(u.propertyNames, root);
-    const wrap = el("div", { class: "fv-table" });
-    const tbody = el("tbody");
-    for (const [k, e] of Object.entries<any>(v)) {
-      const upd = (x: any, rr = false) => change({ ...v, [k]: x }, rr);
-      const val = e.secret
-        ? el("input", { type: "password", autocomplete: "new-password", placeholder: e.value === null && !e.set ? "•••••••• secret (type to replace)" : "write-only", value: e.set ?? "", oninput: (ev: any) => upd(ev.target.value === "" ? { value: null, secret: true } : { value: null, secret: true, set: ev.target.value }) })
-        : el("input", { type: "text", value: e.value ?? "", oninput: (ev: any) => upd({ value: ev.target.value, secret: false }) });
-      tbody.append(
-        el(
-          "tr",
-          { "data-key": k },
-          el("td", {}, el("code", {}, k)),
-          el("td", { class: "fv-grow" }, val),
-          el("td", {}, el("label", { class: "fv-inline" }, el("input", { type: "checkbox", checked: e.secret, onchange: (ev: any) => upd(ev.target.checked ? { value: null, secret: true, ...(e.value ? { set: e.value } : {}) } : { value: e.set ?? "", secret: false }, true) }), "secret")),
-          el("td", {}, el("button", { type: "button", class: "ghost danger", "aria-label": `remove ${k}`, onclick: () => { const { [k]: _, ...rest } = v; change(rest, true); } }, "✕")),
-        ),
-      );
-    }
-    const nk = el("input", { type: "text", placeholder: "NEW_KEY", pattern: keyS?.pattern, "aria-label": "new key" });
-    const dlist = el("datalist", { id: `dl${++uid}` }, ...dynOptions(o.dyn, keyS?.["x-dynamic"] || "env_keys").filter((x) => !(x.value in v)).map((x) => el("option", { value: x.value }, x.detail || "")));
-    nk.setAttribute("list", dlist.id);
-    const add = el("button", { type: "button", onclick: () => { const k = nk.value.trim(); if (!k || k in v) return; change({ ...v, [k]: { value: "", secret: false } }, true); } }, "+ add");
-    wrap.append(el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "key"), el("th", {}, "value"), el("th", {}, ""), el("th", {}, ""))), tbody)), el("div", { class: "row" }, nk, dlist, add));
-    return wrap;
+  function envTable(_u: Schema, v: Record<string, any>, change: (v: any, rr?: boolean) => void, path: Path): HTMLElement {
+    // Key rule and reserved keys as you type, typed values for the engine keys, secrets write-only (ui/fields.ts envEditor).
+    const err = el("div", { class: "cf-err", role: "alert" });
+    const ed = envEditor({
+      value: v,
+      dyn: o.dyn,
+      shape: "doc",
+      secrets: true,
+      onChange: (next, errs) => {
+        err.textContent = errs.join("; ");
+        change(next, false);
+      },
+    });
+    return el("div", { class: "fv-table", "data-path": path.join(".") }, ed.el, err);
   }
   draw();
   return {

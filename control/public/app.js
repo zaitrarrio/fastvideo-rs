@@ -529,14 +529,8 @@ function buildPodsCard(bpm, redraw) {
     ),
     h("div", { class: "row" }, h("button", { class: "primary", disabled: !pol.enabled, onclick: async () => { const r = await call("up", "/api/build-pods/up", { method: "POST", body: {} }); if (r) toast(`up: ${r.action} ${r.pod.name}`); after(); } }, "Up (reuse / start / create)")),
     bpm.error ? h("p", { class: "small" }, bpm.error) : live.length ? live.map(one) : h("p", { class: "muted small" }, "No managed build pod."),
-    h("details", {}, h("summary", { class: "small" }, "Policy (build_pods)"), docJson(pol, async (next) => { await act("policy", () => api("/api/build-pods/policy", { method: "PUT", body: { policy: next } })); after(); })),
+    h("details", {}, h("summary", { class: "small" }, "Policy (build_pods)"), docPanel("build-pods", "default", { title: "build pods policy", onSaved: () => after() })),
   );
-}
-/** A JSON textarea with a Save button (the build pods policy). */
-function docJson(value, onSave) {
-  const ta = h("textarea", { rows: 18, style: "width:100%;font-family:var(--mono, monospace)" });
-  ta.value = JSON.stringify(value, null, 2);
-  return h("div", {}, ta, h("button", { onclick: async () => { let v; try { v = JSON.parse(ta.value); } catch (e) { toast(`policy: ${e.message}`); return; } await onSave(v); } }, "Save"));
 }
 /** The legacy shared build pod (read only): its own self-stop timers (/healthz) and the controller's backstop. */
 function buildPodCard(bp) {
@@ -710,7 +704,7 @@ async function pageCluster(main, id) {
       h("button", { class: "primary", onclick: () => { location.hash = `#/cluster/${c.id}/config`; } }, "Configure…"),
       !running && btn("Start", () => startDialog(c, draw), "primary"),
       running && btn("Stop (delete pods)", () => confirm(`Delete every pod of ${c.name}?`) && post("stop", {}, "stop"), "danger"),
-      running && btn("Extend…", () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) post("extend", { minutes: Number(m) }, "extend"); }),
+      running && btn("Extend…", async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${c.name}`); if (m) post("extend", { minutes: m }, "extend"); }),
       running && btn("Roll to…", () => rollDialog(c, post)),
       running && btn("Restart…", () => restartDialog(c, r.pods, post)),
       btn("Add pool…", async () => addPoolDialog(c, (await api("/api/templates")).pool_presets || [], () => route())),
@@ -728,7 +722,7 @@ async function pageCluster(main, id) {
           { label: "workers", get: (p) => `${(c.state.workers[p.id] || []).length} / ${p.count}`, num: true },
           {
             label: "",
-            get: (p) => running ? h("button", { disabled: !!op, onclick: () => { const n = prompt(`Workers for ${p.id}`, String(p.count)); if (n !== null) post("scale", { pool: p.id, count: Number(n) }, "scale"); } }, "Scale…") : "",
+            get: (p) => running ? h("button", { disabled: !!op, onclick: async () => { const r = await (await fvEditor()).askScale(api, `Scale ${c.name}`, p.id, p.count, c.spec.pools.map((x) => x.id)); if (r) post("scale", r, "scale"); } }, "Scale…") : "",
           },
         ],
         c.spec.pools,
@@ -810,7 +804,7 @@ async function pageCluster(main, id) {
         { class: "row" },
         h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/front`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : { workers: j.workers }, null, 2)); } }, edge ? "Families view" : "Workers view"),
         h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : "cluster"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
-        h("button", { onclick: async () => { const n = prompt("Name of the new user API key", "laptop"); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
+        h("button", { onclick: async () => { const n = await (await fvEditor()).askKeyName(api, `Mint a user API key for ${c.name}`); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
         h("button", { onclick: showKeys }, "Keys"),
       ),
       gwKeysEl,
@@ -896,16 +890,11 @@ function pickDialog(title, intro, groups, okLabel, extra) {
     dlg.showModal();
   });
 }
-/** Roll: a target and which pools move to it. */
+/** Roll: a target and which pools move to it (a form bound to the roll schema). */
 async function rollDialog(c, post) {
-  const target = h("input", { value: c.spec.image.channel || "stable", "aria-label": "Roll target", placeholder: "channel, git sha or image" });
   const pools = Object.keys(c.state.workers || {}).filter((p) => (c.state.workers[p] || []).length);
-  const groups = [{ label: "Pools (new workers come up beside the old ones, then the old ones drain)", items: pools.map((p) => ({ value: p, label: p, checked: true, note: `${c.state.workers[p].length} worker(s)` })) }];
-  const sel = await pickDialog(`Roll ${c.name}`, "Target: a channel (stable, latest), a git sha or an image.", groups, "Roll", h("label", {}, "Target ", target));
-  if (!sel) return;
-  if (!sel.length) return toast("nothing chosen");
-  if (!target.value.trim()) return toast("no target");
-  post("roll", { target: target.value.trim(), pools: sel }, "roll");
+  const r = await (await fvEditor()).askRoll(api, `Roll ${c.name}`, c.spec.image.channel || "stable", pools, c.id);
+  if (r) post("roll", { target: r.target, pools: r.pools && r.pools.length ? r.pools : pools }, "roll");
 }
 /** Restart: whole pools or single pods, whether or not their env changed. */
 async function restartDialog(c, pods, post) {
@@ -1088,15 +1077,8 @@ async function pageCosts(main) {
 // ---------------------------------------------------------------- releases
 async function pageReleases(main) {
   const [rel, ci] = await Promise.all([api("/api/releases"), api("/api/github/ci").catch((e) => ({ error: e.message }))]);
-  const target = h("input", { placeholder: "git sha, digest or tag", "aria-label": "Target" });
-  const channel = h("input", { value: "stable", "aria-label": "Channel", size: 8 });
-  const dry = h("input", { type: "checkbox", checked: true, "aria-label": "Dry run" });
-  const dispatch = async (action) => {
-    const body = { action, channel: channel.value, target: target.value, dry_run: dry.checked };
-    if (!confirm(`${action} ${action === "promote" ? target.value + " to " : ""}${channel.value}${dry.checked ? " (dry run)" : ""}? This dispatches release.yml.`)) return;
-    const r = await act(action, () => api("/api/github/release", { method: "POST", body }));
-    toast(`dispatched: see ${r.runs_url}`);
-  };
+  const relForm = h("div", { class: "muted small" }, "loading the form…");
+  fvEditor().then((E) => E.mountReleaseForm(relForm, { api, toast })).catch((e) => relForm.replaceChildren(h("p", { class: "small" }, e.message)));
   main.replaceChildren(
     h("h1", {}, "Releases"),
     h(
@@ -1106,7 +1088,7 @@ async function pageReleases(main) {
         "Channels",
         rel.available ? table([{ label: "channel", get: (r) => r.channel }, { label: "sha", get: (r) => h("code", {}, r.git_sha.slice(0, 7)) }, { label: "action", get: (r) => r.action }, { label: "when", get: (r) => ago(r.promoted_at) }, { label: "by", get: (r) => r.promoted_by }], rel.heads) : h("p", { class: "muted small" }, "fv-jobs is not bound (JOBS_DB)."),
         h("h3", {}, "Promote / roll back (release.yml)"),
-        h("div", { class: "row" }, target, channel, h("label", { style: "flex-direction:row;align-items:center;gap:5px" }, dry, "dry run"), h("button", { class: "primary", onclick: () => dispatch("promote") }, "Promote"), h("button", { onclick: () => dispatch("rollback") }, "Roll back")),
+        relForm,
       ),
       card(
         "CI on main",
@@ -1123,21 +1105,23 @@ async function pageReleases(main) {
 // ---------------------------------------------------------------- settings
 async function pageSettings(main) {
   const [tok, aud] = await Promise.all([api("/api/tokens"), api("/api/audit?limit=100")]);
-  const tName = h("input", { placeholder: "token name", "aria-label": "Token name" });
-  const tScope = h("select", { "aria-label": "Scope" }, h("option", { value: "read" }, "read"), h("option", { value: "admin" }, "admin"));
-  const tTtl = h("input", { type: "number", min: 1, max: 365, value: 90, "aria-label": "Days", style: "width:80px" });
   const tOut = h("pre", { class: "log", hidden: true });
+  const tForm = h("div", { class: "muted small" }, "loading the form…");
+  fvEditor().then((E) => E.mountTokenForm(tForm, { api, toast, onMinted: (j) => { tOut.hidden = false; tOut.textContent = `${j.token}\n(shown once; expires ${dt(j.expires_at)})`; } })).catch((e) => tForm.replaceChildren(h("p", { class: "small" }, e.message)));
   const auditView = h("div", {});
   const parse = (x) => { try { return JSON.parse(x); } catch { return x; } };
   main.replaceChildren(
     h("h1", {}, "Settings"),
     card("Alert policies", h("p", { class: "muted small" }, "Auto-actions touch controller clusters only, with one exception: the build pod backstop (build_pod_*) stops the shared build pod (owner external:build-pod) when its own self-stop did not happen. No other external pod is touched. The deadline backstop always applies."), docPanel("policies", "default", { title: "policies" })),
     card("External pod attribution (name prefix → owner; first match wins)", docPanel("attribution", "default", { title: "attribution rules" })),
+    card("Build pods policy", docPanel("build-pods", "default", { title: "build pods policy" })),
+    card("Serverless policy", docPanel("serverless-policy", "default", { title: "serverless policy" })),
     card(
       "API tokens (scripts/serve/fv-control.sh, agents)",
       table([{ label: "name", get: (t) => t.name }, { label: "scope", get: (t) => t.scope }, { label: "created", get: (t) => ago(t.created_at) }, { label: "last used", get: (t) => ago(t.last_used_at) }, { label: "expires", get: (t) => dt(t.expires_at) }, { label: "", get: (t) => (t.revoked_at ? "revoked" : h("button", { class: "ghost danger", onclick: async () => { await act("revoke", () => api(`/api/tokens/${t.id}`, { method: "DELETE" })); route(); } }, "Revoke")) }], tok.tokens, "No tokens."),
-      h("div", { class: "row", style: "margin-top:8px" }, tName, tScope, h("label", { style: "flex-direction:row;align-items:center;gap:4px" }, tTtl, "days"), h("button", { onclick: async () => { const j = await act("mint", () => api("/api/tokens", { method: "POST", body: { name: tName.value, scope: tScope.value, ttl_days: Number(tTtl.value) } })); tOut.hidden = false; tOut.textContent = `${j.token}\n(shown once; expires ${dt(j.expires_at)})`; } }, "Mint token")),
-      h("p", { class: "muted small" }, "read: GET only · admin: everything but minting tokens (validated against the token-create schema)."),
+      h("h3", {}, "Mint a token"),
+      tForm,
+      h("p", { class: "muted small" }, "read: GET only · admin: everything but minting tokens · ci: only /api/ci/* (a GitHub workflow secret). Validated against the token-create schema."),
       tOut,
     ),
     card(

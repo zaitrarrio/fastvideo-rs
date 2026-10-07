@@ -1,67 +1,22 @@
 // A cluster definition: pod pools of fv-serve workers behind the edge
 // Worker (control_plane "edge", docs/serve/edge-control-plane.md), or
 // workers clients call directly ("direct", docs/control/gateway-less-auth.md).
-import { validate } from "../schemas";
+import type { z } from "zod";
+import { validate, type ClusterSpecZ, type ModelRefZ, type PoolSpecZ } from "../schemas";
 import { HttpError } from "../util";
 import CATALOG from "./catalog.json";
 import { WORKER_CONFIGS } from "./worker-configs";
 import { regionProblem, type RegionId } from "./regions";
 export * from "./regions";
 
-export type CpuFlavor = "cpu3c" | "cpu3g" | "cpu3m" | "cpu5c" | "cpu5g" | "cpu5m";
-export interface ModelRef {
-  id: string;
-  family: string;
-  recipe: string;
-}
-export interface PoolSpec {
-  id: string; // h3-turbo | h3-max | ltx | wan | …
-  variant: string; // image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan5b, cpu (fake engine), …
-  count: number; // worker pods
-  compute: "GPU" | "CPU";
-  config?: string; // the worker config inside the image (/etc/fv/runpod.toml …)
-  config_toml?: string; // or an inline worker config (FV_WORKER_TOML_B64)
-  gpu_types?: string[]; // default: the region's
-  regions?: RegionId[]; // default: the cluster's
-  cpu_flavors?: CpuFlavor[];
-  vcpu?: number;
-  container_disk_gb?: number;
-  volume?: boolean; // mount the region's network volume at /workspace (GPU default true)
-  image?: string; // override: an image reference (resolved to a digest)
-  models?: ModelRef[]; // the models the pool serves (families, recipe check)
-  fake_models?: string[];
-  max_queued?: number;
-  job_timeout_s?: number;
-  stale_after_s?: number;
-  /** control_plane = edge: the family DO this pool's models queue on (default: from each model's family). */
-  family?: string;
-}
-/** edge: the edge Worker is the only front; direct: clients call each worker. (The gateway pod is retired.) */
-export type ControlPlane = "edge" | "direct";
-export interface ClusterSpec {
-  name: string;
-  /** Image source: a release channel (stable, latest, …), a commit (sha), or one image ref for every pod (all-in-one). */
-  image: { channel?: string; sha?: string; ref?: string };
-  regions: RegionId[];
-  /** edge (default): the edge Worker is the cluster's only front; direct: clients call each worker. */
-  control_plane: ControlPlane;
-  /** direct: the workers' client auth (FV_AUTH_MODE). An edge's auth is the edge's own setting. */
-  auth: "keys" | "none";
-  pools: PoolSpec[];
-  /** Backstop: every pod is deleted at create + cap_s (extend moves it). */
-  cap_s: number;
-  /** Each pod's watchdog (edge workers) deletes it below this balance; the cron stops the cluster. */
-  min_balance: number;
-  /** Refuse to start / extend when the projected balance at the deadline would be below this. */
-  balance_floor: number;
-  /** Refuse to start below this balance (script: FV_CLUSTER_MIN_START). */
-  min_start: number;
-  /** A GPU pod over this $/hr is deleted right after create (script: RUNPOD_GPU_MAX_DPH). */
-  max_gpu_dph: number;
-  auto_stop_idle_min?: number | null; // per-cluster override of the idle auto-stop policy
-  log_shipping: boolean;
-  log_level?: "trace" | "debug" | "info" | "warn" | "error"; // FV_LOG_SHIP_LEVEL
-}
+export type { CpuFlavor } from "../enums";
+// The spec's types are the zod schemas' (src/schemas.ts): one definition.
+export type ModelRef = z.infer<typeof ModelRefZ>;
+export type PoolSpec = z.infer<typeof PoolSpecZ>;
+/** A cluster: image source (a release channel, a commit, or one image ref for every pod), regions, control plane
+ * (edge: the edge Worker is the only front; direct: clients call each worker), auth, pools, backstops and money floors. */
+export type ClusterSpec = z.infer<typeof ClusterSpecZ>;
+export type ControlPlane = ClusterSpec["control_plane"];
 
 export const STANDARD_POOLS: PoolSpec[] = [
   { id: "h3-turbo", variant: "h3-turbo", count: 1, compute: "GPU", config: "/etc/fv/runpod.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
@@ -251,14 +206,11 @@ export function defaultSpec(name: string, template: string = "standard"): Cluste
   return base;
 }
 
-const ID_RE = /^[a-z][a-z0-9-]{0,30}$/;
-const VARIANT_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 
-/** Validates and fills defaults; throws 400 with the first problem. */
+/** Fills defaults (a template, preset pools, legacy gateway fields) and validates with the zod schema; throws 400 with every problem (`extra.issues`, path-anchored). */
 export function normalizeSpec(input: any): ClusterSpec {
-  if (!input || typeof input !== "object") throw new HttpError(400, "spec must be an object");
-  const name = String(input.name || "");
-  if (!ID_RE.test(name)) throw new HttpError(400, "name: lower-case letters, digits and '-', starting with a letter (max 31)");
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "spec must be an object", { issues: [{ path: [], message: "spec must be an object" }] });
+  const name = typeof input.name === "string" ? input.name : "";
   const d = defaultSpec(name, typeof input.template === "string" && TEMPLATES[input.template] ? input.template : "standard");
   // A spec stored before the gateway was retired: its `gateway` block gives
   // the auth mode and, with the gateway off, direct mode; a gateway
@@ -269,69 +221,47 @@ export function normalizeSpec(input: any): ClusterSpec {
   const s: ClusterSpec = {
     ...d,
     ...input,
+    name: input.name,
     control_plane: plane ?? d.control_plane,
     auth: input.auth ?? legacy?.auth ?? d.auth,
-    image: input.image ? { ...input.image } : d.image,
+    image: input.image && typeof input.image === "object" ? { ...input.image } : d.image,
     pools: Array.isArray(input.pools) ? input.pools : d.pools,
     regions: Array.isArray(input.regions) && input.regions.length ? input.regions : d.regions,
   };
   delete (s as any).template;
   delete (s as any).gateway;
-  const img = s.image;
-  const nSrc = [img.channel, img.sha, img.ref].filter(Boolean).length;
-  if (nSrc !== 1) throw new HttpError(400, "image: exactly one of channel, sha, ref");
-  if (img.channel && !/^[a-z][a-z0-9-]{0,30}$/.test(img.channel)) throw new HttpError(400, "image.channel: a lower-case word");
-  if (img.sha && !/^[0-9a-f]{7,40}$/.test(img.sha)) throw new HttpError(400, "image.sha: 7-40 hex characters");
-  if (img.ref && !/^[a-z0-9.\-]+(:[0-9]+)?\/[a-z0-9._\-/]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?$/.test(img.ref)) throw new HttpError(400, "image.ref: an image reference");
+  const issues: { path: (string | number)[]; message: string }[] = [];
   // An unavailable region (us: its volume is gone) is rejected, not dropped:
   // dropping would silently change where a saved cluster places workers (and
   // rewrite the stored spec on the next save); a 400 makes the owner choose.
-  for (const r of s.regions) {
+  s.regions.forEach((r, i) => {
     const why = regionProblem(r);
-    if (why) throw new HttpError(400, `regions: ${why}`);
-  }
-  const ids = new Set<string>();
+    if (why) issues.push({ path: ["regions", i], message: why });
+  });
   s.pools = s.pools.map((p: any, i: number) => {
+    if (!p || typeof p !== "object") return p;
     // A standard or preset pool id fills what the entry leaves out; its own config wins.
     const std = presetPool(String(p?.id ?? ""));
     if (std && (p?.config || p?.config_toml)) delete std.config, delete std.config_toml;
     const q: PoolSpec = { ...(std ?? {}), ...p } as PoolSpec;
-    if (q.variant === "gateway") q.variant = "cpu"; // the CPU image's name before the gateway was retired
-    if (!ID_RE.test(q.id || "")) throw new HttpError(400, `pools[${i}].id: invalid`);
-    if (ids.has(q.id)) throw new HttpError(400, `pools: ${q.id} twice`);
-    ids.add(q.id);
-    if (!VARIANT_RE.test(q.variant || "")) throw new HttpError(400, `pools[${i}].variant: invalid`);
-    q.count = Number(q.count ?? 1);
-    if (!Number.isInteger(q.count) || q.count < 0 || q.count > 8) throw new HttpError(400, `pools[${i}].count: 0-8`);
-    q.compute = q.compute === "CPU" ? "CPU" : "GPU";
-    if (!q.config && !q.config_toml) throw new HttpError(400, `pools[${i}]: config or config_toml`);
-    if (q.config_toml && q.config_toml.length > 32768) throw new HttpError(400, `pools[${i}].config_toml: too long`);
-    for (const r of q.regions || []) {
+    if ((q.variant as string) === "gateway") q.variant = "cpu"; // the CPU image's name before the gateway was retired
+    if (q.count === undefined) q.count = 1;
+    if (q.compute === undefined) q.compute = "GPU";
+    (q.regions || []).forEach((r, j) => {
       const why = regionProblem(r);
-      if (why) throw new HttpError(400, `pools[${i}].regions: ${why}`);
-    }
-    if (!(q.models?.length || q.fake_models?.length)) throw new HttpError(400, `pools[${i}]: models or fake_models (what the pool serves)`);
+      if (why) issues.push({ path: ["pools", i, "regions", j], message: why });
+    });
     for (const [j, m] of (q.models || []).entries())
-      if (UNSERVABLE_RECIPES.has(m?.recipe)) throw new HttpError(400, `pools[${i}].models[${j}].recipe: ${m.recipe} is not in the fv-serve catalog of this build (LongLive-Plug recipes run in fv-gpucheck / the CLI)`);
+      if (UNSERVABLE_RECIPES.has(m?.recipe)) issues.push({ path: ["pools", i, "models", j, "recipe"], message: `${m.recipe} is not in the fv-serve catalog of this build (LongLive-Plug recipes run in fv-gpucheck / the CLI)` });
     return q;
   });
-  const num = (k: keyof ClusterSpec, lo: number, hi: number) => {
-    const v = Number(s[k]);
-    if (!Number.isFinite(v) || v < lo || v > hi) throw new HttpError(400, `${String(k)}: ${lo}-${hi}`);
-    (s as any)[k] = v;
-  };
-  num("cap_s", 300, 7 * 86400);
-  num("min_balance", 8, 10000);
-  num("balance_floor", 8, 10000);
-  num("min_start", 8, 10000);
-  num("max_gpu_dph", 0.1, 50);
-  if (!["edge", "direct"].includes(s.control_plane)) throw new HttpError(400, "control_plane: edge | direct (the gateway is retired)");
-  if (!["keys", "none"].includes(s.auth)) throw new HttpError(400, "auth: keys | none");
-  s.log_shipping = s.log_shipping !== false;
+  if (s.control_plane === ("gateway" as any)) issues.push({ path: ["control_plane"], message: "edge | direct (the gateway is retired)" });
+  if (s.log_shipping === undefined) s.log_shipping = true;
   // The same schema the editor validates against (src/schemas.ts).
   const v = validate("cluster-spec", s);
-  if (!v.ok) throw new HttpError(400, v.issues.map((i) => `${i.path.join(".") || "spec"}: ${i.message}`).join("; "), { issues: v.issues });
-  return s;
+  if (!v.ok) for (const i of v.issues) if (!issues.some((x) => x.path.join(".") === i.path.join("."))) issues.push(i);
+  if (issues.length) throw new HttpError(400, issues.map((i) => `${i.path.join(".") || "spec"}: ${i.message}`).join("; "), { issues });
+  return v.ok ? (v.value as ClusterSpec) : s;
 }
 
 /** A spec stored before the gateway was retired, read as today's: its

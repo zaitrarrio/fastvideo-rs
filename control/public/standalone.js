@@ -44,7 +44,7 @@ function fvBootTimeline(podId) {
   async function pageStandalone(main) {
     const id = new URLSearchParams(location.hash.split("?")[1] || "").get("id");
     if (id) return pageStandaloneOne(main, id);
-    const [list, tpl, dyn] = await Promise.all([api("/api/standalone"), api("/api/templates"), api("/api/schemas/dynamic").catch(() => ({}))]);
+    const list = await api("/api/standalone");
     const draw = async () => {
       const r = await api("/api/standalone");
       listHost.replaceChildren(listTable(r.pods));
@@ -54,7 +54,7 @@ function fvBootTimeline(podId) {
       h("h1", {}, "Standalone pods"),
       h("p", { class: "muted small" }, "One pod on its own, not part of a cluster: the same price check, image preflight, deadline backstop, balance floor, idle stop, cost ledger (owner pod:<name>) and logs from boot as cluster pods. Stop deletes the pod and keeps its definition; Start makes a new pod."),
       card("Pods", listHost),
-      card("Launch", launchForm(tpl.pool_presets || [], dyn, () => draw())),
+      card("Launch", launchForm(() => draw())),
     );
     every(10000, () => draw().catch(() => {}));
   }
@@ -89,70 +89,18 @@ function fvBootTimeline(podId) {
       { class: "row" },
       !p.pod && h("button", { disabled: busy, onclick: () => post("start", {}, "start") }, "Start"),
       (p.pod || busy) && h("button", { onclick: () => confirm(`Stop ${p.name}? Its pod is deleted (logs and costs are kept); Start makes a new one.`) && post("stop", {}, "stop") }, "Stop"),
-      p.pod && h("button", { disabled: busy, onclick: () => { const m = prompt("Extend the deadline by how many minutes?", "30"); if (m) post("extend", { minutes: Number(m) }, "extend"); } }, "Extend"),
+      p.pod && h("button", { disabled: busy, onclick: async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${p.name}`); if (m) post("extend", { minutes: m }, "extend"); } }, "Extend"),
       h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}${p.pod ? " (its pod is stopped first)" : ""}?`)) { await act("delete", () => api(`/api/standalone/${encodeURIComponent(p.name)}`, { method: "DELETE" })); location.hash = "#/standalone"; setTimeout(after, 800); } } }, "Delete"),
     );
   }
 
-  function launchForm(presets, dyn, after) {
-    const f = (label, el) => h("label", {}, label, el);
-    const name = h("input", { name: "name", type: "text", placeholder: "h3-test", required: true, pattern: "[a-z][a-z0-9\\-]{0,30}", "aria-label": "Name" });
-    const preset = h("select", { name: "preset", "aria-label": "Preset" }, h("option", { value: "" }, "custom (variant + config)"), presets.map((p) => h("option", { value: p.id }, `${p.id}: ${p.title}`)));
-    const variant = h("input", { name: "variant", type: "text", placeholder: "h3-turbo, ltx, cpu …", list: "fvsp-variants" });
-    const config = h("input", { name: "config", type: "text", placeholder: "/etc/fv/runpod.toml" });
-    const models = h("input", { name: "fake_models", type: "text", placeholder: "fake models, comma separated (custom only)" });
-    const srcKind = h("select", { "aria-label": "Image source" }, ["channel", "sha", "image"].map((k) => h("option", { value: k }, k)));
-    const src = h("input", { name: "image_source", type: "text", value: "latest", list: "fvsp-channels", placeholder: "latest | <sha> | ghcr.io/…@sha256:…" });
-    const compute = h("select", { name: "compute" }, h("option", { value: "GPU" }, "GPU"), h("option", { value: "CPU" }, "CPU"));
-    const gpu = h("input", { type: "text", list: "fvsp-gpus", placeholder: "region default (RTX PRO 6000)" });
-    const region = h("select", {}, (dyn.regions?.length ? dyn.regions : [{ id: "eu", dc: "EUR-IS-1" }]).map((r) => h("option", { value: r.id }, `${r.id} (${r.dc})`)));
-    const volume = h("input", { name: "volume", type: "checkbox", checked: true });
-    const deadline = h("input", { type: "number", min: 5, max: 10080, value: 60 });
-    const idle = h("input", { type: "number", min: 5, max: 1440, placeholder: "off" });
-    const envTa = h("textarea", { placeholder: "KEY=value, one per line (secrets: the Env page, or the API's {value, secret: true})", style: "min-height:70px" });
-    const out = h("div", { class: "small" });
-    const lists = h(
-      "div",
-      { hidden: true },
-      h("datalist", { id: "fvsp-variants" }, (dyn.variants || []).map((v) => h("option", { value: v.id }, v.detail || ""))),
-      h("datalist", { id: "fvsp-channels" }, (dyn.channels || []).map((c) => h("option", { value: c.id }, c.sha ? `${c.id} (${c.sha})` : c.id))),
-      h("datalist", { id: "fvsp-gpus" }, (dyn.gpu_types || []).map((g) => h("option", { value: g.id }, g.id))),
-    );
-    const customOnly = () => { for (const el of [variant, config, models]) el.disabled = !!preset.value; };
-    preset.addEventListener("change", customOnly);
-    srcKind.addEventListener("change", () => { src.value = srcKind.value === "channel" ? "latest" : ""; });
-    customOnly();
-    const submit = async (ev) => {
-      ev.preventDefault();
-      out.textContent = "";
-      const env = {};
-      for (const line of envTa.value.split("\n").map((l) => l.trim()).filter(Boolean)) {
-        const i = line.indexOf("=");
-        if (i < 1) { out.textContent = `env: "${line}" is not KEY=value`; return; }
-        env[line.slice(0, i).trim()] = line.slice(i + 1);
-      }
-      const body = { name: name.value.trim(), compute: compute.value, region: region.value, volume: volume.checked, deadline_min: Number(deadline.value), env };
-      if (preset.value) body.preset = preset.value;
-      else Object.assign(body, { variant: variant.value.trim(), config: config.value.trim() || undefined, fake_models: models.value ? models.value.split(",").map((s) => s.trim()).filter(Boolean) : undefined });
-      if (src.value.trim()) body[srcKind.value] = src.value.trim();
-      if (gpu.value.trim()) body.gpu_types = [gpu.value.trim()];
-      if (idle.value) body.idle_stop_min = Number(idle.value);
-      try {
-        const r = await act("launch", () => api("/api/standalone", { method: "POST", body }));
-        location.hash = `#/standalone?id=${encodeURIComponent(r.pod.name)}`;
-        after();
-      } catch (e) {
-        out.textContent = e.message;
-      }
-    };
-    return h(
-      "form",
-      { onsubmit: submit },
-      h("div", { class: "fv-form" }, f("name", name), f("preset", preset), f("variant (custom)", variant), f("config in the image (custom)", config), f("fake models (custom)", models), f("image source", srcKind), f("channel / sha / image", src), f("compute", compute), f("GPU type", gpu), f("region", region), h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, volume, "mount the weights volume"), f("deadline (min)", deadline), f("idle stop (min)", idle)),
-      h("div", { style: "margin-top:10px" }, f("env", envTa)),
-      h("div", { class: "row", style: "margin-top:10px" }, h("button", { class: "primary", type: "submit" }, "Launch"), out),
-      lists,
-    );
+  /** The launch form (ui/forms/standalone.ts in the editor bundle): every field bound to the standalone-launch schema. */
+  function launchForm(after) {
+    const host = h("div", { class: "muted small" }, "loading the form…");
+    fvEditor()
+      .then((E) => E.mountLaunchForm(host, { api, toast, onLaunched: (name) => { location.hash = `#/standalone?id=${encodeURIComponent(name)}`; after(); } }))
+      .catch((e) => host.replaceChildren(h("p", { class: "small" }, e.message)));
+    return host;
   }
 
   async function pageStandaloneOne(main, id) {

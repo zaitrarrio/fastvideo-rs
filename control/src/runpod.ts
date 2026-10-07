@@ -4,6 +4,7 @@
 // "Logs"). The API key only ever goes in an Authorization header. Nothing
 // here returns a pod's env: Runpod's GET /pods/<id> includes it in clear,
 // so only named fields are picked.
+import { runpodErrorText } from "./runpoderr";
 import { defaults, type Env } from "./env";
 import { fetchWithTimeout, HttpError, scrub } from "./util";
 
@@ -38,7 +39,7 @@ async function call(env: Env, url: string, init: RequestInit & { timeoutMs?: num
     j = { raw: text.slice(0, 300) };
   }
   if (!r.ok) {
-    const msg = typeof j === "object" && j ? j.error || j.message || JSON.stringify(j).slice(0, 300) : text.slice(0, 300);
+    const msg = typeof j === "object" && j ? runpodErrorText(j, typeof init.body === "string" ? init.body : null) : text.slice(0, 2000);
     throw new HttpError(r.status >= 500 ? 502 : r.status, `runpod: ${scrub(env, String(msg))}`, { upstream: r.status });
   }
   return j;

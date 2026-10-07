@@ -7,6 +7,7 @@
 // The API key only goes in an Authorization header; every upstream text is
 // scrubbed. Nothing here returns a template's env (Runpod returns it in
 // clear): views pick named fields (payloads.ts endpointView).
+import { runpodErrorText } from "../runpoderr";
 import { defaults, type Env } from "../env";
 import { runpod } from "../runpod";
 import { fetchWithTimeout, HttpError, scrub } from "../util";
@@ -43,7 +44,7 @@ async function ok(env: Env, url: string, init: RequestInit & { timeoutMs?: numbe
   const r = await raw(env, url, init);
   if (r.status < 200 || r.status >= 300) {
     const b = r.body;
-    const msg = typeof b === "object" && b ? b.error || b.message || JSON.stringify(b).slice(0, 300) : String(b).slice(0, 300);
+    const msg = runpodErrorText(b, typeof init.body === "string" ? init.body : null);
     throw new HttpError(r.status >= 500 ? 502 : r.status === 401 || r.status === 403 ? 502 : r.status, `runpod: ${scrub(env, String(msg))}`, { upstream: r.status });
   }
   return r.body;
