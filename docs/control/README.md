@@ -548,11 +548,16 @@ when each phase happened, from the lines the controller already sees.
 | fv-serve process start | fv-serve's first line (`fv_serve: fv-serve <version>`) |
 | connected to the edge | `edge_link: worker: connected to the dispatcher` |
 | weights per component | the engine's `[fastvideo] load/io <family> <component> {wall_s, viewed_gb, viewed_gbps}` (text encoder, DiT) and the vision tower line; `loading` / `model resident … seconds=` for the whole model |
-| warm-up done | `warmup done … seconds=` |
+| warm-up started (background) | `warmup started (background)` (fast boot B: after READY) |
+| warm-up done (background) / warm-up done | `warmup done (background) … seconds=` / the blocking `warmup done … seconds=` |
 | fv-serve READY | `FV-SERVE READY` |
 | ready | the `up` wait: a ready front at the edge, or `/health` AVAILABLE |
 
-Shipped tracing events mark the same phases. Each new milestone is written
+Rows are in time order: with the background warm-up (fast boot B, the
+default since 2026-10-07) fv-serve is READY when the weights are resident
+and the warm-up rows follow it, labelled "(background)"; `warmup = "blocking"`
+(or `FV_WARMUP=blocking`) restores ready-after-warm-up. `/health` says
+`warmup: warming | warm | off`. Shipped tracing events mark the same phases. Each new milestone is written
 to the pod's log (`fv-control.boot`, e.g. `boot: pull_end at +22.0 s (pull
 21 s)`). It is served as `GET /api/pods/<id>/boot` (rows: phase, seconds
 after create, duration, detail; and the phase the pod is in now), in

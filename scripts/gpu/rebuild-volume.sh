@@ -112,11 +112,12 @@ hub	wan22-t2v-a14b	wan22-t2v-a14b	126199274206
 hub	lingbot-video-moe-30b-a3b	lingbot-moe	129952345105
 hub	cosmos3-super	cosmos3-super	129465061778
 fp8	h3-base/text_encoder_fp8	text-fp8	25950727517
-fp8	ltx25/text_encoder_fp8	text-fp8	12923849944"
+fp8	ltx25/text_encoder_fp8	text-fp8	12923849944
+ditq	h3-base/transformer_prequant_4step-vsa_mxfp8	dit-prequant	27288663973"
 # Composite cells, run once every tree is in place.
 FINAL_CELLS="aux fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo
 ltx25-two-stage ltx25-dev ltx25-a2v-guided ltx25-ic-lora-ingredients ltx25-ref2v ltx2 ltx23 fastwan21-1.3b wan22-ti2v-5b
-fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v mmaudio-44k-v2 upscalers text-fp8
+fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v mmaudio-44k-v2 upscalers text-fp8 dit-prequant
 longlive2-5b longlive2-5b-nvfp4 longlive-plug
 sana-video-2b-480p wan21-t2v-1.3b ltx23-hq wan22-t2v-a14b lingbot-moe cosmos3-super"
 # longlive-1.3b-safetensors is derived on a CPU pod (scripts/gpu/convert-longlive.py, on wip/longlive until merged;
@@ -134,7 +135,7 @@ slug() { local s="$1"; echo "${s//\//-}"; }
 tree_state() {
   local p="$W/$1"
   if [[ -e "$p" ]]; then
-    if [[ -f "$p/.complete" || "$1" == auxiliary || "$1" == */text_encoder_fp8 ]]; then echo present; else echo present-no-marker; fi
+    if [[ -f "$p/.complete" || "$1" == auxiliary || "$1" == */text_encoder_fp8 || "$1" == */transformer_prequant_* ]]; then echo present; else echo present-no-marker; fi
   else
     echo missing
   fi
@@ -166,6 +167,7 @@ describe() {
     mmaudio) printf 'hkchengrex/MMAudio + nvidia/bigvgan_v2 + apple/DFN5B-CLIP (main; .pth md5-pinned; converted)' ;;
     aux) printf 'weights-manifest.tsv auxiliary/ url rows (pinned URL + SHA-256)' ;;
     fp8) printf 'DERIVED: fv-gpucheck quantize-text-encoder (GPU) or copy from the other volume' ;;
+    ditq) printf 'DERIVED: fv-gpucheck quantize-dit (GPU) or copy from the other volume' ;;
   esac
 }
 
@@ -186,6 +188,9 @@ command_for() {
       [[ "$root" == ltx25 ]] && fam=ltx2-gemma4
       printf 'GPU pod: fv-gpucheck --out /tmp/q quantize-text-encoder --family %s --root %q --tree %q && mv that %q' \
         "$fam" "$W/$root" "$W/$root/.text_encoder_fp8.partial-<stamp>" "$W/$dest" ;;
+    ditq)
+      printf 'GPU pod (h3-turbo image): fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa --out /tmp/q quantize-dit --model h3-turbo --weights-root %q --finalize   # writes <tree>.tmp-<pid>, verifies, renames to %q' \
+        "$W" "$W/$dest" ;;
   esac
 }
 
@@ -309,9 +314,9 @@ for item in ${TODO[@]+"${TODO[@]}"}; do
     if fetch_aux && verify_tree "$dest" "$cells"; then log "ok: $dest"; else FAILED+=("$dest"); fi
     continue
   fi
-  if [[ "$kind" == fp8 ]]; then
+  if [[ "$kind" == fp8 || "$kind" == ditq ]]; then
     if [[ "$state" == present ]] && verify_tree "$dest" "$cells" >/dev/null 2>&1; then log "ok (verified): $dest"
-    else MANUAL+=("$dest: $(command_for fp8 "$dest")"); fi
+    else MANUAL+=("$dest: $(command_for "$kind" "$dest")"); fi
     continue
   fi
   if [[ "$state" == present || "$state" == present-no-marker ]]; then

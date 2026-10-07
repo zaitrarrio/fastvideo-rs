@@ -604,6 +604,10 @@ enum Cmd {
     /// refiner/DiT tensor into a new temporary directory, hash it, load it
     /// back and require byte-identical state, then (with `--finalize`)
     /// rename it into place. Only adds files; refuses an existing tree.
+    /// Run it as fv-serve runs the model: `--mode fast --techniques <the
+    /// model's profile>` (h3-turbo: `h3/fasth3_4step_vsa`), e.g.
+    /// `fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa quantize-dit
+    /// --model h3-turbo --weights-root /workspace/weights --finalize`.
     #[cfg(feature = "cuda")]
     QuantizeDit {
         /// Tier alias or catalog id.

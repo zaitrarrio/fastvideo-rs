@@ -353,6 +353,14 @@ pub fn quantize_dit(
     let identity = dit_tree_identity_for(&r.weights, &options)
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .ok_or_else(|| anyhow::anyhow!("{model}: this recipe has no pre-quantized form"))?;
+    if identity.linear_route != "device-bf16" {
+        // fv-serve loads with bf16 device linears; a tree built otherwise
+        // (e.g. `--mode exact`, FASTVIDEO_BF16=0) would never be selected.
+        return Err(StageError::Error(anyhow::anyhow!(
+            "linear route {} is not fv-serve's (device-bf16): run with --mode fast",
+            identity.linear_route
+        )));
+    }
     let quant = fastvideo_cudarc::wan::quant::QuantMode::parse(&identity.quant).map_err(|e| anyhow::anyhow!(e))?;
     let name = dit_tree::dir_name(&identity.recipe, quant);
     let final_dir = r.weights.join(&name);
