@@ -25,7 +25,10 @@ for each field and where the server enforces it.
   The form model checks each field locally on every edit. It sends the draft
   to the server's validator, debounced, for the cross-field and live rules,
   shows each problem inline at its field and in a summary with a link to the
-  field, and keeps Save, Launch and Create disabled until the form is valid.
+  field. Forms with no validator of their own use `POST
+  /api/schemas/<name>/validate`, which runs the schema's refinements on a
+  draft. The form model keeps Save, Launch and Create disabled until the form
+  is valid.
   A value the live list no longer offers (a channel that is gone, a GPU type
   Runpod dropped) stays visible and is flagged "not available".
 - **The server never trusts the client.** Every write path parses its input
@@ -58,6 +61,50 @@ for each field and where the server enforces it.
   `test/ui/config-validation.mjs` runs `FVEditor.auditForms()` in Chromium on
   each form. It fails on any control without a schema path and on any enum
   rendered as a text input.
+
+## Runpod enums: the staging failures of 2026-10-07
+
+Serverless creates of `scale2`, `scale` and `testing` failed on Runpod. Their
+`gpu_types` were `["RTX 6000 PRO","H100"]` or `["H100","RTX PRO 6000"]`,
+because the form took free text and the spec accepted any 3–80 characters.
+
+Runpod REST v1 refused the create with
+`At /endpoints/properties/gpuTypeIds/items/enum: value must be one of …`.
+Only `…"problems":["At /endp` was visible, because fv-control cut errors at
+300 and 500 characters.
+
+The fix:
+
+- **GPU types are an enum of Runpod's GPU type ids** in the serverless spec,
+  cluster pools and standalone pods (`RUNPOD_GPU_TYPES`, REST v1 openapi).
+  - The forms offer them as chips from the live catalog, with price and
+    stock, and flag a type that is missing from the catalog.
+  - A wrong value is refused with close matches, e.g.
+    `"RTX 6000 PRO" is not a Runpod GPU type id; did you mean "NVIDIA RTX PRO 6000 Blackwell Server Edition" …?`
+    (`enums.ts closeMatches`).
+- **The other enums Runpod validates are enums here too, with the same
+  hint:**
+  - `dataCenterIds` (`data_centers`, the build-pod `volumes` keys);
+  - `cpuFlavorIds`;
+  - `allowedCudaVersions`;
+  - `scalerType`.
+- **GPU type against data centre.** `placementIssues` in
+  `serverless/spec.ts` checks the GPU types against the data centres the
+  workers may use: the volume's data centre (EUR-IS-1 for the EU volume) or
+  `data_centers`.
+  - It uses Runpod's stock for each type and data centre.
+  - It refuses the create and flags the field when none of the types has
+    stock there, for example H100 only on the EU volume.
+  - It warns for each type that has no stock.
+  - Clusters and standalone pods get the same warning per pool
+    (`liveSpecIssues`).
+- **Readable Runpod errors.** `runpoderr.ts` turns each entry of `problems`
+  into this order: the field, the values fv-control sent, did-you-mean
+  matches, then the full allowed list. The REST callers use it
+  (`runpod.ts`, `serverless/runpod-sls.ts`), and `last_error` keeps 4000
+  characters instead of 500.
+- **Tests.** `test/unit/config-validation.test.ts` reproduces the three
+  staging specs, the Runpod error text and the placement check.
 
 ## Naming rules
 

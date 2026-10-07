@@ -252,6 +252,10 @@ describe("UI coverage", () => {
         if (u["x-dynamic"] && ["channels", "variants", "regions", "pool_presets", "data_centers", "volumes", "releases", "pools", "clusters"].includes(u["x-dynamic"])) expect(kind, `${name}:${path.join(".")}`).toBe("select");
       }
     expect(enums).toBeGreaterThan(30);
+    // Nullable fields keep their hints: the serverless volume is a select of the known volumes.
+    const sls = S["serverless-endpoint"]!;
+    expect(controlKind(schemaAt(sls, ["network_volume"]), sls)).toBe("select");
+    expect(controlKind(schemaAt(S["cluster-spec"]!, ["auto_stop_idle_min"]), S["cluster-spec"]!)).toBe("number");
   });
   it("every form field has a schema entry; every schema property is offered or listed", () => {
     for (const [form, m] of Object.entries(FORM_FIELDS)) {

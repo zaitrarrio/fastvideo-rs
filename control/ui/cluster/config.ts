@@ -626,7 +626,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       spec.control_plane !== "direct" ? fieldBox(P("family"), "Edge family", select(P("family"), enumOf(["pools", 0, "family"]).map((v) => [v, v]), { optional: true }), describe(["pools", 0, "family"])) : null,
       fieldBox(P("config"), "Worker config", cfg, "A path inside the image, or a whole worker config sent inline (FV_WORKER_TOML_B64).", true),
       fieldBox(P("models"), "Models", models, describe(["pools", 0, "models"]), true),
-      fieldBox(P("fake_models"), "Fake-engine models", fakeModels, "Comma-separated (CPU pools / tests).", true),
+      fieldBox(P("fake_models"), "Fake-engine models", fakeModels, "The fake engine's models (CPU pools, tests).", true),
       fieldBox(P("max_queued"), "Max queued", num(P("max_queued"), { min: 0, max: 10000, step: 1, optional: true }), describe(["pools", 0, "max_queued"])),
       fieldBox(P("job_timeout_s"), "Job timeout (s)", num(P("job_timeout_s"), { min: 10, max: 86400, step: 10, optional: true })),
       fieldBox(P("stale_after_s"), "Stale after (s)", num(P("stale_after_s"), { min: 10, max: 86400, step: 10, optional: true }), describe(["pools", 0, "stale_after_s"])),
