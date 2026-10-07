@@ -801,6 +801,54 @@ impl AdaLnTable {
         })
     }
 
+    /// The table into a pre-quantized tree (`adaln_table.*`, F32).
+    fn export(&self, w: &mut super::dit_tree::TreeWriter) -> Result<()> {
+        w.values("adaln_table.block_mods", vec![self.block_mods.len()], &self.block_mods)?;
+        w.values("adaln_table.out_mods", vec![self.out_mods.len()], &self.out_mods)?;
+        w.values("adaln_table.keyframe_mods", vec![self.keyframe_mods.len()], &self.keyframe_mods)?;
+        let te = self.temb.first().map_or(0, Vec::len);
+        let flat: Vec<f32> = self.temb.iter().flatten().copied().collect();
+        w.values("adaln_table.temb", vec![self.temb.len(), te], &flat)
+    }
+
+    /// The table [`Self::export`] stored, checked against `cfg` and the
+    /// ladder's length.
+    fn from_tree(
+        cfg: &H3TransformerConfig,
+        r: &super::dit_tree::TreeReader,
+        schedule: &H3JointSchedule,
+    ) -> Result<Self> {
+        let steps = schedule.num_steps();
+        let slice = ADALN_PARAMS * cfg.hidden_size;
+        let (_, block_mods) = r.values("adaln_table.block_mods")?;
+        let (_, out_mods) = r.values("adaln_table.out_mods")?;
+        let (_, keyframe_mods) = r.values("adaln_table.keyframe_mods")?;
+        let (tshape, flat) = r.values("adaln_table.temb")?;
+        let want = [
+            steps * cfg.num_layers * MODALITY_NUM * slice,
+            2 * steps * 2 * cfg.hidden_size,
+            cfg.num_layers * MODALITY_NUM * slice,
+        ];
+        let got = [block_mods.len(), out_mods.len(), keyframe_mods.len()];
+        if got != want || tshape != [2 * steps, cfg.time_embed_dim] {
+            return Err(msg(format!(
+                "dit tree adaln table: {got:?} / temb {tshape:?}, a {steps}-step ladder needs {want:?} / [{}, {}]",
+                2 * steps,
+                cfg.time_embed_dim
+            )));
+        }
+        crate::wan::log::info(format_args!("h3 adaln table: from the pre-quantized tree"));
+        Ok(Self {
+            steps,
+            blocks: cfg.num_layers,
+            hidden: cfg.hidden_size,
+            block_mods,
+            out_mods,
+            keyframe_mods,
+            temb: flat.chunks_exact(cfg.time_embed_dim).map(<[f32]>::to_vec).collect(),
+        })
+    }
+
     /// [`Self::precompute`], memoized in `cache`. Building the table reads
     /// 26 GB of projections that are needed for nothing else, so a warm start
     /// skips more than a third of the checkpoint. The file is keyed by the
@@ -1819,6 +1867,65 @@ impl Block {
 }
 
 impl Block {
+    /// The block's resident state into a pre-quantized tree
+    /// ([`super::dit_tree`]); `prefix` as in the checkpoint.
+    fn export(&self, w: &mut super::dit_tree::TreeWriter, prefix: &str) -> Result<()> {
+        w.tensor(&format!("{prefix}.norm1.weight"), &self.norm1)?;
+        w.tensor(&format!("{prefix}.norm2.weight"), &self.norm2)?;
+        w.linear(&format!("{prefix}.attn.qkvg"), &self.attn.qkvg)?;
+        w.linear(&format!("{prefix}.attn.to_out.0"), &self.attn.to_out)?;
+        w.tensor(&format!("{prefix}.attn.norm_q.weight"), &self.attn.norm_q)?;
+        w.tensor(&format!("{prefix}.attn.norm_k.weight"), &self.attn.norm_k)?;
+        w.linear(&format!("{prefix}.ff.net.0.proj"), &self.ff.ff_in)?;
+        w.linear(&format!("{prefix}.ff.net.2"), &self.ff.ff_out)
+    }
+
+    /// The block [`Self::export`] stored, as [`Self::load_quant`] built it;
+    /// `quant` is checked against what the tree holds.
+    fn from_tree(
+        r: &super::dit_tree::TreeReader,
+        prefix: &str,
+        cfg: &H3TransformerConfig,
+        gate: bool,
+        quant: Option<QuantKind>,
+    ) -> Result<Self> {
+        let (hidden, inner, d) = (cfg.hidden_size, cfg.inner_dim(), cfg.attention_head_dim);
+        let rows = (3 + usize::from(gate)) * inner;
+        let block = Self {
+            norm1: r.pinned(&format!("{prefix}.norm1.weight"), &[hidden])?,
+            norm2: r.pinned(&format!("{prefix}.norm2.weight"), &[hidden])?,
+            attn: Attention {
+                qkvg: r.linear(&format!("{prefix}.attn.qkvg"), hidden, rows)?,
+                to_out: r.linear(&format!("{prefix}.attn.to_out.0"), inner, hidden)?,
+                has_gate: gate,
+                norm_q: r.pinned(&format!("{prefix}.attn.norm_q.weight"), &[d])?,
+                norm_k: r.pinned(&format!("{prefix}.attn.norm_k.weight"), &[d])?,
+                heads: cfg.num_attention_heads,
+                head_dim: d,
+                eps: cfg.qk_norm_eps as f32,
+            },
+            ff: FeedForward {
+                ff_in: r.linear(&format!("{prefix}.ff.net.0.proj"), hidden, 2 * cfg.ffn_dim)?,
+                ff_out: r.linear(&format!("{prefix}.ff.net.2"), cfg.ffn_dim, hidden)?,
+                ffn_dim: cfg.ffn_dim,
+            },
+        };
+        for (name, l) in [
+            ("attn.qkvg", &block.attn.qkvg),
+            ("attn.to_out.0", &block.attn.to_out),
+            ("ff.net.0.proj", &block.ff.ff_in),
+            ("ff.net.2", &block.ff.ff_out),
+        ] {
+            if l.quant_kind() != quant {
+                return Err(msg(format!(
+                    "dit tree {prefix}.{name}: stored as {:?}, this load quantizes it as {quant:?}",
+                    l.quant_kind()
+                )));
+            }
+        }
+        Ok(block)
+    }
+
     /// [`Self::load`], then the reference FP8 recipe on the attention and FFN
     /// linears (after any bf16 LoRA merge, as the reference quantizes).
     pub(crate) fn load_quant(
@@ -2036,6 +2143,47 @@ impl H3TextRefiner {
                 &[cfg.hidden_size],
                 lora,
             )?,
+            eps: cfg.norm_eps as f32,
+            final_eps: cfg.final_norm_eps as f32,
+            quant,
+        })
+    }
+
+    /// The refiner's resident state into a pre-quantized tree.
+    pub fn export(&self, w: &mut super::dit_tree::TreeWriter) -> Result<()> {
+        w.linear("context_embedder", &self.context_embedder)?;
+        for i in 0..self.blocks.len() {
+            self.blocks.with(i, |b| {
+                b.export(w, &format!("token_refiner.refiner_blocks.{i}"))
+            })?;
+        }
+        w.tensor("token_refiner.final_norm.weight", &self.final_norm)
+    }
+
+    /// The refiner [`Self::export`] stored, as [`Self::load_with_residency`]
+    /// built it.
+    pub fn from_tree(
+        cfg: &H3TransformerConfig,
+        r: &super::dit_tree::TreeReader,
+        residency: Residency,
+    ) -> Result<Self> {
+        let mut blocks = BlockWeights::new("h3 refiner", residency)
+            .with_ledger(crate::wan::ledger::REFINER_RING);
+        let quant = QuantMode::from_env().map_err(msg)?;
+        let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
+        for i in 0..cfg.num_refiner_layers {
+            blocks.push(Block::from_tree(
+                r,
+                &format!("token_refiner.refiner_blocks.{i}"),
+                cfg,
+                false,
+                plan.refiner(),
+            )?)?;
+        }
+        Ok(Self {
+            context_embedder: r.linear("context_embedder", cfg.text_dim, cfg.hidden_size)?,
+            blocks,
+            final_norm: r.pinned("token_refiner.final_norm.weight", &[cfg.hidden_size])?,
             eps: cfg.norm_eps as f32,
             final_eps: cfg.final_norm_eps as f32,
             quant,
@@ -2286,6 +2434,88 @@ impl H3Transformer {
                 true,
                 lora,
             )?),
+            out_mods: pinned(
+                table.out_mods.clone(),
+                vec![table.out_mods.len() / cfg.hidden_size, cfg.hidden_size],
+            )?,
+            table,
+            has_gate: with_gate,
+            sol_tea: Default::default(),
+            quant,
+            cfg,
+        })
+    }
+
+    /// The DiT's resident state into a pre-quantized tree
+    /// ([`super::dit_tree`]): the patch projections, every block, the output
+    /// norm and the AdaLN table (the projections it was built from are not
+    /// resident and are not stored).
+    pub fn export(&self, w: &mut super::dit_tree::TreeWriter) -> Result<()> {
+        w.linear("proj_in", &self.proj_in)?;
+        w.linear("audio_proj_in", &self.audio_proj_in)?;
+        w.linear("proj_out", &self.proj_out)?;
+        w.linear("audio_proj_out", &self.audio_proj_out)?;
+        w.tensor("norm_out.norm.weight", &self.norm_out)?;
+        for i in 0..self.blocks.len() {
+            self.blocks
+                .with(i, |b| b.export(w, &format!("transformer_blocks.{i}")))?;
+        }
+        self.table.export(w)
+    }
+
+    /// The DiT [`Self::export`] stored, as [`Self::load_with_residency`]
+    /// builds it for the same recipe: nothing is read from the checkpoint,
+    /// no adapter is merged and nothing is quantized. The AdaLN table must
+    /// be for `schedule` (the tree's identity checks it; so does this).
+    pub fn from_tree(
+        cfg: H3TransformerConfig,
+        r: &super::dit_tree::TreeReader,
+        schedule: &H3JointSchedule,
+        with_gate: bool,
+        residency: Residency,
+    ) -> Result<Self> {
+        if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
+            return Err(msg(format!(
+                "h3 dit: {} rotary channels of a {}-wide head",
+                cfg.rotary_dim(),
+                cfg.attention_head_dim
+            )));
+        }
+        let quant = QuantMode::from_env().map_err(msg)?;
+        let table = AdaLnTable::from_tree(&cfg, r, schedule)?;
+        let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
+        let mut blocks = BlockWeights::new("h3 dit", residency);
+        for i in 0..cfg.num_layers {
+            blocks.push(Block::from_tree(
+                r,
+                &format!("transformer_blocks.{i}"),
+                &cfg,
+                with_gate,
+                plan.dit_block(i),
+            )?)?;
+        }
+        crate::wan::log::info(format_args!(
+            "h3 dit: {} blocks from the pre-quantized tree ({}{})",
+            cfg.num_layers,
+            quant.as_str(),
+            if quant == QuantMode::Off {
+                String::new()
+            } else {
+                format!(", {} reference linears", plan.reference_linear_count())
+            }
+        ));
+        crate::wan::log::info(format_args!("{}", blocks.describe()));
+        let island = |mut l: Linear| {
+            l.set_f32_island();
+            l
+        };
+        Ok(Self {
+            proj_in: island(r.linear("proj_in", cfg.video_patch_dim(), cfg.hidden_size)?),
+            audio_proj_in: island(r.linear("audio_proj_in", cfg.audio_in_channels, cfg.hidden_size)?),
+            blocks,
+            norm_out: r.pinned("norm_out.norm.weight", &[cfg.hidden_size])?,
+            proj_out: island(r.linear("proj_out", cfg.hidden_size, cfg.video_patch_dim())?),
+            audio_proj_out: island(r.linear("audio_proj_out", cfg.hidden_size, cfg.audio_in_channels)?),
             out_mods: pinned(
                 table.out_mods.clone(),
                 vec![table.out_mods.len() / cfg.hidden_size, cfg.hidden_size],

@@ -56,12 +56,13 @@ pub struct H3Model {
 }
 
 impl H3Model {
-    pub fn load(
+    /// The pipeline options serving `recipe` loads with (also what
+    /// `fv-gpucheck quantize-dit` builds the pre-quantized DiT tree under).
+    pub fn pipeline_options(
         recipe: &H3Recipe,
         text_cache: Option<&Path>,
-        obs: &mut dyn FnMut(&'static str),
-    ) -> Result<Self, ApiError> {
-        let options = H3PipelineOptions {
+    ) -> Result<H3PipelineOptions, ApiError> {
+        Ok(H3PipelineOptions {
             dense: recipe.dense,
             // The AdaLN table is the base DiT's; a Ref2VA DiT builds its own.
             adaln_cache: recipe.adaln_cache.clone().filter(|_| !recipe.ref2va),
@@ -85,7 +86,15 @@ impl H3Model {
                 &recipe.i2v_encoder,
             )
             .map_err(ApiError::internal)?,
-        };
+        })
+    }
+
+    pub fn load(
+        recipe: &H3Recipe,
+        text_cache: Option<&Path>,
+        obs: &mut dyn FnMut(&'static str),
+    ) -> Result<Self, ApiError> {
+        let options = Self::pipeline_options(recipe, text_cache)?;
         obs("h3_pipeline");
         let mut pipe = H3Pipeline::load(&recipe.weights, options)
             .map_err(|e| api_err(&format!("h3 load {}", recipe.weights.display()), e))?;

@@ -4,6 +4,7 @@
 //! See docs/ports/h3.md.
 
 pub mod audio_vae;
+pub mod dit_tree;
 pub mod fused16;
 pub mod drain;
 pub mod lora;
