@@ -218,7 +218,7 @@ async fn every_adapter_records_the_whole_path_under_the_callers_trace() {
 
     // MiniMax.
     let id = "33333333333333333333333333333333";
-    let body = json!({"model": "MiniMax-H3-Turbo", "content": [{"type": "text", "text": "a red fox"}], "resolution": "768P", "duration": 5});
+    let body = json!({"model": "MiniMax-H3-Turbo", "content": [{"type": "text", "text": "a red fox"}], "resolution": "768P", "duration": 5, "ratio": "16:9"});
     let s = call(
         &r,
         "POST",
