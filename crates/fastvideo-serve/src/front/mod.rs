@@ -243,11 +243,11 @@ impl EngineGate for FrontGate {
         if let (Some(t), Some(s)) = (trace, t_stage) {
             t.span_since(fastvideo_trace::Comp::Front, "stage_inputs", s, inputs.len() as i64);
         }
-        let mut job = job.clone();
-        if job.trace.is_none() {
-            job.trace = trace.map(|t| t.traceparent(t.parent));
+        let mut sent = job.clone();
+        if sent.trace.is_none() {
+            sent.trace = trace.map(|t| t.traceparent(t.parent));
         }
-        let env = Envelope { job, inputs, attempt: 1, pool: Some(scope.id().to_owned()) };
+        let env = Envelope { job: sent, inputs, attempt: 1, pool: Some(scope.id().to_owned()) };
         let body = EnqueueReq {
             job_id: job.id.to_string(),
             envelope: serde_json::to_value(&env).map_err(|e| ApiError::internal(format!("encoding the envelope: {e}")))?,
