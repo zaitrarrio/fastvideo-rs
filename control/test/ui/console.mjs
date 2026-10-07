@@ -105,7 +105,8 @@ try {
   await page.waitForSelector('[data-field-file="image_url"]', { state: "attached" });
   await page.setInputFiles('[data-field-file="image_url"]', { name: "fox.png", mimeType: "image/png", buffer: Buffer.from("89504e470d0a1a0a", "hex") });
   await page.fill('[data-input="prompt"]', "the fox turns its head");
-  await page.waitForFunction(() => !document.querySelector('[data-field="image_url"]')?.textContent?.includes("uploading"));
+  await page.waitForFunction(() => { const t = document.querySelector('[data-field="image_url"]')?.textContent || ""; return !t.includes("Uploading"); });
+  assert.doesNotMatch(await page.textContent('[data-field="image_url"]'), /Upload failed/);
   await page.click("#run");
   await page.waitForSelector("#video:not([hidden])", { timeout: 30000 });
   const i2v = mock.queue.ran.filter((r) => r.input.path === "/fastvideo/fake-wan/image-to-video").at(-1);
