@@ -540,6 +540,12 @@ app.post("/api/standalone/validate", async (c) => {
     const ex = e as HttpError;
     issues.push(...mapLaunchIssues((ex.extra?.issues as Issue[]) || [{ path: [], message: ex.message }]));
   }
+  // An off provider (its secrets unset) says so at its field even while the rest of the request does not parse.
+  if ((OTHER_PROVIDERS as readonly string[]).includes(b?.provider) && !issues.some((i) => i.path[0] === "provider")) {
+    const impl = providerImpl(b.provider as OtherProviderId);
+    const off = impl.off(c.env);
+    if (off) issues.push({ path: ["provider"], message: `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)` });
+  }
   if (typeof b?.name === "string" && !issues.some((i) => i.path[0] === "name")) {
     const r = await checkName(c.env, "cluster", b.name);
     if (!r.ok && r.problem) issues.push({ path: ["name"], message: r.problem });

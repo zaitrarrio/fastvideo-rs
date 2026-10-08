@@ -37,7 +37,6 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
     const custom = !f.get(["preset"]);
     const prov = f.get(["provider"]) || "runpod";
     const other = prov !== "runpod";
-    const offDetail = other ? (dyn.providers || []).find((p: any) => p.id === prov)?.detail : null;
     const cpu = !other && (f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu"));
     const where = other
       ? [
@@ -47,7 +46,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             help: prov === "gmi" ? "A GMI container product the account may use (GMI_PRODUCTS)." : "A Brev instance type the account may use (BREV_INSTANCE_TYPES).",
           }),
           ...(prov === "gmi" ? [F(["provider_region"], { label: "IDC", placeholder: (dyn.provider_regions || [])[0]?.id || "the default IDC", help: "GMI data centre (GET /v1/idcs)." })] : []),
-          F(["weights_source"], { label: "Weights", unsetLabel: "none (fake engine)", onSet: () => draw(), help: "No Runpod volume here: none (the fake engine), or hub (downloaded at every boot; the owner approves)." }),
+          F(["weights_source"], { label: "Weights", options: [{ value: "none", detail: "fake engine" }, { value: "hub", detail: "download at boot" }], unsetLabel: "none (fake engine)", onSet: () => draw(), help: "No Runpod volume here: none (the fake engine), or hub (downloaded at every boot; the owner approves)." }),
           ...(f.get(["weights_source"]) === "hub" ? [F(["weights_download_approved"], { label: "Owner approved the Hub download", help: "Tens to hundreds of GB per boot, paid at the GPU's rate (CLAUDE.md: large downloads need approval)." })] : []),
         ]
       : [
@@ -145,7 +144,6 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             },
             help: "Runpod (the EU weights volume), or GMI Cloud / NVIDIA Brev: docs/serve/deploy-gmi-brev.md.",
           }),
-          ...(offDetail && /^off:/.test(offDetail) ? [h("p", { class: "small", style: "color:var(--critical-text)", "data-schema-ignore": "" }, `${prov}: ${offDetail} — the owner sets its secrets first (docs/serve/deploy-gmi-brev.md §8).`)] : []),
           ...where,
         ),
       ),

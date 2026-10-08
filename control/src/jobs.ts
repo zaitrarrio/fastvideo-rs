@@ -27,6 +27,7 @@ import { edgeFetch, requireEdge } from "./cluster/ops";
 import { isEdge } from "./cluster/spec";
 import { getCluster, secretsOf, type Cluster } from "./cluster/store";
 import { audit, fetchWithTimeout, HttpError } from "./util";
+import { podBaseUrl } from "./providers";
 
 export type Actor = { actor: string; ip?: string };
 export const TERMINAL_JOB = new Set(["succeeded", "failed", "cancelled"]);
@@ -220,7 +221,9 @@ export async function cancelJobRow(env: Env, who: Actor, c: Cluster, row: any, o
   const attempts: Attempt[] = [];
   const tok = await internalToken(env, c);
   for (const pod of targets.slice(0, 4)) {
-    const r = await call(`${defaults.podUrl(env, pod)}/fv/v1/internal/jobs/${encodeURIComponent(row.id)}`, { method: "DELETE", headers: { "x-fv-internal-token": tok }, timeoutMs: 15000 });
+    const at = await podBaseUrl(env, pod, (p) => defaults.podUrl(env, p));
+    if (!at) continue; // a GMI / Brev pod that has not reported its URL yet
+    const r = await call(`${at}/fv/v1/internal/jobs/${encodeURIComponent(row.id)}`, { method: "DELETE", headers: { "x-fv-internal-token": tok }, timeoutMs: 15000 });
     attempts.push({ via: "internal", target: pod, status: r.status, message: r.status === 200 ? String(r.body?.status || "") : short(r.body) });
     if (r.status === 200) return finish(env, who, c, o, { ...base, ok: true, via: "internal", pod, status: String(r.body?.status || row.status), cancel_requested: !!r.body?.cancel_requested, note: noteFor(r.body?.status, !!r.body?.cancel_requested, pod === holder), attempts });
     if (r.status === 401 || r.status === 403) break; // the token is wrong for every pod alike
@@ -237,7 +240,8 @@ export async function cancelJobRow(env: Env, who: Actor, c: Cluster, row: any, o
       viaEdge = env;
       auth = e.admin_token;
     } else if (holder && livePods.includes(holder)) {
-      url = `${defaults.podUrl(env, holder)}${route.path}`;
+      const at = await podBaseUrl(env, holder, (p) => defaults.podUrl(env, p));
+      url = at ? `${at}${route.path}` : null;
       auth = (await secretsOf(env, c)).admin_token || "";
     }
     if (url) {

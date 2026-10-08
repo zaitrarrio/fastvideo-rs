@@ -130,8 +130,9 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
       compute: pool.compute,
       gpu_types: pool.gpu_types || null,
       cpu_flavors: pool.compute === "CPU" ? pool.cpu_flavors || null : undefined,
-      region: (pool.regions || c.spec.regions)[0],
-      dc: REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.dc,
+      // GMI / Brev: the provider's own region (the spec's Runpod region does not apply there).
+      region: pool.provider && pool.provider !== "runpod" ? (pool.provider_region ?? null) : (pool.regions || c.spec.regions)[0],
+      dc: pool.provider && pool.provider !== "runpod" ? null : REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.dc,
       volume: pool.volume !== false && pool.compute === "GPU" ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : pool.volume ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : null,
       config: pool.config || (pool.config_toml ? "(inline config_toml)" : null),
       models: (pool.models || []).map((m) => m.id).concat(pool.fake_models || []),
