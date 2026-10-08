@@ -75,8 +75,32 @@ export function startMock() {
       ],
     },
   };
+  // GMI Cloud (docs/serve/deploy-gmi-brev.md §2): REST under /gmi/v1, Bearer key. Containers boot like a pod:
+  // `/pod/gmi:<name>` serves fv-serve, and the boot's tunnel report goes to fv-control (FV_ENDPOINT_REPORT_URL).
+  m.gmi = {
+    calls: [],
+    templates: [],
+    containers: [
+      { id: "00000000-0000-4000-8000-0000000f0e1a", name: "someone-else", status: "running", reason: "", product: "container.h100.x1", idc: "us-denver-1", templateId: "t", createdAt: new Date().toISOString(), envs: [{ name: "SECRET", value: "foreign-secret" }] },
+      { id: "00000000-0000-4000-8000-00000000057a", name: "fv-pod-stray-0101000000", status: "running", reason: "", product: "container.h200.x1", idc: "us-denver-1", templateId: "t", createdAt: new Date().toISOString(), envs: [] },
+    ],
+    products: [
+      { name: "container.h200.x1", idc: "us-denver-1", type: "Container", price: 320, valid: true, spec: {}, gpuModel: "H200" },
+      { name: "container.b200.x1", idc: "us-denver-1", type: "Container", price: 900, valid: true, spec: {}, gpuModel: "B200" },
+    ],
+    boot: "ok", // ok | fail (the boot reports failed) | silent (no report)
+  };
+  // NVIDIA Brev (§3): the CLI's REST paths under /brev/api, Bearer token; the env rides in the startup script.
+  m.brev = { calls: [], workspaces: [], boot: "ok" };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
+  /** A GMI / Brev pod's boot (providers.ts PROVIDER_BOOT): it serves at /pod/<key> and reports its "tunnel" URL to fv-control. */
+  const simBoot = (key, env, mode, extra) => {
+    m.pods.set(key, { id: key, name: key.split(":")[1], payload: extra, env, image: extra.image, desiredStatus: "RUNNING", costPerHr: 0, created: Date.now(), provider: key.split(":")[0] });
+    if (mode === "silent" || !env.FV_ENDPOINT_REPORT_URL) return;
+    const report = (b) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key, ...b }) }).then((r) => (m.reports ||= []).push({ key, status: r.status, ...b })).catch((e) => (m.reports ||= []).push({ key, error: String(e) }));
+    setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" })), 300);
+  };
   const digestOf = (tag) => "sha256:" + Buffer.from(tag).toString("hex").padEnd(64, "0").slice(0, 64);
   const json = (res, code, body) => {
     res.writeHead(code, { "content-type": "application/json" });
@@ -224,6 +248,78 @@ export function startMock() {
       if (path === "instances/metrics") return ok({ metrics: (d.selector.ById || []).map((id) => ({ instance_id: id, node_id: "n", gpus: [{ gpu_index: "0", gpu_utilization_percent: 50 }] })) });
       if (path === "instances/terminate") { const t = sel(d.selector); for (const i of t) i.status = "Inactive"; return ok({ terminated: t }); }
       return json(res, 404, `no route ${path}`);
+    }
+    // ---- GMI Cloud
+    if (p.startsWith("/gmi/v1/")) {
+      const g = m.gmi;
+      const rest = p.slice("/gmi/v1".length);
+      g.calls.push({ method: req.method, path: rest, auth: bearer === m.gmiKey });
+      if (bearer !== m.gmiKey) return json(res, 401, { code: 0, group: "auth_verify", message: "invalid token" });
+      if (rest === "/containers/products") return json(res, 200, g.products.filter((x) => !url.searchParams.get("idc") || x.idc === url.searchParams.get("idc")));
+      if (rest === "/templates" && req.method === "GET") return json(res, 200, g.templates);
+      if (rest === "/templates" && req.method === "POST") {
+        if (!/^([A-Za-z0-9][A-Za-z0-9_\-. ]*)?[A-Za-z0-9]$/.test(body?.name || "") || !body?.path) return json(res, 400, { reason: "bad template" });
+        const t = { id: `tpl-${g.templates.length + 1}`, ...body };
+        g.templates.push(t);
+        return json(res, 200, { id: t.id });
+      }
+      if (rest === "/containers" && req.method === "GET") return json(res, 200, g.containers);
+      if (rest === "/containers" && req.method === "POST") {
+        for (const k of ["name", "templateId", "product", "idc"]) if (!body?.[k]) return json(res, 400, { reason: `${k} is required` });
+        if (!/^([A-Za-z0-9][A-Za-z0-9_\-. ]*)?[A-Za-z0-9]$/.test(body.name)) return json(res, 400, { reason: "bad name" });
+        if (!g.templates.some((t) => t.id === body.templateId)) return json(res, 404, { reason: "template not found" });
+        if (!g.products.some((x) => x.name === body.product)) return json(res, 400, { reason: `no product ${body.product}` });
+        const id = `00000000-0000-4000-8000-${String(g.containers.length + 1).padStart(12, "0")}`;
+        const env = Object.fromEntries((body.envs || []).map((e) => [e.name, e.value]));
+        g.containers.push({ id, name: body.name, status: "running", reason: "", product: body.product, idc: body.idc, templateId: body.templateId, createdAt: new Date().toISOString(), envs: body.envs, command: body.command, args: body.args, ports: body.ports });
+        simBoot(`gmi:${body.name}`, env, g.boot, { command: body.command, args: body.args, image: g.templates.find((t) => t.id === body.templateId)?.path });
+        return json(res, 200, [{ id }]);
+      }
+      let gm = /^\/containers\/([^/]+)(\/logs)?$/.exec(rest);
+      if (gm) {
+        const c = g.containers.find((x) => x.id === gm[1]);
+        if (!c) return json(res, 404, { reason: "container not found" });
+        if (gm[2]) { res.writeHead(200, { "content-type": "text/plain" }); return res.end(`[fv-boot] start (gmi gmi:${c.name})\n[fv-boot] tunnel ok\nleak? ${m.gmiKey}\n`); }
+        if (req.method === "GET") return json(res, 200, c);
+        if (req.method === "DELETE") {
+          g.containers = g.containers.filter((x) => x.id !== c.id);
+          m.pods.delete(`gmi:${c.name}`);
+          return json(res, 200, { result: "deleted" });
+        }
+      }
+      return json(res, 404, { reason: `mock: no GMI route ${req.method} ${rest}` });
+    }
+    // ---- NVIDIA Brev (the CLI's API)
+    if (p.startsWith("/brev/api/")) {
+      const b = m.brev;
+      const rest = p.slice("/brev/api".length);
+      b.calls.push({ method: req.method, path: rest, auth: bearer === m.brevToken });
+      if (bearer !== m.brevToken) return json(res, 401, { message: "unauthorized" });
+      const om = /^\/organizations\/([^/]+)\/workspaces$/.exec(rest);
+      if (om && om[1] !== m.brevOrg) return json(res, 403, { message: "not a member" });
+      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, ...w }) => w));
+      if (om && req.method === "POST") {
+        if (!body?.name || !body?.instanceType || body.vmOnlyMode !== true || !body.startupScript) return json(res, 400, { message: "name, instanceType, vmOnlyMode, startupScript" });
+        const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
+        // The env file the startup script writes (base64 in the first printf).
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(body.startupScript)?.[1] || "";
+        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+        b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: body.startupScript });
+        simBoot(`brev:${body.name}`, env, b.boot, { startupScript: body.startupScript });
+        return json(res, 200, { id, name: body.name, status: "DEPLOYING" });
+      }
+      const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
+      if (wm) {
+        const w = b.workspaces.find((x) => x.id === wm[1]);
+        if (!w) return json(res, 404, { message: "workspace not found" });
+        if (req.method === "GET") { const { startupScript, ...o } = w; return json(res, 200, o); }
+        if (req.method === "DELETE") {
+          b.workspaces = b.workspaces.filter((x) => x.id !== w.id);
+          m.pods.delete(`brev:${w.name}`);
+          return json(res, 200, {});
+        }
+      }
+      return json(res, 404, { message: `mock: no Brev route ${req.method} ${rest}` });
     }
     // ---- GHCR
     if (p === "/ghcr/token") return json(res, 200, { token: "anon" });
@@ -399,7 +495,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GMI_API: `${base}/gmi`, BREV_API_URL: `${base}/brev`, FV_ENDPOINT_URL_RE: "^http://127\\.0\\.0\\.1:\\d+/pod/(gmi|brev):fv-[a-z0-9-]+$", GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };
@@ -431,6 +527,8 @@ export const SECRETS = {
   GITHUB_PAT: "github_pat_TEST_0123456789",
   CLOUDRIFT_API_KEY: "crk_TEST_0123456789abcdef",
   CLOUDFLARE_API_KEY: "cf_TEST_0123456789abcdef",
+  GMI_API_KEY: "gmi_TEST_0123456789abcdef",
+  BREV_API_TOKEN: "brev_TEST_0123456789abcdef",
   CONTROL_KEK: b64(wc.getRandomValues(new Uint8Array(32))),
   SESSION_SECRET: "sess_" + Buffer.from(wc.getRandomValues(new Uint8Array(24))).toString("hex"),
 };

@@ -314,7 +314,7 @@ export const CLOUDFLARED = {
 // fv-serve with the same config handling as WORKER_BOOT (payloads.ts).
 export const PROVIDER_BOOT = `set -u
 say() { echo "[fv-boot] $*" >&2; }
-say "start ($FV_PROVIDER $FV_POD_ID)"
+echo "[fv-boot] start ($FV_PROVIDER $FV_POD_ID)" >&2
 mkdir -p /fvstate "$FV_WEIGHTS"
 report() {
   [ -n "\${FV_ENDPOINT_REPORT_URL:-}" ] || return 0
