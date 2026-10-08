@@ -25,6 +25,8 @@ import {
 } from "./ops";
 import { markReady } from "../boottime";
 import { checkPod } from "../podlogs";
+import type { OtherProviderId } from "../enums";
+import { budgetCheck, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
 import type { PodRec, PoolStatus } from "./payloads";
 import { checkImages } from "./preflight";
 import { isEdge } from "./spec";
@@ -209,6 +211,9 @@ export class ClusterOps implements DurableObject {
         const other = (await listClusters(env)).find((x) => x.id !== c.id && isEdge(x.spec) && (["starting", "running", "stopping"].includes(x.status) || Object.values(x.state.workers || {}).some((l) => l.length)));
         if (other) return { done: true, error: `the edge already fronts cluster ${other.name} (${other.status}): one edge cluster at a time` };
       }
+      // GMI / Brev pools (providers.ts): the provider is configured, the GPU allowed, a Hub download approved.
+      const pv = providerIssues(env, c.spec);
+      if (pv.length) return { done: true, error: pv.map((i) => `${c.spec.pools[i.path[1] as number]?.id}: ${i.message}`).join("; ") };
       const proj = await projectSpend(env, c.spec, { hours: c.spec.cap_s / 3600 });
       this.log(`balance $${proj.balance.toFixed(2)}, account $${proj.account_spend_per_hr.toFixed(2)}/hr, cluster ~$${proj.cluster_dph.toFixed(2)}/hr; projected $${proj.projected_balance.toFixed(2)} at the deadline (floor $${proj.floor})`);
       if (!proj.ok && !op.params?.skip_price_check) return { done: true, error: proj.reasons.join("; ") };
@@ -313,6 +318,8 @@ export class ClusterOps implements DurableObject {
       if (cur.status === "ready" || cur.status === "failed") continue;
       if (!recs.length) continue; // no stock: retried below
       let ready = false;
+      // A GMI / Brev pod's URL is the tunnel it reported (POST /ingest/v1/endpoint): into the state for the admin calls.
+      for (const r of recs) if (isOtherPod(r.pod) && !r.url) r.url = (await reportedUrl(env, r.pod)) || undefined;
       for (const r of recs) {
         const ok = isEdge(c.spec) ? !!fronts?.get(r.pod)?.ready : (await workerHealth(env, r.pod)).ok;
         if (ok) {
@@ -328,8 +335,10 @@ export class ClusterOps implements DurableObject {
       // Not ready yet: what does each pod's boot look like?
       const notes: string[] = [];
       for (const r of [...recs]) {
-        const rt = await runpod.podRuntime(env, r.pod).catch(() => undefined);
-        const diag: { phase: string; detail: string; fatal: boolean; replace?: boolean } | null = rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
+        const other = isOtherPod(r.pod);
+        const rt = other ? await otherPodState(env, r.pod).catch(() => undefined) : await runpod.podRuntime(env, r.pod).catch(() => undefined);
+        const diag: { phase: string; detail: string; fatal: boolean; replace?: boolean } | null =
+          rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : other ? await otherPodDiag(env, r.pod, rt as Awaited<ReturnType<typeof otherPodState>> | undefined ?? undefined) : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
         if (!diag) continue;
         if (diag.fatal) {
           this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; deleting it (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
@@ -394,7 +403,7 @@ export class ClusterOps implements DurableObject {
     // verify
     const left: string[] = [];
     for (const p of ids()) {
-      const pod = await runpod.pod(env, p);
+      const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
       if (pod) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {
@@ -422,8 +431,18 @@ export class ClusterOps implements DurableObject {
     if (!(minutes > 0 && minutes <= 24 * 60)) return { done: true, error: "minutes: 1-1440" };
     const base = Math.max(c.deadline || now(), now());
     const next = base + minutes * 60_000;
-    const acct = await runpod.account(env);
     const hours = (next - now()) / 3_600_000;
+    // GMI / Brev pools: their budgets (no balance API); a cluster only there does not ask Runpod.
+    for (const prov of [...new Set(c.spec.pools.filter(isOtherPool).map((p) => poolProvider(p) as OtherProviderId))]) {
+      const b = await budgetCheck(env, prov, 0, hours);
+      this.log(`${prov}: $${b.month.toFixed(2)} this month, $${b.running_dph.toFixed(2)}/hr running; projected $${b.projected.toFixed(2)} (budget ${b.budget === null ? "unset" : `$${b.budget}`})`);
+      if (!b.ok) return { done: true, error: b.reasons.join("; ") };
+    }
+    if (!c.spec.pools.some((p) => !isOtherPool(p))) {
+      await saveState(env, c, { deadline: next });
+      return { done: true };
+    }
+    const acct = await runpod.account(env);
     const floor = Math.max(c.spec.balance_floor, c.spec.min_balance);
     const projected = acct.balance - acct.spendPerHr * hours;
     this.log(`balance $${acct.balance.toFixed(2)}, account $${acct.spendPerHr.toFixed(2)}/hr; new deadline ${new Date(next).toISOString()}; projected $${projected.toFixed(2)}`);

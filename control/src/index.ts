@@ -58,6 +58,8 @@ import { serverlessRoutes } from "./serverless/routes";
 import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
+import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -101,6 +103,8 @@ app.post("/api/auth/logout", async (c) => {
 });
 app.get("/api/auth/me", async (c) => c.json(await whoami(c)));
 app.post("/ingest/v1/logs", async (c) => c.json(await ingest(c.env, c.req.raw, c.executionCtx as ExecutionContext)));
+/** A GMI / Brev pod reports its phase and tunnel URL (providers.ts PROVIDER_BOOT) with its cluster's ingest token. */
+app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, c.req.raw)));
 
 // ---------------- everything else under /api needs auth
 app.use("/api/*", requireAuth);
@@ -157,8 +161,33 @@ async function cloudriftView(env: Env) {
   return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
 }
 app.get("/api/providers", async (c) =>
-  c.json({ providers: [{ id: "runpod", enabled: true }, { id: "cloudrift", enabled: cloudriftEnabled(c.env), ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) }] }),
+  c.json({
+    providers: [
+      { id: "runpod", enabled: true, launch: true },
+      { id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) },
+      // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): launch targets for standalone pods and pools.
+      ...(await Promise.all(OTHER_PROVIDERS.map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
+    ],
+  }),
 );
+/** Price and stock of a GMI / Brev GPU product (the planner's view). */
+app.get("/api/providers/:p/offers", async (c) => {
+  const p = c.req.param("p") as OtherProviderId;
+  if (!(OTHER_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no launch provider ${p} (${OTHER_PROVIDERS.join(", ")})`);
+  const impl = providerImpl(p);
+  const off = impl.off(c.env);
+  if (off) throw new HttpError(400, `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)`);
+  const gpus = c.req.query("gpu") ? [c.req.query("gpu")!] : impl.gpus(c.env);
+  const region = c.req.query("region") || undefined;
+  return c.json({ provider: p, offers: await Promise.all(gpus.map((g) => impl.offer(c.env, g, region))) });
+});
+/** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none). */
+app.get("/api/pods/:id/provider-logs", async (c) => {
+  const id = c.req.param("id");
+  if (!isOtherPod(id)) throw new HttpError(400, "a GMI / Brev pod id (gmi:<name>, brev:<name>); Runpod pods: /api/pods/:id/runpod-logs");
+  const lines = await otherPodLogs(c.env, id);
+  return c.json({ source: splitKey(id)!.provider, lines: lines.slice(-1000).map((l) => scrub(c.env, l)), report: await lastReport(c.env, id) });
+});
 app.get("/api/providers/cloudrift/price", async (c) => {
   const gpu = c.req.query("gpu") || "";
   if (!gpu) throw new HttpError(400, "gpu: a brand (RTX PRO 6000) or a variant name");

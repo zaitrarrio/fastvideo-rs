@@ -11,6 +11,8 @@ import { isEdge } from "./cluster/spec";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { isStandalone, listClusters, ownerOf, type Cluster } from "./cluster/store";
 import { checkPod } from "./podlogs";
+import { collectProviders } from "./collector-providers";
+import { deleteOtherPod, isOtherPod } from "./providers";
 import { defaults, type Env } from "./env";
 import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
@@ -50,7 +52,8 @@ export async function collect(env: Env): Promise<CollectResult> {
   const rows = await env.DB.prepare("SELECT pod_id, cluster_id, role, pool, url, created_at, deleted_at FROM cluster_pods WHERE deleted_at IS NULL OR deleted_at > ?")
     .bind(t - 6 * 3600_000)
     .all<{ pod_id: string; cluster_id: string; role: string; pool: string | null; url: string | null; created_at: number; deleted_at: number | null }>();
-  const ctl = new Map((rows.results || []).map((r) => [r.pod_id, r]));
+  // GMI / Brev pods (gmi:<name>, brev:<name>) are the provider collector's (collector-providers.ts), never Runpod's.
+  const ctl = new Map((rows.results || []).filter((r) => !isOtherPod(r.pod_id)).map((r) => [r.pod_id, r]));
   // Build pods fv-control manages (buildpods.ts): owner build-pod:<name>.
   const managed = await managedPodNames(env);
 
@@ -251,11 +254,12 @@ export async function collect(env: Env): Promise<CollectResult> {
   if ((today?.usd || 0) > pol.daily_spend_max) alerts.push({ key: "daily_spend", kind: "daily_spend", severity: "warn", message: `spend today $${today!.usd.toFixed(2)} (> $${pol.daily_spend_max})` });
   if (balance < floor) {
     alerts.push({ key: "balance_floor", kind: "balance_floor", severity: "critical", message: `balance $${balance.toFixed(2)} is below the floor $${floor}`, action: pol.stop_on_floor ? "stop controller clusters" : undefined });
-    if (pol.stop_on_floor) for (const c of clusters) if (c.state.gateway || Object.values(c.state.workers).some((l) => l.length)) actions.push(await stopCluster(env, c, "balance floor"));
+    // Only clusters with a Runpod pod: GMI / Brev pods have their own budget (collector-providers.ts).
+    if (pol.stop_on_floor) for (const c of clusters) if (hasRunpodPods(c)) actions.push(await stopCluster(env, c, "balance floor"));
   } else if (balance < floor + pol.balance_margin) alerts.push({ key: "balance_margin", kind: "balance_margin", severity: "warn", message: `balance $${balance.toFixed(2)} is within $${pol.balance_margin} of the floor $${floor}` });
   // Clusters with their own higher floor.
   for (const c of clusters) {
-    if (!(c.state.gateway || Object.values(c.state.workers).some((l) => l.length))) continue;
+    if (!hasRunpodPods(c)) continue;
     if (balance < c.spec.balance_floor && balance >= floor && pol.stop_on_floor) {
       alerts.push({ key: `cluster_floor:${c.id}`, kind: "balance_floor", severity: "critical", target: c.name, message: `balance $${balance.toFixed(2)} below ${c.name}'s floor $${c.spec.balance_floor}: stopping`, action: "stop" });
       actions.push(await stopCluster(env, c, "cluster balance floor"));
@@ -265,7 +269,11 @@ export async function collect(env: Env): Promise<CollectResult> {
   const cr = await collectCloudrift(env, t, dtMs, pol).catch((e) => ({ enabled: true, ok: false, error: (e as Error).message, alerts: [], kinds: [], actions: [] }) as unknown as CloudriftCollect);
   alerts.push(...cr.alerts);
   actions.push(...cr.actions);
-  await syncAlerts(env, alerts, ["pod_idle", "pool_failed", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds]);
+  // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): pods, costs, budgets; their failure never stops the Runpod half.
+  const pv = await collectProviders(env, t, dtMs, pol, clusters).catch((e) => ({ alerts: [{ key: "provider_api", kind: "provider_api", severity: "warn" as const, message: `providers: ${(e as Error).message.slice(0, 200)}` }], kinds: [] as string[], actions: [] as string[], summary: {} }));
+  alerts.push(...pv.alerts);
+  actions.push(...pv.actions);
+  await syncAlerts(env, alerts, ["pod_idle", "pool_failed", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds, ...pv.kinds]);
 
   // ---- retention
   await env.DB.batch([
@@ -278,8 +286,11 @@ export async function collect(env: Env): Promise<CollectResult> {
     env.DB.prepare("DELETE FROM pod_log_cursors WHERE updated_at < ?").bind(t - 7 * 86400_000),
   ]);
   const { alerts: _a, kinds: _k, actions: _x, ...crSummary } = cr;
-  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions, ...(cr.enabled ? { cloudrift: crSummary } : {}) };
+  return { at: t, balance, spend_per_hr: spendPerHr, pods: pods.length, running: podInfo.filter((x) => x.running).length, alerts: alerts.length, actions, ...(cr.enabled ? { cloudrift: crSummary } : {}), ...(Object.keys(pv.summary).length ? { providers: pv.summary } : {}) };
 }
+
+/** A cluster with a live Runpod pod (the Runpod balance floor stops only those). */
+const hasRunpodPods = (c: Cluster) => !!c.state.gateway || Object.values(c.state.workers).some((l) => l.some((r) => !isOtherPod(r.pod)));
 
 /** Stops a cluster now (backstop / floor): a `down` operation, cancelling whatever runs; deletes the pods directly if the DO fails. */
 export async function stopCluster(env: Env, c: Cluster, reason: string): Promise<string> {
@@ -292,7 +303,7 @@ export async function stopCluster(env: Env, c: Cluster, reason: string): Promise
     return `${c.name}: stop (${reason})`;
   } catch (e) {
     const ids = [...Object.values(c.state.workers).flat(), ...(c.state.gateway ? [c.state.gateway] : [])].map((r) => r.pod);
-    for (const p of ids) await runpod.remove(env, p).catch(() => {});
+    for (const p of ids) await (isOtherPod(p) ? deleteOtherPod(env, p) : runpod.remove(env, p)).catch(() => {});
     await audit(env, { actor: `policy:${reason}`, action: "cluster.stop.direct", target: c.name, detail: (e as Error).message, after: { deleted: ids } });
     return `${c.name}: deleted pods directly (${reason})`;
   }

@@ -32,7 +32,11 @@ import {
   NAME_RE,
   NAME_RULE,
   POOL_PRESET_IDS,
+  PROVIDER_GPU_RE,
+  PROVIDER_REGION_RE,
+  PROVIDERS,
   RESERVED_NAMES,
+  WEIGHTS_SOURCES,
   RUNPOD_DATA_CENTERS,
   RUNPOD_GPU_TYPES,
   SHA_RE,
@@ -66,6 +70,38 @@ const region = z
   .describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
 const cpuFlavor = z.enum(CPU_FLAVORS, { error: (i) => enumMessage("a Runpod CPU flavor", i.input, CPU_FLAVORS) }).meta({ "x-dynamic": "cpu_flavors" }).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
 const gpuType = z.enum(RUNPOD_GPU_TYPES, { error: (i) => enumMessage("a Runpod GPU type id", i.input, RUNPOD_GPU_TYPES) }).meta({ "x-dynamic": "gpu_types" }).describe("A Runpod GPU type id.");
+// GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): where a pod runs, the provider's GPU product, its region, the weights.
+const provider = z
+  .enum(PROVIDERS, { error: (i) => enumMessage("a provider", i.input, PROVIDERS) })
+  .meta({ "x-dynamic": "providers" })
+  .describe("Where the pods run: runpod (default), gmi (GMI Cloud containers) or brev (NVIDIA Brev VMs); docs/serve/deploy-gmi-brev.md.");
+const providerGpu = z
+  .string()
+  .regex(PROVIDER_GPU_RE, { message: "a provider product / instance type id: letters, digits, . _ : -" })
+  .meta({ "x-dynamic": "provider_gpus", "x-rule": "the provider's own id: a GMI product (container.h200.x1) or a Brev instanceType" })
+  .describe("gmi / brev: the provider's GPU product (GMI) or instance type (Brev); one of GMI_PRODUCTS / BREV_INSTANCE_TYPES.");
+const providerRegion = z.string().regex(PROVIDER_REGION_RE, { message: "an IDC id: letters, digits, . _ - (≤ 50)" }).meta({ "x-dynamic": "provider_regions" }).describe("gmi: the IDC (GET /v1/idcs; default GMI_DEFAULT_IDC). brev: unused (the instance type implies it).");
+const weightsSource = z
+  .enum(WEIGHTS_SOURCES)
+  .describe("Weights: volume (the region's Runpod network volume; Runpod only), hub (downloaded from the Hub at pinned revisions at boot, verified; needs the owner's approval) or none (fake engine). Default: volume on Runpod, none elsewhere.");
+/** The provider fields' rules shared by a pool and a standalone launch. */
+function providerRules(x: { provider?: string; provider_gpu?: string; provider_region?: string; weights_source?: string; gpu_types?: unknown; cpu_flavors?: unknown; vcpu?: unknown; volume?: boolean; compute?: string; models?: unknown[] }, add: (path: string, message: string) => void, gpuTypesKey = "gpu_types") {
+  const other = !!x.provider && x.provider !== "runpod";
+  if (!other) {
+    if (x.provider_gpu) add("provider_gpu", "provider_gpu is for provider gmi / brev (Runpod: gpu_types)");
+    if (x.provider_region) add("provider_region", "provider_region is for provider gmi");
+    if (x.weights_source === "hub") add("weights_source", "Runpod pods read the weights volume (volume) or none");
+    return;
+  }
+  if (!x.provider_gpu) add("provider_gpu", `provider ${x.provider}: the GPU product / instance type is required`);
+  if (x.gpu_types) add(gpuTypesKey, `gpu_types are Runpod GPU type ids: provider ${x.provider} takes provider_gpu`);
+  if (x.cpu_flavors || x.vcpu !== undefined) add("cpu_flavors", `provider ${x.provider} has GPU machines only (the cpu variant runs on one)`);
+  if (x.compute === "CPU") add("compute", `provider ${x.provider} has GPU machines only: compute GPU (the cpu variant runs there too)`);
+  if (x.volume) add("volume", `provider ${x.provider} cannot mount the Runpod weights volume: weights_source hub or none`);
+  if (x.weights_source === "volume") add("weights_source", `provider ${x.provider} has no Runpod volume: hub or none`);
+  if (x.provider === "brev" && x.provider_region) add("provider_region", "brev: the instance type implies the region");
+  if ((x.weights_source ?? "none") === "none" && x.models?.length) add("weights_source", "models need weights: hub (owner approval) or serve fake_models");
+}
 const imageRef = z.string().max(300).regex(IMAGE_REF_RE, { message: "an image reference: registry/repo[:tag][@sha256:<64 hex>]" }).meta({ "x-rule": "registry/repo[:tag][@sha256:<64 hex>], lower-case" });
 const configPath = z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).meta({ "x-rule": "an absolute path ending in .toml, e.g. /etc/fv/runpod.toml", "x-dynamic": "config_paths" });
 const channel = z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" });
@@ -118,13 +154,23 @@ export const PoolSpecZ = z
       .enum(EDGE_FAMILIES)
       .optional()
       .describe("control_plane = edge: the family Durable Object every model of this pool queues on. Default: from each model's family (h3 → h3, ltx2 → ltx, causal wan → sfwan, wan → wan; fake models: fake)."),
+    provider: provider.optional(),
+    provider_gpu: providerGpu.optional(),
+    provider_region: providerRegion.optional(),
+    weights_source: weightsSource.optional(),
+    hub_download_approved: z.boolean().optional().describe("weights_source hub: the owner approved the Hub download at boot (also needs the Worker's FV_HUB_DOWNLOADS_APPROVED=1)."),
   })
   .strict()
   .superRefine((p, ctx) => {
     const add = (path: (string | number)[], message: string) => ctx.addIssue({ code: "custom", path, message });
     if (!!p.config === !!p.config_toml) add(["config"], p.config ? "one of config / config_toml, not both" : "config or config_toml is required");
     if (!(p.models?.length || p.fake_models?.length)) add(["models"], "models or fake_models (what the pool serves) is required");
-    if (p.compute === "CPU") {
+    providerRules(p, (path, message) => add([path], message));
+    // GMI / Brev machines are GPU machines; the cpu variant (fake engine) runs on one as a smoke test.
+    const other = !!p.provider && p.provider !== "runpod";
+    if (other) {
+      /* providerRules covers it */
+    } else if (p.compute === "CPU") {
       if (p.gpu_types) add(["gpu_types"], "a CPU pool takes no gpu_types");
       if (p.variant !== "cpu" && !p.image) add(["variant"], "CPU pods run the cpu variant (the CUDA variants need a GPU)");
     } else {
@@ -315,10 +361,19 @@ export const StandaloneLaunchZ = z
     log_level: z.enum(LOG_LEVELS).optional().describe("Most verbose level shipped."),
     start: z.boolean().optional().describe("Start it now (default); false: only define it."),
     skip_image_check: z.boolean().optional().describe("Skip the image preflight (not recommended)."),
+    provider: provider.optional(),
+    provider_gpu: providerGpu.optional(),
+    provider_region: providerRegion.optional(),
+    weights_source: weightsSource.optional(),
+    weights_download_approved: z.boolean().optional().describe("weights_source hub: the owner approves this pod's Hub download at boot (the Worker's FV_HUB_DOWNLOADS_APPROVED=1 is needed too)."),
   })
   .strict()
   .superRefine((x, ctx) => {
     const add = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    providerRules(x, add, x.gpu_type ? "gpu_type" : "gpu_types");
+    if (x.provider && x.provider !== "runpod" && x.gpu_type) add("gpu_type", `gpu_type is a Runpod GPU type id: provider ${x.provider} takes provider_gpu`);
+    if (x.provider && x.provider !== "runpod" && (x.region || x.dc)) add(x.region ? "region" : "dc", `region / dc are Runpod's: provider ${x.provider} takes provider_region (gmi)`);
+    if (x.weights_download_approved && x.weights_source !== "hub") add("weights_download_approved", "only with weights_source hub");
     if ([x.channel, x.sha, x.image].filter(Boolean).length > 1) add("channel", "at most one of channel, sha, image");
     if (!x.preset && !x.variant) add("variant", "a preset or variant is required");
     if (x.preset && (x.variant || x.config || x.config_toml || x.models || x.fake_models)) add("preset", "a preset brings its variant, config and models: leave those out");

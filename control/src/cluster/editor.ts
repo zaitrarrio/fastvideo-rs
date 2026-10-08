@@ -9,6 +9,7 @@ import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
+import { isOtherPool, poolDph, providerIssues } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 
 /**
@@ -20,11 +21,20 @@ import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (string | number)[] = []): Promise<{ issues: Issue[]; warnings: Issue[] }> {
   const issues: Issue[] = [];
   const warnings: Issue[] = [];
+  // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
+  for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
+  for (const [i, p] of spec.pools.entries()) {
+    if (!isOtherPool(p) || !p.count || issues.some((x) => x.path[prefix.length + 1] === i)) continue;
+    const { dph, known, offer } = await poolDph(env, p, spec.max_gpu_dph);
+    if (known && dph > spec.max_gpu_dph) issues.push({ path: [...prefix, "max_gpu_dph"], message: `${p.provider_gpu} on ${p.provider} costs $${dph}/hr, above max_gpu_dph $${spec.max_gpu_dph}` });
+    else if (!known) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `no price known for ${p.provider_gpu} on ${p.provider}: planned at max_gpu_dph ($${spec.max_gpu_dph}/hr)` });
+    if (offer?.in_stock === false) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `${p.provider_gpu} is not available on ${p.provider}${offer.region ? ` in ${offer.region}` : ""} now` });
+  }
   const cat = await gpuTypes(env).catch(() => []);
   if (!cat.length) return { issues, warnings };
   const price = new Map(cat.map((g) => [g.id, g.secure_price]));
   spec.pools.forEach((p, i) => {
-    if (p.compute !== "GPU") return;
+    if (p.compute !== "GPU" || isOtherPool(p)) return;
     const regions = p.regions?.length ? p.regions : spec.regions;
     const gpus = p.gpu_types?.length ? p.gpu_types : [...new Set(regions.flatMap((r) => REGIONS[r]?.gpus || []))];
     (p.gpu_types || []).forEach((g, j) => {
@@ -39,7 +49,7 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   // GPU types against the regions' data centres (Runpod's stock): a pool none of whose types has stock there is a warning
   // (stock moves by the minute; a definition may wait for it), shown before Start.
   const pairs = new Map<string, { dc: string; gpu: string }>();
-  const plan = spec.pools.filter((p) => p.compute === "GPU" && p.count > 0).map((p) => ({ p, pls: workerPlacements(spec, p).filter((x) => x.dc && x.gpu) }));
+  const plan = spec.pools.filter((p) => p.compute === "GPU" && p.count > 0 && !isOtherPool(p)).map((p) => ({ p, pls: workerPlacements(spec, p).filter((x) => x.dc && x.gpu) }));
   for (const { pls } of plan) for (const x of pls) pairs.set(`${x.dc}|${x.gpu}`, { dc: x.dc!, gpu: x.gpu! });
   const st = pairs.size ? await gpuStock(env, [...pairs.values()]).catch(() => null) : null;
   if (st)
@@ -180,13 +190,14 @@ export async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): 
 const short = (gpu: string) => gpu.replace(/^NVIDIA\s+/, "").replace(/ Blackwell Server Edition$/, "");
 /** Stock per pool for a spec: where each pool's pods may land and what Runpod reports there. */
 export async function availability(env: Env, spec: ClusterSpec): Promise<Availability> {
-  const plan = spec.pools.map((p) => ({ p, pls: workerPlacements(spec, p) }));
+  const plan = spec.pools.map((p) => ({ p, pls: isOtherPool(p) ? [] : workerPlacements(spec, p) }));
   const pairs = new Map<string, { dc: string; gpu: string }>();
   for (const { pls } of plan) for (const pl of pls) if (pl.gpu && pl.dc) pairs.set(`${pl.dc}|${pl.gpu}`, { dc: pl.dc, gpu: pl.gpu });
   const st = await gpuStock(env, [...pairs.values()]);
   // Demand per (DC, GPU type): the pods of every pool whose first choice it is.
   const demand = new Map<string, { n: number; pools: string[] }>();
   const pools: PoolStock[] = plan.map(({ p, pls }) => {
+    if (isOtherPool(p)) return { pool: p.id, compute: "GPU", count: p.count, status: "ok", hint: `${p.provider}: ${p.provider_gpu}${p.provider_region ? ` in ${p.provider_region}` : ""} (the provider's stock is checked at start)`, placements: [] };
     if (p.compute === "CPU") {
       return { pool: p.id, compute: "CPU", count: p.count, status: "ok", hint: `CPU (${(p.cpu_flavors?.length ? p.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]).join(", ")}): any data centre as a fallback`, placements: pls.map((pl) => ({ dc: pl.dc ?? null, cpu: pl.cpu, stock: null, max_available: null, price: null })) };
     }

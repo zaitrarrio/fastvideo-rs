@@ -29,9 +29,36 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   const F = (p: Path, opts: FieldOpts = {}) => f.field(p, opts);
   const presetOpts = (dyn.pool_presets || []).map((p: any) => ({ value: p.id, detail: p.detail }));
   const catalog = (dyn.catalog_models || []).map((m: any) => ({ value: m, label: m.id, detail: `${m.family} · ${m.recipe}` }));
+  // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): a provider that is off says why in its option.
+  const providerOpts = (dyn.providers || [{ id: "runpod", detail: "" }]).map((p: any) => ({ value: p.id, detail: p.detail }));
+  const RUNPOD_ONLY = ["compute", "region", "gpu_types", "cpu_flavors", "vcpu", "volume", "container_disk_gb"];
+  const OTHER_ONLY = ["provider_gpu", "provider_region", "weights_source", "weights_download_approved"];
   function draw() {
     const custom = !f.get(["preset"]);
-    const cpu = f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu");
+    const prov = f.get(["provider"]) || "runpod";
+    const other = prov !== "runpod";
+    const offDetail = other ? (dyn.providers || []).find((p: any) => p.id === prov)?.detail : null;
+    const cpu = !other && (f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu"));
+    const where = other
+      ? [
+          F(["provider_gpu"], {
+            label: prov === "gmi" ? "GPU product" : "Instance type",
+            options: (dyn.provider_gpus || []).filter((g: any) => g.provider === prov).map((g: any) => ({ value: g.id, detail: g.detail })),
+            help: prov === "gmi" ? "A GMI container product the account may use (GMI_PRODUCTS)." : "A Brev instance type the account may use (BREV_INSTANCE_TYPES).",
+          }),
+          ...(prov === "gmi" ? [F(["provider_region"], { label: "IDC", placeholder: (dyn.provider_regions || [])[0]?.id || "the default IDC", help: "GMI data centre (GET /v1/idcs)." })] : []),
+          F(["weights_source"], { label: "Weights", unsetLabel: "none (fake engine)", onSet: () => draw(), help: "No Runpod volume here: none (the fake engine), or hub (downloaded at every boot; the owner approves)." }),
+          ...(f.get(["weights_source"]) === "hub" ? [F(["weights_download_approved"], { label: "Owner approved the Hub download", help: "Tens to hundreds of GB per boot, paid at the GPU's rate (CLAUDE.md: large downloads need approval)." })] : []),
+        ]
+      : [
+          F(["compute"], { label: "Compute", onSet: (v) => (v === "CPU" ? (f.set(["gpu_types"], undefined, true), f.set(["volume"], false, true)) : (f.set(["cpu_flavors"], undefined, true), f.set(["vcpu"], undefined, true)), draw()), unsetLabel: "the preset's" }),
+          F(["region"], { label: "Region" }),
+          ...(cpu
+            ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs", unsetLabel: "2 (default)" })]
+            : [F(["gpu_types"], { label: "GPU types (in order; none: the region's)", help: "Live from Runpod: $/hr and stock; a type that is gone is flagged." })]),
+          F(["volume"], { label: "Weights volume", placeholder: "mount at /workspace", help: "The region's weights volume (EU jg48s6o1w0); a GPU pod needs it for the weights." }),
+          F(["container_disk_gb"], { label: "Container disk", unsetLabel: "default", placeholder: cpu ? "10" : "40" }),
+        ];
     const s = src();
     body.replaceChildren(
       h(
@@ -105,13 +132,21 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
         h(
           "div",
           { class: "cf-fields" },
-          F(["compute"], { label: "Compute", onSet: (v) => (v === "CPU" ? (f.set(["gpu_types"], undefined, true), f.set(["volume"], false, true)) : (f.set(["cpu_flavors"], undefined, true), f.set(["vcpu"], undefined, true)), draw()), unsetLabel: "the preset's" }),
-          F(["region"], { label: "Region" }),
-          ...(cpu
-            ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs", unsetLabel: "2 (default)" })]
-            : [F(["gpu_types"], { label: "GPU types (in order; none: the region's)", help: "Live from Runpod: $/hr and stock; a type that is gone is flagged." })]),
-          F(["volume"], { label: "Weights volume", placeholder: "mount at /workspace", help: "The region's weights volume (EU jg48s6o1w0); a GPU pod needs it for the weights." }),
-          F(["container_disk_gb"], { label: "Container disk", unsetLabel: "default", placeholder: cpu ? "10" : "40" }),
+          F(["provider"], {
+            label: "Provider",
+            options: providerOpts,
+            unsetLabel: "runpod (default)",
+            allowUnset: true,
+            onSet: (v) => {
+              // Each provider's own fields: the other side's are cleared (the server refuses a mix).
+              for (const k of v && v !== "runpod" ? RUNPOD_ONLY : OTHER_ONLY) f.set([k], undefined, true);
+              if (v && v !== "runpod") f.set(["weights_source"], "none", true);
+              draw();
+            },
+            help: "Runpod (the EU weights volume), or GMI Cloud / NVIDIA Brev: docs/serve/deploy-gmi-brev.md.",
+          }),
+          ...(offDetail && /^off:/.test(offDetail) ? [h("p", { class: "small", style: "color:var(--critical-text)", "data-schema-ignore": "" }, `${prov}: ${offDetail} — the owner sets its secrets first (docs/serve/deploy-gmi-brev.md §8).`)] : []),
+          ...where,
         ),
       ),
       h(
