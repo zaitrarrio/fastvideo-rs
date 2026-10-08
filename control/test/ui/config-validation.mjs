@@ -66,6 +66,21 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await page.waitForSelector(`${SL} select[data-ctl][data-path="vcpu"]`);
   await audit();
   await shot("02-standalone-valid-custom");
+  // GMI Cloud (docs/serve/deploy-gmi-brev.md): a select; picking it hides the Runpod fields and shows the provider's;
+  // here GMI has a key but no GMI_PRODUCTS, so the option and the form say why it is off, and the server refuses it.
+  assert.equal(await page.$eval(`${SL} [data-ctl][data-path="provider"]`, (e) => e.tagName), "SELECT");
+  await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, "gmi");
+  await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"]`);
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_source"]`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="gpu_types"]`), null, "Runpod GPU types hidden");
+  assert.equal(await page.$(`${SL} .ff-field[data-path="region"]`), null, "Runpod region hidden");
+  await page.waitForSelector(`${SL} p:has-text("GMI_PRODUCTS is not set")`);
+  await errAt("standalone-launch", "provider", "GMI Cloud is off");
+  assert.ok(await disabled(launch), "Launch is off while the provider is off");
+  await audit();
+  await shot("02b-standalone-gmi-off");
+  await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, "");
+  await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
 
   // ---------------------------------------------------------------- serverless
   await go("#/serverless");

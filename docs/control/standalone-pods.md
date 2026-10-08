@@ -87,6 +87,23 @@ fv-control.sh boot <pod id | name>            # the boot timeline
 
 `--secret-env K=@FILE` reads a secret value from a file (not argv).
 
+## GMI Cloud and NVIDIA Brev
+
+`provider: gmi | brev` (`--provider` on the CLI) launches the same pod on a
+GMI Cloud container or a Brev VM (docs/serve/deploy-gmi-brev.md): `provider_gpu`
+is the provider's product / instance type, there is no weights volume
+(`weights_source: none` runs the fake engine; `hub` downloads at boot after
+the owner's approval), the pod reports its HTTPS tunnel URL to
+`/ingest/v1/endpoint`, and a monthly budget (`GMI_BUDGET_USD`,
+`BREV_BUDGET_USD`) replaces the balance floor. Both are off until the owner
+sets their secrets; the form and `fv-control.sh providers` say why.
+
+```bash
+fv-control.sh providers
+fv-control.sh pod launch smoke-gmi --provider gmi --gpu container.h200.x1 --fake --deadline-min 20 --wait
+fv-control.sh pod launch smoke-brev --provider brev --gpu <instanceType> --fake --deadline-min 20 --wait
+```
+
 ## UI
 
 The **Standalone** page (`#/standalone`, `public/standalone.js`): the list
