@@ -633,6 +633,19 @@ The collector runs every minute (`collector.ts`):
   defaults to `cents`). Only RTX PRO 6000 and RTX 5090 (`rtxpro6000-*`,
   `rtx59-*`) are allowed: the price route refuses other GPUs (400), and the
   cron terminates our live rental on any other type (`cloudrift_type`).
+- **GMI Cloud and NVIDIA Brev (launch providers, docs/serve/deploy-gmi-brev.md).**
+  A pool or standalone pod with `provider: gmi | brev` runs there (pod ids
+  `gmi:<name>` / `brev:<name>`). Secrets `GMI_API_KEY`, `BREV_API_TOKEN`;
+  vars `GMI_PRODUCTS`, `GMI_DEFAULT_IDC`, `GMI_BUDGET_USD`,
+  `GMI_PRICE_DIVISOR`, `BREV_ORG_ID`, `BREV_INSTANCE_TYPES`, `BREV_PRICES`,
+  `BREV_BUDGET_USD`, `FV_HUB_DOWNLOADS_APPROVED`; optional secret
+  `FV_PROVIDER_SECRET_ENV`. Each is off (and says why) until its secrets
+  are set. The cron lists their fv-named instances into `pods`
+  (`provider = 'gmi' | 'brev'`, owner `pod:<name>` / `cluster:<name>`),
+  books the cost recorded at create, raises `<p>_orphan` for an fv-named
+  instance it did not record (never touched), and warns at 80 % of the
+  monthly budget and stops that provider's clusters at 100 % (`<p>_budget`;
+  neither provider has a balance API). `GET /api/providers` lists all four.
 
 ## 8. Alerts and policies
 

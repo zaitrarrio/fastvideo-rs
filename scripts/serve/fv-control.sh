@@ -32,9 +32,13 @@
 #                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1]
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
+#                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]
 #                                              a standalone pod (docs/control/standalone-pods.md): one pod, not part of a
 #                                              cluster, with the cluster pods' price check, image preflight, backstops,
-#                                              cost ledger (owner pod:<name>) and logs from boot
+#                                              cost ledger (owner pod:<name>) and logs from boot. --provider gmi|brev
+#                                              (docs/serve/deploy-gmi-brev.md): --gpu is the GMI product / Brev instance
+#                                              type; --fake = the cpu image's fake engine (a cheap smoke test)
+#   fv-control.sh providers                    launch providers: enabled or why not, budget, month's spend, GPU products
 #   fv-control.sh pod list | status <name> | start <name> | stop <name> | extend <name> <min> | delete <name> | wait <name>
 #   fv-control.sh pod logs <name|pod id> [--source runpod|serve] [--follow]
 #   fv-control.sh boot <pod id | cluster or standalone name>
@@ -185,16 +189,26 @@ cmd_pod() {
           --idle-stop-min) body="$(jq -c --argjson v "${2:?}" '.idle_stop_min = $v' <<<"$body")"; shift 2 ;;
           --max-dph) body="$(jq -c --argjson v "${2:?}" '.max_gpu_dph = $v' <<<"$body")"; shift 2 ;;
           --no-start) body="$(jq -c '.start = false' <<<"$body")"; shift ;;
+          # GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): --gpu is then the provider's product / instance type.
+          --provider) body="$(jq -c --arg v "${2:?}" '.provider = $v' <<<"$body")"; shift 2 ;;
+          --idc) body="$(jq -c --arg v "${2:?}" '.provider_region = $v' <<<"$body")"; shift 2 ;;
+          --weights) body="$(jq -c --arg v "${2:?}" '.weights_source = $v' <<<"$body")"; shift 2 ;;
+          --approve-hub-download) body="$(jq -c '.weights_download_approved = true' <<<"$body")"; shift ;;
+          --fake) body="$(jq -c '.variant = "cpu" | .config = "/etc/fv/runpod-fake.toml" | .fake_models = ["fake-wan"]' <<<"$body")"; shift ;;
           --wait) wait=1; shift ;;
           --json) json="${2:?}"; shift 2 ;;
           *) die "pod launch: unknown option $1" ;;
         esac
       done
+      # On gmi / brev the one --gpu is the provider's GPU product (GMI) or instance type (Brev), and the CPU image runs on it.
+      if [[ "$(jq -r '.provider // "runpod"' <<<"$body")" != runpod ]]; then
+        body="$(jq -c 'if .gpu_types then .provider_gpu = .gpu_types[0] | del(.gpu_types) else . end | del(.compute)' <<<"$body")"
+      fi
       [[ -n "$json" ]] && body="$(jq -c --slurpfile f "$json" '. * $f[0]' <<<"$body")"
       api_s POST /api/standalone "$body" || die "pod launch: $(api_err)"
       sp_line <<<"$API_OUT"
       jq -r 'if .operation then "operation \(.operation) (fv-control.sh pod wait \(.pod.name))" else empty end' <<<"$API_OUT" >&2
-      (( wait )) && sp_wait "$name" ;;
+      if (( wait )); then sp_wait "$name"; fi ;;
     list) api GET /api/standalone | sp_line ;;
     status) api GET "/api/standalone/${1:?name}" | jq '.pod' ;;
     start) api_s POST "/api/standalone/${1:?name}/start" '{}' || die "start: $(api_err)"; jq -c . <<<"$API_OUT" ;;
@@ -366,6 +380,7 @@ case "$cmd" in
   rollback) api POST /api/github/release "$(jq -nc --arg c "${1:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "rollback", channel: (if $c == "--dry-run" then "stable" else $c end), dry_run: $d}')" | jq . ;;
   build-pod) cmd_build_pod "$@" ;;
   pod) cmd_pod "$@" ;;
+  providers) api GET /api/providers | jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' ;;
   boot)
     t="${1:?boot <pod id | cluster or standalone name>}"
     if [[ "$t" =~ ^[a-z0-9]{14}$ ]]; then ids="$t"; else ids="$(api GET "/api/clusters/$t" | jq -r '.cluster.state.workers // {} | [.[][] | .pod] | join(" ")')"; fi

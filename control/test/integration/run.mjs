@@ -10,8 +10,19 @@ const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
 mock.cloudriftKey = SECRETS.CLOUDRIFT_API_KEY;
+mock.gmiKey = SECRETS.GMI_API_KEY;
+mock.brevToken = SECRETS.BREV_API_TOKEN;
+mock.brevOrg = "org-test-1";
 const w = await startWorker(mock, {
   ...SECRETS,
+  // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): the owner's config, against the simulated APIs.
+  GMI_PRODUCTS: "container.h200.x1,container.b200.x1",
+  GMI_DEFAULT_IDC: "us-denver-1",
+  GMI_BUDGET_USD: "50",
+  BREV_ORG_ID: mock.brevOrg,
+  BREV_INSTANCE_TYPES: "g5.xlarge-test,a100-test",
+  BREV_PRICES: JSON.stringify({ "g5.xlarge-test": 1.0 }),
+  BREV_BUDGET_USD: "2",
   OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
   // The edge stand-in (test/harness.mjs `/edge/*`).
   EDGE_URL: `http://127.0.0.1:${mock.port}/edge`,
@@ -550,7 +561,7 @@ await step("CloudRift: rentals collected, deadline backstop, balance, terminate 
   assert.equal(ov.cloudrift.balance, 30, "account/info's 3000 cents");
   assert.equal(ov.balance, 50, "the Runpod balance is separate");
   const prov = (await call("/api/providers", { headers: T() })).j.providers;
-  assert.deepEqual(prov.map((p) => [p.id, p.enabled]), [["runpod", true], ["cloudrift", true]]);
+  assert.deepEqual(prov.map((p) => [p.id, p.enabled]), [["runpod", true], ["cloudrift", true], ["gmi", true], ["brev", true]]);
   const price = (await call("/api/providers/cloudrift/price?gpu=RTX%20PRO%206000", { headers: T() })).j;
   assert.equal(price.offers[0].usd_per_hr, 1.3936);
   // Owner rule: only RTX PRO 6000 and RTX 5090 on CloudRift.
@@ -1183,6 +1194,149 @@ await step("standalone pod: launch, the same up (direct, watchdog boot), costs u
   for (let i = 0; i < 120 && (await call("/api/standalone/solo1", { headers: T() })).status !== 404; i++) await sleep(500);
   assert.equal((await call("/api/standalone/solo1", { headers: T() })).status, 404, "the definition goes once the pod is gone");
   assert.equal([...mock.pods.values()].filter((p) => !before.has(p.id)).length, 0);
+});
+
+await step("GMI / Brev standalone pods: checks, create → running → tunnel report → health → delete, budget, failed boot, only ours", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const g = mock.gmi;
+  const b = mock.brev;
+  const fake = { variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], channel: "stable", deadline_min: 20 };
+  const issues = async (body) => (await call("/api/standalone/validate", { method: "POST", body, headers: T() })).j;
+  // The provider's fields, path-anchored: a product the owner did not allow, Runpod fields mixed in, a Hub download without approval.
+  let v = await issues({ name: "gmi1", provider: "gmi", provider_gpu: "container.nope.x1", ...fake });
+  assert.ok(v.issues.some((i) => i.path[0] === "provider_gpu" && /not allowed on GMI Cloud/.test(i.message)), JSON.stringify(v.issues));
+  v = await issues({ name: "gmi1", provider: "gmi", provider_gpu: "container.h200.x1", gpu_types: ["NVIDIA H200"], region: "eu", ...fake });
+  assert.ok(v.issues.some((i) => i.path[0] === "gpu_types") && v.issues.some((i) => i.path[0] === "region"), JSON.stringify(v.issues));
+  v = await issues({ name: "gmi1", provider: "gmi", ...fake });
+  assert.ok(v.issues.some((i) => i.path[0] === "provider_gpu" && /required/.test(i.message)));
+  v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "hub", deadline_min: 20 });
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /owner's approval/.test(i.message)), JSON.stringify(v.issues));
+  v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "hub", weights_download_approved: true, deadline_min: 20 });
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /FV_HUB_DOWNLOADS_APPROVED/.test(i.message)), "the Worker-level approval is needed too");
+  v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", deadline_min: 20 });
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with no weights");
+  v = await issues({ name: "gmib", provider: "gmi", provider_gpu: "container.b200.x1", ...fake });
+  assert.ok(v.issues.some((i) => i.path[0] === "max_gpu_dph" && /\$9\/hr/.test(i.message)), JSON.stringify(v.issues));
+  v = await issues({ name: "gmi1", provider: "gmi", provider_gpu: "container.h200.x1", ...fake });
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.ok(!g.calls.some((c) => c.method !== "GET"), "validation creates nothing");
+
+  // GMI: a fake-engine pod end to end.
+  let r = await call("/api/standalone", { method: "POST", body: { name: "gmi1", provider: "gmi", provider_gpu: "container.h200.x1", ...fake }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const gid = r.j.pod.id;
+  let op = await waitOp(gid, "up", 90000);
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+  const gc = g.containers.find((c) => c.name.startsWith("fv-pod-gmi1-"));
+  assert.ok(gc, "container created");
+  assert.ok(g.calls.every((c) => c.auth), "every GMI call carries the key");
+  assert.equal(g.templates.length, 1);
+  assert.match(g.templates[0].path, /fastvideo-rs-serve.*@sha256:/, "the template is the resolved image digest");
+  assert.equal(gc.command, "bash");
+  assert.match(gc.args[1], /\[fv-boot\] start/);
+  assert.match(gc.args[1], /cloudflared tunnel --no-autoupdate --url http:\/\/127\.0\.0\.1:8000/);
+  assert.match(gc.args[1], /53b7a7a5420d188758d24341294acb0d1bca54296548ac05e38811a694ac6134/);
+  assert.deepEqual(gc.ports, [{ containerPort: 8000, protocol: "TCP" }]);
+  const genv = Object.fromEntries(gc.envs.map((e) => [e.name, e.value]));
+  const gkey = `gmi:${gc.name}`;
+  assert.equal(genv.FV_POD_ID, gkey);
+  assert.equal(genv.FV_WORKER_ID, gkey);
+  assert.equal(genv.FV_PROVIDER, "gmi");
+  assert.equal(genv.FV_WORKER_DIRECT, "1");
+  assert.equal(genv.FV_WEIGHTS_SOURCE, "none");
+  assert.ok(!Object.values(genv).some((x) => /RUNPOD_SECRET/.test(x)), "no Runpod secret reference");
+  assert.ok(!Object.values(genv).includes(SECRETS.RUNPOD_API_KEY), "the Runpod key never leaves Runpod");
+  assert.equal(genv.FV_BACKSTOP_API_KEY, SECRETS.GMI_API_KEY, "its own self-delete key");
+  assert.ok(Number(genv.FV_CLUSTER_DEADLINE) > Date.now() / 1000);
+  assert.ok(mock.reports.some((x) => x.key === gkey && x.phase === "tunnel" && x.status === 200), JSON.stringify(mock.reports));
+  let sp = (await call("/api/standalone/gmi1", { headers: T() })).j.pod;
+  assert.equal(sp.pod.pod_id, gkey);
+  assert.equal(sp.pod.url, `http://127.0.0.1:${mock.port}/pod/${gkey}`);
+  assert.equal(sp.definition.provider, "gmi");
+  assert.equal(sp.definition.provider_gpu, "container.h200.x1");
+  assert.equal(sp.pod.cost_per_hr, 3.2, "the products price (320 / GMI_PRICE_DIVISOR 100)");
+  // A report for a pod of another cluster, or with a non-tunnel URL, is refused.
+  assert.equal((await call("/ingest/v1/endpoint", { method: "POST", body: { pod: gkey, phase: "tunnel", url: "https://evil.example.com" }, headers: { authorization: `Bearer ${genv.FV_ENDPOINT_REPORT_TOKEN}` } })).status, 400);
+  assert.equal((await call("/ingest/v1/endpoint", { method: "POST", body: { pod: gkey, phase: "tunnel", url: sp.pod.url }, headers: { authorization: "Bearer nope" } })).status, 401);
+  // The collector: our pod under pod:gmi1 at its $/hr; the stray fv- container is reported, the foreign one ignored; neither touched.
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  await call("/api/collect", { method: "POST", body: {}, headers: T() });
+  const pods = Object.fromEntries((await call("/api/pods", { headers: T() })).j.pods.map((p) => [p.pod_id, p]));
+  assert.equal(pods[gkey]?.provider, "gmi");
+  assert.equal(pods[gkey]?.owner, "pod:gmi1");
+  assert.ok(!Object.keys(pods).some((k) => k.includes("someone-else")), "a foreign container is not listed");
+  assert.equal(pods["gmi:fv-pod-stray-0101000000"]?.owner, "external:gmi");
+  const al = (await call("/api/alerts", { headers: T() })).j.alerts;
+  assert.ok(al.some((a) => a.kind === "gmi_orphan" && /not touched/.test(a.message)), JSON.stringify(al.map((a) => a.kind)));
+  const costs = (await call("/api/costs?days=1", { headers: T() })).j;
+  assert.ok(costs.by_owner.some((x) => x.owner === "pod:gmi1" && x.usd > 0), JSON.stringify(costs.by_owner));
+  const lg = (await call(`/api/pods/${encodeURIComponent(gkey)}/provider-logs`, { headers: T() })).j;
+  assert.ok(lg.lines.some((l) => /\[fv-boot\] start/.test(l)) && lg.lines.some((l) => /\[redacted\]/.test(l)), JSON.stringify(lg));
+  const prov = (await call("/api/providers", { headers: T() })).j.providers.find((p) => p.id === "gmi");
+  assert.equal(prov.budget_usd, 50);
+  assert.ok(prov.month_usd > 0 && prov.running_dph === 3.2, JSON.stringify(prov));
+  const offers = (await call("/api/providers/gmi/offers", { headers: T() })).j.offers;
+  assert.deepEqual(offers.map((o) => [o.gpu, o.usd_per_hr, o.in_stock]), [["container.h200.x1", 3.2, true], ["container.b200.x1", 9, true]]);
+  // Stop deletes our container only; delete removes the definition.
+  assert.equal((await call("/api/standalone/gmi1/stop", { method: "POST", body: {}, headers: T() })).status, 202);
+  op = await waitOp(gid, "down");
+  assert.equal(op.status, "done", op.error);
+  assert.ok(!g.containers.some((c) => c.name === gc.name), "our container is gone");
+  assert.deepEqual(g.containers.map((c) => c.name).sort(), ["fv-pod-stray-0101000000", "someone-else"], "nothing else touched");
+  assert.ok(g.calls.filter((c) => c.method === "DELETE").every((c) => c.path === `/containers/${gc.id}`));
+  assert.equal((await call("/api/standalone/gmi1", { method: "DELETE", headers: T() })).status, 200, "no pod left: the definition goes at once");
+
+  // A boot that reports a failure (a weights or tunnel error): the pod is failed and deleted at once.
+  g.boot = "fail";
+  r = await call("/api/standalone", { method: "POST", body: { name: "gmifail", provider: "gmi", provider_gpu: "container.h200.x1", ...fake }, headers: T() });
+  assert.equal(r.status, 201);
+  op = await waitOp(r.j.pod.id, "up", 90000);
+  assert.equal(op.status, "failed");
+  assert.ok(op.log.some((l) => /boot failed.*hub 404/.test(l.msg)), JSON.stringify({ log: op.log.map((l) => l.msg), error: op.error, reports: mock.reports }));
+  assert.ok(!g.containers.some((c) => c.name.startsWith("fv-pod-gmifail-")), "deleted after the failure");
+  g.boot = "ok";
+  await call("/api/standalone/gmifail", { method: "DELETE", headers: T() });
+
+  // Brev: the budget refuses a launch whose projection is over it ($1/hr × 10 h > $2), before any VM.
+  r = await call("/api/standalone", { method: "POST", body: { name: "brevbig", provider: "brev", provider_gpu: "g5.xlarge-test", ...fake, deadline_min: 600 }, headers: T() });
+  assert.equal(r.status, 201);
+  op = await waitOp(r.j.pod.id, "up");
+  assert.equal(op.status, "failed");
+  assert.match(op.error, /NVIDIA Brev: .* over the budget \$2/);
+  assert.equal(b.workspaces.length, 0, "no VM before the budget check");
+  await call("/api/standalone/brevbig", { method: "DELETE", headers: T() });
+  // Brev: a 20-minute fake-engine VM end to end, launched with the CLI.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
+  writeFileSync(`${dir}/token`, token, { mode: 0o600 });
+  const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+  assert.match(await cli("providers"), /^gmi\ton\t\tbudget \$50, month \$[\d.]+\tcontainer\.h200\.x1,container\.b200\.x1$/m);
+  await cli("pod", "launch", "brev1", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
+  const bid = (await call("/api/standalone/brev1", { headers: T() })).j.pod.id;
+  assert.equal((await call("/api/standalone/brev1", { headers: T() })).j.pod.definition.provider_gpu, "g5.xlarge-test", "--gpu is the instance type on brev");
+  op = await waitOp(bid, "up", 90000);
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+  assert.equal(b.workspaces.length, 1);
+  const ws = b.workspaces[0];
+  assert.ok(b.calls.every((c) => c.auth) && b.calls.some((c) => c.path === `/organizations/${mock.brevOrg}/workspaces` && c.method === "POST"));
+  assert.match(ws.startupScript, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
+  assert.match(ws.startupScript, /fastvideo-rs-serve.*@sha256:/);
+  assert.match(ws.startupScript, /shutdown -h now/, "the host watchdog powers the VM off at the deadline");
+  const bkey = `brev:${ws.name}`;
+  const benv = mock.pods.get(bkey)?.env || {};
+  assert.equal(benv.FV_POD_ID, bkey);
+  assert.equal(benv.FV_PROVIDER, "brev");
+  assert.ok(!("FV_BACKSTOP_API_KEY" in benv), "no account key in a Brev VM");
+  sp = (await call("/api/standalone/brev1", { headers: T() })).j.pod;
+  assert.equal(sp.pod.pod_id, bkey);
+  assert.equal(sp.pod.cost_per_hr, 1, "BREV_PRICES");
+  assert.equal((await call("/api/standalone/brev1", { method: "DELETE", headers: T() })).status, 202);
+  for (let i = 0; i < 120 && (await call("/api/standalone/brev1", { headers: T() })).status !== 404; i++) await sleep(500);
+  assert.equal(b.workspaces.length, 0, "the VM is deleted");
+  assert.ok(b.calls.filter((c) => c.method === "DELETE").every((c) => c.path === `/workspaces/${ws.id}`));
 });
 
 await step("audit log; no secret in any response", async () => {

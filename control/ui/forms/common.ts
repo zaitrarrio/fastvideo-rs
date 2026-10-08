@@ -24,7 +24,7 @@ export const resetDyn = () => dyns.clear();
 export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOffered?: Record<string, string> }> = {
   "standalone-launch": {
     schema: "standalone-launch",
-    fields: [["name"], ["preset"], ["variant"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["gpu_types"], ["cpu_flavors"], ["vcpu"], ["region"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"]],
+    fields: [["name"], ["preset"], ["variant"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["gpu_types"], ["cpu_flavors"], ["vcpu"], ["region"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"], ["provider"], ["provider_gpu"], ["provider_region"], ["weights_source"], ["weights_download_approved"]],
     notOffered: {
       config_toml: "inline worker configs come with the presets; a custom one is a cluster pool (the cluster page's TOML editor)",
       gpu_type: "API shorthand of gpu_types",

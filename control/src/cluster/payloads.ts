@@ -123,7 +123,7 @@ export interface ClusterSecrets {
 
 export { RESERVED_KEYS, isReserved } from "../enums";
 /** System env keys whose values are secret (masked in every view). */
-export const SECRET_SYSTEM_KEYS = new Set(["FV_INTERNAL_TOKEN", "FV_URL_SIGNING_KEY", "FV_BACKSTOP_API_KEY", "FV_ADMIN_TOKEN", "FV_LOG_SHIP_TOKEN"]);
+export const SECRET_SYSTEM_KEYS = new Set(["FV_INTERNAL_TOKEN", "FV_URL_SIGNING_KEY", "FV_BACKSTOP_API_KEY", "FV_ADMIN_TOKEN", "FV_LOG_SHIP_TOKEN", "FV_ENDPOINT_REPORT_TOKEN"]);
 
 /** The edge Worker a control_plane = edge cluster fronts through (fv-control's EDGE_* settings). */
 export interface EdgeCfg {

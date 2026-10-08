@@ -20,6 +20,9 @@ import {
 } from "./payloads";
 import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
 import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
+import type { OtherProviderId } from "../enums";
+import { gmiDefaultIdc } from "../gmi";
+import { budgetCheck, deleteOtherPod, isOtherPod, isOtherPool, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -79,8 +82,12 @@ export interface Projection {
 }
 /** Price check before a start (or an extend / scale-up): the cluster's $/hr, and the balance at the deadline with the whole account's burn. */
 export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: number; extraOnly?: { pool: string; count: number }; runningDph?: number }): Promise<Projection> {
-  const acct = await runpod.account(env);
+  // Runpod's balance only matters when a pool runs there (GMI / Brev pools: their budgets below).
+  const onRunpod = spec.pools.some((p) => !isOtherPool(p) && (!opts.extraOnly || opts.extraOnly.pool === p.id));
+  const acct = onRunpod || !spec.pools.some(isOtherPool) ? await runpod.account(env) : { balance: 0, spendPerHr: 0 };
   const pods: Projection["pods"] = [];
+  const reasons: string[] = [];
+  const otherDph: Partial<Record<OtherProviderId, number>> = {};
   const priceCache = new Map<string, number | null>();
   const gpuPrice = async (g: string) => {
     if (!priceCache.has(g)) priceCache.set(g, (await runpod.gpuPrice(env, g).catch(() => ({ price: null }))).price);
@@ -89,6 +96,14 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
   for (const p of spec.pools) {
     const n = opts.extraOnly ? (opts.extraOnly.pool === p.id ? opts.extraOnly.count : 0) : p.count;
     for (let i = 0; i < n; i++) {
+      if (isOtherPool(p)) {
+        const prov = poolProvider(p) as OtherProviderId;
+        const { dph, known } = await poolDph(env, p, spec.max_gpu_dph);
+        if (known && dph > spec.max_gpu_dph) reasons.push(`${p.id}: ${p.provider_gpu} on ${prov} costs $${dph}/hr, above max_gpu_dph $${spec.max_gpu_dph}`);
+        pods.push({ role: "worker", pool: p.id, what: `${prov}:${p.provider_gpu}`, dph: known ? dph : null });
+        otherDph[prov] = (otherDph[prov] ?? 0) + dph;
+        continue;
+      }
       if (p.compute === "CPU") {
         const f = p.cpu_flavors?.[0] || "cpu3c";
         pods.push({ role: "worker", pool: p.id, what: `cpu:${f}`, dph: cpuPrice(f, p.vcpu ?? 2) });
@@ -106,15 +121,18 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
     }
   }
   const cluster_dph = pods.reduce((s, p) => s + (p.dph ?? 0), 0);
-  // The account's burn already includes the running pods of this cluster.
+  // GMI / Brev: no balance API, so the provider's monthly budget (providers.ts budgetCheck).
+  for (const [prov, add] of Object.entries(otherDph) as [OtherProviderId, number][]) reasons.push(...(await budgetCheck(env, prov, add, opts.hours)).reasons);
+  const rpDph = cluster_dph - Object.values(otherDph).reduce((s, x) => s + (x ?? 0), 0);
   // The account's burn includes this cluster's running pods (runningDph) when it replans a running cluster.
-  const burn = Math.max(0, acct.spendPerHr - (opts.runningDph ?? 0)) + cluster_dph;
+  const burn = Math.max(0, acct.spendPerHr - (opts.runningDph ?? 0)) + rpDph;
   const projected = acct.balance - burn * opts.hours;
   const floor = Math.max(spec.balance_floor, defaults.balanceFloor(env));
-  const reasons: string[] = [];
-  if (!opts.extraOnly && acct.balance < spec.min_start) reasons.push(`balance $${acct.balance.toFixed(2)} is below the start minimum $${spec.min_start}`);
-  if (projected < floor)
-    reasons.push(`at $${burn.toFixed(2)}/hr (account $${acct.spendPerHr.toFixed(2)} + cluster $${cluster_dph.toFixed(2)}) the balance would be $${projected.toFixed(2)} after ${opts.hours.toFixed(2)} h, below the floor $${floor}`);
+  if (onRunpod || !spec.pools.some(isOtherPool)) {
+    if (!opts.extraOnly && acct.balance < spec.min_start) reasons.push(`balance $${acct.balance.toFixed(2)} is below the start minimum $${spec.min_start}`);
+    if (projected < floor)
+      reasons.push(`at $${burn.toFixed(2)}/hr (account $${acct.spendPerHr.toFixed(2)} + cluster $${rpDph.toFixed(2)}) the balance would be $${projected.toFixed(2)} after ${opts.hours.toFixed(2)} h, below the floor $${floor}`);
+  }
   return { ok: reasons.length === 0, reasons, balance: acct.balance, account_spend_per_hr: acct.spendPerHr, cluster_dph, hours: opts.hours, projected_balance: projected, floor, pods };
 }
 
@@ -122,6 +140,7 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
 /** One worker for a pool into `slot` (workers | rolling); null when no stock anywhere. */
 export async function createWorker(env: Env, c: Cluster, poolId: string, image: string, slot: "workers" | "rolling", log: Logf): Promise<PodRec | null> {
   const pool = poolOf(c, poolId);
+  if (isOtherPool(pool)) return createOtherWorker(env, c, pool, image, slot, log);
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pool: poolId, image });
   for (const pl of workerPlacements(c.spec, pool)) {
@@ -156,8 +175,50 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   return null;
 }
 
+/** A GMI / Brev worker (providers.ts): its provider's GPU product, the provider env and start command, the price cap; null when it could not be made. */
+async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: string, slot: "workers" | "rolling", log: Logf): Promise<PodRec | null> {
+  const prov = poolProvider(pool) as OtherProviderId;
+  const impl = providerImpl(prov);
+  const where = `${prov}${pool.provider_region ? `/${pool.provider_region}` : ""}`;
+  const problems = providerIssues(env, { pools: [pool] });
+  if (problems.length) {
+    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${problems.map((x) => x.message).join("; ")}`);
+    return null;
+  }
+  const ctx = await envCtx(env, c);
+  const name = runpodName(c, pool.id);
+  const key = podKey(prov, name);
+  const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: key, pool: pool.id, image });
+  const reportToken = ctx.secrets.ingest_token;
+  if (!reportToken) {
+    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: the cluster has no ingest token (its pods report their URL with it)`);
+    return null;
+  }
+  const { dph, known } = await poolDph(env, pool, c.spec.max_gpu_dph);
+  if (known && dph > c.spec.max_gpu_dph) {
+    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: $${dph}/hr > max_gpu_dph $${c.spec.max_gpu_dph}`);
+    return null;
+  }
+  const pe = providerEnv(env, full, { provider: prov, key, name, deadlineMs: c.deadline ?? now() + c.spec.cap_s * 1000, reportToken, weights: weightsPlan(pool), scriptsRef: c.spec.image.sha || "main" });
+  if (pe.dropped.length) log(`${pool.id}: WARNING: ${pe.dropped.join(", ")} are Runpod secret references a ${impl.title} pod cannot resolve (FV_PROVIDER_SECRET_ENV): left out`);
+  try {
+    await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env });
+  } catch (e) {
+    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
+    return null;
+  }
+  const rec: PodRec = { pod: key, pool: pool.id, gpu: pool.provider_gpu, dc: pool.provider_region || (prov === "gmi" ? gmiDefaultIdc(env) : prov), dph /* unknown price: the cap, so the ledger and the budget err high */, created: Math.floor(now() / 1000), image };
+  const target = slot === "rolling" ? (c.state.rolling ||= {}) : c.state.workers;
+  (target[pool.id] ||= []).push(rec);
+  await saveState(env, c);
+  await recordPod(env, c, rec, "worker", slot, hash);
+  log(`${pool.id}: ${impl.title} pod ${key} on ${pool.provider_gpu}${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`);
+  return rec;
+}
+
 /** PATCH a worker's env (a restart); keeps its image unless one is given. */
 export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, image?: string): Promise<void> {
+  if (isOtherPod(rec.pod)) throw new HttpError(409, `${rec.pod}: a GMI / Brev pod's env cannot be changed in place (GMI wipes the container on update; Brev runs a startup script once): roll or stop and start it`);
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: rec.pod, pool: rec.pool, image: image || rec.image });
   await runpod.patch(env, rec.pod, { env: full, ...(image ? { imageName: image } : {}) });
@@ -169,7 +230,9 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
 
 export async function deletePod(env: Env, podId: string, log: Logf, why: string): Promise<boolean> {
   try {
-    await runpod.remove(env, podId);
+    if (isOtherPod(podId)) {
+      if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
+    } else await runpod.remove(env, podId);
     await podUpdate(env, podId, { deleted: true });
     log(`deleted ${podId} (${why})`);
     return true;
@@ -288,7 +351,9 @@ export async function edgePublic(env: Env, c: Cluster, path: string): Promise<{ 
 /** A worker's /health (public): state AVAILABLE when ready; build.image.digest. */
 export async function workerHealth(env: Env, podId: string): Promise<{ ok: boolean; state?: string; digest?: string; sha?: string; code: number }> {
   try {
-    const r = await fetchWithTimeout(`${defaults.podUrl(env, podId)}/health`, { timeoutMs: 15000 });
+    const base = await podBaseUrl(env, podId, (p) => defaults.podUrl(env, p));
+    if (!base) return { ok: false, state: "no URL yet (tunnel not reported)", code: 0 };
+    const r = await fetchWithTimeout(`${base}/health`, { timeoutMs: 15000 });
     const j: any = await r.json().catch(() => ({}));
     return { ok: r.ok && j.state === "AVAILABLE", state: j.state, digest: j.build?.image?.digest, sha: j.build?.git_sha, code: r.status };
   } catch {
@@ -299,7 +364,9 @@ export async function workerHealth(env: Env, podId: string): Promise<{ ok: boole
 export async function workerInternal(env: Env, c: Cluster, podId: string, method: "GET" | "POST", path: string): Promise<any> {
   // Edge fronts take the edge's internal token, not the cluster's.
   const token = isEdge(c.spec) ? requireEdge(env).internal_token : (await secretsOf(env, c)).internal_token;
-  const r = await fetchWithTimeout(`${defaults.podUrl(env, podId)}${path}`, { method, headers: { "x-fv-internal-token": token }, timeoutMs: 20000 });
+  const base = await podBaseUrl(env, podId, (p) => defaults.podUrl(env, p));
+  if (!base) throw new HttpError(409, `${podId} has not reported its URL yet`);
+  const r = await fetchWithTimeout(`${base}${path}`, { method, headers: { "x-fv-internal-token": token }, timeoutMs: 20000 });
   if (!r.ok) throw new HttpError(502, `${podId} ${path}: ${r.status}`);
   return r.json().catch(() => ({}));
 }

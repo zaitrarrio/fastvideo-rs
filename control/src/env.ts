@@ -26,6 +26,13 @@ export interface Env {
   BUILD_CACHE_R2_SECRET_ACCESS_KEY?: string;
   /** CloudRift API key (docs/ops/cloudrift.md). Unset: the CloudRift provider is off. */
   CLOUDRIFT_API_KEY?: string;
+  /** GMI Cloud API key (docs/serve/deploy-gmi-brev.md). Unset: the gmi provider is off. */
+  GMI_API_KEY?: string;
+  /** NVIDIA Brev API key / token (docs/serve/deploy-gmi-brev.md). Unset: the brev provider is off. */
+  BREV_API_TOKEN?: string;
+  /** JSON {KEY: value} of the worker secrets Runpod pods get as {{ RUNPOD_SECRET_… }} references
+   * (FV_CF_ACCOUNT_ID, FV_R2_*, …): GMI / Brev pods get these values instead. Unset: they go without. */
+  FV_PROVIDER_SECRET_ENV?: string;
   /** 32+ random bytes, base64: seals cluster secrets and secret env values in D1 (AES-256-GCM). */
   CONTROL_KEK: string;
   /** 32+ random bytes: signs session cookies and CSRF tokens (HMAC-SHA256); also the passphrase pepper. */
@@ -74,6 +81,28 @@ export interface Env {
   CLOUDRIFT_API_VERSION?: string;
   CLOUDRIFT_COST_UNIT?: string;
   CLOUDRIFT_BALANCE_FLOOR?: string;
+  /** GMI Cloud (docs/serve/deploy-gmi-brev.md §2): API base (tests: a mock), the
+   * product ids pods may use (comma list; the owner gets them from GMI), the
+   * default IDC, the monthly budget in $ (no balance API: unset refuses
+   * launches), and what `price` of /v1/containers/products is divided by to
+   * get $/hr (UNVERIFIED unit; default 100, cents). */
+  GMI_API?: string;
+  GMI_PRODUCTS?: string;
+  GMI_DEFAULT_IDC?: string;
+  GMI_BUDGET_USD?: string;
+  GMI_PRICE_DIVISOR?: string;
+  /** NVIDIA Brev (§3): API base (the CLI's, SRC; tests: a mock), the org id,
+   * the instance types pods may use (comma list), their $/hr as JSON
+   * {"<type>": usd} (no documented price API), the monthly budget in $. */
+  BREV_API_URL?: string;
+  BREV_ORG_ID?: string;
+  BREV_INSTANCE_TYPES?: string;
+  BREV_PRICES?: string;
+  BREV_BUDGET_USD?: string;
+  /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
+  FV_HUB_DOWNLOADS_APPROVED?: string;
+  /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */
+  FV_ENDPOINT_URL_RE?: string;
   /** "1": the cron does nothing (tests drive it by hand). */
   CRON_DISABLED?: string;
 }
