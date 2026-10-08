@@ -1305,10 +1305,18 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.match(op.error, /NVIDIA Brev: .* over the budget \$2/);
   assert.equal(b.workspaces.length, 0, "no VM before the budget check");
   await call("/api/standalone/brevbig", { method: "DELETE", headers: T() });
-  // Brev: a 20-minute fake-engine VM end to end.
-  r = await call("/api/standalone", { method: "POST", body: { name: "brev1", provider: "brev", provider_gpu: "g5.xlarge-test", ...fake }, headers: T() });
-  assert.equal(r.status, 201, JSON.stringify(r.j));
-  const bid = r.j.pod.id;
+  // Brev: a 20-minute fake-engine VM end to end, launched with the CLI.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
+  writeFileSync(`${dir}/token`, token, { mode: 0o600 });
+  const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+  assert.match(await cli("providers"), /^gmi\ton\t\tbudget \$50, month \$[\d.]+\tcontainer\.h200\.x1,container\.b200\.x1$/m);
+  await cli("pod", "launch", "brev1", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
+  const bid = (await call("/api/standalone/brev1", { headers: T() })).j.pod.id;
+  assert.equal((await call("/api/standalone/brev1", { headers: T() })).j.pod.definition.provider_gpu, "g5.xlarge-test", "--gpu is the instance type on brev");
   op = await waitOp(bid, "up", 90000);
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
   assert.equal(b.workspaces.length, 1);
