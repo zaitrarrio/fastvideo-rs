@@ -92,13 +92,17 @@ export interface Env {
   GMI_BUDGET_USD?: string;
   GMI_PRICE_DIVISOR?: string;
   /** NVIDIA Brev (§3): API base (the CLI's, SRC; tests: a mock), the org id,
-   * the instance types pods may use (comma list), their $/hr as JSON
-   * {"<type>": usd} (no documented price API), the monthly budget in $. */
+   * the instance types pods may use (comma list: the allow-list), $/hr
+   * overrides as JSON {"<type>": usd} (else the live instance-type list), the
+   * monthly budget in $ (parked instances' storage counts). */
   BREV_API_URL?: string;
   BREV_ORG_ID?: string;
   BREV_INSTANCE_TYPES?: string;
   BREV_PRICES?: string;
   BREV_BUDGET_USD?: string;
+  /** Keep-on-stop (brev-park.ts): seconds a restarted parked instance may take to run again before it is held
+   * for the owner and a fresh one is made (default 900). */
+  BREV_RESTART_TIMEOUT_S?: string;
   /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */
