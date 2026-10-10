@@ -12,7 +12,8 @@ import { budgetDecision } from "../../src/collector-providers";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { gmi, toContainer } from "../../src/gmi";
-import { brevStartup, budgetCheck, CLOUDFLARED, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan } from "../../src/providers";
+import { brevStartup } from "../../src/brev-park";
+import { brevRun, budgetCheck, CLOUDFLARED, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan } from "../../src/providers";
 import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
 import { presetPool } from "../../src/cluster/spec";
@@ -161,8 +162,22 @@ describe("the pod env and start command", () => {
     expect(PROVIDER_BOOT).toContain('--version 2>&1 | head -n 1');
     expect(PROVIDER_BOOT).not.toMatch(/RUNPOD_POD_ID/);
   });
-  it("Brev startup: env file 0600, the GPU, the weights dir, the host deadline; no line breaks in env", () => {
-    const s = brevStartup("ghcr.io/x/y@sha256:" + "a".repeat(64), { A: "1", FV_CLUSTER_DEADLINE: "1800000000" });
+  it("Brev startup: only the per-boot bootstrap (URL, token in a header file, systemd unit); no env, no launch", () => {
+    const s = brevStartup("https://fvc.test/ingest/v1/brev-boot", "fvb_TOKEN");
+    expect(s).toContain("umask 077");
+    expect(s).toContain("printf %s 'https://fvc.test/ingest/v1/brev-boot' > \"$D/boot-url\"");
+    expect(s).toContain("printf 'Authorization: Bearer %s\\n' 'fvb_TOKEN' > \"$D/boot-header\"");
+    expect(s).toContain("systemctl enable fv-boot.service");
+    expect(s).toContain("systemctl start --no-block fv-boot.service");
+    expect(s).not.toContain("docker run");
+    const boot = atob(/printf %s '([^']+)' \| base64 -d > "\$D\/bootstrap.sh"/.exec(s)![1]!);
+    expect(boot).toContain('curl -fsS --max-time 30 -H @"$D/boot-header"');
+    expect(boot).toContain('exec bash "$D/run.sh"');
+    const unit = atob(/printf %s '([^']+)' \| base64 -d > "\$D\/fv-boot.service"/.exec(s)![1]!);
+    expect(unit).toMatch(/Type=oneshot[\s\S]*WantedBy=multi-user.target/);
+  });
+  it("Brev run script: env file 0600, the GPU, the weights dir, the host deadline; no line breaks in env", () => {
+    const s = brevRun("ghcr.io/x/y@sha256:" + "a".repeat(64), { A: "1", FV_CLUSTER_DEADLINE: "1800000000" });
     expect(s).toContain("umask 077");
     expect(s).toContain('--gpus all --network host --env-file "$W/fv/env"');
     expect(s).toContain('-v "$W/weights:/workspace/weights"');
@@ -170,7 +185,7 @@ describe("the pod env and start command", () => {
     expect(s).toContain("-lt 1800000000");
     const envB64 = /printf %s '([^']+)' \| base64 -d > '\$W\/fv\/env'/.exec(s)![1]!;
     expect(atob(envB64)).toBe("A=1\nFV_CLUSTER_DEADLINE=1800000000");
-    expect(() => brevStartup("img", { X: "a\nb" })).toThrow(/line break/);
+    expect(() => brevRun("img", { X: "a\nb" })).toThrow(/line break/);
   });
   describe("Brev host script, run in bash with stub commands (docker, nvidia-smi, curl, shutdown)", () => {
     const run = (o: { docker?: "ok" | "missing" | "runfail" | "exits"; install?: boolean } = {}) => {
@@ -195,7 +210,7 @@ while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 
         );
       const env = { A: "1", X_SECRET: "SECRETVALUE123", FV_POD_ID: "brev:fv-pod-h-1", FV_ENDPOINT_REPORT_URL: "https://fvc.test/ingest/v1/endpoint", FV_ENDPOINT_REPORT_TOKEN: "fvi_SECRET", FV_CLUSTER_DEADLINE: "1", ...(o.install ? { FV_BREV_INSTALL_DOCKER: "1" } : {}) };
       const script = join(dir, "startup.sh");
-      writeFileSync(script, brevStartup("ghcr.io/x/y@sha256:" + "a".repeat(64), env));
+      writeFileSync(script, brevRun("ghcr.io/x/y@sha256:" + "a".repeat(64), env));
       // PATH: the stubs, then every system tool but docker / nvidia-* / shutdown (a real one is never reached).
       const tools = join(dir, "tools");
       mkdirSync(tools);
@@ -221,6 +236,8 @@ while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 
       expect(r.reports[0].phase).toBe("host");
       expect(r.reports[0].pod).toBe("brev:fv-pod-h-1");
       expect(r.reports[0].detail).toMatch(/user=\S+ uid=\d+ sudo=(root|yes|NO) docker=\S+docker info=\[27\.1\.1 runtimes=nvidia,runc,\] gpu=\[GPU 0: NVIDIA RTX PRO 6000 \(UUID: GPU-x\)\] toolkit=\[\S*.*\] disk=\[.*\] kernel=\S+ os=\[.*\] ws=/);
+      expect(r.reports[0].detail).toMatch(/ boots=1$/);
+      expect(readFileSync(join(r.ws, "fv/boots.log"), "utf8")).toMatch(/^\d{4}-\d\d-\d\dT\S+Z \S+ brev:fv-pod-h-1\n$/);
       expect(r.reports.map((x) => x.phase)).toEqual(expect.arrayContaining(["host", "container_started", "heartbeat"]));
       expect(r.reports.find((x) => x.phase === "container_started").detail).toMatch(/^c0ffee000000 ghcr\.io\/x\/y@sha256:a+$/);
       expect(r.headers).toContain("Authorization: Bearer fvi_SECRET");

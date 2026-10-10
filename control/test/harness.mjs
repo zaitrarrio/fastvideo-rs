@@ -107,6 +107,9 @@ export function startMock() {
   m.brev = {
     calls: [],
     workspaces: [],
+    boots: [], // every simulated VM boot: {ws, name, status, kept, fetched, env, run, error}
+    startFail: false, // PUT …/start answers 409 (no capacity)
+    startHang: false, // PUT …/start leaves it STARTING (the restart times out)
     boot: "ok",
     types: [
       brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
@@ -121,6 +124,55 @@ export function startMock() {
     if (mode === "silent" || !env.FV_ENDPOINT_REPORT_URL) return;
     const report = (b) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key, ...b }) }).then((r) => (m.reports ||= []).push({ key, status: r.status, ...b })).catch((e) => (m.reports ||= []).push({ key, error: String(e) }));
     setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" })), 300);
+  };
+  /**
+   * A Brev VM's boot (brev-park.ts): the startup script's bootstrap fetches the run script from fv-control with the
+   * boot token, the run script's env file is the pod's env, and its weights loop keeps trees on the VM's disk at the
+   * pinned revision (WEIGHTS_SH) and "downloads" the rest. Every boot is recorded in m.brev.boots.
+   */
+  const brevVmBoot = (w) => {
+    const url = /printf %s '([^']+)' > "\$D\/boot-url"/.exec(w.startupScript)?.[1];
+    const token = /printf 'Authorization: Bearer %s\\n' '([^']+)' > "\$D\/boot-header"/.exec(w.startupScript)?.[1];
+    const rec = { ws: w.id, name: w.name, status: 0, kept: [], fetched: [] };
+    m.brev.boots.push(rec);
+    if (!url || !token) return (rec.error = "no boot url / token in the startup script");
+    setTimeout(async () => {
+      try {
+        const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+        rec.status = r.status;
+        const run = await r.text();
+        if (!r.ok) return (rec.error = run.slice(0, 200));
+        rec.run = run;
+        // The env file the host script writes (base64 in its printf to $W/fv/env).
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '\$W\/fv\/env'/.exec(run)?.[1] || "";
+        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+        rec.env = env;
+        // The host script's own reports (brev-host.ts) come first: its facts, then container_started (or host_failed).
+        const hostReport = (phase, detail) =>
+          fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: `brev:${w.name}`, phase, url: "", detail }) })
+            .then((r) => (m.reports ||= []).push({ key: `brev:${w.name}`, status: r.status, phase }))
+            .catch(() => {});
+        if (env.FV_ENDPOINT_REPORT_URL) {
+          await hostReport("host", "user=ubuntu uid=1000 sudo=yes docker=/usr/bin/docker info=[27.1.1 runtimes=nvidia,runc,] gpu=[GPU 0: NVIDIA A10G] toolkit=[NVIDIA Container Toolkit CLI version 1.17.8] disk=[180G free of 197G] kernel=6.8.0 os=[ubuntu 22.04] ws=/home/ubuntu/workspace");
+          if (m.brev.boot === "hostfail") return void (await hostReport("host_failed", 'docker run (exit 125): docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]] | '));
+          await hostReport("heartbeat", "container: no container; last: ");
+          await hostReport("container_started", "c0ffee000000 image");
+          // The host watcher: the container exits (as live 2026-10-10: fv-serve's config refused) or /health answers.
+          if (m.brev.boot === "exit") return void (await hostReport("container_exited", "container exited exit=2 oom=false: [fv-boot] start | fv-serve: config: auth.key_store = d1 needs the D1 settings | "));
+          setTimeout(() => hostReport("serve_ready", "fv-serve /health 200, 1 s after the tunnel"), 800);
+        }
+        if (env.FV_WEIGHTS_SOURCE === "hub")
+          for (const line of Buffer.from(env.FV_WEIGHTS_TREES_B64 || "", "base64").toString().split("\n")) {
+            const [kind, tree, , rev] = line.split("\t");
+            if (kind !== "tree") continue;
+            if (w.disk[tree] === rev) rec.kept.push(tree);
+            else rec.fetched.push(tree), m.brev.boot === "ok" && (w.disk[tree] = rev);
+          }
+        simBoot(`brev:${w.name}`, env, m.brev.boot, { startupScript: w.startupScript, image: /--entrypoint bash '([^']+)'/.exec(run)?.[1] });
+      } catch (e) {
+        rec.error = String(e);
+      }
+    }, 50);
   };
   const digestOf = (tag) => "sha256:" + Buffer.from(tag).toString("hex").padEnd(64, "0").slice(0, 64);
   const json = (res, code, body) => {
@@ -318,7 +370,7 @@ export function startMock() {
       if (bearer !== m.brevToken) return json(res, 401, { message: "unauthorized" });
       const om = /^\/organizations\/([^/]+)\/workspaces$/.exec(rest);
       if (om && om[1] !== m.brevOrg) return json(res, 403, { message: "not a member" });
-      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, ...w }) => w));
+      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, disk: _d, ...w }) => w));
       // The instance-type listing (shape read live 2026-10-10): each type's cloud_cred_id, stoppable, prices.
       const tm = /^\/instances\/alltypesavailable\/([^/]+)$/.exec(rest);
       if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
@@ -332,36 +384,36 @@ export function startMock() {
         const script = body?.vmBuild?.lifeCycleScriptAttr?.script;
         if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
           return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
-        const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
-        // The env file the host script writes (base64 in its printf to $W/fv/env).
-        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '\$W\/fv\/env'/.exec(script)?.[1] || "";
-        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-        b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body });
-        // The host script's own reports (brev-host.ts) come first: its facts, then container_started (or host_failed).
-        const hostReport = (phase, detail) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: `brev:${body.name}`, phase, url: "", detail }) }).then((r) => (m.reports ||= []).push({ key: `brev:${body.name}`, status: r.status, phase })).catch(() => {});
-        if (env.FV_ENDPOINT_REPORT_URL)
-          setTimeout(async () => {
-            await hostReport("host", "user=ubuntu uid=1000 sudo=yes docker=/usr/bin/docker info=[27.1.1 runtimes=nvidia,runc,] gpu=[GPU 0: NVIDIA A10G] toolkit=[NVIDIA Container Toolkit CLI version 1.17.8] disk=[180G free of 197G] kernel=6.8.0 os=[ubuntu 22.04] ws=/home/ubuntu/workspace");
-            if (b.boot === "hostfail") return hostReport("host_failed", "docker run (exit 125): docker: Error response from daemon: could not select device driver \"\" with capabilities: [[gpu]] | ");
-            await hostReport("heartbeat", "container: no container; last: ");
-            await hostReport("container_started", "c0ffee000000 image");
-            // The host watcher: the container exits (as live 2026-10-10: fv-serve's config refused) or /health answers.
-            if (b.boot === "exit") return void (await hostReport("container_exited", "container exited exit=2 oom=false: [fv-boot] start | fv-serve: config: auth.key_store = d1 needs the D1 settings | "));
-            simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
-            setTimeout(() => hostReport("serve_ready", "fv-serve /health 200, 1 s after the tunnel"), 800);
-          }, 50);
-        else simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
+        const id = `ws${String((b.seq = (b.seq || 0) + 1)).padStart(6, "0")}`;
+        const w = { id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body, disk: {}, diskStorage: body.diskStorage };
+        b.workspaces.push(w);
+        brevVmBoot(w);
         return json(res, 201, { id, name: body.name, status: "DEPLOYING", instanceType: body.instanceType, workspaceVersion: "v1" });
       }
-      const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
+      const wm = /^\/workspaces\/([^/]+)(\/(stop|start))?$/.exec(rest);
       if (wm) {
         const w = b.workspaces.find((x) => x.id === wm[1]);
         if (!w) return json(res, 404, { message: "workspace not found" });
-        if (req.method === "GET") { const { startupScript, body: _b, ...o } = w; return json(res, 200, o); }
-        if (req.method === "DELETE") {
+        if (req.method === "GET" && !wm[3]) { const { startupScript, body: _b, disk: _d, ...o } = w; return json(res, 200, o); }
+        if (req.method === "DELETE" && !wm[3]) {
           b.workspaces = b.workspaces.filter((x) => x.id !== w.id);
           m.pods.delete(`brev:${w.name}`);
           return json(res, 200, {});
+        }
+        // Stop keeps the disk (w.disk: the trees on it); start fails without capacity, or hangs, or boots again.
+        if (req.method === "PUT" && wm[3] === "stop") {
+          const t = b.types.find((x) => x.type === w.instanceType);
+          if (!t?.stoppable) return json(res, 400, { errors: [{ type: "BadRequestError", message: "instance type is not stoppable" }] });
+          w.status = "STOPPED";
+          m.pods.delete(`brev:${w.name}`);
+          return json(res, 200, { id: w.id, status: "STOPPING" });
+        }
+        if (req.method === "PUT" && wm[3] === "start") {
+          if (b.startFail) return json(res, 409, { errors: [{ type: "ConflictError", message: "no capacity in the same provider/region" }] });
+          if (w.status !== "STOPPED") return json(res, 409, { errors: [{ type: "ConflictError", message: `workspace is ${w.status}` }] });
+          w.status = b.startHang ? "STARTING" : "RUNNING";
+          if (!b.startHang) brevVmBoot(w);
+          return json(res, 200, { id: w.id, status: "STARTING" });
         }
       }
       return json(res, 404, { message: `mock: no Brev route ${req.method} ${rest}` });

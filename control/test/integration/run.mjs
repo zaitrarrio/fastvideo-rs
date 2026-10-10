@@ -1322,13 +1322,18 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.equal(b.workspaces.length, 1);
   const ws = b.workspaces[0];
   assert.ok(b.calls.every((c) => c.auth) && b.calls.some((c) => c.path === `/organizations/${mock.brevOrg}/workspaces` && c.method === "POST"));
-  assert.match(ws.startupScript, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
-  assert.match(ws.startupScript, /fastvideo-rs-serve.*@sha256:/);
-  assert.match(ws.startupScript, /shutdown -h now/, "the host watchdog powers the VM off at the deadline");
+  // The startup script only installs the per-boot bootstrap; the launch is the run script it fetched from fv-control.
+  assert.match(ws.startupScript, /systemctl enable fv-boot\.service/);
+  assert.ok(!ws.startupScript.includes("FV_POD_ID") && !ws.startupScript.includes("docker run"), "no env or launch in the startup script");
+  const boot1 = b.boots.find((x) => x.ws === ws.id);
+  assert.equal(boot1?.status, 200, JSON.stringify(boot1));
+  assert.match(boot1.run, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
+  assert.match(boot1.run, /fastvideo-rs-serve.*@sha256:/);
+  assert.match(boot1.run, /shutdown -h now/, "the host watchdog powers the VM off after the deadline");
   // brev-cli main's create body (the old one got 400 "Legacy workspace version unsupported" live).
   assert.equal(ws.body.workspaceVersion, "v1");
   assert.equal(ws.body.cloudCredId, "devplane-brev-1-credential", "the type's cloud_cred_id from the listing");
-  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "120Gi", false]);
+  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "200Gi", true], "a stoppable type: isStoppable true");
   assert.ok(ws.body.startupScript === "" && ws.body.vmOnlyMode === false && ws.body.description === "" && Array.isArray(ws.body.applications), "Go zero values present; the script rides in vmBuild.lifeCycleScriptAttr");
   assert.ok(b.calls.some((c) => c.method === "GET" && c.path === `/instances/alltypesavailable/${mock.brevOrg}`));
   const bkey = `brev:${ws.name}`;
@@ -1343,7 +1348,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   const plg = (await call(`/api/pods/${encodeURIComponent(bkey)}/provider-logs`, { headers: T() })).j;
   assert.ok(plg.lines.some((l) => /^\[report .*\] host: user=ubuntu uid=1000 sudo=yes docker=\/usr\/bin\/docker .*gpu=\[GPU 0: NVIDIA A10G\]/.test(l)), JSON.stringify(plg.lines));
   assert.ok(plg.lines.some((l) => /\] container_started: c0ffee000000/.test(l)) && plg.lines.some((l) => /\] heartbeat \(last\): container: no container/.test(l)), JSON.stringify(plg.lines));
-  assert.deepEqual(plg.reports.map((x) => x.phase), ["host", "container_started", "tunnel", "serve_ready"], "the host watcher saw /health 200");
+  assert.deepEqual(plg.reports.map((x) => x.phase), ["run_fetched", "host", "container_started", "tunnel", "serve_ready"], "the host watcher saw /health 200");
   const btl = (await call(`/api/pods/${encodeURIComponent(bkey)}/boot`, { headers: T() })).j.timeline;
   const hostRow = btl.find((r) => r.phase === "host script (Brev VM)");
   assert.ok(hostRow?.at && /user=ubuntu/.test(hostRow.detail || ""), JSON.stringify(btl));
@@ -1375,6 +1380,212 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.ok(op.log.some((l) => /NOTE: FV_KEY_STORE=memory: no D1 settings/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   assert.equal(b.workspaces.length, 0, "deleted after the exit");
   await call("/api/standalone/brevex", { method: "DELETE", headers: T() });
+});
+
+await step("Brev keep-on-stop: park on stop, warm restart (no download), restart failure / timeout, non-stoppable delete, limits, budget, only ours", async () => {
+  // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
+  // instance-type list as prices (no BREV_PRICES), a short restart timeout.
+  const w2 = await startWorker(mock, {
+    ...SECRETS,
+    BREV_ORG_ID: mock.brevOrg,
+    BREV_INSTANCE_TYPES: "g5.xlarge-test,a100-test",
+    BREV_BUDGET_USD: "100",
+    BREV_RESTART_TIMEOUT_S: "30",
+    FV_HUB_DOWNLOADS_APPROVED: "1",
+    OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
+  });
+  const b = mock.brev;
+  b.workspaces = [];
+  b.boots = [];
+  // Not ours: a foreign workspace and an fv- named one fv-control never recorded. Never stopped, started or deleted.
+  b.workspaces.push({ id: "wsforeign", name: "someone-else", status: "STOPPED", instanceType: "g5.xlarge-test", disk: {}, startupScript: "", body: {} });
+  b.workspaces.push({ id: "wsstray", name: "fv-pod-stray-0101000000", status: "STOPPED", instanceType: "g5.xlarge-test", disk: {}, startupScript: "", body: {} });
+  try {
+    const call2 = async (path, { method = "GET", body, headers = {} } = {}) => {
+      const r = await fetch(w2.url + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const text = await r.text();
+      bodies.push(text);
+      let j = null;
+      try { j = JSON.parse(text); } catch {}
+      return { status: r.status, j, text };
+    };
+    const lr = await fetch(w2.url + "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+    const ck = lr.headers.get("set-cookie").split(";")[0];
+    const cs = (await lr.json()).csrf;
+    const tok = (await call2("/api/tokens", { method: "POST", body: { name: "ci2", scope: "admin" }, headers: { cookie: ck, "x-csrf-token": cs } })).j.token;
+    const H = { authorization: `Bearer ${tok}` };
+    const wait2 = async (cluster, kind, timeoutMs = 120000) => {
+      const t = Date.now();
+      while (Date.now() - t < timeoutMs) {
+        const op = (await call2(`/api/clusters/${cluster}/ops`, { headers: H })).j.operations.find((o) => o.kind === kind && !/is running/.test(o.error || ""));
+        if (op && op.status !== "running") return op;
+        await sleep(500);
+      }
+      const ops = (await call2(`/api/clusters/${cluster}/ops`, { headers: H })).j.operations;
+      throw new Error(`operation ${kind} did not finish: ${JSON.stringify(ops.map((o) => [o.kind, o.status, (o.log || []).slice(-8).map((l) => l.msg)]))}; boots ${JSON.stringify(mock.brev.boots.slice(-2).map(({ run, env, ...x }) => x))}`);
+    };
+    const launch = async (name, gpu = "g5.xlarge-test") => {
+      const r = await call2("/api/standalone", { method: "POST", body: { name, provider: "brev", provider_gpu: gpu, preset: "wan", weights_source: "hub", weights_download_approved: true, channel: "stable", deadline_min: 30, max_gpu_dph: 5 }, headers: H });
+      assert.equal(r.status, 201, JSON.stringify(r.j));
+      const op = await wait2(r.j.pod.id, "up", 150000);
+      return { id: r.j.pod.id, op };
+    };
+    const stop = async (name, id) => {
+      assert.equal((await call2(`/api/standalone/${name}/stop`, { method: "POST", body: {}, headers: H })).status, 202);
+      return wait2(id, "down");
+    };
+    const parked = async () => (await call2("/api/providers/brev/parked", { headers: H })).j;
+    const posts = () => b.calls.filter((c) => c.method === "POST" && c.path === `/organizations/${mock.brevOrg}/workspaces`).length;
+    const posts0 = posts();
+    const callsFrom = b.calls.length;
+
+    // The launch form's outlook: cold on the stoppable type, the non-stoppable one flagged.
+    const v = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "g5.xlarge-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+    assert.ok(v.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads fastwan22-ti2v-5b, wan22-ti2v-5b .*kept on stop/.test(x.message)), JSON.stringify(v.warnings));
+    const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
+    assert.ok(v2.warnings.some((x) => /a100-test is not stoppable: the weights download at every launch \(stoppable allowed types keep them: g5\.xlarge-test\)/.test(x.message)), JSON.stringify(v2.warnings));
+    const dyn = (await call2("/api/schemas/dynamic", { headers: H })).j;
+    const bg = dyn.provider_gpus.filter((g) => g.provider === "brev");
+    assert.deepEqual(bg.map((g) => g.id), ["g5.xlarge-test", "a100-test"], "stoppable types first");
+    assert.match(bg[0].detail, /\$1\.01\/hr · stoppable: weights kept on stop/, "the live list's price");
+
+    // 1. Cold launch: both trees downloaded; the disk sized for them.
+    const l1 = await launch("warm1");
+    assert.equal(l1.op.status, "done", l1.op.error + JSON.stringify(l1.op.log.slice(-6)));
+    const ws1 = b.workspaces.find((x) => x.name.startsWith("fv-pod-warm1-"));
+    assert.equal(ws1.body.diskStorage, "200Gi");
+    assert.equal(ws1.body.isStoppable, true, "a stoppable type is created with isStoppable true");
+    let boot = b.boots.filter((x) => x.ws === ws1.id).at(-1);
+    assert.deepEqual(boot.fetched.sort(), ["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
+    const key = `brev:${ws1.name}`;
+    let sp = (await call2("/api/standalone/warm1", { headers: H })).j.pod;
+    assert.equal(sp.pod.cost_per_hr, 1.006, "the live list's base price");
+
+    // 2. Stop: the workspace is stopped, not deleted, and parked with its trees.
+    let op = await stop("warm1", l1.id);
+    assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+    assert.ok(op.log.some((l) => /parked \(stopped; fastwan22-ti2v-5b, wan22-ti2v-5b kept on its 200 GB disk/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.equal(ws1.status, "STOPPED");
+    assert.ok(b.calls.some((c) => c.method === "PUT" && c.path === `/workspaces/${ws1.id}/stop`));
+    assert.ok(!b.calls.some((c) => c.method === "DELETE" && c.path === `/workspaces/${ws1.id}`));
+    let pk = await parked();
+    assert.equal(pk.parked.length, 1);
+    assert.equal(pk.parked[0].workspace_id, ws1.id);
+    assert.deepEqual(Object.keys(pk.parked[0].trees).sort(), ["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
+    assert.ok(Math.abs(pk.parked[0].storage_usd_per_day - 200 * 0.000132 * 24) < 1e-9);
+    // The boot endpoint refuses a parked VM (its token is in its startup script).
+    const tok1 = /printf 'Authorization: Bearer %s\\n' '([^']+)'/.exec(ws1.startupScript)[1];
+    assert.equal((await fetch(w2.url + "/ingest/v1/brev-boot", { headers: { authorization: `Bearer ${tok1}` } })).status, 409);
+    // The collector: parked storage in the ledger and the pods table (owner brev:parked); no orphan alert for it; the budget counts it.
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    const pods = Object.fromEntries((await call2("/api/pods", { headers: H })).j.pods.map((p) => [p.pod_id, p]));
+    assert.equal(pods[key]?.owner, "brev:parked");
+    assert.equal(pods[key]?.desired_status, "PARKED");
+    const costs = (await call2("/api/costs?days=1", { headers: H })).j;
+    assert.ok(costs.by_owner.some((x) => x.owner === "brev:parked" && x.usd > 0), JSON.stringify(costs.by_owner));
+    const al = (await call2("/api/alerts", { headers: H })).j.alerts;
+    assert.ok(!al.some((a) => a.kind === "brev_orphan" && a.target === key), "a parked instance is ours");
+    assert.ok(al.some((a) => a.kind === "brev_orphan" && /fv-pod-stray/.test(a.message)), "an unrecorded fv- one is reported");
+    const prov = (await call2("/api/providers", { headers: H })).j.providers.find((p) => p.id === "brev");
+    assert.ok(prov.parked_dph > 0, JSON.stringify(prov));
+
+    // 3. The same preset and type again: the parked instance is restarted (no create), nothing downloaded, the new launch's env.
+    const vw = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm2", provider: "brev", provider_gpu: "g5.xlarge-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
+    assert.ok(vw.warnings.some((x) => new RegExp(`^warm: restarts parked ${ws1.name}`).test(x.message)), JSON.stringify(vw.warnings));
+    const l2 = await launch("warm2");
+    assert.equal(l2.op.status, "done", l2.op.error + JSON.stringify(l2.op.log.slice(-8)));
+    assert.equal(posts(), posts0 + 1, "no second create");
+    assert.ok(b.calls.some((c) => c.method === "PUT" && c.path === `/workspaces/${ws1.id}/start`));
+    assert.ok(l2.op.log.some((l) => /warm restart of parked NVIDIA Brev/.test(l.msg)), JSON.stringify(l2.op.log.map((l) => l.msg)));
+    boot = b.boots.filter((x) => x.ws === ws1.id).at(-1);
+    assert.deepEqual([boot.kept.sort(), boot.fetched], [["fastwan22-ti2v-5b", "wan22-ti2v-5b"], []], "the trees are skipped");
+    assert.equal(boot.env.FV_POD_ID, key, "it keeps its key");
+    assert.ok(boot.env.FV_ENDPOINT_REPORT_TOKEN !== b.boots.filter((x) => x.ws === ws1.id)[0].env.FV_ENDPOINT_REPORT_TOKEN, "the new cluster's env (a fresh run script)");
+    sp = (await call2("/api/standalone/warm2", { headers: H })).j.pod;
+    assert.equal(sp.pod.pod_id, key);
+    assert.equal((await parked()).parked.length, 0);
+    op = await stop("warm2", l2.id);
+    assert.equal(op.status, "done", op.error);
+    assert.equal((await parked()).parked.length, 1, "parked again");
+
+    // 4. Restart fails (no capacity): the parked one is held for the owner, a fresh instance is made (and downloads).
+    b.startFail = true;
+    const l3 = await launch("warm3");
+    b.startFail = false;
+    assert.equal(l3.op.status, "done", l3.op.error + JSON.stringify(l3.op.log.slice(-8)));
+    assert.ok(l3.op.log.some((l) => /restart of parked .* failed .*no capacity.*held for the owner.*creating a fresh instance/.test(l.msg)), JSON.stringify(l3.op.log.map((l) => l.msg)));
+    assert.equal(posts(), posts0 + 2);
+    const ws3 = b.workspaces.find((x) => x.name.startsWith("fv-pod-warm3-"));
+    assert.deepEqual(b.boots.filter((x) => x.ws === ws3.id).at(-1).fetched.sort(), ["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
+    pk = await parked();
+    assert.deepEqual(pk.parked.map((p) => [p.workspace_id, p.state]), [[ws1.id, "held"]]);
+    assert.match(pk.parked[0].note, /restart failed: .*no capacity/);
+    op = await stop("warm3", l3.id);
+    assert.equal(op.status, "done", op.error);
+    assert.deepEqual((await parked()).parked.map((p) => p.state).sort(), ["held", "parked"]);
+
+    // 5. Restart that never runs (BREV_RESTART_TIMEOUT_S 30): held, a fresh one replaces it.
+    b.startHang = true;
+    const l4 = await launch("warm4");
+    b.startHang = false;
+    assert.equal(l4.op.status, "done", l4.op.error + JSON.stringify(l4.op.log.slice(-8)));
+    assert.ok(l4.op.log.some((l) => /restart timed out/.test(l.msg)), JSON.stringify(l4.op.log.map((l) => l.msg)));
+    assert.equal(posts(), posts0 + 3);
+    assert.equal(ws3.status, "STOPPED", "stopped again after the timeout");
+    assert.deepEqual((await parked()).parked.map((p) => [p.workspace_id, p.state]).sort(), [[ws1.id, "held"], [ws3.id, "held"]].sort());
+    // Parking warm4's instance makes three: past brev_park_max 2, the oldest goes (only ours).
+    op = await stop("warm4", l4.id);
+    assert.equal(op.status, "done", op.error);
+    pk = await parked();
+    assert.equal(pk.parked.length, 2);
+    assert.ok(op.log.some((l) => /parked instance deleted \(more than brev_park_max 2 parked\)/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+
+    // 6. A non-stoppable type: deleted on stop as before.
+    const l5 = await launch("cold5", "a100-test");
+    assert.equal(l5.op.status, "done", l5.op.error + JSON.stringify(l5.op.log.slice(-8)));
+    const ws5 = b.workspaces.find((x) => x.name.startsWith("fv-pod-cold5-"));
+    assert.equal(ws5.body.isStoppable, false, "not stoppable: isStoppable false");
+    op = await stop("cold5", l5.id);
+    assert.equal(op.status, "done", op.error);
+    assert.ok(op.log.some((l) => /not parked \(a100-test is not stoppable\): deleting/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.ok(!b.workspaces.some((x) => x.id === ws5.id), "deleted");
+
+    // 7. The CLI and the owner's actions: list, unpark a held one, delete one; the age limit.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(`${tmpdir()}/fvc-cli2-`);
+    writeFileSync(`${dir}/token`, tok, { mode: 0o600 });
+    const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w2.url, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+    const out = await cli("brev", "parked");
+    assert.match(out, /^policy: at most 2 parked, 7 days each; storage \$[\d.]+\/day$/m);
+    pk = await parked();
+    const held = pk.parked.find((p) => p.state === "held");
+    assert.ok(held, JSON.stringify(pk));
+    assert.match(out, new RegExp(`^${held.workspace_id}\\t${held.name}\\theld\\tg5\\.xlarge-test\\t200 GB\\t`, "m"));
+    assert.match(await cli("brev", "unpark", held.workspace_id), /: parked \(the next launch of its type may restart it\)/);
+    const other = pk.parked.find((p) => p.workspace_id !== held.workspace_id);
+    assert.match(await cli("brev", "delete-parked", other.workspace_id), /parked instance deleted \(deleted by /);
+    assert.ok(!b.workspaces.some((x) => x.id === other.workspace_id));
+    await assert.rejects(cli("brev", "delete-parked", "wsforeign"), /no parked Brev instance/);
+    // brev_park_max_days 0.0001 (~9 s): the age limit deletes the last one at the next collect.
+    const pol = (await call2("/api/policies", { headers: H })).j.policies;
+    assert.equal((await call2("/api/policies", { method: "PUT", body: { ...pol, brev_park_max_days: 0.0001 }, headers: { cookie: ck, "x-csrf-token": cs } })).status, 200);
+    await sleep(9000);
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    assert.equal((await parked()).parked.length, 0);
+    assert.ok(!b.workspaces.some((x) => x.id === held.workspace_id), "deleted by age");
+
+    // Only ours: the foreign and the unrecorded fv- workspaces were never stopped, started or deleted.
+    for (const id of ["wsforeign", "wsstray"]) assert.ok(!b.calls.slice(callsFrom).some((c) => c.path.startsWith(`/workspaces/${id}`)), id);
+    assert.deepEqual(b.workspaces.map((x) => x.id).sort(), ["wsforeign", "wsstray"]);
+  } finally {
+    w2.stop();
+    b.workspaces = b.workspaces.filter((x) => !["wsforeign", "wsstray"].includes(x.id));
+  }
 });
 
 await step("audit log; no secret in any response", async () => {

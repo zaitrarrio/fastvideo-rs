@@ -125,7 +125,8 @@ GPU="$(nvidia-smi -L 2>&1 | head -n 1)"
 if command -v nvidia-ctk >/dev/null 2>&1; then CTK="$(nvidia-ctk --version 2>/dev/null | head -n 1)"; elif dpkg -s nvidia-container-toolkit >/dev/null 2>&1; then CTK=package; else CTK=none; fi
 DISK="$(df -h "$W" 2>/dev/null | awk 'NR==2 {print $4 " free of " $2}')"
 OS="$( (. /etc/os-release 2>/dev/null; echo "\${ID:-?} \${VERSION_ID:-?}") )"
-hreport host "user=$(whoami) uid=$(id -u) sudo=$SUDO docker=$DK info=[$DI] gpu=[$GPU] toolkit=[$CTK] disk=[$DISK] kernel=$(uname -r) os=[$OS] ws=$W"
+BOOTS="$W/fv/boots.log"; echo "$(date -u +%FT%TZ) $(hostname) $R_POD" >> "$BOOTS"
+hreport host "user=$(whoami) uid=$(id -u) sudo=$SUDO docker=$DK info=[$DI] gpu=[$GPU] toolkit=[$CTK] disk=[$DISK] kernel=$(uname -r) os=[$OS] ws=$W boots=$(wc -l < "$BOOTS")"
 die() { echo "[fv-host] FAILED: $1"; hreport host_failed "$1: $(tail20 "$W/fv/host.log")"; exit 1; }
 step() { # what, command...
   what="$1"; shift

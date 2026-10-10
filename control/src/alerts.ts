@@ -21,6 +21,9 @@ export interface Policies {
   build_pod_backstop: boolean; // auto-action (default on): stop the build pod past the limits below (buildpod.ts)
   build_pod_max_h: number; // …up this many hours (its own cap is 8 h + 30 min grace)
   build_pod_idle_grace_min: number; // …or idle this many minutes past its own idle stop (per its /healthz)
+  brev_park_max: number; // NVIDIA Brev keep-on-stop (brev-park.ts): at most this many parked (stopped, weights kept) instances; 0: delete on stop
+  brev_park_max_days: number; // …each parked at most this many days; then the oldest go (only ours)
+  brev_park_delete_failed: boolean; // auto-action (default off): delete a parked instance whose restart failed instead of holding it for the owner
 }
 export const DEFAULT_POLICIES: Policies = {
   idle_gpu_pct: 5,
@@ -44,8 +47,12 @@ export const DEFAULT_POLICIES: Policies = {
   build_pod_backstop: true,
   build_pod_max_h: 9,
   build_pod_idle_grace_min: 15,
+  brev_park_max: 2,
+  brev_park_max_days: 7,
+  brev_park_delete_failed: false,
 };
-export const policies = (env: Env) => getSetting<Policies>(env, "policies", DEFAULT_POLICIES);
+/** The policies; a key added since they were saved takes its default. */
+export const policies = async (env: Env): Promise<Policies> => ({ ...DEFAULT_POLICIES, ...(await getSetting<Partial<Policies>>(env, "policies", DEFAULT_POLICIES)) });
 
 export function attribute(name: string, rules: Policies["attribution"]): string {
   for (const r of rules) if (name.startsWith(r.prefix)) return r.owner;

@@ -6,6 +6,7 @@
 // only ever acts on pods fv-control recorded (cluster_pods); an fv-named
 // instance it did not record is reported, never touched.
 import type { AlertIn, Policies } from "./alerts";
+import { brevUnlisted, enforceParkLimits, markBrevDeleted, parkedRows, storageDph } from "./brev-park";
 import { ownerOf, type Cluster } from "./cluster/store";
 import { stopCluster } from "./collector";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
@@ -57,8 +58,30 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     const seen = new Set<string>();
     let running = 0;
     let dphSum = 0;
+    // Brev keep-on-stop (brev-park.ts): parked / held instances are ours by their record, billed as storage.
+    const parked = new Map(p === "brev" ? (await parkedRows(env)).map((r) => [r.workspace_id, r]) : []);
+    const seenIds = new Set(insts.map((i) => i.id));
     for (const i of insts) {
       seen.add(i.key);
+      const pk = parked.get(i.id);
+      if (pk) {
+        const sdph = storageDph(pk);
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO pods (pod_id, name, owner, cluster_id, desired_status, cost_per_hr, gpu, gpu_count, dc, image, uptime_s, gpu_util, gpu_mem, cpu, mem, jobs_running, jobs_queued, health, build_sha, idle_since, first_seen, last_seen, gone_at, provider)
+             VALUES (?, ?, 'brev:parked', NULL, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'parked', NULL, NULL, ?, ?, NULL, ?)
+             ON CONFLICT (pod_id) DO UPDATE SET name = excluded.name, owner = excluded.owner, cluster_id = NULL, desired_status = excluded.desired_status, cost_per_hr = excluded.cost_per_hr,
+               gpu = excluded.gpu, uptime_s = NULL, health = excluded.health, last_seen = excluded.last_seen, gone_at = NULL, provider = excluded.provider`,
+          ).bind(i.key, i.name, pk.state.toUpperCase(), sdph, i.gpu, pk.location, prevBy.get(i.key)?.first_seen ?? t, t, p),
+          env.DB.prepare(
+            `INSERT INTO cost_daily (day, pod_id, cluster_id, owner, usd, minutes, idle_minutes) VALUES (?, ?, NULL, 'brev:parked', ?, 1, 0)
+             ON CONFLICT (day, pod_id) DO UPDATE SET usd = usd + excluded.usd, minutes = minutes + 1`,
+          ).bind(day, i.key, (sdph * dtMs) / 3_600_000),
+        );
+        if (i.state === "running" || i.state === "starting")
+          res.alerts.push({ key: `brev_parked_running:${i.id}`, kind: "brev_parked", severity: "warn", target: i.key, message: `parked Brev ${i.name} is ${i.raw} outside fv-control (GPU billing): stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${i.id})` });
+        continue;
+      }
       const row = ctl.get(i.key);
       const c = row ? byId.get(row.cluster_id) : undefined;
       const owner = c ? ownerOf(c) : `external:${p}`;
@@ -88,6 +111,13 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     // Recorded pods the provider no longer lists (after 10 min: a fresh create may not be listed yet): gone.
     for (const [pod, r] of ctl) if (!r.deleted_at && !seen.has(pod) && t - r.created_at > 10 * 60_000) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
     for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
+    if (p === "brev") {
+      res.kinds.push("brev_parked");
+      // Records whose workspace Brev no longer lists (10 min after their last change): gone.
+      for (const id of await brevUnlisted(env, seenIds, t - 10 * 60_000)) await markBrevDeleted(env, id, "gone", "no longer listed by Brev");
+      // The park limits (brev_park_max, brev_park_max_days): the oldest of ours go.
+      res.actions.push(...(await enforceParkLimits(env, pol, t)));
+    }
 
     const spend = await providerSpend(env, p);
     const budget = impl.budget(env);

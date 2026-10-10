@@ -261,6 +261,9 @@ export const PoliciesZ = z
     build_pod_backstop: z.boolean().describe("Auto-action (default on): stop the shared build pod (external:build-pod) when its own self-stop did not happen."),
     build_pod_max_h: z.number().min(0).max(72).meta({ "x-unit": "h" }).describe("…when it has been up this many hours (0: off; its own cap is 8 h + 30 min grace)."),
     build_pod_idle_grace_min: z.number().min(0).max(1440).meta({ "x-unit": "min" }).describe("…or idle (no jobs, per its /healthz) this many minutes past its own idle stop."),
+    brev_park_max: z.number().int().min(0).max(20).describe("NVIDIA Brev keep-on-stop: at most this many parked instances (stopped, weights kept, storage billed); beyond it the oldest is deleted. 0: delete on stop."),
+    brev_park_max_days: z.number().min(0).max(90).meta({ "x-unit": "days" }).describe("…a parked instance is deleted after this many days (only ours: fv- named and recorded)."),
+    brev_park_delete_failed: z.boolean().describe("Auto-action (default off): delete a parked instance whose restart failed or timed out, instead of holding it for the owner."),
   })
   .strict()
   .superRefine((p, ctx) => {
