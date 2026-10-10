@@ -26,6 +26,7 @@ import {
 import { markReady } from "../boottime";
 import { checkPod } from "../podlogs";
 import type { OtherProviderId } from "../enums";
+import { isParked } from "../brev-park";
 import { budgetCheck, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
 import type { PodRec, PoolStatus } from "./payloads";
 import { checkImages } from "./preflight";
@@ -395,7 +396,7 @@ export class ClusterOps implements DurableObject {
     };
     if (op.phase === "init") {
       await saveState(env, c, { status: "stopping" });
-      for (const p of ids()) await deletePod(env, p, this.log, op.params?.reason || "cluster stop");
+      for (const p of ids()) await deletePod(env, p, this.log, op.params?.reason || "cluster stop", { park: true });
       op.phase = "verify";
       op.data.tries = 0;
       return { delayMs: 5000 };
@@ -404,10 +405,11 @@ export class ClusterOps implements DurableObject {
     const left: string[] = [];
     for (const p of ids()) {
       const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
-      if (pod) left.push(p);
+      // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped.
+      if (pod && !(isOtherPod(p) && (pod as { state?: string }).state === "stopped" && (await isParked(env, p)))) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {
-      for (const p of left) await deletePod(env, p, this.log, "retry");
+      for (const p of left) await deletePod(env, p, this.log, "retry", { park: true });
       return { delayMs: 10_000 };
     }
     // Remaining live rows of this cluster (e.g. a pod the state lost) go too.

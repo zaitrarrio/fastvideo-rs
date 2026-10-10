@@ -22,7 +22,8 @@ import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
 import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
 import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
-import { budgetCheck, deleteOtherPod, isOtherPod, isOtherPool, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, weightsPlan } from "../providers";
+import { claimWarm, holdFailed, restartWarm } from "../brev-park";
+import { brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -257,13 +258,15 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
   log(`${rec.pool}: ${rec.pod} env applied; container restarts`);
 }
 
-export async function deletePod(env: Env, podId: string, log: Logf, why: string): Promise<boolean> {
+/** Deletes a pod. `park` (a cluster stop): a Brev pod of a stoppable type whose weights completed is stopped and
+ * parked instead (brev-park.ts); a Brev warm restart that never came up is held for the owner. */
+export async function deletePod(env: Env, podId: string, log: Logf, why: string, opts: { park?: boolean } = {}): Promise<boolean> {
   try {
-    if (isOtherPod(podId)) {
-      if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
-    } else await runpod.remove(env, podId);
-    await podUpdate(env, podId, { deleted: true });
-    log(`deleted ${podId} (${why})`);
+    let what = "deleted";
+    if (isOtherPod(podId)) what = await releaseOtherPod(env, podId, !!opts.park, log);
+    else await runpod.remove(env, podId);
+    await podUpdate(env, podId, { deleted: true, ...(what === "deleted" ? {} : { status: what }) });
+    log(`${what} ${podId} (${why})`);
     return true;
   } catch (e) {
     log(`WARNING: delete of ${podId} failed: ${(e as Error).message.slice(0, 160)}`);

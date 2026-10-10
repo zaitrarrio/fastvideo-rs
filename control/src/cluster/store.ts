@@ -131,7 +131,8 @@ export async function podUpdate(env: Env, podId: string, f: { status?: string; e
   if (f.slot) sets.push("slot = ?"), vals.push(f.slot);
   if (f.image) sets.push("image = ?"), vals.push(f.image);
   if (f.ready) sets.push("ready_at = COALESCE(ready_at, ?)"), vals.push(now());
-  if (f.deleted) sets.push("deleted_at = ?", "status = 'deleted'"), vals.push(now());
+  if (f.deleted) sets.push("deleted_at = ?"), vals.push(now());
+  if (f.deleted && !f.status) sets.push("status = 'deleted'");
   if (!sets.length) return;
   await env.DB.prepare(`UPDATE cluster_pods SET ${sets.join(", ")} WHERE pod_id = ?`).bind(...vals, podId).run();
 }

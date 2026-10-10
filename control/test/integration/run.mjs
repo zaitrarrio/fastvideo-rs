@@ -1325,6 +1325,12 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.match(ws.startupScript, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
   assert.match(ws.startupScript, /fastvideo-rs-serve.*@sha256:/);
   assert.match(ws.startupScript, /shutdown -h now/, "the host watchdog powers the VM off at the deadline");
+  // brev-cli main's create body (the old one got 400 "Legacy workspace version unsupported" live).
+  assert.equal(ws.body.workspaceVersion, "v1");
+  assert.equal(ws.body.cloudCredId, "devplane-brev-1-credential", "the type's cloud_cred_id from the listing");
+  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "120Gi", false]);
+  assert.ok(!("startupScript" in ws.body) && !ws.body.vmOnlyMode, "the script rides in vmBuild.lifeCycleScriptAttr");
+  assert.ok(b.calls.some((c) => c.method === "GET" && c.path === `/instances/alltypesavailable/${mock.brevOrg}`));
   const bkey = `brev:${ws.name}`;
   const benv = mock.pods.get(bkey)?.env || {};
   assert.equal(benv.FV_POD_ID, bkey);

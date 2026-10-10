@@ -3,9 +3,11 @@
 // (brevdev/brev-cli pkg/store/workspace.go) uses: workspaces under an org,
 // `Authorization: Bearer <BREV_API_TOKEN>`. That API is not a documented
 // contract: the instance-type list and the (empty) workspace list were read
-// live once (2026-10-10, GET only, bearer accepted); create / stop / start /
-// delete have not been called live, so their shapes are UNVERIFIED and read
-// defensively. fv-control rents a VM (vmOnlyMode) whose startup script
+// live once (2026-10-10, GET only, bearer accepted); a live create answered
+// 400 "Legacy workspace version unsupported" to the old body, so create sends
+// brev-cli main's v1 body; stop / start / delete have not been called live,
+// so their shapes are UNVERIFIED and read defensively. fv-control rents a VM
+// (vmBuild, no container) whose startup script
 // installs a per-boot bootstrap (brev-park.ts) that runs our image with Docker
 // and the NVIDIA toolkit (both preinstalled, per the docs). Brev has no
 // labels: ours are fv-pod-* / fv-ctl-* names that fv-control recorded in D1
@@ -76,6 +78,10 @@ export function toWorkspace(w: any): BrevWorkspace {
     createdAt: w.createdAt ?? w.created_at ?? null,
   };
 }
+/** brev-cli store/workspace.go: UserWorkspaceTemplateID, UserWorkspaceClassID, DefaultDiskStorage (non-admin users). */
+export const BREV_USER_TEMPLATE_ID = "4nbb4lg2s";
+export const BREV_USER_CLASS_ID = "2x8";
+export const BREV_DEFAULT_DISK = "120Gi";
 const arr = (j: any): any[] => (Array.isArray(j) ? j : Array.isArray(j?.workspaces) ? j.workspaces : []);
 
 export const brev = {
@@ -85,16 +91,37 @@ export const brev = {
   async byName(env: Env, name: string): Promise<BrevWorkspace | null> {
     return (await brev.workspaces(env)).find((w) => w.name === name && w.status !== "DELETING") || null;
   },
-  /** A VM (vmOnlyMode) of an instance type running `startupScript` on boot; its id. `diskStorage` ("500Gi", the
-   * CLI's field; the CLI sends 120Gi by default) sizes the disk (UNVERIFIED for fixed-disk types). */
+  /** The cloud credential an instance type is created under (its listing row's `cloud_cred_id`); the CLI refuses to create without it. */
+  async cloudCredId(env: Env, instanceType: string): Promise<string> {
+    const t = (await brev.types(env)).find((x) => x.type === instanceType);
+    if (!t?.cloud_cred_id) throw new HttpError(400, `brev: instance type ${instanceType} is not in the org's instance-type listing (invalid or unavailable): no cloud credential to create it under`);
+    return t.cloud_cred_id;
+  },
+  /**
+   * A VM of an instance type running `startupScript` on boot; its id. The body is what brev-cli main sends
+   * (pkg/store/workspace.go NewCreateWorkspacesOptions, pkg/cmd/gpucreate createWorkspace / applyBuildMode "vm" /
+   * resolveWorkspaceUserOptions): workspaceVersion v1 (the old body got 400 "Legacy workspace version unsupported"
+   * live), the user template and class, the type's cloudCredId, and the script in vmBuild.lifeCycleScriptAttr.
+   * `diskStorage` ("500Gi"; the CLI's default 120Gi) sizes the disk (UNVERIFIED for fixed-disk types).
+   */
   async create(env: Env, req: { name: string; instanceType: string; startupScript: string; diskStorage?: string }): Promise<string> {
+    const cloudCredId = await brev.cloudCredId(env, req.instanceType);
     const j = await call(env, "POST", `api/organizations/${encodeURIComponent(env.BREV_ORG_ID!)}/workspaces`, {
       name: req.name,
+      workspaceVersion: "v1",
+      workspaceTemplateId: BREV_USER_TEMPLATE_ID,
+      workspaceClassId: BREV_USER_CLASS_ID,
+      cloudCredId,
       instanceType: req.instanceType,
-      vmOnlyMode: true,
+      diskStorage: req.diskStorage || BREV_DEFAULT_DISK,
+      isStoppable: false,
+      vmBuild: { forceJupyterInstall: false, lifeCycleScriptAttr: { script: req.startupScript } },
+      portMappings: {},
+      execsV1: {},
+      reposV1: {},
+      labels: null,
+      files: null,
       launchJupyterOnStart: false,
-      startupScript: req.startupScript,
-      ...(req.diskStorage ? { diskStorage: req.diskStorage } : {}),
     });
     const id = j?.id ?? j?.workspace?.id;
     if (!id) throw new HttpError(502, "brev create: no id");
@@ -152,6 +179,8 @@ export interface BrevType {
   /** `estimated_deploy_time` ("7m0s") in seconds. */
   deploy_s: number | null;
   available: boolean | null;
+  /** The cloud credential creates of this type go under (`cloud_cred_id`; required by create). */
+  cloud_cred_id: string | null;
 }
 const TYPES_TTL_MS = 3600_000;
 let typesCache: { k: string; at: number; v: BrevType[] } | null = null;
@@ -202,6 +231,7 @@ export function toType(x: any): BrevType {
     provider: x?.provider ? String(x.provider) : null,
     deploy_s: parseDuration(x?.estimated_deploy_time),
     available: typeof x?.is_available === "boolean" ? x.is_available : null,
+    cloud_cred_id: x?.cloud_cred_id ? String(x.cloud_cred_id) : x?.cloud_cred?.cloud_cred_id ? String(x.cloud_cred.cloud_cred_id) : null,
   };
 }
 /** $/hr of an instance type: the BREV_PRICES override, else the live list; null when neither knows it. */
