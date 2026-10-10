@@ -149,11 +149,22 @@ this API (the CLI may exchange it for a token via NGC auth,
 `brev search gpu` lists types with `TYPE GPU COUNT VRAM TOTAL $/HR BOOT
 FEATURES` (S stoppable, R rebootable, P flex ports) and `--json` [b-search];
 `brev create --type a,b,c` is a fallback chain, `--startup-script @file`
-[b-create]. The search data comes from `ListPublicInstanceType` on
-`https://api.brev.dev` (gRPC/connect, SRC [b-src-it]); its JSON shape is not
-documented, so fv-control does not call it: **prices come from a configured
-table** (`BREV_PRICES` JSON, `{"<instanceType>": usd_per_hr}`), and with no
-entry the planner uses the spec's `max_gpu_dph` (the most it may cost).
+[b-create]. **Live prices:** `GET api/instances/alltypesavailable/{org}`
+(bearer key; read live 2026-10-10, GET only) lists every type the org may
+rent with `type`, `supported_gpus`, `base_price.amount` ($/hr at its
+default `location`), `location_prices`, `stoppable` (`true`, or `null` on
+the Shadeform types such as `massedcompute_*`, `hyperstack_*`),
+`elastic_root_volume`, `supported_storage[]` (`price_per_gb_hr`, e.g. AWS
+gp3 $0.000132/GB-hr, or a fixed `size` such as `850GiB` without a price on
+Shadeform), `estimated_deploy_time` (`7m0s`), `is_available`, `provider`
+and `cloud_cred_id` (the create needs it). fv-control reads it (`brev.ts`
+`brev.types`, cached 1 h per isolate) for the planner's $/hr, the stoppable
+flag, the storage price of a parked instance and the deploy-time estimate;
+`BREV_PRICES` (JSON `{"<instanceType>": usd_per_hr}`) still overrides a
+price, and `BREV_INSTANCE_TYPES` stays the allow-list. With neither, the
+planner uses the spec's `max_gpu_dph` (the most it may cost). Of 321 GPU
+types listed on 2026-10-10, 258 were stoppable (GCP, AWS, Nebius, Crusoe)
+and 63 not (Shadeform, Lambda, SF Compute).
 
 GPU types listed in the docs include B200 (192 GB), H200 (141 GB), H100,
 A100 80GB, L40S, RTX PRO Server 6000 (96 GB), RTX 5090 [b-gputypes].
@@ -174,8 +185,78 @@ Cloudflare Tunnel as GMI (§6.4).
 [b-gpu] [b-mgmt]. Weights: populate-at-boot into
 `/home/ubuntu/workspace/weights` (§7); a *stopped* instance keeps them, so
 a stop/start cycle avoids a second download (storage is billed while
-stopped [b-gpu]). fv-control v1 deletes on stop (simpler, no idle storage
-bill); keep-on-stop is a follow-up.
+stopped [b-gpu]; a restart "fails if no capacity in the same
+provider/region, data remains inaccessible" [b-mgmt]).
+
+**Keep-on-stop** (`control/src/brev-park.ts`, D1 migration 0008
+`brev_instances`):
+
+- **Every Brev workspace fv-control creates is recorded**: id, name / pod
+  key, instance type, location, stoppable, disk GB, storage $/GB-hr, the
+  launch's trees at their revisions, state (`live`, `parked`, `held`,
+  `deleted`, `gone`), a boot-token hash and the sealed run script.
+- **Disk**: `diskStorage` at create = the trees × 1.3 + 40 GB, at least
+  200 GiB, in 50s (e.g. H3 250, H3 + LTX-2.5 400). Fixed-disk types record
+  their listed size.
+- **Every boot fetches its launch.** The startup script (given once at
+  create, `vmBuild.lifeCycleScriptAttr`) only writes the boot URL, a
+  per-instance token (a header file) and a systemd unit `fv-boot.service`
+  that runs at every boot: it fetches the VM's current run script from
+  `GET /ingest/v1/brev-boot` (Bearer token; served only while the instance
+  is live, sealed at rest, 20/min) and runs it. The run script is the host
+  script (§6.3: host reports, env file, `docker pull` / `docker run` of the
+  image, heartbeat, deadline watchdog). A restarted VM therefore runs the
+  new launch's image, env, deadline and ingest token; a parked one started
+  outside fv-control gets 409 and runs nothing.
+- **Park on stop**: a cluster / standalone stop (user, deadline backstop,
+  budget stop, the direct fallback) calls `PUT api/workspaces/{id}/stop`
+  instead of `DELETE` when the type is stoppable, the pod had weights, and
+  they completed (the pod became ready, or reported its tunnel, which the
+  boot does after the weights). The trees it holds (union of the launches
+  that completed) are recorded with `parked_at`. Anything else is deleted
+  as before: a non-stoppable type, a fake-engine pod, weights that never
+  completed, a scale-down / roll / failed boot, policy `brev_park_max` 0,
+  or a stop call that fails.
+- **Warm restart**: the next launch on the same instance type picks the
+  parked instance holding the most of its trees at the pinned revisions
+  (whose disk fits the rest), claims it atomically, stores the new run
+  script and calls `PUT …/start`. It keeps its first name, so its pod key
+  `brev:<name>`; its `cluster_pods` row starts over for the new cluster.
+  The boot skips trees that are complete at the pinned revision (§7) and
+  downloads only the missing ones.
+- **Fallbacks**: a start that fails (e.g. no capacity), or a restarted
+  instance not running (and not ready) within `BREV_RESTART_TIMEOUT_S`
+  (default 900), is stopped again and **held** for the owner: never
+  restarted on its own, still billed as storage, still counted. Policy
+  `brev_park_delete_failed` deletes it instead. A fresh instance is then
+  created (downloading, with the same approvals).
+- **Money**: a parked or held instance costs disk GB × the type's highest
+  listed $/GB-hr (unknown: $0.000263). The cron books it each minute in
+  the ledger (owner `brev:parked`, pods table `PARKED` / `HELD`), and
+  `budgetCheck` adds it to the projection (`… parked storage $x/hr
+  included`). `/api/providers` shows `parked_dph`.
+- **Limits** (policies): `brev_park_max` (default 2) parked or held
+  instances, `brev_park_max_days` (default 7) each. Past either, the
+  oldest go (`DELETE`), at park time and every cron pass. Only rows
+  fv-control recorded with fv- names are touched; an fv- workspace it did
+  not record is reported (`brev_orphan`), never stopped, started or
+  deleted. A parked instance found running outside fv-control raises
+  `brev_parked`.
+- **Owner**:
+  - UI: the Pods page lists parked instances with their weights, disk,
+    $/day, age and note, with Delete (and Unpark for a held one).
+  - CLI: `fv-control.sh brev parked`, `brev unpark <id>` (a held one back
+    into the warm pool), `brev delete-parked <id>`.
+  - API: `GET /api/providers/brev/parked`,
+    `POST /api/providers/brev/parked/<id>/delete | unpark`.
+- **Planner**: the launch form lists the allowed instance types with
+  stoppable ones first, each with its live $/hr, "stoppable: weights kept
+  on stop (warm restarts)" or "not stoppable: weights download at every
+  launch", the deploy time and how many are parked. With Hub weights, the
+  validator shows at the instance-type field either "warm: restarts parked
+  <name> (holds …): boot ~N min" or "cold: downloads … (~X GB): boot ~N
+  min", plus the stoppable allowed types when the chosen one is not.
+  Estimate: the list's deploy time + the missing GB at 0.15 GB/s.
 
 ### 3.5 Billing
 
@@ -359,18 +440,28 @@ No provider volume yet (§2.4, §3.4), so `weights_source: hub`:
    `scripts/gpu/fetch-hub-tree.py` at the image's commit (the spec's `sha`,
    else `main`), and runs it per tree: download into a `.partial-<stamp>`
    folder, every file checked against the Hub listing at that revision
-   (LFS SHA-256, git blob SHA-1, sizes), `.complete`, then rename. A tree
-   with `.complete` is skipped (a Brev VM keeps them under
-   `~/workspace/weights`). Aux files are checked by SHA-256 and size. Any
-   failure reports `failed` and the pod is deleted.
+   (LFS SHA-256, git blob SHA-1, sizes), `.complete`, then rename; the
+   boot then writes `.fv-revision` (the pinned revision) into the tree. A
+   tree is skipped only with `.complete` **and** `.fv-revision` equal to
+   its pinned revision: a Brev VM restarted from a stop keeps
+   `~/workspace/weights` (§3.4), so its trees are not downloaded again.
+   A tree at another revision, or a leftover without both marks, is moved
+   aside and removed (the VM's own disk, never a shared volume), then
+   fetched again; `.partial` leftovers of an interrupted download are
+   removed first. The fetcher (apt, venv, `fetch-hub-tree.py`) is set up
+   only when a tree is missing. Aux files are checked by SHA-256 and size.
+   Any failure reports `failed` and the pod is deleted (a warm restart
+   that fails is held instead, §3.4). The loop is `WEIGHTS_SH` in
+   `providers.ts`, unit-tested in bash with a stub fetcher.
 4. **Approval**: refused unless the launch has
    `weights_download_approved: true` **and** the Worker has
    `FV_HUB_DOWNLOADS_APPROVED=1`. Both default off. No test performs a
    download (the simulated pods never run the boot script).
 
 Rough sizes (`scripts/gcp/weights.sh plan`): H3 ~120 GB, LTX-2.5 ~70 GB,
-Wan 5B ~35 GB: 5–15 min per boot at the GPU's rate. A GMI storage volume
-or a stopped Brev VM would remove it (§9).
+Wan 5B ~35 GB: 5–15 min per boot at the GPU's rate. On a stoppable Brev
+type it is paid once: later launches restart the parked VM (§3.4). A GMI
+storage volume would do the same there (§9).
 
 ## 8. Owner to-do (nothing works live until these exist)
 
@@ -388,9 +479,17 @@ or a stopped Brev VM would remove it (§9).
 2. **NVIDIA Brev**
    1. Create an org and a **Read & Write** API key with a short expiry.
    2. `wrangler secret put BREV_API_TOKEN`; vars `BREV_ORG_ID`,
-      `BREV_INSTANCE_TYPES` and `BREV_PRICES` (from `brev search gpu
-      --json`), `BREV_BUDGET_USD`.
-   3. Ask NVIDIA whether the workspaces REST API may be automated and
+      `BREV_INSTANCE_TYPES` (the allow-list; put **stoppable** types first
+      for presets with weights, e.g. AWS / GCP / Nebius / Crusoe types,
+      not `massedcompute_*` / `hyperstack_*`), `BREV_BUDGET_USD`.
+      `BREV_PRICES` is optional now (an override of the live list).
+   3. Keep-on-stop (§3.4): decide `brev_park_max` (default 2) and
+      `brev_park_max_days` (default 7) in the policies (0 turns it off),
+      and whether a failed restart is held (default) or deleted
+      (`brev_park_delete_failed`). Check parked instances with
+      `fv-control.sh brev parked` or on the Pods page; they bill storage
+      (~$0.8/day for 250 GB on AWS gp3) until deleted.
+   4. Ask NVIDIA whether the workspaces REST API may be automated and
       whether the API key is a bearer token for it (if not, set
       `BREV_API_TOKEN` to whatever token the CLI stores after
       `brev login --api-key`, UNVERIFIED).
