@@ -39,6 +39,10 @@
 #                                              (docs/serve/deploy-gmi-brev.md): --gpu is the GMI product / Brev instance
 #                                              type; --fake = the cpu image's fake engine (a cheap smoke test)
 #   fv-control.sh providers                    launch providers: enabled or why not, budget, month's spend, GPU products
+#   fv-control.sh brev parked | unpark <id> | delete-parked <id>
+#                                              NVIDIA Brev keep-on-stop: parked (stopped, weights kept) instances with
+#                                              their trees, disk and storage $/day; unpark = a held one (restart failed)
+#                                              back into the warm pool; delete-parked deletes one (only ours)
 #   fv-control.sh pod list | status <name> | start <name> | stop <name> | extend <name> <min> | delete <name> | wait <name>
 #   fv-control.sh pod logs <name|pod id> [--source runpod|serve] [--follow]
 #   fv-control.sh boot <pod id | cluster or standalone name>
@@ -380,6 +384,18 @@ case "$cmd" in
   rollback) api POST /api/github/release "$(jq -nc --arg c "${1:-stable}" --argjson d "$([[ " $* " == *" --dry-run "* ]] && echo true || echo false)" '{action: "rollback", channel: (if $c == "--dry-run" then "stable" else $c end), dry_run: $d}')" | jq . ;;
   build-pod) cmd_build_pod "$@" ;;
   pod) cmd_pod "$@" ;;
+  brev)
+    # NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): parked instances keep their weights, billed as storage.
+    case "${1:-parked}" in
+      parked)
+        api_s GET /api/providers/brev/parked || die "brev parked: $(api_err)"
+        jq -r '"policy: at most \(.policy.brev_park_max) parked, \(.policy.brev_park_max_days) days each; storage $\(.storage_usd_per_day * 100 | round / 100)/day",
+          (.parked[] | [.workspace_id, .name, .state, .instance_type, "\(.disk_gb // "?") GB", "$\(.storage_usd_per_day * 100 | round / 100)/day",
+            "parked \(.parked_days // 0 | . * 10 | round / 10) d", (.trees | to_entries | map("\(.key)@\(.value[0:7])") | join(",")), (.note // "")] | @tsv)' <<<"$API_OUT" ;;
+      unpark) api_s POST "/api/providers/brev/parked/${2:?brev unpark <workspace id>}/unpark" '{}' || die "brev unpark: $(api_err)"; jq -r '"\(.name): \(.state) (the next launch of its type may restart it)"' <<<"$API_OUT" ;;
+      delete-parked) api_s POST "/api/providers/brev/parked/${2:?brev delete-parked <workspace id>}/delete" '{}' || die "brev delete-parked: $(api_err)"; jq -r .message <<<"$API_OUT" ;;
+      *) die "brev parked | unpark <workspace id> | delete-parked <workspace id>" ;;
+    esac ;;
   providers) api GET /api/providers | jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' ;;
   boot)
     t="${1:?boot <pod id | cluster or standalone name>}"

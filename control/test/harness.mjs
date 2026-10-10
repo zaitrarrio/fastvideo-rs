@@ -355,7 +355,7 @@ export function startMock() {
       if (bearer !== m.brevToken) return json(res, 401, { message: "unauthorized" });
       const om = /^\/organizations\/([^/]+)\/workspaces$/.exec(rest);
       if (om && om[1] !== m.brevOrg) return json(res, 403, { message: "not a member" });
-      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, ...w }) => w));
+      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, disk: _d, ...w }) => w));
       // The instance-type listing (shape read live 2026-10-10): each type's cloud_cred_id, stoppable, prices.
       const tm = /^\/instances\/alltypesavailable\/([^/]+)$/.exec(rest);
       if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
@@ -369,7 +369,7 @@ export function startMock() {
         const script = body?.vmBuild?.lifeCycleScriptAttr?.script;
         if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
           return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
-        const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
+        const id = `ws${String((b.seq = (b.seq || 0) + 1)).padStart(6, "0")}`;
         const w = { id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body, disk: {}, diskStorage: body.diskStorage };
         b.workspaces.push(w);
         brevVmBoot(w);
