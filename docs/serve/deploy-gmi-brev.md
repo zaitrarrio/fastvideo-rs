@@ -302,6 +302,21 @@ edge), same log shipping. What differs (`providerEnv`, `PROVIDER_BOOT`):
   /home/ubuntu/workspace/weights:/workspace/weights <image>` on the boot,
   and starts a host watchdog (`docker rm -f` + `shutdown -h now` at the
   deadline). Env values with a line break are refused.
+- Brev host reports (`control/src/brev-host.ts`): the startup script logs
+  to `~/workspace/fv/host.log` and reports to `/ingest/v1/endpoint` with
+  the ingest token before anything else, so a VM whose host part fails is
+  no longer silent: `host` (whoami, uid, `sudo -n` ok, `docker`,
+  `docker info`, `nvidia-smi -L`, the NVIDIA container toolkit, disk free,
+  kernel, OS), `host_failed` (the failing step + the last 20 log lines;
+  fails the boot at once), `container_started` (after `docker run`), and a
+  detached `heartbeat` every 30 s (container state + its last log line)
+  until the boot logs its tunnel, or `host_failed` with the container's
+  log if it exits. Docker missing: installed (docker.io + the NVIDIA
+  container toolkit) only with `FV_BREV_INSTALL_DOCKER=1` in the pod env.
+  The reports show in `provider-logs` (`[report …]` lines), the boot
+  timeline (`host script (Brev VM)`, `container start`, `tunnel reported`)
+  and the `up` wait's pool status. **UNVERIFIED** live: whether Brev runs
+  the `lifeCycleScriptAttr` script, as which user, with Docker present.
 - `patchWorker` (env apply) is refused for these pods (GMI wipes a
   container on update; a Brev startup script runs once): roll, or stop and
   start.
