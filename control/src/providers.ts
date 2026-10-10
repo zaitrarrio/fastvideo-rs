@@ -269,9 +269,10 @@ export function providerEnv(
   env: Env,
   full: Record<string, string>,
   o: { provider: OtherProviderId; key: string; name: string; deadlineMs: number; reportToken: string; weights: WeightsPlan; scriptsRef: string },
-): { env: Record<string, string>; dropped: string[] } {
+): { env: Record<string, string>; dropped: string[]; notes: string[] } {
   const out: Record<string, string> = {};
   const dropped: string[] = [];
+  const notes: string[] = [];
   const subst = parseJson<Record<string, unknown>>(env.FV_PROVIDER_SECRET_ENV, {});
   for (const [k, v] of Object.entries(full)) {
     if (/\{\{\s*RUNPOD_SECRET_/.test(v)) {
@@ -284,6 +285,14 @@ export function providerEnv(
   // The Runpod key and floor of the Runpod watchdog never leave Runpod.
   delete out.FV_BACKSTOP_API_KEY;
   delete out.FV_MIN_BALANCE;
+  // fv-serve refuses to start with key_store = d1 (direct workers) when the D1 settings are missing ("auth.key_store
+  // = d1 needs the D1 settings"): without FV_PROVIDER_SECRET_ENV's FV_CF_* / FV_D1_*, keys live in memory (minted
+  // through the worker's admin API with FV_ADMIN_TOKEN; gone at restart). Live on Brev 2026-10-10: exit right after the tunnel.
+  const d1 = ["FV_CF_ACCOUNT_ID", "FV_CF_API_TOKEN", "FV_D1_DATABASE_ID"];
+  if (out.FV_KEY_STORE === "d1" && d1.some((k) => !out[k])) {
+    out.FV_KEY_STORE = "memory";
+    notes.push(`FV_KEY_STORE=memory: no D1 settings (${d1.filter((k) => !out[k]).join(", ")}; FV_PROVIDER_SECRET_ENV), so API keys minted on this pod live in its memory`);
+  }
   Object.assign(out, {
     FV_PROVIDER: o.provider,
     FV_POD_ID: o.key,
@@ -302,7 +311,7 @@ export function providerEnv(
   }
   // GMI: the in-container watchdog deletes its own container at the deadline (fv-control's cron does too).
   if (o.provider === "gmi" && env.GMI_API_KEY) Object.assign(out, { FV_BACKSTOP_API_KEY: env.GMI_API_KEY, FV_BACKSTOP_API: (env.GMI_API || "https://console.gmicloud.ai/api").replace(/\/$/, "") });
-  return { env: out, dropped };
+  return { env: out, dropped, notes };
 }
 
 /** cloudflared, pinned (2026.9.0, linux-amd64) and checked by SHA-256 before it runs. */
@@ -330,6 +339,24 @@ fail() { say "FAILED: $1"; report failed "" "$1"; sleep 600; exit 1; }
 if ! command -v curl >/dev/null 2>&1; then
   { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates; } >/fvstate/apt.log 2>&1 || fail "no curl"
 fi
+# ---- preflight: the binary and the config (as WORKER_BOOT makes it), checked before the weights and the tunnel.
+# fv-serve exits at once on a bad config ("fv-serve: config: ...", before any log is shipped): say why instead.
+FV_SERVE_BIN=/opt/fastvideo-rs/bin/fv-serve
+[ -x "$FV_SERVE_BIN" ] || fail "no $FV_SERVE_BIN in the image"
+if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
+  printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml || fail "FV_WORKER_TOML_B64 does not decode"
+else
+  [ -f "$FV_WORKER_CONFIG" ] || fail "no worker config $FV_WORKER_CONFIG in the image"
+  cp "$FV_WORKER_CONFIG" /fv-worker.toml || fail "cannot copy $FV_WORKER_CONFIG"
+fi
+if grep -q "^\\[gateway\\]" /fv-worker.toml; then
+  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
+else
+  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
+fi
+export FV_WORKER_ID="$FV_POD_ID"
+cfgerr="$("$FV_SERVE_BIN" --config /fv-worker.toml --print-config 2>&1 >/dev/null)" || fail "fv-serve config: $(printf '%s' "$cfgerr" | tail -n 3 | tr '\\n"' '  ')"
+say "config ok: /fv-worker.toml"
 # ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256
 if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ]; then
   say "weights: Hub download (owner-approved)"
@@ -389,19 +416,9 @@ report tunnel "$U" ""
     sleep 30
   done
 ) &
-# ---- fv-serve (the config as WORKER_BOOT does it)
-if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
-  printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml
-else
-  cp "$FV_WORKER_CONFIG" /fv-worker.toml
-fi
-if grep -q "^\\[gateway\\]" /fv-worker.toml; then
-  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
-else
-  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
-fi
-export FV_WORKER_ID="$FV_POD_ID"
-exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
+# ---- fv-serve (its config was checked before the weights)
+say "fv-serve: $FV_SERVE_BIN --config /fv-worker.toml (from \${FV_WORKER_TOML_B64:+inline FV_WORKER_TOML_B64}\${FV_WORKER_TOML_B64:-$FV_WORKER_CONFIG}); $("$FV_SERVE_BIN" --version 2>&1 | head -n 1)"
+exec "$FV_SERVE_BIN" --config /fv-worker.toml`;
 
 /** A Brev VM's startup script (brev-host.ts): the host's facts and failures reported, our image run with the GPU and
  * the weights dir, a heartbeat until the tunnel, a host watchdog at the deadline. */
@@ -477,13 +494,16 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   const rep = await lastReport(env, podId);
   if (rep?.phase === "failed") return { phase: "boot failed", detail: rep.detail || "the pod reported a failure", fatal: true };
   if (rep?.phase === "host_failed") return { phase: "host failed", detail: rep.detail || "the VM's host script reported a failure", fatal: true };
+  if (rep?.phase === "container_exited") return { phase: "container exited", detail: rep.detail || "the container exited", fatal: true };
+  if (rep?.phase === "serve_timeout") return { phase: "serve timeout", detail: rep.detail || "fv-serve never answered /health", fatal: true };
   if (!rt) return null;
   if (rt.state === "failed") return { phase: "provider error", detail: rt.reason || "the provider reports an error", fatal: true };
   if (rt.state === "stopped") return { phase: "stopped", detail: "stopped outside fv-control", fatal: true };
   if (rt.state === "starting") return { phase: "provisioning", detail: rt.reason || "", fatal: false };
   const hb = rep?.heartbeat_at ? `; host heartbeat ${Math.round((now() - rep.heartbeat_at) / 1000)} s ago: ${(rep.heartbeat || "").slice(0, 160)}` : "";
   if (rep?.phase === "weights") return { phase: "weights", detail: `downloading from the Hub${rep.detail ? ` (${rep.detail})` : ""}`, fatal: false };
-  if (rep?.phase === "tunnel") return { phase: "loading", detail: "tunnel up, fv-serve loading", fatal: false };
+  if (rep?.phase === "tunnel") return { phase: "loading", detail: `tunnel up, fv-serve loading${hb}`, fatal: false };
+  if (rep?.phase === "serve_ready") return { phase: "loading", detail: `fv-serve answers /health on the host (${rep.detail}); waiting for it through the tunnel`, fatal: false };
   if (rep?.phase === "container_started") return { phase: "container started", detail: `the boot runs in the container${hb}`, fatal: false };
   if (rep?.phase === "host") return { phase: "host", detail: `host script running (${rep.detail.slice(0, 200)})${hb}`, fatal: false };
   return { phase: "booting", detail: `no report from the pod yet${hb}`, fatal: false };
@@ -518,7 +538,7 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
     await env.DB.prepare("UPDATE cluster_pods SET url = ? WHERE pod_id = ?").bind(url, pod).run();
   }
   // The host's facts and failures (a log tail) are longer than the container's one-line phases.
-  const detail = typeof b?.detail === "string" ? b.detail.slice(0, phase === "host" || phase === "host_failed" ? 2000 : 300) : "";
+  const detail = typeof b?.detail === "string" ? b.detail.slice(0, LONG_REPORTS.includes(phase) ? 2000 : 300) : "";
   const t = now();
   const prev = await lastReport(env, pod);
   if (phase === "heartbeat") {
@@ -530,12 +550,19 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
   const hist = [...(await reportHistory(env, pod)), { phase, detail, at: t }].slice(-REPORT_HISTORY);
   await putSetting(env, `endpoint-log:${pod}`, hist, "pod");
   // Into the boot timeline (and the pod's log): the host script, the container, the tunnel.
-  const m = ({ host: "host_script", container_started: "container_start", tunnel: "tunnel", host_failed: "host_script" } as const)[phase as "host"];
-  if (m) await recordBoot(env, pod, cl.id, [], { [m]: t }, { [m]: phase === "host_failed" ? `FAILED: ${detail.slice(0, 300)}` : detail.slice(0, 300) });
+  // A failure marks no milestone (the phase was not reached); it is the note of the phase it ended.
+  const m = (
+    { host: "host_script", host_failed: "host_script", container_started: "container_start", container_exited: "container_start", tunnel: "tunnel", serve_ready: "serve_ready", serve_timeout: "serve_ready" } as const
+  )[phase as "host"];
+  const bad = ["host_failed", "container_exited", "serve_timeout"].includes(phase);
+  if (m) await recordBoot(env, pod, cl.id, [], bad ? {} : { [m]: t }, { [m]: bad ? `${phase.toUpperCase()}: ${detail.slice(-300)}` : detail.slice(0, 300) });
   return { ok: true, pod, phase };
 }
-/** What a pod may report: the container's boot (weights, tunnel, failed) and a Brev host's (host, host_failed, container_started, heartbeat). */
-export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_failed", "container_started", "heartbeat"];
+/** What a pod may report: the container's boot (weights, tunnel, failed) and a Brev host's (host, host_failed,
+ * container_started, heartbeat, then serve_ready / container_exited / serve_timeout from its watcher). */
+export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_failed", "container_started", "heartbeat", "serve_ready", "container_exited", "serve_timeout"];
+/** Reports that carry a log tail (up to 2000 chars). */
+const LONG_REPORTS = ["host", "host_failed", "container_exited", "serve_timeout"];
 
 /** Every reason a spec's GMI / Brev pools cannot start, at the field it is about (the launch form, `up`'s first step). */
 export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (string | number)[]; message: string }[] {

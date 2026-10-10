@@ -310,13 +310,34 @@ edge), same log shipping. What differs (`providerEnv`, `PROVIDER_BOOT`):
   kernel, OS), `host_failed` (the failing step + the last 20 log lines;
   fails the boot at once), `container_started` (after `docker run`), and a
   detached `heartbeat` every 30 s (container state + its last log line)
-  until the boot logs its tunnel, or `host_failed` with the container's
-  log if it exits. Docker missing: installed (docker.io + the NVIDIA
-  container toolkit) only with `FV_BREV_INSTALL_DOCKER=1` in the pod env.
-  The reports show in `provider-logs` (`[report …]` lines), the boot
-  timeline (`host script (Brev VM)`, `container start`, `tunnel reported`)
-  and the `up` wait's pool status. **UNVERIFIED** live: whether Brev runs
-  the `lifeCycleScriptAttr` script, as which user, with Docker present.
+  until the boot logs its tunnel. After the tunnel the same watcher polls
+  `127.0.0.1:8000/health` every 10 s: `serve_ready` at the first 200,
+  `container_exited` (exit code, OOMKilled, the last 60 lines of `docker
+  logs`) if the container exits, `serve_timeout` (the last 60 lines) after
+  10 min. Both fail the boot at once. The log lines have every env value
+  (8+ chars) replaced by `[redacted]` and are kept in
+  `~/workspace/fv/container.log`; the container is not removed when it
+  exits (`--restart no`, no `--rm`). Docker missing: installed (docker.io
+  + the NVIDIA container toolkit) only with `FV_BREV_INSTALL_DOCKER=1` in
+  the pod env. The reports show in `provider-logs` (`[report …]` lines),
+  the boot timeline (`host script (Brev VM)`, `container start`, `tunnel
+  reported`, `fv-serve READY`) and the `up` wait's pool status. Verified
+  live 2026-10-10 on g7e.2xlarge: Brev runs the `lifeCycleScriptAttr`
+  script as `ubuntu` with passwordless sudo, Docker 29 with the NVIDIA
+  runtime, toolkit 1.20.1.
+- **Preflight in the container** (`PROVIDER_BOOT`, before the weights and
+  the tunnel): `/opt/fastvideo-rs/bin/fv-serve` must exist, the worker
+  config is made as `WORKER_BOOT` does it, and `fv-serve --print-config`
+  must accept it with the env. Otherwise `failed` carries fv-serve's own
+  message. Before `exec fv-serve`, the boot logs the config path and
+  `fv-serve --version`.
+- **Key store**: a direct worker gets `FV_KEY_STORE=d1`, and fv-serve
+  refuses to start without the D1 settings ("auth.key_store = d1 needs the
+  D1 settings"). That is what the first live Brev smoke hit: the container
+  exited right after its tunnel. Without `FV_PROVIDER_SECRET_ENV`'s
+  `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN` and `FV_D1_DATABASE_ID`, a GMI /
+  Brev pod now gets `FV_KEY_STORE=memory`: keys minted on it with its
+  admin token live in its memory. The operation log says so (`NOTE:`).
 - `patchWorker` (env apply) is refused for these pods (GMI wipes a
   container on update; a Brev startup script runs once): roll, or stop and
   start.
