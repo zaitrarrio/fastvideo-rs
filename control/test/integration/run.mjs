@@ -1344,10 +1344,30 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   sp = (await call("/api/standalone/brev1", { headers: T() })).j.pod;
   assert.equal(sp.pod.pod_id, bkey);
   assert.equal(sp.pod.cost_per_hr, 1, "BREV_PRICES");
+  // The host script's reports: its facts and container_started in the provider logs and the boot timeline; heartbeats keep the phase.
+  const plg = (await call(`/api/pods/${encodeURIComponent(bkey)}/provider-logs`, { headers: T() })).j;
+  assert.ok(plg.lines.some((l) => /^\[report .*\] host: user=ubuntu uid=1000 sudo=yes docker=\/usr\/bin\/docker .*gpu=\[GPU 0: NVIDIA A10G\]/.test(l)), JSON.stringify(plg.lines));
+  assert.ok(plg.lines.some((l) => /\] container_started: c0ffee000000/.test(l)) && plg.lines.some((l) => /\] heartbeat \(last\): container: no container/.test(l)), JSON.stringify(plg.lines));
+  assert.deepEqual(plg.reports.map((x) => x.phase), ["run_fetched", "host", "container_started", "tunnel"]);
+  const btl = (await call(`/api/pods/${encodeURIComponent(bkey)}/boot`, { headers: T() })).j.timeline;
+  const hostRow = btl.find((r) => r.phase === "host script (Brev VM)");
+  assert.ok(hostRow?.at && /user=ubuntu/.test(hostRow.detail || ""), JSON.stringify(btl));
+  assert.ok(btl.find((r) => r.phase === "tunnel reported")?.at, JSON.stringify(btl));
+  assert.equal((await call("/ingest/v1/endpoint", { method: "POST", body: { pod: bkey, phase: "nonsense" }, headers: { authorization: `Bearer ${benv.FV_ENDPOINT_REPORT_TOKEN}` } })).status, 400);
   assert.equal((await call("/api/standalone/brev1", { method: "DELETE", headers: T() })).status, 202);
   for (let i = 0; i < 120 && (await call("/api/standalone/brev1", { headers: T() })).status !== 404; i++) await sleep(500);
   assert.equal(b.workspaces.length, 0, "the VM is deleted");
   assert.ok(b.calls.filter((c) => c.method === "DELETE").every((c) => c.path === `/workspaces/${ws.id}`));
+  // A host script that fails (here docker run without a GPU driver): the boot fails at once with its reason, the VM goes.
+  b.boot = "hostfail";
+  await cli("pod", "launch", "brevhf", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
+  const hid = (await call("/api/standalone/brevhf", { headers: T() })).j.pod.id;
+  op = await waitOp(hid, "up", 90000);
+  b.boot = "ok";
+  assert.equal(op.status, "failed");
+  assert.ok(op.log.some((l) => /FAILED \(host failed\): docker run \(exit 125\): .*could not select device driver/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  assert.equal(b.workspaces.length, 0, "deleted after the host failure");
+  await call("/api/standalone/brevhf", { method: "DELETE", headers: T() });
 });
 
 await step("Brev keep-on-stop: park on stop, warm restart (no download), restart failure / timeout, non-stoppable delete, limits, budget, only ours", async () => {

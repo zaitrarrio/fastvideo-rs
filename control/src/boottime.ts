@@ -26,10 +26,12 @@ import { now, parseJson } from "./util";
 export const MILESTONES = [
   "create", // Runpod accepted the create (the controller's record)
   "machine", // a host took it: Runpod's first system line ("create container …")
+  "host_script", // a Brev VM's host script ran (its `host` report; GMI / Runpod: none)
   "pull_start",
   "pull_end", // "Digest: …" / "Status: … up to date"
   "container_start", // "start container …: begin"
   "boot_script", // [fv-boot] start (the boot command runs)
+  "tunnel", // a GMI / Brev pod reported its tunnel URL
   "volume", // [fv-boot] volume: the weights tree is visible
   "serve_start", // fv-serve's first line
   "edge_link", // connected to the edge's family dispatcher (edge fronts)
@@ -57,6 +59,8 @@ export interface Boot {
   /** `background`: the warm-up ran after ready (fast boot B); else it held readiness. */
   warmup_mode?: "background" | "blocking";
   volume?: string;
+  /** What a phase's report said (a Brev host's facts or failure, the container id). */
+  notes?: Partial<Record<Milestone, string>>;
 }
 
 /** What one log line says about the boot: a milestone, or a component load. */
@@ -118,10 +122,12 @@ export interface BootRow {
 const PHASE_LABEL: Record<Milestone, string> = {
   create: "Runpod create accepted",
   machine: "machine assigned",
+  host_script: "host script (Brev VM)",
   pull_start: "image pull start",
   pull_end: "image pull end",
   container_start: "container start",
   boot_script: "boot script start",
+  tunnel: "tunnel reported",
   volume: "volume mounted and visible",
   serve_start: "fv-serve process start",
   edge_link: "connected to the edge dispatcher",
@@ -146,7 +152,7 @@ export function bootRows(boot: Boot | null): BootRow[] {
       m === "pull_end" && boot.t.pull_start !== undefined && at !== null ? `pull ${Math.round((at - boot.t.pull_start) / 1000)} s` :
       m === "volume" ? boot.volume :
       m === "model_resident" && boot.load_s !== undefined ? `load ${boot.load_s.toFixed(1)} s` :
-      m === "warmup_done" && boot.warmup_s !== undefined ? `warm-up ${boot.warmup_s.toFixed(1)} s` : undefined;
+      m === "warmup_done" && boot.warmup_s !== undefined ? `warm-up ${boot.warmup_s.toFixed(1)} s` : boot.notes?.[m];
     const label = m === "warmup_done" && boot.warmup_mode === "background" ? "warm-up done (background)" : PHASE_LABEL[m];
     rows.push({ phase: label, at, t_s: at !== null && Number.isFinite(t0) ? Math.round((at - t0) / 100) / 10 : null, took_s: at !== null && prev !== null ? Math.round((at - prev) / 100) / 10 : null, ...(detail ? { detail } : {}) });
     if (m === "load_start")
@@ -180,13 +186,21 @@ export function bootPhase(boot: Boot | null, t = now()): { phase: Milestone; sin
   return last ? { phase: last, since_s: Math.round((t - boot.t[last]!) / 1000) } : null;
 }
 /** Folds lines into a controller pod's timeline; writes each new milestone to the pod's log. No-op for a pod the controller does not own. */
-export async function recordBoot(env: Env, podId: string, clusterId: string, lines: { stream: "system" | "container" | "shipped"; ts: number; text: string }[], extra?: Partial<Record<Milestone, number>>): Promise<Milestone[]> {
+export async function recordBoot(
+  env: Env,
+  podId: string,
+  clusterId: string,
+  lines: { stream: "system" | "container" | "shipped"; ts: number; text: string }[],
+  extra?: Partial<Record<Milestone, number>>,
+  notes?: Partial<Record<Milestone, string>>,
+): Promise<Milestone[]> {
   const r = await loadBoot(env, podId);
   if (!r) return [];
   const boot = r.boot;
   const before = JSON.stringify(boot);
   const added = foldBoot(boot, lines);
   for (const [m, at] of Object.entries(extra || {}) as [Milestone, number][]) if (boot.t[m] === undefined) (boot.t[m] = at), added.push(m);
+  for (const [m, s] of Object.entries(notes || {}) as [Milestone, string][]) if (s && boot.notes?.[m] !== s) (boot.notes ||= {})[m] = s;
   if (JSON.stringify(boot) === before) return [];
   await env.DB.prepare("UPDATE cluster_pods SET boot = ? WHERE pod_id = ?").bind(JSON.stringify(boot), podId).run();
   if (added.length) {

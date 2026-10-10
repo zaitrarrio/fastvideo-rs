@@ -22,6 +22,7 @@
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
 import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
+import { recordBoot } from "./boottime";
 import { bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
@@ -570,16 +571,36 @@ export async function podBaseUrl(env: Env, podId: string, runpodUrl: (pod: strin
   return isOtherPod(podId) ? reportedUrl(env, podId) : runpodUrl(podId);
 }
 
-/** What a GMI / Brev pod reported last (POST /ingest/v1/endpoint): failed boots show here. */
-export async function lastReport(env: Env, podId: string): Promise<{ phase: string; detail: string; at: number } | null> {
+export interface PodReport {
+  phase: string;
+  detail: string;
+  at: number;
+  /** The host's last heartbeat (Brev) and what it said. */
+  heartbeat_at?: number;
+  heartbeat?: string;
+}
+/** What a GMI / Brev pod reported last (POST /ingest/v1/endpoint): failed boots show here. Heartbeats do not change the phase. */
+export async function lastReport(env: Env, podId: string): Promise<PodReport | null> {
   const r = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(`endpoint:${podId}`).first<{ value: string }>();
   return r ? parseJson(r.value, null) : null;
 }
+/** Every report of a pod but heartbeats (the last REPORT_HISTORY), oldest first. */
+export async function reportHistory(env: Env, podId: string): Promise<{ phase: string; detail: string; at: number }[]> {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(`endpoint-log:${podId}`).first<{ value: string }>();
+  return r ? parseJson(r.value, []) : [];
+}
+const REPORT_HISTORY = 30;
+/** The reports as log lines (provider-logs: Brev keeps no log of its own). */
+export const reportLines = (h: { phase: string; detail: string; at: number }[], last: PodReport | null): string[] => [
+  ...h.map((x) => `[report ${new Date(x.at).toISOString()}] ${x.phase}${x.detail ? `: ${x.detail}` : ""}`),
+  ...(last?.heartbeat_at ? [`[report ${new Date(last.heartbeat_at).toISOString()}] heartbeat (last): ${last.heartbeat || ""}`] : []),
+];
 
 /** A starting GMI / Brev pod's boot diagnosis (the `up` wait): the provider's state and the pod's own last report. */
 export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const rep = await lastReport(env, podId);
   if (rep?.phase === "failed") return { phase: "boot failed", detail: rep.detail || "the pod reported a failure", fatal: true };
+  if (rep?.phase === "host_failed") return { phase: "host failed", detail: rep.detail || "the VM's host script reported a failure", fatal: true };
   if (!rt) return null;
   // A parked Brev instance being started again: stopped / starting is expected until BREV_RESTART_TIMEOUT_S.
   if (splitKey(podId)?.provider === "brev") {
@@ -589,9 +610,12 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   if (rt.state === "failed") return { phase: "provider error", detail: rt.reason || "the provider reports an error", fatal: true };
   if (rt.state === "stopped") return { phase: "stopped", detail: "stopped outside fv-control", fatal: true };
   if (rt.state === "starting") return { phase: "provisioning", detail: rt.reason || "", fatal: false };
-  if (rep?.phase === "weights") return { phase: "weights", detail: "downloading from the Hub", fatal: false };
+  const hb = rep?.heartbeat_at ? `; host heartbeat ${Math.round((now() - rep.heartbeat_at) / 1000)} s ago: ${(rep.heartbeat || "").slice(0, 160)}` : "";
+  if (rep?.phase === "weights") return { phase: "weights", detail: `downloading from the Hub${rep.detail ? ` (${rep.detail})` : ""}`, fatal: false };
   if (rep?.phase === "tunnel") return { phase: "loading", detail: "tunnel up, fv-serve loading", fatal: false };
-  return { phase: "booting", detail: "no report from the pod yet", fatal: false };
+  if (rep?.phase === "container_started") return { phase: "container started", detail: `the boot runs in the container${hb}`, fatal: false };
+  if (rep?.phase === "host") return { phase: "host", detail: `host script running (${rep.detail.slice(0, 200)})${hb}`, fatal: false };
+  return { phase: "booting", detail: `no report from the pod yet${hb}`, fatal: false };
 }
 
 /** The URL a pod reports must be a quick-tunnel URL (tests: FV_ENDPOINT_URL_RE). */
@@ -614,7 +638,7 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
   const pod = typeof b?.pod === "string" ? b.pod : "";
   const phase = typeof b?.phase === "string" ? b.phase : "";
   if (!isOtherPod(pod)) throw new HttpError(400, "pod: a GMI / Brev pod id");
-  if (!["weights", "tunnel", "failed"].includes(phase)) throw new HttpError(400, "phase: weights | tunnel | failed");
+  if (!REPORT_PHASES.includes(phase)) throw new HttpError(400, `phase: ${REPORT_PHASES.join(" | ")}`);
   const row = await env.DB.prepare("SELECT cluster_id FROM cluster_pods WHERE pod_id = ? AND deleted_at IS NULL").bind(pod).first<{ cluster_id: string }>();
   if (!row || row.cluster_id !== cl.id) throw new HttpError(404, "no live pod of this cluster with that id");
   if (phase === "tunnel") {
@@ -622,10 +646,25 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
     if (!endpointUrlOk(env, url)) throw new HttpError(400, "url: a Cloudflare quick-tunnel URL (https://<name>.trycloudflare.com)");
     await env.DB.prepare("UPDATE cluster_pods SET url = ? WHERE pod_id = ?").bind(url, pod).run();
   }
-  const detail = typeof b?.detail === "string" ? b.detail.slice(0, 300) : "";
-  await putSetting(env, `endpoint:${pod}`, { phase, detail, at: now() }, "pod");
+  // The host's facts and failures (a log tail) are longer than the container's one-line phases.
+  const detail = typeof b?.detail === "string" ? b.detail.slice(0, phase === "host" || phase === "host_failed" ? 2000 : 300) : "";
+  const t = now();
+  const prev = await lastReport(env, pod);
+  if (phase === "heartbeat") {
+    // A heartbeat keeps the phase: it only says the host script is alive (and what the container does).
+    await putSetting(env, `endpoint:${pod}`, { ...(prev ?? { phase: "heartbeat", detail: "", at: t }), heartbeat_at: t, heartbeat: detail }, "pod");
+    return { ok: true, pod, phase };
+  }
+  await putSetting(env, `endpoint:${pod}`, { phase, detail, at: t, ...(prev?.heartbeat_at ? { heartbeat_at: prev.heartbeat_at, heartbeat: prev.heartbeat } : {}) }, "pod");
+  const hist = [...(await reportHistory(env, pod)), { phase, detail, at: t }].slice(-REPORT_HISTORY);
+  await putSetting(env, `endpoint-log:${pod}`, hist, "pod");
+  // Into the boot timeline (and the pod's log): the host script, the container, the tunnel.
+  const m = ({ host: "host_script", container_started: "container_start", tunnel: "tunnel", host_failed: "host_script" } as const)[phase as "host"];
+  if (m) await recordBoot(env, pod, cl.id, [], { [m]: t }, { [m]: phase === "host_failed" ? `FAILED: ${detail.slice(0, 300)}` : detail.slice(0, 300) });
   return { ok: true, pod, phase };
 }
+/** What a pod may report: the container's boot (weights, tunnel, failed) and a Brev host's (host, host_failed, container_started, heartbeat). */
+export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_failed", "container_started", "heartbeat"];
 
 /** Every reason a spec's GMI / Brev pools cannot start, at the field it is about (the launch form, `up`'s first step). */
 export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (string | number)[]; message: string }[] {

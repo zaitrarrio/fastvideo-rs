@@ -29,10 +29,11 @@
 // here (fv- names) are ever stopped, started or deleted.
 import { policies, type Policies } from "./alerts";
 import { brev, type BrevType } from "./brev";
+import { brevHostScript } from "./brev-host";
 import { randomToken, seal, sha256Hex, unseal } from "./crypto";
 import type { Env } from "./env";
 import { FV_NAME_RE } from "./gmi";
-import { getSetting, HttpError, now, parseJson, rateLimit } from "./util";
+import { getSetting, HttpError, now, parseJson, putSetting, rateLimit } from "./util";
 
 export const BREV_HOME = "/home/ubuntu/workspace";
 
@@ -182,28 +183,11 @@ $S systemctl enable fv-boot.service
 $S systemctl start --no-block fv-boot.service
 `;
 }
-/** The run script of one launch (root, from the unit): the env file (0600), our image with the GPU and the weights
- * dir mounted, and a host watchdog that removes the container at the deadline and powers the VM off 5 min later
- * (fv-control parks or deletes it at the deadline itself; this is the backstop). */
+/** The run script of one launch (root, from the unit): brev-host.ts's host script (the host's facts and failures
+ * reported, the env file 0600, our image with the GPU and the weights dir, a heartbeat until the tunnel, the deadline
+ * watchdog; fv-control parks or deletes the VM at the deadline itself). */
 export function brevRunScript(image: string, env: Record<string, string>, boot: string): string {
-  for (const [k, v] of Object.entries(env)) if (/[\r\n]/.test(v)) throw new HttpError(400, `brev: env ${k} has a line break (docker --env-file takes one line per variable)`);
-  const envFile = Object.entries(env)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  const deadline = Number(env.FV_CLUSTER_DEADLINE || "0");
-  return `#!/usr/bin/env bash
-set -u
-S=""; [ "$(id -u)" = 0 ] || S="sudo -n"
-umask 077
-mkdir -p ${BREV_HOME}/weights ${BREV_HOME}/fv
-printf %s ${shq(btoa(envFile))} | base64 -d > ${BREV_HOME}/fv/env
-printf %s ${shq(btoa(boot))} | base64 -d > ${BREV_HOME}/fv/boot.sh
-$S docker rm -f fv-serve >/dev/null 2>&1 || true
-$S docker run -d --name fv-serve --restart no --gpus all --network host --env-file ${BREV_HOME}/fv/env \\
-  -v ${BREV_HOME}/weights:/workspace/weights -v ${BREV_HOME}/fv/boot.sh:/fv-boot.sh:ro \\
-  --entrypoint bash ${shq(image)} /fv-boot.sh
-nohup setsid bash -c 'while [ "$(date +%s)" -lt ${deadline} ]; do sleep 30; done; '"$S"' docker rm -f fv-serve; sleep 300; '"$S"' shutdown -h now' >/dev/null 2>&1 &
-`;
+  return brevHostScript(image, env, boot);
 }
 
 // ---------------------------------------------------------------- create / restart
@@ -435,6 +419,9 @@ export async function brevBoot(env: Env, req: Request): Promise<Response> {
   if (!row.run_sealed) throw new HttpError(404, "no run script yet");
   const script = await unseal(env.CONTROL_KEK, row.run_sealed, runAad(row.name));
   await env.DB.prepare("UPDATE brev_instances SET boots = boots + 1 WHERE workspace_id = ?").bind(row.workspace_id).run();
+  // Into the pod's report history (provider-logs): the VM booted and fetched its launch (before the host script reports).
+  const hist = await getSetting<{ phase: string; detail: string; at: number }[]>(env, `endpoint-log:${row.pod_id}`, []);
+  await putSetting(env, `endpoint-log:${row.pod_id}`, [...hist, { phase: "run_fetched", detail: `boot ${row.boots + 1}: the VM fetched its run script`, at: now() }].slice(-30), "pod");
   return new Response(script, { headers: { "content-type": "text/x-shellscript; charset=utf-8", "cache-control": "no-store" } });
 }
 

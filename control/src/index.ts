@@ -59,8 +59,8 @@ import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
-import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, splitKey } from "./providers";
 import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -203,11 +203,15 @@ app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
   return c.json({ ok: true, name: r.name, state: r.state });
 });
 /** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none). */
+/** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none), then the pod's
+ * reports (POST /ingest/v1/endpoint: a Brev host's facts, failures, heartbeat; the container's phases). */
 app.get("/api/pods/:id/provider-logs", async (c) => {
   const id = c.req.param("id");
   if (!isOtherPod(id)) throw new HttpError(400, "a GMI / Brev pod id (gmi:<name>, brev:<name>); Runpod pods: /api/pods/:id/runpod-logs");
-  const lines = await otherPodLogs(c.env, id);
-  return c.json({ source: splitKey(id)!.provider, lines: lines.slice(-1000).map((l) => scrub(c.env, l)), report: await lastReport(c.env, id) });
+  const lines = await otherPodLogs(c.env, id).catch(() => [] as string[]);
+  const report = await lastReport(c.env, id);
+  const reports = await reportHistory(c.env, id);
+  return c.json({ source: splitKey(id)!.provider, lines: [...lines.slice(-1000), ...reportLines(reports, report)].map((l) => scrub(c.env, l)), report, reports });
 });
 app.get("/api/providers/cloudrift/price", async (c) => {
   const gpu = c.req.query("gpu") || "";

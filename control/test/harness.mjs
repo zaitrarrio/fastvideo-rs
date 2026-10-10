@@ -143,9 +143,21 @@ export function startMock() {
         const run = await r.text();
         if (!r.ok) return (rec.error = run.slice(0, 200));
         rec.run = run;
-        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(run)?.[1] || "";
+        // The env file the host script writes (base64 in its printf to $W/fv/env).
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '\$W\/fv\/env'/.exec(run)?.[1] || "";
         const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
         rec.env = env;
+        // The host script's own reports (brev-host.ts) come first: its facts, then container_started (or host_failed).
+        const hostReport = (phase, detail) =>
+          fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: `brev:${w.name}`, phase, url: "", detail }) })
+            .then((r) => (m.reports ||= []).push({ key: `brev:${w.name}`, status: r.status, phase }))
+            .catch(() => {});
+        if (env.FV_ENDPOINT_REPORT_URL) {
+          await hostReport("host", "user=ubuntu uid=1000 sudo=yes docker=/usr/bin/docker info=[27.1.1 runtimes=nvidia,runc,] gpu=[GPU 0: NVIDIA A10G] toolkit=[NVIDIA Container Toolkit CLI version 1.17.8] disk=[180G free of 197G] kernel=6.8.0 os=[ubuntu 22.04] ws=/home/ubuntu/workspace");
+          if (m.brev.boot === "hostfail") return void (await hostReport("host_failed", 'docker run (exit 125): docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]] | '));
+          await hostReport("heartbeat", "container: no container; last: ");
+          await hostReport("container_started", "c0ffee000000 image");
+        }
         if (env.FV_WEIGHTS_SOURCE === "hub")
           for (const line of Buffer.from(env.FV_WEIGHTS_TREES_B64 || "", "base64").toString().split("\n")) {
             const [kind, tree, , rev] = line.split("\t");
