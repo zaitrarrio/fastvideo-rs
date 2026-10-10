@@ -21,7 +21,8 @@
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
-import { brev, brevInstanceTypes, brevOff, brevPrice } from "./brev";
+import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
+import { bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
@@ -65,6 +66,12 @@ export interface Offer {
   region: string | null;
   usd_per_hr: number | null;
   in_stock: boolean | null;
+  /** Brev: the type can be stopped (keep-on-stop, warm restarts); null: unknown. */
+  stoppable?: boolean | null;
+  /** Brev: the list's estimated deploy time (s). */
+  deploy_s?: number | null;
+  /** Brev: storage $/GB-hr (what a parked instance costs). */
+  storage_usd_per_gb_hr?: number | null;
 }
 export interface ProviderLaunch {
   name: string;
@@ -72,6 +79,10 @@ export interface ProviderLaunch {
   gpu: string;
   region?: string;
   env: Record<string, string>;
+  /** The pod's weights (Brev: the disk size and the trees recorded for keep-on-stop). */
+  weights?: WeightsPlan;
+  /** The cluster it serves (Brev's record). */
+  clusterId?: string;
 }
 export interface ComputeProvider {
   id: OtherProviderId;
@@ -138,8 +149,9 @@ const BREV: ComputeProvider = {
   off: (env) => brevOff(env) ?? (!brevInstanceTypes(env).length ? "BREV_INSTANCE_TYPES is not set (allowed instance types)" : null),
   gpus: brevInstanceTypes,
   async offer(env, gpu) {
-    // No documented price or stock API (docs/serve/deploy-gmi-brev.md §3.2): the owner's BREV_PRICES table; stock unknown.
-    return { gpu, region: null, usd_per_hr: brevPrice(env, gpu), in_stock: null };
+    // The live instance-type list (docs/serve/deploy-gmi-brev.md §3.2; cached 1 h), the owner's BREV_PRICES overriding a price.
+    const { usd_per_hr, info } = await brevPriceLive(env, gpu);
+    return { gpu, region: info?.location ?? null, usd_per_hr, in_stock: info?.available ?? null, stoppable: info ? info.stoppable : null, deploy_s: info?.deploy_s ?? null, storage_usd_per_gb_hr: info?.storage_usd_per_gb_hr ?? null };
   },
   async list(env) {
     return (await brev.workspaces(env))
@@ -157,9 +169,33 @@ const BREV: ComputeProvider = {
       }));
   },
   async create(env, req) {
-    return { id: await brev.create(env, { name: req.name, instanceType: req.gpu, startupScript: brevStartup(req.image, req.env) }) };
+    // The startup script only installs the per-boot bootstrap; the launch itself (image + env) is the run script it
+    // fetches from fv-control (brev-park.ts), so a parked VM restarted later runs that later launch.
+    const run = brevRun(req.image, req.env);
+    const info = await brev.type(env, req.gpu);
+    const trees = req.weights?.source === "hub" ? req.weights.trees : [];
+    const disk = brevDiskGb(trees);
+    const token = newBootToken();
+    const id = await brev.create(env, { name: req.name, instanceType: req.gpu, startupScript: brevStartup(`${(env.PUBLIC_URL || "").replace(/\/$/, "")}/ingest/v1/brev-boot`, token), diskStorage: `${disk}Gi` });
+    await recordBrevCreate(env, {
+      workspace_id: id,
+      pod_id: podKey("brev", req.name),
+      name: req.name,
+      instance_type: req.gpu,
+      info,
+      disk_gb: info && !info.elastic_disk && info.fixed_disk_gb ? info.fixed_disk_gb : disk,
+      launch_trees: launchTrees(req.weights),
+      cluster_id: req.clusterId ?? null,
+      token,
+      run,
+    });
+    return { id };
   },
-  remove: (env, inst) => brev.remove(env, inst.id),
+  async remove(env, inst) {
+    const ok = await brev.remove(env, inst.id);
+    if (ok) await markBrevDeleted(env, inst.id);
+    return ok;
+  },
   budget: (env) => num(env.BREV_BUDGET_USD),
 };
 
@@ -181,17 +217,20 @@ export async function providerView(env: Env, p: OtherProviderId) {
     budget_usd: impl.budget(env),
     month_usd: spend.month,
     running_dph: spend.running_dph,
+    parked_dph: spend.parked_dph,
     hub_downloads_approved: env.FV_HUB_DOWNLOADS_APPROVED === "1",
   };
 }
 
 // ---------------------------------------------------------------- money
 /** This UTC month's ledger for a provider's pods (cost_daily) and the $/hr of its running ones (pods table). */
-export async function providerSpend(env: Env, p: OtherProviderId): Promise<{ month: number; running_dph: number }> {
+export async function providerSpend(env: Env, p: OtherProviderId): Promise<{ month: number; running_dph: number; parked_dph: number }> {
   const first = utcDay(now()).slice(0, 8) + "01";
   const m = await env.DB.prepare("SELECT COALESCE(SUM(usd), 0) AS usd FROM cost_daily WHERE day >= ? AND pod_id LIKE ?").bind(first, `${p}:%`).first<{ usd: number }>();
   const r = await env.DB.prepare("SELECT COALESCE(SUM(cost_per_hr), 0) AS dph FROM pods WHERE gone_at IS NULL AND provider = ? AND desired_status = 'RUNNING'").bind(p).first<{ dph: number }>();
-  return { month: Number(m?.usd || 0), running_dph: Number(r?.dph || 0) };
+  // Brev keep-on-stop: parked instances bill their disk (brev-park.ts).
+  const parked = p === "brev" ? await parkedDph(env) : 0;
+  return { month: Number(m?.usd || 0), running_dph: Number(r?.dph || 0), parked_dph: parked };
 }
 
 export interface BudgetCheck {
@@ -201,20 +240,25 @@ export interface BudgetCheck {
   budget: number | null;
   month: number;
   running_dph: number;
+  /** Brev: the storage $/hr of parked instances. */
+  parked_dph: number;
   add_dph: number;
   hours: number;
   projected: number;
 }
-/** No balance API on GMI / Brev: this month's spend + the running pods and `addDph` until the deadline must stay within the budget. */
+/** No balance API on GMI / Brev: this month's spend + the running pods, the parked instances' storage and `addDph`
+ * until the deadline must stay within the budget. */
 export async function budgetCheck(env: Env, p: OtherProviderId, addDph: number, hours: number): Promise<BudgetCheck> {
   const impl = providerImpl(p);
   const budget = impl.budget(env);
   const s = await providerSpend(env, p);
-  const projected = s.month + (s.running_dph + addDph) * hours;
+  const dph = s.running_dph + s.parked_dph + addDph;
+  const projected = s.month + dph * hours;
   const reasons: string[] = [];
   if (budget === null) reasons.push(`${impl.title} has no balance API: set ${p.toUpperCase()}_BUDGET_USD (the most fv-control may spend there per month) before launching`);
-  else if (projected > budget) reasons.push(`${impl.title}: $${s.month.toFixed(2)} spent this month + $${(s.running_dph + addDph).toFixed(2)}/hr for ${hours.toFixed(2)} h = $${projected.toFixed(2)}, over the budget $${budget}`);
-  return { provider: p, ok: !reasons.length, reasons, budget, month: s.month, running_dph: s.running_dph, add_dph: addDph, hours, projected };
+  else if (projected > budget)
+    reasons.push(`${impl.title}: $${s.month.toFixed(2)} spent this month + $${dph.toFixed(2)}/hr${s.parked_dph ? ` (parked storage $${s.parked_dph.toFixed(3)}/hr included)` : ""} for ${hours.toFixed(2)} h = $${projected.toFixed(2)}, over the budget $${budget}`);
+  return { provider: p, ok: !reasons.length, reasons, budget, month: s.month, running_dph: s.running_dph, parked_dph: s.parked_dph, add_dph: addDph, hours, projected };
 }
 
 /** The $/hr a pool's pod will cost on its provider: the offer's price, else the cap (the most it may cost). */
@@ -259,6 +303,53 @@ export function weightsPlan(pool: PoolSpec): WeightsPlan {
   // The TAEs (and LPIPS) every engine may load: small, pinned by SHA-256.
   for (const a of AUX_FILES) rows.push(["aux", a.path, a.url, a.sha256, String(a.size)].join("\t"));
   return { source, trees, unsupported, tsv: rows.join("\n") + "\n" };
+}
+/** The launch form's Brev instance types: the allowed ones, stoppable first (warm restarts keep the weights), each
+ * with its $/hr, deploy time and parked instances. */
+export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; parked: number }[]> {
+  const types = await brev.types(env).catch(() => []);
+  const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state = 'parked' GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
+  const out = brevInstanceTypes(env).map((id) => {
+    const t = types.find((x) => x.type === id);
+    const n = Number(parked.find((p) => p.instance_type === id)?.n || 0);
+    const price = brevPrice(env, id) ?? t?.usd_per_hr ?? null;
+    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", t ? (t.stoppable ? "stoppable: weights kept on stop (warm restarts)" : "not stoppable: weights download at every launch") : "not in Brev's list", ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked`] : [])];
+    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, parked: n };
+  });
+  return out.sort((a, b) => Number(b.stoppable === true) - Number(a.stoppable === true));
+}
+/** A Brev pool's warm / cold outlook (the launch form, the planner): a parked instance holding its trees restarts
+ * (warm); else every tree downloads (cold), and a non-stoppable type downloads them at every launch. */
+export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boolean; stoppable: boolean | null; instance: string | null; download_gb: number; boot_s: number; note: string } | null> {
+  if (poolProvider(pool) !== "brev" || !pool.provider_gpu) return null;
+  const plan = weightsPlan(pool);
+  const want = launchTrees(plan);
+  const trees = Object.keys(want);
+  const info = await brev.type(env, pool.provider_gpu);
+  const stoppable = info ? info.stoppable : null;
+  const min = (s: number) => `~${Math.max(1, Math.round(s / 60))} min`;
+  if (!trees.length) {
+    const e = bootEstimate(info, []);
+    return { warm: false, stoppable, instance: null, download_gb: 0, boot_s: e.boot_s, note: `no weights: boot ${min(e.boot_s)}` };
+  }
+  const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
+  if (c) {
+    const e = bootEstimate(info, trees, c.matched);
+    return { warm: true, stoppable, instance: c.row.name, download_gb: e.download_gb, boot_s: e.boot_s, note: `warm: restarts parked ${c.row.name} (holds ${c.matched.join(", ")}${c.missing.length ? `; downloads ${c.missing.join(", ")} ~${e.download_gb} GB` : ""}): boot ${min(e.boot_s)}` };
+  }
+  const e = bootEstimate(info, trees);
+  let note = `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB): boot ${min(e.boot_s)}`;
+  if (stoppable) note += "; kept on stop (the next launch is warm)";
+  else if (stoppable === false) {
+    const others = (await brev.types(env).catch(() => [])).filter((t) => t.stoppable && brevInstanceTypes(env).includes(t.type)).map((t) => t.type);
+    note += `; ${pool.provider_gpu} is not stoppable: the weights download at every launch${others.length ? ` (stoppable allowed types keep them: ${others.join(", ")})` : ""}`;
+  }
+  return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note };
+}
+/** The Hub trees of a plan at their pinned revisions ({} without hub): what a Brev disk keeps. */
+export function launchTrees(plan: WeightsPlan | undefined): TreeRevs {
+  if (!plan || plan.source !== "hub") return {};
+  return Object.fromEntries(plan.trees.filter((t) => HUB_TREES[t]).map((t) => [t, HUB_TREES[t]!.revision]));
 }
 
 // ---------------------------------------------------------------- the pod's env and start command
@@ -309,6 +400,48 @@ export const CLOUDFLARED = {
   sha256: "53b7a7a5420d188758d24341294acb0d1bca54296548ac05e38811a694ac6134",
 };
 
+// The weight trees of FV_WEIGHTS_TREES_B64 (weightsPlan), in the boot below. A
+// tree counts as present only with fetch-hub-tree.py's `.complete` AND our
+// `.fv-revision` holding its pinned revision (written after the fetch): a Brev
+// VM restarted from a stop keeps /home/ubuntu/workspace/weights, so those
+// trees are skipped (warm restart); one at another revision, or a leftover
+// without both marks, is moved aside and removed (the VM's own disk, never a
+// shared volume), then fetched again. `fetch_tree` is the boot's (tests stub
+// it). The Hub fetcher is only set up when a tree is missing.
+export const WEIGHTS_SH = `if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ]; then
+  say "weights: Hub trees at pinned revisions (owner-approved)"
+  rm -rf "$FV_WEIGHTS"/.*.partial-* "$FV_WEIGHTS"/.stale-* 2>/dev/null || true
+  report weights "" "checking"
+  n=0; kept=0; got=0
+  while IFS="$(printf '\\t')" read -r kind a b c d; do
+    n=$((n + 1))
+    case "$kind" in
+      tree)
+        if [ -f "$FV_WEIGHTS/$a/.complete" ] && [ "$(cat "$FV_WEIGHTS/$a/.fv-revision" 2>/dev/null)" = "$c" ]; then say "tree $a: present at $c"; kept=$((kept + 1)); continue; fi
+        if [ -e "$FV_WEIGHTS/$a" ]; then
+          old="$FV_WEIGHTS/.stale-$(printf %s "$a" | tr '/' '_')-$(date +%s)"
+          say "tree $a: not complete at $c: replaced"
+          mv "$FV_WEIGHTS/$a" "$old" && rm -rf "$old" || fail "tree $a: cannot move the old copy aside"
+        fi
+        say "tree $a <- $b@$c"
+        report weights "" "downloading $a"
+        fetch_tree "$a" "$b" "$c" "$d" "$n"
+        printf %s "$c" > "$FV_WEIGHTS/$a/.fv-revision" || fail "tree $a: revision mark"
+        got=$((got + 1))
+        ;;
+      aux)
+        p="$FV_WEIGHTS/$a"; mkdir -p "$(dirname "$p")"
+        if [ -f "$p" ] && [ "$(sha256sum "$p" | cut -d' ' -f1)" = "$c" ]; then continue; fi
+        curl -fsSL --max-time 600 -o "$p.part" "$b" && [ "$(sha256sum "$p.part" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$p.part")" = "$d" ] && mv "$p.part" "$p" || fail "aux $a"
+        ;;
+    esac
+  done <<EOF_TREES
+$(printf "%s" "$FV_WEIGHTS_TREES_B64" | base64 -d)
+EOF_TREES
+  say "weights ready: $kept present, $got fetched"
+fi
+`;
+
 // The start command of a GMI / Brev worker (inside our image, as root): the
 // weights (hub), the tunnel and its report, the deadline watchdog, then
 // fv-serve with the same config handling as WORKER_BOOT (payloads.ts).
@@ -329,35 +462,19 @@ if ! command -v curl >/dev/null 2>&1; then
   { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates; } >/fvstate/apt.log 2>&1 || fail "no curl"
 fi
 # ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256
-if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ]; then
-  say "weights: Hub download (owner-approved)"
-  report weights "" "downloading"
-  { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-venv python3-pip; } >>/fvstate/apt.log 2>&1 || fail "apt python3-venv"
-  python3 -m venv /opt/fv/venv && /opt/fv/venv/bin/pip install -q "huggingface_hub>=0.34" >/fvstate/pip.log 2>&1 || fail "pip huggingface_hub"
-  mkdir -p /opt/fv/scripts && curl -fsSL --max-time 60 -o /opt/fv/scripts/fetch-hub-tree.py "$FV_SCRIPTS_URL/fetch-hub-tree.py" || fail "fetch-hub-tree.py"
-  n=0
-  while IFS="$(printf '\\t')" read -r kind a b c d; do
-    n=$((n + 1))
-    case "$kind" in
-      tree)
-        if [ -f "$FV_WEIGHTS/$a/.complete" ]; then say "tree $a: present"; continue; fi
-        say "tree $a <- $b@$c"
-        mkdir -p "/fvstate/fetch-$n"
-        FETCH_REPO="$b" FETCH_REVISION="$c" FETCH_DEST="$a" FETCH_GLOBS="$d" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$n" FETCH_MIN_FREE_GB=5 \\
-          /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$n.out" 2>&1 || fail "tree $a: $(tail -2 "/fvstate/fetch-$n/log.txt" 2>/dev/null | tr '\\n"' '  ')"
-        ;;
-      aux)
-        p="$FV_WEIGHTS/$a"; mkdir -p "$(dirname "$p")"
-        if [ -f "$p" ] && [ "$(sha256sum "$p" | cut -d' ' -f1)" = "$c" ]; then continue; fi
-        curl -fsSL --max-time 600 -o "$p.part" "$b" && [ "$(sha256sum "$p.part" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$p.part")" = "$d" ] && mv "$p.part" "$p" || fail "aux $a"
-        ;;
-    esac
-  done <<EOF_TREES
-$(printf "%s" "$FV_WEIGHTS_TREES_B64" | base64 -d)
-EOF_TREES
-  say "weights ready"
-fi
-# ---- the tunnel: https://<random>.trycloudflare.com -> 127.0.0.1:8000 (outbound only; no inbound port needed)
+FETCHER=""
+fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (the fetcher is set up on first use)
+  if [ -z "$FETCHER" ]; then
+    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-venv python3-pip; } >>/fvstate/apt.log 2>&1 || fail "apt python3-venv"
+    python3 -m venv /opt/fv/venv && /opt/fv/venv/bin/pip install -q "huggingface_hub>=0.34" >/fvstate/pip.log 2>&1 || fail "pip huggingface_hub"
+    mkdir -p /opt/fv/scripts && curl -fsSL --max-time 60 -o /opt/fv/scripts/fetch-hub-tree.py "$FV_SCRIPTS_URL/fetch-hub-tree.py" || fail "fetch-hub-tree.py"
+    FETCHER=1
+  fi
+  mkdir -p "/fvstate/fetch-$5"
+  FETCH_REPO="$2" FETCH_REVISION="$3" FETCH_DEST="$1" FETCH_GLOBS="$4" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$5" FETCH_MIN_FREE_GB=5 \\
+    /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$5.out" 2>&1 || fail "tree $1: $(tail -2 "/fvstate/fetch-$5/log.txt" 2>/dev/null | tr '\\n"' '  ')"
+}
+${WEIGHTS_SH}# ---- the tunnel: https://<random>.trycloudflare.com -> 127.0.0.1:8000 (outbound only; no inbound port needed)
 curl -fsSL --max-time 120 -o /usr/local/bin/cloudflared "${CLOUDFLARED.url}" || fail "cloudflared download"
 echo "${CLOUDFLARED.sha256}  /usr/local/bin/cloudflared" | sha256sum -c - >/dev/null 2>&1 || fail "cloudflared sha256"
 chmod +x /usr/local/bin/cloudflared
@@ -401,29 +518,8 @@ fi
 export FV_WORKER_ID="$FV_POD_ID"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
-const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-/** A Brev VM's startup script (root on the host, UNVERIFIED): the env file (0600), our image with the GPU and the
- * weights dir mounted, and a host watchdog that removes the container and powers the VM off at the deadline. */
-export function brevStartup(image: string, env: Record<string, string>): string {
-  for (const [k, v] of Object.entries(env)) if (/[\r\n]/.test(v)) throw new HttpError(400, `brev: env ${k} has a line break (docker --env-file takes one line per variable)`);
-  const envFile = Object.entries(env)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  const deadline = Number(env.FV_CLUSTER_DEADLINE || "0");
-  return `#!/usr/bin/env bash
-set -u
-S=""; [ "$(id -u)" = 0 ] || S="sudo -n"
-umask 077
-mkdir -p /home/ubuntu/workspace/weights /home/ubuntu/workspace/fv
-printf %s ${shq(btoa(envFile))} | base64 -d > /home/ubuntu/workspace/fv/env
-printf %s ${shq(btoa(PROVIDER_BOOT))} | base64 -d > /home/ubuntu/workspace/fv/boot.sh
-$S docker rm -f fv-serve >/dev/null 2>&1 || true
-$S docker run -d --name fv-serve --restart no --gpus all --network host --env-file /home/ubuntu/workspace/fv/env \\
-  -v /home/ubuntu/workspace/weights:/workspace/weights -v /home/ubuntu/workspace/fv/boot.sh:/fv-boot.sh:ro \\
-  --entrypoint bash ${shq(image)} /fv-boot.sh
-nohup setsid bash -c 'while [ "$(date +%s)" -lt ${deadline} ]; do sleep 30; done; '"$S"' docker rm -f fv-serve; '"$S"' shutdown -h now' >/dev/null 2>&1 &
-`;
-}
+/** A Brev VM's run script for one launch (brev-park.ts): our image running PROVIDER_BOOT with the pod's env. */
+export const brevRun = (image: string, env: Record<string, string>) => brevRunScript(image, env, PROVIDER_BOOT);
 
 // ---------------------------------------------------------------- lifecycle (cluster/ops.ts and the DO call these)
 async function findInstance(env: Env, podId: string): Promise<ProviderInstance | null> {
@@ -436,6 +532,16 @@ export async function deleteOtherPod(env: Env, podId: string): Promise<boolean> 
   const inst = await findInstance(env, podId);
   if (!inst) return true;
   return providerImpl(inst.provider).remove(env, inst);
+}
+/** Releases a GMI / Brev pod: with `park`, a Brev pod of a stoppable type whose weights completed is stopped and
+ * parked (brev-park.ts); a warm restart that never came up is held; everything else is deleted. */
+export async function releaseOtherPod(env: Env, podId: string, park: boolean, log?: (m: string) => void): Promise<Release | "deleted"> {
+  if (splitKey(podId)?.provider === "brev") {
+    const r = await releaseBrev(env, podId, park, log);
+    if (r !== "none") return r;
+  }
+  if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
+  return "deleted";
 }
 /** A GMI / Brev pod's state for the boot watch; null when the provider no longer lists it. */
 export async function otherPodState(env: Env, podId: string): Promise<{ desiredStatus: string; uptimeS: number | null; state: InstanceState; reason: string | null } | null> {
@@ -471,10 +577,15 @@ export async function lastReport(env: Env, podId: string): Promise<{ phase: stri
 }
 
 /** A starting GMI / Brev pod's boot diagnosis (the `up` wait): the provider's state and the pod's own last report. */
-export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null } | undefined): Promise<{ phase: string; detail: string; fatal: boolean } | null> {
+export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const rep = await lastReport(env, podId);
   if (rep?.phase === "failed") return { phase: "boot failed", detail: rep.detail || "the pod reported a failure", fatal: true };
   if (!rt) return null;
+  // A parked Brev instance being started again: stopped / starting is expected until BREV_RESTART_TIMEOUT_S.
+  if (splitKey(podId)?.provider === "brev") {
+    const w = await restartDiag(env, podId, rt.state);
+    if (w) return w;
+  }
   if (rt.state === "failed") return { phase: "provider error", detail: rt.reason || "the provider reports an error", fatal: true };
   if (rt.state === "stopped") return { phase: "stopped", detail: "stopped outside fv-control", fatal: true };
   if (rt.state === "starting") return { phase: "provisioning", detail: rt.reason || "", fatal: false };

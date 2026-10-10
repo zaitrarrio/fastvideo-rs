@@ -107,6 +107,9 @@ export function startMock() {
   m.brev = {
     calls: [],
     workspaces: [],
+    boots: [], // every simulated VM boot: {ws, name, status, kept, fetched, env, run, error}
+    startFail: false, // PUT …/start answers 409 (no capacity)
+    startHang: false, // PUT …/start leaves it STARTING (the restart times out)
     boot: "ok",
     types: [
       brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
@@ -121,6 +124,40 @@ export function startMock() {
     if (mode === "silent" || !env.FV_ENDPOINT_REPORT_URL) return;
     const report = (b) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key, ...b }) }).then((r) => (m.reports ||= []).push({ key, status: r.status, ...b })).catch((e) => (m.reports ||= []).push({ key, error: String(e) }));
     setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" })), 300);
+  };
+  /**
+   * A Brev VM's boot (brev-park.ts): the startup script's bootstrap fetches the run script from fv-control with the
+   * boot token, the run script's env file is the pod's env, and its weights loop keeps trees on the VM's disk at the
+   * pinned revision (WEIGHTS_SH) and "downloads" the rest. Every boot is recorded in m.brev.boots.
+   */
+  const brevVmBoot = (w) => {
+    const url = /printf %s '([^']+)' > "\$D\/boot-url"/.exec(w.startupScript)?.[1];
+    const token = /printf 'Authorization: Bearer %s\\n' '([^']+)' > "\$D\/boot-header"/.exec(w.startupScript)?.[1];
+    const rec = { ws: w.id, name: w.name, status: 0, kept: [], fetched: [] };
+    m.brev.boots.push(rec);
+    if (!url || !token) return (rec.error = "no boot url / token in the startup script");
+    setTimeout(async () => {
+      try {
+        const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+        rec.status = r.status;
+        const run = await r.text();
+        if (!r.ok) return (rec.error = run.slice(0, 200));
+        rec.run = run;
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(run)?.[1] || "";
+        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+        rec.env = env;
+        if (env.FV_WEIGHTS_SOURCE === "hub")
+          for (const line of Buffer.from(env.FV_WEIGHTS_TREES_B64 || "", "base64").toString().split("\n")) {
+            const [kind, tree, , rev] = line.split("\t");
+            if (kind !== "tree") continue;
+            if (w.disk[tree] === rev) rec.kept.push(tree);
+            else rec.fetched.push(tree), m.brev.boot === "ok" && (w.disk[tree] = rev);
+          }
+        simBoot(`brev:${w.name}`, env, m.brev.boot, { startupScript: w.startupScript, image: /--entrypoint bash '([^']+)'/.exec(run)?.[1] });
+      } catch (e) {
+        rec.error = String(e);
+      }
+    }, 50);
   };
   const digestOf = (tag) => "sha256:" + Buffer.from(tag).toString("hex").padEnd(64, "0").slice(0, 64);
   const json = (res, code, body) => {
@@ -333,22 +370,35 @@ export function startMock() {
         if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
           return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
         const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
-        // The env file the startup script writes (base64 in the first printf).
-        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(script)?.[1] || "";
-        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-        b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body });
-        simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
+        const w = { id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body, disk: {}, diskStorage: body.diskStorage };
+        b.workspaces.push(w);
+        brevVmBoot(w);
         return json(res, 201, { id, name: body.name, status: "DEPLOYING", instanceType: body.instanceType, workspaceVersion: "v1" });
       }
-      const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
+      const wm = /^\/workspaces\/([^/]+)(\/(stop|start))?$/.exec(rest);
       if (wm) {
         const w = b.workspaces.find((x) => x.id === wm[1]);
         if (!w) return json(res, 404, { message: "workspace not found" });
-        if (req.method === "GET") { const { startupScript, body: _b, ...o } = w; return json(res, 200, o); }
-        if (req.method === "DELETE") {
+        if (req.method === "GET" && !wm[3]) { const { startupScript, body: _b, disk: _d, ...o } = w; return json(res, 200, o); }
+        if (req.method === "DELETE" && !wm[3]) {
           b.workspaces = b.workspaces.filter((x) => x.id !== w.id);
           m.pods.delete(`brev:${w.name}`);
           return json(res, 200, {});
+        }
+        // Stop keeps the disk (w.disk: the trees on it); start fails without capacity, or hangs, or boots again.
+        if (req.method === "PUT" && wm[3] === "stop") {
+          const t = b.types.find((x) => x.type === w.instanceType);
+          if (!t?.stoppable) return json(res, 400, { errors: [{ type: "BadRequestError", message: "instance type is not stoppable" }] });
+          w.status = "STOPPED";
+          m.pods.delete(`brev:${w.name}`);
+          return json(res, 200, { id: w.id, status: "STOPPING" });
+        }
+        if (req.method === "PUT" && wm[3] === "start") {
+          if (b.startFail) return json(res, 409, { errors: [{ type: "ConflictError", message: "no capacity in the same provider/region" }] });
+          if (w.status !== "STOPPED") return json(res, 409, { errors: [{ type: "ConflictError", message: `workspace is ${w.status}` }] });
+          w.status = b.startHang ? "STARTING" : "RUNNING";
+          if (!b.startHang) brevVmBoot(w);
+          return json(res, 200, { id: w.id, status: "STARTING" });
         }
       }
       return json(res, 404, { message: `mock: no Brev route ${req.method} ${rest}` });

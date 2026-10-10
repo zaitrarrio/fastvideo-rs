@@ -1322,13 +1322,18 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.equal(b.workspaces.length, 1);
   const ws = b.workspaces[0];
   assert.ok(b.calls.every((c) => c.auth) && b.calls.some((c) => c.path === `/organizations/${mock.brevOrg}/workspaces` && c.method === "POST"));
-  assert.match(ws.startupScript, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
-  assert.match(ws.startupScript, /fastvideo-rs-serve.*@sha256:/);
-  assert.match(ws.startupScript, /shutdown -h now/, "the host watchdog powers the VM off at the deadline");
+  // The startup script only installs the per-boot bootstrap; the launch is the run script it fetched from fv-control.
+  assert.match(ws.startupScript, /systemctl enable fv-boot\.service/);
+  assert.ok(!ws.startupScript.includes("FV_POD_ID") && !ws.startupScript.includes("docker run"), "no env or launch in the startup script");
+  const boot1 = b.boots.find((x) => x.ws === ws.id);
+  assert.equal(boot1?.status, 200, JSON.stringify(boot1));
+  assert.match(boot1.run, /docker run -d --name fv-serve --restart no --gpus all --network host --env-file/);
+  assert.match(boot1.run, /fastvideo-rs-serve.*@sha256:/);
+  assert.match(boot1.run, /shutdown -h now/, "the host watchdog powers the VM off after the deadline");
   // brev-cli main's create body (the old one got 400 "Legacy workspace version unsupported" live).
   assert.equal(ws.body.workspaceVersion, "v1");
   assert.equal(ws.body.cloudCredId, "devplane-brev-1-credential", "the type's cloud_cred_id from the listing");
-  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "120Gi", false]);
+  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "200Gi", false]);
   assert.ok(ws.body.startupScript === "" && ws.body.vmOnlyMode === false && ws.body.description === "" && Array.isArray(ws.body.applications), "Go zero values present; the script rides in vmBuild.lifeCycleScriptAttr");
   assert.ok(b.calls.some((c) => c.method === "GET" && c.path === `/instances/alltypesavailable/${mock.brevOrg}`));
   const bkey = `brev:${ws.name}`;

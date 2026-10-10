@@ -12,7 +12,8 @@ import type { Env } from "./env";
 import { releaseHeads } from "./releases";
 import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
 import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, VARIANTS } from "./enums";
-import { providerImpl } from "./providers";
+import { brevGpuOptions, providerImpl } from "./providers";
+import { brevInstanceTypes } from "./brev";
 import { listTags } from "./ghcr";
 import { knownVolumes, SLS_RESERVED } from "./serverless/spec";
 import { SLS_PRESETS } from "./serverless/presets";
@@ -109,7 +110,11 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
     env_types: ENV_VALUE_TYPES,
     // Launch providers (docs/serve/deploy-gmi-brev.md): Runpod, and GMI / Brev when their secrets are set (detail says why not).
     providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
-    provider_gpus: OTHER_PROVIDERS.flatMap((p) => providerImpl(p).gpus(env).map((g) => ({ id: g, detail: providerImpl(p).title, provider: p }))),
+    // Brev: live prices, stoppable types first (keep-on-stop), parked instances (docs/serve/deploy-gmi-brev.md §3.4).
+    provider_gpus: [
+      ...providerImpl("gmi").gpus(env).map((g) => ({ id: g, detail: providerImpl("gmi").title, provider: "gmi" })),
+      ...(providerImpl("brev").off(env) ? brevInstanceTypes(env).map((g) => ({ id: g, detail: "NVIDIA Brev", provider: "brev" })) : await brevGpuOptions(env).catch(() => [])),
+    ],
     provider_regions: env.GMI_DEFAULT_IDC ? [{ id: env.GMI_DEFAULT_IDC, detail: "GMI default IDC" }] : [],
   };
 }

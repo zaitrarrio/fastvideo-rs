@@ -60,6 +60,7 @@ import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, splitKey } from "./providers";
+import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -105,6 +106,8 @@ app.get("/api/auth/me", async (c) => c.json(await whoami(c)));
 app.post("/ingest/v1/logs", async (c) => c.json(await ingest(c.env, c.req.raw, c.executionCtx as ExecutionContext)));
 /** A GMI / Brev pod reports its phase and tunnel URL (providers.ts PROVIDER_BOOT) with its cluster's ingest token. */
 app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, c.req.raw)));
+/** A Brev VM fetches its current launch (run script) at every boot with its boot token (brev-park.ts); refused while parked. */
+app.get("/ingest/v1/brev-boot", async (c) => brevBoot(c.env, c.req.raw));
 
 // ---------------- everything else under /api needs auth
 app.use("/api/*", requireAuth);
@@ -180,6 +183,24 @@ app.get("/api/providers/:p/offers", async (c) => {
   const gpus = c.req.query("gpu") ? [c.req.query("gpu")!] : impl.gpus(c.env);
   const region = c.req.query("region") || undefined;
   return c.json({ provider: p, offers: await Promise.all(gpus.map((g) => impl.offer(c.env, g, region))) });
+});
+/** NVIDIA Brev keep-on-stop (brev-park.ts): parked / held instances, their weights, disk and storage $/day. */
+app.get("/api/providers/brev/parked", async (c) => c.json({ enabled: !providerImpl("brev").off(c.env), ...(await parkedView(c.env)) }));
+/** Deletes one parked / held Brev instance (only ours: recorded and fv- named). */
+app.post("/api/providers/brev/parked/:id/delete", async (c) => {
+  requireAdmin(c);
+  const id = c.req.param("id");
+  const msg = await deleteParked(c.env, id, `deleted by ${actor(c)}`);
+  await auditC(c, { action: "brev.parked.delete", target: id, detail: msg });
+  return c.json({ ok: true, message: msg });
+});
+/** A held instance (its restart failed) back into the warm pool: the next launch of its type may restart it. */
+app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
+  requireAdmin(c);
+  const id = c.req.param("id");
+  const r = await unpark(c.env, id);
+  await auditC(c, { action: "brev.parked.unpark", target: id });
+  return c.json({ ok: true, name: r.name, state: r.state });
 });
 /** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none). */
 app.get("/api/pods/:id/provider-logs", async (c) => {

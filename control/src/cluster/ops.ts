@@ -22,7 +22,8 @@ import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
 import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
 import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
-import { budgetCheck, deleteOtherPod, isOtherPod, isOtherPool, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, weightsPlan } from "../providers";
+import { claimWarm, holdFailed, restartWarm } from "../brev-park";
+import { brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -186,33 +187,62 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     return null;
   }
   const ctx = await envCtx(env, c);
-  const name = runpodName(c, pool.id);
+  const plan = weightsPlan(pool);
+  // NVIDIA Brev keep-on-stop (brev-park.ts): a parked instance of this type holding some of the trees is restarted
+  // (it keeps its first name, so its pod key) instead of creating one.
+  const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan)) : null;
+  const name = warm ? warm.row.name : runpodName(c, pool.id);
   const key = podKey(prov, name);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: key, pool: pool.id, image });
+  const unclaim = async () => {
+    if (warm) await env.DB.prepare("UPDATE brev_instances SET state = 'parked', updated_at = ? WHERE workspace_id = ? AND state = 'restarting'").bind(now(), warm.row.workspace_id).run();
+  };
   const reportToken = ctx.secrets.ingest_token;
   if (!reportToken) {
+    await unclaim();
     log(`${pool.id}: no ${pool.provider_gpu} in ${where}: the cluster has no ingest token (its pods report their URL with it)`);
     return null;
   }
   const { dph, known } = await poolDph(env, pool, c.spec.max_gpu_dph);
   if (known && dph > c.spec.max_gpu_dph) {
+    await unclaim();
     log(`${pool.id}: no ${pool.provider_gpu} in ${where}: $${dph}/hr > max_gpu_dph $${c.spec.max_gpu_dph}`);
     return null;
   }
-  const pe = providerEnv(env, full, { provider: prov, key, name, deadlineMs: c.deadline ?? now() + c.spec.cap_s * 1000, reportToken, weights: weightsPlan(pool), scriptsRef: c.spec.image.sha || "main" });
+  const pe = providerEnv(env, full, { provider: prov, key, name, deadlineMs: c.deadline ?? now() + c.spec.cap_s * 1000, reportToken, weights: plan, scriptsRef: c.spec.image.sha || "main" });
   if (pe.dropped.length) log(`${pool.id}: WARNING: ${pe.dropped.join(", ")} are Runpod secret references a ${impl.title} pod cannot resolve (FV_PROVIDER_SECRET_ENV): left out`);
-  try {
-    await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env });
-  } catch (e) {
-    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
-    return null;
+  if (warm) {
+    try {
+      await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan), cluster_id: c.id });
+    } catch (e) {
+      const msg = (e as Error).message.slice(0, 200);
+      const r = await holdFailed(env, warm.row, msg);
+      log(`${pool.id}: restart of parked ${warm.row.name} failed (${msg}): ${r === "held" ? "held for the owner (fv-control.sh brev parked)" : "deleted (policy brev_park_delete_failed)"}; creating a fresh instance`);
+      return createOtherWorker(env, c, pool, image, slot, log);
+    }
+    // The pod key is the parked instance's: its record starts over for this cluster (no old URL, report or ready mark).
+    await env.DB.prepare("UPDATE cluster_pods SET cluster_id = ?, role = 'worker', pool = ?, gpu = ?, cost_per_hr = ?, url = NULL, created_at = ?, ready_at = NULL, deleted_at = NULL, status = 'creating', boot = NULL WHERE pod_id = ?")
+      .bind(c.id, pool.id, pool.provider_gpu, dph, now(), key)
+      .run();
+    await env.DB.prepare("DELETE FROM settings WHERE key = ?").bind(`endpoint:${key}`).run();
+  } else {
+    try {
+      await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env, weights: plan, clusterId: c.id });
+    } catch (e) {
+      log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
+      return null;
+    }
   }
   const rec: PodRec = { pod: key, pool: pool.id, gpu: pool.provider_gpu, dc: pool.provider_region || (prov === "gmi" ? gmiDefaultIdc(env) : prov), dph /* unknown price: the cap, so the ledger and the budget err high */, created: Math.floor(now() / 1000), image };
   const target = slot === "rolling" ? (c.state.rolling ||= {}) : c.state.workers;
   (target[pool.id] ||= []).push(rec);
   await saveState(env, c);
   await recordPod(env, c, rec, "worker", slot, hash);
-  log(`${pool.id}: ${impl.title} pod ${key} on ${pool.provider_gpu}${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`);
+  if (warm)
+    log(
+      `${pool.id}: warm restart of parked ${impl.title} ${key} on ${pool.provider_gpu} (${warm.matched.join(", ")} on its disk${warm.missing.length ? `; downloads ${warm.missing.join(", ")}` : ""})${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`,
+    );
+  else log(`${pool.id}: ${impl.title} pod ${key} on ${pool.provider_gpu}${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`);
   return rec;
 }
 
@@ -228,13 +258,15 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
   log(`${rec.pool}: ${rec.pod} env applied; container restarts`);
 }
 
-export async function deletePod(env: Env, podId: string, log: Logf, why: string): Promise<boolean> {
+/** Deletes a pod. `park` (a cluster stop): a Brev pod of a stoppable type whose weights completed is stopped and
+ * parked instead (brev-park.ts); a Brev warm restart that never came up is held for the owner. */
+export async function deletePod(env: Env, podId: string, log: Logf, why: string, opts: { park?: boolean } = {}): Promise<boolean> {
   try {
-    if (isOtherPod(podId)) {
-      if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
-    } else await runpod.remove(env, podId);
-    await podUpdate(env, podId, { deleted: true });
-    log(`deleted ${podId} (${why})`);
+    let what = "deleted";
+    if (isOtherPod(podId)) what = await releaseOtherPod(env, podId, !!opts.park, log);
+    else await runpod.remove(env, podId);
+    await podUpdate(env, podId, { deleted: true, ...(what === "deleted" ? {} : { status: what }) });
+    log(`${what} ${podId} (${why})`);
     return true;
   } catch (e) {
     log(`WARNING: delete of ${podId} failed: ${(e as Error).message.slice(0, 160)}`);
