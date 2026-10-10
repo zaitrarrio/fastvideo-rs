@@ -21,8 +21,8 @@
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
-import { brev, brevInstanceTypes, brevOff, brevPriceLive } from "./brev";
-import { brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, type Release, type TreeRevs } from "./brev-park";
+import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
+import { bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
@@ -303,6 +303,48 @@ export function weightsPlan(pool: PoolSpec): WeightsPlan {
   // The TAEs (and LPIPS) every engine may load: small, pinned by SHA-256.
   for (const a of AUX_FILES) rows.push(["aux", a.path, a.url, a.sha256, String(a.size)].join("\t"));
   return { source, trees, unsupported, tsv: rows.join("\n") + "\n" };
+}
+/** The launch form's Brev instance types: the allowed ones, stoppable first (warm restarts keep the weights), each
+ * with its $/hr, deploy time and parked instances. */
+export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; parked: number }[]> {
+  const types = await brev.types(env).catch(() => []);
+  const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state = 'parked' GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
+  const out = brevInstanceTypes(env).map((id) => {
+    const t = types.find((x) => x.type === id);
+    const n = Number(parked.find((p) => p.instance_type === id)?.n || 0);
+    const price = brevPrice(env, id) ?? t?.usd_per_hr ?? null;
+    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", t ? (t.stoppable ? "stoppable: weights kept on stop (warm restarts)" : "not stoppable: weights download at every launch") : "not in Brev's list", ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked`] : [])];
+    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, parked: n };
+  });
+  return out.sort((a, b) => Number(b.stoppable === true) - Number(a.stoppable === true));
+}
+/** A Brev pool's warm / cold outlook (the launch form, the planner): a parked instance holding its trees restarts
+ * (warm); else every tree downloads (cold), and a non-stoppable type downloads them at every launch. */
+export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boolean; stoppable: boolean | null; instance: string | null; download_gb: number; boot_s: number; note: string } | null> {
+  if (poolProvider(pool) !== "brev" || !pool.provider_gpu) return null;
+  const plan = weightsPlan(pool);
+  const want = launchTrees(plan);
+  const trees = Object.keys(want);
+  const info = await brev.type(env, pool.provider_gpu);
+  const stoppable = info ? info.stoppable : null;
+  const min = (s: number) => `~${Math.max(1, Math.round(s / 60))} min`;
+  if (!trees.length) {
+    const e = bootEstimate(info, []);
+    return { warm: false, stoppable, instance: null, download_gb: 0, boot_s: e.boot_s, note: `no weights: boot ${min(e.boot_s)}` };
+  }
+  const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
+  if (c) {
+    const e = bootEstimate(info, trees, c.matched);
+    return { warm: true, stoppable, instance: c.row.name, download_gb: e.download_gb, boot_s: e.boot_s, note: `warm: restarts parked ${c.row.name} (holds ${c.matched.join(", ")}${c.missing.length ? `; downloads ${c.missing.join(", ")} ~${e.download_gb} GB` : ""}): boot ${min(e.boot_s)}` };
+  }
+  const e = bootEstimate(info, trees);
+  let note = `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB): boot ${min(e.boot_s)}`;
+  if (stoppable) note += "; kept on stop (the next launch is warm)";
+  else if (stoppable === false) {
+    const others = (await brev.types(env).catch(() => [])).filter((t) => t.stoppable && brevInstanceTypes(env).includes(t.type)).map((t) => t.type);
+    note += `; ${pool.provider_gpu} is not stoppable: the weights download at every launch${others.length ? ` (stoppable allowed types keep them: ${others.join(", ")})` : ""}`;
+  }
+  return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note };
 }
 /** The Hub trees of a plan at their pinned revisions ({} without hub): what a Brev disk keeps. */
 export function launchTrees(plan: WeightsPlan | undefined): TreeRevs {

@@ -331,6 +331,11 @@ export async function releaseBrev(env: Env, podId: string, park: boolean, log: (
   await markBrevDeleted(env, row.workspace_id);
   return "deleted";
 }
+/** Workspace ids of records Brev should still list (live / parked / held) that it did not, changed before `before`. */
+export async function brevUnlisted(env: Env, listed: Set<string>, before: number): Promise<string[]> {
+  const rows = (await env.DB.prepare("SELECT workspace_id FROM brev_instances WHERE state IN ('live', 'parked', 'held') AND updated_at < ?").bind(before).all<{ workspace_id: string }>()).results || [];
+  return rows.map((r) => r.workspace_id).filter((id) => !listed.has(id));
+}
 /** Whether a pod is parked or held (a stopped VM is then the expected end state of a stop). */
 export async function isParked(env: Env, podId: string): Promise<boolean> {
   const r = await brevRow(env, podId);

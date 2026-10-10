@@ -9,7 +9,7 @@ import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
-import { isOtherPool, poolDph, providerIssues } from "../providers";
+import { brevOutlook, isOtherPool, poolDph, providerIssues } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 
 /**
@@ -29,6 +29,11 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
     if (known && dph > spec.max_gpu_dph) issues.push({ path: [...prefix, "max_gpu_dph"], message: `${p.provider_gpu} on ${p.provider} costs $${dph}/hr, above max_gpu_dph $${spec.max_gpu_dph}` });
     else if (!known) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `no price known for ${p.provider_gpu} on ${p.provider}: planned at max_gpu_dph ($${spec.max_gpu_dph}/hr)` });
     if (offer?.in_stock === false) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `${p.provider_gpu} is not available on ${p.provider}${offer.region ? ` in ${offer.region}` : ""} now` });
+    // Brev keep-on-stop: warm (a parked instance holds the trees) or cold, with the boot estimate; non-stoppable types flagged.
+    if (p.weights_source === "hub") {
+      const o = await brevOutlook(env, p).catch(() => null);
+      if (o) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: o.note });
+    }
   }
   const cat = await gpuTypes(env).catch(() => []);
   if (!cat.length) return { issues, warnings };

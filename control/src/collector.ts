@@ -12,7 +12,7 @@ import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { isStandalone, listClusters, ownerOf, type Cluster } from "./cluster/store";
 import { checkPod } from "./podlogs";
 import { collectProviders } from "./collector-providers";
-import { deleteOtherPod, isOtherPod } from "./providers";
+import { isOtherPod, releaseOtherPod } from "./providers";
 import { defaults, type Env } from "./env";
 import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
@@ -303,7 +303,7 @@ export async function stopCluster(env: Env, c: Cluster, reason: string): Promise
     return `${c.name}: stop (${reason})`;
   } catch (e) {
     const ids = [...Object.values(c.state.workers).flat(), ...(c.state.gateway ? [c.state.gateway] : [])].map((r) => r.pod);
-    for (const p of ids) await (isOtherPod(p) ? deleteOtherPod(env, p) : runpod.remove(env, p)).catch(() => {});
+    for (const p of ids) await (isOtherPod(p) ? releaseOtherPod(env, p, true) : runpod.remove(env, p)).catch(() => {});
     await audit(env, { actor: `policy:${reason}`, action: "cluster.stop.direct", target: c.name, detail: (e as Error).message, after: { deleted: ids } });
     return `${c.name}: deleted pods directly (${reason})`;
   }
