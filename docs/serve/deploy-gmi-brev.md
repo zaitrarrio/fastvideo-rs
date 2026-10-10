@@ -377,12 +377,21 @@ edge), same log shipping. What differs (`providerEnv`, `PROVIDER_BOOT`):
 - GMI: template `fv-img-<sha256(image)[:12]>` (created once, reused), then
   `POST /v1/containers` with `envs`, `command: "bash"`,
   `args: ["-c", PROVIDER_BOOT]`, `ports: [{containerPort: 8000, protocol: TCP}]`.
-- Brev: `POST api/organizations/<org>/workspaces` with `vmOnlyMode: true`
-  and a startup script that writes the env file (umask 077) and the boot,
-  runs `docker run -d --gpus all --network host --env-file … -v
-  /home/ubuntu/workspace/weights:/workspace/weights <image>` on the boot,
-  and starts a host watchdog (`docker rm -f` + `shutdown -h now` at the
-  deadline). Env values with a line break are refused.
+- Brev: `POST api/organizations/<org>/workspaces` with brev-cli's v1 body
+  (the type's `cloudCredId`, `diskStorage` sized for the trees,
+  `isStoppable` true for a stoppable type) and a startup script
+  (`vmBuild.lifeCycleScriptAttr`) that installs `fv-boot.service`. At every
+  boot that unit fetches the VM's run script for its current launch from
+  `GET /ingest/v1/brev-boot` (§3.4). The run script is the host script:
+  - it writes the env file (umask 077) and the boot;
+  - it runs `docker run -d --gpus all --network host --env-file … -v
+    /home/ubuntu/workspace/weights:/workspace/weights <image>` on the boot;
+  - it starts a host watchdog (`docker rm -f` at the deadline,
+    `shutdown -h now`).
+
+  It also appends one line per boot (time, hostname, pod) to
+  `~/workspace/fv/boots.log`, and the `host` report carries `boots=<lines>`
+  (2 after one stop / start). Env values with a line break are refused.
 - Brev host reports (`control/src/brev-host.ts`): the startup script logs
   to `~/workspace/fv/host.log` and reports to `/ingest/v1/endpoint` with
   the ingest token before anything else, so a VM whose host part fails is
@@ -441,8 +450,9 @@ deleted. No inbound port, EIP or firewall is needed.
 
 | Guard | Runpod | GMI / Brev |
 |---|---|---|
-| per-pod $/hr cap | create answer's `costPerHr` > `max_gpu_dph` → delete | offer price (GMI products ÷ `GMI_PRICE_DIVISOR`, Brev `BREV_PRICES`) > `max_gpu_dph` → refused before create; unknown → planned and booked at `max_gpu_dph` |
-| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`) |
+| per-pod $/hr cap | create answer's `costPerHr` > `max_gpu_dph` → delete | offer price (GMI products ÷ `GMI_PRICE_DIVISOR`, Brev's live instance-type list or the `BREV_PRICES` override) > `max_gpu_dph` → refused before create; unknown → planned and booked at `max_gpu_dph` |
+| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev pods of stoppable types park, §3.4) |
+| idle storage | none | Brev parked instances: at most `brev_park_max`, each `brev_park_max_days`; the oldest are deleted (§3.4) |
 | deadline | cron + pod watchdog | cron (`stopCluster`) + the pod's watchdog (GMI: API delete; Brev: host `shutdown`) |
 | ours only | listed by id | fv- names **and** recorded in `cluster_pods`; an fv-named instance fv-control did not record raises `<p>_orphan` and is never touched; anything else is not even listed |
 
@@ -542,6 +552,25 @@ tunnel report, health, logs (GMI), delete, and on Brev that the REST paths,
 the bearer token and the startup script (root? Docker + toolkit present?)
 work as the CLI source suggests.
 
+### Live keep-on-stop test (a stoppable type, e.g. g7e.2xlarge; under $5)
+
+1. `fv-control.sh brev parked` is empty. Launch a pod with a small Hub tree
+   (approved, e.g. preset `fastwan21`, ~30 GB; the launch form's outlook
+   names the trees and their size). Expect `host` with `boots=1`, the
+   weights downloaded, ready.
+2. Stop it: the operation log says `parked (stopped; … kept on its … GB
+   disk, $x/day storage)`; `brev parked` lists it; the Brev console shows
+   it STOPPED, not deleted.
+3. Launch the same preset and type again. The log says `warm restart of
+   parked …`. The `host` report says `boots=2`; `provider-logs` shows
+   `run_fetched` for boot 2; the boot logs `tree …: present at <rev>` and
+   `weights ready: N present, 0 fetched`; then ready.
+4. Clean up: `brev delete-parked <id>`, and check the Brev console.
+
+If step 3's restart fails or times out, the instance is held
+(`brev parked` shows the note) and a fresh one is created; delete the held
+one by hand.
+
 ### Verified vs UNVERIFIED
 
 | | Status |
@@ -550,7 +579,15 @@ work as the CLI source suggests.
 | GMI `price` unit, `valid` meaning, template `path` format, `command`/`args` overriding the image entrypoint, billing in `creating`, inbound needing EIP + firewall (we avoid it) | UNVERIFIED |
 | GMI list shape of `/v1/templates` (array assumed) | UNVERIFIED |
 | Brev REST paths and fields (§3.1) | SRC (brev-cli), not a documented contract |
-| Brev bearer = API key, startup script as root, `shutdown` stopping billing | UNVERIFIED |
+| Brev bearer = API key, the instance-type listing and its fields (§3.2) | LIVE (GET, 2026-10-10) |
+| Brev v1 create body; the `lifeCycleScriptAttr` script run as `ubuntu` with passwordless sudo, Docker + NVIDIA runtime; a fake-engine pod serving through its tunnel (g7e.2xlarge) | LIVE (coordinator's smoke, 2026-10-10) |
+| Brev `PUT …/stop` / `…/start` request shapes and states (STOPPING → STOPPED, STARTING → RUNNING) | SRC (brev-cli `StopWorkspace` / `StartWorkspace`), not called live |
+| Whether Brev re-runs the `lifeCycleScriptAttr` script on start | UNVERIFIED: not needed, the systemd unit `fv-boot.service` runs the host part at every boot (and a re-run only `start`s the active unit) |
+| Whether the server's stop needs `isStoppable: true` (brev-cli: "used for autostop only"; its `brev stop` checks the type's `stoppable`), and whether `isStoppable: true` enables an idle autostop | UNVERIFIED (sent true for stoppable types; `BREV_IS_STOPPABLE=0` turns it off) |
+| `diskStorage` honoured on every provider (fixed-disk Shadeform types list a size) | UNVERIFIED |
+| `/home/ubuntu/workspace` kept across stop / start with the same disk; start failing without capacity | DOC [b-gpu] [b-mgmt]; the persistence test is the owner's next live run |
+| Storage billed while stopped at the listed $/GB-hr (fv-control books the highest storage class) | DOC + listing; the class Brev picks is UNVERIFIED |
+| `shutdown` (the host watchdog) stopping billing | UNVERIFIED |
 | Brev GPU list, stop/delete semantics, credits behaviour | DOC |
 | Quick-tunnel limits (200 in flight, no SSE, no uptime guarantee) | DOC (Cloudflare) |
 | cloudflared 2026.9.0 linux-amd64 SHA-256 | computed here from the release asset |
@@ -562,9 +599,12 @@ work as the CLI source suggests.
   production HTTPS and SSE-safe streaming.
 - GMI storage (ask GMI how to create what `storages[]` mounts) → a
   weights volume, filled once (add-only, verified, like the EU volume).
-- Brev stop/start instead of delete to keep `~/workspace/weights`.
 - GMI EIP + firewall for WebRTC (ICE) if the Reactor runs there.
-- Brev prices from `ListPublicInstanceType` once its JSON is confirmed.
+- Brev keep-on-stop for scale-down and roll victims (only cluster stops
+  park today), and a cross-type warm pool (a parked disk serves only its
+  own instance type).
+- Brev `location_prices`: the planner uses `base_price` (the type's default
+  location); fv-control sends no `location`.
 
 ## 10. Tests
 
@@ -589,6 +629,30 @@ work as the CLI source suggests.
 - `control/test/ui/config-validation.mjs`: the provider select, the
   Runpod fields hidden, an off provider's reason, Launch off, the coverage
   audit.
+- Keep-on-stop (§3.4):
+  - `control/test/unit/brev-park.test.ts`: `WEIGHTS_SH` run in bash with
+    a stub fetcher (fetch missing, skip complete at the pinned revision,
+    replace another revision or a leftover, `.partial` cleanup); the
+    instance-type parsing; park vs delete (non-stoppable, no weights,
+    never ready, policy off); warm candidates and the atomic claim; held /
+    unpark / delete-by-policy; the restart timeout; the limits; the budget
+    with parked storage; the boot endpoint (live only, sealed run script);
+    the warm / cold outlook.
+  - The Brev simulator (`harness.mjs`): the instance-type listing,
+    `PUT …/stop` / `…/start` (no capacity: `startFail`; hanging:
+    `startHang`), a per-workspace disk that keeps trees across stops, and
+    VM boots that fetch the run script from `/ingest/v1/brev-boot`.
+  - Integration step "Brev keep-on-stop" (a second Worker with Hub
+    downloads approved): cold launch → stop parks (not deleted) → ledger,
+    pods row, budget and no orphan alert → warm restart (no create, no
+    download, the new env) → park again; restart failure → held + fresh;
+    restart timeout → held + fresh; the `brev_park_max` limit; a
+    non-stoppable type deleted; the CLI (`brev parked`, `unpark`,
+    `delete-parked`); the age limit; foreign and unrecorded fv-
+    workspaces never touched.
+  - `control/test/ui/brev-parked.mjs`: the Pods page's parked card
+    (weights, disk, $/day, held, Unpark, Delete), and the launch form's
+    instance types (stoppable first, live price) with the cold outlook.
 
 ## Sources
 
