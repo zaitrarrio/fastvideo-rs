@@ -1343,7 +1343,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   const plg = (await call(`/api/pods/${encodeURIComponent(bkey)}/provider-logs`, { headers: T() })).j;
   assert.ok(plg.lines.some((l) => /^\[report .*\] host: user=ubuntu uid=1000 sudo=yes docker=\/usr\/bin\/docker .*gpu=\[GPU 0: NVIDIA A10G\]/.test(l)), JSON.stringify(plg.lines));
   assert.ok(plg.lines.some((l) => /\] container_started: c0ffee000000/.test(l)) && plg.lines.some((l) => /\] heartbeat \(last\): container: no container/.test(l)), JSON.stringify(plg.lines));
-  assert.deepEqual(plg.reports.map((x) => x.phase), ["host", "container_started", "tunnel"]);
+  assert.deepEqual(plg.reports.map((x) => x.phase), ["host", "container_started", "tunnel", "serve_ready"], "the host watcher saw /health 200");
   const btl = (await call(`/api/pods/${encodeURIComponent(bkey)}/boot`, { headers: T() })).j.timeline;
   const hostRow = btl.find((r) => r.phase === "host script (Brev VM)");
   assert.ok(hostRow?.at && /user=ubuntu/.test(hostRow.detail || ""), JSON.stringify(btl));
@@ -1363,6 +1363,18 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.ok(op.log.some((l) => /FAILED \(host failed\): docker run \(exit 125\): .*could not select device driver/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   assert.equal(b.workspaces.length, 0, "deleted after the host failure");
   await call("/api/standalone/brevhf", { method: "DELETE", headers: T() });
+  // The container exits after its start (the host watcher's container_exited, with its log): failed at once, deleted.
+  b.boot = "exit";
+  await cli("pod", "launch", "brevex", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
+  const xid = (await call("/api/standalone/brevex", { headers: T() })).j.pod.id;
+  op = await waitOp(xid, "up", 90000);
+  b.boot = "ok";
+  assert.equal(op.status, "failed");
+  assert.ok(op.log.some((l) => /FAILED \(container exited\): container exited exit=2 .*fv-serve: config: auth\.key_store = d1/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  // Without FV_PROVIDER_SECRET_ENV's D1 settings the key store is memory (else fv-serve refuses to start), said in the log.
+  assert.ok(op.log.some((l) => /NOTE: FV_KEY_STORE=memory: no D1 settings/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  assert.equal(b.workspaces.length, 0, "deleted after the exit");
+  await call("/api/standalone/brevex", { method: "DELETE", headers: T() });
 });
 
 await step("audit log; no secret in any response", async () => {

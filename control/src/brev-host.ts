@@ -11,9 +11,16 @@
 //   host_failed       the failing step and the last 20 lines of its log
 //                     (~/workspace/fv/host.log); fails the boot
 //   container_started docker run succeeded
-//   heartbeat         every 30 s from a detached loop, with the container's
+//   heartbeat         every 30 s from a detached watcher, with the container's
 //                     state and its last log line, until the boot logs its
-//                     tunnel (or the container exits: host_failed with its log)
+//                     tunnel; then the watcher polls 127.0.0.1:8000/health:
+//   serve_ready       /health answered 200 (seconds after the tunnel)
+//   container_exited  the container exited: exit code, OOMKilled, its last 60
+//                     log lines (env values scrubbed); fails the boot
+//   serve_timeout     no /health 200 within 10 min of the tunnel (last 60
+//                     lines); fails the boot
+// The container stays after it exits (--restart no, no --rm); its log is in
+// ~/workspace/fv/container.log.
 // Docker missing: installed (docker.io + the NVIDIA container toolkit, per
 // NVIDIA's apt instructions) only with FV_BREV_INSTALL_DOCKER=1 in the pod's
 // env; else host_failed says so.
@@ -22,7 +29,7 @@ import { HttpError } from "./util";
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Shared by the host script and its heartbeat: JSON-safe one-line text, and the report (10 s, never fails). */
-const HOST_LIB = `esc() { printf '%s' "$1" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\037' | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' | cut -c1-1900; }
+const HOST_LIB = `esc() { printf '%s' "$1" | tr '\\n\\r\\t' '   ' | tr -d '\\000-\\037' | tail -c 1800 | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g'; }
 hreport() { # phase detail
   command -v curl >/dev/null 2>&1 || return 0
   curl -sS --max-time 10 -X POST -H @"$W/fv/report-header" -H "content-type: application/json" \\
@@ -31,18 +38,44 @@ hreport() { # phase detail
 tail20() { tail -n 20 "$1" 2>/dev/null | awk 1 ORS=' | '; }
 `;
 
-/** The heartbeat loop (a file of its own, run detached): every 30 s until the boot logs its tunnel or the container exits. */
-const HEARTBEAT = `n=0
-while [ "$n" -lt 480 ]; do
+/**
+ * The host watcher (a file of its own, run detached), every 30 s (10 s after the tunnel):
+ *  - before the tunnel: a heartbeat with the container's state and last log line;
+ *  - after it: until fv-serve answers 127.0.0.1:8000/health with 200 (`serve_ready`, seconds since the tunnel), or
+ *    the container exits (`container_exited`: exit code, OOMKilled, its last 60 log lines), or 10 min pass
+ *    (`serve_timeout`, the last 60 lines). The log lines are scrubbed of every env value (8+ chars) and kept in
+ *    ~/workspace/fv/container.log (the container is not removed: --restart no, no --rm).
+ */
+const WATCH = `scrub() { awk 'NR==FNR { i = index($0, "="); v = substr($0, i + 1); if (length(v) >= 8) vals[++n] = v; next }
+  { for (j = 1; j <= n; j++) while ((p = index($0, vals[j])) > 0) $0 = substr($0, 1, p - 1) "[redacted]" substr($0, p + length(vals[j])); print }' "$W/fv/env" - 2>/dev/null; }
+clog() { $S docker logs --tail "$1" fv-serve 2>&1 | scrub; }
+n=0; tun=""
+while [ "$n" -lt 720 ]; do
   n=$((n + 1))
-  st="$($S docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' fv-serve 2>/dev/null || echo "no container")"
-  last="$($S docker logs --tail 1 fv-serve 2>&1 | tail -n 1)"
-  if $S docker logs fv-serve 2>&1 | grep -q '\\[fv-boot\\] tunnel '; then hreport heartbeat "tunnel up; heartbeat stops"; exit 0; fi
+  st="$($S docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' fv-serve 2>/dev/null || echo "no container")"
   case "$st" in
-    exited*|dead*) hreport host_failed "container $st: $($S docker logs --tail 20 fv-serve 2>&1 | awk 1 ORS=' | ')"; exit 0 ;;
+    exited*|dead*)
+      clog 1000 > "$W/fv/container.log"
+      hreport container_exited "container $st$([ -n "$tun" ] && echo " $(( $(date +%s) - tun )) s after the tunnel"): $(tail -n 60 "$W/fv/container.log" | awk 1 ORS=' | ')"
+      exit 0 ;;
   esac
-  hreport heartbeat "container: $st; last: $last"
-  sleep 30
+  if [ -z "$tun" ]; then
+    if $S docker logs fv-serve 2>&1 | grep -q '\\[fv-boot\\] tunnel '; then tun="$(date +%s)"; hreport heartbeat "tunnel up; watching for fv-serve /health"; continue; fi
+    hreport heartbeat "container: $st; last: $(clog 1 | tail -n 1)"
+    sleep 30
+    continue
+  fi
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health 2>/dev/null)" = 200 ]; then
+    hreport serve_ready "fv-serve /health 200, $(( $(date +%s) - tun )) s after the tunnel"
+    clog 1000 > "$W/fv/container.log"
+    exit 0
+  fi
+  if [ $(( $(date +%s) - tun )) -ge 600 ]; then
+    clog 1000 > "$W/fv/container.log"
+    hreport serve_timeout "no /health 200 10 min after the tunnel (container $st): $(tail -n 60 "$W/fv/container.log" | awk 1 ORS=' | ')"
+    exit 0
+  fi
+  sleep 10
 done
 `;
 
@@ -103,15 +136,16 @@ step() { # what, command...
 ${INSTALL_DOCKER}if [ "$DK" = none ]; then
   ${install ? 'step "install docker + the NVIDIA container toolkit (FV_BREV_INSTALL_DOCKER=1)" install_docker' : 'die "docker not found on the host (set FV_BREV_INSTALL_DOCKER=1 in the pod env to install it)"'}
 fi
-# ---- the heartbeat (detached): a silent pod is then told apart from a dead script
+# ---- the watcher (detached): heartbeats until the tunnel (a silent pod is told apart from a dead script), then
+# serve_ready / container_exited / serve_timeout. An old container goes first (the watcher must not see it).
+$S docker rm -f fv-serve >/dev/null 2>&1 || true
 printf '%s\\n' "W=\\"$W\\"" "R_URL='$R_URL'" "R_POD='$R_POD'" "S=\\"$S\\"" > "$W/fv/heartbeat.sh"
 cat "$W/fv/host-lib.sh" >> "$W/fv/heartbeat.sh"
-printf %s ${shq(btoa(HEARTBEAT))} | base64 -d >> "$W/fv/heartbeat.sh"
+printf %s ${shq(btoa(WATCH))} | base64 -d >> "$W/fv/heartbeat.sh"
 nohup setsid bash "$W/fv/heartbeat.sh" >/dev/null 2>&1 &
 # ---- the launch
 step "write the env file and the boot" sh -c "printf %s ${shq(btoa(envFile))} | base64 -d > '$W/fv/env' && printf %s ${shq(btoa(boot))} | base64 -d > '$W/fv/boot.sh'"
 step "docker pull" $S docker pull -q ${shq(image)}
-$S docker rm -f fv-serve >/dev/null 2>&1 || true
 step "docker run" $S docker run -d --name fv-serve --restart no --gpus all --network host --env-file "$W/fv/env" \\
   -v "$W/weights:/workspace/weights" -v "$W/fv/boot.sh:/fv-boot.sh:ro" \\
   --entrypoint bash ${shq(image)} /fv-boot.sh
