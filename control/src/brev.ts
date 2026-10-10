@@ -77,6 +77,19 @@ export function toWorkspace(w: any): BrevWorkspace {
 export const BREV_USER_TEMPLATE_ID = "4nbb4lg2s";
 export const BREV_USER_CLASS_ID = "2x8";
 export const BREV_DEFAULT_DISK = "120Gi";
+/** The CLI's non-omitempty create fields left at their zero values (pkg/store/workspace.go CreateWorkspacesOptions). */
+export const BREV_CREATE_EMPTY = {
+  description: "",
+  primaryApplicationId: "",
+  applications: [] as unknown[],
+  startupScript: "",
+  gitRepo: "",
+  initBranch: "",
+  startupScriptPath: "",
+  dotBrevPath: "",
+  baseImage: "",
+  vmOnlyMode: false,
+};
 const TYPES_TTL_MS = 3600_000;
 let typesCache: { k: string; at: number; v: any[] } | null = null;
 /** Tests: forget the cached instance-type listing. */
@@ -133,6 +146,9 @@ export const brev = {
       labels: null,
       files: null,
       launchJupyterOnStart: false,
+      // Go's json.Marshal of the CLI's CreateWorkspacesOptions emits every non-omitempty field; without these the
+      // server answered 400 "Legacy workspace version unsupported" live (this exact shape got 201, 2026-10-10).
+      ...BREV_CREATE_EMPTY,
     });
     const id = j?.id ?? j?.workspace?.id;
     if (!id) throw new HttpError(502, "brev create: no id");

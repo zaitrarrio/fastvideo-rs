@@ -324,10 +324,13 @@ export function startMock() {
       if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
       if (om && req.method === "POST") {
         // brev-cli main's body: the old one (vmOnlyMode + startupScript, no workspaceVersion) is refused as live.
-        if (body?.workspaceVersion !== "v1") return json(res, 400, { errors: [{ type: "BadRequestError", message: "Legacy workspace version unsupported" }] });
+        // Live (2026-10-10): a body missing any of Go's non-omitempty fields got this 400 even with workspaceVersion v1.
+        const full = ["description", "primaryApplicationId", "applications", "startupScript", "gitRepo", "initBranch", "startupScriptPath", "dotBrevPath", "baseImage", "vmOnlyMode", "portMappings", "execsV1", "reposV1", "labels", "files", "launchJupyterOnStart", "diskStorage", "isStoppable"];
+        if (body?.workspaceVersion !== "v1" || full.some((k) => !(k in body)) || body.vmOnlyMode !== false || body.startupScript !== "")
+          return json(res, 400, { errors: [{ type: "BadRequestError", message: "Legacy workspace version unsupported" }] });
         const type = b.types.find((t) => t.type === body.instanceType);
         const script = body?.vmBuild?.lifeCycleScriptAttr?.script;
-        if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script || "startupScript" in body)
+        if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
           return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
         const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
         // The env file the startup script writes (base64 in the first printf).
@@ -335,7 +338,7 @@ export function startMock() {
         const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
         b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body });
         simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
-        return json(res, 200, { id, name: body.name, status: "DEPLOYING" });
+        return json(res, 201, { id, name: body.name, status: "DEPLOYING", instanceType: body.instanceType, workspaceVersion: "v1" });
       }
       const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
       if (wm) {

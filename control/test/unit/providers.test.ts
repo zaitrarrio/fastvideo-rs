@@ -225,8 +225,7 @@ describe("clients (fetch mock)", () => {
       auth: `Bearer ${BREV_TOKEN}`,
       body: { name: "fv-pod-b-1", instanceType: "g5.xlarge", workspaceVersion: "v1", workspaceTemplateId: "4nbb4lg2s", workspaceClassId: "2x8", cloudCredId: "cred-aws-1", diskStorage: "120Gi", isStoppable: false, vmBuild: { forceJupyterInstall: false, lifeCycleScriptAttr: { script: "#!/bin/bash" } }, launchJupyterOnStart: false },
     });
-    expect(calls[1].body).not.toHaveProperty("startupScript");
-    expect(calls[1].body).not.toHaveProperty("vmOnlyMode");
+    expect(calls[1].body).toMatchObject({ description: "", primaryApplicationId: "", applications: [], startupScript: "", gitRepo: "", initBranch: "", startupScriptPath: "", dotBrevPath: "", baseImage: "", vmOnlyMode: false, portMappings: {}, execsV1: {}, reposV1: {}, labels: null, files: null });
     // A type the listing does not have: refused before any create; the listing is cached.
     await expect(brev.create(env, { name: "fv-pod-b-2", instanceType: "nope", startupScript: "x" })).rejects.toThrow(/not in the org's instance-type listing/);
     expect(calls.filter((c) => c.method === "POST").length).toBe(1);
