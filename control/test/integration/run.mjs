@@ -1329,7 +1329,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.equal(ws.body.workspaceVersion, "v1");
   assert.equal(ws.body.cloudCredId, "devplane-brev-1-credential", "the type's cloud_cred_id from the listing");
   assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "120Gi", false]);
-  assert.ok(!("startupScript" in ws.body) && !ws.body.vmOnlyMode, "the script rides in vmBuild.lifeCycleScriptAttr");
+  assert.ok(ws.body.startupScript === "" && ws.body.vmOnlyMode === false && ws.body.description === "" && Array.isArray(ws.body.applications), "Go zero values present; the script rides in vmBuild.lifeCycleScriptAttr");
   assert.ok(b.calls.some((c) => c.method === "GET" && c.path === `/instances/alltypesavailable/${mock.brevOrg}`));
   const bkey = `brev:${ws.name}`;
   const benv = mock.pods.get(bkey)?.env || {};
