@@ -91,7 +91,28 @@ export function startMock() {
     boot: "ok", // ok | fail (the boot reports failed) | silent (no report)
   };
   // NVIDIA Brev (§3): the CLI's REST paths under /brev/api, Bearer token; the env rides in the startup script.
-  m.brev = { calls: [], workspaces: [], boot: "ok" };
+  const brevType = (type, o) => ({
+    type,
+    supported_gpus: [{ count: 1, name: o.gpu, memory: "80GiB" }],
+    supported_storage: o.stoppable ? [{ size: "0B", type: "gp3", min_size: "10GiB", max_size: "16TiB", price_per_gb_hr: { currency: "USD", amount: "0.000132" } }] : [{ size: "850GiB", type: "ssd" }],
+    base_price: { currency: "USD", amount: o.price },
+    location: o.location,
+    provider: o.provider,
+    stoppable: o.stoppable ? true : null,
+    elastic_root_volume: o.stoppable ? true : null,
+    estimated_deploy_time: "7m0s",
+    is_available: true,
+    cloud_cred_id: o.cred,
+  });
+  m.brev = {
+    calls: [],
+    workspaces: [],
+    boot: "ok",
+    types: [
+      brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
+      brevType("a100-test", { gpu: "A100", price: "1.800000", location: "houston-usa-1", provider: "shadeform", stoppable: false, cred: "shadeform-brev-1" }),
+    ],
+  };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
   /** A GMI / Brev pod's boot (providers.ts PROVIDER_BOOT): it serves at /pod/<key> and reports its "tunnel" URL to fv-control. */
@@ -297,22 +318,30 @@ export function startMock() {
       if (bearer !== m.brevToken) return json(res, 401, { message: "unauthorized" });
       const om = /^\/organizations\/([^/]+)\/workspaces$/.exec(rest);
       if (om && om[1] !== m.brevOrg) return json(res, 403, { message: "not a member" });
-      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, ...w }) => w));
+      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, ...w }) => w));
+      // The instance-type listing (shape read live 2026-10-10): each type's cloud_cred_id, stoppable, prices.
+      const tm = /^\/instances\/alltypesavailable\/([^/]+)$/.exec(rest);
+      if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
       if (om && req.method === "POST") {
-        if (!body?.name || !body?.instanceType || body.vmOnlyMode !== true || !body.startupScript) return json(res, 400, { message: "name, instanceType, vmOnlyMode, startupScript" });
+        // brev-cli main's body: the old one (vmOnlyMode + startupScript, no workspaceVersion) is refused as live.
+        if (body?.workspaceVersion !== "v1") return json(res, 400, { errors: [{ type: "BadRequestError", message: "Legacy workspace version unsupported" }] });
+        const type = b.types.find((t) => t.type === body.instanceType);
+        const script = body?.vmBuild?.lifeCycleScriptAttr?.script;
+        if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script || "startupScript" in body)
+          return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
         const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
         // The env file the startup script writes (base64 in the first printf).
-        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(body.startupScript)?.[1] || "";
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(script)?.[1] || "";
         const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
-        b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: body.startupScript });
-        simBoot(`brev:${body.name}`, env, b.boot, { startupScript: body.startupScript });
+        b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body });
+        simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
         return json(res, 200, { id, name: body.name, status: "DEPLOYING" });
       }
       const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
       if (wm) {
         const w = b.workspaces.find((x) => x.id === wm[1]);
         if (!w) return json(res, 404, { message: "workspace not found" });
-        if (req.method === "GET") { const { startupScript, ...o } = w; return json(res, 200, o); }
+        if (req.method === "GET") { const { startupScript, body: _b, ...o } = w; return json(res, 200, o); }
         if (req.method === "DELETE") {
           b.workspaces = b.workspaces.filter((x) => x.id !== w.id);
           m.pods.delete(`brev:${w.name}`);

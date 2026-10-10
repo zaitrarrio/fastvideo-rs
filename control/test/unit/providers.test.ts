@@ -3,7 +3,7 @@
 // the pod env and start command, the weights plan, the off / approval
 // refusals, the budget, the clients against a fetch mock.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { brev, brevPrice, toWorkspace } from "../../src/brev";
+import { brev, brevPrice, resetBrevTypes, toWorkspace } from "../../src/brev";
 import { budgetDecision } from "../../src/collector-providers";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
@@ -203,12 +203,14 @@ describe("clients (fetch mock)", () => {
     await expect(gmi.containers(mkEnv({ GMI_API_KEY: undefined }))).rejects.toThrow(/GMI_API_KEY is not set/);
     expect(f).not.toHaveBeenCalled();
   });
-  it("Brev: org path, vmOnlyMode create, delete of an unknown id is done; prices from BREV_PRICES", async () => {
+  it("Brev: org path, brev-cli v1 create (cloudCredId from the listing, script in vmBuild), delete of an unknown id is done; prices from BREV_PRICES", async () => {
+    resetBrevTypes();
     const calls: any[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: any) => {
         calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : null, auth: init.headers.authorization });
+        if (url.includes("/alltypesavailable/")) return new Response(JSON.stringify({ allInstanceTypes: [{ type: "g5.xlarge", cloud_cred_id: "cred-aws-1", stoppable: true }] }));
         if (init.method === "POST") return new Response(JSON.stringify({ id: "ws1" }));
         if (init.method === "DELETE") return new Response("{}", { status: 404 });
         return new Response(JSON.stringify([{ id: "ws1", name: "fv-pod-b-1", status: "running", instanceType: "g5.xlarge" }]));
@@ -216,7 +218,19 @@ describe("clients (fetch mock)", () => {
     );
     const env = mkEnv();
     expect(await brev.create(env, { name: "fv-pod-b-1", instanceType: "g5.xlarge", startupScript: "#!/bin/bash" })).toBe("ws1");
-    expect(calls[0]).toMatchObject({ url: "https://brev.test/api/organizations/org1/workspaces", method: "POST", auth: `Bearer ${BREV_TOKEN}`, body: { name: "fv-pod-b-1", instanceType: "g5.xlarge", vmOnlyMode: true } });
+    expect(calls[0]).toMatchObject({ url: "https://brev.test/api/instances/alltypesavailable/org1", method: "GET", auth: `Bearer ${BREV_TOKEN}` });
+    expect(calls[1]).toMatchObject({
+      url: "https://brev.test/api/organizations/org1/workspaces",
+      method: "POST",
+      auth: `Bearer ${BREV_TOKEN}`,
+      body: { name: "fv-pod-b-1", instanceType: "g5.xlarge", workspaceVersion: "v1", workspaceTemplateId: "4nbb4lg2s", workspaceClassId: "2x8", cloudCredId: "cred-aws-1", diskStorage: "120Gi", isStoppable: false, vmBuild: { forceJupyterInstall: false, lifeCycleScriptAttr: { script: "#!/bin/bash" } }, launchJupyterOnStart: false },
+    });
+    expect(calls[1].body).not.toHaveProperty("startupScript");
+    expect(calls[1].body).not.toHaveProperty("vmOnlyMode");
+    // A type the listing does not have: refused before any create; the listing is cached.
+    await expect(brev.create(env, { name: "fv-pod-b-2", instanceType: "nope", startupScript: "x" })).rejects.toThrow(/not in the org's instance-type listing/);
+    expect(calls.filter((c) => c.method === "POST").length).toBe(1);
+    expect(calls.filter((c) => c.url.includes("alltypesavailable")).length).toBe(1);
     expect((await brev.workspaces(env))[0]!.status).toBe("RUNNING");
     expect(await brev.remove(env, "gone")).toBe(true);
     expect(brevPrice(env, "g5.xlarge")).toBe(1.25);
