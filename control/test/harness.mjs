@@ -157,6 +157,9 @@ export function startMock() {
           if (m.brev.boot === "hostfail") return void (await hostReport("host_failed", 'docker run (exit 125): docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]] | '));
           await hostReport("heartbeat", "container: no container; last: ");
           await hostReport("container_started", "c0ffee000000 image");
+          // The host watcher: the container exits (as live 2026-10-10: fv-serve's config refused) or /health answers.
+          if (m.brev.boot === "exit") return void (await hostReport("container_exited", "container exited exit=2 oom=false: [fv-boot] start | fv-serve: config: auth.key_store = d1 needs the D1 settings | "));
+          setTimeout(() => hostReport("serve_ready", "fv-serve /health 200, 1 s after the tunnel"), 800);
         }
         if (env.FV_WEIGHTS_SOURCE === "hub")
           for (const line of Buffer.from(env.FV_WEIGHTS_TREES_B64 || "", "base64").toString().split("\n")) {

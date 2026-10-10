@@ -117,7 +117,7 @@ export const brev = {
    * live), the user template and class, the type's cloudCredId, and the script in vmBuild.lifeCycleScriptAttr.
    * `diskStorage` ("500Gi"; the CLI's default 120Gi) sizes the disk (UNVERIFIED for fixed-disk types).
    */
-  async create(env: Env, req: { name: string; instanceType: string; startupScript: string; diskStorage?: string }): Promise<string> {
+  async create(env: Env, req: { name: string; instanceType: string; startupScript: string; diskStorage?: string; isStoppable?: boolean }): Promise<string> {
     const cloudCredId = await brev.cloudCredId(env, req.instanceType);
     const j = await call(env, "POST", `api/organizations/${encodeURIComponent(env.BREV_ORG_ID!)}/workspaces`, {
       name: req.name,
@@ -127,7 +127,7 @@ export const brev = {
       cloudCredId,
       instanceType: req.instanceType,
       diskStorage: req.diskStorage || BREV_DEFAULT_DISK,
-      isStoppable: false,
+      isStoppable: req.isStoppable ?? false,
       vmBuild: { forceJupyterInstall: false, lifeCycleScriptAttr: { script: req.startupScript } },
       portMappings: {},
       execsV1: {},

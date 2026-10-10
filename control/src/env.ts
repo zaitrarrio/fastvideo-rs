@@ -103,6 +103,9 @@ export interface Env {
   /** Keep-on-stop (brev-park.ts): seconds a restarted parked instance may take to run again before it is held
    * for the owner and a fresh one is made (default 900). */
   BREV_RESTART_TIMEOUT_S?: string;
+  /** "0": create every Brev workspace with isStoppable false (default: true for a type the listing marks stoppable;
+   * brev-cli's entity says the flag is "used for autostop only", UNVERIFIED whether the server's stop needs it). */
+  BREV_IS_STOPPABLE?: string;
   /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */

@@ -420,7 +420,10 @@ export async function brevBoot(env: Env, req: Request): Promise<Response> {
   const script = await unseal(env.CONTROL_KEK, row.run_sealed, runAad(row.name));
   await env.DB.prepare("UPDATE brev_instances SET boots = boots + 1 WHERE workspace_id = ?").bind(row.workspace_id).run();
   // Into the pod's report history (provider-logs): the VM booted and fetched its launch (before the host script reports).
-  const hist = await getSetting<{ phase: string; detail: string; at: number }[]>(env, `endpoint-log:${row.pod_id}`, []);
+  // (Read raw: getSetting merges objects, which turns an array into one.)
+  const raw = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(`endpoint-log:${row.pod_id}`).first<{ value: string }>();
+  const h0 = parseJson<unknown>(raw?.value, []);
+  const hist = Array.isArray(h0) ? (h0 as { phase: string; detail: string; at: number }[]) : [];
   await putSetting(env, `endpoint-log:${row.pod_id}`, [...hist, { phase: "run_fetched", detail: `boot ${row.boots + 1}: the VM fetched its run script`, at: now() }].slice(-30), "pod");
   return new Response(script, { headers: { "content-type": "text/x-shellscript; charset=utf-8", "cache-control": "no-store" } });
 }

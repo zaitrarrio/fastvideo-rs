@@ -211,6 +211,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   }
   const pe = providerEnv(env, full, { provider: prov, key, name, deadlineMs: c.deadline ?? now() + c.spec.cap_s * 1000, reportToken, weights: plan, scriptsRef: c.spec.image.sha || "main" });
   if (pe.dropped.length) log(`${pool.id}: WARNING: ${pe.dropped.join(", ")} are Runpod secret references a ${impl.title} pod cannot resolve (FV_PROVIDER_SECRET_ENV): left out`);
+  for (const n of pe.notes) log(`${pool.id}: NOTE: ${n}`);
   if (warm) {
     try {
       await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan), cluster_id: c.id });

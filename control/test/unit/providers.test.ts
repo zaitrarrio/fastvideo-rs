@@ -123,6 +123,14 @@ describe("weights plan", () => {
 describe("the pod env and start command", () => {
   const full = { FV_R2_BUCKET: "{{ RUNPOD_SECRET_fv_r2_bucket }}", FV_CF_API_TOKEN: "{{ RUNPOD_SECRET_fv_cf_api_token }}", FV_BACKSTOP_API_KEY: "rpa_x", FV_MIN_BALANCE: "8.25", FV_WORKER_DIRECT: "1", RUST_LOG: "info" };
   const o = { key: "gmi:fv-pod-a-1", name: "fv-pod-a-1", deadlineMs: 1_800_000_000_000, reportToken: "ingest_tok", weights: weightsPlan(fakePool() as any), scriptsRef: "main" };
+  it("key_store d1 without the D1 settings becomes memory (fv-serve would refuse to start); with them it stays d1", () => {
+    const d = { ...full, FV_KEY_STORE: "d1", FV_CF_ACCOUNT_ID: "{{ RUNPOD_SECRET_fv_cf_account_id }}", FV_D1_DATABASE_ID: "{{ RUNPOD_SECRET_fv_d1_database_id }}" };
+    const r = providerEnv(mkEnv(), d, { provider: "brev", ...o, key: "brev:fv-pod-a-1" });
+    expect(r.env.FV_KEY_STORE).toBe("memory");
+    expect(r.notes[0]).toMatch(/^FV_KEY_STORE=memory: no D1 settings \(FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID; FV_PROVIDER_SECRET_ENV\)/);
+    const r2 = providerEnv(mkEnv({ FV_PROVIDER_SECRET_ENV: JSON.stringify({ FV_CF_ACCOUNT_ID: "a", FV_CF_API_TOKEN: "t", FV_D1_DATABASE_ID: "d" }) }), d, { provider: "brev", ...o, key: "brev:fv-pod-a-1" });
+    expect([r2.env.FV_KEY_STORE, r2.notes]).toEqual(["d1", []]);
+  });
   it("Runpod secret refs resolved from FV_PROVIDER_SECRET_ENV or dropped; the Runpod key never leaves Runpod", () => {
     const r = providerEnv(mkEnv({ FV_PROVIDER_SECRET_ENV: '{"FV_R2_BUCKET": "fv-out"}' }), full, { provider: "gmi", ...o });
     expect(r.env.FV_R2_BUCKET).toBe("fv-out");
@@ -145,7 +153,13 @@ describe("the pod env and start command", () => {
     expect(PROVIDER_BOOT).toContain(`${CLOUDFLARED.sha256}  /usr/local/bin/cloudflared" | sha256sum -c -`);
     expect(PROVIDER_BOOT).toContain('report tunnel "$U"');
     expect(PROVIDER_BOOT).toContain("fetch-hub-tree.py");
-    expect(PROVIDER_BOOT.trim().endsWith("exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml")).toBe(true);
+    expect(PROVIDER_BOOT.trim().endsWith(`exec "$FV_SERVE_BIN" --config /fv-worker.toml`)).toBe(true);
+    // The preflight: the binary, the worker config and fv-serve's own config check, before the weights and the tunnel.
+    expect(PROVIDER_BOOT).toContain("FV_SERVE_BIN=/opt/fastvideo-rs/bin/fv-serve");
+    expect(PROVIDER_BOOT).toContain('--print-config 2>&1 >/dev/null)" || fail "fv-serve config: ');
+    expect(PROVIDER_BOOT.indexOf("--print-config")).toBeLessThan(PROVIDER_BOOT.indexOf("# ---- weights"));
+    expect(PROVIDER_BOOT.indexOf("--print-config")).toBeLessThan(PROVIDER_BOOT.indexOf("cloudflared tunnel"));
+    expect(PROVIDER_BOOT).toContain('--version 2>&1 | head -n 1');
     expect(PROVIDER_BOOT).not.toMatch(/RUNPOD_POD_ID/);
   });
   it("Brev startup: only the per-boot bootstrap (URL, token in a header file, systemd unit); no env, no launch", () => {
@@ -174,19 +188,27 @@ describe("the pod env and start command", () => {
     expect(() => brevRun("img", { X: "a\nb" })).toThrow(/line break/);
   });
   describe("Brev host script, run in bash with stub commands (docker, nvidia-smi, curl, shutdown)", () => {
-    const run = (o: { docker?: "ok" | "missing" | "runfail"; install?: boolean } = {}) => {
+    const run = (o: { docker?: "ok" | "missing" | "runfail" | "exits"; install?: boolean } = {}) => {
       const dir = mkdtempSync(join(tmpdir(), "fvhost-"));
       const bin = join(dir, "bin");
       mkdirSync(bin);
       const sent = join(dir, "sent.txt");
       const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
-      // curl records the report body (-d) and its auth header file; nothing leaves the machine.
-      stub("curl", `while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 ;; -H) case "$2" in @*) cat "\${2#@}" >> ${join(dir, "headers.txt")} ;; esac; shift 2 ;; *) shift ;; esac; done`);
+      // curl records the report body (-d) and its auth header file; nothing leaves the machine; /health answers 200.
+      stub("curl", `for a; do case "$a" in */health) echo -n 200; exit 0 ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 ;; -H) case "$2" in @*) cat "\${2#@}" >> ${join(dir, "headers.txt")} ;; esac; shift 2 ;; *) shift ;; esac; done`);
       stub("nvidia-smi", 'echo "GPU 0: NVIDIA RTX PRO 6000 (UUID: GPU-x)"');
       stub("shutdown", "exit 0");
+      // The container: running with a tunnel in its log, or exited (OOM) after a config error that names an env value.
+      writeFileSync(join(dir, "state"), o.docker === "exits" ? "exited exit=2 oom=true" : "running exit=0 oom=false");
+      writeFileSync(join(dir, "clog"), o.docker === "exits" ? "[fv-boot] start\nfv-serve: config: bad value SECRETVALUE123 for X_SECRET\n" : "[fv-boot] tunnel https://x.trycloudflare.com\n");
       if (o.docker !== "missing")
-        stub("docker", `case "$1" in info) echo "27.1.1 runtimes=nvidia,runc," ;; pull) echo pulled ;; run) ${o.docker === "runfail" ? 'echo "docker: Error response from daemon: could not select device driver" >&2; exit 125' : "echo c0ffee000000aaaa"} ;; inspect) echo c0ffee000000aaaa ;; logs) echo "[fv-boot] tunnel https://x.trycloudflare.com" ;; *) exit 0 ;; esac`);
-      const env = { A: "1", FV_POD_ID: "brev:fv-pod-h-1", FV_ENDPOINT_REPORT_URL: "https://fvc.test/ingest/v1/endpoint", FV_ENDPOINT_REPORT_TOKEN: "fvi_SECRET", FV_CLUSTER_DEADLINE: "1", ...(o.install ? { FV_BREV_INSTALL_DOCKER: "1" } : {}) };
+        stub(
+          "docker",
+          `case "$1" in info) echo "27.1.1 runtimes=nvidia,runc," ;; pull) echo pulled ;; run) ${o.docker === "runfail" ? 'echo "docker: Error response from daemon: could not select device driver" >&2; exit 125' : "echo c0ffee000000aaaa"} ;;
+  inspect) case "$3" in *State.Status*) cat ${join(dir, "state")} ;; *) echo c0ffee000000aaaa ;; esac ;; logs) cat ${join(dir, "clog")} ;; *) exit 0 ;; esac`,
+        );
+      const env = { A: "1", X_SECRET: "SECRETVALUE123", FV_POD_ID: "brev:fv-pod-h-1", FV_ENDPOINT_REPORT_URL: "https://fvc.test/ingest/v1/endpoint", FV_ENDPOINT_REPORT_TOKEN: "fvi_SECRET", FV_CLUSTER_DEADLINE: "1", ...(o.install ? { FV_BREV_INSTALL_DOCKER: "1" } : {}) };
       const script = join(dir, "startup.sh");
       writeFileSync(script, brevRun("ghcr.io/x/y@sha256:" + "a".repeat(64), env));
       // PATH: the stubs, then every system tool but docker / nvidia-* / shutdown (a real one is never reached).
@@ -202,10 +224,10 @@ describe("the pod env and start command", () => {
       } catch (e: any) {
         code = e.status ?? -1;
       }
-      const deadline = Date.now() + 3000;
+      const deadline = Date.now() + 8000;
       const reports = () => (existsSync(sent) ? readFileSync(sent, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
-      // The heartbeat runs detached: give it a moment.
-      while (Date.now() < deadline && o.docker === "ok" && !reports().some((r) => r.phase === "heartbeat")) execFileSync("sleep", ["0.1"]);
+      // The watcher runs detached: wait for its last word.
+      while (Date.now() < deadline && (o.docker === "ok" || o.docker === "exits") && !reports().some((r) => ["serve_ready", "container_exited", "serve_timeout"].includes(r.phase))) execFileSync("sleep", ["0.1"]);
       return { code, reports: reports(), headers: existsSync(join(dir, "headers.txt")) ? readFileSync(join(dir, "headers.txt"), "utf8") : "", ws: join(dir, "ws") };
     };
     it("reports the host's facts first, then container_started, then a heartbeat; the env file is 0600", () => {
@@ -214,12 +236,27 @@ describe("the pod env and start command", () => {
       expect(r.reports[0].phase).toBe("host");
       expect(r.reports[0].pod).toBe("brev:fv-pod-h-1");
       expect(r.reports[0].detail).toMatch(/user=\S+ uid=\d+ sudo=(root|yes|NO) docker=\S+docker info=\[27\.1\.1 runtimes=nvidia,runc,\] gpu=\[GPU 0: NVIDIA RTX PRO 6000 \(UUID: GPU-x\)\] toolkit=\[\S*.*\] disk=\[.*\] kernel=\S+ os=\[.*\] ws=/);
+      expect(r.reports[0].detail).toMatch(/ boots=1$/);
+      expect(readFileSync(join(r.ws, "fv/boots.log"), "utf8")).toMatch(/^\d{4}-\d\d-\d\dT\S+Z \S+ brev:fv-pod-h-1\n$/);
       expect(r.reports.map((x) => x.phase)).toEqual(expect.arrayContaining(["host", "container_started", "heartbeat"]));
       expect(r.reports.find((x) => x.phase === "container_started").detail).toMatch(/^c0ffee000000 ghcr\.io\/x\/y@sha256:a+$/);
       expect(r.headers).toContain("Authorization: Bearer fvi_SECRET");
       expect(JSON.stringify(r.reports)).not.toContain("fvi_SECRET");
       expect(statSync(join(r.ws, "fv/env")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(r.ws, "fv/env"), "utf8")).toContain("A=1");
+      // After the tunnel the watcher waits for fv-serve's /health: serve_ready, and the container's log is kept.
+      expect(r.reports.find((x) => x.phase === "heartbeat" && /tunnel up/.test(x.detail))).toBeTruthy();
+      expect(r.reports.find((x) => x.phase === "serve_ready")?.detail).toMatch(/^fv-serve \/health 200, \d+ s after the tunnel$/);
+      expect(readFileSync(join(r.ws, "fv/container.log"), "utf8")).toContain("[fv-boot] tunnel");
+    });
+    it("the container exits: container_exited with its exit code, OOMKilled and its log tail, env values scrubbed", () => {
+      const r = run({ docker: "exits" });
+      expect(r.code).toBe(0);
+      const x = r.reports.find((y) => y.phase === "container_exited");
+      expect(x?.detail).toMatch(/^container exited exit=2 oom=true: \[fv-boot\] start \| fv-serve: config: bad value \[redacted\] for X_SECRET \| $/);
+      expect(JSON.stringify(r.reports)).not.toContain("SECRETVALUE123");
+      expect(readFileSync(join(r.ws, "fv/container.log"), "utf8")).toContain("[redacted]");
+      expect(r.reports.some((y) => y.phase === "serve_ready")).toBe(false);
     });
     it("docker missing: host_failed says so (no install without FV_BREV_INSTALL_DOCKER=1)", () => {
       const r = run({ docker: "missing" });

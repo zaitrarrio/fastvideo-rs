@@ -1333,7 +1333,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   // brev-cli main's create body (the old one got 400 "Legacy workspace version unsupported" live).
   assert.equal(ws.body.workspaceVersion, "v1");
   assert.equal(ws.body.cloudCredId, "devplane-brev-1-credential", "the type's cloud_cred_id from the listing");
-  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "200Gi", false]);
+  assert.deepEqual([ws.body.workspaceTemplateId, ws.body.workspaceClassId, ws.body.diskStorage, ws.body.isStoppable], ["4nbb4lg2s", "2x8", "200Gi", true], "a stoppable type: isStoppable true");
   assert.ok(ws.body.startupScript === "" && ws.body.vmOnlyMode === false && ws.body.description === "" && Array.isArray(ws.body.applications), "Go zero values present; the script rides in vmBuild.lifeCycleScriptAttr");
   assert.ok(b.calls.some((c) => c.method === "GET" && c.path === `/instances/alltypesavailable/${mock.brevOrg}`));
   const bkey = `brev:${ws.name}`;
@@ -1348,7 +1348,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   const plg = (await call(`/api/pods/${encodeURIComponent(bkey)}/provider-logs`, { headers: T() })).j;
   assert.ok(plg.lines.some((l) => /^\[report .*\] host: user=ubuntu uid=1000 sudo=yes docker=\/usr\/bin\/docker .*gpu=\[GPU 0: NVIDIA A10G\]/.test(l)), JSON.stringify(plg.lines));
   assert.ok(plg.lines.some((l) => /\] container_started: c0ffee000000/.test(l)) && plg.lines.some((l) => /\] heartbeat \(last\): container: no container/.test(l)), JSON.stringify(plg.lines));
-  assert.deepEqual(plg.reports.map((x) => x.phase), ["run_fetched", "host", "container_started", "tunnel"]);
+  assert.deepEqual(plg.reports.map((x) => x.phase), ["run_fetched", "host", "container_started", "tunnel", "serve_ready"], "the host watcher saw /health 200");
   const btl = (await call(`/api/pods/${encodeURIComponent(bkey)}/boot`, { headers: T() })).j.timeline;
   const hostRow = btl.find((r) => r.phase === "host script (Brev VM)");
   assert.ok(hostRow?.at && /user=ubuntu/.test(hostRow.detail || ""), JSON.stringify(btl));
@@ -1368,6 +1368,18 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.ok(op.log.some((l) => /FAILED \(host failed\): docker run \(exit 125\): .*could not select device driver/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   assert.equal(b.workspaces.length, 0, "deleted after the host failure");
   await call("/api/standalone/brevhf", { method: "DELETE", headers: T() });
+  // The container exits after its start (the host watcher's container_exited, with its log): failed at once, deleted.
+  b.boot = "exit";
+  await cli("pod", "launch", "brevex", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
+  const xid = (await call("/api/standalone/brevex", { headers: T() })).j.pod.id;
+  op = await waitOp(xid, "up", 90000);
+  b.boot = "ok";
+  assert.equal(op.status, "failed");
+  assert.ok(op.log.some((l) => /FAILED \(container exited\): container exited exit=2 .*fv-serve: config: auth\.key_store = d1/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  // Without FV_PROVIDER_SECRET_ENV's D1 settings the key store is memory (else fv-serve refuses to start), said in the log.
+  assert.ok(op.log.some((l) => /NOTE: FV_KEY_STORE=memory: no D1 settings/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  assert.equal(b.workspaces.length, 0, "deleted after the exit");
+  await call("/api/standalone/brevex", { method: "DELETE", headers: T() });
 });
 
 await step("Brev keep-on-stop: park on stop, warm restart (no download), restart failure / timeout, non-stoppable delete, limits, budget, only ours", async () => {
@@ -1409,7 +1421,8 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
         if (op && op.status !== "running") return op;
         await sleep(500);
       }
-      throw new Error(`operation ${kind} did not finish`);
+      const ops = (await call2(`/api/clusters/${cluster}/ops`, { headers: H })).j.operations;
+      throw new Error(`operation ${kind} did not finish: ${JSON.stringify(ops.map((o) => [o.kind, o.status, (o.log || []).slice(-8).map((l) => l.msg)]))}; boots ${JSON.stringify(mock.brev.boots.slice(-2).map(({ run, env, ...x }) => x))}`);
     };
     const launch = async (name, gpu = "g5.xlarge-test") => {
       const r = await call2("/api/standalone", { method: "POST", body: { name, provider: "brev", provider_gpu: gpu, preset: "wan", weights_source: "hub", weights_download_approved: true, channel: "stable", deadline_min: 30, max_gpu_dph: 5 }, headers: H });
@@ -1442,6 +1455,7 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     assert.equal(l1.op.status, "done", l1.op.error + JSON.stringify(l1.op.log.slice(-6)));
     const ws1 = b.workspaces.find((x) => x.name.startsWith("fv-pod-warm1-"));
     assert.equal(ws1.body.diskStorage, "200Gi");
+    assert.equal(ws1.body.isStoppable, true, "a stoppable type is created with isStoppable true");
     let boot = b.boots.filter((x) => x.ws === ws1.id).at(-1);
     assert.deepEqual(boot.fetched.sort(), ["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
     const key = `brev:${ws1.name}`;
@@ -1532,6 +1546,7 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     const l5 = await launch("cold5", "a100-test");
     assert.equal(l5.op.status, "done", l5.op.error + JSON.stringify(l5.op.log.slice(-8)));
     const ws5 = b.workspaces.find((x) => x.name.startsWith("fv-pod-cold5-"));
+    assert.equal(ws5.body.isStoppable, false, "not stoppable: isStoppable false");
     op = await stop("cold5", l5.id);
     assert.equal(op.status, "done", op.error);
     assert.ok(op.log.some((l) => /not parked \(a100-test is not stoppable\): deleting/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
