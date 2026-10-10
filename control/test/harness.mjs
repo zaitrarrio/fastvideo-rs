@@ -333,11 +333,21 @@ export function startMock() {
         if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
           return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
         const id = `ws${String(b.workspaces.length + 1).padStart(6, "0")}`;
-        // The env file the startup script writes (base64 in the first printf).
-        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(script)?.[1] || "";
+        // The env file the host script writes (base64 in its printf to $W/fv/env).
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '\$W\/fv\/env'/.exec(script)?.[1] || "";
         const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
         b.workspaces.push({ id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body });
-        simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
+        // The host script's own reports (brev-host.ts) come first: its facts, then container_started (or host_failed).
+        const hostReport = (phase, detail) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: `brev:${body.name}`, phase, url: "", detail }) }).then((r) => (m.reports ||= []).push({ key: `brev:${body.name}`, status: r.status, phase })).catch(() => {});
+        if (env.FV_ENDPOINT_REPORT_URL)
+          setTimeout(async () => {
+            await hostReport("host", "user=ubuntu uid=1000 sudo=yes docker=/usr/bin/docker info=[27.1.1 runtimes=nvidia,runc,] gpu=[GPU 0: NVIDIA A10G] toolkit=[NVIDIA Container Toolkit CLI version 1.17.8] disk=[180G free of 197G] kernel=6.8.0 os=[ubuntu 22.04] ws=/home/ubuntu/workspace");
+            if (b.boot === "hostfail") return hostReport("host_failed", "docker run (exit 125): docker: Error response from daemon: could not select device driver \"\" with capabilities: [[gpu]] | ");
+            await hostReport("heartbeat", "container: no container; last: ");
+            await hostReport("container_started", "c0ffee000000 image");
+            simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
+          }, 50);
+        else simBoot(`brev:${body.name}`, env, b.boot, { startupScript: script });
         return json(res, 201, { id, name: body.name, status: "DEPLOYING", instanceType: body.instanceType, workspaceVersion: "v1" });
       }
       const wm = /^\/workspaces\/([^/]+)$/.exec(rest);
