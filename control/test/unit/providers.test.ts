@@ -8,7 +8,8 @@ import { budgetDecision } from "../../src/collector-providers";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { gmi, toContainer } from "../../src/gmi";
-import { brevStartup, budgetCheck, CLOUDFLARED, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan } from "../../src/providers";
+import { brevStartup } from "../../src/brev-park";
+import { brevRun, budgetCheck, CLOUDFLARED, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan } from "../../src/providers";
 import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
 import { presetPool } from "../../src/cluster/spec";
@@ -143,15 +144,29 @@ describe("the pod env and start command", () => {
     expect(PROVIDER_BOOT.trim().endsWith("exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml")).toBe(true);
     expect(PROVIDER_BOOT).not.toMatch(/RUNPOD_POD_ID/);
   });
-  it("Brev startup: env file 0600, the GPU, the weights dir, the host deadline; no line breaks in env", () => {
-    const s = brevStartup("ghcr.io/x/y@sha256:" + "a".repeat(64), { A: "1", FV_CLUSTER_DEADLINE: "1800000000" });
+  it("Brev startup: only the per-boot bootstrap (URL, token in a header file, systemd unit); no env, no launch", () => {
+    const s = brevStartup("https://fvc.test/ingest/v1/brev-boot", "fvb_TOKEN");
+    expect(s).toContain("umask 077");
+    expect(s).toContain("printf %s 'https://fvc.test/ingest/v1/brev-boot' > \"$D/boot-url\"");
+    expect(s).toContain("printf 'Authorization: Bearer %s\\n' 'fvb_TOKEN' > \"$D/boot-header\"");
+    expect(s).toContain("systemctl enable fv-boot.service");
+    expect(s).toContain("systemctl start --no-block fv-boot.service");
+    expect(s).not.toContain("docker run");
+    const boot = atob(/printf %s '([^']+)' \| base64 -d > "\$D\/bootstrap.sh"/.exec(s)![1]!);
+    expect(boot).toContain('curl -fsS --max-time 30 -H @"$D/boot-header"');
+    expect(boot).toContain('exec bash "$D/run.sh"');
+    const unit = atob(/printf %s '([^']+)' \| base64 -d > "\$D\/fv-boot.service"/.exec(s)![1]!);
+    expect(unit).toMatch(/Type=oneshot[\s\S]*WantedBy=multi-user.target/);
+  });
+  it("Brev run script: env file 0600, the GPU, the weights dir, the host deadline; no line breaks in env", () => {
+    const s = brevRun("ghcr.io/x/y@sha256:" + "a".repeat(64), { A: "1", FV_CLUSTER_DEADLINE: "1800000000" });
     expect(s).toContain("umask 077");
     expect(s).toContain("--gpus all --network host --env-file /home/ubuntu/workspace/fv/env");
     expect(s).toContain("-v /home/ubuntu/workspace/weights:/workspace/weights");
     expect(s).toContain("-lt 1800000000");
     const envB64 = /printf %s '([^']+)' \| base64 -d > \/home\/ubuntu\/workspace\/fv\/env/.exec(s)![1]!;
     expect(atob(envB64)).toBe("A=1\nFV_CLUSTER_DEADLINE=1800000000");
-    expect(() => brevStartup("img", { X: "a\nb" })).toThrow(/line break/);
+    expect(() => brevRun("img", { X: "a\nb" })).toThrow(/line break/);
   });
   it("only quick-tunnel URLs are accepted as a pod's endpoint", () => {
     expect(endpointUrlOk(mkEnv(), "https://abc-def.trycloudflare.com")).toBe(true);
