@@ -83,8 +83,8 @@ order $HUB | xargs -P "$JOBS" -I{} bash -c 'pub "$1"' _ {}
 order $VOL | xargs -P "$JOBS" -I{} bash -c 'pub "$1" --rev "$REV"' _ {}
 
 # ---- the archive (no manifest, no presets): runs/ and wan/
-[ -n "$RUNS" ] && step "archive runs" $P archive runs "$RUNS" --files 8 --window 4 >>$SRV/archive-runs.log 2>&1
-[ -n "$WAN" ] && step "archive wan" $P archive wan "$WAN" --files 8 --window 4 >>$SRV/archive-wan.log 2>&1
+[ -n "$RUNS" ] && step "archive runs" $P archive runs "$RUNS" --files 48 --window 2 >>$SRV/archive-runs.log 2>&1
+[ -n "$WAN" ] && step "archive wan" $P archive wan "$WAN" --files 16 --window 4 >>$SRV/archive-wan.log 2>&1
 log "archive done"
 
 # ---- the volume against R2: volume-only trees by SHA-256 (re-read), Hub trees by size (their bytes were hashed
