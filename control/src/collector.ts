@@ -298,7 +298,8 @@ export async function collect(env: Env): Promise<CollectResult> {
 /** A cluster with a live Runpod pod (the Runpod balance floor stops only those). */
 const hasRunpodPods = (c: Cluster) => !!c.state.gateway || Object.values(c.state.workers).some((l) => l.some((r) => !isOtherPod(r.pod)));
 
-/** Stops a cluster now (backstop / floor): a `down` operation, cancelling whatever runs; deletes the pods directly if the DO fails. */
+/** Stops a cluster now (backstop / floor): a `down` operation, cancelling whatever runs; releases the pods directly if
+ * the DO fails (Runpod / GMI deleted, Brev stopped and parked / held). */
 export async function stopCluster(env: Env, c: Cluster, reason: string): Promise<string> {
   try {
     const cur = (await currentOp(env, c.id)) as { kind?: string } | null;
@@ -309,7 +310,8 @@ export async function stopCluster(env: Env, c: Cluster, reason: string): Promise
     return `${c.name}: stop (${reason})`;
   } catch (e) {
     const ids = [...Object.values(c.state.workers).flat(), ...(c.state.gateway ? [c.state.gateway] : [])].map((r) => r.pod);
-    for (const p of ids) await (isOtherPod(p) ? releaseOtherPod(env, p, true) : runpod.remove(env, p)).catch(() => {});
+    // A Brev VM is stopped and parked / held, never deleted (owner rule 2026-10-11).
+    for (const p of ids) await (isOtherPod(p) ? releaseOtherPod(env, p, { why: reason }) : runpod.remove(env, p)).catch(() => {});
     await audit(env, { actor: `policy:${reason}`, action: "cluster.stop.direct", target: c.name, detail: (e as Error).message, after: { deleted: ids } });
     return `${c.name}: deleted pods directly (${reason})`;
   }

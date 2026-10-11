@@ -12,6 +12,7 @@ import type { Env } from "./env";
 import { validateVar } from "./envvars";
 import { bootRows, getBoot } from "./boottime";
 import { getDiagnosis } from "./podlogs";
+import { brevDiskGb, brevRow, DEFAULT_STORAGE_USD_PER_GB_HR, storageDph } from "./brev-park";
 import { HttpError, utcDay } from "./util";
 import type { z } from "zod";
 import { parseOr400, type StandaloneLaunchZ } from "./schemas";
@@ -115,6 +116,9 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     .bind(day, c.id)
     .first<{ total: number; today: number; minutes: number }>();
   const lastOp = await env.DB.prepare("SELECT id, kind, status, error, created_at, updated_at FROM operations WHERE cluster_id = ? ORDER BY created_at DESC LIMIT 1").bind(c.id).first<any>();
+  // NVIDIA Brev: a stop keeps the VM (stopped, parked / held: never deleted by fv-control, owner rule 2026-10-11) and
+  // bills its disk; the stop confirmation says so with the storage $/day.
+  const brevRec = rec?.pod.startsWith("brev:") ? await brevRow(env, rec.pod) : null;
   return {
     id: c.id,
     name: c.name,
@@ -156,6 +160,9 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
           gpu_util: live?.gpu_util ?? null,
           boot: await getDiagnosis(env, rec.pod),
           boot_timeline: bootRows(await getBoot(env, rec.pod)),
+          ...(rec.pod.startsWith("brev:")
+            ? { brev: { kept_on_stop: true, workspace_id: brevRec?.workspace_id ?? null, disk_gb: brevRec?.disk_gb ?? null, storage_usd_per_day: (brevRec ? storageDph(brevRec) : brevDiskGb([]) * DEFAULT_STORAGE_USD_PER_GB_HR) * 24 } }
+            : {}),
         }
       : null,
     pool_status: c.state.pools?.[STANDALONE_POOL] || null,

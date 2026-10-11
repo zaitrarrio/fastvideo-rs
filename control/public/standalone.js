@@ -81,6 +81,12 @@ function fvBootTimeline(podId) {
     );
   }
 
+  // NVIDIA Brev (owner rule 2026-10-11): a stop keeps the VM (stopped, parked / held, storage billed), never deletes it.
+  function stopQuestion(p) {
+    const b = p.pod?.brev;
+    if (b) return `Stop ${p.name}? Its Brev VM is stopped and kept, not deleted: its disk (${b.disk_gb ? `${b.disk_gb} GB, ` : ""}~$${b.storage_usd_per_day.toFixed(2)}/day storage) stays for reuse by the next launch of its type; delete it yourself on the Pods page (parked list) when no longer wanted.`;
+    return `Stop ${p.name}? Its pod is deleted (logs and costs are kept); Start makes a new one.`;
+  }
   function actions(p, after) {
     const busy = !!p.op;
     const post = (path, body, label) => act(label, () => api(`/api/standalone/${encodeURIComponent(p.name)}/${path}`, { method: "POST", body: body || {} })).then(() => setTimeout(after, 800));
@@ -88,9 +94,9 @@ function fvBootTimeline(podId) {
       "div",
       { class: "row" },
       !p.pod && h("button", { disabled: busy, onclick: () => post("start", {}, "start") }, "Start"),
-      (p.pod || busy) && h("button", { onclick: () => confirm(`Stop ${p.name}? Its pod is deleted (logs and costs are kept); Start makes a new one.`) && post("stop", {}, "stop") }, "Stop"),
+      (p.pod || busy) && h("button", { onclick: () => confirm(stopQuestion(p)) && post("stop", {}, "stop") }, "Stop"),
       p.pod && h("button", { disabled: busy, onclick: async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${p.name}`); if (m) post("extend", { minutes: m }, "extend"); } }, "Extend"),
-      h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}${p.pod ? " (its pod is stopped first)" : ""}?`)) { await act("delete", () => api(`/api/standalone/${encodeURIComponent(p.name)}`, { method: "DELETE" })); location.hash = "#/standalone"; setTimeout(after, 800); } } }, "Delete"),
+      h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}${p.pod ? (p.pod.brev ? " and its Brev VM (deleted: your explicit delete)" : " (its pod is stopped first)") : ""}?`)) { await act("delete", () => api(`/api/standalone/${encodeURIComponent(p.name)}`, { method: "DELETE" })); location.hash = "#/standalone"; setTimeout(after, 800); } } }, "Delete"),
     );
   }
 

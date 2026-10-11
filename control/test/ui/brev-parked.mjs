@@ -1,6 +1,7 @@
 // UI test (headless Chromium, playwright-core): NVIDIA Brev keep-on-stop on the Pods page (the parked instances'
-// card: weights, disk, $/day, state, Unpark, Delete) and the launch form's Brev instance types (stoppable first,
-// live price) with the warm / cold outlook at the instance-type field. Simulated Brev only (test/harness.mjs).
+// card: weights, disk, $/day, state, reuse status, the policy line (owner rule 2026-10-11: never auto-deleted), Unpark,
+// the owner's Delete) and the launch form's Brev instance types (stoppable only, live price) with the warm / cold
+// outlook at the instance-type field. Simulated Brev only (test/harness.mjs).
 //   CHROMIUM=/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell node test/ui/brev-parked.mjs
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -63,8 +64,9 @@ try {
   const card = page.locator(".card", { hasText: "Parked Brev instances" });
   await card.waitFor();
   const text = await card.textContent();
-  for (const s of ["Parked Brev instances (2): $1.58/day storage", "fv-pod-ui01-1010000000", "fv-pod-ui02-1010000000", "fastwan22-ti2v-5b@3e18704", "250 GB", "$0.79", "1.0 d", "2.0 d", "held", "restart failed: no capacity", "At most 2 parked, 7 days each"])
+  for (const s of ["Parked Brev instances (2): $1.58/day storage", "fv-pod-ui01-1010000000", "fv-pod-ui02-1010000000", "fastwan22-ti2v-5b@3e18704", "250 GB", "$0.79", "1.0 d", "2.0 d", "held", "restart failed: no capacity", "never deleted by fv-control (owner rule 2026-10-11)", "alert past 2 parked or 7 days each", "Delete is yours only", "reusable: the next launch of g5.xlarge-test", "(Unpark: now)"])
     assert.ok(text.includes(s), `parked card: ${s} in ${text}`);
+  assert.ok(!/then the oldest is deleted/.test(text), "no auto-delete wording");
   assert.equal(await card.locator("button:text('Unpark')").count(), 1, "Unpark only on the held one");
   assert.equal(await card.locator("button:text('Delete')").count(), 2);
   await page.screenshot({ path: `${out}/20-brev-parked.png`, fullPage: true });
@@ -85,10 +87,11 @@ try {
   await page.waitForSelector(`${SL} .ff-field[data-path="name"]`);
   await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, JSON.stringify("brev"));
   await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"]`);
-  // The instance types (a combo: the options' values and details), stoppable first with the live list's price.
+  // The instance types (a combo: the options' values and details): the stoppable ones only, with the live list's price
+  // (a type Brev cannot stop is refused: its stop would be a delete).
   const opts = await page.$$eval(`${SL} .ff-field[data-path="provider_gpu"] option`, (els) => els.map((e) => `${e.value} ${e.textContent}`));
-  assert.match(opts[0] || "", /^g5\.xlarge-test .*\$1\.01\/hr · stoppable: weights kept on stop \(warm restarts\)/, JSON.stringify(opts));
-  assert.match(opts[1] || "", /^a100-test .*not stoppable: weights download at every launch/, JSON.stringify(opts));
+  assert.match(opts[0] || "", /^g5\.xlarge-test .*\$1\.01\/hr · stoppable: stopped and kept on stop \(reused by the next launch\)/, JSON.stringify(opts));
+  assert.ok(!opts.some((o) => o.startsWith("a100-test")), JSON.stringify(opts));
   // The warm / cold outlook shows at the instance-type field (the validator's warning) once Hub weights are picked.
   await page.fill(`${SL} [data-ctl][data-path="name"]`, "uiwarm");
   await page.fill(`${SL} [data-ctl][data-path="provider_gpu"]`, "g5.xlarge-test");
@@ -97,9 +100,10 @@ try {
   else await page.click(`${ws} [role=radio]:text-is("hub")`);
   await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"]`);
   await page.check(`${SL} [data-ctl][data-path="weights_download_approved"]`);
-  await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn:not([hidden]):text-matches("^(cold|warm): ")`, { timeout: 20000 });
+  await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn:not([hidden]):text-matches("^(cold|warm|reuse): ")`, { timeout: 20000 });
   const outlook = await page.textContent(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn`);
-  assert.match(outlook, /^cold: downloads h3-base \(~144 GB\): boot ~\d+ min; kept on stop \(the next launch is warm\)$/, outlook);
+  // The parked fv-pod-ui02 (the same type; 25 GB on its 250 GB disk) is reused before a new VM: h3-base downloads onto it.
+  assert.match(outlook, /^reuse: restarts parked fv-pod-ui02-1010000000 \(none of the trees at the pinned revisions on it; downloads h3-base ~144 GB onto it\): boot ~\d+ min$/, outlook);
   await page.screenshot({ path: `${out}/22-brev-launch-types.png`, fullPage: true });
 
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");

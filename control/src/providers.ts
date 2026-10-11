@@ -25,7 +25,7 @@
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
 import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
 import { recordBoot } from "./boottime";
-import { bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
+import { adoptAndStop, bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
@@ -177,6 +177,8 @@ const BREV: ComputeProvider = {
     // fetches from fv-control (brev-park.ts), so a parked VM restarted later runs that later launch.
     const run = brevRun(req.image, req.env);
     const info = await brev.type(env, req.gpu);
+    // Owner rule 2026-10-11: a Brev VM is stopped, never deleted by fv-control; a type Brev cannot stop is refused.
+    if (info && !info.stoppable) throw new Error((await brevStoppableIssue(env, req.gpu)) || `${req.gpu} is not stoppable`);
     const trees = req.weights?.source === "hub" ? req.weights.trees : [];
     const disk = brevDiskGb(trees);
     const token = newBootToken();
@@ -310,22 +312,50 @@ export function weightsPlan(pool: PoolSpec): WeightsPlan {
   for (const a of AUX_FILES) rows.push(["aux", a.path, a.url, a.sha256, String(a.size)].join("\t"));
   return { source, trees, unsupported, tsv: rows.join("\n") + "\n" };
 }
-/** The launch form's Brev instance types: the allowed ones, stoppable first (warm restarts keep the weights), each
- * with its $/hr, deploy time and parked instances. */
+/** The launch form's Brev instance types: the allowed stoppable ones (a type Brev cannot stop is refused at launch:
+ * owner rule 2026-10-11, brevStoppableIssue), each with its $/hr, deploy time and parked / held instances. A type the
+ * live list does not show (or an unreachable list) stays, after the stoppable ones. */
 export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; parked: number }[]> {
   const types = await brev.types(env).catch(() => []);
-  const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state = 'parked' GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
+  const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state IN ('parked', 'held') GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
   const out = brevInstanceTypes(env).map((id) => {
     const t = types.find((x) => x.type === id);
     const n = Number(parked.find((p) => p.instance_type === id)?.n || 0);
     const price = brevPrice(env, id) ?? t?.usd_per_hr ?? null;
-    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", t ? (t.stoppable ? "stoppable: weights kept on stop (warm restarts)" : "not stoppable: weights download at every launch") : "not in Brev's list", ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked`] : [])];
+    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", t ? "stoppable: stopped and kept on stop (reused by the next launch)" : "not in Brev's list", ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked / held`] : [])];
     return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, parked: n };
   });
-  return out.sort((a, b) => Number(b.stoppable === true) - Number(a.stoppable === true));
+  return out.filter((o) => o.stoppable !== false).sort((a, b) => Number(b.stoppable === true) - Number(a.stoppable === true));
 }
-/** A Brev pool's warm / cold outlook (the launch form, the planner): a parked instance holding its trees restarts
- * (warm); else every tree downloads (cold), and a non-stoppable type downloads them at every launch. */
+/** Owner rule 2026-10-11 (rule brev_stoppable_only): fv-control never deletes a Brev VM on its own, so a type Brev cannot
+ * stop (its stop would be a delete) is refused at launch and scale. The message names the stoppable alternatives from
+ * the live list; null when the type is stoppable or the list does not know it (or is unreachable). */
+export async function brevStoppableIssue(env: Env, gpu: string): Promise<string | null> {
+  const types = await brev.types(env).catch(() => null);
+  const t = types?.find((x) => x.type === gpu);
+  if (!t || t.stoppable) return null;
+  const alts = types!.filter((x) => x.stoppable && brevInstanceTypes(env).includes(x.type)).map((x) => x.type);
+  return `${gpu} is not stoppable on NVIDIA Brev: refused (rule brev_stoppable_only: a Brev VM is stopped and kept on every stop, never deleted by fv-control, owner 2026-10-11; this type could only be deleted). Stoppable allowed types: ${alts.length ? alts.join(", ") : "none in BREV_INSTANCE_TYPES (the owner adds one)"}`;
+}
+/** brevStoppableIssue for every Brev pool of a spec (or the pools named), path-anchored at provider_gpu. */
+export async function brevStoppableIssues(env: Env, spec: { pools: PoolSpec[] }, only?: string[]): Promise<{ path: (string | number)[]; message: string }[]> {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  for (const [i, p] of spec.pools.entries()) {
+    if (poolProvider(p) !== "brev" || !p.provider_gpu || (only && !only.includes(p.id))) continue;
+    const m = await brevStoppableIssue(env, p.provider_gpu);
+    if (m) out.push({ path: ["pools", i, "provider_gpu"], message: m });
+  }
+  return out;
+}
+/** 400 (with the issues) when a Brev pool of the spec (or of the pools named) uses a type Brev cannot stop. */
+export async function assertBrevStoppable(env: Env, spec: { pools: PoolSpec[] }, only?: string[]): Promise<void> {
+  if (!spec.pools.some((p) => poolProvider(p) === "brev")) return;
+  const issues = await brevStoppableIssues(env, spec, only);
+  if (issues.length) throw new HttpError(400, issues.map((x) => `${x.path.join(".")}: ${x.message}`).join("; "), { issues });
+}
+/** A Brev pool's warm / cold outlook (the launch form, the planner): a parked / held instance of the type restarts
+ * (warm when it holds some of the trees, else reuse: they download onto it); else every tree downloads (cold). A
+ * non-stoppable type is refused (brevStoppableIssue). */
 export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boolean; stoppable: boolean | null; instance: string | null; download_gb: number; boot_s: number; note: string } | null> {
   if (poolProvider(pool) !== "brev" || !pool.provider_gpu) return null;
   const plan = weightsPlan(pool);
@@ -338,18 +368,23 @@ export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boo
     const e = bootEstimate(info, []);
     return { warm: false, stoppable, instance: null, download_gb: 0, boot_s: e.boot_s, note: `no weights: boot ${min(e.boot_s)}` };
   }
+  if (stoppable === false) {
+    const e = bootEstimate(info, trees);
+    return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note: (await brevStoppableIssue(env, pool.provider_gpu)) || `${pool.provider_gpu} is not stoppable: refused` };
+  }
+  // Reuse (brev-park.ts): a parked / held instance of the type, the one holding most trees first; the missing ones download.
   const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
   if (c) {
     const e = bootEstimate(info, trees, c.matched);
-    return { warm: true, stoppable, instance: c.row.name, download_gb: e.download_gb, boot_s: e.boot_s, note: `warm: restarts parked ${c.row.name} (holds ${c.matched.join(", ")}${c.missing.length ? `; downloads ${c.missing.join(", ")} ~${e.download_gb} GB` : ""}): boot ${min(e.boot_s)}` };
+    const what = `${c.row.state} ${c.row.name}${c.row.state === "held" && c.row.note ? ` (held: ${c.row.note.slice(0, 120)})` : ""}`;
+    const note = c.matched.length
+      ? `warm: restarts ${what} (holds ${c.matched.join(", ")}${c.missing.length ? `; downloads ${c.missing.join(", ")} ~${e.download_gb} GB` : ""}): boot ${min(e.boot_s)}`
+      : `reuse: restarts ${what} (none of the trees at the pinned revisions on it; downloads ${c.missing.join(", ")} ~${e.download_gb} GB onto it): boot ${min(e.boot_s)}`;
+    return { warm: true, stoppable, instance: c.row.name, download_gb: e.download_gb, boot_s: e.boot_s, note };
   }
   const e = bootEstimate(info, trees);
   let note = `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB): boot ${min(e.boot_s)}`;
   if (stoppable) note += "; kept on stop (the next launch is warm)";
-  else if (stoppable === false) {
-    const others = (await brev.types(env).catch(() => [])).filter((t) => t.stoppable && brevInstanceTypes(env).includes(t.type)).map((t) => t.type);
-    note += `; ${pool.provider_gpu} is not stoppable: the weights download at every launch${others.length ? ` (stoppable allowed types keep them: ${others.join(", ")})` : ""}`;
-  }
   return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note };
 }
 /** The Hub trees of a plan at their pinned revisions ({} without hub): what a Brev disk keeps. */
@@ -576,12 +611,19 @@ export async function deleteOtherPod(env: Env, podId: string): Promise<boolean> 
   if (!inst) return true;
   return providerImpl(inst.provider).remove(env, inst);
 }
-/** Releases a GMI / Brev pod: with `park`, a Brev pod of a stoppable type whose weights completed is stopped and
- * parked (brev-park.ts); a warm restart that never came up is held; everything else is deleted. */
-export async function releaseOtherPod(env: Env, podId: string, park: boolean, log?: (m: string) => void): Promise<Release | "deleted"> {
+/** Releases a GMI / Brev pod. GMI: deleted. Brev (owner rule 2026-10-11: fv-control never deletes a Brev VM on its
+ * own): every stop stops the VM, parked (weights complete) or held (with why), or left running as stop_failed when
+ * Brev refuses the stop (alerted); one with no keep-on-stop record is stopped and recorded held. Only `manual` (the
+ * owner's `pod delete` of a standalone pod) deletes a Brev VM. */
+export async function releaseOtherPod(env: Env, podId: string, o: { manual?: boolean; why?: string } = {}, log?: (m: string) => void): Promise<Release> {
   if (splitKey(podId)?.provider === "brev") {
-    const r = await releaseBrev(env, podId, park, log);
+    const r = await releaseBrev(env, podId, o, log);
     if (r !== "none") return r;
+    if (!o.manual) {
+      const inst = await findInstance(env, podId);
+      if (!inst) return "deleted"; // gone (or in the owner's delete)
+      return adoptAndStop(env, { workspace_id: inst.id, pod_id: podId, name: inst.name, instance_type: inst.gpu || "?" }, o.why || "stop", log);
+    }
   }
   if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
   // Its named tunnel and DNS record go with it (a parked / held Brev instance keeps them: its restart reuses them).

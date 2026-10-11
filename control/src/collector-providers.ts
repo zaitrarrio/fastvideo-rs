@@ -6,7 +6,7 @@
 // only ever acts on pods fv-control recorded (cluster_pods); an fv-named
 // instance it did not record is reported, never touched.
 import type { AlertIn, Policies } from "./alerts";
-import { brevUnlisted, enforceParkLimits, markBrevDeleted, parkedRows, storageDph } from "./brev-park";
+import { brevUnlisted, markBrevDeleted, parkedRows, parkLimitAlert, retryRefusedStops, storageDph } from "./brev-park";
 import { ownerOf, type Cluster } from "./cluster/store";
 import { stopCluster } from "./collector";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
@@ -112,11 +112,16 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     for (const [pod, r] of ctl) if (!r.deleted_at && !seen.has(pod) && t - r.created_at > 10 * 60_000) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
     for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
     if (p === "brev") {
-      res.kinds.push("brev_parked");
+      res.kinds.push("brev_parked", "brev_parked_over_limit", "brev_stop_failed");
       // Records whose workspace Brev no longer lists (10 min after their last change): gone.
       for (const id of await brevUnlisted(env, seenIds, t - 10 * 60_000)) await markBrevDeleted(env, id, "gone", "no longer listed by Brev");
-      // The park limits (brev_park_max, brev_park_max_days): the oldest of ours go.
-      res.actions.push(...(await enforceParkLimits(env, pol, t)));
+      // Owner rule 2026-10-11: fv-control never deletes a Brev VM on its own. The park thresholds (brev_park_max,
+      // brev_park_max_days) are an alert; a stop Brev refused is tried again, and alerted with its $/hr while it runs.
+      const lim = await parkLimitAlert(env, pol, t);
+      if (lim) res.alerts.push(lim);
+      const rs = await retryRefusedStops(env, new Map(insts.map((i) => [i.id, i.state])));
+      res.alerts.push(...rs.alerts);
+      res.actions.push(...rs.actions);
     }
 
     const spend = await providerSpend(env, p);

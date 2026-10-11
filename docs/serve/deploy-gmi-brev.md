@@ -193,8 +193,9 @@ provider/region, data remains inaccessible" [b-mgmt]).
 
 - **Every Brev workspace fv-control creates is recorded**: id, name / pod
   key, instance type, location, stoppable, disk GB, storage $/GB-hr, the
-  launch's trees at their revisions, state (`live`, `parked`, `held`,
-  `deleted`, `gone`), a boot-token hash and the sealed run script.
+  launch's trees at their revisions, state (`live`, `restarting`,
+  `parked`, `held`, `stop_failed`, `deleting`, `deleted`, `gone`), a
+  boot-token hash and the sealed run script.
 - **Disk**: `diskStorage` at create = the trees × 1.3 + 40 GB, at least
   200 GiB, in 50s (e.g. H3 250, H3 + LTX-2.5 400). Fixed-disk types record
   their listed size.
@@ -208,55 +209,96 @@ provider/region, data remains inaccessible" [b-mgmt]).
   image, heartbeat, deadline watchdog). A restarted VM therefore runs the
   new launch's image, env, deadline and ingest token; a parked one started
   outside fv-control gets 409 and runs nothing.
-- **Park on stop**: a cluster / standalone stop (user, deadline backstop,
-  budget stop, the direct fallback) calls `PUT api/workspaces/{id}/stop`
-  instead of `DELETE` when the type is stoppable, the pod had weights, and
-  they completed (the pod became ready, or reported its tunnel, which the
-  boot does after the weights). The trees it holds (union of the launches
-  that completed) are recorded with `parked_at`. Anything else is deleted
-  as before: a non-stoppable type, a fake-engine pod, weights that never
-  completed, a scale-down / roll / failed boot, policy `brev_park_max` 0,
-  or a stop call that fails.
-- **Warm restart**: the next launch on the same instance type picks the
-  parked instance holding the most of its trees at the pinned revisions
-  (whose disk fits the rest), claims it atomically, stores the new run
-  script and calls `PUT …/start`. It keeps its first name, so its pod key
-  `brev:<name>`; its `cluster_pods` row starts over for the new cluster.
-  The boot skips trees that are complete at the pinned revision (§7) and
-  downloads only the missing ones.
+- **Owner rule (2026-10-11):** "stopping a brev vm should NOT delete it.
+  brev VM's should be re-used or manually deleted". fv-control never
+  deletes a Brev VM on its own. The only deletes are the owner's:
+  `fv-control.sh pod delete <name>` (a standalone pod whose VM is live:
+  the explicit delete of that pod), `fv-control.sh brev delete-parked
+  <id>`, Delete on the Pods page's parked list, and
+  `POST /api/providers/brev/parked/<id>/delete`.
+- **Every stop stops the VM** (`PUT api/workspaces/{id}/stop`): user stop,
+  deadline backstop, budget stop (`stop_on_floor`), idle stop, scale-down,
+  roll / aborted roll, a failed or never-ready boot, a failed or timed-out
+  warm restart, the `down`'s orphan sweep, the collector's direct fallback
+  when the operations DO fails. The instance is then recorded:
+  - **parked** when its weights completed (the pod became ready, or
+    reported its tunnel, which the boot does after the weights): the trees
+    it holds (union of the launches that completed) with `parked_at`;
+  - **held** otherwise, with a note why (`stopped before its boot became
+    ready (<pod FAILED phase>): weights may be incomplete`, `restart
+    failed: …`, `no keep-on-stop record` for a VM made before #64).
+    Partially downloaded trees stay on its disk; the next boot's weights
+    loop removes `.partial-*` leftovers and replaces any tree that is not
+    complete at the pinned revision (§7).
+  A fake-engine pod (no trees) that became ready parks with no trees.
+- **A stop Brev refuses** (a type that turned out not stoppable, an API
+  error) leaves the VM **running**: state `stop_failed`, a log warning
+  with its $/hr, and the critical alert `brev_stop_failed` (its $/hr and
+  $/day) each cron pass while it runs. The cron retries the stop; once it
+  takes (or Brev shows it stopped) the instance is held. Nothing deletes
+  it; the owner may delete it (`brev delete-parked` accepts it).
+- **Non-stoppable types are refused** (rule `brev_stoppable_only`): a type
+  the live list marks not stoppable (e.g. the Shadeform `massedcompute_*`
+  / `hyperstack_*` types) could only be deleted, so the validator, launch,
+  start, scale and roll refuse it with the stoppable allowed types from the
+  live list, and `createOtherWorker` / the provider's create refuse it
+  again. The launch form lists stoppable types only.
+- **Reuse before create**: a new launch on Brev claims (atomically) a
+  parked or held instance of the requested type before creating a VM: the
+  one holding the most requested trees at the pinned revisions first, then
+  parked before held, then the newest; otherwise any of the type whose
+  disk fits (its complete trees ∪ its last launch's trees ∪ the requested
+  ones, by the §7 sizes, + 40 GB headroom ≤ its disk; a tree replaced at
+  another revision counts once). It stores the new run script and calls
+  `PUT …/start`; the missing trees download onto it. It keeps its first
+  name, so its pod key `brev:<name>`; its `cluster_pods` row starts over
+  for the new cluster. A held instance is reused too, once
+  `BREV_HELD_REUSE_AFTER_S` (default 900) passed since it was held (so the
+  re-placement right after a failed boot does not land on the VM that just
+  failed; Unpark makes it reusable at once); the operation log names it
+  and its note. Only if none fits is a new VM created.
 - **Fallbacks**: a start that fails (e.g. no capacity), or a restarted
   instance not running (and not ready) within `BREV_RESTART_TIMEOUT_S`
-  (default 900), is stopped again and **held** for the owner: never
-  restarted on its own, still billed as storage, still counted. Policy
-  `brev_park_delete_failed` deletes it instead. A fresh instance is then
-  created (downloading, with the same approvals).
+  (default 900), is stopped again and **held** (reused later, see above),
+  and the next candidate or a fresh instance is tried. The former policy
+  `brev_park_delete_failed` is **removed** (2026-10-11): a stored value is
+  dropped and ignored.
 - **Money**: a parked or held instance costs disk GB × the type's highest
   listed $/GB-hr (unknown: $0.000263). The cron books it each minute in
   the ledger (owner `brev:parked`, pods table `PARKED` / `HELD`), and
   `budgetCheck` adds it to the projection (`… parked storage $x/hr
-  included`). `/api/providers` shows `parked_dph`.
-- **Limits** (policies): `brev_park_max` (default 2) parked or held
-  instances, `brev_park_max_days` (default 7) each. Past either, the
-  oldest go (`DELETE`), at park time and every cron pass. Only rows
-  fv-control recorded with fv- names are touched; an fv- workspace it did
-  not record is reported (`brev_orphan`), never stopped, started or
-  deleted. A parked instance found running outside fv-control raises
-  `brev_parked`.
+  included`). `/api/providers` shows `parked_dph`. A `stop_failed` VM is
+  still billed at its GPU $/hr under its cluster.
+- **Thresholds are alerts only** (policies): more than `brev_park_max`
+  (default 2) parked or held instances, or one parked longer than
+  `brev_park_max_days` (default 7), raises `brev_parked_over_limit`
+  (warn) listing each instance with its state, type, age and storage
+  $/day, at park time (in the operation log) and every cron pass. Nothing
+  is deleted; `0` means any parked instance alerts (it no longer means
+  "delete on stop"). Only rows fv-control recorded with fv- names are
+  touched; an fv- workspace it did not record is reported (`brev_orphan`),
+  never stopped, started or deleted. A parked instance found running
+  outside fv-control raises `brev_parked`.
 - **Owner**:
-  - UI: the Pods page lists parked instances with their weights, disk,
-    $/day, age and note, with Delete (and Unpark for a held one).
-  - CLI: `fv-control.sh brev parked`, `brev unpark <id>` (a held one back
-    into the warm pool), `brev delete-parked <id>`.
-  - API: `GET /api/providers/brev/parked`,
+  - UI: the Pods page lists parked, held and stop-refused instances with
+    their weights, disk, $/day, age, reuse status and note, the policy
+    line, an over-threshold banner, Delete (manual) and Unpark (a held
+    one). Stop confirmations say a Brev VM is stopped and kept (storage
+    $/day), not deleted.
+  - CLI: `fv-control.sh brev parked` (the policy line, then one row per
+    instance with its reuse status), `brev unpark <id>` (a held one
+    reusable at once), `brev delete-parked <id>`.
+  - API: `GET /api/providers/brev/parked` (`policy.line`,
+    `policy.auto_delete: false`, `over_limit`, per instance `reuse`),
     `POST /api/providers/brev/parked/<id>/delete | unpark`.
-- **Planner**: the launch form lists the allowed instance types with
-  stoppable ones first, each with its live $/hr, "stoppable: weights kept
-  on stop (warm restarts)" or "not stoppable: weights download at every
-  launch", the deploy time and how many are parked. With Hub weights, the
-  validator shows at the instance-type field either "warm: restarts parked
-  <name> (holds …): boot ~N min" or "cold: downloads … (~X GB): boot ~N
-  min", plus the stoppable allowed types when the chosen one is not.
-  Estimate: the list's deploy time + the missing GB at 0.15 GB/s.
+- **Planner**: the launch form lists the allowed stoppable instance types,
+  each with its live $/hr, "stoppable: stopped and kept on stop (reused by
+  the next launch)", the deploy time and how many are parked / held. With
+  Hub weights, the validator shows at the instance-type field "warm:
+  restarts parked|held <name> (holds …): boot ~N min", "reuse: restarts
+  … (none of the trees …; downloads … onto it)" or "cold: downloads …
+  (~X GB): boot ~N min". Estimate: the list's deploy time + the missing GB
+  at 0.15 GB/s.
 
 ### 3.5 Billing
 
@@ -482,8 +524,8 @@ provider's create failing, the deadline), fv-control deletes the DNS record,
 then the tunnel's connections (`DELETE …/connections`: a deleted pod's
 connections linger), then the tunnel. A **parked Brev instance keeps its
 tunnel and record** (§3.4): its warm restart reuses them (a fresh token
-read, no new tunnel); they go when the parked instance is deleted (owner,
-limits, `brev_park_delete_failed`, or Brev no longer listing it). A delete
+read, no new tunnel); they go when the parked instance is deleted (only by
+the owner since 2026-10-11) or Brev no longer lists it. A delete
 that fails leaves the row `delete_failed` and the cron retries.
 
 Only ours: fv-control deletes a tunnel only by the id it recorded, after
@@ -540,8 +582,8 @@ next poll and the pod is deleted (with its tunnel).
 | Guard | Runpod | GMI / Brev |
 |---|---|---|
 | per-pod $/hr cap | create answer's `costPerHr` > `max_gpu_dph` → delete | offer price (GMI products ÷ `GMI_PRICE_DIVISOR`, Brev's live instance-type list or the `BREV_PRICES` override) > `max_gpu_dph` → refused before create; unknown → planned and booked at `max_gpu_dph` |
-| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev pods of stoppable types park, §3.4) |
-| idle storage | none | Brev parked instances: at most `brev_park_max`, each `brev_park_max_days`; the oldest are deleted (§3.4) |
+| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev VMs are stopped and parked / held, never deleted, §3.4) |
+| idle storage | none | Brev parked / held instances: kept until the owner deletes them (owner rule 2026-10-11); alert `brev_parked_over_limit` past `brev_park_max` instances or `brev_park_max_days` days, with their age and $/day (§3.4) |
 | deadline | cron + pod watchdog | cron (`stopCluster`) + the pod's watchdog (GMI: API delete; Brev: host `shutdown`) |
 | ours only | listed by id | fv- names **and** recorded in `cluster_pods`; an fv-named instance fv-control did not record raises `<p>_orphan` and is never touched; anything else is not even listed |
 
@@ -603,12 +645,14 @@ storage volume would do the same there (§9).
       for presets with weights, e.g. AWS / GCP / Nebius / Crusoe types,
       not `massedcompute_*` / `hyperstack_*`), `BREV_BUDGET_USD`.
       `BREV_PRICES` is optional now (an override of the live list).
-   3. Keep-on-stop (§3.4): decide `brev_park_max` (default 2) and
-      `brev_park_max_days` (default 7) in the policies (0 turns it off),
-      and whether a failed restart is held (default) or deleted
-      (`brev_park_delete_failed`). Check parked instances with
-      `fv-control.sh brev parked` or on the Pods page; they bill storage
-      (~$0.8/day for 250 GB on AWS gp3) until deleted.
+   3. Keep-on-stop (§3.4): every stop keeps the VM (owner rule
+      2026-10-11: fv-control never deletes a Brev VM on its own). Set the
+      alert thresholds `brev_park_max` (default 2) and
+      `brev_park_max_days` (default 7) in the policies. Check parked /
+      held instances with `fv-control.sh brev parked` or on the Pods page;
+      they bill storage (~$0.8/day for 250 GB on AWS gp3) until you delete
+      them. Allow only stoppable types in `BREV_INSTANCE_TYPES` (others
+      are refused at launch).
    4. Ask NVIDIA whether the workspaces REST API may be automated and
       whether the API key is a bearer token for it (if not, set
       `BREV_API_TOKEN` to whatever token the CLI stores after
@@ -656,8 +700,8 @@ work as the CLI source suggests.
    (approved, e.g. preset `fastwan21`, ~30 GB; the launch form's outlook
    names the trees and their size). Expect `host` with `boots=1`, the
    weights downloaded, ready.
-2. Stop it: the operation log says `parked (stopped; … kept on its … GB
-   disk, $x/day storage)`; `brev parked` lists it; the Brev console shows
+2. Stop it: the operation log says `parked (stopped, not deleted; … kept
+   on its … GB disk, $x/day storage)`; `brev parked` lists it; the Brev console shows
    it STOPPED, not deleted.
 3. Launch the same preset and type again. The log says `warm restart of
    parked …`. The `host` report says `boots=2`; `provider-logs` shows
@@ -666,8 +710,9 @@ work as the CLI source suggests.
 4. Clean up: `brev delete-parked <id>`, and check the Brev console.
 
 If step 3's restart fails or times out, the instance is held
-(`brev parked` shows the note) and a fresh one is created; delete the held
-one by hand.
+(`brev parked` shows the note) and a fresh one is created; the held one is
+reused by a later launch (after `BREV_HELD_REUSE_AFTER_S`) or deleted by
+hand. fv-control never deletes either on its own (owner rule 2026-10-11).
 
 ### Verified vs UNVERIFIED
 
@@ -743,7 +788,8 @@ one by hand.
   the path-anchored launch checks; GMI create → tunnel report → health →
   ready → collector (owner, cost, orphan reported, foreign untouched) →
   provider logs (scrubbed) → offers → stop deletes only ours → delete; a
-  failed boot deleted at once; a Brev launch refused by the budget before
+  failed boot deleted at once (GMI) or stopped and held (Brev, owner rule
+  2026-10-11); a Brev launch refused by the budget before
   any VM; a Brev launch through `fv-control.sh pod launch --provider brev
   --fake` end to end; and the existing "no secret in any response" check
   with the GMI / Brev keys added.
@@ -767,10 +813,21 @@ one by hand.
     downloads approved): cold launch → stop parks (not deleted) → ledger,
     pods row, budget and no orphan alert → warm restart (no create, no
     download, the new env) → park again; restart failure → held + fresh;
-    restart timeout → held + fresh; the `brev_park_max` limit; a
-    non-stoppable type deleted; the CLI (`brev parked`, `unpark`,
-    `delete-parked`); the age limit; foreign and unrecorded fv-
-    workspaces never touched.
+    restart timeout → held + fresh; the `brev_park_max` threshold an
+    alert (nothing deleted); a held instance reused (no create); a stop
+    Brev refuses left running with `brev_stop_failed`, then held by the
+    cron's retry; a non-stoppable type refused at validate and launch; the
+    CLI (`brev parked`, `unpark`, `delete-parked`); the age threshold an
+    alert; the only DELETE the owner's; foreign and unrecorded fv-
+    workspaces never touched. The step "GMI / Brev standalone pods": a
+    failed boot (host failure, container exit) stops and holds the VM;
+    `pod delete` of a live VM deletes it.
+  - Unit (`brev-park.test.ts`): "owner rule 2026-10-11: no automatic path
+    deletes a Brev VM" stubs `brev.remove` and runs stop, deadline,
+    scale-down, roll, orphan, failed boot, failed / timed-out restart, no
+    record, refused stop, the direct backstop / budget release and the
+    cron (limits, refused-stop retry, budget floor): it fails if any of
+    them calls it; only `deleteParked` and the manual `pod delete` do.
   - `control/test/ui/brev-parked.mjs`: the Pods page's parked card
     (weights, disk, $/day, held, Unpark, Delete), and the launch form's
     instance types (stoppable first, live price) with the cold outlook.
