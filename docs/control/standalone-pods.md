@@ -87,6 +87,51 @@ fv-control.sh boot <pod id | name>            # the boot timeline
 
 `--secret-env K=@FILE` reads a secret value from a file (not argv).
 
+## GMI Cloud and NVIDIA Brev
+
+`provider: gmi | brev` (`--provider` on the CLI) launches the same pod on a
+GMI Cloud container or a Brev VM (docs/serve/deploy-gmi-brev.md): `provider_gpu`
+is the provider's product / instance type, there is no weights volume
+(`weights_source: none` runs the fake engine; `hub` downloads at boot after
+the owner's approval), the pod reports its HTTPS tunnel URL to
+`/ingest/v1/endpoint` (a named tunnel fv-control made on the owner's zone,
+URL known at create, or a quick tunnel without those settings;
+deploy-gmi-brev.md §6.4), and a monthly budget (`GMI_BUDGET_USD`,
+`BREV_BUDGET_USD`) replaces the balance floor. Both are off until the owner
+sets their secrets; the form and `fv-control.sh providers` say why.
+
+**Brev keep-on-stop** (docs/serve/deploy-gmi-brev.md §3.4). Stopping a
+Brev pod of a stoppable instance type, whose Hub weights completed, stops
+the VM instead of deleting it: it is *parked* with its weights under
+`~/workspace/weights`. This covers Stop, the deadline and a budget stop;
+a delete of the definition stops first and parks the same way. The next
+launch of the same instance type with those trees restarts it, a *warm*
+boot with no download. Non-stoppable types (e.g. `massedcompute_*`), the
+fake engine and pods whose weights never completed are deleted as before.
+
+A parked instance bills storage only. That cost counts in the Brev
+budget and the cost views (owner `brev:parked`), and the policies
+`brev_park_max` (2) and `brev_park_max_days` (7) delete the oldest. A
+restart that fails (no capacity) or does not come up is *held* for you,
+and a fresh pod is created.
+
+The launch form lists stoppable instance types first, and shows "warm:
+restarts parked …" or "cold: downloads … (~N GB): boot ~M min" at the
+instance-type field. The Pods page lists parked instances with their
+weights, disk and $/day, with Delete (and Unpark for a held one).
+
+```bash
+fv-control.sh brev parked                    # parked / held instances: weights, disk, $/day
+fv-control.sh brev unpark <workspace id>     # a held one back into the warm pool
+fv-control.sh brev delete-parked <workspace id>
+```
+
+```bash
+fv-control.sh providers
+fv-control.sh pod launch smoke-gmi --provider gmi --gpu container.h200.x1 --fake --deadline-min 20 --wait
+fv-control.sh pod launch smoke-brev --provider brev --gpu <instanceType> --fake --deadline-min 20 --wait
+```
+
 ## UI
 
 The **Standalone** page (`#/standalone`, `public/standalone.js`): the list

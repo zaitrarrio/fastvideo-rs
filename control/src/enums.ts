@@ -42,6 +42,22 @@ export const RUNPOD_GPU_TYPES = [
   "NVIDIA RTX PRO 5000 Blackwell", "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition", "NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
   "Tesla V100-PCIE-16GB", "Tesla V100-SXM2-16GB",
 ] as const;
+/** Where a pod runs (docs/serve/deploy-gmi-brev.md): Runpod (the default and
+ * primary), GMI Cloud containers, NVIDIA Brev VMs. CloudRift is observed by the
+ * collector but never launched from fv-control (on hold, docs/ops/cloudrift.md). */
+export const PROVIDERS = ["runpod", "gmi", "brev"] as const;
+export type ProviderId = (typeof PROVIDERS)[number];
+/** The providers fv-control launches pods on besides Runpod. */
+export const OTHER_PROVIDERS = ["gmi", "brev"] as const;
+export type OtherProviderId = (typeof OTHER_PROVIDERS)[number];
+/** Where a worker's weights come from: the region's Runpod network volume, the Hub at pinned revisions at boot (owner approval), or none (fake engine). */
+export const WEIGHTS_SOURCES = ["volume", "hub", "none"] as const;
+export type WeightsSource = (typeof WEIGHTS_SOURCES)[number];
+/** A provider's own GPU product / instance type id (GMI product, Brev instanceType). */
+export const PROVIDER_GPU_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** A GMI IDC id (GET /v1/idcs: ^[a-zA-Z0-9._-]+$, max 50). */
+export const PROVIDER_REGION_RE = /^[A-Za-z0-9._-]{1,50}$/;
+
 /** Runpod's name limit (REST v1: PodCreateInput / EndpointCreateInput / TemplateCreateInput name maxLength 191). */
 export const RUNPOD_NAME_MAX = 191;
 
@@ -69,6 +85,16 @@ export const RESERVED_KEYS = new Set([
   "FV_DISPATCH_MODEL_FAMILIES",
   "FV_DISPATCH_ENDPOINT",
   "FV_DISPATCH_DIRECT_UPLOAD",
+  // GMI / Brev pods (providers.ts): their id, the weights plan, the tunnel report.
+  "FV_POD_ID",
+  "FV_POD_NAME",
+  "FV_PROVIDER",
+  "FV_WEIGHTS_SOURCE",
+  "FV_WEIGHTS_TREES_B64",
+  "FV_SCRIPTS_URL",
+  "FV_ENDPOINT_REPORT_URL",
+  "FV_ENDPOINT_REPORT_TOKEN",
+  "FV_BACKSTOP_API",
 ]);
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 

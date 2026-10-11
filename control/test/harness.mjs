@@ -75,8 +75,148 @@ export function startMock() {
       ],
     },
   };
+  // GMI Cloud (docs/serve/deploy-gmi-brev.md §2): REST under /gmi/v1, Bearer key. Containers boot like a pod:
+  // `/pod/gmi:<name>` serves fv-serve, and the boot's tunnel report goes to fv-control (FV_ENDPOINT_REPORT_URL).
+  m.gmi = {
+    calls: [],
+    templates: [],
+    containers: [
+      { id: "00000000-0000-4000-8000-0000000f0e1a", name: "someone-else", status: "running", reason: "", product: "container.h100.x1", idc: "us-denver-1", templateId: "t", createdAt: new Date().toISOString(), envs: [{ name: "SECRET", value: "foreign-secret" }] },
+      { id: "00000000-0000-4000-8000-00000000057a", name: "fv-pod-stray-0101000000", status: "running", reason: "", product: "container.h200.x1", idc: "us-denver-1", templateId: "t", createdAt: new Date().toISOString(), envs: [] },
+    ],
+    products: [
+      { name: "container.h200.x1", idc: "us-denver-1", type: "Container", price: 320, valid: true, spec: {}, gpuModel: "H200" },
+      { name: "container.b200.x1", idc: "us-denver-1", type: "Container", price: 900, valid: true, spec: {}, gpuModel: "B200" },
+    ],
+    boot: "ok", // ok | fail (the boot reports failed) | silent (no report)
+  };
+  // NVIDIA Brev (§3): the CLI's REST paths under /brev/api, Bearer token; the env rides in the startup script.
+  const brevType = (type, o) => ({
+    type,
+    supported_gpus: [{ count: 1, name: o.gpu, memory: "80GiB" }],
+    supported_storage: o.stoppable ? [{ size: "0B", type: "gp3", min_size: "10GiB", max_size: "16TiB", price_per_gb_hr: { currency: "USD", amount: "0.000132" } }] : [{ size: "850GiB", type: "ssd" }],
+    base_price: { currency: "USD", amount: o.price },
+    location: o.location,
+    provider: o.provider,
+    stoppable: o.stoppable ? true : null,
+    elastic_root_volume: o.stoppable ? true : null,
+    estimated_deploy_time: "7m0s",
+    is_available: true,
+    cloud_cred_id: o.cred,
+  });
+  m.brev = {
+    calls: [],
+    workspaces: [],
+    boots: [], // every simulated VM boot: {ws, name, status, kept, fetched, env, run, error}
+    startFail: false, // PUT …/start answers 409 (no capacity)
+    startHang: false, // PUT …/start leaves it STARTING (the restart times out)
+    boot: "ok",
+    types: [
+      brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
+      brevType("a100-test", { gpu: "A100", price: "1.800000", location: "houston-usa-1", provider: "shadeform", stoppable: false, cred: "shadeform-brev-1" }),
+    ],
+  };
+  // The Cloudflare API's tunnels and DNS (src/tunnels.ts): named tunnels of one account, records of the zones, the
+  // tunnels' connections (a simulated pod's cloudflared), and the edge routing <host> through them (/tunnel/<host>/…).
+  m.cf = {
+    token: null, // CF_TUNNEL_API_TOKEN (Bearer); unset: every tunnel / DNS call is refused
+    account: "acct",
+    zones: [{ id: "zone0maximal0000000000000000000", name: "maximal.llc" }],
+    tunnels: [], // {id, name, config_src, created_at, deleted_at, secret, token, config, connections: [{pod}]}
+    dns: [], // {id, zone, type, name, content, proxied, comment}
+    calls: [], // {method, path, auth}
+    fail: {}, // "<METHOD> <path regex source>" -> [status, code, message], once
+  };
+  const cfOk = (res, result, extra = {}) => json(res, 200, { success: true, errors: [], messages: [], result, ...extra });
+  const cfErr = (res, status, code, message) => json(res, status, { success: false, errors: [{ code, message }], messages: [], result: null });
+  const tunnelView = ({ secret, token, config, connections, ...t }) => ({ ...t, connections: connections.map((c) => ({ id: c.id, colo_name: "mock" })), status: connections.length ? "healthy" : "inactive" });
+  /** Where a host answers through the simulated edge: its proxied CNAME -> a live tunnel -> its ingress -> the pod connected to it. */
+  m.routeHost = (host) => {
+    const rec = m.cf.dns.find((r) => r.name === host && r.type === "CNAME" && r.proxied);
+    const tid = /^([0-9a-f-]{36})\.cfargotunnel\.com$/.exec(rec?.content || "")?.[1];
+    const t = m.cf.tunnels.find((x) => x.id === tid && !x.deleted_at);
+    const rule = t?.config?.ingress?.find((r) => r.hostname === host);
+    const conn = t?.connections.find((c) => m.pods.get(c.pod)?.desiredStatus === "RUNNING");
+    if (!rec) return { error: "no DNS record (1016)" };
+    if (!t) return { error: "no tunnel (1033)" };
+    if (rule?.service !== "http://127.0.0.1:8000") return { error: "no ingress rule for the host" };
+    if (!conn) return { error: "tunnel has no connection (1033)" };
+    return { pod: conn.pod };
+  };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
+  const uuid = () => wc.randomUUID();
+  /**
+   * A GMI / Brev pod's boot (providers.ts PROVIDER_BOOT): it serves at /pod/<key> and reports its "tunnel" URL to fv-control:
+   * with FV_TUNNEL_TOKEN (a named tunnel) its cloudflared connects with the token (checked against the simulated
+   * account) and it reports FV_TUNNEL_URL; else a quick tunnel (its /pod/<key> URL).
+   */
+  const simBoot = (key, env, mode, extra) => {
+    m.pods.set(key, { id: key, name: key.split(":")[1], payload: extra, env, image: extra.image, desiredStatus: "RUNNING", costPerHr: 0, created: Date.now(), provider: key.split(":")[0] });
+    if (mode === "silent" || !env.FV_ENDPOINT_REPORT_URL) return;
+    const report = (b) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key, ...b }) }).then((r) => (m.reports ||= []).push({ key, status: r.status, ...b })).catch((e) => (m.reports ||= []).push({ key, error: String(e) }));
+    const tunnel = () => {
+      if (!env.FV_TUNNEL_TOKEN) return report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" });
+      // cloudflared tunnel run: the token is {a, t, s} (base64 JSON); the tunnel must exist, live, with that secret.
+      let tok = null;
+      try { tok = JSON.parse(Buffer.from(env.FV_TUNNEL_TOKEN, "base64").toString()); } catch {}
+      const t = m.cf.tunnels.find((x) => x.id === tok?.t && x.secret === tok?.s && tok?.a === m.cf.account && !x.deleted_at);
+      if (!t) return report({ phase: "failed", url: "", detail: "named tunnel did not connect: Unauthorized: Invalid tunnel secret" });
+      t.connections.push({ id: uuid(), pod: key });
+      (m.tunnelConnects ||= []).push({ key, tunnel: t.id });
+      return report({ phase: "tunnel", url: env.FV_TUNNEL_URL, detail: "" });
+    };
+    setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : tunnel()), 300);
+  };
+  /**
+   * A Brev VM's boot (brev-park.ts): the startup script's bootstrap fetches the run script from fv-control with the
+   * boot token, the run script's env file is the pod's env, and its weights loop keeps trees on the VM's disk at the
+   * pinned revision (WEIGHTS_SH) and "downloads" the rest. Every boot is recorded in m.brev.boots.
+   */
+  const brevVmBoot = (w) => {
+    const url = /printf %s '([^']+)' > "\$D\/boot-url"/.exec(w.startupScript)?.[1];
+    const token = /printf 'Authorization: Bearer %s\\n' '([^']+)' > "\$D\/boot-header"/.exec(w.startupScript)?.[1];
+    const rec = { ws: w.id, name: w.name, status: 0, kept: [], fetched: [] };
+    m.brev.boots.push(rec);
+    if (!url || !token) return (rec.error = "no boot url / token in the startup script");
+    setTimeout(async () => {
+      try {
+        const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+        rec.status = r.status;
+        const run = await r.text();
+        if (!r.ok) return (rec.error = run.slice(0, 200));
+        rec.run = run;
+        // The env file the host script writes (base64 in its printf to $W/fv/env).
+        const envB64 = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '\$W\/fv\/env'/.exec(run)?.[1] || "";
+        const env = Object.fromEntries(Buffer.from(envB64, "base64").toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+        rec.env = env;
+        // The host script's own reports (brev-host.ts) come first: its facts, then container_started (or host_failed).
+        const hostReport = (phase, detail) =>
+          fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: `brev:${w.name}`, phase, url: "", detail }) })
+            .then((r) => (m.reports ||= []).push({ key: `brev:${w.name}`, status: r.status, phase }))
+            .catch(() => {});
+        if (env.FV_ENDPOINT_REPORT_URL) {
+          await hostReport("host", "user=ubuntu uid=1000 sudo=yes docker=/usr/bin/docker info=[27.1.1 runtimes=nvidia,runc,] gpu=[GPU 0: NVIDIA A10G] toolkit=[NVIDIA Container Toolkit CLI version 1.17.8] disk=[180G free of 197G] kernel=6.8.0 os=[ubuntu 22.04] ws=/home/ubuntu/workspace");
+          if (m.brev.boot === "hostfail") return void (await hostReport("host_failed", 'docker run (exit 125): docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]] | '));
+          await hostReport("heartbeat", "container: no container; last: ");
+          await hostReport("container_started", "c0ffee000000 image");
+          // The host watcher: the container exits (as live 2026-10-10: fv-serve's config refused) or /health answers.
+          if (m.brev.boot === "exit") return void (await hostReport("container_exited", "container exited exit=2 oom=false: [fv-boot] start | fv-serve: config: auth.key_store = d1 needs the D1 settings | "));
+          setTimeout(() => hostReport("serve_ready", "fv-serve /health 200, 1 s after the tunnel"), 800);
+        }
+        if (env.FV_WEIGHTS_SOURCE === "hub")
+          for (const line of Buffer.from(env.FV_WEIGHTS_TREES_B64 || "", "base64").toString().split("\n")) {
+            const [kind, tree, , rev] = line.split("\t");
+            if (kind !== "tree") continue;
+            if (w.disk[tree] === rev) rec.kept.push(tree);
+            else rec.fetched.push(tree), m.brev.boot === "ok" && (w.disk[tree] = rev);
+          }
+        simBoot(`brev:${w.name}`, env, m.brev.boot, { startupScript: w.startupScript, image: /--entrypoint bash '([^']+)'/.exec(run)?.[1] });
+      } catch (e) {
+        rec.error = String(e);
+      }
+    }, 50);
+  };
   const digestOf = (tag) => "sha256:" + Buffer.from(tag).toString("hex").padEnd(64, "0").slice(0, 64);
   const json = (res, code, body) => {
     res.writeHead(code, { "content-type": "application/json" });
@@ -89,9 +229,89 @@ export function startMock() {
     const raw = Buffer.concat(chunks).toString();
     let body = null;
     try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
-    const p = url.pathname;
+    let p = url.pathname;
     m.log.push({ method: req.method, path: p, body, auth: req.headers.authorization || "" });
     const bearer = (req.headers.authorization || "").replace(/^Bearer /, "");
+    // ---- the Cloudflare edge for a named tunnel's host (FV_TUNNEL_URL_TEMPLATE): DNS -> tunnel -> ingress -> the connected pod
+    const tm0 = /^\/tunnel\/([a-z0-9.-]+)(\/.*)$/.exec(p);
+    if (tm0) {
+      const r = m.routeHost(tm0[1]);
+      (m.tunnelHits ||= []).push({ host: tm0[1], route: tm0[2], ...r });
+      if (r.error) { res.writeHead(530); return res.end(r.error); }
+      p = `/pod/${r.pod}${tm0[2]}`;
+    }
+    // ---- the Cloudflare API: tunnels and DNS (src/tunnels.ts)
+    if (/^\/cf\/(accounts\/[^/]+\/cfd_tunnel|zones)/.test(p)) {
+      const c = m.cf;
+      const rest = p.slice("/cf".length);
+      c.calls.push({ method: req.method, path: rest + (url.search || ""), auth: !!c.token && bearer === c.token });
+      if (!c.token || bearer !== c.token) return cfErr(res, 403, 10000, "Authentication error");
+      for (const [k, v] of Object.entries(c.fail)) {
+        const [meth, re] = [k.slice(0, k.indexOf(" ")), k.slice(k.indexOf(" ") + 1)];
+        if (meth === req.method && new RegExp(re).test(rest)) { delete c.fail[k]; return cfErr(res, v[0], v[1], v[2]); }
+      }
+      let mm = /^\/accounts\/([^/]+)\/cfd_tunnel(?:\/([^/]+))?(?:\/(configurations|token|connections))?$/.exec(rest);
+      if (mm) {
+        if (mm[1] !== c.account) return cfErr(res, 403, 10000, "Authentication error");
+        if (!mm[2] && req.method === "POST") {
+          if (!/^[\w.-]{1,64}$/.test(body?.name || "") || body.config_src !== "cloudflare") return cfErr(res, 400, 1001, "name and config_src cloudflare");
+          if (c.tunnels.some((t) => t.name === body.name && !t.deleted_at)) return cfErr(res, 409, 1013, "You already have a tunnel with this name");
+          const id = uuid();
+          const secret = Buffer.from(wc.getRandomValues(new Uint8Array(32))).toString("base64");
+          const t = { id, name: body.name, config_src: "cloudflare", created_at: new Date().toISOString(), deleted_at: null, secret, token: Buffer.from(JSON.stringify({ a: c.account, t: id, s: secret })).toString("base64"), config: null, connections: [] };
+          c.tunnels.push(t);
+          return cfOk(res, tunnelView(t));
+        }
+        if (!mm[2] && req.method === "GET") {
+          let l = c.tunnels;
+          if (url.searchParams.get("is_deleted") === "false") l = l.filter((t) => !t.deleted_at);
+          if (url.searchParams.get("name")) l = l.filter((t) => t.name === url.searchParams.get("name"));
+          const per = Number(url.searchParams.get("per_page") || 20), page = Number(url.searchParams.get("page") || 1);
+          return cfOk(res, l.slice((page - 1) * per, page * per).map(tunnelView), { result_info: { page, per_page: per, count: Math.min(per, l.length), total_count: l.length } });
+        }
+        const t = c.tunnels.find((x) => x.id === mm[2]);
+        if (!t) return cfErr(res, 404, 1003, "Tunnel not found");
+        if (!mm[3] && req.method === "GET") return cfOk(res, tunnelView(t));
+        if (!mm[3] && req.method === "DELETE") {
+          if (t.deleted_at) return cfErr(res, 400, 1022, "Tunnel is already deleted");
+          if (t.connections.length) return cfErr(res, 400, 1022, "Cannot delete a tunnel with active connections");
+          t.deleted_at = new Date().toISOString();
+          return cfOk(res, tunnelView(t));
+        }
+        if (mm[3] === "configurations" && req.method === "PUT") {
+          const ing = body?.config?.ingress;
+          if (!Array.isArray(ing) || !ing.length || ing.at(-1).hostname || !ing.at(-1).service) return cfErr(res, 400, 1056, "the last ingress rule must be a catch-all");
+          t.config = body.config;
+          return cfOk(res, { tunnel_id: t.id, version: 1, config: t.config });
+        }
+        if (mm[3] === "configurations" && req.method === "GET") return cfOk(res, { tunnel_id: t.id, config: t.config });
+        if (mm[3] === "token" && req.method === "GET") return t.deleted_at ? cfErr(res, 404, 1003, "Tunnel not found") : cfOk(res, t.token);
+        if (mm[3] === "connections" && req.method === "DELETE") { t.connections = []; return cfOk(res, null); }
+        return cfErr(res, 405, 10405, "method not allowed");
+      }
+      if (rest === "/zones" && req.method === "GET") return cfOk(res, c.zones.filter((z) => !url.searchParams.get("name") || z.name === url.searchParams.get("name")));
+      mm = /^\/zones\/([^/]+)\/dns_records(?:\/([^/]+))?$/.exec(rest);
+      if (mm) {
+        const z = c.zones.find((x) => x.id === mm[1]);
+        if (!z) return cfErr(res, 404, 7003, "Could not route to /zones/x, perhaps your object identifier is invalid?");
+        if (!mm[2] && req.method === "POST") {
+          if (body?.type !== "CNAME" || !body.name?.endsWith(`.${z.name}`) || !body.content) return cfErr(res, 400, 9000, "invalid record");
+          if (c.dns.some((r) => r.zone === z.id && r.name === body.name)) return cfErr(res, 400, 81053, "An A, AAAA, or CNAME record with that host already exists.");
+          const r = { id: uuid().replace(/-/g, ""), zone: z.id, type: body.type, name: body.name, content: body.content, proxied: !!body.proxied, ttl: body.ttl, comment: body.comment ?? null };
+          c.dns.push(r);
+          return cfOk(res, r);
+        }
+        if (!mm[2] && req.method === "GET") {
+          const pre = url.searchParams.get("comment.startswith");
+          return cfOk(res, c.dns.filter((r) => r.zone === z.id && (!pre || (r.comment || "").startsWith(pre))));
+        }
+        const r = c.dns.find((x) => x.zone === z.id && x.id === mm[2]);
+        if (!r) return cfErr(res, 404, 81044, "Record does not exist.");
+        if (req.method === "GET") return cfOk(res, r);
+        if (req.method === "DELETE") { c.dns = c.dns.filter((x) => x !== r); return cfOk(res, { id: r.id }); }
+      }
+      return cfErr(res, 404, 7000, `mock: no Cloudflare route ${req.method} ${rest}`);
+    }
 
     // ---- Runpod REST
     if (p.startsWith("/rp/rest/")) {
@@ -224,6 +444,108 @@ export function startMock() {
       if (path === "instances/metrics") return ok({ metrics: (d.selector.ById || []).map((id) => ({ instance_id: id, node_id: "n", gpus: [{ gpu_index: "0", gpu_utilization_percent: 50 }] })) });
       if (path === "instances/terminate") { const t = sel(d.selector); for (const i of t) i.status = "Inactive"; return ok({ terminated: t }); }
       return json(res, 404, `no route ${path}`);
+    }
+    // ---- GMI Cloud
+    if (p.startsWith("/gmi/v1/")) {
+      const g = m.gmi;
+      const rest = p.slice("/gmi/v1".length);
+      g.calls.push({ method: req.method, path: rest, auth: bearer === m.gmiKey });
+      if (bearer !== m.gmiKey) return json(res, 401, { code: 0, group: "auth_verify", message: "invalid token" });
+      if (rest === "/containers/products") return json(res, 200, g.products.filter((x) => !url.searchParams.get("idc") || x.idc === url.searchParams.get("idc")));
+      if (rest === "/templates" && req.method === "GET") return json(res, 200, g.templates);
+      if (rest === "/templates" && req.method === "POST") {
+        if (!/^([A-Za-z0-9][A-Za-z0-9_\-. ]*)?[A-Za-z0-9]$/.test(body?.name || "") || !body?.path) return json(res, 400, { reason: "bad template" });
+        const t = { id: `tpl-${g.templates.length + 1}`, ...body };
+        g.templates.push(t);
+        return json(res, 200, { id: t.id });
+      }
+      if (rest === "/containers" && req.method === "GET") return json(res, 200, g.containers);
+      if (rest === "/containers" && req.method === "POST") {
+        if (g.failCreate > 0) { g.failCreate--; return json(res, 503, { reason: "no capacity for the product" }); }
+        for (const k of ["name", "templateId", "product", "idc"]) if (!body?.[k]) return json(res, 400, { reason: `${k} is required` });
+        if (!/^([A-Za-z0-9][A-Za-z0-9_\-. ]*)?[A-Za-z0-9]$/.test(body.name)) return json(res, 400, { reason: "bad name" });
+        if (!g.templates.some((t) => t.id === body.templateId)) return json(res, 404, { reason: "template not found" });
+        if (!g.products.some((x) => x.name === body.product)) return json(res, 400, { reason: `no product ${body.product}` });
+        const id = `00000000-0000-4000-8000-${String(g.containers.length + 1).padStart(12, "0")}`;
+        const env = Object.fromEntries((body.envs || []).map((e) => [e.name, e.value]));
+        g.containers.push({ id, name: body.name, status: "running", reason: "", product: body.product, idc: body.idc, templateId: body.templateId, createdAt: new Date().toISOString(), envs: body.envs, command: body.command, args: body.args, ports: body.ports });
+        simBoot(`gmi:${body.name}`, env, g.boot, { command: body.command, args: body.args, image: g.templates.find((t) => t.id === body.templateId)?.path });
+        return json(res, 200, [{ id }]);
+      }
+      let gm = /^\/containers\/([^/]+)(\/logs)?$/.exec(rest);
+      if (gm) {
+        const c = g.containers.find((x) => x.id === gm[1]);
+        if (!c) return json(res, 404, { reason: "container not found" });
+        if (gm[2]) {
+          // A container log that leaks the key and (a named tunnel's pod) its tunnel token: fv-control must scrub both.
+          const tt = (c.envs || []).find((e) => e.name === "FV_TUNNEL_TOKEN")?.value;
+          res.writeHead(200, { "content-type": "text/plain" });
+          return res.end(`[fv-boot] start (gmi gmi:${c.name})\n[fv-boot] tunnel ok\nleak? ${m.gmiKey}\n${tt ? `leak? TUNNEL_TOKEN=${tt}\n` : ""}`);
+        }
+        if (req.method === "GET") return json(res, 200, c);
+        if (req.method === "DELETE") {
+          g.containers = g.containers.filter((x) => x.id !== c.id);
+          m.pods.delete(`gmi:${c.name}`);
+          return json(res, 200, { result: "deleted" });
+        }
+      }
+      return json(res, 404, { reason: `mock: no GMI route ${req.method} ${rest}` });
+    }
+    // ---- NVIDIA Brev (the CLI's API)
+    if (p.startsWith("/brev/api/")) {
+      const b = m.brev;
+      const rest = p.slice("/brev/api".length);
+      b.calls.push({ method: req.method, path: rest, auth: bearer === m.brevToken });
+      if (bearer !== m.brevToken) return json(res, 401, { message: "unauthorized" });
+      const om = /^\/organizations\/([^/]+)\/workspaces$/.exec(rest);
+      if (om && om[1] !== m.brevOrg) return json(res, 403, { message: "not a member" });
+      if (om && req.method === "GET") return json(res, 200, b.workspaces.map(({ startupScript, body: _b, disk: _d, ...w }) => w));
+      // The instance-type listing (shape read live 2026-10-10): each type's cloud_cred_id, stoppable, prices.
+      const tm = /^\/instances\/alltypesavailable\/([^/]+)$/.exec(rest);
+      if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
+      if (om && req.method === "POST") {
+        // brev-cli main's body: the old one (vmOnlyMode + startupScript, no workspaceVersion) is refused as live.
+        // Live (2026-10-10): a body missing any of Go's non-omitempty fields got this 400 even with workspaceVersion v1.
+        const full = ["description", "primaryApplicationId", "applications", "startupScript", "gitRepo", "initBranch", "startupScriptPath", "dotBrevPath", "baseImage", "vmOnlyMode", "portMappings", "execsV1", "reposV1", "labels", "files", "launchJupyterOnStart", "diskStorage", "isStoppable"];
+        if (body?.workspaceVersion !== "v1" || full.some((k) => !(k in body)) || body.vmOnlyMode !== false || body.startupScript !== "")
+          return json(res, 400, { errors: [{ type: "BadRequestError", message: "Legacy workspace version unsupported" }] });
+        const type = b.types.find((t) => t.type === body.instanceType);
+        const script = body?.vmBuild?.lifeCycleScriptAttr?.script;
+        if (!body?.name || !type || body.cloudCredId !== type.cloud_cred_id || !body.workspaceTemplateId || !body.workspaceClassId || !script)
+          return json(res, 400, { errors: [{ type: "BadRequestError", message: "name, instanceType (listed), its cloudCredId, workspaceTemplateId, workspaceClassId, vmBuild.lifeCycleScriptAttr.script" }] });
+        const id = `ws${String((b.seq = (b.seq || 0) + 1)).padStart(6, "0")}`;
+        const w = { id, name: body.name, status: "RUNNING", healthStatus: "HEALTHY", instanceType: body.instanceType, dns: `${id}.brev.example`, createdAt: new Date().toISOString(), startupScript: script, body, disk: {}, diskStorage: body.diskStorage };
+        b.workspaces.push(w);
+        brevVmBoot(w);
+        return json(res, 201, { id, name: body.name, status: "DEPLOYING", instanceType: body.instanceType, workspaceVersion: "v1" });
+      }
+      const wm = /^\/workspaces\/([^/]+)(\/(stop|start))?$/.exec(rest);
+      if (wm) {
+        const w = b.workspaces.find((x) => x.id === wm[1]);
+        if (!w) return json(res, 404, { message: "workspace not found" });
+        if (req.method === "GET" && !wm[3]) { const { startupScript, body: _b, disk: _d, ...o } = w; return json(res, 200, o); }
+        if (req.method === "DELETE" && !wm[3]) {
+          b.workspaces = b.workspaces.filter((x) => x.id !== w.id);
+          m.pods.delete(`brev:${w.name}`);
+          return json(res, 200, {});
+        }
+        // Stop keeps the disk (w.disk: the trees on it); start fails without capacity, or hangs, or boots again.
+        if (req.method === "PUT" && wm[3] === "stop") {
+          const t = b.types.find((x) => x.type === w.instanceType);
+          if (!t?.stoppable) return json(res, 400, { errors: [{ type: "BadRequestError", message: "instance type is not stoppable" }] });
+          w.status = "STOPPED";
+          m.pods.delete(`brev:${w.name}`);
+          return json(res, 200, { id: w.id, status: "STOPPING" });
+        }
+        if (req.method === "PUT" && wm[3] === "start") {
+          if (b.startFail) return json(res, 409, { errors: [{ type: "ConflictError", message: "no capacity in the same provider/region" }] });
+          if (w.status !== "STOPPED") return json(res, 409, { errors: [{ type: "ConflictError", message: `workspace is ${w.status}` }] });
+          w.status = b.startHang ? "STARTING" : "RUNNING";
+          if (!b.startHang) brevVmBoot(w);
+          return json(res, 200, { id: w.id, status: "STARTING" });
+        }
+      }
+      return json(res, 404, { message: `mock: no Brev route ${req.method} ${rest}` });
     }
     // ---- GHCR
     if (p === "/ghcr/token") return json(res, 200, { token: "anon" });
@@ -399,7 +721,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GMI_API: `${base}/gmi`, BREV_API_URL: `${base}/brev`, FV_ENDPOINT_URL_RE: "^http://127\\.0\\.0\\.1:\\d+/pod/(gmi|brev):fv-[a-z0-9-]+$", GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };
@@ -431,6 +753,8 @@ export const SECRETS = {
   GITHUB_PAT: "github_pat_TEST_0123456789",
   CLOUDRIFT_API_KEY: "crk_TEST_0123456789abcdef",
   CLOUDFLARE_API_KEY: "cf_TEST_0123456789abcdef",
+  GMI_API_KEY: "gmi_TEST_0123456789abcdef",
+  BREV_API_TOKEN: "brev_TEST_0123456789abcdef",
   CONTROL_KEK: b64(wc.getRandomValues(new Uint8Array(32))),
   SESSION_SECRET: "sess_" + Buffer.from(wc.getRandomValues(new Uint8Array(24))).toString("hex"),
 };

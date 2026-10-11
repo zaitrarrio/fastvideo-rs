@@ -580,11 +580,70 @@ async function podNameMap() {
 }
 
 // ---------------------------------------------------------------- pods
+// NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): stopped instances that keep their weights for a warm
+// restart, billed as storage; the owner deletes one, or puts a held one (its restart failed) back into the warm pool.
+function brevParkedCard(pk, redraw) {
+  const trees = (p) => Object.entries(p.trees || {}).map(([t, rev]) => `${t}@${String(rev).slice(0, 7)}`).join(", ") || "–";
+  return card(
+    `Parked Brev instances (${pk.parked.length}): $${pk.storage_usd_per_day.toFixed(2)}/day storage`,
+    h("p", { class: "muted small" }, `A Brev pod of a stoppable type is stopped (not deleted) when its cluster stops, keeping its weights; the next launch of the same type and trees restarts it. At most ${pk.policy.brev_park_max} parked, ${pk.policy.brev_park_max_days} days each (policies brev_park_*); then the oldest is deleted. Held: its restart failed, kept for you.`),
+    table(
+      [
+        { label: "instance", get: (p) => h("span", { title: p.workspace_id }, p.name) },
+        { label: "state", get: (p) => badge(p.state, p.state === "held" ? "warn" : "good") },
+        { label: "type", get: (p) => p.instance_type },
+        { label: "weights", get: (p) => trees(p) },
+        { label: "disk", get: (p) => (p.disk_gb ? `${p.disk_gb} GB` : "–"), num: true },
+        { label: "$/day", get: (p) => fmt$(p.storage_usd_per_day), num: true },
+        { label: "parked", get: (p) => (p.parked_days === null ? "–" : `${p.parked_days.toFixed(1)} d`), num: true },
+        { label: "note", get: (p) => p.note || "" },
+        {
+          label: "",
+          get: (p) =>
+            h(
+              "span",
+              { class: "row" },
+              p.state === "held" ? h("button", { onclick: async () => { await act("unpark", () => api(`/api/providers/brev/parked/${p.workspace_id}/unpark`, { method: "POST", body: {} })); redraw(); } }, "Unpark") : "",
+              h("button", { class: "danger", onclick: async () => { if (!confirm(`Delete ${p.name} and its weights (${trees(p)})? The next launch downloads them again. (audited)`)) return; await act("delete", () => api(`/api/providers/brev/parked/${p.workspace_id}/delete`, { method: "POST", body: {} })); redraw(); } }, "Delete"),
+            ),
+        },
+      ],
+      pk.parked,
+      "No parked instances.",
+    ),
+  );
+}
+// Named pod tunnels (docs/serve/deploy-gmi-brev.md §6.4): how GMI / Brev pods are reached, what is wrong with the
+// settings (said loudly: a host Universal SSL does not cover), and the tunnels fv-control made.
+function tunnelsCard(tv) {
+  const s = tv.settings;
+  return card(
+    `Pod tunnels (GMI / Brev): ${s.mode === "named" ? "named" : "quick"}${tv.tunnels.length ? ` · ${tv.tunnels.length} recorded` : ""}`,
+    h("p", { class: "muted small" }, s.note),
+    s.error ? h("div", { class: "alert", "data-tunnel-error": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("error", "critical"), " ", s.error)) : "",
+    s.warning ? h("div", { class: "alert", "data-tunnel-warning": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("warning", "warn"), " ", s.warning)) : "",
+    tv.tunnels.length
+      ? table(
+          [
+            { label: "pod", get: (x) => h("a", { href: `#/pod/${x.pod_id}` }, x.pod_id) },
+            { label: "host", get: (x) => x.host },
+            { label: "tunnel", get: (x) => h("span", { title: x.tunnel_id || "" }, x.name) },
+            { label: "state", get: (x) => badge(x.state, x.state === "live" ? "good" : x.state === "delete_failed" ? "critical" : "warn") },
+            { label: "note", get: (x) => x.note || "", wrap: true },
+          ],
+          tv.tunnels,
+          "",
+        )
+      : "",
+  );
+}
 async function pagePods(main) {
-  const r = await api("/api/pods");
+  const [r, pk, tv] = await Promise.all([api("/api/pods"), api("/api/providers/brev/parked").catch(() => null), api("/api/tunnels").catch(() => null)]);
   const t = Date.now();
   main.replaceChildren(
     h("h1", {}, "Pods"),
+    ...(tv && (tv.settings.mode === "named" || tv.settings.warning || tv.tunnels.length) ? [tunnelsCard(tv)] : []),
+    ...(pk && (pk.enabled || pk.parked.length) ? [brevParkedCard(pk, () => pagePods(main))] : []),
     card(
       `All pods of the Runpod account (${r.pods.length})`,
       table(

@@ -167,6 +167,11 @@ Columns:
 | pools[].fake_models | chips | `FAKE_MODELS` | the cpu variant: fake only | zod enum | **free** (comma list) |
 | pools[].max_queued | number | 0–10000 | — | zod | number |
 | pools[].job_timeout_s / stale_after_s | number s | 10–86400 | stale ≤ job timeout | zod refine | number |
+| pools[].provider | select (live: off providers say why) | runpod, gmi, brev | gmi/brev: no gpu_types, cpu_flavors, vcpu, volume, regions; compute GPU | zod enum + `providerIssues` (configured, PUBLIC_URL) | new (docs/serve/deploy-gmi-brev.md) |
+| pools[].provider_gpu | select (GMI_PRODUCTS / BREV_INSTANCE_TYPES) | `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` | gmi/brev: required; the owner's allow-list; price ≤ max_gpu_dph (live) | zod + live | new |
+| pools[].provider_region | text | GMI IDC id | gmi only | zod | new |
+| pools[].weights_source | select | volume (Runpod), hub, none | gmi/brev: hub or none; models need hub | zod refine | new |
+| pools[].hub_download_approved | toggle | bool | hub: required, and the Worker's FV_HUB_DOWNLOADS_APPROVED=1 | `providerIssues` | new |
 | JSON tab | CodeMirror, schema lint + server issues at their paths | — | Save off while the JSON does not parse or has issues | — | Save stayed on while the JSON did not parse |
 
 ### Standalone pod launch (`#/standalone`) — schema `standalone-launch`, `POST /api/standalone/validate`
@@ -190,6 +195,9 @@ Columns:
 | max_gpu_dph | number $/hr | 0.1–50 | ≥ the cheapest candidate GPU (live) | zod + live | absent |
 | auth, log_level | segmented, select | enums | — | zod | absent |
 | env | env editor | key rule, not reserved, typed known keys, secrets masked | — | zod + `validateVar` | **textarea `KEY=value`** |
+| provider | select (live; an off provider shows its reason) | runpod, gmi, brev | gmi/brev hide the Runpod fields (compute, region, gpu_types, volume, disk) | zod + `providerIssues` | new |
+| provider_gpu, provider_region | select (the owner's allow-list), text (gmi) | product / IDC patterns | gmi/brev only; brev: no region | zod + live | new |
+| weights_source, weights_download_approved | select, toggle | hub, none; bool | approval only with hub, plus FV_HUB_DOWNLOADS_APPROVED=1 | zod + `providerIssues` | new |
 | (Launch) | disabled until valid; image preflight first | — | — | `up` also refuses | always enabled |
 
 ### Serverless (`#/serverless`) — schema `serverless-endpoint`, `POST /api/serverless/validate`

@@ -633,6 +633,33 @@ The collector runs every minute (`collector.ts`):
   defaults to `cents`). Only RTX PRO 6000 and RTX 5090 (`rtxpro6000-*`,
   `rtx59-*`) are allowed: the price route refuses other GPUs (400), and the
   cron terminates our live rental on any other type (`cloudrift_type`).
+- **GMI Cloud and NVIDIA Brev (launch providers, docs/serve/deploy-gmi-brev.md).**
+  A pool or standalone pod with `provider: gmi | brev` runs there (pod ids
+  `gmi:<name>` / `brev:<name>`). Secrets `GMI_API_KEY`, `BREV_API_TOKEN`;
+  vars `GMI_PRODUCTS`, `GMI_DEFAULT_IDC`, `GMI_BUDGET_USD`,
+  `GMI_PRICE_DIVISOR`, `BREV_ORG_ID`, `BREV_INSTANCE_TYPES`, `BREV_PRICES`,
+  `BREV_BUDGET_USD`, `FV_HUB_DOWNLOADS_APPROVED`; optional secret
+  `FV_PROVIDER_SECRET_ENV`. Each is off (and says why) until its secrets
+  are set. The cron lists their fv-named instances into `pods`
+  (`provider = 'gmi' | 'brev'`, owner `pod:<name>` / `cluster:<name>`),
+  books the cost recorded at create, raises `<p>_orphan` for an fv-named
+  instance it did not record (never touched), and warns at 80 % of the
+  monthly budget and stops that provider's clusters at 100 % (`<p>_budget`;
+  neither provider has a balance API). `GET /api/providers` lists all four.
+  Their pods are reached through a **named Cloudflare Tunnel per pod**
+  (`src/tunnels.ts`, migration 0009 `pod_tunnels`, deploy-gmi-brev.md §6.4)
+  when the secret `CF_TUNNEL_API_TOKEN` and the vars
+  `FV_TUNNEL_HOST_TEMPLATE` (`{pod}-fv-pods.<zone>`: one level below the
+  zone, which Universal SSL covers; deeper is warned about) and
+  `FV_TUNNEL_ZONE` are set (with `CF_ACCOUNT_ID`); else through a quick
+  tunnel. fv-control makes the tunnel, its ingress and a proxied CNAME
+  (comment `fv-control <pod>`) before the provider's create, gives the pod
+  the token in its env only, accepts only that pod's URL, deletes record and
+  tunnel with the pod (a parked Brev instance keeps them), and the cron
+  deletes leaks and raises `tunnel_orphan` for unrecorded `fv-` tunnels /
+  `fv-control` records (never touched). `GET /api/tunnels`,
+  `POST /api/tunnels/sweep`; `fv-control.sh tunnels [--all] | sweep`; the
+  Pods page's tunnels card.
 
 ## 8. Alerts and policies
 

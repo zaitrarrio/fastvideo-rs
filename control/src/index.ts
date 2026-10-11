@@ -4,7 +4,8 @@
 // /ingest, a per-minute cron (collector.ts) and one ClusterOps Durable
 // Object per cluster (cluster/do.ts).
 import { Hono, type Context } from "hono";
-import { DEFAULT_POLICIES, policies } from "./alerts";
+import { DEFAULT_POLICIES, policies, syncAlerts } from "./alerts";
+import { tunnelSettings, tunnelsView, tunnelSweep } from "./tunnels";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
@@ -58,6 +59,9 @@ import { serverlessRoutes } from "./serverless/routes";
 import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
+import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
+import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -101,6 +105,10 @@ app.post("/api/auth/logout", async (c) => {
 });
 app.get("/api/auth/me", async (c) => c.json(await whoami(c)));
 app.post("/ingest/v1/logs", async (c) => c.json(await ingest(c.env, c.req.raw, c.executionCtx as ExecutionContext)));
+/** A GMI / Brev pod reports its phase and tunnel URL (providers.ts PROVIDER_BOOT) with its cluster's ingest token. */
+app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, c.req.raw)));
+/** A Brev VM fetches its current launch (run script) at every boot with its boot token (brev-park.ts); refused while parked. */
+app.get("/ingest/v1/brev-boot", async (c) => brevBoot(c.env, c.req.raw));
 
 // ---------------- everything else under /api needs auth
 app.use("/api/*", requireAuth);
@@ -157,8 +165,64 @@ async function cloudriftView(env: Env) {
   return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
 }
 app.get("/api/providers", async (c) =>
-  c.json({ providers: [{ id: "runpod", enabled: true }, { id: "cloudrift", enabled: cloudriftEnabled(c.env), ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) }] }),
+  c.json({
+    providers: [
+      { id: "runpod", enabled: true, launch: true },
+      { id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) },
+      // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): launch targets for standalone pods and pools.
+      ...(await Promise.all(OTHER_PROVIDERS.map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
+    ],
+  }),
 );
+/** Price and stock of a GMI / Brev GPU product (the planner's view). */
+app.get("/api/providers/:p/offers", async (c) => {
+  const p = c.req.param("p") as OtherProviderId;
+  if (!(OTHER_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no launch provider ${p} (${OTHER_PROVIDERS.join(", ")})`);
+  const impl = providerImpl(p);
+  const off = impl.off(c.env);
+  if (off) throw new HttpError(400, `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)`);
+  const gpus = c.req.query("gpu") ? [c.req.query("gpu")!] : impl.gpus(c.env);
+  const region = c.req.query("region") || undefined;
+  return c.json({ provider: p, offers: await Promise.all(gpus.map((g) => impl.offer(c.env, g, region))) });
+});
+/** NVIDIA Brev keep-on-stop (brev-park.ts): parked / held instances, their weights, disk and storage $/day. */
+app.get("/api/providers/brev/parked", async (c) => c.json({ enabled: !providerImpl("brev").off(c.env), ...(await parkedView(c.env)) }));
+/** Deletes one parked / held Brev instance (only ours: recorded and fv- named). */
+app.post("/api/providers/brev/parked/:id/delete", async (c) => {
+  requireAdmin(c);
+  const id = c.req.param("id");
+  const msg = await deleteParked(c.env, id, `deleted by ${actor(c)}`);
+  await auditC(c, { action: "brev.parked.delete", target: id, detail: msg });
+  return c.json({ ok: true, message: msg });
+});
+/** A held instance (its restart failed) back into the warm pool: the next launch of its type may restart it. */
+app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
+  requireAdmin(c);
+  const id = c.req.param("id");
+  const r = await unpark(c.env, id);
+  await auditC(c, { action: "brev.parked.unpark", target: id });
+  return c.json({ ok: true, name: r.name, state: r.state });
+});
+/** Named pod tunnels (tunnels.ts): the settings (mode, template, warning) and the recorded tunnels; ?all=1 with deleted ones. */
+app.get("/api/tunnels", async (c) => c.json(await tunnelsView(c.env, c.req.query("all") === "1")));
+/** The cron's tunnel pass now (leaks deleted, the account and zone listed for strays). */
+app.post("/api/tunnels/sweep", async (c) => {
+  requireAdmin(c);
+  const r = await tunnelSweep(c.env, undefined, true);
+  if (r.actions.length) await auditC(c, { action: "tunnels.sweep", detail: r.actions.join("; ").slice(0, 1900) });
+  await syncAlerts(c.env, r.alerts, r.kinds);
+  return c.json(r);
+});
+/** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none), then the pod's
+ * reports (POST /ingest/v1/endpoint: a Brev host's facts, failures, heartbeat; the container's phases). */
+app.get("/api/pods/:id/provider-logs", async (c) => {
+  const id = c.req.param("id");
+  if (!isOtherPod(id)) throw new HttpError(400, "a GMI / Brev pod id (gmi:<name>, brev:<name>); Runpod pods: /api/pods/:id/runpod-logs");
+  const lines = await otherPodLogs(c.env, id).catch(() => [] as string[]);
+  const report = await lastReport(c.env, id);
+  const reports = await reportHistory(c.env, id);
+  return c.json({ source: splitKey(id)!.provider, lines: [...lines.slice(-1000), ...reportLines(reports, report)].map((l) => scrub(c.env, l)), report, reports });
+});
 app.get("/api/providers/cloudrift/price", async (c) => {
   const gpu = c.req.query("gpu") || "";
   if (!gpu) throw new HttpError(400, "gpu: a brand (RTX PRO 6000) or a variant name");
@@ -511,6 +575,12 @@ app.post("/api/standalone/validate", async (c) => {
     const ex = e as HttpError;
     issues.push(...mapLaunchIssues((ex.extra?.issues as Issue[]) || [{ path: [], message: ex.message }]));
   }
+  // An off provider (its secrets unset) says so at its field even while the rest of the request does not parse.
+  if ((OTHER_PROVIDERS as readonly string[]).includes(b?.provider) && !issues.some((i) => i.path[0] === "provider")) {
+    const impl = providerImpl(b.provider as OtherProviderId);
+    const off = impl.off(c.env);
+    if (off) issues.push({ path: ["provider"], message: `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)` });
+  }
   if (typeof b?.name === "string" && !issues.some((i) => i.path[0] === "name")) {
     const r = await checkName(c.env, "cluster", b.name);
     if (!r.ok && r.problem) issues.push({ path: ["name"], message: r.problem });
@@ -521,6 +591,10 @@ app.post("/api/standalone/validate", async (c) => {
     issues.push(...mapLaunchIssues(live.issues));
     warnings.push(...mapLaunchIssues(live.warnings));
   }
+  // Named pod tunnels: a host two levels below the zone (or a half-configured setup) shows at once, at the provider.
+  const tun = tunnelSettings(c.env);
+  if ((OTHER_PROVIDERS as readonly string[]).includes(b?.provider) && tun.warning && !warnings.some((w) => w.message.includes(tun.warning!)))
+    warnings.push({ path: ["provider"], message: `${tun.mode === "named" ? "WARNING" : "NOTE"}: ${tun.warning}` });
   return c.json({ ok: !issues.length, issues, warnings, spec: issues.length ? null : spec });
 });
 /** Launch: define the pod and start it (start: false only defines it). The same `up` as a cluster: price check, image preflight, placement, wait until ready. */
