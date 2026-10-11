@@ -24,13 +24,16 @@ export function parseJson<T>(s: string | null | undefined, fallback: T): T {
   }
 }
 
-/** Removes every secret this Worker holds from a string (error messages from upstreams). */
+/** A Cloudflare tunnel token: base64 JSON starting {"a":" (eyJhIjoi), any base64 alphabet. */
+export const TUNNEL_TOKEN_RE = /eyJhIjoi[A-Za-z0-9+/_=-]{16,}/g;
+/** Removes every secret this Worker holds from a string (error messages from upstreams), and any tunnel token. */
 export function scrub(env: Env, s: string): string {
   let out = s;
-  for (const v of [env.RUNPOD_API_KEY, env.CLOUDRIFT_API_KEY, env.CLOUDFLARE_API_KEY, env.GITHUB_PAT, env.GITHUB_RUNNER_PAT, env.BUILD_CACHE_R2_SECRET_ACCESS_KEY, env.CONTROL_KEK, env.SESSION_SECRET, env.GMI_API_KEY, env.BREV_API_TOKEN]) {
+  for (const v of [env.RUNPOD_API_KEY, env.CLOUDRIFT_API_KEY, env.CLOUDFLARE_API_KEY, env.GITHUB_PAT, env.GITHUB_RUNNER_PAT, env.BUILD_CACHE_R2_SECRET_ACCESS_KEY, env.CONTROL_KEK, env.SESSION_SECRET, env.GMI_API_KEY, env.BREV_API_TOKEN, env.CF_TUNNEL_API_TOKEN]) {
     if (v && v.length >= 8) out = out.split(v).join("[redacted]");
   }
-  return out;
+  // A Cloudflare tunnel token (base64 of {"a":<account>,"t":<tunnel>,"s":<secret>}): a pod's, never shown.
+  return out.replace(TUNNEL_TOKEN_RE, "[redacted]");
 }
 
 /** Audit log: every mutating action (who, what, when, before/after; never a secret value). */

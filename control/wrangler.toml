@@ -2,6 +2,7 @@
 # Secrets (wrangler secret put, never here): RUNPOD_API_KEY,
 # CLOUDFLARE_API_KEY, GITHUB_PAT, CONTROL_KEK, SESSION_SECRET,
 # CLOUDRIFT_API_KEY (optional: the CloudRift provider, docs/ops/cloudrift.md),
+# CF_TUNNEL_API_TOKEN (optional: named GMI / Brev pod tunnels, docs/serve/deploy-gmi-brev.md §6.4),
 # GITHUB_RUNNER_PAT, BUILD_CACHE_R2_ACCESS_KEY_ID, BUILD_CACHE_R2_SECRET_ACCESS_KEY
 # (optional: build pods' runners and R2 cache, docs/dev/build-pods-fv-control.md),
 # OWNER_PASSPHRASE_HASH. Deploy: scripts/serve/fv-control.sh deploy staging.
@@ -85,6 +86,10 @@ RELEASE_WORKFLOW = "release.yml"
 SERVE_REPO = "ghcr.io/zaitrarrio/fastvideo-rs-serve"
 BALANCE_FLOOR = "8"
 PUBLIC_URL = "https://fv-control-staging.maximalize.workers.dev"
+# Named pod tunnels for GMI / Brev pods (src/tunnels.ts, docs/serve/deploy-gmi-brev.md §6.4): active once the
+# secret CF_TUNNEL_API_TOKEN is set (quick tunnels until then). One level below the zone: Universal SSL covers it.
+FV_TUNNEL_ZONE = "maximal.llc"
+FV_TUNNEL_HOST_TEMPLATE = "{pod}-fv-pods.maximal.llc"
 
 [[env.staging.d1_databases]]
 binding = "DB"

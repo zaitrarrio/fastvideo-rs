@@ -11,6 +11,7 @@ import { workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
 import { brevOutlook, isOtherPool, poolDph, providerIssues } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
+import { tunnelSettings } from "../tunnels";
 
 /**
  * Checks that need live data (the Runpod GPU catalog, 5-minute cache): a
@@ -23,6 +24,12 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   const warnings: Issue[] = [];
   // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
   for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
+  // Named pod tunnels (tunnels.ts): a host two levels below the zone, or a half-configured setup, is said loudly.
+  const tun = tunnelSettings(env);
+  if (tun.warning)
+    spec.pools.forEach((p, i) => {
+      if (isOtherPool(p)) warnings.push({ path: [...prefix, "pools", i, "provider"], message: `${tun.mode === "named" ? "WARNING" : "NOTE"}: ${tun.warning}` });
+    });
   for (const [i, p] of spec.pools.entries()) {
     if (!isOtherPool(p) || !p.count || issues.some((x) => x.path[prefix.length + 1] === i)) continue;
     const { dph, known, offer } = await poolDph(env, p, spec.max_gpu_dph);

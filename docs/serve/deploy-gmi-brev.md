@@ -287,11 +287,12 @@ documented [b-launch]. Useful for the owner to try fv-serve by hand
    auto-top-up in each provider's console.
 2. **No labels** → "ours" is decided by fv-control's own D1 records (pods it
    created) and the `fv-` name prefix; nothing else on the account is touched.
-3. **HTTPS** → v1 uses Cloudflare *Quick* Tunnels (`trycloudflare.com`),
-   which Cloudflare documents as "for testing and development", 200
-   in-flight requests, no SSE, no uptime guarantee [cf-quick]. fv-serve
-   uses no SSE (WebSockets work). Production needs a named tunnel per pod
-   (Cloudflare API + a DNS zone, §9).
+3. **HTTPS** → a named Cloudflare Tunnel per pod on the owner's zone,
+   made and deleted by fv-control (§6.4), once `CF_TUNNEL_API_TOKEN` and
+   the host template are set. Without them the fallback is a Cloudflare
+   *Quick* Tunnel (`trycloudflare.com`), which Cloudflare documents as "for
+   testing and development", 200 in-flight requests, no SSE, no uptime
+   guarantee [cf-quick] (WebSockets work).
 4. **Weights** → a Hub download per pod boot (tens to hundreds of GB) until
    a provider volume exists. Needs the owner's approval per launch (§7).
 5. **Brev API is undocumented** → a contract risk; confirm with NVIDIA
@@ -434,17 +435,105 @@ edge), same log shipping. What differs (`providerEnv`, `PROVIDER_BOOT`):
 
 ### 6.4 HTTPS: the tunnel
 
-`PROVIDER_BOOT` downloads cloudflared 2026.9.0 (linux-amd64, SHA-256
-`53b7a7a5…ac6134`, checked before it runs), starts
-`cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000`, reads the
-`https://<x>.trycloudflare.com` URL, exports it as `FV_DISPATCH_ENDPOINT`
-for edge fronts, and `POST`s `{pod, phase: "tunnel", url}` to
-`/ingest/v1/endpoint` with the ingest token. fv-control accepts only a
-quick-tunnel URL, for a live pod of that token's cluster (rate-limited
-60/min), stores it as the pod's URL, and the `up` wait probes `/health`
-there. `phase: "weights"` shows progress; `phase: "failed"` (a weights,
-tunnel or cloudflared error) fails the boot at the next poll and the pod is
-deleted. No inbound port, EIP or firewall is needed.
+A GMI / Brev pod has no HTTPS proxy, so it runs an outbound Cloudflare
+tunnel to `127.0.0.1:8000` (no inbound port, EIP or firewall). There are
+two kinds; fv-control picks one per launch from its settings.
+
+**Named tunnels (the default once configured; `src/tunnels.ts`).** With
+`FV_TUNNEL_HOST_TEMPLATE` (e.g. `{pod}-fv-pods.maximal.llc`),
+`FV_TUNNEL_ZONE` (`maximal.llc`), `CF_ACCOUNT_ID` and the secret
+`CF_TUNNEL_API_TOKEN` (Tunnel edit on the account, DNS edit on the zone)
+set, fv-control makes, **before the provider's create call**:
+
+1. a row of `pod_tunnels` (migration 0009: name, pod, host, URL, zone,
+   tunnel id, DNS record id, state), written first so a crash leaves a
+   record to clean up;
+2. `POST /accounts/{acct}/cfd_tunnel` `{name, config_src: "cloudflare"}`,
+   name `fv-<pod name slug>-<6 hex>`;
+3. `PUT …/cfd_tunnel/{id}/configurations` with the ingress
+   `[{hostname: <host>, service: "http://127.0.0.1:8000"}, {service:
+   "http_status:404"}]` and no `originRequest` (cloudflared's defaults keep
+   websockets, SSE and the WebRTC signalling working);
+4. `POST /zones/{zone}/dns_records`: CNAME `<host>` →
+   `<id>.cfargotunnel.com`, proxied, comment `fv-control <pod id>`
+   (the zone id is looked up by name once and cached in D1);
+5. `GET …/cfd_tunnel/{id}/token`, passed to the pod as `FV_TUNNEL_TOKEN`
+   (GMI: the create call's env; Brev: the run script, sealed in D1) with
+   `FV_TUNNEL_URL = https://<host>`. The token is never stored by
+   fv-control, logged or returned; `scrub` removes any tunnel token
+   (`eyJhIjoi…`) from provider logs and errors.
+
+`{pod}` is a DNS-safe slug of the pod name plus a random 6-hex suffix (≤ 63
+characters per label). If any step fails, what was made is deleted and the
+launch says why (`no <gpu> in <provider>: named tunnel …`). The operation
+log names the URL at create (`named tunnel …: <pod> will answer at
+https://<host>`), before the pod is up.
+
+The pod's boot (`TUNNEL_SH` in `PROVIDER_BOOT`, the same pinned
+cloudflared) runs `cloudflared tunnel --no-autoupdate run` with the token in
+cloudflared's environment (`TUNNEL_TOKEN`, not its argv), unsets
+`FV_TUNNEL_TOKEN` before fv-serve starts, waits for `Registered tunnel
+connection`, and reports `{phase: "tunnel", url: $FV_TUNNEL_URL}` as
+before. For a pod with a named tunnel, `/ingest/v1/endpoint` accepts
+**only that exact URL** (no quick-tunnel URL, no other host).
+
+Delete: when the pod is deleted (stop, scale-down, failed boot, the
+provider's create failing, the deadline), fv-control deletes the DNS record,
+then the tunnel's connections (`DELETE …/connections`: a deleted pod's
+connections linger), then the tunnel. A **parked Brev instance keeps its
+tunnel and record** (§3.4): its warm restart reuses them (a fresh token
+read, no new tunnel); they go when the parked instance is deleted (owner,
+limits, `brev_park_delete_failed`, or Brev no longer listing it). A delete
+that fails leaves the row `delete_failed` and the cron retries.
+
+Only ours: fv-control deletes a tunnel only by the id it recorded, after
+checking its name is the recorded `fv-…` one, and a DNS record only by its
+recorded id, after checking its comment starts with `fv-control` and its
+name is the recorded host. The cron (`tunnelSweep`, every minute; the
+Cloudflare listings every 10 minutes; `POST /api/tunnels/sweep` or
+`fv-control.sh tunnels sweep` now) deletes recorded tunnels whose pod is
+gone (no live `cluster_pods` row and no live / parked Brev record, after a
+10-minute grace for a create in flight), records the id of a tunnel or
+record made just before a crash (found by its recorded name / host) so the
+next pass deletes it, and raises `tunnel_orphan` for an `fv-` tunnel or an
+`fv-control` record it did not record, **never touching it**.
+
+**One level below the zone.** Cloudflare's Universal SSL certificate
+covers `maximal.llc` and `*.maximal.llc` only. A live check (2026-10-11)
+showed `x.fv-pods.maximal.llc` failing the edge's TLS handshake while
+`x-fv-pods.maximal.llc` works. So the template should put `{pod}` one
+level below the zone (`{pod}-fv-pods.maximal.llc`). A deeper template is
+allowed but warned about loudly (the Pods page's tunnels card, the launch
+form at `provider`, the `up` log, `fv-control.sh providers` on stderr,
+`GET /api/providers` `tunnel.warning`): it needs an Advanced Certificate
+Manager certificate for `*.fv-pods.maximal.llc`. A template without
+`{pod}`, outside the zone or with a bad label is an error that refuses GMI
+/ Brev launches until fixed.
+
+**Quick tunnels (the fallback).** Without those settings (or with some of
+them missing, which is warned about), `PROVIDER_BOOT` starts
+`cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000`, reads
+the `https://<x>.trycloudflare.com` URL from its log and reports it;
+fv-control accepts only a quick-tunnel URL from such a pod. Runpod pods are
+unaffected either way (Runpod's proxy).
+
+Common to both: the report is accepted only for a live pod of the ingest
+token's cluster (rate-limited 60/min); fv-control stores the URL as the
+pod's, the `up` wait probes `/health` there, edge fronts export it as
+`FV_DISPATCH_ENDPOINT`. `phase: "weights"` shows progress; `phase:
+"failed"` (a weights, tunnel or cloudflared error) fails the boot at the
+next poll and the pod is deleted (with its tunnel).
+
+| | Quick tunnel | Named tunnel |
+|---|---|---|
+| URL | random `*.trycloudflare.com`, known only after the pod reports it | `https://<slug>-fv-pods.<zone>`, known at create |
+| Concurrency | 200 in-flight requests | no tunnel-specific cap (the zone's plan limits apply) |
+| SSE (`text/event-stream`) | not supported | supported (proxied; an idle stream needs a byte within the proxy's 100 s read timeout) |
+| Websockets (WebRTC signalling) | yes | yes |
+| Uptime | "testing only", no guarantee | a normal proxied hostname |
+| Upload size | the zone's plan limit (100 MB Free / Pro) | the same |
+| Setup | none | the four settings above |
+| Cleanup | none (dies with the pod) | DNS + tunnel deleted by fv-control; leaks swept by the cron |
 
 ### 6.5 Money guards
 
@@ -530,8 +619,15 @@ storage volume would do the same there (§9).
 4. **Weights**: decide whether Hub downloads at boot are approved
    (`FV_HUB_DOWNLOADS_APPROVED=1`) and for which presets; until then only
    the fake engine runs there.
-5. **Production HTTPS**: a Cloudflare API token with Tunnel + DNS edit on
-   one zone, for a named tunnel per pod (§9).
+5. **Named pod tunnels (§6.4)**: `wrangler secret put CF_TUNNEL_API_TOKEN`
+   (a token with Cloudflare Tunnel edit on the account and DNS edit on the
+   zone; the account token was checked live to have both on `maximal.llc`)
+   on fv-control staging; vars `FV_TUNNEL_ZONE = "maximal.llc"` and
+   `FV_TUNNEL_HOST_TEMPLATE = "{pod}-fv-pods.maximal.llc"` (one level below
+   the zone: Universal SSL covers it; staging's `wrangler.toml` has both)
+   and `CF_ACCOUNT_ID` (already set). Until the secret is set, pods use
+   quick tunnels. Check with `fv-control.sh providers` (the `tunnels` line;
+   a warning on stderr) and `fv-control.sh tunnels`.
 
 ### First live smoke test (no weights, about 20 minutes, under $2 each)
 
@@ -539,10 +635,12 @@ storage volume would do the same there (§9).
 scripts/serve/fv-control.sh providers                       # gmi / brev: on, budget
 scripts/serve/fv-control.sh pod launch smoke-gmi --provider gmi --gpu <product-id> \
   --fake --deadline-min 20 --max-dph 4 --wait
-scripts/serve/fv-control.sh pod status smoke-gmi | jq .pod.url   # https://….trycloudflare.com
+scripts/serve/fv-control.sh pod status smoke-gmi | jq .pod.url   # https://fv-pod-smoke-gmi-…-fv-pods.maximal.llc (named; quick: https://….trycloudflare.com)
+scripts/serve/fv-control.sh tunnels                        # its tunnel, host and state
 curl -s "<url>/health"                                      # state AVAILABLE
 scripts/serve/fv-control.sh api GET /api/pods/gmi:<name>/provider-logs | jq .
 scripts/serve/fv-control.sh pod delete smoke-gmi            # then check the GMI console: gone
+scripts/serve/fv-control.sh tunnels --all                  # its tunnel: deleted (and gone from the Cloudflare dashboard)
 # Brev: the same with --provider brev --gpu <instanceType>
 ```
 
@@ -590,13 +688,17 @@ one by hand.
 | `shutdown` (the host watchdog) stopping billing | UNVERIFIED |
 | Brev GPU list, stop/delete semantics, credits behaviour | DOC |
 | Quick-tunnel limits (200 in flight, no SSE, no uptime guarantee) | DOC (Cloudflare) |
+| Named tunnels: one subdomain level works through Universal SSL, two levels fail the TLS handshake | LIVE (coordinator, 2026-10-11) |
+| The account token has Tunnel + DNS edit on `maximal.llc` | LIVE (coordinator) |
+| fv-control's tunnel / DNS calls (create body, ingress, CNAME, token, delete order, `comment.startswith` listing), a pod's cloudflared connecting with the token, SSE through a named tunnel | UNVERIFIED live: simulated only (`harness.mjs` `m.cf`); first live launch with the secret set confirms |
 | cloudflared 2026.9.0 linux-amd64 SHA-256 | computed here from the release asset |
 | everything in fv-control | simulated only: unit + integration tests (§10) |
 
 ## 9. Follow-ups
 
-- Named Cloudflare Tunnels per pod (API-created, DNS on our zone) for
-  production HTTPS and SSE-safe streaming.
+- Named tunnels (§6.4): a live check of SSE and WebRTC signalling
+  through one; Cloudflare Access (service tokens) in front of the pod
+  hosts if they should not be public.
 - GMI storage (ask GMI how to create what `storages[]` mounts) → a
   weights volume, filled once (add-only, verified, like the EU volume).
 - GMI EIP + firewall for WebRTC (ICE) if the Reactor runs there.
@@ -607,6 +709,25 @@ one by hand.
   location); fv-control sends no `location`.
 
 ## 10. Tests
+
+- Named tunnels (§6.4): `control/test/unit/tunnels.test.ts` (settings,
+  the two-level warning, template errors refusing launches, the host slug
+  ≤ 63, create order / rollback / reuse / only-ours delete against a fetch
+  mock, `TUNNEL_SH` in bash with a stub cloudflared: the token in its
+  environment and not its argv, unset before fv-serve; the quick path; the
+  token scrub); the harness's simulated Cloudflare API (`m.cf`: tunnels,
+  configurations, tokens, connections, zones, DNS records) and edge
+  (`/tunnel/<host>/…` routed DNS → tunnel → ingress → the connected pod);
+  integration step "named pod tunnels" (GMI create → token in the
+  container's env, URL logged up front, served through the tunnel → only
+  its own URL accepted → stop deletes record, connections, tunnel; a
+  failed provider create removes them; Brev park keeps them, the warm
+  restart reuses them, deleting the parked instance deletes them; leak
+  cleanup incl. a crash before the id was recorded; strays alerted, foreign
+  ones untouched; no token in any response or the Worker's log; the CLI);
+  the GMI step asserts the quick-tunnel fallback; `control/test/ui/tunnels.mjs`
+  (the Pods page's tunnels card and the launch form's warning for a
+  two-level template).
 
 - `control/test/unit/providers.test.ts`: pod keys; the schema rules (pool
   and launch); off / not allowed / Hub approval refusals; the weights plan

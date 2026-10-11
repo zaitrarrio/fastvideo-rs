@@ -33,6 +33,7 @@ import { brevHostScript } from "./brev-host";
 import { randomToken, seal, sha256Hex, unseal } from "./crypto";
 import type { Env } from "./env";
 import { FV_NAME_RE } from "./gmi";
+import { releaseTunnels } from "./tunnels";
 import { getSetting, HttpError, now, parseJson, putSetting, rateLimit } from "./util";
 
 export const BREV_HOME = "/home/ubuntu/workspace";
@@ -123,6 +124,10 @@ export async function markBrevDeleted(env: Env, workspaceId: string, state: "del
   await env.DB.prepare("UPDATE brev_instances SET state = ?, updated_at = ?, note = COALESCE(?, note) WHERE workspace_id = ? AND state NOT IN ('deleted', 'gone')")
     .bind(state, now(), note ?? null, workspaceId)
     .run();
+  // Its named tunnel and DNS record (tunnels.ts), kept while it was parked: gone with it (failures: the cron retries).
+  const row = await brevRowById(env, workspaceId);
+  if (row && !(await env.DB.prepare("SELECT 1 AS x FROM brev_instances WHERE pod_id = ? AND state IN ('live', 'restarting', 'parked', 'held')").bind(row.pod_id).first()))
+    await releaseTunnels(env, row.pod_id, `its Brev instance was ${state}`);
 }
 const runAad = (name: string) => `brev-run:${name}`;
 /** The run script a VM fetches at its next boot (sealed: it holds the pod's env). */

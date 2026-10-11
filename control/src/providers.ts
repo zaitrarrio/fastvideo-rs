@@ -15,9 +15,11 @@
 // What differs from a Runpod pod (all in the env and the start command):
 //  - no network volume: weights come from the Hub at pinned revisions at
 //    boot (weights_source hub, owner approval) or not at all (fake engine);
-//  - no HTTPS proxy: the pod opens a Cloudflare quick tunnel and reports its
-//    https URL to POST /ingest/v1/endpoint (index.ts) with the cluster's
-//    ingest token; edge fronts export it as FV_DISPATCH_ENDPOINT;
+//  - no HTTPS proxy: the pod runs a Cloudflare tunnel, a named one fv-control
+//    made for it on the owner's zone (tunnels.ts; URL known up front) or,
+//    without those settings, a quick tunnel; it reports its https URL to
+//    POST /ingest/v1/endpoint (index.ts) with the cluster's ingest token;
+//    edge fronts export it as FV_DISPATCH_ENDPOINT;
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
@@ -28,6 +30,7 @@ import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
 import { sha256Hex } from "./crypto";
+import { expectedTunnelUrl, releaseTunnels, tunnelSettings, tunnelView } from "./tunnels";
 import { OTHER_PROVIDERS, type OtherProviderId, type ProviderId } from "./enums";
 import type { Env } from "./env";
 import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
@@ -220,6 +223,8 @@ export async function providerView(env: Env, p: OtherProviderId) {
     running_dph: spend.running_dph,
     parked_dph: spend.parked_dph,
     hub_downloads_approved: env.FV_HUB_DOWNLOADS_APPROVED === "1",
+    // How its pods are reached (tunnels.ts): named tunnels on the owner's zone, or quick tunnels; and what is wrong.
+    tunnel: tunnelView(env),
   };
 }
 
@@ -452,6 +457,39 @@ EOF_TREES
 fi
 `;
 
+// The tunnel of a GMI / Brev pod (outbound only; no inbound port), in the boot below. A named tunnel fv-control made
+// for this pod (tunnels.ts): FV_TUNNEL_TOKEN, given to cloudflared in its environment (TUNNEL_TOKEN, not its argv)
+// and dropped from fv-serve's, and its URL FV_TUNNEL_URL, known up front; reported once a connection registered.
+// Else (named tunnels not configured) a quick tunnel: https://<random>.trycloudflare.com from cloudflared's log.
+export const TUNNEL_SH = `# ---- the tunnel -> 127.0.0.1:8000
+curl -fsSL --max-time 120 -o /usr/local/bin/cloudflared "${CLOUDFLARED.url}" || fail "cloudflared download"
+echo "${CLOUDFLARED.sha256}  /usr/local/bin/cloudflared" | sha256sum -c - >/dev/null 2>&1 || fail "cloudflared sha256"
+chmod +x /usr/local/bin/cloudflared
+tlog() { tail -3 /fvstate/tunnel.log | sed 's/eyJhIjoi[A-Za-z0-9+/_=-]*/[redacted]/g' | tr '\\n"' '  '; }
+U=""
+if [ -n "\${FV_TUNNEL_TOKEN:-}" ]; then
+  say "named tunnel: $FV_TUNNEL_URL"
+  TUNNEL_TOKEN="$FV_TUNNEL_TOKEN" /usr/local/bin/cloudflared tunnel --no-autoupdate run >/fvstate/tunnel.log 2>&1 &
+  unset FV_TUNNEL_TOKEN
+  for _ in $(seq 1 90); do
+    if grep -q 'Registered tunnel connection' /fvstate/tunnel.log; then U="$FV_TUNNEL_URL"; break; fi
+    sleep 2
+  done
+  [ -n "$U" ] || fail "named tunnel did not connect: $(tlog)"
+else
+  /usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 >/fvstate/tunnel.log 2>&1 &
+  for _ in $(seq 1 90); do
+    U="$(grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com' /fvstate/tunnel.log | head -1)"
+    [ -n "$U" ] && break
+    sleep 2
+  done
+  [ -n "$U" ] || fail "no tunnel URL: $(tlog)"
+fi
+say "tunnel $U"
+[ "\${FV_DISPATCH_FRONT:-0}" = 1 ] && export FV_DISPATCH_ENDPOINT="$U"
+report tunnel "$U" ""
+`;
+
 // The start command of a GMI / Brev worker (inside our image, as root): the
 // weights (hub), the tunnel and its report, the deadline watchdog, then
 // fv-serve with the same config handling as WORKER_BOOT (payloads.ts).
@@ -502,22 +540,7 @@ fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (t
   FETCH_REPO="$2" FETCH_REVISION="$3" FETCH_DEST="$1" FETCH_GLOBS="$4" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$5" FETCH_MIN_FREE_GB=5 \\
     /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$5.out" 2>&1 || fail "tree $1: $(tail -2 "/fvstate/fetch-$5/log.txt" 2>/dev/null | tr '\\n"' '  ')"
 }
-${WEIGHTS_SH}# ---- the tunnel: https://<random>.trycloudflare.com -> 127.0.0.1:8000 (outbound only; no inbound port needed)
-curl -fsSL --max-time 120 -o /usr/local/bin/cloudflared "${CLOUDFLARED.url}" || fail "cloudflared download"
-echo "${CLOUDFLARED.sha256}  /usr/local/bin/cloudflared" | sha256sum -c - >/dev/null 2>&1 || fail "cloudflared sha256"
-chmod +x /usr/local/bin/cloudflared
-/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 >/fvstate/tunnel.log 2>&1 &
-U=""
-for _ in $(seq 1 90); do
-  U="$(grep -o 'https://[a-z0-9-]*\\.trycloudflare\\.com' /fvstate/tunnel.log | head -1)"
-  [ -n "$U" ] && break
-  sleep 2
-done
-[ -n "$U" ] || fail "no tunnel URL: $(tail -3 /fvstate/tunnel.log | tr '\\n"' '  ')"
-say "tunnel $U"
-[ "\${FV_DISPATCH_FRONT:-0}" = 1 ] && export FV_DISPATCH_ENDPOINT="$U"
-report tunnel "$U" ""
-# ---- the deadline watchdog (fv-control's cron deletes the pod at the deadline as well)
+${WEIGHTS_SH}${TUNNEL_SH}# ---- the deadline watchdog (fv-control's cron deletes the pod at the deadline as well)
 (
   while :; do
     if [ "$(date +%s)" -ge "$FV_CLUSTER_DEADLINE" ]; then
@@ -559,6 +582,8 @@ export async function releaseOtherPod(env: Env, podId: string, park: boolean, lo
     if (r !== "none") return r;
   }
   if (!(await deleteOtherPod(env, podId))) throw new Error("the provider did not confirm the delete");
+  // Its named tunnel and DNS record go with it (a parked / held Brev instance keeps them: its restart reuses them).
+  for (const m of await releaseTunnels(env, podId, "its pod was deleted")) log?.(`${podId}: ${m}`);
   return "deleted";
 }
 /** A GMI / Brev pod's state for the boot watch; null when the provider no longer lists it. */
@@ -663,7 +688,9 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
   if (!row || row.cluster_id !== cl.id) throw new HttpError(404, "no live pod of this cluster with that id");
   if (phase === "tunnel") {
     const url = typeof b?.url === "string" ? b.url : "";
-    if (!endpointUrlOk(env, url)) throw new HttpError(400, "url: a Cloudflare quick-tunnel URL (https://<name>.trycloudflare.com)");
+    // A pod with a named tunnel (tunnels.ts) may report only its own host's URL; any other pod a quick-tunnel URL.
+    const want = await expectedTunnelUrl(env, pod);
+    if (want ? url !== want : !endpointUrlOk(env, url)) throw new HttpError(400, want ? "url: this pod's named-tunnel URL (the one fv-control gave it in FV_TUNNEL_URL)" : "url: a Cloudflare quick-tunnel URL (https://<name>.trycloudflare.com)");
     await env.DB.prepare("UPDATE cluster_pods SET url = ? WHERE pod_id = ?").bind(url, pod).run();
   }
   // The host's facts and failures (a log tail) are longer than the container's one-line phases.
@@ -703,6 +730,8 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
     const off = impl.off(env);
     if (off) return out.push({ path: ["pools", i, "provider"], message: `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)` });
     if (!env.PUBLIC_URL) out.push({ path: ["pools", i, "provider"], message: `PUBLIC_URL is not set: a ${impl.title} pod reports its tunnel URL to fv-control there` });
+    const tun = tunnelSettings(env);
+    if (tun.error) out.push({ path: ["pools", i, "provider"], message: `named pod tunnels: ${tun.error} (docs/serve/deploy-gmi-brev.md §6.4)` });
     const gpus = impl.gpus(env);
     if (p.provider_gpu && !gpus.includes(p.provider_gpu)) out.push({ path: ["pools", i, "provider_gpu"], message: `${p.provider_gpu} is not allowed on ${impl.title}: one of ${gpus.join(", ")} (${prov.toUpperCase()}_${prov === "gmi" ? "PRODUCTS" : "INSTANCE_TYPES"})` });
     const plan = weightsPlan(p);
