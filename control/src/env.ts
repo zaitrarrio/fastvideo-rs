@@ -33,6 +33,10 @@ export interface Env {
   /** JSON {KEY: value} of the worker secrets Runpod pods get as {{ RUNPOD_SECRET_… }} references
    * (FV_CF_ACCOUNT_ID, FV_R2_*, …): GMI / Brev pods get these values instead. Unset: they go without. */
   FV_PROVIDER_SECRET_ENV?: string;
+  /** A read-only R2 S3 key of the weights bucket (docs/ops/r2-weights.md §4): fv-control presigns the pods' weight
+   * URLs with it (weights_source r2); pods never get it. Unset: weights_source r2 is refused. */
+  WEIGHTS_R2_ACCESS_KEY_ID?: string;
+  WEIGHTS_R2_SECRET_ACCESS_KEY?: string;
   /** Cloudflare API token with Tunnel edit (account) and DNS edit (FV_TUNNEL_ZONE): named pod tunnels (tunnels.ts).
    * Unset: GMI / Brev pods use quick tunnels. */
   CF_TUNNEL_API_TOKEN?: string;
@@ -109,6 +113,14 @@ export interface Env {
   /** "0": create every Brev workspace with isStoppable false (default: true for a type the listing marks stoppable;
    * brev-cli's entity says the flag is "used for autostop only", UNVERIFIED whether the server's stop needs it). */
   BREV_IS_STOPPABLE?: string;
+  /** The R2 weights store (r2weights.ts, docs/ops/r2-weights.md): its bucket (default fv-weights), the S3 endpoint
+   * (default https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com; tests: a mock), the presigned URLs' lifetime in s
+   * (default 3600, 300-21600), and published trees beyond scripts/gpu/weights-r2.tsv as JSON {dest: {rev, files,
+   * bytes, manifest_sha256, source}} (tests; an owner's stopgap until the next deploy). */
+  WEIGHTS_R2_BUCKET?: string;
+  WEIGHTS_R2_ENDPOINT?: string;
+  WEIGHTS_R2_URL_TTL_S?: string;
+  WEIGHTS_R2_EXTRA_TREES?: string;
   /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */

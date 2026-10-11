@@ -623,7 +623,6 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
             delete q.gpu_types, delete q.cpu_flavors, delete q.vcpu, delete q.regions;
             q.compute = "GPU";
             q.volume = false;
-            q.weights_source ??= "none";
           } else for (const k of ["provider_gpu", "provider_region", "weights_source", "hub_download_approved"]) delete q[k];
           drawForm();
         },
@@ -634,7 +633,18 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       ? [
           fieldBox(P("provider_gpu"), "GPU product", select(P("provider_gpu"), (dyn.provider_gpus || []).filter((g: any) => g.provider === p.provider).map((g: any) => [g.id, g.id])), describe(["pools", 0, "provider_gpu"])),
           p.provider === "gmi" ? fieldBox(P("provider_region"), "IDC", text(P("provider_region"), { optional: true, mono: true, placeholder: (dyn.provider_regions || [])[0]?.id || "GMI_DEFAULT_IDC" }), describe(["pools", 0, "provider_region"])) : null,
-          fieldBox(P("weights_source"), "Weights", select(P("weights_source"), enumOf(["pools", 0, "weights_source"]).filter((x) => x !== "volume").map((x) => [x, x === "hub" ? "hub — download at boot (owner approval)" : "none — fake engine"]), { onSet: () => drawForm() }), describe(["pools", 0, "weights_source"])),
+          fieldBox(
+            P("weights_source"),
+            "Weights",
+            select(
+              P("weights_source"),
+              enumOf(["pools", 0, "weights_source"])
+                .filter((x) => x !== "volume")
+                .map((x) => [x, x === "r2" ? "r2 — our R2 weights store (published trees; no approval)" : x === "hub" ? "hub — download at boot (owner approval)" : "none — fake engine"]),
+              { optional: true, onSet: () => drawForm() },
+            ),
+            describe(["pools", 0, "weights_source"]),
+          ),
           p.weights_source === "hub" ? fieldBox(P("hub_download_approved"), "Hub download", toggle(P("hub_download_approved"), "the owner approved this download"), describe(["pools", 0, "hub_download_approved"])) : null,
         ]
       : [];

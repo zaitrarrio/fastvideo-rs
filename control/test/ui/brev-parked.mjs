@@ -99,7 +99,7 @@ try {
   await page.check(`${SL} [data-ctl][data-path="weights_download_approved"]`);
   await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn:not([hidden]):text-matches("^(cold|warm): ")`, { timeout: 20000 });
   const outlook = await page.textContent(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn`);
-  assert.match(outlook, /^cold: downloads h3-base \(~144 GB\): boot ~\d+ min; kept on stop \(the next launch is warm\)$/, outlook);
+  assert.match(outlook, /^cold: downloads h3-base \(~144 GB from the Hub\): boot ~\d+ min; kept on stop \(the next launch is warm\)$/, outlook);
   await page.screenshot({ path: `${out}/22-brev-launch-types.png`, fullPage: true });
 
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");

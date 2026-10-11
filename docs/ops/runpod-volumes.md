@@ -10,6 +10,11 @@ recorded source is marked **UNVERIFIED** or **UNKNOWN**.
 
 ## 0. Status 2026-10-06: EU only
 
+> **2026-10-11: R2 replaces this volume.** The owner decided to move the weights to Cloudflare R2 (bucket
+> `fv-weights`) and get rid of the EU volume. Layout, tools, the migration (Hub trees from the Hub; volume-only
+> trees copied once from this volume) and the deletion gate are in **docs/ops/r2-weights.md**. Until that gate
+> passes and the owner confirms, this volume stays as it is: add-only, never detached or deleted.
+
 - **The US weights volume is gone.** Runpod deleted `s2k01690bi`
   (`fv-weights-b200-us`, 2000 GB, US-CA-2) on about **2026-10-05**, while the
   account balance was negative. Nothing in the repo deleted it. Its data is
@@ -51,6 +56,7 @@ Data files beside this page:
 | `scripts/gpu/weights-sha256.tsv` | per-file hashes recorded at fetch time (`verify-weights.sh sha:<dest>`) |
 | `scripts/gpu/verify-weights.sh` | completeness and hash gates (cells) |
 | `scripts/gpu/rebuild-volume.sh` | one entry point: plan (`--dry-run`) or run the fetch and verify sequence on a pod |
+| `scripts/gpu/weights-r2.tsv`, `scripts/gpu/r2-weights.py` | the trees published in the R2 weights store, and the tool that publishes, verifies and compares them (docs/ops/r2-weights.md) |
 
 ## 1. The volumes
 

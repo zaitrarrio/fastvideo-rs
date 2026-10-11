@@ -5,6 +5,8 @@
 # CF_TUNNEL_API_TOKEN (optional: named GMI / Brev pod tunnels, docs/serve/deploy-gmi-brev.md §6.4),
 # GITHUB_RUNNER_PAT, BUILD_CACHE_R2_ACCESS_KEY_ID, BUILD_CACHE_R2_SECRET_ACCESS_KEY
 # (optional: build pods' runners and R2 cache, docs/dev/build-pods-fv-control.md),
+# WEIGHTS_R2_ACCESS_KEY_ID, WEIGHTS_R2_SECRET_ACCESS_KEY (optional: weights_source r2, a read-only R2 token
+# scoped to the fv-weights bucket; docs/ops/r2-weights.md §4),
 # OWNER_PASSPHRASE_HASH. Deploy: scripts/serve/fv-control.sh deploy staging.
 name = "fv-control"
 main = "src/index.ts"

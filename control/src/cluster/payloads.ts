@@ -2,6 +2,9 @@
 // (docs/serve/edge-control-plane.md §5.2) or direct workers
 // (docs/control/gateway-less-auth.md). (The gateway pod is retired.)
 import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
+import type { Env } from "../env";
+import { isOtherPool, weightsPlan } from "../providers";
+import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -144,6 +147,8 @@ export interface EnvCtx {
   ingestUrl?: string;
   /** A standalone pod (direct, no edge): its own backstop watchdog (deadline, balance floor) like an edge front's. */
   backstop?: boolean;
+  /** fv-control's settings (weights_source r2 on Runpod: the plan URL, the published trees). */
+  env?: Env;
 }
 
 function b64utf8(s: string): string {
@@ -221,7 +226,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx) };
+  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...runpodR2Env(ctx, pool) };
   // Edge fronts never use the account's (production) bucket: they upload
   // results through the edge into its outputs bucket and presign their URLs
   // there (the account's R2 credentials, the edge's bucket); without that
@@ -231,6 +236,21 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     else for (const k of Object.keys(out)) if (k.startsWith("FV_R2_")) delete out[k];
   }
   return out;
+}
+
+/** A Runpod worker with weights_source r2 (docs/ops/r2-weights.md): no volume; the boot fetches its pool's trees from
+ * the R2 weights store onto the container disk (FV_R2_DISK_GB sizes it) with the cluster's ingest token, and the aux
+ * files by URL. GMI / Brev pods get theirs in providers.ts providerEnv. */
+function runpodR2Env(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
+  if (isOtherPool(pool) || pool.weights_source !== "r2" || !ctx.env) return {};
+  const plan = weightsPlan(pool, ctx.env);
+  return {
+    FV_WEIGHTS_SOURCE: "r2",
+    ...r2PodEnv(ctx.env),
+    FV_ENDPOINT_REPORT_TOKEN: ctx.secrets.ingest_token || "",
+    FV_WEIGHTS_TREES_B64: btoa(plan.tsv),
+    FV_R2_DISK_GB: String(Math.min(500, Math.max(40, r2DiskGb(ctx.env, plan.trees)))),
+  };
 }
 
 /** One placement attempt of a worker (a GPU type in a region, or a CPU flavor). */
@@ -256,8 +276,9 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
 }
 /** The start command for a worker env: an edge front, a worker with the backstop watchdog (standalone), or the plain worker. */
 export function bootFor(env: Record<string, string>): string {
-  if (env.FV_DISPATCH_FRONT === "1") return EDGE_WORKER_BOOT;
-  return env.FV_CLUSTER_DEADLINE && env.FV_BACKSTOP_API_KEY ? WATCHDOG_WORKER_BOOT : WORKER_BOOT;
+  const boot = env.FV_DISPATCH_FRONT === "1" ? EDGE_WORKER_BOOT : env.FV_CLUSTER_DEADLINE && env.FV_BACKSTOP_API_KEY ? WATCHDOG_WORKER_BOOT : WORKER_BOOT;
+  // weights_source r2: the trees from the R2 weights store before anything else (the volume is not mounted).
+  return env.FV_WEIGHTS_SOURCE === "r2" ? boot.replace("mkdir -p /fvstate\n", `mkdir -p /fvstate\n${R2_RUNPOD_SH()}`) : boot;
 }
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
   const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [bootFor(env)], env };
@@ -273,14 +294,15 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
       ...(pool.volume && pl.region ? { networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {}),
     };
   }
-  const vol = pool.volume !== false && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
+  const r2 = env.FV_WEIGHTS_SOURCE === "r2";
+  const vol = pool.volume !== false && !r2 && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
   return {
     ...common,
     cloudType: "SECURE",
     computeType: "GPU",
     gpuTypeIds: [pl.gpu!],
     gpuCount: 1,
-    containerDiskInGb: pool.container_disk_gb ?? 40,
+    containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : 40),
     ...vol,
     dataCenterIds: [pl.dc!],
     ports: ["8000/http", "70000/tcp"],

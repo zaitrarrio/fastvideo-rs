@@ -46,7 +46,17 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             help: prov === "gmi" ? "A GMI container product the account may use (GMI_PRODUCTS)." : "A Brev instance type the account may use (BREV_INSTANCE_TYPES).",
           }),
           ...(prov === "gmi" ? [F(["provider_region"], { label: "IDC", placeholder: (dyn.provider_regions || [])[0]?.id || "the default IDC", help: "GMI data centre (GET /v1/idcs)." })] : []),
-          F(["weights_source"], { label: "Weights", options: [{ value: "none", detail: "fake engine" }, { value: "hub", detail: "download at boot" }], unsetLabel: "none (fake engine)", onSet: () => draw(), help: "No Runpod volume here: none (the fake engine), or hub (downloaded at every boot; the owner approves)." }),
+          F(["weights_source"], {
+            label: "Weights",
+            options: [
+              { value: "r2", detail: "our R2 weights store, fetched at boot" },
+              { value: "hub", detail: "download at boot" },
+              { value: "none", detail: "fake engine" },
+            ],
+            unsetLabel: "default: r2 when every tree is published, else none",
+            onSet: () => draw(),
+            help: "No Runpod volume here: r2 (our R2 weights store, docs/ops/r2-weights.md; no approval, published trees only), hub (downloaded from the Hub at every boot; the owner approves) or none (the fake engine).",
+          }),
           ...(f.get(["weights_source"]) === "hub" ? [F(["weights_download_approved"], { label: "Owner approved the Hub download", help: "Tens to hundreds of GB per boot, paid at the GPU's rate (CLAUDE.md: large downloads need approval)." })] : []),
         ]
       : [
@@ -139,7 +149,6 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             onSet: (v) => {
               // Each provider's own fields: the other side's are cleared (the server refuses a mix).
               for (const k of v && v !== "runpod" ? RUNPOD_ONLY : OTHER_ONLY) f.set([k], undefined, true);
-              if (v && v !== "runpod") f.set(["weights_source"], "none", true);
               draw();
             },
             help: "Runpod (the EU weights volume), or GMI Cloud / NVIDIA Brev: docs/serve/deploy-gmi-brev.md.",

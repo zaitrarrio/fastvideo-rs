@@ -83,24 +83,25 @@ const providerGpu = z
 const providerRegion = z.string().regex(PROVIDER_REGION_RE, { message: "an IDC id: letters, digits, . _ - (≤ 50)" }).meta({ "x-dynamic": "provider_regions" }).describe("gmi: the IDC (GET /v1/idcs; default GMI_DEFAULT_IDC). brev: unused (the instance type implies it).");
 const weightsSource = z
   .enum(WEIGHTS_SOURCES)
-  .describe("Weights: volume (the region's Runpod network volume; Runpod only), hub (downloaded from the Hub at pinned revisions at boot, verified; needs the owner's approval) or none (fake engine). Default: volume on Runpod, none elsewhere.");
+  .describe("Weights: volume (the region's Runpod network volume; Runpod only), r2 (our R2 weights store, fetched at boot through presigned URLs, every part checked; needs no approval, only trees published there: docs/ops/r2-weights.md), hub (downloaded from the Hub at pinned revisions at boot, verified; needs the owner's approval) or none (fake engine). Default: volume on Runpod; on GMI / Brev r2 when every tree of the pool is published in R2, else none.");
 /** The provider fields' rules shared by a pool and a standalone launch. */
 function providerRules(x: { provider?: string; provider_gpu?: string; provider_region?: string; weights_source?: string; gpu_types?: unknown; cpu_flavors?: unknown; vcpu?: unknown; volume?: boolean; compute?: string; models?: unknown[] }, add: (path: string, message: string) => void, gpuTypesKey = "gpu_types") {
   const other = !!x.provider && x.provider !== "runpod";
   if (!other) {
     if (x.provider_gpu) add("provider_gpu", "provider_gpu is for provider gmi / brev (Runpod: gpu_types)");
     if (x.provider_region) add("provider_region", "provider_region is for provider gmi");
-    if (x.weights_source === "hub") add("weights_source", "Runpod pods read the weights volume (volume) or none");
+    if (x.weights_source === "hub") add("weights_source", "Runpod pods read the weights volume (volume), the R2 weights store (r2) or none");
     return;
   }
   if (!x.provider_gpu) add("provider_gpu", `provider ${x.provider}: the GPU product / instance type is required`);
   if (x.gpu_types) add(gpuTypesKey, `gpu_types are Runpod GPU type ids: provider ${x.provider} takes provider_gpu`);
   if (x.cpu_flavors || x.vcpu !== undefined) add("cpu_flavors", `provider ${x.provider} has GPU machines only (the cpu variant runs on one)`);
   if (x.compute === "CPU") add("compute", `provider ${x.provider} has GPU machines only: compute GPU (the cpu variant runs there too)`);
-  if (x.volume) add("volume", `provider ${x.provider} cannot mount the Runpod weights volume: weights_source hub or none`);
-  if (x.weights_source === "volume") add("weights_source", `provider ${x.provider} has no Runpod volume: hub or none`);
+  if (x.volume) add("volume", `provider ${x.provider} cannot mount the Runpod weights volume: weights_source r2, hub or none`);
+  if (x.weights_source === "volume") add("weights_source", `provider ${x.provider} has no Runpod volume: r2, hub or none`);
   if (x.provider === "brev" && x.provider_region) add("provider_region", "brev: the instance type implies the region");
-  if ((x.weights_source ?? "none") === "none" && x.models?.length) add("weights_source", "models need weights: hub (owner approval) or serve fake_models");
+  // Unset: r2 once every tree is published (providers.ts weightsSource); providerIssues says when they are not.
+  if (x.weights_source === "none" && x.models?.length) add("weights_source", "models need weights: r2 (the R2 weights store), hub (owner approval) or serve fake_models");
 }
 const imageRef = z.string().max(300).regex(IMAGE_REF_RE, { message: "an image reference: registry/repo[:tag][@sha256:<64 hex>]" }).meta({ "x-rule": "registry/repo[:tag][@sha256:<64 hex>], lower-case" });
 const configPath = z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).meta({ "x-rule": "an absolute path ending in .toml, e.g. /etc/fv/runpod.toml", "x-dynamic": "config_paths" });

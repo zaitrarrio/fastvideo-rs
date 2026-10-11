@@ -4,6 +4,8 @@
 //   node test/integration/run.mjs            (npm run test:integration)
 //   FVC_UI=1 …                               also keep it up for test/ui/smoke.mjs
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { d1Exec, fakeServe, hashPassphrase, jobInsert, JOBS_TABLE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
 
 const mock = await startMock();
@@ -13,8 +15,21 @@ mock.cloudriftKey = SECRETS.CLOUDRIFT_API_KEY;
 mock.gmiKey = SECRETS.GMI_API_KEY;
 mock.brevToken = SECRETS.BREV_API_TOKEN;
 mock.brevOrg = "org-test-1";
+// The R2 weights store (src/r2weights.ts): one published test tree in the mock bucket (1 MiB parts), pinned by its
+// manifest's SHA-256 through WEIGHTS_R2_EXTRA_TREES (production: scripts/gpu/weights-r2.tsv).
+const r2sha = (b) => createHash("sha256").update(b).digest("hex");
+const R2_FILES = { "config.json": Buffer.from('{"r2": true}'), "transformer/model.safetensors": Buffer.from(Array.from({ length: 2_600_000 }, (_, i) => (i * 7919) % 251)) };
+const R2_PART = 1 << 20;
+const r2Manifest = Buffer.from(JSON.stringify({ format: "fv-weights-manifest/1", dest: "r2demo", rev: "rev1", part_size: R2_PART, total_bytes: Object.values(R2_FILES).reduce((s, b) => s + b.length, 0), files: Object.entries(R2_FILES).map(([path, b]) => ({ path, size: b.length, sha256: r2sha(b), parts: Array.from({ length: Math.ceil(b.length / R2_PART) }, (_, i) => r2sha(b.subarray(i * R2_PART, (i + 1) * R2_PART))) })) }));
+mock.r2.objects.set("manifests/r2demo/rev1.json", r2Manifest);
+for (const [path, b] of Object.entries(R2_FILES)) mock.r2.objects.set(`weights/r2demo/rev1/${path}`, b);
 const w = await startWorker(mock, {
   ...SECRETS,
+  WEIGHTS_R2_ENDPOINT: `http://127.0.0.1:${mock.port}`,
+  WEIGHTS_R2_BUCKET: mock.r2.bucket,
+  WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
+  WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
+  WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ r2demo: { rev: "rev1", files: 2, bytes: Object.values(R2_FILES).reduce((s, b) => s + b.length, 0), manifest_sha256: r2sha(r2Manifest), source: "test" } }),
   // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): the owner's config, against the simulated APIs.
   GMI_PRODUCTS: "container.h200.x1,container.b200.x1",
   GMI_DEFAULT_IDC: "us-denver-1",
@@ -1387,6 +1402,60 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   await call("/api/standalone/brevex", { method: "DELETE", headers: T() });
 });
 
+await step("weights_source r2: a GMI pod fetches its trees from the R2 weights store through presigned URLs (no R2 key on the pod); the default once published; the plan endpoint's auth", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const g = mock.gmi;
+  g.boot = "ok";
+  // A fake-engine config that also names a weight tree: the published r2demo.
+  const toml = readFileSync(new URL("../../../configs/serve/runpod-fake.toml", import.meta.url), "utf8") + '\n[r2probe]\npath = "${FV_WEIGHTS}/r2demo/config.json"\n';
+  const body = { name: "gmir2", provider: "gmi", provider_gpu: "container.h200.x1", variant: "cpu", config_toml: toml, fake_models: ["fake-wan"], channel: "stable", deadline_min: 20 };
+  // Validation: no approval needed; the manifest is read and its size shown.
+  let v = (await call("/api/standalone/validate", { method: "POST", body, headers: T() })).j;
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.ok(v.warnings.some((x) => /r2: fetches r2demo 0\.0 GB/.test(x.message) && /manifests checked/.test(x.message)), JSON.stringify(v.warnings));
+  v = (await call("/api/standalone/validate", { method: "POST", body: { ...body, config_toml: toml.replace("r2demo", "r2missing") }, headers: T() })).j;
+  assert.ok(!v.warnings.some((x) => /r2:/.test(x.message)), "not published: no r2 default");
+  v = (await call("/api/standalone/validate", { method: "POST", body: { ...body, config_toml: toml.replace("r2demo", "r2missing"), weights_source: "r2" }, headers: T() })).j;
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /not in the R2 weights store yet: r2missing/.test(i.message)), JSON.stringify(v.issues));
+  const before = mock.r2.bad;
+  let r = await call("/api/standalone", { method: "POST", body, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.pod.id;
+  const op = await waitOp(id, "up", 90000);
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)) + JSON.stringify(mock.reports.slice(-3)));
+  const gc = g.containers.find((c) => c.name.startsWith("fv-pod-gmir2-"));
+  const genv = Object.fromEntries(gc.envs.map((e) => [e.name, e.value]));
+  const key = `gmi:${gc.name}`;
+  assert.equal(genv.FV_WEIGHTS_SOURCE, "r2", "r2 is the default once every tree is published");
+  assert.equal(genv.FV_WEIGHTS_PLAN_URL, `${B}/ingest/v1/weights-plan`);
+  assert.ok(!JSON.stringify(gc.envs).includes(mock.r2.secret) && !JSON.stringify(gc.envs).includes(mock.r2.access), "no R2 credential on the pod");
+  assert.match(gc.args[1], /r2-fetch\.py/);
+  assert.deepEqual(mock.r2.fetched.filter((f) => f.key === key).map((f) => [f.dest, f.rev, f.files]), [["r2demo", "rev1", 2]]);
+  assert.equal(mock.r2.bad, before, "every presigned URL fv-control made was accepted");
+  assert.ok(mock.r2.gets.filter((x) => x.range && x.key.startsWith("weights/r2demo/")).length >= 4, "ranged GETs per part");
+  assert.ok(mock.reports.some((x) => x.key === key && x.phase === "weights" && /^r2 weights ready/.test(x.detail) && x.status === 200), JSON.stringify(mock.reports.slice(-4)));
+  const sp = (await call("/api/standalone/gmir2", { headers: T() })).j.pod;
+  assert.equal(sp.definition.weights_source, "r2");
+  // The plan endpoint: the cluster's ingest token and a live pod of that cluster only; the fetcher it serves is the pinned one.
+  const plan = async (pod, tok) => call("/ingest/v1/weights-plan", { method: "POST", body: { pod }, headers: { authorization: `Bearer ${tok}` } });
+  assert.equal((await plan(key, "nope")).status, 401);
+  assert.equal((await plan("gmi:fv-pod-other-0101000000", genv.FV_ENDPOINT_REPORT_TOKEN)).status, 404);
+  const ok = await plan(key, genv.FV_ENDPOINT_REPORT_TOKEN);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.j.trees.map((t) => [t.dest, t.files.length]), [["r2demo", 2]]);
+  assert.ok(ok.j.trees[0].files.every((f) => /X-Amz-Signature=[0-9a-f]{64}/.test(f.url)) && ok.j.expires_at > Date.now() / 1000);
+  const forged = ok.j.trees[0].files[0].url.replace("config.json", "transformer/model.safetensors");
+  assert.equal((await fetch(forged)).status, 403, "a URL is good for its own object only");
+  const py = await call("/ingest/v1/r2-fetch.py", { raw: true });
+  assert.equal(py.status, 200);
+  assert.equal(r2sha(py.text), genv.FV_R2_FETCH_SHA256);
+  // Stop and delete.
+  assert.equal((await call("/api/standalone/gmir2/stop", { method: "POST", body: {}, headers: T() })).status, 202);
+  assert.equal((await waitOp(id, "down")).status, "done");
+  assert.equal((await plan(key, genv.FV_ENDPOINT_REPORT_TOKEN)).status, 404, "a deleted pod gets no URLs");
+  assert.equal((await call("/api/standalone/gmir2", { method: "DELETE", headers: T() })).status, 200);
+});
+
 await step("Brev keep-on-stop: park on stop, warm restart (no download), restart failure / timeout, non-stoppable delete, limits, budget, only ours", async () => {
   // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
   // instance-type list as prices (no BREV_PRICES), a short restart timeout.
@@ -1843,6 +1912,7 @@ await step("audit log; no secret in any response", async () => {
   for (const [k, v] of Object.entries(SECRETS)) assert.ok(!all.includes(v), `${k} leaked into a response`);
   assert.ok(!all.includes("hf_supersecret"), "a secret env value leaked");
   assert.ok(!all.includes(mock.edgeInternal), "the edge's internal token leaked");
+  assert.ok(!all.includes(mock.r2.secret), "the R2 weights key leaked");
   assert.ok(!all.includes(worker.env.FV_LOG_SHIP_TOKEN), "an ingest token leaked");
 });
 

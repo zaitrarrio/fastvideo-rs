@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { webcrypto as wc } from "node:crypto";
+import { createHash, createHmac, webcrypto as wc } from "node:crypto";
 
 const te = new TextEncoder();
 const b64 = (u) => Buffer.from(u).toString("base64");
@@ -75,6 +75,9 @@ export function startMock() {
       ],
     },
   };
+  // The R2 weights store (src/r2weights.ts, docs/ops/r2-weights.md): path-style objects of bucket `bucket`, served only
+  // through presigned GETs (checked here with node:crypto against `secret`), with Range. `fetched`: what pods pulled.
+  m.r2 = { bucket: "fv-weights-test", access: "r2-test-access-id", secret: "r2-TEST-secret-0123456789abcdef", objects: new Map(), gets: [], bad: 0, fetched: [] };
   // GMI Cloud (docs/serve/deploy-gmi-brev.md §2): REST under /gmi/v1, Bearer key. Containers boot like a pod:
   // `/pod/gmi:<name>` serves fv-serve, and the boot's tunnel report goes to fv-control (FV_ENDPOINT_REPORT_URL).
   m.gmi = {
@@ -166,7 +169,44 @@ export function startMock() {
       (m.tunnelConnects ||= []).push({ key, tunnel: t.id });
       return report({ phase: "tunnel", url: env.FV_TUNNEL_URL, detail: "" });
     };
-    setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : tunnel()), 300);
+    // weights_source r2: the boot's R2_FETCH_SH and r2-fetch.py in short: the fetcher from fv-control (its SHA-256
+    // checked), the plan with the ingest token, then every part by a ranged GET on its presigned URL, each part and file
+    // checked against the plan's SHA-256s.
+    const r2 = async () => {
+      const py = Buffer.from(await (await fetch(env.FV_R2_FETCH_URL)).arrayBuffer());
+      if (createHash("sha256").update(py).digest("hex") !== env.FV_R2_FETCH_SHA256) throw new Error("r2-fetch.py sha256");
+      const pr = await fetch(env.FV_WEIGHTS_PLAN_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key }) });
+      if (!pr.ok) throw new Error(`plan: HTTP ${pr.status} ${(await pr.text()).slice(0, 200)}`);
+      const plan = await pr.json();
+      let bytes = 0;
+      for (const t of plan.trees) {
+        for (const f of t.files) {
+          const whole = createHash("sha256");
+          for (let i = 0; i < f.parts.length; i++) {
+            const a = i * t.part_size, b = Math.min(f.size, a + t.part_size) - 1;
+            const r = await fetch(f.url, { headers: { range: `bytes=${a}-${b}` } });
+            const buf = Buffer.from(await r.arrayBuffer());
+            if (r.status !== 206 || createHash("sha256").update(buf).digest("hex") !== f.parts[i]) throw new Error(`${t.dest}/${f.path} part ${i}: HTTP ${r.status}`);
+            whole.update(buf);
+            bytes += buf.length;
+          }
+          if (whole.digest("hex") !== f.sha256) throw new Error(`${t.dest}/${f.path}: sha256`);
+        }
+        m.r2.fetched.push({ key, dest: t.dest, rev: t.rev, files: t.files.length, bytes: t.total_bytes });
+      }
+      return `r2 weights ready: ${plan.trees.length} tree(s), ${bytes} bytes`;
+    };
+    setTimeout(async () => {
+      if (mode === "fail") return report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" });
+      if (env.FV_WEIGHTS_SOURCE === "r2") {
+        try {
+          await report({ phase: "weights", url: "", detail: await r2() });
+        } catch (e) {
+          return report({ phase: "failed", url: "", detail: `r2 weights: ${String(e.message || e).slice(0, 200)}` });
+        }
+      }
+      tunnel();
+    }, 300);
   };
   /**
    * A Brev VM's boot (brev-park.ts): the startup script's bootstrap fetches the run script from fv-control with the
@@ -231,6 +271,29 @@ export function startMock() {
     try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
     let p = url.pathname;
     m.log.push({ method: req.method, path: p, body, auth: req.headers.authorization || "" });
+    // ---- the R2 weights store's S3 endpoint (WEIGHTS_R2_ENDPOINT): presigned GETs only
+    if (p.startsWith(`/${m.r2.bucket}/`)) {
+      const q = url.searchParams;
+      const amz = q.get("X-Amz-Date") || "";
+      const when = Date.UTC(+amz.slice(0, 4), +amz.slice(4, 6) - 1, +amz.slice(6, 8), +amz.slice(9, 11), +amz.slice(11, 13), +amz.slice(13, 15));
+      const [ak, date, region] = (q.get("X-Amz-Credential") || "").split("/");
+      const pairs = [...q.entries()].filter(([k]) => k !== "X-Amz-Signature").map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)]).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      const canonical = ["GET", p, pairs.map(([k, v]) => `${k}=${v}`).join("&"), `host:${req.headers.host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
+      const toSign = ["AWS4-HMAC-SHA256", amz, `${date}/${region}/s3/aws4_request`, createHash("sha256").update(canonical).digest("hex")].join("\n");
+      let k = createHmac("sha256", "AWS4" + m.r2.secret).update(date || "").digest();
+      for (const s of [region || "", "s3", "aws4_request"]) k = createHmac("sha256", k).update(s).digest();
+      const ok = req.method === "GET" && ak === m.r2.access && Date.now() <= when + Number(q.get("X-Amz-Expires")) * 1000 && createHmac("sha256", k).update(toSign).digest("hex") === q.get("X-Amz-Signature");
+      if (!ok) { m.r2.bad++; res.writeHead(403); return res.end("<Error><Code>AccessDenied</Code></Error>"); }
+      const objKey = decodeURIComponent(p.slice(m.r2.bucket.length + 2));
+      const obj = m.r2.objects.get(objKey);
+      m.r2.gets.push({ key: objKey, range: req.headers.range || null });
+      if (!obj) { res.writeHead(404); return res.end("<Error><Code>NoSuchKey</Code></Error>"); }
+      const rg = /bytes=(\d+)-(\d+)/.exec(req.headers.range || "");
+      if (!rg) { res.writeHead(200, { "content-length": obj.length }); return res.end(obj); }
+      const a = +rg[1], b = Math.min(+rg[2], obj.length - 1);
+      res.writeHead(206, { "content-length": b - a + 1, "content-range": `bytes ${a}-${b}/${obj.length}` });
+      return res.end(obj.subarray(a, b + 1));
+    }
     const bearer = (req.headers.authorization || "").replace(/^Bearer /, "");
     // ---- the Cloudflare edge for a named tunnel's host (FV_TUNNEL_URL_TEMPLATE): DNS -> tunnel -> ingress -> the connected pod
     const tm0 = /^\/tunnel\/([a-z0-9.-]+)(\/.*)$/.exec(p);

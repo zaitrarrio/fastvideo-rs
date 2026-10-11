@@ -435,8 +435,10 @@ export async function brevBoot(env: Env, req: Request): Promise<Response> {
 
 // ---------------------------------------------------------------- estimates (launch form, planner)
 /** Boot estimate for a launch on a type: warm (a parked instance holds `matched`) or cold (every tree downloads). */
-export function bootEstimate(info: Pick<BrevType, "deploy_s"> | null, trees: string[], have: string[] = []): { download_gb: number; boot_s: number } {
+export function bootEstimate(info: Pick<BrevType, "deploy_s"> | null, trees: string[], have: string[] = [], r2?: { bytes: (trees: string[]) => number; gbps: number }): { download_gb: number; boot_s: number } {
   const missing = trees.filter((t) => !have.includes(t));
-  const gb = treesGb(missing);
-  return { download_gb: gb, boot_s: Math.round((info?.deploy_s ?? DEFAULT_DEPLOY_S) + gb / DOWNLOAD_GBPS) };
+  // weights_source r2: the manifests' exact bytes and the R2 rate; else the table and the Hub rate.
+  const exact = r2 ? r2.bytes(missing) / 1e9 : 0;
+  const gb = r2 && exact ? Math.round(exact) : treesGb(missing);
+  return { download_gb: gb, boot_s: Math.round((info?.deploy_s ?? DEFAULT_DEPLOY_S) + gb / (r2 ? r2.gbps : DOWNLOAD_GBPS)) };
 }

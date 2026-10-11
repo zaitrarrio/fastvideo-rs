@@ -13,8 +13,10 @@
 // cluster_pods; nothing else on those accounts is ever touched.
 //
 // What differs from a Runpod pod (all in the env and the start command):
-//  - no network volume: weights come from the Hub at pinned revisions at
-//    boot (weights_source hub, owner approval) or not at all (fake engine);
+//  - no network volume: weights come from our R2 weights store at boot
+//    (weights_source r2, r2weights.ts; the default once every tree of the pool
+//    is published), from the Hub at pinned revisions (hub, owner approval) or
+//    not at all (fake engine);
 //  - no HTTPS proxy: the pod runs a Cloudflare tunnel, a named one fv-control
 //    made for it on the owner's zone (tunnels.ts; URL known up front) or,
 //    without those settings, a quick tunnel; it reports its https URL to
@@ -37,6 +39,7 @@ import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
 import { POOL_PRESETS } from "./presets";
 import { HttpError, now, parseJson, putSetting, rateLimit, utcDay } from "./util";
 import { AUX_FILES, HUB_TREES } from "./weights-sources";
+import { R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 
 // ---------------------------------------------------------------- ids
 const KEY_RE = /^(gmi|brev):(.+)$/;
@@ -177,7 +180,7 @@ const BREV: ComputeProvider = {
     // fetches from fv-control (brev-park.ts), so a parked VM restarted later runs that later launch.
     const run = brevRun(req.image, req.env);
     const info = await brev.type(env, req.gpu);
-    const trees = req.weights?.source === "hub" ? req.weights.trees : [];
+    const trees = req.weights?.source === "hub" || req.weights?.source === "r2" ? req.weights.trees : [];
     const disk = brevDiskGb(trees);
     const token = newBootToken();
     const id = await brev.create(env, { name: req.name, instanceType: req.gpu, startupScript: brevStartup(`${(env.PUBLIC_URL || "").replace(/\/$/, "")}/ingest/v1/brev-boot`, token), diskStorage: `${disk}Gi`, isStoppable: env.BREV_IS_STOPPABLE !== "0" && !!info?.stoppable });
@@ -188,7 +191,7 @@ const BREV: ComputeProvider = {
       instance_type: req.gpu,
       info,
       disk_gb: info && !info.elastic_disk && info.fixed_disk_gb ? info.fixed_disk_gb : disk,
-      launch_trees: launchTrees(req.weights),
+      launch_trees: launchTrees(req.weights, env),
       cluster_id: req.clusterId ?? null,
       token,
       run,
@@ -223,6 +226,8 @@ export async function providerView(env: Env, p: OtherProviderId) {
     running_dph: spend.running_dph,
     parked_dph: spend.parked_dph,
     hub_downloads_approved: env.FV_HUB_DOWNLOADS_APPROVED === "1",
+    // weights_source r2 (r2weights.ts): configured or why not, and the published trees.
+    r2_weights: { enabled: !r2Cfg(env).off, reason: r2Cfg(env).off, trees: Object.keys(r2Trees(env)).sort() },
     // How its pods are reached (tunnels.ts): named tunnels on the owner's zone, or quick tunnels; and what is wrong.
     tunnel: tunnelView(env),
   };
@@ -283,9 +288,10 @@ const configText = (pool: PoolSpec): string => {
   return BAKED_CONFIGS[f] || WORKER_CONFIGS[f] || "";
 };
 export interface WeightsPlan {
-  source: "hub" | "none";
+  source: "hub" | "r2" | "none";
   trees: string[];
-  /** Trees no plain Hub fetch can make (several repos, a conversion): the launch is refused with them. */
+  /** hub: trees no plain Hub fetch can make (several repos, a conversion); r2: trees not published in the R2 weights
+   * store. The launch is refused with them. */
   unsupported: string[];
   /** TSV for FV_WEIGHTS_TREES_B64: tree<TAB>dest<TAB>repo<TAB>rev<TAB>globs, aux<TAB>path<TAB>url<TAB>sha256<TAB>size. */
   tsv: string;
@@ -300,12 +306,25 @@ export function poolTrees(pool: PoolSpec): string[] {
   for (const p of POOL_PRESETS) if (p.pool.variant === pool.variant && ((pool.config && p.pool.config === pool.config) || (pool.config_toml && p.pool.config_toml === pool.config_toml))) p.weights.forEach((w) => out.add(w));
   return [...out].sort();
 }
-export function weightsPlan(pool: PoolSpec): WeightsPlan {
-  const source = pool.weights_source === "hub" ? "hub" : "none";
+/** A GMI / Brev pool's weights source: its own, else r2 when its config loads trees and every one is published in
+ * the R2 weights store (r2weights.ts), else none. Runpod pools: their own, else the volume. */
+export function weightsSource(pool: PoolSpec, env?: Env): "volume" | "hub" | "r2" | "none" {
+  if (pool.weights_source) return pool.weights_source;
+  if (!isOtherPool(pool)) return "volume";
+  const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
+  const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
+  return trees.length && trees.every((t) => pub[t]) ? "r2" : "none";
+}
+const R2_DEFAULT_TREES = () => r2Trees({} as Env);
+export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
+  const ws = weightsSource(pool, env);
+  const source = ws === "hub" || ws === "r2" ? ws : "none";
   if (source === "none") return { source, trees: [], unsupported: [], tsv: "" };
   const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
-  const unsupported = trees.filter((t) => !HUB_TREES[t]);
-  const rows = trees.filter((t) => HUB_TREES[t]).map((t) => ["tree", t, HUB_TREES[t]!.repo, HUB_TREES[t]!.revision, HUB_TREES[t]!.globs.join(" ")].join("\t"));
+  const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
+  const unsupported = trees.filter((t) => (source === "hub" ? !HUB_TREES[t] : !pub[t]));
+  // r2: the trees come from the fetcher's plan (fv-control's /ingest/v1/weights-plan), so only the aux rows here.
+  const rows = source === "r2" ? [] : trees.filter((t) => HUB_TREES[t]).map((t) => ["tree", t, HUB_TREES[t]!.repo, HUB_TREES[t]!.revision, HUB_TREES[t]!.globs.join(" ")].join("\t"));
   // The TAEs (and LPIPS) every engine may load: small, pinned by SHA-256.
   for (const a of AUX_FILES) rows.push(["aux", a.path, a.url, a.sha256, String(a.size)].join("\t"));
   return { source, trees, unsupported, tsv: rows.join("\n") + "\n" };
@@ -328,10 +347,11 @@ export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: st
  * (warm); else every tree downloads (cold), and a non-stoppable type downloads them at every launch. */
 export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boolean; stoppable: boolean | null; instance: string | null; download_gb: number; boot_s: number; note: string } | null> {
   if (poolProvider(pool) !== "brev" || !pool.provider_gpu) return null;
-  const plan = weightsPlan(pool);
-  const want = launchTrees(plan);
+  const plan = weightsPlan(pool, env);
+  const want = launchTrees(plan, env);
   const trees = Object.keys(want);
   const info = await brev.type(env, pool.provider_gpu);
+  const r2 = plan.source === "r2" ? { bytes: (t: string[]) => r2Bytes(env, t), gbps: R2_DOWNLOAD_GBPS } : undefined;
   const stoppable = info ? info.stoppable : null;
   const min = (s: number) => `~${Math.max(1, Math.round(s / 60))} min`;
   if (!trees.length) {
@@ -340,11 +360,11 @@ export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boo
   }
   const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
   if (c) {
-    const e = bootEstimate(info, trees, c.matched);
+    const e = bootEstimate(info, trees, c.matched, r2);
     return { warm: true, stoppable, instance: c.row.name, download_gb: e.download_gb, boot_s: e.boot_s, note: `warm: restarts parked ${c.row.name} (holds ${c.matched.join(", ")}${c.missing.length ? `; downloads ${c.missing.join(", ")} ~${e.download_gb} GB` : ""}): boot ${min(e.boot_s)}` };
   }
-  const e = bootEstimate(info, trees);
-  let note = `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB): boot ${min(e.boot_s)}`;
+  const e = bootEstimate(info, trees, [], r2);
+  let note = `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB${plan.source === "r2" ? " from R2" : " from the Hub"}): boot ${min(e.boot_s)}`;
   if (stoppable) note += "; kept on stop (the next launch is warm)";
   else if (stoppable === false) {
     const others = (await brev.types(env).catch(() => [])).filter((t) => t.stoppable && brevInstanceTypes(env).includes(t.type)).map((t) => t.type);
@@ -352,10 +372,16 @@ export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boo
   }
   return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note };
 }
-/** The Hub trees of a plan at their pinned revisions ({} without hub): what a Brev disk keeps. */
-export function launchTrees(plan: WeightsPlan | undefined): TreeRevs {
-  if (!plan || plan.source !== "hub") return {};
-  return Object.fromEntries(plan.trees.filter((t) => HUB_TREES[t]).map((t) => [t, HUB_TREES[t]!.revision]));
+/** The trees of a plan at their revisions ({} without weights): what a Brev disk keeps. A Hub tree in R2 has the Hub
+ * revision as its R2 revision, so a disk filled from either source serves both. */
+export function launchTrees(plan: WeightsPlan | undefined, env?: Env): TreeRevs {
+  if (!plan) return {};
+  if (plan.source === "hub") return Object.fromEntries(plan.trees.filter((t) => HUB_TREES[t]).map((t) => [t, HUB_TREES[t]!.revision]));
+  if (plan.source === "r2") {
+    const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
+    return Object.fromEntries(plan.trees.filter((t) => pub[t]).map((t) => [t, pub[t]!.rev]));
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------- the pod's env and start command
@@ -404,6 +430,8 @@ export function providerEnv(
     out.FV_WEIGHTS_TREES_B64 = btoa(o.weights.tsv);
     out.FV_SCRIPTS_URL = `https://raw.githubusercontent.com/${env.GITHUB_REPO || "zaitrarrio/fastvideo-rs"}/${o.scriptsRef}/scripts/gpu`;
   }
+  // r2: the trees' URLs come from fv-control at boot (presigned, short-lived); the aux files by their pinned URLs.
+  if (o.weights.source === "r2") Object.assign(out, r2PodEnv(env), { FV_WEIGHTS_TREES_B64: btoa(o.weights.tsv) });
   // GMI: the in-container watchdog deletes its own container at the deadline (fv-control's cron does too).
   if (o.provider === "gmi" && env.GMI_API_KEY) Object.assign(out, { FV_BACKSTOP_API_KEY: env.GMI_API_KEY, FV_BACKSTOP_API: (env.GMI_API || "https://console.gmicloud.ai/api").replace(/\/$/, "") });
   return { env: out, dropped, notes };
@@ -415,7 +443,9 @@ export const CLOUDFLARED = {
   sha256: "53b7a7a5420d188758d24341294acb0d1bca54296548ac05e38811a694ac6134",
 };
 
-// The weight trees of FV_WEIGHTS_TREES_B64 (weightsPlan), in the boot below. A
+// The weights of the boot below: with weights_source r2 the trees come from the R2 weights store (R2_FETCH_SH,
+// r2weights.ts) and the aux rows from their pinned URLs; with hub, the weight trees of FV_WEIGHTS_TREES_B64
+// (weightsPlan). A
 // tree counts as present only with fetch-hub-tree.py's `.complete` AND our
 // `.fv-revision` holding its pinned revision (written after the fetch): a Brev
 // VM restarted from a stop keeps /home/ubuntu/workspace/weights, so those
@@ -423,8 +453,8 @@ export const CLOUDFLARED = {
 // without both marks, is moved aside and removed (the VM's own disk, never a
 // shared volume), then fetched again. `fetch_tree` is the boot's (tests stub
 // it). The Hub fetcher is only set up when a tree is missing.
-export const WEIGHTS_SH = `if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ]; then
-  say "weights: Hub trees at pinned revisions (owner-approved)"
+export const WEIGHTS_SH = `${R2_FETCH_SH}if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ] || [ "\${FV_WEIGHTS_SOURCE:-none}" = r2 ]; then
+  [ "$FV_WEIGHTS_SOURCE" = hub ] && say "weights: Hub trees at pinned revisions (owner-approved)"
   rm -rf "$FV_WEIGHTS"/.*.partial-* "$FV_WEIGHTS"/.stale-* 2>/dev/null || true
   report weights "" "checking"
   n=0; kept=0; got=0
@@ -655,12 +685,27 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   if (rt.state === "stopped") return { phase: "stopped", detail: "stopped outside fv-control", fatal: true };
   if (rt.state === "starting") return { phase: "provisioning", detail: rt.reason || "", fatal: false };
   const hb = rep?.heartbeat_at ? `; host heartbeat ${Math.round((now() - rep.heartbeat_at) / 1000)} s ago: ${(rep.heartbeat || "").slice(0, 160)}` : "";
-  if (rep?.phase === "weights") return { phase: "weights", detail: `downloading from the Hub${rep.detail ? ` (${rep.detail})` : ""}`, fatal: false };
+  if (rep?.phase === "weights") return { phase: "weights", detail: /^r2 /.test(rep.detail || "") ? `fetching from the R2 weights store (${rep.detail.slice(3)})` : `downloading from the Hub${rep.detail ? ` (${rep.detail})` : ""}`, fatal: false };
   if (rep?.phase === "tunnel") return { phase: "loading", detail: `tunnel up, fv-serve loading${hb}`, fatal: false };
   if (rep?.phase === "serve_ready") return { phase: "loading", detail: `fv-serve answers /health on the host (${rep.detail}); waiting for it through the tunnel`, fatal: false };
   if (rep?.phase === "container_started") return { phase: "container started", detail: `the boot runs in the container${hb}`, fatal: false };
   if (rep?.phase === "host") return { phase: "host", detail: `host script running (${rep.detail.slice(0, 200)})${hb}`, fatal: false };
   return { phase: "booting", detail: `no report from the pod yet${hb}`, fatal: false };
+}
+
+/** weights_source r2 (any provider): every tree's manifest read from the bucket (checked against the repo's pin), and
+ * what the pod will fetch; null without r2. An unreadable manifest is an issue: the pod could not fetch it either. */
+export async function r2Outlook(env: Env, pool: PoolSpec): Promise<{ ok: boolean; note: string } | null> {
+  const plan = weightsPlan(pool, env);
+  const { cfg } = r2Cfg(env);
+  if (plan.source !== "r2" || !cfg || plan.unsupported.length || !plan.trees.length) return null;
+  try {
+    const ms = await Promise.all(plan.trees.map((t) => r2Manifest(env, cfg, t)));
+    const total = ms.reduce((s, m) => s + m.total_bytes, 0);
+    return { ok: true, note: `r2: fetches ${ms.map((m) => `${m.dest} ${(m.total_bytes / 1e9).toFixed(1)} GB`).join(", ")} = ${(total / 1e9).toFixed(1)} GB from the R2 weights store (manifests checked; ~${Math.max(1, Math.round(total / 1e9 / R2_DOWNLOAD_GBPS / 60))} min at ${R2_DOWNLOAD_GBPS} GB/s)` };
+  } catch (e) {
+    return { ok: false, note: `weights_source r2: ${(e as Error).message.slice(0, 300)}` };
+  }
 }
 
 /** The URL a pod reports must be a quick-tunnel URL (tests: FV_ENDPOINT_URL_RE). */
@@ -724,7 +769,20 @@ const LONG_REPORTS = ["host", "host_failed", "container_exited", "serve_timeout"
 export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (string | number)[]; message: string }[] {
   const out: { path: (string | number)[]; message: string }[] = [];
   spec.pools.forEach((p, i) => {
-    if (!isOtherPool(p)) return;
+    if (!isOtherPool(p)) {
+      // A Runpod pool may fetch from the R2 weights store onto its container disk instead of mounting the volume.
+      if (p.weights_source !== "r2") return;
+      const plan = weightsPlan(p, env);
+      const off = r2Cfg(env).off;
+      if (off) out.push({ path: ["pools", i, "weights_source"], message: `weights_source r2: ${off}` });
+      if (plan.unsupported.length) out.push({ path: ["pools", i, "weights_source"], message: `not in the R2 weights store yet: ${plan.unsupported.join(", ")} (scripts/gpu/r2-weights.py status; docs/ops/r2-weights.md §6): use the volume` });
+      if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
+      if (p.volume === true) out.push({ path: ["pools", i, "volume"], message: "weights_source r2 fetches onto the container disk: leave volume off (the volume is not mounted with r2)" });
+      const need = r2DiskGb(env, plan.trees);
+      if (p.container_disk_gb !== undefined && p.container_disk_gb < need) out.push({ path: ["pools", i, "container_disk_gb"], message: `${p.container_disk_gb} GB is too small for ${plan.trees.join(", ")} from R2: at least ${need} GB (unset: fv-control sizes it)` });
+      if (need > 500) out.push({ path: ["pools", i, "weights_source"], message: `${plan.trees.join(", ")} need ${need} GB of container disk, over Runpod's 500 GB: use the volume` });
+      return;
+    }
     const prov = poolProvider(p) as OtherProviderId;
     const impl = providerImpl(prov);
     const off = impl.off(env);
@@ -734,7 +792,15 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
     if (tun.error) out.push({ path: ["pools", i, "provider"], message: `named pod tunnels: ${tun.error} (docs/serve/deploy-gmi-brev.md §6.4)` });
     const gpus = impl.gpus(env);
     if (p.provider_gpu && !gpus.includes(p.provider_gpu)) out.push({ path: ["pools", i, "provider_gpu"], message: `${p.provider_gpu} is not allowed on ${impl.title}: one of ${gpus.join(", ")} (${prov.toUpperCase()}_${prov === "gmi" ? "PRODUCTS" : "INSTANCE_TYPES"})` });
-    const plan = weightsPlan(p);
+    const plan = weightsPlan(p, env);
+    if (plan.source === "none" && !p.weights_source && (p.models?.length ?? 0) > 0)
+      out.push({ path: ["pools", i, "weights_source"], message: `models need weights: r2 (the R2 weights store, once every tree of the pool is published: ${poolTrees(p).filter((t) => t !== "auxiliary").filter((t) => !r2Trees(env)[t]).join(", ") || "-"} missing), hub (owner approval) or serve fake_models` });
+    if (plan.source === "r2") {
+      const off = r2Cfg(env).off;
+      if (off) out.push({ path: ["pools", i, "weights_source"], message: `weights_source r2: ${off}` });
+      if (plan.unsupported.length) out.push({ path: ["pools", i, "weights_source"], message: `not in the R2 weights store yet: ${plan.unsupported.join(", ")} (scripts/gpu/r2-weights.py status; docs/ops/r2-weights.md §6): use hub or another preset` });
+      if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
+    }
     if (plan.source === "hub") {
       if (!p.hub_download_approved) out.push({ path: ["pools", i, "hub_download_approved"], message: `weights_source hub downloads ${plan.trees.join(", ") || "the weights"} from the Hub at every boot: it needs the owner's approval for this launch (weights_download_approved: true)` });
       else if (env.FV_HUB_DOWNLOADS_APPROVED !== "1") out.push({ path: ["pools", i, "hub_download_approved"], message: "Hub downloads at boot are not approved on this fv-control (the owner sets FV_HUB_DOWNLOADS_APPROVED=1; CLAUDE.md: large downloads need approval)" });

@@ -1,0 +1,11 @@
+# Weight trees published in the R2 weights store (bucket fv-weights, docs/ops/r2-weights.md).
+# One row per published manifest (manifests/<dest>/<rev>.json), recorded AFTER `r2-weights.py publish-*`
+# and `r2-weights.py verify --deep` passed; `r2-weights.py record` prints these rows.
+# fv-control (control/gen-configs.mjs -> src/weights-sources.ts R2_TREES) offers weights_source r2 only
+# for trees listed here, and refuses a manifest whose SHA-256 differs from the one pinned here.
+#
+# dest<TAB>rev<TAB>files<TAB>bytes<TAB>manifest sha256<TAB>source (hub | dir)
+#
+# rev: the Hub revision (40 hex) for Hub trees, as weights-revisions.tsv; for volume-only trees the
+# label given to publish-dir (eu-<YYYYMMDD>: the day it was copied off the EU volume jg48s6o1w0).
+# Nothing is published yet (2026-10-11): the bucket exists, empty; the coordinator populates it.

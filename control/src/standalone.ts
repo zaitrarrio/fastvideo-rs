@@ -13,6 +13,7 @@ import { validateVar } from "./envvars";
 import { bootRows, getBoot } from "./boottime";
 import { getDiagnosis } from "./podlogs";
 import { HttpError, utcDay } from "./util";
+import { weightsSource } from "./providers";
 import type { z } from "zod";
 import { parseOr400, type StandaloneLaunchZ } from "./schemas";
 
@@ -60,17 +61,22 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
   if (input.vcpu !== undefined) pool.vcpu = input.vcpu;
   if (input.container_disk_gb !== undefined) pool.container_disk_gb = Number(input.container_disk_gb);
   pool.volume = input.volume ?? (compute === "GPU" ? (base.volume ?? true) : false);
-  // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): no Runpod volume; the weights from the Hub (approved) or none.
+  // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): no Runpod volume; the weights from R2 (the default once
+  // every tree is published, providers.ts weightsSource), the Hub (approved) or none.
   if (input.provider && input.provider !== "runpod") {
     pool.provider = input.provider;
     pool.provider_gpu = input.provider_gpu;
     if (input.provider_region) pool.provider_region = input.provider_region;
     pool.compute = "GPU";
     pool.volume = false;
-    pool.weights_source = input.weights_source ?? "none";
+    if (input.weights_source) pool.weights_source = input.weights_source;
     if (input.weights_download_approved) pool.hub_download_approved = true;
     delete pool.gpu_types, delete pool.cpu_flavors, delete pool.vcpu;
-  } else if (input.weights_source) pool.weights_source = input.weights_source;
+  } else if (input.weights_source) {
+    pool.weights_source = input.weights_source;
+    // r2 on Runpod: the trees go onto the container disk (sized by fv-control unless given); no volume.
+    if (input.weights_source === "r2" && input.volume === undefined) pool.volume = false;
+  }
   // An image reference is the pool's own image (resolved to a digest at start); the channel / sha the spec's source.
   if (input.image) pool.image = input.image;
   const deadlineMin = input.deadline_min ?? 60;
@@ -124,7 +130,7 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     created_by: c.created_by,
     definition: {
       provider: pool.provider ?? "runpod",
-      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: pool.weights_source ?? "none", hub_download_approved: !!pool.hub_download_approved } : {}),
+      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : {}),
       variant: pool.variant,
       image: pool.image ? { image: pool.image } : c.spec.image,
       compute: pool.compute,

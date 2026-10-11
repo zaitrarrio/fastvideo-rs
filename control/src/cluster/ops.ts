@@ -53,6 +53,7 @@ export async function envCtx(env: Env, c: Cluster, secrets?: ClusterSecrets): Pr
     runpodApiKey: env.RUNPOD_API_KEY,
     ingestUrl: ingestUrl(env),
     backstop: isStandalone(c) && !isEdge(c.spec),
+    env,
   };
 }
 /** The Runpod pod name: fv-ctl-<cluster>-<pool>-<stamp>, or fv-pod-<name>-<stamp> for a standalone pod. */
@@ -188,10 +189,10 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     return null;
   }
   const ctx = await envCtx(env, c);
-  const plan = weightsPlan(pool);
+  const plan = weightsPlan(pool, env);
   // NVIDIA Brev keep-on-stop (brev-park.ts): a parked instance of this type holding some of the trees is restarted
   // (it keeps its first name, so its pod key) instead of creating one.
-  const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan)) : null;
+  const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan, env)) : null;
   const name = warm ? warm.row.name : runpodName(c, pool.id);
   const key = podKey(prov, name);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: key, pool: pool.id, image });
@@ -236,7 +237,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   }
   if (warm) {
     try {
-      await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan), cluster_id: c.id });
+      await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
     } catch (e) {
       const msg = (e as Error).message.slice(0, 200);
       const r = await holdFailed(env, warm.row, msg);
