@@ -22,9 +22,9 @@ import { isEdge, REGIONS, type ClusterSpec, type PoolSpec } from "./spec";
 import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, type Cluster } from "./store";
 import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
-import { claimWarm, holdFailed, restartWarm } from "../brev-park";
+import { claimWarm, holdFailed, restartWarm, unclaimWarm } from "../brev-park";
 import { ensureTunnel, podTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
-import { brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
+import { brevRun, brevStoppableIssue, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -188,16 +188,23 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${problems.map((x) => x.message).join("; ")}`);
     return null;
   }
+  // Owner rule 2026-10-11: a Brev VM is stopped and kept, never deleted by fv-control: a type Brev cannot stop is refused.
+  const nostop = prov === "brev" ? await brevStoppableIssue(env, pool.provider_gpu!) : null;
+  if (nostop) {
+    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${nostop}`);
+    return null;
+  }
   const ctx = await envCtx(env, c);
   const plan = weightsPlan(pool, env);
-  // NVIDIA Brev keep-on-stop (brev-park.ts): a parked instance of this type holding some of the trees is restarted
-  // (it keeps its first name, so its pod key) instead of creating one.
+  // NVIDIA Brev keep-on-stop (brev-park.ts): a parked or held instance of this type is restarted (it keeps its first
+  // name, so its pod key) before a new VM is created: the one holding most of the trees first (fetched from r2 or the
+  // Hub alike: same revisions); the missing ones download.
   const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan, env)) : null;
   const name = warm ? warm.row.name : runpodName(c, pool.id);
   const key = podKey(prov, name);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: key, pool: pool.id, image });
   const unclaim = async () => {
-    if (warm) await env.DB.prepare("UPDATE brev_instances SET state = 'parked', updated_at = ? WHERE workspace_id = ? AND state = 'restarting'").bind(now(), warm.row.workspace_id).run();
+    if (warm) await unclaimWarm(env, warm.row);
   };
   const reportToken = ctx.secrets.ingest_token;
   if (!reportToken) {
@@ -240,8 +247,8 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
       await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
     } catch (e) {
       const msg = (e as Error).message.slice(0, 200);
-      const r = await holdFailed(env, warm.row, msg);
-      log(`${pool.id}: restart of parked ${warm.row.name} failed (${msg}): ${r === "held" ? "held for the owner (fv-control.sh brev parked)" : "deleted (policy brev_park_delete_failed)"}; creating a fresh instance`);
+      const r = await holdFailed(env, warm.row, msg, log);
+      log(`${pool.id}: restart of ${warm.row.state} ${warm.row.name} failed (${msg}): ${r === "held" ? "stopped and held, not deleted (reused by a later launch after BREV_HELD_REUSE_AFTER_S, or fv-control.sh brev parked)" : "Brev refused its stop: left running (alert brev_stop_failed)"}; trying another instance or a fresh one`);
       return createOtherWorker(env, c, pool, image, slot, log);
     }
     // The pod key is the parked instance's: its record starts over for this cluster (no old URL, report or ready mark).
@@ -265,7 +272,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   await recordPod(env, c, rec, "worker", slot, hash);
   if (warm)
     log(
-      `${pool.id}: warm restart of parked ${impl.title} ${key} on ${pool.provider_gpu} (${warm.matched.join(", ")} on its disk${warm.missing.length ? `; downloads ${warm.missing.join(", ")}` : ""})${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`,
+      `${pool.id}: ${warm.matched.length ? "warm restart" : "reuse"} of ${warm.row.state} ${impl.title} ${key} on ${pool.provider_gpu}${warm.row.state === "held" && warm.row.note ? ` (it was held: ${warm.row.note})` : ""} (${warm.matched.length ? `${warm.matched.join(", ")} on its disk` : "none of the trees on its disk"}${warm.missing.length ? `; downloads ${warm.missing.join(", ")}` : ""})${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`,
     );
   else log(`${pool.id}: ${impl.title} pod ${key} on ${pool.provider_gpu}${known ? ` at $${dph}/hr` : " (price unknown: capped at max_gpu_dph)"}; its URL comes from its tunnel report`);
   return rec;
@@ -283,13 +290,18 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
   log(`${rec.pool}: ${rec.pod} env applied; container restarts`);
 }
 
-/** Deletes a pod. `park` (a cluster stop): a Brev pod of a stoppable type whose weights completed is stopped and
- * parked instead (brev-park.ts); a Brev warm restart that never came up is held for the owner. */
-export async function deletePod(env: Env, podId: string, log: Logf, why: string, opts: { park?: boolean } = {}): Promise<boolean> {
+/** Releases a pod: a Runpod / GMI pod is deleted; a Brev VM is stopped and parked or held, never deleted (owner rule
+ * 2026-10-11, brev-park.ts) unless `manual` (the owner's `pod delete` of a standalone pod). False when it is still
+ * there (a failed delete, or a stop Brev refused: left running and alerted). */
+export async function deletePod(env: Env, podId: string, log: Logf, why: string, opts: { manual?: boolean } = {}): Promise<boolean> {
   try {
     let what = "deleted";
-    if (isOtherPod(podId)) what = await releaseOtherPod(env, podId, !!opts.park, log);
+    if (isOtherPod(podId)) what = await releaseOtherPod(env, podId, { manual: !!opts.manual, why }, log);
     else await runpod.remove(env, podId);
+    if (what === "stop_failed") {
+      log(`WARNING: ${podId} is still running: Brev refused its stop (${why}); not deleted (alert brev_stop_failed)`);
+      return false;
+    }
     await podUpdate(env, podId, { deleted: true, ...(what === "deleted" ? {} : { status: what }) });
     log(`${what} ${podId} (${why})`);
     return true;

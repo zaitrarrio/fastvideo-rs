@@ -21,9 +21,11 @@ export interface Policies {
   build_pod_backstop: boolean; // auto-action (default on): stop the build pod past the limits below (buildpod.ts)
   build_pod_max_h: number; // …up this many hours (its own cap is 8 h + 30 min grace)
   build_pod_idle_grace_min: number; // …or idle this many minutes past its own idle stop (per its /healthz)
-  brev_park_max: number; // NVIDIA Brev keep-on-stop (brev-park.ts): at most this many parked (stopped, weights kept) instances; 0: delete on stop
-  brev_park_max_days: number; // …each parked at most this many days; then the oldest go (only ours)
-  brev_park_delete_failed: boolean; // auto-action (default off): delete a parked instance whose restart failed instead of holding it for the owner
+  // NVIDIA Brev keep-on-stop (brev-park.ts). Owner rule 2026-10-11: fv-control never deletes a Brev VM on its own, so
+  // these are alert thresholds only (alert brev_parked_over_limit); nothing is deleted past them. The former
+  // brev_park_delete_failed is removed (ignored when stored).
+  brev_park_max: number; // alert: more than this many parked / held (stopped, weights kept) instances
+  brev_park_max_days: number; // alert: one parked / held longer than this many days
 }
 export const DEFAULT_POLICIES: Policies = {
   idle_gpu_pct: 5,
@@ -49,10 +51,18 @@ export const DEFAULT_POLICIES: Policies = {
   build_pod_idle_grace_min: 15,
   brev_park_max: 2,
   brev_park_max_days: 7,
-  brev_park_delete_failed: false,
 };
-/** The policies; a key added since they were saved takes its default. */
-export const policies = async (env: Env): Promise<Policies> => ({ ...DEFAULT_POLICIES, ...(await getSetting<Partial<Policies>>(env, "policies", DEFAULT_POLICIES)) });
+/** Policy keys that were removed: dropped when read or saved (brev_park_delete_failed: removed 2026-10-11, owner rule
+ * "stopping a brev vm should NOT delete it"). */
+export const REMOVED_POLICIES = ["brev_park_delete_failed"] as const;
+const dropRemoved = <T extends object>(p: T): T => {
+  const out = { ...p } as Record<string, unknown>;
+  for (const k of REMOVED_POLICIES) delete out[k];
+  return out as T;
+};
+/** The policies; a key added since they were saved takes its default; a removed one is dropped. */
+export const policies = async (env: Env): Promise<Policies> => dropRemoved({ ...DEFAULT_POLICIES, ...(await getSetting<Partial<Policies>>(env, "policies", DEFAULT_POLICIES)) });
+export { dropRemoved as dropRemovedPolicies };
 
 export function attribute(name: string, rules: Policies["attribution"]): string {
   for (const r of rules) if (name.startsWith(r.prefix)) return r.owner;

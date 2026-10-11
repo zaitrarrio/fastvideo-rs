@@ -580,23 +580,26 @@ async function podNameMap() {
 }
 
 // ---------------------------------------------------------------- pods
-// NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): stopped instances that keep their weights for a warm
-// restart, billed as storage; the owner deletes one, or puts a held one (its restart failed) back into the warm pool.
+// NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): stopped instances that keep their weights for reuse,
+// billed as storage. Owner rule 2026-10-11: fv-control never deletes a Brev VM on its own; only the owner's Delete here
+// (or fv-control.sh brev delete-parked) does. Unpark puts a held one (failed boot / restart) back into reuse at once.
 function brevParkedCard(pk, redraw) {
   const trees = (p) => Object.entries(p.trees || {}).map(([t, rev]) => `${t}@${String(rev).slice(0, 7)}`).join(", ") || "–";
   return card(
     `Parked Brev instances (${pk.parked.length}): $${pk.storage_usd_per_day.toFixed(2)}/day storage`,
-    h("p", { class: "muted small" }, `A Brev pod of a stoppable type is stopped (not deleted) when its cluster stops, keeping its weights; the next launch of the same type and trees restarts it. At most ${pk.policy.brev_park_max} parked, ${pk.policy.brev_park_max_days} days each (policies brev_park_*); then the oldest is deleted. Held: its restart failed, kept for you.`),
+    h("p", { class: "muted small" }, `Every stop of a Brev pod stops its VM and keeps it, with its weights: parked (weights complete) or held (with why: a failed boot or restart). The next launch of the same instance type reuses one before creating a VM. Policy: ${pk.policy.line} (policies brev_park_*). Delete is yours only.`),
+    pk.over_limit ? h("div", { class: "alert", "data-brev-over-limit": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("over the alert threshold", "warn"), ` more than ${pk.policy.brev_park_max} parked or one older than ${pk.policy.brev_park_max_days} days: nothing is deleted; reuse or delete them.`)) : "",
     table(
       [
         { label: "instance", get: (p) => h("span", { title: p.workspace_id }, p.name) },
-        { label: "state", get: (p) => badge(p.state, p.state === "held" ? "warn" : "good") },
+        { label: "state", get: (p) => badge(p.state === "stop_failed" ? "running (stop refused)" : p.state, p.state === "stop_failed" ? "critical" : p.state === "held" ? "warn" : "good") },
         { label: "type", get: (p) => p.instance_type },
         { label: "weights", get: (p) => trees(p) },
         { label: "disk", get: (p) => (p.disk_gb ? `${p.disk_gb} GB` : "–"), num: true },
         { label: "$/day", get: (p) => fmt$(p.storage_usd_per_day), num: true },
         { label: "parked", get: (p) => (p.parked_days === null ? "–" : `${p.parked_days.toFixed(1)} d`), num: true },
-        { label: "note", get: (p) => p.note || "" },
+        { label: "reuse", get: (p) => p.reuse || "", wrap: true },
+        { label: "note", get: (p) => p.note || "", wrap: true },
         {
           label: "",
           get: (p) =>
@@ -604,7 +607,7 @@ function brevParkedCard(pk, redraw) {
               "span",
               { class: "row" },
               p.state === "held" ? h("button", { onclick: async () => { await act("unpark", () => api(`/api/providers/brev/parked/${p.workspace_id}/unpark`, { method: "POST", body: {} })); redraw(); } }, "Unpark") : "",
-              h("button", { class: "danger", onclick: async () => { if (!confirm(`Delete ${p.name} and its weights (${trees(p)})? The next launch downloads them again. (audited)`)) return; await act("delete", () => api(`/api/providers/brev/parked/${p.workspace_id}/delete`, { method: "POST", body: {} })); redraw(); } }, "Delete"),
+              h("button", { class: "danger", onclick: async () => { if (!confirm(`Delete the Brev VM ${p.name} and its weights (${trees(p)})? fv-control never does this on its own; the next launch downloads them again. (audited)`)) return; await act("delete", () => api(`/api/providers/brev/parked/${p.workspace_id}/delete`, { method: "POST", body: {} })); redraw(); } }, "Delete"),
             ),
         },
       ],
@@ -762,7 +765,7 @@ async function pageCluster(main, id) {
       { class: "row" },
       h("button", { class: "primary", onclick: () => { location.hash = `#/cluster/${c.id}/config`; } }, "Configure…"),
       !running && btn("Start", () => startDialog(c, draw), "primary"),
-      running && btn("Stop (delete pods)", () => confirm(`Delete every pod of ${c.name}?`) && post("stop", {}, "stop"), "danger"),
+      running && btn("Stop (delete pods)", () => confirm(`Stop ${c.name}? Its Runpod / GMI pods are deleted; its Brev VMs are stopped and kept (storage billed, reused by the next launch; never deleted by fv-control).`) && post("stop", {}, "stop"), "danger"),
       running && btn("Extend…", async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${c.name}`); if (m) post("extend", { minutes: m }, "extend"); }),
       running && btn("Roll to…", () => rollDialog(c, post)),
       running && btn("Restart…", () => restartDialog(c, r.pods, post)),

@@ -102,27 +102,37 @@ sets their secrets; the form and `fv-control.sh providers` say why.
 
 **Brev keep-on-stop** (docs/serve/deploy-gmi-brev.md §3.4). Stopping a
 Brev pod of a stoppable instance type, whose Hub weights completed, stops
-the VM instead of deleting it: it is *parked* with its weights under
-`~/workspace/weights`. This covers Stop, the deadline and a budget stop;
-a delete of the definition stops first and parks the same way. The next
-launch of the same instance type with those trees restarts it, a *warm*
-boot with no download. Non-stoppable types (e.g. `massedcompute_*`), the
-fake engine and pods whose weights never completed are deleted as before.
+the VM instead of deleting it (owner rule 2026-10-11: "stopping a brev vm
+should NOT delete it. brev VM's should be re-used or manually deleted"):
+it is *parked* with its weights under `~/workspace/weights`, or *held*
+with a note when its boot never became ready (a failed boot: partial
+weights stay and the next boot resumes them). This covers Stop, the
+deadline, the idle stop and a budget stop. `fv-control.sh pod delete
+<name>` of a pod whose VM is live deletes that VM (your explicit delete);
+the delete of a definition with no pod leaves any parked VM alone. The
+next launch of the same instance type reuses a parked or held instance
+before creating one: a *warm* boot when it holds the trees, else the
+trees download onto it. Non-stoppable types (e.g. `massedcompute_*`) are
+refused at launch. A stop Brev refuses leaves the VM running with the
+alert `brev_stop_failed` (its $/hr); fv-control never deletes it.
 
 A parked instance bills storage only. That cost counts in the Brev
-budget and the cost views (owner `brev:parked`), and the policies
-`brev_park_max` (2) and `brev_park_max_days` (7) delete the oldest. A
-restart that fails (no capacity) or does not come up is *held* for you,
-and a fresh pod is created.
+budget and the cost views (owner `brev:parked`); the policies
+`brev_park_max` (2) and `brev_park_max_days` (7) only raise the alert
+`brev_parked_over_limit`. A restart that fails (no capacity) or does not
+come up is *held* (reused by a later launch after 15 minutes, or at once
+after Unpark), and another instance or a fresh pod is used.
 
-The launch form lists stoppable instance types first, and shows "warm:
+The launch form lists stoppable instance types only, and shows "warm:
 restarts parked …" or "cold: downloads … (~N GB): boot ~M min" at the
-instance-type field. The Pods page lists parked instances with their
-weights, disk and $/day, with Delete (and Unpark for a held one).
+instance-type field. The Pods page lists parked and held instances with
+their weights, disk, $/day and reuse status, with Delete (yours only) and
+Unpark for a held one. The Stop confirmation of a Brev pod says its VM is
+stopped and kept, with its storage $/day.
 
 ```bash
-fv-control.sh brev parked                    # parked / held instances: weights, disk, $/day
-fv-control.sh brev unpark <workspace id>     # a held one back into the warm pool
+fv-control.sh brev parked                    # policy line; parked / held instances: weights, disk, $/day, reuse
+fv-control.sh brev unpark <workspace id>     # a held one reusable at once
 fv-control.sh brev delete-parked <workspace id>
 ```
 

@@ -110,6 +110,9 @@ export interface Env {
   /** Keep-on-stop (brev-park.ts): seconds a restarted parked instance may take to run again before it is held
    * for the owner and a fresh one is made (default 900). */
   BREV_RESTART_TIMEOUT_S?: string;
+  /** Keep-on-stop: seconds after a Brev instance was held (failed boot / restart) before a launch may reuse it
+   * (default 900; Unpark reuses it at once). */
+  BREV_HELD_REUSE_AFTER_S?: string;
   /** "0": create every Brev workspace with isStoppable false (default: true for a type the listing marks stoppable;
    * brev-cli's entity says the flag is "used for autostop only", UNVERIFIED whether the server's stop needs it). */
   BREV_IS_STOPPABLE?: string;

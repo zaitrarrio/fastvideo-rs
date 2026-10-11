@@ -44,10 +44,14 @@
 #                                              recorded tunnels and hosts; sweep = the cron's pass now (leaks deleted,
 #                                              unrecorded fv- tunnels / fv-control records reported, never touched)
 #   fv-control.sh brev parked | unpark <id> | delete-parked <id>
-#                                              NVIDIA Brev keep-on-stop: parked (stopped, weights kept) instances with
-#                                              their trees, disk and storage $/day; unpark = a held one (restart failed)
-#                                              back into the warm pool; delete-parked deletes one (only ours)
+#                                              NVIDIA Brev keep-on-stop: every stop keeps the VM (owner rule 2026-10-11:
+#                                              fv-control never deletes a Brev VM on its own): parked / held instances
+#                                              with their trees, disk, storage $/day and reuse status; unpark = a held
+#                                              one (failed boot / restart) reusable at once; delete-parked deletes one
+#                                              (only ours; with `pod delete`, the only Brev deletes)
 #   fv-control.sh pod list | status <name> | start <name> | stop <name> | extend <name> <min> | delete <name> | wait <name>
+#                                              on Brev, stop keeps the VM (stopped: parked / held, reused by the next
+#                                              launch); delete of a pod with a live VM deletes that VM (your explicit delete)
 #   fv-control.sh pod logs <name|pod id> [--source runpod|serve] [--follow]
 #   fv-control.sh boot <pod id | cluster or standalone name>
 #                                              each pod's boot timeline: create, machine, image pull, container, fv-serve,
@@ -389,13 +393,14 @@ case "$cmd" in
   build-pod) cmd_build_pod "$@" ;;
   pod) cmd_pod "$@" ;;
   brev)
-    # NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): parked instances keep their weights, billed as storage.
+    # NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4): stopped VMs are kept with their weights (billed as
+    # storage) and reused; fv-control never deletes one on its own (owner rule 2026-10-11).
     case "${1:-parked}" in
       parked)
         api_s GET /api/providers/brev/parked || die "brev parked: $(api_err)"
-        jq -r '"policy: at most \(.policy.brev_park_max) parked, \(.policy.brev_park_max_days) days each; storage $\(.storage_usd_per_day * 100 | round / 100)/day",
+        jq -r '"policy: \(.policy.line); storage $\(.storage_usd_per_day * 100 | round / 100)/day\(if .over_limit then " (OVER the alert threshold: nothing is deleted)" else "" end)",
           (.parked[] | [.workspace_id, .name, .state, .instance_type, "\(.disk_gb // "?") GB", "$\(.storage_usd_per_day * 100 | round / 100)/day",
-            "parked \(.parked_days // 0 | . * 10 | round / 10) d", (.trees | to_entries | map("\(.key)@\(.value[0:7])") | join(",")), (.note // "")] | @tsv)' <<<"$API_OUT" ;;
+            "parked \(.parked_days // 0 | . * 10 | round / 10) d", (.trees | to_entries | map("\(.key)@\(.value[0:7])") | join(",")), (.reuse // ""), (.note // "")] | @tsv)' <<<"$API_OUT" ;;
       unpark) api_s POST "/api/providers/brev/parked/${2:?brev unpark <workspace id>}/unpark" '{}' || die "brev unpark: $(api_err)"; jq -r '"\(.name): \(.state) (the next launch of its type may restart it)"' <<<"$API_OUT" ;;
       delete-parked) api_s POST "/api/providers/brev/parked/${2:?brev delete-parked <workspace id>}/delete" '{}' || die "brev delete-parked: $(api_err)"; jq -r .message <<<"$API_OUT" ;;
       *) die "brev parked | unpark <workspace id> | delete-parked <workspace id>" ;;

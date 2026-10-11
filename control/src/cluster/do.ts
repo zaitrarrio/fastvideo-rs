@@ -342,7 +342,7 @@ export class ClusterOps implements DurableObject {
           rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : other ? await otherPodDiag(env, r.pod, rt as Awaited<ReturnType<typeof otherPodState>> | undefined ?? undefined) : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
         if (!diag) continue;
         if (diag.fatal) {
-          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; deleting it (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
+          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; ${r.pod.startsWith("brev:") ? "stopping and holding its VM (never deleted)" : "deleting it"} (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
           await podUpdate(env, r.pod, { status: "failed" });
           await deletePod(env, r.pod, this.log, `${p.id} ${diag.phase}`);
           c.state.workers[p.id] = (c.state.workers[p.id] || []).filter((x) => x.pod !== r.pod);
@@ -396,7 +396,8 @@ export class ClusterOps implements DurableObject {
     };
     if (op.phase === "init") {
       await saveState(env, c, { status: "stopping" });
-      for (const p of ids()) await deletePod(env, p, this.log, op.params?.reason || "cluster stop", { park: true });
+      // A Brev VM is stopped and parked / held (never deleted) unless this is the owner's delete of a standalone pod.
+      for (const p of ids()) await deletePod(env, p, this.log, op.params?.reason || "cluster stop", { manual: !!op.params?.delete_definition });
       op.phase = "verify";
       op.data.tries = 0;
       return { delayMs: 5000 };
@@ -405,15 +406,16 @@ export class ClusterOps implements DurableObject {
     const left: string[] = [];
     for (const p of ids()) {
       const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
-      // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped.
+      // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped (one in DELETING, the
+      // owner's delete, is not listed: gone).
       if (pod && !(isOtherPod(p) && (pod as { state?: string }).state === "stopped" && (await isParked(env, p)))) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {
-      for (const p of left) await deletePod(env, p, this.log, "retry", { park: true });
+      for (const p of left) await deletePod(env, p, this.log, "retry", { manual: !!op.params?.delete_definition });
       return { delayMs: 10_000 };
     }
-    // Remaining live rows of this cluster (e.g. a pod the state lost) go too.
-    for (const row of await livePods(env, c.id)) if (!ids().includes(row.pod_id)) await deletePod(env, row.pod_id, this.log, "orphan");
+    // Remaining live rows of this cluster (e.g. a pod the state lost) go too (a Brev VM: stopped and held, not deleted).
+    for (const row of await livePods(env, c.id)) if (!ids().includes(row.pod_id)) await deletePod(env, row.pod_id, this.log, "orphan", { manual: !!op.params?.delete_definition });
     const images = c.state.images;
     c.state = { images, workers: {} };
     await saveState(env, c, { status: left.length ? "failed" : "stopped", deadline: null });
