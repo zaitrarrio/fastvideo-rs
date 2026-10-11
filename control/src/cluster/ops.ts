@@ -23,7 +23,7 @@ import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, 
 import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
 import { claimWarm, holdFailed, restartWarm } from "../brev-park";
-import { ensureTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
+import { ensureTunnel, podTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
 import { brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
@@ -229,7 +229,11 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     pe.env.FV_TUNNEL_TOKEN = tunnel.token;
     pe.env.FV_TUNNEL_URL = tunnel.url;
     log(`${pool.id}: named tunnel ${tunnel.name}: ${key} will answer at ${tunnel.url}${tunnel.reused ? " (kept with the parked instance)" : ""}`);
-  } else if (tun.warning) log(`${pool.id}: NOTE: ${tun.warning}`);
+  } else {
+    if (tun.warning) log(`${pool.id}: NOTE: ${tun.warning}`);
+    // A parked Brev instance restarted after named tunnels were turned off: its old tunnel goes (it reports a quick one).
+    if (await podTunnel(env, key)) for (const m of await releaseTunnels(env, key, "named tunnels are off")) log(`${pool.id}: ${m}`);
+  }
   if (warm) {
     try {
       await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan), cluster_id: c.id });

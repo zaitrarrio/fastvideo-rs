@@ -33,7 +33,7 @@
 import type { AlertIn } from "./alerts";
 import { randomToken } from "./crypto";
 import { defaults, type Env } from "./env";
-import { fetchWithTimeout, getSetting, HttpError, now, parseJson, putSetting } from "./util";
+import { fetchWithTimeout, getSetting, now, parseJson, putSetting } from "./util";
 
 // ---------------------------------------------------------------- settings
 export interface TunnelSettings {
@@ -405,9 +405,4 @@ export async function tunnelSweep(env: Env, t = now(), force = false): Promise<T
 /** The owner's view: the settings and the recorded tunnels (no token). */
 export async function tunnelsView(env: Env, all = false) {
   return { settings: tunnelView(env), tunnels: await tunnelRows(env, all) };
-}
-/** Refuses a tunnel action while named tunnels are not configured. */
-export function requireNamed(env: Env) {
-  const s = tunnelSettings(env);
-  if (s.mode !== "named") throw new HttpError(409, `named pod tunnels are off: ${s.missing.join(", ")} unset`);
 }
