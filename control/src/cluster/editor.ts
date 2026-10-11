@@ -9,7 +9,7 @@ import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
-import { brevOutlook, isOtherPool, poolDph, providerIssues } from "../providers";
+import { brevOutlook, brevStoppableIssues, isOtherPool, poolDph, providerIssues } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 import { tunnelSettings } from "../tunnels";
 
@@ -24,6 +24,8 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   const warnings: Issue[] = [];
   // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
   for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
+  // Owner rule 2026-10-11 (brev_stoppable_only): a Brev type that cannot be stopped is refused (its stop would be a delete).
+  if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevStoppableIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
   // Named pod tunnels (tunnels.ts): a host two levels below the zone, or a half-configured setup, is said loudly.
   const tun = tunnelSettings(env);
   if (tun.warning)
@@ -36,7 +38,7 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
     if (known && dph > spec.max_gpu_dph) issues.push({ path: [...prefix, "max_gpu_dph"], message: `${p.provider_gpu} on ${p.provider} costs $${dph}/hr, above max_gpu_dph $${spec.max_gpu_dph}` });
     else if (!known) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `no price known for ${p.provider_gpu} on ${p.provider}: planned at max_gpu_dph ($${spec.max_gpu_dph}/hr)` });
     if (offer?.in_stock === false) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: `${p.provider_gpu} is not available on ${p.provider}${offer.region ? ` in ${offer.region}` : ""} now` });
-    // Brev keep-on-stop: warm (a parked instance holds the trees) or cold, with the boot estimate; non-stoppable types flagged.
+    // Brev keep-on-stop: warm / reuse (a parked or held instance of the type) or cold, with the boot estimate.
     if (p.weights_source === "hub") {
       const o = await brevOutlook(env, p).catch(() => null);
       if (o) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: o.note });

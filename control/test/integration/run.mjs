@@ -1359,11 +1359,15 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.ok(hostRow?.at && /user=ubuntu/.test(hostRow.detail || ""), JSON.stringify(btl));
   assert.ok(btl.find((r) => r.phase === "tunnel reported")?.at, JSON.stringify(btl));
   assert.equal((await call("/ingest/v1/endpoint", { method: "POST", body: { pod: bkey, phase: "nonsense" }, headers: { authorization: `Bearer ${benv.FV_ENDPOINT_REPORT_TOKEN}` } })).status, 400);
+  // The stop confirmation names the kept VM and its storage $/day (owner rule 2026-10-11: a stop never deletes it).
+  assert.ok(sp.pod.brev?.kept_on_stop && sp.pod.brev.storage_usd_per_day > 0, JSON.stringify(sp.pod.brev));
+  // `pod delete` of a pod with a live VM: the owner's explicit delete, the one Brev delete besides delete-parked.
   assert.equal((await call("/api/standalone/brev1", { method: "DELETE", headers: T() })).status, 202);
   for (let i = 0; i < 120 && (await call("/api/standalone/brev1", { headers: T() })).status !== 404; i++) await sleep(500);
   assert.equal(b.workspaces.length, 0, "the VM is deleted");
   assert.ok(b.calls.filter((c) => c.method === "DELETE").every((c) => c.path === `/workspaces/${ws.id}`));
-  // A host script that fails (here docker run without a GPU driver): the boot fails at once with its reason, the VM goes.
+  // A host script that fails (here docker run without a GPU driver): the boot fails at once with its reason; the VM is
+  // stopped and held (owner rule 2026-10-11: never deleted by fv-control), for reuse or the owner's delete.
   b.boot = "hostfail";
   await cli("pod", "launch", "brevhf", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
   const hid = (await call("/api/standalone/brevhf", { headers: T() })).j.pod.id;
@@ -1371,9 +1375,16 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   b.boot = "ok";
   assert.equal(op.status, "failed");
   assert.ok(op.log.some((l) => /FAILED \(host failed\): docker run \(exit 125\): .*could not select device driver/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
-  assert.equal(b.workspaces.length, 0, "deleted after the host failure");
+  assert.deepEqual(b.workspaces.map((x) => [x.name.replace(/-\d+$/, ""), x.status]), [["fv-pod-brevhf", "STOPPED"]], "stopped, not deleted, after the host failure");
+  assert.ok(op.log.some((l) => /stopping and holding its VM \(never deleted\)/.test(l.msg)) && op.log.some((l) => /stopped and held, not deleted: its boot never became ready/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  let pk = (await call("/api/providers/brev/parked", { headers: T() })).j;
+  assert.deepEqual(pk.parked.map((x) => x.state), ["held"]);
+  assert.match(pk.parked[0].note, /stopped before its boot became ready .*host failed/);
+  // Deleting the definition (no pod left) keeps the held VM: only delete-parked deletes it.
   await call("/api/standalone/brevhf", { method: "DELETE", headers: T() });
-  // The container exits after its start (the host watcher's container_exited, with its log): failed at once, deleted.
+  assert.equal(b.workspaces.length, 1);
+  // The container exits after its start (the host watcher's container_exited, with its log): failed at once, stopped
+  // and held. A fresh VM: the held one is not reused within BREV_HELD_REUSE_AFTER_S (it just failed).
   b.boot = "exit";
   await cli("pod", "launch", "brevex", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
   const xid = (await call("/api/standalone/brevex", { headers: T() })).j.pod.id;
@@ -1383,11 +1394,16 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.ok(op.log.some((l) => /FAILED \(container exited\): container exited exit=2 .*fv-serve: config: auth\.key_store = d1/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   // Without FV_PROVIDER_SECRET_ENV's D1 settings the key store is memory (else fv-serve refuses to start), said in the log.
   assert.ok(op.log.some((l) => /NOTE: FV_KEY_STORE=memory: no D1 settings/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
-  assert.equal(b.workspaces.length, 0, "deleted after the exit");
+  assert.deepEqual(b.workspaces.map((x) => x.status), ["STOPPED", "STOPPED"], "stopped, not deleted, after the exit");
+  assert.ok(!b.calls.some((c) => c.method === "DELETE" && c.path !== `/workspaces/${ws.id}`), "the only Brev delete was the owner's pod delete");
   await call("/api/standalone/brevex", { method: "DELETE", headers: T() });
+  // The owner deletes the held VMs (Pods page / fv-control.sh brev delete-parked).
+  pk = (await call("/api/providers/brev/parked", { headers: T() })).j;
+  for (const x of pk.parked) assert.equal((await call(`/api/providers/brev/parked/${x.workspace_id}/delete`, { method: "POST", body: {}, headers: T() })).status, 200);
+  assert.equal(b.workspaces.length, 0);
 });
 
-await step("Brev keep-on-stop: park on stop, warm restart (no download), restart failure / timeout, non-stoppable delete, limits, budget, only ours", async () => {
+await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop alerted, non-stoppable refused, limits as alerts, budget, only ours", async () => {
   // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
   // instance-type list as prices (no BREV_PRICES), a short restart timeout.
   const w2 = await startWorker(mock, {
@@ -1444,16 +1460,20 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     const posts0 = posts();
     const callsFrom = b.calls.length;
 
-    // The launch form's outlook: cold on the stoppable type, the non-stoppable one flagged.
+    // The launch form's outlook: cold on the stoppable type; the non-stoppable one refused (its stop would be a delete).
     const v = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "g5.xlarge-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
     assert.equal(v.ok, true, JSON.stringify(v.issues));
     assert.ok(v.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads fastwan22-ti2v-5b, wan22-ti2v-5b .*kept on stop/.test(x.message)), JSON.stringify(v.warnings));
     const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
-    assert.ok(v2.warnings.some((x) => /a100-test is not stoppable: the weights download at every launch \(stoppable allowed types keep them: g5\.xlarge-test\)/.test(x.message)), JSON.stringify(v2.warnings));
+    assert.equal(v2.ok, false);
+    assert.ok(v2.issues.some((x) => x.path[0] === "provider_gpu" && /^a100-test is not stoppable on NVIDIA Brev: refused \(rule brev_stoppable_only: .*\)\. Stoppable allowed types: g5\.xlarge-test$/.test(x.message)), JSON.stringify(v2.issues));
+    const rns = await call2("/api/standalone", { method: "POST", body: { name: "nostop1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, channel: "stable", deadline_min: 30, max_gpu_dph: 5 }, headers: H });
+    assert.equal(rns.status, 400, JSON.stringify(rns.j));
+    assert.match(rns.j.error, /a100-test is not stoppable on NVIDIA Brev: refused/);
     const dyn = (await call2("/api/schemas/dynamic", { headers: H })).j;
     const bg = dyn.provider_gpus.filter((g) => g.provider === "brev");
-    assert.deepEqual(bg.map((g) => g.id), ["g5.xlarge-test", "a100-test"], "stoppable types first");
-    assert.match(bg[0].detail, /\$1\.01\/hr · stoppable: weights kept on stop/, "the live list's price");
+    assert.deepEqual(bg.map((g) => g.id), ["g5.xlarge-test"], "stoppable types only");
+    assert.match(bg[0].detail, /\$1\.01\/hr · stoppable: stopped and kept on stop/, "the live list's price");
 
     // 1. Cold launch: both trees downloaded; the disk sized for them.
     const l1 = await launch("warm1");
@@ -1470,7 +1490,7 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     // 2. Stop: the workspace is stopped, not deleted, and parked with its trees.
     let op = await stop("warm1", l1.id);
     assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
-    assert.ok(op.log.some((l) => /parked \(stopped; fastwan22-ti2v-5b, wan22-ti2v-5b kept on its 200 GB disk/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.ok(op.log.some((l) => /parked \(stopped, not deleted; fastwan22-ti2v-5b, wan22-ti2v-5b kept on its 200 GB disk/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
     assert.equal(ws1.status, "STOPPED");
     assert.ok(b.calls.some((c) => c.method === "PUT" && c.path === `/workspaces/${ws1.id}/stop`));
     assert.ok(!b.calls.some((c) => c.method === "DELETE" && c.path === `/workspaces/${ws1.id}`));
@@ -1520,7 +1540,7 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     const l3 = await launch("warm3");
     b.startFail = false;
     assert.equal(l3.op.status, "done", l3.op.error + JSON.stringify(l3.op.log.slice(-8)));
-    assert.ok(l3.op.log.some((l) => /restart of parked .* failed .*no capacity.*held for the owner.*creating a fresh instance/.test(l.msg)), JSON.stringify(l3.op.log.map((l) => l.msg)));
+    assert.ok(l3.op.log.some((l) => /restart of parked .* failed .*no capacity.*stopped and held, not deleted.*trying another instance or a fresh one/.test(l.msg)), JSON.stringify(l3.op.log.map((l) => l.msg)));
     assert.equal(posts(), posts0 + 2);
     const ws3 = b.workspaces.find((x) => x.name.startsWith("fv-pod-warm3-"));
     assert.deepEqual(b.boots.filter((x) => x.ws === ws3.id).at(-1).fetched.sort(), ["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
@@ -1540,24 +1560,52 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     assert.equal(posts(), posts0 + 3);
     assert.equal(ws3.status, "STOPPED", "stopped again after the timeout");
     assert.deepEqual((await parked()).parked.map((p) => [p.workspace_id, p.state]).sort(), [[ws1.id, "held"], [ws3.id, "held"]].sort());
-    // Parking warm4's instance makes three: past brev_park_max 2, the oldest goes (only ours).
+    // Parking warm4's instance makes three: past brev_park_max 2: an alert, nothing deleted.
     op = await stop("warm4", l4.id);
     assert.equal(op.status, "done", op.error);
     pk = await parked();
-    assert.equal(pk.parked.length, 2);
-    assert.ok(op.log.some((l) => /parked instance deleted \(more than brev_park_max 2 parked\)/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.equal(pk.parked.length, 3);
+    assert.equal(pk.over_limit, true);
+    assert.ok(op.log.some((l) => /WARNING: NVIDIA Brev: 3 parked \/ held, more than brev_park_max 2: .*Not deleted/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    let al2 = (await call2("/api/alerts", { headers: H })).j.alerts;
+    assert.ok(al2.some((a) => a.kind === "brev_parked_over_limit" && /\$[\d.]+\/day/.test(a.message)), JSON.stringify(al2));
+    assert.ok(!b.calls.slice(callsFrom).some((c) => c.method === "DELETE"), "nothing deleted so far");
 
-    // 6. A non-stoppable type: deleted on stop as before.
-    const l5 = await launch("cold5", "a100-test");
-    assert.equal(l5.op.status, "done", l5.op.error + JSON.stringify(l5.op.log.slice(-8)));
-    const ws5 = b.workspaces.find((x) => x.name.startsWith("fv-pod-cold5-"));
-    assert.equal(ws5.body.isStoppable, false, "not stoppable: isStoppable false");
-    op = await stop("cold5", l5.id);
-    assert.equal(op.status, "done", op.error);
-    assert.ok(op.log.some((l) => /not parked \(a100-test is not stoppable\): deleting/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
-    assert.ok(!b.workspaces.some((x) => x.id === ws5.id), "deleted");
+    // 6. Reuse of a held one: once BREV_HELD_REUSE_AFTER_S passed, a launch restarts it (its note in the log) rather
+    //    than creating a VM. (Its hold is backdated here.)
+    const ws4 = b.workspaces.find((x) => x.name.startsWith("fv-pod-warm4-"));
+    d1Exec(w2.dir, `UPDATE brev_instances SET updated_at = ${Date.now() - 3600_000}, parked_at = ${Date.now() - 3600_000} WHERE workspace_id = '${ws1.id}'; UPDATE brev_instances SET state = 'held', note = 'held for the test' WHERE workspace_id IN ('${ws3.id}', '${ws4.id}')`);
+    // After `wrangler d1 execute`, workerd can drop the next connection: wait until it answers twice.
+    for (let i = 0, ok = 0; i < 40 && ok < 2; i++) {
+      ok = (await fetch(`${w2.url}/healthz`).then((r) => r.ok).catch(() => false)) ? ok + 1 : 0;
+      await sleep(250);
+    }
+    const l6 = await launch("reuse6");
+    assert.equal(l6.op.status, "done", l6.op.error + JSON.stringify(l6.op.log.slice(-8)));
+    assert.equal(posts(), posts0 + 3, "no create: the held one is reused");
+    assert.ok(l6.op.log.some((l) => new RegExp(`warm restart of held NVIDIA Brev brev:${ws1.name} .*\\(it was held: restart failed: .*no capacity`).test(l.msg)), JSON.stringify(l6.op.log.map((l) => l.msg)));
 
-    // 7. The CLI and the owner's actions: list, unpark a held one, delete one; the age limit.
+    // 7. Brev refuses the stop (here the simulated type turns out not stoppable): left running, alerted with its $/hr,
+    //    never deleted; the cron's retry stops and holds it once Brev accepts.
+    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
+    g5.stoppable = false;
+    op = await stop("reuse6", l6.id);
+    assert.equal(op.status, "failed", JSON.stringify(op));
+    assert.match(op.error, /still present/);
+    assert.ok(op.log.some((l) => /stop refused by Brev .*left RUNNING at \$1\.01\/hr.*never deletes a Brev VM on its own/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.equal(ws1.status, "RUNNING");
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    al2 = (await call2("/api/alerts", { headers: H })).j.alerts;
+    assert.ok(al2.some((a) => a.kind === "brev_stop_failed" && /still RUNNING at \$1\.01\/hr \(\$24\.14\/day\)/.test(a.message)), JSON.stringify(al2));
+    g5.stoppable = true;
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    assert.equal(ws1.status, "STOPPED");
+    assert.ok(!(await call2("/api/alerts", { headers: H })).j.alerts.some((a) => a.kind === "brev_stop_failed"), "resolved once stopped");
+    assert.equal((await parked()).parked.find((p) => p.workspace_id === ws1.id).state, "held");
+    assert.ok(!b.calls.slice(callsFrom).some((c) => c.method === "DELETE"), "still nothing deleted");
+
+    // 8. The CLI and the owner's actions: list, unpark a held one, delete one; the age limit is an alert.
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const { mkdtempSync, writeFileSync } = await import("node:fs");
@@ -1566,7 +1614,7 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     writeFileSync(`${dir}/token`, tok, { mode: 0o600 });
     const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w2.url, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
     const out = await cli("brev", "parked");
-    assert.match(out, /^policy: at most 2 parked, 7 days each; storage \$[\d.]+\/day$/m);
+    assert.match(out, /^policy: stopped Brev VMs are kept, never deleted by fv-control \(owner rule 2026-10-11\): reused by the next launch of their type, or deleted by you; alert past 2 parked or 7 days each; storage \$[\d.]+\/day \(OVER the alert threshold: nothing is deleted\)$/m);
     pk = await parked();
     const held = pk.parked.find((p) => p.state === "held");
     assert.ok(held, JSON.stringify(pk));
@@ -1576,20 +1624,28 @@ await step("Brev keep-on-stop: park on stop, warm restart (no download), restart
     assert.match(await cli("brev", "delete-parked", other.workspace_id), /parked instance deleted \(deleted by /);
     assert.ok(!b.workspaces.some((x) => x.id === other.workspace_id));
     await assert.rejects(cli("brev", "delete-parked", "wsforeign"), /no parked Brev instance/);
-    // brev_park_max_days 0.0001 (~9 s): the age limit deletes the last one at the next collect.
+    // brev_park_max_days 0.0001 (~9 s): past the age threshold at the next collect: an alert, nothing deleted.
+    // (A stored brev_park_delete_failed, removed, is dropped.)
     const pol = (await call2("/api/policies", { headers: H })).j.policies;
-    assert.equal((await call2("/api/policies", { method: "PUT", body: { ...pol, brev_park_max_days: 0.0001 }, headers: { cookie: ck, "x-csrf-token": cs } })).status, 200);
+    assert.ok(!("brev_park_delete_failed" in pol));
+    assert.equal((await call2("/api/policies", { method: "PUT", body: { ...pol, brev_park_max: 10, brev_park_max_days: 0.0001, brev_park_delete_failed: true }, headers: { cookie: ck, "x-csrf-token": cs } })).status, 200);
     await sleep(9000);
+    const n = (await parked()).parked.length;
     await call2("/api/collect", { method: "POST", body: {}, headers: H });
-    assert.equal((await parked()).parked.length, 0);
-    assert.ok(!b.workspaces.some((x) => x.id === held.workspace_id), "deleted by age");
+    assert.equal((await parked()).parked.length, n, "nothing deleted by age");
+    assert.ok(b.workspaces.some((x) => x.id === held.workspace_id));
+    al2 = (await call2("/api/alerts", { headers: H })).j.alerts;
+    assert.ok(al2.some((a) => a.kind === "brev_parked_over_limit" && /parked longer than brev_park_max_days 0\.0001/.test(a.message)), JSON.stringify(al2));
 
-    // Only ours: the foreign and the unrecorded fv- workspaces were never stopped, started or deleted.
+    // Only ours: the foreign and the unrecorded fv- workspaces were never stopped, started or deleted; the only deletes
+    // were the owner's (delete-parked).
     for (const id of ["wsforeign", "wsstray"]) assert.ok(!b.calls.slice(callsFrom).some((c) => c.path.startsWith(`/workspaces/${id}`)), id);
-    assert.deepEqual(b.workspaces.map((x) => x.id).sort(), ["wsforeign", "wsstray"]);
+    assert.deepEqual(b.calls.slice(callsFrom).filter((c) => c.method === "DELETE").map((c) => c.path), [`/workspaces/${other.workspace_id}`]);
   } finally {
     w2.stop();
-    b.workspaces = b.workspaces.filter((x) => !["wsforeign", "wsstray"].includes(x.id));
+    b.workspaces = [];
+    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
+    if (g5) g5.stoppable = true;
   }
 });
 
@@ -1763,7 +1819,7 @@ await step("named pod tunnels: create → token in the pod's env, URL known up f
     assert.ok(!(await call3(`/api/standalone/tunb`, { headers: H })).text.includes(tb.token));
     assert.equal((await call3("/api/standalone/tunb/stop", { method: "POST", body: {}, headers: H })).status, 202);
     op = await wait3(lb.id, "down");
-    assert.ok(msgs(op).some((m) => /parked \(stopped;/.test(m)), JSON.stringify(msgs(op)));
+    assert.ok(msgs(op).some((m) => /parked \(stopped, not deleted;/.test(m)), JSON.stringify(msgs(op)));
     assert.ok(!tb.deleted_at && c.dns.includes(recB), "parked: tunnel and DNS kept");
     sw = (await call3("/api/tunnels/sweep", { method: "POST", body: {}, headers: H })).j;
     assert.ok(!tb.deleted_at, "the sweep keeps a parked instance's tunnel");

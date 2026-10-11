@@ -917,7 +917,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         "div",
         { class: "row", style: "margin-top:8px" },
         !running ? b("Start", () => runOp("start", {}, `Start ${c.name}? Price check: ${price ? `${fmt$(price.cluster_dph)}/hr, ${price.ok ? "within the floor" : "REFUSED: " + price.reasons.join("; ")}` : "runs first"}.${dirty ? "\n\nYour unsaved edits are NOT used: Start uses the saved spec." : ""}`), "primary", dirty) : null,
-        running ? b("Stop", () => runOp("stop", {}, `Stop ${c.name}: delete every pod?`), "danger") : null,
+        running ? b("Stop", () => runOp("stop", {}, `Stop ${c.name}? Its Runpod / GMI pods are deleted; its Brev VMs are stopped and kept (storage billed, reused by the next launch; never deleted by fv-control).`), "danger") : null,
         running ? b("Extend…", async () => { const m = await askExtend(api, `Extend ${c.name}`); if (m) runOp("extend", { minutes: m }, `Extend ${c.name} by ${m} min?`); }) : null,
         op ? b("Cancel operation", () => runOp("cancel", {}, "Cancel the running operation? Pods it created stay (the backstops hold them).")) : null,
         b("Clone", () => (location.hash = `#/clusters/new?clone=${id}`)),

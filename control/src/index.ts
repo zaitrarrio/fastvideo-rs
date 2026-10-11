@@ -4,7 +4,7 @@
 // /ingest, a per-minute cron (collector.ts) and one ClusterOps Durable
 // Object per cluster (cluster/do.ts).
 import { Hono, type Context } from "hono";
-import { DEFAULT_POLICIES, policies, syncAlerts } from "./alerts";
+import { DEFAULT_POLICIES, dropRemovedPolicies, policies, syncAlerts } from "./alerts";
 import { tunnelSettings, tunnelsView, tunnelSweep } from "./tunnels";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
@@ -61,7 +61,7 @@ import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
-import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { assertBrevStoppable, endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -427,6 +427,8 @@ for (const [path, def] of Object.entries(OPS)) {
     for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
       if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
+    // Owner rule 2026-10-11: a Brev type that cannot be stopped is refused wherever pods are made (its stop would be a delete).
+    if (["up", "scale", "roll"].includes(def.kind)) await assertBrevStoppable(c.env, cl.spec, def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools : undefined);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
     return c.json({ operation: r.id, kind: def.kind }, 202);
@@ -625,6 +627,7 @@ app.post("/api/standalone/:id/start", async (c) => {
   const cl = await standaloneOf(c);
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
   assertRegionsAvailable(cl.spec);
+  await assertBrevStoppable(c.env, cl.spec);
   const b = await body<{ skip_image_check?: boolean }>(c);
   const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
   await auditC(c, { action: "standalone.start", target: cl.name });
@@ -795,7 +798,7 @@ app.post("/api/alerts/:id/resolve", async (c) => {
 app.get("/api/policies", async (c) => c.json({ policies: await policies(c.env), defaults: DEFAULT_POLICIES }));
 app.put("/api/policies", async (c) => {
   const b = await body<any>(c);
-  const next = { ...(await policies(c.env)), ...b };
+  const next = dropRemovedPolicies({ ...(await policies(c.env)), ...b });
   delete next.version;
   const r = await saveDoc(c.env, "policies", "default", next, { version: b.version, actor: actor(c), ip: clientIp(c) });
   return c.json({ policies: r.doc, version: r.version });

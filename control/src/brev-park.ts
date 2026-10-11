@@ -1,13 +1,27 @@
 // NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4, §7).
 //
-// Brev keeps /home/ubuntu/workspace across a stop (not a delete); the weights
-// a pod fetched into ~/workspace/weights are 35-120 GB. So when a Brev pod of a
-// stoppable instance type stops with its cluster (deadline, user stop, budget
-// stop) and its weights were complete (the pod became ready), fv-control
-// stops the workspace instead of deleting it: it is "parked" (brev_instances,
-// migration 0008). The next launch of the same instance type whose trees it
-// holds at the pinned revisions restarts it instead of creating one; its boot
-// skips those trees (providers.ts WEIGHTS_SH).
+// Owner rule (2026-10-11): "stopping a brev vm should NOT delete it. brev VM's
+// should be re-used or manually deleted". fv-control never deletes a Brev VM
+// on its own. Every stop (user stop, deadline backstop, budget floor, idle
+// stop, scale-down, roll, a failed or never-ready boot, a failed warm restart,
+// the down's orphan sweep) STOPS the workspace and records it:
+//   parked: its weights completed (the pod became ready): kept with its trees;
+//   held:   stopped with a note why (incomplete weights, failed boot, failed
+//           restart, no record); partial trees stay on its disk and the next
+//           boot's weights loop resumes / cleans them (providers.ts WEIGHTS_SH).
+// The only deletes are the owner's: `fv-control.sh pod delete <name>` (a
+// standalone pod with a live VM), `fv-control.sh brev delete-parked <id>`, the
+// UI's Delete on the Pods page's parked list, and
+// POST /api/providers/brev/parked/<id>/delete (deleteParked).
+//
+// Brev keeps /home/ubuntu/workspace across a stop; the weights a pod fetched
+// into ~/workspace/weights are 35-120 GB. The next launch of the same instance
+// type reuses a parked or held instance (state 'restarting', then live) before
+// creating a VM: the one holding most of the requested trees at the pinned
+// revisions first, else any of the type with the disk for them (the missing
+// trees download onto it). A held instance is reused once BREV_HELD_REUSE_AFTER_S
+// (default 900) passed since it was held, so a re-placement after a failed boot
+// does not land on the VM that just failed.
 //
 // The new launch's image and env reach a restarted VM without changing the
 // workspace (the CLI's API has no startup-script update): the startup script
@@ -16,18 +30,18 @@
 // GET /ingest/v1/brev-boot with a per-instance token, and runs it. fv-control
 // serves it only while the instance is live (not parked or held).
 //
-// Fallbacks: a start that fails (Brev: no capacity in the same provider /
-// region) or does not run within BREV_RESTART_TIMEOUT_S leaves the instance
-// "held" for the owner (or deleted, policy brev_park_delete_failed) and a
-// fresh instance is created. Non-stoppable types, pods without weights or
-// whose weights never completed are deleted as before.
+// A stop Brev refuses (a type that turned out not stoppable, an API error)
+// leaves the VM running in state 'stop_failed': alert brev_stop_failed with its
+// $/hr, the cron retries the stop, nothing is deleted. Non-stoppable types are
+// refused at launch (providers.ts brevStoppableIssue).
 //
-// Money and guards: a parked instance bills storage (disk GB × the type's
-// $/GB-hr); it is booked in the ledger (owner brev:parked), counted in the
-// Brev budget, and the oldest go past brev_park_max instances or
-// brev_park_max_days days. Only instances fv-control created and recorded
-// here (fv- names) are ever stopped, started or deleted.
-import { policies, type Policies } from "./alerts";
+// Money and guards: a parked / held instance bills storage (disk GB × the type's
+// $/GB-hr); it is booked in the ledger (owner brev:parked) and counted in the
+// Brev budget. brev_park_max / brev_park_max_days are alert thresholds only
+// (alert brev_parked_over_limit); brev_park_delete_failed is removed. Only
+// instances fv-control created and recorded here (fv- names) are ever stopped,
+// started or deleted.
+import { policies, type AlertIn, type Policies } from "./alerts";
 import { brev, type BrevType } from "./brev";
 import { brevHostScript } from "./brev-host";
 import { randomToken, seal, sha256Hex, unseal } from "./crypto";
@@ -74,7 +88,9 @@ export const DEFAULT_DEPLOY_S = 420;
 
 // ---------------------------------------------------------------- the record
 export type TreeRevs = Record<string, string>;
-export type BrevState = "live" | "restarting" | "parked" | "held" | "deleting" | "deleted" | "gone";
+/** live | restarting (claimed for a launch) | parked | held | stop_failed (Brev refused the stop: still running) |
+ * deleting (the owner's delete) | deleted | gone (Brev no longer lists it). */
+export type BrevState = "live" | "restarting" | "parked" | "held" | "stop_failed" | "deleting" | "deleted" | "gone";
 export interface BrevInstance {
   workspace_id: string;
   pod_id: string;
@@ -213,33 +229,51 @@ export async function recordBrevCreate(
 /** A new boot token (the startup script holds it). */
 export const newBootToken = () => randomToken("fvb_", 24);
 
-/** Disk GB that trees `present` ∪ `want` need on an instance (the same headroom as at create, without the 1.3). */
-const fits = (r: BrevInstance, want: TreeRevs) => {
+/** Whether the trees on an instance plus `want` fit its disk (the same 40 GB headroom as at create, without the 1.3).
+ * On the disk: its complete trees (`trees`) and whatever its last launch fetched (`launch_trees`, complete or partial:
+ * the weights loop replaces a partial tree in place, so a name counts once whatever its revision). Trees it holds
+ * that the launch does not want stay on the disk and count. */
+export function fitsDisk(r: Pick<BrevInstance, "disk_gb" | "trees" | "launch_trees">, want: TreeRevs): boolean {
   if (!r.disk_gb) return true;
-  const all = new Set([...Object.keys(parseJson<TreeRevs>(r.trees, {})), ...Object.keys(want)]);
+  const all = new Set([...Object.keys(parseJson<TreeRevs>(r.trees, {})), ...Object.keys(parseJson<TreeRevs>(r.launch_trees, {})), ...Object.keys(want)]);
   return treesGb([...all]) + 40 <= r.disk_gb;
-};
-/** Parked instances of an instance type ranked for a launch needing `want`: most trees at the pinned revision, then newest. */
-export async function warmCandidates(env: Env, instanceType: string, want: TreeRevs): Promise<{ row: BrevInstance; matched: string[]; missing: string[] }[]> {
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state = 'parked' AND instance_type = ? AND stoppable = 1`).bind(instanceType).all<BrevInstance>()).results || [];
-  const out: { row: BrevInstance; matched: string[]; missing: string[] }[] = [];
+}
+/** A held instance is reused for a launch once this long passed since it was held (BREV_HELD_REUSE_AFTER_S, default
+ * 900 s): a re-placement right after a failed boot / restart does not land on the same VM. */
+export const heldReuseAfterMs = (env: Env) => Math.max(0, Number(env.BREV_HELD_REUSE_AFTER_S ?? "900") || 0) * 1000;
+export interface WarmCandidate {
+  row: BrevInstance;
+  matched: string[];
+  missing: string[];
+}
+/** Parked / held instances of an instance type a launch needing `want` may reuse, best first: most trees at the pinned
+ * revision, then parked before held, then the newest. Any of the type with the disk for the trees qualifies (the
+ * missing ones download onto it); a held one once heldReuseAfterMs passed. Only ours (fv- names). */
+export async function warmCandidates(env: Env, instanceType: string, want: TreeRevs, t = now()): Promise<WarmCandidate[]> {
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PARKED_STATES} AND instance_type = ?`).bind(instanceType).all<BrevInstance>()).results || [];
+  const out: WarmCandidate[] = [];
+  const cool = heldReuseAfterMs(env);
   for (const row of rows) {
     if (!FV_NAME_RE.test(row.name)) continue;
+    if (row.state === "held" && t - row.updated_at < cool) continue;
+    if (!fitsDisk(row, want)) continue;
     const have = parseJson<TreeRevs>(row.trees, {});
-    const matched = Object.keys(want).filter((t) => have[t] === want[t]);
-    if (!matched.length || !fits(row, want)) continue;
-    out.push({ row, matched, missing: Object.keys(want).filter((t) => have[t] !== want[t]) });
+    out.push({ row, matched: Object.keys(want).filter((k) => have[k] === want[k]), missing: Object.keys(want).filter((k) => have[k] !== want[k]) });
   }
-  return out.sort((a, b) => b.matched.length - a.matched.length || (b.row.parked_at ?? 0) - (a.row.parked_at ?? 0));
+  const held = (c: WarmCandidate) => Number(c.row.state === "held");
+  return out.sort((a, b) => b.matched.length - a.matched.length || held(a) - held(b) || (b.row.parked_at ?? 0) - (a.row.parked_at ?? 0));
 }
-/** Claims the best parked instance for a launch (parked -> restarting, atomically); null: none fits. */
-export async function claimWarm(env: Env, instanceType: string, want: TreeRevs): Promise<{ row: BrevInstance; matched: string[]; missing: string[] } | null> {
-  if (!Object.keys(want).length) return null;
+/** Claims the best parked / held instance for a launch (-> restarting, atomically); null: none of the type fits. */
+export async function claimWarm(env: Env, instanceType: string, want: TreeRevs): Promise<WarmCandidate | null> {
   for (const c of await warmCandidates(env, instanceType, want)) {
-    const r = await env.DB.prepare("UPDATE brev_instances SET state = 'restarting', updated_at = ? WHERE workspace_id = ? AND state = 'parked'").bind(now(), c.row.workspace_id).run();
+    const r = await env.DB.prepare("UPDATE brev_instances SET state = 'restarting', updated_at = ? WHERE workspace_id = ? AND state = ?").bind(now(), c.row.workspace_id, c.row.state).run();
     if (Number(r.meta?.changes ?? 0) === 1) return c;
   }
   return null;
+}
+/** Gives a claimed instance back (the launch did not get to start it): parked or held as it was. */
+export async function unclaimWarm(env: Env, row: BrevInstance) {
+  await env.DB.prepare("UPDATE brev_instances SET state = ?, updated_at = ? WHERE workspace_id = ? AND state = 'restarting'").bind(row.state, row.updated_at, row.workspace_id).run();
 }
 /** Restarts a claimed instance for a launch: its new run script, then Brev's start; live on success. Throws on a failed start. */
 export async function restartWarm(env: Env, row: BrevInstance, x: { run: string; launch_trees: TreeRevs; cluster_id: string }) {
@@ -250,21 +284,8 @@ export async function restartWarm(env: Env, row: BrevInstance, x: { run: string;
     .bind(JSON.stringify(x.launch_trees), x.cluster_id, t, t, row.workspace_id)
     .run();
 }
-/** A restart that failed or timed out: stop it again and hold it for the owner (never restarted on its own), or
- * delete it (policy brev_park_delete_failed). The weights it holds stay unless deleted. */
-export async function holdFailed(env: Env, row: BrevInstance, why: string, pol?: Policies): Promise<"held" | "deleted"> {
-  const p = pol ?? (await policies(env));
-  if (p.brev_park_delete_failed) {
-    await brev.remove(env, row.workspace_id).catch(() => false);
-    await markBrevDeleted(env, row.workspace_id, "deleted", `restart failed: ${why}`.slice(0, 300));
-    return "deleted";
-  }
-  await brev.stop(env, row.workspace_id).catch(() => {});
-  await setState(env, row.workspace_id, "held", { note: `restart failed: ${why}`.slice(0, 300), parked_at: row.parked_at ?? now() });
-  return "held";
-}
 
-// ---------------------------------------------------------------- stop: park or delete
+// ---------------------------------------------------------------- stop: park or hold (never delete)
 /** The pod ran its weights to completion (it became ready, or reported its tunnel, which the boot does after the weights). */
 async function weightsDone(env: Env, podId: string): Promise<boolean> {
   const r = await env.DB.prepare("SELECT ready_at FROM cluster_pods WHERE pod_id = ?").bind(podId).first<{ ready_at: number | null }>();
@@ -272,63 +293,139 @@ async function weightsDone(env: Env, podId: string): Promise<boolean> {
   const rep = await getSetting<{ phase?: string } | null>(env, `endpoint:${podId}`, null);
   return rep?.phase === "tunnel";
 }
-/** Why a live Brev pod is not parked on stop (null: it is parkable). */
-export async function parkRefusal(env: Env, row: BrevInstance, pol: Policies): Promise<string | null> {
-  if (!row.stoppable) return `${row.instance_type} is not stoppable`;
-  if (pol.brev_park_max <= 0 || pol.brev_park_max_days <= 0) return "keep-on-stop is off (policy brev_park_max / brev_park_max_days)";
-  if (!FV_NAME_RE.test(row.name)) return "not an fv- name";
-  const trees = { ...parseJson<TreeRevs>(row.trees, {}), ...parseJson<TreeRevs>(row.launch_trees, {}) };
-  if (!Object.keys(trees).length) return "no weights to keep";
-  if (!(await weightsDone(env, row.pod_id))) return "its weights never completed";
-  return null;
+/** The $/hr a running Brev pod costs (the price fv-control recorded at create); null when unknown. */
+async function podDph(env: Env, podId: string): Promise<number | null> {
+  const r = await env.DB.prepare("SELECT cost_per_hr FROM cluster_pods WHERE pod_id = ?").bind(podId).first<{ cost_per_hr: number | null }>();
+  return r?.cost_per_hr ?? null;
 }
-export type Release = "parked" | "held" | "deleted" | "none";
+const money = (x: number | null) => (x === null ? "an unknown $/hr" : `$${x.toFixed(2)}/hr`);
+export type StopOutcome = "parked" | "held" | "stop_failed";
+/** Stops a live / restarting instance and records it: parked with `trees` (its weights completed), else held with
+ * `note`. Brev refusing the stop leaves it running as stop_failed (alert brev_stop_failed; the cron retries).
+ * Never deletes. */
+async function stopAndRecord(env: Env, row: BrevInstance, rec: { parked: TreeRevs } | { note: string }, log: (m: string) => void): Promise<StopOutcome> {
+  try {
+    await brev.stop(env, row.workspace_id);
+  } catch (e) {
+    const dph = await podDph(env, row.pod_id);
+    const why = `stop refused by Brev (${(e as Error).message.slice(0, 160)}): left RUNNING at ${money(dph)}${"note" in rec ? `; ${rec.note}` : ""}`;
+    await setState(env, row.workspace_id, "stop_failed", { note: why.slice(0, 300) });
+    log(`${row.pod_id}: WARNING: ${why}. fv-control never deletes a Brev VM on its own: stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${row.workspace_id}); alert brev_stop_failed`);
+    return "stop_failed";
+  }
+  if ("parked" in rec) {
+    await setState(env, row.workspace_id, "parked", { parked_at: now(), trees: rec.parked, note: null });
+    return "parked";
+  }
+  await setState(env, row.workspace_id, "held", { note: rec.note.slice(0, 300), parked_at: now() });
+  return "held";
+}
+/** A restart that failed or timed out: stop it again and hold it (reused by a later launch of its type after
+ * heldReuseAfterMs, or deleted by the owner). Its weights stay. */
+export async function holdFailed(env: Env, row: BrevInstance, why: string, log: (m: string) => void = () => {}): Promise<StopOutcome> {
+  return stopAndRecord(env, row, { note: `restart failed: ${why}` }, log);
+}
+export type Release = StopOutcome | "deleted" | "none";
 /**
- * Releases a Brev pod at a stop. `park`: a stoppable one whose weights completed is stopped and parked (its trees
- * recorded), else deleted. A warm restart that never became ready is held (or deleted by policy), whatever `park`.
- * An already parked / held one gets its stop again (the down's verify). Returns what happened, "none" when
- * fv-control has no record (the caller deletes as before).
+ * Releases a Brev pod. Every stop (`manual` unset) stops the VM: parked when its weights completed (its trees
+ * recorded), else held with a note (a never-ready boot: `why`; a warm restart that never came up). An already
+ * parked / held one gets its stop again (the down's verify); one in the owner's delete counts as gone. A stop Brev
+ * refuses leaves it running (stop_failed, alerted). `manual` (the owner's `pod delete` of a standalone pod) deletes
+ * the VM: the only delete here. Returns "none" when fv-control has no record of it (the caller decides).
  */
-export async function releaseBrev(env: Env, podId: string, park: boolean, log: (m: string) => void = () => {}): Promise<Release> {
+export async function releaseBrev(env: Env, podId: string, o: { manual?: boolean; why?: string } = {}, log: (m: string) => void = () => {}): Promise<Release> {
   const row = await brevRow(env, podId);
   if (!row) return "none";
-  const pol = await policies(env);
+  if (row.state === "deleting") return "deleted";
+  if (o.manual) {
+    if (!FV_NAME_RE.test(row.name)) throw new Error(`${row.name}: not an fv- name: not deleted`);
+    await brev.remove(env, row.workspace_id);
+    await markBrevDeleted(env, row.workspace_id, "deleted", `deleted by the owner (${o.why || "pod delete"})`.slice(0, 300));
+    log(`${podId}: Brev VM deleted (the owner's delete: ${o.why || "pod delete"})`);
+    return "deleted";
+  }
   if (row.state === "parked" || row.state === "held") {
     await brev.stop(env, row.workspace_id).catch(() => {});
     return row.state;
   }
+  const why = o.why ? ` (${o.why})` : "";
+  const keep = `reused by a later launch of ${row.instance_type}, or delete it: fv-control.sh brev parked`;
   if (row.restarted_at && !(await weightsDone(env, podId))) {
-    const r = await holdFailed(env, row, "it did not come up after the restart", pol);
-    log(`${podId}: the restarted instance never came up: ${r === "held" ? "stopped and held for the owner (fv-control.sh brev parked)" : "deleted (policy brev_park_delete_failed)"}`);
+    const r = await stopAndRecord(env, row, { note: `restart failed: it did not come up after the restart${why}` }, log);
+    if (r === "held") log(`${podId}: the restarted instance never came up: stopped and held (${keep})`);
     return r;
   }
-  const why = park ? await parkRefusal(env, row, pol) : "not a stop";
-  if (!why) {
-    try {
-      await brev.stop(env, row.workspace_id);
-      const trees = { ...parseJson<TreeRevs>(row.trees, {}), ...parseJson<TreeRevs>(row.launch_trees, {}) };
-      await setState(env, row.workspace_id, "parked", { parked_at: now(), trees, note: null });
-      log(`${podId}: parked (stopped; ${Object.keys(trees).join(", ")} kept on its ${row.disk_gb ?? "?"} GB disk, $${(storageDph(row) * 24).toFixed(2)}/day storage)`);
-      const lim = await enforceParkLimits(env, pol);
-      for (const a of lim) log(a);
-      return "parked";
-    } catch (e) {
-      log(`${podId}: stop failed (${(e as Error).message.slice(0, 160)}): deleting instead`);
-    }
-  } else if (park) log(`${podId}: not parked (${why}): deleting`);
-  await brev.remove(env, row.workspace_id);
-  await markBrevDeleted(env, row.workspace_id);
-  return "deleted";
+  if (!(await weightsDone(env, podId))) {
+    const r = await stopAndRecord(env, row, { note: `stopped before its boot became ready${why}: weights may be incomplete (the next boot resumes them)` }, log);
+    if (r === "held") log(`${podId}: stopped and held, not deleted: its boot never became ready${why}; partial weights stay on its disk (${keep})`);
+    return r;
+  }
+  const trees = { ...parseJson<TreeRevs>(row.trees, {}), ...parseJson<TreeRevs>(row.launch_trees, {}) };
+  const r = await stopAndRecord(env, row, { parked: trees }, log);
+  if (r !== "parked") return r;
+  log(`${podId}: parked (stopped, not deleted; ${Object.keys(trees).join(", ") || "no weights"} kept on its ${row.disk_gb ?? "?"} GB disk, $${(storageDph(row) * 24).toFixed(2)}/day storage)`);
+  const lim = await parkLimitAlert(env, await policies(env));
+  if (lim) log(`WARNING: ${lim.message}`);
+  return "parked";
 }
-/** Workspace ids of records Brev should still list (live / parked / held) that it did not, changed before `before`. */
+/** A Brev pod fv-control has no keep-on-stop record of (made before it): stopped and recorded held. Never deleted. */
+export async function adoptAndStop(env: Env, x: { workspace_id: string; pod_id: string; name: string; instance_type: string }, why: string, log: (m: string) => void = () => {}): Promise<StopOutcome> {
+  const t = now();
+  await env.DB.prepare(
+    `INSERT INTO brev_instances (workspace_id, pod_id, name, instance_type, stoppable, trees, launch_trees, state, created_at, updated_at, note)
+     VALUES (?, ?, ?, ?, 0, '{}', '{}', 'live', ?, ?, ?) ON CONFLICT (workspace_id) DO NOTHING`,
+  )
+    .bind(x.workspace_id, x.pod_id, x.name, x.instance_type, t, t, "no keep-on-stop record (made before it)")
+    .run();
+  const row = await brevRowById(env, x.workspace_id);
+  if (!row) throw new Error(`${x.name}: no record`);
+  const r = await stopAndRecord(env, row, { note: `no keep-on-stop record: its weights are unknown (${why})` }, log);
+  if (r === "held") log(`${x.pod_id}: stopped and held, not deleted (no keep-on-stop record; reused by a later launch of ${x.instance_type}, or delete it: fv-control.sh brev parked)`);
+  return r;
+}
+/** Workspace ids of records Brev should still list (live / parked / held / stop_failed) that it did not, changed before `before`. */
 export async function brevUnlisted(env: Env, listed: Set<string>, before: number): Promise<string[]> {
-  const rows = (await env.DB.prepare("SELECT workspace_id FROM brev_instances WHERE state IN ('live', 'parked', 'held') AND updated_at < ?").bind(before).all<{ workspace_id: string }>()).results || [];
+  const rows = (await env.DB.prepare("SELECT workspace_id FROM brev_instances WHERE state IN ('live', 'parked', 'held', 'stop_failed') AND updated_at < ?").bind(before).all<{ workspace_id: string }>()).results || [];
   return rows.map((r) => r.workspace_id).filter((id) => !listed.has(id));
 }
 /** Whether a pod is parked or held (a stopped VM is then the expected end state of a stop). */
 export async function isParked(env: Env, podId: string): Promise<boolean> {
   const r = await brevRow(env, podId);
   return r?.state === "parked" || r?.state === "held";
+}
+/** The cron's pass over stops Brev refused: the stop again (held once it took, or once Brev shows it stopped); still
+ * running: alert brev_stop_failed naming its $/hr. Never deletes. `listed`: workspace id -> its state in Brev's list. */
+export async function retryRefusedStops(env: Env, listed: Map<string, string>): Promise<{ alerts: AlertIn[]; actions: string[] }> {
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state = 'stop_failed'`).all<BrevInstance>()).results || [];
+  const alerts: AlertIn[] = [];
+  const actions: string[] = [];
+  for (const r of rows) {
+    const st = listed.get(r.workspace_id);
+    if (st === undefined) continue; // brevUnlisted marks it gone
+    let stopped = st === "stopped";
+    let err = "";
+    if (!stopped)
+      try {
+        await brev.stop(env, r.workspace_id);
+        stopped = true;
+      } catch (e) {
+        err = (e as Error).message.slice(0, 160);
+      }
+    if (stopped) {
+      await setState(env, r.workspace_id, "held", { note: `stopped after Brev first refused the stop (${(r.note || "").slice(0, 200)})`, parked_at: now() });
+      actions.push(`brev ${r.name}: stopped (an earlier stop was refused): held`);
+      continue;
+    }
+    const dph = await podDph(env, r.pod_id);
+    alerts.push({
+      key: `brev_stop_failed:${r.workspace_id}`,
+      kind: "brev_stop_failed",
+      severity: "critical",
+      target: r.pod_id,
+      message: `Brev ${r.name} (${r.instance_type}) is still RUNNING at ${money(dph)}${dph !== null ? ` ($${(dph * 24).toFixed(2)}/day)` : ""}: Brev refused its stop (${err || r.note || "?"}). fv-control never deletes a Brev VM on its own: stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${r.workspace_id})`,
+    });
+  }
+  return { alerts, actions };
 }
 
 /** The `up` wait's view of a warm restart: still starting (fine until the timeout), or timed out (fatal, replace). */
@@ -345,25 +442,29 @@ export async function restartDiag(env: Env, podId: string, state: string): Promi
   return null;
 }
 
-// ---------------------------------------------------------------- limits, views, owner actions
-/** Deletes parked / held instances past brev_park_max (oldest first) or older than brev_park_max_days. Only ours. */
-export async function enforceParkLimits(env: Env, pol: Policies, t = now()): Promise<string[]> {
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PARKED_STATES} ORDER BY parked_at DESC`).all<BrevInstance>()).results || [];
-  const out: string[] = [];
+// ---------------------------------------------------------------- limits (alerts only), views, owner actions
+/** The park thresholds as an alert (brev_parked_over_limit): more than brev_park_max parked / held instances, or one
+ * parked longer than brev_park_max_days. Lists each (age, $/day). Nothing is deleted (owner rule 2026-10-11). */
+export async function parkLimitAlert(env: Env, pol: Policies, t = now()): Promise<AlertIn | null> {
+  const rows = await parkedRows(env);
   const maxAge = pol.brev_park_max_days * 86400_000;
-  for (const [i, r] of rows.entries()) {
-    const old = t - (r.parked_at ?? r.updated_at) > maxAge;
-    const over = i >= pol.brev_park_max;
-    if (!old && !over) continue;
-    if (!FV_NAME_RE.test(r.name)) continue;
-    const why = over ? `more than brev_park_max ${pol.brev_park_max} parked` : `parked longer than brev_park_max_days ${pol.brev_park_max_days}`;
-    out.push(await deleteParked(env, r.workspace_id, why).catch((e) => `brev ${r.name}: delete failed: ${(e as Error).message.slice(0, 160)}`));
-  }
-  return out;
+  const old = rows.filter((r) => t - (r.parked_at ?? r.updated_at) > maxAge);
+  const over = rows.length > pol.brev_park_max;
+  if (!over && !old.length) return null;
+  const age = (r: BrevInstance) => ((t - (r.parked_at ?? r.updated_at)) / 86400_000).toFixed(1);
+  const list = rows.map((r) => `${r.name} (${r.state}, ${r.instance_type}, ${age(r)} d, $${(storageDph(r) * 24).toFixed(2)}/day)`).join("; ");
+  const why = [over ? `${rows.length} parked / held, more than brev_park_max ${pol.brev_park_max}` : "", old.length ? `${old.length} parked longer than brev_park_max_days ${pol.brev_park_max_days}` : ""].filter(Boolean).join("; ");
+  const total = rows.reduce((s, r) => s + storageDph(r) * 24, 0);
+  return {
+    key: "brev_parked_over_limit",
+    kind: "brev_parked_over_limit",
+    severity: "warn",
+    message: `NVIDIA Brev: ${why}: ${list}; storage $${total.toFixed(2)}/day in all. Not deleted (fv-control never deletes a Brev VM on its own): the next launch of a type reuses them, or delete one (Pods page, fv-control.sh brev delete-parked <id>)`,
+  };
 }
-/** Deletes one parked / held instance (owner, or a limit); refused for anything else. */
+/** Deletes one parked / held (or stop_failed) instance: the owner's action only (API, CLI, UI); refused for anything else. */
 export async function deleteParked(env: Env, workspaceId: string, why: string): Promise<string> {
-  const r = await env.DB.prepare(`UPDATE brev_instances SET state = 'deleting', updated_at = ? WHERE workspace_id = ? AND state IN ${PARKED_STATES}`).bind(now(), workspaceId).run();
+  const r = await env.DB.prepare("UPDATE brev_instances SET state = 'deleting', updated_at = ? WHERE workspace_id = ? AND state IN ('parked', 'held', 'stop_failed')").bind(now(), workspaceId).run();
   const row = await brevRowById(env, workspaceId);
   if (Number(r.meta?.changes ?? 0) !== 1 || !row) throw new HttpError(404, `no parked Brev instance ${workspaceId} (only parked / held ones fv-control made)`);
   try {
@@ -375,7 +476,7 @@ export async function deleteParked(env: Env, workspaceId: string, why: string): 
   await markBrevDeleted(env, workspaceId, "deleted", why.slice(0, 300));
   return `brev ${row.name}: parked instance deleted (${why})`;
 }
-/** A held instance (restart failed) back into the warm pool: the next launch of its type may restart it. */
+/** A held instance back into the warm pool now (without waiting for BREV_HELD_REUSE_AFTER_S), its note cleared. */
 export async function unpark(env: Env, workspaceId: string): Promise<BrevInstance> {
   const r = await env.DB.prepare("UPDATE brev_instances SET state = 'parked', note = NULL, updated_at = ? WHERE workspace_id = ? AND state IN ('held', 'parked')").bind(now(), workspaceId).run();
   if (Number(r.meta?.changes ?? 0) !== 1) throw new HttpError(404, `no held Brev instance ${workspaceId}`);
@@ -388,10 +489,20 @@ export async function parkedRows(env: Env): Promise<BrevInstance[]> {
 export async function parkedDph(env: Env): Promise<number> {
   return (await parkedRows(env)).reduce((s, r) => s + storageDph(r), 0);
 }
+/** The policy line the UI and `fv-control.sh brev parked` show. */
+export const parkPolicyLine = (pol: Pick<Policies, "brev_park_max" | "brev_park_max_days">) =>
+  `stopped Brev VMs are kept, never deleted by fv-control (owner rule 2026-10-11): reused by the next launch of their type, or deleted by you; alert past ${pol.brev_park_max} parked or ${pol.brev_park_max_days} days each`;
 export async function parkedView(env: Env) {
   const pol = await policies(env);
-  const rows = await parkedRows(env);
+  const rows = [...(await parkedRows(env)), ...((await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state = 'stop_failed'`).all<BrevInstance>()).results || [])];
   const t = now();
+  const cool = heldReuseAfterMs(env);
+  const reuse = (r: BrevInstance) =>
+    r.state === "stop_failed"
+      ? "running: Brev refused its stop"
+      : r.state === "held" && t - r.updated_at < cool
+        ? `reusable from ${new Date(r.updated_at + cool).toISOString().slice(11, 16)}Z (Unpark: now)`
+        : `reusable: the next launch of ${r.instance_type}`;
   const parked = rows.map((r) => ({
     workspace_id: r.workspace_id,
     pod_id: r.pod_id,
@@ -401,15 +512,21 @@ export async function parkedView(env: Env) {
     location: r.location,
     trees: parseJson<TreeRevs>(r.trees, {}),
     disk_gb: r.disk_gb,
-    storage_usd_per_hr: storageDph(r),
-    storage_usd_per_day: storageDph(r) * 24,
+    storage_usd_per_hr: r.state === "stop_failed" ? 0 : storageDph(r),
+    storage_usd_per_day: r.state === "stop_failed" ? 0 : storageDph(r) * 24,
     parked_at: r.parked_at,
     parked_days: r.parked_at ? (t - r.parked_at) / 86400_000 : null,
-    deleted_after: r.parked_at ? r.parked_at + pol.brev_park_max_days * 86400_000 : null,
+    over_age: r.state !== "stop_failed" && !!r.parked_at && t - r.parked_at > pol.brev_park_max_days * 86400_000,
+    reuse: reuse(r),
     restarts: r.restarts,
     note: r.note,
   }));
-  return { policy: { brev_park_max: pol.brev_park_max, brev_park_max_days: pol.brev_park_max_days, brev_park_delete_failed: pol.brev_park_delete_failed }, parked, storage_usd_per_day: parked.reduce((s, p) => s + p.storage_usd_per_day, 0) };
+  return {
+    policy: { brev_park_max: pol.brev_park_max, brev_park_max_days: pol.brev_park_max_days, auto_delete: false, line: parkPolicyLine(pol) },
+    parked,
+    over_limit: parked.filter((p) => p.state !== "stop_failed").length > pol.brev_park_max || parked.some((p) => p.over_age),
+    storage_usd_per_day: parked.reduce((s, p) => s + p.storage_usd_per_day, 0),
+  };
 }
 
 // ---------------------------------------------------------------- the boot endpoint
