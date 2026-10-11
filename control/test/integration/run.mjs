@@ -1700,6 +1700,16 @@ await step("named pod tunnels: create → token in the pod's env, URL known up f
     // The owner's view; the sweep leaves a live pod's tunnel alone.
     let tv = (await call3("/api/tunnels", { headers: H })).j;
     assert.deepEqual(tv.tunnels.map((x) => [x.pod_id, x.host, x.state, x.tunnel_id, x.dns_record_id]), [[gkey, host1, "live", t1.id, rec1.id]]);
+    // The CLI: the providers' tunnel line, the recorded tunnels.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(`${tmpdir()}/fvc-cli3-`);
+    writeFileSync(`${dir}/token`, tok, { mode: 0o600 });
+    const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w3.url, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
+    assert.match(await cli("providers"), /^tunnels\tnamed\t\{pod\}-fv-pods\.maximal\.llc\tnamed pod tunnels: one Cloudflare Tunnel/m);
+    assert.match(await cli("tunnels"), new RegExp(`^mode: named \\(\\{pod\\}-fv-pods\\.maximal\\.llc\\)\\n${gkey}\\t${host1.replace(/\./g, "\\.")}\\t${t1.name}\\tlive\\t$`, "m"));
     let sw = (await call3("/api/tunnels/sweep", { method: "POST", body: {}, headers: H })).j;
     assert.ok(!sw.actions.some((a) => a.includes(t1.name)), JSON.stringify(sw));
     assert.ok(!t1.deleted_at && c.dns.includes(rec1));

@@ -5,7 +5,7 @@
 // Object per cluster (cluster/do.ts).
 import { Hono, type Context } from "hono";
 import { DEFAULT_POLICIES, policies, syncAlerts } from "./alerts";
-import { tunnelsView, tunnelSweep } from "./tunnels";
+import { tunnelSettings, tunnelsView, tunnelSweep } from "./tunnels";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
@@ -591,6 +591,10 @@ app.post("/api/standalone/validate", async (c) => {
     issues.push(...mapLaunchIssues(live.issues));
     warnings.push(...mapLaunchIssues(live.warnings));
   }
+  // Named pod tunnels: a host two levels below the zone (or a half-configured setup) shows at once, at the provider.
+  const tun = tunnelSettings(c.env);
+  if ((OTHER_PROVIDERS as readonly string[]).includes(b?.provider) && tun.warning && !warnings.some((w) => w.message.includes(tun.warning!)))
+    warnings.push({ path: ["provider"], message: `${tun.mode === "named" ? "WARNING" : "NOTE"}: ${tun.warning}` });
   return c.json({ ok: !issues.length, issues, warnings, spec: issues.length ? null : spec });
 });
 /** Launch: define the pod and start it (start: false only defines it). The same `up` as a cluster: price check, image preflight, placement, wait until ready. */

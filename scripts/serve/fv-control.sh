@@ -39,6 +39,10 @@
 #                                              (docs/serve/deploy-gmi-brev.md): --gpu is the GMI product / Brev instance
 #                                              type; --fake = the cpu image's fake engine (a cheap smoke test)
 #   fv-control.sh providers                    launch providers: enabled or why not, budget, month's spend, GPU products
+#                                              and the pod tunnels' mode (named | quick); a warning or error on stderr
+#   fv-control.sh tunnels [--all] | sweep      named pod tunnels (GMI / Brev, docs/serve/deploy-gmi-brev.md §6.4): the
+#                                              recorded tunnels and hosts; sweep = the cron's pass now (leaks deleted,
+#                                              unrecorded fv- tunnels / fv-control records reported, never touched)
 #   fv-control.sh brev parked | unpark <id> | delete-parked <id>
 #                                              NVIDIA Brev keep-on-stop: parked (stopped, weights kept) instances with
 #                                              their trees, disk and storage $/day; unpark = a held one (restart failed)
@@ -396,7 +400,20 @@ case "$cmd" in
       delete-parked) api_s POST "/api/providers/brev/parked/${2:?brev delete-parked <workspace id>}/delete" '{}' || die "brev delete-parked: $(api_err)"; jq -r .message <<<"$API_OUT" ;;
       *) die "brev parked | unpark <workspace id> | delete-parked <workspace id>" ;;
     esac ;;
-  providers) api GET /api/providers | jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' ;;
+  providers)
+    pv="$(api GET /api/providers)"
+    jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' <<<"$pv"
+    # The pod tunnels (tunnels.ts): named or quick, and loudly what is wrong with the settings.
+    jq -r '[.providers[] | .tunnel // empty][0] // empty | ["tunnels", .mode, (.host_template // ""), .note] | @tsv' <<<"$pv"
+    jq -r '[.providers[] | .tunnel // empty][0] // empty | (.error // empty | "ERROR: \(.)"), (.warning // empty | "WARNING: \(.)")' <<<"$pv" >&2 ;;
+  tunnels)
+    case "${1:-}" in
+      sweep) api_s POST /api/tunnels/sweep '{}' || die "tunnels sweep: $(api_err)"
+        jq -r '(.actions[] | "done: \(.)"), (.alerts[] | "\(.severity): \(.message)")' <<<"$API_OUT" ;;
+      ""|--all) api_s GET "/api/tunnels$([[ "${1:-}" == --all ]] && echo '?all=1')" || die "tunnels: $(api_err)"
+        jq -r '"mode: \(.settings.mode)\(if .settings.host_template then " (\(.settings.host_template))" else "" end)", (.settings.error // empty | "ERROR: \(.)"), (.settings.warning // empty | "WARNING: \(.)"), (.tunnels[] | [.pod_id, .host, .name, .state, (.note // "")] | @tsv)' <<<"$API_OUT" ;;
+      *) die "tunnels [--all] | sweep" ;;
+    esac ;;
   boot)
     t="${1:?boot <pod id | cluster or standalone name>}"
     if [[ "$t" =~ ^[a-z0-9]{14}$ ]]; then ids="$t"; else ids="$(api GET "/api/clusters/$t" | jq -r '.cluster.state.workers // {} | [.[][] | .pod] | join(" ")')"; fi
