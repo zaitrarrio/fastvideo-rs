@@ -596,7 +596,9 @@ export const brevRun = (image: string, env: Record<string, string>) => brevRunSc
 async function findInstance(env: Env, podId: string): Promise<ProviderInstance | null> {
   const k = splitKey(podId);
   if (!k) return null;
-  return (await providerImpl(k.provider).list(env)).find((i) => i.name === k.name) || null;
+  // A Brev instance in DELETING has its delete accepted (it takes Brev ~5-10 min to finish): it counts as gone, so a
+  // stop's verify does not time out on it and a retry does not delete it again.
+  return (await providerImpl(k.provider).list(env)).find((i) => i.name === k.name && i.raw !== "DELETING") || null;
 }
 /** Deletes a GMI / Brev pod by its key; true when it is gone (or was). Only an fv-named instance can match. */
 export async function deleteOtherPod(env: Env, podId: string): Promise<boolean> {

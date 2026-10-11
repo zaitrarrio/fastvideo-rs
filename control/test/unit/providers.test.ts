@@ -13,7 +13,7 @@ import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { gmi, toContainer } from "../../src/gmi";
 import { brevStartup } from "../../src/brev-park";
-import { brevRun, budgetCheck, CLOUDFLARED, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan, weightsSource } from "../../src/providers";
+import { brevRun, budgetCheck, CLOUDFLARED, deleteOtherPod, otherPodState, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan, weightsSource } from "../../src/providers";
 import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
 import { presetPool } from "../../src/cluster/spec";
@@ -364,6 +364,14 @@ describe("clients (fetch mock)", () => {
     expect(brevPrice(env, "g5.xlarge")).toBe(1.25);
     expect(brevPrice(env, "other")).toBeNull();
     expect(toWorkspace({ id: "x" }).name).toBe("x");
+  });
+  it("Brev: an instance in DELETING counts as gone (a stop's verify does not wait out Brev's slow delete)", async () => {
+    const f = vi.fn(async () => new Response(JSON.stringify([{ id: "ws9", name: "fv-pod-d-1", status: "DELETING", instanceType: "g5.xlarge" }])));
+    vi.stubGlobal("fetch", f);
+    const env = mkEnv();
+    expect(await otherPodState(env, podKey("brev", "fv-pod-d-1"))).toBeNull();
+    expect(await deleteOtherPod(env, podKey("brev", "fv-pod-d-1"))).toBe(true);
+    expect(f.mock.calls.every((c: any[]) => (c[1]?.method || "GET") === "GET")).toBe(true);
   });
   it("list keeps only fv- names (never anyone else's)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{ id: "1", name: "someone-else", status: "running" }, { id: "2", name: "fv-ctl-c-p-1", status: "creating" }]))));
