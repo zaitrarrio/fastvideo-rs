@@ -124,6 +124,9 @@ export interface Env {
   WEIGHTS_R2_ENDPOINT?: string;
   WEIGHTS_R2_URL_TTL_S?: string;
   WEIGHTS_R2_EXTRA_TREES?: string;
+  /** JSON {"<volume id>": "<data centre>"}: network volumes the owner made as R2 caches for serverless endpoints with
+   * weights_source r2 (docs/ops/r2-weights.md §9.4; add-only, filled from R2). Unset: no cache volume (the default). */
+  FV_SLS_R2_CACHE_VOLUMES?: string;
   /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */

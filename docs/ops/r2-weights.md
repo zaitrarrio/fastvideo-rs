@@ -139,6 +139,8 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
     `RUNPOD_POD_ID`.
   - The volume path is unchanged and stays the Runpod default until the coordinator removes it. Runpod is still
     limited to the EU region in fv-control (`regions.ts`); lifting that is a follow-up once the volume is gone.
+- **Runpod serverless endpoints**: `weights_source: r2` on the endpoint spec (no volume, any data centre, a
+  per-endpoint weights token instead of a cluster's ingest token, a cache check that skips the fetch). See §9.
 - **Aux files** (TAE decoders, LPIPS) still come from their pinned URLs with SHA-256 (`AUX_FILES`), as with
   `hub`.
 
@@ -350,6 +352,12 @@ The volume is deleted only when every one of these holds, and nothing here does 
   - `R2_FETCH_SH` run in bash with the real `r2-fetch.py` against a fake R2 that verifies every presigned URL
     with node:crypto
   - a tampered fetcher refused
+- `control/test/unit/serverless-r2.test.ts` (19 tests): the serverless spec (default, placement, disk, refusals),
+  the payloads (bash boot, token, no volume, no R2 key), the weights token (wrong, another endpoint's, a volume
+  endpoint's, rotation with grace, revocation by delete), the boot reports and the outlook, and `SLS_R2_SH` run in
+  bash with the real fetcher and fv-control's real handlers: a cold boot, a cache hit that asks for nothing, a stale
+  revision fetched again, a wrong token failing loudly, the add-only cache volume.
+- `scripts/gpu/tests/test_r2_weights.py` still passes with `--add-only` added to the fetcher.
 - Integration (`node test/integration/run.mjs`, step "weights_source r2"):
   - a GMI standalone pod defaults to r2 for a published tree
   - the launch check reads the manifest
@@ -375,3 +383,113 @@ The volume is deleted only when every one of these holds, and nothing here does 
   | with the whole-file re-hash | 0.22-0.24 GB/s | — |
 
   System time varied 2-25 s between identical runs (VM noise).
+
+## 9. Serverless endpoints (`weights_source: r2`)
+
+How it works for users, the API and the token: docs/control/serverless.md §1b. This section covers the caching
+design and how to benchmark it.
+
+### 9.1 What changes against the volume
+
+- **No network volume**, so there is no `EUR-IS-1`-only restriction: any GPU type in any data centre with stock.
+- Every scale-from-zero worker on a fresh host fetches its trees before fv-serve starts. That is about 144 GB for
+  H3 (`h3-base`), 125 GB for LTX-2.5 and about 60 GB for Wan 2.2 5B (sizes from brev-park.ts `TREE_GB` until the
+  manifests are published).
+- At 1-2.5 GB/s (§5.4, **UNVERIFIED**) the H3 fetch adds about 1-2.5 min. It replaces the volume's slower load
+  (measured volume cold starts: wan 49 + 70 s, h3 80 + 52 s, ltx 79 + 33 s, docs/serve/gateway.md §8.6).
+- The container disk is sized from the manifests: the bytes × 1.15 + 30 GB (H3 196 GB). Runpod's maximum
+  container disk for serverless is **UNVERIFIED**; fv-control allows up to 500 GB.
+
+### 9.2 Auth
+
+The worker has no cluster and no ingest token. Each r2 endpoint gets its own **weights token** (`fvw_…`, in the
+template env as `FV_WEIGHTS_TOKEN`). D1 keeps only its SHA-256 (`weights_token_hash`), as clusters keep
+`ingest_hash`.
+
+- `POST /ingest/v1/weights-plan` with that token answers the plan of **that endpoint's trees only** (from its
+  stored spec). The `fvw_` prefix routes it; a cluster token still works for its pods.
+- `POST /ingest/v1/sls-report` takes the same token for the boot's reports.
+- A template update rotates the token. The previous one is honoured for 30 min (the rollout).
+- A delete revokes both. The R2 key never leaves fv-control.
+- Tested: no token, a wrong one, another endpoint named (403), a volume endpoint's token (409), rotation with
+  grace, revocation by delete.
+
+### 9.3 Caching across cold starts (what Runpod supports, checked 2026-10-11)
+
+| Mechanism | What Runpod documents | Fit |
+|---|---|---|
+| Container disk | "Temporary storage that exists only while a worker is running … lost when the worker stops or scales down" (docs.runpod.io/serverless/storage/overview) | A restarted container on the same worker keeps it: the cache check makes that boot a **hit**. |
+| FlashBoot | "Reduces cold starts by retaining worker state after spin-down, allowing faster 'revival' than fresh boots" (docs.runpod.io/serverless/endpoints/endpoint-configurations) | Whether the container disk survives a revival is **UNVERIFIED**. Our 2026-10 runs showed fv-serve starting fresh after an idle-out (docs/serve/images.md §FlashBoot), which says nothing about the disk. If it does survive, the boot skips the fetch. The benchmark below measures it. |
+| Cached models | Hugging Face only, "one cached model at a time" per endpoint, mounted at `/runpod-volume/huggingface-cache/hub/`, workers placed on hosts that have it, download time not billed (docs.runpod.io/serverless/endpoints/model-caching) | **Not as is.** There is no S3/R2 source, and one repo per endpoint does not cover a family's several trees. It could work with one private HF bundle repo per preset (a large new upload: owner approval). Worth evaluating for H3 after the R2 numbers. |
+| Network volume as a cache | $0.07/GB-month; one volume pins the endpoint to its DC; several volumes from different DCs can be attached, one per DC, with no sync between them (docs.runpod.io/serverless/storage/network-volumes) | Implemented, **off by default** (`FV_SLS_R2_CACHE_VOLUMES`, one volume per endpoint). Filled add-only from R2 (`r2-fetch.py --add-only`). It costs storage per DC and brings back the DC pin and the volume's read speed. |
+
+What is implemented:
+
+1. **Skip when present.** The boot checks every tree for `.complete` and `.fv-revision` = the pinned revision
+   (`FV_R2_TREE_REVS`, from `weights-r2.tsv`) before it asks fv-control for anything. The fetcher writes those
+   markers as brev-park's trees do. A tree at another revision is fetched again.
+2. **Resume.** A partial fetch (a crashed container) is resumed part by part (§4).
+3. **Disk sized from the manifests**, so a fetch never fails half-way for space.
+4. **Optional cache volume** (above), with the add-only rule enforced in the fetcher:
+   - per-worker staging names;
+   - "another worker finished first" keeps theirs;
+   - a different revision is never replaced.
+
+### 9.4 The cache volume (off by default)
+
+The owner creates the volume (CLAUDE.md: never by an agent) in the chosen DC, then sets the Worker var
+`FV_SLS_R2_CACHE_VOLUMES='{"<id>":"<DC>"}'`. An r2 endpoint with `network_volume: "<id>"` then runs in that DC.
+Its workers fill `/runpod-volume/fv-r2-cache/<dest>` once and load from there afterwards.
+
+Cost per DC: the trees' GB × $0.07/month (H3 + Wan + LTX ≈ 330 GB ≈ $23/month).
+
+Enable it only if §9.5 shows the R2 fetch is slower than a volume load for a family.
+
+### 9.5 How to benchmark (coordinator)
+
+Preconditions:
+
+- `h3-base`, `fastwan22-ti2v-5b` and `wan22-ti2v-5b` are published and recorded in `weights-r2.tsv`
+  (`r2-weights.py status`).
+- fv-control is deployed with them. `GET /api/serverless/presets` shows `r2.missing: []` for `h3-turbo` and `wan`.
+- The balance is above the floor plus margin.
+
+Launch one endpoint per family, `workers_max` 1, FlashBoot on (to test the revival), and a 60 min backstop:
+
+```bash
+for p in h3-turbo wan; do
+  fv-control.sh endpoint create - <<EOF
+{"name": "bench-${p%%-*}-r2", "preset": "$p", "weights_source": "r2",
+ "gpu_types": ["NVIDIA H100 80GB HBM3", "NVIDIA H200", "NVIDIA RTX PRO 6000 Blackwell Server Edition"],
+ "workers_min": 0, "workers_max": 1, "idle_timeout_s": 5, "flashboot": true, "deadline_min": 60, "deadline_action": "delete"}
+EOF
+done
+```
+
+For each endpoint (`bench-h3-r2`, `bench-wan-r2`):
+
+1. **Cold from zero.** `fv-control.sh endpoint invoke bench-h3-r2` (an info job; `--async` if it outlasts /runsync,
+   then `endpoint show` until done).
+2. Wait until the worker is gone: `fv-control.sh endpoint show bench-h3-r2 | jq '.runpod.workers'` is empty, then
+   30 s more.
+3. **Second cold start** (revival or a new worker): `fv-control.sh endpoint invoke bench-h3-r2`.
+4. Record, from `fv-control.sh endpoint show bench-h3-r2` (`boots`, `jobs`, `outlook`) and the worker's log (Log
+   explorer, pod = the worker id; Runpod's system log for the image pull):
+   - per boot: worker id, GPU type, DC, `cache` (hit / miss), GB fetched, `fetch_s`, MB/s, and container start
+     → fv-serve start (`boot_to_serve_s`);
+   - per job: `delay_ms` (the cold start as Runpod counts it), `exec_ms`, and the image pull time from the system
+     log;
+   - the load: fv-serve's ready time minus the `serve` report;
+   - whether the second start was a **hit** (FlashBoot kept the disk) or a **miss** (a new worker or the disk
+     lost).
+5. `fv-control.sh endpoint delete bench-h3-r2` (the backstop deletes it anyway after 60 min).
+
+Expected cost: two cold starts and two short jobs per endpoint, about 10-15 GPU-minutes each, about $1-2 per
+endpoint at H100 flex rates.
+
+Then:
+
+- Write the measured MB/s into §5.4 and `R2_DOWNLOAD_GBPS`.
+- Write the breakdown into docs/serve/gateway.md §8.6.
+- Flip `DEFAULT_SLS_WEIGHTS_SOURCE` to `"r2"` in `control/src/serverless/spec.ts` if r2 is not slower end to end
+  than the volume.

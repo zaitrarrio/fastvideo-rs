@@ -2,10 +2,9 @@
 // published example, manifests pinned by SHA-256, the plan, weights_source r2 as the GMI / Brev default once every
 // tree is published, the launch checks (GMI / Brev and Runpod), the pod env and boot; and the boot's weights step
 // (R2_FETCH_SH) run in bash with the real scripts/gpu/r2-fetch.py against a fake R2 that checks every presigned URL.
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -16,84 +15,10 @@ import { bootFor, workerCreatePayload, workerSystemEnv, type EnvCtx } from "../.
 import { presetPool } from "../../src/cluster/spec";
 import { launchTrees, poolTrees, PROVIDER_BOOT, providerEnv, providerIssues, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
-import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2Manifest, r2Plan, r2Trees, type R2Manifest } from "../../src/r2weights";
+import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2Manifest, r2Plan, r2Trees } from "../../src/r2weights";
 import { validate } from "../../src/schemas";
 import { d1 } from "./d1shim";
-
-const ACCESS = "r2-access-key-id";
-const SECRET = "r2-SECRET-access-key-0123456789";
-const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
-
-/** A tree, its manifest (part size 1 MiB) and the R2_TREES pin. */
-function makeTree(dest: string, rev: string, files: Record<string, Buffer>, part = 1 << 20) {
-  const m: R2Manifest = {
-    format: "fv-weights-manifest/1",
-    dest,
-    rev,
-    part_size: part,
-    total_bytes: Object.values(files).reduce((s, b) => s + b.length, 0),
-    files: Object.entries(files).map(([path, b]) => ({ path, size: b.length, sha256: sha(b), parts: Array.from({ length: Math.ceil(b.length / part) }, (_, i) => sha(b.subarray(i * part, (i + 1) * part))) })),
-  };
-  const raw = Buffer.from(JSON.stringify(m));
-  return { m, raw, pin: { rev, files: m.files.length, bytes: m.total_bytes, manifest_sha256: sha(raw), source: "test" } };
-}
-const rnd = (n: number, seed: number) => {
-  const out = Buffer.alloc(n);
-  let h = createHash("sha256").update(String(seed)).digest();
-  for (let o = 0; o < n; o += 32) {
-    h = createHash("sha256").update(h).digest();
-    h.copy(out, o);
-  }
-  return out;
-};
-
-/** A fake R2: path-style objects, presigned GETs checked with node:crypto (an implementation independent of src's). */
-function fakeR2() {
-  const objects = new Map<string, Buffer>(); // "<bucket>/<key>"
-  const gets: { key: string; range: string | null }[] = [];
-  let bad = 0;
-  const routes: Record<string, (req: any, res: any) => void> = {};
-  const verify = (u: URL, host: string) => {
-    const q = u.searchParams;
-    const amz = q.get("X-Amz-Date") || "";
-    const when = Date.UTC(+amz.slice(0, 4), +amz.slice(4, 6) - 1, +amz.slice(6, 8), +amz.slice(9, 11), +amz.slice(11, 13), +amz.slice(13, 15));
-    if (Date.now() > when + Number(q.get("X-Amz-Expires")) * 1000) return false;
-    const [ak, date, region] = (q.get("X-Amz-Credential") || "").split("/");
-    const pairs = [...q.entries()].filter(([k]) => k !== "X-Amz-Signature").map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)]).sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
-    const canonical = ["GET", u.pathname, pairs.map(([k, v]) => `${k}=${v}`).join("&"), `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-    const toSign = ["AWS4-HMAC-SHA256", amz, `${date}/${region}/s3/aws4_request`, sha(canonical)].join("\n");
-    let k: Buffer = createHmac("sha256", "AWS4" + SECRET).update(date!).digest();
-    for (const p of [region!, "s3", "aws4_request"]) k = createHmac("sha256", k).update(p).digest();
-    return ak === ACCESS && createHmac("sha256", k).update(toSign).digest("hex") === q.get("X-Amz-Signature");
-  };
-  const srv: Server = createServer((req, res) => {
-    const u = new URL(req.url!, "http://x");
-    if (routes[u.pathname]) return routes[u.pathname]!(req, res);
-    if (!verify(u, req.headers.host!)) {
-      bad++;
-      return res.writeHead(403).end("<Error><Code>AccessDenied</Code></Error>");
-    }
-    const key = decodeURIComponent(u.pathname.slice(1));
-    const obj = objects.get(key);
-    if (!obj) return res.writeHead(404).end("<Error><Code>NoSuchKey</Code></Error>");
-    const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range || "");
-    gets.push({ key, range: req.headers.range || null });
-    if (!m) return res.writeHead(200, { "content-length": obj.length }).end(obj);
-    const a = +m[1]!, b = Math.min(+m[2]!, obj.length - 1);
-    res.writeHead(206, { "content-length": b - a + 1, "content-range": `bytes ${a}-${b}/${obj.length}` }).end(obj.subarray(a, b + 1));
-  });
-  return {
-    objects,
-    gets,
-    routes,
-    bad: () => bad,
-    async start() {
-      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-      return `http://127.0.0.1:${(srv.address() as any).port}`;
-    },
-    stop: () => new Promise<void>((r) => srv.close(() => r())),
-  };
-}
+import { ACCESS, fakeR2, makeTree, rnd, SECRET, sha } from "./fake-r2";
 
 const mkEnv = (over: Partial<Env> = {}): Env =>
   ({

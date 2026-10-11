@@ -62,6 +62,7 @@ import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
+import { slsReport } from "./serverless/ingest";
 import { weightsPlanRequest } from "./weights-plan";
 import { assertBrevStoppable, endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
@@ -113,6 +114,8 @@ app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, 
 app.get("/ingest/v1/brev-boot", async (c) => brevBoot(c.env, c.req.raw));
 /** A pod with weights_source r2 asks for its trees' presigned URLs with its cluster's ingest token (weights-plan.ts). */
 app.post("/ingest/v1/weights-plan", async (c) => weightsPlanRequest(c.env, c.req.raw));
+/** A serverless worker with weights_source r2 reports its boot (cache hit / miss, fetch progress, serve) with its endpoint's weights token (serverless/ingest.ts). */
+app.post("/ingest/v1/sls-report", async (c) => c.json(await slsReport(c.env, c.req.raw)));
 /** The pod-side fetcher (scripts/gpu/r2-fetch.py, generated into r2-fetch-script.ts); the boot checks R2_FETCH_SHA256. */
 app.get("/ingest/v1/r2-fetch.py", () => new Response(R2_FETCH_PY, { headers: { "content-type": "text/x-python; charset=utf-8", "x-sha256": R2_FETCH_SHA256, "cache-control": "no-store" } }));
 

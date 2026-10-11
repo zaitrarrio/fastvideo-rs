@@ -129,6 +129,20 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await page.waitForFunction((s) => !document.querySelector(s).disabled, create, { timeout: 15000 });
   await shot("04a-serverless-preset-h3-ref2v");
   await audit();
+  // weights_source r2 (docs/control/serverless.md §1b): a segmented control; no volume, any data centre, the disk
+  // sized from the trees, the cold-start outlook; here the R2 store is not configured, so the field says why.
+  assert.equal(await page.$eval(`${SV} [data-ctl][data-path="weights_source"]`, (e) => e.getAttribute("role")), "radiogroup");
+  await page.waitForSelector(`${SV} #sls-outlook:has-text("cold start ~")`);
+  await page.click(`${SV} [data-ctl][data-path="weights_source"] button:text-is("r2")`);
+  await page.waitForSelector(`${SV} .ff-field[data-path="network_volume"] label:text("R2 cache volume")`);
+  await page.waitForFunction((s) => /\+ fetch \d+ GB at 1\.00 GB\/s/.test(document.querySelector(s)?.textContent || ""), `${SV} #sls-outlook`, { timeout: 15000 });
+  assert.ok(Number(await page.inputValue(`${SV} [data-ctl][data-path="container_disk_gb"]`)) >= 196, "the disk holds the H3 trees");
+  await errAt("serverless-endpoint", "weights_source");
+  assert.ok(await disabled(create), "Create is off while the trees cannot come from R2");
+  await shot("04b-serverless-r2");
+  await page.click(`${SV} [data-ctl][data-path="weights_source"] button:text-is("volume")`);
+  await page.waitForSelector(`${SV} .ff-field[data-path="network_volume"] label:text("Network volume")`);
+  await page.waitForFunction((s) => !document.querySelector(s).disabled, create, { timeout: 15000 });
   await page.selectOption(`${SV} [data-ctl][data-path="preset"]`, JSON.stringify("cpu"));
   await page.waitForSelector(`${SV} [data-serves] tr[data-model="fake-wan"]`);
 

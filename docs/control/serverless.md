@@ -35,17 +35,141 @@ custom endpoint the variant's (`?variant=`). §1a says what a preset is and what
 | `env` | | plain extra env; keys fv-control sets (serve mode, image identity, the `{{ RUNPOD_SECRET_fv_* }}` references, …) are refused |
 | `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1, `["13.0"]` | GPU types in priority order |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
-| `network_volume`, `data_centers` | GPU: `jg48s6o1w0` in `EUR-IS-1`; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center |
+| `weights_source` | GPU: `volume` (`DEFAULT_SLS_WEIGHTS_SOURCE`, spec.ts); CPU: none | `volume`: the EU weights volume at `/runpod-volume`; `r2`: the R2 weights store, fetched onto the container disk at boot, no volume, any data centre (§1b) |
+| `network_volume`, `data_centers` | GPU on `volume`: `jg48s6o1w0` in `EUR-IS-1`; on `r2`: none, any DC; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center. With `r2`, `network_volume` is null or an R2 cache volume the owner listed (§1b, off by default) |
 | `workers_min`, `workers_max` | 0, 1 | 0–4, 0–8 |
 | `idle_timeout_s`, `flashboot`, `execution_timeout_s` | 5, false, 1800 | |
 | `scaler_type`, `scaler_value` | `QUEUE_DELAY`, 4 | |
-| `container_disk_gb` | 20 | |
+| `container_disk_gb` | the preset's (20); `r2`: the trees' bytes × 1.15 + 30 GB | 5-200; up to 500 with `r2` (Runpod's serverless maximum is **UNVERIFIED**) |
 | `deadline_min`, `deadline_action` | 120, `delete` | the backstop: `delete` (endpoint + template) or `scale0` (workers 0/0) that long after create (or after the last extend); `null` for none |
 
 An update merges a partial spec over the stored one. Image, env, config and
 disk patch the **template** (Runpod rolls the workers); scaling, timeouts,
 GPU types and data centers patch the **endpoint**; `mode`, `compute`,
 `network_volume` and a CPU endpoint's flavors / vCPUs need a new endpoint (409).
+Switching `weights_source` changes `network_volume`, so it needs a new endpoint too.
+
+## 1b. Weights: the volume or the R2 weights store (`weights_source`)
+
+The owner decided (2026-10-11) that the R2 bucket `fv-weights` replaces the EU network volume as the weights
+store (docs/ops/r2-weights.md). A GPU endpoint takes `weights_source`:
+
+- **`volume`** (the default until the coordinator flips `DEFAULT_SLS_WEIGHTS_SOURCE` in `src/serverless/spec.ts`
+  after the benchmarks; one line): the EU volume `jg48s6o1w0` mounted at `/runpod-volume`, workers in
+  `EUR-IS-1` only. Unchanged.
+- **`r2`**: no network volume, so **no data-centre restriction**. Leave `data_centers` out for any DC, or list
+  DCs anywhere. The validator then asks Runpod's stock for every data centre and shows where each GPU type is in
+  stock (a warning line, `stock` in `POST /api/serverless/validate`, "Cold start" in the form). Before any worker
+  boots, fv-control requires:
+  - every tree is published in R2 (`scripts/gpu/weights-r2.tsv`);
+  - the store is configured (`WEIGHTS_R2_*`, `PUBLIC_URL`);
+  - the container disk holds the trees (bytes × 1.15 + 30 GB; the default is sized from the manifests).
+
+  Passing `weights_source: r2` to a preset brings that placement with it (`GET /api/serverless/defaults?preset=…&weights_source=r2`).
+
+**The worker's boot** (`SLS_R2_SH` in `src/serverless/weights.ts`, put before fv-serve by `payloads.ts`; the
+template's start is `bash -c`):
+
+1. Reports `boot` to `POST /ingest/v1/sls-report`.
+2. **Cache check.** For every tree in `FV_R2_TREE_REVS` (`dest@rev …`) it looks for `$FV_WEIGHTS/<dest>/.complete`
+   and `.fv-revision` = the pinned revision. If all are there it is a **cache hit**: no plan request, no fetch, and
+   fv-control does not even have to be reachable.
+3. On a **miss**, it downloads the fetcher (`/ingest/v1/r2-fetch.py`, checked against `FV_R2_FETCH_SHA256`).
+   `r2-fetch.py` then asks `POST /ingest/v1/weights-plan` with the endpoint's weights token. The fetcher is the
+   same one pods use: 32 parallel 64 MiB ranged GETs on presigned URLs, SHA-256 per part and per file, and
+   resume. It keeps complete trees and resumes partial files.
+4. The aux files (TAE, LPIPS) come by pinned URL and SHA-256. Then it reports `serve` and starts fv-serve with the
+   config, as before.
+
+The trees land in `/workspace/weights` (`FV_WEIGHTS`) on the container disk. A failure exits after 30 s, and
+Runpod restarts the container; the fetch resumes.
+
+**Auth: a weights token per endpoint.**
+
+- At create, fv-control mints `fvw_<64 hex>` and puts it in the template env as `FV_WEIGHTS_TOKEN`. D1 keeps only
+  its SHA-256 (`serverless_endpoints.weights_token_hash`, migration 0010).
+- The token is good for exactly two things:
+  - the plan of **that endpoint's** trees, derived from its stored spec (`slsTrees`), never from the request. A
+    request naming another endpoint gets 403. An endpoint not on `r2` gets 409.
+  - that endpoint's boot reports.
+- It never reaches an R2 key. The presigned URLs expire after `WEIGHTS_R2_URL_TTL_S`, and each URL is for one
+  object.
+- **Rotation**: every template update writes a new token. The previous hash stays valid for 30 min
+  (`SLS_TOKEN_GRACE_MS`) while Runpod rolls the workers.
+- **Revocation**: a delete (or a failed create) clears both hashes at once.
+- A cluster's ingest token still works for its own pods. The two token kinds are told apart by the `fvw_` prefix.
+- **Exposure**: the token sits in clear in the Runpod template env, which anyone with the Runpod account can read.
+  It is scoped to presigned reads of this endpoint's published trees. A Runpod secret reference per endpoint would
+  hide it, at the cost of creating and deleting one Runpod secret per endpoint and rotation (not done).
+
+**Cold-start breakdown.** Each boot is a row in `serverless_boots`: container start, cache `hit` / `miss` (and the
+trees fetched), fetch start / end, GB, s, MB/s, and fv-serve start. The fetcher's 15 s progress lines and its
+summary arrive through `--report-url`. Every report is also a log line (target `fv.boot`) in the log store under
+the worker's id, next to Runpod's container log; the tick's log capture keeps those lines.
+
+`GET /api/serverless/:id` returns:
+
+- `boots`: the last 10;
+- `outlook`: the estimate:
+  - **start** ~60 s with the image on the host (measured +49 to +62 s; up to 458 s on a host without the image,
+    about 10 % of cold starts, docs/serve/gateway.md §8.6);
+  - **+ fetch** = the manifests' GB at `R2_DOWNLOAD_GBPS` (1.0, **UNVERIFIED**), or at the last measured MB/s once
+    a boot fetched more than 5 GB;
+  - **+ load** (volume measurements: wan 70, h3 52, ltx 33 s; from a local disk **UNVERIFIED**);
+  - the cache state of the last boot.
+
+The endpoint page shows a "Cold start" card with the boots table. The CLI's `endpoint show` prints `outlook` and
+`boots`.
+
+**Caching across cold starts.**
+
+| Situation | What happens |
+|---|---|
+| Fresh worker, fresh host | Full fetch. Container disk is lost when a worker stops (Runpod docs). |
+| Same worker restarted (crash, OOM, a failed boot) | Cache hit, or a resume of the partial files. |
+| FlashBoot revival | Cache hit **if** the revival keeps the container disk. Runpod says FlashBoot "retain[s] worker state after spin-down"; whether that includes the container disk is **UNVERIFIED**, and our 2026-10 run showed fv-serve restarting from scratch (docs/serve/images.md §FlashBoot). The cache check makes it free when it does. |
+| R2 cache volume (off by default) | Below. |
+
+**Optional: an R2 cache volume per DC (off by default).**
+
+- The owner creates a small network volume in a data centre and lists it in `FV_SLS_R2_CACHE_VOLUMES`
+  (`{"<id>": "<DC>"}`). An r2 endpoint may then name it as `network_volume`, which pins its workers to that DC.
+- The boot fills `/runpod-volume/fv-r2-cache/` from R2 with `r2-fetch.py --add-only`:
+  - each worker stages under its own name;
+  - a tree another worker finished first wins;
+  - nothing there is ever moved aside or removed;
+  - a tree at another revision is an error, not replaced (CLAUDE.md's add-only rule).
+- `$FV_WEIGHTS` links to the cache.
+- **Trade-off**: storage costs $0.07/GB-month (h3-base 144 GB: ~$10/month per DC). It brings back the one-DC
+  restriction (one volume per endpoint here; Runpod allows one volume per DC on an endpoint, not wired). Loads
+  then read the network volume again (200-400 MB/s typical per Runpod), which was the slow part of today's cold
+  starts.
+- Use it only if the benchmarks show R2 fetches slower than volume loads.
+
+**Runpod's cached models (checked 2026-10-11).** The feature takes **one Hugging Face model per endpoint** (public,
+gated or private with a token). It has no S3 or R2 source. It mounts at `/runpod-volume/huggingface-cache/hub/`,
+schedules workers on hosts that already hold the model, and does not bill the download time
+(docs.runpod.io/serverless/endpoints/model-caching). It **does not fit as is**:
+
+- our trees are R2 objects at pinned revisions, several per family (DiT, text encoder, VAE, upscaler), and some
+  derived (FP8, fused) trees exist only on the volume.
+
+It could fit with one **private HF repo per preset** bundling exactly that preset's files, read with an HF token.
+That means a new large upload (owner approval, CLAUDE.md), a token on the endpoint, and fv-serve or the boot
+pointing `FV_WEIGHTS` at the snapshot path. It is worth evaluating for H3 (largest fetch) once the R2 numbers are in.
+
+Examples:
+
+```bash
+# r2, any data centre, GPU types in priority order
+fv-control.sh endpoint create h3r2 --preset h3-turbo --weights r2 --gpu "NVIDIA H100 80GB HBM3" --gpu "NVIDIA H200"
+# r2, pinned to two DCs
+fv-control.sh endpoint create wanr2 --preset wan --weights r2 --dc US-TX-3 --dc EU-RO-1
+# as a document
+fv-control.sh endpoint create - <<'EOF'
+{"name": "wanr2", "preset": "wan", "weights_source": "r2", "workers_max": 1, "deadline_min": 60}
+EOF
+```
 
 ## 1a. Model-first: presets, what an endpoint serves, the checks
 
