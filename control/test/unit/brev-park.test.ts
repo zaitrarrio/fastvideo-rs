@@ -436,3 +436,28 @@ describe("warm / cold outlook (launch form, planner), non-stoppable types refuse
     expect(warm.note).toMatch(/^warm: restarts parked fv-pod-o1-1010000000/);
   });
 });
+
+describe("reuse across weights sources (r2 and hub)", () => {
+  it("a VM parked with Hub-fetched trees is warm for an r2 launch of the same trees (same revisions)", async () => {
+    const { HUB_TREES } = await import("../../src/weights-sources");
+    const { launchTrees, weightsPlan, weightsSource } = await import("../../src/providers");
+    const preset = (await import("../../src/presets")).POOL_PRESETS.find((p) => p.id === "wan")!;
+    const trees = ["fastwan22-ti2v-5b", "wan22-ti2v-5b"];
+    // Both trees published in R2 at their Hub revisions (as publish-hub writes them).
+    const pub = Object.fromEntries(trees.map((t) => [t, { rev: HUB_TREES[t]!.revision, files: 1, bytes: 30e9, manifest_sha256: "c".repeat(64), source: "hub" }]));
+    const env = mkEnv({ FV_HUB_DOWNLOADS_APPROVED: "1", WEIGHTS_R2_EXTRA_TREES: JSON.stringify(pub), WEIGHTS_R2_ACCESS_KEY_ID: "k", WEIGHTS_R2_SECRET_ACCESS_KEY: "s" });
+    brevMock();
+    const r2pool: any = { ...preset.pool, id: "pod", count: 1, provider: "brev", provider_gpu: "stop.x1" };
+    const hubPool: any = { ...r2pool, weights_source: "hub", hub_download_approved: true };
+    expect(weightsSource(r2pool, env)).toBe("r2");
+    const r2want = launchTrees(weightsPlan(r2pool, env), env);
+    const hubWant = launchTrees(weightsPlan(hubPool, env), env);
+    expect(r2want).toEqual(hubWant);
+    await releaseBrev(env, await live(env, "h1", { trees: hubWant, disk: 2000 }));
+    const [c] = await warmCandidates(env, "stop.x1", r2want);
+    expect([c!.row.workspace_id, [...c!.matched].sort(), c!.missing]).toEqual(["h1", trees, []]);
+    const o = (await brevOutlook(env, r2pool))!;
+    expect([o.warm, o.instance, o.download_gb]).toEqual([true, "fv-pod-h1-1010000000", 0]);
+    expect(o.note).toMatch(/^warm: restarts parked fv-pod-h1-1010000000 \(holds /);
+  });
+});

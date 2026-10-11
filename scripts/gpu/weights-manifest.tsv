@@ -6,6 +6,9 @@
 # (fv-weights-h3-ltx-hy, EUR-IS-1; all trees verified 2026-10-06). The US volume s2k01690bi
 # (fv-weights-b200-us) was deleted by Runpod on about 2026-10-05; "both volumes" below is history.
 # New rows go on EU (CLAUDE.md); a rebuilt US volume is filled from EU or the Hub (rebuild-volume.sh us).
+# R2 (2026-10-11, owner decision): the R2 weights store (bucket fv-weights) replaces the EU volume. Each row is
+# published there with scripts/gpu/r2-weights.py (publish-hub for Hub rows, publish-dir for volume-only trees) and
+# recorded in weights-r2.tsv; docs/ops/r2-weights.md has the layout, the migration and the deletion gate.
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors

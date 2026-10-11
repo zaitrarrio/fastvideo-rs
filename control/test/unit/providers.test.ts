@@ -13,7 +13,7 @@ import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { gmi, toContainer } from "../../src/gmi";
 import { brevStartup } from "../../src/brev-park";
-import { brevRun, budgetCheck, CLOUDFLARED, deleteOtherPod, otherPodState, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan } from "../../src/providers";
+import { brevRun, budgetCheck, CLOUDFLARED, deleteOtherPod, otherPodState, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan, weightsSource } from "../../src/providers";
 import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
 import { presetPool } from "../../src/cluster/spec";
@@ -65,8 +65,14 @@ describe("schema rules", () => {
   });
   it("the cpu variant runs on a GMI GPU (smoke test); a real model needs weights", () => {
     expect(pool({ variant: "cpu" }).ok).toBe(true);
-    const r = pool({ variant: "h3-turbo", config: "/etc/fv/runpod.toml", fake_models: undefined, models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] });
+    const real = { variant: "h3-turbo", config: "/etc/fv/runpod.toml", fake_models: undefined, models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] };
+    // weights_source none, said: the schema refuses it.
+    const r = pool({ ...real, weights_source: "none" });
     expect((r as any).issues.some((i: any) => i.path[0] === "weights_source")).toBe(true);
+    // Unset: r2 once every tree is in the R2 weights store; until then the launch check says why (providerIssues).
+    expect(pool(real).ok).toBe(true);
+    const is = providerIssues(mkEnv(), { pools: [fakePool(real) as any] });
+    expect(is.some((i) => i.path[2] === "weights_source" && /models need weights: r2 .*h3-base/.test(i.message))).toBe(true);
   });
   it("Runpod pools refuse the provider fields", () => {
     const r = validate("pool", { ...fakePool({ provider: undefined }), compute: "CPU" });
@@ -75,7 +81,10 @@ describe("schema rules", () => {
   it("a standalone launch on GMI becomes a one-pool spec without Runpod fields", () => {
     const { spec } = standaloneSpec({ name: "g1", provider: "gmi", provider_gpu: "container.h200.x1", provider_region: "us-denver-1", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"] } as any);
     const p = spec.pools[0]!;
-    expect(p).toMatchObject({ provider: "gmi", provider_gpu: "container.h200.x1", provider_region: "us-denver-1", compute: "GPU", volume: false, weights_source: "none" });
+    expect(p).toMatchObject({ provider: "gmi", provider_gpu: "container.h200.x1", provider_region: "us-denver-1", compute: "GPU", volume: false });
+    // Unset: weightsSource picks r2 when every tree is published, else none (here: no trees, the fake engine).
+    expect(p.weights_source).toBeUndefined();
+    expect(weightsSource(p)).toBe("none");
     expect(p.gpu_types).toBeUndefined();
     expect(() => standaloneSpec({ name: "g1", provider: "brev", provider_gpu: "g5.xlarge", provider_region: "x", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"] } as any)).toThrow(/instance type implies the region/);
   });

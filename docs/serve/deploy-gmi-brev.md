@@ -589,7 +589,10 @@ next poll and the pod is deleted (with its tunnel).
 
 ## 7. Weights on GMI / Brev
 
-No provider volume yet (§2.4, §3.4), so `weights_source: hub`:
+**`weights_source: r2` (2026-10-11) is the preferred source.** It fetches from our R2 weights store through
+presigned URLs fv-control mints per boot. It needs no approval, and it becomes the default once every tree of the
+pool is published. See docs/ops/r2-weights.md §4. `hub`, below, stays as the fallback. No provider volume yet
+(§2.4, §3.4), so `weights_source: hub`:
 
 1. `poolTrees`: the `${FV_WEIGHTS}/<tree>` paths of the pool's worker
    config (inline, or the image's baked config) plus its preset's

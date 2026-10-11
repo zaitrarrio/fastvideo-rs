@@ -51,7 +51,7 @@ export type ProviderId = (typeof PROVIDERS)[number];
 export const OTHER_PROVIDERS = ["gmi", "brev"] as const;
 export type OtherProviderId = (typeof OTHER_PROVIDERS)[number];
 /** Where a worker's weights come from: the region's Runpod network volume, the Hub at pinned revisions at boot (owner approval), or none (fake engine). */
-export const WEIGHTS_SOURCES = ["volume", "hub", "none"] as const;
+export const WEIGHTS_SOURCES = ["volume", "r2", "hub", "none"] as const;
 export type WeightsSource = (typeof WEIGHTS_SOURCES)[number];
 /** A provider's own GPU product / instance type id (GMI product, Brev instanceType). */
 export const PROVIDER_GPU_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
