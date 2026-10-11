@@ -1819,7 +1819,7 @@ await step("named pod tunnels: create → token in the pod's env, URL known up f
     assert.ok(!(await call3(`/api/standalone/tunb`, { headers: H })).text.includes(tb.token));
     assert.equal((await call3("/api/standalone/tunb/stop", { method: "POST", body: {}, headers: H })).status, 202);
     op = await wait3(lb.id, "down");
-    assert.ok(msgs(op).some((m) => /parked \(stopped;/.test(m)), JSON.stringify(msgs(op)));
+    assert.ok(msgs(op).some((m) => /parked \(stopped, not deleted;/.test(m)), JSON.stringify(msgs(op)));
     assert.ok(!tb.deleted_at && c.dns.includes(recB), "parked: tunnel and DNS kept");
     sw = (await call3("/api/tunnels/sweep", { method: "POST", body: {}, headers: H })).j;
     assert.ok(!tb.deleted_at, "the sweep keeps a parked instance's tunnel");
