@@ -1472,6 +1472,102 @@ await step("weights_source r2: a GMI pod fetches its trees from the R2 weights s
   assert.equal((await call("/api/standalone/gmir2", { method: "DELETE", headers: T() })).status, 200);
 });
 
+await step("serverless weights_source r2: an endpoint without a volume (any DC), its worker's real boot fetches through the Worker's plan with the endpoint's weights token (presigned, ranged), reports its cold start, a second boot is a cache hit; token scope, rotation, revocation; the CLI flag", async () => {
+  const toml = readFileSync(new URL("../../../configs/serve/runpod-fake.toml", import.meta.url), "utf8") + '\n[r2probe]\npath = "${FV_WEIGHTS}/r2demo/config.json"\n';
+  const spec = { name: "slsr2", variant: "wan", compute: "GPU", config_toml: toml, weights_source: "r2", gpu_types: ["NVIDIA H100 80GB HBM3"] };
+  // Validate: no volume, any data centre (the stock per GPU type), the cold-start outlook from the manifests.
+  const v = (await call("/api/serverless/validate", { method: "POST", body: { spec }, headers: T() })).j;
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.equal(v.spec.network_volume, null);
+  assert.equal(v.spec.data_centers, undefined);
+  assert.equal(v.outlook.weights_source, "r2");
+  assert.deepEqual(v.outlook.trees.map((t) => [t.dest, t.published]), [["r2demo", true]]);
+  assert.match(v.outlook.note, /fetch 0 GB at 1\.00 GB\/s \(planning rate, UNVERIFIED\)/);
+  assert.ok(v.warnings.some((x) => /any data centre: in stock/.test(x.message)), JSON.stringify(v.warnings));
+  assert.ok(Array.isArray(v.stock) && v.stock[0].gpu === "NVIDIA H100 80GB HBM3");
+  const vbad = (await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, config_toml: toml.replace("r2demo", "r2missing") } }, headers: T() })).j;
+  assert.ok(vbad.issues.some((i) => /not in the R2 weights store yet: r2missing/.test(i.message)), JSON.stringify(vbad.issues));
+  assert.match((await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, network_volume: "jg48s6o1w0" } }, headers: T() })).j.error, /replaces the weights volume/);
+  // Create: a template with the r2 boot and the endpoint's weights token, an endpoint with no volume and no DC.
+  const before = new Set(mock.sls.templates.keys());
+  const r = await call("/api/serverless", { method: "POST", body: { spec }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const ep = r.j.endpoint;
+  const tpl = [...mock.sls.templates.values()].find((t) => !before.has(t.id));
+  const rpe = mock.sls.endpoints.get(ep.endpoint_id);
+  assert.equal(rpe.networkVolumeId, undefined);
+  assert.equal(rpe.dataCenterIds, undefined);
+  assert.deepEqual(tpl.dockerEntrypoint.slice(0, 2), ["bash", "-c"]);
+  assert.match(tpl.env.FV_WEIGHTS_TOKEN, /^fvw_[0-9a-f]{64}$/);
+  assert.equal(tpl.env.FV_R2_TREE_REVS, "r2demo@rev1");
+  assert.equal(tpl.env.FV_WEIGHTS_PLAN_URL, `${B}/ingest/v1/weights-plan`);
+  assert.ok(!JSON.stringify(tpl).includes(mock.r2.secret) && !JSON.stringify(tpl).includes(mock.r2.access), "no R2 credential in the template");
+  assert.ok(!JSON.stringify(r.j).includes(tpl.env.FV_WEIGHTS_TOKEN), "the token is never in an API answer");
+  // The worker: the template's own start command, in bash, with the template's env (fv-serve replaced by an echo, the
+  // root paths by a temp dir, the aux files left out: they are real downloads).
+  const { mkdtempSync, existsSync: ex } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const tmp = mkdtempSync(`${tmpdir()}/fvc-slsr2-`);
+  const script = tpl.dockerEntrypoint[2].replace("mkdir -p /fvstate\n", `mkdir -p ${tmp}/fvstate\n`).replaceAll("/fv-worker.toml", `${tmp}/fv-worker.toml`).replaceAll("/opt/fastvideo-rs/bin/fv-serve", "echo FV-SERVE-START");
+  const runBoot = (worker, env = tpl.env) =>
+    promisify(execFile)("bash", ["-c", script], {
+      env: { ...env, PATH: process.env.PATH, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", FV_WEIGHTS: `${tmp}/weights`, FV_R2_STATE: `${tmp}/fvstate`, FV_R2_TOOLS: `${tmp}/tools`, FV_R2_MIN_FREE_GB: "0", FV_FAIL_SLEEP_S: "0", FV_WEIGHTS_TREES_B64: "", RUNPOD_POD_ID: worker },
+      timeout: 90000,
+    });
+  const gets0 = mock.r2.gets.length;
+  const bad0 = mock.r2.bad;
+  const out1 = await runBoot("wkr2a");
+  assert.match(out1.stdout, /FV-SERVE-START --config/);
+  assert.match(out1.stderr, /cache miss: r2demo/);
+  assert.equal(readFileSync(`${tmp}/weights/r2demo/.fv-revision`, "utf8"), "rev1");
+  assert.equal(mock.r2.bad, bad0, "every presigned URL the Worker made was accepted");
+  assert.ok(mock.r2.gets.slice(gets0).filter((g) => g.range && g.key.startsWith("weights/r2demo/")).length >= 4, "ranged GETs per part");
+  let page = (await call(`/api/serverless/${ep.id}`, { headers: T() })).j;
+  const b1 = page.boots.find((b) => b.worker_id === "wkr2a");
+  assert.equal(b1.cache, "miss");
+  assert.equal(b1.missing, "r2demo");
+  assert.ok(b1.fetch_s !== null && b1.fetch_mbps !== null && b1.serve_at >= b1.boot_at, JSON.stringify(b1));
+  assert.equal(page.outlook.cache.state, "miss");
+  // A second boot on the same disk: a cache hit, no plan request, no GET.
+  const gets1 = mock.r2.gets.length;
+  const out2 = await runBoot("wkr2b");
+  assert.match(out2.stderr, /cache hit/);
+  assert.equal(mock.r2.gets.length, gets1);
+  page = (await call(`/api/serverless/${ep.id}`, { headers: T() })).j;
+  assert.equal(page.outlook.cache.state, "hit");
+  // The boot's phases are in the log store next to Runpod's log (source serverless:<id>).
+  const logs = (await call(`/api/logs?pod=wkr2a&level=trace&limit=50`, { headers: T() })).j.lines;
+  assert.ok(logs.some((l) => l.msg === "[cache] miss: r2demo") && logs.some((l) => /^\[weights\] r2 weights ready/.test(l.msg)), JSON.stringify(logs).slice(0, 600));
+  // The token's scope: wrong token 401, another endpoint named 403.
+  const plan = (tok, body = { pod: "wkr2a@1700000000" }) => call("/ingest/v1/weights-plan", { method: "POST", body, headers: { authorization: `Bearer ${tok}` } });
+  assert.equal((await plan("fvw_" + "0".repeat(64))).status, 401);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN, { pod: "x@1700000000", endpoint: "r2v-q" })).status, 403);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 200);
+  // Rotation: a template update writes a new token; the old one still works during the rollout.
+  const old = tpl.env.FV_WEIGHTS_TOKEN;
+  const u = await call(`/api/serverless/${ep.id}`, { method: "PUT", body: { spec: { env: { FV_TEST: "1" } } }, headers: T() });
+  assert.equal(u.status, 200, JSON.stringify(u.j));
+  assert.notEqual(tpl.env.FV_WEIGHTS_TOKEN, old);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 200);
+  assert.equal((await plan(old)).status, 200, "the previous token stays good for the grace period");
+  // The CLI: --weights r2 on a preset whose trees are not published is refused with the reason.
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(`${tmp}/token`, token, { mode: 0o600 });
+  const cli = (...args) => promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${tmp}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } }).catch((e) => e);
+  const c = await cli("endpoint", "create", "slsr2b", "--preset", "wan", "--weights", "r2", "--gpu", "NVIDIA H100 80GB HBM3", "--dc", "US-TX-3");
+  assert.match(`${c.stderr}${c.stdout}`, /not in the R2 weights store yet: fastwan22-ti2v-5b, wan22-ti2v-5b/);
+  const show = await cli("endpoint", "show", "slsr2");
+  assert.match(show.stdout, /"weights_source": "r2"/);
+  assert.match(show.stdout, /"state": "hit"/);
+  // Delete: both tokens die with the endpoint.
+  assert.equal((await call(`/api/serverless/${ep.id}`, { method: "DELETE", headers: T() })).status, 200);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 401);
+  assert.equal((await plan(old)).status, 401);
+  assert.ok(ex(`${tmp}/weights/r2demo/config.json`));
+});
+
 await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop alerted, non-stoppable refused, limits as alerts, budget, only ours", async () => {
   // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
   // instance-type list as prices (no BREV_PRICES), a short restart timeout.

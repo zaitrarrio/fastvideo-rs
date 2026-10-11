@@ -11,6 +11,7 @@ import { audit, getSetting, HttpError, newId, now, parseJson, putSetting, scrub,
 import { endpointCreatePayload, endpointName, endpointUpdatePayload, invokeBody, lbPools, SLS_PREFIX, templateCreatePayload, templateName, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "./payloads";
 import { balanceFloor, sls, type LiveEndpoint, type SlsEnv } from "./runpod-sls";
 import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
+import { newWeightsToken, slsWeightsEnv } from "./weights";
 import { defaultCancelPath } from "../jobapi";
 
 export interface SlsRow {
@@ -37,6 +38,10 @@ export interface SlsRow {
   updated_at: number;
   deleted_at: number | null;
   last_error: string | null;
+  /** weights_source r2: SHA-256 of the endpoint's weights token (FV_WEIGHTS_TOKEN), the previous one during a rotation. */
+  weights_token_hash?: string | null;
+  weights_token_prev_hash?: string | null;
+  weights_token_rotated_at?: number | null;
 }
 export type Actor = { actor: string; ip?: string };
 
@@ -131,6 +136,12 @@ async function patchRow(env: Env, id: string, f: Partial<SlsRow>): Promise<void>
 }
 export const reload = (env: Env, id: string) => getRow(env, id);
 const deadlineFor = (spec: EndpointSpec, from = now()) => (spec.deadline_min ? from + spec.deadline_min * 60_000 : null);
+/** weights_source r2: a fresh weights token for the template env, and its hash for D1 (never the token). */
+async function weightsFor(env: Env, spec: EndpointSpec): Promise<{ weights: Record<string, string>; hash: string | null }> {
+  if (spec.weights_source !== "r2" || spec.compute !== "GPU") return { weights: {}, hash: null };
+  const t = await newWeightsToken();
+  return { weights: slsWeightsEnv(env, spec, t.token), hash: t.hash };
+}
 
 // ---------------------------------------------------------------- create
 export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o: { image?: string } = {}): Promise<SlsRow> {
@@ -143,15 +154,16 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
   const image = o.image ?? (await resolveImage(env, spec));
   const id = newId("se");
   const t = now();
-  await env.DB.prepare("INSERT INTO serverless_endpoints (id, name, mode, spec, image, status, deadline, deadline_action, created_at, created_by, updated_at) VALUES (?, ?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?)")
-    .bind(id, spec.name, spec.mode, JSON.stringify(spec), image, deadlineFor(spec, t), spec.deadline_action, t, who.actor, t)
+  const w = await weightsFor(env, spec);
+  await env.DB.prepare("INSERT INTO serverless_endpoints (id, name, mode, spec, image, status, deadline, deadline_action, created_at, created_by, updated_at, weights_token_hash) VALUES (?, ?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?)")
+    .bind(id, spec.name, spec.mode, JSON.stringify(spec), image, deadlineFor(spec, t), spec.deadline_action, t, who.actor, t, w.hash)
     .run();
   let tpl: string | null = null;
   let ep: string | null = null;
   try {
     if (spec.mode === "queue" && spec.compute === "GPU") {
       // GPU queue: a template, then the endpoint on it (REST v1; runpod-endpoint.sh's proven path).
-      const tr = await sls.createTemplate(env, templateCreatePayload(spec, image, templateName(spec, t)));
+      const tr = await sls.createTemplate(env, templateCreatePayload(spec, image, templateName(spec, t), w.weights));
       tpl = String(tr?.id || "");
       if (!tpl) throw new HttpError(502, "runpod: template create returned no id");
       await patchRow(env, id, { template_id: tpl, own_template: 1 });
@@ -161,7 +173,7 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
     } else {
       // Load balancer, or CPU queue (REST v1 ignores computeType CPU): REST v2, which makes the template.
       const pools = spec.compute === "GPU" ? lbPools(spec.gpu_types || [], await sls.gpuCatalog(env).catch(() => [])) : [];
-      const er = await sls.createLb(env, v2CreatePayload(spec, image, pools));
+      const er = await sls.createLb(env, v2CreatePayload(spec, image, pools, w.weights));
       ep = String(er?.id || "");
       if (!ep) throw new HttpError(502, "runpod: v2 endpoint create returned no id");
       const got = await sls.getEndpoint(env, ep);
@@ -183,7 +195,7 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
     // Nothing half-made stays behind: the endpoint, then the template.
     if (ep) await sls.deleteEndpoint(env, ep).catch(() => {});
     if (tpl) await sls.deleteTemplate(env, tpl).catch(() => {});
-    await patchRow(env, id, { status: "failed", last_error: msg, deleted_at: now(), endpoint_id: ep });
+    await patchRow(env, id, { status: "failed", last_error: msg, deleted_at: now(), endpoint_id: ep, weights_token_hash: null });
     await audit(env, { actor: who.actor, ip: who.ip, action: "serverless.create", target: spec.name, ok: false, detail: msg, after: { endpoint: ep, template: tpl, image } });
     throw e;
   }
@@ -210,10 +222,14 @@ export async function updateEndpoint(env: SlsEnv, who: Actor, row: SlsRow, input
   assertOurs(row, live);
   let image = row.image || "";
   const applied: string[] = [];
+  let tokens: Partial<SlsRow> = {};
   if (d.template) {
     if (!row.template_id) throw new HttpError(409, "no template recorded for this endpoint");
     image = o.image ?? (await resolveImage(env, next));
-    await sls.updateTemplate(env, row.template_id, templateUpdatePayload(next, image));
+    // weights_source r2: every template update rotates the weights token (the old one stays good for the rollout).
+    const w = await weightsFor(env, next);
+    await sls.updateTemplate(env, row.template_id, templateUpdatePayload(next, image, w.weights));
+    tokens = w.hash ? { weights_token_hash: w.hash, weights_token_prev_hash: row.weights_token_hash ?? null, weights_token_rotated_at: now() } : { weights_token_hash: null, weights_token_prev_hash: null, weights_token_rotated_at: null };
     applied.push("template");
   }
   if (d.endpoint) {
@@ -222,7 +238,7 @@ export async function updateEndpoint(env: SlsEnv, who: Actor, row: SlsRow, input
   }
   const deadline = prev.deadline_min !== next.deadline_min ? deadlineFor(next) : row.deadline;
   const status = next.workers_max > 0 ? "active" : "scaled-down";
-  await patchRow(env, row.id, { spec: JSON.stringify(next), image, deadline, deadline_action: next.deadline_action, status, last_error: null });
+  await patchRow(env, row.id, { spec: JSON.stringify(next), image, deadline, deadline_action: next.deadline_action, status, last_error: null, ...tokens });
   await audit(env, { actor: who.actor, ip: who.ip, action: o.action || "serverless.update", target: row.name, before: prev, after: { ...next, applied, image } });
   return reload(env, row.id);
 }
@@ -247,7 +263,8 @@ export async function extendEndpoint(env: Env, who: Actor, row: SlsRow, minutes:
 export async function deleteEndpoint(env: Env, who: Actor, row: SlsRow, reason = "by hand"): Promise<SlsRow> {
   if (row.status === "deleted") return row;
   if (row.status !== "deleting") {
-    await patchRow(env, row.id, { status: "deleting" });
+    // The weights token dies with the endpoint (a worker still booting gets no more URLs).
+    await patchRow(env, row.id, { status: "deleting", weights_token_hash: null, weights_token_prev_hash: null });
     await audit(env, { actor: who.actor, ip: who.ip, action: "serverless.delete", target: row.name, before: { endpoint: row.endpoint_id, template: row.template_id, status: row.status }, detail: reason });
   }
   await finishDelete(env, await reload(env, row.id), who.actor);
@@ -264,7 +281,7 @@ export async function finishDelete(env: Env, row: SlsRow, actor: string): Promis
       }
     }
     if (row.own_template && row.template_id) await sls.deleteTemplate(env, row.template_id);
-    await patchRow(env, row.id, { status: "deleted", deleted_at: now(), workers: 0, live_dph: 0, last_error: null });
+    await patchRow(env, row.id, { status: "deleted", deleted_at: now(), workers: 0, live_dph: 0, last_error: null, weights_token_hash: null, weights_token_prev_hash: null });
     await audit(env, { actor, action: "serverless.deleted", target: row.name, after: { endpoint: row.endpoint_id, template: row.own_template ? row.template_id : null } });
     return true;
   } catch (e) {
@@ -382,7 +399,8 @@ export async function captureLogs(env: Env, row: SlsRow, workerId: string, max =
   const t = now();
   const lines = [...system.slice(-50).map((x) => ({ ...parseRunpodLine(x, t), target: "runpod.system" })), ...container.slice(-max).map((x) => ({ ...parseRunpodLine(x, t), target: "runpod.container" }))];
   const src = logSource(row);
-  const stmts = [env.DB.prepare("DELETE FROM log_lines WHERE cluster_id = ? AND pod_id = ?").bind(src, workerId)];
+  // The boot reports (target fv.boot, POST /ingest/v1/sls-report) stay: only Runpod's tail is replaced.
+  const stmts = [env.DB.prepare("DELETE FROM log_lines WHERE cluster_id = ? AND pod_id = ? AND (target IS NULL OR target != 'fv.boot')").bind(src, workerId)];
   for (const x of lines) stmts.push(env.DB.prepare("INSERT INTO log_lines (cluster_id, pod_id, ts, level, target, msg, fields) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(src, workerId, x.ts, x.level, x.target, x.msg, JSON.stringify({ endpoint: row.endpoint_id, source: "runpod-serverless" })));
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
   return { container, system, stored: lines.length };
