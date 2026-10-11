@@ -46,6 +46,7 @@ import hmac
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -107,14 +108,37 @@ def hub_rows():
     return out
 
 
+def _split_dest(full):
+    """auxiliary/tae/taeh3.safetensors -> (auxiliary/tae, taeh3.safetensors): the longest known dest prefix."""
+    dests = sorted([d for d, _ in VOLUME_ONLY] + list(hub_rows()), key=len, reverse=True)
+    for d in dests:
+        if full.startswith(d + "/"):
+            return d, full[len(d) + 1:]
+    return None, None
+
+
 def recorded_hashes():
-    """(dest, path) -> (bytes or None, algo, [hex alternatives]) from weights-sha256.tsv."""
+    """(dest, path) -> (bytes or None, algo, [hex alternatives]) recorded in the repo: weights-sha256.tsv, the
+    auxiliary/ url rows of weights-manifest.tsv, and verify-weights.sh's FP8_TREES / DIT_PREQUANT_TREES."""
     out = {}
     for r in read_tsv("weights-sha256.tsv"):
         if len(r) < 4 or ":" not in r[3]:
             continue
         algo, hexes = r[3].split(":", 1)
         out[(r[0], r[1])] = (None if r[2] == "-" else int(r[2]), algo, [h.lower() for h in hexes.split("|")])
+    for r in read_tsv("weights-manifest.tsv"):
+        if len(r) >= 3 and r[1].startswith("url:"):
+            sha = re.search(r"sha256:([0-9a-f]{64})", " ".join(r[2:]))
+            size = re.search(r"size:(\d+)", " ".join(r[2:]))
+            dest, path = _split_dest(r[0])
+            if sha and dest:
+                out.setdefault((dest, path), (int(size.group(1)) if size else None, "sha256", [sha.group(1)]))
+    vw = HERE / "verify-weights.sh"
+    if vw.is_file():
+        for m in re.finditer(r"^(?:[A-Z_]+=\")?([\w./-]+)\t(\d+)\t([0-9a-f]{64})\"?$", vw.read_text(), re.M):
+            dest, path = _split_dest(m.group(1))
+            if dest:
+                out.setdefault((dest, path), (int(m.group(2)), "sha256", [m.group(3)]))
     return out
 
 
@@ -474,7 +498,7 @@ def hub_sources(dest, conns, rev_override=None):
 SKIP_NAMES = {".complete", ".fv-revision", ".fv-source", ".fv-manifest.json"}
 
 
-def dir_sources(dest, root, globs=None, exclude=()):
+def dir_sources(dest, root, globs=None, exclude=(), hidden=False):
     root = Path(root)
     if not root.is_dir():
         raise Fail(f"{root}: not a directory")
@@ -484,10 +508,10 @@ def dir_sources(dest, root, globs=None, exclude=()):
     for dp, dns, fns in os.walk(root, followlinks=True):
         rel_dir = os.path.relpath(dp, root)
         # never descend into fetchers' temp folders, HF-cache internals or caches
-        dns[:] = sorted(d for d in dns if not d.startswith(".") and not d.startswith("models--"))
+        dns[:] = sorted(d for d in dns if (hidden or not d.startswith(".")) and not d.startswith("models--"))
         for fn in sorted(fns):
             rel = fn if rel_dir == "." else f"{rel_dir}/{fn}"
-            if fn in SKIP_NAMES or fn.startswith("."):
+            if not hidden and (fn in SKIP_NAMES or fn.startswith(".")):
                 continue
             if globs and not any(fnmatch.fnmatch(rel, g) for g in globs):
                 continue
@@ -504,6 +528,51 @@ def dir_sources(dest, root, globs=None, exclude=()):
     return out
 
 
+def hub_dir_sources(dest, root, conns):
+    """A Hub tree copied from a directory (the volume), checked against the Hub at the pinned revision: the file set is
+    the Hub listing's (manifest globs + model_index.json), every file must exist with the listed size, and each one's
+    bytes must hash to the Hub's LFS SHA-256 (or git blob SHA-1) before its upload completes. HF-cache layouts are
+    read through their top-level links, else models--*/snapshots/<rev>/. Files under the globs that the revision does
+    not list are left out (reported)."""
+    repo, rev, globs = hub_rows()[dest]
+    globs = globs + ["model_index.json"]
+    want = {p: (size, lfs, oid) for p, size, lfs, oid in hub_list(repo, rev) if any(fnmatch.fnmatch(p, g) for g in globs)}
+    if not want:
+        raise Fail(f"{repo}@{rev}: nothing matches {' '.join(globs)}")
+    root = Path(root)
+    try:
+        have = {s.path: s for s in dir_sources(dest, root, globs)}
+    except Fail:
+        have = {}  # nothing at the top level: an HF-cache layout without top-level links (the snapshot below)
+    snaps = sorted(root.glob(f"models--*/snapshots/{rev}")) if root.is_dir() else []
+    rec = recorded_hashes()
+    out, missing = [], []
+    for p, (size, lfs, oid) in sorted(want.items()):
+        # the pinned revision's own snapshot (HF-cache layout) first, else the plain / top-level file
+        src = None
+        for sd in snaps:
+            f = (sd / p).resolve()
+            if f.is_file():
+                r = rec.get((dest, p))
+                src = Source(p, f.stat().st_size, file_reader(f), recorded=(r[1], r[2]) if r else None)
+                break
+        src = src or have.get(p)
+        if src is None:
+            missing.append(p)
+            continue
+        if src.size != size:
+            raise Fail(f"{dest}/{p}: {src.size} bytes in {root}, the Hub lists {size} at {rev[:12]}")
+        src.sha256 = lfs
+        src.sha1_blob = None if lfs else oid
+        out.append(src)
+    if missing:
+        raise Fail(f"{dest}: {len(missing)} file(s) of {repo}@{rev[:12]} not in {root}: {', '.join(missing[:8])}")
+    extra = sorted(set(have) - set(want))
+    if extra:
+        log(f"{dest}: left out {len(extra)} file(s) under the globs that {rev[:12]} does not list: {', '.join(extra[:8])}")
+    return rev, {"kind": "hub-via-dir", "repo": repo, "revision": rev, "globs": globs, "path": str(root.resolve())}, out
+
+
 # --------------------------------------------------------------------------- publish
 class Publisher:
     def __init__(self, s3, args):
@@ -515,12 +584,18 @@ class Publisher:
         self.dry = args.dry_run
         self.bytes = 0
         self.skipped = 0
+        self.checked = {}
         self.blk = threading.Lock()
         self.t0 = time.time()
 
     def add(self, n):
         with self.blk:
             self.bytes += n
+
+    @staticmethod
+    def checks(src):
+        """What a file's bytes were checked against before its upload completed (none: its hash is recorded from the copy)."""
+        return (["hub-lfs-sha256"] if src.sha256 else []) + (["hub-git-blob-sha1"] if src.sha1_blob else []) + ([f"repo-{src.recorded[0]}"] if src.recorded else [])
 
     def expected_ok(self, src, sha256, sha1_blob, other):
         """Raises when the bytes do not match what is known about them."""
@@ -534,9 +609,9 @@ class Publisher:
             if got and got not in hexes:
                 raise Fail(f"{src.path}: {algo} {got} not in weights-sha256.tsv ({', '.join(h[:16] + '…' for h in hexes)})")
 
-    def publish_file(self, dest, rev, src):
-        key = obj_key(self.prefix, dest, rev, src.path)
-        pkey = parts_key(self.prefix, dest, rev, src.path)
+    def publish_file(self, dest, rev, src, key=None, pkey=None):
+        key = key or obj_key(self.prefix, dest, rev, src.path)
+        pkey = pkey or parts_key(self.prefix, dest, rev, src.path)
         have = self.s3.head(key)
         if have is not None:
             rec = self.s3.get(pkey)
@@ -546,6 +621,7 @@ class Publisher:
                 raise Fail(f"{key} exists without its parts record {pkey}: an earlier run stopped between the two; check it by hand (verify --deep) before going on")
             rec = json.loads(rec)
             self.expected_ok(src, rec["sha256"], None, {})
+            self.checked[src.path] = rec.get("checked", self.checks(src))
             self.skipped += 1
             self.add(src.size)
             return rec
@@ -609,7 +685,8 @@ class Publisher:
             got = self.s3.head(key)
             if not got or got[0] != src.size:
                 raise Fail(f"{key}: {got[0] if got else 'no object'} bytes after completing, expected {src.size}")
-        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": part_shas}
+        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": part_shas, "checked": self.checks(src)}
+        self.checked[src.path] = rec["checked"]
         for a, h in extra.items():
             rec[a] = h.hexdigest()
         if not self.s3.put_new(pkey, json.dumps(rec).encode(), content_type="application/json"):
@@ -668,6 +745,12 @@ class Publisher:
         if not self.s3.put_new(mkey, json.dumps(manifest, indent=1, sort_keys=True).encode(), content_type="application/json"):
             raise Fail(f"{mkey} appeared while publishing: add-only, not replacing it")
         el = time.time() - self.t0
+        none = sorted(p for p, c in self.checked.items() if not c)
+        kinds = {}
+        for c in self.checked.values():
+            for k in c or ["none"]:
+                kinds[k] = kinds.get(k, 0) + 1
+        log(f"{dest}@{rev}: hash checks {json.dumps(kinds, sort_keys=True)}" + (f"; NO recorded hash (SHA-256 recorded from this copy): {', '.join(none)}" if none else ""))
         log(f"{dest}@{rev}: PUBLISHED {mkey} ({total / 1e9:.2f} GB; {self.skipped} files already there; {el:.0f}s, {(self.bytes / max(el, 1e-6)) / 1e6:.0f} MB/s)")
         return manifest
 
@@ -794,9 +877,10 @@ def cmd_plan(s3, args):
 def cmd_compare_dir(s3, args):
     m = load_manifest(s3, args.prefix, args.dest, args.rev)
     root = Path(args.dir)
+    snaps = sorted(root.glob(f"models--*/snapshots/{m['rev']}"))  # HF-cache layout: the pinned snapshot first
     bad = []
     for f in m["files"]:
-        p = (root / f["path"]).resolve()
+        p = next((q for q in ((sd / f["path"]).resolve() for sd in snaps) if q.is_file()), None) or (root / f["path"]).resolve()
         if not p.is_file():
             bad.append(f"{f['path']}: not in {root}")
             continue
@@ -814,6 +898,36 @@ def cmd_compare_dir(s3, args):
         print("DIFF " + line)
     print(f"{args.dest}@{m['rev']}: {len(m['files']) - len(bad)}/{len(m['files'])} files equal ({'sizes' if args.sizes_only else 'sha256'})")
     return 1 if bad else 0
+
+
+def cmd_archive(s3, args):
+    """Every regular file of DIR (hidden ones too) under archive/<label>/<name>/<path>, add-only, with its SHA-256 in
+    archive/<label>/.parts/<name>/<path>.json and, last, an index archive/<label>/<name>.index.json."""
+    r2_fetch.safe_rel(args.name)
+    base = f"{args.prefix}archive/{args.label}/"
+    ikey = f"{base}{args.name}.index.json"
+    if s3.head(ikey) is not None:
+        log(f"archive {args.name}: already done ({ikey})")
+        return 0
+    files = dir_sources(args.name, args.dir, hidden=True)
+    pub = Publisher(s3, args)
+    t0 = time.time()
+    recs = {}
+    with concurrent.futures.ThreadPoolExecutor(args.files) as ex:
+        futs = {ex.submit(pub.publish_file, args.name, "-", f, f"{base}{args.name}/{f.path}", f"{base}.parts/{args.name}/{f.path}.json"): f for f in sorted(files, key=lambda f: -f.size)}
+        for fu in concurrent.futures.as_completed(futs):
+            r = fu.result()
+            recs[r["path"]] = r
+    if args.dry_run:
+        return 0
+    total = sum(r["size"] for r in recs.values())
+    idx = {"format": "fv-archive-index/1", "name": args.name, "source": str(Path(args.dir).resolve()), "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "total_bytes": total,
+           "files": [{k: recs[p][k] for k in ("path", "size", "sha256")} for p in sorted(recs)]}
+    if not s3.put_new(ikey, json.dumps(idx, indent=1).encode(), content_type="application/json"):
+        raise Fail(f"{ikey} appeared while archiving")
+    el = time.time() - t0
+    log(f"archive {args.name}: {len(recs)} files, {total / 1e9:.2f} GB -> {base}{args.name}/ ({el:.0f}s, {total / max(el, 1e-6) / 1e6:.0f} MB/s)")
+    return 0
 
 
 def cmd_create_bucket(args):
@@ -844,6 +958,7 @@ def main(argv=None):
             p.add_argument("--globs", default="", help="space-separated globs (default: the Hub row's, else every file)")
             p.add_argument("--exclude", default="", help="space-separated globs to leave out")
             p.add_argument("--note", default="", help="where the directory is (recorded in the manifest)")
+            p.add_argument("--no-hub-check", action="store_true", help="a Hub dest WITHOUT the Hub listing check (not recommended)")
         p.add_argument("--rev", default="", help="publish-hub: override the pinned revision; publish-dir: required without a Hub row (e.g. eu-20261012)")
         p.add_argument("--files", type=int, default=4, help="files uploaded at once")
         p.add_argument("--window", type=int, default=4, help="parts in flight per file (memory: files x (window+1) x 64 MiB)")
@@ -869,6 +984,19 @@ def main(argv=None):
     p.add_argument("dests", nargs="+", help="dest or dest@rev")
     p.add_argument("--ttl", type=int, default=3600)
     p.add_argument("--out", default="")
+    p = sub.add_parser("archive", help="copy a directory as-is under archive/<label>/<name>/ (no manifest, no preset wiring)")
+    p.add_argument("name")
+    p.add_argument("dir")
+    p.add_argument("--label", default="eu-volume")
+    p.add_argument("--files", type=int, default=4)
+    p.add_argument("--window", type=int, default=4)
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("put-temp", help="stage a file under tmp/ of a NON-weights bucket and print a presigned GET URL")
+    p.add_argument("file")
+    p.add_argument("--key", required=True)
+    p.add_argument("--ttl", type=int, default=3600)
+    p = sub.add_parser("rm-temp", help="delete the tmp/<prefix>* objects of a NON-weights bucket")
+    p.add_argument("--prefix", dest="tmp_prefix", required=True)
     p = sub.add_parser("create-bucket")
     p.add_argument("--location", default="wnam", help="R2 location hint: wnam enam weur eeur apac oc")
     args = ap.parse_args(argv)
@@ -882,6 +1010,11 @@ def main(argv=None):
             pub = Publisher(s3, args)
             if args.cmd == "publish-hub":
                 rev, source, files = hub_sources(args.dest, s3.conns, args.rev or None)
+            elif hub_rows().get(args.dest) and not args.no_hub_check:
+                if args.rev and args.rev != hub_rows()[args.dest][1]:
+                    raise Fail(f"{args.dest}: a Hub tree keeps its pinned revision {hub_rows()[args.dest][1]}, not {args.rev}")
+                rev, source, files = hub_dir_sources(args.dest, args.dir, s3.conns)
+                source["note"] = args.note
             else:
                 hub = hub_rows().get(args.dest)
                 rev = args.rev or (hub[1] if hub else "")
@@ -899,6 +1032,25 @@ def main(argv=None):
             pub.publish(args.dest, rev, source, files)
             log(f"ops: {s3.ops['A']} class A, {s3.ops['B']} class B")
             return 0
+        if args.cmd in ("put-temp", "rm-temp"):
+            # Only scratch objects, only outside the weights bucket: the weights bucket is add-only.
+            if s3.bucket == DEFAULT_BUCKET:
+                raise Fail(f"{args.cmd}: not in the weights bucket {DEFAULT_BUCKET}")
+            if args.cmd == "put-temp":
+                if not args.key.startswith("tmp/"):
+                    raise Fail("put-temp: the key must start with tmp/")
+                s3.request("PUT", args.key, headers={"content-type": "application/octet-stream"}, body=Path(args.file).read_bytes())
+                print(presign(s3.endpoint, s3.bucket, args.key, s3.access, s3.secret, args.ttl))
+                return 0
+            if not args.tmp_prefix.startswith("tmp/"):
+                raise Fail("rm-temp: the prefix must start with tmp/")
+            for k, size in list(s3.list(args.tmp_prefix)):
+                if size >= 0 and k.startswith(args.tmp_prefix):
+                    s3.request("DELETE", k, ok=(200, 204))
+                    log(f"deleted {s3.bucket}/{k}")
+            return 0
+        if args.cmd == "archive":
+            return cmd_archive(s3, args)
         if args.cmd == "status":
             return cmd_status(s3, args) or 0
         if args.cmd == "list":
@@ -911,20 +1063,26 @@ def main(argv=None):
             print(json.dumps(load_manifest(s3, args.prefix, args.dest, args.rev), indent=1))
             return 0
         if args.cmd == "verify":
-            pub = manifests(s3, args.prefix)
+            # FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID / _SECRET_ACCESS_KEY: every read goes through that (read-only) key, e.g.
+            # fv-control's, to prove it reads everything; the verified/ records are written with the main key.
+            rs3 = s3
+            if os.environ.get("FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID") and os.environ.get("FV_WEIGHTS_R2_VERIFY_SECRET_ACCESS_KEY"):
+                rs3 = S3(s3.endpoint, s3.bucket, os.environ["FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID"], os.environ["FV_WEIGHTS_R2_VERIFY_SECRET_ACCESS_KEY"])
+                log("verify: reading with the FV_WEIGHTS_R2_VERIFY_* key")
+            pub = manifests(rs3, args.prefix)
             dests = args.dests or sorted(pub)
             fails = 0
             for d in dests:
                 dest, _, rev = d.partition("@")
                 for r in ([rev] if rev else pub.get(dest, [None])):
                     try:
-                        m = load_manifest(s3, args.prefix, dest, r)
+                        m = load_manifest(rs3, args.prefix, dest, r)
                     except Fail as e:
                         print(f"FAIL {dest}: {e}")
                         fails += 1
                         continue
                     t = time.time()
-                    bad = verify_tree(s3, args.prefix, m, args.deep, args.workers)
+                    bad = verify_tree(rs3, args.prefix, m, args.deep, args.workers)
                     what = "sha256" if args.deep else "size"
                     if bad:
                         fails += 1
@@ -933,7 +1091,7 @@ def main(argv=None):
                         print(f"ok   {dest}@{m['rev']}: {len(m['files'])} files, {m['total_bytes'] / 1e9:.2f} GB ({what}, {time.time() - t:.0f}s)")
                         if args.record and args.deep:
                             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every part and file", "at": stamp}).encode(), content_type="application/json")
+                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every part and file", "read_with": "verify key" if rs3 is not s3 else "main key", "at": stamp}).encode(), content_type="application/json")
             return 1 if fails else 0
         if args.cmd == "compare-dir":
             return cmd_compare_dir(s3, args)
