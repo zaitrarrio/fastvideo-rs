@@ -6,6 +6,26 @@ new work in the same area. Newest decisions first.
 
 ## Decisions
 
+### 2026-10-11
+
+- **MiniMax H3 licence: held.** The owner states they hold a MiniMax H3
+  licence covering the territories the Community License excludes (US, EU,
+  UK, Republic of Korea). H3 and its derivatives (FastH3, Sol-H3, Ref2VA,
+  the Plug adapters) may be stored and served from US / EU infrastructure
+  (the `fv-weights` R2 bucket, Brev, GMI, Runpod). The licence document
+  itself is not in the repo. See docs/ports/h3-ref2v.md §1.1.
+- **Weights move to R2; the EU volume goes.** R2 bucket `fv-weights`
+  (docs/ops/r2-weights.md) becomes the weights store, filled by copying the
+  EU volume `jg48s6o1w0` (not re-downloading from the Hub), plus `runs/` and
+  `wan/` under `archive/eu-volume/`. The volume is deleted only after every
+  tree is verified in R2, a real pod has served from R2, and the owner
+  confirms again.
+- **Brev VMs are never deleted automatically.** Stopping keeps the VM; it is
+  reused by the next launch of its type or deleted by the owner (#69).
+- **Pod tunnel hostnames:** `<pod>-fv-pods.maximal.llc` (one level, covered
+  by Universal SSL), not `<pod>.fv-pods.maximal.llc`.
+- **Hub downloads at boot approved** on staging (`FV_HUB_DOWNLOADS_APPROVED=1`).
+
 ### 2026-10-07
 
 - **CloudRift: on hold.** No CloudRift work until the owner lifts the hold.
