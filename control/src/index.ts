@@ -4,7 +4,8 @@
 // /ingest, a per-minute cron (collector.ts) and one ClusterOps Durable
 // Object per cluster (cluster/do.ts).
 import { Hono, type Context } from "hono";
-import { DEFAULT_POLICIES, policies } from "./alerts";
+import { DEFAULT_POLICIES, policies, syncAlerts } from "./alerts";
+import { tunnelsView, tunnelSweep } from "./tunnels";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
@@ -202,7 +203,16 @@ app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
   await auditC(c, { action: "brev.parked.unpark", target: id });
   return c.json({ ok: true, name: r.name, state: r.state });
 });
-/** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none). */
+/** Named pod tunnels (tunnels.ts): the settings (mode, template, warning) and the recorded tunnels; ?all=1 with deleted ones. */
+app.get("/api/tunnels", async (c) => c.json(await tunnelsView(c.env, c.req.query("all") === "1")));
+/** The cron's tunnel pass now (leaks deleted, the account and zone listed for strays). */
+app.post("/api/tunnels/sweep", async (c) => {
+  requireAdmin(c);
+  const r = await tunnelSweep(c.env, undefined, true);
+  if (r.actions.length) await auditC(c, { action: "tunnels.sweep", detail: r.actions.join("; ").slice(0, 1900) });
+  await syncAlerts(c.env, r.alerts, r.kinds);
+  return c.json(r);
+});
 /** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none), then the pod's
  * reports (POST /ingest/v1/endpoint: a Brev host's facts, failures, heartbeat; the container's phases). */
 app.get("/api/pods/:id/provider-logs", async (c) => {

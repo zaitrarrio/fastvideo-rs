@@ -613,11 +613,36 @@ function brevParkedCard(pk, redraw) {
     ),
   );
 }
+// Named pod tunnels (docs/serve/deploy-gmi-brev.md §6.4): how GMI / Brev pods are reached, what is wrong with the
+// settings (said loudly: a host Universal SSL does not cover), and the tunnels fv-control made.
+function tunnelsCard(tv) {
+  const s = tv.settings;
+  return card(
+    `Pod tunnels (GMI / Brev): ${s.mode === "named" ? "named" : "quick"}${tv.tunnels.length ? ` · ${tv.tunnels.length} recorded` : ""}`,
+    h("p", { class: "muted small" }, s.note),
+    s.error ? h("div", { class: "alert", "data-tunnel-error": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("error", "critical"), " ", s.error)) : "",
+    s.warning ? h("div", { class: "alert", "data-tunnel-warning": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("warning", "warn"), " ", s.warning)) : "",
+    tv.tunnels.length
+      ? table(
+          [
+            { label: "pod", get: (x) => h("a", { href: `#/pod/${x.pod_id}` }, x.pod_id) },
+            { label: "host", get: (x) => x.host },
+            { label: "tunnel", get: (x) => h("span", { title: x.tunnel_id || "" }, x.name) },
+            { label: "state", get: (x) => badge(x.state, x.state === "live" ? "good" : x.state === "delete_failed" ? "critical" : "warn") },
+            { label: "note", get: (x) => x.note || "", wrap: true },
+          ],
+          tv.tunnels,
+          "",
+        )
+      : "",
+  );
+}
 async function pagePods(main) {
-  const [r, pk] = await Promise.all([api("/api/pods"), api("/api/providers/brev/parked").catch(() => null)]);
+  const [r, pk, tv] = await Promise.all([api("/api/pods"), api("/api/providers/brev/parked").catch(() => null), api("/api/tunnels").catch(() => null)]);
   const t = Date.now();
   main.replaceChildren(
     h("h1", {}, "Pods"),
+    ...(tv && (tv.settings.mode === "named" || tv.settings.warning || tv.tunnels.length) ? [tunnelsCard(tv)] : []),
     ...(pk && (pk.enabled || pk.parked.length) ? [brevParkedCard(pk, () => pagePods(main))] : []),
     card(
       `All pods of the Runpod account (${r.pods.length})`,

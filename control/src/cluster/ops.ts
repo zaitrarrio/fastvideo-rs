@@ -23,6 +23,7 @@ import { isStandalone, podUpdate, recordPod, saveSecrets, saveState, secretsOf, 
 import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
 import { claimWarm, holdFailed, restartWarm } from "../brev-park";
+import { ensureTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
 import { brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
@@ -212,6 +213,23 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   const pe = providerEnv(env, full, { provider: prov, key, name, deadlineMs: c.deadline ?? now() + c.spec.cap_s * 1000, reportToken, weights: plan, scriptsRef: c.spec.image.sha || "main" });
   if (pe.dropped.length) log(`${pool.id}: WARNING: ${pe.dropped.join(", ")} are Runpod secret references a ${impl.title} pod cannot resolve (FV_PROVIDER_SECRET_ENV): left out`);
   for (const n of pe.notes) log(`${pool.id}: NOTE: ${n}`);
+  // Named tunnels (tunnels.ts): the pod's tunnel, ingress and DNS record before the provider's create (a parked Brev
+  // instance's are reused); the token rides in the pod's env only. Unconfigured: the pod opens a quick tunnel.
+  const tun = tunnelSettings(env);
+  let tunnel: PodTunnelGrant | null = null;
+  if (tun.mode === "named") {
+    if (tun.warning) log(`${pool.id}: WARNING: ${tun.warning}`);
+    try {
+      tunnel = await ensureTunnel(env, { podId: key, podName: name, clusterId: c.id });
+    } catch (e) {
+      await unclaim();
+      log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 300)}`);
+      return null;
+    }
+    pe.env.FV_TUNNEL_TOKEN = tunnel.token;
+    pe.env.FV_TUNNEL_URL = tunnel.url;
+    log(`${pool.id}: named tunnel ${tunnel.name}: ${key} will answer at ${tunnel.url}${tunnel.reused ? " (kept with the parked instance)" : ""}`);
+  } else if (tun.warning) log(`${pool.id}: NOTE: ${tun.warning}`);
   if (warm) {
     try {
       await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan), cluster_id: c.id });
@@ -231,6 +249,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
       await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env, weights: plan, clusterId: c.id });
     } catch (e) {
       log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
+      if (tunnel) for (const m of await releaseTunnels(env, key, "the provider's create failed")) log(`${pool.id}: ${m}`);
       return null;
     }
   }

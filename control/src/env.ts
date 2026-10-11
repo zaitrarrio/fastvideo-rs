@@ -33,6 +33,9 @@ export interface Env {
   /** JSON {KEY: value} of the worker secrets Runpod pods get as {{ RUNPOD_SECRET_… }} references
    * (FV_CF_ACCOUNT_ID, FV_R2_*, …): GMI / Brev pods get these values instead. Unset: they go without. */
   FV_PROVIDER_SECRET_ENV?: string;
+  /** Cloudflare API token with Tunnel edit (account) and DNS edit (FV_TUNNEL_ZONE): named pod tunnels (tunnels.ts).
+   * Unset: GMI / Brev pods use quick tunnels. */
+  CF_TUNNEL_API_TOKEN?: string;
   /** 32+ random bytes, base64: seals cluster secrets and secret env values in D1 (AES-256-GCM). */
   CONTROL_KEK: string;
   /** 32+ random bytes: signs session cookies and CSRF tokens (HMAC-SHA256); also the passphrase pepper. */
@@ -110,6 +113,13 @@ export interface Env {
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */
   FV_ENDPOINT_URL_RE?: string;
+  /** Named pod tunnels (tunnels.ts, docs/serve/deploy-gmi-brev.md §6.4): the host of a GMI / Brev pod
+   * (`{pod}-fv-pods.example.com`: one level below the zone, which Universal SSL covers) and its zone. Unset (or
+   * CF_TUNNEL_API_TOKEN unset): quick tunnels. */
+  FV_TUNNEL_HOST_TEMPLATE?: string;
+  FV_TUNNEL_ZONE?: string;
+  /** Tests: the URL a pod's named tunnel answers at (default `https://{host}`). */
+  FV_TUNNEL_URL_TEMPLATE?: string;
   /** "1": the cron does nothing (tests drive it by hand). */
   CRON_DISABLED?: string;
 }

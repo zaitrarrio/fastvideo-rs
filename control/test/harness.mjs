@@ -116,14 +116,57 @@ export function startMock() {
       brevType("a100-test", { gpu: "A100", price: "1.800000", location: "houston-usa-1", provider: "shadeform", stoppable: false, cred: "shadeform-brev-1" }),
     ],
   };
+  // The Cloudflare API's tunnels and DNS (src/tunnels.ts): named tunnels of one account, records of the zones, the
+  // tunnels' connections (a simulated pod's cloudflared), and the edge routing <host> through them (/tunnel/<host>/…).
+  m.cf = {
+    token: null, // CF_TUNNEL_API_TOKEN (Bearer); unset: every tunnel / DNS call is refused
+    account: "acct",
+    zones: [{ id: "zone0maximal0000000000000000000", name: "maximal.llc" }],
+    tunnels: [], // {id, name, config_src, created_at, deleted_at, secret, token, config, connections: [{pod}]}
+    dns: [], // {id, zone, type, name, content, proxied, comment}
+    calls: [], // {method, path, auth}
+    fail: {}, // "<METHOD> <path regex source>" -> [status, code, message], once
+  };
+  const cfOk = (res, result, extra = {}) => json(res, 200, { success: true, errors: [], messages: [], result, ...extra });
+  const cfErr = (res, status, code, message) => json(res, status, { success: false, errors: [{ code, message }], messages: [], result: null });
+  const tunnelView = ({ secret, token, config, connections, ...t }) => ({ ...t, connections: connections.map((c) => ({ id: c.id, colo_name: "mock" })), status: connections.length ? "healthy" : "inactive" });
+  /** Where a host answers through the simulated edge: its proxied CNAME -> a live tunnel -> its ingress -> the pod connected to it. */
+  m.routeHost = (host) => {
+    const rec = m.cf.dns.find((r) => r.name === host && r.type === "CNAME" && r.proxied);
+    const tid = /^([0-9a-f-]{36})\.cfargotunnel\.com$/.exec(rec?.content || "")?.[1];
+    const t = m.cf.tunnels.find((x) => x.id === tid && !x.deleted_at);
+    const rule = t?.config?.ingress?.find((r) => r.hostname === host);
+    const conn = t?.connections.find((c) => m.pods.get(c.pod)?.desiredStatus === "RUNNING");
+    if (!rec) return { error: "no DNS record (1016)" };
+    if (!t) return { error: "no tunnel (1033)" };
+    if (rule?.service !== "http://127.0.0.1:8000") return { error: "no ingress rule for the host" };
+    if (!conn) return { error: "tunnel has no connection (1033)" };
+    return { pod: conn.pod };
+  };
   let n = 0;
   const newId = () => `mp${Date.now().toString(36)}${(n++).toString(36)}`.slice(0, 14).padEnd(14, "0");
-  /** A GMI / Brev pod's boot (providers.ts PROVIDER_BOOT): it serves at /pod/<key> and reports its "tunnel" URL to fv-control. */
+  const uuid = () => wc.randomUUID();
+  /**
+   * A GMI / Brev pod's boot (providers.ts PROVIDER_BOOT): it serves at /pod/<key> and reports its "tunnel" URL to fv-control:
+   * with FV_TUNNEL_TOKEN (a named tunnel) its cloudflared connects with the token (checked against the simulated
+   * account) and it reports FV_TUNNEL_URL; else a quick tunnel (its /pod/<key> URL).
+   */
   const simBoot = (key, env, mode, extra) => {
     m.pods.set(key, { id: key, name: key.split(":")[1], payload: extra, env, image: extra.image, desiredStatus: "RUNNING", costPerHr: 0, created: Date.now(), provider: key.split(":")[0] });
     if (mode === "silent" || !env.FV_ENDPOINT_REPORT_URL) return;
     const report = (b) => fetch(env.FV_ENDPOINT_REPORT_URL, { method: "POST", headers: { authorization: `Bearer ${env.FV_ENDPOINT_REPORT_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ pod: key, ...b }) }).then((r) => (m.reports ||= []).push({ key, status: r.status, ...b })).catch((e) => (m.reports ||= []).push({ key, error: String(e) }));
-    setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" })), 300);
+    const tunnel = () => {
+      if (!env.FV_TUNNEL_TOKEN) return report({ phase: "tunnel", url: `http://127.0.0.1:${m.port}/pod/${key}`, detail: "" });
+      // cloudflared tunnel run: the token is {a, t, s} (base64 JSON); the tunnel must exist, live, with that secret.
+      let tok = null;
+      try { tok = JSON.parse(Buffer.from(env.FV_TUNNEL_TOKEN, "base64").toString()); } catch {}
+      const t = m.cf.tunnels.find((x) => x.id === tok?.t && x.secret === tok?.s && tok?.a === m.cf.account && !x.deleted_at);
+      if (!t) return report({ phase: "failed", url: "", detail: "named tunnel did not connect: Unauthorized: Invalid tunnel secret" });
+      t.connections.push({ id: uuid(), pod: key });
+      (m.tunnelConnects ||= []).push({ key, tunnel: t.id });
+      return report({ phase: "tunnel", url: env.FV_TUNNEL_URL, detail: "" });
+    };
+    setTimeout(() => (mode === "fail" ? report({ phase: "failed", url: "", detail: "tree h3-base: hub 404" }) : tunnel()), 300);
   };
   /**
    * A Brev VM's boot (brev-park.ts): the startup script's bootstrap fetches the run script from fv-control with the
@@ -186,9 +229,89 @@ export function startMock() {
     const raw = Buffer.concat(chunks).toString();
     let body = null;
     try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
-    const p = url.pathname;
+    let p = url.pathname;
     m.log.push({ method: req.method, path: p, body, auth: req.headers.authorization || "" });
     const bearer = (req.headers.authorization || "").replace(/^Bearer /, "");
+    // ---- the Cloudflare edge for a named tunnel's host (FV_TUNNEL_URL_TEMPLATE): DNS -> tunnel -> ingress -> the connected pod
+    const tm0 = /^\/tunnel\/([a-z0-9.-]+)(\/.*)$/.exec(p);
+    if (tm0) {
+      const r = m.routeHost(tm0[1]);
+      (m.tunnelHits ||= []).push({ host: tm0[1], route: tm0[2], ...r });
+      if (r.error) { res.writeHead(530); return res.end(r.error); }
+      p = `/pod/${r.pod}${tm0[2]}`;
+    }
+    // ---- the Cloudflare API: tunnels and DNS (src/tunnels.ts)
+    if (/^\/cf\/(accounts\/[^/]+\/cfd_tunnel|zones)/.test(p)) {
+      const c = m.cf;
+      const rest = p.slice("/cf".length);
+      c.calls.push({ method: req.method, path: rest + (url.search || ""), auth: !!c.token && bearer === c.token });
+      if (!c.token || bearer !== c.token) return cfErr(res, 403, 10000, "Authentication error");
+      for (const [k, v] of Object.entries(c.fail)) {
+        const [meth, re] = [k.slice(0, k.indexOf(" ")), k.slice(k.indexOf(" ") + 1)];
+        if (meth === req.method && new RegExp(re).test(rest)) { delete c.fail[k]; return cfErr(res, v[0], v[1], v[2]); }
+      }
+      let mm = /^\/accounts\/([^/]+)\/cfd_tunnel(?:\/([^/]+))?(?:\/(configurations|token|connections))?$/.exec(rest);
+      if (mm) {
+        if (mm[1] !== c.account) return cfErr(res, 403, 10000, "Authentication error");
+        if (!mm[2] && req.method === "POST") {
+          if (!/^[\w.-]{1,64}$/.test(body?.name || "") || body.config_src !== "cloudflare") return cfErr(res, 400, 1001, "name and config_src cloudflare");
+          if (c.tunnels.some((t) => t.name === body.name && !t.deleted_at)) return cfErr(res, 409, 1013, "You already have a tunnel with this name");
+          const id = uuid();
+          const secret = Buffer.from(wc.getRandomValues(new Uint8Array(32))).toString("base64");
+          const t = { id, name: body.name, config_src: "cloudflare", created_at: new Date().toISOString(), deleted_at: null, secret, token: Buffer.from(JSON.stringify({ a: c.account, t: id, s: secret })).toString("base64"), config: null, connections: [] };
+          c.tunnels.push(t);
+          return cfOk(res, tunnelView(t));
+        }
+        if (!mm[2] && req.method === "GET") {
+          let l = c.tunnels;
+          if (url.searchParams.get("is_deleted") === "false") l = l.filter((t) => !t.deleted_at);
+          if (url.searchParams.get("name")) l = l.filter((t) => t.name === url.searchParams.get("name"));
+          const per = Number(url.searchParams.get("per_page") || 20), page = Number(url.searchParams.get("page") || 1);
+          return cfOk(res, l.slice((page - 1) * per, page * per).map(tunnelView), { result_info: { page, per_page: per, count: Math.min(per, l.length), total_count: l.length } });
+        }
+        const t = c.tunnels.find((x) => x.id === mm[2]);
+        if (!t) return cfErr(res, 404, 1003, "Tunnel not found");
+        if (!mm[3] && req.method === "GET") return cfOk(res, tunnelView(t));
+        if (!mm[3] && req.method === "DELETE") {
+          if (t.deleted_at) return cfErr(res, 400, 1022, "Tunnel is already deleted");
+          if (t.connections.length) return cfErr(res, 400, 1022, "Cannot delete a tunnel with active connections");
+          t.deleted_at = new Date().toISOString();
+          return cfOk(res, tunnelView(t));
+        }
+        if (mm[3] === "configurations" && req.method === "PUT") {
+          const ing = body?.config?.ingress;
+          if (!Array.isArray(ing) || !ing.length || ing.at(-1).hostname || !ing.at(-1).service) return cfErr(res, 400, 1056, "the last ingress rule must be a catch-all");
+          t.config = body.config;
+          return cfOk(res, { tunnel_id: t.id, version: 1, config: t.config });
+        }
+        if (mm[3] === "configurations" && req.method === "GET") return cfOk(res, { tunnel_id: t.id, config: t.config });
+        if (mm[3] === "token" && req.method === "GET") return t.deleted_at ? cfErr(res, 404, 1003, "Tunnel not found") : cfOk(res, t.token);
+        if (mm[3] === "connections" && req.method === "DELETE") { t.connections = []; return cfOk(res, null); }
+        return cfErr(res, 405, 10405, "method not allowed");
+      }
+      if (rest === "/zones" && req.method === "GET") return cfOk(res, c.zones.filter((z) => !url.searchParams.get("name") || z.name === url.searchParams.get("name")));
+      mm = /^\/zones\/([^/]+)\/dns_records(?:\/([^/]+))?$/.exec(rest);
+      if (mm) {
+        const z = c.zones.find((x) => x.id === mm[1]);
+        if (!z) return cfErr(res, 404, 7003, "Could not route to /zones/x, perhaps your object identifier is invalid?");
+        if (!mm[2] && req.method === "POST") {
+          if (body?.type !== "CNAME" || !body.name?.endsWith(`.${z.name}`) || !body.content) return cfErr(res, 400, 9000, "invalid record");
+          if (c.dns.some((r) => r.zone === z.id && r.name === body.name)) return cfErr(res, 400, 81053, "An A, AAAA, or CNAME record with that host already exists.");
+          const r = { id: uuid().replace(/-/g, ""), zone: z.id, type: body.type, name: body.name, content: body.content, proxied: !!body.proxied, ttl: body.ttl, comment: body.comment ?? null };
+          c.dns.push(r);
+          return cfOk(res, r);
+        }
+        if (!mm[2] && req.method === "GET") {
+          const pre = url.searchParams.get("comment.startswith");
+          return cfOk(res, c.dns.filter((r) => r.zone === z.id && (!pre || (r.comment || "").startsWith(pre))));
+        }
+        const r = c.dns.find((x) => x.zone === z.id && x.id === mm[2]);
+        if (!r) return cfErr(res, 404, 81044, "Record does not exist.");
+        if (req.method === "GET") return cfOk(res, r);
+        if (req.method === "DELETE") { c.dns = c.dns.filter((x) => x !== r); return cfOk(res, { id: r.id }); }
+      }
+      return cfErr(res, 404, 7000, `mock: no Cloudflare route ${req.method} ${rest}`);
+    }
 
     // ---- Runpod REST
     if (p.startsWith("/rp/rest/")) {
@@ -338,6 +461,7 @@ export function startMock() {
       }
       if (rest === "/containers" && req.method === "GET") return json(res, 200, g.containers);
       if (rest === "/containers" && req.method === "POST") {
+        if (g.failCreate > 0) { g.failCreate--; return json(res, 503, { reason: "no capacity for the product" }); }
         for (const k of ["name", "templateId", "product", "idc"]) if (!body?.[k]) return json(res, 400, { reason: `${k} is required` });
         if (!/^([A-Za-z0-9][A-Za-z0-9_\-. ]*)?[A-Za-z0-9]$/.test(body.name)) return json(res, 400, { reason: "bad name" });
         if (!g.templates.some((t) => t.id === body.templateId)) return json(res, 404, { reason: "template not found" });
@@ -352,7 +476,12 @@ export function startMock() {
       if (gm) {
         const c = g.containers.find((x) => x.id === gm[1]);
         if (!c) return json(res, 404, { reason: "container not found" });
-        if (gm[2]) { res.writeHead(200, { "content-type": "text/plain" }); return res.end(`[fv-boot] start (gmi gmi:${c.name})\n[fv-boot] tunnel ok\nleak? ${m.gmiKey}\n`); }
+        if (gm[2]) {
+          // A container log that leaks the key and (a named tunnel's pod) its tunnel token: fv-control must scrub both.
+          const tt = (c.envs || []).find((e) => e.name === "FV_TUNNEL_TOKEN")?.value;
+          res.writeHead(200, { "content-type": "text/plain" });
+          return res.end(`[fv-boot] start (gmi gmi:${c.name})\n[fv-boot] tunnel ok\nleak? ${m.gmiKey}\n${tt ? `leak? TUNNEL_TOKEN=${tt}\n` : ""}`);
+        }
         if (req.method === "GET") return json(res, 200, c);
         if (req.method === "DELETE") {
           g.containers = g.containers.filter((x) => x.id !== c.id);

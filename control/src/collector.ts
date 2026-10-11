@@ -16,7 +16,8 @@ import { isOtherPod, releaseOtherPod } from "./providers";
 import { defaults, type Env } from "./env";
 import { writeAccountSample, writePodSamples, type PodSample } from "./metrics";
 import { runpod, type RunpodPod } from "./runpod";
-import { audit, getSetting, now, putSetting, utcDay } from "./util";
+import { audit, getSetting, now, putSetting, scrub, utcDay } from "./util";
+import { tunnelSweep } from "./tunnels";
 
 /** Pods whose Runpod log is copied per cron pass (one hapi call each). */
 const LOG_CAPTURE_MAX = 25;
@@ -273,6 +274,11 @@ export async function collect(env: Env): Promise<CollectResult> {
   const pv = await collectProviders(env, t, dtMs, pol, clusters).catch((e) => ({ alerts: [{ key: "provider_api", kind: "provider_api", severity: "warn" as const, message: `providers: ${(e as Error).message.slice(0, 200)}` }], kinds: [] as string[], actions: [] as string[], summary: {} }));
   alerts.push(...pv.alerts);
   actions.push(...pv.actions);
+  // Named pod tunnels (tunnels.ts): leaked ones deleted, strays reported (after the providers marked gone pods).
+  const tn = await tunnelSweep(env, t).catch((e) => ({ alerts: [{ key: "tunnel_cleanup:sweep", kind: "tunnel_cleanup", severity: "warn" as const, message: `pod tunnels: ${scrub(env, (e as Error).message).slice(0, 200)}` }], kinds: ["tunnel_cleanup"], actions: [] as string[], scanned: false }));
+  alerts.push(...tn.alerts);
+  actions.push(...tn.actions);
+  pv.kinds.push(...tn.kinds);
   await syncAlerts(env, alerts, ["pod_idle", "pool_failed", "cluster_dph", "pod_down", "deadline", "daily_spend", "balance_floor", "balance_margin", "build_pod", "build_pod_spend", "build_pod_runner", ...cr.kinds, ...pv.kinds]);
 
   // ---- retention
