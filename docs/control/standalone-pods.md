@@ -94,7 +94,9 @@ GMI Cloud container or a Brev VM (docs/serve/deploy-gmi-brev.md): `provider_gpu`
 is the provider's product / instance type, there is no weights volume
 (`weights_source: none` runs the fake engine; `hub` downloads at boot after
 the owner's approval), the pod reports its HTTPS tunnel URL to
-`/ingest/v1/endpoint`, and a monthly budget (`GMI_BUDGET_USD`,
+`/ingest/v1/endpoint` (a named tunnel fv-control made on the owner's zone,
+URL known at create, or a quick tunnel without those settings;
+deploy-gmi-brev.md §6.4), and a monthly budget (`GMI_BUDGET_USD`,
 `BREV_BUDGET_USD`) replaces the balance floor. Both are off until the owner
 sets their secrets; the form and `fv-control.sh providers` say why.
 
