@@ -32,6 +32,9 @@ step() { # name, command...: runs it, appends "name rc seconds" to status.tsv
   return "$rc"
 }
 log "start: rev $REV, $JOBS trees at once"
+# Gated Hub repos (Lightricks) list their real LFS SHA-256 only to an authenticated caller: use the project's Hub
+# token kept on the volume (the fetchers read the same file), read only, never printed.
+if [ -z "${HF_TOKEN:-}" ] && [ -r "$V/hf/token" ]; then HF_TOKEN="$(cat "$V/hf/token")"; export HF_TOKEN; log "Hub token: from the volume's hf/token"; fi
 
 # ---- inventory (read only)
 {

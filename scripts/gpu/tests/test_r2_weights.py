@@ -366,6 +366,16 @@ class HubViaDir(Base):
             self.pub(src)
         self.assertNotIn(("fv-weights-test", f"test/manifests/demo/{self.rev}.json"), self.st.objects)
 
+    def test_dot_files_the_hub_lists_are_kept(self):
+        def blob(b):
+            return hashlib.sha1(f"blob {len(b)}\0".encode() + b).hexdigest()
+        ga = b"*.bin filter=lfs\n"
+        self.listing.append((".gitattributes", len(ga), None, blob(ga)))
+        W.hub_rows = lambda: {"demo": ("org/demo", self.rev, ["*"])}  # a whole-repo glob, as longlive-plug/minimax-h3-few-step
+        src = self.make_tree(dict(self.files, **{".gitattributes": ga, ".complete": b"x"}))
+        _, m = self.pub(src)
+        self.assertEqual(sorted(f["path"] for f in m["files"]), [".gitattributes", "cfg.json", "w/model.bin"])
+
     def test_a_missing_file_is_refused(self):
         src = self.make_tree({"cfg.json": self.files["cfg.json"]})
         with self.assertRaises(W.Fail):

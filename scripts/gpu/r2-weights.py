@@ -541,7 +541,8 @@ def hub_dir_sources(dest, root, conns):
         raise Fail(f"{repo}@{rev}: nothing matches {' '.join(globs)}")
     root = Path(root)
     try:
-        have = {s.path: s for s in dir_sources(dest, root, globs)}
+        # hidden=True: a Hub repo may hold dot files (.gitattributes); the Hub listing decides what is kept
+        have = {s.path: s for s in dir_sources(dest, root, globs, hidden=True)}
     except Fail:
         have = {}  # nothing at the top level: an HF-cache layout without top-level links (the snapshot below)
     snaps = sorted(root.glob(f"models--*/snapshots/{rev}")) if root.is_dir() else []
