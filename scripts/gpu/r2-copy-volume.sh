@@ -56,7 +56,7 @@ assert hashlib.sha256(b).hexdigest() == os.environ[\"FV_BUNDLE_SHA256\"], \"bund
 tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
 " >>/srv/log.txt 2>&1 && bash /opt/fv/r2-copy-volume-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; sleep infinity'
     # The keys and the presigned URL go into jq through its environment (env.X), never through argv.
-    export FVX_URL="$url" FVX_RWID FVX_RWSEC FVX_ROID FVX_ROSEC
+    export FVX_URL="$url" FVX_RWID FVX_RWSEC FVX_ROID FVX_ROSEC FV_COPY_SKIP_COMPARE="${FV_COPY_SKIP_COMPARE:-0}"
     FVX_RWID="$(cat "$CFG/r2_weights_rw_access_key_id")"; FVX_RWSEC="$(cat "$CFG/r2_weights_rw_secret_access_key")"
     FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
     payload="$(jq -n --arg name "fv-p0-r2copy-$(date -u +%m%d%H%M)" --arg vol "$FV_EU_VOLUME_ID" --arg dc "$FV_EU_DC" --arg start "$start" \
@@ -68,7 +68,7 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
         dockerStartCmd: ["/bin/bash","-lc",$start],
         env: {FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_R2_ENDPOINT: $ep, FV_WEIGHTS_R2_BUCKET: "fv-weights",
               FV_WEIGHTS_R2_ACCESS_KEY_ID: env.FVX_RWID, FV_WEIGHTS_R2_SECRET_ACCESS_KEY: env.FVX_RWSEC, FV_R2_RO_ID: env.FVX_ROID, FV_R2_RO_SECRET: env.FVX_ROSEC,
-              FV_COPY_REV: $rev, FV_COPY_JOBS: $jobs, FV_COPY_FILES: $files, FV_COPY_WINDOW: $window, FV_COPY_ONLY: $only}
+              FV_COPY_REV: $rev, FV_COPY_JOBS: $jobs, FV_COPY_FILES: $files, FV_COPY_WINDOW: $window, FV_COPY_ONLY: $only, FV_COPY_SKIP_COMPARE: env.FV_COPY_SKIP_COMPARE}
       }')"
     unset FVX_URL FVX_RWID FVX_RWSEC FVX_ROID FVX_ROSEC
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(jq -r '.error // .' <<<"$resp" | head -c 300)"; exit 1; }

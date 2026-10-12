@@ -832,19 +832,35 @@ def verify_tree(s3, prefix, m, deep, workers):
             return None
         ps = m["part_size"]
         whole = hashlib.sha256()
-        for i, want in enumerate(f["parts"]):
+
+        def get_part(i):
             a = i * ps
             b = min(f["size"], a + ps)
             data = s3.get(key, f"bytes={a}-{b - 1}")
             if data is None or len(data) != b - a:
-                return f"{f['path']}: part {i} short"
-            if hashlib.sha256(data).hexdigest() != want:
-                return f"{f['path']}: part {i} sha256 mismatch"
-            whole.update(data)
+                return i, None, "short"
+            return i, data, None if hashlib.sha256(data).hexdigest() == f["parts"][i] else "sha256 mismatch"
+
+        # One stream is slow across regions: `window` ranged GETs of this file in flight, consumed in order for the
+        # whole-file SHA-256.
+        with concurrent.futures.ThreadPoolExecutor(window) as px:
+            pending = deque()
+            nxt = 0
+            for _ in range(len(f["parts"])):
+                while nxt < len(f["parts"]) and len(pending) < window:
+                    pending.append(px.submit(get_part, nxt))
+                    nxt += 1
+                i, data, err = pending.popleft().result()
+                if err:
+                    for x in pending:
+                        x.cancel()
+                    return f"{f['path']}: part {i} {err}"
+                whole.update(data)
         if whole.hexdigest() != f["sha256"]:
             return f"{f['path']}: sha256 mismatch"
         return None
 
+    window = max(1, int(os.environ.get("FV_VERIFY_WINDOW", "8")))
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         for f, err in zip(m["files"], ex.map(one, m["files"])):
             if err:
