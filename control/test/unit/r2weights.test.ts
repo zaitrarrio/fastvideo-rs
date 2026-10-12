@@ -15,6 +15,7 @@ import { bootFor, workerCreatePayload, workerSystemEnv, type EnvCtx } from "../.
 import { presetPool } from "../../src/cluster/spec";
 import { launchTrees, poolTrees, PROVIDER_BOOT, providerEnv, providerIssues, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
+import { R2_TREES } from "../../src/r2-trees";
 import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2Manifest, r2Plan, r2Trees } from "../../src/r2weights";
 import { validate } from "../../src/schemas";
 import { d1 } from "./d1shim";
@@ -37,6 +38,20 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
   }) as unknown as Env;
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("the repo's record of the R2 weights store (scripts/gpu/weights-r2.tsv)", () => {
+  it("holds the benchmark round's trees at their pinned Hub revisions, and every volume-only tree", () => {
+    expect(R2_TREES["h3-base"]?.rev).toBe("42ed227ee7df40d41602854ae760620d6eb651fe");
+    expect(R2_TREES["fastwan22-ti2v-5b"]?.rev).toBe("3e187042a324f6f5fb68fd22110a78725253de8f");
+    expect(R2_TREES["wan22-ti2v-5b"]?.rev).toBe("b8fff7315c768468a5333511427288870b2e9635");
+    for (const d of ["h3-base/text_encoder_fp8", "ltx25/text_encoder_fp8", "mmaudio-44k-v2", "h3-ref2va", "longlive-1.3b-safetensors"]) expect(R2_TREES[d]?.rev).toBe("eu-20261011");
+    for (const t of Object.values(R2_TREES)) expect(t.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("a GMI / Brev pool whose trees are all recorded defaults to r2 (h3-turbo: h3-base)", () => {
+    const pool = { ...presetPool("h3-turbo")!, provider: "gmi", provider_gpu: "container.h200.x1", volume: false } as any;
+    expect(weightsSource(pool, mkEnv())).toBe("r2");
+  });
+});
 
 describe("SigV4 presigning", () => {
   it("matches AWS's published presigned-URL example (sigv4-query-string-auth)", async () => {
@@ -102,6 +117,15 @@ describe("manifests and the plan (against the fake R2)", () => {
 
 describe("weights_source r2: the default, the checks, the env", () => {
   const h3 = presetPool("h3-turbo")!;
+  // These cases need h3-base unpublished: the repo's record (R2_TREES) holds it since the 2026-10-12 copy.
+  let saved: any;
+  beforeAll(() => {
+    saved = R2_TREES["h3-base"];
+    delete R2_TREES["h3-base"];
+  });
+  afterAll(() => {
+    if (saved) R2_TREES["h3-base"] = saved;
+  });
   const pin = (trees: string[]) => JSON.stringify(Object.fromEntries(trees.map((t) => [t, { rev: `rev-${t}`, files: 1, bytes: 100e9, manifest_sha256: "a".repeat(64), source: "test" }])));
   const gmiPool = (over: any = {}) => ({ ...h3, provider: "gmi", provider_gpu: "container.h200.x1", volume: false, ...over }) as any;
   const trees = poolTrees(gmiPool()).filter((t) => t !== "auxiliary");
