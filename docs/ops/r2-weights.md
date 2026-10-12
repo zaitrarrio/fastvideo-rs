@@ -515,11 +515,35 @@ written, renamed or deleted, and temp files went to the pod's container disk.
   - `/workspace/runs` → `archive/eu-volume/runs/`: 10598 files, 32.51 GB.
   - `/workspace/weights/wan` → `archive/eu-volume/wan/`: 8 files, 12.46 GB.
   - Each archive also has `archive/eu-volume/<name>.index.json`, which lists every file's size and SHA-256.
+- **Added on 2026-10-12 with the owner's approval** (one pod, `FV_COPY_ARCHIVE` mode of `r2-copy-volume.sh`, about
+  1.5 min). `compare-archive` checked each one against the volume:
+  - **`/workspace/h3-text-cache` → `archive/eu-volume/h3-text-cache/`: 1 file, 942,320 bytes. compare-archive 1/1
+    equal.**
+    - It holds one cached H3 text-encoder output (`<sha256>.h3text`).
+    - No script or code in the repo names this copy. `runpod-matrix.sh` (`--text-cache "$SCRATCH/h3-text-cache"`,
+      with `$SCRATCH` defaulting to `/workspace`) and `validate.sh` (`$WORK/h3-text-cache`) write a cache at this
+      path. A missing cache is rebuilt.
+  - **`/workspace/fastboot-logs` → `archive/eu-volume/fastboot-logs/`: 13 files, 46,208 bytes. compare-archive
+    13/13 equal.**
+    - It holds the logs of the 2026-10-07 fast-boot prequant runs: three `convert-*` runs (`env.txt`, `log`,
+      `quantize-dit.json`) and two `verify-*` runs (`manifest.json`, `out`).
+  - **`/workspace/gpucheck-out` → `archive/eu-volume/gpucheck-out/`: 20 files, 321,408 bytes. compare-archive
+    20/20 equal.**
+    - It holds `fv-gpucheck`'s environment probe (`env.json`, `kernels.json`, `nvrtc.json`) and 17 Hub fetch logs
+      (`logs/fetch-*.log`) from when the volume was filled.
+  - **`/workspace/fv-libs`: nothing to archive.**
+    - It holds 5 symlinks and no regular files: `libcublas.so`, `libcublasLt.so`, `libcudnn.so`, `libcupti.so` and
+      `libnvrtc.so`. They point into a GPU image's CUDA libraries, so on a CPU pod none of them resolves.
+    - The repo still uses this path. `runpod.sh` creates `/workspace/fv-libs` and puts it on `LD_LIBRARY_PATH`;
+      `runpod-matrix.sh` and `sol-bench-pod.sh` relink `$SCRATCH/fv-libs/lib*.so`; and `fastvideo-gpucheck`'s
+      `mathprobe.rs` reads the `/workspace/fv-libs/libcublas.so` link. Each pod recreates the links itself.
+  - Before copying, each directory was scanned for Hub-token-shaped strings, and the copies in R2 were scanned for
+    credential names and token shapes. Neither scan found anything.
 - **Not copied:**
   - `FastH3-4-step-Preview-v1-VSA-DataFree`, `ltx2`'s second Gemma layout, the top-level upscaler copy, `taeh3/`,
     `upstream/` and `.cache/`, all as §6.1 says.
-  - The volume root also holds directories that §6.1 does not list, and these were not copied either:
-    `fastboot-logs`, `fv-libs`, `gpucheck-out`, `h3-text-cache`, `hf` (a Hub token) and `scratch`.
+  - `hf`, which holds the Hub token. It is never copied, and the archive mode refuses it.
+  - `scratch`.
 
 **Files with no recorded hash.** For these files the SHA-256 in the manifest was taken from the volume copy itself,
 and nothing independent checks it:
