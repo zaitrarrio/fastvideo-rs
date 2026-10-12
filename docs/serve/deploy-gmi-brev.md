@@ -257,6 +257,16 @@ provider/region, data remains inaccessible" [b-mgmt]).
   re-placement right after a failed boot does not land on the VM that just
   failed; Unpark makes it reusable at once); the operation log names it
   and its note. Only if none fits is a new VM created.
+- **The start** (since 2026-10-12, docs/ops/r2-bench-2026-10-12.md finding
+  7): as Brev's CLI does, fv-control reads the workspace first
+  (`GET api/workspaces/{id}`) and starts only a STOPPED one. It waits out
+  STOPPING (`BREV_STOPPING_WAIT_S`, 60), does not start a RUNNING one again,
+  and refuses anything else with Brev's status. Brev's answer to the start
+  (status and `statusMessage`) goes to the operation log and the record's
+  note. Every poll of the `up` wait shows Brev's status, message and health.
+  A workspace still STOPPED `BREV_RESTART_RETRY_S` (180) after its start gets
+  the start once more. After `BREV_RESTART_ALERT_S` (300) the cron raises
+  `brev_restart_stuck` with Brev's message.
 - **Fallbacks**: a start that fails (e.g. no capacity), or a restarted
   instance not running (and not ready) within `BREV_RESTART_TIMEOUT_S`
   (default 900), is stopped again and **held** (reused later, see above),

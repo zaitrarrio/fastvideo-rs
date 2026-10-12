@@ -65,7 +65,7 @@ The launch request:
   "channel": "latest",               // or "sha", or "image" (a ref or a digest); default: stable
   "compute": "GPU",                  // or "CPU" (+ "cpu_flavors", "vcpu")
   "gpu_types": ["NVIDIA RTX PRO 6000 Blackwell Server Edition"],
-  "region": "eu",                    // or "dc": "EUR-IS-1"; EU only (CLAUDE.md)
+  "region": "eu",                    // or "dc": "EUR-IS-1"; the volume is EU only (CLAUDE.md). With "weights_source": "r2" (no volume) any Runpod "dc", e.g. "US-TX-3"
   "volume": true,                    // the region's weights volume at /workspace (GPU default)
   "env": {"FOO": "bar", "HF_TOKEN": {"value": "…", "secret": true}},
   "deadline_min": 60,                // 5-10080
