@@ -139,8 +139,8 @@ the worker's id, next to Runpod's container log; the tick's log capture keeps th
 - `outlook`: the estimate:
   - **start** ~60 s with the image on the host (measured +49 to +62 s; up to 458 s on a host without the image,
     about 10 % of cold starts, docs/serve/gateway.md §8.6);
-  - **+ fetch** = the manifests' GB at `R2_DOWNLOAD_GBPS` (0.5, the round-1 median before the straggler fix;
-    docs/ops/r2-weights.md §5.4), or at the last measured MB/s once a boot fetched more than 5 GB;
+  - **+ fetch** = the manifests' GB at `R2_DOWNLOAD_GBPS` (0.55, the mean of two H100 workers with the fixed
+    fetcher, 2026-10-12 round 2; docs/ops/r2-weights.md §5.4), or at the last measured MB/s once a boot fetched more than 5 GB;
   - **+ load** (volume measurements: wan 70, h3 52, ltx 33 s; from a local disk **UNVERIFIED**);
   - the cache state of the last boot.
 
