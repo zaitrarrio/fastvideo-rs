@@ -24,9 +24,10 @@ import { fetchWithTimeout, parseJson } from "./util";
 export const DEFAULT_WEIGHTS_BUCKET = "fv-weights";
 export const PLAN_FORMAT = "fv-weights-plan/1";
 export const MANIFEST_FORMAT = "fv-weights-manifest/1";
-/** A boot's R2 download rate for estimates (GB/s): the median of the first measurements (Runpod serverless H100,
- * 2026-10-12: 0.50 / 0.77 / 0.33 GB/s; docs/ops/r2-weights.md §5.4, docs/ops/r2-bench-2026-10-12.md). */
-export const R2_DOWNLOAD_GBPS = 0.5;
+/** A boot's R2 download rate for estimates (GB/s): the fixed fetcher (64 × 128 MiB, watchdog) on two Runpod serverless
+ * H100 workers, 2026-10-12 round 2: 0.69 (h3, 177 GB) and 0.41 GB/s (wan, 59 GB, one part's tail cost ~45 s); mean
+ * 0.55 (docs/ops/r2-weights.md §5.4, docs/ops/r2-bench-2026-10-12-round2.md). Round 1 (old fetcher): 0.50 / 0.77 / 0.33. */
+export const R2_DOWNLOAD_GBPS = 0.55;
 /** The aux files (AUX_FILES: TAE decoders, LPIPS) as published trees: a boot with weights_source r2 fetches them with the
  * weights instead of from GitHub / download.pytorch.org (2026-10-12: up to 151 s on one host), then checks each file
  * against AUX_FILES' SHA-256 (test/unit/preset-trees.test.ts: the same files and bytes). */

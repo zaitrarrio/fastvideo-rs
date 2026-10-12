@@ -283,9 +283,21 @@ pwrite + fsync 8.6 GB/s. Each fetch started from an empty disk.
   handled. Concurrency 32-128 made little difference. The whole-file hash cost little wall time with the in-order
   hash on many-file trees, but 5-10 s on a single 27 GB file (it waits for the file's slowest part).
 - **Chosen defaults:** 64 streams, 2 parts (128 MiB) per GET, the watchdog at 4 s, no whole-file hash.
-- **Not measured:** a GPU host with this fetcher. Round 1's three serverless H100 boots (0.33-0.77 GB/s) ran the
-  fetcher without the watchdog, so their rates are tail-bound too. The planning rate stays **0.5 GB/s**
-  (`R2_DOWNLOAD_GBPS`) until round 2 measures a GPU host. An endpoint uses its own measured rate after one boot.
+- Round 1's three serverless H100 boots (0.33-0.77 GB/s) ran the fetcher without the watchdog, so their rates are
+  tail-bound too.
+
+**Measured on GPU hosts (2026-10-12 round 2, docs/ops/r2-bench-2026-10-12-round2.md):** this fetcher (the
+defaults) on two Runpod serverless H100 80GB workers (driver 580, DC unknown):
+
+| Fetch | GB | s | MB/s | Slow restarts |
+|---|---:|---:|---:|---:|
+| h3 (`h3-base`, `text_encoder_fp8`, FastH3 LoRA, aux; MXFP8 skipped on sm_90) | 177.19 | 255.8 | **693** | 44 |
+| wan (`fastwan22-ti2v-5b`, `wan22-ti2v-5b`, aux) | 58.78 | 142.7 | **412** (bulk 614: 58.3 GB in 95 s, then one part slow on three connections for 47 s) | 49 |
+
+- In bulk a GPU host fetched at **600-790 MB/s**, about 13-17 MB/s per GET. That is half the CPU pod's rate.
+- The planning rate is now **0.55 GB/s** (`R2_DOWNLOAD_GBPS`), the mean of the two. An endpoint uses its own
+  measured rate after one boot.
+- Not measured: a Runpod GPU pod (its fetch hung before the first line: round-2 finding 2) and Brev.
 
 To measure it: `scripts/gpu/r2-fetch-bench.sh up [DC…]` (one CPU pod, 45 min backstop, read-only key), then `status
 <pod>`, `rerun <pod>` with other `FV_BENCH_FETCH` settings, and `down <pod>`. By hand on any box: `python3 r2-weights.py
