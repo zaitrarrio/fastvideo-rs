@@ -28,6 +28,12 @@ What it does, per tree of the plan (`weights/<dest>/<rev>/` in R2):
   encoder, the VAEs, then the big transformer shards, so the first trees are
   ready (renamed into place with `.complete`, `.fv-revision`, `sha256.txt`)
   while the rest is still arriving.
+- --add-only (a shared R2 cache on a network volume, serverless workers with
+  FV_SLS_R2_CACHE_VOLUMES; CLAUDE.md: volume writes are add-only): nothing
+  under the root is ever moved aside or removed. Each worker stages under its
+  own name (`.r2-partial/<dest>@<rev>.<pod>`), a tree another worker finished
+  first wins (ours is dropped), and a tree present at another revision is an
+  error (the boot falls back to failing loudly, never to replacing it).
 - Progress: a line every 5 s on stderr, `--status FILE` (JSON), and a
   `weights` report to fv-control every 15 s when --report-url is given
   (POST /ingest/v1/endpoint, the same as the boot's other phases).
@@ -235,14 +241,14 @@ class FileJob:
 
 
 class Tree:
-    def __init__(self, spec, root):
+    def __init__(self, spec, root, stage_suffix=""):
         self.dest = safe_rel(spec["dest"])
         self.rev = spec["rev"]
         if not self.rev or "/" in self.rev or self.rev.startswith("."):
             raise FetchError(f"bad revision {self.rev!r}")
         self.part_size = int(spec.get("part_size") or 64 << 20)
         self.final = os.path.join(root, self.dest)
-        self.stage = os.path.join(root, ".r2-partial", self.dest.replace("/", "__") + "@" + self.rev)
+        self.stage = os.path.join(root, ".r2-partial", self.dest.replace("/", "__") + "@" + self.rev + stage_suffix)
         self.files = [FileJob(self, f, self.stage) for f in spec["files"]]
         self.total = sum(f.size for f in self.files)
         self.left = len(self.files)
@@ -266,7 +272,9 @@ class Fetcher:
         self.plan = plan
         self.root = os.path.abspath(args.root)
         self.conns = Conns(timeout=args.timeout)
-        self.trees = [Tree(t, self.root) for t in plan["trees"]]
+        self.add_only = bool(getattr(args, "add_only", False))
+        suffix = "." + "".join(c if c.isalnum() or c in "-_" else "_" for c in (args.pod or str(os.getpid())))[:80] if self.add_only else ""
+        self.trees = [Tree(t, self.root, suffix) for t in plan["trees"]]
         self.q = []
         self.qlock = threading.Lock()
         self.qcond = threading.Condition(self.qlock)
@@ -337,6 +345,11 @@ class Fetcher:
         log(f"{len(todo)} tree(s) to fetch, {self.bytes_total / 1e9:.2f} GB in {len(jobs)} parts; {len(self.trees) - len(todo)} present")
 
     def clear_stale(self, t):
+        if self.add_only:
+            # a shared cache: nothing there is ever moved or removed
+            if os.path.lexists(t.final):
+                raise FetchError(f"add-only: {t.final} exists but is not complete at {t.rev}: not replaced")
+            return
         if os.path.lexists(t.final):
             old = os.path.join(os.path.dirname(t.final), f".stale-{os.path.basename(t.final)}-{int(time.time())}")
             log(f"tree {t.dest}: not complete at {t.rev}: replaced")
@@ -554,6 +567,13 @@ class Fetcher:
 
     def finish_tree(self, t):
         parent = os.path.dirname(t.final)
+        if self.add_only and os.path.lexists(t.final):
+            if not present(t):
+                raise OSError(f"add-only: {t.final} appeared but is not complete at {t.rev}: not replaced")
+            shutil.rmtree(t.stage, ignore_errors=True)  # our own staging copy: another worker finished first
+            t.done = True
+            log(f"tree {t.dest}: another worker finished it first at {t.rev}: kept theirs")
+            return
         os.makedirs(parent, exist_ok=True)
         with open(os.path.join(t.stage, "sha256.txt"), "w") as out:
             for f in sorted(t.files, key=lambda x: x.path):
@@ -566,12 +586,18 @@ class Fetcher:
             out.write("r2\n")
         with open(os.path.join(t.stage, ".complete"), "w") as out:
             out.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " r2-fetch\n")
-        if os.path.lexists(t.final):
+        if os.path.lexists(t.final) and not self.add_only:
             # a parent tree fetched in this run keeps no copy of the nested one; anything else is stale
             old = os.path.join(parent, f".stale-{os.path.basename(t.final)}-{int(time.time())}")
             os.rename(t.final, old)
             shutil.rmtree(old, ignore_errors=True)
-        os.rename(t.stage, t.final)
+        try:
+            os.rename(t.stage, t.final)
+        except OSError:
+            # add-only: another worker renamed its copy in between (a non-empty directory is never replaced)
+            if not (self.add_only and present(t)):
+                raise
+            shutil.rmtree(t.stage, ignore_errors=True)
         t.done = True
         el = time.time() - self.t0
         log(f"tree {t.dest}: ready at {t.rev} ({t.total / 1e9:.2f} GB, {len(t.files)} files, {el:.0f}s since start)")
@@ -698,6 +724,7 @@ def main(argv=None):
     ap.add_argument("--min-free-gb", type=float, default=float(os.environ.get("FV_R2_MIN_FREE_GB", "5")))
     ap.add_argument("--no-full-hash", action="store_true", help="trust the per-part SHA-256s (skip the whole-file re-read)")
     ap.add_argument("--status", default="", help="write a JSON status file here")
+    ap.add_argument("--add-only", action="store_true", help="the root is a shared cache (a network volume): never move aside or remove anything; stage per --pod")
     args = ap.parse_args(argv)
     try:
         plan = load_plan(args)

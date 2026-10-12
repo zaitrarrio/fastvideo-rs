@@ -6,7 +6,7 @@ import { createJsonEditor } from "./editor";
 import { auditForms, controlKind, createForm, formDialog } from "./fields";
 import { renderForm } from "./form";
 import { askCancelQueued, askExtend, askJobCancel, askKeyName, askPurge, askRoll, askScale, askSlsCancel } from "./forms/dialogs";
-import { mountEndpointForm, mountScaleForm, mountSpecEditor } from "./forms/serverless";
+import { mountEndpointForm, mountScaleForm, mountSpecEditor, outlookLine } from "./forms/serverless";
 import { mountInvokePicker, servesPanel } from "./forms/serves";
 import { mountReleaseForm, mountTokenForm } from "./forms/settings";
 import { mountLaunchForm } from "./forms/standalone";
@@ -30,6 +30,7 @@ import { diffLines, renderDiff, renderTree } from "./view";
   auditForms,
   mountLaunchForm,
   mountEndpointForm,
+  outlookLine,
   mountSpecEditor,
   mountScaleForm,
   mountInvokePicker,
