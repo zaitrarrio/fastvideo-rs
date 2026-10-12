@@ -193,13 +193,23 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
 3. Keep Brev keep-on-stop.
 4. Skip HTTP/3, the CDN cache and compression for now.
 
-Expected throughput on a 10-25 Gbps GPU node (1.25-3.1 GB/s line rate):
+**Measured (2026-10-12, docs/ops/r2-bench-2026-10-12.md):** three Runpod serverless H100 80GB workers, default
+concurrency 32, 0 retries and 0 bad parts each:
 
-- **About 1-2.5 GB/s** with 32-64 streams. A 144 GB `h3-base` would then take about 1-2.5 min.
+| Fetch | GB | s | MB/s |
+|---|---:|---:|---:|
+| `h3-base` (1 tree) | 144.04 | 288.3 | **500** |
+| `fastwan22-ti2v-5b` + `wan22-ti2v-5b`, worker 1 | 58.40 | 76.3 | **766** |
+| the same two trees, worker 2 | 58.40 | 177.7 | **329** |
+
+- That is **0.33-0.77 GB/s, median 0.5 GB/s**, not the 1-2.5 GB/s estimated before the run. A 144 GB `h3-base`
+  takes about 5 min.
+- fv-control now plans with **0.5 GB/s** (`R2_DOWNLOAD_GBPS`). An endpoint's outlook switches to its own last
+  measured rate once a boot reports one.
+- Not measured yet: a Runpod pod outside the EU (the standalone launch accepts EUR-IS-1 only), Brev (the warm
+  restart did not come up), and concurrency 64.
 - For comparison, the Hub manages **150-260 MB/s** on an 8-vCPU pod (runpod-volumes.md §5.5), or 10-16 min for the
   same tree.
-- This is an **estimate** (**UNVERIFIED**): no pod has run it, and R2 documents no per-object read bandwidth.
-  fv-control's outlook plans with 1 GB/s (`R2_DOWNLOAD_GBPS`) until a measurement replaces it.
 
 To measure it on a pod: run `python3 r2-weights.py plan <tree> --out /tmp/plan.json`, then
 `python3 r2-fetch.py --root /tmp/w --plan /tmp/plan.json --concurrency 64 --status /tmp/s.json` (the status file has
@@ -395,8 +405,9 @@ design and how to benchmark it.
 - Every scale-from-zero worker on a fresh host fetches its trees before fv-serve starts. That is about 144 GB for
   H3 (`h3-base`), 125 GB for LTX-2.5 and about 60 GB for Wan 2.2 5B (sizes from brev-park.ts `TREE_GB` until the
   manifests are published).
-- At 1-2.5 GB/s (§5.4, **UNVERIFIED**) the H3 fetch adds about 1-2.5 min. It replaces the volume's slower load
-  (measured volume cold starts: wan 49 + 70 s, h3 80 + 52 s, ltx 79 + 33 s, docs/serve/gateway.md §8.6).
+- At the measured 0.33-0.77 GB/s (§5.4) the H3 fetch adds about 5 min and the Wan fetch 1.3-3 min to every
+  scale-from-zero worker on a fresh host. Measured volume cold starts, for comparison: wan 49 + 70 s, h3 80 + 52 s,
+  ltx 79 + 33 s (docs/serve/gateway.md §8.6). The comparison is in docs/ops/r2-bench-2026-10-12.md.
 - The container disk is sized from the manifests: the bytes × 1.15 + 30 GB (H3 196 GB). Runpod's maximum
   container disk for serverless is **UNVERIFIED**; fv-control allows up to 500 GB.
 
@@ -419,7 +430,7 @@ template env as `FV_WEIGHTS_TOKEN`). D1 keeps only its SHA-256 (`weights_token_h
 | Mechanism | What Runpod documents | Fit |
 |---|---|---|
 | Container disk | "Temporary storage that exists only while a worker is running … lost when the worker stops or scales down" (docs.runpod.io/serverless/storage/overview) | A restarted container on the same worker keeps it: the cache check makes that boot a **hit**. |
-| FlashBoot | "Reduces cold starts by retaining worker state after spin-down, allowing faster 'revival' than fresh boots" (docs.runpod.io/serverless/endpoints/endpoint-configurations) | Whether the container disk survives a revival is **UNVERIFIED**. Our 2026-10 runs showed fv-serve starting fresh after an idle-out (docs/serve/images.md §FlashBoot), which says nothing about the disk. If it does survive, the boot skips the fetch. The benchmark below measures it. |
+| FlashBoot | "Reduces cold starts by retaining worker state after spin-down, allowing faster 'revival' than fresh boots" (docs.runpod.io/serverless/endpoints/endpoint-configurations) | **Measured 2026-10-12 (docs/ops/r2-bench-2026-10-12.md): a hit.** About 12 min after its last job, an r2 worker was revived with its process and its model still resident. There was no new container, no boot report and no fetch, and the job waited 0.9 s. A container restart on the same worker also kept the disk: the boot found every tree, skipped the fetch, and reached fv-serve in 3 s. How long FlashBoot keeps a worker is **UNVERIFIED**, and a new worker always fetches. |
 | Cached models | Hugging Face only, "one cached model at a time" per endpoint, mounted at `/runpod-volume/huggingface-cache/hub/`, workers placed on hosts that have it, download time not billed (docs.runpod.io/serverless/endpoints/model-caching) | **Not as is.** There is no S3/R2 source, and one repo per endpoint does not cover a family's several trees. It could work with one private HF bundle repo per preset (a large new upload: owner approval). Worth evaluating for H3 after the R2 numbers. |
 | Network volume as a cache | $0.07/GB-month; one volume pins the endpoint to its DC; several volumes from different DCs can be attached, one per DC, with no sync between them (docs.runpod.io/serverless/storage/network-volumes) | Implemented, **off by default** (`FV_SLS_R2_CACHE_VOLUMES`, one volume per endpoint). Filled add-only from R2 (`r2-fetch.py --add-only`). It costs storage per DC and brings back the DC pin and the volume's read speed. |
 

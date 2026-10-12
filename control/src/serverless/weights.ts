@@ -248,7 +248,7 @@ export function slsOutlook(env: Env, spec: SpecLike, boots: BootRow[] = []): Out
   const cold = SLS_IMAGE_START_S + fetchS + loadS;
   const m = (s: number) => (s >= 90 ? `${Math.round(s / 60)} min` : `${s} s`);
   const note = r2
-    ? `cold start ~${m(cold)}: start ~${SLS_IMAGE_START_S} s (image on the host; up to ${SLS_IMAGE_PULL_TAIL_S} s without) + fetch ${fetchGb} GB at ${rate.toFixed(2)} GB/s${measured ? " (measured)" : " (planning rate, UNVERIFIED)"} ~${m(fetchS)} + load ~${loadS} s; with the trees on the worker's disk ~${m(SLS_IMAGE_START_S + loadS)}`
+    ? `cold start ~${m(cold)}: start ~${SLS_IMAGE_START_S} s (image on the host; up to ${SLS_IMAGE_PULL_TAIL_S} s without) + fetch ${fetchGb} GB at ${rate.toFixed(2)} GB/s${measured ? " (measured)" : " (planning rate: the 2026-10-12 median)"} ~${m(fetchS)} + load ~${loadS} s; with the trees on the worker's disk ~${m(SLS_IMAGE_START_S + loadS)}`
     : `cold start ~${m(SLS_IMAGE_START_S + loadS)}: start ~${SLS_IMAGE_START_S} s (up to ${SLS_IMAGE_PULL_TAIL_S} s on a host without the image) + load from the volume ~${loadS} s`;
   return {
     weights_source: r2 ? "r2" : "volume",

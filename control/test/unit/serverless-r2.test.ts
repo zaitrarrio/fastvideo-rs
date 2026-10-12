@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { b64, randomBytes, sha256Hex } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
-import { manifestKey, objectKey } from "../../src/r2weights";
+import { manifestKey, objectKey, R2_DOWNLOAD_GBPS } from "../../src/r2weights";
 import { slsReport, slsTokenRow } from "../../src/serverless/ingest";
 import { deleteEndpoint, getRow, updateEndpoint } from "../../src/serverless/ops";
 import { endpointCreatePayload, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "../../src/serverless/payloads";
@@ -164,7 +164,7 @@ describe("boot reports and the outlook", () => {
     const s = normalizeEndpointSpec({ name: "h", preset: "h3-turbo", weights_source: "r2" });
     const o = slsOutlook(env, s);
     expect(o.fetch_gb).toBeGreaterThanOrEqual(144);
-    expect(o.fetch_s).toBe(Math.round(o.fetch_gb / 1.0));
+    expect(o.fetch_s).toBe(Math.round(o.fetch_gb / R2_DOWNLOAD_GBPS));
     expect(o.cold_start_s).toBe(o.image_start_s + o.fetch_s + o.load_s);
     expect(o.cached_cold_start_s).toBe(o.image_start_s + o.load_s);
     expect(o.cache.state).toBe("unknown");

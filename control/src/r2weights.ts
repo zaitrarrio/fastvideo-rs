@@ -23,8 +23,9 @@ import { fetchWithTimeout, parseJson } from "./util";
 export const DEFAULT_WEIGHTS_BUCKET = "fv-weights";
 export const PLAN_FORMAT = "fv-weights-plan/1";
 export const MANIFEST_FORMAT = "fv-weights-manifest/1";
-/** A boot's R2 download rate for estimates (GB/s): UNVERIFIED until measured on a pod (docs/ops/r2-weights.md §5). */
-export const R2_DOWNLOAD_GBPS = 1.0;
+/** A boot's R2 download rate for estimates (GB/s): the median of the first measurements (Runpod serverless H100,
+ * 2026-10-12: 0.50 / 0.77 / 0.33 GB/s; docs/ops/r2-weights.md §5.4, docs/ops/r2-bench-2026-10-12.md). */
+export const R2_DOWNLOAD_GBPS = 0.5;
 
 export interface R2Cfg {
   endpoint: string;

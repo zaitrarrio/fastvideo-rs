@@ -1486,7 +1486,7 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.equal(v.spec.data_centers, undefined);
   assert.equal(v.outlook.weights_source, "r2");
   assert.deepEqual(v.outlook.trees.map((t) => [t.dest, t.published]), [["r2demo", true]]);
-  assert.match(v.outlook.note, /fetch 0 GB at 1\.00 GB\/s \(planning rate, UNVERIFIED\)/);
+  assert.match(v.outlook.note, /fetch 0 GB at 0\.50 GB\/s \(planning rate: the 2026-10-12 median\)/);
   assert.ok(v.warnings.some((x) => /any data centre: in stock/.test(x.message)), JSON.stringify(v.warnings));
   assert.ok(Array.isArray(v.stock) && v.stock[0].gpu === "NVIDIA H100 80GB HBM3");
   const vbad = (await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, config_toml: toml.replace("r2demo", "r2missing") } }, headers: T() })).j;
