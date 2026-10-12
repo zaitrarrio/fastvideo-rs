@@ -39,7 +39,8 @@ import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
 import { POOL_PRESETS } from "./presets";
 import { HttpError, now, parseJson, putSetting, rateLimit, utcDay } from "./util";
 import { AUX_FILES, HUB_TREES } from "./weights-sources";
-import { R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
+import { DRIVER_CHECK_SH } from "./driver-check";
+import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 
 // ---------------------------------------------------------------- ids
 const KEY_RE = /^(gmi|brev):(.+)$/;
@@ -170,7 +171,8 @@ const BREV: ComputeProvider = {
         name: w.name,
         state: w.status === "RUNNING" ? "running" : w.status === "FAILURE" ? "failed" : ["STOPPED", "STOPPING", "DELETING"].includes(w.status) ? "stopped" : "starting",
         raw: w.status,
-        reason: w.health,
+        // Brev's statusMessage first (why a start did not run, e.g. capacity), then its health.
+        reason: [w.statusMessage, w.health].filter(Boolean).join("; ") || null,
         gpu: w.instanceType,
         createdAt: ms(w.createdAt),
       }));
@@ -308,6 +310,11 @@ export function poolTrees(pool: PoolSpec): string[] {
   for (const p of POOL_PRESETS) if (p.pool.variant === pool.variant && ((pool.config && p.pool.config === pool.config) || (pool.config_toml && p.pool.config_toml === pool.config_toml))) p.weights.forEach((w) => out.add(w));
   return [...out].sort();
 }
+/** The pre-quantized trees of the pool's preset (presets.ts PoolPreset.prequant): r2 fetches them, the Hub cannot. */
+export function poolPrequant(pool: PoolSpec): string[] {
+  const p = POOL_PRESETS.find((x) => x.pool.variant === pool.variant && ((pool.config && x.pool.config === pool.config) || (pool.config_toml && x.pool.config_toml === pool.config_toml)));
+  return [...(p?.prequant ?? [])];
+}
 /** A GMI / Brev pool's weights source: its own, else r2 when its config loads trees and every one is published in
  * the R2 weights store (r2weights.ts), else none. Runpod pools: their own, else the volume. */
 export function weightsSource(pool: PoolSpec, env?: Env): "volume" | "hub" | "r2" | "none" {
@@ -324,6 +331,11 @@ export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
   if (source === "none") return { source, trees: [], unsupported: [], tsv: "" };
   const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
   const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
+  // r2: the presets' pre-quantized trees too (published ones; recipe-trees.ts): the Hub has no source for them.
+  if (source === "r2") for (const t of poolPrequant(pool)) if (pub[t] && !trees.includes(t)) trees.push(t);
+  // r2: the aux files come with the weights as their R2 trees (not from GitHub / PyTorch); the boot's aux rows below
+  // then only check them by SHA-256 (a file missing or different still comes from its pinned URL).
+  if (source === "r2" && trees.length && env) for (const t of r2AuxTrees(env)) if (!trees.includes(t)) trees.push(t);
   const unsupported = trees.filter((t) => (source === "hub" ? !HUB_TREES[t] : !pub[t]));
   // r2: the trees come from the fetcher's plan (fv-control's /ingest/v1/weights-plan), so only the aux rows here.
   const rows = source === "r2" ? [] : trees.filter((t) => HUB_TREES[t]).map((t) => ["tree", t, HUB_TREES[t]!.repo, HUB_TREES[t]!.revision, HUB_TREES[t]!.globs.join(" ")].join("\t"));
@@ -414,7 +426,9 @@ export function launchTrees(plan: WeightsPlan | undefined, env?: Env): TreeRevs 
   if (plan.source === "hub") return Object.fromEntries(plan.trees.filter((t) => HUB_TREES[t]).map((t) => [t, HUB_TREES[t]!.revision]));
   if (plan.source === "r2") {
     const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
-    return Object.fromEntries(plan.trees.filter((t) => pub[t]).map((t) => [t, pub[t]!.rev]));
+    // The aux trees are not what makes a VM warm (0.37 GB, checked by SHA-256 at every boot): left out, so a VM parked
+    // with Hub trees (aux by URL) matches an r2 launch of the same trees.
+    return Object.fromEntries(plan.trees.filter((t) => pub[t] && !R2_AUX_TREES.includes(t)).map((t) => [t, pub[t]!.rev]));
   }
   return {};
 }
@@ -571,7 +585,7 @@ report() {
   done
 }
 fail() { say "FAILED: $1"; report failed "" "$1"; sleep 600; exit 1; }
-if ! command -v curl >/dev/null 2>&1; then
+${DRIVER_CHECK_SH}if ! command -v curl >/dev/null 2>&1; then
   { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates; } >/fvstate/apt.log 2>&1 || fail "no curl"
 fi
 # ---- preflight: the binary and the config (as WORKER_BOOT makes it), checked before the weights and the tunnel.
@@ -661,7 +675,7 @@ export async function releaseOtherPod(env: Env, podId: string, o: { manual?: boo
   return "deleted";
 }
 /** A GMI / Brev pod's state for the boot watch; null when the provider no longer lists it. */
-export async function otherPodState(env: Env, podId: string): Promise<{ desiredStatus: string; uptimeS: number | null; state: InstanceState; reason: string | null } | null> {
+export async function otherPodState(env: Env, podId: string): Promise<{ desiredStatus: string; uptimeS: number | null; state: InstanceState; reason: string | null; raw?: string } | null> {
   const inst = await findInstance(env, podId);
   if (!inst) return null;
   return {
@@ -669,6 +683,7 @@ export async function otherPodState(env: Env, podId: string): Promise<{ desiredS
     uptimeS: inst.createdAt ? Math.max(0, Math.round((now() - inst.createdAt) / 1000)) : null,
     state: inst.state,
     reason: inst.reason,
+    raw: inst.raw,
   };
 }
 export async function otherPodLogs(env: Env, podId: string): Promise<string[]> {
@@ -713,7 +728,7 @@ export const reportLines = (h: { phase: string; detail: string; at: number }[], 
 ];
 
 /** A starting GMI / Brev pod's boot diagnosis (the `up` wait): the provider's state and the pod's own last report. */
-export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
+export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null; raw?: string } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const rep = await lastReport(env, podId);
   if (rep?.phase === "failed") return { phase: "boot failed", detail: rep.detail || "the pod reported a failure", fatal: true };
   if (rep?.phase === "host_failed") return { phase: "host failed", detail: rep.detail || "the VM's host script reported a failure", fatal: true };
@@ -722,7 +737,7 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   if (!rt) return null;
   // A parked Brev instance being started again: stopped / starting is expected until BREV_RESTART_TIMEOUT_S.
   if (splitKey(podId)?.provider === "brev") {
-    const w = await restartDiag(env, podId, rt.state);
+    const w = await restartDiag(env, podId, rt.state, [rt.raw, rt.reason].filter(Boolean).join(": ") || null);
     if (w) return w;
   }
   if (rt.state === "failed") return { phase: "provider error", detail: rt.reason || "the provider reports an error", fatal: true };

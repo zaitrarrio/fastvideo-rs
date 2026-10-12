@@ -27,6 +27,8 @@ export interface SlsPreset {
   /** An inline config (FV_WORKER_TOML_B64): one the image does not carry. */
   config_toml?: string;
   weights: string[];
+  /** Pre-quantized trees fetched with weights_source r2 (../presets.ts PoolPreset.prequant). */
+  prequant: string[];
   min_vram_gb: number;
   container_disk_gb: number;
   execution_timeout_s: number;
@@ -47,13 +49,14 @@ export const SLS_PRESETS: SlsPreset[] = [
       ...(pool.config && pool.config !== img?.default ? { config: pool.config } : {}),
       ...(pool.config_toml ? { config_toml: pool.config_toml } : {}),
       weights: p.weights,
+      prequant: p.prequant ?? [],
       min_vram_gb: p.min_vram_gb,
       container_disk_gb: pool.container_disk_gb ?? 20,
       execution_timeout_s: pool.job_timeout_s ?? 1800,
       ...(p.licence ? { licence: p.licence } : {}),
     };
   }),
-  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
+  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], prequant: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
 ];
 export const slsPreset = (id: unknown): SlsPreset | undefined => SLS_PRESETS.find((p) => p.id === id);
 

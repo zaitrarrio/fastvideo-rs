@@ -87,7 +87,7 @@ serverlessRoutes.get("/presets", (c) =>
       const trees = slsTrees(spec);
       const pub = r2Trees(c.env);
       const r2 = { trees, published: trees.filter((t) => pub[t]), missing: trees.filter((t) => !pub[t]), outlook: p.compute === "GPU" ? slsOutlook(c.env, withWeightsSource(spec, "r2")).note : null };
-      return { id: p.id, title: p.title, description: p.description, variant: p.variant, compute: p.compute, config: p.config ?? null, inline_config: !!p.config_toml, weights: p.weights, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves, r2 };
+      return { id: p.id, title: p.title, description: p.description, variant: p.variant, compute: p.compute, config: p.config ?? null, inline_config: !!p.config_toml, weights: p.weights, prequant: p.prequant, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves, r2 };
     }),
     protocols: PROTOCOL_INFO,
   }),

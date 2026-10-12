@@ -14,7 +14,7 @@ import { weightsPlan } from "./providers";
 import { r2Cfg, r2Plan, r2Trees } from "./r2weights";
 import { slsTokenRow } from "./serverless/ingest";
 import { specOf } from "./serverless/ops";
-import { slsTrees } from "./serverless/weights";
+import { slsFetchTrees } from "./serverless/weights";
 import { HttpError, parseJson, rateLimit } from "./util";
 
 async function planFor(env: Env, trees: string[]): Promise<Response> {
@@ -61,7 +61,7 @@ async function slsPlan(env: Env, token: string, body: { endpoint?: unknown }): P
   if (!(await rateLimit(env, `weights-plan:${row.id}`, 120, 60))) throw new HttpError(429, "weights plan rate limit (120/min per endpoint)");
   const spec = specOf(row);
   if (spec.weights_source !== "r2") throw new HttpError(409, `endpoint ${row.name} does not use weights_source r2`);
-  const trees = slsTrees(spec);
+  const trees = slsFetchTrees(env, spec);
   const pub = r2Trees(env);
   const missing = trees.filter((t) => !pub[t]);
   if (missing.length) throw new HttpError(409, `not in the R2 weights store: ${missing.join(", ")}`);

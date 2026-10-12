@@ -17,6 +17,7 @@ import { HttpError, utcDay } from "./util";
 import { weightsSource } from "./providers";
 import type { z } from "zod";
 import { parseOr400, type StandaloneLaunchZ } from "./schemas";
+import { RUNPOD_DATA_CENTERS } from "./enums";
 
 /** The single pool's id inside a standalone pod's spec. */
 export const STANDALONE_POOL = "pod";
@@ -24,10 +25,12 @@ export const STANDALONE_POOL = "pod";
 /** A launch request (the schema: src/schemas.ts StandaloneLaunchZ, GET /api/schemas/standalone-launch). */
 export type LaunchRequest = z.infer<typeof StandaloneLaunchZ>;
 
-/** The region of a region id or a data centre id. */
-export function regionOf(x: { region?: string; dc?: string }): RegionId {
+/** The region of a region id or a data centre id. A Runpod data centre without a weights volume is allowed with
+ * weights_source r2 (or a CPU pod): the spec keeps the nominal region eu and the pool's data_centers place the pod. */
+export function regionOf(x: { region?: string; dc?: string; weights_source?: string; compute?: string; variant?: string }): RegionId {
   const want = x.region || x.dc || "eu";
   const byDc = (Object.keys(REGIONS) as RegionId[]).find((r) => REGIONS[r].dc === want);
+  if (!byDc && !x.region && x.dc && ((RUNPOD_DATA_CENTERS as readonly string[]).includes(x.dc) && (x.weights_source === "r2"))) return "eu";
   const r = (byDc || want) as RegionId;
   if (!regionAvailable(r)) throw new HttpError(400, `region: ${want} has no weights volume fv-control can use (EU only: eu / ${REGIONS.eu.dc}; CLAUDE.md)`);
   return r;
@@ -77,6 +80,8 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
     pool.weights_source = input.weights_source;
     // r2 on Runpod: the trees go onto the container disk (sized by fv-control unless given); no volume.
     if (input.weights_source === "r2" && input.volume === undefined) pool.volume = false;
+    // r2 has no volume to pin the pod: any Runpod data centre (docs/ops/r2-bench-2026-10-12.md finding 5).
+    if (input.weights_source === "r2" && input.dc) pool.data_centers = [input.dc] as PoolSpec["data_centers"];
   }
   // An image reference is the pool's own image (resolved to a digest at start); the channel / sha the spec's source.
   if (input.image) pool.image = input.image;
@@ -142,7 +147,7 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
       cpu_flavors: pool.compute === "CPU" ? pool.cpu_flavors || null : undefined,
       // GMI / Brev: the provider's own region (the spec's Runpod region does not apply there).
       region: pool.provider && pool.provider !== "runpod" ? (pool.provider_region ?? null) : (pool.regions || c.spec.regions)[0],
-      dc: pool.provider && pool.provider !== "runpod" ? null : REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.dc,
+      dc: pool.provider && pool.provider !== "runpod" ? null : (pool.data_centers?.join(", ") ?? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.dc),
       volume: pool.volume !== false && pool.compute === "GPU" ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : pool.volume ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : null,
       config: pool.config || (pool.config_toml ? "(inline config_toml)" : null),
       models: (pool.models || []).map((m) => m.id).concat(pool.fake_models || []),

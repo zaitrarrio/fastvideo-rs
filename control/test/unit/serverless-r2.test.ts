@@ -36,6 +36,8 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
     CF_ACCOUNT_ID: "acct",
     WEIGHTS_R2_ACCESS_KEY_ID: ACCESS,
     WEIGHTS_R2_SECRET_ACCESS_KEY: SECRET,
+    // the aux trees (TAE, LPIPS) come from R2 by default; these fake stores have only the trees a test publishes
+    WEIGHTS_R2_AUX: "0",
     ...over,
   }) as unknown as Env;
 const pin = (rev: string, bytes = 1000) => ({ rev, files: 1, bytes, manifest_sha256: "a".repeat(64), source: "test" });
@@ -296,6 +298,8 @@ describe.skipIf(!py)("the worker's boot (SLS_R2_SH) with the real r2-fetch.py ag
   let base = "";
   const files = { "config.json": Buffer.from('{"x": 1}'), "text_encoder/model.safetensors": rnd(1_500_000, 11), "transformer/model.safetensors": rnd(2_700_000, 12) };
   const t = makeTree("demo", "rev1", files);
+  // the aux trees, as R2 serves them (auxiliary/tae, auxiliary/lpips): fetched with the weights, not from GitHub / PyTorch
+  const aux = { "auxiliary/tae": makeTree("auxiliary/tae", "eu-1", { "taew2_2.safetensors": rnd(70_000, 13) }), "auxiliary/lpips": makeTree("auxiliary/lpips", "eu-1", { "alex.pth": rnd(5_000, 14) }) };
   let env: Env;
   let token = "";
   let plans = 0;
@@ -314,9 +318,13 @@ describe.skipIf(!py)("the worker's boot (SLS_R2_SH) with the real r2-fetch.py ag
   };
   beforeAll(async () => {
     base = await r2.start();
-    env = mkEnv({ WEIGHTS_R2_ENDPOINT: base, PUBLIC_URL: base, WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ demo: t.pin }) });
+    env = mkEnv({ WEIGHTS_R2_ENDPOINT: base, PUBLIC_URL: base, WEIGHTS_R2_AUX: undefined, WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ demo: t.pin, ...Object.fromEntries(Object.entries(aux).map(([d, x]) => [d, x.pin])) }) });
     r2.objects.set(`fv-weights/${manifestKey("demo", "rev1")}`, t.raw);
     for (const [p, b] of Object.entries(files)) r2.objects.set(`fv-weights/${objectKey("demo", "rev1", p)}`, b);
+    for (const [d, x] of Object.entries(aux)) {
+      r2.objects.set(`fv-weights/${manifestKey(d, "eu-1")}`, x.raw);
+      for (const f of x.m.files) r2.objects.set(`fv-weights/${objectKey(d, "eu-1", f.path)}`, d === "auxiliary/tae" ? rnd(70_000, 13) : rnd(5_000, 14));
+    }
     const tk = await newWeightsToken();
     token = tk.token;
     const now = Date.now();
@@ -344,7 +352,12 @@ describe.skipIf(!py)("the worker's boot (SLS_R2_SH) with the real r2-fetch.py ag
     expect(r2.bad()).toBe(0);
     expect(plans).toBe(1);
     const b1 = (await boots()).at(-1);
-    expect([b1.worker_id, b1.cache, b1.missing, b1.fetch_s !== null, b1.fetch_mbps !== null, !!b1.serve_at]).toEqual(["wk1", "miss", "demo", true, true, true]);
+    expect([b1.worker_id, b1.cache, b1.missing, b1.fetch_s !== null, b1.fetch_mbps !== null, !!b1.serve_at]).toEqual(["wk1", "miss", "auxiliary/lpips auxiliary/tae demo", true, true, true]);
+    // the aux files came from R2 with the weights (findings 3-4), and every step of the boot was timed and reported
+    expect(readFileSync(join(root, "weights/auxiliary/tae/taew2_2.safetensors")).equals(rnd(70_000, 13))).toBe(true);
+    expect(Object.keys(JSON.parse(b1.steps)).sort()).toEqual(["fetch", "fetcher", "tools"]);
+    expect(r.stderr).toMatch(/\[fv-boot\] \d\d:\d\d:\d\d \+[\d.]+s step fetcher: [\d.]+s \(downloaded from fv-control\)/);
+    expect(r.stderr).toMatch(/step tools: [\d.]+s \(python3 and curl in the image\)/);
     // The same disk again (a FlashBoot revival or a restarted container): no plan request, no GET.
     const gets = r2.gets.length;
     const r2nd = await boot(root, { RUNPOD_POD_ID: "wk1b" });

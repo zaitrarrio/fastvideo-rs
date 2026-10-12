@@ -6,7 +6,7 @@
 // only ever acts on pods fv-control recorded (cluster_pods); an fv-named
 // instance it did not record is reported, never touched.
 import type { AlertIn, Policies } from "./alerts";
-import { brevUnlisted, markBrevDeleted, parkedRows, parkLimitAlert, retryRefusedStops, storageDph } from "./brev-park";
+import { brevUnlisted, markBrevDeleted, parkedRows, parkLimitAlert, restartStuckAlerts, retryRefusedStops, storageDph } from "./brev-park";
 import { ownerOf, type Cluster } from "./cluster/store";
 import { stopCluster } from "./collector";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
@@ -112,7 +112,7 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     for (const [pod, r] of ctl) if (!r.deleted_at && !seen.has(pod) && t - r.created_at > 10 * 60_000) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
     for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
     if (p === "brev") {
-      res.kinds.push("brev_parked", "brev_parked_over_limit", "brev_stop_failed");
+      res.kinds.push("brev_parked", "brev_parked_over_limit", "brev_stop_failed", "brev_restart_stuck");
       // Records whose workspace Brev no longer lists (10 min after their last change): gone.
       for (const id of await brevUnlisted(env, seenIds, t - 10 * 60_000)) await markBrevDeleted(env, id, "gone", "no longer listed by Brev");
       // Owner rule 2026-10-11: fv-control never deletes a Brev VM on its own. The park thresholds (brev_park_max,
@@ -122,6 +122,8 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
       const rs = await retryRefusedStops(env, new Map(insts.map((i) => [i.id, i.state])));
       res.alerts.push(...rs.alerts);
       res.actions.push(...rs.actions);
+      // A warm restart Brev keeps STOPPED (2026-10-12: 700 s, no reason seen): an alert with Brev's own status message.
+      res.alerts.push(...(await restartStuckAlerts(env, new Map(insts.map((i) => [i.id, [i.raw, i.reason].filter(Boolean).join(": ")])), t)));
     }
 
     const spend = await providerSpend(env, p);

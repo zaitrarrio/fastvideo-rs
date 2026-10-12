@@ -660,6 +660,11 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         ? fieldBox(P("cpu_flavors"), "CPU flavors (in order)", multi(P("cpu_flavors"), (dyn.cpu_flavors || []).map((f: any) => ({ id: f.id, label: f.id, detail: `$${f.dph_per_vcpu}/vCPU·hr` })), { optional: true }), describe(["pools", 0, "cpu_flavors"]), true)
         : fieldBox(P("gpu_types"), "GPU types (in order; none: the regions')", multi(P("gpu_types"), gpuOpts(), { optional: true }), describe(["pools", 0, "gpu_types"]), true),
       other ? null : fieldBox(P("regions"), "Regions (none: the cluster's)", multi(P("regions"), (dyn.regions || []).map((r: any) => ({ id: r.id, label: r.id, detail: r.dc })), { optional: true }), null, true),
+      // weights_source r2 on Runpod (no volume): any data centre, and the hosts' CUDA filter (docs/ops/r2-weights.md §4).
+      !other && !isCpu && p.weights_source === "r2"
+        ? fieldBox(P("data_centers"), "Data centres (r2; none: the regions')", multi(P("data_centers"), enumOf(["pools", 0, "data_centers", 0]).map((d) => ({ id: d, label: d })), { optional: true }), describe(["pools", 0, "data_centers"]), true)
+        : null,
+      !other && !isCpu ? fieldBox(P("allowed_cuda"), "Allowed CUDA (host filter)", multi(P("allowed_cuda"), enumOf(["pools", 0, "allowed_cuda", 0]).map((v) => ({ id: v, label: v })), { optional: true }), describe(["pools", 0, "allowed_cuda"]), true) : null,
       isCpu && !other ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,
       fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
       other ? null : fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),

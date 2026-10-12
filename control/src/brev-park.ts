@@ -42,7 +42,7 @@
 // instances fv-control created and recorded here (fv- names) are ever stopped,
 // started or deleted.
 import { policies, type AlertIn, type Policies } from "./alerts";
-import { brev, type BrevType } from "./brev";
+import { brev, brevStatusLine, type BrevType, type BrevWorkspace } from "./brev";
 import { brevHostScript } from "./brev-host";
 import { randomToken, seal, sha256Hex, unseal } from "./crypto";
 import type { Env } from "./env";
@@ -275,14 +275,44 @@ export async function claimWarm(env: Env, instanceType: string, want: TreeRevs):
 export async function unclaimWarm(env: Env, row: BrevInstance) {
   await env.DB.prepare("UPDATE brev_instances SET state = ?, updated_at = ? WHERE workspace_id = ? AND state = 'restarting'").bind(row.state, row.updated_at, row.workspace_id).run();
 }
-/** Restarts a claimed instance for a launch: its new run script, then Brev's start; live on success. Throws on a failed start. */
-export async function restartWarm(env: Env, row: BrevInstance, x: { run: string; launch_trees: TreeRevs; cluster_id: string }) {
+/** How long a warm restart waits for a workspace still STOPPING (from its park) before its start (BREV_STOPPING_WAIT_S). */
+const stoppingWaitMs = (env: Env) => Math.max(0, Number(env.BREV_STOPPING_WAIT_S ?? "60") || 0) * 1000;
+/** A start that left the workspace STOPPED this long is sent once more (BREV_RESTART_RETRY_S, 0: never). */
+const restartRetryMs = (env: Env) => Math.max(0, Number(env.BREV_RESTART_RETRY_S ?? "180") || 0) * 1000;
+/** A restarted workspace still STOPPED this long after its start raises brev_restart_stuck (BREV_RESTART_ALERT_S). */
+const restartAlertMs = (env: Env) => Math.max(60, Number(env.BREV_RESTART_ALERT_S ?? "300") || 300) * 1000;
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Restarts a claimed instance for a launch: its new run script, then Brev's start; live on success. Throws on a failed
+ * start. As the CLI does (brev-cli pkg/cmd/start startStopppedWorkspace), it starts only a STOPPED workspace whose type
+ * can be stopped: one still STOPPING from its park is waited for (BREV_STOPPING_WAIT_S), one already RUNNING or
+ * STARTING is not started again, anything else is refused with Brev's status and message. Brev's answer to the start
+ * (its status and statusMessage) is kept in the record's note and returned for the operation's log
+ * (docs/ops/r2-bench-2026-10-12.md finding 7: a start left the VM STOPPED for 700 s and nothing said why).
+ */
+export async function restartWarm(env: Env, row: BrevInstance, x: { run: string; launch_trees: TreeRevs; cluster_id: string }): Promise<string> {
   await storeRunScript(env, row.workspace_id, row.name, x.run);
-  await brev.start(env, row.workspace_id);
+  let w: BrevWorkspace | null = await brev.get(env, row.workspace_id).catch(() => null);
+  const until = now() + stoppingWaitMs(env);
+  while (w?.status === "STOPPING" && now() < until) {
+    await sleepMs(5000);
+    w = await brev.get(env, row.workspace_id).catch(() => w);
+  }
+  const before = w ? brevStatusLine(w) : "unknown (GET failed)";
+  if (w && w.stoppable === false) throw new HttpError(409, `brev ${row.name}: its instance type cannot be started again (instanceTypeInfo.stoppable false)`);
+  let said: string;
+  if (w && (w.status === "RUNNING" || w.status === "STARTING" || w.status === "DEPLOYING")) said = `already ${before}: not started again`;
+  else if (w && w.status !== "STOPPED") throw new HttpError(409, `brev ${row.name} is ${before}: only a STOPPED workspace is started`);
+  else {
+    const ans = await brev.start(env, row.workspace_id);
+    said = `start accepted (was ${before}; Brev answered ${ans ? brevStatusLine(ans) : "no workspace"})`;
+  }
   const t = now();
-  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = NULL, updated_at = ? WHERE workspace_id = ?")
-    .bind(JSON.stringify(x.launch_trees), x.cluster_id, t, t, row.workspace_id)
+  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = ?, updated_at = ? WHERE workspace_id = ?")
+    .bind(JSON.stringify(x.launch_trees), x.cluster_id, t, said.slice(0, 300), t, row.workspace_id)
     .run();
+  return said;
 }
 
 // ---------------------------------------------------------------- stop: park or hold (never delete)
@@ -428,18 +458,55 @@ export async function retryRefusedStops(env: Env, listed: Map<string, string>): 
   return { alerts, actions };
 }
 
-/** The `up` wait's view of a warm restart: still starting (fine until the timeout), or timed out (fatal, replace). */
-export async function restartDiag(env: Env, podId: string, state: string): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
+/**
+ * The `up` wait's view of a warm restart: still starting (fine until the timeout), or timed out (fatal, replace).
+ * `brevSays` is Brev's status, statusMessage and health this poll: every poll's detail carries it (the operation's
+ * log shows why a VM stays STOPPED). A workspace still STOPPED BREV_RESTART_RETRY_S after its start (its start did
+ * not take) gets the start once more.
+ */
+export async function restartDiag(env: Env, podId: string, state: string, brevSays: string | null = null): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const row = await brevRow(env, podId);
   if (!row?.restarted_at || row.state !== "live" || (await weightsDone(env, podId))) return null;
   const limit = Math.max(30, Number(env.BREV_RESTART_TIMEOUT_S || "900")) * 1000;
   const waited = now() - row.restarted_at;
-  if (state === "failed") return { phase: "restart failed", detail: `Brev reports an error on the restarted ${row.name}`, fatal: true, replace: true };
+  const says = brevSays ? `; Brev: ${brevSays.slice(0, 200)}` : "";
+  if (state === "failed") return { phase: "restart failed", detail: `Brev reports an error on the restarted ${row.name}${says}`, fatal: true, replace: true };
   if (state === "stopped" || state === "starting") {
-    if (waited > limit) return { phase: "restart timed out", detail: `${row.name} not running after ${Math.round(waited / 1000)} s (BREV_RESTART_TIMEOUT_S ${limit / 1000})`, fatal: true, replace: true };
-    return { phase: "restarting", detail: `parked ${row.name} starting (${Math.round(waited / 1000)} s)`, fatal: false };
+    if (waited > limit) return { phase: "restart timed out", detail: `${row.name} not running after ${Math.round(waited / 1000)} s (BREV_RESTART_TIMEOUT_S ${limit / 1000})${says}`, fatal: true, replace: true };
+    let retry = "";
+    const rm = restartRetryMs(env);
+    if (state === "stopped" && /^STOPPED\b/.test(brevSays || "") && rm && waited > rm && !/start sent again/.test(row.note || "")) {
+      try {
+        const ans = await brev.start(env, row.workspace_id);
+        retry = `; still STOPPED ${Math.round(waited / 1000)} s after its start: start sent again (Brev answered ${ans ? brevStatusLine(ans) : "no workspace"})`;
+      } catch (e) {
+        retry = `; still STOPPED ${Math.round(waited / 1000)} s after its start: start sent again, refused: ${(e as Error).message.slice(0, 160)}`;
+      }
+      await env.DB.prepare("UPDATE brev_instances SET note = ?, updated_at = ? WHERE workspace_id = ?").bind(`${row.note || ""}${retry}`.slice(-300), now(), row.workspace_id).run();
+    }
+    return { phase: "restarting", detail: `parked ${row.name} starting (${Math.round(waited / 1000)} s)${says}${retry}`, fatal: false };
   }
   return null;
+}
+
+/** The cron's view of warm restarts that do not come up: a restarted instance (live, not ready) that Brev still lists as
+ * STOPPED BREV_RESTART_ALERT_S after its start raises brev_restart_stuck with Brev's status and message. `listed`:
+ * workspace id -> Brev's status line (status: statusMessage). Changes nothing. */
+export async function restartStuckAlerts(env: Env, listed: Map<string, string>, t = now()): Promise<AlertIn[]> {
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state = 'live' AND restarted_at IS NOT NULL`).all<BrevInstance>()).results || [];
+  const out: AlertIn[] = [];
+  for (const r of rows) {
+    const st = listed.get(r.workspace_id);
+    if (!st || !/^STOPP/.test(st) || t - r.restarted_at! < restartAlertMs(env) || (await weightsDone(env, r.pod_id))) continue;
+    out.push({
+      key: `brev_restart_stuck:${r.workspace_id}`,
+      kind: "brev_restart_stuck",
+      severity: "warn",
+      target: r.pod_id,
+      message: `Brev ${r.name} (${r.instance_type}) is still ${st.slice(0, 200)} ${Math.round((t - r.restarted_at!) / 60000)} min after fv-control started it for a launch (${(r.note || "no answer recorded").slice(0, 200)}). The launch replaces it after BREV_RESTART_TIMEOUT_S; check the instance in the Brev console (capacity for its type in its region is the usual cause).`,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- limits (alerts only), views, owner actions

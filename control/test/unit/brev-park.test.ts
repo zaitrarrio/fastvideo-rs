@@ -22,6 +22,8 @@ import {
   recordBrevCreate,
   releaseBrev,
   restartDiag,
+  restartStuckAlerts,
+  restartWarm,
   retryRefusedStops,
   storageDph,
   unclaimWarm,
@@ -55,9 +57,11 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
 
 /** A Brev API stand-in: workspaces with a status, stop / start / delete, the list, the instance-type list. `o` is live
  * (a test flips stopFail: Brev refusing a stop, as for a type that is not stoppable). */
-let M: { ws: Map<string, { status: string; name?: string; type?: string }>; calls: string[]; o: { startFail?: boolean; stopFail?: boolean } } | null = null;
-function brevMock(o: { startFail?: boolean; stopFail?: boolean } = {}) {
-  const ws = new Map<string, { status: string; name?: string; type?: string }>();
+type MockWs = { status: string; name?: string; type?: string; statusMessage?: string };
+type MockOpts = { startFail?: boolean; stopFail?: boolean; startNoop?: string };
+let M: { ws: Map<string, MockWs>; calls: string[]; o: MockOpts } | null = null;
+function brevMock(o: MockOpts = {}) {
+  const ws = new Map<string, MockWs>();
   const calls: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -73,7 +77,7 @@ function brevMock(o: { startFail?: boolean; stopFail?: boolean } = {}) {
             ],
           }),
         );
-      if (path === "organizations/org1/workspaces") return new Response(JSON.stringify([...ws].map(([id, w]) => ({ id, name: w.name ?? id, status: w.status, instanceType: w.type ?? "stop.x1" }))));
+      if (path === "organizations/org1/workspaces") return new Response(JSON.stringify([...ws].map(([id, w]) => ({ id, name: w.name ?? id, status: w.status, statusMessage: w.statusMessage ?? "", instanceType: w.type ?? "stop.x1" }))));
       const m = /^workspaces\/([^/]+)(?:\/(stop|start))?$/.exec(path);
       if (m) {
         const w = ws.get(m[1]!) || { status: "RUNNING" };
@@ -84,8 +88,12 @@ function brevMock(o: { startFail?: boolean; stopFail?: boolean } = {}) {
         }
         if (m[2] === "start") {
           if (o.startFail) return new Response(JSON.stringify({ message: "no capacity" }), { status: 409 });
-          w.status = "RUNNING";
+          // startNoop: Brev accepts the start but the VM stays STOPPED, with its reason in statusMessage
+          if (o.startNoop) w.statusMessage = o.startNoop;
+          else w.status = "RUNNING";
+          return new Response(JSON.stringify({ id: m[1], name: w.name ?? m[1], status: w.status, statusMessage: w.statusMessage ?? "", instanceTypeInfo: { stoppable: true } }));
         }
+        if (init.method === "GET" && !m[2]) return new Response(JSON.stringify({ id: m[1], name: w.name ?? m[1], status: w.status, statusMessage: w.statusMessage ?? "", instanceTypeInfo: { stoppable: true } }));
         if (init.method === "DELETE") ws.delete(m[1]!);
         return new Response("{}");
       }
@@ -299,6 +307,48 @@ describe("every stop parks or holds (owner rule 2026-10-11: never deleted), reus
     expect(await restartDiag(env, pod, "running")).toBeNull();
     expect(await releaseBrev(env, pod, { why: "restart timed out" })).toBe("held");
     expect((await brevRowById(env, "r1"))!.note).toMatch(/^restart failed: it did not come up after the restart \(restart timed out\)/);
+  });
+  it("a warm restart starts only a STOPPED workspace (waits out STOPPING, skips a running one) and keeps Brev's answer", async () => {
+    const env = mkEnv({ BREV_STOPPING_WAIT_S: "0" });
+    const m = brevMock();
+    const pod = await live(env, "w1", { ready: false });
+    m.ws.get("w1")!.status = "STOPPED";
+    const x = { run: "#!/bin/bash\necho x", launch_trees: {}, cluster_id: "c1" };
+    const said = await restartWarm(env, (await brevRow(env, pod))!, x);
+    expect(said).toMatch(/^start accepted \(was STOPPED; Brev answered RUNNING\)/);
+    expect(m.calls.filter((c) => /workspaces\/w1/.test(c))).toEqual(["GET workspaces/w1", "PUT workspaces/w1/start"]);
+    expect((await brevRow(env, pod))!).toMatchObject({ state: "live", note: said });
+    // already running (a start that took a while ago): not started twice
+    expect(await restartWarm(env, (await brevRow(env, pod))!, x)).toMatch(/^already RUNNING: not started again/);
+    expect(m.calls.filter((c) => c === "PUT workspaces/w1/start")).toHaveLength(1);
+    // still STOPPING after the wait, or another status: refused with Brev's status (the launch holds it and moves on)
+    m.ws.get("w1")!.status = "STOPPING";
+    await expect(restartWarm(env, (await brevRow(env, pod))!, x)).rejects.toThrow(/brev fv-pod-w1-1010000000 is STOPPING: only a STOPPED workspace is started/);
+  });
+  it("a start Brev accepts but leaves STOPPED: every poll shows Brev's status and message, the start goes once more, then an alert", async () => {
+    const env = mkEnv({ BREV_RESTART_RETRY_S: "60", BREV_RESTART_ALERT_S: "120", BREV_RESTART_TIMEOUT_S: "900" });
+    const m = brevMock({ startNoop: "insufficient capacity for stop.x1 in us-east-1a" });
+    const pod = await live(env, "s9", { ready: false });
+    m.ws.get("s9")!.status = "STOPPED";
+    const said = await restartWarm(env, (await brevRow(env, pod))!, { run: "#!/bin/bash\necho x", launch_trees: {}, cluster_id: "c1" });
+    expect(said).toBe("start accepted (was STOPPED; Brev answered STOPPED: insufficient capacity for stop.x1 in us-east-1a)");
+    const says = "STOPPED: insufficient capacity for stop.x1 in us-east-1a";
+    const d1 = await restartDiag(env, pod, "stopped", says);
+    expect(d1).toMatchObject({ phase: "restarting", fatal: false });
+    expect(d1!.detail).toMatch(/starting \(\d+ s\); Brev: STOPPED: insufficient capacity/);
+    expect(m.calls.filter((c) => c === "PUT workspaces/s9/start")).toHaveLength(1);
+    await env.DB.prepare("UPDATE brev_instances SET restarted_at = ? WHERE workspace_id = 's9'").bind(Date.now() - 90_000).run();
+    expect((await restartDiag(env, pod, "stopped", says))!.detail).toMatch(/still STOPPED 90 s after its start: start sent again \(Brev answered STOPPED: insufficient capacity/);
+    await restartDiag(env, pod, "stopped", says);
+    expect(m.calls.filter((c) => c === "PUT workspaces/s9/start"), "the start is sent once more, not every poll").toHaveLength(2);
+    expect(await restartStuckAlerts(env, new Map([["s9", says]]))).toEqual([]); // 90 s < BREV_RESTART_ALERT_S
+    await env.DB.prepare("UPDATE brev_instances SET restarted_at = ? WHERE workspace_id = 's9'").bind(Date.now() - 400_000).run();
+    const a = await restartStuckAlerts(env, new Map([["s9", says]]));
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ kind: "brev_restart_stuck", key: "brev_restart_stuck:s9", target: pod });
+    expect(a[0]!.message).toMatch(/is still STOPPED: insufficient capacity .* 7 min after fv-control started it/);
+    expect(await restartStuckAlerts(env, new Map([["s9", "RUNNING"]]))).toEqual([]);
+    expect(m.calls.some((c) => c.startsWith("DELETE")), "never deleted").toBe(false);
   });
   it("limits: an alert listing the instances, their age and $/day; nothing deleted; the owner's delete works", async () => {
     const env = mkEnv();
