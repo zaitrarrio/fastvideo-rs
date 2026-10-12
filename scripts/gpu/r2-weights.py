@@ -1039,6 +1039,73 @@ def cmd_archive(s3, args):
     return 0
 
 
+def cmd_compare_archive(s3, args):
+    """An archive (archive/<label>/<name>/) against its directory: the same set of files (hidden ones too), each with
+    its size, each R2 object present with that size, each file's parts record agreeing with the index, and (unless
+    --sizes-only) every 64 MiB part of the file on disk hashing to the parts record's SHA-256, read in parallel."""
+    base = f"{args.prefix}archive/{args.label}/"
+    raw = s3.get(f"{base}{args.name}.index.json")
+    if raw is None:
+        raise Fail(f"no index {base}{args.name}.index.json")
+    idx = json.loads(raw)
+    disk = {f.path: f.size for f in dir_sources(args.name, args.dir, hidden=True)}
+    root = Path(args.dir)
+    bad = [f"{p}: on disk, not in the archive" for p in sorted(set(disk) - {f["path"] for f in idx["files"]})]
+
+    def meta(f):
+        if f["path"] not in disk:
+            return f, None, f"{f['path']}: in the archive, not on disk"
+        if disk[f["path"]] != f["size"]:
+            return f, None, f"{f['path']}: {disk[f['path']]} bytes on disk, {f['size']} in the index"
+        h = s3.head(f"{base}{args.name}/{f['path']}")
+        if h is None or h[0] != f["size"]:
+            return f, None, f"{f['path']}: R2 object {'missing' if h is None else f'{h[0]} bytes'}"
+        rec = json.loads(s3.get(f"{base}.parts/{args.name}/{f['path']}.json") or b"{}")
+        if rec.get("sha256") != f["sha256"] or rec.get("size") != f["size"]:
+            return f, None, f"{f['path']}: parts record disagrees with the index"
+        return f, rec, None
+
+    t = time.time()
+    jobs = []
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for f, rec, err in ex.map(meta, idx["files"]):
+            if err:
+                bad.append(err)
+            elif not args.sizes_only:
+                parts = rec.get("parts") or []
+                ps = rec.get("part_size") or PART_SIZE
+                if len(parts) != -(-f["size"] // ps):
+                    bad.append(f"{f['path']}: parts record has {len(parts)} parts")
+                    continue
+                jobs += [(f, (root / f["path"]).resolve(), i, ps, parts[i]) for i in range(len(parts))]
+
+    def part_ok(job):
+        f, p, i, ps, want = job
+        off = i * ps
+        n = min(ps, f["size"] - off)
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            got = 0
+            while got < n:
+                b = os.pread(fh.fileno(), min(16 << 20, n - got), off + got)
+                if not b:
+                    break
+                h.update(b)
+                got += len(b)
+        return None if got == n and h.hexdigest() == want else f"{f['path']}: part {i} differs"
+
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for err in ex.map(part_ok, jobs):
+            if err:
+                bad.append(err)
+    for line in bad:
+        print("DIFF " + line)
+    nbad = len({b.split(":")[0] for b in bad})
+    print(f"archive/{args.label}/{args.name}: {len(idx['files']) - nbad}/{len(idx['files'])} files equal, {len(disk)} on disk "
+          f"({'sizes' if args.sizes_only else 'sha256 of every part'}; {idx['total_bytes'] / 1e9:.2f} GB, {time.time() - t:.0f}s)")
+    return 1 if bad else 0
+
+
 def cmd_create_bucket(args):
     tok = Path(args.cf_token_file).read_text().strip()
     acct = os.environ.get("FV_CF_ACCOUNT_ID", DEFAULT_ACCOUNT)
@@ -1102,6 +1169,12 @@ def main(argv=None):
     p.add_argument("--files", type=int, default=4)
     p.add_argument("--window", type=int, default=4)
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("compare-archive", help="an archive against its directory (file set, sizes, every part's SHA-256)")
+    p.add_argument("name")
+    p.add_argument("dir")
+    p.add_argument("--label", default="eu-volume")
+    p.add_argument("--sizes-only", action="store_true")
+    p.add_argument("--workers", type=int, default=24)
     p = sub.add_parser("put-temp", help="stage a file under tmp/ of a NON-weights bucket and print a presigned GET URL")
     p.add_argument("file")
     p.add_argument("--key", required=True)
@@ -1162,6 +1235,8 @@ def main(argv=None):
             return 0
         if args.cmd == "archive":
             return cmd_archive(s3, args)
+        if args.cmd == "compare-archive":
+            return cmd_compare_archive(s3, args)
         if args.cmd == "status":
             return cmd_status(s3, args) or 0
         if args.cmd == "list":

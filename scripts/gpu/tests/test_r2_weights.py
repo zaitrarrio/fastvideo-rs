@@ -2,9 +2,11 @@
 
 python3 -m unittest discover -s scripts/gpu/tests -p 'test_r2*.py' -v
 """
+import contextlib
 import datetime
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -420,6 +422,29 @@ class Archive(Base):
         self.assertEqual(W.cmd_archive(self.s3, a), 0)
         self.assertEqual(len(self.st.objects), n)
         self.assertFalse(any(k.startswith("test/manifests/") for _, k in self.st.objects))
+
+    def test_compare_archive_against_the_directory(self):
+        src = self.make_tree({"a.txt": b"a", "empty": b"", ".hidden/b.log": b"bb", "c/d.bin": rnd(150_000, 4)})
+        a = type("A", (), dict(prefix="test/", files=2, window=2, dry_run=False, name="libs", dir=str(src), label="eu-volume"))()
+        self.assertEqual(W.cmd_archive(self.s3, a), 0)
+        c = type("C", (), dict(prefix="test/", name="libs", dir=str(src), label="eu-volume", sizes_only=False, workers=4))()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(W.cmd_compare_archive(self.s3, c), 0)
+        self.assertIn("4/4 files equal", out.getvalue())
+        # same size, one byte changed on disk: the part hash catches it
+        p = Path(src) / "c/d.bin"
+        b = bytearray(p.read_bytes())
+        b[100] ^= 1
+        p.write_bytes(bytes(b))
+        with contextlib.redirect_stdout(io.StringIO()) as o:
+            self.assertEqual(W.cmd_compare_archive(self.s3, c), 1)
+        self.assertIn("DIFF c/d.bin: part 0 differs", o.getvalue())
+        p.write_bytes(rnd(150_000, 4))
+        (Path(src) / "new.txt").write_bytes(b"n")
+        with contextlib.redirect_stdout(io.StringIO()) as o:
+            self.assertEqual(W.cmd_compare_archive(self.s3, c), 1)
+        self.assertIn("new.txt: on disk, not in the archive", o.getvalue())
 
 
 if __name__ == "__main__":
