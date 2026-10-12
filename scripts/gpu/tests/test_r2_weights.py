@@ -151,6 +151,20 @@ class Publish(Base):
         self.assertEqual(pub2.skipped, 1)
         self.assertEqual(len(m["files"]), len(TREE))
 
+    def test_an_object_without_its_record_is_adopted_only_when_its_bytes_match(self):
+        src = self.make_tree(TREE)
+        big = "transformer/diffusion_pytorch_model.safetensors"
+        self.st.objects[("fv-weights-test", f"test/weights/demo/r1/{big}")] = (TREE[big], {})  # a run stopped before the record
+        m = self.publish("demo", "r1", src)
+        self.assertEqual(next(f for f in m["files"] if f["path"] == big)["sha256"], hashlib.sha256(TREE[big]).hexdigest())
+        self.assertIn(("fv-weights-test", f"test/parts/demo/r1/{big}.json"), self.st.objects)
+        bad = bytearray(TREE["config.json"])
+        bad[0] ^= 1
+        self.st.objects[("fv-weights-test", "test/weights/demo/r2/config.json")] = (bytes(bad), {})
+        with self.assertRaises(W.Fail):
+            self.publish("demo", "r2", src)
+        self.assertEqual(self.st.objects[("fv-weights-test", "test/weights/demo/r2/config.json")][0], bytes(bad))
+
     def test_existing_object_with_other_size_is_never_replaced(self):
         src = self.make_tree(TREE)
         self.st.objects[("fv-weights-test", "test/weights/demo/r1/config.json")] = (b"other bytes!", {})

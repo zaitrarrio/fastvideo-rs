@@ -610,6 +610,27 @@ class Publisher:
             if got and got not in hexes:
                 raise Fail(f"{src.path}: {algo} {got} not in weights-sha256.tsv ({', '.join(h[:16] + '…' for h in hexes)})")
 
+    def adopt(self, key, pkey, src):
+        whole_r2, whole_src, parts = hashlib.sha256(), hashlib.sha256(), []
+        for i in range(max(1, -(-src.size // self.part_size)) if src.size else 0):
+            off = i * self.part_size
+            n = min(self.part_size, src.size - off)
+            a = self.s3.get(key, f"bytes={off}-{off + n - 1}") if n else b""
+            b = src.read(off, n)
+            if a is None or len(a) != n or len(b) != n:
+                raise Fail(f"{key}: short read while checking an object without its record")
+            whole_r2.update(a)
+            whole_src.update(b)
+            parts.append(hashlib.sha256(a).hexdigest())
+        sha = whole_r2.hexdigest()
+        if sha != whole_src.hexdigest():
+            raise Fail(f"{key} exists without its parts record and its bytes differ from {src.path}: add-only, not replacing it")
+        self.expected_ok(src, sha, None, {})
+        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": parts, "checked": self.checks(src), "adopted": True}
+        self.s3.put_new(pkey, json.dumps(rec).encode(), content_type="application/json")
+        log(f"  {src.path}: object without a record: same bytes as the source, record written")
+        return rec
+
     def publish_file(self, dest, rev, src, key=None, pkey=None):
         key = key or obj_key(self.prefix, dest, rev, src.path)
         pkey = pkey or parts_key(self.prefix, dest, rev, src.path)
@@ -619,8 +640,11 @@ class Publisher:
             if have[0] != src.size:
                 raise Fail(f"{key} exists with {have[0]} bytes, the source has {src.size}: add-only, not replacing it")
             if rec is None:
-                raise Fail(f"{key} exists without its parts record {pkey}: an earlier run stopped between the two; check it by hand (verify --deep) before going on")
-            rec = json.loads(rec)
+                # An earlier run stopped between the object and its record: the object is kept only if its bytes are
+                # the source's (both read and hashed here), then the record is written; otherwise the run stops.
+                rec = self.adopt(key, pkey, src)
+            else:
+                rec = json.loads(rec)
             self.expected_ok(src, rec["sha256"], None, {})
             self.checked[src.path] = rec.get("checked", self.checks(src))
             self.skipped += 1
