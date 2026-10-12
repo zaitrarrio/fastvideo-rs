@@ -8,6 +8,7 @@ import { CUDA_VERSIONS } from "../enums";
 import { imageIdentEnv, SECRET_ENV_REFS } from "../cluster/payloads";
 import type { EndpointSpec } from "./spec";
 import { SLS_R2_SH } from "./weights";
+import { DRIVER_CHECK_SH } from "../driver-check";
 
 /** Every Runpod endpoint and template fv-control creates is named fvc-<name>…; nothing else is ever touched. */
 export const SLS_PREFIX = "fvc-";
@@ -15,11 +16,12 @@ export const endpointName = (spec: Pick<EndpointSpec, "name">) => `${SLS_PREFIX}
 /** Template names are unique per account: one per create (and per recreate). */
 export const templateName = (spec: Pick<EndpointSpec, "name">, at: number) => `${SLS_PREFIX}${spec.name}-${new Date(at).toISOString().replace(/[-:T]/g, "").slice(2, 14)}`;
 
-/** The worker's start when the spec names a config: the weights link (a serverless worker mounts the
+/** The worker's start when the spec names a config (or weights_source r2): the host's driver (driver-check.ts), the weights link (a serverless worker mounts the
  * volume at /runpod-volume; its HF-cache trees link into /workspace/weights) and an inline config, then
  * fv-serve. Without a config the image's own entrypoint (fv-entry) and baked FV_CONFIG run. */
 export const SLS_BOOT = `set -eu
-if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi
+FV_DRV_POD="\${RUNPOD_POD_ID:-}"
+${DRIVER_CHECK_SH}if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi
 mkdir -p /fvstate
 cfg="\${FV_CONFIG:-}"
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml; cfg=/fv-worker.toml; fi

@@ -20,9 +20,9 @@ export async function slsTokenRow(env: Env, token: string, at = now()): Promise<
 }
 
 const BOOT_RE = /^([A-Za-z0-9_.-]{1,64})@(\d{9,11})$/;
-const PHASES = new Set(["boot", "cache", "weights", "serve", "failed"]);
+const PHASES = new Set(["boot", "cache", "weights", "step", "serve", "failed"]);
 
-/** POST /ingest/v1/sls-report: {pod: "<worker>@<container start>", phase: boot | cache | weights | serve | failed, detail}. */
+/** POST /ingest/v1/sls-report: {pod: "<worker>@<container start>", phase: boot | cache | weights | step | serve | failed, detail}. */
 export async function slsReport(env: Env, req: Request): Promise<{ ok: true }> {
   const auth = req.headers.get("authorization") || "";
   if (!auth.toLowerCase().startsWith("bearer ")) throw new HttpError(401, "weights token required");
@@ -41,13 +41,13 @@ export async function slsReport(env: Env, req: Request): Promise<{ ok: true }> {
   const prev = (await env.DB.prepare("SELECT * FROM serverless_boots WHERE endpoint = ? AND boot = ?").bind(row.id, b.pod).first<BootRow>()) ?? { worker_id: m[1]!, boot: b.pod as string, boot_at: t };
   const next = applyReport(prev, phase, detail, t) as BootRow;
   await env.DB.prepare(
-    `INSERT INTO serverless_boots (endpoint, worker_id, boot, boot_at, cache, missing, fetch_start, fetch_end, fetch_bytes, fetch_s, fetch_mbps, serve_at, error, last_detail, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO serverless_boots (endpoint, worker_id, boot, boot_at, cache, missing, fetch_start, fetch_end, fetch_bytes, fetch_s, fetch_mbps, serve_at, error, last_detail, steps, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (endpoint, boot) DO UPDATE SET cache = excluded.cache, missing = excluded.missing, fetch_start = excluded.fetch_start, fetch_end = excluded.fetch_end,
        fetch_bytes = excluded.fetch_bytes, fetch_s = excluded.fetch_s, fetch_mbps = excluded.fetch_mbps, serve_at = excluded.serve_at, error = excluded.error,
-       last_detail = excluded.last_detail, updated_at = excluded.updated_at`,
+       last_detail = excluded.last_detail, steps = excluded.steps, updated_at = excluded.updated_at`,
   )
-    .bind(row.id, m[1], b.pod, next.boot_at, next.cache ?? null, next.missing ?? null, next.fetch_start ?? null, next.fetch_end ?? null, next.fetch_bytes ?? null, next.fetch_s ?? null, next.fetch_mbps ?? null, next.serve_at ?? null, next.error ?? null, next.last_detail ?? null, t)
+    .bind(row.id, m[1], b.pod, next.boot_at, next.cache ?? null, next.missing ?? null, next.fetch_start ?? null, next.fetch_end ?? null, next.fetch_bytes ?? null, next.fetch_s ?? null, next.fetch_mbps ?? null, next.serve_at ?? null, next.error ?? null, next.last_detail ?? null, next.steps ?? null, t)
     .run();
   // The log store (source serverless:<id>, pod = the worker): the boot's phases next to Runpod's container log.
   await env.DB.prepare("INSERT INTO log_lines (cluster_id, pod_id, ts, level, target, msg, fields) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -58,7 +58,7 @@ export async function slsReport(env: Env, req: Request): Promise<{ ok: true }> {
 
 /** The endpoint's latest boots (newest first). */
 export async function recentBoots(env: Env, rowId: string, limit = 10): Promise<BootRow[]> {
-  const r = await env.DB.prepare("SELECT worker_id, boot, boot_at, cache, missing, fetch_start, fetch_end, fetch_bytes, fetch_s, fetch_mbps, serve_at, error, last_detail, updated_at FROM serverless_boots WHERE endpoint = ? ORDER BY boot_at DESC LIMIT ?")
+  const r = await env.DB.prepare("SELECT worker_id, boot, boot_at, cache, missing, fetch_start, fetch_end, fetch_bytes, fetch_s, fetch_mbps, serve_at, error, last_detail, steps, updated_at FROM serverless_boots WHERE endpoint = ? ORDER BY boot_at DESC LIMIT ?")
     .bind(rowId, limit)
     .all<BootRow>()
     .catch(() => ({ results: [] as BootRow[] }));

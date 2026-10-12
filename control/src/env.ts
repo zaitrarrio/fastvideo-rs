@@ -110,6 +110,14 @@ export interface Env {
   /** Keep-on-stop (brev-park.ts): seconds a restarted parked instance may take to run again before it is held
    * for the owner and a fresh one is made (default 900). */
   BREV_RESTART_TIMEOUT_S?: string;
+  /** A warm restart: how long to wait for a workspace still STOPPING before its start (default 60). */
+  BREV_STOPPING_WAIT_S?: string;
+  /** "0": a weights_source r2 boot takes the aux files (TAE, LPIPS) from their pinned URLs instead of R2's auxiliary/* trees. */
+  WEIGHTS_R2_AUX?: string;
+  /** A started workspace still STOPPED this long gets the start once more (default 180; 0 never). */
+  BREV_RESTART_RETRY_S?: string;
+  /** A started workspace still STOPPED this long raises brev_restart_stuck (default 300). */
+  BREV_RESTART_ALERT_S?: string;
   /** Keep-on-stop: seconds after a Brev instance was held (failed boot / restart) before a launch may reuse it
    * (default 900; Unpark reuses it at once). */
   BREV_HELD_REUSE_AFTER_S?: string;

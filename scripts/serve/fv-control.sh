@@ -29,7 +29,7 @@
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
 #   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
-#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1]
+#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1|<DC> (r2)]
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
 #                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]
@@ -193,7 +193,8 @@ cmd_pod() {
           --image) body="$(jq -c --arg v "${2:?}" '.image = $v' <<<"$body")"; shift 2 ;;
           --gpu) body="$(jq -c --arg v "${2:?}" '.gpu_types = ((.gpu_types // []) + [$v])' <<<"$body")"; shift 2 ;;
           --cpu) if [[ -n "${2:-}" && "${2:-}" != --* ]]; then body="$(jq -c --arg v "$2" '.compute = "CPU" | .cpu_flavors = [$v]' <<<"$body")"; shift 2; else body="$(jq -c '.compute = "CPU"' <<<"$body")"; shift; fi ;;
-          --region) body="$(jq -c --arg v "${2:?}" '.region = $v' <<<"$body")"; shift 2 ;;
+          # A region id (eu), or a Runpod data centre (EUR-IS-1; with --weights r2 any one, e.g. US-TX-3).
+          --region) body="$(jq -c --arg v "${2:?}" 'if ($v | test("^[A-Z]{2,3}-[A-Z]{2}-[0-9]+$")) then .dc = $v else .region = $v end' <<<"$body")"; shift 2 ;;
           --no-volume) body="$(jq -c '.volume = false' <<<"$body")"; shift ;;
           --env | --secret-env)
             kv="${2:?$1 K=V}"; k="${kv%%=*}"; v="${kv#*=}"
@@ -289,7 +290,13 @@ cmd_endpoint() {
       if [[ "$(jq -r '.done' <<<"$out")" == false ]]; then
         jid="$(jq -r .job <<<"$out")"
         echo "job $(jq -r .runpod_job <<<"$out") $(jq -r .status <<<"$out"): polling" >&2
-        until [[ "$(jq -r '.job.finished_at // "null"' <<<"$out")" != null ]]; do sleep 3; out="$(api GET "/api/serverless/$id/jobs/$jid")"; done
+        # The invoke's answer carries the job's number in .job; GET /jobs/<n> carries the job object there. Poll until
+        # that object has finished_at (a number in .job never counts as done: the first answer is not the job).
+        [[ "$jid" =~ ^[0-9]+$ ]] || die "invoke: no job number in the answer: $(head -c 300 <<<"$out")"
+        until [[ "$(jq -r '(.job | objects | .finished_at) // "null"' <<<"$out" 2>/dev/null || echo null)" != null ]]; do
+          sleep "${FV_POLL_S:-3}"
+          out="$(api GET "/api/serverless/$id/jobs/$jid")" || die "invoke: polling job $jid failed"
+        done
       fi
       jq . <<<"$out" ;;
     logs) api GET "/api/serverless/${1:?name|id}/logs${2:+?worker=$2}" | jq -r '"workers: \(.workers | join(" ")); worker \(.worker // "-")", (.system[]? // empty), (.container[]? // empty), (.stored[]? | "\(.ts / 1000 | todate) \(.msg)")' ;;

@@ -33,7 +33,7 @@ custom endpoint the variant's (`?variant=`). §1a says what a preset is and what
 | `variant`, `compute` | the preset's; custom: `cpu` → `CPU` | `cpu` (fake engine) runs on CPU workers; the CUDA variants on GPU |
 | `config` / `config_toml` | the preset's; custom: the variant's baked config | a config file the image carries (`FV_CONFIG`) or inline (`FV_WORKER_TOML_B64`), in both modes |
 | `env` | | plain extra env; keys fv-control sets (serve mode, image identity, the `{{ RUNPOD_SECRET_fv_* }}` references, …) are refused |
-| `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1, `["13.0"]` | GPU types in priority order |
+| `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1; `allowed_cuda` `[]` on `volume`, `["13.0"]` on `r2` | GPU types in priority order; `allowed_cuda` is Runpod's host filter (§1b: an `r2` endpoint runs in any DC, and a host older than CUDA 13 crashes the image). `[]` lifts it |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
 | `weights_source` | GPU: `volume` (`DEFAULT_SLS_WEIGHTS_SOURCE`, spec.ts); CPU: none | `volume`: the EU weights volume at `/runpod-volume`; `r2`: the R2 weights store, fetched onto the container disk at boot, no volume, any data centre (§1b) |
 | `network_volume`, `data_centers` | GPU on `volume`: `jg48s6o1w0` in `EUR-IS-1`; on `r2`: none, any DC; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center. With `r2`, `network_volume` is null or an R2 cache volume the owner listed (§1b, off by default) |
@@ -65,21 +65,47 @@ store (docs/ops/r2-weights.md). A GPU endpoint takes `weights_source`:
   - the store is configured (`WEIGHTS_R2_*`, `PUBLIC_URL`);
   - the container disk holds the trees (bytes × 1.15 + 30 GB; the default is sized from the manifests).
 
-  Passing `weights_source: r2` to a preset brings that placement with it (`GET /api/serverless/defaults?preset=…&weights_source=r2`).
+  Passing `weights_source: r2` to a preset brings that placement with it (`GET /api/serverless/defaults?preset=…&weights_source=r2`),
+  including **`allowed_cuda: ["13.0"]`** (`DEFAULT_R2_CUDA`). On 2026-10-12 an `r2` worker outside EUR-IS-1 landed
+  on a host whose `libcuda` lacked `cuCtxGetDevice_v2`, and fv-serve panicked and crash-looped
+  (docs/ops/r2-bench-2026-10-12.md finding 2). Runpod's REST enum stops at `"13.0"`, the image's minimum
+  (CUDA 13.4 runtime, driver ≥ 580). Caveat: a `"13.0"`-only filter hid the EUR-IS-1 driver-595 hosts on
+  2026-10-07, so it can leave the newest hosts out. `allowed_cuda: []` lifts it, and the boot's driver check
+  (below) still refuses an old host before it fetches anything.
 
 **The worker's boot** (`SLS_R2_SH` in `src/serverless/weights.ts`, put before fv-serve by `payloads.ts`; the
 template's start is `bash -c`):
 
-1. Reports `boot` to `POST /ingest/v1/sls-report`.
+0. **Driver check** (`DRIVER_CHECK_SH`, `src/driver-check.ts`; every serverless boot with a config and every pod
+   boot run it first): the driver version from `nvidia-smi` must be ≥ 580, and the `libcuda.so.1` the loader opens
+   must have `cuCtxGetDevice_v2`. Otherwise the boot prints `driver_too_old: …`, reports it (`failed`, so the boot
+   row and the outlook name the host), sleeps 20 s and exits: no fetch and no fv-serve panic. A pod's boot
+   diagnosis treats the line (or cudarc's `undefined symbol: cu…`) as fatal and places a new pod.
+   `FV_SKIP_DRIVER_CHECK=1` skips it.
+1. Reports `boot` to `POST /ingest/v1/sls-report`. Every later step is logged with the time of day and the seconds
+   since the container started (`[fv-boot] 05:01:02 +13.4s step fetcher: 0.2s (from the image)`) and reported
+   as a `step` (`tools`, `fetcher`, `fetch`, `aux`). The boot row keeps them (`steps`, migration 0011) and the
+   outlook's `last_boot.breakdown` shows `<step>_s`, so a slow boot says where its time went
+   (docs/ops/r2-bench-2026-10-12.md findings 3 and 4).
 2. **Cache check.** For every tree in `FV_R2_TREE_REVS` (`dest@rev …`) it looks for `$FV_WEIGHTS/<dest>/.complete`
    and `.fv-revision` = the pinned revision. If all are there it is a **cache hit**: no plan request, no fetch, and
    fv-control does not even have to be reachable.
-3. On a **miss**, it downloads the fetcher (`/ingest/v1/r2-fetch.py`, checked against `FV_R2_FETCH_SHA256`).
-   `r2-fetch.py` then asks `POST /ingest/v1/weights-plan` with the endpoint's weights token. The fetcher is the
-   same one pods use: 32 parallel 64 MiB ranged GETs on presigned URLs, SHA-256 per part and per file, and
-   resume. It keeps complete trees and resumes partial files.
-4. The aux files (TAE, LPIPS) come by pinned URL and SHA-256. Then it reports `serve` and starts fv-serve with the
-   config, as before.
+3. On a **miss**:
+   - `python3` and `curl`: the serve images carry both (`serve-cuda-bin` stage); an older image gets them with
+     `apt-get` (timeouts 15 s, 3 retries). That apt step is the likely cause of the unexplained ~70 s of finding 3.
+   - The fetcher: the image's `/opt/fastvideo-rs/bin/r2-fetch.py` when its SHA-256 is the one fv-control pins
+     (`FV_R2_FETCH_SHA256`), else `/ingest/v1/r2-fetch.py` with `--connect-timeout 5 --max-time 30 --retry 4
+     --retry-all-errors` (it used `--max-time 60` and stalled 60 s once).
+   - `r2-fetch.py` asks `POST /ingest/v1/weights-plan` with the endpoint's weights token. The fetcher is the same
+     one pods use: 64 parallel ranged GETs of 128 MiB (two manifest parts each, each part checked on its own),
+     a straggler watchdog, and resume (docs/ops/r2-weights.md §4 and §5.4). It keeps complete trees and resumes
+     partial files.
+   - Below sm_100 (H100, H200: `nvidia-smi --query-gpu=compute_cap`) it skips the `*_mxfp8` pre-quantized DiTs,
+     which the engine cannot use there (`FV_R2_SKIP_TREES`).
+4. The aux files (TAE, LPIPS) come **from R2 with the trees** (`auxiliary/tae`, `auxiliary/lpips`; `slsFetchTrees`)
+   and are then checked by SHA-256 against their rows. A missing or different one still comes from its pinned
+   URL (an add-only cache volume does that, and `WEIGHTS_R2_AUX=0` turns the R2 path off). Then it reports
+   `serve` and starts fv-serve with the config, as before.
 
 The trees land in `/workspace/weights` (`FV_WEIGHTS`) on the container disk. A failure exits after 30 s, and
 Runpod restarts the container; the fetch resumes.
@@ -113,8 +139,8 @@ the worker's id, next to Runpod's container log; the tick's log capture keeps th
 - `outlook`: the estimate:
   - **start** ~60 s with the image on the host (measured +49 to +62 s; up to 458 s on a host without the image,
     about 10 % of cold starts, docs/serve/gateway.md §8.6);
-  - **+ fetch** = the manifests' GB at `R2_DOWNLOAD_GBPS` (1.0, **UNVERIFIED**), or at the last measured MB/s once
-    a boot fetched more than 5 GB;
+  - **+ fetch** = the manifests' GB at `R2_DOWNLOAD_GBPS` (0.5, the round-1 median before the straggler fix;
+    docs/ops/r2-weights.md §5.4), or at the last measured MB/s once a boot fetched more than 5 GB;
   - **+ load** (volume measurements: wan 70, h3 52, ltx 33 s; from a local disk **UNVERIFIED**);
   - the cache state of the last boot.
 

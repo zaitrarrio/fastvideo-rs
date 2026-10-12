@@ -14,12 +14,19 @@ What it does, per tree of the plan (`weights/<dest>/<rev>/` in R2):
   Anything else at that path is moved aside and removed: it is this pod's own
   disk, never a shared volume.
 - Files go into `<root>/.r2-partial/<dest>@<rev>/`, preallocated at their full
-  size. The work is cut into the manifest's parts (64 MiB by default), and
-  `--concurrency` ranged GETs run at once across files, each streamed to its
-  offset with pwrite (no temp files, no concatenation). Every part is checked
-  against the manifest's per-part SHA-256 as it arrives; a bad or short part
-  is fetched again. When a file is whole, a hasher thread re-reads it and
-  checks the whole-file SHA-256 (overlapping with the rest of the download).
+  size. The work is cut into the manifest's parts (64 MiB), `--get-parts` of
+  them per ranged GET (default 2), and `--concurrency` GETs (default 64) run at
+  once across files, each streamed to its offset with pwrite (no temp files,
+  no concatenation). Every part is checked against the manifest's per-part
+  SHA-256 as its last byte arrives; a bad or short part is fetched again from
+  that part on.
+- Stragglers: R2 now and then serves one GET at 1-3 MB/s for minutes. A
+  watchdog cuts a GET that falls far behind the recent parts' pace
+  (--slow-after-s) and fetches it again on a new connection
+  (docs/ops/r2-weights.md §5.4: 0.16-0.42 GB/s without it, 1.2-1.6 with it).
+- --full-hash (off by default: the per-part hashes already cover every byte)
+  also checks each file's whole SHA-256, in order as its parts come in.
+- --skip-trees leaves trees of the plan out (the MXFP8 DiTs below sm_100).
 - Retries: exponential backoff with jitter, `--retries` per part. A 403 (an
   expired URL) refreshes the plan from --plan-url once per 30 s.
 - Resume: a partial file left by an earlier run (same size) has each of its
@@ -41,12 +48,14 @@ What it does, per tree of the plan (`weights/<dest>/<rev>/` in R2):
 Exit 0 when every tree is in place; 1 with the reason otherwise.
 """
 import argparse
+import fnmatch
 import hashlib
 import http.client
 import json
 import os
 import random
 import shutil
+import socket
 import ssl
 import sys
 import threading
@@ -58,6 +67,8 @@ import urllib.request
 PLAN_FORMAT = "fv-weights-plan/1"
 CHUNK = 4 << 20  # bytes per read from a response (memory per worker)
 USER_AGENT = "fv-r2-fetch/1"
+DEFAULT_CONCURRENCY = 64
+DEFAULT_GET_PARTS = 2
 
 
 def log(msg):
@@ -67,6 +78,10 @@ def log(msg):
 
 class FetchError(Exception):
     pass
+
+
+class SlowPart(FetchError):
+    """The watchdog cut a GET that fell far behind the others (a straggler): fetched again at once, not a fault."""
 
 
 class HttpStatus(FetchError):
@@ -150,6 +165,7 @@ class Conns:
         h.update(headers or {})
         for attempt in (0, 1):
             c = self.get(u.scheme, u.netloc)
+            self.local.last = c
             try:
                 c.request(method, path, body=body, headers=h)
                 return c.getresponse()
@@ -230,14 +246,19 @@ class FileJob:
         self.left = 0
         self.lock = threading.Lock()
         self.failed_whole = 0
+        # the whole-file SHA-256, computed in order as the parts arrive (parts done, the next part to hash)
+        self.done = set()
+        self.hnext = 0
+        self.h = hashlib.sha256()
+        self.hlock = threading.Lock()
         part = tree.part_size
         n = max(1, -(-self.size // part)) if self.size else 0
         if self.size and len(self.parts) != n:
             raise FetchError(f"{tree.dest}/{self.path}: {len(self.parts)} part hashes for {n} parts")
 
-    def ranges(self):
+    def span(self, i):
         p = self.tree.part_size
-        return [(i, i * p, min(self.size, (i + 1) * p)) for i in range(len(self.parts))]
+        return i * p, min(self.size, (i + 1) * p)
 
 
 class Tree:
@@ -274,7 +295,10 @@ class Fetcher:
         self.conns = Conns(timeout=args.timeout)
         self.add_only = bool(getattr(args, "add_only", False))
         suffix = "." + "".join(c if c.isalnum() or c in "-_" else "_" for c in (args.pod or str(os.getpid())))[:80] if self.add_only else ""
-        self.trees = [Tree(t, self.root, suffix) for t in plan["trees"]]
+        # --skip-trees: optional trees this host cannot use (the boot drops the MXFP8 pre-quantized DiTs below sm_100)
+        pats = [x for x in (getattr(args, "skip_trees", "") or "").replace(",", " ").split() if x]
+        self.skipped = [t["dest"] for t in plan["trees"] if any(fnmatch.fnmatchcase(t["dest"], x) for x in pats)]
+        self.trees = [Tree(t, self.root, suffix) for t in plan["trees"] if t["dest"] not in self.skipped]
         self.q = []
         self.qlock = threading.Lock()
         self.qcond = threading.Condition(self.qlock)
@@ -284,7 +308,11 @@ class Fetcher:
         self.bytes_total = 0
         self.block = threading.Lock()
         self.error = None
-        self.stats = {"retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0}
+        self.stats = {"retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 0}
+        # the straggler watchdog: the GETs in flight (per thread) and the recent parts' rates (bytes/s)
+        self.inflight = {}
+        self.part_rates = []
+        self.slow_count = {}
         self.refresh_lock = threading.Lock()
         self.last_refresh = 0.0
         self.t0 = time.time()
@@ -318,6 +346,7 @@ class Fetcher:
         if todo and free - need < floor:
             raise FetchError(f"disk: {free / 1e9:.1f} GB free, the trees need {need / 1e9:.1f} GB more, and {self.args.min_free_gb} GB must stay free")
         jobs = []
+        gp = max(1, self.args.get_parts)
         for t in todo:
             for f in t.files:
                 fresh = not (os.path.isfile(f.local) and os.path.getsize(f.local) == f.size)
@@ -331,18 +360,23 @@ class Fetcher:
                             pass  # tmpfs / some filesystems: the sparse file still works
                 f.resume = not fresh
                 f.left = len(f.parts)
+                f.done, f.hnext, f.h = set(), 0, hashlib.sha256()
                 self.bytes_total += f.size
                 if not f.size:
                     self.queue_hash(f)
                     continue
-                for i, a, b in f.ranges():
-                    jobs.append((t, f, i, a, b))
+                # one GET spans --get-parts consecutive manifest parts (each still checked on its own)
+                for i in range(0, len(f.parts), gp):
+                    jobs.append((t, f, i, min(len(f.parts), i + gp)))
         rank = {id(t): n for n, t in enumerate(todo)}
         jobs.sort(key=lambda j: (rank[id(j[0])], file_rank(j[1].path), j[1].size, j[1].path, j[2]))
         self.q = jobs
         self.q.reverse()  # pop() from the end
         self.todo = todo
-        log(f"{len(todo)} tree(s) to fetch, {self.bytes_total / 1e9:.2f} GB in {len(jobs)} parts; {len(self.trees) - len(todo)} present")
+        part = (self.trees[0].part_size if self.trees else 0) >> 20
+        log(f"{len(todo)} tree(s) to fetch, {self.bytes_total / 1e9:.2f} GB in {len(jobs)} GETs of up to {gp} x {part} MiB, "
+            f"concurrency {self.args.concurrency}, {os.cpu_count()} CPUs; {len(self.trees) - len(todo)} present"
+            + (f"; skipped {', '.join(self.skipped)}" if self.skipped else ""))
 
     def clear_stale(self, t):
         if self.add_only:
@@ -373,11 +407,11 @@ class Fetcher:
             job = self.next_job()
             if job is None:
                 return
-            t, f, i, a, b = job
+            t, f, i0, i1 = job
             try:
-                self.do_part(t, f, i, a, b, buf)
+                self.do_span(t, f, i0, i1, buf)
             except Exception as e:  # noqa: BLE001 (any failure ends the run with its reason)
-                self.fail(f"{t.dest}/{f.path} part {i}: {e}")
+                self.fail(f"{t.dest}/{f.path} part {i0}: {e}")
                 return
 
     def fail(self, msg):
@@ -399,20 +433,42 @@ class Fetcher:
             off += len(data)
         return h.hexdigest() == f.parts[i]
 
-    def do_part(self, t, f, i, a, b, buf):
-        if f.resume and self.part_on_disk_ok(f, i, a, b):
-            self.bump("resumed_parts")
-            self.add_bytes(b - a)
-            self.part_done(f)
-            return
+    def do_span(self, t, f, i0, i1, buf):
+        """Parts i0..i1-1 of f: those already good on disk (resume) are kept; each run of the others is one GET."""
+        todo = list(range(i0, i1))
+        if f.resume:
+            keep = []
+            for i in todo:
+                a, b = f.span(i)
+                if self.part_on_disk_ok(f, i, a, b):
+                    self.bump("resumed_parts")
+                    self.add_bytes(b - a)
+                    self.part_done(f, i)
+                else:
+                    keep.append(i)
+            todo = keep
+        while todo:
+            n = 1
+            while n < len(todo) and todo[n] == todo[0] + n:
+                n += 1
+            self.fetch_run(t, f, todo[0], todo[0] + n, buf)
+            todo = todo[n:]
+
+    def fetch_run(self, t, f, i0, i1, buf):
+        """Consecutive parts i0..i1-1 in as few GETs as faults allow: a retry resumes at the first unchecked part."""
+        nxt = [i0]
         tries = 0
-        while True:
+        while nxt[0] < i1:
             if self.error:
                 return
+            before = nxt[0]
             try:
-                self.get_range(f, i, a, b, buf)
-                self.part_done(f)
+                self.get_range(f, nxt, i1, buf)
                 return
+            except SlowPart as e:
+                self.bump("slow_restarts")
+                log(f"{t.dest}/{f.path} part {nxt[0]}: {e}: fetched again on a new connection")
+                continue
             except HttpStatus as e:
                 if e.status == 403:
                     self.refresh()
@@ -421,20 +477,31 @@ class Fetcher:
                 err = e
             except (OSError, http.client.HTTPException, FetchError) as e:
                 err = e
+            if nxt[0] > before:
+                tries = 0  # parts were checked before the fault: the retry budget is per part
             tries += 1
             self.bump("retries")
             if tries > self.args.retries:
                 raise FetchError(f"gave up after {tries} tries: {err}")
             delay = min(30.0, 0.5 * 2 ** (tries - 1)) * (0.5 + random.random())
-            log(f"{t.dest}/{f.path} part {i}: {err}; retry {tries}/{self.args.retries} in {delay:.1f}s")
+            log(f"{t.dest}/{f.path} part {nxt[0]}: {err}; retry {tries}/{self.args.retries} in {delay:.1f}s")
             time.sleep(delay)
 
-    def get_range(self, f, i, a, b, buf):
+    def get_range(self, f, nxt, i1, buf):
+        """One ranged GET of parts nxt[0]..i1-1 streamed to disk with pwrite. Each part's SHA-256 is checked as its
+        last byte arrives, then the part counts as done (nxt[0] advances): a fault loses only the part in flight."""
+        a = f.span(nxt[0])[0]
+        b = f.span(i1 - 1)[1]
         url = f.url
         u = urllib.parse.urlsplit(url)
-        r = self.conns.request("GET", url, {"Range": f"bytes={a}-{b - 1}"})
-        got = 0
+        # the watchdog's view of this GET: the part in flight from the request on (a slow first byte counts too)
+        rec = {"t0": time.time(), "n": 0, "size": f.span(nxt[0])[1] - a, "abort": False, "conn": self.conns.get(u.scheme, u.netloc), "key": nxt[0], "f": f}
+        me = threading.get_ident()
+        self.inflight[me] = rec
+        got = 0  # bytes of the part in flight (not checked yet)
         try:
+            r = self.conns.request("GET", url, {"Range": f"bytes={a}-{b - 1}"})
+            rec["conn"] = getattr(self.conns.local, "last", None) or rec["conn"]
             if r.status not in (200, 206):
                 body = r.read(300).decode("utf-8", "replace")
                 raise HttpStatus(r.status, f"HTTP {r.status}: {body.strip()[:200]}")
@@ -444,29 +511,44 @@ class Fetcher:
                 cr = r.getheader("Content-Range") or ""
                 if not cr.startswith(f"bytes {a}-{b - 1}/"):
                     raise FetchError(f"Content-Range {cr!r}, wanted bytes {a}-{b - 1}")
-            h = hashlib.sha256()
             mv = memoryview(buf)
             off = a
-            while off < b:
-                n = r.readinto(mv[: min(CHUNK, b - off)])
-                if not n:
-                    break
-                h.update(mv[:n])
-                w = 0
-                while w < n:
-                    w += os.pwrite(f.fd, mv[w:n], off + w)
-                off += n
-                got += n
-                self.add_bytes(n)
-            if off != b:
-                raise FetchError(f"short read: {off - a} of {b - a} bytes")
-            if h.hexdigest() != f.parts[i]:
-                self.bump("corrupt_parts")
-                raise FetchError(f"part sha256 {h.hexdigest()[:16]}… != manifest {f.parts[i][:16]}…")
-        except Exception:
+            while nxt[0] < i1:
+                i = nxt[0]
+                pb = f.span(i)[1]
+                h = hashlib.sha256()
+                if i != rec["key"]:  # the next part of a multi-part GET (the first one's clock includes the request)
+                    rec.update(t0=time.time(), n=0, size=pb - off, key=i)
+                while off < pb:
+                    if rec["abort"]:
+                        raise SlowPart(rec["abort"])
+                    n = r.readinto(mv[: min(len(mv), pb - off)])
+                    if not n:
+                        raise FetchError(f"short read: {off - a} of {b - a} bytes")
+                    h.update(mv[:n])
+                    w = 0
+                    while w < n:
+                        w += os.pwrite(f.fd, mv[w:n], off + w)
+                    off += n
+                    got += n
+                    rec["n"] += n
+                    self.add_bytes(n)
+                if h.hexdigest() != f.parts[i]:
+                    self.bump("corrupt_parts")
+                    raise FetchError(f"part {i} sha256 {h.hexdigest()[:16]}… != manifest {f.parts[i][:16]}…")
+                got = 0
+                nxt[0] = i + 1
+                with self.block:
+                    self.part_rates = (self.part_rates + [rec["size"] / max(1e-3, time.time() - rec["t0"])])[-64:]
+                self.part_done(f, i)
+        except Exception as e:
             self.add_bytes(-got)
             self.conns.drop(u.scheme, u.netloc)
+            if rec["abort"] and not isinstance(e, SlowPart):
+                raise SlowPart(rec["abort"]) from e  # the watchdog cut the socket under a blocked read
             raise
+        finally:
+            self.inflight.pop(me, None)
 
     def bump(self, k):
         with self.block:
@@ -476,11 +558,14 @@ class Fetcher:
         with self.block:
             self.bytes_done += n
 
-    def part_done(self, f):
+    def part_done(self, f, i):
         with f.lock:
             f.left -= 1
+            f.done.add(i)
             last = f.left == 0
-        if last:
+            # the in-order whole-file hash can move on when the part it waits for is in
+            nxt = i == f.hnext
+        if last or (nxt and not self.args.no_full_hash):
             self.queue_hash(f)
 
     def refresh(self):
@@ -523,30 +608,60 @@ class Fetcher:
                     self.hashing -= 1
 
     def check_file(self, f):
+        """Moves f's whole-file SHA-256 over the parts that are in, in order (a hasher thread at a time per file: they
+        are read back from the page cache right after they were written, so the hash ends soon after the last part,
+        not a whole re-read later), and closes the file once every part is in and the hash equals the manifest's."""
+        while True:
+            if not f.hlock.acquire(blocking=False):
+                return  # another hasher has it; it looks again before it lets go
+            try:
+                if f.fd is None:
+                    return
+                if not self.args.no_full_hash:
+                    while True:
+                        with f.lock:
+                            ready = f.hnext in f.done
+                        if not ready:
+                            break
+                        off, end = f.span(f.hnext)
+                        while off < end:
+                            data = os.pread(f.fd, min(16 << 20, end - off), off)
+                            if not data:
+                                raise FetchError(f"short read at {off} while hashing")
+                            f.h.update(data)
+                            off += len(data)
+                        f.hnext += 1
+                with f.lock:
+                    complete = f.left == 0
+                if complete and (self.args.no_full_hash or f.hnext >= len(f.parts)):
+                    self.finish_file(f)
+                    return
+            finally:
+                f.hlock.release()
+            with f.lock:
+                again = not self.args.no_full_hash and f.hnext in f.done
+            if not again:
+                return
+
+    def finish_file(self, f):
         os.fsync(f.fd)
-        if not self.args.no_full_hash:
-            h = hashlib.sha256()
-            off = 0
-            while off < f.size:
-                data = os.pread(f.fd, min(16 << 20, f.size - off), off)
-                if not data:
-                    break
-                h.update(data)
-                off += len(data)
-            if h.hexdigest() != f.sha256:
-                # every part matched but the file does not: fetch it all again once, then give up
-                f.failed_whole += 1
-                if f.failed_whole > 1:
-                    raise FetchError(f"whole-file sha256 {h.hexdigest()[:16]}… != manifest {f.sha256[:16]}… twice")
-                log(f"{f.tree.dest}/{f.path}: whole-file sha256 mismatch: fetching it again")
+        if not self.args.no_full_hash and f.h.hexdigest() != f.sha256:
+            got = f.h.hexdigest()
+            # every part matched but the file does not: fetch it all again once, then give up
+            f.failed_whole += 1
+            if f.failed_whole > 1:
+                raise FetchError(f"whole-file sha256 {got[:16]}… != manifest {f.sha256[:16]}… twice")
+            log(f"{f.tree.dest}/{f.path}: whole-file sha256 mismatch: fetching it again")
+            with f.lock:
                 f.resume = False
                 f.left = len(f.parts)
-                self.add_bytes(-f.size)
-                with self.qlock:
-                    for i, a, b in f.ranges():
-                        self.q.append((f.tree, f, i, a, b))
-                self.spawn_workers(min(self.args.concurrency, len(f.parts)))
-                return
+                f.done, f.hnext, f.h = set(), 0, hashlib.sha256()
+            self.add_bytes(-f.size)
+            with self.qlock:
+                for i in range(len(f.parts)):
+                    self.q.append((f.tree, f, i, i + 1))
+            self.spawn_workers(min(self.args.concurrency, len(f.parts)))
+            return
         os.close(f.fd)
         f.fd = None
         with self.block:
@@ -602,6 +717,44 @@ class Fetcher:
         el = time.time() - self.t0
         log(f"tree {t.dest}: ready at {t.rev} ({t.total / 1e9:.2f} GB, {len(t.files)} files, {el:.0f}s since start)")
 
+    # ---- stragglers
+    def watchdog(self):
+        """Cuts a GET that falls far behind: R2 serves most ranged GETs at a steady per-stream rate, but now and then
+        one trickles at 1-3 MB/s for minutes (2026-10-12: the last 0.3 GB of a 24 GB tree took 100 s at 32 streams
+        while the first 23.9 GB took 20 s). A part is cut when it has run --slow-after-s and longer than 3x the time
+        the recent parts took, at under a third of their rate (or under 1 MB/s after 20 s); its socket is shut, and the
+        worker fetches it again on a new connection (at most 4 times per part, then it runs to the end)."""
+        while not self.finished.wait(1.0):
+            if self.args.slow_after_s <= 0:
+                return
+            with self.block:
+                rates = sorted(self.part_rates)
+            typical = rates[len(rates) // 2] if len(rates) >= 8 else None
+            now = time.time()
+            for rec in list(self.inflight.values()):
+                if rec["abort"]:
+                    continue
+                el = now - rec["t0"]
+                if el < self.args.slow_after_s:
+                    continue
+                rate = rec["n"] / el
+                slow = el >= 20 and rate < 1e6
+                if typical and not slow:
+                    slow = el > 3 * rec["size"] / typical and rate < typical / 3
+                if not slow:
+                    continue
+                k = (id(rec.get("f")), rec["key"])
+                if self.slow_count.get(k, 0) >= 4:
+                    continue
+                self.slow_count[k] = self.slow_count.get(k, 0) + 1
+                rec["abort"] = f"slow: {rate / 1e6:.1f} MB/s after {el:.0f}s" + (f" (recent parts {typical / 1e6:.0f} MB/s)" if typical else "")
+                c = rec.get("conn")
+                try:
+                    if c is not None and c.sock is not None:
+                        c.sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
     # ---- progress
     def progress_line(self):
         el = max(1e-6, time.time() - self.t0)
@@ -651,6 +804,7 @@ class Fetcher:
             h.start()
         rep = threading.Thread(target=self.reporter, daemon=True)
         rep.start()
+        threading.Thread(target=self.watchdog, daemon=True).start()
         self.spawn_workers(self.args.concurrency)
         # wait until every tree is done (workers may be respawned by a whole-file mismatch)
         while not self.error and not all(t.done for t in self.trees):
@@ -685,7 +839,7 @@ class Fetcher:
             raise FetchError(self.error)
         self.write_status("done")
         rate = self.bytes_done / max(el, 1e-6)
-        summary = f"weights ready: {len(self.trees)} tree(s), {self.bytes_done / 1e9:.2f} GB fetched in {el:.1f}s ({rate / 1e6:.0f} MB/s); retries {self.stats['retries']}, bad parts {self.stats['corrupt_parts']}, resumed parts {self.stats['resumed_parts']}"
+        summary = f"weights ready: {len(self.trees)} tree(s), {self.bytes_done / 1e9:.2f} GB fetched in {el:.1f}s ({rate / 1e6:.0f} MB/s); retries {self.stats['retries']}, bad parts {self.stats['corrupt_parts']}, resumed parts {self.stats['resumed_parts']}, slow restarts {self.stats['slow_restarts']}"
         log(summary)
         if self.args.report_url:
             report(self.args, "weights", "r2 " + summary)
@@ -717,12 +871,23 @@ def main(argv=None):
     ap.add_argument("--pod", default=os.environ.get("FV_POD_ID", ""))
     ap.add_argument("--report-url", default="", help="POST progress here (fv-control's /ingest/v1/endpoint)")
     ap.add_argument("--report-every", type=float, default=15.0)
-    ap.add_argument("--concurrency", type=int, default=int(os.environ.get("FV_R2_CONCURRENCY", "32")))
+    ap.add_argument("--concurrency", type=int, default=int(os.environ.get("FV_R2_CONCURRENCY") or DEFAULT_CONCURRENCY), help="ranged GETs in flight (env FV_R2_CONCURRENCY)")
+    ap.add_argument("--get-parts", type=int, default=int(os.environ.get("FV_R2_GET_PARTS") or DEFAULT_GET_PARTS),
+                    help="manifest parts (64 MiB each) per ranged GET; every part is still checked on its own (env FV_R2_GET_PARTS)")
+    ap.add_argument("--skip-trees", default=os.environ.get("FV_R2_SKIP_TREES", ""), help="trees of the plan not to fetch: dest globs, comma or space separated (env FV_R2_SKIP_TREES)")
     ap.add_argument("--hashers", type=int, default=4, help="threads re-reading finished files for the whole-file SHA-256")
     ap.add_argument("--retries", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=60.0, help="socket timeout (s)")
+    ap.add_argument("--slow-after-s", type=float, default=float(os.environ.get("FV_R2_SLOW_AFTER_S") or 4),
+                    help="a GET may be cut as a straggler once its part has run this long (0: never; env FV_R2_SLOW_AFTER_S)")
     ap.add_argument("--min-free-gb", type=float, default=float(os.environ.get("FV_R2_MIN_FREE_GB", "5")))
-    ap.add_argument("--no-full-hash", action="store_true", help="trust the per-part SHA-256s (skip the whole-file re-read)")
+    # Every byte is already checked by its part's SHA-256 from the manifest (whose own SHA-256 fv-control pins), so
+    # the whole-file pass is an extra check, off by default: it waits on the slowest part of each file (it hashes in
+    # order) and then hashes the rest, which added 5-10 s to a 27 GB single-file tree (docs/ops/r2-weights.md §5.4).
+    fh = ap.add_mutually_exclusive_group()
+    fh.add_argument("--full-hash", dest="no_full_hash", action="store_false", help="also check each file's whole SHA-256, in order as its parts arrive (env FV_R2_FULL_HASH=1)")
+    fh.add_argument("--no-full-hash", dest="no_full_hash", action="store_true", help="trust the per-part SHA-256s (the default)")
+    ap.set_defaults(no_full_hash=os.environ.get("FV_R2_FULL_HASH", "0") != "1")
     ap.add_argument("--status", default="", help="write a JSON status file here")
     ap.add_argument("--add-only", action="store_true", help="the root is a shared cache (a network volume): never move aside or remove anything; stage per --pod")
     args = ap.parse_args(argv)

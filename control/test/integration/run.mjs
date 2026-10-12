@@ -30,6 +30,8 @@ const w = await startWorker(mock, {
   WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
   WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
   WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ r2demo: { rev: "rev1", files: 2, bytes: Object.values(R2_FILES).reduce((s, b) => s + b.length, 0), manifest_sha256: r2sha(r2Manifest), source: "test" } }),
+  // The mock bucket holds r2demo only: the aux files keep their pinned URLs here (aux from R2: unit tests).
+  WEIGHTS_R2_AUX: "0",
   // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): the owner's config, against the simulated APIs.
   GMI_PRODUCTS: "container.h200.x1,container.b200.x1",
   GMI_DEFAULT_IDC: "us-denver-1",
@@ -518,6 +520,14 @@ await step("CLI: fv-control.sh jobs, job-cancel, jobs-cancel-queued, endpoint ca
   mock.queue.queued = 2;
   assert.match(await cli("endpoint", "cancel", "qmock", "rp-cli-1"), /rp-cli-1: IN_QUEUE -> CANCELLED \(cancelled\); removed from the queue/);
   assert.match(await cli("endpoint", "purge", "qmock", "--yes"), /removed 1 \(Runpod: completed\); queued 1 -> 0/);
+  // invoke --async: the first answer's .job is fv-control's job number; the CLI polls /jobs/<n> until it finished
+  // (it used to stop at once: jq could not index the number).
+  mock.queue.onRun = () => [{ status: "IN_PROGRESS" }, { status: "IN_PROGRESS" }, { status: "COMPLETED", output: { object: "fv.info", ok: true } }];
+  const inv = JSON.parse(await cli("endpoint", "invoke", "qmock", "--async"));
+  mock.queue.onRun = undefined;
+  assert.equal(typeof inv.job, "object", JSON.stringify(inv));
+  assert.equal(inv.job.status, "COMPLETED");
+  assert.ok(inv.job.finished_at);
 });
 
 await step("the collector: pods, owners, costs, samples, external attribution, alerts", async () => {
@@ -1231,7 +1241,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", deadline_min: 20 });
   // h3-base is in the repo's R2 record (scripts/gpu/weights-r2.tsv) since 2026-10-12, so the default is r2; this
   // fv-control's (mock) bucket has no such manifest, so the launch is refused at weights_source all the same.
-  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights|weights_source r2: R2 manifest of h3-base/.test(i.message)), "a real model with no weights it can fetch: " + JSON.stringify(v.issues));
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights|weights_source r2: R2 manifest of (h3-base|FastH3-4-step-Preview-v1-LoRA)/.test(i.message)), "a real model with no weights it can fetch: " + JSON.stringify(v.issues));
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "none", deadline_min: 20 });
   assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with weights_source none");
   v = await issues({ name: "gmib", provider: "gmi", provider_gpu: "container.b200.x1", ...fake });
@@ -1527,7 +1537,7 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.match(out1.stderr, /cache miss: r2demo/);
   assert.equal(readFileSync(`${tmp}/weights/r2demo/.fv-revision`, "utf8"), "rev1");
   assert.equal(mock.r2.bad, bad0, "every presigned URL the Worker made was accepted");
-  assert.ok(mock.r2.gets.slice(gets0).filter((g) => g.range && g.key.startsWith("weights/r2demo/")).length >= 4, "ranged GETs per part");
+  assert.ok(mock.r2.gets.slice(gets0).filter((g) => g.range && g.key.startsWith("weights/r2demo/")).length >= 2, "ranged GETs (two manifest parts each, r2-fetch.py DEFAULT_GET_PARTS)");
   let page = (await call(`/api/serverless/${ep.id}`, { headers: T() })).j;
   const b1 = page.boots.find((b) => b.worker_id === "wkr2a");
   assert.equal(b1.cache, "miss");

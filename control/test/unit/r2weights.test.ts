@@ -11,12 +11,12 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
-import { bootFor, workerCreatePayload, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
+import { bootFor, workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { presetPool } from "../../src/cluster/spec";
 import { launchTrees, poolTrees, PROVIDER_BOOT, providerEnv, providerIssues, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
 import { R2_TREES } from "../../src/r2-trees";
-import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2Manifest, r2Plan, r2Trees } from "../../src/r2weights";
+import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2DiskGb, r2Manifest, r2Plan, r2Trees } from "../../src/r2weights";
 import { validate } from "../../src/schemas";
 import { d1 } from "./d1shim";
 import { ACCESS, fakeR2, makeTree, rnd, SECRET, sha } from "./fake-r2";
@@ -34,6 +34,7 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
     GMI_BUDGET_USD: "20",
     WEIGHTS_R2_ACCESS_KEY_ID: ACCESS,
     WEIGHTS_R2_SECRET_ACCESS_KEY: SECRET,
+    WEIGHTS_R2_AUX: "0", // the fake store has only the trees a test publishes (aux from R2: preset-trees.test.ts)
     ...over,
   }) as unknown as Env;
 
@@ -130,9 +131,10 @@ describe("weights_source r2: the default, the checks, the env", () => {
   const gmiPool = (over: any = {}) => ({ ...h3, provider: "gmi", provider_gpu: "container.h200.x1", volume: false, ...over }) as any;
   const trees = poolTrees(gmiPool()).filter((t) => t !== "auxiliary");
   it("GMI / Brev: r2 once every tree of the pool is published, else none; a source given stays", () => {
-    expect(trees).toContain("h3-base");
+    // h3-turbo loads h3-base and the FastH3 LoRA beside it (recipe-trees.ts; docs/ops/r2-bench-2026-10-12.md finding 1)
+    expect(trees).toEqual(["FastH3-4-step-Preview-v1-LoRA", "h3-base"]);
     expect(weightsSource(gmiPool(), mkEnv())).toBe("none");
-    expect(weightsSource(gmiPool(), mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.slice(1)) }))).toBe("none");
+    expect(weightsSource(gmiPool(), mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.filter((t) => t !== "h3-base")) }))).toBe("none");
     const all = mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees) });
     expect(weightsSource(gmiPool(), all)).toBe("r2");
     expect(weightsSource(gmiPool({ weights_source: "hub" }), all)).toBe("hub");
@@ -141,13 +143,15 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect([plan.source, plan.unsupported]).toEqual(["r2", []]);
     // Only the aux rows travel in the env: the trees come from the plan endpoint.
     expect(plan.tsv.split("\n").filter(Boolean).every((l) => l.startsWith("aux\t"))).toBe(true);
-    expect(launchTrees(plan, all)).toEqual(Object.fromEntries(trees.map((t) => [t, `rev-${t}`])));
+    // r2 also fetches the preset's pre-quantized trees (published), never the Hub
+    expect(plan.trees).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
+    expect(launchTrees(plan, all)).toEqual(Object.fromEntries(plan.trees.map((t) => [t, r2Trees(all)[t]!.rev])));
   });
   it("needs no download approval; refuses what is not published, or no store configured", () => {
     const all = mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees) });
     expect(providerIssues(all, { pools: [gmiPool({ weights_source: "r2" })] })).toEqual([]);
-    const some = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.slice(1)) }), { pools: [gmiPool({ weights_source: "r2" })] });
-    expect(some.map((i) => i.message)).toEqual([expect.stringMatching(new RegExp(`not in the R2 weights store yet: ${trees[0]}`))]);
+    const some = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.filter((t) => t !== "h3-base")) }), { pools: [gmiPool({ weights_source: "r2" })] });
+    expect(some.map((i) => i.message)).toEqual([expect.stringMatching(/not in the R2 weights store yet: h3-base/)]);
     const off = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees), WEIGHTS_R2_ACCESS_KEY_ID: undefined }), { pools: [gmiPool({ weights_source: "r2" })] });
     expect(off.map((i) => i.message)).toEqual([expect.stringMatching(/weights_source r2: the R2 weights store is not configured/)]);
     expect(validate("pool", gmiPool({ weights_source: "r2" })).ok).toBe(true);
@@ -159,7 +163,7 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(r.env.FV_SCRIPTS_URL).toBeUndefined();
     expect(JSON.stringify(r.env)).not.toContain(SECRET);
     expect(JSON.stringify(r.env)).not.toContain(ACCESS);
-    expect(PROVIDER_BOOT).toContain(`python3 "$R2T/r2-fetch.py"`);
+    expect(PROVIDER_BOOT).toContain(`python3 "$R2F" "$@"`);
     expect(PROVIDER_BOOT.indexOf("r2-fetch.py")).toBeLessThan(PROVIDER_BOOT.indexOf("cloudflared tunnel"));
     expect(R2_FETCH_PY).toContain("fv-weights-plan/1");
     expect(createHash("sha256").update(R2_FETCH_PY).digest("hex")).toBe(R2_FETCH_SHA256);
@@ -176,9 +180,24 @@ describe("weights_source r2: the default, the checks, the env", () => {
     const e = workerSystemEnv(ctx, pool, "img@sha256:" + "0".repeat(64));
     expect(e).toMatchObject({ FV_WEIGHTS_SOURCE: "r2", FV_WEIGHTS_PLAN_URL: "https://fvc.test/ingest/v1/weights-plan", FV_ENDPOINT_REPORT_TOKEN: "ingest_tok" });
     const gb = Number(e.FV_R2_DISK_GB);
-    expect(gb).toBe(Math.min(500, Math.ceil(trees.length * 100 * 1.15 + 30)));
+    // the trees (2 x 100 GB pinned here) plus the preset's pre-quantized trees (text_encoder_fp8, the MXFP8 DiT)
+    const planned = weightsPlan(pool, all).trees;
+    expect(planned).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
+    expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
     const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EUR-IS-1", gpu: "g" }, e) as any;
     expect(p.networkVolumeId).toBeUndefined();
+    // EUR-IS-1 (the volume's data centre, hosts known): no CUDA filter
+    expect(p.allowedCudaVersions).toBeUndefined();
+    // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, CUDA 13 hosts only
+    const us = { ...pool, data_centers: ["US-TX-3", "US-KS-2"] };
+    expect(validate("pool", us).ok).toBe(true);
+    expect(validate("pool", { ...h3, data_centers: ["US-TX-3"] }).ok, "data_centers needs r2 (the volume pins its DC)").toBe(false);
+    const pls = workerPlacements({ regions: ["eu"] } as any, us);
+    expect(pls.map((x) => x.dc)).toEqual(["US-TX-3", "US-KS-2"]);
+    expect(pls.every((x) => x.region === undefined)).toBe(true);
+    const pu = workerCreatePayload("fv-ctl-x", "img", us, pls[0]!, e) as any;
+    expect([pu.dataCenterIds, pu.allowedCudaVersions, pu.networkVolumeId]).toEqual([["US-TX-3"], ["13.0"], undefined]);
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).allowedCudaVersions, "allowed_cuda [] lifts the filter").toBeUndefined();
     expect(p.containerDiskInGb).toBe(gb);
     expect(p.dockerStartCmd[0]).toContain('export FV_POD_ID="${FV_POD_ID:-${RUNPOD_POD_ID:-}}"');
     expect(p.dockerStartCmd[0].indexOf("r2-fetch.py")).toBeLessThan(p.dockerStartCmd[0].indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
@@ -250,7 +269,8 @@ ${R2_FETCH_SH}`;
     expect(existsSync(join(dir, "demo/.complete"))).toBe(true);
     expect(r2.bad()).toBe(0);
     const ranged = r2.gets.filter((g) => g.key.includes("/weights/") && g.range);
-    expect(ranged.length).toBe(t.m.files.reduce((s, f) => s + f.parts.length, 0));
+    // one ranged GET per two manifest parts (r2-fetch.py DEFAULT_GET_PARTS), each part checked on its own
+    expect(ranged.length).toBe(t.m.files.reduce((s, f) => s + Math.ceil(f.parts.length / 2), 0));
     expect(reports.some((r) => r.phase === "weights" && /^r2 weights ready/.test(r.detail))).toBe(true);
     const n = r2.gets.length;
     await run(dir);

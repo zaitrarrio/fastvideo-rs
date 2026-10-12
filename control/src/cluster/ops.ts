@@ -244,7 +244,8 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   }
   if (warm) {
     try {
-      await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
+      const said = await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
+      log(`${pool.id}: Brev ${warm.row.name}: ${said}`);
     } catch (e) {
       const msg = (e as Error).message.slice(0, 200);
       const r = await holdFailed(env, warm.row, msg, log);

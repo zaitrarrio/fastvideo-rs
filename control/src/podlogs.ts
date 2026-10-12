@@ -88,6 +88,7 @@ const CONTAINER_FATAL = [
   /^(bash|sh|\/bin\/sh)(: line \d+)?: .*(No such file or directory|command not found|Permission denied)/,
   /panicked at /,
   /CUDA driver version is insufficient|no CUDA-capable device|CUDA_ERROR_NO_DEVICE/,
+  /undefined symbol: cu[A-Za-z0-9_]+|driver_too_old: /, // a host driver older than the image's CUDA 13 (driver-check.ts)
   /Segmentation fault|core dumped|Killed$/,
 ];
 // A system line that means the container cannot be created or its image pulled.
@@ -106,7 +107,7 @@ export const STUCK_MS = 15 * 60_000;
  */
 export const PULL_DEADLINE_MS = 6 * 60_000;
 
-export type BootPhase = "pulling" | "starting" | "running" | "error" | "crashloop" | "image_error" | "stuck" | "slow_pull";
+export type BootPhase = "pulling" | "starting" | "running" | "error" | "crashloop" | "image_error" | "stuck" | "slow_pull" | "driver_too_old";
 export interface Diagnosis {
   phase: BootPhase;
   detail: string;
@@ -124,6 +125,10 @@ export function diagnose(x: { ageMs: number; uptimeS?: number | null; container:
     return { phase: "slow_pull", detail: `image pull still running ${Math.round((t - ps) / 60000)} min after it started (a slow host): placing a new pod`, fatal: true, replace: true };
   const sysFatal = x.system.filter((l) => isFatalLine(l, "system"));
   if (sysFatal.length) return { phase: "image_error", detail: sysFatal[sysFatal.length - 1]!.slice(0, 300), fatal: true };
+  // The host's driver is older than the image needs (driver-check.ts, or cudarc's missing CUDA 13 symbol): no restart
+  // on this host helps, so the pod is replaced (a new host; outside the EU the pod's CUDA filter keeps such hosts away).
+  const drv = x.container.find((l) => /driver_too_old: |undefined symbol: cu[A-Za-z0-9_]+/.test(l));
+  if (drv) return { phase: "driver_too_old", detail: `the host's NVIDIA driver is too old for the image (CUDA 13): ${drv.slice(0, 260)}`, fatal: true, replace: true };
   const fatal = x.container.filter((l) => isFatalLine(l, "container"));
   if (fatal.length >= 2) return { phase: "crashloop", detail: `crash loop (${fatal.length}× in the log tail): ${fatal[fatal.length - 1]!.slice(0, 300)}`, fatal: true };
   if (fatal.length === 1) return { phase: "error", detail: fatal[0]!.slice(0, 300), fatal: false };

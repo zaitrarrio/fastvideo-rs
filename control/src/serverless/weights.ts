@@ -18,9 +18,10 @@
 import { sha256Hex, randomToken } from "../crypto";
 import type { Env } from "../env";
 import { DEFAULT_TREE_GB, TREE_GB } from "../brev-park";
-import { R2_DOWNLOAD_GBPS, r2Cfg, r2PodEnv, r2Trees } from "../r2weights";
+import { r2AuxTrees, R2_DOWNLOAD_GBPS, r2Cfg, r2PodEnv, r2Trees } from "../r2weights";
 import { R2_TREES } from "../r2-trees";
 import { AUX_FILES, HUB_TREES } from "../weights-sources";
+import { MXFP8_TREE_GLOB } from "../recipe-trees";
 import { parseJson } from "../util";
 import { slsPreset } from "./presets";
 import { configOf } from "./serves";
@@ -36,10 +37,12 @@ export const SLS_R2_WEIGHTS = "/workspace/weights";
 export const SLS_R2_CACHE_ROOT = "/runpod-volume/fv-r2-cache";
 
 /** The weight trees an endpoint's workers load: `${FV_WEIGHTS}/<tree>` (or /workspace/weights/<tree>) in its worker
- * config, plus its preset's list; a nested published tree (longlive-plug/x) by its full name. */
+ * config, plus its preset's list and (published) pre-quantized trees; a nested published tree (longlive-plug/x,
+ * h3-base/text_encoder_fp8) by its full name: the fetcher places it inside its parent, as on the volume. */
 export function slsTrees(spec: SpecLike): string[] {
   if (spec.compute !== "GPU") return [];
-  const out = new Set<string>(slsPreset(spec.preset)?.weights ?? []);
+  const p = slsPreset(spec.preset);
+  const out = new Set<string>([...(p?.weights ?? []), ...(p?.prequant ?? []).filter((t) => R2_TREES[t])]);
   const text = configOf({ variant: spec.variant, config: spec.config, config_toml: spec.config_toml, image: spec.image }).text || "";
   for (const line of text.split("\n")) {
     if (/^\s*#/.test(line)) continue;
@@ -50,6 +53,11 @@ export function slsTrees(spec: SpecLike): string[] {
   }
   out.delete("auxiliary");
   return [...out].sort();
+}
+/** What an r2 worker fetches: its trees plus the aux trees (TAE, LPIPS) from R2 (r2AuxTrees), when it loads any tree. */
+export function slsFetchTrees(env: Env, spec: SpecLike): string[] {
+  const t = slsTrees(spec);
+  return t.length ? [...new Set([...t, ...r2AuxTrees(env)])].sort() : t;
 }
 
 /** A tree's bytes: the published manifest's, else the size table's (brev-park.ts TREE_GB), else DEFAULT_TREE_GB. */
@@ -103,7 +111,7 @@ export async function newWeightsToken(): Promise<{ token: string; hash: string }
  * the weights token, the trees at their revisions (the cache check), the aux files (pinned URL + SHA-256). */
 export function slsWeightsEnv(env: Env, spec: SpecLike, token: string): Record<string, string> {
   const pub = r2Trees(env);
-  const trees = slsTrees(spec).filter((t) => pub[t]);
+  const trees = slsFetchTrees(env, spec).filter((t) => pub[t]);
   const aux = AUX_FILES.map((a) => ["aux", a.path, a.url, a.sha256, String(a.size)].join("\t")).join("\n") + "\n";
   const base = (env.PUBLIC_URL || "").replace(/\/$/, "");
   return {
@@ -128,49 +136,82 @@ export function slsWeightsEnv(env: Env, spec: SpecLike, token: string): Record<s
  */
 export const SLS_R2_SH = `# ---- weights: the R2 weights store (weights_source r2, docs/control/serverless.md §1b)
 if [ "\${FV_WEIGHTS_SOURCE:-}" = r2 ]; then
-  FV_BOOT_T0="$(date +%s)"; FV_BOOT="\${RUNPOD_POD_ID:-worker}@$FV_BOOT_T0"
+  FV_BOOT_T0="$(date +%s)"; FV_BOOT_T0F="$(date +%s.%N)"; FV_BOOT="\${RUNPOD_POD_ID:-worker}@$FV_BOOT_T0"
+  el() { awk -v a="$1" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }'; }
+  say() { echo "[fv-boot] $(date -u +%H:%M:%S) +$(el "$FV_BOOT_T0F")s $*" >&2; }
   rep() { [ -n "\${FV_SLS_REPORT_URL:-}" ] || return 0; local d; d="$(printf "%s" "$2" | tr -d '"\\\\' | tr '\\n' ' ' | cut -c1-280)"
-    curl -fsS --max-time 10 -o /dev/null -X POST -H "authorization: Bearer \${FV_WEIGHTS_TOKEN:-}" -H "content-type: application/json" --data "{\\"pod\\":\\"$FV_BOOT\\",\\"phase\\":\\"$1\\",\\"url\\":\\"\\",\\"detail\\":\\"$d\\"}" "$FV_SLS_REPORT_URL" >/dev/null 2>&1 || true; }
-  slsfail() { echo "[fv-boot] FAILED: $1" >&2; rep failed "$1"; sleep "\${FV_FAIL_SLEEP_S:-30}"; exit 1; }
+    curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null -X POST -H "authorization: Bearer \${FV_WEIGHTS_TOKEN:-}" -H "content-type: application/json" --data "{\\"pod\\":\\"$FV_BOOT\\",\\"phase\\":\\"$1\\",\\"url\\":\\"\\",\\"detail\\":\\"$d\\"}" "$FV_SLS_REPORT_URL" >/dev/null 2>&1 || true; }
+  # A timed boot step (name, its start from date +%s.%N, a note): logged with the time of day and the time since the
+  # container's start, and reported (phase step) so the endpoint's boots show where a cold start went.
+  step() { local d; d="$(el "$2")"; say "step $1: \${d}s\${3:+ ($3)}"; rep step "$1 \${d}s\${3:+ ($3)}"; }
+  slsfail() { say "FAILED: $1"; rep failed "$1"; sleep "\${FV_FAIL_SLEEP_S:-30}"; exit 1; }
   S="\${FV_R2_STATE:-/fvstate}"
-  rep boot "container started"
+  rep boot "container started; \${fv_drv:-driver not checked}"
   WR="$FV_WEIGHTS"; ADD=""
   if [ -n "\${FV_R2_CACHE_ROOT:-}" ] && [ -d "$(dirname "$FV_R2_CACHE_ROOT")" ]; then WR="$FV_R2_CACHE_ROOT"; ADD="--add-only"; fi
   mkdir -p "$WR" "$S"
   if [ "$WR" != "$FV_WEIGHTS" ] && [ ! -e "$FV_WEIGHTS" ]; then mkdir -p "$(dirname "$FV_WEIGHTS")"; ln -s "$WR" "$FV_WEIGHTS"; fi
-  miss=""
+  # Trees this host does not fetch: the MXFP8 pre-quantized DiTs below sm_100 (the engine runs W8A8 there: unused),
+  # and on an add-only cache volume the aux trees (their files may predate the trees; the pinned URLs fill them).
+  if [ -z "\${FV_R2_SKIP_TREES+x}" ]; then
+    cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d ' ')"
+    FV_R2_SKIP_TREES=""; case "$cc" in [1-9].*) FV_R2_SKIP_TREES="${MXFP8_TREE_GLOB}" ;; esac
+    [ -n "$ADD" ] && FV_R2_SKIP_TREES="$FV_R2_SKIP_TREES auxiliary/*"
+  fi
+  export FV_R2_SKIP_TREES
+  skipped() { local p r=1; set -f; for p in $FV_R2_SKIP_TREES; do case "$1" in $p) r=0 ;; esac; done; set +f; return $r; }
+  t="$(date +%s.%N)"; miss=""
   for tr in \${FV_R2_TREE_REVS:-}; do
     d="\${tr%@*}"; r="\${tr##*@}"
+    skipped "$d" && continue
     if [ -f "$WR/$d/.complete" ] && [ "$(cat "$WR/$d/.fv-revision" 2>/dev/null || true)" = "$r" ]; then :; else miss="$miss $d"; fi
   done
   if [ -z "$miss" ]; then
-    echo "[fv-boot] weights: cache hit (every tree at its revision under $WR): no fetch" >&2; rep cache "hit"
+    say "weights: cache hit (every tree at its revision under $WR): no fetch"; rep cache "hit"
   else
-    echo "[fv-boot] weights: cache miss:$miss: fetching from the R2 weights store" >&2; rep cache "miss:$miss"
+    say "weights: cache miss:$miss: fetching from the R2 weights store\${FV_R2_SKIP_TREES:+ (skipping $FV_R2_SKIP_TREES)}"; rep cache "miss:$miss"
     T="\${FV_R2_TOOLS:-/opt/fv}"; mkdir -p "$T"
-    if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-      { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 curl ca-certificates; } >"$S/apt-r2.log" 2>&1 || slsfail "apt python3"
+    t="$(date +%s.%N)"
+    if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then step tools "$t" "python3 and curl in the image"
+    else
+      { apt-get -o Acquire::http::Timeout=15 -o Acquire::Retries=3 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=15 -o Acquire::Retries=3 install -y -qq --no-install-recommends python3 curl ca-certificates; } >"$S/apt-r2.log" 2>&1 || slsfail "apt python3: $(tail -n 2 "$S/apt-r2.log" | tr '\\n' ' ')"
+      step tools "$t" "apt-get python3 curl: the image has no python3 or curl"
     fi
-    curl -fsS --retry 5 --max-time 60 -o "$T/r2-fetch.py" "$FV_R2_FETCH_URL" || slsfail "r2-fetch.py download"
-    echo "$FV_R2_FETCH_SHA256  $T/r2-fetch.py" | sha256sum -c - >/dev/null 2>&1 || slsfail "r2-fetch.py sha256"
+    # The fetcher: the image's copy when it is the one fv-control pins (no download), else fv-control's.
+    t="$(date +%s.%N)"; F="\${FV_R2_FETCH_IMAGE:-/opt/fastvideo-rs/bin/r2-fetch.py}"
+    if [ -f "$F" ] && echo "$FV_R2_FETCH_SHA256  $F" | sha256sum -c - >/dev/null 2>&1; then step fetcher "$t" "from the image"
+    else
+      F="$T/r2-fetch.py"
+      curl -fsS --connect-timeout 5 --max-time 30 --retry 4 --retry-delay 1 --retry-all-errors -o "$F" "$FV_R2_FETCH_URL" || slsfail "r2-fetch.py download from fv-control"
+      echo "$FV_R2_FETCH_SHA256  $F" | sha256sum -c - >/dev/null 2>&1 || slsfail "r2-fetch.py sha256"
+      step fetcher "$t" "downloaded from fv-control"
+    fi
+    t="$(date +%s.%N)"
     set +e
-    python3 "$T/r2-fetch.py" --root "$WR" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_WEIGHTS_TOKEN --pod "$FV_BOOT" --status "$S/r2-fetch.json" --report-url "\${FV_SLS_REPORT_URL:-}" $ADD 2>&1 | tee "$S/r2-fetch.log" >&2
+    python3 "$F" --root "$WR" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_WEIGHTS_TOKEN --pod "$FV_BOOT" --status "$S/r2-fetch.json" --report-url "\${FV_SLS_REPORT_URL:-}" $ADD 2>&1 | tee "$S/r2-fetch.log" >&2
     rc="\${PIPESTATUS[0]}"; set -e
     [ "$rc" = 0 ] || slsfail "r2 weights: $(grep FAILED "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+    step fetch "$t" "$(grep -o 'weights ready: .*' "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
   fi
+  # Aux files (TAE decoders, LPIPS): from R2 as the auxiliary/* trees when the plan has them (above), checked here by
+  # SHA-256; a file missing or different comes from its pinned URL (an add-only cache volume, an older plan).
   if [ -n "\${FV_WEIGHTS_TREES_B64:-}" ]; then
+    t="$(date +%s.%N)"; n=0; got=0
     printf "%s" "$FV_WEIGHTS_TREES_B64" | base64 -d > "$S/aux.tsv"
     while IFS="$(printf '\\t')" read -r kind a b c d; do
       [ "$kind" = aux ] || continue
-      p="$WR/$a"; mkdir -p "$(dirname "$p")"
+      n=$((n + 1)); p="$WR/$a"; mkdir -p "$(dirname "$p")"
       if [ -f "$p" ] && [ "$(sha256sum "$p" | cut -d' ' -f1)" = "$c" ]; then continue; fi
       if [ -n "$ADD" ] && [ -e "$p" ]; then slsfail "aux $a differs on the cache volume (add-only: not replaced)"; fi
-      q="$p.part-\${RUNPOD_POD_ID:-w}"
-      curl -fsSL --retry 3 --max-time 600 -o "$q" "$b" && [ "$(sha256sum "$q" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$q")" = "$d" ] || slsfail "aux $a"
+      q="$p.part-\${RUNPOD_POD_ID:-w}"; got=$((got + 1))
+      say "aux $a <- $b"
+      curl -fsSL --connect-timeout 10 --retry 3 --max-time 600 -o "$q" "$b" && [ "$(sha256sum "$q" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$q")" = "$d" ] || slsfail "aux $a"
       if [ -n "$ADD" ] && [ -e "$p" ]; then rm -f "$q"; else mv "$q" "$p"; fi
     done < "$S/aux.tsv"
+    step aux "$t" "$n files checked, $got from their pinned URLs"
   fi
-  rep serve "weights ready under $WR: starting fv-serve"
+  rep serve "weights ready under $WR after $(el "$FV_BOOT_T0F")s: starting fv-serve"
+  say "starting fv-serve"
 fi
 `;
 
@@ -202,6 +243,8 @@ export interface BootRow {
   serve_at: number | null;
   error: string | null;
   last_detail: string | null;
+  /** The boot's timed steps, JSON {step: seconds} (phase `step` reports: tools, fetcher, fetch, aux). */
+  steps?: string | null;
   updated_at: number;
 }
 export interface Outlook {
@@ -240,10 +283,13 @@ export function slsOutlook(env: Env, spec: SpecLike, boots: BootRow[] = []): Out
       : last?.cache === "miss"
         ? { state: "miss", at: last.boot_at, worker: last.worker_id, note: `the last boot (${last.worker_id}) fetched${last.missing ? ` ${last.missing}` : ""}` }
         : { state: "unknown", at: null, worker: null, note: "no boot reported yet: a new worker fetches every tree" };
+  // A host whose driver is too old for the image (driver-check.ts): the boot stopped before the fetch.
+  if (last?.error?.startsWith("driver_too_old")) cacheState.note += `; the last boot's host was refused: ${last.error} (allowed_cuda filters such hosts out)`;
   const breakdown = (b: BootRow) => ({
     fetch_s: b.fetch_s ?? (b.fetch_start && b.fetch_end ? Math.round((b.fetch_end - b.fetch_start) / 1000) : null),
     boot_to_serve_s: b.serve_at ? Math.round((b.serve_at - b.boot_at) / 1000) : null,
     mbps: b.fetch_mbps,
+    ...Object.fromEntries(Object.entries(parseJson<Record<string, number>>(b.steps ?? null, {}) || {}).map(([k, v]) => [`${k}_s`, v])),
   });
   const cold = SLS_IMAGE_START_S + fetchS + loadS;
   const m = (s: number) => (s >= 90 ? `${Math.round(s / 60)} min` : `${s} s`);
@@ -285,6 +331,14 @@ export function applyReport(prev: Partial<BootRow>, phase: string, detail: strin
     if (done) Object.assign(r, { fetch_end: at, fetch_bytes: num(done[1])! * 1e9, fetch_s: num(done[2]), fetch_mbps: num(done[3]) });
     else if (prog) Object.assign(r, { fetch_start: r.fetch_start ?? at, fetch_bytes: num(prog[1])! * 1e9, fetch_mbps: num(prog[3]) });
     else if (/failed/.test(detail)) r.error = detail.slice(0, 300);
+  } else if (phase === "step") {
+    // "<step> <seconds>s (<note>)": the boot's own timing of one step (SLS_R2_SH step()).
+    const m = /^([a-z][a-z0-9_-]{0,31}) ([\d.]+)s\b/.exec(detail);
+    if (m) {
+      const st = parseJson<Record<string, number>>(prev.steps ?? null, {}) || {};
+      st[m[1]!] = Number(m[2]);
+      r.steps = JSON.stringify(st).slice(0, 1000);
+    }
   } else if (phase === "serve") r.serve_at = at;
   else if (phase === "failed") r.error = detail.slice(0, 300);
   return r;

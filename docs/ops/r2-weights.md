@@ -9,8 +9,9 @@ local disk (Brev: the persisted `~/workspace`), instead of mounting a volume or 
 **Status of this page's claims.** The tooling and fv-control's `weights_source r2` exist and are tested (§8).
 On 2026-10-11/12 all 46 trees of §6.1 (798 files, 1742.04 GB) were copied off the EU volume into `fv-weights`, and
 `runs/` and `weights/wan/` were archived there. Every copied tree was compared with the volume, and read back by
-`verify --deep` (§10). Throughput on a GPU node has **not** been measured (§5.4 gives the estimate and how to measure
-it). The volume stays until §7's gate passes and the owner confirms.
+`verify --deep` (§10). Throughput was measured on Runpod serverless H100 workers (round 1, 0.33-0.77 GB/s) and,
+after the straggler fix, on a 16-vCPU CPU pod in US-NC-1 (1.2-1.6 GB/s); §5.4 has the numbers. A GPU node with the
+fixed fetcher is **not** measured yet. The volume stays until §7's gate passes and the owner confirms.
 
 ## 1. Where things are
 
@@ -99,7 +100,7 @@ python3 r2-weights.py plan h3-base --ttl 3600 --out plan.json   # a presigned pl
 pod boot ──POST /ingest/v1/weights-plan {pod}──▶ fv-control          (Bearer: the cluster's ingest token)
          ◀── plan: the pool's trees' manifests + one presigned GET URL per file (TTL 1 h) ──
 pod ──GET /ingest/v1/r2-fetch.py──▶ fv-control; checked against FV_R2_FETCH_SHA256 from the pod's env
-pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no R2 key on the pod)
+pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──▶ R2   (no R2 key on the pod)
 ```
 
 - **fv-control** holds a read-only key (secrets `WEIGHTS_R2_ACCESS_KEY_ID` / `WEIGHTS_R2_SECRET_ACCESS_KEY`: an
@@ -109,18 +110,40 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
   `WEIGHTS_R2_BUCKET` (default `fv-weights`), `WEIGHTS_R2_ENDPOINT` (default from `CF_ACCOUNT_ID`),
   `WEIGHTS_R2_URL_TTL_S` (3600, clamped to 300-21600), and `WEIGHTS_R2_EXTRA_TREES` (JSON rows like
   `weights-r2.tsv`'s, for tests or as a stopgap until the next deploy).
-- **The fetcher** (`r2-fetch.py`, stdlib only; the boot installs `python3` with apt if the image lacks it):
+- **The fetcher** (`r2-fetch.py`, stdlib only). The serve images carry it at `/opt/fastvideo-rs/bin/r2-fetch.py`
+  with `python3` and `curl` (`docker/gpucheck.Dockerfile` `serve-cuda-bin`); a boot uses that copy when its
+  SHA-256 is the one fv-control pins, else it downloads fv-control's (short timeouts, retried), and installs
+  `python3` with apt only on an older image:
   - Small trees go first. Inside a tree the order is configs and tokenizers, then the text encoder, then
     VAEs and vocoders, then transformer shards.
-  - `--concurrency` (default 32, env `FV_R2_CONCURRENCY`) ranged GETs run at once across files. Each is
-    streamed with `pwrite` into a file preallocated at its full size under `$FV_WEIGHTS/.r2-partial/<dest>@<rev>/`.
-  - Every part is checked against the manifest's SHA-256 as it arrives. A bad or short part is fetched again.
-  - Hasher threads re-read each finished file for the whole-file SHA-256 while the rest downloads
-    (`--no-full-hash` skips this).
+  - `--concurrency` (default **64**, env `FV_R2_CONCURRENCY`) ranged GETs run at once across files. Each GET spans
+    `--get-parts` (default **2**, env `FV_R2_GET_PARTS`) consecutive manifest parts, so 128 MiB. Each is streamed with
+    `pwrite` into a file preallocated at its full size under `$FV_WEIGHTS/.r2-partial/<dest>@<rev>/`.
+  - Every part is checked against the manifest's SHA-256 as its last byte arrives. A bad or short part is fetched
+    again from that part on (the parts of the GET before it stay done).
+  - **Straggler watchdog.** Now and then R2 serves one GET at 1-3 MB/s for minutes, and the fetch then waited on it
+    (§5.4). A GET is cut when its part has run `--slow-after-s` (4 s, env `FV_R2_SLOW_AFTER_S`) and over 3× the
+    time the recent parts took, at under a third of their rate (or under 1 MB/s after 20 s, or no first byte). Its
+    socket is shut, and the part is fetched again on a new connection, at most 4 times per part. These cuts are
+    counted as `slow restarts`, not as retries.
+  - The whole-file SHA-256 (`--full-hash`, env `FV_R2_FULL_HASH=1`) is **off by default**. The per-part hashes
+    already cover every byte against the manifest, whose own SHA-256 fv-control pins. With it on, it is computed
+    in order as the parts come in (from the page cache), not by re-reading each file afterwards.
+  - `--skip-trees` (env `FV_R2_SKIP_TREES`) leaves trees of the plan out. The boots set it to `*_mxfp8` below
+    sm_100, where the engine runs W8A8 and cannot use the MXFP8 pre-quantized DiTs.
+  - Nested trees (`h3-base/text_encoder_fp8`, `h3-base/transformer_prequant_*`) are trees of their own. Being
+    smaller, they arrive first and wait in staging until their parent is in place, then land inside it, as on the
+    volume. A parent already present gets a missing nested tree added (tested).
   - Retries use exponential backoff with jitter. A 403 (an expired URL) asks fv-control for a fresh plan.
   - Resume: a partial file from an earlier attempt has its parts hashed on disk, and only the bad ones are fetched.
   - Each tree is renamed into place as soon as it is whole, with `.complete`, `.fv-revision`, `.fv-source`,
     `sha256.txt` and `.fv-manifest.json`.
+- **Which trees.** The plan holds the pool's (or endpoint's) preset trees: the config's `weights` and every tree the
+  engine reads beside it for the recipe (`src/recipe-trees.ts`: the FastH3 LoRA for `h3-turbo` / `h3-max`, Ref2VA,
+  the LTX dev DiT and IC-LoRA). With r2 it also holds the preset's pre-quantized trees (`prequant`:
+  `h3-base/text_encoder_fp8` and the recipe's `transformer_prequant_*_mxfp8`), which the Hub cannot serve, and the
+  aux trees `auxiliary/tae` and `auxiliary/lpips`. `test/unit/preset-trees.test.ts` checks every preset's list against
+  its config and the Rust sources (docs/ops/r2-bench-2026-10-12.md finding 1).
   - Progress goes to the pod log every 5 s and to fv-control's `/ingest/v1/endpoint` every 15 s (phase
     `weights`, `r2 12.3/150.2 GB, 2450 MB/s, …`; the boot diagnosis shows "fetching from the R2 weights store").
 - **GMI / Brev**: `weights_source r2` needs no download approval (it is our own store). It is refused unless every
@@ -133,16 +156,22 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
   - Keep-on-stop works unchanged: a tree complete at its revision is kept.
 - **Runpod**: `weights_source: r2` on a pool fetches onto the container disk instead of mounting the volume.
   - The volume is not mounted. `volume: true` with r2 is refused.
+  - **Any data centre**: the pool's `data_centers` (r2 only) replaces the region's EUR-IS-1, and a standalone launch
+    takes any Runpod `dc` with r2 (`fv-control.sh pod launch … --weights r2 --region US-TX-3`). Outside EUR-IS-1 the
+    pod gets `allowedCudaVersions: ["13.0"]` (`allowed_cuda` overrides it; finding 2).
   - `containerDiskInGb` defaults to the trees' bytes × 1.15 + 30 GB, at most 500 GB. Trees larger than that must
     use the volume.
-  - The worker boot runs the same fetch step, then the aux files by pinned URL. The pod's id comes from
-    `RUNPOD_POD_ID`.
-  - The volume path is unchanged and stays the Runpod default until the coordinator removes it. Runpod is still
-    limited to the EU region in fv-control (`regions.ts`); lifting that is a follow-up once the volume is gone.
+  - The worker boot runs the same fetch step, then checks the aux files (fetched from R2 with the trees) by
+    SHA-256. The pod's id comes from `RUNPOD_POD_ID`.
+  - The volume path is unchanged and stays the Runpod default until the coordinator removes it. The volume itself
+    stays EU-only (`regions.ts`).
 - **Runpod serverless endpoints**: `weights_source: r2` on the endpoint spec (no volume, any data centre, a
   per-endpoint weights token instead of a cluster's ingest token, a cache check that skips the fetch). See §9.
-- **Aux files** (TAE decoders, LPIPS) still come from their pinned URLs with SHA-256 (`AUX_FILES`), as with
-  `hub`.
+- **Aux files** (TAE decoders, LPIPS): with r2 they come from R2 as the trees `auxiliary/tae` and `auxiliary/lpips`
+  (the same files and bytes as `AUX_FILES`, tested), then each is checked against `AUX_FILES`' SHA-256. A missing or
+  different file still comes from its pinned URL (GitHub raw, download.pytorch.org), as with `hub`.
+  `WEIGHTS_R2_AUX=0` turns the R2 path off. One h3 boot spent 151 s there with nothing logged (finding 4); every
+  step is now timed in the log and in the boot's reports.
 
 ## 5. Acceleration: what was evaluated
 
@@ -166,7 +195,10 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
 ### 5.2 Many parallel ranged GETs over TCP + TLS: implemented
 
 - This is the main lever. One stream is bounded by its congestion window and RTT, and N streams add up until the
-  NIC, R2 or the client's CPU saturates. The fetcher runs 32 streams by default.
+  NIC, R2 or the client's CPU saturates. The fetcher runs 64 streams of 128 MiB by default.
+- **The tail matters more than the streams.** R2 serves most GETs at a steady 10-50 MB/s per stream, but a few
+  trickle at 1-3 MB/s for minutes. Without the straggler watchdog (§4) the last 0.1-0.3 GB took 40-130 s, more
+  than the rest of the tree (§5.4).
 - The client's CPU per GB is about one SHA-256 pass per part, one whole-file pass (optional), TLS decryption
   (AES-GCM, AES-NI) and the copies.
 - Measured locally (§8): about 3 user CPU-s per GB on a 4-vCPU VM **without SHA-NI** (SHA-256 at 348 MB/s on one
@@ -188,7 +220,7 @@ pod ──N × ranged GET (64 MiB parts) on the presigned URLs──▶ R2   (no
 
 ### 5.4 Recommendation and expected numbers
 
-1. Use parallel ranged GETs (32-64 streams, 64 MiB parts), as implemented.
+1. Use parallel ranged GETs (64 streams of 128 MiB) with the straggler watchdog, as implemented.
 2. Fetch FP8 / prequantized subsets per preset (follow-up).
 3. Keep Brev keep-on-stop.
 4. Skip HTTP/3, the CDN cache and compression for now.
@@ -206,14 +238,59 @@ concurrency 32, 0 retries and 0 bad parts each:
   takes about 5 min.
 - fv-control now plans with **0.5 GB/s** (`R2_DOWNLOAD_GBPS`). An endpoint's outlook switches to its own last
   measured rate once a boot reports one.
-- Not measured yet: a Runpod pod outside the EU (the standalone launch accepts EUR-IS-1 only), Brev (the warm
-  restart did not come up), and concurrency 64.
+- Not measured yet: a Runpod GPU pod outside the EU (now possible: §4), Brev (the warm restart did not come up),
+  and the fixed fetcher on a GPU host.
 - For comparison, the Hub manages **150-260 MB/s** on an 8-vCPU pod (runpod-volumes.md §5.5), or 10-16 min for the
   same tree.
 
-To measure it on a pod: run `python3 r2-weights.py plan <tree> --out /tmp/plan.json`, then
-`python3 r2-fetch.py --root /tmp/w --plan /tmp/plan.json --concurrency 64 --status /tmp/s.json` (the status file has
-MB/s). A pod booted with `weights_source r2` reports the same figures to fv-control.
+**Measured 2026-10-12, after round 1: where the time goes, and the fix.** One Runpod CPU pod (`cpu3c`, 16 vCPU on
+an AMD EPYC 9655 with SHA-NI, US-NC-1, $0.48/hr, 25 min, about $0.20) fetched real trees from `fv-weights` with the
+read-only key (`scripts/gpu/r2-fetch-bench.sh`, `r2-fetch-bench.py`). Host: SHA-256 1.9 GB/s on one core,
+pwrite + fsync 8.6 GB/s. Each fetch started from an empty disk.
+
+| Fetcher | Tree | Streams × MiB per GET | s | MB/s |
+|---|---|---|---:|---:|
+| round 1's (no watchdog), whole-file hash | `fastwan22-ti2v-5b` 24.2 GB | 32 × 64 | 150.0 | 161 |
+| round 1's, `--no-full-hash` | same | 32 × 64 | 97.8 | 248 |
+| round 1's, the same host later | same | 32 × 64 | 57.3 | 422 |
+| watchdog (6 s), whole-file hash after the file | same | 32 × 64 | 28.1 | 860 |
+| same | same | 64 × 64 | 66.0 | 367 (a stalled first byte, not caught: fixed) |
+| same | same | 64 × 256 | 31.0 | 781 |
+| same | same | 128 × 256 | 22.3-28.7 | 843-1085 |
+| same, `--no-full-hash` | same | 64 × 256 | 21.4 | 1132 |
+| watchdog incl. first byte, in-order whole-file hash | same | 32 × 64 | 19.9 | 1214 |
+| same | same | 64 × 64 | 20.8 | 1164 |
+| same | same | 64 × 256 | 19.4 | 1249 |
+| same | same | 128 × 128 | 18.5 | 1308 |
+| same | same | 128 × 256 | 19.7 | 1230 |
+| same | same | 32 × 256 | 24.9 | 971 |
+| same, `--no-full-hash` | same | 64 × 256 / 128 × 256 | 19.0 / 19.5 | 1275 / 1243 |
+| same, in-order whole-file hash | `h3-base/transformer_prequant_4step-vsa_mxfp8` 27.3 GB (one 27 GB file) | 64 × 128 | 29.8 | 918 |
+| round 1's (no watchdog) | same | 32 × 64 | > 120 (stopped at 27.2 / 27.3 GB) | < 217 |
+| **the defaults** (64 × 128, watchdog, no whole-file hash) | that tree + `fastwan22-ti2v-5b`, 51.5 GB | 64 × 128 | 32.2, 32.8 | **1598, 1568** |
+| same | same | 128 × 128 | 35.2 | 1463 |
+
+- **The bottleneck was the tail, not the streams.** Every fetch ran at **1.7-1.8 GB/s** for its first 15-20 s.
+  Then a few GETs trickled at 1-3 MB/s (one sat about a minute, most likely before its first byte). Round 1's fetcher
+  waited for them, at 2-3 MB/s overall, for 40-130 s. The watchdog cut 1-29 GETs per fetch and fetched them again.
+  The fetches then ended within a few seconds of the bulk.
+- Raw GETs to nowhere (no hash, no write) over 20 s: 32 × 64 MiB 386 MB/s, 64 × 64 532, 128 × 64 756,
+  64 × 256 816, 128 × 256 1211 MB/s. These include the same tail (a run waited for its slowest GET). Per GET, the
+  median was 1.6-4.6 s for 64 MiB and 8.6-19 s for 256 MiB.
+- **CPU is not the bottleneck** with SHA-NI: about 2 CPU-s per GB (SHA-256 of every part, TLS, pwrite), 2.6 with the
+  whole-file hash. That is about 3 cores at 1.3 GB/s.
+- **Part size:** 128-256 MiB GETs were a little faster than 64 MiB GETs at the same stream count once the tail was
+  handled. Concurrency 32-128 made little difference. The whole-file hash cost little wall time with the in-order
+  hash on many-file trees, but 5-10 s on a single 27 GB file (it waits for the file's slowest part).
+- **Chosen defaults:** 64 streams, 2 parts (128 MiB) per GET, the watchdog at 4 s, no whole-file hash.
+- **Not measured:** a GPU host with this fetcher. Round 1's three serverless H100 boots (0.33-0.77 GB/s) ran the
+  fetcher without the watchdog, so their rates are tail-bound too. The planning rate stays **0.5 GB/s**
+  (`R2_DOWNLOAD_GBPS`) until round 2 measures a GPU host. An endpoint uses its own measured rate after one boot.
+
+To measure it: `scripts/gpu/r2-fetch-bench.sh up [DC…]` (one CPU pod, 45 min backstop, read-only key), then `status
+<pod>`, `rerun <pod>` with other `FV_BENCH_FETCH` settings, and `down <pod>`. By hand on any box: `python3 r2-weights.py
+plan <tree> --out /tmp/plan.json`, then `python3 r2-fetch.py --root /tmp/w --plan /tmp/plan.json --status /tmp/s.json`
+(the status file has MB/s). A pod booted with `weights_source r2` reports the same figures to fv-control.
 
 ## 6. Migration off the EU volume
 
@@ -368,6 +445,16 @@ The volume is deleted only when every one of these holds, and nothing here does 
   bash with the real fetcher and fv-control's real handlers: a cold boot, a cache hit that asks for nothing, a stale
   revision fetched again, a wrong token failing loudly, the add-only cache volume.
 - `scripts/gpu/tests/test_r2_weights.py` still passes with `--add-only` added to the fetcher.
+- Added 2026-10-12 (round-1 fixes, docs/ops/r2-bench-2026-10-12.md):
+  - `test_r2_weights.py`: multi-part GETs with a bad part inside one, a stalled GET cut by the watchdog and fetched
+    again (not counted as a retry), `--skip-trees`, two nested trees that arrive before their parent and a nested
+    tree added to a parent already present, the in-order whole-file hash (`--full-hash`);
+  - `control/test/unit/preset-trees.test.ts`: every preset's trees against its config, `recipe-trees.ts` against the
+    Rust sources, the r2 / hub plans, the aux trees against `AUX_FILES`;
+  - `control/test/unit/r2-round1-fixes.test.ts`: the driver check in sh and bash with stub hosts (and its report),
+    the CUDA filter defaults, standalone pods outside the EU with r2, the boot diagnosis, the timed steps;
+  - `serverless-r2.test.ts`: the bash boot fetches the aux trees from the fake R2 and reports its steps;
+  - `brev-park.test.ts`: the warm restart's start checks and Brev's answer, the start sent again, the stuck alert.
 - Integration (`node test/integration/run.mjs`, step "weights_source r2"):
   - a GMI standalone pod defaults to r2 for a published tree
   - the launch check reads the manifest
@@ -405,8 +492,9 @@ design and how to benchmark it.
 - Every scale-from-zero worker on a fresh host fetches its trees before fv-serve starts. That is about 144 GB for
   H3 (`h3-base`), 125 GB for LTX-2.5 and about 60 GB for Wan 2.2 5B (sizes from brev-park.ts `TREE_GB` until the
   manifests are published).
-- At the measured 0.33-0.77 GB/s (§5.4) the H3 fetch adds about 5 min and the Wan fetch 1.3-3 min to every
-  scale-from-zero worker on a fresh host. Measured volume cold starts, for comparison: wan 49 + 70 s, h3 80 + 52 s,
+- At round 1's 0.33-0.77 GB/s (§5.4) the H3 fetch added about 5 min and the Wan fetch 1.3-3 min to every
+  scale-from-zero worker on a fresh host. With the straggler fix a CPU pod fetched at 1.2-1.6 GB/s (about 2 min for
+  H3's 204 GB with its pre-quantized trees, under 1 min for Wan); a GPU host is **UNVERIFIED**. Measured volume cold starts, for comparison: wan 49 + 70 s, h3 80 + 52 s,
   ltx 79 + 33 s (docs/serve/gateway.md §8.6). The comparison is in docs/ops/r2-bench-2026-10-12.md.
 - The container disk is sized from the manifests: the bytes × 1.15 + 30 GB (H3 196 GB). Runpod's maximum
   container disk for serverless is **UNVERIFIED**; fv-control allows up to 500 GB.

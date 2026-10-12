@@ -29,6 +29,10 @@ export interface BrevWorkspace {
   instanceType: string | null;
   dns: string | null;
   createdAt: string | null;
+  /** Brev's own explanation of the status (brev-cli entity.go Workspace.StatusMessage), e.g. why a start did not run. */
+  statusMessage: string | null;
+  /** The instance type can be stopped and started (instanceTypeInfo.stoppable; the CLI refuses a start without it). */
+  stoppable: boolean | null;
 }
 
 const base = (env: Env) => (env.BREV_API_URL || "https://brevapi.us-west-2-prod.control-plane.brev.dev").replace(/\/$/, "");
@@ -76,8 +80,12 @@ export function toWorkspace(w: any): BrevWorkspace {
     instanceType: w.instanceType ?? null,
     dns: w.dns ?? null,
     createdAt: w.createdAt ?? w.created_at ?? null,
+    statusMessage: typeof w.statusMessage === "string" && w.statusMessage.trim() ? w.statusMessage.trim().slice(0, 300) : null,
+    stoppable: typeof w.instanceTypeInfo?.stoppable === "boolean" ? w.instanceTypeInfo.stoppable : null,
   };
 }
+/** Brev's status of a workspace in a few words: the status, its message and health (what the logs and alerts show). */
+export const brevStatusLine = (w: Pick<BrevWorkspace, "status" | "statusMessage" | "health">) => [w.status || "?", w.statusMessage, w.health && w.health !== "HEALTHY" ? `health ${w.health}` : null].filter(Boolean).join(": ");
 /** brev-cli store/workspace.go: UserWorkspaceTemplateID, UserWorkspaceClassID, DefaultDiskStorage (non-admin users). */
 export const BREV_USER_TEMPLATE_ID = "4nbb4lg2s";
 export const BREV_USER_CLASS_ID = "2x8";
@@ -100,6 +108,17 @@ const arr = (j: any): any[] => (Array.isArray(j) ? j : Array.isArray(j?.workspac
 export const brev = {
   async workspaces(env: Env): Promise<BrevWorkspace[]> {
     return arr(await call(env, "GET", `api/organizations/${encodeURIComponent(env.BREV_ORG_ID!)}/workspaces`)).map(toWorkspace);
+  },
+  /** One workspace (`GET api/workspaces/{id}`, brev-cli GetWorkspace); null when Brev does not know it. */
+  async get(env: Env, id: string): Promise<BrevWorkspace | null> {
+    try {
+      const j = await call(env, "GET", `api/workspaces/${encodeURIComponent(id)}`);
+      const w = j?.workspace ?? j;
+      return w && typeof w === "object" && w.id && w.status ? toWorkspace(w) : null;
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
   },
   async byName(env: Env, name: string): Promise<BrevWorkspace | null> {
     return (await brev.workspaces(env)).find((w) => w.name === name && w.status !== "DELETING") || null;
@@ -147,9 +166,11 @@ export const brev = {
   async stop(env: Env, id: string): Promise<void> {
     await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/stop`);
   },
-  /** Starts a stopped workspace (`PUT …/start`); per the docs it fails when its provider / region has no capacity. */
-  async start(env: Env, id: string): Promise<void> {
-    await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/start`);
+  /** Starts a stopped workspace (`PUT …/start`); per the docs it fails when its provider / region has no capacity.
+   * Answers the workspace as Brev returns it (brev-cli StartWorkspace: its status and statusMessage), or null. */
+  async start(env: Env, id: string): Promise<BrevWorkspace | null> {
+    const j = await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/start`);
+    return j && typeof j === "object" && (j.id || j.workspace?.id) ? toWorkspace(j.workspace ?? j) : null;
   },
   /** Deletes one workspace (instance and disk); an unknown one counts as gone. */
   async remove(env: Env, id: string): Promise<boolean> {

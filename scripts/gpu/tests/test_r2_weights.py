@@ -49,8 +49,8 @@ class Base(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.addCleanup(self.srv.shutdown)
 
-    def make_tree(self, files):
-        src = self.tmp / "src"
+    def make_tree(self, files, name="src"):
+        src = self.tmp / name
         for rel, data in files.items():
             p = src / rel
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +247,7 @@ class Fetch(Base):
 
     def test_fetch_whole_tree_then_present(self):
         plan = self.plan("demo")
-        self.assertEqual(self.fetch(plan, self.root), 0)
+        self.assertEqual(self.fetch(plan, self.root, "--get-parts", "1"), 0)
         self.assert_tree()
         n = len(self.range_gets())
         self.assertEqual(n, sum(-(-len(v) // PART) for v in TREE.values()))
@@ -293,7 +293,7 @@ class Fetch(Base):
         data[PART * 7:PART * 8] = b"\0" * PART  # part 7 never written
         (stage / "transformer").mkdir(parents=True)
         (stage / big).write_bytes(bytes(data))
-        self.assertEqual(self.fetch(plan, self.root), 0)
+        self.assertEqual(self.fetch(plan, self.root, "--get-parts", "1"), 0)
         self.assert_tree()
         got = sorted(a // PART for k, a in self.range_gets() if k.endswith(big))
         self.assertEqual(got, [3, 7])
@@ -333,11 +333,61 @@ class Fetch(Base):
         self.assertEqual((self.root / "demo" / "text_encoder_fp8" / "model.safetensors").read_bytes(), child["model.safetensors"])
         self.assertEqual((self.root / "demo" / "text_encoder_fp8" / ".fv-revision").read_text(), "eu-1")
 
+    def test_multi_part_gets_check_every_part(self):
+        plan = self.plan("demo")
+        self.st.faults["corrupt"] = 1  # one bad part inside a 3-part GET: only that GET's unchecked parts again
+        self.assertEqual(self.fetch(plan, self.root, "--get-parts", "3", "--full-hash"), 0)  # the in-order whole-file hash too
+        self.assert_tree()
+        n = sum(-(-(-(-len(v) // PART)) // 3) for v in TREE.values())
+        self.assertGreaterEqual(len(self.range_gets()), n)
+        self.assertLessEqual(len(self.range_gets()), n + 3)
+        self.assertEqual(self.status()["corrupt_parts"], 1)
+
+    def test_a_straggler_is_cut_and_fetched_again(self):
+        # R2 now and then trickles one GET at 1-3 MB/s for minutes (docs/ops/r2-bench-2026-10-12.md, §5.4): the
+        # watchdog cuts it once the parts before it set the pace, and the part comes again on a new connection.
+        plan = self.plan("demo")
+        self.st.stall_skip = 12
+        self.st.faults["stall"] = 2
+        t = time.time()
+        self.assertEqual(self.fetch(plan, self.root, "--concurrency", "2", "--slow-after-s", "0.5"), 0)
+        self.assertLess(time.time() - t, 15, "a stalled GET must not hold the fetch for its whole stall")
+        self.assert_tree()
+        self.assertGreaterEqual(self.status()["slow_restarts"], 1)
+        self.assertEqual(self.status()["retries"], 0, "a straggler cut is not a fault")
+
+    def test_skip_trees_leaves_those_trees_out(self):
+        self.publish("demo/transformer_prequant_x_mxfp8", "eu-1", self.make_tree({"model.safetensors": rnd(70_000, 5)}, "dit"))
+        plan = self.plan("demo", "demo/transformer_prequant_x_mxfp8")
+        self.assertEqual(self.fetch(plan, self.root, "--skip-trees", "*_mxfp8"), 0)
+        self.assert_tree()
+        self.assertFalse((self.root / "demo" / "transformer_prequant_x_mxfp8").exists())
+        self.assertFalse(any("mxfp8" in k for k, _ in self.range_gets()))
+
+    def test_nested_trees_arrive_first_and_land_inside_their_parent(self):
+        # h3-base/text_encoder_fp8 and h3-base/transformer_prequant_*: separate (smaller) trees that go first, wait
+        # for the parent, then sit inside it as on the volume; a later run with the parent present adds a missing one.
+        te = {"model.safetensors": rnd(90_000, 6), "manifest.json": b'{"k": 1}'}
+        dit = {"model.safetensors": rnd(120_000, 7), "manifest.json": b'{"k": 2}'}
+        self.publish("demo/text_encoder_fp8", "eu-1", self.make_tree(te, "te"))
+        self.publish("demo/transformer_prequant_x_mxfp8", "eu-1", self.make_tree(dit, "dit"))
+        self.assertEqual(self.fetch(self.plan("demo/text_encoder_fp8", "demo"), self.root), 0)
+        self.assert_tree()
+        self.assertEqual((self.root / "demo" / "text_encoder_fp8" / "model.safetensors").read_bytes(), te["model.safetensors"])
+        n = len(self.range_gets())
+        # the parent and one nested tree present: only the new nested tree is fetched, the others stay
+        self.assertEqual(self.fetch(self.plan("demo/text_encoder_fp8", "demo", "demo/transformer_prequant_x_mxfp8"), self.root), 0)
+        got = [k for k, _ in self.range_gets()[n:]]
+        self.assertTrue(got and all("transformer_prequant_x_mxfp8" in k for k in got), got)
+        self.assert_tree()
+        self.assertEqual((self.root / "demo" / "transformer_prequant_x_mxfp8" / "model.safetensors").read_bytes(), dit["model.safetensors"])
+        self.assertEqual((self.root / "demo" / "text_encoder_fp8" / ".fv-revision").read_text(), "eu-1")
+
     def test_whole_file_mismatch_fails(self):
         plan = self.plan("demo")
         f = [x for x in plan["trees"][0]["files"] if x["path"].startswith("transformer/")][0]
         f["sha256"] = "1" * 64  # parts fine, whole file not: refetched once, then a failure
-        self.assertEqual(self.fetch(plan, self.root), 1)
+        self.assertEqual(self.fetch(plan, self.root, "--full-hash"), 1)
         self.assertFalse((self.root / "demo").exists())
 
     def test_unsafe_paths_are_refused(self):

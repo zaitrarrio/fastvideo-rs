@@ -5,6 +5,7 @@ import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, 
 import type { Env } from "../env";
 import { isOtherPool, weightsPlan } from "../providers";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
+import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -22,7 +23,8 @@ export const SECRET_ENV_REFS: Record<string, string> = {
 // inline (FV_WORKER_TOML_B64) when the pool has one.
 export const WORKER_BOOT = `set -u
 echo "[fv-boot] start" >&2
-if [ -d /workspace/weights ]; then echo "[fv-boot] volume: /workspace/weights ($(ls /workspace/weights 2>/dev/null | wc -l) trees)" >&2; else echo "[fv-boot] volume: /workspace/weights missing" >&2; fi
+FV_DRV_POD="\${RUNPOD_POD_ID:-}"
+${DRIVER_CHECK_SH}if [ -d /workspace/weights ]; then echo "[fv-boot] volume: /workspace/weights ($(ls /workspace/weights 2>/dev/null | wc -l) trees)" >&2; else echo "[fv-boot] volume: /workspace/weights missing" >&2; fi
 mkdir -p /fvstate
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
   printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml
@@ -271,8 +273,20 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
     }
     return out;
   }
+  // weights_source r2 (no volume) with data_centers: those data centres, in order, instead of the regions'.
+  if (pool.weights_source === "r2" && !isOtherPool(pool) && pool.data_centers?.length) {
+    for (const dc of pool.data_centers) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS.eu.gpus) out.push({ dc, gpu: g });
+    return out;
+  }
   for (const r of regions) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS[r]!.gpus) out.push({ region: r, dc: REGIONS[r]!.dc, gpu: g });
   return out;
+}
+/** A GPU pod's host filter (allowedCudaVersions): the pool's, else none in a weights volume's data centre (its hosts
+ * are known), else CUDA 13 (driver-check.ts: an older driver crashes the image). */
+export function podAllowedCuda(pool: PoolSpec, pl: Placement): string[] {
+  if (pool.allowed_cuda) return [...pool.allowed_cuda];
+  const volumeDc = Object.values(REGIONS).some((r) => r.volume && r.dc === pl.dc);
+  return volumeDc ? [] : [...R2_DEFAULT_CUDA];
 }
 /** The start command for a worker env: an edge front, a worker with the backstop watchdog (standalone), or the plain worker. */
 export function bootFor(env: Record<string, string>): string {
@@ -296,6 +310,7 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
   }
   const r2 = env.FV_WEIGHTS_SOURCE === "r2";
   const vol = pool.volume !== false && !r2 && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
+  const cuda = podAllowedCuda(pool, pl);
   return {
     ...common,
     cloudType: "SECURE",
@@ -305,6 +320,7 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
     containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : 40),
     ...vol,
     dataCenterIds: [pl.dc!],
+    ...(cuda.length ? { allowedCudaVersions: cuda } : {}),
     ports: ["8000/http", "70000/tcp"],
   };
 }

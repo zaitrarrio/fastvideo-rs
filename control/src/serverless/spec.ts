@@ -30,6 +30,7 @@ import {
 } from "../enums";
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { slsR2DiskGb, slsTrees } from "./weights";
+import { R2_DEFAULT_CUDA } from "../driver-check";
 
 /**
  * Where a GPU endpoint's workers get their weights (docs/control/serverless.md §1b, docs/ops/r2-weights.md §9):
@@ -45,6 +46,10 @@ export const SLS_WEIGHTS_SOURCES = ["volume", "r2"] as const;
 // EUR-IS-1 RTX PRO 6000 hosts (driver 595.x) so workers never started (docs/serve/e2e/ltx.md, h3-max.md;
 // staging h3-max2, 2026-10-07). The images check the driver (>= 580) themselves.
 export const DEFAULT_CUDA: string[] = [];
+/** weights_source r2 (any data centre): hosts must offer CUDA 13 (driver-check.ts R2_DEFAULT_CUDA). A worker on an
+ * older driver panicked in fv-serve and crash-looped (docs/ops/r2-bench-2026-10-12.md finding 2). */
+export const DEFAULT_R2_CUDA: string[] = [...R2_DEFAULT_CUDA];
+const sameList = (a: readonly string[] | undefined, b: readonly string[]) => JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...b].sort());
 export { CUDA_VERSIONS, SLS_CPU_FLAVORS };
 
 /** The weights volumes fv-control may mount (CLAUDE.md: EU only; a region without a volume is unavailable). */
@@ -151,7 +156,7 @@ export const EndpointSpecZ = z
     execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
     scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"], { error: (i) => enumMessage("a Runpod scaler type", i.input, ["QUEUE_DELAY", "REQUEST_COUNT"]) }).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
     scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
-    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer (default: no filter, any CUDA; the images check the driver themselves). Setting one can leave workers unplaced."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer. Default: none on the EU volume (its hosts are new); 13.0 with weights_source r2 (any data centre: an older driver crashes the image). [] for no filter (the boot still refuses a driver older than CUDA 13). A filter can leave workers unplaced."),
     container_disk_gb: z.number().int().min(5).max(500).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB). weights_source r2: at least the trees' size × 1.15 + 30 GB (the default is sized from the manifests); otherwise up to 200."),
     deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
@@ -244,12 +249,14 @@ export function withWeightsSource(spec: EndpointSpec, ws: "volume" | "r2"): Endp
   if (ws === "r2") {
     out.network_volume = null;
     delete out.data_centers;
+    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
     out.container_disk_gb = Math.max(spec.container_disk_gb, slsR2DiskGb(slsTrees(out)));
   } else {
     const eu = knownVolumes()[0];
     out.network_volume = eu ? eu.id : null;
     if (eu) out.data_centers = [eu.dc] as EndpointSpec["data_centers"];
     out.container_disk_gb = Math.min(spec.container_disk_gb, 200);
+    if (sameList(spec.allowed_cuda, DEFAULT_R2_CUDA)) out.allowed_cuda = [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"];
   }
   return out;
 }

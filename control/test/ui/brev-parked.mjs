@@ -102,8 +102,8 @@ try {
   await page.check(`${SL} [data-ctl][data-path="weights_download_approved"]`);
   await page.waitForSelector(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn:not([hidden]):text-matches("^(cold|warm|reuse): ")`, { timeout: 20000 });
   const outlook = await page.textContent(`${SL} .ff-field[data-path="provider_gpu"] .ff-warn`);
-  // The parked fv-pod-ui02 (the same type; 25 GB on its 250 GB disk) is reused before a new VM: h3-base downloads onto it.
-  assert.match(outlook, /^reuse: restarts parked fv-pod-ui02-1010000000 \(none of the trees at the pinned revisions on it; downloads h3-base ~144 GB onto it\): boot ~\d+ min$/, outlook);
+  // The parked fv-pod-ui02 (the same type; 25 GB on its 250 GB disk) is reused before a new VM: h3-base and the FastH3 LoRA download onto it.
+  assert.match(outlook, /^reuse: restarts parked fv-pod-ui02-1010000000 \(none of the trees at the pinned revisions on it; downloads FastH3-4-step-Preview-v1-LoRA, h3-base ~151 GB onto it\): boot ~\d+ min$/, outlook);
   await page.screenshot({ path: `${out}/22-brev-launch-types.png`, fullPage: true });
 
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");
