@@ -99,7 +99,7 @@ fi
 if [ "${FV_COPY_SKIP_VERIFY:-0}" != 1 ]; then
   # shellcheck disable=SC2086
   FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID="$FV_R2_RO_ID" FV_WEIGHTS_R2_VERIFY_SECRET_ACCESS_KEY="$FV_R2_RO_SECRET" \
-    FV_VERIFY_WINDOW=8 step "verify-deep" $P verify --deep --record --workers 10 $HUB $VOL >>$SRV/verify.txt 2>&1
+    FV_VERIFY_WINDOW=24 FV_R2_TIMEOUT_S=60 step "verify-deep" $P verify --deep --record --skip-recorded --workers 8 $HUB $VOL >>$SRV/verify.txt 2>&1
   log "verify done"
 fi
 $P record >$SRV/record.tsv 2>>$SRV/log.txt

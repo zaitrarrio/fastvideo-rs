@@ -222,7 +222,7 @@ class S3:
         self.bucket = bucket
         self.access = access
         self.secret = secret
-        self.conns = r2_fetch.Conns(timeout=300)
+        self.conns = r2_fetch.Conns(timeout=float(os.environ.get("FV_R2_TIMEOUT_S", "120")))
         self.ops = {"A": 0, "B": 0}
         self.oplock = threading.Lock()
 
@@ -832,6 +832,7 @@ def verify_tree(s3, prefix, m, deep, workers):
             return None
         ps = m["part_size"]
         whole = hashlib.sha256()
+        t0 = time.time()
 
         def get_part(i):
             a = i * ps
@@ -858,6 +859,8 @@ def verify_tree(s3, prefix, m, deep, workers):
                 whole.update(data)
         if whole.hexdigest() != f["sha256"]:
             return f"{f['path']}: sha256 mismatch"
+        el = time.time() - t0
+        log(f"  verified {m['dest']}/{f['path']}: {f['size'] / 1e9:.2f} GB in {el:.0f}s ({f['size'] / max(el, 1e-6) / 1e6:.0f} MB/s)")
         return None
 
     window = max(1, int(os.environ.get("FV_VERIFY_WINDOW", "8")))
@@ -1037,6 +1040,7 @@ def main(argv=None):
     p.add_argument("dests", nargs="*", help="default: every published tree")
     p.add_argument("--deep", action="store_true", help="read every byte and check the part and file SHA-256s")
     p.add_argument("--record", action="store_true", help="write verified/<dest>/<rev>/<stamp>.json (add-only) for each tree that passes")
+    p.add_argument("--skip-recorded", action="store_true", help="--deep: skip a tree that already has a verified/ record (a resumed run)")
     p.add_argument("--workers", type=int, default=16)
     p = sub.add_parser("compare-dir")
     p.add_argument("dest")
@@ -1144,6 +1148,9 @@ def main(argv=None):
                     except Fail as e:
                         print(f"FAIL {dest}: {e}")
                         fails += 1
+                        continue
+                    if args.deep and args.skip_recorded and any(size >= 0 for _, size in rs3.list(f"{args.prefix}verified/{dest}/{m['rev']}/")):
+                        print(f"ok   {dest}@{m['rev']}: {len(m['files'])} files, {m['total_bytes'] / 1e9:.2f} GB (sha256, recorded earlier)")
                         continue
                     t = time.time()
                     bad = verify_tree(rs3, args.prefix, m, args.deep, args.workers)
