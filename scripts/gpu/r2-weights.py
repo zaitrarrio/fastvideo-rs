@@ -818,6 +818,18 @@ def verify_tree(s3, prefix, m, deep, workers):
     bad = []
     rec = recorded_hashes()
 
+    def one_shallow(f):
+        key = obj_key(prefix, m["dest"], m["rev"], f["path"])
+        h = s3.head(key)
+        if h is None:
+            return f"{f['path']}: missing"
+        if h[0] != f["size"]:
+            return f"{f['path']}: {h[0]} bytes, manifest {f['size']}"
+        r = rec.get((m["dest"], f["path"]))
+        if r and r[1] == "sha256" and f["sha256"] not in r[2]:
+            return f"{f['path']}: manifest sha256 not in weights-sha256.tsv"
+        return None
+
     def one(f):
         key = obj_key(prefix, m["dest"], m["rev"], f["path"])
         h = s3.head(key)
@@ -864,6 +876,37 @@ def verify_tree(s3, prefix, m, deep, workers):
         return None
 
     window = max(1, int(os.environ.get("FV_VERIFY_WINDOW", "8")))
+    if deep and os.environ.get("FV_VERIFY_WHOLE_FILE") != "1":
+        # Every 64 MiB part against the manifest's part SHA-256, all parts of the tree at once (workers x window GETs
+        # in flight, no ordering): R2's slow tail GETs (seconds to tens of seconds, seen 2026-10-12) then cost one
+        # thread each instead of stalling a file. The part hashes are the ones the publisher computed from the same
+        # bytes as each file's SHA-256 (checked before the upload completed); FV_VERIFY_WHOLE_FILE=1 re-hashes whole files.
+        with concurrent.futures.ThreadPoolExecutor(workers) as ex:
+            for f, err in zip(m["files"], ex.map(lambda f: one_shallow(f), m["files"])):
+                if err:
+                    bad.append(err)
+        if bad:
+            return bad
+        ps = m["part_size"]
+        t0 = time.time()
+
+        def part(job):
+            f, i = job
+            a = i * ps
+            b = min(f["size"], a + ps)
+            data = s3.get(obj_key(prefix, m["dest"], m["rev"], f["path"]), f"bytes={a}-{b - 1}")
+            if data is None or len(data) != b - a:
+                return f"{f['path']}: part {i} short"
+            return None if hashlib.sha256(data).hexdigest() == f["parts"][i] else f"{f['path']}: part {i} sha256 mismatch"
+
+        jobs = [(f, i) for f in m["files"] for i in range(len(f["parts"]))]
+        with concurrent.futures.ThreadPoolExecutor(workers * window) as ex:
+            for err in ex.map(part, jobs):
+                if err:
+                    bad.append(err)
+        el = time.time() - t0
+        log(f"  parts of {m['dest']}: {len(jobs)} in {el:.0f}s ({m['total_bytes'] / max(el, 1e-6) / 1e6:.0f} MB/s)")
+        return bad
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         for f, err in zip(m["files"], ex.map(one, m["files"])):
             if err:
@@ -1162,7 +1205,7 @@ def main(argv=None):
                         print(f"ok   {dest}@{m['rev']}: {len(m['files'])} files, {m['total_bytes'] / 1e9:.2f} GB ({what}, {time.time() - t:.0f}s)")
                         if args.record and args.deep:
                             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every part and file", "read_with": "verify key" if rs3 is not s3 else "main key", "at": stamp}).encode(), content_type="application/json")
+                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every file" if os.environ.get("FV_VERIFY_WHOLE_FILE") == "1" else "sha256 of every 64 MiB part (manifest part hashes)", "read_with": "verify key" if rs3 is not s3 else "main key", "at": stamp}).encode(), content_type="application/json")
             return 1 if fails else 0
         if args.cmd == "compare-dir":
             return cmd_compare_dir(s3, args)
