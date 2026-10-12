@@ -12,7 +12,8 @@
 # with fv-control's read-only key, and `record`. Rerunning `up` after a dead pod resumes (add-only, idempotent).
 #
 # Env: RUNPOD_API_KEY; FV_POD_CAP_S (backstop, default 14400 = 4 h); FV_MIN_BALANCE (default 8); FV_COPY_VCPU
-# (default 16); FV_COPY_JOBS / FV_COPY_FILES / FV_COPY_WINDOW / FV_COPY_ONLY / FV_COPY_REV (passed to the pod).
+# (default 16); FV_COPY_JOBS / FV_COPY_FILES / FV_COPY_WINDOW / FV_COPY_ONLY / FV_COPY_REV / FV_COPY_ARCHIVE (passed
+# to the pod; FV_COPY_ARCHIVE="d1 d2": archive-only mode for those volume-root directories, see the pod script).
 # Credentials are read from /root/.config/fv (r2_weights_rw_*, r2_weights_ro_*, cf_api_token) into the pod's env
 # only; nothing is printed. The scripts reach the pod as a tarball in the staging bucket (fv-weights-staging,
 # tmp/), fetched through a presigned URL and checked by SHA-256; `down` deletes that tarball.
@@ -61,14 +62,14 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
     payload="$(jq -n --arg name "fv-p0-r2copy-$(date -u +%m%d%H%M)" --arg vol "$FV_EU_VOLUME_ID" --arg dc "$FV_EU_DC" --arg start "$start" \
       --arg vcpu "${FV_COPY_VCPU:-16}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" \
-      --arg rev "${FV_COPY_REV:-eu-$(date -u +%Y%m%d)}" --arg jobs "${FV_COPY_JOBS:-3}" --arg files "${FV_COPY_FILES:-6}" --arg window "${FV_COPY_WINDOW:-4}" --arg only "${FV_COPY_ONLY:-}" '{
+      --arg rev "${FV_COPY_REV:-eu-$(date -u +%Y%m%d)}" --arg jobs "${FV_COPY_JOBS:-3}" --arg files "${FV_COPY_FILES:-6}" --arg window "${FV_COPY_WINDOW:-4}" --arg only "${FV_COPY_ONLY:-}" --arg arch "${FV_COPY_ARCHIVE:-}" '{
         name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
         cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
         containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc], ports: ["8000/http"],
         dockerStartCmd: ["/bin/bash","-lc",$start],
         env: {FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_R2_ENDPOINT: $ep, FV_WEIGHTS_R2_BUCKET: "fv-weights",
               FV_WEIGHTS_R2_ACCESS_KEY_ID: env.FVX_RWID, FV_WEIGHTS_R2_SECRET_ACCESS_KEY: env.FVX_RWSEC, FV_R2_RO_ID: env.FVX_ROID, FV_R2_RO_SECRET: env.FVX_ROSEC,
-              FV_COPY_REV: $rev, FV_COPY_JOBS: $jobs, FV_COPY_FILES: $files, FV_COPY_WINDOW: $window, FV_COPY_ONLY: $only, FV_COPY_SKIP_COMPARE: env.FV_COPY_SKIP_COMPARE}
+              FV_COPY_REV: $rev, FV_COPY_JOBS: $jobs, FV_COPY_FILES: $files, FV_COPY_WINDOW: $window, FV_COPY_ONLY: $only, FV_COPY_ARCHIVE: $arch, FV_COPY_SKIP_COMPARE: env.FV_COPY_SKIP_COMPARE}
       }')"
     unset FVX_URL FVX_RWID FVX_RWSEC FVX_ROID FVX_ROSEC
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(jq -r '.error // .' <<<"$resp" | head -c 300)"; exit 1; }
@@ -87,10 +88,10 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
   fetch)
     id="${2:?pod id}"; out="${3:?dir}"; u="https://$id-8000.proxy.runpod.net"
     mkdir -p "$out"
-    for f in log.txt status.tsv inventory.txt wan-listing.txt compare.txt verify.txt record.tsv status-final.txt archive-runs.log archive-wan.log; do
+    for f in log.txt status.tsv inventory.txt wan-listing.txt compare.txt verify.txt record.tsv status-final.txt archive-runs.log archive-wan.log sizes.tsv compare-archive.txt; do
       curl -sS --max-time 60 --fail "$u/$f" -o "$out/$f" 2>/dev/null || true
     done
-    for f in $(curl -sS --max-time 20 "$u/" | grep -o 'href="pub-[^"]*\.log"' | cut -d'"' -f2); do curl -sS --max-time 60 --fail "$u/$f" -o "$out/$f" || true; done
+    for f in $(curl -sS --max-time 20 "$u/" | grep -oE 'href="(pub-[^"]*\.log|archive-[^"]*\.log|listing-[^"]*\.txt|token-scan-[^"]*\.txt)"' | cut -d'"' -f2); do curl -sS --max-time 60 --fail "$u/$f" -o "$out/$f" || true; done
     log "fetched into $out"
     ;;
   down)

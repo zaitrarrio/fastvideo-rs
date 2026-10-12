@@ -8,7 +8,7 @@
 # FV_R2_RO_SECRET (fv-control's read-only pair: the deep verify runs with it), FV_WEIGHTS_R2_ENDPOINT,
 # FV_COPY_REV (the label of volume-only trees, eu-<YYYYMMDD>), FV_COPY_JOBS (trees at once, default 3),
 # FV_COPY_FILES / FV_COPY_WINDOW (files per tree / parts per file in flight), FV_COPY_ONLY (space-separated
-# dests: only these), FV_COPY_SKIP_VERIFY=1.
+# dests: only these), FV_COPY_SKIP_VERIFY=1, FV_COPY_ARCHIVE (archive-only mode: these volume-root directories).
 #
 # /srv (served on :8000 through the Runpod proxy): log.txt, status.tsv (one line per step: what, rc, seconds),
 # inventory.txt, wan-listing.txt, pub-<dest>.log, compare.txt, verify.txt, record.tsv, DONE (0 = all ok).
@@ -32,6 +32,33 @@ step() { # name, command...: runs it, appends "name rc seconds" to status.tsv
   return "$rc"
 }
 log "start: rev $REV, $JOBS trees at once"
+
+# ---- archive-only mode (FV_COPY_ARCHIVE="dir1 dir2 ...": directories at the volume root, owner-approved): list each
+#      one's size and file count, stop if any is over FV_COPY_ARCHIVE_MAX_GB (default 50) or holds something that
+#      looks like a Hub token, else archive each under archive/eu-volume/<dir>/ and compare it with the volume.
+#      `hf` (the Hub token) and `scratch` are refused outright; no tree is touched and the token is never read.
+if [ -n "${FV_COPY_ARCHIVE:-}" ]; then
+  max=$(( ${FV_COPY_ARCHIVE_MAX_GB:-50} * 1000000000 )); stop=0
+  for d in $FV_COPY_ARCHIVE; do
+    case "$d" in hf | scratch | */* | .* | "") log "refused: $d"; echo 1 >$SRV/DONE; exit 1 ;; esac
+    [ -d "$V/$d" ] || { log "no directory $V/$d"; stop=1; continue; }
+    b="$(du -sb "$V/$d" | cut -f1)"; n="$(find "$V/$d" -type f | wc -l)"
+    printf '%s\t%s\t%s\n' "$d" "$b" "$n" >>$SRV/sizes.tsv
+    find "$V/$d" -maxdepth 2 -printf '%y %s %P\n' | sort -k3 | head -300 >$SRV/listing-$d.txt
+    [ "$b" -le "$max" ] || { log "$d is $b bytes, over the limit: not copying"; stop=1; }
+    # A Hub / API token in any file stops the copy (only file names are logged, never the match).
+    if grep -rlIE 'hf_[A-Za-z0-9]{30,}' "$V/$d" >$SRV/token-scan-$d.txt 2>/dev/null; then log "$d: a token-like string in $(wc -l <$SRV/token-scan-$d.txt) file(s): not copying"; stop=1; fi
+  done
+  [ "$stop" = 0 ] || { echo 1 >$SRV/DONE; exit 1; }
+  for d in $FV_COPY_ARCHIVE; do
+    step "archive $d" $P archive "$d" "$V/$d" --files 16 --window 4 >>$SRV/archive-$d.log 2>&1 && log "archived $d" || log "FAILED archive $d"
+  done
+  for d in $FV_COPY_ARCHIVE; do step "compare-archive $d" $P compare-archive "$d" "$V/$d" --workers 32 >>$SRV/compare-archive.txt 2>&1; done
+  bad="$(awk -F'\t' '$2 != 0' $SRV/status.tsv | wc -l)"
+  log "end: $bad step(s) failed"
+  echo $(( bad > 0 ? 1 : 0 )) >$SRV/DONE
+  exit 0
+fi
 # Gated Hub repos (Lightricks) list their real LFS SHA-256 only to an authenticated caller: use the project's Hub
 # token kept on the volume (the fetchers read the same file), read only, never printed.
 if [ -z "${HF_TOKEN:-}" ] && [ -r "$V/hf/token" ]; then HF_TOKEN="$(cat "$V/hf/token")"; export HF_TOKEN; log "Hub token: from the volume's hf/token"; fi
