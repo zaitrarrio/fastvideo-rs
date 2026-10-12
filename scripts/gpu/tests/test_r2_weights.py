@@ -151,6 +151,20 @@ class Publish(Base):
         self.assertEqual(pub2.skipped, 1)
         self.assertEqual(len(m["files"]), len(TREE))
 
+    def test_an_object_without_its_record_is_adopted_only_when_its_bytes_match(self):
+        src = self.make_tree(TREE)
+        big = "transformer/diffusion_pytorch_model.safetensors"
+        self.st.objects[("fv-weights-test", f"test/weights/demo/r1/{big}")] = (TREE[big], {})  # a run stopped before the record
+        m = self.publish("demo", "r1", src)
+        self.assertEqual(next(f for f in m["files"] if f["path"] == big)["sha256"], hashlib.sha256(TREE[big]).hexdigest())
+        self.assertIn(("fv-weights-test", f"test/parts/demo/r1/{big}.json"), self.st.objects)
+        bad = bytearray(TREE["config.json"])
+        bad[0] ^= 1
+        self.st.objects[("fv-weights-test", "test/weights/demo/r2/config.json")] = (bytes(bad), {})
+        with self.assertRaises(W.Fail):
+            self.publish("demo", "r2", src)
+        self.assertEqual(self.st.objects[("fv-weights-test", "test/weights/demo/r2/config.json")][0], bytes(bad))
+
     def test_existing_object_with_other_size_is_never_replaced(self):
         src = self.make_tree(TREE)
         self.st.objects[("fv-weights-test", "test/weights/demo/r1/config.json")] = (b"other bytes!", {})
@@ -186,6 +200,18 @@ class Publish(Base):
             pub.publish_file("demo", "r1", f)
         f.recorded = ("md5", [hashlib.md5(b"hello").hexdigest()])
         self.assertEqual(pub.publish_file("demo", "r1", f)["sha256"], hashlib.sha256(b"hello").hexdigest())
+
+    def test_compare_dir_by_part_hashes(self):
+        src = self.make_tree(TREE)
+        self.publish("demo", "r1", src)
+        a = lambda **kw: type("A", (), dict(dict(prefix="test/", dest="demo", dir=str(src), rev="r1", sizes_only=False, workers=4), **kw))()  # noqa: E731
+        self.assertEqual(W.cmd_compare_dir(self.s3, a()), 0)
+        big = src / "transformer/diffusion_pytorch_model.safetensors"
+        b = bytearray(big.read_bytes())
+        b[PART * 5 + 3] ^= 1
+        big.write_bytes(bytes(b))
+        self.assertEqual(W.cmd_compare_dir(self.s3, a(sizes_only=True)), 0)
+        self.assertEqual(W.cmd_compare_dir(self.s3, a()), 1)
 
     def test_verify(self):
         src = self.make_tree(TREE)
@@ -317,6 +343,83 @@ class Fetch(Base):
         plan["trees"][0]["files"][0]["path"] = "../escape"
         self.assertEqual(self.fetch(plan, self.root), 1)
         self.assertFalse((self.tmp / "escape").exists())
+
+
+class HubViaDir(Base):
+    """publish-dir of a Hub tree (the volume copy): the Hub listing at the pinned revision decides the files and hashes."""
+
+    def setUp(self):
+        super().setUp()
+        self.rev = "a" * 40
+        self.files = {"cfg.json": b'{"k": 1}', "w/model.bin": rnd(200_000, 7)}
+        self.orig = (W.hub_rows, W.hub_list)
+        W.hub_rows = lambda: {"demo": ("org/demo", self.rev, ["*.bin", "cfg.json", "w/*"])}
+
+        def blob(b):
+            return hashlib.sha1(f"blob {len(b)}\0".encode() + b).hexdigest()
+        self.listing = [("cfg.json", len(self.files["cfg.json"]), None, blob(self.files["cfg.json"])), ("w/model.bin", 200_000, hashlib.sha256(self.files["w/model.bin"]).hexdigest(), "x")]
+        W.hub_list = lambda repo, rev: list(self.listing)
+
+    def tearDown(self):
+        W.hub_rows, W.hub_list = self.orig
+        super().tearDown()
+
+    def pub(self, root):
+        rev, source, files = W.hub_dir_sources("demo", root, self.s3.conns)
+        pub = W.Publisher(self.s3, args_ns())
+        pub.part_size = PART
+        return pub, pub.publish("demo", rev, source, files)
+
+    def test_plain_layout_checked_against_the_hub_and_carries_the_pinned_revision(self):
+        src = self.make_tree(dict(self.files, **{"w/extra.bin": b"not at this revision"}))
+        pub, m = self.pub(src)
+        self.assertEqual((m["rev"], m["source"]["kind"]), (self.rev, "hub-via-dir"))
+        self.assertEqual(sorted(f["path"] for f in m["files"]), ["cfg.json", "w/model.bin"])
+        self.assertEqual(pub.checked, {"cfg.json": ["hub-git-blob-sha1"], "w/model.bin": ["hub-lfs-sha256"]})
+
+    def test_hf_cache_layout_read_through_the_snapshot(self):
+        snap = self.tmp / "src" / "models--org--demo" / "snapshots" / self.rev
+        for p, b in self.files.items():
+            (snap / p).parent.mkdir(parents=True, exist_ok=True)
+            (snap / p).write_bytes(b)
+        (self.tmp / "src" / "README").write_bytes(b"x")
+        _, m = self.pub(self.tmp / "src")
+        self.assertEqual(len(m["files"]), 2)
+
+    def test_a_volume_file_that_differs_from_the_hub_is_refused(self):
+        src = self.make_tree(dict(self.files, **{"w/model.bin": rnd(200_000, 8)}))
+        with self.assertRaises(W.Fail):
+            self.pub(src)
+        self.assertNotIn(("fv-weights-test", f"test/manifests/demo/{self.rev}.json"), self.st.objects)
+
+    def test_dot_files_the_hub_lists_are_kept(self):
+        def blob(b):
+            return hashlib.sha1(f"blob {len(b)}\0".encode() + b).hexdigest()
+        ga = b"*.bin filter=lfs\n"
+        self.listing.append((".gitattributes", len(ga), None, blob(ga)))
+        W.hub_rows = lambda: {"demo": ("org/demo", self.rev, ["*"])}  # a whole-repo glob, as longlive-plug/minimax-h3-few-step
+        src = self.make_tree(dict(self.files, **{".gitattributes": ga, ".complete": b"x"}))
+        _, m = self.pub(src)
+        self.assertEqual(sorted(f["path"] for f in m["files"]), [".gitattributes", "cfg.json", "w/model.bin"])
+
+    def test_a_missing_file_is_refused(self):
+        src = self.make_tree({"cfg.json": self.files["cfg.json"]})
+        with self.assertRaises(W.Fail):
+            self.pub(src)
+
+
+class Archive(Base):
+    def test_archive_copies_everything_with_an_index_and_is_idempotent(self):
+        src = self.make_tree({"a.txt": b"a", ".hidden/b.log": b"bb", "c/d.bin": rnd(150_000, 3)})
+        a = type("A", (), dict(prefix="test/", files=2, window=2, dry_run=False, name="runs", dir=str(src), label="eu-volume"))()
+        self.assertEqual(W.cmd_archive(self.s3, a), 0)
+        idx = json.loads(self.st.objects[("fv-weights-test", "test/archive/eu-volume/runs.index.json")][0])
+        self.assertEqual(sorted(f["path"] for f in idx["files"]), [".hidden/b.log", "a.txt", "c/d.bin"])
+        self.assertEqual(self.st.objects[("fv-weights-test", "test/archive/eu-volume/runs/c/d.bin")][0], rnd(150_000, 3))
+        n = len(self.st.objects)
+        self.assertEqual(W.cmd_archive(self.s3, a), 0)
+        self.assertEqual(len(self.st.objects), n)
+        self.assertFalse(any(k.startswith("test/manifests/") for _, k in self.st.objects))
 
 
 if __name__ == "__main__":

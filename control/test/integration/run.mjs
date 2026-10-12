@@ -1229,7 +1229,11 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "hub", weights_download_approved: true, deadline_min: 20 });
   assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /FV_HUB_DOWNLOADS_APPROVED/.test(i.message)), "the Worker-level approval is needed too");
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", deadline_min: 20 });
-  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with no weights");
+  // h3-base is in the repo's R2 record (scripts/gpu/weights-r2.tsv) since 2026-10-12, so the default is r2; this
+  // fv-control's (mock) bucket has no such manifest, so the launch is refused at weights_source all the same.
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights|weights_source r2: R2 manifest of h3-base/.test(i.message)), "a real model with no weights it can fetch: " + JSON.stringify(v.issues));
+  v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "none", deadline_min: 20 });
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with weights_source none");
   v = await issues({ name: "gmib", provider: "gmi", provider_gpu: "container.b200.x1", ...fake });
   assert.ok(v.issues.some((i) => i.path[0] === "max_gpu_dph" && /\$9\/hr/.test(i.message)), JSON.stringify(v.issues));
   v = await issues({ name: "gmi1", provider: "gmi", provider_gpu: "container.h200.x1", ...fake });
@@ -1552,12 +1556,15 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.notEqual(tpl.env.FV_WEIGHTS_TOKEN, old);
   assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 200);
   assert.equal((await plan(old)).status, 200, "the previous token stays good for the grace period");
-  // The CLI: --weights r2 on a preset whose trees are not published is refused with the reason.
+  // The CLI: weights_source r2 on a config whose tree is not published is refused with the reason. (Every preset's
+  // trees are in the store since the 2026-10-12 copy off the EU volume, so the unpublished tree is a config's.)
   const { writeFileSync } = await import("node:fs");
   writeFileSync(`${tmp}/token`, token, { mode: 0o600 });
   const cli = (...args) => promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${tmp}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } }).catch((e) => e);
-  const c = await cli("endpoint", "create", "slsr2b", "--preset", "wan", "--weights", "r2", "--gpu", "NVIDIA H100 80GB HBM3", "--dc", "US-TX-3");
-  assert.match(`${c.stderr}${c.stdout}`, /not in the R2 weights store yet: fastwan22-ti2v-5b, wan22-ti2v-5b/);
+  writeFileSync(`${tmp}/slsr2b.json`, JSON.stringify({ ...spec, name: "slsr2b", config_toml: toml.replace("r2demo", "r2missing") }));
+  const c = await cli("endpoint", "create", `${tmp}/slsr2b.json`);
+  assert.match(`${c.stderr}${c.stdout}`, /not in the R2 weights store yet: r2missing/);
+  assert.ok(![...mock.sls.endpoints?.values?.() ?? []].some((e) => /slsr2b/.test(e.name ?? "")), "nothing created");
   const show = await cli("endpoint", "show", "slsr2");
   assert.match(show.stdout, /"weights_source": "r2"/);
   assert.match(show.stdout, /"state": "hit"/);

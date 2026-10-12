@@ -7,10 +7,10 @@ docs/ops/runpod-volumes.md). Pods on any provider (GMI, Brev, Runpod) fetch thei
 local disk (Brev: the persisted `~/workspace`), instead of mounting a volume or pulling from the Hub.
 
 **Status of this page's claims.** The tooling and fv-control's `weights_source r2` exist and are tested (§8).
-The bucket `fv-weights` exists and is **empty**. One real tree (`h3-to-ltx`, 0.39 GB) went Hub → R2 → local disk
-through the tools in a staging bucket, and those test objects were then deleted (§8). Nothing has been copied
-off the volume. Throughput on a GPU node has **not** been measured (§5.4 gives the estimate and how to measure it).
-The volume stays until §7's gate passes and the owner confirms.
+On 2026-10-11/12 all 46 trees of §6.1 (798 files, 1742.04 GB) were copied off the EU volume into `fv-weights`, and
+`runs/` and `weights/wan/` were archived there. Every copied tree was compared with the volume, and read back by
+`verify --deep` (§10). Throughput on a GPU node has **not** been measured (§5.4 gives the estimate and how to measure
+it). The volume stays until §7's gate passes and the owner confirms.
 
 ## 1. Where things are
 
@@ -493,3 +493,130 @@ Then:
 - Write the breakdown into docs/serve/gateway.md §8.6.
 - Flip `DEFAULT_SLS_WEIGHTS_SOURCE` to `"r2"` in `control/src/serverless/spec.ts` if r2 is not slower end to end
   than the volume.
+
+## 10. The copy off the EU volume (2026-10-11/12)
+
+The copy ran on CPU pods in EUR-IS-1 with `jg48s6o1w0` mounted at `/workspace`, which the pods only read
+(`scripts/gpu/r2-copy-volume.sh` launches the pod, `r2-copy-volume-pod.sh` runs on it). Nothing on the volume was
+written, renamed or deleted, and temp files went to the pod's container disk.
+
+**What went where.**
+
+- **37 Hub trees** (`source hub-via-dir`) are stored at their pinned Hub revision. `publish-dir` takes the file list
+  from the Hub listing at that revision, not from the directory. It reads each file from the volume
+  (`models--*/snapshots/<rev>` first, then the plain path), and checks each file before its upload completes:
+  - LFS files against the Hub's SHA-256;
+  - small files against the git blob SHA-1;
+  - files that have a row in `weights-sha256.tsv` against that row as well.
+- **9 volume-only trees** (`source dir`) are stored at rev `eu-20261011`. They are checked against the repo's
+  recorded hashes (`weights-sha256.tsv`, `verify-weights.sh`'s FP8 and prequant lists, and the `auxiliary/` URL
+  rows).
+- **Archive, with no manifest and no preset wiring:**
+  - `/workspace/runs` → `archive/eu-volume/runs/`: 10598 files, 32.51 GB.
+  - `/workspace/weights/wan` → `archive/eu-volume/wan/`: 8 files, 12.46 GB.
+  - Each archive also has `archive/eu-volume/<name>.index.json`, which lists every file's size and SHA-256.
+- **Not copied:**
+  - `FastH3-4-step-Preview-v1-VSA-DataFree`, `ltx2`'s second Gemma layout, the top-level upscaler copy, `taeh3/`,
+    `upstream/` and `.cache/`, all as §6.1 says.
+  - The volume root also holds directories that §6.1 does not list, and these were not copied either:
+    `fastboot-logs`, `fv-libs`, `gpucheck-out`, `h3-text-cache`, `hf` (a Hub token) and `scratch`.
+
+**Files with no recorded hash.** For these files the SHA-256 in the manifest was taken from the volume copy itself,
+and nothing independent checks it:
+
+- `h3-base/text_encoder_fp8/manifest.json`;
+- `h3-ref2va/SOURCE.json` and `h3-ref2va/sha256.txt`;
+- `longlive-1.3b-safetensors/keys-longlive_base.txt`, `keys-lora.txt` and `sha256.txt`;
+- 17 files in `mmaudio-44k-v2`: the 9 `DFN5B-CLIP-ViT-H-14-384/*` files, `MANIFEST.json`, the 2 `bigvgan` files and
+  the 5 `safetensors/*` files. Its 3 md5 rows matched.
+
+**Per tree.** compare-dir compared the volume with R2:
+
+- for the volume-only trees, by the SHA-256 of every 64 MiB part;
+- for the Hub trees, by size only, because their bytes had already been checked against the Hub at upload.
+
+| Tree | Rev | Files | GB | Source | Hash checks at upload | compare-dir vs volume |
+|---|---|---:|---:|---|---|---|
+| `FastH3-4-step-Preview-v1-LoRA` | `f509e629374c` | 2 | 6.82 | hub-via-dir | hub-lfs-sha256 2 | 2/2 files equal (sizes; 6.82 GB, 0s) |
+| `auxiliary/lpips` | `eu-20261011` | 2 | 0.24 | dir | repo-sha256 2 | 2/2 files equal (sha256 of every part; 0.24 GB, 0s) |
+| `auxiliary/tae` | `eu-20261011` | 4 | 0.13 | dir | repo-sha256 4 | 4/4 files equal (sha256 of every part; 0.13 GB, 0s) |
+| `auxiliary/upscalers/flashvsr-v1.1` | `27561b186ded` | 6 | 6.95 | hub-via-dir | hub-git-blob-sha1 2, hub-lfs-sha256 4, repo-sha256 6 | 6/6 files equal (sizes; 6.95 GB, 0s) |
+| `auxiliary/upscalers/seedvr2` | `09ced7102363` | 2 | 7.28 | hub-via-dir | hub-lfs-sha256 2, repo-sha256 2 | 2/2 files equal (sizes; 7.28 GB, 0s) |
+| `cosmos3-super` | `f543c56225b2` | 40 | 129.47 | hub-via-dir | hub-git-blob-sha1 11, hub-lfs-sha256 29, repo-sha256 40 | 40/40 files equal (sizes; 129.47 GB, 0s) |
+| `fastwan21-1.3b` | `25e7ed7f41fd` | 16 | 29.21 | hub-via-dir | hub-git-blob-sha1 7, hub-lfs-sha256 9 | 16/16 files equal (sizes; 29.21 GB, 0s) |
+| `fastwan22-ti2v-5b` | `3e187042a324` | 15 | 24.20 | hub-via-dir | hub-git-blob-sha1 8, hub-lfs-sha256 7, repo-sha256 15 | 15/15 files equal (sizes; 24.20 GB, 0s) |
+| `h3-8step` | `3da2ddfe1954` | 49 | 147.86 | hub-via-dir | hub-git-blob-sha1 17, hub-lfs-sha256 32 | 49/49 files equal (sizes; 147.86 GB, 0s) |
+| `h3-base` | `42ed227ee7df` | 50 | 144.04 | hub-via-dir | hub-git-blob-sha1 18, hub-lfs-sha256 32 | 50/50 files equal (sizes; 144.04 GB, 0s) |
+| `h3-base/text_encoder_fp8` | `eu-20261011` | 2 | 25.95 | dir | none 1, repo-sha256 1 | 2/2 files equal (sha256 of every part; 25.95 GB, 58s) |
+| `h3-base/transformer_prequant_4step-vsa_mxfp8` | `eu-20261011` | 2 | 27.29 | dir | repo-sha256 2 | 2/2 files equal (sha256 of every part; 27.29 GB, 97s) |
+| `h3-base/transformer_prequant_sol-h3_mxfp8` | `eu-20261011` | 2 | 23.44 | dir | repo-sha256 2 | 2/2 files equal (sha256 of every part; 23.44 GB, 31s) |
+| `h3-ref2va` | `eu-20261011` | 31 | 69.06 | dir | none 2, repo-sha256 29 | 31/31 files equal (sha256 of every part; 69.06 GB, 83s) |
+| `h3-to-ltx` | `1792c42689a0` | 2 | 0.39 | hub-via-dir | hub-git-blob-sha1 1, hub-lfs-sha256 1 | 2/2 files equal (sizes; 0.39 GB, 0s) |
+| `hy15-480-i2v` | `854c04a4c8a5` | 25 | 33.78 | hub-via-dir | hub-git-blob-sha1 17, hub-lfs-sha256 8 | 25/25 files equal (sizes; 33.78 GB, 0s) |
+| `hy15-480-t2v` | `286be7ce7227` | 32 | 53.38 | hub-via-dir | hub-git-blob-sha1 18, hub-lfs-sha256 14 | 32/32 files equal (sizes; 53.38 GB, 0s) |
+| `hy15-720-i2v` | `a1d10cf3af79` | 27 | 53.38 | hub-via-dir | hub-git-blob-sha1 17, hub-lfs-sha256 10 | 27/27 files equal (sizes; 53.38 GB, 0s) |
+| `hy15-720-t2v` | `f4dbc4a1efa4` | 32 | 53.38 | hub-via-dir | hub-git-blob-sha1 18, hub-lfs-sha256 14 | 32/32 files equal (sizes; 53.38 GB, 0s) |
+| `lingbot-video-moe-30b-a3b` | `f2e538f64afe` | 59 | 129.95 | hub-via-dir | hub-git-blob-sha1 30, hub-lfs-sha256 29, repo-sha256 59 | 59/59 files equal (sizes; 129.95 GB, 0s) |
+| `longlive-1.3b` | `cda9138d9387` | 4 | 8.48 | hub-via-dir | hub-git-blob-sha1 2, hub-lfs-sha256 2, repo-sha256 4 | 4/4 files equal (sizes; 8.48 GB, 0s) |
+| `longlive-1.3b-safetensors` | `eu-20261011` | 5 | 7.08 | dir | none 3, repo-sha256 2 | 5/5 files equal (sha256 of every part; 7.08 GB, 12s) |
+| `longlive-plug/minimax-h3-cfg` | `de1f4e8c7310` | 11 | 2.77 | hub-via-dir | hub-git-blob-sha1 10, hub-lfs-sha256 1, repo-sha256 11 | 11/11 files equal (sizes; 2.77 GB, 0s) |
+| `longlive-plug/minimax-h3-few-step` | `b3686f432d3f` | 55 | 2.77 | hub-via-dir | hub-git-blob-sha1 54, hub-lfs-sha256 1, repo-sha256 55 | 55/55 files equal (sizes; 2.77 GB, 0s) |
+| `longlive-plug/wan21-t2v-14b-cfg` | `32b8aa3d1db3` | 8 | 2.45 | hub-via-dir | hub-git-blob-sha1 7, hub-lfs-sha256 1, repo-sha256 8 | 8/8 files equal (sizes; 2.45 GB, 0s) |
+| `longlive-plug/wan21-t2v-14b-few-step` | `f125af0533b9` | 5 | 1.23 | hub-via-dir | hub-git-blob-sha1 4, hub-lfs-sha256 1, repo-sha256 5 | 5/5 files equal (sizes; 1.23 GB, 0s) |
+| `longlive-plug/wan22-ti2v-5b-cfg` | `fa1f9280778a` | 8 | 0.64 | hub-via-dir | hub-git-blob-sha1 7, hub-lfs-sha256 1, repo-sha256 8 | 8/8 files equal (sizes; 0.64 GB, 0s) |
+| `longlive-plug/wan22-ti2v-5b-few-step` | `38a6ec4e8f5b` | 7 | 1.29 | hub-via-dir | hub-git-blob-sha1 6, hub-lfs-sha256 1, repo-sha256 7 | 7/7 files equal (sizes; 1.29 GB, 0s) |
+| `longlive2-5b` | `8521079b8637` | 2 | 10.00 | hub-via-dir | hub-git-blob-sha1 1, hub-lfs-sha256 1, repo-sha256 2 | 2/2 files equal (sizes; 10.00 GB, 0s) |
+| `longlive2-5b-nvfp4-s2` | `9ab6c9c70db9` | 2 | 2.95 | hub-via-dir | hub-git-blob-sha1 1, hub-lfs-sha256 1, repo-sha256 2 | 2/2 files equal (sizes; 2.95 GB, 0s) |
+| `longlive2-5b-nvfp4-s4` | `427ffb75f0a3` | 2 | 2.95 | hub-via-dir | hub-git-blob-sha1 1, hub-lfs-sha256 1, repo-sha256 2 | 2/2 files equal (sizes; 2.95 GB, 0s) |
+| `ltx2` | `dfcc2108383f` | 31 | 94.74 | hub-via-dir | hub-git-blob-sha1 14, hub-lfs-sha256 17 | 31/31 files equal (sizes; 94.74 GB, 0s) |
+| `ltx23` | `22b09fb1860a` | 40 | 71.60 | hub-via-dir | hub-git-blob-sha1 25, hub-lfs-sha256 15 | 40/40 files equal (sizes; 71.60 GB, 0s) |
+| `ltx23-dev` | `3c6a4e66e5d0` | 3 | 54.75 | hub-via-dir | hub-lfs-sha256 3, repo-sha256 3 | 3/3 files equal (sizes; 54.75 GB, 0s) |
+| `ltx25` | `426936f8b22d` | 40 | 125.12 | hub-via-dir | hub-git-blob-sha1 14, hub-lfs-sha256 26 | 40/40 files equal (sizes; 125.12 GB, 0s) |
+| `ltx25-dev` | `426936f8b22d` | 7 | 37.98 | hub-via-dir | hub-git-blob-sha1 3, hub-lfs-sha256 4 | 7/7 files equal (sizes; 37.98 GB, 0s) |
+| `ltx25-ic-lora-ingredients` | `12040e4091ac` | 2 | 1.31 | hub-via-dir | hub-git-blob-sha1 1, hub-lfs-sha256 1, repo-sha256 1 | 2/2 files equal (sizes; 1.31 GB, 0s) |
+| `ltx25/text_encoder_fp8` | `eu-20261011` | 2 | 12.92 | dir | repo-sha256 2 | 2/2 files equal (sha256 of every part; 12.92 GB, 33s) |
+| `mmaudio-44k-v2` | `eu-20261011` | 20 | 21.46 | dir | none 17, repo-md5 3 | 20/20 files equal (sha256 of every part; 21.46 GB, 55s) |
+| `sana-video-2b-480p` | `db5f398b13ca` | 17 | 14.00 | hub-via-dir | hub-git-blob-sha1 10, hub-lfs-sha256 7, repo-sha256 17 | 17/17 files equal (sizes; 14.00 GB, 0s) |
+| `sfwan21-1.3b` | `4b44356635ae` | 17 | 28.93 | hub-via-dir | hub-git-blob-sha1 8, hub-lfs-sha256 9 | 17/17 files equal (sizes; 28.93 GB, 0s) |
+| `upscaler` | `3f941d5d1820` | 1 | 0.69 | hub-via-dir | hub-lfs-sha256 1 | 1/1 files equal (sizes; 0.69 GB, 0s) |
+| `wan21-t2v-1.3b` | `0fad780a534b` | 19 | 28.93 | hub-via-dir | hub-git-blob-sha1 9, hub-lfs-sha256 10, repo-sha256 19 | 19/19 files equal (sizes; 28.93 GB, 0s) |
+| `wan21-t2v-14b` | `38ec498cb320` | 29 | 80.41 | hub-via-dir | hub-git-blob-sha1 9, hub-lfs-sha256 20 | 29/29 files equal (sizes; 80.41 GB, 0s) |
+| `wan22-t2v-a14b` | `5be7df9619b5` | 41 | 126.20 | hub-via-dir | hub-git-blob-sha1 11, hub-lfs-sha256 30, repo-sha256 41 | 41/41 files equal (sizes; 126.20 GB, 0s) |
+| `wan22-ti2v-5b` | `b8fff7315c76` | 20 | 34.20 | hub-via-dir | hub-git-blob-sha1 9, hub-lfs-sha256 11 | 20/20 files equal (sizes; 34.20 GB, 0s) |
+
+**Verify.** `verify --deep --record` read every part back from R2 with the read-only key pair and checked the
+SHA-256 of every 64 MiB part against the manifest. Each tree has a `verified/<dest>/<rev>/<stamp>.json` record.
+The result: **46 of 46 trees OK, 0 failures.**
+
+- 14 trees were verified on the first two verify pods with whole-file hashing, which the record calls "sha256 of
+  every part and file".
+- The other 32 were verified by parts, at 30-560 MB/s per tree.
+
+**Findings.**
+
+- **Gated repos need a token for the listing, not only for the download.** For Lightricks `ltx25`, `ltx25-dev`
+  and `ltx25-ic-lora-ingredients`, an anonymous tree listing returns LFS oids that are not the files' SHA-256. With
+  an `HF_TOKEN` whose account accepted the gate, the oids are the real hashes and match the volume.
+  `r2-copy-volume-pod.sh` takes the token from the volume's `hf/token`.
+- **Dot files.** A Hub listing can include `.gitattributes`, so `publish-dir` keeps the dot files that the listing
+  names.
+- **`runs/` is 32.51 GB in 10598 files**, not the ~1.8 GB that runpod-volumes.md §4 estimated.
+- **R2 read latency has a long tail.** Single ranged GETs took from 1.6 s to 26 s. Hashing each file in order then
+  waits on its slowest part (a single-stream compare-dir ran at about 10 MB/s). `compare-dir` and `verify --deep` therefore hash parts in
+  parallel across the whole tree, and run at 80-550 MB/s per tree from a 16-vCPU pod.
+  `FV_VERIFY_WHOLE_FILE=1` keeps the old whole-file hashing.
+- **A pod deleted mid-upload leaves objects without a parts record.** `publish` now adopts such an object only if
+  its bytes in R2 equal the source bytes (3 files were adopted in `runs/`).
+
+**Throughput and cost.**
+
+- Publish volume → R2 on a 16-vCPU `cpu3c` pod (3 trees at a time, 64 MiB parts):
+  - about 1.6 TB in 61 min (22:27–23:28 UTC), **≈ 0.44 GB/s** on average;
+  - peaks of **≈ 0.82 GB/s** while the large trees ran.
+- The copy took seven pods, one after another and never two at once: publish, the four trees that failed, the
+  `runs/` archive, compare, then verify on three pods. Each pod cost $0.48/hr and had a DELETE backstop of at most
+  4 h.
+- The whole copy took 22:27 to 04:35 UTC, about 6.1 h of pod time, so ≈ $2.93 at $0.48/hr.
+- The Runpod balance went from $35.38 to $31.32. That figure includes the volume's own hourly charge.
+- The bucket now holds 1787.0 GB: 1742.04 GB of trees plus 44.97 GB of archive. At $0.015/GB-month, that is
+  ≈ $27/month.

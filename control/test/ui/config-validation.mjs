@@ -135,7 +135,7 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await page.waitForSelector(`${SV} #sls-outlook:has-text("cold start ~")`);
   await page.click(`${SV} [data-ctl][data-path="weights_source"] button:text-is("r2")`);
   await page.waitForSelector(`${SV} .ff-field[data-path="network_volume"] label:text("R2 cache volume")`);
-  await page.waitForFunction((s) => /\+ fetch \d+ GB at 1\.00 GB\/s/.test(document.querySelector(s)?.textContent || ""), `${SV} #sls-outlook`, { timeout: 15000 });
+  await page.waitForFunction((s) => /\+ fetch [\d.]+ GB at 1\.00 GB\/s/.test(document.querySelector(s)?.textContent || ""), `${SV} #sls-outlook`, { timeout: 15000 });
   assert.ok(Number(await page.inputValue(`${SV} [data-ctl][data-path="container_disk_gb"]`)) >= 196, "the disk holds the H3 trees");
   await errAt("serverless-endpoint", "weights_source");
   assert.ok(await disabled(create), "Create is off while the trees cannot come from R2");
