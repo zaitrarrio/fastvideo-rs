@@ -89,7 +89,7 @@ log "archive done"
 
 # ---- the volume against R2: volume-only trees by SHA-256 (re-read), Hub trees by size (their bytes were hashed
 #      against the Hub's LFS SHA-256 on the way up)
-for d in $VOL; do step "compare $d" $P compare-dir "$d" "$W/$d" >>$SRV/compare.txt 2>&1; done
+for d in $VOL; do step "compare $d" $P compare-dir "$d" "$W/$d" --workers 32 >>$SRV/compare.txt 2>&1; done
 for d in $HUB; do step "compare-size $d" $P compare-dir "$d" "$W/$d" --sizes-only >>$SRV/compare.txt 2>&1; done
 log "compare done"
 

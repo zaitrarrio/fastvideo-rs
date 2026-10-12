@@ -201,6 +201,18 @@ class Publish(Base):
         f.recorded = ("md5", [hashlib.md5(b"hello").hexdigest()])
         self.assertEqual(pub.publish_file("demo", "r1", f)["sha256"], hashlib.sha256(b"hello").hexdigest())
 
+    def test_compare_dir_by_part_hashes(self):
+        src = self.make_tree(TREE)
+        self.publish("demo", "r1", src)
+        a = lambda **kw: type("A", (), dict(dict(prefix="test/", dest="demo", dir=str(src), rev="r1", sizes_only=False, workers=4), **kw))()  # noqa: E731
+        self.assertEqual(W.cmd_compare_dir(self.s3, a()), 0)
+        big = src / "transformer/diffusion_pytorch_model.safetensors"
+        b = bytearray(big.read_bytes())
+        b[PART * 5 + 3] ^= 1
+        big.write_bytes(bytes(b))
+        self.assertEqual(W.cmd_compare_dir(self.s3, a(sizes_only=True)), 0)
+        self.assertEqual(W.cmd_compare_dir(self.s3, a()), 1)
+
     def test_verify(self):
         src = self.make_tree(TREE)
         m = self.publish("demo", "r1", src)

@@ -900,10 +900,15 @@ def cmd_plan(s3, args):
 
 
 def cmd_compare_dir(s3, args):
+    """The directory's copy against the manifest: every file present with its size and (unless --sizes-only) every
+    64 MiB part's SHA-256 equal to the manifest's, the parts read in parallel (--workers): one stream from a network
+    volume is slow, many are not. The manifest's part hashes are of the bytes R2 holds (verify --deep checks that)."""
     m = load_manifest(s3, args.prefix, args.dest, args.rev)
     root = Path(args.dir)
     snaps = sorted(root.glob(f"models--*/snapshots/{m['rev']}"))  # HF-cache layout: the pinned snapshot first
+    ps = m["part_size"]
     bad = []
+    jobs = []
     for f in m["files"]:
         p = next((q for q in ((sd / f["path"]).resolve() for sd in snaps) if q.is_file()), None) or (root / f["path"]).resolve()
         if not p.is_file():
@@ -913,15 +918,32 @@ def cmd_compare_dir(s3, args):
             bad.append(f"{f['path']}: {p.stat().st_size} bytes on disk, {f['size']} in R2")
             continue
         if not args.sizes_only:
-            h = hashlib.sha256()
-            with open(p, "rb") as fh:
-                for chunk in iter(lambda: fh.read(16 << 20), b""):
-                    h.update(chunk)
-            if h.hexdigest() != f["sha256"]:
-                bad.append(f"{f['path']}: sha256 differs (disk {h.hexdigest()[:16]}…, R2 {f['sha256'][:16]}…)")
+            jobs += [(f, p, i) for i in range(len(f["parts"]))]
+
+    def part_ok(job):
+        f, p, i = job
+        off = i * ps
+        n = min(ps, f["size"] - off)
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            got = 0
+            while got < n:
+                b = os.pread(fh.fileno(), min(16 << 20, n - got), off + got)
+                if not b:
+                    break
+                h.update(b)
+                got += len(b)
+        return None if got == n and h.hexdigest() == f["parts"][i] else f"{f['path']}: part {i} differs"
+
+    t = time.time()
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for err in ex.map(part_ok, jobs):
+            if err and err.split(": part")[0] not in {b.split(":")[0] for b in bad}:
+                bad.append(err)
     for line in bad:
         print("DIFF " + line)
-    print(f"{args.dest}@{m['rev']}: {len(m['files']) - len(bad)}/{len(m['files'])} files equal ({'sizes' if args.sizes_only else 'sha256'})")
+    gb = sum(f["size"] for f in m["files"]) / 1e9
+    print(f"{args.dest}@{m['rev']}: {len(m['files']) - len(bad)}/{len(m['files'])} files equal ({'sizes' if args.sizes_only else 'sha256 of every part'}; {gb:.2f} GB, {time.time() - t:.0f}s)")
     return 1 if bad else 0
 
 
@@ -1005,6 +1027,7 @@ def main(argv=None):
     p.add_argument("dir")
     p.add_argument("--rev", default=None)
     p.add_argument("--sizes-only", action="store_true")
+    p.add_argument("--workers", type=int, default=24, help="parts read and hashed at once")
     p = sub.add_parser("plan")
     p.add_argument("dests", nargs="+", help="dest or dest@rev")
     p.add_argument("--ttl", type=int, default=3600)
