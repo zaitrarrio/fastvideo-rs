@@ -1955,7 +1955,11 @@ additions and readings; everything is re-exported from the crate root.
   §0.5; owner decision); `h3-turbo` = FastH3 4-step VSA + profile
   `h3/fasth3_4step_vsa` (`fasth3-4step-vsa`, also `fasth3`); `h3-draft` = the
   same at 480p with TAEH3; untiered `fasth3-8step-dense` = FastH3 8-step DMD,
-  dense attention, official VAE. `ltx-pro` = LTX-2.5 distilled
+  dense attention, official VAE; untiered `fasth3-trim-8step` (served
+  `h3-trim`, pool / control preset `fasth3-trim`, `configs/serve/runpod-h3-trim.toml`)
+  = FastH3 Trim 8-step: 42 of the 50 blocks, rank-16 AdaLN, VSA-H3 at 0.8, its
+  own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md).
+  `ltx-pro` = LTX-2.5 distilled
   two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
   stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN
   (`ltx2/ltx25_distill_sol_nvfp4`) + TAEHV. `wan-max` = Wan2.2 TI2V-5B, 50

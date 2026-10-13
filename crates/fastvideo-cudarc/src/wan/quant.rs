@@ -42,9 +42,14 @@ pub const E4M3_MAX: f32 = 448.0;
 pub const W8A8_MIN_SCALE: f32 = (1.0f64 / 229_376.0) as f32;
 /// Values per MX scale.
 pub const MX_BLOCK: usize = 32;
-/// Sol-H3 `compute_quant.py`: MXFP8 covers blocks `[2, 46]` inclusive.
+/// Sol-H3 `compute_quant.py`: MXFP8 covers blocks `[2, 46]` inclusive of the 50,
+/// i.e. all but the first two and the last three, which stay bf16.
 pub const MXFP8_FIRST_BLOCK: usize = 2;
 pub const MXFP8_LAST_BLOCK: usize = 46;
+/// Blocks at the end of the stack MXFP8 leaves in bf16 (50 - 1 - 46). A pruned
+/// stack (FastH3 Trim, 42 blocks) keeps the same rule: its last three blocks are
+/// the source blocks 47-49 and stay bf16, so MXFP8 covers its blocks `[2, 38]`.
+pub const MXFP8_BF16_TAIL: usize = 3;
 pub const ENV: &str = "FASTVIDEO_H3_QUANT";
 
 // ---------------------------------------------------------------------------
@@ -427,11 +432,16 @@ impl H3QuantPlan {
         match self.mode {
             QuantMode::Off => None,
             QuantMode::W8A8 => (i < self.num_layers).then_some(QuantKind::W8A8),
-            QuantMode::Mxfp8 => (MXFP8_FIRST_BLOCK
-                ..=MXFP8_LAST_BLOCK.min(self.num_layers.saturating_sub(1)))
+            QuantMode::Mxfp8 => (MXFP8_FIRST_BLOCK..=self.mxfp8_last_block())
                 .contains(&i)
                 .then_some(QuantKind::Mxfp8),
         }
+    }
+
+    /// The last MXFP8 block: 46 of H3's 50, and always [`MXFP8_BF16_TAIL`]
+    /// bf16 blocks at the end of a shorter (pruned) stack.
+    pub fn mxfp8_last_block(&self) -> usize {
+        MXFP8_LAST_BLOCK.min(self.num_layers.saturating_sub(1 + MXFP8_BF16_TAIL))
     }
 
     /// The text refiner's blocks: W8A8 tags them too (`quantized_linear_name`
@@ -1740,6 +1750,12 @@ mod tests {
         assert_eq!(mx.dit_block(47), None);
         assert_eq!(mx.refiner(), None);
         assert_eq!(mx.reference_linear_count(), 45 * 4);
+        assert_eq!(mx.mxfp8_last_block(), MXFP8_LAST_BLOCK);
+        // FastH3 Trim: 42 blocks, the last three (source 47-49) stay bf16.
+        let trim = H3QuantPlan::new(QuantMode::Mxfp8, 42, 2);
+        assert_eq!((trim.dit_block(1), trim.dit_block(2)), (None, Some(QuantKind::Mxfp8)));
+        assert_eq!((trim.dit_block(38), trim.dit_block(39)), (Some(QuantKind::Mxfp8), None));
+        assert_eq!(trim.reference_linear_count(), 37 * 4);
         assert_eq!(QuantMode::parse("W8A8").unwrap(), QuantMode::W8A8);
         assert_eq!(QuantMode::parse("off").unwrap(), QuantMode::Off);
         assert!(QuantMode::parse("int4").is_err());

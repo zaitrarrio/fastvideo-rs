@@ -107,6 +107,9 @@ fn dit_config() -> H3TransformerConfig {
         norm_eps: 1e-5,
         qk_norm_eps: 1e-5,
         final_norm_eps: 1e-5,
+        adaln_rank: None,
+        source_num_layers: 2,
+        kept_block_indices: vec![0, 1],
     }
 }
 

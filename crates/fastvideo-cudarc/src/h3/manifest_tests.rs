@@ -325,3 +325,119 @@ fn text_encoder_reads_only_layers_present_in_shards_1_to_11() {
         .values()
         .all(|d| d == "BF16"));
 }
+
+/// FastH3 Trim (`FastVideo/FastVideo-FastH3-Trim-8-Step` @ 9edcb65,
+/// `manifests/trim_transformer.json`): 42 blocks renumbered 0..41, the shared
+/// `adaln_basis`, rank-16 `adaln_proj` / `norm_out.linear` stored F32. The
+/// stack, the last block, the refiner and the factorized AdaLN table together
+/// read every published key, each with its shape, and nothing else.
+#[test]
+fn trim_dit_loaders_cover_the_published_transformer_and_nothing_else() {
+    let _guard = heavy();
+    let json = include_str!("manifests/trim_transformer.json");
+    let published = manifest(json);
+    let cfg = H3TransformerConfig::fasth3_trim_8step();
+    let layers = cfg.num_layers;
+    assert_eq!(layers, 42);
+    let rung = |shift| H3Schedule::from_dmd_rungs(&[500], shift).expect("schedule");
+    let schedule = H3JointSchedule {
+        video: rung(10.0),
+        audio: rung(3.0),
+        fresh_noise: false,
+    };
+    let mut one = cfg.clone();
+    one.num_layers = 1;
+    one.kept_block_indices.truncate(1);
+    // The resident stack (block 0, VSA gates) with the factorized table it precomputes.
+    let (map, seen) = recording();
+    H3Transformer::load(one.clone(), &map, &schedule, true).expect("load");
+    let mut requested = for_every_index(
+        &seen.lock().expect("lock"),
+        "transformer_blocks",
+        0,
+        0..layers,
+    );
+    let (map, seen) = recording();
+    Block::load(
+        &map,
+        &format!("transformer_blocks.{}", layers - 1),
+        &cfg,
+        true,
+        &mut None,
+    )
+    .expect("last block");
+    requested.extend(seen.lock().expect("lock").clone());
+    let (map, seen) = recording();
+    H3TextRefiner::load(&cfg, &map).expect("refiner");
+    requested.extend(seen.lock().expect("lock").clone());
+
+    let mut problems = mismatches(&requested, &published);
+    problems.extend(unrequested(&requested, &published, |_| true));
+    assert_clean("trim transformer", problems);
+    assert_eq!(published.len(), 585);
+    assert!(published
+        .keys()
+        .all(|k| !k.starts_with("transformer_blocks.42.")));
+
+    // The table reads the basis and the rank-16 projections, never a full-rank one.
+    let (map, seen) = recording();
+    AdaLnTable::precompute(&one, &map, &schedule).expect("table");
+    let table = seen.lock().expect("lock").clone();
+    assert_eq!(
+        table.keys().cloned().collect::<Vec<_>>(),
+        [
+            "adaln_basis.weight",
+            "norm_out.linear.bias",
+            "norm_out.linear.weight",
+            "time_embedder.linear_1.bias",
+            "time_embedder.linear_1.weight",
+            "time_embedder.linear_2.bias",
+            "time_embedder.linear_2.weight",
+            "transformer_blocks.0.adaln_proj.linear.bias",
+            "transformer_blocks.0.adaln_proj.linear.weight",
+        ]
+    );
+    assert_eq!(table["adaln_basis.weight"], [16, 2688]);
+    assert_eq!(table["transformer_blocks.0.adaln_proj.linear.weight"], [96768, 16]);
+    assert_eq!(table["norm_out.linear.weight"], [10752, 16]);
+    // Stored F32 (upstream loads them as float16); every other tensor is BF16.
+    for (k, d) in dtypes(json) {
+        let factor = k == "adaln_basis.weight"
+            || k.contains(".adaln_proj.")
+            || k.starts_with("norm_out.linear.");
+        assert_eq!(d, if factor { "F32" } else { "BF16" }, "{k}");
+    }
+}
+
+/// FastH3 Trim's lightweight VAE (`manifests/trim_vae.json`): H3's decoder
+/// keys and shapes with 26 blocks, stored F16.
+#[test]
+fn trim_video_decoder_asks_for_exactly_the_published_decoder() {
+    let _guard = heavy();
+    let json = include_str!("manifests/trim_vae.json");
+    let published = manifest(json);
+    let mut cfg = H3VideoVaeConfig::fasth3_trim_8step();
+    let layers = cfg.decoder_num_layers;
+    assert_eq!(layers, 26);
+    cfg.decoder_num_layers = 1;
+    let (map, seen) = recording();
+    H3VideoDecoder::load(cfg, &map).expect("load");
+    let seen = for_every_index(
+        &seen.lock().expect("lock"),
+        "decoder.transformer_blocks",
+        0,
+        0..layers,
+    );
+    let mut problems = mismatches(&seen, &published);
+    problems.extend(unrequested(&seen, &published, |k| {
+        k.starts_with("decoder.") || k.starts_with("post_quant_conv.")
+    }));
+    assert_clean("trim vae", problems);
+    assert!(published
+        .keys()
+        .all(|k| !k.starts_with("decoder.transformer_blocks.26.")));
+    assert!(dtypes(json)
+        .iter()
+        .filter(|(k, _)| k.starts_with("decoder.") || k.starts_with("post_quant_conv."))
+        .all(|(_, d)| d == "F16"));
+}

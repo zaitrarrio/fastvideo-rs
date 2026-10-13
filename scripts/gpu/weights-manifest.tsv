@@ -14,6 +14,13 @@
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors
+# fasth3-trim-8step (owner approval 2026-10-13; docs/ports/h3-trim.md): FastH3 Trim 8-step, 42 of the 50 blocks and a
+# rank-16 AdaLN basis. No text_encoder/ (NVFP4; the port reads h3-base's), and no audio_vae/, tokenizer/ or processor/:
+# byte-identical to h3-base's (LFS SHA-256 / git blob), which the pipeline reads instead. vae/ is NOT H3's (26 decoder
+# blocks, F16). R2 only (not on the EU volume).
+fasth3-trim-8step	FastVideo/FastVideo-FastH3-Trim-8-Step	transformer/* vae/* scheduler/* audio_scheduler/* fastvideo_inference.json metadata.json README.md
+# fasth3-trim-8step-nvfp4: the ComfyUI NVFP4 single file of the same network (Blackwell; ComfyUI key names, fused QKV).
+fasth3-trim-8step-nvfp4	FastVideo/FastVideo-FastH3-Trim-Comfy	diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors README.md
 # upscaler: pinned @ 3f941d5d182014dd5c0a5e16330420ee2d4aa0c6 (690 592 992 bytes, LFS sha256 4f57821f…46a5e6, checked by
 # verify-weights.sh sol-h3-spark). The repo moved the file into minimax_h3_latent_upscaler_3d_conv_v1/ at 6749d7b; the earlier
 # top-level minimax_h3_latent_upscaler_3d_bf16.safetensors (still on EU) is the same bytes.
