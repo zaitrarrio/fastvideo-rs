@@ -12,7 +12,7 @@ import { dynOptions, type Dynamic } from "./editor";
 import { getAt, resolve, schemaAt, unwrap, validate, type Issue, type Json, type Path, type Schema } from "./schema";
 import "./fields.css";
 
-export type Api = (path: string, opts?: { method?: string; body?: unknown }) => Promise<any>;
+export type Api = (path: string, opts?: { method?: string; body?: unknown; signal?: AbortSignal }) => Promise<any>;
 export type ControlKind = "select" | "segmented" | "toggle" | "number" | "text" | "combo" | "textarea" | "secret" | "chips" | "list" | "table" | "record" | "object";
 /** Live lists that are the whole choice (a select); the others only suggest (a text input with a datalist). */
 export const CLOSED_SOURCES = new Set(["channels", "pool_presets", "pools", "clusters", "data_centers", "volumes", "releases", "regions", "variants", "gpu_types", "cpu_flavors", "model_ids", "families", "recipes", "fake_models"]);
@@ -138,7 +138,7 @@ export interface FormOptions {
   api: Api;
   value: any;
   /** The server's validator for the cross-field rules: issues by path (debounced, after each change). */
-  remote?: (v: any) => Promise<{ issues: Issue[]; warnings?: Issue[] }>;
+  remote?: (v: any, signal?: AbortSignal) => Promise<{ issues: Issue[]; warnings?: Issue[] }>;
   onChange?: (v: any) => void;
   /** Disabled until the form is valid. */
   submit?: HTMLButtonElement;
@@ -185,6 +185,7 @@ export function createForm(o: FormOptions): Form {
   let remotePending = !!o.remote;
   let remoteSeq = 0;
   let remoteTimer: any;
+  let remoteAbort: AbortController | null = null;
   const summary = el("div", { class: "ff-summary", role: "status", "aria-live": "polite" });
   const formEl = el("div", { class: "ff", "data-schema-form": o.schemaName });
 
@@ -287,11 +288,15 @@ export function createForm(o: FormOptions): Form {
   function runRemote() {
     if (!o.remote) return;
     clearTimeout(remoteTimer);
+    // A newer value: the check still in flight is stale (cancelled; its answer would be dropped anyway).
+    remoteAbort?.abort();
+    remoteAbort = null;
     remotePending = true;
     const my = ++remoteSeq;
     remoteTimer = setTimeout(async () => {
+      const ac = (remoteAbort = typeof AbortController === "function" ? new AbortController() : null);
       try {
-        const r = await o.remote!(clone(value));
+        const r = await o.remote!(clone(value), ac?.signal);
         if (my !== remoteSeq) return;
         remoteIssues = r.issues || [];
         remoteWarnings = r.warnings || [];

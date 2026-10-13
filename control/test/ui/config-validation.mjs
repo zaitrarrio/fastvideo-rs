@@ -30,6 +30,9 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await go("#/standalone");
   const SL = '[data-schema-form="standalone-launch"]';
   await page.waitForSelector(`${SL} .ff-field[data-path="name"]`);
+  // No provider details before a pick (test/ui/lazy-providers.mjs): pick Runpod for its fields and live checks.
+  await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, JSON.stringify("runpod"));
+  await page.waitForSelector(`${SL} .ff-field[data-path="compute"]`);
   // Enums are selects / segmented controls; the name's rule shows before typing.
   assert.equal(await page.$eval(`${SL} [data-ctl][data-path="preset"]`, (e) => e.tagName), "SELECT");
   assert.equal(await page.$eval(`${SL} [data-ctl][data-path="compute"]`, (e) => e.getAttribute("role")), "radiogroup");
@@ -80,7 +83,8 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   assert.ok(await disabled(launch), "Launch is off while the provider is off");
   await audit();
   await shot("02b-standalone-gmi-off");
-  await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, "");
+  // Back to Runpod (picked: the form loads no provider details before a pick, test/ui/lazy-providers.mjs).
+  await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, JSON.stringify("runpod"));
   await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
 
   // ---------------------------------------------------------------- serverless
@@ -135,7 +139,7 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await page.waitForSelector(`${SV} #sls-outlook:has-text("cold start ~")`);
   await page.click(`${SV} [data-ctl][data-path="weights_source"] button:text-is("r2")`);
   await page.waitForSelector(`${SV} .ff-field[data-path="network_volume"] label:text("R2 cache volume")`);
-  await page.waitForFunction((s) => /\+ fetch [\d.]+ GB at 0\.50 GB\/s/.test(document.querySelector(s)?.textContent || ""), `${SV} #sls-outlook`, { timeout: 15000 });
+  await page.waitForFunction((s) => /\+ fetch [\d.]+ GB at 0\.55 GB\/s/.test(document.querySelector(s)?.textContent || ""), `${SV} #sls-outlook`, { timeout: 15000 });
   assert.ok(Number(await page.inputValue(`${SV} [data-ctl][data-path="container_disk_gb"]`)) >= 196, "the disk holds the H3 trees");
   await errAt("serverless-endpoint", "weights_source");
   assert.ok(await disabled(create), "Create is off while the trees cannot come from R2");

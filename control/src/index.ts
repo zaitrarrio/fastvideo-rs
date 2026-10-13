@@ -42,7 +42,7 @@ import { deleteVar, listVars, maskRow, resolveView, setVar, type Scope } from ".
 import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
 import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
-import { dynamicEnums } from "./dynamic";
+import { dynamicEnums, imageCommits, providerDetails } from "./dynamic";
 import { downloadLogs, ingest, searchLogs } from "./logs";
 import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
 import { availability, checkSpec, liveSpecIssues } from "./cluster/editor";
@@ -173,16 +173,21 @@ async function cloudriftView(env: Env) {
   const floor = defaults.cloudriftFloor(env);
   return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
 }
-app.get("/api/providers", async (c) =>
-  c.json({
+/** Every provider, or ?provider=<id> only that one (nothing else is read). */
+app.get("/api/providers", async (c) => {
+  const only = c.req.query("provider");
+  const all = ["runpod", "cloudrift", ...OTHER_PROVIDERS];
+  if (only && !all.includes(only)) throw new HttpError(404, `no provider ${only} (${all.join(", ")})`);
+  const want = (p: string) => !only || only === p;
+  return c.json({
     providers: [
-      { id: "runpod", enabled: true, launch: true },
-      { id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) },
+      ...(want("runpod") ? [{ id: "runpod", enabled: true, launch: true }] : []),
+      ...(want("cloudrift") ? [{ id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) }] : []),
       // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): launch targets for standalone pods and pools.
-      ...(await Promise.all(OTHER_PROVIDERS.map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
+      ...(await Promise.all(OTHER_PROVIDERS.filter(want).map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
     ],
-  }),
-);
+  });
+});
 /** Price and stock of a GMI / Brev GPU product (the planner's view). */
 app.get("/api/providers/:p/offers", async (c) => {
   const p = c.req.param("p") as OtherProviderId;
@@ -597,7 +602,8 @@ app.post("/api/standalone/validate", async (c) => {
     if (!r.ok && r.problem) issues.push({ path: ["name"], message: r.problem });
   }
   const warnings: Issue[] = [];
-  if (spec) {
+  // ?live=0 (the form before a provider is picked): the request's own rules and the name only, no provider API call.
+  if (spec && c.req.query("live") !== "0") {
     const live = await liveSpecIssues(c.env, spec);
     issues.push(...mapLaunchIssues(live.issues));
     warnings.push(...mapLaunchIssues(live.warnings));
@@ -911,7 +917,7 @@ app.get("/api/github/ci", async (c) => c.json(await ciStatus(c.env)));
 app.post("/api/github/release", async (c) => {
   const b = await body(c);
   parseOr400("release-dispatch", b);
-  const known = (await dynamicEnums(c.env)).channels.map((x) => x.id);
+  const known = (await dynamicEnums(c.env, undefined, { live: false })).channels.map((x) => x.id);
   if (b.channel && !known.includes(b.channel)) throw new HttpError(400, `channel: one of ${known.join(", ")}`, { issues: [{ path: ["channel"], message: `one of ${known.join(", ")}` }] });
   const r = await dispatchRelease(c.env, b);
   await auditC(c, { action: `release.${b.action}`, target: b.channel || "stable", after: r.inputs });
@@ -973,7 +979,17 @@ app.post("/api/preflight", async (c) => {
   const pf = await checkImages(c.env, spec, images);
   return c.json({ ok: pf.errors.length === 0, ...pf, images });
 });
-app.get("/api/schemas/dynamic", async (c) => c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined)));
+/**
+ * The editors' lists. ?live=0: no upstream call (the launch forms on open); ?provider=<runpod|gmi|brev>: that one
+ * provider's live details only (asked once it is picked); ?images=1: the commits with images (GHCR); none of them:
+ * the full view (the JSON editor, the CLI).
+ */
+app.get("/api/schemas/dynamic", async (c) => {
+  const p = c.req.query("provider");
+  if (p) return c.json(await providerDetails(c.env, p));
+  if (c.req.query("images") === "1") return c.json(await imageCommits(c.env));
+  return c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined, { live: c.req.query("live") !== "0" }));
+});
 /** Any schema's own check (refinements included) on a draft, without acting: the forms' cross-field rules. */
 app.post("/api/schemas/:name/validate", async (c) => {
   const name = c.req.param("name") as SchemaName;

@@ -7,14 +7,16 @@ import { badge, h } from "../dom";
 import { createJsonEditor } from "../editor";
 import { createForm, type Api, type FieldOpts, type Form } from "../fields";
 import type { Issue, Path } from "../schema";
-import { issuesOf, loadDyn, loadSchemas, preflight } from "./common";
+import { issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight } from "./common";
 import { servesPanel } from "./serves";
 
 const pretty = (v: unknown) => JSON.stringify(v, null, 2);
 
 export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast: (m: string) => void; defaults: any; onCreated: (id: string) => void }) {
   const { api } = o;
-  const [schemas, dyn] = await Promise.all([loadSchemas(api), loadDyn(api)]);
+  // Serverless is Runpod only: the lists without any live one (?live=0), and Runpod's GPU types (prices, stock) alone.
+  const [schemas, dyn, rp] = await Promise.all([loadSchemas(api), loadDyn(api, "", { live: false }), loadProvider(api, "runpod").catch(() => null)]);
+  if (rp) mergeProvider(dyn, rp);
   const schema = schemas["serverless-endpoint"]!;
   const create = h("button", { type: "button", class: "primary" }, "Create endpoint");
   const out = h("div", { class: "small", style: "margin-top:8px" });
@@ -22,8 +24,8 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const servesBox = h("div", { class: "small muted" }, "Serves: checking…");
   // The cold start to expect (image pull + R2 fetch + load), live from the validator (serverless/weights.ts slsOutlook).
   const outlookBox = h("div", { class: "small", id: "sls-outlook" });
-  const remote = async (v: any) => {
-    const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v } });
+  const remote = async (v: any, signal?: AbortSignal) => {
+    const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v }, signal });
     servesBox.replaceChildren(servesPanel(r.serving));
     outlookBox.replaceChildren(...outlookLine(r.outlook, r.stock));
     return { issues: r.ok ? [] : issuesOf(r), warnings: r.warnings || [] };
@@ -51,10 +53,12 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
     if (d.compute === "CPU") f.set(["mode"], "queue", true);
   };
   let advanced = false;
+  let shasAsked = false;
   function draw() {
     const cpu = f.get(["compute"]) === "CPU";
     const custom = !f.get(["preset"]);
     const s = src();
+    if (s === "sha" && !shasAsked) (shasAsked = true), loadShas(api, dyn).then(() => src() === "sha" && draw());
     // Custom endpoints name their variant and config; with a preset they sit under "Advanced" (read-only: the preset sets them).
     const imageFields = [
       F(["variant"], {
