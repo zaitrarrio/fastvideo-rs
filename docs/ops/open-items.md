@@ -8,6 +8,21 @@ new work in the same area. Newest decisions first.
 
 ### 2026-10-13
 
+- **EU weights volume: reduce to a 500 GB H3 + LTX volume** ("eu volume -
+  reduce to 500 gb plan"). Replace `jg48s6o1w0` (2000 GB, $120/month) with a
+  500 GB volume (~$35/month) holding only `FV_EU_VOLUME_TREES`
+  (`scripts/gpu/volumes.sh`: h3-base and its three nested trees, the FastH3
+  LoRA, h3-ref2va, ltx25, ltx25-dev, the IC-LoRA, upscaler, h3-to-ltx,
+  auxiliary/tae and lpips: 462.45 GB), filled from R2 with
+  `scripts/gpu/r2-fill-volume.sh`; everything else from R2.
+  **Blocked (2026-10-13):** Runpod no longer creates network volumes in
+  EUR-IS-1 (`POST /networkvolumes`: "Data center EUR-IS-1 not found or does
+  not support network volumes"; GraphQL `storageSupport: false`). The only EU
+  DC with volumes and RTX PRO 6000 Server stock is EU-RO-1 (stock "Low"),
+  which would move the EU GPU region. Owner to choose: a volume in EU-RO-1
+  (and move the `eu` region there), keep `jg48s6o1w0` as is, or drop the
+  volume for `weights_source r2` (any DC). Nothing was created and
+  `jg48s6o1w0` is unchanged.
 - **Brev: a stop that does not succeed deletes the VM.** "We should go ahead
   and delete VMs that need to be stopped if a stop command does not succeed.
   If the stop command succeeds then we should NOT delete the VM." On every

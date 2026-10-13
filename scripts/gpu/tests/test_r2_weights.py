@@ -383,6 +383,18 @@ class Fetch(Base):
         self.assertEqual((self.root / "demo" / "transformer_prequant_x_mxfp8" / "model.safetensors").read_bytes(), dit["model.safetensors"])
         self.assertEqual((self.root / "demo" / "text_encoder_fp8" / ".fv-revision").read_text(), "eu-1")
 
+    def test_a_tree_s_own_sha256_txt_is_kept_byte_for_byte(self):
+        # h3-ref2va ships sha256.txt (its fetch-time list, 29 lines): the fetcher's own list must not overwrite it,
+        # or the tree on a volume filled from R2 differs from the R2 manifest and from the old volume.
+        own = {"model.safetensors": rnd(80_000, 8), "SOURCE.json": b'{"s": 1}', "sha256.txt": b"abc  model.safetensors\n"}
+        self.publish("ref", "eu-1", self.make_tree(own, "ref"))
+        self.assertEqual(self.fetch(self.plan("ref"), self.root, "--add-only", "--pod", "t"), 0)
+        d = self.root / "ref"
+        for p, data in own.items():
+            self.assertEqual((d / p).read_bytes(), data, p)
+        self.assertEqual(len((d / ".fv-sha256.txt").read_text().splitlines()), len(own))
+        self.assertTrue((d / ".complete").is_file())
+
     def test_whole_file_mismatch_fails(self):
         plan = self.plan("demo")
         f = [x for x in plan["trees"][0]["files"] if x["path"].startswith("transformer/")][0]

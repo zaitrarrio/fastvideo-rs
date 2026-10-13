@@ -34,7 +34,9 @@ What it does, per tree of the plan (`weights/<dest>/<rev>/` in R2):
 - Order: small trees first, and in a tree configs/tokenizers, then the text
   encoder, the VAEs, then the big transformer shards, so the first trees are
   ready (renamed into place with `.complete`, `.fv-revision`, `sha256.txt`)
-  while the rest is still arriving.
+  while the rest is still arriving. A tree that ships its own `sha256.txt`
+  (h3-ref2va) keeps it byte for byte; the fetcher's list goes to
+  `.fv-sha256.txt` there.
 - --add-only (a shared R2 cache on a network volume, serverless workers with
   FV_SLS_R2_CACHE_VOLUMES; CLAUDE.md: volume writes are add-only): nothing
   under the root is ever moved aside or removed. Each worker stages under its
@@ -820,7 +822,9 @@ class Fetcher:
             log(f"tree {t.dest}: another worker finished it first at {t.rev}: kept theirs")
             return
         os.makedirs(parent, exist_ok=True)
-        with open(os.path.join(t.stage, "sha256.txt"), "w") as out:
+        # a tree's own sha256.txt is one of its files (h3-ref2va): never overwrite it
+        listing = ".fv-sha256.txt" if any(f.path == "sha256.txt" for f in t.files) else "sha256.txt"
+        with open(os.path.join(t.stage, listing), "w") as out:
             for f in sorted(t.files, key=lambda x: x.path):
                 out.write(f"{f.sha256}  {f.path}\n")
         with open(os.path.join(t.stage, ".fv-manifest.json"), "w") as out:

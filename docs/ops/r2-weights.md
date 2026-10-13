@@ -137,7 +137,8 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
   - Retries use exponential backoff with jitter. A 403 (an expired URL) asks fv-control for a fresh plan.
   - Resume: a partial file from an earlier attempt has its parts hashed on disk, and only the bad ones are fetched.
   - Each tree is renamed into place as soon as it is whole, with `.complete`, `.fv-revision`, `.fv-source`,
-    `sha256.txt` and `.fv-manifest.json`.
+    `sha256.txt` and `.fv-manifest.json`. A tree that ships its own `sha256.txt` (`h3-ref2va`) keeps it byte for
+    byte, and the fetcher's list goes to `.fv-sha256.txt` (fixed 2026-10-13: it used to be overwritten).
   - **Streaming** (`--stream`, what the boots use when fv-serve can, 2026-10-13): the trees are written in place
     with a per-file progress map, and fv-serve starts loading while they arrive. See §11.
 - **Which trees.** The plan holds the pool's (or endpoint's) preset trees: the config's `weights` and every tree the

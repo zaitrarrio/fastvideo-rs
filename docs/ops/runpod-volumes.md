@@ -512,6 +512,35 @@ FV_VERIFY_FP8_SHA=1 bash scripts/gpu/verify-weights.sh text-fp8   # ~40 GB read
 
 `verify-weights.sh --list` prints every cell and what it needs.
 
+### 5.7 Fill a volume from R2 (`r2-fill-volume.sh`)
+
+Every tree is in the R2 weights store (docs/ops/r2-weights.md), so a new
+volume can be filled from R2 instead of the Hub or another volume:
+
+```bash
+scripts/gpu/r2-fill-volume.sh up <new-volume-id>            # fill FV_EU_VOLUME_TREES (or FV_FILL_TREES)
+scripts/gpu/r2-fill-volume.sh up <old-volume-id> compare    # read-only: the old volume against the same manifests
+scripts/gpu/r2-fill-volume.sh status <pod>                  # then: fetch <pod> DIR; down <pod>
+```
+
+One CPU pod (`cpu3c` 16 vCPU, 3 h DELETE backstop, the read-only R2 key
+pair only) mounts the volume at `/workspace` and runs `r2-fetch.py
+--add-only --full-hash` into `/workspace/weights`: each tree is staged as
+`.r2-partial/<dest>@<rev>.<pod>`, every 64 MiB part and every whole file is
+checked against the R2 manifest's SHA-256, and the tree is then renamed into
+place with `.complete`, `.fv-revision`, `.fv-source`, `.fv-manifest.json`
+and `sha256.txt` (`.fv-sha256.txt` where the tree ships its own, as
+`h3-ref2va` does). A tree present at another revision stops the run; nothing
+is replaced. Then `compare-dir` reads every tree back from the volume. The
+trees are plain files (not the HF-cache layout), as on an r2 pod's disk;
+readers see the same paths. A pod mounts one network volume, so the old
+volume is compared in a second pod (`compare` mode); both then equal the same
+manifests by the SHA-256 of every part.
+
+Runpod creates network volumes only in DCs with `storageSupport` (GraphQL
+`dataCenters`). **EUR-IS-1 lost it by 2026-10-13**, so no new volume can be
+made there; `jg48s6o1w0` still works.
+
 ## 6. Adding a new tree (the normal path, not a rebuild)
 
 `scripts/gpu/fetch-hub-tree.sh <dest> <revision>` (from this container: it
