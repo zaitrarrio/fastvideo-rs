@@ -1925,7 +1925,29 @@ const AUDIO_BITRATES = [96000, 128000, 192000];
 // property the schema advertises (an enum or a bounded integer, such as the
 // clip director's chunk size) is rendered generically and sent in
 // \`configure\` under its own name.
-const OWN_PROPS = new Set(['resolution', 'aspect_ratio', 'prompt', 'image_url', 'end_image_url', 'audio_url', 'audio_bitrate', 'memory', 'seed', 'script']);
+const OWN_PROPS = new Set(['resolution', 'aspect_ratio', 'prompt', 'image_url', 'end_image_url', 'audio_url', 'audio_bitrate', 'memory', 'seed', 'script', 'upsample', 'style', 'entities']);
+
+// The world bible's opening cast (\`configure.entities\`, the prompt
+// upsampler's registry): a JSON array of {id, kind, name, descriptor}, kind
+// one of character / location / prop. Throws on anything else.
+export function parseEntities(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  let v;
+  try { v = JSON.parse(t); } catch (e) { throw new Error('entities: not JSON (' + e.message + ')'); }
+  if (!Array.isArray(v)) throw new Error('entities: a JSON array of {id, kind, name, descriptor}');
+  const kinds = ['character', 'location', 'prop'];
+  v.forEach((e, i) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) throw new Error('entities[' + i + ']: an object');
+    for (const k of ['id', 'kind', 'name', 'descriptor']) {
+      if (typeof e[k] !== 'string' || !e[k].trim()) throw new Error('entities[' + i + '].' + k + ': a non-empty string');
+    }
+    if (!kinds.includes(e.kind)) throw new Error('entities[' + i + '].kind: one of ' + kinds.join(', '));
+    const extra = Object.keys(e).filter((k) => !['id', 'kind', 'name', 'descriptor'].includes(k));
+    if (extra.length) throw new Error('entities[' + i + ']: unknown field ' + extra[0]);
+  });
+  return v.length ? v : null;
+}
 // Property names that are a chunk length in seconds (labelled "N s").
 const CHUNK_PROPS = /^(chunk_duration|chunk_seconds|chunk_size)$/;
 const humanProp = (k) => (CHUNK_PROPS.test(k) ? 'Chunk size' : (k.charAt(0).toUpperCase() + k.slice(1)).replace(/_/g, ' '));
@@ -2005,6 +2027,15 @@ export function mountDirector(root, { app, model }) {
   const audio = mediaInput('director-audio', 'audio', 'optional driving audio URL');
   const bitrate = el('select', { id: 'director-audio-bitrate' }, el('option', { value: '' }, 'server default'), AUDIO_BITRATES.map((b) => el('option', { value: String(b) }, b / 1000 + ' kbit/s')));
   const script = scriptEditor('director-script');
+  // Prompt upsampling (ours, docs/serve/prompt-upsampling.md): the server's
+  // LLM writes every segment from a world bible (premise = opening prompt).
+  const upsample = el('input', { type: 'checkbox', id: 'director-upsample' });
+  const style = el('textarea', { id: 'director-style', rows: 2, placeholder: 'e.g. 35mm film, muted teal palette, shallow depth of field' });
+  const entities = el('textarea', { id: 'director-entities', rows: 4, spellcheck: 'false',
+    placeholder: '[{"id": "mara", "kind": "character", "name": "Mara", "descriptor": "a wiry woman in her sixties, yellow oilskin coat"}]' });
+  const upsampleNote = el('p', { class: 'hint', id: 'director-upsample-note' }, 'Needs a server with [upsampler] configured; otherwise prompts are used as sent.');
+  const segments = el('ul', { class: 'timeline', id: 'director-segments' });
+  const segmentsBlock = el('div', { id: 'director-segments-block', hidden: true }, el('h3', { style: 'margin-top:14px' }, 'Upsampled segments'), segments);
   const start = el('button', { class: 'primary', id: 'director-start' }, 'Start session');
   const stop = el('button', { id: 'director-stop', disabled: true }, 'Stop');
   const msg = el('div', { class: 'msg', role: 'status', id: 'director-msg' });
@@ -2080,6 +2111,10 @@ export function mountDirector(root, { app, model }) {
       ['scripts', m.scripts === false ? 'no' : 'up to ' + m.script_max_beats + ' beats, ' + m.script_max_end_images + ' keyframes'],
       ['audio conditioning', audioOk ? 'yes' : 'no']];
     if (m.causal) facts.push(['causal', m.causal.block_frames + '-frame blocks (' + m.causal.block_seconds + ' s), prompt switch: ' + m.causal.prompt_switch]);
+    const u = m.upsample;
+    const limit = u && (u.prompt_limit_unit === 'tokens' ? u.max_prompt_tokens + ' tokens' : u.max_prompt_chars + ' characters');
+    facts.push(['prompt upsampler', u && u.available ? 'available (up to ' + limit + ' per segment' + (u.layout ? ', ' + u.layout + ' layout' : '')
+      + (u.deck_size ? ', ' + u.deck_size + ' planned ahead' : '') + (u.vision ? ', sees images' : '') + (u.default ? ', on by default' : '') + ')' : 'none']);
     sessionFacts.replaceChildren(...facts.filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))]));
   }
 
@@ -2145,7 +2180,26 @@ export function mountDirector(root, { app, model }) {
     switch (m.type) {
       case 'meta': meta = { ...m, chunk: meta.chunk }; renderStats(lastChunk); break;
       case 'session_info': applySessionInfo(m); break;
+      case 'segment_expanded': {
+        segmentsBlock.hidden = false;
+        const where = m.chunk_index != null ? 'chunk ' + m.chunk_index : m.first_block != null ? 'block ' + m.first_block : 'segment';
+        const head = el('div', {}, el('span', { class: 'v' }, where), ' ', el('span', { class: 'pill' + (m.fallback ? ' bad' : ' ok') }, m.fallback ? 'fallback' : 'v' + m.prompt_version),
+          m.summary ? ' ' + m.summary : '', m.fallback && m.error ? ' (' + m.error + ')' : '',
+          m.prompt_length != null ? ' · ' + m.prompt_length + '/' + m.prompt_limit + ' ' + m.prompt_unit : '',
+          m.planned != null ? ' · ' + m.planned + ' planned' : '');
+        const added = (m.new_entities || []).map((e) => e.name + ' (' + e.kind + ')').join(', ');
+        const li = el('li', { 'data-segment': String(m.segment_index ?? ''), 'data-fallback': String(!!m.fallback) }, head,
+          el('p', { class: 'hint segment-prompt', style: 'white-space: pre-wrap' }, m.prompt || ''), added ? el('p', { class: 'hint' }, 'New: ' + added) : null);
+        segments.prepend(li);
+        while (segments.childNodes.length > 50) segments.lastChild.remove();
+        break;
+      }
       case 'configured':
+        if (m.upsample === false && m.upsample_error) setMsg(msg, m.upsample_error, 'bad');
+        if (m.upsample_premise && m.upsample_premise.digest) {
+          const d = m.upsample_premise.digest;
+          setMsg(msg, 'The premise (' + m.upsample_premise.tokens + ' tokens) is over the LLM budget: ' + (d.fallback ? 'its head is used (' + (d.error || 'digest failed') + ')' : 'condensed into a series bible of ' + d.tokens + ' tokens'), d.fallback ? 'bad' : 'ok');
+        }
         // The chunk length the session actually runs (a tier may fall back).
         if (m.chunk_duration != null) { meta = { ...meta, chunk: m.chunk_duration }; renderStats(lastChunk); }
         setPromptState(m.prompt_version, 'applied', 'ok');
@@ -2220,8 +2274,14 @@ export function mountDirector(root, { app, model }) {
       if (bitrate.value) cfg.audio_bitrate = Number(bitrate.value);
     }
     try { const beats = script.value(); if (beats) cfg.script = beats; } catch (e) { setMsg(msg, 'Script: ' + e.message, 'bad'); return; }
+    if (upsample.checked) {
+      cfg.upsample = true;
+      if (style.value.trim()) cfg.style = style.value.trim();
+      try { const ents = parseEntities(entities.value); if (ents) cfg.entities = ents; } catch (e) { setMsg(msg, e.message, 'bad'); return; }
+    }
     // With a script the opening chunk follows its beats: an end image goes in a keyframe beat.
     if (cfg.script && cfg.end_image_url) { setMsg(msg, 'With a script, put the last-frame image in a beat (a keyframe at its offset).', 'bad'); return; }
+    segments.replaceChildren(); segmentsBlock.hidden = true;
     prompts.clear(); timeline.replaceChildren(); chunks = 0; lastChunk = null; meta = {}; stats.replaceChildren(); sessionFacts.replaceChildren();
     client = new DirectorClient({ appId, onEvent, onState, onTrack: (s) => { video.srcObject = s; }, check: offered });
     addTimeline(1, text + (cfg.script ? ' (+ ' + cfg.script.length + ' beats)' : ''), 'configuring');
@@ -2276,6 +2336,11 @@ export function mountDirector(root, { app, model }) {
           el('details', { class: 'more', id: 'director-more' }, el('summary', {}, 'Additional settings'),
             el('div', { class: 'row' }, field('Seed', seed), field('Memory', memory, 'Prior segment prompts kept as context (1-50).')),
             endBlock, audioBlock, scriptBlock),
+          el('details', { class: 'more', id: 'director-upsampling' }, el('summary', {}, 'Prompt upsampling'),
+            el('label', { class: 'check' }, upsample, 'Upsample prompts: the server\\'s LLM writes each segment from the opening prompt (the premise) and your directions'),
+            upsampleNote,
+            field('Style', style, 'Appended to every segment.'),
+            field('Entities', entities, 'Established cast: JSON array of {id, kind (character | location | prop), name, descriptor}. Descriptors are spliced into every segment the entity appears in.')),
           el('div', { class: 'actions' }, start, stop, poolBadge(model)), msg)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Stream')),
@@ -2289,7 +2354,7 @@ export function mountDirector(root, { app, model }) {
           el('details', { class: 'more', id: 'director-next-more' }, el('summary', {}, 'End image, audio, script'),
             nextEndBlock, nextAudioBlock, nextScriptBlock),
           el('div', { class: 'actions' }, send),
-          el('h3', { style: 'margin-top:14px' }, 'Timeline'), timeline)),
+          el('h3', { style: 'margin-top:14px' }, 'Timeline'), timeline, segmentsBlock)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Events')),
         el('div', { class: 'stage-body' }, log))));
