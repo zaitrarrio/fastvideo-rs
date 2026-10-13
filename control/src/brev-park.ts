@@ -73,6 +73,7 @@ export const BREV_HOME = "/home/ubuntu/workspace";
 export const TREE_GB: Record<string, number> = {
   "h3-base": 144,
   "h3-8step": 144,
+  "fasth3-trim-8step": 44,
   "FastH3-4-step-Preview-v1-LoRA": 7,
   ltx25: 125,
   "ltx25-dev": 45,

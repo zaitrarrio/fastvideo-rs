@@ -43,9 +43,101 @@ pub struct H3TransformerConfig {
     pub norm_eps: f64,
     pub qk_norm_eps: f64,
     pub final_norm_eps: f64,
+    /// Rank of the factorized AdaLN (FastH3 Trim: 16). `None`: every block
+    /// owns a full `Linear(time_embed_dim, 96768)` on `silu(temb)`. `Some(r)`:
+    /// one shared `adaln_basis: Linear(time_embed_dim, r, bias=False)` on
+    /// `silu(temb)`, and each block's `adaln_proj.linear` (and `norm_out.linear`)
+    /// is `Linear(r, ...)` on the basis output with no further `silu`. Upstream
+    /// keeps these three in float16 (FastVideo `minimax_h3.py`
+    /// `_get_parameter_dtype`, `forward`: `adaln_basis(silu(temb).to(fp16))`).
+    pub adaln_rank: Option<usize>,
+    /// Blocks of the network the checkpoint was pruned from (50 for H3).
+    /// Metadata only: the stored blocks are renumbered `0..num_layers`.
+    pub source_num_layers: usize,
+    /// Which source blocks survived, in order (`kept_block_indices` of
+    /// `transformer/config.json`). Metadata only: no upstream code reads it
+    /// (FastVideo `configs/models/dits/minimax_h3.py` has no such field; RoPE,
+    /// VSA and the AdaLN table are block-index independent), so it is checked
+    /// for consistency and logged, never used to index anything.
+    pub kept_block_indices: Vec<usize>,
 }
 
+/// The source blocks `FastVideo/FastVideo-FastH3-Trim-8-Step` keeps
+/// (`transformer/config.json` at 9edcb65): 42 of 50, dropping 6, 7, 9, 13, 15,
+/// 16, 22 and 23.
+pub const FASTH3_TRIM_KEPT_BLOCKS: [usize; 42] = [
+    0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 14, 17, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+    33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+];
+
 impl H3TransformerConfig {
+    /// `FastVideo/FastVideo-FastH3-Trim-8-Step` `transformer/config.json`: the
+    /// H3 dims with 42 blocks and a rank-16 shared AdaLN basis.
+    pub fn fasth3_trim_8step() -> Self {
+        Self {
+            num_layers: FASTH3_TRIM_KEPT_BLOCKS.len(),
+            adaln_rank: Some(16),
+            source_num_layers: 50,
+            kept_block_indices: FASTH3_TRIM_KEPT_BLOCKS.to_vec(),
+            ..Self::fasth3_8step()
+        }
+    }
+
+    /// Apply a pruned / rank-reduced `transformer/config.json`'s three extra
+    /// fields to these (otherwise identical) dims, checking them against each
+    /// other: `num_layers` blocks, strictly increasing kept indices below
+    /// `source_num_layers`, and `0 < adaln_rank <= time_embed_dim` (the
+    /// upstream check). A config without `kept_block_indices` keeps every
+    /// block (`0..num_layers`).
+    pub fn with_pruning(
+        mut self,
+        num_layers: usize,
+        source_num_layers: Option<usize>,
+        kept_block_indices: Option<Vec<usize>>,
+        adaln_rank: Option<usize>,
+    ) -> Result<Self, String> {
+        if num_layers == 0 {
+            return Err("h3 transformer config: num_layers 0".into());
+        }
+        let source = source_num_layers.unwrap_or(num_layers);
+        let kept = kept_block_indices.unwrap_or_else(|| (0..num_layers).collect());
+        if kept.len() != num_layers {
+            return Err(format!(
+                "h3 transformer config: {} kept_block_indices for num_layers {num_layers}",
+                kept.len()
+            ));
+        }
+        if kept.windows(2).any(|w| w[0] >= w[1]) || kept.last().is_some_and(|&l| l >= source) {
+            return Err(format!(
+                "h3 transformer config: kept_block_indices must increase strictly below source_num_layers {source}: {kept:?}"
+            ));
+        }
+        if let Some(r) = adaln_rank {
+            if r == 0 || r > self.time_embed_dim {
+                return Err(format!(
+                    "h3 transformer config: adaln_rank {r} outside (0, time_embed_dim={}]",
+                    self.time_embed_dim
+                ));
+            }
+        }
+        self.num_layers = num_layers;
+        self.source_num_layers = source;
+        self.kept_block_indices = kept;
+        self.adaln_rank = adaln_rank;
+        Ok(self)
+    }
+
+    /// Input width of every block's `adaln_proj.linear` and of
+    /// `norm_out.linear`: the rank when factorized, else `time_embed_dim`.
+    pub fn adaln_in_dim(&self) -> usize {
+        self.adaln_rank.unwrap_or(self.time_embed_dim)
+    }
+
+    /// Whether this is a pruned checkpoint (fewer blocks than its source).
+    pub fn is_pruned(&self) -> bool {
+        self.num_layers < self.source_num_layers
+    }
+
     pub fn fasth3_8step() -> Self {
         Self {
             num_attention_heads: 56,
@@ -66,6 +158,9 @@ impl H3TransformerConfig {
             norm_eps: 1e-5,
             qk_norm_eps: 1e-5,
             final_norm_eps: 1e-5,
+            adaln_rank: None,
+            source_num_layers: 50,
+            kept_block_indices: (0..50).collect(),
         }
     }
 
@@ -184,6 +279,18 @@ impl H3VideoVaeConfig {
             ],
             tile_sample_min_size: 256,
             tile_sample_min_overlap: 64,
+        }
+    }
+
+    /// `FastVideo/FastVideo-FastH3-Trim-8-Step` `vae/config.json`: the
+    /// "LynnReal lightweight" video VAE. The same `AutoencoderKLMiniMaxH3`, the
+    /// same latent space (`latents_mean` / `latents_std` equal) and decoder
+    /// width; the ViT decoder has 26 blocks instead of 36 and is stored in
+    /// float16 (`vae/diffusion_pytorch_model.safetensors`, 4.23 GB).
+    pub fn fasth3_trim_8step() -> Self {
+        Self {
+            decoder_num_layers: 26,
+            ..Self::fasth3_8step()
         }
     }
 
@@ -758,7 +865,11 @@ impl H3InferenceContract {
             return Ok(Self::base(n + 1));
         }
         match name {
-            "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
+            // FastH3 Trim's fastvideo_inference.json is the V2 contract verbatim:
+            // the same 8 rungs, shifts 10 / 3, VSA 0.8 at tile 64.
+            "8step" | "v2" | "fasth3-8step" | "trim-8step" | "fasth3-trim-8step" | "fasth3-trim" => {
+                Ok(Self::fasth3_8step())
+            }
             "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => {
                 Ok(Self::fasth3_preview_lora_vsa())
             }
@@ -772,7 +883,7 @@ impl H3InferenceContract {
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg)"
+                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg)"
             )),
         }
     }
@@ -1388,6 +1499,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn trim_config_is_h3_with_42_blocks_and_a_rank16_basis() {
+        let base = H3TransformerConfig::fasth3_8step();
+        let trim = H3TransformerConfig::fasth3_trim_8step();
+        assert_eq!(trim.num_layers, 42);
+        assert_eq!(trim.adaln_rank, Some(16));
+        assert_eq!(trim.adaln_in_dim(), 16);
+        assert_eq!(base.adaln_in_dim(), 2688);
+        assert!(trim.is_pruned() && !base.is_pruned());
+        assert_eq!(trim.adaln_out_dim(), 96768);
+        // Dropped: 6, 7, 9, 13, 15, 16, 22, 23 (the model card's "eight blocks").
+        let dropped: Vec<usize> =
+            (0..50).filter(|b| !FASTH3_TRIM_KEPT_BLOCKS.contains(b)).collect();
+        assert_eq!(dropped, [6, 7, 9, 13, 15, 16, 22, 23]);
+        // Every dim but the three pruning fields is H3's.
+        let same = H3TransformerConfig {
+            num_layers: 50,
+            adaln_rank: None,
+            kept_block_indices: (0..50).collect(),
+            ..trim.clone()
+        };
+        assert_eq!(same, base);
+        let parsed = base
+            .clone()
+            .with_pruning(42, Some(50), Some(FASTH3_TRIM_KEPT_BLOCKS.to_vec()), Some(16))
+            .unwrap();
+        assert_eq!(parsed, trim);
+        // An unpruned config.json (no extra fields) keeps the base.
+        assert_eq!(base.clone().with_pruning(50, None, None, None).unwrap(), base);
+    }
+
+    #[test]
+    fn trim_pruning_fields_are_checked() {
+        let base = H3TransformerConfig::fasth3_8step();
+        let kept = FASTH3_TRIM_KEPT_BLOCKS.to_vec();
+        assert!(base.clone().with_pruning(41, Some(50), Some(kept.clone()), Some(16)).is_err());
+        let mut unsorted = kept.clone();
+        unsorted.swap(3, 4);
+        assert!(base.clone().with_pruning(42, Some(50), Some(unsorted), Some(16)).is_err());
+        assert!(base.clone().with_pruning(42, Some(49), Some(kept.clone()), Some(16)).is_err());
+        assert!(base.clone().with_pruning(42, Some(50), Some(kept.clone()), Some(0)).is_err());
+        assert!(base.clone().with_pruning(42, Some(50), Some(kept), Some(2689)).is_err());
+        assert!(base.with_pruning(0, None, None, None).is_err());
+    }
+
+    #[test]
+    fn trim_vae_is_the_h3_vae_with_26_decoder_blocks() {
+        let base = H3VideoVaeConfig::fasth3_8step();
+        let trim = H3VideoVaeConfig::fasth3_trim_8step();
+        assert_eq!(trim.decoder_num_layers, 26);
+        assert_eq!(H3VideoVaeConfig { decoder_num_layers: 36, ..trim.clone() }, base);
+        // Same chunking, so the same decoded frame counts.
+        assert_eq!(trim.temporal_decode_plan(37), base.temporal_decode_plan(37));
+    }
+
+    #[test]
+    fn trim_recipe_is_the_v2_contract() {
+        for name in ["trim-8step", "fasth3-trim-8step", "fasth3-trim"] {
+            assert_eq!(
+                H3InferenceContract::named(name).unwrap(),
+                H3InferenceContract::fasth3_8step(),
+                "{name}"
+            );
+        }
+        let c = H3InferenceContract::fasth3_8step();
+        assert_eq!(c.dmd_denoising_steps, [999, 874, 749, 624, 500, 375, 250, 125]);
+        assert_eq!((c.video_scheduler_shift, c.audio_scheduler_shift), (10.0, 3.0));
+        assert_eq!((c.vsa_sparsity, c.vsa_tile_size, c.dense), (0.8, 64, false));
+        assert_eq!((c.transformer_forwards, c.num_inference_steps, c.guidance_scale), (8, 9, 1.0));
     }
 
     #[test]

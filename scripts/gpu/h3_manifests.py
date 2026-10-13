@@ -42,10 +42,13 @@ def header(repo: str, rev: str, path: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=REPO)
+    ap.add_argument("--rev", default="", help="a pinned revision (default: the repo's current one)")
+    ap.add_argument("--components", default="transformer,vae,audio_vae,text_encoder")
+    ap.add_argument("--prefix", default="", help="output name prefix, e.g. trim_ for FastVideo/FastVideo-FastH3-Trim-8-Step")
     ap.add_argument("--out", default="crates/fastvideo-cudarc/src/h3/manifests")
     args = ap.parse_args()
 
-    info = json.loads(get(f"https://huggingface.co/api/models/{args.repo}"))
+    info = json.loads(get(f"https://huggingface.co/api/models/{args.repo}" + (f"/revision/{args.rev}" if args.rev else "")))
     rev = info["sha"]
     files = sorted(s["rfilename"] for s in info["siblings"] if s["rfilename"].endswith(".safetensors"))
 
@@ -64,8 +67,13 @@ def main() -> int:
         ),
     }
     os.makedirs(args.out, exist_ok=True)
+    wanted = args.components.split(",")
     for name, (want_file, want_key) in components.items():
-        chosen = [f for f in files if want_file(f)]
+        if name not in wanted:
+            continue
+        # The diffusers weights only: a component folder may also carry a ComfyUI file
+        # (FastH3 Trim's vae/minimax_h3_video_vae_int8_convrot.safetensors).
+        chosen = [f for f in files if want_file(f) and f.rsplit("/", 1)[-1].startswith(("diffusion_pytorch_model", "model"))]
         tensors = {}
         for f in chosen:
             for key, meta in header(args.repo, rev, f).items():
@@ -73,7 +81,7 @@ def main() -> int:
                     assert key not in tensors, f"{key} appears in two shards"
                     tensors[key] = [meta["dtype"], meta["shape"]]
         doc = {"repo": args.repo, "revision": rev, "files": chosen, "tensors": dict(sorted(tensors.items()))}
-        path = os.path.join(args.out, f"{name}.json")
+        path = os.path.join(args.out, f"{args.prefix}{name}.json")
         with open(path, "w") as fh:
             json.dump(doc, fh, separators=(",", ":"))
         print(f"{path}: {len(tensors)} tensors from {len(chosen)} file(s) at {rev[:12]}")

@@ -6,7 +6,7 @@
 # other tree comes from R2. Before that: jg48s6o1w0 (every cell passed on 2026-10-06). The US volume
 # s2k01690bi was deleted (docs/ops/runpod-volumes.md).
 #
-#   verify-weights.sh <cell>...        cells: fasth3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
+#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
@@ -69,6 +69,13 @@ needs() {
       echo "h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
     h3-base)
       echo "h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
+    # FastH3 Trim 8-step (docs/ports/h3-trim.md): its pruned transformer and its own lightweight VAE; the text
+    # encoder, tokenizer and the (byte-identical) audio VAE come from h3-base. Plus sha:fasth3-trim-8step.
+    fasth3-trim-8step)
+      echo "fasth3-trim-8step:transformer fasth3-trim-8step:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
+    # Its ComfyUI NVFP4 single file (Blackwell). Plus sha:fasth3-trim-8step-nvfp4.
+    fasth3-trim-8step-nvfp4)
+      echo ":fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors" ;;
     # FastH3 Preview v1 = the base transformer + one Preview LoRA (FastVideo's
     # run_fasth3_lora_preview_*_datafree.sh); the 8-step export is refused.
     fasth3-4step-vsa)
@@ -161,7 +168,7 @@ needs() {
   esac
 }
 
-CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
+CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super)

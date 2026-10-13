@@ -799,9 +799,24 @@ pub fn dit_tree_identity_for(
         root,
         options,
         &schedule,
-        &H3TransformerConfig::fasth3_8step(),
+        &dit_config(root, options)?,
         dit_loads_vsa_gate(&contract, None),
     )
+}
+
+/// The DiT config of a load: `transformer_ref/config.json` for Ref2VA,
+/// `transformer/config.json` otherwise ([`transformer_config`]); an MLX
+/// snapshot is H3's own config.
+fn dit_config(root: &Path, options: &H3PipelineOptions) -> Result<H3TransformerConfig> {
+    if options.ref2va {
+        return transformer_config(
+            &options.ref_root.as_deref().unwrap_or(root).join("transformer_ref"),
+        );
+    }
+    if super::mlx::find(root).is_some() {
+        return Ok(H3TransformerConfig::fasth3_8step());
+    }
+    transformer_config(&root.join("transformer"))
 }
 
 fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
@@ -914,7 +929,7 @@ impl H3Pipeline {
             options.reference_image_resize = ReferenceImageResize::Match;
         }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
-        let cfg = H3TransformerConfig::fasth3_8step();
+        let cfg = dit_config(root, &options)?;
         let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
         if contract.dense {
             options.dense = true;
@@ -1043,7 +1058,8 @@ impl H3Pipeline {
         if let Some(m) = &vae_map {
             m.prefetch_groups(&[&not_encoder]);
         }
-        let mut audio_vae_map = WeightMap::open(&root.join("audio_vae")).ok();
+        let audio_dir = audio_vae_dir(root, options.text_root.as_deref());
+        let mut audio_vae_map = WeightMap::open(&audio_dir).ok();
         if let Some(m) = &audio_vae_map {
             m.prefetch_groups(&[&not_encoder]);
         }
@@ -1432,7 +1448,7 @@ impl H3Pipeline {
             let timer = Instant::now();
             let audio_vae = booking.track(
                 crate::wan::ledger::AUDIO_VAE,
-                || load_audio_decoder_from(root, audio_vae_map.take()),
+                || load_audio_decoder_from(&audio_dir, audio_vae_map.take()),
                 |_| None,
             )?;
             timed(&mut load_timings.audio_vae_s, timer);
@@ -1887,6 +1903,7 @@ impl H3Pipeline {
         let (mut layout, cond_rows, cond_audio_rows) = if request.is_ref2va() {
             let encoded = encode_ref2va_conditions(
                 &self.root,
+                &audio_vae_dir(&self.root, self.options.text_root.as_deref()),
                 cfg,
                 &geometry,
                 &request.references,
@@ -2086,7 +2103,7 @@ impl H3Pipeline {
             Some(_) => None,
             None => Some(transient_booking.track(
                 crate::wan::ledger::AUDIO_VAE,
-                || load_audio_decoder(&self.root),
+                || load_audio_decoder(&audio_vae_dir(&self.root, self.options.text_root.as_deref())),
                 |_| None,
             )?),
         };
@@ -2252,7 +2269,7 @@ fn load_video_decoder_from(
             VideoDecoder::Taeh3(tae)
         }
         None => VideoDecoder::Official(H3VideoDecoder::load(
-            H3VideoVaeConfig::fasth3_8step(),
+            video_vae_config(&root.join("vae"))?,
             &match opened {
                 Some(m) => m,
                 None => WeightMap::open(&root.join("vae"))?,
@@ -2261,18 +2278,167 @@ fn load_video_decoder_from(
     })
 }
 
-fn load_audio_decoder(root: &Path) -> Result<H3AudioDecoder> {
-    load_audio_decoder_from(root, None)
+/// `dir` is the `audio_vae/` directory ([`audio_vae_dir`]).
+fn load_audio_decoder(dir: &Path) -> Result<H3AudioDecoder> {
+    load_audio_decoder_from(dir, None)
 }
 
-fn load_audio_decoder_from(root: &Path, opened: Option<WeightMap>) -> Result<H3AudioDecoder> {
+fn load_audio_decoder_from(dir: &Path, opened: Option<WeightMap>) -> Result<H3AudioDecoder> {
     Ok(H3AudioDecoder::load(
         H3AudioVaeConfig::fasth3_8step(),
         &match opened {
             Some(m) => m,
-            None => WeightMap::open(&root.join("audio_vae"))?,
+            None => WeightMap::open(dir)?,
         },
     )?)
+}
+
+/// The `audio_vae/` a snapshot decodes with: its own, else the one beside the
+/// text encoder (`text_root`, the `h3-base` tree). FastH3 Trim's audio VAE is
+/// byte-identical to H3's (`audio_vae/diffusion_pytorch_model.safetensors`
+/// SHA-256 52c59e67...), so its weights tree does not carry a copy
+/// (docs/ports/h3-trim.md).
+pub fn audio_vae_dir(root: &Path, text_root: Option<&Path>) -> PathBuf {
+    let own = root.join("audio_vae");
+    if own.is_dir() {
+        return own;
+    }
+    match text_root.map(|t| t.join("audio_vae")) {
+        Some(shared) if shared.is_dir() => shared,
+        _ => own,
+    }
+}
+
+/// Reads a JSON file when it exists: `Ok(None)` without one.
+fn read_json(path: &Path) -> Result<Option<serde_json::Value>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|e| msg(format!("{}: {e}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(msg(format!("{}: {e}", path.display()))),
+    }
+}
+
+/// `<dir>/config.json` (`MiniMaxH3Transformer3DModel`): H3's dims, plus a
+/// pruned / rank-reduced checkpoint's `num_layers`, `source_num_layers`,
+/// `kept_block_indices` and `adaln_rank` (FastH3 Trim). Every other dim must be
+/// H3's: this port has one set of kernels and memory plans for it. No
+/// config.json (an MLX or test snapshot) is H3's own config.
+pub fn transformer_config(dir: &Path) -> Result<H3TransformerConfig> {
+    let base = H3TransformerConfig::fasth3_8step();
+    let path = dir.join("config.json");
+    let Some(v) = read_json(&path)? else {
+        return Ok(base);
+    };
+    let uint = |k: &str| v.get(k).and_then(serde_json::Value::as_u64).map(|x| x as usize);
+    for (key, want) in [
+        ("num_attention_heads", base.num_attention_heads),
+        ("attention_head_dim", base.attention_head_dim),
+        ("hidden_size", base.hidden_size),
+        ("num_refiner_layers", base.num_refiner_layers),
+        ("ffn_dim", base.ffn_dim),
+        ("in_channels", base.in_channels),
+        ("audio_in_channels", base.audio_in_channels),
+        ("text_dim", base.text_dim),
+        ("freq_dim", base.freq_dim),
+        ("time_embed_hidden_dim", base.time_embed_hidden_dim),
+        ("time_embed_dim", base.time_embed_dim),
+        ("rope_freq_dim", base.rope_freq_dim),
+    ] {
+        if let Some(got) = uint(key) {
+            if got != want {
+                return Err(msg(format!(
+                    "{}: {key} = {got}, but the H3 port is built for {want}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if v.get("pdd_steps").is_some_and(|x| !x.is_null()) {
+        return Err(msg(format!(
+            "{}: a PDD (pdd_steps) transformer is not supported",
+            path.display()
+        )));
+    }
+    let kept = match v.get("kept_block_indices") {
+        Some(serde_json::Value::Array(a)) => Some(
+            a.iter()
+                .map(|x| x.as_u64().map(|n| n as usize))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| msg(format!("{}: kept_block_indices", path.display())))?,
+        ),
+        _ => None,
+    };
+    let cfg = base
+        .with_pruning(
+            uint("num_layers").unwrap_or(50),
+            uint("source_num_layers"),
+            kept,
+            uint("adaln_rank"),
+        )
+        .map_err(|e| msg(format!("{}: {e}", path.display())))?;
+    if cfg.is_pruned() || cfg.adaln_rank.is_some() {
+        crate::wan::log::info(format_args!(
+            "h3 dit: {} of {} source blocks (kept {:?}), adaln_rank {:?}",
+            cfg.num_layers, cfg.source_num_layers, cfg.kept_block_indices, cfg.adaln_rank
+        ));
+    }
+    Ok(cfg)
+}
+
+/// `vae/config.json` (`AutoencoderKLMiniMaxH3`): H3's video VAE with the
+/// file's `decoder_num_layers` (FastH3 Trim's lightweight VAE: 26). Every other
+/// field that this port reads must be H3's.
+pub fn video_vae_config(dir: &Path) -> Result<H3VideoVaeConfig> {
+    let base = H3VideoVaeConfig::fasth3_8step();
+    let path = dir.join("config.json");
+    let Some(v) = read_json(&path)? else {
+        return Ok(base);
+    };
+    let uint = |k: &str| v.get(k).and_then(serde_json::Value::as_u64).map(|x| x as usize);
+    for (key, want) in [
+        ("latent_channels", base.latent_channels),
+        ("decoder_num_attention_heads", base.decoder_num_attention_heads),
+        ("decoder_attention_head_dim", base.decoder_attention_head_dim),
+        ("decoder_num_register_tokens", base.decoder_num_register_tokens),
+        ("decoder_ffn_mult", base.decoder_ffn_mult),
+        ("clip_length", base.clip_length),
+        ("token_drop", base.token_drop),
+    ] {
+        if let Some(got) = uint(key) {
+            if got != want {
+                return Err(msg(format!(
+                    "{}: {key} = {got}, but the H3 VAE port is built for {want}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    for (key, want) in [("latents_mean", &base.latents_mean), ("latents_std", &base.latents_std)] {
+        if let Some(a) = v.get(key).and_then(serde_json::Value::as_array) {
+            // serde_json's float parsing is not always correctly rounded (no
+            // `float_roundtrip`): compare to a relative 1e-12, not bitwise.
+            let same = a.len() == want.len()
+                && a.iter().zip(want.iter()).all(|(x, w)| {
+                    x.as_f64().is_some_and(|x| (x - w).abs() <= 1e-12 * w.abs().max(1.0))
+                });
+            if !same {
+                return Err(msg(format!(
+                    "{}: {key} differs from H3's latent statistics",
+                    path.display()
+                )));
+            }
+        }
+    }
+    let layers = uint("decoder_num_layers").unwrap_or(base.decoder_num_layers);
+    if layers == 0 {
+        return Err(msg(format!("{}: decoder_num_layers 0", path.display())));
+    }
+    Ok(H3VideoVaeConfig {
+        decoder_num_layers: layers,
+        ..base
+    })
 }
 
 /// Load LTX-2.5 and run the 3-step joint refiner into `out_dir/refined`.
@@ -2468,7 +2634,7 @@ fn encode_fl2va_cond_rows(
     anchors: &[KeyframeAnchor],
 ) -> Result<CudaTensor> {
     let encoder = H3VideoEncoder::load(
-        H3VideoVaeConfig::fasth3_8step(),
+        video_vae_config(&root.join("vae"))?,
         &WeightMap::open(&root.join("vae"))?,
     )?;
     let mut parts = Vec::with_capacity(anchors.len());
@@ -2551,20 +2717,21 @@ struct Ref2VaEncoded {
 /// clip's own 768-short-edge canvas, trimmed to VAE chunk geometry).
 fn encode_ref2va_conditions(
     root: &Path,
+    audio_dir: &Path,
     cfg: &H3TransformerConfig,
     geometry: &H3Geometry,
     references: &[H3ReferenceSpec],
     seed: u64,
     resize: ReferenceImageResize,
 ) -> Result<Ref2VaEncoded> {
-    let vae_cfg = H3VideoVaeConfig::fasth3_8step();
+    let vae_cfg = video_vae_config(&root.join("vae"))?;
     let audio_cfg = H3AudioVaeConfig::fasth3_8step();
     let ratio = vae_cfg.spatial_compression_ratio();
     let sample_rate = audio_cfg.sampling_rate as u32;
     // Posterior samples, as FastVideo's Ref2VA encode (`_sample_visual_posterior`).
     let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?
         .with_posterior_sample(super::vae_encoder::KEYFRAME_ENCODE_SEED);
-    let audio_map = WeightMap::open(&root.join("audio_vae"))?;
+    let audio_map = WeightMap::open(audio_dir)?;
     let audio_encoder = super::audio_vae::H3AudioEncoder::load(audio_cfg, &audio_map)?;
     let mut prepared = Vec::with_capacity(references.len());
     let mut video_parts = Vec::new();
@@ -2741,6 +2908,76 @@ pub fn generate(
 mod tests {
     use super::*;
     use fastvideo_models::h3::packing::unpatchify;
+
+    /// A temporary snapshot directory holding `<sub>/config.json` = `text`.
+    fn snapshot(name: &str, sub: &str, text: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("h3-cfg-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(sub)).unwrap();
+        std::fs::write(root.join(sub).join("config.json"), text).unwrap();
+        root
+    }
+
+    /// The Hub's own config files (fixtures/*_config.json, copied verbatim):
+    /// MiniMax-H3 reads as H3; FastH3 Trim as 42 blocks, rank 16, and a
+    /// 26-block VAE with the same latent statistics.
+    #[test]
+    fn hub_configs_parse_into_the_port_configs() {
+        let base = snapshot("base", "transformer", include_str!("fixtures/h3_transformer_config.json"));
+        assert_eq!(
+            transformer_config(&base.join("transformer")).unwrap(),
+            H3TransformerConfig::fasth3_8step()
+        );
+        let trim = snapshot("trim", "transformer", include_str!("fixtures/trim_transformer_config.json"));
+        assert_eq!(
+            transformer_config(&trim.join("transformer")).unwrap(),
+            H3TransformerConfig::fasth3_trim_8step()
+        );
+        let v = snapshot("base-vae", "vae", include_str!("fixtures/h3_vae_config.json"));
+        assert_eq!(video_vae_config(&v.join("vae")).unwrap(), H3VideoVaeConfig::fasth3_8step());
+        let tv = snapshot("trim-vae", "vae", include_str!("fixtures/trim_vae_config.json"));
+        assert_eq!(video_vae_config(&tv.join("vae")).unwrap(), H3VideoVaeConfig::fasth3_trim_8step());
+        // No config.json: H3's own.
+        let none = std::env::temp_dir().join(format!("h3-cfg-none-{}", std::process::id()));
+        assert_eq!(transformer_config(&none).unwrap(), H3TransformerConfig::fasth3_8step());
+        assert_eq!(video_vae_config(&none).unwrap(), H3VideoVaeConfig::fasth3_8step());
+        for d in [base, trim, v, tv] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn foreign_configs_are_refused() {
+        let wide = snapshot("wide", "transformer", r#"{"hidden_size": 4096, "num_layers": 50}"#);
+        assert!(transformer_config(&wide.join("transformer")).is_err());
+        let bad_keep = snapshot(
+            "keep",
+            "transformer",
+            r#"{"num_layers": 2, "source_num_layers": 50, "kept_block_indices": [3, 1], "adaln_rank": 16}"#,
+        );
+        assert!(transformer_config(&bad_keep.join("transformer")).is_err());
+        let pdd = snapshot("pdd", "transformer", r#"{"num_layers": 50, "pdd_steps": 16}"#);
+        assert!(transformer_config(&pdd.join("transformer")).is_err());
+        let vae = snapshot("vae-stats", "vae", r#"{"decoder_num_layers": 26, "latents_mean": [0.0]}"#);
+        assert!(video_vae_config(&vae.join("vae")).is_err());
+        for d in [wide, bad_keep, pdd, vae] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// A snapshot without `audio_vae/` (FastH3 Trim's tree) decodes with the
+    /// one beside the text encoder; its own wins when present.
+    #[test]
+    fn audio_vae_falls_back_to_the_text_root() {
+        let tmp = std::env::temp_dir().join(format!("h3-avae-{}", std::process::id()));
+        let (trim, base) = (tmp.join("trim"), tmp.join("base"));
+        std::fs::create_dir_all(base.join("audio_vae")).unwrap();
+        std::fs::create_dir_all(&trim).unwrap();
+        assert_eq!(audio_vae_dir(&trim, Some(&base)), base.join("audio_vae"));
+        assert_eq!(audio_vae_dir(&trim, None), trim.join("audio_vae"));
+        std::fs::create_dir_all(trim.join("audio_vae")).unwrap();
+        assert_eq!(audio_vae_dir(&trim, Some(&base)), trim.join("audio_vae"));
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 
     #[test]
     fn device_unpatchify_is_the_inverse_of_the_host_patchify() {

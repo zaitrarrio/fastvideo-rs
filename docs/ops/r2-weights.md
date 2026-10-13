@@ -882,3 +882,21 @@ CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.
     (eager 82-88 s), container start → ready 106.6 s (eager 196-213 s), byte-identical output, host RSS −9.3 GiB.
     **Default since 2026-10-13 (owner):** a one-DiT Wan opens its DiT lazily while `FASTVIDEO_STREAMING_FETCH=1`;
     `FASTVIDEO_WAN_DIT_LAZY=0` forces eager.
+
+## 12. FastH3 Trim (2026-10-13, owner approval of the same day)
+
+Two trees, published Hub → R2 straight from one CPU pod with `scripts/gpu/r2-publish-hub.sh up fasth3-trim-8step
+fasth3-trim-8step-nvfp4` (python:3.12-slim, 16 vCPU, $0.48/hr, ~12 min; nothing passed through the agent
+container), then `verify --deep --record` on the same pod (every byte re-read; 114 s). Hash checks at upload:
+10 Hub LFS SHA-256, 9 git blob SHA-1 and the 10 `weights-sha256.tsv` rows of the Trim tree.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `fasth3-trim-8step` | `9edcb6511d5ff8dd1579e8eec8afee77e098b8d8` | 19 | 43,878,908,891 | `2ccd02ced74fe826bdf1cee2c491d8ddbc2cf51fd7c390c8d7ee65aff4f19339` |
+| `fasth3-trim-8step-nvfp4` | `f66c13dc17391dd4da99242a407918b92bf7d5fc` | 2 | 11,894,625,413 | `3e536acde92569b54100657df67529a25c3c0b34a6b466ec0c1e53c5fa5a44fe` |
+
+**Shared with h3-base, so not duplicated:** the Trim release's `audio_vae/` (LFS SHA-256 `52c59e67…`, and its
+config), `tokenizer/` and `processor/` are byte-identical to `h3-base`'s (and FastH3 V2's); the pipeline reads
+`h3-base/audio_vae` and `h3-base/tokenizer` (`text_weights`). Its **`vae/` is not** H3's (26 decoder blocks, F16,
+`73fc5a61…`; plus Kijai's INT8 convrot file) and is in the Trim tree. Its NVFP4 `text_encoder/` was not downloaded
+(h3-base's encoder serves it, docs/ports/h3-trim.md §3). Neither tree is on the 500 GB EU volume.
