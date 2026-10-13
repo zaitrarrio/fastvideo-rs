@@ -170,7 +170,8 @@ load_releases() {
     [[ -n "${FV_TOOLS_RELEASES_FILE:-}" ]] && { all="$(cat "$FV_TOOLS_RELEASES_FILE")"; page=99; }
     while (( page <= 20 )); do
       batch="$(api GET "/repos/$REPO/releases?per_page=100&page=$page")" || die "cannot list releases of $REPO"
-      all="$(jq -c --argjson b "$batch" '. + $b' <<<"$all")"
+      # Both lists go through files, not argv: the release list outgrew ARG_MAX ("Argument list too long", exit 126).
+      all="$(jq -cs '.[0] + .[1]' <(printf '%s' "$all") <(printf '%s' "$batch"))"
       (( $(jq length <<<"$batch") == 100 )) || break
       page=$((page + 1))
     done
