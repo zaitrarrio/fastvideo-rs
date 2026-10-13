@@ -45,11 +45,20 @@ OPS="${FV_DUMP_OPS:-0,1,20,41}"
 BIN=/opt/fv/fv-gpucheck
 log "start: ${H}x${WD}x${NF} seed $SEED, upstream FastVideo @ ${FV_UP_REV:-?}"
 nvidia-smi >$SRV/nvidia-smi.txt 2>&1
+# A host whose GPU memory is already held (2026-10-13: 95.8 of 97.9 GiB used, no process of ours) cannot run
+# anything: stop at once and delete this pod (Runpod's pod-scoped key), so the launcher can retry elsewhere.
+used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')"
+if [[ "${used:-0}" -gt 4096 ]]; then
+  log "GPU busy before start: ${used} MiB used; deleting this pod"
+  echo busy >$SRV/DONE
+  [[ -n "${RUNPOD_POD_ID:-}" ]] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >>$SRV/log.txt 2>&1
+  exit 1
+fi
 (while sleep 1; do nvidia-smi --query-gpu=timestamp,memory.used,utilization.gpu --format=csv,noheader,nounits; done) >$SRV/nvsmi.csv 2>/dev/null &
 
 # ---- 1. weights from R2 and the upstream stack, concurrently -------------------------------------------------
-fetch() {
-  "$PY" /opt/fv/r2-fetch.py --root "$L" --plan /opt/fv/plan.json --status $SRV/fetch-status.json >>$SRV/fetch.log 2>&1
+fetch() { # <plan> <tag>: the Trim (and h3-base) trees first; FastH3 V2's while the Trim runs use the GPU
+  "$PY" /opt/fv/r2-fetch.py --root "$L" --plan "$1" --status $SRV/fetch-status-$2.json >>$SRV/fetch-$2.log 2>&1
 }
 upstream_setup() {
   ( export FV_REV="$FV_UP_REV" UP_LOCAL=1; . /opt/fv/upstream/setup.sh && ensure_base && install_fastvideo ) >>$SRV/setup.log 2>&1
@@ -62,7 +71,7 @@ reuse_upstream() {
     && tar -xf /fvw/up-dump.tar -C $SRV up/dump && curl -fsSL --retry 5 -o $SRV/up/ref.mp4 "$FV_UP_REF_URL" \
     && uv venv -q --python "$PY" /opt/avpy && uv pip install -q --python /opt/avpy/bin/python numpy
 } >>$SRV/setup.log 2>&1
-step fetch fetch & fpid=$!
+step fetch fetch /opt/fv/plan.json trim & fpid=$!
 if [[ -n "${FV_UP_DUMP_URL:-}" ]]; then
   step reuse-upstream reuse_upstream & upid=$!
   AVPY=/opt/avpy/bin/python
@@ -72,6 +81,7 @@ else
 fi
 wait "$fpid"; wait "$upid"
 [[ -d "$L/fasth3-trim-8step/transformer" ]] || { log "no Trim tree"; echo 1 >$SRV/DONE; exit 1; }
+step fetch-v2 fetch /opt/fv/plan-v2.json v2 & v2pid=$!
 
 mkdir -p "$O"
 for x in transformer vae scheduler audio_scheduler fastvideo_inference.json model_index.json; do ln -sfn "$L/fasth3-trim-8step/$x" "$O/$x"; done
@@ -123,6 +133,7 @@ done
 # ---- 4. timing: Trim and FastH3 V2, warm, the same request -----------------------------------------------------
 step time-trim "${GEN[@]}" --weights "$L/fasth3-trim-8step" --h3-recipe trim-8step --adaln-cache $L/trim-adaln.cache \
   --clip-dir $SRV/ours/trim --warm >$SRV/time-trim.log 2>&1
+wait "$v2pid"
 step time-v2 "${GEN[@]}" --weights "$L/h3-8step" --h3-recipe 8step --adaln-cache $L/v2-adaln.cache \
   --clip-dir $SRV/ours/v2 --warm >$SRV/time-v2.log 2>&1
 # The two clips decoded by both: how far Trim moves from V2 on the same prompt and seed (not a gate).

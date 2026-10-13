@@ -1053,7 +1053,7 @@ impl H3Pipeline {
         let not_encoder = |k: &str| !k.starts_with("encoder.");
         let mut vae_map = match resolve_taeh3(options.taeh3.as_deref()) {
             Some(_) => None,
-            None => WeightMap::open(&root.join("vae")).ok(),
+            None => open_vae(&root.join("vae")).ok(),
         };
         if let Some(m) = &vae_map {
             m.prefetch_groups(&[&not_encoder]);
@@ -2272,7 +2272,7 @@ fn load_video_decoder_from(
             video_vae_config(&root.join("vae"))?,
             &match opened {
                 Some(m) => m,
-                None => WeightMap::open(&root.join("vae"))?,
+                None => open_vae(&root.join("vae"))?,
             },
         )?),
     })
@@ -2307,6 +2307,33 @@ pub fn audio_vae_dir(root: &Path, text_root: Option<&Path>) -> PathBuf {
         Some(shared) if shared.is_dir() => shared,
         _ => own,
     }
+}
+
+/// The diffusers weights of a `vae/` directory: its `diffusion_pytorch_model*`
+/// shards when it has any, else every safetensors file. FastH3 Trim's `vae/`
+/// also carries a ComfyUI file (`minimax_h3_video_vae_int8_convrot.safetensors`,
+/// fused `to_qkv`, INT8) whose keys overlap the decoder's.
+pub fn vae_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut all: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| msg(format!("{}: {e}", dir.display())))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
+        .collect();
+    all.sort();
+    let diffusers: Vec<PathBuf> = all
+        .iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("diffusion_pytorch_model"))
+        })
+        .cloned()
+        .collect();
+    Ok(if diffusers.is_empty() { all } else { diffusers })
+}
+
+fn open_vae(dir: &Path) -> Result<WeightMap> {
+    WeightMap::open_files(&vae_files(dir)?)
 }
 
 /// Reads a JSON file when it exists: `Ok(None)` without one.
@@ -2635,7 +2662,7 @@ fn encode_fl2va_cond_rows(
 ) -> Result<CudaTensor> {
     let encoder = H3VideoEncoder::load(
         video_vae_config(&root.join("vae"))?,
-        &WeightMap::open(&root.join("vae"))?,
+        &open_vae(&root.join("vae"))?,
     )?;
     let mut parts = Vec::with_capacity(anchors.len());
     for (i, anchor) in anchors.iter().enumerate() {
@@ -2729,7 +2756,7 @@ fn encode_ref2va_conditions(
     let ratio = vae_cfg.spatial_compression_ratio();
     let sample_rate = audio_cfg.sampling_rate as u32;
     // Posterior samples, as FastVideo's Ref2VA encode (`_sample_visual_posterior`).
-    let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?
+    let encoder = H3VideoEncoder::load(vae_cfg, &open_vae(&root.join("vae"))?)?
         .with_posterior_sample(super::vae_encoder::KEYFRAME_ENCODE_SEED);
     let audio_map = WeightMap::open(audio_dir)?;
     let audio_encoder = super::audio_vae::H3AudioEncoder::load(audio_cfg, &audio_map)?;
@@ -2962,6 +2989,32 @@ mod tests {
         for d in [wide, bad_keep, pdd, vae] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// FastH3 Trim's `vae/` holds the diffusers file and a ComfyUI INT8 file
+    /// with overlapping keys: only the diffusers shards are opened.
+    #[test]
+    fn vae_files_skip_the_comfy_file() {
+        let dir = std::env::temp_dir().join(format!("h3-vaefiles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "diffusion_pytorch_model.safetensors",
+            "minimax_h3_video_vae_int8_convrot.safetensors",
+            "config.json",
+        ] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        assert_eq!(vae_files(&dir).unwrap(), [dir.join("diffusion_pytorch_model.safetensors")]);
+        std::fs::remove_file(dir.join("diffusion_pytorch_model.safetensors")).unwrap();
+        for i in 1..=3 {
+            std::fs::write(dir.join(format!("diffusion_pytorch_model-0000{i}-of-00003.safetensors")), b"").unwrap();
+        }
+        assert_eq!(vae_files(&dir).unwrap().len(), 3);
+        let only = dir.join("only");
+        std::fs::create_dir_all(&only).unwrap();
+        std::fs::write(only.join("model.safetensors"), b"").unwrap();
+        assert_eq!(vae_files(&only).unwrap(), [only.join("model.safetensors")]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A snapshot without `audio_vae/` (FastH3 Trim's tree) decodes with the

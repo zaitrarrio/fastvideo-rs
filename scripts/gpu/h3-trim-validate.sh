@@ -66,6 +66,9 @@ case "$cmd" in
     mapfile -t dcs < <(for d in "${dcs[@]}"; do [[ "$rest_dcs" == *" $d "* ]] && echo "$d"; done)
     if [[ "${FV_NO_VOLUME:-0}" != 1 ]] && printf '%s\n' "${dcs[@]}" | grep -qx "$FV_EU_DC"; then
       dcs=("$FV_EU_DC")
+    elif [[ "${FV_REQUIRE_VOLUME:-0}" == 1 ]]; then
+      # Elsewhere a host may first pull the runtime image for many minutes (2026-10-13: 12 min, no runtime yet).
+      log "no stock in $FV_EU_DC (FV_REQUIRE_VOLUME=1)"; exit 1
     else
       mode=r2
     fi
@@ -89,9 +92,12 @@ for t in plan["trees"]:
         t["files"] = [f for f in t["files"] if any(fnmatch.fnmatch(f["path"], g) for g in keep[t["dest"]])
                       and (t["dest"] == "h3-base" or not f["path"].startswith(("text_encoder/", "tokenizer/")))]
         t["total_bytes"] = sum(f["size"] for f in t["files"])
-fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    json.dump(plan, f)
+# Two plans: what the Trim runs need first (plan.json), and FastH3 V2's tree, fetched while they run (plan-v2.json).
+for name, pick in ((sys.argv[2], lambda d: d != "h3-8step"), (sys.argv[2].replace("plan.json", "plan-v2.json"), lambda d: d == "h3-8step")):
+    part = dict(plan, trees=[t for t in plan["trees"] if pick(t["dest"])])
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(part, f)
 print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" for t in plan["trees"]), file=sys.stderr)
 PYEOF
     cp "$bin" "$tmp/b/fv-gpucheck"
@@ -149,7 +155,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
   fetch)
     id="${2:?pod id}"; out="${3:?dir}"; u="https://$id-8000.proxy.runpod.net"
     mkdir -p "$out"
-    for f in log.txt status.tsv nvidia-smi.txt nvsmi.csv fetch.log setup.log upstream.log fetch-status.json \
+    for f in log.txt status.tsv nvidia-smi.txt nvsmi.csv fetch-trim.log fetch-v2.log setup.log upstream.log fetch-status-trim.json fetch-status-v2.json \
              ours-inj.log ours-inj-served.log compare-dumps-inj.txt compare-dumps-inj-served.txt \
              av-psnr-inj.json av-psnr-inj-served.json time-trim.log time-v2.log trim-vs-v2.json \
              up/result.json up/ref.mp4 ours/inj/output.mp4 ours/inj-served/output.mp4 ours/trim/output.mp4 \

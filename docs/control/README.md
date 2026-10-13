@@ -293,7 +293,8 @@ the pool presets below.
 **Pool presets** (`POOL_PRESETS` in `spec.ts`; the dashboard's "Add pool"):
 the four standard pools plus `ltx-pro` (`ltx25-distill-dense`, recipe
 `ltx-pro`; Sage attention on by default on sm_120), `ltx-a2v`, `ltx-ref2v`,
-`h3-ref2v`, `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
+`h3-ref2v`, `fasth3-trim` (FastH3 Trim 8-step on the `h3-max` image, served `h3-trim`;
+weights from R2), `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
 streaming) and `longlive` (LongLive-1.3B on the `sfwan` image;
 **non-commercial** weights). They reuse the image variants CI builds; a
 config the variant's image does not carry rides inline (`config_toml`,
