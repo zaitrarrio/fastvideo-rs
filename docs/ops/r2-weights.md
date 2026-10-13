@@ -868,3 +868,14 @@ From round 2:
 The fetch rate with and without a concurrent load is not measured yet. The loader reads the page cache (no extra
 network or disk reads) with 4 read-ahead threads at nice 5, so the expected effect is small: the fetcher is
 CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.
+
+**Measured (2026-10-13, docs/ops/r2-bench-2026-10-13-stream.md), one H100 worker each:**
+
+- **H3:**
+  - fetch 250 s at 708 MB/s (no slowdown from the concurrent load);
+  - ready **10.5 s** after the last byte (was 57 s);
+  - container start → ready **268 s** (was 320 s).
+- **Wan:** ready 88 s after the last byte (was 91.5 s), so almost no overlap.
+  - The one-DiT Wan pipeline opens its DiT with the eager map, which waits for the whole 10 GB file. That file
+    was the last to complete.
+  - `FASTVIDEO_WAN_DIT_LAZY=1` (lazy, gated per part) is the untested fix.
