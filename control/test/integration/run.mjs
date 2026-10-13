@@ -1656,6 +1656,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
 
     // 0. A non-stoppable type: launched like any other; its stop leaves it RUNNING (Brev 500 "does not support stop"):
     //    released (the stop is done), never deleted, alerted once with its $/hr, billed at it; the owner deletes it.
+    const callsN = b.calls.length;
     const ln = await launch("nostop1", "a100-test");
     assert.equal(ln.op.status, "done", ln.op.error + JSON.stringify(ln.op.log.slice(-6)));
     assert.ok(ln.op.log.some((l) => /WARNING: a100-test can't be stopped on NVIDIA Brev/.test(l.msg)), JSON.stringify(ln.op.log.map((l) => l.msg)));
@@ -1681,7 +1682,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     assert.deepEqual([podn?.owner, podn?.desired_status, podn?.cost_per_hr], ["brev:unstoppable", "RUNNING", 1.8]);
     const provn = (await call2("/api/providers", { headers: H })).j.providers.find((p) => p.id === "brev");
     assert.ok(provn.running_dph >= 1.8, JSON.stringify(provn));
-    assert.ok(!b.calls.some((c) => c.method === "DELETE"), "never deleted by fv-control");
+    assert.ok(!b.calls.slice(callsN).some((c) => c.method === "DELETE"), "never deleted by fv-control");
     // The owner's delete (Pods page / fv-control.sh brev delete-parked): the only delete.
     const dn = await call2(`/api/providers/brev/parked/${wsn.id}/delete`, { method: "POST", body: {}, headers: H });
     assert.equal(dn.status, 200, JSON.stringify(dn.j));
