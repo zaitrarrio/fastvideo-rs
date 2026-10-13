@@ -145,7 +145,7 @@ export const CONFIG_PATH_RE = /^\/[A-Za-z0-9._/-]+\.toml$/;
  * (cluster/catalog.json engine_env; the parsers in crates/): what the env
  * editors offer as a select or a toggle, and what the server accepts.
  */
-export const ENV_VALUE_TYPES: Record<string, { kind: "enum" | "bool" | "path"; values?: readonly string[] }> = {
+export const ENV_VALUE_TYPES: Record<string, { kind: "enum" | "bool" | "path" | "secret"; values?: readonly string[] }> = {
   FASTVIDEO_ATTN_SAGE: { kind: "enum", values: ["0", "2", "off", "on"] }, // crates/fastvideo-cudarc/src/wan/attn_sage.rs forced()
   FASTVIDEO_FLASH_KERNEL: { kind: "enum", values: ["auto", "v1", "v2", "cudnn", "dc"] },
   FASTVIDEO_NVFP4: { kind: "enum", values: ["1", "static_6", "static_4", "mse"] },
@@ -159,14 +159,24 @@ export const ENV_VALUE_TYPES: Record<string, { kind: "enum" | "bool" | "path"; v
   FV_LONGLIVE_WEIGHTS: { kind: "path" },
   FV_LONGLIVE_RECACHE: { kind: "bool" },
   FV_LONGLIVE_INFINITY: { kind: "bool" },
+  // Stream outputs (docs/serve/stream-outputs.md, crates/fastvideo-serve/src/config.rs).
+  FV_CF_STREAM_API_TOKEN: { kind: "secret" },
+  FV_OUTPUTS_ALLOW_PRIVATE: { kind: "bool" },
+  FV_DIRECTOR_ALLOW_OUTPUT: { kind: "bool" },
 };
+/** A Runpod secret reference (`{{ RUNPOD_SECRET_name }}`): the value lives in Runpod (or FV_PROVIDER_SECRET_ENV). */
+export const RUNPOD_SECRET_REF_RE = /^\{\{\s*RUNPOD_SECRET_[A-Za-z0-9_]+\s*\}\}$/;
 export const BOOL_VALUES = ["0", "1", "true", "false", "on", "off"] as const;
 
-/** Why a value of a known env key is wrong, or null (unknown keys take any string). */
+/** Why a value of a known env key is wrong, or null (unknown keys take any string). A `secret` key's plain
+ * value is wrong everywhere: a variable is set with `secret: true` (sealed; envvars.ts skips this check), a
+ * serverless spec's env takes only a `{{ RUNPOD_SECRET_… }}` reference. */
 export function envValueProblem(key: string, value: string): string | null {
   const t = ENV_VALUE_TYPES[key];
   if (!t) return null;
   const v = value.trim();
+  if (t.kind === "secret")
+    return RUNPOD_SECRET_REF_RE.test(v) ? null : `${key} is a secret: set it as a secret variable (sealed in D1), or as a {{ RUNPOD_SECRET_… }} reference`;
   if (t.kind === "bool") return (BOOL_VALUES as readonly string[]).includes(v.toLowerCase()) ? null : `${key} is a switch: 0 or 1`;
   if (t.kind === "enum") return t.values!.includes(v.toLowerCase()) ? null : `${key}: one of ${t.values!.join(", ")}`;
   return /^\/\S*$/.test(v) ? null : `${key}: an absolute path`;

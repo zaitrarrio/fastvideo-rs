@@ -22,9 +22,14 @@ unless `h264_nvenc` opens.
 - The container needs the driver's `video` capability:
   `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video` (**WP-16: set this in the
   `serve` image**; the runtime stage currently has `compute,utility`).
-- Publish profiles (`H264Config::for_publish`): Cloudflare WHIP → capped at
-  1280×720 (fit + pad), level 3.1 (`42e01f`); MediaMTX and peer WebRTC →
-  native canvas, level 4.0 (`42e028`).
+- Publish profiles (`H264Config::for_publish`): every target keeps the
+  native canvas, at the smallest level that fits and at least the target's
+  floor: Cloudflare WHIP 3.1 (the level its offer names, `42e01f`; 1344×768
+  encodes at 3.2), MediaMTX and peer WebRTC 4.0. The 1280×720 Cloudflare
+  cap was removed 2026-10-13 (docs/serve/stream-outputs.md).
+- Sinks (`sink.rs`): RTMP(S) as FLV and SRT as MPEG-TS meet Cloudflare
+  Stream Live's input rules (CBR 2-13 Mb/s, closed 2 s GOP, AAC-LC 48 kHz
+  stereo) and scrub credentials from ffmpeg's errors.
 - No x264. libx264 appears only as `FfmpegH264::Libx264CpuTest`, the CPU CI
   stand-in that exercises the same ffmpeg plumbing; it cannot be selected
   from config.
@@ -36,7 +41,7 @@ unless `h264_nvenc` opens.
 
 | Profile | Encoded | SPS | IDRs | Wall per frame |
 |---|---|---|---|---|
-| Cloudflare | 1280×720 | CB (`42c01f`), level 3.1 | 0, 48, 70, 118 | 16.8 ms |
+| Cloudflare (the old 720p profile, removed 2026-10-13) | 1280×720 | CB (`42c01f`), level 3.1 | 0, 48, 70, 118 | 16.8 ms |
 | MediaMTX | 1344×768 | CB (`42c028`), level 4.0 | 0, 48, 70, 118 | 14.8 ms |
 
 Wall time includes the pipe, a debug-build test harness and one ffmpeg

@@ -44,6 +44,17 @@ describe("env resolution: pod > cluster > account > system", () => {
     await expect(setVar(env, "cluster", "c1", "FV_INTERNAL_TOKEN", "x", false, "t")).rejects.toThrow(/controller/);
     await expect(setVar(env, "cluster", "c1", "FV_DISPATCH_FAMILIES", "x", false, "t")).rejects.toThrow(/controller/);
     await expect(setVar(env, "cluster", "c1", "bad-key", "x", false, "t")).rejects.toThrow(/invalid/);
+    // The Cloudflare Stream token (stream outputs) is sealed or a Runpod reference, never a plain value.
+    await expect(setVar(env, "cluster", "c1", "FV_CF_STREAM_API_TOKEN", "cf-plain-token", false, "t")).rejects.toThrow(/is a secret/);
+    await setVar(env, "cluster", "c1", "FV_CF_STREAM_API_TOKEN", "cf-sealed-token", true, "t");
+    await setVar(env, "account", "", "FV_CF_STREAM_API_TOKEN", "{{ RUNPOD_SECRET_fv_cf_stream_api_token }}", false, "t");
+    await expect(setVar(env, "cluster", "c1", "FV_OUTPUTS_ALLOW_PRIVATE", "maybe", false, "t")).rejects.toThrow(/switch/);
+    expect((await resolvePlain(env, "c1", "p1", system)).FV_CF_STREAM_API_TOKEN).toBe("cf-sealed-token");
+    expect((await resolvePlain(env, "c2", null, system)).FV_CF_STREAM_API_TOKEN).toBe("{{ RUNPOD_SECRET_fv_cf_stream_api_token }}");
+    const v2 = await resolveView(env, "c1", "p1", system);
+    expect(v2.find((v) => v.key === "FV_CF_STREAM_API_TOKEN")).toMatchObject({ value: MASK, secret: true, source: "cluster" });
+    expect(JSON.stringify(v2)).not.toContain("cf-sealed-token");
+    expect((await listVars(env, "cluster", "c1")).find((r) => r.key === "FV_CF_STREAM_API_TOKEN")!.value).not.toContain("cf-sealed-token");
     await deleteVar(env, "pod", "p1", "RUST_LOG");
     expect((await resolvePlain(env, "c1", "p1", system)).RUST_LOG).toBe("info,fv=debug");
   });

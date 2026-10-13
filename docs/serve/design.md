@@ -25,11 +25,14 @@ text says **native**.
    `fastvideo-media` encodes H.264 on the GPU's NVENC. OpenH264 stays only as a
    CPU-only test/CI backend behind a feature and is never used in a deployed
    image (no Cisco patent licence when built from source). No x264.
-2. **H.264 level / 1344x768 H3 streams.** WHIP to Cloudflare: scale H3 streams to
-   1280x720 (level 3.1) before encoding. Full resolution (1344x768, level 4.0) is
-   supported when publishing to MediaMTX (self-hosted relay) and for peer WebRTC.
-   The WHIP target config selects the profile: `cloudflare` → 720p cap,
-   `mediamtx` / peer → native resolution.
+2. **H.264 level / 1344x768 H3 streams.** Every sink takes the native
+   resolution (corrected 2026-10-13, docs/serve/stream-outputs.md). WHIP to
+   Cloudflare offers `profile-level-id=42e01f` (level 3.1, as Cloudflare's
+   docs ask) and encodes the native canvas at the level it needs (1344x768:
+   3.2; 1080p30: 4.0), as browsers do; MediaMTX and peer WebRTC offer 4.0.
+   The earlier 1280x720 cap for Cloudflare rested on the offered level, not
+   on any Cloudflare limit (Cloudflare documents none; its FFmpeg example is
+   1920x1080@30), and was removed.
 3. **Model tiers exposed by the APIs.**
    - `h3-max` (fal `minimax/h3-max/*`, MiniMax `MiniMax-H3-Max`) and LTX
      `ltx-2-5-pro` / `ltx-2-3-pro` map to **our highest-quality configuration**
@@ -1373,12 +1376,24 @@ risk R2. The strobe workspace already pinned `str0m 0.21.0`
 
 **WHIP client** (`fastvideo-webrtc::whip`), per streaming-refs §1.9:
 
-- H.264 is offered first, with no VP8.
+- One video codec is offered: H.264 Constrained Baseline by default, or VP8
+  / VP9 (profile 0) when the output asks (`codec`). Cloudflare's WHIP takes
+  all three; the earlier "Cloudflare plays VP8 black" note was never
+  verified and is withdrawn (docs/serve/stream-outputs.md).
 - The offer is complete (non-trickle). Host candidates plus a STUN-derived
-  srflx candidate are gathered before the POST.
+  srflx candidate are gathered before the POST. Cloudflare and MediaMTX
+  accept it, so trickle ICE (PATCH) is not used.
 - `Content-Type: application/sdp`; 200 or 201 is accepted. The `Location`
   header is resolved per RFC 3986 and kept for `DELETE`.
-- Bearer or Basic auth; 30 s timeout.
+- Bearer or Basic auth; 30 s timeout. Errors never carry the URL (a
+  Cloudflare WHIP URL holds the publish key).
+
+**Outputs** (docs/serve/stream-outputs.md): a native stream publishes to
+one output, Cloudflare Stream by default (a live input per stream, WHIP in,
+WHEP out), or WHIP, RTMP(S) or SRT destinations the request names with
+their credentials (`output`); RTMPS/SRT go through the ffmpeg sink (H.264 +
+AAC, Cloudflare Stream Live's input rules). Director and Reactor sessions
+can add one output copy (`x_fv_output`).
 
 ### 5.9 Encoder decision
 
@@ -1419,7 +1434,8 @@ Alternatives considered:
   - Revisit only if 768p openh264 exceeds about 15 ms/frame (gate in WP-04).
 - Level: we signal `profile-level-id=42e01f` with
   `level-asymmetry-allowed=1`. 1344×768 exceeds level 3.1's frame size (risk
-  R3). WHIP sinks to Cloudflare scale to fit 1280×720.
+  R3); the SPS carries the level the canvas needs (3.2) and no sink scales
+  (docs/serve/stream-outputs.md).
 
 **Audio: libopus** (the `audiopus` crate), 48 kHz, 20 ms frames (960
 samples), and an RTP timestamp derived from the global sample counter.
@@ -1937,13 +1953,11 @@ additions and readings; everything is re-exported from the crate root.
 - `ArtifactStore::open` (serve-kit) reads an artifact back (local path or
   S3 object bytes) so LTX `/v1` sync works on R2; the `PUT /uploads` route
   uses the `ServeCtx` clock.
-- WHIP geometry: `whip::whip_h264` takes the encoder frame from
-  `fastvideo-media` (`H264Config::for_publish`: Cloudflare = padded
-  1280x720) and only the level/box from `fastvideo-webrtc`'s
-  `EncodeProfile`, whose `output_size` (1260x720 for H3) is the picture
-  inside that frame; `check_profile` asserts they agree. No crate change is
-  required; renaming `output_size` to `picture_size` in fastvideo-webrtc
-  would make the distinction explicit.
+- WHIP geometry: `whip::whip_h264` takes the encoder config from
+  `fastvideo-media` (`H264Config::for_publish`: the native canvas, at least
+  the offered level) and the offered level from `fastvideo-webrtc`'s
+  `EncodeProfile`; `check_profile` asserts they agree. (Until 2026-10-13
+  Cloudflare got a padded 1280x720 frame; docs/serve/stream-outputs.md.)
 - `[webrtc] udp_port = 70010 / tcp_port = 70000` (§6.1) exceed the 65535
   port range; the config keeps them as integers for the streaming packages
   to settle.
@@ -2257,7 +2271,7 @@ never allowed; the APIs authenticate with headers.
 |---|---|---|
 | R1 | Outbound UDP egress on Runpod **pods** is unconfirmed; serverless has strong evidence (deploy §7 #1) | WP-18 STUN probe on a pod before relying on WHIP there. Fallback: ICE-TCP to MediaMTX |
 | R2 | str0m has no TURN client. Clients behind UDP-hostile networks need client-side TURN; the server offers ICE-TCP | Document. Revisit webrtc-rs only if E2E shows real failures |
-| R3 | H.264 CB level 3.1 (`42e01f`) cannot carry 1344×768 by the book. Cloudflare Stream requires L3.1 | `level-asymmetry-allowed=1` and E2E in Chrome/Safari; WHIP sinks to Cloudflare scale to 1280×720 |
+| R3 | H.264 CB level 3.1 (`42e01f`) cannot carry 1344×768 by the book. Cloudflare Stream's WHIP docs name `42e01f` in the offer | `level-asymmetry-allowed=1`; the offer says `42e01f`, the SPS the level the native canvas needs (as browsers send 1080p after offering `42e01f`). Verified with MediaMTX; the live Cloudflare run (docs/serve/stream-outputs.md) records what Cloudflare delivers |
 | R4 | fal director WebRTC codec, frame size, `session_info` order and `wma.network-info` reply are undocumented (fal §8.6, §14 #5) | Our choices (H.264, native canvas, session_info first). Validate once against the JS alpha client in WP-14 |
 | R5 | fal `sync_mode` output shape; result GET before completion; 1080P canvases (fal §14 #1-4) | INFERRED choices in §4.4, covered by golden tests and changeable in one place |
 | R6 | FastWan Video API server unidentified; `.env.example` unread (minimax-fastvideo "Open items") | We implement exactly the client's observed contract |

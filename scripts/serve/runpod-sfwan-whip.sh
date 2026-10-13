@@ -70,7 +70,7 @@ mkdir -p /fvscratch/mtx && curl -fsSL https://github.com/bluenviron/mediamtx/rel
     MTX_WEBRTCADDITIONALHOSTS=127.0.0.1 exec ./mediamtx mediamtx.yml ) >"\$OUT/mediamtx.log" 2>&1 &
 say "fv-serve"
 FV_ENGINE=cuda FV_SFWAN_WEIGHTS=\$W FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \
-  FV_STATE_DIR=/fvscratch/state FV_JOB_STORE=memory FV_ARTIFACTS=local FV_STREAM_STUN=none FV_LOG_FORMAT=text \
+  FV_STATE_DIR=/fvscratch/state FV_JOB_STORE=memory FV_ARTIFACTS=local FV_STREAM_STUN=none FV_OUTPUTS_ALLOW_PRIVATE=1 FV_LOG_FORMAT=text \
   /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-fake.toml >"\$OUT/serve.log" 2>&1 &
 S=http://127.0.0.1:8080
 for i in \$(seq 1 900); do curl -fsS \$S/health >/dev/null 2>&1 && break; sleep 2; done

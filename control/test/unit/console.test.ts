@@ -35,6 +35,10 @@ describe("pages: fv-serve's console, unchanged but for the embedding tags", () =
     expect(Object.keys(CONSOLE_PAGES).sort()).toEqual(["admin", "avatar", "index", "live", "model", "native", "stream"]);
     for (const a of ["common.js", "home.js", "model.js", "form.js", "snippets.js", "native.js", "rtc.js", "console.css"]) expect(CONSOLE_ASSETS[a]?.body.length).toBeGreaterThan(100);
     expect(CONSOLE_ASSETS["console.css"]!.type).toBe("text/css; charset=utf-8");
+    // Stream outputs: the destination form and the vendored hls.js (docs/serve/stream-outputs.md).
+    expect(CONSOLE_ASSETS["outputs.js"]!.body).toContain("export function playerFor");
+    expect(CONSOLE_ASSETS["hls.light.min.js"]!.body.length).toBeGreaterThan(200_000);
+    expect(CONSOLE_ASSETS["hls.js-LICENSE.txt"]!.body).toContain("Apache License");
     expect(CONSOLE_ASSETS["common.js"]!.body).toContain("fv-console-base");
   });
   it("a page gets the prefix, the off pages and the note; its links and assets move under the prefix", () => {

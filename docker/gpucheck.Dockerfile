@@ -166,11 +166,13 @@ COPY --from=build /out/ /
 # decode), NVENC (ffnvcodec: the nv-codec-headers Ubuntu built its ffmpeg
 # with, 11.1: driver >= 470), and the stream outputs' transports
 # (docs/serve/stream-outputs.md): TLS for rtmps:// / https:// through
-# OpenSSL 3 (shared libssl3, already in every image: ca-certificates
-# depends on openssl; OpenSSL 3 is Apache-2.0, so the build is GPLv3:
-# --enable-version3) and srt:// through libsrt, built here from source as a
-# static library (its crypto is the same libcrypto). Nothing autodetected,
-# so no X11/SDL/VA-API/Pulse/... dependencies.
+# OpenSSL 3 (Ubuntu's shared libssl3, one copy for ffmpeg and ffprobe:
+# +5.7 MB installed, +2.3 MB compressed in base-os; linking it statically
+# would put it in both binaries. OpenSSL 3 is Apache-2.0, so the build is
+# GPLv3: --enable-version3) and srt:// through libsrt, built here from
+# source as a static library (its crypto is the same libcrypto; +0.8 MB
+# compressed on the ffmpeg layer). Nothing autodetected, so no
+# X11/SDL/VA-API/Pulse/... dependencies.
 FROM ${UBUNTU} AS ffmpeg-build
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FFMPEG_VERSION=4.4.5
@@ -255,8 +257,7 @@ RUN apt-get update \
 # ---- base-os: what every runtime image (CUDA or not) runs on.
 FROM ${UBUNTU} AS base-os
 ARG DEBIAN_FRONTEND=noninteractive
-# libssl3: ffmpeg's TLS (already pulled in by ca-certificates → openssl;
-# named so the dependency is explicit).
+# libssl3: ffmpeg's TLS (rtmps://, https://), shared by ffmpeg and ffprobe.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 libx264-163 libvpx7 libdav1d5 \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old /var/lib/dpkg/*-old \

@@ -44,8 +44,8 @@ images](#lean-runtime-images-2026-10-06)):
 
 ```
 ubuntu:22.04 (pinned by digest)                     every image
-base-os:   ca-certificates + libx264/libvpx/libdav1d  every image
-           ffmpeg + ffprobe (minimal FFmpeg 4.4)
+base-os:   ca-certificates + libssl3 + libx264/libvpx/libdav1d  every image
+           ffmpeg + ffprobe (minimal FFmpeg 4.4; TLS + libsrt for RTMPS/SRT outputs)
 base-cuda: cuBLASLt                                  every CUDA image
            cuDNN precompiled engines                 (4 layers, pulled in parallel,
            cuDNN core (graph, ops, cnn, heuristic,    unchanged until a CUDA pin
@@ -244,6 +244,7 @@ Layers (MB compressed):
 | apt: CUDA libs + tileiras (→ nvcc, libnvjitlink, build-essential) + CUPTI + ffmpeg (193 packages) + openssh-server + rsync + curl/wget/binutils | **1506.1** | – | – |
 | apt: ca-certificates + libx264/libvpx/libdav1d | – | 3.7 | 3.7 |
 | ffmpeg + ffprobe (FFmpeg 4.4.5, static except x264/vpx/dav1d) | – | 19.1 | 19.1 |
+| … since 2026-10-13: + OpenSSL TLS (`rtmps://`) and static libsrt (`srt://`), [Stream outputs](#stream-outputs-ffmpeg-2026-10-13) | – | 19.9 | 19.9 |
 | cuBLAS + cuBLASLt 13.8 | (in the apt layer) | 439.5 | – |
 | cuDNN 9.26 without `libcudnn_adv` | (in the apt layer) | 421.9 | – |
 | NVRTC 13.4 + builtins | (in the apt layer) | 54.4 | – |
@@ -327,9 +328,11 @@ come out larger), on top of the base image and the CUDA libraries we keep:
 - **CUPTI**: loaded lazily by `cudarc/cupti` only for `FASTVIDEO_GPU_TRACE`;
   the debug image keeps it.
 - **ffmpeg**: every codec, format and filter the code names (`h264_nvenc`
-  with p4/p5 presets, `libx264`, `libvpx`, native AAC, mp4/ivf/h264/rawvideo/
-  f32le/s16le/wav, lavfi `color`/`sine`, `crop`/`fps`/scale) is either native
-  (all native components are built) or one of the three external libraries.
+  with p4/p5 presets, `libx264`, `libvpx`, `libvpx-vp9`, native AAC,
+  mp4/ivf/h264/rawvideo/f32le/s16le/wav/flv/mpegts, lavfi `color`/`sine`,
+  `crop`/`fps`/scale, the `rtmps`/`tls`/`https` and `srt` protocols) is
+  either native (all native components are built) or one of the external
+  libraries (x264, vpx, dav1d; OpenSSL and libsrt since 2026-10-13).
   FFmpeg 4.4 is the release Ubuntu 22.04 packages, so the command lines behave
   as before. Not built: the other external libraries of Ubuntu's build (x265,
   aom, openh264, libass, …), which no code path uses.
@@ -460,6 +463,29 @@ from the binaries' strings):
 With cudart (CI runs 37516701535 and 37517976275 on `d940b41`): base-cuda
 **964.5 MB** (+0.2 MB), runtime 1020.0 MB, debug 1050.4 MB, CUDA variants
 994.9 MB, cpu 69.0 MB; all of them on the same base-cuda digests.
+
+### Stream outputs ffmpeg (2026-10-13)
+
+The stream outputs (docs/serve/stream-outputs.md) publish RTMPS and SRT
+with ffmpeg, which the minimal build could not (`--disable-autodetect`: no
+TLS, no libsrt). The ffmpeg-build stage now adds `--enable-openssl
+--enable-version3 --enable-libsrt` (OpenSSL 3 is Apache-2.0, so the binary
+is GPLv3) with SRT 1.5.4 built from source as a static library, and
+base-os installs `libssl3` (one shared copy for ffmpeg and ffprobe; static
+OpenSSL would sit in both binaries). base-os fails its build unless
+`ffmpeg -protocols` lists `rtmps` and `srt`, `libvpx-vp9` encodes, and `ldd`
+resolves every library of ffmpeg and ffprobe.
+
+| layer (compressed, GHCR) | before (`base-os-ea8bf35926f522ad`) | after (`base-os-67056bc7cf6a3849`) | change |
+|---|---:|---:|---:|
+| apt: ca-certificates, codec libs (+ libssl3: libssl.so.3, libcrypto.so.3, its engines, 5.7 MB installed) | 3.5 MB | 5.8 MB | +2.3 MB |
+| ffmpeg + ffprobe | 19.1 MB | 19.9 MB | +0.8 MB |
+| **base-os** | **52.3 MB** | **55.4 MB** | **+3.1 MB** |
+
+Every runtime image sits on base-os, so each grows by 3.1 MB (base-cuda
+964.5 → 967.6 MB). `fastvideo-rs-serve:cpu`: 69.5 → 74.5 MB (serve-image
+run 38471722784 on `05b282c`; fv-serve itself +2.0 MB with the outputs code
+and the console's hls.js).
 
 Nothing else is missing. base-cuda now fails its build if any library in
 `/usr/local/cuda-13.4/lib64` or any `libcudnn*` has an unresolved `ldd`
