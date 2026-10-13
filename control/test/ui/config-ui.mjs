@@ -10,7 +10,21 @@ mkdirSync(out, { recursive: true });
 const mock = await startMock();
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
-const w = await startWorker(mock, { ...SECRETS, OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET), EDGE_URL: `http://127.0.0.1:${mock.port}/edge`, EDGE_INTERNAL_TOKEN: mock.edgeInternal, EDGE_ADMIN_TOKEN: mock.edgeAdmin, EDGE_D1_DATABASE_ID: "d1-edge-staging" });
+const w = await startWorker(mock, {
+  ...SECRETS,
+  OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
+  EDGE_URL: `http://127.0.0.1:${mock.port}/edge`,
+  EDGE_INTERNAL_TOKEN: mock.edgeInternal,
+  EDGE_ADMIN_TOKEN: mock.edgeAdmin,
+  EDGE_D1_DATABASE_ID: "d1-edge-staging",
+  // The R2 weights store (the mock's bucket), as in explorer.mjs and test/integration/run.mjs: the shared checks
+  // (config-validation.mjs) expect weights_source r2 to be usable since 2026-10-13.
+  WEIGHTS_R2_ENDPOINT: `http://127.0.0.1:${mock.port}`,
+  WEIGHTS_R2_BUCKET: mock.r2.bucket,
+  WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
+  WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
+  WEIGHTS_R2_AUX: "0",
+});
 const B = w.url;
 let browser;
 let page;
