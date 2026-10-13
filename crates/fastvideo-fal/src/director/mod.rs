@@ -13,6 +13,7 @@
 //! | [`messages`] | strict client schemas (`invalid_message` on anything extra) and the server message shapes |
 //! | [`control`] | the pure control state machine: configure once, prompt versions, `replan`, the planned deck, scripts |
 //! | [`info`] | `session_info` / `DirectorInfo` with **our** constants |
+//! | [`upsample`] | the optional prompt upsampler per session (`configure.upsample`): which segment takes which expansion, expanded ahead (docs/serve/prompt-upsampling.md) |
 //! | [`engine`] | the thin adapter trait over the engine's clip sessions (fv-serve implements it over `EngineService`) |
 //! | [`vp8`] | intra-only VP8 (libwebp), the fallback when ffmpeg has no `libvpx` (else `fastvideo_media::vp8`), for offers without H.264 (open-source Chromium) |
 //! | `service`, `session`, `media`, `routes` (feature `director`) | the WebRTC runtime: admission, heartbeats, the session task, lockstep playout and encoding, the HTTP routes |
@@ -33,6 +34,7 @@ pub mod control;
 pub mod engine;
 pub mod info;
 pub mod messages;
+pub mod upsample;
 pub mod vp8;
 
 #[cfg(feature = "director")]

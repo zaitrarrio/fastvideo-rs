@@ -9,6 +9,7 @@ description = "fv-serve adapter: fal queue/sync API, proxy mode, storage, webhoo
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-serve-kit.workspace = true
+fastvideo-upsampler.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true

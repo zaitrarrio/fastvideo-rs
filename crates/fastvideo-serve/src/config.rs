@@ -43,6 +43,8 @@
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
+//! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
+//! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
@@ -584,6 +586,113 @@ impl Default for DirectorCfg {
     }
 }
 
+/// `[upsampler]`: the prompt upsampler (docs/serve/prompt-upsampling.md).
+/// Any OpenAI-compatible `/chat/completions` server. Absent: no prompt is
+/// ever rewritten and every expansion flag stays an accepted no-op.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UpsamplerCfg {
+    /// The API root, e.g. `https://api.openai.com/v1` (`/chat/completions`
+    /// is appended).
+    pub base_url: String,
+    /// The chat model.
+    pub model: String,
+    /// The environment variable holding the API key (default
+    /// `FV_UPSAMPLER_API_KEY`); unset or empty: no `authorization` header.
+    pub api_key_env: String,
+    /// The key itself (local development only; normally from
+    /// `api_key_env`). Never printed.
+    pub api_key: Secret,
+    /// One call, every hedged attempt included (default 10000).
+    pub timeout_ms: u64,
+    /// Two concurrent attempts per call, first success wins (default on).
+    pub hedge: bool,
+    /// Director: prior segments the LLM sees when `configure.memory` is
+    /// absent (default 12, 1..50).
+    pub memory: u32,
+    /// Clients that omit the flag get their protocol's documented default
+    /// (fal `balanced`, MiniMax H3-Max `balanced`, fal ingredient and LTX
+    /// on, director on). Off (default): upsampling is opt-in per request.
+    pub default_on: bool,
+    /// Prompt budgets per model family, in characters.
+    pub max_chars: MaxCharsCfg,
+}
+
+impl Default for UpsamplerCfg {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            model: String::new(),
+            api_key_env: "FV_UPSAMPLER_API_KEY".into(),
+            api_key: Secret::default(),
+            timeout_ms: 10_000,
+            hedge: true,
+            memory: 12,
+            default_on: false,
+            max_chars: MaxCharsCfg::default(),
+        }
+    }
+}
+
+/// `[upsampler.max_chars]`: each family's text-encoder budget (see
+/// docs/serve/prompt-upsampling.md §Limits).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MaxCharsCfg {
+    /// Wan, FastWan, SF-Wan, LongLive: umT5 512 tokens.
+    pub wan: usize,
+    /// LTX-2.x: Gemma 3, 1024 tokens.
+    pub ltx: usize,
+    /// H3: 1024 tokens, refused beyond.
+    pub h3: usize,
+    pub other: usize,
+}
+
+impl Default for MaxCharsCfg {
+    fn default() -> Self {
+        let d = fastvideo_upsampler::MaxChars::default();
+        Self { wan: d.wan, ltx: d.ltx, h3: d.h3, other: d.other }
+    }
+}
+
+impl UpsamplerCfg {
+    /// The service settings (the transport is built from `base_url`,
+    /// `model` and the key).
+    pub fn settings(&self) -> fastvideo_upsampler::Settings {
+        let m = self.max_chars;
+        fastvideo_upsampler::Settings {
+            model: self.model.clone(),
+            timeout: Duration::from_millis(self.timeout_ms),
+            hedge: self.hedge,
+            memory: self.memory as usize,
+            max_chars: fastvideo_upsampler::MaxChars { wan: m.wan, ltx: m.ltx, h3: m.h3, other: m.other },
+            default_on: self.default_on,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(format!("[upsampler]: {m}")));
+        let u = url::Url::parse(self.base_url.trim()).map_err(|e| ConfigError::Invalid(format!("[upsampler] base_url: {e}")))?;
+        if !matches!(u.scheme(), "http" | "https") {
+            return bad(format!("base_url must be http(s), got {}", u.scheme()));
+        }
+        if self.model.trim().is_empty() {
+            return bad("model is required (FV_UPSAMPLER_MODEL)".into());
+        }
+        if !(100..=120_000).contains(&self.timeout_ms) {
+            return bad(format!("timeout_ms must be 100..120000, got {}", self.timeout_ms));
+        }
+        if !(1..=50).contains(&self.memory) {
+            return bad(format!("memory must be 1..50, got {}", self.memory));
+        }
+        let m = self.max_chars;
+        if [m.wan, m.ltx, m.h3, m.other].iter().any(|&n| !(200..=20_000).contains(&n)) {
+            return bad("max_chars values must be 200..20000".into());
+        }
+        Ok(())
+    }
+}
+
 /// `[reactor]`: the Reactor local runtime (design §5.7, WP-13).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -794,6 +903,8 @@ pub struct Config {
     pub streams: StreamsCfg,
     pub director: DirectorCfg,
     pub reactor: ReactorCfg,
+    /// `None`: no prompt upsampling.
+    pub upsampler: Option<UpsamplerCfg>,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
@@ -1098,6 +1209,7 @@ impl Config {
         if let Some(v) = env.var("FV_DISPATCH_STATUS_S").and_then(|v| v.trim().parse().ok()) {
             self.dispatch.status_s = v;
         }
+        self.apply_upsampler_env(env)?;
         if let Some(v) = env.var("FV_LOG_FORMAT") {
             self.log.format = v;
         }
@@ -1107,9 +1219,43 @@ impl Config {
         Ok(())
     }
 
+    /// `FV_UPSAMPLER_*` (a base URL alone creates the section), then the
+    /// key from `api_key_env`.
+    fn apply_upsampler_env(&mut self, env: &dyn Env) -> Result<(), ConfigError> {
+        if let Some(v) = env.var("FV_UPSAMPLER_BASE_URL") {
+            self.upsampler.get_or_insert_with(UpsamplerCfg::default).base_url = v.trim().to_owned();
+        }
+        let Some(u) = self.upsampler.as_mut() else { return Ok(()) };
+        if let Some(v) = env.var("FV_UPSAMPLER_MODEL") {
+            u.model = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_DEFAULT_ON") {
+            u.default_on = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_HEDGE") {
+            u.hedge = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_TIMEOUT_MS") {
+            u.timeout_ms = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds")))?;
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_API_KEY_ENV") {
+            u.api_key_env = v.trim().to_owned();
+        }
+        let name = u.api_key_env.trim().to_owned();
+        if !name.is_empty() {
+            if let Some(k) = var2(env, &name) {
+                u.api_key = Secret(k.trim().to_owned());
+            }
+        }
+        Ok(())
+    }
+
     /// Consistency checks that do not need I/O.
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.bind_addr()?;
+        if let Some(u) = &self.upsampler {
+            u.validate()?;
+        }
         if self.server.workers_max == 0 {
             return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
         }

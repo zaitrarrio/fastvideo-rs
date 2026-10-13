@@ -262,6 +262,8 @@ pub struct Opts {
     /// adds one step).
     pub causal_steps: u32,
     pub causal_lead_seconds: f64,
+    /// The prompt upsampler (`None`: none).
+    pub upsampler: Option<Arc<fastvideo_upsampler::Service>>,
 }
 
 impl Default for Opts {
@@ -277,6 +279,7 @@ impl Default for Opts {
             hold_builds: false,
             causal_steps: 4,
             causal_lead_seconds: 2.0,
+            upsampler: None,
         }
     }
 }
@@ -295,12 +298,13 @@ pub async fn fixture(o: Opts) -> Fixture {
     assert_eq!(tokio::time::timeout(T, engine.wait_ready()).await.unwrap(), Readiness::Ready);
 
     let scfg = ServeConfig::new(Url::parse(&o.public_base).unwrap(), &dir);
-    let ctx = ServeCtx::builder(scfg, Arc::new(Gate(engine.clone())))
+    let mut builder = ServeCtx::builder(scfg, Arc::new(Gate(engine.clone())))
         .auth(Auth::new(AuthMode::Keys, KeyRing::from_plain([KEY])))
-        .url_key(UrlKey::new("director-test-url-key"))
-        .build()
-        .await
-        .unwrap();
+        .url_key(UrlKey::new("director-test-url-key"));
+    if let Some(u) = o.upsampler.clone() {
+        builder = builder.upsampler(u);
+    }
+    let ctx = builder.build().await.unwrap();
 
     let hcfg = if o.lan {
         HostConfig { udp_bind: Some("0.0.0.0:0".parse().unwrap()), ice_servers: Vec::new(), ..HostConfig::default() }

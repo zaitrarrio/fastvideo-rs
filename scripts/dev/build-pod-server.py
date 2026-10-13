@@ -179,7 +179,7 @@ SEED_AGENT = "fv-seed"
 SEED_KEEP = int(os.environ.get("FV_BUILD_SEED_KEEP", "4"))
 SEED_ZSTD_LEVEL = os.environ.get("FV_BUILD_SEED_ZSTD_LEVEL", "3")
 SERVE_CRATES = ("fastvideo-protocol", "fastvideo-engine-service", "fastvideo-media", "fastvideo-webrtc",
-                "fastvideo-serve-kit", "fastvideo-openai-videos", "fastvideo-minimax", "fastvideo-ltxapi",
+                "fastvideo-serve-kit", "fastvideo-upsampler", "fastvideo-openai-videos", "fastvideo-minimax", "fastvideo-ltxapi",
                 "fastvideo-fal", "fastvideo-reactor", "fastvideo-deploy", "fastvideo-autoscale", "fastvideo-serve",
                 "fastvideo-dispatch-proto", "fastvideo-edge")  # scripts/serve/check.sh's CRATES
 

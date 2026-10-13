@@ -258,6 +258,8 @@ pub struct Opts {
     pub queue_max: usize,
     /// fal app ids to mount (empty: `FalConfig::default()`'s).
     pub fal_apps: Vec<&'static str>,
+    /// The prompt upsampler (`None`: none, as in production by default).
+    pub upsampler: Option<Arc<fastvideo_upsampler::Service>>,
 }
 
 impl Default for Opts {
@@ -270,6 +272,7 @@ impl Default for Opts {
             mp4: false,
             queue_max: 32,
             fal_apps: Vec::new(),
+            upsampler: None,
         }
     }
 }
@@ -309,14 +312,15 @@ pub async fn fixture(o: Opts) -> Fixture {
     let signer = WebhookSigner::from_seed([7u8; 32], "fv-test-user");
     let cb = Arc::new(CallbackSender::new(Some(hooks.clone()), Some(signer.clone())));
     let scfg = ServeConfig::new(Url::parse(&o.public_base).unwrap(), &dir);
-    let ctx = ServeCtx::builder(scfg, Arc::new(GateRef(gate.clone())))
+    let mut builder = ServeCtx::builder(scfg, Arc::new(GateRef(gate.clone())))
         .auth(Auth::new(AuthMode::Keys, KeyRing::from_plain([KEY, OTHER_KEY])))
         .url_key(UrlKey::new("fal-test-url-key"))
         .callbacks(cb)
-        .renderer(ProtocolId::Fal, Arc::new(FalWebhook::default()))
-        .build()
-        .await
-        .unwrap();
+        .renderer(ProtocolId::Fal, Arc::new(FalWebhook::default()));
+    if let Some(u) = o.upsampler.clone() {
+        builder = builder.upsampler(u);
+    }
+    let ctx = builder.build().await.unwrap();
     gate.ctx.set(ctx.clone()).ok().unwrap();
     let mut fal = FalConfig::default();
     if !o.fal_apps.is_empty() {

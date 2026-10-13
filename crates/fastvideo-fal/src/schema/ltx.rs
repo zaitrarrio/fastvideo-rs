@@ -32,8 +32,8 @@
 //!   refuses them (`Ltx25I2V`, `LtxKeyframes`) until the LTX I2V port lands.
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioOut, CanvasSpec, GapId, GenerationRequest, Keyframe, Length, MediaRef,
-    ProtocolId, Snap, Task, TimingSpec,
+    Anchor, ApiError, AudioOut, CanvasSpec, ExpansionMode, GapId, GenerationRequest, Keyframe, Length, MediaRef,
+    PromptExpansion, ProtocolId, Snap, Task, TimingSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -179,6 +179,11 @@ pub struct LtxInput {
     pub end_image_url: Option<String>,
     pub seed: Option<u64>,
     pub sync_mode: bool,
+    /// `enable_prompt_expansion` (ours: fal's partner LTX endpoints have no
+    /// switch): an explicit opt-in to the server's upsampler. Read
+    /// leniently, not serialized.
+    #[serde(skip)]
+    pub enable_prompt_expansion: Option<bool>,
 }
 
 fn parse_duration(f: &Fields, class: LtxClass) -> Result<Option<u32>, ApiError> {
@@ -253,6 +258,7 @@ pub(super) fn parse(f: &Fields, class: LtxClass, image_to_video: bool) -> Result
         end_image_url,
         seed: super::parse_seed(f)?,
         sync_mode: f.bool("sync_mode", false)?,
+        enable_prompt_expansion: f.lenient_bool("enable_prompt_expansion"),
     })
 }
 
@@ -295,6 +301,11 @@ impl LtxInput {
         if let Some(u) = &self.end_image_url {
             r.keyframes.push(Keyframe { at: Anchor::Last, image: MediaRef::parse(u, "end_image_url")? });
             r.task = Task::Keyframes;
+        }
+        if let Some(on) = self.enable_prompt_expansion {
+            r.note_noop("enable_prompt_expansion");
+            let mode = if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled };
+            r.prompt_expansion = Some(PromptExpansion::explicit(mode, "enable_prompt_expansion"));
         }
         Ok(r)
     }
