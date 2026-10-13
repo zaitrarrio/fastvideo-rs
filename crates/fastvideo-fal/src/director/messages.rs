@@ -20,6 +20,17 @@ pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 pub const PROMPT_MAX_CHARS: usize = 50_000;
 /// `script` beat count bounds.
 pub const SCRIPT_MAX_BEATS: usize = 64;
+/// `configure.style` length bound (ours, with `upsample`).
+pub const STYLE_MAX_CHARS: usize = 2_000;
+/// `configure.entities` bounds (ours, with `upsample`): entries, id, name
+/// and descriptor lengths.
+pub const ENTITIES_MAX: usize = 32;
+pub const ENTITY_ID_MAX_CHARS: usize = 64;
+pub const ENTITY_NAME_MAX_CHARS: usize = 200;
+pub const ENTITY_DESCRIPTOR_MAX_CHARS: usize = 1_000;
+/// Server messages of the prompt upsampler (ours, sent only to sessions
+/// that turned it on; not in fal's list above).
+pub const UPSAMPLE_SERVER_MESSAGE_TYPES: [&str; 1] = ["segment_expanded"];
 /// `configure.chunk_duration` values (whole seconds): an extension of
 /// fal's schema, which echoes the session's chunk length as
 /// `configured.chunk_duration` but takes none. Clip models only; a causal
@@ -207,6 +218,80 @@ pub struct Configure {
     /// server's default (`default_chunk_duration`).
     #[serde(default)]
     pub chunk_duration: Option<u32>,
+    /// Rewrite every segment's prompt with the server's prompt upsampler
+    /// (ours; docs/serve/prompt-upsampling.md): `prompt` becomes the world
+    /// bible's premise and each `prompt` message a direction. `None`: the
+    /// server's default (`[upsampler] default_on`, else off).
+    #[serde(default)]
+    pub upsample: Option<bool>,
+    /// World bible style, appended to every upsampled segment (ours).
+    #[serde(default)]
+    pub style: Option<String>,
+    /// World bible opening cast (ours): established characters, locations
+    /// and props whose descriptors are spliced into every segment they
+    /// appear in.
+    #[serde(default)]
+    pub entities: Option<Vec<WorldEntity>>,
+}
+
+/// One `configure.entities` entry (the upsampler's `Entity`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldEntity {
+    pub id: String,
+    pub kind: EntityKindIn,
+    pub name: String,
+    pub descriptor: String,
+}
+
+/// `configure.entities[].kind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntityKindIn {
+    Character,
+    Location,
+    Prop,
+}
+
+impl WorldEntity {
+    pub fn to_entity(&self) -> fastvideo_upsampler::Entity {
+        use fastvideo_upsampler::EntityKind as K;
+        fastvideo_upsampler::Entity {
+            id: self.id.trim().to_owned(),
+            kind: match self.kind {
+                EntityKindIn::Character => K::Character,
+                EntityKindIn::Location => K::Location,
+                EntityKindIn::Prop => K::Prop,
+            },
+            name: self.name.trim().to_owned(),
+            descriptor: self.descriptor.trim().to_owned(),
+        }
+    }
+}
+
+fn check_world(m: &Configure, v: &Value) -> Result<(), Invalid> {
+    if let Some(s) = &m.style {
+        if s.chars().count() > STYLE_MAX_CHARS {
+            return Err(invalid(format!("`style` must be at most {STYLE_MAX_CHARS} characters"), v));
+        }
+    }
+    let Some(es) = &m.entities else { return Ok(()) };
+    if es.len() > ENTITIES_MAX {
+        return Err(invalid(format!("`entities` must have at most {ENTITIES_MAX} entries"), v));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for (i, e) in es.iter().enumerate() {
+        for (field, s, max) in [("id", &e.id, ENTITY_ID_MAX_CHARS), ("name", &e.name, ENTITY_NAME_MAX_CHARS), ("descriptor", &e.descriptor, ENTITY_DESCRIPTOR_MAX_CHARS)] {
+            let n = s.trim().chars().count();
+            if n == 0 || n > max {
+                return Err(invalid(format!("`entities[{i}].{field}` must be 1..{max} characters"), v));
+            }
+        }
+        if !ids.insert(e.id.trim()) {
+            return Err(invalid(format!("`entities[{i}].id` `{}` is not unique", e.id.trim()), v));
+        }
+    }
+    Ok(())
 }
 
 /// `prompt` (correlation `/prompt_version`).
@@ -353,6 +438,7 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
                 return Err(invalid("`protocol_version` must be 1", &v));
             }
             check_script(&m.script, &v)?;
+            check_world(&m, &v)?;
             Ok(ClientMessage::Configure(Box::new(m)))
         }
         "prompt" => {
@@ -499,6 +585,50 @@ pub fn deadline_missed(chunk_index: u32, late_by_seconds: f64) -> Value {
 /// snake_case shape the JS client's `normalizeRunnerPath` reads.
 pub fn network_info(request_id: &str, path: Value) -> Value {
     json!({"type": NETWORK_INFO_RESPONSE, "request_id": request_id, "path": path})
+}
+
+/// `segment_expanded` (ours, upsampling sessions only): the prompt the
+/// upsampler wrote for one segment, or the raw prompt it fell back to.
+pub struct SegmentExpanded<'a> {
+    /// Clip models: the chunk it directs.
+    pub chunk_index: Option<u32>,
+    /// Causal models: the first block it may direct (blocks received when
+    /// it went to the engine).
+    pub first_block: Option<u64>,
+    pub prompt_version: u64,
+    pub segment: Option<&'a fastvideo_upsampler::ExpandedSegment>,
+    /// The prompt the engine got.
+    pub prompt: &'a str,
+    pub error: Option<String>,
+    pub latency_ms: f64,
+    /// Segments still planned (expanded) in the deck after this one.
+    pub planned: usize,
+    /// `prompt`'s size in `prompt_unit` (tokens by the model's tokenizer,
+    /// else characters) and the family's limit in that unit.
+    pub prompt_length: usize,
+    pub prompt_limit: usize,
+    pub prompt_unit: &'a str,
+}
+
+pub fn segment_expanded(s: &SegmentExpanded<'_>) -> Value {
+    json!({
+        "type": "segment_expanded",
+        "chunk_index": s.chunk_index,
+        "first_block": s.first_block,
+        "prompt_version": s.prompt_version,
+        "segment_index": s.segment.map(|x| x.record.index),
+        "direction_id": s.segment.and_then(|x| x.record.direction_id.clone()),
+        "summary": s.segment.map(|x| x.record.summary.clone()),
+        "prompt": s.prompt,
+        "new_entities": s.segment.map_or_else(Vec::new, |x| x.new_entities.clone()),
+        "fallback": s.segment.is_none(),
+        "error": s.error,
+        "latency_ms": s.latency_ms,
+        "planned": s.planned,
+        "prompt_length": s.prompt_length,
+        "prompt_limit": s.prompt_limit,
+        "prompt_unit": s.prompt_unit,
+    })
 }
 
 /// Keeps only `Some` values of a field list (for optional schema fields).

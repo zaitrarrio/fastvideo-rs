@@ -6,6 +6,7 @@ import type { Env } from "../env";
 import { isOtherPool, weightsPlan, weightsSource } from "../providers";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
+import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -228,7 +229,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...runpodR2Env(ctx, pool) };
+  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...upsamplerEnv(ctx, pool), ...runpodR2Env(ctx, pool) };
   // Edge fronts never use the account's (production) bucket: they upload
   // results through the edge into its outputs bucket and presign their URLs
   // there (the account's R2 credentials, the edge's bucket); without that
@@ -238,6 +239,13 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     else for (const k of Object.keys(out)) if (k.startsWith("FV_R2_")) delete out[k];
   }
   return out;
+}
+
+/** upsampler_local (upsampler.ts, docs/serve/upsampler-local.md): the sidecar's switch and what its fetch needs (the
+ * plan URL, the fetcher, the cluster's ingest token), whatever the pool's weights source. GPU pools only. */
+function upsamplerEnv(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
+  if (!pool.upsampler_local || pool.compute === "CPU" || !ctx.env) return {};
+  return { ...upsamplerPodEnv(ctx.env), ...(ctx.secrets.ingest_token ? { FV_ENDPOINT_REPORT_TOKEN: ctx.secrets.ingest_token } : {}) };
 }
 
 /** A Runpod worker with weights_source r2 (docs/ops/r2-weights.md): no volume; the boot fetches its pool's trees from
@@ -251,7 +259,7 @@ function runpodR2Env(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
     ...r2PodEnv(ctx.env),
     FV_ENDPOINT_REPORT_TOKEN: ctx.secrets.ingest_token || "",
     FV_WEIGHTS_TREES_B64: btoa(plan.tsv),
-    FV_R2_DISK_GB: String(Math.min(500, Math.max(40, r2DiskGb(ctx.env, plan.trees)))),
+    FV_R2_DISK_GB: String(Math.min(500, Math.max(40, r2DiskGb(ctx.env, plan.trees) + (pool.upsampler_local ? upsamplerDiskGb(ctx.env) : 0)))),
   };
 }
 
@@ -291,8 +299,12 @@ export function podAllowedCuda(pool: PoolSpec, pl: Placement): string[] {
 /** The start command for a worker env: an edge front, a worker with the backstop watchdog (standalone), or the plain worker. */
 export function bootFor(env: Record<string, string>): string {
   const boot = env.FV_DISPATCH_FRONT === "1" ? EDGE_WORKER_BOOT : env.FV_CLUSTER_DEADLINE && env.FV_BACKSTOP_API_KEY ? WATCHDOG_WORKER_BOOT : WORKER_BOOT;
+  // upsampler_local: the sidecar starts before the weights (its fetch and load overlap theirs) and is awaited just
+  // before fv-serve, which then gets FV_UPSAMPLER_BASE_URL (upsampler.ts).
+  const ups = env.FV_UPSAMPLER_LOCAL === "1";
+  const b = ups ? boot.replace("mkdir -p /fvstate\n", `mkdir -p /fvstate\n${UPSAMPLER_START_SH}`).replace(EXEC_SERVE, `${UPSAMPLER_WAIT_SH}${EXEC_SERVE}`) : boot;
   // weights_source r2: the trees from the R2 weights store before anything else (the volume is not mounted).
-  return env.FV_WEIGHTS_SOURCE === "r2" ? boot.replace("mkdir -p /fvstate\n", `mkdir -p /fvstate\n${R2_RUNPOD_SH()}`) : boot;
+  return env.FV_WEIGHTS_SOURCE === "r2" ? b.replace(`mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}`, `mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}${R2_RUNPOD_SH()}`) : b;
 }
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
   const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [bootFor(env)], env };

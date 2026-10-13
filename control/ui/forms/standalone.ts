@@ -183,6 +183,11 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
                 f.get(["variant"]) === "cpu" ? F(["fake_models"], { label: "Fake-engine models" }) : F(["models"], { label: "Models", kind: "chips", options: catalog, help: "The catalog's models (family and recipe filled in)." }),
               ]
             : []),
+          F(["upsampler_local"], {
+            label: "Prompt upsampler (local)",
+            placeholder: "llama-server sidecar on the GPU",
+            help: "Qwen3-VL-4B-Instruct (vision) in llama-server next to fv-serve on the same GPU (see the doc for its GPU memory; its 5.1 GB GGUF from the R2 weights store). If it fails, fv-serve starts anyway and upsampling falls back. Default off; GPU only. docs/serve/upsampler-local.md.",
+          }),
         ),
       ),
       h(

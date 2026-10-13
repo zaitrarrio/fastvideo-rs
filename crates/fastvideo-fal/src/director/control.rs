@@ -32,8 +32,15 @@
 //!   `invalid_initial_script`); a text beat directs from the first chunk
 //!   that starts at or after its offset.
 //!
-//! We have no prompt expander: a chunk's prompt is the series premise
-//! followed by the current direction (the latest text update).
+//! A chunk's prompt is the series premise followed by the current
+//! direction (the latest text update). With the prompt upsampler on
+//! (`configure.upsample`, docs/serve/prompt-upsampling.md) the session
+//! replaces it with the upsampler's segment prompt, taking
+//! [`ChunkPlan::direction`] as the new direction when it changes, plans
+//! upcoming segments from [`Control::peek`], and puts an appended
+//! (`replan:false`) direction behind the segments already planned
+//! ([`Control::reserve`]; fal: "appends the direction after the
+//! already-planned chunks").
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -191,6 +198,9 @@ struct Planned {
     script: Option<u64>,
     /// Causal sessions: blocks this entry directs (1 on clip models).
     blocks: u32,
+    /// A continuation reserved for a segment the upsampler already
+    /// planned ([`Control::reserve`]): not counted against the deck size.
+    reserved: bool,
 }
 
 /// The chunk the session should build next.
@@ -198,6 +208,10 @@ struct Planned {
 pub struct ChunkPlan {
     pub index: u32,
     pub prompt: String,
+    /// The direction composed into `prompt` after the premise (`None`:
+    /// the premise alone): what the prompt upsampler takes as a new
+    /// direction when it changes.
+    pub direction: Option<String>,
     pub seconds: f64,
     /// `configure.image_url` for chunk 0 (exact first frame).
     pub first_image: Option<PathBuf>,
@@ -349,7 +363,7 @@ pub fn plan_script_blocks(beats: &[ScriptBeat], c: &CausalLimits) -> (Vec<Segmen
 }
 
 /// The control state of one director session.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Control {
     limits: Limits,
     settings: Option<Settings>,
@@ -513,6 +527,7 @@ impl Control {
                 persist: None,
                 script: None,
                 blocks: 1,
+                reserved: false,
             });
         }
         reply
@@ -540,6 +555,7 @@ impl Control {
                 persist: if k + 1 == n { last_text.and_then(|i| script[i].prompt.clone()) } else { None },
                 script: Some(group),
                 blocks: s.blocks.max(1),
+                reserved: false,
             })
             .collect()
     }
@@ -586,7 +602,7 @@ impl Control {
             None => p.replan == Some(false),
         };
         if append {
-            if self.deck.len() >= self.limits.deck_size {
+            if self.deck.iter().filter(|p| !p.reserved).count() >= self.limits.deck_size {
                 return Err(vec![m::prompt_rejected(v, RejectReason::QueueFull, format!("the planned deck is full ({} chunks)", self.limits.deck_size))]);
             }
             if p.script.is_some() && self.queued_scripts() >= self.limits.script_max_queued {
@@ -627,6 +643,7 @@ impl Control {
             script: None,
             // Causal: an appended direction holds one director chunk.
             blocks: self.limits.causal.as_ref().map_or(1, |c| c.chunk_blocks.max(1)),
+            reserved: false,
         };
         if p.replan != Some(false) {
             // replace-pending: undispatched plans (and their versions) go.
@@ -634,6 +651,41 @@ impl Control {
         }
         self.deck.push_back(entry);
         out
+    }
+
+    /// The next `n` plans [`Self::next_chunk`] would hand out, without
+    /// handing them out (the deck and the direction unchanged).
+    pub fn peek(&self, n: usize) -> Vec<ChunkPlan> {
+        let mut c = self.clone();
+        (0..n).map_while(|_| c.next_chunk().map(|x| x.0)).collect()
+    }
+
+    /// Upsampling: makes room for `blocks` continuation blocks (clip
+    /// models: chunks) ahead of anything appended next, for the segments
+    /// the upsampler has already planned. Only the shortfall is added,
+    /// as continuations of the current direction that announce nothing.
+    pub fn reserve(&mut self, blocks: u32) {
+        let have: u32 = self.deck.iter().map(|p| p.blocks).sum();
+        let need = blocks.saturating_sub(have);
+        if need == 0 {
+            return;
+        }
+        let causal = self.limits.causal.is_some();
+        let seconds = self.limits.chunk_seconds;
+        let n = if causal { 1 } else { need };
+        for _ in 0..n {
+            self.deck.push_back(Planned {
+                direction: None,
+                end_image: None,
+                seconds,
+                version: self.current_version,
+                announce: Vec::new(),
+                persist: None,
+                script: None,
+                blocks: if causal { need } else { 1 },
+                reserved: true,
+            });
+        }
     }
 
     /// `stop`: nothing new is dispatched. Returns `false` if already stopped.
@@ -686,6 +738,7 @@ impl Control {
                 let plan = ChunkPlan {
                     index,
                     prompt: self.compose(direction.as_deref()),
+                    direction: direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: p.seconds,
                     first_image,
                     end_image: p.end_image,
@@ -697,6 +750,7 @@ impl Control {
                 ChunkPlan {
                     index,
                     prompt: self.compose(self.direction.clone().as_deref()),
+                    direction: self.direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: self.limits.chunk_seconds,
                     first_image,
                     end_image: None,
@@ -1082,5 +1136,43 @@ mod tests {
         assert_eq!(out[0]["reason"], "invalid_script");
         let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":5,"script":[{"offset":2,"end_image_url":"z"}]}"#);
         assert_eq!(out[0]["reason"], "infeasible_timing");
+    }
+
+    /// `peek` previews without consuming; `reserve` puts an appended
+    /// direction behind the planned continuations (they announce nothing
+    /// and do not count against `queue_full`), and a replan clears them.
+    #[test]
+    fn peek_and_reserve() {
+        let mut c = Control::new(Limits::default());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","image_url":"f.png"}"#).unwrap();
+        let p = c.peek(3);
+        assert_eq!(p.iter().map(|x| x.index).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(p[0].first_image, Some(PathBuf::from("f.png")));
+        assert_eq!(c.next_chunk().unwrap().0, p[0]);
+        // Three segments planned: an appended direction goes fourth.
+        c.reserve(3);
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
+        let got: Vec<(String, usize)> = (0..5).map(|_| c.next_chunk().unwrap()).map(|(p, a)| (p.prompt, a.len())).collect();
+        assert_eq!(got, [("P".into(), 0), ("P".into(), 0), ("P".into(), 0), ("P A".into(), 1), ("P A".into(), 0)]);
+        // Reservations are not deck entries for queue_full.
+        c.reserve(6);
+        for v in 3..9u64 {
+            let out = prompt(&mut c, &format!(r#"{{"type":"prompt","prompt_version":{v},"prompt":"s{v}","replan":false}}"#));
+            assert_eq!(types(&out), ["prompt_pending"], "v{v}");
+        }
+        assert_eq!(prompt(&mut c, r#"{"type":"prompt","prompt_version":9,"prompt":"x","replan":false}"#)[0]["reason"], "queue_full");
+        // A replan clears the deck, reservations included.
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":10,"prompt":"B"}"#);
+        assert_eq!(c.deck_len(), 1);
+        assert_eq!(c.next_chunk().unwrap().0.prompt, "P B");
+        // Causal: one entry of the needed blocks.
+        let mut c = Control::new(causal_limits());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        c.reserve(8);
+        assert_eq!(c.deck_len(), 1);
+        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
+        let got: Vec<String> = (0..9).map(|_| c.next_chunk().unwrap().0.prompt).collect();
+        assert_eq!(got.iter().filter(|p| *p == "P").count(), 8);
+        assert_eq!(got[8], "P A");
     }
 }

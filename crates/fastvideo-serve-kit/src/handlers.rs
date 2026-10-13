@@ -127,7 +127,7 @@ fn normalize_ctx(ctx: &ServeCtx, owner: Option<KeyId>, headers: &HeaderMap, quer
 pub async fn submit_request<P: BatchProtocol + ?Sized>(
     ctx: &ServeCtx,
     proto: &P,
-    req: GenerationRequest,
+    mut req: GenerationRequest,
     owner: Option<KeyId>,
     request_echo: serde_json::Value,
     policy: &IngestPolicy,
@@ -151,6 +151,13 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let caps = fastvideo_protocol::route_task(caps, req.task, &models);
     precheck(&req, caps)?;
     span("validate", fastvideo_trace::Comp::Adapter, t_validate);
+    // docs/serve/prompt-upsampling.md: the protocol's expansion flag, when
+    // the server has an upsampler (else a no-op, as before).
+    let t_upsample = mark();
+    let expansion = crate::upsample::expand_request(ctx, &mut req, caps).await;
+    if expansion.attempted() {
+        span("upsample", fastvideo_trace::Comp::Adapter, t_upsample);
+    }
     let id = JobId::new();
     let dir = ctx.inputs_dir(id);
     let t_ingest = mark();
@@ -175,6 +182,11 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     job.callback = req.callback.clone();
     job.input_sources = sources;
     job.trace = trace.map(|t| t.traceparent(t.parent));
+    job.expanded_prompt = expansion.expanded;
+    if let Some(l) = expansion.log {
+        tracing::info!(job = %id, model = %caps.id, "{l}");
+        job.logs.push(fastvideo_protocol::LogLine::info(l, now));
+    }
     for n in notes {
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));

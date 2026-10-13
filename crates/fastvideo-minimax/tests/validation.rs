@@ -282,6 +282,31 @@ fn model_extra_callback() {
     for bad in ["ftp://x/y", "not a url"] {
         assert_eq!(err(body("MiniMax-H3", vec![text("a")], json!({"ratio": "16:9", "callback_url": bad}))).param.as_deref(), Some("callback_url"));
     }
-    // Unknown top-level fields are ignored (e.g. V1's prompt_optimizer).
+    // Unknown top-level fields are ignored; V1's prompt_optimizer is read
+    // (prompt_expansion_flags below).
     assert!(run(body("MiniMax-H3", vec![text("a")], json!({"ratio": "16:9", "prompt_optimizer": true}))).is_ok());
+}
+
+// ---- prompt expansion (docs/serve/prompt-upsampling.md) ---------------------------
+
+#[test]
+fn prompt_expansion_flags() {
+    use fastvideo_protocol::{ExpansionMode as M, PromptExpansion as P};
+    const X: &str = "prompt_expansion_mode";
+    const O: &str = "prompt_optimizer";
+    let pe = |model: &str, fields: Value| run(body(model, vec![text("a")], fields)).unwrap().prompt_expansion;
+    // H3-Max documents `balanced` as the default (applied only with
+    // `[upsampler] default_on`); `extra` sets it explicitly.
+    assert_eq!(pe("MiniMax-H3-Max", json!({"ratio": "16:9"})), Some(P::default_for(M::Balanced, X)));
+    assert_eq!(pe("MiniMax-H3-Max", json!({"ratio": "16:9", "extra": {"prompt_expansion_mode": "quality"}})), Some(P::explicit(M::Quality, X)));
+    assert_eq!(pe("MiniMax-H3-Max", json!({"ratio": "16:9", "extra": {"prompt_expansion_mode": "disabled"}})), Some(P::explicit(M::Disabled, X)));
+    // The base model takes no `extra` (no default); V1's `prompt_optimizer`
+    // opts in or out on any model; a non-boolean is ignored as before.
+    assert_eq!(pe("MiniMax-H3", json!({"ratio": "16:9"})), None);
+    assert_eq!(pe("MiniMax-H3", json!({"ratio": "16:9", "prompt_optimizer": true})), Some(P::explicit(M::Balanced, O)));
+    assert_eq!(pe("MiniMax-H3", json!({"ratio": "16:9", "prompt_optimizer": false})), Some(P::explicit(M::Disabled, O)));
+    assert_eq!(pe("MiniMax-H3", json!({"ratio": "16:9", "prompt_optimizer": "yes"})), None);
+    assert_eq!(run(body("MiniMax-H3", vec![text("a")], json!({"ratio": "16:9", "prompt_optimizer": true}))).unwrap().accepted_noop, [O]);
+    // `extra` wins over `prompt_optimizer`.
+    assert_eq!(pe("MiniMax-H3-Max", json!({"ratio": "16:9", "prompt_optimizer": false, "extra": {"prompt_expansion_mode": "quality"}})), Some(P::explicit(M::Quality, X)));
 }

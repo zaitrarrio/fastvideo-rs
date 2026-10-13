@@ -165,7 +165,7 @@ fn h3_schema(kind: AppKind, endpoint: Endpoint) -> Value {
     };
     props.insert(
         "prompt_expansion_mode".into(),
-        json!({"type": "string", "default": "balanced", "examples": expansion, "description": "How much effort to spend rewriting the prompt before generation. Accepted; this server does not expand prompts.", "x-fv-advanced": true}),
+        json!({"type": "string", "default": "balanced", "examples": expansion, "description": "How much effort to spend rewriting the prompt before generation. Applied when the server has a prompt upsampler configured (the rewrite comes back as `expanded_prompt`); otherwise accepted with no effect.", "x-fv-advanced": true}),
     );
     let mut extra = Vec::<&str>::new();
     match endpoint {
@@ -354,7 +354,7 @@ fn wan_schema(endpoint: Endpoint, variant: WanVariant) -> Value {
     );
     props.insert(
         "enable_prompt_expansion".into(),
-        json!({"type": "boolean", "default": false, "description": "Expand the prompt with an LLM. Accepted; this server does not expand prompts.", "x-fv-advanced": true}),
+        json!({"type": "boolean", "default": false, "description": "Expand the prompt with an LLM. Applied when the server has a prompt upsampler configured; otherwise accepted with no effect.", "x-fv-advanced": true}),
     );
     props.insert("seed".into(), seed());
     props.insert("enable_safety_checker".into(), safety_checker());
@@ -936,8 +936,10 @@ mod tests {
                 let mut body = defaults(&s);
                 body.extend(minimal(e));
                 let parsed = parse(&body).unwrap_or_else(|err| panic!("{kind:?} {e:?} defaults: {err:?}"));
-                // Defaults in the schema equal the parser's defaults.
-                assert_eq!(parse(&minimal(e)).unwrap(), parsed, "{e:?} defaults");
+                // Defaults in the schema equal the parser's defaults (an
+                // explicit `prompt_expansion_mode` also opts in to the
+                // upsampler: that flag aside).
+                assert_eq!(parse(&minimal(e)).unwrap(), parsed.clone().without_explicit_expansion(), "{e:?} defaults");
                 // LTX: 20 s is only within the engine's frame grid at 24 fps.
                 if kind == AppKind::Ltx25 {
                     body.insert("fps".into(), 24.into());

@@ -169,6 +169,7 @@ export const PoolSpecZ = z
     allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) }))
       .optional()
       .describe("Runpod GPU pods: CUDA versions a host may offer (allowedCudaVersions). Default: none in the weights volume's data centre (EU-RO-1), 13.0 elsewhere (an older driver crashes the image); [] for no filter."),
+    upsampler_local: z.boolean().optional().describe("The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server with Qwen3-VL-4B-Instruct (GGUF Q8_0 + its F16 vision projector, 5.1 GB from the R2 weights store; GPU memory: see the doc) next to fv-serve on the same GPU; fv-serve gets FV_UPSAMPLER_BASE_URL. If it fails, fv-serve starts anyway and upsampling falls back. GPU only; default off."),
   })
   .strict()
   .superRefine((p, ctx) => {
@@ -191,6 +192,7 @@ export const PoolSpecZ = z
     if (p.variant === "cpu" && p.models?.length) add(["models"], "the cpu variant runs the fake engine: fake_models, not models");
     if (p.data_centers && (other || p.weights_source !== "r2")) add(["data_centers"], "data_centers is for Runpod pods with weights_source r2 (a volume pins its own data centre: regions)");
     if (p.allowed_cuda && (other || p.compute === "CPU")) add(["allowed_cuda"], "allowed_cuda is for Runpod GPU pods");
+    if (p.upsampler_local && (p.compute === "CPU" || p.variant === "cpu")) add(["upsampler_local"], "the upsampler sidecar runs on the GPU: GPU pools only");
     if (p.stale_after_s !== undefined && p.job_timeout_s !== undefined && p.stale_after_s > p.job_timeout_s) add(["stale_after_s"], `at most job_timeout_s (${p.job_timeout_s})`);
     const ids = new Set<string>();
     (p.models || []).forEach((m, i) => {
@@ -384,6 +386,7 @@ export const StandaloneLaunchZ = z
     provider_region: providerRegion.optional(),
     weights_source: weightsSource.optional(),
     weights_download_approved: z.boolean().optional().describe("weights_source hub: the owner approves this pod's Hub download at boot (the Worker's FV_HUB_DOWNLOADS_APPROVED=1 is needed too)."),
+    upsampler_local: z.boolean().optional().describe("The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server with Qwen3-VL-4B-Instruct (GGUF Q8_0 + its F16 vision projector, 5.1 GB from the R2 weights store; GPU memory: see the doc) next to fv-serve on the same GPU; fv-serve gets FV_UPSAMPLER_BASE_URL. If it fails, fv-serve starts anyway and upsampling falls back. GPU only; default off."),
   })
   .strict()
   .superRefine((x, ctx) => {
@@ -392,6 +395,7 @@ export const StandaloneLaunchZ = z
     if (x.provider && x.provider !== "runpod" && x.gpu_type) add("gpu_type", `gpu_type is a Runpod GPU type id: provider ${x.provider} takes provider_gpu`);
     if (x.provider && x.provider !== "runpod" && (x.region || x.dc)) add(x.region ? "region" : "dc", `region / dc are Runpod's: provider ${x.provider} takes provider_region (gmi)`);
     if (x.weights_download_approved && x.weights_source !== "hub") add("weights_download_approved", "only with weights_source hub");
+    if (x.upsampler_local && x.compute === "CPU") add("upsampler_local", "the upsampler sidecar runs on the GPU: GPU pods only");
     if ([x.channel, x.sha, x.image].filter(Boolean).length > 1) add("channel", "at most one of channel, sha, image");
     if (!x.preset && !x.variant) add("variant", "a preset or variant is required");
     if (x.preset && (x.variant || x.config || x.config_toml || x.models || x.fake_models)) add("preset", "a preset brings its variant, config and models: leave those out");

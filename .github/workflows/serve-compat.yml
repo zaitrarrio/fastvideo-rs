@@ -27,6 +27,7 @@ on:
     paths:
       - "crates/fastvideo-serve/**"
       - "crates/fastvideo-serve-kit/**"
+      - "crates/fastvideo-upsampler/**"
       - "crates/fastvideo-engine-service/**"
       - "crates/fastvideo-protocol/**"
       - "crates/fastvideo-media/**"

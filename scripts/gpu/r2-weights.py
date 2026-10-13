@@ -153,6 +153,7 @@ VOLUME_ONLY = [
     ("h3-ref2va", "two repos merged (fetch-h3-ref2va.py; Hub-reproducible, copied from the volume for byte identity)"),
     ("auxiliary/tae", "pinned URLs (weights-manifest.tsv aux rows)"),
     ("auxiliary/lpips", "pinned URLs (weights-manifest.tsv aux rows)"),
+    ("qwen3-4b-instruct-gguf", "converted to GGUF Q8_0 (llama.cpp b11195) from Qwen/Qwen3-4B-Instruct-2507 @ cdbee75; R2 only, no volume; superseded by qwen3-vl-4b-instruct-gguf"),
 ]
 
 

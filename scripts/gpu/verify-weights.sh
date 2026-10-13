@@ -19,7 +19,7 @@
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
 #                                      longlive-plug
 #                                      wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq
-#                                      lingbot-moe cosmos3-super
+#                                      lingbot-moe cosmos3-super upsampler-local
 #                                      sha:<dest> (dest in weights-sha256.tsv)
 #   verify-weights.sh --list           print the cells and what each needs
 #
@@ -30,6 +30,13 @@
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
 # LPIPS files): present, the listed size, the listed SHA-256.
+# The `upsampler-local` cell checks the prompt upsampler's local GGUF tree
+# (qwen3-vl-4b-instruct-gguf: Q8_0 model + F16 mmproj, R2 only;
+# docs/serve/upsampler-local.md): every file weights-sha256.tsv lists for it,
+# by size and SHA-256 (5.1 GB read). The superseded text-only tree is
+# sha:qwen3-4b-instruct-gguf. On a pod
+# whose weights are on a volume the sidecar keeps it under
+# $FV_STATE_DIR/upsampler-weights: run with FV_WEIGHTS pointing there.
 # The `upscalers` cell checks the video super-resolution trees under
 # auxiliary/upscalers/ (SeedVR2 3B, FlashVSR v1.1): a .complete marker and
 # every pinned file with its size and SHA-256 (about 14 GB read).
@@ -164,6 +171,7 @@ needs() {
     text-fp8) echo "text-fp8" ;;
     dit-prequant) echo "dit-prequant" ;;
     upscalers) echo "upscalers" ;;
+    upsampler-local) echo "sha:qwen3-vl-4b-instruct-gguf" ;;
     *) return 1 ;;
   esac
 }
@@ -171,7 +179,7 @@ needs() {
 CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
-  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super)
+  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local)
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {
@@ -369,6 +377,10 @@ check_sha_list() {
 for cell in "$@"; do
   if [[ "$cell" == sha:* ]]; then
     if check_sha_list "${cell#sha:}"; then echo "weights ok: $cell"; else echo "weights INCOMPLETE: $cell" >&2; fail=1; fi
+    continue
+  fi
+  if [[ "$cell" == upsampler-local ]]; then
+    if check_sha_list qwen3-vl-4b-instruct-gguf; then echo "weights ok: upsampler-local"; else echo "weights INCOMPLETE: upsampler-local" >&2; fail=1; fi
     continue
   fi
   if [[ "$cell" == upscalers ]]; then

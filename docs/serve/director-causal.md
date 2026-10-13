@@ -6,6 +6,10 @@ clip queue (`StreamCaps::Clip`), so the director could not use the SF-Wan
 causal engine. LongLive's prompt switch with KV re-cache was reachable only
 from the Reactor (`set_prompt`). See docs/serve/research-longlive.md §5–§11.
 
+Prompt upsampling (`configure.upsample`, 2026-10-13): a new segment's
+prompt every director chunk and at every direction, handed to the engine
+like any prompt switch; see [prompt-upsampling.md](prompt-upsampling.md).
+
 ## 1. Shape
 
 A causal director session is **one continuous causal rollout**. It is not a

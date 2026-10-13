@@ -44,6 +44,7 @@ use super::info::{session_info, InfoFacts};
 use super::media::{self, MediaCmd, MediaConfig, MediaEvent, MediaGauges, MediaSink, PreparedChunk, VideoCodec};
 use super::messages::{self as m, ClientMessage, ErrorCode, RejectReason, ScriptBeat};
 use super::service::{canvas_for, DirectorConfig};
+use super::upsample::{self as ups, Cue, PlanView, SegmentUpsampler};
 
 /// Shared, observable state of a session (the registry keeps it).
 #[derive(Debug)]
@@ -208,6 +209,19 @@ struct Causal {
     paused: bool,
     recaches: u64,
     recache_ms: f64,
+    /// Upsampling: blocks handed out under the current segment's prompt.
+    seg_blocks: u32,
+    /// Upsampling: the segment waiting for its expansion (the engine keeps
+    /// its current prompt meanwhile).
+    want: Option<Want>,
+}
+
+/// A causal segment waiting for its expansion.
+struct Want {
+    key: Cue,
+    version: u64,
+    /// `prompt_applied` owed once it reaches the engine.
+    applied: Vec<Value>,
 }
 
 struct Session {
@@ -242,6 +256,17 @@ struct Session {
     ending: Option<EndReason>,
     causal: Option<Causal>,
     block_rx: mpsc::UnboundedReceiver<Result<StreamBlock, ApiError>>,
+    /// The prompt upsampler, when the session turned it on.
+    upsample: Option<SegmentUpsampler>,
+    up_tx: mpsc::UnboundedSender<ups::Done>,
+    up_rx: mpsc::UnboundedReceiver<ups::Done>,
+    /// The upsampler's deck needs a [`Session::plan_ahead`].
+    plan_dirty: bool,
+}
+
+/// What the upsampler needs of a chunk plan.
+fn view(p: &ChunkPlan) -> PlanView {
+    PlanView { version: p.prompt_version, direction: p.direction.clone(), first_image: p.first_image.clone(), end_image: p.end_image.clone() }
 }
 
 fn ms(d: f64) -> f64 {
@@ -308,6 +333,8 @@ pub async fn run(init: SessionInit) {
                 paused: false,
                 recaches: 0,
                 recache_ms: 0.0,
+                seg_blocks: 0,
+                want: None,
             })
         }
         _ => {
@@ -315,6 +342,7 @@ pub async fn run(init: SessionInit) {
             None
         }
     };
+    let (up_tx, up_rx) = mpsc::unbounded_channel();
     let mut s = Session {
         init,
         control,
@@ -343,6 +371,10 @@ pub async fn run(init: SessionInit) {
         ending: None,
         causal,
         block_rx,
+        upsample: None,
+        up_tx,
+        up_rx,
+        plan_dirty: false,
     };
     handle.set_state(SessionState::Ready);
     let reason = s.run_loop().await;
@@ -378,6 +410,7 @@ impl Session {
                 Some(b) = self.build_rx.recv() => self.on_built(b),
                 Some(b) = self.block_rx.recv() => self.on_block(b),
                 Some(e) = self.media_rx.recv() => self.on_media(e),
+                Some(d) = self.up_rx.recv() => self.on_upsampled(d),
                 _ = tick.tick() => self.on_tick(),
                 _ = handle.end.notified() => self.end(EndReason::ClientGone),
             }
@@ -385,6 +418,7 @@ impl Session {
                 return r;
             }
             self.maybe_dispatch();
+            self.plan_ahead();
         }
     }
 
@@ -423,7 +457,32 @@ impl Session {
                 if !self.info_sent {
                     self.info_sent = true;
                     self.channel_open_at = Some(Instant::now());
-                    self.send(session_info(&self.init.facts));
+                    let mut info = session_info(&self.init.facts);
+                    if let Some(svc) = self.init.ctx.upsampler() {
+                        // fal's value for its server-side expander; ours is
+                        // the prompt upsampler this session may turn on.
+                        let family = fastvideo_serve_kit::upsample::prompt_family(self.clips.caps().family);
+                        let limit = svc.limit(family);
+                        let st = svc.settings();
+                        info["prompt_expander"] = json!("fast");
+                        info["upsample"] = json!({
+                            "available": true,
+                            "default": st.default_on,
+                            "max_prompt_chars": limit.max_chars,
+                            "max_prompt_tokens": limit.max_tokens,
+                            "prompt_limit_unit": limit.unit().as_str(),
+                            "tokenizer": limit.counter.as_ref().map(|c| c.describe()),
+                            "layout": match fastvideo_upsampler::Layout::for_family(family) {
+                                fastvideo_upsampler::Layout::H3 => "h3",
+                                fastvideo_upsampler::Layout::Prose => "prose",
+                            },
+                            "context_tokens": st.context_tokens,
+                            "deck_size": st.deck_size,
+                            "vision": st.vision,
+                            "server_message_types": m::UPSAMPLE_SERVER_MESSAGE_TYPES,
+                        });
+                    }
+                    self.send(info);
                 }
             }
             PeerEvent::ChannelClose { label } if label == FAL_CONTROL => self.end(EndReason::ClientGone),
@@ -453,6 +512,9 @@ impl Session {
     async fn stage_sized(&self, url: &str, param: &str) -> Result<(PathBuf, Option<(u32, u32)>), String> {
         let r = MediaRef::parse(url, param).map_err(|e| e.message)?;
         let dir = self.dir.join("inputs");
+        // `stage_one` writes into `dir` (a data URI or an upload) without
+        // creating it.
+        tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("staging input: {e}"))?;
         let ctx = &self.init.ctx;
         ctx.ingestor()
             .stage_one(&r, MediaKind::Image, &self.init.cfg.ingest, &dir, param, ctx.now())
@@ -548,7 +610,8 @@ impl Session {
                 if let Some(b) = c.audio_bitrate {
                     let _ = self.media.send(MediaCmd::AudioBitrate(b));
                 }
-                let reply = self.control.configure(&c, image, end_image, script_images);
+                let mut reply = self.control.configure(&c, image, end_image, script_images);
+                self.start_upsampling(&c, &mut reply).await;
                 self.send(reply);
                 if let Some(cz) = &self.causal {
                     // Seed before the first prompt (it restarts the rollout),
@@ -581,15 +644,33 @@ impl Session {
                     },
                     None => Vec::new(),
                 };
-                for o in self.control.prompt(&p, end_image, script_images) {
-                    self.send(o);
-                }
-                // Causal: a replanning update goes to the engine now (the
-                // next block it starts); an appended one waits its turn.
                 let append = match &p.script {
                     Some(_) => p.script_mode == Some(m::ScriptMode::Append),
                     None => p.replan == Some(false),
                 };
+                // Upsampling: an appended direction goes behind the segments
+                // already planned (fal), a replan busts them (the deck's
+                // cues change at the next chunk).
+                if append {
+                    if let Some(up) = &self.upsample {
+                        let ahead = up.ahead() as u32;
+                        let blocks = match &self.causal {
+                            Some(cz) => {
+                                let cb = cz.limits.chunk_blocks.max(1);
+                                let rest = if cz.want.is_some() { 0 } else { cb.saturating_sub(cz.seg_blocks) };
+                                rest + ahead * cb
+                            }
+                            None => ahead,
+                        };
+                        self.control.reserve(blocks);
+                    }
+                }
+                for o in self.control.prompt(&p, end_image, script_images) {
+                    self.send(o);
+                }
+                self.plan_dirty = true;
+                // Causal: a replanning update goes to the engine now (the
+                // next block it starts); an appended one waits its turn.
                 if self.causal.is_some() && !append {
                     self.causal_next();
                 }
@@ -610,7 +691,31 @@ impl Session {
         if queued >= self.init.cfg.buffer_chunks.max(1) {
             return;
         }
-        let Some((plan, applied)) = self.control.next_chunk() else { return };
+        let (mut plan, applied, taken) = match self.upsample.as_mut() {
+            Some(up) => {
+                // The chunk waits (undispatched, its `prompt_applied` with
+                // it) until its segment is expanded: at most the timeout.
+                let plans = self.control.peek(up.deck_size());
+                let cues = up.cues(&plans.iter().map(view).collect::<Vec<_>>());
+                let Some(first) = cues.first().cloned() else { return };
+                up.sync(cues);
+                if !up.ready(&first) {
+                    return;
+                }
+                let Some((plan, applied)) = self.control.next_chunk() else { return };
+                let t = up.take(&first);
+                self.plan_dirty = true;
+                (plan, applied, t)
+            }
+            None => match self.control.next_chunk() {
+                Some((p, a)) => (p, a, None),
+                None => return,
+            },
+        };
+        if let Some(t) = taken {
+            plan.prompt = t.prompt.clone();
+            self.report_segment(&t, Some(plan.index), None, plan.prompt_version);
+        }
         for a in applied {
             self.send(a);
         }
@@ -753,6 +858,9 @@ impl Session {
             return;
         }
         let Some((plan, applied)) = self.control.next_chunk() else { return };
+        if self.upsample.is_some() {
+            return self.causal_upsampled(plan, applied);
+        }
         let Some(cz) = self.causal.as_mut() else { return };
         if cz.engine_prompt.as_deref() != Some(plan.prompt.as_str()) {
             let v = cz.stream.set_prompt(&plan.prompt);
@@ -771,6 +879,218 @@ impl Session {
                 self.send(a);
             }
         }
+    }
+
+    /// Upsampling: the deck's upcoming segments, synced (after every
+    /// change: configure, a prompt, a segment taken, an expansion done).
+    fn plan_ahead(&mut self) {
+        if !std::mem::take(&mut self.plan_dirty) || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
+            return;
+        }
+        let cues = match &self.causal {
+            Some(_) => self.causal_upcoming(),
+            None => {
+                let Some(up) = &self.upsample else { return };
+                let plans = self.control.peek(up.deck_size());
+                up.cues(&plans.iter().map(view).collect::<Vec<_>>())
+            }
+        };
+        if let Some(up) = self.upsample.as_mut() {
+            up.sync(cues);
+        }
+    }
+
+    /// Causal + upsampling: the upcoming segments: the one waiting (if
+    /// any), then the predicted boundaries (a new direction, else every
+    /// `causal_chunk_blocks` blocks) over the control's next blocks.
+    fn causal_upcoming(&self) -> Vec<Cue> {
+        let (Some(up), Some(cz)) = (&self.upsample, &self.causal) else { return Vec::new() };
+        let n = up.deck_size();
+        let cb = cz.limits.chunk_blocks.max(1);
+        let mut out = Vec::new();
+        let mut last = up.last_direction().cloned();
+        let mut sb = cz.seg_blocks;
+        if let Some(w) = &cz.want {
+            if let Some(d) = &w.key.direction {
+                last = Some(d.clone());
+            }
+            out.push(w.key.clone());
+            sb = 1;
+        }
+        for p in self.control.peek(n * cb as usize + 1) {
+            if out.len() >= n {
+                break;
+            }
+            let cue = SegmentUpsampler::cues_from(last.as_ref(), &[view(&p)]).remove(0);
+            if let Some(d) = &cue.direction {
+                last = Some(d.clone());
+            }
+            if cue.direction.is_some() || sb >= cb || (out.is_empty() && cz.engine_prompt.is_none()) {
+                out.push(cue);
+                sb = 0;
+            }
+            sb += 1;
+        }
+        out
+    }
+
+    /// Upsampling: decides on `configure` whether this session upsamples
+    /// (`configure.upsample`, else the server's `default_on`), builds its
+    /// showrunner from the world bible and prepares the premise (token
+    /// count, a digest when it overflows the LLM budget); notes it in
+    /// `configured` (`upsample`, `upsample_premise`).
+    async fn start_upsampling(&mut self, c: &m::Configure, reply: &mut Value) {
+        let svc = self.init.ctx.upsampler().cloned();
+        let on = c.upsample.unwrap_or_else(|| svc.as_ref().is_some_and(|s| s.settings().default_on));
+        if !on {
+            if c.upsample == Some(false) {
+                reply["upsample"] = json!(false);
+            }
+            return;
+        }
+        let Some(svc) = svc else {
+            reply["upsample"] = json!(false);
+            reply["upsample_error"] = json!("this server has no prompt upsampler ([upsampler] is not configured): prompts are used as sent");
+            return;
+        };
+        let world = fastvideo_upsampler::WorldBible {
+            premise: c.prompt.clone(),
+            style: c.style.clone().unwrap_or_default().trim().to_owned(),
+            entities: c.entities.iter().flatten().map(m::WorldEntity::to_entity).collect(),
+        };
+        let family = fastvideo_serve_kit::upsample::prompt_family(self.clips.caps().family);
+        let mut up = svc.director(world, family, c.memory.map(|x| x as usize));
+        let report = up.prepare().await.clone();
+        let limit = &up.config().limit;
+        tracing::info!(
+            session = %self.init.handle.id,
+            backend = %svc.describe(),
+            memory = up.config().memory,
+            prompt_limit = if limit.unit() == fastvideo_upsampler::Unit::Tokens { limit.max_tokens } else { limit.max_chars },
+            prompt_limit_unit = limit.unit().as_str(),
+            context_tokens = report.context_tokens,
+            premise_chars = report.chars,
+            premise_tokens = report.tokens,
+            premise_tokens_exact = report.tokens_exact,
+            deck_size = svc.settings().deck_size,
+            vision = svc.settings().vision,
+            entities = c.entities.as_ref().map_or(0, Vec::len),
+            "director: prompt upsampling on"
+        );
+        if let Some(d) = &report.digest {
+            match &d.error {
+                None => tracing::info!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, calls = d.calls, latency_ms = d.latency_ms, "director: the premise overflows the LLM budget; condensed into a series bible"),
+                Some(e) => tracing::warn!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, error = %e, "director: the premise digest failed; the premise's head is used"),
+            }
+        }
+        reply["upsample"] = json!(true);
+        reply["upsample_premise"] = serde_json::to_value(&report).unwrap_or(Value::Null);
+        let images = svc.settings().vision.then(ups::default_image_loader);
+        self.upsample = Some(SegmentUpsampler::new(up, self.up_tx.clone(), svc.settings().deck_size, images));
+        self.plan_dirty = true;
+    }
+
+    /// Upsampling: an expansion finished.
+    fn on_upsampled(&mut self, d: ups::Done) {
+        let Some(up) = self.upsample.as_mut() else { return };
+        if up.on_done(d) && self.causal.is_some() {
+            self.causal_apply_ready();
+        }
+        // Clip models: `maybe_dispatch` (after every event) takes it.
+        self.plan_dirty = true;
+    }
+
+    /// Upsampling: `segment_expanded` and a log line for one segment.
+    fn report_segment(&self, t: &ups::Taken, chunk: Option<u32>, block: Option<u64>, version: u64) {
+        let latency_ms = ms(t.latency.as_secs_f64());
+        match &t.error {
+            None => tracing::info!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, chars = t.prompt.chars().count(), "director: segment upsampled"),
+            Some(e) => tracing::warn!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, error = %e, "director: upsampling failed, the raw prompt is used"),
+        }
+        let (length, limit, unit) = match &self.upsample {
+            Some(up) => up.upsampler().config().limit.measure(&t.prompt),
+            None => (t.prompt.chars().count(), 0, fastvideo_upsampler::Unit::Chars),
+        };
+        self.send(m::segment_expanded(&m::SegmentExpanded {
+            chunk_index: chunk,
+            first_block: block,
+            prompt_version: version,
+            segment: t.segment.as_ref(),
+            prompt: &t.prompt,
+            error: t.error.clone(),
+            latency_ms,
+            planned: t.planned,
+            prompt_length: length,
+            prompt_limit: limit,
+            prompt_unit: unit.as_str(),
+        }));
+    }
+
+    /// Causal + upsampling: a new segment starts at a new direction, at
+    /// the first block, and every director chunk (`causal_chunk_blocks`);
+    /// until its expansion is ready the engine keeps its current prompt.
+    fn causal_upsampled(&mut self, plan: ChunkPlan, applied: Vec<Value>) {
+        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else { return };
+        let key = up.cues(&[view(&plan)]).remove(0);
+        let boundary = key.direction.is_some() || cz.engine_prompt.is_none() || cz.seg_blocks >= cz.limits.chunk_blocks.max(1);
+        cz.seg_blocks = cz.seg_blocks.saturating_add(1);
+        if !boundary && cz.want.is_none() {
+            // Mid-segment: nothing changes in the picture.
+            if let Some(last) = cz.versions.back_mut() {
+                last.1 = last.1.max(plan.prompt_version);
+            }
+            for a in applied {
+                self.send(a);
+            }
+            return;
+        }
+        match cz.want.as_mut() {
+            // A pending direction stays wanted until a newer one comes.
+            Some(w) if key.direction.is_none() => w.applied.extend(applied),
+            Some(w) => {
+                w.applied.extend(applied);
+                w.key = key;
+                w.version = plan.prompt_version;
+            }
+            None => cz.want = Some(Want { key, version: plan.prompt_version, applied }),
+        }
+        self.plan_dirty = true;
+        self.plan_ahead();
+        self.causal_apply_ready();
+    }
+
+    /// Causal + upsampling: hands the wanted segment's prompt to the engine
+    /// once its expansion is ready, then expands the next beat.
+    fn causal_apply_ready(&mut self) {
+        if self.ending.is_some() {
+            return;
+        }
+        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else { return };
+        let Some(w) = cz.want.as_ref() else { return };
+        let Some(t) = up.take(&w.key) else { return };
+        let w = cz.want.take().expect("want");
+        cz.seg_blocks = 0;
+        let block = cz.blocks;
+        let mut now = Vec::new();
+        if cz.engine_prompt.as_deref() != Some(t.prompt.as_str()) {
+            let v = cz.stream.set_prompt(&t.prompt);
+            tracing::info!(session = %self.init.handle.id, engine_version = v, prompt_version = w.version, "director: upsampled prompt to the causal engine");
+            cz.engine_prompt = Some(t.prompt.clone());
+            cz.versions.push_back((v, w.version));
+            if !w.applied.is_empty() {
+                cz.owed.push_back((v, w.applied));
+            }
+        } else {
+            if let Some(last) = cz.versions.back_mut() {
+                last.1 = last.1.max(w.version);
+            }
+            now = w.applied;
+        }
+        self.plan_dirty = true;
+        for a in now {
+            self.send(a);
+        }
+        self.report_segment(&t, None, Some(block), w.version);
     }
 
     /// Causal: pause the rollout while `causal_lead_seconds` of video is
@@ -1132,7 +1452,7 @@ mod tests {
             }
             RgbFrame::new(8, 6, data.into(), i).unwrap()
         };
-        let plan = ChunkPlan { index: 1, prompt: "p".into(), seconds: 5.0, first_image: None, end_image: None, prompt_version: 1 };
+        let plan = ChunkPlan { index: 1, prompt: "p".into(), direction: None, seconds: 5.0, first_image: None, end_image: None, prompt_version: 1 };
         let out = super::super::engine::ChunkOutput { frames: (0..3).map(frame).collect(), audio: None };
         let anchor_path = dir.join("anchor-1.png");
         let prep = Prep { fps: 24, audio: false, trimmed: 1, crossfade: None, anchor_path: Some(anchor_path.clone()), dir: dir.clone(), crop: Some((6, 4)) };

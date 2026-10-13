@@ -32,6 +32,8 @@ import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { slsR2DiskGb, slsTrees } from "./weights";
 import { R2_DEFAULT_CUDA } from "../driver-check";
 import { missingTrees } from "../volumes";
+import { upsamplerDiskGb } from "../upsampler";
+import type { Env } from "../env";
 
 /**
  * Where a GPU endpoint's workers get their weights (docs/control/serverless.md §1b, docs/ops/r2-weights.md §9):
@@ -93,6 +95,9 @@ export const SLS_RESERVED = new Set([
   "FV_R2_TREE_REVS",
   "FV_R2_CACHE_ROOT",
   "FV_SLS_REPORT_URL",
+  // upsampler_local (upsampler.ts): set from the spec's switch.
+  "FV_UPSAMPLER_LOCAL",
+  "FV_UPSAMPLER_REV",
 ]);
 
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -161,6 +166,7 @@ export const EndpointSpecZ = z
     container_disk_gb: z.number().int().min(5).max(500).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB). weights_source r2: at least the trees' size × 1.15 + 30 GB (the default is sized from the manifests); otherwise up to 200."),
     deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
+    upsampler_local: z.boolean().optional().describe("The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server with Qwen3-VL-4B-Instruct (GGUF Q8_0 + its F16 vision projector, 5.1 GB from the R2 weights store; GPU memory: see the doc) next to fv-serve on the same GPU; fv-serve gets FV_UPSAMPLER_BASE_URL. If it fails, fv-serve starts anyway and upsampling falls back. GPU only; default off."),
   })
   .strict()
   .superRefine((s, ctx) => {
@@ -175,6 +181,7 @@ export const EndpointSpecZ = z
       if (p.id !== "cpu" && s.compute === "GPU" && s.network_volume === null && s.weights_source !== "r2") add("network_volume", `preset ${p.id} loads weights from the volume: network_volume ${knownVolumes()[0]?.id ?? "(none available)"}, or weights_source r2`);
     }
     if (s.mode === "lb" && s.scaler_type !== "REQUEST_COUNT") add("scaler_type", "load-balancer endpoints scale by REQUEST_COUNT");
+    if (s.upsampler_local && s.compute === "CPU") add("upsampler_local", "the upsampler sidecar runs on the GPU: GPU workers only");
     if (s.compute === "CPU") {
       if (s.mode === "lb") add("mode", "load-balancer endpoints are GPU only");
       if (s.gpu_types || s.gpu_count || s.allowed_cuda) add("gpu_types", "CPU workers take no gpu_types / gpu_count / allowed_cuda");
@@ -214,7 +221,7 @@ export function defaultEndpointSpec(name: string, variant = "cpu", preset?: stri
   if (p) {
     const d = defaultEndpointSpec(name, p.variant);
     delete d.config, delete d.config_toml;
-    const out: EndpointSpec = { ...d, preset: p.id, compute: p.compute, ...(p.config ? { config: p.config } : {}), ...(p.config_toml ? { config_toml: p.config_toml } : {}), container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s };
+    const out: EndpointSpec = { ...d, preset: p.id, compute: p.compute, ...(p.config ? { config: p.config } : {}), ...(p.config_toml ? { config_toml: p.config_toml } : {}), container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, ...(p.upsampler_local ? { upsampler_local: true } : {}) };
     // The EU volume holds H3 + LTX only (volumes.ts, owner decision 2026-10-13): a preset with a tree elsewhere
     // defaults to the R2 weights store.
     const eu = knownVolumes()[0];
@@ -255,7 +262,8 @@ export function withWeightsSource(spec: EndpointSpec, ws: "volume" | "r2"): Endp
     out.network_volume = null;
     delete out.data_centers;
     if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
-    out.container_disk_gb = Math.max(spec.container_disk_gb, slsR2DiskGb(slsTrees(out)));
+    // upsampler_local: its GGUF tree (upsampler.ts) lands on the same disk (the +30 GB headroom would take it; sized anyway).
+    out.container_disk_gb = Math.max(spec.container_disk_gb, slsR2DiskGb(slsTrees(out)) + (spec.upsampler_local ? upsamplerDiskGb({} as Env) : 0));
   } else {
     const eu = knownVolumes()[0];
     out.network_volume = eu ? eu.id : null;
@@ -319,7 +327,7 @@ export function specDiff(a: EndpointSpec, b: EndpointSpec): { template: boolean;
   const recreate: string[] = (["name", "mode", "compute", "network_volume"] as const).filter((k) => j(a[k]) !== j(b[k]));
   // A CPU endpoint's flavors and vCPUs are fixed at create (REST v2 fields).
   if (b.compute === "CPU") recreate.push(...(["cpu_flavors", "vcpu"] as const).filter((k) => j(a[k]) !== j(b[k])));
-  const template = (["image", "variant", "config", "config_toml", "env", "container_disk_gb", "weights_source"] as const).some((k) => j(a[k]) !== j(b[k]));
+  const template = (["image", "variant", "config", "config_toml", "env", "container_disk_gb", "weights_source", "upsampler_local"] as const).some((k) => j(a[k]) !== j(b[k]));
   const endpoint = (
     ["gpu_types", "gpu_count", "data_centers", "workers_min", "workers_max", "idle_timeout_s", "flashboot", "execution_timeout_s", "scaler_type", "scaler_value", "allowed_cuda"] as const
   ).some((k) => j(a[k]) !== j(b[k]));

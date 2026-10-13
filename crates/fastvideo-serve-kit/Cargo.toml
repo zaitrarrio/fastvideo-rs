@@ -11,6 +11,7 @@ fastvideo-protocol.workspace = true
 fastvideo-trace.workspace = true
 fastvideo-engine-service.workspace = true
 fastvideo-media.workspace = true
+fastvideo-upsampler.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
@@ -48,7 +49,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 [features]
 default = []
 # Outbound HTTP: media fetch, MiniMax callbacks, fal webhooks, S3 uploads.
-fetch = ["dep:reqwest"]
+fetch = ["dep:reqwest", "fastvideo-upsampler/http"]
 # `d1::mock::MockD1`: a SQLite-backed D1 HTTP API for other crates' tests.
 d1-mock = ["dep:rusqlite", "tokio/macros", "tokio/rt-multi-thread"]
 

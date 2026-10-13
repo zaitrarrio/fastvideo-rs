@@ -27,7 +27,7 @@
 //! | `seed` | `null` | integer or null (drawn when null) |
 //! | `enable_safety_checker` | `true` | boolean (accepted, no checker: risk R8) |
 //! | `sync_mode` | `false` | boolean (`video.url` becomes a `data:` URI) |
-//! | `prompt_expansion_mode` | `"balanced"` | any string (accepted, no expansion) |
+//! | `prompt_expansion_mode` | `"balanced"` | any string; `disabled` / `fast` / `balanced` / `quality` rewrite the prompt when the server has an `[upsampler]` (explicitly sent, or omitted with `default_on`; docs/serve/prompt-upsampling.md), else accepted with no effect |
 //! | `aspect_ratio` (t2v) | `"16:9"` | `21:9 16:9 4:3 1:1 3:4 9:16` |
 //! | `aspect_ratio` (r2v) | `"adaptive"` | `adaptive` plus the t2v values |
 //! | `target_audio_url` (t2v, i2v) | `null` | non-blank string |
@@ -47,8 +47,8 @@ pub mod wan;
 
 use base64::Engine as _;
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, Family, GenerationRequest,
-    Job, Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, ProtocolId, Ratio, Reference, Snap,
+    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, ExpansionMode, Family, GenerationRequest,
+    Job, Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, PromptExpansion, ProtocolId, Ratio, Reference, Snap,
     Task, Tier, TimingSpec,
 };
 
@@ -389,6 +389,10 @@ pub struct CommonInput {
     pub enable_safety_checker: bool,
     pub sync_mode: bool,
     pub prompt_expansion_mode: String,
+    /// `prompt_expansion_mode` was sent (not fal's default). Not
+    /// serialized: the defaults golden is unchanged.
+    #[serde(skip)]
+    pub prompt_expansion_explicit: bool,
 }
 
 /// A validated input for one endpoint.
@@ -459,6 +463,12 @@ impl<'a> Fields<'a> {
             Some(Value::String(s)) => Ok(Some(s)),
             Some(v) => Err(bad(k, format!("Input should be a valid string, got {}", type_name(v)))),
         }
+    }
+
+    /// A boolean the schema does not list: `None` when absent or not a
+    /// boolean (unknown fields were always ignored).
+    fn lenient_bool(&self, k: &str) -> Option<bool> {
+        self.get(k).and_then(Value::as_bool)
     }
 
     fn bool(&self, k: &str, default: bool) -> Result<bool, ApiError> {
@@ -566,6 +576,7 @@ fn parse_common(f: &Fields, resolutions: &[Resolution]) -> Result<CommonInput, A
         enable_safety_checker: f.bool("enable_safety_checker", true)?,
         sync_mode: f.bool("sync_mode", false)?,
         prompt_expansion_mode: f.string("prompt_expansion_mode")?.unwrap_or("balanced").to_owned(),
+        prompt_expansion_explicit: f.string("prompt_expansion_mode")?.is_some(),
     })
 }
 
@@ -683,6 +694,16 @@ impl FalInput {
         }
     }
 
+    /// This input with `prompt_expansion_mode` counted as omitted (the
+    /// one field whose explicit default differs from its absence: an
+    /// explicit mode opts in to the upsampler).
+    pub fn without_explicit_expansion(mut self) -> Self {
+        if let FalInput::TextToVideo { common, .. } | FalInput::ImageToVideo { common, .. } | FalInput::ReferenceToVideo { common, .. } = &mut self {
+            common.prompt_expansion_explicit = false;
+        }
+        self
+    }
+
     /// The H3 fields (`None` for the LTX and Wan inputs).
     pub fn common(&self) -> Option<&CommonInput> {
         match self {
@@ -703,7 +724,16 @@ impl FalInput {
         };
         r.output.inline_data_uri = c.sync_mode;
         r.note_noop("enable_safety_checker");
+        // A no-op unless the server has an `[upsampler]` (then the submit
+        // pipeline rewrites the prompt and drops the note).
         r.note_noop("prompt_expansion_mode");
+        r.prompt_expansion = ExpansionMode::parse(&c.prompt_expansion_mode).map(|mode| {
+            if c.prompt_expansion_explicit {
+                PromptExpansion::explicit(mode, "prompt_expansion_mode")
+            } else {
+                PromptExpansion::default_for(mode, "prompt_expansion_mode")
+            }
+        });
         let short_edge = c.resolution.short_edge();
         let media = |s: &str, param: &str| MediaRef::parse(s, param);
         match self {
