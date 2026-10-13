@@ -2,7 +2,7 @@
 # WP-19: real Runpod serverless (queue) cold starts, driven over REST.
 #
 #   serverless-coldstart.sh up <image> [gpu type] [volume id] [dc]
-#       defaults: RTX PRO 6000, the EU volume jg48s6o1w0, EUR-IS-1 (the US
+#       defaults: RTX PRO 6000, the EU volume bz0ofkfx45, EU-RO-1 (the US
 #       volume was deleted 2026-10 and is refused, scripts/gpu/volumes.sh).
 #       serverless template + queue endpoint (min 0 / max 1 workers, idle 5 s,
 #       FlashBoot off) whose start command is serverless-worker.sh, inlined so

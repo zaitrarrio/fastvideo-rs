@@ -426,7 +426,9 @@ class Fetcher:
                 f.fd = os.open(f.local, os.O_RDWR | os.O_CREAT, 0o644)
                 if fresh:
                     os.ftruncate(f.fd, f.size)
-                    if f.size and hasattr(os, "posix_fallocate"):
+                    # --no-prealloc: a network volume without fallocate support, where glibc's emulation writes
+                    # every block first (hours for a 460 GB fill at 1% CPU, 2026-10-13); the sparse file works
+                    if f.size and getattr(self.args, "prealloc", True) and hasattr(os, "posix_fallocate"):
                         try:
                             os.posix_fallocate(f.fd, 0, f.size)
                         except OSError:
@@ -1104,6 +1106,8 @@ def main(argv=None):
     fh.add_argument("--no-full-hash", dest="no_full_hash", action="store_true", help="trust the per-part SHA-256s (the default)")
     ap.set_defaults(no_full_hash=os.environ.get("FV_R2_FULL_HASH", "0") != "1")
     ap.add_argument("--status", default="", help="write a JSON status file here")
+    ap.add_argument("--no-prealloc", dest="prealloc", action="store_false", default=os.environ.get("FV_R2_PREALLOC", "1") != "0",
+                    help="do not posix_fallocate the files (a network volume: glibc's emulation writes every block; env FV_R2_PREALLOC=0)")
     ap.add_argument("--add-only", action="store_true", help="the root is a shared cache (a network volume): never move aside or remove anything; stage per --pod")
     ap.add_argument("--stream", action="store_true",
                     help="write the trees in place with per-part progress maps the loader waits on, so fv-serve can load while they arrive")

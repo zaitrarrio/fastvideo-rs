@@ -164,7 +164,7 @@ rp_pick_dc() {
   fi
   local dc query resp stock
   # Prefer DCs that currently list PRO 6000 Server 96 GB and are in the REST enum.
-  for dc in EUR-IS-1 EUR-IS-2 CA-MTL-3 EU-NL-1 EU-CZ-1 US-NE-1 US-MD-1 US-MO-2 US-NC-2; do
+  for dc in "$FV_EU_DC" EUR-IS-1 EUR-IS-2 CA-MTL-3 EU-NL-1 EU-CZ-1 US-NE-1 US-MD-1 US-MO-2 US-NC-2; do
     query="query { gpuTypes(input: {id: \"${RP_GPU_TYPE}\"}) { lowestPrice(input: {gpuCount: 1, dataCenterId: \"${dc}\"}) { stockStatus uninterruptablePrice } } }"
     resp="$(rp_gql "$query")"
     stock="$(jq -r '.data.gpuTypes[0].lowestPrice.stockStatus // empty' <<<"$resp")"

@@ -90,7 +90,7 @@ The fix:
   - `scalerType`.
 - **GPU type against data centre.** `placementIssues` in
   `serverless/spec.ts` checks the GPU types against the data centres the
-  workers may use: the volume's data centre (EUR-IS-1 for the EU volume) or
+  workers may use: the volume's data centre (EU-RO-1 for the EU volume) or
   `data_centers`.
   - It uses Runpod's stock for each type and data centre.
   - It refuses the create and flags the field when none of the types has
@@ -214,7 +214,7 @@ Columns:
 | gpu_count | number | 1–8 | GPU only | zod | absent |
 | allowed_cuda | chips | CUDA enum | GPU only | zod | absent |
 | cpu_flavors / vcpu | chips / select | serverless flavors / 2–32 sizes | CPU only | zod | absent |
-| network_volume | select (known volumes, none) | `jg48s6o1w0` or null | DCs = volume's | zod refine | select |
+| network_volume | select (known volumes, none) | `bz0ofkfx45` or null | DCs = volume's | zod refine | select |
 | data_centers | chips (Runpod DCs) | Runpod DC enum, unique | with a volume: its DC | zod enum (was regex) | **free** (comma list) |
 | workers_min / workers_max | number | 0–4 / 0–8 | min ≤ max; policy `max_workers` | zod + `checkLimits` | number |
 | idle_timeout_s | number s | 5–3600 (Runpod REST: 5–3600) | — | zod (min was 1) | number |

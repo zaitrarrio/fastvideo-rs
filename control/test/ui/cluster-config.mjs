@@ -29,8 +29,8 @@ export async function clusterEditorChecks({ page, B, api, out, tiny, big }) {
   await page.screenshot({ path: `${out}/config-01-new-invalid.png`, fullPage: true });
   await page.fill('.cf-pool[data-path="pools.0"] input.cf-count', "1");
   await page.waitForSelector(".cf-issues .badge.good");
-  // Price and the stock warning: four pools want RTX PRO 6000 in EUR-IS-1, Runpod reports 2 free (the 2026-10-06 failure).
-  await page.waitForSelector(".cf-stockwarn:has-text('RTX PRO 6000 in EUR-IS-1')");
+  // Price and the stock warning: four pools want RTX PRO 6000 in EU-RO-1, Runpod reports 2 free (the 2026-10-06 failure).
+  await page.waitForSelector(".cf-stockwarn:has-text('RTX PRO 6000 in EU-RO-1')");
   const warn = await page.textContent(".cf-stockwarn");
   assert.match(warn, /4 pod\(s\).*2 free/);
   assert.ok((await page.$$(".cf-pool-head .badge.warn")).length >= 4, "a stock badge on every GPU pool");

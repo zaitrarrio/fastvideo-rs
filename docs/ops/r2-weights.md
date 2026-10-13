@@ -30,7 +30,7 @@ fixed fetcher is **not** measured yet. The volume stays until §7's gate passes 
 be scoped to it alone (R2 tokens scope by bucket, developers.cloudflare.com/r2/api/tokens), its usage and bill show
 on their own, and no outputs or logs share its lifecycle. The location hint follows where the GPUs mostly run.
 GMI's IDCs are mostly in the US (Denver ×2, Oregon, Iowa ×4, Ohio: `GET /v1/idcs`, 2026-10-11). Brev's control
-plane is us-west-2. Runpod is EUR-IS-1 only while the volume exists. Hints are best-effort and are honoured only
+plane is us-west-2. Runpod volume pods run in the EU volume's data centre (EU-RO-1 since 2026-10-13; EUR-IS-1 before). Hints are best-effort and are honoured only
 on a bucket's first creation (developers.cloudflare.com/r2/reference/data-location). EU pods reach WNAM over a
 longer path. The many parallel streams of §4 hide most of the latency, but this is **UNVERIFIED**. If EU becomes
 the main GPU region, a second bucket `fv-weights-eu` (WEUR) can be filled from this one with the same tools.
@@ -159,8 +159,11 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
   - Keep-on-stop works unchanged: a tree complete at its revision is kept.
 - **Runpod**: `weights_source: r2` on a pool fetches onto the container disk instead of mounting the volume.
   - The volume is not mounted. `volume: true` with r2 is refused.
-  - **Any data centre**: the pool's `data_centers` (r2 only) replaces the region's EUR-IS-1, and a standalone launch
-    takes any Runpod `dc` with r2 (`fv-control.sh pod launch … --weights r2 --region US-TX-3`). Outside EUR-IS-1 the
+  - **Unset, it is r2 when a tree is not on the EU volume** (since 2026-10-13 the 500 GB volume holds H3 + LTX only;
+    `providers.ts weightsSource`, `volumes.ts EU_TREES`): wan, fastwan21, sfwan and longlive pools fetch from R2 in
+    the `eu` region (EU-RO-1); H3 and LTX pools mount the volume. Serverless presets follow the same rule.
+  - **Any data centre**: the pool's `data_centers` (r2 only) replaces the region's data centre (EU-RO-1), and a standalone launch
+    takes any Runpod `dc` with r2 (`fv-control.sh pod launch … --weights r2 --region US-TX-3`). Outside the volume's data centre the
     pod gets `allowedCudaVersions: ["13.0"]` (`allowed_cuda` overrides it; finding 2).
   - `containerDiskInGb` defaults to the trees' bytes × 1.15 + 30 GB, at most 500 GB. Trees larger than that must
     use the volume.
@@ -503,7 +506,7 @@ design and how to benchmark it.
 
 ### 9.1 What changes against the volume
 
-- **No network volume**, so there is no `EUR-IS-1`-only restriction: any GPU type in any data centre with stock.
+- **No network volume**, so there is no volume data-centre restriction: any GPU type in any data centre with stock.
 - Every scale-from-zero worker on a fresh host fetches its trees before fv-serve starts. That is about 144 GB for
   H3 (`h3-base`), 125 GB for LTX-2.5 and about 60 GB for Wan 2.2 5B (sizes from brev-park.ts `TREE_GB` until the
   manifests are published).
@@ -865,3 +868,14 @@ From round 2:
 The fetch rate with and without a concurrent load is not measured yet. The loader reads the page cache (no extra
 network or disk reads) with 4 read-ahead threads at nice 5, so the expected effect is small: the fetcher is
 CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.
+
+**Measured (2026-10-13, docs/ops/r2-bench-2026-10-13-stream.md), one H100 worker each:**
+
+- **H3:**
+  - fetch 250 s at 708 MB/s (no slowdown from the concurrent load);
+  - ready **10.5 s** after the last byte (was 57 s);
+  - container start → ready **268 s** (was 320 s).
+- **Wan:** ready 88 s after the last byte (was 91.5 s), so almost no overlap.
+  - The one-DiT Wan pipeline opens its DiT with the eager map, which waits for the whole 10 GB file. That file
+    was the last to complete.
+  - `FASTVIDEO_WAN_DIT_LAZY=1` (lazy, gated per part) is the untested fix.

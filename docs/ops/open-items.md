@@ -19,10 +19,14 @@ new work in the same area. Newest decisions first.
   EUR-IS-1 (`POST /networkvolumes`: "Data center EUR-IS-1 not found or does
   not support network volumes"; GraphQL `storageSupport: false`). The only EU
   DC with volumes and RTX PRO 6000 Server stock is EU-RO-1 (stock "Low"),
-  which would move the EU GPU region. Owner to choose: a volume in EU-RO-1
-  (and move the `eu` region there), keep `jg48s6o1w0` as is, or drop the
-  volume for `weights_source r2` (any DC). Nothing was created and
-  `jg48s6o1w0` is unchanged.
+  which would move the EU GPU region.
+  **Owner's choice (2026-10-13): the volume in EU-RO-1, and the `eu` region
+  (GPU pods and serverless) moves there.** Done: `bz0ofkfx45`
+  (`fv-weights-h3-ltx-500`, 500 GB, EU-RO-1), filled from R2 and compared
+  (docs/ops/runpod-volumes.md §0a). Presets whose trees are not on it (wan,
+  fastwan21, sfwan, longlive) default to `weights_source r2`. `jg48s6o1w0`
+  stays until the coordinator deletes it, after the deploy and one EU-RO-1
+  pod reading the new volume.
 - **Brev: a stop that does not succeed deletes the VM.** "We should go ahead
   and delete VMs that need to be stopped if a stop command does not succeed.
   If the stop command succeeds then we should NOT delete the VM." On every

@@ -1,0 +1,224 @@
+08:39:47 [r2-fetch] 13 tree(s) to fetch, 462.45 GB in 3555 GETs of up to 2 x 64 MiB, concurrency 64, 192 CPUs; 0 present
+08:39:52 [r2-fetch] tree auxiliary/tae: ready at eu-20261011 (0.13 GB, 4 files, 5s since start)
+08:39:52 [r2-fetch] r2 0.2/462.5 GB, 28 MB/s, eta 16677s, trees 1/13 (now 31 MB/s)
+08:39:57 [r2-fetch] r2 0.3/462.5 GB, 32 MB/s, eta 14610s, trees 1/13 (now 36 MB/s)
+08:40:02 [r2-fetch] r2 0.9/462.5 GB, 57 MB/s, eta 8068s, trees 1/13 (now 112 MB/s)
+08:40:03 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 30: slow: 4.3 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:03 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 34: slow: 5.8 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:03 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 38: slow: 5.7 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 40: slow: 5.2 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 44: slow: 4.3 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 32: slow: 5.3 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 46: slow: 6.2 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 42: slow: 6.2 MB/s after 9s (recent parts 23 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 36: slow: 4.3 MB/s after 10s (recent parts 32 MB/s): fetched again on a new connection
+08:40:04 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 54: slow: 4.2 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+08:40:05 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 52: slow: 5.4 MB/s after 9s (recent parts 32 MB/s): fetched again on a new connection
+08:40:05 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 50: slow: 4.9 MB/s after 9s (recent parts 32 MB/s): fetched again on a new connection
+08:40:05 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 48: slow: 6.2 MB/s after 10s (recent parts 32 MB/s): fetched again on a new connection
+08:40:05 [r2-fetch] tree auxiliary/lpips: ready at eu-20261011 (0.24 GB, 2 files, 18s since start)
+08:40:07 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 56: slow: 4.0 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+08:40:07 [r2-fetch] r2 3.2/462.5 GB, 156 MB/s, eta 2937s, trees 2/13 (now 467 MB/s)
+08:40:08 [r2-fetch] tree h3-to-ltx: ready at 1792c42689a0f22de880eaf57a187c6a373a636d (0.39 GB, 2 files, 22s since start)
+08:40:09 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 58: slow: 3.9 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+08:40:09 [r2-fetch] ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors part 2: slow: 8.7 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:09 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 60: slow: 3.7 MB/s after 7s (recent parts 37 MB/s): fetched again on a new connection
+08:40:09 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 32: slow: 3.8 MB/s after 5s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 40: slow: 3.7 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 38: slow: 3.6 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 30: slow: 4.2 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 44: slow: 4.4 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors part 12: slow: 9.5 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 48: slow: 3.1 MB/s after 5s (recent parts 38 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 34: slow: 3.5 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 8: slow: 2.2 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:10 [r2-fetch] tree upscaler: ready at 3f941d5d182014dd5c0a5e16330420ee2d4aa0c6 (0.69 GB, 1 files, 24s since start)
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 50: slow: 2.3 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 42: slow: 3.3 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 46: slow: 3.9 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 20: slow: 3.1 MB/s after 5s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 52: slow: 3.7 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 16: slow: 3.0 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 54: slow: 2.9 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:11 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 36: slow: 3.6 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 28: slow: 2.7 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] r2 7.3/462.5 GB, 283 MB/s, eta 1610s, trees 4/13 (now 805 MB/s)
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 10: slow: 2.6 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 2: slow: 2.4 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 12: slow: 3.0 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 24: slow: 2.8 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 62: slow: 2.4 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 26: slow: 2.4 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:12 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 4: slow: 2.8 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 0: slow: 3.1 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 56: slow: 2.3 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 6: slow: 3.2 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 18: slow: 3.6 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 22: slow: 3.3 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 14: slow: 3.2 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:13 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 64: slow: 5.5 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:14 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 58: slow: 8.2 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:15 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 60: slow: 9.8 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:15 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 40: slow: 11.0 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:15 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 32: slow: 10.8 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:15 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 30: slow: 11.7 MB/s after 5s (recent parts 39 MB/s): fetched again on a new connection
+08:40:15 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 38: slow: 11.3 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+08:40:16 [r2-fetch] tree ltx25-ic-lora-ingredients: ready at 12040e4091ac2008d3906a594e31a7fb1ab9d546 (1.31 GB, 2 files, 29s since start)
+08:40:17 [r2-fetch] r2 11.9/462.5 GB, 386 MB/s, eta 1166s, trees 5/13 (now 919 MB/s)
+08:40:22 [r2-fetch] r2 17.2/462.5 GB, 481 MB/s, eta 926s, trees 5/13 (now 1059 MB/s)
+08:40:27 [r2-fetch] r2 21.7/462.5 GB, 533 MB/s, eta 826s, trees 5/13 (now 909 MB/s)
+08:40:32 [r2-fetch] r2 26.2/462.5 GB, 574 MB/s, eta 760s, trees 5/13 (now 902 MB/s)
+08:40:32 [r2-fetch] FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors part 51: slow: 1.2 MB/s after 14s (recent parts 15 MB/s): fetched again on a new connection
+08:40:37 [r2-fetch] tree FastH3-4-step-Preview-v1-LoRA: ready at f509e629374cac104e7f62daecce6d1488a3041d (6.82 GB, 2 files, 50s since start)
+08:40:37 [r2-fetch] r2 30.9/462.5 GB, 610 MB/s, eta 707s, trees 6/13 (now 943 MB/s)
+08:40:42 [r2-fetch] r2 36.1/462.5 GB, 649 MB/s, eta 657s, trees 6/13 (now 1043 MB/s)
+08:40:47 [r2-fetch] r2 39.9/462.5 GB, 657 MB/s, eta 643s, trees 6/13 (now 752 MB/s)
+08:40:52 [r2-fetch] r2 43.9/462.5 GB, 668 MB/s, eta 626s, trees 6/13 (now 801 MB/s)
+08:40:57 [r2-fetch] r2 48.0/462.5 GB, 679 MB/s, eta 610s, trees 6/13 (now 819 MB/s)
+08:41:02 [r2-fetch] r2 52.0/462.5 GB, 688 MB/s, eta 597s, trees 6/13 (now 809 MB/s)
+08:41:07 [r2-fetch] r2 56.3/462.5 GB, 698 MB/s, eta 582s, trees 6/13 (now 859 MB/s)
+08:41:12 [r2-fetch] r2 61.7/462.5 GB, 720 MB/s, eta 556s, trees 6/13 (now 1077 MB/s)
+08:41:17 [r2-fetch] r2 65.7/462.5 GB, 724 MB/s, eta 548s, trees 6/13 (now 792 MB/s)
+08:41:22 [r2-fetch] r2 69.8/462.5 GB, 729 MB/s, eta 539s, trees 6/13 (now 814 MB/s)
+08:41:27 [r2-fetch] r2 73.8/462.5 GB, 733 MB/s, eta 530s, trees 6/13 (now 805 MB/s)
+08:41:32 [r2-fetch] r2 77.8/462.5 GB, 736 MB/s, eta 523s, trees 6/13 (now 804 MB/s)
+08:41:37 [r2-fetch] r2 81.7/462.5 GB, 738 MB/s, eta 516s, trees 6/13 (now 776 MB/s)
+08:41:42 [r2-fetch] r2 86.7/462.5 GB, 749 MB/s, eta 502s, trees 6/13 (now 994 MB/s)
+08:41:43 [r2-fetch] h3-base/transformer_prequant_4step-vsa_mxfp8/model.safetensors part 328: slow: 1.7 MB/s after 12s (recent parts 16 MB/s): fetched again on a new connection
+08:41:45 [r2-fetch] h3-base/transformer_prequant_4step-vsa_mxfp8/model.safetensors part 368: slow: 1.4 MB/s after 12s (recent parts 18 MB/s): fetched again on a new connection
+08:41:47 [r2-fetch] r2 91.6/462.5 GB, 759 MB/s, eta 488s, trees 6/13 (now 994 MB/s)
+08:41:52 [r2-fetch] r2 97.3/462.5 GB, 774 MB/s, eta 472s, trees 6/13 (now 1138 MB/s)
+08:41:53 [r2-fetch] ltx25-dev/transformer_full/diffusion_pytorch_model-00004-of-00004.safetensors part 68: slow: 3.4 MB/s after 11s (recent parts 19 MB/s): fetched again on a new connection
+08:41:57 [r2-fetch] r2 101.7/462.5 GB, 778 MB/s, eta 464s, trees 6/13 (now 870 MB/s)
+08:42:02 [r2-fetch] r2 107.1/462.5 GB, 789 MB/s, eta 450s, trees 6/13 (now 1091 MB/s)
+08:42:07 [r2-fetch] r2 111.3/462.5 GB, 791 MB/s, eta 444s, trees 6/13 (now 841 MB/s)
+08:42:11 [r2-fetch] ltx25-dev/transformer_full/diffusion_pytorch_model-00001-of-00004.safetensors part 20: slow: 1.2 MB/s after 14s (recent parts 17 MB/s): fetched again on a new connection
+08:42:12 [r2-fetch] r2 117.0/462.5 GB, 803 MB/s, eta 430s, trees 6/13 (now 1123 MB/s)
+08:42:17 [r2-fetch] r2 121.0/462.5 GB, 803 MB/s, eta 425s, trees 6/13 (now 808 MB/s)
+08:42:22 [r2-fetch] r2 126.3/462.5 GB, 811 MB/s, eta 415s, trees 6/13 (now 1055 MB/s)
+08:42:27 [r2-fetch] tree ltx25-dev: ready at 426936f8b22dc28e4def61e515478b0b7e4a53cc (37.98 GB, 7 files, 160s since start)
+08:42:27 [r2-fetch] r2 131.6/462.5 GB, 819 MB/s, eta 404s, trees 7/13 (now 1072 MB/s)
+08:42:32 [r2-fetch] r2 137.2/462.5 GB, 828 MB/s, eta 393s, trees 7/13 (now 1114 MB/s)
+08:42:37 [r2-fetch] r2 142.9/462.5 GB, 837 MB/s, eta 382s, trees 7/13 (now 1133 MB/s)
+08:42:37 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors part 3: slow: 0.7 MB/s after 11s (recent parts 21 MB/s): fetched again on a new connection
+08:42:42 [r2-fetch] r2 148.3/462.5 GB, 844 MB/s, eta 372s, trees 7/13 (now 1088 MB/s)
+08:42:42 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 2: slow: 5.5 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:42:43 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 18: slow: 1.2 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:42:43 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 26: slow: 2.5 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:42:43 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 8: slow: 1.1 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:42:43 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 24: slow: 1.2 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 32: slow: 7.8 MB/s after 8s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 38: slow: 2.3 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 40: slow: 1.7 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 44: slow: 1.7 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 46: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 48: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 42: slow: 1.7 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 30: slow: 6.7 MB/s after 8s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 50: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 52: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 56: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 28: slow: 2.2 MB/s after 8s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 54: slow: 1.8 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 58: slow: 2.4 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 66: slow: 1.3 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 64: slow: 1.9 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 36: slow: 1.7 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 60: slow: 3.0 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 62: slow: 5.5 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:44 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors part 68: slow: 7.0 MB/s after 7s (recent parts 36 MB/s): fetched again on a new connection
+08:42:47 [r2-fetch] r2 153.2/462.5 GB, 848 MB/s, eta 365s, trees 7/13 (now 970 MB/s)
+08:42:52 [r2-fetch] r2 159.0/462.5 GB, 856 MB/s, eta 354s, trees 7/13 (now 1161 MB/s)
+08:42:57 [r2-fetch] r2 164.7/462.5 GB, 863 MB/s, eta 345s, trees 7/13 (now 1132 MB/s)
+08:43:02 [r2-fetch] r2 170.3/462.5 GB, 870 MB/s, eta 336s, trees 7/13 (now 1118 MB/s)
+08:43:07 [r2-fetch] r2 176.0/462.5 GB, 876 MB/s, eta 327s, trees 7/13 (now 1134 MB/s)
+08:43:12 [r2-fetch] r2 181.5/462.5 GB, 882 MB/s, eta 318s, trees 7/13 (now 1111 MB/s)
+08:43:17 [r2-fetch] r2 187.1/462.5 GB, 888 MB/s, eta 310s, trees 7/13 (now 1116 MB/s)
+08:43:22 [r2-fetch] r2 192.6/462.5 GB, 892 MB/s, eta 302s, trees 7/13 (now 1083 MB/s)
+08:43:22 [r2-fetch] h3-ref2va/transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors part 48: slow: 6.4 MB/s after 10s (recent parts 21 MB/s): fetched again on a new connection
+08:43:27 [r2-fetch] r2 198.0/462.5 GB, 897 MB/s, eta 295s, trees 7/13 (now 1083 MB/s)
+08:43:30 [r2-fetch] tree h3-ref2va: ready at eu-20261011 (69.06 GB, 31 files, 223s since start)
+08:43:32 [r2-fetch] r2 203.8/462.5 GB, 902 MB/s, eta 287s, trees 8/13 (now 1164 MB/s)
+08:43:37 [r2-fetch] r2 209.4/462.5 GB, 907 MB/s, eta 279s, trees 8/13 (now 1117 MB/s)
+08:43:40 [r2-fetch] ltx25/text_encoder/model-00001-of-00005.safetensors part 54: slow: 0.9 MB/s after 10s (recent parts 22 MB/s): fetched again on a new connection
+08:43:41 [r2-fetch] ltx25/text_encoder/model-00002-of-00005.safetensors part 36: slow: 5.2 MB/s after 10s (recent parts 22 MB/s): fetched again on a new connection
+08:43:42 [r2-fetch] r2 215.1/462.5 GB, 912 MB/s, eta 271s, trees 8/13 (now 1140 MB/s)
+08:43:47 [r2-fetch] r2 221.1/462.5 GB, 918 MB/s, eta 263s, trees 8/13 (now 1192 MB/s)
+08:43:52 [r2-fetch] r2 226.8/462.5 GB, 923 MB/s, eta 255s, trees 8/13 (now 1143 MB/s)
+08:43:57 [r2-fetch] r2 232.2/462.5 GB, 925 MB/s, eta 249s, trees 8/13 (now 1070 MB/s)
+08:44:01 [r2-fetch] ltx25/connectors/diffusion_pytorch_model.safetensors part 56: slow: 0.9 MB/s after 10s (recent parts 22 MB/s): fetched again on a new connection
+08:44:02 [r2-fetch] r2 237.9/462.5 GB, 930 MB/s, eta 241s, trees 8/13 (now 1154 MB/s)
+08:44:07 [r2-fetch] r2 243.6/462.5 GB, 934 MB/s, eta 234s, trees 8/13 (now 1133 MB/s)
+08:44:12 [r2-fetch] r2 249.3/462.5 GB, 938 MB/s, eta 227s, trees 8/13 (now 1134 MB/s)
+08:44:17 [r2-fetch] r2 255.1/462.5 GB, 942 MB/s, eta 220s, trees 8/13 (now 1158 MB/s)
+08:44:19 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00001-of-00008.safetensors part 10: slow: 6.5 MB/s after 10s (recent parts 22 MB/s): fetched again on a new connection
+08:44:22 [r2-fetch] r2 260.9/462.5 GB, 946 MB/s, eta 213s, trees 8/13 (now 1158 MB/s)
+08:44:27 [r2-fetch] r2 266.7/462.5 GB, 949 MB/s, eta 206s, trees 8/13 (now 1155 MB/s)
+08:44:30 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 65: slow: 8.0 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:44:30 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 69: slow: 3.6 MB/s after 8s (recent parts 30 MB/s): fetched again on a new connection
+08:44:30 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 61: slow: 7.4 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+08:44:30 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 63: slow: 4.4 MB/s after 9s (recent parts 30 MB/s): fetched again on a new connection
+08:44:30 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 55: slow: 6.9 MB/s after 8s (recent parts 30 MB/s): fetched again on a new connection
+08:44:31 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00006-of-00008.safetensors part 74: slow: 2.7 MB/s after 5s (recent parts 29 MB/s): fetched again on a new connection
+08:44:32 [r2-fetch] r2 271.9/462.5 GB, 951 MB/s, eta 200s, trees 8/13 (now 1043 MB/s)
+08:44:37 [r2-fetch] r2 277.5/462.5 GB, 954 MB/s, eta 194s, trees 8/13 (now 1133 MB/s)
+08:44:41 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00004-of-00004.safetensors part 64: slow: 0.4 MB/s after 11s (recent parts 18 MB/s): fetched again on a new connection
+08:44:42 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 61: slow: 4.9 MB/s after 12s (recent parts 18 MB/s): fetched again on a new connection
+08:44:42 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 63: slow: 1.4 MB/s after 12s (recent parts 18 MB/s): fetched again on a new connection
+08:44:42 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 65: slow: 0.0 MB/s after 12s (recent parts 18 MB/s): fetched again on a new connection
+08:44:42 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 55: slow: 4.9 MB/s after 12s (recent parts 18 MB/s): fetched again on a new connection
+08:44:42 [r2-fetch] r2 282.7/462.5 GB, 955 MB/s, eta 188s, trees 8/13 (now 1021 MB/s)
+08:44:47 [r2-fetch] r2 287.7/462.5 GB, 956 MB/s, eta 183s, trees 8/13 (now 1002 MB/s)
+08:44:50 [r2-fetch] ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors part 82: slow: 5.2 MB/s after 11s (recent parts 19 MB/s): fetched again on a new connection
+08:44:52 [r2-fetch] r2 292.6/462.5 GB, 956 MB/s, eta 178s, trees 8/13 (now 983 MB/s)
+08:44:53 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 63: slow: 1.1 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+08:44:53 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 61: slow: 0.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+08:44:57 [r2-fetch] r2 297.4/462.5 GB, 956 MB/s, eta 173s, trees 8/13 (now 956 MB/s)
+08:45:02 [r2-fetch] r2 302.5/462.5 GB, 958 MB/s, eta 167s, trees 8/13 (now 1031 MB/s)
+08:45:04 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 61: slow: 1.1 MB/s after 11s (recent parts 18 MB/s): fetched again on a new connection
+08:45:07 [r2-fetch] r2 307.3/462.5 GB, 958 MB/s, eta 162s, trees 8/13 (now 957 MB/s)
+08:45:09 [r2-fetch] ltx25/transformer/diffusion_pytorch_model-00002-of-00004.safetensors part 35: slow: 0.3 MB/s after 14s (recent parts 16 MB/s): fetched again on a new connection
+08:45:12 [r2-fetch] r2 312.5/462.5 GB, 959 MB/s, eta 156s, trees 8/13 (now 1040 MB/s)
+08:45:17 [r2-fetch] r2 316.5/462.5 GB, 956 MB/s, eta 153s, trees 8/13 (now 794 MB/s)
+08:45:22 [r2-fetch] r2 322.1/462.5 GB, 959 MB/s, eta 146s, trees 8/13 (now 1122 MB/s)
+08:45:27 [r2-fetch] r2 327.7/462.5 GB, 961 MB/s, eta 140s, trees 8/13 (now 1119 MB/s)
+08:45:31 [r2-fetch] tree ltx25: ready at 426936f8b22dc28e4def61e515478b0b7e4a53cc (125.12 GB, 40 files, 345s since start)
+08:45:33 [r2-fetch] r2 333.4/462.5 GB, 964 MB/s, eta 134s, trees 9/13 (now 1136 MB/s)
+08:45:38 [r2-fetch] r2 339.3/462.5 GB, 967 MB/s, eta 127s, trees 9/13 (now 1184 MB/s)
+08:45:43 [r2-fetch] r2 345.1/462.5 GB, 970 MB/s, eta 121s, trees 9/13 (now 1157 MB/s)
+08:45:48 [r2-fetch] r2 351.0/462.5 GB, 972 MB/s, eta 115s, trees 9/13 (now 1169 MB/s)
+08:45:53 [r2-fetch] r2 356.8/462.5 GB, 975 MB/s, eta 108s, trees 9/13 (now 1163 MB/s)
+08:45:58 [r2-fetch] r2 362.4/462.5 GB, 977 MB/s, eta 102s, trees 9/13 (now 1124 MB/s)
+08:46:03 [r2-fetch] r2 367.1/462.5 GB, 976 MB/s, eta 98s, trees 9/13 (now 930 MB/s)
+08:46:04 [r2-fetch] h3-base/text_encoder/model-00010-of-00014.safetensors part 54: slow: 7.4 MB/s after 8s (recent parts 25 MB/s): fetched again on a new connection
+08:46:05 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 8: slow: 1.0 MB/s after 8s (recent parts 25 MB/s): fetched again on a new connection
+08:46:06 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 24: slow: 2.9 MB/s after 9s (recent parts 24 MB/s): fetched again on a new connection
+08:46:06 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 20: slow: 6.2 MB/s after 9s (recent parts 24 MB/s): fetched again on a new connection
+08:46:07 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 28: slow: 5.4 MB/s after 9s (recent parts 22 MB/s): fetched again on a new connection
+08:46:08 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 46: slow: 6.0 MB/s after 10s (recent parts 21 MB/s): fetched again on a new connection
+08:46:08 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 38: slow: 6.4 MB/s after 10s (recent parts 21 MB/s): fetched again on a new connection
+08:46:08 [r2-fetch] h3-base/text_encoder/model-00011-of-00014.safetensors part 44: slow: 6.0 MB/s after 10s (recent parts 21 MB/s): fetched again on a new connection
+08:46:08 [r2-fetch] r2 372.2/462.5 GB, 977 MB/s, eta 92s, trees 9/13 (now 1017 MB/s)
+08:46:13 [r2-fetch] r2 377.9/462.5 GB, 979 MB/s, eta 86s, trees 9/13 (now 1140 MB/s)
+08:46:18 [r2-fetch] r2 383.8/462.5 GB, 982 MB/s, eta 80s, trees 9/13 (now 1187 MB/s)
+08:46:23 [r2-fetch] r2 389.7/462.5 GB, 984 MB/s, eta 74s, trees 9/13 (now 1181 MB/s)
+08:46:28 [r2-fetch] r2 395.8/462.5 GB, 987 MB/s, eta 68s, trees 9/13 (now 1210 MB/s)
+08:46:33 [r2-fetch] r2 401.7/462.5 GB, 989 MB/s, eta 61s, trees 9/13 (now 1176 MB/s)
+08:46:37 [r2-fetch] h3-base/transformer/diffusion_pytorch_model-00004-of-00014.safetensors part 66: slow: 6.2 MB/s after 9s (recent parts 21 MB/s): fetched again on a new connection
+08:46:38 [r2-fetch] r2 407.4/462.5 GB, 991 MB/s, eta 55s, trees 9/13 (now 1153 MB/s)
+08:46:43 [r2-fetch] r2 413.5/462.5 GB, 994 MB/s, eta 49s, trees 9/13 (now 1203 MB/s)
+08:46:48 [r2-fetch] r2 419.4/462.5 GB, 996 MB/s, eta 43s, trees 9/13 (now 1190 MB/s)
+08:46:53 [r2-fetch] r2 425.2/462.5 GB, 998 MB/s, eta 37s, trees 9/13 (now 1160 MB/s)
+08:46:58 [r2-fetch] r2 431.2/462.5 GB, 1000 MB/s, eta 31s, trees 9/13 (now 1198 MB/s)
+08:47:03 [r2-fetch] r2 437.2/462.5 GB, 1003 MB/s, eta 25s, trees 9/13 (now 1197 MB/s)
+08:47:08 [r2-fetch] r2 443.3/462.5 GB, 1005 MB/s, eta 19s, trees 9/13 (now 1215 MB/s)
+08:47:13 [r2-fetch] r2 449.3/462.5 GB, 1007 MB/s, eta 13s, trees 9/13 (now 1208 MB/s)
+08:47:18 [r2-fetch] r2 455.0/462.5 GB, 1009 MB/s, eta 7s, trees 9/13 (now 1123 MB/s)
+08:47:23 [r2-fetch] r2 460.9/462.5 GB, 1011 MB/s, eta 2s, trees 9/13 (now 1179 MB/s)
+08:47:24 [r2-fetch] h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors part 64: slow: 4.9 MB/s after 9s (recent parts 25 MB/s): fetched again on a new connection
+08:47:27 [r2-fetch] tree h3-base: ready at 42ed227ee7df40d41602854ae760620d6eb651fe (144.04 GB, 50 files, 461s since start)
+08:47:27 [r2-fetch] tree h3-base/transformer_prequant_sol-h3_mxfp8: ready at eu-20261011 (23.44 GB, 2 files, 461s since start)
+08:47:28 [r2-fetch] tree h3-base/text_encoder_fp8: ready at eu-20261011 (25.95 GB, 2 files, 461s since start)
+08:47:28 [r2-fetch] r2 462.5/462.5 GB, 1003 MB/s, eta 0s, trees 12/13 (now 316 MB/s)
+08:47:28 [r2-fetch] tree h3-base/transformer_prequant_4step-vsa_mxfp8: ready at eu-20261011 (27.29 GB, 2 files, 461s since start)
+08:47:28 [r2-fetch] weights ready: 13 tree(s), 462.45 GB fetched in 461.1s (1003 MB/s); retries 0, bad parts 5, resumed parts 0, slow restarts 117

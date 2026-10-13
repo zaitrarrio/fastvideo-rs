@@ -11,7 +11,9 @@
 #   compare: compare-dir only (e.g. the old volume against the same manifests). Nothing is written to /workspace.
 #
 # Env: FV_R2_RO_ID / FV_R2_RO_SECRET (the read-only key pair, fv-weights only), FV_WEIGHTS_R2_ENDPOINT,
-# FV_FILL_TREES (space-separated dests), FV_FILL_MODE (fill | compare), FV_POD_ID.
+# FV_FILL_TREES (space-separated dests), FV_FILL_MODE (fill | compare), FV_POD_ID, FV_FILL_TAG (the staging
+# name, default fill-<pod id>: a new pod given an earlier pod's tag resumes, and cleans up, that pod's temp folders).
+# --no-prealloc: the network volume has no fallocate, and glibc's emulation wrote block by block for hours.
 # /srv (served on :8000 through the Runpod proxy): log.txt, status.tsv (step, rc, seconds), fetch.log,
 # fetch-status.json, compare.txt, inventory.txt, du.tsv, DONE (0 = every step ok).
 set -u
@@ -44,8 +46,8 @@ case "$MODE" in
     mkdir -p "$W"
     # shellcheck disable=SC2086 # the tree list splits on purpose
     step plan "${P[@]}" plan $TREES --ttl 21600 --out /root/plan.json >>"$SRV/log.txt" 2>&1 || { echo 1 >"$SRV/DONE"; exit 1; }
-    step fetch python3 "$T/r2-fetch.py" --root "$W" --plan /root/plan.json --add-only --pod "fill-${FV_POD_ID:-$$}" \
-      --full-hash --status "$SRV/fetch-status.json" >>"$SRV/fetch.log" 2>&1 || log "fetch failed (fetch.log)"
+    step fetch python3 "$T/r2-fetch.py" --root "$W" --plan /root/plan.json --add-only --pod "${FV_FILL_TAG:-fill-${FV_POD_ID:-$$}}" \
+      --no-prealloc --full-hash --status "$SRV/fetch-status.json" >>"$SRV/fetch.log" 2>&1 || log "fetch failed (fetch.log)"
     ;;
   compare) ;;
   *) log "unknown FV_FILL_MODE $MODE"; echo 1 >"$SRV/DONE"; exit 1 ;;

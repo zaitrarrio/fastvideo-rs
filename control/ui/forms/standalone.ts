@@ -149,7 +149,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           ...(cpu
             ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs", unsetLabel: "2 (default)" })]
             : [F(["gpu_types"], { label: "GPU types (in order; none: the region's)", onSet: () => tableFor("runpod").sync(), help: "Pick a row in the table above (it sets the first), or list fallbacks here in order. Live from Runpod: $/hr and stock; a type that is gone is flagged." })]),
-          F(["volume"], { label: "Weights volume", placeholder: "mount at /workspace", help: "The region's weights volume (EU jg48s6o1w0); a GPU pod needs it for the weights." }),
+          F(["volume"], { label: "Weights volume", placeholder: "mount at /workspace", help: "The region's weights volume (EU bz0ofkfx45 in EU-RO-1: H3 + LTX trees only); a GPU pod needs it for the weights." }),
           F(["container_disk_gb"], { label: "Container disk", unsetLabel: "default", placeholder: cpu ? "10" : "40" }),
         ];
     const s = src();

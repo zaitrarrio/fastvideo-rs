@@ -40,7 +40,7 @@ export function startMock() {
     failCreate: 0,
     // Build pods (src/buildpods.ts): CPU stock per "<dc>|<instanceId>", repo files, GitHub runners and queued jobs.
     // GPU stock per "<dc>|<gpu type>": [stockStatus, maxUnreservedGpuCount]; unlisted: High, 8.
-    gpuStock: { "EUR-IS-1|NVIDIA RTX PRO 6000 Blackwell Server Edition": ["Low", 2] },
+    gpuStock: { "EU-RO-1|NVIDIA RTX PRO 6000 Blackwell Server Edition": ["Low", 2] },
     cpuStock: { "EU-RO-1|cpu3c-32-64": ["High", 0.96], "EUR-IS-1|cpu3c-32-64": ["Low", 0.96], "EUR-IS-1|cpu5c-16-32": ["High", 0.56], "US-CA-2|cpu3c-16-32": ["High", 0.48] },
     noStockDcs: new Set(), // create answers "no longer any instances available" there
     repoFiles: {
@@ -400,7 +400,7 @@ export function startMock() {
         const cpu = body.computeType === "CPU";
         const pod = { id, name: body.name, payload: body, env: body.env, image: body.imageName, desiredStatus: "RUNNING", costPerHr: cpu ? 0.06 * (body.vcpuCount || 2) / 2 : 2.09, created: Date.now() };
         m.pods.set(id, pod);
-        return json(res, 200, { id, name: body.name, costPerHr: pod.costPerHr, desiredStatus: "RUNNING", machine: { dataCenterId: (body.dataCenterIds || ["EUR-IS-1"])[0] }, env: body.env });
+        return json(res, 200, { id, name: body.name, costPerHr: pod.costPerHr, desiredStatus: "RUNNING", machine: { dataCenterId: (body.dataCenterIds || ["EU-RO-1"])[0] }, env: body.env });
       }
       const mm = /^\/pods\/([^/]+)(\/(stop|start))?$/.exec(rest);
       if (mm) {
@@ -497,7 +497,7 @@ export function startMock() {
       if (q.includes("gpuTypes")) return json(res, 200, { data: { gpuTypes: [{ id: body.variables?.id, securePrice: body.variables?.id?.includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: "High" } }] } });
       const pods = [...m.pods.values()].map((x) => ({
         id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.computeType === "CPU" ? 0 : 1, vcpuCount: 2,
-        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EUR-IS-1"])[0] },
+        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EU-RO-1"])[0] },
         runtime: x.desiredStatus === "RUNNING" ? { uptimeInSeconds: 120, gpus: x.payload.computeType === "CPU" ? [] : [{ id: "g", gpuUtilPercent: 3, memoryUtilPercent: 40 }], container: { cpuPercent: 12, memoryPercent: 20 } } : null,
       }));
       return json(res, 200, { data: { myself: { clientBalance: m.balance, currentSpendPerHr: m.spend, spendLimit: 80, pods: [...pods, ...m.external] } } });

@@ -1033,7 +1033,8 @@ Audio: male speech, clear voice, quiet room"
     done
 
     # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the EU
-    # volume, fv-weights-h3-ltx-hy; first run on the US volume, deleted 2026-10). One prompt ($PROMPT), the upstream
+    # volume fv-weights-h3-ltx-hy until 2026-10-13; the 500 GB EU volume has H3 + LTX only, so these cells need a
+    # volume with the Wan trees or the trees fetched from R2). One prompt ($PROMPT), the upstream
     # FastVideo sampling defaults of each checkpoint. The 50-step cells run
     # one generation (no --warm): first-request overhead is small next to
     # 100 forwards, and each cell would otherwise cost twice the time.

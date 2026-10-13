@@ -5,12 +5,23 @@
 // CHROMIUM=<path> picks the browser; SHOTS=<dir> where screenshots go (default test-results/).
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { chromium } from "playwright-core";
 import { d1Exec, hashPassphrase, HERE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
 
 const out = process.env.SHOTS || `${HERE}test-results`;
 mkdirSync(out, { recursive: true });
 const mock = await startMock();
+// The wan pool's trees in the mock R2 bucket: a one-file manifest each, pinned by WEIGHTS_R2_EXTRA_TREES below.
+const WAN_TREES = ["fastwan22-ti2v-5b", "wan22-ti2v-5b"];
+function mockManifest(dest) {
+  const sha = (b) => createHash("sha256").update(b).digest("hex");
+  const f = Buffer.from(`{"tree": "${dest}"}`);
+  const m = Buffer.from(JSON.stringify({ format: "fv-weights-manifest/1", dest, rev: "rev1", part_size: 1 << 20, total_bytes: f.length, files: [{ path: "config.json", size: f.length, sha256: sha(f), parts: [sha(f)] }] }));
+  mock.r2.objects.set(`manifests/${dest}/rev1.json`, m);
+  mock.r2.objects.set(`weights/${dest}/rev1/config.json`, f);
+  return { rev: "rev1", files: 1, bytes: f.length, manifest_sha256: sha(m), source: "test" };
+}
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
 const w = await startWorker(mock, {
@@ -20,6 +31,14 @@ const w = await startWorker(mock, {
   EDGE_INTERNAL_TOKEN: mock.edgeInternal,
   EDGE_ADMIN_TOKEN: mock.edgeAdmin,
   EDGE_D1_DATABASE_ID: "d1-edge-staging",
+  // The R2 weights store (the mock's bucket): since 2026-10-13 the standard cluster's wan pool defaults to
+  // weights_source r2 (the EU volume holds H3 + LTX only), and the launch check reads its trees' manifests.
+  WEIGHTS_R2_ENDPOINT: `http://127.0.0.1:${mock.port}`,
+  WEIGHTS_R2_BUCKET: mock.r2.bucket,
+  WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
+  WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
+  WEIGHTS_R2_AUX: "0",
+  WEIGHTS_R2_EXTRA_TREES: JSON.stringify(Object.fromEntries(WAN_TREES.map((d) => [d, mockManifest(d)]))),
 });
 const B = w.url;
 let browser;
