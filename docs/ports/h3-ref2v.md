@@ -55,6 +55,12 @@ H3 (any task) from US or EU infrastructure, or to users there, needs the
 owner's legal decision or a MiniMax license.** Not a technical blocker, so
 it is recorded here and in the report rather than acted on.
 
+**Update 2026-10-11:** the owner states they hold a MiniMax H3 licence
+covering the excluded territories, so H3 is stored and served from US / EU
+infrastructure under it (docs/ops/open-items.md, 2026-10-11). The licence
+document is not in the repo; its own terms replace the Community License
+terms above where they differ.
+
 ## 2. Upstream implementations
 
 | Upstream | Entry | Weights | Steps / guidance | Attention |

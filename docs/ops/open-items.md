@@ -25,8 +25,8 @@ new work in the same area. Newest decisions first.
   (`fv-weights-h3-ltx-500`, 500 GB, EU-RO-1), filled from R2 and compared
   (docs/ops/runpod-volumes.md §0a). Presets whose trees are not on it (wan,
   fastwan21, sfwan, longlive) default to `weights_source r2`. `jg48s6o1w0`
-  stays until the coordinator deletes it, after the deploy and one EU-RO-1
-  pod reading the new volume.
+  was deleted on the owner's word ("delete the old 2 TB volume", 2026-10-13;
+  no pod or endpoint had it attached).
 - **Brev: a stop that does not succeed deletes the VM.** "We should go ahead
   and delete VMs that need to be stopped if a stop command does not succeed.
   If the stop command succeeds then we should NOT delete the VM." On every
@@ -48,13 +48,33 @@ new work in the same area. Newest decisions first.
   the start is retried 3 times over ~5 min, then the launch creates a fresh
   VM and the parked VM stays parked (its stop succeeded: not deleted).
 
+### 2026-10-11
+
+- **MiniMax H3 licence: held.** The owner states they hold a MiniMax H3
+  licence covering the territories the Community License excludes (US, EU,
+  UK, Republic of Korea). H3 and its derivatives (FastH3, Sol-H3, Ref2VA,
+  the Plug adapters) may be stored and served from US / EU infrastructure
+  (the `fv-weights` R2 bucket, Brev, GMI, Runpod). The licence document
+  itself is not in the repo. See docs/ports/h3-ref2v.md §1.1.
+- **Weights move to R2; the EU volume goes.** R2 bucket `fv-weights`
+  (docs/ops/r2-weights.md) becomes the weights store, filled by copying the
+  EU volume `jg48s6o1w0` (not re-downloading from the Hub), plus `runs/` and
+  `wan/` under `archive/eu-volume/`. The volume is deleted only after every
+  tree is verified in R2, a real pod has served from R2, and the owner
+  confirms again.
+- **Brev VMs are never deleted automatically.** Stopping keeps the VM; it is
+  reused by the next launch of its type or deleted by the owner (#69).
+- **Pod tunnel hostnames:** `<pod>-fv-pods.maximal.llc` (one level, covered
+  by Universal SSL), not `<pod>.fv-pods.maximal.llc`.
+- **Hub downloads at boot approved** on staging (`FV_HUB_DOWNLOADS_APPROVED=1`).
+
 ### 2026-10-07
 
 - **CloudRift: on hold.** No CloudRift work until the owner lifts the hold.
   Last state: stock read 0 for RTX PRO 6000 / 5090, and the public API has no
   API-key → bearer exchange (both specs checked); a console check or a bearer
   token from the owner was the next step.
-- **US weights volume: wait.** Still EU only (`jg48s6o1w0`, EUR-IS-1); the US
+- **US weights volume: wait.** Still EU only (`bz0ofkfx45`, EU-RO-1; `jg48s6o1w0` in EUR-IS-1 deleted 2026-10-13); the US
   rebuild plan in `docs/ops/runpod-volumes.md` §5 stays unused. Revisit if EU
   serverless or pod capacity keeps failing to place workers.
 - **`h3` cluster on `stable`.** Its spec follows the `stable` channel, and a
