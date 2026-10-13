@@ -116,6 +116,10 @@ export interface Env {
   WEIGHTS_R2_AUX?: string;
   /** A started workspace still STOPPED this long gets the start once more (default 180; 0 never). */
   BREV_RESTART_RETRY_S?: string;
+  /** A warm restart whose start Brev failed for capacity (environment.tasks: InsufficientCapacity): starts sent again
+   * (default 3) and the seconds between them (default 75); still failing, the VM stays parked and a fresh one is made. */
+  BREV_CAPACITY_RETRIES?: string;
+  BREV_CAPACITY_RETRY_S?: string;
   /** A started workspace still STOPPED this long raises brev_restart_stuck (default 300). */
   BREV_RESTART_ALERT_S?: string;
   /** Keep-on-stop: seconds after a Brev instance was held (failed boot / restart) before a launch may reuse it

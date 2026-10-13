@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_POLICIES, policies } from "../../src/alerts";
-import { brev, parseDuration, parseGiB, resetBrevTypes, toType } from "../../src/brev";
+import { brev, brevStatusLine, brevTaskLine, lastStartTask, parseDuration, parseGiB, resetBrevTypes, TASK_MSG_MAX, toType, toWorkspace } from "../../src/brev";
 import {
   brevBoot,
   brevDiskGb,
@@ -59,7 +59,9 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
 
 /** A Brev API stand-in: workspaces with a status, stop / start / delete, the list, the instance-type list. `o` is live
  * (a test flips stopFail: Brev refusing a stop, as for a type that is not stoppable). */
-type MockWs = { status: string; name?: string; type?: string; statusMessage?: string };
+/** tasks: the workspace's environment.tasks[] (GET); noStart: a start is accepted but the VM stays as it is (as when
+ * Brev's start task then fails for capacity). */
+type MockWs = { status: string; name?: string; type?: string; statusMessage?: string; tasks?: unknown[]; noStart?: boolean };
 type MockOpts = { startFail?: boolean; stopFail?: boolean; startNoop?: string; stopNoop?: string };
 let M: { ws: Map<string, MockWs>; calls: string[]; o: MockOpts } | null = null;
 function brevMock(o: MockOpts = {}) {
@@ -96,11 +98,12 @@ function brevMock(o: MockOpts = {}) {
         if (m[2] === "start") {
           if (o.startFail) return new Response(JSON.stringify({ message: "no capacity" }), { status: 409 });
           // startNoop: Brev accepts the start but the VM stays STOPPED, with its reason in statusMessage
-          if (o.startNoop) w.statusMessage = o.startNoop;
+          if (w.noStart) w.tasks = [...(w.tasks || []), capacityTask(Date.now())];
+          else if (o.startNoop) w.statusMessage = o.startNoop;
           else w.status = "RUNNING";
           return new Response(JSON.stringify({ id: m[1], name: w.name ?? m[1], status: w.status, statusMessage: w.statusMessage ?? "", instanceTypeInfo: { stoppable: true } }));
         }
-        if (init.method === "GET" && !m[2]) return new Response(JSON.stringify({ id: m[1], name: w.name ?? m[1], status: w.status, statusMessage: w.statusMessage ?? "", instanceTypeInfo: { stoppable: true } }));
+        if (init.method === "GET" && !m[2]) return new Response(JSON.stringify({ id: m[1], name: w.name ?? m[1], status: w.status, statusMessage: w.statusMessage ?? "", healthStatus: w.tasks ? "UNHEALTHY" : "", instanceTypeInfo: { stoppable: true }, ...(w.tasks ? { environment: { tasks: w.tasks } } : {}) }));
         if (init.method === "DELETE") ws.delete(m[1]!);
         return new Response("{}");
       }
@@ -110,6 +113,10 @@ function brevMock(o: MockOpts = {}) {
   M = { ws, calls, o };
   return M;
 }
+
+/** A failed start task as Brev keeps it (a ~10 KB message ending in the reason; statusMessage stays empty). */
+const CAPACITY_TAIL = "AWSClient.StartInstance: zone has insufficient resources to fulfill the request, InsufficientCapacity (retryable: true)";
+const capacityTask = (at: number) => ({ id: `task-${at}`, type: "START_INSTANCE", status: "FAILED", createdAt: new Date(at).toISOString(), message: `${"retrying StartInstance in us-east-1a; ".repeat(280)}${CAPACITY_TAIL}` });
 
 async function live(env: Env, id: string, o: { type?: string; stoppable?: boolean; trees?: Record<string, string>; ready?: boolean; disk?: number } = {}) {
   const name = `fv-pod-${id}-1010000000`;
@@ -477,6 +484,83 @@ describe("every stop parks or holds (owner rule 2026-10-11: never deleted once s
     expect(a[0]!.message).toMatch(/is still STOPPED: insufficient capacity .* 7 min after fv-control started it/);
     expect(await restartStuckAlerts(env, new Map([["s9", "RUNNING"]]))).toEqual([]);
     expect(m.calls.some((c) => c.startsWith("DELETE")), "never deleted").toBe(false);
+  });
+  it("the latest start task (environment.tasks[]): its status and the tail of its message, truncated; InsufficientCapacity recognised", () => {
+    const t0 = Date.parse("2026-10-13T01:00:00Z");
+    const w = toWorkspace({
+      id: "w",
+      name: "fv-pod-w",
+      status: "STOPPED",
+      statusMessage: "",
+      healthStatus: "UNHEALTHY",
+      environment: {
+        tasks: [
+          { type: "START_INSTANCE", status: "SUCCEEDED", createdAt: new Date(t0).toISOString(), message: "" },
+          { type: "STOP_INSTANCE", status: "SUCCEEDED", createdAt: new Date(t0 + 120_000).toISOString(), message: "stopped" },
+          capacityTask(t0 + 60_000),
+        ],
+      },
+    });
+    expect(w.lastStart).toMatchObject({ status: "FAILED", capacity: true, at: t0 + 60_000 });
+    expect(capacityTask(0).message.length).toBeGreaterThan(10_000);
+    expect(w.lastStart!.message!.length).toBeLessThanOrEqual(TASK_MSG_MAX);
+    expect(w.lastStart!.message!.endsWith(CAPACITY_TAIL)).toBe(true);
+    expect(w.lastStart!.message!.startsWith("…")).toBe(true);
+    expect(brevStatusLine(w)).toMatch(/^STOPPED: last start task FAILED: ….*InsufficientCapacity \(retryable: true\): health UNHEALTHY$/);
+    expect(brevStatusLine(w).length).toBeLessThan(300);
+    // No tasks, or a start that succeeded with nothing to say: nothing added.
+    expect(toWorkspace({ id: "x", status: "RUNNING" }).lastStart).toBeNull();
+    expect(brevTaskLine({ status: "SUCCEEDED", message: null, at: null, capacity: false })).toBeNull();
+    expect(lastStartTask({ environment: { tasks: [{ status: "failed", error: "boom" }] } })).toMatchObject({ status: "FAILED", message: "boom", capacity: false });
+  });
+  it("a warm restart Brev cannot start for capacity: the task in every poll, 3 quick starts, then left parked (not deleted) and a fresh VM; the stuck alert names the task", async () => {
+    const env = mkEnv({ BREV_CAPACITY_RETRY_S: "60" });
+    const m = brevMock();
+    const remove = vi.spyOn(brev, "remove");
+    const pod = await live(env, "cap1");
+    // Parked (its stop succeeded), then claimed and restarted for a launch; Brev's start task fails for capacity.
+    expect(await releaseBrev(env, pod)).toBe("parked");
+    const w = m.ws.get("cap1")!;
+    w.noStart = true;
+    const c = (await claimWarm(env, "stop.x1", { "wan22-ti2v-5b": REV_A }))!;
+    await restartWarm(env, c.row, { run: "#!/bin/bash\necho x", launch_trees: { "wan22-ti2v-5b": REV_A }, cluster_id: "c1" });
+    await env.DB.prepare("UPDATE cluster_pods SET ready_at = NULL WHERE pod_id = ?").bind(pod).run();
+    const starts = () => m.calls.filter((x) => x === "PUT workspaces/cap1/start").length;
+    expect(starts()).toBe(1);
+    const back = (ms: number) => env.DB.prepare("UPDATE brev_instances SET restarted_at = restarted_at - ?, capacity_retry_at = capacity_retry_at - ? WHERE workspace_id = 'cap1'").bind(ms, ms).run();
+    const d0 = (await restartDiag(env, pod, "stopped", "STOPPED"))!;
+    expect(d0).toMatchObject({ phase: "restarting", fatal: false });
+    expect(d0.detail).toMatch(/no capacity for its start \(0\/3 starts sent again\); Brev: STOPPED; last start task FAILED: ….*InsufficientCapacity \(retryable: true\)/);
+    expect(d0.detail.length).toBeLessThan(800);
+    expect(starts()).toBe(1);
+    for (const k of [1, 2, 3]) {
+      await back(61_000);
+      const d = (await restartDiag(env, pod, "stopped", "STOPPED"))!;
+      expect(d).toMatchObject({ phase: "restarting", fatal: false });
+      expect(d.detail).toMatch(new RegExp(`no capacity for its start: start sent again ${k}/3`));
+      expect(starts()).toBe(1 + k);
+    }
+    // The cron's alert while it waits names the start task.
+    await env.DB.prepare("UPDATE brev_instances SET restarted_at = ? WHERE workspace_id = 'cap1'").bind(Date.now() - 400_000).run();
+    const al = await restartStuckAlerts(env, new Map([["cap1", "STOPPED"]]));
+    expect(al[0]!.message).toMatch(/is still STOPPED; last start task FAILED: ….*InsufficientCapacity \(retryable: true\) \d+ min after fv-control started it/);
+    // Still no capacity a backoff after the 3rd: left parked, the restart fatal with replace (the launch makes a fresh VM).
+    await back(61_000);
+    const dz = (await restartDiag(env, pod, "stopped", "STOPPED"))!;
+    expect(dz).toMatchObject({ phase: "restart no capacity", fatal: true, replace: true });
+    expect(dz.detail).toMatch(/^no capacity to restart fv-pod-cap1-1010000000: ….*InsufficientCapacity \(retryable: true\) \(3 starts sent again over \d+ min\): left parked \(its stop had succeeded: not deleted\); a fresh VM is made/);
+    const r = (await brevRowById(env, "cap1"))!;
+    expect([r.state, r.stop_tried_at]).toEqual(["parked", null]);
+    expect(starts()).toBe(4);
+    // The up wait then releases the pod: the parked VM stays parked (no stop failure, no delete), and it is not the
+    // launch's next pick during the cooldown (the fresh VM is a create).
+    expect(await deletePod(env, pod, () => {}, "pod restart no capacity")).toBe(true);
+    expect((await brevRowById(env, "cap1"))!.state).toBe("parked");
+    expect(await warmCandidates(env, "stop.x1", { "wan22-ti2v-5b": REV_A })).toEqual([]);
+    expect((await warmCandidates(env, "stop.x1", { "wan22-ti2v-5b": REV_A }, Date.now() + 901_000)).map((x) => x.row.workspace_id)).toEqual(["cap1"]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(m.calls.some((x) => x.startsWith("DELETE"))).toBe(false);
+    remove.mockRestore();
   });
   it("limits: an alert listing the instances, their age and $/day; nothing deleted; the owner's delete works", async () => {
     const env = mkEnv();

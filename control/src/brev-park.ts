@@ -58,7 +58,7 @@
 // brev:stopping) until it is STOPPED or deleted. Only instances fv-control
 // created and recorded here (fv- names) are ever stopped, started or deleted.
 import { policies, type AlertIn, type Policies } from "./alerts";
-import { brev, brevStatusLine, type BrevType, type BrevWorkspace } from "./brev";
+import { brev, brevStatusLine, brevTaskLine, type BrevType, type BrevWorkspace } from "./brev";
 import { brevHostScript } from "./brev-host";
 import { randomToken, seal, sha256Hex, unseal } from "./crypto";
 import type { Env } from "./env";
@@ -139,6 +139,9 @@ export interface BrevInstance {
    * deletes it when it is not STOPPED BREV_STOP_TIMEOUT_S after. stop_pending: when the stop was requested (the
    * DEPLOYING wait, BREV_DEPLOYING_WAIT_S, counts from it). */
   stop_tried_at: number | null;
+  /** Starts sent again for the current restart after Brev failed it for capacity (migration 0013), and the last one's time. */
+  capacity_retries: number;
+  capacity_retry_at: number | null;
 }
 /** Storage $/hr of a parked instance. */
 export const storageDph = (r: Pick<BrevInstance, "disk_gb" | "storage_usd_per_gb_hr">) => (r.disk_gb || 0) * (r.storage_usd_per_gb_hr ?? DEFAULT_STORAGE_USD_PER_GB_HR);
@@ -284,6 +287,8 @@ export async function warmCandidates(env: Env, instanceType: string, want: TreeR
   for (const row of rows) {
     if (!FV_NAME_RE.test(row.name)) continue;
     if (row.state === "held" && t - row.updated_at < cool) continue;
+    // Given back after its restart found no capacity: not the launch's next pick for the same cooldown.
+    if ((row.note || "").startsWith(NO_CAPACITY_PREFIX) && t - row.updated_at < cool) continue;
     if (!fitsDisk(row, want)) continue;
     const have = parseJson<TreeRevs>(row.trees, {});
     out.push({ row, matched: Object.keys(want).filter((k) => have[k] === want[k]), missing: Object.keys(want).filter((k) => have[k] !== want[k]) });
@@ -337,7 +342,7 @@ export async function restartWarm(env: Env, row: BrevInstance, x: { run: string;
     said = `start accepted (was ${before}; Brev answered ${ans ? brevStatusLine(ans) : "no workspace"})`;
   }
   const t = now();
-  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = ?, stop_tried_at = NULL, updated_at = ? WHERE workspace_id = ?")
+  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = ?, stop_tried_at = NULL, capacity_retries = 0, capacity_retry_at = NULL, updated_at = ? WHERE workspace_id = ?")
     .bind(JSON.stringify(x.launch_trees), x.cluster_id, t, said.slice(0, 300), t, row.workspace_id)
     .run();
   return said;
@@ -646,18 +651,63 @@ export async function settleBrevStops(env: Env, listed: Map<string, string>, t =
   return { alerts, actions };
 }
 
+/** Starts sent again after a start Brev failed for capacity (BREV_CAPACITY_RETRIES, default 3). */
+export const capacityRetries = (env: Env) => {
+  const n = Number(env.BREV_CAPACITY_RETRIES ?? 3);
+  return Math.max(0, Number.isFinite(n) ? Math.floor(n) : 3);
+};
+/** Seconds between them, and after the last one before the launch gives the VM up (BREV_CAPACITY_RETRY_S, default 75:
+ * 3 tries and the final check within ~5 min). */
+export const capacityRetryMs = (env: Env) => envSeconds(env.BREV_CAPACITY_RETRY_S, 75, 0);
+/** The note of a parked VM given back after its restart failed for capacity (warmCandidates skips it for
+ * heldReuseAfterMs, so the launch's fresh VM is not this one again). */
+export const NO_CAPACITY_PREFIX = "no capacity to restart";
 /**
  * The `up` wait's view of a warm restart: still starting (fine until the timeout), or timed out (fatal, replace).
- * `brevSays` is Brev's status, statusMessage and health this poll: every poll's detail carries it (the operation's
- * log shows why a VM stays STOPPED). A workspace still STOPPED BREV_RESTART_RETRY_S after its start (its start did
- * not take) gets the start once more.
+ * `brevSays` is Brev's status, statusMessage and health this poll: every poll's detail carries it, with the latest start
+ * task of the workspace (environment.tasks[]: why a start did not run; its statusMessage is empty then; truncated).
+ * A start that failed for capacity (InsufficientCapacity, "zone has insufficient resources") is sent again up to
+ * BREV_CAPACITY_RETRIES times BREV_CAPACITY_RETRY_S apart; still failing, the VM goes back to parked (its stop had
+ * succeeded: never deleted, owner rule 2026-10-13) and the restart is fatal with replace (the launch makes a fresh VM).
+ * Otherwise a workspace still STOPPED BREV_RESTART_RETRY_S after its start (its start did not take) gets the start once
+ * more.
  */
 export async function restartDiag(env: Env, podId: string, state: string, brevSays: string | null = null): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const row = await brevRow(env, podId);
   if (!row?.restarted_at || row.state !== "live" || (await weightsDone(env, podId))) return null;
   const limit = Math.max(30, Number(env.BREV_RESTART_TIMEOUT_S || "900")) * 1000;
-  const waited = now() - row.restarted_at;
-  const says = brevSays ? `; Brev: ${brevSays.slice(0, 200)}` : "";
+  const t = now();
+  const waited = t - row.restarted_at;
+  // The latest start task (one GET; the list may not carry environment.tasks).
+  const task = state === "stopped" || state === "failed" || state === "starting" ? ((await brev.get(env, row.workspace_id).catch(() => null))?.lastStart ?? null) : null;
+  const tl = brevTaskLine(task);
+  const saysAll = [brevSays, tl && !(brevSays || "").includes(tl) ? tl : null].filter(Boolean).join("; ");
+  const says = saysAll ? `; Brev: ${saysAll.slice(0, 400)}` : "";
+  // A start Brev could not run for lack of capacity in the zone: a few quick starts, then a fresh VM.
+  if (task?.capacity && (state === "stopped" || state === "failed")) {
+    const n = row.capacity_retries || 0;
+    const since = row.capacity_retry_at ?? row.restarted_at;
+    if (t - since < capacityRetryMs(env)) return { phase: "restarting", detail: `parked ${row.name}: no capacity for its start (${n}/${capacityRetries(env)} starts sent again)${says}`, fatal: false };
+    if (n < capacityRetries(env)) {
+      let ans: string;
+      try {
+        const w = await brev.start(env, row.workspace_id);
+        ans = `start sent again ${n + 1}/${capacityRetries(env)} (Brev answered ${w ? brevStatusLine(w) : "no workspace"})`;
+      } catch (e) {
+        ans = `start sent again ${n + 1}/${capacityRetries(env)}, refused: ${brevErrText((e as Error).message)}`;
+      }
+      await env.DB.prepare("UPDATE brev_instances SET capacity_retries = ?, capacity_retry_at = ?, note = ?, updated_at = ? WHERE workspace_id = ?")
+        .bind(n + 1, t, `no capacity for its start: ${ans}`.slice(0, 300), t, row.workspace_id)
+        .run();
+      return { phase: "restarting", detail: `parked ${row.name}: no capacity for its start: ${ans.slice(0, 200)}${says}`, fatal: false };
+    }
+    // Still no capacity after the retries: back to parked (stopped, kept), and the launch makes a fresh VM.
+    const why = `${NO_CAPACITY_PREFIX} ${row.name}: ${task.message || "InsufficientCapacity"} (${n} starts sent again over ${Math.round(waited / 60000)} min)`;
+    await env.DB.prepare("UPDATE brev_instances SET state = 'parked', parked_at = ?, note = ?, stop_tried_at = NULL, updated_at = ? WHERE workspace_id = ? AND state = 'live'")
+      .bind(t, `${why}: kept parked`.slice(0, 300), t, row.workspace_id)
+      .run();
+    return { phase: "restart no capacity", detail: `${why}: left parked (its stop had succeeded: not deleted); a fresh VM is made for the launch`, fatal: true, replace: true };
+  }
   if (state === "failed") return { phase: "restart failed", detail: `Brev reports an error on the restarted ${row.name}${says}`, fatal: true, replace: true };
   if (state === "stopped" || state === "starting") {
     if (waited > limit) return { phase: "restart timed out", detail: `${row.name} not running after ${Math.round(waited / 1000)} s (BREV_RESTART_TIMEOUT_S ${limit / 1000})${says}`, fatal: true, replace: true };
@@ -678,20 +728,23 @@ export async function restartDiag(env: Env, podId: string, state: string, brevSa
 }
 
 /** The cron's view of warm restarts that do not come up: a restarted instance (live, not ready) that Brev still lists as
- * STOPPED BREV_RESTART_ALERT_S after its start raises brev_restart_stuck with Brev's status and message. `listed`:
- * workspace id -> Brev's status line (status: statusMessage). Changes nothing. */
+ * STOPPED BREV_RESTART_ALERT_S after its start raises brev_restart_stuck with Brev's status and message and its latest
+ * start task (environment.tasks[], truncated). `listed`: workspace id -> Brev's status line (status: statusMessage).
+ * Changes nothing. */
 export async function restartStuckAlerts(env: Env, listed: Map<string, string>, t = now()): Promise<AlertIn[]> {
   const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state = 'live' AND restarted_at IS NOT NULL`).all<BrevInstance>()).results || [];
   const out: AlertIn[] = [];
   for (const r of rows) {
     const st = listed.get(r.workspace_id);
     if (!st || !/^STOPP/.test(st) || t - r.restarted_at! < restartAlertMs(env) || (await weightsDone(env, r.pod_id))) continue;
+    const tl = brevTaskLine((await brev.get(env, r.workspace_id).catch(() => null))?.lastStart ?? null);
+    const says = [st.slice(0, 200), tl && !st.includes(tl) ? tl : null].filter(Boolean).join("; ");
     out.push({
       key: `brev_restart_stuck:${r.workspace_id}`,
       kind: "brev_restart_stuck",
       severity: "warn",
       target: r.pod_id,
-      message: `Brev ${r.name} (${r.instance_type}) is still ${st.slice(0, 200)} ${Math.round((t - r.restarted_at!) / 60000)} min after fv-control started it for a launch (${(r.note || "no answer recorded").slice(0, 200)}). The launch replaces it after BREV_RESTART_TIMEOUT_S; check the instance in the Brev console (capacity for its type in its region is the usual cause).`,
+      message: `Brev ${r.name} (${r.instance_type}) is still ${says} ${Math.round((t - r.restarted_at!) / 60000)} min after fv-control started it for a launch (${(r.note || "no answer recorded").slice(0, 200)}). The launch replaces it after BREV_RESTART_TIMEOUT_S (sooner when the start task says InsufficientCapacity); check the instance in the Brev console (capacity for its type in its region is the usual cause).`,
     });
   }
   return out;

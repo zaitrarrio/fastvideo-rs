@@ -25,7 +25,7 @@
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
-import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
+import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine } from "./brev";
 import { recordBoot } from "./boottime";
 import { adoptAndStop, bootEstimate, brevDiskGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
@@ -171,8 +171,8 @@ const BREV: ComputeProvider = {
         name: w.name,
         state: w.status === "RUNNING" ? "running" : w.status === "FAILURE" ? "failed" : ["STOPPED", "STOPPING", "DELETING"].includes(w.status) ? "stopped" : "starting",
         raw: w.status,
-        // Brev's statusMessage first (why a start did not run, e.g. capacity), then its health.
-        reason: [w.statusMessage, w.health].filter(Boolean).join("; ") || null,
+        // Brev's statusMessage first (why a start did not run, e.g. capacity), then its latest start task (environment.tasks: empty statusMessage, the reason there), then its health.
+        reason: [w.statusMessage, brevTaskLine(w.lastStart), w.health].filter(Boolean).join("; ") || null,
         gpu: w.instanceType,
         createdAt: ms(w.createdAt),
       }));
