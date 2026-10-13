@@ -17,7 +17,7 @@ use fastvideo_webrtc::sdp::{MediaKind, Sdp};
 use fastvideo_webrtc::whip::{
     WhipAuth, WhipClient, WhipConfig, WhipPublishOptions, WhipPublisher, WhipTarget,
 };
-use fastvideo_webrtc::writer::{video_rtp_time, AudioPacket, TrackKind, VideoFrame};
+use fastvideo_webrtc::writer::{video_rtp_time, AudioPacket, TrackKind, VideoCodec, VideoFrame};
 use fastvideo_webrtc::WebrtcError;
 use url::Url;
 
@@ -68,6 +68,8 @@ async fn whip_post(State(m): State<Mock>, headers: HeaderMap, body: String) -> R
             AnswerOptions {
                 audio,
                 channels: ChannelPolicy::none(),
+                // An SFU that takes any of Cloudflare's WHIP codecs.
+                video_codecs: vec![VideoCodec::H264, VideoCodec::Vp8, VideoCodec::Vp9],
                 ..Default::default()
             },
         )
@@ -279,7 +281,7 @@ async fn video_only_offer_has_no_audio_mline_and_basic_auth() {
         let o = Sdp::parse(offer).unwrap();
         assert_eq!(o.media.len(), 1, "video m-line only: {offer}");
         assert_eq!(o.media[0].kind(), MediaKind::Video);
-        // Cloudflare target: level 3.1 offered, 720p cap for the encoder.
+        // Cloudflare target: level 3.1 offered (resolution stays native).
         assert!(offer.contains("profile-level-id=42e01f"), "{offer}");
         assert!(!offer.contains("profile-level-id=42e028"), "{offer}");
     }
@@ -333,4 +335,58 @@ async fn rejected_post_is_an_error_without_delete() {
         client.post_offer("v=0\r\n").await,
         Err(WebrtcError::Whip(_))
     ));
+}
+
+/// `codec: vp8 | vp9`: only that codec is offered, the answer carries it,
+/// and the publisher sends on its payload type.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offers_only_the_chosen_vpx_codec() {
+    for (codec, name) in [(VideoCodec::Vp8, "VP8"), (VideoCodec::Vp9, "VP9")] {
+        let (url, mock) = start_mock("tok").await;
+        let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+        let mut publisher = WhipPublisher::publish(
+            &host,
+            WhipConfig::new(url, WhipAuth::Bearer("tok".into()))
+                .with_target(WhipTarget::Cloudflare)
+                .with_codec(codec),
+            WhipPublishOptions { audio: None, stun: vec![], ..Default::default() },
+        )
+        .await
+        .unwrap();
+        {
+            let seen = mock.seen.lock().unwrap();
+            let o = Sdp::parse(&seen.posts[0].2).unwrap();
+            let video = o.media.iter().find(|m| m.kind() == MediaKind::Video).unwrap();
+            let codecs = video.codecs();
+            assert!(codecs.iter().all(|c| c.is(name) || c.is("rtx")), "{name} only: {}", video.m_line);
+            assert!(codecs.iter().any(|c| c.is(name)));
+        }
+        assert_eq!(publisher.negotiated_video_codec(), Some(name));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout_at(deadline, publisher.peer().next_event()).await.unwrap() {
+                Some(PeerEvent::Connected) => break,
+                Some(PeerEvent::Closed(r)) => panic!("{r:?}"),
+                _ => {}
+            }
+        }
+        assert_eq!(publisher.peer().handle().video_codec(), Some(codec));
+        if codec == VideoCodec::Vp8 {
+            // A VP8 keyframe header (P bit clear) and filler: str0m carries it whole.
+            let mut server_peer = mock.peers.lock().unwrap().pop().unwrap();
+            let handle = publisher.peer().handle().clone();
+            let sender = tokio::spawn(async move {
+                for i in 0..20u64 {
+                    let mut f = vec![0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x40, 0x01, 0xb4, 0x00];
+                    f.extend(std::iter::repeat_n(i as u8, 1800));
+                    handle.send_video(VideoFrame::new(f, video_rtp_time(i, 24))).unwrap();
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+            });
+            let (_, data) = next_media(&mut server_peer, TrackKind::Video).await;
+            assert_eq!(data.len(), 1810, "one whole VP8 frame");
+            sender.await.unwrap();
+        }
+        let _ = publisher.teardown().await;
+    }
 }

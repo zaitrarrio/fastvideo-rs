@@ -131,6 +131,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/jobs/{id}/content"),
         r(Native, "GET", "/fv/v1/streams"),
         r(Native, "POST", "/fv/v1/streams"),
+        r(Native, "GET", "/fv/v1/outputs"),
         // Minted API keys (serve-kit `admin_routes`, admin token).
         r(Native, "POST", "/fv/v1/admin/keys"),
         r(Native, "GET", "/fv/v1/admin/keys"),

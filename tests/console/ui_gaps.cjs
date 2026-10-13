@@ -78,6 +78,8 @@ async function startServer() {
     FV_BIND: '127.0.0.1:' + port, FV_STATE_DIR: state, FV_JOB_STORE: 'memory', FV_ENGINE: 'fake',
     FV_URL_SIGNING_KEY: 'ui-gaps', FV_API_KEYS: crypto.createHash('sha256').update(KEY).digest('hex'),
     FV_REACTOR_MODEL: 'fake-sfwan', FV_STREAM_STUN: 'none', FV_FAKE_H3_1080P: '1', RUST_LOG: 'warn',
+    // The mock WHIP endpoint is on loopback (docs/serve/stream-outputs.md).
+    FV_OUTPUTS_ALLOW_PRIVATE: '1',
   });
   const srv = { origin, state, logs: '', exited: null };
   srv.proc = spawn(BIN, ['--config', cfg], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -332,8 +334,11 @@ async function liveStream(page, origin, whip) {
   await page.waitForFunction(() => document.body.dataset.streamState === 'stopped', null, { timeout: T });
 
   // Native POST /fv/v1/streams to the mock WHIP endpoint.
-  await page.selectOption('#transport', 'whip');
-  await page.fill('#whip-url', whip.url);
+  await page.selectOption('#transport', 'native');
+  // No Cloudflare account here: the Cloudflare kinds are off, WHIP is the first choice.
+  check(await page.$eval('#out-kind option[value="cloudflare"]', (o) => o.disabled), 'Cloudflare is off without an account');
+  await page.selectOption('#out-kind', 'whip');
+  await page.fill('#out-url', whip.url);
   await page.fill('#max-seconds', '60');
   await page.click('#start');
   await page.waitForFunction(() => document.body.dataset.stream, null, { timeout: T });

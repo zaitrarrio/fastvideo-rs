@@ -88,6 +88,10 @@
     { "id": "FASTVIDEO_WAN_AUDIO", "detail": "mmaudio: Wan generates audio with the MMAudio sidecar (opt-in)" },
     { "id": "FV_LONGLIVE_WEIGHTS", "detail": "LongLive checkpoint dir for the [[models]]-less SF-Wan backend (with FV_SFWAN_WEIGHTS); NON-COMMERCIAL weights" },
     { "id": "FV_LONGLIVE_RECACHE", "detail": "0: keep the KV cache at prompt switches (the ablation); default on" },
-    { "id": "FV_LONGLIVE_INFINITY", "detail": "1: relative RoPE, past 1024 latent frames" }
+    { "id": "FV_LONGLIVE_INFINITY", "detail": "1: relative RoPE, past 1024 latent frames" },
+    { "id": "FV_CF_STREAM_API_TOKEN", "detail": "secret: Cloudflare Stream API token (Account > Stream > Edit); live streams then default to a Stream live input per stream (FV_CF_ACCOUNT_ID is already set); a secret variable, or a {{ RUNPOD_SECRET_… }} reference" },
+    { "id": "FV_CF_STREAM_NAME_PREFIX", "detail": "prefix of the Cloudflare live inputs' names (default fv-)" },
+    { "id": "FV_OUTPUTS_ALLOW_PRIVATE", "detail": "1: stream outputs may publish to loopback / private addresses (LAN relays, MediaMTX tests)" },
+    { "id": "FV_DIRECTOR_ALLOW_OUTPUT", "detail": "1: the director takes configure.output (not in fal's schema; x_fv_output always works)" }
   ]
 }

@@ -46,6 +46,9 @@
 //! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
 //! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
+//! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
+//! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms` |
+//! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -569,6 +572,9 @@ pub struct DirectorCfg {
     /// Causal models: seconds of video kept queued for playout; above it the
     /// rollout pauses at the next block boundary (prompt latency).
     pub causal_lead_seconds: f64,
+    /// Accept `configure.output` (fal's schema forbids extra fields, so off
+    /// by default: `x_fv_output` is always accepted; docs/serve/stream-outputs.md).
+    pub allow_output: bool,
 }
 
 impl Default for DirectorCfg {
@@ -582,6 +588,66 @@ impl Default for DirectorCfg {
             video_bitrate: 0,
             causal_chunk_blocks: 4,
             causal_lead_seconds: 2.0,
+            allow_output: false,
+        }
+    }
+}
+
+/// `[outputs]`: where live streams publish (docs/serve/stream-outputs.md).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OutputsCfg {
+    /// Loopback / private / link-local destinations allowed (MediaMTX
+    /// tests, LAN relays). Off: such URLs are refused, also when a name
+    /// resolves to one.
+    pub allow_private: bool,
+    /// SRT receiver latency (ffmpeg `latency`), 20..8000 ms.
+    pub srt_latency_ms: u32,
+    /// The default output: a Cloudflare Stream live input per stream.
+    pub cloudflare: CloudflareOutputCfg,
+}
+
+impl Default for OutputsCfg {
+    fn default() -> Self {
+        Self { allow_private: false, srt_latency_ms: 1000, cloudflare: CloudflareOutputCfg::default() }
+    }
+}
+
+/// `[outputs.cloudflare]`: set `account_id` and `api_token` to make
+/// Cloudflare Stream the default output.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CloudflareOutputCfg {
+    /// `FV_CF_ACCOUNT_ID`.
+    pub account_id: String,
+    /// `FV_CF_STREAM_API_TOKEN` (Account > Stream > Edit).
+    pub api_token: Secret,
+    /// `FV_CF_STREAM_API_BASE` (tests point it at a fake server).
+    pub api_base: String,
+    /// `auto` (WebRTC off, RTMPS/SRT automatic: HLS needs it) | `off` | `automatic`.
+    pub recording: crate::stream_outputs::Recording,
+    /// `auto` (delete, or disable when it recorded) | `delete` | `disable` | `keep`.
+    pub on_stop: crate::stream_outputs::OnStop,
+    /// `deleteRecordingAfterDays` of recording inputs (Cloudflare's minimum is 30).
+    pub delete_recording_after_days: Option<u32>,
+    /// `customer-<code>.cloudflarestream.com` when the API does not name it.
+    pub customer_domain: Option<String>,
+    /// Live inputs are named `<name_prefix><stream id>` (`fv-`; tests use
+    /// `fv-test-`, `FV_CF_STREAM_NAME_PREFIX`).
+    pub name_prefix: String,
+}
+
+impl Default for CloudflareOutputCfg {
+    fn default() -> Self {
+        Self {
+            account_id: String::new(),
+            api_token: Secret::default(),
+            api_base: "https://api.cloudflare.com/client/v4".into(),
+            recording: crate::stream_outputs::Recording::Auto,
+            on_stop: crate::stream_outputs::OnStop::Auto,
+            delete_recording_after_days: None,
+            customer_domain: None,
+            name_prefix: "fv-".into(),
         }
     }
 }
@@ -942,6 +1008,7 @@ pub struct Config {
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
     pub streams: StreamsCfg,
+    pub outputs: OutputsCfg,
     pub director: DirectorCfg,
     pub reactor: ReactorCfg,
     /// `None`: no prompt upsampling.
@@ -1152,7 +1219,34 @@ impl Config {
             self.jobs.backend = parse_enum("FV_JOB_STORE", &v)?;
         }
         if let Some(v) = var2(env, "FV_CF_ACCOUNT_ID") {
+            self.outputs.cloudflare.account_id = v.trim().to_owned();
             self.jobs.d1.account_id = Some(v);
+        }
+        if let Some(v) = var2(env, "FV_CF_STREAM_API_TOKEN") {
+            self.outputs.cloudflare.api_token = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_CF_STREAM_API_BASE") {
+            self.outputs.cloudflare.api_base = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_CF_STREAM_NAME_PREFIX") {
+            self.outputs.cloudflare.name_prefix = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_CF_STREAM_CUSTOMER_DOMAIN") {
+            self.outputs.cloudflare.customer_domain = Some(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_OUTPUTS_ALLOW_PRIVATE") {
+            self.outputs.allow_private = matches!(v.trim(), "1" | "true" | "yes" | "on");
+        }
+        if let Some(v) = env.var("FV_OUTPUTS_SRT_LATENCY_MS") {
+            self.outputs.srt_latency_ms = v
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| (20..=8000).contains(n))
+                .ok_or_else(|| ConfigError::Invalid(format!("FV_OUTPUTS_SRT_LATENCY_MS={v} is not 20..8000")))?;
+        }
+        if let Some(v) = env.var("FV_DIRECTOR_ALLOW_OUTPUT") {
+            self.director.allow_output = matches!(v.trim(), "1" | "true" | "yes" | "on");
         }
         if let Some(v) = var2(env, "FV_CF_API_TOKEN") {
             self.jobs.d1.api_token = Secret(v);

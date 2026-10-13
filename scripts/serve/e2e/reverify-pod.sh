@@ -64,7 +64,8 @@ EOF
   switch)
     cfg=$E/cfg-$2.toml; [ "$2" = fv ] && cfg=$E/fv.toml
     t0=$(date +%s)
-    FV_STREAM_STUN=none $E/serve.sh "$cfg"
+    # The WHIP target is the local MediaMTX (docs/serve/stream-outputs.md: loopback needs allow_private).
+    FV_STREAM_STUN=none FV_OUTPUTS_ALLOW_PRIVATE=1 $E/serve.sh "$cfg"
     sleep 3
     for _ in $(seq 1 450); do
       c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/ping)

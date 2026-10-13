@@ -147,6 +147,13 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   # Native /fv/v1/streams: fake engine → pacer → OpenH264/Opus → WHIP (in
   # process endpoint); scripts/serve/whip-e2e.sh adds MediaMTX + WHEP.
   run cargo test -p fastvideo-serve --features full --test streams_whip
+  # Stream outputs (docs/serve/stream-outputs.md): the Cloudflare default
+  # against a fake Stream API, VP8, refusals and redaction, RTMPS/SRT inputs,
+  # a director session's output copy; the WHIP codec offers. The real
+  # MediaMTX / Cloudflare runs (tests/outputs_live.rs) are gated:
+  # FV_TEST_OUTPUTS_MEDIAMTX=1 / FV_TEST_OUTPUTS_CLOUDFLARE=1.
+  run cargo test -p fastvideo-serve --features full,fake --test stream_outputs --test output_copies --test outputs_live
+  run cargo test -p fastvideo-webrtc --features str0m,whip,opus --test whip
   # The Runpod worker over reqwest against the queue simulator on TCP.
   run cargo test -p fastvideo-deploy --features runpod
   # Autoscaler: Runpod providers, D1 lease over HTTPS, fv-autoscale.

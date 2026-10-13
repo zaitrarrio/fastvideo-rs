@@ -23,8 +23,11 @@
 //!   the WebRTC host from `[webrtc]` and the engine seam.
 //! - [`encoders`] resolves the `auto` H.264 encoder settings at startup
 //!   (NVENC probe, else OpenH264).
-//! - [`whip`] fixes the WHIP encoder geometry (Cloudflare gets a padded
-//!   1280x720 frame).
+//! - [`whip`] fixes the WHIP encoder geometry (native canvas; the offered
+//!   H.264 level per target).
+//! - [`stream_outputs`]: where live streams publish (Cloudflare Stream by default,
+//!   WHIP, RTMP(S), SRT), for native streams and director / Reactor output
+//!   copies (docs/serve/stream-outputs.md).
 //! - `reactor` (feature `reactor`) builds the Reactor local runtime from
 //!   `[reactor]` (WP-13) on the shared WebRTC host of `rtc` (`[webrtc]`).
 
@@ -61,6 +64,7 @@ pub mod log_ship;
 pub mod metrics;
 pub mod multiworker;
 pub mod native;
+pub mod stream_outputs;
 #[cfg(feature = "reactor")]
 pub mod reactor;
 #[cfg(feature = "webrtc")]

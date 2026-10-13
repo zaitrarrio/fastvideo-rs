@@ -419,6 +419,13 @@ workers, the backstop (`FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`,
   (`RESERVED_KEYS` in `payloads.ts`) are the controller's own: tokens,
   deadline, pod list, pool URLs, boot config, `FV_IMAGE_*`,
   `FV_GITHUB_TOKEN`, log shipping. Setting them is refused with 400.
+- Keys that must be secret (`ENV_VALUE_TYPES` kind `secret` in
+  `enums.ts`): a plain value is refused unless it is a `{{ RUNPOD_SECRET_… }}`
+  reference. Today: `FV_CF_STREAM_API_TOKEN`, the Cloudflare Stream token
+  that makes Cloudflare the default output of live streams
+  (docs/serve/stream-outputs.md "fv-control"; `FV_CF_ACCOUNT_ID` is already
+  every pod's, from the Runpod secret `fv_cf_account_id`). Serverless
+  specs take it as `"FV_CF_STREAM_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_stream_api_token }}"`.
 - A secret variable (`secret: true`) is sealed in D1 and shows as
   `••••••••` in every view and in the audit log. System secrets are masked
   the same way. Runpod secret references (`{{ RUNPOD_SECRET_… }}`) are

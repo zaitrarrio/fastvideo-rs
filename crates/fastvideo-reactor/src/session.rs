@@ -121,6 +121,9 @@ pub struct ReactorConfig {
     pub mode: Option<Mode>,
     /// Avatar-mode settings.
     pub avatar: AvatarSettings,
+    /// Opens output copies (`start_session` `output` / `x_fv_output`,
+    /// docs/serve/stream-outputs.md); `None`: refused.
+    pub outputs: Option<fastvideo_media::output::OutputHook>,
 }
 
 impl Default for ReactorConfig {
@@ -145,6 +148,7 @@ impl Default for ReactorConfig {
             ingest_auth: None,
             mode: None,
             avatar: AvatarSettings::default(),
+            outputs: None,
         }
     }
 }
@@ -215,6 +219,9 @@ pub(crate) struct Live {
     pub connected: Mutex<HashSet<u32>>,
     /// Duplex mode: the input tracks and their publishers.
     pub inputs: Option<Arc<Inputs>>,
+    /// The output copy: its redacted view, then its latest event
+    /// (`output_ready` with playback, `output_error`, `output_ended`).
+    pub output: Mutex<Option<Value>>,
 }
 
 pub(crate) struct St {
@@ -515,9 +522,9 @@ impl Reactor {
     /// The session descriptor (`runner.py:descriptor`).
     pub fn descriptor(&self) -> Value {
         let state = self.state();
-        let (caps, tracks) = match &lock(&self.inner.st).live {
-            Some(l) => (Some(l.caps.clone()), Some(l.tracks.clone())),
-            None => (None, None),
+        let (caps, tracks, output) = match &lock(&self.inner.st).live {
+            Some(l) => (Some(l.caps.clone()), Some(l.tracks.clone()), lock(&l.output).clone()),
+            None => (None, None, None),
         };
         let caps = caps.or_else(|| self.model());
         let tracks = tracks.or_else(|| caps.as_ref().map(|c| self.tracks(c)));
@@ -537,6 +544,10 @@ impl Reactor {
                 a.extend(i);
             }
             d["capabilities"] = json!({"protocol_version": "v0", "tracks": all, "commands": []});
+        }
+        if let Some(o) = output {
+            // Ours: the output copy (docs/serve/stream-outputs.md).
+            d["x_fv_output"] = o;
         }
         d
     }
@@ -659,6 +670,16 @@ impl Reactor {
             }
             r
         };
+        // An output copy (ours): `output` or `x_fv_output`, checked before
+        // the engine session opens.
+        let want_output = match (params.get("output").filter(|v| !v.is_null()), params.get("x_fv_output").filter(|v| !v.is_null())) {
+            (Some(_), Some(_)) => return Err(Refusal::new(400, "give `output` or `x_fv_output`, not both")),
+            (Some(o), None) | (None, Some(o)) => Some(o.clone()),
+            (None, None) => None,
+        };
+        if want_output.is_some() && cfg.outputs.is_none() {
+            return Err(Refusal::new(400, "this server has no stream outputs"));
+        }
         let context: SessionContext = match params.get("context") {
             None | Some(Value::Null) => SessionContext::default(),
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| Refusal::new(400, format!("context: {e}")))?,
@@ -693,6 +714,24 @@ impl Reactor {
                 (Arc::new(d), p, None)
             }
         };
+        let copy = match (&want_output, &cfg.outputs) {
+            (Some(req), Some(hook)) => {
+                let media = fastvideo_media::output::OutputMedia {
+                    fps,
+                    audio_channels: tracks.has_audio().then_some(1),
+                    label: format!("reactor-{}", lock(&self.inner.st).epoch + 1),
+                };
+                match hook.0.open(req, media) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        driver.close().await;
+                        let p = e.param.map(|p| format!("{p}: ")).unwrap_or_default();
+                        return Err(Refusal::new(400, format!("output: {p}{}", e.message)));
+                    }
+                }
+            }
+            _ => None,
+        };
         let mut pace_stats = paced.stats.clone();
         let spares = lock(&self.inner.next_spares).take().unwrap_or_else(SparePool::per_session);
         let media =
@@ -700,6 +739,12 @@ impl Reactor {
         if let Some(c) = causal {
             media.on_first_frame(move || c.mark_first_frame_sent());
         }
+        let mut output_events = None;
+        let output_view = copy.map(|c| {
+            media.set_tap(c.tap);
+            output_events = Some(c.events);
+            json!({"output": c.view})
+        });
         let openapi = self.openapi(&caps, &table, &tracks);
         let codecs = sendable_codecs(cfg.h264);
         let (epoch, gen) = {
@@ -718,7 +763,20 @@ impl Reactor {
                 conns: Mutex::new(HashMap::new()),
                 connected: Mutex::new(HashSet::new()),
                 inputs,
+                output: Mutex::new(output_view),
             });
+            if let Some(mut rx) = output_events.take() {
+                // Output events go to every connection as model messages
+                // and into the descriptor (`x_fv_output`).
+                let l = live.clone();
+                tokio::spawn(async move {
+                    while let Some(ev) = rx.recv().await {
+                        let kind = ev.get("type").and_then(Value::as_str).unwrap_or("output_event").to_owned();
+                        l.out.broadcast(crate::wire::ServerMsg::broadcast(kind, ev.clone()));
+                        *lock(&l.output) = Some(ev);
+                    }
+                });
+            }
             st.live = Some(live);
             self.transition(&mut st, RtState::Waiting, "start_session", json!({}));
             (st.epoch, st.orphan_gen)

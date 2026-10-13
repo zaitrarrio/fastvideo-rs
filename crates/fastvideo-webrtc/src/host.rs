@@ -1468,6 +1468,9 @@ impl HostLoop {
         if video.contains(&VideoCodec::Vp8) {
             cfg.codec_config().enable_vp8(true);
         }
+        if video.contains(&VideoCodec::Vp9) {
+            cfg.codec_config().enable_vp9(true);
+        }
         if let Some((ufrag, pass)) = creds {
             cfg = cfg.set_local_ice_credentials(IceCreds { ufrag, pass });
         }
@@ -1908,6 +1911,11 @@ fn choose_video(w: &str0m::media::Writer, prefs: &[VideoCodec]) -> Option<(Pt, V
             VideoCodec::Vp8 => w
                 .payload_params()
                 .find(|p| p.spec().codec == Codec::Vp8)
+                .map(|p| p.pt()),
+            // Profile 0 (8-bit 4:2:0, what libvpx-vp9 emits for yuv420p).
+            VideoCodec::Vp9 => w
+                .payload_params()
+                .find(|p| p.spec().codec == Codec::Vp9 && p.spec().format.profile_id.unwrap_or(0) == 0)
                 .map(|p| p.pt()),
         };
         if let Some(pt) = pt {

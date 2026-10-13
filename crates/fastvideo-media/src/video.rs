@@ -14,9 +14,12 @@
 //! ffmpeg plumbing is testable on GPU-less CI; nothing selects it by default
 //! and it is not reachable from config.
 //!
-//! The encoder config carries the **publish profile** (decision 2): Cloudflare
-//! WHIP scales H3 streams to 1280×720 at level 3.1; MediaMTX and peer WebRTC
-//! keep the native canvas at level 4.0. See [`H264Config::for_publish`].
+//! The encoder config carries the **publish profile** (decision 2): every
+//! target keeps the native canvas; the level is the smallest that fits,
+//! never below the target's floor (Cloudflare WHIP 3.1, the level its
+//! offer names; MediaMTX and peer WebRTC 4.0). See [`H264Config::for_publish`]
+//! and docs/serve/stream-outputs.md (the 1280×720 Cloudflare cap was
+//! removed: Cloudflare documents none).
 //!
 //! Forced IDRs (PLI/FIR, rate-limited by [`IdrLimiter`]) are native in
 //! OpenH264. Through the ffmpeg pipe there is no per-frame control, so the
@@ -76,24 +79,25 @@ pub fn default_bitrate(width: u32, height: u32) -> u32 {
     if width.min(height) >= 720 { 6_000_000 } else { 2_500_000 }
 }
 
-/// Where a stream is published; selects canvas cap and level (decision 2).
+/// Where a stream is published; selects the level floor (decision 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishTarget {
-    /// WHIP to Cloudflare Stream: at most 1280×720, level 3.1.
+    /// WHIP to Cloudflare Stream: native canvas, level 3.1 or what it needs.
     Cloudflare,
-    /// WHIP to a self-hosted MediaMTX: native canvas, level 4.0.
+    /// WHIP to a self-hosted MediaMTX: native canvas, level 4.0 or more.
     Mediamtx,
-    /// Peer WebRTC (Reactor, fal director): native canvas, level 4.0.
+    /// Peer WebRTC (Reactor, fal director): native canvas, level 4.0 or more.
     Peer,
 }
 
 impl PublishTarget {
-    /// `(canvas cap, level)`; `None` cap means native.
-    pub fn policy(self) -> (Option<(u32, u32)>, H264Level) {
+    /// The lowest level a stream to this target is written at (the level
+    /// the WebRTC offer names).
+    pub fn level_floor(self) -> H264Level {
         match self {
-            PublishTarget::Cloudflare => (Some((1280, 720)), H264Level::L3_1),
-            PublishTarget::Mediamtx | PublishTarget::Peer => (None, H264Level::L4_0),
+            PublishTarget::Cloudflare => H264Level::L3_1,
+            PublishTarget::Mediamtx | PublishTarget::Peer => H264Level::L4_0,
         }
     }
 }
@@ -134,17 +138,17 @@ impl H264Config {
         }
     }
 
-    /// The config for publishing a `w×h` model canvas to `target`:
-    /// Cloudflare → capped at 1280×720 (orientation kept), level 3.1;
-    /// MediaMTX / peer → native, level 4.0.
+    /// The config for publishing a `w×h` model canvas to `target`: the
+    /// native canvas at the smallest level that fits, at least the target's
+    /// [`PublishTarget::level_floor`] (H3 1344×768@24 to Cloudflare: 3.2;
+    /// to a peer: 4.0).
     pub fn for_publish(target: PublishTarget, width: u32, height: u32, fps: u32) -> Self {
-        let (cap, level) = target.policy();
-        let (w, h) = cap.map(|c| scale::capped_canvas(width, height, c)).unwrap_or((width, height));
         let mut c = Self::new(width, height, fps);
-        c.width = w;
-        c.height = h;
-        c.bitrate_bps = default_bitrate(w, h);
-        c.level = Some(level);
+        let floor = target.level_floor();
+        c.level = Some(match H264Level::min_for(width, height, fps) {
+            Some(min) if min > floor => min,
+            _ => floor,
+        });
         c
     }
 
@@ -811,18 +815,20 @@ mod tests {
 
     #[test]
     fn publish_profiles() {
-        // Cloudflare WHIP: H3 1344x768 -> 1280x720 at level 3.1.
+        // Cloudflare WHIP: H3 1344x768 stays native, at the level it needs (3.2).
         let cf = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
-        assert_eq!((cf.input_width, cf.input_height, cf.width, cf.height), (1344, 768, 1280, 720));
-        assert_eq!(cf.resolved_level().unwrap(), H264Level::L3_1);
-        assert_eq!(cf.profile_level_id().unwrap(), "42e01f");
-        assert!(cf.scales());
-        // Portrait H3 keeps its orientation.
+        assert_eq!((cf.input_width, cf.input_height, cf.width, cf.height), (1344, 768, 1344, 768));
+        assert_eq!(cf.resolved_level().unwrap(), H264Level::L3_2);
+        assert!(!cf.scales());
+        // 1080p30 (H3 1080p tier): level 4.0; portrait keeps its orientation.
+        let hd = H264Config::for_publish(PublishTarget::Cloudflare, 1920, 1088, 30);
+        assert_eq!((hd.width, hd.height, hd.resolved_level().unwrap()), (1920, 1088, H264Level::L4_0));
         let cfp = H264Config::for_publish(PublishTarget::Cloudflare, 768, 1344, 24);
-        assert_eq!((cfp.width, cfp.height), (720, 1280));
-        // Already within the cap: untouched.
+        assert_eq!((cfp.width, cfp.height), (768, 1344));
+        // Small canvases stay at the floor (3.1, the offered `42e01f`).
         let wan = H264Config::for_publish(PublishTarget::Cloudflare, 832, 480, 16);
         assert_eq!((wan.width, wan.height), (832, 480));
+        assert_eq!(wan.profile_level_id().unwrap(), "42e01f");
         assert!(!wan.scales());
         // MediaMTX / peer: native at level 4.0.
         for t in [PublishTarget::Mediamtx, PublishTarget::Peer] {
@@ -835,12 +841,17 @@ mod tests {
 
     #[test]
     fn nvenc_args() {
-        let cf = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
+        // A scaled config (the scaler path still exists for callers that set one).
+        let mut cf = H264Config::new(1344, 768, 24);
+        (cf.width, cf.height, cf.level) = (1280, 720, Some(H264Level::L3_1));
         let a = pipe_encoder_args(&cf, FfmpegH264::Nvenc).unwrap().join(" ");
         assert!(a.contains("-s 1344x768 -r 24 -i pipe:0"), "{a}");
         assert!(a.contains("-vf scale=1260:720:flags=bicubic,pad=1280:720:10:0:black,setsar=1"), "{a}");
         assert!(a.contains("-c:v h264_nvenc"));
         assert!(a.contains("-profile:v baseline -level:v 3.1 -rc cbr -b:v 6000000"));
+        let native = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
+        let a = pipe_encoder_args(&native, FfmpegH264::Nvenc).unwrap().join(" ");
+        assert!(!a.contains("-vf") && a.contains("-level:v 3.2"), "{a}");
         assert!(a.contains("-g 48 -bf 0 -forced-idr 1 -no-scenecut 1"));
         assert!(a.contains("-zerolatency 1") && a.contains("-aud 1"));
         assert!(a.ends_with("-f h264 pipe:1"));

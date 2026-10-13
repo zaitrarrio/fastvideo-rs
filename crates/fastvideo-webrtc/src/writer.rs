@@ -36,11 +36,38 @@ pub enum TrackKind {
 ///
 /// H.264 is the default everywhere (design §5.9). VP8 exists for clients
 /// whose WebRTC stack offers no H.264 at all, such as the Reactor Python SDK
-/// (its libwebrtc offers VP8/VP9/AV1 only; WP-13).
+/// (its libwebrtc offers VP8/VP9/AV1 only; WP-13). VP9 (profile 0, str0m's
+/// non-flexible packetizer) is offered only by WHIP publishers that ask for
+/// it (`codec: "vp9"`, docs/serve/stream-outputs.md); the host never answers
+/// with it and ingest never accepts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VideoCodec {
     H264,
     Vp8,
+    Vp9,
+}
+
+impl VideoCodec {
+    /// The SDP encoding name (`H264`, `VP8`, `VP9`).
+    pub fn sdp_name(self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H264",
+            VideoCodec::Vp8 => "VP8",
+            VideoCodec::Vp9 => "VP9",
+        }
+    }
+}
+
+impl std::str::FromStr for VideoCodec {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "h264" | "h.264" | "avc" => Ok(VideoCodec::H264),
+            "vp8" => Ok(VideoCodec::Vp8),
+            "vp9" => Ok(VideoCodec::Vp9),
+            other => Err(format!("unknown video codec {other:?} (h264 | vp8 | vp9)")),
+        }
+    }
 }
 
 /// One encoded video frame.

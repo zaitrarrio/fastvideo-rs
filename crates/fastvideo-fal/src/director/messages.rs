@@ -232,6 +232,15 @@ pub struct Configure {
     /// appear in.
     #[serde(default)]
     pub entities: Option<Vec<WorldEntity>>,
+    /// An output copy of the session (ours; docs/serve/stream-outputs.md):
+    /// `{kind, url?, token?, stream_key?, stream_id?, passphrase?, codec?}`.
+    /// fal's schema forbids extra fields, so the session takes it only with
+    /// `[director] allow_output`; `x_fv_output` is always accepted.
+    #[serde(default)]
+    pub output: Option<Value>,
+    /// The same, under a name no fal client can collide with.
+    #[serde(default)]
+    pub x_fv_output: Option<Value>,
 }
 
 /// One `configure.entities` entry (the upsampler's `Entity`).

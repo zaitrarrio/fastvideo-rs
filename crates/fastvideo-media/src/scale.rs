@@ -1,8 +1,9 @@
 //! Canvas scaling before encode (design §0 decision 2).
 //!
-//! Cloudflare WHIP caps H3 streams at 1280×720 (level 3.1); MediaMTX and
-//! peer WebRTC keep the native canvas. [`ScaleMode::Fit`] keeps the aspect
-//! ratio and pads with black (1344×768 → 1260×720 centred in 1280×720);
+//! No publish target scales any more (every sink takes the native canvas,
+//! docs/serve/stream-outputs.md); this stays for configs that set an output
+//! size other than the input's. [`ScaleMode::Fit`] keeps the aspect ratio and
+//! pads with black (1344×768 into 1280×720 → 1260×720 centred);
 //! [`ScaleMode::Stretch`] fills the target exactly.
 //!
 //! The ffmpeg-based encoders do this with an ffmpeg filter

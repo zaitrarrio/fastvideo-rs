@@ -1,25 +1,33 @@
 //! Native `/fv/v1/streams` (design §5.1-5.2, §5.8, §9; **native** shapes,
-//! WP-15): run an engine streaming session and publish it with WHIP.
+//! WP-15): run an engine streaming session and publish it to an output
+//! (docs/serve/stream-outputs.md): Cloudflare Stream by default (a live
+//! input per stream, WHIP), or `output: {kind: whip | rtmps | srt |
+//! cloudflare-rtmps | cloudflare-srt, …}`. The legacy `whip_url` /
+//! `whip_token` / `whip_user` / `whip_target` fields are an `output` of kind
+//! `whip`.
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `POST /fv/v1/streams` | Open a session (`causal` for SF-Wan, `clip` for H3/LTX/Wan clip models), start the pacer and publish via WHIP → 201 stream object. A causal stream always has a length: `max_seconds`, else `[streams] causal_default_max_s` (120), at most `causal_hard_max_s` (300); it then closes with `end_reason: "session_limit"` (a `reset` restarts the clock, up to the ceiling in all). Busy → 429 + `Retry-After`; model not resident → 503 + `Retry-After` |
+//! | `GET /fv/v1/outputs` | What this server publishes to: the default (`cloudflare` or none), kinds, codecs |
+//! | `POST /fv/v1/streams` | Open a session (`causal` for SF-Wan, `clip` for H3/LTX/Wan clip models), create the output (a Cloudflare live input), start the pacer and publish → 201 stream object with `output` (redacted) and `playback` (`whep_url`, `hls_url`, `dash_url`, `iframe_url`). A causal stream always has a length: `max_seconds`, else `[streams] causal_default_max_s` (120), at most `causal_hard_max_s` (300); it then closes with `end_reason: "session_limit"` (a `reset` restarts the clock, up to the ceiling in all). Busy → 429 + `Retry-After`; model not resident → 503 + `Retry-After` |
 //! | `GET /fv/v1/streams` | Live and recently ended streams |
-//! | `GET /fv/v1/streams/{id}` | State, WHIP resource, pacer stats, TTFF phases, recent session events |
+//! | `GET /fv/v1/streams/{id}` | State, output and playback, WHIP resource (redacted), pacer stats, TTFF phases, recent session events |
 //! | `POST /fv/v1/streams/{id}/commands` | One session command, `{"type","data"}`: the clip set ([`ClipCommand`]) or the causal set ([`CausalCommand`]) → `{"reply": …}` |
-//! | `DELETE /fv/v1/streams/{id}` | Stop: WHIP `DELETE`, then the session is released |
+//! | `DELETE /fv/v1/streams/{id}` | Stop: WHIP `DELETE` / ffmpeg EOF, the Cloudflare live input deleted (`on_stop`), then the session is released |
 //!
 //! Pipeline per stream (§5.1): session → pacer ([`spawn_causal_pacer`] /
-//! [`spawn_clip_pacer`]) → **wait for the first frame** (WHIP is a
-//! transport we initiate: never offer an empty track, §5.2) → WHIP offer
-//! (H.264 first, video-only sessions offer no audio m-line, §5.3) → one
-//! encoder per session (H.264 from `[webrtc] encoder`, `auto` = NVENC when
-//! the startup probe encodes, else OpenH264, else the CPU test x264; Opus
-//! 48 kHz stereo) → the published peer. PLI/FIR and tick drops
-//! force an IDR (at most one per second).
+//! [`spawn_clip_pacer`]) → **wait for the first frame** (never offer an
+//! empty track, §5.2) → the output's publisher (`crate::stream_outputs::publish`):
+//! WHIP (one codec offered: H.264 by default, VP8 / VP9 on request;
+//! video-only sessions offer no audio m-line, §5.3; Opus 48 kHz stereo) or
+//! the ffmpeg RTMP(S) / SRT sink (H.264 + AAC), always at the native canvas
+//! and fps. PLI/FIR and tick drops force an IDR (at most one per second).
 //!
 //! The publisher needs the `webrtc` and `http-client` features (and
 //! `encoders` for Opus/OpenH264); without them `POST` answers 501.
+//! Credentials in the request are never echoed: the stream object carries
+//! the output's redacted view (`url` without credentials, `credentials:
+//! "set"`).
 
 // The registry is only driven by the publisher.
 #![cfg_attr(not(all(feature = "webrtc", feature = "http-client")), allow(dead_code))]
@@ -48,23 +56,12 @@ use tokio::sync::{watch, Notify};
 
 use crate::gate::ServiceGate;
 
-/// Stream settings (from `[webrtc]` and the environment).
+/// Stream settings (from `[streams]`, `[outputs]`, `[webrtc]` and the environment).
 #[derive(Clone, Debug)]
 pub struct StreamsConfig {
-    /// Default WHIP target kind when a stream does not say.
-    pub whip_target: Option<String>,
-    /// Default WHIP bearer token (`FV_WHIP_TOKEN`).
-    pub whip_token: Option<String>,
-    /// `auto` | `nvenc` | `openh264` | `x264-test` (`[webrtc] encoder`,
-    /// `FV_STREAM_ENCODER`; `auto` is normally resolved at startup by
-    /// [`crate::encoders::resolve`]).
-    pub encoder: String,
-    /// STUN servers for the publisher's srflx candidate (empty: host only).
-    pub stun: Vec<String>,
-    /// UDP bind for the publisher's str0m host.
-    pub udp_bind: std::net::SocketAddr,
+    /// Where streams publish (`[outputs]`, the WHIP bits of `[webrtc]`).
+    pub outputs: Arc<crate::stream_outputs::Outputs>,
     pub first_frame_timeout: Duration,
-    pub connect_timeout: Duration,
     /// Ended streams kept for `GET`.
     pub keep_ended: usize,
     /// Live causal session length (`[streams]`, design §5.2).
@@ -74,13 +71,8 @@ pub struct StreamsConfig {
 impl Default for StreamsConfig {
     fn default() -> Self {
         Self {
-            whip_target: None,
-            whip_token: None,
-            encoder: "auto".into(),
-            stun: vec!["stun:stun.l.google.com:19302".into()],
-            udp_bind: "0.0.0.0:0".parse().expect("static addr"),
+            outputs: crate::stream_outputs::Outputs::new(crate::stream_outputs::OutputsConfig::default()),
             first_frame_timeout: Duration::from_secs(300),
-            connect_timeout: Duration::from_secs(30),
             keep_ended: 32,
             causal: CausalLimits::default(),
         }
@@ -88,24 +80,8 @@ impl Default for StreamsConfig {
 }
 
 impl StreamsConfig {
-    /// From the serve config plus `FV_STREAM_STUN` (comma-separated;
-    /// `none` disables the probe).
     pub fn from_config(c: &crate::config::Config) -> Self {
-        let mut s = Self {
-            whip_target: c.webrtc.whip_target.clone(),
-            whip_token: (!c.webrtc.whip_token.is_empty()).then(|| c.webrtc.whip_token.expose().to_owned()),
-            encoder: c.webrtc.encoder.clone(),
-            causal: c.streams.causal_limits(),
-            ..Self::default()
-        };
-        if let Ok(v) = std::env::var("FV_STREAM_STUN") {
-            s.stun = if v.trim() == "none" {
-                Vec::new()
-            } else {
-                v.split(',').map(|x| x.trim().to_owned()).filter(|x| !x.is_empty()).collect()
-            };
-        }
-        s
+        Self { outputs: crate::stream_outputs::Outputs::from_config(c), causal: c.streams.causal_limits(), ..Self::default() }
     }
 }
 
@@ -114,8 +90,13 @@ impl StreamsConfig {
 #[serde(deny_unknown_fields)]
 pub struct StreamBody {
     pub model: String,
-    /// The WHIP endpoint to publish to.
-    pub whip_url: String,
+    /// Where to publish (docs/serve/stream-outputs.md); absent: the
+    /// server's default (Cloudflare Stream), or the legacy `whip_url`.
+    #[serde(default)]
+    pub output: Option<Value>,
+    /// Legacy: a WHIP endpoint (an `output` of kind `whip`).
+    #[serde(default)]
+    pub whip_url: Option<String>,
     /// Bearer token (or the Basic password with `whip_user`).
     #[serde(default)]
     pub whip_token: Option<String>,
@@ -172,26 +153,15 @@ pub enum StreamState {
     Closed,
 }
 
-/// The status a stream reports.
+/// The status a stream reports: its own state plus the output publisher's
+/// counters (flattened: `whip_resource`, `video_codec`, `frames_sent`, …).
 #[derive(Clone, Debug, Serialize)]
 pub struct StreamStatus {
     pub state: StreamState,
     pub end_reason: Option<String>,
     pub error: Option<String>,
-    pub whip_resource: Option<String>,
-    pub video_codec: Option<String>,
-    pub encoder: Option<String>,
-    pub frames_sent: u64,
-    pub keyframes_sent: u64,
-    pub audio_packets_sent: u64,
-    /// IDRs forced on request (a forced NVENC IDR restarts ffmpeg).
-    pub forced_idrs: u64,
-    /// PLI/FIR received from the WHIP endpoint.
-    pub keyframe_requests: u64,
-    /// Requests answered by the periodic IDR or a keyframe that had just
-    /// gone out, without forcing one.
-    pub keyframe_requests_covered: u64,
-    pub video_send_errors: u64,
+    #[serde(flatten)]
+    pub output: crate::stream_outputs::OutputStatus,
     pub started_ms: u64,
     pub first_frame_ms: Option<u64>,
     pub streaming_ms: Option<u64>,
@@ -213,12 +183,20 @@ struct Entry {
     pace: Mutex<Option<watch::Receiver<PaceStats>>>,
     events: Mutex<VecDeque<Value>>,
     control: Mutex<Option<Control>>,
+    /// The output (redacted view, playback, publisher counters).
+    output: Mutex<Option<Arc<crate::stream_outputs::OutputState>>>,
     stop: Notify,
 }
 
 impl Entry {
     fn view(&self) -> Value {
-        let st = self.status.lock().map(|s| s.clone()).ok();
+        let out = self.output.lock().ok().and_then(|o| o.clone());
+        let st = self.status.lock().map(|s| s.clone()).ok().map(|mut s| {
+            if let Some(o) = &out {
+                s.output = o.status();
+            }
+            s
+        });
         let pace = self
             .pace
             .lock()
@@ -237,6 +215,8 @@ impl Entry {
             "max_seconds": self.max_seconds,
             "created_at": self.created_ms / 1000,
             "status": st,
+            "output": out.as_ref().map(|o| o.view.clone()),
+            "playback": out.as_ref().map(|o| o.playback()),
             "pacer": pace.map(pace_json),
             "ttff": ttff.map(|t: Ttff| serde_json::to_value(t).unwrap_or(Value::Null)),
             "session": session_state,
@@ -407,10 +387,11 @@ async fn create(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMa
     if !PUBLISHER {
         return (
             StatusCode::NOT_IMPLEMENTED,
-            Json(json!({"error": {"kind": "not_implemented", "message": "native WHIP streams need fv-serve built with the `webrtc` and `http-client` features", "param": null}})),
+            Json(json!({"error": {"kind": "not_implemented", "message": "native streams need fv-serve built with the `webrtc` and `http-client` features", "param": null}})),
         )
             .into_response();
     }
+    // serde's errors name fields and types, never a value (no credential echo).
     let b: StreamBody = match serde_json::from_value(body) {
         Ok(b) => b,
         Err(e) => return err_reply(&ApiError::invalid_param("body", e.to_string())),
@@ -500,8 +481,21 @@ async fn command(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderM
 /// The `/fv/v1/streams` routes.
 pub fn routes(gate: Arc<ServiceGate>, cfg: StreamsConfig) -> Router<ServeCtx> {
     let st = Arc::new(Streams::new(gate.engine().clone(), cfg));
+    let outs = st.cfg.outputs.clone();
     let (s1, s2, s3, s4, s5) = (st.clone(), st.clone(), st.clone(), st.clone(), st);
     Router::new()
+        .route(
+            "/fv/v1/outputs",
+            get(move |State(ctx): State<ServeCtx>, headers: HeaderMap| {
+                let outs = outs.clone();
+                async move {
+                    if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
+                        return err_reply(&e);
+                    }
+                    Json(outs.info()).into_response()
+                }
+            }),
+        )
         .route(
             "/fv/v1/streams",
             get(move |State(ctx): State<ServeCtx>, headers: HeaderMap| {
@@ -550,16 +544,7 @@ fn new_entry(model: &ModelId, mode: &'static str, max_seconds: Option<u32>) -> A
             state: StreamState::Starting,
             end_reason: None,
             error: None,
-            whip_resource: None,
-            video_codec: None,
-            encoder: None,
-            frames_sent: 0,
-            keyframes_sent: 0,
-            audio_packets_sent: 0,
-            forced_idrs: 0,
-            keyframe_requests: 0,
-            keyframe_requests_covered: 0,
-            video_send_errors: 0,
+            output: crate::stream_outputs::OutputStatus::default(),
             started_ms: now_ms(),
             first_frame_ms: None,
             streaming_ms: None,
@@ -567,6 +552,7 @@ fn new_entry(model: &ModelId, mode: &'static str, max_seconds: Option<u32>) -> A
         pace: Mutex::new(None),
         events: Mutex::new(VecDeque::new()),
         control: Mutex::new(None),
+        output: Mutex::new(None),
         stop: Notify::new(),
     })
 }
@@ -577,80 +563,69 @@ fn uuid_simple() -> String {
 
 #[cfg(all(feature = "webrtc", feature = "http-client"))]
 mod publish {
-    //! The WHIP publisher loop.
+    //! A native stream's session and its output (`crate::stream_outputs::publish`).
 
-    use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use fastvideo_engine_service::stream::{
-        spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipCommand, ClipPacerConfig,
-        ClipPlayerConfig, PacedStream,
+        spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipCommand, ClipPacerConfig, ClipPlayerConfig,
+        PacedStream,
     };
-    use fastvideo_media::pacer::VideoOut;
-    use fastvideo_media::video::{create_encoder, EncoderBackend, VideoEncoder};
     use fastvideo_protocol::{ApiError, ErrorKind, StreamCaps};
-    use fastvideo_webrtc::host::{AudioLayout, HostConfig, PeerEvent, RtcHost};
-    use fastvideo_webrtc::ice::IceServer;
-    use fastvideo_webrtc::whip::{WhipAuth, WhipConfig, WhipPublishOptions, WhipPublisher, WhipTarget};
-    use fastvideo_webrtc::writer::VideoFrame;
     use serde_json::json;
-    use url::Url;
 
     use super::{new_entry, now_ms, session_spec, Control, Entry, StreamBody, StreamState, Streams};
+    use crate::stream_outputs::publish::{publish, Ctx, Provisioned, Source};
+    use crate::stream_outputs::{LegacyWhip, OutputState, Outputs};
 
     fn internal(e: impl std::fmt::Display) -> ApiError {
         ApiError::internal(e.to_string())
     }
 
-    fn pick_encoder(choice: &str) -> Result<EncoderBackend, ApiError> {
-        match choice {
-            "nvenc" => Ok(EncoderBackend::Nvenc),
-            "openh264" => Ok(EncoderBackend::OpenH264),
-            "x264-test" => Ok(EncoderBackend::CpuTestX264),
-            _ => {
-                // `auto` left unresolved (a router built without
-                // `App::build`): the same per-process probe.
-                let (_, sel) = crate::encoders::auto_selection();
-                pick_encoder(&sel.streams)
-            }
+    /// Closes a session that will not stream (its output could not start).
+    async fn close_session(entry: &Arc<Entry>, paced: &PacedStream) {
+        let ctl = entry.control.lock().ok().and_then(|mut c| c.take());
+        match ctl {
+            Some(Control::Clip(p)) => p.close().await,
+            Some(Control::Causal(c)) => c.close(),
+            None => {}
         }
+        paced.task.abort();
     }
 
     pub(super) async fn start(st: &Arc<Streams>, b: StreamBody) -> Result<Arc<Entry>, ApiError> {
-        let url = Url::parse(&b.whip_url).map_err(|e| ApiError::invalid_param("whip_url", e.to_string()))?;
-        let target = match b.whip_target.clone().or_else(|| st.cfg.whip_target.clone()) {
-            Some(t) => t.parse::<WhipTarget>().map_err(|e| ApiError::invalid_param("whip_target", e.to_string()))?,
-            None => WhipTarget::guess(&url),
-        };
-        let token = b.whip_token.clone().or_else(|| st.cfg.whip_token.clone()).unwrap_or_default();
-        let auth = match &b.whip_user {
-            Some(u) => WhipAuth::from_user_token(u, &token),
-            None if token.is_empty() => WhipAuth::None,
-            None => WhipAuth::Bearer(token),
-        };
+        let outs = st.cfg.outputs.clone();
+        // The output first: a bad destination is refused before a session opens.
+        let legacy = b.whip_url.as_ref().filter(|u| !u.trim().is_empty()).map(|u| LegacyWhip {
+            url: u.clone(),
+            token: b.whip_token.clone(),
+            user: b.whip_user.clone(),
+            target: b.whip_target.clone(),
+        });
+        let spec = outs.resolve(b.output.as_ref(), legacy)?;
         let caps = st
             .engine
             .caps()
             .get(&fastvideo_protocol::ModelId::new(&b.model))
             .cloned()
             .ok_or_else(|| ApiError::invalid_param("model", format!("model `{}` is not served here", b.model)))?;
-        let spec = session_spec(&caps, &b, &st.cfg.causal)?;
+        let spec_s = session_spec(&caps, &b, &st.cfg.causal)?;
         let causal = matches!(caps.stream, Some(StreamCaps::Causal { .. }));
-        let entry = new_entry(&caps.id, if causal { "causal" } else { "clip" }, spec.max_seconds);
+        let entry = new_entry(&caps.id, if causal { "causal" } else { "clip" }, spec_s.max_seconds);
         let paced: PacedStream = if causal {
             let prompt = b
                 .prompt
                 .clone()
                 .filter(|p| !p.trim().is_empty())
                 .ok_or_else(|| ApiError::invalid_param("prompt", "a causal stream needs a prompt"))?;
-            let session = st.engine.open_causal_session(spec.clone()).await?;
+            let session = st.engine.open_causal_session(spec_s.clone()).await?;
             let control = session.control();
             control.set_prompt(prompt.trim());
             *entry.control.lock().map_err(internal)? = Some(Control::Causal(control));
-            spawn_causal_pacer(session, CausalPacerConfig::with_limits(&spec, &st.cfg.causal))?
+            spawn_causal_pacer(session, CausalPacerConfig::with_limits(&spec_s, &st.cfg.causal))?
         } else {
-            let session = st.engine.open_clip_session(spec.clone()).await?;
+            let session = st.engine.open_clip_session(spec_s.clone()).await?;
             let (player, out) = session.into_player(ClipPlayerConfig {
                 autoplay: b.autoplay.unwrap_or(true),
                 ..ClipPlayerConfig::default()
@@ -669,30 +644,48 @@ mod publish {
             }
             for (prompt, seconds, seed) in clips {
                 player
-                    .command(ClipCommand::Enqueue {
-                        prompt,
-                        metadata: String::new(),
-                        seed,
-                        seconds,
-                        position: None,
-                    })
+                    .command(ClipCommand::Enqueue { prompt, metadata: String::new(), seed, seconds, position: None })
                     .await?;
             }
             *entry.control.lock().map_err(internal)? = Some(Control::Clip(player));
-            spawn_clip_pacer(out.media, ClipPacerConfig::for_spec(&spec))?
+            spawn_clip_pacer(out.media, ClipPacerConfig::for_spec(&spec_s))?
         };
+        // The destination (a Cloudflare live input) before the 201, so the
+        // stream object carries its playback URLs.
+        let state = OutputState::new(spec.view());
+        let prov = match outs.provision(&spec, &entry.id).await {
+            Ok(p) => p,
+            Err(e) => {
+                close_session(&entry, &paced).await;
+                return Err(e);
+            }
+        };
+        if let Ok(mut p) = state.playback.lock() {
+            *p = prov.playback.clone();
+        }
+        *entry.output.lock().map_err(internal)? = Some(state.clone());
         *entry.pace.lock().map_err(internal)? = Some(paced.stats.clone());
+        tracing::info!(stream = %entry.id, output = %state.view, "stream starting");
         st.insert(entry.clone());
         let cfg = st.cfg.clone();
         let e2 = entry.clone();
+        let audio = spec_s.tracks.has_audio().then_some(2u8);
+        let fps = spec_s.fps;
         tokio::spawn(async move {
-            let r = run(&e2, paced, spec.tracks.has_audio(), (spec.canvas, spec.fps), url, auth, target, &cfg).await;
+            let r = run(&e2, paced, &outs, &prov, &state, audio, fps, &cfg).await;
+            outs.release(&prov).await;
             let reason = match &r {
                 Ok(reason) => Some(reason.clone()),
                 Err(_) => Some("error".to_owned()),
             };
             if let Err(e) = &r {
-                tracing::warn!(stream = %e2.id, error = %e, "stream ended with an error");
+                tracing::warn!(stream = %e2.id, error = %e.message, "stream ended with an error");
+                state.set(|s| {
+                    s.output_state = "failed".into();
+                    s.output_error = Some(e.message.clone());
+                });
+            } else {
+                state.set(|s| s.output_state = "ended".into());
             }
             let ctl = e2.control.lock().ok().and_then(|mut c| c.take());
             match ctl {
@@ -715,11 +708,11 @@ mod publish {
     async fn run(
         entry: &Arc<Entry>,
         mut paced: PacedStream,
-        audio: bool,
-        (canvas, fps): ((u32, u32), u32),
-        url: Url,
-        auth: WhipAuth,
-        target: WhipTarget,
+        outs: &Outputs,
+        prov: &Provisioned,
+        state: &OutputState,
+        audio: Option<u8>,
+        fps: u32,
         cfg: &super::StreamsConfig,
     ) -> Result<String, ApiError> {
         let t0 = Instant::now();
@@ -737,197 +730,48 @@ mod publish {
             s.state = StreamState::Publishing;
             s.first_frame_ms = Some(t0.elapsed().as_millis() as u64);
         });
-        // 2. WHIP offer / answer.
-        let stun: Vec<IceServer> = cfg.stun.iter().map(IceServer::stun).collect();
-        let host = RtcHost::bind(HostConfig {
-            udp_bind: Some(cfg.udp_bind),
-            ice_servers: stun.clone(),
-            ..HostConfig::default()
-        })
-        .await
-        .map_err(internal)?;
-        let mut publisher = WhipPublisher::publish(
-            &host,
-            WhipConfig::new(url, auth).with_target(target),
-            WhipPublishOptions {
-                audio: audio.then_some(AudioLayout::Stereo),
-                stun,
-                stun_timeout: Duration::from_secs(2),
-            },
-        )
-        .await
-        .map_err(|e| ApiError::new(ErrorKind::Internal, format!("whip: {e}")))?;
-        let resource = publisher.resource_url().map(|u| u.to_string());
-        let codec = publisher.negotiated_video_codec().map(str::to_owned);
-        entry.set(|s| {
-            s.whip_resource = resource;
-            s.video_codec = codec;
-        });
-        let r = stream_loop(entry, &mut paced, &mut publisher, audio, canvas, fps, target, cfg).await;
-        let _ = publisher.teardown().await;
-        host.shutdown().await;
-        paced.task.abort();
-        r
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn stream_loop(
-        entry: &Arc<Entry>,
-        paced: &mut PacedStream,
-        publisher: &mut WhipPublisher,
-        audio: bool,
-        canvas: (u32, u32),
-        fps: u32,
-        target: WhipTarget,
-        cfg: &super::StreamsConfig,
-    ) -> Result<String, ApiError> {
-        let handle = publisher.peer().handle().clone();
-        // 3. ICE + DTLS.
-        let deadline = tokio::time::Instant::now() + cfg.connect_timeout;
-        loop {
-            tokio::select! {
-                ev = publisher.peer().next_event() => match ev {
-                    Some(PeerEvent::Connected) => break,
-                    Some(PeerEvent::Closed(r)) => return Err(ApiError::new(ErrorKind::Internal, format!("whip peer closed: {r:?}"))),
-                    Some(_) => {}
-                    None => return Err(ApiError::new(ErrorKind::Internal, "whip peer ended")),
-                },
-                _ = tokio::time::sleep_until(deadline) => return Err(ApiError::new(ErrorKind::Timeout, "whip ICE/DTLS did not connect")),
-                _ = entry.stop.notified() => return Ok("stopped".into()),
-            }
-        }
-        // 4. One encoder per session.
-        let backend = {
-            let c = cfg.encoder.clone();
-            tokio::task::spawn_blocking(move || pick_encoder(&c)).await.map_err(internal)??
-        };
-        let hcfg = crate::whip::whip_h264(target, canvas.0, canvas.1, fps);
-        let gop_frames = hcfg.gop_frames();
-        let mut enc: Option<Box<dyn VideoEncoder>> = Some(
-            tokio::task::spawn_blocking(move || create_encoder(backend, hcfg))
-                .await
-                .map_err(internal)?
-                .map_err(|e| ApiError::internal(format!("encoder: {e}")))?,
-        );
-        entry.set(|s| {
-            s.encoder = Some(format!("{backend:?}"));
-            s.state = StreamState::Streaming;
-            s.streaming_ms = Some(now_ms().saturating_sub(s.started_ms));
-        });
-        #[cfg(feature = "encoders")]
-        let mut opus = if audio {
-            Some(
-                fastvideo_media::opus::OpusEncoder::new(fastvideo_media::opus::OpusConfig::whip(), 0)
-                    .map_err(|e| ApiError::internal(format!("opus: {e}")))?,
-            )
-        } else {
-            None
-        };
-        #[cfg(not(feature = "encoders"))]
-        let _ = audio;
-        // A new encoder starts on an IDR, so nothing is requested up front.
-        // PLI/FIR (MediaMTX sends one every 2 s), a gap in the ticks or a
-        // send error ask for a keyframe; the policy answers with the
-        // periodic IDR when it is due within 1 s and forces one otherwise.
-        let t0 = Instant::now();
-        let mut idr = fastvideo_media::video::KeyframePolicy::new(1.0, gop_frames);
-        let mut rtps: VecDeque<u32> = VecDeque::new();
-        let mut first_sent = false;
-        let reason = loop {
-            tokio::select! {
-                _ = entry.stop.notified() => break "stopped".to_owned(),
-                ev = publisher.peer().next_event() => match ev {
-                    Some(PeerEvent::KeyframeRequest { .. }) => {
-                        idr.request(t0.elapsed().as_secs_f64());
-                        entry.set(|s| s.keyframe_requests += 1);
-                    }
-                    Some(PeerEvent::Closed(r)) => return Err(ApiError::new(ErrorKind::Internal, format!("whip peer closed: {r:?}"))),
-                    Some(_) => {}
-                    None => return Err(ApiError::new(ErrorKind::Internal, "whip peer ended")),
-                },
-                t = paced.ticks.recv() => {
-                    let Some(t) = t else {
-                        let end = paced.stats.borrow().ended.clone();
-                        break match end {
-                            Some(e) => serde_json::to_value(e).ok().and_then(|v| v.as_str().map(str::to_owned).or_else(|| Some(v.to_string()))).unwrap_or_else(|| "ended".into()),
-                            None => "ended".into(),
-                        };
-                    };
-                    if paced.ticks.take_dropped() {
-                        idr.request(t0.elapsed().as_secs_f64());
-                    }
-                    #[cfg(feature = "encoders")]
-                    if let (Some(op), Some(a)) = (opus.as_mut(), t.audio.as_ref()) {
-                        match op.push(a) {
-                            Ok(pkts) => {
-                                for p in pkts {
-                                    if handle.send_audio(fastvideo_webrtc::writer::AudioPacket::new(p.data, u64::from(p.rtp_ts))).is_ok() {
-                                        entry.set(|s| s.audio_packets_sent += 1);
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!(error = %e, "opus encode failed"),
-                        }
-                    }
-                    let frame = match &t.video {
-                        VideoOut::Fresh(f) | VideoOut::Repeat(f) => f.clone(),
-                        VideoOut::Nothing => continue,
-                    };
-                    let force = idr.next_frame(t0.elapsed().as_secs_f64());
-                    rtps.push_back(t.video_rtp);
-                    let mut e = enc.take().expect("encoder present");
-                    let (e, out) = tokio::task::spawn_blocking(move || {
-                        if force {
-                            e.force_idr();
-                        }
-                        let r = e.encode(&frame);
-                        (e, r)
-                    })
-                    .await
-                    .map_err(internal)?;
-                    enc = Some(e);
-                    if force {
-                        entry.set(|s| s.forced_idrs += 1);
-                    }
-                    let covered = idr.covered();
-                    entry.set(|s| s.keyframe_requests_covered = covered);
-                    let aus = out.map_err(|e| ApiError::internal(format!("encode: {e}")))?;
-                    for au in aus {
-                        let rtp = rtps.pop_front().unwrap_or(t.video_rtp);
-                        let key = au.keyframe;
-                        if key {
-                            idr.keyframe_out(t0.elapsed().as_secs_f64());
-                        }
-                        match handle.send_video(VideoFrame::new(au.data, u64::from(rtp))) {
-                            Ok(()) => {
-                                entry.set(|s| {
-                                    s.frames_sent += 1;
-                                    if key {
-                                        s.keyframes_sent += 1;
-                                    }
-                                });
-                                if !first_sent {
-                                    first_sent = true;
-                                    if let Ok(g) = entry.control.lock() {
-                                        if let Some(Control::Causal(c)) = g.as_ref() {
-                                            c.mark_first_frame_sent();
-                                        }
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                entry.set(|s| s.video_send_errors += 1);
-                                idr.request(t0.elapsed().as_secs_f64());
-                            }
-                        }
+        // 2. Publish until the session ends or a stop.
+        let e_first = entry.clone();
+        let e_phase = entry.clone();
+        let mut ctx = Ctx {
+            outs,
+            state,
+            stop: &entry.stop,
+            fps,
+            audio_channels: audio,
+            events: None,
+            on_first_sent: Some(Box::new(move || {
+                if let Ok(g) = e_first.control.lock() {
+                    if let Some(Control::Causal(c)) = g.as_ref() {
+                        c.mark_first_frame_sent();
                     }
                 }
-            }
+            })),
+            on_phase: Some(Box::new(move |p| {
+                if p == "publishing" {
+                    e_phase.set(|s| {
+                        s.state = StreamState::Streaming;
+                        s.streaming_ms = Some(now_ms().saturating_sub(s.started_ms));
+                    });
+                }
+            })),
         };
-        if let Some(mut e) = enc.take() {
-            let _ = tokio::task::spawn_blocking(move || e.finish()).await;
+        let r = publish(&mut ctx, prov, &mut Source::Paced(&mut paced)).await;
+        paced.task.abort();
+        // A pacer that ended the session (its length limit) names the reason.
+        match r {
+            Ok(reason) if reason == "ended" => {
+                let end = paced.stats.borrow().ended.clone();
+                Ok(match end {
+                    Some(e) => serde_json::to_value(e)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned).or_else(|| Some(v.to_string())))
+                        .unwrap_or_else(|| "ended".into()),
+                    None => "ended".into(),
+                })
+            }
+            other => other,
         }
-        Ok(reason)
     }
 }
 

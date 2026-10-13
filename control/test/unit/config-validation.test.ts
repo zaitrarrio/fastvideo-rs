@@ -217,6 +217,11 @@ describe("policies and small forms", () => {
     expect(bad("env", { FV_INTERNAL_TOKEN: { value: "x", secret: false } })).toContain("FV_INTERNAL_TOKEN");
     expect(bad("env", { FASTVIDEO_FP8: { value: "yes", secret: false } })).toContain("FASTVIDEO_FP8.value");
     expect(envValueProblem("FASTVIDEO_TAE_DIR", "rel/path")).toMatch(/absolute/);
+    // Stream outputs: the Cloudflare Stream token only as a Runpod reference in plain env (serverless spec env).
+    expect(envValueProblem("FV_CF_STREAM_API_TOKEN", "abc123")).toMatch(/is a secret/);
+    expect(envValueProblem("FV_CF_STREAM_API_TOKEN", "{{ RUNPOD_SECRET_fv_cf_stream_api_token }}")).toBeNull();
+    expect(envValueProblem("FV_OUTPUTS_ALLOW_PRIVATE", "1")).toBeNull();
+    expect(envValueProblem("FV_DIRECTOR_ALLOW_OUTPUT", "yes")).toMatch(/switch/);
     ok("log-query", { from: "2h", to: "2026-10-06 12:00", lv: "info,warn", src: "pod,op", order: "desc" });
     expect(bad("log-query", { from: "yesterday" })).toContain("from");
     expect(bad("log-query", { lv: "info,loud" })).toContain("lv");

@@ -14,7 +14,7 @@ with `curl`.
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
-| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` WHIP publish; prompt switches, pause, reset, stop, stats, licence (§4c) |
+| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT) played back by its format (WHEP or HLS); prompt switches, pause, reset, stop, stats, licence (§4c) |
 | `/console/native` | Native API: `POST /fv/v1/jobs` with the fields only it takes, on any served model or tier alias (§4d) |
 | `/console/live` | Live input: publish the camera and microphone (`getUserMedia`) to a duplex model and watch its output, over native WHIP ingest or the Reactor runtime (§4b) |
 | `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
@@ -226,6 +226,13 @@ The form follows what the server advertises:
 - **Stream**: the session's model, tier and recipe (`x-fv-model`,
   `x-fv-tier`, `x-fv-recipe` of `/wma/session`, draft flagged), the chunk
   length, chunks, buffer, generation time and (causal) the KV re-cache time.
+- **Output copy** (optional; docs/serve/stream-outputs.md): the same
+  destination form as the Live stream page, with "No copy" first. A copy is
+  sent as `configure.x_fv_output` (checked against `session_info.x_fv_output`
+  first; the event log shows it with its credentials as `"set"`); the page
+  shows `configured`'s echo, `output_ready` (with the copy's playback URL),
+  `output_error` and `output_ended`, and "Watch the copy" plays it (WHEP or
+  HLS by its format, as on the Live stream page).
 
 ## 4b. Script avatar page
 
@@ -305,13 +312,25 @@ catalog app's `licence`) is shown as a banner.
     `max_seconds`), recv-only transceivers per output track, the `data` and
     `control` channels, `set_prompt` with the opening prompt, `get_state`
     every second, `/stop_session` on Stop.
-  - *Native stream*: `POST /fv/v1/streams` (`model`, `whip_url`,
-    `whip_token`, `whip_target`, `prompt`, `seed`, `max_seconds`) publishes
-    H.264 to a WHIP endpoint (a relay: MediaMTX, Cloudflare Stream); the
-    page plays the relay's **WHEP** URL when given. It polls
-    `GET /fv/v1/streams/{id}` (state, output, pacer, TTFF, the session) and
-    Stop sends `DELETE`. Offered when the build can publish
-    (`protocols.streams`).
+  - *Native stream*: `POST /fv/v1/streams` (`model`, `output`, `prompt`,
+    `seed`, `max_seconds`; docs/serve/stream-outputs.md). The
+    **destination form** (`console/outputs.js`) builds `output`: Cloudflare
+    Stream (the default; greyed out when `GET /fv/v1/outputs` reports no
+    account), Cloudflare over RTMPS or SRT, or your own WHIP endpoint (URL,
+    token, codec H.264 / VP8 / VP9, endpoint kind), RTMP(S) ingest (URL,
+    stream key) or SRT listener (URL, stream id, passphrase). Credentials
+    are password inputs, never stored (no localStorage) and never shown
+    back: the stream object carries the URL without them and
+    `"credentials": "set"`. The **player follows the output**: WHEP
+    (`rtc.js` `whepPlay`) on the stream's `playback.whep_url` (Cloudflare's
+    `webRTCPlayback`), HLS on `playback.hls_url` (RTMPS / SRT inputs) with
+    the browser's own HLS or the vendored hls.js 1.5.20 light build
+    (`console/vendor/`, loaded on first use, no worker under the CSP), or,
+    for a destination of your own, the playback URL pasted in the form
+    (HLS when it ends in `.m3u8`, else WHEP). It polls
+    `GET /fv/v1/streams/{id}` (state, output state and errors, codec,
+    encoder, canvas, pacer, TTFF, the session) and Stop sends `DELETE`.
+    Offered when the build can publish (`protocols.streams`).
 - **Direct**: Switch prompt (`set_prompt`, applied at the next block
   boundary; the timeline marks a switch applied when the session reports
   its prompt), Pause / Resume (`set_paused`), Reset (`reset`).
@@ -521,7 +540,14 @@ curl -s -X PUT "$BASE/fv/v1/admin/flags/h3_1080p_long" -H "Authorization: Bearer
   stop) and the native `/fv/v1/streams` transport to a mock WHIP endpoint
   (create, `set_prompt` through `/commands`, stats, Stop → `DELETE`); the
   Native API page (tier aliases, a job with steps and guidance, retake
-  fields, `flow_shift` through `/v1/videos`).
+  fields, `flow_shift` through `/v1/videos`). Then
+  `tests/console/stream_outputs.cjs` against a fake Cloudflare Stream API
+  in the script (docs/serve/stream-outputs.md): the destination form's
+  request shapes (Cloudflare default, Cloudflare SRT, your RTMPS with a
+  stream key, your WHIP with a token and VP8), the WHEP player on the live
+  input's `webRTCPlayback`, hls.js on `hls_url`, a pasted HLS playlist that
+  plays, `playerFor` for every playback shape, no credential in storage,
+  the page or the server log, and the director's `x_fv_output`.
   `FV_CONSOLE_TESTS=live_echo bash tests/console/run.sh` runs one of them.
 
 With the fake engine and no ffmpeg the "video" is a small placeholder file,

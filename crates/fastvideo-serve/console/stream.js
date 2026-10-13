@@ -7,10 +7,13 @@
 //   reactorWatch) -> `set_prompt` with the opening prompt, then
 //   `set_prompt` / `set_paused` / `reset` / `get_state` (state_update every
 //   second) on the `data` channel; POST /stop_session.
-// Native stream (design §5.1-5.2, crates/fastvideo-serve/src/streams.rs):
-//   POST /fv/v1/streams {model, whip_url, whip_token, whip_target, prompt,
-//   seed, max_seconds} publishes H.264 to a WHIP endpoint (a relay such as
-//   MediaMTX or Cloudflare Stream); this page plays the relay's WHEP URL.
+// Native stream (design §5.1-5.2, crates/fastvideo-serve/src/streams.rs,
+// docs/serve/stream-outputs.md):
+//   POST /fv/v1/streams {model, output, prompt, seed, max_seconds}: the
+//   destination form (outputs.js) builds `output` (Cloudflare Stream by
+//   default, WHIP, RTMPS, SRT; credentials never stored here); the stream
+//   object's `playback` picks the player: WHEP for WebRTC outputs, HLS for
+//   RTMPS / SRT, else the playback URL pasted in the form.
 //   GET /fv/v1/streams/{id} every second (state, pacer, TTFF, session),
 //   POST …/commands {type: set_prompt | set_paused | reset | get_state},
 //   DELETE /fv/v1/streams/{id}.
@@ -21,7 +24,8 @@ import {
   $, el, request, setMsg, topbar, loadAuthMode, needsKey, loadCapabilities, loadCatalog, mountedProtocols, streamKind,
   recipeText, licenceBanner, modelHref, admit, BUSY,
 } from './common.js';
-import { reactorWatch, reactorModel, whepPlay } from './rtc.js';
+import { reactorWatch, reactorModel } from './rtc.js';
+import { outputForm, loadOutputs, playOutput } from './outputs.js';
 
 topbar('stream');
 
@@ -30,6 +34,8 @@ let reactorServes = null; // the model id the Reactor runtime streams
 let protocols = null;
 let apps = [];
 let live = null; // {kind, close(), command(type, data), poll}
+const dest = outputForm('out');
+$('native-fields').append(dest.node);
 let version = 0;
 const switches = new Map(); // version -> {text, li}
 
@@ -89,8 +95,8 @@ function showModel() {
   const whipOk = !protocols || protocols.streams !== false;
   const t = $('transport');
   t.querySelector('[value="reactor"]').disabled = !reactorOk;
-  t.querySelector('[value="whip"]').disabled = !whipOk;
-  if (t.selectedOptions[0] && t.selectedOptions[0].disabled) t.value = reactorOk ? 'reactor' : 'whip';
+  t.querySelector('[value="native"]').disabled = !whipOk;
+  if (t.selectedOptions[0] && t.selectedOptions[0].disabled) t.value = reactorOk ? 'reactor' : 'native';
   $('transport-note').textContent = !reactorOk
     ? (reactorServes ? 'The Reactor runtime streams ' + reactorServes + ' on this server ([reactor] model), not this model.' : 'This server does not mount the Reactor runtime.')
       + (whipOk ? '' : ' This build cannot publish native streams either (it needs the webrtc and http-client features).')
@@ -99,7 +105,7 @@ function showModel() {
 }
 
 function showTransport() {
-  $('whip-fields').hidden = $('transport').value !== 'whip';
+  $('native-fields').hidden = $('transport').value !== 'native';
 }
 
 async function load() {
@@ -114,6 +120,7 @@ async function load() {
   protocols = mountedProtocols(caps);
   models = (caps.models || []).filter((m) => streamKind(m) === 'causal');
   reactorServes = protocols && protocols.reactor === false ? null : await reactorModel();
+  dest.setInfo(await loadOutputs());
   try { apps = (await loadCatalog()).apps || []; } catch { apps = []; }
   $('model').replaceChildren(...models.map((m) => el('option', { value: m.caps.id }, m.caps.id + ((m.caps.served_names || []).filter((n) => n !== m.caps.id).length ? ' (' + m.caps.served_names.filter((n) => n !== m.caps.id).join(', ') + ')' : ''))));
   const want = new URLSearchParams(location.search).get('model');
@@ -203,22 +210,24 @@ async function startReactor(m, prompt, params) {
   };
 }
 
-async function startWhip(m, prompt, params) {
-  const whip = $('whip-url').value.trim();
-  if (!whip) throw new Error('enter the WHIP endpoint the server publishes to');
-  const body = { model: m.caps.id, whip_url: whip, prompt, ...params };
-  if ($('whip-token').value.trim()) body.whip_token = $('whip-token').value.trim();
-  if ($('whip-target').value) body.whip_target = $('whip-target').value;
+async function startNative(m, prompt, params) {
+  const output = dest.read();
+  const body = { model: m.caps.id, prompt, ...params, output };
   const s = await admit(() => request('POST', '/fv/v1/streams', { auth: 'bearer', body }), { isBusy: (e, failed) => failed && BUSY.has(e.status), onWait: waiting });
   const path = '/fv/v1/streams/' + encodeURIComponent(s.id);
   document.body.dataset.stream = s.id;
-  log('→ POST /fv/v1/streams: ' + s.id + ' (' + s.mode + ', ' + s.max_seconds + ' s)');
+  document.body.dataset.output = (s.output && s.output.kind) || '';
+  log('→ POST /fv/v1/streams: ' + s.id + ' (' + s.mode + ', ' + s.max_seconds + ' s) → ' + ((s.output && s.output.kind) || 'output'));
+  // The player follows the output's format (WHEP for WebRTC, HLS for RTMPS / SRT).
   let player = null;
-  const whep = $('whep-url').value.trim();
-  if (whep) {
-    try {
-      player = await whepPlay(whep, { onTrack: attachVideo(), onState: (st) => log('WHEP ' + st) });
-    } catch (e) { log('WHEP: ' + e.message); setMsg('stream-msg', 'Playback: ' + e.message, 'bad'); }
+  try {
+    player = await playOutput($('video'), s.playback, dest.pasted(), { log });
+    document.body.dataset.player = player.kind || 'none';
+    $('playback-info').textContent = player.kind ? 'Player: ' + player.kind.toUpperCase() + ' · ' + player.url : 'Player: ' + player.why;
+  } catch (e) {
+    document.body.dataset.player = 'failed';
+    log('playback: ' + e.message);
+    setMsg('stream-msg', 'Playback: ' + e.message, 'bad');
   }
   const poll = setInterval(async () => {
     try {
@@ -226,12 +235,15 @@ async function startWhip(m, prompt, params) {
       const st = v.status || {};
       const p = v.pacer || {};
       const t = v.ttff || null;
+      const o = v.output || {};
       showStats([
-        ['transport', 'native stream → WHIP'],
+        ['transport', 'native stream → ' + (o.kind || 'output') + (o.url ? ' (' + o.url + ')' : '')],
         ['stream', v.id],
         ['state', st.state + (st.end_reason ? ' (' + st.end_reason + ')' : '')],
         ['error', st.error],
-        ['output', [st.video_codec, st.encoder].filter(Boolean).join(' · ') + (st.frames_sent ? ' · ' + st.frames_sent + ' frames, ' + st.keyframes_sent + ' keyframes sent' : '')],
+        ['output', [st.output_state, st.video_codec, st.encoder, st.width ? st.width + '×' + st.height : null].filter(Boolean).join(' · ')
+          + (st.frames_sent ? ' · ' + st.frames_sent + ' frames' + (st.keyframes_sent ? ', ' + st.keyframes_sent + ' keyframes' : '') + ' sent' : '')],
+        ['output error', st.output_error],
         ['pacer', p.ticks != null ? Number(p.effective_fps || 0).toFixed(1) + ' fps out, ' + Number(p.unique_fps || 0).toFixed(1) + ' fps generated, '
           + Number(p.video_seconds || 0).toFixed(1) + ' / ' + (v.max_seconds || '?') + ' s, ' + (p.underruns || 0) + ' underruns' : null],
         ['first frame', st.first_frame_ms != null ? st.first_frame_ms + ' ms' : null],
@@ -244,7 +256,7 @@ async function startWhip(m, prompt, params) {
     } catch (e) { log('status: ' + e.message); }
   }, 1000);
   return {
-    kind: 'whip', poll,
+    kind: 'native', poll,
     command: async (type, data) => {
       log('→ ' + type + (data && data.prompt ? ' ' + JSON.stringify(data.prompt) : ''));
       const r = await request('POST', path + '/commands', { auth: 'bearer', body: data ? { type, data } : { type } });
@@ -280,12 +292,14 @@ async function start() {
   if ($('seed').value.trim()) params.seed = Number($('seed').value.trim());
   if ($('max-seconds').value) params.max_seconds = Number($('max-seconds').value);
   switches.clear(); $('timeline').replaceChildren(); version = 0; $('stream-stats').replaceChildren(); $('stream-log').replaceChildren();
+  for (const k of ['stream', 'player', 'output']) delete document.body.dataset[k];
+  delete $('video').dataset.hlsEngine;
   setState('starting', 'warn');
   controls(true);
   $('stop').disabled = true;
   try {
     const v = addSwitch(prompt, 'sent');
-    live = $('transport').value === 'whip' ? await startWhip(m, prompt, params) : await startReactor(m, prompt, params);
+    live = $('transport').value === 'native' ? await startNative(m, prompt, params) : await startReactor(m, prompt, params);
     live.paused = false;
     markSwitch(v, 'sent', 'warn');
     controls(true);
@@ -308,6 +322,7 @@ async function stop(reason, ended) {
   const v = $('video').srcObject;
   if (v && v.getTracks) v.getTracks().forEach((t) => t.stop());
   $('video').srcObject = null;
+  $('playback-info').textContent = '';
   setState('stopped');
   if (reason) setMsg('stream-msg', reason);
   controls(false);

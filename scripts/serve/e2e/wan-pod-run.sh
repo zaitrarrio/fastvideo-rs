@@ -160,7 +160,7 @@ EOF
 }
 start_sfwan() { # $1 public_ip, $2 log
   sfwan_cfg "$1" >"$E/sfwan.toml"; cp "$E/sfwan.toml" "$R/sfwan-$2.toml"
-  FV_WEIGHTS=$W FV_STATE_DIR=/fvscratch/state2 FV_STREAM_STUN=none "$BIN" --config "$E/sfwan.toml" >"$R/serve-$2.log" 2>&1 &
+  FV_WEIGHTS=$W FV_STATE_DIR=/fvscratch/state2 FV_STREAM_STUN=none FV_OUTPUTS_ALLOW_PRIVATE=1 "$BIN" --config "$E/sfwan.toml" >"$R/serve-$2.log" 2>&1 &
   SERVE_PID=$!
 }
 start_sfwan auto sfwan

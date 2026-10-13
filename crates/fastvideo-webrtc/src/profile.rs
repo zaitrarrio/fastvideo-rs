@@ -1,14 +1,26 @@
 //! Encode profiles per sink (design §0 decision 2, §5.8, risk R3).
 //!
-//! WHIP to Cloudflare needs H.264 Constrained Baseline level 3.1, which by the
-//! book cannot carry 1344x768, so those streams are scaled to fit 1280x720.
-//! MediaMTX (self-hosted relay) and peer WebRTC take native resolution at
-//! level 4.0. The media layer asks the sink for its [`EncodeProfile`] and
-//! scales and encodes to it; the WebRTC layer advertises the same level in SDP.
+//! Every sink takes the model's **native** resolution and fps
+//! (docs/serve/stream-outputs.md). What differs is the H.264 level we
+//! **offer** in SDP:
+//!
+//! - Cloudflare Stream's WHIP ingest documents H.264 Constrained Baseline
+//!   `profile-level-id=42e01f` (level 3.1) in the offer, so that is what we
+//!   offer. The bitstream itself carries the level its resolution needs
+//!   (1344x768@24 is level 3.2, 1920x1080@30 level 4.0): what browsers do
+//!   (libwebrtc offers `42e01f` and sends 1080p), and Cloudflare publishes
+//!   no resolution cap (its own FFmpeg example is 1920x1080@30). The old
+//!   1280x720 cap here assumed the offered level bounds the stream; it was
+//!   never a Cloudflare requirement.
+//! - MediaMTX (self-hosted relay) and peer WebRTC: level 4.0 offered.
+//!
+//! The media layer encodes the native canvas at the smallest level that
+//! fits, never below the offered one
+//! (`fastvideo_media::video::H264Config::for_publish`).
 
 use serde::{Deserialize, Serialize};
 
-/// H.264 levels we encode at.
+/// H.264 levels we offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum H264Level {
     /// Level 3.1 (`level_idc` 31): max 3600 macroblocks per frame.
@@ -61,42 +73,25 @@ impl H264Level {
     }
 }
 
-/// What a sink accepts: an optional bounding box and the H.264 level.
+/// What a sink is offered: the H.264 level in SDP. The resolution is
+/// always native.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncodeProfile {
-    /// Output must fit inside `(width, height)`; `None`: native resolution.
-    pub max_size: Option<(u32, u32)>,
+    /// The level of the offered `profile-level-id`. The encoder never goes
+    /// below it, and above it when the canvas needs more.
     pub h264_level: H264Level,
 }
 
 impl EncodeProfile {
-    /// Cloudflare WHIP: fit 1280x720, level 3.1.
-    pub const CLOUDFLARE: EncodeProfile = EncodeProfile {
-        max_size: Some((1280, 720)),
-        h264_level: H264Level::L3_1,
-    };
-    /// MediaMTX WHIP and peer WebRTC: native resolution, level 4.0.
-    pub const NATIVE: EncodeProfile = EncodeProfile {
-        max_size: None,
-        h264_level: H264Level::L4_0,
-    };
+    /// Cloudflare WHIP: `42e01f` offered, native resolution.
+    pub const CLOUDFLARE: EncodeProfile = EncodeProfile { h264_level: H264Level::L3_1 };
+    /// MediaMTX WHIP and peer WebRTC: `42e028` offered, native resolution.
+    pub const NATIVE: EncodeProfile = EncodeProfile { h264_level: H264Level::L4_0 };
 
-    /// The encode size for a `width`x`height` source: scaled down (never up)
-    /// to fit `max_size` with the aspect ratio kept, rounded down to even
-    /// dimensions (4:2:0). 1344x768 under `CLOUDFLARE` gives 1260x720.
+    /// The encode size for a `width`x`height` source: native, rounded down
+    /// to even dimensions (4:2:0).
     pub fn output_size(&self, width: u32, height: u32) -> (u32, u32) {
-        let (w, h) = match self.max_size {
-            Some((mw, mh)) if width > mw || height > mh => {
-                // Compare mw/width against mh/height without floats.
-                if (mw as u64) * (height as u64) <= (mh as u64) * (width as u64) {
-                    (mw, ((height as u64 * mw as u64) / width as u64) as u32)
-                } else {
-                    (((width as u64 * mh as u64) / height as u64) as u32, mh)
-                }
-            }
-            _ => (width, height),
-        };
-        ((w & !1).max(2), (h & !1).max(2))
+        ((width & !1).max(2), (height & !1).max(2))
     }
 }
 
@@ -105,18 +100,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cloudflare_scales_h3_to_720p_and_fits_level_3_1() {
+    fn cloudflare_offers_3_1_and_keeps_native_resolution() {
         let p = EncodeProfile::CLOUDFLARE;
-        let (w, h) = p.output_size(1344, 768);
-        assert_eq!((w, h), (1260, 720));
-        assert!(p.h264_level.fits(w, h, 24) && p.h264_level.fits(w, h, 30));
-        // Native H3 does not fit 3.1 (risk R3) but fits 4.0.
+        assert_eq!(p.h264_level.constrained_baseline_plid(), 0x42e01f);
+        for (w, h) in [(1344, 768), (1920, 1080), (768, 1344), (832, 480), (1280, 704)] {
+            assert_eq!(p.output_size(w, h), (w, h));
+        }
+        // The offered level does not bound the stream: native H3 needs 3.2.
         assert!(!H264Level::L3_1.fits(1344, 768, 24));
         assert!(H264Level::L4_0.fits(1344, 768, 30));
-        // Already small, 16:9, portrait: never upscaled, aspect kept.
-        assert_eq!(p.output_size(832, 480), (832, 480));
-        assert_eq!(p.output_size(1920, 1080), (1280, 720));
-        assert_eq!(p.output_size(768, 1344), (410, 720));
+        assert!(H264Level::L4_0.fits(1920, 1080, 30));
     }
 
     #[test]

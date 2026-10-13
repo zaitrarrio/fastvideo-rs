@@ -41,7 +41,7 @@ export FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}"
 # FV_CONSOLE_ONLY=avatar runs only the avatar page test.
 if [[ "${FV_CONSOLE_ONLY:-}" == avatar ]]; then exec node tests/console/avatar.cjs; fi
 # FV_CONSOLE_TESTS picks a subset (e.g. `live_echo`); default: all.
-for t in ${FV_CONSOLE_TESTS:-smoke director_playback director_upsample avatar live_echo ui_gaps}; do
+for t in ${FV_CONSOLE_TESTS:-smoke director_playback director_upsample avatar live_echo ui_gaps stream_outputs}; do
   case "$t" in
     # Director playback when generation is slower than real time (~50 s).
     # The script avatar page (Reactor avatar mode on the fake engine, ~30 s).
@@ -49,7 +49,9 @@ for t in ${FV_CONSOLE_TESTS:-smoke director_playback director_upsample avatar li
     # runtime to the loopback echo model and back (~30 s).
     # The UI-gap pages and fields (~2 min).
     # Director prompt upsampling against a fake LLM (~30 s).
-    smoke|director_playback|director_upsample|avatar|live_echo|ui_gaps) node "tests/console/$t.cjs" ;;
+    # Stream outputs: destination form -> request shape, WHEP / HLS player
+    # per output, the director's output copy (~1 min).
+    smoke|director_playback|director_upsample|avatar|live_echo|ui_gaps|stream_outputs) node "tests/console/$t.cjs" ;;
     *) echo "console tests: unknown test $t" >&2; exit 2 ;;
   esac
 done

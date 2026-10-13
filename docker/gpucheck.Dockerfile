@@ -131,8 +131,8 @@ COPY --from=build /out/ /
 # Runtime images: one shared layer stack (docs/serve/images.md "Layers").
 #
 #   ubuntu:22.04 (pinned digest)        every image
-#   base-os: ca-certificates + x264/vpx/dav1d runtime libs (1 layer)
-#            + the minimal ffmpeg/ffprobe build below (1 layer)
+#   base-os: ca-certificates (+ libssl3) + x264/vpx/dav1d runtime libs (1 layer)
+#            + the minimal ffmpeg/ffprobe build below (1 layer; TLS + libsrt)
 #   base-cuda: CUDA 13.4 runtime libraries, four stable layers, largest first:
 #            cuBLASLt | cuDNN precompiled engines | cuDNN core | cuBLAS + NVRTC + cudart
 #   ── base-os / base-cuda end here. CI publishes them as
@@ -162,29 +162,57 @@ COPY --from=build /out/ /
 # ---- ffmpeg: FFmpeg 4.4 (the release Ubuntu 22.04 ships, so the CLI behaves
 # the same), every native component, external libraries limited to what the
 # code asks for: libx264 (cpu-test-x264 fallback, LTX I2V conditioning),
-# libvpx (VP8 for WebRTC peers), libdav1d (AV1 input decode) and NVENC
-# (ffnvcodec: the nv-codec-headers Ubuntu built its ffmpeg with, 11.1: driver >=
-# 470). Nothing autodetected, so no X11/SDL/VA-API/Pulse/... dependencies.
+# libvpx (VP8 / VP9 for WebRTC peers and WHIP outputs), libdav1d (AV1 input
+# decode), NVENC (ffnvcodec: the nv-codec-headers Ubuntu built its ffmpeg
+# with, 11.1: driver >= 470), and the stream outputs' transports
+# (docs/serve/stream-outputs.md): TLS for rtmps:// / https:// through
+# OpenSSL 3 (Ubuntu's shared libssl3, one copy for ffmpeg and ffprobe:
+# +5.7 MB installed, +2.3 MB compressed in base-os; linking it statically
+# would put it in both binaries. OpenSSL 3 is Apache-2.0, so the build is
+# GPLv3: --enable-version3) and srt:// through libsrt, built here from
+# source as a static library (its crypto is the same libcrypto; +0.8 MB
+# compressed on the ffmpeg layer). Nothing autodetected, so no
+# X11/SDL/VA-API/Pulse/... dependencies.
 FROM ${UBUNTU} AS ffmpeg-build
 ARG DEBIAN_FRONTEND=noninteractive
 ARG FFMPEG_VERSION=4.4.5
 ARG FFMPEG_SHA256=f9514e0d3515aee5a271283df71636e1d1ff7274b15853bcd84e144be416ab07
+# Haivision SRT (MPL-2.0): the v1.5.4 tag archive; Ubuntu's pool carries the
+# same file as srt_1.5.4.orig.tar.gz (the fallback).
+ARG SRT_VERSION=1.5.4
+ARG SRT_SHA256=d0a8b600fe1b4eaaf6277530e3cfc8f15b8ce4035f16af4a5eb5d4b123640cdd
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential pkg-config nasm curl ca-certificates xz-utils \
-      libx264-dev libvpx-dev libdav1d-dev zlib1g-dev libffmpeg-nvenc-dev \
+ && apt-get install -y --no-install-recommends build-essential pkg-config nasm curl ca-certificates xz-utils cmake \
+      libx264-dev libvpx-dev libdav1d-dev zlib1g-dev libffmpeg-nvenc-dev libssl-dev \
  && rm -rf /var/lib/apt/lists/*
+RUN { curl -fsSL -o /tmp/srt.tar.gz "https://github.com/Haivision/srt/archive/refs/tags/v${SRT_VERSION}.tar.gz" \
+        && echo "${SRT_SHA256}  /tmp/srt.tar.gz" | sha256sum -c - ; } \
+    || { curl -fsSL -o /tmp/srt.tar.gz "http://archive.ubuntu.com/ubuntu/pool/universe/s/srt/srt_${SRT_VERSION}.orig.tar.gz" \
+        && echo "${SRT_SHA256}  /tmp/srt.tar.gz" | sha256sum -c - ; } \
+ && mkdir /tmp/srt && tar -xzf /tmp/srt.tar.gz -C /tmp/srt --strip-components=1 \
+ && cmake -S /tmp/srt -B /tmp/srt/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/srt \
+      -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DENABLE_APPS=OFF -DENABLE_ENCRYPTION=ON -DUSE_ENCLIB=openssl-evp \
+ && cmake --build /tmp/srt/build -j"$(nproc)" && cmake --install /tmp/srt/build \
+ && test -f /opt/srt/lib/libsrt.a && test ! -e /opt/srt/lib/libsrt.so \
+ && rm -rf /tmp/srt /tmp/srt.tar.gz
 RUN curl -fsSL -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
  && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
  && mkdir /tmp/ffmpeg && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
  && cd /tmp/ffmpeg \
- && ./configure --prefix=/opt/ffmpeg --disable-autodetect --disable-debug --disable-doc --disable-ffplay \
-      --disable-shared --enable-static --enable-gpl --enable-pthreads --enable-zlib \
+ && PKG_CONFIG_PATH=/opt/srt/lib/pkgconfig ./configure --prefix=/opt/ffmpeg --disable-autodetect --disable-debug \
+      --disable-doc --disable-ffplay --pkg-config-flags=--static \
+      --disable-shared --enable-static --enable-gpl --enable-version3 --enable-pthreads --enable-zlib \
       --enable-libx264 --enable-libvpx --enable-libdav1d \
       --enable-ffnvcodec --enable-nvenc \
+      --enable-openssl --enable-libsrt \
  && make -j"$(nproc)" && make install \
  && strip /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe \
  && mkdir -p /out && cp /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /out/ \
- && /out/ffmpeg -hide_banner -encoders | grep -E ' (h264_nvenc|libx264|libvpx|aac) ' \
+ && /out/ffmpeg -hide_banner -encoders | grep -E ' (h264_nvenc|libx264|libvpx|libvpx-vp9|aac) ' \
+ && /out/ffmpeg -hide_banner -protocols | tr -s ' ' '\n' | grep -E '^(rtmps|srt|tls|https)$' \
+ && ldd /out/ffmpeg \
+ && ls -l /out/ffmpeg /out/ffprobe \
  && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz
 
 
@@ -229,13 +257,22 @@ RUN apt-get update \
 # ---- base-os: what every runtime image (CUDA or not) runs on.
 FROM ${UBUNTU} AS base-os
 ARG DEBIAN_FRONTEND=noninteractive
+# libssl3: ffmpeg's TLS (rtmps://, https://), shared by ffmpeg and ffprobe.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libx264-163 libvpx7 libdav1d5 \
+ && apt-get install -y --no-install-recommends ca-certificates libssl3 libx264-163 libvpx7 libdav1d5 \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old /var/lib/dpkg/*-old \
       /var/log/dpkg.log /var/log/apt /var/log/alternatives.log \
  && mkdir -p /fvstate /var/log
 COPY --from=ffmpeg-build /out/ffmpeg /out/ffprobe /usr/local/bin/
-RUN ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
+# Every shared library resolves (the ldd audit), and the stream outputs'
+# protocols (rtmps, srt) and encoders (libvpx-vp9) are there.
+RUN for f in /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do \
+      if ldd "$f" | grep 'not found'; then echo "unresolved dependency of $f"; exit 1; fi; \
+    done \
+ && ffmpeg -hide_banner -protocols | tr -s ' ' '\n' | grep -qx rtmps \
+ && ffmpeg -hide_banner -protocols | tr -s ' ' '\n' | grep -qx srt \
+ && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
+ && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx-vp9 -deadline realtime -f ivf -y /dev/null \
  && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -f lavfi -i sine=d=0.1 \
       -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -y /tmp/t.mp4 \
  && ffprobe -v error -show_entries stream=codec_name -of csv=p=0 /tmp/t.mp4 | grep -qx h264 \

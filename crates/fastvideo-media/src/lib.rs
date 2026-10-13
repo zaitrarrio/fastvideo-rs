@@ -9,16 +9,17 @@
 //! | [`resample`] | rubato FFT resampler (32k/24k to 48k for Opus, 48k to 32k/44.1k for MP4), channel mixing |
 //! | [`crossfade`] | Raised-cosine clip-edge fades that keep sample counts |
 //! | [`opus`] | Opus framer (10/20 ms, sample-counter RTP timestamps) and libopus encoder (`opus` feature) |
-//! | [`video`] | `VideoEncoder` trait: NVENC (production, via ffmpeg `h264_nvenc`), OpenH264 (CPU test backend, `openh264` feature); publish profiles (Cloudflare 720p/L3.1, MediaMTX/peer native/L4.0) |
+//! | [`video`] | `VideoEncoder` trait: NVENC (production, via ffmpeg `h264_nvenc`), OpenH264 (CPU test backend, `openh264` feature); publish profiles (native canvas; level floor 3.1 for Cloudflare, 4.0 for MediaMTX/peer) |
 //! | [`pipe`] | ffmpeg pipe-encoder processes: EOF flush on a keyframe restart, one warm pre-primed spare per streaming session ([`pipe::SparePool`]), restart latency metrics |
-//! | [`vp8`] | Inter-frame VP8 via ffmpeg `libvpx` (IVF over a pipe; forced keyframes restart the process) for peers without H.264 |
+//! | [`vp8`] | Inter-frame VP8 (and VP9 profile 0) via ffmpeg `libvpx` / `libvpx-vp9` (IVF over a pipe; forced keyframes restart the process) for peers without H.264 and WHIP publishers that ask for them |
 //! | [`scale`] | Pre-encode canvas scaler (fit+pad or stretch) |
 //! | [`decode`] | Client video in: warm ffmpeg decode pipe (VP8 in IVF, H.264 Annex-B → RGB24 at the model's input size), keyframe probes |
 //! | [`ring`] | Timestamped drop-oldest ring buffers for decoded client input ([`ring::InputBuffers`]) |
 //! | [`h264`] | Annex-B / SPS helpers and the H.264 level table |
 //! | [`mp4`] | ffmpeg MP4 writer and `finalize` (faststart, `-an`, crop), plus a pure-Rust box inspector |
 //! | [`probe`] | `MediaProbe` via the image crate, ffprobe, or the MP4 inspector; decoding helpers |
-//! | [`sink`] | RTMP/HLS/file ffmpeg sinks with two input pipes, always with an audio track |
+//! | [`sink`] | RTMP(S)/SRT/HLS/file ffmpeg sinks with two input pipes, always with an audio track; credentials scrubbed from errors |
+//! | [`output`] | The output-copy seam of live sessions: a non-blocking tick tap and the `OutputOpener` fv-serve implements |
 //! | [`tools`] | Where the ffmpeg/ffprobe binaries are (`FV_FFMPEG`, `FV_FFPROBE`) |
 //!
 //! Only `clock` and `pacer` carry code ported from strobe-core (MIT, see
@@ -35,6 +36,7 @@ pub mod h264;
 pub mod lockstep;
 pub mod mp4;
 pub mod opus;
+pub mod output;
 pub mod pacer;
 pub mod pipe;
 pub mod probe;

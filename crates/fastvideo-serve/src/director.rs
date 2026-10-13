@@ -194,9 +194,12 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         heartbeat_timeout: Duration::from_secs(15),
         causal_chunk_blocks: d.causal_chunk_blocks.max(1),
         causal_lead_seconds: d.causal_lead_seconds.max(0.5),
+        outputs: crate::stream_outputs::hook(c),
+        allow_output: d.allow_output,
         ..DirectorConfig::default()
     }
 }
+
 
 /// The director service on the shared WebRTC host (`crate::rtc`).
 pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost) -> Arc<DirectorService> {

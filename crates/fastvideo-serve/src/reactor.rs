@@ -78,6 +78,8 @@ pub fn ingest_auth(ctx: fastvideo_serve_kit::ServeCtx) -> IngestAuth {
 pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost, auth: Option<IngestAuth>) -> anyhow::Result<Reactor> {
     let mut cfg = reactor_config(&c.reactor, &c.streams)?;
     cfg.ingest_auth = auth;
+    // `start_session` `output` / `x_fv_output` (docs/serve/stream-outputs.md).
+    cfg.outputs = crate::stream_outputs::hook(c);
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "reactor runtime ready to answer offers");
     Ok(Reactor::new(cfg, Arc::new(engine.clone()), host))
 }
