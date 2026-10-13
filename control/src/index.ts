@@ -43,6 +43,7 @@ import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
 import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
 import { dynamicEnums, imageCommits, providerDetails } from "./dynamic";
+import { instanceTypes } from "./instance-types";
 import { downloadLogs, ingest, searchLogs } from "./logs";
 import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
 import { availability, checkSpec, liveSpecIssues } from "./cluster/editor";
@@ -188,6 +189,9 @@ app.get("/api/providers", async (c) => {
     ],
   });
 });
+/** Every instance type a launch provider lists, normalized (instance-types.ts; the launch screen's table); ?refresh=1
+ * reads the provider again instead of the cache (at most once per 30 s per provider: a faster one is served cached). */
+app.get("/api/providers/:p/instance-types", async (c) => c.json(await instanceTypes(c.env, c.req.param("p"), { refresh: c.req.query("refresh") === "1" })));
 /** Price and stock of a GMI / Brev GPU product (the planner's view). */
 app.get("/api/providers/:p/offers", async (c) => {
   const p = c.req.param("p") as OtherProviderId;

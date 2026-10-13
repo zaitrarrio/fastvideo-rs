@@ -230,13 +230,18 @@ export const brev = {
     }
   },
   /** Every instance type the org may rent: price, stoppable flag, storage price, deploy time (cached 1 h per isolate). */
-  async types(env: Env): Promise<BrevType[]> {
+  async types(env: Env, o: { refresh?: boolean } = {}): Promise<BrevType[]> {
+    return (await brev.rawTypes(env, o)).rows.map(toType).filter((t: BrevType) => t.type);
+  },
+  /** The instance-type listing as Brev answers it (GET api/instances/alltypesavailable/{org}), with when it was read;
+   * cached 1 h per isolate (`refresh`: read it again). Every row, CPU-only ones too (the launch table, instance-types.ts). */
+  async rawTypes(env: Env, o: { refresh?: boolean } = {}): Promise<{ at: number; rows: any[] }> {
     const k = `${base(env)}|${env.BREV_ORG_ID}`;
-    if (typesCache && typesCache.k === k && Date.now() - typesCache.at < TYPES_TTL_MS) return typesCache.v;
+    if (!o.refresh && typesCache && typesCache.k === k && Date.now() - typesCache.at < TYPES_TTL_MS) return { at: typesCache.at, rows: typesCache.raw };
     const j = await call(env, "GET", `api/instances/alltypesavailable/${encodeURIComponent(env.BREV_ORG_ID!)}`);
-    const v = (Array.isArray(j?.allInstanceTypes) ? j.allInstanceTypes : Array.isArray(j) ? j : []).map(toType).filter((t: BrevType) => t.type);
-    typesCache = { k, at: Date.now(), v };
-    return v;
+    const raw: any[] = (Array.isArray(j?.allInstanceTypes) ? j.allInstanceTypes : Array.isArray(j) ? j : []).filter((x: any) => x && typeof x === "object" && x.type);
+    typesCache = { k, at: Date.now(), raw };
+    return { at: typesCache.at, rows: raw };
   },
   /** One instance type of the list; null when it is not there or the list is unreachable. */
   async type(env: Env, type: string): Promise<BrevType | null> {
@@ -267,7 +272,7 @@ export interface BrevType {
   cloud_cred_id: string | null;
 }
 const TYPES_TTL_MS = 3600_000;
-let typesCache: { k: string; at: number; v: BrevType[] } | null = null;
+let typesCache: { k: string; at: number; raw: any[] } | null = null;
 /** Tests: forget the cached instance-type list. */
 export const resetBrevTypes = () => {
   typesCache = null;
