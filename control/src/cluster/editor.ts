@@ -9,7 +9,7 @@ import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
-import { brevOutlook, brevStoppableIssues, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
+import { brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 import { tunnelSettings } from "../tunnels";
 
@@ -24,8 +24,9 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   const warnings: Issue[] = [];
   // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
   for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
-  // Owner rule 2026-10-11 (brev_stoppable_only): a Brev type that cannot be stopped is refused (its stop would be a delete).
-  if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevStoppableIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
+  // Owner decision 2026-10-13: a Brev type that cannot be stopped is allowed like any other (rule brev_stoppable_only
+  // removed); a warning says that a stop leaves it running and what it keeps billing.
+  if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevNoStopWarnings(env, spec)) warnings.push({ path: [...prefix, ...x.path], message: x.message });
   // Named pod tunnels (tunnels.ts): a host two levels below the zone, or a half-configured setup, is said loudly.
   const tun = tunnelSettings(env);
   if (tun.warning)

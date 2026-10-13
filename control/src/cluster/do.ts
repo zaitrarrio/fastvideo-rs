@@ -26,7 +26,7 @@ import {
 import { markReady } from "../boottime";
 import { checkPod } from "../podlogs";
 import type { OtherProviderId } from "../enums";
-import { isParked } from "../brev-park";
+import { brevReleased } from "../brev-park";
 import { budgetCheck, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
 import type { PodRec, PoolStatus } from "./payloads";
 import { checkImages } from "./preflight";
@@ -408,7 +408,8 @@ export class ClusterOps implements DurableObject {
       const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
       // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped (one in DELETING, the
       // owner's delete, is not listed: gone).
-      if (pod && !(isOtherPod(p) && (pod as { state?: string }).state === "stopped" && (await isParked(env, p)))) left.push(p);
+      // A Brev VM whose type cannot be stopped (running_unstoppable) is released though it runs: alerted, billed, the owner's to delete.
+      if (pod && !(isOtherPod(p) && (await brevReleased(env, p, (pod as { state?: string }).state)))) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {
       for (const p of left) await deletePod(env, p, this.log, "retry", { manual: !!op.params?.delete_definition });

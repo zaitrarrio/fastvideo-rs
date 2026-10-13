@@ -24,7 +24,7 @@ import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
 import { claimWarm, holdFailed, restartWarm, unclaimWarm } from "../brev-park";
 import { ensureTunnel, podTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
-import { brevRun, brevStoppableIssue, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
+import { brevNoStopNote, brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -91,6 +91,8 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
   const pods: Projection["pods"] = [];
   const reasons: string[] = [];
   const otherDph: Partial<Record<OtherProviderId, number>> = {};
+  // Brev types that cannot be stopped (a stop leaves the VM running): budgeted past the deadline (budgetCheck).
+  let nostopDph = 0;
   const priceCache = new Map<string, number | null>();
   const gpuPrice = async (g: string) => {
     if (!priceCache.has(g)) priceCache.set(g, (await runpod.gpuPrice(env, g).catch(() => ({ price: null }))).price);
@@ -101,7 +103,8 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
     for (let i = 0; i < n; i++) {
       if (isOtherPool(p)) {
         const prov = poolProvider(p) as OtherProviderId;
-        const { dph, known } = await poolDph(env, p, spec.max_gpu_dph);
+        const { dph, known, offer } = await poolDph(env, p, spec.max_gpu_dph);
+        if (prov === "brev" && offer?.stoppable === false) nostopDph += dph;
         if (known && dph > spec.max_gpu_dph) reasons.push(`${p.id}: ${p.provider_gpu} on ${prov} costs $${dph}/hr, above max_gpu_dph $${spec.max_gpu_dph}`);
         pods.push({ role: "worker", pool: p.id, what: `${prov}:${p.provider_gpu}`, dph: known ? dph : null });
         otherDph[prov] = (otherDph[prov] ?? 0) + dph;
@@ -125,7 +128,7 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
   }
   const cluster_dph = pods.reduce((s, p) => s + (p.dph ?? 0), 0);
   // GMI / Brev: no balance API, so the provider's monthly budget (providers.ts budgetCheck).
-  for (const [prov, add] of Object.entries(otherDph) as [OtherProviderId, number][]) reasons.push(...(await budgetCheck(env, prov, add, opts.hours)).reasons);
+  for (const [prov, add] of Object.entries(otherDph) as [OtherProviderId, number][]) reasons.push(...(await budgetCheck(env, prov, add, opts.hours, prov === "brev" ? { nostopDph } : {})).reasons);
   const rpDph = cluster_dph - Object.values(otherDph).reduce((s, x) => s + (x ?? 0), 0);
   // The account's burn includes this cluster's running pods (runningDph) when it replans a running cluster.
   const burn = Math.max(0, acct.spendPerHr - (opts.runningDph ?? 0)) + rpDph;
@@ -188,12 +191,10 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${problems.map((x) => x.message).join("; ")}`);
     return null;
   }
-  // Owner rule 2026-10-11: a Brev VM is stopped and kept, never deleted by fv-control: a type Brev cannot stop is refused.
-  const nostop = prov === "brev" ? await brevStoppableIssue(env, pool.provider_gpu!) : null;
-  if (nostop) {
-    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${nostop}`);
-    return null;
-  }
+  // Owner decision 2026-10-13: a Brev type that cannot be stopped is launched like any other (its stop leaves it
+  // running until the owner deletes it): said in the log.
+  const nostop = prov === "brev" ? await brevNoStopNote(env, pool.provider_gpu!) : null;
+  if (nostop) log(`${pool.id}: WARNING: ${nostop}`);
   const ctx = await envCtx(env, c);
   const plan = weightsPlan(pool, env);
   // NVIDIA Brev keep-on-stop (brev-park.ts): a parked or held instance of this type is restarted (it keeps its first
@@ -249,7 +250,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     } catch (e) {
       const msg = (e as Error).message.slice(0, 200);
       const r = await holdFailed(env, warm.row, msg, log);
-      log(`${pool.id}: restart of ${warm.row.state} ${warm.row.name} failed (${msg}): ${r === "held" ? "stopped and held, not deleted (reused by a later launch after BREV_HELD_REUSE_AFTER_S, or fv-control.sh brev parked)" : "Brev refused its stop: left running (alert brev_stop_failed)"}; trying another instance or a fresh one`);
+      log(`${pool.id}: restart of ${warm.row.state} ${warm.row.name} failed (${msg}): ${r === "held" ? "stopped and held, not deleted (reused by a later launch after BREV_HELD_REUSE_AFTER_S, or fv-control.sh brev parked)" : r === "running_unstoppable" ? "Brev cannot stop its type: left running, released (alert brev_unstoppable)" : "Brev refused its stop: left running (alert brev_stop_failed)"}; trying another instance or a fresh one`);
       return createOtherWorker(env, c, pool, image, slot, log);
     }
     // The pod key is the parked instance's: its record starts over for this cluster (no old URL, report or ready mark).
@@ -302,6 +303,13 @@ export async function deletePod(env: Env, podId: string, log: Logf, why: string,
     if (what === "stop_failed") {
       log(`WARNING: ${podId} is still running: Brev refused its stop (${why}); not deleted (alert brev_stop_failed)`);
       return false;
+    }
+    // Owner decision 2026-10-13: a Brev type that cannot be stopped is launched like any other. Its stop leaves the VM
+    // running: released from the cluster (no blind retries), alerted once with its $/hr, billed until the owner deletes it.
+    if (what === "running_unstoppable") {
+      await podUpdate(env, podId, { deleted: true, status: what });
+      log(`WARNING: ${podId} released (${why}) but STILL RUNNING and billing: Brev cannot stop its type; fv-control never deletes a Brev VM on its own: delete it yourself (fv-control.sh brev delete-parked <workspace id>, or the Pods page's parked list) (alert brev_unstoppable)`);
+      return true;
     }
     await podUpdate(env, podId, { deleted: true, ...(what === "deleted" ? {} : { status: what }) });
     log(`${what} ${podId} (${why})`);
