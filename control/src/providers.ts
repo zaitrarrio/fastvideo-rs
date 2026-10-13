@@ -39,6 +39,8 @@ import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
 import { POOL_PRESETS } from "./presets";
 import { HttpError, now, parseJson, putSetting, rateLimit, utcDay } from "./util";
 import { AUX_FILES, HUB_TREES } from "./weights-sources";
+import { REGIONS } from "./cluster/regions";
+import { missingTrees } from "./volumes";
 import { DRIVER_CHECK_SH } from "./driver-check";
 import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 
@@ -318,13 +320,19 @@ export function poolPrequant(pool: PoolSpec): string[] {
   return [...(p?.prequant ?? [])];
 }
 /** A GMI / Brev pool's weights source: its own, else r2 when its config loads trees and every one is published in
- * the R2 weights store (r2weights.ts), else none. Runpod pools: their own, else the volume. */
+ * the R2 weights store (r2weights.ts), else none. Runpod GPU pools: their own, else the volume when it holds every
+ * tree (volumes.ts: the 500 GB EU volume has H3 + LTX only, owner decision 2026-10-13), else r2 when every tree is
+ * published, else the volume (its launch check names the missing trees). */
 export function weightsSource(pool: PoolSpec, env?: Env): "volume" | "hub" | "r2" | "none" {
   if (pool.weights_source) return pool.weights_source;
-  if (!isOtherPool(pool)) return "volume";
   const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
   const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
-  return trees.length && trees.every((t) => pub[t]) ? "r2" : "none";
+  const published = trees.length > 0 && trees.every((t) => pub[t]);
+  if (!isOtherPool(pool)) {
+    if (pool.compute === "CPU" || pool.volume === true) return "volume";
+    return (missingTrees(REGIONS.eu.volume, trees) ?? []).length && published ? "r2" : "volume";
+  }
+  return published ? "r2" : "none";
 }
 const R2_DEFAULT_TREES = () => r2Trees({} as Env);
 export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
@@ -834,7 +842,7 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
   spec.pools.forEach((p, i) => {
     if (!isOtherPool(p)) {
       // A Runpod pool may fetch from the R2 weights store onto its container disk instead of mounting the volume.
-      if (p.weights_source !== "r2") return;
+      if (weightsSource(p, env) !== "r2") return;
       const plan = weightsPlan(p, env);
       const off = r2Cfg(env).off;
       if (off) out.push({ path: ["pools", i, "weights_source"], message: `weights_source r2: ${off}` });

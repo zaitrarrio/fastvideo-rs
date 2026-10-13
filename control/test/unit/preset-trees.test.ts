@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../../src/cluster/image-configs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { POOL_PRESETS } from "../../src/presets";
-import { weightsPlan } from "../../src/providers";
+import { weightsPlan, weightsSource } from "../../src/providers";
 import { R2_AUX_TREES } from "../../src/r2weights";
 import { R2_TREES } from "../../src/r2-trees";
 import { FASTH3_LORA, MXFP8_TREE_GLOB, RECIPE_TREES } from "../../src/recipe-trees";
@@ -55,8 +55,13 @@ describe("preset trees: each preset lists every tree its config reads", () => {
       expect([...(p.prequant ?? [])].sort(), `${p.id}: prequant`).toEqual(e.prequant);
       for (const t of [...p.weights, ...(p.prequant ?? [])]) {
         expect(R2_TREES[t], `${p.id}: ${t} is published in the R2 weights store`).toBeTruthy();
-        expect(missingTrees("jg48s6o1w0", [t]), `${p.id}: ${t} is on the EU volume`).toEqual([]);
       }
+      // The 500 GB EU volume holds H3 + LTX only (owner decision 2026-10-13): a preset's trees are all on it (it
+      // mounts the volume) or the Runpod pool defaults to weights_source r2.
+      const off = missingTrees("bz0ofkfx45", [...p.weights, ...(p.prequant ?? [])])!;
+      if (/^(h3|ltx)/.test(p.id)) expect(off, `${p.id}: on the EU volume`).toEqual([]);
+      else expect(off.length, `${p.id}: not on the EU volume`).toBeGreaterThan(0);
+      expect(weightsSource({ ...p.pool }), `${p.id}: Runpod default`).toBe(off.length ? "r2" : "volume");
       // a nested tree sits inside a tree of the same preset (the fetcher places it there, as on the volume)
       for (const t of p.prequant ?? []) expect(p.weights).toContain(t.split("/")[0]);
     });

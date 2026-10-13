@@ -6,7 +6,8 @@
 #   r2-copy-volume.sh fetch <pod-id> DIR its logs, listings and record.tsv into DIR
 #   r2-copy-volume.sh down <pod-id>      delete the pod and check it is gone
 #
-# The pod (python:3.12-slim, secure CPU, EUR-IS-1) mounts jg48s6o1w0 at /workspace and only READS it; it runs
+# Done 2026-10-11/12 (docs/ops/r2-weights.md §10). The pod (python:3.12-slim, secure CPU, EUR-IS-1) mounts the
+# volume FV_COPY_VOLUME_ID (default jg48s6o1w0, the old 2000 GB EU volume; not the 500 GB one) at /workspace and only READS it; it runs
 # r2-copy-volume-pod.sh: every Hub tree (checked against the Hub's listing at its pinned revision) and every
 # volume-only tree via r2-weights.py publish-dir, runs/ and wan/ via `archive`, then compare-dir, a deep verify read
 # with fv-control's read-only key, and `record`. Rerunning `up` after a dead pod resumes (add-only, idempotent).
@@ -60,7 +61,7 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     export FVX_URL="$url" FVX_RWID FVX_RWSEC FVX_ROID FVX_ROSEC FV_COPY_SKIP_COMPARE="${FV_COPY_SKIP_COMPARE:-0}"
     FVX_RWID="$(cat "$CFG/r2_weights_rw_access_key_id")"; FVX_RWSEC="$(cat "$CFG/r2_weights_rw_secret_access_key")"
     FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
-    payload="$(jq -n --arg name "fv-p0-r2copy-$(date -u +%m%d%H%M)" --arg vol "$FV_EU_VOLUME_ID" --arg dc "$FV_EU_DC" --arg start "$start" \
+    payload="$(jq -n --arg name "fv-p0-r2copy-$(date -u +%m%d%H%M)" --arg vol "${FV_COPY_VOLUME_ID:-jg48s6o1w0}" --arg dc "${FV_COPY_DC:-EUR-IS-1}" --arg start "$start" \
       --arg vcpu "${FV_COPY_VCPU:-16}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" \
       --arg rev "${FV_COPY_REV:-eu-$(date -u +%Y%m%d)}" --arg jobs "${FV_COPY_JOBS:-3}" --arg files "${FV_COPY_FILES:-6}" --arg window "${FV_COPY_WINDOW:-4}" --arg only "${FV_COPY_ONLY:-}" --arg arch "${FV_COPY_ARCHIVE:-}" '{
         name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
@@ -76,7 +77,7 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 300 <<<"$resp")"; exit 1; }
     setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
-    log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr in $FV_EU_DC, backstop pid $! deletes it after ${CAP_S}s; logs https://$id-8000.proxy.runpod.net/"
+    log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr in ${FV_COPY_DC:-EUR-IS-1}, backstop pid $! deletes it after ${CAP_S}s; logs https://$id-8000.proxy.runpod.net/"
     echo "$id"
     ;;
   status)

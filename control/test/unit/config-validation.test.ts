@@ -162,7 +162,7 @@ describe("serverless-endpoint", () => {
     expect(bad("serverless-endpoint", { ...c, mode: "lb" })).toContain("mode");
     expect(bad("serverless-endpoint", { ...c, env: { PORT: "1" } })).toContain("env.PORT");
     expect(bad("serverless-endpoint", { ...g, data_centers: ["XX-YY-1"] })).toContain("data_centers.0");
-    expect(bad("serverless-endpoint", { ...g, data_centers: ["EU-RO-1"] })).toContain("data_centers");
+    expect(bad("serverless-endpoint", { ...g, data_centers: ["EUR-IS-1"] })).toContain("data_centers");
     expect(bad("serverless-endpoint", { ...g, network_volume: "abcdef12" })).toContain("network_volume");
     expect(bad("serverless-endpoint", { ...g, gpu_types: ["NVIDIA RTX 9999"] })).toContain("gpu_types.0");
     expect(bad("serverless-endpoint", { ...g, cpu_flavors: ["cpu3c"] })).toContain("cpu_flavors");
@@ -316,7 +316,7 @@ describe("serverless GPU types (staging rows scale2, scale, testing)", () => {
     const stock = async (pairs: { dc: string; gpu: string }[]) => new Map(pairs.map((p) => [`${p.dc}|${p.gpu}`, p.gpu.includes("RTX PRO 6000") ? { stock: "Low", max_available: 2 } : { stock: null, max_available: 0 }]));
     const h100 = normalizeEndpointSpec({ name: "h", variant: "h3-turbo", gpu_types: ["NVIDIA H100 80GB HBM3"] });
     const r1 = await placementIssues(h100, stock);
-    expect(r1.issues[0]!.message).toMatch(/none of NVIDIA H100 80GB HBM3 is offered in EUR-IS-1/);
+    expect(r1.issues[0]!.message).toMatch(/none of NVIDIA H100 80GB HBM3 is offered in EU-RO-1/);
     const mix = normalizeEndpointSpec({ name: "m", variant: "h3-turbo", gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA H100 80GB HBM3"] });
     const r2 = await placementIssues(mix, stock);
     expect(r2.issues).toEqual([]);

@@ -3,7 +3,7 @@
 // (docs/control/gateway-less-auth.md). (The gateway pod is retired.)
 import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 import type { Env } from "../env";
-import { isOtherPool, weightsPlan } from "../providers";
+import { isOtherPool, weightsPlan, weightsSource } from "../providers";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
 
@@ -244,7 +244,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
  * the R2 weights store onto the container disk (FV_R2_DISK_GB sizes it) with the cluster's ingest token, and the aux
  * files by URL. GMI / Brev pods get theirs in providers.ts providerEnv. */
 function runpodR2Env(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
-  if (isOtherPool(pool) || pool.weights_source !== "r2" || !ctx.env) return {};
+  if (isOtherPool(pool) || !ctx.env || weightsSource(pool, ctx.env) !== "r2") return {};
   const plan = weightsPlan(pool, ctx.env);
   return {
     FV_WEIGHTS_SOURCE: "r2",

@@ -34,7 +34,7 @@
 # checks its driver (>= FV_MIN_DRIVER, default 580) and stops early if older.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
-# fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
+# fv-weights-h3-ltx-500), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
 # FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
@@ -83,7 +83,7 @@ rest() {
 proxy() { curl -sS --max-time 30 --fail "https://$1-8000.proxy.runpod.net/$2"; }
 
 # The weight volume to mount. RUNPOD_VOLUME_NAME may list several volumes
-# (space-separated, e.g. "fv-weights-h3-ltx-hy <a rebuilt US volume>"); the first
+# (space-separated, e.g. "fv-weights-h3-ltx-500 <a rebuilt US volume>"); the first
 # whose datacenter currently reports stock for $GPU wins, else the first.
 volume() {
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then

@@ -779,7 +779,7 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   assert.deepEqual(dyn.pools, ["fake"]);
   assert.ok(dyn.env_keys.some((k) => k.id === "HF_TOKEN" && /in use/.test(k.detail)));
   assert.ok(dyn.env_keys.some((k) => k.id === "FASTVIDEO_WAN_AUDIO" && /mmaudio/.test(k.detail)));
-  assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "jg48s6o1w0");
+  assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "bz0ofkfx45");
   assert.ok(!dyn.regions.find((r) => r.id === "us"), "us is not offered (its weights volume is gone)");
   assert.deepEqual(sc.schemas["cluster-spec"].properties.regions.items.enum, ["eu"]);
   const d = (await call(`/api/docs/cluster-spec/${cid}`, { headers: T() })).j;
@@ -1513,7 +1513,7 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.ok(Array.isArray(v.stock) && v.stock[0].gpu === "NVIDIA H100 80GB HBM3");
   const vbad = (await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, config_toml: toml.replace("r2demo", "r2missing") } }, headers: T() })).j;
   assert.ok(vbad.issues.some((i) => /not in the R2 weights store yet: r2missing/.test(i.message)), JSON.stringify(vbad.issues));
-  assert.match((await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, network_volume: "jg48s6o1w0" } }, headers: T() })).j.error, /replaces the weights volume/);
+  assert.match((await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, network_volume: "bz0ofkfx45" } }, headers: T() })).j.error, /replaces the weights volume/);
   // Create: a template with the r2 boot and the endpoint's weights token, an endpoint with no volume and no DC.
   const before = new Set(mock.sls.templates.keys());
   const r = await call("/api/serverless", { method: "POST", body: { spec }, headers: T() });

@@ -13,8 +13,11 @@
 # (FV_MIN_BALANCE, default 8 $), a detached backstop that deletes the pod
 # after FV_POD_CAP_S (default 5400 s) even if this shell dies, and a ledger
 # (artifacts/runpod/serve/ledger.tsv). The weight volume (RUNPOD_VOLUME_ID,
-# default jg48s6o1w0, EUR-IS-1; the US volume was deleted 2026-10 and is
-# refused, scripts/gpu/volumes.sh) is mounted at /workspace and only read.
+# default the EU volume from scripts/gpu/volumes.sh) is mounted at /workspace
+# and only read. Since 2026-10-13 that volume (bz0ofkfx45, EU-RO-1) holds the
+# H3 + LTX trees only: the Wan trees are not on it, so this script needs a
+# volume that has them (fv-control's weights_source r2 serves Wan instead).
+# The deleted US volume is refused (scripts/gpu/volumes.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"

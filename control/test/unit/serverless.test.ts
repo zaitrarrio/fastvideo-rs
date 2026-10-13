@@ -47,7 +47,7 @@ describe("serverless spec", () => {
   });
   it("GPU defaults: the EU volume, its data center, RTX PRO 6000 Server, no CUDA filter", () => {
     const s = normalizeEndpointSpec({ name: "h3", variant: "h3-turbo" });
-    expect(s).toMatchObject({ compute: "GPU", network_volume: "jg48s6o1w0", data_centers: ["EUR-IS-1"], gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpu_count: 1, allowed_cuda: [] });
+    expect(s).toMatchObject({ compute: "GPU", network_volume: "bz0ofkfx45", data_centers: ["EU-RO-1"], gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpu_count: 1, allowed_cuda: [] });
   });
   it("GPU types keep their priority order; a 5090 fallback is allowed", () => {
     const s = normalizeEndpointSpec({ name: "h3", variant: "h3-turbo", gpu_types: ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA GeForce RTX 5090"] });
@@ -55,7 +55,7 @@ describe("serverless spec", () => {
   });
   it("refuses the deleted US volume, a volume outside its data center, unknown fields and bad names", () => {
     expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", network_volume: "s2k01690bi" })).toThrow(/unknown or unavailable volume/);
-    expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", data_centers: ["US-CA-2"] })).toThrow(/must run in EUR-IS-1/);
+    expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", data_centers: ["US-CA-2"] })).toThrow(/must run in EU-RO-1/);
     expect(() => normalizeEndpointSpec({ name: "x", bogus: 1 })).toThrow();
     expect(() => normalizeEndpointSpec({ name: "Bad Name" })).toThrow(/name/);
   });
@@ -122,11 +122,11 @@ describe("serverless payloads", () => {
     });
     expect(endpointCreatePayload(gpu, "tpl2")).toEqual({
       name: "fvc-h3", templateId: "tpl2", computeType: "GPU", gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpuCount: 1,
-      networkVolumeId: "jg48s6o1w0", dataCenterIds: ["EUR-IS-1"], workersMin: 0, workersMax: 2, idleTimeout: 5, flashboot: true, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
+      networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], workersMin: 0, workersMax: 2, idleTimeout: 5, flashboot: true, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
     });
   });
   it("CUDA: no filter on create by default; an update clears an old filter; an explicit filter is kept", () => {
-    // "13.0" alone hid the EUR-IS-1 RTX PRO 6000 hosts, so workers never started (staging h3-max2, 2026-10-07).
+    // "13.0" alone hid the EU-RO-1 RTX PRO 6000 hosts, so workers never started (staging h3-max2, 2026-10-07).
     expect((endpointCreatePayload(gpu, "t") as any).allowedCudaVersions).toBeUndefined();
     expect((endpointUpdatePayload(gpu) as any).allowedCudaVersions).toEqual([...CUDA_VERSIONS]);
     const pinned = normalizeEndpointSpec({ name: "pin", variant: "h3-max", allowed_cuda: ["12.8"] } as any);
@@ -138,7 +138,7 @@ describe("serverless payloads", () => {
     const pools = lbPools(lb.gpu_types!, [{ id: "NVIDIA GeForce RTX 5090", pool: "ADA_32_PRO" }, { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", pool: "BLACKWELL_96" }]);
     expect(pools).toEqual(["BLACKWELL_96", "ADA_32_PRO"]);
     const p = v2CreatePayload(lb, IMG, pools) as any;
-    expect(p).toMatchObject({ name: "fvc-lb", type: "LOAD_BALANCER", image: IMG, args: "--config /etc/fv/runpod-wan.toml", ports: ["8000/http"], networkVolumes: ["jg48s6o1w0"], dataCenterIds: ["EUR-IS-1"], flashboot: "OFF", workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
+    expect(p).toMatchObject({ name: "fvc-lb", type: "LOAD_BALANCER", image: IMG, args: "--config /etc/fv/runpod-wan.toml", ports: ["8000/http"], networkVolumes: ["bz0ofkfx45"], dataCenterIds: ["EU-RO-1"], flashboot: "OFF", workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
     expect(p.env).toMatchObject({ FV_SERVE_MODE: "http", PORT: "8000", PORT_HEALTH: "8000", FV_WORKERS_MAX: "1" });
   });
   it("CPU queue: REST v2 with the cpu flavors (REST v1 ignores computeType CPU); a config goes into its template", () => {
@@ -310,7 +310,7 @@ describe("serverless operations", () => {
     expect(row).toMatchObject({ status: "active", template_id: "tpl1", own_template: 1 });
     const writes = mock.m.calls.filter((c) => c.method !== "GET" && !c.url.includes("graphql"));
     expect(writes.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(["POST /v1/templates", "POST /v1/endpoints", `PATCH /v1/endpoints/${row.endpoint_id}`]);
-    expect(writes[1]!.body).toMatchObject({ templateId: "tpl1", networkVolumeId: "jg48s6o1w0", dataCenterIds: ["EUR-IS-1"] });
+    expect(writes[1]!.body).toMatchObject({ templateId: "tpl1", networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"] });
     expect(writes[2]!.body.computeType).toBeUndefined();
   });
 
@@ -358,7 +358,7 @@ describe("serverless operations", () => {
     const u = await updateEndpoint(env, who, up, { ...JSON.parse(up.spec), image: { ref: IMG2 } }, { image: IMG2 });
     expect(u.image).toBe(IMG2);
     expect(mock.m.templates.get(up.template_id!)!.imageName).toBe(IMG2);
-    await expect(updateEndpoint(env, who, u, { ...JSON.parse(u.spec), network_volume: "jg48s6o1w0" })).rejects.toThrow(/network_volume: cannot change in place/);
+    await expect(updateEndpoint(env, who, u, { ...JSON.parse(u.spec), network_volume: "bz0ofkfx45" })).rejects.toThrow(/network_volume: cannot change in place/);
   });
 
   it("invoke: /runsync, timings, cold start flag, output scrubbed of secrets", async () => {

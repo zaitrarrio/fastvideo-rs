@@ -12,7 +12,7 @@
 #                                    weights/<dest>.partial-*, checks SHA-256 against
 #                                    the Hub's LFS oid, renames it to weights/<dest>
 #                                    and serves it read-only;
-#                                 2. a CPU pod on the EU volume (fv-weights-h3-ltx-hy)
+#                                 2. a CPU pod on the EU volume (fv-weights-h3-ltx-500)
 #                                    pulls it from the US pod, checks SHA-256, renames;
 #                                 3. both pods are deleted (and checked gone).
 #   fetch-ltx-iclora.sh hub <volume name>

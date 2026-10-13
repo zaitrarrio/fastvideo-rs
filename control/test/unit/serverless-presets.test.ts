@@ -15,10 +15,10 @@ import { SLS_BOOT, templateCreatePayload, templateUpdatePayload, v2CreatePayload
 import { inferPreset, mergeSpec, servingIssues, servingView, SLS_PRESETS } from "../../src/serverless/presets";
 import { compareCapabilities, readToml, servesOf } from "../../src/serverless/serves";
 import { defaultEndpointSpec, normalizeEndpointSpec } from "../../src/serverless/spec";
-import { VOLUME_TREES } from "../../src/volumes";
+import { missingTrees, VOLUME_TREES } from "../../src/volumes";
 
 const IMG = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "a".repeat(64);
-const EU = "jg48s6o1w0";
+const EU = "bz0ofkfx45";
 const ROOT = new URL("../../../", import.meta.url).pathname;
 const REF2V = readFileSync(`${ROOT}configs/serve/runpod-h3-ref2v.toml`, "utf8");
 const b64 = (s: string) => Buffer.from(s, "base64").toString();
@@ -35,7 +35,9 @@ describe("presets: one catalog", () => {
         const s = normalizeEndpointSpec({ name: "t", preset: p.id, mode });
         expect(s, `${p.id} ${mode}`).toMatchObject({ preset: p.id, variant: p.variant, compute: p.compute, mode });
         expect(servingIssues(s).issues, `${p.id} ${mode}`).toEqual([]);
-        if (p.compute === "GPU") expect(s).toMatchObject({ network_volume: EU, data_centers: ["EUR-IS-1"] });
+        // The 500 GB EU volume holds H3 + LTX only (2026-10-13): other presets default to the R2 weights store.
+        if (p.compute === "GPU" && missingTrees(EU, p.weights)!.length) expect(s, p.id).toMatchObject({ weights_source: "r2", network_volume: null });
+        else if (p.compute === "GPU") expect(s, p.id).toMatchObject({ weights_source: "volume", network_volume: EU, data_centers: ["EU-RO-1"] });
       }
     }
   });
@@ -108,20 +110,20 @@ describe("validation before create", () => {
     const toml = `[engine]\nbackend = "cuda"\n[[models]]\nid = "x"\nfamily = "wan"\nrecipe = "wan-max"\nweights = "\${FV_WEIGHTS}/not-on-the-volume"\n`;
     const r = servingIssues(normalizeEndpointSpec({ name: "c", variant: "wan5b", config_toml: toml }));
     expect(paths(r)).toEqual(["network_volume"]);
-    expect(r.issues[0]!.message).toMatch(/no weights tree not-on-the-volume .*weights-manifest\.tsv/);
+    expect(r.issues[0]!.message).toMatch(/no weights tree not-on-the-volume .*volumes\.sh FV_EU_VOLUME_TREES/);
     // No volume at all: a preset is refused by the schema, a custom config that loads weights by the serving check.
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", network_volume: null })).toThrow(/network_volume: preset h3-ref2v loads weights/);
     const nv = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-turbo", network_volume: null }));
     expect(nv.issues[0]).toMatchObject({ path: ["network_volume"], message: expect.stringMatching(/loads weight trees \(h3-base\)/) });
   });
-  it("data centre: a worker with the EU volume runs in EUR-IS-1 only", () => {
-    expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", data_centers: ["US-CA-2"] })).toThrow(/must run in EUR-IS-1/);
+  it("data centre: a worker with the EU volume runs in EU-RO-1 only", () => {
+    expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", data_centers: ["US-CA-2"] })).toThrow(/must run in EU-RO-1/);
   });
   it("a config path must be in the variant's image (the incident's companion config is not in h3-max)", () => {
     const r = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-max", config: "/etc/fv/runpod-h3-ref2v.toml" }));
     expect(paths(r)).toContain("config");
     expect(r.issues.find((i) => i.path[0] === "config")!.message).toMatch(/carries \/etc\/fv\/runpod-h3-max\.toml, \/etc\/fv\/runpod-fake\.toml; .* not in it \(preset h3-ref2v sends that config inline\)/);
-    expect(paths(servingIssues(normalizeEndpointSpec({ name: "c", variant: "wan5b", config: "/etc/fv/runpod-wan14b.toml" })))).toEqual([]);
+    expect(paths(servingIssues(normalizeEndpointSpec({ name: "c", variant: "wan5b", config: "/etc/fv/runpod-wan14b.toml", weights_source: "r2" })))).toEqual([]);
     // An image ref: not checkable, a warning.
     const ref = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-max", config: "/etc/fv/x.toml", image: { ref: IMG } }));
     expect(ref.warnings.map((w) => w.path.join("."))).toContain("config");
@@ -248,10 +250,12 @@ describe("static data", () => {
   it("every Runpod GPU type has its memory", () => {
     expect(Object.keys(GPU_MEMORY_GB).sort()).toEqual([...RUNPOD_GPU_TYPES].sort());
   });
-  it("the EU volume's tree list has every manifest row and every preset's trees", () => {
+  it("the EU volume's tree list is volumes.sh FV_EU_VOLUME_TREES; every H3 / LTX preset's trees are on it", () => {
     const eu = VOLUME_TREES[EU]!;
-    const rows = readFileSync(`${ROOT}scripts/gpu/weights-manifest.tsv`, "utf8").split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")[0]!.split("/")[0]!);
-    for (const r of rows) expect(eu, r).toContain(r);
-    for (const p of SLS_PRESETS) for (const t of p.weights) expect(eu, `${p.id}: ${t}`).toContain(t);
+    const sh = /FV_EU_VOLUME_TREES="([^"]*)"/.exec(readFileSync(`${ROOT}scripts/gpu/volumes.sh`, "utf8"))![1]!.replace(/\\\n/g, " ").split(/\s+/).filter(Boolean);
+    expect([...eu].sort()).toEqual(sh.sort());
+    const rows = new Set(readFileSync(`${ROOT}scripts/gpu/weights-r2.tsv`, "utf8").split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")[0]!));
+    for (const t of eu) expect(rows.has(t), `${t} is published in R2 (r2-fill-volume.sh filled it from there)`).toBe(true);
+    for (const p of SLS_PRESETS) if (/^(h3|ltx)/.test(p.id)) for (const t of [...p.weights, ...p.prequant]) expect(missingTrees(EU, [t]), `${p.id}: ${t}`).toEqual([]);
   });
 });
