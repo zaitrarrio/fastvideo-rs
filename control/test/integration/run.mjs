@@ -57,7 +57,19 @@ let passed = 0;
 const t0 = Date.now();
 
 async function call(path, { method = "GET", body, headers = {}, raw = false } = {}) {
-  const r = await fetch(B + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
+  const once = () => fetch(B + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
+  // After `wrangler d1 execute` (d1Exec), workerd can drop the next connection ("fetch failed" before any answer):
+  // the request is sent again, at most twice.
+  let r;
+  for (let i = 0; ; i++) {
+    try {
+      r = await once();
+      break;
+    } catch (e) {
+      if (i >= 2 || !(e instanceof TypeError)) throw e;
+      await sleep(500);
+    }
+  }
   const text = await r.text();
   bodies.push(text);
   let j = null;
