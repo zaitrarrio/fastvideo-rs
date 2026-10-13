@@ -8,7 +8,12 @@
 //! - `Content-Type: application/sdp`; the body is the **full** offer
 //!   (non-trickle): host candidates plus a STUN srflx candidate gathered
 //!   before the POST, and `a=end-of-candidates`.
-//! - H.264 is offered first and VP8 not at all (Cloudflare plays VP8 black).
+//! - One video codec is offered, chosen by [`WhipConfig::codec`]: H.264
+//!   Constrained Baseline by default (Cloudflare's recommended codec), else
+//!   VP8 or VP9 (profile 0), which Cloudflare Stream's WHIP ingest also
+//!   lists (developers.cloudflare.com/stream/webrtc-beta). The old note
+//!   here that "Cloudflare plays VP8 black" was never verified against the
+//!   service; docs/serve/stream-outputs.md records what was.
 //! - 200 or 201 carries the answer; anything else is an error with the body.
 //! - `Location` may be relative and is resolved against the (final) POST URL
 //!   per RFC 3986; it is kept for `DELETE`.
@@ -17,12 +22,14 @@
 //! - 30 s timeout; teardown is best effort.
 //! - A video-only session offers only a video m-line (design §5.3).
 //! - The config names the [`WhipTarget`], which picks the [`EncodeProfile`]
-//!   (design §0 decision 2): Cloudflare caps at 1280x720 and H.264 level
-//!   3.1; MediaMTX and other relays take native resolution at level 4.0. The
-//!   offer advertises that level and the media layer reads
-//!   [`WhipConfig::profile`] to scale and encode.
+//!   (design §0 decision 2): the H.264 level offered in SDP, `42e01f` (3.1)
+//!   for Cloudflare as its docs ask, 4.0 for MediaMTX. Every target gets
+//!   the native resolution and fps; the bitstream's level is the one the
+//!   canvas needs (see [`crate::profile`]).
 //!
-//! There is no PATCH (trickle) and no ICE restart, as in strobe.
+//! There is no PATCH (trickle) and no ICE restart, as in strobe: the offer
+//! is complete (host + srflx candidates), which Cloudflare and MediaMTX
+//! accept, so trickle ICE (whip-06 PATCH) is not needed.
 
 use std::time::Duration;
 
@@ -30,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::profile::EncodeProfile;
+use crate::writer::VideoCodec;
 use crate::WebrtcError;
 
 /// Default POST/DELETE timeout (strobe `whip_timeout_s=30`).
@@ -112,9 +120,9 @@ fn base64(input: &[u8]) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WhipTarget {
-    /// Cloudflare Stream / Realtime: 720p cap, H.264 level 3.1.
+    /// Cloudflare Stream / Realtime: `42e01f` offered, native resolution.
     Cloudflare,
-    /// MediaMTX (self-hosted relay): native resolution, level 4.0.
+    /// MediaMTX (self-hosted relay): level 4.0 offered, native resolution.
     #[serde(alias = "peer")]
     Mediamtx,
 }
@@ -164,6 +172,8 @@ pub struct WhipConfig {
     pub timeout: Duration,
     /// Selects the encode profile (design §0 decision 2).
     pub target: WhipTarget,
+    /// The one video codec offered (default H.264).
+    pub codec: VideoCodec,
 }
 
 impl WhipConfig {
@@ -176,6 +186,7 @@ impl WhipConfig {
             auth,
             timeout: DEFAULT_TIMEOUT,
             target,
+            codec: VideoCodec::H264,
         }
     }
 
@@ -184,7 +195,12 @@ impl WhipConfig {
         self
     }
 
-    /// Resolution cap and H.264 level the media layer must encode to.
+    pub fn with_codec(mut self, codec: VideoCodec) -> Self {
+        self.codec = codec;
+        self
+    }
+
+    /// The H.264 level the offer advertises (resolution is native).
     pub fn profile(&self) -> EncodeProfile {
         self.target.profile()
     }
@@ -367,6 +383,7 @@ mod publisher {
             opts: WhipPublishOptions,
         ) -> Result<Self, WebrtcError> {
             let profile = cfg.profile();
+            let codec = cfg.codec;
             let client = WhipClient::new(cfg)?;
             let srflx = if opts.stun.is_empty() {
                 Vec::new()
@@ -380,7 +397,7 @@ mod publisher {
                     channels: Vec::new(),
                     srflx,
                     h264_level: profile.h264_level,
-                    video_codecs: vec![crate::writer::VideoCodec::H264],
+                    video_codecs: vec![codec],
                 })
                 .await?;
             let answer = client.post_offer(&offer).await?;
@@ -415,12 +432,12 @@ mod publisher {
             self.resource.as_ref()
         }
 
-        /// The resolution cap and H.264 level the encoder must use.
+        /// The H.264 level the offer advertised.
         pub fn profile(&self) -> EncodeProfile {
             self.client.config().profile()
         }
 
-        /// The first video codec of the answer (should be `H264`).
+        /// The first video codec of the answer (`H264`, `VP8` or `VP9`).
         pub fn negotiated_video_codec(&self) -> Option<&str> {
             self.negotiated_video.as_deref()
         }
@@ -509,7 +526,11 @@ mod tests {
         );
         let c = WhipConfig::new(mtx, WhipAuth::None).with_target(WhipTarget::Cloudflare);
         assert_eq!(c.profile(), EncodeProfile::CLOUDFLARE);
-        assert_eq!(c.profile().output_size(1344, 768), (1260, 720));
+        assert_eq!(c.codec, VideoCodec::H264);
+        assert_eq!(c.clone().with_codec(VideoCodec::Vp8).codec, VideoCodec::Vp8);
+        // Native resolution for every target (no 720p cap).
+        assert_eq!(c.profile().output_size(1344, 768), (1344, 768));
+        assert_eq!(c.profile().output_size(1920, 1080), (1920, 1080));
         assert_eq!(WhipTarget::Mediamtx.profile(), EncodeProfile::NATIVE);
         assert_eq!("peer".parse::<WhipTarget>().unwrap(), WhipTarget::Mediamtx);
         assert_eq!(

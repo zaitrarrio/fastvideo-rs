@@ -45,6 +45,8 @@ async fn app_with(extra: &[(&str, &str)]) -> App {
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
     env.insert("FV_STATE_DIR".to_owned(), dir.display().to_string());
     env.insert("FV_PUBLIC_BASE_URL".to_owned(), "http://fv.test".to_owned());
+    // The WHIP endpoints here are on loopback.
+    env.insert("FV_OUTPUTS_ALLOW_PRIVATE".to_owned(), "1".to_owned());
     for (k, v) in extra {
         env.insert((*k).to_owned(), (*v).to_owned());
     }

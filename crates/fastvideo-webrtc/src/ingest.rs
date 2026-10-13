@@ -259,10 +259,12 @@ struct Worker {
 /// PLIs at most this often.
 const PLI_INTERVAL: Duration = Duration::from_secs(1);
 
-fn to_input_codec(c: VideoCodec) -> InputVideoCodec {
+fn to_input_codec(c: VideoCodec) -> Option<InputVideoCodec> {
     match c {
-        VideoCodec::Vp8 => InputVideoCodec::Vp8,
-        VideoCodec::H264 => InputVideoCodec::H264,
+        VideoCodec::Vp8 => Some(InputVideoCodec::Vp8),
+        VideoCodec::H264 => Some(InputVideoCodec::H264),
+        // Never negotiated for ingest (the host does not answer VP9).
+        VideoCodec::Vp9 => None,
     }
 }
 
@@ -344,7 +346,7 @@ impl Worker {
     fn video(&mut self, m: InboundMedia) {
         let Some(caps) = self.cfg.video.clone() else { return };
         self.sh.stats().video_frames_in += 1;
-        let Some(codec) = m.codec.map(to_input_codec) else { return };
+        let Some(codec) = m.codec.and_then(to_input_codec) else { return };
         if !caps.codecs.contains(&codec) {
             self.reject(format!("codec {} is not accepted", codec.as_str()));
             return;

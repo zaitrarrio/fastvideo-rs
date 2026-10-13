@@ -88,6 +88,9 @@ pub struct PreparedChunk {
 
 pub enum MediaCmd {
     Chunk(PreparedChunk),
+    /// Copy every paced tick (frame + audio) to an output
+    /// (docs/serve/stream-outputs.md); replaces a previous tap.
+    Tap(fastvideo_media::output::OutputTap),
     /// PLI/FIR or a new connection: force a keyframe (rate limited).
     Keyframe,
     /// Opus target bitrate (`configure.audio_bitrate`).
@@ -159,6 +162,8 @@ pub struct MediaLoop<S: MediaSink> {
     underrun_since: Option<Instant>,
     played_any: bool,
     last_index: u32,
+    /// The session's output copy, if any.
+    tap: Option<fastvideo_media::output::OutputTap>,
 }
 
 impl<S: MediaSink> MediaLoop<S> {
@@ -192,6 +197,7 @@ impl<S: MediaSink> MediaLoop<S> {
             underrun_since: None,
             played_any: false,
             last_index: 0,
+            tap: None,
         })
     }
 
@@ -227,6 +233,7 @@ impl<S: MediaSink> MediaLoop<S> {
                 self.gauges.pending_chunks.fetch_add(1, Ordering::Relaxed);
                 self.queue.push_back(Playing { chunk: c, slices, next: 0, started: false });
             }
+            MediaCmd::Tap(t) => self.tap = Some(t),
             MediaCmd::Keyframe => {
                 if self.keyframes.request(Instant::now()) {
                     self.force_keyframe();
@@ -309,6 +316,12 @@ impl<S: MediaSink> MediaLoop<S> {
             }
             if self.video_failed.load(Ordering::Relaxed) {
                 return;
+            }
+            // The output copy gets the same tick; a gone copy is dropped.
+            if let Some(tap) = &self.tap {
+                if !tap.push(frame, tick.audio.as_deref()) {
+                    self.tap = None;
+                }
             }
             if let (Some(samples), Some(opus)) = (&tick.audio, &mut self.opus) {
                 match opus.push(samples) {

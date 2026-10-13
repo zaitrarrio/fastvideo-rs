@@ -14,7 +14,7 @@ use fastvideo_media::mp4::{self, AudioTarget, Crop, Mp4Spec, PostProcess};
 use fastvideo_media::probe::{self, MediaKind};
 use fastvideo_media::sink::{FfmpegSink, SinkAudioIn, SinkConfig, SinkTarget, HLS_PLAYLIST};
 use fastvideo_media::tools;
-use fastvideo_media::video::{create_encoder, EncoderBackend, FfmpegH264, H264Config, PublishTarget};
+use fastvideo_media::video::{create_encoder, EncoderBackend, FfmpegH264, H264Config};
 use fastvideo_media::{Pcm, RgbFrame};
 
 fn have_ffmpeg() -> bool {
@@ -276,8 +276,9 @@ fn pipe_encoder_cloudflare_scale_and_forced_idr_restart() {
     if !have_ffmpeg() {
         return;
     }
-    // H3 1344x768 published to Cloudflare: encoded at 1280x720, level 3.1.
-    let cfg = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
+    // A scaled config through the ffmpeg filter graph: 1280x720, level 3.1.
+    let mut cfg = H264Config::new(1344, 768, 24);
+    (cfg.width, cfg.height, cfg.level) = (1280, 720, Some(fastvideo_media::h264::H264Level::L3_1));
     let mut enc = create_encoder(EncoderBackend::CpuTestX264, cfg).unwrap();
     let mut aus = Vec::new();
     for i in 0..40 {

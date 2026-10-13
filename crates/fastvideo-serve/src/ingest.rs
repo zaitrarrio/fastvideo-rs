@@ -475,6 +475,8 @@ impl OutEncoder {
             )
             .map(|e| OutEncoder::Vp8(Box::new(e)))
             .map_err(|e| e.to_string()),
+            // The ingest answer never negotiates VP9.
+            VideoCodec::Vp9 => Err("VP9 is not served to ingest peers".into()),
         }
     }
 

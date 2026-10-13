@@ -57,9 +57,9 @@ fn run(target: PublishTarget, want: (u32, u32, H264Level)) {
 }
 
 #[test]
-fn nvenc_cloudflare_720p_level_3_1() {
+fn nvenc_cloudflare_native_level_3_2() {
     if gpu() {
-        run(PublishTarget::Cloudflare, (1280, 720, H264Level::L3_1));
+        run(PublishTarget::Cloudflare, (1344, 768, H264Level::L3_2));
     }
 }
 

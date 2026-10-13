@@ -146,7 +146,7 @@ impl SpareSpec {
     pub fn vp8(cfg: &crate::vp8::Vp8Config) -> Result<Self> {
         cfg.validate()?;
         Ok(Self {
-            codec: "libvpx",
+            codec: cfg.encoder_name(),
             args: crate::vp8::ffmpeg_args(cfg),
             framer: Framer::Ivf,
             frame_len: cfg.width as usize * cfg.height as usize * 3,

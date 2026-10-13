@@ -147,6 +147,8 @@ struct Shared {
     wake: (Mutex<()>, Condvar),
     stats: MediaStats,
     on_first_frame: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// An output copy of the session (docs/serve/stream-outputs.md).
+    tap: Mutex<Option<fastvideo_media::output::OutputTap>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -184,6 +186,7 @@ impl MediaPipeline {
             wake: (Mutex::new(()), Condvar::new()),
             stats: MediaStats::default(),
             on_first_frame: Mutex::new(None),
+            tap: Mutex::new(None),
         });
         let v = sh.clone();
         let rt = tokio::runtime::Handle::current();
@@ -248,7 +251,15 @@ impl MediaPipeline {
         lock(&self.sh.requests).entry(codec).or_insert((false, None)).0 = true;
     }
 
+    /// Copies every tick (the picture showing, the tick's audio) to an
+    /// output; replaces a previous tap.
+    pub fn set_tap(&self, tap: fastvideo_media::output::OutputTap) {
+        *lock(&self.sh.tap) = Some(tap);
+    }
+
     pub fn close(&self) {
+        // Ends the output copy (its publisher tears down).
+        lock(&self.sh.tap).take();
         self.sh.closed.store(true, Ordering::Relaxed);
         let (_, cv) = &self.sh.wake;
         cv.notify_all();
@@ -323,6 +334,20 @@ fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Hand
             continue;
         };
         sh.stats.ticks.fetch_add(1, Ordering::Relaxed);
+        {
+            // The output copy gets every tick: the picture showing (held
+            // frames too) and exactly the tick's audio.
+            let mut tap = lock(&sh.tap);
+            if let Some(tp) = tap.as_ref() {
+                let pic = match &t.video {
+                    VideoOut::Fresh(f) | VideoOut::Repeat(f) => Some(f),
+                    VideoOut::Nothing => st.current.as_ref(),
+                };
+                if !tp.push(pic, t.audio.as_deref()) {
+                    *tap = None;
+                }
+            }
+        }
         if let Some(a) = t.audio {
             sh.stats.audio_samples_in.fetch_add(a.len() as u64, Ordering::Relaxed);
             let mut buf = lock(&sh.audio);
@@ -454,6 +479,7 @@ fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, o
         key |= match codec {
             VideoCodec::H264 => fastvideo_media::h264::is_idr(&data),
             VideoCodec::Vp8 => fastvideo_media::vp8::is_keyframe(&data),
+            VideoCodec::Vp9 => fastvideo_media::vp8::vp9_is_keyframe(&data),
         };
         sh.stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
         sh.stats.video_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -638,6 +664,8 @@ fn new_encoder(
             LibvpxEncoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>)
         }
         VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
+        // `sendable_codecs` never lists VP9 (the host does not answer it).
+        VideoCodec::Vp9 => Err("VP9 is not served to Reactor peers".into()),
     }
 }
 
@@ -886,6 +914,7 @@ mod tests {
             wake: (Mutex::new(()), Condvar::new()),
             stats: MediaStats::default(),
             on_first_frame: Mutex::new(None),
+            tap: Mutex::new(None),
         };
         let request = |c| lock(&sh.requests).entry(c).or_insert((false, None)).0 = true;
         let t0 = Instant::now();

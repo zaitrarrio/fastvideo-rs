@@ -262,6 +262,17 @@ struct Session {
     up_rx: mpsc::UnboundedReceiver<ups::Done>,
     /// The upsampler's deck needs a [`Session::plan_ahead`].
     plan_dirty: bool,
+    /// The output copy's events (`output_ready` / `_error` / `_ended`),
+    /// forwarded to the client (docs/serve/stream-outputs.md).
+    output_events: Option<mpsc::UnboundedReceiver<Value>>,
+}
+
+/// The next output event; pends forever without an output.
+async fn next_output(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<Value> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// What the upsampler needs of a chunk plan.
@@ -375,6 +386,7 @@ pub async fn run(init: SessionInit) {
         up_tx,
         up_rx,
         plan_dirty: false,
+        output_events: None,
     };
     handle.set_state(SessionState::Ready);
     let reason = s.run_loop().await;
@@ -411,6 +423,10 @@ impl Session {
                 Some(b) = self.block_rx.recv() => self.on_block(b),
                 Some(e) = self.media_rx.recv() => self.on_media(e),
                 Some(d) = self.up_rx.recv() => self.on_upsampled(d),
+                ev = next_output(&mut self.output_events) => match ev {
+                    Some(v) => self.send(v),
+                    None => self.output_events = None,
+                },
                 _ = tick.tick() => self.on_tick(),
                 _ = handle.end.notified() => self.end(EndReason::ClientGone),
             }
@@ -480,6 +496,15 @@ impl Session {
                             "deck_size": st.deck_size,
                             "vision": st.vision,
                             "server_message_types": m::UPSAMPLE_SERVER_MESSAGE_TYPES,
+                        });
+                    }
+                    if let Some(hook) = &self.init.cfg.outputs {
+                        // Ours: an output copy of the session (`x_fv_output`).
+                        info["x_fv_output"] = json!({
+                            "available": true,
+                            "fields": if self.init.cfg.allow_output { json!(["x_fv_output", "output"]) } else { json!(["x_fv_output"]) },
+                            "server_message_types": fastvideo_media::output::OUTPUT_MESSAGE_TYPES,
+                            "destinations": hook.0.info(),
                         });
                     }
                     self.send(info);
@@ -560,6 +585,25 @@ impl Session {
                 }
             }
             ClientMessage::Configure(c) => {
+                // An output copy (ours): `x_fv_output`, or `output` when the
+                // server allows the field fal's schema forbids.
+                let want_output = match (&c.output, &c.x_fv_output) {
+                    (Some(_), Some(_)) => {
+                        return self.send(m::error(ErrorCode::InvalidMessage, "give `x_fv_output` or `output`, not both", Some(c.prompt_version)))
+                    }
+                    (Some(_), None) if !self.init.cfg.allow_output => {
+                        return self.send(m::error(
+                            ErrorCode::InvalidMessage,
+                            "invalid `configure` message: unknown field `output` (send `x_fv_output`, or enable [director] allow_output)",
+                            Some(c.prompt_version),
+                        ))
+                    }
+                    (Some(o), None) | (None, Some(o)) if !o.is_null() => Some(o.clone()),
+                    _ => None,
+                };
+                if want_output.is_some() && self.init.cfg.outputs.is_none() {
+                    return self.send(m::error(ErrorCode::InvalidInput, "this server has no stream outputs", Some(c.prompt_version)));
+                }
                 if let Err((reply, fatal)) = self.control.precheck_configure(&c) {
                     self.send(reply.clone());
                     if fatal {
@@ -610,8 +654,34 @@ impl Session {
                 if let Some(b) = c.audio_bitrate {
                     let _ = self.media.send(MediaCmd::AudioBitrate(b));
                 }
+                // The output copy: a refused request refuses the configure;
+                // anything after that is an `output_error` event.
+                let copy = match (&want_output, &self.init.cfg.outputs) {
+                    (Some(req), Some(hook)) => {
+                        let media = fastvideo_media::output::OutputMedia {
+                            fps: self.clips.spec().fps,
+                            audio_channels: self.clips.spec().tracks.has_audio().then_some(2),
+                            label: format!("wma-{}", self.init.handle.id),
+                        };
+                        match hook.0.open(req, media) {
+                            Ok(copy) => Some(copy),
+                            Err(e) => {
+                                let field = if c.x_fv_output.is_some() { "x_fv_output" } else { "output" };
+                                let msg = format!("{field}: {}{}", e.param.map(|p| format!("{p}: ")).unwrap_or_default(), e.message);
+                                return self.send(m::error(ErrorCode::InvalidInput, msg, v));
+                            }
+                        }
+                    }
+                    _ => None,
+                };
                 let mut reply = self.control.configure(&c, image, end_image, script_images);
                 self.start_upsampling(&c, &mut reply).await;
+                if let Some(copy) = copy {
+                    tracing::info!(session = %self.init.handle.id, output = %copy.view, "director output copy");
+                    reply["x_fv_output"] = copy.view.clone();
+                    let _ = self.media.send(MediaCmd::Tap(copy.tap));
+                    self.output_events = Some(copy.events);
+                }
                 self.send(reply);
                 if let Some(cz) = &self.causal {
                     // Seed before the first prompt (it restarts the rollout),

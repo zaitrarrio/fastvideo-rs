@@ -73,6 +73,10 @@ pub struct DirectorConfig {
     /// pauses at the next block boundary, so a prompt update reaches the
     /// picture within about this lead.
     pub causal_lead_seconds: f64,
+    /// Opens output copies (`configure.x_fv_output`); `None`: refused.
+    pub outputs: Option<fastvideo_media::output::OutputHook>,
+    /// Also accept `configure.output` (not in fal's schema).
+    pub allow_output: bool,
 }
 
 impl Default for DirectorConfig {
@@ -94,6 +98,8 @@ impl Default for DirectorConfig {
             max_sessions: 1,
             causal_chunk_blocks: 4,
             causal_lead_seconds: 2.0,
+            outputs: None,
+            allow_output: false,
         }
     }
 }
@@ -336,7 +342,8 @@ impl DirectorService {
         let codec = match peer.video_codec() {
             Some(WVideoCodec::H264) => VideoCodec::H264,
             Some(WVideoCodec::Vp8) => VideoCodec::Vp8,
-            None => {
+            // Never answered (the director's answer codecs are H.264 / VP8).
+            Some(WVideoCodec::Vp9) | None => {
                 peer.close();
                 release(&stream);
                 return Err(ApiError::invalid("the offer has no receivable video we can send (H.264 or VP8)"));

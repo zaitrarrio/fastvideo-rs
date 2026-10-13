@@ -1,5 +1,15 @@
-//! RTMP / HLS / file sinks: one ffmpeg process with two inputs
-//! (streaming-refs §4.2, design §5.3).
+//! RTMP(S) / SRT / HLS / file sinks: one ffmpeg process with two inputs
+//! (streaming-refs §4.2, design §5.3, docs/serve/stream-outputs.md).
+//!
+//! - Live targets (`rtmp://`, `rtmps://` as FLV; `srt://` as MPEG-TS) meet
+//!   Cloudflare Stream Live's input rules: H.264 + AAC-LC 48 kHz stereo
+//!   (ADTS in MPEG-TS), CBR video clamped to 2-13 Mb/s, a closed 2 s GOP
+//!   (Constrained Baseline, IDR only, no B-frames, no scene-cut keyframes).
+//! - The URL of a live target carries credentials (an RTMP stream key in
+//!   the path, an SRT passphrase in the query): they never reach a log or
+//!   an error. ffmpeg's stderr lines are scrubbed of every secret part
+//!   ([`SinkTarget::secrets`]) before they are kept, and `Debug` prints
+//!   [`SinkTarget::redacted`].
 //!
 //! - Video: RGB24 frames on ffmpeg's stdin.
 //! - Audio: s16le PCM on a **second pipe**. The reference client passes an
@@ -37,15 +47,187 @@ use crate::video::{FfmpegH264, H264Config};
 /// HLS playlist file name inside the output directory.
 pub const HLS_PLAYLIST: &str = "stream.m3u8";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SinkTarget {
-    /// FLV to an RTMP ingest; 2 s keyframes.
+    /// FLV to an RTMP ingest (`rtmp://` or `rtmps://`, the stream key in the
+    /// path); 2 s keyframes.
     Rtmp { url: String },
+    /// MPEG-TS over SRT (`srt://host:port?streamid=…&passphrase=…`, see
+    /// [`srt_url`]); 2 s keyframes.
+    Srt { url: String },
     /// Rolling HLS in `dir`: 1 s keyframes and segments, `window` segments.
     Hls { dir: PathBuf, segment_s: u32, window: u32 },
     /// A local MP4 (recording, and tests).
     File { path: PathBuf },
 }
+
+impl std::fmt::Debug for SinkTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SinkTarget::Rtmp { .. } => write!(f, "Rtmp({})", self.redacted()),
+            SinkTarget::Srt { .. } => write!(f, "Srt({})", self.redacted()),
+            SinkTarget::Hls { dir, segment_s, window } => write!(f, "Hls({}, {segment_s}s x {window})", dir.display()),
+            SinkTarget::File { path } => write!(f, "File({})", path.display()),
+        }
+    }
+}
+
+impl SinkTarget {
+    /// Whether this is a live network target (RTMP(S), SRT).
+    pub fn is_live(&self) -> bool {
+        matches!(self, SinkTarget::Rtmp { .. } | SinkTarget::Srt { .. })
+    }
+
+    /// The URL without credentials: scheme, host and port, plus the path of
+    /// an RTMP URL with its last segment (the stream key) replaced. No
+    /// userinfo, no query.
+    pub fn redacted(&self) -> String {
+        match self {
+            SinkTarget::Rtmp { url } => {
+                let (origin, path) = split_origin(url);
+                let path = path.split(['?', '#']).next().unwrap_or("");
+                let keep = match path.trim_end_matches('/').rsplit_once('/') {
+                    Some((head, _key)) => format!("{head}/<key>"),
+                    None => String::new(),
+                };
+                format!("{origin}{keep}")
+            }
+            SinkTarget::Srt { url } => split_origin(url).0,
+            SinkTarget::Hls { dir, .. } => dir.display().to_string(),
+            SinkTarget::File { path } => path.display().to_string(),
+        }
+    }
+
+    /// The substrings that must never be printed: the whole URL, its
+    /// userinfo, an RTMP stream key, the query values (raw and decoded).
+    pub fn secrets(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let url = match self {
+            SinkTarget::Rtmp { url } | SinkTarget::Srt { url } => url,
+            _ => return out,
+        };
+        out.push(url.clone());
+        let after_scheme = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
+        let end = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
+        let (authority, rest) = after_scheme.split_at(end);
+        if let Some((userinfo, _)) = authority.rsplit_once('@') {
+            out.extend(userinfo.split(':').map(str::to_owned));
+        }
+        let (path, query) = match rest.split_once('?') {
+            Some((p, q)) => (p, q),
+            None => (rest, ""),
+        };
+        if matches!(self, SinkTarget::Rtmp { .. }) {
+            if let Some(key) = path.trim_end_matches('/').rsplit('/').next() {
+                out.push(key.to_owned());
+            }
+        }
+        for kv in query.split('#').next().unwrap_or("").split('&') {
+            if let Some((_, v)) = kv.split_once('=') {
+                out.push(v.to_owned());
+                out.push(percent_decode(v));
+            }
+        }
+        // Short values (`caller`, `1316`) are settings, not secrets.
+        out.retain(|x| x.len() >= 6 && x != "caller");
+        out.sort_by_key(|x| std::cmp::Reverse(x.len()));
+        out.dedup();
+        out
+    }
+}
+
+/// `scheme://host:port` (no userinfo) and the rest after the authority.
+fn split_origin(url: &str) -> (String, String) {
+    let Some((scheme, rest)) = url.split_once("://") else { return ("<url>".into(), String::new()) };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    (format!("{scheme}://{host}"), rest[end..].to_owned())
+}
+
+/// Replaces every secret in `line` with `<redacted>` (longest first).
+pub fn scrub(line: &str, secrets: &[String]) -> String {
+    let mut out = line.to_owned();
+    for s in secrets {
+        if !s.is_empty() && out.contains(s.as_str()) {
+            out = out.replace(s.as_str(), "<redacted>");
+        }
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Percent-encodes an SRT query value (RFC 3986 unreserved characters kept).
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// An ffmpeg `srt://` URL in caller mode: `base` (`srt://host:port`; a
+/// query it has is kept), `streamid` and `passphrase` added
+/// percent-encoded, `latency` (ffmpeg's libsrt takes microseconds) and the
+/// MPEG-TS payload size (7 x 188).
+pub fn srt_url(base: &str, stream_id: Option<&str>, passphrase: Option<&str>, latency_ms: u32) -> String {
+    let has = |k: &str| base.split(['?', '&']).skip(1).any(|kv| kv.split('=').next() == Some(k));
+    let mut adds: Vec<(&str, String)> = Vec::new();
+    if let Some(id) = stream_id.filter(|v| !v.is_empty()) {
+        if !has("streamid") {
+            adds.push(("streamid", percent_encode(id)));
+        }
+    }
+    if let Some(p) = passphrase.filter(|v| !v.is_empty()) {
+        if !has("passphrase") {
+            adds.push(("passphrase", percent_encode(p)));
+        }
+    }
+    if !has("latency") {
+        adds.push(("latency", (u64::from(latency_ms) * 1000).to_string()));
+    }
+    if !has("mode") {
+        adds.push(("mode", "caller".into()));
+    }
+    if !has("pkt_size") {
+        adds.push(("pkt_size", "1316".into()));
+    }
+    let mut u = base.trim_end_matches(['?', '&']).to_owned();
+    let mut sep = if u.contains('?') { '&' } else { '?' };
+    for (k, v) in adds {
+        u.push(sep);
+        u.push_str(k);
+        u.push('=');
+        u.push_str(&v);
+        sep = '&';
+    }
+    u
+}
+
+/// Video bitrate bounds for live targets (Cloudflare Stream Live takes
+/// 2-14 Mb/s combined; AAC adds 128 kb/s).
+pub const LIVE_VIDEO_BPS: (u32, u32) = (2_000_000, 13_000_000);
 
 /// PCM the caller feeds per tick (wire audio from the pacer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +274,16 @@ impl SinkConfig {
         }
     }
 
+    /// The video bitrate ffmpeg is given: live targets are clamped to
+    /// [`LIVE_VIDEO_BPS`].
+    pub fn effective_video_bps(&self) -> u32 {
+        if self.target.is_live() {
+            self.video_bitrate_bps.clamp(LIVE_VIDEO_BPS.0, LIVE_VIDEO_BPS.1)
+        } else {
+            self.video_bitrate_bps
+        }
+    }
+
     /// The full ffmpeg argument list (after the binary) for an audio port.
     pub fn ffmpeg_args(&self, audio_port: Option<u16>) -> Result<Vec<String>> {
         let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-nostats", "-y"].map(String::from).to_vec();
@@ -113,15 +305,31 @@ impl SinkConfig {
         }
         a.extend(["-map", "0:v", "-map", "1:a"].map(String::from));
         let mut h = H264Config::new(self.width, self.height, self.fps);
-        h.bitrate_bps = self.video_bitrate_bps;
+        h.bitrate_bps = self.effective_video_bps();
         h.gop_seconds = self.gop_seconds();
-        a.extend(self.encoder.stream_args(&h)?);
-        a.extend(["-c:a", "aac", "-b:a"].map(String::from));
+        let mut v = self.encoder.stream_args(&h)?;
+        if self.target.is_live() {
+            // CBR with a filler-padded HRD for libx264 (NVENC's `-rc cbr`
+            // already pads), and the closed-GOP flag for both.
+            for x in v.iter_mut() {
+                if x == "aud=1:repeat-headers=1" {
+                    *x = "aud=1:repeat-headers=1:nal-hrd=cbr:force-cfr=1".into();
+                }
+            }
+            v.extend(["-flags", "+cgop"].map(String::from));
+        }
+        a.extend(v);
+        a.extend(["-c:a", "aac", "-profile:a", "aac_low", "-b:a"].map(String::from));
         a.extend([self.aac.bitrate_bps.to_string(), "-ar".into(), self.aac.rate.to_string()]);
         a.extend(["-ac".into(), self.aac.channels.to_string()]);
         match &self.target {
             SinkTarget::Rtmp { url } => {
-                a.extend(["-f".into(), "flv".into(), url.clone()]);
+                a.extend(["-flush_packets", "1", "-f", "flv", "-flvflags", "no_duration_filesize"].map(String::from));
+                a.push(url.clone());
+            }
+            SinkTarget::Srt { url } => {
+                a.extend(["-flush_packets", "1", "-f", "mpegts", "-mpegts_flags", "+resend_headers"].map(String::from));
+                a.push(url.clone());
             }
             SinkTarget::Hls { dir, segment_s, window } => {
                 a.extend(["-f".into(), "hls".into(), "-hls_time".into(), segment_s.to_string()]);
@@ -205,8 +413,10 @@ impl FfmpegSink {
         let stderr_reader = match child.stderr.take() {
             Some(pipe) => {
                 let tail = stderr.clone();
+                let secrets = cfg.target.secrets();
                 Some(std::thread::Builder::new().name("sink-stderr".into()).spawn(move || {
                     for line in std::io::BufReader::new(pipe).lines().map_while(|l| l.ok()) {
+                        let line = scrub(&line, &secrets);
                         let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
                         if t.len() == STDERR_LINES {
                             t.pop_front();
@@ -362,6 +572,24 @@ impl FfmpegSink {
     pub fn stats(&self) -> SinkStats {
         self.stats
     }
+
+    /// ffmpeg's last stderr lines (scrubbed of credentials), e.g. why a
+    /// live target refused the connection.
+    pub fn last_error(&self) -> Option<String> {
+        let r = self.run.as_ref()?;
+        let t = r.stderr.lock().unwrap_or_else(|p| p.into_inner());
+        (!t.is_empty()).then(|| t.iter().cloned().collect::<Vec<_>>().join(" | "))
+    }
+
+    /// Whether ffmpeg is running now (a dead one restarts on the next `send`).
+    pub fn is_running(&mut self) -> bool {
+        self.run.as_mut().is_some_and(|r| matches!(r.child.try_wait(), Ok(None)))
+    }
+
+    /// The target, for status (print [`SinkTarget::redacted`]).
+    pub fn target(&self) -> &SinkTarget {
+        &self.cfg.target
+    }
 }
 
 impl Drop for FfmpegSink {
@@ -413,13 +641,57 @@ mod tests {
         let a = c.ffmpeg_args(None).unwrap().join(" ");
         assert!(a.contains("-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000"), "{a}");
         assert!(a.contains("-map 0:v -map 1:a"));
-        assert!(a.contains("-c:a aac -b:a 128000 -ar 48000 -ac 2"));
+        assert!(a.contains("-c:a aac -profile:a aac_low -b:a 128000 -ar 48000 -ac 2"));
         assert!(a.contains("-c:v h264_nvenc"));
+        assert!(a.contains("-rc cbr -b:v 6000000 -maxrate 6000000"), "{a}");
         assert!(a.contains("-g 48 -bf 0 -forced-idr 1 -no-scenecut 1"));
         assert!(a.contains("-profile:v baseline -level:v 3.2"));
+        assert!(a.contains("-flags +cgop"));
         assert!(!a.contains("libx264"));
-        assert!(a.ends_with("-f flv rtmp://x/live/k"));
+        assert!(a.ends_with("-f flv -flvflags no_duration_filesize rtmp://x/live/k"), "{a}");
     }
+
+    #[test]
+    fn srt_is_mpegts_with_cloudflare_settings() {
+        let url = srt_url("srt://live.example.com:778", Some("abc123def456"), Some("pa ss/word"), 1000);
+        assert_eq!(
+            url,
+            "srt://live.example.com:778?streamid=abc123def456&passphrase=pa%20ss%2Fword&latency=1000000&mode=caller&pkt_size=1316"
+        );
+        // An existing query is kept and not doubled.
+        assert_eq!(srt_url("srt://h:9000?latency=200000", None, None, 1000), "srt://h:9000?latency=200000&mode=caller&pkt_size=1316");
+        let mut c = SinkConfig::new(SinkTarget::Srt { url: url.clone() }, 832, 480, 16, Some(SinkAudioIn { rate: 48_000, channels: 1 }));
+        c.encoder = FfmpegH264::Libx264CpuTest;
+        c.video_bitrate_bps = 500_000; // clamped up to Cloudflare's minimum
+        let a = c.ffmpeg_args(Some(1)).unwrap().join(" ");
+        assert!(a.contains("-b:v 2000000 -maxrate 2000000"), "{a}");
+        assert!(a.contains("nal-hrd=cbr"), "{a}");
+        assert!(a.contains("-g 32 -keyint_min 32 -sc_threshold 0"), "{a}");
+        assert!(a.contains("-c:a aac -profile:a aac_low -b:a 128000 -ar 48000 -ac 2"), "{a}");
+        assert!(a.ends_with(&format!("-f mpegts -mpegts_flags +resend_headers {url}")), "{a}");
+        c.video_bitrate_bps = 40_000_000;
+        assert_eq!(c.effective_video_bps(), 13_000_000);
+    }
+
+    #[test]
+    fn credentials_never_print() {
+        let r = SinkTarget::Rtmp { url: "rtmps://live.example.com:443/live/0123456789abcdefk".into() };
+        assert_eq!(r.redacted(), "rtmps://live.example.com:443/live/<key>");
+        assert!(!format!("{r:?}").contains("0123456789abcdefk"));
+        let line = "rtmps://live.example.com:443/live/0123456789abcdefk: Input/output error";
+        assert_eq!(scrub(line, &r.secrets()), "<redacted>: Input/output error");
+        assert_eq!(scrub("key 0123456789abcdefk refused", &r.secrets()), "key <redacted> refused");
+        let s = SinkTarget::Srt { url: srt_url("srt://user:pw1234@h:778", Some("streamid-xyz"), Some("secret pass"), 500) };
+        assert_eq!(s.redacted(), "srt://h:778");
+        let dbg = format!("{s:?}");
+        for x in ["streamid-xyz", "secret", "pw1234"] {
+            assert!(!dbg.contains(x), "{dbg}");
+        }
+        let sec = s.secrets();
+        assert!(sec.contains(&"secret pass".to_owned()) && sec.contains(&"secret%20pass".to_owned()), "{sec:?}");
+        assert_eq!(scrub("Connection to srt://h:778 (secret pass) failed", &sec), "Connection to srt://h:778 (<redacted>) failed");
+    }
+
 
     #[test]
     fn av_uses_the_second_pipe_and_hls_uses_1s_gops() {

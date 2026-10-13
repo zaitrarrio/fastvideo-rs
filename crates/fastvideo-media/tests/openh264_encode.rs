@@ -87,13 +87,20 @@ fn configured_level_4_and_small_canvas() {
         }
     }
     assert_eq!(keys, vec![0, 32, 64]);
-    // Cloudflare profile: the Rust scaler feeds a 1280x720 level-3.1 stream.
-    let mut cf = create_encoder(EncoderBackend::OpenH264, H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24)).unwrap();
+    // A scaled config: the Rust scaler feeds a 1280x720 level-3.1 stream.
+    let mut scaled = H264Config::new(1344, 768, 24);
+    (scaled.width, scaled.height, scaled.level) = (1280, 720, Some(h264::H264Level::L3_1));
+    let mut cf = create_encoder(EncoderBackend::OpenH264, scaled).unwrap();
     let au = cf.encode(&pattern(1344, 768, 0)).unwrap().remove(0);
     let sps = h264::find_sps(&au.data).unwrap();
     assert_eq!((sps.width, sps.height, sps.level_idc), (1280, 720, 31));
     let dec = decode_rgb(&[&au.data[..]]).unwrap();
     assert_eq!(dec[0].pixel(2, 360).map(|p| p.iter().all(|&c| c < 24)), Some(true), "fit padding is black");
+    // The Cloudflare publish profile is native: 1344x768 at level 3.2.
+    let mut native = create_encoder(EncoderBackend::OpenH264, H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24)).unwrap();
+    let au = native.encode(&pattern(1344, 768, 0)).unwrap().remove(0);
+    let sps = h264::find_sps(&au.data).unwrap();
+    assert_eq!((sps.width, sps.height, sps.level_idc), (1344, 768, 32));
     // Wrong frame size is an error, not a silent re-init.
     assert!(e.encode(&pattern(64, 64, 0)).is_err());
 }
