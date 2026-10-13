@@ -2333,7 +2333,7 @@ pub fn vae_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn open_vae(dir: &Path) -> Result<WeightMap> {
-    WeightMap::open_files(&vae_files(dir)?)
+    Ok(WeightMap::open_files(&vae_files(dir)?)?)
 }
 
 /// Reads a JSON file when it exists: `Ok(None)` without one.

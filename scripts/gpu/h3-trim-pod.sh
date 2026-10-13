@@ -43,6 +43,7 @@ SEED="${FV_SEED:-1024}"
 H="${FV_H:-480}"; WD="${FV_W:-832}"; NF="${FV_FRAMES:-124}"
 OPS="${FV_DUMP_OPS:-0,1,20,41}"
 BIN=/opt/fv/fv-gpucheck
+[[ -x "$BIN" ]] || BIN=/opt/fastvideo-rs/target/release/fv-gpucheck   # the runtime image's own
 log "start: ${H}x${WD}x${NF} seed $SEED, upstream FastVideo @ ${FV_UP_REV:-?}"
 nvidia-smi >$SRV/nvidia-smi.txt 2>&1
 # A host whose GPU memory is already held (2026-10-13: 95.8 of 97.9 GiB used, no process of ours) cannot run

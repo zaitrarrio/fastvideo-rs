@@ -100,7 +100,8 @@ for name, pick in ((sys.argv[2], lambda d: d != "h3-8step"), (sys.argv[2].replac
         json.dump(part, f)
 print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" for t in plan["trees"]), file=sys.stderr)
 PYEOF
-    cp "$bin" "$tmp/b/fv-gpucheck"
+    # BIN "-": the image's own fv-gpucheck (a CI runtime image of this branch, FV_RUNTIME_IMAGE=…:sha-<commit>).
+    [[ "$bin" == - ]] || cp "$bin" "$tmp/b/fv-gpucheck"
     cp "$HERE/r2-fetch.py" "$HERE/h3-trim-pod.sh" "$tmp/b/"
     cp -r "$HERE/upstream/oracle_site" "$HERE"/upstream/{oracle_dump.py,oracle_fastvideo.py,bench_fastvideo.py,setup.sh,av_psnr.py} "$tmp/b/upstream/"
     tar czf "$tmp/bundle.tgz" -C "$tmp/b" .
@@ -109,7 +110,7 @@ PYEOF
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     # The runtime image has curl and sha256sum but no Python: uv brings one. The pod deletes itself 20 min after
     # DONE (Runpod injects a pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the local backstop deletes it regardless.
-    start='mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz && chmod +x fv-gpucheck \
+    start='mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz && { [ ! -f fv-gpucheck ] || chmod +x fv-gpucheck; } \
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
 && (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/h3-trim-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
