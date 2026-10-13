@@ -687,6 +687,8 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       !other && !isCpu ? fieldBox(P("allowed_cuda"), "Allowed CUDA (host filter)", multi(P("allowed_cuda"), enumOf(["pools", 0, "allowed_cuda", 0]).map((v) => ({ id: v, label: v })), { optional: true }), describe(["pools", 0, "allowed_cuda"]), true) : null,
       isCpu && !other ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,
       fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
+      // The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server next to fv-serve, default off.
+      isCpu && !other ? null : fieldBox(P("upsampler_local"), "Prompt upsampler (local)", toggle(P("upsampler_local"), "llama-server sidecar (Qwen3-VL-4B-Instruct) on the pod's GPU"), describe(["pools", 0, "upsampler_local"])),
       other ? null : fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),
       fieldBox(P("image"), "Image override", text(P("image"), { optional: true, mono: true, placeholder: "(the variant's image)" }), describe(["pools", 0, "image"])),
       spec.control_plane !== "direct" ? fieldBox(P("family"), "Edge family", select(P("family"), enumOf(["pools", 0, "family"]).map((v) => [v, v]), { optional: true }), describe(["pools", 0, "family"])) : null,

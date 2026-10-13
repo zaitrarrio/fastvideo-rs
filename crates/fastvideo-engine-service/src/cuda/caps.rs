@@ -15,6 +15,7 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
+//! | — (served `h3-trim`) | `fasth3-trim-8step` | FastH3 Trim 8-step DMD (`trim-8step`): 42 of 50 blocks, rank-16 AdaLN, VSA-H3 0.8, its own lightweight VAE; text-to-video only | none | untiered (explicit id, `h3-trim`, or `recipe = "trim-8step"`); docs/ports/h3-trim.md |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
@@ -515,6 +516,10 @@ impl CudaModel {
                          (Sol-H3 Ref2VA route), {} forwards, dense attention, official VAE",
                         r.steps
                     ),
+                    _ if self.recipe_name.starts_with("fasth3-trim") => "FastH3 Trim 8-step DMD: 42 of the \
+                        50 H3 blocks, rank-16 AdaLN, VSA-H3 (80% sparse), lightweight VAE; faster and smaller \
+                        than FastH3 V2, with some quality cost"
+                        .to_owned(),
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
                                         attention (no compression gate), official VAE"
                         .to_owned(),
@@ -649,6 +654,12 @@ pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
     let mut c = ModelCaps::h3(id, r.ref2va);
+    if is_trim_recipe(&r.recipe) {
+        // FastH3 Trim was distilled and released for text-to-video+audio only
+        // (`fastvideo_inference.json` task t2av); image conditioning is
+        // untested on the pruned DiT, so it is not offered.
+        c.tasks = [Task::T2V].into_iter().collect();
+    }
     if r.ref2va {
         // `transformer_ref/` serves references only: the pipeline refuses a
         // request without them, and FL2VA keyframes need `transformer/`.
@@ -705,6 +716,16 @@ pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Opt
             gib(need)
         )
     })
+}
+
+/// The FastH3 Trim catalog id, its served alias and its weight tree.
+pub const FASTH3_TRIM_ID: &str = "fasth3-trim-8step";
+pub const H3_TRIM: &str = "h3-trim";
+pub const FASTH3_TRIM_TREE: &str = "fasth3-trim-8step";
+
+/// The FastH3 Trim contract names (`H3InferenceContract::named`).
+pub fn is_trim_recipe(recipe: &str) -> bool {
+    matches!(recipe, "trim-8step" | "fasth3-trim-8step" | "fasth3-trim")
 }
 
 /// LTX caps from the model config (audio from the vocoder).
@@ -1052,6 +1073,11 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         dense: true,
         ..h3(layout, "h3-8step", "8step", None, 8)
     };
+    // FastH3 Trim (docs/ports/h3-trim.md): the trimmed DiT and its lightweight
+    // VAE in `fasth3-trim-8step`; the text encoder, tokenizer and the
+    // (byte-identical) audio VAE come from `h3-base` (`text_weights`). Served
+    // with the trained recipe: VSA-H3 at 0.8, tile 64, the 8 DMD rungs.
+    let h3_trim = h3(layout, FASTH3_TRIM_TREE, "trim-8step", None, 8);
     // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
     // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
     let h3_turbo = H3Recipe {
@@ -1202,6 +1228,13 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fasth3-8step-dense",
             CudaRecipe::H3(h3_8step),
         ),
+        CudaModel::new(
+            FASTH3_TRIM_ID,
+            None,
+            "fasth3-trim-8step-vsa",
+            CudaRecipe::H3(h3_trim),
+        )
+        .with_served_names(&[H3_TRIM]),
         // Reference-to-video companions of the H3 max / turbo tiers: the
         // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
         CudaModel::new(
@@ -1350,6 +1383,7 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (_, "") => crate::caps::tier_alias(family, Tier::Turbo).unwrap_or_default().to_owned(),
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
+        (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
         (_, r) => r.to_owned(),
     };
@@ -2270,6 +2304,49 @@ mod tests {
         };
         assert_eq!(r.weights, Path::new("/w/h3-8step"));
         assert!(r.dense);
+    }
+
+    /// FastH3 Trim: its own tree for the DiT and VAE, h3-base for the text
+    /// encoder and audio VAE, the trained VSA recipe (not dense), untiered,
+    /// text-to-video only, addressed by id, `h3-trim` or `recipe = "trim-8step"`.
+    #[test]
+    fn trim_catalog_entry() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        for name in [FASTH3_TRIM_ID, H3_TRIM] {
+            let m = find(&cat, name).unwrap();
+            assert_eq!(m.id.as_str(), FASTH3_TRIM_ID, "{name}");
+            assert!(m.tier.is_none());
+            let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+            assert_eq!(r.weights, Path::new("/w/fasth3-trim-8step"));
+            assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
+            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()), ("trim-8step", 8, false, None));
+            assert!(!r.ref2va && !r.hd_1080p && r.taeh3.is_none());
+            // The recipe name is one the pipeline's contract resolver knows.
+            assert_eq!(
+                h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
+                h3cfg::H3InferenceContract::fasth3_8step()
+            );
+            let c = m.caps();
+            assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+            assert!(c.audio.is_some());
+            assert_eq!(c.canvas.short_edges, vec![768, 480]);
+            assert_eq!(c.frames, FrameGrid::h3());
+            let d = m.describe();
+            assert_eq!((d.steps, d.attention.as_str(), d.vae.as_str()), (Some(8), "vsa", "full"));
+            assert!(d.summary.contains("Trim"), "{}", d.summary);
+        }
+        assert!(m_served(&cat, H3_TRIM));
+        for rec in ["trim-8step", "fasth3-trim", H3_TRIM, FASTH3_TRIM_ID] {
+            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_ID, "{rec}");
+        }
+        // Its own process: it never co-resides with another H3 recipe's settings.
+        assert!(is_trim_recipe("trim-8step") && !is_trim_recipe("8step"));
+    }
+
+    fn m_served(cat: &[CudaModel], name: &str) -> bool {
+        cat.iter().any(|m| m.served_names.iter().any(|s| s == name))
     }
 
     /// `[[models]]` turns LongLive on with `longlive = "<dir>"`: window 12,

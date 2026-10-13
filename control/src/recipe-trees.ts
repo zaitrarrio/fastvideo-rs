@@ -51,6 +51,12 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "Ref2VA base: transformer_ref in h3-ref2va (caps.rs ref_weights)",
   },
+  "h3-trim": {
+    catalog: "fasth3-trim-8step",
+    required: ["h3-base"],
+    prequant: [H3_TEXT_FP8],
+    note: "FastH3 Trim: the DiT and VAE in fasth3-trim-8step (the config's weights); the text encoder, tokenizer and audio VAE from h3-base (caps.rs h3() text_weights; cudarc h3/pipeline.rs audio_vae_dir)",
+  },
   // LTX-2.5: its FP8 Gemma tree (ltx25/text_encoder_fp8) is read only with FASTVIDEO_LTX2_TEXT_FP8=1 (opt-in,
   // cudarc ltx2/pipeline.rs), which no preset sets.
   "ltx-turbo": { catalog: "ltx25-distill-sol", required: [], prequant: [], note: "everything under ltx25" },

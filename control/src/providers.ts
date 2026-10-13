@@ -43,6 +43,7 @@ import { REGIONS } from "./cluster/regions";
 import { missingTrees } from "./volumes";
 import { DRIVER_CHECK_SH } from "./driver-check";
 import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
+import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "./upsampler";
 
 // ---------------------------------------------------------------- ids
 const KEY_RE = /^(gmi|brev):(.+)$/;
@@ -614,7 +615,7 @@ fi
 export FV_WORKER_ID="$FV_POD_ID"
 cfgerr="$("$FV_SERVE_BIN" --config /fv-worker.toml --print-config 2>&1 >/dev/null)" || fail "fv-serve config: $(printf '%s' "$cfgerr" | tail -n 3 | tr '\\n"' '  ')"
 say "config ok: /fv-worker.toml"
-# ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256
+${UPSAMPLER_START_SH}# ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256
 FETCHER=""
 fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (the fetcher is set up on first use)
   if [ -z "$FETCHER" ]; then
@@ -642,7 +643,7 @@ ${WEIGHTS_SH}${TUNNEL_SH}# ---- the deadline watchdog (fv-control's cron deletes
     sleep 30
   done
 ) &
-# ---- fv-serve (its config was checked before the weights)
+${UPSAMPLER_WAIT_SH}# ---- fv-serve (its config was checked before the weights)
 say "fv-serve: $FV_SERVE_BIN --config /fv-worker.toml (from \${FV_WORKER_TOML_B64:+inline FV_WORKER_TOML_B64}\${FV_WORKER_TOML_B64:-$FV_WORKER_CONFIG}); $("$FV_SERVE_BIN" --version 2>&1 | head -n 1)"
 if [ -n "\${FASTVIDEO_STREAMING_FETCH:-}" ]; then date +%s.%N > "\${FV_R2_STATE:-/fvstate}/serve-start"; say "fv-serve starts while the weights arrive (its loader waits on each file's progress map)"; fi
 exec "$FV_SERVE_BIN" --config /fv-worker.toml`;
@@ -758,6 +759,8 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   const hb = rep?.heartbeat_at ? `; host heartbeat ${Math.round((now() - rep.heartbeat_at) / 1000)} s ago: ${(rep.heartbeat || "").slice(0, 160)}` : "";
   if (rep?.phase === "weights") return { phase: "weights", detail: /^r2 /.test(rep.detail || "") ? `fetching from the R2 weights store (${rep.detail.slice(3)})` : `downloading from the Hub${rep.detail ? ` (${rep.detail})` : ""}`, fatal: false };
   if (rep?.phase === "tunnel") return { phase: "loading", detail: `tunnel up, fv-serve loading${hb}`, fatal: false };
+  // upsampler_local (upsampler.ts): the sidecar's outcome, just before fv-serve starts; a failure is not fatal.
+  if (rep?.phase === "upsampler") return { phase: "loading", detail: `upsampler sidecar: ${(rep.detail || "").slice(0, 200)}; fv-serve starting${hb}`, fatal: false };
   if (rep?.phase === "serve_ready") return { phase: "loading", detail: `fv-serve answers /health on the host (${rep.detail}); waiting for it through the tunnel`, fatal: false };
   if (rep?.phase === "container_started") return { phase: "container started", detail: `the boot runs in the container${hb}`, fatal: false };
   if (rep?.phase === "host") return { phase: "host", detail: `host script running (${rep.detail.slice(0, 200)})${hb}`, fatal: false };
@@ -832,7 +835,7 @@ export async function endpointReport(env: Env, req: Request): Promise<{ ok: true
 }
 /** What a pod may report: the container's boot (weights, tunnel, failed) and a Brev host's (host, host_failed,
  * container_started, heartbeat, then serve_ready / container_exited / serve_timeout from its watcher). */
-export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_failed", "container_started", "heartbeat", "serve_ready", "container_exited", "serve_timeout"];
+export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_failed", "container_started", "heartbeat", "serve_ready", "container_exited", "serve_timeout", "upsampler"];
 /** Reports that carry a log tail (up to 2000 chars). */
 const LONG_REPORTS = ["host", "host_failed", "container_exited", "serve_timeout"];
 

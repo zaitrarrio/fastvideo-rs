@@ -218,7 +218,7 @@ load balancers refused inline configs.
 **Presets.** `preset` takes an id from the one catalog cluster pools use
 (`control/src/presets.ts` `POOL_PRESETS`, re-exported by `cluster/spec.ts`;
 `serverless/presets.ts` adds `cpu`, the fake engine): `h3-turbo`, `h3-max`,
-`h3-ref2v`, `ltx`, `ltx-pro`, `ltx-a2v`, `ltx-ref2v`, `wan`, `fastwan21`,
+`h3-ref2v`, `fasth3-trim`, `ltx`, `ltx-pro`, `ltx-a2v`, `ltx-ref2v`, `wan`, `fastwan21`,
 `sfwan`, `longlive`, `cpu`. A preset sets the variant, compute and config (a
 config file the image carries, left unset when it is the image's baked default
 so the image's own entrypoint runs it; otherwise inline), the container disk

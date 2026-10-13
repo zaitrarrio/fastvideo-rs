@@ -262,6 +262,69 @@ native = true
 queue_max = 32
 body_max_mb = 64
 `,
+  "runpod-h3-trim.toml": `# fv-serve on Runpod: FastH3 Trim 8-step (docs/ports/h3-trim.md).
+# Secrets as in runpod.toml. Weights: $FV_WEIGHTS/fasth3-trim-8step (the
+# 42-block DiT, its lightweight video VAE, the schedule in
+# fastvideo_inference.json) and $FV_WEIGHTS/h3-base, which the recipe reads
+# beside it for the text encoder, the tokenizer and the audio VAE
+# (byte-identical to the Trim release's, so not duplicated in R2).
+#
+# Text-to-video with audio only (the release's task, t2av): 8 DMD forwards,
+# VSA-H3 at 0.8, 768p by default and 480p, 5-15 s. Its own pool: the Trim DiT
+# (35 GB) does not co-reside with another H3 DiT on a 96 GB card.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3-trim-8step"
+family = "h3"
+recipe = "h3-trim"
+weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+# \${FV_WEIGHTS}/h3-base.
+resident = true
+served_names = ["h3-trim", "fasth3-trim"]
+warmup = true
+
+[aliases]
+"MiniMax-H3-Trim" = "fasth3-trim-8step"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "fasth3-trim"
+`,
   "runpod-longlive.toml": `# fv-serve on a Runpod pod: LongLive-1.3B causal streaming (the SF-Wan
 # engine with the LongLive transformer and its prompt-switch KV re-cache,
 # docs/serve/research-longlive.md). Secrets as in runpod.toml.

@@ -95,11 +95,14 @@ export const RESERVED_KEYS = new Set([
   "FV_ENDPOINT_REPORT_URL",
   "FV_ENDPOINT_REPORT_TOKEN",
   "FV_BACKSTOP_API",
+  // upsampler_local (upsampler.ts): set by fv-control from the spec's switch.
+  "FV_UPSAMPLER_LOCAL",
+  "FV_UPSAMPLER_REV",
 ]);
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 
 /** The pool presets' ids (cluster/spec.ts POOL_PRESETS; test/unit/config-validation.test.ts checks they agree). */
-export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"] as const;
+export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fastwan21", "sfwan", "longlive"] as const;
 /** A serverless endpoint's presets: the pool presets plus `cpu` (the fake engine on CPU workers, for tests); serverless/presets.ts. */
 export const SLS_PRESET_IDS = [...POOL_PRESET_IDS, "cpu"] as const;
 

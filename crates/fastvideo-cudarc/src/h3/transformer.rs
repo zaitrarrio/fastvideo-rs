@@ -726,23 +726,41 @@ impl AdaLnTable {
             .flatten()
             .map(|&v| v / (1.0 + (-v).exp()))
             .collect();
-        let s = pinned(silu, vec![2 * steps + 1, te])?;
+        // FastH3 Trim (`adaln_rank`): one shared rank-r basis on silu(temb),
+        // then each projection on the basis output, all in float16 on the host.
+        let factorized = match cfg.adaln_rank {
+            Some(rank) => {
+                if lora.is_some() {
+                    return Err(msg(
+                        "h3 adaln: a factorized (adaln_rank) checkpoint takes no adapter",
+                    ));
+                }
+                Some(FactorizedAdaLn::new(map, &silu, 2 * steps + 1, te, rank)?)
+            }
+            None => None,
+        };
+        let s = if factorized.is_some() {
+            None
+        } else {
+            Some(pinned(silu, vec![2 * steps + 1, te])?)
+        };
 
         let slice = ADALN_PARAMS * hidden;
         let mut block_mods = vec![0f32; steps * cfg.num_layers * MODALITY_NUM * slice];
         let mut keyframe_mods = vec![0f32; cfg.num_layers * MODALITY_NUM * slice];
         for b in 0..cfg.num_layers {
-            let proj = load_linear(
-                map,
-                &format!("transformer_blocks.{b}.adaln_proj.linear"),
-                te,
-                cfg.adaln_out_dim(),
-                true,
-                lora,
-            )?;
-            let y = proj.forward(&s)?;
-            let y = y.host_cow()?;
-            drop(proj);
+            let prefix = format!("transformer_blocks.{b}.adaln_proj.linear");
+            let y: Vec<f32> = match (&factorized, &s) {
+                (Some(f), _) => f.project(map, &prefix, cfg.adaln_out_dim(), 2 * steps + 1)?,
+                (None, Some(s)) => {
+                    let proj = load_linear(map, &prefix, te, cfg.adaln_out_dim(), true, lora)?;
+                    let y = proj.forward(s)?;
+                    let y = y.host_cow()?.into_owned();
+                    drop(proj);
+                    y
+                }
+                (None, None) => unreachable!("full-rank AdaLN always has its input"),
+            };
             let width = cfg.adaln_out_dim();
             for i in 0..steps {
                 for tag in [TAG_VIDEO, TAG_TEXT, TAG_AUDIO] {
@@ -781,12 +799,19 @@ impl AdaLnTable {
         }
 
         // Out mods only need the ladder timesteps (video/audio heads), not keyframe.
-        let s_ladder = s.narrow(0, 0, 2 * steps)?;
-        let proj = load_linear(map, "norm_out.linear", te, 2 * hidden, true, lora)?;
-        let y = proj.forward(&s_ladder)?;
-        let y = y.host_cow()?;
+        let y: Vec<f32> = match (&factorized, &s) {
+            (Some(f), _) => f.project(map, "norm_out.linear", 2 * hidden, 2 * steps)?,
+            (None, Some(s)) => {
+                let s_ladder = s.narrow(0, 0, 2 * steps)?;
+                let proj = load_linear(map, "norm_out.linear", te, 2 * hidden, true, lora)?;
+                let y = proj.forward(&s_ladder)?;
+                let y = y.host_cow()?.into_owned();
+                y
+            }
+            (None, None) => unreachable!("full-rank AdaLN always has its input"),
+        };
         // `shift, scale = chunk(2)`: shift first.
-        let mut out_mods = y.to_vec();
+        let mut out_mods = y;
         for row in out_mods.chunks_exact_mut(2 * hidden) {
             row[hidden..].iter_mut().for_each(|v| *v += 1.0);
         }
@@ -900,6 +925,12 @@ impl AdaLnTable {
                 .map(|t| u64::from(t.to_bits())),
         );
         header.push(u64::from(KEYFRAME_NOISE_AUG.to_bits()));
+        // A factorized table (FastH3 Trim) is keyed by its rank as well; a
+        // full-rank header is unchanged, so existing caches stay valid.
+        if let Some(rank) = cfg.adaln_rank {
+            header.push(u64::from_le_bytes(*b"ADALNRNK"));
+            header.push(rank as u64);
+        }
         let header: Vec<u8> = header.iter().flat_map(|v| v.to_le_bytes()).collect();
         let sizes = [
             steps * cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size,
@@ -988,6 +1019,100 @@ impl AdaLnTable {
             &self.out_mods[(2 * step + usize::from(audio)) * 2 * self.hidden..][..2 * self.hidden];
         row.split_at(self.hidden)
     }
+}
+
+/// `x` rounded to IEEE float16 (round to nearest even), kept as f32: what a
+/// tensor `.to(torch.float16)` holds.
+pub(crate) fn f16_round(x: f32) -> f32 {
+    half::f16::from_f32(x).to_f32()
+}
+
+/// The rank-reduced AdaLN of FastH3 Trim (FastVideo `minimax_h3.py`,
+/// `adaln_rank` set): `r = adaln_basis(fp16(silu(temb)))` once per timestep,
+/// then every block's `adaln_proj.linear` and `norm_out.linear` on `r`, with
+/// no further `silu`. Upstream pins these three linears to float16
+/// (`_get_parameter_dtype`: the checkpoint stores them in F32, the load
+/// casts), so here the weights, the inputs and each output are rounded to
+/// float16 as `F.linear` in half precision does: products summed at higher
+/// precision (f64 here, an fp32 accumulator on the GPU), the bias added, then
+/// one rounding to float16. The table that comes out holds float16 values;
+/// the block path's bf16 rounding of them ([`bf16_table_value`]) is the
+/// reference's `t.to(hidden_states.dtype)`.
+///
+/// At rank 16 a whole 42-block table is ~1.1 G multiply-adds on the host
+/// (about a second), and the 6.2 MB of factors per block are read once.
+pub(crate) struct FactorizedAdaLn {
+    rank: usize,
+    /// `[rows, rank]`: the basis output per timestep row, float16 values.
+    r: Vec<f32>,
+}
+
+impl FactorizedAdaLn {
+    pub(crate) fn new(
+        map: &WeightMap,
+        silu: &[f32],
+        rows: usize,
+        te: usize,
+        rank: usize,
+    ) -> Result<Self> {
+        let basis: Vec<f32> = host_f32(map, "adaln_basis.weight", &[rank, te])?
+            .iter()
+            .map(|&v| f16_round(v))
+            .collect();
+        let x: Vec<f32> = silu.iter().map(|&v| f16_round(v)).collect();
+        let r = fp16_linear(&x, rows, te, &basis, None, rank);
+        crate::wan::log::info(format_args!(
+            "h3 adaln: factorized, rank {rank} (shared basis, float16 projections)"
+        ));
+        Ok(Self { rank, r })
+    }
+
+    /// `prefix.weight [out, rank]`, `prefix.bias [out]` on the first `rows`
+    /// basis rows: `[rows, out]` float16 values.
+    pub(crate) fn project(
+        &self,
+        map: &WeightMap,
+        prefix: &str,
+        out: usize,
+        rows: usize,
+    ) -> Result<Vec<f32>> {
+        let round = |v: Vec<f32>| -> Vec<f32> { v.into_iter().map(f16_round).collect() };
+        let w = round(host_f32(map, &format!("{prefix}.weight"), &[out, self.rank])?);
+        let b = round(host_f32(map, &format!("{prefix}.bias"), &[out])?);
+        Ok(fp16_linear(&self.r[..rows * self.rank], rows, self.rank, &w, Some(&b), out))
+    }
+}
+
+/// A tensor's values on the host as f32, its shape checked.
+fn host_f32(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
+    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+}
+
+/// `y = fp16(x @ w.T + b)` for float16-valued `x [rows, k]`, `w [out, k]`,
+/// `b [out]`: sums in f64, one rounding to float16 per output.
+fn fp16_linear(
+    x: &[f32],
+    rows: usize,
+    k: usize,
+    w: &[f32],
+    b: Option<&[f32]>,
+    out: usize,
+) -> Vec<f32> {
+    use rayon::prelude::*;
+    let mut y = vec![0f32; rows * out];
+    y.par_chunks_mut(out).enumerate().for_each(|(row, dst)| {
+        let xr = &x[row * k..(row + 1) * k];
+        for (o, d) in dst.iter_mut().enumerate() {
+            let acc = w[o * k..(o + 1) * k]
+                .iter()
+                .zip(xr)
+                .map(|(a, c)| f64::from(*a) * f64::from(*c))
+                .sum::<f64>()
+                + b.map_or(0.0, |b| f64::from(b[o]));
+            *d = f16_round(acc as f32);
+        }
+    });
+    y
 }
 
 /// One block's modulation on the device: a `[1, 6, hidden]` table per contiguous
@@ -2371,7 +2496,7 @@ impl H3Transformer {
                 plan.reference_linear_count(),
                 match quant {
                     QuantMode::W8A8 => "FastVideo tensorwise W8A8, all blocks + refiner",
-                    _ => "Sol-H3 MXFP8, blocks 2..=46",
+                    _ => "Sol-H3 MXFP8, blocks 2..=46 (pruned stacks: the last 3 stay bf16)",
                 }
             ));
         }
@@ -3009,6 +3134,9 @@ pub(crate) mod tests {
             norm_eps: 1e-5,
             qk_norm_eps: 1e-5,
             final_norm_eps: 1e-5,
+            adaln_rank: None,
+            source_num_layers: 2,
+            kept_block_indices: vec![0, 1],
         }
     }
 
@@ -3617,6 +3745,107 @@ pub(crate) mod tests {
             .iter()
             .zip(&want)
             .all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+
+    /// FastH3 Trim: `adaln_rank` set. The table must be the reference's
+    /// `adaln_proj(adaln_basis(silu(temb)))` in float16 (no second silu),
+    /// for the blocks and for `norm_out`.
+    #[test]
+    fn factorized_adaln_is_basis_then_projection_in_float16() {
+        let rank = 3;
+        let cfg = H3TransformerConfig {
+            adaln_rank: Some(rank),
+            ..tiny_cfg()
+        };
+        let map = weights();
+        let schedule = H3JointSchedule::fasth3_8step();
+        let table = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
+        let h = cfg.hidden_size;
+        let fp16_lin = |prefix: &str, x: &[f32], o: usize, bias: bool| -> Vec<f32> {
+            let k = x.len();
+            let w = get(&map, &format!("{prefix}.weight"), &[o, k]);
+            let b = if bias {
+                get(&map, &format!("{prefix}.bias"), &[o])
+            } else {
+                vec![0.0; o]
+            };
+            (0..o)
+                .map(|r| {
+                    let acc: f64 = (0..k)
+                        .map(|c| f64::from(f16_round(w[r * k + c])) * f64::from(x[c]))
+                        .sum::<f64>()
+                        + f64::from(f16_round(b[r]));
+                    f16_round(acc as f32)
+                })
+                .collect()
+        };
+        for step in [0, 3, 7] {
+            for (tag, t) in [
+                (TAG_VIDEO, schedule.video.timesteps[step]),
+                (TAG_TEXT, schedule.video.timesteps[step]),
+                (TAG_AUDIO, schedule.audio.timesteps[step]),
+            ] {
+                let x: Vec<f32> = ref_temb(&cfg, &map, t)
+                    .into_iter()
+                    .map(|v| f16_round(silu(v)))
+                    .collect();
+                let r = fp16_lin("adaln_basis", &x, rank, false);
+                for block in 0..cfg.num_layers {
+                    let y = fp16_lin(
+                        &format!("transformer_blocks.{block}.adaln_proj.linear"),
+                        &r,
+                        18 * h,
+                        true,
+                    );
+                    let m = usize::from(tag);
+                    let got = table.block_slot(step, block, tag);
+                    for p in 0..6 {
+                        let plus = if p == SCALE_MSA || p == SCALE_MLP { 1.0 } else { 0.0 };
+                        for c in 0..h {
+                            let want = y[m * 6 * h + p * h + c];
+                            let have = got[p * h + c] - plus;
+                            assert!((have - want).abs() <= 1e-6, "step {step} tag {tag} p {p} c {c}");
+                            // Float16 values: rounding again changes nothing.
+                            assert_eq!(f16_round(want), want);
+                        }
+                    }
+                }
+                if tag != TAG_TEXT {
+                    let y = fp16_lin("norm_out.linear", &r, 2 * h, true);
+                    let (shift, scale) = table.out_slot(step, tag == TAG_AUDIO);
+                    for c in 0..h {
+                        assert!((shift[c] - y[c]).abs() <= 1e-6);
+                        assert!((scale[c] - (1.0 + y[h + c])).abs() <= 1e-6);
+                    }
+                }
+            }
+        }
+        // A factorized table differs from the full-rank one on the same map.
+        let full = AdaLnTable::precompute(&tiny_cfg(), &map, &schedule).unwrap();
+        assert_ne!(full.block_slot(0, 0, TAG_VIDEO), table.block_slot(0, 0, TAG_VIDEO));
+    }
+
+    #[test]
+    fn factorized_adaln_cache_is_keyed_by_rank() {
+        let dir = std::env::temp_dir().join(format!("h3-adaln-rank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.cache");
+        let schedule = H3JointSchedule::fasth3_8step();
+        let map = weights();
+        // A generated map has no lazy view: the cache is bypassed, never wrong.
+        let cfg = H3TransformerConfig { adaln_rank: Some(2), ..tiny_cfg() };
+        let a = AdaLnTable::load_or_precompute(&cfg, &map, &schedule, Some(&path)).unwrap();
+        let b = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
+        assert_eq!(a.block_slot(2, 1, TAG_AUDIO), b.block_slot(2, 1, TAG_AUDIO));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn f16_round_is_round_to_nearest_even() {
+        assert_eq!(f16_round(1.0), 1.0);
+        assert_eq!(f16_round(1.0 + 1.0 / 4096.0), 1.0); // below half an ulp (2^-10)
+        assert_eq!(f16_round(1.0 + 3.0 / 2048.0), 1.0 + 2.0 / 1024.0); // tie to even
+        assert_eq!(f16_round(65504.0), 65504.0);
     }
 
     #[test]

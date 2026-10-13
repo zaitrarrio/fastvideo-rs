@@ -106,6 +106,15 @@ export const POOL_PRESETS: PoolPreset[] = [
     },
   },
   {
+    id: "fasth3-trim",
+    min_vram_gb: 80,
+    title: "FastH3 Trim 8-step",
+    description: "FastH3 Trim (FastVideo/FastVideo-FastH3-Trim-8-Step): 42 of the 50 H3 blocks, 8 DMD steps, VSA; text-to-video with audio only. Faster and smaller than FastH3 V2, with some quality cost. Served as h3-trim.",
+    weights: ["fasth3-trim-8step", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-trim", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim.toml"), models: [{ id: "fasth3-trim-8step", family: "h3", recipe: "h3-trim" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
     id: "fastwan21",
     min_vram_gb: 24,
     title: "FastWan 2.1 1.3B",

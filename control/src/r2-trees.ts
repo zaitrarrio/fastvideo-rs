@@ -16,6 +16,8 @@ export const R2_TREES: Record<string, R2Tree> = {
   "auxiliary/upscalers/flashvsr-v1.1": { rev: "27561b186ded3402d7c975f4fd722e2885b6135f", files: 6, bytes: 6948393656, manifest_sha256: "f790def5c5d1a6924ce4ed04cf87da10ff560ed48654d6775f2c0f459cfde1ff", source: "hub-via-dir" },
   "auxiliary/upscalers/seedvr2": { rev: "09ced71023636e9bc8cdf9cdecfb2625d1e691e8", files: 2, bytes: 7284343622, manifest_sha256: "e344f7e4b87bd4ef3318afb888461e93ea1a64915e9912b42c52702779175138", source: "hub-via-dir" },
   "cosmos3-super": { rev: "f543c56225b2e04d0ad141e29655be3a45d9c455", files: 40, bytes: 129465061778, manifest_sha256: "847009f136216d709db7d3f988a27665a88906f06f9316c453a4c1ce7b8e929e", source: "hub-via-dir" },
+  "fasth3-trim-8step": { rev: "9edcb6511d5ff8dd1579e8eec8afee77e098b8d8", files: 19, bytes: 43878908891, manifest_sha256: "2ccd02ced74fe826bdf1cee2c491d8ddbc2cf51fd7c390c8d7ee65aff4f19339", source: "hub" },
+  "fasth3-trim-8step-nvfp4": { rev: "f66c13dc17391dd4da99242a407918b92bf7d5fc", files: 2, bytes: 11894625413, manifest_sha256: "3e536acde92569b54100657df67529a25c3c0b34a6b466ec0c1e53c5fa5a44fe", source: "hub" },
   "fastwan21-1.3b": { rev: "25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef", files: 16, bytes: 29212120229, manifest_sha256: "059c5ed976b053bc2021da39c7558f616562f6db532a833b647a2851f8ee223d", source: "hub-via-dir" },
   "fastwan22-ti2v-5b": { rev: "3e187042a324f6f5fb68fd22110a78725253de8f", files: 15, bytes: 24201770562, manifest_sha256: "bd5976a252dc4f543e197db43682642569ac86393fc350ca7fd41e8d5d5f9d8b", source: "hub-via-dir" },
   "h3-8step": { rev: "3da2ddfe1954d9cda4c05b643dc0f26007a655c5", files: 49, bytes: 147857050891, manifest_sha256: "b7b5f71fb8fca577f8bf189873d06405f7f81e7e05d41c98d3b770e1ea5f210e", source: "hub-via-dir" },
@@ -56,4 +58,6 @@ export const R2_TREES: Record<string, R2Tree> = {
   "wan21-t2v-14b": { rev: "38ec498cb3208fb688890f8cc7e94ede2cbd7f68", files: 29, bytes: 80406918983, manifest_sha256: "fd40c2c3b3a80a5e2999925f45fa88071b8e8ebb4a40522ffa462d9f358e3be4", source: "hub-via-dir" },
   "wan22-t2v-a14b": { rev: "5be7df9619b54f4e2667b2755bc6a756675b5cd7", files: 41, bytes: 126199274206, manifest_sha256: "9b5bd6bd601c03a6b5708da95a15933ae4a40010ef649d1fce21d0cb7e20bfc9", source: "hub-via-dir" },
   "wan22-ti2v-5b": { rev: "b8fff7315c768468a5333511427288870b2e9635", files: 20, bytes: 34201418400, manifest_sha256: "2c93c3dfb16f51e8ed3e7c8e806148fe88458536be3abf0efc0e6a3713f26d38", source: "hub-via-dir" },
+  "qwen3-4b-instruct-gguf": { rev: "gguf-20261013", files: 3, bytes: 4280416613, manifest_sha256: "eee6eb0170cad473f33b75f2654c30158322ebf965b69581d4cbe4040a6450c7", source: "dir" },
+  "qwen3-vl-4b-instruct-gguf": { rev: "1cd86afb9a95c410a6038ab3b40d8b578c892266", files: 3, bytes: 5116592189, manifest_sha256: "eb465f963022881dc7bae4992752bd33e5e917d11dbd5f4d577441fd4a7477ab", source: "hub" },
 };
