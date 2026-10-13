@@ -112,9 +112,18 @@ deadline, the idle stop and a budget stop. `fv-control.sh pod delete
 the delete of a definition with no pod leaves any parked VM alone. The
 next launch of the same instance type reuses a parked or held instance
 before creating one: a *warm* boot when it holds the trees, else the
-trees download onto it. Non-stoppable types (e.g. `massedcompute_*`) are
-refused at launch. A stop Brev refuses leaves the VM running with the
+trees download onto it. A stop Brev refuses leaves the VM running with the
 alert `brev_stop_failed` (its $/hr); fv-control never deletes it.
+
+Non-stoppable types (e.g. `massedcompute_*`) are launched like any other
+(owner decision 2026-10-13). Brev cannot stop them: a stop answers HTTP
+500 "does not support stop" and the VM keeps running. fv-control then
+releases the pod (state `running_unstoppable`), raises one critical alert
+`brev_unstoppable` with its $/hr and $/day, tries the stop again hourly,
+and bills it in the ledger and the Brev budget until you delete it
+(`fv-control.sh brev delete-parked <id>`, Delete on the Pods page, or
+`pod delete <name>` instead of a stop). The launch's budget check counts
+such a pod 24 h past its deadline (`BREV_NOSTOP_MARGIN_H`).
 
 A parked instance bills storage only. That cost counts in the Brev
 budget and the cost views (owner `brev:parked`); the policies
@@ -123,7 +132,8 @@ budget and the cost views (owner `brev:parked`); the policies
 come up is *held* (reused by a later launch after 15 minutes, or at once
 after Unpark), and another instance or a fresh pod is used.
 
-The launch form lists stoppable instance types only, and shows "warm:
+The launch form lists the stoppable instance types first, then the others
+with "WARNING: can't be stopped: a stop leaves it running at $X/hr", and shows "warm:
 restarts parked …" or "cold: downloads … (~N GB): boot ~M min" at the
 instance-type field. The Pods page lists parked and held instances with
 their weights, disk, $/day and reuse status, with Delete (yours only) and

@@ -1585,7 +1585,7 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.ok(ex(`${tmp}/weights/r2demo/config.json`));
 });
 
-await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop alerted, non-stoppable refused, limits as alerts, budget, only ours", async () => {
+await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop alerted, non-stoppable allowed and left running (owner 2026-10-13), limits as alerts, budget, only ours", async () => {
   // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
   // instance-type list as prices (no BREV_PRICES), a short restart timeout.
   const w2 = await startWorker(mock, {
@@ -1639,23 +1639,58 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     };
     const parked = async () => (await call2("/api/providers/brev/parked", { headers: H })).j;
     const posts = () => b.calls.filter((c) => c.method === "POST" && c.path === `/organizations/${mock.brevOrg}/workspaces`).length;
-    const posts0 = posts();
-    const callsFrom = b.calls.length;
-
-    // The launch form's outlook: cold on the stoppable type; the non-stoppable one refused (its stop would be a delete).
+    // The launch form's outlook: cold on the stoppable type; the non-stoppable one allowed with a warning (owner
+    // decision 2026-10-13: treated like any other Brev VM; its stop leaves it running).
     const v = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "g5.xlarge-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
     assert.equal(v.ok, true, JSON.stringify(v.issues));
     assert.ok(v.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads fastwan22-ti2v-5b, wan22-ti2v-5b .*kept on stop/.test(x.message)), JSON.stringify(v.warnings));
-    const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
-    assert.equal(v2.ok, false);
-    assert.ok(v2.issues.some((x) => x.path[0] === "provider_gpu" && /^a100-test is not stoppable on NVIDIA Brev: refused \(rule brev_stoppable_only: .*\)\. Stoppable allowed types: g5\.xlarge-test$/.test(x.message)), JSON.stringify(v2.issues));
-    const rns = await call2("/api/standalone", { method: "POST", body: { name: "nostop1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, channel: "stable", deadline_min: 30, max_gpu_dph: 5 }, headers: H });
-    assert.equal(rns.status, 400, JSON.stringify(rns.j));
-    assert.match(rns.j.error, /a100-test is not stoppable on NVIDIA Brev: refused/);
+    const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "nostop1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
+    assert.equal(v2.ok, true, JSON.stringify(v2.issues));
+    assert.ok(v2.warnings.some((x) => x.path[0] === "provider_gpu" && /^WARNING: a100-test can't be stopped on NVIDIA Brev: a stop .* leaves the VM running at \$1\.80\/hr \(\$43\.20\/day\) until you delete it .*24 h past the deadline/.test(x.message)), JSON.stringify(v2.warnings));
+    assert.ok(v2.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads .*; WARNING: a100-test can't be stopped/.test(x.message)), JSON.stringify(v2.warnings));
     const dyn = (await call2("/api/schemas/dynamic", { headers: H })).j;
     const bg = dyn.provider_gpus.filter((g) => g.provider === "brev");
-    assert.deepEqual(bg.map((g) => g.id), ["g5.xlarge-test"], "stoppable types only");
+    assert.deepEqual(bg.map((g) => [g.id, g.stoppable]), [["g5.xlarge-test", true], ["a100-test", false]], "every allowed type, stoppable first");
     assert.match(bg[0].detail, /\$1\.01\/hr · stoppable: stopped and kept on stop/, "the live list's price");
+    assert.match(bg[1].detail, /\$1\.80\/hr · WARNING: can't be stopped: a stop leaves it running at \$1\.80\/hr \(\$43\.20\/day\): delete it yourself/);
+
+    // 0. A non-stoppable type: launched like any other; its stop leaves it RUNNING (Brev 500 "does not support stop"):
+    //    released (the stop is done), never deleted, alerted once with its $/hr, billed at it; the owner deletes it.
+    const ln = await launch("nostop1", "a100-test");
+    assert.equal(ln.op.status, "done", ln.op.error + JSON.stringify(ln.op.log.slice(-6)));
+    assert.ok(ln.op.log.some((l) => /WARNING: a100-test can't be stopped on NVIDIA Brev/.test(l.msg)), JSON.stringify(ln.op.log.map((l) => l.msg)));
+    const wsn = b.workspaces.find((x) => x.name.startsWith("fv-pod-nostop1-"));
+    assert.equal(wsn.body.isStoppable, false);
+    const sq = (await call2("/api/standalone/nostop1", { headers: H })).j.pod;
+    assert.deepEqual([sq.pod.brev.stoppable, sq.pod.brev.kept_on_stop, sq.pod.brev.usd_per_hr], [false, false, 1.8]);
+    const opn = await stop("nostop1", ln.id);
+    assert.equal(opn.status, "done", opn.error + JSON.stringify(opn.log.slice(-6)));
+    assert.ok(opn.log.some((l) => /not_stoppable: Brev cannot stop a100-test \(Brev: HTTP 500 rpc error: code = Internal desc = instance "inst-ws\d+" does not support stop\): left RUNNING at \$1\.80\/hr \(\$43\.20\/day\).*STILL BILLING/.test(l.msg)), JSON.stringify(opn.log.map((l) => l.msg)));
+    assert.equal(wsn.status, "RUNNING");
+    assert.equal(b.calls.filter((c) => c.method === "PUT" && c.path === `/workspaces/${wsn.id}/stop`).length, 1, "one stop: no blind retries");
+    let pkn = await parked();
+    assert.deepEqual(pkn.parked.map((p) => [p.workspace_id, p.state, p.storage_usd_per_day, p.running_usd_per_day]), [[wsn.id, "running_unstoppable", 0, 1.8 * 24]]);
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    assert.equal(b.calls.filter((c) => c.method === "PUT" && c.path === `/workspaces/${wsn.id}/stop`).length, 1, "the cron's stop retry waits BREV_UNSTOPPABLE_RETRY_S");
+    const aln = (await call2("/api/alerts", { headers: H })).j.alerts.filter((a) => a.kind === "brev_unstoppable");
+    assert.equal(aln.length, 1, JSON.stringify(aln));
+    assert.match(aln[0].message, new RegExp(`cannot be stopped .*still RUNNING at \\$1\\.80\\/hr \\(\\$43\\.20\\/day\\).*fv-control\\.sh brev delete-parked ${wsn.id}`));
+    assert.equal(aln[0].severity, "critical");
+    const podn = (await call2("/api/pods", { headers: H })).j.pods.find((p) => p.pod_id === `brev:${wsn.name}`);
+    assert.deepEqual([podn?.owner, podn?.desired_status, podn?.cost_per_hr], ["brev:unstoppable", "RUNNING", 1.8]);
+    const provn = (await call2("/api/providers", { headers: H })).j.providers.find((p) => p.id === "brev");
+    assert.ok(provn.running_dph >= 1.8, JSON.stringify(provn));
+    assert.ok(!b.calls.some((c) => c.method === "DELETE"), "never deleted by fv-control");
+    // The owner's delete (Pods page / fv-control.sh brev delete-parked): the only delete.
+    const dn = await call2(`/api/providers/brev/parked/${wsn.id}/delete`, { method: "POST", body: {}, headers: H });
+    assert.equal(dn.status, 200, JSON.stringify(dn.j));
+    assert.ok(!b.workspaces.some((x) => x.id === wsn.id));
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    assert.ok(!(await call2("/api/alerts", { headers: H })).j.alerts.some((a) => a.kind === "brev_unstoppable"), "resolved once deleted");
+    assert.equal((await parked()).parked.length, 0);
+    const posts0 = posts();
+    const callsFrom = b.calls.length;
 
     // 1. Cold launch: both trees downloaded; the disk sized for them.
     const l1 = await launch("warm1");
@@ -1768,10 +1803,9 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     assert.equal(posts(), posts0 + 3, "no create: the held one is reused");
     assert.ok(l6.op.log.some((l) => new RegExp(`warm restart of held NVIDIA Brev brev:${ws1.name} .*\\(it was held: restart failed: .*no capacity`).test(l.msg)), JSON.stringify(l6.op.log.map((l) => l.msg)));
 
-    // 7. Brev refuses the stop (here the simulated type turns out not stoppable): left running, alerted with its $/hr,
-    //    never deleted; the cron's retry stops and holds it once Brev accepts.
-    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
-    g5.stoppable = false;
+    // 7. Brev refuses the stop (an API error): left running, alerted with its $/hr, never deleted; the cron's retry
+    //    stops and holds it once Brev accepts.
+    b.stopFail = true;
     op = await stop("reuse6", l6.id);
     assert.equal(op.status, "failed", JSON.stringify(op));
     assert.match(op.error, /still present/);
@@ -1780,7 +1814,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     await call2("/api/collect", { method: "POST", body: {}, headers: H });
     al2 = (await call2("/api/alerts", { headers: H })).j.alerts;
     assert.ok(al2.some((a) => a.kind === "brev_stop_failed" && /still RUNNING at \$1\.01\/hr \(\$24\.14\/day\)/.test(a.message)), JSON.stringify(al2));
-    g5.stoppable = true;
+    b.stopFail = false;
     await call2("/api/collect", { method: "POST", body: {}, headers: H });
     assert.equal(ws1.status, "STOPPED");
     assert.ok(!(await call2("/api/alerts", { headers: H })).j.alerts.some((a) => a.kind === "brev_stop_failed"), "resolved once stopped");
@@ -1826,8 +1860,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
   } finally {
     w2.stop();
     b.workspaces = [];
-    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
-    if (g5) g5.stoppable = true;
+    b.stopFail = false;
   }
 });
 

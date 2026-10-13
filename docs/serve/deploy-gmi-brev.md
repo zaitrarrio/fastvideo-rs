@@ -231,18 +231,52 @@ provider/region, data remains inaccessible" [b-mgmt]).
     loop removes `.partial-*` leftovers and replaces any tree that is not
     complete at the pinned revision (§7).
   A fake-engine pod (no trees) that became ready parks with no trees.
-- **A stop Brev refuses** (a type that turned out not stoppable, an API
-  error) leaves the VM **running**: state `stop_failed`, a log warning
-  with its $/hr, and the critical alert `brev_stop_failed` (its $/hr and
-  $/day) each cron pass while it runs. The cron retries the stop; once it
-  takes (or Brev shows it stopped) the instance is held. Nothing deletes
-  it; the owner may delete it (`brev delete-parked` accepts it).
-- **Non-stoppable types are refused** (rule `brev_stoppable_only`): a type
-  the live list marks not stoppable (e.g. the Shadeform `massedcompute_*`
-  / `hyperstack_*` types) could only be deleted, so the validator, launch,
-  start, scale and roll refuse it with the stoppable allowed types from the
-  live list, and `createOtherWorker` / the provider's create refuse it
-  again. The launch form lists stoppable types only.
+- **A stop Brev refuses** (an API error) leaves the VM **running**: state
+  `stop_failed`, a log warning with its $/hr, and the critical alert
+  `brev_stop_failed` (its $/hr and $/day) while it runs. The cron retries
+  the stop each pass; once it takes (or Brev shows it stopped) the
+  instance is held. Nothing deletes it; the owner may delete it
+  (`brev delete-parked` accepts it). A stop sent while the workspace is
+  still **DEPLOYING** gets `instance not found` (measured below): it is
+  `stop_failed` too, and the cron sends the stop again once Brev no longer
+  shows it DEPLOYING (no stop while it is).
+- **Non-stoppable types are launched like any other.** Owner decision
+  (2026-10-13), replacing rule `brev_stoppable_only` (#69): "On Brev we
+  don't want to filter out non-stoppable VMs; we'll just treat them like
+  any other Brev VM." A type the live list marks not stoppable (e.g. the
+  Shadeform `massedcompute_*` / `hyperstack_*` types) is offered, validated
+  and launched (created with `isStoppable` false). The owner rule of
+  2026-10-11 still holds: fv-control never deletes such a VM on its own.
+  Measured live 2026-10-13 (Brev REST, a RUNNING `massedcompute_A6000`,
+  `isStoppable` false):
+
+  | Call | State | Brev's answer | Afterwards |
+  |---|---|---|---|
+  | `PUT api/workspaces/{id}/stop` | RUNNING, non-stoppable type | HTTP 500 `{"errors":[{"type":"InternalServerError","message":"rpc error: code = Internal desc = instance \"inst-…\" does not support stop"}]}` | still RUNNING / HEALTHY, billing |
+  | `PUT api/workspaces/{id}/stop` | DEPLOYING (never provisioned) | HTTP 500 `rpc error: code = NotFound desc = instance not found` | still DEPLOYING |
+
+  So every stop of such a VM (user stop, deadline backstop, budget floor,
+  idle stop, scale-down, roll, failed boot) records it
+  **`running_unstoppable`** (note `not_stoppable: …`, its $/hr): it is
+  released from its cluster (the stop operation completes, no blind
+  retries), it **keeps running**, and the critical alert
+  `brev_unstoppable` (one alert, the same key while it runs) names its
+  $/hr, $/day and the deletes: `fv-control.sh brev delete-parked <id>` or
+  Delete on the Pods page's parked list (`fv-control.sh pod delete <name>`
+  of a standalone pod, instead of a stop, deletes its VM at once). The cron
+  sends the stop again only every `BREV_UNSTOPPABLE_RETRY_S` (default
+  3600 s); if it ever takes, the VM is held. Until it is gone it is billed
+  at its full GPU $/hr: the ledger books it (owner `brev:unstoppable`, pods
+  table `RUNNING`), `budgetCheck` counts it, and the budget floor warns
+  early (below). The launch form lists these types after the stoppable
+  ones with "WARNING: can't be stopped: a stop leaves it running at $X/hr
+  ($Y/day): delete it yourself"; the validator and the launch log say the
+  same, and the outlook is always cold (a stopped one could not be started
+  again). The Pods page shows it as "running (can't be stopped)" with its
+  GPU $/day; the standalone Stop confirmation says it keeps running.
+  Reusing such a still-running VM for the next launch of its type (warm,
+  its weights on disk) is a follow-up (§9): its container keeps serving
+  the old launch, and the VM fetches a run script only at boot.
 - **Reuse before create**: a new launch on Brev claims (atomically) a
   parked or held instance of the requested type before creating a VM: the
   one holding the most requested trees at the pinned revisions first, then
@@ -277,8 +311,13 @@ provider/region, data remains inaccessible" [b-mgmt]).
   listed $/GB-hr (unknown: $0.000263). The cron books it each minute in
   the ledger (owner `brev:parked`, pods table `PARKED` / `HELD`), and
   `budgetCheck` adds it to the projection (`… parked storage $x/hr
-  included`). `/api/providers` shows `parked_dph`. A `stop_failed` VM is
-  still billed at its GPU $/hr under its cluster.
+  included`). `/api/providers` shows `parked_dph`. A `stop_failed` or
+  `running_unstoppable` VM is billed at its GPU $/hr (its price recorded at
+  create, D1 migration 0012), also after its cluster released it. For
+  Brev, VMs a stop cannot end (running non-stoppable VMs, and the
+  launch's pods of a non-stoppable type) count `BREV_NOSTOP_MARGIN_H`
+  (default 24) hours past the deadline in the launch's budget check
+  (`… + $x/hr that a stop cannot end … for 24 h past the deadline`).
 - **Thresholds are alerts only** (policies): more than `brev_park_max`
   (default 2) parked or held instances, or one parked longer than
   `brev_park_max_days` (default 7), raises `brev_parked_over_limit`
@@ -301,9 +340,10 @@ provider/region, data remains inaccessible" [b-mgmt]).
   - API: `GET /api/providers/brev/parked` (`policy.line`,
     `policy.auto_delete: false`, `over_limit`, per instance `reuse`),
     `POST /api/providers/brev/parked/<id>/delete | unpark`.
-- **Planner**: the launch form lists the allowed stoppable instance types,
-  each with its live $/hr, "stoppable: stopped and kept on stop (reused by
-  the next launch)", the deploy time and how many are parked / held. With
+- **Planner**: the launch form lists the allowed instance types, stoppable
+  first, each with its live $/hr, "stoppable: stopped and kept on stop
+  (reused by the next launch)" or "WARNING: can't be stopped: …", the
+  deploy time and how many are parked / held. With
   Hub weights, the validator shows at the instance-type field "warm:
   restarts parked|held <name> (holds …): boot ~N min", "reuse: restarts
   … (none of the trees …; downloads … onto it)" or "cold: downloads …
@@ -592,7 +632,8 @@ next poll and the pod is deleted (with its tunnel).
 | Guard | Runpod | GMI / Brev |
 |---|---|---|
 | per-pod $/hr cap | create answer's `costPerHr` > `max_gpu_dph` → delete | offer price (GMI products ÷ `GMI_PRICE_DIVISOR`, Brev's live instance-type list or the `BREV_PRICES` override) > `max_gpu_dph` → refused before create; unknown → planned and booked at `max_gpu_dph` |
-| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev VMs are stopped and parked / held, never deleted, §3.4) |
+| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. Brev: $/hr a stop cannot end (non-stoppable types, owner decision 2026-10-13) counts `BREV_NOSTOP_MARGIN_H` (24 h) more. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev VMs are stopped and parked / held, never deleted, §3.4). Brev VMs that can't be stopped warn early: when this month's spend + their $/hr × the margin reaches 80 %; the floor's alert names them (a stop leaves them running: the owner deletes them) |
+| stop that cannot stop | n/a | Brev non-stoppable type (owner decision 2026-10-13: launched like any other): `PUT …/stop` → HTTP 500 "does not support stop" (measured 2026-10-13), VM stays RUNNING → `running_unstoppable`, released, never deleted, one critical alert `brev_unstoppable` ($/hr, $/day, delete commands), stop retried every `BREV_UNSTOPPABLE_RETRY_S` (1 h), billed in the ledger and budget until the owner deletes it. A stop while DEPLOYING → HTTP 500 "instance not found": `stop_failed`, sent again once it leaves DEPLOYING (§3.4) |
 | idle storage | none | Brev parked / held instances: kept until the owner deletes them (owner rule 2026-10-11); alert `brev_parked_over_limit` past `brev_park_max` instances or `brev_park_max_days` days, with their age and $/day (§3.4) |
 | deadline | cron + pod watchdog | cron (`stopCluster`) + the pod's watchdog (GMI: API delete; Brev: host `shutdown`) |
 | ours only | listed by id | fv- names **and** recorded in `cluster_pods`; an fv-named instance fv-control did not record raises `<p>_orphan` and is never touched; anything else is not even listed |
@@ -667,8 +708,10 @@ storage volume would do the same there (§9).
       `brev_park_max_days` (default 7) in the policies. Check parked /
       held instances with `fv-control.sh brev parked` or on the Pods page;
       they bill storage (~$0.8/day for 250 GB on AWS gp3) until you delete
-      them. Allow only stoppable types in `BREV_INSTANCE_TYPES` (others
-      are refused at launch).
+      them. Non-stoppable types are allowed too (owner decision
+      2026-10-13): a stop leaves such a VM running at its full $/hr until
+      you delete it (alert `brev_unstoppable`); prefer stoppable types for
+      presets with weights.
    4. Ask NVIDIA whether the workspaces REST API may be automated and
       whether the API key is a bearer token for it (if not, set
       `BREV_API_TOKEN` to whatever token the CLI stores after
@@ -768,6 +811,17 @@ hand. fv-control never deletes either on its own (owner rule 2026-10-11).
   own instance type).
 - Brev `location_prices`: the planner uses `base_price` (the type's default
   location); fv-control sends no `location`.
+- Brev non-stoppable reuse (owner decision 2026-10-13): a
+  `running_unstoppable` VM keeps running after its stop, with its weights
+  on disk; the next launch of its type could reuse it warm instead of
+  creating a VM. Not built: the VM fetches its run script only at boot
+  (`fv-boot.service`) and its container keeps serving the old launch, so
+  reuse needs a host-side poll for a new run script (or Brev's reboot, if
+  its API has one: UNVERIFIED) before `claimWarm` may pick it.
+- Brev non-stoppable VM at its deadline: the host watchdog runs
+  `shutdown -h now`; whether Brev then stops billing a non-stoppable
+  instance is UNVERIFIED (fv-control keeps billing it until Brev no longer
+  lists it running).
 
 ## 10. Tests
 
@@ -832,7 +886,11 @@ hand. fv-control never deletes either on its own (owner rule 2026-10-11).
     restart timeout → held + fresh; the `brev_park_max` threshold an
     alert (nothing deleted); a held instance reused (no create); a stop
     Brev refuses left running with `brev_stop_failed`, then held by the
-    cron's retry; a non-stoppable type refused at validate and launch; the
+    cron's retry; a non-stoppable type allowed with a warning at validate
+    and in the form, launched, its stop answered 500 "does not support
+    stop" → `running_unstoppable`, released, one stop only, one
+    `brev_unstoppable` alert, billed (owner `brev:unstoppable`), deleted
+    only by the owner's delete-parked; the
     CLI (`brev parked`, `unpark`, `delete-parked`); the age threshold an
     alert; the only DELETE the owner's; foreign and unrecorded fv-
     workspaces never touched. The step "GMI / Brev standalone pods": a
@@ -842,8 +900,12 @@ hand. fv-control never deletes either on its own (owner rule 2026-10-11).
     deletes a Brev VM" stubs `brev.remove` and runs stop, deadline,
     scale-down, roll, orphan, failed boot, failed / timed-out restart, no
     record, refused stop, the direct backstop / budget release and the
-    cron (limits, refused-stop retry, budget floor): it fails if any of
-    them calls it; only `deleteParked` and the manual `pod delete` do.
+    cron (limits, refused-stop retry, budget floor), and the same stop
+    paths on a non-stoppable type (all `running_unstoppable`): it fails if
+    any of them calls it; only `deleteParked` and the manual `pod delete`
+    do. Also: the non-stoppable stop (state, one alert, the hourly stop
+    backoff, ledger owner `brev:unstoppable`, budget margin and early
+    warning) and the DEPLOYING "instance not found" retry.
   - `control/test/ui/brev-parked.mjs`: the Pods page's parked card
     (weights, disk, $/day, held, Unpark, Delete), and the launch form's
     instance types (stoppable first, live price) with the cold outlook.

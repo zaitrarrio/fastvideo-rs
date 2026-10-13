@@ -1084,7 +1084,8 @@ details only once that provider is picked:
 - `?provider=runpod|gmi|brev`: that provider's details and nothing
   else. Runpod gives its GPU types with $/hr and stock. GMI gives its
   products with price and availability in the default IDC. Brev gives
-  its instance types (stoppable ones, with the live price), its parked
+  its instance types (stoppable ones first, each with the live price and,
+  for a type Brev cannot stop, a warning that a stop leaves it running), its parked
   or held VMs and storage $/day. GMI and Brev also give the month's spend
   against the budget. The upstream lists are cached in the Worker
   (Runpod 5 min, Brev 1 h, GMI 60 s), with one call in flight per list.
