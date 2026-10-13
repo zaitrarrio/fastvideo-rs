@@ -129,13 +129,14 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3trim-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" --arg rev "$UP_REV" \
-      --arg prompt "${FV_PROMPT:-}" --arg seed "${FV_SEED:-}" --arg h "${FV_H:-}" --arg w "${FV_W:-}" --arg nf "${FV_FRAMES:-}" --arg skip "${FV_SKIP:-}" --arg upsha "$up_dump_sha" '{
+      --arg prompt "${FV_PROMPT:-}" --arg seed "${FV_SEED:-}" --arg h "${FV_H:-}" --arg w "${FV_W:-}" --arg nf "${FV_FRAMES:-}" --arg skip "${FV_SKIP:-}" --arg te "${FV_TEXT_ENCODER:-}" --arg upsha "$up_dump_sha" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_UP_REV: $rev, FV_WEIGHTS_MODE: $mode}
               + (if $prompt != "" then {FV_PROMPT: $prompt} else {} end) + (if $seed != "" then {FV_SEED: $seed} else {} end)
               + (if $h != "" then {FV_H: $h} else {} end) + (if $w != "" then {FV_W: $w} else {} end)
               + (if $nf != "" then {FV_FRAMES: $nf} else {} end) + (if $skip != "" then {FV_SKIP: $skip} else {} end)
+              + (if $te != "" then {FV_TEXT_ENCODER: $te} else {} end)
               + (if $upsha != "" then {FV_UP_DUMP_URL: env.FVX_UPD, FV_UP_DUMP_SHA256: $upsha, FV_UP_REF_URL: env.FVX_UPR} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 220, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 300, allowedCudaVersions: ["13.0"]} end)')"

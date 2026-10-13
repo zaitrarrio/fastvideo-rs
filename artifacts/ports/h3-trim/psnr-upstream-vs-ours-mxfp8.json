@@ -1,0 +1,22 @@
+{
+ "ref": "trimpod1/ref.mp4",
+ "cand": "trimpod7/ours/inj-served/output.mp4",
+ "video": {
+  "frames_ref": 124,
+  "frames_cand": 124,
+  "frames": 124,
+  "psnr_db": 14.346599403385383,
+  "psnr_db_frame_mean": 14.353071434580093,
+  "psnr_db_frame_min": 13.627401890524634
+ },
+ "audio": {
+  "samples_ref": 165888,
+  "samples_cand": 165600,
+  "rate": 32000,
+  "psnr_db": 15.47199057932287,
+  "best_lag_samples": 0,
+  "psnr_db_best_lag": 15.47199057932287,
+  "rms_ref": 0.1336534321308136,
+  "rms_cand": 0.12582586705684662
+ }
+}

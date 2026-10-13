@@ -14,7 +14,8 @@
 #
 # Nothing is written to /workspace (the shared volume is only read). /srv is served on :8000 (Runpod proxy):
 # log.txt, status.tsv (step, rc, seconds), *.log, the dumps' comparison, the clips and DONE (0 = every step ok).
-# Env: FV_UP_REV, FV_PROMPT, FV_SEED, FV_H/FV_W/FV_FRAMES, FV_DUMP_OPS, FV_SKIP (space-separated step names).
+# Env: FV_UP_REV, FV_PROMPT, FV_SEED, FV_H/FV_W/FV_FRAMES, FV_DUMP_OPS, FV_SKIP (space-separated step names),
+# FV_TEXT_ENCODER (h3 gen --text-encoder; default streamed: the bf16 encoder, as the reference).
 set -u
 SRV=/srv
 L=/fvw
@@ -116,7 +117,7 @@ upstream() {
 
 # ---- 3. ours on the reference's noise and text -----------------------------------------------------------------
 GEN=("$BIN" --mode fast h3 gen --prompt "$P" --seed "$SEED" --height "$H" --width "$WD" --num-frames "$NF"
-     --text-encoder streamed --text-weights "$W/h3-base" --text-cache $L/text-cache)
+     --text-encoder "${FV_TEXT_ENCODER:-streamed}" --text-weights "$W/h3-base" --text-cache $L/text-cache)
 # Parity: bf16 linears (FASTVIDEO_H3_QUANT=off), as the reference's strict profile; then the served default (MXFP8
 # blocks on sm_100+, docs/ports/h3-trim.md §6) on the same injected inputs.
 ours_injected() { # <name> <quant>

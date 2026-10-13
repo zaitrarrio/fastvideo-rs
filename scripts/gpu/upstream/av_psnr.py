@@ -41,14 +41,14 @@ def _probe(mp4: Path) -> tuple[int, int]:
 
 
 def _frames(mp4: Path, w: int, h: int) -> np.ndarray:
-    raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(mp4), "-f", "rawvideo", "-pix_fmt", "rgb24",
-                                   "-s", f"{w}x{h}", "-"])
+    raw = subprocess.check_output(["ffmpeg", "-nostdin", "-v", "error", "-i", str(mp4), "-f", "rawvideo", "-pix_fmt", "rgb24",
+                                   "-s", f"{w}x{h}", "-"], stdin=subprocess.DEVNULL)
     return np.frombuffer(raw, np.uint8).reshape(-1, h, w, 3)
 
 
 def _audio(src: Path) -> np.ndarray:
-    raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(src), "-vn", "-ac", "2", "-ar", str(RATE),
-                                   "-f", "f32le", "-"])
+    raw = subprocess.check_output(["ffmpeg", "-nostdin", "-v", "error", "-i", str(src), "-vn", "-ac", "2", "-ar", str(RATE),
+                                   "-f", "f32le", "-"], stdin=subprocess.DEVNULL)
     return np.frombuffer(raw, np.float32).reshape(-1, 2)
 
 
