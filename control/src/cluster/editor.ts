@@ -12,6 +12,7 @@ import { gpuTypes } from "../dynamic";
 import { brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 import { tunnelSettings } from "../tunnels";
+import { upsamplerIssue } from "../upsampler";
 
 /**
  * Checks that need live data (the Runpod GPU catalog, 5-minute cache): a
@@ -33,6 +34,9 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
     spec.pools.forEach((p, i) => {
       if (isOtherPool(p)) warnings.push({ path: [...prefix, "pools", i, "provider"], message: `${tun.mode === "named" ? "WARNING" : "NOTE"}: ${tun.warning}` });
     });
+  // upsampler_local (upsampler.ts): the sidecar's GGUF tree comes from the R2 weights store, whatever the weights source.
+  const ups = upsamplerIssue(env);
+  if (ups) spec.pools.forEach((p, i) => p.upsampler_local && issues.push({ path: [...prefix, "pools", i, "upsampler_local"], message: ups }));
   // weights_source r2: the manifests are read now (sizes in the outlook; an unreadable one would fail the boot).
   for (const [i, p] of spec.pools.entries()) {
     if (issues.some((x) => x.path[prefix.length + 1] === i)) continue;

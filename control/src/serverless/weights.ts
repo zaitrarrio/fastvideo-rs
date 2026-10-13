@@ -23,11 +23,12 @@ import { R2_TREES } from "../r2-trees";
 import { AUX_FILES, HUB_TREES } from "../weights-sources";
 import { MXFP8_TREE_GLOB } from "../recipe-trees";
 import { parseJson } from "../util";
+import { upsamplerIssue } from "../upsampler";
 import { slsPreset } from "./presets";
 import { configOf } from "./serves";
 import type { EndpointSpec } from "./spec";
 
-type SpecLike = Pick<EndpointSpec, "variant" | "compute"> & Partial<Pick<EndpointSpec, "preset" | "config" | "config_toml" | "image" | "weights_source" | "network_volume" | "data_centers" | "container_disk_gb">>;
+type SpecLike = Pick<EndpointSpec, "variant" | "compute"> & Partial<Pick<EndpointSpec, "preset" | "config" | "config_toml" | "image" | "weights_source" | "network_volume" | "data_centers" | "container_disk_gb" | "upsampler_local">>;
 
 /** The previous weights token stays valid this long after a rotation (Runpod's rolling release of the workers). */
 export const SLS_TOKEN_GRACE_MS = 30 * 60_000;
@@ -82,6 +83,9 @@ export interface WeightsIssue {
 export function slsWeightsIssues(env: Env, spec: SpecLike): { issues: WeightsIssue[]; warnings: WeightsIssue[] } {
   const issues: WeightsIssue[] = [];
   const warnings: WeightsIssue[] = [];
+  // upsampler_local (upsampler.ts): its GGUF tree comes from the R2 weights store, whatever the weights source.
+  const ups = spec.upsampler_local && spec.compute === "GPU" ? upsamplerIssue(env) : null;
+  if (ups) issues.push({ path: ["upsampler_local"], message: ups });
   if (spec.weights_source !== "r2" || spec.compute !== "GPU") return { issues, warnings };
   const { off } = r2Cfg(env);
   if (off) issues.push({ path: ["weights_source"], message: `weights_source r2: ${off}` });

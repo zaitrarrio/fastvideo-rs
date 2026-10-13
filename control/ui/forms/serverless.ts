@@ -156,6 +156,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         F(["scaler_type"], { label: "Scaler", onSet: () => draw() }),
         F(["scaler_value"], { label: f.get(["scaler_type"]) === "REQUEST_COUNT" ? "Jobs per worker" : "Queue delay", unit: f.get(["scaler_type"]) === "REQUEST_COUNT" ? "jobs" : "s" }),
         F(["flashboot"], { label: "FlashBoot", placeholder: "faster warm starts" }),
+        F(["upsampler_local"], { label: "Prompt upsampler (local)", placeholder: "llama-server sidecar on the GPU", help: "Qwen3-VL-4B-Instruct (vision) in llama-server next to fv-serve on each worker's GPU (see the doc for its GPU memory; its 5.1 GB GGUF from the R2 weights store, any weights source). If it fails, fv-serve starts anyway and upsampling falls back. Default off; GPU only." }),
         F(["container_disk_gb"], { label: "Container disk" }),
         F(["deadline_min"], { label: "Backstop after", unsetLabel: "no backstop", allowUnset: true, placeholder: "none" }),
         F(["deadline_action"], { label: "At the backstop" }),

@@ -3,7 +3,8 @@
 # serves a local Qwen3-VL-4B-Instruct GGUF (language model + vision projector, --mmproj) on 127.0.0.1 next to
 # fv-serve, on the same GPU; fv-serve's upsampler talks to it as an OpenAI-compatible /v1/chat/completions
 # (FV_UPSAMPLER_BASE_URL, FV_UPSAMPLER_MODEL; FV_UPSAMPLER_VISION=1 when the projector is loaded: image_url content
-# parts work, as data: URLs or http(s) URLs llama-server downloads itself, at most 10 MB within 10 s).
+# parts work, as data: URLs or http(s) URLs llama-server downloads itself, at most 10 MB within 10 s; and, unless the
+# operator set them, FV_UPSAMPLER_HEDGE=0 and FV_UPSAMPLER_TIMEOUT_MS=30000 for a local server).
 #
 # Shipped in the CUDA serve images as /opt/fastvideo-rs/bin/fv-upsampler, beside /opt/fastvideo-rs/bin/llama-server.
 # The image entrypoint (fv-entry) and fv-control's boots run it when FV_UPSAMPLER_LOCAL=1:
@@ -176,6 +177,10 @@ start_bg() {
     echo "export FV_UPSAMPLER_BASE_URL='http://127.0.0.1:$PORT/v1'"
     echo "export FV_UPSAMPLER_MODEL='$MODEL'"
     echo "export FV_UPSAMPLER_VISION='$([ -n "$MMPROJ" ] && echo 1 || echo 0)'"
+    # A local server: one request per call (no hedge), and room for a long director prefill; an operator's own
+    # values win (evaluated by the boot).
+    # shellcheck disable=SC2016 # expanded where the boot evals it
+    echo 'export FV_UPSAMPLER_HEDGE="${FV_UPSAMPLER_HEDGE:-0}" FV_UPSAMPLER_TIMEOUT_MS="${FV_UPSAMPLER_TIMEOUT_MS:-30000}"'
   } > "$ENVF.part" && mv -f "$ENVF.part" "$ENVF"
   say "ready in $(el "$t0")s ($(tr '\n' ' ' < "$STEPF" | sed 's/ $//'))"
   # Keep it up: a crashed llama-server is restarted (requests in between fall back in fv-serve).
@@ -228,6 +233,8 @@ cmd_wait() {
     echo "[fv-boot] $(ts) upsampler: not ready after ${FV_UPSAMPLER_WAIT_S:-240}s (still starting): fv-serve starts with it; upsampling falls back until it answers" >&2
     echo "export FV_UPSAMPLER_BASE_URL='http://127.0.0.1:$PORT/v1'"
     echo "export FV_UPSAMPLER_MODEL='$MODEL'"
+    # shellcheck disable=SC2016 # expanded where the boot evals it
+    echo 'export FV_UPSAMPLER_HEDGE="${FV_UPSAMPLER_HEDGE:-0}" FV_UPSAMPLER_TIMEOUT_MS="${FV_UPSAMPLER_TIMEOUT_MS:-30000}"'
   fi
   return 0
 }

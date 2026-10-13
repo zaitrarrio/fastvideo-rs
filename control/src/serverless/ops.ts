@@ -12,6 +12,7 @@ import { endpointCreatePayload, endpointName, endpointUpdatePayload, invokeBody,
 import { balanceFloor, sls, type LiveEndpoint, type SlsEnv } from "./runpod-sls";
 import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
 import { newWeightsToken, slsWeightsEnv } from "./weights";
+import { upsamplerPodEnv } from "../upsampler";
 import { defaultCancelPath } from "../jobapi";
 
 export interface SlsRow {
@@ -138,9 +139,12 @@ export const reload = (env: Env, id: string) => getRow(env, id);
 const deadlineFor = (spec: EndpointSpec, from = now()) => (spec.deadline_min ? from + spec.deadline_min * 60_000 : null);
 /** weights_source r2: a fresh weights token for the template env, and its hash for D1 (never the token). */
 async function weightsFor(env: Env, spec: EndpointSpec): Promise<{ weights: Record<string, string>; hash: string | null }> {
-  if (spec.weights_source !== "r2" || spec.compute !== "GPU") return { weights: {}, hash: null };
+  const ups = !!spec.upsampler_local && spec.compute === "GPU";
+  if ((spec.weights_source !== "r2" && !ups) || spec.compute !== "GPU") return { weights: {}, hash: null };
   const t = await newWeightsToken();
-  return { weights: slsWeightsEnv(env, spec, t.token), hash: t.hash };
+  // upsampler_local (upsampler.ts): the sidecar fetches its GGUF tree with the same token, whatever the weights source.
+  const own = spec.weights_source === "r2" ? slsWeightsEnv(env, spec, t.token) : { FV_WEIGHTS_TOKEN: t.token };
+  return { weights: { ...own, ...(ups ? upsamplerPodEnv(env) : {}) }, hash: t.hash };
 }
 
 // ---------------------------------------------------------------- create
