@@ -1816,7 +1816,7 @@ await step("Brev keep-on-stop (owner rules 2026-10-11 / 2026-10-13: a stopped VM
     writeFileSync(`${dir}/token`, tok, { mode: 0o600 });
     const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w2.url, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
     const out = await cli("brev", "parked");
-    assert.match(out, /^policy: stopped Brev VMs are kept, never deleted by fv-control \(owner rule 2026-10-11\): reused by the next launch of their type, or deleted by you; a VM whose stop does not succeed is deleted instead \(owner rule 2026-10-13\); alert past 2 parked or 7 days each; storage \$[\d.]+\/day \(OVER the alert threshold: nothing is deleted\)$/m);
+    assert.match(out, /^policy: stopped Brev VMs are kept, never deleted by fv-control \(owner rule 2026-10-11\): reused by the next launch of their type, or deleted by you; a VM whose stop does not succeed is deleted instead \(owner rule 2026-10-13\); alert past 2 parked or 7 days each; storage \$[\d.]+\/day$/m); // two kept after the failed stop's delete: under brev_park_max
     pk = await parked();
     const held = pk.parked.find((p) => p.state === "held");
     assert.ok(held, JSON.stringify(pk));
