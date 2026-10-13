@@ -878,4 +878,5 @@ CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.
 - **Wan:** ready 88 s after the last byte (was 91.5 s), so almost no overlap.
   - The one-DiT Wan pipeline opens its DiT with the eager map, which waits for the whole 10 GB file. That file
     was the last to complete.
-  - `FASTVIDEO_WAN_DIT_LAZY=1` (lazy, gated per part) is the untested fix.
+  - `FASTVIDEO_WAN_DIT_LAZY=1` (lazy, gated per part) is the fix. Tested in docs/ops/r2-bench-2026-10-13-wan-lazy.md: ready 3.8 s after the last byte
+    (eager 82-88 s), container start → ready 106.6 s (eager 196-213 s), byte-identical output, host RSS −9.3 GiB.
