@@ -7,6 +7,8 @@
 //    weights_source r2; the trees are its spec's (slsTrees). A request naming another endpoint is refused.
 // Never what the request names. The answer is the trees' manifests with a presigned GET URL per file (short-lived):
 // the pod gets no R2 key, and the URLs are never logged.
+// `?set=upsampler` (upsampler.ts): the prompt upsampler sidecar's GGUF tree only, for a pool or endpoint with
+// upsampler_local, whatever its weights source (the tree is in R2 only).
 import { getCluster } from "./cluster/store";
 import { sha256Hex } from "./crypto";
 import type { Env } from "./env";
@@ -16,6 +18,15 @@ import { slsTokenRow } from "./serverless/ingest";
 import { specOf } from "./serverless/ops";
 import { slsFetchTrees } from "./serverless/weights";
 import { HttpError, parseJson, rateLimit } from "./util";
+import { UPSAMPLER_SET, UPSAMPLER_TREE } from "./upsampler";
+
+/** The plan's set: the weights (default) or the upsampler sidecar's tree (?set=upsampler). */
+function planSet(req: Request): "weights" | "upsampler" {
+  const s = new URL(req.url).searchParams.get("set");
+  if (s === null || s === "" || s === "weights") return "weights";
+  if (s === UPSAMPLER_SET) return "upsampler";
+  throw new HttpError(400, `set: weights | ${UPSAMPLER_SET}`);
+}
 
 async function planFor(env: Env, trees: string[]): Promise<Response> {
   const { cfg, off } = r2Cfg(env);
@@ -36,7 +47,8 @@ export async function weightsPlanRequest(env: Env, req: Request): Promise<Respon
   const text = await req.text();
   if (text.length > 4096) throw new HttpError(413, "request too large");
   const body = parseJson<{ pod?: unknown; endpoint?: unknown }>(text, {}) || {};
-  if (token.startsWith("fvw_")) return slsPlan(env, token, body);
+  const set = planSet(req);
+  if (token.startsWith("fvw_")) return slsPlan(env, token, body, set);
   const cl = await env.DB.prepare("SELECT id FROM clusters WHERE ingest_hash = ?").bind(await sha256Hex(token)).first<{ id: string }>();
   if (!cl) throw new HttpError(401, "invalid ingest token");
   if (!(await rateLimit(env, `weights-plan:${cl.id}`, 60, 60))) throw new HttpError(429, "weights plan rate limit (60/min per cluster)");
@@ -47,6 +59,7 @@ export async function weightsPlanRequest(env: Env, req: Request): Promise<Respon
   const c = await getCluster(env, cl.id);
   const pool = c.spec.pools.find((p) => p.id === row.pool);
   if (!pool) throw new HttpError(409, `pool ${row.pool} is no longer in the cluster's spec`);
+  if (set === "upsampler") return upsamplerPlan(env, !!pool.upsampler_local && pool.compute !== "CPU", `pool ${pool.id}`);
   const plan = weightsPlan(pool, env);
   if (plan.source !== "r2") throw new HttpError(409, `pool ${pool.id} does not use weights_source r2`);
   if (plan.unsupported.length) throw new HttpError(409, `not in the R2 weights store: ${plan.unsupported.join(", ")}`);
@@ -54,12 +67,13 @@ export async function weightsPlanRequest(env: Env, req: Request): Promise<Respon
 }
 
 /** A serverless worker's plan: its endpoint's trees, by the endpoint's weights token. */
-async function slsPlan(env: Env, token: string, body: { endpoint?: unknown }): Promise<Response> {
+async function slsPlan(env: Env, token: string, body: { endpoint?: unknown }, set: "weights" | "upsampler" = "weights"): Promise<Response> {
   const row = await slsTokenRow(env, token);
   if (!row) throw new HttpError(401, "invalid weights token (unknown, rotated out, or its endpoint was deleted)");
   if (body.endpoint !== undefined && ![row.id, row.name, row.endpoint_id].includes(String(body.endpoint))) throw new HttpError(403, "this weights token is not for that endpoint");
   if (!(await rateLimit(env, `weights-plan:${row.id}`, 120, 60))) throw new HttpError(429, "weights plan rate limit (120/min per endpoint)");
   const spec = specOf(row);
+  if (set === "upsampler") return upsamplerPlan(env, !!spec.upsampler_local && spec.compute === "GPU", `endpoint ${row.name}`);
   if (spec.weights_source !== "r2") throw new HttpError(409, `endpoint ${row.name} does not use weights_source r2`);
   const trees = slsFetchTrees(env, spec);
   const pub = r2Trees(env);
@@ -67,4 +81,11 @@ async function slsPlan(env: Env, token: string, body: { endpoint?: unknown }): P
   if (missing.length) throw new HttpError(409, `not in the R2 weights store: ${missing.join(", ")}`);
   if (!trees.length) throw new HttpError(409, `endpoint ${row.name} loads no weight tree`);
   return planFor(env, trees);
+}
+
+/** The upsampler sidecar's plan: its GGUF tree, for a pool / endpoint that turned it on (any weights source). */
+async function upsamplerPlan(env: Env, on: boolean, who: string): Promise<Response> {
+  if (!on) throw new HttpError(409, `${who} does not run the upsampler sidecar (upsampler_local)`);
+  if (!r2Trees(env)[UPSAMPLER_TREE]) throw new HttpError(409, `not in the R2 weights store: ${UPSAMPLER_TREE}`);
+  return planFor(env, [UPSAMPLER_TREE]);
 }

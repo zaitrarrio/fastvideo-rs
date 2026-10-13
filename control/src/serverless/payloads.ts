@@ -9,6 +9,7 @@ import { imageIdentEnv, SECRET_ENV_REFS } from "../cluster/payloads";
 import type { EndpointSpec } from "./spec";
 import { SLS_R2_SH } from "./weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
+import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "../upsampler";
 
 /** Every Runpod endpoint and template fv-control creates is named fvc-<name>…; nothing else is ever touched. */
 export const SLS_PREFIX = "fvc-";
@@ -23,13 +24,13 @@ export const SLS_BOOT = `set -eu
 FV_DRV_POD="\${RUNPOD_POD_ID:-}"
 ${DRIVER_CHECK_SH}if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi
 mkdir -p /fvstate
-cfg="\${FV_CONFIG:-}"
+${UPSAMPLER_START_SH}cfg="\${FV_CONFIG:-}"
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml; cfg=/fv-worker.toml; fi
-if [ -n "$cfg" ]; then exec /opt/fastvideo-rs/bin/fv-serve --config "$cfg"; fi
+${UPSAMPLER_WAIT_SH}if [ -n "$cfg" ]; then exec /opt/fastvideo-rs/bin/fv-serve --config "$cfg"; fi
 exec /opt/fastvideo-rs/bin/fv-serve`;
 
 /** The start of a weights_source r2 worker (bash: the fetch, then SLS_BOOT's config handling and fv-serve). */
-export const SLS_R2_BOOT = SLS_BOOT.replace("mkdir -p /fvstate\n", `mkdir -p /fvstate\n${SLS_R2_SH}`);
+export const SLS_R2_BOOT = SLS_BOOT.replace(`mkdir -p /fvstate\n${UPSAMPLER_START_SH}`, `mkdir -p /fvstate\n${UPSAMPLER_START_SH}${SLS_R2_SH}`);
 const isR2 = (spec: EndpointSpec) => spec.weights_source === "r2" && spec.compute === "GPU";
 
 function b64utf8(s: string): string {
@@ -57,10 +58,12 @@ export function workerEnv(spec: EndpointSpec, image: string, weights: Record<str
   if (spec.config) e.FV_CONFIG = spec.config;
   if (spec.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(spec.config_toml);
   if (spec.mode === "lb") Object.assign(e, { PORT: "8000", PORT_HEALTH: "8000", FV_WORKERS_MAX: String(Math.max(1, spec.workers_max)) });
-  if (isR2(spec)) Object.assign(e, weights);
+  // weights_source r2's env, and upsampler_local's (the sidecar's switch and its fetch, any weights source).
+  if (isR2(spec) || (spec.upsampler_local && spec.compute === "GPU")) Object.assign(e, weights);
   return { ...e, ...(spec.env || {}) };
 }
 
+// Without a config (and without r2) the image's entrypoint (fv-entry) runs, which starts the upsampler sidecar itself.
 const bootFields = (spec: EndpointSpec) =>
   isR2(spec) ? { dockerEntrypoint: ["bash", "-c", SLS_R2_BOOT], dockerStartCmd: [] as string[] } : spec.config || spec.config_toml ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : {};
 

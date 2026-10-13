@@ -53,6 +53,8 @@ base-cuda: cuBLASLt                                  every CUDA image
            cuBLAS + NVRTC (+ builtins) + cudart
            ld.so config
  ├─ serve-cuda-bin: fv-serve --features cuda,http-client, python3 + curl + scripts/gpu/r2-fetch.py (weights_source r2)  -> serve-<variant>: config + FV_VARIANT
+ │    + llama-server (llama.cpp, CUDA; fastvideo-rs-runtime:llama-server-<hash>, 82 MB) + fv-upsampler: the local
+ │      prompt upsampler sidecar, docs/serve/upsampler-local.md
  ├─ runtime: sshd/rsync/curl, CUPTI, hf-fm, scripts/gpu, oxide, fv-gpucheck
  │   └─ serve (debug): + configs, deploy/vast/worker.py, fv-serve
 base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)

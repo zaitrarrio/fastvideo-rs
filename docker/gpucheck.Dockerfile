@@ -363,6 +363,70 @@ LABEL org.opencontainers.image.description="fv-serve: FastVideo, MiniMax, fal an
 EXPOSE 8000
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
 
+# >>> llama-server: everything from here to "<<< llama-server", the UBUNTU ARG,
+# scripts/gpu/cuda-13.pins and cuda-13-runtime.pins are hashed into the
+# fastvideo-rs-runtime:llama-server-<hash> tag (scripts/ci/base-images.sh), so
+# CI compiles it once per llama.cpp pin and every later build reuses it.
+#
+# llama.cpp's llama-server, the prompt upsampler's sidecar (a local
+# Qwen3-4B-Instruct GGUF on the serve GPU, docs/serve/upsampler-local.md).
+# Pinned release tag + commit, built with the image's CUDA 13.4 (nvcc, cuBLAS,
+# cudart from the pins) for sm_80/90/100/120. Static llama/ggml libraries, so
+# the binary's DT_NEEDED is glibc, libstdc++, libgcc_s, OpenSSL 3 (Ubuntu's
+# libssl3, already in the base through ca-certificates: llama-server downloads
+# https image_url parts for the vision model itself) and the CUDA runtime
+# libraries base-cuda already ships (libcudart, libcublas, libcublasLt). No
+# libcuda link (GGML_CUDA_NO_VMM: the driver comes from the host and cudart
+# loads it), no OpenMP (libgomp is not in the image), no curl, no NCCL, no web
+# UI (no download at build time), portable CPU code (AVX2, no -march=native).
+# The multimodal library (mtmd: Qwen3-VL's vision projector, --mmproj) is
+# linked in. The output stage holds the stripped binary only.
+FROM ${UBUNTU} AS llama-build
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LLAMA_CPP_TAG=b11195
+ARG LLAMA_CPP_COMMIT=d834d44e643681f7b046a22d357335f6f4ff6107
+ARG LLAMA_CUDA_ARCHS="80-real;90-real;100-real;120a-real"
+COPY scripts/gpu/cuda-13.pins scripts/gpu/cuda-13-runtime.pins /etc/fastvideo/
+# CMake 3.31.6 from PyPI (hash-pinned): CUDA 13 and the 120a architecture
+# want a newer CMake than Ubuntu 22.04's 3.22.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git ca-certificates wget python3-pip libssl-dev \
+ && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+ && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
+ && apt-get update \
+ && . /etc/fastvideo/cuda-13.pins && . /etc/fastvideo/cuda-13-runtime.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades \
+      "$CUDA_NVCC_PKG" "$(echo "$CUDA_CUDART_PKG" | sed 's/^cuda-cudart-/cuda-cudart-dev-/')" \
+      "$CUDA_CUBLAS_PKG" "$(echo "$CUDA_CUBLAS_PKG" | sed 's/^libcublas-/libcublas-dev-/')" \
+ && rm -rf /var/lib/apt/lists/* \
+ && printf '%s\n' 'cmake==3.31.6 \' \
+      '  --hash=sha256:1c8b05df0602365da91ee6a3336fe57525b137706c4ab5675498f662ae1dbcec \' \
+      '  --hash=sha256:2297e9591307d9c61e557efe737bcf4d7c13a30f1f860732f684a204fee24dca' > /tmp/cmake.req \
+ && pip3 install --no-cache-dir --require-hashes -r /tmp/cmake.req \
+ && cmake --version
+RUN git clone --depth 1 --branch "$LLAMA_CPP_TAG" https://github.com/ggml-org/llama.cpp /src/llama.cpp \
+ && test "$(git -C /src/llama.cpp rev-parse HEAD)" = "$LLAMA_CPP_COMMIT" \
+ && cd /src/llama.cpp \
+ && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.4/bin/nvcc -DCUDAToolkit_ROOT=/usr/local/cuda-13.4 \
+      -DCMAKE_CUDA_ARCHITECTURES="$LLAMA_CUDA_ARCHS" \
+      -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON -DGGML_CUDA_NO_VMM=ON -DGGML_CUDA_NCCL=OFF \
+      -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF \
+      -DLLAMA_OPENSSL=ON -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
+      -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON \
+      -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_NUMBER="${LLAMA_CPP_TAG#b}" \
+ && cmake --build build --target llama-server -j"$(nproc)" \
+ && mkdir -p /out \
+ && strip -o /out/llama-server build/bin/llama-server \
+ && printf 'llama.cpp %s %s\ncuda archs %s\n' "$LLAMA_CPP_TAG" "$LLAMA_CPP_COMMIT" "$LLAMA_CUDA_ARCHS" > /out/llama-server.version \
+ && readelf -d /out/llama-server | grep NEEDED \
+ && ! readelf -d /out/llama-server | grep -E 'NEEDED.*(libcuda\.so|libgomp|libcurl|libnccl)' \
+ && ls -la /out && rm -rf /src/llama.cpp/build
+
+FROM scratch AS llama-server
+COPY --from=llama-build /out/ /
+# <<< llama-server
+
 # ---- serve-cuda-bin: the CUDA fv-serve (serve-build above) on base-cuda.
 FROM base-cuda AS serve-cuda-bin
 # weights_source r2 (docs/ops/r2-weights.md §4): python3 + curl and the fetcher in the image, so a boot neither runs
@@ -372,6 +436,13 @@ RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl \
  && rm -rf /var/lib/apt/lists/*
 COPY scripts/gpu/r2-fetch.py /opt/fastvideo-rs/bin/r2-fetch.py
+# The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server (the llama-server stage above,
+# or its published fastvideo-rs-runtime:llama-server-<hash> image) and its launcher, which fv-entry and fv-control's
+# boots run when FV_UPSAMPLER_LOCAL=1. Its libraries must all resolve from base-cuda (no libcuda: the host's).
+COPY --from=llama-server /llama-server /llama-server.version /opt/fastvideo-rs/bin/
+COPY deploy/runpod/fv-upsampler.sh /opt/fastvideo-rs/bin/fv-upsampler
+RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "llama-server: unresolved libraries"; exit 1; fi \
+ && cat /opt/fastvideo-rs/bin/llama-server.version
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
 EXPOSE 8000

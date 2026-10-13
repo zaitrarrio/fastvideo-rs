@@ -95,6 +95,9 @@ export const RESERVED_KEYS = new Set([
   "FV_ENDPOINT_REPORT_URL",
   "FV_ENDPOINT_REPORT_TOKEN",
   "FV_BACKSTOP_API",
+  // upsampler_local (upsampler.ts): set by fv-control from the spec's switch.
+  "FV_UPSAMPLER_LOCAL",
+  "FV_UPSAMPLER_REV",
 ]);
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 

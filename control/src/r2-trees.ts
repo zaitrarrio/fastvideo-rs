@@ -56,4 +56,6 @@ export const R2_TREES: Record<string, R2Tree> = {
   "wan21-t2v-14b": { rev: "38ec498cb3208fb688890f8cc7e94ede2cbd7f68", files: 29, bytes: 80406918983, manifest_sha256: "fd40c2c3b3a80a5e2999925f45fa88071b8e8ebb4a40522ffa462d9f358e3be4", source: "hub-via-dir" },
   "wan22-t2v-a14b": { rev: "5be7df9619b54f4e2667b2755bc6a756675b5cd7", files: 41, bytes: 126199274206, manifest_sha256: "9b5bd6bd601c03a6b5708da95a15933ae4a40010ef649d1fce21d0cb7e20bfc9", source: "hub-via-dir" },
   "wan22-ti2v-5b": { rev: "b8fff7315c768468a5333511427288870b2e9635", files: 20, bytes: 34201418400, manifest_sha256: "2c93c3dfb16f51e8ed3e7c8e806148fe88458536be3abf0efc0e6a3713f26d38", source: "hub-via-dir" },
+  "qwen3-4b-instruct-gguf": { rev: "gguf-20261013", files: 3, bytes: 4280416613, manifest_sha256: "eee6eb0170cad473f33b75f2654c30158322ebf965b69581d4cbe4040a6450c7", source: "dir" },
+  "qwen3-vl-4b-instruct-gguf": { rev: "1cd86afb9a95c410a6038ab3b40d8b578c892266", files: 3, bytes: 5116592189, manifest_sha256: "eb465f963022881dc7bae4992752bd33e5e917d11dbd5f4d577441fd4a7477ab", source: "hub" },
 };

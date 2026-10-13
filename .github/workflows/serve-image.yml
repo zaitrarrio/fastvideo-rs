@@ -124,11 +124,13 @@ jobs:
       # published images, one per content hash, built here only when missing.
       # Passing them as named contexts puts this image on the same layer
       # digests as fastvideo-rs-runtime and every serve variant (docs/serve/images.md "Layers").
+      # Plus llama-server (the prompt upsampler's sidecar, docs/serve/upsampler-local.md), compiled
+      # once per llama.cpp pin and published the same way.
       - name: Shared base images
         id: base
         env:
           FV_BASE_DISABLE: ${{ vars.FV_BASE_DISABLE || '0' }}
-        run: bash scripts/ci/base-images.sh ensure
+        run: bash scripts/ci/base-images.sh ensure llama-server
 
       - name: Build and push (debug / legacy all-in-one)
         id: push

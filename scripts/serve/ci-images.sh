@@ -129,6 +129,11 @@ smoke() {
         ldconfig -p | grep -qE "^[[:space:]]+$l " || bad "missing $l"
       done
       ls /usr/local/cuda-13.4/lib64 | grep -q "libnvrtc-builtins" || bad "missing nvrtc-builtins"
+      # the prompt upsampler sidecar (docs/serve/upsampler-local.md): llama-server and its launcher, libraries resolved
+      test -x /opt/fastvideo-rs/bin/llama-server || bad "no llama-server"
+      test -x /opt/fastvideo-rs/bin/fv-upsampler || bad "no fv-upsampler"
+      ldd /opt/fastvideo-rs/bin/llama-server | grep "not found" && bad "llama-server: unresolved libraries"
+      cat /opt/fastvideo-rs/bin/llama-server.version
     fi
     echo "smoke ok: $V"'
   # HTTP mode on the fake engine through the image entrypoint: /healthz 200.

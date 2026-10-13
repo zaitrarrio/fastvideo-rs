@@ -85,6 +85,11 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
   }
   // An image reference is the pool's own image (resolved to a digest at start); the channel / sha the spec's source.
   if (input.image) pool.image = input.image;
+  // The prompt upsampler's local sidecar (upsampler.ts): the launch's switch, else the preset's (default off).
+  if (input.upsampler_local !== undefined) {
+    if (input.upsampler_local) pool.upsampler_local = true;
+    else delete pool.upsampler_local;
+  }
   const deadlineMin = input.deadline_min ?? 60;
   const idle = input.idle_stop_min ?? null;
   const spec = normalizeSpec({

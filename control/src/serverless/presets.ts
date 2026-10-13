@@ -33,6 +33,8 @@ export interface SlsPreset {
   container_disk_gb: number;
   execution_timeout_s: number;
   licence?: string;
+  /** The prompt upsampler's local sidecar on by default (upsampler.ts; the pool preset's `upsampler_local`). */
+  upsampler_local?: boolean;
 }
 
 /** Every serverless preset: the pool presets (their image-default config left unset, so the image's own entrypoint runs it) and `cpu`. */
@@ -54,6 +56,7 @@ export const SLS_PRESETS: SlsPreset[] = [
       container_disk_gb: pool.container_disk_gb ?? 20,
       execution_timeout_s: pool.job_timeout_s ?? 1800,
       ...(p.licence ? { licence: p.licence } : {}),
+      ...(pool.upsampler_local ? { upsampler_local: true } : {}),
     };
   }),
   { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], prequant: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
