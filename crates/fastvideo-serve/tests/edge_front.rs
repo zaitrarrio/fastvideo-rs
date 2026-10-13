@@ -520,7 +520,10 @@ async fn whip_offers_can_be_handed_to_the_worker() {
     assert_eq!(s, 401, "no capability, no internal token");
     let (s, v, _) = http.call("GET", &format!("{list}?fv_cap={cap}"), None, None).await;
     assert_ne!(s, 401, "{v}");
-    let bad = format!("{}0", &cap[..cap.len() - 1]);
+    // A different last character (a capability that already ended in `0`
+    // made the old forgery the real one: a 1-in-16 flake).
+    let last = if cap.ends_with('0') { '1' } else { '0' };
+    let bad = format!("{}{last}", &cap[..cap.len() - 1]);
     let (s, _, _) = http.call("GET", &format!("{list}?fv_cap={bad}"), None, None).await;
     assert_eq!(s, 401, "a forged capability");
     let (s, _, _) = http.call("GET", &format!("{}/fv/v1/jobs?fv_cap={cap}", w.base), None, None).await;
