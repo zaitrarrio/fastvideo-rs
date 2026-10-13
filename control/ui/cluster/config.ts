@@ -8,6 +8,7 @@
 import { badge, copyText, h, kids, type Api } from "../dom";
 import { createJsonEditor, type Dynamic, type JsonEditor } from "../editor";
 import { askExtend } from "../forms/dialogs";
+import { loadProvider, loadShas, mergeProvider } from "../forms/common";
 import { schemaAt, unwrap, type Issue, type Schema } from "../schema";
 import { renderDiff } from "../view";
 import "./config.css";
@@ -53,7 +54,8 @@ function setAt(root: any, p: Path, x: any) {
 export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   const { api, toast } = o;
   host.replaceChildren(h("p", { class: "muted" }, "loading…"));
-  const [schemas, dyn, tpl] = await Promise.all([api("/api/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/schemas/dynamic${o.id ? `?cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/templates")]);
+  // The lists without any provider's live one (?live=0); the providers the pools use load next (ensureProviders).
+  const [schemas, dyn, tpl] = await Promise.all([api("/api/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/schemas/dynamic?live=0${o.id ? `&cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/templates")]);
   const presets: { id: string; title: string; description: string; weights: string[]; licence?: string; pool: any }[] = tpl.pool_presets || [];
   let saved: any = null;
   let version = 0;
@@ -280,7 +282,25 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
 
   // ---- the form
   const gpuOpts = () => (dyn.gpu_types || []).map((g: any) => ({ id: g.id, label: g.display || g.id, detail: `${g.secure_price != null ? `$${g.secure_price}/hr` : "no price"}${g.stock ? ` · ${g.stock}` : ""}` }));
+  // The providers the pools use (Runpod for a pool without one): their GPU types / products with prices and stock, once
+  // each per page session (forms/common.ts); a provider no pool uses is never asked. A commit image: the GHCR commits.
+  const asked = new Set<string>();
+  const typing = () => {
+    const a = document.activeElement as HTMLElement | null;
+    return !!a && el.form.contains(a) && (a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+  };
+  function ensureLists() {
+    for (const p of new Set<string>((spec?.pools || []).map((x: any) => x?.provider || "runpod"))) {
+      if (asked.has(p) || dyn.provider_details?.[p]) continue;
+      asked.add(p);
+      loadProvider(api, p)
+        .then((d) => (mergeProvider(dyn, d), mode === "form" && !typing() && drawForm()))
+        .catch(() => asked.delete(p));
+    }
+    if (spec?.image?.sha !== undefined && !asked.has("shas")) asked.add("shas"), loadShas(api, dyn).then(() => mode === "form" && !typing() && drawForm());
+  }
   function drawForm() {
+    ensureLists();
     const s = spec;
     const lists = h(
       "div",

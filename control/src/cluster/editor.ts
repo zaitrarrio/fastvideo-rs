@@ -51,7 +51,8 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
       if (o) warnings.push({ path: [...prefix, "pools", i, "provider_gpu"], message: o.note });
     }
   }
-  const cat = await gpuTypes(env).catch(() => []);
+  // Runpod's catalog only when a pool runs on Runpod GPUs (a GMI / Brev-only spec asks no Runpod API).
+  const cat = spec.pools.some((p) => p.compute === "GPU" && !isOtherPool(p)) ? await gpuTypes(env).catch(() => []) : [];
   if (!cat.length) return { issues, warnings };
   const price = new Map(cat.map((g) => [g.id, g.secure_price]));
   spec.pools.forEach((p, i) => {

@@ -52,7 +52,7 @@ const SERIES = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => `var(--series-${i})`);
 // ---------------------------------------------------------------- API
 const state = { csrf: null, me: null, timers: [], cleanups: [] };
 async function api(path, opts = {}) {
-  const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
+  const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin", signal: opts.signal };
   if (opts.body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(opts.body);

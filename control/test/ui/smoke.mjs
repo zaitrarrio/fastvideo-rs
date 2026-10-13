@@ -268,6 +268,8 @@ try {
   const SL = '[data-schema-form="standalone-launch"]';
   await page.waitForSelector(`${SL} [data-ctl][data-path=name]`);
   await page.fill(`${SL} [data-ctl][data-path=name]`, "ui-solo");
+  // The launch screen loads no provider details until one is picked (test/ui/lazy-providers.mjs).
+  await page.selectOption(`${SL} [data-ctl][data-path=provider]`, JSON.stringify("runpod"));
   // Custom: the cpu variant with the fake config and fake-wan (what "custom" starts with), CPU, no volume.
   await page.selectOption(`${SL} [data-ctl][data-path=preset]`, "");
   await page.waitForSelector(`${SL} select[data-ctl][data-path=variant]`);

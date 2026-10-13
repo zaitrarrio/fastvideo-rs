@@ -5,11 +5,16 @@
 import { badge, h, kids } from "../dom";
 import { createForm, type Api, type FieldOpts } from "../fields";
 import type { Path } from "../schema";
-import { issuesOf, loadDyn, loadSchemas, preflight } from "./common";
+import { issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight, providerSummary } from "./common";
+
+/** The remote check's issue while no provider is picked (nothing provider-specific is loaded or checked until then). */
+export const PICK_PROVIDER = "choose a provider: its GPU types, prices and stock load then";
 
 export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (m: string) => void; onLaunched: (name: string) => void }) {
   const { api } = o;
-  const [schemas, dyn] = await Promise.all([loadSchemas(api), loadDyn(api)]);
+  // Opening the form calls no provider's API (owner 2026-10-12: the launch screen was slow): the lists without the
+  // live ones (?live=0); a provider's GPU types, prices, stock, parked VMs and budget load once it is picked.
+  const [schemas, dyn] = await Promise.all([loadSchemas(api), loadDyn(api, "", { live: false })]);
   const launch = h("button", { type: "submit", class: "primary" }, "Launch");
   const out = h("div", { class: "small" });
   const f = createForm({
@@ -19,11 +24,43 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
     api,
     value: { name: "", preset: "h3-turbo", channel: "stable", region: dyn.regions?.[0]?.id || "eu", deadline_min: 60, env: {} },
     submit: launch,
-    remote: async (v) => {
-      const r = await api("/api/standalone/validate", { method: "POST", body: v });
-      return { issues: issuesOf(r), warnings: r.warnings || [] };
+    // Debounced by the form, the stale one cancelled; ?live=0 until a provider is picked (no provider API call).
+    remote: async (v, signal) => {
+      const picked = !!v.provider;
+      const r = await api(`/api/standalone/validate${picked ? "" : "?live=0"}`, { method: "POST", body: v, signal });
+      const issues = issuesOf(r);
+      if (!picked && !issues.some((i) => i.path[0] === "provider")) issues.push({ path: ["provider"], message: PICK_PROVIDER });
+      return { issues, warnings: r.warnings || [] };
     },
   });
+  // The picked provider's details: loaded once per page session (common.ts), the load of an earlier pick cancelled.
+  const provStatus = h("div", { class: "small muted cf-provider-status", "data-provider-status": "", role: "status", "aria-live": "polite" });
+  let provLoad: AbortController | null = null;
+  function pickProvider(p: string | undefined) {
+    provLoad?.abort();
+    provLoad = null;
+    provStatus.removeAttribute("data-loading");
+    if (!p) return void provStatus.replaceChildren("Pick a provider: its GPU types, prices, stock (Brev: parked VMs; GMI / Brev: the budget) load then.");
+    const have = dyn.provider_details?.[p];
+    if (have) return void provStatus.replaceChildren(providerSummary(have));
+    const ac = (provLoad = new AbortController());
+    provStatus.setAttribute("data-loading", p);
+    provStatus.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), ` loading ${p}: GPU types, prices and stock…`);
+    loadProvider(api, p, ac.signal)
+      .then((d) => {
+        if (ac.signal.aborted) return;
+        provLoad = null;
+        provStatus.removeAttribute("data-loading");
+        mergeProvider(dyn, d);
+        draw();
+      })
+      .catch((e) => {
+        if (ac.signal.aborted) return;
+        provLoad = null;
+        provStatus.removeAttribute("data-loading");
+        provStatus.replaceChildren(`could not load ${p}'s details: ${(e as Error).message} (pick it again to retry)`);
+      });
+  }
   const src = () => (f.get(["sha"]) !== undefined ? "sha" : f.get(["image"]) !== undefined ? "image" : "channel");
   const body = h("div", {});
   const F = (p: Path, opts: FieldOpts = {}) => f.field(p, opts);
@@ -33,12 +70,17 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   const providerOpts = (dyn.providers || [{ id: "runpod", detail: "" }]).map((p: any) => ({ value: p.id, detail: p.detail }));
   const RUNPOD_ONLY = ["compute", "region", "gpu_types", "cpu_flavors", "vcpu", "volume", "container_disk_gb"];
   const OTHER_ONLY = ["provider_gpu", "provider_region", "weights_source", "weights_download_approved"];
+  let shasAsked = false;
   function draw() {
     const custom = !f.get(["preset"]);
-    const prov = f.get(["provider"]) || "runpod";
+    const picked: string | undefined = f.get(["provider"]);
+    const prov = picked || "runpod";
     const other = prov !== "runpod";
     const cpu = !other && (f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu"));
-    const where = other
+    if (picked && !provLoad && dyn.provider_details?.[picked]) provStatus.replaceChildren(providerSummary(dyn.provider_details[picked]));
+    const where = !picked
+      ? []
+      : other
       ? [
           F(["provider_gpu"], {
             label: prov === "gmi" ? "GPU product" : "Instance type",
@@ -69,6 +111,8 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           F(["container_disk_gb"], { label: "Container disk", unsetLabel: "default", placeholder: cpu ? "10" : "40" }),
         ];
     const s = src();
+    // A commit: the commits with images (GHCR) load now, once (not on open).
+    if (s === "sha" && !shasAsked) (shasAsked = true), loadShas(api, dyn).then(() => src() === "sha" && draw());
     body.replaceChildren(
       h(
         "div",
@@ -144,15 +188,17 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           F(["provider"], {
             label: "Provider",
             options: providerOpts,
-            unsetLabel: "runpod (default)",
+            unsetLabel: "choose a provider…",
             allowUnset: true,
             onSet: (v) => {
               // Each provider's own fields: the other side's are cleared (the server refuses a mix).
               for (const k of v && v !== "runpod" ? RUNPOD_ONLY : OTHER_ONLY) f.set([k], undefined, true);
+              pickProvider(v || undefined);
               draw();
             },
-            help: "Runpod (the EU weights volume), or GMI Cloud / NVIDIA Brev: docs/serve/deploy-gmi-brev.md.",
+            help: "Runpod (the EU weights volume), or GMI Cloud / NVIDIA Brev: docs/serve/deploy-gmi-brev.md. Its GPU types, prices and stock load once picked.",
           }),
+          provStatus,
           ...where,
         ),
       ),
@@ -174,6 +220,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
     );
     f.prune();
   }
+  pickProvider(undefined);
   draw();
   const submit = async (ev: Event) => {
     ev.preventDefault();

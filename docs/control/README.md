@@ -867,7 +867,7 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET /api/logs?pod=&q=&level=&since=&source=&after_id=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
 | `GET /api/releases`, `/api/images/tags?filter=`, `/api/github/ci`, `POST /api/github/release` | channels, drift, registry, GHCR tags, CI on main, promote/rollback dispatch |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/<id>`, `GET /api/audit` | tokens and audit |
-| `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` | JSON Schemas and live values (section 13) |
+| `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` (`&live=0`, `?provider=<p>`, `?images=1`) | JSON Schemas and live values (section 13; the launch forms load per provider) |
 | `GET/PUT /api/docs/<kind>/<id>`, `POST …/validate`, `POST …/plan`, `GET …/history`, `POST …/restore` | editable documents with versions (section 13) |
 | `POST /api/collect` | run the collector now |
 | `POST /ingest/v1/logs` | log ingest (cluster ingest token) |
@@ -1071,6 +1071,34 @@ the same valid and invalid documents and checks that they agree.
 - image variants and fake models;
 - the cluster's pools;
 - env keys in use, and the reserved keys.
+
+The launch forms (standalone, serverless create, the cluster editor) do
+not ask for all of that on open (owner, 2026-10-12: the launch screen was
+slow). They load the lists without the live ones, then each provider's
+details only once that provider is picked:
+
+- `?live=0`: no upstream call. You get the presets, regions, channels
+  (from fv-jobs), the provider list (on or off from the config) and the
+  configured GMI / Brev types without prices. There are no Runpod GPU
+  types and no GHCR commits.
+- `?provider=runpod|gmi|brev`: that provider's details and nothing
+  else. Runpod gives its GPU types with $/hr and stock. GMI gives its
+  products with price and availability in the default IDC. Brev gives
+  its instance types (stoppable ones, with the live price), its parked
+  or held VMs and storage $/day. GMI and Brev also give the month's spend
+  against the budget. The upstream lists are cached in the Worker
+  (Runpod 5 min, Brev 1 h, GMI 60 s), with one call in flight per list.
+  The forms keep each provider's answer for the page session and cancel
+  a load when the pick changes first.
+- `?images=1`: the commits with images (releases and GHCR sha tags),
+  asked when a form's image source is a git commit.
+
+`GET /api/providers?provider=<id>` returns one provider's view.
+`POST /api/standalone/validate?live=0` checks a launch request (its
+rules and the name) without calling any provider. The form uses it until
+a provider is picked, and it debounces and cancels stale checks. With no
+parameters, both endpoints return the full view, as before (the CLI and
+the JSON editors).
 
 ### Documents API
 
