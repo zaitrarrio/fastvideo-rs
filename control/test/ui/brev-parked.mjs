@@ -117,7 +117,7 @@ try {
   await page.screenshot({ path: `${out}/22-brev-launch-types.png`, fullPage: true });
 
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");
-  console.log(`ok   UI Brev keep-on-stop: parked card (weights, disk, $/day, held, Unpark, Delete, a running non-stoppable VM), launch form instance types (non-stoppable with a warning) (screenshots in ${out})`);
+  console.log(`ok   UI Brev keep-on-stop: parked card (weights, disk, $/day, held, Unpark, Delete, a stop-pending VM), launch form instance types (non-stoppable: a stop deletes it) (screenshots in ${out})`);
 } catch (e) {
   fail(e);
 }
