@@ -25,6 +25,7 @@
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	3da2ddfe1954d9cda4c05b643dc0f26007a655c5	inferred	hub
 fasth3-trim-8step	FastVideo/FastVideo-FastH3-Trim-8-Step	9edcb6511d5ff8dd1579e8eec8afee77e098b8d8	recorded	hub
 fasth3-trim-8step-nvfp4	FastVideo/FastVideo-FastH3-Trim-Comfy	f66c13dc17391dd4da99242a407918b92bf7d5fc	recorded	hub
+vdn-h3-stage-b-2000	OpenVDN/vdn-minimax-h3	2ce18deb1d1c6b115d6bb3732f3750fdbac95173	recorded	hub
 h3-base	MiniMaxAI/MiniMax-H3	42ed227ee7df40d41602854ae760620d6eb651fe	recorded	hub
 FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	f509e629374cac104e7f62daecce6d1488a3041d	inferred	hub
 upscaler	LBH-123-AI/Minimax_h3_latent_Upscaler	3f941d5d182014dd5c0a5e16330420ee2d4aa0c6	recorded	hub
