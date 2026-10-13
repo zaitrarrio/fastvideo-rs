@@ -601,7 +601,10 @@ next poll and the pod is deleted (with its tunnel).
 
 **`weights_source: r2` (2026-10-11) is the preferred source.** It fetches from our R2 weights store through
 presigned URLs fv-control mints per boot. It needs no approval, and it becomes the default once every tree of the
-pool is published. See docs/ops/r2-weights.md §4. `hub`, below, stays as the fallback. No provider volume yet
+pool is published. See docs/ops/r2-weights.md §4. `hub`, below, stays as the fallback.
+The r2 boot streams when the image's fv-serve can (docs/ops/r2-weights.md §11). Once the configs, tokenizers and
+aux trees are in place, the boot goes on to the tunnel and fv-serve while the weights still arrive, and the
+loader waits on each file's progress map. A fetch that fails after that stops fv-serve. No provider volume yet
 (§2.4, §3.4), so `weights_source: hub`:
 
 1. `poolTrees`: the `${FV_WEIGHTS}/<tree>` paths of the pool's worker

@@ -187,11 +187,46 @@ if [ "\${FV_WEIGHTS_SOURCE:-}" = r2 ]; then
       step fetcher "$t" "downloaded from fv-control"
     fi
     t="$(date +%s.%N)"
-    set +e
-    python3 "$F" --root "$WR" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_WEIGHTS_TOKEN --pod "$FV_BOOT" --status "$S/r2-fetch.json" --report-url "\${FV_SLS_REPORT_URL:-}" $ADD 2>&1 | tee "$S/r2-fetch.log" >&2
-    rc="\${PIPESTATUS[0]}"; set -e
-    [ "$rc" = 0 ] || slsfail "r2 weights: $(grep FAILED "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
-    step fetch "$t" "$(grep -o 'weights ready: .*' "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+    # Streaming (docs/ops/r2-weights.md §11): fv-serve starts once every file it reads unguarded is in place and loads
+    # while the rest arrives (its loader waits on each file's progress map). Only with a fv-serve that can (it carries
+    # the marker), on the worker's own disk (not an add-only cache volume), unless FV_R2_STREAM=0.
+    STREAM=""; SB="\${FV_SERVE_BIN:-/opt/fastvideo-rs/bin/fv-serve}"
+    if [ "\${FV_R2_STREAM:-1}" = 1 ] && [ -z "$ADD" ]; then
+      if grep -qaF 'fv-streaming-fetch/1' "$SB" 2>/dev/null; then STREAM=1; else say "weights: $SB cannot load while the weights arrive: fetching first"; fi
+    fi
+    if [ -n "$STREAM" ]; then
+      rm -f "$S/r2-stream-ready" "$S/r2-fetch.rc" "$S/serve-start"
+      FV_BOOT_PID=$$
+      # The fetcher's own subshell: it reports the fetch when it ends, and on a failure stops fv-serve (this shell
+      # execs it: same pid), which then never serves a partial tree (its loads fail on the maps marked failed too).
+      (
+        set +e
+        python3 "$F" --root "$WR" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_WEIGHTS_TOKEN --pod "$FV_BOOT" --status "$S/r2-fetch.json" --report-url "\${FV_SLS_REPORT_URL:-}" --stream --stream-ready "$S/r2-stream-ready" 2>&1 | tee "$S/r2-fetch.log" >&2
+        rc="\${PIPESTATUS[0]}"
+        if [ "$rc" = 0 ]; then
+          step fetch "$t" "$(grep -o 'weights ready: .*' "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+          if [ -f "$S/serve-start" ]; then step load_overlap "$(cat "$S/serve-start")" "fv-serve loading while the fetch ran"; fi
+        elif [ -f "$S/r2-stream-ready" ]; then
+          why="$(grep FAILED "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+          say "FAILED: r2 weights while fv-serve was loading: $why: stopping fv-serve"; rep failed "r2 weights: $why"
+          kill -TERM "$FV_BOOT_PID" 2>/dev/null; sleep "\${FV_STREAM_KILL_GRACE_S:-20}"; kill -KILL "$FV_BOOT_PID" 2>/dev/null
+        fi
+        printf %s "$rc" > "$S/r2-fetch.rc"
+      ) &
+      while [ ! -f "$S/r2-stream-ready" ] && [ ! -f "$S/r2-fetch.rc" ]; do sleep 0.2; done
+      [ -f "$S/r2-stream-ready" ] || slsfail "r2 weights: $(grep FAILED "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+      step stream_ready "$t" "the files fv-serve reads unguarded are in place; the rest streams in while it loads"
+      export FASTVIDEO_STREAMING_FETCH=1 FASTVIDEO_STREAMING_FETCH_STATUS="$S/r2-fetch.json"
+      # The fetcher first: this shell (and so fv-serve, which it execs) yields the CPUs to it while both run; the
+      # fetcher started above keeps its priority. No effect once the fetch is done (nothing else competes).
+      renice -n "\${FV_SERVE_NICE:-5}" -p $$ >/dev/null 2>&1 || true
+    else
+      set +e
+      python3 "$F" --root "$WR" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_WEIGHTS_TOKEN --pod "$FV_BOOT" --status "$S/r2-fetch.json" --report-url "\${FV_SLS_REPORT_URL:-}" $ADD 2>&1 | tee "$S/r2-fetch.log" >&2
+      rc="\${PIPESTATUS[0]}"; set -e
+      [ "$rc" = 0 ] || slsfail "r2 weights: $(grep FAILED "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+      step fetch "$t" "$(grep -o 'weights ready: .*' "$S/r2-fetch.log" | tail -1 | cut -c1-200)"
+    fi
   fi
   # Aux files (TAE decoders, LPIPS): from R2 as the auxiliary/* trees when the plan has them (above), checked here by
   # SHA-256; a file missing or different comes from its pinned URL (an add-only cache volume, an older plan).
@@ -210,8 +245,14 @@ if [ "\${FV_WEIGHTS_SOURCE:-}" = r2 ]; then
     done < "$S/aux.tsv"
     step aux "$t" "$n files checked, $got from their pinned URLs"
   fi
-  rep serve "weights ready under $WR after $(el "$FV_BOOT_T0F")s: starting fv-serve"
-  say "starting fv-serve"
+  if [ -n "\${FASTVIDEO_STREAMING_FETCH:-}" ] && [ ! -f "$S/r2-fetch.rc" ]; then
+    date +%s.%N > "$S/serve-start"
+    rep serve "weights streaming under $WR after $(el "$FV_BOOT_T0F")s: starting fv-serve (it loads while the fetch runs)"
+    say "starting fv-serve while the weights arrive"
+  else
+    rep serve "weights ready under $WR after $(el "$FV_BOOT_T0F")s: starting fv-serve"
+    say "starting fv-serve"
+  fi
 fi
 `;
 

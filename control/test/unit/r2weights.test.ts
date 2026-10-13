@@ -276,6 +276,38 @@ ${R2_FETCH_SH}`;
     await run(dir);
     expect(r2.gets.length).toBe(n);
   }, 90000);
+  it("streaming (a fv-serve with the marker): the boot goes on once the unguarded files are in place, fv-serve loads while the rest arrives, the fetch and the overlap are timed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fvr2-"));
+    const dir = join(root, "w");
+    const serve = join(root, "fv-serve");
+    writeFileSync(serve, "\x7fELF... fv-streaming-fetch/1 ...");
+    r2.hooks.delayMs = (k) => (k.includes("/transformer/") ? 1500 : 0);
+    try {
+      const script = `set -u
+say() { echo "[fv-boot] $*" >&2; }
+fail() { echo "FAIL: $1" > ${root}/failed-$$; exit 1; }
+report() { :; }
+FV_SERVE_BIN=${serve}
+${R2_FETCH_SH}echo "SERVE stream=\${FASTVIDEO_STREAMING_FETCH:-}"; [ -f "${dir}/demo/transformer/model.safetensors.fvparts" ] && echo MAP-PRESENT
+date +%s.%N > "${join(root, "state")}/serve-start"
+wait; echo FETCH-DONE`;
+      const e = { PATH: process.env.PATH!, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", FV_R2_STATE: join(root, "state"), FV_R2_TOOLS: join(root, "tools"), FV_R2_MIN_FREE_GB: "0", FV_WEIGHTS: dir, FV_WEIGHTS_SOURCE: "r2", FV_POD_ID: "gmi:fv-pod-a-1", FV_ENDPOINT_REPORT_TOKEN: "ingest_tok", FV_ENDPOINT_REPORT_URL: `${base}/ingest/v1/endpoint`, ...providerEnvR2(base) };
+      const r = await promisify(execFile)("bash", ["-c", script], { env: e, timeout: 60000 });
+      expect(r.stdout).toContain("SERVE stream=1");
+      expect(r.stdout).toContain("MAP-PRESENT");
+      expect(r.stdout).toContain("FETCH-DONE");
+      expect(r.stderr).toMatch(/step stream_ready: [\d.]+s/);
+      expect(r.stderr).toMatch(/step fetch: [\d.]+s/);
+      expect(r.stderr).toMatch(/step load_overlap: [\d.]+s/);
+      for (const [p, b] of Object.entries(files)) {
+        expect(readFileSync(join(dir, "demo", p)).equals(b)).toBe(true);
+        expect(existsSync(join(dir, "demo", p + ".fvparts"))).toBe(false);
+      }
+      expect(existsSync(join(dir, "demo/.complete"))).toBe(true);
+    } finally {
+      delete r2.hooks.delayMs;
+    }
+  }, 90000);
   it("a fetcher whose bytes are not the pinned ones is refused before it runs", async () => {
     r2.routes["/ingest/v1/r2-fetch.py"] = (_req, res) => res.writeHead(200).end(R2_FETCH_PY + "\n# tampered\n");
     const root = mkdtempSync(join(tmpdir(), "fvr2-"));

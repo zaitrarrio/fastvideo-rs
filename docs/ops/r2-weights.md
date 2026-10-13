@@ -138,6 +138,8 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
   - Resume: a partial file from an earlier attempt has its parts hashed on disk, and only the bad ones are fetched.
   - Each tree is renamed into place as soon as it is whole, with `.complete`, `.fv-revision`, `.fv-source`,
     `sha256.txt` and `.fv-manifest.json`.
+  - **Streaming** (`--stream`, what the boots use when fv-serve can, 2026-10-13): the trees are written in place
+    with a per-file progress map, and fv-serve starts loading while they arrive. See §11.
 - **Which trees.** The plan holds the pool's (or endpoint's) preset trees: the config's `weights` and every tree the
   engine reads beside it for the recipe (`src/recipe-trees.ts`: the FastH3 LoRA for `h3-turbo` / `h3-max`, Ref2VA,
   the LTX dev DiT and IC-LoRA). With r2 it also holds the preset's pre-quantized trees (`prequant`:
@@ -755,3 +757,110 @@ The result: **46 of 46 trees OK, 0 failures.**
 - The Runpod balance went from $35.38 to $31.32. That figure includes the volume's own hourly charge.
 - The bucket now holds 1787.0 GB: 1742.04 GB of trees plus 44.97 GB of archive. At $0.015/GB-month, that is
   ≈ $27/month.
+
+## 11. Loading while the weights arrive (streaming fetch, 2026-10-13)
+
+Until now an r2 boot was strictly sequential: `r2-fetch.py` fetched and verified every tree, then fv-serve started
+and loaded. Round 2 (docs/ops/r2-bench-2026-10-12-round2.md): H3 fetch 256 s then load 52 s; Wan fetch 143 s then
+load 85 s. With streaming, fv-serve starts a few seconds into the fetch and its loader reads each byte range as soon
+as the parts covering it are verified, so a cold start is about **max(fetch, load) + a short tail** instead of
+fetch + load.
+
+**The progress map.** `r2-fetch.py --stream` writes each tree **in place** at `<root>/<dest>` (no `.r2-partial`
+staging, no rename). The tree carries `.fv-streaming` (= its revision) until `.complete` is written last, as the
+rename used to make it appear. Every file gets `<file>.fvparts` **before** the file itself is created:
+
+| Bytes | Field |
+|---|---|
+| 0..8 | magic `FVPARTS1` |
+| 8..16, 16..24, 24..32 | file size, part size, parts (u64 LE) |
+| 32..40 | `want`: part + 1 a loader is blocked on (written by the loader, read by the fetcher) |
+| 40 | state: 0 fetching, 1 done, 2 failed |
+| 48.. | one byte per part: 1 = written and its SHA-256 matched the manifest |
+
+- A part's flag is written only after its bytes are on disk **and** its hash passed, by the thread that wrote them
+  (the page cache makes the bytes visible before the flag). A corrupt part is fetched again before it is flagged.
+- When the whole file is verified, the state becomes 1 and the map is removed. A reader that holds the map open sees
+  `done`; one that opens the file later finds no map and reads it as a whole file.
+- On a failure every remaining map is marked failed (2), the status file says `failed`, and the maps stay as a
+  record. A restarted container resumes the tree in place: `.fv-streaming` at the same revision is kept, every map
+  is rewritten as pending, and the parts on disk are hashed again and flagged as they pass.
+- `--stream` does not combine with `--add-only` (a shared cache volume stages per worker and renames).
+- The whole-file hash (`--full-hash`, off by default) failing under `--stream` is a failure, not a second fetch:
+  the loader may already have read those parts.
+
+**Order** (`stream_key`). (0) every file fv-serve reads without waiting on a map (configs, tokenizers, indexes,
+`.pth`, anything not `.safetensors`) and every tree of `--ready-trees` (default `auxiliary/*`, which the boot checks
+by SHA-256), small trees first; (1) the first part of every `.safetensors` file (its header) as a GET of its own;
+(2) the rest by component: text encoders, then DiTs (and anything unclassified), then VAEs / vocoders / upsamplers,
+each file in offset order. The static order is a guess: the loader's `want` corrects it. When a loader thread blocks
+on part k of a file, it writes k + 1 into the map; the fetcher polls the maps every 0.2 s and moves that file's GETs
+from part k on to the front of its queue (`boosts` in the status). A DiT the recipe does not load, or a component
+loaded earlier than its rank, then costs no waiting. `--stream-ready FILE` is written once the files of (0) are
+verified (the parallel GETs of (1) and (2) have long started).
+
+**The loader** (`crates/fastvideo-loader/src/stream.rs`). `PartsGate::open(path)` looks for `<path>.fvparts`: no
+map, no gate (one failed `open` per file at store open, nothing per read; volume, Hub and complete trees are
+unchanged).
+
+- `LazyStore::open_files` waits for the 8-byte header length, then the header.
+- `LazyStore::view` waits for the tensor's byte range before it hands out a borrowed view.
+- The read-ahead pool waits before each read: in memory mode it would otherwise keep zeros. While
+  `FASTVIDEO_STREAMING_FETCH=1` the pool takes `FASTVIDEO_STREAMING_PREFETCH_THREADS` (4) instead of 16 threads
+  (they read the page cache the fetcher just wrote; the fetcher needs the CPUs).
+- The eager loaders (`load_raw_tensors*`, `pth::read_pth*`) wait for the whole file.
+- A wait polls the map (1 ms doubling to 25 ms) and fails, naming the file and the part, when the map says failed,
+  when `FASTVIDEO_STREAMING_FETCH_STATUS` (the fetcher's `--status` JSON) says `failed` or was not written for
+  `FASTVIDEO_STREAMING_FETCH_STALE_S` (120 s; the fetcher writes it every 5 s), or after
+  `FASTVIDEO_STREAMING_FETCH_TIMEOUT_S` (3600 s). It never returns bytes of an unflagged part.
+- `load/io` log lines gain `fetch_wait_s`: the loader threads' total time blocked on the fetch.
+- The fv-serve binary carries the string `fv-streaming-fetch/1` (the first gate's log line). The boots stream only
+  when they find it in `/opt/fastvideo-rs/bin/fv-serve` (`FV_SERVE_BIN`). An older image fetches first, as before,
+  so its loader never meets a map.
+
+**The boots** (`SLS_R2_SH` in `control/src/serverless/weights.ts`; `R2_FETCH_SH` in `control/src/r2weights.ts` for
+GMI / Brev and Runpod pods). With the marker, on the worker's own disk (not an add-only cache volume), and unless
+`FV_R2_STREAM=0`:
+
+1. The fetcher runs in a background subshell with `--stream --stream-ready $S/r2-stream-ready`.
+2. The boot waits for the ready file. A fetch that fails before it fails the boot as before.
+3. Step `stream_ready` is reported, `FASTVIDEO_STREAMING_FETCH=1` and `FASTVIDEO_STREAMING_FETCH_STATUS` are
+   exported, and the boot shell renices itself by `FV_SERVE_NICE` (5): fv-serve, which it execs, yields the CPUs to
+   the fetcher started before (no effect once the fetch is done).
+4. The aux checks run (their trees are complete), then fv-serve starts; `serve-start` is stamped.
+5. When the fetch ends, the subshell reports step `fetch` (with the usual summary) and `load_overlap`: the seconds
+   fv-serve was loading while the fetch still ran.
+6. If the fetch fails after fv-serve started, the subshell reports `failed` and sends fv-serve SIGTERM (then SIGKILL
+   after `FV_STREAM_KILL_GRACE_S`, 20 s). The container exits and Runpod restarts it; the fetch resumes in place.
+   fv-serve's own loads fail on the maps marked failed in any case. It never serves a partial tree: health stays
+   not-ready until its loading completes, as before.
+
+**Tests.**
+
+- `cargo test -p fastvideo-loader` (on the build pod, 34 tests). A fake fetcher thread writes a safetensors file
+  part by part, out of order and slowly, with corrupt bytes written unflagged first and fixed later. A `LazyStore`
+  over it, views only and with the read-ahead, hashes every tensor and matches a sequential load of the whole
+  file. A fetch that dies half way gives errors naming the file, part and key for the missing tensors, and the
+  right bytes for the rest (never zeros). The eager loader waits for the whole file. Stale and failed status files
+  and the timeout end a wait. With the view gate or the read-ahead gate disabled, the tests fail (checked).
+- `scripts/gpu/tests/test_r2_stream.py` (fake R2). In-place layout, no maps left. The exact order: unguarded files,
+  headers, text encoder, DiT, VAE. A watcher thread polls the maps during a fetch with corrupt and cut GETs:
+  no flagged part ever had wrong bytes. A dead fetch marks its maps failed and the rerun resumes exactly the
+  missing parts. The loader's `want` moves a file's GETs first. The ready file waits for the ready trees.
+  `--add-only` is refused.
+- `control`: the serverless boot and the pod boot, in bash with the real fetcher. fv-serve starts while the DiT is
+  still arriving, and the steps `stream_ready`, `fetch` and `load_overlap` are reported. A fetch dying after
+  fv-serve started kills it (SIGTERM), and the restart resumes in place. No streaming without the marker or with
+  `FV_R2_STREAM=0`.
+
+**Expected gain (estimate, UNVERIFIED live).** The load overlaps the fetch when the loader consumes in about the
+order the parts arrive. With 64 GETs of 128 MiB in flight, the frontier the loader trails is about 8 GB. Cold start
+≈ container start + max(fetch, load) + the tail: the last window plus what the loader does after its last byte.
+From round 2:
+
+- Wan: 143 + 85 = 228 s becomes ~143 + 15-30 s, saving ~55-70 s of the 240 s container-start→ready.
+- H3: 256 + 52 = 308 s becomes ~256 + 15-30 s, saving ~25-35 s.
+
+The fetch rate with and without a concurrent load is not measured yet. The loader reads the page cache (no extra
+network or disk reads) with 4 read-ahead threads at nice 5, so the expected effect is small: the fetcher is
+CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.

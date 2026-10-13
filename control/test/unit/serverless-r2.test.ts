@@ -401,4 +401,87 @@ describe.skipIf(!py)("the worker's boot (SLS_R2_SH) with the real r2-fetch.py ag
     expect(readFileSync(join(vol2, "fv-r2-cache/demo/keep.txt"), "utf8")).toBe("old");
     expect(readdirSync(join(vol2, "fv-r2-cache/demo"))).toEqual([".fv-revision", "keep.txt"]);
   }, 90000);
+
+  // Streaming (docs/ops/r2-weights.md §11): with a fv-serve that carries the marker, the boot hands over to it as soon
+  // as the files it reads unguarded are in place; the rest streams in under progress maps its loader waits on.
+  const fakeServe = (root: string) => {
+    const p = join(root, "fv-serve");
+    writeFileSync(p, "\x7fELF... fv-streaming-fetch/1 ...");
+    return p;
+  };
+  const bootTail = (root: string, tail: string, over: Record<string, string> = {}) => {
+    const w = slsWeightsEnv(env, r2Spec("w", "demo"), token);
+    const e = { PATH: process.env.PATH!, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", ...w, FV_WEIGHTS_TREES_B64: "", FV_WEIGHTS: join(root, "weights"), FV_R2_STATE: join(root, "state"), FV_R2_TOOLS: join(root, "tools"), FV_R2_MIN_FREE_GB: "0", FV_FAIL_SLEEP_S: "0", FV_STREAM_KILL_GRACE_S: "0", ...over };
+    return promisify(execFile)("bash", ["-c", `set -eu\n${SLS_R2_SH}${tail}`], { env: e, timeout: 60000 });
+  };
+  it("streaming: fv-serve starts while the DiT is still arriving; the fetch, the start signal and the overlap are timed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fvsls-"));
+    r2.hooks.delayMs = (k) => (k.includes("/transformer/") ? 1500 : 0);
+    try {
+      const map = "$FV_WEIGHTS/demo/transformer/model.safetensors.fvparts";
+      // the part of fv-serve: it starts, sees the env and a map still there, and lives until the fetch is done
+      const tail = `echo "SERVE stream=\${FASTVIDEO_STREAMING_FETCH:-} status=\${FASTVIDEO_STREAMING_FETCH_STATUS:-}"; [ -f "${map}" ] && echo MAP-PRESENT; [ -f "$FV_WEIGHTS/demo/config.json" ] && echo CONFIG-WHOLE; wait; echo FETCH-DONE`;
+      const r = await bootTail(root, tail, { FV_SERVE_BIN: fakeServe(root), RUNPOD_POD_ID: "wks" });
+      expect(r.stdout).toContain(`SERVE stream=1 status=${join(root, "state", "r2-fetch.json")}`);
+      expect(r.stdout).toContain("MAP-PRESENT");
+      expect(r.stdout).toContain("CONFIG-WHOLE");
+      expect(r.stdout).toContain("FETCH-DONE");
+      expect(r.stderr).toMatch(/starting fv-serve while the weights arrive/);
+      for (const [p, b] of Object.entries(files)) {
+        expect(readFileSync(join(root, "weights/demo", p)).equals(b)).toBe(true);
+        expect(existsSync(join(root, "weights/demo", p + ".fvparts"))).toBe(false);
+      }
+      expect(existsSync(join(root, "weights/demo/.complete"))).toBe(true);
+      expect(existsSync(join(root, "weights/demo/.fv-streaming"))).toBe(false);
+      expect(existsSync(join(root, "weights/.r2-partial"))).toBe(false);
+      const b = (await boots()).filter((x: any) => x.worker_id === "wks").at(-1);
+      const steps = JSON.parse(b.steps);
+      expect(Object.keys(steps).sort()).toEqual(["fetch", "fetcher", "load_overlap", "stream_ready", "tools"]);
+      expect(steps.stream_ready).toBeLessThan(steps.fetch);
+      expect(steps.load_overlap).toBeGreaterThan(0.5);
+      expect([b.cache, !!b.serve_at, b.fetch_mbps !== null]).toEqual(["miss", true, true]);
+    } finally {
+      delete r2.hooks.delayMs;
+    }
+  }, 90000);
+  it("streaming: a fetch that dies after fv-serve started stops fv-serve (never a partial tree served); the rerun resumes in place", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fvsls-"));
+    // the DiT's GETs come late and then fail: after the start signal, while fv-serve would be loading
+    r2.hooks.delayMs = (k) => (k.includes("/transformer/") ? 1500 : 0);
+    r2.hooks.fail = (k) => k.includes("/transformer/");
+    try {
+      // fv-serve here is a long sleep in the boot's own process (as the real one is exec'd): the fetcher's subshell ends it
+      const t0 = Date.now();
+      const err: any = await bootTail(root, "echo SERVE; exec sleep 50", { FV_SERVE_BIN: fakeServe(root), RUNPOD_POD_ID: "wkd" }).catch((e) => e);
+      expect(Date.now() - t0).toBeLessThan(30000);
+      expect(err.stdout).toContain("SERVE");
+      expect(err.signal === "SIGTERM" || err.code === 143).toBe(true);
+      expect(err.stderr).toMatch(/FAILED: r2 weights while fv-serve was loading: .*stopping fv-serve/);
+      const raw = readFileSync(join(root, "weights/demo/transformer/model.safetensors.fvparts"));
+      expect(raw.subarray(0, 8).toString()).toBe("FVPARTS1");
+      expect(raw[40]).toBe(2); // marked failed: a loader waiting on it errors at once
+      expect(readFileSync(join(root, "weights/demo/.fv-streaming"), "utf8")).toBe("rev1");
+      expect((await boots()).filter((x: any) => x.worker_id === "wkd").at(-1).error).toMatch(/r2 weights/);
+    } finally {
+      delete r2.hooks.fail;
+      delete r2.hooks.delayMs;
+    }
+    // the container's restart: the tree is resumed in place (the files already verified are not fetched again)
+    const n = r2.gets.length;
+    const r = await bootTail(root, "wait; echo FETCH-DONE", { FV_SERVE_BIN: fakeServe(root), RUNPOD_POD_ID: "wkd2" });
+    expect(r.stdout).toContain("FETCH-DONE");
+    expect(r.stderr).toMatch(/resuming the in-place fetch at rev1/);
+    const again = r2.gets.slice(n).filter((g) => g.range && g.key.includes("/demo/"));
+    expect(again.length).toBeGreaterThan(0);
+    expect(again.every((g) => g.key.includes("/transformer/"))).toBe(true);
+    for (const [p, b] of Object.entries(files)) expect(readFileSync(join(root, "weights/demo", p)).equals(b)).toBe(true);
+  }, 90000);
+  it("no streaming without the marker in fv-serve, or with FV_R2_STREAM=0", async () => {
+    for (const over of [{ FV_SERVE_BIN: "/nonexistent/fv-serve" }, { FV_R2_STREAM: "0" }]) {
+      const root = mkdtempSync(join(tmpdir(), "fvsls-"));
+      const r = await bootTail(root, 'echo "SERVE stream=${FASTVIDEO_STREAMING_FETCH:-0}"', { FV_SERVE_BIN: fakeServe(root), ...over });
+      expect(r.stdout).toContain("SERVE stream=0");
+      expect(existsSync(join(root, "weights/demo/.complete"))).toBe(true);
+    }
+  }, 90000);
 });
