@@ -94,6 +94,8 @@ The "≈" click → video rows are estimates. This run's measured click → vide
      exists as `FASTVIDEO_WAN_DIT_LAZY=1`, and the A14B uses that path. Its `LazyStore` views wait per part.
      Expected: a tail like H3's, and about 196 → 120 s container start → ready (**UNVERIFIED**). A one-endpoint
      test with that env var costs about $0.5.
+   - **Tested** in docs/ops/r2-bench-2026-10-13-wan-lazy.md: ready 3.8 s after the last byte, container start →
+     ready 106.6 s, output byte-identical to eager.
 3. **The wan preset fetches a tree the boot does not load.**
    - The wan endpoint fetched `wan22-ti2v-5b` (34.2 GB, finished at 82 s) as well as `fastwan22-ti2v-5b`
      (24.2 GB, finished last at 102 s). Only `fastwan22-ti2v-5b` is loaded at boot: the log shows one model
