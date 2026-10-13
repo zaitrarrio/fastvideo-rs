@@ -8,6 +8,12 @@ new work in the same area. Newest decisions first.
 
 ### 2026-10-13
 
+- **Wan: lazy DiT by default under the R2 streaming fetch** ("make lazy wan the
+  default for r2"). A one-DiT Wan checkpoint opens its DiT with the lazy store
+  while `FASTVIDEO_STREAMING_FETCH=1`; volume loads stay eager;
+  `FASTVIDEO_WAN_DIT_LAZY=0` forces eager. Measured: cold start 106.6 s vs
+  212.6 s, byte-identical output (docs/ops/r2-bench-2026-10-13-wan-lazy.md).
+- **Old EU volume `jg48s6o1w0` deleted** ("delete the old 2 TB volume").
 - **EU weights volume: reduce to a 500 GB H3 + LTX volume** ("eu volume -
   reduce to 500 gb plan"). Replace `jg48s6o1w0` (2000 GB, $120/month) with a
   500 GB volume (~$35/month) holding only `FV_EU_VOLUME_TREES`

@@ -108,6 +108,9 @@ At the same fetch time, lazy saves about **80 s**, which is the whole DiT load. 
 
 ## Proposal (not made in this PR)
 
+> **Adopted 2026-10-13** (owner: "make lazy wan the default for r2"): `WanPipeline::load_with_dit` now
+> defaults `FASTVIDEO_WAN_DIT_LAZY` to `two_experts || streaming`. The volume path is unchanged.
+
 **Make the lazy DiT the default for one-DiT Wan loads under the streaming fetch.** For example, in
 `WanPipeline::load_with_dit`, change the default of `FASTVIDEO_WAN_DIT_LAZY` from `two_experts` to
 `two_experts || streaming`, where `streaming` is true while `FASTVIDEO_STREAMING_FETCH=1` (the loader's

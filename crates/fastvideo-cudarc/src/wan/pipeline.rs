@@ -450,10 +450,16 @@ impl WanPipeline {
         // phase B, exit 137). Its experts are opened lazily instead: tensors stay
         // in the mapped shards and go to the device one at a time as bf16, the
         // same bits the eager path uploads (`weights::fill_bf16`).
-        // `FASTVIDEO_WAN_DIT_LAZY=1` opens a one-DiT checkpoint the same way,
-        // `=0` keeps an A14B on the eager path.
+        // A one-DiT checkpoint is opened lazily too while the weights are still
+        // streaming from R2 (`FASTVIDEO_STREAMING_FETCH=1`): its views wait per
+        // part of the file, so the DiT loads under the fetch instead of after it
+        // (ready 3.8 s after the last byte vs ~82 s eager, the same output bytes:
+        // docs/ops/r2-bench-2026-10-13-wan-lazy.md). `FASTVIDEO_WAN_DIT_LAZY=1`
+        // opens it lazily in any case, `=0` keeps any checkpoint on the eager path.
         let two_experts = root.join("transformer_2").is_dir();
-        let lazy_dit = super::envflag::bool_flag("FASTVIDEO_WAN_DIT_LAZY", two_experts);
+        let streaming = fastvideo_loader::stream::streaming_fetch_env();
+        let lazy_dit =
+            super::envflag::bool_flag("FASTVIDEO_WAN_DIT_LAZY", two_experts || streaming);
         let open_dit = |dir: &Path| -> Result<WeightMap> {
             Ok(if lazy_dit {
                 WeightMap::open(dir)?

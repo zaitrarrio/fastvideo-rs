@@ -880,3 +880,5 @@ CPU-bound on TLS + SHA-256 under the GIL at ~1.2-1.6 GB/s on a 16+ vCPU host.
     was the last to complete.
   - `FASTVIDEO_WAN_DIT_LAZY=1` (lazy, gated per part) is the fix. Tested in docs/ops/r2-bench-2026-10-13-wan-lazy.md: ready 3.8 s after the last byte
     (eager 82-88 s), container start → ready 106.6 s (eager 196-213 s), byte-identical output, host RSS −9.3 GiB.
+    **Default since 2026-10-13 (owner):** a one-DiT Wan opens its DiT lazily while `FASTVIDEO_STREAMING_FETCH=1`;
+    `FASTVIDEO_WAN_DIT_LAZY=0` forces eager.
