@@ -389,6 +389,8 @@ async function markUnstoppable(env: Env, row: BrevInstance, err: string, rec: { 
   const t = now();
   const why = `not_stoppable: Brev cannot stop ${row.instance_type} (Brev: ${brevErrText(err)}): left RUNNING at ${money(dph)}${moneyDay(dph)}${rec && "note" in rec ? `; ${rec.note}` : ""}`;
   await setState(env, row.workspace_id, "running_unstoppable", { note: why.slice(0, 300), usd_per_hr: dph, stop_tried_at: t, stoppable: 0, parked_at: t, ...(rec && "parked" in rec ? { trees: rec.parked } : {}) });
+  // Released from its cluster (also when the cron's retry finds it: an earlier stop_failed left its pod row live).
+  await env.DB.prepare("UPDATE cluster_pods SET deleted_at = ?, status = 'running_unstoppable' WHERE pod_id = ? AND deleted_at IS NULL").bind(t, row.pod_id).run();
   log(`${row.pod_id}: WARNING: ${why}. Released from its cluster but STILL BILLING: fv-control never deletes a Brev VM on its own; ${unstoppableDeleteHow(row.workspace_id)} (alert brev_unstoppable; the stop is tried again every ${unstoppableRetryMs(env) / 60000} min)`);
   return "running_unstoppable";
 }
