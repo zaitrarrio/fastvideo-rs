@@ -25,22 +25,10 @@
         <label for="transport">Transport</label>
         <select id="transport">
           <option value="reactor">Reactor runtime (plays in this page)</option>
-          <option value="whip">Native stream: POST /fv/v1/streams, published to a WHIP endpoint</option>
+          <option value="native">Native stream: POST /fv/v1/streams to an output (Cloudflare Stream, WHIP, RTMPS, SRT)</option>
         </select>
         <p class="hint" id="transport-note"></p>
-        <div id="whip-fields" hidden>
-          <label for="whip-url">WHIP endpoint</label>
-          <input id="whip-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://relay.example/live/whip (MediaMTX, Cloudflare Stream, …)">
-          <div class="row">
-            <div><label for="whip-target">Target</label>
-              <select id="whip-target"><option value="">guess from the URL</option><option value="mediamtx">mediamtx</option><option value="cloudflare">cloudflare</option></select></div>
-            <div><label for="whip-token">WHIP token</label>
-              <input id="whip-token" type="password" spellcheck="false" autocomplete="off" placeholder="server default"></div>
-          </div>
-          <label for="whep-url">Playback (WHEP) URL</label>
-          <input id="whep-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://relay.example/live/whep (optional: no picture here without it)">
-          <p class="hint">fv-serve publishes H.264 to the WHIP endpoint; this page plays it back from the relay's WHEP URL.</p>
-        </div>
+        <div id="native-fields" hidden></div>
         <label for="prompt">Opening prompt</label>
         <textarea id="prompt" rows="4">A first-person drive along a coastal road at golden hour, waves breaking on the rocks below.</textarea>
         <div class="row">
@@ -58,6 +46,7 @@
       <div class="stage-head"><h2 id="h-out">Stream</h2></div>
       <div class="stage-body">
         <video id="video" autoplay playsinline muted controls style="margin-top:10px"></video>
+        <p class="hint" id="playback-info"></p>
         <dl id="stream-stats"></dl>
       </div>
     </section>

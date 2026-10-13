@@ -46,7 +46,7 @@
 //! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
 //! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
-//! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
+//! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
 //! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms` |
 //! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
 //!
@@ -1230,6 +1230,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_CF_STREAM_NAME_PREFIX") {
             self.outputs.cloudflare.name_prefix = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_CF_STREAM_CUSTOMER_DOMAIN") {
+            self.outputs.cloudflare.customer_domain = Some(v.trim().to_owned());
         }
         if let Some(v) = env.var("FV_OUTPUTS_ALLOW_PRIVATE") {
             self.outputs.allow_private = matches!(v.trim(), "1" | "true" | "yes" | "on");

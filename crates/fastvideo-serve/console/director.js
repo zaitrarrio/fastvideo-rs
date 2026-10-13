@@ -12,6 +12,10 @@
 //      sends `configure` (prompt_version 1) and waits for `configured`
 //   6. `prompt` messages with prompt_version 2, 3, … (replan true/false)
 //   7. `stop` -> `stream_exhausted`, then close
+// An optional output copy (ours, docs/serve/stream-outputs.md): the
+// "Output copy" form (outputs.js) adds `x_fv_output` to `configure`; the
+// session answers `output_ready` (with playback), `output_error`,
+// `output_ended`, and the page can play the copy (WHEP or HLS).
 // 404 / 405 / 501 on the signalling routes means this server does not
 // mount the director (built without `webrtc`, or `fal_director` off): the
 // page says so instead of failing.
@@ -21,6 +25,7 @@ import {
   admit, BUSY,
 } from './common.js';
 import { gathered } from './rtc.js';
+import { outputForm, loadOutputs, playOutput, redactOutput } from './outputs.js';
 
 const HEARTBEAT_MS = 5000;
 // How long `configure` waits for `session_info`. The server sends it the
@@ -123,7 +128,10 @@ export class DirectorClient {
   send(msg) {
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('control channel is not open');
     this.dc.send(JSON.stringify(msg));
-    this.onEvent({ ...msg, type: '→ ' + msg.type });
+    // The page log never shows an output copy's credentials.
+    const shown = { ...msg, type: '→ ' + msg.type };
+    for (const k of ['x_fv_output', 'output']) if (shown[k]) shown[k] = redactOutput(shown[k]);
+    this.onEvent(shown);
   }
 
   // A `prompt` message: `fields` may carry `prompt`, `end_image_url`,
@@ -418,6 +426,28 @@ export function mountDirector(root, { app, model }) {
   const start = el('button', { class: 'primary', id: 'director-start' }, 'Start session');
   const stop = el('button', { id: 'director-stop', disabled: true }, 'Stop');
   const msg = el('div', { class: 'msg', role: 'status', id: 'director-msg' });
+  // The output copy: a second encode of the session to a destination.
+  const copy = outputForm('director-out', { optional: true });
+  const copyStatus = el('div', { class: 'msg', role: 'status', id: 'director-copy-status' });
+  const copyVideo = el('video', { id: 'director-copy-video', autoplay: true, playsinline: true, muted: true, controls: true, hidden: true });
+  const copyWatch = el('button', { id: 'director-copy-watch', hidden: true }, 'Watch the copy');
+  let copyPlayback = null;
+  let copyPlayer = null;
+  loadOutputs().then((i) => copy.setInfo(i));
+  const stopCopyPlayer = () => {
+    if (copyPlayer) { try { copyPlayer.close(); } catch { /* gone */ } }
+    copyPlayer = null;
+    copyVideo.hidden = true;
+  };
+  copyWatch.onclick = async () => {
+    stopCopyPlayer();
+    copyVideo.hidden = false;
+    try {
+      copyPlayer = await playOutput(copyVideo, copyPlayback, copy.pasted(), { log: (t) => logLine({ type: 'output_player', message: t }) });
+      root.dataset.copyPlayer = copyPlayer.kind || 'none';
+      if (!copyPlayer.kind) setMsg(copyStatus, 'Output copy: ' + copyPlayer.why, 'bad');
+    } catch (e) { root.dataset.copyPlayer = 'failed'; setMsg(copyStatus, 'Output copy playback: ' + e.message, 'bad'); }
+  };
   const playback = el('div', { class: 'msg', role: 'status', id: 'director-playback', 'data-phase': 'idle' });
   const tracker = new PlaybackTracker();
   let ticker = null;
@@ -582,6 +612,7 @@ export function mountDirector(root, { app, model }) {
         // The chunk length the session actually runs (a tier may fall back).
         if (m.chunk_duration != null) { meta = { ...meta, chunk: m.chunk_duration }; renderStats(lastChunk); }
         setPromptState(m.prompt_version, 'applied', 'ok');
+        if (m.x_fv_output) setMsg(copyStatus, 'Output copy: ' + m.x_fv_output.kind + (m.x_fv_output.url ? ' → ' + m.x_fv_output.url : '') + ' (starting)', 'warn');
         tracker.configured(Date.now());
         if (!ticker) ticker = setInterval(renderPlayback, 250);
         renderPlayback();
@@ -596,6 +627,16 @@ export function mountDirector(root, { app, model }) {
         lastChunk = m;
         renderStats(m);
         break;
+      case 'output_ready': {
+        copyPlayback = m.playback || {};
+        const p = copyPlayback;
+        root.dataset.copy = 'ready';
+        setMsg(copyStatus, 'Output copy live: ' + ((m.output && m.output.kind) || 'output') + (p.whep_url || p.hls_url ? ' · ' + (p.whep_url || p.hls_url) : ''), 'ok');
+        copyWatch.hidden = false;
+        break;
+      }
+      case 'output_error': root.dataset.copy = m.fatal ? 'failed' : 'error'; setMsg(copyStatus, 'Output copy: ' + (m.message || 'error'), 'bad'); break;
+      case 'output_ended': root.dataset.copy = 'ended'; setMsg(copyStatus, 'Output copy ended (' + (m.reason || 'ended') + ')'); break;
       case 'deadline_missed': setMsg(msg, 'Chunk ' + m.chunk_index + ' late by ' + m.late_by_seconds + ' s (holding).', 'bad'); break;
       case 'error': setMsg(msg, (m.code || 'error') + ': ' + (m.error || ''), 'bad'); break;
       default: break;
@@ -603,6 +644,7 @@ export function mountDirector(root, { app, model }) {
   }
   function onState(s, reason) {
     if (s === 'closed' || s === 'idle') {
+      stopCopyPlayer();
       if (ticker) clearInterval(ticker);
       ticker = null;
       tracker.reset();
@@ -628,6 +670,7 @@ export function mountDirector(root, { app, model }) {
     const keys = beats.filter((b) => b.end_image_url).length + (cfg.end_image_url ? 1 : 0);
     if (info.script_max_end_images != null && keys > info.script_max_end_images) return 'At most ' + info.script_max_end_images + ' keyframes (end images) in this session.';
     if (beats.some((b) => b.audio_url) && (info.script_max_audio_beats || 0) === 0) return 'This session takes no audio beats.';
+    if (cfg.x_fv_output && !(info.x_fv_output && info.x_fv_output.available)) return 'This server takes no output copy (session_info has no x_fv_output): choose "No copy".';
     return null;
   }
 
@@ -658,6 +701,8 @@ export function mountDirector(root, { app, model }) {
       if (style.value.trim()) cfg.style = style.value.trim();
       try { const ents = parseEntities(entities.value); if (ents) cfg.entities = ents; } catch (e) { setMsg(msg, e.message, 'bad'); return; }
     }
+    try { const o = copy.read(); if (o) cfg.x_fv_output = o; } catch (e) { setMsg(msg, 'Output copy: ' + e.message, 'bad'); return; }
+    setMsg(copyStatus, ''); copyWatch.hidden = true; copyPlayback = null; delete root.dataset.copy;
     // With a script the opening chunk follows its beats: an end image goes in a keyframe beat.
     if (cfg.script && cfg.end_image_url) { setMsg(msg, 'With a script, put the last-frame image in a beat (a keyframe at its offset).', 'bad'); return; }
     segments.replaceChildren(); segmentsBlock.hidden = true;
@@ -720,10 +765,13 @@ export function mountDirector(root, { app, model }) {
             upsampleNote,
             field('Style', style, 'Appended to every segment.'),
             field('Entities', entities, 'Established cast: JSON array of {id, kind (character | location | prop), name, descriptor}. Descriptors are spliced into every segment the entity appears in.')),
+          el('details', { class: 'more', id: 'director-output' }, el('summary', {}, 'Output copy (Cloudflare Stream, WHIP, RTMPS, SRT)'),
+            el('p', { class: 'hint' }, 'A second encode of this session published to a destination while this page plays (sent as configure.x_fv_output).'),
+            copy.node),
           el('div', { class: 'actions' }, start, stop, poolBadge(model)), msg)),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Stream')),
-        el('div', { class: 'stage-body' }, el('div', { style: 'margin-top:10px' }, video), playback, stats,
+        el('div', { class: 'stage-body' }, el('div', { style: 'margin-top:10px' }, video), playback, copyStatus, copyWatch, copyVideo, stats,
           el('details', { class: 'more' }, el('summary', {}, 'Session info'), sessionFacts))),
       el('section', { class: 'stage' },
         el('div', { class: 'stage-head' }, el('h2', {}, 'Direct')),
