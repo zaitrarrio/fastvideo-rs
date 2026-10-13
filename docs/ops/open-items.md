@@ -6,6 +6,29 @@ new work in the same area. Newest decisions first.
 
 ## Decisions
 
+### 2026-10-13
+
+- **Brev: a stop that does not succeed deletes the VM.** "We should go ahead
+  and delete VMs that need to be stopped if a stop command does not succeed.
+  If the stop command succeeds then we should NOT delete the VM." On every
+  stop path, a refused stop ("does not support stop", the non-stoppable
+  types), another stop error after 3 tries, or a VM not STOPPED 10 min after
+  an accepted stop → deleted (fv- names, recorded rows), recorded with the
+  reason, info alert `brev_stop_deleted`. A successfully stopped VM is still
+  parked / held and never auto-deleted (the 2026-10-11 rule); park limits
+  still only alert; manual deletes unchanged. A stop while DEPLOYING waits
+  (15 min) for it to leave DEPLOYING, then stops it or deletes it. Replaces
+  the same morning's `running_unstoppable` handling (PR #80: left running,
+  hourly retry, `brev_unstoppable`, the 24 h budget margin).
+  docs/serve/deploy-gmi-brev.md §3.4.
+- **Brev: non-stoppable types are launched like any other** (earlier the
+  same day, replacing rule `brev_stoppable_only`); with the rule above, their
+  stop deletes them.
+- **Brev warm restart without capacity: a fresh VM, the parked one kept.**
+  When Brev's start task (`environment.tasks[]`) says InsufficientCapacity,
+  the start is retried 3 times over ~5 min, then the launch creates a fresh
+  VM and the parked VM stays parked (its stop succeeded: not deleted).
+
 ### 2026-10-07
 
 - **CloudRift: on hold.** No CloudRift work until the owner lifts the hold.
