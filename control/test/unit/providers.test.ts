@@ -18,6 +18,7 @@ import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
 import { presetPool } from "../../src/cluster/spec";
 import { HUB_TREES } from "../../src/weights-sources";
+import { R2_TREES } from "../../src/r2-trees";
 import { d1 } from "./d1shim";
 
 const GMI_KEY = "gmi_SECRET_0123456789";
@@ -64,6 +65,16 @@ describe("schema rules", () => {
     expect(paths).toEqual(expect.arrayContaining(["provider_gpu", "gpu_types", "volume", "weights_source"]));
   });
   it("the cpu variant runs on a GMI GPU (smoke test); a real model needs weights", () => {
+    // h3-base unpublished for this case (it is in R2_TREES since the 2026-10-12 copy).
+    const saved = R2_TREES["h3-base"];
+    delete R2_TREES["h3-base"];
+    try {
+      realModelNeedsWeights();
+    } finally {
+      if (saved) R2_TREES["h3-base"] = saved;
+    }
+  });
+  const realModelNeedsWeights = () => {
     expect(pool({ variant: "cpu" }).ok).toBe(true);
     const real = { variant: "h3-turbo", config: "/etc/fv/runpod.toml", fake_models: undefined, models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] };
     // weights_source none, said: the schema refuses it.
@@ -73,7 +84,7 @@ describe("schema rules", () => {
     expect(pool(real).ok).toBe(true);
     const is = providerIssues(mkEnv(), { pools: [fakePool(real) as any] });
     expect(is.some((i) => i.path[2] === "weights_source" && /models need weights: r2 .*h3-base/.test(i.message))).toBe(true);
-  });
+  };
   it("Runpod pools refuse the provider fields", () => {
     const r = validate("pool", { ...fakePool({ provider: undefined }), compute: "CPU" });
     expect((r as any).issues.some((i: any) => i.path[0] === "provider_gpu")).toBe(true);
@@ -300,6 +311,10 @@ describe("budget (no balance API)", () => {
     expect(budgetDecision("gmi", "GMI Cloud", 17, 20, true).alert?.severity).toBe("warn");
     expect(budgetDecision("gmi", "GMI Cloud", 20, 20, true)).toMatchObject({ stop: true, alert: { severity: "critical", kind: "gmi_budget" } });
     expect(budgetDecision("gmi", "GMI Cloud", 25, 20, false).stop).toBe(false);
+  });
+  it("Brev: no early warning or margin for non-stoppable types (owner rule 2026-10-13: their stop deletes them at the deadline)", () => {
+    expect(budgetDecision("brev", "NVIDIA Brev", 5, 20, true)).toEqual({ alert: null, stop: false });
+    expect(budgetDecision("brev", "NVIDIA Brev", 20, 20, true)).toMatchObject({ stop: true, alert: { severity: "critical", message: "NVIDIA Brev: $20.00 spent this month, at or over the budget $20: stopping its pods" } });
   });
 });
 

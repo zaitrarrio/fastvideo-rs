@@ -1,0 +1,55 @@
+## ls -la /workspace
+total 22702
+drwxr-xr-x 12 root   root   4000180 Oct  7 00:59 .
+drwxr-xr-x  1 root   root        56 Oct 13 08:29 ..
+drwxr-xr-x  4 165536 165536 3000456 Sep 25 21:23 .cache
+drwxr-xr-x  7 100000 100000 1004512 Oct  7 01:36 fastboot-logs
+drwxr-xr-x  2 root   root     31100 Oct  6 11:39 fv-libs
+drwxr-xr-x  3 root   root   1031387 Sep 24 18:52 gpucheck-out
+drwxr-xr-x  2 100000 100000 1092023 Sep 24 18:58 h3-text-cache
+drwx------  4 root   root   1000282 Sep 24 00:45 hf
+drwxr-xr-x 10 100000 100000 3003027 Sep 25 19:01 runs
+drwxr-xr-x  3 100000 100000 2074918 Oct  6 14:16 scratch
+drwxr-xr-x  8 165536 165536 3006213 Sep 25 20:06 upstream
+drwxr-xr-x 39 root   root   4000171 Oct  6 14:41 weights
+## ls -la /workspace/weights
+total 114477
+drwxr-xr-x 39 root   root   4000171 Oct  6 14:41 .
+drwxr-xr-x 12 root   root   4000180 Oct  7 00:59 ..
+drwxr-xr-x  4 root   root   3000635 Sep 24 18:40 FastH3-4-step-Preview-v1-LoRA
+drwxr-xr-x  3 root   root   3007261 Sep 24 16:32 FastH3-4-step-Preview-v1-VSA-DataFree
+drwxr-xr-x  5 root   root   3001360 Sep 28 21:17 auxiliary
+drwxr-xr-x  6 root   root   3012057 Oct  6 14:38 cosmos3-super
+drwxr-xr-x  4 root   root   3002720 Sep 24 18:48 fastwan21-1.3b
+drwxr-xr-x  7 root   root   3002253 Sep 28 19:30 fastwan22-ti2v-5b
+drwxr-xr-x  4 root   root   3013769 Sep 24 01:13 h3-8step
+drwxr-xr-x  7 root   root   3020554 Oct  7 01:36 h3-base
+drwxr-xr-x  5 root   root   3006431 Sep 28 19:20 h3-ref2va
+drwxr-xr-x  4 root   root   2037149 Sep 24 18:40 h3-to-ltx
+drwxr-xr-x  4 root   root   3003146 Sep 24 00:52 hy15-480-i2v
+drwxr-xr-x  4 root   root   3004971 Sep 24 00:57 hy15-480-t2v
+drwxr-xr-x  4 root   root   3004971 Sep 24 00:57 hy15-720-i2v
+drwxr-xr-x  4 root   root   3004971 Sep 24 00:58 hy15-720-t2v
+drwxr-xr-x  8 root   root   3012102 Oct  6 14:41 lingbot-video-moe-30b-a3b
+drwxr-xr-x  4 root   root   3000789 Oct  2 01:37 longlive-1.3b
+drwxr-xr-x  2 root   root   3000659 Oct  2 01:39 longlive-1.3b-safetensors
+drwxr-xr-x  8 root   root   3001038 Oct  2 01:45 longlive-plug
+drwxr-xr-x  2 root   root   3000931 Oct  2 01:38 longlive2-5b
+drwxr-xr-x  2 root   root   3000274 Oct  2 01:39 longlive2-5b-nvfp4-s2
+drwxr-xr-x  2 root   root   3000274 Oct  2 01:38 longlive2-5b-nvfp4-s4
+drwxr-xr-x  4 root   root   3013629 Sep 24 01:00 ltx2
+drwxr-xr-x  5 root   root   3006664 Sep 27 15:58 ltx23
+drwxr-xr-x  2 root   root   3005099 Oct  6 14:29 ltx23-dev
+drwxr-xr-x  5 root   root   3012855 Sep 27 19:50 ltx25
+drwxr-xr-x  3 root   root   3003536 Sep 29 07:52 ltx25-dev
+drwxr-xr-x  2 root   root   3000121 Sep 28 22:20 ltx25-ic-lora-ingredients
+drwxr-xr-x  8 root   root   3001999 Sep 27 16:58 mmaudio-44k-v2
+drwxr-xr-x  7 root   root   3001304 Oct  6 13:32 sana-video-2b-480p
+drwxr-xr-x  8 root   root   3002694 Sep 27 15:39 sfwan21-1.3b
+drwxr-xr-x  2 root   root   2002165 Sep 27 15:38 taeh3
+drwxr-xr-x  3 root   root   3000128 Sep 29 02:49 upscaler
+drwxr-xr-x  3 100000 100000 3001160 Sep 27 20:44 wan
+drwxr-xr-x  7 root   root   3002694 Oct  6 13:34 wan21-t2v-1.3b
+drwxr-xr-x  8 root   root   3007488 Sep 27 15:42 wan21-t2v-14b
+drwxr-xr-x  8 root   root   3011753 Oct  6 14:30 wan22-t2v-a14b
+drwxr-xr-x  8 root   root   3003185 Sep 27 15:41 wan22-ti2v-5b

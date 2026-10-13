@@ -42,7 +42,8 @@ import { deleteVar, listVars, maskRow, resolveView, setVar, type Scope } from ".
 import { ciStatus, dispatchRelease } from "./github";
 import { listTags } from "./ghcr";
 import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, readDoc, restoreDoc, saveDoc, SCHEMA_OF, validateDoc, bumpDoc, type DocKind } from "./docs";
-import { dynamicEnums } from "./dynamic";
+import { dynamicEnums, imageCommits, providerDetails } from "./dynamic";
+import { instanceTypes } from "./instance-types";
 import { downloadLogs, ingest, searchLogs } from "./logs";
 import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
 import { availability, checkSpec, liveSpecIssues } from "./cluster/editor";
@@ -62,8 +63,9 @@ import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
+import { slsReport } from "./serverless/ingest";
 import { weightsPlanRequest } from "./weights-plan";
-import { assertBrevStoppable, endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -113,6 +115,8 @@ app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, 
 app.get("/ingest/v1/brev-boot", async (c) => brevBoot(c.env, c.req.raw));
 /** A pod with weights_source r2 asks for its trees' presigned URLs with its cluster's ingest token (weights-plan.ts). */
 app.post("/ingest/v1/weights-plan", async (c) => weightsPlanRequest(c.env, c.req.raw));
+/** A serverless worker with weights_source r2 reports its boot (cache hit / miss, fetch progress, serve) with its endpoint's weights token (serverless/ingest.ts). */
+app.post("/ingest/v1/sls-report", async (c) => c.json(await slsReport(c.env, c.req.raw)));
 /** The pod-side fetcher (scripts/gpu/r2-fetch.py, generated into r2-fetch-script.ts); the boot checks R2_FETCH_SHA256. */
 app.get("/ingest/v1/r2-fetch.py", () => new Response(R2_FETCH_PY, { headers: { "content-type": "text/x-python; charset=utf-8", "x-sha256": R2_FETCH_SHA256, "cache-control": "no-store" } }));
 
@@ -170,16 +174,24 @@ async function cloudriftView(env: Env) {
   const floor = defaults.cloudriftFloor(env);
   return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
 }
-app.get("/api/providers", async (c) =>
-  c.json({
+/** Every provider, or ?provider=<id> only that one (nothing else is read). */
+app.get("/api/providers", async (c) => {
+  const only = c.req.query("provider");
+  const all = ["runpod", "cloudrift", ...OTHER_PROVIDERS];
+  if (only && !all.includes(only)) throw new HttpError(404, `no provider ${only} (${all.join(", ")})`);
+  const want = (p: string) => !only || only === p;
+  return c.json({
     providers: [
-      { id: "runpod", enabled: true, launch: true },
-      { id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) },
+      ...(want("runpod") ? [{ id: "runpod", enabled: true, launch: true }] : []),
+      ...(want("cloudrift") ? [{ id: "cloudrift", enabled: cloudriftEnabled(c.env), launch: false, ...(cloudriftEnabled(c.env) ? await cloudriftView(c.env) : {}) }] : []),
       // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): launch targets for standalone pods and pools.
-      ...(await Promise.all(OTHER_PROVIDERS.map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
+      ...(await Promise.all(OTHER_PROVIDERS.filter(want).map(async (p) => ({ ...(await providerView(c.env, p)), launch: true })))),
     ],
-  }),
-);
+  });
+});
+/** Every instance type a launch provider lists, normalized (instance-types.ts; the launch screen's table); ?refresh=1
+ * reads the provider again instead of the cache (at most once per 30 s per provider: a faster one is served cached). */
+app.get("/api/providers/:p/instance-types", async (c) => c.json(await instanceTypes(c.env, c.req.param("p"), { refresh: c.req.query("refresh") === "1" })));
 /** Price and stock of a GMI / Brev GPU product (the planner's view). */
 app.get("/api/providers/:p/offers", async (c) => {
   const p = c.req.param("p") as OtherProviderId;
@@ -433,8 +445,6 @@ for (const [path, def] of Object.entries(OPS)) {
     for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
       if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
-    // Owner rule 2026-10-11: a Brev type that cannot be stopped is refused wherever pods are made (its stop would be a delete).
-    if (["up", "scale", "roll"].includes(def.kind)) await assertBrevStoppable(c.env, cl.spec, def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools : undefined);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
     return c.json({ operation: r.id, kind: def.kind }, 202);
@@ -594,7 +604,8 @@ app.post("/api/standalone/validate", async (c) => {
     if (!r.ok && r.problem) issues.push({ path: ["name"], message: r.problem });
   }
   const warnings: Issue[] = [];
-  if (spec) {
+  // ?live=0 (the form before a provider is picked): the request's own rules and the name only, no provider API call.
+  if (spec && c.req.query("live") !== "0") {
     const live = await liveSpecIssues(c.env, spec);
     issues.push(...mapLaunchIssues(live.issues));
     warnings.push(...mapLaunchIssues(live.warnings));
@@ -633,7 +644,6 @@ app.post("/api/standalone/:id/start", async (c) => {
   const cl = await standaloneOf(c);
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
   assertRegionsAvailable(cl.spec);
-  await assertBrevStoppable(c.env, cl.spec);
   const b = await body<{ skip_image_check?: boolean }>(c);
   const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
   await auditC(c, { action: "standalone.start", target: cl.name });
@@ -908,7 +918,7 @@ app.get("/api/github/ci", async (c) => c.json(await ciStatus(c.env)));
 app.post("/api/github/release", async (c) => {
   const b = await body(c);
   parseOr400("release-dispatch", b);
-  const known = (await dynamicEnums(c.env)).channels.map((x) => x.id);
+  const known = (await dynamicEnums(c.env, undefined, { live: false })).channels.map((x) => x.id);
   if (b.channel && !known.includes(b.channel)) throw new HttpError(400, `channel: one of ${known.join(", ")}`, { issues: [{ path: ["channel"], message: `one of ${known.join(", ")}` }] });
   const r = await dispatchRelease(c.env, b);
   await auditC(c, { action: `release.${b.action}`, target: b.channel || "stable", after: r.inputs });
@@ -970,7 +980,17 @@ app.post("/api/preflight", async (c) => {
   const pf = await checkImages(c.env, spec, images);
   return c.json({ ok: pf.errors.length === 0, ...pf, images });
 });
-app.get("/api/schemas/dynamic", async (c) => c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined)));
+/**
+ * The editors' lists. ?live=0: no upstream call (the launch forms on open); ?provider=<runpod|gmi|brev>: that one
+ * provider's live details only (asked once it is picked); ?images=1: the commits with images (GHCR); none of them:
+ * the full view (the JSON editor, the CLI).
+ */
+app.get("/api/schemas/dynamic", async (c) => {
+  const p = c.req.query("provider");
+  if (p) return c.json(await providerDetails(c.env, p));
+  if (c.req.query("images") === "1") return c.json(await imageCommits(c.env));
+  return c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined, { live: c.req.query("live") !== "0" }));
+});
 /** Any schema's own check (refinements included) on a draft, without acting: the forms' cross-field rules. */
 app.post("/api/schemas/:name/validate", async (c) => {
   const name = c.req.param("name") as SchemaName;

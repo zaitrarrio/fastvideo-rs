@@ -701,7 +701,7 @@ mod tests {
                 // US volume s2k01690bi was deleted 2026-10).
                 placements: vec![
                     Placement { data_center: "US-CA-2".into(), volume_id: "usrebuilt0".into() },
-                    Placement { data_center: "EUR-IS-1".into(), volume_id: "jg48s6o1w0".into() },
+                    Placement { data_center: "EU-RO-1".into(), volume_id: "bz0ofkfx45".into() },
                 ],
                 ..PodConfig::default()
             },
@@ -711,10 +711,10 @@ mod tests {
         let order: Vec<&str> = p.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(
             order,
-            ["NVIDIA H100 80GB HBM3 in US-CA-2", "NVIDIA H200 in US-CA-2", "NVIDIA H100 80GB HBM3 in EUR-IS-1", "NVIDIA H200 in EUR-IS-1"]
+            ["NVIDIA H100 80GB HBM3 in US-CA-2", "NVIDIA H200 in US-CA-2", "NVIDIA H100 80GB HBM3 in EU-RO-1", "NVIDIA H200 in EU-RO-1"]
         );
         let b = &p[2].1;
-        assert_eq!(b["networkVolumeId"], "jg48s6o1w0");
+        assert_eq!(b["networkVolumeId"], "bz0ofkfx45");
         assert_eq!(b["templateId"], "tpl");
         assert!(b.get("allowedCudaVersions").is_none());
     }

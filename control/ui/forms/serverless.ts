@@ -7,22 +7,27 @@ import { badge, h } from "../dom";
 import { createJsonEditor } from "../editor";
 import { createForm, type Api, type FieldOpts, type Form } from "../fields";
 import type { Issue, Path } from "../schema";
-import { issuesOf, loadDyn, loadSchemas, preflight } from "./common";
+import { issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight } from "./common";
 import { servesPanel } from "./serves";
 
 const pretty = (v: unknown) => JSON.stringify(v, null, 2);
 
 export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast: (m: string) => void; defaults: any; onCreated: (id: string) => void }) {
   const { api } = o;
-  const [schemas, dyn] = await Promise.all([loadSchemas(api), loadDyn(api)]);
+  // Serverless is Runpod only: the lists without any live one (?live=0), and Runpod's GPU types (prices, stock) alone.
+  const [schemas, dyn, rp] = await Promise.all([loadSchemas(api), loadDyn(api, "", { live: false }), loadProvider(api, "runpod").catch(() => null)]);
+  if (rp) mergeProvider(dyn, rp);
   const schema = schemas["serverless-endpoint"]!;
   const create = h("button", { type: "button", class: "primary" }, "Create endpoint");
   const out = h("div", { class: "small", style: "margin-top:8px" });
   // What it serves, live: the validator derives it from the preset or config (src/serverless/serves.ts).
   const servesBox = h("div", { class: "small muted" }, "Serves: checking…");
-  const remote = async (v: any) => {
-    const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v } });
+  // The cold start to expect (image pull + R2 fetch + load), live from the validator (serverless/weights.ts slsOutlook).
+  const outlookBox = h("div", { class: "small", id: "sls-outlook" });
+  const remote = async (v: any, signal?: AbortSignal) => {
+    const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v }, signal });
     servesBox.replaceChildren(servesPanel(r.serving));
+    outlookBox.replaceChildren(...outlookLine(r.outlook, r.stock));
     return { issues: r.ok ? [] : issuesOf(r), warnings: r.warnings || [] };
   };
   let f: Form;
@@ -41,15 +46,19 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const presetOpts = (dyn.sls_presets || []).map((p: any) => ({ value: p.id, detail: p.detail }));
   /** A preset (or a variant, for a custom endpoint) brings its defaults: variant, config, compute, GPU / CPU fields, volume, disk, timeout; the name stays. */
   const takeDefaults = async (q: string) => {
-    const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}`)).spec;
-    for (const k of ["variant", "config", "config_toml", "compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "network_volume", "data_centers", "container_disk_gb", "execution_timeout_s"]) f.set([k], d[k], true);
+    // The weights source chosen stays across a preset switch (its placement and disk come with it).
+    const ws = f.get(["weights_source"]);
+    const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}${ws && !q.includes("weights_source") ? `&weights_source=${ws}` : ""}`)).spec;
+    for (const k of ["variant", "config", "config_toml", "compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "weights_source", "network_volume", "data_centers", "container_disk_gb", "execution_timeout_s"]) f.set([k], d[k], true);
     if (d.compute === "CPU") f.set(["mode"], "queue", true);
   };
   let advanced = false;
+  let shasAsked = false;
   function draw() {
     const cpu = f.get(["compute"]) === "CPU";
     const custom = !f.get(["preset"]);
     const s = src();
+    if (s === "sha" && !shasAsked) (shasAsked = true), loadShas(api, dyn).then(() => src() === "sha" && draw());
     // Custom endpoints name their variant and config; with a preset they sit under "Advanced" (read-only: the preset sets them).
     const imageFields = [
       F(["variant"], {
@@ -87,6 +96,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         F(["mode"], { label: "Mode", onSet: (v) => (v === "lb" ? f.set(["scaler_type"], "REQUEST_COUNT", true) : f.set(["scaler_type"], "QUEUE_DELAY", true), draw()) }),
       ),
       h("div", { class: "ff-section", style: "margin-top:8px" }, h("h3", {}, "Serves"), servesBox),
+      ...(cpu ? [] : [h("div", { class: "ff-section", style: "margin-top:8px" }, h("h3", {}, "Cold start"), outlookBox)]),
       custom
         ? h("div", { class: "cf-fields", style: "margin-top:10px" }, ...imageFields)
         : h(
@@ -118,8 +128,23 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         ...(cpu
           ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs per worker" })]
           : [F(["gpu_types"], { label: "GPU types (priority order)" }), F(["gpu_count"], { label: "GPUs per worker", unsetLabel: "1" }), F(["allowed_cuda"], { label: "CUDA versions a host may offer", help: "The images need 13.0." })]),
-        F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume jg48s6o1w0 (CLAUDE.md: EU only): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
-        F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : "Any of these (none: any)." }),
+        cpu
+          ? null
+          : F(["weights_source"], {
+              label: "Weights from",
+              allowUnset: false,
+              onSet: async (v) => {
+                // r2: no volume, any data centre, a container disk sized from the manifests; volume: the EU volume in its DC.
+                const p = f.get(["preset"]);
+                await takeDefaults(`${p ? `preset=${encodeURIComponent(p)}` : `variant=${encodeURIComponent(f.get(["variant"]) || "")}`}&weights_source=${v}`);
+                draw();
+              },
+              help: "volume: the EU weights volume (EU-RO-1 only; H3 + LTX trees). r2: the R2 weights store, fetched onto the container disk at boot (any data centre; skipped when the worker's disk already holds the trees).",
+            }),
+        f.get(["weights_source"]) === "r2"
+          ? F(["network_volume"], { label: "R2 cache volume", options: [{ value: null, label: "none (default)" }], allowUnset: false, onSet: () => draw(), help: "Off by default: a per-DC cache volume the owner lists in FV_SLS_R2_CACHE_VOLUMES (JSON tab)." })
+          : F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume bz0ofkfx45 (EU-RO-1, H3 + LTX trees only; CLAUDE.md): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
+        F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : f.get(["weights_source"]) === "r2" ? "weights_source r2: none = any data centre (the stock per GPU type is shown under Cold start)." : "Any of these (none: any)." }),
       ),
       h(
         "div",
@@ -203,6 +228,19 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   f.el.append(tabs, formBody, jsonBox, f.summary, h("div", { class: "row", style: "margin-top:10px" }, create), out);
   host.replaceChildren(f.el);
   return f;
+}
+
+/** The outlook as lines: the estimate, the cache state, where the GPU types are in stock (r2, any DC). */
+export function outlookLine(o: any, stock?: { gpu: string; dcs: string[] }[] | null): (HTMLElement | string)[] {
+  if (!o) return [];
+  const out: (HTMLElement | string)[] = [h("div", {}, o.weights_source === "r2" ? badge("r2", "good") : badge("volume", "neutral"), " ", o.note)];
+  if (o.weights_source === "r2") out.push(h("div", { class: "muted" }, `cache: ${o.cache.state} (${o.cache.note})`));
+  if (o.last_boot) {
+    const b = o.last_boot;
+    out.push(h("div", { class: "muted" }, `last boot ${b.worker_id}: cache ${b.cache || "?"}${b.breakdown.fetch_s != null ? `, fetch ${b.breakdown.fetch_s} s` : ""}${b.fetch_mbps ? ` at ${b.fetch_mbps} MB/s` : ""}${b.breakdown.boot_to_serve_s != null ? `, container start to fv-serve ${b.breakdown.boot_to_serve_s} s` : ""}${b.error ? `, error: ${b.error}` : ""}`));
+  }
+  if (stock?.length && o.weights_source === "r2") out.push(h("div", { class: "muted" }, "in stock: ", stock.map((s) => `${s.gpu.replace(/^NVIDIA /, "")}: ${s.dcs.length ? s.dcs.join(", ") : "none"}`).join(" · ")));
+  return out;
 }
 
 /** An endpoint's spec as JSON, checked as you type (the schema here, the server's validator for the rest); Save stays off while invalid. */

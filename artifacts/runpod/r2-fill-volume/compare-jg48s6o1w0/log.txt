@@ -1,0 +1,3 @@
+<string>:5: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+2026-10-13T08:29:40Z start: mode compare, trees: h3-base h3-base/text_encoder_fp8 h3-base/transformer_prequant_4step-vsa_mxfp8 h3-base/transformer_prequant_sol-h3_mxfp8 FastH3-4-step-Preview-v1-LoRA h3-ref2va ltx25 ltx25-dev ltx25-ic-lora-ingredients upscaler h3-to-ltx auxiliary/tae auxiliary/lpips
+2026-10-13T08:32:59Z end: 0 step(s) failed

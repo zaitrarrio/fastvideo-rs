@@ -33,11 +33,14 @@ import { cancelSlsJob, purgeSlsQueue } from "./cancel";
 import { clearConsoleCache } from "./console";
 import { parseOr400 } from "../schemas";
 import { checkName } from "../names";
-import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, placementIssues } from "./spec";
+import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, placementIssues, withWeightsSource } from "./spec";
 import { gpuStock } from "../cluster/editor";
 import { mergeSpec, servingIssues, servingView, SERVING_FIELDS, SLS_PRESETS } from "./presets";
 import { compareCapabilities, PROTOCOL_INFO } from "./serves";
 import { gpusWithAtLeast } from "../gpus";
+import { recentBoots } from "./ingest";
+import { slsOutlook, slsTrees, slsWeightsIssues } from "./weights";
+import { r2Trees } from "../r2weights";
 
 type App = { Bindings: Env; Variables: Vars };
 type C = Context<App>;
@@ -69,14 +72,22 @@ serverlessRoutes.get("/", async (c) => {
     policy: await slsPolicy(c.env),
   });
 });
-serverlessRoutes.get("/defaults", (c) => c.json({ spec: defaultEndpointSpec(c.req.query("name") || "example", c.req.query("variant") || "cpu", c.req.query("preset") || undefined) }));
+serverlessRoutes.get("/defaults", (c) => {
+  const ws = c.req.query("weights_source");
+  const d = defaultEndpointSpec(c.req.query("name") || "example", c.req.query("variant") || "cpu", c.req.query("preset") || undefined);
+  // ?weights_source=r2|volume: that source's placement (r2: no volume, any data centre, a disk for the trees).
+  return c.json({ spec: (ws === "r2" || ws === "volume") && d.compute === "GPU" ? withWeightsSource(d, ws) : d });
+});
 /** The preset catalog (the cluster pools' presets plus cpu): what each serves, the weights and GPU memory it needs (docs/control/serverless.md §1a). */
 serverlessRoutes.get("/presets", (c) =>
   c.json({
     presets: SLS_PRESETS.map((p) => {
       const spec = defaultEndpointSpec("example", p.variant, p.id);
       const v = servingView(spec);
-      return { id: p.id, title: p.title, description: p.description, variant: p.variant, compute: p.compute, config: p.config ?? null, inline_config: !!p.config_toml, weights: p.weights, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves };
+      const trees = slsTrees(spec);
+      const pub = r2Trees(c.env);
+      const r2 = { trees, published: trees.filter((t) => pub[t]), missing: trees.filter((t) => !pub[t]), outlook: p.compute === "GPU" ? slsOutlook(c.env, withWeightsSource(spec, "r2")).note : null };
+      return { id: p.id, title: p.title, description: p.description, variant: p.variant, compute: p.compute, config: p.config ?? null, inline_config: !!p.config_toml, weights: p.weights, prequant: p.prequant, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves, r2 };
     }),
     protocols: PROTOCOL_INFO,
   }),
@@ -106,11 +117,14 @@ serverlessRoutes.post("/validate", async (c) => {
     const spec = normalizeEndpointSpec(doc);
     const serving = servingView(spec);
     const si = servingIssues(spec, serving.serves);
+    const wi = slsWeightsIssues(c.env, spec);
     const place = await placementIssues(spec, (pairs) => gpuStock(c.env, pairs));
-    const issues = [...nameIssue, ...si.issues, ...place.issues];
-    const warnings = [...si.warnings, ...place.warnings];
-    if (issues.length) return c.json({ ok: false, error: issues[0]!.message, issues, warnings, serving });
-    return c.json({ ok: true, spec, raw_issues: raw.ok ? [] : raw.issues, warnings, serving });
+    const issues = [...nameIssue, ...si.issues, ...wi.issues, ...place.issues];
+    const warnings = [...si.warnings, ...wi.warnings, ...place.warnings];
+    // The cold start to expect (image + fetch + load), with the cache state of an existing endpoint's last boots.
+    const outlook = slsOutlook(c.env, spec, b.id ? await recentBoots(c.env, String(b.id), 5) : []);
+    if (issues.length) return c.json({ ok: false, error: issues[0]!.message, issues, warnings, serving, outlook, stock: place.stock ?? null });
+    return c.json({ ok: true, spec, raw_issues: raw.ok ? [] : raw.issues, warnings, serving, outlook, stock: place.stock ?? null });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message, issues: [...((e as HttpError).extra?.issues as any[] ?? []), ...nameIssue] });
   }
@@ -121,8 +135,9 @@ serverlessRoutes.post("/", async (c) => {
   const draft = normalizeEndpointSpec(b.spec ?? b);
   // What it serves must be servable here (config in the image, weights on the volume, GPU memory), then placement.
   const si = servingIssues(draft);
-  const place = si.issues.length ? { issues: [] } : await placementIssues(draft, (pairs) => gpuStock(c.env, pairs));
-  const refused = [...si.issues, ...place.issues];
+  const wi = slsWeightsIssues(c.env, draft);
+  const place = si.issues.length || wi.issues.length ? { issues: [] } : await placementIssues(draft, (pairs) => gpuStock(c.env, pairs));
+  const refused = [...si.issues, ...wi.issues, ...place.issues];
   if (refused.length) throw new HttpError(400, refused.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: refused });
   const row = await createEndpoint(c.env, who(c), b.spec ?? b);
   return c.json({ endpoint: rowView(row) }, 201);
@@ -151,6 +166,7 @@ serverlessRoutes.get("/:id", async (c) => {
   const jobs = await recentJobs(c.env, row.id, 20);
   const costs = row.endpoint_id ? await c.env.DB.prepare("SELECT day, usd, minutes FROM cost_daily WHERE pod_id = ? ORDER BY day DESC LIMIT 30").bind(`sls:${row.endpoint_id}`).all<any>() : { results: [] };
   const audits = await c.env.DB.prepare("SELECT at, actor, action, ok, detail FROM audit WHERE target = ? AND action LIKE 'serverless.%' ORDER BY id DESC LIMIT 30").bind(row.name).all<any>();
+  const boots = await recentBoots(c.env, row.id, 10);
   return c.json({
     endpoint: rowView(row),
     serving: servingView(specOf(row)),
@@ -161,6 +177,9 @@ serverlessRoutes.get("/:id", async (c) => {
     costs: costs.results || [],
     audit: audits.results || [],
     log_source: logSource(row),
+    // weights_source r2: the cold start to expect and the last boots' breakdown (cache hit / miss, fetch MB/s).
+    outlook: slsOutlook(c.env, specOf(row), boots),
+    boots,
   });
 });
 serverlessRoutes.put("/:id", async (c) => {
@@ -172,8 +191,9 @@ serverlessRoutes.put("/:id", async (c) => {
   const merged = mergeSpec(prev, spec && typeof spec === "object" && !Array.isArray(spec) ? spec : {});
   // A change of what it serves is checked like a create; scaling alone never is (a scale to 0 must always work).
   if (SERVING_FIELDS.some((k) => JSON.stringify(merged[k] ?? null) !== JSON.stringify((prev as any)[k] ?? null))) {
-    const si = servingIssues(normalizeEndpointSpec({ ...merged, name: row.name }));
-    if (si.issues.length) throw new HttpError(400, si.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: si.issues });
+    const next = normalizeEndpointSpec({ ...merged, name: row.name });
+    const bad = [...servingIssues(next).issues, ...slsWeightsIssues(c.env, next).issues];
+    if (bad.length) throw new HttpError(400, bad.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), { issues: bad });
   }
   return c.json({ endpoint: rowView(await updateEndpoint(c.env, who(c), row, merged)) });
 });

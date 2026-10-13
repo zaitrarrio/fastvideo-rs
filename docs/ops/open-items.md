@@ -6,6 +6,48 @@ new work in the same area. Newest decisions first.
 
 ## Decisions
 
+### 2026-10-13
+
+- **EU weights volume: reduce to a 500 GB H3 + LTX volume** ("eu volume -
+  reduce to 500 gb plan"). Replace `jg48s6o1w0` (2000 GB, $120/month) with a
+  500 GB volume (~$35/month) holding only `FV_EU_VOLUME_TREES`
+  (`scripts/gpu/volumes.sh`: h3-base and its three nested trees, the FastH3
+  LoRA, h3-ref2va, ltx25, ltx25-dev, the IC-LoRA, upscaler, h3-to-ltx,
+  auxiliary/tae and lpips: 462.45 GB), filled from R2 with
+  `scripts/gpu/r2-fill-volume.sh`; everything else from R2.
+  **Blocked (2026-10-13):** Runpod no longer creates network volumes in
+  EUR-IS-1 (`POST /networkvolumes`: "Data center EUR-IS-1 not found or does
+  not support network volumes"; GraphQL `storageSupport: false`). The only EU
+  DC with volumes and RTX PRO 6000 Server stock is EU-RO-1 (stock "Low"),
+  which would move the EU GPU region.
+  **Owner's choice (2026-10-13): the volume in EU-RO-1, and the `eu` region
+  (GPU pods and serverless) moves there.** Done: `bz0ofkfx45`
+  (`fv-weights-h3-ltx-500`, 500 GB, EU-RO-1), filled from R2 and compared
+  (docs/ops/runpod-volumes.md §0a). Presets whose trees are not on it (wan,
+  fastwan21, sfwan, longlive) default to `weights_source r2`. `jg48s6o1w0`
+  was deleted on the owner's word ("delete the old 2 TB volume", 2026-10-13;
+  no pod or endpoint had it attached).
+- **Brev: a stop that does not succeed deletes the VM.** "We should go ahead
+  and delete VMs that need to be stopped if a stop command does not succeed.
+  If the stop command succeeds then we should NOT delete the VM." On every
+  stop path, a refused stop ("does not support stop", the non-stoppable
+  types), another stop error after 3 tries, or a VM not STOPPED 10 min after
+  an accepted stop → deleted (fv- names, recorded rows), recorded with the
+  reason, info alert `brev_stop_deleted`. A successfully stopped VM is still
+  parked / held and never auto-deleted (the 2026-10-11 rule); park limits
+  still only alert; manual deletes unchanged. A stop while DEPLOYING waits
+  (15 min) for it to leave DEPLOYING, then stops it or deletes it. Replaces
+  the same morning's `running_unstoppable` handling (PR #80: left running,
+  hourly retry, `brev_unstoppable`, the 24 h budget margin).
+  docs/serve/deploy-gmi-brev.md §3.4.
+- **Brev: non-stoppable types are launched like any other** (earlier the
+  same day, replacing rule `brev_stoppable_only`); with the rule above, their
+  stop deletes them.
+- **Brev warm restart without capacity: a fresh VM, the parked one kept.**
+  When Brev's start task (`environment.tasks[]`) says InsufficientCapacity,
+  the start is retried 3 times over ~5 min, then the launch creates a fresh
+  VM and the parked VM stays parked (its stop succeeded: not deleted).
+
 ### 2026-10-11
 
 - **MiniMax H3 licence: held.** The owner states they hold a MiniMax H3
@@ -32,7 +74,7 @@ new work in the same area. Newest decisions first.
   Last state: stock read 0 for RTX PRO 6000 / 5090, and the public API has no
   API-key → bearer exchange (both specs checked); a console check or a bearer
   token from the owner was the next step.
-- **US weights volume: wait.** Still EU only (`jg48s6o1w0`, EUR-IS-1); the US
+- **US weights volume: wait.** Still EU only (`bz0ofkfx45`, EU-RO-1; `jg48s6o1w0` in EUR-IS-1 deleted 2026-10-13); the US
   rebuild plan in `docs/ops/runpod-volumes.md` §5 stays unused. Revisit if EU
   serverless or pod capacity keeps failing to place workers.
 - **`h3` cluster on `stable`.** Its spec follows the `stable` channel, and a

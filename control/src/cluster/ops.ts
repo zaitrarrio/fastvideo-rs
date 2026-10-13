@@ -24,7 +24,7 @@ import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
 import { claimWarm, holdFailed, restartWarm, unclaimWarm } from "../brev-park";
 import { ensureTunnel, podTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
-import { brevRun, brevStoppableIssue, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
+import { brevNoStopNote, brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -188,12 +188,10 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${problems.map((x) => x.message).join("; ")}`);
     return null;
   }
-  // Owner rule 2026-10-11: a Brev VM is stopped and kept, never deleted by fv-control: a type Brev cannot stop is refused.
-  const nostop = prov === "brev" ? await brevStoppableIssue(env, pool.provider_gpu!) : null;
-  if (nostop) {
-    log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${nostop}`);
-    return null;
-  }
+  // Owner decision 2026-10-13: a Brev type that cannot be stopped is launched like any other (its stop fails, so a
+  // stop deletes it: owner rule 2026-10-13): said in the log.
+  const nostop = prov === "brev" ? await brevNoStopNote(env, pool.provider_gpu!) : null;
+  if (nostop) log(`${pool.id}: WARNING: ${nostop}`);
   const ctx = await envCtx(env, c);
   const plan = weightsPlan(pool, env);
   // NVIDIA Brev keep-on-stop (brev-park.ts): a parked or held instance of this type is restarted (it keeps its first
@@ -244,11 +242,12 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   }
   if (warm) {
     try {
-      await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
+      const said = await restartWarm(env, warm.row, { run: brevRun(image, pe.env), launch_trees: launchTrees(plan, env), cluster_id: c.id });
+      log(`${pool.id}: Brev ${warm.row.name}: ${said}`);
     } catch (e) {
       const msg = (e as Error).message.slice(0, 200);
       const r = await holdFailed(env, warm.row, msg, log);
-      log(`${pool.id}: restart of ${warm.row.state} ${warm.row.name} failed (${msg}): ${r === "held" ? "stopped and held, not deleted (reused by a later launch after BREV_HELD_REUSE_AFTER_S, or fv-control.sh brev parked)" : "Brev refused its stop: left running (alert brev_stop_failed)"}; trying another instance or a fresh one`);
+      log(`${pool.id}: restart of ${warm.row.state} ${warm.row.name} failed (${msg}): ${r === "held" || r === "parked" ? "stopped and held, not deleted (reused by a later launch after BREV_HELD_REUSE_AFTER_S, or fv-control.sh brev parked)" : r === "deleted" ? "its stop failed too: deleted (owner rule 2026-10-13)" : "still DEPLOYING: stopped once it leaves DEPLOYING, or deleted (stop_pending)"}; trying another instance or a fresh one`);
       return createOtherWorker(env, c, pool, image, slot, log);
     }
     // The pod key is the parked instance's: its record starts over for this cluster (no old URL, report or ready mark).
@@ -290,17 +289,21 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
   log(`${rec.pool}: ${rec.pod} env applied; container restarts`);
 }
 
-/** Releases a pod: a Runpod / GMI pod is deleted; a Brev VM is stopped and parked or held, never deleted (owner rule
- * 2026-10-11, brev-park.ts) unless `manual` (the owner's `pod delete` of a standalone pod). False when it is still
- * there (a failed delete, or a stop Brev refused: left running and alerted). */
+/** Releases a pod: a Runpod / GMI pod is deleted; a Brev VM is stopped and parked or held, never deleted once its stop
+ * succeeded (owner rule 2026-10-11, brev-park.ts); a Brev VM whose stop does not succeed is deleted (owner rule
+ * 2026-10-13); one still DEPLOYING is released as stop_pending (the cron stops or deletes it). `manual` (the owner's
+ * `pod delete` of a standalone pod) deletes it. False when it is still there (a failed delete). */
 export async function deletePod(env: Env, podId: string, log: Logf, why: string, opts: { manual?: boolean } = {}): Promise<boolean> {
   try {
     let what = "deleted";
     if (isOtherPod(podId)) what = await releaseOtherPod(env, podId, { manual: !!opts.manual, why }, log);
     else await runpod.remove(env, podId);
-    if (what === "stop_failed") {
-      log(`WARNING: ${podId} is still running: Brev refused its stop (${why}); not deleted (alert brev_stop_failed)`);
-      return false;
+    // Owner rule 2026-10-13: a stop that came while the VM was still DEPLOYING: released from the cluster; the cron
+    // sends the stop once it leaves DEPLOYING, or deletes it.
+    if (what === "stop_pending") {
+      await podUpdate(env, podId, { deleted: true, status: what });
+      log(`WARNING: ${podId} released (${why}) while still DEPLOYING: stopped once it leaves DEPLOYING, deleted if it does not or its stop fails (alert brev_stop_pending)`);
+      return true;
     }
     await podUpdate(env, podId, { deleted: true, ...(what === "deleted" ? {} : { status: what }) });
     log(`${what} ${podId} (${why})`);

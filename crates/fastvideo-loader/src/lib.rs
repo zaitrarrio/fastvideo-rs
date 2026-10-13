@@ -4,6 +4,7 @@ mod lazy;
 pub mod prefetch;
 pub mod pth;
 mod raw;
+pub mod stream;
 mod writer;
 
 pub use lazy::{natural_cmp, LazyDType, LazyStore, LazyView};
@@ -12,6 +13,7 @@ pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,
 };
+pub use stream::{fetch_wait_s, wait_file, wait_range, PartsGate};
 pub use writer::{write_parallel, SafetensorsWriter, TensorSpec};
 
 use std::path::{Path, PathBuf};

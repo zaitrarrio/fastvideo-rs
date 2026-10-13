@@ -110,12 +110,32 @@ export interface Env {
   /** Keep-on-stop (brev-park.ts): seconds a restarted parked instance may take to run again before it is held
    * for the owner and a fresh one is made (default 900). */
   BREV_RESTART_TIMEOUT_S?: string;
+  /** A warm restart: how long to wait for a workspace still STOPPING before its start (default 60). */
+  BREV_STOPPING_WAIT_S?: string;
+  /** "0": a weights_source r2 boot takes the aux files (TAE, LPIPS) from their pinned URLs instead of R2's auxiliary/* trees. */
+  WEIGHTS_R2_AUX?: string;
+  /** A started workspace still STOPPED this long gets the start once more (default 180; 0 never). */
+  BREV_RESTART_RETRY_S?: string;
+  /** A warm restart whose start Brev failed for capacity (environment.tasks: InsufficientCapacity): starts sent again
+   * (default 3) and the seconds between them (default 75); still failing, the VM stays parked and a fresh one is made. */
+  BREV_CAPACITY_RETRIES?: string;
+  BREV_CAPACITY_RETRY_S?: string;
+  /** A started workspace still STOPPED this long raises brev_restart_stuck (default 300). */
+  BREV_RESTART_ALERT_S?: string;
   /** Keep-on-stop: seconds after a Brev instance was held (failed boot / restart) before a launch may reuse it
    * (default 900; Unpark reuses it at once). */
   BREV_HELD_REUSE_AFTER_S?: string;
   /** "0": create every Brev workspace with isStoppable false (default: true for a type the listing marks stoppable;
    * brev-cli's entity says the flag is "used for autostop only", UNVERIFIED whether the server's stop needs it). */
   BREV_IS_STOPPABLE?: string;
+  /** Owner rule 2026-10-13 (brev-park.ts): a Brev VM whose stop does not succeed is deleted. A stop Brev accepted must
+   * leave the VM STOPPED within this many seconds, else it is deleted (default 600). */
+  BREV_STOP_TIMEOUT_S?: string;
+  /** A stop that came while the VM was still DEPLOYING: seconds to wait for it to leave DEPLOYING (then the stop is
+   * sent) before it is deleted (default 900). */
+  BREV_DEPLOYING_WAIT_S?: string;
+  /** Seconds between the tries of a stop Brev answers with a transient error (3 tries; default 3). */
+  BREV_STOP_RETRY_S?: string;
   /** The R2 weights store (r2weights.ts, docs/ops/r2-weights.md): its bucket (default fv-weights), the S3 endpoint
    * (default https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com; tests: a mock), the presigned URLs' lifetime in s
    * (default 3600, 300-21600), and published trees beyond scripts/gpu/weights-r2.tsv as JSON {dest: {rev, files,
@@ -124,6 +144,9 @@ export interface Env {
   WEIGHTS_R2_ENDPOINT?: string;
   WEIGHTS_R2_URL_TTL_S?: string;
   WEIGHTS_R2_EXTRA_TREES?: string;
+  /** JSON {"<volume id>": "<data centre>"}: network volumes the owner made as R2 caches for serverless endpoints with
+   * weights_source r2 (docs/ops/r2-weights.md §9.4; add-only, filled from R2). Unset: no cache volume (the default). */
+  FV_SLS_R2_CACHE_VOLUMES?: string;
   /** "1": the owner approves Hub downloads at boot (weights_source = hub). Unset: refused (CLAUDE.md: large downloads need approval). */
   FV_HUB_DOWNLOADS_APPROVED?: string;
   /** Tests: the URLs a GMI / Brev pod may report as its endpoint (default: Cloudflare quick tunnels, https://<x>.trycloudflare.com). */

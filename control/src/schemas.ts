@@ -15,6 +15,7 @@ import {
   CONFIG_PATH_RE,
   CPU_FLAVORS,
   CPU_VCPUS,
+  CUDA_VERSIONS,
   EDGE_FAMILIES,
   ENV_KEY_RE,
   ENV_KEY_MESSAGE,
@@ -67,7 +68,7 @@ const EU_ONLY = `EU only: ${AVAILABLE_REGIONS.map((r) => `${r} (${REGIONS[r].dc}
 const region = z
   .enum(AVAILABLE_REGIONS as [RegionId, ...RegionId[]], { error: () => EU_ONLY })
   .meta({ "x-dynamic": "regions" })
-  .describe("eu = volume jg48s6o1w0 in EUR-IS-1 (RTX PRO 6000). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
+  .describe("eu = volume bz0ofkfx45 in EU-RO-1 (RTX PRO 6000; H3 + LTX trees only, every other preset defaults to weights_source r2). us (US-CA-2) is unavailable: its weights volume was deleted 2026-10; EU only, see docs/ops/runpod-volumes.md.");
 const cpuFlavor = z.enum(CPU_FLAVORS, { error: (i) => enumMessage("a Runpod CPU flavor", i.input, CPU_FLAVORS) }).meta({ "x-dynamic": "cpu_flavors" }).describe("Runpod CPU flavor: 3/5 = generation; c compute, g general, m memory optimised.");
 const gpuType = z.enum(RUNPOD_GPU_TYPES, { error: (i) => enumMessage("a Runpod GPU type id", i.input, RUNPOD_GPU_TYPES) }).meta({ "x-dynamic": "gpu_types" }).describe("A Runpod GPU type id.");
 // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): where a pod runs, the provider's GPU product, its region, the weights.
@@ -160,6 +161,14 @@ export const PoolSpecZ = z
     provider_region: providerRegion.optional(),
     weights_source: weightsSource.optional(),
     hub_download_approved: z.boolean().optional().describe("weights_source hub: the owner approved the Hub download at boot (also needs the Worker's FV_HUB_DOWNLOADS_APPROVED=1)."),
+    data_centers: uniq(z.enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) }).meta({ "x-dynamic": "data_centers" }))
+      .min(1)
+      .max(30)
+      .optional()
+      .describe("Runpod GPU pods with weights_source r2 (no volume): the data centres to try, in order, instead of the region's (EU-RO-1). Any Runpod data centre."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) }))
+      .optional()
+      .describe("Runpod GPU pods: CUDA versions a host may offer (allowedCudaVersions). Default: none in the weights volume's data centre (EU-RO-1), 13.0 elsewhere (an older driver crashes the image); [] for no filter."),
   })
   .strict()
   .superRefine((p, ctx) => {
@@ -180,6 +189,8 @@ export const PoolSpecZ = z
       if (p.variant === "cpu") add(["variant"], "the cpu variant runs on CPU pods (compute: CPU)");
     }
     if (p.variant === "cpu" && p.models?.length) add(["models"], "the cpu variant runs the fake engine: fake_models, not models");
+    if (p.data_centers && (other || p.weights_source !== "r2")) add(["data_centers"], "data_centers is for Runpod pods with weights_source r2 (a volume pins its own data centre: regions)");
+    if (p.allowed_cuda && (other || p.compute === "CPU")) add(["allowed_cuda"], "allowed_cuda is for Runpod GPU pods");
     if (p.stale_after_s !== undefined && p.job_timeout_s !== undefined && p.stale_after_s > p.job_timeout_s) add(["stale_after_s"], `at most job_timeout_s (${p.job_timeout_s})`);
     const ids = new Set<string>();
     (p.models || []).forEach((m, i) => {
@@ -347,7 +358,11 @@ export const StandaloneLaunchZ = z
     cpu_flavors: uniq(cpuFlavor).min(1).optional().describe("CPU pods: flavors in order."),
     vcpu: z.literal(CPU_VCPUS).optional().meta({ "x-unit": "vCPU" }).describe("CPU pods: vCPUs."),
     region: region.optional().describe("Region (eu)."),
-    dc: z.enum(AVAILABLE_REGIONS.map((r) => REGIONS[r].dc) as [string, ...string[]], { error: () => EU_ONLY }).optional().meta({ "x-dynamic": "data_centers" }).describe("Or its data centre (EUR-IS-1)."),
+    dc: z
+      .enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) })
+      .optional()
+      .meta({ "x-dynamic": "data_centers" })
+      .describe("Or its data centre: EU-RO-1 (the weights volume's); with weights_source r2 (no volume) any Runpod data centre."),
     volume: z.boolean().optional().describe("Mount the region's weights volume at /workspace (GPU default on, CPU off)."),
     container_disk_gb: z.number().int().min(5).max(500).optional().meta({ "x-unit": "GB" }).describe("Container disk."),
     env: z
@@ -386,6 +401,12 @@ export const StandaloneLaunchZ = z
     if (x.compute === "CPU" && (x.gpu_types || x.gpu_type)) add("gpu_types", "a CPU pod takes no GPU types");
     if (x.compute === "GPU" && (x.cpu_flavors || x.vcpu !== undefined)) add("cpu_flavors", "a GPU pod takes no cpu_flavors / vcpu");
     if (x.region && x.dc && REGIONS[x.region].dc !== x.dc) add("dc", `region ${x.region} is ${REGIONS[x.region].dc}`);
+    // A data centre without a weights volume: only with the R2 weights store, never the volume.
+    const volDc = AVAILABLE_REGIONS.some((r) => REGIONS[r].dc === x.dc);
+    if (x.dc && !volDc && !(x.provider && x.provider !== "runpod")) {
+      if (x.weights_source !== "r2") add("dc", `${x.dc} has no weights volume: weights_source r2 (the R2 weights store, any data centre), or ${EU_ONLY}`);
+      else if (x.volume) add("volume", `${x.dc} has no weights volume: volume off with weights_source r2`);
+    }
     if (x.min_start !== undefined && x.balance_floor !== undefined && x.min_start < x.balance_floor) add("min_start", "at least balance_floor");
     for (const [k, v] of Object.entries(x.env || {})) {
       const s = typeof v === "string" ? v : v.secret ? null : v.value;

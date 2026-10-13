@@ -83,6 +83,7 @@
         kv("$/hr now", fmt$(e.live_dph, 3)),
         kv("billed", `${fmt$(e.cost_usd, 4)} (${dur((e.billed_ms || 0) / 1000)})`),
         kv("cold start", ms(st.cold_start_ms)),
+        kv("weights", e.spec.compute === "GPU" ? `${e.spec.weights_source || "volume"}${d.outlook && d.outlook.weights_source === "r2" ? ` · cache ${d.outlook.cache.state}` : ""}` : "–"),
         kv("warm queue wait", ms(st.warm_delay_ms)),
         kv("exec (median)", ms(st.exec_ms)),
         kv("backstop", e.deadline && live ? `${e.deadline_action} ${until(e.deadline)}` : "–"),
@@ -118,7 +119,7 @@
       ),
       h("p", { class: "small muted" }, "Scaling up (or creating) needs the balance above the floor plus the serverless margin. The cron scales every endpoint to 0 below the floor, and runs the backstop at its time."),
     );
-    main.replaceChildren(head, ctl, servesCard(e, d), invokeCard(e, d.serving), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
+    main.replaceChildren(head, ctl, servesCard(e, d), outlookCard(e, d), invokeCard(e, d.serving), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
     every(10000, async () => {
       if (!location.hash.includes(`ep=${id}`)) return;
       const f = await api(`/api/serverless/${encodeURIComponent(id)}`).catch(() => null);
@@ -126,6 +127,28 @@
         if (!document.activeElement || !main.contains(document.activeElement) || document.activeElement.tagName === "BUTTON") route();
       }
     });
+  }
+
+  /** The cold start to expect (image pull + R2 fetch + load) and the last boots' breakdown (serverless/weights.ts slsOutlook). */
+  function outlookCard(e, d) {
+    const host = h("div", { class: "small", id: "sls-outlook" }, "loading…");
+    fvEditor().then((E) => host.replaceChildren(...E.outlookLine(d.outlook))).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
+    const boots = d.boots || [];
+    const sec = (a, b) => (a && b ? `${Math.round((b - a) / 1000)} s` : "–");
+    return card("Cold start",
+      host,
+      boots.length
+        ? table([
+            { label: "worker", get: (b) => b.worker_id },
+            { label: "booted", get: (b) => new Date(b.boot_at).toISOString().slice(11, 19) },
+            { label: "cache", get: (b) => b.cache || "?" },
+            { label: "fetched", get: (b) => (b.cache === "miss" && b.fetch_bytes ? `${(b.fetch_bytes / 1e9).toFixed(1)} GB` : "–") },
+            { label: "fetch", get: (b) => (b.fetch_s != null ? `${b.fetch_s} s` : sec(b.fetch_start, b.fetch_end)) },
+            { label: "MB/s", get: (b) => b.fetch_mbps ?? "–", num: true },
+            { label: "to fv-serve", get: (b) => sec(b.boot_at, b.serve_at) },
+            { label: "", get: (b) => b.error || "" },
+          ], boots, "")
+        : h("p", { class: "small muted" }, e.spec.weights_source === "r2" ? "No boot reported yet." : "weights_source volume: workers report no boot breakdown."));
   }
 
   /** What the endpoint serves, derived from its preset or config (src/serverless/serves.ts); checked against a running worker on demand. */

@@ -1,0 +1,27 @@
+## ls -la /workspace
+total 5862
+drwxr-xr-x 3 root root 3000892 Oct 13 08:29 .
+drwxr-xr-x 1 root root      76 Oct 13 08:39 ..
+drwxr-xr-x 3 root root 3000892 Oct 13 08:29 weights
+## ls -la /workspace/weights
+total 8793
+drwxr-xr-x  3 root root 3000892 Oct 13 08:29 .
+drwxr-xr-x  3 root root 3000892 Oct 13 08:29 ..
+drwxr-xr-x 15 root root 3000892 Oct 13 08:29 .r2-partial
+## du -sb /workspace/weights
+462451207744	/workspace/weights
+## ls -la /workspace/weights /workspace/weights/.r2-partial
+ls: cannot access '/workspace/weights/.r2-partial': No such file or directory
+/workspace/weights:
+total 29561
+drwxr-xr-x 11 root root 3043069 Oct 13 08:47 .
+drwxr-xr-x  3 root root 3043069 Oct 13 08:29 ..
+drwxr-xr-x  4 root root 3000635 Oct 13 08:40 FastH3-4-step-Preview-v1-LoRA
+drwxr-xr-x  4 root root 2035569 Oct 13 08:40 auxiliary
+drwxr-xr-x 10 root root 3020555 Oct 13 08:47 h3-base
+drwxr-xr-x  5 root root 3006431 Oct 13 08:43 h3-ref2va
+drwxr-xr-x  2 root root 2037149 Oct 13 08:40 h3-to-ltx
+drwxr-xr-x 10 root root 3011652 Oct 13 08:45 ltx25
+drwxr-xr-x  3 root root 3003536 Oct 13 08:42 ltx25-dev
+drwxr-xr-x  2 root root 3000121 Oct 13 08:40 ltx25-ic-lora-ingredients
+drwxr-xr-x  3 root root 2065860 Oct 13 08:40 upscaler

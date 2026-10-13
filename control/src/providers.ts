@@ -25,9 +25,9 @@
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
-import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive } from "./brev";
+import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine } from "./brev";
 import { recordBoot } from "./boottime";
-import { adoptAndStop, bootEstimate, brevDiskGb, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
+import { adoptAndStop, bootEstimate, brevDiskGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
@@ -39,7 +39,10 @@ import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
 import { POOL_PRESETS } from "./presets";
 import { HttpError, now, parseJson, putSetting, rateLimit, utcDay } from "./util";
 import { AUX_FILES, HUB_TREES } from "./weights-sources";
-import { R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
+import { REGIONS } from "./cluster/regions";
+import { missingTrees } from "./volumes";
+import { DRIVER_CHECK_SH } from "./driver-check";
+import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 
 // ---------------------------------------------------------------- ids
 const KEY_RE = /^(gmi|brev):(.+)$/;
@@ -170,7 +173,8 @@ const BREV: ComputeProvider = {
         name: w.name,
         state: w.status === "RUNNING" ? "running" : w.status === "FAILURE" ? "failed" : ["STOPPED", "STOPPING", "DELETING"].includes(w.status) ? "stopped" : "starting",
         raw: w.status,
-        reason: w.health,
+        // Brev's statusMessage first (why a start did not run, e.g. capacity), then its latest start task (environment.tasks: empty statusMessage, the reason there), then its health.
+        reason: [w.statusMessage, brevTaskLine(w.lastStart), w.health].filter(Boolean).join("; ") || null,
         gpu: w.instanceType,
         createdAt: ms(w.createdAt),
       }));
@@ -179,9 +183,9 @@ const BREV: ComputeProvider = {
     // The startup script only installs the per-boot bootstrap; the launch itself (image + env) is the run script it
     // fetches from fv-control (brev-park.ts), so a parked VM restarted later runs that later launch.
     const run = brevRun(req.image, req.env);
-    const info = await brev.type(env, req.gpu);
-    // Owner rule 2026-10-11: a Brev VM is stopped, never deleted by fv-control; a type Brev cannot stop is refused.
-    if (info && !info.stoppable) throw new Error((await brevStoppableIssue(env, req.gpu)) || `${req.gpu} is not stoppable`);
+    // Owner decision 2026-10-13: a type Brev cannot stop is created like any other (its stop fails, so a stop deletes
+    // it: brev-park.ts, owner rule 2026-10-13); its price is recorded for the ledger.
+    const { usd_per_hr, info } = await brevPriceLive(env, req.gpu);
     const trees = req.weights?.source === "hub" || req.weights?.source === "r2" ? req.weights.trees : [];
     const disk = brevDiskGb(trees);
     const token = newBootToken();
@@ -197,6 +201,7 @@ const BREV: ComputeProvider = {
       cluster_id: req.clusterId ?? null,
       token,
       run,
+      usd_per_hr,
     });
     return { id };
   },
@@ -260,7 +265,8 @@ export interface BudgetCheck {
   projected: number;
 }
 /** No balance API on GMI / Brev: this month's spend + the running pods, the parked instances' storage and `addDph`
- * until the deadline must stay within the budget. */
+ * until the deadline must stay within the budget. (A Brev type that cannot be stopped ends at the deadline too: its
+ * stop fails and deletes it, owner rule 2026-10-13.) */
 export async function budgetCheck(env: Env, p: OtherProviderId, addDph: number, hours: number): Promise<BudgetCheck> {
   const impl = providerImpl(p);
   const budget = impl.budget(env);
@@ -308,14 +314,25 @@ export function poolTrees(pool: PoolSpec): string[] {
   for (const p of POOL_PRESETS) if (p.pool.variant === pool.variant && ((pool.config && p.pool.config === pool.config) || (pool.config_toml && p.pool.config_toml === pool.config_toml))) p.weights.forEach((w) => out.add(w));
   return [...out].sort();
 }
+/** The pre-quantized trees of the pool's preset (presets.ts PoolPreset.prequant): r2 fetches them, the Hub cannot. */
+export function poolPrequant(pool: PoolSpec): string[] {
+  const p = POOL_PRESETS.find((x) => x.pool.variant === pool.variant && ((pool.config && x.pool.config === pool.config) || (pool.config_toml && x.pool.config_toml === pool.config_toml)));
+  return [...(p?.prequant ?? [])];
+}
 /** A GMI / Brev pool's weights source: its own, else r2 when its config loads trees and every one is published in
- * the R2 weights store (r2weights.ts), else none. Runpod pools: their own, else the volume. */
+ * the R2 weights store (r2weights.ts), else none. Runpod GPU pools: their own, else the volume when it holds every
+ * tree (volumes.ts: the 500 GB EU volume has H3 + LTX only, owner decision 2026-10-13), else r2 when every tree is
+ * published, else the volume (its launch check names the missing trees). */
 export function weightsSource(pool: PoolSpec, env?: Env): "volume" | "hub" | "r2" | "none" {
   if (pool.weights_source) return pool.weights_source;
-  if (!isOtherPool(pool)) return "volume";
   const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
   const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
-  return trees.length && trees.every((t) => pub[t]) ? "r2" : "none";
+  const published = trees.length > 0 && trees.every((t) => pub[t]);
+  if (!isOtherPool(pool)) {
+    if (pool.compute === "CPU" || pool.volume === true) return "volume";
+    return (missingTrees(REGIONS.eu.volume, trees) ?? []).length && published ? "r2" : "volume";
+  }
+  return published ? "r2" : "none";
 }
 const R2_DEFAULT_TREES = () => r2Trees({} as Env);
 export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
@@ -324,6 +341,11 @@ export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
   if (source === "none") return { source, trees: [], unsupported: [], tsv: "" };
   const trees = poolTrees(pool).filter((t) => t !== "auxiliary");
   const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
+  // r2: the presets' pre-quantized trees too (published ones; recipe-trees.ts): the Hub has no source for them.
+  if (source === "r2") for (const t of poolPrequant(pool)) if (pub[t] && !trees.includes(t)) trees.push(t);
+  // r2: the aux files come with the weights as their R2 trees (not from GitHub / PyTorch); the boot's aux rows below
+  // then only check them by SHA-256 (a file missing or different still comes from its pinned URL).
+  if (source === "r2" && trees.length && env) for (const t of r2AuxTrees(env)) if (!trees.includes(t)) trees.push(t);
   const unsupported = trees.filter((t) => (source === "hub" ? !HUB_TREES[t] : !pub[t]));
   // r2: the trees come from the fetcher's plan (fv-control's /ingest/v1/weights-plan), so only the aux rows here.
   const rows = source === "r2" ? [] : trees.filter((t) => HUB_TREES[t]).map((t) => ["tree", t, HUB_TREES[t]!.repo, HUB_TREES[t]!.revision, HUB_TREES[t]!.globs.join(" ")].join("\t"));
@@ -331,50 +353,46 @@ export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
   for (const a of AUX_FILES) rows.push(["aux", a.path, a.url, a.sha256, String(a.size)].join("\t"));
   return { source, trees, unsupported, tsv: rows.join("\n") + "\n" };
 }
-/** The launch form's Brev instance types: the allowed stoppable ones (a type Brev cannot stop is refused at launch:
- * owner rule 2026-10-11, brevStoppableIssue), each with its $/hr, deploy time and parked / held instances. A type the
- * live list does not show (or an unreachable list) stays, after the stoppable ones. */
-export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; parked: number }[]> {
+/** The launch form's Brev instance types: every allowed one, stoppable first (owner decision 2026-10-13: a type Brev
+ * cannot stop is offered like any other, its detail saying that a stop deletes it: owner rule 2026-10-13),
+ * each with its $/hr, deploy time and parked / held instances. A type the live list does not show (or an unreachable
+ * list) stays, last. */
+export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; usd_per_hr: number | null; parked: number }[]> {
   const types = await brev.types(env).catch(() => []);
   const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state IN ('parked', 'held') GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
   const out = brevInstanceTypes(env).map((id) => {
     const t = types.find((x) => x.type === id);
     const n = Number(parked.find((p) => p.instance_type === id)?.n || 0);
     const price = brevPrice(env, id) ?? t?.usd_per_hr ?? null;
-    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", t ? "stoppable: stopped and kept on stop (reused by the next launch)" : "not in Brev's list", ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked / held`] : [])];
-    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, parked: n };
+    const stop = !t ? "not in Brev's list" : t.stoppable ? "stoppable: stopped and kept on stop (reused by the next launch)" : "WARNING: can't be stopped: a stop deletes it (its disk and weights go too)";
+    const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", stop, ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked / held`] : [])];
+    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, usd_per_hr: price, parked: n };
   });
-  return out.filter((o) => o.stoppable !== false).sort((a, b) => Number(b.stoppable === true) - Number(a.stoppable === true));
+  const rank = (o: { stoppable: boolean | null }) => (o.stoppable === true ? 0 : o.stoppable === false ? 1 : 2);
+  return out.sort((a, b) => rank(a) - rank(b));
 }
-/** Owner rule 2026-10-11 (rule brev_stoppable_only): fv-control never deletes a Brev VM on its own, so a type Brev cannot
- * stop (its stop would be a delete) is refused at launch and scale. The message names the stoppable alternatives from
- * the live list; null when the type is stoppable or the list does not know it (or is unreachable). */
-export async function brevStoppableIssue(env: Env, gpu: string): Promise<string | null> {
-  const types = await brev.types(env).catch(() => null);
-  const t = types?.find((x) => x.type === gpu);
-  if (!t || t.stoppable) return null;
-  const alts = types!.filter((x) => x.stoppable && brevInstanceTypes(env).includes(x.type)).map((x) => x.type);
-  return `${gpu} is not stoppable on NVIDIA Brev: refused (rule brev_stoppable_only: a Brev VM is stopped and kept on every stop, never deleted by fv-control, owner 2026-10-11; this type could only be deleted). Stoppable allowed types: ${alts.length ? alts.join(", ") : "none in BREV_INSTANCE_TYPES (the owner adds one)"}`;
+/** Owner decision 2026-10-13 ("On Brev we don't want to filter out non-stoppable VMs; we'll just treat them like any
+ * other Brev VM"): the warning a type Brev cannot stop gets (launch form, validator, launch log); null when the type is
+ * stoppable or the live list does not know it (or is unreachable). */
+export async function brevNoStopNote(env: Env, gpu: string): Promise<string | null> {
+  const { usd_per_hr, info } = await brevPriceLive(env, gpu).catch(() => ({ usd_per_hr: null, info: null }));
+  if (!info || info.stoppable) return null;
+  const price = usd_per_hr !== null ? ` ($${usd_per_hr.toFixed(2)}/hr while it runs)` : "";
+  return `${gpu} can't be stopped on NVIDIA Brev: a stop (yours, the deadline, the budget floor, a scale-down or roll) deletes the VM${price}: its disk and weights go too, so its next launch downloads them again (owner rule 2026-10-13: a Brev VM whose stop does not succeed is deleted)`;
 }
-/** brevStoppableIssue for every Brev pool of a spec (or the pools named), path-anchored at provider_gpu. */
-export async function brevStoppableIssues(env: Env, spec: { pools: PoolSpec[] }, only?: string[]): Promise<{ path: (string | number)[]; message: string }[]> {
+/** brevNoStopNote for every Brev pool of a spec, path-anchored at provider_gpu (warnings: nothing is refused). */
+export async function brevNoStopWarnings(env: Env, spec: { pools: PoolSpec[] }): Promise<{ path: (string | number)[]; message: string }[]> {
   const out: { path: (string | number)[]; message: string }[] = [];
   for (const [i, p] of spec.pools.entries()) {
-    if (poolProvider(p) !== "brev" || !p.provider_gpu || (only && !only.includes(p.id))) continue;
-    const m = await brevStoppableIssue(env, p.provider_gpu);
-    if (m) out.push({ path: ["pools", i, "provider_gpu"], message: m });
+    if (poolProvider(p) !== "brev" || !p.provider_gpu) continue;
+    const m = await brevNoStopNote(env, p.provider_gpu);
+    if (m) out.push({ path: ["pools", i, "provider_gpu"], message: `WARNING: ${m}` });
   }
   return out;
 }
-/** 400 (with the issues) when a Brev pool of the spec (or of the pools named) uses a type Brev cannot stop. */
-export async function assertBrevStoppable(env: Env, spec: { pools: PoolSpec[] }, only?: string[]): Promise<void> {
-  if (!spec.pools.some((p) => poolProvider(p) === "brev")) return;
-  const issues = await brevStoppableIssues(env, spec, only);
-  if (issues.length) throw new HttpError(400, issues.map((x) => `${x.path.join(".")}: ${x.message}`).join("; "), { issues });
-}
 /** A Brev pool's warm / cold outlook (the launch form, the planner): a parked / held instance of the type restarts
  * (warm when it holds some of the trees, else reuse: they download onto it); else every tree downloads (cold). A
- * non-stoppable type is refused (brevStoppableIssue). */
+ * type Brev cannot stop is always cold (its stop deletes it), the note saying so (brevNoStopNote). */
 export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boolean; stoppable: boolean | null; instance: string | null; download_gb: number; boot_s: number; note: string } | null> {
   if (poolProvider(pool) !== "brev" || !pool.provider_gpu) return null;
   const plan = weightsPlan(pool, env);
@@ -386,11 +404,13 @@ export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boo
   const min = (s: number) => `~${Math.max(1, Math.round(s / 60))} min`;
   if (!trees.length) {
     const e = bootEstimate(info, []);
-    return { warm: false, stoppable, instance: null, download_gb: 0, boot_s: e.boot_s, note: `no weights: boot ${min(e.boot_s)}` };
+    const ns = stoppable === false ? await brevNoStopNote(env, pool.provider_gpu) : null;
+    return { warm: false, stoppable, instance: null, download_gb: 0, boot_s: e.boot_s, note: `no weights: boot ${min(e.boot_s)}${ns ? `; WARNING: ${ns}` : ""}` };
   }
   if (stoppable === false) {
     const e = bootEstimate(info, trees, [], r2);
-    return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note: (await brevStoppableIssue(env, pool.provider_gpu)) || `${pool.provider_gpu} is not stoppable: refused` };
+    const ns = await brevNoStopNote(env, pool.provider_gpu);
+    return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note: `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB${plan.source === "r2" ? " from R2" : " from the Hub"}): boot ${min(e.boot_s)}; WARNING: ${ns || `${pool.provider_gpu} can't be stopped: a stop deletes it (its disk and weights go too)`}` };
   }
   // Reuse (brev-park.ts): a parked / held instance of the type, the one holding most trees first; the missing ones download.
   const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
@@ -414,7 +434,9 @@ export function launchTrees(plan: WeightsPlan | undefined, env?: Env): TreeRevs 
   if (plan.source === "hub") return Object.fromEntries(plan.trees.filter((t) => HUB_TREES[t]).map((t) => [t, HUB_TREES[t]!.revision]));
   if (plan.source === "r2") {
     const pub = env ? r2Trees(env) : R2_DEFAULT_TREES();
-    return Object.fromEntries(plan.trees.filter((t) => pub[t]).map((t) => [t, pub[t]!.rev]));
+    // The aux trees are not what makes a VM warm (0.37 GB, checked by SHA-256 at every boot): left out, so a VM parked
+    // with Hub trees (aux by URL) matches an r2 launch of the same trees.
+    return Object.fromEntries(plan.trees.filter((t) => pub[t] && !R2_AUX_TREES.includes(t)).map((t) => [t, pub[t]!.rev]));
   }
   return {};
 }
@@ -571,7 +593,7 @@ report() {
   done
 }
 fail() { say "FAILED: $1"; report failed "" "$1"; sleep 600; exit 1; }
-if ! command -v curl >/dev/null 2>&1; then
+${DRIVER_CHECK_SH}if ! command -v curl >/dev/null 2>&1; then
   { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates; } >/fvstate/apt.log 2>&1 || fail "no curl"
 fi
 # ---- preflight: the binary and the config (as WORKER_BOOT makes it), checked before the weights and the tunnel.
@@ -622,6 +644,7 @@ ${WEIGHTS_SH}${TUNNEL_SH}# ---- the deadline watchdog (fv-control's cron deletes
 ) &
 # ---- fv-serve (its config was checked before the weights)
 say "fv-serve: $FV_SERVE_BIN --config /fv-worker.toml (from \${FV_WORKER_TOML_B64:+inline FV_WORKER_TOML_B64}\${FV_WORKER_TOML_B64:-$FV_WORKER_CONFIG}); $("$FV_SERVE_BIN" --version 2>&1 | head -n 1)"
+if [ -n "\${FASTVIDEO_STREAMING_FETCH:-}" ]; then date +%s.%N > "\${FV_R2_STATE:-/fvstate}/serve-start"; say "fv-serve starts while the weights arrive (its loader waits on each file's progress map)"; fi
 exec "$FV_SERVE_BIN" --config /fv-worker.toml`;
 
 /** A Brev VM's run script for one launch (brev-park.ts): our image running PROVIDER_BOOT with the pod's env. */
@@ -641,10 +664,10 @@ export async function deleteOtherPod(env: Env, podId: string): Promise<boolean> 
   if (!inst) return true;
   return providerImpl(inst.provider).remove(env, inst);
 }
-/** Releases a GMI / Brev pod. GMI: deleted. Brev (owner rule 2026-10-11: fv-control never deletes a Brev VM on its
- * own): every stop stops the VM, parked (weights complete) or held (with why), or left running as stop_failed when
- * Brev refuses the stop (alerted); one with no keep-on-stop record is stopped and recorded held. Only `manual` (the
- * owner's `pod delete` of a standalone pod) deletes a Brev VM. */
+/** Releases a GMI / Brev pod. GMI: deleted. Brev: every stop stops the VM, parked (weights complete) or held (with
+ * why), never deleted once the stop succeeded (owner rule 2026-10-11); a stop that does not succeed deletes it (owner
+ * rule 2026-10-13: "deleted"); one still DEPLOYING is stop_pending (the cron's). One with no keep-on-stop record is
+ * stopped and recorded held. `manual` (the owner's `pod delete` of a standalone pod) deletes a Brev VM. */
 export async function releaseOtherPod(env: Env, podId: string, o: { manual?: boolean; why?: string } = {}, log?: (m: string) => void): Promise<Release> {
   if (splitKey(podId)?.provider === "brev") {
     const r = await releaseBrev(env, podId, o, log);
@@ -652,6 +675,9 @@ export async function releaseOtherPod(env: Env, podId: string, o: { manual?: boo
     if (!o.manual) {
       const inst = await findInstance(env, podId);
       if (!inst) return "deleted"; // gone (or in the owner's delete)
+      // A workspace fv-control already deleted (a failed stop, the owner) that Brev still lists for a moment: gone.
+      const known = await brevRowById(env, inst.id);
+      if (known && (known.state === "deleted" || known.state === "deleting" || known.state === "gone")) return "deleted";
       return adoptAndStop(env, { workspace_id: inst.id, pod_id: podId, name: inst.name, instance_type: inst.gpu || "?" }, o.why || "stop", log);
     }
   }
@@ -661,7 +687,7 @@ export async function releaseOtherPod(env: Env, podId: string, o: { manual?: boo
   return "deleted";
 }
 /** A GMI / Brev pod's state for the boot watch; null when the provider no longer lists it. */
-export async function otherPodState(env: Env, podId: string): Promise<{ desiredStatus: string; uptimeS: number | null; state: InstanceState; reason: string | null } | null> {
+export async function otherPodState(env: Env, podId: string): Promise<{ desiredStatus: string; uptimeS: number | null; state: InstanceState; reason: string | null; raw?: string } | null> {
   const inst = await findInstance(env, podId);
   if (!inst) return null;
   return {
@@ -669,6 +695,7 @@ export async function otherPodState(env: Env, podId: string): Promise<{ desiredS
     uptimeS: inst.createdAt ? Math.max(0, Math.round((now() - inst.createdAt) / 1000)) : null,
     state: inst.state,
     reason: inst.reason,
+    raw: inst.raw,
   };
 }
 export async function otherPodLogs(env: Env, podId: string): Promise<string[]> {
@@ -713,7 +740,7 @@ export const reportLines = (h: { phase: string; detail: string; at: number }[], 
 ];
 
 /** A starting GMI / Brev pod's boot diagnosis (the `up` wait): the provider's state and the pod's own last report. */
-export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
+export async function otherPodDiag(env: Env, podId: string, rt: { state: InstanceState; reason: string | null; raw?: string } | undefined): Promise<{ phase: string; detail: string; fatal: boolean; replace?: boolean } | null> {
   const rep = await lastReport(env, podId);
   if (rep?.phase === "failed") return { phase: "boot failed", detail: rep.detail || "the pod reported a failure", fatal: true };
   if (rep?.phase === "host_failed") return { phase: "host failed", detail: rep.detail || "the VM's host script reported a failure", fatal: true };
@@ -722,7 +749,7 @@ export async function otherPodDiag(env: Env, podId: string, rt: { state: Instanc
   if (!rt) return null;
   // A parked Brev instance being started again: stopped / starting is expected until BREV_RESTART_TIMEOUT_S.
   if (splitKey(podId)?.provider === "brev") {
-    const w = await restartDiag(env, podId, rt.state);
+    const w = await restartDiag(env, podId, rt.state, [rt.raw, rt.reason].filter(Boolean).join(": ") || null);
     if (w) return w;
   }
   if (rt.state === "failed") return { phase: "provider error", detail: rt.reason || "the provider reports an error", fatal: true };
@@ -815,7 +842,7 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
   spec.pools.forEach((p, i) => {
     if (!isOtherPool(p)) {
       // A Runpod pool may fetch from the R2 weights store onto its container disk instead of mounting the volume.
-      if (p.weights_source !== "r2") return;
+      if (weightsSource(p, env) !== "r2") return;
       const plan = weightsPlan(p, env);
       const off = r2Cfg(env).off;
       if (off) out.push({ path: ["pools", i, "weights_source"], message: `weights_source r2: ${off}` });

@@ -261,7 +261,7 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   `<variant>-sha-<sha>`). A ref gives one all-in-one image. Images are
   resolved to digests at start, and `:stable` falls back to `:latest` as
   in the scripts.
-- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000). The
+- `regions`: `eu` is volume `bz0ofkfx45` in EU-RO-1 (RTX PRO 6000; H3 + LTX trees only since 2026-10-13, other presets default to `weights_source r2`). The
   default and the only available region is `["eu"]`. `us` (US-CA-2) is
   unavailable: Runpod deleted its weights volume (`s2k01690bi`) on about
   2026-10-05, and the owner chose EU only (2026-10-06). A spec that names
@@ -867,13 +867,78 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET /api/logs?pod=&q=&level=&since=&source=&after_id=`, `/api/logs/download?pod=&day=`, `/api/logs/tail?pod=` (WebSocket) | logs |
 | `GET /api/releases`, `/api/images/tags?filter=`, `/api/github/ci`, `POST /api/github/release` | channels, drift, registry, GHCR tags, CI on main, promote/rollback dispatch |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/<id>`, `GET /api/audit` | tokens and audit |
-| `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` | JSON Schemas and live values (section 13) |
+| `GET /api/schemas`, `/api/schemas/<name>`, `/api/schemas/dynamic?cluster=` (`&live=0`, `?provider=<p>`, `?images=1`) | JSON Schemas and live values (section 13; the launch forms load per provider) |
+| `GET /api/providers/<runpod\|gmi\|brev>/instance-types` (`?refresh=1`) | every instance type the provider lists, normalized, with whether fv-control can launch it (the launch screen's table; "Instance types" below) |
 | `GET/PUT /api/docs/<kind>/<id>`, `POST …/validate`, `POST …/plan`, `GET …/history`, `POST …/restore` | editable documents with versions (section 13) |
 | `POST /api/collect` | run the collector now |
 | `POST /ingest/v1/logs` | log ingest (cluster ingest token) |
 
 The CLI `scripts/serve/fv-control.sh` wraps these; run it without
 arguments for help.
+
+### Instance types
+
+`GET /api/providers/<p>/instance-types` (`src/instance-types.ts`; owner
+2026-10-13) answers every type the provider lists, not only the allowed
+ones, one normalized row each:
+
+- **Runpod**: one row per (GPU type, data centre) that Runpod's
+  `dataCenters { gpuAvailability }` lists, plus one row (no region) per GPU
+  type no data centre lists. If the data-centre query fails, one row per GPU
+  type with its global stock, and `error` says so.
+- **Brev**: every row of `api/instances/alltypesavailable/{org}` (about 590
+  on 2026-10-13, CPU-only ones included).
+- **GMI**: every container product of `GET /v1/containers/products` (all
+  IDCs), one row per product and IDC.
+
+The answer is `{provider, enabled, reason, at, cached, refresh_limited,
+live_ok, error, rows, counts: {total, supported, available}}`. The rows are
+sorted launchable first, then available, then cheapest. The upstream list is
+cached per isolate: Runpod 5 min, GMI 60 s, Brev 1 h (the same cache the
+planner uses). `?refresh=1` reads the upstream again. A provider may be
+refreshed at most once per 30 s per isolate. A faster refresh gets the
+cached list, with `refresh_limited` set to the seconds left. If a refresh
+fails, the cached list is served and `error` says so. A provider that is off
+(its secrets unset) lists its configured types, none launchable. An
+unreachable list gives `live_ok: false`, `error`, and the configured types,
+none launchable.
+
+| column | field(s) | meaning |
+|---|---|---|
+| name | `name` (`id` is unique per table: Runpod `<gpu>@<dc>`, GMI `<product>@<idc>`) | the provider's own id: Runpod GPU type id, Brev instance type, GMI product |
+| spec | `spec` | short summary: `<n>× <model> <VRAM> GB · <vCPU> vCPU · <RAM> GB RAM` (Runpod: `≥`, the least a one-GPU pod gets) |
+| available | `available`, `stock` | the provider says it can be had now: Runpod per data centre (`available` and a High / Medium / Low stock), Brev `is_available`, GMI `valid`; null is not reported |
+| cost | `usd_per_hr`, `usd_per_gpu_hr` | on-demand $/hr of the instance and per GPU. Runpod: one GPU, Secure Cloud (fv-control creates Secure Cloud pods; a type with no Secure price is not launchable). Brev: `base_price` (or the owner's `BREV_PRICES`). GMI: `price ÷ GMI_PRICE_DIVISOR` |
+| model | `gpu_model` | the GPU model as the provider names it (Runpod's display name: "H100 SXM"; Brev "L40S"; GMI `gpuModel`) |
+| model family | `model_family` | the GPU's architecture (`src/gpu-family.ts`): Blackwell, Hopper, Ada Lovelace, Ampere, Turing, Volta, Pascal, Kepler (NVIDIA); CDNA 4 / CDNA 3 / CDNA 2 / RDNA (AMD); null when no rule knows the name |
+| RAM | `ram_gb` | system memory, GB |
+| vCPU | `vcpu` | |
+| gpu | `gpu`, `gpu_count` | `<count> × <model>` (`-` without a GPU) |
+| gpu family | `gpu_family`, `gpu_vendor` | the GPU's market segment (`src/gpu-family.ts`): `datacenter` (server parts: H100, A100, L40S, L4, T4, B200, RTX PRO … Server Edition, MI300X), `workstation` (RTX A6000, RTX 6000 Ada, RTX PRO … Blackwell Workstation / Max-Q), `consumer` (GeForce RTX 3090 / 4090 / 5090) |
+| VRAM | `vram_gb`, `vram_total_gb` | per GPU and in all. GMI's product spec does not give it, so it comes from a small model table (`KNOWN_VRAM_GB`) |
+| storage type | `storage_type`, `storage_kind` | as the provider reports it. Runpod: container disk, plus the network volume where fv's weights volume is (EUR-IS-1). Brev: its classes (gp3, gp2, io1 …, ssd, nvme, network-ssd; up to 3 shown, then `+n`). GMI: its spec's disks. `fixed`: the size comes with the type; `elastic`: chosen at create |
+| storage size | `storage_gb`, `storage_min_gb`, `storage_max_gb` | the fixed size, or the default and the range (Runpod container disk: default 40, 5–500 GB) |
+| region | `region`, `cloud` | data centre / location / IDC, and the cloud behind it (Brev `provider/cloud`: aws, gcp, nebius, shadeform/massedcompute …; Runpod Secure Cloud and the DC's place; GMI) |
+| stoppable (Brev) | `stoppable` | Brev's `stoppable` (null for the others) |
+| deploy (Brev) | `deploy_s` | `estimated_deploy_time`, seconds |
+| launchable | `supported`, `reason`, `launch` | fv-control can launch it from the launch form. If not, `reason` gives every reason: the provider is off; no GPU (CPU-only); an AMD GPU (the images need CUDA); arm64 only; not in `BREV_INSTANCE_TYPES` / `GMI_PRODUCTS`; for Runpod a type not in `RUNPOD_GPU_TYPES`, no Secure Cloud price, an unlisted data centre, or no fv weights volume in the data centre (the form places Runpod GPU pods in EUR-IS-1; `weights_source r2` pods may use any data centre through the JSON / CLI). `launch` is the form fields a click sets (`{gpu_types, region}` or `{provider_gpu[, provider_region]}`) |
+
+The launch form (`ui/forms/itable.ts`) shows the picked provider's table.
+Its columns sort (click a header to cycle ascending, descending, off; the
+header carries `aria-sort`). It has free-text search, filters (available,
+launchable, model family, GPU family, region, min VRAM, max $/hr, stoppable
+on Brev), and pages of 10 / 25 / 50 / 100 rows. Clicking a launchable row,
+or pressing Enter / Space on it, selects it. The selection stays across
+sort, filter, page and refresh, and is shown above the table with a Clear
+button. A non-launchable row shows its reason on hover and cannot be
+selected. The table loads when its provider is picked (each pick) and when
+its **Refresh** button is clicked (`?refresh=1`). It shows when the list
+was read and whether it came from the cache; switching provider cancels a
+load in flight. Only the standalone launch form has the table: the cluster
+pool editor and the serverless create form keep their GPU-type controls
+(they share none of this component). Screenshots:
+`docs/control/img/instance-table-{runpod,brev,gmi}.png` (simulated
+upstreams).
 
 ## 11. Tests
 
@@ -952,7 +1017,16 @@ horizontal scroll at 390 px. `test/ui/cancel.mjs` (run by `explorer.mjs`):
 the Jobs card (cancel one, all queued, by id with an invalid id refused
 inline), the Jobs page at phone width, and the serverless Queue card (cancel,
 purge with a wrong then the right name), every dialog passing the coverage
-audit. Screenshots go to `control/test-results/` (`SHOTS=<dir>`).
+audit. `test/ui/lazy-providers.mjs`: the launch screen asks no provider on
+open, and each pick asks only that provider's details and table.
+`test/ui/instance-tables.mjs`: the instance-type tables. It checks that a
+table loads only on a pick, then sort, search, every filter and the pages.
+It checks that a launchable row's click or Enter selects it, that the
+selection stays across sort, filter and page, and that a non-launchable row
+is refused. It checks that the launch posts the selected type, that Refresh
+asks `?refresh=1` and that a second refresh is rate-limited. Last, it checks
+that a provider switch swaps the tables and cancels a stale load.
+Screenshots go to `control/test-results/` (`SHOTS=<dir>`).
 
 **fv-serve:** the `log_ship` unit tests (config from env, JSON lines with
 span fields, dropping when full), run on the build pod.
@@ -1071,6 +1145,35 @@ the same valid and invalid documents and checks that they agree.
 - image variants and fake models;
 - the cluster's pools;
 - env keys in use, and the reserved keys.
+
+The launch forms (standalone, serverless create, the cluster editor) do
+not ask for all of that on open (owner, 2026-10-12: the launch screen was
+slow). They load the lists without the live ones, then each provider's
+details only once that provider is picked:
+
+- `?live=0`: no upstream call. You get the presets, regions, channels
+  (from fv-jobs), the provider list (on or off from the config) and the
+  configured GMI / Brev types without prices. There are no Runpod GPU
+  types and no GHCR commits.
+- `?provider=runpod|gmi|brev`: that provider's details and nothing
+  else. Runpod gives its GPU types with $/hr and stock. GMI gives its
+  products with price and availability in the default IDC. Brev gives
+  its instance types (stoppable ones first, each with the live price and,
+  for a type Brev cannot stop, a warning that a stop deletes it: owner rule 2026-10-13), its parked
+  or held VMs and storage $/day. GMI and Brev also give the month's spend
+  against the budget. The upstream lists are cached in the Worker
+  (Runpod 5 min, Brev 1 h, GMI 60 s), with one call in flight per list.
+  The forms keep each provider's answer for the page session and cancel
+  a load when the pick changes first.
+- `?images=1`: the commits with images (releases and GHCR sha tags),
+  asked when a form's image source is a git commit.
+
+`GET /api/providers?provider=<id>` returns one provider's view.
+`POST /api/standalone/validate?live=0` checks a launch request (its
+rules and the name) without calling any provider. The form uses it until
+a provider is picked, and it debounces and cancels stale checks. With no
+parameters, both endpoints return the full view, as before (the CLI and
+the JSON editors).
 
 ### Documents API
 

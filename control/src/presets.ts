@@ -32,8 +32,13 @@ export interface PoolPreset {
   id: string;
   title: string;
   description: string;
-  /** Weight trees (under /workspace/weights on both volumes) the workers load. */
+  /** Weight trees (under /workspace/weights on the volume) the workers load: the config's `weights` plus every tree
+   * the engine finds beside it for the recipe (recipe-trees.ts: adapters, Ref2VA, dev DiT, IC-LoRA). The load fails
+   * without any of them. test/unit/preset-trees.test.ts checks the list against the config. */
   weights: string[];
+  /** Derived pre-quantized trees (nested in a `weights` tree, as on the volume) that only speed up the load: fetched
+   * with weights_source r2 (the boot skips the MXFP8 ones below sm_100), never from the Hub (recipe-trees.ts). */
+  prequant?: string[];
   /** Set when the weights' licence restricts use. */
   licence?: string;
   /** The least GPU memory a worker needs (GB, Runpod's memoryInGb): a serverless endpoint whose GPU types offer
@@ -50,8 +55,8 @@ const inline = (file: string) => {
 // config the variant's image does not carry rides inline (FV_WORKER_TOML_B64,
 // generated from configs/serve by gen-configs.mjs).
 export const POOL_PRESETS: PoolPreset[] = [
-  { id: "h3-turbo", min_vram_gb: 80, title: "H3 turbo (fasth3)", description: "MiniMax H3 turbo tier; also the Reactor's clip model.", weights: ["h3-base"], pool: STANDARD_POOLS[0]! },
-  { id: "h3-max", min_vram_gb: 80, title: "H3 max (Sol-H3)", description: "MiniMax H3 max tier (Sol-H3 4-step ladder).", weights: ["h3-base"], pool: STANDARD_POOLS[1]! },
+  { id: "h3-turbo", min_vram_gb: 80, title: "H3 turbo (fasth3)", description: "MiniMax H3 turbo tier; also the Reactor's clip model.", weights: ["h3-base", "FastH3-4-step-Preview-v1-LoRA"], prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"], pool: STANDARD_POOLS[0]! },
+  { id: "h3-max", min_vram_gb: 80, title: "H3 max (Sol-H3)", description: "MiniMax H3 max tier (Sol-H3 4-step ladder).", weights: ["h3-base", "FastH3-4-step-Preview-v1-LoRA"], prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_sol-h3_mxfp8"], pool: STANDARD_POOLS[1]! },
   { id: "ltx", min_vram_gb: 80, title: "LTX turbo", description: "LTX-2.5 turbo tier (Sol stage 2): fal lightricks/ltx-2.5 /fast.", weights: ["ltx25"], pool: STANDARD_POOLS[2]! },
   { id: "wan", min_vram_gb: 32, title: "Wan 2.2 5B (turbo + max)", description: "Wan 2.2 TI2V-5B: FastWan turbo and the 50-step max tier; fal-ai/wan.", weights: ["fastwan22-ti2v-5b", "wan22-ti2v-5b"], pool: STANDARD_POOLS[3]! },
   {
@@ -84,6 +89,7 @@ export const POOL_PRESETS: PoolPreset[] = [
     title: "H3 reference-to-video",
     description: "H3 Ref2VA, turbo and max (the reference companions of h3-turbo / h3-max).",
     weights: ["h3-base", "h3-ref2va"],
+    prequant: ["h3-base/text_encoder_fp8"],
     pool: {
       id: "h3-ref2v",
       variant: "h3-max",

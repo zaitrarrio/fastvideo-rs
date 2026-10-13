@@ -39,8 +39,8 @@
 # pool, when there is one).
 #
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_VARIANT; FV_SERVE_CONFIG (default
-# /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default jg48s6o1w0,
-# fv-weights-h3-ltx-hy, EUR-IS-1; the US volume s2k01690bi was deleted
+# /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default bz0ofkfx45,
+# fv-weights-h3-ltx-500, EU-RO-1, H3 + LTX trees only; the US volume s2k01690bi was deleted
 # 2026-10 and is refused, scripts/gpu/volumes.sh) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to

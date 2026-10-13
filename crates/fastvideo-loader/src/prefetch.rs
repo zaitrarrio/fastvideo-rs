@@ -22,8 +22,13 @@
 //! across component boundaries (the DiT's first shards are read while the
 //! encoder's last layers are still being uploaded).
 //!
-//! `FASTVIDEO_PREFETCH=0` turns it off; `FASTVIDEO_PREFETCH_THREADS` (16) and
-//! `FASTVIDEO_PREFETCH_CHUNK_MB` (16) size the reads.
+//! `FASTVIDEO_PREFETCH=0` turns it off; `FASTVIDEO_PREFETCH_THREADS` (16; 4,
+//! `FASTVIDEO_STREAMING_PREFETCH_THREADS`, while `FASTVIDEO_STREAMING_FETCH=1`)
+//! and `FASTVIDEO_PREFETCH_CHUNK_MB` (16) size the reads.
+//!
+//! A file still being fetched ([`crate::stream`]): each read first waits for
+//! the parts it covers, so the pool never reads ahead into bytes not yet
+//! verified (memory mode would keep their zeros).
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -58,8 +63,16 @@ pub fn mem_available() -> Option<u64> {
 impl PrefetchConfig {
     pub fn from_env() -> Self {
         let enabled = std::env::var("FASTVIDEO_PREFETCH").map_or(true, |v| v.trim() != "0");
+        // While the weights are still arriving (FASTVIDEO_STREAMING_FETCH=1) fewer readers: they read the page cache
+        // the fetcher just wrote, and the fetcher (hashing, TLS) needs the CPUs more.
         let threads = env_usize("FASTVIDEO_PREFETCH_THREADS")
-            .unwrap_or(16)
+            .unwrap_or_else(|| {
+                if crate::stream::streaming_fetch_env() {
+                    env_usize("FASTVIDEO_STREAMING_PREFETCH_THREADS").unwrap_or(4)
+                } else {
+                    16
+                }
+            })
             .clamp(1, 256);
         let chunk = env_usize("FASTVIDEO_PREFETCH_CHUNK_MB")
             .unwrap_or(16)
@@ -239,6 +252,8 @@ impl StoreShared {
 
 struct Chunk {
     file: Arc<File>,
+    /// The file's progress map while it is being fetched: the read waits for its parts.
+    gate: Option<Arc<crate::stream::PartsGate>>,
     /// Memory mode: where the bytes land (at their file offsets).
     mem: Option<Arc<MemShard>>,
     offset: u64,
@@ -364,6 +379,23 @@ fn process_chunk(chunk: &Chunk, buf: &mut Vec<u8>) {
             }
         }
     }
+    // Never read ahead into parts still arriving: memory mode would keep their zeros.
+    if let Some(g) = &chunk.gate {
+        if g.wait(chunk.offset, chunk.offset + chunk.len as u64)
+            .is_err()
+        {
+            // The fetch died: a memory-mode tensor is FAILED (its view waits on the map itself and says why).
+            if chunk.mem.is_some() {
+                for &(k, _) in &chunk.keys {
+                    store.state[k as usize].store(FAILED, Ordering::Release);
+                }
+                let (m, cv) = ready_cv();
+                drop(m.lock().expect("ready"));
+                cv.notify_all();
+            }
+            return;
+        }
+    }
     let t0 = Instant::now();
     let start_ns = t0.duration_since(epoch()).as_nanos() as u64;
     p.stats.first_ns.fetch_min(start_ns, Ordering::Relaxed);
@@ -464,7 +496,12 @@ fn memory_mode(bytes: u64) -> bool {
 /// Returns the bytes queued. Ranges whose tensors were already consumed are
 /// skipped; neighbouring ranges in one file are merged into reads of up to the
 /// configured chunk size.
-pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Range]) -> u64 {
+pub(crate) fn submit(
+    store: &Arc<StoreShared>,
+    paths: &[PathBuf],
+    gates: &[Option<Arc<crate::stream::PartsGate>>],
+    ranges: &[Range],
+) -> u64 {
     let cfg = PrefetchConfig::get();
     if !cfg.enabled || ranges.is_empty() {
         return 0;
@@ -537,6 +574,7 @@ pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Rang
             if !merged {
                 chunks.push(Chunk {
                     file: file.clone(),
+                    gate: gates.get(r.file).cloned().flatten(),
                     mem: shard.clone(),
                     offset: at as u64,
                     len: n,
@@ -575,6 +613,8 @@ pub struct PrefetchStats {
     pub viewed_bytes: u64,
     /// [`ConsumerTime`] totals, seconds.
     pub consumer_s: [f64; 6],
+    /// Seconds readers waited on parts still being fetched ([`crate::stream`]), all threads.
+    pub fetch_wait_s: f64,
 }
 
 pub(crate) static VIEWED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -632,6 +672,7 @@ impl PrefetchStats {
             window_wait_s: s.window_wait_ns.load(Ordering::Relaxed) as f64 * 1e-9,
             viewed_bytes: VIEWED_BYTES.load(Ordering::Relaxed),
             consumer_s: consumer_s(),
+            fetch_wait_s: crate::stream::fetch_wait_s(),
         }
     }
 
@@ -648,6 +689,7 @@ impl PrefetchStats {
             window_wait_s: self.window_wait_s - base.window_wait_s,
             viewed_bytes: self.viewed_bytes - base.viewed_bytes,
             consumer_s: std::array::from_fn(|i| self.consumer_s[i] - base.consumer_s[i]),
+            fetch_wait_s: self.fetch_wait_s - base.fetch_wait_s,
         }
     }
 
@@ -657,7 +699,7 @@ impl PrefetchStats {
         let gb = |b: u64| b as f64 / 1e9;
         let c = &self.consumer_s;
         format!(
-            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"fill_s\":{:.1},\"h2d_wait_s\":{:.1},\"h2d_pageable_s\":{:.1},\"convert_s\":{:.1},\"lora_s\":{:.1},\"read_wait_s\":{:.1},\"mem_mode\":{},\"prefetch\":{}}}",
+            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"fill_s\":{:.1},\"h2d_wait_s\":{:.1},\"h2d_pageable_s\":{:.1},\"convert_s\":{:.1},\"lora_s\":{:.1},\"read_wait_s\":{:.1},\"fetch_wait_s\":{:.1},\"mem_mode\":{},\"prefetch\":{}}}",
             gb(self.viewed_bytes),
             gb(self.read_bytes),
             gb(self.skipped_bytes),
@@ -670,6 +712,7 @@ impl PrefetchStats {
             c[3],
             c[4],
             c[5],
+            self.fetch_wait_s,
             MEM_RESERVED.load(Ordering::Relaxed) > 0,
             PrefetchConfig::get().enabled,
         )

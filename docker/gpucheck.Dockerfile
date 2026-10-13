@@ -365,6 +365,13 @@ ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
 
 # ---- serve-cuda-bin: the CUDA fv-serve (serve-build above) on base-cuda.
 FROM base-cuda AS serve-cuda-bin
+# weights_source r2 (docs/ops/r2-weights.md §4): python3 + curl and the fetcher in the image, so a boot neither runs
+# apt-get (up to ~70 s on a slow mirror, docs/ops/r2-bench-2026-10-12.md finding 3) nor downloads r2-fetch.py; the
+# boot uses this copy only when its SHA-256 is the one fv-control pins (R2_FETCH_SHA256), else fetches fv-control's.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl \
+ && rm -rf /var/lib/apt/lists/*
+COPY scripts/gpu/r2-fetch.py /opt/fastvideo-rs/bin/r2-fetch.py
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
 EXPOSE 8000

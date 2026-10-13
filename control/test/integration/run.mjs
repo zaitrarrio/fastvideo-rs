@@ -30,6 +30,8 @@ const w = await startWorker(mock, {
   WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
   WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
   WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ r2demo: { rev: "rev1", files: 2, bytes: Object.values(R2_FILES).reduce((s, b) => s + b.length, 0), manifest_sha256: r2sha(r2Manifest), source: "test" } }),
+  // The mock bucket holds r2demo only: the aux files keep their pinned URLs here (aux from R2: unit tests).
+  WEIGHTS_R2_AUX: "0",
   // GMI Cloud and NVIDIA Brev (docs/serve/deploy-gmi-brev.md): the owner's config, against the simulated APIs.
   GMI_PRODUCTS: "container.h200.x1,container.b200.x1",
   GMI_DEFAULT_IDC: "us-denver-1",
@@ -55,7 +57,19 @@ let passed = 0;
 const t0 = Date.now();
 
 async function call(path, { method = "GET", body, headers = {}, raw = false } = {}) {
-  const r = await fetch(B + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
+  const once = () => fetch(B + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
+  // After `wrangler d1 execute` (d1Exec), workerd can drop the next connection ("fetch failed" before any answer):
+  // the request is sent again, at most twice.
+  let r;
+  for (let i = 0; ; i++) {
+    try {
+      r = await once();
+      break;
+    } catch (e) {
+      if (i >= 2 || !(e instanceof TypeError)) throw e;
+      await sleep(500);
+    }
+  }
   const text = await r.text();
   bodies.push(text);
   let j = null;
@@ -518,6 +532,14 @@ await step("CLI: fv-control.sh jobs, job-cancel, jobs-cancel-queued, endpoint ca
   mock.queue.queued = 2;
   assert.match(await cli("endpoint", "cancel", "qmock", "rp-cli-1"), /rp-cli-1: IN_QUEUE -> CANCELLED \(cancelled\); removed from the queue/);
   assert.match(await cli("endpoint", "purge", "qmock", "--yes"), /removed 1 \(Runpod: completed\); queued 1 -> 0/);
+  // invoke --async: the first answer's .job is fv-control's job number; the CLI polls /jobs/<n> until it finished
+  // (it used to stop at once: jq could not index the number).
+  mock.queue.onRun = () => [{ status: "IN_PROGRESS" }, { status: "IN_PROGRESS" }, { status: "COMPLETED", output: { object: "fv.info", ok: true } }];
+  const inv = JSON.parse(await cli("endpoint", "invoke", "qmock", "--async"));
+  mock.queue.onRun = undefined;
+  assert.equal(typeof inv.job, "object", JSON.stringify(inv));
+  assert.equal(inv.job.status, "COMPLETED");
+  assert.ok(inv.job.finished_at);
 });
 
 await step("the collector: pods, owners, costs, samples, external attribution, alerts", async () => {
@@ -757,7 +779,7 @@ await step("schemas, dynamic values and the document API (versions, validation, 
   assert.deepEqual(dyn.pools, ["fake"]);
   assert.ok(dyn.env_keys.some((k) => k.id === "HF_TOKEN" && /in use/.test(k.detail)));
   assert.ok(dyn.env_keys.some((k) => k.id === "FASTVIDEO_WAN_AUDIO" && /mmaudio/.test(k.detail)));
-  assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "jg48s6o1w0");
+  assert.ok(dyn.regions.find((r) => r.id === "eu").volume === "bz0ofkfx45");
   assert.ok(!dyn.regions.find((r) => r.id === "us"), "us is not offered (its weights volume is gone)");
   assert.deepEqual(sc.schemas["cluster-spec"].properties.regions.items.enum, ["eu"]);
   const d = (await call(`/api/docs/cluster-spec/${cid}`, { headers: T() })).j;
@@ -1229,7 +1251,11 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "hub", weights_download_approved: true, deadline_min: 20 });
   assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /FV_HUB_DOWNLOADS_APPROVED/.test(i.message)), "the Worker-level approval is needed too");
   v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", deadline_min: 20 });
-  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with no weights");
+  // h3-base is in the repo's R2 record (scripts/gpu/weights-r2.tsv) since 2026-10-12, so the default is r2; this
+  // fv-control's (mock) bucket has no such manifest, so the launch is refused at weights_source all the same.
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights|weights_source r2: R2 manifest of (h3-base|FastH3-4-step-Preview-v1-LoRA)/.test(i.message)), "a real model with no weights it can fetch: " + JSON.stringify(v.issues));
+  v = await issues({ name: "gmih3", provider: "gmi", provider_gpu: "container.h200.x1", preset: "h3-turbo", weights_source: "none", deadline_min: 20 });
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_source" && /models need weights/.test(i.message)), "a real model with weights_source none");
   v = await issues({ name: "gmib", provider: "gmi", provider_gpu: "container.b200.x1", ...fake });
   assert.ok(v.issues.some((i) => i.path[0] === "max_gpu_dph" && /\$9\/hr/.test(i.message)), JSON.stringify(v.issues));
   v = await issues({ name: "gmi1", provider: "gmi", provider_gpu: "container.h200.x1", ...fake });
@@ -1391,7 +1417,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.equal(op.status, "failed");
   assert.ok(op.log.some((l) => /FAILED \(host failed\): docker run \(exit 125\): .*could not select device driver/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   assert.deepEqual(b.workspaces.map((x) => [x.name.replace(/-\d+$/, ""), x.status]), [["fv-pod-brevhf", "STOPPED"]], "stopped, not deleted, after the host failure");
-  assert.ok(op.log.some((l) => /stopping and holding its VM \(never deleted\)/.test(l.msg)) && op.log.some((l) => /stopped and held, not deleted: its boot never became ready/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+  assert.ok(op.log.some((l) => /stopping its VM \(kept once stopped; deleted only if its stop fails/.test(l.msg)) && op.log.some((l) => /stopped and held, not deleted: its boot never became ready/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
   let pk = (await call("/api/providers/brev/parked", { headers: T() })).j;
   assert.deepEqual(pk.parked.map((x) => x.state), ["held"]);
   assert.match(pk.parked[0].note, /stopped before its boot became ready .*host failed/);
@@ -1472,7 +1498,106 @@ await step("weights_source r2: a GMI pod fetches its trees from the R2 weights s
   assert.equal((await call("/api/standalone/gmir2", { method: "DELETE", headers: T() })).status, 200);
 });
 
-await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop alerted, non-stoppable refused, limits as alerts, budget, only ours", async () => {
+await step("serverless weights_source r2: an endpoint without a volume (any DC), its worker's real boot fetches through the Worker's plan with the endpoint's weights token (presigned, ranged), reports its cold start, a second boot is a cache hit; token scope, rotation, revocation; the CLI flag", async () => {
+  const toml = readFileSync(new URL("../../../configs/serve/runpod-fake.toml", import.meta.url), "utf8") + '\n[r2probe]\npath = "${FV_WEIGHTS}/r2demo/config.json"\n';
+  const spec = { name: "slsr2", variant: "wan", compute: "GPU", config_toml: toml, weights_source: "r2", gpu_types: ["NVIDIA H100 80GB HBM3"] };
+  // Validate: no volume, any data centre (the stock per GPU type), the cold-start outlook from the manifests.
+  const v = (await call("/api/serverless/validate", { method: "POST", body: { spec }, headers: T() })).j;
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.equal(v.spec.network_volume, null);
+  assert.equal(v.spec.data_centers, undefined);
+  assert.equal(v.outlook.weights_source, "r2");
+  assert.deepEqual(v.outlook.trees.map((t) => [t.dest, t.published]), [["r2demo", true]]);
+  assert.match(v.outlook.note, /fetch 0 GB at 0\.55 GB\/s \(planning rate: two GPU hosts, 2026-10-12\)/);
+  assert.ok(v.warnings.some((x) => /any data centre: in stock/.test(x.message)), JSON.stringify(v.warnings));
+  assert.ok(Array.isArray(v.stock) && v.stock[0].gpu === "NVIDIA H100 80GB HBM3");
+  const vbad = (await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, config_toml: toml.replace("r2demo", "r2missing") } }, headers: T() })).j;
+  assert.ok(vbad.issues.some((i) => /not in the R2 weights store yet: r2missing/.test(i.message)), JSON.stringify(vbad.issues));
+  assert.match((await call("/api/serverless/validate", { method: "POST", body: { spec: { ...spec, network_volume: "bz0ofkfx45" } }, headers: T() })).j.error, /replaces the weights volume/);
+  // Create: a template with the r2 boot and the endpoint's weights token, an endpoint with no volume and no DC.
+  const before = new Set(mock.sls.templates.keys());
+  const r = await call("/api/serverless", { method: "POST", body: { spec }, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const ep = r.j.endpoint;
+  const tpl = [...mock.sls.templates.values()].find((t) => !before.has(t.id));
+  const rpe = mock.sls.endpoints.get(ep.endpoint_id);
+  assert.equal(rpe.networkVolumeId, undefined);
+  assert.equal(rpe.dataCenterIds, undefined);
+  assert.deepEqual(tpl.dockerEntrypoint.slice(0, 2), ["bash", "-c"]);
+  assert.match(tpl.env.FV_WEIGHTS_TOKEN, /^fvw_[0-9a-f]{64}$/);
+  assert.equal(tpl.env.FV_R2_TREE_REVS, "r2demo@rev1");
+  assert.equal(tpl.env.FV_WEIGHTS_PLAN_URL, `${B}/ingest/v1/weights-plan`);
+  assert.ok(!JSON.stringify(tpl).includes(mock.r2.secret) && !JSON.stringify(tpl).includes(mock.r2.access), "no R2 credential in the template");
+  assert.ok(!JSON.stringify(r.j).includes(tpl.env.FV_WEIGHTS_TOKEN), "the token is never in an API answer");
+  // The worker: the template's own start command, in bash, with the template's env (fv-serve replaced by an echo, the
+  // root paths by a temp dir, the aux files left out: they are real downloads).
+  const { mkdtempSync, existsSync: ex } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const tmp = mkdtempSync(`${tmpdir()}/fvc-slsr2-`);
+  const script = tpl.dockerEntrypoint[2].replace("mkdir -p /fvstate\n", `mkdir -p ${tmp}/fvstate\n`).replaceAll("/fv-worker.toml", `${tmp}/fv-worker.toml`).replaceAll("/opt/fastvideo-rs/bin/fv-serve", "echo FV-SERVE-START");
+  const runBoot = (worker, env = tpl.env) =>
+    promisify(execFile)("bash", ["-c", script], {
+      env: { ...env, PATH: process.env.PATH, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", FV_WEIGHTS: `${tmp}/weights`, FV_R2_STATE: `${tmp}/fvstate`, FV_R2_TOOLS: `${tmp}/tools`, FV_R2_MIN_FREE_GB: "0", FV_FAIL_SLEEP_S: "0", FV_WEIGHTS_TREES_B64: "", RUNPOD_POD_ID: worker },
+      timeout: 90000,
+    });
+  const gets0 = mock.r2.gets.length;
+  const bad0 = mock.r2.bad;
+  const out1 = await runBoot("wkr2a");
+  assert.match(out1.stdout, /FV-SERVE-START --config/);
+  assert.match(out1.stderr, /cache miss: r2demo/);
+  assert.equal(readFileSync(`${tmp}/weights/r2demo/.fv-revision`, "utf8"), "rev1");
+  assert.equal(mock.r2.bad, bad0, "every presigned URL the Worker made was accepted");
+  assert.ok(mock.r2.gets.slice(gets0).filter((g) => g.range && g.key.startsWith("weights/r2demo/")).length >= 2, "ranged GETs (two manifest parts each, r2-fetch.py DEFAULT_GET_PARTS)");
+  let page = (await call(`/api/serverless/${ep.id}`, { headers: T() })).j;
+  const b1 = page.boots.find((b) => b.worker_id === "wkr2a");
+  assert.equal(b1.cache, "miss");
+  assert.equal(b1.missing, "r2demo");
+  assert.ok(b1.fetch_s !== null && b1.fetch_mbps !== null && b1.serve_at >= b1.boot_at, JSON.stringify(b1));
+  assert.equal(page.outlook.cache.state, "miss");
+  // A second boot on the same disk: a cache hit, no plan request, no GET.
+  const gets1 = mock.r2.gets.length;
+  const out2 = await runBoot("wkr2b");
+  assert.match(out2.stderr, /cache hit/);
+  assert.equal(mock.r2.gets.length, gets1);
+  page = (await call(`/api/serverless/${ep.id}`, { headers: T() })).j;
+  assert.equal(page.outlook.cache.state, "hit");
+  // The boot's phases are in the log store next to Runpod's log (source serverless:<id>).
+  const logs = (await call(`/api/logs?pod=wkr2a&level=trace&limit=50`, { headers: T() })).j.lines;
+  assert.ok(logs.some((l) => l.msg === "[cache] miss: r2demo") && logs.some((l) => /^\[weights\] r2 weights ready/.test(l.msg)), JSON.stringify(logs).slice(0, 600));
+  // The token's scope: wrong token 401, another endpoint named 403.
+  const plan = (tok, body = { pod: "wkr2a@1700000000" }) => call("/ingest/v1/weights-plan", { method: "POST", body, headers: { authorization: `Bearer ${tok}` } });
+  assert.equal((await plan("fvw_" + "0".repeat(64))).status, 401);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN, { pod: "x@1700000000", endpoint: "r2v-q" })).status, 403);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 200);
+  // Rotation: a template update writes a new token; the old one still works during the rollout.
+  const old = tpl.env.FV_WEIGHTS_TOKEN;
+  const u = await call(`/api/serverless/${ep.id}`, { method: "PUT", body: { spec: { env: { FV_TEST: "1" } } }, headers: T() });
+  assert.equal(u.status, 200, JSON.stringify(u.j));
+  assert.notEqual(tpl.env.FV_WEIGHTS_TOKEN, old);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 200);
+  assert.equal((await plan(old)).status, 200, "the previous token stays good for the grace period");
+  // The CLI: weights_source r2 on a config whose tree is not published is refused with the reason. (Every preset's
+  // trees are in the store since the 2026-10-12 copy off the EU volume, so the unpublished tree is a config's.)
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(`${tmp}/token`, token, { mode: 0o600 });
+  const cli = (...args) => promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${tmp}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } }).catch((e) => e);
+  writeFileSync(`${tmp}/slsr2b.json`, JSON.stringify({ ...spec, name: "slsr2b", config_toml: toml.replace("r2demo", "r2missing") }));
+  const c = await cli("endpoint", "create", `${tmp}/slsr2b.json`);
+  assert.match(`${c.stderr}${c.stdout}`, /not in the R2 weights store yet: r2missing/);
+  assert.ok(![...mock.sls.endpoints?.values?.() ?? []].some((e) => /slsr2b/.test(e.name ?? "")), "nothing created");
+  const show = await cli("endpoint", "show", "slsr2");
+  assert.match(show.stdout, /"weights_source": "r2"/);
+  assert.match(show.stdout, /"state": "hit"/);
+  // Delete: both tokens die with the endpoint.
+  assert.equal((await call(`/api/serverless/${ep.id}`, { method: "DELETE", headers: T() })).status, 200);
+  assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 401);
+  assert.equal((await plan(old)).status, 401);
+  assert.ok(ex(`${tmp}/weights/r2demo/config.json`));
+});
+
+await step("Brev keep-on-stop (owner rules 2026-10-11 / 2026-10-13: a stopped VM is never auto-deleted; a failed stop deletes it): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop deleted, non-stoppable allowed and deleted by its stop, limits as alerts, budget, only ours", async () => {
   // A second fv-control with Hub downloads approved (the simulated VMs never download anything), the live
   // instance-type list as prices (no BREV_PRICES), a short restart timeout.
   const w2 = await startWorker(mock, {
@@ -1481,6 +1606,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     BREV_INSTANCE_TYPES: "g5.xlarge-test,a100-test",
     BREV_BUDGET_USD: "100",
     BREV_RESTART_TIMEOUT_S: "30",
+    BREV_STOP_RETRY_S: "0",
     FV_HUB_DOWNLOADS_APPROVED: "1",
     OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET),
   });
@@ -1526,23 +1652,46 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     };
     const parked = async () => (await call2("/api/providers/brev/parked", { headers: H })).j;
     const posts = () => b.calls.filter((c) => c.method === "POST" && c.path === `/organizations/${mock.brevOrg}/workspaces`).length;
-    const posts0 = posts();
-    const callsFrom = b.calls.length;
-
-    // The launch form's outlook: cold on the stoppable type; the non-stoppable one refused (its stop would be a delete).
+    // The launch form's outlook: cold on the stoppable type; the non-stoppable one allowed with a warning (owner
+    // decision 2026-10-13: treated like any other Brev VM; its stop fails, so a stop deletes it: owner rule 2026-10-13).
     const v = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "g5.xlarge-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
     assert.equal(v.ok, true, JSON.stringify(v.issues));
     assert.ok(v.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads fastwan22-ti2v-5b, wan22-ti2v-5b .*kept on stop/.test(x.message)), JSON.stringify(v.warnings));
-    const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "warm1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
-    assert.equal(v2.ok, false);
-    assert.ok(v2.issues.some((x) => x.path[0] === "provider_gpu" && /^a100-test is not stoppable on NVIDIA Brev: refused \(rule brev_stoppable_only: .*\)\. Stoppable allowed types: g5\.xlarge-test$/.test(x.message)), JSON.stringify(v2.issues));
-    const rns = await call2("/api/standalone", { method: "POST", body: { name: "nostop1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, channel: "stable", deadline_min: 30, max_gpu_dph: 5 }, headers: H });
-    assert.equal(rns.status, 400, JSON.stringify(rns.j));
-    assert.match(rns.j.error, /a100-test is not stoppable on NVIDIA Brev: refused/);
+    const v2 = (await call2("/api/standalone/validate", { method: "POST", body: { name: "nostop1", provider: "brev", provider_gpu: "a100-test", preset: "wan", weights_source: "hub", weights_download_approved: true, deadline_min: 30, max_gpu_dph: 5 }, headers: H })).j;
+    assert.equal(v2.ok, true, JSON.stringify(v2.issues));
+    assert.ok(v2.warnings.some((x) => x.path[0] === "provider_gpu" && /^WARNING: a100-test can't be stopped on NVIDIA Brev: a stop .* deletes the VM \(\$1\.80\/hr while it runs\): its disk and weights go too/.test(x.message)), JSON.stringify(v2.warnings));
+    assert.ok(v2.warnings.some((x) => x.path[0] === "provider_gpu" && /^cold: downloads .*; WARNING: a100-test can't be stopped/.test(x.message)), JSON.stringify(v2.warnings));
     const dyn = (await call2("/api/schemas/dynamic", { headers: H })).j;
     const bg = dyn.provider_gpus.filter((g) => g.provider === "brev");
-    assert.deepEqual(bg.map((g) => g.id), ["g5.xlarge-test"], "stoppable types only");
+    assert.deepEqual(bg.map((g) => [g.id, g.stoppable]), [["g5.xlarge-test", true], ["a100-test", false]], "every allowed type, stoppable first");
     assert.match(bg[0].detail, /\$1\.01\/hr · stoppable: stopped and kept on stop/, "the live list's price");
+    assert.match(bg[1].detail, /\$1\.80\/hr · WARNING: can't be stopped: a stop deletes it \(its disk and weights go too\)/);
+
+    // 0. A non-stoppable type: launched like any other; its stop is refused (Brev 500 "does not support stop"), so the
+    //    VM is deleted (owner rule 2026-10-13): exactly one DELETE, recorded with the reason, an info alert.
+    const callsN = b.calls.length;
+    const ln = await launch("nostop1", "a100-test");
+    assert.equal(ln.op.status, "done", ln.op.error + JSON.stringify(ln.op.log.slice(-6)));
+    assert.ok(ln.op.log.some((l) => /WARNING: a100-test can't be stopped on NVIDIA Brev/.test(l.msg)), JSON.stringify(ln.op.log.map((l) => l.msg)));
+    const wsn = b.workspaces.find((x) => x.name.startsWith("fv-pod-nostop1-"));
+    assert.equal(wsn.body.isStoppable, false);
+    const sq = (await call2("/api/standalone/nostop1", { headers: H })).j.pod;
+    assert.deepEqual([sq.pod.brev.stoppable, sq.pod.brev.kept_on_stop, sq.pod.brev.usd_per_hr], [false, false, 1.8]);
+    const opn = await stop("nostop1", ln.id);
+    assert.equal(opn.status, "done", opn.error + JSON.stringify(opn.log.slice(-6)));
+    assert.ok(opn.log.some((l) => /stop failed \(Brev cannot stop a100-test: HTTP 500 rpc error: code = Internal desc = instance "inst-ws\d+" does not support stop\): deleted \(owner rule 2026-10-13/.test(l.msg)), JSON.stringify(opn.log.map((l) => l.msg)));
+    assert.ok(!b.workspaces.some((x) => x.id === wsn.id), "deleted");
+    assert.equal(b.calls.filter((c) => c.method === "PUT" && c.path === `/workspaces/${wsn.id}/stop`).length, 1, "one stop: a refusal is final");
+    assert.deepEqual(b.calls.slice(callsN).filter((c) => c.method === "DELETE").map((c) => c.path), [`/workspaces/${wsn.id}`], "exactly one delete");
+    assert.equal((await parked()).parked.length, 0);
+    await call2("/api/collect", { method: "POST", body: {}, headers: H });
+    const aln = (await call2("/api/alerts", { headers: H })).j.alerts.filter((a) => a.kind === "brev_stop_deleted");
+    assert.equal(aln.length, 1, JSON.stringify(aln));
+    assert.equal(aln[0].severity, "info");
+    assert.match(aln[0].message, /^Brev fv-pod-nostop1-\d+ \(a100-test\): stop failed \(Brev cannot stop a100-test: .*does not support stop\): deleted/);
+    assert.ok(!(await call2("/api/alerts", { headers: H })).j.alerts.some((a) => a.kind === "brev_unstoppable" || a.kind === "brev_stop_failed"));
+    const posts0 = posts();
+    const callsFrom = b.calls.length;
 
     // 1. Cold launch: both trees downloaded; the disk sized for them.
     const l1 = await launch("warm1");
@@ -1655,24 +1804,20 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     assert.equal(posts(), posts0 + 3, "no create: the held one is reused");
     assert.ok(l6.op.log.some((l) => new RegExp(`warm restart of held NVIDIA Brev brev:${ws1.name} .*\\(it was held: restart failed: .*no capacity`).test(l.msg)), JSON.stringify(l6.op.log.map((l) => l.msg)));
 
-    // 7. Brev refuses the stop (here the simulated type turns out not stoppable): left running, alerted with its $/hr,
-    //    never deleted; the cron's retry stops and holds it once Brev accepts.
-    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
-    g5.stoppable = false;
+    // 7. Brev refuses the stop (an API error, 3 tries): deleted (owner rule 2026-10-13), the reason recorded and alerted.
+    const stops7 = b.calls.filter((c) => c.method === "PUT" && c.path === `/workspaces/${ws1.id}/stop`).length;
+    b.stopFail = true;
     op = await stop("reuse6", l6.id);
-    assert.equal(op.status, "failed", JSON.stringify(op));
-    assert.match(op.error, /still present/);
-    assert.ok(op.log.some((l) => /stop refused by Brev .*left RUNNING at \$1\.01\/hr.*never deletes a Brev VM on its own/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
-    assert.equal(ws1.status, "RUNNING");
+    b.stopFail = false;
+    assert.equal(op.status, "done", JSON.stringify(op));
+    assert.equal(b.calls.filter((c) => c.method === "PUT" && c.path === `/workspaces/${ws1.id}/stop`).length - stops7, 3, "STOP_TRIES tries");
+    assert.ok(op.log.some((l) => /stop failed \(Brev refused the stop 3 times: HTTP 400 stop refused \(simulated API error\)\): deleted/.test(l.msg)), JSON.stringify(op.log.map((l) => l.msg)));
+    assert.ok(!b.workspaces.some((x) => x.id === ws1.id));
+    assert.deepEqual(b.calls.slice(callsFrom).filter((c) => c.method === "DELETE").map((c) => c.path), [`/workspaces/${ws1.id}`], "the failed stop's delete only");
     await call2("/api/collect", { method: "POST", body: {}, headers: H });
     al2 = (await call2("/api/alerts", { headers: H })).j.alerts;
-    assert.ok(al2.some((a) => a.kind === "brev_stop_failed" && /still RUNNING at \$1\.01\/hr \(\$24\.14\/day\)/.test(a.message)), JSON.stringify(al2));
-    g5.stoppable = true;
-    await call2("/api/collect", { method: "POST", body: {}, headers: H });
-    assert.equal(ws1.status, "STOPPED");
-    assert.ok(!(await call2("/api/alerts", { headers: H })).j.alerts.some((a) => a.kind === "brev_stop_failed"), "resolved once stopped");
-    assert.equal((await parked()).parked.find((p) => p.workspace_id === ws1.id).state, "held");
-    assert.ok(!b.calls.slice(callsFrom).some((c) => c.method === "DELETE"), "still nothing deleted");
+    assert.ok(al2.some((a) => a.kind === "brev_stop_deleted" && a.severity === "info" && a.message.includes(ws1.name)), JSON.stringify(al2));
+    assert.ok(!(await parked()).parked.some((p) => p.workspace_id === ws1.id));
 
     // 8. The CLI and the owner's actions: list, unpark a held one, delete one; the age limit is an alert.
     const { execFile } = await import("node:child_process");
@@ -1683,7 +1828,7 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     writeFileSync(`${dir}/token`, tok, { mode: 0o600 });
     const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w2.url, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
     const out = await cli("brev", "parked");
-    assert.match(out, /^policy: stopped Brev VMs are kept, never deleted by fv-control \(owner rule 2026-10-11\): reused by the next launch of their type, or deleted by you; alert past 2 parked or 7 days each; storage \$[\d.]+\/day \(OVER the alert threshold: nothing is deleted\)$/m);
+    assert.match(out, /^policy: stopped Brev VMs are kept, never deleted by fv-control \(owner rule 2026-10-11\): reused by the next launch of their type, or deleted by you; a VM whose stop does not succeed is deleted instead \(owner rule 2026-10-13\); alert past 2 parked or 7 days each; storage \$[\d.]+\/day$/m); // two kept after the failed stop's delete: under brev_park_max
     pk = await parked();
     const held = pk.parked.find((p) => p.state === "held");
     assert.ok(held, JSON.stringify(pk));
@@ -1707,14 +1852,13 @@ await step("Brev keep-on-stop (owner rule 2026-10-11: never auto-deleted): park 
     assert.ok(al2.some((a) => a.kind === "brev_parked_over_limit" && /parked longer than brev_park_max_days 0\.0001/.test(a.message)), JSON.stringify(al2));
 
     // Only ours: the foreign and the unrecorded fv- workspaces were never stopped, started or deleted; the only deletes
-    // were the owner's (delete-parked).
+    // were the failed stop's (owner rule 2026-10-13) and the owner's (delete-parked).
     for (const id of ["wsforeign", "wsstray"]) assert.ok(!b.calls.slice(callsFrom).some((c) => c.path.startsWith(`/workspaces/${id}`)), id);
-    assert.deepEqual(b.calls.slice(callsFrom).filter((c) => c.method === "DELETE").map((c) => c.path), [`/workspaces/${other.workspace_id}`]);
+    assert.deepEqual(b.calls.slice(callsFrom).filter((c) => c.method === "DELETE").map((c) => c.path), [`/workspaces/${ws1.id}`, `/workspaces/${other.workspace_id}`]);
   } finally {
     w2.stop();
     b.workspaces = [];
-    const g5 = b.types.find((x) => x.type === "g5.xlarge-test");
-    if (g5) g5.stoppable = true;
+    b.stopFail = false;
   }
 });
 

@@ -2,9 +2,18 @@
 
 ## Model weights and network volumes
 
-- New weights go on the EU Runpod network volume `jg48s6o1w0`
-  (`fv-weights-h3-ltx-hy`, EUR-IS-1), and never only on a pod's container
-  disk. **EU only (owner decision, 2026-10-06):** Runpod deleted the US volume
+- The weights live in the R2 weights store (bucket `fv-weights`,
+  `docs/ops/r2-weights.md`); new trees are published there, never only on a
+  pod's container disk. **EU volume: 500 GB, H3 + LTX only (owner decision,
+  2026-10-13, "eu volume - reduce to 500 gb plan"):** `bz0ofkfx45`
+  (`fv-weights-h3-ltx-500`, EU-RO-1) holds the trees of
+  `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (filled from R2 with
+  `scripts/gpu/r2-fill-volume.sh`); everything else comes from R2
+  (`weights_source r2`, the default for those presets). fv-control's `eu`
+  region is EU-RO-1. It replaced `jg48s6o1w0` (`fv-weights-h3-ltx-hy`,
+  2000 GB, EUR-IS-1, where Runpod no longer creates volumes),
+  deleted 2026-10-13 on the owner's decision.
+  **EU only (owner decision, 2026-10-06):** Runpod deleted the US volume
   `s2k01690bi` (`fv-weights-b200-us`, US-CA-2) on about 2026-10-05 while the
   account balance was negative, and the owner chose not to rebuild it for
   now. The earlier "both volumes" rule (US and EU, eventually in sync) is

@@ -65,7 +65,7 @@ The launch request:
   "channel": "latest",               // or "sha", or "image" (a ref or a digest); default: stable
   "compute": "GPU",                  // or "CPU" (+ "cpu_flavors", "vcpu")
   "gpu_types": ["NVIDIA RTX PRO 6000 Blackwell Server Edition"],
-  "region": "eu",                    // or "dc": "EUR-IS-1"; EU only (CLAUDE.md)
+  "region": "eu",                    // or "dc": "EUR-IS-1"; the volume is EU only (CLAUDE.md). With "weights_source": "r2" (no volume) any Runpod "dc", e.g. "US-TX-3"
   "volume": true,                    // the region's weights volume at /workspace (GPU default)
   "env": {"FOO": "bar", "HF_TOKEN": {"value": "…", "secret": true}},
   "deadline_min": 60,                // 5-10080
@@ -112,18 +112,36 @@ deadline, the idle stop and a budget stop. `fv-control.sh pod delete
 the delete of a definition with no pod leaves any parked VM alone. The
 next launch of the same instance type reuses a parked or held instance
 before creating one: a *warm* boot when it holds the trees, else the
-trees download onto it. Non-stoppable types (e.g. `massedcompute_*`) are
-refused at launch. A stop Brev refuses leaves the VM running with the
-alert `brev_stop_failed` (its $/hr); fv-control never deletes it.
+trees download onto it.
+
+A stop that does not succeed deletes the VM instead (owner rule
+2026-10-13: "We should go ahead and delete VMs that need to be stopped if
+a stop command does not succeed. If the stop command succeeds then we
+should NOT delete the VM."): Brev refuses it, another stop error persists
+over 3 tries, or the VM is not STOPPED 10 minutes (`BREV_STOP_TIMEOUT_S`)
+after a stop Brev accepted. The record says `stop failed (<reason>):
+deleted`, its tunnel goes, and the info alert `brev_stop_deleted` names
+it. A pod stopped while its VM is still DEPLOYING is `stop_pending`: the
+cron stops it once it leaves DEPLOYING, or deletes it after 15 minutes.
+
+Non-stoppable types (e.g. `massedcompute_*`) are launched like any other
+(owner decision 2026-10-13). Brev cannot stop them (a stop answers HTTP
+500 "does not support stop"), so every stop of such a pod deletes its VM,
+with its disk and weights: it ends at its deadline like any pod and its
+next launch downloads its weights again.
 
 A parked instance bills storage only. That cost counts in the Brev
 budget and the cost views (owner `brev:parked`); the policies
 `brev_park_max` (2) and `brev_park_max_days` (7) only raise the alert
-`brev_parked_over_limit`. A restart that fails (no capacity) or does not
+`brev_parked_over_limit`. A restart that fails or does not
 come up is *held* (reused by a later launch after 15 minutes, or at once
-after Unpark), and another instance or a fresh pod is used.
+after Unpark), and another instance or a fresh pod is used. A restart
+Brev cannot run for capacity (its start task says InsufficientCapacity;
+shown in the launch log) gets 3 more starts over about 5 minutes; then the
+VM stays parked (not deleted) and a fresh pod is created.
 
-The launch form lists stoppable instance types only, and shows "warm:
+The launch form lists the stoppable instance types first, then the others
+with "WARNING: can't be stopped: a stop deletes it (its disk and weights go too)", and shows "warm:
 restarts parked …" or "cold: downloads … (~N GB): boot ~M min" at the
 instance-type field. The Pods page lists parked and held instances with
 their weights, disk, $/day and reuse status, with Delete (yours only) and
@@ -150,7 +168,21 @@ deadline, and Start / Stop / Extend / Delete; a launch form (preset or custom
 variant, image source, compute, GPU type, region, volume, deadline, idle
 stop, env). `#/standalone?id=<name>` shows one pod: its pod and definition,
 cost, the boot timeline, the last operation's log and the last 40 log lines,
-with a link to the Logs page. The page adds its own route to the dashboard's
+with a link to the Logs page.
+
+The form's GPU / instance type is picked from a table of every type the
+chosen provider lists. For Runpod this is each GPU type per data centre with
+its stock; for Brev, every instance type of the org; for GMI, every
+product. The columns are name, spec, available, cost ($/hr and $/GPU-hr),
+model, model family, RAM, vCPU, GPU, GPU family, VRAM, storage type and
+size, region, launchable, and on Brev also stoppable and deploy time. The
+table sorts, searches, filters and pages. A click on a launchable row fills
+the form: `gpu_types` and `region` on Runpod, `provider_gpu` on Brev,
+`provider_gpu` and `provider_region` on GMI. A row fv-control cannot launch
+says why. The table loads when the provider is picked and on its Refresh
+button, which reads the provider again (at most once per 30 s). The
+endpoint and the column definitions are in README.md, "Instance types".
+The page adds its own route to the dashboard's
 router; the shared files only gain a nav link and a script tag
 (`index.html`), and the pod page one line for the boot timeline card.
 
@@ -161,4 +193,5 @@ and watchdog boot, the routes with auth and CSRF, delete with and without a
 pod, pod status and logs JSON), the integration step "standalone pod" (the
 real Durable Object: launch, up, the watchdog boot, owner `pod:<name>`,
 status, boot timeline, logs, stop, start, delete), and the UI smoke (launch
-from the form, the pod's page, phone width).
+from the form, the pod's page, phone width), `test/unit/instance-types.test.ts`
+and `test/ui/instance-tables.mjs` (the launch form's instance-type tables).

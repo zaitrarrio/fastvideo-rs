@@ -40,7 +40,7 @@ export function startMock() {
     failCreate: 0,
     // Build pods (src/buildpods.ts): CPU stock per "<dc>|<instanceId>", repo files, GitHub runners and queued jobs.
     // GPU stock per "<dc>|<gpu type>": [stockStatus, maxUnreservedGpuCount]; unlisted: High, 8.
-    gpuStock: { "EUR-IS-1|NVIDIA RTX PRO 6000 Blackwell Server Edition": ["Low", 2] },
+    gpuStock: { "EU-RO-1|NVIDIA RTX PRO 6000 Blackwell Server Edition": ["Low", 2] },
     cpuStock: { "EU-RO-1|cpu3c-32-64": ["High", 0.96], "EUR-IS-1|cpu3c-32-64": ["Low", 0.96], "EUR-IS-1|cpu5c-16-32": ["High", 0.56], "US-CA-2|cpu3c-16-32": ["High", 0.48] },
     noStockDcs: new Set(), // create answers "no longer any instances available" there
     repoFiles: {
@@ -77,6 +77,17 @@ export function startMock() {
   };
   // The R2 weights store (src/r2weights.ts, docs/ops/r2-weights.md): path-style objects of bucket `bucket`, served only
   // through presigned GETs (checked here with node:crypto against `secret`), with Range. `fetched`: what pods pulled.
+  // Runpod's data centres and their GPU stock (dataCenters { gpuAvailability }: the launch screen's table).
+  m.runpodDcs = [
+    { id: "EU-RO-1", name: "EU-RO-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
+      { available: true, stockStatus: "Low", gpuTypeId: "NVIDIA RTX PRO 6000 Blackwell Server Edition" },
+      { available: false, stockStatus: null, gpuTypeId: "NVIDIA H100 80GB HBM3" },
+    ] },
+    { id: "US-CA-2", name: "US-CA-2", location: "United States", storageSupport: true, listed: true, gpuAvailability: [
+      { available: true, stockStatus: "High", gpuTypeId: "NVIDIA H100 80GB HBM3" },
+      { available: true, stockStatus: "Medium", gpuTypeId: "NVIDIA H200" },
+    ] },
+  ];
   m.r2 = { bucket: "fv-weights-test", access: "r2-test-access-id", secret: "r2-TEST-secret-0123456789abcdef", objects: new Map(), gets: [], bad: 0, fetched: [] };
   // GMI Cloud (docs/serve/deploy-gmi-brev.md §2): REST under /gmi/v1, Bearer key. Containers boot like a pod:
   // `/pod/gmi:<name>` serves fv-serve, and the boot's tunnel report goes to fv-control (FV_ENDPOINT_REPORT_URL).
@@ -113,6 +124,7 @@ export function startMock() {
     boots: [], // every simulated VM boot: {ws, name, status, kept, fetched, env, run, error}
     startFail: false, // PUT …/start answers 409 (no capacity)
     startHang: false, // PUT …/start leaves it STARTING (the restart times out)
+    stopFail: false, // PUT …/stop answers 400 (an API error)
     boot: "ok",
     types: [
       brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
@@ -388,7 +400,7 @@ export function startMock() {
         const cpu = body.computeType === "CPU";
         const pod = { id, name: body.name, payload: body, env: body.env, image: body.imageName, desiredStatus: "RUNNING", costPerHr: cpu ? 0.06 * (body.vcpuCount || 2) / 2 : 2.09, created: Date.now() };
         m.pods.set(id, pod);
-        return json(res, 200, { id, name: body.name, costPerHr: pod.costPerHr, desiredStatus: "RUNNING", machine: { dataCenterId: (body.dataCenterIds || ["EUR-IS-1"])[0] }, env: body.env });
+        return json(res, 200, { id, name: body.name, costPerHr: pod.costPerHr, desiredStatus: "RUNNING", machine: { dataCenterId: (body.dataCenterIds || ["EU-RO-1"])[0] }, env: body.env });
       }
       const mm = /^\/pods\/([^/]+)(\/(stop|start))?$/.exec(rest);
       if (mm) {
@@ -453,6 +465,9 @@ export function startMock() {
       const q = body.query || "";
       if (q.includes("dataCenters") && q.includes("ramMultiplier"))
         return json(res, 200, { data: { dataCenters: ["EU-RO-1", "EUR-IS-1", "EU-NL-1", "US-CA-2", "AP-IN-2"].map((id) => ({ id, listed: id !== "AP-IN-2" })), cpuFlavors: [{ id: "cpu3c", ramMultiplier: 2 }, { id: "cpu5c", ramMultiplier: 2 }, { id: "cpu3g", ramMultiplier: 4 }] } });
+      // GPU stock per data centre (src/instance-types.ts, the launch table): every data centre's gpuAvailability.
+      if (q.includes("gpuAvailability"))
+        return m.runpodDcsFail ? json(res, 200, { errors: [{ message: "Cannot query field gpuAvailability" }] }) : json(res, 200, { data: { dataCenters: m.runpodDcs } });
       if (q.includes("specifics(")) {
         const data = {};
         for (const mm of q.matchAll(/(a\d+): cpuFlavors \{ id specifics\(input: \{dataCenterId: "([^"]+)", instanceId: "([^"]+)"\}\)/g)) {
@@ -482,7 +497,7 @@ export function startMock() {
       if (q.includes("gpuTypes")) return json(res, 200, { data: { gpuTypes: [{ id: body.variables?.id, securePrice: body.variables?.id?.includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: "High" } }] } });
       const pods = [...m.pods.values()].map((x) => ({
         id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.computeType === "CPU" ? 0 : 1, vcpuCount: 2,
-        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EUR-IS-1"])[0] },
+        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EU-RO-1"])[0] },
         runtime: x.desiredStatus === "RUNNING" ? { uptimeInSeconds: 120, gpus: x.payload.computeType === "CPU" ? [] : [{ id: "g", gpuUtilPercent: 3, memoryUtilPercent: 40 }], container: { cpuPercent: 12, memoryPercent: 20 } } : null,
       }));
       return json(res, 200, { data: { myself: { clientBalance: m.balance, currentSpendPerHr: m.spend, spendLimit: 80, pods: [...pods, ...m.external] } } });
@@ -595,7 +610,11 @@ export function startMock() {
         // Stop keeps the disk (w.disk: the trees on it); start fails without capacity, or hangs, or boots again.
         if (req.method === "PUT" && wm[3] === "stop") {
           const t = b.types.find((x) => x.type === w.instanceType);
-          if (!t?.stoppable) return json(res, 400, { errors: [{ type: "BadRequestError", message: "instance type is not stoppable" }] });
+          if (b.stopFail) return json(res, 400, { errors: [{ type: "BadRequestError", message: "stop refused (simulated API error)" }] });
+          // Measured live 2026-10-13: a workspace still DEPLOYING (never provisioned), and a RUNNING one of a type Brev
+          // cannot stop (isStoppable false): HTTP 500, the VM stays RUNNING / HEALTHY.
+          if (w.status === "DEPLOYING") return json(res, 500, { errors: [{ type: "InternalServerError", message: "rpc error: code = NotFound desc = instance not found" }] });
+          if (!t?.stoppable) return json(res, 500, { errors: [{ type: "InternalServerError", message: `rpc error: code = Internal desc = instance "inst-${w.id}" does not support stop` }] });
           w.status = "STOPPED";
           m.pods.delete(`brev:${w.name}`);
           return json(res, 200, { id: w.id, status: "STOPPING" });

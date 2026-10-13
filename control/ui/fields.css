@@ -23,6 +23,11 @@
 .ff-env td.fv-grow { width: 60%; }
 .ff-dialog { width: min(520px, 94vw); }
 .ff-dialog .cf-fields { grid-template-columns: 1fr; }
+/* The launch form's provider line: what was loaded for the picked provider, or a spinner while it loads. */
+.cf-provider-status { grid-column: 1 / -1; min-height: 1.4em; }
+.cf-provider-status .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: cf-spin .8s linear infinite; }
+@keyframes cf-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cf-provider-status .spin { animation: none; } }
 .ff-seg button:focus-visible, .fv-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button:disabled, button[disabled] { opacity: .55; cursor: not-allowed; }
 .ff-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: 12px 16px; }

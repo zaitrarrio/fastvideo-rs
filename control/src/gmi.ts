@@ -144,10 +144,14 @@ export const gmi = {
   },
   /** Container products (price, valid) of an IDC, or all. */
   async products(env: Env, idc?: string): Promise<GmiProduct[]> {
-    const div = Number(env.GMI_PRICE_DIVISOR || "100") || 100;
+    const div = gmiPriceDivisor(env);
+    return (await gmi.rawProducts(env, idc)).map((p: any) => ({ name: String(p.name), idc: String(p.idc || idc || ""), usd_per_hr: typeof p.price === "number" ? Math.round((p.price / div) * 10000) / 10000 : null, valid: p.valid !== false, gpu: p.gpuModel ?? null }));
+  },
+  /** The container products as GMI answers them (GET /v1/containers/products: name, idc, gpuModel, price, valid, spec), of an IDC or all. */
+  async rawProducts(env: Env, idc?: string): Promise<any[]> {
     const j = await call(env, "GET", `/containers/products${idc ? `?idc=${encodeURIComponent(idc)}` : ""}`);
-    return arr(j, "products")
-      .filter((p: any) => !p.type || p.type === "Container")
-      .map((p: any) => ({ name: String(p.name), idc: String(p.idc || idc || ""), usd_per_hr: typeof p.price === "number" ? Math.round((p.price / div) * 10000) / 10000 : null, valid: p.valid !== false, gpu: p.gpuModel ?? null }));
+    return arr(j, "products").filter((p: any) => p && typeof p === "object" && p.name && (!p.type || p.type === "Container"));
   },
 };
+/** GMI's `price` ÷ this = $/hr (GMI_PRICE_DIVISOR, default 100; the unit is not documented: UNVERIFIED). */
+export const gmiPriceDivisor = (env: Env) => Number(env.GMI_PRICE_DIVISOR || "100") || 100;

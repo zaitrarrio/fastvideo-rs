@@ -189,9 +189,9 @@ describe("pod logs from boot", () => {
 describe("up: an early, clear verdict", () => {
   const v = (id: string, status: PoolView["status"], detail?: string): PoolView => ({ id, status, detail });
   it("the h3-and-ltx start: names the crash loop and the pools without stock, without waiting 30 min", () => {
-    const pools = [v("fake", "ready"), v("h3-turbo", "failed", `crash loop: ${CRASH}`), v("h3-max", "starting", "pulling"), v("h3-ref2v", "no_stock", "no NVIDIA RTX PRO 6000 in EUR-IS-1"), v("ltx-ref2v", "no_stock")];
+    const pools = [v("fake", "ready"), v("h3-turbo", "failed", `crash loop: ${CRASH}`), v("h3-max", "starting", "pulling"), v("h3-ref2v", "no_stock", "no NVIDIA RTX PRO 6000 in EU-RO-1"), v("ltx-ref2v", "no_stock")];
     expect(summarize(pools)).toBe(
-      `ready 1/5: fake | starting: h3-max (pulling) | failed: h3-turbo (crash loop: ${CRASH}) | no stock: h3-ref2v (no NVIDIA RTX PRO 6000 in EUR-IS-1), ltx-ref2v`,
+      `ready 1/5: fake | starting: h3-max (pulling) | failed: h3-turbo (crash loop: ${CRASH}) | no stock: h3-ref2v (no NVIDIA RTX PRO 6000 in EU-RO-1), ltx-ref2v`,
     );
     expect(upOutcome(pools, 60_000)).toEqual({ done: false });
     pools[2] = v("h3-max", "failed", "crash loop");
@@ -221,7 +221,7 @@ describe("standalone pods: the spec", () => {
     ]);
   });
   it("custom variant on CPU, a DC alias, a GPU type, an image ref or a sha", () => {
-    const cpu = standaloneSpec({ name: "fake1", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], dc: "EUR-IS-1" }).spec;
+    const cpu = standaloneSpec({ name: "fake1", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], dc: "EU-RO-1" }).spec;
     expect(cpu.pools[0]).toMatchObject({ compute: "CPU", volume: false, fake_models: ["fake-wan"] });
     expect(cpu.image).toEqual({ channel: "stable" });
     const g = standaloneSpec({ name: "g", preset: "ltx-pro", gpu_type: "NVIDIA RTX PRO 6000 Blackwell Server Edition", sha: "b51ddcd" }).spec;
@@ -253,7 +253,7 @@ describe("standalone pods: the spec", () => {
     const pl = workerPlacements(spec, spec.pools[0]!)[0]!;
     const payload = workerCreatePayload("fv-pod-h3-solo-1006", "img", spec.pools[0]!, pl, e);
     expect(payload.dockerStartCmd).toEqual([WATCHDOG_WORKER_BOOT]);
-    expect(payload).toMatchObject({ networkVolumeId: "jg48s6o1w0", dataCenterIds: ["EUR-IS-1"], gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] });
+    expect(payload).toMatchObject({ networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] });
     const plain = workerSystemEnv(base, spec.pools[0]!, "img");
     expect(plain.FV_CLUSTER_DEADLINE).toBeUndefined();
     expect(bootFor(plain)).toBe(WORKER_BOOT);
@@ -282,7 +282,7 @@ describe("standalone pods: the API", () => {
     const r = await call(env, "/api/standalone", { method: "POST", body: launch, headers: admin });
     expect(r.status).toBe(201);
     const j: any = await r.json();
-    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { variant: "h3-turbo", image: { channel: "latest" }, region: "eu", dc: "EUR-IS-1", volume: "jg48s6o1w0", deadline_min: 30 }, pod: null });
+    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { variant: "h3-turbo", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
     expect(j.operation).toMatch(/^op_/);
     expect(ops.calls.find((x) => x.path === "/op/start")?.body).toMatchObject({ kind: "up", params: { skip_price_check: false } });
     const cl = await getCluster(env, "h3-solo");
@@ -348,7 +348,7 @@ describe("standalone pods: the API", () => {
 });
 
 describe("boot timeline", () => {
-  // Lines from the 2026-10-06 measurement (h3-turbo, latest = b51ddcd, RTX PRO 6000, EUR-IS-1; pod created 21:50:38).
+  // Lines from the 2026-10-06 measurement (h3-turbo, latest = b51ddcd, RTX PRO 6000, EU-RO-1; pod created 21:50:38).
   const T = (s: string) => Date.parse(s);
   const lines = [
     { stream: "system" as const, ts: T("2026-10-06T21:50:38Z"), text: "create container ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:ff54" },

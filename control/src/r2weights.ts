@@ -18,13 +18,22 @@ import type { Env } from "./env";
 import { hex } from "./crypto";
 import { R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { R2_TREES, type R2Tree } from "./r2-trees";
+import { MXFP8_TREE_GLOB } from "./recipe-trees";
 import { fetchWithTimeout, parseJson } from "./util";
 
 export const DEFAULT_WEIGHTS_BUCKET = "fv-weights";
 export const PLAN_FORMAT = "fv-weights-plan/1";
 export const MANIFEST_FORMAT = "fv-weights-manifest/1";
-/** A boot's R2 download rate for estimates (GB/s): UNVERIFIED until measured on a pod (docs/ops/r2-weights.md §5). */
-export const R2_DOWNLOAD_GBPS = 1.0;
+/** A boot's R2 download rate for estimates (GB/s): the fixed fetcher (64 × 128 MiB, watchdog) on two Runpod serverless
+ * H100 workers, 2026-10-12 round 2: 0.69 (h3, 177 GB) and 0.41 GB/s (wan, 59 GB, one part's tail cost ~45 s); mean
+ * 0.55 (docs/ops/r2-weights.md §5.4, docs/ops/r2-bench-2026-10-12-round2.md). Round 1 (old fetcher): 0.50 / 0.77 / 0.33. */
+export const R2_DOWNLOAD_GBPS = 0.55;
+/** The aux files (AUX_FILES: TAE decoders, LPIPS) as published trees: a boot with weights_source r2 fetches them with the
+ * weights instead of from GitHub / download.pytorch.org (2026-10-12: up to 151 s on one host), then checks each file
+ * against AUX_FILES' SHA-256 (test/unit/preset-trees.test.ts: the same files and bytes). */
+export const R2_AUX_TREES = ["auxiliary/lpips", "auxiliary/tae"];
+/** The aux trees a boot fetches with its weights: the published ones, unless WEIGHTS_R2_AUX=0 (then the pinned URLs). */
+export const r2AuxTrees = (env: Env) => (env.WEIGHTS_R2_AUX === "0" ? [] : R2_AUX_TREES.filter((t) => r2Trees(env)[t]));
 
 export interface R2Cfg {
   endpoint: string;
@@ -169,9 +178,11 @@ ${R2_FETCH_SH}if [ "\${FV_WEIGHTS_SOURCE:-none}" = r2 ] && [ -n "\${FV_WEIGHTS_T
     [ "$kind" = aux ] || continue
     p="$FV_WEIGHTS/$a"; mkdir -p "$(dirname "$p")"
     if [ -f "$p" ] && [ "$(sha256sum "$p" | cut -d' ' -f1)" = "$c" ]; then continue; fi
-    curl -fsSL --retry 3 --max-time 600 -o "$p.part" "$b" && [ "$(sha256sum "$p.part" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$p.part")" = "$d" ] && mv "$p.part" "$p" || { echo "[fv-boot] FAILED: aux $a" >&2; sleep 30; exit 1; }
+    echo "[fv-boot] $(date -u +%H:%M:%S) aux $a <- $b" >&2
+    curl -fsSL --connect-timeout 10 --retry 3 --max-time 600 -o "$p.part" "$b" && [ "$(sha256sum "$p.part" | cut -d' ' -f1)" = "$c" ] && [ "$(stat -c %s "$p.part")" = "$d" ] && mv "$p.part" "$p" || { echo "[fv-boot] $(date -u +%H:%M:%S) FAILED: aux $a" >&2; sleep 30; exit 1; }
   done || exit 1
 fi
+if [ -n "\${FASTVIDEO_STREAMING_FETCH:-}" ]; then date +%s.%N > "\${FV_R2_STATE:-/fvstate}/serve-start"; fi
 `;
 
 // The weights step of a pod's boot with weights_source r2 (PROVIDER_BOOT on GMI / Brev, the Runpod worker boot):
@@ -181,19 +192,69 @@ fi
 // fetch resumes). Progress lines reach the pod's log; GMI / Brev also report them (FV_ENDPOINT_REPORT_URL).
 export const R2_FETCH_SH = `# ---- weights: the R2 weights store (docs/ops/r2-weights.md): presigned URLs from fv-control, no R2 key on the pod
 if [ "\${FV_WEIGHTS_SOURCE:-none}" = r2 ]; then
-  r2fail() { if command -v fail >/dev/null 2>&1; then fail "$1"; else echo "[fv-boot] FAILED: $1" >&2; sleep 30; exit 1; fi; }
-  echo "[fv-boot] weights: R2 weights store (plan: $FV_WEIGHTS_PLAN_URL)" >&2
+  r2fail() { if command -v fail >/dev/null 2>&1; then fail "$1"; else echo "[fv-boot] $(date -u +%H:%M:%S) FAILED: $1" >&2; sleep 30; exit 1; fi; }
+  r2say() { echo "[fv-boot] $(date -u +%H:%M:%S) $*" >&2; }
+  r2el() { awk -v a="$1" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }'; }
+  r2say "weights: R2 weights store (plan: $FV_WEIGHTS_PLAN_URL)"
   R2S="\${FV_R2_STATE:-/fvstate}"; R2T="\${FV_R2_TOOLS:-/opt/fv}"
   mkdir -p "$R2S" "$R2T" "$FV_WEIGHTS"
+  t="$(date +%s.%N)"
   if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 curl ca-certificates; } >"$R2S/apt-r2.log" 2>&1 || r2fail "apt python3"
+    { apt-get -o Acquire::http::Timeout=15 -o Acquire::Retries=3 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=15 -o Acquire::Retries=3 install -y -qq --no-install-recommends python3 curl ca-certificates; } >"$R2S/apt-r2.log" 2>&1 || r2fail "apt python3"
+    r2say "step tools: $(r2el "$t")s (apt-get python3 curl)"
   fi
-  curl -fsS --retry 5 --max-time 60 -o "$R2T/r2-fetch.py" "$FV_R2_FETCH_URL" || r2fail "r2-fetch.py download"
-  echo "$FV_R2_FETCH_SHA256  $R2T/r2-fetch.py" | sha256sum -c - >/dev/null 2>&1 || r2fail "r2-fetch.py sha256"
+  # The fetcher: the image's copy when it is the one fv-control pins, else fv-control's (short timeouts, retried).
+  t="$(date +%s.%N)"; R2F="\${FV_R2_FETCH_IMAGE:-/opt/fastvideo-rs/bin/r2-fetch.py}"
+  if [ -f "$R2F" ] && echo "$FV_R2_FETCH_SHA256  $R2F" | sha256sum -c - >/dev/null 2>&1; then r2say "step fetcher: from the image"
+  else
+    R2F="$R2T/r2-fetch.py"
+    curl -fsS --connect-timeout 5 --max-time 30 --retry 4 --retry-delay 1 --retry-all-errors -o "$R2F" "$FV_R2_FETCH_URL" || r2fail "r2-fetch.py download"
+    echo "$FV_R2_FETCH_SHA256  $R2F" | sha256sum -c - >/dev/null 2>&1 || r2fail "r2-fetch.py sha256"
+    r2say "step fetcher: $(r2el "$t")s (downloaded from fv-control)"
+  fi
+  # The MXFP8 pre-quantized DiTs are of no use below sm_100 (the engine runs W8A8 there): not fetched.
+  if [ -z "\${FV_R2_SKIP_TREES+x}" ]; then
+    cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d ' ')"
+    case "$cc" in [1-9].*) export FV_R2_SKIP_TREES="${MXFP8_TREE_GLOB}" ;; esac
+  fi
+  t="$(date +%s.%N)"
   set -- --root "$FV_WEIGHTS" --plan-url "$FV_WEIGHTS_PLAN_URL" --token-env FV_ENDPOINT_REPORT_TOKEN --pod "\${FV_POD_ID:-}" --status "$R2S/r2-fetch.json"
   if [ -n "\${FV_ENDPOINT_REPORT_URL:-}" ]; then set -- "$@" --report-url "$FV_ENDPOINT_REPORT_URL"; fi
-  python3 "$R2T/r2-fetch.py" "$@" 2>&1 | tee "$R2S/r2-fetch.log" >&2
-  [ "\${PIPESTATUS[0]}" = 0 ] || r2fail "r2 weights: $(grep FAILED "$R2S/r2-fetch.log" | tail -1 | cut -c1-240 | tr '"' "'")"
+  # Streaming (docs/ops/r2-weights.md §11): fv-serve starts once every file it reads unguarded is in place and loads
+  # while the rest arrives, when its binary can (the marker) and unless FV_R2_STREAM=0.
+  R2STREAM=""
+  if [ "\${FV_R2_STREAM:-1}" = 1 ] && grep -qaF 'fv-streaming-fetch/1' "\${FV_SERVE_BIN:-/opt/fastvideo-rs/bin/fv-serve}" 2>/dev/null; then R2STREAM=1; fi
+  if [ -n "$R2STREAM" ]; then
+    rm -f "$R2S/r2-stream-ready" "$R2S/r2-fetch.rc" "$R2S/serve-start"
+    FV_BOOT_PID=$$
+    # The fetcher's own subshell: it times the fetch when it ends, and on a failure stops fv-serve (this shell execs
+    # it: same pid) so a partial tree is never served (its loads fail on the maps marked failed too).
+    (
+      set +e
+      python3 "$R2F" "$@" --stream --stream-ready "$R2S/r2-stream-ready" 2>&1 | tee "$R2S/r2-fetch.log" >&2
+      rc="\${PIPESTATUS[0]}"
+      if [ "$rc" = 0 ]; then
+        r2say "step fetch: $(r2el "$t")s"
+        if [ -f "$R2S/serve-start" ]; then r2say "step load_overlap: $(r2el "$(cat "$R2S/serve-start")")s (fv-serve loading while the fetch ran)"; fi
+      elif [ -f "$R2S/r2-stream-ready" ]; then
+        why="$(grep FAILED "$R2S/r2-fetch.log" | tail -1 | cut -c1-240 | tr '"' "'")"
+        r2say "FAILED: r2 weights while fv-serve was loading: $why: stopping fv-serve"
+        if command -v report >/dev/null 2>&1; then report failed "" "r2 weights: $why"; fi
+        kill -TERM "$FV_BOOT_PID" 2>/dev/null; sleep "\${FV_STREAM_KILL_GRACE_S:-20}"; kill -KILL "$FV_BOOT_PID" 2>/dev/null
+      fi
+      printf %s "$rc" > "$R2S/r2-fetch.rc"
+    ) &
+    while [ ! -f "$R2S/r2-stream-ready" ] && [ ! -f "$R2S/r2-fetch.rc" ]; do sleep 0.2; done
+    [ -f "$R2S/r2-stream-ready" ] || r2fail "r2 weights: $(grep FAILED "$R2S/r2-fetch.log" | tail -1 | cut -c1-240 | tr '"' "'")"
+    r2say "step stream_ready: $(r2el "$t")s (the files fv-serve reads unguarded are in place; the rest streams in while it loads)"
+    export FASTVIDEO_STREAMING_FETCH=1 FASTVIDEO_STREAMING_FETCH_STATUS="$R2S/r2-fetch.json"
+    # the fetcher first: this shell and fv-serve (exec'd from it) yield the CPUs to it while both run
+    renice -n "\${FV_SERVE_NICE:-5}" -p $$ >/dev/null 2>&1 || true
+  else
+    python3 "$R2F" "$@" 2>&1 | tee "$R2S/r2-fetch.log" >&2
+    [ "\${PIPESTATUS[0]}" = 0 ] || r2fail "r2 weights: $(grep FAILED "$R2S/r2-fetch.log" | tail -1 | cut -c1-240 | tr '"' "'")"
+    r2say "step fetch: $(r2el "$t")s"
+  fi
   set --
 fi
 `;

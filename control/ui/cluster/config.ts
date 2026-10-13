@@ -8,6 +8,7 @@
 import { badge, copyText, h, kids, type Api } from "../dom";
 import { createJsonEditor, type Dynamic, type JsonEditor } from "../editor";
 import { askExtend } from "../forms/dialogs";
+import { loadProvider, loadShas, mergeProvider } from "../forms/common";
 import { schemaAt, unwrap, type Issue, type Schema } from "../schema";
 import { renderDiff } from "../view";
 import "./config.css";
@@ -53,7 +54,8 @@ function setAt(root: any, p: Path, x: any) {
 export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   const { api, toast } = o;
   host.replaceChildren(h("p", { class: "muted" }, "loading…"));
-  const [schemas, dyn, tpl] = await Promise.all([api("/api/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/schemas/dynamic${o.id ? `?cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/templates")]);
+  // The lists without any provider's live one (?live=0); the providers the pools use load next (ensureProviders).
+  const [schemas, dyn, tpl] = await Promise.all([api("/api/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/schemas/dynamic?live=0${o.id ? `&cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/templates")]);
   const presets: { id: string; title: string; description: string; weights: string[]; licence?: string; pool: any }[] = tpl.pool_presets || [];
   let saved: any = null;
   let version = 0;
@@ -280,7 +282,25 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
 
   // ---- the form
   const gpuOpts = () => (dyn.gpu_types || []).map((g: any) => ({ id: g.id, label: g.display || g.id, detail: `${g.secure_price != null ? `$${g.secure_price}/hr` : "no price"}${g.stock ? ` · ${g.stock}` : ""}` }));
+  // The providers the pools use (Runpod for a pool without one): their GPU types / products with prices and stock, once
+  // each per page session (forms/common.ts); a provider no pool uses is never asked. A commit image: the GHCR commits.
+  const asked = new Set<string>();
+  const typing = () => {
+    const a = document.activeElement as HTMLElement | null;
+    return !!a && el.form.contains(a) && (a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+  };
+  function ensureLists() {
+    for (const p of new Set<string>((spec?.pools || []).map((x: any) => x?.provider || "runpod"))) {
+      if (asked.has(p) || dyn.provider_details?.[p]) continue;
+      asked.add(p);
+      loadProvider(api, p)
+        .then((d) => (mergeProvider(dyn, d), mode === "form" && !typing() && drawForm()))
+        .catch(() => asked.delete(p));
+    }
+    if (spec?.image?.sha !== undefined && !asked.has("shas")) asked.add("shas"), loadShas(api, dyn).then(() => mode === "form" && !typing() && drawForm());
+  }
   function drawForm() {
+    ensureLists();
     const s = spec;
     const lists = h(
       "div",
@@ -660,6 +680,11 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         ? fieldBox(P("cpu_flavors"), "CPU flavors (in order)", multi(P("cpu_flavors"), (dyn.cpu_flavors || []).map((f: any) => ({ id: f.id, label: f.id, detail: `$${f.dph_per_vcpu}/vCPU·hr` })), { optional: true }), describe(["pools", 0, "cpu_flavors"]), true)
         : fieldBox(P("gpu_types"), "GPU types (in order; none: the regions')", multi(P("gpu_types"), gpuOpts(), { optional: true }), describe(["pools", 0, "gpu_types"]), true),
       other ? null : fieldBox(P("regions"), "Regions (none: the cluster's)", multi(P("regions"), (dyn.regions || []).map((r: any) => ({ id: r.id, label: r.id, detail: r.dc })), { optional: true }), null, true),
+      // weights_source r2 on Runpod (no volume): any data centre, and the hosts' CUDA filter (docs/ops/r2-weights.md §4).
+      !other && !isCpu && p.weights_source === "r2"
+        ? fieldBox(P("data_centers"), "Data centres (r2; none: the regions')", multi(P("data_centers"), enumOf(["pools", 0, "data_centers", 0]).map((d) => ({ id: d, label: d })), { optional: true }), describe(["pools", 0, "data_centers"]), true)
+        : null,
+      !other && !isCpu ? fieldBox(P("allowed_cuda"), "Allowed CUDA (host filter)", multi(P("allowed_cuda"), enumOf(["pools", 0, "allowed_cuda", 0]).map((v) => ({ id: v, label: v })), { optional: true }), describe(["pools", 0, "allowed_cuda"]), true) : null,
       isCpu && !other ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,
       fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
       other ? null : fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),

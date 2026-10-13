@@ -29,7 +29,7 @@
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
 #   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
-#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1]
+#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EU-RO-1|<DC> (r2)]
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
 #                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]
@@ -57,9 +57,11 @@
 #                                              each pod's boot timeline: create, machine, image pull, container, fv-serve,
 #                                              volume, weights per component, warm-up, ready (and the phase it is in)
 #   fv-control.sh endpoint list [--all]       Runpod serverless endpoints fv-control made (docs/control/serverless.md)
-#   fv-control.sh endpoint create <spec.json|-> | create <name> --preset P [--mode queue|lb] | create <name> [variant]
+#   fv-control.sh endpoint create <spec.json|-> | create <name> --preset P [--mode queue|lb] [--weights volume|r2]
+#                                 [--gpu TYPE]... [--dc DC]... | create <name> [variant]
 #                                              model-first: a preset (endpoint presets) sets variant, config, weights,
-#                                              GPU; a bare variant is a custom endpoint (default cpu = CPU fake engine)
+#                                              GPU; a bare variant is a custom endpoint (default cpu = CPU fake engine).
+#                                              --weights r2: the R2 weights store (no volume, any DC unless --dc)
 #   fv-control.sh endpoint presets             what each preset serves (models, tasks, API names), GPU memory, weights
 #   fv-control.sh endpoint serves <name|id>    what an endpoint serves (derived; preset or inferred) and its test invokes
 #   fv-control.sh endpoint show <name|id> | update <name|id> <json> | scale <name|id> <max> [min]
@@ -191,7 +193,8 @@ cmd_pod() {
           --image) body="$(jq -c --arg v "${2:?}" '.image = $v' <<<"$body")"; shift 2 ;;
           --gpu) body="$(jq -c --arg v "${2:?}" '.gpu_types = ((.gpu_types // []) + [$v])' <<<"$body")"; shift 2 ;;
           --cpu) if [[ -n "${2:-}" && "${2:-}" != --* ]]; then body="$(jq -c --arg v "$2" '.compute = "CPU" | .cpu_flavors = [$v]' <<<"$body")"; shift 2; else body="$(jq -c '.compute = "CPU"' <<<"$body")"; shift; fi ;;
-          --region) body="$(jq -c --arg v "${2:?}" '.region = $v' <<<"$body")"; shift 2 ;;
+          # A region id (eu), or a Runpod data centre (EU-RO-1; with --weights r2 any one, e.g. US-TX-3).
+          --region) body="$(jq -c --arg v "${2:?}" 'if ($v | test("^[A-Z]{2,3}-[A-Z]{2}-[0-9]+$")) then .dc = $v else .region = $v end' <<<"$body")"; shift 2 ;;
           --no-volume) body="$(jq -c '.volume = false' <<<"$body")"; shift ;;
           --env | --secret-env)
             kv="${2:?$1 K=V}"; k="${kv%%=*}"; v="${kv#*=}"
@@ -252,21 +255,25 @@ cmd_endpoint() {
     create)
       if [[ -f "${1:-}" || "${1:-}" == - ]]; then body="$(jq -c '{spec: .}' "${1/#-//dev/stdin}")"
       else
-        local name="${1:?spec.json or a name}" preset="" variant="" mode=""; shift
+        local name="${1:?spec.json or a name}" preset="" variant="" mode="" weights="" gpus="[]" dcs="[]"; shift
         while (( $# )); do case "$1" in
           --preset) preset="${2:?--preset P (endpoint presets)}"; shift 2 ;;
           --mode) mode="${2:?--mode queue|lb}"; shift 2 ;;
+          --weights) weights="${2:?--weights volume|r2}"; [[ "$weights" == volume || "$weights" == r2 ]] || die "--weights volume|r2"; shift 2 ;;
+          --gpu) gpus="$(jq -c --arg g "${2:?--gpu TYPE}" '. + [$g]' <<<"$gpus")"; shift 2 ;;
+          --dc) dcs="$(jq -c --arg d "${2:?--dc DC}" '. + [$d]' <<<"$dcs")"; shift 2 ;;
           -*) die "endpoint create: unknown option $1" ;;
           *) variant="$1"; shift ;;
         esac; done
         [[ -n "$preset" && -n "$variant" ]] && die "endpoint create: --preset or a variant, not both"
-        body="$(jq -nc --arg n "$name" --arg p "$preset" --arg v "${variant:-cpu}" --arg m "$mode" \
-          '{spec: ({name: $n} + (if $p != "" then {preset: $p} else {variant: $v} end) + (if $m != "" then {mode: $m} else {} end))}')"
+        body="$(jq -nc --arg n "$name" --arg p "$preset" --arg v "${variant:-cpu}" --arg m "$mode" --arg w "$weights" --argjson g "$gpus" --argjson d "$dcs" \
+          '{spec: ({name: $n} + (if $p != "" then {preset: $p} else {variant: $v} end) + (if $m != "" then {mode: $m} else {} end)
+            + (if $w != "" then {weights_source: $w} else {} end) + (if ($g | length) > 0 then {gpu_types: $g} else {} end) + (if ($d | length) > 0 then {data_centers: $d} else {} end))}')"
       fi
       api_s POST /api/serverless "$body" || die "create: $(api_err)"; ep_line <<<"$API_OUT" ;;
     presets) api GET /api/serverless/presets | jq -r '.presets[] | "\(.id)\t\(.variant)\(if .inline_config then " + inline config" else "" end)\t>= \(.min_vram_gb) GB\tweights: \(.weights | join(","))\n  serves: \([.serves.models[] | "\(.id) [\(.tasks | join(","))]"] | join("; "))\n  API names: \([.serves.aliases[] | "\(.name)->\(.model)"] | join(", "))\n  APIs: \(.serves.protocols | join(", "))"' ;;
     serves) api GET "/api/serverless/${1:?name|id}/serves" | jq '{preset, preset_inferred, models: [.serves.models[] | {id, recipe, tier, tasks}], aliases: .serves.aliases, protocols: .serves.protocols, fal_apps: .serves.fal_apps, weights: .serves.weights, examples: [.examples[] | {label, invoke}]}' ;;
-    show) api GET "/api/serverless/${1:?name|id}" | jq '{endpoint: (.endpoint | del(.spec)), spec: .endpoint.spec, runpod: .runpod, health, stats, jobs: [.jobs[] | {id, route, status, cold, delay_ms, exec_ms, wall_ms}], costs}' ;;
+    show) api GET "/api/serverless/${1:?name|id}" | jq '{endpoint: (.endpoint | del(.spec)), spec: .endpoint.spec, runpod: .runpod, health, stats, outlook: (.outlook | {weights_source, note, cache, fetch_gb, rate_gbps, rate_source}), boots, jobs: [.jobs[] | {id, route, status, cold, delay_ms, exec_ms, wall_ms}], costs}' ;;
     update) api_s PUT "/api/serverless/${1:?name|id}" "$(jq -c '{spec: .}' <<<"${2:?json (merged over the spec)}")" || die "update: $(api_err)"; ep_line <<<"$API_OUT" ;;
     scale) api_s POST "/api/serverless/${1:?name|id}/scale" "$(jq -nc --argjson max "${2:?workers_max}" --arg min "${3:-}" '{workers_max: $max} + (if $min == "" then {} else {workers_min: ($min|tonumber)} end)')" || die "scale: $(api_err)"; ep_line <<<"$API_OUT" ;;
     extend) api_s POST "/api/serverless/${1:?name|id}/extend" "$(jq -nc --argjson m "${2:?minutes}" '{minutes: $m}')" || die "extend: $(api_err)"; ep_line <<<"$API_OUT" ;;
@@ -283,7 +290,13 @@ cmd_endpoint() {
       if [[ "$(jq -r '.done' <<<"$out")" == false ]]; then
         jid="$(jq -r .job <<<"$out")"
         echo "job $(jq -r .runpod_job <<<"$out") $(jq -r .status <<<"$out"): polling" >&2
-        until [[ "$(jq -r '.job.finished_at // "null"' <<<"$out")" != null ]]; do sleep 3; out="$(api GET "/api/serverless/$id/jobs/$jid")"; done
+        # The invoke's answer carries the job's number in .job; GET /jobs/<n> carries the job object there. Poll until
+        # that object has finished_at (a number in .job never counts as done: the first answer is not the job).
+        [[ "$jid" =~ ^[0-9]+$ ]] || die "invoke: no job number in the answer: $(head -c 300 <<<"$out")"
+        until [[ "$(jq -r '(.job | objects | .finished_at) // "null"' <<<"$out" 2>/dev/null || echo null)" != null ]]; do
+          sleep "${FV_POLL_S:-3}"
+          out="$(api GET "/api/serverless/$id/jobs/$jid")" || die "invoke: polling job $jid failed"
+        done
       fi
       jq . <<<"$out" ;;
     logs) api GET "/api/serverless/${1:?name|id}/logs${2:+?worker=$2}" | jq -r '"workers: \(.workers | join(" ")); worker \(.worker // "-")", (.system[]? // empty), (.container[]? // empty), (.stored[]? | "\(.ts / 1000 | todate) \(.msg)")' ;;

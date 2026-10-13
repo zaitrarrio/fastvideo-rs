@@ -4,7 +4,7 @@ Path-style requests (/<bucket>/<key>): PUT (If-None-Match: *), HEAD, GET with
 Range, DELETE, ListObjectsV2, and multipart uploads. Header-signed requests
 must carry an x-amz-content-sha256 that matches the body (as R2 checks) and a
 valid SigV4 signature for SECRET; presigned GETs are checked the same way,
-expiry included. Faults for the fetcher's tests: corrupt / cut / fail the
+expiry included. Faults for the fetcher's tests: corrupt / cut / fail / stall the
 next N ranged GETs, or refuse presigned URLs dated before a cut-off (403).
 POST /plan answers with `plan_fn()` (a fake fv-control plan endpoint).
 """
@@ -14,6 +14,7 @@ import hmac
 import json
 import re
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -41,7 +42,11 @@ class State:
         self.objects = {}  # (bucket, key) -> (bytes, meta)
         self.uploads = {}  # id -> (bucket, key, meta, {n: bytes})
         self.lock = threading.Lock()
-        self.faults = {"corrupt": 0, "cut": 0, "err500": 0}
+        self.faults = {"corrupt": 0, "cut": 0, "err500": 0, "stall": 0}
+        self.stall_skip = 0  # ranged GETs served normally before a "stall" fault may hit one
+        self.stall_s = 20.0  # how long a stalled GET trickles before it gives up
+        self.get_delay_s = 0.0  # every ranged GET of a tree object waits this long first (a slow fetch)
+        self.die_after = None  # after this many ranged GETs of tree objects, every one is a 404 (the fetch dies)
         self.reject_before = None  # presigned URLs with X-Amz-Date before this: 403
         self.gets = []  # (key, range)
         self.plan_fn = None
@@ -184,6 +189,29 @@ def make_handler(st):
                 a, b = int(a), min(int(b), len(data) - 1)
                 st.gets.append((key, a))
                 chunk = data[a:b + 1]
+                if "/weights/" in key:
+                    if st.die_after is not None and sum(1 for k, x in st.gets if x is not None and "/weights/" in k) > st.die_after:
+                        return self.err(404, "NoSuchKey", "gone")
+                    if st.get_delay_s:
+                        time.sleep(st.get_delay_s)
+                if len(st.gets) > st.stall_skip and "/weights/" in key and st.take("stall"):
+                    # a straggler: headers and a few bytes, then (almost) nothing, as R2 does now and then
+                    self.send_response(206)
+                    self.send_header("Content-Range", f"bytes {a}-{b}/{len(data)}")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(chunk[:100])
+                        self.wfile.flush()
+                        t = time.time()
+                        while time.time() - t < st.stall_s:
+                            time.sleep(0.2)
+                            self.wfile.write(chunk[100:101])  # a byte now and then: no socket timeout
+                            self.wfile.flush()
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
                 if st.take("corrupt"):
                     chunk = bytes([chunk[0] ^ 0xFF]) + chunk[1:]
                 if st.take("cut"):

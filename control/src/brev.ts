@@ -29,7 +29,56 @@ export interface BrevWorkspace {
   instanceType: string | null;
   dns: string | null;
   createdAt: string | null;
+  /** Brev's own explanation of the status (brev-cli entity.go Workspace.StatusMessage), e.g. why a start did not run. */
+  statusMessage: string | null;
+  /** The instance type can be stopped and started (instanceTypeInfo.stoppable; the CLI refuses a start without it). */
+  stoppable: boolean | null;
+  /** The latest start task in environment.tasks[] (why a start did not run: its statusMessage is empty then); null when
+   * the payload has none. */
+  lastStart: BrevTask | null;
 }
+/** One task of a workspace (environment.tasks[]; shape read defensively, UNVERIFIED beyond the fields used here). */
+export interface BrevTask {
+  status: string | null;
+  /** Its message, at most TASK_MSG_MAX characters (the tail: Brev's reason ends it; the whole can be ~10 KB). */
+  message: string | null;
+  at: number | null;
+  /** The message says the zone had no capacity (AWS InsufficientCapacity / "insufficient resources"). */
+  capacity: boolean;
+}
+/** Characters of a task message kept (never the whole ~10 KB). */
+export const TASK_MSG_MAX = 240;
+export const INSUFFICIENT_CAPACITY_RE = /InsufficientCapacity|insufficient (?:resources|capacity)/i;
+const taskTime = (t: any): number | null => {
+  for (const k of ["updatedAt", "updated_at", "finishedAt", "createdAt", "created_at", "startedAt"]) {
+    const v = t?.[k];
+    const n = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN;
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+};
+const taskKind = (t: any) => [t?.type, t?.name, t?.action, t?.kind, t?.taskType].filter((x) => typeof x === "string").join(" ");
+/** The latest start task of a workspace payload (environment.tasks[], or tasks[]): a task whose type / name / action
+ * says start (else, when no task names its kind, the latest task); its message truncated to its tail. */
+export function lastStartTask(w: any): BrevTask | null {
+  const tasks: any[] = Array.isArray(w?.environment?.tasks) ? w.environment.tasks : Array.isArray(w?.tasks) ? w.tasks : [];
+  if (!tasks.length) return null;
+  const named = tasks.filter((t) => taskKind(t));
+  const pool = named.length ? named.filter((t) => /start/i.test(taskKind(t))) : tasks;
+  if (!pool.length) return null;
+  // The latest by its time; without times, the last in the list.
+  const t = pool.reduce((a, b) => ((taskTime(b) ?? -1) >= (taskTime(a) ?? -1) ? b : a));
+  const raw = [t?.message, t?.statusMessage, t?.error, t?.errorMessage].find((x) => typeof x === "string" && x.trim()) as string | undefined;
+  const msg = raw ? raw.trim().replace(/\s+/g, " ") : null;
+  return {
+    status: typeof t?.status === "string" ? t.status.toUpperCase() : null,
+    message: msg ? (msg.length > TASK_MSG_MAX ? `…${msg.slice(-(TASK_MSG_MAX - 1))}` : msg) : null,
+    at: taskTime(t),
+    capacity: !!raw && INSUFFICIENT_CAPACITY_RE.test(raw),
+  };
+}
+/** A start task in a few words for logs and alerts (null when it has nothing to say). */
+export const brevTaskLine = (t: BrevTask | null) => (t && (t.message || (t.status && !/SUCC|COMPLET|DONE/.test(t.status))) ? `last start task ${t.status || "?"}${t.message ? `: ${t.message}` : ""}` : null);
 
 const base = (env: Env) => (env.BREV_API_URL || "https://brevapi.us-west-2-prod.control-plane.brev.dev").replace(/\/$/, "");
 export const brevEnabled = (env: Env) => !!env.BREV_API_TOKEN && !!env.BREV_ORG_ID;
@@ -76,8 +125,14 @@ export function toWorkspace(w: any): BrevWorkspace {
     instanceType: w.instanceType ?? null,
     dns: w.dns ?? null,
     createdAt: w.createdAt ?? w.created_at ?? null,
+    statusMessage: typeof w.statusMessage === "string" && w.statusMessage.trim() ? w.statusMessage.trim().slice(0, 300) : null,
+    stoppable: typeof w.instanceTypeInfo?.stoppable === "boolean" ? w.instanceTypeInfo.stoppable : null,
+    lastStart: lastStartTask(w),
   };
 }
+/** Brev's status of a workspace in a few words: the status, its message and health (what the logs and alerts show). */
+export const brevStatusLine = (w: Pick<BrevWorkspace, "status" | "statusMessage" | "health"> & { lastStart?: BrevTask | null }) =>
+  [w.status || "?", w.statusMessage, brevTaskLine(w.lastStart ?? null), w.health && w.health !== "HEALTHY" ? `health ${w.health}` : null].filter(Boolean).join(": ");
 /** brev-cli store/workspace.go: UserWorkspaceTemplateID, UserWorkspaceClassID, DefaultDiskStorage (non-admin users). */
 export const BREV_USER_TEMPLATE_ID = "4nbb4lg2s";
 export const BREV_USER_CLASS_ID = "2x8";
@@ -100,6 +155,17 @@ const arr = (j: any): any[] => (Array.isArray(j) ? j : Array.isArray(j?.workspac
 export const brev = {
   async workspaces(env: Env): Promise<BrevWorkspace[]> {
     return arr(await call(env, "GET", `api/organizations/${encodeURIComponent(env.BREV_ORG_ID!)}/workspaces`)).map(toWorkspace);
+  },
+  /** One workspace (`GET api/workspaces/{id}`, brev-cli GetWorkspace); null when Brev does not know it. */
+  async get(env: Env, id: string): Promise<BrevWorkspace | null> {
+    try {
+      const j = await call(env, "GET", `api/workspaces/${encodeURIComponent(id)}`);
+      const w = j?.workspace ?? j;
+      return w && typeof w === "object" && w.id && w.status ? toWorkspace(w) : null;
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
   },
   async byName(env: Env, name: string): Promise<BrevWorkspace | null> {
     return (await brev.workspaces(env)).find((w) => w.name === name && w.status !== "DELETING") || null;
@@ -147,9 +213,11 @@ export const brev = {
   async stop(env: Env, id: string): Promise<void> {
     await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/stop`);
   },
-  /** Starts a stopped workspace (`PUT …/start`); per the docs it fails when its provider / region has no capacity. */
-  async start(env: Env, id: string): Promise<void> {
-    await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/start`);
+  /** Starts a stopped workspace (`PUT …/start`); per the docs it fails when its provider / region has no capacity.
+   * Answers the workspace as Brev returns it (brev-cli StartWorkspace: its status and statusMessage), or null. */
+  async start(env: Env, id: string): Promise<BrevWorkspace | null> {
+    const j = await call(env, "PUT", `api/workspaces/${encodeURIComponent(id)}/start`);
+    return j && typeof j === "object" && (j.id || j.workspace?.id) ? toWorkspace(j.workspace ?? j) : null;
   },
   /** Deletes one workspace (instance and disk); an unknown one counts as gone. */
   async remove(env: Env, id: string): Promise<boolean> {
@@ -162,13 +230,18 @@ export const brev = {
     }
   },
   /** Every instance type the org may rent: price, stoppable flag, storage price, deploy time (cached 1 h per isolate). */
-  async types(env: Env): Promise<BrevType[]> {
+  async types(env: Env, o: { refresh?: boolean } = {}): Promise<BrevType[]> {
+    return (await brev.rawTypes(env, o)).rows.map(toType).filter((t: BrevType) => t.type);
+  },
+  /** The instance-type listing as Brev answers it (GET api/instances/alltypesavailable/{org}), with when it was read;
+   * cached 1 h per isolate (`refresh`: read it again). Every row, CPU-only ones too (the launch table, instance-types.ts). */
+  async rawTypes(env: Env, o: { refresh?: boolean } = {}): Promise<{ at: number; rows: any[] }> {
     const k = `${base(env)}|${env.BREV_ORG_ID}`;
-    if (typesCache && typesCache.k === k && Date.now() - typesCache.at < TYPES_TTL_MS) return typesCache.v;
+    if (!o.refresh && typesCache && typesCache.k === k && Date.now() - typesCache.at < TYPES_TTL_MS) return { at: typesCache.at, rows: typesCache.raw };
     const j = await call(env, "GET", `api/instances/alltypesavailable/${encodeURIComponent(env.BREV_ORG_ID!)}`);
-    const v = (Array.isArray(j?.allInstanceTypes) ? j.allInstanceTypes : Array.isArray(j) ? j : []).map(toType).filter((t: BrevType) => t.type);
-    typesCache = { k, at: Date.now(), v };
-    return v;
+    const raw: any[] = (Array.isArray(j?.allInstanceTypes) ? j.allInstanceTypes : Array.isArray(j) ? j : []).filter((x: any) => x && typeof x === "object" && x.type);
+    typesCache = { k, at: Date.now(), raw };
+    return { at: typesCache.at, rows: raw };
   },
   /** One instance type of the list; null when it is not there or the list is unreachable. */
   async type(env: Env, type: string): Promise<BrevType | null> {
@@ -199,7 +272,7 @@ export interface BrevType {
   cloud_cred_id: string | null;
 }
 const TYPES_TTL_MS = 3600_000;
-let typesCache: { k: string; at: number; v: BrevType[] } | null = null;
+let typesCache: { k: string; at: number; raw: any[] } | null = null;
 /** Tests: forget the cached instance-type list. */
 export const resetBrevTypes = () => {
   typesCache = null;

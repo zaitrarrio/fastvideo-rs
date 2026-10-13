@@ -285,6 +285,8 @@ fn load_raw_tensors_with(
     let mmaps: Vec<(PathBuf, Mmap)> = files
         .into_iter()
         .map(|f| {
+            // Every byte is read below: a file still being fetched is waited for whole.
+            crate::stream::wait_file(&f)?;
             let mapped = mmap_file(&f)?;
             Ok((f, mapped))
         })

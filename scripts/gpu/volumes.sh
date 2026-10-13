@@ -13,10 +13,19 @@
 # `us` region everywhere that sources this file. (fv-control has the same
 # switch: US_VOLUME_ID in control/src/cluster/regions.ts.)
 
-FV_EU_VOLUME_ID=jg48s6o1w0
-FV_EU_VOLUME_NAME=fv-weights-h3-ltx-hy
-FV_EU_DC=EUR-IS-1
+# EU (owner decision 2026-10-13, "eu volume - reduce to 500 gb plan"): fv-weights-h3-ltx-500, 500 GB in
+# EU-RO-1, H3 + LTX trees only (FV_EU_VOLUME_TREES); everything else comes from R2 (weights_source r2).
+# It replaced jg48s6o1w0 (fv-weights-h3-ltx-hy, 2000 GB, EUR-IS-1; Runpod no longer creates volumes there),
+# which the coordinator deletes once a pod has read the new volume (docs/ops/runpod-volumes.md §0).
+FV_EU_VOLUME_ID=bz0ofkfx45
+FV_EU_VOLUME_NAME=fv-weights-h3-ltx-500
+FV_EU_DC=EU-RO-1
 FV_EU_GPUS="NVIDIA RTX PRO 6000 Blackwell Server Edition"
+# The trees on the EU volume (462.45 GB in weights-r2.tsv), filled from R2 by r2-fill-volume.sh on 2026-10-13.
+# control/src/volumes.ts EU_TREES holds the same list (a unit test compares them).
+FV_EU_VOLUME_TREES="h3-base h3-base/text_encoder_fp8 h3-base/transformer_prequant_4step-vsa_mxfp8 \
+h3-base/transformer_prequant_sol-h3_mxfp8 FastH3-4-step-Preview-v1-LoRA h3-ref2va ltx25 ltx25-dev \
+ltx25-ic-lora-ingredients upscaler h3-to-ltx auxiliary/tae auxiliary/lpips"
 
 FV_US_VOLUME_ID=""   # empty = US unavailable (was s2k01690bi, deleted)
 FV_US_VOLUME_NAME="" # empty = US unavailable (was fv-weights-b200-us, deleted)

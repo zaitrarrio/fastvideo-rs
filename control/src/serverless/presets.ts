@@ -27,6 +27,8 @@ export interface SlsPreset {
   /** An inline config (FV_WORKER_TOML_B64): one the image does not carry. */
   config_toml?: string;
   weights: string[];
+  /** Pre-quantized trees fetched with weights_source r2 (../presets.ts PoolPreset.prequant). */
+  prequant: string[];
   min_vram_gb: number;
   container_disk_gb: number;
   execution_timeout_s: number;
@@ -47,13 +49,14 @@ export const SLS_PRESETS: SlsPreset[] = [
       ...(pool.config && pool.config !== img?.default ? { config: pool.config } : {}),
       ...(pool.config_toml ? { config_toml: pool.config_toml } : {}),
       weights: p.weights,
+      prequant: p.prequant ?? [],
       min_vram_gb: p.min_vram_gb,
       container_disk_gb: pool.container_disk_gb ?? 20,
       execution_timeout_s: pool.job_timeout_s ?? 1800,
       ...(p.licence ? { licence: p.licence } : {}),
     };
   }),
-  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
+  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], prequant: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
 ];
 export const slsPreset = (id: unknown): SlsPreset | undefined => SLS_PRESETS.find((p) => p.id === id);
 
@@ -84,6 +87,7 @@ export interface SpecLike {
   image: { channel?: string; sha?: string; ref?: string };
   gpu_types?: string[];
   network_volume: string | null;
+  weights_source?: "volume" | "r2";
 }
 export interface Issue {
   path: (string | number)[];
@@ -122,7 +126,9 @@ export function servingIssues(spec: SpecLike, s: Serves = servesOf(spec)): { iss
   if (!s.models.length && s.source.kind === "unknown" && !spec.config) warnings.push({ path: ["variant"], message: "fv-control does not know this variant's config: nothing derived" });
   const trees = [...new Set([...(preset?.weights ?? []), ...s.weights])];
   if (spec.compute === "GPU" && s.engine !== "fake") {
-    if (!spec.network_volume) {
+    if (spec.weights_source === "r2") {
+      // The R2 weights store: serverless/weights.ts slsWeightsIssues checks the trees are published.
+    } else if (!spec.network_volume) {
       // A preset's missing volume is the schema's issue (spec.ts superRefine).
       if (trees.length && !preset) issues.push({ path: ["network_volume"], message: `the config loads weight trees (${trees.join(", ")}): mount the weights volume ${REGIONS.eu.volume} (${REGIONS.eu.dc})` });
     } else {
@@ -166,4 +172,4 @@ export function mergeSpec(prev: Record<string, any>, patch: Record<string, any>)
 }
 
 /** Fields whose change makes an update re-check what the endpoint serves (servingIssues). */
-export const SERVING_FIELDS = ["preset", "variant", "compute", "config", "config_toml", "image", "gpu_types", "network_volume"] as const;
+export const SERVING_FIELDS = ["preset", "variant", "compute", "config", "config_toml", "image", "gpu_types", "network_volume", "weights_source", "container_disk_gb"] as const;

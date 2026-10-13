@@ -19,9 +19,14 @@ export interface RegionDef {
  * change brings the region back.
  */
 export const US_VOLUME_ID = "";
-/** CLAUDE.md: the weights network volumes. A region with an empty volume id is unavailable. */
+/**
+ * CLAUDE.md: the weights network volumes. A region with an empty volume id is unavailable.
+ * eu: fv-weights-h3-ltx-500 (bz0ofkfx45, 500 GB, EU-RO-1; owner decision 2026-10-13): the H3 + LTX trees only
+ * (volumes.ts EU_TREES); every other preset defaults to weights_source r2 here. It replaced jg48s6o1w0
+ * (fv-weights-h3-ltx-hy, 2000 GB, EUR-IS-1), where Runpod no longer creates volumes.
+ */
 export const REGIONS: Record<RegionId, RegionDef> = {
-  eu: { volume: "jg48s6o1w0", dc: "EUR-IS-1", gpus: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] },
+  eu: { volume: "bz0ofkfx45", dc: "EU-RO-1", gpus: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] },
   us: { volume: US_VOLUME_ID, dc: "US-CA-2", gpus: ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H200"] },
 };
 export const REGION_UNAVAILABLE: Partial<Record<RegionId, string>> = {

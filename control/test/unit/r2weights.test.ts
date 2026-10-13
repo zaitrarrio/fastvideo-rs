@@ -2,98 +2,24 @@
 // published example, manifests pinned by SHA-256, the plan, weights_source r2 as the GMI / Brev default once every
 // tree is published, the launch checks (GMI / Brev and Runpod), the pod env and boot; and the boot's weights step
 // (R2_FETCH_SH) run in bash with the real scripts/gpu/r2-fetch.py against a fake R2 that checks every presigned URL.
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
-import { bootFor, workerCreatePayload, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
+import { bootFor, workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { presetPool } from "../../src/cluster/spec";
 import { launchTrees, poolTrees, PROVIDER_BOOT, providerEnv, providerIssues, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
-import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2Manifest, r2Plan, r2Trees, type R2Manifest } from "../../src/r2weights";
+import { R2_TREES } from "../../src/r2-trees";
+import { encodeKey, manifestKey, objectKey, presignGet, presignPath, R2_FETCH_SH, r2Cfg, r2DiskGb, r2Manifest, r2Plan, r2Trees } from "../../src/r2weights";
 import { validate } from "../../src/schemas";
 import { d1 } from "./d1shim";
-
-const ACCESS = "r2-access-key-id";
-const SECRET = "r2-SECRET-access-key-0123456789";
-const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
-
-/** A tree, its manifest (part size 1 MiB) and the R2_TREES pin. */
-function makeTree(dest: string, rev: string, files: Record<string, Buffer>, part = 1 << 20) {
-  const m: R2Manifest = {
-    format: "fv-weights-manifest/1",
-    dest,
-    rev,
-    part_size: part,
-    total_bytes: Object.values(files).reduce((s, b) => s + b.length, 0),
-    files: Object.entries(files).map(([path, b]) => ({ path, size: b.length, sha256: sha(b), parts: Array.from({ length: Math.ceil(b.length / part) }, (_, i) => sha(b.subarray(i * part, (i + 1) * part))) })),
-  };
-  const raw = Buffer.from(JSON.stringify(m));
-  return { m, raw, pin: { rev, files: m.files.length, bytes: m.total_bytes, manifest_sha256: sha(raw), source: "test" } };
-}
-const rnd = (n: number, seed: number) => {
-  const out = Buffer.alloc(n);
-  let h = createHash("sha256").update(String(seed)).digest();
-  for (let o = 0; o < n; o += 32) {
-    h = createHash("sha256").update(h).digest();
-    h.copy(out, o);
-  }
-  return out;
-};
-
-/** A fake R2: path-style objects, presigned GETs checked with node:crypto (an implementation independent of src's). */
-function fakeR2() {
-  const objects = new Map<string, Buffer>(); // "<bucket>/<key>"
-  const gets: { key: string; range: string | null }[] = [];
-  let bad = 0;
-  const routes: Record<string, (req: any, res: any) => void> = {};
-  const verify = (u: URL, host: string) => {
-    const q = u.searchParams;
-    const amz = q.get("X-Amz-Date") || "";
-    const when = Date.UTC(+amz.slice(0, 4), +amz.slice(4, 6) - 1, +amz.slice(6, 8), +amz.slice(9, 11), +amz.slice(11, 13), +amz.slice(13, 15));
-    if (Date.now() > when + Number(q.get("X-Amz-Expires")) * 1000) return false;
-    const [ak, date, region] = (q.get("X-Amz-Credential") || "").split("/");
-    const pairs = [...q.entries()].filter(([k]) => k !== "X-Amz-Signature").map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)]).sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
-    const canonical = ["GET", u.pathname, pairs.map(([k, v]) => `${k}=${v}`).join("&"), `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-    const toSign = ["AWS4-HMAC-SHA256", amz, `${date}/${region}/s3/aws4_request`, sha(canonical)].join("\n");
-    let k: Buffer = createHmac("sha256", "AWS4" + SECRET).update(date!).digest();
-    for (const p of [region!, "s3", "aws4_request"]) k = createHmac("sha256", k).update(p).digest();
-    return ak === ACCESS && createHmac("sha256", k).update(toSign).digest("hex") === q.get("X-Amz-Signature");
-  };
-  const srv: Server = createServer((req, res) => {
-    const u = new URL(req.url!, "http://x");
-    if (routes[u.pathname]) return routes[u.pathname]!(req, res);
-    if (!verify(u, req.headers.host!)) {
-      bad++;
-      return res.writeHead(403).end("<Error><Code>AccessDenied</Code></Error>");
-    }
-    const key = decodeURIComponent(u.pathname.slice(1));
-    const obj = objects.get(key);
-    if (!obj) return res.writeHead(404).end("<Error><Code>NoSuchKey</Code></Error>");
-    const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range || "");
-    gets.push({ key, range: req.headers.range || null });
-    if (!m) return res.writeHead(200, { "content-length": obj.length }).end(obj);
-    const a = +m[1]!, b = Math.min(+m[2]!, obj.length - 1);
-    res.writeHead(206, { "content-length": b - a + 1, "content-range": `bytes ${a}-${b}/${obj.length}` }).end(obj.subarray(a, b + 1));
-  });
-  return {
-    objects,
-    gets,
-    routes,
-    bad: () => bad,
-    async start() {
-      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-      return `http://127.0.0.1:${(srv.address() as any).port}`;
-    },
-    stop: () => new Promise<void>((r) => srv.close(() => r())),
-  };
-}
+import { ACCESS, fakeR2, makeTree, rnd, SECRET, sha } from "./fake-r2";
 
 const mkEnv = (over: Partial<Env> = {}): Env =>
   ({
@@ -108,10 +34,25 @@ const mkEnv = (over: Partial<Env> = {}): Env =>
     GMI_BUDGET_USD: "20",
     WEIGHTS_R2_ACCESS_KEY_ID: ACCESS,
     WEIGHTS_R2_SECRET_ACCESS_KEY: SECRET,
+    WEIGHTS_R2_AUX: "0", // the fake store has only the trees a test publishes (aux from R2: preset-trees.test.ts)
     ...over,
   }) as unknown as Env;
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("the repo's record of the R2 weights store (scripts/gpu/weights-r2.tsv)", () => {
+  it("holds the benchmark round's trees at their pinned Hub revisions, and every volume-only tree", () => {
+    expect(R2_TREES["h3-base"]?.rev).toBe("42ed227ee7df40d41602854ae760620d6eb651fe");
+    expect(R2_TREES["fastwan22-ti2v-5b"]?.rev).toBe("3e187042a324f6f5fb68fd22110a78725253de8f");
+    expect(R2_TREES["wan22-ti2v-5b"]?.rev).toBe("b8fff7315c768468a5333511427288870b2e9635");
+    for (const d of ["h3-base/text_encoder_fp8", "ltx25/text_encoder_fp8", "mmaudio-44k-v2", "h3-ref2va", "longlive-1.3b-safetensors"]) expect(R2_TREES[d]?.rev).toBe("eu-20261011");
+    for (const t of Object.values(R2_TREES)) expect(t.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("a GMI / Brev pool whose trees are all recorded defaults to r2 (h3-turbo: h3-base)", () => {
+    const pool = { ...presetPool("h3-turbo")!, provider: "gmi", provider_gpu: "container.h200.x1", volume: false } as any;
+    expect(weightsSource(pool, mkEnv())).toBe("r2");
+  });
+});
 
 describe("SigV4 presigning", () => {
   it("matches AWS's published presigned-URL example (sigv4-query-string-auth)", async () => {
@@ -177,13 +118,23 @@ describe("manifests and the plan (against the fake R2)", () => {
 
 describe("weights_source r2: the default, the checks, the env", () => {
   const h3 = presetPool("h3-turbo")!;
+  // These cases need h3-base unpublished: the repo's record (R2_TREES) holds it since the 2026-10-12 copy.
+  let saved: any;
+  beforeAll(() => {
+    saved = R2_TREES["h3-base"];
+    delete R2_TREES["h3-base"];
+  });
+  afterAll(() => {
+    if (saved) R2_TREES["h3-base"] = saved;
+  });
   const pin = (trees: string[]) => JSON.stringify(Object.fromEntries(trees.map((t) => [t, { rev: `rev-${t}`, files: 1, bytes: 100e9, manifest_sha256: "a".repeat(64), source: "test" }])));
   const gmiPool = (over: any = {}) => ({ ...h3, provider: "gmi", provider_gpu: "container.h200.x1", volume: false, ...over }) as any;
   const trees = poolTrees(gmiPool()).filter((t) => t !== "auxiliary");
   it("GMI / Brev: r2 once every tree of the pool is published, else none; a source given stays", () => {
-    expect(trees).toContain("h3-base");
+    // h3-turbo loads h3-base and the FastH3 LoRA beside it (recipe-trees.ts; docs/ops/r2-bench-2026-10-12.md finding 1)
+    expect(trees).toEqual(["FastH3-4-step-Preview-v1-LoRA", "h3-base"]);
     expect(weightsSource(gmiPool(), mkEnv())).toBe("none");
-    expect(weightsSource(gmiPool(), mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.slice(1)) }))).toBe("none");
+    expect(weightsSource(gmiPool(), mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.filter((t) => t !== "h3-base")) }))).toBe("none");
     const all = mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees) });
     expect(weightsSource(gmiPool(), all)).toBe("r2");
     expect(weightsSource(gmiPool({ weights_source: "hub" }), all)).toBe("hub");
@@ -192,13 +143,15 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect([plan.source, plan.unsupported]).toEqual(["r2", []]);
     // Only the aux rows travel in the env: the trees come from the plan endpoint.
     expect(plan.tsv.split("\n").filter(Boolean).every((l) => l.startsWith("aux\t"))).toBe(true);
-    expect(launchTrees(plan, all)).toEqual(Object.fromEntries(trees.map((t) => [t, `rev-${t}`])));
+    // r2 also fetches the preset's pre-quantized trees (published), never the Hub
+    expect(plan.trees).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
+    expect(launchTrees(plan, all)).toEqual(Object.fromEntries(plan.trees.map((t) => [t, r2Trees(all)[t]!.rev])));
   });
   it("needs no download approval; refuses what is not published, or no store configured", () => {
     const all = mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees) });
     expect(providerIssues(all, { pools: [gmiPool({ weights_source: "r2" })] })).toEqual([]);
-    const some = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.slice(1)) }), { pools: [gmiPool({ weights_source: "r2" })] });
-    expect(some.map((i) => i.message)).toEqual([expect.stringMatching(new RegExp(`not in the R2 weights store yet: ${trees[0]}`))]);
+    const some = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees.filter((t) => t !== "h3-base")) }), { pools: [gmiPool({ weights_source: "r2" })] });
+    expect(some.map((i) => i.message)).toEqual([expect.stringMatching(/not in the R2 weights store yet: h3-base/)]);
     const off = providerIssues(mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees), WEIGHTS_R2_ACCESS_KEY_ID: undefined }), { pools: [gmiPool({ weights_source: "r2" })] });
     expect(off.map((i) => i.message)).toEqual([expect.stringMatching(/weights_source r2: the R2 weights store is not configured/)]);
     expect(validate("pool", gmiPool({ weights_source: "r2" })).ok).toBe(true);
@@ -210,7 +163,7 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(r.env.FV_SCRIPTS_URL).toBeUndefined();
     expect(JSON.stringify(r.env)).not.toContain(SECRET);
     expect(JSON.stringify(r.env)).not.toContain(ACCESS);
-    expect(PROVIDER_BOOT).toContain(`python3 "$R2T/r2-fetch.py"`);
+    expect(PROVIDER_BOOT).toContain(`python3 "$R2F" "$@"`);
     expect(PROVIDER_BOOT.indexOf("r2-fetch.py")).toBeLessThan(PROVIDER_BOOT.indexOf("cloudflared tunnel"));
     expect(R2_FETCH_PY).toContain("fv-weights-plan/1");
     expect(createHash("sha256").update(R2_FETCH_PY).digest("hex")).toBe(R2_FETCH_SHA256);
@@ -227,17 +180,44 @@ describe("weights_source r2: the default, the checks, the env", () => {
     const e = workerSystemEnv(ctx, pool, "img@sha256:" + "0".repeat(64));
     expect(e).toMatchObject({ FV_WEIGHTS_SOURCE: "r2", FV_WEIGHTS_PLAN_URL: "https://fvc.test/ingest/v1/weights-plan", FV_ENDPOINT_REPORT_TOKEN: "ingest_tok" });
     const gb = Number(e.FV_R2_DISK_GB);
-    expect(gb).toBe(Math.min(500, Math.ceil(trees.length * 100 * 1.15 + 30)));
-    const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EUR-IS-1", gpu: "g" }, e) as any;
+    // the trees (2 x 100 GB pinned here) plus the preset's pre-quantized trees (text_encoder_fp8, the MXFP8 DiT)
+    const planned = weightsPlan(pool, all).trees;
+    expect(planned).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
+    expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
+    const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any;
     expect(p.networkVolumeId).toBeUndefined();
+    // EU-RO-1 (the volume's data centre, hosts known): no CUDA filter
+    expect(p.allowedCudaVersions).toBeUndefined();
+    // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, CUDA 13 hosts only
+    const us = { ...pool, data_centers: ["US-TX-3", "US-KS-2"] };
+    expect(validate("pool", us).ok).toBe(true);
+    expect(validate("pool", { ...h3, data_centers: ["US-TX-3"] }).ok, "data_centers needs r2 (the volume pins its DC)").toBe(false);
+    const pls = workerPlacements({ regions: ["eu"] } as any, us);
+    expect(pls.map((x) => x.dc)).toEqual(["US-TX-3", "US-KS-2"]);
+    expect(pls.every((x) => x.region === undefined)).toBe(true);
+    const pu = workerCreatePayload("fv-ctl-x", "img", us, pls[0]!, e) as any;
+    expect([pu.dataCenterIds, pu.allowedCudaVersions, pu.networkVolumeId]).toEqual([["US-TX-3"], ["13.0"], undefined]);
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).allowedCudaVersions, "allowed_cuda [] lifts the filter").toBeUndefined();
     expect(p.containerDiskInGb).toBe(gb);
     expect(p.dockerStartCmd[0]).toContain('export FV_POD_ID="${FV_POD_ID:-${RUNPOD_POD_ID:-}}"');
     expect(p.dockerStartCmd[0].indexOf("r2-fetch.py")).toBeLessThan(p.dockerStartCmd[0].indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
     // The volume path is unchanged without r2.
     const v = workerSystemEnv({ ...ctx, env: all } as any, { ...h3 } as any, "img");
     expect(v.FV_WEIGHTS_SOURCE).toBeUndefined();
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EUR-IS-1", gpu: "g" }, v) as any).networkVolumeId).toBeTruthy();
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, v) as any).networkVolumeId).toBeTruthy();
     expect(bootFor(v)).not.toContain("r2-fetch.py");
+    // A Runpod pool whose trees are not on the EU volume (H3 + LTX only since 2026-10-13) defaults to r2: the
+    // fetch boot, no volume, the region's data centre; an explicit volume stays the volume.
+    const wan = { ...presetPool("wan")! };
+    expect(wan.weights_source).toBeUndefined();
+    expect(weightsSource(wan, all)).toBe("r2");
+    const we = workerSystemEnv(ctx, wan, "img");
+    expect(we.FV_WEIGHTS_SOURCE).toBe("r2");
+    const wp = workerCreatePayload("fv-ctl-x", "img", wan, workerPlacements({ regions: ["eu"] } as any, wan)[0]!, we) as any;
+    expect([wp.networkVolumeId, wp.dataCenterIds]).toEqual([undefined, ["EU-RO-1"]]);
+    expect(providerIssues(all, { pools: [wan] })).toEqual([]);
+    expect(weightsSource({ ...wan, weights_source: "volume" }, all)).toBe("volume");
+    expect(weightsSource({ ...presetPool("ltx")! }, all)).toBe("volume");
   });
   it("r2Trees: the repo's record plus valid WEIGHTS_R2_EXTRA_TREES rows only", () => {
     expect(Object.keys(r2Trees(mkEnv({ WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ ok: { rev: "r", files: 1, bytes: 1, manifest_sha256: "b".repeat(64) }, bad: { rev: "r", bytes: 1, manifest_sha256: "x" } }) })))).toContain("ok");
@@ -301,11 +281,44 @@ ${R2_FETCH_SH}`;
     expect(existsSync(join(dir, "demo/.complete"))).toBe(true);
     expect(r2.bad()).toBe(0);
     const ranged = r2.gets.filter((g) => g.key.includes("/weights/") && g.range);
-    expect(ranged.length).toBe(t.m.files.reduce((s, f) => s + f.parts.length, 0));
+    // one ranged GET per two manifest parts (r2-fetch.py DEFAULT_GET_PARTS), each part checked on its own
+    expect(ranged.length).toBe(t.m.files.reduce((s, f) => s + Math.ceil(f.parts.length / 2), 0));
     expect(reports.some((r) => r.phase === "weights" && /^r2 weights ready/.test(r.detail))).toBe(true);
     const n = r2.gets.length;
     await run(dir);
     expect(r2.gets.length).toBe(n);
+  }, 90000);
+  it("streaming (a fv-serve with the marker): the boot goes on once the unguarded files are in place, fv-serve loads while the rest arrives, the fetch and the overlap are timed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fvr2-"));
+    const dir = join(root, "w");
+    const serve = join(root, "fv-serve");
+    writeFileSync(serve, "\x7fELF... fv-streaming-fetch/1 ...");
+    r2.hooks.delayMs = (k) => (k.includes("/transformer/") ? 1500 : 0);
+    try {
+      const script = `set -u
+say() { echo "[fv-boot] $*" >&2; }
+fail() { echo "FAIL: $1" > ${root}/failed-$$; exit 1; }
+report() { :; }
+FV_SERVE_BIN=${serve}
+${R2_FETCH_SH}echo "SERVE stream=\${FASTVIDEO_STREAMING_FETCH:-}"; [ -f "${dir}/demo/transformer/model.safetensors.fvparts" ] && echo MAP-PRESENT
+date +%s.%N > "${join(root, "state")}/serve-start"
+wait; echo FETCH-DONE`;
+      const e = { PATH: process.env.PATH!, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", FV_R2_STATE: join(root, "state"), FV_R2_TOOLS: join(root, "tools"), FV_R2_MIN_FREE_GB: "0", FV_WEIGHTS: dir, FV_WEIGHTS_SOURCE: "r2", FV_POD_ID: "gmi:fv-pod-a-1", FV_ENDPOINT_REPORT_TOKEN: "ingest_tok", FV_ENDPOINT_REPORT_URL: `${base}/ingest/v1/endpoint`, ...providerEnvR2(base) };
+      const r = await promisify(execFile)("bash", ["-c", script], { env: e, timeout: 60000 });
+      expect(r.stdout).toContain("SERVE stream=1");
+      expect(r.stdout).toContain("MAP-PRESENT");
+      expect(r.stdout).toContain("FETCH-DONE");
+      expect(r.stderr).toMatch(/step stream_ready: [\d.]+s/);
+      expect(r.stderr).toMatch(/step fetch: [\d.]+s/);
+      expect(r.stderr).toMatch(/step load_overlap: [\d.]+s/);
+      for (const [p, b] of Object.entries(files)) {
+        expect(readFileSync(join(dir, "demo", p)).equals(b)).toBe(true);
+        expect(existsSync(join(dir, "demo", p + ".fvparts"))).toBe(false);
+      }
+      expect(existsSync(join(dir, "demo/.complete"))).toBe(true);
+    } finally {
+      delete r2.hooks.delayMs;
+    }
   }, 90000);
   it("a fetcher whose bytes are not the pinned ones is refused before it runs", async () => {
     r2.routes["/ingest/v1/r2-fetch.py"] = (_req, res) => res.writeHead(200).end(R2_FETCH_PY + "\n# tampered\n");

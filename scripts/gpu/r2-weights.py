@@ -46,6 +46,7 @@ import hmac
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -107,14 +108,37 @@ def hub_rows():
     return out
 
 
+def _split_dest(full):
+    """auxiliary/tae/taeh3.safetensors -> (auxiliary/tae, taeh3.safetensors): the longest known dest prefix."""
+    dests = sorted([d for d, _ in VOLUME_ONLY] + list(hub_rows()), key=len, reverse=True)
+    for d in dests:
+        if full.startswith(d + "/"):
+            return d, full[len(d) + 1:]
+    return None, None
+
+
 def recorded_hashes():
-    """(dest, path) -> (bytes or None, algo, [hex alternatives]) from weights-sha256.tsv."""
+    """(dest, path) -> (bytes or None, algo, [hex alternatives]) recorded in the repo: weights-sha256.tsv, the
+    auxiliary/ url rows of weights-manifest.tsv, and verify-weights.sh's FP8_TREES / DIT_PREQUANT_TREES."""
     out = {}
     for r in read_tsv("weights-sha256.tsv"):
         if len(r) < 4 or ":" not in r[3]:
             continue
         algo, hexes = r[3].split(":", 1)
         out[(r[0], r[1])] = (None if r[2] == "-" else int(r[2]), algo, [h.lower() for h in hexes.split("|")])
+    for r in read_tsv("weights-manifest.tsv"):
+        if len(r) >= 3 and r[1].startswith("url:"):
+            sha = re.search(r"sha256:([0-9a-f]{64})", " ".join(r[2:]))
+            size = re.search(r"size:(\d+)", " ".join(r[2:]))
+            dest, path = _split_dest(r[0])
+            if sha and dest:
+                out.setdefault((dest, path), (int(size.group(1)) if size else None, "sha256", [sha.group(1)]))
+    vw = HERE / "verify-weights.sh"
+    if vw.is_file():
+        for m in re.finditer(r"^(?:[A-Z_]+=\")?([\w./-]+)\t(\d+)\t([0-9a-f]{64})\"?$", vw.read_text(), re.M):
+            dest, path = _split_dest(m.group(1))
+            if dest:
+                out.setdefault((dest, path), (int(m.group(2)), "sha256", [m.group(3)]))
     return out
 
 
@@ -198,7 +222,7 @@ class S3:
         self.bucket = bucket
         self.access = access
         self.secret = secret
-        self.conns = r2_fetch.Conns(timeout=300)
+        self.conns = r2_fetch.Conns(timeout=float(os.environ.get("FV_R2_TIMEOUT_S", "120")))
         self.ops = {"A": 0, "B": 0}
         self.oplock = threading.Lock()
 
@@ -474,7 +498,7 @@ def hub_sources(dest, conns, rev_override=None):
 SKIP_NAMES = {".complete", ".fv-revision", ".fv-source", ".fv-manifest.json"}
 
 
-def dir_sources(dest, root, globs=None, exclude=()):
+def dir_sources(dest, root, globs=None, exclude=(), hidden=False):
     root = Path(root)
     if not root.is_dir():
         raise Fail(f"{root}: not a directory")
@@ -484,10 +508,10 @@ def dir_sources(dest, root, globs=None, exclude=()):
     for dp, dns, fns in os.walk(root, followlinks=True):
         rel_dir = os.path.relpath(dp, root)
         # never descend into fetchers' temp folders, HF-cache internals or caches
-        dns[:] = sorted(d for d in dns if not d.startswith(".") and not d.startswith("models--"))
+        dns[:] = sorted(d for d in dns if (hidden or not d.startswith(".")) and not d.startswith("models--"))
         for fn in sorted(fns):
             rel = fn if rel_dir == "." else f"{rel_dir}/{fn}"
-            if fn in SKIP_NAMES or fn.startswith("."):
+            if not hidden and (fn in SKIP_NAMES or fn.startswith(".")):
                 continue
             if globs and not any(fnmatch.fnmatch(rel, g) for g in globs):
                 continue
@@ -504,6 +528,52 @@ def dir_sources(dest, root, globs=None, exclude=()):
     return out
 
 
+def hub_dir_sources(dest, root, conns):
+    """A Hub tree copied from a directory (the volume), checked against the Hub at the pinned revision: the file set is
+    the Hub listing's (manifest globs + model_index.json), every file must exist with the listed size, and each one's
+    bytes must hash to the Hub's LFS SHA-256 (or git blob SHA-1) before its upload completes. HF-cache layouts are
+    read through their top-level links, else models--*/snapshots/<rev>/. Files under the globs that the revision does
+    not list are left out (reported)."""
+    repo, rev, globs = hub_rows()[dest]
+    globs = globs + ["model_index.json"]
+    want = {p: (size, lfs, oid) for p, size, lfs, oid in hub_list(repo, rev) if any(fnmatch.fnmatch(p, g) for g in globs)}
+    if not want:
+        raise Fail(f"{repo}@{rev}: nothing matches {' '.join(globs)}")
+    root = Path(root)
+    try:
+        # hidden=True: a Hub repo may hold dot files (.gitattributes); the Hub listing decides what is kept
+        have = {s.path: s for s in dir_sources(dest, root, globs, hidden=True)}
+    except Fail:
+        have = {}  # nothing at the top level: an HF-cache layout without top-level links (the snapshot below)
+    snaps = sorted(root.glob(f"models--*/snapshots/{rev}")) if root.is_dir() else []
+    rec = recorded_hashes()
+    out, missing = [], []
+    for p, (size, lfs, oid) in sorted(want.items()):
+        # the pinned revision's own snapshot (HF-cache layout) first, else the plain / top-level file
+        src = None
+        for sd in snaps:
+            f = (sd / p).resolve()
+            if f.is_file():
+                r = rec.get((dest, p))
+                src = Source(p, f.stat().st_size, file_reader(f), recorded=(r[1], r[2]) if r else None)
+                break
+        src = src or have.get(p)
+        if src is None:
+            missing.append(p)
+            continue
+        if src.size != size:
+            raise Fail(f"{dest}/{p}: {src.size} bytes in {root}, the Hub lists {size} at {rev[:12]}")
+        src.sha256 = lfs
+        src.sha1_blob = None if lfs else oid
+        out.append(src)
+    if missing:
+        raise Fail(f"{dest}: {len(missing)} file(s) of {repo}@{rev[:12]} not in {root}: {', '.join(missing[:8])}")
+    extra = sorted(set(have) - set(want))
+    if extra:
+        log(f"{dest}: left out {len(extra)} file(s) under the globs that {rev[:12]} does not list: {', '.join(extra[:8])}")
+    return rev, {"kind": "hub-via-dir", "repo": repo, "revision": rev, "globs": globs, "path": str(root.resolve())}, out
+
+
 # --------------------------------------------------------------------------- publish
 class Publisher:
     def __init__(self, s3, args):
@@ -515,12 +585,18 @@ class Publisher:
         self.dry = args.dry_run
         self.bytes = 0
         self.skipped = 0
+        self.checked = {}
         self.blk = threading.Lock()
         self.t0 = time.time()
 
     def add(self, n):
         with self.blk:
             self.bytes += n
+
+    @staticmethod
+    def checks(src):
+        """What a file's bytes were checked against before its upload completed (none: its hash is recorded from the copy)."""
+        return (["hub-lfs-sha256"] if src.sha256 else []) + (["hub-git-blob-sha1"] if src.sha1_blob else []) + ([f"repo-{src.recorded[0]}"] if src.recorded else [])
 
     def expected_ok(self, src, sha256, sha1_blob, other):
         """Raises when the bytes do not match what is known about them."""
@@ -534,18 +610,43 @@ class Publisher:
             if got and got not in hexes:
                 raise Fail(f"{src.path}: {algo} {got} not in weights-sha256.tsv ({', '.join(h[:16] + '…' for h in hexes)})")
 
-    def publish_file(self, dest, rev, src):
-        key = obj_key(self.prefix, dest, rev, src.path)
-        pkey = parts_key(self.prefix, dest, rev, src.path)
+    def adopt(self, key, pkey, src):
+        whole_r2, whole_src, parts = hashlib.sha256(), hashlib.sha256(), []
+        for i in range(max(1, -(-src.size // self.part_size)) if src.size else 0):
+            off = i * self.part_size
+            n = min(self.part_size, src.size - off)
+            a = self.s3.get(key, f"bytes={off}-{off + n - 1}") if n else b""
+            b = src.read(off, n)
+            if a is None or len(a) != n or len(b) != n:
+                raise Fail(f"{key}: short read while checking an object without its record")
+            whole_r2.update(a)
+            whole_src.update(b)
+            parts.append(hashlib.sha256(a).hexdigest())
+        sha = whole_r2.hexdigest()
+        if sha != whole_src.hexdigest():
+            raise Fail(f"{key} exists without its parts record and its bytes differ from {src.path}: add-only, not replacing it")
+        self.expected_ok(src, sha, None, {})
+        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": parts, "checked": self.checks(src), "adopted": True}
+        self.s3.put_new(pkey, json.dumps(rec).encode(), content_type="application/json")
+        log(f"  {src.path}: object without a record: same bytes as the source, record written")
+        return rec
+
+    def publish_file(self, dest, rev, src, key=None, pkey=None):
+        key = key or obj_key(self.prefix, dest, rev, src.path)
+        pkey = pkey or parts_key(self.prefix, dest, rev, src.path)
         have = self.s3.head(key)
         if have is not None:
             rec = self.s3.get(pkey)
             if have[0] != src.size:
                 raise Fail(f"{key} exists with {have[0]} bytes, the source has {src.size}: add-only, not replacing it")
             if rec is None:
-                raise Fail(f"{key} exists without its parts record {pkey}: an earlier run stopped between the two; check it by hand (verify --deep) before going on")
-            rec = json.loads(rec)
+                # An earlier run stopped between the object and its record: the object is kept only if its bytes are
+                # the source's (both read and hashed here), then the record is written; otherwise the run stops.
+                rec = self.adopt(key, pkey, src)
+            else:
+                rec = json.loads(rec)
             self.expected_ok(src, rec["sha256"], None, {})
+            self.checked[src.path] = rec.get("checked", self.checks(src))
             self.skipped += 1
             self.add(src.size)
             return rec
@@ -609,7 +710,8 @@ class Publisher:
             got = self.s3.head(key)
             if not got or got[0] != src.size:
                 raise Fail(f"{key}: {got[0] if got else 'no object'} bytes after completing, expected {src.size}")
-        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": part_shas}
+        rec = {"path": src.path, "size": src.size, "sha256": sha, "part_size": self.part_size, "parts": part_shas, "checked": self.checks(src)}
+        self.checked[src.path] = rec["checked"]
         for a, h in extra.items():
             rec[a] = h.hexdigest()
         if not self.s3.put_new(pkey, json.dumps(rec).encode(), content_type="application/json"):
@@ -668,6 +770,12 @@ class Publisher:
         if not self.s3.put_new(mkey, json.dumps(manifest, indent=1, sort_keys=True).encode(), content_type="application/json"):
             raise Fail(f"{mkey} appeared while publishing: add-only, not replacing it")
         el = time.time() - self.t0
+        none = sorted(p for p, c in self.checked.items() if not c)
+        kinds = {}
+        for c in self.checked.values():
+            for k in c or ["none"]:
+                kinds[k] = kinds.get(k, 0) + 1
+        log(f"{dest}@{rev}: hash checks {json.dumps(kinds, sort_keys=True)}" + (f"; NO recorded hash (SHA-256 recorded from this copy): {', '.join(none)}" if none else ""))
         log(f"{dest}@{rev}: PUBLISHED {mkey} ({total / 1e9:.2f} GB; {self.skipped} files already there; {el:.0f}s, {(self.bytes / max(el, 1e-6)) / 1e6:.0f} MB/s)")
         return manifest
 
@@ -710,6 +818,18 @@ def verify_tree(s3, prefix, m, deep, workers):
     bad = []
     rec = recorded_hashes()
 
+    def one_shallow(f):
+        key = obj_key(prefix, m["dest"], m["rev"], f["path"])
+        h = s3.head(key)
+        if h is None:
+            return f"{f['path']}: missing"
+        if h[0] != f["size"]:
+            return f"{f['path']}: {h[0]} bytes, manifest {f['size']}"
+        r = rec.get((m["dest"], f["path"]))
+        if r and r[1] == "sha256" and f["sha256"] not in r[2]:
+            return f"{f['path']}: manifest sha256 not in weights-sha256.tsv"
+        return None
+
     def one(f):
         key = obj_key(prefix, m["dest"], m["rev"], f["path"])
         h = s3.head(key)
@@ -724,19 +844,69 @@ def verify_tree(s3, prefix, m, deep, workers):
             return None
         ps = m["part_size"]
         whole = hashlib.sha256()
-        for i, want in enumerate(f["parts"]):
+        t0 = time.time()
+
+        def get_part(i):
             a = i * ps
             b = min(f["size"], a + ps)
             data = s3.get(key, f"bytes={a}-{b - 1}")
             if data is None or len(data) != b - a:
-                return f"{f['path']}: part {i} short"
-            if hashlib.sha256(data).hexdigest() != want:
-                return f"{f['path']}: part {i} sha256 mismatch"
-            whole.update(data)
+                return i, None, "short"
+            return i, data, None if hashlib.sha256(data).hexdigest() == f["parts"][i] else "sha256 mismatch"
+
+        # One stream is slow across regions: `window` ranged GETs of this file in flight, consumed in order for the
+        # whole-file SHA-256.
+        with concurrent.futures.ThreadPoolExecutor(window) as px:
+            pending = deque()
+            nxt = 0
+            for _ in range(len(f["parts"])):
+                while nxt < len(f["parts"]) and len(pending) < window:
+                    pending.append(px.submit(get_part, nxt))
+                    nxt += 1
+                i, data, err = pending.popleft().result()
+                if err:
+                    for x in pending:
+                        x.cancel()
+                    return f"{f['path']}: part {i} {err}"
+                whole.update(data)
         if whole.hexdigest() != f["sha256"]:
             return f"{f['path']}: sha256 mismatch"
+        el = time.time() - t0
+        log(f"  verified {m['dest']}/{f['path']}: {f['size'] / 1e9:.2f} GB in {el:.0f}s ({f['size'] / max(el, 1e-6) / 1e6:.0f} MB/s)")
         return None
 
+    window = max(1, int(os.environ.get("FV_VERIFY_WINDOW", "8")))
+    if deep and os.environ.get("FV_VERIFY_WHOLE_FILE") != "1":
+        # Every 64 MiB part against the manifest's part SHA-256, all parts of the tree at once (workers x window GETs
+        # in flight, no ordering): R2's slow tail GETs (seconds to tens of seconds, seen 2026-10-12) then cost one
+        # thread each instead of stalling a file. The part hashes are the ones the publisher computed from the same
+        # bytes as each file's SHA-256 (checked before the upload completed); FV_VERIFY_WHOLE_FILE=1 re-hashes whole files.
+        with concurrent.futures.ThreadPoolExecutor(workers) as ex:
+            for f, err in zip(m["files"], ex.map(lambda f: one_shallow(f), m["files"])):
+                if err:
+                    bad.append(err)
+        if bad:
+            return bad
+        ps = m["part_size"]
+        t0 = time.time()
+
+        def part(job):
+            f, i = job
+            a = i * ps
+            b = min(f["size"], a + ps)
+            data = s3.get(obj_key(prefix, m["dest"], m["rev"], f["path"]), f"bytes={a}-{b - 1}")
+            if data is None or len(data) != b - a:
+                return f"{f['path']}: part {i} short"
+            return None if hashlib.sha256(data).hexdigest() == f["parts"][i] else f"{f['path']}: part {i} sha256 mismatch"
+
+        jobs = [(f, i) for f in m["files"] for i in range(len(f["parts"]))]
+        with concurrent.futures.ThreadPoolExecutor(workers * window) as ex:
+            for err in ex.map(part, jobs):
+                if err:
+                    bad.append(err)
+        el = time.time() - t0
+        log(f"  parts of {m['dest']}: {len(jobs)} in {el:.0f}s ({m['total_bytes'] / max(el, 1e-6) / 1e6:.0f} MB/s)")
+        return bad
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         for f, err in zip(m["files"], ex.map(one, m["files"])):
             if err:
@@ -792,11 +962,17 @@ def cmd_plan(s3, args):
 
 
 def cmd_compare_dir(s3, args):
+    """The directory's copy against the manifest: every file present with its size and (unless --sizes-only) every
+    64 MiB part's SHA-256 equal to the manifest's, the parts read in parallel (--workers): one stream from a network
+    volume is slow, many are not. The manifest's part hashes are of the bytes R2 holds (verify --deep checks that)."""
     m = load_manifest(s3, args.prefix, args.dest, args.rev)
     root = Path(args.dir)
+    snaps = sorted(root.glob(f"models--*/snapshots/{m['rev']}"))  # HF-cache layout: the pinned snapshot first
+    ps = m["part_size"]
     bad = []
+    jobs = []
     for f in m["files"]:
-        p = (root / f["path"]).resolve()
+        p = next((q for q in ((sd / f["path"]).resolve() for sd in snaps) if q.is_file()), None) or (root / f["path"]).resolve()
         if not p.is_file():
             bad.append(f"{f['path']}: not in {root}")
             continue
@@ -804,15 +980,129 @@ def cmd_compare_dir(s3, args):
             bad.append(f"{f['path']}: {p.stat().st_size} bytes on disk, {f['size']} in R2")
             continue
         if not args.sizes_only:
-            h = hashlib.sha256()
-            with open(p, "rb") as fh:
-                for chunk in iter(lambda: fh.read(16 << 20), b""):
-                    h.update(chunk)
-            if h.hexdigest() != f["sha256"]:
-                bad.append(f"{f['path']}: sha256 differs (disk {h.hexdigest()[:16]}…, R2 {f['sha256'][:16]}…)")
+            jobs += [(f, p, i) for i in range(len(f["parts"]))]
+
+    def part_ok(job):
+        f, p, i = job
+        off = i * ps
+        n = min(ps, f["size"] - off)
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            got = 0
+            while got < n:
+                b = os.pread(fh.fileno(), min(16 << 20, n - got), off + got)
+                if not b:
+                    break
+                h.update(b)
+                got += len(b)
+        return None if got == n and h.hexdigest() == f["parts"][i] else f"{f['path']}: part {i} differs"
+
+    t = time.time()
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for err in ex.map(part_ok, jobs):
+            if err and err.split(": part")[0] not in {b.split(":")[0] for b in bad}:
+                bad.append(err)
     for line in bad:
         print("DIFF " + line)
-    print(f"{args.dest}@{m['rev']}: {len(m['files']) - len(bad)}/{len(m['files'])} files equal ({'sizes' if args.sizes_only else 'sha256'})")
+    gb = sum(f["size"] for f in m["files"]) / 1e9
+    print(f"{args.dest}@{m['rev']}: {len(m['files']) - len(bad)}/{len(m['files'])} files equal ({'sizes' if args.sizes_only else 'sha256 of every part'}; {gb:.2f} GB, {time.time() - t:.0f}s)")
+    return 1 if bad else 0
+
+
+def cmd_archive(s3, args):
+    """Every regular file of DIR (hidden ones too) under archive/<label>/<name>/<path>, add-only, with its SHA-256 in
+    archive/<label>/.parts/<name>/<path>.json and, last, an index archive/<label>/<name>.index.json."""
+    r2_fetch.safe_rel(args.name)
+    base = f"{args.prefix}archive/{args.label}/"
+    ikey = f"{base}{args.name}.index.json"
+    if s3.head(ikey) is not None:
+        log(f"archive {args.name}: already done ({ikey})")
+        return 0
+    files = dir_sources(args.name, args.dir, hidden=True)
+    pub = Publisher(s3, args)
+    t0 = time.time()
+    recs = {}
+    with concurrent.futures.ThreadPoolExecutor(args.files) as ex:
+        futs = {ex.submit(pub.publish_file, args.name, "-", f, f"{base}{args.name}/{f.path}", f"{base}.parts/{args.name}/{f.path}.json"): f for f in sorted(files, key=lambda f: -f.size)}
+        for fu in concurrent.futures.as_completed(futs):
+            r = fu.result()
+            recs[r["path"]] = r
+    if args.dry_run:
+        return 0
+    total = sum(r["size"] for r in recs.values())
+    idx = {"format": "fv-archive-index/1", "name": args.name, "source": str(Path(args.dir).resolve()), "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "total_bytes": total,
+           "files": [{k: recs[p][k] for k in ("path", "size", "sha256")} for p in sorted(recs)]}
+    if not s3.put_new(ikey, json.dumps(idx, indent=1).encode(), content_type="application/json"):
+        raise Fail(f"{ikey} appeared while archiving")
+    el = time.time() - t0
+    log(f"archive {args.name}: {len(recs)} files, {total / 1e9:.2f} GB -> {base}{args.name}/ ({el:.0f}s, {total / max(el, 1e-6) / 1e6:.0f} MB/s)")
+    return 0
+
+
+def cmd_compare_archive(s3, args):
+    """An archive (archive/<label>/<name>/) against its directory: the same set of files (hidden ones too), each with
+    its size, each R2 object present with that size, each file's parts record agreeing with the index, and (unless
+    --sizes-only) every 64 MiB part of the file on disk hashing to the parts record's SHA-256, read in parallel."""
+    base = f"{args.prefix}archive/{args.label}/"
+    raw = s3.get(f"{base}{args.name}.index.json")
+    if raw is None:
+        raise Fail(f"no index {base}{args.name}.index.json")
+    idx = json.loads(raw)
+    disk = {f.path: f.size for f in dir_sources(args.name, args.dir, hidden=True)}
+    root = Path(args.dir)
+    bad = [f"{p}: on disk, not in the archive" for p in sorted(set(disk) - {f["path"] for f in idx["files"]})]
+
+    def meta(f):
+        if f["path"] not in disk:
+            return f, None, f"{f['path']}: in the archive, not on disk"
+        if disk[f["path"]] != f["size"]:
+            return f, None, f"{f['path']}: {disk[f['path']]} bytes on disk, {f['size']} in the index"
+        h = s3.head(f"{base}{args.name}/{f['path']}")
+        if h is None or h[0] != f["size"]:
+            return f, None, f"{f['path']}: R2 object {'missing' if h is None else f'{h[0]} bytes'}"
+        rec = json.loads(s3.get(f"{base}.parts/{args.name}/{f['path']}.json") or b"{}")
+        if rec.get("sha256") != f["sha256"] or rec.get("size") != f["size"]:
+            return f, None, f"{f['path']}: parts record disagrees with the index"
+        return f, rec, None
+
+    t = time.time()
+    jobs = []
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for f, rec, err in ex.map(meta, idx["files"]):
+            if err:
+                bad.append(err)
+            elif not args.sizes_only:
+                parts = rec.get("parts") or []
+                ps = rec.get("part_size") or PART_SIZE
+                if len(parts) != -(-f["size"] // ps):
+                    bad.append(f"{f['path']}: parts record has {len(parts)} parts")
+                    continue
+                jobs += [(f, (root / f["path"]).resolve(), i, ps, parts[i]) for i in range(len(parts))]
+
+    def part_ok(job):
+        f, p, i, ps, want = job
+        off = i * ps
+        n = min(ps, f["size"] - off)
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            got = 0
+            while got < n:
+                b = os.pread(fh.fileno(), min(16 << 20, n - got), off + got)
+                if not b:
+                    break
+                h.update(b)
+                got += len(b)
+        return None if got == n and h.hexdigest() == want else f"{f['path']}: part {i} differs"
+
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as ex:
+        for err in ex.map(part_ok, jobs):
+            if err:
+                bad.append(err)
+    for line in bad:
+        print("DIFF " + line)
+    nbad = len({b.split(":")[0] for b in bad})
+    print(f"archive/{args.label}/{args.name}: {len(idx['files']) - nbad}/{len(idx['files'])} files equal, {len(disk)} on disk "
+          f"({'sizes' if args.sizes_only else 'sha256 of every part'}; {idx['total_bytes'] / 1e9:.2f} GB, {time.time() - t:.0f}s)")
     return 1 if bad else 0
 
 
@@ -844,6 +1134,7 @@ def main(argv=None):
             p.add_argument("--globs", default="", help="space-separated globs (default: the Hub row's, else every file)")
             p.add_argument("--exclude", default="", help="space-separated globs to leave out")
             p.add_argument("--note", default="", help="where the directory is (recorded in the manifest)")
+            p.add_argument("--no-hub-check", action="store_true", help="a Hub dest WITHOUT the Hub listing check (not recommended)")
         p.add_argument("--rev", default="", help="publish-hub: override the pinned revision; publish-dir: required without a Hub row (e.g. eu-20261012)")
         p.add_argument("--files", type=int, default=4, help="files uploaded at once")
         p.add_argument("--window", type=int, default=4, help="parts in flight per file (memory: files x (window+1) x 64 MiB)")
@@ -859,16 +1150,37 @@ def main(argv=None):
     p.add_argument("dests", nargs="*", help="default: every published tree")
     p.add_argument("--deep", action="store_true", help="read every byte and check the part and file SHA-256s")
     p.add_argument("--record", action="store_true", help="write verified/<dest>/<rev>/<stamp>.json (add-only) for each tree that passes")
+    p.add_argument("--skip-recorded", action="store_true", help="--deep: skip a tree that already has a verified/ record (a resumed run)")
     p.add_argument("--workers", type=int, default=16)
     p = sub.add_parser("compare-dir")
     p.add_argument("dest")
     p.add_argument("dir")
     p.add_argument("--rev", default=None)
     p.add_argument("--sizes-only", action="store_true")
+    p.add_argument("--workers", type=int, default=24, help="parts read and hashed at once")
     p = sub.add_parser("plan")
     p.add_argument("dests", nargs="+", help="dest or dest@rev")
     p.add_argument("--ttl", type=int, default=3600)
     p.add_argument("--out", default="")
+    p = sub.add_parser("archive", help="copy a directory as-is under archive/<label>/<name>/ (no manifest, no preset wiring)")
+    p.add_argument("name")
+    p.add_argument("dir")
+    p.add_argument("--label", default="eu-volume")
+    p.add_argument("--files", type=int, default=4)
+    p.add_argument("--window", type=int, default=4)
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("compare-archive", help="an archive against its directory (file set, sizes, every part's SHA-256)")
+    p.add_argument("name")
+    p.add_argument("dir")
+    p.add_argument("--label", default="eu-volume")
+    p.add_argument("--sizes-only", action="store_true")
+    p.add_argument("--workers", type=int, default=24)
+    p = sub.add_parser("put-temp", help="stage a file under tmp/ of a NON-weights bucket and print a presigned GET URL")
+    p.add_argument("file")
+    p.add_argument("--key", required=True)
+    p.add_argument("--ttl", type=int, default=3600)
+    p = sub.add_parser("rm-temp", help="delete the tmp/<prefix>* objects of a NON-weights bucket")
+    p.add_argument("--prefix", dest="tmp_prefix", required=True)
     p = sub.add_parser("create-bucket")
     p.add_argument("--location", default="wnam", help="R2 location hint: wnam enam weur eeur apac oc")
     args = ap.parse_args(argv)
@@ -882,6 +1194,11 @@ def main(argv=None):
             pub = Publisher(s3, args)
             if args.cmd == "publish-hub":
                 rev, source, files = hub_sources(args.dest, s3.conns, args.rev or None)
+            elif hub_rows().get(args.dest) and not args.no_hub_check:
+                if args.rev and args.rev != hub_rows()[args.dest][1]:
+                    raise Fail(f"{args.dest}: a Hub tree keeps its pinned revision {hub_rows()[args.dest][1]}, not {args.rev}")
+                rev, source, files = hub_dir_sources(args.dest, args.dir, s3.conns)
+                source["note"] = args.note
             else:
                 hub = hub_rows().get(args.dest)
                 rev = args.rev or (hub[1] if hub else "")
@@ -899,6 +1216,27 @@ def main(argv=None):
             pub.publish(args.dest, rev, source, files)
             log(f"ops: {s3.ops['A']} class A, {s3.ops['B']} class B")
             return 0
+        if args.cmd in ("put-temp", "rm-temp"):
+            # Only scratch objects, only outside the weights bucket: the weights bucket is add-only.
+            if s3.bucket == DEFAULT_BUCKET:
+                raise Fail(f"{args.cmd}: not in the weights bucket {DEFAULT_BUCKET}")
+            if args.cmd == "put-temp":
+                if not args.key.startswith("tmp/"):
+                    raise Fail("put-temp: the key must start with tmp/")
+                s3.request("PUT", args.key, headers={"content-type": "application/octet-stream"}, body=Path(args.file).read_bytes())
+                print(presign(s3.endpoint, s3.bucket, args.key, s3.access, s3.secret, args.ttl))
+                return 0
+            if not args.tmp_prefix.startswith("tmp/"):
+                raise Fail("rm-temp: the prefix must start with tmp/")
+            for k, size in list(s3.list(args.tmp_prefix)):
+                if size >= 0 and k.startswith(args.tmp_prefix):
+                    s3.request("DELETE", k, ok=(200, 204))
+                    log(f"deleted {s3.bucket}/{k}")
+            return 0
+        if args.cmd == "archive":
+            return cmd_archive(s3, args)
+        if args.cmd == "compare-archive":
+            return cmd_compare_archive(s3, args)
         if args.cmd == "status":
             return cmd_status(s3, args) or 0
         if args.cmd == "list":
@@ -911,20 +1249,29 @@ def main(argv=None):
             print(json.dumps(load_manifest(s3, args.prefix, args.dest, args.rev), indent=1))
             return 0
         if args.cmd == "verify":
-            pub = manifests(s3, args.prefix)
+            # FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID / _SECRET_ACCESS_KEY: every read goes through that (read-only) key, e.g.
+            # fv-control's, to prove it reads everything; the verified/ records are written with the main key.
+            rs3 = s3
+            if os.environ.get("FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID") and os.environ.get("FV_WEIGHTS_R2_VERIFY_SECRET_ACCESS_KEY"):
+                rs3 = S3(s3.endpoint, s3.bucket, os.environ["FV_WEIGHTS_R2_VERIFY_ACCESS_KEY_ID"], os.environ["FV_WEIGHTS_R2_VERIFY_SECRET_ACCESS_KEY"])
+                log("verify: reading with the FV_WEIGHTS_R2_VERIFY_* key")
+            pub = manifests(rs3, args.prefix)
             dests = args.dests or sorted(pub)
             fails = 0
             for d in dests:
                 dest, _, rev = d.partition("@")
                 for r in ([rev] if rev else pub.get(dest, [None])):
                     try:
-                        m = load_manifest(s3, args.prefix, dest, r)
+                        m = load_manifest(rs3, args.prefix, dest, r)
                     except Fail as e:
                         print(f"FAIL {dest}: {e}")
                         fails += 1
                         continue
+                    if args.deep and args.skip_recorded and any(size >= 0 for _, size in rs3.list(f"{args.prefix}verified/{dest}/{m['rev']}/")):
+                        print(f"ok   {dest}@{m['rev']}: {len(m['files'])} files, {m['total_bytes'] / 1e9:.2f} GB (sha256, recorded earlier)")
+                        continue
                     t = time.time()
-                    bad = verify_tree(s3, args.prefix, m, args.deep, args.workers)
+                    bad = verify_tree(rs3, args.prefix, m, args.deep, args.workers)
                     what = "sha256" if args.deep else "size"
                     if bad:
                         fails += 1
@@ -933,7 +1280,7 @@ def main(argv=None):
                         print(f"ok   {dest}@{m['rev']}: {len(m['files'])} files, {m['total_bytes'] / 1e9:.2f} GB ({what}, {time.time() - t:.0f}s)")
                         if args.record and args.deep:
                             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every part and file", "at": stamp}).encode(), content_type="application/json")
+                            s3.put_new(f"{args.prefix}verified/{dest}/{m['rev']}/{stamp}.json", json.dumps({"dest": dest, "rev": m["rev"], "files": len(m["files"]), "total_bytes": m["total_bytes"], "check": "sha256 of every file" if os.environ.get("FV_VERIFY_WHOLE_FILE") == "1" else "sha256 of every 64 MiB part (manifest part hashes)", "read_with": "verify key" if rs3 is not s3 else "main key", "at": stamp}).encode(), content_type="application/json")
             return 1 if fails else 0
         if args.cmd == "compare-dir":
             return cmd_compare_dir(s3, args)
