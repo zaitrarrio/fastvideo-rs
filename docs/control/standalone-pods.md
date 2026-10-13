@@ -168,7 +168,21 @@ deadline, and Start / Stop / Extend / Delete; a launch form (preset or custom
 variant, image source, compute, GPU type, region, volume, deadline, idle
 stop, env). `#/standalone?id=<name>` shows one pod: its pod and definition,
 cost, the boot timeline, the last operation's log and the last 40 log lines,
-with a link to the Logs page. The page adds its own route to the dashboard's
+with a link to the Logs page.
+
+The form's GPU / instance type is picked from a table of every type the
+chosen provider lists. For Runpod this is each GPU type per data centre with
+its stock; for Brev, every instance type of the org; for GMI, every
+product. The columns are name, spec, available, cost ($/hr and $/GPU-hr),
+model, model family, RAM, vCPU, GPU, GPU family, VRAM, storage type and
+size, region, launchable, and on Brev also stoppable and deploy time. The
+table sorts, searches, filters and pages. A click on a launchable row fills
+the form: `gpu_types` and `region` on Runpod, `provider_gpu` on Brev,
+`provider_gpu` and `provider_region` on GMI. A row fv-control cannot launch
+says why. The table loads when the provider is picked and on its Refresh
+button, which reads the provider again (at most once per 30 s). The
+endpoint and the column definitions are in README.md, "Instance types".
+The page adds its own route to the dashboard's
 router; the shared files only gain a nav link and a script tag
 (`index.html`), and the pod page one line for the boot timeline card.
 
@@ -179,4 +193,5 @@ and watchdog boot, the routes with auth and CSRF, delete with and without a
 pod, pod status and logs JSON), the integration step "standalone pod" (the
 real Durable Object: launch, up, the watchdog boot, owner `pod:<name>`,
 status, boot timeline, logs, stop, start, delete), and the UI smoke (launch
-from the form, the pod's page, phone width).
+from the form, the pod's page, phone width), `test/unit/instance-types.test.ts`
+and `test/ui/instance-tables.mjs` (the launch form's instance-type tables).

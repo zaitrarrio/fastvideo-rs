@@ -1,0 +1,36 @@
+/* The launch screen's instance-type table (ui/forms/itable.ts); tokens from app.css. */
+.it { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface-1); min-width: 0; }
+.it-head { gap: 10px; margin-bottom: 8px; }
+.it-title { font-size: 13px; }
+.it-status { flex: 1; min-width: 200px; }
+.it-status .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: cf-spin .8s linear infinite; }
+.it-err { color: var(--critical-text); }
+.it-filters { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; margin-bottom: 8px; }
+.it-f { font-size: 11.5px; }
+.it-f select, .it-f input { padding: 4px 6px; font-size: 12.5px; }
+.it-search input { width: 220px; }
+.it-num { width: 90px; }
+.it-picked { min-height: 1.6em; margin: 4px 0 6px; }
+.it-picked button { padding: 1px 8px; }
+.it-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.it-table th { position: sticky; top: 0; background: var(--surface-2); z-index: 1; padding: 0; }
+.it-sort { all: unset; display: block; padding: 6px 8px; cursor: pointer; font-weight: 600; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.it-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+th.num .it-sort { text-align: right; }
+.it-table td { font-size: 12.5px; padding: 5px 8px; }
+.it-table td.wrap { min-width: 180px; }
+.it-table tr.it-can { cursor: pointer; }
+.it-table tr.it-can:hover td { background: var(--surface-2); }
+.it-table tr.it-cannot td { color: var(--text-muted); }
+.it-table tr.it-on td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.it-table tr.it-on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.it-table tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.it-av.yes, .it-ok { color: var(--good-text); }
+.it-av.no { color: var(--critical-text); }
+.it-av.unk { color: var(--text-muted); }
+.it-no { text-decoration: underline dotted; cursor: help; }
+.it-empty { padding: 14px 8px; }
+.it-pager { margin-top: 8px; }
+.it-pager button { padding: 3px 10px; }
+@media (prefers-reduced-motion: reduce) { .it-status .spin { animation: none; } }
+@media (max-width: 600px) { .it-search input { width: 100%; } .it-wrap { max-height: 420px; } }

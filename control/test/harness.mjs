@@ -77,6 +77,17 @@ export function startMock() {
   };
   // The R2 weights store (src/r2weights.ts, docs/ops/r2-weights.md): path-style objects of bucket `bucket`, served only
   // through presigned GETs (checked here with node:crypto against `secret`), with Range. `fetched`: what pods pulled.
+  // Runpod's data centres and their GPU stock (dataCenters { gpuAvailability }: the launch screen's table).
+  m.runpodDcs = [
+    { id: "EU-RO-1", name: "EU-RO-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
+      { available: true, stockStatus: "Low", gpuTypeId: "NVIDIA RTX PRO 6000 Blackwell Server Edition" },
+      { available: false, stockStatus: null, gpuTypeId: "NVIDIA H100 80GB HBM3" },
+    ] },
+    { id: "US-CA-2", name: "US-CA-2", location: "United States", storageSupport: true, listed: true, gpuAvailability: [
+      { available: true, stockStatus: "High", gpuTypeId: "NVIDIA H100 80GB HBM3" },
+      { available: true, stockStatus: "Medium", gpuTypeId: "NVIDIA H200" },
+    ] },
+  ];
   m.r2 = { bucket: "fv-weights-test", access: "r2-test-access-id", secret: "r2-TEST-secret-0123456789abcdef", objects: new Map(), gets: [], bad: 0, fetched: [] };
   // GMI Cloud (docs/serve/deploy-gmi-brev.md §2): REST under /gmi/v1, Bearer key. Containers boot like a pod:
   // `/pod/gmi:<name>` serves fv-serve, and the boot's tunnel report goes to fv-control (FV_ENDPOINT_REPORT_URL).
@@ -454,6 +465,9 @@ export function startMock() {
       const q = body.query || "";
       if (q.includes("dataCenters") && q.includes("ramMultiplier"))
         return json(res, 200, { data: { dataCenters: ["EU-RO-1", "EUR-IS-1", "EU-NL-1", "US-CA-2", "AP-IN-2"].map((id) => ({ id, listed: id !== "AP-IN-2" })), cpuFlavors: [{ id: "cpu3c", ramMultiplier: 2 }, { id: "cpu5c", ramMultiplier: 2 }, { id: "cpu3g", ramMultiplier: 4 }] } });
+      // GPU stock per data centre (src/instance-types.ts, the launch table): every data centre's gpuAvailability.
+      if (q.includes("gpuAvailability"))
+        return m.runpodDcsFail ? json(res, 200, { errors: [{ message: "Cannot query field gpuAvailability" }] }) : json(res, 200, { data: { dataCenters: m.runpodDcs } });
       if (q.includes("specifics(")) {
         const data = {};
         for (const mm of q.matchAll(/(a\d+): cpuFlavors \{ id specifics\(input: \{dataCenterId: "([^"]+)", instanceId: "([^"]+)"\}\)/g)) {
