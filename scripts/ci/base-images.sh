@@ -11,16 +11,26 @@
 # digests whichever workflow, runner or cache built them: a host that pulled
 # one has the ~1 GB of CUDA libraries for all of them.
 #
-#   base-images.sh hash        the content hash: the `ARG UBUNTU=` line, the
+#   base-images.sh hash [stage] the content hash: the `ARG UBUNTU=` line, the
 #                              Dockerfile between "# >>> shared base" and
 #                              "# <<< shared base", scripts/gpu/cuda-13.pins
-#                              and scripts/gpu/cuda-13-runtime.pins
-#   base-images.sh ensure      resolve both tags; build + push the missing
+#                              and scripts/gpu/cuda-13-runtime.pins (stage
+#                              llama-server: its own "# >>> llama-server"
+#                              section instead of the shared base)
+#   base-images.sh ensure [extra...]  resolve both tags (and the extra stages',
+#                              e.g. llama-server); build + push the missing
 #                              ones (base-cuda on top of the published base-os);
 #                              append "contexts" (name=docker-image://repo@digest
 #                              lines) and "hash" to $GITHUB_OUTPUT
-#   base-images.sh contexts    print the context lines of published bases
-#                              (no build; status 1 if either is missing)
+#   base-images.sh contexts [extra...]  print the context lines of published
+#                              bases (no build; status 1 if one is missing)
+#
+# Extra stages are published the same way, one tag per content hash:
+#   llama-server   <repo>:llama-server-<hash>, a scratch image holding the CUDA
+#                  llama-server binary (the prompt upsampler's sidecar,
+#                  docs/serve/upsampler-local.md). It is a compile (nvcc for
+#                  four CUDA archs), so CI runs it once per llama.cpp pin.
+#                  serve-image passes it; gpucheck-runtime-image does not need it.
 #
 # Env: FV_BASE_REPO (default ghcr.io/${GITHUB_REPOSITORY_OWNER:-zaitrarrio}/
 # fastvideo-rs-runtime); FV_BASE_DISABLE=1 (no contexts: the stages build
@@ -40,10 +50,13 @@ OUT="${GITHUB_OUTPUT:-/dev/null}"
 STAGES=(base-os base-cuda)
 log() { printf '[base %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
+EXTRA_STAGES=(llama-server)
+
 cmd_hash() {
-  local section
-  section="$(sed -n '/^# >>> shared base/,/^# <<< shared base/p' "$DOCKERFILE")"
-  [[ -n "$section" ]] || { log "no shared base section in $DOCKERFILE"; exit 2; }
+  local section marker="shared base"
+  [[ "${1:-}" == llama-server ]] && marker="llama-server"
+  section="$(sed -n "/^# >>> $marker/,/^# <<< $marker/p" "$DOCKERFILE")"
+  [[ -n "$section" ]] || { log "no $marker section in $DOCKERFILE"; exit 2; }
   { grep -m1 '^ARG UBUNTU=' "$DOCKERFILE"; printf '%s\n' "$section"; cat "$ROOT/scripts/gpu/cuda-13.pins" "$ROOT/scripts/gpu/cuda-13-runtime.pins"; } \
     | sha256sum | cut -c1-16
 }
@@ -71,16 +84,28 @@ build() {  # build <stage> <tag> [context lines…] -> digest
   rm -f "$meta"
 }
 
-# resolve [build] -> context lines on stdout
+# resolve [build] [extra stages...] -> context lines on stdout
 resolve() {
-  local want_build="${1:-0}" h stage tag d lines=()
-  h="$(cmd_hash)"
-  for stage in "${STAGES[@]}"; do
+  local want_build="${1:-0}" h stage tag d lines=() stages=("${STAGES[@]}") x
+  shift || true
+  for x in "$@"; do
+    [[ " ${EXTRA_STAGES[*]} " == *" $x "* ]] || { log "unknown extra stage $x (known: ${EXTRA_STAGES[*]})"; return 1; }
+    stages+=("$x")
+  done
+  for stage in "${stages[@]}"; do
+    case "$stage" in
+      base-os | base-cuda) h="$(cmd_hash)" ;;
+      *) h="$(cmd_hash "$stage")" ;;
+    esac
     tag="$REPO:$stage-$h"
     d="$(digest "$tag")"
     if [[ -z "$d" ]]; then
       [[ "$want_build" == 1 ]] || { log "$tag is not published"; return 1; }
-      d="$(build "$stage" "$tag" ${lines[@]+"${lines[@]}"})"
+      # An extra stage builds on its own (no base contexts): its section starts FROM the pinned Ubuntu.
+      case "$stage" in
+        base-os | base-cuda) d="$(build "$stage" "$tag" ${lines[@]+"${lines[@]}"})" ;;
+        *) d="$(build "$stage" "$tag")" ;;
+      esac
       [[ "$d" == sha256:* ]] || { log "$stage: no digest from the build"; return 1; }
       log "published $tag@$d"
     else
@@ -99,7 +124,7 @@ cmd_ensure() {
     printf 'hash=%s\ncontexts=\n' "$h" >>"$OUT"
     return 0
   fi
-  if ! ctx="$(resolve 1)"; then
+  if ! ctx="$(resolve 1 "$@")"; then
     if [[ "${FV_BASE_REQUIRE:-0}" == 1 ]]; then
       echo "::error title=Shared base images::could not publish or resolve $REPO:base-{os,cuda}-$h"
       exit 1
@@ -118,8 +143,8 @@ cmd_ensure() {
 }
 
 case "${1:-}" in
-  hash) cmd_hash ;;
-  ensure) cmd_ensure ;;
-  contexts) resolve 0 ;;
-  *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  hash) shift; cmd_hash "$@" ;;
+  ensure) shift; cmd_ensure "$@" ;;
+  contexts) shift; resolve 0 "$@" ;;
+  *) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
