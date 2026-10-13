@@ -95,15 +95,23 @@ pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>
         let key = (!u.api_key.is_empty()).then(|| u.api_key.expose().to_owned());
         match fastvideo_upsampler::Service::http(&u.base_url, key, u.settings()) {
             Ok(s) => {
+                let counters = crate::tokens::counters(c);
+                let tok = |x: &Option<Arc<dyn fastvideo_upsampler::TokenCounter>>| x.as_ref().map_or_else(|| "chars".to_owned(), |t| t.describe());
                 tracing::info!(
                     backend = %s.describe(),
                     timeout_ms = u.timeout_ms,
                     hedge = u.hedge,
                     default_on = u.default_on,
+                    context_tokens = u.context_tokens,
+                    deck_size = u.deck_size,
+                    vision = u.vision,
+                    tokenizer_h3 = %tok(&counters.h3),
+                    tokenizer_wan = %tok(&counters.wan),
+                    tokenizer_ltx = %tok(&counters.ltx),
                     api_key = if u.api_key.is_empty() { "unset" } else { "set" },
                     "prompt upsampler configured"
                 );
-                Some(Arc::new(s))
+                Some(Arc::new(s.with_counters(counters)))
             }
             Err(e) => {
                 tracing::error!(error = %e, "[upsampler] is configured but unusable: prompt expansion stays off");

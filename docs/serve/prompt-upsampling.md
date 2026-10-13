@@ -21,15 +21,28 @@ does not ask (unless the operator sets `default_on`). No live LLM was
 called in testing: every test runs against fake servers
 ([Tests](#tests)).
 
+**Update (2026-10-13, owner: "how does fal.ai h3 max director support such
+long prompts.. our implementation should be modeled after h3 max
+director"):** the director now works like fal's H3 Max director, with the
+owner's TS design (world bible, registry with verbatim descriptors, ledger,
+`json_schema` segment output) as its core: a 50 000-character premise that
+never reaches the DiT, a token budget for the LLM, a premise digest, H3's
+native Context-IR prompt layout within 1024 tokens by H3's own tokenizer,
+a prompt deck planned ahead with fal's replan / append semantics, and an
+image-grounded opening on a vision LLM. See
+[Modelled on fal's H3 Max director](#modelled-on-fals-h3-max-director).
+
 ## Code
 
 | Where | What |
 |---|---|
-| `crates/fastvideo-upsampler` | `chat`: the `ChatBackend` seam and the hedge; `http` (feature `http`): `OpenAiChat`; `director`: the spec port (`Upsampler`, `build_user_message`, `assemble_prompt`, `SYSTEM_PROMPT`, `output_schema`); `rewrite`: one-shot rewrites; `Service`: backend + settings, metrics, logs |
+| `crates/fastvideo-upsampler` | `chat`: the `ChatBackend` seam (with an optional `tokenize`) and the hedge; `http` (feature `http`): `OpenAiChat` (vision content parts, `/tokenize`); `director`: the spec port (`Upsampler`, `build_user_message`, `SYSTEM_PROMPT`, `output_schema`) plus the token budget, premise digest, frames and speculative chain; `assemble`: per-family segment prompts (H3 Context-IR, prose) trimmed by priority; `tokens`: `TokenCounter`, `PromptLimit`, the LLM estimate; `rewrite`: one-shot rewrites (H3 in Context-IR); `Service`: backend + settings + tokenizers, metrics, logs |
 | `crates/fastvideo-protocol` | `GenerationRequest::prompt_expansion` (`PromptExpansion {mode, explicit, field}`, not serialized), `Job::expanded_prompt` |
 | `crates/fastvideo-serve-kit/src/upsample.rs` | `expand_request`: the batch rewrite, called by `submit_request` (and MiniMax's own submit) after model resolution, before negotiation |
 | adapters | each protocol's flag → `prompt_expansion` ([table](#per-protocol-mapping)); fal returns `expanded_prompt`, the native job view `expanded_prompt` |
-| `crates/fastvideo-fal/src/director/upsample.rs` | `SegmentUpsampler`: which segment takes which expansion, expanded ahead, fallbacks |
+| `crates/fastvideo-fal/src/director/upsample.rs` | `SegmentUpsampler`: the prompt deck (cues, planning ahead, bust / append, fallbacks), the vision image loader |
+| `crates/fastvideo-fal/src/director/control.rs` | `Control::peek` (upcoming chunk plans), `Control::reserve` (an appended direction behind the planned segments) |
+| `crates/fastvideo-serve/src/tokens.rs` | the text encoders' tokenizers (`tokenizer.json`, H3 with its `<d>` markers), loaded lazily |
 | `crates/fastvideo-fal/src/director/session.rs` | the session wiring (clip chunks held for their prompt, causal segments) |
 | `crates/fastvideo-serve/src/config.rs`, `app.rs` | `[upsampler]`, `FV_UPSAMPLER_*`, the service on `ServeCtx` |
 | `crates/fastvideo-serve/console/director.js` | the director page: toggle, style, entities, the segment list |
@@ -45,17 +58,24 @@ timeout_ms = 10000                        # one call, both hedged attempts inclu
 hedge = true                              # two concurrent attempts, first success wins
 memory = 12                               # director: prior segments as context when configure.memory is absent (1..50)
 default_on = false                        # see Defaults
-[upsampler.max_chars]                     # prompt budgets (Limits)
+context_tokens = 28000                    # director: the LLM's context (4096..1000000); 28000 suits a local Qwen3(-VL)-4B at 32k
+deck_size = 6                             # director: segments planned ahead (1..12), fal's prompt_deck_size
+vision = false                            # the LLM sees images (Qwen3-VL behind llama-server --mmproj)
+tokenize = true                           # ask the LLM server's /tokenize (llama-server, vLLM) once; else estimate
+[upsampler.max_chars]                     # prompt budgets in characters, used only without the family's tokenizer (Limits)
 wan = 1800
 ltx = 3600
 h3 = 3200
 other = 1800
+[upsampler.tokenizers]                    # optional: tokenizer.json per family; default <weights>/tokenizer/tokenizer.json of the first [[models]] entry of that family
+h3 = "/runpod-volume/weights/FastH3/tokenizer/tokenizer.json"
 ```
 
 Environment (they override the file; a base URL alone creates the
 section): `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`,
 `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DEFAULT_ON`,
-`FV_UPSAMPLER_API_KEY_ENV`, and the key in `FV_UPSAMPLER_API_KEY` (or the
+`FV_UPSAMPLER_VISION`, `FV_UPSAMPLER_CONTEXT_TOKENS`,
+`FV_UPSAMPLER_DECK_SIZE`, `FV_UPSAMPLER_API_KEY_ENV`, and the key in `FV_UPSAMPLER_API_KEY` (or the
 variable `api_key_env` names, also in its lower-case Runpod-secret
 spelling). The key is held as a `Secret`: never in logs, `Debug`, the
 serialized config or error messages (the startup line says `api_key=set`).
@@ -75,7 +95,21 @@ environment alone, no TOML edit and no key:
 FV_UPSAMPLER_BASE_URL=http://127.0.0.1:<port>/v1
 FV_UPSAMPLER_MODEL=<the name llama-server serves>
 FV_UPSAMPLER_HEDGE=0      # one request per call: the hedge doubles the load on a local server
+FV_UPSAMPLER_VISION=1     # Qwen3-VL-4B-Instruct with --mmproj (owner decision, 2026-10-13)
 ```
+
+**Vision (owner decision, 2026-10-13: Qwen3-VL-4B-Instruct under
+llama-server `--mmproj`).** With `vision`, the director sends
+`configure.image_url` with the opening expansion, and an end image
+(`end_image_url` of `configure` or a `prompt`, an end-image script beat)
+with the segment that must arrive there, as OpenAI `image_url` content
+parts after the user text. The image is the file fv-serve staged (an
+`http(s)` URL is fetched server-side by the ingestor, with its size caps;
+llama-server never fetches anything), decoded, scaled to at most 1024 px
+on the long side and sent as a JPEG `data:` URL, refused above 4 MB (the
+LLM is then told the frame exists). Images go only into the segment they
+pin, never every request, so the rest keep one stable text prefix for the
+server's prompt cache. Switching the model is config only.
 
 With no key (`FV_UPSAMPLER_API_KEY` unset or empty) no `authorization`
 header is sent. For a small model the system prompts of the batch rewrites
@@ -219,8 +253,10 @@ port splits `next` into `user_message` → `expand_with_hedge` → `commit`
 ([Deviations](#director-port)); a speculative expansion is never committed,
 so the ledger only holds segments that played.
 
-**Fallback.** A failed or timed-out call uses the raw text the director
-would have used without upsampling (premise + direction), records nothing
+**Fallback.** A failed or timed-out call uses the direction's text, else
+the previous segment's prompt, else the premise (its digest), cut at a
+sentence or word to the encoder's limit: never the long premise as a
+whole (before 2026-10-13 it was premise + direction). It records nothing
 in the ledger (as `next` throws in the spec), and is reported with
 `fallback: true`; the direction counts as consumed. The stream never stops
 for the LLM.
@@ -238,7 +274,10 @@ when a segment's prompt goes to the engine:
 
 `chunk_index` on clip models, `first_block` (blocks received so far) on
 causal ones; `segment_index`, `direction_id`, `summary` are the ledger
-record (null on a fallback); `prompt` is what the engine got.
+record (null on a fallback); `prompt` is what the engine got. Since
+2026-10-13 also `planned` (segments still expanded in the deck),
+`prompt_length`, `prompt_limit` and `prompt_unit` (`tokens` by the
+family's tokenizer, else `chars`).
 
 **Console.** The director page has a "Prompt upsampling" section (toggle,
 style, entities as JSON) and lists every `segment_expanded` under the
@@ -288,9 +327,22 @@ for the other, both are dropped (HTTP requests aborted) at the timeout),
 
 ## Limits
 
-Prompt budgets in characters, from each text encoder's token limit at about
-3.5 to 4 characters per English token, with headroom. `[upsampler.max_chars]`
-overrides them.
+**In tokens, by the model's own tokenizer, when fv-serve has it**
+(`crates/fastvideo-serve/src/tokens.rs`): `[upsampler.tokenizers]`, else
+`<weights>/tokenizer/tokenizer.json` of the first `[[models]]` entry of the
+family, loaded on first use and looked for again every 30 s while missing
+(weights still streaming). H3 counts with `H3Tokenizer` (no template, the
+`<d>` / `</d>` markers one token each, ids 151669 / 151670); Wan (umT5) and
+LTX (Gemma 3) count with the special tokens their encoders add. Limits:
+H3 1024, LTX 1024, Wan 512. Without a tokenizer (a server whose models come
+from the catalog only, no `[[models]]` weights and no
+`[upsampler.tokenizers]`), the character budgets below apply, as before.
+`session_info.upsample.prompt_limit_unit` and each `segment_expanded`
+say which is in force.
+
+Character budgets (the fallback), from each text encoder's token limit at
+about 3.5 to 4 characters per English token, with headroom.
+`[upsampler.max_chars]` overrides them.
 
 | Family | Text encoder, limit | Budget |
 |---|---|---|
@@ -301,6 +353,100 @@ overrides them.
 
 The client-facing prompt limits (fal 50 000, MiniMax 7000, LTX 5000
 characters) still apply to what the client sends.
+
+## Modelled on fal's H3 Max director
+
+fal's sources: [research-fal.md](research-fal.md) §8 (AsyncAPI,
+`llms.txt`, `session_info`) and §4-5; H3's prompt conventions:
+[h3.md](../ports/h3.md) (~L298), [h3-ref2v.md](../ports/h3-ref2v.md) §3,
+[research-minimax-fastvideo.md](research-minimax-fastvideo.md) §1.6b.
+**Not documented by fal, not invented here:** the expander model and its
+system prompt. Rows marked *inferred* are our reading of fal's text, not
+a documented behaviour.
+
+| fal H3 Max director | Ours |
+|---|---|
+| `configure.prompt` is a series premise up to 50 000 characters, not a DiT prompt; a server-side expander writes a fresh per-segment prompt sized for H3's encoder (`session_info.prompt_expander: "fast"`) | the premise (≤ 50 000) is the world bible; the DiT only ever gets assembled segment prompts (and, on an LLM failure, a fallback within the limit). `prompt_expander: "fast"` when the server has an upsampler, `"none"` without |
+| H3 conditions on ≤ 1024 tokens, no truncation | segment prompts measured with H3's tokenizer and trimmed by priority to 1024 ([Assembly](#assembly)) |
+| `memory` (1..50, default 12, `prompt_context_segments: 12`): "number of prior segment prompts retained as context for future prompt expansion" | the spec's `memory` window, then the token budget: as many of the newest as fit |
+| How a 50 000-character premise fits the expander's context | *inferred / ours:* a token budget (`context_tokens`, default 28 000): premise first and verbatim (a stable prefix for the prompt cache), registry, newest segments, direction; a premise over the budget is condensed once at configure into a "series bible" (reported in `configured.upsample_premise` and the logs) |
+| prompt deck (`prompt_deck_size: 6`): planned upcoming segment prompts | up to `deck_size` (6) segments expanded ahead, one LLM call at a time, front first; each written after the planned ones before it; only executed segments enter the ledger and memory |
+| `replan: true` (default) "busts the planned prompt queue so the new direction applies at the next undispatched chunk" (`versionedInput.policy: "replace-pending"`) | the deck's cues change at the next chunk: planned segments are discarded and an in-flight call aborted |
+| `replan: false` "appends the direction after the already-planned chunks" | the control reserves continuation chunks for the planned segments (not counted toward `queue_full`), so the direction is consumed by the first segment after them; `prompt_applied` comes with that chunk |
+| `image_url`: "The opening prompt expansion also sees this image, so the first segment's prompt is grounded in it" | with `vision`, the image goes as an `image_url` part with the opening expansion only; without, one line says a given first frame exists |
+| `end_image_url`: "Director jointly plans that arrival and the following checkpoint continuation" | the arrival segment is told (and, with `vision`, shown) that it must end on the given frame; the continuation after it is planned in the same deck (*inferred*: "jointly") |
+| `script` beats: "`prompt` stays the series premise; a beat prompt directs from its offset on", a text beat "persists until the next text beat" | beats are directions at their chunk (unchanged control planning); end-image beats as above |
+| Expander output: H3's Context-IR text (`integrated_multimodal_description:`, `overall_soundscape:`, `non_diegetic_music:`, `<d>[English] …</d>`, `<Picture N>`) | the H3 family's segments use that layout; batch H3 rewrites emit it too |
+| Expander model, system prompt | **undocumented**: ours is the owner's showrunner (SYSTEM_PROMPT + one `music` rule) on the operator's LLM |
+
+### Assembly
+
+Per family (`crates/fastvideo-upsampler/src/assemble.rs`):
+
+- **H3** (H3, FastH3, Sol-H3, H3-Trim):
+  ```text
+  integrated_multimodal_description: <location descriptor.> <Name: descriptor.> … <action> <Name says <d>[English] line</d>> <camera.> <lighting.> <style.>
+  overall_soundscape: <audio>[ No spoken words.]
+  non_diegetic_music: <music, or None.>
+  ```
+  Sections on their own lines; each part ends in sentence punctuation;
+  the language tag is always `[English]` (*inferred* from the model card's
+  example; the line's language is not detected). `<Picture N>` labels are
+  not emitted (the director's references are frames, not ingredients).
+- **Prose** (Wan, LTX, LongLive, SF-Wan): the owner's `assemblePrompt`
+  unchanged while it fits, plus `Music: …` after `Sound:` when the segment
+  has a score.
+
+Over the limit, parts go by priority, never by slicing a string: 1. the
+style, 2. the music, 3. descriptors of cast members that neither speak nor
+act (their name not in the action) shortened to the name, oldest registered
+first, 4. the lighting, 5. the camera. The location descriptor, the
+speaking / acting cast, the action, the dialogue and the sound stay. Only
+if those alone are over the limit is the description cut at the last
+sentence (else word) that fits, never inside `<d>…</d>`; and only if the
+sound line alone is over is it cut too.
+
+**Batch H3 rewrites** (fal `prompt_expansion_mode`, MiniMax): the H3
+family's one-shot rewrite asks for the same three sections (`balanced`:
+one short paragraph of description; `quality`: richer, `[Shot N]` blocks
+allowed), keeps the section lines when cleaning (an answer without labels
+becomes the description), and fits 1024 tokens by H3's tokenizer: music to
+`None.`, then the description cut at a sentence, never inside `<d>…</d>`.
+
+### Deviations from the owner's TS spec
+
+- `music` added to the schema (in `required` for strict mode, an empty
+  string meaning none; an answer without it parses as empty) and one rule
+  appended to `SYSTEM_PROMPT` (the rest verbatim).
+- Assembly per family; over the limit the priority trims above instead of
+  "drop the last part, then slice" (which dropped `Sound:` when the style
+  was empty: the owner's open question on #89, settled as "never drop the
+  sound").
+- Limits in tokens by the real tokenizer (characters only without one).
+- `buildUserMessage` keeps its sections and order but the history is cut
+  to the token budget (newest kept) and the premise may be the digest;
+  `FIRST FRAME:` / `FINAL FRAME:` lines follow the direction when a
+  segment is pinned to an image.
+- The fallback is the direction's text (or the previous segment), not
+  premise + direction.
+- `next` is planned ahead in a speculative chain; only executed segments
+  are committed.
+
+### Deviations from fal
+
+- `prompt_expander: "fast"` names fal's mode; ours is whatever LLM the
+  operator configured (local Qwen3-VL-4B planned), and it is off unless
+  the session asks (or `default_on`).
+- Deck planning is bounded by one LLM call at a time and `deck_size`
+  segments ahead (about 30 s of video at 5 s chunks); fal does not
+  document its bound.
+- The premise digest and the token budget are ours (fal does not say how
+  its expander fits 50 000 characters).
+- A failed expansion falls back to the direction's text; fal does not
+  document its failure mode.
+- Without `[upsampler]` the session is unchanged: the premise + direction
+  goes to the engine as before (a premise over 1024 H3 tokens is then
+  refused by the engine).
 
 ## Metrics and logs
 
@@ -356,8 +502,23 @@ goldens, `accepted_noop` notes and `expanded_prompt: null` are unchanged).
   causal session (the rollout starting on the first segment, a segment per
   director chunk, a direction applied with `prompt_applied`, `memory`), and
   `upsample: true` without an upsampler.
-- `crates/fastvideo-fal/src/director/upsample.rs` unit tests: keys,
-  speculative beats replaced by a direction, fallbacks.
+- `crates/fastvideo-fal/src/director/upsample.rs` unit tests: cues, the
+  deck planning ahead to `deck_size` with only executed segments
+  committed, bust and append, an in-flight call aborted by a bust, the
+  direction fallback, images only with the segment they pin, the JPEG
+  data URL scaling and cap; `control.rs`: `peek` and `reserve`.
+- `crates/fastvideo-upsampler` (2026-10-13): H3 assembly goldens with `<d>`
+  and the token-limit trim order that never splits a pair, prose that never
+  drops the sound, a 50 000-character premise sent verbatim, budget
+  trimming of history, the premise digest (several calls, exact counts via
+  `/tokenize`) and its fallback, the speculative chain, the H3 batch
+  rewrite's sections and token fit, vision `image_url` parts on the wire,
+  the `/tokenize` feature check; `fastvideo-serve` `tokens.rs`: H3 counting
+  `<d>` as one token, the lazy load, the paths from config.
+- `director_e2e` (2026-10-13): `upsampled_prompt_deck_plan_bust_append`
+  (planned count, append behind the planned chunks, bust at the next chunk,
+  `prompt_pending` → `prompt_applied` → chunk), `upsampled_opening_is_grounded_in_the_image`
+  (vision on and off), `upsampled_long_premise_never_reaches_the_engine`.
 - `cargo test -p fastvideo-serve --features http-client --test upsample`:
   fv-serve from `FV_UPSAMPLER_*` against a fake HTTP LLM (native
   `prompt_expansion`, MiniMax `prompt_optimizer`, the key as bearer and
@@ -369,6 +530,12 @@ goldens, `accepted_noop` notes and `expanded_prompt: null` are unchanged).
   `tests/console/run.sh`): the director page's toggle, style and entities
   against fv-serve's fake engine and a fake LLM; the segments shown, the
   fallback, and the spec's request on the wire.
+
+Untested since 2026-10-13: a real Qwen3-VL-4B under llama-server (the
+`--mmproj` image path, `/tokenize`, the digest's quality and latency on a
+50 000-character premise), real H3 generations from the Context-IR segment
+prompts, the real H3 / umT5 / Gemma `tokenizer.json` files (counted with a
+toy vocabulary in tests), and causal sessions' deck prediction under load.
 
 Untested: a real LLM (none was available while building this; the request
 format is the spec's and the common OpenAI-compatible one, but a provider

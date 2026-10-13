@@ -8,8 +8,8 @@
 //     json_schema `segment`, the premise as the world bible);
 //   - each chunk's `segment_expanded` shows in the page, with the entity's
 //     descriptor and the style spliced into the prompt;
-//   - a direction whose call fails falls back to the raw text (shown as
-//     `fallback`) and the stream goes on.
+//   - a direction whose call fails falls back to the direction's text
+//     (shown as `fallback`) and the stream goes on.
 //
 //   FV_SERVE_BIN=target/debug/fv-serve node tests/console/director_upsample.cjs
 //
@@ -52,6 +52,12 @@ function startLlm() {
       let j = null;
       try { j = JSON.parse(body); } catch { /* recorded as null */ }
       llm.calls.push({ path: req.url, auth: req.headers.authorization || null, body: j });
+      // Only chat completions (fv-serve's `/tokenize` feature check gets a 404).
+      if (req.url !== '/v1/chat/completions') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{"error":"not found"}');
+        return;
+      }
       const user = (j && j.messages && j.messages[1] && j.messages[1].content) || '';
       if (/please fail/i.test(user.split('NEW DIRECTION:').pop())) {
         res.writeHead(500, { 'content-type': 'application/json' });
@@ -141,28 +147,32 @@ const segs = (page) => page.evaluate(() => [...document.querySelectorAll('#direc
     let s = await segs(page);
     const first = s[s.length - 1];
     check(!first.fallback && /chunk 0/.test(first.text) && /beat 0/.test(first.text), 'chunk 0 segment', s);
-    check(first.prompt.startsWith('a white lighthouse on black rocks Mara: a wiry woman in a yellow oilskin coat Mara climbs the stairs, step 0.'), 'location, cast and action lead the prompt', first);
-    check(first.prompt.endsWith('Sound: wind and rain No spoken words. 35mm film, muted teal palette.'), 'sound and style close the prompt', first);
+    // H3: the Context-IR layout (docs/serve/prompt-upsampling.md §Assembly).
+    check(first.prompt.startsWith('integrated_multimodal_description: a white lighthouse on black rocks. Mara: a wiry woman in a yellow oilskin coat. Mara climbs the stairs, step 0.'), 'location, cast and action lead the description', first);
+    check(first.prompt.endsWith('35mm film, muted teal palette.\noverall_soundscape: wind and rain No spoken words.\nnon_diegetic_music: None.'), 'style closes the description, then soundscape and music', first);
+    check(/planned/.test(first.text), 'the planned count is shown', first);
     check(/New: Gull \(prop\)/.test(first.text), 'the new entity is listed', first);
     step('chunk 0 upsampled: "' + first.prompt.slice(0, 90) + '…"');
 
     // The LLM saw the spec's request.
-    const c0 = llm.calls[0];
+    const chat = llm.calls.filter((c) => c.path === '/v1/chat/completions');
+    const c0 = chat[0];
     check(c0.path === '/v1/chat/completions' && c0.auth === 'Bearer test-key', 'endpoint and bearer key', c0);
     check(c0.body.model === 'fake-llm' && c0.body.response_format.type === 'json_schema' && c0.body.response_format.json_schema.name === 'segment', 'model and schema', c0.body);
     check(c0.body.messages[1].content.startsWith('WORLD BIBLE:\nA lighthouse keeper on a stormy island.'), 'the premise is the world bible', c0.body.messages[1]);
     check(/- mara \(character, "Mara"\)/.test(c0.body.messages[1].content), 'the configured cast is in the registry', c0.body.messages[1]);
     const facts = await page.textContent('#director-session-info');
-    check(/prompt upsampler/.test(facts) && /available/.test(facts), 'session info lists the upsampler', facts);
+    check(/prompt upsampler/.test(facts) && /available/.test(facts) && /h3 layout/.test(facts), 'session info lists the upsampler', facts);
+    check(c0.body.messages[0].content.includes('"music" is the non-diegetic score'), 'the music rule is in the system prompt', c0.body.messages[0]);
     step('LLM request: bearer key, model fake-llm, json_schema `segment`, ' + llm.calls.length + ' call(s) so far');
 
-    // A direction whose call fails: the raw text is used, shown as fallback.
+    // A direction whose call fails: its text is used (never the premise), shown as fallback.
     await page.fill('#director-next', 'Please fail now.');
     await page.click('#director-send');
     await page.waitForFunction(() => [...document.querySelectorAll('#director-segments li')].some((li) => li.dataset.fallback === 'true'), null, { timeout: 90_000 });
     s = await segs(page);
     const fb = s.find((x) => x.fallback);
-    check(fb.prompt === 'A lighthouse keeper on a stormy island. Please fail now.' && /upsampler LLM 500/.test(fb.text), 'the fallback is the raw premise + direction', fb);
+    check(fb.prompt === 'Please fail now.' && /upsampler LLM 500/.test(fb.text), 'the fallback is the direction', fb);
     step('failed direction fell back to "' + fb.prompt + '"');
 
     // The stream goes on: a later chunk is upsampled again.
@@ -172,8 +182,9 @@ const segs = (page) => page.evaluate(() => [...document.querySelectorAll('#direc
       const li = [...document.querySelectorAll('#director-segments li')];
       return li.length >= 3 && li[0].dataset.fallback === 'false';
     }, null, { timeout: 90_000 });
-    const dirCall = llm.calls.find((c) => c.body && /NEW DIRECTION:\nThe storm clears at dawn\.$/.test(c.body.messages[1].content));
-    check(dirCall, 'the direction reached the LLM', llm.calls.map((c) => c.body && c.body.messages[1].content.split('NEW DIRECTION:').pop()));
+    const chats = llm.calls.filter((c) => c.body && c.body.messages);
+    const dirCall = chats.find((c) => /NEW DIRECTION:\nThe storm clears at dawn\.$/.test(c.body.messages[1].content));
+    check(dirCall, 'the direction reached the LLM', chats.map((c) => c.body.messages[1].content.split('NEW DIRECTION:').pop()));
     step('upsampling resumed after the fallback (' + (await segs(page)).length + ' segments, ' + llm.calls.length + ' LLM calls)');
 
     await page.click('#director-stop');

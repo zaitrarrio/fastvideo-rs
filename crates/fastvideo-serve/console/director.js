@@ -490,7 +490,10 @@ export function mountDirector(root, { app, model }) {
       ['scripts', m.scripts === false ? 'no' : 'up to ' + m.script_max_beats + ' beats, ' + m.script_max_end_images + ' keyframes'],
       ['audio conditioning', audioOk ? 'yes' : 'no']];
     if (m.causal) facts.push(['causal', m.causal.block_frames + '-frame blocks (' + m.causal.block_seconds + ' s), prompt switch: ' + m.causal.prompt_switch]);
-    facts.push(['prompt upsampler', m.upsample && m.upsample.available ? 'available (up to ' + m.upsample.max_prompt_chars + ' characters per segment' + (m.upsample.default ? ', on by default' : '') + ')' : 'none']);
+    const u = m.upsample;
+    const limit = u && (u.prompt_limit_unit === 'tokens' ? u.max_prompt_tokens + ' tokens' : u.max_prompt_chars + ' characters');
+    facts.push(['prompt upsampler', u && u.available ? 'available (up to ' + limit + ' per segment' + (u.layout ? ', ' + u.layout + ' layout' : '')
+      + (u.deck_size ? ', ' + u.deck_size + ' planned ahead' : '') + (u.vision ? ', sees images' : '') + (u.default ? ', on by default' : '') + ')' : 'none']);
     sessionFacts.replaceChildren(...facts.filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))]));
   }
 
@@ -560,16 +563,22 @@ export function mountDirector(root, { app, model }) {
         segmentsBlock.hidden = false;
         const where = m.chunk_index != null ? 'chunk ' + m.chunk_index : m.first_block != null ? 'block ' + m.first_block : 'segment';
         const head = el('div', {}, el('span', { class: 'v' }, where), ' ', el('span', { class: 'pill' + (m.fallback ? ' bad' : ' ok') }, m.fallback ? 'fallback' : 'v' + m.prompt_version),
-          m.summary ? ' ' + m.summary : '', m.fallback && m.error ? ' (' + m.error + ')' : '');
+          m.summary ? ' ' + m.summary : '', m.fallback && m.error ? ' (' + m.error + ')' : '',
+          m.prompt_length != null ? ' · ' + m.prompt_length + '/' + m.prompt_limit + ' ' + m.prompt_unit : '',
+          m.planned != null ? ' · ' + m.planned + ' planned' : '');
         const added = (m.new_entities || []).map((e) => e.name + ' (' + e.kind + ')').join(', ');
         const li = el('li', { 'data-segment': String(m.segment_index ?? ''), 'data-fallback': String(!!m.fallback) }, head,
-          el('p', { class: 'hint segment-prompt' }, m.prompt || ''), added ? el('p', { class: 'hint' }, 'New: ' + added) : null);
+          el('p', { class: 'hint segment-prompt', style: 'white-space: pre-wrap' }, m.prompt || ''), added ? el('p', { class: 'hint' }, 'New: ' + added) : null);
         segments.prepend(li);
         while (segments.childNodes.length > 50) segments.lastChild.remove();
         break;
       }
       case 'configured':
         if (m.upsample === false && m.upsample_error) setMsg(msg, m.upsample_error, 'bad');
+        if (m.upsample_premise && m.upsample_premise.digest) {
+          const d = m.upsample_premise.digest;
+          setMsg(msg, 'The premise (' + m.upsample_premise.tokens + ' tokens) is over the LLM budget: ' + (d.fallback ? 'its head is used (' + (d.error || 'digest failed') + ')' : 'condensed into a series bible of ' + d.tokens + ' tokens'), d.fallback ? 'bad' : 'ok');
+        }
         // The chunk length the session actually runs (a tier may fall back).
         if (m.chunk_duration != null) { meta = { ...meta, chunk: m.chunk_duration }; renderStats(lastChunk); }
         setPromptState(m.prompt_version, 'applied', 'ok');

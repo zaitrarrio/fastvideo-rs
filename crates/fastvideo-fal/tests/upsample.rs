@@ -103,12 +103,12 @@ async fn explicit_modes_rewrite_and_defaults_wait_for_default_on() {
     let (f, llm) = fixture_with(false, false).await;
     // Explicit `quality`: rewritten, returned, generated with.
     let (out, job) = run(&f, json!({"prompt": "a kitten", "prompt_expansion_mode": "quality"})).await;
-    assert_eq!(out["expanded_prompt"], "Rewritten: a kitten");
-    assert_eq!(job.resolved.prompt, "Rewritten: a kitten");
-    assert_eq!(job.expanded_prompt.as_deref(), Some("Rewritten: a kitten"));
+    assert_eq!(out["expanded_prompt"], "integrated_multimodal_description: Rewritten: a kitten", "H3: Context-IR layout");
+    assert_eq!(job.resolved.prompt, "integrated_multimodal_description: Rewritten: a kitten");
+    assert_eq!(job.expanded_prompt.as_deref(), Some("integrated_multimodal_description: Rewritten: a kitten"));
     assert!(job.logs.iter().any(|l| l.message.contains("prompt expanded by the upsampler (prompt_expansion_mode `quality`, requested)")), "{:?}", job.logs);
     let sys = llm.systems.lock().unwrap().last().cloned().unwrap();
-    assert!(sys.contains("camera language") && sys.contains("140 to 200 words") && sys.contains("3200 characters"), "{sys}");
+    assert!(sys.contains("camera language") && sys.contains("120 to 220 words") && sys.contains("[Shot 1]") && sys.contains("3200 characters"), "{sys}");
     // Omitted: fal's default `balanced` is not applied without default_on.
     let (out, job) = run(&f, json!({"prompt": "a puppy"})).await;
     assert_eq!(out["expanded_prompt"], Value::Null);
@@ -121,8 +121,8 @@ async fn explicit_modes_rewrite_and_defaults_wait_for_default_on() {
     // default_on: the omitted flag follows fal's default (balanced).
     let (f, llm) = fixture_with(false, true).await;
     let (out, _) = run(&f, json!({"prompt": "a puppy"})).await;
-    assert_eq!(out["expanded_prompt"], "Rewritten: a puppy");
-    assert!(llm.systems.lock().unwrap()[0].contains("80 to 130 words"));
+    assert_eq!(out["expanded_prompt"], "integrated_multimodal_description: Rewritten: a puppy");
+    assert!(llm.systems.lock().unwrap()[0].contains("60 to 110 words"));
     let (out, _) = run(&f, json!({"prompt": "a puppy", "prompt_expansion_mode": "disabled"})).await;
     assert_eq!(out["expanded_prompt"], Value::Null);
 }

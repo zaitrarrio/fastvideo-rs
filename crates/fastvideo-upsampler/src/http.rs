@@ -1,6 +1,8 @@
 //! [`OpenAiChat`]: `POST {base_url}/chat/completions` on any
 //! OpenAI-compatible server (the spec's `callModel` transport).
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use serde_json::{json, Value};
 
 use crate::chat::{clip, ChatBackend, ChatRequest, UpsampleError};
@@ -11,6 +13,11 @@ pub struct OpenAiChat {
     url: String,
     api_key: Option<String>,
     model: String,
+    /// `POST {root}/tokenize` (llama-server, vLLM), `root` being the base
+    /// URL without a trailing `/v1`.
+    tokenize_url: String,
+    /// 0 unknown, 1 supported, 2 unsupported (the first failure decides).
+    tokenize: AtomicU8,
 }
 
 impl std::fmt::Debug for OpenAiChat {
@@ -38,8 +45,11 @@ impl OpenAiChat {
         let client = reqwest::Client::builder()
             .build()
             .map_err(|e| UpsampleError::Unavailable(format!("HTTP client: {e}")))?;
+        let root = base.strip_suffix("/v1").unwrap_or(base);
         Ok(Self {
             client,
+            tokenize_url: format!("{root}/tokenize"),
+            tokenize: AtomicU8::new(0),
             url: format!("{base}/chat/completions"),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             model: model.trim().to_owned(),
@@ -48,12 +58,20 @@ impl OpenAiChat {
 
     /// The request body (the spec's `JSON.stringify({...})`).
     pub fn body(&self, req: &ChatRequest) -> Value {
+        // A vision request: the text, then one `image_url` part per image.
+        let user = if req.images.is_empty() {
+            json!(req.user)
+        } else {
+            let mut parts = vec![json!({"type": "text", "text": req.user})];
+            parts.extend(req.images.iter().map(|u| json!({"type": "image_url", "image_url": {"url": u}})));
+            Value::Array(parts)
+        };
         let mut body = json!({
             "model": self.model,
             "temperature": req.temperature,
             "messages": [
                 {"role": "system", "content": req.system},
-                {"role": "user", "content": req.user},
+                {"role": "user", "content": user},
             ],
         });
         if let Some(rf) = &req.response_format {
@@ -92,4 +110,46 @@ impl ChatBackend for OpenAiChat {
     fn describe(&self) -> String {
         format!("{} ({})", self.url, self.model)
     }
+
+    /// llama-server answers `{"tokens": [...]}` to `{"content": text}`,
+    /// vLLM `{"count": n, ...}` to `{"model", "prompt"}`; both fields are
+    /// sent. Any failure marks the server unsupported for this process.
+    async fn tokenize(&self, text: &str) -> Option<usize> {
+        if self.tokenize.load(Ordering::Relaxed) == 2 {
+            return None;
+        }
+        let n = self.tokenize_once(text).await;
+        self.tokenize.store(if n.is_some() { 1 } else { 2 }, Ordering::Relaxed);
+        if n.is_none() {
+            tracing::info!(url = %self.tokenize_url, "upsampler: the LLM server has no usable /tokenize; token counts are estimated");
+        }
+        n
+    }
+}
+
+impl OpenAiChat {
+    async fn tokenize_once(&self, text: &str) -> Option<usize> {
+        let mut rb = self
+            .client
+            .post(&self.tokenize_url)
+            .timeout(std::time::Duration::from_secs(10))
+            .json(&json!({"content": text, "prompt": text, "model": self.model, "add_special": false}));
+        if let Some(k) = &self.api_key {
+            rb = rb.bearer_auth(k);
+        }
+        let resp = rb.send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let v: Value = resp.json().await.ok()?;
+        tokens_of(&v)
+    }
+}
+
+/// The token count of a `/tokenize` answer (`count`, else `tokens`).
+pub fn tokens_of(v: &Value) -> Option<usize> {
+    if let Some(n) = v.get("count").and_then(Value::as_u64) {
+        return Some(n as usize);
+    }
+    v.get("tokens").and_then(Value::as_array).map(Vec::len)
 }

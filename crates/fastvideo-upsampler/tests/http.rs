@@ -119,6 +119,7 @@ fn segment() -> ExpansionOutput {
         camera: "close-up, slow push in".into(),
         lighting: "orange flame on her face".into(),
         audio: "rain on glass".into(),
+        music: String::new(),
         dialogue: vec![],
     }
 }
@@ -136,7 +137,7 @@ fn world() -> WorldBible {
 
 fn upsampler(url: &str, hedge: bool, timeout_ms: u64) -> Upsampler {
     let chat: Arc<dyn ChatBackend> = Arc::new(OpenAiChat::new(url, Some("test-key".into()), "test-model").unwrap());
-    Upsampler::new(UpsamplerConfig { memory: 12, max_prompt_chars: 1800, hedge, timeout: Duration::from_millis(timeout_ms) }, world(), chat)
+    Upsampler::new(UpsamplerConfig { memory: 12, hedge, timeout: Duration::from_millis(timeout_ms), ..UpsamplerConfig::default() }, world(), chat)
 }
 
 #[tokio::test]
@@ -159,7 +160,7 @@ async fn next_over_http_sends_the_spec_request() {
     assert_eq!(b["model"], "test-model");
     assert_eq!(b["temperature"].as_f64().map(|t| (t * 10.0).round()), Some(8.0));
     assert_eq!(b["messages"][0]["role"], "system");
-    assert_eq!(b["messages"][0]["content"], fastvideo_upsampler::director::SYSTEM_PROMPT);
+    assert_eq!(b["messages"][0]["content"], fastvideo_upsampler::director::system_prompt());
     assert_eq!(b["messages"][1]["role"], "user");
     assert!(b["messages"][1]["content"].as_str().unwrap().ends_with("NEW DIRECTION:\nThe storm breaks."));
     assert_eq!(b["response_format"]["type"], "json_schema");
@@ -240,4 +241,50 @@ async fn service_rewrite_over_http_and_no_key_no_header() {
     // Debug never prints the key.
     let c = OpenAiChat::new("http://x/v1/", Some("sekret".into()), "m").unwrap();
     assert!(!format!("{c:?}").contains("sekret"));
+}
+
+/// A vision request: the user message becomes `[text, image_url...]`
+/// content parts (OpenAI's shape, which llama-server `--mmproj` takes).
+#[tokio::test]
+async fn vision_requests_send_image_url_parts() {
+    let f = fake(|_| ok_content("{}")).await;
+    let c = OpenAiChat::new(&f.url, None, "qwen3-vl").unwrap();
+    let mut req = fastvideo_upsampler::director::request_for("WORLD BIBLE:\nx".into(), vec!["data:image/jpeg;base64,AAAA".into()]);
+    let b = c.body(&req);
+    assert_eq!(
+        b["messages"][1]["content"],
+        json!([{"type": "text", "text": "WORLD BIBLE:\nx"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}])
+    );
+    // On the wire, as the server receives it.
+    c.complete(&req).await.unwrap();
+    {
+        let seen = f.seen.lock().unwrap();
+        let parts = seen[0].body["messages"][1]["content"].as_array().unwrap().clone();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1], json!({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}));
+        assert_eq!(seen[0].body["response_format"]["json_schema"]["name"], "segment");
+    }
+    req.images.clear();
+    assert_eq!(c.body(&req)["messages"][1]["content"], "WORLD BIBLE:\nx");
+}
+
+/// `/tokenize` at the server root (the `/v1` dropped): llama-server's
+/// `tokens`, vLLM's `count`; a server without it is asked once.
+#[tokio::test]
+async fn tokenize_is_feature_checked_once() {
+    let f = fake(|n| if n == 0 { Answer { status: 200, body: json!({"tokens": [1, 2, 3]}).to_string(), delay: Duration::ZERO } } else { ok_content("x") }).await;
+    let c = OpenAiChat::new(&f.url, None, "m").unwrap();
+    assert_eq!(c.tokenize("a b c").await, Some(3));
+    {
+        let seen = f.seen.lock().unwrap();
+        assert_eq!(seen[0].path, "/tokenize");
+        assert_eq!(seen[0].body["content"], "a b c");
+    }
+    assert_eq!(fastvideo_upsampler::http::tokens_of(&json!({"count": 7, "tokens": [1]})), Some(7));
+    let f = fake(|_| Answer { status: 404, body: "{}".into(), delay: Duration::ZERO }).await;
+    let c = OpenAiChat::new(&f.url, None, "m").unwrap();
+    assert_eq!(c.tokenize("a").await, None);
+    assert_eq!(c.tokenize("a").await, None);
+    assert_eq!(f.count.load(Ordering::SeqCst), 1, "asked once");
 }

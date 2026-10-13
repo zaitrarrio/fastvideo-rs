@@ -129,13 +129,13 @@ async fn native_and_minimax_flags_rewrite_through_the_configured_llm() {
     assert_eq!(s, StatusCode::ACCEPTED, "{v}");
     let done = wait_done(&r, v["id"].as_str().unwrap()).await;
     assert_eq!(done["status"], "succeeded", "{done}");
-    assert_eq!(done["expanded_prompt"], "Rewritten: a cat");
+    assert_eq!(done["expanded_prompt"], "integrated_multimodal_description: Rewritten: a cat", "H3: Context-IR layout");
     {
         let calls = seen.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0.as_deref(), Some("Bearer llm-secret-key"));
         assert_eq!(calls[0].1["model"], "fake-llm");
-        assert!(calls[0].1["messages"][0]["content"].as_str().unwrap().contains("140 to 200 words"));
+        assert!(calls[0].1["messages"][0]["content"].as_str().unwrap().contains("120 to 220 words"));
     }
     // No flag: nothing rewritten, no call.
     let body = json!({"model": "h3-turbo", "prompt": "a dog", "aspect_ratio": "16:9", "short_edge": 768});
@@ -155,8 +155,8 @@ async fn native_and_minimax_flags_rewrite_through_the_configured_llm() {
     assert_eq!(s, StatusCode::OK, "{v}");
     let task = v["task_id"].as_str().unwrap().to_owned();
     let job = app.ctx.jobs().by_external(ProtocolId::MiniMaxV2, &task).await.unwrap();
-    assert_eq!(job.expanded_prompt.as_deref(), Some("Rewritten: a fox"));
-    assert_eq!(job.resolved.prompt, "Rewritten: a fox");
+    assert_eq!(job.expanded_prompt.as_deref(), Some("integrated_multimodal_description: Rewritten: a fox"));
+    assert_eq!(job.resolved.prompt, "integrated_multimodal_description: Rewritten: a fox");
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
