@@ -3,7 +3,7 @@
 # one weight volume, add-only, with a CPU pod driven through the Runpod REST
 # API and the pod's HTTPS proxy (no SSH). Same pattern as fetch-mmaudio.sh.
 #
-#   fetch-h3-ref2va.sh <volume id>     jg48s6o1w0 (EU; the US volume s2k01690bi
+#   fetch-h3-ref2va.sh <volume id>     bz0ofkfx45 (EU-RO-1; the US volume s2k01690bi
 #                                      was deleted 2026-10 and is refused)
 #
 # The pod runs scripts/gpu/fetch-h3-ref2va.py: it refuses when

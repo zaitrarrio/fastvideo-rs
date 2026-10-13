@@ -425,8 +425,8 @@ cell_fv_fastwan() {
     --prompts "$HERE/../prompts-eval.json" "$@"
 }
 
-# Wan checkpoints on the EU volume (fv-weights-h3-ltx-hy; the US volume
-# fv-weights-b200-us was deleted 2026-10), one prompt (ours),
+# Wan checkpoints (were on the old EU volume fv-weights-h3-ltx-hy; since 2026-10-13 the EU volume
+# holds H3 + LTX only, so mount a volume with them or fetch them from R2), one prompt (ours),
 # each at FastVideo's own sampling defaults for the checkpoint, dense
 # FLASH_ATTN, the same warm-up + median-of-repeats methodology.
 cell_fv_wan() {

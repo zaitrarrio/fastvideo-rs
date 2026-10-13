@@ -261,7 +261,7 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   `<variant>-sha-<sha>`). A ref gives one all-in-one image. Images are
   resolved to digests at start, and `:stable` falls back to `:latest` as
   in the scripts.
-- `regions`: `eu` is volume `jg48s6o1w0` in EUR-IS-1 (RTX PRO 6000). The
+- `regions`: `eu` is volume `bz0ofkfx45` in EU-RO-1 (RTX PRO 6000; H3 + LTX trees only since 2026-10-13, other presets default to `weights_source r2`). The
   default and the only available region is `["eu"]`. `us` (US-CA-2) is
   unavailable: Runpod deleted its weights volume (`s2k01690bi`) on about
   2026-10-05, and the owner chose EU only (2026-10-06). A spec that names

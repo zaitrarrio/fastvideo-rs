@@ -29,7 +29,7 @@
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
 #   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
-#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EUR-IS-1|<DC> (r2)]
+#                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EU-RO-1|<DC> (r2)]
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
 #                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]
@@ -193,7 +193,7 @@ cmd_pod() {
           --image) body="$(jq -c --arg v "${2:?}" '.image = $v' <<<"$body")"; shift 2 ;;
           --gpu) body="$(jq -c --arg v "${2:?}" '.gpu_types = ((.gpu_types // []) + [$v])' <<<"$body")"; shift 2 ;;
           --cpu) if [[ -n "${2:-}" && "${2:-}" != --* ]]; then body="$(jq -c --arg v "$2" '.compute = "CPU" | .cpu_flavors = [$v]' <<<"$body")"; shift 2; else body="$(jq -c '.compute = "CPU"' <<<"$body")"; shift; fi ;;
-          # A region id (eu), or a Runpod data centre (EUR-IS-1; with --weights r2 any one, e.g. US-TX-3).
+          # A region id (eu), or a Runpod data centre (EU-RO-1; with --weights r2 any one, e.g. US-TX-3).
           --region) body="$(jq -c --arg v "${2:?}" 'if ($v | test("^[A-Z]{2,3}-[A-Z]{2}-[0-9]+$")) then .dc = $v else .region = $v end' <<<"$body")"; shift 2 ;;
           --no-volume) body="$(jq -c '.volume = false' <<<"$body")"; shift ;;
           --env | --secret-env)

@@ -77,15 +77,15 @@ describe("payloads", () => {
   it("worker create payloads", () => {
     const spec = defaultSpec("s");
     const pl = workerPlacements(spec, spec.pools[0]!);
-    expect(pl[0]).toEqual({ region: "eu", dc: "EUR-IS-1", gpu: "NVIDIA RTX PRO 6000 Blackwell Server Edition" });
+    expect(pl[0]).toEqual({ region: "eu", dc: "EU-RO-1", gpu: "NVIDIA RTX PRO 6000 Blackwell Server Edition" });
     expect(spec.regions).toEqual(["eu"]);
     expect(pl.map((p) => p.dc)).not.toContain("US-CA-2");
     // An old stored spec that still lists us never places there (its volume is gone).
     const old = { ...spec, regions: ["eu", "us"] as RegionId[] };
-    expect(workerPlacements(old, old.pools[0]!).every((p) => p.region === "eu" && p.dc === "EUR-IS-1")).toBe(true);
+    expect(workerPlacements(old, old.pools[0]!).every((p) => p.region === "eu" && p.dc === "EU-RO-1")).toBe(true);
     expect(workerPlacements({ ...spec, regions: ["us"] }, spec.pools[0]!)).toEqual([]);
     const w = workerCreatePayload("n", "img", spec.pools[0]!, pl[0]!, {});
-    expect(w).toMatchObject({ computeType: "GPU", cloudType: "SECURE", gpuCount: 1, networkVolumeId: "jg48s6o1w0", volumeMountPath: "/workspace", ports: ["8000/http", "70000/tcp"] });
+    expect(w).toMatchObject({ computeType: "GPU", cloudType: "SECURE", gpuCount: 1, networkVolumeId: "bz0ofkfx45", volumeMountPath: "/workspace", ports: ["8000/http", "70000/tcp"] });
     const tiny = defaultSpec("t", "tiny-cpu");
     const cp = workerCreatePayload("n", "img", tiny.pools[0]!, workerPlacements(tiny, tiny.pools[0]!)[0]!, {});
     expect(cp).toMatchObject({ computeType: "CPU", cpuFlavorIds: ["cpu3c"], ports: ["8000/http"] });
@@ -191,7 +191,7 @@ describe("regions: EU only (US weights volume deleted 2026-10)", () => {
     expect(AVAILABLE_REGIONS).toEqual(["eu"]);
     expect(REGIONS.us.volume).toBe("");
     expect(REGIONS.us.dc).toBe("US-CA-2");
-    expect(REGIONS.eu).toMatchObject({ volume: "jg48s6o1w0", dc: "EUR-IS-1" });
+    expect(REGIONS.eu).toMatchObject({ volume: "bz0ofkfx45", dc: "EU-RO-1" });
     expect(defaultSpec("x").regions).toEqual(["eu"]);
     expect(defaultSpec("x", "tiny-cpu").regions).toEqual(["eu"]);
   });

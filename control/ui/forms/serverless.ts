@@ -139,11 +139,11 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
                 await takeDefaults(`${p ? `preset=${encodeURIComponent(p)}` : `variant=${encodeURIComponent(f.get(["variant"]) || "")}`}&weights_source=${v}`);
                 draw();
               },
-              help: "volume: the EU weights volume (EUR-IS-1 only). r2: the R2 weights store, fetched onto the container disk at boot (any data centre; skipped when the worker's disk already holds the trees).",
+              help: "volume: the EU weights volume (EU-RO-1 only; H3 + LTX trees). r2: the R2 weights store, fetched onto the container disk at boot (any data centre; skipped when the worker's disk already holds the trees).",
             }),
         f.get(["weights_source"]) === "r2"
           ? F(["network_volume"], { label: "R2 cache volume", options: [{ value: null, label: "none (default)" }], allowUnset: false, onSet: () => draw(), help: "Off by default: a per-DC cache volume the owner lists in FV_SLS_R2_CACHE_VOLUMES (JSON tab)." })
-          : F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume jg48s6o1w0 (CLAUDE.md: EU only): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
+          : F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume bz0ofkfx45 (EU-RO-1, H3 + LTX trees only; CLAUDE.md): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
         F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : f.get(["weights_source"]) === "r2" ? "weights_source r2: none = any data centre (the stock per GPU type is shown under Cold start)." : "Any of these (none: any)." }),
       ),
       h(

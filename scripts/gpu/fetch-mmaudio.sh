@@ -4,7 +4,7 @@
 #
 #   fetch-mmaudio.sh                 create the pod, wait for DONE, pull the log
 #                                    and key listings, delete the pod
-#   RUNPOD_VOLUME_NAME=fv-weights-h3-ltx-hy (default, EU) picks the volume;
+#   RUNPOD_VOLUME_NAME=fv-weights-h3-ltx-500 (default, EU-RO-1) picks the volume;
 #   its datacenter picks the pod's. The US volume (fv-weights-b200-us) was
 #   deleted 2026-10 and is refused (EU only, scripts/gpu/volumes.sh). The fetch is
 #   add-only: it stops if weights/mmaudio-44k-v2 already has files on that

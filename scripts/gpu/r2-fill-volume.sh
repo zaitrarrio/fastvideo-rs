@@ -13,7 +13,9 @@
 # only; nothing is written to the volume (use it on the old volume to tie both to the same manifests).
 #
 # Env: RUNPOD_API_KEY; FV_FILL_TREES (default: FV_EU_VOLUME_TREES from volumes.sh); FV_POD_CAP_S (backstop,
-# default 10800 = 3 h); FV_MIN_BALANCE (default 12); FV_FILL_VCPU (default 16). Only the read-only R2 key pair
+# default 10800 = 3 h); FV_MIN_BALANCE (default 12); FV_FILL_VCPU (default 16); FV_FILL_TAG (resume an earlier
+# pod's staging: fill-<its pod id>); FV_FILL_FLAVORS (CPU flavors, any
+# in stock: default "cpu3c cpu5c cpu3g cpu5g cpu3m cpu5m"). Only the read-only R2 key pair
 # (/root/.config/fv/r2_weights_ro_*) goes into the pod's env; nothing is printed. The scripts reach the pod as a
 # tarball in the staging bucket (fv-weights-staging, tmp/), fetched through a presigned URL and checked by SHA-256.
 set -euo pipefail
@@ -67,13 +69,13 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     export FVX_URL="$url" FVX_ROID FVX_ROSEC
     FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
     payload="$(jq -n --arg name "fv-p0-r2fill-$mode-$(date -u +%m%d%H%M)" --arg vol "$vol" --arg dc "$dc" --arg start "$start" \
-      --arg vcpu "${FV_FILL_VCPU:-16}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" --arg mode "$mode" --arg trees "$trees" '{
+      --arg vcpu "${FV_FILL_VCPU:-16}" --arg flavors "${FV_FILL_FLAVORS:-cpu3c cpu5c cpu3g cpu5g cpu3m cpu5m}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" --arg mode "$mode" --arg trees "$trees" --arg tag "${FV_FILL_TAG:-}" '{
         name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-        cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
+        cpuFlavorIds: ($flavors | split(" ") | map(select(. != ""))), cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
         containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc], ports: ["8000/http"],
         dockerStartCmd: ["/bin/bash","-lc",$start],
         env: {FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_R2_ENDPOINT: $ep, FV_WEIGHTS_R2_BUCKET: "fv-weights",
-              FV_R2_RO_ID: env.FVX_ROID, FV_R2_RO_SECRET: env.FVX_ROSEC, FV_FILL_MODE: $mode, FV_FILL_TREES: $trees}
+              FV_R2_RO_ID: env.FVX_ROID, FV_R2_RO_SECRET: env.FVX_ROSEC, FV_FILL_MODE: $mode, FV_FILL_TREES: $trees, FV_FILL_TAG: $tag}
       }')"
     unset FVX_URL FVX_ROID FVX_ROSEC
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(jq -r '.error // .' <<<"$resp" | head -c 300)"; exit 1; }

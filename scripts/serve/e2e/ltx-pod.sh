@@ -30,7 +30,7 @@ GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-2.2}"
 CAP_S="${FV_POD_CAP_S:-5400}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
-VOL="${RUNPOD_VOLUME_ID-jg48s6o1w0}"
+VOL="${RUNPOD_VOLUME_ID-bz0ofkfx45}" # fv-weights-h3-ltx-500, EU-RO-1 (H3 + LTX trees)
 RECIPE="${FV_LTX_RECIPE:-ltx-turbo}"
 LEDGER="$ROOT/artifacts/runpod/serve/ledger.tsv"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }

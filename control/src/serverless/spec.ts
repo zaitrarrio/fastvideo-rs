@@ -31,6 +31,7 @@ import {
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { slsR2DiskGb, slsTrees } from "./weights";
 import { R2_DEFAULT_CUDA } from "../driver-check";
+import { missingTrees } from "../volumes";
 
 /**
  * Where a GPU endpoint's workers get their weights (docs/control/serverless.md §1b, docs/ops/r2-weights.md §9):
@@ -148,7 +149,7 @@ export const EndpointSpecZ = z
       .regex(/^[a-z0-9]{6,16}$/, { message: "a Runpod network volume id" })
       .nullable()
       .meta({ "x-dynamic": "volumes" })
-      .describe("weights_source volume: the weights network volume mounted at /runpod-volume (EU jg48s6o1w0; CLAUDE.md), or null. weights_source r2: null, or an R2 cache volume the owner listed in FV_SLS_R2_CACHE_VOLUMES (off by default). Default: the EU volume for GPU workers on volume, none otherwise."),
+      .describe("weights_source volume: the weights network volume mounted at /runpod-volume (EU bz0ofkfx45 in EU-RO-1: H3 + LTX trees only; CLAUDE.md), or null. weights_source r2: null, or an R2 cache volume the owner listed in FV_SLS_R2_CACHE_VOLUMES (off by default). Default: the EU volume for GPU workers on volume, none otherwise."),
     workers_min: z.number().int().min(0).max(4).meta({ "x-unit": "workers" }).describe("Always-on workers (billed while idle). 0 scales to zero."),
     workers_max: z.number().int().min(0).max(8).meta({ "x-unit": "workers" }).describe("Most workers at once."),
     idle_timeout_s: z.number().int().min(5).max(3600).meta({ "x-unit": "s" }).describe("A worker without a job this long is stopped (Runpod: 5-3600 s)."),
@@ -214,7 +215,11 @@ export function defaultEndpointSpec(name: string, variant = "cpu", preset?: stri
     const d = defaultEndpointSpec(name, p.variant);
     delete d.config, delete d.config_toml;
     const out: EndpointSpec = { ...d, preset: p.id, compute: p.compute, ...(p.config ? { config: p.config } : {}), ...(p.config_toml ? { config_toml: p.config_toml } : {}), container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s };
-    return out.weights_source === "r2" ? withWeightsSource(out, "r2") : out;
+    // The EU volume holds H3 + LTX only (volumes.ts, owner decision 2026-10-13): a preset with a tree elsewhere
+    // defaults to the R2 weights store.
+    const eu = knownVolumes()[0];
+    const offVolume = p.compute === "GPU" && eu && (missingTrees(eu.id, p.weights) ?? []).length > 0;
+    return out.weights_source === "r2" || offVolume ? withWeightsSource(out, "r2") : out;
   }
   const cpu = variant === "cpu";
   const eu = knownVolumes()[0];
@@ -323,7 +328,7 @@ export function specDiff(a: EndpointSpec, b: EndpointSpec): { template: boolean;
 
 /**
  * A GPU endpoint's GPU types against the data centres it may run in (with a
- * volume: the volume's, EUR-IS-1 for the EU weights volume), from Runpod's
+ * volume: the volume's, EU-RO-1 for the EU weights volume), from Runpod's
  * stock per (type, data centre). A type with no stock anywhere it may run is
  * a warning; when none of the types has stock there it is an error (the
  * workers could never start: e.g. H100 only, on the EU volume). Nothing when

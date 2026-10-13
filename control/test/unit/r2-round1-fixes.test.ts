@@ -88,7 +88,7 @@ describe("the CUDA host filter (allowedCudaVersions) for placements outside the 
     expect(r2.allowed_cuda).toEqual(["13.0"]);
     expect(endpointCreatePayload(r2, "tpl")).toMatchObject({ allowedCudaVersions: ["13.0"] });
     expect(endpointCreatePayload(r2, "tpl")).not.toHaveProperty("dataCenterIds");
-    const vol = normalizeEndpointSpec({ name: "b", preset: "wan" });
+    const vol = normalizeEndpointSpec({ name: "b", preset: "ltx" });
     expect(vol.allowed_cuda).toEqual([]);
     expect(endpointCreatePayload(vol, "tpl")).not.toHaveProperty("allowedCudaVersions");
     const open = normalizeEndpointSpec({ name: "c", preset: "wan", weights_source: "r2", allowed_cuda: [] });
@@ -100,13 +100,13 @@ describe("the CUDA host filter (allowedCudaVersions) for placements outside the 
 });
 
 describe("standalone Runpod pods: any data centre with weights_source r2 (finding 5)", () => {
-  it("dc outside the EU with r2: the pod's data_centers, no volume; without r2 it is refused; EUR-IS-1 unchanged", () => {
+  it("dc outside the EU with r2: the pod's data_centers, no volume; without r2 it is refused; EU-RO-1 (the volume) unchanged", () => {
     const { spec } = standaloneSpec({ name: "us1", preset: "wan", weights_source: "r2", dc: "US-TX-3" } as any);
     const pool = spec.pools[0]!;
     expect([pool.weights_source, pool.volume, pool.data_centers, spec.regions]).toEqual(["r2", false, ["US-TX-3"], ["eu"]]);
     expect(() => standaloneSpec({ name: "us2", preset: "wan", dc: "US-TX-3" } as any)).toThrow(/US-TX-3 has no weights volume: weights_source r2/);
     expect(() => standaloneSpec({ name: "us3", preset: "wan", weights_source: "r2", dc: "US-TX-3", volume: true } as any)).toThrow(/volume/);
-    const eu = standaloneSpec({ name: "eu1", preset: "wan", dc: "EUR-IS-1" } as any).spec.pools[0]!;
+    const eu = standaloneSpec({ name: "eu1", preset: "ltx", dc: "EU-RO-1" } as any).spec.pools[0]!;
     expect([eu.volume, eu.data_centers]).toEqual([true, undefined]);
   });
 });

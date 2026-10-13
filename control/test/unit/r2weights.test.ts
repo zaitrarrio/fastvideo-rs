@@ -184,9 +184,9 @@ describe("weights_source r2: the default, the checks, the env", () => {
     const planned = weightsPlan(pool, all).trees;
     expect(planned).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
     expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
-    const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EUR-IS-1", gpu: "g" }, e) as any;
+    const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any;
     expect(p.networkVolumeId).toBeUndefined();
-    // EUR-IS-1 (the volume's data centre, hosts known): no CUDA filter
+    // EU-RO-1 (the volume's data centre, hosts known): no CUDA filter
     expect(p.allowedCudaVersions).toBeUndefined();
     // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, CUDA 13 hosts only
     const us = { ...pool, data_centers: ["US-TX-3", "US-KS-2"] };
@@ -204,8 +204,20 @@ describe("weights_source r2: the default, the checks, the env", () => {
     // The volume path is unchanged without r2.
     const v = workerSystemEnv({ ...ctx, env: all } as any, { ...h3 } as any, "img");
     expect(v.FV_WEIGHTS_SOURCE).toBeUndefined();
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EUR-IS-1", gpu: "g" }, v) as any).networkVolumeId).toBeTruthy();
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, v) as any).networkVolumeId).toBeTruthy();
     expect(bootFor(v)).not.toContain("r2-fetch.py");
+    // A Runpod pool whose trees are not on the EU volume (H3 + LTX only since 2026-10-13) defaults to r2: the
+    // fetch boot, no volume, the region's data centre; an explicit volume stays the volume.
+    const wan = { ...presetPool("wan")! };
+    expect(wan.weights_source).toBeUndefined();
+    expect(weightsSource(wan, all)).toBe("r2");
+    const we = workerSystemEnv(ctx, wan, "img");
+    expect(we.FV_WEIGHTS_SOURCE).toBe("r2");
+    const wp = workerCreatePayload("fv-ctl-x", "img", wan, workerPlacements({ regions: ["eu"] } as any, wan)[0]!, we) as any;
+    expect([wp.networkVolumeId, wp.dataCenterIds]).toEqual([undefined, ["EU-RO-1"]]);
+    expect(providerIssues(all, { pools: [wan] })).toEqual([]);
+    expect(weightsSource({ ...wan, weights_source: "volume" }, all)).toBe("volume");
+    expect(weightsSource({ ...presetPool("ltx")! }, all)).toBe("volume");
   });
   it("r2Trees: the repo's record plus valid WEIGHTS_R2_EXTRA_TREES rows only", () => {
     expect(Object.keys(r2Trees(mkEnv({ WEIGHTS_R2_EXTRA_TREES: JSON.stringify({ ok: { rev: "r", files: 1, bytes: 1, manifest_sha256: "b".repeat(64) }, bad: { rev: "r", bytes: 1, manifest_sha256: "x" } }) })))).toContain("ok");

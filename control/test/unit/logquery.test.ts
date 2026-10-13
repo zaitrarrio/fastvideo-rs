@@ -71,7 +71,7 @@ async function seed() {
   // Two lines at the same ts as an op line and an audit row (ties across sources).
   await run("INSERT INTO operations (id, cluster_id, kind, status, log, actor, created_at, updated_at) VALUES (?, 'c_a', 'up', 'failed', ?, 'owner', ?, ?)", "op_1", JSON.stringify([
     { at: T0 + 5000, msg: "balance $30.63, projected $26.08 at the deadline (floor $8)" },
-    { at: T0 + 6000, msg: "ltx: pod poda000000001x on NVIDIA RTX PRO 6000 in EUR-IS-1" },
+    { at: T0 + 6000, msg: "ltx: pod poda000000001x on NVIDIA RTX PRO 6000 in EU-RO-1" },
     { at: T0 + 7000, msg: "h3-turbo: no stock in [eu]" },
     { at: T0 + 8000, msg: "WARNING: no pod for: h3-turbo" },
   ]), T0 + 4000, T0 + 9000);
@@ -322,10 +322,10 @@ describe("stock hint", () => {
     });
     const spec = normalizeSpec({ name: "std", template: "standard" });
     const a = await availability(env, spec);
-    expect(query).toContain('dataCenterId: "EUR-IS-1"');
+    expect(query).toContain('dataCenterId: "EU-RO-1"');
     expect(a.pools.map((p) => p.status)).toEqual(["low", "low", "low", "low"]);
-    expect(a.pools[0]!.hint).toContain("RTX PRO 6000 in EUR-IS-1: Low (2 free)");
-    expect(a.warnings[0]).toMatch(/4 pod\(s\) .* want RTX PRO 6000 in EUR-IS-1; Runpod reports 2 free/);
+    expect(a.pools[0]!.hint).toContain("RTX PRO 6000 in EU-RO-1: Low (2 free)");
+    expect(a.warnings[0]).toMatch(/4 pod\(s\) .* want RTX PRO 6000 in EU-RO-1; Runpod reports 2 free/);
   });
   it("no stock reported: none; CPU pools are not GPU-bound", async () => {
     const env = await seed();

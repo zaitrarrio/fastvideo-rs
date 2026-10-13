@@ -23,7 +23,7 @@ import { weightsPlanRequest } from "../../src/weights-plan";
 import { d1 } from "./d1shim";
 import { ACCESS, fakeR2, makeTree, rnd, SECRET } from "./fake-r2";
 
-const EU = "jg48s6o1w0";
+const EU = "bz0ofkfx45";
 const toml = (tree: string) => `# a test config\n[r2probe]\npath = "\${FV_WEIGHTS}/${tree}/config.json"\n`;
 const r2Spec = (name: string, tree: string, over: Record<string, unknown> = {}) => normalizeEndpointSpec({ name, variant: "wan", compute: "GPU", config_toml: toml(tree), weights_source: "r2", ...over });
 const mkEnv = (over: Partial<Env> = {}): Env =>
@@ -45,11 +45,16 @@ const pin = (rev: string, bytes = 1000) => ({ rev, files: 1, bytes, manifest_sha
 describe("the spec: weights_source", () => {
   it("defaults to volume (the coordinator flips DEFAULT_SLS_WEIGHTS_SOURCE after the benchmarks)", () => {
     expect(DEFAULT_SLS_WEIGHTS_SOURCE).toBe("volume");
-    const d = defaultEndpointSpec("x", "wan", "wan");
+    const d = defaultEndpointSpec("x", "ltx", "ltx");
     expect(d.weights_source).toBe("volume");
     expect(d.network_volume).toBe(EU);
-    expect(d.data_centers).toEqual(["EUR-IS-1"]);
+    expect(d.data_centers).toEqual(["EU-RO-1"]);
     expect(defaultEndpointSpec("x", "cpu").weights_source).toBeUndefined();
+    // The EU volume holds H3 + LTX only (2026-10-13): a preset with trees elsewhere defaults to r2.
+    expect(defaultEndpointSpec("x", "wan", "wan")).toMatchObject({ weights_source: "r2", network_volume: null });
+    expect(normalizeEndpointSpec({ name: "w", preset: "fastwan21" })).toMatchObject({ weights_source: "r2", network_volume: null });
+    // ... unless the spec asks for the volume: then the missing trees are a serving issue.
+    expect(normalizeEndpointSpec({ name: "w", preset: "wan", weights_source: "volume" })).toMatchObject({ weights_source: "volume", network_volume: EU });
   });
   it("r2: no volume, no data-centre restriction, a container disk sized from the trees", () => {
     const s = normalizeEndpointSpec({ name: "h", preset: "h3-turbo", weights_source: "r2" });
@@ -67,20 +72,20 @@ describe("the spec: weights_source", () => {
     expect(() => normalizeEndpointSpec({ name: "h", preset: "h3-turbo", weights_source: "r2", network_volume: EU })).toThrow(/replaces the weights volume/);
     expect(() => normalizeEndpointSpec({ name: "h", preset: "h3-turbo", weights_source: "r2", container_disk_gb: 60 })).toThrow(/at least \d+ GB/);
     expect(() => normalizeEndpointSpec({ name: "c", variant: "cpu", weights_source: "r2" })).toThrow(/GPU workers/);
-    expect(() => normalizeEndpointSpec({ name: "w", preset: "wan", container_disk_gb: 300 })).toThrow(/only with weights_source r2/);
+    expect(() => normalizeEndpointSpec({ name: "w", preset: "ltx", container_disk_gb: 300 })).toThrow(/only with weights_source r2/);
   });
   it("a spec stored before weights_source (the EU volume, no field) stays a volume spec; back to volume restores the placement", () => {
-    const old: any = { ...defaultEndpointSpec("w", "wan", "wan") };
+    const old: any = { ...defaultEndpointSpec("w", "ltx", "ltx") };
     delete old.weights_source;
     expect(normalizeEndpointSpec(old).weights_source).toBe("volume");
-    const r2 = normalizeEndpointSpec({ name: "w", preset: "wan", weights_source: "r2" });
+    const r2 = normalizeEndpointSpec({ name: "w", preset: "ltx", weights_source: "r2" });
     const { network_volume: _v, data_centers: _d, container_disk_gb: _c, ...rest } = r2;
     const back = normalizeEndpointSpec({ ...rest, weights_source: "volume" });
-    expect([back.network_volume, back.data_centers]).toEqual([EU, ["EUR-IS-1"]]);
+    expect([back.network_volume, back.data_centers]).toEqual([EU, ["EU-RO-1"]]);
   });
   it("a switch changes the template (boot, env) and needs a new endpoint (the volume)", () => {
-    const a = normalizeEndpointSpec({ name: "w", preset: "wan" });
-    const b = normalizeEndpointSpec({ name: "w", preset: "wan", weights_source: "r2" });
+    const a = normalizeEndpointSpec({ name: "w", preset: "ltx" });
+    const b = normalizeEndpointSpec({ name: "w", preset: "ltx", weights_source: "r2" });
     const d = specDiff(a, b);
     expect(d.template).toBe(true);
     expect(d.recreate).toContain("network_volume");
@@ -98,8 +103,8 @@ describe("the spec: weights_source", () => {
     expect(r.warnings.some((w) => /any data centre: in stock H100 80GB HBM3 in US-TX-3/.test(w.message))).toBe(true);
     // The volume spec still asks its data centre only.
     const asked2: string[] = [];
-    await placementIssues(normalizeEndpointSpec({ name: "w", preset: "wan" }), async (pairs) => (asked2.push(...pairs.map((p) => p.dc)), new Map()));
-    expect([...new Set(asked2)]).toEqual(["EUR-IS-1"]);
+    await placementIssues(normalizeEndpointSpec({ name: "w", preset: "ltx" }), async (pairs) => (asked2.push(...pairs.map((p) => p.dc)), new Map()));
+    expect([...new Set(asked2)]).toEqual(["EU-RO-1"]);
   });
 });
 
@@ -128,11 +133,11 @@ describe("payloads and the checks", () => {
     expect(templateUpdatePayload(s, "img", w).dockerEntrypoint![0]).toBe("bash");
   });
   it("a volume endpoint is unchanged: no token, the volume's weights", () => {
-    const v = normalizeEndpointSpec({ name: "w", preset: "wan" });
+    const v = normalizeEndpointSpec({ name: "w", preset: "ltx" });
     const t = templateCreatePayload(v, "img", "n", slsWeightsEnv(env, s, "fvw_x"));
     expect(t.env.FV_WEIGHTS_TOKEN).toBeUndefined();
     expect(t.env.FV_WEIGHTS).toBe("/runpod-volume/weights");
-    expect(endpointCreatePayload(v, "tpl")).toMatchObject({ networkVolumeId: EU, dataCenterIds: ["EUR-IS-1"] });
+    expect(endpointCreatePayload(v, "tpl")).toMatchObject({ networkVolumeId: EU, dataCenterIds: ["EU-RO-1"] });
   });
   it("refuses unpublished trees, a store not configured, a volume that is not a listed cache; a listed cache is pinned to its DC", () => {
     expect(slsWeightsIssues(env, s).issues).toEqual([]);
@@ -210,7 +215,7 @@ describe("the weights token: the plan and the reports", () => {
     tokB = b.token;
     await insert("se_a", "a", r2Spec("a", "demo"), a.hash);
     await insert("se_b", "b", r2Spec("b", "other"), b.hash);
-    await insert("se_v", "v", normalizeEndpointSpec({ name: "v", preset: "wan" }), (await newWeightsToken()).hash);
+    await insert("se_v", "v", normalizeEndpointSpec({ name: "v", preset: "ltx" }), (await newWeightsToken()).hash);
     // The Runpod REST calls of update and delete (fv-control only touches its own fvc-… endpoints).
     const json = (res: any, code: number, body: unknown) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
     r2.routes["/rest/endpoints/rpa"] = (req, res) => (req.method === "GET" ? json(res, 200, { id: "rpa", name: "fvc-a", workers: [] }) : json(res, 200, {}));

@@ -8,6 +8,29 @@ that expand short revisions. Nothing here was measured on the volumes today
 (the balance was negative, so no pods ran). Anything not backed by a
 recorded source is marked **UNVERIFIED** or **UNKNOWN**.
 
+## 0a. Status 2026-10-13: the 500 GB H3 + LTX volume in EU-RO-1
+
+Owner decision (2026-10-13): "eu volume - reduce to 500 gb plan", then (the same day, after Runpod refused a
+new volume in EUR-IS-1) "create the 500 GB H3+LTX volume in EU-RO-1 and move fv-control's EU region there".
+
+- **The EU weights volume is `bz0ofkfx45`** (`fv-weights-h3-ltx-500`, 500 GB, **EU-RO-1**, $35/month). It holds
+  only `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (462.45 GB; §1), in the plain-file layout an r2 pod
+  writes. Every other tree comes from the R2 weights store: fv-control's `eu` region (GPU pods and serverless)
+  is EU-RO-1, and a preset whose trees are not on the volume (wan, fastwan21, sfwan, longlive) defaults to
+  `weights_source r2` (control `providers.ts weightsSource`, `serverless/spec.ts defaultEndpointSpec`).
+- **Why EU-RO-1.** Runpod no longer creates network volumes in EUR-IS-1 (`POST /networkvolumes`: "Data center
+  EUR-IS-1 not found or does not support network volumes"; GraphQL `dataCenters.storageSupport: false`). Of the
+  EU data centres with volumes (EU-RO-1, EU-FR-1, EUR-IS-3, EUR-NO-1, EUR-NO-2), only EU-RO-1 listed RTX PRO 6000
+  Server stock ("Low"). `fv-build` is in EU-RO-1 too.
+- **Filled from R2 and compared** (§5.7): every tree by the SHA-256 of every 64 MiB part (and the whole-file
+  SHA-256 at fetch) against the R2 manifests; the old volume `jg48s6o1w0` was compared against the same manifests
+  in a separate pod: equal for all 13 trees. Results: `artifacts/runpod/r2-fill-volume/`.
+- **`jg48s6o1w0` (2000 GB, EUR-IS-1, $120/month) is retired**, not yet deleted: the coordinator deletes it once
+  this change is deployed and one EU-RO-1 pod has read the new volume.
+- **Not on the new volume** (from R2 only): `h3-8step`, `ltx2`, `ltx23`, `ltx23-dev`, `ltx25/text_encoder_fp8`,
+  the hy15 and Wan sets, LongLive, `mmaudio-44k-v2`, the upscaler benchmark trees, the sol-engine trees. The
+  `verify-weights.sh` cells for them fail on this volume by design.
+
 ## 0. Status 2026-10-06: EU only
 
 > **2026-10-11: R2 replaces this volume.** The owner decided to move the weights to Cloudflare R2 (bucket
@@ -63,7 +86,8 @@ Data files beside this page:
 | Id | Name | Size | DC | Role |
 |---|---|---:|---|---|
 | ~~`s2k01690bi`~~ | ~~`fv-weights-b200-us`~~ | 2000 GB | US-CA-2 | **deleted by Runpod ~2026-10-05** (negative balance). Was the US weights volume (GPU pods and serverless in US-CA-2). Not rebuilt (§0) |
-| `jg48s6o1w0` | `fv-weights-h3-ltx-hy` | 2000 GB | EUR-IS-1 | **the** weights volume (EU only since 2026-10-06; RTX PRO 6000 pods in EUR-IS-1). Verified 2026-10-06, ~1.45 TB used |
+| `bz0ofkfx45` | `fv-weights-h3-ltx-500` | 500 GB | EU-RO-1 | **the** weights volume since 2026-10-13 (§0a): H3 + LTX trees only, 462.45 GB, filled from R2 and compared. RTX PRO 6000 pods and serverless in EU-RO-1 |
+| `jg48s6o1w0` | `fv-weights-h3-ltx-hy` | 2000 GB | EUR-IS-1 | **retired 2026-10-13** (§0a); the coordinator deletes it after the switch is deployed and verified. Was the weights volume 2026-10-06 to 2026-10-13, ~1.45 TB used |
 | `pxy4hlsnwq` | `fv-build` | 200 GB | EU-RO-1 | build caches for the shared build pod (toolchains, sccache, crates). No weights. Section 8 |
 
 Other volumes on the account are **not ours and not covered here**. Nothing
@@ -85,8 +109,9 @@ as far as the listing shows):
 
 ### Rules (CLAUDE.md)
 
-- New weights go on the **EU** weights volume `jg48s6o1w0`, never only on a
-  pod's container disk. **EU only since 2026-10-06** (owner decision, §0):
+- New weights are published in the R2 weights store; the **EU** weights volume `bz0ofkfx45`
+  (EU-RO-1, 500 GB) holds the H3 + LTX trees only (§0a), never only a pod's container disk.
+  **EU only since 2026-10-06** (owner decision, §0):
   the earlier rule, both volumes eventually in sync, is suspended until the
   owner rebuilds US. Do not create, mount or copy to a US volume without the
   owner.
@@ -110,7 +135,8 @@ Network volume storage is $0.07/GB-month for the first 1 TB and $0.05 beyond
 | Volume | Size | $/month |
 |---|---:|---:|
 | ~~`fv-weights-b200-us`~~ | deleted ~2026-10-05 | **$0** (was $120) |
-| `fv-weights-h3-ltx-hy` | 2000 GB | 70 + 50 = **$120** |
+| `fv-weights-h3-ltx-500` | 500 GB | **$35** (since 2026-10-13) |
+| ~~`fv-weights-h3-ltx-hy`~~ | 2000 GB | 70 + 50 = **$120** until it is deleted (§0a) |
 | `fv-build` | 200 GB | **$14** |
 
 A volume can grow but cannot shrink. Billing is on the provisioned size, not
@@ -541,11 +567,22 @@ Runpod creates network volumes only in DCs with `storageSupport` (GraphQL
 `dataCenters`). **EUR-IS-1 lost it by 2026-10-13**, so no new volume can be
 made there; `jg48s6o1w0` still works.
 
+The fetcher runs with `--no-prealloc` here: the network volume has no
+`fallocate`, and glibc's emulation (`posix_fallocate` writing every block)
+stalled the first fill pod at 1% CPU with nothing written for 8 min. A new pod
+given the old pod's staging tag (`FV_FILL_TAG=fill-<old pod id>`) resumes that
+pod's temp folders (each part on disk hashed, only bad ones fetched) and
+renames them, so nothing is left behind.
+
+**2026-10-13, `bz0ofkfx45`:** see §0a and `artifacts/runpod/r2-fill-volume/`.
+
 ## 6. Adding a new tree (the normal path, not a rebuild)
 
 `scripts/gpu/fetch-hub-tree.sh <dest> <revision>` (from this container: it
 creates the CPU pod, sets the backstop and deletes the pod afterwards) runs
-against the EU volume (`fv-weights-h3-ltx-hy`, the default). EU only since
+against the EU volume (`fv-weights-h3-ltx-500` since 2026-10-13, the default;
+only H3 / LTX trees belong there, everything else goes to R2 with
+`r2-weights.py publish-hub`). EU only since
 2026-10-06: there is no second volume to copy to. (While US existed, it ran
 against US first, then against EU with the US `sha256.txt` as the third
 argument; a rebuilt US would get the EU lists the same way.) Add the manifest

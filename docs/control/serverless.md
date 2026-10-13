@@ -36,7 +36,7 @@ custom endpoint the variant's (`?variant=`). §1a says what a preset is and what
 | `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1; `allowed_cuda` `[]` on `volume`, `["13.0"]` on `r2` | GPU types in priority order; `allowed_cuda` is Runpod's host filter (§1b: an `r2` endpoint runs in any DC, and a host older than CUDA 13 crashes the image). `[]` lifts it |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
 | `weights_source` | GPU: `volume` (`DEFAULT_SLS_WEIGHTS_SOURCE`, spec.ts); CPU: none | `volume`: the EU weights volume at `/runpod-volume`; `r2`: the R2 weights store, fetched onto the container disk at boot, no volume, any data centre (§1b) |
-| `network_volume`, `data_centers` | GPU on `volume`: `jg48s6o1w0` in `EUR-IS-1`; on `r2`: none, any DC; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center. With `r2`, `network_volume` is null or an R2 cache volume the owner listed (§1b, off by default) |
+| `network_volume`, `data_centers` | GPU on `volume`: `bz0ofkfx45` in `EU-RO-1` (H3 + LTX trees only; other presets default to `r2`); on `r2`: none, any DC; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center. With `r2`, `network_volume` is null or an R2 cache volume the owner listed (§1b, off by default) |
 | `workers_min`, `workers_max` | 0, 1 | 0–4, 0–8 |
 | `idle_timeout_s`, `flashboot`, `execution_timeout_s` | 5, false, 1800 | |
 | `scaler_type`, `scaler_value` | `QUEUE_DELAY`, 4 | |
@@ -55,8 +55,8 @@ The owner decided (2026-10-11) that the R2 bucket `fv-weights` replaces the EU n
 store (docs/ops/r2-weights.md). A GPU endpoint takes `weights_source`:
 
 - **`volume`** (the default until the coordinator flips `DEFAULT_SLS_WEIGHTS_SOURCE` in `src/serverless/spec.ts`
-  after the benchmarks; one line): the EU volume `jg48s6o1w0` mounted at `/runpod-volume`, workers in
-  `EUR-IS-1` only. Unchanged.
+  after the benchmarks; one line): the EU volume `bz0ofkfx45` (H3 + LTX trees, since 2026-10-13) mounted at `/runpod-volume`, workers in
+  `EU-RO-1` only. A preset whose trees are not on the volume (wan, fastwan21, sfwan, longlive) defaults to `r2`.
 - **`r2`**: no network volume, so **no data-centre restriction**. Leave `data_centers` out for any DC, or list
   DCs anywhere. The validator then asks Runpod's stock for every data centre and shows where each GPU type is in
   stock (a warning line, `stock` in `POST /api/serverless/validate`, "Cold start" in the form). Before any worker
@@ -270,7 +270,7 @@ scale never runs them, so a scale to 0 always works):
 | GPU presets have a network volume; a custom config that loads weights too | the preset, the config's `weights = "${FV_WEIGHTS}/<tree>"` |
 | every weight tree is on the volume | a static list per volume (`control/src/volumes.ts`): the EU volume's trees from `docs/ops/runpod-volumes.md` (per-volume table) and `scripts/gpu/weights-manifest.tsv`; a unit test checks every manifest row and every preset's trees are in it. fv-control cannot list a volume without a pod. A new tree is added there with its manifest row |
 | each GPU type has the memory the preset needs (`h3-*`, `ltx*`: 80 GB, so no RTX 5090 / 48 GB cards; `wan`: 32; 1.3B models: 24) | `presets.ts` `min_vram_gb` (conservative), `control/src/gpus.ts` (Runpod's `memoryInGb` per GPU type id; a unit test covers every type in the enum) |
-| the data centres are the volume's (EUR-IS-1 for the EU volume) | the schema (`spec.ts`), as before |
+| the data centres are the volume's (EU-RO-1 for the EU volume) | the schema (`spec.ts`), as before |
 | licence (LongLive: non-commercial) | a warning |
 
 **Test invokes** (`serverless/examples.ts`): the endpoint page's Test invoke
