@@ -172,7 +172,17 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
           boot: await getDiagnosis(env, rec.pod),
           boot_timeline: bootRows(await getBoot(env, rec.pod)),
           ...(rec.pod.startsWith("brev:")
-            ? { brev: { kept_on_stop: true, workspace_id: brevRec?.workspace_id ?? null, disk_gb: brevRec?.disk_gb ?? null, storage_usd_per_day: (brevRec ? storageDph(brevRec) : brevDiskGb([]) * DEFAULT_STORAGE_USD_PER_GB_HR) * 24 } }
+            ? {
+                brev: {
+                  // Owner decision 2026-10-13: a type Brev cannot stop (stoppable false) is launched too; its stop leaves it running.
+                  kept_on_stop: brevRec ? !!brevRec.stoppable : true,
+                  stoppable: brevRec ? !!brevRec.stoppable : null,
+                  workspace_id: brevRec?.workspace_id ?? null,
+                  disk_gb: brevRec?.disk_gb ?? null,
+                  storage_usd_per_day: (brevRec ? storageDph(brevRec) : brevDiskGb([]) * DEFAULT_STORAGE_USD_PER_GB_HR) * 24,
+                  usd_per_hr: live?.cost_per_hr ?? rec.dph ?? brevRec?.usd_per_hr ?? null,
+                },
+              }
             : {}),
         }
       : null,

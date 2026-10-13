@@ -367,6 +367,14 @@ export const NOT_STOPPABLE_RE = /does not support stop/i;
 export const NOT_PROVISIONED_RE = /instance not found/i;
 export type StopRefusal = "not_stoppable" | "not_provisioned" | "other";
 export const stopRefusal = (msg: string): StopRefusal => (NOT_STOPPABLE_RE.test(msg) ? "not_stoppable" : NOT_PROVISIONED_RE.test(msg) ? "not_provisioned" : "other");
+/** A Brev API error in a few words: the HTTP status and Brev's own message (`{"errors":[{"message": …}]}`) when the
+ * body has one, else the error's first 160 characters. */
+export function brevErrText(msg: string): string {
+  const st = /: (\d{3}) /.exec(msg)?.[1];
+  const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(msg)?.[1];
+  if (!m) return msg.slice(0, 160);
+  return `${st ? `HTTP ${st} ` : ""}${m.replace(/\\"/g, '"').replace(/\\\\/g, "\\")}`.slice(0, 200);
+}
 /** How the owner deletes a Brev VM fv-control released but could not stop (fv-control never deletes one on its own). */
 export const unstoppableDeleteHow = (workspaceId: string) =>
   `delete it yourself: fv-control.sh brev delete-parked ${workspaceId}, or Delete in the Pods page's parked list (fv-control.sh pod delete <name> instead of a stop deletes a standalone pod's VM)`;
@@ -379,7 +387,7 @@ export type StopOutcome = "parked" | "held" | "stop_failed" | "running_unstoppab
 async function markUnstoppable(env: Env, row: BrevInstance, err: string, rec: { parked: TreeRevs } | { note: string } | null, log: (m: string) => void): Promise<"running_unstoppable"> {
   const dph = await vmDph(env, row);
   const t = now();
-  const why = `not_stoppable: Brev cannot stop ${row.instance_type} (${err.slice(0, 160)}): left RUNNING at ${money(dph)}${moneyDay(dph)}${rec && "note" in rec ? `; ${rec.note}` : ""}`;
+  const why = `not_stoppable: Brev cannot stop ${row.instance_type} (Brev: ${brevErrText(err)}): left RUNNING at ${money(dph)}${moneyDay(dph)}${rec && "note" in rec ? `; ${rec.note}` : ""}`;
   await setState(env, row.workspace_id, "running_unstoppable", { note: why.slice(0, 300), usd_per_hr: dph, stop_tried_at: t, stoppable: 0, parked_at: t, ...(rec && "parked" in rec ? { trees: rec.parked } : {}) });
   log(`${row.pod_id}: WARNING: ${why}. Released from its cluster but STILL BILLING: fv-control never deletes a Brev VM on its own; ${unstoppableDeleteHow(row.workspace_id)} (alert brev_unstoppable; the stop is tried again every ${unstoppableRetryMs(env) / 60000} min)`);
   return "running_unstoppable";
@@ -396,7 +404,7 @@ async function stopAndRecord(env: Env, row: BrevInstance, rec: { parked: TreeRev
     if (kind === "not_stoppable") return markUnstoppable(env, row, msg, rec, log);
     const dph = await vmDph(env, row);
     const deploying = kind === "not_provisioned" ? " (still DEPLOYING: the stop is sent again once it leaves DEPLOYING)" : "";
-    const why = `stop refused by Brev (${msg.slice(0, 160)})${deploying}: left RUNNING at ${money(dph)}${"note" in rec ? `; ${rec.note}` : ""}`;
+    const why = `stop refused by Brev (${brevErrText(msg)})${deploying}: left RUNNING at ${money(dph)}${"note" in rec ? `; ${rec.note}` : ""}`;
     await setState(env, row.workspace_id, "stop_failed", { note: why.slice(0, 300), usd_per_hr: dph, stop_tried_at: now() });
     log(`${row.pod_id}: WARNING: ${why}. fv-control never deletes a Brev VM on its own: stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${row.workspace_id}); alert brev_stop_failed`);
     return "stop_failed";
@@ -530,7 +538,7 @@ export async function retryRefusedStops(env: Env, listed: Map<string, string>, t
         await brev.stop(env, r.workspace_id);
         stopped = true;
       } catch (e) {
-        err = (e as Error).message.slice(0, 160);
+        err = (e as Error).message;
       }
     }
     if (stopped) {
@@ -549,7 +557,7 @@ export async function retryRefusedStops(env: Env, listed: Map<string, string>, t
       continue;
     }
     const dph = await vmDph(env, r);
-    const why = st === "DEPLOYING" ? "it is still DEPLOYING (Brev answers its stop with \"instance not found\" until it is provisioned): the stop is sent once it leaves DEPLOYING" : `Brev refused its stop (${err || r.note || "?"})`;
+    const why = st === "DEPLOYING" ? "it is still DEPLOYING (Brev answers its stop with \"instance not found\" until it is provisioned): the stop is sent once it leaves DEPLOYING" : `Brev refused its stop (${err ? brevErrText(err) : r.note || "?"})`;
     alerts.push({
       key: `brev_stop_failed:${r.workspace_id}`,
       kind: "brev_stop_failed",

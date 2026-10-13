@@ -312,6 +312,13 @@ describe("budget (no balance API)", () => {
     expect(budgetDecision("gmi", "GMI Cloud", 20, 20, true)).toMatchObject({ stop: true, alert: { severity: "critical", kind: "gmi_budget" } });
     expect(budgetDecision("gmi", "GMI Cloud", 25, 20, false).stop).toBe(false);
   });
+  it("Brev VMs the floor cannot stop: warned early (spend + their $/hr for the margin), and named at the floor", () => {
+    const un = { n: 1, dph: 0.5, margin_h: 24 };
+    // $5 + $0.50/hr × 24 h = $17 ≥ 80 % of $20: a warning before the spend itself reaches 80 %.
+    expect(budgetDecision("brev", "NVIDIA Brev", 5, 20, true, un).alert).toMatchObject({ severity: "warn", message: expect.stringMatching(/\$0\.50\/hr that the budget floor cannot stop for 24 h = \$17\.00, 85% .*warned early.*can't be stopped/) });
+    expect(budgetDecision("brev", "NVIDIA Brev", 5, 20, true, { ...un, dph: 0.1 }).alert).toBeNull();
+    expect(budgetDecision("brev", "NVIDIA Brev", 20, 20, true, un)).toMatchObject({ stop: true, alert: { severity: "critical", message: expect.stringMatching(/stopping its pods; 1 Brev VM at \$0\.50\/hr \(\$12\.00\/day\) can't be stopped .*delete it yourself/) } });
+  });
 });
 
 describe("clients (fetch mock)", () => {

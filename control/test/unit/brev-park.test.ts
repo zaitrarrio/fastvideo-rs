@@ -35,7 +35,7 @@ import { stopCluster } from "../../src/collector";
 import { collectProviders } from "../../src/collector-providers";
 import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
-import { assertBrevStoppable, brevGpuOptions, brevOutlook, brevStoppableIssue, brevStoppableIssues, budgetCheck, WEIGHTS_SH } from "../../src/providers";
+import { brevGpuOptions, brevNoStopNote, brevNoStopWarnings, brevOutlook, budgetCheck, WEIGHTS_SH } from "../../src/providers";
 import { putSetting } from "../../src/util";
 import { d1 } from "./d1shim";
 
@@ -83,7 +83,11 @@ function brevMock(o: MockOpts = {}) {
         const w = ws.get(m[1]!) || { status: "RUNNING" };
         ws.set(m[1]!, w);
         if (m[2] === "stop") {
-          if (o.stopFail) return new Response(JSON.stringify({ message: "instance type is not stoppable" }), { status: 400 });
+          if (o.stopFail) return new Response(JSON.stringify({ message: "brev API error" }), { status: 400 });
+          // Brev's answers measured live 2026-10-13: a workspace still DEPLOYING (never provisioned), and a RUNNING one
+          // of a type Brev cannot stop (it stays RUNNING).
+          if (w.status === "DEPLOYING") return new Response(JSON.stringify({ errors: [{ type: "InternalServerError", message: "rpc error: code = NotFound desc = instance not found" }] }), { status: 500 });
+          if (w.type === "nostop.x1") return new Response(JSON.stringify({ errors: [{ type: "InternalServerError", message: `rpc error: code = Internal desc = instance "inst-${m[1]}" does not support stop` }] }), { status: 500 });
           w.status = "STOPPED";
         }
         if (m[2] === "start") {
@@ -224,10 +228,10 @@ describe("every stop parks or holds (owner rule 2026-10-11: never deleted), reus
     expect(m.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
     expect(logs.some((l) => /WARNING: NVIDIA Brev: 1 parked \/ held, more than brev_park_max 0: fv-pod-p0-1010000000 \(parked, stop\.x1, 0\.0 d, \$0\.95\/day\).*Not deleted/.test(l))).toBe(true);
   });
-  it("a stop Brev refuses (a type that is not stoppable) leaves it running, alerted with its $/hr; the cron retries; never deleted", async () => {
+  it("a stop Brev refuses (an API error) leaves it running, alerted with its $/hr; the cron retries; never deleted", async () => {
     const env = mkEnv();
     const m = brevMock({ stopFail: true });
-    const pod = await live(env, "f1", { type: "nostop.x1", stoppable: false });
+    const pod = await live(env, "f1");
     await env.DB.prepare("UPDATE cluster_pods SET cost_per_hr = 1.5 WHERE pod_id = ?").bind(pod).run();
     const logs: string[] = [];
     expect(await releaseBrev(env, pod, {}, (x) => logs.push(x))).toBe("stop_failed");
@@ -239,6 +243,95 @@ describe("every stop parks or holds (owner rule 2026-10-11: never deleted), reus
     const r2 = await retryRefusedStops(env, new Map([["f1", "running"]]));
     expect([r2.alerts, r2.actions]).toEqual([[], ["brev fv-pod-f1-1010000000: stopped (an earlier stop was refused): held"]]);
     expect((await states(env)).f1).toBe("held");
+    expect(m.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
+  });
+  it("a type Brev cannot stop (500 \"does not support stop\"): running_unstoppable, released, one alert, stop retried hourly, billed in the ledger and budget, never deleted", async () => {
+    const env = mkEnv();
+    const m = brevMock();
+    const remove = vi.spyOn(brev, "remove");
+    const pod = await live(env, "u1", { type: "nostop.x1", stoppable: false });
+    await env.DB.prepare("UPDATE cluster_pods SET cost_per_hr = 1.5 WHERE pod_id = ?").bind(pod).run();
+    const logs: string[] = [];
+    const stops = () => m.calls.filter((c) => c === "PUT workspaces/u1/stop").length;
+    // The stop: released from its cluster (deletePod true: no blind retries by the down's verify), the VM still running.
+    expect(await deletePod(env, pod, (x) => logs.push(x), "stop")).toBe(true);
+    expect(stops()).toBe(1);
+    const row = (await brevRowById(env, "u1"))!;
+    expect([row.state, row.stoppable, row.usd_per_hr]).toEqual(["running_unstoppable", 0, 1.5]);
+    expect(row.note).toMatch(/^not_stoppable: Brev cannot stop nostop\.x1 \(.*does not support stop.*\): left RUNNING at \$1\.50\/hr \(\$36\.00\/day\)/);
+    expect(logs.join("\n")).toMatch(/STILL BILLING: fv-control never deletes a Brev VM on its own; delete it yourself: fv-control\.sh brev delete-parked u1/);
+    expect(m.ws.get("u1")!.status).toBe("RUNNING");
+    // A second stop (the down's verify, a retry): no stop call, still released.
+    expect(await releaseBrev(env, pod, { why: "retry" })).toBe("running_unstoppable");
+    expect(stops()).toBe(1);
+    // The cron: one alert (the same key every pass), no stop until the backoff (BREV_UNSTOPPABLE_RETRY_S, 1 h) passed.
+    const t0 = Date.now();
+    const r1 = await retryRefusedStops(env, new Map([["u1", "RUNNING"]]), t0 + 60_000);
+    const r2 = await retryRefusedStops(env, new Map([["u1", "RUNNING"]]), t0 + 120_000);
+    expect(r1.alerts).toEqual([expect.objectContaining({ key: "brev_unstoppable:u1", kind: "brev_unstoppable", severity: "critical" })]);
+    expect(r1.alerts[0]!.message).toMatch(/cannot be stopped .*still RUNNING at \$1\.50\/hr \(\$36\.00\/day\).*never deletes a Brev VM on its own: delete it yourself: fv-control\.sh brev delete-parked u1, or Delete in the Pods page's parked list/);
+    expect(r2.alerts.map((a) => a.key)).toEqual(["brev_unstoppable:u1"]);
+    expect(stops()).toBe(1);
+    const r3 = await retryRefusedStops(env, new Map([["u1", "RUNNING"]]), t0 + 3700_000);
+    expect(stops()).toBe(2);
+    expect(r3.alerts.map((a) => a.key)).toEqual(["brev_unstoppable:u1"]);
+    expect((await brevRowById(env, "u1"))!.stop_tried_at).toBe(t0 + 3700_000);
+    await retryRefusedStops(env, new Map([["u1", "RUNNING"]]), t0 + 3800_000);
+    expect(stops()).toBe(2);
+    // The Pods page: running at its GPU $/hr, no storage.
+    const pv = await parkedView(env);
+    expect(pv.parked.map((p) => [p.workspace_id, p.state, p.storage_usd_per_day, p.running_usd_per_day])).toEqual([["u1", "running_unstoppable", 0, 36]]);
+    expect(pv.running_usd_per_day).toBe(36);
+    expect(pv.parked[0]!.reuse).toMatch(/can't|cannot stop nostop\.x1/);
+    // The budget: its $/hr counted BREV_NOSTOP_MARGIN_H (24 h) past the deadline.
+    const b = await budgetCheck(env, "brev", 0, 1);
+    expect([b.nostop_dph, b.margin_h]).toEqual([1.5, 24]);
+    expect(b.reasons[0]).toMatch(/\+ \$1\.50\/hr that a stop cannot end .* for 24 h past the deadline/);
+    // The collector: billed at its full $/hr (owner brev:unstoppable, no orphan alert), its alert, the budget warned early.
+    const res = await collectProviders(env, Date.now(), 60_000, DEFAULT_POLICIES, []);
+    expect(res.alerts.map((a) => a.kind)).toEqual(expect.arrayContaining(["brev_unstoppable", "brev_budget"]));
+    expect(res.alerts.some((a) => a.kind === "brev_orphan")).toBe(false);
+    expect(res.alerts.find((a) => a.kind === "brev_budget")).toMatchObject({ severity: "warn", message: expect.stringMatching(/\$1\.50\/hr that the budget floor cannot stop for 24 h .*warned early.*1 Brev VM at \$1\.50\/hr \(\$36\.00\/day\) can't be stopped/) });
+    expect(res.kinds).toContain("brev_unstoppable");
+    const led = await env.DB.prepare("SELECT owner, usd FROM cost_daily WHERE pod_id = ?").bind(pod).first<{ owner: string; usd: number }>();
+    expect(led!.owner).toBe("brev:unstoppable");
+    expect(led!.usd).toBeCloseTo(1.5 / 60, 6);
+    const pr = await env.DB.prepare("SELECT desired_status, cost_per_hr FROM pods WHERE pod_id = ?").bind(pod).first<{ desired_status: string; cost_per_hr: number }>();
+    expect(pr).toEqual({ desired_status: "RUNNING", cost_per_hr: 1.5 });
+    expect((await budgetCheck(env, "brev", 0, 1)).running_dph).toBe(1.5);
+    // Nothing deleted it; the owner's delete does.
+    expect(remove).not.toHaveBeenCalled();
+    expect(await deleteParked(env, "u1", "owner")).toMatch(/running instance deleted/);
+    expect((await states(env)).u1).toBe("deleted");
+    remove.mockRestore();
+  });
+  it("a stop while DEPLOYING (500 \"instance not found\"): stop_failed, sent again once it left DEPLOYING", async () => {
+    const env = mkEnv();
+    const m = brevMock();
+    const pod = await live(env, "dp1", { ready: false });
+    m.ws.get("dp1")!.status = "DEPLOYING";
+    const logs: string[] = [];
+    expect(await deletePod(env, pod, (x) => logs.push(x), "stop")).toBe(false);
+    expect((await brevRowById(env, "dp1"))!.state).toBe("stop_failed");
+    expect(logs.join("\n")).toMatch(/instance not found.*still DEPLOYING: the stop is sent again once it leaves DEPLOYING/);
+    const stops = () => m.calls.filter((c) => c === "PUT workspaces/dp1/stop").length;
+    // Still DEPLOYING: no stop sent, alerted.
+    const r1 = await retryRefusedStops(env, new Map([["dp1", "DEPLOYING"]]));
+    expect(stops()).toBe(1);
+    expect(r1.alerts).toEqual([expect.objectContaining({ kind: "brev_stop_failed", message: expect.stringMatching(/still DEPLOYING .*sent once it leaves DEPLOYING/) })]);
+    // Provisioned: the stop goes and takes.
+    m.ws.get("dp1")!.status = "RUNNING";
+    const r2 = await retryRefusedStops(env, new Map([["dp1", "RUNNING"]]));
+    expect(stops()).toBe(2);
+    expect([r2.alerts, (await states(env)).dp1]).toEqual([[], "held"]);
+    // A non-stoppable type caught DEPLOYING: once provisioned its stop says "does not support stop": running_unstoppable.
+    const p2 = await live(env, "dp2", { type: "nostop.x1", stoppable: false, ready: false });
+    m.ws.get("dp2")!.status = "DEPLOYING";
+    expect(await deletePod(env, p2, () => {}, "stop")).toBe(false);
+    m.ws.get("dp2")!.status = "RUNNING";
+    const r3 = await retryRefusedStops(env, new Map([["dp2", "RUNNING"]]));
+    expect((await states(env)).dp2).toBe("running_unstoppable");
+    expect(r3.alerts.map((a) => a.kind)).toEqual(["brev_unstoppable"]);
     expect(m.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
   });
   it("reuse: any parked / held instance of the type with the disk for the trees; most trees first, parked before held; a held one after the cooldown", async () => {
@@ -407,10 +500,22 @@ describe("owner rule 2026-10-11: no automatic path deletes a Brev VM", () => {
     M!.ws.set("old1", { status: "RUNNING", name: "fv-pod-old-0101000000", type: "stop.x1" });
     expect(await deletePod(env, "brev:fv-pod-old-0101000000", L, "stop")).toBe(true);
     expect((await brevRowById(env, "old1"))!.state).toBe("held");
-    // Brev refuses the stop (a type that is not stoppable): left running, alerted, not deleted.
+    // Brev refuses the stop (an API error): left running, alerted, not deleted.
     m.o.stopFail = true;
-    expect(await deletePod(env, await live(env, "d10", { type: "nostop.x1", stoppable: false }), L, "stop")).toBe(false);
+    expect(await deletePod(env, await live(env, "d10"), L, "stop")).toBe(false);
     m.o.stopFail = false;
+    // A type Brev cannot stop (owner decision 2026-10-13: launched like any other): every stop path leaves it running
+    // (running_unstoppable), released, never deleted.
+    for (const [id, why, o] of [
+      ["n1", "stop", {}],
+      ["n2", "deadline", {}],
+      ["n3", "scale-down", {}],
+      ["n4", "roll", {}],
+      ["n5", "pod FAILED (host failed)", { ready: false }],
+    ] as const)
+      expect(await deletePod(env, await live(env, id, { ...o, type: "nostop.x1", stoppable: false }), L, why)).toBe(true);
+    const p15 = await live(env, "n6", { type: "nostop.x1", stoppable: false });
+    expect(await stopCluster(env, cluster(p15), "brev budget")).toMatch(/directly/);
     // The deadline backstop / budget floor with the operations DO unreachable: stopCluster's direct release.
     const p11 = await live(env, "d11");
     expect(await stopCluster(env, cluster(p11), "deadline")).toMatch(/directly/);
@@ -420,14 +525,15 @@ describe("owner rule 2026-10-11: no automatic path deletes a Brev VM", () => {
     m.o.stopFail = true;
     const res = await collectProviders(env, Date.now(), 60_000, { ...DEFAULT_POLICIES, brev_park_max: 0, brev_park_max_days: 0, stop_on_floor: true }, [cluster(p12)]);
     m.o.stopFail = false;
-    expect(res.alerts.map((a) => a.kind)).toEqual(expect.arrayContaining(["brev_parked_over_limit", "brev_stop_failed", "brev_budget"]));
+    expect(res.alerts.map((a) => a.kind)).toEqual(expect.arrayContaining(["brev_parked_over_limit", "brev_stop_failed", "brev_unstoppable", "brev_budget"]));
     expect(res.actions.some((a) => /directly \(brev budget\)/.test(a))).toBe(true);
     // Nothing above deleted anything.
     expect(remove).not.toHaveBeenCalled();
     expect(m.calls.filter((c) => c.startsWith("DELETE"))).toEqual([]);
     const st = Object.fromEntries(((await env.DB.prepare("SELECT workspace_id, state FROM brev_instances").all<any>()).results || []).map((r: any) => [r.workspace_id, r.state]));
-    expect(Object.values(st).every((s) => ["parked", "held", "stop_failed", "live"].includes(s as string))).toBe(true);
+    expect(Object.values(st).every((s) => ["parked", "held", "stop_failed", "running_unstoppable", "live"].includes(s as string))).toBe(true);
     expect(st).toMatchObject({ d1: "held", d2: "parked", d3: "parked", d4: "parked", d5: "held", d6: "held", d7: "held", d8: "parked", d9: "held", d10: "stop_failed", d11: "parked", old1: "held" });
+    expect(["n1", "n2", "n3", "n4", "n5", "n6"].map((k) => st[k])).toEqual(Array(6).fill("running_unstoppable"));
     // The owner's explicit deletes are the only ones: delete-parked (API / CLI / UI), and `pod delete` of a live VM.
     await deleteParked(env, "d2", "deleted by owner");
     expect(await deletePod(env, await live(env, "d13"), L, "delete", { manual: true })).toBe(true);
@@ -455,8 +561,8 @@ describe("the boot endpoint", () => {
   });
 });
 
-describe("warm / cold outlook (launch form, planner), non-stoppable types refused", () => {
-  it("cold on a stoppable type, warm once parked, reuse of one holding other trees; the non-stoppable type refused with the alternatives", async () => {
+describe("warm / cold outlook (launch form, planner), non-stoppable types allowed with a warning", () => {
+  it("cold on a stoppable type, warm once parked, reuse of one holding other trees; the non-stoppable type offered with what it bills after a stop", async () => {
     const env = mkEnv({ FV_HUB_DOWNLOADS_APPROVED: "1" });
     brevMock();
     const preset = (await import("../../src/presets")).POOL_PRESETS.find((p) => p.id === "wan")!;
@@ -466,13 +572,21 @@ describe("warm / cold outlook (launch form, planner), non-stoppable types refuse
     const cold = (await brevOutlook(env, pool))!;
     expect(cold.warm).toBe(false);
     expect(cold.note).toMatch(/^cold: downloads .* kept on stop/);
+    // Owner decision 2026-10-13: a type Brev cannot stop is offered and allowed, with a warning (no refusal).
     const ns = (await brevOutlook(env, { ...pool, provider_gpu: "nostop.x1" }))!;
-    expect(ns.note).toMatch(/^nostop\.x1 is not stoppable on NVIDIA Brev: refused \(rule brev_stoppable_only: .*owner 2026-10-11.*\)\. Stoppable allowed types: stop\.x1$/);
-    expect(await brevStoppableIssue(env, "stop.x1")).toBeNull();
-    expect(await brevStoppableIssues(env, { pools: [pool, { ...pool, id: "b", provider_gpu: "nostop.x1" }] })).toEqual([{ path: ["pools", 1, "provider_gpu"], message: expect.stringMatching(/^nostop\.x1 is not stoppable/) }]);
-    await expect(assertBrevStoppable(env, { pools: [{ ...pool, provider_gpu: "nostop.x1" }] })).rejects.toMatchObject({ status: 400 });
-    // The launch form lists the stoppable types only.
-    expect((await brevGpuOptions(env)).map((o) => o.id)).toEqual(["stop.x1"]);
+    expect([ns.warm, ns.stoppable]).toEqual([false, false]);
+    expect(ns.note).toMatch(/^cold: downloads .*; WARNING: nostop\.x1 can't be stopped on NVIDIA Brev: a stop .* leaves the VM running at \$1\.50\/hr \(\$36\.00\/day\) until you delete it .*24 h past the deadline/);
+    expect(await brevNoStopNote(env, "stop.x1")).toBeNull();
+    expect(await brevNoStopWarnings(env, { pools: [pool, { ...pool, id: "b", provider_gpu: "nostop.x1" }] })).toEqual([{ path: ["pools", 1, "provider_gpu"], message: expect.stringMatching(/^WARNING: nostop\.x1 can't be stopped/) }]);
+    // The launch form lists every allowed type, stoppable first; the other says what it bills after a stop.
+    const opts = await brevGpuOptions(env);
+    expect(opts.map((o) => [o.id, o.stoppable])).toEqual([["stop.x1", true], ["nostop.x1", false]]);
+    expect(opts[1]!.detail).toMatch(/\$1\.50\/hr · WARNING: can't be stopped: a stop leaves it running at \$1\.50\/hr \(\$36\.00\/day\): delete it yourself/);
+    // The launch's budget check: a non-stoppable pod counts BREV_NOSTOP_MARGIN_H past the deadline (2 h + 24 h × $1.50).
+    const bc = await budgetCheck(env, "brev", 1.5, 2, { nostopDph: 1.5 });
+    expect([bc.ok, bc.projected]).toEqual([false, 39]);
+    expect(bc.reasons[0]).toMatch(/for 2\.00 h \+ \$1\.50\/hr that a stop cannot end .* for 24 h past the deadline \(BREV_NOSTOP_MARGIN_H\) = \$39\.00, over the budget \$10/);
+    expect((await budgetCheck(mkEnv({ BREV_NOSTOP_MARGIN_H: "2" }), "brev", 1.5, 2, { nostopDph: 1.5 })).projected).toBe(6);
     // A parked instance holding other trees: reused (the trees download onto it).
     await releaseBrev(env, await live(env, "o0", { trees: { ltx2: REV_A }, disk: 2000 }));
     const reuse = (await brevOutlook(env, pool))!;
