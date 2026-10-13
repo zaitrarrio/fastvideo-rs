@@ -64,7 +64,7 @@ import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { slsReport } from "./serverless/ingest";
 import { weightsPlanRequest } from "./weights-plan";
-import { assertBrevStoppable, endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -441,8 +441,6 @@ for (const [path, def] of Object.entries(OPS)) {
     for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
       if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
-    // Owner rule 2026-10-11: a Brev type that cannot be stopped is refused wherever pods are made (its stop would be a delete).
-    if (["up", "scale", "roll"].includes(def.kind)) await assertBrevStoppable(c.env, cl.spec, def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools : undefined);
     const r = await startOp(c.env, cl.id, def.kind, params, actor(c));
     await auditC(c, { action: `cluster.${def.kind}`, target: cl.name, before: { status: cl.status, deadline: cl.deadline }, after: params });
     return c.json({ operation: r.id, kind: def.kind }, 202);
@@ -642,7 +640,6 @@ app.post("/api/standalone/:id/start", async (c) => {
   const cl = await standaloneOf(c);
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
   assertRegionsAvailable(cl.spec);
-  await assertBrevStoppable(c.env, cl.spec);
   const b = await body<{ skip_image_check?: boolean }>(c);
   const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
   await auditC(c, { action: "standalone.start", target: cl.name });

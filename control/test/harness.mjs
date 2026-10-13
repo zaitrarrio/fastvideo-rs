@@ -113,6 +113,7 @@ export function startMock() {
     boots: [], // every simulated VM boot: {ws, name, status, kept, fetched, env, run, error}
     startFail: false, // PUT …/start answers 409 (no capacity)
     startHang: false, // PUT …/start leaves it STARTING (the restart times out)
+    stopFail: false, // PUT …/stop answers 400 (an API error)
     boot: "ok",
     types: [
       brevType("g5.xlarge-test", { gpu: "A10G", price: "1.006000", location: "us-east-1", provider: "aws", stoppable: true, cred: "devplane-brev-1-credential" }),
@@ -595,7 +596,11 @@ export function startMock() {
         // Stop keeps the disk (w.disk: the trees on it); start fails without capacity, or hangs, or boots again.
         if (req.method === "PUT" && wm[3] === "stop") {
           const t = b.types.find((x) => x.type === w.instanceType);
-          if (!t?.stoppable) return json(res, 400, { errors: [{ type: "BadRequestError", message: "instance type is not stoppable" }] });
+          if (b.stopFail) return json(res, 400, { errors: [{ type: "BadRequestError", message: "stop refused (simulated API error)" }] });
+          // Measured live 2026-10-13: a workspace still DEPLOYING (never provisioned), and a RUNNING one of a type Brev
+          // cannot stop (isStoppable false): HTTP 500, the VM stays RUNNING / HEALTHY.
+          if (w.status === "DEPLOYING") return json(res, 500, { errors: [{ type: "InternalServerError", message: "rpc error: code = NotFound desc = instance not found" }] });
+          if (!t?.stoppable) return json(res, 500, { errors: [{ type: "InternalServerError", message: `rpc error: code = Internal desc = instance "inst-${w.id}" does not support stop` }] });
           w.status = "STOPPED";
           m.pods.delete(`brev:${w.name}`);
           return json(res, 200, { id: w.id, status: "STOPPING" });

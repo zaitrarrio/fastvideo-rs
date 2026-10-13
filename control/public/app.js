@@ -586,17 +586,17 @@ async function podNameMap() {
 function brevParkedCard(pk, redraw) {
   const trees = (p) => Object.entries(p.trees || {}).map(([t, rev]) => `${t}@${String(rev).slice(0, 7)}`).join(", ") || "–";
   return card(
-    `Parked Brev instances (${pk.parked.length}): $${pk.storage_usd_per_day.toFixed(2)}/day storage`,
-    h("p", { class: "muted small" }, `Every stop of a Brev pod stops its VM and keeps it, with its weights: parked (weights complete) or held (with why: a failed boot or restart). The next launch of the same instance type reuses one before creating a VM. Policy: ${pk.policy.line} (policies brev_park_*). Delete is yours only.`),
+    `Parked Brev instances (${pk.parked.length}): $${pk.storage_usd_per_day.toFixed(2)}/day storage${pk.running_usd_per_day ? `, $${pk.running_usd_per_day.toFixed(2)}/day still running` : ""}`,
+    h("p", { class: "muted small" }, `Every stop of a Brev pod stops its VM and keeps it, with its weights: parked (weights complete) or held (with why: a failed boot or restart). The next launch of the same instance type reuses one before creating a VM. A type Brev cannot stop stays running after a stop (running, can't be stopped): its full GPU $/hr bills until you delete it. Policy: ${pk.policy.line} (policies brev_park_*). Delete is yours only.`),
     pk.over_limit ? h("div", { class: "alert", "data-brev-over-limit": "" }, h("span", { class: "icon" }, "!"), h("div", {}, badge("over the alert threshold", "warn"), ` more than ${pk.policy.brev_park_max} parked or one older than ${pk.policy.brev_park_max_days} days: nothing is deleted; reuse or delete them.`)) : "",
     table(
       [
         { label: "instance", get: (p) => h("span", { title: p.workspace_id }, p.name) },
-        { label: "state", get: (p) => badge(p.state === "stop_failed" ? "running (stop refused)" : p.state, p.state === "stop_failed" ? "critical" : p.state === "held" ? "warn" : "good") },
+        { label: "state", get: (p) => badge(p.state === "stop_failed" ? "running (stop refused)" : p.state === "running_unstoppable" ? "running (can't be stopped)" : p.state, p.state === "stop_failed" || p.state === "running_unstoppable" ? "critical" : p.state === "held" ? "warn" : "good") },
         { label: "type", get: (p) => p.instance_type },
         { label: "weights", get: (p) => trees(p) },
         { label: "disk", get: (p) => (p.disk_gb ? `${p.disk_gb} GB` : "–"), num: true },
-        { label: "$/day", get: (p) => fmt$(p.storage_usd_per_day), num: true },
+        { label: "$/day", get: (p) => (p.state === "stop_failed" || p.state === "running_unstoppable" ? h("span", { "data-brev-running": "" }, `${fmt$(p.running_usd_per_day || 0)} GPU`) : fmt$(p.storage_usd_per_day)), num: true },
         { label: "parked", get: (p) => (p.parked_days === null ? "–" : `${p.parked_days.toFixed(1)} d`), num: true },
         { label: "reuse", get: (p) => p.reuse || "", wrap: true },
         { label: "note", get: (p) => p.note || "", wrap: true },
