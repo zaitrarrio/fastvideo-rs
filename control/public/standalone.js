@@ -81,11 +81,12 @@ function fvBootTimeline(podId) {
     );
   }
 
-  // NVIDIA Brev (owner rule 2026-10-11): a stop keeps the VM (stopped, parked / held, storage billed), never deletes it.
+  // NVIDIA Brev (owner rule 2026-10-11): a stop keeps the VM (stopped, parked / held, storage billed), never deletes it;
+  // a VM whose stop does not succeed (a type Brev cannot stop) is deleted (owner rule 2026-10-13).
   function stopQuestion(p) {
     const b = p.pod?.brev;
     if (b && b.stoppable === false)
-      return `Stop ${p.name}? Its Brev instance type can't be stopped: a stop leaves the VM RUNNING${b.usd_per_hr ? ` at $${b.usd_per_hr.toFixed(2)}/hr ($${(b.usd_per_hr * 24).toFixed(2)}/day)` : ""} until you delete it (fv-control never deletes a Brev VM; Delete here deletes it now, or later the Pods page's parked list).`;
+      return `Stop ${p.name}? Its Brev instance type can't be stopped: a stop deletes the VM (its disk and weights go too; owner rule 2026-10-13); Start makes a new one, which downloads its weights again.`;
     if (b) return `Stop ${p.name}? Its Brev VM is stopped and kept, not deleted: its disk (${b.disk_gb ? `${b.disk_gb} GB, ` : ""}~$${b.storage_usd_per_day.toFixed(2)}/day storage) stays for reuse by the next launch of its type; delete it yourself on the Pods page (parked list) when no longer wanted.`;
     return `Stop ${p.name}? Its pod is deleted (logs and costs are kept); Start makes a new one.`;
   }

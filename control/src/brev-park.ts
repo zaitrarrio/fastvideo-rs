@@ -1,15 +1,35 @@
 // NVIDIA Brev keep-on-stop (docs/serve/deploy-gmi-brev.md §3.4, §7).
 //
 // Owner rule (2026-10-11): "stopping a brev vm should NOT delete it. brev VM's
-// should be re-used or manually deleted". fv-control never deletes a Brev VM
-// on its own. Every stop (user stop, deadline backstop, budget floor, idle
-// stop, scale-down, roll, a failed or never-ready boot, a failed warm restart,
-// the down's orphan sweep) STOPS the workspace and records it:
+// should be re-used or manually deleted". Every stop (user stop, deadline
+// backstop, budget floor, idle stop, scale-down, roll, a failed or never-ready
+// boot, a failed warm restart, the down's orphan sweep) STOPS the workspace and,
+// once the stop succeeded, keeps it:
 //   parked: its weights completed (the pod became ready): kept with its trees;
 //   held:   stopped with a note why (incomplete weights, failed boot, failed
 //           restart, no record); partial trees stay on its disk and the next
 //           boot's weights loop resumes / cleans them (providers.ts WEIGHTS_SH).
-// The only deletes are the owner's: `fv-control.sh pod delete <name>` (a
+// A VM whose stop succeeded is never deleted by fv-control.
+//
+// Owner rule (2026-10-13): "We should go ahead and delete VMs that need to be
+// stopped if a stop command does not succeed. If the stop command succeeds then
+// we should NOT delete the VM." A stop does not succeed when Brev refuses it
+// ("does not support stop", HTTP 500, for a type it cannot stop: measured
+// 2026-10-13), when any other stop error persists over STOP_TRIES tries
+// (BREV_STOP_RETRY_S apart), or when Brev accepted it but the VM is not STOPPED
+// BREV_STOP_TIMEOUT_S (default 600 s = 10 min) after it (the cron checks). Then
+// the VM is deleted (fv- names and recorded rows only), recorded 'deleted' with
+// the reason ("stop failed (<reason>): deleted"), its tunnel released, logged,
+// and an info alert brev_stop_deleted is raised. A VM still DEPLOYING when its
+// stop comes (Brev answers "instance not found") is 'stop_pending': released
+// from its cluster; the cron sends the stop once it leaves DEPLOYING, or deletes
+// it when it is still DEPLOYING BREV_DEPLOYING_WAIT_S (default 900 s) after the
+// stop was requested. This replaces the 2026-10-13 morning states
+// 'running_unstoppable' (released, left running) and 'stop_failed' (left
+// running, retried): rows still in them are deleted by the cron (their stop
+// already failed), unless Brev shows them STOPPED (held).
+//
+// The owner's deletes stay as they were: `fv-control.sh pod delete <name>` (a
 // standalone pod with a live VM), `fv-control.sh brev delete-parked <id>`, the
 // UI's Delete on the Pods page's parked list, and
 // POST /api/providers/brev/parked/<id>/delete (deleteParked).
@@ -30,28 +50,13 @@
 // GET /ingest/v1/brev-boot with a per-instance token, and runs it. fv-control
 // serves it only while the instance is live (not parked or held).
 //
-// A stop Brev refuses (an API error; a workspace still DEPLOYING answers
-// "instance not found") leaves the VM running in state 'stop_failed': alert
-// brev_stop_failed with its $/hr, the cron retries the stop (a DEPLOYING one
-// once it leaves DEPLOYING), nothing is deleted.
-//
-// Non-stoppable types (owner decision 2026-10-13: "we'll just treat them like
-// any other Brev VM") are launched like the others. Brev answers their stop
-// with HTTP 500 "... does not support stop" (measured 2026-10-13) and the VM
-// stays RUNNING and billing: state 'running_unstoppable' (released from its
-// cluster, never deleted by fv-control), one critical alert brev_unstoppable
-// with its $/hr, $/day and the delete commands, a further stop try only every
-// BREV_UNSTOPPABLE_RETRY_S (default 1 h), and its full GPU $/hr in the ledger
-// and the Brev budget until the owner deletes it. Reusing such a running VM for
-// the next launch of its type is a follow-up (its container keeps the old
-// launch; the VM fetches a run script only at boot).
-//
 // Money and guards: a parked / held instance bills storage (disk GB × the type's
 // $/GB-hr); it is booked in the ledger (owner brev:parked) and counted in the
 // Brev budget. brev_park_max / brev_park_max_days are alert thresholds only
-// (alert brev_parked_over_limit); brev_park_delete_failed is removed. Only
-// instances fv-control created and recorded here (fv- names) are ever stopped,
-// started or deleted.
+// (alert brev_parked_over_limit); brev_park_delete_failed is removed. A VM whose
+// stop is not yet confirmed (or stop_pending) bills its GPU $/hr (owner
+// brev:stopping) until it is STOPPED or deleted. Only instances fv-control
+// created and recorded here (fv- names) are ever stopped, started or deleted.
 import { policies, type AlertIn, type Policies } from "./alerts";
 import { brev, brevStatusLine, type BrevType, type BrevWorkspace } from "./brev";
 import { brevHostScript } from "./brev-host";
@@ -99,10 +104,13 @@ export const DEFAULT_DEPLOY_S = 420;
 
 // ---------------------------------------------------------------- the record
 export type TreeRevs = Record<string, string>;
-/** live | restarting (claimed for a launch) | parked | held | stop_failed (Brev refused the stop: still running, the
- * cron retries) | running_unstoppable (Brev cannot stop its type: released, still running and billing until the owner
- * deletes it) | deleting (the owner's delete) | deleted | gone (Brev no longer lists it). */
-export type BrevState = "live" | "restarting" | "parked" | "held" | "stop_failed" | "running_unstoppable" | "deleting" | "deleted" | "gone";
+/** live | restarting (claimed for a launch) | parked | held | stop_pending (its stop came while Brev still showed it
+ * DEPLOYING: released; the cron stops it once it leaves DEPLOYING, or deletes it) | deleting (the owner's delete) |
+ * deleted | gone (Brev no longer lists it). Legacy (before the owner rule of 2026-10-13, migration 0012): stop_failed
+ * and running_unstoppable, rows whose stop failed; the cron deletes them. */
+export type BrevState = "live" | "restarting" | "parked" | "held" | "stop_pending" | "stop_failed" | "running_unstoppable" | "deleting" | "deleted" | "gone";
+/** States whose VM still runs after a stop that did not (yet) succeed: the cron settles them (stop or delete). */
+const PENDING_STATES = "('stop_pending', 'stop_failed', 'running_unstoppable')";
 export interface BrevInstance {
   workspace_id: string;
   pod_id: string;
@@ -125,9 +133,11 @@ export interface BrevInstance {
   restarts: number;
   note: string | null;
   updated_at: number;
-  /** The VM's GPU $/hr (recorded at create, or when a stop was refused); null when unknown. */
+  /** The VM's GPU $/hr (recorded at create); null when unknown. */
   usd_per_hr: number | null;
-  /** The last stop sent after a refusal (the cron's backoff for a running_unstoppable VM). */
+  /** parked / held: when the stop Brev accepted was sent, until Brev shows the VM STOPPED (null: confirmed); the cron
+   * deletes it when it is not STOPPED BREV_STOP_TIMEOUT_S after. stop_pending: when the stop was requested (the
+   * DEPLOYING wait, BREV_DEPLOYING_WAIT_S, counts from it). */
   stop_tried_at: number | null;
 }
 /** Storage $/hr of a parked instance. */
@@ -141,7 +151,7 @@ export async function brevRow(env: Env, podId: string): Promise<BrevInstance | n
 export async function brevRowById(env: Env, workspaceId: string): Promise<BrevInstance | null> {
   return env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE workspace_id = ?`).bind(workspaceId).first<BrevInstance>();
 }
-async function setState(env: Env, workspaceId: string, state: BrevState, f: { note?: string | null; parked_at?: number | null; trees?: TreeRevs; usd_per_hr?: number | null; stop_tried_at?: number | null; stoppable?: 0 | 1 } = {}) {
+async function setState(env: Env, workspaceId: string, state: BrevState, f: { note?: string | null; parked_at?: number | null; trees?: TreeRevs; usd_per_hr?: number | null; stop_tried_at?: number | null } = {}) {
   const sets = ["state = ?", "updated_at = ?"];
   const vals: unknown[] = [state, now()];
   if (f.note !== undefined) sets.push("note = ?"), vals.push(f.note);
@@ -149,7 +159,6 @@ async function setState(env: Env, workspaceId: string, state: BrevState, f: { no
   if (f.trees) sets.push("trees = ?"), vals.push(JSON.stringify(f.trees));
   if (f.usd_per_hr !== undefined && f.usd_per_hr !== null) sets.push("usd_per_hr = ?"), vals.push(f.usd_per_hr);
   if (f.stop_tried_at !== undefined) sets.push("stop_tried_at = ?"), vals.push(f.stop_tried_at);
-  if (f.stoppable !== undefined) sets.push("stoppable = ?"), vals.push(f.stoppable);
   await env.DB.prepare(`UPDATE brev_instances SET ${sets.join(", ")} WHERE workspace_id = ?`)
     .bind(...vals, workspaceId)
     .run();
@@ -328,13 +337,13 @@ export async function restartWarm(env: Env, row: BrevInstance, x: { run: string;
     said = `start accepted (was ${before}; Brev answered ${ans ? brevStatusLine(ans) : "no workspace"})`;
   }
   const t = now();
-  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = ?, updated_at = ? WHERE workspace_id = ?")
+  await env.DB.prepare("UPDATE brev_instances SET state = 'live', launch_trees = ?, cluster_id = ?, restarted_at = ?, restarts = restarts + 1, note = ?, stop_tried_at = NULL, updated_at = ? WHERE workspace_id = ?")
     .bind(JSON.stringify(x.launch_trees), x.cluster_id, t, said.slice(0, 300), t, row.workspace_id)
     .run();
   return said;
 }
 
-// ---------------------------------------------------------------- stop: park or hold (never delete)
+// ---------------------------------------------------------------- stop: park or hold; delete when the stop fails
 /** The pod ran its weights to completion (it became ready, or reported its tunnel, which the boot does after the weights). */
 async function weightsDone(env: Env, podId: string): Promise<boolean> {
   const r = await env.DB.prepare("SELECT ready_at FROM cluster_pods WHERE pod_id = ?").bind(podId).first<{ ready_at: number | null }>();
@@ -356,11 +365,11 @@ export async function vmDph(env: Env, row: Pick<BrevInstance, "pod_id" | "usd_pe
   return (await brev.type(env, row.instance_type).catch(() => null))?.usd_per_hr ?? null;
 }
 const money = (x: number | null) => (x === null ? "an unknown $/hr" : `$${x.toFixed(2)}/hr`);
-const moneyDay = (x: number | null) => (x === null ? "" : ` ($${(x * 24).toFixed(2)}/day)`);
+const hhmm = (ms: number) => `${new Date(ms).toISOString().slice(11, 16)}Z`;
 
 /** Brev's answer to the stop of a type it cannot stop (measured 2026-10-13 on a RUNNING massedcompute_A6000,
  * isStoppable false: HTTP 500 `rpc error: code = Internal desc = instance "inst-…" does not support stop`; the VM
- * stays RUNNING / HEALTHY and keeps billing). Permanent. */
+ * stays RUNNING / HEALTHY and keeps billing). Permanent: the VM is deleted at once. */
 export const NOT_STOPPABLE_RE = /does not support stop/i;
 /** Brev's answer to the stop of a workspace still DEPLOYING, never provisioned (measured 2026-10-13: HTTP 500
  * `rpc error: code = NotFound desc = instance not found`). The stop is sent again once it leaves DEPLOYING. */
@@ -375,62 +384,112 @@ export function brevErrText(msg: string): string {
   if (!m) return msg.slice(0, 160);
   return `${st ? `HTTP ${st} ` : ""}${m.replace(/\\"/g, '"').replace(/\\\\/g, "\\")}`.slice(0, 200);
 }
-/** How the owner deletes a Brev VM fv-control released but could not stop (fv-control never deletes one on its own). */
-export const unstoppableDeleteHow = (workspaceId: string) =>
-  `delete it yourself: fv-control.sh brev delete-parked ${workspaceId}, or Delete in the Pods page's parked list (fv-control.sh pod delete <name> instead of a stop deletes a standalone pod's VM)`;
-/** Seconds between the cron's further stop tries on a running_unstoppable VM (BREV_UNSTOPPABLE_RETRY_S, default 3600). */
-export const unstoppableRetryMs = (env: Env) => Math.max(60, Number(env.BREV_UNSTOPPABLE_RETRY_S ?? "3600") || 3600) * 1000;
+const envSeconds = (v: string | undefined, dflt: number, min: number) => {
+  const n = Number(v ?? dflt);
+  return Math.max(min, Number.isFinite(n) ? n : dflt) * 1000;
+};
+/** Tries of a stop Brev answers with an error other than "does not support stop" / "instance not found". */
+export const STOP_TRIES = 3;
+/** Seconds between those tries (BREV_STOP_RETRY_S, default 3). */
+const stopRetryMs = (env: Env) => envSeconds(env.BREV_STOP_RETRY_S, 3, 0);
+/** A stop Brev accepted must leave the VM STOPPED within this (BREV_STOP_TIMEOUT_S, default 600 = 10 min), else the VM
+ * is deleted (the cron checks). */
+export const stopTimeoutMs = (env: Env) => envSeconds(env.BREV_STOP_TIMEOUT_S, 600, 60);
+/** A VM still DEPLOYING when its stop came is waited for this long (BREV_DEPLOYING_WAIT_S, default 900) before it is
+ * deleted (the cron sends the stop once it leaves DEPLOYING). */
+export const deployingWaitMs = (env: Env) => envSeconds(env.BREV_DEPLOYING_WAIT_S, 900, 60);
 
-export type StopOutcome = "parked" | "held" | "stop_failed" | "running_unstoppable";
-/** Records a VM whose stop Brev refused with "does not support stop": running_unstoppable, never deleted; its trees
- * (weights complete) kept on the record. */
-async function markUnstoppable(env: Env, row: BrevInstance, err: string, rec: { parked: TreeRevs } | { note: string } | null, log: (m: string) => void): Promise<"running_unstoppable"> {
-  const dph = await vmDph(env, row);
-  const t = now();
-  const why = `not_stoppable: Brev cannot stop ${row.instance_type} (Brev: ${brevErrText(err)}): left RUNNING at ${money(dph)}${moneyDay(dph)}${rec && "note" in rec ? `; ${rec.note}` : ""}`;
-  await setState(env, row.workspace_id, "running_unstoppable", { note: why.slice(0, 300), usd_per_hr: dph, stop_tried_at: t, stoppable: 0, parked_at: t, ...(rec && "parked" in rec ? { trees: rec.parked } : {}) });
-  // Released from its cluster (also when the cron's retry finds it: an earlier stop_failed left its pod row live).
-  await env.DB.prepare("UPDATE cluster_pods SET deleted_at = ?, status = 'running_unstoppable' WHERE pod_id = ? AND deleted_at IS NULL").bind(t, row.pod_id).run();
-  log(`${row.pod_id}: WARNING: ${why}. Released from its cluster but STILL BILLING: fv-control never deletes a Brev VM on its own; ${unstoppableDeleteHow(row.workspace_id)} (alert brev_unstoppable; the stop is tried again every ${unstoppableRetryMs(env) / 60000} min)`);
-  return "running_unstoppable";
-}
-/** Stops a live / restarting instance and records it: parked with `trees` (its weights completed), else held with
- * `note`. Brev refusing the stop leaves it running: running_unstoppable when its type cannot be stopped (alert
- * brev_unstoppable), else stop_failed (alert brev_stop_failed; the cron retries). Never deletes. */
-async function stopAndRecord(env: Env, row: BrevInstance, rec: { parked: TreeRevs } | { note: string }, log: (m: string) => void): Promise<StopOutcome> {
-  try {
-    await brev.stop(env, row.workspace_id);
-  } catch (e) {
-    const msg = (e as Error).message;
-    const kind = stopRefusal(msg);
-    if (kind === "not_stoppable") return markUnstoppable(env, row, msg, rec, log);
-    const dph = await vmDph(env, row);
-    const deploying = kind === "not_provisioned" ? " (still DEPLOYING: the stop is sent again once it leaves DEPLOYING)" : "";
-    const why = `stop refused by Brev (${brevErrText(msg)})${deploying}: left RUNNING at ${money(dph)}${"note" in rec ? `; ${rec.note}` : ""}`;
-    await setState(env, row.workspace_id, "stop_failed", { note: why.slice(0, 300), usd_per_hr: dph, stop_tried_at: now() });
-    log(`${row.pod_id}: WARNING: ${why}. fv-control never deletes a Brev VM on its own: stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${row.workspace_id}); alert brev_stop_failed`);
-    return "stop_failed";
+type StopSent = { ok: true; confirmed: boolean } | { ok: false; kind: StopRefusal; err: string };
+/** Sends the stop: up to STOP_TRIES tries for a transient error, none more for "does not support stop" or "instance not
+ * found". A stop Brev refused for a VM it shows STOPPED / STOPPING (e.g. already stopping) counts as accepted; one it
+ * shows DEPLOYING as not provisioned. `confirmed`: Brev shows it STOPPED already. */
+async function sendStop(env: Env, workspaceId: string): Promise<StopSent> {
+  let err = "";
+  for (let i = 0; i < STOP_TRIES; i++) {
+    if (i) await sleepMs(stopRetryMs(env));
+    try {
+      await brev.stop(env, workspaceId);
+      const w = await brev.get(env, workspaceId).catch(() => null);
+      return { ok: true, confirmed: w?.status === "STOPPED" };
+    } catch (e) {
+      err = (e as Error).message;
+      const kind = stopRefusal(err);
+      if (kind !== "other") return { ok: false, kind, err };
+    }
   }
+  const w = await brev.get(env, workspaceId).catch(() => null);
+  if (w?.status === "STOPPED" || w?.status === "STOPPING") return { ok: true, confirmed: w.status === "STOPPED" };
+  if (w?.status === "DEPLOYING") return { ok: false, kind: "not_provisioned", err };
+  return { ok: false, kind: "other", err };
+}
+
+/** stop_pending: still running; deleted: the stop failed and the VM was deleted. */
+export type StopOutcome = "parked" | "held" | "stop_pending" | "deleted";
+/** The note of a "stop failed: deleted" record (the cron's info alert brev_stop_deleted finds it by it). */
+const STOP_DELETED_PREFIX = "stop failed (";
+/**
+ * Owner rule 2026-10-13: a Brev VM whose stop does not succeed is deleted (fv- names and recorded rows only): marked
+ * deleted with the reason, its tunnel released (markBrevDeleted), its cluster row closed, logged; the cron raises the
+ * info alert brev_stop_deleted from the record. A delete Brev refuses leaves it stop_pending (the cron tries the stop,
+ * then the delete, again).
+ */
+async function deleteFailedStop(env: Env, row: BrevInstance, reason: string, log: (m: string) => void): Promise<"deleted" | "stop_pending"> {
+  if (!FV_NAME_RE.test(row.name)) throw new Error(`${row.name}: its stop failed (${reason}) but it is not an fv- name: not deleted`);
+  try {
+    await brev.remove(env, row.workspace_id);
+  } catch (e) {
+    const why = `stop failed (${reason}); its delete failed too (${brevErrText((e as Error).message)}): the cron tries again`;
+    await setState(env, row.workspace_id, "stop_pending", { note: why.slice(0, 300), stop_tried_at: row.stop_tried_at ?? now() });
+    log(`${row.pod_id}: WARNING: ${why}`);
+    return "stop_pending";
+  }
+  await markBrevDeleted(env, row.workspace_id, "deleted", `${STOP_DELETED_PREFIX}${reason}): deleted`.slice(0, 300));
+  await env.DB.prepare("UPDATE cluster_pods SET deleted_at = ?, status = 'deleted' WHERE pod_id = ? AND deleted_at IS NULL").bind(now(), row.pod_id).run();
+  log(`${row.pod_id}: stop failed (${reason}): deleted (owner rule 2026-10-13: a Brev VM whose stop does not succeed is deleted; its disk and weights went with it)`);
+  return "deleted";
+}
+/**
+ * Stops a live / restarting instance and records it. Brev accepting the stop: parked with `trees` (its weights
+ * completed), else held with `note`, never deleted; until Brev shows it STOPPED the record keeps the stop's time
+ * (stop_tried_at) and the cron deletes it if it is not STOPPED BREV_STOP_TIMEOUT_S later. Brev refusing it ("does not
+ * support stop", or another error STOP_TRIES times): deleted (deleteFailedStop). Still DEPLOYING ("instance not
+ * found"): stop_pending (the cron stops it once it leaves DEPLOYING, or deletes it after BREV_DEPLOYING_WAIT_S).
+ */
+async function stopAndRecord(env: Env, row: BrevInstance, rec: { parked: TreeRevs } | { note: string }, log: (m: string) => void): Promise<StopOutcome> {
+  const s = await sendStop(env, row.workspace_id);
+  if (!s.ok) {
+    if (s.kind === "not_provisioned") {
+      // The DEPLOYING wait counts from the first stop request (a stop_pending row keeps its time).
+      const since = row.state === "stop_pending" && row.stop_tried_at ? row.stop_tried_at : now();
+      const why = `stop_pending: still DEPLOYING when its stop came (Brev: ${brevErrText(s.err)}): stopped once it leaves DEPLOYING, deleted if still DEPLOYING at ${hhmm(since + deployingWaitMs(env))} (BREV_DEPLOYING_WAIT_S) or if its stop fails${"note" in rec ? `; ${rec.note}` : ""}`;
+      await setState(env, row.workspace_id, "stop_pending", { note: why.slice(0, 300), stop_tried_at: since, ...("parked" in rec ? { trees: rec.parked } : {}) });
+      log(`${row.pod_id}: ${why}`);
+      return "stop_pending";
+    }
+    const reason = s.kind === "not_stoppable" ? `Brev cannot stop ${row.instance_type}: ${brevErrText(s.err)}` : `Brev refused the stop ${STOP_TRIES} times: ${brevErrText(s.err)}`;
+    return deleteFailedStop(env, row, reason, log);
+  }
+  const pending = s.confirmed ? null : now();
   if ("parked" in rec) {
-    await setState(env, row.workspace_id, "parked", { parked_at: now(), trees: rec.parked, note: null });
+    await setState(env, row.workspace_id, "parked", { parked_at: now(), trees: rec.parked, note: null, stop_tried_at: pending });
     return "parked";
   }
-  await setState(env, row.workspace_id, "held", { note: rec.note.slice(0, 300), parked_at: now() });
+  await setState(env, row.workspace_id, "held", { note: rec.note.slice(0, 300), parked_at: now(), stop_tried_at: pending });
   return "held";
 }
 /** A restart that failed or timed out: stop it again and hold it (reused by a later launch of its type after
- * heldReuseAfterMs, or deleted by the owner). Its weights stay. */
+ * heldReuseAfterMs, or deleted by the owner). Its weights stay. A stop that fails deletes it. */
 export async function holdFailed(env: Env, row: BrevInstance, why: string, log: (m: string) => void = () => {}): Promise<StopOutcome> {
   return stopAndRecord(env, row, { note: `restart failed: ${why}` }, log);
 }
-export type Release = StopOutcome | "deleted" | "none";
+export type Release = StopOutcome | "none";
 /**
  * Releases a Brev pod. Every stop (`manual` unset) stops the VM: parked when its weights completed (its trees
  * recorded), else held with a note (a never-ready boot: `why`; a warm restart that never came up). An already
- * parked / held one gets its stop again (the down's verify); one in the owner's delete counts as gone. A stop Brev
- * refuses leaves it running (stop_failed, alerted; running_unstoppable when its type cannot be stopped: released,
- * alerted, still billing). `manual` (the owner's `pod delete` of a standalone pod) deletes
- * the VM: the only delete here. Returns "none" when fv-control has no record of it (the caller decides).
+ * parked / held one gets its stop again (the down's verify); one in the owner's delete counts as gone; a stop_pending
+ * one is the cron's. A stop that does not succeed deletes the VM (owner rule 2026-10-13: "deleted"); one still
+ * DEPLOYING is stop_pending. `manual` (the owner's `pod delete` of a standalone pod) deletes the VM. Returns "none"
+ * when fv-control has no record of it (the caller decides).
  */
 export async function releaseBrev(env: Env, podId: string, o: { manual?: boolean; why?: string } = {}, log: (m: string) => void = () => {}): Promise<Release> {
   const row = await brevRow(env, podId);
@@ -447,13 +506,14 @@ export async function releaseBrev(env: Env, podId: string, o: { manual?: boolean
     await brev.stop(env, row.workspace_id).catch(() => {});
     return row.state;
   }
-  // Brev cannot stop it: already released and alerted; the cron tries the stop again on its backoff (no blind retry).
-  if (row.state === "running_unstoppable") return "running_unstoppable";
+  // Its stop came while it was DEPLOYING: the cron stops it once it leaves DEPLOYING (or deletes it).
+  if (row.state === "stop_pending") return "stop_pending";
+  // live / restarting, and the legacy stop_failed / running_unstoppable (their stop is sent again: a failure deletes).
   const why = o.why ? ` (${o.why})` : "";
   const keep = `reused by a later launch of ${row.instance_type}, or delete it: fv-control.sh brev parked`;
   if (row.restarted_at && !(await weightsDone(env, podId))) {
     const r = await stopAndRecord(env, row, { note: `restart failed: it did not come up after the restart${why}` }, log);
-    if (r === "held") log(`${podId}: the restarted instance never came up: stopped and held (${keep})`);
+    if (r === "held") log(`${podId}: the restarted instance never came up: stopped and held, not deleted (${keep})`);
     return r;
   }
   if (!(await weightsDone(env, podId))) {
@@ -469,7 +529,8 @@ export async function releaseBrev(env: Env, podId: string, o: { manual?: boolean
   if (lim) log(`WARNING: ${lim.message}`);
   return "parked";
 }
-/** A Brev pod fv-control has no keep-on-stop record of (made before it): stopped and recorded held. Never deleted. */
+/** A Brev pod fv-control has no keep-on-stop record of (made before it): stopped and recorded held (deleted if its stop
+ * fails). A workspace fv-control already recorded deleted / gone is not adopted again: "deleted". */
 export async function adoptAndStop(env: Env, x: { workspace_id: string; pod_id: string; name: string; instance_type: string }, why: string, log: (m: string) => void = () => {}): Promise<StopOutcome> {
   const t = now();
   await env.DB.prepare(
@@ -480,13 +541,15 @@ export async function adoptAndStop(env: Env, x: { workspace_id: string; pod_id: 
     .run();
   const row = await brevRowById(env, x.workspace_id);
   if (!row) throw new Error(`${x.name}: no record`);
+  if (row.state === "deleted" || row.state === "deleting" || row.state === "gone") return "deleted";
   const r = await stopAndRecord(env, row, { note: `no keep-on-stop record: its weights are unknown (${why})` }, log);
   if (r === "held") log(`${x.pod_id}: stopped and held, not deleted (no keep-on-stop record; reused by a later launch of ${x.instance_type}, or delete it: fv-control.sh brev parked)`);
   return r;
 }
-/** Workspace ids of records Brev should still list (live / parked / held / stop_failed / running_unstoppable) that it did not, changed before `before`. */
+/** Workspace ids of records Brev should still list (live / parked / held / stop_pending and the legacy states) that it
+ * did not, changed before `before`. */
 export async function brevUnlisted(env: Env, listed: Set<string>, before: number): Promise<string[]> {
-  const rows = (await env.DB.prepare("SELECT workspace_id FROM brev_instances WHERE state IN ('live', 'parked', 'held', 'stop_failed', 'running_unstoppable') AND updated_at < ?").bind(before).all<{ workspace_id: string }>()).results || [];
+  const rows = (await env.DB.prepare(`SELECT workspace_id FROM brev_instances WHERE (state IN ('live', 'parked', 'held') OR state IN ${PENDING_STATES}) AND updated_at < ?`).bind(before).all<{ workspace_id: string }>()).results || [];
   return rows.map((r) => r.workspace_id).filter((id) => !listed.has(id));
 }
 /** Whether a pod is parked or held (a stopped VM is then the expected end state of a stop). */
@@ -494,94 +557,93 @@ export async function isParked(env: Env, podId: string): Promise<boolean> {
   const r = await brevRow(env, podId);
   return r?.state === "parked" || r?.state === "held";
 }
-/** Whether a stop of a Brev pod is done for its cluster: a stopped VM parked or held, or one Brev cannot stop
- * (running_unstoppable: released, alerted, billing until the owner deletes it). `providerState`: the instance's state. */
+/** Whether a stop of a Brev pod is done for its cluster: parked / held and Brev shows it stopped, or its stop is not yet
+ * confirmed (the cron confirms it or deletes the VM); stop_pending (the cron's); or deleted by a failed stop.
+ * `providerState`: the instance's state. */
 export async function brevReleased(env: Env, podId: string, providerState: string | undefined): Promise<boolean> {
-  const r = await brevRow(env, podId);
-  if (r?.state === "running_unstoppable") return true;
-  return providerState === "stopped" && (r?.state === "parked" || r?.state === "held");
+  const r = await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE pod_id = ? ORDER BY updated_at DESC LIMIT 1`).bind(podId).first<BrevInstance>();
+  if (!r) return false;
+  if (r.state === "stop_pending" || r.state === "deleted" || r.state === "deleting") return true;
+  return (r.state === "parked" || r.state === "held") && (providerState === "stopped" || !!r.stop_tried_at);
 }
-/** Brev VMs fv-control released or cannot stop that still run and bill their GPU $/hr: running_unstoppable and
- * stop_failed records, and live / restarting ones whose type cannot be stopped (a stop will leave them running).
- * `dph`: vmDph. The ledger, the budget projection and the budget floor's early warning count them. */
-export async function brevUnstoppable(env: Env): Promise<{ row: BrevInstance; dph: number | null; released: boolean }[]> {
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ('running_unstoppable', 'stop_failed') OR (state IN ('live', 'restarting') AND stoppable = 0)`).all<BrevInstance>()).results || [];
-  const out: { row: BrevInstance; dph: number | null; released: boolean }[] = [];
-  for (const row of rows) out.push({ row, dph: await vmDph(env, row), released: row.state === "running_unstoppable" || row.state === "stop_failed" });
+/** Brev VMs whose stop has not succeeded yet and that still bill their GPU $/hr: stop_pending (and the legacy states),
+ * and parked / held ones whose stop Brev has not shown STOPPED. `dph`: vmDph. The collector bills them (owner
+ * brev:stopping) while Brev lists them not stopped. */
+export async function brevStopping(env: Env): Promise<{ row: BrevInstance; dph: number | null }[]> {
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PENDING_STATES} OR (state IN ${PARKED_STATES} AND stop_tried_at IS NOT NULL)`).all<BrevInstance>()).results || [];
+  const out: { row: BrevInstance; dph: number | null }[] = [];
+  for (const row of rows) out.push({ row, dph: await vmDph(env, row) });
   return out;
 }
 const STATUS_OF: Record<string, string> = { stopped: "STOPPED", running: "RUNNING", starting: "STARTING", failed: "FAILURE" };
 /**
- * The cron's pass over stops Brev refused. stop_failed: the stop again every pass (held once it took, or once Brev
- * shows it stopped), except while Brev shows it DEPLOYING (its stop answers "instance not found" until it is
- * provisioned: sent once it leaves DEPLOYING); still running: alert brev_stop_failed naming its $/hr; a refusal that
- * says the type cannot be stopped makes it running_unstoppable. running_unstoppable: one critical alert
- * brev_unstoppable (the same key while it runs) with its $/hr, $/day and the delete commands; the stop is tried again
- * only every BREV_UNSTOPPABLE_RETRY_S (default 1 h). Never deletes. `listed`: workspace id -> its status in Brev's
- * list (Brev's raw status, e.g. DEPLOYING; the provider states stopped / running / starting / failed are read too).
+ * The cron's pass over stops that have not succeeded yet (owner rule 2026-10-13). `listed`: workspace id -> its status
+ * in Brev's list (Brev's raw status, e.g. DEPLOYING; the provider states stopped / running / starting / failed are read
+ * too); an unlisted one is left to brevUnlisted.
+ *   parked / held with a stop not yet confirmed: STOPPED confirms it (kept); not STOPPED BREV_STOP_TIMEOUT_S after the
+ *     stop: deleted ("still <status> N min after its stop").
+ *   stop_pending: STOPPED: held; still DEPLOYING: waited for (alert brev_stop_pending) until BREV_DEPLOYING_WAIT_S after
+ *     the stop request, then deleted; STOPPING: held (its stop is confirmed or timed out like any other); anything
+ *     else: the stop now (parked / held, or deleted when it fails).
+ *   stop_failed / running_unstoppable (legacy): their stop already failed: deleted (held when Brev shows them STOPPED).
+ * Every "stop failed: deleted" record of the last 24 h raises the info alert brev_stop_deleted (from any path).
  */
-export async function retryRefusedStops(env: Env, listed: Map<string, string>, t = now()): Promise<{ alerts: AlertIn[]; actions: string[] }> {
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ('stop_failed', 'running_unstoppable')`).all<BrevInstance>()).results || [];
+export async function settleBrevStops(env: Env, listed: Map<string, string>, t = now()): Promise<{ alerts: AlertIn[]; actions: string[] }> {
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PENDING_STATES} OR (state IN ${PARKED_STATES} AND stop_tried_at IS NOT NULL)`).all<BrevInstance>()).results || [];
   const alerts: AlertIn[] = [];
   const actions: string[] = [];
-  const backoff = unstoppableRetryMs(env);
+  const log = (m: string) => actions.push(m);
   for (const r of rows) {
     const raw = listed.get(r.workspace_id);
     if (raw === undefined) continue; // brevUnlisted marks it gone
     const st = (STATUS_OF[raw] ?? raw).toUpperCase();
-    const unstoppable = r.state === "running_unstoppable";
-    let stopped = st === "STOPPED";
-    let err = "";
-    let tried = false;
-    const due = !unstoppable || !r.stop_tried_at || t - r.stop_tried_at >= backoff;
-    if (!stopped && st !== "DEPLOYING" && st !== "STOPPING" && due) {
-      tried = true;
-      try {
-        await brev.stop(env, r.workspace_id);
-        stopped = true;
-      } catch (e) {
-        err = (e as Error).message;
+    if (r.state === "parked" || r.state === "held") {
+      if (st === "STOPPED") {
+        await env.DB.prepare("UPDATE brev_instances SET stop_tried_at = NULL WHERE workspace_id = ? AND state = ?").bind(r.workspace_id, r.state).run();
+        continue;
       }
-    }
-    if (stopped) {
-      await setState(env, r.workspace_id, "held", { note: `stopped after Brev first refused the stop (${(r.note || "").slice(0, 200)})`, parked_at: now(), stop_tried_at: null });
-      actions.push(`brev ${r.name}: stopped (an earlier stop was refused): held`);
+      const waited = t - (r.stop_tried_at ?? t);
+      if (waited >= stopTimeoutMs(env)) await deleteFailedStop(env, r, `still ${st} ${Math.round(waited / 60000)} min after its stop (BREV_STOP_TIMEOUT_S ${stopTimeoutMs(env) / 1000})`, log);
       continue;
     }
-    if (tried) await env.DB.prepare("UPDATE brev_instances SET stop_tried_at = ? WHERE workspace_id = ?").bind(t, r.workspace_id).run();
-    if (!unstoppable && err && stopRefusal(err) === "not_stoppable") {
-      await markUnstoppable(env, r, err, null, (m) => actions.push(m));
-      alerts.push(await unstoppableAlert(env, (await brevRowById(env, r.workspace_id))!));
+    if (st === "STOPPED") {
+      await setState(env, r.workspace_id, "held", { note: `stopped after its stop was pending (${(r.note || "").slice(0, 220)})`.slice(0, 300), parked_at: t, stop_tried_at: null });
+      log(`brev ${r.name}: Brev shows it STOPPED: held`);
       continue;
     }
-    if (unstoppable) {
-      alerts.push(await unstoppableAlert(env, tried ? { ...r, stop_tried_at: t } : r));
+    if (r.state !== "stop_pending") {
+      await deleteFailedStop(env, r, `its stop had already failed (${r.state}, before the owner rule of 2026-10-13: ${(r.note || "").slice(0, 120)})`, log);
       continue;
     }
-    const dph = await vmDph(env, r);
-    const why = st === "DEPLOYING" ? "it is still DEPLOYING (Brev answers its stop with \"instance not found\" until it is provisioned): the stop is sent once it leaves DEPLOYING" : `Brev refused its stop (${err ? brevErrText(err) : r.note || "?"})`;
-    alerts.push({
-      key: `brev_stop_failed:${r.workspace_id}`,
-      kind: "brev_stop_failed",
-      severity: "critical",
-      target: r.pod_id,
-      message: `Brev ${r.name} (${r.instance_type}) is still ${st === "DEPLOYING" ? "DEPLOYING" : "RUNNING"} at ${money(dph)}${moneyDay(dph)}: ${why}. fv-control never deletes a Brev VM on its own: stop it in the Brev console or delete it (fv-control.sh brev delete-parked ${r.workspace_id})`,
-    });
+    if (st === "DEPLOYING") {
+      const since = r.stop_tried_at ?? r.updated_at;
+      if (t - since >= deployingWaitMs(env)) {
+        await deleteFailedStop(env, r, `still DEPLOYING ${Math.round((t - since) / 60000)} min after its stop was requested (BREV_DEPLOYING_WAIT_S ${deployingWaitMs(env) / 1000})`, log);
+        continue;
+      }
+      const dph = await vmDph(env, r);
+      alerts.push({
+        key: `brev_stop_pending:${r.workspace_id}`,
+        kind: "brev_stop_pending",
+        severity: "warn",
+        target: r.pod_id,
+        message: `Brev ${r.name} (${r.instance_type}) is still DEPLOYING at ${money(dph)}: its stop is sent once it leaves DEPLOYING; deleted if it is still DEPLOYING at ${hhmm(since + deployingWaitMs(env))} (BREV_DEPLOYING_WAIT_S) or its stop fails (owner rule 2026-10-13)`,
+      });
+      continue;
+    }
+    if (st === "STOPPING") {
+      await setState(env, r.workspace_id, "held", { note: `stopping after its stop was pending (${(r.note || "").slice(0, 220)})`.slice(0, 300), parked_at: t, stop_tried_at: t });
+      continue;
+    }
+    // It left DEPLOYING: the stop now (held, or deleted when the stop fails).
+    const out = await stopAndRecord(env, { ...r, state: "stop_pending" }, { note: `stopped once it left DEPLOYING (${(r.note || "").replace(/^stop_pending: /, "").slice(0, 200)})` }, log);
+    if (out === "held") log(`brev ${r.name}: stopped once it left DEPLOYING: held`);
   }
+  // The info alert of every VM a failed stop deleted (inline or above) in the last 24 h.
+  const gone = (await env.DB.prepare("SELECT workspace_id, pod_id, name, instance_type, note FROM brev_instances WHERE state = 'deleted' AND note LIKE ? AND updated_at > ?").bind(`${STOP_DELETED_PREFIX}%`, t - 86400_000).all<BrevInstance>()).results || [];
+  for (const g of gone)
+    alerts.push({ key: `brev_stop_deleted:${g.workspace_id}`, kind: "brev_stop_deleted", severity: "info", target: g.pod_id, message: `Brev ${g.name} (${g.instance_type}): ${g.note} (owner rule 2026-10-13: a Brev VM whose stop does not succeed is deleted)` });
   return { alerts, actions };
-}
-/** The one alert of a running_unstoppable VM (key brev_unstoppable:<workspace id>, opened once, refreshed while it runs). */
-async function unstoppableAlert(env: Env, r: BrevInstance): Promise<AlertIn> {
-  const dph = await vmDph(env, r);
-  const since = r.parked_at ? ` since ${new Date(r.parked_at).toISOString().slice(0, 16)}Z` : "";
-  const next = r.stop_tried_at ? `; next stop try ${new Date(r.stop_tried_at + unstoppableRetryMs(env)).toISOString().slice(11, 16)}Z` : "";
-  return {
-    key: `brev_unstoppable:${r.workspace_id}`,
-    kind: "brev_unstoppable",
-    severity: "critical",
-    target: r.pod_id,
-    message: `Brev ${r.name} (${r.instance_type}) cannot be stopped (Brev: "does not support stop") and is still RUNNING at ${money(dph)}${moneyDay(dph)}${since}, counted in the Brev budget. fv-control released it and never deletes a Brev VM on its own: ${unstoppableDeleteHow(r.workspace_id)}${next}`,
-  };
 }
 
 /**
@@ -652,17 +714,18 @@ export async function parkLimitAlert(env: Env, pol: Policies, t = now()): Promis
     key: "brev_parked_over_limit",
     kind: "brev_parked_over_limit",
     severity: "warn",
-    message: `NVIDIA Brev: ${why}: ${list}; storage $${total.toFixed(2)}/day in all. Not deleted (fv-control never deletes a Brev VM on its own): the next launch of a type reuses them, or delete one (Pods page, fv-control.sh brev delete-parked <id>)`,
+    message: `NVIDIA Brev: ${why}: ${list}; storage $${total.toFixed(2)}/day in all. Not deleted (fv-control never deletes a stopped Brev VM on its own): the next launch of a type reuses them, or delete one (Pods page, fv-control.sh brev delete-parked <id>)`,
   };
 }
-/** Deletes one parked / held (or stop_failed / running_unstoppable: still running) instance: the owner's action only
- * (API, CLI, UI); refused for anything else. A failed delete leaves a running one in the state it had. */
+/** Deletes one parked / held (or stop_pending, or a legacy stop_failed / running_unstoppable: still running) instance:
+ * the owner's action only (API, CLI, UI); refused for anything else. A failed delete leaves a running one in the state
+ * it had. */
 export async function deleteParked(env: Env, workspaceId: string, why: string): Promise<string> {
   const before = await brevRowById(env, workspaceId);
-  const r = await env.DB.prepare("UPDATE brev_instances SET state = 'deleting', updated_at = ? WHERE workspace_id = ? AND state IN ('parked', 'held', 'stop_failed', 'running_unstoppable')").bind(now(), workspaceId).run();
+  const r = await env.DB.prepare(`UPDATE brev_instances SET state = 'deleting', updated_at = ? WHERE workspace_id = ? AND (state IN ${PARKED_STATES} OR state IN ${PENDING_STATES})`).bind(now(), workspaceId).run();
   const row = await brevRowById(env, workspaceId);
-  if (Number(r.meta?.changes ?? 0) !== 1 || !row || !before) throw new HttpError(404, `no parked Brev instance ${workspaceId} (only parked / held / unstoppable ones fv-control made)`);
-  const running = before.state === "running_unstoppable" || before.state === "stop_failed";
+  if (Number(r.meta?.changes ?? 0) !== 1 || !row || !before) throw new HttpError(404, `no parked Brev instance ${workspaceId} (only parked / held / stop-pending ones fv-control made)`);
+  const running = !isKept(before);
   try {
     await brev.remove(env, workspaceId);
   } catch (e) {
@@ -685,21 +748,25 @@ export async function parkedRows(env: Env): Promise<BrevInstance[]> {
 export async function parkedDph(env: Env): Promise<number> {
   return (await parkedRows(env)).reduce((s, r) => s + storageDph(r), 0);
 }
+/** Parked or held (stopped and kept), not a stop still pending. */
+const isKept = (r: Pick<BrevInstance, "state">) => r.state === "parked" || r.state === "held";
 /** The policy line the UI and `fv-control.sh brev parked` show. */
 export const parkPolicyLine = (pol: Pick<Policies, "brev_park_max" | "brev_park_max_days">) =>
-  `stopped Brev VMs are kept, never deleted by fv-control (owner rule 2026-10-11): reused by the next launch of their type, or deleted by you; alert past ${pol.brev_park_max} parked or ${pol.brev_park_max_days} days each`;
+  `stopped Brev VMs are kept, never deleted by fv-control (owner rule 2026-10-11): reused by the next launch of their type, or deleted by you; a VM whose stop does not succeed is deleted instead (owner rule 2026-10-13); alert past ${pol.brev_park_max} parked or ${pol.brev_park_max_days} days each`;
 export async function parkedView(env: Env) {
   const pol = await policies(env);
-  const rows = [...(await parkedRows(env)), ...((await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ('stop_failed', 'running_unstoppable') ORDER BY parked_at DESC`).all<BrevInstance>()).results || [])];
+  const rows = [...(await parkedRows(env)), ...((await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PENDING_STATES} ORDER BY parked_at DESC`).all<BrevInstance>()).results || [])];
   const t = now();
   const cool = heldReuseAfterMs(env);
-  const running = (r: BrevInstance) => r.state === "stop_failed" || r.state === "running_unstoppable";
+  const running = (r: BrevInstance) => !isKept(r);
   const reuse = (r: BrevInstance) =>
-    r.state === "running_unstoppable"
-      ? `running: Brev cannot stop ${r.instance_type} (a stop leaves it running): delete it yourself`
-      : r.state === "stop_failed"
-        ? "running: Brev refused its stop"
-        : r.state === "held" && t - r.updated_at < cool
+    r.state === "stop_pending"
+      ? `stop pending: stopped once it leaves DEPLOYING, deleted if still DEPLOYING at ${hhmm((r.stop_tried_at ?? r.updated_at) + deployingWaitMs(env))} or if its stop fails`
+      : running(r)
+        ? "its stop failed: the cron deletes it (owner rule 2026-10-13)"
+        : r.stop_tried_at
+          ? `stopping: kept once Brev shows it STOPPED, deleted if not by ${hhmm(r.stop_tried_at + stopTimeoutMs(env))}`
+          : r.state === "held" && t - r.updated_at < cool
           ? `reusable from ${new Date(r.updated_at + cool).toISOString().slice(11, 16)}Z (Unpark: now)`
           : `reusable: the next launch of ${r.instance_type}`;
   const parked: {
@@ -735,7 +802,7 @@ export async function parkedView(env: Env) {
       disk_gb: r.disk_gb,
       storage_usd_per_hr: running(r) ? 0 : storageDph(r),
       storage_usd_per_day: running(r) ? 0 : storageDph(r) * 24,
-      // Still running (Brev refused the stop, or cannot stop its type): its full GPU $/hr.
+      // Still running (its stop pending, or a legacy failed stop the cron deletes): its full GPU $/hr.
       running_usd_per_hr: dph,
       running_usd_per_day: (dph ?? 0) * 24,
       parked_at: r.parked_at,

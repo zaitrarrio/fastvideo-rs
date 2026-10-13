@@ -124,12 +124,14 @@ export interface Env {
   /** "0": create every Brev workspace with isStoppable false (default: true for a type the listing marks stoppable;
    * brev-cli's entity says the flag is "used for autostop only", UNVERIFIED whether the server's stop needs it). */
   BREV_IS_STOPPABLE?: string;
-  /** A Brev VM whose type cannot be stopped (owner decision 2026-10-13: launched like any other; a stop leaves it
-   * RUNNING, state running_unstoppable): seconds between the cron's further stop tries (default 3600). */
-  BREV_UNSTOPPABLE_RETRY_S?: string;
-  /** The hours a launch of a non-stoppable Brev type is budgeted past its deadline (a stop leaves it running until
-   * the owner deletes it; default 24). */
-  BREV_NOSTOP_MARGIN_H?: string;
+  /** Owner rule 2026-10-13 (brev-park.ts): a Brev VM whose stop does not succeed is deleted. A stop Brev accepted must
+   * leave the VM STOPPED within this many seconds, else it is deleted (default 600). */
+  BREV_STOP_TIMEOUT_S?: string;
+  /** A stop that came while the VM was still DEPLOYING: seconds to wait for it to leave DEPLOYING (then the stop is
+   * sent) before it is deleted (default 900). */
+  BREV_DEPLOYING_WAIT_S?: string;
+  /** Seconds between the tries of a stop Brev answers with a transient error (3 tries; default 3). */
+  BREV_STOP_RETRY_S?: string;
   /** The R2 weights store (r2weights.ts, docs/ops/r2-weights.md): its bucket (default fv-weights), the S3 endpoint
    * (default https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com; tests: a mock), the presigned URLs' lifetime in s
    * (default 3600, 300-21600), and published trees beyond scripts/gpu/weights-r2.tsv as JSON {dest: {rev, files,

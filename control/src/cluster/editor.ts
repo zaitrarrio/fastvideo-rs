@@ -25,7 +25,7 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
   for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
   // Owner decision 2026-10-13: a Brev type that cannot be stopped is allowed like any other (rule brev_stoppable_only
-  // removed); a warning says that a stop leaves it running and what it keeps billing.
+  // removed); a warning says that a stop deletes it (owner rule 2026-10-13).
   if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevNoStopWarnings(env, spec)) warnings.push({ path: [...prefix, ...x.path], message: x.message });
   // Named pod tunnels (tunnels.ts): a host two levels below the zone, or a half-configured setup, is said loudly.
   const tun = tunnelSettings(env);

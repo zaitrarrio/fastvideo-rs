@@ -408,7 +408,8 @@ export class ClusterOps implements DurableObject {
       const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
       // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped (one in DELETING, the
       // owner's delete, is not listed: gone).
-      // A Brev VM whose type cannot be stopped (running_unstoppable) is released though it runs: alerted, billed, the owner's to delete.
+      // Owner rule 2026-10-13: a stop not yet confirmed STOPPED, or stop_pending (still DEPLOYING), is the cron's (it
+      // confirms, stops or deletes it); a VM a failed stop deleted is gone.
       if (pod && !(isOtherPod(p) && (await brevReleased(env, p, (pod as { state?: string }).state)))) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {

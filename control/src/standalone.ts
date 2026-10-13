@@ -174,7 +174,8 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
           ...(rec.pod.startsWith("brev:")
             ? {
                 brev: {
-                  // Owner decision 2026-10-13: a type Brev cannot stop (stoppable false) is launched too; its stop leaves it running.
+                  // Owner decision 2026-10-13: a type Brev cannot stop (stoppable false) is launched too; its stop fails and
+                  // deletes it (owner rule 2026-10-13).
                   kept_on_stop: brevRec ? !!brevRec.stoppable : true,
                   stoppable: brevRec ? !!brevRec.stoppable : null,
                   workspace_id: brevRec?.workspace_id ?? null,

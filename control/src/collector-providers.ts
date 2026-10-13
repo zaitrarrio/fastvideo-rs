@@ -6,12 +6,12 @@
 // only ever acts on pods fv-control recorded (cluster_pods); an fv-named
 // instance it did not record is reported, never touched.
 import type { AlertIn, Policies } from "./alerts";
-import { brevUnlisted, brevUnstoppable, markBrevDeleted, parkedRows, parkLimitAlert, restartStuckAlerts, retryRefusedStops, storageDph } from "./brev-park";
+import { brevStopping, brevUnlisted, markBrevDeleted, parkedRows, parkLimitAlert, restartStuckAlerts, settleBrevStops, storageDph } from "./brev-park";
 import { ownerOf, type Cluster } from "./cluster/store";
 import { stopCluster } from "./collector";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import type { Env } from "./env";
-import { brevNoStopMarginH, providerImpl, providerSpend, type ProviderInstance } from "./providers";
+import { providerImpl, providerSpend, type ProviderInstance } from "./providers";
 import { utcDay } from "./util";
 
 export interface ProvidersCollect {
@@ -21,38 +21,15 @@ export interface ProvidersCollect {
   summary: Record<string, { instances: number; running: number; spend_per_hr: number; month_usd: number; budget_usd: number | null }>;
 }
 
-/** Brev VMs the budget floor cannot stop (types Brev cannot stop: owner decision 2026-10-13, launched like any other):
- * how many, their $/hr, and the hours ahead the floor warns for them (BREV_NOSTOP_MARGIN_H). */
-export interface Unstoppable {
-  n: number;
-  dph: number;
-  margin_h: number;
-}
-/** Budget alerts and whether to stop (pure: unit-tested). VMs a stop cannot end (`un`: Brev types that can't be
- * stopped) keep billing past the floor, so the warning comes early: once this month's spend plus their $/hr for
- * `un.margin_h` hours reaches 80 % of the budget; at the floor the message says they keep running. */
-export function budgetDecision(p: OtherProviderId, title: string, month: number, budget: number | null, stopOnFloor: boolean, un: Unstoppable = { n: 0, dph: 0, margin_h: 0 }): { alert: AlertIn | null; stop: boolean } {
+/** Budget alerts and whether to stop (pure: unit-tested). */
+export function budgetDecision(p: OtherProviderId, title: string, month: number, budget: number | null, stopOnFloor: boolean): { alert: AlertIn | null; stop: boolean } {
   if (budget === null) return { alert: null, stop: false };
-  const keep = un.n
-    ? `; ${un.n} Brev VM${un.n > 1 ? "s" : ""} at $${un.dph.toFixed(2)}/hr ($${(un.dph * 24).toFixed(2)}/day) can't be stopped (a stop leaves ${un.n > 1 ? "them" : "it"} running): delete ${un.n > 1 ? "them" : "it"} yourself (fv-control.sh brev parked / delete-parked <id>, or the Pods page)`
-    : "";
   if (month >= budget)
     return {
-      alert: { key: `${p}_budget`, kind: `${p}_budget`, severity: "critical", message: `${title}: $${month.toFixed(2)} spent this month, at or over the budget $${budget}${stopOnFloor ? ": stopping its pods" : ""}${keep}`, action: stopOnFloor ? "stop" : undefined },
+      alert: { key: `${p}_budget`, kind: `${p}_budget`, severity: "critical", message: `${title}: $${month.toFixed(2)} spent this month, at or over the budget $${budget}${stopOnFloor ? ": stopping its pods" : ""}`, action: stopOnFloor ? "stop" : undefined },
       stop: stopOnFloor,
     };
-  if (month >= 0.8 * budget) return { alert: { key: `${p}_budget`, kind: `${p}_budget`, severity: "warn", message: `${title}: $${month.toFixed(2)} spent this month, ${Math.round((month / budget) * 100)}% of the budget $${budget}${keep}` }, stop: false };
-  const ahead = month + un.dph * un.margin_h;
-  if (un.n && ahead >= 0.8 * budget)
-    return {
-      alert: {
-        key: `${p}_budget`,
-        kind: `${p}_budget`,
-        severity: "warn",
-        message: `${title}: $${month.toFixed(2)} spent this month + $${un.dph.toFixed(2)}/hr that the budget floor cannot stop for ${un.margin_h} h = $${ahead.toFixed(2)}, ${Math.round((ahead / budget) * 100)}% of the budget $${budget} (warned early)${keep}`,
-      },
-      stop: false,
-    };
+  if (month >= 0.8 * budget) return { alert: { key: `${p}_budget`, kind: `${p}_budget`, severity: "warn", message: `${title}: $${month.toFixed(2)} spent this month, ${Math.round((month / budget) * 100)}% of the budget $${budget}` }, stop: false };
   return { alert: null, stop: false };
 }
 
@@ -83,14 +60,15 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     let dphSum = 0;
     // Brev keep-on-stop (brev-park.ts): parked / held instances are ours by their record, billed as storage.
     const parked = new Map(p === "brev" ? (await parkedRows(env)).map((r) => [r.workspace_id, r]) : []);
-    // Brev VMs a stop left running (running_unstoppable: its type cannot be stopped; stop_failed): billed at their full
-    // GPU $/hr until the owner deletes them, also once their cluster released them (no cluster_pods row needed).
-    const stuck = new Map(p === "brev" ? (await brevUnstoppable(env)).filter((x) => x.released).map((x) => [x.row.workspace_id, x]) : []);
+    // Brev VMs whose stop has not succeeded yet (stop_pending; parked / held before Brev shows them STOPPED): billed at
+    // their full GPU $/hr while Brev lists them not stopped, also once their cluster released them (owner rule
+    // 2026-10-13: the cron stops them or deletes them).
+    const stuck = new Map(p === "brev" ? (await brevStopping(env)).map((x) => [x.row.workspace_id, x]) : []);
     const seenIds = new Set(insts.map((i) => i.id));
     for (const i of insts) {
       seen.add(i.key);
       const pk = parked.get(i.id);
-      if (pk) {
+      if (pk && !(stuck.has(i.id) && i.state !== "stopped")) {
         const sdph = storageDph(pk);
         stmts.push(
           env.DB.prepare(
@@ -113,7 +91,7 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
       const released = !!(st && (!row || row.deleted_at));
       const cid = released ? null : (row?.cluster_id ?? null);
       const c = cid ? byId.get(cid) : undefined;
-      const owner = c ? ownerOf(c) : st ? "brev:unstoppable" : `external:${p}`;
+      const owner = c ? ownerOf(c) : st ? "brev:stopping" : `external:${p}`;
       const dph = st ? Number(st.dph ?? row?.cost_per_hr ?? 0) : Number(row?.cost_per_hr ?? 0);
       const live = i.state === "running";
       if (live) running++, (dphSum += dph);
@@ -141,14 +119,16 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     for (const [pod, r] of ctl) if (!r.deleted_at && !seen.has(pod) && t - r.created_at > 10 * 60_000) stmts.push(env.DB.prepare("UPDATE cluster_pods SET status = 'gone', deleted_at = ? WHERE pod_id = ? AND deleted_at IS NULL").bind(t, pod));
     for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
     if (p === "brev") {
-      res.kinds.push("brev_parked", "brev_parked_over_limit", "brev_stop_failed", "brev_restart_stuck", "brev_unstoppable");
+      // brev_stop_failed / brev_unstoppable (before the owner rule of 2026-10-13) stay listed so open ones resolve.
+      res.kinds.push("brev_parked", "brev_parked_over_limit", "brev_stop_pending", "brev_stop_deleted", "brev_restart_stuck", "brev_stop_failed", "brev_unstoppable");
       // Records whose workspace Brev no longer lists (10 min after their last change): gone.
       for (const id of await brevUnlisted(env, seenIds, t - 10 * 60_000)) await markBrevDeleted(env, id, "gone", "no longer listed by Brev");
-      // Owner rule 2026-10-11: fv-control never deletes a Brev VM on its own. The park thresholds (brev_park_max,
-      // brev_park_max_days) are an alert; a stop Brev refused is tried again, and alerted with its $/hr while it runs.
+      // Owner rule 2026-10-11: a stopped Brev VM is never deleted by fv-control; the park thresholds (brev_park_max,
+      // brev_park_max_days) are an alert. Owner rule 2026-10-13: a VM whose stop does not succeed is deleted: stops not
+      // yet confirmed STOPPED (BREV_STOP_TIMEOUT_S), stop_pending ones (BREV_DEPLOYING_WAIT_S), legacy failed stops.
       const lim = await parkLimitAlert(env, pol, t);
       if (lim) res.alerts.push(lim);
-      const rs = await retryRefusedStops(env, new Map(insts.map((i) => [i.id, i.raw || i.state])), t);
+      const rs = await settleBrevStops(env, new Map(insts.map((i) => [i.id, i.raw || i.state])), t);
       res.alerts.push(...rs.alerts);
       res.actions.push(...rs.actions);
       // A warm restart Brev keeps STOPPED (2026-10-12: 700 s, no reason seen): an alert with Brev's own status message.
@@ -158,7 +138,7 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     const spend = await providerSpend(env, p);
     const budget = impl.budget(env);
     res.summary[p] = { instances: insts.length, running, spend_per_hr: dphSum, month_usd: spend.month, budget_usd: budget };
-    const d = budgetDecision(p, impl.title, spend.month, budget, pol.stop_on_floor, { n: spend.unstoppable, dph: spend.unstoppable_dph, margin_h: p === "brev" ? brevNoStopMarginH(env) : 0 });
+    const d = budgetDecision(p, impl.title, spend.month, budget, pol.stop_on_floor);
     if (d.alert) res.alerts.push(d.alert);
     if (d.stop)
       for (const c of clusters)
