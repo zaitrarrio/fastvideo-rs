@@ -37,6 +37,8 @@ export function fakeR2() {
   const gets: { key: string; range: string | null }[] = [];
   let bad = 0;
   const routes: Record<string, (req: any, res: any) => void> = {};
+  /** Test faults on object GETs: a delay (a slow fetch) and a 404 (a fetch that dies). */
+  const hooks: { delayMs?: (key: string) => number; fail?: (key: string) => boolean } = {};
   const verify = (u: URL, host: string) => {
     const q = u.searchParams;
     const amz = q.get("X-Amz-Date") || "";
@@ -62,14 +64,21 @@ export function fakeR2() {
     if (!obj) return res.writeHead(404).end("<Error><Code>NoSuchKey</Code></Error>");
     const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range || "");
     gets.push({ key, range: req.headers.range || null });
-    if (!m) return res.writeHead(200, { "content-length": obj.length }).end(obj);
-    const a = +m[1]!, b = Math.min(+m[2]!, obj.length - 1);
-    res.writeHead(206, { "content-length": b - a + 1, "content-range": `bytes ${a}-${b}/${obj.length}` }).end(obj.subarray(a, b + 1));
+    const send = () => {
+      if (hooks.fail?.(key)) return res.writeHead(404).end("<Error><Code>NoSuchKey</Code></Error>");
+      if (!m) return res.writeHead(200, { "content-length": obj.length }).end(obj);
+      const a = +m[1]!, b = Math.min(+m[2]!, obj.length - 1);
+      res.writeHead(206, { "content-length": b - a + 1, "content-range": `bytes ${a}-${b}/${obj.length}` }).end(obj.subarray(a, b + 1));
+    };
+    const d = hooks.delayMs?.(key) ?? 0;
+    if (d > 0) setTimeout(send, d);
+    else send();
   });
   return {
     objects,
     gets,
     routes,
+    hooks,
     bad: () => bad,
     async start() {
       await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));

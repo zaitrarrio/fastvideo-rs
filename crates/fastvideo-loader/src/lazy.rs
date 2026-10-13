@@ -101,6 +101,8 @@ impl LazyView<'_> {
 
 pub struct LazyStore {
     files: Vec<(PathBuf, Mmap)>,
+    /// Per file: its progress map while it is still being fetched ([`crate::stream`]); `None` for a whole file.
+    gates: Vec<Option<std::sync::Arc<crate::stream::PartsGate>>>,
     index: HashMap<String, Entry>,
     /// Tensor names by [`Entry::id`].
     names: Vec<String>,
@@ -316,11 +318,23 @@ impl LazyStore {
     /// last-one-wins.
     pub fn open_files(paths: &[PathBuf]) -> Result<Self, LoaderError> {
         let mut files = Vec::with_capacity(paths.len());
+        let mut gates = Vec::with_capacity(paths.len());
         let mut index = HashMap::new();
         let mut names = Vec::new();
         let mut metadata = HashMap::new();
         for (fi, path) in paths.iter().enumerate() {
+            // A file still arriving: its map exists before the file does, so it is seen here or never needed.
+            let gate = crate::stream::PartsGate::open(path)?;
             let map = crate::raw::mmap_file(path)?;
+            if let Some(g) = &gate {
+                if g.size() != map.len() as u64 {
+                    return Err(err(
+                        path,
+                        format!("{} bytes, its progress map says {}", map.len(), g.size()),
+                    ));
+                }
+                g.wait(0, 8)?;
+            }
             if map.len() < 8 {
                 return Err(err(path, "shorter than a safetensors header"));
             }
@@ -329,6 +343,9 @@ impl LazyStore {
                 .checked_add(hlen)
                 .filter(|&b| b <= map.len())
                 .ok_or_else(|| err(path, format!("header length {hlen} exceeds the file")))?;
+            if let Some(g) = &gate {
+                g.wait(8, base as u64)?;
+            }
             let header: serde_json::Value = serde_json::from_slice(&map[8..base])
                 .map_err(|e| err(path, format!("header: {e}")))?;
             let obj = header
@@ -406,10 +423,12 @@ impl LazyStore {
                 names.push(name.clone());
             }
             files.push((path.clone(), map));
+            gates.push(gate);
         }
         let shared = crate::prefetch::new_shared(names.len(), files.len());
         Ok(Self {
             files,
+            gates,
             index,
             names,
             shared,
@@ -432,7 +451,7 @@ impl LazyStore {
             })
             .collect();
         let paths: Vec<PathBuf> = self.files.iter().map(|(p, _)| p.clone()).collect();
-        crate::prefetch::submit(&self.shared, &paths, &ranges)
+        crate::prefetch::submit(&self.shared, &paths, &self.gates, &ranges)
     }
 
     /// [`Self::prefetch`] of every key some group matches, group by group (a
@@ -502,6 +521,11 @@ impl LazyStore {
             .index
             .get(key)
             .ok_or_else(|| LoaderError::Message(format!("missing weight key: {key}")))?;
+        // Still arriving: only bytes of verified parts are handed out (the read-ahead waits the same way).
+        if let Some(g) = &self.gates[e.file] {
+            g.wait(e.start as u64, e.end as u64)
+                .map_err(|x| LoaderError::Message(format!("{key}: {x}")))?;
+        }
         if self.shared.consume(e.id) {
             crate::prefetch::VIEWED_BYTES.fetch_add(
                 (e.end - e.start) as u64,

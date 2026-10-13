@@ -680,6 +680,8 @@ pub fn read_pth_nested(
     keep: impl Fn(&str) -> bool,
 ) -> Result<BTreeMap<String, PthTensor>> {
     let ctx = |e: LoaderError| err(format!("{}: {e}", path.display()));
+    // A file still being fetched (crate::stream) is waited for whole: the zip index sits at its end.
+    crate::stream::wait_file(path)?;
     let mut f = std::fs::File::open(path).map_err(|e| err(format!("{}: {e}", path.display())))?;
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;

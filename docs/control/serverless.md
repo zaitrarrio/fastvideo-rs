@@ -84,7 +84,7 @@ template's start is `bash -c`):
    `FV_SKIP_DRIVER_CHECK=1` skips it.
 1. Reports `boot` to `POST /ingest/v1/sls-report`. Every later step is logged with the time of day and the seconds
    since the container started (`[fv-boot] 05:01:02 +13.4s step fetcher: 0.2s (from the image)`) and reported
-   as a `step` (`tools`, `fetcher`, `fetch`, `aux`). The boot row keeps them (`steps`, migration 0011) and the
+   as a `step` (`tools`, `fetcher`, `fetch`, `aux`; streaming adds `stream_ready` and `load_overlap`). The boot row keeps them (`steps`, migration 0011) and the
    outlook's `last_boot.breakdown` shows `<step>_s`, so a slow boot says where its time went
    (docs/ops/r2-bench-2026-10-12.md findings 3 and 4).
 2. **Cache check.** For every tree in `FV_R2_TREE_REVS` (`dest@rev …`) it looks for `$FV_WEIGHTS/<dest>/.complete`
@@ -102,6 +102,14 @@ template's start is `bash -c`):
      partial files.
    - Below sm_100 (H100, H200: `nvidia-smi --query-gpu=compute_cap`) it skips the `*_mxfp8` pre-quantized DiTs,
      which the engine cannot use there (`FV_R2_SKIP_TREES`).
+   - **Streaming** (2026-10-13; docs/ops/r2-weights.md §11). When the image's fv-serve carries the marker
+     `fv-streaming-fetch/1`, and the worker has no cache volume, and `FV_R2_STREAM` is not `0`, the fetcher runs
+     in the background with `--stream`. The boot goes on as soon as the files fv-serve reads unguarded and the aux
+     trees are in place (step `stream_ready`). fv-serve then starts, reniced by 5, with
+     `FASTVIDEO_STREAMING_FETCH=1`, and its loader waits on each file's progress map. The fetch's end reports
+     `fetch` and `load_overlap`.
+   - A fetch that fails after fv-serve started reports `failed` and stops fv-serve (SIGTERM). Runpod restarts the
+     container and the fetch resumes in place. Health stays not-ready until loading completes.
 4. The aux files (TAE, LPIPS) come **from R2 with the trees** (`auxiliary/tae`, `auxiliary/lpips`; `slsFetchTrees`)
    and are then checked by SHA-256 against their rows. A missing or different one still comes from its pinned
    URL (an add-only cache volume does that, and `WEIGHTS_R2_AUX=0` turns the R2 path off). Then it reports
