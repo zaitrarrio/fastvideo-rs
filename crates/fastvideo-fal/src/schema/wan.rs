@@ -16,7 +16,7 @@
 //! | `shift` (5B) | `5` | number 1..=10 |
 //! | `interpolator_model` | `"none"` | `none film rife` |
 //! | `num_interpolated_frames` | `0` | integer 0..=4; > 0 with `film`/`rife` is refused (no interpolator on this server) |
-//! | `enable_prompt_expansion` | `false` | boolean (accepted, no expansion) |
+//! | `enable_prompt_expansion` | `false` | boolean; `true` rewrites the prompt when the server has an `[upsampler]` (docs/serve/prompt-upsampling.md), else accepted with no effect |
 //! | `image_url` (i2v) | required | string |
 //! | `seed` | `null` | integer or null |
 //! | `enable_safety_checker` | `true` | boolean (accepted, no checker) |
@@ -28,8 +28,8 @@
 //! 480, 576 or 704.
 
 use fastvideo_protocol::{
-    Anchor, ApiError, CanvasSpec, GenerationRequest, Keyframe, Length, MediaRef, ProtocolId, Ratio,
-    Snap, Task, TimingSpec,
+    Anchor, ApiError, CanvasSpec, ExpansionMode, GenerationRequest, Keyframe, Length, MediaRef, PromptExpansion, ProtocolId,
+    Ratio, Snap, Task, TimingSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -266,6 +266,9 @@ impl WanInput {
         r.output.inline_data_uri = self.sync_mode;
         r.note_noop("enable_safety_checker");
         r.note_noop("enable_prompt_expansion");
+        if self.enable_prompt_expansion {
+            r.prompt_expansion = Some(PromptExpansion::explicit(ExpansionMode::Balanced, "enable_prompt_expansion"));
+        }
         r.timing = TimingSpec {
             length: Length::Frames { value: self.num_frames, snap: Snap::AlignUp },
             fps: Some(self.frames_per_second),

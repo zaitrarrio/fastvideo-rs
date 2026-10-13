@@ -50,6 +50,7 @@ CRATES=(
   fastvideo-media
   fastvideo-webrtc
   fastvideo-serve-kit
+  fastvideo-upsampler
   fastvideo-openai-videos
   fastvideo-minimax
   fastvideo-ltxapi
@@ -121,7 +122,10 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets
   run cargo test -p fastvideo-reactor --features proto-codegen --lib
   run cargo clippy -p fastvideo-serve -p fastvideo-webrtc -p fastvideo-media -p fastvideo-serve-kit -p fastvideo-deploy \
-    -p fastvideo-fal --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
+    -p fastvideo-fal -p fastvideo-upsampler --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
+  # The prompt upsampler's HTTP client against a local fake LLM
+  # (docs/serve/prompt-upsampling.md).
+  run cargo test -p fastvideo-upsampler --features http
   # serve-kit's HTTP fetch / callback-receiver tests only exist with `fetch`.
   run cargo test -p fastvideo-serve-kit --features fetch
   # fal WMA director (WP-14): protocol units, WebRTC end to end against the

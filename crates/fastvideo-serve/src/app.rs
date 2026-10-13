@@ -85,6 +85,40 @@ impl Drop for App {
     }
 }
 
+/// The prompt upsampler from `[upsampler]` (docs/serve/prompt-upsampling.md):
+/// `None` when the section is absent, or (logged) when the build has no
+/// HTTP client or the client cannot be made. Never logs the key.
+pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>> {
+    let u = c.upsampler.as_ref()?;
+    #[cfg(feature = "http-client")]
+    {
+        let key = (!u.api_key.is_empty()).then(|| u.api_key.expose().to_owned());
+        match fastvideo_upsampler::Service::http(&u.base_url, key, u.settings()) {
+            Ok(s) => {
+                tracing::info!(
+                    backend = %s.describe(),
+                    timeout_ms = u.timeout_ms,
+                    hedge = u.hedge,
+                    default_on = u.default_on,
+                    api_key = if u.api_key.is_empty() { "unset" } else { "set" },
+                    "prompt upsampler configured"
+                );
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "[upsampler] is configured but unusable: prompt expansion stays off");
+                None
+            }
+        }
+    }
+    #[cfg(not(feature = "http-client"))]
+    {
+        let _ = u;
+        tracing::warn!("[upsampler] is configured but this build has no `http-client` feature: prompt expansion stays off");
+        None
+    }
+}
+
 /// The engine from `[engine]`.
 pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
     build_engine_with_clock(c, None)
@@ -447,6 +481,9 @@ impl App {
         }
         if let Some(dir) = &config.artifacts.local_dir {
             builder = builder.artifacts_root(dir);
+        }
+        if let Some(u) = upsampler_service(&config) {
+            builder = builder.upsampler(u);
         }
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());

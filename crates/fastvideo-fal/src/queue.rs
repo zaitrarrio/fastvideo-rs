@@ -167,7 +167,9 @@ pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> 
             file_name: Some(a.file_name.clone()),
             file_size: Some(a.bytes),
         },
-        expanded_prompt: None,
+        // The upsampler's rewrite (docs/serve/prompt-upsampling.md); null
+        // when the prompt was not expanded.
+        expanded_prompt: job.expanded_prompt.clone(),
         // The effective seed (the request's, or the one the server drew),
         // on every task: fal's r2v schema requires it, and on t2v/i2v it
         // is an extra key clients ignore but callers need to reproduce a

@@ -342,6 +342,12 @@ pub struct Job {
     /// `None` (and absent on the wire) for untraced jobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<String>,
+    /// The prompt the job generated with when the server's upsampler rewrote
+    /// the request's (docs/serve/prompt-upsampling.md): fal returns it as
+    /// `expanded_prompt`. `None` (absent on the wire) when nothing was
+    /// rewritten, including a rewrite that failed and fell back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expanded_prompt: Option<String>,
 }
 
 impl Job {
@@ -376,6 +382,7 @@ impl Job {
             cancel_requested: false,
             input_sources: Vec::new(),
             trace: None,
+            expanded_prompt: None,
         }
     }
 

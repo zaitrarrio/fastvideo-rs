@@ -21,7 +21,7 @@ rel() {
     CUDARC_CUDA_VERSION=13000 NVCC="$CUDA_HOME/bin/nvcc" "$@"
 }
 serve_pkgs=(-p fastvideo-protocol -p fastvideo-engine-service -p fastvideo-media -p fastvideo-webrtc
-  -p fastvideo-serve-kit -p fastvideo-openai-videos -p fastvideo-minimax -p fastvideo-ltxapi -p fastvideo-fal
+  -p fastvideo-serve-kit -p fastvideo-upsampler -p fastvideo-openai-videos -p fastvideo-minimax -p fastvideo-ltxapi -p fastvideo-fal
   -p fastvideo-reactor -p fastvideo-deploy -p fastvideo-autoscale -p fastvideo-serve -p fastvideo-dispatch-proto
   -p fastvideo-edge)
 case "$group" in

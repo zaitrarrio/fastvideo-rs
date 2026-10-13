@@ -14,7 +14,9 @@
 # tests/console/live_echo.cjs (the Live input page with a fake camera and
 # microphone publishing to the loopback echo model) and
 # tests/console/ui_gaps.cjs (Live stream, Native API, the causal and script
-# director, tier / recipe / draft, reference limits, per-API snippets).
+# director, tier / recipe / draft, reference limits, per-API snippets) and
+# tests/console/director_upsample.cjs (director prompt upsampling against a
+# fake OpenAI-compatible LLM).
 # scripts/serve/check.sh runs it when FV_SERVE_UI=1.
 set -euo pipefail
 
@@ -39,14 +41,15 @@ export FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}"
 # FV_CONSOLE_ONLY=avatar runs only the avatar page test.
 if [[ "${FV_CONSOLE_ONLY:-}" == avatar ]]; then exec node tests/console/avatar.cjs; fi
 # FV_CONSOLE_TESTS picks a subset (e.g. `live_echo`); default: all.
-for t in ${FV_CONSOLE_TESTS:-smoke director_playback avatar live_echo ui_gaps}; do
+for t in ${FV_CONSOLE_TESTS:-smoke director_playback director_upsample avatar live_echo ui_gaps}; do
   case "$t" in
     # Director playback when generation is slower than real time (~50 s).
     # The script avatar page (Reactor avatar mode on the fake engine, ~30 s).
     # Live input: a fake camera through WHIP ingest and the Reactor
     # runtime to the loopback echo model and back (~30 s).
     # The UI-gap pages and fields (~2 min).
-    smoke|director_playback|avatar|live_echo|ui_gaps) node "tests/console/$t.cjs" ;;
+    # Director prompt upsampling against a fake LLM (~30 s).
+    smoke|director_playback|director_upsample|avatar|live_echo|ui_gaps) node "tests/console/$t.cjs" ;;
     *) echo "console tests: unknown test $t" >&2; exit 2 ;;
   esac
 done

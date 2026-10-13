@@ -845,3 +845,174 @@ impl OneshotReq for axum::Router {
         self.oneshot(r).await.unwrap()
     }
 }
+
+// ---- prompt upsampling (docs/serve/prompt-upsampling.md) -------------------------
+
+/// A fake showrunner LLM: call `n` answers beat `n` (Mara on her tower),
+/// after 50 ms; a direction containing "fail" gets a 503.
+struct ShowLlm {
+    n: std::sync::atomic::AtomicUsize,
+    users: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl fastvideo_upsampler::ChatBackend for ShowLlm {
+    async fn complete(&self, req: &fastvideo_upsampler::ChatRequest) -> Result<String, fastvideo_upsampler::UpsampleError> {
+        self.users.lock().unwrap().push(req.user.clone());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if req.user.rsplit("NEW DIRECTION:").next().is_some_and(|d| d.contains("fail")) {
+            return Err(fastvideo_upsampler::UpsampleError::Status { status: 503, body: "down".into() });
+        }
+        let n = self.n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!({
+            "beat_summary": format!("beat {n}"), "entity_ids": ["tower", "mara"], "new_entities": [],
+            "action": format!("Mara step {n}."), "camera": "c", "lighting": "l", "audio": "a", "dialogue": [],
+        })
+        .to_string())
+    }
+}
+
+fn show_llm() -> (Arc<ShowLlm>, Arc<fastvideo_upsampler::Service>) {
+    let llm = Arc::new(ShowLlm { n: Default::default(), users: Mutex::new(Vec::new()) });
+    let settings = fastvideo_upsampler::Settings { model: "fake".into(), hedge: false, timeout: Duration::from_secs(5), ..Default::default() };
+    (llm.clone(), Arc::new(fastvideo_upsampler::Service::new(llm, settings)))
+}
+
+fn world_configure(prompt: &str) -> Value {
+    json!({
+        "type": "configure", "prompt_version": 1, "prompt": prompt, "upsample": true, "style": "35mm film.",
+        "entities": [
+            {"id": "mara", "kind": "character", "name": "Mara", "descriptor": "a wiry woman in a yellow oilskin"},
+            {"id": "tower", "kind": "location", "name": "Lighthouse", "descriptor": "a white lighthouse on black rocks"},
+        ],
+    })
+}
+
+fn segments(msgs: &[Value]) -> Vec<Value> {
+    msgs.iter().filter(|m| m["type"] == "segment_expanded").cloned().collect()
+}
+
+/// A clip session with `upsample`: every chunk's prompt is the showrunner's
+/// segment (location, cast descriptors, action, camera / lighting / sound,
+/// style), reported in `segment_expanded`; a direction becomes the LLM's
+/// NEW DIRECTION once; a failed call falls back to premise + direction and
+/// the stream goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upsampled_clip_session() {
+    let Some(h264) = h264_or_skip() else { return };
+    let (llm, svc) = show_llm();
+    let f = fixture(Opts { h264, upsampler: Some(svc), ..Opts::default() }).await;
+    let mut c = open(&f, "minimax/h3-max/director").await;
+    let info = c.expect("session_info").await;
+    assert_eq!(info["prompt_expander"], "upsampler");
+    assert_eq!(info["upsample"], json!({"available": true, "default": false, "max_prompt_chars": 3200, "server_message_types": ["segment_expanded"]}));
+    c.send(world_configure("A lighthouse keeper on a stormy island.")).await;
+    assert_eq!(c.expect("configured").await["upsample"], true);
+    let (_, others) = chunks_until(&mut c, |m| m["chunk_index"] == 1).await;
+    let s = segments(&others);
+    assert!(s.len() >= 2, "{others:?}");
+    let want0 = "a white lighthouse on black rocks Mara: a wiry woman in a yellow oilskin Mara step 0. Camera: c Lighting: l Sound: a No spoken words. 35mm film.";
+    assert_eq!((s[0]["chunk_index"].as_u64(), s[0]["segment_index"].as_u64(), s[0]["prompt"].as_str()), (Some(0), Some(0), Some(want0)), "{}", s[0]);
+    assert_eq!((s[0]["fallback"].as_bool(), s[0]["direction_id"].is_null(), s[0]["summary"].as_str()), (Some(false), true, Some("beat 0")));
+    assert_eq!((s[1]["chunk_index"].as_u64(), s[1]["segment_index"].as_u64()), (Some(1), Some(1)));
+    {
+        let u = llm.users.lock().unwrap();
+        assert!(u[0].starts_with("WORLD BIBLE:\nA lighthouse keeper on a stormy island.\n\nESTABLISHED ENTITIES:\n- mara (character, \"Mara\")\n- tower (location, \"Lighthouse\")"), "{}", u[0]);
+        assert!(u[0].ends_with("NEW DIRECTION:\n(none, advance the story one beat)"));
+        assert!(u[1].contains("[0] beat 0\n") && u[1].contains(want0));
+    }
+
+    // A direction: expanded for the next undispatched chunk.
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "The storm arrives."})).await;
+    let (_, others) = chunks_until(&mut c, |m| m["prompt_version"] == 2).await;
+    let s = segments(&others);
+    let d = s.iter().find(|m| m["prompt_version"] == 2).unwrap_or_else(|| panic!("{others:?}"));
+    assert_eq!((d["direction_id"].as_str(), d["fallback"].as_bool()), (Some("2"), Some(false)), "{d}");
+    assert!(llm.users.lock().unwrap().iter().any(|u| u.ends_with("NEW DIRECTION:\nThe storm arrives.")));
+
+    // A direction whose call fails: the raw premise + direction, reported.
+    c.send(json!({"type": "prompt", "prompt_version": 3, "prompt": "Everything should fail."})).await;
+    let (_, others) = chunks_until(&mut c, |m| m["prompt_version"] == 3).await;
+    let fb = segments(&others).into_iter().find(|m| m["prompt_version"] == 3).unwrap_or_else(|| panic!("{others:?}"));
+    assert_eq!(fb["fallback"], true, "{fb}");
+    assert_eq!(fb["prompt"], "A lighthouse keeper on a stormy island. Everything should fail.");
+    assert_eq!(fb["error"], "upsampler LLM 503: down");
+    assert!(fb["segment_index"].is_null());
+    // ...and the next chunk is upsampled again.
+    let (_, others) = chunks_until(&mut c, |_| true).await;
+    let (_, more) = chunks_until(&mut c, |_| true).await;
+    assert!(segments(&others).iter().chain(&segments(&more)).any(|m| m["fallback"] == false), "{others:?} {more:?}");
+
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// Without `[upsampler]`, `upsample: true` is refused softly: `configured`
+/// says so and the session runs on the raw prompts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upsample_without_an_upsampler() {
+    let Some(h264) = h264_or_skip() else { return };
+    let f = fixture(Opts { h264, ..Opts::default() }).await;
+    let mut c = open(&f, "minimax/h3-max/director").await;
+    let info = c.expect("session_info").await;
+    assert_eq!(info["prompt_expander"], "none");
+    assert!(info.get("upsample").is_none());
+    c.send(world_configure("A lighthouse keeper.")).await;
+    let cfgd = c.expect("configured").await;
+    assert_eq!(cfgd["upsample"], false);
+    assert!(cfgd["upsample_error"].as_str().unwrap().contains("[upsampler]"));
+    let (_, others) = chunks_until(&mut c, |m| m["chunk_index"] == 0).await;
+    assert!(segments(&others).is_empty());
+    // A strict schema still: unknown entity fields and kinds are refused.
+    let e = fastvideo_fal::director::messages::parse(
+        &json!({"type": "configure", "prompt_version": 1, "prompt": "p", "entities": [{"id": "a", "kind": "animal", "name": "A", "descriptor": "d"}]}).to_string(),
+    )
+    .unwrap_err();
+    assert!(e.error.contains("animal"), "{e:?}");
+    let e = fastvideo_fal::director::messages::parse(
+        &json!({"type": "configure", "prompt_version": 1, "prompt": "p", "entities": [{"id": "a", "kind": "prop", "name": "A", "descriptor": "d"}, {"id": "a", "kind": "prop", "name": "B", "descriptor": "d"}]}).to_string(),
+    )
+    .unwrap_err();
+    assert!(e.error.contains("not unique"), "{e:?}");
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// A causal session (fake LongLive) with `upsample`: the rollout starts on
+/// the first segment's prompt, a new segment goes to the engine every
+/// director chunk, and a direction reaches it at the next block.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upsampled_causal_session() {
+    let Some(h264) = h264_or_skip() else { return };
+    let (llm, svc) = show_llm();
+    let f = fixture(Opts { h264, upsampler: Some(svc), ..Opts::default() }).await;
+    let mut c = open(&f, "fastvideo/longlive/director").await;
+    let info = c.expect("session_info").await;
+    assert_eq!(info["upsample"]["max_prompt_chars"], 1800, "umT5: {info}");
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "upsample": true, "memory": 2})).await;
+    assert_eq!(c.expect("configured").await["upsample"], true);
+    let (_, others) = chunks_until(&mut c, |m| m["chunk_index"] == 2).await;
+    let s = segments(&others);
+    assert!(s.len() >= 2, "a new segment every director chunk: {others:?}");
+    assert_eq!((s[0]["first_block"].as_u64(), s[0]["chunk_index"].is_null()), (Some(0), true));
+    // No cast registered: the ids are dropped, the prompt is the beat.
+    assert_eq!(s[0]["prompt"], "Mara step 0. Camera: c Lighting: l Sound: a No spoken words.");
+    {
+        let p = f.engine_prompts.lock().unwrap();
+        assert_eq!(p[0], "Mara step 0. Camera: c Lighting: l Sound: a No spoken words.");
+        assert!(p.len() >= 2, "{p:?}");
+    }
+    c.send(json!({"type": "prompt", "prompt_version": 2, "prompt": "The storm arrives."})).await;
+    let (_, others) = chunks_until(&mut c, |m| m["prompt_version"] == 2).await;
+    assert!(others.iter().any(|m| m["type"] == "prompt_applied" && m["prompt_version"] == 2), "{others:?}");
+    let d = segments(&others).into_iter().find(|m| m["prompt_version"] == 2).unwrap_or_else(|| panic!("{others:?}"));
+    assert_eq!(d["direction_id"], "2");
+    {
+        // memory 2: at most the last two segments as context.
+        let u = llm.users.lock().unwrap();
+        let last = u.iter().rfind(|u| u.ends_with("NEW DIRECTION:\nThe storm arrives.")).unwrap();
+        assert_eq!(last.matches("\n[").count(), 2, "{last}");
+    }
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}

@@ -195,6 +195,14 @@ pub struct GenerationRequest {
     /// deserialized request has this empty.
     #[serde(default, skip_deserializing)]
     pub accepted_noop: Vec<&'static str>,
+    /// The protocol's prompt-expansion flag (fal `prompt_expansion_mode`,
+    /// `enable_prompt_expansion`, MiniMax `prompt_optimizer`, …), applied by
+    /// the submit pipeline when the server has an `[upsampler]`
+    /// (docs/serve/prompt-upsampling.md); `None`: the request has none.
+    /// Not serialized: it is spent before the job exists, and the request
+    /// goldens stay as they were.
+    #[serde(skip)]
+    pub prompt_expansion: Option<PromptExpansion>,
     /// Where status changes are delivered (fal `fal_webhook`, MiniMax
     /// `callback_url`); copied onto `Job::callback`. **Addition to design
     /// §3.1** (see the WP-01 notes in design §8).
@@ -222,8 +230,14 @@ impl GenerationRequest {
             output: OutputOptions::default(),
             edit: None,
             accepted_noop: Vec::new(),
+            prompt_expansion: None,
             callback: None,
         }
+    }
+
+    /// Drops a no-op note (the field turned out to have an effect).
+    pub fn unnote_noop(&mut self, field: &str) {
+        self.accepted_noop.retain(|f| *f != field);
     }
 
     /// Every media ref the request carries, in order: keyframes, references,
@@ -242,6 +256,64 @@ impl GenerationRequest {
         if !self.accepted_noop.contains(&field) {
             self.accepted_noop.push(field);
         }
+    }
+}
+
+/// How much the prompt is rewritten before generation (fal's
+/// `prompt_expansion_mode` values; the boolean flags map `true` to
+/// `Balanced`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpansionMode {
+    Disabled,
+    Balanced,
+    Quality,
+}
+
+impl ExpansionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExpansionMode::Disabled => "disabled",
+            ExpansionMode::Balanced => "balanced",
+            ExpansionMode::Quality => "quality",
+        }
+    }
+    /// `disabled` / `balanced` / `quality` (and H3 base's `fast`, as
+    /// balanced); anything else is `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "disabled" | "none" | "off" => Some(ExpansionMode::Disabled),
+            "balanced" | "fast" => Some(ExpansionMode::Balanced),
+            "quality" => Some(ExpansionMode::Quality),
+            _ => None,
+        }
+    }
+}
+
+/// A request's prompt-expansion flag, normalized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PromptExpansion {
+    pub mode: ExpansionMode,
+    /// The client sent the flag. `false`: the protocol's documented default,
+    /// applied only when the operator sets `[upsampler] default_on`.
+    pub explicit: bool,
+    /// The protocol field it came from (dropped from `accepted_noop` when
+    /// the expansion runs).
+    pub field: &'static str,
+}
+
+impl PromptExpansion {
+    /// The client asked for `mode` in `field`.
+    pub fn explicit(mode: ExpansionMode, field: &'static str) -> Self {
+        Self { mode, explicit: true, field }
+    }
+    /// The protocol's default for an omitted `field`.
+    pub fn default_for(mode: ExpansionMode, field: &'static str) -> Self {
+        Self { mode, explicit: false, field }
+    }
+    /// Whether to rewrite, given the server's `default_on`.
+    pub fn wanted(&self, default_on: bool) -> bool {
+        self.mode != ExpansionMode::Disabled && (self.explicit || default_on)
     }
 }
 

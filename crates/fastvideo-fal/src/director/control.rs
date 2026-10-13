@@ -32,8 +32,11 @@
 //!   `invalid_initial_script`); a text beat directs from the first chunk
 //!   that starts at or after its offset.
 //!
-//! We have no prompt expander: a chunk's prompt is the series premise
-//! followed by the current direction (the latest text update).
+//! A chunk's prompt is the series premise followed by the current
+//! direction (the latest text update). With the prompt upsampler on
+//! (`configure.upsample`, docs/serve/prompt-upsampling.md) the session
+//! replaces it with the upsampler's segment prompt, taking
+//! [`ChunkPlan::direction`] as the new direction when it changes.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -198,6 +201,10 @@ struct Planned {
 pub struct ChunkPlan {
     pub index: u32,
     pub prompt: String,
+    /// The direction composed into `prompt` after the premise (`None`:
+    /// the premise alone): what the prompt upsampler takes as a new
+    /// direction when it changes.
+    pub direction: Option<String>,
     pub seconds: f64,
     /// `configure.image_url` for chunk 0 (exact first frame).
     pub first_image: Option<PathBuf>,
@@ -686,6 +693,7 @@ impl Control {
                 let plan = ChunkPlan {
                     index,
                     prompt: self.compose(direction.as_deref()),
+                    direction: direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: p.seconds,
                     first_image,
                     end_image: p.end_image,
@@ -697,6 +705,7 @@ impl Control {
                 ChunkPlan {
                     index,
                     prompt: self.compose(self.direction.clone().as_deref()),
+                    direction: self.direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: self.limits.chunk_seconds,
                     first_image,
                     end_image: None,

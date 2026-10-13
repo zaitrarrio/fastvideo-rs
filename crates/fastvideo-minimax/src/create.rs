@@ -29,8 +29,8 @@ use axum::response::Response;
 use fastvideo_models::h3::config::H3Geometry;
 use fastvideo_protocol::{
     negotiate_noted, precheck, Anchor, ApiError, BatchProtocol, CallbackSpec, CanvasSpec, ErrorCtx,
-    Family, GapId, GenerationRequest, HttpReply, Job, JobId, KeyId, Keyframe, Length, ListQuery,
-    MediaKind, MediaRef, ModelCaps, NormalizeCtx, ProtocolId, Ratio, Reference, Snap,
+    ExpansionMode, Family, GapId, GenerationRequest, HttpReply, Job, JobId, KeyId, Keyframe, Length, ListQuery,
+    MediaKind, MediaRef, ModelCaps, NormalizeCtx, PromptExpansion, ProtocolId, Ratio, Reference, Snap,
     StagedInputs, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
 use fastvideo_serve_kit::handlers::{error_reply, into_response};
@@ -68,6 +68,12 @@ pub struct CreateBody {
     pub extra: Option<Value>,
     #[serde(default)]
     pub callback_url: Option<String>,
+    /// MiniMax V1's `prompt_optimizer` (boolean; not in the V2 spec): an
+    /// explicit opt-in (`true`) or opt-out (`false`) of the server's prompt
+    /// upsampler (docs/serve/prompt-upsampling.md). Any other value is
+    /// ignored, as unknown fields always were.
+    #[serde(default)]
+    pub prompt_optimizer: Option<Value>,
 }
 
 /// `ContentItem`.
@@ -204,6 +210,11 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
         .collect();
     req.references = content.refs;
 
+    if let Some(Value::Bool(on)) = b.prompt_optimizer {
+        let mode = if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled };
+        req.prompt_expansion = Some(PromptExpansion::explicit(mode, "prompt_optimizer"));
+        req.note_noop("prompt_optimizer");
+    }
     match &b.extra {
         None | Some(Value::Null) => {}
         Some(_) if !model.accepts_extra() => {
@@ -223,11 +234,20 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
                         ))
                     }
                 }
-                // We have no prompt expander (design §4.3): accepted, no effect.
+                // Rewritten by the server's upsampler when it has one
+                // (docs/serve/prompt-upsampling.md); else accepted, no effect.
                 req.note_noop("prompt_expansion_mode");
+                if let Some(mode) = v.as_str().and_then(ExpansionMode::parse) {
+                    req.prompt_expansion = Some(PromptExpansion::explicit(mode, "prompt_expansion_mode"));
+                }
             }
         }
         Some(_) => return Err(bad("extra", "extra must be an object")),
+    }
+    // H3-Max documents `prompt_expansion_mode` default `balanced`: applied
+    // only when the operator turns `[upsampler] default_on` on.
+    if model.accepts_extra() && req.prompt_expansion.is_none() {
+        req.prompt_expansion = Some(PromptExpansion::default_for(ExpansionMode::Balanced, "prompt_expansion_mode"));
     }
 
     if let Some(u) = b.callback_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -544,7 +564,7 @@ fn input_usage(staged: &StagedInputs) -> Value {
 pub async fn submit_generation(
     ctx: &ServeCtx,
     mm: &MiniMax,
-    req: GenerationRequest,
+    mut req: GenerationRequest,
     owner: Option<KeyId>,
     mut echo: Value,
 ) -> Result<Job, ApiError> {
@@ -556,6 +576,9 @@ pub async fn submit_generation(
     let (caps, via_tier) = mm.resolve_caps(&req.model, &alias, &models)?;
     let caps = fastvideo_protocol::route_task(caps, req.task, &models);
     let four = four_second_frames(&req, caps)?;
+    // `prompt_optimizer` / `extra.prompt_expansion_mode` with an upsampler
+    // (docs/serve/prompt-upsampling.md); else a no-op, as before.
+    let expansion = fastvideo_serve_kit::expand_request(ctx, &mut req, caps).await;
     let mut plan = req.clone();
     if four.is_some() {
         plan.timing.length = Length::ModelDefault;
@@ -595,6 +618,11 @@ pub async fn submit_generation(
     // docs/serve/tracing.md: the request's trace (set by the HTTP layer).
     let trace = fastvideo_trace::current();
     job.trace = trace.map(|t| t.traceparent(t.parent));
+    job.expanded_prompt = expansion.expanded;
+    if let Some(l) = expansion.log {
+        tracing::info!(job = %id, model = %caps.id, "{l}");
+        job.logs.push(fastvideo_protocol::LogLine::info(l, now));
+    }
     for n in notes {
         tracing::info!(job = %id, model = %caps.id, "{n}");
         job.logs.push(fastvideo_protocol::LogLine::info(n, now));
