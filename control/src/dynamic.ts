@@ -11,12 +11,15 @@ import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
 import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
-import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, VARIANTS } from "./enums";
-import { brevGpuOptions, providerImpl } from "./providers";
+import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, VARIANTS, type OtherProviderId } from "./enums";
+import { brevGpuOptions, providerImpl, providerView } from "./providers";
 import { brevInstanceTypes } from "./brev";
+import { parkedView } from "./brev-park";
 import { listTags } from "./ghcr";
 import { knownVolumes, SLS_RESERVED } from "./serverless/spec";
 import { SLS_PRESETS } from "./serverless/presets";
+import { ttlCached } from "./ttlcache";
+import { HttpError } from "./util";
 
 export interface GpuType {
   id: string;
@@ -26,17 +29,15 @@ export interface GpuType {
   community_price: number | null;
   stock: string | null;
 }
-let gpuCache: { at: number; list: GpuType[] } | null = null;
-/** Runpod GPU types; a price of 0 means "not offered" in that cloud (null here); cheapest secure first. */
-export async function gpuTypes(env: Env): Promise<GpuType[]> {
-  if (gpuCache && Date.now() - gpuCache.at < 300_000) return gpuCache.list;
-  const d = await runpod.gql<any>(env, "{ gpuTypes { id displayName memoryInGb securePrice communityPrice lowestPrice(input: {gpuCount: 1}) { stockStatus } } }");
-  const list: GpuType[] = (d?.gpuTypes || [])
-    .filter((g: any) => g.id && g.id !== "unknown")
-    .map((g: any) => ({ id: g.id, display: g.displayName || g.id, memory_gb: g.memoryInGb ?? null, secure_price: g.securePrice > 0 ? g.securePrice : null, community_price: g.communityPrice > 0 ? g.communityPrice : null, stock: g.lowestPrice?.stockStatus ?? null }))
-    .sort((a: GpuType, b: GpuType) => (a.secure_price ?? 99) - (b.secure_price ?? 99));
-  gpuCache = { at: Date.now(), list };
-  return list;
+/** Runpod GPU types; a price of 0 means "not offered" in that cloud (null here); cheapest secure first. 5-minute cache, one call in flight. */
+export function gpuTypes(env: Env): Promise<GpuType[]> {
+  return ttlCached("runpod:gpu-types", 300_000, async () => {
+    const d = await runpod.gql<any>(env, "{ gpuTypes { id displayName memoryInGb securePrice communityPrice lowestPrice(input: {gpuCount: 1}) { stockStatus } } }");
+    return (d?.gpuTypes || [])
+      .filter((g: any) => g.id && g.id !== "unknown")
+      .map((g: any) => ({ id: g.id, display: g.displayName || g.id, memory_gb: g.memoryInGb ?? null, secure_price: g.securePrice > 0 ? g.securePrice : null, community_price: g.communityPrice > 0 ? g.communityPrice : null, stock: g.lowestPrice?.stockStatus ?? null }))
+      .sort((a: GpuType, b: GpuType) => (a.secure_price ?? 99) - (b.secure_price ?? 99));
+  });
 }
 
 export { VARIANTS, FAKE_MODELS } from "./enums";
@@ -63,19 +64,26 @@ async function imageShas(env: Env): Promise<string[]> {
   return shas;
 }
 
-export async function dynamicEnums(env: Env, clusterId?: string) {
+/**
+ * The editors' lists. `live: false` (GET /api/schemas/dynamic?live=0, the launch forms on open) makes no upstream
+ * call: no Runpod GPU types, no GHCR tags, no provider listing (only what the config says); the forms then ask
+ * providerDetails for the provider picked. The default (live) is the full view (the JSON editor, the CLI).
+ */
+export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: boolean } = {}) {
+  const live = opts.live !== false;
   const [gpus, heads, clusters, keys, tagShas, endpoints] = await Promise.all([
-    gpuTypes(env).catch(() => [] as GpuType[]),
+    live ? gpuTypes(env).catch(() => [] as GpuType[]) : ([] as GpuType[]),
     releaseHeads(env).catch(() => ({ available: false, heads: [] as any[], history: [] })),
     listClusters(env),
     env.DB.prepare("SELECT key, scope, COUNT(*) AS n FROM env_vars GROUP BY key, scope ORDER BY key").all<{ key: string; scope: string; n: number }>(),
-    imageShas(env).catch(() => [] as string[]),
+    live ? imageShas(env).catch(() => [] as string[]) : ([] as string[]),
     env.DB.prepare("SELECT name FROM serverless_endpoints WHERE deleted_at IS NULL ORDER BY name").all<{ name: string }>().catch(() => ({ results: [] as { name: string }[] })),
   ]);
   const vols = knownVolumes();
   const channels = [...new Set(["stable", "latest", ...heads.heads.map((h: any) => h.channel)])];
   const pools = clusterId ? (await getCluster(env, clusterId).catch(() => null))?.spec.pools.map((p) => p.id) ?? [] : [...new Set(clusters.flatMap((c) => c.spec.pools.map((p) => p.id)))];
   return {
+    live,
     gpu_types: gpus,
     regions: Object.entries(REGIONS)
       .filter(([id]) => regionAvailable(id))
@@ -85,7 +93,7 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
       const h = heads.heads.find((x: any) => x.channel === ch);
       return { id: ch, sha: h?.git_sha?.slice(0, 7) ?? null, promoted_at: h?.promoted_at ?? null, digests: h?.digests ?? {} };
     }),
-    shas: [...new Set([...heads.history.map((h: any) => String(h.git_sha).slice(0, 7)), ...tagShas.map((x) => x.slice(0, 7))])].slice(0, 60),
+    shas: shaList(heads.history, tagShas),
     releases: heads.history.slice(0, 30).map((h: any) => ({ id: String(h.id), detail: `${h.channel} → ${String(h.git_sha).slice(0, 7)} (${h.action})` })),
     volumes: vols.map((v) => ({ id: v.id, dc: v.dc, region: v.region, detail: `${v.region} weights volume in ${v.dc}` })),
     data_centers: RUNPOD_DATA_CENTERS.map((dc) => ({ id: dc, detail: vols.some((v) => v.dc === dc) ? "weights volume here" : "" })),
@@ -111,10 +119,52 @@ export async function dynamicEnums(env: Env, clusterId?: string) {
     // Launch providers (docs/serve/deploy-gmi-brev.md): Runpod, and GMI / Brev when their secrets are set (detail says why not).
     providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
     // Brev: live prices, stoppable types first (keep-on-stop), parked instances (docs/serve/deploy-gmi-brev.md §3.4).
-    provider_gpus: [
-      ...providerImpl("gmi").gpus(env).map((g) => ({ id: g, detail: providerImpl("gmi").title, provider: "gmi" })),
-      ...(providerImpl("brev").off(env) ? brevInstanceTypes(env).map((g) => ({ id: g, detail: "NVIDIA Brev", provider: "brev" })) : await brevGpuOptions(env).catch(() => [])),
-    ],
+    provider_gpus: [...configuredGpus(env, "gmi"), ...(live && !providerImpl("brev").off(env) ? await brevGpuOptions(env).catch(() => []) : configuredGpus(env, "brev"))],
     provider_regions: env.GMI_DEFAULT_IDC ? [{ id: env.GMI_DEFAULT_IDC, detail: "GMI default IDC" }] : [],
   };
+}
+
+const shaList = (history: any[], tagShas: string[]) => [...new Set([...history.map((h: any) => String(h.git_sha).slice(0, 7)), ...tagShas.map((x) => x.slice(0, 7))])].slice(0, 60);
+/** The commits with images (GET /api/schemas/dynamic?images=1): releases and GHCR's sha tags, asked when a form's image source is a commit. */
+export async function imageCommits(env: Env) {
+  const [heads, tagShas] = await Promise.all([releaseHeads(env).catch(() => ({ history: [] as any[] })), imageShas(env).catch(() => [] as string[])]);
+  return { shas: shaList(heads.history, tagShas) };
+}
+
+/** A provider's allowed GPU products / instance types as the config lists them (no upstream call). */
+const configuredGpus = (env: Env, p: OtherProviderId) => (p === "brev" ? brevInstanceTypes(env) : providerImpl(p).gpus(env)).map((g) => ({ id: g, detail: providerImpl(p).title, provider: p }));
+
+export const LAUNCH_PROVIDERS = ["runpod", ...OTHER_PROVIDERS] as const;
+
+/**
+ * One launch provider's live details (GET /api/schemas/dynamic?provider=<p>), asked by the launch forms once that
+ * provider is picked: Runpod's GPU types with $/hr and stock; GMI's products with price and availability in the
+ * default IDC; Brev's instance types (stoppable first, live price, parked count) and its parked / held VMs; for GMI
+ * and Brev the month's spend against the budget. Only that provider's API is called (an off one: none). The upstream
+ * lists are cached (Runpod 5 min, Brev 1 h, GMI 60 s); the D1 parts (spend, parked) are read fresh.
+ */
+export async function providerDetails(env: Env, p: string) {
+  if (!(LAUNCH_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no launch provider ${p} (${LAUNCH_PROVIDERS.join(", ")})`);
+  if (p === "runpod") {
+    const gpus = await gpuTypes(env).catch(() => null);
+    return { provider: "runpod", enabled: true, reason: null, live_ok: !!gpus?.length, gpu_types: gpus || [] };
+  }
+  const id = p as OtherProviderId;
+  const impl = providerImpl(id);
+  const off = impl.off(env);
+  const view = await providerView(env, id);
+  const base = { provider: id, enabled: !off, reason: view.reason, budget: { budget_usd: view.budget_usd, month_usd: view.month_usd, running_dph: view.running_dph, parked_dph: view.parked_dph } };
+  if (off) return { ...base, live_ok: false, provider_gpus: configuredGpus(env, id), provider_regions: [], ...(id === "brev" ? { parked: [] } : {}) };
+  if (id === "brev") {
+    const [gpus, pk] = await Promise.all([brevGpuOptions(env).then((x) => ({ ok: true, x }), () => ({ ok: false, x: configuredGpus(env, "brev") })), parkedView(env)]);
+    return { ...base, live_ok: gpus.ok, provider_gpus: gpus.x, provider_regions: [], parked: pk.parked, parked_usd_per_day: pk.storage_usd_per_day, park_policy: pk.policy.line };
+  }
+  // GMI: each allowed product's price and availability in the default IDC (one products call, cached 60 s).
+  const offers = await ttlCached(`gmi:offers:${env.GMI_API || ""}:${env.GMI_DEFAULT_IDC || ""}:${impl.gpus(env).join(",")}`, 60_000, () => Promise.all(impl.gpus(env).map((g) => impl.offer(env, g)))).catch(() => null);
+  const provider_gpus = impl.gpus(env).map((g) => {
+    const o = offers?.find((x) => x.gpu === g);
+    const bits = [impl.title, o?.usd_per_hr != null ? `$${o.usd_per_hr.toFixed(2)}/hr` : "price unknown", ...(o?.in_stock === false ? [`not available${o.region ? ` in ${o.region}` : ""} now`] : o?.in_stock ? ["available"] : [])];
+    return { id: g, detail: bits.join(" · "), provider: id, usd_per_hr: o?.usd_per_hr ?? null, in_stock: o?.in_stock ?? null };
+  });
+  return { ...base, live_ok: !!offers, provider_gpus, provider_regions: env.GMI_DEFAULT_IDC ? [{ id: env.GMI_DEFAULT_IDC, detail: "GMI default IDC" }] : [] };
 }

@@ -8,12 +8,72 @@ import type { Issue, Path, Schema } from "../schema";
 let schemas: Promise<Record<string, Schema>> | null = null;
 const dyns = new Map<string, Promise<Dynamic>>();
 export const loadSchemas = (api: Api) => (schemas ||= api("/api/schemas").then((r) => r.schemas));
-export const loadDyn = (api: Api, cluster = "") => {
-  if (!dyns.has(cluster)) dyns.set(cluster, api(`/api/schemas/dynamic${cluster ? `?cluster=${encodeURIComponent(cluster)}` : ""}`).catch(() => ({})));
-  return dyns.get(cluster)!;
+/** The lists; `live: false` (the launch forms): no provider's API is called, see loadProvider. */
+export const loadDyn = (api: Api, cluster = "", o: { live?: boolean } = {}) => {
+  const live = o.live !== false;
+  const k = `${cluster}|${live}`;
+  const q = [cluster ? `cluster=${encodeURIComponent(cluster)}` : "", live ? "" : "live=0"].filter(Boolean).join("&");
+  if (!dyns.has(k)) dyns.set(k, api(`/api/schemas/dynamic${q ? `?${q}` : ""}`).catch(() => ({})));
+  return dyns.get(k)!;
 };
 /** Forget the live lists (after a create: names, endpoints). */
-export const resetDyn = () => dyns.clear();
+export const resetDyn = () => (dyns.clear(), providers.clear());
+
+/**
+ * One launch provider's live details (GET /api/schemas/dynamic?provider=<p>: GPU / instance types with $/hr and stock,
+ * GMI's IDC, Brev's parked VMs, the budget), asked only once that provider is picked; kept for the page's session.
+ * A load aborted by its signal (the pick changed first) is forgotten, so the next pick asks again.
+ */
+const providers = new Map<string, Promise<ProviderDetails>>();
+export interface ProviderDetails {
+  provider: string;
+  enabled: boolean;
+  reason: string | null;
+  live_ok: boolean;
+  gpu_types?: any[];
+  provider_gpus?: { id: string; detail: string; provider: string }[];
+  provider_regions?: { id: string; detail: string }[];
+  parked?: any[];
+  parked_usd_per_day?: number;
+  budget?: { budget_usd: number | null; month_usd: number; running_dph: number; parked_dph: number };
+}
+export const providerLoaded = (p: string) => providers.has(p);
+export function loadProvider(api: Api, p: string, signal?: AbortSignal): Promise<ProviderDetails> {
+  if (!providers.has(p)) {
+    const pr = api(`/api/schemas/dynamic?provider=${encodeURIComponent(p)}`, { signal });
+    providers.set(p, pr);
+    pr.catch(() => providers.get(p) === pr && providers.delete(p));
+  }
+  return providers.get(p)!;
+}
+let shas: Promise<string[]> | null = null;
+/** The commits with images (GHCR tags too: ?images=1), folded into a form's lists once its image source is a commit. */
+export async function loadShas(api: Api, dyn: Record<string, any>): Promise<void> {
+  shas ||= api("/api/schemas/dynamic?images=1").then((r) => r.shas || [], () => ((shas = null), []));
+  const got = await shas;
+  dyn.shas = [...new Set([...(dyn.shas || []), ...got])];
+}
+/** Folds a provider's details into a form's lists (its GPU types; its share of provider_gpus / provider_regions). */
+export function mergeProvider(dyn: Record<string, any>, d: ProviderDetails) {
+  if (d.gpu_types) dyn.gpu_types = d.gpu_types;
+  if (d.provider_gpus) dyn.provider_gpus = [...(dyn.provider_gpus || []).filter((g: any) => g.provider !== d.provider), ...d.provider_gpus];
+  if (d.provider === "gmi") dyn.provider_regions = d.provider_regions || [];
+  (dyn.provider_details ||= {})[d.provider] = d;
+}
+/** One line on what was loaded for a provider (under the provider field): budget, parked VMs, a list that failed. */
+export function providerSummary(d: ProviderDetails): string {
+  const bits: string[] = [];
+  if (!d.enabled) return d.reason || `${d.provider} is off`;
+  if (d.provider === "runpod") bits.push(d.live_ok ? `${(d.gpu_types || []).length} GPU types with live $/hr and stock` : "Runpod's live GPU list is unavailable now (the types are still offered)");
+  else {
+    const n = (d.provider_gpus || []).length;
+    bits.push(d.live_ok ? `${n} ${d.provider === "brev" ? "instance type" : "product"}${n === 1 ? "" : "s"} with live prices` : "the live price list is unavailable now");
+    const b = d.budget;
+    if (b) bits.push(`this month $${b.month_usd.toFixed(2)}${b.budget_usd != null ? ` of the $${b.budget_usd} budget` : " (no budget set: launches are refused)"}${b.running_dph ? `, $${b.running_dph.toFixed(2)}/hr running` : ""}`);
+    if (d.provider === "brev") bits.push(d.parked?.length ? `${d.parked.length} parked / held VM${d.parked.length > 1 ? "s" : ""} ($${(d.parked_usd_per_day || 0).toFixed(2)}/day storage)` : "no parked VMs");
+  }
+  return bits.join(" · ");
+}
 
 /**
  * Every field each form offers, by schema: the UI coverage test
