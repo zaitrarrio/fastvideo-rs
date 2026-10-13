@@ -23,6 +23,10 @@ pub struct ChatRequest {
     /// `response_format` as sent (the director's strict `json_schema`);
     /// `None`: plain text.
     pub response_format: Option<Value>,
+    /// Images for a vision model (`data:` or `http(s)` URLs), sent as
+    /// OpenAI `image_url` content parts after the user text. Empty for a
+    /// text-only request (the user message stays a plain string).
+    pub images: Vec<String>,
 }
 
 /// Why an upsampling call produced nothing usable. Messages never carry
@@ -75,6 +79,13 @@ pub trait ChatBackend: Send + Sync + 'static {
     /// What to log about the backend (never the key).
     fn describe(&self) -> String {
         "chat backend".into()
+    }
+    /// Tokens of `text` in the LLM's own tokenizer, when the server can
+    /// say (llama-server and vLLM `POST /tokenize`); `None` otherwise
+    /// (the caller estimates). Must be cheap to call again once known
+    /// unsupported.
+    async fn tokenize(&self, _text: &str) -> Option<usize> {
+        None
     }
 }
 

@@ -95,6 +95,16 @@ impl H3Tokenizer {
             .all(|((_, id), want)| *id == want)
     }
 
+    /// Tokens `prompt` encodes to (verbatim, as [`Self::encode`]), without
+    /// the limit checks: what a prompt writer measures against
+    /// [`H3_MAX_PROMPT_TOKENS`].
+    pub fn count(&self, prompt: &str) -> Result<usize, String> {
+        self.inner
+            .encode(prompt, false)
+            .map(|e| e.get_ids().len())
+            .map_err(|e| format!("tokenize: {e}"))
+    }
+
     /// Token ids of `prompt`, verbatim: no template, no special tokens.
     pub fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
         let encoding = self

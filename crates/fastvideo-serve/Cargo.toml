@@ -28,6 +28,9 @@ fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
 fastvideo-serve-kit.workspace = true
 fastvideo-upsampler.workspace = true
+# The text encoders' tokenizers for the upsampler's prompt limits (src/tokens.rs).
+fastvideo-models.workspace = true
+tokenizers.workspace = true
 fastvideo-deploy.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

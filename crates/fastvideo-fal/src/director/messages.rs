@@ -601,6 +601,13 @@ pub struct SegmentExpanded<'a> {
     pub prompt: &'a str,
     pub error: Option<String>,
     pub latency_ms: f64,
+    /// Segments still planned (expanded) in the deck after this one.
+    pub planned: usize,
+    /// `prompt`'s size in `prompt_unit` (tokens by the model's tokenizer,
+    /// else characters) and the family's limit in that unit.
+    pub prompt_length: usize,
+    pub prompt_limit: usize,
+    pub prompt_unit: &'a str,
 }
 
 pub fn segment_expanded(s: &SegmentExpanded<'_>) -> Value {
@@ -617,6 +624,10 @@ pub fn segment_expanded(s: &SegmentExpanded<'_>) -> Value {
         "fallback": s.segment.is_none(),
         "error": s.error,
         "latency_ms": s.latency_ms,
+        "planned": s.planned,
+        "prompt_length": s.prompt_length,
+        "prompt_limit": s.prompt_limit,
+        "prompt_unit": s.prompt_unit,
     })
 }
 

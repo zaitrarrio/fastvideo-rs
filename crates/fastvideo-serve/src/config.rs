@@ -614,8 +614,33 @@ pub struct UpsamplerCfg {
     /// (fal `balanced`, MiniMax H3-Max `balanced`, fal ingredient and LTX
     /// on, director on). Off (default): upsampling is opt-in per request.
     pub default_on: bool,
-    /// Prompt budgets per model family, in characters.
+    /// Prompt budgets per model family, in characters (used while the
+    /// family's tokenizer is not available; else its token limit).
     pub max_chars: MaxCharsCfg,
+    /// Director: the LLM's context in tokens (default 28000: a local
+    /// Qwen3-4B / Qwen3-VL-4B at 32k, with room for the answer).
+    pub context_tokens: usize,
+    /// Director: segments planned ahead (fal's `prompt_deck_size`, default 6).
+    pub deck_size: usize,
+    /// The LLM is a vision model (Qwen3-VL behind llama-server `--mmproj`):
+    /// the director sends the first frame and end frames as `image_url`
+    /// parts (`FV_UPSAMPLER_VISION`).
+    pub vision: bool,
+    /// Ask the LLM server's `/tokenize` (llama-server, vLLM) for exact
+    /// premise counts; without it, or off, tokens are estimated.
+    pub tokenize: bool,
+    /// Text-encoder `tokenizer.json` per family (default: under the first
+    /// `[[models]]` entry's weights of that family).
+    pub tokenizers: TokenizersCfg,
+}
+
+/// `[upsampler.tokenizers]`: paths to `tokenizer.json`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TokenizersCfg {
+    pub h3: Option<String>,
+    pub wan: Option<String>,
+    pub ltx: Option<String>,
 }
 
 impl Default for UpsamplerCfg {
@@ -630,6 +655,11 @@ impl Default for UpsamplerCfg {
             memory: 12,
             default_on: false,
             max_chars: MaxCharsCfg::default(),
+            context_tokens: fastvideo_upsampler::director::DEFAULT_CONTEXT_TOKENS,
+            deck_size: 6,
+            vision: false,
+            tokenize: true,
+            tokenizers: TokenizersCfg::default(),
         }
     }
 }
@@ -666,7 +696,12 @@ impl UpsamplerCfg {
             hedge: self.hedge,
             memory: self.memory as usize,
             max_chars: fastvideo_upsampler::MaxChars { wan: m.wan, ltx: m.ltx, h3: m.h3, other: m.other },
+            max_tokens: fastvideo_upsampler::MaxTokens::default(),
             default_on: self.default_on,
+            context_tokens: self.context_tokens,
+            deck_size: self.deck_size,
+            vision: self.vision,
+            tokenize: self.tokenize,
         }
     }
 
@@ -688,6 +723,12 @@ impl UpsamplerCfg {
         let m = self.max_chars;
         if [m.wan, m.ltx, m.h3, m.other].iter().any(|&n| !(200..=20_000).contains(&n)) {
             return bad("max_chars values must be 200..20000".into());
+        }
+        if !(4_096..=1_000_000).contains(&self.context_tokens) {
+            return bad(format!("context_tokens must be 4096..1000000, got {}", self.context_tokens));
+        }
+        if !(1..=12).contains(&self.deck_size) {
+            return bad(format!("deck_size must be 1..12, got {}", self.deck_size));
         }
         Ok(())
     }
@@ -1234,6 +1275,15 @@ impl Config {
         }
         if let Some(v) = env.var("FV_UPSAMPLER_HEDGE") {
             u.hedge = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_VISION") {
+            u.vision = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_CONTEXT_TOKENS") {
+            u.context_tokens = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_CONTEXT_TOKENS={v} is not a number")))?;
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_DECK_SIZE") {
+            u.deck_size = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_DECK_SIZE={v} is not a number")))?;
         }
         if let Some(v) = env.var("FV_UPSAMPLER_TIMEOUT_MS") {
             u.timeout_ms = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds")))?;

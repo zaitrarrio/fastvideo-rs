@@ -12,7 +12,7 @@
 //!   `720p`, `768p` and `1080p` (H3: `480p`/`768p`, `1080p` with the opt-in
 //!   H3 1080P tier; LTX: all four). `720p` is ours, not in fal's schema;
 //!   older clients never ask for it;
-//! - `prompt_expander: "none"` (the session reports `"upsampler"` and an
+//! - `prompt_expander: "none"` (the session reports `"fast"`, fal's value, and an
 //!   `upsample` object when the server has one, docs/serve/prompt-upsampling.md),
 //!   `accelerations: ["none"]`;
 //! - the chunk length is a session choice (`configure.chunk_duration`, ours):
