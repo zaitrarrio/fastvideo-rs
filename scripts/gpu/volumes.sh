@@ -17,6 +17,12 @@ FV_EU_VOLUME_ID=jg48s6o1w0
 FV_EU_VOLUME_NAME=fv-weights-h3-ltx-hy
 FV_EU_DC=EUR-IS-1
 FV_EU_GPUS="NVIDIA RTX PRO 6000 Blackwell Server Edition"
+# The trees a smaller H3 + LTX weights volume holds (owner decision 2026-10-13, "eu volume - reduce to 500 gb
+# plan"; 462.45 GB in weights-r2.tsv). r2-fill-volume.sh fills a volume with them from R2. Everything else
+# comes from R2 (weights_source r2).
+FV_EU_VOLUME_TREES="h3-base h3-base/text_encoder_fp8 h3-base/transformer_prequant_4step-vsa_mxfp8 \
+h3-base/transformer_prequant_sol-h3_mxfp8 FastH3-4-step-Preview-v1-LoRA h3-ref2va ltx25 ltx25-dev \
+ltx25-ic-lora-ingredients upscaler h3-to-ltx auxiliary/tae auxiliary/lpips"
 
 FV_US_VOLUME_ID=""   # empty = US unavailable (was s2k01690bi, deleted)
 FV_US_VOLUME_NAME="" # empty = US unavailable (was fv-weights-b200-us, deleted)
