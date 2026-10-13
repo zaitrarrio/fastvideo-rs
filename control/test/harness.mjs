@@ -79,7 +79,7 @@ export function startMock() {
   // through presigned GETs (checked here with node:crypto against `secret`), with Range. `fetched`: what pods pulled.
   // Runpod's data centres and their GPU stock (dataCenters { gpuAvailability }: the launch screen's table).
   m.runpodDcs = [
-    { id: "EUR-IS-1", name: "EUR-IS-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
+    { id: "EU-RO-1", name: "EU-RO-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
       { available: true, stockStatus: "Low", gpuTypeId: "NVIDIA RTX PRO 6000 Blackwell Server Edition" },
       { available: false, stockStatus: null, gpuTypeId: "NVIDIA H100 80GB HBM3" },
     ] },

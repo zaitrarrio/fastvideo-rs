@@ -242,20 +242,20 @@ try {
   assert.equal(await page.$(T("runpod")), null, "no Runpod table");
   await page.unroute("**/api/providers/runpod/instance-types");
 
-  // ---- Runpod: GPU types × data centres; only EUR-IS-1 (the weights volume) is launchable; the launch submits the pick
+  // ---- Runpod: GPU types × data centres; only EU-RO-1 (the weights volume) is launchable; the launch submits the pick
   await pick("runpod");
   await loaded("runpod");
   const rp = await names("runpod");
-  assert.ok(rp.includes("NVIDIA RTX PRO 6000 Blackwell Server Edition@EUR-IS-1") && rp.includes("NVIDIA H100 80GB HBM3@US-CA-2") && rp.includes("NVIDIA H200@US-CA-2"), rp.join(", "));
+  assert.ok(rp.includes("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1") && rp.includes("NVIDIA H100 80GB HBM3@US-CA-2") && rp.includes("NVIDIA H200@US-CA-2"), rp.join(", "));
   assert.match(await page.getAttribute(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"]`, "title"), /no fv weights volume in US-CA-2/);
-  const rtx = await page.$$eval(`${T("runpod")} tr[data-row="NVIDIA RTX PRO 6000 Blackwell Server Edition@EUR-IS-1"] td`, (tds) => tds.map((t) => t.textContent));
+  const rtx = await page.$$eval(`${T("runpod")} tr[data-row="NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1"] td`, (tds) => tds.map((t) => t.textContent));
   assert.equal(rtx[2], "yes (Low)");
   assert.equal(rtx[6], "Blackwell");
   assert.equal(rtx[10], "datacenter");
   await page.click(`${T("runpod")} th[data-col="usd_per_hr"] button`);
-  await page.click(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EUR-IS-1"]`);
-  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EUR-IS-1"][aria-selected="true"]`);
-  assert.match(await page.textContent(`${T("runpod")} [data-it-selected]`), /Selected: NVIDIA H100 80GB HBM3 · 1× H100 SXM 80 GB · \$3\.29\/hr · EUR-IS-1/);
+  await page.click(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EU-RO-1"]`);
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EU-RO-1"][aria-selected="true"]`);
+  assert.match(await page.textContent(`${T("runpod")} [data-it-selected]`), /Selected: NVIDIA H100 80GB HBM3 · 1× H100 SXM 80 GB · \$3\.29\/hr · EU-RO-1/);
   await (await page.$(T("runpod"))).screenshot({ path: `${img}/instance-table-runpod.png` });
   // Launch: the preflight and the create are answered here (the body is what is checked).
   let posted = null;

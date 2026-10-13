@@ -24,7 +24,7 @@ const RP_TYPES = [
   { id: "unknown", displayName: "unknown", memoryInGb: 0, securePrice: 0 },
 ];
 const RP_DCS = [
-  { id: "EUR-IS-1", name: "EUR-IS-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
+  { id: "EU-RO-1", name: "EU-RO-1", location: "Europe", storageSupport: false, listed: true, gpuAvailability: [
     { available: true, stockStatus: "Low", gpuTypeId: "NVIDIA RTX PRO 6000 Blackwell Server Edition" },
     { available: false, stockStatus: null, gpuTypeId: "NVIDIA H100 80GB HBM3" },
     { available: true, stockStatus: "Low", gpuTypeId: "AMD Instinct MI300X OAM" },
@@ -101,10 +101,10 @@ describe("normalizeRunpod: GPU types × data centres", () => {
   it("one row per (type, data centre) Runpod lists, one per type no data centre lists; never 'unknown'", () => {
     expect(rows.map((r) => r.id).sort()).toEqual(
       [
-        "NVIDIA RTX PRO 6000 Blackwell Server Edition@EUR-IS-1",
-        "NVIDIA H100 80GB HBM3@EUR-IS-1",
-        "AMD Instinct MI300X OAM@EUR-IS-1",
-        "NVIDIA RTX PRO 4500 Blackwell Server Edition@EUR-IS-1",
+        "NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1",
+        "NVIDIA H100 80GB HBM3@EU-RO-1",
+        "AMD Instinct MI300X OAM@EU-RO-1",
+        "NVIDIA RTX PRO 4500 Blackwell Server Edition@EU-RO-1",
         "NVIDIA H100 80GB HBM3@US-CA-2",
         "NVIDIA GeForce RTX 3070@US-CA-2",
         "NVIDIA H100 80GB HBM3@AP-IN-2",
@@ -113,7 +113,7 @@ describe("normalizeRunpod: GPU types × data centres", () => {
     );
   });
   it("the columns of a launchable row: stock, $/hr, GPU, families, RAM / vCPU (the least per GPU), storage, region; launch fields", () => {
-    const r = by("NVIDIA RTX PRO 6000 Blackwell Server Edition@EUR-IS-1");
+    const r = by("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1");
     expect(r).toMatchObject({
       name: "NVIDIA RTX PRO 6000 Blackwell Server Edition",
       available: true,
@@ -129,11 +129,11 @@ describe("normalizeRunpod: GPU types × data centres", () => {
       vram_total_gb: 96,
       ram_gb: 90,
       vcpu: 16,
-      storage_type: "container disk + network volume (jg48s6o1w0)",
+      storage_type: "container disk + network volume (bz0ofkfx45)",
       storage_kind: "elastic",
       storage_min_gb: 5,
       storage_max_gb: 500,
-      region: "EUR-IS-1",
+      region: "EU-RO-1",
       cloud: "Runpod Secure Cloud · Europe",
       supported: true,
       reason: null,
@@ -141,17 +141,17 @@ describe("normalizeRunpod: GPU types × data centres", () => {
     });
     expect(r.spec).toBe("1× RTX PRO 6000 96 GB · ≥ 16 vCPU · ≥ 90 GB RAM");
     // Listed but out of stock there: launchable, not available.
-    expect(by("NVIDIA H100 80GB HBM3@EUR-IS-1")).toMatchObject({ available: false, stock: null, supported: true });
+    expect(by("NVIDIA H100 80GB HBM3@EU-RO-1")).toMatchObject({ available: false, stock: null, supported: true });
   });
   it("not launchable, with the reason: no weights volume, unlisted DC, AMD, not in Secure Cloud, unknown type, no DC", () => {
     expect(by("NVIDIA H100 80GB HBM3@US-CA-2")).toMatchObject({ supported: false, available: true, stock: "High", launch: null, storage_type: "container disk (network volumes offered)" });
-    expect(by("NVIDIA H100 80GB HBM3@US-CA-2").reason).toMatch(/no fv weights volume in US-CA-2.*EUR-IS-1.*weights_source r2/);
+    expect(by("NVIDIA H100 80GB HBM3@US-CA-2").reason).toMatch(/no fv weights volume in US-CA-2.*EU-RO-1.*weights_source r2/);
     expect(by("NVIDIA H100 80GB HBM3@AP-IN-2").reason).toMatch(/AP-IN-2 is not a listed data centre/);
-    expect(by("AMD Instinct MI300X OAM@EUR-IS-1")).toMatchObject({ supported: false, gpu_vendor: "AMD", model_family: "CDNA 3" });
-    expect(by("AMD Instinct MI300X OAM@EUR-IS-1").reason).toMatch(/AMD GPU: the serve images need NVIDIA CUDA/);
+    expect(by("AMD Instinct MI300X OAM@EU-RO-1")).toMatchObject({ supported: false, gpu_vendor: "AMD", model_family: "CDNA 3" });
+    expect(by("AMD Instinct MI300X OAM@EU-RO-1").reason).toMatch(/AMD GPU: the serve images need NVIDIA CUDA/);
     expect(by("NVIDIA GeForce RTX 3070@US-CA-2").reason).toMatch(/not offered in Secure Cloud/);
     expect(by("NVIDIA GeForce RTX 3070@US-CA-2").usd_per_hr).toBeNull();
-    expect(by("NVIDIA RTX PRO 4500 Blackwell Server Edition@EUR-IS-1").reason).toMatch(/not in fv-control's Runpod GPU type list/);
+    expect(by("NVIDIA RTX PRO 4500 Blackwell Server Edition@EU-RO-1").reason).toMatch(/not in fv-control's Runpod GPU type list/);
     expect(by("NVIDIA B200@-")).toMatchObject({ region: null, available: false, supported: false });
     expect(by("NVIDIA B200@-").reason).toMatch(/no data centre lists it now/);
   });
@@ -288,7 +288,7 @@ describe("GET /api/providers/:id/instance-types", () => {
     expect(r.status).toBe(200);
     expect(r.j).toMatchObject({ provider: "runpod", enabled: true, live_ok: true, error: null, cached: false, refresh_limited: null, counts: { total: 8, supported: 2 } });
     expect(r.j.rows[0].supported).toBe(true);
-    expect(r.j.rows[0].id).toBe("NVIDIA RTX PRO 6000 Blackwell Server Edition@EUR-IS-1"); // available before not available
+    expect(r.j.rows[0].id).toBe("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1"); // available before not available
     expect(typeof r.j.at).toBe("number");
     expect(calls.sort()).toEqual(["runpod:dcs", "runpod:types"]);
     const again = await api("/api/providers/runpod/instance-types");
