@@ -23,8 +23,8 @@
 //! of the output's length (the model card's reference input) by the engine.
 
 use fastvideo_protocol::{
-    ApiError, AudioOut, CanvasSpec, GenerationRequest, Length, MediaKind, MediaRef, ProtocolId,
-    Reference, Snap, Task, TimingSpec,
+    ApiError, AudioOut, CanvasSpec, ExpansionMode, GenerationRequest, Length, MediaKind, MediaRef,
+    PromptExpansion, ProtocolId, Reference, Snap, Task, TimingSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,6 +56,11 @@ pub struct IngredientInput {
     pub negative_prompt: Option<String>,
     pub seed: Option<u64>,
     pub sync_mode: bool,
+    /// fal's `enable_prompt_expansion` (default `true` there): `None` when
+    /// absent. Read leniently (a non-boolean is ignored, as the field was
+    /// before). Not serialized (the defaults golden is unchanged).
+    #[serde(skip)]
+    pub enable_prompt_expansion: Option<bool>,
 }
 
 fn int_in(f: &Fields, k: &str, lo: i64, hi: i64, default: i64) -> Result<u32, ApiError> {
@@ -98,6 +103,7 @@ pub(super) fn parse(f: &Fields) -> Result<IngredientInput, ApiError> {
         negative_prompt: f.string("negative_prompt")?.filter(|s| !s.trim().is_empty()).map(str::to_owned),
         seed: super::parse_seed(f)?,
         sync_mode: f.bool("sync_mode", false)?,
+        enable_prompt_expansion: f.lenient_bool("enable_prompt_expansion"),
     })
 }
 
@@ -128,6 +134,15 @@ impl IngredientInput {
         });
         r.sampling.reference_strength = Some(self.reference_strength as f32);
         r.sampling.reference_lora_strength = Some(self.ingredient_strength as f32);
+        // fal expands by default; with an `[upsampler]` that default applies
+        // only under `default_on` (docs/serve/prompt-upsampling.md).
+        r.prompt_expansion = Some(match self.enable_prompt_expansion {
+            Some(on) => {
+                r.note_noop("enable_prompt_expansion");
+                PromptExpansion::explicit(if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled }, "enable_prompt_expansion")
+            }
+            None => PromptExpansion::default_for(ExpansionMode::Balanced, "enable_prompt_expansion"),
+        });
         Ok(r)
     }
 }

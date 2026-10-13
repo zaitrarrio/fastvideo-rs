@@ -29,7 +29,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use fastvideo_protocol::{EditOp, ExtendAt, RetakeMode, VideoEdit};
+use fastvideo_protocol::{EditOp, ExpansionMode, ExtendAt, PromptExpansion, RetakeMode, VideoEdit};
 use fastvideo_protocol::{
     ApiError, AudioInput, AudioRole, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
     JobView, Keyframe, Length, ListQuery, MediaKind, MediaRef, Reference, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
@@ -158,6 +158,12 @@ pub struct NativeBody {
     /// default as many as fit). The rest of the source is copied unchanged.
     #[serde(default)]
     pub context_s: Option<f64>,
+    /// `disabled` (default), `balanced` or `quality`: rewrite the prompt
+    /// with the server's upsampler before generation (a no-op without an
+    /// `[upsampler]`; docs/serve/prompt-upsampling.md). Not on retake /
+    /// extend.
+    #[serde(default)]
+    pub prompt_expansion: Option<String>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -204,7 +210,14 @@ impl SubmitEndpoint for NativeSubmit {
                 return Err(ApiError::invalid_param(field, format!("`{field}` needs `video_url` (retake / extend)")));
             }
         }
+        let expansion = match b.prompt_expansion.as_deref() {
+            None => None,
+            Some(s) => Some(ExpansionMode::parse(s).ok_or_else(|| {
+                ApiError::invalid_param("prompt_expansion", format!("`prompt_expansion` must be disabled, balanced or quality, got `{s}`"))
+            })?),
+        };
         let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
+        r.prompt_expansion = expansion.map(|m| PromptExpansion::explicit(m, "prompt_expansion"));
         r.negative_prompt = b.negative_prompt;
         r.seed = b.seed;
         r.canvas = match (b.size, b.width, b.height, b.aspect_ratio) {
@@ -373,7 +386,7 @@ pub fn job_json(job: &Job, cx: &ViewCtx) -> Value {
             "audio": a.audio.map(|(rate, channels)| json!({"rate": rate, "channels": channels})),
         })
     });
-    json!({
+    let mut v = json!({
         "id": job.external_id,
         "object": "fv.job",
         "status": job.status().as_str(),
@@ -398,7 +411,12 @@ pub fn job_json(job: &Job, cx: &ViewCtx) -> Value {
         "output": output,
         "protocol": job.protocol.as_str(),
         "metrics": metrics_json(job),
-    })
+    });
+    // The upsampler's rewrite, when the prompt was expanded.
+    if let Some(p) = &job.expanded_prompt {
+        v["expanded_prompt"] = json!(p);
+    }
+    v
 }
 
 /// The job's measurements: the engine's `Finished` event metrics

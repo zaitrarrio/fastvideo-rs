@@ -4,7 +4,9 @@ A clip director session (H3, LTX, Wan) builds its stream from chunks, and
 each chunk continues from the previous one's last frame. The session picks
 the chunk length. The default is **5 s**; 10 s is the alternative.
 Causal models (LongLive, SF-Wan) have no chunks to size (one rollout, see
-`director-causal.md`), so they ignore the setting.
+`director-causal.md`), so they ignore the setting. With prompt upsampling
+(`configure.upsample`, [prompt-upsampling.md](prompt-upsampling.md)) each
+chunk is one segment of the upsampler.
 
 ## Protocol
 

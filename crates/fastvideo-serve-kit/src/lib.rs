@@ -38,6 +38,7 @@ pub mod net;
 pub mod sse;
 pub mod store;
 pub mod uploads;
+pub mod upsample;
 
 pub use artifacts::{
     files_router, ArtifactBody, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore, S3Config,
@@ -53,6 +54,7 @@ pub use keys::{admin_routes, AdminToken, KeyStore};
 pub use ingest::{IngestPolicy, Ingestor, KindLimits, Prober};
 pub use store::MemJobStore;
 pub use uploads::{RemoteUploads, UploadStore, UploadTicket};
+pub use upsample::{expand_request, Expansion};
 
 /// Lowercase hex helpers (no extra dependency).
 pub(crate) mod hex {

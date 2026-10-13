@@ -1,0 +1,32 @@
+[package]
+name = "fastvideo-upsampler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve prompt upsampling: an OpenAI-compatible chat client (hedged, timed out), the director's showrunner upsampler and one-shot prompt rewrites (docs/serve/prompt-upsampling.md)."
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+metrics.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+# The OpenAI-compatible HTTP client (feature `http`; fv-serve's
+# `http-client` turns it on). Without it the crate still builds the director
+# and rewrite logic over any `ChatBackend`.
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["time", "macros", "rt-multi-thread", "net", "io-util", "sync"] }
+
+[features]
+default = []
+http = ["dep:reqwest"]
+
+[lints]
+workspace = true

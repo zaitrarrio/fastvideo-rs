@@ -16,6 +16,7 @@
 //! | `camera_motion` | 400 `Unsupported(LtxCameraMotion)` |
 //! | `image_uri` (i2v, required) | `Keyframe{First}`: `I2V` |
 //! | `last_frame_uri` (i2v) | `Keyframe{Last}`: `Keyframes` (E9; 400 `Unsupported(LtxKeyframes)` on an engine without it) |
+//! | `enhance_prompt` (ours, boolean) | `prompt_expansion`: the server's upsampler rewrites the prompt when it has one (absent: only with `default_on`; docs/serve/prompt-upsampling.md) |
 //!
 //! `AudioToVideoRequest` (ltx §2.5, [`normalize_a2v`]): `audio_uri`
 //! (required) drives an `A2V` job whose length follows the audio;
@@ -45,8 +46,8 @@
 use std::sync::Arc;
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExtendAt, GapId, GenerationRequest,
-    HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx, RetakeMode, Snap, SubmitEndpoint, Task, TimingSpec,
+    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExpansionMode, ExtendAt, GapId, GenerationRequest,
+    HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx, PromptExpansion, RetakeMode, Snap, SubmitEndpoint, Task, TimingSpec,
     VideoEdit, ViewCtx,
 };
 use serde_json::{Map, Value};
@@ -338,7 +339,21 @@ pub fn normalize(
     if !generate_audio {
         req.audio_out = AudioOut::Silent;
     }
+    req.prompt_expansion = Some(enhance_prompt(o));
     Ok(req)
+}
+
+/// `enhance_prompt` (ours, named after the LTX CLI's `--enhance-prompt`;
+/// the OAS has no switch and the hosted API enhances server-side): a
+/// boolean opts in or out of the server's upsampler; absent, the hosted
+/// default (on) applies only with `[upsampler] default_on`
+/// (docs/serve/prompt-upsampling.md). A non-boolean is ignored, like any
+/// unknown field.
+fn enhance_prompt(o: &Map<String, Value>) -> PromptExpansion {
+    match field(o, "enhance_prompt").and_then(Value::as_bool) {
+        Some(on) => PromptExpansion::explicit(if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled }, "enhance_prompt"),
+        None => PromptExpansion::default_for(ExpansionMode::Balanced, "enhance_prompt"),
+    }
 }
 
 /// The A2V default model (OAS: `AudioToVideoRequest.model` defaults to it).
@@ -537,6 +552,18 @@ mod tests {
         let r = t2v(with("generate_audio", json!(false))).unwrap();
         assert_eq!(r.audio_out, AudioOut::Silent);
         assert_eq!(t2v(with("duration", json!(8.0))).unwrap().timing, r.timing);
+    }
+
+    #[test]
+    fn enhance_prompt_maps_to_the_upsampler() {
+        use fastvideo_protocol::{ExpansionMode as M, PromptExpansion as P};
+        const F: &str = "enhance_prompt";
+        // Absent: the hosted default (on), applied only with `default_on`.
+        assert_eq!(t2v(base()).unwrap().prompt_expansion, Some(P::default_for(M::Balanced, F)));
+        assert_eq!(t2v(with(F, json!(true))).unwrap().prompt_expansion, Some(P::explicit(M::Balanced, F)));
+        assert_eq!(t2v(with(F, json!(false))).unwrap().prompt_expansion, Some(P::explicit(M::Disabled, F)));
+        // Not a boolean: ignored like any unknown field.
+        assert_eq!(t2v(with(F, json!("yes"))).unwrap().prompt_expansion, Some(P::default_for(M::Balanced, F)));
     }
 
     #[test]

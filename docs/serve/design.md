@@ -162,7 +162,7 @@ text says **native**.
 | Reactor cloud coordinator (`api.reactor.inc`, `/tokens`), recording and HLS clips | The coordinator is closed source (reactor §9). We serve the **local runtime** contract. `RequestClip` answers `clip_failed` |
 | More than one streaming session per GPU | Matches RT (one session per process) and fal `one_session_per_machine: true` |
 | TURN client inside the server; NVENC | See §5.8 and §5.9 |
-| Prompt expansion, safety checker, billing | Fields are accepted and do nothing where the spec permits (§4). Billing numbers are not emitted |
+| Prompt expansion, safety checker, billing | Safety and billing fields are accepted and do nothing where the spec permits (§4); billing numbers are not emitted. Prompt-expansion flags rewrite the prompt when the server has an `[upsampler]` (an OpenAI-compatible LLM; [prompt-upsampling.md](prompt-upsampling.md)), else they stay accepted no-ops |
 
 ---
 
@@ -673,7 +673,7 @@ Source: minimax-fastvideo §1.2-1.7 and §3.2.
 | `resolution: 2K` | — | 400 `Unsupported(H3Resolution2K)` |
 | `duration` 5–15 | `Seconds{AlignUp}` → 17n+5 | OK |
 | `duration` 4 (`MiniMax-H3` only) | — | 400 `Unsupported(H3FourSeconds)` until E3 |
-| `extra.prompt_expansion_mode` (H3-Max only; enum checked) | `accepted_noop` | We have no prompt expander. Rejected for `MiniMax-H3` as the schema says. The query has no expanded-prompt field, so nothing changes on the wire |
+| `extra.prompt_expansion_mode` (H3-Max only; enum checked) | `prompt_expansion` (`accepted_noop` without an upsampler) | With `[upsampler]`: an explicit mode rewrites the prompt (`disabled` never); omitted, the documented `balanced` applies only with `default_on` ([prompt-upsampling.md](prompt-upsampling.md)). Without one: no effect, as before. Rejected for `MiniMax-H3` as the schema says. The query has no expanded-prompt field, so nothing changes on the wire. V1's `prompt_optimizer` (boolean, any model) is read as an explicit opt-in / opt-out (2026-10-13; it was ignored as an unknown field) |
 | `callback_url` | `CallbackSpec::MiniMax` | `POST {"challenge":<random>}`, which must be echoed within 3 s, then `POST {"task":…}` on every status change (INFERRED V1 form, §1.6). An SSRF guard applies |
 
 Status: `Queued` → `queued`, `Running` → `running`, `Succeeded` → `succeeded`,
@@ -740,10 +740,10 @@ Configuring each client (fal §12):
 | `target_audio_url` | `AudioInput{TargetSoundtrack}` | 422 `Unsupported(H3TargetAudio)` until E10 |
 | `seed` | `seed` | Drawn if omitted |
 | `enable_safety_checker` | `accepted_noop` | No checker (risk R8) |
-| `prompt_expansion_mode` (default `balanced`, all accepted) | `accepted_noop` | Output `expanded_prompt: null`. The schema allows null "when prompt expansion was disabled, left the prompt unchanged" (fal §3.4) |
+| `prompt_expansion_mode` (default `balanced`, all accepted) | `prompt_expansion` (`accepted_noop` without an upsampler) | With `[upsampler]`: `balanced` / `fast` / `quality` sent explicitly rewrite the prompt and the output returns it as `expanded_prompt`; omitted, fal's default `balanced` applies only with `default_on`; `disabled` and other strings never ([prompt-upsampling.md](prompt-upsampling.md)). Without an upsampler, or when the call fails (fallback to the client's prompt): `expanded_prompt: null`, which the schema allows "when prompt expansion was disabled, left the prompt unchanged" (fal §3.4) |
 | `sync_mode: true` | `inline_data_uri` | `video.url = data:video/mp4;base64,…` (INFERRED, fal §14 #1) |
 
-Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<app-slug>.mp4",file_size}, expanded_prompt:null, seed, timings:{inference:<denoise s>}}`.
+Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<app-slug>.mp4",file_size}, expanded_prompt:null, seed, timings:{inference:<denoise s>}}` (`expanded_prompt` is the upsampler's rewrite when one ran).
 `<app-slug>` is `minimax-<alias>` for the `minimax/*` apps, else the app
 alias, plus `-<tier>` when the resolved tier is not already a word of it
 (`minimax-h3-max`, `minimax-h3-turbo`, `ltx-2.5-turbo`, `wan-turbo`;
@@ -1198,7 +1198,7 @@ router so `/fal/proxy` reaches `/wma/*`).
   appends (`prompt_deck_size` 6 → `queue_full`); `prompt_applied` at the
   chunk's dispatch. Scripts become chunks cut at beat offsets (end-image
   beats end a chunk exactly there, 5–15 s, ≥ 3 s apart, else
-  `infeasible_timing`). No prompt expander: a chunk's prompt is the premise
+  `infeasible_timing`). Without `configure.upsample` (ours; [prompt-upsampling.md](prompt-upsampling.md)) there is no prompt expander: a chunk's prompt is the premise
   plus the current direction; `memory` is accepted and echoed.
 - `session_info` / `DirectorInfo` report our constants (fps from the model,
   `continuation_context_frames:1`, `resolutions` from the canvas tiers,

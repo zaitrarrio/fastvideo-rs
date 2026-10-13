@@ -64,6 +64,7 @@ pub use request::{
     SamplingOverrides, Snap, Task, TimingSpec, UploadId,
 };
 pub use request::{EditOp, ExtendAt, RetakeMode, VideoEdit};
+pub use request::{ExpansionMode, PromptExpansion};
 pub use stream::{
     AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
     VideoTrack, WIRE_AUDIO_RATE,

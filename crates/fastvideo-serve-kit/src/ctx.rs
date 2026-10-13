@@ -105,6 +105,7 @@ struct Inner {
     callbacks: Arc<CallbackSender>,
     renderers: HashMap<ProtocolId, Arc<dyn CallbackRender>>,
     safety: Arc<dyn SafetyFilter>,
+    upsampler: Option<Arc<fastvideo_upsampler::Service>>,
     files: Arc<FileServer>,
     now: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
 }
@@ -138,6 +139,7 @@ pub struct ServeCtxBuilder {
     prober: Arc<dyn Prober>,
     now: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
     artifacts_root: Option<PathBuf>,
+    upsampler: Option<Arc<fastvideo_upsampler::Service>>,
 }
 
 impl ServeCtxBuilder {
@@ -177,6 +179,12 @@ impl ServeCtxBuilder {
     }
     pub fn safety(mut self, s: Arc<dyn SafetyFilter>) -> Self {
         self.safety = s;
+        self
+    }
+    /// The prompt upsampler (`[upsampler]`, docs/serve/prompt-upsampling.md).
+    /// Without one, prompt-expansion flags stay accepted no-ops.
+    pub fn upsampler(mut self, u: Arc<fastvideo_upsampler::Service>) -> Self {
+        self.upsampler = Some(u);
         self
     }
     pub fn prober(mut self, p: Arc<dyn Prober>) -> Self {
@@ -226,6 +234,7 @@ impl ServeCtxBuilder {
                 callbacks,
                 renderers: self.renderers,
                 safety: self.safety,
+                upsampler: self.upsampler,
                 now: self.now,
             }),
         })
@@ -247,6 +256,7 @@ impl ServeCtx {
             prober: Arc::new(DefaultProber::default()),
             now: Arc::new(OffsetDateTime::now_utc),
             artifacts_root: None,
+            upsampler: None,
         }
     }
 
@@ -276,6 +286,10 @@ impl ServeCtx {
     }
     pub fn safety(&self) -> &Arc<dyn SafetyFilter> {
         &self.inner.safety
+    }
+    /// The prompt upsampler, when `[upsampler]` is configured.
+    pub fn upsampler(&self) -> Option<&Arc<fastvideo_upsampler::Service>> {
+        self.inner.upsampler.as_ref()
     }
     pub fn now(&self) -> OffsetDateTime {
         (self.inner.now)()

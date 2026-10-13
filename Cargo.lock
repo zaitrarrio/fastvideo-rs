@@ -1272,6 +1272,7 @@ dependencies = [
  "fastvideo-media",
  "fastvideo-protocol",
  "fastvideo-serve-kit",
+ "fastvideo-upsampler",
  "fastvideo-webrtc",
  "futures",
  "image",
@@ -1511,11 +1512,13 @@ dependencies = [
  "fastvideo-ltxapi",
  "fastvideo-media",
  "fastvideo-minimax",
+ "fastvideo-models",
  "fastvideo-openai-videos",
  "fastvideo-protocol",
  "fastvideo-reactor",
  "fastvideo-serve-kit",
  "fastvideo-trace",
+ "fastvideo-upsampler",
  "fastvideo-webrtc",
  "futures",
  "hmac",
@@ -1530,6 +1533,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "tokenizers",
  "tokio",
  "tokio-tungstenite",
  "toml",
@@ -1555,6 +1559,7 @@ dependencies = [
  "fastvideo-media",
  "fastvideo-protocol",
  "fastvideo-trace",
+ "fastvideo-upsampler",
  "futures",
  "hmac",
  "image",
@@ -1582,6 +1587,21 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "fastvideo-upsampler"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "futures",
+ "metrics",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
