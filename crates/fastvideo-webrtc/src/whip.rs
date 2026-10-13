@@ -297,7 +297,9 @@ mod client {
                         redact(&self.cfg.url)
                     ))
                 } else {
-                    WebrtcError::Whip(format!("POST {}: {e}", redact(&self.cfg.url)))
+                    // reqwest's message names the URL, whose path can hold
+                    // the publish key (Cloudflare): drop it.
+                    WebrtcError::Whip(format!("POST {}: {}", redact(&self.cfg.url), e.without_url()))
                 }
             })?;
             let status = resp.status().as_u16();
@@ -310,7 +312,7 @@ mod client {
             let body = resp
                 .text()
                 .await
-                .map_err(|e| WebrtcError::Whip(format!("reading answer: {e}")))?;
+                .map_err(|e| WebrtcError::Whip(format!("reading answer: {}", e.without_url())))?;
             check_post_response(status, &final_url, location.as_deref(), body)
         }
 
@@ -320,7 +322,7 @@ mod client {
                 .auth(self.http.delete(resource.clone()))
                 .send()
                 .await
-                .map_err(|e| WebrtcError::Whip(format!("DELETE {}: {e}", redact(resource))))?;
+                .map_err(|e| WebrtcError::Whip(format!("DELETE {}: {}", redact(resource), e.without_url())))?;
             Ok(resp.status().as_u16())
         }
     }

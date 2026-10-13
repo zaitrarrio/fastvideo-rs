@@ -814,3 +814,105 @@ async fn avatar_take(realtime: bool) {
     assert_eq!(st["script"], "");
     rt.drain().await;
 }
+
+/// An opener that hands the test its tap receiver and event sender.
+struct RecordingOpener {
+    got: std::sync::Mutex<Vec<(Value, fastvideo_media::output::OutputMedia)>>,
+    rx: std::sync::Mutex<Option<fastvideo_media::output::TapReceiver>>,
+    tx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Value>>>,
+}
+
+impl fastvideo_media::output::OutputOpener for RecordingOpener {
+    fn open(
+        &self,
+        request: &Value,
+        media: fastvideo_media::output::OutputMedia,
+    ) -> Result<fastvideo_media::output::OutputCopy, fastvideo_protocol::ApiError> {
+        if request["kind"] == "bogus" {
+            return Err(fastvideo_protocol::ApiError::invalid_param("output.kind", "unknown output kind"));
+        }
+        self.got.lock().unwrap().push((request.clone(), media));
+        let (tap, rx) = fastvideo_media::output::OutputTap::channel(64);
+        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+        *self.rx.lock().unwrap() = Some(rx);
+        *self.tx.lock().unwrap() = Some(tx);
+        Ok(fastvideo_media::output::OutputCopy {
+            tap,
+            events,
+            view: json!({"kind": "whip", "url": "https://relay.example/w", "credentials": "set"}),
+        })
+    }
+}
+
+/// `start_session` `x_fv_output` (docs/serve/stream-outputs.md): the copy
+/// gets every paced tick while the peer plays, its events reach the client
+/// as model messages and the descriptor carries the latest one; a refused
+/// output refuses the session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn output_copy_gets_the_paced_ticks() {
+    let e = engine(FakeModel::sf_wan(), Duration::ZERO);
+    e.wait_ready().await;
+    let opener = Arc::new(RecordingOpener { got: Default::default(), rx: Default::default(), tx: Default::default() });
+    let hook = fastvideo_media::output::OutputHook(opener.clone());
+    let (rt, app) = runtime(e, move |c| c.outputs = Some(hook)).await;
+    let (s, _, d) = call(&app, "POST", "/start_session", Some(json!({"x_fv_output": {"kind": "bogus"}}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{d}");
+    let (s, _, d) = call(&app, "POST", "/start_session", Some(json!({"output": {}, "x_fv_output": {}}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{d}");
+    let req = json!({"x_fv_output": {"kind": "whip", "url": "https://relay.example/w", "token": "t"}});
+    let (s, _, d) = call(&app, "POST", "/start_session", Some(req)).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(d["x_fv_output"]["output"]["credentials"], "set");
+    {
+        let got = opener.got.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.fps, 16);
+        assert_eq!(got[0].1.audio_channels, None, "SF-Wan is video-only");
+        assert!(got[0].1.label.starts_with("reactor-"));
+    }
+    let Client { mut peer, .. } = connect(&app, false).await;
+    let h = peer.handle().clone();
+    h.send_message(control(
+        pb::control_client_message::Payload::ResumeTrack(pb::ResumeTrack { name: "main_video".into() }),
+        "",
+        pb::MessageKind::Notification,
+    ))
+    .await
+    .unwrap();
+    h.send_message(command("set_prompt", json!({"prompt": "a road"}), "data_1")).await.unwrap();
+    let mut rx = opener.rx.lock().unwrap().take().unwrap();
+    let mut frames = 0;
+    let mut size = None;
+    let t0 = Instant::now();
+    while frames < 20 && t0.elapsed() < T {
+        if let Ok(Some(t)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            if let Some(f) = t.frame {
+                size = Some((f.width, f.height));
+                frames += 1;
+            }
+        }
+    }
+    assert!(frames >= 20, "{frames} tapped frames");
+    let (_, _, d) = call(&app, "GET", "/session", None).await;
+    let tracks = d["capabilities"]["tracks"].to_string();
+    assert!(size.is_some_and(|(w, h)| w > 0 && h == 96), "the session canvas: {size:?} {tracks}");
+    // An event reaches the client and the descriptor.
+    let tx = opener.tx.lock().unwrap().take().unwrap();
+    tx.send(json!({"type": "output_ready", "output": {"kind": "whip"}, "playback": {"whep_url": "https://relay.example/whep"}}))
+        .unwrap();
+    let mut seen = Seen::default();
+    pump(&mut peer, &mut seen, T, |s| !s.model("output_ready").is_empty()).await;
+    let ready = seen.model("output_ready");
+    assert_eq!(ready[0].1["playback"]["whep_url"], "https://relay.example/whep");
+    let (_, _, d) = call(&app, "GET", "/session", None).await;
+    assert_eq!(d["x_fv_output"]["type"], "output_ready", "{d}");
+    rt.drain().await;
+    // The session's end closes the tap.
+    let t0 = Instant::now();
+    loop {
+        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            Ok(None) => break,
+            _ => assert!(t0.elapsed() < T, "the tap stays open after the session"),
+        }
+    }
+}

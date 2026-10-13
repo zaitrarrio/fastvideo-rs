@@ -247,6 +247,12 @@ impl OutputSpec {
                         return Err(bad("output.passphrase", "an SRT passphrase is 10 to 79 characters"));
                     }
                 }
+                // ffmpeg takes them verbatim from the URL query.
+                for (name, v) in [("passphrase", &spec.passphrase), ("stream_id", &spec.stream_id)] {
+                    if v.as_deref().is_some_and(|v| !fastvideo_media::sink::srt_value_ok(v)) {
+                        return Err(bad(&format!("output.{name}"), "SRT values cannot contain spaces, &, #, ? or %"));
+                    }
+                }
                 spec.url = Some(u);
             }
         }
@@ -450,6 +456,8 @@ mod tests {
         assert_eq!(p(json!({"kind": "rtmps", "url": "https://a.example/live/k"})), "output.url");
         assert_eq!(p(json!({"kind": "srt", "url": "srt://a.example"})), "output.url");
         assert_eq!(p(json!({"kind": "srt", "url": "srt://a.example:778", "passphrase": "short"})), "output.passphrase");
+        assert_eq!(p(json!({"kind": "srt", "url": "srt://a.example:778", "passphrase": "with space 1234"})), "output.passphrase");
+        assert_eq!(p(json!({"kind": "srt", "url": "srt://a.example:778", "stream_id": "a&b"})), "output.stream_id");
         assert_eq!(p(json!({"kind": "rtmps", "url": "rtmps://a.example/live"})), "output.stream_key");
         assert_eq!(p(json!({"kind": "rtmps", "url": "rtmps://a.example/live", "stream_key": "a/b"})), "output.stream_key");
         assert_eq!(p(json!({"kind": "rtmps", "url": "rtmps://a.example/live/k", "codec": "vp8"})), "output.codec");

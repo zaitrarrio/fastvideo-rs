@@ -174,7 +174,14 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Percent-encodes an SRT query value (RFC 3986 unreserved characters kept).
+/// Whether `v` can go into an ffmpeg `srt://` query as is: ffmpeg's libsrt
+/// takes `streamid` and `passphrase` verbatim (no percent-decoding), so a
+/// value must not contain the query's own delimiters.
+pub fn srt_value_ok(v: &str) -> bool {
+    !v.is_empty() && !v.contains(['&', '#', '?', '%']) && !v.chars().any(char::is_whitespace)
+}
+
+/// Percent-encodes a query value (RFC 3986 unreserved characters kept).
 pub fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -188,20 +195,21 @@ pub fn percent_encode(s: &str) -> String {
 }
 
 /// An ffmpeg `srt://` URL in caller mode: `base` (`srt://host:port`; a
-/// query it has is kept), `streamid` and `passphrase` added
-/// percent-encoded, `latency` (ffmpeg's libsrt takes microseconds) and the
-/// MPEG-TS payload size (7 x 188).
+/// query it has is kept), `streamid` and `passphrase` added verbatim
+/// (ffmpeg does not percent-decode them; check them with
+/// [`srt_value_ok`]), `latency` (ffmpeg's libsrt takes microseconds) and
+/// the MPEG-TS payload size (7 x 188).
 pub fn srt_url(base: &str, stream_id: Option<&str>, passphrase: Option<&str>, latency_ms: u32) -> String {
     let has = |k: &str| base.split(['?', '&']).skip(1).any(|kv| kv.split('=').next() == Some(k));
     let mut adds: Vec<(&str, String)> = Vec::new();
     if let Some(id) = stream_id.filter(|v| !v.is_empty()) {
         if !has("streamid") {
-            adds.push(("streamid", percent_encode(id)));
+            adds.push(("streamid", id.to_owned()));
         }
     }
     if let Some(p) = passphrase.filter(|v| !v.is_empty()) {
         if !has("passphrase") {
-            adds.push(("passphrase", percent_encode(p)));
+            adds.push(("passphrase", p.to_owned()));
         }
     }
     if !has("latency") {
@@ -653,11 +661,12 @@ mod tests {
 
     #[test]
     fn srt_is_mpegts_with_cloudflare_settings() {
-        let url = srt_url("srt://live.example.com:778", Some("abc123def456"), Some("pa ss/word"), 1000);
+        let url = srt_url("srt://live.example.com:778", Some("publish:abc123"), Some("pass/word-123"), 1000);
         assert_eq!(
             url,
-            "srt://live.example.com:778?streamid=abc123def456&passphrase=pa%20ss%2Fword&latency=1000000&mode=caller&pkt_size=1316"
+            "srt://live.example.com:778?streamid=publish:abc123&passphrase=pass/word-123&latency=1000000&mode=caller&pkt_size=1316"
         );
+        assert!(srt_value_ok("publish:live/a") && !srt_value_ok("a&b") && !srt_value_ok("a b") && !srt_value_ok("50%"));
         // An existing query is kept and not doubled.
         assert_eq!(srt_url("srt://h:9000?latency=200000", None, None, 1000), "srt://h:9000?latency=200000&mode=caller&pkt_size=1316");
         let mut c = SinkConfig::new(SinkTarget::Srt { url: url.clone() }, 832, 480, 16, Some(SinkAudioIn { rate: 48_000, channels: 1 }));
@@ -681,15 +690,15 @@ mod tests {
         let line = "rtmps://live.example.com:443/live/0123456789abcdefk: Input/output error";
         assert_eq!(scrub(line, &r.secrets()), "<redacted>: Input/output error");
         assert_eq!(scrub("key 0123456789abcdefk refused", &r.secrets()), "key <redacted> refused");
-        let s = SinkTarget::Srt { url: srt_url("srt://user:pw1234@h:778", Some("streamid-xyz"), Some("secret pass"), 500) };
+        let s = SinkTarget::Srt { url: srt_url("srt://user:pw1234@h:778", Some("streamid-xyz"), Some("secret-pass"), 500) };
         assert_eq!(s.redacted(), "srt://h:778");
         let dbg = format!("{s:?}");
         for x in ["streamid-xyz", "secret", "pw1234"] {
             assert!(!dbg.contains(x), "{dbg}");
         }
         let sec = s.secrets();
-        assert!(sec.contains(&"secret pass".to_owned()) && sec.contains(&"secret%20pass".to_owned()), "{sec:?}");
-        assert_eq!(scrub("Connection to srt://h:778 (secret pass) failed", &sec), "Connection to srt://h:778 (<redacted>) failed");
+        assert!(sec.contains(&"secret-pass".to_owned()), "{sec:?}");
+        assert_eq!(scrub("Connection to srt://h:778 (secret-pass) failed", &sec), "Connection to srt://h:778 (<redacted>) failed");
     }
 
 
