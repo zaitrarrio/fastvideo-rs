@@ -112,28 +112,36 @@ deadline, the idle stop and a budget stop. `fv-control.sh pod delete
 the delete of a definition with no pod leaves any parked VM alone. The
 next launch of the same instance type reuses a parked or held instance
 before creating one: a *warm* boot when it holds the trees, else the
-trees download onto it. A stop Brev refuses leaves the VM running with the
-alert `brev_stop_failed` (its $/hr); fv-control never deletes it.
+trees download onto it.
+
+A stop that does not succeed deletes the VM instead (owner rule
+2026-10-13: "We should go ahead and delete VMs that need to be stopped if
+a stop command does not succeed. If the stop command succeeds then we
+should NOT delete the VM."): Brev refuses it, another stop error persists
+over 3 tries, or the VM is not STOPPED 10 minutes (`BREV_STOP_TIMEOUT_S`)
+after a stop Brev accepted. The record says `stop failed (<reason>):
+deleted`, its tunnel goes, and the info alert `brev_stop_deleted` names
+it. A pod stopped while its VM is still DEPLOYING is `stop_pending`: the
+cron stops it once it leaves DEPLOYING, or deletes it after 15 minutes.
 
 Non-stoppable types (e.g. `massedcompute_*`) are launched like any other
-(owner decision 2026-10-13). Brev cannot stop them: a stop answers HTTP
-500 "does not support stop" and the VM keeps running. fv-control then
-releases the pod (state `running_unstoppable`), raises one critical alert
-`brev_unstoppable` with its $/hr and $/day, tries the stop again hourly,
-and bills it in the ledger and the Brev budget until you delete it
-(`fv-control.sh brev delete-parked <id>`, Delete on the Pods page, or
-`pod delete <name>` instead of a stop). The launch's budget check counts
-such a pod 24 h past its deadline (`BREV_NOSTOP_MARGIN_H`).
+(owner decision 2026-10-13). Brev cannot stop them (a stop answers HTTP
+500 "does not support stop"), so every stop of such a pod deletes its VM,
+with its disk and weights: it ends at its deadline like any pod and its
+next launch downloads its weights again.
 
 A parked instance bills storage only. That cost counts in the Brev
 budget and the cost views (owner `brev:parked`); the policies
 `brev_park_max` (2) and `brev_park_max_days` (7) only raise the alert
-`brev_parked_over_limit`. A restart that fails (no capacity) or does not
+`brev_parked_over_limit`. A restart that fails or does not
 come up is *held* (reused by a later launch after 15 minutes, or at once
-after Unpark), and another instance or a fresh pod is used.
+after Unpark), and another instance or a fresh pod is used. A restart
+Brev cannot run for capacity (its start task says InsufficientCapacity;
+shown in the launch log) gets 3 more starts over about 5 minutes; then the
+VM stays parked (not deleted) and a fresh pod is created.
 
 The launch form lists the stoppable instance types first, then the others
-with "WARNING: can't be stopped: a stop leaves it running at $X/hr", and shows "warm:
+with "WARNING: can't be stopped: a stop deletes it (its disk and weights go too)", and shows "warm:
 restarts parked …" or "cold: downloads … (~N GB): boot ~M min" at the
 instance-type field. The Pods page lists parked and held instances with
 their weights, disk, $/day and reuse status, with Delete (yours only) and

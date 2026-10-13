@@ -33,7 +33,52 @@ export interface BrevWorkspace {
   statusMessage: string | null;
   /** The instance type can be stopped and started (instanceTypeInfo.stoppable; the CLI refuses a start without it). */
   stoppable: boolean | null;
+  /** The latest start task in environment.tasks[] (why a start did not run: its statusMessage is empty then); null when
+   * the payload has none. */
+  lastStart: BrevTask | null;
 }
+/** One task of a workspace (environment.tasks[]; shape read defensively, UNVERIFIED beyond the fields used here). */
+export interface BrevTask {
+  status: string | null;
+  /** Its message, at most TASK_MSG_MAX characters (the tail: Brev's reason ends it; the whole can be ~10 KB). */
+  message: string | null;
+  at: number | null;
+  /** The message says the zone had no capacity (AWS InsufficientCapacity / "insufficient resources"). */
+  capacity: boolean;
+}
+/** Characters of a task message kept (never the whole ~10 KB). */
+export const TASK_MSG_MAX = 240;
+export const INSUFFICIENT_CAPACITY_RE = /InsufficientCapacity|insufficient (?:resources|capacity)/i;
+const taskTime = (t: any): number | null => {
+  for (const k of ["updatedAt", "updated_at", "finishedAt", "createdAt", "created_at", "startedAt"]) {
+    const v = t?.[k];
+    const n = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN;
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+};
+const taskKind = (t: any) => [t?.type, t?.name, t?.action, t?.kind, t?.taskType].filter((x) => typeof x === "string").join(" ");
+/** The latest start task of a workspace payload (environment.tasks[], or tasks[]): a task whose type / name / action
+ * says start (else, when no task names its kind, the latest task); its message truncated to its tail. */
+export function lastStartTask(w: any): BrevTask | null {
+  const tasks: any[] = Array.isArray(w?.environment?.tasks) ? w.environment.tasks : Array.isArray(w?.tasks) ? w.tasks : [];
+  if (!tasks.length) return null;
+  const named = tasks.filter((t) => taskKind(t));
+  const pool = named.length ? named.filter((t) => /start/i.test(taskKind(t))) : tasks;
+  if (!pool.length) return null;
+  // The latest by its time; without times, the last in the list.
+  const t = pool.reduce((a, b) => ((taskTime(b) ?? -1) >= (taskTime(a) ?? -1) ? b : a));
+  const raw = [t?.message, t?.statusMessage, t?.error, t?.errorMessage].find((x) => typeof x === "string" && x.trim()) as string | undefined;
+  const msg = raw ? raw.trim().replace(/\s+/g, " ") : null;
+  return {
+    status: typeof t?.status === "string" ? t.status.toUpperCase() : null,
+    message: msg ? (msg.length > TASK_MSG_MAX ? `…${msg.slice(-(TASK_MSG_MAX - 1))}` : msg) : null,
+    at: taskTime(t),
+    capacity: !!raw && INSUFFICIENT_CAPACITY_RE.test(raw),
+  };
+}
+/** A start task in a few words for logs and alerts (null when it has nothing to say). */
+export const brevTaskLine = (t: BrevTask | null) => (t && (t.message || (t.status && !/SUCC|COMPLET|DONE/.test(t.status))) ? `last start task ${t.status || "?"}${t.message ? `: ${t.message}` : ""}` : null);
 
 const base = (env: Env) => (env.BREV_API_URL || "https://brevapi.us-west-2-prod.control-plane.brev.dev").replace(/\/$/, "");
 export const brevEnabled = (env: Env) => !!env.BREV_API_TOKEN && !!env.BREV_ORG_ID;
@@ -82,10 +127,12 @@ export function toWorkspace(w: any): BrevWorkspace {
     createdAt: w.createdAt ?? w.created_at ?? null,
     statusMessage: typeof w.statusMessage === "string" && w.statusMessage.trim() ? w.statusMessage.trim().slice(0, 300) : null,
     stoppable: typeof w.instanceTypeInfo?.stoppable === "boolean" ? w.instanceTypeInfo.stoppable : null,
+    lastStart: lastStartTask(w),
   };
 }
 /** Brev's status of a workspace in a few words: the status, its message and health (what the logs and alerts show). */
-export const brevStatusLine = (w: Pick<BrevWorkspace, "status" | "statusMessage" | "health">) => [w.status || "?", w.statusMessage, w.health && w.health !== "HEALTHY" ? `health ${w.health}` : null].filter(Boolean).join(": ");
+export const brevStatusLine = (w: Pick<BrevWorkspace, "status" | "statusMessage" | "health"> & { lastStart?: BrevTask | null }) =>
+  [w.status || "?", w.statusMessage, brevTaskLine(w.lastStart ?? null), w.health && w.health !== "HEALTHY" ? `health ${w.health}` : null].filter(Boolean).join(": ");
 /** brev-cli store/workspace.go: UserWorkspaceTemplateID, UserWorkspaceClassID, DefaultDiskStorage (non-admin users). */
 export const BREV_USER_TEMPLATE_ID = "4nbb4lg2s";
 export const BREV_USER_CLASS_ID = "2x8";

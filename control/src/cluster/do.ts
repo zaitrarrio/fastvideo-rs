@@ -342,7 +342,7 @@ export class ClusterOps implements DurableObject {
           rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : other ? await otherPodDiag(env, r.pod, rt as Awaited<ReturnType<typeof otherPodState>> | undefined ?? undefined) : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
         if (!diag) continue;
         if (diag.fatal) {
-          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; ${r.pod.startsWith("brev:") ? "stopping and holding its VM (never deleted)" : "deleting it"} (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
+          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; ${r.pod.startsWith("brev:") ? "stopping its VM (kept once stopped; deleted only if its stop fails, owner rule 2026-10-13)" : "deleting it"} (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
           await podUpdate(env, r.pod, { status: "failed" });
           await deletePod(env, r.pod, this.log, `${p.id} ${diag.phase}`);
           c.state.workers[p.id] = (c.state.workers[p.id] || []).filter((x) => x.pod !== r.pod);
@@ -408,7 +408,8 @@ export class ClusterOps implements DurableObject {
       const pod = isOtherPod(p) ? await otherPodState(env, p).catch(() => ({ state: "unknown" })) : await runpod.pod(env, p);
       // A parked / held Brev instance stays (stopped) on purpose: done once Brev shows it stopped (one in DELETING, the
       // owner's delete, is not listed: gone).
-      // A Brev VM whose type cannot be stopped (running_unstoppable) is released though it runs: alerted, billed, the owner's to delete.
+      // Owner rule 2026-10-13: a stop not yet confirmed STOPPED, or stop_pending (still DEPLOYING), is the cron's (it
+      // confirms, stops or deletes it); a VM a failed stop deleted is gone.
       if (pod && !(isOtherPod(p) && (await brevReleased(env, p, (pod as { state?: string }).state)))) left.push(p);
     }
     if (left.length && op.data.tries++ < 5) {

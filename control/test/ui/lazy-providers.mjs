@@ -112,7 +112,7 @@ try {
   const opts = await page.$$eval(`${SL} .ff-field[data-path="provider_gpu"] option`, (els) => els.map((e) => `${e.value} ${e.textContent}`));
   assert.ok(opts.some((o) => /^g5\.xlarge-test .*\$1\.01\/hr/.test(o)), JSON.stringify(opts));
   // Owner decision 2026-10-13: a type Brev cannot stop is listed too, with a warning.
-  assert.ok(opts.some((o) => /^a100-test .*\$1\.80\/hr · WARNING: can't be stopped/.test(o)), JSON.stringify(opts));
+  assert.ok(opts.some((o) => /^a100-test .*\$1\.80\/hr · WARNING: can't be stopped: a stop deletes it \(its disk and weights go too\)/.test(o)), JSON.stringify(opts));
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /2 instance types with live prices · this month \$0\.00 of the \$40 budget · no parked VMs/);
   await page.screenshot({ path: `${out}/41-launch-brev-picked.png`, fullPage: true });
 

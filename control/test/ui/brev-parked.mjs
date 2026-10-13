@@ -1,8 +1,8 @@
 // UI test (headless Chromium, playwright-core): NVIDIA Brev keep-on-stop on the Pods page (the parked instances'
 // card: weights, disk, $/day, state, reuse status, the policy line (owner rule 2026-10-11: never auto-deleted), Unpark,
-// the owner's Delete; a VM of a type Brev cannot stop, left running by its stop, with its GPU $/day) and the launch
+// the owner's Delete; a VM whose stop came while it was DEPLOYING (stop_pending, owner rule 2026-10-13), with its GPU $/day) and the launch
 // form's Brev instance types (every allowed one, stoppable first, live price; owner decision 2026-10-13: the
-// non-stoppable ones with a warning) with the warm / cold outlook at the instance-type field. Simulated Brev only (test/harness.mjs).
+// non-stoppable ones with a warning: a stop deletes them) with the warm / cold outlook at the instance-type field. Simulated Brev only (test/harness.mjs).
 //   CHROMIUM=/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell node test/ui/brev-parked.mjs
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -47,13 +47,14 @@ try {
     );
     mock.brev.workspaces.push({ id, name, status: "STOPPED", healthStatus: "", instanceType: "g5.xlarge-test", dns: "", createdAt: new Date(t).toISOString(), startupScript: "", body: {}, disk: {} });
   }
-  // A VM of a type Brev cannot stop: its stop left it RUNNING (running_unstoppable), billed at its GPU $/hr.
+  // A VM whose stop came while it was still DEPLOYING (stop_pending, owner rule 2026-10-13): billed at its GPU $/hr
+  // until the cron stops it (once it leaves DEPLOYING) or deletes it.
   d1Exec(
     w.dir,
     `INSERT INTO brev_instances (workspace_id, pod_id, name, instance_type, location, stoppable, disk_gb, storage_usd_per_gb_hr, trees, launch_trees, state, created_at, parked_at, updated_at, note, usd_per_hr, stop_tried_at)
-     VALUES ('wsui03', 'brev:fv-pod-ui03-1010000000', 'fv-pod-ui03-1010000000', 'a100-test', 'houston-usa-1', 0, 850, NULL, '{}', '{}', 'running_unstoppable', ${t - 3600_000}, ${t - 3600_000}, ${t}, 'not_stoppable: Brev cannot stop a100-test', 1.8, ${t})`,
+     VALUES ('wsui03', 'brev:fv-pod-ui03-1010000000', 'fv-pod-ui03-1010000000', 'a100-test', 'houston-usa-1', 0, 850, NULL, '{}', '{}', 'stop_pending', ${t - 3600_000}, ${t - 3600_000}, ${t}, 'stop_pending: still DEPLOYING when its stop came', 1.8, ${t})`,
   );
-  mock.brev.workspaces.push({ id: "wsui03", name: "fv-pod-ui03-1010000000", status: "RUNNING", healthStatus: "HEALTHY", instanceType: "a100-test", dns: "", createdAt: new Date(t).toISOString(), startupScript: "", body: {}, disk: {} });
+  mock.brev.workspaces.push({ id: "wsui03", name: "fv-pod-ui03-1010000000", status: "DEPLOYING", healthStatus: "", instanceType: "a100-test", dns: "", createdAt: new Date(t).toISOString(), startupScript: "", body: {}, disk: {} });
 
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
@@ -72,7 +73,7 @@ try {
   const card = page.locator(".card", { hasText: "Parked Brev instances" });
   await card.waitFor();
   const text = await card.textContent();
-  for (const s of ["Parked Brev instances (3): $1.58/day storage, $43.20/day still running", "running (can't be stopped)", "$43.20 GPU", "Brev cannot stop a100-test","fv-pod-ui01-1010000000", "fv-pod-ui02-1010000000", "fastwan22-ti2v-5b@3e18704", "250 GB", "$0.79", "1.0 d", "2.0 d", "held", "restart failed: no capacity", "never deleted by fv-control (owner rule 2026-10-11)", "alert past 2 parked or 7 days each", "Delete is yours only", "reusable: the next launch of g5.xlarge-test", "(Unpark: now)"])
+  for (const s of ["Parked Brev instances (3): $1.58/day storage, $43.20/day still running", "running (stop pending)", "$43.20 GPU", "still DEPLOYING when its stop came", "stop pending: stopped once it leaves DEPLOYING", "a VM whose stop does not succeed is deleted instead (owner rule 2026-10-13)", "fv-pod-ui01-1010000000", "fv-pod-ui02-1010000000", "fastwan22-ti2v-5b@3e18704", "250 GB", "$0.79", "1.0 d", "2.0 d", "held", "restart failed: no capacity", "never deleted by fv-control (owner rule 2026-10-11)", "alert past 2 parked or 7 days each", "Deleting a stopped VM is yours only", "reusable: the next launch of g5.xlarge-test", "(Unpark: now)"])
     assert.ok(text.includes(s), `parked card: ${s} in ${text}`);
   assert.ok(!/then the oldest is deleted/.test(text), "no auto-delete wording");
   assert.equal(await card.locator("button:text('Unpark')").count(), 1, "Unpark only on the held one");
@@ -100,7 +101,7 @@ try {
   await page.waitForFunction((s) => [...document.querySelectorAll(`${s} .ff-field[data-path="provider_gpu"] option`)].some((e) => /\/hr/.test(e.textContent || "")), SL, { timeout: 20000 });
   const opts = await page.$$eval(`${SL} .ff-field[data-path="provider_gpu"] option`, (els) => els.map((e) => `${e.value} ${e.textContent}`));
   assert.match(opts[0] || "", /^g5\.xlarge-test .*\$1\.01\/hr · stoppable: stopped and kept on stop \(reused by the next launch\)/, JSON.stringify(opts));
-  assert.match(opts[1] || "", /^a100-test .*\$1\.80\/hr · WARNING: can't be stopped: a stop leaves it running at \$1\.80\/hr \(\$43\.20\/day\): delete it yourself/, JSON.stringify(opts));
+  assert.match(opts[1] || "", /^a100-test .*\$1\.80\/hr · WARNING: can't be stopped: a stop deletes it \(its disk and weights go too\)/, JSON.stringify(opts));
   // The warm / cold outlook shows at the instance-type field (the validator's warning) once Hub weights are picked.
   await page.fill(`${SL} [data-ctl][data-path="name"]`, "uiwarm");
   await page.fill(`${SL} [data-ctl][data-path="provider_gpu"]`, "g5.xlarge-test");
@@ -116,7 +117,7 @@ try {
   await page.screenshot({ path: `${out}/22-brev-launch-types.png`, fullPage: true });
 
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");
-  console.log(`ok   UI Brev keep-on-stop: parked card (weights, disk, $/day, held, Unpark, Delete, a running non-stoppable VM), launch form instance types (non-stoppable with a warning) (screenshots in ${out})`);
+  console.log(`ok   UI Brev keep-on-stop: parked card (weights, disk, $/day, held, Unpark, Delete, a stop-pending VM), launch form instance types (non-stoppable: a stop deletes it) (screenshots in ${out})`);
 } catch (e) {
   fail(e);
 }
