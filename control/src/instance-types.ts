@@ -152,6 +152,7 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
   for (const g of d.gpuTypes || []) if (g?.id && g.id !== "unknown") types.set(String(g.id), g);
   const rows: InstanceTypeRow[] = [];
   const seen = new Set<string>();
+  const haveDcs = Array.isArray(d.dataCenters);
   const row = (g: any, dc: any | null, a: any | null): InstanceTypeRow => {
     const id = String(g.id);
     const display = String(g.displayName || shortGpuName(id));
@@ -166,17 +167,18 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
     const reasons = hardwareReasons({ gpu_model: cols.gpu_model, gpu_vendor: cols.gpu_vendor ?? (/^AMD/i.test(id) ? "AMD" : null) });
     if (!known.has(id)) reasons.push("not in fv-control's Runpod GPU type list (enums.ts RUNPOD_GPU_TYPES)");
     if (price === null) reasons.push("not offered in Secure Cloud (fv-control creates Secure Cloud pods)");
-    if (!dcId) reasons.push("no data centre lists it now");
+    if (!dcId) reasons.push(haveDcs ? "no data centre lists it now" : "the data centres' stock is unknown now (Refresh)");
     else if (dc.listed === false) reasons.push(`${dcId} is not a listed data centre`);
     else if (!knownDcs.has(dcId)) reasons.push(`${dcId} is not in fv-control's data centre list (enums.ts RUNPOD_DATA_CENTERS)`);
     else if (!region) reasons.push(`no fv weights volume in ${dcId}: the launch form places Runpod GPU pods where one is (${[...volumeDcs.keys()].join(", ") || "none now"}); weights_source r2 pods may use any data centre (JSON / CLI)`);
-    const stock = a ? (a.stockStatus ? String(a.stockStatus) : null) : dcId ? null : lp.stockStatus ? String(lp.stockStatus) : null;
+    // Without the data centres' answer: the type's own (any data centre) stock.
+    const stock = a ? (a.stockStatus ? String(a.stockStatus) : null) : haveDcs ? null : lp.stockStatus ? String(lp.stockStatus) : null;
     return finish(
       {
         id: `${id}@${dcId ?? "-"}`,
         name: id,
         spec: specLine({ ...cols, vcpu, ram_gb: ram, ramMin: true }),
-        available: a ? a.available === true && !!a.stockStatus : dcId ? false : stock ? true : null,
+        available: a ? a.available === true && !!a.stockStatus : haveDcs ? false : stock ? true : null,
         stock,
         usd_per_hr: price,
         usd_per_gpu_hr: price,

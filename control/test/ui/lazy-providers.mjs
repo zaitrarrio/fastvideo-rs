@@ -105,7 +105,8 @@ try {
   await settle();
   await page.unroute("**/api/schemas/dynamic?provider=brev");
   const brevReqs = reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic") || r.startsWith("GET /api/providers"));
-  assert.deepEqual(brevReqs, ["GET /api/schemas/dynamic?provider=brev"], `only Brev's details: ${reqs}`);
+  // Brev's details and its instance-type table (owner 2026-10-13: the table loads when the provider is picked).
+  assert.deepEqual(brevReqs.sort(), ["GET /api/providers/brev/instance-types", "GET /api/schemas/dynamic?provider=brev"], `only Brev's details and table: ${reqs}`);
   const upBrev = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   // (Brev's type list may already be in the Worker's 1 h cache: no call at all is fine; any other provider is not.)
   assert.ok(!upBrev.includes("runpod") && !upBrev.includes("gmi") && !upBrev.includes("ghcr"), `no other provider is asked: ${upBrev}`);
@@ -120,6 +121,7 @@ try {
   await pick("gmi");
   await settle();
   assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), ["GET /api/schemas/dynamic?provider=gmi"], `only GMI's details: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/providers")), ["GET /api/providers/gmi/instance-types"], `GMI's table only: ${reqs}`);
   const upGmi = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   assert.ok(upGmi.every((x) => x === "gmi"), `GMI only: ${upGmi}`);
   assert.ok((await page.$$eval(`${SL} .ff-field[data-path="provider_gpu"] option`, (els) => els.map((e) => e.textContent))).some((t) => /GMI Cloud · \$3\.20\/hr · available/.test(t)));
@@ -128,9 +130,12 @@ try {
   await pick("brev");
   await settle();
   assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), [], `Brev's details are kept: ${reqs}`);
+  // The table loads again on each switch (the Worker's cache answers it).
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/providers")), ["GET /api/providers/brev/instance-types"], `Brev's table again: ${reqs}`);
 
   // ---- Runpod picked while its load is in flight, then GMI (kept): the Runpod load is cancelled; a re-pick asks again
   await page.route("**/api/schemas/dynamic?provider=runpod", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
+  await page.route("**/api/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
   failed.length = 0;
   await pick("runpod");
   await page.waitForSelector(`${SL} [data-provider-status][data-loading="runpod"]`);
@@ -139,8 +144,10 @@ try {
   await page.waitForFunction(() => true);
   await page.waitForTimeout(1800);
   assert.ok(failed.some((f) => f.startsWith("GET /api/schemas/dynamic?provider=runpod")), `the stale Runpod load is cancelled: ${failed}`);
+  assert.ok(failed.some((f) => f.startsWith("GET /api/providers/runpod/instance-types")), `the stale Runpod table load is cancelled: ${failed}`);
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /products? with live prices/, "GMI's line, not Runpod's");
   await page.unroute("**/api/schemas/dynamic?provider=runpod");
+  await page.unroute("**/api/providers/runpod/instance-types");
   await pick("runpod");
   await settle();
   assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), ["GET /api/schemas/dynamic?provider=runpod"], `Runpod asked again: ${reqs}`);

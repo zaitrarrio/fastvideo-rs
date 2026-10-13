@@ -6,6 +6,7 @@ import { badge, h, kids } from "../dom";
 import { createForm, type Api, type FieldOpts } from "../fields";
 import type { Path } from "../schema";
 import { issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight, providerSummary } from "./common";
+import { instanceTable, type InstanceTable, type ITRow } from "./itable";
 
 /** The remote check's issue while no provider is picked (nothing provider-specific is loaded or checked until then). */
 export const PICK_PROVIDER = "choose a provider: its GPU types, prices and stock load then";
@@ -36,7 +37,45 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   // The picked provider's details: loaded once per page session (common.ts), the load of an earlier pick cancelled.
   const provStatus = h("div", { class: "small muted cf-provider-status", "data-provider-status": "", role: "status", "aria-live": "polite" });
   let provLoad: AbortController | null = null;
+  // The picked provider's instance-type table (owner 2026-10-13): every type it lists; a launchable row's click sets
+  // the fields its `launch` names. Loaded when the provider is picked (each pick) and on its Refresh button.
+  const tables = new Map<string, InstanceTable>();
+  const isSel: Record<string, (r: ITRow) => boolean> = {
+    runpod: (r) => {
+      const g = f.get(["gpu_types"]);
+      return Array.isArray(g) && g[0] === r.name && (r.launch?.region ?? null) === (f.get(["region"]) ?? null);
+    },
+    brev: (r) => f.get(["provider_gpu"]) === r.name,
+    gmi: (r) => f.get(["provider_gpu"]) === r.name && (!f.get(["provider_region"]) || f.get(["provider_region"]) === r.region),
+  };
+  const tableFor = (p: string) => {
+    let t = tables.get(p);
+    if (!t) {
+      t = instanceTable({
+        api,
+        provider: p,
+        noun: p === "gmi" ? "product" : p === "runpod" ? "GPU type" : "instance type",
+        isSelected: (r) => (isSel[p] || (() => false))(r),
+        onSelect: (r) => {
+          if (p === "runpod") {
+            if (r && f.get(["compute"]) === "CPU") f.set(["compute"], "GPU", true), f.set(["cpu_flavors"], undefined, true), f.set(["vcpu"], undefined, true);
+            f.set(["gpu_types"], r ? [r.name] : undefined, true);
+            if (r?.launch?.region) f.set(["region"], r.launch.region, true);
+          } else {
+            f.set(["provider_gpu"], r ? r.name : undefined, true);
+            if (p === "gmi") f.set(["provider_region"], r ? (r.launch?.provider_region as string | undefined) : undefined, true);
+          }
+          draw();
+        },
+      });
+      tables.set(p, t);
+    }
+    return t;
+  };
   function pickProvider(p: string | undefined) {
+    // A switch cancels the other tables' loads in flight; the picked one loads (again).
+    for (const [k, t] of tables) if (k !== p) t.abort();
+    if (p) void tableFor(p).load(false);
     provLoad?.abort();
     provLoad = null;
     provStatus.removeAttribute("data-loading");
@@ -82,10 +121,12 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
       ? []
       : other
       ? [
+          tableFor(prov).el,
           F(["provider_gpu"], {
-            label: prov === "gmi" ? "GPU product" : "Instance type",
+            label: prov === "gmi" ? "Selected GPU product" : "Selected instance type",
             options: (dyn.provider_gpus || []).filter((g: any) => g.provider === prov).map((g: any) => ({ value: g.id, detail: g.detail })),
-            help: prov === "gmi" ? "A GMI container product the account may use (GMI_PRODUCTS)." : "A Brev instance type the account may use (BREV_INSTANCE_TYPES).",
+            onSet: () => tableFor(prov).sync(),
+            help: prov === "gmi" ? "Pick a row in the table above (or here): a GMI container product the account may use (GMI_PRODUCTS)." : "Pick a row in the table above (or here): a Brev instance type the account may use (BREV_INSTANCE_TYPES).",
           }),
           ...(prov === "gmi" ? [F(["provider_region"], { label: "IDC", placeholder: (dyn.provider_regions || [])[0]?.id || "the default IDC", help: "GMI data centre (GET /v1/idcs)." })] : []),
           F(["weights_source"], {
@@ -102,11 +143,12 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           ...(f.get(["weights_source"]) === "hub" ? [F(["weights_download_approved"], { label: "Owner approved the Hub download", help: "Tens to hundreds of GB per boot, paid at the GPU's rate (CLAUDE.md: large downloads need approval)." })] : []),
         ]
       : [
+          tableFor("runpod").el,
           F(["compute"], { label: "Compute", onSet: (v) => (v === "CPU" ? (f.set(["gpu_types"], undefined, true), f.set(["volume"], false, true)) : (f.set(["cpu_flavors"], undefined, true), f.set(["vcpu"], undefined, true)), draw()), unsetLabel: "the preset's" }),
-          F(["region"], { label: "Region" }),
+          F(["region"], { label: "Region", onSet: () => tableFor("runpod").sync() }),
           ...(cpu
             ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs", unsetLabel: "2 (default)" })]
-            : [F(["gpu_types"], { label: "GPU types (in order; none: the region's)", help: "Live from Runpod: $/hr and stock; a type that is gone is flagged." })]),
+            : [F(["gpu_types"], { label: "GPU types (in order; none: the region's)", onSet: () => tableFor("runpod").sync(), help: "Pick a row in the table above (it sets the first), or list fallbacks here in order. Live from Runpod: $/hr and stock; a type that is gone is flagged." })]),
           F(["volume"], { label: "Weights volume", placeholder: "mount at /workspace", help: "The region's weights volume (EU jg48s6o1w0); a GPU pod needs it for the weights." }),
           F(["container_disk_gb"], { label: "Container disk", unsetLabel: "default", placeholder: cpu ? "10" : "40" }),
         ];
@@ -219,6 +261,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
       h("div", { class: "ff-section" }, h("h3", {}, "Env"), h("div", { class: "cf-fields" }, F(["env"], { label: "Variables of this pod", env: { shape: "launch", secrets: true } }))),
     );
     f.prune();
+    if (picked) tableFor(prov).sync();
   }
   pickProvider(undefined);
   draw();
