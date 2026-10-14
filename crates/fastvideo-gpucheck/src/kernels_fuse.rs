@@ -97,6 +97,46 @@ pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
 /// FASTVIDEO_H3_GLUE: every glue fusion against the ops it replaces, bit for
 /// bit (bf16 values, NVFP4 codes / scales / amax).
 fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
+    let glue = |f: &mut dyn FnMut() -> StageResult<()>| fused16::with_fuse(true, || fused16::with_glue(true, f));
+
+    // q/k/v/gate heads in one launch vs qk_norm_rope + split_heads_bhsd.
+    let (h2, d2, r2) = (3usize, 128usize, 96usize);
+    let inner = h2 * d2;
+    for (b, s2, gate) in [(1usize, 83usize, true), (1, 70, false), (2, 41, true)] {
+        let width = 4 * inner + 8;
+        let packed = t16(&bf16v(rand(seed, b * s2 * width, 1.3)), &[b, s2, width])?;
+        let nq = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
+        let nk = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
+        let ang: Vec<f32> = (0..s2 * r2).map(|i| (i as f32 * 0.013).sin() * 3.0).collect();
+        let cos = t32(&ang.iter().map(|a| a.cos()).collect::<Vec<_>>(), &[s2, r2])?;
+        let sin = t32(&ang.iter().map(|a| a.sin()).collect::<Vec<_>>(), &[s2, r2])?;
+        for rope in [Some((&cos, &sin)), None] {
+            let tag = format!("b{b}_s{s2}_gate{}_rope{}", u8::from(gate), u8::from(rope.is_some()));
+            let mut got = None;
+            glue(&mut || {
+                got = fused16::qkvg_heads(&packed, &nq, &nk, rope, h2, d2, gate, 1e-6)?;
+                Ok(())
+            })?;
+            let (q, k, v, g) = got.ok_or_else(|| anyhow::anyhow!("qkvg_heads did not apply ({tag})"))?;
+            let want = [
+                fused16::qk_norm_rope(&packed, &nq, rope, h2, d2, 0, 1e-6)?,
+                fused16::qk_norm_rope(&packed, &nk, rope, h2, d2, inner, 1e-6)?,
+                packed.split_heads_bhsd(2 * inner, h2, d2)?,
+            ];
+            for (name, got, want) in [("q", &q, &want[0]), ("k", &k, &want[1]), ("v", &v, &want[2])] {
+                check_ulps(report, &format!("h3_glue_heads_{name}_{tag}"), &host(got)?, &host(want)?, true)?;
+            }
+            match (g, gate) {
+                (Some(g), true) => {
+                    let w = packed.split_heads_bhsd(3 * inner, h2, d2)?;
+                    check_ulps(report, &format!("h3_glue_heads_gate_{tag}"), &host(&g)?, &host(&w)?, true)?;
+                }
+                (None, false) => {}
+                _ => return Err(anyhow::anyhow!("qkvg_heads: gate output mismatch ({tag})").into()),
+            }
+        }
+    }
+
     // VSA fed bf16 q/k/v/gate in place (attend_unrounded, rounded after) vs
     // the f32 feed `attend` widened and rounded.
     {

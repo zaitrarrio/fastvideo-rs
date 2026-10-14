@@ -7017,6 +7017,79 @@ extern "C" __global__ void fvf_split_heads_rows(
         else ((float2*)out)[o >> 1] = make_float2(a, c);
     }
 }
+
+// ---- H3 glue (FASTVIDEO_H3_GLUE; h3/fused16.rs) ----
+// The fused QKV(+gate) projection [B, S, W] (bf16) to bf16 BHSD q, k, v and
+// the VSA gate in one launch: q and k normed per head and rotated over their
+// first r channels exactly as h3_qk_norm_rope with d = 128 (dpad 128: four
+// warps per row, each a butterfly over its 32 channels, then the four warp
+// sums in order), v and gate copied. One warp per (row, part, head), four
+// channels per lane (c = 4 * lane + i); the butterfly's xor 16 / 8 / 4 are
+// lane xor 4 / 2 / 1 and its xor 2 / 1 the lane's own registers, so every
+// sum is the same tree. Needs d == 128, r % 8 == 0, r <= 128, W % 4 == 0.
+extern "C" __global__ void fvf_h3_qkvg_heads(
+    const unsigned short* __restrict__ src, const float* __restrict__ wq, const float* __restrict__ wk,
+    const float* __restrict__ cs, const float* __restrict__ sn, int use_rope,
+    unsigned short* __restrict__ q, unsigned short* __restrict__ k, unsigned short* __restrict__ v,
+    unsigned short* __restrict__ g, int batch, int seq, int heads, int parts, int r, int width, float eps,
+    int dn
+) {
+    // `dn` (= 128) is the norm's divisor as a runtime value, as in
+    // h3_qk_norm_rope: a constant would let the compiler turn `tot / d + eps`
+    // into one FMA and round differently.
+    const int d = 128;
+    int lane = threadIdx.x & 31;
+    long item = (long)blockIdx.x * (long)(blockDim.x >> 5) + (threadIdx.x >> 5);
+    if (item >= (long)batch * seq * parts * heads) return;
+    int h = (int)(item % heads);
+    long t = item / heads;
+    int part = (int)(t % parts);
+    long bs = t / parts;
+    int s = (int)(bs % seq);
+    int b = (int)(bs / seq);
+    long inner = (long)heads * d;
+    const unsigned short* row = src + bs * width + part * inner + (long)h * d;
+    long o = (((long)b * heads + h) * seq + s) * d + 4 * lane;
+    uint2 raw = *(const uint2*)(row + 4 * lane);
+    if (part >= 2) {
+        *(uint2*)((part == 2 ? v : g) + o) = raw;
+        return;
+    }
+    float x[4] = {fv_bf16_to_f32((unsigned short)(raw.x & 0xFFFFu)), fv_bf16_to_f32((unsigned short)(raw.x >> 16)),
+                  fv_bf16_to_f32((unsigned short)(raw.y & 0xFFFFu)), fv_bf16_to_f32((unsigned short)(raw.y >> 16))};
+    float sq[4];
+    for (int i = 0; i < 4; ++i) {
+        sq[i] = x[i] * x[i];
+        for (int m = 4; m > 0; m >>= 1) sq[i] += __shfl_xor_sync(0xffffffffu, sq[i], m);
+    }
+    float l2[4] = {sq[0] + sq[2], sq[1] + sq[3], sq[2] + sq[0], sq[3] + sq[1]};
+    float wsum = l2[0] + l2[1];
+    float tot = 0.0f;
+    for (int w = 0; w < 4; ++w) tot += __shfl_sync(0xffffffffu, wsum, 8 * w);
+    float rr = rsqrtf(tot / (float)dn + eps);
+    const float* wt = part == 0 ? wq : wk;
+    int half = r / 2;
+    int c0 = 4 * lane;
+    int peer = c0 < half ? lane + half / 4 : lane - half / 4;
+    if (peer < 0 || peer > 31) peer = lane;
+    unsigned short outv[4];
+    for (int i = 0; i < 4; ++i) {
+        int p = c0 + i;
+        float normed = x[i] * rr * wt[p];
+        float pv = __shfl_sync(0xffffffffu, x[i], peer);
+        float res = normed;
+        if (use_rope && p < r) {
+            int partner = p < half ? p + half : p - half;
+            float pn = pv * rr * wt[partner];
+            float rot = p < half ? -pn : pn;
+            res = normed * cs[(long)s * r + p] + rot * sn[(long)s * r + p];
+        }
+        outv[i] = fv_bf16_rne(res);
+    }
+    *(uint2*)((part == 0 ? q : k) + o) = make_uint2((unsigned int)outv[0] | ((unsigned int)outv[1] << 16),
+                                                   (unsigned int)outv[2] | ((unsigned int)outv[3] << 16));
+}
+
 // ==== endregion: DiT block fusions ====
 
 // ==== region: Wan block (bf16 activations) ====

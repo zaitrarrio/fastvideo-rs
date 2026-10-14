@@ -221,6 +221,7 @@ kernel_fns!(
     fvf_merge_heads_mx,
     fvf_h3_gate_res_norm_mod,
     fvf_split_heads_rows,
+    fvf_h3_qkvg_heads,
     // ---- Wan block, bf16 activations (appended) ----
     wan_res_ln,
     wan_res_gate,

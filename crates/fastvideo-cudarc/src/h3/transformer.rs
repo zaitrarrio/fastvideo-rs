@@ -1688,6 +1688,24 @@ impl Attention {
                 }
             }
         }
+        // Dense and Sol-layer attention read bf16 q/k/v: one launch writes
+        // them (FASTVIDEO_H3_GLUE; the same values as the ops below).
+        #[cfg(feature = "cuda")]
+        if fused
+            && fused16::glue_enabled()
+            && !crate::wan::nvfp4::kv_enabled()
+            && matches!(mode, AttnMode::Dense | AttnMode::SolLayer { .. })
+            && packed.is_bf16()
+            && packed.is_device_fresh()
+        {
+            let (q, k, v, _) = self.heads16(&packed, rope, false)?;
+            drop(packed);
+            let out = match mode {
+                AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
+                _ => dense_attention(&q, &k, &v)?,
+            };
+            return self.project_out(out, permutation);
+        }
         let q = phase("h3_attn_q", || {
             if fused {
                 return fused16::qk_norm_rope(
@@ -1819,18 +1837,7 @@ impl Attention {
         let (heads, d) = (self.heads, self.head_dim);
         let inner = heads * d;
         if fused16::glue_enabled() && vsa.takes_bf16() && packed.is_bf16() && packed.is_device_fresh() {
-            let q = phase("h3_attn_q", || {
-                fused16::qk_norm_rope(packed, &self.norm_q, rope, heads, d, 0, self.eps)
-            })?;
-            let k = phase("h3_attn_k", || {
-                fused16::qk_norm_rope(packed, &self.norm_k, rope, heads, d, inner, self.eps)
-            })?;
-            let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, heads, d))?;
-            let gate = if self.has_gate {
-                Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, heads, d))?)
-            } else {
-                None
-            };
+            let (q, k, v, gate) = self.heads16(packed, rope, self.has_gate)?;
             let Some(out) = vsa.attend_unrounded(q, k, v, gate)? else {
                 return Ok(None);
             };
@@ -1861,6 +1868,39 @@ impl Attention {
         };
         let out = vsa.attend(q, k, v, gate)?;
         self.round_attn_out(out).map(Some)
+    }
+
+    /// bf16 q, k (normed, rotated), v and (with `gate`) the VSA gate of a
+    /// bf16 projection: one launch ([`fused16::qkvg_heads`]) where it
+    /// applies, else [`fused16::qk_norm_rope`] and the head splits.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::type_complexity)]
+    fn heads16(
+        &self,
+        packed: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        gate: bool,
+    ) -> Result<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)> {
+        let (heads, d) = (self.heads, self.head_dim);
+        let inner = heads * d;
+        if let Some(t) = phase("h3_attn_qkvg_heads", || {
+            fused16::qkvg_heads(packed, &self.norm_q, &self.norm_k, rope, heads, d, gate, self.eps)
+        })? {
+            return Ok(t);
+        }
+        let q = phase("h3_attn_q", || {
+            fused16::qk_norm_rope(packed, &self.norm_q, rope, heads, d, 0, self.eps)
+        })?;
+        let k = phase("h3_attn_k", || {
+            fused16::qk_norm_rope(packed, &self.norm_k, rope, heads, d, inner, self.eps)
+        })?;
+        let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, heads, d))?;
+        let g = if gate {
+            Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, heads, d))?)
+        } else {
+            None
+        };
+        Ok((q, k, v, g))
     }
 
     /// The VSA output for [`Self::project_out`]: an all-MXFP8 `to_out` rounds

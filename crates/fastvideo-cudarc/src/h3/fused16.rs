@@ -374,6 +374,45 @@ pub fn gate_res_norm_mod(
     Ok(None)
 }
 
+/// q, k, v and the VSA gate of one bf16 `[B, S, W]` projection (columns
+/// `[q | k | v | gate]`, `heads * d` each) as bf16 BHSD in one launch: q and
+/// k exactly as [`qk_norm_rope`], v and the gate as `split_heads_bhsd`.
+/// Device only; `None` unless [`glue_enabled`], `d == 128` and the RoPE
+/// width is a multiple of 8 (the caller runs the separate ops).
+#[cfg(feature = "cuda")]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn qkvg_heads(
+    packed: &CudaTensor,
+    wq: &CudaTensor,
+    wk: &CudaTensor,
+    rope: Option<(&CudaTensor, &CudaTensor)>,
+    heads: usize,
+    d: usize,
+    gate: bool,
+    eps: f32,
+) -> Result<Option<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)>> {
+    let [batch, seq, width] = packed.shape[..] else {
+        return Ok(None);
+    };
+    let parts = if gate { 4 } else { 3 };
+    let r = rope.map_or(0, |(c, _)| c.shape.get(1).copied().unwrap_or(0));
+    if !glue_enabled()
+        || d != 128
+        || !r.is_multiple_of(8)
+        || r > d
+        || !width.is_multiple_of(4)
+        || parts * heads * d > width
+        || !packed.is_bf16()
+        || !packed.is_device_fresh()
+    {
+        return Ok(None);
+    }
+    let Some(src) = packed.device_slice_bf16() else {
+        return Ok(None);
+    };
+    dev::qkvg_heads(src, wq, wk, rope, batch, seq, heads, parts, r, width, eps).map(Some)
+}
+
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
 use crate::wan::{device, stats};
@@ -692,6 +731,60 @@ mod dev {
                 None => NormOut::T(out16.into_tensor(res.shape.clone())?),
             },
         ))
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(super) fn qkvg_heads(
+        src: &cudarc::driver::CudaSlice<half::bf16>,
+        wq: &CudaTensor,
+        wk: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        batch: usize,
+        seq: usize,
+        heads: usize,
+        parts: usize,
+        r: usize,
+        width: usize,
+        eps: f32,
+    ) -> Result<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)> {
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let d = 128usize;
+        let (wq, wk) = (weight_f32(wq)?, weight_f32(wk)?);
+        let wqo = operand(&wq)?.ok_or_else(|| msg("h3 qkvg heads: norm_q"))?;
+        let wko = operand(&wk)?.ok_or_else(|| msg("h3 qkvg heads: norm_k"))?;
+        let (cos, sin, use_rope) = match rope {
+            Some((c, s)) => (c.to_f32_act()?, s.to_f32_act()?, 1i32),
+            None => (wq.clone(), wq.clone(), 0),
+        };
+        let (co, so) = (
+            operand(&cos)?.ok_or_else(|| msg("rope cos"))?,
+            operand(&sin)?.ok_or_else(|| msg("rope sin"))?,
+        );
+        let n = batch * heads * seq * d;
+        let mut outs: Vec<OutBuf> = (0..parts).map(|_| OutBuf::new(n, true)).collect::<Result<_>>()?;
+        let mut ptrs: Vec<u64> = outs.iter_mut().map(|o| o.ptr()).collect();
+        if parts == 3 {
+            ptrs.push(ptrs[2]);
+        }
+        let items = batch * seq * parts * heads;
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (items.div_ceil(8).max(1) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let sp = ptr(src);
+        let v = [batch, seq, heads, parts, r, width, d].map(|u| u as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_qkvg_heads, cfg;
+            &sp, &wqo.ptr, &wko.ptr, &co.ptr, &so.ptr, &use_rope, &ptrs[0], &ptrs[1], &ptrs[2], &ptrs[3],
+            &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &eps, &v[6])
+        .map_err(err)?;
+        let shape = vec![batch, heads, seq, d];
+        let mut it = outs.into_iter();
+        let q = it.next().unwrap().into_tensor(shape.clone())?;
+        let k = it.next().unwrap().into_tensor(shape.clone())?;
+        let v = it.next().unwrap().into_tensor(shape.clone())?;
+        let g = it.next().map(|g| g.into_tensor(shape)).transpose()?;
+        Ok((q, k, v, g))
     }
 
     pub(super) fn swiglu_mx(h: &CudaTensor) -> Result<Option<MxAct>> {
