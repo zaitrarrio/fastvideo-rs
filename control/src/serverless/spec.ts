@@ -13,6 +13,8 @@ import {
   CONFIG_PATH_RE,
   CPU_VCPUS,
   CUDA_VERSIONS,
+  DEFAULT_ALLOWED_CUDA,
+  MIN_CUDA,
   ENV_KEY_MESSAGE,
   envValueProblem,
   enumMessage,
@@ -30,7 +32,6 @@ import {
 } from "../enums";
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { SLS_MAX_DISK_GB, slsHubDiskGb, slsHubPlan, slsR2DiskGb, slsTrees } from "./weights";
-import { R2_DEFAULT_CUDA } from "../driver-check";
 import { missingTrees } from "../volumes";
 import { upsamplerDiskGb } from "../upsampler";
 import type { Env } from "../env";
@@ -46,15 +47,12 @@ export const DEFAULT_SLS_WEIGHTS_SOURCE: "volume" | "r2" = "volume";
 export const SLS_WEIGHTS_SOURCES = ["volume", "r2", "hub"] as const;
 export type SlsWeightsSource = (typeof SLS_WEIGHTS_SOURCES)[number];
 
-/** The CUDA versions the serve images run on (docs/serve/images.md): the driver must offer 13.0. */
-// No CUDA filter by default: Runpod's allowedCudaVersions is a host filter, and "13.0" alone hid the
-// EUR-IS-1 RTX PRO 6000 hosts (driver 595.x) so workers never started (docs/serve/e2e/ltx.md, h3-max.md;
-// staging h3-max2, 2026-10-07). The images check the driver (>= 580) themselves.
-export const DEFAULT_CUDA: string[] = [];
-/** weights_source r2 (any data centre): hosts must offer CUDA 13 (driver-check.ts R2_DEFAULT_CUDA). A worker on an
- * older driver panicked in fv-serve and crash-looped (docs/ops/r2-bench-2026-10-12.md finding 2). */
-export const DEFAULT_R2_CUDA: string[] = [...R2_DEFAULT_CUDA];
-const sameList = (a: readonly string[] | undefined, b: readonly string[]) => JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...b].sort());
+/** A GPU endpoint's default allowed_cuda, whatever its weights source (enums.ts DEFAULT_ALLOWED_CUDA): no filter
+ * while Runpod's REST enum cannot name the 13.1 / 13.2 hosts ("13.0" alone hid every Secure RTX PRO 6000, so workers
+ * never started: staging h3-max2 2026-10-07, 2026-10-14). The endpoint still gets minCudaVersion MIN_CUDA
+ * (payloads.ts), and the boot's driver check refuses a host older than CUDA 13 (docs/ops/r2-bench-2026-10-12.md
+ * finding 2). */
+export const DEFAULT_CUDA: string[] = [...DEFAULT_ALLOWED_CUDA];
 export { CUDA_VERSIONS, SLS_CPU_FLAVORS };
 
 /** The weights volumes fv-control may mount (CLAUDE.md: EU only; a region without a volume is unavailable). */
@@ -168,7 +166,7 @@ export const EndpointSpecZ = z
     execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
     scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"], { error: (i) => enumMessage("a Runpod scaler type", i.input, ["QUEUE_DELAY", "REQUEST_COUNT"]) }).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
     scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
-    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe("GPU workers: CUDA versions a host may offer. Default: none on the EU volume (its hosts are new); 13.0 with weights_source r2 (any data centre: an older driver crashes the image). [] for no filter (the boot still refuses a driver older than CUDA 13). A filter can leave workers unplaced."),
+    allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe(`GPU workers: an exact list of CUDA versions a host may offer (allowedCudaVersions). Default: none, as [] (every endpoint gets minCudaVersion ${MIN_CUDA}, and the boot refuses a driver older than CUDA 13). Runpod's REST enum stops at 13.0 while hosts report 13.1 / 13.2, so a list leaves those hosts out (all Secure RTX PRO 6000s, 2026-10-14).`),
     container_disk_gb: z.number().int().min(5).max(500).meta({ "x-unit": "GB" }).describe("Container disk per worker (GB). weights_source r2: at least the trees' size × 1.15 + 30 GB (the default is sized from the manifests); otherwise up to 200."),
     deadline_min: z.number().int().min(5).max(7 * 1440).nullable().meta({ "x-unit": "min" }).describe("Backstop: minutes after create (or the last extend) at which deadline_action runs; null: none."),
     deadline_action: z.enum(["scale0", "delete"]).describe("At the deadline: scale0 (workers 0/0, the endpoint stays) or delete (endpoint and template)."),
@@ -284,12 +282,12 @@ export function withWeightsSource(spec: EndpointSpec, ws: SlsWeightsSource): End
     out.network_volume = null;
     delete out.data_centers;
     out.flashboot = true;
-    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
+    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"];
     out.container_disk_gb = Math.min(SLS_MAX_DISK_GB, Math.max(spec.container_disk_gb, slsHubDiskGb(slsHubPlan(out).trees) + (spec.upsampler_local ? upsamplerDiskGb({} as Env) : 0)));
   } else if (ws === "r2") {
     out.network_volume = null;
     delete out.data_centers;
-    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
+    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"];
     // upsampler_local: its GGUF tree (upsampler.ts) lands on the same disk (the +30 GB headroom would take it; sized anyway).
     out.container_disk_gb = Math.max(spec.container_disk_gb, slsR2DiskGb(slsTrees(out)) + (spec.upsampler_local ? upsamplerDiskGb({} as Env) : 0));
   } else {
@@ -297,7 +295,6 @@ export function withWeightsSource(spec: EndpointSpec, ws: SlsWeightsSource): End
     out.network_volume = eu ? eu.id : null;
     if (eu) out.data_centers = [eu.dc] as EndpointSpec["data_centers"];
     out.container_disk_gb = Math.min(spec.container_disk_gb, 200);
-    if (sameList(spec.allowed_cuda, DEFAULT_R2_CUDA)) out.allowed_cuda = [...DEFAULT_CUDA] as EndpointSpec["allowed_cuda"];
   }
   return out;
 }

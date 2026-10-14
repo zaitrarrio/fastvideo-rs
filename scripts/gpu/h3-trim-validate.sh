@@ -21,6 +21,8 @@
 # Trim's adaln_rank); FV_PROMPT / FV_SEED / FV_H / FV_W / FV_FRAMES / FV_SKIP (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
+source "$HERE/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
@@ -127,7 +129,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     export FVX_URL="$url" FVX_UPD="$up_dump_url" FVX_UPR="$up_ref_url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
-    payload="$(jq -n --arg name "fv-h3trim-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
+    payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-h3trim-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" --arg rev "$UP_REV" \
       --arg prompt "${FV_PROMPT:-}" --arg seed "${FV_SEED:-}" --arg h "${FV_H:-}" --arg w "${FV_W:-}" --arg nf "${FV_FRAMES:-}" --arg skip "${FV_SKIP:-}" --arg te "${FV_TEXT_ENCODER:-}" --arg upsha "$up_dump_sha" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
@@ -139,7 +141,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
               + (if $te != "" then {FV_TEXT_ENCODER: $te} else {} end)
               + (if $upsha != "" then {FV_UP_DUMP_URL: env.FVX_UPD, FV_UP_DUMP_SHA256: $upsha, FV_UP_REF_URL: env.FVX_UPR} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 220, networkVolumeId: $vol, volumeMountPath: "/workspace"}
-           else {containerDiskInGb: 300, allowedCudaVersions: ["13.0"]} end)')"
+           else {containerDiskInGb: 300} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end) end)')"
     unset FVX_URL FVX_UPD FVX_UPR
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"

@@ -1,0 +1,5 @@
+<string>:5: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+2026-10-14T12:08:13Z start: fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4
+2026-10-14T12:13:20Z published fasth3-v2-nvfp4
+2026-10-14T12:18:26Z published fasth3-4step-vsa-nvfp4
+2026-10-14T12:25:22Z end: 0 step(s) failed

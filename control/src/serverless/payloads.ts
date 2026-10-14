@@ -1,4 +1,4 @@
-import { CUDA_VERSIONS } from "../enums";
+import { MIN_CUDA } from "../enums";
 // Runpod payloads of a serverless endpoint (docs/control/serverless.md),
 // the same shapes scripts/serve/runpod-endpoint.sh and runpod-templates.sh
 // proved: a serverless template (REST v1 POST /templates) plus a queue
@@ -113,6 +113,9 @@ export function endpointFields(spec: EndpointSpec) {
     computeType: "GPU" as const,
     gpuTypeIds: spec.gpu_types || [],
     gpuCount: spec.gpu_count ?? 1,
+    // "At least CUDA 13.0": Runpod applies minCudaVersion as a minimum, so it keeps the 13.1 / 13.2 hosts (which REST
+    // cannot name in allowedCudaVersions) and drops the pre-13 ones (enums.ts MIN_CUDA, DEFAULT_ALLOWED_CUDA).
+    minCudaVersion: MIN_CUDA,
     ...((spec.allowed_cuda ?? []).length ? { allowedCudaVersions: spec.allowed_cuda } : {}),
   };
 }
@@ -125,10 +128,12 @@ export function endpointCreatePayload(spec: EndpointSpec, templateId: string) {
 /** REST v1 PATCH /endpoints/<id> (EndpointUpdateInput; also scales a v2-made endpoint): scaling, timeouts,
  * placement. Never computeType (not an update field: Runpod refuses "extra input keys"); a CPU endpoint's
  * flavors and vCPUs are v2 fields, changed only by a new endpoint. */
-export function endpointUpdatePayload(spec: EndpointSpec) {
+export function endpointUpdatePayload(spec: EndpointSpec, prev?: EndpointSpec) {
   const { computeType: _c, ...f } = endpointFields(spec) as Record<string, unknown>;
-  // An empty allowed_cuda must also clear a filter set earlier: PATCH with every version Runpod knows.
-  if (spec.compute === "GPU" && !(spec.allowed_cuda ?? []).length) f.allowedCudaVersions = [...CUDA_VERSIONS];
+  // An empty allowed_cuda after a list clears the endpoint's filter: [] ("not set: any CUDA version", REST v1). Never
+  // "every version Runpod knows": REST's enum stops at 13.0, so that list hid the 13.1 / 13.2 hosts (all Secure RTX
+  // PRO 6000s, 2026-10-14) from every endpoint fv-control made. minCudaVersion keeps the CUDA 13 minimum.
+  if (spec.compute === "GPU" && !(spec.allowed_cuda ?? []).length && (prev?.allowed_cuda ?? []).length) f.allowedCudaVersions = [];
   if (spec.compute === "CPU") {
     delete f.cpuFlavorIds;
     delete f.vcpuCount;

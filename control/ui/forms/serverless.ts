@@ -130,7 +130,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         { class: "cf-fields", style: "margin-top:10px" },
         ...(cpu
           ? [F(["cpu_flavors"], { label: "CPU flavors (in order)" }), F(["vcpu"], { label: "vCPUs per worker" })]
-          : [F(["gpu_types"], { label: "GPU types (priority order)" }), F(["gpu_count"], { label: "GPUs per worker", unsetLabel: "1" }), F(["allowed_cuda"], { label: "CUDA versions a host may offer", help: "The images need 13.0." })]),
+          : [F(["gpu_types"], { label: "GPU types (priority order)" }), F(["gpu_count"], { label: "GPUs per worker", unsetLabel: "1" }), F(["allowed_cuda"], { label: "CUDA versions a host may offer", help: "Leave empty: every endpoint already asks for CUDA 13.0 or newer. A list is exact, and Runpod cannot name 13.1 / 13.2 here, so it hides the newest hosts." })]),
         cpu
           ? null
           : F(["weights_source"], {

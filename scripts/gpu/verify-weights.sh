@@ -6,7 +6,8 @@
 # other tree comes from R2. Before that: jg48s6o1w0 (every cell passed on 2026-10-06). The US volume
 # s2k01690bi was deleted (docs/ops/runpod-volumes.md).
 #
-#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 vdn-h3 vdn-h3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
+#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 fasth3-v2-nvfp4
+#                                      fasth3-4step-vsa-nvfp4 vdn-h3 vdn-h3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
@@ -83,6 +84,11 @@ needs() {
     # Its ComfyUI NVFP4 single file (Blackwell). Plus sha:fasth3-trim-8step-nvfp4.
     fasth3-trim-8step-nvfp4)
       echo ":fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors" ;;
+    # FastH3 V2 / 4-step NVFP4 (ModelOpt layout, docs/ports/fasth3-nvfp4.md): the published transformer/ and vae/
+    # (vae shard 3, text encoder, tokenizer, audio VAE: h3-8step's / h3-base's). Plus sha:<dest>. R2 only.
+    # Its vae/ index names shard 3, which is h3-8step's: the two published shards are checked as files.
+    fasth3-v2-nvfp4|fasth3-4step-vsa-nvfp4)
+      echo "$1:transformer $1:vae/diffusion_pytorch_model-00001-of-00003.safetensors $1:vae/diffusion_pytorch_model-00002-of-00003.safetensors h3-8step:vae h3-8step:audio_vae h3-8step:tokenizer h3-8step:text_encoder" ;;
     # VDN-H3 (docs/ports/vdn-h3.md): h3-base's transformer, VAEs and text encoder plus the stage-B linear branch and its
     # default LoRA (vdn-h3-stage-b-2000). Plus sha:vdn-h3-stage-b-2000.
     vdn-h3)
@@ -189,7 +195,7 @@ needs() {
   esac
 }
 
-CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 vdn-h3 vdn-h3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
+CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 vdn-h3 vdn-h3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
@@ -207,6 +213,7 @@ sha_dests() {
       echo "longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg" ;;
     h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v h3-turbo-loras/lightx2v-v0.1" ;;
     ncii-guard) echo "auxiliary/ncii-light-guard" ;;
+    fasth3-v2-nvfp4|fasth3-4step-vsa-nvfp4) echo "$1" ;;
   esac
 }
 SHA_LIST="$HERE/weights-sha256.tsv"
