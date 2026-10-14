@@ -4,6 +4,7 @@
 import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 import type { Env } from "../env";
 import { isOtherPool, weightsPlan, weightsSource } from "../providers";
+import { DC_ANY, noVolumePod } from "../enums";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
@@ -274,6 +275,14 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
   // Never place in a region without a weights volume (us since 2026-10), even from an old stored spec.
   const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
   const out: Placement[] = [];
+  // A pod without the weights volume (GPU: weights_source r2 or none; CPU: volume off) with data_centers: those data
+  // centres, in order (each with every GPU type / flavor in order), instead of the regions'; "any" = no dataCenterIds.
+  const dcs = !isOtherPool(pool) && pool.data_centers?.length && noVolumePod(pool) ? pool.data_centers : null;
+  const at = (dc: string) => (dc === DC_ANY ? {} : { dc });
+  if (pool.compute === "CPU" && dcs) {
+    for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) for (const dc of dcs) out.push({ ...at(dc), cpu: f });
+    return out;
+  }
   if (pool.compute === "CPU") {
     for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) {
       for (const r of regions) out.push({ region: r, dc: REGIONS[r]!.dc, cpu: f });
@@ -281,9 +290,8 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
     }
     return out;
   }
-  // weights_source r2 (no volume) with data_centers: those data centres, in order, instead of the regions'.
-  if (pool.weights_source === "r2" && !isOtherPool(pool) && pool.data_centers?.length) {
-    for (const dc of pool.data_centers) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS.eu.gpus) out.push({ dc, gpu: g });
+  if (dcs) {
+    for (const dc of dcs) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS.eu.gpus) out.push({ ...at(dc), gpu: g });
     return out;
   }
   for (const r of regions) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS[r]!.gpus) out.push({ region: r, dc: REGIONS[r]!.dc, gpu: g });
@@ -331,7 +339,7 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
     gpuCount: 1,
     containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : 40),
     ...vol,
-    dataCenterIds: [pl.dc!],
+    ...(pl.dc ? { dataCenterIds: [pl.dc] } : {}),
     ...(cuda.length ? { allowedCudaVersions: cuda } : {}),
     ports: ["8000/http", "70000/tcp"],
   };

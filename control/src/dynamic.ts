@@ -14,6 +14,7 @@ import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
 import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, VARIANTS, type OtherProviderId } from "./enums";
 import { brevGpuOptions, providerImpl, providerView } from "./providers";
 import { brevInstanceTypes } from "./brev";
+import { presetWeightsDefault } from "./standalone";
 import { parkedView } from "./brev-park";
 import { listTags } from "./ghcr";
 import { knownVolumes, SLS_RESERVED } from "./serverless/spec";
@@ -101,7 +102,8 @@ export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: 
     config_paths: [...new Set([...POOL_PRESETS, ...STANDARD_POOLS.map((pool) => ({ pool }))].map((p) => p.pool.config).filter((x): x is string => !!x).concat(["/etc/fv/runpod-fake.toml"]))].sort(),
     endpoints: (endpoints.results || []).map((e) => e.name),
     variants: VARIANTS.map((v) => ({ id: v, detail: variantDetail(v) })),
-    pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}` })),
+    // weights_source: the preset's default on a Runpod GPU pod (the launch form's Weights default; standalone.ts).
+    pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}`, weights_source: presetWeightsDefault(p.id) })),
     sls_presets: SLS_PRESETS.map((p) => ({ id: p.id, detail: `${p.title} · ${p.variant}${p.config_toml ? " + inline config" : ""}${p.min_vram_gb ? ` · ≥ ${p.min_vram_gb} GB GPU` : ""}${p.licence ? ` · ${p.licence}` : ""}` })),
     fake_models: FAKE_MODELS,
     models: POOL_PRESETS.flatMap((p) => p.pool.models || []),
@@ -117,7 +119,7 @@ export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: 
     sls_reserved_env_keys: [...SLS_RESERVED],
     env_types: ENV_VALUE_TYPES,
     // Launch providers (docs/serve/deploy-gmi-brev.md): Runpod, and GMI / Brev when their secrets are set (detail says why not).
-    providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
+    providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume, or R2 / none in any data centre" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
     // Brev: live prices, stoppable types first (keep-on-stop), parked instances (docs/serve/deploy-gmi-brev.md §3.4).
     provider_gpus: [...configuredGpus(env, "gmi"), ...(live && !providerImpl("brev").off(env) ? await brevGpuOptions(env).catch(() => []) : configuredGpus(env, "brev"))],
     provider_regions: env.GMI_DEFAULT_IDC ? [{ id: env.GMI_DEFAULT_IDC, detail: "GMI default IDC" }] : [],

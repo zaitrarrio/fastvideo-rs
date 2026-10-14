@@ -1233,6 +1233,41 @@ await step("standalone pod: launch, the same up (direct, watchdog boot), costs u
   assert.equal([...mock.pods.values()].filter((p) => !before.has(p.id)).length, 0);
 });
 
+await step("standalone Runpod pod with weights_source r2 in a data centre without the weights volume (owner 2026-10-13: any region with R2): validates, launches there with no volume, the fallbacks in order; a volume pod there is refused", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  const toml = readFileSync(new URL("../../../configs/serve/runpod-fake.toml", import.meta.url), "utf8") + '\n[r2probe]\npath = "${FV_WEIGHTS}/r2demo/config.json"\n';
+  const launch = { name: "r2us", variant: "wan", config_toml: toml, fake_models: ["fake-wan"], channel: "stable", deadline_min: 30, weights_source: "r2", gpu_types: ["NVIDIA H200", "NVIDIA H100 80GB HBM3"], data_centers: ["US-TX-3", "any"] };
+  // The validator (the launch form's live check) and the image preflight agree: ok.
+  const v = (await call("/api/standalone/validate", { method: "POST", body: launch, headers: T() })).j;
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.deepEqual([v.spec.pools[0].data_centers, v.spec.pools[0].volume], [["US-TX-3", "any"], false]);
+  const pf = (await call("/api/preflight", { method: "POST", body: { launch }, headers: T() })).j;
+  assert.equal(pf.ok, true, JSON.stringify(pf.errors));
+  // A volume pod there: refused at its field, by the validator and the launch alike.
+  const bad = { ...launch, name: "volus", weights_source: "volume" };
+  const vb = (await call("/api/standalone/validate", { method: "POST", body: bad, headers: T() })).j;
+  assert.ok(vb.issues.some((i) => i.path[0] === "data_centers" && /US-TX-3, "any" \(Runpod places it\) has no weights volume: weights_source r2 \(the R2 weights store\) or none runs in any data centre/.test(i.message)), JSON.stringify(vb.issues));
+  assert.equal((await call("/api/standalone", { method: "POST", body: bad, headers: T() })).status, 400);
+  // The first GPU type has no host in US-TX-3: the next placement (the fallback type, same data centre) gets it.
+  mock.failCreate = 1;
+  const r = await call("/api/standalone", { method: "POST", body: launch, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.pod.id;
+  const op = await waitOp(id, "up", 90000);
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+  assert.equal(mine().length, 1);
+  const p = mine()[0].payload;
+  assert.deepEqual([p.gpuTypeIds, p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE, p.allowedCudaVersions], [["NVIDIA H100 80GB HBM3"], ["US-TX-3"], undefined, "r2", ["13.0"]]);
+  assert.ok(op.log.some((l) => /no NVIDIA H200 in US-TX-3/.test(typeof l === "string" ? l : l.msg || JSON.stringify(l))), JSON.stringify(op.log));
+  const sp = (await call("/api/standalone/r2us", { headers: T() })).j.pod;
+  assert.deepEqual([sp.definition.weights_source, sp.definition.dc, sp.definition.volume, sp.pod.dc], ["r2", "US-TX-3, any", null, "US-TX-3"]);
+  assert.equal((await call("/api/standalone/r2us", { method: "DELETE", headers: T() })).status, 202);
+  for (let i = 0; i < 120 && (await call("/api/standalone/r2us", { headers: T() })).status !== 404; i++) await sleep(500);
+  assert.equal(mine().length, 0);
+});
+
 await step("GMI / Brev standalone pods: checks, create → running → tunnel report → health → delete, budget, failed boot, only ours", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
   const g = mock.gmi;

@@ -17,7 +17,7 @@ import { HttpError, utcDay } from "./util";
 import { weightsSource } from "./providers";
 import type { z } from "zod";
 import { parseOr400, type StandaloneLaunchZ } from "./schemas";
-import { RUNPOD_DATA_CENTERS } from "./enums";
+import { noVolumePod, RUNPOD_DC_CHOICES } from "./enums";
 
 /** The single pool's id inside a standalone pod's spec. */
 export const STANDALONE_POOL = "pod";
@@ -25,15 +25,27 @@ export const STANDALONE_POOL = "pod";
 /** A launch request (the schema: src/schemas.ts StandaloneLaunchZ, GET /api/schemas/standalone-launch). */
 export type LaunchRequest = z.infer<typeof StandaloneLaunchZ>;
 
-/** The region of a region id or a data centre id. A Runpod data centre without a weights volume is allowed with
- * weights_source r2 (or a CPU pod): the spec keeps the nominal region eu and the pool's data_centers place the pod. */
-export function regionOf(x: { region?: string; dc?: string; weights_source?: string; compute?: string; variant?: string }): RegionId {
-  const want = x.region || x.dc || "eu";
+/** The region of a region id or a data centre id. A Runpod data centre without a weights volume (or "any") is allowed
+ * for a pod without the volume (weights_source r2 or none; a CPU pod with volume off; schemas.ts noVolumePod): the spec
+ * keeps the nominal region eu and the pool's data_centers place the pod. */
+export function regionOf(x: { region?: string; dc?: string; data_centers?: string[]; weights_source?: string; compute?: string; variant?: string; volume?: boolean }): RegionId {
+  const first = x.data_centers?.[0] ?? x.dc;
+  const want = x.region || first || "eu";
   const byDc = (Object.keys(REGIONS) as RegionId[]).find((r) => REGIONS[r].dc === want);
-  if (!byDc && !x.region && x.dc && ((RUNPOD_DATA_CENTERS as readonly string[]).includes(x.dc) && (x.weights_source === "r2"))) return "eu";
+  // (US-CA-2 is the unavailable us region's data centre: without its volume it is just another data centre.)
+  if ((!byDc || !regionAvailable(byDc)) && !x.region && first &&((RUNPOD_DC_CHOICES as readonly string[]).includes(first) && noVolumePod(x))) return "eu";
   const r = (byDc || want) as RegionId;
-  if (!regionAvailable(r)) throw new HttpError(400, `region: ${want} has no weights volume fv-control can use (EU only: eu / ${REGIONS.eu.dc}; CLAUDE.md)`);
+  if (!regionAvailable(r)) throw new HttpError(400, `region: ${want} has no weights volume fv-control can use (EU only: eu / ${REGIONS.eu.dc}; CLAUDE.md); weights_source r2 or none runs in any data centre`);
   return r;
+}
+
+/** A preset's default weights source on a Runpod GPU pod (what standaloneSpec picks when the launch names none): the
+ * volume when it holds every tree, else r2 when every tree is published (the launch form's default per preset). */
+export function presetWeightsDefault(id: string): "volume" | "r2" | "hub" | "none" {
+  const base = presetPool(id);
+  if (!base) return "volume";
+  if (base.weights_source) return base.weights_source;
+  return base.volume === undefined ? weightsSource({ ...base, compute: "GPU", volume: undefined }) : base.volume ? "volume" : weightsSource({ ...base, compute: "GPU" });
 }
 
 /** A launch request → the env it sets (validated) and a normalized one-pool direct cluster spec. */
@@ -64,7 +76,11 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
   if (input.cpu_flavors) pool.cpu_flavors = input.cpu_flavors;
   if (input.vcpu !== undefined) pool.vcpu = input.vcpu;
   if (input.container_disk_gb !== undefined) pool.container_disk_gb = Number(input.container_disk_gb);
-  pool.volume = input.volume ?? (compute === "GPU" ? (base.volume ?? true) : false);
+  // A GPU pod's default weights: the preset's own volume flag, else what a cluster pool would use (providers.ts
+  // weightsSource: the volume when it holds every tree, else r2 when every tree is published: wan, fastwan21, sfwan,
+  // longlive, fasth3-trim since the 500 GB EU volume, owner decision 2026-10-13), so the launch form's default matches.
+  const ws0 = compute === "GPU" && input.volume === undefined && !input.weights_source && base.volume === undefined ? weightsSource({ ...pool, volume: undefined }) : null;
+  pool.volume = input.volume ?? (compute === "GPU" ? (base.volume ?? ws0 !== "r2") : false);
   // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): no Runpod volume; the weights from R2 (the default once
   // every tree is published, providers.ts weightsSource), the Hub (approved) or none.
   if (input.provider && input.provider !== "runpod") {
@@ -76,12 +92,14 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
     if (input.weights_source) pool.weights_source = input.weights_source;
     if (input.weights_download_approved) pool.hub_download_approved = true;
     delete pool.gpu_types, delete pool.cpu_flavors, delete pool.vcpu;
-  } else if (input.weights_source) {
-    pool.weights_source = input.weights_source;
-    // r2 on Runpod: the trees go onto the container disk (sized by fv-control unless given); no volume.
-    if (input.weights_source === "r2" && input.volume === undefined) pool.volume = false;
-    // r2 has no volume to pin the pod: any Runpod data centre (docs/ops/r2-bench-2026-10-12.md finding 5).
-    if (input.weights_source === "r2" && input.dc) pool.data_centers = [input.dc] as PoolSpec["data_centers"];
+  } else {
+    if (input.weights_source) pool.weights_source = input.weights_source;
+    // r2 on Runpod: the trees go onto the container disk (sized by fv-control unless given); none: no weights. No volume.
+    if ((input.weights_source === "r2" || input.weights_source === "none") && input.volume === undefined && compute === "GPU") pool.volume = false;
+    // No volume to pin the pod: any Runpod data centre (docs/ops/r2-bench-2026-10-12.md finding 5), in order, a last
+    // "any" letting Runpod place it. The validator (schemas.ts) refuses them for a volume pod.
+    const dcs = input.data_centers ?? (input.dc ? [input.dc] : undefined);
+    if (dcs?.length && noVolumePod({ compute, weights_source: input.weights_source, volume: pool.volume })) pool.data_centers = [...dcs] as PoolSpec["data_centers"];
   }
   // An image reference is the pool's own image (resolved to a digest at start); the channel / sha the spec's source.
   if (input.image) pool.image = input.image;
@@ -144,7 +162,7 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     created_by: c.created_by,
     definition: {
       provider: pool.provider ?? "runpod",
-      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : {}),
+      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : { weights_source: pool.compute === "CPU" ? null : weightsSource(pool, env) }),
       variant: pool.variant,
       image: pool.image ? { image: pool.image } : c.spec.image,
       compute: pool.compute,

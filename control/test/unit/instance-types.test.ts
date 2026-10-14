@@ -11,6 +11,7 @@ import { gpuClass, shortGpuName } from "../../src/gpu-family";
 import { _app } from "../../src/index";
 import { normalizeBrev, normalizeGmi, normalizeRunpod, REFRESH_MIN_MS, resetRefreshLimit } from "../../src/instance-types";
 import { clearTtlCache, ttlCached, ttlCachedAt } from "../../src/ttlcache";
+import { launchable, type ITRow } from "../../ui/forms/itable";
 import { d1 } from "./d1shim";
 
 // ---------------------------------------------------------------- fixtures (live shapes)
@@ -159,6 +160,28 @@ describe("normalizeRunpod: GPU types × data centres", () => {
     const r = normalizeRunpod({ gpuTypes: RP_TYPES, dataCenters: null });
     expect(r).toHaveLength(6);
     expect(r.find((x) => x.name === "NVIDIA H100 80GB HBM3")).toMatchObject({ region: null, stock: "Medium", available: true, supported: false });
+  });
+  // Owner 2026-10-13: "I should be able to launch Runpod in any region if I am using R2": each row says why it cannot
+  // be launched per weights source, so the launch form recomputes the table when its Weights change (no refetch).
+  it("launchable per weights source: r2 / none in any data centre; volume in EU-RO-1 only; AMD, unknown, not Secure Cloud never", () => {
+    const rows = normalizeRunpod({ gpuTypes: RP_TYPES, dataCenters: RP_DCS });
+    const by = (id: string) => rows.find((r) => r.id === id)!;
+    const ok = (id: string, w: "volume" | "r2" | "none") => launchable(by(id) as ITRow, w).supported;
+    // A non-volume data centre: launchable with r2 / none, not with the volume (the API's own flags stay the volume's).
+    const us = by("NVIDIA H100 80GB HBM3@US-CA-2");
+    expect([us.volume_dc, us.supported, us.reasons]).toEqual([false, false, { volume: expect.stringMatching(/no fv weights volume in US-CA-2/), r2: null, none: null }]);
+    expect([ok(us.id, "volume"), ok(us.id, "r2"), ok(us.id, "none")]).toEqual([false, true, true]);
+    // The volume's data centre: launchable with each.
+    const eu = by("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1");
+    expect([eu.volume_dc, eu.reasons]).toEqual([true, { volume: null, r2: null, none: null }]);
+    // The other reasons hold whatever the weights.
+    for (const id of ["AMD Instinct MI300X OAM@EU-RO-1", "NVIDIA GeForce RTX 3070@US-CA-2", "NVIDIA RTX PRO 4500 Blackwell Server Edition@EU-RO-1", "NVIDIA H100 80GB HBM3@AP-IN-2", "NVIDIA B200@-"])
+      for (const w of ["volume", "r2", "none"] as const) expect(ok(id, w), `${id} ${w}`).toBe(false);
+    expect(by("NVIDIA GeForce RTX 3070@US-CA-2").reasons!.r2).toMatch(/not offered in Secure Cloud/);
+    expect(by("NVIDIA GeForce RTX 3070@US-CA-2").reasons!.volume).toMatch(/not offered in Secure Cloud.*no fv weights volume in US-CA-2/);
+    expect(by("NVIDIA B200@-").volume_dc).toBeNull();
+    // Without the map (an older server): the row's own flags.
+    expect(launchable({ ...us, reasons: undefined } as ITRow, "r2")).toEqual({ supported: false, reason: us.reason });
   });
 });
 

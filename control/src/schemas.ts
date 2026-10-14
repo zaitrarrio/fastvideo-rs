@@ -39,6 +39,9 @@ import {
   RESERVED_NAMES,
   WEIGHTS_SOURCES,
   RUNPOD_DATA_CENTERS,
+  RUNPOD_DC_CHOICES,
+  DC_ANY,
+  noVolumePod,
   RUNPOD_GPU_TYPES,
   SHA_RE,
   TOKEN_NAME_RE,
@@ -48,6 +51,7 @@ import {
   type NameKind,
 } from "./enums";
 import { EndpointSpecZ } from "./serverless/spec";
+export { noVolumePod } from "./enums";
 import { HttpError } from "./util";
 import { zIssues, type Issue } from "./zissues";
 
@@ -85,6 +89,16 @@ const providerRegion = z.string().regex(PROVIDER_REGION_RE, { message: "an IDC i
 const weightsSource = z
   .enum(WEIGHTS_SOURCES)
   .describe("Weights: volume (the region's Runpod network volume; Runpod only), r2 (our R2 weights store, fetched at boot through presigned URLs, every part checked; needs no approval, only trees published there: docs/ops/r2-weights.md), hub (downloaded from the Hub at pinned revisions at boot, verified; needs the owner's approval) or none (fake engine). Default: volume on Runpod; on GMI / Brev r2 when every tree of the pool is published in R2, else none.");
+/** A Runpod pod's data centres without a weights volume, in order; a last "any" = no dataCenterIds (Runpod places it). */
+const dcList = uniq(z.enum(RUNPOD_DC_CHOICES, { error: (i) => enumMessage("a Runpod data centre (or any)", i.input, RUNPOD_DC_CHOICES) }).meta({ "x-dynamic": "data_centers" }))
+  .min(1)
+  .max(31)
+  .optional();
+/** "any" only as the last data centre (the fallback after the named ones). */
+export const dcListProblem = (dcs: readonly string[]): string | null => (dcs.slice(0, -1).includes(DC_ANY) ? `"${DC_ANY}" only last (after the named data centres)` : null);
+/** A data centre with an fv weights volume (CLAUDE.md: EU-RO-1 only now). */
+export const volumeDc = (dc: string): boolean => AVAILABLE_REGIONS.some((r) => REGIONS[r].dc === dc);
+const NEEDS_NO_VOLUME = `data centres outside the weights volume's need a pod without the volume: weights_source r2 (the R2 weights store) or none on a GPU pod, volume off on a CPU pod (a volume pod runs in ${AVAILABLE_REGIONS.map((r) => REGIONS[r].dc).join(", ")}: region)`;
 /** The provider fields' rules shared by a pool and a standalone launch. */
 function providerRules(x: { provider?: string; provider_gpu?: string; provider_region?: string; weights_source?: string; gpu_types?: unknown; cpu_flavors?: unknown; vcpu?: unknown; volume?: boolean; compute?: string; models?: unknown[] }, add: (path: string, message: string) => void, gpuTypesKey = "gpu_types") {
   const other = !!x.provider && x.provider !== "runpod";
@@ -161,11 +175,9 @@ export const PoolSpecZ = z
     provider_region: providerRegion.optional(),
     weights_source: weightsSource.optional(),
     hub_download_approved: z.boolean().optional().describe("weights_source hub: the owner approved the Hub download at boot (also needs the Worker's FV_HUB_DOWNLOADS_APPROVED=1)."),
-    data_centers: uniq(z.enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) }).meta({ "x-dynamic": "data_centers" }))
-      .min(1)
-      .max(30)
-      .optional()
-      .describe("Runpod GPU pods with weights_source r2 (no volume): the data centres to try, in order, instead of the region's (EU-RO-1). Any Runpod data centre."),
+    data_centers: dcList.describe(
+      "Runpod pods without a weights volume (GPU: weights_source r2 or none; CPU: volume off): the data centres to try, in order, instead of the region's (EU-RO-1). Any Runpod data centre; a last \"any\" lets Runpod place it.",
+    ),
     allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) }))
       .optional()
       .describe("Runpod GPU pods: CUDA versions a host may offer (allowedCudaVersions). Default: none in the weights volume's data centre (EU-RO-1), 13.0 elsewhere (an older driver crashes the image); [] for no filter."),
@@ -190,7 +202,12 @@ export const PoolSpecZ = z
       if (p.variant === "cpu") add(["variant"], "the cpu variant runs on CPU pods (compute: CPU)");
     }
     if (p.variant === "cpu" && p.models?.length) add(["models"], "the cpu variant runs the fake engine: fake_models, not models");
-    if (p.data_centers && (other || p.weights_source !== "r2")) add(["data_centers"], "data_centers is for Runpod pods with weights_source r2 (a volume pins its own data centre: regions)");
+    if (p.data_centers) {
+      if (other) add(["data_centers"], `data_centers is Runpod's: provider ${p.provider} takes provider_region`);
+      else if (!noVolumePod(p)) add(["data_centers"], NEEDS_NO_VOLUME);
+      const why = dcListProblem(p.data_centers);
+      if (why) add(["data_centers"], why);
+    }
     if (p.allowed_cuda && (other || p.compute === "CPU")) add(["allowed_cuda"], "allowed_cuda is for Runpod GPU pods");
     if (p.upsampler_local && (p.compute === "CPU" || p.variant === "cpu")) add(["upsampler_local"], "the upsampler sidecar runs on the GPU: GPU pools only");
     if (p.stale_after_s !== undefined && p.job_timeout_s !== undefined && p.stale_after_s > p.job_timeout_s) add(["stale_after_s"], `at most job_timeout_s (${p.job_timeout_s})`);
@@ -364,7 +381,10 @@ export const StandaloneLaunchZ = z
       .enum(RUNPOD_DATA_CENTERS, { error: (i) => enumMessage("a Runpod data centre", i.input, RUNPOD_DATA_CENTERS) })
       .optional()
       .meta({ "x-dynamic": "data_centers" })
-      .describe("Or its data centre: EU-RO-1 (the weights volume's); with weights_source r2 (no volume) any Runpod data centre."),
+      .describe("Or its data centre: EU-RO-1 (the weights volume's); without the volume (weights_source r2 or none; a CPU pod with volume off) any Runpod data centre. One data centre: shorthand of data_centers."),
+    data_centers: dcList.describe(
+      "Runpod pods without the weights volume (weights_source r2 or none; a CPU pod with volume off): the data centres to try, in order (each with every GPU type of gpu_types, in order); a last \"any\" lets Runpod place it. Unset: EU-RO-1.",
+    ),
     volume: z.boolean().optional().describe("Mount the region's weights volume at /workspace (GPU default on, CPU off)."),
     container_disk_gb: z.number().int().min(5).max(500).optional().meta({ "x-unit": "GB" }).describe("Container disk."),
     env: z
@@ -393,7 +413,7 @@ export const StandaloneLaunchZ = z
     const add = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
     providerRules(x, add, x.gpu_type ? "gpu_type" : "gpu_types");
     if (x.provider && x.provider !== "runpod" && x.gpu_type) add("gpu_type", `gpu_type is a Runpod GPU type id: provider ${x.provider} takes provider_gpu`);
-    if (x.provider && x.provider !== "runpod" && (x.region || x.dc)) add(x.region ? "region" : "dc", `region / dc are Runpod's: provider ${x.provider} takes provider_region (gmi)`);
+    if (x.provider && x.provider !== "runpod" && (x.region || x.dc || x.data_centers)) add(x.region ? "region" : x.dc ? "dc" : "data_centers", `region / dc / data_centers are Runpod's: provider ${x.provider} takes provider_region (gmi)`);
     if (x.weights_download_approved && x.weights_source !== "hub") add("weights_download_approved", "only with weights_source hub");
     if (x.upsampler_local && x.compute === "CPU") add("upsampler_local", "the upsampler sidecar runs on the GPU: GPU pods only");
     if ([x.channel, x.sha, x.image].filter(Boolean).length > 1) add("channel", "at most one of channel, sha, image");
@@ -405,11 +425,24 @@ export const StandaloneLaunchZ = z
     if (x.compute === "CPU" && (x.gpu_types || x.gpu_type)) add("gpu_types", "a CPU pod takes no GPU types");
     if (x.compute === "GPU" && (x.cpu_flavors || x.vcpu !== undefined)) add("cpu_flavors", "a GPU pod takes no cpu_flavors / vcpu");
     if (x.region && x.dc && REGIONS[x.region].dc !== x.dc) add("dc", `region ${x.region} is ${REGIONS[x.region].dc}`);
-    // A data centre without a weights volume: only with the R2 weights store, never the volume.
-    const volDc = AVAILABLE_REGIONS.some((r) => REGIONS[r].dc === x.dc);
-    if (x.dc && !volDc && !(x.provider && x.provider !== "runpod")) {
-      if (x.weights_source !== "r2") add("dc", `${x.dc} has no weights volume: weights_source r2 (the R2 weights store, any data centre), or ${EU_ONLY}`);
-      else if (x.volume) add("volume", `${x.dc} has no weights volume: volume off with weights_source r2`);
+    if (x.dc && x.data_centers) add("data_centers", "dc or data_centers, not both");
+    // A data centre without a weights volume: only for a pod without the volume (r2 / none; a CPU pod with volume
+    // off), never the volume. The same rule for the launch, its validator and the image preflight (standaloneSpec).
+    const dcKey = x.data_centers ? "data_centers" : "dc";
+    const dcs: string[] = x.data_centers ?? (x.dc ? [x.dc] : []);
+    if (dcs.length && !(x.provider && x.provider !== "runpod")) {
+      const why = dcListProblem(dcs);
+      if (why) add(dcKey, why);
+      const off = dcs.filter((d) => !volumeDc(d));
+      const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
+      if (off.length && !noVolumePod(x)) {
+        const where = off.map((d) => (d === DC_ANY ? "\"any\" (Runpod places it)" : d)).join(", ");
+        if (cpu) add(x.volume ? "volume" : dcKey, `${where} has no weights volume: a CPU pod there runs with volume off, or ${EU_ONLY}`);
+        else if (x.weights_source === "r2" || x.weights_source === "none") add("volume", `${where} has no weights volume: volume off with weights_source ${x.weights_source}`);
+        else add(dcKey, `${where} has no weights volume: weights_source r2 (the R2 weights store) or none runs in any data centre (now: ${x.weights_source ?? "unset, the volume"}); the volume needs ${EU_ONLY}`);
+      }
+      if (x.region && x.data_centers && off.length) add("region", "region is the weights volume's: leave it out with data_centers outside it");
+      if (x.region && x.data_centers && !off.length && x.data_centers.some((d) => d !== REGIONS[x.region!].dc)) add("data_centers", `region ${x.region} is ${REGIONS[x.region].dc}`);
     }
     if (x.min_start !== undefined && x.balance_floor !== undefined && x.min_start < x.balance_floor) add("min_start", "at least balance_floor");
     for (const [k, v] of Object.entries(x.env || {})) {
