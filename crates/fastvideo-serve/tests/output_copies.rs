@@ -4,8 +4,12 @@
 //! in-process endpoint while the client peer plays; `output` is refused
 //! unless `[director] allow_output`. The Reactor copy is tested in
 //! `fastvideo-reactor/tests/runtime.rs` (`output_copy_gets_the_paced_ticks`).
+//!
+//! Also run without `encoders` (check.sh), the serve images' feature set:
+//! the copy's Opus was once gated on `encoders`, so image builds offered an
+//! audio m-line and never sent a packet (gpu-check-2026-10-13, bug 3).
 
-#![cfg(all(feature = "fal", feature = "webrtc", feature = "http-client", feature = "encoders"))]
+#![cfg(all(feature = "fal", feature = "webrtc", feature = "http-client"))]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -98,7 +102,6 @@ async fn app() -> App {
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
     c.engine.fake.step_ms = 1;
-    c.director.encoder = "openh264".into();
     c.webrtc.public_ip = "127.0.0.1".into();
     c.validate().unwrap();
     std::env::set_var("FV_STREAM_STUN", "none");
@@ -152,6 +155,8 @@ async fn director_session_copies_to_whip() {
             video: Some(Direction::RecvOnly),
             audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
             channels: vec!["control".into()],
+            // VP8 too: a build without OpenH264 answers the client with VP8.
+            video_codecs: vec![fastvideo_webrtc::writer::VideoCodec::H264, fastvideo_webrtc::writer::VideoCodec::Vp8],
             ..Default::default()
         })
         .await

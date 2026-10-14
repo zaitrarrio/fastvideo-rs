@@ -116,7 +116,8 @@ async fn native_and_minimax_flags_rewrite_through_the_configured_llm() {
     let (llm, seen) = fake_llm().await;
     let c = config(&llm);
     let u = c.upsampler.as_ref().expect("a base URL alone creates [upsampler]");
-    assert_eq!((u.model.as_str(), u.hedge, u.default_on, u.timeout_ms), ("fake-llm", false, false, 10_000));
+    // The fake LLM is on 127.0.0.1: a local server's defaults.
+    assert_eq!((u.model.as_str(), u.hedge(), u.default_on, u.timeout_ms(), u.is_local()), ("fake-llm", false, false, 60_000, true));
     assert!(!format!("{c:?}").contains("llm-secret-key"), "the key never prints");
     assert!(!serde_json::to_string(&c).unwrap().contains("llm-secret-key"));
     let app = App::build(c, Overrides::default()).await.unwrap();
@@ -178,6 +179,25 @@ fn config_validation() {
     assert_eq!((u.api_key.expose(), u.default_on, u.max_chars.wan, u.max_chars.ltx), ("k1", true, 1500, 3600));
     let s = u.settings();
     assert_eq!((s.max_chars.wan, s.max_chars.h3, s.memory, s.timeout), (1500, 3200, 12, Duration::from_secs(10)));
+    assert_eq!((s.hedge, s.deck_size, u.is_local()), (true, 6, false), "a remote LLM: fal's deck, hedged");
+    // A local sidecar (gpu-check-2026-10-13): unset timeout / hedge / deck
+    // get 60 s, off and 2, from a loopback base URL or FV_UPSAMPLER_LOCAL=1;
+    // what the operator set (TOML or env) wins.
+    let local = |toml: &str, kv: &[(&str, &str)]| {
+        let mut c = Config::from_toml(toml, "t").unwrap();
+        c.apply_env(&env(kv)).unwrap();
+        c.validate().unwrap();
+        let s = c.upsampler.as_ref().unwrap().settings();
+        (s.timeout.as_millis() as u64, s.hedge, s.deck_size)
+    };
+    let loopback = "[upsampler]\nbase_url = \"http://127.0.0.1:18080/v1\"\nmodel = \"m\"\n";
+    assert_eq!(local(loopback, &[]), (60_000, false, 2));
+    assert_eq!(local("[upsampler]\nbase_url = \"http://localhost:18080/v1\"\nmodel = \"m\"\n", &[]), (60_000, false, 2));
+    assert_eq!(local("[upsampler]\nbase_url = \"http://[::1]:18080/v1\"\nmodel = \"m\"\n", &[]), (60_000, false, 2));
+    assert_eq!(local("[upsampler]\nbase_url = \"http://10.0.0.5:18080/v1\"\nmodel = \"m\"\n", &[("FV_UPSAMPLER_LOCAL", "1")]), (60_000, false, 2));
+    assert_eq!(local(loopback, &[("FV_UPSAMPLER_LOCAL", "0")]), (10_000, true, 6));
+    assert_eq!(local(&format!("{loopback}timeout_ms = 30000\ndeck_size = 4\nhedge = true\n"), &[]), (30_000, true, 4));
+    assert_eq!(local(loopback, &[("FV_UPSAMPLER_TIMEOUT_MS", "45000"), ("FV_UPSAMPLER_DECK_SIZE", "3")]), (45_000, false, 3));
     // Refusals.
     for (toml, want) in [
         ("[upsampler]\nbase_url = \"ftp://x\"\nmodel = \"m\"\n", "http(s)"),
