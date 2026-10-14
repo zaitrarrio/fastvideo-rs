@@ -49,6 +49,14 @@ fn check_hd_memory(req: &H3Request) -> Result<(), ApiError> {
     ))
 }
 
+/// The request an `auto` text encoder is planned for: the recipe's default
+/// 16:9 canvas at `short_edge` for 5 s (`None`: the pipeline's 1344x768 5 s).
+fn planned_request(short_edge: u32) -> Option<fastvideo_models::h3::config::H3Geometry> {
+    use fastvideo_models::h3::config as c;
+    let (h, w) = c::resolve_canvas_size_short(16.0, 9.0, short_edge as usize).ok()?;
+    c::H3Geometry::new(h, w, c::H3_FASTVIDEO_MIN_DURATION_S * c::H3_FPS).ok()
+}
+
 /// One resident H3 pipeline.
 pub struct H3Model {
     pipe: H3Pipeline,
@@ -70,6 +78,10 @@ impl H3Model {
             text_cache: text_cache.map(Path::to_path_buf),
             text_encoder: TextEncoderChoice::parse(&recipe.text_encoder)
                 .map_err(ApiError::internal)?,
+            // `auto` keeps the encoder resident for the recipe's default
+            // canvas at 5 s; the 1080P tier and longer clips release it
+            // before their denoise when it does not fit beside them.
+            auto_text_encoder_request: planned_request(recipe.short_edge),
             taeh3: recipe.taeh3.clone(),
             recipe: Some(recipe.recipe.clone()),
             ref2va: recipe.ref2va,
