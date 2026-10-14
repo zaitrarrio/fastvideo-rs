@@ -83,8 +83,8 @@ const MXFP8_CHECK_REL_L2: f64 = 1e-1;
 /// The check found the MXFP8 forward off by more than [`MXFP8_CHECK_REL_L2`].
 static MXFP8_BROKEN: AtomicBool = AtomicBool::new(false);
 
-/// `FASTVIDEO_H3_VAE_VEC` (default on): the vector-access twins of the
-/// QKV-heads, merge-heads and SwiGLU kernels (bit-identical outputs).
+/// `FASTVIDEO_H3_VAE_VEC`: the vector-access twins of the merge-heads and
+/// SwiGLU kernels (bit-identical outputs).
 #[cfg(feature = "cuda")]
 fn vec_enabled() -> bool {
     static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
@@ -808,8 +808,10 @@ impl H3VideoDecoder {
         for (index, block) in self.blocks.iter().enumerate() {
             let qkv = prof.time("vae_qkv_gemm", || gemm(block, 0, &n1))?;
             let [q, k, v] = prof.time("vae_qkv_heads", || {
+                // The vector twin of this kernel measured slower (h3vae_bench:
+                // 0.50 vs 0.39 ms at 7 tiles), so it stays scalar.
                 ops::h3v_qkv_heads_bf16_device_with(
-                    vec,
+                    false,
                     &qkv,
                     &*bias(&block.qkv)?,
                     &cos,
