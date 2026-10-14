@@ -1,0 +1,783 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "required": [
+          "benchmark.json"
+        ]
+      },
+      "name": "artifact/benchmark_json",
+      "ok": true,
+      "values": {
+        "baseline": "/srv/runs/bf16-768/benchmark.json",
+        "baseline_error": null,
+        "candidate": "/srv/runs/mxfp8-768/benchmark.json",
+        "candidate_error": null
+      }
+    },
+    {
+      "limits": {
+        "min": 1
+      },
+      "name": "artifact/compare_reports",
+      "ok": true,
+      "values": {
+        "reports": [
+          "/srv/runs/compare/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast.json",
+          "/srv/runs/compare/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake.json",
+          "/srv/runs/compare/compare-clips-bf16-768--mxfp8-768-talking-head.json"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "baseline_clip": "completed",
+        "candidate_clip": "completed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "baseline_clip": "completed",
+        "candidate_clip": "completed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-bf16-768--mxfp8-768-talking-head",
+      "ok": true,
+      "values": {
+        "baseline_clip": "completed",
+        "candidate_clip": "completed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "official_config/prompts",
+      "ok": true,
+      "values": {
+        "baseline": [
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ],
+        "candidate": [
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "same": [
+          "workload.height",
+          "workload.width",
+          "workload.num_frames",
+          "workload.seed",
+          "workload.prompt_sha256",
+          "workload.measured_steps"
+        ]
+      },
+      "name": "official_config/workload",
+      "ok": true,
+      "values": {
+        "differences": []
+      }
+    },
+    {
+      "limits": {
+        "min_speedup_for_experimental": 1.03,
+        "min_speedup_for_promotion": 1.1
+      },
+      "name": "performance/speedup",
+      "ok": true,
+      "values": {
+        "aggregate": "median",
+        "baseline": 48.313565833,
+        "candidate": 38.152492244,
+        "metric": "denoise_s",
+        "secondary_metric": "total_s",
+        "secondary_speedup": 1.2345500349215266,
+        "speedup": 1.2663279117918689,
+        "warm": true
+      }
+    },
+    {
+      "limits": {
+        "warmup_required_for_promotion": true
+      },
+      "name": "performance/warm",
+      "ok": true,
+      "values": {
+        "baseline": true,
+        "candidate": true
+      }
+    },
+    {
+      "limits": {
+        "required_for_kinds": [
+          "exact"
+        ]
+      },
+      "name": "off_identity/report",
+      "ok": true,
+      "values": {
+        "kind": "lossy",
+        "off_reports": 0
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 0.9876133614009168
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.9891393840934194
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 13.035923148055398,
+          "psnr_min": 10.802557942957495
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.558966359912549
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.6563041833681897
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 0.9663358668731572
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.9655228808034546
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 18.98473460443903,
+          "psnr_min": 17.392978430614946
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.32482569363140884
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-spark-mountain-lake/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.3491181567662622
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0028492297940597
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0697956991802282
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 16.38890458836132,
+          "psnr_min": 14.606720872567127
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.312506400684452
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-bf16-768--mxfp8-768-talking-head/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.3575971632784199
+        }
+      }
+    },
+    {
+      "limits": {
+        "required": false
+      },
+      "name": "visual_artifact/judge",
+      "ok": true,
+      "values": {
+        "judge": "none in this runtime",
+        "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "mode": "exact",
+    "policy": {
+      "id": "fastvideo-rs-default",
+      "kind": "lossy",
+      "path": "/opt/fastvideo-rs/scripts/gpu/gate-policy.toml",
+      "source": "sol-engine@6c2f582 evals/README.md + evals/profiles/official_video_t2v.toml + evals/tiers.toml"
+    },
+    "verdict": {
+      "gates": {
+        "artifact": {
+          "detail": {
+            "compare_reports": 3
+          },
+          "status": "pass"
+        },
+        "off_identity": {
+          "detail": {
+            "reason": "no --off-compare report"
+          },
+          "status": "not_applicable"
+        },
+        "official_config": {
+          "detail": {
+            "fields": [
+              "workload.height",
+              "workload.width",
+              "workload.num_frames",
+              "workload.seed",
+              "workload.prompt_sha256",
+              "workload.measured_steps"
+            ]
+          },
+          "status": "pass"
+        },
+        "performance": {
+          "detail": {
+            "aggregate": "median",
+            "baseline": 48.313565833,
+            "candidate": 38.152492244,
+            "metric": "denoise_s",
+            "secondary_metric": "total_s",
+            "secondary_speedup": 1.2345500349215266,
+            "speedup": 1.2663279117918689,
+            "warm": true
+          },
+          "status": "pass"
+        },
+        "quantitative_quality": {
+          "detail": {
+            "checks": [
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "sharpness_ratio_mean": 0.9876133614009168
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.9891393840934194
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "psnr_mean": 13.035923148055398,
+                  "psnr_min": 10.802557942957495
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "lpips_mean": 0.558966359912549
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-ltx-newsbroadcast",
+                "values": {
+                  "lpips_max": 0.6563041833681897
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "sharpness_ratio_mean": 0.9663358668731572
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.9655228808034546
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "psnr_mean": 18.98473460443903,
+                  "psnr_min": 17.392978430614946
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "lpips_mean": 0.32482569363140884
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-spark-mountain-lake",
+                "values": {
+                  "lpips_max": 0.3491181567662622
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "sharpness_ratio_mean": 1.0028492297940597
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0697956991802282
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "psnr_mean": 16.38890458836132,
+                  "psnr_min": 14.606720872567127
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "lpips_mean": 0.312506400684452
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-bf16-768--mxfp8-768-talking-head",
+                "values": {
+                  "lpips_max": 0.3575971632784199
+                }
+              }
+            ],
+            "lpips_max_max": 0.6563041833681897,
+            "lpips_mean_max": 0.558966359912549,
+            "lpips_mean_median": 0.32482569363140884,
+            "psnr_mean_median": 16.38890458836132,
+            "reports": 3
+          },
+          "status": "pass"
+        },
+        "visual_artifact": {
+          "detail": {
+            "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+          },
+          "status": "deferred"
+        }
+      },
+      "kind": "lossy",
+      "promotion_blockers": [],
+      "speedup": 1.2663279117918689,
+      "tier": null,
+      "verdict": "pass"
+    }
+  },
+  "elapsed_s": 0.001499574,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "gate-bf16-768--mxfp8-768",
+  "status": "pass"
+}
