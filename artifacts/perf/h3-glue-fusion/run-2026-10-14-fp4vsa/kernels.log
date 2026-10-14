@@ -1,0 +1,102 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=0
+[PASS] kernels/nvfp4_operand_plain_matches_te_reference {"amax":40.0,"host_amax":40.0,"packed_mismatch":0,"pad_nonzero":0,"rows":300,"rows_pack":304,"scale_bytes":24576,"scale_mismatch":0} (limits {"packed_mismatch":0,"pad_nonzero":0,"scale_mismatch":0})
+[PASS] kernels/nvfp4_operand_gelu_matches_te_reference {"amax":40.0,"host_amax":40.0,"packed_mismatch":0,"pad_nonzero":0,"rows":300,"rows_pack":304,"scale_bytes":24576,"scale_mismatch":0} (limits {"packed_mismatch":153,"pad_nonzero":0,"scale_mismatch":19})
+[PASS] kernels/nvfp4_linear_plain_matches_host {"bias_in_epilogue":true,"k":1024,"m":300,"n":512,"ok":true,"vs_dense_psnr_db":37.59100420691227,"vs_dense_rel_l2":0.13198552967026916,"vs_exact":{"cosine":0.9999986270480533,"max_abs":0.01560354232788086,"non_finite":0,"ref_norm":639.0685544810273,"rel_l2":0.0016570883124330275}} (limits {"rel_l2":0.004})
+[PASS] kernels/nvfp4_linear_gelu_in_matches_host {"bias_in_epilogue":true,"k":1024,"m":300,"n":256,"ok":true,"vs_dense_psnr_db":40.85529132214213,"vs_dense_rel_l2":0.12817017690158114,"vs_exact":{"cosine":0.9999986121021998,"max_abs":0.015584468841552734,"non_finite":0,"ref_norm":303.2306798079754,"rel_l2":0.0016661353482985985}} (limits {"rel_l2":0.004})
+[PASS] kernels/nvfp4_published_stack_matches_host {"k":1024,"m":300,"n":512,"ok":true,"parts":2,"vs_exact":{"cosine":0.9999986294793629,"max_abs":1.99249267578125,"non_finite":0,"ref_norm":44536.0477971173,"rel_l2":0.001655608462729691},"worst_part_rel_l2":0.0016594792793117239} (limits {"rel_l2":0.004})
+[PASS] kernels/nvfp4_static_act_scale_matches_dynamic {"bit_identical":true,"clipped_quarter_amax_finite":true,"clipped_vs_dynamic_rel_l2":0.056940163703529216,"k":1024,"m":300,"n":256,"ok":true,"vs_dynamic_rel_l2":0.0} (limits {"vs_dynamic_rel_l2":0.001})
+[INFO] kernels/nvfp4_linear_vs_bf16_ffn_up {"cosine":0.9899038129124595,"k":4096,"m":2048,"n":16384,"psnr_db":37.83409881510093,"rel_l2":0.14507019414077335}
+[INFO] kernels/nvfp4_linear_bench_s1_4k_up_m32640 {"bf16_gemm_ms":11.21634132142857,"bf16_gemm_tflops":390.5789344650605,"bf16_linear_ms":11.56995144,"fp8_w8a8_linear_ms":6.672394222222223,"gelu_in":false,"k":4096,"m":32640,"n":16384,"nvfp4_gemm_ms":3.18910576,"nvfp4_gemm_speedup_vs_bf16_gemm":3.5170803872708727,"nvfp4_gemm_tflops":1373.69751008822,"nvfp4_linear_ms":4.06741536,"nvfp4_linear_speedup_vs_bf16_linear":2.844546331260351,"nvfp4_linear_speedup_vs_fp8_linear":1.6404506625608608,"nvfp4_quantize_ms":0.729974}
+[INFO] kernels/nvfp4_linear_bench_s1_4k_down_m32640 {"bf16_gemm_ms":10.40745711111111,"bf16_gemm_tflops":420.93535386688654,"bf16_linear_ms":12.98087068181818,"fp8_w8a8_linear_ms":8.866402818181816,"gelu_in":true,"k":16384,"m":32640,"n":4096,"nvfp4_gemm_ms":3.0193667600000005,"nvfp4_gemm_speedup_vs_bf16_gemm":3.4469006047847954,"nvfp4_gemm_tflops":1450.922325819073,"nvfp4_linear_ms":5.68368484,"nvfp4_linear_speedup_vs_bf16_linear":2.28388291174466,"nvfp4_linear_speedup_vs_fp8_linear":1.5599743947417424,"nvfp4_quantize_ms":2.7802402799999997}
+[INFO] kernels/nvfp4_linear_bench_s1_1080p_up_m32130 {"bf16_gemm_ms":10.42131003448276,"bf16_gemm_tflops":413.8074374882599,"bf16_linear_ms":10.629168142857143,"fp8_w8a8_linear_ms":6.342173755555555,"gelu_in":false,"k":4096,"m":32130,"n":16384,"nvfp4_gemm_ms":3.14830834,"nvfp4_gemm_speedup_vs_bf16_gemm":3.3101300473265463,"nvfp4_gemm_tflops":1369.7564326370905,"nvfp4_linear_ms":3.87337964,"nvfp4_linear_speedup_vs_bf16_linear":2.7441586239290356,"nvfp4_linear_speedup_vs_fp8_linear":1.6373746818051522,"nvfp4_quantize_ms":0.68632204}
+[INFO] kernels/nvfp4_linear_bench_s1_1080p_down_m32130 {"bf16_gemm_ms":10.294415185185185,"bf16_gemm_tflops":418.90826463324,"bf16_linear_ms":12.594640739130435,"fp8_w8a8_linear_ms":8.610331176470588,"gelu_in":true,"k":16384,"m":32130,"n":4096,"nvfp4_gemm_ms":2.9390945,"nvfp4_gemm_speedup_vs_bf16_gemm":3.502580534646023,"nvfp4_gemm_tflops":1467.2599335067316,"nvfp4_linear_ms":5.57020538,"nvfp4_linear_speedup_vs_bf16_linear":2.2610729551107567,"nvfp4_linear_speedup_vs_fp8_linear":1.545783429707324,"nvfp4_quantize_ms":2.62690118}
+[INFO] kernels/nvfp4_linear_bench_s2_chunk_up_m16384 {"bf16_gemm_ms":5.33017552,"bf16_gemm_tflops":412.56113373767477,"bf16_linear_ms":5.46043884,"fp8_w8a8_linear_ms":3.22066036,"gelu_in":false,"k":4096,"m":16384,"n":16384,"nvfp4_gemm_ms":1.49191642,"nvfp4_gemm_speedup_vs_bf16_gemm":3.572703838194904,"nvfp4_gemm_tflops":1473.9587459946317,"nvfp4_linear_ms":1.87110926,"nvfp4_linear_speedup_vs_bf16_linear":2.9182896780704297,"nvfp4_linear_speedup_vs_fp8_linear":1.7212572396761052,"nvfp4_quantize_ms":0.33172332}
+[INFO] kernels/nvfp4_linear_bench_s2_chunk_down_m16384 {"bf16_gemm_ms":5.205505860000001,"bf16_gemm_tflops":422.44179810643794,"bf16_linear_ms":6.394124777777778,"fp8_w8a8_linear_ms":4.3719838,"gelu_in":true,"k":16384,"m":16384,"n":4096,"nvfp4_gemm_ms":1.3643380399999998,"nvfp4_gemm_speedup_vs_bf16_gemm":3.8154076976406825,"nvfp4_gemm_tflops":1611.7876883004742,"nvfp4_linear_ms":2.7237467399999997,"nvfp4_linear_speedup_vs_bf16_linear":2.3475474734401254,"nvfp4_linear_speedup_vs_fp8_linear":1.6051359459360015,"nvfp4_quantize_ms":1.36187208}
+[INFO] kernels/nvfp4_linear_bench_s2_4k_whole_up_m130560 {"bf16_gemm_ms":46.82788883333333,"bf16_gemm_tflops":374.2100488460699,"bf16_linear_ms":47.3323025,"fp8_w8a8_linear_ms":26.590898636363637,"gelu_in":false,"k":4096,"m":130560,"n":16384,"nvfp4_gemm_ms":12.153557639999999,"nvfp4_gemm_speedup_vs_bf16_gemm":3.853019027055302,"nvfp4_gemm_tflops":1441.8384383192015,"nvfp4_linear_ms":14.825519947368422,"nvfp4_linear_speedup_vs_bf16_linear":3.1926234403941858,"nvfp4_linear_speedup_vs_fp8_linear":1.7935896164696474,"nvfp4_quantize_ms":2.7153182999999994}
+[INFO] NVFP4 linear (ms) on sm_120:
+[INFO] shape                     bf16 GEMM  bf16 linear   FP8 linear   NVFP4 GEMM  NVFP4 lin   speedup
+[INFO] s1_4k_up_m32640              11.216       11.570        6.672        3.189      4.067     2.845
+[INFO] s1_4k_down_m32640            10.407       12.981        8.866        3.019      5.684     2.284
+[INFO] s1_1080p_up_m32130           10.421       10.629        6.342        3.148      3.873     2.744
+[INFO] s1_1080p_down_m32130         10.294       12.595        8.610        2.939      5.570     2.261
+[INFO] s2_chunk_up_m16384            5.330        5.460        3.221        1.492      1.871     2.918
+[INFO] s2_chunk_down_m16384          5.206        6.394        4.372        1.364      2.724     2.348
+[INFO] s2_4k_whole_up_m130560       46.828       47.332       26.591       12.154     14.826     3.193
+[PASS] kernels/ltx_qk_norm_rope_w32_rope_shape {"bf16":true,"got":[1,5,97,64],"want":[1,5,97,64]} (limits {})
+[PASS] kernels/ltx_qk_norm_rope_w32_rope {"max_ulps":0.0,"n":31040,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_qk_norm_rope_w32_norope_shape {"bf16":true,"got":[1,5,97,64],"want":[1,5,97,64]} (limits {})
+[PASS] kernels/ltx_qk_norm_rope_w32_norope {"max_ulps":0.0,"n":31040,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_qk_norm_rope_w16_rope_shape {"bf16":true,"got":[1,5,97,64],"want":[1,5,97,64]} (limits {})
+[PASS] kernels/ltx_qk_norm_rope_w16_rope {"max_ulps":0.0,"n":31040,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_qk_norm_rope_w16_norope_shape {"bf16":true,"got":[1,5,97,64],"want":[1,5,97,64]} (limits {})
+[PASS] kernels/ltx_qk_norm_rope_w16_norope {"max_ulps":0.0,"n":31040,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_adaln {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_norm_then_mod {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_res_gate_hidden {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_res_gate_then_mod {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_text_gate_hidden {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_text_gate_adaln {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_plain_add_hidden {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_av_gate_hidden {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_av_gate_adaln {"max_ulps":0.0,"n":61000,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_gate_merge_shape {"got":[1,53,384],"want":[1,53,384]} (limits {})
+[PASS] kernels/ltx_gate_merge {"max_ulps":0.0,"n":20352,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/ltx_fuse_off_declines {"declined":true} (limits {"declined":true})
+[PASS] kernels/h3_merge_heads_mx {"codes":29568,"codes_differing":0,"scales":1536,"scales_differing":0} (limits {"differing":0})
+[PASS] kernels/h3_merge_heads_mx_f32 {"codes":29568,"codes_differing":0,"scales":1536,"scales_differing":0} (limits {"differing":0})
+[PASS] kernels/h3_qk_norm_rope_f32_col0_dtype {"got_bf16":false,"shape":[1,3,83,128]} (limits {"got_bf16":false})
+[PASS] kernels/h3_qk_norm_rope_f32_col0 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_qk_norm_rope_f32_col384_dtype {"got_bf16":false,"shape":[1,3,83,128]} (limits {"got_bf16":false})
+[PASS] kernels/h3_qk_norm_rope_f32_col384 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_split_heads_f32_col768 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/split_heads_rows_bf16_col768 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_split_heads_f32_col1152 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/split_heads_rows_bf16_col1152 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/split_heads_rows_bf16_batch2 {"max_ulps":0.0,"n":63744,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_gate_res_hidden_bf16 {"max_ulps":0.0,"n":28800,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_gate_res_norm_mod_bf16 {"max_ulps":0.0,"n":28800,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_gate_res_hidden_mx {"max_ulps":0.0,"n":28800,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_gate_res_norm_mod_mx {"codes":28800,"codes_differing":0,"scales":2560,"scales_differing":0} (limits {"differing":0})
+[fastvideo] vsa-h3: 4 prefix + 4 video tiles, k_vid 2, 136 of 256 rows dense
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] sdpa: fused mma B=1 H=2 Sq=136 Sk=256 D=128
+[PASS] kernels/h3_vsa_prefix_in_place_dtype {"got_bf16":false,"want_bf16":false} (limits {})
+[PASS] kernels/h3_vsa_prefix_in_place {"max_ulps":0.0,"n":65536,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_fuse_off_declines {"declined":true} (limits {"declined":true})
+[PASS] kernels/h3_glue_heads_q_b1_s83_gate1_rope1 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b1_s83_gate1_rope1 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b1_s83_gate1_rope1 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_gate_b1_s83_gate1_rope1 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_q_b1_s83_gate1_rope0 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b1_s83_gate1_rope0 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b1_s83_gate1_rope0 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_gate_b1_s83_gate1_rope0 {"max_ulps":0.0,"n":31872,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_q_b1_s70_gate0_rope1 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b1_s70_gate0_rope1 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b1_s70_gate0_rope1 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_q_b1_s70_gate0_rope0 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b1_s70_gate0_rope0 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b1_s70_gate0_rope0 {"max_ulps":0.0,"n":26880,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_q_b2_s41_gate1_rope1 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b2_s41_gate1_rope1 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b2_s41_gate1_rope1 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_gate_b2_s41_gate1_rope1 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_q_b2_s41_gate1_rope0 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_k_b2_s41_gate1_rope0 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_v_b2_s41_gate1_rope0 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_heads_gate_b2_s41_gate1_rope0 {"max_ulps":0.0,"n":31488,"over_1ulp":0} (limits {"max_ulps":0})
+[fastvideo] vsa-h3: 4 prefix + 4 video tiles, k_vid 2, 136 of 256 rows dense
+[PASS] kernels/h3_glue_vsa_takes_bf16 {"takes_bf16":true} (limits {"takes_bf16":true})
+[fastvideo] vsa-h3: bf16 inputs read in place (no f32 widening)
+[PASS] kernels/h3_glue_vsa_bf16_unrounded_dtype {"got_bf16":false,"shape":[1,2,256,128]} (limits {"got_bf16":false})
+[PASS] kernels/h3_glue_vsa_bf16_feed {"max_ulps":0.0,"n":65536,"over_1ulp":0} (limits {"max_ulps":0})
+[PASS] kernels/h3_glue_swiglu_nvfp4_77x320_Static6 {"amax":3.0,"codes":12800,"codes_differing":0,"scales":2560,"scales_differing":0,"want_amax":3.0} (limits {"differing":0})
+[PASS] kernels/h3_glue_swiglu_nvfp4_200x192_Static6 {"amax":0.25,"codes":19968,"codes_differing":0,"scales":3072,"scales_differing":0,"want_amax":0.25} (limits {"differing":0})
+[PASS] kernels/h3_glue_swiglu_nvfp4_130x128_Static4 {"amax":2.0,"codes":9216,"codes_differing":0,"scales":2048,"scales_differing":0,"want_amax":2.0} (limits {"differing":0})
+[PASS] kernels/h3_glue_merge_nvfp4_77x384_f32_measured {"amax":8.6875,"codes":15360,"codes_differing":0,"scales":3072,"scales_differing":0,"want_amax":8.6875} (limits {"differing":0})
+[PASS] kernels/h3_glue_merge_nvfp4_140x512_f32_measured {"amax":10.0,"codes":36864,"codes_differing":0,"scales":8192,"scales_differing":0,"want_amax":10.0} (limits {"differing":0})
+[PASS] kernels/h3_glue_merge_nvfp4_77x384_bf16_measured {"amax":8.125,"codes":15360,"codes_differing":0,"scales":3072,"scales_differing":0,"want_amax":8.125} (limits {"differing":0})
+[PASS] kernels/h3_glue_merge_nvfp4_45x256_f32_static {"amax":1.5,"codes":6144,"codes_differing":0,"scales":2048,"scales_differing":0,"want_amax":1.5} (limits {"differing":0})
+[PASS] kernels/h3_glue_off_declines {"declined":true} (limits {"declined":true})
+[INFO] kernels/ltx_fusion_timing_16k_x_4096 {"adaln":{"fused_ms":0.286725,"speedup":2.388236114744093,"unfused_ms":0.684767},"gate_merge":{"fused_ms":0.23882499999999998,"speedup":4.264088767926306,"unfused_ms":1.018371},"qk_norm_rope":{"fused_ms":0.47963100000000003,"speedup":2.4155402799235244,"unfused_ms":1.158568},"res_gate_then_mod":{"fused_ms":0.448321,"speedup":3.8153867429810333,"unfused_ms":1.710518}}
+[PASS] stage kernels → /srv/gc/kernels.json (14.8s)

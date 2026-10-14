@@ -1,0 +1,12 @@
+kernels	0	13
+fetch-nvfp4	0	132
+fetch-turbo	0	208
+turbo-base	0	56
+turbo-new	0	48
+trace-turbo-base	0	15
+trace-turbo-new	0	15
+nvfp4-base	0	97
+nvfp4-new	0	80
+trace-nvfp4-base	0	29
+trace-nvfp4-new	0	27
+parity	0	2

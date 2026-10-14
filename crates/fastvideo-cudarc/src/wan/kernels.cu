@@ -7017,6 +7017,206 @@ extern "C" __global__ void fvf_split_heads_rows(
         else ((float2*)out)[o >> 1] = make_float2(a, c);
     }
 }
+
+// ---- H3 glue (FASTVIDEO_H3_GLUE; h3/fused16.rs) ----
+// The fused QKV(+gate) projection [B, S, W] (bf16) to bf16 BHSD q, k, v and
+// the VSA gate in one launch: q and k normed per head and rotated over their
+// first r channels exactly as h3_qk_norm_rope with d = 128 (dpad 128: four
+// warps per row, each a butterfly over its 32 channels, then the four warp
+// sums in order), v and gate copied. One warp per (row, part, head), four
+// channels per lane (c = 4 * lane + i); the butterfly's xor 16 / 8 / 4 are
+// lane xor 4 / 2 / 1 and its xor 2 / 1 the lane's own registers, so every
+// sum is the same tree. Needs d == 128, r % 8 == 0, r <= 128, W % 4 == 0.
+extern "C" __global__ void fvf_h3_qkvg_heads(
+    const unsigned short* __restrict__ src, const float* __restrict__ wq, const float* __restrict__ wk,
+    const float* __restrict__ cs, const float* __restrict__ sn, int use_rope,
+    unsigned short* __restrict__ q, unsigned short* __restrict__ k, unsigned short* __restrict__ v,
+    unsigned short* __restrict__ g, int batch, int seq, int heads, int parts, int r, int width, float eps,
+    int dn
+) {
+    // `dn` (= 128) is the norm's divisor as a runtime value, as in
+    // h3_qk_norm_rope: a constant would let the compiler turn `tot / d + eps`
+    // into one FMA and round differently.
+    const int d = 128;
+    int lane = threadIdx.x & 31;
+    long item = (long)blockIdx.x * (long)(blockDim.x >> 5) + (threadIdx.x >> 5);
+    if (item >= (long)batch * seq * parts * heads) return;
+    int h = (int)(item % heads);
+    long t = item / heads;
+    int part = (int)(t % parts);
+    long bs = t / parts;
+    int s = (int)(bs % seq);
+    int b = (int)(bs / seq);
+    long inner = (long)heads * d;
+    const unsigned short* row = src + bs * width + part * inner + (long)h * d;
+    long o = (((long)b * heads + h) * seq + s) * d + 4 * lane;
+    uint2 raw = *(const uint2*)(row + 4 * lane);
+    if (part >= 2) {
+        *(uint2*)((part == 2 ? v : g) + o) = raw;
+        return;
+    }
+    float x[4] = {fv_bf16_to_f32((unsigned short)(raw.x & 0xFFFFu)), fv_bf16_to_f32((unsigned short)(raw.x >> 16)),
+                  fv_bf16_to_f32((unsigned short)(raw.y & 0xFFFFu)), fv_bf16_to_f32((unsigned short)(raw.y >> 16))};
+    float sq[4];
+    for (int i = 0; i < 4; ++i) {
+        sq[i] = x[i] * x[i];
+        for (int m = 4; m > 0; m >>= 1) sq[i] += __shfl_xor_sync(0xffffffffu, sq[i], m);
+    }
+    float l2[4] = {sq[0] + sq[2], sq[1] + sq[3], sq[2] + sq[0], sq[3] + sq[1]};
+    float wsum = l2[0] + l2[1];
+    float tot = 0.0f;
+    for (int w = 0; w < 4; ++w) tot += __shfl_sync(0xffffffffu, wsum, 8 * w);
+    float rr = rsqrtf(tot / (float)dn + eps);
+    const float* wt = part == 0 ? wq : wk;
+    int half = r / 2;
+    int c0 = 4 * lane;
+    int peer = c0 < half ? lane + half / 4 : lane - half / 4;
+    if (peer < 0 || peer > 31) peer = lane;
+    unsigned short outv[4];
+    for (int i = 0; i < 4; ++i) {
+        int p = c0 + i;
+        float normed = x[i] * rr * wt[p];
+        float pv = __shfl_sync(0xffffffffu, x[i], peer);
+        float res = normed;
+        if (use_rope && p < r) {
+            int partner = p < half ? p + half : p - half;
+            float pn = pv * rr * wt[partner];
+            float rot = p < half ? -pn : pn;
+            res = normed * cs[(long)s * r + p] + rot * sn[(long)s * r + p];
+        }
+        outv[i] = fv_bf16_rne(res);
+    }
+    *(uint2*)((part == 0 ? q : k) + o) = make_uint2((unsigned int)outv[0] | ((unsigned int)outv[1] << 16),
+                                                   (unsigned int)outv[2] | ((unsigned int)outv[3] << 16));
+}
+
+// NVFP4 quantize-on-write: one value per lane, a 16-column NVFP4 block held
+// by 16 consecutive lanes (column j at lane j % 16, j % 16 == lane % 16).
+// The block's E4M3 scale and E2M1 codes are fv_nvfp4_scale_block's (static_6
+// / static_4, e4 448), so the bytes equal nvfp4_quant_bf16_sw on the stored
+// bf16 tensor; `v` is that bf16 value. Codes go out as one 32-bit word per 8
+// lanes (low nibble first), the scale from the block's first lane, into
+// cuBLASLt's VEC16_UE4M3 tiled layout. Every lane of the warp must call it.
+__device__ __forceinline__ void fv_nvfp4_store_lane(
+    float v, long row, int j, long cols, float amax, float e2,
+    unsigned char* packed, unsigned char* scales
+) {
+    // fv_nvfp4_scale_block's `if (|v| > block_amax)` from 0 skips NaN.
+    float a = fabsf(v);
+    float m = (a > 0.0f) ? a : 0.0f;
+    for (int o = 8; o > 0; o >>= 1) {
+        float other = __shfl_xor_sync(0xffffffffu, m, o);
+        if (other > m) m = other;
+    }
+    unsigned char code = 0;
+    float fake = 0.0f;
+    if ((amax > 0.0f) && isfinite(amax)) {
+        float encode = (e2 * 448.0f) / amax;
+        float decode = amax / (e2 * 448.0f);
+        code = fv_to_e4m3((m / e2) * encode * 1.0f);
+        float s = fv_e4m3_to_f32(code);
+        if (s != 0.0f) {
+            float inv = 1.0f / (decode * s);
+            fake = fv_nvfp4_fake_e2m1(v * inv);
+        }
+    }
+    unsigned int word = (unsigned int)fv_nvfp4_code(fake) << (4 * (j & 7));
+    for (int o = 1; o < 8; o <<= 1) word |= __shfl_xor_sync(0xffffffffu, word, o);
+    if ((j & 7) == 0) *(unsigned int*)(packed + row * (cols / 2) + j / 2) = word;
+    if ((j & 15) == 0) {
+        long sc = cols / 16, blk = j / 16;
+        long tile = (row / 128) * (sc / 4) + (blk / 4);
+        long rr = row % 128;
+        scales[tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (blk % 4)] = code;
+    }
+}
+
+// The padding rows of an NVFP4 operand (nvfp4_quant_bf16_sw's): zero scales
+// for rows in [rows, rows_scale), zero codes for rows in [rows, rows_pack).
+__device__ __forceinline__ void fv_nvfp4_pad_row(
+    long row, long rows_pack, long cols, unsigned char* packed, unsigned char* scales
+) {
+    long sc = cols / 16;
+    long tile0 = (row / 128) * (sc / 4);
+    long rr = row % 128;
+    for (long blk = threadIdx.x; blk < sc; blk += blockDim.x) {
+        scales[(tile0 + blk / 4) * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (blk % 4)] = 0;
+        if (row < rows_pack) *(uint2*)(packed + row * (cols / 2) + blk * 8) = make_uint2(0u, 0u);
+    }
+}
+
+// SwiGLU straight into the down projection's NVFP4 operand (static
+// activation amax `amax_ptr`): bf16(value * (gate * sigmoid(gate))) as
+// mx_swiglu stores it, quantized as nvfp4_quant_bf16_sw would. One block per
+// operand row (rows_scale of them; rows past `rows` are padding);
+// half % 64 == 0, blockDim.x % 32 == 0.
+extern "C" __global__ void fvf_h3_swiglu_nvfp4(
+    const unsigned short* x, const float* amax_ptr, unsigned char* packed, unsigned char* scales,
+    int rows, int rows_pack, int half, int rule
+) {
+    long row = blockIdx.x;
+    if (row >= rows) {
+        fv_nvfp4_pad_row(row, rows_pack, half, packed, scales);
+        return;
+    }
+    float amax = *amax_ptr;
+    float e2 = rule == 1 ? 4.0f : 6.0f;
+    long xb = row * 2 * (long)half;
+    for (int j0 = 0; j0 < half; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= half) continue;
+        int j = j0 + threadIdx.x;
+        float v = fv_bf16_to_f32(x[xb + j]);
+        float gt = fv_bf16_to_f32(x[xb + half + j]);
+        float sg = 1.0f / (1.0f + expf(-gt));
+        fv_nvfp4_store_lane(fv_r16(v * (gt * sg)), row, j, half, amax, e2, packed, scales);
+    }
+}
+
+// max |bf16(x)| of an f32 tensor as nvfp4_amax_bf16 measures it on the
+// rounded tensor: rounding is monotone, so each block rounds its partial
+// max; NaN wins (as there). `out` zeroed by the caller.
+extern "C" __global__ void fvf_amax_f32_r16(const float* x, float* out, long n) {
+    __shared__ float sm[256];
+    int tid = threadIdx.x;
+    float acc = 0.0f;
+    long stride = (long)gridDim.x * blockDim.x;
+    for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += stride) {
+        float a = fabsf(x[i]);
+        if (!(a <= acc)) acc = a;
+    }
+    sm[tid] = acc;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) { float o = sm[tid + s]; if (!(o <= sm[tid])) sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) atomicMax((int*)out, __float_as_int(fv_r16(sm[0])));
+}
+
+// merge_heads of the attention output [H, S, D] (f32 rounded to bf16, or
+// bf16) straight into `to_out`'s NVFP4 operand, with the amax of the merged
+// bf16 tensor (fvf_amax_f32_r16 / nvfp4_amax_bf16). One block per operand
+// row; heads * d % 64 == 0.
+extern "C" __global__ void fvf_h3_merge_heads_nvfp4(
+    const void* o, int o16, const float* amax_ptr, unsigned char* packed, unsigned char* scales,
+    int seq, int rows_pack, int heads, int d, int rule
+) {
+    long s = blockIdx.x;
+    int k = heads * d;
+    if (s >= seq) {
+        fv_nvfp4_pad_row(s, rows_pack, k, packed, scales);
+        return;
+    }
+    float amax = *amax_ptr;
+    float e2 = rule == 1 ? 4.0f : 6.0f;
+    for (int j0 = 0; j0 < k; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= k) continue;
+        int j = j0 + threadIdx.x;
+        int h = j / d;
+        float v = fv_r16(fv_ld(o, ((long)h * seq + s) * d + (j - h * d), o16));
+        fv_nvfp4_store_lane(v, s, j, k, amax, e2, packed, scales);
+    }
+}
 // ==== endregion: DiT block fusions ====
 
 // ==== region: Wan block (bf16 activations) ====

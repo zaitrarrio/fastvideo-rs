@@ -659,6 +659,17 @@ impl Nvfp4Stack {
         self.parts.iter().map(Nvfp4Linear::held_bytes).sum()
     }
 
+    /// The static activation amax ([`Self::with_static_act_scale`]) as the
+    /// device scalar the quantizer reads; `None` when it is measured per call.
+    pub fn static_act_amax(&self) -> Option<&CudaSlice<f32>> {
+        self.act_amax.as_ref()
+    }
+
+    /// The scale rule every part shares.
+    pub fn rule(&self) -> ScaleRule {
+        self.parts[0].rule
+    }
+
     /// `x[m, k]` bf16 (device pointer) → bf16 `[m, n]`.
     pub fn forward_bf16(&self, x_bf16: CUdeviceptr, m: usize) -> Result<CudaSlice<half::bf16>> {
         let a = quantize_bf16_operand_with(
@@ -669,8 +680,19 @@ impl Nvfp4Stack {
             self.parts[0].rule,
             self.act_amax.as_ref(),
         )?;
+        self.gemm_operand(&a)
+    }
+
+    /// The stacked GEMMs on an activation already quantized (by
+    /// [`quantize_bf16_operand_with`], or written that way by its producer)
+    /// → bf16 `[a.rows, n]`.
+    pub fn gemm_operand(&self, a: &Nvfp4Operand) -> Result<CudaSlice<half::bf16>> {
+        if a.k != self.k {
+            return Err(err(format!("nvfp4 stack: activation k {} != {}", a.k, self.k)));
+        }
+        let m = a.rows;
         if let [one] = self.parts.as_slice() {
-            return Ok(one.gemm(&a)?.0);
+            return Ok(one.gemm(a)?.0);
         }
         let d = dev()?;
         let rows = a.rows_pack;
@@ -679,11 +701,10 @@ impl Nvfp4Stack {
             let (base, _g) = out.device_ptr_mut(&d.stream);
             let mut col = 0usize;
             for p in &self.parts {
-                p.gemm_into(&a, base + (col * 2) as CUdeviceptr, self.n)?;
+                p.gemm_into(a, base + (col * 2) as CUdeviceptr, self.n)?;
                 col += p.n;
             }
         }
-        drop(a);
         if rows == m {
             return Ok(out);
         }
