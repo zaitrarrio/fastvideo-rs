@@ -73,7 +73,10 @@ case "$cmd" in
     mkdir -p "$tmp/b"
     cp "$bin" "$tmp/b/fv-gpucheck" && chmod 755 "$tmp/b/fv-gpucheck"
     cp -r "$HERE" "$tmp/b/gpu"
-    tar -czf "$tmp/bundle.tgz" -C "$tmp/b" fv-gpucheck gpu
+    # The plan rides in the bundle (private bucket, SHA-256 checked, removed by `down`): at ~200 kB it is too large
+    # for the pod's env (Runpod answered 500).
+    base64 -d <"$tmp/plan.b64" | gunzip >"$tmp/b/plan.json" && chmod 600 "$tmp/b/plan.json"
+    tar -czf "$tmp/bundle.tgz" -C "$tmp/b" fv-gpucheck gpu plan.json
     rm -rf "$tmp/b"
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
     url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/fasth3-nvfp4-bundle-$sha.tgz" --ttl "$CAP_S")"
@@ -82,23 +85,20 @@ case "$cmd" in
     log "bundle ${sha:0:12} staged, binary $size"
     # The pod deletes itself 10 min after DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop
     # deletes it regardless.
-    start='mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
-&& unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 \
-&& curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
-&& tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz \
+    start='mkdir -p /opt/fv /srv && curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
+&& tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json \
 && (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     export FVX_URL="$url"
     payload="$(jq -n --arg name "fv-fasth3-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --argjson dcs "$dcs_json" \
-      --arg start "$start" --argjson gpus "$gpus_json" --rawfile plan "$tmp/plan.b64" --arg sha "$sha" \
+      --arg start "$start" --argjson gpus "$gpus_json" --arg sha "$sha" \
       --arg skip "${FV_SKIP:-}" --arg only "${FV_ONLY_V2:-0}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, dataCenterPriority: "availability", ports: ["8000/http"],
         dockerStartCmd: ["/bin/bash", "-lc", $start], containerDiskInGb: 420, allowedCudaVersions: ["13.0"],
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_ONLY_V2: $only}
-              + ([range(0; $plan | length; 60000) as $i | {key: "FV_PLAN_GZ_B64_\($i / 60000 | floor)", value: $plan[$i:$i + 60000]}] | from_entries)
               + (if $skip != "" then {FV_SKIP: $skip} else {} end))
       }')"
     unset FVX_URL
