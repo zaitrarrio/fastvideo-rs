@@ -2546,12 +2546,10 @@ impl H3Pipeline {
 
         let steps = self.schedule.num_steps();
         hooks.stage(Stage::Denoise, steps)?;
-        let mut step_s = Vec::with_capacity(steps);
-        // FASTVIDEO_GPU_TRACE: one step's device activity (a no-op when off).
-        crate::wan::gpu_trace::pass_begin("h3");
-        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
-        let mut last = Instant::now();
+        // Lazy CUDA events per step (FASTVIDEO_H3_STEP_SYNC=1 / a GPU trace:
+        // a synchronize per step), docs/perf/h3-denoise-graphs.md.
+        let mut clock = super::step_graph::StepClock::start(steps)?;
         // fp8_attention (opt-in): dense calls of this denoise on the FP8 kernel;
         // the refiner above and the decoders below stay bf16.
         crate::wan::attn_fp8::set_ops(self.techniques.fp8_attention.dense, false);
@@ -2567,27 +2565,16 @@ impl H3Pipeline {
             cond_rows.as_ref(),
             cond_audio_rows.as_ref(),
             &mut |step, _, _| {
-                // The trace window closes before the step-timing sync.
-                crate::wan::gpu_trace::step_before_sync();
-                crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
-                step_s.push(last.elapsed().as_secs_f64());
-                crate::wan::gpu_trace::step_end(step_s[step]);
-                crate::wan::log::info(format_args!(
-                    "h3 step {}/{steps}: {:.1}s",
-                    step + 1,
-                    step_s[step]
-                ));
-                if step + 1 < steps {
-                    crate::wan::gpu_trace::step_begin();
-                }
-                last = Instant::now();
+                clock.step_queued(step)?;
+                // Lazy clock: the step is queued, not finished; the host runs
+                // at most a block or two ahead of the device.
                 hooks.step(Stage::Denoise, step + 1, steps, None)
             },
         );
         crate::wan::attn_fp8::set_ops(false, false);
         let (video_rows, audio_rows) = denoised?;
+        timings.step_s = clock.finish()?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
-        timings.step_s = step_s;
         // TeaCache rows and the step's AdaLN rows go with the denoise.
         self.model.end_denoise();
         drop((

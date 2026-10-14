@@ -14,6 +14,7 @@ pub mod nvfp4;
 pub mod pipeline;
 pub mod recovered_8b;
 pub mod spark;
+pub mod step_graph;
 pub mod text;
 pub mod transformer;
 pub mod vae;
