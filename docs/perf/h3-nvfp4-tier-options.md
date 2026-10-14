@@ -256,7 +256,39 @@ entries, NVFP4 requirement, T2V only for the releases); `fastvideo-serve` `token
 h3-base's); `configs/serve/runpod-h3-{v2-nvfp4,turbo-nvfp4,v2-nvfp4-preview,turbo-nvfp4-preview,turbo-preview,trim-nvfp4-fast}.toml`;
 fv-control presets, recipe trees, catalog, serverless recipes, `scripts/serve/variants.sh`.
 
+**GPU smoke of what shipped** (one RTX PRO 6000, pod `2d8zzz9gsqsop3`, US-NC-1, r2 mode, image
+`fastvideo-rs-runtime:sha-b564268`, this branch's and main's (`cf8a20d`) release `fv-gpucheck`;
+`scripts/gpu/h3-tier-ship-{validate,pod}.sh`; results in `artifacts/perf/h3-nvfp4-tier-ship/`). One prompt
+(talking-head, seed 1024), 832x480, 124 frames, `--warm`, one process each. V2 ran on the R2 tree as fetched
+(`--h3-recipe v2-nvfp4 --text-weights h3-base`); main ran it from a folder holding the tree's `transformer/` and
+h3-base's `vae/`, as option 6 measured it.
+
+| run | decoder (log line) | denoise s | VAE s | total s | peak (device max) |
+|---|---|---:|---:|---:|---:|
+| main, default | MXFP8 36 blocks (h3-base `vae/`) | 9.95 | 1.97 | 12.22 | 30.7 GiB |
+| **this branch, default** | **"NVFP4 decoder (FASTVIDEO_H3_VAE_NVFP4 default: the tree carries them) ... 1.27 GiB"**; shard 3 "from /fvw/h3-base/vae/..." | 10.02 | **1.77** | 12.06 | **25.7 GiB** |
+| this branch, `FASTVIDEO_H3_VAE_NVFP4=0` | "h3-base's vae/ ... (bf16 / MXFP8 linears)"; MXFP8 36 blocks | 10.06 | 1.99 | 12.33 | 30.7 GiB |
+| this branch, preview (TAEH3) | "h3 vae=taeh3" | 10.09 | 0.13 | 10.55 | 25.5 GiB |
+| this branch, `trim-8step-nvfp4-fp4attn` | "VSA fine stage on sparse FP4 tensor cores (FASTVIDEO_H3_VSA_FP4=1 by the recipe ...)"; MXFP8 26 blocks | **7.53** | 1.45 | 9.27 | 21.1 GiB |
+
+- The `=0` clip is **byte-identical** to main's default: all 250 output files (124 PNG frames and the audio, the warm
+  and the timed generation) have the same SHA-256.
+- The NVFP4 default decodes in 1.77 s, against option 6's 1.77 s and about 1.8 s expected, with 5.0 GiB less peak.
+- The Trim fastest recipe's denoise (7.53 s) is under option 7's 9.21 s, because the glue fusions and lazy step events
+  merged since. It ran with the FP4 attention on from the recipe alone, with no variable set.
+
 ## Cost and clean-up
+
+**Tier-ship smoke (2026-10-14):** pod `2d8zzz9gsqsop3`, $2.49/hr, 22:22-22:33 UTC: **about $0.46**.
+- The run order was: fetch (187 GB in 140 s), runs, pack.
+- The samplers were stopped by their PIDs before the tar. The archive was checked (`gzip -t`, `tar -t`) and fetched, and only then was the pod deleted.
+- The delete was checked: `GET /pods/2d8zzz9gsqsop3` returned 404.
+- The backstop (`fv-h3ship-backstop-2d8zzz9gsqsop3`) was stopped by its exact PID.
+- The staged bundle `fv-weights-staging/tmp/h3-tier-ship-bundle-fd0f5f03…` was removed by its exact key.
+- Builds ran on the shared build pod.
+- R2 and the volumes were only read.
+
+**Options measurement:**
 
 - GPU: one pod, `s9mm8tx90r8llm` (EU-RO-1, $2.49/hr), 16:22:38-17:34, about **$2.97**. The first cell spent 15 min
   streaming the bf16 text encoder from the network volume for four new prompts (228 s each); a pod with the FP8 encoder
