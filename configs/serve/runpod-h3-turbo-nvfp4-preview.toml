@@ -1,0 +1,61 @@
+# fv-serve on Runpod: the "fast preview" of the H3 NVFP4 tier's 4-step
+# (owner decision 2026-10-14): FastH3 4-step VSA DataFree NVFP4 as
+# runpod-h3-turbo-nvfp4.toml, decoded by TAEH3 instead of the official VAE.
+# An explicit choice, never a default: TAEH3 FAILS the quality gate's
+# sharpness floor (0.82-0.91) and saves about 10-12% end to end
+# (docs/perf/h3-nvfp4-tier-options.md option 5).
+#
+# Weights as runpod-h3-turbo-nvfp4.toml. NVFP4 tensor cores only.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3-4step-vsa-nvfp4-taeh3"
+family = "h3"
+recipe = "h3-turbo-nvfp4-preview"
+weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+# The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
+# tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
+# (byte-identical): the catalog's text_weights, ${FV_WEIGHTS}/h3-base.
+resident = true
+served_names = ["h3-turbo-nvfp4-preview"]
+warmup = true
+
+[aliases]
+"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "fasth3-4step-nvfp4-preview"

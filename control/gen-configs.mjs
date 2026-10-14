@@ -26,7 +26,7 @@ const SERVE = join(HERE, "../configs/serve");
 const CONSOLE = join(HERE, "../crates/fastvideo-serve/console");
 
 /** The worker configs src/cluster/spec.ts's presets send inline. */
-export const INLINE_WORKER_CONFIGS = ["runpod-ltx-pro.toml", "runpod-ltx-a2v.toml", "runpod-ltx-ref2v.toml", "runpod-h3-ref2v.toml", "runpod-h3-trim.toml", "runpod-h3-trim-nvfp4.toml", "runpod-h3-larry-turbo.toml", "runpod-h3-lightx2v-turbo.toml", "runpod-h3-lightx2v-turbo-v01.toml", "runpod-vdn-h3.toml", "runpod-vdn-h3-8step.toml", "runpod-longlive.toml"];
+export const INLINE_WORKER_CONFIGS = ["runpod-ltx-pro.toml", "runpod-ltx-a2v.toml", "runpod-ltx-ref2v.toml", "runpod-h3-ref2v.toml", "runpod-h3-trim.toml", "runpod-h3-trim-nvfp4.toml", "runpod-h3-v2-nvfp4.toml", "runpod-h3-turbo-nvfp4.toml", "runpod-h3-trim-nvfp4-fast.toml", "runpod-h3-v2-nvfp4-preview.toml", "runpod-h3-turbo-nvfp4-preview.toml", "runpod-h3-turbo-preview.toml", "runpod-h3-larry-turbo.toml", "runpod-h3-lightx2v-turbo.toml", "runpod-h3-lightx2v-turbo-v01.toml", "runpod-vdn-h3.toml", "runpod-vdn-h3-8step.toml", "runpod-longlive.toml"];
 
 const lit = (s) => "`" + s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${") + "`";
 

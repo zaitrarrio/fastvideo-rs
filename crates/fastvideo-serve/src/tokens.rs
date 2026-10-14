@@ -97,11 +97,19 @@ fn text_tree(m: &crate::config::ModelCfg, fam: PromptFamily) -> Option<PathBuf> 
             return Some(PathBuf::from(t));
         }
         let w = Path::new(weights.trim_end_matches('/'));
-        let trim = w.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("fasth3-trim"))
-            || m.recipe.as_deref().is_some_and(|r| {
-                matches!(r, "h3-trim" | "trim-8step" | "fasth3-trim-8step")
-                    || fastvideo_models::h3::config::is_trim_nvfp4_recipe(r)
-            });
+        // FastH3 Trim and the V2 / 4-step NVFP4 release trees carry no
+        // tokenizer either: h3-base beside them.
+        let trim = w.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.starts_with("fasth3-trim") || n == "fasth3-v2-nvfp4" || n == "fasth3-4step-vsa-nvfp4"
+        }) || m.recipe.as_deref().is_some_and(|r| {
+            matches!(r, "h3-trim" | "trim-8step" | "fasth3-trim-8step")
+                || fastvideo_models::h3::config::is_trim_nvfp4_recipe(r)
+                || fastvideo_models::h3::config::is_nvfp4_release_recipe(r)
+                || r.starts_with("fasth3-v2-nvfp4")
+                || r.starts_with("fasth3-4step-vsa-nvfp4")
+                || r.starts_with("h3-v2-nvfp4")
+                || r.starts_with("h3-turbo-nvfp4")
+        });
         if trim {
             if let Some(parent) = w.parent() {
                 return Some(parent.join("h3-base"));

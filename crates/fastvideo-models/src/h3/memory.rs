@@ -112,6 +112,34 @@ pub enum H3DitWeights {
     Nvfp4,
 }
 
+/// How the official video decoder's block linears are held: what the load
+/// resolves (`FASTVIDEO_H3_VAE_MXFP8`, `FASTVIDEO_H3_VAE_NVFP4` and the
+/// `vae/` the tree carries).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum H3VaeLinears {
+    /// bf16 linears only ([`video_vae_bytes`]): `FASTVIDEO_H3_VAE_MXFP8=0`,
+    /// pre-sm_100 GPUs, TAEH3 (priced as the official decoder, the safe side).
+    Bf16,
+    /// bf16 linears plus their MXFP8 copies ([`video_vae_mxfp8_bytes`],
+    /// about 2.3 GiB more): the default on sm_100+.
+    #[default]
+    Mxfp8,
+    /// The NVFP4 releases' published decoder linears and nothing else
+    /// ([`video_vae_nvfp4_bytes`], about 1.27 GiB of linears in place of
+    /// 4.5 GiB of bf16 ones): the NVFP4 tier's default decoder.
+    Nvfp4,
+}
+
+impl H3VaeLinears {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bf16 => "bf16",
+            Self::Mxfp8 => "bf16+mxfp8",
+            Self::Nvfp4 => "nvfp4",
+        }
+    }
+}
+
 /// The MXFP8 block range of `fastvideo_cudarc::wan::quant::H3QuantPlan`.
 pub const MXFP8_FIRST_BLOCK: usize = 2;
 pub const MXFP8_LAST_BLOCK: usize = 46;
@@ -229,6 +257,38 @@ pub fn video_vae_mxfp8_bytes(v: &H3VideoVaeConfig) -> u64 {
     let hid = d * v.decoder_ffn_mult as u64;
     let params = 4 * d * d + d * 2 * hid + hid * d;
     v.decoder_num_layers as u64 * (params + params / 32)
+}
+
+/// The bf16 weights of the video decoder's block linears (the part of
+/// [`video_vae_bytes`] the published NVFP4 linears replace; biases apart).
+fn video_vae_block_linear_bf16_bytes(v: &H3VideoVaeConfig) -> u64 {
+    let d = v.decoder_dim() as u64;
+    let hid = d * v.decoder_ffn_mult as u64;
+    v.decoder_num_layers as u64 * (4 * d * d + d * 2 * hid + hid * d) * 2
+}
+
+/// The video decoder with the NVFP4 releases' published block linears
+/// (`FASTVIDEO_H3_VAE_NVFP4`, the NVFP4 tier's default): every block linear
+/// as E2M1 nibbles (half a byte per weight) plus one E4M3 scale per 16, float32
+/// biases and scalar scales; no bf16 copy. The rest (norms, `proj_in` /
+/// `proj_out` / `post_quant`, registers) as [`video_vae_bytes`]. About 1.27
+/// GiB of linears in place of 4.5 GiB (measured: "1.27 GiB with biases" in
+/// the load log, 480p peak 27.1 GiB vs 32.1 with the MXFP8 default,
+/// docs/perf/h3-nvfp4-tier-options.md option 6).
+pub fn video_vae_nvfp4_bytes(v: &H3VideoVaeConfig) -> u64 {
+    let d = v.decoder_dim() as u64;
+    let hid = d * v.decoder_ffn_mult as u64;
+    let params = 4 * d * d + d * 2 * hid + hid * d;
+    video_vae_bytes(v) - video_vae_block_linear_bf16_bytes(v) + v.decoder_num_layers as u64 * (params / 2 + params / 16)
+}
+
+/// The video decoder held for `linears` ([`H3VaeLinears`]).
+pub fn video_vae_held_bytes(v: &H3VideoVaeConfig, linears: H3VaeLinears) -> u64 {
+    match linears {
+        H3VaeLinears::Bf16 => video_vae_bytes(v),
+        H3VaeLinears::Mxfp8 => video_vae_bytes(v) + video_vae_mxfp8_bytes(v),
+        H3VaeLinears::Nvfp4 => video_vae_nvfp4_bytes(v),
+    }
 }
 
 /// BigVGAN decoder: float32 weight-normed convs (folded at load), every
@@ -439,11 +499,12 @@ pub struct H3PlanOptions {
     pub vae_tile_batch: usize,
     /// Ladder steps (rows of the output modulation kept on the device).
     pub steps: usize,
-    /// The video decoder also holds MXFP8 copies of its block linears
-    /// ([`video_vae_mxfp8_bytes`]): the default decode on sm_100+. The
-    /// pipeline passes what `FASTVIDEO_H3_VAE_MXFP8` resolves to (off on
-    /// older GPUs, with `=0` or with TAEH3).
-    pub vae_mxfp8: bool,
+    /// How the video decoder's block linears are held ([`H3VaeLinears`]):
+    /// bf16 plus MXFP8 copies by default (sm_100+). The pipeline passes what
+    /// `FASTVIDEO_H3_VAE_MXFP8` / `FASTVIDEO_H3_VAE_NVFP4` and the tree
+    /// resolve to (bf16 on older GPUs, with `MXFP8=0` or with TAEH3; the
+    /// published NVFP4 linears on the NVFP4 tier).
+    pub vae: H3VaeLinears,
     /// How the resident DiT's block linears are stored. Streamed blocks are
     /// priced as bf16 whatever this says.
     pub dit: H3DitWeights,
@@ -457,7 +518,7 @@ impl Default for H3PlanOptions {
             text_tokens: PLAN_TEXT_TOKENS,
             vae_tile_batch: 8,
             steps: 50,
-            vae_mxfp8: true,
+            vae: H3VaeLinears::Mxfp8,
             dit: H3DitWeights::Bf16,
         }
     }
@@ -481,12 +542,7 @@ pub fn plan(geometry: &H3Geometry, opts: H3PlanOptions) -> H3MemoryPlan {
     let tcfg = H3TextEncoderConfig::fasth3_8step();
     let streamed = opts.placement.is_streamed();
     let rows = geometry.sequence_length(opts.text_tokens);
-    let video_vae = video_vae_bytes(&vcfg)
-        + if opts.vae_mxfp8 {
-            video_vae_mxfp8_bytes(&vcfg)
-        } else {
-            0
-        };
+    let video_vae = video_vae_held_bytes(&vcfg, opts.vae);
     let audio_vae = audio_vae_bytes(&acfg);
     let decoders_held = if streamed { 0 } else { video_vae + audio_vae };
     // Skeletons (and, resident, every block) stay loaded for the whole run;
@@ -616,7 +672,7 @@ impl AutoTextEncoder {
         let gib = |b: u64| b as f64 / GIB as f64;
         let g = &opts.request;
         format!(
-            "{}: {:.1} GiB free before load {} need {:.1} GiB = fp8 encoder {:.1} + max(resident weights {:.1} [dit {} {}, vae mxfp8 {}, extra {:.1}] + denoise reserve {:.1} for {}x{}x{} ({} rows) + runtime {:.1}; plan peak {:.1}{})",
+            "{}: {:.1} GiB free before load {} need {:.1} GiB = fp8 encoder {:.1} + max(resident weights {:.1} [dit {} {}, vae {}, extra {:.1}] + denoise reserve {:.1} for {}x{}x{} ({} rows) + runtime {:.1}; plan peak {:.1}{})",
             if self.resident { "resident-fp8" } else { "streamed" },
             gib(self.free),
             if self.resident { ">=" } else { "<" },
@@ -625,7 +681,7 @@ impl AutoTextEncoder {
             gib(self.weights),
             opts.plan.dit.as_str(),
             if opts.plan.placement.is_streamed() { "streamed" } else { "resident" },
-            opts.plan.vae_mxfp8,
+            opts.plan.vae.as_str(),
             gib(opts.extra),
             gib(self.reserve),
             g.width,
@@ -734,7 +790,7 @@ mod tests {
         assert!((2.2..2.4).contains(&gib(mx)), "{:.3}", gib(mx));
         let g = H3Geometry::default_16x9(5).unwrap();
         let off = |o: H3PlanOptions| H3PlanOptions {
-            vae_mxfp8: false,
+            vae: H3VaeLinears::Bf16,
             ..o
         };
         let (on_r, off_r) = (
@@ -753,6 +809,34 @@ mod tests {
             assert_eq!(a.total(), b.total() + extra, "streamed {}", a.stage);
         }
         show("768p5s mxfp8 vae streamed", &on_s);
+    }
+
+    /// The NVFP4 tier's default decoder (owner decision 2026-10-14) is priced
+    /// as what it holds: the published linears, about 1.27 GiB (the load log's
+    /// "1.27 GiB with biases"), in place of the bf16 linears and their MXFP8
+    /// copies; the plan's video decoder drops by about 5.5 GiB against the
+    /// MXFP8 default (the measured peak dropped 5.0 / 5.2 GiB at 480p / 768p,
+    /// docs/perf/h3-nvfp4-tier-options.md option 6).
+    #[test]
+    fn the_nvfp4_video_decoder_is_priced_as_its_published_linears() {
+        let v = H3VideoVaeConfig::fasth3_8step();
+        let linears = video_vae_nvfp4_bytes(&v) - (video_vae_bytes(&v) - video_vae_block_linear_bf16_bytes(&v));
+        assert!((1.24..1.30).contains(&gib(linears)), "{:.3}", gib(linears));
+        let (bf16, mx, nv) = (
+            video_vae_held_bytes(&v, H3VaeLinears::Bf16),
+            video_vae_held_bytes(&v, H3VaeLinears::Mxfp8),
+            video_vae_held_bytes(&v, H3VaeLinears::Nvfp4),
+        );
+        assert!(nv < bf16 && bf16 < mx);
+        assert!((5.3..5.8).contains(&gib(mx - nv)), "mxfp8 - nvfp4 {:.2}", gib(mx - nv));
+        assert!((1.25..1.45).contains(&gib(nv)), "the whole NVFP4 decoder {:.3}", gib(nv));
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let with = |vae| plan(&g, H3PlanOptions { vae, ..H3PlanOptions::default() });
+        let (m, n) = (with(H3VaeLinears::Mxfp8), with(H3VaeLinears::Nvfp4));
+        for (a, b) in m.stages.iter().zip(&n.stages) {
+            assert_eq!(a.total(), b.total() + (mx - nv), "resident {}", a.stage);
+        }
+        assert_eq!(H3PlanOptions::default().vae, H3VaeLinears::Mxfp8, "the default stays bf16 + MXFP8");
     }
 
     /// The resident FP8 encoder is 22.7 GiB, what the PRO 6000 run's
@@ -809,7 +893,7 @@ mod tests {
             let bf16_vae = plan(
                 &g,
                 H3PlanOptions {
-                    vae_mxfp8: false,
+                    vae: H3VaeLinears::Bf16,
                     ..H3PlanOptions::streamed()
                 },
             );

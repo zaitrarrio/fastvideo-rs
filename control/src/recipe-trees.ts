@@ -93,6 +93,47 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "FastH3 Trim NVFP4: as h3-trim, plus the published NVFP4 DiT in fasth3-trim-8step-nvfp4 beside the config's weights (cudarc h3/nvfp4.rs sibling_tree; h3/pipeline.rs nvfp4_dit_file)",
   },
+  "h3-trim-nvfp4-fast": {
+    catalog: "fasth3-trim-nvfp4-fast",
+    required: ["h3-base", "fasth3-trim-8step-nvfp4"],
+    prequant: [H3_TEXT_FP8],
+    note: "FastH3 Trim NVFP4 + sparse FP4 VSA (the opt-in fastest tier, recipe trim-8step-nvfp4-fp4attn): the trees of h3-trim-nvfp4 (cudarc h3/nvfp4.rs sibling_tree; h3/pipeline.rs vsa_fp4_choice turns the FP4 attention on for the recipe)",
+  },
+  // The H3 NVFP4 tier (owner decision 2026-10-14): each release's own tree (ModelOpt transformer/, the published NVFP4
+  // vae/ shards 1-2) is the config's weights; h3-base gives the text encoder, tokenizer, audio VAE and the vae/'s
+  // byte-identical third shard (cudarc h3/pipeline.rs resolve_video_vae / completed_vae_files, caps.rs h3() text_weights).
+  "h3-v2-nvfp4": {
+    catalog: "fasth3-v2-nvfp4",
+    required: ["h3-base"],
+    prequant: [H3_TEXT_FP8],
+    note: "FastH3 V2 NVFP4: the DiT and the NVFP4 VAE in fasth3-v2-nvfp4 (the config's weights); text, tokenizer, audio VAE and vae/ shard 3 from h3-base (h3/pipeline.rs resolve_video_vae)",
+  },
+  "h3-turbo-nvfp4": {
+    catalog: "fasth3-4step-vsa-nvfp4",
+    required: ["h3-base"],
+    prequant: [H3_TEXT_FP8],
+    note: "FastH3 4-step VSA DataFree NVFP4: as h3-v2-nvfp4, tree fasth3-4step-vsa-nvfp4",
+  },
+  // "Fast preview" (owner decision 2026-10-14): the recipe decoded by TAEH3 (auxiliary/tae, an aux file every boot
+  // fetches), its own model id; never a default.
+  "h3-v2-nvfp4-preview": {
+    catalog: "fasth3-v2-nvfp4-taeh3",
+    required: ["h3-base"],
+    prequant: [H3_TEXT_FP8],
+    note: "h3-v2-nvfp4 with the TAEH3 decoder (aux files); the load still resolves the tree's vae/ (shard 3 from h3-base), so h3-base is required as for h3-v2-nvfp4",
+  },
+  "h3-turbo-nvfp4-preview": {
+    catalog: "fasth3-4step-vsa-nvfp4-taeh3",
+    required: ["h3-base"],
+    prequant: [H3_TEXT_FP8],
+    note: "h3-turbo-nvfp4 with the TAEH3 decoder (aux files)",
+  },
+  "h3-turbo-preview": {
+    catalog: "fasth3-4step-vsa-taeh3",
+    required: [FASTH3_LORA],
+    prequant: [H3_TEXT_FP8, "h3-base/transformer_prequant_4step-vsa_mxfp8"],
+    note: "h3-turbo with the TAEH3 decoder (aux files): the same adapter and DiT tree as h3-turbo (dit_tree.rs keys the tree by recipe, not decoder)",
+  },
   // LTX-2.5: its FP8 Gemma tree (ltx25/text_encoder_fp8) is read only with FASTVIDEO_LTX2_TEXT_FP8=1 (opt-in,
   // cudarc ltx2/pipeline.rs), which no preset sets.
   "ltx-turbo": { catalog: "ltx25-distill-sol", required: [], prequant: [], note: "everything under ltx25" },

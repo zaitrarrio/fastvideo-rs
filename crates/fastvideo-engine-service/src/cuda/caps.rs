@@ -19,6 +19,10 @@
 //! | — | `h3-lightx2v-turbo` | base MiniMax-H3 + lightx2v FL2VA/T2VA 4-step v1.2 768p folded at load (`lightx2v-turbo`, 4 forwards, shifts 6 / 3), dense, MXFP8; T2V + FL2VA | `h3/lightx2v_turbo_dense` | untiered (docs/ports/h3-turbo-loras.md) |
 //! | — (served `h3-trim`) | `fasth3-trim-8step` | FastH3 Trim 8-step DMD (`trim-8step`): 42 of 50 blocks, rank-16 AdaLN, VSA-H3 0.8, its own lightweight VAE; text-to-video only | none | untiered (explicit id, `h3-trim`, or `recipe = "trim-8step"`); docs/ports/h3-trim.md |
 //! | — (served `h3-trim-nvfp4`) | `fasth3-trim-nvfp4` | the Trim recipe with every block's attention and FFN linears from the release's NVFP4 file (`trim-8step-nvfp4`, tree `fasth3-trim-8step-nvfp4` beside `fasth3-trim-8step`), W4A4 on NVFP4 tensor cores; sm_100 / sm_120 only (the load fails elsewhere) | none | untiered, opt-in (explicit id, `h3-trim-nvfp4`, or `recipe = "trim-8step-nvfp4"`); not a default (docs/ports/h3-trim.md §5) |
+//! | — (served `h3-trim-nvfp4-fast`) | `fasth3-trim-nvfp4-fast` | the Trim NVFP4 recipe with the VSA fine stage on sparse FP4 tensor cores, turned on by the recipe (`trim-8step-nvfp4-fp4attn`, `FASTVIDEO_H3_VSA_FP4=1` semantics; `=0` still turns it off); sm_120 kernel, sm_100 / sm_120 only | none | untiered, opt-in "fastest" tier (owner decision 2026-10-14): 9.21 / 24.64 s denoise at 480p / 768p, ~20 GiB peak; a different model from FastH3 V2, not gate-equivalent (docs/perf/h3-nvfp4-tier-options.md option 7) |
+//! | — (served `h3-v2-nvfp4`) | `fasth3-v2-nvfp4` | FastH3 V2 NVFP4 (`v2-nvfp4`): the release's ModelOpt NVFP4 DiT (tree `fasth3-v2-nvfp4`), sparse FP4 VSA (the NVFP4 default on sm_120), its own published NVFP4 VAE decoder (`FASTVIDEO_H3_VAE_NVFP4`, default; `=0` decodes with h3-base's `vae/`, MXFP8); text, tokenizer, audio VAE and the `vae/`'s third shard from `h3-base`; T2V only | none | untiered, the NVFP4 tier (owner decision 2026-10-14: NVFP4 VAE by default, gate pass, -5 GiB of peak) |
+//! | — (served `h3-turbo-nvfp4`) | `fasth3-4step-vsa-nvfp4` | FastH3 4-step VSA DataFree NVFP4 (`4step-vsa-nvfp4`, tree `fasth3-4step-vsa-nvfp4`), as `h3-v2-nvfp4` on its 4-rung contract (VSA 0.9) | none | untiered, the NVFP4 tier's 4-step |
+//! | — (served `h3-v2-nvfp4-preview`, `h3-turbo-nvfp4-preview`, `h3-turbo-preview`) | `fasth3-v2-nvfp4-taeh3`, `fasth3-4step-vsa-nvfp4-taeh3`, `fasth3-4step-vsa-taeh3` | the NVFP4 tier's two recipes and `h3-turbo`'s, decoded by TAEH3 (`auxiliary/tae/taeh3.safetensors`) at their canvases (768p default, 480p) | as the base | untiered, explicit "fast preview" choice, never a default: fails the sharpness gate (0.82-0.91 against the official decoder), saves about 10-12% end to end (docs/perf/h3-nvfp4-tier-options.md option 5) |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
@@ -462,7 +466,10 @@ impl CudaModel {
     /// DiT's weight bytes (when the weights are on disk) within the device.
     pub fn requirements(&self) -> crate::device::Requirements {
         let (fp8, nvfp4) = match &self.recipe {
-            CudaRecipe::H3(r) => (r.profile.is_some() || r.text_encoder == "resident-fp8", false),
+            CudaRecipe::H3(r) => (
+                r.profile.is_some() || r.text_encoder == "resident-fp8" || needs_nvfp4(&r.recipe),
+                needs_nvfp4(&r.recipe),
+            ),
             CudaRecipe::Ltx2(r) => {
                 let fp4 = r.profile.as_deref() == Some(LTX_DRAFT_PROFILE);
                 (fp4, fp4)
@@ -533,6 +540,23 @@ impl CudaModel {
                         "H3 reference-to-video, fast: the Ref2VA DiT with the lightx2v turbo LoRA fused \
                          (Sol-H3 Ref2VA route), {} forwards, dense attention, official VAE",
                         r.steps
+                    ),
+                    _ if r.taeh3.is_some() && self.tier != Some(Tier::Draft) => format!(
+                        "H3 fast preview: {} decoded by TAEH3 instead of the official VAE (explicit choice, never \
+                         a default; fails the sharpness gate, 0.82-0.91 against the official decoder; about 10-12% \
+                         faster end to end)",
+                        preview_base_name(&r.recipe)
+                    ),
+                    _ if h3cfg::is_trim_nvfp4_fp4attn_recipe(&r.recipe) => "FastH3 Trim 8-step NVFP4, fastest \
+                        (opt-in): the release's NVFP4 DiT (42 blocks, every attention and FFN linear W4A4) with the \
+                        VSA fine stage on sparse FP4 tensor cores (sm_120 kernel), lightweight VAE; a different model \
+                        from FastH3 V2 and not gate-equivalent (9.2 / 24.6 s denoise at 480p / 768p on an RTX PRO 6000)"
+                        .to_owned(),
+                    _ if h3cfg::is_nvfp4_release_recipe(&r.recipe) => format!(
+                        "{}: the release's ModelOpt NVFP4 DiT (FFN W4A4 on NVFP4 tensor cores, sm_100 / sm_120 \
+                         only), VSA-H3 with the fine stage on sparse FP4 tensor cores where the kernel exists, its \
+                         published NVFP4 VAE decoder (FASTVIDEO_H3_VAE_NVFP4=0: h3-base's, MXFP8)",
+                        preview_base_name(&r.recipe)
                     ),
                     _ if h3cfg::is_trim_nvfp4_recipe(&r.recipe) => "FastH3 Trim 8-step DMD with the release's NVFP4 \
                         DiT: 42 blocks, every attention and FFN linear W4A4 on NVFP4 tensor cores (sm_100 / sm_120 \
@@ -694,7 +718,7 @@ pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
     let mut c = ModelCaps::h3(id, r.ref2va);
-    if is_trim_recipe(&r.recipe) || r.vdn_weights.is_some() {
+    if is_trim_recipe(&r.recipe) || r.vdn_weights.is_some() || h3cfg::is_nvfp4_release_recipe(&r.recipe) {
         // FastH3 Trim: distilled and released for text-to-video+audio only.
         // VDN-H3: the checkpoint serves T2VA / I2VA / L2VA / FL2VA; the
         // keyframe rows run through H3's FL2VA path (global rows of the
@@ -702,7 +726,8 @@ fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
         // offered (docs/ports/vdn-h3.md §7).
         // FastH3 Trim was distilled and released for text-to-video+audio only
         // (`fastvideo_inference.json` task t2av); image conditioning is
-        // untested on the pruned DiT, so it is not offered.
+        // untested on the pruned DiT, so it is not offered. The V2 / 4-step
+        // NVFP4 releases likewise (task t2av; measured on T2V only).
         c.tasks = [Task::T2V].into_iter().collect();
     }
     if r.ref2va {
@@ -787,6 +812,50 @@ pub const FASTH3_TRIM_TREE: &str = "fasth3-trim-8step";
 pub const FASTH3_TRIM_NVFP4_ID: &str = "fasth3-trim-nvfp4";
 pub const H3_TRIM_NVFP4: &str = "h3-trim-nvfp4";
 pub const FASTH3_TRIM_NVFP4_RECIPE: &str = "trim-8step-nvfp4";
+
+/// The opt-in "fastest" H3 tier (owner decision 2026-10-14): the Trim NVFP4
+/// with sparse FP4 VSA turned on by its recipe
+/// ([`h3cfg::is_trim_nvfp4_fp4attn_recipe`]); same trees as
+/// [`FASTH3_TRIM_NVFP4_ID`].
+pub const FASTH3_TRIM_NVFP4_FAST_ID: &str = "fasth3-trim-nvfp4-fast";
+pub const H3_TRIM_NVFP4_FAST: &str = "h3-trim-nvfp4-fast";
+pub const FASTH3_TRIM_NVFP4_FAST_RECIPE: &str = "trim-8step-nvfp4-fp4attn";
+/// The NVFP4 tier (docs/ports/fasth3-nvfp4.md, docs/perf/h3-nvfp4-tier-options.md):
+/// the FastH3 V2 / 4-step NVFP4 releases from their own trees (the ModelOpt
+/// `transformer/` and the published NVFP4 `vae/` shards 1-2), with
+/// `h3-base` for the text encoder, tokenizer, audio VAE and the `vae/`'s
+/// byte-identical third shard. Catalog ids, served names, trees, recipes.
+pub const FASTH3_V2_NVFP4_ID: &str = "fasth3-v2-nvfp4";
+pub const H3_V2_NVFP4: &str = "h3-v2-nvfp4";
+pub const FASTH3_V2_NVFP4_TREE: &str = "fasth3-v2-nvfp4";
+pub const FASTH3_V2_NVFP4_RECIPE: &str = "v2-nvfp4";
+pub const FASTH3_4STEP_NVFP4_ID: &str = "fasth3-4step-vsa-nvfp4";
+pub const H3_TURBO_NVFP4: &str = "h3-turbo-nvfp4";
+pub const FASTH3_4STEP_NVFP4_TREE: &str = "fasth3-4step-vsa-nvfp4";
+pub const FASTH3_4STEP_NVFP4_RECIPE: &str = "4step-vsa-nvfp4";
+/// The "fast preview" choices (owner decision 2026-10-14): the same recipe
+/// decoded by TAEH3, a model id of its own (as `h3-draft`), never a default.
+/// (catalog id, served name) of the NVFP4 tier's two and of `h3-turbo`.
+pub const H3_PREVIEWS: [(&str, &str); 3] = [
+    ("fasth3-v2-nvfp4-taeh3", "h3-v2-nvfp4-preview"),
+    ("fasth3-4step-vsa-nvfp4-taeh3", "h3-turbo-nvfp4-preview"),
+    ("fasth3-4step-vsa-taeh3", "h3-turbo-preview"),
+];
+
+/// The H3 recipes that run only on NVFP4 tensor cores (sm_100 / sm_120): the
+/// Trim NVFP4 ones and the V2 / 4-step NVFP4 releases.
+pub fn needs_nvfp4(recipe: &str) -> bool {
+    h3cfg::is_trim_nvfp4_recipe(recipe) || h3cfg::is_nvfp4_release_recipe(recipe)
+}
+
+/// What a recipe is called in a summary.
+fn preview_base_name(recipe: &str) -> &'static str {
+    match h3cfg::nvfp4_release_contract(recipe) {
+        Some(c) if c.transformer_forwards == 8 => "FastH3 V2 NVFP4 (8 steps)",
+        Some(_) => "FastH3 4-step VSA DataFree NVFP4",
+        None => "FastH3 Preview 4-step VSA (h3-turbo)",
+    }
+}
 
 /// VDN-H3's catalog id, its contract (`H3InferenceContract::named`), its
 /// weight tree and the stage directory inside it (docs/ports/vdn-h3.md).
@@ -1163,6 +1232,15 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // The same model with the release's NVFP4 block linears (opt-in, sm_100 /
     // sm_120 only): the pipeline reads `fasth3-trim-8step-nvfp4` beside the tree.
     let h3_trim_nvfp4 = h3(layout, FASTH3_TRIM_TREE, FASTH3_TRIM_NVFP4_RECIPE, None, 8);
+    // The opt-in "fastest" tier: the same trees, sparse FP4 VSA by the recipe.
+    let h3_trim_nvfp4_fast = h3(layout, FASTH3_TRIM_TREE, FASTH3_TRIM_NVFP4_FAST_RECIPE, None, 8);
+    // The NVFP4 tier: each release's tree holds its ModelOpt DiT and its
+    // published NVFP4 `vae/` (shards 1-2, the default decoder; the third
+    // shard is read from h3-base's `vae/`, `text_weights`). No technique
+    // profile: the NVFP4 path sets its own linears (NVFP4 FFN, attention as
+    // FASTVIDEO_H3_QUANT) and sparse FP4 VSA where the kernel exists.
+    let h3_v2_nvfp4 = h3(layout, FASTH3_V2_NVFP4_TREE, FASTH3_V2_NVFP4_RECIPE, None, 8);
+    let h3_4step_nvfp4 = h3(layout, FASTH3_4STEP_NVFP4_TREE, FASTH3_4STEP_NVFP4_RECIPE, None, 4);
     // VDN-H3 (docs/ports/vdn-h3.md): h3-base's DiT, VAEs and text encoder with
     // the stage-B hybrid attention (linear branch + LoRA) of
     // `vdn-h3-stage-b-2000`: the 50-step model on its own schedule (no CFG,
@@ -1197,6 +1275,14 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         hd_1080p: false,
         ..h3_turbo.clone()
     };
+    // "Fast preview": the recipe decoded by TAEH3 at its own canvases (768p
+    // default and 480p; not the 1080P tier).
+    let preview = |r: &H3Recipe| H3Recipe {
+        taeh3: Some(tae("taeh3.safetensors")),
+        hd_1080p: false,
+        ..r.clone()
+    };
+    let previews = [preview(&h3_v2_nvfp4), preview(&h3_4step_nvfp4), preview(&h3_turbo)];
     let sol_h3 = H3Recipe {
         hd_1080p: true,
         ..h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4)
@@ -1319,7 +1405,10 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         block_frames: 12,
         longlive: None,
     };
-    vec![
+    let preview_models = H3_PREVIEWS.iter().zip(previews).map(|((id, served), r)| {
+        CudaModel::new(id, None, id, CudaRecipe::H3(r)).with_served_names(&[served])
+    });
+    let mut models = vec![
         CudaModel::new(
             "sol-h3",
             Some(Tier::Max),
@@ -1359,6 +1448,27 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             CudaRecipe::H3(h3_trim_nvfp4),
         )
         .with_served_names(&[H3_TRIM_NVFP4]),
+        CudaModel::new(
+            FASTH3_TRIM_NVFP4_FAST_ID,
+            None,
+            "fasth3-trim-8step-vsa-fp4-nvfp4",
+            CudaRecipe::H3(h3_trim_nvfp4_fast),
+        )
+        .with_served_names(&[H3_TRIM_NVFP4_FAST]),
+        CudaModel::new(
+            FASTH3_V2_NVFP4_ID,
+            None,
+            "fasth3-v2-8step-vsa-nvfp4",
+            CudaRecipe::H3(h3_v2_nvfp4),
+        )
+        .with_served_names(&[H3_V2_NVFP4]),
+        CudaModel::new(
+            FASTH3_4STEP_NVFP4_ID,
+            None,
+            "fasth3-4step-vsa-nvfp4",
+            CudaRecipe::H3(h3_4step_nvfp4),
+        )
+        .with_served_names(&[H3_TURBO_NVFP4]),
         // Untiered, addressed by id: the h3-turbo / h3-max slots stay as they are.
         CudaModel::new(
             H3_LARRY_TURBO,
@@ -1473,7 +1583,9 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "sfwan21-1.3b-causal",
             CudaRecipe::SfWan(sfwan),
         ),
-    ]
+    ];
+    models.extend(preview_models);
+    models
 }
 
 /// The catalog model bound to a tier alias (`h3-turbo`) or with this id.
@@ -1523,7 +1635,10 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
+        (Family::H3, r) if h3cfg::is_trim_nvfp4_fp4attn_recipe(r) => FASTH3_TRIM_NVFP4_FAST_ID.to_owned(),
         (Family::H3, r) if h3cfg::is_trim_nvfp4_recipe(r) => FASTH3_TRIM_NVFP4_ID.to_owned(),
+        (Family::H3, FASTH3_V2_NVFP4_RECIPE) => FASTH3_V2_NVFP4_ID.to_owned(),
+        (Family::H3, FASTH3_4STEP_NVFP4_RECIPE) => FASTH3_4STEP_NVFP4_ID.to_owned(),
         (Family::H3, VDN_H3_ID | VDN_H3_RECIPE) => VDN_H3_ID.to_owned(),
         (Family::H3, VDN_H3_8STEP_RECIPE) => VDN_H3_8STEP_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
@@ -2621,6 +2736,87 @@ mod tests {
         let CudaRecipe::H3(t) = &find(&cat, H3_TRIM).unwrap().recipe else { panic!() };
         assert_eq!(t.recipe, "trim-8step");
         assert!(is_trim_recipe("trim-8step-nvfp4"));
+    }
+
+    /// Owner decisions 2026-10-14: the NVFP4 tier (V2 and 4-step NVFP4 from
+    /// their own trees, h3-base for the text side), its TAEH3 "fast preview"
+    /// twins and h3-turbo's (explicit ids, never a default), and the Trim
+    /// NVFP4 + sparse FP4 attention "fastest" tier (FP4 VSA by the recipe).
+    #[test]
+    fn nvfp4_tier_previews_and_the_fastest_trim() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        let h3 = |name: &str| {
+            let m = find(&cat, name).unwrap_or_else(|| panic!("{name}"));
+            let CudaRecipe::H3(r) = m.recipe.clone() else { panic!("{name}") };
+            (m, r)
+        };
+        for (id, served, tree, recipe, steps) in [
+            (FASTH3_V2_NVFP4_ID, H3_V2_NVFP4, "fasth3-v2-nvfp4", "v2-nvfp4", 8),
+            (FASTH3_4STEP_NVFP4_ID, H3_TURBO_NVFP4, "fasth3-4step-vsa-nvfp4", "4step-vsa-nvfp4", 4),
+        ] {
+            for name in [id, served] {
+                let (m, r) = h3(name);
+                assert_eq!(m.id.as_str(), id);
+                assert!(m.tier.is_none(), "untiered: h3-turbo stays the default");
+                assert_eq!((r.recipe.as_str(), r.steps, r.profile.as_deref()), (recipe, steps, None));
+                assert_eq!(r.weights, Path::new("/w").join(tree));
+                assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")), "text + vae shard 3");
+                assert!(r.taeh3.is_none(), "the official (NVFP4) decoder by default");
+                assert_eq!(
+                    h3cfg::H3InferenceContract::named(&r.recipe).unwrap().transformer_forwards as u32,
+                    steps
+                );
+                assert!(m.requirements().nvfp4, "NVFP4 tensor cores only");
+                assert_eq!(m.caps().tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+                let d = m.describe();
+                assert_eq!(d.vae, "full");
+                assert!(d.summary.contains("NVFP4 VAE"), "{}", d.summary);
+            }
+            let e = ModelEntryCfg { family: "h3".into(), recipe: recipe.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), id, "{recipe}");
+        }
+        // Fast preview: the same recipe and canvases, TAEH3 decode, its own id.
+        let bases = [FASTH3_V2_NVFP4_ID, FASTH3_4STEP_NVFP4_ID, "fasth3-4step-vsa"];
+        for ((id, served), base) in H3_PREVIEWS.iter().zip(bases) {
+            let (m, r) = h3(served);
+            let (bm, b) = h3(base);
+            assert_eq!(m.id.as_str(), *id);
+            assert!(m.tier.is_none(), "never a default");
+            assert_eq!(r.taeh3.as_deref(), Some(Path::new("/w/auxiliary/tae/taeh3.safetensors")));
+            assert_eq!((&r.recipe, &r.weights, r.steps, &r.profile), (&b.recipe, &b.weights, b.steps, &b.profile));
+            assert_eq!(r.short_edge, b.short_edge, "the base's canvases, 768p default");
+            assert!(!r.hd_1080p);
+            assert_eq!(m.caps().canvas.short_edges, [768, 480]);
+            assert_eq!(m.caps().tasks, bm.caps().tasks);
+            let d = m.describe();
+            assert_eq!(d.vae, "taeh3");
+            assert!(d.summary.contains("fast preview") && d.summary.contains("sharpness"), "{}", d.summary);
+        }
+        // h3-turbo and the draft tier are unchanged.
+        let (_, t) = h3("h3-turbo");
+        assert!(t.taeh3.is_none() && t.hd_1080p);
+        assert_eq!(h3("h3-draft").0.id.as_str(), "fasth3-4step-vsa-480p-taeh3");
+        // The fastest tier: the Trim NVFP4's trees, sparse FP4 VSA by its recipe.
+        for name in [FASTH3_TRIM_NVFP4_FAST_ID, H3_TRIM_NVFP4_FAST] {
+            let (m, r) = h3(name);
+            let (_, trim_nv) = h3(H3_TRIM_NVFP4);
+            assert_eq!(m.id.as_str(), FASTH3_TRIM_NVFP4_FAST_ID);
+            assert!(m.tier.is_none());
+            assert_eq!(r.recipe, FASTH3_TRIM_NVFP4_FAST_RECIPE);
+            assert!(h3cfg::is_trim_nvfp4_fp4attn_recipe(&r.recipe) && is_trim_recipe(&r.recipe));
+            assert_eq!((&r.weights, &r.text_weights), (&trim_nv.weights, &trim_nv.text_weights));
+            assert!(m.recipe.process_env().is_empty(), "no process-wide variable");
+            assert!(m.requirements().nvfp4);
+            let d = m.describe();
+            assert!(d.summary.contains("sparse FP4") && d.summary.contains("not gate-equivalent"), "{}", d.summary);
+        }
+        for rec in ["trim-8step-nvfp4-fp4attn", H3_TRIM_NVFP4_FAST] {
+            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_NVFP4_FAST_ID, "{rec}");
+        }
+        let (_, slow) = h3(H3_TRIM_NVFP4);
+        assert!(!h3cfg::is_trim_nvfp4_fp4attn_recipe(&slow.recipe), "h3-trim-nvfp4 keeps bf16 VSA");
     }
 
     /// VDN-H3: the stage-B hybrid over h3-base, 50 forwards, text-to-video

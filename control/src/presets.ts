@@ -125,6 +125,68 @@ export const POOL_PRESETS: PoolPreset[] = [
     prequant: ["h3-base/text_encoder_fp8"],
     pool: { id: "fasth3-trim-nvfp4", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim-nvfp4.toml"), models: [{ id: "fasth3-trim-nvfp4", family: "h3", recipe: "h3-trim-nvfp4" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
+  // The H3 NVFP4 tier (owner decision 2026-10-14; docs/perf/h3-nvfp4-tier-options.md): the FastH3 V2 / 4-step NVFP4
+  // releases, each decoding with its own published NVFP4 VAE by default (FASTVIDEO_H3_VAE_NVFP4=0: h3-base's, MXFP8).
+  // Opt-in, h3-turbo stays the default. NVFP4 tensor cores only (RTX PRO 6000 / B200). The release trees are in R2 only.
+  {
+    id: "fasth3-v2-nvfp4",
+    min_vram_gb: 80,
+    title: "H3 NVFP4 tier: FastH3 V2 NVFP4",
+    description: "FastH3 V2 NVFP4 (FastVideo/FastVideo-FastH3-8-Step-V2-NVFP4): the release's ModelOpt NVFP4 DiT, 8 DMD steps, sparse FP4 VSA, and its own published NVFP4 VAE decoder (gate pass, 5 GiB less peak; FASTVIDEO_H3_VAE_NVFP4=0 decodes with h3-base's VAE). NVFP4 tensor cores only (RTX PRO 6000 / B200, no fallback); text-to-video with audio. Opt-in; served as h3-v2-nvfp4.",
+    weights: ["fasth3-v2-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-v2-nvfp4", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-v2-nvfp4.toml"), models: [{ id: "fasth3-v2-nvfp4", family: "h3", recipe: "h3-v2-nvfp4" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
+    id: "fasth3-4step-nvfp4",
+    min_vram_gb: 80,
+    title: "H3 NVFP4 tier: FastH3 4-step NVFP4",
+    description: "FastH3 4-step VSA DataFree NVFP4 (FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree-NVFP4): the release's ModelOpt NVFP4 DiT, 4 DMD steps (VSA 0.9), sparse FP4 VSA, and its own published NVFP4 VAE decoder (FASTVIDEO_H3_VAE_NVFP4=0: h3-base's). NVFP4 tensor cores only (RTX PRO 6000 / B200, no fallback); text-to-video with audio. Opt-in; served as h3-turbo-nvfp4.",
+    weights: ["fasth3-4step-vsa-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-4step-nvfp4", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-turbo-nvfp4.toml"), models: [{ id: "fasth3-4step-vsa-nvfp4", family: "h3", recipe: "h3-turbo-nvfp4" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  // "Fast preview" (owner decision 2026-10-14): the NVFP4 tier's recipes and h3-turbo decoded by TAEH3, each its own
+  // model id and pool. An explicit choice, never a default: fails the quality gate's sharpness floor (0.82-0.91),
+  // saves about 10-12% end to end (docs/perf/h3-nvfp4-tier-options.md option 5).
+  {
+    id: "fasth3-v2-nvfp4-preview",
+    min_vram_gb: 80,
+    title: "H3 NVFP4 tier, fast preview (TAEH3)",
+    description: "FastH3 V2 NVFP4 decoded by TAEH3 instead of the official VAE: a fast preview for drafts and scrubbing, never a default. Fails the quality gate's sharpness floor (0.82-0.91, softer frames of the same picture); about 10-12% faster end to end. NVFP4 tensor cores only; text-to-video with audio. Served as h3-v2-nvfp4-preview.",
+    weights: ["fasth3-v2-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-v2-nvfp4-preview", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-v2-nvfp4-preview.toml"), models: [{ id: "fasth3-v2-nvfp4-taeh3", family: "h3", recipe: "h3-v2-nvfp4-preview" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
+    id: "fasth3-4step-nvfp4-preview",
+    min_vram_gb: 80,
+    title: "H3 NVFP4 4-step, fast preview (TAEH3)",
+    description: "FastH3 4-step VSA DataFree NVFP4 decoded by TAEH3 instead of the official VAE: a fast preview, never a default. Fails the quality gate's sharpness floor (0.82-0.91); about 10-12% faster end to end. NVFP4 tensor cores only; text-to-video with audio. Served as h3-turbo-nvfp4-preview.",
+    weights: ["fasth3-4step-vsa-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-4step-nvfp4-preview", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-turbo-nvfp4-preview.toml"), models: [{ id: "fasth3-4step-vsa-nvfp4-taeh3", family: "h3", recipe: "h3-turbo-nvfp4-preview" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
+    id: "h3-turbo-preview",
+    min_vram_gb: 80,
+    title: "H3 turbo, fast preview (TAEH3)",
+    description: "The h3-turbo recipe (FastH3 Preview 4-step VSA, MXFP8) decoded by TAEH3 instead of the official VAE, at 768p and 480p: a fast preview, never a default (the 480p draft tier is h3-draft). Fails the quality gate's sharpness floor; about 10-12% faster end to end. Served as h3-turbo-preview.",
+    weights: ["h3-base", "FastH3-4-step-Preview-v1-LoRA"],
+    prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"],
+    pool: { id: "h3-turbo-preview", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-turbo-preview.toml"), models: [{ id: "fasth3-4step-vsa-taeh3", family: "h3", recipe: "h3-turbo-preview" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  // The opt-in "fastest" H3 tier (owner decision 2026-10-14): the Trim NVFP4 with sparse FP4 VSA turned on by its
+  // recipe. A different model from FastH3 V2 and not gate-equivalent. RTX PRO 6000 (sm_120 kernel) only.
+  {
+    id: "fasth3-trim-nvfp4-fast",
+    min_vram_gb: 80,
+    title: "FastH3 Trim NVFP4 + FP4 attention (fastest, opt-in)",
+    description: "The fastest H3 configuration measured: FastH3 Trim 8-step with the release's NVFP4 DiT and the VSA fine stage on sparse FP4 tensor cores (9.2 s denoise at 480p, 24.6 s at 768p on an RTX PRO 6000, about 20 GiB peak). A DIFFERENT MODEL from FastH3 V2 and NOT gate-equivalent to any H3 tier: judge it by eye. RTX PRO 6000 (sm_120) only, no fallback; text-to-video with audio only. Opt-in; served as h3-trim-nvfp4-fast.",
+    weights: ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-trim-nvfp4-fast", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim-nvfp4-fast.toml"), models: [{ id: "fasth3-trim-nvfp4-fast", family: "h3", recipe: "h3-trim-nvfp4-fast" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
   // MiniMax-H3 Turbo LoRAs (docs/ports/h3-turbo-loras.md): base H3 + one adapter folded at load. The adapters are in R2
   // only (not on the EU volume), so these pools fetch from R2 by default.
   {
