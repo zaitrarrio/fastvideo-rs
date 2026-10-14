@@ -99,8 +99,18 @@ boot ── mkdir /fvstate ── fv-upsampler start ─┐ (background)
     chunks after a shifted prefix, and `--cache-ram` keeps evicted prompts in host RAM. §5 shows whether it hits.
 - **Exports** for fv-serve: `FV_UPSAMPLER_BASE_URL=http://127.0.0.1:18080/v1`, `FV_UPSAMPLER_MODEL=qwen3-vl-4b-instruct`,
   `FV_UPSAMPLER_VISION=1` (the projector loaded: the director's `[upsampler] vision = true` sends images as OpenAI
-  `image_url` parts), and, unless the operator set them, `FV_UPSAMPLER_HEDGE=0` (a hedge doubles the load on a local
-  server) and `FV_UPSAMPLER_TIMEOUT_MS=30000` (a cold long-premise prefill).
+  `image_url` parts) and `FV_UPSAMPLER_LOCAL=1`. fv-serve then gives a local server its own defaults for what the
+  operator left unset (TOML or env; `UpsamplerCfg` in crates/fastvideo-serve/src/config.rs): **`hedge` off** (a hedge
+  doubles the load), **`timeout_ms` 60000** and the director's **`deck_size` 2**. A loopback `base_url` (127.0.0.0/8,
+  ::1, localhost) counts as local too, `[upsampler] local = false` / `FV_UPSAMPLER_LOCAL=0` opts out. Why 60 s and 2
+  (docs/serve/e2e/gpu-check-2026-10-13.md): while H3 denoises beside it the sidecar decodes at 32-38 tok/s (76-88
+  idle), a director segment is 600-1 050 tokens of JSON, so a segment takes 9-28 s and one crossed the old 30 s timeout;
+  and a deck of 6 made 17 LLM calls for 3 played segments, each competing with the chunk being built. The defaults
+  live in fv-serve rather than in the launcher's exports so that they apply however fv-serve is started (fv-entry,
+  fv-control's boots, a hand-written config) and an operator's TOML value is never overridden by an exported env
+  default (the launcher used to export `FV_UPSAMPLER_HEDGE` / `FV_UPSAMPLER_TIMEOUT_MS`, which beat the TOML). The
+  director also plans nothing beyond the next segment while a chunk waits for its prompt, and only the next segment
+  after a `replan: true` direction until it executes (crates/fastvideo-fal/src/director/upsample.rs).
 - **Images**: `image_url` takes a `data:` URL, or an `http(s)://` URL llama-server downloads itself (at most 10 MB,
   10 s timeout, no auth headers). Prefer data URLs for anything large, slow or private.
 - **Failure**: fv-serve starts anyway. The reason is in the pod log (`[fv-boot] … upsampler: FAILED: …: fv-serve starts
@@ -118,11 +128,22 @@ boot ── mkdir /fvstate ── fv-upsampler start ─┐ (background)
   first image; text only, `FV_UPSAMPLER_VISION=0`: 9 942 MiB). That is the Q8_0 weights (4.3 GB), the q8_0 KV of two
   32k-token slots (≈ 5.1 GB), compute buffers, and the vision encoder (**≈ 1.1 GB** loaded, ≈ 1.3 GB after an image).
   It is allocated at start, before fv-serve loads.
-- **Next to a video model**: on a 96 GB RTX PRO 6000 or a 141 GB H200 there is room beside every family. On an 80 GB
-  H100 / A100 check the family's peak first: H3 and LTX-2.5 (80-96 GB presets, presets.ts `min_vram_gb: 80`) may not
-  leave 11 GB; shrink the sidecar there before turning it on: `FV_UPSAMPLER_CTX=32768 FV_UPSAMPLER_PARALLEL=1` (one
-  32k slot: KV ≈ 2.6 GB, total ≈ 8.5 GB), and/or `FV_UPSAMPLER_VISION=0` (−1.1 GB). Not measured with a video model
-  generating on the same GPU (§5).
+- **Next to a video model** (measured on a 96 GB RTX PRO 6000 Server Edition, docs/serve/e2e/gpu-check-2026-10-13.md):
+  the 11 GB fit, but **not every family keeps its resident plan**. Whole-GPU peaks with the sidecar: FastH3 Trim 480p
+  51.4 GB (session) / 52.4 GB (768p job), H3 turbo with an image 45.9 GB. With the sidecar loaded first, H3 saw
+  **60.6 GiB free** after its FP8 text encoder, against a **64.6 GiB resident plan** (768p 5 s), so `dit_offload auto`
+  **streamed the DiT** from host memory: for Trim that cost nothing (57.8 GB/s H2D, 100% hidden behind compute; 1.6
+  s/step at 480p either way). For **anchored H3 directors (turbo / max: every continuation chunk is image-to-video)** it
+  was not fine with the image of that check: the i2v vision tower was streamed too, so every chunk re-read the vision
+  tower and the ~26 GB FP8 language model from the network volume (~0.3 GB/s there): **160-214 s per turbo chunk**.
+  Since this branch (`i2v_tower_beside_streamed_dit`, crates/fastvideo-cudarc/src/h3/pipeline.rs) the 2 GiB tower stays
+  resident beside a DiT that streams anyway (the streamed plan is < 30 GiB), so the language model is the resident text
+  encoder again; the DiT itself still streams beside the sidecar. Not yet re-measured on a GPU (the three pods tried on
+  2026-10-14 had 95.8 of 97.9 GB already in use before anything started). If H3 must keep its resident DiT beside the
+  sidecar: shrink the sidecar (`FV_UPSAMPLER_CTX=32768 FV_UPSAMPLER_PARALLEL=1`: one 32k slot, KV ≈ 2.6 GB, total ≈ 8.5
+  GB; `FV_UPSAMPLER_VISION=0`: −1.1 GB) — 4 GiB is the gap to the resident plan at 768p — or run it on another GPU.
+  On an 80 GB H100 / A100, H3 and LTX-2.5 (presets.ts `min_vram_gb: 80`) do not keep their resident plans beside 11
+  GB; a 141 GB H200 has room for every family.
 - **Context**: 32 768 tokens per slot covers a 50 000-character premise (≈ 12-14k tokens: our 46 000-character prompt
   was 10.7k tokens) + 12 prior segments + the registry with room to spare; 50 prior segments of ≈ 400 characters each
   add ≈ 5k tokens. Raise `FV_UPSAMPLER_CTX` (KV ≈ 78 KB per token) only if a session approaches it; the model itself
@@ -207,7 +228,8 @@ sunrise above a sea of clouds, 800×533 JPEG, 67 KB): **valid JSON**, the expand
 > in a natural composition. Lighting: Soft, directional sunrise light; long shadows cast across the mountain slopes;
 > highlights catch the snow caps and cloud tops. …
 
-**Not measured**: the sidecar and a video model generating on the same GPU at once (the slowdown of both); a cold
+**Not measured here**: the sidecar beside a generating video model (measured since: §4 and
+docs/serve/e2e/gpu-check-2026-10-13.md, decode 32-38 tok/s during an H3 denoise); a cold
 disk read of the GGUF; H100 / B200 / A100. The schema check is a structural validator of the subset of JSON Schema the
 spec uses (in the bench script), not a full JSON Schema library.
 

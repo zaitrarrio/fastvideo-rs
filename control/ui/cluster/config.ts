@@ -643,29 +643,35 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
             delete q.gpu_types, delete q.cpu_flavors, delete q.vcpu, delete q.regions;
             q.compute = "GPU";
             q.volume = false;
-          } else for (const k of ["provider_gpu", "provider_region", "weights_source", "hub_download_approved"]) delete q[k];
+            if (q.weights_source === "volume") delete q.weights_source;
+          } else for (const k of ["provider_gpu", "provider_region"]) delete q[k];
           drawForm();
         },
       }),
       describe(["pools", 0, "provider"]),
     );
-    const otherBoxes = other
-      ? [
-          fieldBox(P("provider_gpu"), "GPU product", select(P("provider_gpu"), (dyn.provider_gpus || []).filter((g: any) => g.provider === p.provider).map((g: any) => [g.id, g.id])), describe(["pools", 0, "provider_gpu"])),
-          p.provider === "gmi" ? fieldBox(P("provider_region"), "IDC", text(P("provider_region"), { optional: true, mono: true, placeholder: (dyn.provider_regions || [])[0]?.id || "GMI_DEFAULT_IDC" }), describe(["pools", 0, "provider_region"])) : null,
+    // The weights (owner 2026-10-14: Runpod has r2, hub and none too, any data centre without the volume).
+    const weightsBoxes = isCpu && !other
+      ? []
+      : [
           fieldBox(
             P("weights_source"),
             "Weights",
             select(
               P("weights_source"),
               enumOf(["pools", 0, "weights_source"])
-                .filter((x) => x !== "volume")
-                .map((x) => [x, x === "r2" ? "r2 — our R2 weights store (published trees; no approval)" : x === "hub" ? "hub — download at boot (owner approval)" : "none — fake engine"]),
+                .filter((x) => !other || x !== "volume")
+                .map((x) => [x, x === "volume" ? "volume — the EU weights volume (EU-RO-1)" : x === "r2" ? "r2 — our R2 weights store (published trees; no approval)" : x === "hub" ? "hub — download at boot (owner approval)" : "none — fake engine"]),
               { optional: true, onSet: () => drawForm() },
             ),
             describe(["pools", 0, "weights_source"]),
           ),
           p.weights_source === "hub" ? fieldBox(P("hub_download_approved"), "Hub download", toggle(P("hub_download_approved"), "the owner approved this download"), describe(["pools", 0, "hub_download_approved"])) : null,
+        ];
+    const otherBoxes = other
+      ? [
+          fieldBox(P("provider_gpu"), "GPU product", select(P("provider_gpu"), (dyn.provider_gpus || []).filter((g: any) => g.provider === p.provider).map((g: any) => [g.id, g.id])), describe(["pools", 0, "provider_gpu"])),
+          p.provider === "gmi" ? fieldBox(P("provider_region"), "IDC", text(P("provider_region"), { optional: true, mono: true, placeholder: (dyn.provider_regions || [])[0]?.id || "GMI_DEFAULT_IDC" }), describe(["pools", 0, "provider_region"])) : null,
         ]
       : [];
     const body = h(
@@ -675,14 +681,16 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       fieldBox(P("variant"), "Image variant", select(P("variant"), (dyn.variants || []).map((v: any) => [v.id, `${v.id}${v.detail ? ` — ${v.detail}` : ""}`]), { onSet: () => drawForm() }), "The CI-built image this pool runs."),
       providerBox,
       ...otherBoxes,
+      ...weightsBoxes,
       other ? null : fieldBox(P("compute"), "Compute", segmented(P("compute"), [["GPU", "GPU"], ["CPU", "CPU"]], () => drawForm())),
       other ? null : isCpu
         ? fieldBox(P("cpu_flavors"), "CPU flavors (in order)", multi(P("cpu_flavors"), (dyn.cpu_flavors || []).map((f: any) => ({ id: f.id, label: f.id, detail: `$${f.dph_per_vcpu}/vCPU·hr` })), { optional: true }), describe(["pools", 0, "cpu_flavors"]), true)
         : fieldBox(P("gpu_types"), "GPU types (in order; none: the regions')", multi(P("gpu_types"), gpuOpts(), { optional: true }), describe(["pools", 0, "gpu_types"]), true),
       other ? null : fieldBox(P("regions"), "Regions (none: the cluster's)", multi(P("regions"), (dyn.regions || []).map((r: any) => ({ id: r.id, label: r.id, detail: r.dc })), { optional: true }), null, true),
       // weights_source r2 on Runpod (no volume): any data centre, and the hosts' CUDA filter (docs/ops/r2-weights.md §4).
-      !other && !isCpu && p.weights_source === "r2"
-        ? fieldBox(P("data_centers"), "Data centres (r2; none: the regions')", multi(P("data_centers"), enumOf(["pools", 0, "data_centers", 0]).map((d) => ({ id: d, label: d })), { optional: true }), describe(["pools", 0, "data_centers"]), true)
+      // A pod without the volume (GPU: r2 / hub / none; CPU: volume off): any data centre too (enums.ts noVolumePod).
+      !other && (isCpu ? p.volume !== true : (p.weights_source === "r2" || p.weights_source === "hub" || p.weights_source === "none") && p.volume !== true)
+        ? fieldBox(P("data_centers"), "Data centres (no volume; none: the regions')", multi(P("data_centers"), enumOf(["pools", 0, "data_centers", 0]).map((d) => ({ id: d, label: d })), { optional: true }), describe(["pools", 0, "data_centers"]), true)
         : null,
       !other && !isCpu ? fieldBox(P("allowed_cuda"), "Allowed CUDA (host filter)", multi(P("allowed_cuda"), enumOf(["pools", 0, "allowed_cuda", 0]).map((v) => ({ id: v, label: v })), { optional: true }), describe(["pools", 0, "allowed_cuda"]), true) : null,
       isCpu && !other ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,

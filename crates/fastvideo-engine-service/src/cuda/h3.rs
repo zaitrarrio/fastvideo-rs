@@ -75,6 +75,7 @@ impl H3Model {
             ref2va: recipe.ref2va,
             ref_root: recipe.ref_weights.clone(),
             adapter: None,
+            adapter_strength: recipe.lora_strength,
             reference_image_resize: Default::default(),
             dit_offload: recipe
                 .dit_offload
@@ -86,6 +87,8 @@ impl H3Model {
                 &recipe.i2v_encoder,
             )
             .map_err(ApiError::internal)?,
+            vdn: recipe.vdn_weights.clone(),
+            vdn_shared: recipe.vdn_shared.clone(),
         })
     }
 

@@ -42,6 +42,10 @@ pub enum LoraFormat {
     Peft,
     /// `format == "fastvideo-lora-v2"`. Alpha is the rank; `.diff` tensors apply.
     FastvideoV2,
+    /// ComfyUI (reference) module tree, `alpha == rank` per module, so the
+    /// multiplier is the strength whatever the rank (larryvrh's Turbo LoRA,
+    /// [`super::turbo_lora`]). Ranks may differ between modules.
+    Comfy,
 }
 
 /// Keys of one adapter, validated before any base weight is touched.
@@ -128,7 +132,7 @@ pub fn lora_multiplier(
         return Err("LoRA scale must be finite and non-negative".into());
     }
     let applied = match format {
-        LoraFormat::FastvideoV2 => rank as f32,
+        LoraFormat::FastvideoV2 | LoraFormat::Comfy => rank as f32,
         LoraFormat::Peft => alpha as f32,
     };
     Ok(scale * applied / rank as f32)
@@ -628,6 +632,8 @@ mod tests {
             lora_multiplier(LoraFormat::FastvideoV2, 16, 64, 1.0).unwrap(),
             1.0
         );
+        assert_eq!(lora_multiplier(LoraFormat::Comfy, 64, 1, 1.25).unwrap(), 1.25);
+        assert_eq!(lora_multiplier(LoraFormat::Comfy, 16, 1, 1.25).unwrap(), 1.25);
     }
 
     #[test]

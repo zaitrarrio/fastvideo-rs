@@ -15,6 +15,8 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
+//! | — | `h3-larry-turbo` | base MiniMax-H3 + larryvrh Turbo LoRA ckpt850 folded at load (`larry-turbo`, 6 forwards; `steps` 3-8, `lora_strength`), dense, MXFP8, official VAE; T2V + FL2VA | `h3/larry_turbo_dense` | untiered: what the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs (docs/ports/h3-turbo-loras.md) |
+//! | — | `h3-lightx2v-turbo` | base MiniMax-H3 + lightx2v FL2VA/T2VA 4-step v1.2 768p folded at load (`lightx2v-turbo`, 4 forwards, shifts 6 / 3), dense, MXFP8; T2V + FL2VA | `h3/lightx2v_turbo_dense` | untiered (docs/ports/h3-turbo-loras.md) |
 //! | — (served `h3-trim`) | `fasth3-trim-8step` | FastH3 Trim 8-step DMD (`trim-8step`): 42 of 50 blocks, rank-16 AdaLN, VSA-H3 0.8, its own lightweight VAE; text-to-video only | none | untiered (explicit id, `h3-trim`, or `recipe = "trim-8step"`); docs/ports/h3-trim.md |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
@@ -44,6 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::h3::config as h3cfg;
+use fastvideo_models::h3::turbo_lora::{parse_turbo_recipe, TurboLora};
 use fastvideo_protocol::{
     AudioCaps, CanvasCaps, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, RefLimits,
     StreamCaps, Task, Tier,
@@ -146,6 +149,20 @@ pub struct H3Recipe {
     /// Catalog: h3-max and h3-turbo; `h3_1080p = false` turns it off.
     #[serde(default)]
     pub hd_1080p: bool,
+    /// Turbo LoRA strength (`h3-larry-turbo`, `h3-lightx2v-turbo`; the
+    /// larry card's sharpness dial). `None`: 1.0 (or
+    /// `FV_H3_TURBO_LORA_STRENGTH`).
+    #[serde(default)]
+    pub lora_strength: Option<f32>,
+    /// VDN-H3 (docs/ports/vdn-h3.md): the VDN checkpoint directory (linear
+    /// branch + LoRA adapters) over the h3-base `weights`; `recipe` is a
+    /// `vdn-h3-<N>step` contract.
+    #[serde(default)]
+    pub vdn_weights: Option<PathBuf>,
+    /// VDN-H3 8-step: the stage directory the files `vdn_weights` does not
+    /// carry come from (stage B's linear branch and default adapter).
+    #[serde(default)]
+    pub vdn_shared: Option<PathBuf>,
 }
 
 fn auto_str() -> String {
@@ -520,6 +537,24 @@ impl CudaModel {
                         50 H3 blocks, rank-16 AdaLN, VSA-H3 (80% sparse), lightweight VAE; faster and smaller \
                         than FastH3 V2, with some quality cost"
                         .to_owned(),
+                    _ if turbo_lora_of(&r.recipe).is_some() => {
+                        let t = turbo_lora_of(&r.recipe).unwrap_or(TurboLora::Larry);
+                        format!(
+                            "H3 + {} Turbo LoRA ({}, folded at load, strength {}), {} forwards, dense \
+                             attention, MXFP8 linears, official VAE",
+                            t.hub_repo(),
+                            t.file(),
+                            r.lora_strength.unwrap_or(1.0),
+                            r.steps
+                        )
+                    }
+                    _ if self.recipe_name.starts_with("vdn-h3") => format!(
+                        "VDN-H3 (Video DeltaNet on MiniMax-H3): hybrid attention, a chunk-aligned window \
+                         softmax plus a frame-wise delta-rule linear branch in every block, {}; \
+                         {} forwards, bf16 linears, official VAE",
+                        if r.vdn_shared.is_some() { "stage-B + DMD turbo LoRA" } else { "stage-B LoRA" },
+                        r.steps
+                    ),
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
                                         attention (no compression gate), official VAE"
                         .to_owned(),
@@ -654,7 +689,12 @@ pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
     let mut c = ModelCaps::h3(id, r.ref2va);
-    if is_trim_recipe(&r.recipe) {
+    if is_trim_recipe(&r.recipe) || r.vdn_weights.is_some() {
+        // FastH3 Trim: distilled and released for text-to-video+audio only.
+        // VDN-H3: the checkpoint serves T2VA / I2VA / L2VA / FL2VA; the
+        // keyframe rows run through H3's FL2VA path (global rows of the
+        // window softmax) but were not validated on a GPU, so only T2V is
+        // offered (docs/ports/vdn-h3.md §7).
         // FastH3 Trim was distilled and released for text-to-video+audio only
         // (`fastvideo_inference.json` task t2av); image conditioning is
         // untested on the pruned DiT, so it is not offered.
@@ -718,10 +758,38 @@ pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Opt
     })
 }
 
+/// The Turbo LoRA catalog ids and their technique profiles.
+pub const H3_LARRY_TURBO: &str = "h3-larry-turbo";
+pub const H3_LIGHTX2V_TURBO: &str = "h3-lightx2v-turbo";
+pub const LARRY_TURBO_PROFILE: &str = "h3/larry_turbo_dense";
+pub const LIGHTX2V_TURBO_PROFILE: &str = "h3/lightx2v_turbo_dense";
+
+/// The Turbo LoRA a recipe (`larry-turbo`, `lightx2v-turbo-5step`, ...) runs.
+pub fn turbo_lora_of(recipe: &str) -> Option<TurboLora> {
+    match parse_turbo_recipe(recipe) {
+        Some(Ok((t, _))) => Some(t),
+        _ => None,
+    }
+}
+
 /// The FastH3 Trim catalog id, its served alias and its weight tree.
 pub const FASTH3_TRIM_ID: &str = "fasth3-trim-8step";
 pub const H3_TRIM: &str = "h3-trim";
 pub const FASTH3_TRIM_TREE: &str = "fasth3-trim-8step";
+
+/// VDN-H3's catalog id, its contract (`H3InferenceContract::named`), its
+/// weight tree and the stage directory inside it (docs/ports/vdn-h3.md).
+pub const VDN_H3_ID: &str = "vdn-h3";
+pub const VDN_H3_RECIPE: &str = "vdn-h3-50step";
+pub const VDN_H3_TREE: &str = "vdn-h3-stage-b-2000";
+pub const VDN_H3_STAGE: &str = "stage-b-step-2000";
+/// VDN-H3 8-step (the DMD-distilled model): its id, contract, the tree with
+/// the turbo LoRA and its stage directory; the branch and default LoRA come
+/// from [`VDN_H3_TREE`] (`H3Recipe::vdn_shared`).
+pub const VDN_H3_8STEP_ID: &str = "vdn-h3-8step";
+pub const VDN_H3_8STEP_RECIPE: &str = "vdn-h3-8step";
+pub const VDN_H3_8STEP_TREE: &str = "vdn-h3-dmd-250-turbo";
+pub const VDN_H3_8STEP_STAGE: &str = "stage-dmd-step-250";
 
 /// The FastH3 Trim contract names (`H3InferenceContract::named`).
 pub fn is_trim_recipe(recipe: &str) -> bool {
@@ -980,6 +1048,9 @@ fn h3(
         warmup: false,
         warmup_blocking: false,
         hd_1080p: false,
+        lora_strength: None,
+        vdn_weights: None,
+        vdn_shared: None,
     }
 }
 
@@ -1078,6 +1149,28 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // (byte-identical) audio VAE come from `h3-base` (`text_weights`). Served
     // with the trained recipe: VSA-H3 at 0.8, tile 64, the 8 DMD rungs.
     let h3_trim = h3(layout, FASTH3_TRIM_TREE, "trim-8step", None, 8);
+    // VDN-H3 (docs/ports/vdn-h3.md): h3-base's DiT, VAEs and text encoder with
+    // the stage-B hybrid attention (linear branch + LoRA) of
+    // `vdn-h3-stage-b-2000`: the 50-step model on its own schedule (no CFG,
+    // shifts 12 / 3). Not VSA: the window softmax + linear branch replace
+    // the attention of every block.
+    let vdn_h3 = H3Recipe {
+        dense: true,
+        // The hybrid needs every block resident (H3Transformer::attach_vdn).
+        dit_offload: Some("resident".to_owned()),
+        vdn_weights: Some(layout.at(VDN_H3_TREE).join(VDN_H3_STAGE)),
+        ..h3(layout, "h3-base", VDN_H3_RECIPE, None, 50)
+    };
+    // VDN-H3 8-step: the DMD-distilled model, stage B's branch and default
+    // LoRA (read from `vdn-h3-stage-b-2000`, byte-identical) plus the turbo
+    // LoRA of `vdn-h3-dmd-250-turbo`; 8 forwards on the base grid.
+    let vdn_h3_8step = H3Recipe {
+        recipe: VDN_H3_8STEP_RECIPE.to_owned(),
+        steps: 8,
+        vdn_weights: Some(layout.at(VDN_H3_8STEP_TREE).join(VDN_H3_8STEP_STAGE)),
+        vdn_shared: vdn_h3.vdn_weights.clone(),
+        ..vdn_h3.clone()
+    };
     // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
     // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
     let h3_turbo = H3Recipe {
@@ -1102,6 +1195,16 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         ref_weights: Some(layout.at("h3-ref2va")),
         ..h3(layout, "h3-base", recipe, Some(profile), steps)
     };
+    // MiniMax-H3 Turbo LoRAs (docs/ports/h3-turbo-loras.md): what the
+    // MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs. Base `transformer/` + one
+    // adapter from `h3-turbo-loras` folded at load, then MXFP8; dense
+    // attention; T2V and FL2VA (first and/or last frame).
+    let h3_turbo_lora = |t: TurboLora, profile: &str| H3Recipe {
+        dense: true,
+        ..h3(layout, "h3-base", t.stem(), Some(profile), t.default_forwards() as u32)
+    };
+    let h3_larry = h3_turbo_lora(TurboLora::Larry, LARRY_TURBO_PROFILE);
+    let h3_lightx = h3_turbo_lora(TurboLora::Lightx2v, LIGHTX2V_TURBO_PROFILE);
     let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
     let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
     // Reference-to-video (docs/ports/ltx-ref2v.md): the dense two-stage with
@@ -1235,6 +1338,21 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             CudaRecipe::H3(h3_trim),
         )
         .with_served_names(&[H3_TRIM]),
+        // Untiered, addressed by id: the h3-turbo / h3-max slots stay as they are.
+        CudaModel::new(
+            H3_LARRY_TURBO,
+            None,
+            "h3-larry-turbo-ckpt850-dense",
+            CudaRecipe::H3(h3_larry),
+        ),
+        CudaModel::new(
+            H3_LIGHTX2V_TURBO,
+            None,
+            "h3-lightx2v-turbo-v1.2-768p-dense",
+            CudaRecipe::H3(h3_lightx),
+        ),
+        CudaModel::new(VDN_H3_ID, None, VDN_H3_RECIPE, CudaRecipe::H3(vdn_h3)),
+        CudaModel::new(VDN_H3_8STEP_ID, None, VDN_H3_8STEP_RECIPE, CudaRecipe::H3(vdn_h3_8step)),
         // Reference-to-video companions of the H3 max / turbo tiers: the
         // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
         CudaModel::new(
@@ -1384,7 +1502,13 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
+        (Family::H3, VDN_H3_ID | VDN_H3_RECIPE) => VDN_H3_ID.to_owned(),
+        (Family::H3, VDN_H3_8STEP_RECIPE) => VDN_H3_8STEP_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
+        (Family::H3, r) if turbo_lora_of(r).is_some() => match turbo_lora_of(r) {
+            Some(TurboLora::Larry) => H3_LARRY_TURBO.to_owned(),
+            _ => H3_LIGHTX2V_TURBO.to_owned(),
+        },
         (_, r) => r.to_owned(),
     };
     let mut m = find(&cat, &name).ok_or_else(|| {
@@ -1430,6 +1554,12 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             if let Some(t) = x("ref_weights").filter(|_| r.ref2va) {
                 r.ref_weights = Some(t.into());
             }
+            if let Some(t) = x("vdn_weights").filter(|_| r.vdn_weights.is_some()) {
+                r.vdn_weights = Some(t.into());
+            }
+            if let Some(t) = x("vdn_shared").filter(|_| r.vdn_shared.is_some()) {
+                r.vdn_shared = Some(t.into());
+            }
             if let Some(t) = x("i2v_encoder") {
                 r.i2v_encoder = t;
             }
@@ -1462,6 +1592,40 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                         return Err(format!("model `{}`: h3_1080p = {other:?} (true | false)", e.id))
                     }
                 };
+            }
+            if let Some(t) = turbo_lora_of(&r.recipe) {
+                // `recipe = "larry-turbo-4step"` or `steps = 4`; the adapter
+                // file follows the recipe (v0.1 only by its recipe name).
+                let from_recipe = match parse_turbo_recipe(&e.recipe) {
+                    Some(Ok(parsed)) => Some(parsed),
+                    Some(Err(err)) => return Err(format!("model `{}`: {err}", e.id)),
+                    None => None,
+                };
+                let (t, mut forwards) = from_recipe.unwrap_or((t, t.default_forwards()));
+                if let Some(n) = x("steps") {
+                    forwards = n.trim().parse().map_err(|_| {
+                        format!("model `{}`: steps = {n:?} is not a whole number", e.id)
+                    })?;
+                }
+                let recipe = t.recipe(forwards);
+                if let Some(Err(err)) = parse_turbo_recipe(&recipe) {
+                    return Err(format!("model `{}`: {err}", e.id));
+                }
+                r.recipe = recipe;
+                r.steps = forwards as u32;
+                if let Some(s) = x("lora_strength") {
+                    let v: f32 = s.trim().parse().map_err(|_| {
+                        format!("model `{}`: lora_strength = {s:?} is not a number", e.id)
+                    })?;
+                    fastvideo_models::h3::turbo_lora::turbo_strength(Some(v), None)
+                        .map_err(|err| format!("model `{}`: {err}", e.id))?;
+                    r.lora_strength = Some(v);
+                }
+            } else if x("steps").is_some() || x("lora_strength").is_some() {
+                return Err(format!(
+                    "model `{}`: steps / lora_strength apply to the Turbo LoRA models (h3-larry-turbo, h3-lightx2v-turbo) only",
+                    e.id
+                ));
             }
             if r.ref2va && r.warmup {
                 return Err(format!(
@@ -1574,7 +1738,12 @@ impl ProcessPlan {
                 if let Some(name) = &r.profile {
                     let p = load_profile(name)?;
                     if let Some(want) = &p.recipe {
-                        if h3cfg::H3InferenceContract::named(want).ok()
+                        // A Turbo LoRA profile serves every step count and
+                        // adapter file of its family (`steps`, the v0.1 recipe):
+                        // its techniques do not depend on the ladder.
+                        let turbo = turbo_lora_of(want).is_some() && turbo_lora_of(&r.recipe).is_some();
+                        if !turbo
+                            && h3cfg::H3InferenceContract::named(want).ok()
                             != h3cfg::H3InferenceContract::named(&r.recipe).ok()
                         {
                             return Err(format!(
@@ -2211,6 +2380,58 @@ mod tests {
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
     }
 
+    /// The Turbo LoRA models: untiered, base H3 + their adapter, dense, T2V
+    /// and FL2VA (first / last frame), `steps` and `lora_strength` per model.
+    #[test]
+    fn turbo_lora_models() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        for (id, recipe, steps, profile) in [
+            (H3_LARRY_TURBO, "larry-turbo", 6, LARRY_TURBO_PROFILE),
+            (H3_LIGHTX2V_TURBO, "lightx2v-turbo", 4, LIGHTX2V_TURBO_PROFILE),
+        ] {
+            let m = find(&cat, id).unwrap();
+            assert_eq!(m.tier, None, "{id}");
+            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
+            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.ref2va), (recipe, steps, true, false));
+            assert_eq!(r.profile.as_deref(), Some(profile));
+            assert!(r.weights.ends_with("h3-base"));
+            assert!(fastvideo_models::techniques::builtin::get(profile).is_some(), "{profile}");
+            let caps = m.caps();
+            assert_eq!(caps.tasks, [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect());
+            assert!(m.describe().summary.contains("Turbo LoRA"), "{id}");
+            // Same load-time settings as h3-turbo / h3-max (MXFP8, bf16 activations).
+            ProcessPlan::for_models(&[m.clone(), find(&cat, "h3-turbo").unwrap()]).unwrap();
+        }
+        // The tier aliases are unchanged.
+        assert_eq!(find(&cat, "h3-turbo").unwrap().id.as_str(), "fasth3-4step-vsa");
+        let entry = |recipe: &str, extra: &[(&str, &str)]| ModelEntryCfg {
+            id: String::new(),
+            family: "h3".into(),
+            recipe: recipe.into(),
+            extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        let h3r = |m: CudaModel| match m.recipe {
+            CudaRecipe::H3(r) => r,
+            _ => panic!(),
+        };
+        let r = h3r(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "4")])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps), ("larry-turbo-4step", 4));
+        let r = h3r(model_from_config(&l, &entry("larry-turbo-5step", &[("lora_strength", "1.1")])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps, r.lora_strength), ("larry-turbo-5step", 5, Some(1.1)));
+        let r = h3r(model_from_config(&l, &entry("lightx2v-turbo-v0.1", &[])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps), ("lightx2v-turbo-v0.1", 4));
+        // Another step count or the v0.1 file keeps the family's profile and process plan.
+        for (rec, extra) in [("h3-larry-turbo", ("steps", "4")), ("lightx2v-turbo-v0.1", ("steps", "4"))] {
+            let m = model_from_config(&l, &entry(rec, &[extra])).unwrap();
+            ProcessPlan::for_models(&[m]).unwrap_or_else(|e| panic!("{rec}: {e}"));
+        }
+        assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "12")])).is_err());
+        assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("lora_strength", "nan")])).is_err());
+        assert!(model_from_config(&l, &entry("h3-turbo", &[("steps", "4")])).is_err());
+    }
+
     #[test]
     fn serve_config_entries() {
         let l = WeightLayout::new("/w");
@@ -2343,6 +2564,79 @@ mod tests {
         }
         // Its own process: it never co-resides with another H3 recipe's settings.
         assert!(is_trim_recipe("trim-8step") && !is_trim_recipe("8step"));
+    }
+
+    /// VDN-H3: the stage-B hybrid over h3-base, 50 forwards, text-to-video
+    /// only, addressed by id or `recipe = "vdn-h3-50step"`.
+    #[test]
+    fn vdn_catalog_entry() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        let m = find(&cat, VDN_H3_ID).unwrap();
+        assert!(m.tier.is_none());
+        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        assert_eq!(r.weights, Path::new("/w/h3-base"));
+        assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
+        assert_eq!(
+            r.vdn_weights.as_deref(),
+            Some(Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000"))
+        );
+        assert_eq!((r.recipe.as_str(), r.steps, r.dense), ("vdn-h3-50step", 50, true));
+        assert_eq!(r.dit_offload.as_deref(), Some("resident"));
+        assert_eq!(
+            h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
+            h3cfg::H3InferenceContract::base(51)
+        );
+        let c = m.caps();
+        assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+        assert!(c.audio.is_some());
+        let d = m.describe();
+        assert_eq!((d.steps, d.attention.as_str()), (Some(50), "dense"));
+        assert!(d.summary.contains("VDN-H3"), "{}", d.summary);
+        for rec in [VDN_H3_ID, VDN_H3_RECIPE] {
+            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_ID, "{rec}");
+        }
+    }
+
+    /// VDN-H3 8-step: the turbo tree over stage B's branch and default LoRA,
+    /// 8 forwards on the base grid, its own id.
+    #[test]
+    fn vdn_8step_catalog_entry() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        let m = find(&cat, VDN_H3_8STEP_ID).unwrap();
+        assert!(m.tier.is_none());
+        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        assert_eq!(r.weights, Path::new("/w/h3-base"));
+        assert_eq!(
+            r.vdn_weights.as_deref(),
+            Some(Path::new("/w/vdn-h3-dmd-250-turbo/stage-dmd-step-250"))
+        );
+        assert_eq!(
+            r.vdn_shared.as_deref(),
+            Some(Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000"))
+        );
+        assert_eq!((r.recipe.as_str(), r.steps, r.dense), ("vdn-h3-8step", 8, true));
+        assert_eq!(r.dit_offload.as_deref(), Some("resident"));
+        assert_eq!(
+            h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
+            h3cfg::H3InferenceContract::base(9)
+        );
+        assert_eq!(m.caps().tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+        let d = m.describe();
+        assert_eq!(d.steps, Some(8));
+        assert!(d.summary.contains("turbo"), "{}", d.summary);
+        let e = ModelEntryCfg {
+            family: "h3".into(),
+            recipe: "vdn-h3-8step".into(),
+            resident: true,
+            ..Default::default()
+        };
+        assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_8STEP_ID);
+        // The 50-step entry carries no shared directory.
+        let CudaRecipe::H3(b) = &find(&cat, VDN_H3_ID).unwrap().recipe else { panic!() };
+        assert!(b.vdn_shared.is_none());
     }
 
     fn m_served(cat: &[CudaModel], name: &str) -> bool {

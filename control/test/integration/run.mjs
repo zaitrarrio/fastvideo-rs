@@ -1233,6 +1233,101 @@ await step("standalone pod: launch, the same up (direct, watchdog boot), costs u
   assert.equal([...mock.pods.values()].filter((p) => !before.has(p.id)).length, 0);
 });
 
+await step("standalone Runpod pod with weights_source r2 in a data centre without the weights volume (owner 2026-10-13: any region with R2): validates, launches there with no volume, the fallbacks in order; a volume pod there is refused", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const before = new Set(mock.pods.keys());
+  const mine = () => [...mock.pods.values()].filter((p) => !before.has(p.id));
+  const toml = readFileSync(new URL("../../../configs/serve/runpod-fake.toml", import.meta.url), "utf8") + '\n[r2probe]\npath = "${FV_WEIGHTS}/r2demo/config.json"\n';
+  const launch = { name: "r2us", variant: "wan", config_toml: toml, fake_models: ["fake-wan"], channel: "stable", deadline_min: 30, weights_source: "r2", gpu_types: ["NVIDIA H200", "NVIDIA H100 80GB HBM3"], data_centers: ["US-TX-3", "any"] };
+  // The validator (the launch form's live check) and the image preflight agree: ok.
+  const v = (await call("/api/standalone/validate", { method: "POST", body: launch, headers: T() })).j;
+  assert.equal(v.ok, true, JSON.stringify(v.issues));
+  assert.deepEqual([v.spec.pools[0].data_centers, v.spec.pools[0].volume], [["US-TX-3", "any"], false]);
+  const pf = (await call("/api/preflight", { method: "POST", body: { launch }, headers: T() })).j;
+  assert.equal(pf.ok, true, JSON.stringify(pf.errors));
+  // A volume pod there: refused at its field, by the validator and the launch alike.
+  const bad = { ...launch, name: "volus", weights_source: "volume" };
+  const vb = (await call("/api/standalone/validate", { method: "POST", body: bad, headers: T() })).j;
+  assert.ok(vb.issues.some((i) => i.path[0] === "data_centers" && /US-TX-3, "any" \(Runpod places it\) has no weights volume: weights_source r2 \(the R2 weights store\), hub \(approved\) or none runs in any data centre/.test(i.message)), JSON.stringify(vb.issues));
+  assert.equal((await call("/api/standalone", { method: "POST", body: bad, headers: T() })).status, 400);
+  // The first GPU type has no host in US-TX-3: the next placement (the fallback type, same data centre) gets it.
+  mock.failCreate = 1;
+  const r = await call("/api/standalone", { method: "POST", body: launch, headers: T() });
+  assert.equal(r.status, 201, JSON.stringify(r.j));
+  const id = r.j.pod.id;
+  const op = await waitOp(id, "up", 90000);
+  assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+  assert.equal(mine().length, 1);
+  const p = mine()[0].payload;
+  assert.deepEqual([p.gpuTypeIds, p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE, p.allowedCudaVersions], [["NVIDIA H100 80GB HBM3"], ["US-TX-3"], undefined, "r2", ["13.0"]]);
+  assert.ok(op.log.some((l) => /no NVIDIA H200 in US-TX-3/.test(typeof l === "string" ? l : l.msg || JSON.stringify(l))), JSON.stringify(op.log));
+  const sp = (await call("/api/standalone/r2us", { headers: T() })).j.pod;
+  assert.deepEqual([sp.definition.weights_source, sp.definition.dc, sp.definition.volume, sp.pod.dc], ["r2", "US-TX-3, any", null, "US-TX-3"]);
+  { const dr = await call("/api/standalone/r2us", { method: "DELETE", headers: T() }); assert.equal(dr.status, 202, dr.text); }
+  for (let i = 0; i < 120 && (await call("/api/standalone/r2us", { headers: T() })).status !== 404; i++) await sleep(500);
+  assert.equal(mine().length, 0);
+});
+
+await step("standalone Runpod pod with weights_source hub in a data centre without the weights volume (owner 2026-10-14): refused without the owner's approval (the launch's and fv-control's), launched with both: the Hub boot, the container disk, no volume", async () => {
+  await d1Exec(w.dir, "DELETE FROM operations");
+  const launch = { name: "hubus", preset: "wan", channel: "stable", deadline_min: 30, weights_source: "hub", gpu_types: ["NVIDIA H100 80GB HBM3"], data_centers: ["US-TX-3"] };
+  // This fv-control has no FV_HUB_DOWNLOADS_APPROVED: refused with and without the launch's approval.
+  let v = (await call("/api/standalone/validate", { method: "POST", body: launch, headers: T() })).j;
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /needs the owner's approval for this launch \(weights_download_approved: true\)/.test(i.message)), JSON.stringify(v.issues));
+  v = (await call("/api/standalone/validate", { method: "POST", body: { ...launch, weights_download_approved: true }, headers: T() })).j;
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /not approved on this fv-control \(the owner sets FV_HUB_DOWNLOADS_APPROVED=1/.test(i.message)), JSON.stringify(v.issues));
+  const r0 = await call("/api/standalone", { method: "POST", body: { ...launch, weights_download_approved: true }, headers: T() });
+  assert.equal(r0.status, 400, JSON.stringify(r0.j));
+  // A second fv-control with Hub downloads approved: the launch's approval is still required.
+  const w4 = await startWorker(mock, { ...SECRETS, FV_HUB_DOWNLOADS_APPROVED: "1", OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET) });
+  try {
+    const call4 = async (path, { method = "GET", body, headers = {} } = {}) => {
+      const r = await fetch(w4.url + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const text = await r.text();
+      let j = null;
+      try { j = JSON.parse(text); } catch {}
+      return { status: r.status, j, text };
+    };
+    const lr = await fetch(w4.url + "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+    const ck = lr.headers.get("set-cookie").split(";")[0];
+    const cs = (await lr.json()).csrf;
+    const H = { authorization: `Bearer ${(await call4("/api/tokens", { method: "POST", body: { name: "ci4", scope: "admin" }, headers: { cookie: ck, "x-csrf-token": cs } })).j.token}` };
+    v = (await call4("/api/standalone/validate", { method: "POST", body: launch, headers: H })).j;
+    assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /needs the owner's approval for this launch/.test(i.message)), JSON.stringify(v.issues));
+    const ok = { ...launch, weights_download_approved: true };
+    v = (await call4("/api/standalone/validate", { method: "POST", body: ok, headers: H })).j;
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+    assert.equal((await call4("/api/preflight", { method: "POST", body: { launch: ok }, headers: H })).j.ok, true);
+    const before = new Set(mock.pods.keys());
+    const r = await call4("/api/standalone", { method: "POST", body: ok, headers: H });
+    assert.equal(r.status, 201, JSON.stringify(r.j));
+    const id = r.j.pod.id;
+    let op = null;
+    for (let i = 0; i < 180; i++) {
+      op = (await call4(`/api/clusters/${id}/ops`, { headers: H })).j.operations.find((o) => o.kind === "up");
+      if (op && op.status !== "running") break;
+      await sleep(500);
+    }
+    assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
+    const pods = [...mock.pods.values()].filter((p) => !before.has(p.id));
+    assert.equal(pods.length, 1);
+    const p = pods[0].payload;
+    assert.deepEqual([p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE], [["US-TX-3"], undefined, "hub"]);
+    assert.equal(p.containerDiskInGb, Number(p.env.FV_HUB_DISK_GB));
+    assert.ok(p.containerDiskInGb > 40, `sized from the trees: ${p.containerDiskInGb}`);
+    assert.match(atob(p.env.FV_WEIGHTS_TREES_B64), /^tree\twan22-ti2v-5b\tWan-AI\/Wan2\.2-TI2V-5B-Diffusers\tb8fff7315c768468a5333511427288870b2e9635\t/m);
+    assert.match(p.env.FV_SCRIPTS_URL, /^https:\/\/raw\.githubusercontent\.com\/.+\/scripts\/gpu$/);
+    assert.match(p.dockerStartCmd[0], /fetch-hub-tree\.py[\s\S]*step weights: [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
+    const sp = (await call4("/api/standalone/hubus", { headers: H })).j.pod;
+    assert.deepEqual([sp.definition.weights_source, sp.definition.hub_download_approved, sp.definition.volume, sp.definition.dc], ["hub", true, null, "US-TX-3"]);
+    assert.equal((await call4("/api/standalone/hubus", { method: "DELETE", headers: H })).status, 202);
+    for (let i = 0; i < 120 && (await call4("/api/standalone/hubus", { headers: H })).status !== 404; i++) await sleep(500);
+    assert.equal([...mock.pods.values()].filter((x) => !before.has(x.id)).length, 0);
+  } finally {
+    w4.stop();
+  }
+});
+
 await step("GMI / Brev standalone pods: checks, create → running → tunnel report → health → delete, budget, failed boot, only ours", async () => {
   await d1Exec(w.dir, "DELETE FROM operations");
   const g = mock.gmi;
@@ -1595,6 +1690,99 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   assert.equal((await plan(tpl.env.FV_WEIGHTS_TOKEN)).status, 401);
   assert.equal((await plan(old)).status, 401);
   assert.ok(ex(`${tmp}/weights/r2demo/config.json`));
+});
+
+await step("serverless weights_source hub (owner 2026-10-14: \"get the weights and use flashboot\"): refused without the owner's two approvals (the spec's and fv-control's), in the validator, the preflight and the create; created with both: no volume, any DC, FlashBoot on, the bash Hub boot with the pinned trees and the recorded hashes; its token is good for the boot reports only; the CLI flags", async () => {
+  const spec = { name: "slshub", preset: "wan", weights_source: "hub", gpu_types: ["NVIDIA H100 80GB HBM3"] };
+  // This fv-control has no FV_HUB_DOWNLOADS_APPROVED.
+  let v = (await call("/api/serverless/validate", { method: "POST", body: { spec }, headers: T() })).j;
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /needs the owner's approval for this endpoint \(weights_download_approved: true\)/.test(i.message)), JSON.stringify(v.issues));
+  const ok = { ...spec, weights_download_approved: true };
+  v = (await call("/api/serverless/validate", { method: "POST", body: { spec: ok }, headers: T() })).j;
+  assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /not approved on this fv-control \(the owner sets FV_HUB_DOWNLOADS_APPROVED=1/.test(i.message)), JSON.stringify(v.issues));
+  const pf = (await call("/api/preflight", { method: "POST", body: { endpoint: ok }, headers: T() })).j;
+  assert.ok(pf.errors.some((e) => /FV_HUB_DOWNLOADS_APPROVED/.test(e)), JSON.stringify(pf));
+  const before0 = mock.sls.endpoints.size;
+  assert.equal((await call("/api/serverless", { method: "POST", body: { spec: ok }, headers: T() })).status, 400);
+  assert.equal(mock.sls.endpoints.size, before0, "nothing created");
+  // A second fv-control with Hub downloads approved.
+  const w5 = await startWorker(mock, { ...SECRETS, FV_HUB_DOWNLOADS_APPROVED: "1", OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE, SECRETS.SESSION_SECRET) });
+  try {
+    const call5 = async (path, { method = "GET", body, headers = {} } = {}) => {
+      const r = await fetch(w5.url + path, { method, headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const text = await r.text();
+      let j = null;
+      try { j = JSON.parse(text); } catch {}
+      return { status: r.status, j, text };
+    };
+    const lr = await fetch(w5.url + "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+    const ck = lr.headers.get("set-cookie").split(";")[0];
+    const cs = (await lr.json()).csrf;
+    const tok5 = (await call5("/api/tokens", { method: "POST", body: { name: "ci5", scope: "admin" }, headers: { cookie: ck, "x-csrf-token": cs } })).j.token;
+    const H = { authorization: `Bearer ${tok5}` };
+    v = (await call5("/api/serverless/validate", { method: "POST", body: { spec }, headers: H })).j;
+    assert.ok(v.issues.some((i) => i.path[0] === "weights_download_approved" && /needs the owner's approval for this endpoint/.test(i.message)), "the spec's approval is still needed: " + JSON.stringify(v.issues));
+    v = (await call5("/api/serverless/validate", { method: "POST", body: { spec: ok }, headers: H })).j;
+    assert.equal(v.ok, true, JSON.stringify(v.issues));
+    assert.deepEqual([v.spec.network_volume, v.spec.data_centers, v.spec.flashboot, v.spec.weights_download_approved], [null, undefined, true, true]);
+    assert.ok(v.spec.container_disk_gb > 60, `sized from the trees: ${v.spec.container_disk_gb}`);
+    assert.equal(v.outlook.weights_source, "hub");
+    assert.match(v.outlook.note, /Hub download [\d.]+ GB at 0\.20 GB\/s/);
+    assert.ok(v.warnings.some((x) => /every new worker downloads fastwan22-ti2v-5b, wan22-ti2v-5b/.test(x.message)), JSON.stringify(v.warnings));
+    assert.match((await call5("/api/serverless/validate", { method: "POST", body: { spec: { ...ok, flashboot: false } }, headers: H })).j.error, /FlashBoot on/);
+    const d = (await call5("/api/serverless/defaults?preset=wan&weights_source=hub", { headers: H })).j.spec;
+    assert.deepEqual([d.weights_source, d.network_volume, d.flashboot], ["hub", null, true]);
+    const pf5 = (await call5("/api/preflight", { method: "POST", body: { endpoint: ok }, headers: H })).j;
+    assert.ok(!pf5.errors.some((e) => /weights|FV_HUB/.test(e)), JSON.stringify(pf5));
+    const before = new Set(mock.sls.templates.keys());
+    const r = await call5("/api/serverless", { method: "POST", body: { spec: ok }, headers: H });
+    assert.equal(r.status, 201, JSON.stringify(r.j));
+    const ep = r.j.endpoint;
+    const tpl = [...mock.sls.templates.values()].find((t) => !before.has(t.id));
+    const rpe = mock.sls.endpoints.get(ep.endpoint_id);
+    assert.deepEqual([rpe.networkVolumeId, rpe.dataCenterIds, rpe.flashboot], [undefined, undefined, true]);
+    assert.equal(tpl.containerDiskInGb, v.spec.container_disk_gb);
+    assert.deepEqual(tpl.dockerEntrypoint.slice(0, 2), ["bash", "-c"]);
+    assert.match(tpl.dockerEntrypoint[2], /weights-sha256\.tsv[\s\S]*fetch-hub-tree\.py[\s\S]*step weights [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
+    assert.equal(tpl.env.FV_WEIGHTS_SOURCE, "hub");
+    assert.match(atob(tpl.env.FV_WEIGHTS_TREES_B64), /^tree\twan22-ti2v-5b\tWan-AI\/Wan2\.2-TI2V-5B-Diffusers\tb8fff7315c768468a5333511427288870b2e9635\t/m);
+    assert.match(atob(tpl.env.FV_HUB_SHA256_B64), /^fastwan22-ti2v-5b\ttransformer\/diffusion_pytorch_model\.safetensors\t9999660080\t[0-9a-f]{64}$/m);
+    assert.match(tpl.env.FV_SCRIPTS_URL, /^https:\/\/raw\.githubusercontent\.com\/.+\/scripts\/gpu$/);
+    assert.match(tpl.env.FV_WEIGHTS_TOKEN, /^fvw_[0-9a-f]{64}$/);
+    assert.equal(tpl.env.FV_WEIGHTS_PLAN_URL, undefined);
+    assert.ok(!JSON.stringify(r.j).includes(tpl.env.FV_WEIGHTS_TOKEN), "the token is never in an API answer");
+    // The token: the boot reports (the cold start's breakdown), never a plan (there is nothing to presign).
+    const rep = (phase, detail, pod = "wkhub@1700000000") => call5("/ingest/v1/sls-report", { method: "POST", body: { pod, phase, detail }, headers: { authorization: `Bearer ${tpl.env.FV_WEIGHTS_TOKEN}` } });
+    assert.equal((await rep("cache", "miss: fastwan22-ti2v-5b wan22-ti2v-5b")).status, 200);
+    assert.equal((await rep("step", "hub_tools 31s")).status, 200);
+    assert.equal((await rep("weights", "weights ready: hub 58.40 GB fetched in 292.0s (200 MB/s)")).status, 200);
+    assert.equal((await rep("serve", "weights ready")).status, 200);
+    const page = (await call5(`/api/serverless/${ep.id}`, { headers: H })).j;
+    const b1 = page.boots.find((b) => b.worker_id === "wkhub");
+    assert.deepEqual([b1.cache, b1.fetch_mbps, JSON.parse(b1.steps).hub_tools], ["miss", 200, 31]);
+    assert.deepEqual([page.outlook.weights_source, page.outlook.rate_source, page.outlook.cache.state], ["hub", "measured", "miss"]);
+    const plan = await call5("/ingest/v1/weights-plan", { method: "POST", body: { pod: "wkhub@1700000000" }, headers: { authorization: `Bearer ${tpl.env.FV_WEIGHTS_TOKEN}` } });
+    assert.equal(plan.status, 409, plan.text);
+    // The CLI: --weights hub without --approve-hub-download is refused by the validator; the flag passes the approval.
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const tmp = mkdtempSync(`${tmpdir()}/fvc-slshub-`);
+    writeFileSync(`${tmp}/token`, tok5, { mode: 0o600 });
+    const cli = (...args) => promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: w5.url, FV_CONTROL_TOKEN_FILE: `${tmp}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } }).catch((e) => e);
+    let c = await cli("endpoint", "create", "slshub2", "--preset", "wan", "--weights", "hub", "--gpu", "NVIDIA H100 80GB HBM3");
+    assert.match(`${c.stderr}${c.stdout}`, /weights_download_approved: weights_source hub downloads/);
+    c = await cli("endpoint", "create", "slshub3", "--preset", "wan", "--weights", "r2", "--approve-hub-download");
+    assert.match(`${c.stderr}${c.stdout}`, /--approve-hub-download only with --weights hub/);
+    c = await cli("endpoint", "create", "slshub2", "--preset", "wan", "--weights", "hub", "--approve-hub-download", "--gpu", "NVIDIA H100 80GB HBM3");
+    assert.match(c.stdout, /^slshub2 /, `${c.stderr}${c.stdout}`);
+    // Delete: the token dies with the endpoint.
+    for (const n of [ep.id, "slshub2"]) assert.equal((await call5(`/api/serverless/${n}`, { method: "DELETE", headers: H })).status, 200);
+    assert.equal((await rep("serve", "late")).status, 401);
+  } finally {
+    w5.stop();
+  }
 });
 
 await step("Brev keep-on-stop (owner rules 2026-10-11 / 2026-10-13: a stopped VM is never auto-deleted; a failed stop deletes it): park on stop, warm restart (no download), restart failure / timeout held, reuse of a held one, refused stop deleted, non-stoppable allowed and deleted by its stop, limits as alerts, budget, only ours", async () => {

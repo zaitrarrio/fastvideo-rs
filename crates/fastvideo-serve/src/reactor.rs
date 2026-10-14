@@ -76,8 +76,21 @@ pub fn ingest_auth(ctx: fastvideo_serve_kit::ServeCtx) -> IngestAuth {
 /// Builds the runtime on an already bound host (shared with the fal
 /// director in `App::build`); `auth` guards duplex sessions.
 pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost, auth: Option<IngestAuth>) -> anyhow::Result<Reactor> {
+    build_on_moderated(c, engine, host, auth, None)
+}
+
+/// [`build_on`] with `[moderation]`'s prompt moderator: a refused command
+/// prompt stops the session with RT's `moderation` notice.
+pub fn build_on_moderated(
+    c: &Config,
+    engine: &EngineService,
+    host: RtcHost,
+    auth: Option<IngestAuth>,
+    moderator: Option<Arc<dyn fastvideo_protocol::PromptModerator>>,
+) -> anyhow::Result<Reactor> {
     let mut cfg = reactor_config(&c.reactor, &c.streams)?;
     cfg.ingest_auth = auth;
+    cfg.moderator = moderator.map(fastvideo_reactor::ModeratorHook);
     // `start_session` `output` / `x_fv_output` (docs/serve/stream-outputs.md).
     cfg.outputs = crate::stream_outputs::hook(c);
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "reactor runtime ready to answer offers");

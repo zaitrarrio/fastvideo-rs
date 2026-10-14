@@ -1,0 +1,20 @@
+# MiniMax-H3 Turbo LoRA (lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v1.2
+# 768p): base MiniMax-H3 with the adapter folded in at load (alpha 8 / rank
+# 128), dense attention, 4 forwards on the uniform grid at the adapter's
+# training shifts 6 / 3, then MXFP8 linears and bf16 activations.
+# docs/ports/h3-turbo-loras.md.
+
+[id]
+name = "lightx2v_turbo_dense"
+family = "minimax_h3"
+description = "MiniMax-H3 + lightx2v Turbo LoRA v1.2 768p (4 forwards), dense attention, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "lightx2v-turbo"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

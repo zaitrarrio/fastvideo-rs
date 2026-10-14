@@ -1973,6 +1973,25 @@ additions and readings; everything is re-exported from the crate root.
   `h3-trim`, pool / control preset `fasth3-trim`, `configs/serve/runpod-h3-trim.toml`)
   = FastH3 Trim 8-step: 42 of the 50 blocks, rank-16 AdaLN, VSA-H3 at 0.8, its
   own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md).
+  Untiered `h3-larry-turbo` / `h3-lightx2v-turbo` (pools / control presets of the
+  same names, `configs/serve/runpod-h3-{larry,lightx2v}-turbo.toml`) = base
+  MiniMax-H3 with a Turbo LoRA folded in at load, as the
+  MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs it: larryvrh ckpt850 (6 forwards,
+  `steps` 3-8, `lora_strength`) or lightx2v FL2VA/T2VA v1.2 768p (4 forwards,
+  shifts 6 / 3), dense attention, MXFP8 after the merge, T2V + FL2VA
+  (docs/ports/h3-turbo-loras.md). `[moderation] ncii` is the optional NCII
+  prompt guard (off by default) every API runs at admission.
+  Untiered `vdn-h3` (served also `vdn-h3-50step`, pool / control preset
+  `vdn-h3`, `configs/serve/runpod-vdn-h3.toml`) = VDN-H3 stage B: h3-base with
+  the stage-B LoRA merged at load and hybrid attention in every block (a
+  chunk-aligned window softmax plus a frame-wise delta-rule linear branch,
+  `H3Recipe.vdn_weights` = `vdn-h3-stage-b-2000/stage-b-step-2000`), 50
+  forwards on the base grid without CFG, resident DiT, text-to-video with audio
+  only, bf16 linears (MXFP8 opt-in); `vdn-h3-8step` (pool / preset of the same
+  name, `configs/serve/runpod-vdn-h3-8step.toml`) = the DMD-distilled VDN-H3:
+  the same plus the turbo LoRA of `vdn-h3-dmd-250-turbo` (`vdn_shared` = stage
+  B's directory for the byte-identical branch and default LoRA), 8 forwards
+  (docs/ports/vdn-h3.md).
   `ltx-pro` = LTX-2.5 distilled
   two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
   stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN

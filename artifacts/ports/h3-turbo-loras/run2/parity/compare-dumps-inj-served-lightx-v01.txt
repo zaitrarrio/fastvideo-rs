@@ -1,0 +1,42 @@
+compare-dumps audio_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 6
+compare-dumps audio_step01                 rel_l2 3.051e-3  cosine 0.999995  max_abs 1.731e-2  n 13248
+compare-dumps audio_step02                 rel_l2 9.423e-3  cosine 0.999956  max_abs 3.746e-2  n 13248
+compare-dumps audio_step03                 rel_l2 2.624e-2  cosine 0.999656  max_abs 1.180e-1  n 13248
+compare-dumps audio_step04                 rel_l2 1.436e-1  cosine 0.989643  max_abs 3.825e-1  n 13248
+compare-dumps audio_step05                 rel_l2 4.751e-1  cosine 0.881486  max_abs 9.900e-1  n 13248
+compare-dumps audio_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 13248
+compare-dumps audio_vel_step01             rel_l2 3.482e-2  cosine 0.999396  max_abs 2.250e-1  n 13248
+compare-dumps audio_vel_step02             rel_l2 6.997e-2  cosine 0.997550  max_abs 2.666e-1  n 13248
+compare-dumps audio_vel_step03             rel_l2 1.019e-1  cosine 0.994844  max_abs 6.233e-1  n 13248
+compare-dumps audio_vel_step04             rel_l2 2.604e-1  cosine 0.966544  max_abs 1.278e0  n 13248
+compare-dumps audio_vel_step05             rel_l2 3.230e-1  cosine 0.947064  max_abs 1.781e0  n 13248
+compare-dumps base.token_refiner.refiner_blocks.1.attn.to_out.0: missing in candidate
+compare-dumps base.token_refiner.refiner_blocks.1.ff.net.0.proj: missing in candidate
+compare-dumps base.transformer_blocks.0.attn.to_out.0: missing in candidate
+compare-dumps base.transformer_blocks.0.ff.net.2: missing in candidate
+compare-dumps base.transformer_blocks.0.ff.net.0.proj: missing in candidate
+compare-dumps base.transformer_blocks.49.attn.to_out.0: missing in candidate
+compare-dumps base.transformer_blocks.49.ff.net.2: missing in candidate
+compare-dumps base.transformer_blocks.49.ff.net.0.proj: missing in candidate
+compare-dumps merged.token_refiner.refiner_blocks.1.attn.to_out.0: missing in candidate
+compare-dumps merged.token_refiner.refiner_blocks.1.ff.net.0.proj: missing in candidate
+compare-dumps merged.transformer_blocks.0.attn.to_out.0: missing in candidate
+compare-dumps merged.transformer_blocks.0.ff.net.2: missing in candidate
+compare-dumps merged.transformer_blocks.0.ff.net.0.proj: missing in candidate
+compare-dumps merged.transformer_blocks.49.attn.to_out.0: missing in candidate
+compare-dumps merged.transformer_blocks.49.ff.net.2: missing in candidate
+compare-dumps merged.transformer_blocks.49.ff.net.0.proj: missing in candidate
+compare-dumps text_hidden                  rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 133120
+compare-dumps video_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 6
+compare-dumps video_step01                 rel_l2 2.393e-3  cosine 0.999997  max_abs 1.842e-2  n 1385280
+compare-dumps video_step02                 rel_l2 1.389e-2  cosine 0.999904  max_abs 2.358e-1  n 1385280
+compare-dumps video_step03                 rel_l2 3.600e-2  cosine 0.999352  max_abs 4.778e-1  n 1385280
+compare-dumps video_step04                 rel_l2 1.020e-1  cosine 0.994798  max_abs 1.184e0  n 1385280
+compare-dumps video_step05                 rel_l2 3.378e-1  cosine 0.942875  max_abs 5.184e0  n 1385280
+compare-dumps video_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1385280
+compare-dumps video_vel_step01             rel_l2 5.726e-2  cosine 0.998402  max_abs 9.025e-1  n 1385280
+compare-dumps video_vel_step02             rel_l2 2.616e-1  cosine 0.965819  max_abs 7.327e0  n 1385280
+compare-dumps video_vel_step03             rel_l2 2.777e-1  cosine 0.961402  max_abs 5.626e0  n 1385280
+compare-dumps video_vel_step04             rel_l2 2.762e-1  cosine 0.961822  max_abs 6.886e0  n 1385280
+compare-dumps video_vel_step05             rel_l2 2.849e-1  cosine 0.959386  max_abs 5.734e0  n 1385280
+[PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)

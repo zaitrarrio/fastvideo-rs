@@ -809,6 +809,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                             name: "default".into(),
                             prompt: prompt.clone(),
                             seed: *seed,
+                            size: None,
                         }],
                         false,
                     ),

@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use axum::Router;
 use fastvideo_protocol::{
-    ApiError, GenerationRequest, Job, JobId, JobStore, ModelCaps, ProtocolId, UrlSigner, ViewCtx,
+    ApiError, GenerationRequest, Job, JobId, JobStore, ModelCaps, PromptModerator, ProtocolId, UrlSigner,
+    ViewCtx,
 };
 use time::OffsetDateTime;
 use url::Url;
@@ -105,6 +106,7 @@ struct Inner {
     callbacks: Arc<CallbackSender>,
     renderers: HashMap<ProtocolId, Arc<dyn CallbackRender>>,
     safety: Arc<dyn SafetyFilter>,
+    moderator: Option<Arc<dyn PromptModerator>>,
     upsampler: Option<Arc<fastvideo_upsampler::Service>>,
     files: Arc<FileServer>,
     now: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
@@ -136,6 +138,7 @@ pub struct ServeCtxBuilder {
     callbacks: Option<Arc<CallbackSender>>,
     renderers: HashMap<ProtocolId, Arc<dyn CallbackRender>>,
     safety: Arc<dyn SafetyFilter>,
+    moderator: Option<Arc<dyn PromptModerator>>,
     prober: Arc<dyn Prober>,
     now: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
     artifacts_root: Option<PathBuf>,
@@ -179,6 +182,12 @@ impl ServeCtxBuilder {
     }
     pub fn safety(mut self, s: Arc<dyn SafetyFilter>) -> Self {
         self.safety = s;
+        self
+    }
+    /// The prompt moderator (`[moderation]`, e.g. the NCII guard): every API
+    /// runs it at admission ([`ServeCtx::moderate_request`]).
+    pub fn moderator(mut self, m: Arc<dyn PromptModerator>) -> Self {
+        self.moderator = Some(m);
         self
     }
     /// The prompt upsampler (`[upsampler]`, docs/serve/prompt-upsampling.md).
@@ -234,6 +243,7 @@ impl ServeCtxBuilder {
                 callbacks,
                 renderers: self.renderers,
                 safety: self.safety,
+                moderator: self.moderator,
                 upsampler: self.upsampler,
                 now: self.now,
             }),
@@ -253,6 +263,7 @@ impl ServeCtx {
             callbacks: None,
             renderers: HashMap::new(),
             safety: Arc::new(NoSafetyFilter),
+            moderator: None,
             prober: Arc::new(DefaultProber::default()),
             now: Arc::new(OffsetDateTime::now_utc),
             artifacts_root: None,
@@ -286,6 +297,25 @@ impl ServeCtx {
     }
     pub fn safety(&self) -> &Arc<dyn SafetyFilter> {
         &self.inner.safety
+    }
+    /// The prompt moderator, when `[moderation]` configures one.
+    pub fn moderator(&self) -> Option<&Arc<dyn PromptModerator>> {
+        self.inner.moderator.as_ref()
+    }
+    /// The moderator's admission check of a batch request (its scope decides
+    /// whether this request is looked at). `Ok` without a moderator.
+    pub async fn moderate_request(&self, req: &GenerationRequest) -> Result<(), ApiError> {
+        match &self.inner.moderator {
+            Some(m) => fastvideo_protocol::moderate_request(m.as_ref(), req).await,
+            None => Ok(()),
+        }
+    }
+    /// The same for a bare prompt (the director's `configure` / `prompt`).
+    pub async fn moderate_prompt(&self, prompt: &str, has_visual_input: bool) -> Result<(), ApiError> {
+        match &self.inner.moderator {
+            Some(m) => fastvideo_protocol::moderate(m.as_ref(), prompt, has_visual_input).await,
+            None => Ok(()),
+        }
     }
     /// The prompt upsampler, when `[upsampler]` is configured.
     pub fn upsampler(&self) -> Option<&Arc<fastvideo_upsampler::Service>> {

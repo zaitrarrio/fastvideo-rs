@@ -1,0 +1,190 @@
+{
+ "rows": [
+  {
+   "param": "norm_out.linear",
+   "kind": "norm_out.linear (final AdaLN)",
+   "missing": "ours"
+  },
+  {
+   "param": "token_refiner.refiner_blocks.0.attn.to_q",
+   "kind": "refiner attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "token_refiner.refiner_blocks.1.attn.to_out.0",
+   "kind": "refiner attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 7.172435402169512e-06,
+   "delta_rel_l2": 0.31303463536338444,
+   "delta_norm_vs_base": 2.2911603082320653e-05,
+   "frac_differ": 0.00044302388924319727,
+   "max_ulps": 26058
+  },
+  {
+   "param": "token_refiner.refiner_blocks.1.ff.net.0.proj",
+   "kind": "refiner ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 1.1066213312101998e-05,
+   "delta_rel_l2": 0.3716684400298751,
+   "delta_norm_vs_base": 2.9798866307828575e-05,
+   "frac_differ": 0.000747635250999814,
+   "max_ulps": 26560
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_k",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_out.0",
+   "kind": "attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 2.1809646672116955e-05,
+   "delta_rel_l2": 0.3277167120950543,
+   "delta_norm_vs_base": 6.655255128862336e-05,
+   "frac_differ": 0.001063158722961841,
+   "max_ulps": 26870
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_q",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_v",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.ff.net.0.proj",
+   "kind": "ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 5.9491950774841255e-06,
+   "delta_rel_l2": 0.4129016373549416,
+   "delta_norm_vs_base": 1.4423321772483177e-05,
+   "frac_differ": 0.0005290167672293526,
+   "max_ulps": 26560
+  },
+  {
+   "param": "transformer_blocks.0.ff.net.2",
+   "kind": "ff.net.2 (fc2)",
+   "shape": [
+    5376,
+    14336
+   ],
+   "merged_rel_l2": 2.5059878121721248e-06,
+   "delta_rel_l2": 0.22908553222951547,
+   "delta_norm_vs_base": 1.0941370419459417e-05,
+   "frac_differ": 0.00026582211864237883,
+   "max_ulps": 25984
+  },
+  {
+   "param": "transformer_blocks.25.adaln_proj.linear",
+   "kind": "block adaln_proj.linear",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.25.attn.to_q",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.25.attn.to_v",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.49.attn.to_k",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.49.attn.to_out.0",
+   "kind": "attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 2.27992445223973e-05,
+   "delta_rel_l2": 0.058479628607013764,
+   "delta_norm_vs_base": 0.0003898776485584676,
+   "frac_differ": 0.0008845945604804422,
+   "max_ulps": 27264
+  },
+  {
+   "param": "transformer_blocks.49.ff.net.0.proj",
+   "kind": "ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 4.292472504940383e-05,
+   "delta_rel_l2": 0.09893006390365848,
+   "delta_norm_vs_base": 0.00043447825009934604,
+   "frac_differ": 0.0014671663037773702,
+   "max_ulps": 27383
+  },
+  {
+   "param": "transformer_blocks.49.ff.net.2",
+   "kind": "ff.net.2 (fc2)",
+   "shape": [
+    5376,
+    14336
+   ],
+   "merged_rel_l2": 8.388249520222832e-05,
+   "delta_rel_l2": 0.07673736843897516,
+   "delta_norm_vs_base": 0.0010933777084574103,
+   "frac_differ": 0.004819441814811862,
+   "max_ulps": 27271
+  }
+ ],
+ "by_kind": {
+  "refiner attn.to_out.0 (out_proj)": {
+   "n": 1,
+   "merged_rel_l2": 7.172435402169512e-06,
+   "delta_rel_l2": 0.31303463536338444,
+   "frac_differ": 0.00044302388924319727,
+   "max_ulps": 26058
+  },
+  "refiner ff.net.0.proj (fc1, SwiGLU swap)": {
+   "n": 1,
+   "merged_rel_l2": 1.1066213312101998e-05,
+   "delta_rel_l2": 0.3716684400298751,
+   "frac_differ": 0.000747635250999814,
+   "max_ulps": 26560
+  },
+  "attn.to_out.0 (out_proj)": {
+   "n": 2,
+   "merged_rel_l2": 2.27992445223973e-05,
+   "delta_rel_l2": 0.3277167120950543,
+   "frac_differ": 0.001063158722961841,
+   "max_ulps": 27264
+  },
+  "ff.net.0.proj (fc1, SwiGLU swap)": {
+   "n": 2,
+   "merged_rel_l2": 4.292472504940383e-05,
+   "delta_rel_l2": 0.4129016373549416,
+   "frac_differ": 0.0014671663037773702,
+   "max_ulps": 27383
+  },
+  "ff.net.2 (fc2)": {
+   "n": 2,
+   "merged_rel_l2": 8.388249520222832e-05,
+   "delta_rel_l2": 0.22908553222951547,
+   "frac_differ": 0.004819441814811862,
+   "max_ulps": 27271
+  }
+ }
+}

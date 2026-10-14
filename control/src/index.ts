@@ -64,6 +64,9 @@ import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { slsReport } from "./serverless/ingest";
+import { normalizeEndpointSpec } from "./serverless/spec";
+import { slsPreset } from "./serverless/presets";
+import { slsWeightsIssues } from "./serverless/weights";
 import { weightsPlanRequest } from "./weights-plan";
 import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
@@ -961,14 +964,24 @@ app.get("/api/names/:kind", async (c) => c.json(await checkName(c.env, c.req.par
 /**
  * The image preflight before a save or launch (preflight.ts, the check `up` runs before any pod is paid for):
  * each pool's image resolves to a digest, and that build has what the spec asks of it. Body: {spec} (a cluster spec),
- * {launch} (a standalone launch request) or {endpoint} (a serverless spec: its variant and image).
+ * {launch} (a standalone launch request) or {endpoint} (a serverless spec: its variant and image; with weights_source r2
+ * or hub also the weights checks only fv-control can make, e.g. hub's FV_HUB_DOWNLOADS_APPROVED, as errors).
  */
 app.post("/api/preflight", async (c) => {
   const b = await body<any>(c);
   let spec;
+  const weightsErrors: string[] = [];
+  if (b.endpoint?.weights_source === "r2" || b.endpoint?.weights_source === "hub") {
+    try {
+      weightsErrors.push(...slsWeightsIssues(c.env, normalizeEndpointSpec(b.endpoint)).issues.map((i) => `${i.path.join(".")}: ${i.message}`));
+    } catch (e) {
+      weightsErrors.push(scrub(c.env, (e as Error).message));
+    }
+  }
   if (b.launch) spec = standaloneSpec(b.launch).spec;
   else if (b.endpoint) {
-    const e = b.endpoint;
+    // A preset names the variant (a spec as the API and the CLI send it, before the defaults are filled).
+    const e = { ...b.endpoint, variant: b.endpoint.variant ?? slsPreset(b.endpoint.preset)?.variant, image: b.endpoint.image ?? { channel: "stable" } };
     spec = normalizeSpec({ name: "preflight", image: e.image, control_plane: "direct", pools: [{ id: "endpoint", variant: e.variant, compute: e.variant === "cpu" ? "CPU" : "GPU", count: 1, config: "/etc/fv/runpod.toml", ...(e.variant === "cpu" ? { fake_models: ["fake-wan"] } : { models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
   } else spec = normalizeSpec(b.spec || {});
   let images: Record<string, string>;
@@ -978,6 +991,7 @@ app.post("/api/preflight", async (c) => {
     return c.json({ ok: false, errors: [`image: ${scrub(c.env, (e as Error).message)}`], warnings: [], images: {}, revisions: {} });
   }
   const pf = await checkImages(c.env, spec, images);
+  pf.errors.push(...weightsErrors);
   return c.json({ ok: pf.errors.length === 0, ...pf, images });
 });
 /**

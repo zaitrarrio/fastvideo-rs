@@ -158,6 +158,7 @@ kernel_fns!(
     flash_mma_fwd2_d128,
     flash_mma_fwd2_causal_d64,
     flash_mma_fwd2_causal_d128,
+    flash_mma_fwd2_window_d128,
     vsa_mma_attn_tma2,
     sol_mma_fwd2,
     sol_split_combine,

@@ -54,12 +54,13 @@ image-grounded opening on a vision LLM. See
 base_url = "https://llm.example.com/v1"   # any OpenAI-compatible API root; /chat/completions is appended
 model = "<chat model>"
 api_key_env = "FV_UPSAMPLER_API_KEY"      # the variable holding the key (default); unset: no auth header
-timeout_ms = 10000                        # one call, both hedged attempts included (100..120000)
-hedge = true                              # two concurrent attempts, first success wins
+timeout_ms = 10000                        # one call, both hedged attempts included (100..120000); unset + local: 60000
+hedge = true                              # two concurrent attempts, first success wins; unset + local: false
+local = false                             # the LLM shares this GPU (FV_UPSAMPLER_LOCAL); unset: a loopback base_url is local
 memory = 12                               # director: prior segments as context when configure.memory is absent (1..50)
 default_on = false                        # see Defaults
 context_tokens = 28000                    # director: the LLM's context (4096..1000000); 28000 suits a local Qwen3(-VL)-4B at 32k
-deck_size = 6                             # director: segments planned ahead (1..12), fal's prompt_deck_size
+deck_size = 6                             # director: segments planned ahead (1..12), fal's prompt_deck_size; unset + local: 2
 vision = false                            # the LLM sees images (Qwen3-VL behind llama-server --mmproj)
 tokenize = true                           # ask the LLM server's /tokenize (llama-server, vLLM) once; else estimate
 [upsampler.max_chars]                     # prompt budgets in characters, used only without the family's tokenizer (Limits)
@@ -94,7 +95,7 @@ environment alone, no TOML edit and no key:
 ```bash
 FV_UPSAMPLER_BASE_URL=http://127.0.0.1:<port>/v1
 FV_UPSAMPLER_MODEL=<the name llama-server serves>
-FV_UPSAMPLER_HEDGE=0      # one request per call: the hedge doubles the load on a local server
+# a 127.0.0.1 base URL is local: unset hedge / timeout_ms / deck_size default to off / 60000 / 2 (upsampler-local.md §3)
 FV_UPSAMPLER_VISION=1     # Qwen3-VL-4B-Instruct with --mmproj (owner decision, 2026-10-13)
 ```
 

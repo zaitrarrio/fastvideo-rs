@@ -47,6 +47,9 @@ use fastvideo_models::h3::config::{
     H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3SigmaSource, H3TransformerConfig,
     H3VideoVaeConfig, H3_AUDIO_CHANNELS, H3_FPS,
 };
+use fastvideo_models::h3::turbo_lora::{
+    parse_turbo_recipe, turbo_strength, TURBO_LORA_STRENGTH_ENV,
+};
 use fastvideo_models::h3::lora::{
     check_preview_base, is_sol_h3_recipe, preview_lora_strength, sol_h3_forces_ref2va,
     FastH3PreviewVariant, SolH3AdapterSpec, FASTH3_LORA_STRENGTH_ENV,
@@ -269,6 +272,10 @@ pub struct H3PipelineOptions {
     /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
     /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
+    /// Strength of a Turbo LoRA recipe (`larry-turbo`, `lightx2v-turbo`;
+    /// [`fastvideo_models::h3::turbo_lora`]). `None`:
+    /// `FV_H3_TURBO_LORA_STRENGTH`, else 1.0.
+    pub adapter_strength: Option<f32>,
     /// Ref2VA reference-image fit. `Auto` is 2048 short-edge, and `match` for Sol-H3.
     pub reference_image_resize: ReferenceImageResize,
     /// Where the refiner and DiT blocks live. `None`: `FASTVIDEO_DIT_OFFLOAD`,
@@ -278,7 +285,20 @@ pub struct H3PipelineOptions {
     /// Where the FL2VA / Ref2VA multimodal text encoder lives
     /// ([`I2vEncoderChoice`]).
     pub i2v_encoder: I2vEncoderChoice,
+    /// VDN-H3 (`vdn-h3-<N>step` recipes, docs/ports/vdn-h3.md): the VDN
+    /// checkpoint directory (`stage-b-step-2000/`, or a tree holding one stage
+    /// directory). `None`: `FASTVIDEO_H3_VDN`. The snapshot is h3-base.
+    pub vdn: Option<PathBuf>,
+    /// Where the files `vdn`'s config names but its tree does not carry come
+    /// from (the 8-step `stage-dmd-step-250/` reads stage B's byte-identical
+    /// linear branch and default adapter). `None`: `FASTVIDEO_H3_VDN_SHARED`.
+    pub vdn_shared: Option<PathBuf>,
 }
+
+/// `FASTVIDEO_H3_VDN`: the VDN checkpoint directory when the options name none.
+pub const H3_VDN_ENV: &str = "FASTVIDEO_H3_VDN";
+/// `FASTVIDEO_H3_VDN_SHARED`: [`H3PipelineOptions::vdn_shared`] when unset.
+pub const H3_VDN_SHARED_ENV: &str = "FASTVIDEO_H3_VDN_SHARED";
 
 /// Where the multimodal (image-conditioned) text encoder's weights live.
 ///
@@ -319,6 +339,51 @@ impl I2vEncoderChoice {
             Self::Auto => "auto",
             Self::Resident => "resident",
             Self::Stream => "stream",
+        }
+    }
+}
+
+/// The VDN checkpoint a `vdn-h3-<N>step` recipe runs (`options.vdn`, else
+/// [`H3_VDN_ENV`]); `None` for other recipes, which may not name one.
+pub fn vdn_checkpoint(
+    options: &H3PipelineOptions,
+) -> Result<Option<fastvideo_models::h3::vdn::VdnCheckpoint>> {
+    let recipe = options.recipe.as_deref();
+    let is_vdn = recipe.is_some_and(fastvideo_models::h3::vdn::is_vdn_recipe);
+    let dir = options
+        .vdn
+        .clone()
+        .or_else(|| std::env::var_os(H3_VDN_ENV).map(PathBuf::from));
+    match (is_vdn, dir) {
+        (false, None) => Ok(None),
+        (false, Some(d)) if options.vdn.is_none() => {
+            let _ = d; // the env var is ignored by other recipes
+            Ok(None)
+        }
+        (false, Some(d)) => Err(msg(format!(
+            "VDN weights {} need a vdn-h3-<N>step recipe (got {})",
+            d.display(),
+            recipe.unwrap_or("auto")
+        ))),
+        (true, None) => Err(msg(format!(
+            "recipe {}: no VDN checkpoint (pass --vdn or set {H3_VDN_ENV})",
+            recipe.unwrap_or_default()
+        ))),
+        (true, Some(d)) => {
+            if options.ref2va {
+                return Err(msg("VDN-H3: Ref2VA was not trained (T2VA, I2VA, L2VA, FL2VA only)"));
+            }
+            let shared = options
+                .vdn_shared
+                .clone()
+                .or_else(|| {
+                    std::env::var_os(H3_VDN_SHARED_ENV)
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                });
+            fastvideo_models::h3::vdn::VdnCheckpoint::open_shared(&d, shared.as_deref())
+                .map(Some)
+                .map_err(msg)
         }
     }
 }
@@ -750,6 +815,9 @@ fn dit_tree_identity(
         }
     } else if name.is_some_and(|r| PlugRecipe::named(r).is_some()) {
         return Ok(None);
+    } else if name.is_some_and(|r| parse_turbo_recipe(r).is_some()) {
+        // Turbo LoRAs: merged at load, no pre-quantized tree (yet).
+        return Ok(None);
     } else {
         None
     };
@@ -865,6 +933,8 @@ pub struct H3Pipeline {
     pub load_timings: H3LoadTimings,
     /// What this pipeline keeps on the device, by ledger category.
     booking: std::sync::Mutex<crate::wan::ledger::Booking>,
+    /// VDN-H3: the hybrid transform every block runs (branch attached).
+    vdn: Option<fastvideo_models::h3::vdn::VdnTransform>,
 }
 
 /// Device bytes a denoise needs beside the resident weights for `rows` packed
@@ -885,6 +955,17 @@ pub fn denoise_reserve_bytes(rows: usize) -> u64 {
 pub fn denoise_reserve_bytes_for(rows: usize, bf16_act: bool) -> u64 {
     let per_row: u64 = if bf16_act { 640 << 10 } else { 1 << 20 };
     (rows as u64) * per_row + (4u64 << 30)
+}
+
+/// [`I2vEncoderChoice::Auto`] when the resident plan does not fit beside the
+/// vision tower: keep the tower anyway when the DiT streams whether or not
+/// it loads (`policy` resolves to streamed with `free` and with `free` less
+/// the tower) and `free` covers the tower plus the streamed plan.
+pub fn i2v_tower_beside_streamed_dit(policy: DitOffload, free: u64, resident_need: u64, streamed_need: u64) -> bool {
+    let after = free.saturating_sub(I2V_VISION_RESERVE_BYTES);
+    policy.resolve(resident_need, Some(free)).is_streamed()
+        && policy.resolve(resident_need, Some(after)).is_streamed()
+        && after >= streamed_need
 }
 
 /// Whether an `Auto`-resident encoder may stay on the device through a
@@ -929,6 +1010,14 @@ impl H3Pipeline {
             options.reference_image_resize = ReferenceImageResize::Match;
         }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
+        let vdn_ckpt = vdn_checkpoint(&options)?;
+        // VDN-H3 defaults to bf16 linears (owner decision 2026-10-14; MXFP8
+        // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
+        // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
+        // load (every QuantMode::from_env of the DiT and refiner) only.
+        let _vdn_bf16 = vdn_ckpt
+            .as_ref()
+            .map(|_| crate::wan::quant::QuantMode::scoped_default(crate::wan::quant::QuantMode::Off));
         let cfg = dit_config(root, &options)?;
         let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
         if contract.dense {
@@ -1017,7 +1106,7 @@ impl H3Pipeline {
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`super::dit_tree`), when a
         // valid one is there; otherwise the checkpoint as below.
-        let dit_tree = if mlx.is_none() && !options.ref2va {
+        let dit_tree = if mlx.is_none() && !options.ref2va && vdn_ckpt.is_none() {
             let identity = dit_tree_identity(
                 root,
                 &options,
@@ -1035,10 +1124,11 @@ impl H3Pipeline {
         if dit_tree.is_none() {
             // A fused adapter rebuilds the AdaLN table from the projections;
             // otherwise a valid cache file means they are never read.
-            let adapter = options.recipe.as_deref().is_some_and(|r| {
+            let adapter = vdn_ckpt.is_some() || options.recipe.as_deref().is_some_and(|r| {
                 FastH3PreviewVariant::from_recipe(r).is_some()
                     || is_sol_h3_recipe(r)
                     || PlugRecipe::is_plug(r)
+                    || parse_turbo_recipe(r).is_some()
             });
             let skip_adaln = !adapter && options.adaln_cache.as_deref().is_some_and(Path::is_file);
             let adaln = |k: &str| k.contains(".adaln_proj.");
@@ -1232,6 +1322,29 @@ impl H3Pipeline {
                 ));
             }
             Some(fuse)
+        } else if let Some(ck) = &vdn_ckpt {
+            // VDN-H3: the checkpoint's LoRA adapters merged into the base
+            // projections (M:merge_lora_state, scale 1); the branch attaches
+            // after the blocks load.
+            let fuse = super::lora::H3LoraFuse::open_vdn(&map, &ck.adapters)?;
+            crate::wan::log::info(format_args!(
+                "h3 vdn: {} ({}): fuse {} pairs max rank {} scale 1, chunk {} radius {}{}",
+                ck.dir.display(),
+                ck.adapter_names().join(" + "),
+                fuse.pairs_total,
+                fuse.rank,
+                ck.transform.chunk,
+                ck.transform.radius,
+                if ck.is_distilled() || contract.transformer_forwards >= 40 {
+                    String::new()
+                } else {
+                    format!(
+                        "; NOTE: {} forwards on the 50-step stage-B model (the 8-step model adds adapters/turbo)",
+                        contract.transformer_forwards
+                    )
+                }
+            ));
+            Some(fuse)
         } else if let Some(plug) = options.recipe.as_deref().and_then(PlugRecipe::named) {
             if options.ref2va {
                 return Err(msg(format!(
@@ -1250,6 +1363,38 @@ impl H3Pipeline {
                 fuse.effective_scale(),
                 fuse.path,
                 plug.licence
+            ));
+            Some(fuse)
+        } else if let Some(turbo) = options.recipe.as_deref().and_then(parse_turbo_recipe) {
+            // MiniMax-H3 Turbo LoRA (the MiniMax-H3-Turbo-Lora Space): base
+            // MiniMax-H3 + one adapter folded into the bf16 weights here, before
+            // any quantization of the linears (`load_linear` merges, the block
+            // loader quantizes what it returns).
+            let (turbo, forwards) = turbo.map_err(msg)?;
+            if options.ref2va {
+                return Err(msg(format!(
+                    "recipe {}: the Turbo LoRAs are T2VA / FL2VA (base transformer), not Ref2VA",
+                    turbo.stem()
+                )));
+            }
+            let strength = turbo_strength(
+                options.adapter_strength,
+                std::env::var(TURBO_LORA_STRENGTH_ENV).ok().as_deref(),
+            )
+            .map_err(msg)?;
+            let path = turbo.resolve(root, options.adapter.as_deref()).map_err(msg)?;
+            let fuse = super::lora::H3LoraFuse::open_turbo(&map, &path, turbo, strength)?;
+            crate::wan::log::info(format_args!(
+                "h3 {}: fuse {} pairs rank={} alpha={} multiplier={} strength={strength} forwards={forwards} ({}; {} @ {}; licence {})",
+                turbo.stem(),
+                fuse.pairs_total,
+                fuse.rank,
+                turbo.alpha().map_or("rank".to_owned(), |a| a.to_string()),
+                fuse.effective_scale(),
+                fuse.path,
+                turbo.hub_repo(),
+                &turbo.hub_revision()[..7],
+                turbo.licence()
             ));
             Some(fuse)
         } else {
@@ -1275,6 +1420,21 @@ impl H3Pipeline {
                     .peak()
                 })
                 .map_err(msg)?;
+            // The DiT's working set when its blocks stream from host memory.
+            let streamed_need = H3Geometry::default_16x9(5)
+                .map(|g| {
+                    fastvideo_models::h3::memory::plan(
+                        &g,
+                        fastvideo_models::h3::memory::H3PlanOptions {
+                            placement: fastvideo_models::h3::memory::H3Placement::STREAMED,
+                            gate: with_gate,
+                            ..Default::default()
+                        },
+                    )
+                    .peak()
+                })
+                .map_err(msg)?;
+            let dit_policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
             let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
             let (load, why) = match (options.i2v_encoder, lm) {
                 (I2vEncoderChoice::Stream, _) => (false, "configured".to_owned()),
@@ -1299,6 +1459,33 @@ impl H3Pipeline {
                             gib(need)
                         ),
                     ),
+                    // The DiT streams with or without the tower (e.g. the
+                    // upsampler sidecar holds 11 GB of a 96 GB card): the
+                    // tower is 2 GiB beside the streamed plan, while
+                    // streaming it re-reads the vision tower and the whole
+                    // language model (~26 GB FP8) from the volume for every
+                    // image-conditioned build (every anchored director
+                    // chunk; gpu-check-2026-10-13: 160-214 s chunks).
+                    Some(f)
+                        if i2v_tower_beside_streamed_dit(
+                            dit_policy,
+                            f,
+                            need,
+                            streamed_need,
+                        ) =>
+                    {
+                        (
+                            true,
+                            format!(
+                                "the DiT streams either way ({:.1} GiB free < the resident plan {:.1} GiB): {:.1} GiB free covers the vision tower ({:.1} GiB) and the streamed plan ({:.1} GiB)",
+                                gib(f),
+                                gib(need),
+                                gib(f),
+                                gib(I2V_VISION_RESERVE_BYTES),
+                                gib(streamed_need)
+                            ),
+                        )
+                    }
                     Some(f) => (
                         false,
                         format!(
@@ -1377,7 +1564,7 @@ impl H3Pipeline {
         )?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = booking.track(
+        let mut model = booking.track(
             crate::wan::ledger::DIT_NONLINEAR,
             || match &dit_tree {
                 Some(tree) => {
@@ -1410,6 +1597,10 @@ impl H3Pipeline {
                 ));
             }
             model.enable_teacache(state)?;
+        }
+        if let Some(ck) = &vdn_ckpt {
+            let branch = WeightMap::open_files(std::slice::from_ref(&ck.branch))?;
+            model.attach_vdn(&branch)?;
         }
         if let Some(fuse) = lora.as_ref() {
             fuse.finish()?;
@@ -1475,6 +1666,7 @@ impl H3Pipeline {
             i2v_stream: false,
             load_timings,
             booking: std::sync::Mutex::new(booking),
+            vdn: vdn_ckpt.map(|c| c.transform),
         })
     }
 
@@ -1998,7 +2190,13 @@ impl H3Pipeline {
                 Some(policy)
             }
         };
-        let mode = if let Some(ref policy) = sol_policy {
+        let vdn_plan = match &self.vdn {
+            Some(t) => Some(super::vdn::VdnPlan::new(&layout.layout, t)?),
+            None => None,
+        };
+        let mode = if let Some(plan) = vdn_plan.as_ref() {
+            AttnMode::Vdn(plan)
+        } else if let Some(ref policy) = sol_policy {
             match vsa.as_ref() {
                 Some(vsa) if sol_dense_vsa => AttnMode::SolVsa { policy, vsa },
                 _ => AttnMode::Sol(policy),
@@ -3080,6 +3278,31 @@ mod tests {
         let last = scheduler_step(&schedule.video, 7, &xt, &vt).unwrap();
         let sigma = 1.0f32 - schedule.video.timesteps[7];
         assert!((last.host_cow().unwrap()[0] - (0.5 + sigma * 1.0)).abs() < 1e-6);
+    }
+
+    /// gpu-check-2026-10-13: beside the 11 GB upsampler sidecar the turbo
+    /// load saw 60.6 GiB free against a 64.6 GiB resident plan, so the DiT
+    /// streamed and the vision tower was streamed too (the language model
+    /// re-read from the volume per anchored chunk). The DiT streams either
+    /// way there, so the tower stays resident; a forced-resident DiT or a
+    /// card without room for the streamed plan keeps streaming it.
+    #[test]
+    fn the_vision_tower_stays_resident_when_the_dit_streams_anyway() {
+        use fastvideo_models::h3::memory::{plan, H3PlanOptions, H3Placement};
+        const GIB: u64 = 1 << 30;
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let resident = plan(&g, H3PlanOptions { gate: true, ..Default::default() }).peak();
+        let streamed = plan(&g, H3PlanOptions { placement: H3Placement::STREAMED, gate: true, ..Default::default() }).peak();
+        assert!(streamed + 4 * GIB < 60 * GIB, "streamed plan {} GiB", streamed / GIB);
+        let free = 60 * GIB + 6 * GIB / 10;
+        assert!(free < resident, "the case of the check: {} vs {} GiB", free / GIB, resident / GIB);
+        assert!(super::i2v_tower_beside_streamed_dit(DitOffload::Auto, free, resident, streamed));
+        assert!(super::i2v_tower_beside_streamed_dit(DitOffload::Streamed, free, resident, streamed));
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Resident, free, resident, streamed), "a resident DiT needs the room");
+        // Loading the tower would push a fitting DiT out of residency: no.
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Auto, resident + GIB, resident, streamed));
+        // Not even the streamed plan beside the tower: no.
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Auto, streamed + GIB, resident, streamed));
     }
 
     #[test]

@@ -1,0 +1,4 @@
+00:38:56 [r2-fetch] 1 tree(s) to fetch, 4.61 GB in 44 GETs of up to 2 x 64 MiB, concurrency 64, 224 CPUs; 0 present
+00:39:01 [r2-fetch] r2 4.6/4.6 GB, 918 MB/s, eta 0s, trees 0/1 (now 919 MB/s)
+00:39:02 [r2-fetch] tree vdn-h3-stage-b-2000: ready at 2ce18deb1d1c6b115d6bb3732f3750fdbac95173 (4.61 GB, 11 files, 6s since start)
+00:39:02 [r2-fetch] weights ready: 1 tree(s), 4.61 GB fetched in 6.3s (735 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 0

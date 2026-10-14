@@ -1,0 +1,10 @@
+fetch	0	12
+kernels	0	9
+vdn-setup	0	42
+ours-text	0	499
+upstream	0	427
+ours-inj	0	255
+compare-dumps-inj	0	0
+av-psnr-inj	0	81
+time-vdn-480	0	391
+time-vdn-768	0	493

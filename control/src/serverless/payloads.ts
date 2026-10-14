@@ -7,7 +7,7 @@ import { CUDA_VERSIONS } from "../enums";
 // references, never values.
 import { imageIdentEnv, SECRET_ENV_REFS } from "../cluster/payloads";
 import type { EndpointSpec } from "./spec";
-import { SLS_R2_SH } from "./weights";
+import { SLS_HUB_SH, SLS_R2_SH } from "./weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "../upsampler";
 
@@ -32,6 +32,11 @@ exec /opt/fastvideo-rs/bin/fv-serve`;
 /** The start of a weights_source r2 worker (bash: the fetch, then SLS_BOOT's config handling and fv-serve). */
 export const SLS_R2_BOOT = SLS_BOOT.replace(`mkdir -p /fvstate\n${UPSAMPLER_START_SH}`, `mkdir -p /fvstate\n${UPSAMPLER_START_SH}${SLS_R2_SH}`);
 const isR2 = (spec: EndpointSpec) => spec.weights_source === "r2" && spec.compute === "GPU";
+/** The start of a weights_source hub worker (bash: the Hub download and its checks, then SLS_BOOT's config handling and fv-serve). */
+export const SLS_HUB_BOOT = SLS_BOOT.replace(`mkdir -p /fvstate\n${UPSAMPLER_START_SH}`, `mkdir -p /fvstate\n${UPSAMPLER_START_SH}${SLS_HUB_SH}`);
+const isHub = (spec: EndpointSpec) => spec.weights_source === "hub" && spec.compute === "GPU";
+/** A worker that downloads its weights at boot (r2 or hub): its own bash start, whatever the config. */
+const bashBoot = (spec: EndpointSpec) => (isR2(spec) ? SLS_R2_BOOT : isHub(spec) ? SLS_HUB_BOOT : null);
 
 function b64utf8(s: string): string {
   const u = new TextEncoder().encode(s);
@@ -40,8 +45,8 @@ function b64utf8(s: string): string {
   return btoa(bin);
 }
 
-/** The workers' env: secret references, the image's identity, the serve mode, weights_source r2's (`weights`:
- * serverless/weights.ts slsWeightsEnv), the spec's env last. */
+/** The workers' env: secret references, the image's identity, the serve mode, weights_source r2's or hub's (`weights`:
+ * serverless/weights.ts slsWeightsEnv / slsHubEnv), the spec's env last. */
 export function workerEnv(spec: EndpointSpec, image: string, weights: Record<string, string> = {}): Record<string, string> {
   const e: Record<string, string> = {
     ...SECRET_ENV_REFS,
@@ -59,13 +64,15 @@ export function workerEnv(spec: EndpointSpec, image: string, weights: Record<str
   if (spec.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(spec.config_toml);
   if (spec.mode === "lb") Object.assign(e, { PORT: "8000", PORT_HEALTH: "8000", FV_WORKERS_MAX: String(Math.max(1, spec.workers_max)) });
   // weights_source r2's env, and upsampler_local's (the sidecar's switch and its fetch, any weights source).
-  if (isR2(spec) || (spec.upsampler_local && spec.compute === "GPU")) Object.assign(e, weights);
+  if (isR2(spec) || isHub(spec) || (spec.upsampler_local && spec.compute === "GPU")) Object.assign(e, weights);
   return { ...e, ...(spec.env || {}) };
 }
 
 // Without a config (and without r2) the image's entrypoint (fv-entry) runs, which starts the upsampler sidecar itself.
-const bootFields = (spec: EndpointSpec) =>
-  isR2(spec) ? { dockerEntrypoint: ["bash", "-c", SLS_R2_BOOT], dockerStartCmd: [] as string[] } : spec.config || spec.config_toml ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : {};
+const bootFields = (spec: EndpointSpec) => {
+  const bash = bashBoot(spec);
+  return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : spec.config || spec.config_toml ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : {};
+};
 
 /** REST v1 POST /templates (queue endpoints). */
 export function templateCreatePayload(spec: EndpointSpec, image: string, name: string, weights: Record<string, string> = {}) {
@@ -84,8 +91,8 @@ export function templateCreatePayload(spec: EndpointSpec, image: string, name: s
 /** REST v1 PATCH /templates/<id>: image, env, start and disk (a rolling release of the endpoint's workers). */
 export function templateUpdatePayload(spec: EndpointSpec, image: string, weights: Record<string, string> = {}) {
   const { name: _n, isServerless: _s, category: _c, readme: _r, ...rest } = templateCreatePayload(spec, image, "", weights);
-  // Without a config (and without r2) the template goes back to the image's own entrypoint.
-  return { ...rest, ...(spec.config || spec.config_toml || isR2(spec) ? {} : { dockerEntrypoint: [], dockerStartCmd: [] }) };
+  // Without a config (and without r2 / hub) the template goes back to the image's own entrypoint.
+  return { ...rest, ...(spec.config || spec.config_toml || bashBoot(spec) ? {} : { dockerEntrypoint: [], dockerStartCmd: [] }) };
 }
 
 /** The scaling and placement fields REST v1 takes on create and PATCH. */
@@ -159,7 +166,8 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
  * and the image's entrypoint (fv-entry) knows FV_CONFIG but not FV_WORKER_TOML_B64. A load balancer's config
  * file rides v2's `args` instead (`--config <path>` to fv-entry). */
 export function v2TemplateBoot(spec: EndpointSpec) {
-  if (isR2(spec)) return { dockerEntrypoint: ["bash", "-c", SLS_R2_BOOT], dockerStartCmd: [] as string[] };
+  const bash = bashBoot(spec);
+  if (bash) return { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] };
   const boot = spec.mode === "queue" ? !!(spec.config || spec.config_toml) : !!spec.config_toml;
   return boot ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : null;
 }

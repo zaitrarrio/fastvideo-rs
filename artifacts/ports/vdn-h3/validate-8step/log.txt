@@ -1,0 +1,42 @@
+b.tgz: OK
+downloading uv 0.13.0 x86_64-unknown-linux-gnu
+installing to /opt/uvbin
+  uv
+  uvx
+everything's installed!
+Downloading cpython-3.12.15-linux-x86_64-gnu (download) (32.7MiB)
+ Downloaded cpython-3.12.15-linux-x86_64-gnu (download)
+Installed Python 3.12.15 in 823ms
+ + cpython-3.12.15-linux-x86_64-gnu (python3.12)
+warning: `/root/.local/bin` is not on your PATH. To use installed Python executables, run `export PATH="/root/.local/bin:$PATH"` or `uv python update-shell`.
+2026-10-14T02:37:44Z start: parity 480x832x124 8 steps seed 1024; weights /workspace/weights
+2026-10-14T02:37:44Z begin vdn-setup
+2026-10-14T02:37:44Z begin fetch
+2026-10-14T02:37:56Z end fetch rc=0 12s
+2026-10-14T02:37:56Z VDN checkpoint: ours /fvw/vdn-h3-dmd-250-turbo/stage-dmd-step-250 (shared /fvw/vdn-h3-stage-b-2000/stage-b-step-2000), reference /fvw/vdn8/stage-dmd-step-250, recipe vdn-h3-8step
+2026-10-14T02:37:56Z begin kernels
+2026-10-14T02:37:56Z skip fetch-v2
+2026-10-14T02:38:05Z end kernels rc=0 9s
+2026-10-14T02:38:05Z begin ours-text
+2026-10-14T02:38:26Z end vdn-setup rc=0 42s
+2026-10-14T02:46:24Z end ours-text rc=0 499s
+2026-10-14T02:46:24Z begin upstream
+2026-10-14T02:53:31Z end upstream rc=0 427s
+2026-10-14T02:53:31Z begin ours-inj
+2026-10-14T02:57:46Z end ours-inj rc=0 255s
+2026-10-14T02:57:46Z begin compare-dumps-inj
+2026-10-14T02:57:46Z end compare-dumps-inj rc=0 0s
+2026-10-14T02:57:46Z begin av-psnr-inj
+2026-10-14T02:59:07Z end av-psnr-inj rc=0 81s
+2026-10-14T02:59:07Z begin time-vdn-480
+2026-10-14T03:05:38Z end time-vdn-480 rc=0 391s
+2026-10-14T03:05:38Z skip time-turbo-480
+2026-10-14T03:05:38Z begin time-vdn-768
+2026-10-14T03:13:51Z end time-vdn-768 rc=0 493s
+2026-10-14T03:13:51Z skip time-turbo-768
+2026-10-14T03:13:51Z skip time-v2-480
+2026-10-14T03:13:51Z skip time-v2-768
+2026-10-14T03:13:51Z skip time-vdn-768-long
+2026-10-14T03:13:51Z skip time-vdn-480-long
+2026-10-14T03:13:51Z skip sample-vdn-50
+2026-10-14T03:13:52Z end: 0 step(s) failed

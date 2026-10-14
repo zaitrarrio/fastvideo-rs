@@ -32,6 +32,16 @@ export const RUNPOD_DATA_CENTERS = [
   "EU-RO-1", "CA-MTL-1", "EU-SE-1", "US-IL-1", "EUR-IS-1", "EU-CZ-1", "US-TX-3", "EUR-IS-2", "US-KS-2", "US-GA-2", "US-WA-1", "US-TX-1", "CA-MTL-3", "EU-NL-1", "US-TX-4",
   "US-CA-2", "US-NC-1", "OC-AU-1", "US-DE-1", "EUR-IS-3", "CA-MTL-2", "AP-JP-1", "EUR-NO-1", "EU-FR-1", "US-KS-3", "US-GA-1", "AP-IN-1", "US-MD-1", "US-MO-1", "US-MO-2",
 ] as const;
+/** A pod's data centre list may end with "any": no dataCenterIds, Runpod places it (only without a weights volume). */
+export const DC_ANY = "any";
+/** The data centres a pod without a weights volume may be placed in (pool / launch data_centers): every Runpod one, or "any". */
+export const RUNPOD_DC_CHOICES = [...RUNPOD_DATA_CENTERS, DC_ANY] as const;
+/** A Runpod pod that mounts no weights volume, so it may run in any data centre: a GPU pod with weights_source r2, hub
+ * or none (the volume off), a CPU pod with the volume off. */
+export function noVolumePod(x: { compute?: string; variant?: string; weights_source?: string; volume?: boolean }): boolean {
+  const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
+  return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "hub" || x.weights_source === "none") && x.volume !== true;
+}
 /** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/schemas/dynamic. */
 export const RUNPOD_GPU_TYPES = [
   "AMD Instinct MI300X OAM", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-40GB", "NVIDIA A100-SXM4-80GB", "NVIDIA A40", "NVIDIA B200", "NVIDIA B300 SXM6 AC", "NVIDIA B300 SXM6 AC MIG 1g.34gb",
@@ -92,6 +102,7 @@ export const RESERVED_KEYS = new Set([
   "FV_WEIGHTS_SOURCE",
   "FV_WEIGHTS_TREES_B64",
   "FV_SCRIPTS_URL",
+  "FV_HUB_DISK_GB",
   "FV_ENDPOINT_REPORT_URL",
   "FV_ENDPOINT_REPORT_TOKEN",
   "FV_BACKSTOP_API",
@@ -102,7 +113,7 @@ export const RESERVED_KEYS = new Set([
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 
 /** The pool presets' ids (cluster/spec.ts POOL_PRESETS; test/unit/config-validation.test.ts checks they agree). */
-export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fastwan21", "sfwan", "longlive"] as const;
+export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "vdn-h3", "vdn-h3-8step", "fastwan21", "sfwan", "longlive"] as const;
 /** A serverless endpoint's presets: the pool presets plus `cpu` (the fake engine on CPU workers, for tests); serverless/presets.ts. */
 export const SLS_PRESET_IDS = [...POOL_PRESET_IDS, "cpu"] as const;
 

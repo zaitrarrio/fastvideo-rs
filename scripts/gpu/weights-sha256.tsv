@@ -32,6 +32,9 @@
 #   fasth3-trim-8step, fasth3-trim-8step-nvfp4  the Hub LFS SHA-256 of every LFS file at the pinned revisions
 #                      (weights-revisions.tsv; listed 2026-10-13 from /api/models/<repo>/tree/<rev>), which
 #                      r2-weights.py publish-hub checked each upload against.
+#   vdn-h3-stage-b-2000  the Hub LFS SHA-256 of the two LFS files of OpenVDN/vdn-minimax-h3 @ 2ce18deb (Hub listing
+#                      2026-10-13), which r2-weights.py publish-hub checked each upload against.
+#   vdn-h3-dmd-250-turbo  the Hub LFS SHA-256 of the turbo adapter, same listing and revision.
 h3-ref2va	LICENSE	17604	sha256:59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44
 h3-ref2va	README.md	38406	sha256:f0116a90332496bdfcc827320c603a26b849c73bf804f2674d03682fbbd2334a
 h3-ref2va	model_index.json	2936	sha256:5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2
@@ -376,8 +379,24 @@ fasth3-trim-8step	transformer/diffusion_pytorch_model-00008-of-00008.safetensors
 fasth3-trim-8step	vae/diffusion_pytorch_model.safetensors	4225603880	sha256:73fc5a61caeba438633eb8f8efd3a57f4915adfa46731a1c991312c724a3b5cc
 fasth3-trim-8step	vae/minimax_h3_video_vae_int8_convrot.safetensors	2137493384	sha256:f11f8b9b96c9dd22b36bc6c18464b6929c207d247e6d865d90fe31588e58e7e2
 fasth3-trim-8step-nvfp4	diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors	11894623166	sha256:748b2bcc9c4b7bf7b23406987b42d4ac40362070c164cf11092482be6a863455
+vdn-h3-stage-b-2000	stage-b-step-2000/adapters/default/adapter_model.safetensors	334026912	sha256:58558fef506f88bb41649242de9b9b3a365da806b51b2e96afbbe1625222058a
+vdn-h3-stage-b-2000	stage-b-step-2000/linear_branch/model.safetensors	4279428112	sha256:dec6981c7874f5b3bc92d1a02e256b673a3b3499dc1a124714bb3b19da602855
+vdn-h3-dmd-250-turbo	stage-dmd-step-250/adapters/turbo/adapter_model.safetensors	851452696	sha256:24fc93c82fe84dc45d0627f4e72c637bc387d282ba18f60ed3b7f8c81089392c
 qwen3-4b-instruct-gguf	Qwen3-4B-Instruct-2507-Q8_0.gguf	4280403552	sha256:5ccfe13370064a633cd3344331d7067af817ca97c4a4b045c4020ab92070e943
 qwen3-4b-instruct-gguf	LICENSE	11343	sha256:832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e
 qwen3-4b-instruct-gguf	provenance.json	1718	sha256:cb79523c160e669fb0abb7e47436591c244c306b753d213537d52da870dd790b
 qwen3-vl-4b-instruct-gguf	Qwen3VL-4B-Instruct-Q8_0.gguf	4280406144	sha256:054721f478bc5fa6beffb7f38eae575d45298f88cbb8d2f83ef675a727863eb1
 qwen3-vl-4b-instruct-gguf	mmproj-Qwen3VL-4B-Instruct-F16.gguf	836180256	sha256:256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331
+# h3-turbo-loras/*, auxiliary/ncii-light-guard: Hub LFS SHA-256 at the pinned revisions (safetensors, tokenizer.json);
+# the small files hashed from the Hub at the same revisions on 2026-10-14 (git blob SHA-1 matched by publish-hub).
+h3-turbo-loras/larry	README.md	7448	sha256:0445dc4967a9ecf6ac5c8e37b4c86b837021d99058bc5af68f188b1d66b62b65
+h3-turbo-loras/larry	minimax_h3_turbo_4step_ema_ckpt850.safetensors	779849816	sha256:5a6eeba171cf183020a4ad48774bb2968f29f8168afd6ec17a04987f3528b4ea
+h3-turbo-loras/lightx2v	README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-turbo-loras/lightx2v	minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors	1383677808	sha256:c3d4a2cf618efea71b9e21a4baaa12d412f1eb6c2b6f86efacaf0ebb6814b689
+auxiliary/ncii-light-guard	README.md	8105	sha256:ca84f41bbd3f15e3cf74e8dc487184f67a95cfb95f93f04389b4d483504bfde3
+auxiliary/ncii-light-guard	config.json	1656	sha256:f5f502df0fcb01fe450c02ab3652e858071ac07fb5ff64da771fe6833132e2f8
+auxiliary/ncii-light-guard	model.safetensors	536225696	sha256:d5d7ca0d96cd5215cceb0dc2acff4aeb79a862ea9eec2f4cc0407d4c215c49b0
+auxiliary/ncii-light-guard	tokenizer.json	33385105	sha256:ceeb59cb0d50ec7e025bda69a115d3315090bf0d75c91774e73b43767e4c9202
+auxiliary/ncii-light-guard	tokenizer_config.json	839	sha256:2dd3876e70d1e247b653b345f4b145c77d86500da756dec9f47b23c3649fbeb0
+h3-turbo-loras/lightx2v-v0.1	README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-turbo-loras/lightx2v-v0.1	minimax_h3_fl2v_turbo_4step_v0.1.safetensors	1383677888	sha256:5ff4a12c8b4599fec716e1b15a45e504e0d1129111896bdcde5ac4a15e395b29

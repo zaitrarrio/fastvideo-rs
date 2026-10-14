@@ -43,12 +43,14 @@
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
-//! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
+//! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DECK_SIZE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
+//! | `FV_UPSAMPLER_LOCAL` (`0` \| `1`) | `upsampler.local` (the LLM shares this GPU; unset: a loopback `base_url` is local). Unset `timeout_ms` / `hedge` / `deck_size` of a local server default to 60000 / off / 2 |
 //! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
 //! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
 //! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS`, `FV_OUTPUTS_RTMPS_CA_FILE` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms`, `outputs.rtmps_ca_file` (extra CAs for RTMPS, PEM) |
 //! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
+//! | `FV_MODERATION_NCII` (`off` \| `keyframe` \| `all`), `FV_MODERATION_NCII_DIR`, `FV_MODERATION_NCII_THRESHOLD` | `[moderation]` (the NCII prompt guard; docs/ports/h3-turbo-loras.md) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -674,10 +676,19 @@ pub struct UpsamplerCfg {
     /// The key itself (local development only; normally from
     /// `api_key_env`). Never printed.
     pub api_key: Secret,
-    /// One call, every hedged attempt included (default 10000).
-    pub timeout_ms: u64,
-    /// Two concurrent attempts per call, first success wins (default on).
-    pub hedge: bool,
+    /// One call, every hedged attempt included (default 10000; 60000 for a
+    /// [`local`](Self::local) server). Read it with [`Self::timeout_ms`].
+    pub timeout_ms: Option<u64>,
+    /// Two concurrent attempts per call, first success wins (default on;
+    /// off for a local server). Read it with [`Self::hedge`].
+    pub hedge: Option<bool>,
+    /// The LLM runs next to fv-serve on the same GPU (the llama-server
+    /// sidecar, docs/serve/upsampler-local.md; `FV_UPSAMPLER_LOCAL`).
+    /// Unset: a loopback `base_url` (127.0.0.0/8, ::1, localhost) is local.
+    /// A local server decodes 2-3x slower while a chunk denoises
+    /// (docs/serve/e2e/gpu-check-2026-10-13.md), so its unset `timeout_ms`,
+    /// `hedge` and `deck_size` default to 60000, off and 2.
+    pub local: Option<bool>,
     /// Director: prior segments the LLM sees when `configure.memory` is
     /// absent (default 12, 1..50).
     pub memory: u32,
@@ -691,8 +702,9 @@ pub struct UpsamplerCfg {
     /// Director: the LLM's context in tokens (default 28000: a local
     /// Qwen3-4B / Qwen3-VL-4B at 32k, with room for the answer).
     pub context_tokens: usize,
-    /// Director: segments planned ahead (fal's `prompt_deck_size`, default 6).
-    pub deck_size: usize,
+    /// Director: segments planned ahead (fal's `prompt_deck_size`, default
+    /// 6; 2 for a local server). Read it with [`Self::deck_size`].
+    pub deck_size: Option<usize>,
     /// The LLM is a vision model (Qwen3-VL behind llama-server `--mmproj`):
     /// the director sends the first frame and end frames as `image_url`
     /// parts (`FV_UPSAMPLER_VISION`).
@@ -721,13 +733,14 @@ impl Default for UpsamplerCfg {
             model: String::new(),
             api_key_env: "FV_UPSAMPLER_API_KEY".into(),
             api_key: Secret::default(),
-            timeout_ms: 10_000,
-            hedge: true,
+            timeout_ms: None,
+            hedge: None,
+            local: None,
             memory: 12,
             default_on: false,
             max_chars: MaxCharsCfg::default(),
             context_tokens: fastvideo_upsampler::director::DEFAULT_CONTEXT_TOKENS,
-            deck_size: 6,
+            deck_size: None,
             vision: false,
             tokenize: true,
             tokenizers: TokenizersCfg::default(),
@@ -756,21 +769,58 @@ impl Default for MaxCharsCfg {
     }
 }
 
+/// `[upsampler]` defaults for an LLM elsewhere / a local sidecar on this GPU.
+pub const UPSAMPLER_TIMEOUT_MS: u64 = 10_000;
+pub const UPSAMPLER_LOCAL_TIMEOUT_MS: u64 = 60_000;
+pub const UPSAMPLER_DECK_SIZE: usize = 6;
+pub const UPSAMPLER_LOCAL_DECK_SIZE: usize = 2;
+
 impl UpsamplerCfg {
+    /// Whether the LLM shares this host's GPU: `local`, else a loopback
+    /// `base_url`.
+    pub fn is_local(&self) -> bool {
+        self.local.unwrap_or_else(|| {
+            url::Url::parse(self.base_url.trim()).is_ok_and(|u| match u.host() {
+                Some(url::Host::Ipv4(a)) => a.is_loopback(),
+                Some(url::Host::Ipv6(a)) => a.is_loopback(),
+                Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+                None => false,
+            })
+        })
+    }
+
+    /// `timeout_ms`, else 60000 for a local server (a ~1000-token segment
+    /// at the 32-38 tok/s a local 4B decodes beside a denoising chunk takes
+    /// ~30 s), else 10000.
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms.unwrap_or(if self.is_local() { UPSAMPLER_LOCAL_TIMEOUT_MS } else { UPSAMPLER_TIMEOUT_MS })
+    }
+
+    /// `hedge`, else off for a local server (a hedge doubles its load), else on.
+    pub fn hedge(&self) -> bool {
+        self.hedge.unwrap_or(!self.is_local())
+    }
+
+    /// `deck_size`, else 2 for a local server (every planned segment is an
+    /// LLM call competing with the video model for the GPU), else 6.
+    pub fn deck_size(&self) -> usize {
+        self.deck_size.unwrap_or(if self.is_local() { UPSAMPLER_LOCAL_DECK_SIZE } else { UPSAMPLER_DECK_SIZE })
+    }
+
     /// The service settings (the transport is built from `base_url`,
     /// `model` and the key).
     pub fn settings(&self) -> fastvideo_upsampler::Settings {
         let m = self.max_chars;
         fastvideo_upsampler::Settings {
             model: self.model.clone(),
-            timeout: Duration::from_millis(self.timeout_ms),
-            hedge: self.hedge,
+            timeout: Duration::from_millis(self.timeout_ms()),
+            hedge: self.hedge(),
             memory: self.memory as usize,
             max_chars: fastvideo_upsampler::MaxChars { wan: m.wan, ltx: m.ltx, h3: m.h3, other: m.other },
             max_tokens: fastvideo_upsampler::MaxTokens::default(),
             default_on: self.default_on,
             context_tokens: self.context_tokens,
-            deck_size: self.deck_size,
+            deck_size: self.deck_size(),
             vision: self.vision,
             tokenize: self.tokenize,
         }
@@ -785,8 +835,8 @@ impl UpsamplerCfg {
         if self.model.trim().is_empty() {
             return bad("model is required (FV_UPSAMPLER_MODEL)".into());
         }
-        if !(100..=120_000).contains(&self.timeout_ms) {
-            return bad(format!("timeout_ms must be 100..120000, got {}", self.timeout_ms));
+        if !(100..=120_000).contains(&self.timeout_ms()) {
+            return bad(format!("timeout_ms must be 100..120000, got {}", self.timeout_ms()));
         }
         if !(1..=50).contains(&self.memory) {
             return bad(format!("memory must be 1..50, got {}", self.memory));
@@ -798,8 +848,8 @@ impl UpsamplerCfg {
         if !(4_096..=1_000_000).contains(&self.context_tokens) {
             return bad(format!("context_tokens must be 4096..1000000, got {}", self.context_tokens));
         }
-        if !(1..=12).contains(&self.deck_size) {
-            return bad(format!("deck_size must be 1..12, got {}", self.deck_size));
+        if !(1..=12).contains(&self.deck_size()) {
+            return bad(format!("deck_size must be 1..12, got {}", self.deck_size()));
         }
         Ok(())
     }
@@ -997,6 +1047,62 @@ impl Default for LogCfg {
     }
 }
 
+/// `[moderation]`: optional prompt admission checks (design §10 R8;
+/// docs/ports/h3-turbo-loras.md "NCII guard"). Off by default.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModerationCfg {
+    /// The NCII prompt guard (`hfmlsoc/ncii-light-guard-v01`, MIT, CPU):
+    /// `off` (default), `keyframe` (requests with an image or video input,
+    /// as the MiniMax-H3-Turbo-Lora Space runs it) or `all`.
+    pub ncii: String,
+    /// Its directory (`config.json`, `model.safetensors`, `tokenizer.json`).
+    /// Default `$FV_WEIGHTS/auxiliary/ncii-light-guard`
+    /// (`/workspace/weights/...`).
+    pub ncii_dir: Option<PathBuf>,
+    /// Refuse when the `ncii` probability reaches this (default 0.5: the
+    /// pipeline's top label, what the Space refuses on).
+    pub ncii_threshold: f32,
+    /// Prompts classified at once (CPU threads are shared with the engine's
+    /// host work; default 2).
+    pub ncii_concurrency: usize,
+}
+
+impl Default for ModerationCfg {
+    fn default() -> Self {
+        Self { ncii: "off".into(), ncii_dir: None, ncii_threshold: 0.5, ncii_concurrency: 2 }
+    }
+}
+
+impl ModerationCfg {
+    pub fn scope(&self) -> Result<fastvideo_protocol::ModerationScope, ConfigError> {
+        fastvideo_protocol::ModerationScope::parse(&self.ncii)
+            .map_err(|e| ConfigError::Invalid(format!("[moderation] ncii: {e}")))
+    }
+
+    /// `ncii_dir`, else `$FV_WEIGHTS/auxiliary/ncii-light-guard`.
+    pub fn ncii_dir(&self, env: &dyn Env) -> PathBuf {
+        self.ncii_dir.clone().unwrap_or_else(|| {
+            PathBuf::from(env.var("FV_WEIGHTS").unwrap_or_else(|| "/workspace/weights".into()))
+                .join(fastvideo_models::ncii::NCII_TREE)
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.scope()?;
+        if !(self.ncii_threshold > 0.0 && self.ncii_threshold <= 1.0) {
+            return Err(ConfigError::Invalid(format!(
+                "[moderation] ncii_threshold = {}: expected (0, 1]",
+                self.ncii_threshold
+            )));
+        }
+        if self.ncii_concurrency == 0 {
+            return Err(ConfigError::Invalid("[moderation] ncii_concurrency must be 1 or more".into()));
+        }
+        Ok(())
+    }
+}
+
 /// The whole `serve.toml`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1018,6 +1124,8 @@ pub struct Config {
     pub reactor: ReactorCfg,
     /// `None`: no prompt upsampling.
     pub upsampler: Option<UpsamplerCfg>,
+    /// Prompt admission checks (the NCII guard); off by default.
+    pub moderation: ModerationCfg,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
@@ -1353,6 +1461,17 @@ impl Config {
             self.dispatch.status_s = v;
         }
         self.apply_upsampler_env(env)?;
+        if let Some(v) = env.var("FV_MODERATION_NCII") {
+            self.moderation.ncii = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_MODERATION_NCII_DIR").filter(|v| !v.trim().is_empty()) {
+            self.moderation.ncii_dir = Some(PathBuf::from(v.trim()));
+        }
+        if let Some(v) = env.var("FV_MODERATION_NCII_THRESHOLD") {
+            self.moderation.ncii_threshold = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!("FV_MODERATION_NCII_THRESHOLD={v} is not a number"))
+            })?;
+        }
         if let Some(v) = env.var("FV_LOG_FORMAT") {
             self.log.format = v;
         }
@@ -1376,7 +1495,10 @@ impl Config {
             u.default_on = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
         if let Some(v) = env.var("FV_UPSAMPLER_HEDGE") {
-            u.hedge = matches!(v.trim(), "1" | "true" | "on" | "yes");
+            u.hedge = Some(matches!(v.trim(), "1" | "true" | "on" | "yes"));
+        }
+        if let Some(v) = env.var("FV_UPSAMPLER_LOCAL") {
+            u.local = Some(matches!(v.trim(), "1" | "true" | "on" | "yes"));
         }
         if let Some(v) = env.var("FV_UPSAMPLER_VISION") {
             u.vision = matches!(v.trim(), "1" | "true" | "on" | "yes");
@@ -1385,10 +1507,10 @@ impl Config {
             u.context_tokens = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_CONTEXT_TOKENS={v} is not a number")))?;
         }
         if let Some(v) = env.var("FV_UPSAMPLER_DECK_SIZE") {
-            u.deck_size = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_DECK_SIZE={v} is not a number")))?;
+            u.deck_size = Some(v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_DECK_SIZE={v} is not a number")))?);
         }
         if let Some(v) = env.var("FV_UPSAMPLER_TIMEOUT_MS") {
-            u.timeout_ms = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds")))?;
+            u.timeout_ms = Some(v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds")))?);
         }
         if let Some(v) = env.var("FV_UPSAMPLER_API_KEY_ENV") {
             u.api_key_env = v.trim().to_owned();
@@ -1408,6 +1530,7 @@ impl Config {
         if let Some(u) = &self.upsampler {
             u.validate()?;
         }
+        self.moderation.validate()?;
         if self.server.workers_max == 0 {
             return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
         }

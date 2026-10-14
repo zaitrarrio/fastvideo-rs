@@ -25,6 +25,8 @@
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	3da2ddfe1954d9cda4c05b643dc0f26007a655c5	inferred	hub
 fasth3-trim-8step	FastVideo/FastVideo-FastH3-Trim-8-Step	9edcb6511d5ff8dd1579e8eec8afee77e098b8d8	recorded	hub
 fasth3-trim-8step-nvfp4	FastVideo/FastVideo-FastH3-Trim-Comfy	f66c13dc17391dd4da99242a407918b92bf7d5fc	recorded	hub
+vdn-h3-stage-b-2000	OpenVDN/vdn-minimax-h3	2ce18deb1d1c6b115d6bb3732f3750fdbac95173	recorded	hub
+vdn-h3-dmd-250-turbo	OpenVDN/vdn-minimax-h3	2ce18deb1d1c6b115d6bb3732f3750fdbac95173	recorded	hub
 h3-base	MiniMaxAI/MiniMax-H3	42ed227ee7df40d41602854ae760620d6eb651fe	recorded	hub
 FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	f509e629374cac104e7f62daecce6d1488a3041d	inferred	hub
 upscaler	LBH-123-AI/Minimax_h3_latent_Upscaler	3f941d5d182014dd5c0a5e16330420ee2d4aa0c6	recorded	hub
@@ -67,3 +69,7 @@ wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	5be7df9619b54f4e2667b2755bc6a756
 lingbot-video-moe-30b-a3b	robbyant/lingbot-video-moe-30b-a3b	f2e538f64afe00cc4ae674db2aeb52e2945edfd5	recorded	hub
 cosmos3-super	nvidia/Cosmos3-Super	f543c56225b2e04d0ad141e29655be3a45d9c455	recorded	hub
 qwen3-vl-4b-instruct-gguf	Qwen/Qwen3-VL-4B-Instruct-GGUF	1cd86afb9a95c410a6038ab3b40d8b578c892266	recorded	hub
+h3-turbo-loras/larry	larryvrh/MiniMax-H3-Turbo-Lora	43a74557ac3f6539db8e0f2a959d03feb7a81480	recorded	hub
+h3-turbo-loras/lightx2v	lightx2v/Minimax-h3-Turbo	3ec17a324ced54151364f24f8b5fb6bf7e26414f	recorded	hub
+auxiliary/ncii-light-guard	hfmlsoc/ncii-light-guard-v01	6a44e8b4b608078db164b0c946947922b2b98eab	recorded	hub
+h3-turbo-loras/lightx2v-v0.1	lightx2v/Minimax-h3-Turbo	3ec17a324ced54151364f24f8b5fb6bf7e26414f	recorded	hub

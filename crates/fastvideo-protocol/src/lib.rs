@@ -25,6 +25,7 @@ pub mod error;
 pub mod http;
 pub mod ingest;
 pub mod job;
+pub mod moderation;
 pub mod negotiate;
 pub mod request;
 pub mod stream;
@@ -35,6 +36,7 @@ pub use caps::{
     FLAG_H3_1080P_LONG, H3_1080P_LONG_MAX_S, H3_1080P_MAX_S,
 };
 pub use error::{ApiError, ErrorKind, GapId};
+pub use moderation::{has_visual_input, moderate, moderate_request, ModerationScope, PromptModerator};
 pub use http::{
     BatchProtocol, ErrorCtx, HttpReply, JobView, NormalizeCtx, ReplyBody, SseEvent, SseFollow,
     SseSpec, SubmitEndpoint, UrlSigner, ViewCtx,

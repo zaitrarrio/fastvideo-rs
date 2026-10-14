@@ -173,6 +173,8 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
     stays EU-only (`regions.ts`).
 - **Runpod serverless endpoints**: `weights_source: r2` on the endpoint spec (no volume, any data centre, a
   per-endpoint weights token instead of a cluster's ingest token, a cache check that skips the fetch). See §9.
+  `weights_source: hub` (owner-approved, FlashBoot on) is the R2-free alternative: the same trees from the Hub at
+  the revisions R2 was published from, checked against weights-sha256.tsv (docs/control/serverless.md §1c).
 - **Aux files** (TAE decoders, LPIPS): with r2 they come from R2 as the trees `auxiliary/tae` and `auxiliary/lpips`
   (the same files and bytes as `AUX_FILES`, tested), then each is checked against `AUX_FILES`' SHA-256. A missing or
   different file still comes from its pinned URL (GitHub raw, download.pytorch.org), as with `hub`.
@@ -900,3 +902,46 @@ config), `tokenizer/` and `processor/` are byte-identical to `h3-base`'s (and Fa
 `h3-base/audio_vae` and `h3-base/tokenizer` (`text_weights`). Its **`vae/` is not** H3's (26 decoder blocks, F16,
 `73fc5a61…`; plus Kijai's INT8 convrot file) and is in the Trim tree. Its NVFP4 `text_encoder/` was not downloaded
 (h3-base's encoder serves it, docs/ports/h3-trim.md §3). Neither tree is on the 500 GB EU volume.
+
+## 13. MiniMax-H3 Turbo LoRAs and the NCII guard (2026-10-14, owner approval of 2026-10-13)
+
+Three Hub trees, published with `r2-weights.py publish-hub` from the agent container (2.7 GB in all, streamed Hub →
+R2 at 22-35 MB/s; no local copy), then `verify --deep --record` (every byte re-read). Hash checks at upload: the Hub
+LFS SHA-256 of each safetensors / tokenizer file, the git blob SHA-1 of each small file, and every
+`weights-sha256.tsv` row of the trees. None is on the EU volume; the presets `h3-larry-turbo` / `h3-lightx2v-turbo`
+fetch them from R2 (docs/ports/h3-turbo-loras.md). The v0.1 tree was added the next day the same way, as its own
+tree (add-only, manifest written last, then `verify --deep --record`); the preset `h3-lightx2v-turbo-v01` fetches it.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `h3-turbo-loras/larry` (larryvrh/MiniMax-H3-Turbo-Lora: `minimax_h3_turbo_4step_ema_ckpt850.safetensors`, README) | `43a74557ac3f6539db8e0f2a959d03feb7a81480` | 2 | 779,857,264 | `901f8cf59955cadd8e2a0fa70c366e20e2c811837c627d69671556e16ef0e4e0` |
+| `h3-turbo-loras/lightx2v` (lightx2v/Minimax-h3-Turbo: `minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors`, README) | `3ec17a324ced54151364f24f8b5fb6bf7e26414f` | 2 | 1,383,679,204 | `ffdc68e092e743fe7b87a4e50d02be44b8ecf25ae0b02025d919c3c251de1974` |
+| `h3-turbo-loras/lightx2v-v0.1` (lightx2v/Minimax-h3-Turbo: `minimax_h3_fl2v_turbo_4step_v0.1.safetensors`, README; the file the MiniMax Space folds; owner approval 2026-10-14) | `3ec17a324ced54151364f24f8b5fb6bf7e26414f` | 2 | 1,383,679,284 | `e51cf57fa0fbda4203b635a86bb537080c4dbe3aabcc0320dc9fee332a61c396` |
+| `auxiliary/ncii-light-guard` (hfmlsoc/ncii-light-guard-v01, MIT) | `6a44e8b4b608078db164b0c946947922b2b98eab` | 5 | 569,621,401 | `9118b8cdace81d4c5a59de856a0d2ca7c641158ea9a36d9494594992f42a049b` |
+
+## 14. VDN-H3 stage B (2026-10-13, owner approval of the same day)
+
+One tree, published Hub → R2 from one CPU pod with `scripts/gpu/r2-publish-hub.sh up vdn-h3-stage-b-2000`
+($0.24/hr, ~3 min), then `verify --deep` on the same pod (every byte re-read; 12 s). Logs:
+`artifacts/ports/vdn-h3/publish/`. The approval covers `stage-b-step-2000/` and the small root files only.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `vdn-h3-stage-b-2000` | `2ce18deb1d1c6b115d6bb3732f3750fdbac95173` | 11 | 4,613,679,322 | `7627d20925c384784ef9b1fb49d001255fc919a2d95d9387deeb86f807cd73d1` |
+
+**Shared with h3-base, so not duplicated:** the repository's `h3-base/` is MiniMax-H3: 28 of its 29 files carry the same
+LFS / blob hash as `MiniMaxAI/MiniMax-H3` @ `42ed227` (only the README differs), so the pipeline reads our `h3-base` tree.
+Not on the 500 GB EU volume.
+
+**The 8-step model (owner approval 2026-10-14: the turbo adapter).** `stage-dmd-step-250/`'s linear branch and default
+adapter are byte-identical to stage B's (LFS `dec6981c…`, `58558fef…`), so its tree holds only what differs: the turbo
+LoRA and the stage's small JSON files. Published the same way (`r2-publish-hub.sh up vdn-h3-dmd-250-turbo`, $0.48/hr,
+~3 min, upload checked against the Hub LFS SHA-256 `24fc93c8…`, then `verify --deep`; logs
+`artifacts/ports/vdn-h3/publish-turbo/`); the pod and only its own staged bundle were deleted by hand.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `vdn-h3-dmd-250-turbo` | `2ce18deb1d1c6b115d6bb3732f3750fdbac95173` | 7 | 851,503,008 | `4f8779792f8ddfbb8b05d6dd7cc71809fd055c1e467b11c2832f90c2a5c2abb9` |
+
+The served model reads `vdn-h3-dmd-250-turbo/stage-dmd-step-250` with `vdn-h3-stage-b-2000/stage-b-step-2000` as its
+shared directory (`H3Recipe.vdn_shared`; verify cell `vdn-h3-8step`).

@@ -81,7 +81,8 @@ try {
   // The form says to pick a provider; its fields (and Launch) wait for it.
   assert.equal(await page.$eval(`${SL} [data-ctl][data-path="provider"]`, (e) => e.value), "");
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /Pick a provider/);
-  assert.equal(await page.$(`${SL} .ff-field[data-path="gpu_types"]`), null, "no GPU types before a pick");
+  assert.equal(await page.$(`${SL} [data-instance-table]`), null, "no GPU types (the instance table) before a pick");
+  assert.equal(await page.$(`${SL} .ff-field[data-path="weights_source"]`), null, "no weights before a pick");
   assert.equal(await page.$(`${SL} .ff-field[data-path="provider_gpu"]`), null);
   await page.fill(`${SL} [data-ctl][data-path="name"]`, "lazy-ui");
   await page.waitForSelector(`${SL} .ff-field[data-path="provider"].has-err .cf-err:not([hidden]):text-matches("choose a provider")`);
@@ -153,7 +154,12 @@ try {
   assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), ["GET /api/schemas/dynamic?provider=runpod"], `Runpod asked again: ${reqs}`);
   const upRp = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   assert.ok(upRp.every((x) => x === "runpod"), `Runpod only: ${upRp}`);
-  await page.waitForSelector(`${SL} .ff-field[data-path="gpu_types"]`);
+  // Runpod's fields: the instance table (the GPU pick: no separate GPU types list), the weights (the preset's
+  // default: h3-turbo reads the volume) and the volume's region.
+  await page.waitForSelector(`${SL} [data-instance-table="runpod"] table.it-table`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="gpu_types"]`), null, "the table replaces the GPU types list");
+  assert.equal(await page.textContent(`${SL} [data-ctl][data-path="weights_source"] [aria-checked="true"]`), "volume");
+  await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /GPU types with live \$\/hr and stock/);
   // The validator now runs live (a provider is picked), and Launch turns on.
   assert.ok(reqs.some((r) => r === "POST /api/standalone/validate"), `live validation once picked: ${reqs}`);

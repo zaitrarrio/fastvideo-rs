@@ -50,6 +50,9 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
     const ws = f.get(["weights_source"]);
     const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}${ws && !q.includes("weights_source") ? `&weights_source=${ws}` : ""}`)).spec;
     for (const k of ["variant", "config", "config_toml", "compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "weights_source", "network_volume", "data_centers", "container_disk_gb", "execution_timeout_s"]) f.set([k], d[k], true);
+    // hub turns FlashBoot on (a revival downloads nothing); the owner's approval is never set for you.
+    if (d.weights_source === "hub") f.set(["flashboot"], true, true);
+    else f.set(["weights_download_approved"], undefined, true);
     if (d.compute === "CPU") f.set(["mode"], "queue", true);
   };
   let advanced = false;
@@ -134,17 +137,19 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
               label: "Weights from",
               allowUnset: false,
               onSet: async (v) => {
-                // r2: no volume, any data centre, a container disk sized from the manifests; volume: the EU volume in its DC.
+                // r2 / hub: no volume, any data centre, a container disk sized from the trees (hub: FlashBoot on); volume: the EU volume in its DC.
                 const p = f.get(["preset"]);
                 await takeDefaults(`${p ? `preset=${encodeURIComponent(p)}` : `variant=${encodeURIComponent(f.get(["variant"]) || "")}`}&weights_source=${v}`);
                 draw();
               },
-              help: "volume: the EU weights volume (EU-RO-1 only; H3 + LTX trees). r2: the R2 weights store, fetched onto the container disk at boot (any data centre; skipped when the worker's disk already holds the trees).",
+              help: "volume: the EU weights volume (EU-RO-1 only; H3 + LTX trees). r2: the R2 weights store, fetched onto the container disk at boot (any data centre; skipped when the worker's disk already holds the trees). hub: the Hub at the pinned revisions, downloaded onto the container disk at every cold start and checked before fv-serve starts (any data centre; FlashBoot on; needs the owner's approval).",
             }),
-        f.get(["weights_source"]) === "r2"
+        !cpu && f.get(["weights_source"]) === "hub"
+          ? F(["weights_download_approved"], { label: "Hub download approved", placeholder: "the owner approved the download at every cold start", onSet: () => draw(), help: "Needed for weights_source hub, with fv-control's FV_HUB_DOWNLOADS_APPROVED=1 (CLAUDE.md: large downloads need the owner's approval). No network volume is mounted." })
+          : f.get(["weights_source"]) === "r2"
           ? F(["network_volume"], { label: "R2 cache volume", options: [{ value: null, label: "none (default)" }], allowUnset: false, onSet: () => draw(), help: "Off by default: a per-DC cache volume the owner lists in FV_SLS_R2_CACHE_VOLUMES (JSON tab)." })
           : F(["network_volume"], { label: "Network volume", options: volOpts, allowUnset: false, onSet: () => draw(), help: "EU weights volume bz0ofkfx45 (EU-RO-1, H3 + LTX trees only; CLAUDE.md): GPU presets need it, and it must hold the preset's weight trees. With a volume the workers run in its data centre." }),
-        F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : f.get(["weights_source"]) === "r2" ? "weights_source r2: none = any data centre (the stock per GPU type is shown under Cold start)." : "Any of these (none: any)." }),
+        F(["data_centers"], { label: "Data centres", help: f.get(["network_volume"]) ? "With a volume: its data centre only." : f.get(["weights_source"]) === "r2" || f.get(["weights_source"]) === "hub" ? `weights_source ${f.get(["weights_source"])}: none = any data centre (the stock per GPU type is shown under Cold start).` : "Any of these (none: any)." }),
       ),
       h(
         "div",
@@ -155,7 +160,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
         F(["execution_timeout_s"], { label: "Execution timeout" }),
         F(["scaler_type"], { label: "Scaler", onSet: () => draw() }),
         F(["scaler_value"], { label: f.get(["scaler_type"]) === "REQUEST_COUNT" ? "Jobs per worker" : "Queue delay", unit: f.get(["scaler_type"]) === "REQUEST_COUNT" ? "jobs" : "s" }),
-        F(["flashboot"], { label: "FlashBoot", placeholder: "faster warm starts" }),
+        F(["flashboot"], { label: "FlashBoot", placeholder: "faster warm starts", ...(f.get(["weights_source"]) === "hub" ? { help: "On with weights_source hub: a revival keeps the worker, so it downloads nothing." } : {}) }),
         F(["upsampler_local"], { label: "Prompt upsampler (local)", placeholder: "llama-server sidecar on the GPU", help: "Qwen3-VL-4B-Instruct (vision) in llama-server next to fv-serve on each worker's GPU (see the doc for its GPU memory; its 5.1 GB GGUF from the R2 weights store, any weights source). If it fails, fv-serve starts anyway and upsampling falls back. Default off; GPU only." }),
         F(["container_disk_gb"], { label: "Container disk" }),
         F(["deadline_min"], { label: "Backstop after", unsetLabel: "no backstop", allowUnset: true, placeholder: "none" }),
@@ -231,16 +236,17 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   return f;
 }
 
-/** The outlook as lines: the estimate, the cache state, where the GPU types are in stock (r2, any DC). */
+/** The outlook as lines: the estimate, the cache state, where the GPU types are in stock (r2 / hub, any DC). */
 export function outlookLine(o: any, stock?: { gpu: string; dcs: string[] }[] | null): (HTMLElement | string)[] {
   if (!o) return [];
-  const out: (HTMLElement | string)[] = [h("div", {}, o.weights_source === "r2" ? badge("r2", "good") : badge("volume", "neutral"), " ", o.note)];
-  if (o.weights_source === "r2") out.push(h("div", { class: "muted" }, `cache: ${o.cache.state} (${o.cache.note})`));
+  const fetches = o.weights_source === "r2" || o.weights_source === "hub";
+  const out: (HTMLElement | string)[] = [h("div", {}, o.weights_source === "r2" ? badge("r2", "good") : o.weights_source === "hub" ? badge("hub", "warn") : badge("volume", "neutral"), " ", o.note)];
+  if (fetches) out.push(h("div", { class: "muted" }, `cache: ${o.cache.state} (${o.cache.note})`));
   if (o.last_boot) {
     const b = o.last_boot;
     out.push(h("div", { class: "muted" }, `last boot ${b.worker_id}: cache ${b.cache || "?"}${b.breakdown.fetch_s != null ? `, fetch ${b.breakdown.fetch_s} s` : ""}${b.fetch_mbps ? ` at ${b.fetch_mbps} MB/s` : ""}${b.breakdown.boot_to_serve_s != null ? `, container start to fv-serve ${b.breakdown.boot_to_serve_s} s` : ""}${b.error ? `, error: ${b.error}` : ""}`));
   }
-  if (stock?.length && o.weights_source === "r2") out.push(h("div", { class: "muted" }, "in stock: ", stock.map((s) => `${s.gpu.replace(/^NVIDIA /, "")}: ${s.dcs.length ? s.dcs.join(", ") : "none"}`).join(" · ")));
+  if (stock?.length && fetches) out.push(h("div", { class: "muted" }, "in stock: ", stock.map((s) => `${s.gpu.replace(/^NVIDIA /, "")}: ${s.dcs.length ? s.dcs.join(", ") : "none"}`).join(" · ")));
   return out;
 }
 

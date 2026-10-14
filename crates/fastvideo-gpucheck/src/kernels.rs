@@ -2605,6 +2605,22 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     group(&mut c, "wan_causal_attn", |c| {
         crate::kernels_wan::wan_causal_attn(c.report, &mut c.seed)
     })?;
+    // VDN-H3 (docs/ports/vdn-h3.md): the window flash kernel and every
+    // linear-branch kernel against the host reference, the device branch
+    // against the host branch, and one-layer timings at 480p / 768p 5 s.
+    group(&mut c, "vdn", |c| {
+        let (checks, times) = fastvideo_cudarc::h3::vdn::check::run(c.seed)?;
+        for k in &checks {
+            c.report.check(
+                format!("vdn/{}", k.name),
+                k.pass,
+                json!({"rel_l2": k.rel_l2, "max_abs": k.max_abs, "note": k.note}),
+                json!({"rel_l2_max": k.tol}),
+            )?;
+        }
+        c.report.set("vdn_timings_ms", &times);
+        Ok(())
+    })?;
     // FP8 attention (opt-in, lossy): parity against the bf16 kernels and
     // timing at the H3 768p shapes.
     group(&mut c, "attn_fp8", |c| {
