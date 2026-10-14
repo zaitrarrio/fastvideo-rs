@@ -8,6 +8,7 @@ published through the pod's HTTP proxy). Started by pod-boot.sh.
   (`FV_CALLBACKS_ALLOW_PRIVATE=1`).
 - `GET /hooks`: the recorded deliveries (body base64).
 - `PUT /bundle`: a tar.gz of test files, extracted under /e2e.
+- `GET /file/<absolute path under /e2e>`: the file's bytes (results).
 - `POST /exec` `{"cmd": "..."}`: runs a shell command in the background;
   returns `{"id"}`. `GET /exec/<id>`: `{"done", "rc", "secs", "out"}` (last
   64 KiB of combined output).
@@ -112,6 +113,18 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/hooks":
             with LOCK:
                 return self._send(200, list(HOOKS))
+        if self.path.startswith("/file/"):
+            p = os.path.realpath(self.path[5:])
+            if not p.startswith("/e2e/") or not os.path.isfile(p):
+                return self._send(404, {"error": "not a file under /e2e"})
+            with open(p, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("content-type", "application/octet-stream")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/exec/"):
             with LOCK:
                 j = dict(JOBS.get(self.path[6:], {}))

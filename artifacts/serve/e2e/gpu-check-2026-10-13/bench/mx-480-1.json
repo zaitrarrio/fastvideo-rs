@@ -1,0 +1,54 @@
+{
+  "completed_at": "2026-10-13T23:47:45.36512626Z",
+  "created_at": "2026-10-13T23:47:24.857353242Z",
+  "error": null,
+  "expires_at": "2026-10-14T23:47:24.857353242Z",
+  "fps": 24,
+  "height": 480,
+  "id": "fvjob_682242c5d364406e8b425669ce03ff09",
+  "metrics": {
+    "build_rtf": 2.5139801119354837,
+    "inference_s": 12.988897245,
+    "peak_memory_mb": 29685.6486120224,
+    "queue_s": 0.000901977,
+    "run_s": 20.506871041,
+    "stage_durations": {
+      "audio_decode": 2.954020863,
+      "denoise": 12.988897245,
+      "encode": 0.100852128,
+      "refine": 0.033433987,
+      "text": 0.862751458,
+      "video_decode": 3.503996824
+    }
+  },
+  "model": "fasth3-trim-8step",
+  "notes": [],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 2156790,
+    "fps": 24,
+    "frames": 124,
+    "height": 480,
+    "mime": "video/mp4",
+    "url": "https://u8xmgvj2greb4c-8000.proxy.runpod.net/files/80842c99-0c7b-4059-a42b-1ce13b63b2e0/682242c5d364406e8b425669ce03ff09.mp4?exp=1792021665&sig=f698012323f365287ff271abae5b2c530ef973bf296f043c254521eb5f068e98",
+    "width": 832
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "fasth3-trim-8step-vsa",
+  "resolved_model": "fasth3-trim-8step",
+  "seed": 1024,
+  "started_at": "2026-10-13T23:47:24.858255219Z",
+  "status": "succeeded",
+  "task": "t2v",
+  "tier": null,
+  "width": 832,
+  "gc_tag": "mx-480-1",
+  "gc_wall_s": 20.71
+}

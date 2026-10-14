@@ -1,0 +1,4 @@
+[fv-upsampler] 23:29:06 using /root/w/qwen3-vl-4b-instruct-gguf
+[fv-upsampler] 23:29:06 llama-server on 127.0.0.1:18080: /root/w/qwen3-vl-4b-instruct-gguf/Qwen3VL-4B-Instruct-Q8_0.gguf + vision projector /root/w/qwen3-vl-4b-instruct-gguf/mmproj-Qwen3VL-4B-Instruct-F16.gguf
+[fv-upsampler] 23:29:07 ready in 1.2s (load 1.2 vision on total 1.2)
+[fv-boot] 23:29:07 step upsampler: 1.6s (llama-server 127.0.0.1:18080, qwen3-vl-4b-instruct; load 1.2 vision on total 1.2)
