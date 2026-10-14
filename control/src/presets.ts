@@ -115,6 +115,15 @@ export const POOL_PRESETS: PoolPreset[] = [
     pool: { id: "fasth3-trim", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim.toml"), models: [{ id: "fasth3-trim-8step", family: "h3", recipe: "h3-trim" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
   {
+    id: "vdn-h3",
+    min_vram_gb: 96,
+    title: "VDN-H3 (Video DeltaNet)",
+    description: "VDN-H3 (OpenVDN/vdn-minimax-h3, stage B): MiniMax-H3 with hybrid attention, a chunk-aligned window softmax plus a frame-wise delta-rule linear branch in every block; 50 forwards, no CFG; text-to-video with audio. The 8-step distilled model is not in R2 yet (docs/ports/vdn-h3.md). Served as vdn-h3.",
+    weights: ["vdn-h3-stage-b-2000", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "vdn-h3", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-vdn-h3.toml"), models: [{ id: "vdn-h3", family: "h3", recipe: "vdn-h3-50step" }], max_queued: 16, job_timeout_s: 3600, stale_after_s: 300 },
+  },
+  {
     id: "fastwan21",
     min_vram_gb: 24,
     title: "FastWan 2.1 1.3B",

@@ -51,6 +51,12 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "Ref2VA base: transformer_ref in h3-ref2va (caps.rs ref_weights)",
   },
+  "vdn-h3-50step": {
+    catalog: "vdn-h3",
+    required: ["vdn-h3-stage-b-2000"],
+    prequant: [H3_TEXT_FP8],
+    note: "VDN-H3: h3-base is the config's weights; the linear branch and LoRA in vdn-h3-stage-b-2000/stage-b-step-2000 (caps.rs VDN_H3_TREE / VDN_H3_STAGE, H3Recipe vdn_weights; cudarc h3/pipeline.rs vdn_checkpoint)",
+  },
   "h3-trim": {
     catalog: "fasth3-trim-8step",
     required: ["h3-base"],

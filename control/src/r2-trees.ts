@@ -54,6 +54,7 @@ export const R2_TREES: Record<string, R2Tree> = {
   "sana-video-2b-480p": { rev: "db5f398b13ca086d09a50ce156c20527773841b1", files: 17, bytes: 14002542321, manifest_sha256: "740816ac489e4f93cff57a6217cdf13a532f0e69e278ecb716562e059a0d72f8", source: "hub-via-dir" },
   "sfwan21-1.3b": { rev: "4b44356635ae5e927ca552a220f768022be76004", files: 17, bytes: 28928814212, manifest_sha256: "f57ee6f7fbede993fa9c8ddce4c5a22afbc5bf5bc60c9931eab8ec755e7080b7", source: "hub-via-dir" },
   "upscaler": { rev: "3f941d5d182014dd5c0a5e16330420ee2d4aa0c6", files: 1, bytes: 690592992, manifest_sha256: "08d07f927851008e25e8f9f86b9b8c53596819873a5f09e0916deac9af29e459", source: "hub-via-dir" },
+  "vdn-h3-stage-b-2000": { rev: "2ce18deb1d1c6b115d6bb3732f3750fdbac95173", files: 11, bytes: 4613679322, manifest_sha256: "7627d20925c384784ef9b1fb49d001255fc919a2d95d9387deeb86f807cd73d1", source: "hub" },
   "wan21-t2v-1.3b": { rev: "0fad780a534b6463e45facd96134c9f345acfa5b", files: 19, bytes: 28928887859, manifest_sha256: "3523a9a606c747e1bd42b5253e000097b66a4f6a02bf0b32d56cab9374678be5", source: "hub-via-dir" },
   "wan21-t2v-14b": { rev: "38ec498cb3208fb688890f8cc7e94ede2cbd7f68", files: 29, bytes: 80406918983, manifest_sha256: "fd40c2c3b3a80a5e2999925f45fa88071b8e8ebb4a40522ffa462d9f358e3be4", source: "hub-via-dir" },
   "wan22-t2v-a14b": { rev: "5be7df9619b54f4e2667b2755bc6a756675b5cd7", files: 41, bytes: 126199274206, manifest_sha256: "9b5bd6bd601c03a6b5708da95a15933ae4a40010ef649d1fce21d0cb7e20bfc9", source: "hub-via-dir" },
