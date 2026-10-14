@@ -998,6 +998,10 @@ pub struct H3Pipeline {
     /// docs/ports/fasth3-sparse-fp4-attn.md): only for a ModelOpt NVFP4 DiT on
     /// sm_120 (the default there), decided at load.
     vsa_fp4: bool,
+    /// `FASTVIDEO_H3_GRAPHS`: the CUDA graphs of the denoise steps, by
+    /// request shape (built on first use).
+    #[cfg(feature = "cuda")]
+    graphs: std::sync::Mutex<Option<super::step_graph::H3Graphs>>,
 }
 
 /// `FASTVIDEO_H3_VSA_FP4` (docs/ports/fasth3-sparse-fp4-attn.md): the VSA
@@ -1991,7 +1995,54 @@ impl H3Pipeline {
             booking: std::sync::Mutex::new(booking),
             vdn: vdn_ckpt.map(|c| c.transform),
             vsa_fp4: vsa_fp4_choice(modelopt_nvfp4, comfy_nvfp4)?,
+            #[cfg(feature = "cuda")]
+            graphs: std::sync::Mutex::new(None),
         })
+    }
+
+    /// [`denoise`] through the graph cache ([`super::step_graph::H3Graphs`]).
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn graph_denoise(
+        &self,
+        key: super::step_graph::GraphKey,
+        make: impl FnOnce() -> Result<(DeviceLayout, Option<H3Vsa>)>,
+        text_refined: &CudaTensor,
+        video_rows: CudaTensor,
+        audio_rows: CudaTensor,
+        seed: u64,
+        observe: &mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        let mut slot = self.graphs.lock().map_err(|_| msg("h3 graphs: lock poisoned"))?;
+        if slot.is_none() {
+            *slot = Some(super::step_graph::H3Graphs::new()?);
+        }
+        slot.as_mut().expect("h3 graphs").denoise(
+            &self.model,
+            key,
+            make,
+            text_refined,
+            video_rows,
+            audio_rows,
+            &self.schedule,
+            seed,
+            observe,
+        )
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[allow(clippy::too_many_arguments)]
+    fn graph_denoise(
+        &self,
+        _key: super::step_graph::GraphKey,
+        _make: impl FnOnce() -> Result<(DeviceLayout, Option<H3Vsa>)>,
+        _text_refined: &CudaTensor,
+        _video_rows: CudaTensor,
+        _audio_rows: CudaTensor,
+        _seed: u64,
+        _observe: &mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        Err(msg("h3 graphs need a CUDA build"))
     }
 
     /// Replace the text encoder (tests, or an encoder built elsewhere). It is
@@ -2464,7 +2515,7 @@ impl H3Pipeline {
             && !self.options.dense
             && !force_dense
             && self.contract.vsa_sparsity > 0.0;
-        let vsa = if !sol_dense_vsa
+        let vsa_cfg = if !sol_dense_vsa
             && !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract)
         {
             if force_dense && !self.options.dense && sol_kind == H3SolAttnPolicy::Off {
@@ -2479,23 +2530,29 @@ impl H3Pipeline {
             // removing the top-k selection while keeping the gated
             // compression branch, as FastVideo's `--vsa-sparsity 0`).
             let sparsity = self.techniques.vsa_sparsity(&self.contract).map_err(msg)?;
-            let vsa_cfg = super::vsa::H3VsaConfig {
+            Some(super::vsa::H3VsaConfig {
                 sparsity,
                 group: self.techniques.vsa_group,
                 tile_size: self.contract.vsa_tile_size,
+            })
+        };
+        let make_vsa = |layout: &H3PackedLayout| -> Result<Option<H3Vsa>> {
+            let Some(vsa_cfg) = vsa_cfg else {
+                return Ok(None);
             };
-            Some(
+            Ok(Some(
                 H3Vsa::new(
-                    &layout,
+                    layout,
                     cfg.num_attention_heads,
                     cfg.attention_head_dim,
                     vsa_cfg,
                 )?
-                .with_schedule(sparsity, self.techniques.vsa_schedule.clone())
+                .with_schedule(vsa_cfg.sparsity, self.techniques.vsa_schedule.clone())
                 .with_fp8(self.techniques.fp8_attention.vsa)
                 .with_fp4(self.vsa_fp4),
-            )
+            ))
         };
+        let vsa = make_vsa(&layout)?;
         let layout = DeviceLayout::new(cfg, layout)?;
         let sol_policy = match &self.techniques.attention {
             H3Attention::Auto | H3Attention::Dense => None,
@@ -2557,48 +2614,89 @@ impl H3Pipeline {
 
         let steps = self.schedule.num_steps();
         hooks.stage(Stage::Denoise, steps)?;
-        let mut step_s = Vec::with_capacity(steps);
-        // FASTVIDEO_GPU_TRACE: one step's device activity (a no-op when off).
-        crate::wan::gpu_trace::pass_begin("h3");
-        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
-        let mut last = Instant::now();
+        // Lazy CUDA events per step (FASTVIDEO_H3_STEP_SYNC=1 / a GPU trace:
+        // a synchronize per step), docs/perf/h3-denoise-graphs.md.
+        let mut clock = super::step_graph::StepClock::start(steps)?;
         // fp8_attention (opt-in): dense calls of this denoise on the FP8 kernel;
         // the refiner above and the decoders below stay bf16.
         crate::wan::attn_fp8::set_ops(self.techniques.fp8_attention.dense, false);
-        let denoised = denoise(
-            &self.model,
-            &layout,
-            &text_refined,
-            video_rows,
-            audio_rows,
-            &self.schedule,
-            request.seed,
-            mode,
-            cond_rows.as_ref(),
-            cond_audio_rows.as_ref(),
-            &mut |step, _, _| {
-                // The trace window closes before the step-timing sync.
-                crate::wan::gpu_trace::step_before_sync();
-                crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
-                step_s.push(last.elapsed().as_secs_f64());
-                crate::wan::gpu_trace::step_end(step_s[step]);
-                crate::wan::log::info(format_args!(
-                    "h3 step {}/{steps}: {:.1}s",
-                    step + 1,
-                    step_s[step]
-                ));
-                if step + 1 < steps {
-                    crate::wan::gpu_trace::step_begin();
+        let mut observe = |step: usize, _: &CudaTensor, _: &CudaTensor| -> Result<()> {
+            clock.step_queued(step)?;
+            // Lazy clock: the step is queued, not finished; the host runs
+            // at most a block or two ahead of the device.
+            hooks.step(Stage::Denoise, step + 1, steps, None)
+        };
+        // FASTVIDEO_H3_GRAPHS=1 (opt-in): CUDA graphs of the steps, for a
+        // plain T2V request on a resident DiT (docs/perf/h3-denoise-graphs.md).
+        let graph_key = if super::step_graph::graphs_enabled() {
+            let why_not = if !cfg!(feature = "cuda") {
+                Some("no CUDA build")
+            } else if vdn_plan.is_some() || sol_policy.is_some() {
+                Some("a VDN or Sol-Attn route")
+            } else if cond_rows.is_some() || cond_audio_rows.is_some() {
+                Some("condition rows (FL2VA / Ref2VA)")
+            } else if self.schedule.fresh_noise {
+                Some("a fresh-noise schedule")
+            } else if self.residency.is_streamed() {
+                Some("a streamed DiT")
+            } else if self.model.sol_teacache_enabled() {
+                Some("TeaCache")
+            } else if crate::wan::dump::enabled() {
+                Some("FASTVIDEO_DUMP_DIR")
+            } else {
+                None
+            };
+            match why_not {
+                Some(why) => {
+                    crate::wan::log::info(format_args!("h3 graphs: off for this request ({why})"));
+                    None
                 }
-                last = Instant::now();
-                hooks.step(Stage::Denoise, step + 1, steps, None)
-            },
-        );
+                None => Some(super::step_graph::GraphKey {
+                    layout: layout.layout.clone(),
+                    vsa: vsa_cfg.map(|c| super::step_graph::VsaKey {
+                        sparsity_bits: c.sparsity.to_bits(),
+                        schedule: self.techniques.vsa_schedule.clone(),
+                        fp8: self.techniques.fp8_attention.vsa,
+                        fp4: self.vsa_fp4,
+                        group: c.group,
+                        tile_size: c.tile_size,
+                    }),
+                    fp8_dense: self.techniques.fp8_attention.dense,
+                }),
+            }
+        } else {
+            None
+        };
+        let denoised = match graph_key {
+            Some(key) => self.graph_denoise(
+                key,
+                || Ok((DeviceLayout::new(cfg, layout.layout.clone())?, make_vsa(&layout.layout)?)),
+                &text_refined,
+                video_rows,
+                audio_rows,
+                request.seed,
+                &mut observe,
+            ),
+            None => denoise(
+                &self.model,
+                &layout,
+                &text_refined,
+                video_rows,
+                audio_rows,
+                &self.schedule,
+                request.seed,
+                mode,
+                cond_rows.as_ref(),
+                cond_audio_rows.as_ref(),
+                &mut observe,
+            ),
+        };
+        drop(observe);
         crate::wan::attn_fp8::set_ops(false, false);
         let (video_rows, audio_rows) = denoised?;
+        timings.step_s = clock.finish()?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
-        timings.step_s = step_s;
         // TeaCache rows and the step's AdaLN rows go with the denoise.
         self.model.end_denoise();
         drop((

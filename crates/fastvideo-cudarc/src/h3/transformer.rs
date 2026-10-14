@@ -1344,35 +1344,80 @@ fn dump_adaln_rows(
     )
 }
 
-fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
-    let key = (table.block_mods.as_ptr() as usize, step);
-    let tab = ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
-        if let Some((k, t)) = c.borrow().as_ref() {
-            if *k == key {
-                return Ok(t.clone());
+/// Step `step`'s `[2 * blocks * 3, 6, hidden]` table for the fused kernels,
+/// built on the host and uploaded.
+fn build_rows16(table: &AdaLnTable, step: usize) -> Result<CudaTensor> {
+    let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
+    let rows = table
+        .block_mods
+        .get(step * per_step..(step + 1) * per_step)
+        .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
+    let h = table.hidden;
+    let data: Vec<f32> = rows
+        .iter()
+        .chain(table.keyframe_mods.iter())
+        .enumerate()
+        .map(|(i, &v)| {
+            let p = (i / h) % ADALN_PARAMS;
+            bf16_table_value(v, p == SCALE_MSA || p == SCALE_MLP)
+        })
+        .collect();
+    CudaTensor::from_vec(data, vec![2 * table.blocks * MODALITY_NUM, ADALN_PARAMS, h])?.to_device()
+}
+
+thread_local! {
+    /// `FASTVIDEO_H3_GRAPHS` (super::step_graph): every step's table, held by
+    /// the graph cache while it captures, read instead of [`ADALN_ROWS16`]
+    /// so a captured step never uploads (and its graph keeps the address).
+    static ADALN_PINNED: std::cell::RefCell<Option<(usize, Vec<CudaTensor>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl H3Transformer {
+    /// Every step's bf16 AdaLN table on the device at once (what
+    /// [`adaln_rows16`] builds one step at a time), for the graph cache.
+    pub fn adaln_rows16_all(&self) -> Result<Vec<CudaTensor>> {
+        (0..self.table.steps()).map(|s| build_rows16(&self.table, s)).collect()
+    }
+
+    /// Run `f` with `tabs` ([`Self::adaln_rows16_all`]) as this thread's
+    /// AdaLN tables.
+    pub fn with_pinned_adaln<R>(&self, tabs: &[CudaTensor], f: impl FnOnce() -> R) -> R {
+        struct Unpin;
+        impl Drop for Unpin {
+            fn drop(&mut self) {
+                ADALN_PINNED.with(|c| *c.borrow_mut() = None);
             }
         }
-        let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
-        let rows = table
-            .block_mods
-            .get(step * per_step..(step + 1) * per_step)
-            .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
-        *c.borrow_mut() = None;
-        let h = table.hidden;
-        let data: Vec<f32> = rows
-            .iter()
-            .chain(table.keyframe_mods.iter())
-            .enumerate()
-            .map(|(i, &v)| {
-                let p = (i / h) % ADALN_PARAMS;
-                bf16_table_value(v, p == SCALE_MSA || p == SCALE_MLP)
-            })
-            .collect();
-        let t = CudaTensor::from_vec(data, vec![2 * table.blocks * MODALITY_NUM, ADALN_PARAMS, h])?
-            .to_device()?;
-        *c.borrow_mut() = Some((key, t.clone()));
-        Ok(t)
-    })?;
+        let key = self.table.block_mods.as_ptr() as usize;
+        ADALN_PINNED.with(|c| *c.borrow_mut() = Some((key, tabs.to_vec())));
+        let _unpin = Unpin;
+        f()
+    }
+}
+
+fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
+    let key = (table.block_mods.as_ptr() as usize, step);
+    let pinned = ADALN_PINNED.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(k, _)| *k == key.0)
+            .and_then(|(_, tabs)| tabs.get(step).cloned())
+    });
+    let tab = match pinned {
+        Some(t) => t,
+        None => ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
+            if let Some((k, t)) = c.borrow().as_ref() {
+                if *k == key {
+                    return Ok(t.clone());
+                }
+            }
+            *c.borrow_mut() = None;
+            let t = build_rows16(table, step)?;
+            *c.borrow_mut() = Some((key, t.clone()));
+            Ok(t)
+        })?,
+    };
     Ok(AdaRows {
         tab,
         hidden: table.hidden,
