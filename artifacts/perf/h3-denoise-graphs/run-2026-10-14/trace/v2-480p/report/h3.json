@@ -1,0 +1,2047 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 1.010988521,
+        "dit_residency": "resident",
+        "dit_s": 26.973957414,
+        "refiner_s": 0.342380676,
+        "seconds": 40.664679165,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 6.935324755
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-480p-w",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.268075441,
+        "decode_s": 2.267166872,
+        "denoise_s": 11.118027279,
+        "gpu_trace": {
+          "busy_s": 1.3163157060000001,
+          "by_category": [
+            {
+              "calls": 456,
+              "category": "gemm",
+              "share": 0.34455444103034527,
+              "total_s": 0.431895517
+            },
+            {
+              "calls": 450,
+              "category": "attention",
+              "share": 0.2564102025503731,
+              "total_s": 0.32140760300000004
+            },
+            {
+              "calls": 411,
+              "category": "norm_modulate_elementwise",
+              "share": 0.1574115017909817,
+              "total_s": 0.19731373000000002
+            },
+            {
+              "calls": 1014,
+              "category": "cast",
+              "share": 0.14783886155159054,
+              "total_s": 0.185314522
+            },
+            {
+              "calls": 459,
+              "category": "layout",
+              "share": 0.09378499307670936,
+              "total_s": 0.117558543
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 3485,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 3479,
+              "idle_s": 0.002949662
+            },
+            {
+              "bucket": "5-50us",
+              "count": 3,
+              "idle_s": 0.000070721
+            },
+            {
+              "bucket": "50-500us",
+              "count": 1,
+              "idle_s": 0.000062048
+            },
+            {
+              "bucket": ">500us",
+              "count": 2,
+              "idle_s": 0.062430307000000004
+            }
+          ],
+          "host": {
+            "device_tail_s": 0.3805978298187256,
+            "enqueue_s": 1.001312822,
+            "first_activity_lag_s": 0.00008225440979003906
+          },
+          "host_launches": 2684,
+          "idle_frac": 0.04741018198348796,
+          "idle_s": 0.065512738,
+          "kernel_count": 2790,
+          "kernel_s": 1.253489915,
+          "largest_gaps": [
+            {
+              "after": "memcpy HtoD",
+              "at_s": 0.008994964000000001,
+              "before": "mx_block_copy",
+              "gap_us": 54638.162000000004
+            },
+            {
+              "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+              "at_s": 4.896e-6,
+              "before": "cast_f32_bf16",
+              "gap_us": 7792.145
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 0.008401714000000001,
+              "before": "cast_bf16_f32_bias_act",
+              "gap_us": 62.048
+            },
+            {
+              "after": "h3_norm_mod",
+              "at_s": 0.068454128,
+              "before": "memcpy HtoD",
+              "gap_us": 33.824
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 0.008468434,
+              "before": "mx_block_copy",
+              "gap_us": 30.337
+            },
+            {
+              "after": "memset",
+              "at_s": 1.319093368,
+              "before": "h3_res_gate_norm_mod",
+              "gap_us": 6.5600000000000005
+            },
+            {
+              "after": "memset",
+              "at_s": 0.9857033540000001,
+              "before": "fvf_h3_gate_res_norm_mod",
+              "gap_us": 4.064
+            },
+            {
+              "after": "memset",
+              "at_s": 1.369635522,
+              "before": "mx_merge_heads",
+              "gap_us": 3.84
+            },
+            {
+              "after": "memset",
+              "at_s": 0.11989622100000001,
+              "before": "mx_swiglu",
+              "gap_us": 3.8080000000000003
+            },
+            {
+              "after": "memset",
+              "at_s": 0.403226321,
+              "before": "h3_res_gate_norm_mod",
+              "gap_us": 3.7760000000000002
+            }
+          ],
+          "memcpy": {
+            "DtoD": {
+              "bytes": 42864640400,
+              "count": 150
+            },
+            "HtoD": {
+              "bytes": 38707200,
+              "count": 1
+            }
+          },
+          "memset": {
+            "bytes": 3600,
+            "count": 550
+          },
+          "pass": "h3",
+          "step": 1,
+          "sync_count": 0,
+          "top_kernels": [
+            {
+              "calls": 300,
+              "category": "gemm",
+              "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "share": 0.2843296493534214,
+              "total_s": 0.35640434800000004
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_vsa",
+              "share": 0.09602571074534733,
+              "total_s": 0.12036726
+            },
+            {
+              "calls": 308,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.06767232427234965,
+              "total_s": 0.084826576
+            },
+            {
+              "calls": 200,
+              "category": "cast",
+              "name": "nvfp4_quant_bf16_sw",
+              "share": 0.06741206290439122,
+              "total_s": 0.084500341
+            },
+            {
+              "calls": 100,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_qk_norm_rope",
+              "share": 0.06214716135151355,
+              "total_s": 0.07790084
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+              "share": 0.05718750756762171,
+              "total_s": 0.071683964
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_swiglu",
+              "share": 0.054353682614191594,
+              "total_s": 0.06813179300000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_quant_tile",
+              "share": 0.04363662550886977,
+              "total_s": 0.05469807
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "flash_mma_fwd_d128",
+              "share": 0.03948173767317466,
+              "total_s": 0.049489960000000006
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_mean",
+              "share": 0.037397440090293825,
+              "total_s": 0.046877314
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fvf_split_heads_rows",
+              "share": 0.03600890159535109,
+              "total_s": 0.045136795
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_combine",
+              "share": 0.03482958217497904,
+              "total_s": 0.04365853
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "mx_merge_heads",
+              "share": 0.030846683756526275,
+              "total_s": 0.038666007
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fill_f",
+              "share": 0.022779572183474647,
+              "total_s": 0.028553964
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_res_gate_norm_mod",
+              "share": 0.018859284559939998,
+              "total_s": 0.023639923
+            },
+            {
+              "calls": 49,
+              "category": "norm_modulate_elementwise",
+              "name": "fvf_h3_gate_res_norm_mod",
+              "share": 0.01778235287995915,
+              "total_s": 0.02229
+            },
+            {
+              "calls": 100,
+              "category": "cast",
+              "name": "nvfp4_amax_bf16",
+              "share": 0.011220221903420738,
+              "total_s": 0.014064435
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_topk2",
+              "share": 0.0032718460283743087,
+              "total_s": 0.004101226
+            },
+            {
+              "calls": 104,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0025628614650641205,
+              "total_s": 0.0032125210000000003
+            },
+            {
+              "calls": 154,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.002387201495753558,
+              "total_s": 0.0029923330000000002
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "softmax_last",
+              "share": 0.0017672603293342013,
+              "total_s": 0.002215243
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "magma_sgemmEx_kernel<…>",
+              "share": 0.0015455106393895478,
+              "total_s": 0.001937282
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+              "share": 0.0012957383865350046,
+              "total_s": 0.0016241950000000002
+            },
+            {
+              "calls": 56,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.0011933187352368925,
+              "total_s": 0.0014958130000000001
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "index_select_rows",
+              "share": 0.0010011887490933662,
+              "total_s": 0.0012549800000000002
+            }
+          ],
+          "wall_s": 1.382590391,
+          "window_s": 1.3818284440000002
+        },
+        "load_s": 40.664679165,
+        "peak_mib": 25980,
+        "refine_s": 0.012161537,
+        "step_s": [
+          1.4504246,
+          1.382590391,
+          1.374859519,
+          1.380898354,
+          1.381317268,
+          1.37807142,
+          1.377606764,
+          1.377972511
+        ],
+        "text_cache": "miss",
+        "text_encoder": "streamed",
+        "text_s": 3.5982024040000002,
+        "total_s": 17.165268849,
+        "video_decode_s": 1.999091431,
+        "video_encode_s": 0.000686113,
+        "video_push_s": 0.00010131,
+        "video_rgb_s": 0.16556220199935348,
+        "video_vae_s": 1.971291404128075,
+        "video_wait_s": 0.17710025199999999,
+        "warm": false,
+        "write_s": 0.098732395
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-480p-w",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-480p-w",
+      "ok": true,
+      "values": {
+        "frame": "/srv/trace/v2-480p/clip/spark-mountain-lake-480p-w/frame-062.png",
+        "mean": 0.15839713898551527,
+        "std": 0.16604685590374582
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.110098774,
+        "decode_s": 2.101213176,
+        "denoise_s": 11.634273917,
+        "gpu_trace": {
+          "busy_s": 1.392822932,
+          "by_category": [
+            {
+              "calls": 456,
+              "category": "gemm",
+              "share": 0.3319714291679453,
+              "total_s": 0.441126823
+            },
+            {
+              "calls": 450,
+              "category": "attention",
+              "share": 0.2761575602490585,
+              "total_s": 0.366960818
+            },
+            {
+              "calls": 411,
+              "category": "norm_modulate_elementwise",
+              "share": 0.153740427927958,
+              "total_s": 0.20429175700000002
+            },
+            {
+              "calls": 1014,
+              "category": "cast",
+              "share": 0.14473369590782525,
+              "total_s": 0.19232352500000002
+            },
+            {
+              "calls": 459,
+              "category": "layout",
+              "share": 0.09339688674721294,
+              "total_s": 0.12410668000000001
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 3486,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 3479,
+              "idle_s": 0.0027854520000000003
+            },
+            {
+              "bucket": "5-50us",
+              "count": 4,
+              "idle_s": 0.000060928000000000003
+            },
+            {
+              "bucket": "50-500us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": ">500us",
+              "count": 3,
+              "idle_s": 0.06520120900000001
+            }
+          ],
+          "host": {
+            "device_tail_s": 0.39843010902404785,
+            "enqueue_s": 1.062691482,
+            "first_activity_lag_s": 0.0002512931823730469
+          },
+          "host_launches": 2684,
+          "idle_frac": 0.04658016437584067,
+          "idle_s": 0.068047589,
+          "kernel_count": 2790,
+          "kernel_s": 1.328809603,
+          "largest_gaps": [
+            {
+              "after": "memcpy HtoD",
+              "at_s": 0.004645908000000001,
+              "before": "mx_block_copy",
+              "gap_us": 61665.609000000004
+            },
+            {
+              "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+              "at_s": 4.863000000000001e-6,
+              "before": "cast_f32_bf16",
+              "gap_us": 1847.337
+            },
+            {
+              "after": "cast_bf16_f32_bias_act",
+              "at_s": 0.00195796,
+              "before": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+              "gap_us": 1688.2630000000001
+            },
+            {
+              "after": "h3_norm_mod",
+              "at_s": 0.070570704,
+              "before": "memcpy HtoD",
+              "gap_us": 38.752
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 0.004126033,
+              "before": "cast_bf16_f32_bias_act",
+              "gap_us": 10.976
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 0.004156114000000001,
+              "before": "mx_block_copy",
+              "gap_us": 5.8870000000000005
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 0.004171633,
+              "before": "mx_block_copy",
+              "gap_us": 5.313
+            },
+            {
+              "after": "memset",
+              "at_s": 0.899559781,
+              "before": "mx_swiglu",
+              "gap_us": 4.288
+            },
+            {
+              "after": "memset",
+              "at_s": 0.5421578880000001,
+              "before": "fvf_h3_gate_res_norm_mod",
+              "gap_us": 4.001
+            },
+            {
+              "after": "memset",
+              "at_s": 0.8946591840000001,
+              "before": "h3_res_gate_norm_mod",
+              "gap_us": 3.8080000000000003
+            }
+          ],
+          "memcpy": {
+            "DtoD": {
+              "bytes": 44100403600,
+              "count": 150
+            },
+            "HtoD": {
+              "bytes": 38707200,
+              "count": 1
+            }
+          },
+          "memset": {
+            "bytes": 3600,
+            "count": 550
+          },
+          "pass": "h3",
+          "step": 1,
+          "sync_count": 0,
+          "top_kernels": [
+            {
+              "calls": 300,
+              "category": "gemm",
+              "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "share": 0.2749041007645397,
+              "total_s": 0.365295209
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_vsa",
+              "share": 0.09986188593190051,
+              "total_s": 0.132697433
+            },
+            {
+              "calls": 308,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.06649755149308625,
+              "total_s": 0.08836258500000001
+            },
+            {
+              "calls": 200,
+              "category": "cast",
+              "name": "nvfp4_quant_bf16_sw",
+              "share": 0.06539463878332613,
+              "total_s": 0.086897024
+            },
+            {
+              "calls": 100,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_qk_norm_rope",
+              "share": 0.06010631381627666,
+              "total_s": 0.07986984700000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "flash_mma_fwd_d128",
+              "share": 0.05694511902169027,
+              "total_s": 0.07566922100000001
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+              "share": 0.05425002561484348,
+              "total_s": 0.07208795500000001
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_swiglu",
+              "share": 0.052779180585136094,
+              "total_s": 0.07013348200000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_quant_tile",
+              "share": 0.0445096617803416,
+              "total_s": 0.059144866000000004
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_mean",
+              "share": 0.036184222247827934,
+              "total_s": 0.048081942
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fvf_split_heads_rows",
+              "share": 0.034913327609358044,
+              "total_s": 0.046393165
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_combine",
+              "share": 0.033771364910884075,
+              "total_s": 0.044875714000000004
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "mx_merge_heads",
+              "share": 0.029869316800835915,
+              "total_s": 0.039690635
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fill_f",
+              "share": 0.021988443591944754,
+              "total_s": 0.029218455
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_res_gate_norm_mod",
+              "share": 0.018163224396866434,
+              "total_s": 0.024135467
+            },
+            {
+              "calls": 49,
+              "category": "norm_modulate_elementwise",
+              "name": "fvf_h3_gate_res_norm_mod",
+              "share": 0.01712751394076131,
+              "total_s": 0.022759205
+            },
+            {
+              "calls": 100,
+              "category": "cast",
+              "name": "nvfp4_amax_bf16",
+              "share": 0.01107770666825923,
+              "total_s": 0.014720163000000001
+            },
+            {
+              "calls": 154,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.004283338250378373,
+              "total_s": 0.005691741
+            },
+            {
+              "calls": 104,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.003902675739467846,
+              "total_s": 0.005185913
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_topk2",
+              "share": 0.0031728721635374876,
+              "total_s": 0.004216143
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "softmax_last",
+              "share": 0.001712434192876615,
+              "total_s": 0.0022754990000000003
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "index_select_rows",
+              "share": 0.0016300725063318196,
+              "total_s": 0.002166056
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "magma_sgemmEx_kernel<…>",
+              "share": 0.0014637883377788925,
+              "total_s": 0.001945096
+            },
+            {
+              "calls": 56,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.001445775975476601,
+              "total_s": 0.0019211610000000002
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+              "share": 0.0011733840547809467,
+              "total_s": 0.001559204
+            }
+          ],
+          "wall_s": 1.461748788,
+          "window_s": 1.4608705210000001
+        },
+        "load_s": 40.664679165,
+        "peak_mib": 25982,
+        "refine_s": 0.014884944,
+        "step_s": [
+          1.471605397,
+          1.461748788,
+          1.4410394979999999,
+          1.453744891,
+          1.451621968,
+          1.4441830549999999,
+          1.448265603,
+          1.452009842
+        ],
+        "text_cache": "miss",
+        "text_encoder": "streamed",
+        "text_s": 3.723487899,
+        "total_s": 17.650339972,
+        "video_decode_s": 1.991114402,
+        "video_encode_s": 0.000545146,
+        "video_push_s": 0.000067705,
+        "video_rgb_s": 0.14949014900134044,
+        "video_vae_s": 1.9609478982686996,
+        "video_wait_s": 0.17980111399999998,
+        "warm": false,
+        "write_s": 0.090647467
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "frame": "/srv/trace/v2-480p/clip/h3-demo-480p-a/frame-062.png",
+        "mean": 0.13808404237220978,
+        "std": 0.18792733846181614
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.122882024,
+        "decode_s": 2.1218964319999998,
+        "denoise_s": 12.268682408,
+        "gpu_trace": {
+          "busy_s": 1.393028073,
+          "by_category": [
+            {
+              "calls": 456,
+              "category": "gemm",
+              "share": 0.3324945322418951,
+              "total_s": 0.44333643300000003
+            },
+            {
+              "calls": 450,
+              "category": "attention",
+              "share": 0.27652403174453,
+              "total_s": 0.36870735000000004
+            },
+            {
+              "calls": 411,
+              "category": "norm_modulate_elementwise",
+              "share": 0.15320641912775812,
+              "total_s": 0.204280013
+            },
+            {
+              "calls": 1014,
+              "category": "cast",
+              "share": 0.14447619848357424,
+              "total_s": 0.19263944600000002
+            },
+            {
+              "calls": 461,
+              "category": "layout",
+              "share": 0.09329881840224252,
+              "total_s": 0.12440134000000001
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 2159,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 2159,
+              "idle_s": 0.002332001
+            },
+            {
+              "bucket": "5-50us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": "50-500us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": ">500us",
+              "count": 0,
+              "idle_s": 0.0
+            }
+          ],
+          "host": {
+            "device_tail_s": 0.9562816619873047,
+            "enqueue_s": 0.557237705,
+            "first_activity_lag_s": 0.11815929412841797
+          },
+          "host_launches": 2686,
+          "idle_frac": 0.0016712539246697695,
+          "idle_s": 0.002332001,
+          "kernel_count": 2792,
+          "kernel_s": 1.3333645820000002,
+          "largest_gaps": [
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.087676741,
+              "before": "memset",
+              "gap_us": 4.896
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.199019822,
+              "before": "memset",
+              "gap_us": 4.896
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.143323226,
+              "before": "memset",
+              "gap_us": 4.736
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.032109042000000004,
+              "before": "memset",
+              "gap_us": 4.5440000000000005
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.42144098900000004,
+              "before": "memset",
+              "gap_us": 4.5440000000000005
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.11552784,
+              "before": "memset",
+              "gap_us": 4.5120000000000005
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.171201908,
+              "before": "memset",
+              "gap_us": 4.48
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.365917641,
+              "before": "memset",
+              "gap_us": 4.416
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.059854604000000006,
+              "before": "memset",
+              "gap_us": 4.352
+            },
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 0.28249078,
+              "before": "memset",
+              "gap_us": 4.352
+            }
+          ],
+          "memcpy": {
+            "DtoD": {
+              "bytes": 44100403600,
+              "count": 150
+            }
+          },
+          "memset": {
+            "bytes": 3600,
+            "count": 550
+          },
+          "pass": "h3",
+          "step": 1,
+          "sync_count": 0,
+          "top_kernels": [
+            {
+              "calls": 300,
+              "category": "gemm",
+              "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "share": 0.27541510323393303,
+              "total_s": 0.367228744
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_vsa",
+              "share": 0.0997770128260389,
+              "total_s": 0.133039135
+            },
+            {
+              "calls": 308,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.06663222362389104,
+              "total_s": 0.08884504700000001
+            },
+            {
+              "calls": 200,
+              "category": "cast",
+              "name": "nvfp4_quant_bf16_sw",
+              "share": 0.06518338432961315,
+              "total_s": 0.086913216
+            },
+            {
+              "calls": 100,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_qk_norm_rope",
+              "share": 0.05966571639443772,
+              "total_s": 0.079556153
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "flash_mma_fwd_d128",
+              "share": 0.056873626331256484,
+              "total_s": 0.075833279
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+              "share": 0.054286594212234744,
+              "total_s": 0.072383822
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_swiglu",
+              "share": 0.05282811989376811,
+              "total_s": 0.07043914400000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_quant_tile",
+              "share": 0.04508480187004097,
+              "total_s": 0.060114478000000006
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_mean",
+              "share": 0.036255237804119204,
+              "total_s": 0.04834145
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fvf_split_heads_rows",
+              "share": 0.034748092626327165,
+              "total_s": 0.046331876
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_combine",
+              "share": 0.03365858191064505,
+              "total_s": 0.044879161
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "mx_merge_heads",
+              "share": 0.02978391696922995,
+              "total_s": 0.03971282
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fill_f",
+              "share": 0.02214320704072819,
+              "total_s": 0.029524968000000002
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_res_gate_norm_mod",
+              "share": 0.01810306822744149,
+              "total_s": 0.02413799
+            },
+            {
+              "calls": 49,
+              "category": "norm_modulate_elementwise",
+              "name": "fvf_h3_gate_res_norm_mod",
+              "share": 0.01709278115503446,
+              "total_s": 0.022790909
+            },
+            {
+              "calls": 100,
+              "category": "cast",
+              "name": "nvfp4_amax_bf16",
+              "share": 0.010921025799378852,
+              "total_s": 0.014561709
+            },
+            {
+              "calls": 154,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.004275218553840363,
+              "total_s": 0.005700425
+            },
+            {
+              "calls": 104,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0038598047896850466,
+              "total_s": 0.005146527000000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_topk2",
+              "share": 0.0031567075178242586,
+              "total_s": 0.0042090420000000005
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "softmax_last",
+              "share": 0.001718063484605143,
+              "total_s": 0.0022908050000000004
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "index_select_rows",
+              "share": 0.0016289235737326642,
+              "total_s": 0.0021719490000000003
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "magma_sgemmEx_kernel<…>",
+              "share": 0.001455122647018083,
+              "total_s": 0.001940209
+            },
+            {
+              "calls": 56,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.0014413409700123564,
+              "total_s": 0.0019218330000000002
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+              "share": 0.0011585068486542416,
+              "total_s": 0.0015447120000000002
+            }
+          ],
+          "wall_s": 1.514117256,
+          "window_s": 1.395360074
+        },
+        "load_s": 40.664679165,
+        "peak_mib": 27610,
+        "refine_s": 0.001314416,
+        "step_s": [
+          1.88697856,
+          1.514117256,
+          1.462144897,
+          1.469337104,
+          1.480847919,
+          1.485986792,
+          1.479882344,
+          1.476257292
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.342476322,
+        "total_s": 14.863819458,
+        "video_decode_s": 1.9990144079999999,
+        "video_encode_s": 0.000790054,
+        "video_push_s": 0.000088877,
+        "video_rgb_s": 0.17611170999700984,
+        "video_vae_s": 1.9658893096148968,
+        "video_wait_s": 0.182896673,
+        "warm": false,
+        "write_s": 0.090776045
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "frame": "/srv/trace/v2-480p/clip/h3-demo-480p-b/frame-062.png",
+        "mean": 0.13808404237220978,
+        "std": 0.18792733846181614
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.107696207,
+        "decode_s": 2.100819443,
+        "denoise_s": 11.073394099,
+        "gpu_trace": {
+          "busy_s": 1.39327398,
+          "by_category": [
+            {
+              "calls": 456,
+              "category": "gemm",
+              "share": 0.3330096903313727,
+              "total_s": 0.444149081
+            },
+            {
+              "calls": 450,
+              "category": "attention",
+              "share": 0.2760925842242144,
+              "total_s": 0.368236334
+            },
+            {
+              "calls": 411,
+              "category": "norm_modulate_elementwise",
+              "share": 0.15315923359258574,
+              "total_s": 0.20427493500000002
+            },
+            {
+              "calls": 1014,
+              "category": "cast",
+              "share": 0.14446328553332163,
+              "total_s": 0.19267678200000002
+            },
+            {
+              "calls": 461,
+              "category": "layout",
+              "share": 0.09327520631850557,
+              "total_s": 0.12440508
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 2227,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 2227,
+              "idle_s": 0.0023287010000000003
+            },
+            {
+              "bucket": "5-50us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": "50-500us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": ">500us",
+              "count": 0,
+              "idle_s": 0.0
+            }
+          ],
+          "host": {
+            "device_tail_s": 1.2916641235351562,
+            "enqueue_s": 0.10776645100000001,
+            "first_activity_lag_s": 0.0038275718688964844
+          },
+          "host_launches": 0,
+          "idle_frac": 0.0016685988295260376,
+          "idle_s": 0.0023287010000000003,
+          "kernel_count": 2792,
+          "kernel_s": 1.333742212,
+          "largest_gaps": [
+            {
+              "after": "nvfp4_alpha",
+              "at_s": 1.367741026,
+              "before": "memset",
+              "gap_us": 3.841
+            },
+            {
+              "after": "memset",
+              "at_s": 0.113829514,
+              "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "gap_us": 3.8080000000000003
+            },
+            {
+              "after": "memset",
+              "at_s": 1.060317892,
+              "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "gap_us": 3.7760000000000002
+            },
+            {
+              "after": "memset",
+              "at_s": 0.9392721390000001,
+              "before": "nvfp4_quant_bf16_sw",
+              "gap_us": 3.744
+            },
+            {
+              "after": "memset",
+              "at_s": 0.254365251,
+              "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "gap_us": 3.712
+            },
+            {
+              "after": "memset",
+              "at_s": 0.9671239690000001,
+              "before": "nvfp4_quant_bf16_sw",
+              "gap_us": 3.68
+            },
+            {
+              "after": "memset",
+              "at_s": 0.082864479,
+              "before": "nvfp4_quant_bf16_sw",
+              "gap_us": 3.648
+            },
+            {
+              "after": "memset",
+              "at_s": 1.0023385040000001,
+              "before": "fvf_h3_gate_res_norm_mod",
+              "gap_us": 3.648
+            },
+            {
+              "after": "memset",
+              "at_s": 0.640997385,
+              "before": "nvfp4_quant_bf16_sw",
+              "gap_us": 3.6470000000000002
+            },
+            {
+              "after": "memset",
+              "at_s": 0.995026296,
+              "before": "nvfp4_quant_bf16_sw",
+              "gap_us": 3.616
+            }
+          ],
+          "memcpy": {
+            "DtoD": {
+              "bytes": 44100403600,
+              "count": 150
+            }
+          },
+          "memset": {
+            "bytes": 3600,
+            "count": 550
+          },
+          "pass": "h3",
+          "step": 1,
+          "sync_count": 0,
+          "top_kernels": [
+            {
+              "calls": 300,
+              "category": "gemm",
+              "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "share": 0.2758281553137196,
+              "total_s": 0.367883654
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_vsa",
+              "share": 0.09987909867547928,
+              "total_s": 0.13321297
+            },
+            {
+              "calls": 308,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.06661728421024136,
+              "total_s": 0.088850284
+            },
+            {
+              "calls": 200,
+              "category": "cast",
+              "name": "nvfp4_quant_bf16_sw",
+              "share": 0.06517305609579072,
+              "total_s": 0.086924056
+            },
+            {
+              "calls": 100,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_qk_norm_rope",
+              "share": 0.05964339081741532,
+              "total_s": 0.079548908
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "flash_mma_fwd_d128",
+              "share": 0.057047872756388396,
+              "total_s": 0.076087156
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+              "share": 0.054386614105305084,
+              "total_s": 0.072537723
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_swiglu",
+              "share": 0.05281458318273576,
+              "total_s": 0.07044103900000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "attn_fp4_quant_tile",
+              "share": 0.0444010997531508,
+              "total_s": 0.05921962100000001
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_mean",
+              "share": 0.03624925758891704,
+              "total_s": 0.048347165000000004
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fvf_split_heads_rows",
+              "share": 0.03473187965651641,
+              "total_s": 0.046323374
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_combine",
+              "share": 0.033642298036526415,
+              "total_s": 0.044870153
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "mx_merge_heads",
+              "share": 0.02977523440639217,
+              "total_s": 0.039712487000000005
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fill_f",
+              "share": 0.022147177868582,
+              "total_s": 0.029538626000000002
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_res_gate_norm_mod",
+              "share": 0.018102492207842037,
+              "total_s": 0.024144058000000003
+            },
+            {
+              "calls": 49,
+              "category": "norm_modulate_elementwise",
+              "name": "fvf_h3_gate_res_norm_mod",
+              "share": 0.017083902567522548,
+              "total_s": 0.022785522000000002
+            },
+            {
+              "calls": 100,
+              "category": "cast",
+              "name": "nvfp4_amax_bf16",
+              "share": 0.010924375691874705,
+              "total_s": 0.014570301
+            },
+            {
+              "calls": 154,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.004273696932372416,
+              "total_s": 0.00570001
+            },
+            {
+              "calls": 104,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0038588558971094484,
+              "total_s": 0.005146719
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_topk2",
+              "share": 0.003155869974069622,
+              "total_s": 0.004209117
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "softmax_last",
+              "share": 0.0017170874396828344,
+              "total_s": 0.002290152
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "index_select_rows",
+              "share": 0.0016289699617005149,
+              "total_s": 0.002172626
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "magma_sgemmEx_kernel<…>",
+              "share": 0.0014567672692059927,
+              "total_s": 0.0019429520000000002
+            },
+            {
+              "calls": 56,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.0014405774839493495,
+              "total_s": 0.001921359
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+              "share": 0.00115938371454948,
+              "total_s": 0.001546319
+            }
+          ],
+          "wall_s": 1.400146297,
+          "window_s": 1.3956026810000002
+        },
+        "load_s": 40.664679165,
+        "peak_mib": 27610,
+        "refine_s": 0.00108478,
+        "step_s": [
+          1.379787133,
+          1.400146297,
+          1.379779891,
+          1.379764834,
+          1.38035321,
+          1.380188872,
+          1.379984887,
+          1.379547162
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.298247409,
+        "total_s": 13.611285084,
+        "video_decode_s": 1.993123236,
+        "video_encode_s": 0.000527178,
+        "video_push_s": 0.00007497499999999999,
+        "video_rgb_s": 0.13786436000066912,
+        "video_vae_s": 1.969009513258934,
+        "video_wait_s": 0.175002151,
+        "warm": false,
+        "write_s": 0.098469449
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "frame": "/srv/trace/v2-480p/clip/h3-demo-480p-c/frame-062.png",
+        "mean": 0.13808404237220978,
+        "std": 0.18792733846181614
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/trace/v2-480p/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "gpu_trace": {
+      "busy_s": 1.39327398,
+      "by_category": [
+        {
+          "calls": 456,
+          "category": "gemm",
+          "share": 0.3330096903313727,
+          "total_s": 0.444149081
+        },
+        {
+          "calls": 450,
+          "category": "attention",
+          "share": 0.2760925842242144,
+          "total_s": 0.368236334
+        },
+        {
+          "calls": 411,
+          "category": "norm_modulate_elementwise",
+          "share": 0.15315923359258574,
+          "total_s": 0.20427493500000002
+        },
+        {
+          "calls": 1014,
+          "category": "cast",
+          "share": 0.14446328553332163,
+          "total_s": 0.19267678200000002
+        },
+        {
+          "calls": 461,
+          "category": "layout",
+          "share": 0.09327520631850557,
+          "total_s": 0.12440508
+        }
+      ],
+      "dropped_records": 0,
+      "gap_count": 2227,
+      "gap_histogram": [
+        {
+          "bucket": "<5us",
+          "count": 2227,
+          "idle_s": 0.0023287010000000003
+        },
+        {
+          "bucket": "5-50us",
+          "count": 0,
+          "idle_s": 0.0
+        },
+        {
+          "bucket": "50-500us",
+          "count": 0,
+          "idle_s": 0.0
+        },
+        {
+          "bucket": ">500us",
+          "count": 0,
+          "idle_s": 0.0
+        }
+      ],
+      "host": {
+        "device_tail_s": 1.2916641235351562,
+        "enqueue_s": 0.10776645100000001,
+        "first_activity_lag_s": 0.0038275718688964844
+      },
+      "host_launches": 0,
+      "idle_frac": 0.0016685988295260376,
+      "idle_s": 0.0023287010000000003,
+      "kernel_count": 2792,
+      "kernel_s": 1.333742212,
+      "largest_gaps": [
+        {
+          "after": "nvfp4_alpha",
+          "at_s": 1.367741026,
+          "before": "memset",
+          "gap_us": 3.841
+        },
+        {
+          "after": "memset",
+          "at_s": 0.113829514,
+          "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+          "gap_us": 3.8080000000000003
+        },
+        {
+          "after": "memset",
+          "at_s": 1.060317892,
+          "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+          "gap_us": 3.7760000000000002
+        },
+        {
+          "after": "memset",
+          "at_s": 0.9392721390000001,
+          "before": "nvfp4_quant_bf16_sw",
+          "gap_us": 3.744
+        },
+        {
+          "after": "memset",
+          "at_s": 0.254365251,
+          "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+          "gap_us": 3.712
+        },
+        {
+          "after": "memset",
+          "at_s": 0.9671239690000001,
+          "before": "nvfp4_quant_bf16_sw",
+          "gap_us": 3.68
+        },
+        {
+          "after": "memset",
+          "at_s": 0.082864479,
+          "before": "nvfp4_quant_bf16_sw",
+          "gap_us": 3.648
+        },
+        {
+          "after": "memset",
+          "at_s": 1.0023385040000001,
+          "before": "fvf_h3_gate_res_norm_mod",
+          "gap_us": 3.648
+        },
+        {
+          "after": "memset",
+          "at_s": 0.640997385,
+          "before": "nvfp4_quant_bf16_sw",
+          "gap_us": 3.6470000000000002
+        },
+        {
+          "after": "memset",
+          "at_s": 0.995026296,
+          "before": "nvfp4_quant_bf16_sw",
+          "gap_us": 3.616
+        }
+      ],
+      "memcpy": {
+        "DtoD": {
+          "bytes": 44100403600,
+          "count": 150
+        }
+      },
+      "memset": {
+        "bytes": 3600,
+        "count": 550
+      },
+      "pass": "h3",
+      "step": 1,
+      "sync_count": 0,
+      "top_kernels": [
+        {
+          "calls": 300,
+          "category": "gemm",
+          "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+          "share": 0.2758281553137196,
+          "total_s": 0.367883654
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "attn_fp4_vsa",
+          "share": 0.09987909867547928,
+          "total_s": 0.13321297
+        },
+        {
+          "calls": 308,
+          "category": "cast",
+          "name": "cast_f32_bf16",
+          "share": 0.06661728421024136,
+          "total_s": 0.088850284
+        },
+        {
+          "calls": 200,
+          "category": "cast",
+          "name": "nvfp4_quant_bf16_sw",
+          "share": 0.06517305609579072,
+          "total_s": 0.086924056
+        },
+        {
+          "calls": 100,
+          "category": "norm_modulate_elementwise",
+          "name": "h3_qk_norm_rope",
+          "share": 0.05964339081741532,
+          "total_s": 0.079548908
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "flash_mma_fwd_d128",
+          "share": 0.057047872756388396,
+          "total_s": 0.076087156
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+          "share": 0.054386614105305084,
+          "total_s": 0.072537723
+        },
+        {
+          "calls": 50,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_swiglu",
+          "share": 0.05281458318273576,
+          "total_s": 0.07044103900000001
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "attn_fp4_quant_tile",
+          "share": 0.0444010997531508,
+          "total_s": 0.05921962100000001
+        },
+        {
+          "calls": 150,
+          "category": "attention",
+          "name": "vsa_tile_mean",
+          "share": 0.03624925758891704,
+          "total_s": 0.048347165000000004
+        },
+        {
+          "calls": 100,
+          "category": "layout",
+          "name": "fvf_split_heads_rows",
+          "share": 0.03473187965651641,
+          "total_s": 0.046323374
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "vsa_combine",
+          "share": 0.033642298036526415,
+          "total_s": 0.044870153
+        },
+        {
+          "calls": 50,
+          "category": "layout",
+          "name": "mx_merge_heads",
+          "share": 0.02977523440639217,
+          "total_s": 0.039712487000000005
+        },
+        {
+          "calls": 100,
+          "category": "layout",
+          "name": "fill_f",
+          "share": 0.022147177868582,
+          "total_s": 0.029538626000000002
+        },
+        {
+          "calls": 50,
+          "category": "norm_modulate_elementwise",
+          "name": "h3_res_gate_norm_mod",
+          "share": 0.018102492207842037,
+          "total_s": 0.024144058000000003
+        },
+        {
+          "calls": 49,
+          "category": "norm_modulate_elementwise",
+          "name": "fvf_h3_gate_res_norm_mod",
+          "share": 0.017083902567522548,
+          "total_s": 0.022785522000000002
+        },
+        {
+          "calls": 100,
+          "category": "cast",
+          "name": "nvfp4_amax_bf16",
+          "share": 0.010924375691874705,
+          "total_s": 0.014570301
+        },
+        {
+          "calls": 154,
+          "category": "layout",
+          "name": "block_copy",
+          "share": 0.004273696932372416,
+          "total_s": 0.00570001
+        },
+        {
+          "calls": 104,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_binary",
+          "share": 0.0038588558971094484,
+          "total_s": 0.005146719
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "vsa_topk2",
+          "share": 0.003155869974069622,
+          "total_s": 0.004209117
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "softmax_last",
+          "share": 0.0017170874396828344,
+          "total_s": 0.002290152
+        },
+        {
+          "calls": 50,
+          "category": "layout",
+          "name": "index_select_rows",
+          "share": 0.0016289699617005149,
+          "total_s": 0.002172626
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "magma_sgemmEx_kernel<…>",
+          "share": 0.0014567672692059927,
+          "total_s": 0.0019429520000000002
+        },
+        {
+          "calls": 56,
+          "category": "cast",
+          "name": "cast_bf16_f32_bias_act",
+          "share": 0.0014405774839493495,
+          "total_s": 0.001921359
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+          "share": 0.00115938371454948,
+          "total_s": 0.001546319
+        }
+      ],
+      "wall_s": 1.400146297,
+      "window_s": 1.3956026810000002
+    },
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 15381,
+      "text_tokens": 537,
+      "wav": "/srv/trace/v2-480p/clip/h3-demo-480p-c/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "integrated_multimodal_description: A wide aerial shot follows an eagle gliding over a turquoise alpine lake, with pine forest, a narrow waterfall and snow-covered peaks visible in the background. Its wings flex gently as it banks through the warm afternoon light. The camera maintains its distance and reveals the landscape in one continuous five-second shot. Natural colors, realistic feathers, no cuts or text. overall_soundscape: Wind moving through the valley, a distant eagle call and soft waterfall noise. non_diegetic_music: None.",
+      "prompt_set": [
+        {
+          "name": "spark-mountain-lake-480p-w",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-480p-a",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-480p-b",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-480p-c",
+          "seed": 1024
+        }
+      ],
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/fvw/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 20.151668592356145,
+          "peak_reserved_gib": 20.28125,
+          "peak_used_gib": 20.151668592356145,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 20.157045884989202,
+          "peak_reserved_gib": 20.34375,
+          "peak_used_gib": 20.216196103952825,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 20.156878515146673,
+          "peak_reserved_gib": 20.34375,
+          "peak_used_gib": 20.178795549087226,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 20.156878515146673,
+          "peak_reserved_gib": 20.46875,
+          "peak_used_gib": 20.288530870340765,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 20.162039085291326,
+          "peak_reserved_gib": 21.375,
+          "peak_used_gib": 20.956942721270025,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 105.066362316,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_H3_GRAPHS": "1",
+    "FASTVIDEO_H3_NVFP4_ATTN": "1",
+    "FASTVIDEO_H3_VSA_FP4": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

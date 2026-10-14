@@ -1,0 +1,171 @@
+[INFO] h3/text_encoder {"chosen":"streamed","device_gib":0.0,"free_gib_before_load":94.28277587890625,"load_seconds":0.0,"requested":"Streamed"}
+[INFO] h3/load {"audio_vae_s":0.863645212,"dit_residency":"resident","dit_s":19.161730751,"refiner_s":0.410440523,"seconds":29.184014457,"text_encoder_s":0.0,"video_vae_s":6.491972202}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.6s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/cold_generation {"audio_decode_s":0.250011463,"decode_s":2.246635743,"denoise_s":11.3274931,"refine_s":0.126799991,"step_s":[1.588606689453125,1.42802685546875,1.38488427734375,1.3846026611328126,1.38524560546875,1.384710205078125,1.385608154296875,1.38465380859375],"text_cache":"hit","text_encoder":"cache","text_s":0.277029578,"total_s":14.154284699,"video_decode_s":1.99662428,"video_encode_s":0.000448127,"video_push_s":0.000032921,"video_rgb_s":0.10415837299795683,"video_vae_s":1.978522028774023,"video_wait_s":0.16846221600000003,"write_s":0.104060975}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 graphs: step 0 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 graphs: step 1 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 1/8: 1.8s
+[fastvideo] h3 graphs: step 2 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 graphs: step 3 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 graphs: step 4 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 4/8: 5.5s
+[fastvideo] h3 graphs: step 5 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 graphs: step 6 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 graphs: step 7 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 graphs: 8 steps: 0 replayed, 8 captured, 0 eager
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-a {"audio_decode_s":0.100680451,"decode_s":2.092620925,"denoise_s":15.811260551,"load_s":29.184014457,"peak_mib":27692,"refine_s":0.000973416,"step_s":[1.8488773193359376,1.4119965820312501,1.40543994140625,5.54464453125,1.404774658203125,1.3780726318359375,1.4131842041015625,1.40297119140625],"text_cache":"hit","text_encoder":"cache","text_s":0.263953057,"total_s":18.307031376,"video_decode_s":1.991940474,"video_encode_s":0.000351945,"video_push_s":0.000047435,"video_rgb_s":0.11073660100689138,"video_vae_s":1.9732645453214648,"video_wait_s":0.16985071999999998,"warm":true,"write_s":0.103519394}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 graphs: 8 steps: 8 replayed, 0 captured, 0 eager
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-b {"audio_decode_s":0.097168475,"decode_s":2.094678677,"denoise_s":11.034025761,"load_s":29.184014457,"peak_mib":27692,"refine_s":0.00102466,"step_s":[1.379174072265625,1.378583740234375,1.37858984375,1.379245361328125,1.379004150390625,1.379407958984375,1.3795501708984375,1.3793082275390625],"text_cache":"hit","text_encoder":"cache","text_s":0.340198862,"total_s":13.613694304,"video_decode_s":1.997510202,"video_encode_s":0.000414058,"video_push_s":0.000041266,"video_rgb_s":0.11720908800064213,"video_vae_s":1.9794697135388848,"video_wait_s":0.169633804,"warm":true,"write_s":0.109128825}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 graphs: 8 steps: 8 replayed, 0 captured, 0 eager
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-c {"audio_decode_s":0.100972047,"decode_s":2.100051412,"denoise_s":11.043528779,"load_s":29.184014457,"peak_mib":27692,"refine_s":0.000913554,"step_s":[1.380224853515625,1.3802088623046875,1.3799810791015625,1.380162353515625,1.380200439453125,1.3804423828125,1.3805341796875,1.3802441406250001],"text_cache":"hit","text_encoder":"cache","text_s":0.316548047,"total_s":13.597242643,"video_decode_s":1.999079365,"video_encode_s":0.000379256,"video_push_s":0.00004083500000000001,"video_rgb_s":0.10394659100151378,"video_vae_s":1.980739032626152,"video_wait_s":0.16986341300000002,"warm":true,"write_s":0.100509611}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 step 8/8: 1.3s
+[INFO] h3/timings/spark-mountain-lake-480p-a {"audio_decode_s":0.094076348,"decode_s":2.093155943,"denoise_s":10.596144482,"load_s":29.184014457,"peak_mib":30956,"refine_s":0.010567907,"step_s":[1.3734310302734376,1.3196953125,1.3201654052734375,1.3205308837890626,1.3207777099609375,1.3205513916015625,1.309781005859375,1.3102366943359376],"text_cache":"hit","text_encoder":"cache","text_s":0.255834976,"total_s":13.141998571,"video_decode_s":1.999079595,"video_encode_s":0.000634708,"video_push_s":0.000053159,"video_rgb_s":0.10385688700631672,"video_vae_s":1.9799425576925278,"video_wait_s":0.170539678,"warm":true,"write_s":0.119257093}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 graphs: step 0 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 graphs: step 1 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 1/8: 1.3s
+[fastvideo] h3 graphs: step 2 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 graphs: step 3 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 graphs: step 4 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 graphs: step 5 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 graphs: step 6 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 graphs: step 7 captured: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 411250965160 }, graph pool high 4.72 GiB
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 graphs: 8 steps: 0 replayed, 8 captured, 0 eager
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/spark-mountain-lake-480p-b {"audio_decode_s":0.089470766,"decode_s":2.091223136,"denoise_s":10.664814329,"load_s":29.184014457,"peak_mib":27784,"refine_s":0.000661641,"step_s":[1.3464278564453125,1.3029771728515624,1.331036865234375,1.3308477783203125,1.319832763671875,1.3027093505859375,1.3187949218750001,1.411261474609375],"text_cache":"hit","text_encoder":"cache","text_s":0.243200319,"total_s":13.124154014,"video_decode_s":2.00175237,"video_encode_s":0.000388958,"video_push_s":0.000080163,"video_rgb_s":0.1044320989995268,"video_vae_s":1.9831485480070117,"video_wait_s":0.170766643,"warm":true,"write_s":0.090485906}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 step 1/8: 1.3s
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 graphs: 8 steps: 8 replayed, 0 captured, 0 eager
+[fastvideo] h3 step 8/8: 1.3s
+[INFO] h3/timings/spark-mountain-lake-480p-c {"audio_decode_s":0.102378619,"decode_s":2.102883183,"denoise_s":10.42034338,"load_s":29.184014457,"peak_mib":27784,"refine_s":0.000708265,"step_s":[1.302664794921875,1.3023857421875,1.3024879150390625,1.3026500244140626,1.30250537109375,1.302356689453125,1.302156982421875,1.3019693603515625],"text_cache":"hit","text_encoder":"cache","text_s":0.259101858,"total_s":12.921298587999999,"video_decode_s":2.000504564,"video_encode_s":0.000413683,"video_push_s":0.000062367,"video_rgb_s":0.0965789310035661,"video_vae_s":1.9832510904073712,"video_wait_s":0.169001668,"warm":true,"write_s":0.097121196}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 step 1/8: 3.8s
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-a {"audio_decode_s":0.080093727,"decode_s":4.774967248,"denoise_s":29.586749452,"load_s":29.184014457,"peak_mib":37800,"refine_s":0.001022651,"step_s":[3.7580820312500003,3.7294694824218753,3.680996337890625,3.682976806640625,3.6845556640625,3.684914306640625,3.6852490234375,3.6795034179687502],"text_cache":"hit","text_encoder":"cache","text_s":0.254533294,"total_s":34.948716666,"video_decode_s":4.694873521,"video_encode_s":0.00047924,"video_push_s":0.000061648,"video_rgb_s":0.23395348600420082,"video_vae_s":4.652411722302437,"video_wait_s":0.15686415,"warm":true,"write_s":0.209474603}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 graphs: step 0 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 graphs: step 1 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 graphs: step 2 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 graphs: step 3 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 graphs: step 4 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 graphs: step 5 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 graphs: step 6 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 graphs: step 7 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 graphs: 8 steps: 0 replayed, 8 captured, 0 eager
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-b {"audio_decode_s":0.11820283,"decode_s":4.810936653000001,"denoise_s":29.668756555999998,"load_s":29.184014457,"peak_mib":35127,"refine_s":0.00099361,"step_s":[3.736491455078125,3.7192243652343753,3.676924072265625,3.71311279296875,3.72219580078125,3.705232666015625,3.67632177734375,3.71800537109375],"text_cache":"hit","text_encoder":"cache","text_s":0.274345719,"total_s":35.0715347,"video_decode_s":4.692733823,"video_encode_s":0.000519751,"video_push_s":0.00008271400000000001,"video_rgb_s":0.22911740698860633,"video_vae_s":4.65815091240406,"video_wait_s":0.154217052,"warm":true,"write_s":0.185666137}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 graphs: 8 steps: 8 replayed, 0 captured, 0 eager
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-c {"audio_decode_s":0.080229514,"decode_s":4.770210402,"denoise_s":29.409014274,"load_s":29.184014457,"peak_mib":35084,"refine_s":0.003015019,"step_s":[3.67726025390625,3.676688232421875,3.67591015625,3.6756767578125,3.6753935546875,3.676055419921875,3.6761318359375,3.67478369140625],"text_cache":"hit","text_encoder":"cache","text_s":0.287053001,"total_s":34.731986088,"video_decode_s":4.689980888,"video_encode_s":0.000477359,"video_push_s":0.000071286,"video_rgb_s":0.23995730898310502,"video_vae_s":4.652139853596688,"video_wait_s":0.151621262,"warm":true,"write_s":0.19020529}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 step 1/8: 3.6s
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-a {"audio_decode_s":0.082794747,"decode_s":4.767297919000001,"denoise_s":28.643296323,"load_s":29.184014457,"peak_mib":45390,"refine_s":0.000800632,"step_s":[3.64068603515625,3.573475341796875,3.57083642578125,3.57020458984375,3.573210205078125,3.573095458984375,3.5705078125000003,3.5701279296875],"text_cache":"hit","text_encoder":"cache","text_s":0.285685597,"total_s":34.060640953,"video_decode_s":4.684503172,"video_encode_s":0.000575888,"video_push_s":0.000077246,"video_rgb_s":0.2357898880104331,"video_vae_s":4.649423319280148,"video_wait_s":0.149237767,"warm":true,"write_s":0.219526589}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 graphs: step 0 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1032248952488 }, graph pool high 11.09 GiB
+[fastvideo] h3 graphs: step 1 captured: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1032248952488 }, graph pool high 11.09 GiB
+[fastvideo] h3 step 1/8: 3.6s
+[fastvideo] h3 graphs: step 2 capture: graph capture: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory") (end capture: CUDA_SUCCESS); eager from here
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 graphs: 8 steps: 0 replayed, 2 captured, 6 eager
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-b {"audio_decode_s":0.077552298,"decode_s":4.762259553,"denoise_s":28.609901654,"load_s":29.184014457,"peak_mib":44422,"refine_s":0.000751399,"step_s":[3.6217666015625,3.60108740234375,3.564508544921875,3.564672119140625,3.5646943359375003,3.56448583984375,3.5642646484375002,3.5634038085937503],"text_cache":"hit","text_encoder":"cache","text_s":0.24447778,"total_s":33.94535695,"video_decode_s":4.684707255,"video_encode_s":0.000465405,"video_push_s":0.000069603,"video_rgb_s":0.23166606801573467,"video_vae_s":4.64950362944603,"video_wait_s":0.149137531,"warm":true,"write_s":0.203918161}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 step 1/8: 3.6s
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-c {"audio_decode_s":0.077997765,"decode_s":4.766520229,"denoise_s":28.626229954,"load_s":29.184014457,"peak_mib":44328,"refine_s":0.000664557,"step_s":[3.6220847167968753,3.57366259765625,3.572623291015625,3.5724892578125003,3.573139404296875,3.568963623046875,3.57106494140625,3.57087744140625],"text_cache":"hit","text_encoder":"cache","text_s":0.240930896,"total_s":33.965783809,"video_decode_s":4.688522464,"video_encode_s":0.000506839,"video_push_s":0.000062956,"video_rgb_s":0.23825375999365425,"video_vae_s":4.652228026390076,"video_wait_s":0.150202265,"warm":true,"write_s":0.198624769}

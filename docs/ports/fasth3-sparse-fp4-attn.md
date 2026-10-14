@@ -167,6 +167,11 @@ block (step busy time / 50). Files: `artifacts/ports/fasth3-sparse-fp4-attn/run-
 | V2 | 1344x768 | h3-demo | 39.99 | **30.29** | 1.32x | 29.28 | 1.03x |
 | V2 | 1344x768 | spark-mountain-lake | 39.04 | **29.55** | 1.32x | 28.41 | 1.04x |
 
+**Update (2026-10-14, docs/perf/h3-denoise-graphs.md):** the step loop now times steps with lazy CUDA events instead of
+a synchronize per step, byte-identical. On the FP4 tier this gives V2 h3-demo 11.67 -> **11.14 s** at 480p and
+29.96 -> **29.50 s** at 768p (upstream 10.25 / 29.28 s). Opt-in CUDA graphs of the steps (`FASTVIDEO_H3_GRAPHS=1`)
+take off another 0.3-2% on a replayed request shape.
+
 Median step 1.757 -> 1.472 s (480p) and 4.998 -> 3.789 s (768p). Peak device memory is unchanged or lower (480p
 26.5 -> 26.0 GiB, 768p 34.2 -> 32.4 GiB on h3-demo). VAE decode is unchanged (2.1 / 4.8 s).
 
