@@ -46,6 +46,30 @@ pack() {
      --exclude='*-dump' --exclude='results.tgz' -czf results.tgz.tmp . && mv results.tgz.tmp results.tgz)
 }
 finish() { pack; echo "$1" >$SRV/DONE; log "DONE $1"; }
+# /srv on :8000, and PUT /plan (header X-FV-Token = $FV_UPLOAD_TOKEN) writes /opt/fv/plan.json: the R2 plan (presigned
+# GETs with per-part hashes, ~100 kB) is too large for the pod's env, so the launcher uploads it after boot.
+cat >/opt/fv/serve.py <<'PYEOF'
+import http.server, os, sys
+TOKEN = os.environ.get("FV_UPLOAD_TOKEN", "")
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k):
+        super().__init__(*a, directory="/srv", **k)
+    def log_message(self, *a):
+        pass
+    def do_PUT(self):
+        if not TOKEN or self.headers.get("X-FV-Token") != TOKEN or self.path != "/plan":
+            self.send_response(403); self.end_headers(); return
+        n = int(self.headers.get("Content-Length", "0"))
+        data = self.rfile.read(n)
+        fd = os.open("/opt/fv/plan.json.tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace("/opt/fv/plan.json.tmp", "/opt/fv/plan.json")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ok\n")
+http.server.ThreadingHTTPServer(("", 8000), H).serve_forever()
+PYEOF
+(env FV_UPLOAD_TOKEN="${FV_UPLOAD_TOKEN:-}" "$PY" /opt/fv/serve.py >/dev/null 2>&1 &)
+unset FV_UPLOAD_TOKEN
 log "start: mode ${FV_WEIGHTS_MODE:-volume}, steps${STEPS}, arms $ARMS; $("$BIN" --version 2>/dev/null | head -1)"
 nvidia-smi >$SRV/nvidia-smi.txt 2>&1
 # A host whose GPU memory is already held (2026-10-13: 95.8 of 97.9 GiB used, no process of ours) cannot run
@@ -59,6 +83,12 @@ if [[ "${used:-0}" -gt 4096 ]]; then
 fi
 (while sleep 1; do nvidia-smi --query-gpu=timestamp,memory.used,utilization.gpu,power.draw --format=csv,noheader,nounits; done) >$SRV/nvsmi.csv 2>/dev/null &
 
+if want fetch; then
+  for _ in $(seq 180); do [[ -s /opt/fv/plan.json ]] && break; sleep 5; done
+  [[ -s /opt/fv/plan.json ]] || { log "no plan uploaded in 15 min"; finish 1; exit 1; }
+  log "plan received"
+fi
+
 # ---- unit checks first: they need no weights, so they run while the weights arrive --------------------------------
 fpid=""
 if want fetch; then
@@ -68,9 +98,11 @@ fi
 if want kernels; then
   step kernels "$BIN" --out $SRV/kernels kernels --groups h3_fp4_attn >$SRV/kernels.log 2>&1
   if [[ "${FV_KERNELS_GATE:-1}" == 1 ]] && ! grep -q '"status": *"pass"' $SRV/kernels/*.json 2>/dev/null; then
-    log "kernel checks did not pass: stopping before any model run"
-    [[ -n "$fpid" ]] && kill "$fpid" 2>/dev/null
-    finish 1; exit 1
+    # No FP4 model run on a kernel that failed its checks; the bf16 VSA traces (the 768p question) still run.
+    log "kernel checks did not pass: bf16 VSA traces only"
+    ARMS=bf16vsa
+    STEPS=" ${STEPS// parity / } "; STEPS="${STEPS// cells / }"
+    echo kernels-failed >$SRV/KERNELS_FAILED
   fi
 fi
 want fetch && bash $G/fetch-lpips.sh $L/lpips >$SRV/lpips.log 2>&1

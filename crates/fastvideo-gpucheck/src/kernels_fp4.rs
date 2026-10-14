@@ -553,7 +553,11 @@ fn timing(report: &mut Report, seed: u64) -> StageResult<()> {
         let topk = plan.prefix_tiles + plan.k_vid(0.8);
         let pd = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, 64)?;
         let mut rng = Rng(seed ^ h as u64);
-        let rnd = |rng: &mut Rng| -> Vec<f32> { (0..heads * seq * 128).map(|_| bf16r(rng.normal())).collect() };
+        // One head's values repeated over the heads: the timing does not depend on them.
+        let rnd = |rng: &mut Rng| -> Vec<f32> {
+            let one: Vec<f32> = (0..seq * 128).map(|_| bf16r(rng.normal())).collect();
+            one.repeat(heads)
+        };
         let (q, k, v) = (d.stream.memcpy_stod(&rnd(&mut rng))?, d.stream.memcpy_stod(&rnd(&mut rng))?, d.stream.memcpy_stod(&rnd(&mut rng))?);
         // Random lists of the real length: prefix tiles, then distinct video tiles.
         let mut lists = Vec::with_capacity(heads * n * topk);

@@ -9,8 +9,8 @@
 #   h3-fp4attn-validate.sh fetch <pod> DIR  results.tgz into DIR
 #   h3-fp4attn-validate.sh down <pod>     delete the pod and check it is gone (GET: 404)
 #
-# Nothing is written to R2 or a volume: the R2 plan (presigned GETs from the read-only key) reaches the pod gzip +
-# base64 in its env. With stock in EU-RO-1 the pod mounts the EU weight volume read only (h3-base: text encoder,
+# Nothing is written to R2 or a volume: the R2 plan (presigned GETs from the read-only key; ~100 kB with its part
+# hashes, too large for the pod env) is PUT to the pod's :8000 once it answers, with a per-pod random token. With stock in EU-RO-1 the pod mounts the EU weight volume read only (h3-base: text encoder,
 # tokenizer, VAEs); otherwise (or FV_NO_VOLUME=1) those come from R2 too. No CUDA-version filter (2026-10-14: hosts
 # run CUDA 13.2 drivers).
 #
@@ -99,25 +99,24 @@ print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" 
 PYEOF
     rm -f "$tmp/plan.json"
     gzip -9c "$HERE/h3-fp4attn-pod.sh" | base64 -w0 >"$tmp/script.b64"
+    token="$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
     # The runtime image has curl and coreutils but no Python: uv brings one. The pod deletes itself 10 min after
     # DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop deletes it regardless.
-    start='mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
-&& printf %s "$FV_POD_SCRIPT_B64" | base64 -d | gunzip >/opt/fv/pod.sh \
+    start='mkdir -p /opt/fv /srv && printf %s "$FV_POD_SCRIPT_B64" | base64 -d | gunzip >/opt/fv/pod.sh \
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 FV_POD_SCRIPT_B64 && bash /opt/fv/pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+&& unset FV_POD_SCRIPT_B64 && bash /opt/fv/pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3fp4attn-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \
       --argjson dcs "$dcs_json" --arg mode "$mode" --arg start "$start" --argjson gpus "$gpus_json" \
-      --rawfile plan "$tmp/plan.b64" --rawfile script "$tmp/script.b64" --arg steps "${FV_STEPS:-}" \
+      --arg token "$token" --rawfile script "$tmp/script.b64" --arg steps "${FV_STEPS:-}" \
       --arg arms "${FV_ARMS:-}" --arg gate "${FV_KERNELS_GATE:-1}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, dataCenterPriority: "availability", ports: ["8000/http"],
         dockerStartCmd: ["/bin/bash", "-lc", $start],
-        env: ({FV_WEIGHTS_MODE: $mode, FV_POD_SCRIPT_B64: $script, FV_KERNELS_GATE: $gate}
-              + ([range(0; $plan | length; 60000) as $i | {key: "FV_PLAN_GZ_B64_\($i / 60000 | floor)", value: $plan[$i:$i + 60000]}] | from_entries)
+        env: ({FV_WEIGHTS_MODE: $mode, FV_POD_SCRIPT_B64: $script, FV_KERNELS_GATE: $gate, FV_UPLOAD_TOKEN: $token}
               + (if $steps != "" then {FV_STEPS: $steps} else {} end) + (if $arms != "" then {FV_ARMS: $arms} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 160, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 260} end)')"
@@ -127,6 +126,14 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     # A distinctive marker in the backstop's command line, so no generic pkill pattern matches it.
     setsid nohup bash -c ": fv-h3fp4attn-backstop-$id; sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
     log "pod $id $(jq -r '.machine.gpuDisplayName // .gpuTypeId // "?"' <<<"$resp") \$$(jq -r '.costPerHr' <<<"$resp")/hr in $(jq -r '.machine.dataCenterId // "?"' <<<"$resp"); balance \$$bal; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
+    # The plan goes up once the pod's :8000 answers (PUT /plan with the token; the pod waits up to 15 min).
+    for _ in $(seq 250); do
+      if curl -sS --max-time 20 --fail -X PUT -H "X-FV-Token: $token" --data-binary @<(base64 -d <"$tmp/plan.b64" | gunzip) \
+           "https://$id-8000.proxy.runpod.net/plan" >/dev/null 2>&1; then
+        log "plan uploaded"; break
+      fi
+      sleep 6
+    done
     echo "$id"
     ;;
   status)
