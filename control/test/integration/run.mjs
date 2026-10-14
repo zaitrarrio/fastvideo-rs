@@ -1263,7 +1263,7 @@ await step("standalone Runpod pod with weights_source r2 in a data centre withou
   assert.ok(op.log.some((l) => /no NVIDIA H200 in US-TX-3/.test(typeof l === "string" ? l : l.msg || JSON.stringify(l))), JSON.stringify(op.log));
   const sp = (await call("/api/standalone/r2us", { headers: T() })).j.pod;
   assert.deepEqual([sp.definition.weights_source, sp.definition.dc, sp.definition.volume, sp.pod.dc], ["r2", "US-TX-3, any", null, "US-TX-3"]);
-  assert.equal((await call("/api/standalone/r2us", { method: "DELETE", headers: T() })).status, 202);
+  { const dr = await call("/api/standalone/r2us", { method: "DELETE", headers: T() }); assert.equal(dr.status, 202, dr.text); }
   for (let i = 0; i < 120 && (await call("/api/standalone/r2us", { headers: T() })).status !== 404; i++) await sleep(500);
   assert.equal(mine().length, 0);
 });
