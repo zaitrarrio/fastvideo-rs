@@ -222,6 +222,71 @@ fn file_sink_video_only_still_has_audio() {
 }
 
 #[test]
+fn live_sink_exit_error_has_ffmpegs_reason_and_no_key() {
+    if !have_ffmpeg() {
+        return;
+    }
+    // A closed port: ffmpeg's RTMP connect is refused and it exits at once.
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    let url = format!("rtmp://127.0.0.1:{port}/live/sk-secret-stream-key");
+    let mut cfg = SinkConfig::new(SinkTarget::Rtmp { url }, 64, 64, 16, None);
+    cfg.encoder = FfmpegH264::Libx264CpuTest;
+    let mut s = FfmpegSink::start(cfg).unwrap();
+    s.send(&pattern(64, 64, 0), None).unwrap();
+    let t0 = std::time::Instant::now();
+    let msg = loop {
+        if let Some(m) = s.exit_error() {
+            break m;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(20), "ffmpeg should exit on a refused connection");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // The status and ffmpeg's own words, read after its stderr reached EOF
+    // (before, a race left only "ffmpeg exited").
+    println!("exit_error: {msg}");
+    assert!(msg.starts_with("ffmpeg exited ("), "{msg}");
+    assert!(!msg.contains("without an error message"), "{msg}");
+    assert!(!msg.contains("sk-secret-stream-key"), "the stream key is scrubbed: {msg}");
+    assert!(!s.is_running());
+}
+
+#[test]
+fn live_sink_reports_an_exit_that_a_restart_reaped() {
+    if !have_ffmpeg() {
+        return;
+    }
+    // A server that hangs up on the first connection and holds every later
+    // one open: the first ffmpeg dies, its restart stays up.
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for (i, c) in l.incoming().enumerate() {
+            match c {
+                Ok(c) if i == 0 => drop(c),
+                Ok(c) => held.push(c),
+                Err(_) => break,
+            }
+        }
+    });
+    let mut cfg = SinkConfig::new(SinkTarget::Rtmp { url: format!("rtmp://127.0.0.1:{port}/live/k") }, 64, 64, 16, None);
+    cfg.encoder = FfmpegH264::Libx264CpuTest;
+    let mut s = FfmpegSink::start(cfg).unwrap();
+    let t0 = std::time::Instant::now();
+    // Never asking in between: the restart (2 s on) reaps the first ffmpeg.
+    while s.stats().restarts == 0 {
+        assert!(t0.elapsed() < Duration::from_secs(20), "the sink should restart");
+        s.send(&pattern(64, 64, 0), None).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(s.is_running(), "the restarted ffmpeg is held open");
+    let msg = s.exit_error().expect("the reaped ffmpeg's reason is kept");
+    assert!(msg.starts_with("ffmpeg exited ("), "{msg}");
+    assert_eq!(s.exit_error(), None, "reported once");
+}
+
+#[test]
 fn file_sink_av_over_two_pipes() {
     if !have_ffmpeg() {
         return;

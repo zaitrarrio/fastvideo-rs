@@ -6,7 +6,7 @@
 //! "output": {"kind": "cloudflare" | "cloudflare-rtmps" | "cloudflare-srt" | "whip" | "rtmps" | "srt",
 //!            "url": "…", "token": "…", "user": "…", "stream_key": "…",
 //!            "stream_id": "…", "passphrase": "…", "codec": "h264" | "vp8" | "vp9",
-//!            "target": "cloudflare" | "mediamtx"}
+//!            "target": "cloudflare" | "mediamtx", "insecure_skip_verify": false}
 //! ```
 //!
 //! Credentials (`token`, `stream_key`, `passphrase`, a URL's userinfo, query
@@ -120,6 +120,10 @@ pub struct OutputRequest {
     /// WHIP endpoint kind: `cloudflare` | `mediamtx` (default: from the URL).
     #[serde(default)]
     pub target: Option<String>,
+    /// `rtmps://` only, tests only: skip the server certificate check.
+    /// Refused unless `[outputs] allow_private` (`FV_OUTPUTS_ALLOW_PRIVATE=1`).
+    #[serde(default)]
+    pub insecure_skip_verify: Option<bool>,
 }
 
 /// A validated output. `Debug` never prints credentials.
@@ -136,6 +140,9 @@ pub struct OutputSpec {
     pub passphrase: Option<String>,
     pub codec: VideoCodec,
     pub whip_target: Option<WhipTarget>,
+    /// RTMPS without certificate verification (tests against a self-signed
+    /// MediaMTX; only with `allow_private`).
+    pub insecure_skip_verify: bool,
 }
 
 impl std::fmt::Debug for OutputSpec {
@@ -192,8 +199,12 @@ impl OutputSpec {
             Some(t) if kind == OutputKind::Whip => Some(t.parse::<WhipTarget>().map_err(|e| bad("output.target", e.to_string()))?),
             Some(_) => return Err(bad("output.target", "`target` applies to kind whip only")),
         };
-        let mut spec = OutputSpec { kind, url: None, token, user, stream_key, stream_id, passphrase, codec, whip_target };
+        let insecure_skip_verify = r.insecure_skip_verify.unwrap_or(false);
+        let mut spec = OutputSpec { kind, url: None, token, user, stream_key, stream_id, passphrase, codec, whip_target, insecure_skip_verify };
         let allowed = |what: &str, ok: bool| if ok { Ok(()) } else { Err(bad(&format!("output.{what}"), format!("`{what}` does not apply to kind {}", kind.as_str()))) };
+        if insecure_skip_verify && kind != OutputKind::Rtmps {
+            return Err(bad("output.insecure_skip_verify", format!("`insecure_skip_verify` does not apply to kind {} (rtmps:// URLs only)", kind.as_str())));
+        }
         match kind {
             OutputKind::Cloudflare | OutputKind::CloudflareRtmps | OutputKind::CloudflareSrt => {
                 if nonempty(&r.url).is_some() {
@@ -231,6 +242,17 @@ impl OutputSpec {
                     }
                 } else if u.path().trim_matches('/').split('/').filter(|s| !s.is_empty()).count() < 2 {
                     return Err(bad("output.stream_key", "give `stream_key`, or a URL ending in /<app>/<key>"));
+                }
+                if insecure_skip_verify {
+                    if u.scheme() != "rtmps" {
+                        return Err(bad("output.insecure_skip_verify", "`insecure_skip_verify` applies to rtmps:// URLs only"));
+                    }
+                    if !policy.allow_private {
+                        return Err(bad(
+                            "output.insecure_skip_verify",
+                            "certificate verification can only be skipped on a test server ([outputs] allow_private / FV_OUTPUTS_ALLOW_PRIVATE=1)",
+                        ));
+                    }
                 }
                 spec.url = Some(u);
             }
@@ -310,6 +332,9 @@ impl OutputSpec {
         });
         if self.kind.is_whip() {
             v["codec"] = json!(codec_name(self.codec));
+        }
+        if self.insecure_skip_verify {
+            v["tls_verify"] = json!(false);
         }
         if let Some(t) = self.whip_target {
             v["target"] = json!(match t {
@@ -494,6 +519,35 @@ mod tests {
         assert_eq!(e.param.as_deref(), Some("output.url"));
         parse(json!({"kind": "srt", "url": "srt://203.0.113.9:9000"})).unwrap_err(); // documentation range
         parse(json!({"kind": "srt", "url": "srt://8.8.8.8:9000"})).unwrap();
+    }
+
+    #[test]
+    fn insecure_skip_verify_is_for_test_servers_only() {
+        let req = json!({"kind": "rtmps", "url": "rtmps://127.0.0.1:1937/live/k", "insecure_skip_verify": true});
+        let private = UrlPolicy { allow_private: true };
+        // Off by default; on only with allow_private, and shown.
+        let s = OutputSpec::parse(&json!({"kind": "rtmps", "url": "rtmps://live.example.com/live/k"}), private).unwrap();
+        assert!(!s.insecure_skip_verify);
+        assert!(s.view().get("tls_verify").is_none());
+        let s = OutputSpec::parse(&req, private).unwrap();
+        assert!(s.insecure_skip_verify);
+        assert_eq!(s.view()["tls_verify"], false);
+        let pub_req = json!({"kind": "rtmps", "url": "rtmps://live.example.com/live/k", "insecure_skip_verify": true});
+        let e = parse(pub_req).unwrap_err();
+        assert_eq!(e.param.as_deref(), Some("output.insecure_skip_verify"));
+        assert!(e.message.contains("allow_private"), "{}", e.message);
+        // rtmps:// only: nothing to skip on rtmp://, SRT, WHIP or Cloudflare.
+        for v in [
+            json!({"kind": "rtmps", "url": "rtmp://127.0.0.1/live/k", "insecure_skip_verify": true}),
+            json!({"kind": "whip", "url": "https://127.0.0.1/w", "insecure_skip_verify": true}),
+            json!({"kind": "srt", "url": "srt://127.0.0.1:9000", "insecure_skip_verify": true}),
+            json!({"kind": "cloudflare-rtmps", "insecure_skip_verify": true}),
+        ] {
+            let e = OutputSpec::parse(&v, private).unwrap_err();
+            assert_eq!(e.param.as_deref(), Some("output.insecure_skip_verify"), "{v}");
+        }
+        // `false` is accepted anywhere.
+        parse(json!({"kind": "cloudflare-rtmps", "insecure_skip_verify": false})).unwrap();
     }
 
     #[test]
