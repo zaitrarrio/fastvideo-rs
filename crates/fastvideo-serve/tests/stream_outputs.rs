@@ -75,8 +75,9 @@ async fn cf_create(State(cf): State<Cf>, Path(acct): Path<String>, h: HeaderMap,
             "uid": uid,
             "meta": body["meta"],
             "recording": {"mode": rec},
-            "rtmps": {"url": "rtmps://live.cloudflare.example:443/live/", "streamKey": RTMPS_KEY},
-            "srt": {"url": "srt://live.cloudflare.example:778", "streamId": "f256e6ea9341d51eea64c9454659e576", "passphrase": SRT_PASS},
+            // Unreachable ingests on this host (port 9: nothing listens).
+            "rtmps": {"url": "rtmps://localhost:9/live/", "streamKey": RTMPS_KEY},
+            "srt": {"url": "srt://localhost:9", "streamId": "f256e6ea9341d51eea64c9454659e576", "passphrase": SRT_PASS},
             "webRTC": {"url": format!("{}/{PUBLISH_KEY}/webRTC/publish", cf.whip_base)},
             "webRTCPlayback": {"url": format!("https://customer-abc123.cloudflarestream.com/{uid}/webRTC/play")},
         }

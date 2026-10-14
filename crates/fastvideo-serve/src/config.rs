@@ -47,7 +47,7 @@
 //! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
 //! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
-//! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms` |
+//! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS`, `FV_OUTPUTS_RTMPS_CA_FILE` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms`, `outputs.rtmps_ca_file` (extra CAs for RTMPS, PEM) |
 //! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
@@ -603,13 +603,18 @@ pub struct OutputsCfg {
     pub allow_private: bool,
     /// SRT receiver latency (ffmpeg `latency`), 20..8000 ms.
     pub srt_latency_ms: u32,
+    /// RTMPS: a PEM file of extra CA certificates trusted besides the
+    /// system's (`FV_OUTPUTS_RTMPS_CA_FILE`; a private CA, or a test CA).
+    /// RTMPS always verifies the server's certificate and name
+    /// (docs/serve/stream-outputs.md "RTMPS TLS").
+    pub rtmps_ca_file: Option<PathBuf>,
     /// The default output: a Cloudflare Stream live input per stream.
     pub cloudflare: CloudflareOutputCfg,
 }
 
 impl Default for OutputsCfg {
     fn default() -> Self {
-        Self { allow_private: false, srt_latency_ms: 1000, cloudflare: CloudflareOutputCfg::default() }
+        Self { allow_private: false, srt_latency_ms: 1000, rtmps_ca_file: None, cloudflare: CloudflareOutputCfg::default() }
     }
 }
 
@@ -1244,6 +1249,9 @@ impl Config {
                 .ok()
                 .filter(|n| (20..=8000).contains(n))
                 .ok_or_else(|| ConfigError::Invalid(format!("FV_OUTPUTS_SRT_LATENCY_MS={v} is not 20..8000")))?;
+        }
+        if let Some(v) = env.var("FV_OUTPUTS_RTMPS_CA_FILE") {
+            self.outputs.rtmps_ca_file = Some(PathBuf::from(v.trim())).filter(|p| !p.as_os_str().is_empty());
         }
         if let Some(v) = env.var("FV_DIRECTOR_ALLOW_OUTPUT") {
             self.director.allow_output = matches!(v.trim(), "1" | "true" | "yes" | "on");

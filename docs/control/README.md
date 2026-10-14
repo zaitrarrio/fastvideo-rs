@@ -426,6 +426,10 @@ workers, the backstop (`FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`,
   (docs/serve/stream-outputs.md "fv-control"; `FV_CF_ACCOUNT_ID` is already
   every pod's, from the Runpod secret `fv_cf_account_id`). Serverless
   specs take it as `"FV_CF_STREAM_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_stream_api_token }}"`.
+  **Done (owner, 2026-10-13):** the Runpod secret `fv_cf_stream_api_token`
+  exists (step 3 of the owner setup in docs/serve/stream-outputs.md), so
+  that reference resolves on pods and endpoints; never put the value itself
+  in a spec or variable.
 - A secret variable (`secret: true`) is sealed in D1 and shows as
   `••••••••` in every view and in the audit log. System secrets are masked
   the same way. Runpod secret references (`{{ RUNPOD_SECRET_… }}`) are
