@@ -1,0 +1,113 @@
+{
+    "programs": [
+        {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_name": "aac",
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2
+                },
+                {
+                    "index": 1,
+                    "codec_name": "h264",
+                    "codec_type": "video",
+                    "width": 840,
+                    "height": 480
+                }
+            ]
+        },
+        {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_name": "aac",
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2
+                },
+                {
+                    "index": 2,
+                    "codec_name": "h264",
+                    "codec_type": "video",
+                    "width": 1260,
+                    "height": 720
+                }
+            ]
+        },
+        {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_name": "aac",
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2
+                },
+                {
+                    "index": 3,
+                    "codec_name": "h264",
+                    "codec_type": "video",
+                    "width": 630,
+                    "height": 360
+                }
+            ]
+        },
+        {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_name": "aac",
+                    "codec_type": "audio",
+                    "sample_rate": "48000",
+                    "channels": 2
+                },
+                {
+                    "index": 4,
+                    "codec_name": "h264",
+                    "codec_type": "video",
+                    "width": 420,
+                    "height": 240
+                }
+            ]
+        }
+    ],
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2
+        },
+        {
+            "index": 1,
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 840,
+            "height": 480
+        },
+        {
+            "index": 2,
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1260,
+            "height": 720
+        },
+        {
+            "index": 3,
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 630,
+            "height": 360
+        },
+        {
+            "index": 4,
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 420,
+            "height": 240
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T03:56:48.922490354Z",
+  "created_at": "2026-10-14T03:56:34.94922172Z",
+  "error": null,
+  "expires_at": "2026-10-15T03:56:34.94922172Z",
+  "fps": 24,
+  "height": 480,
+  "id": "fvjob_d1cac94e1bf94cf4b569b408750e5a54",
+  "metrics": {
+    "build_rtf": 1.703055144580645,
+    "inference_s": 8.799118247,
+    "peak_memory_mb": 60480.39756679535,
+    "queue_s": 0.002373247,
+    "run_s": 13.970895387,
+    "stage_durations": {
+      "audio_decode": 0.071011375,
+      "denoise": 8.799118247,
+      "encode": 0.217605722,
+      "refine": 0.00054717,
+      "text": 1.330208538,
+      "video_decode": 2.807982106
+    }
+  },
+  "model": "fasth3",
+  "notes": [
+    "canvas: 832x480 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 3642663,
+    "fps": 24,
+    "frames": 124,
+    "height": 480,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 832
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "fasth3-4step-vsa",
+  "resolved_model": "fasth3",
+  "seed": 7,
+  "started_at": "2026-10-14T03:56:34.951594967Z",
+  "status": "succeeded",
+  "task": "keyframes",
+  "tier": "turbo",
+  "width": 832,
+  "hr_tag": "turbo-fl2va-480",
+  "hr_task": "fl2va",
+  "hr_wall_s": 14.3
+}

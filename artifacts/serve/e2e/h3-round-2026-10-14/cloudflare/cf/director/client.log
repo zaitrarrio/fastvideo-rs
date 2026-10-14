@@ -1,0 +1,270 @@
+session 1d518ace-2f01-464d-a1bb-36079fc9f572
+session_info: fps 24 chunk 5 s, context 1 frames, causal null
+chunk 0 v1 frames 124 gen 25.98s pace null fps buffer 5.17s recaches null
+0.1 s: prompt v2
+chunk 1 v1 frames 124 gen 33.34s pace null fps buffer 5.12s recaches null
+{"behavior":"freeze_video_and_silence_audio_until_ready","chunk_index":1,"late_by_seconds":28.250003154,"type":"deadline_missed"}
+{"prompt_version":2,"type":"prompt_applied"}
+chunk 2 v2 frames 124 gen 34.41s pace null fps buffer 5.12s recaches null
+{"behavior":"freeze_video_and_silence_audio_until_ready","chunk_index":2,"late_by_seconds":29.374997064,"type":"deadline_missed"}
+chunk 3 v2 frames 124 gen 34.42s pace null fps buffer 5.12s recaches null
+{
+  "app": "minimax/h3-turbo",
+  "audio_packets": 6420,
+  "chunks": 4,
+  "configured": {
+    "acceleration": null,
+    "aspect_ratio": "16:9",
+    "audio_bitrate": null,
+    "chunk_duration": 5,
+    "enable_safety_checker": false,
+    "has_initial_audio": false,
+    "has_initial_image": false,
+    "memory": 12,
+    "prompt_version": 1,
+    "resolution": "768p",
+    "type": "configured",
+    "x_fv_output": {
+      "codec": "h264",
+      "credentials": "none",
+      "kind": "cloudflare",
+      "playback_format": "whep",
+      "url": null
+    }
+  },
+  "deadline_missed": 2,
+  "errors": [],
+  "final_metrics": {
+    "final": true,
+    "gauges": {
+      "audio_packets": 6422,
+      "buffered_frames": 123,
+      "chunks": 4,
+      "encode_ms_total": 17461.426,
+      "underruns": 3,
+      "video_packets": 2456,
+      "video_seconds": 15.416666666666666
+    },
+    "history_limit": 64,
+    "history_size": 4,
+    "phases": {
+      "delivery": {
+        "count": 0,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "total_ms": -0.0
+      },
+      "generation": {
+        "count": 4,
+        "max_ms": 34423.622,
+        "p50_ms": 34409.079,
+        "p95_ms": 34423.622,
+        "total_ms": 128155.707
+      },
+      "prepare": {
+        "count": 4,
+        "max_ms": 71.246,
+        "p50_ms": 67.533,
+        "p95_ms": 71.246,
+        "total_ms": 210.77299999999997
+      }
+    },
+    "session_wall_ms": 128451.693,
+    "type": "session_metrics",
+    "units": "ms"
+  },
+  "freezes_over_250ms": 0,
+  "generation_fps_mean": 0.0,
+  "generation_fps_min": null,
+  "generation_over_playback": 6.238817342409735,
+  "keyframes": 52,
+  "max_frame_gap_ms": 115.45453499999712,
+  "output_events": [
+    {
+      "output": {
+        "codec": "h264",
+        "credentials": "none",
+        "kind": "cloudflare",
+        "playback_format": "whep",
+        "url": null
+      },
+      "playback": {
+        "format": "whep",
+        "iframe_url": "<cloudflare playback URL, redacted>",
+        "live_input_id": "1eb89344a403c325fd6ec073179b82c6",
+        "provider": "cloudflare",
+        "whep_url": "<cloudflare playback URL, redacted>"
+      },
+      "type": "output_ready"
+    }
+  ],
+  "prompt_rejected": [],
+  "recaches_reported": 0,
+  "received_fps": 24.03153753759594,
+  "received_span_s": 102.15742526500001,
+  "rtp_fps": 24.0,
+  "segments_expanded": [],
+  "session_id": "1d518ace-2f01-464d-a1bb-36079fc9f572",
+  "session_info": {
+    "accelerations": [
+      "none"
+    ],
+    "app": "minimax-h3-turbo-director",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1"
+    ],
+    "audio_behaviors": [
+      "replace",
+      "queue"
+    ],
+    "audio_bitrates": [
+      96000,
+      128000,
+      192000
+    ],
+    "audio_conditioning": false,
+    "audio_sample_rate": 48000,
+    "chunk_duration_frames": {
+      "10": 243,
+      "5": 124
+    },
+    "chunk_duration_note": "at 1080p chunks are 5 s (the tier's clip cap)",
+    "chunk_duration_options": [
+      5,
+      10
+    ],
+    "chunk_duration_options_by_resolution": {
+      "1080p": [
+        5
+      ],
+      "480p": [
+        5,
+        10
+      ],
+      "768p": [
+        5,
+        10
+      ]
+    },
+    "chunk_seconds": 5,
+    "client_message_types": [
+      "configure",
+      "ping",
+      "prompt",
+      "stop"
+    ],
+    "conditioning_audio_sample_rate": 32000,
+    "continuation_context_frames": 1,
+    "continuation_playback_seconds": 5.125,
+    "default_acceleration": "none",
+    "default_audio_bitrate": null,
+    "default_chunk_duration": 5,
+    "default_memory": 12,
+    "fps": 24,
+    "max_audio_source_seconds": 0,
+    "max_chunk_duration": 15,
+    "max_memory": 50,
+    "max_session_seconds": null,
+    "min_chunk_duration": 5,
+    "min_memory": 1,
+    "one_session_per_machine": true,
+    "prompt_context_segments": 12,
+    "prompt_deck_size": 6,
+    "prompt_expander": "none",
+    "protocol_version": 1,
+    "resolutions": [
+      "480p",
+      "768p",
+      "1080p"
+    ],
+    "script_max_audio_beats": 0,
+    "script_max_beats": 64,
+    "script_max_end_images": 16,
+    "script_max_pending": 4,
+    "script_max_queued": 4,
+    "script_min_chunk_seconds": 5,
+    "script_min_end_image_spacing_seconds": 3,
+    "script_min_opening_chunk_seconds": 5,
+    "script_modes": [
+      "replace",
+      "append"
+    ],
+    "scripts": true,
+    "server_message_types": [
+      "session_info",
+      "configured",
+      "prompt_pending",
+      "prompt_applied",
+      "prompt_rejected",
+      "audio_pending",
+      "audio_applied",
+      "audio_rejected",
+      "audio_exhausted",
+      "chunk",
+      "chunk_metrics",
+      "deadline_missed",
+      "error",
+      "pong",
+      "session_metrics",
+      "stream_exhausted"
+    ],
+    "session_limit_scope": "configured",
+    "type": "session_info",
+    "x_fv_output": {
+      "available": true,
+      "destinations": {
+        "allow_private": false,
+        "cloudflare": {
+          "on_stop": "auto",
+          "recording": "auto"
+        },
+        "codecs": {
+          "rtmps": [
+            "h264"
+          ],
+          "srt": [
+            "h264"
+          ],
+          "whip": [
+            "h264",
+            "vp8",
+            "vp9"
+          ]
+        },
+        "default": "cloudflare",
+        "kinds": [
+          "cloudflare",
+          "cloudflare-rtmps",
+          "cloudflare-srt",
+          "whip",
+          "rtmps",
+          "srt"
+        ],
+        "object": "fv.outputs",
+        "publisher": true
+      },
+      "fields": [
+        "x_fv_output"
+      ],
+      "server_message_types": [
+        "output_ready",
+        "output_error",
+        "output_ended"
+      ]
+    }
+  },
+  "switches": [
+    {
+      "applied_after_ms": 33125.73790099999,
+      "first_chunk": 2,
+      "prompt": "The lamp blazes to life and sweeps its beam across the stormy sea; thunder rolls, rain lashes the windows.",
+      "prompt_version": 2,
+      "sent_s": 0.061738884000002145
+    }
+  ],
+  "ttff_ms": 26263.686188,
+  "video_frames": 2456
+}

@@ -1,0 +1,24 @@
+[hr 03:50:52] serve turbo: /ping 200 after 17.2s
+[fastvideo] llm resident layer 48/50
+[fastvideo] llm resident layer 49/50
+[fastvideo] llm resident layer 50/50
+[fastvideo] load/io h3 text_encoder {"wall_s":4.72,"viewed_gb":25.95,"prefetch_read_gb":45.21,"prefetch_skipped_gb":0.00,"prefetch_busy_s":74.9,"viewed_gbps":5.50,"window_wait_s":0.0,"fill_s":0.6,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.6,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 0.7 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T03:50:52.175179Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mfasth3 [3mseconds[0m[2m=[0m14.972122413
+[hr 03:56:49] turbo-fl2va-480 succeeded wall 14.30s metrics {"build_rtf":1.703055144580645,"inference_s":8.799118247,"peak_memory_mb":60480.39756679535,"queue_s":0.002373247,"run_s":13.970895387,"stage_durations":{"audio_decode":0.071011375,"denoise":8.799118247,"encode":0.217605722,"refine":0.00054717,"text":1.330208538,"video_decode":2.807982106}}
+[hr 03:57:24] turbo-fl2va-768 succeeded wall 34.84s metrics {"build_rtf":4.8179139075483866,"inference_s":24.892555189,"peak_memory_mb":67632.16580104828,"queue_s":0.001927205,"run_s":34.346610698,"stage_durations":{"audio_decode":0.058661387,"denoise":24.892555189,"encode":0.200945223,"refine":0.000350044,"text":1.309623043,"video_decode":6.643074136}}
+[hr 03:57:41] serve max: /ping 200 after 17.2s
+[fastvideo] llm resident layer 48/50
+[fastvideo] llm resident layer 49/50
+[fastvideo] llm resident layer 50/50
+[fastvideo] load/io h3 text_encoder {"wall_s":4.98,"viewed_gb":25.95,"prefetch_read_gb":59.39,"prefetch_skipped_gb":0.00,"prefetch_busy_s":65.4,"viewed_gbps":5.21,"window_wait_s":0.0,"fill_s":0.6,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.8,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (60.0 GiB)): vision tower 1.09 GiB loaded in 0.5 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 60.0 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T03:57:41.115717Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0msol-h3 [3mseconds[0m[2m=[0m14.929113655
+[hr 03:57:52] max-warm2 succeeded wall 10.61s metrics {"build_rtf":1.250140307419355,"inference_s":6.459058255,"peak_memory_mb":53919.56329727173,"queue_s":0.001260876,"run_s":10.209736066,"stage_durations":{"audio_decode":0.298528078,"denoise":6.459058255,"encode":0.264687485,"refine":0.114939509,"text":0.227012183,"video_decode":2.791514201}}
+[hr 03:58:06] max-fl2va-480 succeeded wall 13.77s metrics {"build_rtf":1.4884422152903225,"inference_s":7.690284779,"peak_memory_mb":54326.739886283875,"queue_s":0.002468343,"run_s":13.661152982,"stage_durations":{"audio_decode":0.063633084,"denoise":7.690284779,"encode":0.251387844,"refine":0.009198987,"text":2.11180649,"video_decode":2.796035647}}
+[hr 03:58:43] max-fl2va-768 succeeded wall 36.99s metrics {"build_rtf":5.078885439290322,"inference_s":26.240908103,"peak_memory_mb":58077.304240226746,"queue_s":0.002336666,"run_s":36.729957848,"stage_durations":{"audio_decode":0.063674533,"denoise":26.240908103,"encode":0.233035389,"refine":0.00054219,"text":2.358737978,"video_decode":6.560073306}}
+[hr 03:58:43] cond-all started: larry lightx v2 draft ref2v-turbo ref2v-max

@@ -1,0 +1,7 @@
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x64cb0b8c01c0] mean_volume: -91.0 dB
+[Parsed_volumedetect_0 @ 0x64cb0b8c01c0] max_volume: -91.0 dB

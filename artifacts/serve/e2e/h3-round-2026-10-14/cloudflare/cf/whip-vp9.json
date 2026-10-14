@@ -1,0 +1,56 @@
+{
+  "case": "whip-vp9",
+  "cleanup": {
+    "before": 404,
+    "gone": true,
+    "note": "already deleted (on_stop)",
+    "uid": "6fccb86216c658b92a9e92e2b60e72ed"
+  },
+  "create_ms": 987,
+  "live_input": "6fccb86216c658b92a9e92e2b60e72ed",
+  "model": "fasth3",
+  "ok": true,
+  "read": {
+    "audio": {
+      "mean_packet_bytes": 20.64447806354009,
+      "opus_packets": 1983,
+      "present": true
+    },
+    "decoded": {
+      "codec": "vp9",
+      "frames": 944,
+      "height": 768,
+      "keyframes": 40,
+      "width": 1344
+    },
+    "first_frame_after_whep_post_ms": 3248,
+    "luma": {
+      "black": 0,
+      "deviation": 57.48143167133706,
+      "frames": 944,
+      "mean": 84.9520468271832
+    },
+    "ok": true,
+    "received_frames": 952,
+    "time_to_ready_ms": 30800,
+    "transport": "whep",
+    "watched_s": 40
+  },
+  "server": {
+    "audio_packets_sent": 2335,
+    "encoder": "libvpx-vp9",
+    "end_reason": null,
+    "fps": null,
+    "frames_sent": 1120,
+    "height": 768,
+    "keyframes_sent": 47,
+    "output_error": null,
+    "output_state": "publishing",
+    "ticks_dropped": 2,
+    "ttff": null,
+    "video_codec": "VP9",
+    "width": 1344
+  },
+  "stream_delete_http": 200,
+  "stream_id": "fvstream_1d74bfc4ae484bb99eb9132772510d82"
+}

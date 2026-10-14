@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T03:58:05.911149296Z",
+  "created_at": "2026-10-14T03:57:52.247527971Z",
+  "error": null,
+  "expires_at": "2026-10-15T03:57:52.247527971Z",
+  "fps": 24,
+  "height": 480,
+  "id": "fvjob_b52971576c5b4ef6b162f4aaa3b8db52",
+  "metrics": {
+    "build_rtf": 1.4884422152903225,
+    "inference_s": 7.690284779,
+    "peak_memory_mb": 54326.739886283875,
+    "queue_s": 0.002468343,
+    "run_s": 13.661152982,
+    "stage_durations": {
+      "audio_decode": 0.063633084,
+      "denoise": 7.690284779,
+      "encode": 0.251387844,
+      "refine": 0.009198987,
+      "text": 2.11180649,
+      "video_decode": 2.796035647
+    }
+  },
+  "model": "sol-h3",
+  "notes": [
+    "canvas: 832x480 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 4235636,
+    "fps": 24,
+    "frames": 124,
+    "height": 480,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 832
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "sol-h3-4step-engine-ladder",
+  "resolved_model": "sol-h3",
+  "seed": 7,
+  "started_at": "2026-10-14T03:57:52.249996314Z",
+  "status": "succeeded",
+  "task": "keyframes",
+  "tier": "max",
+  "width": 832,
+  "hr_tag": "max-fl2va-480",
+  "hr_task": "fl2va",
+  "hr_wall_s": 13.77
+}

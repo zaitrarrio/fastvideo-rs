@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T04:06:11.974442903Z",
+  "created_at": "2026-10-14T04:05:48.867120621Z",
+  "error": null,
+  "expires_at": "2026-10-15T04:05:48.867120621Z",
+  "fps": 24,
+  "height": 480,
+  "id": "fvjob_7e2d0e3ccab84886939af3a5bad3d998",
+  "metrics": {
+    "build_rtf": 3.5710439396129026,
+    "inference_s": 18.450393688,
+    "peak_memory_mb": 57626.70751476288,
+    "queue_s": 0.002560682,
+    "run_s": 23.1047616,
+    "stage_durations": {
+      "audio_decode": 0.062223201,
+      "denoise": 18.450393688,
+      "encode": 0.234327195,
+      "refine": 0.00320686,
+      "text": 0.840705926,
+      "video_decode": 2.790271925
+    }
+  },
+  "model": "fasth3-8step-dense",
+  "notes": [
+    "canvas: 832x480 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 3056862,
+    "fps": 24,
+    "frames": 124,
+    "height": 480,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 832
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "fasth3-8step-dense",
+  "resolved_model": "fasth3-8step-dense",
+  "seed": 7,
+  "started_at": "2026-10-14T04:05:48.869681303Z",
+  "status": "succeeded",
+  "task": "i2v",
+  "tier": null,
+  "width": 832,
+  "hr_tag": "v2-i2v-480",
+  "hr_task": "i2v",
+  "hr_wall_s": 23.28
+}

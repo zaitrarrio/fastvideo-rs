@@ -1,0 +1,9 @@
+[hr 04:33:31] serve turbo: /ping 200 after 231.8s
+[fastvideo] llm resident layer 48/50
+[fastvideo] llm resident layer 49/50
+[fastvideo] llm resident layer 50/50
+[fastvideo] load/io h3 text_encoder {"wall_s":94.97,"viewed_gb":25.95,"prefetch_read_gb":26.61,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1554.9,"viewed_gbps":0.27,"window_wait_s":0.0,"fill_s":0.5,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":78.3,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 37.6 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:33:31.355642Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mfasth3 [3mseconds[0m[2m=[0m229.861038188

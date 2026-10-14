@@ -1,0 +1,66 @@
+{
+  "case": "rtmps",
+  "cleanup": {
+    "after": 404,
+    "before": 200,
+    "delete": 200,
+    "enabled_before": false,
+    "gone": true,
+    "name": "fv-test-fvstream_8d5ae8c699af457b8f08af8db3b0fb23",
+    "recordings": [
+      {
+        "delete": 200,
+        "duration_s": -1,
+        "video": "59dc028afbdcb80c5f6dd30efb55a146"
+      }
+    ],
+    "uid": "37be48741dea5c624bab1ce6030ab968"
+  },
+  "create_ms": 1493,
+  "live_input": "37be48741dea5c624bab1ce6030ab968",
+  "model": "fasth3",
+  "ok": true,
+  "read": {
+    "audio": null,
+    "connected_after_s": 31.915605444,
+    "decoded": {
+      "codec": "h264",
+      "frames": 144,
+      "height": 720,
+      "keyframes": 3,
+      "width": 1260
+    },
+    "luma": {
+      "black": 0,
+      "deviation": 57.245758344798986,
+      "frames": 144,
+      "mean": 84.51601381655097
+    },
+    "ok": true,
+    "time_to_ready_ms": 41665,
+    "transport": "hls",
+    "variants": [
+      "#EXT-X-STREAM-INF:RESOLUTION=1260x720,CODECS=\"avc1.64001f,mp4a.40.2\",BANDWIDTH=536901,AVERAGE-BANDWIDTH=536511,SCORE=4.0,FRAME-RATE=24.000,AUDIO=\"group_audio\"",
+      "#EXT-X-STREAM-INF:RESOLUTION=840x480,CODECS=\"avc1.64001e,mp4a.40.2\",BANDWIDTH=347644,AVERAGE-BANDWIDTH=347644,SCORE=3.0,FRAME-RATE=24.000,AUDIO=\"group_audio\"",
+      "#EXT-X-STREAM-INF:RESOLUTION=630x360,CODECS=\"avc1.4d401e,mp4a.40.2\",BANDWIDTH=209781,AVERAGE-BANDWIDTH=209781,SCORE=2.0,FRAME-RATE=24.000,AUDIO=\"group_audio\"",
+      "#EXT-X-STREAM-INF:RESOLUTION=420x240,CODECS=\"avc1.42c015,mp4a.40.2\",BANDWIDTH=164347,AVERAGE-BANDWIDTH=164347,SCORE=1.0,FRAME-RATE=24.000,AUDIO=\"group_audio\""
+    ]
+  },
+  "server": {
+    "audio_packets_sent": 0,
+    "encoder": "ffmpeg h264_nvenc",
+    "end_reason": null,
+    "fps": null,
+    "frames_sent": 806,
+    "height": 768,
+    "keyframes_sent": 0,
+    "output_error": null,
+    "output_state": "publishing",
+    "ticks_dropped": 0,
+    "ttff": null,
+    "video_codec": "H264",
+    "width": 1344
+  },
+  "stream_delete_http": 200,
+  "stream_id": "fvstream_8d5ae8c699af457b8f08af8db3b0fb23"
+}
