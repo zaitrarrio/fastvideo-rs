@@ -69,7 +69,16 @@ export interface InstanceTypeRow {
   reason: string | null;
   /** The launch form's fields a click on the row sets (null: not launchable). */
   launch: Record<string, unknown> | null;
+  /** Runpod: the row's data centre has an fv weights volume (null: no data centre / not Runpod). */
+  volume_dc?: boolean | null;
+  /** Runpod: why the row cannot be launched with each weights source (null: launchable with it), so the launch form
+   * recomputes `supported` / `reason` client-side when its weights source changes. `supported` / `reason` / `launch`
+   * above are the volume's (the default before this map existed). */
+  reasons?: Record<RunpodWeights, string | null>;
 }
+/** The weights sources a Runpod pod may use: the volume pins EU-RO-1; r2, hub (owner-approved) and none run anywhere. */
+export const RUNPOD_WEIGHTS = ["volume", "r2", "hub", "none"] as const;
+export type RunpodWeights = (typeof RUNPOD_WEIGHTS)[number];
 
 export interface InstanceTypesView {
   provider: string;
@@ -170,10 +179,12 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
     if (!dcId) reasons.push(haveDcs ? "no data centre lists it now" : "the data centres' stock is unknown now (Refresh)");
     else if (dc.listed === false) reasons.push(`${dcId} is not a listed data centre`);
     else if (!knownDcs.has(dcId)) reasons.push(`${dcId} is not in fv-control's data centre list (enums.ts RUNPOD_DATA_CENTERS)`);
-    else if (!region) reasons.push(`no fv weights volume in ${dcId}: the launch form places Runpod GPU pods where one is (${[...volumeDcs.keys()].join(", ") || "none now"}); weights_source r2 pods may use any data centre (JSON / CLI)`);
+    // The volume's own rule, apart: weights_source r2 / none pods run in any data centre (the launch form's Weights).
+    const volReason = dcId && dc.listed !== false && knownDcs.has(dcId) && !region ? `no fv weights volume in ${dcId} (only ${[...volumeDcs.keys()].join(", ") || "none now"}): weights_source r2, hub or none runs in any data centre` : null;
     // Without the data centres' answer: the type's own (any data centre) stock.
     const stock = a ? (a.stockStatus ? String(a.stockStatus) : null) : haveDcs ? null : lp.stockStatus ? String(lp.stockStatus) : null;
-    return finish(
+    const base = reasons.length ? reasons.join("; ") : null;
+    const row = finish(
       {
         id: `${id}@${dcId ?? "-"}`,
         name: id,
@@ -195,9 +206,10 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
         stoppable: null,
         deploy_s: null,
       },
-      reasons,
+      volReason ? [...reasons, volReason] : reasons,
       { gpu_types: [id], region },
     );
+    return { ...row, volume_dc: dcId ? !!region : null, reasons: { volume: row.reason, r2: base, hub: base, none: base } };
   };
   for (const dc of d.dataCenters || []) {
     for (const a of dc?.gpuAvailability || []) {

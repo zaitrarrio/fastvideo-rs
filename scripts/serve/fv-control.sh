@@ -30,6 +30,7 @@
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
 #   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
 #                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EU-RO-1|<DC> (r2)]
+#                     [--weights volume|r2|hub|none [--approve-hub-download]] [--dc DC|any]... (Runpod without the volume: any DC, in order)
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
 #                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]
@@ -196,6 +197,8 @@ cmd_pod() {
           # A region id (eu), or a Runpod data centre (EU-RO-1; with --weights r2 any one, e.g. US-TX-3).
           --region) body="$(jq -c --arg v "${2:?}" 'if ($v | test("^[A-Z]{2,3}-[A-Z]{2}-[0-9]+$")) then .dc = $v else .region = $v end' <<<"$body")"; shift 2 ;;
           --no-volume) body="$(jq -c '.volume = false' <<<"$body")"; shift ;;
+          # Runpod without the volume (--weights r2 | none, or a CPU pod): the data centres to try, in order; "any" last.
+          --dc) body="$(jq -c --arg v "${2:?--dc DC|any}" '.data_centers = ((.data_centers // []) + [$v])' <<<"$body")"; shift 2 ;;
           --env | --secret-env)
             kv="${2:?$1 K=V}"; k="${kv%%=*}"; v="${kv#*=}"
             [[ "$v" == @* ]] && v="$(cat "${v#@}")"
