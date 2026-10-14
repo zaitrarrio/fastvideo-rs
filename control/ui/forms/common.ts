@@ -84,11 +84,12 @@ export function providerSummary(d: ProviderDetails): string {
 export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOffered?: Record<string, string> }> = {
   "standalone-launch": {
     schema: "standalone-launch",
-    fields: [["name"], ["preset"], ["variant"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["gpu_types"], ["cpu_flavors"], ["vcpu"], ["region"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"], ["provider"], ["provider_gpu"], ["provider_region"], ["weights_source"], ["weights_download_approved"], ["upsampler_local"]],
+    fields: [["name"], ["preset"], ["variant"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["cpu_flavors"], ["vcpu"], ["region"], ["data_centers"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"], ["provider"], ["provider_gpu"], ["provider_region"], ["weights_source"], ["weights_download_approved"], ["upsampler_local"]],
     notOffered: {
       config_toml: "inline worker configs come with the presets; a custom one is a cluster pool (the cluster page's TOML editor)",
+      gpu_types: "the instance table: a row click picks the primary GPU type, \"+ fallback\" appends; the Selected GPUs strip orders them",
       gpu_type: "API shorthand of gpu_types",
-      dc: "API alias of region",
+      dc: "API shorthand of data_centers (one data centre) / alias of region",
       min_balance: "the account defaults (Settings: policies); API only",
       balance_floor: "the account defaults; API only",
       min_start: "the account defaults; API only",

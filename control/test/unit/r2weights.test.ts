@@ -172,7 +172,8 @@ describe("weights_source r2: the default, the checks, the env", () => {
     const all = mkEnv({ WEIGHTS_R2_EXTRA_TREES: pin(trees) });
     const pool = { ...h3, weights_source: "r2" } as any;
     expect(validate("pool", pool).ok).toBe(true);
-    expect(validate("pool", { ...pool, weights_source: "hub" }).ok).toBe(false);
+    // Owner 2026-10-14: a Runpod pool may download from the Hub too (no volume; the approval is the launch check).
+    expect(validate("pool", { ...pool, weights_source: "hub" }).ok).toBe(true);
     expect(providerIssues(all, { pools: [pool] })).toEqual([]);
     expect(providerIssues(all, { pools: [{ ...pool, volume: true }] }).map((i) => i.path.join("."))).toEqual(["pools.0.volume"]);
     expect(providerIssues(all, { pools: [{ ...pool, container_disk_gb: 50 }] })[0]!.message).toMatch(/too small/);

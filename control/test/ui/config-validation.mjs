@@ -85,7 +85,9 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await shot("02b-standalone-gmi-off");
   // Back to Runpod (picked: the form loads no provider details before a pick, test/ui/lazy-providers.mjs).
   await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, JSON.stringify("runpod"));
-  await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
+  // The custom pod here is a CPU pod with the volume off: any data centre (data_centers), not the volume's region.
+  await page.waitForSelector(`${SL} .ff-field[data-path="data_centers"]`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="region"]`), null, "no volume: no region");
 
   // ---------------------------------------------------------------- serverless
   await go("#/serverless");

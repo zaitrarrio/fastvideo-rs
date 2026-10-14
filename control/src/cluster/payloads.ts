@@ -3,7 +3,8 @@
 // (docs/control/gateway-less-auth.md). (The gateway pod is retired.)
 import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 import type { Env } from "../env";
-import { isOtherPool, weightsPlan, weightsSource } from "../providers";
+import { HUB_RUNPOD_SH, hubDiskGb, isOtherPool, weightsPlan, weightsSource } from "../providers";
+import { DC_ANY, noVolumePod } from "../enums";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
@@ -229,7 +230,7 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     RUST_LOG: "info",
   };
   if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
-  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...upsamplerEnv(ctx, pool), ...runpodR2Env(ctx, pool) };
+  const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...upsamplerEnv(ctx, pool), ...runpodR2Env(ctx, pool), ...runpodHubEnv(ctx, pool) };
   // Edge fronts never use the account's (production) bucket: they upload
   // results through the edge into its outputs bucket and presign their URLs
   // there (the account's R2 credentials, the edge's bucket); without that
@@ -263,6 +264,20 @@ function runpodR2Env(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
   };
 }
 
+/** A Runpod worker with weights_source hub (owner-approved; providers.ts providerIssues checks it before any pod): no
+ * volume; the boot (HUB_RUNPOD_SH) downloads the pool's trees from the Hub at their pinned revisions (weightsPlan:
+ * weights-revisions.tsv) onto the container disk (FV_HUB_DISK_GB sizes it), with fetch-hub-tree.py at the image's commit. */
+function runpodHubEnv(ctx: EnvCtx, pool: PoolSpec): Record<string, string> {
+  if (isOtherPool(pool) || pool.compute === "CPU" || weightsSource(pool, ctx.env) !== "hub") return {};
+  const plan = weightsPlan(pool, ctx.env);
+  return {
+    FV_WEIGHTS_SOURCE: "hub",
+    FV_WEIGHTS_TREES_B64: btoa(plan.tsv),
+    FV_SCRIPTS_URL: `https://raw.githubusercontent.com/${ctx.env?.GITHUB_REPO || "zaitrarrio/fastvideo-rs"}/${ctx.spec.image.sha || "main"}/scripts/gpu`,
+    FV_HUB_DISK_GB: String(Math.min(500, Math.max(40, hubDiskGb(plan.trees) + (pool.upsampler_local && ctx.env ? upsamplerDiskGb(ctx.env) : 0)))),
+  };
+}
+
 /** One placement attempt of a worker (a GPU type in a region, or a CPU flavor). */
 export interface Placement {
   region?: RegionId;
@@ -274,6 +289,14 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
   // Never place in a region without a weights volume (us since 2026-10), even from an old stored spec.
   const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
   const out: Placement[] = [];
+  // A pod without the weights volume (GPU: weights_source r2 or none; CPU: volume off) with data_centers: those data
+  // centres, in order (each with every GPU type / flavor in order), instead of the regions'; "any" = no dataCenterIds.
+  const dcs = !isOtherPool(pool) && pool.data_centers?.length && noVolumePod(pool) ? pool.data_centers : null;
+  const at = (dc: string) => (dc === DC_ANY ? {} : { dc });
+  if (pool.compute === "CPU" && dcs) {
+    for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) for (const dc of dcs) out.push({ ...at(dc), cpu: f });
+    return out;
+  }
   if (pool.compute === "CPU") {
     for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) {
       for (const r of regions) out.push({ region: r, dc: REGIONS[r]!.dc, cpu: f });
@@ -281,9 +304,8 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
     }
     return out;
   }
-  // weights_source r2 (no volume) with data_centers: those data centres, in order, instead of the regions'.
-  if (pool.weights_source === "r2" && !isOtherPool(pool) && pool.data_centers?.length) {
-    for (const dc of pool.data_centers) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS.eu.gpus) out.push({ dc, gpu: g });
+  if (dcs) {
+    for (const dc of dcs) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS.eu.gpus) out.push({ ...at(dc), gpu: g });
     return out;
   }
   for (const r of regions) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS[r]!.gpus) out.push({ region: r, dc: REGIONS[r]!.dc, gpu: g });
@@ -304,7 +326,9 @@ export function bootFor(env: Record<string, string>): string {
   const ups = env.FV_UPSAMPLER_LOCAL === "1";
   const b = ups ? boot.replace("mkdir -p /fvstate\n", `mkdir -p /fvstate\n${UPSAMPLER_START_SH}`).replace(EXEC_SERVE, `${UPSAMPLER_WAIT_SH}${EXEC_SERVE}`) : boot;
   // weights_source r2: the trees from the R2 weights store before anything else (the volume is not mounted).
-  return env.FV_WEIGHTS_SOURCE === "r2" ? b.replace(`mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}`, `mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}${R2_RUNPOD_SH()}`) : b;
+  // weights_source hub: the trees from the Hub (owner-approved) before anything else, the same way.
+  const fetch = env.FV_WEIGHTS_SOURCE === "r2" ? R2_RUNPOD_SH() : env.FV_WEIGHTS_SOURCE === "hub" ? HUB_RUNPOD_SH : "";
+  return fetch ? b.replace(`mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}`, `mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}${fetch}`) : b;
 }
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
   const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [bootFor(env)], env };
@@ -321,7 +345,8 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
     };
   }
   const r2 = env.FV_WEIGHTS_SOURCE === "r2";
-  const vol = pool.volume !== false && !r2 && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
+  const hub = env.FV_WEIGHTS_SOURCE === "hub";
+  const vol = pool.volume !== false && !r2 && !hub && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
   const cuda = podAllowedCuda(pool, pl);
   return {
     ...common,
@@ -329,9 +354,9 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
     computeType: "GPU",
     gpuTypeIds: [pl.gpu!],
     gpuCount: 1,
-    containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : 40),
+    containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : hub ? Number(env.FV_HUB_DISK_GB || 40) : 40),
     ...vol,
-    dataCenterIds: [pl.dc!],
+    ...(pl.dc ? { dataCenterIds: [pl.dc] } : {}),
     ...(cuda.length ? { allowedCudaVersions: cuda } : {}),
     ports: ["8000/http", "70000/tcp"],
   };
