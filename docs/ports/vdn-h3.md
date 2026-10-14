@@ -6,7 +6,7 @@ Target: [`OpenVDN/vdn-minimax-h3`](https://huggingface.co/OpenVDN/vdn-minimax-h3
 blog https://openvdn.github.io/. Owner request 2026-10-13: "let's implement https://huggingface.co/OpenVDN/vdn-minimax-h3".
 Download approval (2026-10-13): `stage-b-step-2000/` plus the small root files only.
 
-Status: see §0.
+Status: see §0. Ported and validated (stage 1): the stage-B model, served as `vdn-h3`; parity §5, timing §6, open items §7.
 
 ## 0. Status and the one open decision
 
@@ -198,7 +198,7 @@ direction". The port follows the inference path (one rounding per fused stage, f
 4. the branch (§2.4) writes only the inner video rows (frames 1..F-2); `to_out_linear` and a row-add into the attention output.
 
 The anchor frames, text, audio and keyframe rows see the dense softmax (they are global rows and columns); a clip whose
-latent frames all fit one window (F <= 2 chunks + anchors) degenerates to dense attention with no branch, which is
+latent frames all fall inside every row's window (`VdnTransform::full_cover`) degenerates to dense attention with no branch, which is
 bitwise our dense kernel (test `a_covered_clip_with_an_open_gate_is_dense_attention`, GPU check `full_cover_vs_dense`).
 
 ### 2.3 The window softmax
@@ -286,3 +286,83 @@ on the pod).
 | branch end to end | 4.23e-3 | | |
 
 (1e-3-level entries are bf16 outputs against an f64 reference.)
+
+## 5. Parity against the upstream reference (RTX PRO 6000, 2026-10-14)
+
+Reference: the remote `modeling_vdn_h3.py` of `stage-b-step-2000` through diffusers `3a2f35d` + the code repo's patch,
+torch 2.13.0 cu129, `scripts/gpu/upstream/oracle_vdn.py --kernels eager --softmax ref` (the eager path, exact masked
+softmax), the `render.py` sampler replicated (uniform grid, shifts 12 / 3, no CFG, Euler). Geometry 832 x 480, 124 frames
+(32 latent frames, 30 in the branch), seed 1024, **8 steps on the stage-B weights** (the approved tree; the same per-step
+work as the 8-step model, a cheaper comparison than 50). Upstream ran on our text encoder's hidden states; ours then ran on
+the reference's noise and text (`FASTVIDEO_INJECT_DIR`), so every remaining difference is the denoiser's. `fv-gpucheck
+compare-dumps`, rel-L2 of ours against the reference (`artifacts/ports/vdn-h3/validate/compare-dumps-inj{,-served}.txt`):
+
+| tensor | ours, bf16 linears (`FASTVIDEO_H3_QUANT=off`) | ours, served default (MXFP8 blocks 2-46) |
+|---|---:|---:|
+| sigmas, timesteps, injected noise | 0 (bitwise) | 0 |
+| text hidden states (our streamed bf16 encoder vs the injected) | 3.8e-4 | |
+| step-1 block 0 / 1 / 10 / 20 / 30 / 41 / 49 | 1.4e-2 / 6.4e-3 / 5.6e-3 / 4.8e-3 / 1.9e-2 / 7.1e-2 / 3.4e-2 | 1.4e-2 / 6.4e-3 / 8.2e-3 / 1.6e-2 / 5.8e-2 / 0.15 / 6.1e-2 |
+| **step-1 velocity, video / audio** | **1.9e-2 / 1.1e-2** | 3.2e-2 / 3.7e-2 |
+| video latents after steps 1 / 2 / 4 / 8 | 4.2e-4 / 1.1e-3 / 5.7e-3 / 0.13 | 7.3e-4 / 1.9e-3 / 1.5e-2 / 0.34 |
+| audio latents after steps 1 / 8 | 5.5e-4 / 0.11 | 2.0e-3 / 0.24 |
+
+Decoded (`av_psnr.py`; `artifacts/ports/vdn-h3/validate/av-psnr-inj{,-served}.json`):
+
+| pair | video PSNR | min frame | audio PSNR |
+|---|---:|---:|---:|
+| upstream vs ours, bf16, injected | **29.0 dB** | 26.0 dB | **32.7 dB** |
+| upstream vs ours, MXFP8 (served), injected | 20.0 dB | 18.5 dB | 22.9 dB |
+
+Reading: the hybrid attention, branch and merged LoRA track the reference far more closely than our other H3 ports did
+(FastH3 Trim bf16: 16.6 / 15.9 dB, step-8 latents 0.47): the window softmax is exact (no top-k selection) and the
+branch is deterministic, so nothing amplifies a rounding difference into a different sample. Block 0's 1.4e-2 (then
+6e-3 from block 1) is most likely the rounding of the merged LoRA weights (both sides merge `W + BA` into bf16, in a different
+operation order) on the block whose inputs are largest; it does not grow. The clips show the same person,
+framing and room (`artifacts/ports/vdn-h3/samples/frame62-upstream-ours-ours768.jpg`: upstream, ours bf16, ours 768p).
+
+**MXFP8 stays the sm_120 default**, as for every other H3 model: it is 1.20x faster per step (2.81 vs 3.37 s at 480p)
+and the first steps stay at the bf16 level (step-1 latents 7.3e-4); the 9 dB lower clip PSNR is the later-step
+divergence of a sample that is still the same scene. Upstream's own fp8 (opt-in) "changes the sample" too.
+`FASTVIDEO_H3_QUANT=off` gives the bf16 reference behaviour.
+
+## 6. Timing (RTX PRO 6000 Blackwell 96 GB, same pod, served defaults, `--warm`)
+
+One process per model and geometry; a cold generation, then the measured one (text from the cache). Ours: MXFP8 linears,
+FP8 text encoder resident (streamed for the long clips), DiT resident. VDN runs use the stage-B weights on the 8-step
+grid: per step identical to the 8-step model (its turbo LoRA is merged at load, no runtime cost). Logs:
+`artifacts/ports/vdn-h3/validate/time-*.log`.
+
+| warm | VDN-H3, 8 steps | FastH3 V2 8-step, dense | h3-turbo (FastH3 4-step VSA) |
+|---|---:|---:|---:|
+| 832 x 480, 124 f: denoise (s / step) | 22.50 s (2.81) | **17.04 s (2.13)** | **7.03 s (1.76)** |
+| 832 x 480: end to end | 25.60 s | 20.15 s | 10.13 s |
+| 1344 x 768, 124 f: denoise (s / step) | **60.73 s (7.59)** | 67.19 s (8.40) | 19.18 s (4.79) |
+| 1344 x 768: end to end | 67.64 s | 74.11 s | 26.12 s |
+| peak memory (768p) | 61.5 GiB | 61.9 GiB | 67.9 GiB |
+
+Long clip, 345 frames (14.4 s, 102 latent frames, 100 in the branch), VDN 8 steps, encoder streamed: **768p fits**,
+23.3 s / step, denoise 186.3 s, decode 18.2 s, end to end 205.4 s, peak 47.7 GiB; 480p 8.0 s / step, 72.2 s end to end,
+peak 39.3 GiB (`samples/ours-768-345f-8step.mp4`, `frames-50step-long768.jpg`). Dense attention at that length is not
+measured here (quadratic: 3.2x the tokens of the 5 s clip). The 50-step stage-B model at 480p: 140.8 s denoise
+(2.84 s / step; `samples/ours-480-50step.mp4`). Upstream's eager reference on the same pod: 4.22 s / step at 480p
+(its fused-kernel path was not timed).
+
+Reading: at 5 s the hybrid is a 1.11x win over dense at 768p and a 1.32x loss at 480p, where the stage-1 branch kernels
+(fp32 CUDA cores, about 22 ms per block at 480p, 35 ms at 768p) cost more than the window saves. Its case is long clips,
+where the softmax cost stays linear in frames. h3-turbo (4 steps, VSA) remains 3x faster at 5 s. Next: tensor-core
+`frame_stats` / `scan` / `readout` and fusing the feature convs (§7).
+
+Load: 316-331 s for the hybrid (h3-base read, 4.3 GB branch, LoRA merge and MXFP8 quantization), vs 205-209 s for
+h3-turbo on the same pod; not optimized.
+
+## 7. Cost, cleanup and what is not done
+
+- Pods: publish `xfrhraloihumz6` (CPU, $0.24/hr, ~3 min) and validation `lldpc5jbqska0t` (RTX PRO 6000, $2.49/hr,
+  00:38-01:57 UTC, about $3.3); both deleted and verified gone (`GET /pods/<id>`: not found); the validation bundle in
+  `fv-weights-staging/tmp/` removed. Builds and CPU tests on the shared build pod.
+- **Not done:** the 8-step distilled model (needs the 0.85 GB turbo adapter, §0; the loader and the manifest test for it
+  are in place); image-to-video and first/last-frame (keyframe rows are handled as global rows in the masks, but no
+  serve task is exposed); tensor-core branch kernels; upstream's fused-kernel / flex-softmax path as a second oracle
+  (the eager path was used); an H100 run (sm_90: the window kernel is our FA2 MMA kernel, the branch kernels are
+  generic CUDA, built but not run there); a served end-to-end request through fv-serve on a GPU (the catalog entry,
+  config and preset are tested on CPU only); dense timing at 345 frames.
