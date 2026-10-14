@@ -69,6 +69,39 @@ h3-turbo (block busy **38.30 -> 34.36 ms**): the same VSA rows (`vsa_tile_qkv` 2
 0.52, `vsa_combine` 0.90 -> 0.76), `cast_f32_bf16` 1.26 -> 0.09, `h3_qk_norm_rope` 1.59 + `fvf_split_heads_rows`
 0.93 -> `fvf_h3_qkvg_heads` 1.18. Its MXFP8 producers (`h3_swiglu_mx`, `fvf_merge_heads_mx`) were already fused.
 
+### Combined with sparse FP4 VSA (main `cf28c95`+, #113)
+
+Once #113 made sparse FP4 VSA the default for the NVFP4 tier, the V2-NVFP4 cells were re-run with
+`FASTVIDEO_H3_VSA_FP4` unset (on), `FASTVIDEO_H3_NVFP4_ATTN=1`:
+- one RTX PRO 6000 Server Edition (EUR-IS-2, driver 580.173.02, CUDA 13.0), runtime image `sha-8f20822`;
+- **base** = main `e873146`; **new** = this branch's head with main merged; **glue off** = the new build with
+  `FASTVIDEO_H3_GLUE=0`;
+- run with `FV_ONLY_NVFP4=1 scripts/gpu/h3-glue-validate.sh up BASE NEW`.
+
+Results are in `artifacts/perf/h3-glue-fusion/run-2026-10-14-fp4vsa/`.
+
+| V2-NVFP4, FP4 VSA on | canvas | base step s | glue off step s | new step s | step win |
+|---|---|---:|---:|---:|---:|
+| 8 fwd | 832x480 | 1.479 | 1.481 | 1.223 | **-17.3%** |
+| 8 fwd | 1344x768 | 3.784 | 3.798 | 3.188 | **-15.7%** |
+
+Denoise times:
+- 480p: 11.81 s (base), 11.82 s (glue off), 9.74 s (new).
+- 768p: 30.26 s (base), 30.36 s (glue off), 25.49 s (new).
+
+Per block at 480p, block busy time went from **28.08 to 22.63 ms**, and kernels per step from 2790 to 2290:
+- The glue rows are the same as in the bf16-VSA run.
+- FP4 VSA's own quantizer, `attn_fp4_quant_tile`, now reads bf16 instead of f32: 1.18 to 0.66 ms.
+- `attn_fp4_vsa` is unchanged: 2.71 to 2.70 ms.
+- The GEMMs are unchanged: 9.00 ms in both.
+
+Against FastVideo's sparse-FP4 path on its page (1.28 / 3.66 s per forward), this is 0.96x / 0.87x. The hardware
+type is the same, but the pods differ.
+
+**Parity:** the clips (frames, mp4, audio; 126 files each) are byte-identical between all three arms, at 480p and at
+768p: base and new, glue off and new, base and glue off (`parity.txt`). The 33 `h3_glue_*` kernel checks pass again
+on this pod.
+
 ## 3. Parity
 
 - **Kernels**: `fv-gpucheck kernels --groups dit_fusion,nvfp4_linear` on the pod, all pass; the 33 new
@@ -93,5 +126,13 @@ the MXFP8 QKV input is under the 2% bar and was not done.
 
 ## 5. Cost
 
-GPU pod 9f1ey4e9whjqvc, 10.5 min at $2.49/hr: **$0.44**; deleted and checked gone (`GET /pods/<id>`: 404), the
-staged bundle removed, the local backstop stopped by its PID after its command line was checked.
+Three GPU pods, each deleted and checked gone (`GET /pods/<id>`: 404). Each staged bundle was removed, and each local
+backstop was stopped by its PID after its command line was checked.
+
+| pod | what it ran | time | cost |
+|---|---|---|---:|
+| 9f1ey4e9whjqvc | the main run | 10.5 min | $0.44 |
+| djye3h0zc5lak1 | combined run, first try: the V2 cells started before h3-base's encoder and VAE had arrived (r2 mode); fixed in the pod script | 5 min | $0.21 |
+| 7jb4gcsj93pqb9 | the combined run | 10 min | $0.42 |
+
+Total: **$1.07**, at $2.49/hr.
