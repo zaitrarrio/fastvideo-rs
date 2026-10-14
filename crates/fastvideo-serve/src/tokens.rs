@@ -98,7 +98,10 @@ fn text_tree(m: &crate::config::ModelCfg, fam: PromptFamily) -> Option<PathBuf> 
         }
         let w = Path::new(weights.trim_end_matches('/'));
         let trim = w.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("fasth3-trim"))
-            || m.recipe.as_deref().is_some_and(|r| matches!(r, "h3-trim" | "trim-8step" | "fasth3-trim-8step"));
+            || m.recipe.as_deref().is_some_and(|r| {
+                matches!(r, "h3-trim" | "trim-8step" | "fasth3-trim-8step")
+                    || fastvideo_models::h3::config::is_trim_nvfp4_recipe(r)
+            });
         if trim {
             if let Some(parent) = w.parent() {
                 return Some(parent.join("h3-base"));

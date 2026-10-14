@@ -143,7 +143,9 @@ struct LtLinearPlan {
 // Raw cuBLASLt handles, only used under the cache's lock.
 unsafe impl Send for LtLinearPlan {}
 
-type PlanKey = (usize, usize, usize, bool);
+/// `(m, n, k, bias, ld)`: `ld` is the output's row pitch (`n`, or the
+/// width of a stacked output [`Nvfp4Stack`] writes one section of).
+type PlanKey = (usize, usize, usize, bool, usize);
 type PlanMap = std::collections::HashMap<PlanKey, LtLinearPlan>;
 static LT_PLANS: std::sync::Mutex<Option<PlanMap>> = std::sync::Mutex::new(None);
 
@@ -176,6 +178,7 @@ unsafe fn build_plan(
     run_m: usize,
     n: usize,
     k: usize,
+    ld_out: usize,
     device_alpha: bool,
     bias: bool,
     p: &LtPtrs,
@@ -225,7 +228,7 @@ unsafe fn build_plan(
     };
     let la = layout(fp4, k, n, k)?;
     let lb = layout(fp4, k, run_m, k)?;
-    let ld = layout(bf16t, n, run_m, n)?;
+    let ld = layout(bf16t, n, run_m, ld_out)?;
     let mut pref: lt::cublasLtMatmulPreference_t = std::ptr::null_mut();
     check(lt::cublasLtMatmulPreferenceCreate(&mut pref), "preference")?;
     let pref = Pref(pref);
@@ -324,8 +327,43 @@ impl Nvfp4Linear {
     }
 
     /// The GEMM on an already-quantized activation.
-    #[allow(clippy::map_entry)]
     pub fn gemm(&self, a: &Nvfp4Operand) -> Result<(CudaSlice<half::bf16>, bool)> {
+        let d = dev()?;
+        let (c, run_m, bias_in) = self.run(a, None)?;
+        let c = c.ok_or_else(|| err("nvfp4 linear: no output"))?;
+        let (m, n) = (a.rows, self.n);
+        if run_m != m {
+            let mut out = unsafe { d.stream.alloc::<half::bf16>(m * n) }.map_err(err)?;
+            let src = c.slice(0..m * n);
+            d.stream.memcpy_dtod(&src, &mut out).map_err(err)?;
+            return Ok((out, bias_in));
+        }
+        Ok((c, bias_in))
+    }
+
+    /// The GEMM into columns of a wider bf16 output: `out` points at this
+    /// linear's first column of a row-major `[a.rows_pack, ld]` buffer (rows
+    /// past `a.rows` may be written). Bias-free linears only (a stacked
+    /// output has no bias). Returns the rows the GEMM ran.
+    pub fn gemm_into(&self, a: &Nvfp4Operand, out: CUdeviceptr, ld: usize) -> Result<usize> {
+        if self.bias.is_some() {
+            return Err(err("nvfp4 linear: gemm_into takes bias-free linears"));
+        }
+        if ld < self.n {
+            return Err(err(format!("nvfp4 linear: output pitch {ld} < {}", self.n)));
+        }
+        Ok(self.run(a, Some((out, ld)))?.1)
+    }
+
+    /// One cuBLASLt call, into a fresh `[run_m, n]` buffer (`into = None`)
+    /// or at `into = (ptr, ld)`. Returns the fresh buffer, the rows the GEMM
+    /// ran and whether the bias is in the output.
+    #[allow(clippy::map_entry, clippy::type_complexity)]
+    fn run(
+        &self,
+        a: &Nvfp4Operand,
+        into: Option<(CUdeviceptr, usize)>,
+    ) -> Result<(Option<CudaSlice<half::bf16>>, usize, bool)> {
         let d = dev()?;
         if a.k != self.k {
             return Err(err(format!(
@@ -334,6 +372,7 @@ impl Nvfp4Linear {
             )));
         }
         let (m, n, k) = (a.rows, self.n, self.k);
+        let ld_out = into.map_or(n, |(_, ld)| ld);
         let mut ab = d.stream.alloc_zeros::<f32>(2).map_err(err)?;
         let e2 = self.rule.e2m1_max();
         let one = LaunchConfig {
@@ -362,14 +401,16 @@ impl Nvfp4Linear {
             .lock()
             .map_err(|_| err("nvfp4 plan cache poisoned"))?;
         let plans = guard.get_or_insert_with(Default::default);
-        let key = (m, n, k, has_bias);
+        let key = (m, n, k, has_bias, ld_out);
         if !plans.contains_key(&key) {
             let mut built = None;
             let biases: &[bool] = if has_bias { &[true, false] } else { &[false] };
             'search: for run_m in [m, a.rows_pack] {
                 for device_alpha in [true, false] {
                     for &bias in biases {
-                        let p = unsafe { build_plan(&ltc, run_m, n, k, device_alpha, bias, &ptrs)? };
+                        let p = unsafe {
+                            build_plan(&ltc, run_m, n, k, ld_out, device_alpha, bias, &ptrs)?
+                        };
                         if let Some(p) = p {
                             built = Some(p);
                             break 'search;
@@ -379,7 +420,7 @@ impl Nvfp4Linear {
             }
             let plan = built.ok_or_else(|| {
                 err(format!(
-                    "cuBLASLt has no NVFP4 (VEC16_UE4M3) algorithm for m={m} n={n} k={k} on sm_{}{}",
+                    "cuBLASLt has no NVFP4 (VEC16_UE4M3) algorithm for m={m} n={n} k={k} ld={ld_out} on sm_{}{}",
                     d.sm_major, d.sm_minor
                 ))
             })?;
@@ -394,7 +435,10 @@ impl Nvfp4Linear {
         let plan = &plans[&key];
         unsafe { bind(&plan.desc, plan.bias, &ptrs)? };
         let run_m = plan.run_m;
-        let mut c = unsafe { d.stream.alloc::<half::bf16>(run_m * n) }.map_err(err)?;
+        let mut fresh = match into {
+            Some(_) => None,
+            None => Some(unsafe { d.stream.alloc::<half::bf16>(run_m * n) }.map_err(err)?),
+        };
         let host_ab: Vec<f32>;
         let (ab_ptr, _g5) = ab.device_ptr(&d.stream);
         let (alpha_p, beta_p): (*const std::ffi::c_void, *const std::ffi::c_void) =
@@ -408,7 +452,14 @@ impl Nvfp4Linear {
                 )
             };
         {
-            let (cp, _g6) = c.device_ptr_mut(&d.stream);
+            let (cp, _g6) = match (&mut fresh, into) {
+                (Some(c), _) => {
+                    let (p, g) = c.device_ptr_mut(&d.stream);
+                    (p, Some(g))
+                }
+                (None, Some((p, _))) => (p, None),
+                (None, None) => return Err(err("nvfp4 linear: no output")),
+            };
             let (ws_ptr, _g7) = ltc.workspace.device_ptr(&d.stream);
             stats::record_launch();
             unsafe {
@@ -437,12 +488,148 @@ impl Nvfp4Linear {
         }
         let bias_in = plan.bias;
         drop(guard);
-        if run_m != m {
-            let mut out = unsafe { d.stream.alloc::<half::bf16>(m * n) }.map_err(err)?;
-            let src = c.slice(0..m * n);
-            d.stream.memcpy_dtod(&src, &mut out).map_err(err)?;
-            return Ok((out, bias_in));
+        Ok((fresh, run_m, bias_in))
+    }
+}
+
+impl Nvfp4Operand {
+    /// A weight published pre-quantized, already in this operand's layout:
+    /// `packed` `[rows, k/2]` E2M1 codes, low nibble first; `scales` the
+    /// 128x4-tiled (`to_blocked`) E4M3 block scales of `rows` padded to 128
+    /// and `k/16` columns; `decode_scale` the tensor's global decode factor
+    /// (a checkpoint's `weight_scale_2`: `w = code · scale · decode_scale`).
+    ///
+    /// The operand keeps an amax, from which [`Nvfp4Linear::gemm`] computes
+    /// `decode = amax / (e2m1_max · 448)` (the TE rule); it is set to
+    /// `decode_scale · e2m1_max · 448`, which gives `decode_scale` back to
+    /// within one f32 rounding.
+    pub fn from_host_layout(
+        packed: &[u8],
+        scales: &[u8],
+        rows: usize,
+        k: usize,
+        decode_scale: f32,
+        rule: ScaleRule,
+    ) -> Result<Self> {
+        let d = dev()?;
+        if rows == 0 || !rows.is_multiple_of(16) || k == 0 || !k.is_multiple_of(64) {
+            return Err(err(format!(
+                "nvfp4 operand: [{rows}, {k}] (rows % 16 == 0, k % 64 == 0)"
+            )));
         }
-        Ok((c, bias_in))
+        rule_code(rule)?;
+        let rows_scale = rows.next_multiple_of(128);
+        if packed.len() != rows * k / 2 || scales.len() != rows_scale * (k / 16) {
+            return Err(err(format!(
+                "nvfp4 operand [{rows}, {k}]: {} code bytes (want {}), {} scale bytes (want {})",
+                packed.len(),
+                rows * k / 2,
+                scales.len(),
+                rows_scale * (k / 16)
+            )));
+        }
+        if !(decode_scale.is_finite() && decode_scale > 0.0) {
+            return Err(err(format!(
+                "nvfp4 operand: global decode scale {decode_scale}"
+            )));
+        }
+        let amax = (f64::from(decode_scale) * f64::from(rule.e2m1_max()) * 448.0) as f32;
+        let packed = d.stream.memcpy_stod(packed).map_err(err)?;
+        let scales = d.stream.memcpy_stod(scales).map_err(err)?;
+        let amax = d.stream.memcpy_stod(&[amax]).map_err(err)?;
+        Ok(Self {
+            packed,
+            scales,
+            amax,
+            rows,
+            rows_pack: rows,
+            k,
+        })
+    }
+}
+
+impl Nvfp4Linear {
+    /// A linear over an already-quantized weight ([`Nvfp4Operand::from_host_layout`]).
+    pub fn from_operand(
+        w: Nvfp4Operand,
+        bias: Option<std::sync::Arc<CudaSlice<half::bf16>>>,
+        rule: ScaleRule,
+    ) -> Result<Self> {
+        let (n, k) = (w.rows, w.k);
+        if !n.is_multiple_of(16) || w.rows_pack != n {
+            return Err(err(format!("nvfp4 linear: out features {n} % 16 != 0")));
+        }
+        if bias.as_ref().is_some_and(|b| b.len() != n) {
+            return Err(err("nvfp4 linear: bias length"));
+        }
+        Ok(Self {
+            w,
+            bias,
+            n,
+            k,
+            rule,
+        })
+    }
+}
+
+/// Bias-free NVFP4 linears that read the same input, stacked on the output
+/// dim (a fused QKV whose parts carry their own global scales): the
+/// activation is quantized once, and each part's GEMM writes its columns of
+/// one `[m, n]` output.
+pub struct Nvfp4Stack {
+    parts: Vec<Nvfp4Linear>,
+    pub n: usize,
+    pub k: usize,
+}
+
+impl Nvfp4Stack {
+    pub fn new(parts: Vec<Nvfp4Linear>) -> Result<Self> {
+        let Some(first) = parts.first() else {
+            return Err(err("nvfp4 stack: no parts"));
+        };
+        let (k, rule) = (first.k, first.rule);
+        if parts.iter().any(|p| p.k != k || p.rule != rule || p.bias.is_some()) {
+            return Err(err(
+                "nvfp4 stack: the parts must share k and the scale rule and have no bias",
+            ));
+        }
+        let n = parts.iter().map(|p| p.n).sum();
+        Ok(Self { parts, n, k })
+    }
+
+    pub fn parts(&self) -> &[Nvfp4Linear] {
+        &self.parts
+    }
+
+    /// Device bytes held.
+    pub fn held_bytes(&self) -> usize {
+        self.parts.iter().map(Nvfp4Linear::held_bytes).sum()
+    }
+
+    /// `x[m, k]` bf16 (device pointer) → bf16 `[m, n]`.
+    pub fn forward_bf16(&self, x_bf16: CUdeviceptr, m: usize) -> Result<CudaSlice<half::bf16>> {
+        if let [one] = self.parts.as_slice() {
+            return Ok(one.forward_bf16(x_bf16, m, false)?.0);
+        }
+        let d = dev()?;
+        let a = quantize_bf16_operand(x_bf16, m, self.k, false, self.parts[0].rule)?;
+        let rows = a.rows_pack;
+        let mut out = unsafe { d.stream.alloc::<half::bf16>(rows * self.n) }.map_err(err)?;
+        {
+            let (base, _g) = out.device_ptr_mut(&d.stream);
+            let mut col = 0usize;
+            for p in &self.parts {
+                p.gemm_into(&a, base + (col * 2) as CUdeviceptr, self.n)?;
+                col += p.n;
+            }
+        }
+        drop(a);
+        if rows == m {
+            return Ok(out);
+        }
+        let mut exact = unsafe { d.stream.alloc::<half::bf16>(m * self.n) }.map_err(err)?;
+        let src = out.slice(0..m * self.n);
+        d.stream.memcpy_dtod(&src, &mut exact).map_err(err)?;
+        Ok(exact)
     }
 }
