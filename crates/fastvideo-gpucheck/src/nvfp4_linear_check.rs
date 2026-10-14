@@ -252,6 +252,44 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         }
     }
 
+    // ---- 2c. a calibrated static activation scale (ModelOpt `input_scale`) ------------
+    // FastH3 V2 / 4-step NVFP4 (docs/ports/fasth3-nvfp4.md): the FFN quantizes its input
+    // with a fixed amax instead of measuring it. Set to the measured amax it must give the
+    // dynamic stack's output bit for bit; set below it, the values past it saturate and
+    // the output stays finite.
+    {
+        let name = "nvfp4_static_act_scale_matches_dynamic";
+        let r = (|| -> anyhow::Result<serde_json::Value> {
+            use fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Stack;
+            let n = 256usize;
+            let wf = randn(seed ^ 0x51a7, n * k, 0.05);
+            let wd = d.stream.memcpy_stod(&wf.iter().map(|&v| bf16::from_f32(v)).collect::<Vec<_>>())?;
+            let lin = || Nvfp4Linear::from_bf16(ptr(&wd), n, k, None, ScaleRule::Static6);
+            let amax = xr.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+            let unit = amax / (6.0 * 448.0);
+            let dynamic = Nvfp4Stack::new(vec![lin()?])?;
+            let fixed = Nvfp4Stack::new(vec![lin()?])?.with_static_act_scale(unit)?;
+            let clipped = Nvfp4Stack::new(vec![lin()?])?.with_static_act_scale(unit * 0.25)?;
+            let yd = to_f32(&d.stream.memcpy_dtov(&dynamic.forward_bf16(ptr(&xd), rows)?)?);
+            let yf = to_f32(&d.stream.memcpy_dtov(&fixed.forward_bf16(ptr(&xd), rows)?)?);
+            let yc = to_f32(&d.stream.memcpy_dtov(&clipped.forward_bf16(ptr(&xd), rows)?)?);
+            // The scale round-trips through f32 (amax / 2688 · 2688), so allow an ulp's flips.
+            let same = diff(&yf, &yd).rel_l2;
+            let bits = yd.iter().zip(&yf).all(|(a, b)| a.to_bits() == b.to_bits());
+            let finite = yc.iter().all(|v| v.is_finite());
+            Ok(json!({"ok": same <= 1e-3 && finite, "vs_dynamic_rel_l2": same, "bit_identical": bits,
+                      "clipped_quarter_amax_finite": finite, "clipped_vs_dynamic_rel_l2": diff(&yc, &yd).rel_l2,
+                      "m": rows, "n": n, "k": k}))
+        })();
+        match r {
+            Ok(v) => {
+                let ok = v["ok"].as_bool().unwrap_or(false);
+                report.check(name, ok, v, json!({"vs_dynamic_rel_l2": 1e-3}))?;
+            }
+            Err(e) => report.check(name, false, json!({"error": format!("{e:#}")}), json!({}))?,
+        }
+    }
+
     // ---- 3. NVFP4 vs the bf16 linear at an FFN shape ---------------------------------
     {
         let r = (|| -> anyhow::Result<serde_json::Value> {

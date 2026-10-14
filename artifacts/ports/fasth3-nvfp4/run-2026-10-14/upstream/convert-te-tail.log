@@ -1,0 +1,30 @@
+INFO 10-14 13:58:21.491 [__init__.py:47] CUDA is available
+keeping 50 of 64 language layers, H3 reads hidden state 50; 350 language linears to visit
+2026-10-14 13:58:29,238 - INFO - core.py:594 - flashinfer.jit: Building JIT module fp4_quantization_120f; this can take several minutes on first use.
+2026-10-14 13:59:39,594 - INFO - core.py:594 - flashinfer.jit: Building JIT module fp4_gemm_cutlass_sm120; this can take several minutes on first use.
+  quantized 35 language linears, 147s
+  quantized 70 language linears, 151s
+  quantized 105 language linears, 152s
+  quantized 140 language linears, 154s
+  quantized 175 language linears, 156s
+  quantized 210 language linears, 159s
+  quantized 245 language linears, 161s
+  quantized 280 language linears, 163s
+  quantized 315 language linears, 167s
+  quantized 350 language linears, 169s
+language linears quantized: 350
+tensors copied unchanged:   553
+skipped    1 keys: lm_head.weight: the conditioner never predicts tokens; H3 reads a hidden state
+skipped  154 keys: model.language_model.layers.{N >= kept}.*: layers above the one H3 reads are never built (#1711)
+language linear bytes: 48.76 GB bf16 -> 13.71 GB NVFP4 (packed values + E4M3 scales)
+artifact total: 16.46 GB in 4 shard(s)
+FP4 GEMM relative error vs bf16, 512 random rows per linear, every linear under --max-probe-error 0.5:
+  projection           linears         max        mean
+  self_attn.q_proj          50   1.345e-01   1.341e-01
+  self_attn.k_proj          50   1.346e-01   1.340e-01
+  self_attn.v_proj          50   1.346e-01   1.341e-01
+  self_attn.o_proj          50   1.345e-01   1.344e-01
+  mlp.gate_proj             50   1.345e-01   1.341e-01
+  mlp.up_proj               50   1.344e-01   1.342e-01
+  mlp.down_proj             50   1.345e-01   1.342e-01
+done in 170s

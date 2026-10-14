@@ -5,6 +5,15 @@ name: upstream-images
 
 on:
   workflow_dispatch:
+    inputs:
+      targets:
+        description: 'JSON list of upstream.Dockerfile targets (e.g. ["fastvideo-nvfp4"]); empty = the four reference stacks'
+        required: false
+        default: ""
+      fvrs_runtime:
+        description: "fastvideo-rs runtime image the images copy fv-gpucheck (fastvideo-nvfp4: the whole runtime) from"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths:
@@ -27,7 +36,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [fastvideo, sol-h3, sol-h3-4step, sol-ltx25]
+        # fastvideo-nvfp4 (FastH3 NVFP4, docs/ports/fasth3-nvfp4.md) is built on dispatch only.
+        target: ${{ fromJSON(inputs.targets || '["fastvideo", "sol-h3", "sol-h3-4step", "sol-ltx25"]') }}
     steps:
       - name: Free disk (hosted runners ship ~14 GB free)
         run: |
@@ -69,6 +79,8 @@ jobs:
           platforms: linux/amd64
           push: true
           provenance: false
+          build-args: |
+            FVRS_RUNTIME=${{ inputs.fvrs_runtime || 'ghcr.io/zaitrarrio/fastvideo-rs-runtime:latest' }}
           tags: |
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
             ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.meta.outputs.image) || '' }}

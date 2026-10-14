@@ -81,6 +81,22 @@ pub fn quantize_bf16_operand(
     gelu: bool,
     rule: ScaleRule,
 ) -> Result<Nvfp4Operand> {
+    quantize_bf16_operand_with(x_bf16, rows, k, gelu, rule, None)
+}
+
+/// [`quantize_bf16_operand`] with the tensor amax given (`fixed_amax`, one
+/// device f32) instead of measured: a checkpoint's calibrated static
+/// activation scale (ModelOpt `input_scale`, `amax = input_scale · e2m1_max ·
+/// 448`). No amax pass runs; values past it saturate (the E4M3 block scale
+/// clamps at 448, the codes at ±e2m1_max).
+pub fn quantize_bf16_operand_with(
+    x_bf16: CUdeviceptr,
+    rows: usize,
+    k: usize,
+    gelu: bool,
+    rule: ScaleRule,
+    fixed_amax: Option<&CudaSlice<f32>>,
+) -> Result<Nvfp4Operand> {
     let d = dev()?;
     if k == 0 || !k.is_multiple_of(64) || rows == 0 {
         return Err(err(format!("nvfp4 operand: [{rows}, {k}] (k % 64 == 0)")));
@@ -89,14 +105,21 @@ pub fn quantize_bf16_operand(
     let n = rows * k;
     let mut amax = d.stream.alloc_zeros::<f32>(1).map_err(err)?;
     let g = i32::from(gelu);
-    let nn = n as i64;
-    let cfg_amax = LaunchConfig {
-        grid_dim: ((n / 8).div_ceil(256).clamp(1, 4096) as u32, 1, 1),
-        block_dim: (256, 1, 1),
-        shared_mem_bytes: 0,
-    };
-    launch!(d.stream, &d.kernels.nvfp4_amax_bf16, cfg_amax; &x_bf16, &g, &mut amax, &nn)
-        .map_err(err)?;
+    if let Some(fixed) = fixed_amax {
+        if fixed.len() != 1 {
+            return Err(err("nvfp4 operand: the fixed amax is one f32"));
+        }
+        d.stream.memcpy_dtod(fixed, &mut amax).map_err(err)?;
+    } else {
+        let nn = n as i64;
+        let cfg_amax = LaunchConfig {
+            grid_dim: ((n / 8).div_ceil(256).clamp(1, 4096) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        launch!(d.stream, &d.kernels.nvfp4_amax_bf16, cfg_amax; &x_bf16, &g, &mut amax, &nn)
+            .map_err(err)?;
+    }
     let rows_pack = rows.next_multiple_of(16);
     let rows_scale = rows.next_multiple_of(128);
     let sc = k / 16;
@@ -580,6 +603,10 @@ pub struct Nvfp4Stack {
     parts: Vec<Nvfp4Linear>,
     pub n: usize,
     pub k: usize,
+    /// A static activation amax ([`Self::with_static_act_scale`]); `None`
+    /// measures it on every call (the TE `static_6` dynamic rule).
+    act_amax: Option<CudaSlice<f32>>,
+    act_scale: Option<f32>,
 }
 
 impl Nvfp4Stack {
@@ -594,7 +621,33 @@ impl Nvfp4Stack {
             ));
         }
         let n = parts.iter().map(|p| p.n).sum();
-        Ok(Self { parts, n, k })
+        Ok(Self {
+            parts,
+            n,
+            k,
+            act_amax: None,
+            act_scale: None,
+        })
+    }
+
+    /// Quantize the activation with a calibrated static scale (ModelOpt's
+    /// `input_scale`, the decode factor `amax / (e2m1_max · 448)`) instead of
+    /// its measured amax, as FastVideo's packed NVFP4 export does
+    /// (`_nvfp4_input_global_sf = 1 / input_scale`).
+    pub fn with_static_act_scale(mut self, input_scale: f32) -> Result<Self> {
+        if !(input_scale.is_finite() && input_scale > 0.0) {
+            return Err(err(format!("nvfp4 stack: activation scale {input_scale}")));
+        }
+        let e2 = self.parts[0].rule.e2m1_max();
+        let amax = (f64::from(input_scale) * f64::from(e2) * 448.0) as f32;
+        self.act_amax = Some(dev()?.stream.memcpy_stod(&[amax]).map_err(err)?);
+        self.act_scale = Some(input_scale);
+        Ok(self)
+    }
+
+    /// The static activation scale, when there is one.
+    pub fn static_act_scale(&self) -> Option<f32> {
+        self.act_scale
     }
 
     pub fn parts(&self) -> &[Nvfp4Linear] {
@@ -608,11 +661,18 @@ impl Nvfp4Stack {
 
     /// `x[m, k]` bf16 (device pointer) → bf16 `[m, n]`.
     pub fn forward_bf16(&self, x_bf16: CUdeviceptr, m: usize) -> Result<CudaSlice<half::bf16>> {
+        let a = quantize_bf16_operand_with(
+            x_bf16,
+            m,
+            self.k,
+            false,
+            self.parts[0].rule,
+            self.act_amax.as_ref(),
+        )?;
         if let [one] = self.parts.as_slice() {
-            return Ok(one.forward_bf16(x_bf16, m, false)?.0);
+            return Ok(one.gemm(&a)?.0);
         }
         let d = dev()?;
-        let a = quantize_bf16_operand(x_bf16, m, self.k, false, self.parts[0].rule)?;
         let rows = a.rows_pack;
         let mut out = unsafe { d.stream.alloc::<half::bf16>(rows * self.n) }.map_err(err)?;
         {

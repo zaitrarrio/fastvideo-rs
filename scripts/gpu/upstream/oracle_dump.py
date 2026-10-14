@@ -260,6 +260,24 @@ def _wrap_h3_step(sched, tag):
     return step
 
 
+def _soft(hook):
+    """A dump hook that never breaks the reference: a call shape it does not know (e.g. FastVideo's
+    FP4 attention route, FASTVIDEO_H3_VSA_FP4) is noted and skipped, once per message."""
+    seen = set()
+
+    def run(*a, **kw):
+        try:
+            return hook(*a, **kw)
+        except Exception as e:  # noqa: BLE001
+            m = f"{type(e).__name__}: {e}"
+            if m not in seen:
+                seen.add(m)
+                _note(f"dump hook skipped: {m}")
+            return None
+
+    return run
+
+
 def _patch_fv_dit(mod) -> None:
     import torch
 
@@ -280,14 +298,14 @@ def _patch_fv_dit(mod) -> None:
         ops = set(op_blocks())
         for i, block in enumerate(self.transformer_blocks):
             handles.append(block.register_forward_hook(
-                lambda m, a, out, i=i: rows_strided(f"step00_block_{i}", out)))
+                _soft(lambda m, a, out, i=i: rows_strided(f"step00_block_{i}", out))))
             if i == 0:
                 def pre0(m, a):
                     hs, rot = a[0], a[3]
                     rows_strided("step00_packed_in", hs)
                     rows_strided("rope_cos", rot[0])
                     rows_strided("rope_sin", rot[1])
-                handles.append(block.register_forward_pre_hook(pre0))
+                handles.append(block.register_forward_pre_hook(_soft(pre0)))
             if i in ops:
                 handles += _h3_op_hooks(block, i, torch)
         try:
