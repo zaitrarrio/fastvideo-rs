@@ -9,6 +9,7 @@ pub mod causal;
 pub mod attn;
 #[cfg(feature = "cuda")]
 pub mod attn_dc;
+pub mod attn_fp4;
 pub mod attn_fp8;
 pub mod attn_sage;
 pub mod bf16_gemm;

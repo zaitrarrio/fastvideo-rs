@@ -308,6 +308,9 @@ pub struct H3Vsa {
     current: std::sync::atomic::AtomicUsize,
     /// The fine stage on the FP8 kernel (`fp8_attention` with `vsa`).
     fp8: bool,
+    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`],
+    /// `FASTVIDEO_H3_VSA_FP4=1` with a ModelOpt NVFP4 DiT).
+    fp4: bool,
     heads: usize,
     head_dim: usize,
     #[cfg(feature = "cuda")]
@@ -395,6 +398,7 @@ impl H3Vsa {
             schedule: None,
             current: std::sync::atomic::AtomicUsize::new(k_vid),
             fp8: false,
+            fp4: false,
             heads,
             head_dim,
             #[cfg(feature = "cuda")]
@@ -434,6 +438,19 @@ impl H3Vsa {
     pub fn with_fp8(mut self, on: bool) -> Self {
         self.fp8 = on;
         self
+    }
+
+    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`]):
+    /// Q K^T and P V on block-scaled FP4 tensor cores, the selection, the
+    /// compression branch, the combine and the dense prefix rows unchanged.
+    pub fn with_fp4(mut self, on: bool) -> Self {
+        self.fp4 = on;
+        self
+    }
+
+    /// Whether the fine stage runs on the sparse FP4 kernel.
+    pub fn fp4(&self) -> bool {
+        self.fp4
     }
 
     /// Set the k_vid for block `layer` of forward `step` (a no-op without a
@@ -611,6 +628,13 @@ impl H3Vsa {
                 (0, n)
             };
             let sparse = phase("vsa_h3_3_mma", || {
+                if self.fp4 {
+                    use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                    return vsa_fine(
+                        &Fp4In::F32 { q: qd, k: kd, v: vd },
+                        &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                    );
+                }
                 if self.fp8 && crate::wan::attn_fp8::supported() {
                     return crate::wan::attn_fp8::vsa_fine(
                         qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base,
@@ -730,6 +754,7 @@ impl H3Vsa {
         use crate::wan::{device, ops};
         let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
         if dim != attn_dc::DC_HEAD_DIM
+            || self.fp4
             || (self.fp8 && crate::wan::attn_fp8::supported())
             || !attn_dc::vsa_enabled()
         {
@@ -986,6 +1011,13 @@ impl H3Vsa {
             (0, n)
         };
         let sparse = phase("vsa_h3_3_mma", || {
+            if self.fp4 {
+                use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                return vsa_fine(
+                    &Fp4In::Bf16 { q: qd, k: kd, v: vd },
+                    &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                );
+            }
             let (qt, kt, vt) = (
                 ops::vsa_tile_qkv_bf16_device(qd, &dp.plan, bh, seq, dim)?,
                 ops::vsa_tile_qkv_bf16_device(kd, &dp.plan, bh, seq, dim)?,
