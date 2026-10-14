@@ -216,7 +216,8 @@ pub fn video_vae_bytes(v: &H3VideoVaeConfig) -> u64 {
 }
 
 /// The MXFP8 copies of the video decoder's block linears
-/// (`FASTVIDEO_H3_VAE_MXFP8`, default on for the 36-block decoder on sm_100+):
+/// (`FASTVIDEO_H3_VAE_MXFP8`, default on for the 36- and 26-block decoders on
+/// sm_100+):
 /// one E4M3 byte per weight plus one E8M0 scale per 32, kept beside the bf16
 /// weights (the unfused path and the check still read those). About 2.3 GiB
 /// (measured: 768p peak 72.2 vs 69.8 GB, docs/perf/h3-vae-decode-speed.md).
@@ -709,6 +710,23 @@ mod tests {
     /// about 2.3 GiB, the +2.4 GB of peak the 768p run measured (72.2 vs
     /// 69.8 GB), priced wherever the decoder is: for the whole run resident,
     /// for the decode only streamed.
+    /// [`plan`] prices the 36-block decoder for every recipe, so FastH3
+    /// Trim's 26-block decoder (MXFP8 by default since 2026-10-14) is
+    /// covered: its bf16 weights and MXFP8 copies (1.68 GiB; measured +1.76
+    /// GiB on the pod, docs/perf/h3-vae-decode-speed.md §6) both fit what
+    /// the plan holds for the larger decoder.
+    #[test]
+    fn the_trim_decoders_mxfp8_copies_fit_the_planned_decoder() {
+        let (big, trim) = (
+            H3VideoVaeConfig::fasth3_8step(),
+            H3VideoVaeConfig::fasth3_trim_8step(),
+        );
+        let mx = video_vae_mxfp8_bytes(&trim);
+        assert!((1.6..1.75).contains(&gib(mx)), "{:.3}", gib(mx));
+        assert!(video_vae_bytes(&trim) + mx <= video_vae_bytes(&big) + video_vae_mxfp8_bytes(&big));
+        assert_eq!(mx * 36, video_vae_mxfp8_bytes(&big) * 26);
+    }
+
     #[test]
     fn the_mxfp8_video_decoder_copies_are_priced() {
         let v = H3VideoVaeConfig::fasth3_8step();

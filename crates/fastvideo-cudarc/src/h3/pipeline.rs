@@ -2741,6 +2741,9 @@ impl H3Pipeline {
         let timer = Instant::now();
         let (frame_paths, _) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
+        if super::vae::ab_requested() {
+            self.vae_ab_redecode(&latents, out_dir, frames, split.vae_s)?;
+        }
         if let Some(video) = refined_video {
             let refined = refine_spark(request, &video, &wave, sample_rate, out_dir)?;
             crate::wan::log::info(format_args!(
@@ -2817,6 +2820,68 @@ fn load_audio_decoder_from(dir: &Path, opened: Option<WeightMap>) -> Result<H3Au
 /// byte-identical to H3's (`audio_vae/diffusion_pytorch_model.safetensors`
 /// SHA-256 52c59e67...), so its weights tree does not carry a copy
 /// (docs/ports/h3-trim.md).
+impl H3Pipeline {
+    /// `FASTVIDEO_H3_VAE_AB=1` ([`super::vae::AB_ENV`], measurement only):
+    /// the clip's latents decoded again with the bf16 block linears into
+    /// `<out_dir>/vae-bf16/` (PNG frames), after the MXFP8 decode, so both
+    /// decodes see identical latents. A resident official decoder that ran
+    /// MXFP8 only; anything else says so and skips.
+    fn vae_ab_redecode(
+        &self,
+        latents: &CudaTensor,
+        out_dir: &Path,
+        frames: usize,
+        mxfp8_vae_s: f64,
+    ) -> Result<()> {
+        let vae = match self.video_vae.as_ref() {
+            Some(VideoDecoder::Official(vae)) if vae.mxfp8_active() => vae,
+            _ => {
+                crate::wan::log::info(format_args!(
+                    "h3 vae a/b: skipped (needs a resident official decoder running MXFP8)"
+                ));
+                return Ok(());
+            }
+        };
+        let dir = out_dir.join("vae-bf16");
+        std::fs::create_dir_all(&dir).map_err(|e| msg(format!("{}: {e}", dir.display())))?;
+        let writer = crate::wan::writer::VideoWriter::spawn_with_audio(
+            &dir,
+            crate::sink::mp4_fps(H3_FPS as f64),
+            false,
+            None,
+        )?;
+        let mut drain = FrameDrain::new(writer)?;
+        let mut writer_error: Option<PipelineError> = None;
+        let mut sink = |offset: usize, chunk: &CudaTensor| {
+            drain.push(offset, chunk).map_err(|e| {
+                let text = e.to_string();
+                writer_error = Some(e);
+                TensorError::Message(text)
+            })
+        };
+        let decoded = super::vae::with_bf16_linears(|| vae.decode_streaming(latents, &mut sink));
+        let emitted = match (decoded, writer_error) {
+            (_, Some(e)) => return Err(e),
+            (r, None) => r?,
+        };
+        let (mut writer, split) = drain.finish()?;
+        writer.finish()?;
+        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        if emitted != frames {
+            return Err(msg(format!(
+                "h3 vae a/b: bf16 re-decode emitted {emitted} frames, the clip has {frames}"
+            )));
+        }
+        crate::wan::log::info(format_args!(
+            "h3 vae a/b: video vae mxfp8 {mxfp8_vae_s:.3}s, bf16 {:.3}s ({} frames to {})",
+            split.vae_s,
+            emitted,
+            dir.display()
+        ));
+        Ok(())
+    }
+}
+
 pub fn audio_vae_dir(root: &Path, text_root: Option<&Path>) -> PathBuf {
     let own = root.join("audio_vae");
     if own.is_dir() {
