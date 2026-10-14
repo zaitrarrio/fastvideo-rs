@@ -271,6 +271,33 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   placement skips `us` in any case. When US is rebuilt, setting
   `US_VOLUME_ID` in `control/src/cluster/regions.ts` brings the region back
   (`docs/ops/runpod-volumes.md`).
+  `regions` places only the Runpod pools that mount the weights volume.
+- `data_centers` (optional; owner 2026-10-14): where the Runpod pools
+  *without* the weights volume run. That is a GPU pool with
+  `weights_source` `r2`, `hub` or `none`, or with `weights_source` unset
+  when its default is `r2` (a preset whose trees are not on the EU volume:
+  wan, fastwan21, sfwan, longlive, the FastH3 Trim and H3 LoRA presets), or
+  a CPU pool with `volume` off. The list is any Runpod data centres, tried in
+  order, each with every GPU type of the pool in order. A last `"any"` sends
+  no `dataCenterIds`, so Runpod places the pod. A pool's own `data_centers`
+  win. Unset: the regions' data centre (EU-RO-1), as before.
+  - Pools that mount the volume (the H3 and LTX presets by default) stay in
+    `regions`. They are valid next to `data_centers`; the editor warns that
+    they run in EU-RO-1.
+  - GMI / Brev pools ignore both and run at their provider.
+  - `cluster/payloads.ts poolDataCenters` / `workerPlacements` place the
+    pods; the stock outlook asks Runpod for each named data centre and says
+    "then any data centre" for `"any"`.
+  - Stored specs without the field read and place exactly as before
+    (`regions: ["eu"]` stays the default).
+- `pools[].provider`: `runpod` (default), `gmi` or `brev`, per pool. A
+  cluster may mix them or use one only; nothing at the cluster level is
+  Runpod-only (`regions` keeps its nominal default). The provider gates
+  hold: a provider is off until its keys are set, and `weights_source hub`
+  needs `hub_download_approved` and the Worker's
+  `FV_HUB_DOWNLOADS_APPROVED=1`. The cluster page lists where each pool
+  runs (provider, data centres or volume region) under Placement and in
+  each pool's header.
 - `auth`: `keys` (default) or `none`: a direct cluster's client auth
   (`FV_AUTH_MODE`). An edge cluster uses the edge's own setting.
 - A spec stored before the gateway was retired (a `gateway` block,

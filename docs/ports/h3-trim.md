@@ -79,6 +79,9 @@ loads it with `vae_precision = fp32` (`F/pcfg`). The port reads `vae/config.json
 (`h3::pipeline::video_vae_config`: `decoder_num_layers` from the file, every other field checked against H3's) and
 loads the F16 weights through the same decoder. The release's `vae/minimax_h3_video_vae_int8_convrot.safetensors`
 (Kijai's INT8, ComfyUI layout: fused `to_qkv`, `w1`/`w2`, per-row scales) is published but not read.
+On sm_100+ its block linears run as MXFP8 by default (`FASTVIDEO_H3_VAE_MXFP8`, since 2026-10-14; `=0` for bf16):
+−22 % video VAE time at 480p and 768p, +1.7 GiB resident, quality gate passed against the bf16 decode (LPIPS 0.001,
+PSNR 50 dB; docs/perf/h3-vae-decode-speed.md §6).
 
 ## 2. Code
 

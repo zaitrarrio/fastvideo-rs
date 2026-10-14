@@ -66,3 +66,6 @@ dialog.cf-review .fv-diff { max-height: 46vh; }
   .cf-grid { grid-template-columns: minmax(0, 1fr); }
   .cf-side { position: static; max-height: none; }
 }
+.cf-wherelist { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.cf-wherelist li { margin: 2px 0; }
+.cf-where { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
