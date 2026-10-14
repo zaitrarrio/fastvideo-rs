@@ -1608,6 +1608,30 @@ impl Linear {
         Ok(Some(c16))
     }
 
+    /// [`Self::gemm_bf16`] for a published NVFP4 weight ([`Self::from_nvfp4`]):
+    /// the bf16 `x16 [m, in]` quantized once (the stack's static activation
+    /// scale when it has one), bf16 `[m, out]` out, **bias not applied**.
+    /// `None` on any other linear.
+    #[cfg(feature = "cuda")]
+    pub fn gemm_nvfp4_bf16(
+        &self,
+        x16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+    ) -> Result<Option<cudarc::driver::CudaSlice<half::bf16>>> {
+        let Some(w) = self.nvfp4_w.as_deref() else {
+            return Ok(None);
+        };
+        if x16.len() < m * self.in_dim {
+            return Err(msg(format!(
+                "nvfp4 gemm input of {} elements for [{m}, {}]",
+                x16.len(),
+                self.in_dim
+            )));
+        }
+        super::evalstats::quant_call("nvfp4_published");
+        Ok(Some(w.0.forward_bf16(super::quant::ptr(x16), m)?))
+    }
+
     /// `gelu_tanh(W x + b)` with the bias add and activation in one launch.
     pub fn forward_gelu(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         self.forward_act(xs, true)
