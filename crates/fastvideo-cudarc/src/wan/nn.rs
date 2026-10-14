@@ -2173,6 +2173,46 @@ pub fn sdpa_block_causal(
     scaled_dot_product_attention_masked(q, k, v, scale, Some(&dense))
 }
 
+/// SDPA under VDN-H3's window mask ([`super::attn::VdnWindow`]): one flash
+/// launch on a tensor-core device (`flash_mma_fwd2_window_d128`), else the
+/// dense additive mask through [`scaled_dot_product_attention_masked`] (CPU
+/// runs, head dims other than 128).
+pub fn sdpa_vdn_window(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    mask: super::attn::VdnWindow,
+) -> Result<CudaTensor> {
+    if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
+        return Err(msg("sdpa expects BHSD"));
+    }
+    let (sq, sk) = (q.shape[2], k.shape[2]);
+    let act16 = super::tensor::bf16_activations();
+    if sp_world() == 1 && super::attn::mma_sdpa_default() {
+        let (qa, ka, va);
+        let (q, k, v) = if act16 {
+            qa = q.quantize_bf16()?;
+            ka = k.quantize_bf16()?;
+            va = v.quantize_bf16()?;
+            (&qa, &ka, &va)
+        } else {
+            (q, k, v)
+        };
+        if let Some(out) = super::attn::device_mma_sdpa_window(q, k, v, scale, act16, mask)? {
+            return Ok(out);
+        }
+    }
+    // The masked fallback materializes [sq, sk]: small (test) shapes only.
+    if sq.saturating_mul(sk) > 1 << 26 {
+        return Err(msg(format!(
+            "sdpa_vdn_window: the window kernel cannot run this {sq}x{sk} call and the dense mask is too large"
+        )));
+    }
+    let dense = CudaTensor::from_vec(mask.dense_mask(sq, sk), vec![1, 1, sq, sk])?;
+    scaled_dot_product_attention_masked(q, k, v, scale, Some(&dense))
+}
+
 /// Causal Wan's autoregressive self-attention: one block's queries against
 /// the KV-cache window, no mask (FastVideo `CausalWanSelfAttention` with a
 /// `kv_cache`: `self.attn(roped_query, key_window, value_window)`). The flash

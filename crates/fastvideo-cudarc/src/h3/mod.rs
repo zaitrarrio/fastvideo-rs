@@ -17,6 +17,7 @@ pub mod spark;
 pub mod text;
 pub mod transformer;
 pub mod vae;
+pub mod vdn;
 pub mod vae_encoder;
 pub mod vision;
 pub mod vsa;

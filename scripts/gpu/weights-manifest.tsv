@@ -21,6 +21,16 @@ FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	
 fasth3-trim-8step	FastVideo/FastVideo-FastH3-Trim-8-Step	transformer/* vae/* scheduler/* audio_scheduler/* fastvideo_inference.json metadata.json README.md
 # fasth3-trim-8step-nvfp4: the ComfyUI NVFP4 single file of the same network (Blackwell; ComfyUI key names, fused QKV).
 fasth3-trim-8step-nvfp4	FastVideo/FastVideo-FastH3-Trim-Comfy	diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors README.md
+# vdn-h3-stage-b-2000 (owner approval 2026-10-13: stage-b-step-2000/ plus the small root files only; docs/ports/vdn-h3.md):
+# VDN-H3 (Video DeltaNet) hybrid attention, the 50-step model: the linear branch of all 50 blocks and the rank-64 LoRA
+# of attn.to_{q,k,v,out.0} + the token refiner. The base is h3-base (its transformer/vae/audio_vae LFS SHA-256 in the
+# repo's h3-base/ equal MiniMaxAI/MiniMax-H3 @ 42ed227, so h3-base/ is NOT copied). stage-dmd-step-250/ (the 8-step
+# model: the same branch + default adapter, plus adapters/turbo/, 0.85 GB) is a tree of its own below. R2 only.
+vdn-h3-stage-b-2000	OpenVDN/vdn-minimax-h3	stage-b-step-2000/* LICENSE README.md modular_model_index.json
+# vdn-h3-dmd-250-turbo (owner approval 2026-10-14: the turbo adapter): the 8-step DMD model's own files only, i.e.
+# adapters/turbo/ and the stage's small JSON files. Its linear branch and default adapter are byte-identical to
+# stage B's (LFS dec6981c…, 58558fef…) and are read from vdn-h3-stage-b-2000 (H3Recipe vdn_shared). R2 only.
+vdn-h3-dmd-250-turbo	OpenVDN/vdn-minimax-h3	stage-dmd-step-250/adapters/turbo/* stage-dmd-step-250/adapters/default/adapter_spec.json stage-dmd-step-250/diffusers/config.json stage-dmd-step-250/linear_branch/config.json stage-dmd-step-250/metadata.json stage-dmd-step-250/model_spec.json
 # upscaler: pinned @ 3f941d5d182014dd5c0a5e16330420ee2d4aa0c6 (690 592 992 bytes, LFS sha256 4f57821f…46a5e6, checked by
 # verify-weights.sh sol-h3-spark). The repo moved the file into minimax_h3_latent_upscaler_3d_conv_v1/ at 6749d7b; the earlier
 # top-level minimax_h3_latent_upscaler_3d_bf16.safetensors (still on EU) is the same bytes.

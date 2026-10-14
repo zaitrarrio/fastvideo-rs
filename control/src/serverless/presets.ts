@@ -90,7 +90,7 @@ export interface SpecLike {
   image: { channel?: string; sha?: string; ref?: string };
   gpu_types?: string[];
   network_volume: string | null;
-  weights_source?: "volume" | "r2";
+  weights_source?: "volume" | "r2" | "hub";
 }
 export interface Issue {
   path: (string | number)[];
@@ -129,8 +129,8 @@ export function servingIssues(spec: SpecLike, s: Serves = servesOf(spec)): { iss
   if (!s.models.length && s.source.kind === "unknown" && !spec.config) warnings.push({ path: ["variant"], message: "fv-control does not know this variant's config: nothing derived" });
   const trees = [...new Set([...(preset?.weights ?? []), ...s.weights])];
   if (spec.compute === "GPU" && s.engine !== "fake") {
-    if (spec.weights_source === "r2") {
-      // The R2 weights store: serverless/weights.ts slsWeightsIssues checks the trees are published.
+    if (spec.weights_source === "r2" || spec.weights_source === "hub") {
+      // The R2 weights store or the Hub: serverless/weights.ts slsWeightsIssues checks the trees are published / have a Hub source.
     } else if (!spec.network_volume) {
       // A preset's missing volume is the schema's issue (spec.ts superRefine).
       if (trees.length && !preset) issues.push({ path: ["network_volume"], message: `the config loads weight trees (${trees.join(", ")}): mount the weights volume ${REGIONS.eu.volume} (${REGIONS.eu.dc})` });

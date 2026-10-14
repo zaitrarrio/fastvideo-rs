@@ -75,8 +75,9 @@ serverlessRoutes.get("/", async (c) => {
 serverlessRoutes.get("/defaults", (c) => {
   const ws = c.req.query("weights_source");
   const d = defaultEndpointSpec(c.req.query("name") || "example", c.req.query("variant") || "cpu", c.req.query("preset") || undefined);
-  // ?weights_source=r2|volume: that source's placement (r2: no volume, any data centre, a disk for the trees).
-  return c.json({ spec: (ws === "r2" || ws === "volume") && d.compute === "GPU" ? withWeightsSource(d, ws) : d });
+  // ?weights_source=r2|hub|volume: that source's placement (r2 / hub: no volume, any data centre, a disk for the trees;
+  // hub: FlashBoot on, and the approval left to the caller).
+  return c.json({ spec: (ws === "r2" || ws === "volume" || ws === "hub") && d.compute === "GPU" ? withWeightsSource(d, ws) : d });
 });
 /** The preset catalog (the cluster pools' presets plus cpu): what each serves, the weights and GPU memory it needs (docs/control/serverless.md §1a). */
 serverlessRoutes.get("/presets", (c) =>

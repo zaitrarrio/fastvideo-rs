@@ -1,0 +1,42 @@
+{
+  "_class_name": "VDNMiniMaxH3Transformer3DModel",
+  "auto_map": {
+    "AutoModel": "modeling_vdn_h3.VDNMiniMaxH3Transformer3DModel"
+  },
+  "vdn": {
+    "adapters": [
+      "adapters/default/adapter_model.safetensors",
+      "adapters/turbo/adapter_model.safetensors"
+    ],
+    "base": {
+      "revision": null,
+      "source": "OpenVDN/vdn-minimax-h3",
+      "subfolder": "h3-base/transformer"
+    },
+    "branch": "linear_branch/model.safetensors",
+    "fp8": false,
+    "inference_kernels": true,
+    "softmax_backend": "flex",
+    "transform": {
+      "anchor_frames": "both",
+      "enable_softmax_gate": true,
+      "linear_attention": {
+        "a_fp32": true,
+        "bridge": "alpha",
+        "delta_rule": "vdn_solve",
+        "enable_text_state": true,
+        "linear_head_dim": 128,
+        "short_conv": {
+          "targets": [
+            "k",
+            "v"
+          ]
+        }
+      },
+      "softmax_attention": {
+        "chunk": 5,
+        "radius": 1
+      }
+    }
+  }
+}

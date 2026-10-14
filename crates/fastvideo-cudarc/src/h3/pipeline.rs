@@ -292,6 +292,14 @@ pub struct H3PipelineOptions {
     /// tree beside the snapshot (`../fasth3-trim-8step-nvfp4`); any other
     /// recipe runs without it.
     pub nvfp4_dit: Option<PathBuf>,
+    /// VDN-H3 (`vdn-h3-<N>step` recipes, docs/ports/vdn-h3.md): the VDN
+    /// checkpoint directory (`stage-b-step-2000/`, or a tree holding one stage
+    /// directory). `None`: `FASTVIDEO_H3_VDN`. The snapshot is h3-base.
+    pub vdn: Option<PathBuf>,
+    /// Where the files `vdn`'s config names but its tree does not carry come
+    /// from (the 8-step `stage-dmd-step-250/` reads stage B's byte-identical
+    /// linear branch and default adapter). `None`: `FASTVIDEO_H3_VDN_SHARED`.
+    pub vdn_shared: Option<PathBuf>,
 }
 
 /// The NVFP4 DiT file a load reads ([`H3PipelineOptions::nvfp4_dit`]).
@@ -310,6 +318,11 @@ pub fn nvfp4_dit_file(root: &Path, options: &H3PipelineOptions) -> Result<Option
     }
     Ok(None)
 }
+
+/// `FASTVIDEO_H3_VDN`: the VDN checkpoint directory when the options name none.
+pub const H3_VDN_ENV: &str = "FASTVIDEO_H3_VDN";
+/// `FASTVIDEO_H3_VDN_SHARED`: [`H3PipelineOptions::vdn_shared`] when unset.
+pub const H3_VDN_SHARED_ENV: &str = "FASTVIDEO_H3_VDN_SHARED";
 
 /// Where the multimodal (image-conditioned) text encoder's weights live.
 ///
@@ -350,6 +363,51 @@ impl I2vEncoderChoice {
             Self::Auto => "auto",
             Self::Resident => "resident",
             Self::Stream => "stream",
+        }
+    }
+}
+
+/// The VDN checkpoint a `vdn-h3-<N>step` recipe runs (`options.vdn`, else
+/// [`H3_VDN_ENV`]); `None` for other recipes, which may not name one.
+pub fn vdn_checkpoint(
+    options: &H3PipelineOptions,
+) -> Result<Option<fastvideo_models::h3::vdn::VdnCheckpoint>> {
+    let recipe = options.recipe.as_deref();
+    let is_vdn = recipe.is_some_and(fastvideo_models::h3::vdn::is_vdn_recipe);
+    let dir = options
+        .vdn
+        .clone()
+        .or_else(|| std::env::var_os(H3_VDN_ENV).map(PathBuf::from));
+    match (is_vdn, dir) {
+        (false, None) => Ok(None),
+        (false, Some(d)) if options.vdn.is_none() => {
+            let _ = d; // the env var is ignored by other recipes
+            Ok(None)
+        }
+        (false, Some(d)) => Err(msg(format!(
+            "VDN weights {} need a vdn-h3-<N>step recipe (got {})",
+            d.display(),
+            recipe.unwrap_or("auto")
+        ))),
+        (true, None) => Err(msg(format!(
+            "recipe {}: no VDN checkpoint (pass --vdn or set {H3_VDN_ENV})",
+            recipe.unwrap_or_default()
+        ))),
+        (true, Some(d)) => {
+            if options.ref2va {
+                return Err(msg("VDN-H3: Ref2VA was not trained (T2VA, I2VA, L2VA, FL2VA only)"));
+            }
+            let shared = options
+                .vdn_shared
+                .clone()
+                .or_else(|| {
+                    std::env::var_os(H3_VDN_SHARED_ENV)
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                });
+            fastvideo_models::h3::vdn::VdnCheckpoint::open_shared(&d, shared.as_deref())
+                .map(Some)
+                .map_err(msg)
         }
     }
 }
@@ -905,6 +963,8 @@ pub struct H3Pipeline {
     pub load_timings: H3LoadTimings,
     /// What this pipeline keeps on the device, by ledger category.
     booking: std::sync::Mutex<crate::wan::ledger::Booking>,
+    /// VDN-H3: the hybrid transform every block runs (branch attached).
+    vdn: Option<fastvideo_models::h3::vdn::VdnTransform>,
 }
 
 /// Device bytes a denoise needs beside the resident weights for `rows` packed
@@ -980,6 +1040,14 @@ impl H3Pipeline {
             options.reference_image_resize = ReferenceImageResize::Match;
         }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
+        let vdn_ckpt = vdn_checkpoint(&options)?;
+        // VDN-H3 defaults to bf16 linears (owner decision 2026-10-14; MXFP8
+        // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
+        // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
+        // load (every QuantMode::from_env of the DiT and refiner) only.
+        let _vdn_bf16 = vdn_ckpt
+            .as_ref()
+            .map(|_| crate::wan::quant::QuantMode::scoped_default(crate::wan::quant::QuantMode::Off));
         let cfg = dit_config(root, &options)?;
         let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
         if contract.dense {
@@ -1091,7 +1159,7 @@ impl H3Pipeline {
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`super::dit_tree`), when a
         // valid one is there; otherwise the checkpoint as below.
-        let dit_tree = if mlx.is_none() && !options.ref2va {
+        let dit_tree = if mlx.is_none() && !options.ref2va && vdn_ckpt.is_none() {
             let identity = dit_tree_identity(
                 root,
                 &options,
@@ -1109,7 +1177,7 @@ impl H3Pipeline {
         if dit_tree.is_none() {
             // A fused adapter rebuilds the AdaLN table from the projections;
             // otherwise a valid cache file means they are never read.
-            let adapter = options.recipe.as_deref().is_some_and(|r| {
+            let adapter = vdn_ckpt.is_some() || options.recipe.as_deref().is_some_and(|r| {
                 FastH3PreviewVariant::from_recipe(r).is_some()
                     || is_sol_h3_recipe(r)
                     || PlugRecipe::is_plug(r)
@@ -1316,6 +1384,29 @@ impl H3Pipeline {
                     fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
                 ));
             }
+            Some(fuse)
+        } else if let Some(ck) = &vdn_ckpt {
+            // VDN-H3: the checkpoint's LoRA adapters merged into the base
+            // projections (M:merge_lora_state, scale 1); the branch attaches
+            // after the blocks load.
+            let fuse = super::lora::H3LoraFuse::open_vdn(&map, &ck.adapters)?;
+            crate::wan::log::info(format_args!(
+                "h3 vdn: {} ({}): fuse {} pairs max rank {} scale 1, chunk {} radius {}{}",
+                ck.dir.display(),
+                ck.adapter_names().join(" + "),
+                fuse.pairs_total,
+                fuse.rank,
+                ck.transform.chunk,
+                ck.transform.radius,
+                if ck.is_distilled() || contract.transformer_forwards >= 40 {
+                    String::new()
+                } else {
+                    format!(
+                        "; NOTE: {} forwards on the 50-step stage-B model (the 8-step model adds adapters/turbo)",
+                        contract.transformer_forwards
+                    )
+                }
+            ));
             Some(fuse)
         } else if let Some(plug) = options.recipe.as_deref().and_then(PlugRecipe::named) {
             if options.ref2va {
@@ -1547,7 +1638,7 @@ impl H3Pipeline {
         )?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = booking.track(
+        let mut model = booking.track(
             crate::wan::ledger::DIT_NONLINEAR,
             || match &dit_tree {
                 Some(tree) => {
@@ -1581,6 +1672,10 @@ impl H3Pipeline {
                 ));
             }
             model.enable_teacache(state)?;
+        }
+        if let Some(ck) = &vdn_ckpt {
+            let branch = WeightMap::open_files(std::slice::from_ref(&ck.branch))?;
+            model.attach_vdn(&branch)?;
         }
         if let Some(fuse) = lora.as_ref() {
             fuse.finish()?;
@@ -1646,6 +1741,7 @@ impl H3Pipeline {
             i2v_stream: false,
             load_timings,
             booking: std::sync::Mutex::new(booking),
+            vdn: vdn_ckpt.map(|c| c.transform),
         })
     }
 
@@ -2169,7 +2265,13 @@ impl H3Pipeline {
                 Some(policy)
             }
         };
-        let mode = if let Some(ref policy) = sol_policy {
+        let vdn_plan = match &self.vdn {
+            Some(t) => Some(super::vdn::VdnPlan::new(&layout.layout, t)?),
+            None => None,
+        };
+        let mode = if let Some(plan) = vdn_plan.as_ref() {
+            AttnMode::Vdn(plan)
+        } else if let Some(ref policy) = sol_policy {
             match vsa.as_ref() {
                 Some(vsa) if sol_dense_vsa => AttnMode::SolVsa { policy, vsa },
                 _ => AttnMode::Sol(policy),

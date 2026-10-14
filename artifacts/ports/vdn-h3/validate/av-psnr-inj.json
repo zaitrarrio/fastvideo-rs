@@ -1,0 +1,22 @@
+{
+ "ref": "/srv/up/output.mp4",
+ "cand": "/srv/ours/inj/output.mp4",
+ "video": {
+  "frames_ref": 124,
+  "frames_cand": 124,
+  "frames": 124,
+  "psnr_db": 29.016855815959065,
+  "psnr_db_frame_mean": 29.134015218337602,
+  "psnr_db_frame_min": 25.954986580577533
+ },
+ "audio": {
+  "samples_ref": 165600,
+  "samples_cand": 165600,
+  "rate": 32000,
+  "psnr_db": 32.71704152160136,
+  "best_lag_samples": 0,
+  "psnr_db_best_lag": 32.71704152160136,
+  "rms_ref": 0.11152659356594086,
+  "rms_cand": 0.1091601699590683
+ }
+}

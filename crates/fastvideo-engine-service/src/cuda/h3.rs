@@ -90,6 +90,8 @@ impl H3Model {
             // An NVFP4 recipe (`trim-8step-nvfp4`) reads the tree beside
             // `weights` (`fasth3-trim-8step-nvfp4`); every other recipe none.
             nvfp4_dit: None,
+            vdn: recipe.vdn_weights.clone(),
+            vdn_shared: recipe.vdn_shared.clone(),
         })
     }
 
