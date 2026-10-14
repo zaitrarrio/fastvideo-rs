@@ -1,0 +1,30 @@
+{
+ "args": {
+  "base": "/fvw/h3-diffusers",
+  "space": "/opt/space",
+  "larry": "/fvw/root/h3-turbo-loras/larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+  "lightx": "/fvw/root/h3-turbo-loras/lightx2v-v0.1/minimax_h3_fl2v_turbo_4step_v0.1.safetensors",
+  "text_hidden": "/srv/ours/pre-lightx-v01-dump/text_hidden",
+  "out": "/srv/ref/lightx-v01",
+  "clip": "/srv/ref/lightx-v01/clip",
+  "height": 480,
+  "width": 832,
+  "num_frames": 124,
+  "steps": 6,
+  "seed": 1024,
+  "params": "transformer_blocks.0.attn.to_out.0,transformer_blocks.0.ff.net.0.proj,transformer_blocks.0.ff.net.2,transformer_blocks.49.attn.to_out.0,transformer_blocks.49.ff.net.0.proj,transformer_blocks.49.ff.net.2,token_refiner.refiner_blocks.1.ff.net.0.proj,token_refiner.refiner_blocks.1.attn.to_out.0",
+  "active": "lightx",
+  "attention": "_native_cudnn"
+ },
+ "torch": "2.11.0+cu130",
+ "cuda": "13.0",
+ "diffusers": "0.40.0.dev0",
+ "transformers": "5.8.0",
+ "load_s": 4.339786052703857,
+ "lora_status": "LoRAs loaded: `lightx` (lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_4step_v0.1.safetensors, 312 weights) \u00b7 active `lightx`",
+ "fold_s": 26.579010486602783,
+ "attention": "_native_cudnn",
+ "generate_s": 20.12184476852417,
+ "peak_allocated_gib": 77.33158826828003,
+ "sampling_rate": 32000
+}
