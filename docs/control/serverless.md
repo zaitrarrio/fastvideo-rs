@@ -254,7 +254,26 @@ The outlook estimates start + download at `HUB_DOWNLOAD_GBPS` (0.2 GB/s, runpod-
 fv-control.sh endpoint create wanhub --preset wan --weights hub --approve-hub-download --gpu "NVIDIA H100 80GB HBM3"
 ```
 
-**Measured (2026-10-14):** see "Live check" below.
+**Live check (2026-10-14).** Preset `wan` (`fastwan22-ti2v-5b` + `wan22-ti2v-5b`, 58.4 GB), image
+`wan5b-stable`, `workers_max` 1, `idle_timeout_s` 5, FlashBoot on, any DC, the template and endpoint built by this
+code (`templateCreatePayload` / `endpointCreatePayload`) and posted to Runpod directly. There was no fv-control
+deployment, so no boot reports. The Runpod secret references were left out (no R2 or D1 credentials on the worker).
+Times come from the Runpod job status and the worker's container log.
+
+| | Worker | Container start → weights ready | Of which | fv-serve load | Job delay / exec |
+|---|---|---:|---|---:|---|
+| Cold, `info` | H100 80GB (sm_90, driver 580.126, 84.4 GB GPU free at load) | 194 s | tools 49 s; fastwan22 58 s (~415 MB/s), 15/15 files = weights-sha256.tsv; wan22 62 s (Hub listing only); aux 13 s | 93 s | **335.7 s** / 0.39 s |
+| Cold again (the first worker had idled out), a generation | H200 (driver 580.178, 149.5 GB free) | 285 s | tools 16 s; fastwan22 103 s; wan22 152 s (~220 MB/s) | 74 s | 360.7 s / **13.2 s** (fastwan22, defaults) |
+| 3 min idle, then `info` | the same H200 worker | none: no new boot, no download | — | none (resident) | **1.5 s** / 0.11 s |
+
+- The Hub rate varied about 2× between hosts (≈ 415 vs 220 MB/s), against R2's 0.33-0.77 GB/s
+  (docs/ops/r2-bench-2026-10-12.md). Cold from zero was 336-361 s with Hub against R2's 279 s on the same preset.
+- **The revival.** The third job was taken after 1.5 s by the worker that had served the second one, with no new
+  container start. Its first log line on wake was `job-take failed error=error sending request`, which fits a suspended
+  process whose long-poll died. Runpod's worker list showed it `RUNNING` and health `running 1` throughout, so whether
+  it was suspended (FlashBoot) or kept up, and how it was billed meanwhile, is **UNVERIFIED**.
+- With `idle_timeout_s` 5, a job sent about 15 s after the previous one ended still went to a new worker: a full
+  cold start, not a revival. A longer `idle_timeout_s` keeps the worker warm between closely spaced jobs.
 
 ## 1a. Model-first: presets, what an endpoint serves, the checks
 
