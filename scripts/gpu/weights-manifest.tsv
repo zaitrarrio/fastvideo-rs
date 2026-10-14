@@ -137,4 +137,6 @@ h3-turbo-loras/larry	larryvrh/MiniMax-H3-Turbo-Lora	README.md minimax_h3_turbo_4
 h3-turbo-loras/lightx2v	lightx2v/Minimax-h3-Turbo	README.md minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors
 # auxiliary/ncii-light-guard: the optional NCII prompt guard (fv-serve [moderation] ncii, docs/ports/h3-turbo-loras.md),
 # MIT, 270M Gemma3 text classifier, 0.57 GB. R2 only.
+# h3-turbo-loras/lightx2v-v0.1: the lightx2v FL2VA/T2VA 4-step v0.1 file the Space folds (owner approval 2026-10-14, 1.38 GB).
+h3-turbo-loras/lightx2v-v0.1	lightx2v/Minimax-h3-Turbo	README.md minimax_h3_fl2v_turbo_4step_v0.1.safetensors
 auxiliary/ncii-light-guard	hfmlsoc/ncii-light-guard-v01	README.md config.json model.safetensors tokenizer.json tokenizer_config.json

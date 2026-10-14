@@ -52,6 +52,7 @@ export const HUB_TREES: Record<string, HubTree> = {
   "cosmos3-super": { repo: "nvidia/Cosmos3-Super", revision: "f543c56225b2e04d0ad141e29655be3a45d9c455", globs: ["model_index.json","scheduler/*","transformer/*","vae/*","text_tokenizer/*"] },
   "h3-turbo-loras/larry": { repo: "larryvrh/MiniMax-H3-Turbo-Lora", revision: "43a74557ac3f6539db8e0f2a959d03feb7a81480", globs: ["README.md","minimax_h3_turbo_4step_ema_ckpt850.safetensors"] },
   "h3-turbo-loras/lightx2v": { repo: "lightx2v/Minimax-h3-Turbo", revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f", globs: ["README.md","minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors"] },
+  "h3-turbo-loras/lightx2v-v0.1": { repo: "lightx2v/Minimax-h3-Turbo", revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f", globs: ["README.md","minimax_h3_fl2v_turbo_4step_v0.1.safetensors"] },
   "auxiliary/ncii-light-guard": { repo: "hfmlsoc/ncii-light-guard-v01", revision: "6a44e8b4b608078db164b0c946947922b2b98eab", globs: ["README.md","config.json","model.safetensors","tokenizer.json","tokenizer_config.json"] },
 };
 /** auxiliary/ files: a pinned URL, its SHA-256 and size (verify-weights.sh aux). */

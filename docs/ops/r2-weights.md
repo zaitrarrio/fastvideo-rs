@@ -907,12 +907,14 @@ Three Hub trees, published with `r2-weights.py publish-hub` from the agent conta
 R2 at 22-35 MB/s; no local copy), then `verify --deep --record` (every byte re-read). Hash checks at upload: the Hub
 LFS SHA-256 of each safetensors / tokenizer file, the git blob SHA-1 of each small file, and every
 `weights-sha256.tsv` row of the trees. None is on the EU volume; the presets `h3-larry-turbo` / `h3-lightx2v-turbo`
-fetch them from R2 (docs/ports/h3-turbo-loras.md).
+fetch them from R2 (docs/ports/h3-turbo-loras.md). The v0.1 tree was added the next day the same way, as its own
+tree (add-only, manifest written last, then `verify --deep --record`); the preset `h3-lightx2v-turbo-v01` fetches it.
 
 | Tree | Rev | Files | Bytes | Manifest SHA-256 |
 |---|---|---:|---:|---|
 | `h3-turbo-loras/larry` (larryvrh/MiniMax-H3-Turbo-Lora: `minimax_h3_turbo_4step_ema_ckpt850.safetensors`, README) | `43a74557ac3f6539db8e0f2a959d03feb7a81480` | 2 | 779,857,264 | `901f8cf59955cadd8e2a0fa70c366e20e2c811837c627d69671556e16ef0e4e0` |
 | `h3-turbo-loras/lightx2v` (lightx2v/Minimax-h3-Turbo: `minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors`, README) | `3ec17a324ced54151364f24f8b5fb6bf7e26414f` | 2 | 1,383,679,204 | `ffdc68e092e743fe7b87a4e50d02be44b8ecf25ae0b02025d919c3c251de1974` |
+| `h3-turbo-loras/lightx2v-v0.1` (lightx2v/Minimax-h3-Turbo: `minimax_h3_fl2v_turbo_4step_v0.1.safetensors`, README; the file the MiniMax Space folds; owner approval 2026-10-14) | `3ec17a324ced54151364f24f8b5fb6bf7e26414f` | 2 | 1,383,679,284 | `e51cf57fa0fbda4203b635a86bb537080c4dbe3aabcc0320dc9fee332a61c396` |
 | `auxiliary/ncii-light-guard` (hfmlsoc/ncii-light-guard-v01, MIT) | `6a44e8b4b608078db164b0c946947922b2b98eab` | 5 | 569,621,401 | `9118b8cdace81d4c5a59de856a0d2ca7c641158ea9a36d9494594992f42a049b` |
 
 ## 14. VDN-H3 stage B (2026-10-13, owner approval of the same day)

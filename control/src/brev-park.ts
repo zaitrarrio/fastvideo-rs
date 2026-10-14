@@ -78,6 +78,7 @@ export const TREE_GB: Record<string, number> = {
   "h3-turbo-loras/lightx2v": 2,
   "vdn-h3-stage-b-2000": 5,
   "vdn-h3-dmd-250-turbo": 1,
+  "h3-turbo-loras/lightx2v-v0.1": 2,
   "FastH3-4-step-Preview-v1-LoRA": 7,
   ltx25: 125,
   "ltx25-dev": 45,
