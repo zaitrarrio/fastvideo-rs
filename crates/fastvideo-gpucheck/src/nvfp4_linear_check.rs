@@ -183,6 +183,75 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         }
     }
 
+    // ---- 2b. a published (pre-quantized) weight, two stacked parts -------------------
+    // FastH3 Trim's NVFP4 release (cudarc h3::nvfp4): high-nibble-first codes,
+    // to_blocked scales and a per-tensor `weight_scale_2`, converted at load and
+    // run as an Nvfp4Stack (one activation quantization, a GEMM per part into
+    // its columns). Two parts with global scales 100x apart, an unaligned m.
+    {
+        let name = "nvfp4_published_stack_matches_host";
+        let r = (|| -> anyhow::Result<serde_json::Value> {
+            use fastvideo_cudarc::h3::nvfp4::{swap_nibbles, PublishedLinear};
+            use fastvideo_cudarc::wan::nvfp4_linear::{Nvfp4Operand, Nvfp4Stack};
+            let n_part = 256usize;
+            let mut parts = Vec::new();
+            let mut wdq = Vec::new();
+            for (p, scale) in [(0u64, 0.05f32), (1, 5.0)] {
+                let wf = randn(seed ^ 0x9b1d ^ p, n_part * k, scale);
+                let wq = nvfp4::quantize(&wf, n_part, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+                wdq.extend(wq.dequantize());
+                // As the file stores it, then as the loader converts it.
+                let mut file_codes = wq.packed.clone();
+                swap_nibbles(&mut file_codes);
+                let mut codes = file_codes;
+                swap_nibbles(&mut codes);
+                let l = PublishedLinear {
+                    codes,
+                    scales: swizzle_scales_host(&wq.scales, n_part, k / 16),
+                    rows: n_part,
+                    k,
+                    decode_scale: nvfp4::dequant_factor(wq.amax, ScaleRule::Static6),
+                };
+                let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, ScaleRule::Static6)?;
+                parts.push(Nvfp4Linear::from_operand(op, None, ScaleRule::Static6)?);
+            }
+            let stack = Nvfp4Stack::new(parts)?;
+            let n = stack.n;
+            let y = stack.forward_bf16(ptr(&xd), rows)?;
+            let got = to_f32(&d.stream.memcpy_dtov(&y)?);
+            let aq = nvfp4::quantize(&xr, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+            let ad = aq.dequantize();
+            let mut want = vec![0.0f32; rows * n];
+            for i in 0..rows {
+                for j in 0..n {
+                    let mut acc = 0.0f64;
+                    for t in 0..k {
+                        acc += f64::from(ad[i * k + t]) * f64::from(wdq[j * k + t]);
+                    }
+                    want[i * n + j] = acc as f32;
+                }
+            }
+            // Each part on its own (its columns of the stacked output).
+            let mut worst = 0.0f64;
+            for (p, cols) in [(0usize, 0..n_part), (1, n_part..n)] {
+                let g: Vec<f32> = (0..rows).flat_map(|i| got[i * n + cols.start..i * n + cols.end].to_vec()).collect();
+                let w: Vec<f32> = (0..rows).flat_map(|i| want[i * n + cols.start..i * n + cols.end].to_vec()).collect();
+                let dv = diff(&g, &w);
+                worst = worst.max(dv.rel_l2);
+                let _ = p;
+            }
+            Ok(json!({"ok": worst <= BF16_OUT_LIMIT, "worst_part_rel_l2": worst, "m": rows, "n": n, "k": k,
+                      "parts": 2, "vs_exact": diff(&got, &want).to_json()}))
+        })();
+        match r {
+            Ok(v) => {
+                let ok = v["ok"].as_bool().unwrap_or(false);
+                report.check(name, ok, v, json!({"rel_l2": BF16_OUT_LIMIT}))?;
+            }
+            Err(e) => report.check(name, false, json!({"error": format!("{e:#}")}), json!({}))?,
+        }
+    }
+
     // ---- 3. NVFP4 vs the bf16 linear at an FFN shape ---------------------------------
     {
         let r = (|| -> anyhow::Result<serde_json::Value> {

@@ -10,6 +10,7 @@ pub mod drain;
 pub mod lora;
 pub mod media;
 pub mod mlx;
+pub mod nvfp4;
 pub mod pipeline;
 pub mod recovered_8b;
 pub mod spark;

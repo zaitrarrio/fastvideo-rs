@@ -345,6 +345,10 @@ pub enum QuantMode {
     Off,
     W8A8,
     Mxfp8,
+    /// FastH3 Trim's published NVFP4 DiT (`crate::h3::nvfp4`): the block
+    /// linears come pre-quantized from the file, bf16 activations. Set by
+    /// the load that reads the file, never from `FASTVIDEO_H3_QUANT`.
+    Nvfp4,
 }
 
 impl QuantMode {
@@ -362,6 +366,7 @@ impl QuantMode {
             Self::Off => "off",
             Self::W8A8 => "w8a8",
             Self::Mxfp8 => "mxfp8",
+            Self::Nvfp4 => "nvfp4",
         }
     }
 
@@ -427,6 +432,7 @@ impl QuantMode {
             Self::Off => None,
             Self::W8A8 => Some(QuantKind::W8A8),
             Self::Mxfp8 => Some(QuantKind::Mxfp8),
+            Self::Nvfp4 => None,
         }
     }
 }
@@ -457,7 +463,7 @@ impl H3QuantPlan {
     /// DiT block `i`'s attention and FFN linears.
     pub fn dit_block(&self, i: usize) -> Option<QuantKind> {
         match self.mode {
-            QuantMode::Off => None,
+            QuantMode::Off | QuantMode::Nvfp4 => None,
             QuantMode::W8A8 => (i < self.num_layers).then_some(QuantKind::W8A8),
             QuantMode::Mxfp8 => (MXFP8_FIRST_BLOCK..=self.mxfp8_last_block())
                 .contains(&i)
@@ -487,7 +493,7 @@ impl H3QuantPlan {
             .filter(|&i| self.dit_block(i).is_some())
             .count();
         match self.mode {
-            QuantMode::Off => 0,
+            QuantMode::Off | QuantMode::Nvfp4 => 0,
             QuantMode::W8A8 => 6 * (dit + self.num_refiner_layers),
             QuantMode::Mxfp8 => 4 * dit,
         }

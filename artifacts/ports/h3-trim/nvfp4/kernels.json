@@ -1,0 +1,161 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "scale_mismatch": 0
+      },
+      "name": "nvfp4_operand_plain_matches_te_reference",
+      "ok": true,
+      "values": {
+        "amax": 40.0,
+        "host_amax": 40.0,
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "rows": 300,
+        "rows_pack": 304,
+        "scale_bytes": 24576,
+        "scale_mismatch": 0
+      }
+    },
+    {
+      "limits": {
+        "packed_mismatch": 153,
+        "pad_nonzero": 0,
+        "scale_mismatch": 19
+      },
+      "name": "nvfp4_operand_gelu_matches_te_reference",
+      "ok": true,
+      "values": {
+        "amax": 40.0,
+        "host_amax": 40.0,
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "rows": 300,
+        "rows_pack": 304,
+        "scale_bytes": 24576,
+        "scale_mismatch": 0
+      }
+    },
+    {
+      "limits": {
+        "rel_l2": 0.004
+      },
+      "name": "nvfp4_linear_plain_matches_host",
+      "ok": true,
+      "values": {
+        "bias_in_epilogue": true,
+        "k": 1024,
+        "m": 300,
+        "n": 512,
+        "ok": true,
+        "vs_dense_psnr_db": 37.59100420691227,
+        "vs_dense_rel_l2": 0.13198552967026916,
+        "vs_exact": {
+          "cosine": 0.9999986270480533,
+          "max_abs": 0.01560354232788086,
+          "non_finite": 0,
+          "ref_norm": 639.0685544810273,
+          "rel_l2": 0.0016570883124330275
+        }
+      }
+    },
+    {
+      "limits": {
+        "rel_l2": 0.004
+      },
+      "name": "nvfp4_linear_gelu_in_matches_host",
+      "ok": true,
+      "values": {
+        "bias_in_epilogue": true,
+        "k": 1024,
+        "m": 300,
+        "n": 256,
+        "ok": true,
+        "vs_dense_psnr_db": 40.85529132214213,
+        "vs_dense_rel_l2": 0.12817017690158114,
+        "vs_exact": {
+          "cosine": 0.9999986121021998,
+          "max_abs": 0.015584468841552734,
+          "non_finite": 0,
+          "ref_norm": 303.2306798079754,
+          "rel_l2": 0.0016661353482985985
+        }
+      }
+    },
+    {
+      "limits": {
+        "rel_l2": 0.004
+      },
+      "name": "nvfp4_published_stack_matches_host",
+      "ok": true,
+      "values": {
+        "k": 1024,
+        "m": 300,
+        "n": 512,
+        "ok": true,
+        "parts": 2,
+        "vs_exact": {
+          "cosine": 0.9999986294793629,
+          "max_abs": 1.99249267578125,
+          "non_finite": 0,
+          "ref_norm": 44536.0477971173,
+          "rel_l2": 0.001655608462729691
+        },
+        "worst_part_rel_l2": 0.0016594792793117239
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_vs_bf16_ffn_up",
+      "ok": true,
+      "values": {
+        "cosine": 0.9899038129124595,
+        "k": 4096,
+        "m": 2048,
+        "n": 16384,
+        "psnr_db": 37.83409881510093,
+        "rel_l2": 0.14507019414077335
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_skipped",
+      "ok": true,
+      "values": {
+        "reason": "FV_NVFP4_BENCH=0"
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "gemm_math": "F32",
+    "limits": {
+      "denoise": 0.002,
+      "forward": 0.001,
+      "op": 0.00001
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 1.026316462,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "kernels",
+  "status": "pass"
+}
