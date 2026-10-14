@@ -23,7 +23,7 @@ ARG FVRS_RUNTIME=ghcr.io/zaitrarrio/fastvideo-rs-runtime:latest
 
 FROM ${FVRS_RUNTIME} AS fvrs
 
-FROM ${BASE_IMAGE} AS base
+FROM ${BASE_IMAGE} AS base-os
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/root \
     UP=/opt/upstream \
@@ -41,7 +41,23 @@ COPY scripts/gpu/upstream/setup.sh /opt/upstream-setup/setup.sh
 RUN . /opt/upstream-setup/setup.sh && ensure_base \
  && uv venv -q --python 3.12 /opt/upstream/tools && uv pip install -q --python /opt/upstream/tools/bin/python numpy \
  && rm -rf /tmp/uv-cache
+
+FROM base-os AS base
 COPY --from=fvrs /opt/fastvideo-rs/target/release/fv-gpucheck /usr/local/bin/fv-gpucheck
+
+# FastH3 NVFP4 on sm_120 (docs/ports/fasth3-nvfp4.md): FastVideo @ FV_NVFP4_REV with fastvideo-kernel built for
+# sm_120a (SageAttention3 dense / block-sparse FP4 attention), and the whole fastvideo-rs runtime so one pod runs
+# both sides. The runtime's CUDA 13.4 libraries (cuBLASLt NVFP4, cuDNN, NVRTC) go to /opt/fvrs-cuda, off the
+# default library path, so torch and FlashInfer keep the base image's CUDA 13.0: our runs set LD_LIBRARY_PATH.
+# The runtime comes last, so a new FVRS_RUNTIME rebuilds only these layers, not the kernel build.
+FROM base-os AS fastvideo-nvfp4
+RUN . /opt/upstream-setup/setup.sh && install_fastvideo_nvfp4 && rm -rf /tmp/uv-cache /root/.cache
+COPY --from=fvrs /usr/local/cuda-13.4/lib64/ /opt/fvrs-cuda/lib64/
+COPY --from=fvrs /usr/lib/x86_64-linux-gnu/libcudnn* /opt/fvrs-cuda/cudnn/
+COPY --from=fvrs /opt/fastvideo-rs /opt/fastvideo-rs
+RUN ln -s /opt/fastvideo-rs/target/release/fv-gpucheck /usr/local/bin/fv-gpucheck
+COPY scripts/gpu/upstream /opt/fvrs/scripts/gpu/upstream
+LABEL org.opencontainers.image.description="FastVideo FastH3 NVFP4 (sm_120 FP4 kernels) + the fastvideo-rs runtime"
 
 FROM base AS fastvideo
 RUN . /opt/upstream-setup/setup.sh && install_fastvideo && rm -rf /tmp/uv-cache

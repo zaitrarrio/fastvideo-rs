@@ -1,0 +1,888 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.35113525390625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.834878487,
+        "dit_residency": "resident",
+        "dit_s": 18.757283442,
+        "refiner_s": 0.451262588,
+        "seconds": 29.787803063,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 6.527691684
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.228818002,
+        "decode_s": 2.906846272,
+        "denoise_s": 14.250052301,
+        "gpu_trace": {
+          "busy_s": 1.692751557,
+          "by_category": [
+            {
+              "calls": 550,
+              "category": "attention",
+              "share": 0.40329371941620323,
+              "total_s": 0.655794112
+            },
+            {
+              "calls": 456,
+              "category": "gemm",
+              "share": 0.2760208218862301,
+              "total_s": 0.44883622300000003
+            },
+            {
+              "calls": 411,
+              "category": "norm_modulate_elementwise",
+              "share": 0.1253663035112075,
+              "total_s": 0.203857585
+            },
+            {
+              "calls": 1014,
+              "category": "cast",
+              "share": 0.11865860224826497,
+              "total_s": 0.192950222
+            },
+            {
+              "calls": 459,
+              "category": "layout",
+              "share": 0.07666055293809418,
+              "total_s": 0.12465738200000001
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 3635,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 3592,
+              "idle_s": 0.0031478920000000002
+            },
+            {
+              "bucket": "5-50us",
+              "count": 41,
+              "idle_s": 0.00030304100000000004
+            },
+            {
+              "bucket": "50-500us",
+              "count": 0,
+              "idle_s": 0.0
+            },
+            {
+              "bucket": ">500us",
+              "count": 2,
+              "idle_s": 0.05999837400000001
+            }
+          ],
+          "host": {
+            "device_tail_s": 0.07386088371276855,
+            "enqueue_s": 1.682404331,
+            "first_activity_lag_s": 0.00006413459777832031
+          },
+          "host_launches": 2784,
+          "idle_frac": 0.036128730090409525,
+          "idle_s": 0.06344930700000001,
+          "kernel_count": 2890,
+          "kernel_s": 1.6260955240000001,
+          "largest_gaps": [
+            {
+              "after": "memcpy HtoD",
+              "at_s": 0.006196535,
+              "before": "mx_block_copy",
+              "gap_us": 54894.291000000005
+            },
+            {
+              "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+              "at_s": 4.896e-6,
+              "before": "cast_f32_bf16",
+              "gap_us": 5104.0830000000005
+            },
+            {
+              "after": "h3_norm_mod",
+              "at_s": 0.067410211,
+              "before": "memcpy HtoD",
+              "gap_us": 22.272000000000002
+            },
+            {
+              "after": "index_select_rows",
+              "at_s": 0.49438974,
+              "before": "memcpy HtoD",
+              "gap_us": 9.856
+            },
+            {
+              "after": "index_select_rows",
+              "at_s": 1.033122628,
+              "before": "memcpy HtoD",
+              "gap_us": 9.536
+            },
+            {
+              "after": "index_select_rows",
+              "at_s": 0.629217843,
+              "before": "memcpy HtoD",
+              "gap_us": 9.312
+            },
+            {
+              "after": "memcpy HtoD",
+              "at_s": 0.09007461800000001,
+              "before": "flash_mma_fwd_d128",
+              "gap_us": 9.28
+            },
+            {
+              "after": "index_select_rows",
+              "at_s": 0.29229296400000004,
+              "before": "memcpy HtoD",
+              "gap_us": 9.216000000000001
+            },
+            {
+              "after": "index_select_rows",
+              "at_s": 1.506159679,
+              "before": "memcpy HtoD",
+              "gap_us": 9.056000000000001
+            },
+            {
+              "after": "memcpy HtoD",
+              "at_s": 0.6292009150000001,
+              "before": "flash_mma_fwd_d128",
+              "gap_us": 8.192
+            }
+          ],
+          "memcpy": {
+            "DtoD": {
+              "bytes": 44100403600,
+              "count": 150
+            },
+            "HtoD": {
+              "bytes": 49358400,
+              "count": 51
+            }
+          },
+          "memset": {
+            "bytes": 3600,
+            "count": 550
+          },
+          "pass": "h3",
+          "step": 1,
+          "sync_count": 0,
+          "top_kernels": [
+            {
+              "calls": 300,
+              "category": "gemm",
+              "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+              "share": 0.2285997393840683,
+              "total_s": 0.37172501300000005
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_mma_attn_tma2",
+              "share": 0.22101697944283868,
+              "total_s": 0.35939472100000003
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_qkv",
+              "share": 0.07530352072969608,
+              "total_s": 0.12245071800000001
+            },
+            {
+              "calls": 308,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.05458780353914805,
+              "total_s": 0.088764983
+            },
+            {
+              "calls": 200,
+              "category": "cast",
+              "name": "nvfp4_quant_bf16_sw",
+              "share": 0.05350102298172244,
+              "total_s": 0.086997774
+            },
+            {
+              "calls": 100,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_qk_norm_rope",
+              "share": 0.04912519518133794,
+              "total_s": 0.07988226000000001
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "flash_mma_fwd_d128",
+              "share": 0.04576937326346149,
+              "total_s": 0.074425373
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+              "share": 0.045134192251795414,
+              "total_s": 0.07339250800000001
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_swiglu",
+              "share": 0.04292798360842177,
+              "total_s": 0.069805002
+            },
+            {
+              "calls": 150,
+              "category": "attention",
+              "name": "vsa_tile_mean",
+              "share": 0.029645937946754967,
+              "total_s": 0.048207127
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fvf_split_heads_rows",
+              "share": 0.028592438336974352,
+              "total_s": 0.046494036
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_combine",
+              "share": 0.027561962589843524,
+              "total_s": 0.044818384
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "mx_merge_heads",
+              "share": 0.024449650351537403,
+              "total_s": 0.039757467000000005
+            },
+            {
+              "calls": 100,
+              "category": "layout",
+              "name": "fill_f",
+              "share": 0.018296757823189236,
+              "total_s": 0.029752276
+            },
+            {
+              "calls": 50,
+              "category": "norm_modulate_elementwise",
+              "name": "h3_res_gate_norm_mod",
+              "share": 0.014836737229712712,
+              "total_s": 0.024125952000000003
+            },
+            {
+              "calls": 49,
+              "category": "norm_modulate_elementwise",
+              "name": "fvf_h3_gate_res_norm_mod",
+              "share": 0.013982462693255652,
+              "total_s": 0.02273682
+            },
+            {
+              "calls": 100,
+              "category": "cast",
+              "name": "nvfp4_amax_bf16",
+              "share": 0.0091225483257649,
+              "total_s": 0.014834135000000002
+            },
+            {
+              "calls": 154,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.003474348165046668,
+              "total_s": 0.005649622
+            },
+            {
+              "calls": 104,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0031349253009812727,
+              "total_s": 0.005097688
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "vsa_topk2",
+              "share": 0.00259181698602351,
+              "total_s": 0.004214542
+            },
+            {
+              "calls": 50,
+              "category": "attention",
+              "name": "softmax_last",
+              "share": 0.0014041284575850048,
+              "total_s": 0.002283247
+            },
+            {
+              "calls": 50,
+              "category": "layout",
+              "name": "index_select_rows",
+              "share": 0.0012615894759698016,
+              "total_s": 0.002051465
+            },
+            {
+              "calls": 56,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.001182439759301619,
+              "total_s": 0.0019227600000000001
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "magma_sgemmEx_kernel<…>",
+              "share": 0.0011749623388053801,
+              "total_s": 0.001910601
+            },
+            {
+              "calls": 50,
+              "category": "gemm",
+              "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+              "share": 0.0009649439266275233,
+              "total_s": 0.001569091
+            }
+          ],
+          "wall_s": 1.75673911,
+          "window_s": 1.7562008640000002
+        },
+        "load_s": 29.787803063,
+        "peak_mib": 24409,
+        "refine_s": 0.110620464,
+        "step_s": [
+          1.855227333,
+          1.75673911,
+          1.730253432,
+          1.759588946,
+          1.783957976,
+          1.901431364,
+          1.7238259679999999,
+          1.726763072
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.253567629,
+        "total_s": 17.707500532,
+        "video_decode_s": 2.67802827,
+        "video_encode_s": 0.00034689,
+        "video_push_s": 0.00006792,
+        "video_rgb_s": 0.13702439599987346,
+        "video_vae_s": 2.6532451618611814,
+        "video_wait_s": 0.370335417,
+        "warm": false,
+        "write_s": 0.097484132
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/srv/ours-v2/profile/trace/frame-062.png",
+        "mean": 0.21397289109678613,
+        "std": 0.24240013760344548
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/ours-v2/profile/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96615,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "gpu_trace": {
+      "busy_s": 1.692751557,
+      "by_category": [
+        {
+          "calls": 550,
+          "category": "attention",
+          "share": 0.40329371941620323,
+          "total_s": 0.655794112
+        },
+        {
+          "calls": 456,
+          "category": "gemm",
+          "share": 0.2760208218862301,
+          "total_s": 0.44883622300000003
+        },
+        {
+          "calls": 411,
+          "category": "norm_modulate_elementwise",
+          "share": 0.1253663035112075,
+          "total_s": 0.203857585
+        },
+        {
+          "calls": 1014,
+          "category": "cast",
+          "share": 0.11865860224826497,
+          "total_s": 0.192950222
+        },
+        {
+          "calls": 459,
+          "category": "layout",
+          "share": 0.07666055293809418,
+          "total_s": 0.12465738200000001
+        }
+      ],
+      "dropped_records": 0,
+      "gap_count": 3635,
+      "gap_histogram": [
+        {
+          "bucket": "<5us",
+          "count": 3592,
+          "idle_s": 0.0031478920000000002
+        },
+        {
+          "bucket": "5-50us",
+          "count": 41,
+          "idle_s": 0.00030304100000000004
+        },
+        {
+          "bucket": "50-500us",
+          "count": 0,
+          "idle_s": 0.0
+        },
+        {
+          "bucket": ">500us",
+          "count": 2,
+          "idle_s": 0.05999837400000001
+        }
+      ],
+      "host": {
+        "device_tail_s": 0.07386088371276855,
+        "enqueue_s": 1.682404331,
+        "first_activity_lag_s": 0.00006413459777832031
+      },
+      "host_launches": 2784,
+      "idle_frac": 0.036128730090409525,
+      "idle_s": 0.06344930700000001,
+      "kernel_count": 2890,
+      "kernel_s": 1.6260955240000001,
+      "largest_gaps": [
+        {
+          "after": "memcpy HtoD",
+          "at_s": 0.006196535,
+          "before": "mx_block_copy",
+          "gap_us": 54894.291000000005
+        },
+        {
+          "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+          "at_s": 4.896e-6,
+          "before": "cast_f32_bf16",
+          "gap_us": 5104.0830000000005
+        },
+        {
+          "after": "h3_norm_mod",
+          "at_s": 0.067410211,
+          "before": "memcpy HtoD",
+          "gap_us": 22.272000000000002
+        },
+        {
+          "after": "index_select_rows",
+          "at_s": 0.49438974,
+          "before": "memcpy HtoD",
+          "gap_us": 9.856
+        },
+        {
+          "after": "index_select_rows",
+          "at_s": 1.033122628,
+          "before": "memcpy HtoD",
+          "gap_us": 9.536
+        },
+        {
+          "after": "index_select_rows",
+          "at_s": 0.629217843,
+          "before": "memcpy HtoD",
+          "gap_us": 9.312
+        },
+        {
+          "after": "memcpy HtoD",
+          "at_s": 0.09007461800000001,
+          "before": "flash_mma_fwd_d128",
+          "gap_us": 9.28
+        },
+        {
+          "after": "index_select_rows",
+          "at_s": 0.29229296400000004,
+          "before": "memcpy HtoD",
+          "gap_us": 9.216000000000001
+        },
+        {
+          "after": "index_select_rows",
+          "at_s": 1.506159679,
+          "before": "memcpy HtoD",
+          "gap_us": 9.056000000000001
+        },
+        {
+          "after": "memcpy HtoD",
+          "at_s": 0.6292009150000001,
+          "before": "flash_mma_fwd_d128",
+          "gap_us": 8.192
+        }
+      ],
+      "memcpy": {
+        "DtoD": {
+          "bytes": 44100403600,
+          "count": 150
+        },
+        "HtoD": {
+          "bytes": 49358400,
+          "count": 51
+        }
+      },
+      "memset": {
+        "bytes": 3600,
+        "count": 550
+      },
+      "pass": "h3",
+      "step": 1,
+      "sync_count": 0,
+      "top_kernels": [
+        {
+          "calls": 300,
+          "category": "gemm",
+          "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+          "share": 0.2285997393840683,
+          "total_s": 0.37172501300000005
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "vsa_mma_attn_tma2",
+          "share": 0.22101697944283868,
+          "total_s": 0.35939472100000003
+        },
+        {
+          "calls": 150,
+          "category": "attention",
+          "name": "vsa_tile_qkv",
+          "share": 0.07530352072969608,
+          "total_s": 0.12245071800000001
+        },
+        {
+          "calls": 308,
+          "category": "cast",
+          "name": "cast_f32_bf16",
+          "share": 0.05458780353914805,
+          "total_s": 0.088764983
+        },
+        {
+          "calls": 200,
+          "category": "cast",
+          "name": "nvfp4_quant_bf16_sw",
+          "share": 0.05350102298172244,
+          "total_s": 0.086997774
+        },
+        {
+          "calls": 100,
+          "category": "norm_modulate_elementwise",
+          "name": "h3_qk_norm_rope",
+          "share": 0.04912519518133794,
+          "total_s": 0.07988226000000001
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "flash_mma_fwd_d128",
+          "share": 0.04576937326346149,
+          "total_s": 0.074425373
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+          "share": 0.045134192251795414,
+          "total_s": 0.07339250800000001
+        },
+        {
+          "calls": 50,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_swiglu",
+          "share": 0.04292798360842177,
+          "total_s": 0.069805002
+        },
+        {
+          "calls": 150,
+          "category": "attention",
+          "name": "vsa_tile_mean",
+          "share": 0.029645937946754967,
+          "total_s": 0.048207127
+        },
+        {
+          "calls": 100,
+          "category": "layout",
+          "name": "fvf_split_heads_rows",
+          "share": 0.028592438336974352,
+          "total_s": 0.046494036
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "vsa_combine",
+          "share": 0.027561962589843524,
+          "total_s": 0.044818384
+        },
+        {
+          "calls": 50,
+          "category": "layout",
+          "name": "mx_merge_heads",
+          "share": 0.024449650351537403,
+          "total_s": 0.039757467000000005
+        },
+        {
+          "calls": 100,
+          "category": "layout",
+          "name": "fill_f",
+          "share": 0.018296757823189236,
+          "total_s": 0.029752276
+        },
+        {
+          "calls": 50,
+          "category": "norm_modulate_elementwise",
+          "name": "h3_res_gate_norm_mod",
+          "share": 0.014836737229712712,
+          "total_s": 0.024125952000000003
+        },
+        {
+          "calls": 49,
+          "category": "norm_modulate_elementwise",
+          "name": "fvf_h3_gate_res_norm_mod",
+          "share": 0.013982462693255652,
+          "total_s": 0.02273682
+        },
+        {
+          "calls": 100,
+          "category": "cast",
+          "name": "nvfp4_amax_bf16",
+          "share": 0.0091225483257649,
+          "total_s": 0.014834135000000002
+        },
+        {
+          "calls": 154,
+          "category": "layout",
+          "name": "block_copy",
+          "share": 0.003474348165046668,
+          "total_s": 0.005649622
+        },
+        {
+          "calls": 104,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_binary",
+          "share": 0.0031349253009812727,
+          "total_s": 0.005097688
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "vsa_topk2",
+          "share": 0.00259181698602351,
+          "total_s": 0.004214542
+        },
+        {
+          "calls": 50,
+          "category": "attention",
+          "name": "softmax_last",
+          "share": 0.0014041284575850048,
+          "total_s": 0.002283247
+        },
+        {
+          "calls": 50,
+          "category": "layout",
+          "name": "index_select_rows",
+          "share": 0.0012615894759698016,
+          "total_s": 0.002051465
+        },
+        {
+          "calls": 56,
+          "category": "cast",
+          "name": "cast_bf16_f32_bias_act",
+          "share": 0.001182439759301619,
+          "total_s": 0.0019227600000000001
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "magma_sgemmEx_kernel<…>",
+          "share": 0.0011749623388053801,
+          "total_s": 0.001910601
+        },
+        {
+          "calls": 50,
+          "category": "gemm",
+          "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+          "share": 0.0009649439266275233,
+          "total_s": 0.001569091
+        }
+      ],
+      "wall_s": 1.75673911,
+      "window_s": 1.7562008640000002
+    },
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 51.55896016955376,
+        "stages": [
+          {
+            "gib": 49.585301607847214,
+            "stage": "text"
+          },
+          {
+            "gib": 45.955662935972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 51.55896016955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 44.226311177015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 47.116344183683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 10.91245412826538,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 9.550762385129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 15381,
+      "text_tokens": 537,
+      "wav": "/srv/ours-v2/profile/trace/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.\noverall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.\nnon_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump.",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/fvw/h3-8step",
+      "video_vae": "official",
+      "warm": false,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 17.364754538983107,
+          "peak_reserved_gib": 17.46875,
+          "peak_used_gib": 17.364754538983107,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 17.401381831616163,
+          "peak_reserved_gib": 17.5625,
+          "peak_used_gib": 17.460532050579786,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 17.401214461773634,
+          "peak_reserved_gib": 22.6875,
+          "peak_used_gib": 22.067846298217773,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 17.484079028479755,
+          "peak_reserved_gib": 17.75,
+          "peak_used_gib": 17.615731383673847,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 17.48923959862441,
+          "peak_reserved_gib": 18.96875,
+          "peak_used_gib": 18.38364579807967,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 47.983989366,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_H3_NVFP4_ATTN": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

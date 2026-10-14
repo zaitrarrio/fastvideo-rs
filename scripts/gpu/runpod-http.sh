@@ -29,9 +29,11 @@
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
 # datacenter (weight-free work: kernels, upstream bench:attn / bench:attn_dc);
 # RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts; RUNPOD_ALLOWED_CUDA
-# (e.g. "13.0") restricts hosts to drivers supporting those CUDA versions. It is
-# off by default because the filter can hide available stock; instead the pod
-# checks its driver (>= FV_MIN_DRIVER, default 580) and stops early if older.
+# (a space list, e.g. "13.0") restricts hosts to exactly those CUDA labels. The
+# default is scripts/gpu/runpod-cuda.sh fv_runpod_cuda: none today, because
+# REST cannot name the 13.1 / 13.2 hosts ("13.0" alone hides every RTX PRO
+# 6000); instead the pod checks its driver (>= FV_MIN_DRIVER, default 580) and
+# stops early if older.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-500), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
@@ -58,6 +60,8 @@ HERE="${FV_HTTP_HERE:-$HERE}"
 source "$HERE/runpod-price.sh"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
+# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
+source "$HERE/runpod-cuda.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -269,7 +273,7 @@ create_pod() {
   fi
   payload="$(jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-}" '{
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
@@ -446,7 +450,7 @@ cmd_run() {
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
   if grep -q "driver_too_old" "$OUT_ROOT/$tag/box.txt" 2>/dev/null; then
-    log "host driver too old ($(grep driver_too_old "$OUT_ROOT/$tag/box.txt")); rerun (or set RUNPOD_ALLOWED_CUDA=13.0)"
+    log "host driver too old ($(grep driver_too_old "$OUT_ROOT/$tag/box.txt")); rerun (RUNPOD_ALLOWED_CUDA=13.0 avoids old hosts but also hides the 13.1 / 13.2 ones)"
     rc=1
   fi
   if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then

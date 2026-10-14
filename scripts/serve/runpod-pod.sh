@@ -31,8 +31,9 @@
 # /etc/fv/runpod-fake.toml: the fake engine until the CUDA backend lands;
 # /etc/fv/runpod.toml for real models); RUNPOD_GPU_TYPES (comma list, cheapest
 # first); RUNPOD_VOLUME_ID (optional weight volume at /workspace, read only:
-# state goes to /fvstate on the container disk); RUNPOD_ALLOWED_CUDA (default
-# 13.0; set it empty to drop the filter, which can hide stock); FV_SMOKE_MODEL (default fake-wan, the FastWan stand-in).
+# state goes to /fvstate on the container disk); RUNPOD_ALLOWED_CUDA (an exact
+# space list; default scripts/gpu/runpod-cuda.sh fv_runpod_cuda, none today:
+# REST cannot name the 13.1 / 13.2 hosts, so "13.0" alone hides them); FV_SMOKE_MODEL (default fake-wan, the FastWan stand-in).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -45,6 +46,8 @@ source "$HERE/lib/registry.sh"
 source "$HERE/../gpu/runpod-price.sh"
 # shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
 source "$HERE/../gpu/volumes.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-cuda.sh
+source "$HERE/../gpu/runpod-cuda.sh"
 fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only since 2026-10)
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
@@ -62,7 +65,7 @@ GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA RTX 4000 Ada 
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-1.0}"
 CAP_S="${FV_POD_CAP_S:-1800}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
-CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
+CUDA="${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}"
 MODEL="${FV_SMOKE_MODEL:-fake-wan}"
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
 OUT_DIR="$FV_ROOT/artifacts/runpod/serve"

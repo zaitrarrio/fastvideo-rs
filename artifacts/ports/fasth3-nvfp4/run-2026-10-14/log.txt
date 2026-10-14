@@ -1,0 +1,34 @@
+/opt/fv/bundle.tgz: OK
+2026-10-14T13:41:03Z start: fv-gpucheck 0.1.1; image FastVideo d5253fd
+2026-10-14T13:41:03Z begin fetch
+2026-10-14T13:57:55Z end fetch rc=0 1012s
+2026-10-14T13:57:55Z begin prep
+2026-10-14T13:58:04Z end prep rc=0 9s
+2026-10-14T13:58:04Z begin lpips
+2026-10-14T13:58:06Z end lpips rc=0 2s
+2026-10-14T13:58:06Z begin kernels
+2026-10-14T13:58:08Z end kernels rc=0 2s
+2026-10-14T13:58:08Z begin convert-te
+2026-10-14T14:01:21Z end convert-te rc=0 193s
+2026-10-14T14:01:21Z begin convert-v2
+2026-10-14T14:02:01Z end convert-v2 rc=0 40s
+2026-10-14T14:02:01Z begin up-v2
+2026-10-14T14:05:43Z end up-v2 rc=0 222s
+2026-10-14T14:05:43Z begin parity-v2
+2026-10-14T14:07:14Z end parity-v2 rc=0 91s
+2026-10-14T14:07:14Z begin cell-v2-nvfp4
+2026-10-14T14:10:21Z end cell-v2-nvfp4 rc=0 187s
+2026-10-14T14:10:21Z begin cell-v2-nvfp4ffn-mxfp8
+2026-10-14T14:13:26Z end cell-v2-nvfp4ffn-mxfp8 rc=0 185s
+2026-10-14T14:13:26Z begin profile-v2
+2026-10-14T14:15:26Z end profile-v2 rc=0 120s
+2026-10-14T14:15:26Z begin convert-4s
+2026-10-14T14:16:13Z end convert-4s rc=0 47s
+2026-10-14T14:16:13Z begin up-4s
+2026-10-14T14:18:22Z end up-4s rc=0 129s
+2026-10-14T14:18:22Z begin parity-4s
+2026-10-14T14:19:49Z end parity-4s rc=0 87s
+2026-10-14T14:19:49Z begin cell-4s-nvfp4
+2026-10-14T14:21:44Z end cell-4s-nvfp4 rc=0 115s
+2026-10-14T14:21:44Z begin cell-4s-nvfp4ffn-mxfp8
+2026-10-14T14:23:33Z end cell-4s-nvfp4ffn-mxfp8 rc=0 109s

@@ -4,9 +4,9 @@
 import { isEdge, poolModelFamilies, REGIONS, regionAvailable, type ClusterSpec, type PoolSpec, type RegionId } from "./spec";
 import type { Env } from "../env";
 import { HUB_RUNPOD_SH, hubDiskGb, isOtherPool, weightsPlan, weightsSource } from "../providers";
-import { DC_ANY, noVolumePod } from "../enums";
+import { DC_ANY, DEFAULT_ALLOWED_CUDA, noVolumePod } from "../enums";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
-import { DRIVER_CHECK_SH, R2_DEFAULT_CUDA } from "../driver-check";
+import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
 
 /** Runpod secret references (values live in Runpod, never here). */
@@ -311,12 +311,11 @@ export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[]
   for (const r of regions) for (const g of pool.gpu_types?.length ? pool.gpu_types : REGIONS[r]!.gpus) out.push({ region: r, dc: REGIONS[r]!.dc, gpu: g });
   return out;
 }
-/** A GPU pod's host filter (allowedCudaVersions): the pool's, else none in a weights volume's data centre (its hosts
- * are known), else CUDA 13 (driver-check.ts: an older driver crashes the image). */
-export function podAllowedCuda(pool: PoolSpec, pl: Placement): string[] {
-  if (pool.allowed_cuda) return [...pool.allowed_cuda];
-  const volumeDc = Object.values(REGIONS).some((r) => r.volume && r.dc === pl.dc);
-  return volumeDc ? [] : [...R2_DEFAULT_CUDA];
+/** A GPU pod's host filter (allowedCudaVersions): the pool's, else enums.ts DEFAULT_ALLOWED_CUDA in every data centre
+ * (none while Runpod's REST enum cannot name the 13.1 / 13.2 hosts: a "13.0"-only list hid every Secure RTX PRO 6000).
+ * The boot's driver check (DRIVER_CHECK_SH) refuses a host older than CUDA 13 and fv-control places a new pod. */
+export function podAllowedCuda(pool: PoolSpec): string[] {
+  return [...(pool.allowed_cuda ?? DEFAULT_ALLOWED_CUDA)];
 }
 /** The start command for a worker env: an edge front, a worker with the backstop watchdog (standalone), or the plain worker. */
 export function bootFor(env: Record<string, string>): string {
@@ -347,7 +346,7 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
   const r2 = env.FV_WEIGHTS_SOURCE === "r2";
   const hub = env.FV_WEIGHTS_SOURCE === "hub";
   const vol = pool.volume !== false && !r2 && !hub && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
-  const cuda = podAllowedCuda(pool, pl);
+  const cuda = podAllowedCuda(pool);
   return {
     ...common,
     cloudType: "SECURE",

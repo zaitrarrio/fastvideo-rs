@@ -32,9 +32,9 @@ const issuesOf = (f: () => unknown) => {
 const APPROVED = { FV_HUB_DOWNLOADS_APPROVED: "1", PUBLIC_URL: "https://fvc.test", GITHUB_REPO: "zaitrarrio/fastvideo-rs" } as unknown as Env;
 
 describe("the spec: weights_source hub", () => {
-  it("no volume, any data centre, FlashBoot on, CUDA 13 hosts, a container disk sized from the trees", () => {
+  it("no volume, any data centre, FlashBoot on, no exact CUDA list, a container disk sized from the trees", () => {
     const s = hub();
-    expect([s.weights_source, s.network_volume, s.data_centers, s.flashboot, s.weights_download_approved, s.allowed_cuda]).toEqual(["hub", null, undefined, true, true, ["13.0"]]);
+    expect([s.weights_source, s.network_volume, s.data_centers, s.flashboot, s.weights_download_approved, s.allowed_cuda]).toEqual(["hub", null, undefined, true, true, []]);
     const { trees } = slsHubPlan(s);
     expect(trees).toEqual(["fastwan22-ti2v-5b", "wan22-ti2v-5b"]);
     expect(s.container_disk_gb).toBe(slsHubDiskGb(trees));
@@ -112,7 +112,7 @@ describe("the template and the endpoint", () => {
     expect(templateUpdatePayload(spec, "img", env).dockerEntrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
     expect(v2TemplateBoot(spec)?.dockerEntrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
     const e = endpointCreatePayload(spec, "tpl");
-    expect([e.flashboot, (e as any).networkVolumeId, (e as any).dataCenterIds, e.allowedCudaVersions]).toEqual([true, undefined, undefined, ["13.0"]]);
+    expect([e.flashboot, (e as any).networkVolumeId, (e as any).dataCenterIds, e.allowedCudaVersions, e.minCudaVersion]).toEqual([true, undefined, undefined, undefined, "13.0"]);
     expect(v2CreatePayload(hub({ mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1 }), "img", [], env).flashboot).toBe("FLASHBOOT");
   });
 });

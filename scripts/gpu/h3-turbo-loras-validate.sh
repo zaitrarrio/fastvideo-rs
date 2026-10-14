@@ -18,6 +18,8 @@
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SEED / FV_SKIP / FV_PARITY_PROMPT (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
+source "$HERE/runpod-cuda.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -94,17 +96,17 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     export FVX_URL="$url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
-    payload="$(jq -n --arg name "fv-h3turbolora-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --argjson dcs "$dcs_json" \
+    payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-h3turbolora-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --argjson dcs "$dcs_json" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" \
       --arg seed "${FV_SEED:-}" --arg skip "${FV_SKIP:-}" --arg par "${FV_PARITY:-}" --arg cells "${FV_PERF_CELLS:-}" --arg pp "${FV_PARITY_PROMPT:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
-        containerDiskInGb: 260, allowedCudaVersions: ["13.0"],
+        containerDiskInGb: 260,
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_MODE: "r2"}
               + (if $seed != "" then {FV_SEED: $seed} else {} end) + (if $skip != "" then {FV_SKIP: $skip} else {} end)
               + (if $pp != "" then {FV_PARITY_PROMPT: $pp} else {} end) + (if $par != "" then {FV_PARITY: $par} else {} end)
               + (if $cells != "" then {FV_PERF_CELLS: $cells} else {} end))
-      }')"
+      } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
     unset FVX_URL
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
