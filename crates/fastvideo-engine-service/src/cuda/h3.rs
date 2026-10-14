@@ -86,6 +86,7 @@ impl H3Model {
                 &recipe.i2v_encoder,
             )
             .map_err(ApiError::internal)?,
+            vdn: recipe.vdn_weights.clone(),
         })
     }
 

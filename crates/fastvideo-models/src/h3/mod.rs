@@ -15,4 +15,5 @@ pub mod sol;
 pub mod spark;
 pub mod techniques;
 pub mod tokenizer;
+pub mod vdn;
 pub mod vision_preprocess;

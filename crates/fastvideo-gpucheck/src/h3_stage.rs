@@ -465,6 +465,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     .transpose()
                     .map_err(|e| anyhow::anyhow!(e))?,
                 i2v_encoder: Default::default(),
+                // VDN-H3 checkpoint: FASTVIDEO_H3_VDN (with a vdn-h3-<N>step recipe).
+                vdn: None,
             };
             let canvas = GenCanvas {
                 seconds: *seconds,

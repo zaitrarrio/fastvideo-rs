@@ -289,6 +289,115 @@ impl H3LoraFuse {
         })
     }
 
+    /// VDN-H3's adapters (`diffusers/config.json` `vdn.adapters`, in merge
+    /// order), as one fuse: `M:merge_lora_state` folds each pair as
+    /// `W += B @ A` at scale 1.0 (alpha = rank in every VDN adapter, and the
+    /// remote loader applies no alpha / rank). Keys are peft names on the
+    /// hybrid tree with an adapter infix (`...attn.orig.to_q.lora_A.default.weight`),
+    /// re-rooted onto the base (`fastvideo_models::h3::vdn::adapter_key`).
+    /// A module several adapters target gets their pairs concatenated along
+    /// the rank axis (`[B1 B2] [A1; A2] = B1 A1 + B2 A2`), so the 8-step
+    /// model's `default` + `turbo` merge in one pass. Every target must exist
+    /// in `base` with the pair's shape.
+    pub fn open_vdn(base: &WeightMap, adapters: &[std::path::PathBuf]) -> Result<Self> {
+        use fastvideo_models::h3::vdn::{adapter_key, LoraSideName};
+        let mut pairs: HashMap<String, Pair> = HashMap::new();
+        let mut names = Vec::new();
+        for path in adapters {
+            let map = WeightMap::open_files(std::slice::from_ref(path))?;
+            let lazy = map.lazy().ok_or_else(|| msg("adapter map has no store"))?;
+            let mut keys: Vec<String> = lazy.keys().map(str::to_string).collect();
+            keys.sort();
+            let mut a_keys: HashMap<String, String> = HashMap::new();
+            let mut b_keys: HashMap<String, String> = HashMap::new();
+            for key in &keys {
+                let (module, side, name) = adapter_key(key)
+                    .ok_or_else(|| msg(format!("{}: not a LoRA factor: {key}", path.display())))?;
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                let slot = match side {
+                    LoraSideName::A => &mut a_keys,
+                    LoraSideName::B => &mut b_keys,
+                };
+                if slot.insert(module.clone(), key.clone()).is_some() {
+                    return Err(msg(format!("{}: two {side:?} factors for {module}", path.display())));
+                }
+            }
+            let mut modules: Vec<&String> = a_keys.keys().collect();
+            modules.sort();
+            if modules.len() != b_keys.len() {
+                return Err(msg(format!("{}: unpaired LoRA factors", path.display())));
+            }
+            for module in modules {
+                let b_key = b_keys
+                    .get(module)
+                    .ok_or_else(|| msg(format!("{}: no B for {module}", path.display())))?;
+                let base_shape = base
+                    .shape(&format!("{module}.weight"))
+                    .ok_or_else(|| msg(format!("VDN LoRA target is absent from the base: {module}")))?;
+                let (a_shape, a) = map.get_f32(&a_keys[module])?;
+                let (b_shape, b) = map.get_f32(b_key)?;
+                if base_shape.len() != 2
+                    || a_shape.len() != 2
+                    || b_shape.len() != 2
+                    || a_shape[0] != b_shape[1]
+                    || base_shape[0] != b_shape[0]
+                    || base_shape[1] != a_shape[1]
+                {
+                    return Err(msg(format!(
+                        "VDN LoRA/base mismatch for {module}: base{base_shape:?}, A{a_shape:?}, B{b_shape:?}"
+                    )));
+                }
+                let (out, inn, r2) = (base_shape[0], base_shape[1], a_shape[0]);
+                match pairs.remove(module) {
+                    None => {
+                        pairs.insert(module.clone(), Pair { b, a, out, inn });
+                    }
+                    Some(prev) => {
+                        let r1 = prev.b.len() / out;
+                        let mut bc = Vec::with_capacity(out * (r1 + r2));
+                        for o in 0..out {
+                            bc.extend_from_slice(&prev.b[o * r1..(o + 1) * r1]);
+                            bc.extend_from_slice(&b[o * r2..(o + 1) * r2]);
+                        }
+                        let mut ac = prev.a;
+                        ac.extend_from_slice(&a);
+                        pairs.insert(module.clone(), Pair { b: bc, a: ac, out, inn });
+                    }
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return Err(msg("VDN: no LoRA pairs in the adapters"));
+        }
+        let rank = pairs.values().map(|p| p.a.len() / p.inn).max().unwrap_or(1);
+        let pairs_total = pairs.len();
+        Ok(Self {
+            factors: pairs.clone(),
+            pairs,
+            diffs: HashMap::new(),
+            replacements: HashMap::new(),
+            format: LoraFormat::Peft,
+            multiplier: 1.0,
+            diff_scale: 1.0,
+            rank,
+            alpha: rank as u32,
+            pairs_total,
+            diffs_total: 0,
+            replacements_total: 0,
+            path: format!(
+                "{} ({})",
+                adapters
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                names.join(" + ")
+            ),
+        })
+    }
+
     pub fn effective_scale(&self) -> f32 {
         self.multiplier
     }

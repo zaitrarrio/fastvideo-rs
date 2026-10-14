@@ -146,6 +146,11 @@ pub struct H3Recipe {
     /// Catalog: h3-max and h3-turbo; `h3_1080p = false` turns it off.
     #[serde(default)]
     pub hd_1080p: bool,
+    /// VDN-H3 (docs/ports/vdn-h3.md): the VDN checkpoint directory (linear
+    /// branch + LoRA adapters) over the h3-base `weights`; `recipe` is a
+    /// `vdn-h3-<N>step` contract.
+    #[serde(default)]
+    pub vdn_weights: Option<PathBuf>,
 }
 
 fn auto_str() -> String {
@@ -980,6 +985,7 @@ fn h3(
         warmup: false,
         warmup_blocking: false,
         hd_1080p: false,
+        vdn_weights: None,
     }
 }
 

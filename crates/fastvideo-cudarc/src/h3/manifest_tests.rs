@@ -441,3 +441,87 @@ fn trim_video_decoder_asks_for_exactly_the_published_decoder() {
         .filter(|(k, _)| k.starts_with("decoder.") || k.starts_with("post_quant_conv."))
         .all(|(_, d)| d == "F16"));
 }
+
+// ---- VDN-H3 (docs/ports/vdn-h3.md) -------------------------------------------
+
+/// The branch loader of one block requests exactly that block's 16 branch
+/// tensors with their published shapes; the other 49 blocks hold the same
+/// keys (the loader substitutes the index); all are bf16.
+#[test]
+fn vdn_branch_asks_for_exactly_the_published_branch() {
+    let published = manifest(include_str!("manifests/vdn_branch.json"));
+    let cfg = H3TransformerConfig::fasth3_8step();
+    let (map, seen) = recording();
+    super::vdn::VdnBranch::load(&map, "transformer_blocks.7.attn", &cfg).expect("load");
+    let seen = seen.lock().expect("lock").clone();
+    assert_eq!(seen.len(), 16, "{:?}", seen.keys().collect::<Vec<_>>());
+    let every = for_every_index(&seen, "transformer_blocks", 7, 0..50);
+    let mut problems = mismatches(&every, &published);
+    problems.extend(unrequested(&every, &published, |_| true));
+    assert_clean("vdn linear_branch", problems);
+    assert_eq!(published.len(), 800);
+    assert!(dtypes(include_str!("manifests/vdn_branch.json"))
+        .values()
+        .all(|d| d == "BF16"));
+}
+
+/// Every factor of both VDN adapters re-roots onto a base parameter of the
+/// published transformer with the pair's shape: `default` (rank 64 on the
+/// attention of all 50 blocks and the refiner) and `turbo` (also the FFN at
+/// rank 64, AdaLN and `norm_out` at rank 16).
+#[test]
+fn vdn_adapters_target_published_base_parameters() {
+    use fastvideo_models::h3::vdn::{adapter_key, LoraSideName};
+    let base = manifest(include_str!("manifests/transformer.json"));
+    for (json, name, pairs, ranks) in [
+        (include_str!("manifests/vdn_adapter_default.json"), "default", 208usize, vec![64usize]),
+        (include_str!("manifests/vdn_adapter_turbo.json"), "turbo", 363, vec![16, 64]),
+    ] {
+        let adapter = manifest(json);
+        let mut a_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut b_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (key, shape) in &adapter {
+            let (module, side, n) = adapter_key(key).unwrap_or_else(|| panic!("{key}"));
+            assert_eq!(n, name, "{key}");
+            match side {
+                LoraSideName::A => a_of.insert(module, shape.clone()),
+                LoraSideName::B => b_of.insert(module, shape.clone()),
+            };
+        }
+        assert_eq!(a_of.len(), pairs, "{name}");
+        assert_eq!(a_of.keys().collect::<Vec<_>>(), b_of.keys().collect::<Vec<_>>());
+        let mut seen_ranks = std::collections::BTreeSet::new();
+        for (module, a) in &a_of {
+            let b = &b_of[module];
+            let w = base
+                .get(&format!("{module}.weight"))
+                .unwrap_or_else(|| panic!("{name}: {module}.weight is not a base parameter"));
+            assert_eq!((w[0], w[1]), (b[0], a[1]), "{name}: {module}");
+            assert_eq!(a[0], b[1], "{name}: {module} rank");
+            seen_ranks.insert(a[0]);
+        }
+        assert_eq!(seen_ranks.into_iter().collect::<Vec<_>>(), ranks, "{name}");
+    }
+}
+
+/// The published `diffusers/config.json` of both stages parse into the
+/// port's checkpoint description, as does `linear_branch/config.json`.
+#[test]
+fn vdn_configs_parse() {
+    use fastvideo_models::h3::vdn::{VdnCheckpoint, VdnTransform};
+    let dir = std::path::Path::new("/w/vdn/stage-b-step-2000");
+    let b = VdnCheckpoint::from_config_json(dir, include_str!("fixtures/vdn_stage_b_config.json"))
+        .unwrap();
+    assert_eq!(b.adapter_names(), ["default"]);
+    assert!(!b.is_distilled());
+    assert_eq!(b.branch, dir.join("linear_branch/model.safetensors"));
+    assert_eq!(b.transform, VdnTransform::released());
+    let d = VdnCheckpoint::from_config_json(dir, include_str!("fixtures/vdn_stage_dmd_config.json"))
+        .unwrap();
+    assert_eq!(d.adapter_names(), ["default", "turbo"]);
+    assert!(d.is_distilled());
+    let lb: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/vdn_linear_branch_config.json")).unwrap();
+    assert_eq!(lb["type"], "hybrid_attention");
+    assert_eq!(VdnTransform::from_json(&lb["config"]).unwrap(), VdnTransform::released());
+}
