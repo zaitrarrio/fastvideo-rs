@@ -930,7 +930,7 @@ none launchable.
 | stoppable (Brev) | `stoppable` | Brev's `stoppable` (null for the others) |
 | deploy (Brev) | `deploy_s` | `estimated_deploy_time`, seconds |
 | launchable | `supported`, `reason`, `launch` | fv-control can launch it from the launch form. If not, `reason` gives every reason: the provider is off; no GPU (CPU-only); an AMD GPU (the images need CUDA); arm64 only; not in `BREV_INSTANCE_TYPES` / `GMI_PRODUCTS`; for Runpod a type not in `RUNPOD_GPU_TYPES`, no Secure Cloud price, an unlisted data centre, or (with the weights volume) no fv weights volume in the data centre. On Runpod these three fields are the volume's answer (unchanged for older clients); `launch` is the form fields a click sets (`{gpu_types, region}` or `{provider_gpu[, provider_region]}`) |
-| launchable per weights (Runpod) | `volume_dc`, `reasons` | `volume_dc`: the data centre has an fv weights volume (EU-RO-1; null: no data centre). `reasons`: `{volume, r2, none}`, each the reason the row cannot be launched with that weights source, or null when it can. With `r2` or `none` (no volume) every NVIDIA Secure Cloud row of a listed data centre in fv-control's lists is launchable; AMD, an unknown type, no Secure Cloud price and an unlisted data centre stay refused. The launch form recomputes the table from this map when its Weights change, without a refetch |
+| launchable per weights (Runpod) | `volume_dc`, `reasons` | `volume_dc`: the data centre has an fv weights volume (EU-RO-1; null: no data centre). `reasons`: `{volume, r2, hub, none}`, each the reason the row cannot be launched with that weights source, or null when it can. With `r2`, `hub` or `none` (no volume) every NVIDIA Secure Cloud row of a listed data centre in fv-control's lists is launchable; AMD, an unknown type, no Secure Cloud price and an unlisted data centre stay refused. The launch form recomputes the table from this map when its Weights change, without a refetch |
 
 The launch form (`ui/forms/itable.ts`) shows the picked provider's table.
 Its columns sort (click a header to cycle ascending, descending, off; the
@@ -940,15 +940,15 @@ on Brev), and pages of 10 / 25 / 50 / 100 rows. Clicking a launchable row,
 or pressing Enter / Space on it, selects it.
 
 On Runpod the table follows the form's **Weights** (`weights_source`:
-volume, r2 or none; owner 2026-10-13, "I should be able to launch Runpod in
+volume, r2, hub or none; owner 2026-10-13, "I should be able to launch Runpod in
 any region if I am using R2"). With the volume only EU-RO-1 rows are
-launchable and a click sets `gpu_types` and `region`; with r2 or none every
+launchable and a click sets `gpu_types` and `region`; with r2, hub or none every
 NVIDIA Secure Cloud row is, and a click sets `gpu_types` and `data_centers`.
 The table is also the GPU pick itself (the separate "GPU types" list is
 gone from the form; `gpu_types` stays in the JSON, the CLI and the API). It
 is an ordered multi-pick: a click picks the primary (it replaces the pick);
 the row's **+ fallback** button, or Shift+click / Shift+Enter, appends its
-GPU type, and with r2 / none its data centre. A **Selected GPUs** strip
+GPU type, and with r2 / hub / none its data centre. A **Selected GPUs** strip
 above the table lists the picked types in order (1, 2, 3 …) with move up,
 move down and remove buttons; a picked row shows its type's number. The
 backend tries every data centre in order, each with every GPU type in

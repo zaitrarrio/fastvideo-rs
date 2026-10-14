@@ -76,8 +76,8 @@ export interface InstanceTypeRow {
    * above are the volume's (the default before this map existed). */
   reasons?: Record<RunpodWeights, string | null>;
 }
-/** The weights sources a Runpod pod may use (hub is GMI / Brev only: schemas.ts providerRules). */
-export const RUNPOD_WEIGHTS = ["volume", "r2", "none"] as const;
+/** The weights sources a Runpod pod may use: the volume pins EU-RO-1; r2, hub (owner-approved) and none run anywhere. */
+export const RUNPOD_WEIGHTS = ["volume", "r2", "hub", "none"] as const;
 export type RunpodWeights = (typeof RUNPOD_WEIGHTS)[number];
 
 export interface InstanceTypesView {
@@ -180,7 +180,7 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
     else if (dc.listed === false) reasons.push(`${dcId} is not a listed data centre`);
     else if (!knownDcs.has(dcId)) reasons.push(`${dcId} is not in fv-control's data centre list (enums.ts RUNPOD_DATA_CENTERS)`);
     // The volume's own rule, apart: weights_source r2 / none pods run in any data centre (the launch form's Weights).
-    const volReason = dcId && dc.listed !== false && knownDcs.has(dcId) && !region ? `no fv weights volume in ${dcId} (only ${[...volumeDcs.keys()].join(", ") || "none now"}): weights_source r2 or none runs in any data centre` : null;
+    const volReason = dcId && dc.listed !== false && knownDcs.has(dcId) && !region ? `no fv weights volume in ${dcId} (only ${[...volumeDcs.keys()].join(", ") || "none now"}): weights_source r2, hub or none runs in any data centre` : null;
     // Without the data centres' answer: the type's own (any data centre) stock.
     const stock = a ? (a.stockStatus ? String(a.stockStatus) : null) : haveDcs ? null : lp.stockStatus ? String(lp.stockStatus) : null;
     const base = reasons.length ? reasons.join("; ") : null;
@@ -209,7 +209,7 @@ export function normalizeRunpod(d: RunpodListing, volumeDcs = runpodVolumeDcs())
       volReason ? [...reasons, volReason] : reasons,
       { gpu_types: [id], region },
     );
-    return { ...row, volume_dc: dcId ? !!region : null, reasons: { volume: row.reason, r2: base, none: base } };
+    return { ...row, volume_dc: dcId ? !!region : null, reasons: { volume: row.reason, r2: base, hub: base, none: base } };
   };
   for (const dc of d.dataCenters || []) {
     for (const a of dc?.gpuAvailability || []) {

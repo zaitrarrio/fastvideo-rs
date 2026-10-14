@@ -65,7 +65,7 @@ The launch request:
   "channel": "latest",               // or "sha", or "image" (a ref or a digest); default: stable
   "compute": "GPU",                  // or "CPU" (+ "cpu_flavors", "vcpu")
   "gpu_types": ["NVIDIA RTX PRO 6000 Blackwell Server Edition"],   // in order: the fallbacks after the first
-  "weights_source": "volume",        // volume | r2 | none (Runpod; hub is GMI / Brev only). Default: the preset's (below)
+  "weights_source": "volume",        // volume | r2 | hub (+ "weights_download_approved": true) | none. Default: the preset's (below)
   "region": "eu",                    // or "dc": "EU-RO-1": the weights volume's data centre (CLAUDE.md: EU only)
   "volume": true,                    // the region's weights volume at /workspace (GPU default with the volume)
   "env": {"FOO": "bar", "HF_TOKEN": {"value": "…", "secret": true}},
@@ -98,6 +98,7 @@ using R2". A Runpod pod reads its weights one of three ways
 |---|---|---|
 | `volume` | EU-RO-1 only: the network volume `bz0ofkfx45` (H3 + LTX trees) is mounted at `/workspace` | `region: "eu"` (or `dc: "EU-RO-1"`) |
 | `r2` | any Runpod data centre: the trees come from the R2 weights store onto the container disk at boot (docs/ops/r2-weights.md; published trees only, no approval) | `data_centers: ["US-TX-3", "US-CA-2", "any"]` (or one `dc`) |
+| `hub` | any Runpod data centre: the trees from the Hub at their pinned revisions (weights-revisions.tsv) onto the container disk at every boot, with `fetch-hub-tree.py` at the image's commit, as on GMI / Brev. Needs the owner's approval: `weights_download_approved: true` on the launch **and** `FV_HUB_DOWNLOADS_APPROVED=1` on fv-control (CLAUDE.md: large downloads need approval); refused at `weights_download_approved` otherwise | as r2 |
 | `none` | any Runpod data centre: no weights (the fake engine) | as r2 |
 
 A CPU pod needs no weights: with `volume` off (its default) it runs in any
@@ -105,7 +106,15 @@ data centre too. `data_centers` are tried in order, each with every
 `gpu_types` entry in order (data centre first); a last `"any"` sends no
 `dataCenterIds`, so Runpod places the pod (with the CUDA 13 host filter of
 a data centre without the volume). Unset, the pod runs in EU-RO-1.
-`hub` (download at boot) is GMI / Brev only.
+With r2 and hub fv-control sizes the container disk from the trees (unset
+`container_disk_gb`; at most Runpod's 500 GB, a bigger set is refused); a
+network volume is never written. The Hub boot (`providers.ts HUB_RUNPOD_SH`,
+inserted before fv-serve by `payloads.ts bootFor`) logs each tree, a `step
+hub <tree>: <s>` line per tree and `step weights: <s> (Hub)`; a failure
+exits after 30 s, Runpod restarts the container and the complete trees are
+kept. Cluster pools take the same `weights_source` / `hub_download_approved`
+(the cluster page's Weights select). Serverless endpoints have no hub (their
+own boot: volume or r2).
 
 The default follows the preset (`presetWeightsDefault`, the same rule as a
 cluster pool): the volume when it holds every tree the preset loads (H3,
@@ -124,6 +133,7 @@ only come last; `dc` and `data_centers` do not go together.
 ```bash
 fv-control.sh pod launch wan-us --preset wan --weights r2 --region US-TX-3 --gpu "NVIDIA H100 80GB HBM3" --gpu "NVIDIA H200"
 fv-control.sh pod launch wan-any --preset wan --weights r2 --dc US-TX-3 --dc any   # data_centers: ["US-TX-3", "any"]
+fv-control.sh pod launch wan-hub --preset wan --weights hub --approve-hub-download --dc US-TX-3
 ```
 
 ## GMI Cloud and NVIDIA Brev
@@ -220,8 +230,8 @@ the form: `gpu_types` and `region` (volume) or `data_centers` (r2 / none)
 on Runpod, `provider_gpu` on Brev, `provider_gpu` and `provider_region` on
 GMI. A row fv-control cannot launch says why.
 
-On Runpod the form's **Weights** (volume, r2, none; the preset's default
-first) decide the location and which rows are launchable: with the volume,
+On Runpod the form's **Weights** (volume, r2, hub, none; the preset's
+default first; hub shows the owner's approval box) decide the location and which rows are launchable: with the volume,
 the region (EU-RO-1) and the volume toggle; with r2 or none, a **Data
 centres** pick of every data centre Runpod lists (its location and the
 picked GPUs' stock), fv-control's other ones, and "any", in order. Switching
@@ -239,9 +249,10 @@ router; the shared files only gain a nav link and a script tag
 
 `control/test/unit/launch-any-dc.test.ts` (r2 / none in any data centre:
 the request shape, placements and payload, the fallbacks' order, "any", the
-refusals the validator and the preflight share), the integration step
-"standalone Runpod pod with weights_source r2 in a data centre without the
-weights volume", `control/test/unit/standalone.test.ts` (spec building and refusals, payload
+refusals the validator and the preflight share), `control/test/unit/hub-runpod.test.ts`
+(hub: the approvals, the env and disk, the boot's weights step in bash with
+a stub fetcher), the integration steps "standalone Runpod pod with
+weights_source r2 / hub in a data centre without the weights volume", `control/test/unit/standalone.test.ts` (spec building and refusals, payload
 and watchdog boot, the routes with auth and CSRF, delete with and without a
 pod, pod status and logs JSON), the integration step "standalone pod" (the
 real Durable Object: launch, up, the watchdog boot, owner `pod:<name>`,

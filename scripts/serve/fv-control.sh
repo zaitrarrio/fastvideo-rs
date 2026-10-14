@@ -30,7 +30,7 @@
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
 #   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
 #                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EU-RO-1|<DC> (r2)]
-#                     [--weights volume|r2|none] [--dc DC|any]... (Runpod without the volume: data centres in order)
+#                     [--weights volume|r2|hub|none [--approve-hub-download]] [--dc DC|any]... (Runpod without the volume: any DC, in order)
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
 #                     [--max-dph X] [--no-start] [--wait] [--json FILE]
 #                     [--provider runpod|gmi|brev [--idc IDC] [--weights none|hub [--approve-hub-download]]] [--fake]

@@ -88,7 +88,7 @@ const providerGpu = z
 const providerRegion = z.string().regex(PROVIDER_REGION_RE, { message: "an IDC id: letters, digits, . _ - (≤ 50)" }).meta({ "x-dynamic": "provider_regions" }).describe("gmi: the IDC (GET /v1/idcs; default GMI_DEFAULT_IDC). brev: unused (the instance type implies it).");
 const weightsSource = z
   .enum(WEIGHTS_SOURCES)
-  .describe("Weights: volume (the region's Runpod network volume; Runpod only), r2 (our R2 weights store, fetched at boot through presigned URLs, every part checked; needs no approval, only trees published there: docs/ops/r2-weights.md), hub (downloaded from the Hub at pinned revisions at boot, verified; needs the owner's approval) or none (fake engine). Default: volume on Runpod; on GMI / Brev r2 when every tree of the pool is published in R2, else none.");
+  .describe("Weights: volume (the region's Runpod network volume; Runpod only), r2 (our R2 weights store, fetched at boot through presigned URLs, every part checked; needs no approval, only trees published there: docs/ops/r2-weights.md), hub (downloaded from the Hub at pinned revisions at boot onto the container disk, verified; needs the owner's approval: weights_download_approved / hub_download_approved and the Worker's FV_HUB_DOWNLOADS_APPROVED=1) or none (fake engine). r2, hub and none mount no volume, so a Runpod pod may run in any data centre. Default: Runpod the volume when it holds every tree, else r2 when every tree is published; GMI / Brev r2 when every tree is published, else none.");
 /** A Runpod pod's data centres without a weights volume, in order; a last "any" = no dataCenterIds (Runpod places it). */
 const dcList = uniq(z.enum(RUNPOD_DC_CHOICES, { error: (i) => enumMessage("a Runpod data centre (or any)", i.input, RUNPOD_DC_CHOICES) }).meta({ "x-dynamic": "data_centers" }))
   .min(1)
@@ -105,7 +105,6 @@ function providerRules(x: { provider?: string; provider_gpu?: string; provider_r
   if (!other) {
     if (x.provider_gpu) add("provider_gpu", "provider_gpu is for provider gmi / brev (Runpod: gpu_types)");
     if (x.provider_region) add("provider_region", "provider_region is for provider gmi");
-    if (x.weights_source === "hub") add("weights_source", "Runpod pods read the weights volume (volume), the R2 weights store (r2) or none");
     return;
   }
   if (!x.provider_gpu) add("provider_gpu", `provider ${x.provider}: the GPU product / instance type is required`);
@@ -438,8 +437,8 @@ export const StandaloneLaunchZ = z
       if (off.length && !noVolumePod(x)) {
         const where = off.map((d) => (d === DC_ANY ? "\"any\" (Runpod places it)" : d)).join(", ");
         if (cpu) add(x.volume ? "volume" : dcKey, `${where} has no weights volume: a CPU pod there runs with volume off, or ${EU_ONLY}`);
-        else if (x.weights_source === "r2" || x.weights_source === "none") add("volume", `${where} has no weights volume: volume off with weights_source ${x.weights_source}`);
-        else add(dcKey, `${where} has no weights volume: weights_source r2 (the R2 weights store) or none runs in any data centre (now: ${x.weights_source ?? "unset, the volume"}); the volume needs ${EU_ONLY}`);
+        else if (x.weights_source === "r2" || x.weights_source === "none" || x.weights_source === "hub") add("volume", `${where} has no weights volume: volume off with weights_source ${x.weights_source}`);
+        else add(dcKey, `${where} has no weights volume: weights_source r2 (the R2 weights store), hub (approved) or none runs in any data centre (now: ${x.weights_source ?? "unset, the volume"}); the volume needs ${EU_ONLY}`);
       }
       if (x.region && x.data_centers && off.length) add("region", "region is the weights volume's: leave it out with data_centers outside it");
       if (x.region && x.data_centers && !off.length && x.data_centers.some((d) => d !== REGIONS[x.region!].dc)) add("data_centers", `region ${x.region} is ${REGIONS[x.region].dc}`);

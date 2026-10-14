@@ -159,7 +159,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): a provider that is off says why in its option.
   const providerOpts = (dyn.providers || [{ id: "runpod", detail: "" }]).map((p: any) => ({ value: p.id, detail: p.detail }));
   const RUNPOD_ONLY = ["compute", "region", "data_centers", "gpu_types", "cpu_flavors", "vcpu", "volume", "container_disk_gb"];
-  const OTHER_ONLY = ["provider_gpu", "provider_region", "weights_download_approved"];
+  const OTHER_ONLY = ["provider_gpu", "provider_region"];
   /** Runpod's weights switched (or the preset / compute changed it): the location fields follow, the table recomputes. */
   function weightsChanged() {
     if (freeDc()) {
@@ -244,11 +244,13 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
                   options: [
                     { value: "volume", detail: "the EU weights volume (H3 + LTX trees): EU-RO-1 only" },
                     { value: "r2", detail: "our R2 weights store, fetched at boot: any data centre" },
+                    { value: "hub", detail: "downloaded from the Hub at boot (owner approval): any data centre" },
                     { value: "none", detail: "fake engine, no weights: any data centre" },
                   ],
-                  onSet: () => weightsChanged(),
-                  help: `volume: the network volume (EU bz0ofkfx45 in EU-RO-1, H3 + LTX trees only). r2: the trees from our R2 weights store onto the container disk at boot (docs/ops/r2-weights.md; published trees only, no approval), in any data centre. none: no weights (fake engine). The preset's default: ${presetWeights()}. (Hub downloads at boot are GMI / Brev only.)`,
+                  onSet: (v) => (v !== "hub" && f.set(["weights_download_approved"], undefined, true), weightsChanged()),
+                  help: `volume: the network volume (EU bz0ofkfx45 in EU-RO-1, H3 + LTX trees only). r2: the trees from our R2 weights store onto the container disk at boot (docs/ops/r2-weights.md; published trees only, no approval), in any data centre. hub: downloaded from the Hub at pinned revisions onto the container disk at every boot, in any data centre; the owner approves each launch (and FV_HUB_DOWNLOADS_APPROVED=1 on fv-control). none: no weights (fake engine). The preset's default: ${presetWeights()}.`,
                 }),
+                ...(f.get(["weights_source"]) === "hub" ? [F(["weights_download_approved"], { label: "Owner approved the Hub download", help: "Tens to hundreds of GB per boot onto the container disk, paid at the GPU's rate (CLAUDE.md: large downloads need approval)." })] : []),
               ]),
           ...(freeDc()
             ? [
@@ -359,6 +361,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
               for (const k of v && v !== "runpod" ? RUNPOD_ONLY : OTHER_ONLY) f.set([k], undefined, true);
               // The weights: Runpod's default per preset (volume / r2), GMI / Brev their own default (unset).
               f.set(["weights_source"], v === "runpod" && !isCpu() ? presetWeights() : undefined, true);
+              f.set(["weights_download_approved"], undefined, true);
               pickProvider(v || undefined);
               if (v === "runpod") weightsChanged();
               else draw();

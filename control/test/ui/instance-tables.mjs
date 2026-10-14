@@ -321,8 +321,20 @@ try {
   await weights("volume");
   await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-cannot`);
   await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
+  // Hub (owner 2026-10-14): any data centre as r2, and the owner's approval box (as on GMI / Brev), refused unticked.
+  assert.deepEqual(await page.$$eval(`${WS} button[role="radio"]`, (bs) => bs.map((b) => b.textContent)), ["volume", "r2", "hub", "none"]);
+  await weights("hub");
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"]`);
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-can`);
+  await page.waitForSelector(`${SL} .ff-field[data-path="data_centers"]`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="region"]`), null, "no region with hub");
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"].has-err .cf-err:not([hidden]):text-matches("owner's approval")`, { timeout: 15000 });
+  await page.check(`${SL} [data-ctl][data-path="weights_download_approved"]`);
+  // (This fv-control has no FV_HUB_DOWNLOADS_APPROVED: the Worker-level approval is still missing, and says so.)
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"].has-err .cf-err:not([hidden]):text-matches("FV_HUB_DOWNLOADS_APPROVED")`, { timeout: 15000 });
   await weights("r2");
   await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-can`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="weights_download_approved"]`), null, "no approval box with r2");
   assert.deepEqual(typeReqs(), [], `no refetch: ${reqs}`);
 
   // ---- the ordered multi-pick: a click = the primary; "+ fallback" appends (the same type in another data centre
@@ -394,6 +406,7 @@ try {
   assert.deepEqual(posted.data_centers, ["US-CA-2", "US-TX-3", "any"]);
   assert.equal(posted.region, undefined, "no region (the volume's) with r2");
   assert.equal(posted.volume, undefined, "no volume with r2");
+  assert.equal(posted.weights_download_approved, undefined, "the Hub approval goes with hub only");
 
   console.log(`ok   UI instance-type tables: load on pick only, sort / search / filters / pages, selection kept and launched, refresh=1 (rate-limited), provider switch cancels stale loads, Runpod weights recompute launchability, ordered multi-pick launched as gpu_types + data_centers${SHOTS ? ` (screenshots in ${img})` : ""}`);
 } catch (e) {

@@ -94,8 +94,10 @@ export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: 
     delete pool.gpu_types, delete pool.cpu_flavors, delete pool.vcpu;
   } else {
     if (input.weights_source) pool.weights_source = input.weights_source;
-    // r2 on Runpod: the trees go onto the container disk (sized by fv-control unless given); none: no weights. No volume.
-    if ((input.weights_source === "r2" || input.weights_source === "none") && input.volume === undefined && compute === "GPU") pool.volume = false;
+    // r2 / hub on Runpod: the trees go onto the container disk (sized by fv-control unless given); none: no weights. No volume.
+    if ((input.weights_source === "r2" || input.weights_source === "hub" || input.weights_source === "none") && input.volume === undefined && compute === "GPU") pool.volume = false;
+    // hub: the owner's approval of this pod's Hub download (CLAUDE.md: large downloads need approval).
+    if (input.weights_download_approved) pool.hub_download_approved = true;
     // No volume to pin the pod: any Runpod data centre (docs/ops/r2-bench-2026-10-12.md finding 5), in order, a last
     // "any" letting Runpod place it. The validator (schemas.ts) refuses them for a volume pod.
     const dcs = input.data_centers ?? (input.dc ? [input.dc] : undefined);
@@ -162,7 +164,7 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     created_by: c.created_by,
     definition: {
       provider: pool.provider ?? "runpod",
-      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : { weights_source: pool.compute === "CPU" ? null : weightsSource(pool, env) }),
+      ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : { weights_source: pool.compute === "CPU" ? null : weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved }),
       variant: pool.variant,
       image: pool.image ? { image: pool.image } : c.spec.image,
       compute: pool.compute,

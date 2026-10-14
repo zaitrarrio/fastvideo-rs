@@ -36,11 +36,11 @@ export const RUNPOD_DATA_CENTERS = [
 export const DC_ANY = "any";
 /** The data centres a pod without a weights volume may be placed in (pool / launch data_centers): every Runpod one, or "any". */
 export const RUNPOD_DC_CHOICES = [...RUNPOD_DATA_CENTERS, DC_ANY] as const;
-/** A Runpod pod that mounts no weights volume, so it may run in any data centre: a GPU pod with weights_source r2 or
- * none (the volume off), a CPU pod with the volume off. */
+/** A Runpod pod that mounts no weights volume, so it may run in any data centre: a GPU pod with weights_source r2, hub
+ * or none (the volume off), a CPU pod with the volume off. */
 export function noVolumePod(x: { compute?: string; variant?: string; weights_source?: string; volume?: boolean }): boolean {
   const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
-  return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "none") && x.volume !== true;
+  return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "hub" || x.weights_source === "none") && x.volume !== true;
 }
 /** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/schemas/dynamic. */
 export const RUNPOD_GPU_TYPES = [
@@ -102,6 +102,7 @@ export const RESERVED_KEYS = new Set([
   "FV_WEIGHTS_SOURCE",
   "FV_WEIGHTS_TREES_B64",
   "FV_SCRIPTS_URL",
+  "FV_HUB_DISK_GB",
   "FV_ENDPOINT_REPORT_URL",
   "FV_ENDPOINT_REPORT_TOKEN",
   "FV_BACKSTOP_API",

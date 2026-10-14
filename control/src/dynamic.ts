@@ -119,7 +119,7 @@ export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: 
     sls_reserved_env_keys: [...SLS_RESERVED],
     env_types: ENV_VALUE_TYPES,
     // Launch providers (docs/serve/deploy-gmi-brev.md): Runpod, and GMI / Brev when their secrets are set (detail says why not).
-    providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume, or R2 / none in any data centre" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
+    providers: [{ id: "runpod", detail: "Runpod (default): the EU weights volume, or R2 / Hub / none in any data centre" }, ...OTHER_PROVIDERS.map((p) => ({ id: p, detail: providerImpl(p).off(env) ? `off: ${providerImpl(p).off(env)}` : providerImpl(p).title }))],
     // Brev: live prices, stoppable types first (keep-on-stop), parked instances (docs/serve/deploy-gmi-brev.md §3.4).
     provider_gpus: [...configuredGpus(env, "gmi"), ...(live && !providerImpl("brev").off(env) ? await brevGpuOptions(env).catch(() => []) : configuredGpus(env, "brev"))],
     provider_regions: env.GMI_DEFAULT_IDC ? [{ id: env.GMI_DEFAULT_IDC, detail: "GMI default IDC" }] : [],

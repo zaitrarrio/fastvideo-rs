@@ -88,7 +88,7 @@ describe("the validator, the launch and the preflight agree (one rule: schemas.t
     }
   });
   it("a volume pod outside the volume's data centre fails with a clear message", () => {
-    expect(refused({ preset: "h3-turbo", weights_source: "volume", data_centers: ["US-TX-3"] })).toMatch(/^data_centers: US-TX-3 has no weights volume: weights_source r2 \(the R2 weights store\) or none runs in any data centre \(now: volume\); the volume needs EU only: eu \(EU-RO-1\)/);
+    expect(refused({ preset: "h3-turbo", weights_source: "volume", data_centers: ["US-TX-3"] })).toMatch(/^data_centers: US-TX-3 has no weights volume: weights_source r2 \(the R2 weights store\), hub \(approved\) or none runs in any data centre \(now: volume\); the volume needs EU only: eu \(EU-RO-1\)/);
     expect(refused({ preset: "h3-turbo", dc: "US-TX-3" })).toMatch(/^dc: US-TX-3 has no weights volume: .*\(now: unset, the volume\)/);
     expect(refused({ preset: "wan", weights_source: "r2", data_centers: ["US-TX-3"], volume: true })).toMatch(/^volume: US-TX-3 has no weights volume: volume off with weights_source r2/);
     expect(refused({ variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], compute: "CPU", volume: true, data_centers: ["US-TX-3"] })).toMatch(/^volume: US-TX-3 has no weights volume: a CPU pod there runs with volume off/);
