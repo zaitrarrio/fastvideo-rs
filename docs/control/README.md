@@ -294,7 +294,8 @@ the pool presets below.
 the four standard pools plus `ltx-pro` (`ltx25-distill-dense`, recipe
 `ltx-pro`; Sage attention on by default on sm_120), `ltx-a2v`, `ltx-ref2v`,
 `h3-ref2v`, `fasth3-trim` (FastH3 Trim 8-step on the `h3-max` image, served `h3-trim`;
-weights from R2), `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
+weights from R2), `h3-larry-turbo` / `h3-lightx2v-turbo` (MiniMax-H3 with a Turbo LoRA folded in
+at load, on the `h3-max` image; the adapters from R2, docs/ports/h3-turbo-loras.md), `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
 streaming) and `longlive` (LongLive-1.3B on the `sfwan` image;
 **non-commercial** weights). They reuse the image variants CI builds; a
 config the variant's image does not carry rides inline (`config_toml`,

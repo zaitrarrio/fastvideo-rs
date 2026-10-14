@@ -1973,6 +1973,14 @@ additions and readings; everything is re-exported from the crate root.
   `h3-trim`, pool / control preset `fasth3-trim`, `configs/serve/runpod-h3-trim.toml`)
   = FastH3 Trim 8-step: 42 of the 50 blocks, rank-16 AdaLN, VSA-H3 at 0.8, its
   own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md).
+  Untiered `h3-larry-turbo` / `h3-lightx2v-turbo` (pools / control presets of the
+  same names, `configs/serve/runpod-h3-{larry,lightx2v}-turbo.toml`) = base
+  MiniMax-H3 with a Turbo LoRA folded in at load, as the
+  MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs it: larryvrh ckpt850 (6 forwards,
+  `steps` 3-8, `lora_strength`) or lightx2v FL2VA/T2VA v1.2 768p (4 forwards,
+  shifts 6 / 3), dense attention, MXFP8 after the merge, T2V + FL2VA
+  (docs/ports/h3-turbo-loras.md). `[moderation] ncii` is the optional NCII
+  prompt guard (off by default) every API runs at admission.
   `ltx-pro` = LTX-2.5 distilled
   two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
   stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN
