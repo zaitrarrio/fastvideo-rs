@@ -32,5 +32,14 @@ th.num .it-sort { text-align: right; }
 .it-empty { padding: 14px 8px; }
 .it-pager { margin-top: 8px; }
 .it-pager button { padding: 3px 10px; }
+/* The ordered multi-pick (Runpod): the "Selected GPUs" strip, the rows' order badges, "+ fallback". */
+.it-strip { margin: 0 0 6px; }
+.it-picks { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; }
+.it-picks li { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 6px; padding: 1px 4px 1px 2px; background: var(--surface-2); }
+.it-picks button { padding: 0 6px; min-width: 22px; }
+.it-picks li .muted { margin: 0 4px; }
+.it-ord { display: inline-block; min-width: 16px; padding: 0 4px; margin-right: 4px; border-radius: 8px; background: var(--accent); color: var(--surface-1); font-size: 11px; font-weight: 600; text-align: center; }
+.it-table tr.it-picked:not(.it-on) td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.it-add { padding: 1px 8px; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .it-status .spin { animation: none; } }
 @media (max-width: 600px) { .it-search input { width: 100%; } .it-wrap { max-height: 420px; } }

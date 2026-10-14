@@ -27,7 +27,7 @@
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
 import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine } from "./brev";
 import { recordBoot } from "./boottime";
-import { adoptAndStop, bootEstimate, brevDiskGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
+import { adoptAndStop, bootEstimate, brevDiskGb, treesGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
@@ -511,7 +511,7 @@ export const CLOUDFLARED = {
 // without both marks, is moved aside and removed (the VM's own disk, never a
 // shared volume), then fetched again. `fetch_tree` is the boot's (tests stub
 // it). The Hub fetcher is only set up when a tree is missing.
-export const WEIGHTS_SH = `${R2_FETCH_SH}if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ] || [ "\${FV_WEIGHTS_SOURCE:-none}" = r2 ]; then
+export const WEIGHTS_LOOP_SH = `if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ] || [ "\${FV_WEIGHTS_SOURCE:-none}" = r2 ]; then
   [ "$FV_WEIGHTS_SOURCE" = hub ] && say "weights: Hub trees at pinned revisions (owner-approved)"
   rm -rf "$FV_WEIGHTS"/.*.partial-* "$FV_WEIGHTS"/.stale-* 2>/dev/null || true
   report weights "" "checking"
@@ -544,6 +544,7 @@ EOF_TREES
   say "weights ready: $kept present, $got fetched"
 fi
 `;
+export const WEIGHTS_SH = `${R2_FETCH_SH}${WEIGHTS_LOOP_SH}`;
 
 // The tunnel of a GMI / Brev pod (outbound only; no inbound port), in the boot below. A named tunnel fv-control made
 // for this pod (tunnels.ts): FV_TUNNEL_TOKEN, given to cloudflared in its environment (TUNNEL_TOKEN, not its argv)
@@ -576,6 +577,25 @@ fi
 say "tunnel $U"
 [ "\${FV_DISPATCH_FRONT:-0}" = 1 ] && export FV_DISPATCH_ENDPOINT="$U"
 report tunnel "$U" ""
+`;
+
+/** The Hub fetcher of a boot with weights_source hub (GMI / Brev PROVIDER_BOOT, the Runpod worker boot): `fetch_tree`
+ * sets up a venv with huggingface_hub and scripts/gpu/fetch-hub-tree.py (at the image's commit) on first use, then
+ * fetches one tree at its pinned revision (weights-revisions.tsv) into $FV_WEIGHTS/<dest>, every file checked against
+ * the Hub listing, and logs its time as a boot step. */
+export const HUB_FETCH_TREE_SH = `FETCHER=""
+fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (the fetcher is set up on first use)
+  if [ -z "$FETCHER" ]; then
+    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-venv python3-pip; } >>/fvstate/apt.log 2>&1 || fail "apt python3-venv"
+    python3 -m venv /opt/fv/venv && /opt/fv/venv/bin/pip install -q "huggingface_hub>=0.34" >/fvstate/pip.log 2>&1 || fail "pip huggingface_hub"
+    mkdir -p /opt/fv/scripts && curl -fsSL --max-time 60 -o /opt/fv/scripts/fetch-hub-tree.py "$FV_SCRIPTS_URL/fetch-hub-tree.py" || fail "fetch-hub-tree.py"
+    FETCHER=1
+  fi
+  mkdir -p "/fvstate/fetch-$5"; t0="$(date +%s)"
+  FETCH_REPO="$2" FETCH_REVISION="$3" FETCH_DEST="$1" FETCH_GLOBS="$4" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$5" FETCH_MIN_FREE_GB=5 \\
+    /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$5.out" 2>&1 || fail "tree $1: $(tail -2 "/fvstate/fetch-$5/log.txt" 2>/dev/null | tr '\\n"' '  ')"
+  say "step hub $1: $(( $(date +%s) - t0 ))s"
+}
 `;
 
 // The start command of a GMI / Brev worker (inside our image, as root): the
@@ -616,19 +636,7 @@ export FV_WORKER_ID="$FV_POD_ID"
 cfgerr="$("$FV_SERVE_BIN" --config /fv-worker.toml --print-config 2>&1 >/dev/null)" || fail "fv-serve config: $(printf '%s' "$cfgerr" | tail -n 3 | tr '\\n"' '  ')"
 say "config ok: /fv-worker.toml"
 ${UPSAMPLER_START_SH}# ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256
-FETCHER=""
-fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (the fetcher is set up on first use)
-  if [ -z "$FETCHER" ]; then
-    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-venv python3-pip; } >>/fvstate/apt.log 2>&1 || fail "apt python3-venv"
-    python3 -m venv /opt/fv/venv && /opt/fv/venv/bin/pip install -q "huggingface_hub>=0.34" >/fvstate/pip.log 2>&1 || fail "pip huggingface_hub"
-    mkdir -p /opt/fv/scripts && curl -fsSL --max-time 60 -o /opt/fv/scripts/fetch-hub-tree.py "$FV_SCRIPTS_URL/fetch-hub-tree.py" || fail "fetch-hub-tree.py"
-    FETCHER=1
-  fi
-  mkdir -p "/fvstate/fetch-$5"
-  FETCH_REPO="$2" FETCH_REVISION="$3" FETCH_DEST="$1" FETCH_GLOBS="$4" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$5" FETCH_MIN_FREE_GB=5 \\
-    /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$5.out" 2>&1 || fail "tree $1: $(tail -2 "/fvstate/fetch-$5/log.txt" 2>/dev/null | tr '\\n"' '  ')"
-}
-${WEIGHTS_SH}${TUNNEL_SH}# ---- the deadline watchdog (fv-control's cron deletes the pod at the deadline as well)
+${HUB_FETCH_TREE_SH}${WEIGHTS_SH}${TUNNEL_SH}# ---- the deadline watchdog (fv-control's cron deletes the pod at the deadline as well)
 (
   while :; do
     if [ "$(date +%s)" -ge "$FV_CLUSTER_DEADLINE" ]; then
@@ -647,6 +655,30 @@ ${UPSAMPLER_WAIT_SH}# ---- fv-serve (its config was checked before the weights)
 say "fv-serve: $FV_SERVE_BIN --config /fv-worker.toml (from \${FV_WORKER_TOML_B64:+inline FV_WORKER_TOML_B64}\${FV_WORKER_TOML_B64:-$FV_WORKER_CONFIG}); $("$FV_SERVE_BIN" --version 2>&1 | head -n 1)"
 if [ -n "\${FASTVIDEO_STREAMING_FETCH:-}" ]; then date +%s.%N > "\${FV_R2_STATE:-/fvstate}/serve-start"; say "fv-serve starts while the weights arrive (its loader waits on each file's progress map)"; fi
 exec "$FV_SERVE_BIN" --config /fv-worker.toml`;
+
+// A Runpod worker with weights_source hub (no volume; the owner approved the download: hub_download_approved and
+// FV_HUB_DOWNLOADS_APPROVED, checked before the launch): the pod's trees from the Hub at their pinned revisions onto the
+// container disk ($FV_WEIGHTS; never a network volume), then the aux files by SHA-256, as on GMI / Brev
+// (WEIGHTS_LOOP_SH). Progress is logged ("[fv-boot] ..." and the "step hub <tree>" times) and reported when the pod has
+// a report URL. A failure exits after 30 s: Runpod restarts the container and the complete trees are kept.
+// Inserted into the worker boot by payloads.ts bootFor.
+export const HUB_RUNPOD_SH = `export FV_POD_ID="\${FV_POD_ID:-\${RUNPOD_POD_ID:-}}"
+if [ "\${FV_WEIGHTS_SOURCE:-none}" = hub ]; then
+  say() { echo "[fv-boot] $(date -u +%H:%M:%S) $*" >&2; }
+  report() {
+    [ -n "\${FV_ENDPOINT_REPORT_URL:-}" ] || return 0
+    curl -sS --max-time 20 -X POST -H "Authorization: Bearer $FV_ENDPOINT_REPORT_TOKEN" -H "content-type: application/json" \\
+      -d "{\\"pod\\":\\"$FV_POD_ID\\",\\"phase\\":\\"$1\\",\\"url\\":\\"$2\\",\\"detail\\":\\"$3\\"}" "$FV_ENDPOINT_REPORT_URL" >/dev/null || true
+  }
+  fail() { say "FAILED: $1"; report failed "" "$1"; sleep 30; exit 1; }
+  if ! command -v curl >/dev/null 2>&1; then
+    { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates; } >/fvstate/apt.log 2>&1 || fail "no curl"
+  fi
+  mkdir -p "$FV_WEIGHTS"
+  hub_t0="$(date +%s)"
+${HUB_FETCH_TREE_SH}${WEIGHTS_LOOP_SH}  say "step weights: $(( $(date +%s) - hub_t0 ))s (Hub)"
+fi
+`;
 
 /** A Brev VM's run script for one launch (brev-park.ts): our image running PROVIDER_BOOT with the pod's env. */
 export const brevRun = (image: string, env: Record<string, string>) => brevRunScript(image, env, PROVIDER_BOOT);
@@ -839,11 +871,34 @@ export const REPORT_PHASES = ["weights", "tunnel", "failed", "host", "host_faile
 /** Reports that carry a log tail (up to 2000 chars). */
 const LONG_REPORTS = ["host", "host_failed", "container_exited", "serve_timeout"];
 
+/** weights_source hub (any provider): the owner's approval for this launch AND on this fv-control (CLAUDE.md: large
+ * downloads need approval), a plain Hub source for every tree, and some tree to fetch. */
+function hubIssues(env: Env, p: PoolSpec, i: number): { path: (string | number)[]; message: string }[] {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  const plan = weightsPlan(p, env);
+  if (!p.hub_download_approved) out.push({ path: ["pools", i, "hub_download_approved"], message: `weights_source hub downloads ${plan.trees.join(", ") || "the weights"} from the Hub at every boot: it needs the owner's approval for this launch (weights_download_approved: true)` });
+  else if (env.FV_HUB_DOWNLOADS_APPROVED !== "1") out.push({ path: ["pools", i, "hub_download_approved"], message: "Hub downloads at boot are not approved on this fv-control (the owner sets FV_HUB_DOWNLOADS_APPROVED=1; CLAUDE.md: large downloads need approval)" });
+  if (plan.unsupported.length) out.push({ path: ["pools", i, "weights_source"], message: `no plain Hub source for ${plan.unsupported.join(", ")} (several repos or a conversion: docs/ops/runpod-volumes.md); serve another preset${isOtherPool(p) ? " or use Runpod" : ", r2 or the volume"}` });
+  if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
+  return out;
+}
+/** A Runpod pod's container disk for these Hub trees (the size table, brev-park.ts treesGb): × 1.15 + 30 GB. */
+export const hubDiskGb = (trees: string[]) => Math.ceil(treesGb(trees) * 1.15 + 30);
+
 /** Every reason a spec's GMI / Brev pools cannot start, at the field it is about (the launch form, `up`'s first step). */
 export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (string | number)[]; message: string }[] {
   const out: { path: (string | number)[]; message: string }[] = [];
   spec.pools.forEach((p, i) => {
     if (!isOtherPool(p)) {
+      // A Runpod pool may download from the Hub onto its container disk (the owner's approval, as on GMI / Brev).
+      if (weightsSource(p, env) === "hub") {
+        out.push(...hubIssues(env, p, i));
+        if (p.volume === true) out.push({ path: ["pools", i, "volume"], message: "weights_source hub downloads onto the container disk: leave volume off (the volume is not mounted with hub)" });
+        const need = hubDiskGb(weightsPlan(p, env).trees);
+        if (p.container_disk_gb !== undefined && p.container_disk_gb < need) out.push({ path: ["pools", i, "container_disk_gb"], message: `${p.container_disk_gb} GB is too small for ${weightsPlan(p, env).trees.join(", ")} from the Hub: at least ${need} GB (unset: fv-control sizes it)` });
+        if (need > 500) out.push({ path: ["pools", i, "weights_source"], message: `${weightsPlan(p, env).trees.join(", ")} need ${need} GB of container disk, over Runpod's 500 GB: use the volume or r2` });
+        return;
+      }
       // A Runpod pool may fetch from the R2 weights store onto its container disk instead of mounting the volume.
       if (weightsSource(p, env) !== "r2") return;
       const plan = weightsPlan(p, env);
@@ -875,12 +930,7 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
       if (plan.unsupported.length) out.push({ path: ["pools", i, "weights_source"], message: `not in the R2 weights store yet: ${plan.unsupported.join(", ")} (scripts/gpu/r2-weights.py status; docs/ops/r2-weights.md §6): use hub or another preset` });
       if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
     }
-    if (plan.source === "hub") {
-      if (!p.hub_download_approved) out.push({ path: ["pools", i, "hub_download_approved"], message: `weights_source hub downloads ${plan.trees.join(", ") || "the weights"} from the Hub at every boot: it needs the owner's approval for this launch (weights_download_approved: true)` });
-      else if (env.FV_HUB_DOWNLOADS_APPROVED !== "1") out.push({ path: ["pools", i, "hub_download_approved"], message: "Hub downloads at boot are not approved on this fv-control (the owner sets FV_HUB_DOWNLOADS_APPROVED=1; CLAUDE.md: large downloads need approval)" });
-      if (plan.unsupported.length) out.push({ path: ["pools", i, "weights_source"], message: `no plain Hub source for ${plan.unsupported.join(", ")} (several repos or a conversion: docs/ops/runpod-volumes.md); serve another preset or use Runpod` });
-      if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
-    }
+    if (plan.source === "hub") out.push(...hubIssues(env, p, i));
   });
   return out;
 }
