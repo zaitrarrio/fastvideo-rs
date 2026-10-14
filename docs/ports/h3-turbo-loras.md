@@ -11,8 +11,7 @@ What this port runs: base MiniMax-H3 (`h3-base`) with the same fold (float32 del
 MXFP8 linears as every other served H3 recipe (merge first, quantize second), dense attention, our VAEs. Two serve
 models, `h3-larry-turbo` and `h3-lightx2v-turbo`, and an optional admission check, `[moderation] ncii`.
 
-GPU validation: §6 (parity), §7 (speed and quality). Results are filled in from the validation pod's reports
-(`artifacts/ports/h3-turbo-loras/`).
+GPU validation: §6 (parity), §7 (speed and quality); reports and samples in `artifacts/ports/h3-turbo-loras/`.
 
 ## 1. The two LoRAs
 
@@ -123,11 +122,105 @@ File SHA-256 (Hub LFS): larry ckpt850 `5a6eeba1…3528b4ea`, lightx2v v1.2 `c3d4
 
 ## 6. Parity against the Space
 
-TBD (filled in from the validation pod).
+One RTX PRO 6000 Blackwell Server Edition (Runpod pod `dj7z8zfge2ldud`, 2026-10-14, 37 min, $1.52), fv-gpucheck of
+this branch, every tree from R2 (`scripts/gpu/h3-turbo-loras-validate.sh` / `-pod.sh`). The reference is the Space's
+own stack: diffusers #14371 @ `665f5782` (installed as 0.40.0.dev0), transformers 5.8.0, torch 2.11.0+cu130, its
+`MiniMaxH3GeneratorBlocks` and `h3_lora.py` verbatim (Space revision `9a76d679`), bf16 transformer, float32 VAEs,
+cuDNN attention (`scripts/gpu/upstream/h3_turbo_lora_ref.py`). Request: T2V, 832x480, 124 frames, seed 1024, the
+Space's default `steps = 6` (5 forwards: our `larry-turbo-5step`), strength 1.0. Text: our Qwen3-VL layer-50 rows fed
+to both (the Space's conditioner is another Space). Noise: the reference's draws (its generator) injected into ours
+(`FASTVIDEO_INJECT_DIR`). Reports: `artifacts/ports/h3-turbo-loras/parity/`.
+
+**Merged weights** (`merged_parity.py`; ours dumped with `FV_H3_DUMP_MERGED`, the reference after
+`apply_lora`). Both sides are bf16, so "differ" is the share of elements one or more bf16 ulps apart; the delta rel-L2
+compares `merged - base` (the LoRA's own contribution, about 1e-4 to 3e-3 of the base's norm, so a 1-ulp rounding
+difference of the sum is a visible share of it).
+
+| larry, target type (worst of the sampled linears) | merged rel-L2 | delta rel-L2 | elements differing | max ulps |
+|---|---|---|---|---|
+| attn.to_out.0 (out_proj), blocks 0 / 49 | 4.0e-6 | 1.1e-2 | 0.001% | 2 |
+| ff.net.0.proj (fc1, SwiGLU swap), blocks 0 / 49 | 7.7e-6 | 1.1e-2 | 0.001% | 1 |
+| ff.net.2 (fc2), blocks 0 / 49 | 1.4e-5 | 1.2e-2 | 0.002% | 1 |
+| block adaln_proj.linear, block 25 | 6.8e-7 | 7.8e-3 | 0.000% | 1 |
+| norm_out.linear (final AdaLN) | 2.3e-6 | 7.6e-3 | 0.000% | 1 |
+| refiner attn.to_out.0 / ff.net.0.proj | 2.0e-6 | 1.1e-2 | 0.001% | 1 |
+
+The fold is the Space's to bf16 rounding: one element in 50 000 to 100 000 lands one ulp away (float32 summation order
+of `B @ A`, CPU vs our device kernel). **Not dumped:** `to_q/to_k/to_v`, whose merge happens on the fused QKV(G) load
+path rather than in `load_linear`; they are covered by the step-1 latents below (a wrong third or a wrong order would
+not give 8e-4). lightx2v: the reference's lightx weights come from the Space's `set_active("lightx")` *after* the larry
+fold (unfold larry, fold lightx: two more bf16 roundings), so 0.04-0.5% of elements differ, by up to 27 000 ulps
+(values crossing zero, where the ulp distance counts the whole exponent range), merged rel-L2 <= 8.4e-5. That is the
+Space's switch residue, not a different fold; a clean lightx-only reference was not run.
+
+**Denoise and decode** (`compare-dumps`, rel-L2 per step; `av_psnr.py` on the decoded clips):
+
+| | bf16 linears (`FASTVIDEO_H3_QUANT=off`) | served (MXFP8) |
+|---|---|---|
+| starting noise, text | 0 (injected) | 0 |
+| sigmas (video, audio) | 0 | 0 |
+| video velocity, step 1 | 1.67e-2 (cos 0.99990) | 4.31e-2 (cos 0.99917) |
+| **video latents after step 1** | **8.26e-4** | **2.13e-3** |
+| audio latents after step 1 | 1.04e-3 | 3.88e-3 |
+| video latents after step 5 (final) | 2.43e-1 (cos 0.971) | 2.64e-1 (cos 0.965) |
+| audio latents after step 5 | 9.99e-2 (cos 0.995) | n/a |
+| decoded video PSNR (124 frames) | **22.7 dB** (frame min 20.1) | 22.5 dB |
+| decoded audio PSNR (32 kHz stereo) | **46.2 dB** (lag 0) | 36.0 dB |
+
+The first step matches to the bf16 noise floor (the velocity's 1.7e-2 is bf16 accumulation over 50 blocks with a
+different attention kernel). The later steps grow quickly: from step 2 on the video velocity differs by 0.18-0.21
+(cos 0.98), i.e. this 5-forward distilled trajectory amplifies small differences far more than the 49-forward base
+(docs/oracle.md); the decoded clip is visibly the same scene (PSNR 22.7 dB; the reference decodes its video VAE in
+float16 autocast, ours in its own precision, part of the gap). Reference wall: 29.4 s for denoise + decode at 480p,
+peak 77.3 GiB allocated (bf16 transformer + float32 VAEs resident); the Space's fold took 113 s on the CPU.
+
+Samples: `artifacts/ports/h3-turbo-loras/samples/parity-space-ref-larry5-480p.mp4` (the Space's stack) and
+`parity-ours-larry5-480p-bf16.mp4` (ours, its noise and our text).
 
 ## 7. Speed and quality
 
-TBD (filled in from the validation pod).
+Same pod, our recipes as served (their profiles: MXFP8 linears, bf16 activations; text encoder streamed with a
+shared conditioning cache), each one warm process over two prompts of `scripts/gpu/prompts-eval.json` (`h3-demo`,
+`spark-mountain-lake`) at 480p (832x480) and 768p (1344x768). **The clips are 107 frames (4.46 s), not 5 s**: the
+per-prompt canvases took the process's `--num-frames 107` (meant for the cold warm-up only; fixed in the pod script
+since). A second pod to redo it at 124 frames got a host that never started its container (18 min, $0.74, deleted).
+Numbers: `artifacts/ports/h3-turbo-loras/perf/*-benchmark.json`.
+
+| Recipe (forwards) | 480p denoise / total (s) | 768p denoise / total (s) | peak allocated (GiB) 480p / 768p | load (s) |
+|---|---|---|---|---|
+| `h3-larry-turbo` (6) | 9.9-10.3 / 13.1 | 39.3-39.9 / 45.5-46.1 | 28.3 / 30.8 | 22 |
+| `larry-turbo-4step` (4) | 6.6-6.9 / 9.4-9.8 | 26.3-26.6 / 32.4-32.9 | 28.3 / 30.8 | 30 |
+| `h3-lightx2v-turbo` (4) | 6.7-7.0 / 9.5-9.8 | 26.2-26.6 / 32.4-32.8 | 28.3 / 30.8 | 29 |
+| `h3-turbo` (FastH3 4-step, VSA 0.9) | 6.2-6.6 / 9.0-9.5 | 16.4-16.8 / 22.6-23.1 | 34.2 / 39.8 | 28 |
+| `h3-max` (Sol-H3 4-step, Sol tau ladder) | 5.5-5.8 / 8.3-8.6 | 17.8-18.3 / 24.0-24.5 | 28.7 / 31.7 | 27 |
+| base, 49 forwards, dense (480p, 124 frames) | 105.9 / 109.5 | - | 28.5 | 20 |
+
+Denoise per forward at 768p (107 frames): dense with a LoRA 6.6 s, h3-turbo's VSA 4.1 s, h3-max's Sol route 4.5 s.
+The Turbo LoRAs are dense by construction (the Space runs them dense); at 480p the difference is small, at 768p a 4-step
+LoRA costs 1.6x h3-turbo's denoise and 6 forwards 2.4x. Load is fast here because the trees were in the page cache;
+the LoRA merge itself is 3.7 s on the device (`load/io ... lora_s`). No pre-quantized DiT tree exists for these
+recipes; one would cut a cold load as it does for h3-turbo.
+
+**Quality** (`fv-gpucheck compare-clips`, LPIPS(alex) on the GPU, the repo's gate metrics, docs/techniques.md):
+
+| Candidate vs baseline | LPIPS | PSNR (dB) | sharpness ratio | jitter ratio |
+|---|---|---|---|---|
+| larry 6 vs h3-max, 768p (h3-demo / spark-mountain-lake) | 0.674 / 0.647 | 10.8 / 13.4 | 0.71 / 0.72 | 0.55 / 0.71 |
+| larry 4 vs h3-max, 768p | 0.678 / 0.653 | 10.9 / 13.3 | 0.68 / 0.69 | 0.49 / 0.63 |
+| lightx2v 4 vs h3-max, 768p | 0.657 / 0.651 | 10.9 / 12.9 | 0.60 / 0.73 | 0.60 / 0.63 |
+| h3-turbo vs h3-max, 768p | 0.706 / 0.630 | 10.4 / 13.9 | 0.69 / 1.13 | 0.90 / 0.99 |
+| larry 4 vs larry 6, 480p, spark-mountain-lake | 0.332 | 18.8 | 0.98 | 0.88 |
+
+These are different distillations of one model on the same prompt and seed, not the same trajectory, so LPIPS around
+0.65 (as h3-turbo vs h3-max) says "a different sample", not "worse"; the gate's `lossy` rule (sharpness >= 0.95
+against the baseline) fails for every turbo recipe against h3-max at 768p. What the numbers do say: the LoRA clips are
+**softer and calmer than h3-max** (sharpness 0.60-0.73, temporal jitter 0.5-0.7 of h3-max's) and softer than h3-turbo
+on spark-mountain-lake; larry at 4 forwards is close to 6 (LPIPS 0.33, sharpness 0.98), as its card says (4 the
+minimum, 6-8 better). The 480p comparisons against the 49-forward base are not usable: the base clip is 124 frames and
+the candidates 107, so frames were paired across different latent grids (LPIPS 0.69-0.72 for every recipe, h3-max
+included); they are kept in `artifacts/ports/h3-turbo-loras/compare/` for completeness only. Samples (<= 10 MB):
+`samples/larry6-spark-mountain-lake-768p.mp4`, `samples/lightx4-spark-mountain-lake-768p.mp4`,
+`samples/larry4-h3-demo-480p.mp4`.
 
 ## 8. The NCII prompt guard
 
@@ -189,4 +282,16 @@ that turns the guard on must fetch it).
 
 ## 9. What is untested
 
-TBD.
+- 5 s (124 frame) timing and quality of the five recipes (measured at 107 frames, §7); the 480p gate against the
+  49-forward base (frame counts differed).
+- larry at 7-8 forwards, strengths other than 1.0, larry v4-600, lightx2v v0.1 (not in R2), lightx2v at other step
+  counts, and 1080p.
+- FL2VA (first / last frame) with either LoRA on the GPU: only T2V ran. The keyframe path is the base pipeline's,
+  unchanged by the adapter.
+- A lightx2v denoise against the Space (only its merged weights were compared, and those after the Space's
+  larry-to-lightx switch); `to_q/k/v` merged weights (fused load path, not dumped; covered by the step-1 latents).
+- The served path end to end on fv-serve (the catalog, configs and control presets are unit- and integration-tested
+  on CPU; no fv-serve process served these models on a GPU), and the fv-control presets on a real pool.
+- The NCII guard inside a running fv-serve on a pod, the director and Reactor refusals end to end (unit-tested at the
+  seam), and the guard's accuracy beyond its card's numbers. Its weights are not part of any preset's trees.
+- Cost: validation $2.26 in all (pod 1 $1.52, pod 2 $0.74 without results); both pods deleted and checked gone.

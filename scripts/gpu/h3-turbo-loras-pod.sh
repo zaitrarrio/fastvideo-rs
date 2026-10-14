@@ -139,7 +139,7 @@ PYEOF
 perf() { # <cell> <recipe> <profile> [gen flags...]: one warm process over the prompt set
   local cell="$1" recipe="$2" prof="$3"; shift 3
   "${GEN[@]}" ${prof:+--techniques "$prof"} --out $SRV/perf/$cell --tag "$cell" "${H3[@]}" --prompt unused --prompts $L/prompts.json \
-    --height 480 --width 832 --num-frames 107 --h3-recipe "$recipe" --clip-dir $SRV/perf/$cell/frames "$@" >$SRV/perf-$cell.log 2>&1
+    --height 480 --width 832 --h3-recipe "$recipe" --clip-dir $SRV/perf/$cell/frames "$@" >$SRV/perf-$cell.log 2>&1
 }
 mkdir -p $SRV/perf
 step perf-larry6 perf larry6 larry-turbo h3/larry_turbo_dense --warm
