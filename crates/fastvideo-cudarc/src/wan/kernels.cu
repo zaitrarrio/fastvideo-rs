@@ -7090,6 +7090,88 @@ extern "C" __global__ void fvf_h3_qkvg_heads(
                                                    (unsigned int)outv[2] | ((unsigned int)outv[3] << 16));
 }
 
+// NVFP4 quantize-on-write: one value per lane, a 16-column NVFP4 block held
+// by 16 consecutive lanes (column j at lane j % 16, j % 16 == lane % 16).
+// The block's E4M3 scale and E2M1 codes are fv_nvfp4_scale_block's (static_6
+// / static_4, e4 448), so the bytes equal nvfp4_quant_bf16_sw on the stored
+// bf16 tensor; `v` is that bf16 value. Codes go out as one 32-bit word per 8
+// lanes (low nibble first), the scale from the block's first lane, into
+// cuBLASLt's VEC16_UE4M3 tiled layout. Every lane of the warp must call it.
+__device__ __forceinline__ void fv_nvfp4_store_lane(
+    float v, long row, int j, long cols, float amax, float e2,
+    unsigned char* packed, unsigned char* scales
+) {
+    // fv_nvfp4_scale_block's `if (|v| > block_amax)` from 0 skips NaN.
+    float a = fabsf(v);
+    float m = (a > 0.0f) ? a : 0.0f;
+    for (int o = 8; o > 0; o >>= 1) {
+        float other = __shfl_xor_sync(0xffffffffu, m, o);
+        if (other > m) m = other;
+    }
+    unsigned char code = 0;
+    float fake = 0.0f;
+    if ((amax > 0.0f) && isfinite(amax)) {
+        float encode = (e2 * 448.0f) / amax;
+        float decode = amax / (e2 * 448.0f);
+        code = fv_to_e4m3((m / e2) * encode * 1.0f);
+        float s = fv_e4m3_to_f32(code);
+        if (s != 0.0f) {
+            float inv = 1.0f / (decode * s);
+            fake = fv_nvfp4_fake_e2m1(v * inv);
+        }
+    }
+    unsigned int word = (unsigned int)fv_nvfp4_code(fake) << (4 * (j & 7));
+    for (int o = 1; o < 8; o <<= 1) word |= __shfl_xor_sync(0xffffffffu, word, o);
+    if ((j & 7) == 0) *(unsigned int*)(packed + row * (cols / 2) + j / 2) = word;
+    if ((j & 15) == 0) {
+        long sc = cols / 16, blk = j / 16;
+        long tile = (row / 128) * (sc / 4) + (blk / 4);
+        long rr = row % 128;
+        scales[tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (blk % 4)] = code;
+    }
+}
+
+// The padding rows of an NVFP4 operand (nvfp4_quant_bf16_sw's): zero scales
+// for rows in [rows, rows_scale), zero codes for rows in [rows, rows_pack).
+__device__ __forceinline__ void fv_nvfp4_pad_row(
+    long row, long rows_pack, long cols, unsigned char* packed, unsigned char* scales
+) {
+    long sc = cols / 16;
+    long tile0 = (row / 128) * (sc / 4);
+    long rr = row % 128;
+    for (long blk = threadIdx.x; blk < sc; blk += blockDim.x) {
+        scales[(tile0 + blk / 4) * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (blk % 4)] = 0;
+        if (row < rows_pack) *(uint2*)(packed + row * (cols / 2) + blk * 8) = make_uint2(0u, 0u);
+    }
+}
+
+// SwiGLU straight into the down projection's NVFP4 operand (static
+// activation amax `amax_ptr`): bf16(value * (gate * sigmoid(gate))) as
+// mx_swiglu stores it, quantized as nvfp4_quant_bf16_sw would. One block per
+// operand row (rows_scale of them; rows past `rows` are padding);
+// half % 64 == 0, blockDim.x % 32 == 0.
+extern "C" __global__ void fvf_h3_swiglu_nvfp4(
+    const unsigned short* x, const float* amax_ptr, unsigned char* packed, unsigned char* scales,
+    int rows, int rows_pack, int half, int rule
+) {
+    long row = blockIdx.x;
+    if (row >= rows) {
+        fv_nvfp4_pad_row(row, rows_pack, half, packed, scales);
+        return;
+    }
+    float amax = *amax_ptr;
+    float e2 = rule == 1 ? 4.0f : 6.0f;
+    long xb = row * 2 * (long)half;
+    for (int j0 = 0; j0 < half; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= half) continue;
+        int j = j0 + threadIdx.x;
+        float v = fv_bf16_to_f32(x[xb + j]);
+        float gt = fv_bf16_to_f32(x[xb + half + j]);
+        float sg = 1.0f / (1.0f + expf(-gt));
+        fv_nvfp4_store_lane(fv_r16(v * (gt * sg)), row, j, half, amax, e2, packed, scales);
+    }
+}
+
 // ==== endregion: DiT block fusions ====
 
 // ==== region: Wan block (bf16 activations) ====

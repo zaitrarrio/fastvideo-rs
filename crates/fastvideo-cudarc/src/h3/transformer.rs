@@ -2093,6 +2093,19 @@ impl FeedForward {
                 return phase("h3_ffn_out", || self.ff_out.forward_mx(&act, vec![1, rows, hidden]));
             }
         }
+        // A published NVFP4 down projection with a static activation scale
+        // takes the SwiGLU as its NVFP4 operand (FASTVIDEO_H3_GLUE).
+        #[cfg(feature = "cuda")]
+        if let Some(stack) = self.ff_out.nvfp4_stack() {
+            if let Some(amax) = stack.static_act_amax() {
+                if let Some(a) = phase("h3_ffn_act", || fused16::swiglu_nvfp4(&h, amax, stack.rule()))? {
+                    drop(h);
+                    return phase("h3_ffn_out", || {
+                        self.ff_out.forward_nvfp4_operand(&a, vec![1, rows, hidden])
+                    });
+                }
+            }
+        }
         let _ = (rows, hidden);
         let act = phase("h3_ffn_act", || h.swiglu_value_first())?;
         drop(h);

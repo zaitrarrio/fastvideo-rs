@@ -94,9 +94,47 @@ pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     with_bf16_act(true, || timing(report, seed))
 }
 
+/// The bytes of an NVFP4 operand: codes of the padded rows, every scale, the
+/// tensor amax.
+fn nvfp4_bytes(a: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand) -> anyhow::Result<(Vec<u8>, Vec<u8>, f32)> {
+    let d = dev()?;
+    Ok((
+        d.stream.memcpy_dtov(&a.packed)?,
+        d.stream.memcpy_dtov(&a.scales)?,
+        d.stream.memcpy_dtov(&a.amax)?[0],
+    ))
+}
+
+fn check_nvfp4(
+    report: &mut Report,
+    name: &str,
+    got: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+    want: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+) -> StageResult<()> {
+    let (gq, gs, ga) = nvfp4_bytes(got)?;
+    let (wq, ws, wa) = nvfp4_bytes(want)?;
+    let dq = gq.iter().zip(&wq).filter(|(a, b)| a != b).count();
+    let ds = gs.iter().zip(&ws).filter(|(a, b)| a != b).count();
+    let ok = gq.len() == wq.len()
+        && gs.len() == ws.len()
+        && dq == 0
+        && ds == 0
+        && ga.to_bits() == wa.to_bits()
+        && (got.rows, got.rows_pack, got.k) == (want.rows, want.rows_pack, want.k);
+    report.check(
+        name,
+        ok,
+        json!({"codes_differing": dq, "scales_differing": ds, "codes": gq.len(), "scales": gs.len(),
+               "amax": ga, "want_amax": wa}),
+        json!({"differing": 0}),
+    )
+}
+
 /// FASTVIDEO_H3_GLUE: every glue fusion against the ops it replaces, bit for
 /// bit (bf16 values, NVFP4 codes / scales / amax).
 fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
+    use fastvideo_cudarc::wan::nvfp4_linear::quantize_bf16_operand_with;
+    use fastvideo_models::nvfp4::ScaleRule;
     let glue = |f: &mut dyn FnMut() -> StageResult<()>| fused16::with_fuse(true, || fused16::with_glue(true, f));
 
     // q/k/v/gate heads in one launch vs qk_norm_rope + split_heads_bhsd.
@@ -180,7 +218,33 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         check_ulps(report, "h3_glue_vsa_bf16_feed", &host(&got.quantize_bf16()?)?, &host(&want)?, true)?;
     }
 
-    Ok(())
+    // SwiGLU -> NVFP4 (static activation amax) vs the bf16 SwiGLU quantized.
+    for (rows, half, amax_v, rule) in [
+        (77usize, 320usize, 3.0f32, ScaleRule::Static6),
+        (200, 192, 0.25, ScaleRule::Static6),
+        (130, 128, 2.0, ScaleRule::Static4),
+    ] {
+        let h = t16(&bf16v(rand(seed, rows * 2 * half, 1.5)), &[1, rows, 2 * half])?;
+        let amax = dev()?.stream.memcpy_stod(&[amax_v])?;
+        let mut got = None;
+        glue(&mut || {
+            got = fused16::swiglu_nvfp4(&h, &amax, rule)?;
+            Ok(())
+        })?;
+        let got = got.ok_or_else(|| anyhow::anyhow!("swiglu_nvfp4 did not apply"))?;
+        let act = h.swiglu_value_first()?;
+        let a16 = act.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("swiglu not device bf16"))?;
+        let want = quantize_bf16_operand_with(quant::ptr(a16), rows, half, false, rule, Some(&amax))?;
+        check_nvfp4(report, &format!("h3_glue_swiglu_nvfp4_{rows}x{half}_{rule:?}"), &got, &want)?;
+    }
+
+    // FASTVIDEO_H3_GLUE=0 declines.
+    let h = t16(&bf16v(rand(seed, 16 * 256, 1.0)), &[1, 16, 256])?;
+    let amax = dev()?.stream.memcpy_stod(&[1.0f32])?;
+    let off = fused16::with_glue(false, || -> anyhow::Result<bool> {
+        Ok(fused16::swiglu_nvfp4(&h, &amax, ScaleRule::Static6)?.is_none())
+    })?;
+    report.check("h3_glue_off_declines", off, json!({"declined": off}), json!({"declined": true}))
 }
 
 /// `ltx_rope`: the LTX-2 rotary tables gathered on the device from their

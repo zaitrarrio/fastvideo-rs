@@ -413,6 +413,27 @@ pub fn qkvg_heads(
     dev::qkvg_heads(src, wq, wk, rope, batch, seq, heads, parts, r, width, eps).map(Some)
 }
 
+/// SwiGLU of the bf16 `[.., 2 * half]` up projection written straight as the
+/// NVFP4 operand of a down projection whose activation scale is static
+/// (`amax`): the bytes `quantize_bf16_operand_with` writes for the bf16
+/// SwiGLU. Device only; `None` unless [`glue_enabled`] and `half % 64 == 0`.
+#[cfg(feature = "cuda")]
+pub fn swiglu_nvfp4(
+    h: &CudaTensor,
+    amax: &cudarc::driver::CudaSlice<f32>,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    let last = *h.shape.last().unwrap_or(&0);
+    let half = last / 2;
+    if !glue_enabled() || half == 0 || !half.is_multiple_of(64) || !h.is_bf16() || !h.is_device_fresh() {
+        return Ok(None);
+    }
+    let Some(src) = h.device_slice_bf16() else {
+        return Ok(None);
+    };
+    dev::swiglu_nvfp4(src, h.numel() / last, half, amax, rule)
+}
+
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
 use crate::wan::{device, stats};
@@ -785,6 +806,67 @@ mod dev {
         let v = it.next().unwrap().into_tensor(shape.clone())?;
         let g = it.next().map(|g| g.into_tensor(shape)).transpose()?;
         Ok((q, k, v, g))
+    }
+
+    fn rule_code(rule: fastvideo_models::nvfp4::ScaleRule) -> Option<i32> {
+        match rule {
+            fastvideo_models::nvfp4::ScaleRule::Static6 => Some(0),
+            fastvideo_models::nvfp4::ScaleRule::Static4 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// An empty NVFP4 operand for `rows x k` (`quantize_bf16_operand_with`'s
+    /// buffers); every byte is written by the producer kernel.
+    fn nvfp4_alloc(rows: usize, k: usize) -> Result<crate::wan::nvfp4_linear::Nvfp4Operand> {
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let rows_pack = rows.next_multiple_of(16);
+        let rows_scale = rows.next_multiple_of(128);
+        // SAFETY: the producer writes every code of rows_pack rows and every
+        // scale of rows_scale rows (fv_nvfp4_pad_row for the padding).
+        let packed = unsafe { dev.stream.alloc::<u8>(rows_pack * k / 2) }.map_err(err)?;
+        let scales = unsafe { dev.stream.alloc::<u8>(rows_scale * (k / 16)) }.map_err(err)?;
+        let amax = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
+        Ok(crate::wan::nvfp4_linear::Nvfp4Operand {
+            packed,
+            scales,
+            amax,
+            rows,
+            rows_pack,
+            k,
+        })
+    }
+
+    fn nvfp4_cfg(rows: usize) -> cudarc::driver::LaunchConfig {
+        cudarc::driver::LaunchConfig {
+            grid_dim: (rows.next_multiple_of(128) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        }
+    }
+
+    pub(super) fn swiglu_nvfp4(
+        src: &cudarc::driver::CudaSlice<half::bf16>,
+        rows: usize,
+        half: usize,
+        amax: &cudarc::driver::CudaSlice<f32>,
+        rule: fastvideo_models::nvfp4::ScaleRule,
+    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+        let Some(code) = rule_code(rule) else {
+            return Ok(None);
+        };
+        if amax.len() != 1 || rows == 0 {
+            return Ok(None);
+        }
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let mut a = nvfp4_alloc(rows, half)?;
+        dev.stream.memcpy_dtod(amax, &mut a.amax).map_err(err)?;
+        let (sp, ap, pp, scp) = (ptr(src), ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
+        let (rows_i, pack_i, half_i) = (rows as i32, a.rows_pack as i32, half as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_swiglu_nvfp4, nvfp4_cfg(rows);
+            &sp, &ap, &pp, &scp, &rows_i, &pack_i, &half_i, &code)
+        .map_err(err)?;
+        Ok(Some(a))
     }
 
     pub(super) fn swiglu_mx(h: &CudaTensor) -> Result<Option<MxAct>> {
