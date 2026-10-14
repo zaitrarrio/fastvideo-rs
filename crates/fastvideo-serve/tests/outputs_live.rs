@@ -25,7 +25,11 @@
 //!   must be present and not silent (`stream_outputs::hls::AudioLevels::
 //!   audible`). These streams queue 19 more clips after the prompt so the
 //!   audio keeps playing (a clip plays once, then the stream holds in
-//!   silence). Each case prints ingest-to-playable time. Every input and its
+//!   silence). From 15 s, 30 s of the input's RTMPS playback (what Cloudflare
+//!   ingested, passed through) are read too. SRT is judged on that ingest
+//!   (audible) plus an AAC rendition in its HLS, because Cloudflare's HLS of
+//!   an SRT input lags and skips most of the input (docs/serve/
+//!   stream-outputs.md "Cloudflare SRT HLS"); RTMPS on the HLS audio. Each case prints ingest-to-playable time. Every input and its
 //!   recordings are deleted.
 //!
 //! - `FV_TEST_OUTPUTS_MEDIAMTX=1` also runs `mediamtx_director_copy_carries_audio`:
@@ -420,6 +424,146 @@ async fn next_msg(peer: &mut fastvideo_webrtc::host::Peer, ty: &str) -> Value {
     })
     .await
     .unwrap_or_else(|_| panic!("no {ty}"))
+}
+
+/// One stream of a recording, in [`av_report`].
+#[derive(Default)]
+struct StreamStats {
+    packets: usize,
+    first: Option<f64>,
+    last: f64,
+    max_step: f64,
+    bytes: u64,
+}
+
+/// What a recorded MPEG-TS / FLV holds, per stream, from ffprobe's packets
+/// in demux order: packets, first and last PTS, the largest PTS step, the
+/// worst interleave (how far one stream's DTS runs ahead of the other's in
+/// file order), and audio levels.
+fn av_report(file: &FsPath) -> Value {
+    let f = file.to_string_lossy().into_owned();
+    let out = Command::new(fastvideo_media::tools::ffprobe_bin())
+        .args(["-v", "error", "-show_entries", "packet=codec_type,pts_time,dts_time,size", "-of", "json", &f])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    let pk = v["packets"].as_array().cloned().unwrap_or_default();
+    let t = |p: &Value, k: &str| p[k].as_str().and_then(|x| x.parse::<f64>().ok());
+    let mut per: BTreeMap<String, StreamStats> = BTreeMap::new();
+    let (mut last_v, mut last_a, mut lead) = (None::<f64>, None::<f64>, 0.0f64);
+    for p in &pk {
+        let ty = p["codec_type"].as_str().unwrap_or("?").to_owned();
+        let pts = t(p, "pts_time");
+        let dts = t(p, "dts_time").or(pts);
+        let e = per.entry(ty.clone()).or_default();
+        e.packets += 1;
+        e.bytes += p["size"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0);
+        if let Some(x) = pts {
+            if e.first.is_none() {
+                e.first = Some(x);
+            } else {
+                e.max_step = e.max_step.max(x - e.last);
+            }
+            e.last = x;
+        }
+        match ty.as_str() {
+            "video" => last_v = dts,
+            "audio" => last_a = dts,
+            _ => {}
+        }
+        if let (Some(a), Some(b)) = (last_v, last_a) {
+            lead = lead.max((a - b).abs());
+        }
+    }
+    let streams: Value = per
+        .iter()
+        .map(|(k, e)| {
+            (k.clone(), json!({"packets": e.packets, "first_pts": e.first, "last_pts": e.last, "max_pts_step": e.max_step, "bytes": e.bytes}))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    let pcm = Command::new(fastvideo_media::tools::ffmpeg_bin())
+        .args(["-v", "error", "-nostdin", "-i", &f, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+        .output()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+    let levels = (!pcm.is_empty()).then(|| hls::AudioLevels::from_s16le(&pcm, 48_000));
+    json!({"streams": streams, "max_interleave_s": lead, "audio_levels": levels})
+}
+
+/// The SRT and RTMP sinks against local ffmpeg listeners (no MediaMTX, no
+/// Cloudflare): fake H3 with 20 clips queued for `FV_TEST_LOCAL_AV_SECONDS`
+/// (40); each recording must hold audible audio from its first seconds,
+/// audio and video PTS that start together and run without gaps, and an
+/// interleave within a second. `FV_TEST_OUTPUTS_LOCAL_AV=1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_srt_and_rtmp_recordings_carry_audio() {
+    if !on("FV_TEST_OUTPUTS_LOCAL_AV") {
+        eprintln!("skipping: FV_TEST_OUTPUTS_LOCAL_AV not set");
+        return;
+    }
+    let secs: u64 = std::env::var("FV_TEST_LOCAL_AV_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+    let protocols = ffmpeg_protocols();
+    let a = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    for kind in ["srt", "rtmp"] {
+        if kind == "srt" && !(has_protocol(&protocols, "srt") || has_protocol(&protocols, "libsrt")) {
+            println!("RESULT srt: skipped (no libsrt)");
+            continue;
+        }
+        let port = free_port();
+        let (listen, output, file) = match kind {
+            "srt" => (
+                vec!["-i".to_owned(), format!("srt://127.0.0.1:{port}?mode=listener")],
+                json!({"kind": "srt", "url": format!("srt://127.0.0.1:{port}")}),
+                dir.path().join("srt.ts"),
+            ),
+            _ => (
+                vec!["-listen".to_owned(), "1".to_owned(), "-i".to_owned(), format!("rtmp://127.0.0.1:{port}/live/fvlocal")],
+                json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{port}/live"), "stream_key": "fvlocal"}),
+                dir.path().join("rtmp.flv"),
+            ),
+        };
+        let mut rec = Command::new(fastvideo_media::tools::ffmpeg_bin())
+            .args(["-v", "error", "-nostdin", "-y"])
+            .args(&listen)
+            .args(["-c", "copy"])
+            .arg(&file)
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let more: Vec<Value> = (0..19).map(|i| json!({"prompt": format!("a lighthouse, shot {i}")})).collect();
+        let body = json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "clips": more, "output": output});
+        let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body)).await;
+        assert_eq!(s, StatusCode::CREATED, "{kind}: {v}");
+        let id = v["id"].as_str().unwrap().to_owned();
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+        let (_, st) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
+        call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
+        let t = Instant::now();
+        while rec.try_wait().ok().flatten().is_none() && t.elapsed() < Duration::from_secs(15) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let _ = rec.kill();
+        let _ = rec.wait();
+        let r = av_report(&file);
+        println!("RESULT {kind}: server {}; recording {r}", st["status"]);
+        let l = &r["audio_levels"];
+        let per = l["rms_dbfs_per_second"].as_array().cloned().unwrap_or_default();
+        let a_first = r["streams"]["audio"]["first_pts"].as_f64();
+        let v_first = r["streams"]["video"]["first_pts"].as_f64();
+        let ok = l["audible_seconds"].as_u64().unwrap_or(0) as f64 >= (secs as f64 * 0.7)
+            && per.iter().take(5).filter(|d| d.as_f64().unwrap_or(-120.0) > hls::AUDIBLE_RMS_DBFS).count() >= 3
+            && matches!((a_first, v_first), (Some(x), Some(y)) if (x - y).abs() < 1.0)
+            && r["streams"]["audio"]["max_pts_step"].as_f64().is_some_and(|s| s < 0.5)
+            && r["max_interleave_s"].as_f64().is_some_and(|s| s < 1.0);
+        if !ok {
+            failures.push(kind);
+        }
+    }
+    assert!(failures.is_empty(), "recordings without clean audio: {failures:?}");
 }
 
 /// Director output copies carry the session's audio (gpu-check-2026-10-13
@@ -915,6 +1059,27 @@ async fn cloudflare_live_each_kind() {
                 // from when HLS serves a decodable segment.
                 let uid = pb["live_input_id"].as_str().unwrap_or_default().to_owned();
                 let mut connected: Option<Duration> = None;
+                // What Cloudflare ingested, apart from its HLS: 30 s of the input's
+                // RTMPS playback (a pass-through) from 15 s after the create, while
+                // the queued clips still play (their audio ends after ~100 s).
+                let mut ingest_task = Some({
+                    let (http, api, uid, token) = (http.clone(), api.clone(), uid.clone(), token.clone());
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                        let v: Value = match http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await {
+                            Ok(r) => r.json().await.unwrap_or(Value::Null),
+                            Err(_) => Value::Null,
+                        };
+                        let pb = &v["result"]["rtmpsPlayback"];
+                        match (pb["url"].as_str(), pb["streamKey"].as_str()) {
+                            (Some(u), Some(k)) => {
+                                let f = std::env::temp_dir().join(format!("fv-cf-{name}-ingest.flv"));
+                                Some(hls::read_rtmps_playback(u, k, 30, &f).await)
+                            }
+                            _ => None,
+                        }
+                    })
+                });
                 // SRT's first HLS segment took 68-72 s on 2026-10-13, 95 s
                 // and more than 120 s on 2026-10-14.
                 while t0.elapsed() < Duration::from_secs(secs.max(180)) {
@@ -960,17 +1125,30 @@ async fn cloudflare_live_each_kind() {
                         // The audio: Cloudflare's separate rendition (or muxed), from the oldest segment listed.
                         let afile = std::env::temp_dir().join(format!("fv-cf-{name}-audio.seg"));
                         let deadline = t0 + Duration::from_secs(secs.max(180) + 120);
-                        let audio = match hls::read_audio(&http, &hls, Duration::from_secs(30), deadline, &afile).await {
-                            Ok(a) => {
-                                if !a.audible {
-                                    failures.push(name);
-                                }
-                                format!("audio {} after {:.1}s: {}", if a.audible { "audible" } else { "SILENT OR MISSING" }, t0.elapsed().as_secs_f64(), serde_json::to_string(&a).unwrap_or_default())
-                            }
-                            Err(e) => {
-                                failures.push(name);
-                                format!("audio not read: {e}")
-                            }
+                        let a = hls::read_audio(&http, &hls, Duration::from_secs(30), deadline, &afile).await;
+                        let ingest = ingest_task.take().expect("one HLS read per case").await.ok().flatten();
+                        // RTMPS: the HLS audio rendition must be audible. SRT: Cloudflare's
+                        // SRT HLS lags and skips most of the input (docs/serve/stream-outputs.md
+                        // "Cloudflare SRT HLS"), so there its rendition must be listed and decode
+                        // as AAC, and the audio must be audible in what Cloudflare ingested.
+                        let ingest_ok = ingest.as_ref().is_some_and(|i| i.audible);
+                        let ok = match &a {
+                            Ok(a) if name == "srt" => a.codec.as_deref() == Some("aac") && ingest_ok,
+                            Ok(a) => a.audible,
+                            Err(_) => false,
+                        };
+                        if !ok {
+                            failures.push(name);
+                        }
+                        let ingest = serde_json::to_string(&ingest).unwrap_or_default();
+                        let audio = match a {
+                            Ok(a) => format!(
+                                "audio {} after {:.1}s: HLS {}; ingest (RTMPS playback) {ingest}",
+                                if ok { "ok" } else { "SILENT OR MISSING" },
+                                t0.elapsed().as_secs_f64(),
+                                serde_json::to_string(&a).unwrap_or_default()
+                            ),
+                            Err(e) => format!("audio not read: {e}; ingest (RTMPS playback) {ingest}"),
                         };
                         format!(
                             "HLS: ingest-to-playable {:.1}s (create -> first segment that decodes; Cloudflare showed the input connected after {:?}); {info}; decoded (codec, frames, keyframes, w, h) {d:?}; luma {l:?}; {dash_info}; {audio}",

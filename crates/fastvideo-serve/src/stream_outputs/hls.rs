@@ -321,7 +321,9 @@ fn round1(x: f64) -> f64 {
 }
 
 #[cfg(feature = "http-client")]
-pub use readback::{read_audio, AudioReadback};
+pub use readback::{
+    measure, read_audio, read_rtmps_playback, AudioReadback, IngestAudio, Measured,
+};
 
 #[cfg(feature = "http-client")]
 mod readback {
@@ -347,6 +349,10 @@ mod readback {
         pub playlist_uri: String,
         /// From the call to the first poll that listed a segment.
         pub listed_after_ms: u64,
+        /// From that first listing to the end of the read: with
+        /// `segment_seconds`, how fast the playlist grew (a live playlist
+        /// grows by about one second of media per second).
+        pub read_ms: u64,
         /// The first poll: media sequence of its oldest segment and how
         /// many it listed (a sequence of 0 is the start of the stream).
         pub first_sequence: u64,
@@ -462,9 +468,28 @@ mod readback {
                 Err(e) => tracing::debug!(error = %e, "HLS audio poll"),
             }
         }
+        r.read_ms = (t0.elapsed().as_millis() as u64).saturating_sub(r.listed_after_ms);
         r.segment_seconds = (r.segment_seconds * 1000.0).round() / 1000.0;
         std::fs::write(out, &file).map_err(|e| e.to_string())?;
-        let f = out.to_string_lossy().into_owned();
+        let m = measure(out)?;
+        (r.codec, r.sample_rate, r.channels, r.levels) =
+            (m.codec, m.sample_rate, m.channels, m.levels);
+        r.audible = r.levels.as_ref().is_some_and(AudioLevels::audible);
+        Ok(r)
+    }
+
+    /// The first audio stream of a media file: codec, rate, channels and
+    /// levels (decoded to 48 kHz mono).
+    #[derive(Clone, Debug, Default, serde::Serialize)]
+    pub struct Measured {
+        pub codec: Option<String>,
+        pub sample_rate: Option<u32>,
+        pub channels: Option<u32>,
+        pub levels: Option<AudioLevels>,
+    }
+
+    pub fn measure(file: &Path) -> Result<Measured, String> {
+        let f = file.to_string_lossy().into_owned();
         let probe = Command::new(fastvideo_media::tools::ffprobe_bin())
             .args([
                 "-v",
@@ -481,10 +506,13 @@ mod readback {
             .map_err(|e| format!("ffprobe: {e}"))?;
         let v: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap_or_default();
         let s = &v["streams"][0];
-        r.codec = s["codec_name"].as_str().map(str::to_owned);
-        r.sample_rate = s["sample_rate"].as_str().and_then(|x| x.parse().ok());
-        r.channels = s["channels"].as_u64().map(|c| c as u32);
-        if r.codec.is_some() {
+        let mut m = Measured {
+            codec: s["codec_name"].as_str().map(str::to_owned),
+            sample_rate: s["sample_rate"].as_str().and_then(|x| x.parse().ok()),
+            channels: s["channels"].as_u64().map(|c| c as u32),
+            levels: None,
+        };
+        if m.codec.is_some() {
             let pcm = Command::new(fastvideo_media::tools::ffmpeg_bin())
                 .args([
                     "-v", "error", "-nostdin", "-i", &f, "-map", "0:a:0", "-ac", "1", "-ar",
@@ -493,11 +521,119 @@ mod readback {
                 .output()
                 .map_err(|e| format!("ffmpeg: {e}"))?;
             if !pcm.stdout.is_empty() {
-                r.levels = Some(AudioLevels::from_s16le(&pcm.stdout, 48_000));
+                m.levels = Some(AudioLevels::from_s16le(&pcm.stdout, 48_000));
             }
         }
-        r.audible = r.levels.as_ref().is_some_and(AudioLevels::audible);
-        Ok(r)
+        Ok(m)
+    }
+
+    /// What [`read_rtmps_playback`] heard.
+    #[derive(Clone, Debug, Default, serde::Serialize)]
+    pub struct IngestAudio {
+        #[serde(flatten)]
+        pub measured: Measured,
+        pub audible: bool,
+        /// ffmpeg's error lines (the playback key removed), when it failed.
+        pub error: Option<String>,
+    }
+
+    /// Records `secs` seconds of a Cloudflare live input's **RTMPS
+    /// playback** (`rtmpsPlayback.url` + `streamKey`: what the input
+    /// ingested, passed through without the HLS transcode) into `out` (FLV)
+    /// and measures its audio. ffmpeg plays plain RTMP to fastvideo's
+    /// verified TLS relay ([`crate::stream_outputs::rtmps`]), so the build
+    /// pod's static ffmpeg (no DNS) works too. The key never appears in the
+    /// result.
+    pub async fn read_rtmps_playback(url: &str, key: &str, secs: u64, out: &Path) -> IngestAudio {
+        use crate::stream_outputs::rtmps::{client_config, RtmpsRelay, TlsTarget};
+        let fail = |e: String| IngestAudio {
+            error: Some(e.replace(key, "<key>")),
+            ..IngestAudio::default()
+        };
+        let u = match url::Url::parse(url) {
+            Ok(u) if u.scheme() == "rtmps" => u,
+            _ => return fail("the RTMPS playback URL is not rtmps://".into()),
+        };
+        let (Some(host), port) = (u.host_str().map(str::to_owned), u.port().unwrap_or(443)) else {
+            return fail("the RTMPS playback URL has no host".into());
+        };
+        let addrs: Vec<std::net::SocketAddr> =
+            match tokio::net::lookup_host((host.as_str(), port)).await {
+                Ok(a) => a.collect(),
+                Err(e) => return fail(format!("resolve {host}: {e}")),
+            };
+        let cfg = match client_config(true, None) {
+            Ok(c) => c,
+            Err(e) => return fail(e),
+        };
+        let relay = match RtmpsRelay::start(
+            TlsTarget {
+                host: host.clone(),
+                port,
+                addrs,
+            },
+            cfg,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return fail(format!("relay: {e}")),
+        };
+        let app = u.path().trim_end_matches('/').to_owned();
+        let local = format!("rtmp://127.0.0.1:{}{app}/{key}", relay.port());
+        let tc = format!("rtmps://{host}:{port}{app}");
+        let file = out.to_owned();
+        let run = tokio::task::spawn_blocking(move || {
+            Command::new(fastvideo_media::tools::ffmpeg_bin())
+                .args([
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    "-rtmp_tcurl",
+                    &tc,
+                    "-rtmp_live",
+                    "live",
+                    "-rw_timeout",
+                    "20000000",
+                ])
+                .args([
+                    "-i",
+                    &local,
+                    "-t",
+                    &secs.to_string(),
+                    "-c",
+                    "copy",
+                    "-f",
+                    "flv",
+                ])
+                .arg(&file)
+                .output()
+        });
+        let stderr = match tokio::time::timeout(Duration::from_secs(secs + 60), run).await {
+            Ok(Ok(Ok(o))) => String::from_utf8_lossy(&o.stderr).into_owned(),
+            Ok(Ok(Err(e))) => return fail(format!("ffmpeg: {e}")),
+            _ => return fail("ffmpeg did not finish".into()),
+        };
+        drop(relay);
+        let m = match measure(out) {
+            Ok(m) => m,
+            Err(e) => return fail(e),
+        };
+        let audible = m.levels.as_ref().is_some_and(AudioLevels::audible);
+        let error = (m.codec.is_none()).then(|| {
+            stderr
+                .lines()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(" | ")
+                .replace(key, "<key>")
+        });
+        IngestAudio {
+            measured: m,
+            audible,
+            error,
+        }
     }
 
     /// The master (or a bare media playlist) → the audio playlist to follow
@@ -515,6 +651,7 @@ mod readback {
             variant: None,
             playlist_uri: String::new(),
             listed_after_ms: 0,
+            read_ms: 0,
             first_sequence: 0,
             first_listed: 0,
             polls: 0,
