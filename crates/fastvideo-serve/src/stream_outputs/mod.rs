@@ -29,6 +29,9 @@ pub mod cloudflare;
 #[cfg(all(feature = "webrtc", feature = "http-client"))]
 pub mod publish;
 
+#[cfg(feature = "http-client")]
+pub mod rtmps;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -95,6 +98,8 @@ impl std::fmt::Debug for CloudflareAccount {
 pub struct OutputsConfig {
     pub policy: UrlPolicy,
     pub srt_latency_ms: u32,
+    /// Extra CA certificates (PEM) RTMPS trusts besides the system roots.
+    pub rtmps_ca_file: Option<std::path::PathBuf>,
     /// `None`: no Cloudflare default (account id or token missing).
     pub cloudflare: Option<CloudflareAccount>,
     /// The server's default WHIP bearer token (`FV_WHIP_TOKEN`), for kind
@@ -127,6 +132,7 @@ impl Default for OutputsConfig {
         Self {
             policy: UrlPolicy::default(),
             srt_latency_ms: 1000,
+            rtmps_ca_file: None,
             cloudflare: None,
             whip_token: None,
             whip_target: None,
@@ -157,6 +163,7 @@ impl OutputsConfig {
         let mut s = Self {
             policy: UrlPolicy { allow_private: o.allow_private },
             srt_latency_ms: o.srt_latency_ms.clamp(20, 8000),
+            rtmps_ca_file: o.rtmps_ca_file.clone(),
             cloudflare,
             whip_token: (!c.webrtc.whip_token.is_empty()).then(|| c.webrtc.whip_token.expose().to_owned()),
             whip_target: c.webrtc.whip_target.clone(),

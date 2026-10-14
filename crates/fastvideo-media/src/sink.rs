@@ -258,6 +258,11 @@ pub struct SinkConfig {
     pub queue_ticks: usize,
     /// NVENC in production.
     pub encoder: FfmpegH264,
+    /// RTMP only: the `tcUrl` ffmpeg announces (`-rtmp_tcurl`) when the URL
+    /// it connects to is not the one the server knows itself by: fastvideo
+    /// connects ffmpeg to a pinned IP (plain RTMP) or to its own TLS relay on
+    /// loopback (RTMPS). No credentials (the key is in the URL's path).
+    pub rtmp_tc_url: Option<String>,
 }
 
 impl SinkConfig {
@@ -272,6 +277,7 @@ impl SinkConfig {
             aac: AudioTarget::BROADCAST,
             queue_ticks: (fps as usize) * 2,
             encoder: FfmpegH264::Nvenc,
+            rtmp_tc_url: None,
         }
     }
 
@@ -333,6 +339,9 @@ impl SinkConfig {
         match &self.target {
             SinkTarget::Rtmp { url } => {
                 a.extend(["-flush_packets", "1", "-f", "flv", "-flvflags", "no_duration_filesize"].map(String::from));
+                if let Some(tc) = &self.rtmp_tc_url {
+                    a.extend(["-rtmp_tcurl".to_owned(), tc.clone()]);
+                }
                 a.push(url.clone());
             }
             SinkTarget::Srt { url } => {
@@ -385,6 +394,28 @@ pub struct FfmpegSink {
     run: Option<Running>,
     started_at: Instant,
     stats: SinkStats,
+    /// Why the last ffmpeg exited, until [`FfmpegSink::exit_error`] takes it
+    /// (recorded when a restart reaps it, so a quick restart cannot hide it).
+    last_exit: Option<String>,
+}
+
+/// Why `r`'s ffmpeg exited, once it has: its exit status and its last
+/// stderr lines (scrubbed), read after the stderr reader reached EOF.
+fn exit_reason(r: &mut Running) -> Option<String> {
+    let status = match r.child.try_wait() {
+        Ok(Some(s)) => s,
+        Ok(None) => return None,
+        Err(e) => return Some(format!("ffmpeg: {e}")),
+    };
+    if let Some(t) = r.stderr_reader.take() {
+        let _ = t.join();
+    }
+    let t = r.stderr.lock().unwrap_or_else(|p| p.into_inner());
+    Some(if t.is_empty() {
+        format!("ffmpeg exited ({status}) without an error message")
+    } else {
+        format!("ffmpeg exited ({status}): {}", t.iter().cloned().collect::<Vec<_>>().join(" | "))
+    })
 }
 
 impl FfmpegSink {
@@ -396,7 +427,7 @@ impl FfmpegSink {
             std::fs::create_dir_all(dir)?;
         }
         let run = Self::spawn(&cfg)?;
-        Ok(Self { cfg, run: Some(run), started_at: Instant::now(), stats: SinkStats::default() })
+        Ok(Self { cfg, run: Some(run), started_at: Instant::now(), stats: SinkStats::default(), last_exit: None })
     }
 
     fn spawn(cfg: &SinkConfig) -> Result<Running> {
@@ -483,7 +514,10 @@ impl FfmpegSink {
         if self.started_at.elapsed() < Duration::from_secs(2) {
             return false;
         }
-        if let Some(r) = self.run.take() {
+        if let Some(mut r) = self.run.take() {
+            if let Some(m) = exit_reason(&mut r) {
+                self.last_exit = Some(m);
+            }
             self.retire(r);
         }
         self.started_at = Instant::now();
@@ -589,6 +623,18 @@ impl FfmpegSink {
         (!t.is_empty()).then(|| t.iter().cloned().collect::<Vec<_>>().join(" | "))
     }
 
+    /// Why ffmpeg exited: the current one if it is dead, else the last one
+    /// a restart reaped (once). Its exit status and last stderr lines
+    /// (scrubbed), read after the stderr reader reached EOF (reading them
+    /// while the reader still drained the pipe gave an empty message).
+    /// `None` when nothing exited since the last call.
+    pub fn exit_error(&mut self) -> Option<String> {
+        if let Some(m) = self.run.as_mut().and_then(exit_reason) {
+            self.last_exit = Some(m);
+        }
+        self.last_exit.take()
+    }
+
     /// Whether ffmpeg is running now (a dead one restarts on the next `send`).
     pub fn is_running(&mut self) -> bool {
         self.run.as_mut().is_some_and(|r| matches!(r.child.try_wait(), Ok(None)))
@@ -657,6 +703,15 @@ mod tests {
         assert!(a.contains("-flags +cgop"));
         assert!(!a.contains("libx264"));
         assert!(a.ends_with("-f flv -flvflags no_duration_filesize rtmp://x/live/k"), "{a}");
+    }
+
+    #[test]
+    fn rtmp_tc_url_names_the_real_server() {
+        let mut c = SinkConfig::new(SinkTarget::Rtmp { url: "rtmp://127.0.0.1:40001/live/k".into() }, 64, 64, 16, None);
+        assert!(!c.ffmpeg_args(None).unwrap().iter().any(|a| a == "-rtmp_tcurl"));
+        c.rtmp_tc_url = Some("rtmps://live.example.com:443/live".into());
+        let a = c.ffmpeg_args(None).unwrap().join(" ");
+        assert!(a.ends_with("-rtmp_tcurl rtmps://live.example.com:443/live rtmp://127.0.0.1:40001/live/k"), "{a}");
     }
 
     #[test]

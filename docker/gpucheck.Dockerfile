@@ -257,7 +257,10 @@ RUN apt-get update \
 # ---- base-os: what every runtime image (CUDA or not) runs on.
 FROM ${UBUNTU} AS base-os
 ARG DEBIAN_FRONTEND=noninteractive
-# libssl3: ffmpeg's TLS (rtmps://, https://), shared by ffmpeg and ffprobe.
+# libssl3: ffmpeg's TLS (https:// inputs), shared by ffmpeg and ffprobe.
+# ca-certificates: the trust store fv-serve verifies RTMPS servers against
+# (its own rustls TLS relay; ffmpeg publishes plain RTMP to it on loopback,
+# docs/serve/stream-outputs.md "RTMPS TLS").
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 libx264-163 libvpx7 libdav1d5 \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old /var/lib/dpkg/*-old \
@@ -269,6 +272,7 @@ COPY --from=ffmpeg-build /out/ffmpeg /out/ffprobe /usr/local/bin/
 RUN for f in /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do \
       if ldd "$f" | grep 'not found'; then echo "unresolved dependency of $f"; exit 1; fi; \
     done \
+ && test -s /etc/ssl/certs/ca-certificates.crt \
  && ffmpeg -hide_banner -protocols | tr -s ' ' '\n' | grep -qx rtmps \
  && ffmpeg -hide_banner -protocols | tr -s ' ' '\n' | grep -qx srt \
  && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
