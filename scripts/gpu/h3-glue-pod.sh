@@ -81,8 +81,8 @@ if [[ "$FV_WEIGHTS_MODE" == r2 ]]; then
 else
   tpid=""
 fi
-# r2 mode: the NVFP4 tree after the turbo trees (one stream at a time is as fast as two).
-( [[ -n "$tpid" ]] && wait "$tpid"; step fetch-nvfp4 nvfp4_weights ) & npid=$!
+# Both fetches run at once (a subshell cannot wait for its sibling); the timing waits for both.
+step fetch-nvfp4 nvfp4_weights & npid=$!
 
 # ---- 2. kernels ---------------------------------------------------------------------------------------------------
 step kernels "$N" --mode fast --out $SRV/gc --keep-going kernels --groups dit_fusion,nvfp4_linear --seed 17 \
@@ -133,6 +133,8 @@ if [[ "${FV_ONLY_NVFP4:-0}" != 1 ]]; then
     step "trace-turbo-$bin" traced turbo "$b" $SRV/trace-turbo-$bin --no-mp4
   done
 fi
+# r2 mode: V2 also reads h3-base's encoder and VAEs (plan-turbo.json), so both fetches must be done.
+[[ -n "$tpid" ]] && wait "$tpid"
 wait "$npid"
 for bin in base new; do
   b=$B; [[ $bin == new ]] && b=$N
