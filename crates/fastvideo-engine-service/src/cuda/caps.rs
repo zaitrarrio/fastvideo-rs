@@ -734,7 +734,7 @@ fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
 }
 
 /// Turns the native 1080P tier off on every H3 model when the GPU has less
-/// memory than the tier's plan (`plan_1080p_min_device_bytes`, about 72 GiB:
+/// memory than the tier's plan (`plan_1080p_min_device_bytes`, about 73.5 GiB:
 /// 80 GB and 96 GB cards keep it, 48 GB ones do not). `device_total` is the
 /// device's memory (under `FASTVIDEO_DEVICE_BUDGET_GIB`, the budget); `None`
 /// (not known) turns it off. Returns what it turned off, for the log.
