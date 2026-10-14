@@ -80,19 +80,26 @@ fn mx_of(x: &CudaSlice<bf16>, rows: usize, k: usize) -> anyhow::Result<MxAct> {
 }
 
 fn mx_equal(a: &MxAct, b: &MxAct) -> anyhow::Result<(usize, usize)> {
-    Ok((mism(&bytes(&a.q)?, &bytes(&b.q)?), mism(&bytes(&a.s)?, &bytes(&b.s)?)))
+    Ok((
+        mism(&bytes(&a.q)?, &bytes(&b.q)?),
+        mism(&bytes(&a.s)?, &bytes(&b.s)?),
+    ))
 }
 
 pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
     if c.only.is_none() {
-        c.report
-            .note("h3vae_bench_skipped", json!({"why": "opt-in: --groups h3vae_bench"}));
+        c.report.note(
+            "h3vae_bench_skipped",
+            json!({"why": "opt-in: --groups h3vae_bench"}),
+        );
         return Ok(());
     }
     let d = dev()?;
     if d.sm_major < 8 {
-        c.report
-            .note("h3vae_bench_skipped", json!({"sm_major": d.sm_major, "needs": "sm80+"}));
+        c.report.note(
+            "h3vae_bench_skipped",
+            json!({"sm_major": d.sm_major, "needs": "sm80+"}),
+        );
         return Ok(());
     }
     let tiles: Vec<usize> = std::env::var("FV_H3VAE_TILES")
@@ -170,7 +177,14 @@ fn gemms(c: &mut Ctx<'_>, t: usize, rows: usize) -> StageResult<()> {
             }
         }
         // MXFP8: weight quantized once; activation quantize timed apart.
-        let layout = QuantLayout::new(QuantKind::Mxfp8, k, vec![Section { rows: n, quantized: true }])?;
+        let layout = QuantLayout::new(
+            QuantKind::Mxfp8,
+            k,
+            vec![Section {
+                rows: n,
+                quantized: true,
+            }],
+        )?;
         let qw = QuantWeight::from_device_bf16(layout, &w)?;
         let mut act = MxAct::alloc(rows, k)?;
         let sq = median3(&mut || {
@@ -235,8 +249,15 @@ fn sdpa(c: &mut Ctx<'_>, t: usize) -> StageResult<()> {
         })?;
         let o = attn::device_mma_sdpa_with(&q, &k, &v, None, true, kernel)?
             .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
-        let b = bits(o.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("not bf16"))?, n)?;
-        row.insert(kname.into(), json!({"ms": s * 1e3, "tflops": flops / s / 1e12}));
+        let b = bits(
+            o.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("not bf16"))?,
+            n,
+        )?;
+        row.insert(
+            kname.into(),
+            json!({"ms": s * 1e3, "tflops": flops / s / 1e12}),
+        );
         outs.insert(kname, b);
     }
     let s = median3(&mut || {
@@ -246,7 +267,11 @@ fn sdpa(c: &mut Ctx<'_>, t: usize) -> StageResult<()> {
     })?;
     let o = attn::device_mma_sdpa(&q, &k, &v, None, true)?
         .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
-    let b = bits(o.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("not bf16"))?, n)?;
+    let b = bits(
+        o.device_slice_bf16()
+            .ok_or_else(|| anyhow::anyhow!("not bf16"))?,
+        n,
+    )?;
     let same_as: Vec<&str> = outs
         .iter()
         .filter(|(_, v)| **v == b)
@@ -256,7 +281,10 @@ fn sdpa(c: &mut Ctx<'_>, t: usize) -> StageResult<()> {
         "auto".into(),
         json!({"ms": s * 1e3, "tflops": flops / s / 1e12, "bit_equal_to": same_as}),
     );
-    row.insert("v1_vs_v2_mismatches".into(), json!(mism(&outs["v1"], &outs["v2"])));
+    row.insert(
+        "v1_vs_v2_mismatches".into(),
+        json!(mism(&outs["v1"], &outs["v2"])),
+    );
     row.insert(
         "cudnn_vs_v2_rel_l2".into(),
         json!(rel_l2(&outs["cudnn"], &outs["v2"])),
@@ -292,7 +320,11 @@ fn elementwise(c: &mut Ctx<'_>, t: usize, rows: usize) -> StageResult<()> {
     );
     let (_, n16) =
         ops::h3v_residual_norm_bf16_device(&x, DIM, Some((&upd, &bias, &scale)), Some(&w), 1e-6)?;
-    let want = mx_of(n16.as_ref().ok_or_else(|| anyhow::anyhow!("no norm"))?, rows, DIM)?;
+    let want = mx_of(
+        n16.as_ref().ok_or_else(|| anyhow::anyhow!("no norm"))?,
+        rows,
+        DIM,
+    )?;
     let mut got = MxAct::alloc(rows, DIM)?;
     let s = median3(&mut || {
         ops::h3v_residual_norm_mx_device(&x, DIM, Some((&upd, &bias, &scale)), &w, 1e-6, &mut got)?;
@@ -323,7 +355,10 @@ fn elementwise(c: &mut Ctx<'_>, t: usize, rows: usize) -> StageResult<()> {
         let o = ops::h3v_qkv_heads_bf16_device_with(
             vec, &qkv, &qb, &cs, &sn, t, TOKENS, HEADS, HEAD_D, ROTARY, 1e-6,
         )?;
-        let b: Vec<Vec<u16>> = o.iter().map(|s| bits(s, rows * DIM)).collect::<anyhow::Result<_>>()?;
+        let b: Vec<Vec<u16>> = o
+            .iter()
+            .map(|s| bits(s, rows * DIM))
+            .collect::<anyhow::Result<_>>()?;
         row.insert(
             format!("qkv_heads{}", if vec { "_vec" } else { "" }),
             json!({"ms": s * 1e3, "gb_s": gbs(qkv_bytes, s)}),
@@ -381,7 +416,10 @@ fn elementwise(c: &mut Ctx<'_>, t: usize, rows: usize) -> StageResult<()> {
         );
         souts.push(o);
     }
-    let sm = mism(&bits(&souts[0], rows * HIDDEN)?, &bits(&souts[1], rows * HIDDEN)?);
+    let sm = mism(
+        &bits(&souts[0], rows * HIDDEN)?,
+        &bits(&souts[1], rows * HIDDEN)?,
+    );
     ok &= sm == 0;
     row.insert("swiglu_vec_bit_mismatches".into(), json!(sm));
     let want = mx_of(&souts[0], rows, HIDDEN)?;

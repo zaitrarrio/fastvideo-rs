@@ -103,7 +103,8 @@ const VEC_DEFAULT: bool = true;
 #[cfg(feature = "cuda")]
 fn gemm_algo() -> Option<usize> {
     static FLAG: crate::wan::envflag::CachedString = crate::wan::envflag::CachedString::new();
-    let v = FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_H3_VAE_GEMM", "cublas"));
+    let v =
+        FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_H3_VAE_GEMM", "cublas"));
     parse_algo(&v, "lt")
 }
 
@@ -748,7 +749,10 @@ impl H3VideoDecoder {
         }
         // Block linear `which` (0 qkv, 1 to_out, 2 ff_in, 3 ff_out) on `act`:
         // bf16 [rows, out] (or [rows_pad, out] from an MXFP8 GEMM, pad rows zero).
-        let gemm = |block: &Block, which: usize, act: &Act| -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+        let gemm = |block: &Block,
+                    which: usize,
+                    act: &Act|
+         -> Result<cudarc::driver::CudaSlice<half::bf16>> {
             let l = [&block.qkv, &block.to_out, &block.ff_in, &block.ff_out][which];
             match act {
                 Act::Mx(a) => block
@@ -797,7 +801,10 @@ impl H3VideoDecoder {
                 Ok((x1, Act::Mx(a)))
             } else {
                 let (x1, n) = ops::h3v_residual_norm_bf16_device(x, dim, update, Some(w), eps)?;
-                Ok((x1, Act::Bf16(n.ok_or_else(|| msg("h3 vae: no normed rows"))?)))
+                Ok((
+                    x1,
+                    Act::Bf16(n.ok_or_else(|| msg("h3 vae: no normed rows"))?),
+                ))
             }
         };
         let (cos, sin) = (dev(cos)?, dev(sin)?);
