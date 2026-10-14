@@ -306,6 +306,34 @@ pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
     out
 }
 
+thread_local! {
+    static GLUE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `FASTVIDEO_H3_GLUE` (default on; needs [`fuse_enabled`]): the glue
+/// fusions around the block's GEMMs and attention (docs/perf/h3-glue-fusion.md)
+/// — VSA fed bf16 q/k/v/gate in place, the q/k/v/gate heads in one kernel,
+/// and the NVFP4 activations written by their producers. Each writes the
+/// bytes of the ops it replaces; `=0` runs those ops.
+pub fn glue_enabled() -> bool {
+    if !fuse_enabled() {
+        return false;
+    }
+    if let Some(v) = GLUE_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_GLUE", true))
+}
+
+/// Run `f` with [`glue_enabled`] forced on or off (parity checks).
+pub fn with_glue<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let prev = GLUE_OVERRIDE.with(|c| c.replace(Some(on)));
+    let out = f();
+    GLUE_OVERRIDE.with(|c| c.set(prev));
+    out
+}
+
 /// `merge_heads(out)` as the MXFP8 activation of a linear over `heads * d`
 /// columns: the bytes `mxfp8_quantize` writes for the merged bf16 tensor.
 /// `out` is `[1, H, S, D]` on the device, bf16 or f32 (rounded to bf16 first,
@@ -344,6 +372,86 @@ pub fn gate_res_norm_mod(
     }
     let _ = (res, branch, w, rows, base_g, gate_slot, base_n, scale_shift, eps, mx);
     Ok(None)
+}
+
+/// q, k, v and the VSA gate of one bf16 `[B, S, W]` projection (columns
+/// `[q | k | v | gate]`, `heads * d` each) as bf16 BHSD in one launch: q and
+/// k exactly as [`qk_norm_rope`], v and the gate as `split_heads_bhsd`.
+/// Device only; `None` unless [`glue_enabled`], `d == 128` and the RoPE
+/// width is a multiple of 8 (the caller runs the separate ops).
+#[cfg(feature = "cuda")]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn qkvg_heads(
+    packed: &CudaTensor,
+    wq: &CudaTensor,
+    wk: &CudaTensor,
+    rope: Option<(&CudaTensor, &CudaTensor)>,
+    heads: usize,
+    d: usize,
+    gate: bool,
+    eps: f32,
+) -> Result<Option<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)>> {
+    let [batch, seq, width] = packed.shape[..] else {
+        return Ok(None);
+    };
+    let parts = if gate { 4 } else { 3 };
+    let r = rope.map_or(0, |(c, _)| c.shape.get(1).copied().unwrap_or(0));
+    if !glue_enabled()
+        || d != 128
+        || !r.is_multiple_of(8)
+        || r > d
+        || !width.is_multiple_of(4)
+        || parts * heads * d > width
+        || !packed.is_bf16()
+        || !packed.is_device_fresh()
+    {
+        return Ok(None);
+    }
+    let Some(src) = packed.device_slice_bf16() else {
+        return Ok(None);
+    };
+    dev::qkvg_heads(src, wq, wk, rope, batch, seq, heads, parts, r, width, eps).map(Some)
+}
+
+/// SwiGLU of the bf16 `[.., 2 * half]` up projection written straight as the
+/// NVFP4 operand of a down projection whose activation scale is static
+/// (`amax`): the bytes `quantize_bf16_operand_with` writes for the bf16
+/// SwiGLU. Device only; `None` unless [`glue_enabled`] and `half % 64 == 0`.
+#[cfg(feature = "cuda")]
+pub fn swiglu_nvfp4(
+    h: &CudaTensor,
+    amax: &cudarc::driver::CudaSlice<f32>,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    let last = *h.shape.last().unwrap_or(&0);
+    let half = last / 2;
+    if !glue_enabled() || half == 0 || !half.is_multiple_of(64) || !h.is_bf16() || !h.is_device_fresh() {
+        return Ok(None);
+    }
+    let Some(src) = h.device_slice_bf16() else {
+        return Ok(None);
+    };
+    dev::swiglu_nvfp4(src, h.numel() / last, half, amax, rule)
+}
+
+/// `merge_heads(out)` (rounded to bf16 when `out` is VSA's f32) written
+/// straight as `to_out`'s NVFP4 operand: the activation amax measured on the
+/// merged bf16 values (or `fixed_amax`, a static scale), then the bytes
+/// `quantize_bf16_operand_with` writes. `out` is `[1, H, S, D]` on the
+/// device. `None` unless [`glue_enabled`] and `H * D % 64 == 0`.
+#[cfg(feature = "cuda")]
+pub fn merge_heads_nvfp4(
+    out: &CudaTensor,
+    fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    let [1, heads, seq, d] = out.shape[..] else {
+        return Ok(None);
+    };
+    if !glue_enabled() || !(heads * d).is_multiple_of(64) || seq == 0 {
+        return Ok(None);
+    }
+    dev::merge_heads_nvfp4(out, heads, seq, d, fixed_amax, rule)
 }
 
 // `launch!` names `super::stats` / `super::device` from its call site.
@@ -664,6 +772,174 @@ mod dev {
                 None => NormOut::T(out16.into_tensor(res.shape.clone())?),
             },
         ))
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(super) fn qkvg_heads(
+        src: &cudarc::driver::CudaSlice<half::bf16>,
+        wq: &CudaTensor,
+        wk: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        batch: usize,
+        seq: usize,
+        heads: usize,
+        parts: usize,
+        r: usize,
+        width: usize,
+        eps: f32,
+    ) -> Result<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)> {
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let d = 128usize;
+        let (wq, wk) = (weight_f32(wq)?, weight_f32(wk)?);
+        let wqo = operand(&wq)?.ok_or_else(|| msg("h3 qkvg heads: norm_q"))?;
+        let wko = operand(&wk)?.ok_or_else(|| msg("h3 qkvg heads: norm_k"))?;
+        let (cos, sin, use_rope) = match rope {
+            Some((c, s)) => (c.to_f32_act()?, s.to_f32_act()?, 1i32),
+            None => (wq.clone(), wq.clone(), 0),
+        };
+        let (co, so) = (
+            operand(&cos)?.ok_or_else(|| msg("rope cos"))?,
+            operand(&sin)?.ok_or_else(|| msg("rope sin"))?,
+        );
+        let n = batch * heads * seq * d;
+        let mut outs: Vec<OutBuf> = (0..parts).map(|_| OutBuf::new(n, true)).collect::<Result<_>>()?;
+        let mut ptrs: Vec<u64> = outs.iter_mut().map(|o| o.ptr()).collect();
+        if parts == 3 {
+            ptrs.push(ptrs[2]);
+        }
+        let items = batch * seq * parts * heads;
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (items.div_ceil(8).max(1) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let sp = ptr(src);
+        let v = [batch, seq, heads, parts, r, width, d].map(|u| u as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_qkvg_heads, cfg;
+            &sp, &wqo.ptr, &wko.ptr, &co.ptr, &so.ptr, &use_rope, &ptrs[0], &ptrs[1], &ptrs[2], &ptrs[3],
+            &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &eps, &v[6])
+        .map_err(err)?;
+        let shape = vec![batch, heads, seq, d];
+        let mut it = outs.into_iter();
+        let q = it.next().unwrap().into_tensor(shape.clone())?;
+        let k = it.next().unwrap().into_tensor(shape.clone())?;
+        let v = it.next().unwrap().into_tensor(shape.clone())?;
+        let g = it.next().map(|g| g.into_tensor(shape)).transpose()?;
+        Ok((q, k, v, g))
+    }
+
+    fn rule_code(rule: fastvideo_models::nvfp4::ScaleRule) -> Option<i32> {
+        match rule {
+            fastvideo_models::nvfp4::ScaleRule::Static6 => Some(0),
+            fastvideo_models::nvfp4::ScaleRule::Static4 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// An empty NVFP4 operand for `rows x k` (`quantize_bf16_operand_with`'s
+    /// buffers); every byte is written by the producer kernel.
+    fn nvfp4_alloc(rows: usize, k: usize) -> Result<crate::wan::nvfp4_linear::Nvfp4Operand> {
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let rows_pack = rows.next_multiple_of(16);
+        let rows_scale = rows.next_multiple_of(128);
+        // SAFETY: the producer writes every code of rows_pack rows and every
+        // scale of rows_scale rows (fv_nvfp4_pad_row for the padding).
+        let packed = unsafe { dev.stream.alloc::<u8>(rows_pack * k / 2) }.map_err(err)?;
+        let scales = unsafe { dev.stream.alloc::<u8>(rows_scale * (k / 16)) }.map_err(err)?;
+        let amax = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
+        Ok(crate::wan::nvfp4_linear::Nvfp4Operand {
+            packed,
+            scales,
+            amax,
+            rows,
+            rows_pack,
+            k,
+        })
+    }
+
+    fn nvfp4_cfg(rows: usize) -> cudarc::driver::LaunchConfig {
+        cudarc::driver::LaunchConfig {
+            grid_dim: (rows.next_multiple_of(128) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        }
+    }
+
+    pub(super) fn swiglu_nvfp4(
+        src: &cudarc::driver::CudaSlice<half::bf16>,
+        rows: usize,
+        half: usize,
+        amax: &cudarc::driver::CudaSlice<f32>,
+        rule: fastvideo_models::nvfp4::ScaleRule,
+    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+        let Some(code) = rule_code(rule) else {
+            return Ok(None);
+        };
+        if amax.len() != 1 || rows == 0 {
+            return Ok(None);
+        }
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let mut a = nvfp4_alloc(rows, half)?;
+        dev.stream.memcpy_dtod(amax, &mut a.amax).map_err(err)?;
+        let (sp, ap, pp, scp) = (ptr(src), ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
+        let (rows_i, pack_i, half_i) = (rows as i32, a.rows_pack as i32, half as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_swiglu_nvfp4, nvfp4_cfg(rows);
+            &sp, &ap, &pp, &scp, &rows_i, &pack_i, &half_i, &code)
+        .map_err(err)?;
+        Ok(Some(a))
+    }
+
+    pub(super) fn merge_heads_nvfp4(
+        out: &CudaTensor,
+        heads: usize,
+        seq: usize,
+        d: usize,
+        fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
+        rule: fastvideo_models::nvfp4::ScaleRule,
+    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+        let Some(code) = rule_code(rule) else {
+            return Ok(None);
+        };
+        let n = heads * seq * d;
+        let (op, o16) = if out.is_bf16() {
+            match out.device_slice_bf16() {
+                Some(o) => (ptr(o), 1i32),
+                None => return Ok(None),
+            }
+        } else {
+            match out.device_slice() {
+                Some(o) => (ptr(o), 0i32),
+                None => return Ok(None),
+            }
+        };
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let k = heads * d;
+        let mut a = nvfp4_alloc(seq, k)?;
+        let nn = n as i64;
+        let amax_cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (n.div_ceil(256).clamp(1, 4096) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        match fixed_amax {
+            Some(f) if f.len() == 1 => dev.stream.memcpy_dtod(f, &mut a.amax).map_err(err)?,
+            Some(_) => return Err(msg("h3 merge nvfp4: the fixed amax is one f32")),
+            // The measured amax of the merged bf16 tensor: the same values in
+            // another order, and max does not depend on the order.
+            None if o16 == 1 => {
+                let g = 0i32;
+                launch!(dev.stream, &dev.kernels.nvfp4_amax_bf16, amax_cfg; &op, &g, &mut a.amax, &nn)
+                    .map_err(err)?
+            }
+            None => launch!(dev.stream, &dev.kernels.fvf_amax_f32_r16, amax_cfg; &op, &mut a.amax, &nn)
+                .map_err(err)?,
+        }
+        let (ap, pp, scp) = (ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
+        let v = [seq, a.rows_pack, heads, d].map(|u| u as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_merge_heads_nvfp4, nvfp4_cfg(seq);
+            &op, &o16, &ap, &pp, &scp, &v[0], &v[1], &v[2], &v[3], &code)
+        .map_err(err)?;
+        Ok(Some(a))
     }
 
     pub(super) fn swiglu_mx(h: &CudaTensor) -> Result<Option<MxAct>> {

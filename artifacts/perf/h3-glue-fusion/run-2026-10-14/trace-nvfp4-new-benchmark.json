@@ -1,0 +1,565 @@
+{
+  "activations": "bf16",
+  "attention": {
+    "dense_video_calls": 0,
+    "forwards": 8,
+    "per_forward": [
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 0,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 0,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 1,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 1,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 2,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 2,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 3,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 3,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 4,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 4,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 5,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 5,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 6,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 6,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 7,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 7,
+        "tau_calls": {},
+        "vsa": 50
+      }
+    ],
+    "pisa_calls": 0,
+    "pisa_sparsity_calls": {},
+    "sol_calls": 0,
+    "tau_calls": {},
+    "video_calls": 400,
+    "vsa_calls": 400
+  },
+  "decode_s": 2.14696881,
+  "denoise_s": 11.484058216,
+  "dit_offload": null,
+  "dtype": "bfloat16",
+  "e2e_seconds": 13.952212513,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_H3_NVFP4_ATTN": "1"
+  },
+  "ffn_chunking": {
+    "calls": 402,
+    "chunked_calls": 0,
+    "chunks": 402
+  },
+  "generate_wall_s": 14.005961955,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "gpu_trace": {
+    "busy_s": 1.385998851,
+    "by_category": [
+      {
+        "calls": 550,
+        "category": "attention",
+        "share": 0.42307021631794056,
+        "total_s": 0.5604713600000001
+      },
+      {
+        "calls": 456,
+        "category": "gemm",
+        "share": 0.3448026185177077,
+        "total_s": 0.45678467800000006
+      },
+      {
+        "calls": 764,
+        "category": "cast",
+        "share": 0.1161905841077401,
+        "total_s": 0.15392597300000002
+      },
+      {
+        "calls": 50,
+        "category": "other",
+        "share": 0.04580876139749771,
+        "total_s": 0.060686141000000006
+      },
+      {
+        "calls": 261,
+        "category": "norm_modulate_elementwise",
+        "share": 0.040806922167093015,
+        "total_s": 0.054059847
+      },
+      {
+        "calls": 309,
+        "category": "layout",
+        "share": 0.0293208974920209,
+        "total_s": 0.038843489
+      }
+    ],
+    "dropped_records": 0,
+    "gap_count": 3136,
+    "gap_histogram": [
+      {
+        "bucket": "<5us",
+        "count": 3091,
+        "idle_s": 0.002247862
+      },
+      {
+        "bucket": "5-50us",
+        "count": 41,
+        "idle_s": 0.00027910500000000003
+      },
+      {
+        "bucket": "50-500us",
+        "count": 2,
+        "idle_s": 0.00040979300000000004
+      },
+      {
+        "bucket": ">500us",
+        "count": 2,
+        "idle_s": 0.049814523000000006
+      }
+    ],
+    "host": {
+      "device_tail_s": 0.06609272956848145,
+      "enqueue_s": 1.372703873,
+      "first_activity_lag_s": 0.00004649162292480469
+    },
+    "host_launches": 2284,
+    "idle_frac": 0.036664658965724205,
+    "idle_s": 0.052751283,
+    "kernel_count": 2390,
+    "kernel_s": 1.324771488,
+    "largest_gaps": [
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.003344618,
+        "before": "mx_block_copy",
+        "gap_us": 47905.333
+      },
+      {
+        "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "at_s": 4.864e-6,
+        "before": "cast_f32_bf16",
+        "gap_us": 1909.19
+      },
+      {
+        "after": "cast_bf16_f32_bias_act",
+        "at_s": 0.00201927,
+        "before": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "gap_us": 345.089
+      },
+      {
+        "after": "h3_norm_mod",
+        "at_s": 0.052613731000000004,
+        "before": "memcpy HtoD",
+        "gap_us": 64.70400000000001
+      },
+      {
+        "after": "index_select_rows",
+        "at_s": 1.3431311810000002,
+        "before": "memcpy HtoD",
+        "gap_us": 9.408
+      },
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.899490699,
+        "before": "flash_mma_fwd_d128",
+        "gap_us": 9.024000000000001
+      },
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.18057499300000002,
+        "before": "flash_mma_fwd_d128",
+        "gap_us": 8.96
+      },
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.5397503490000001,
+        "before": "flash_mma_fwd_d128",
+        "gap_us": 8.704
+      },
+      {
+        "after": "index_select_rows",
+        "at_s": 0.678244955,
+        "before": "memcpy HtoD",
+        "gap_us": 8.512
+      },
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.40150444700000004,
+        "before": "flash_mma_fwd_d128",
+        "gap_us": 8.192
+      }
+    ],
+    "memcpy": {
+      "DtoD": {
+        "bytes": 44100403600,
+        "count": 150
+      },
+      "HtoD": {
+        "bytes": 49358400,
+        "count": 51
+      }
+    },
+    "memset": {
+      "bytes": 3600,
+      "count": 550
+    },
+    "pass": "h3",
+    "step": 1,
+    "sync_count": 0,
+    "top_kernels": [
+      {
+        "calls": 300,
+        "category": "gemm",
+        "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+        "share": 0.2853578405213987,
+        "total_s": 0.37803393100000005
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_mma_attn_tma2",
+        "share": 0.27541458682118014,
+        "total_s": 0.364861392
+      },
+      {
+        "calls": 50,
+        "category": "gemm",
+        "name": "nvjet_sm120_ootst_mma_256x128x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+        "share": 0.05662321062876015,
+        "total_s": 0.07501281500000001
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "flash_mma_fwd_d128",
+        "share": 0.055915652375513686,
+        "total_s": 0.07407546200000001
+      },
+      {
+        "calls": 50,
+        "category": "cast",
+        "name": "fvf_h3_swiglu_nvfp4",
+        "share": 0.048098985807882966,
+        "total_s": 0.06372016500000001
+      },
+      {
+        "calls": 50,
+        "category": "other",
+        "name": "fvf_h3_qkvg_heads",
+        "share": 0.04580876139749771,
+        "total_s": 0.060686141000000006
+      },
+      {
+        "calls": 150,
+        "category": "attention",
+        "name": "vsa_tile_qkv_b16",
+        "share": 0.03830396069031341,
+        "total_s": 0.050743995
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_combine_g16",
+        "share": 0.028840536912279925,
+        "total_s": 0.038207121000000004
+      },
+      {
+        "calls": 50,
+        "category": "cast",
+        "name": "fvf_h3_merge_heads_nvfp4",
+        "share": 0.02533422201791831,
+        "total_s": 0.033562055
+      },
+      {
+        "calls": 100,
+        "category": "layout",
+        "name": "fill_f",
+        "share": 0.023083373454969768,
+        "total_s": 0.030580195
+      },
+      {
+        "calls": 100,
+        "category": "cast",
+        "name": "nvfp4_quant_bf16_sw",
+        "share": 0.022873239101595156,
+        "total_s": 0.030301815000000003
+      },
+      {
+        "calls": 150,
+        "category": "attention",
+        "name": "vsa_tile_mean_b16",
+        "share": 0.019685047750665357,
+        "total_s": 0.02607819
+      },
+      {
+        "calls": 50,
+        "category": "norm_modulate_elementwise",
+        "name": "h3_res_gate_norm_mod",
+        "share": 0.018229436713239407,
+        "total_s": 0.024149838
+      },
+      {
+        "calls": 49,
+        "category": "norm_modulate_elementwise",
+        "name": "fvf_h3_gate_res_norm_mod",
+        "share": 0.01722575720168277,
+        "total_s": 0.022820192000000003
+      },
+      {
+        "calls": 50,
+        "category": "cast",
+        "name": "fvf_amax_f32_r16",
+        "share": 0.012230546284220755,
+        "total_s": 0.016202679
+      },
+      {
+        "calls": 50,
+        "category": "cast",
+        "name": "nvfp4_amax_bf16",
+        "share": 0.004810634934196289,
+        "total_s": 0.006372992
+      },
+      {
+        "calls": 105,
+        "category": "layout",
+        "name": "mx_block_copy",
+        "share": 0.0036932558137905817,
+        "total_s": 0.004892720000000001
+      },
+      {
+        "calls": 104,
+        "category": "norm_modulate_elementwise",
+        "name": "mx_binary",
+        "share": 0.003688113040065669,
+        "total_s": 0.004885907
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_topk2",
+        "share": 0.00318384343126805,
+        "total_s": 0.004217865
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "softmax_last",
+        "share": 0.0017265883367200004,
+        "total_s": 0.002287335
+      },
+      {
+        "calls": 50,
+        "category": "layout",
+        "name": "index_select_rows",
+        "share": 0.0015771406759019862,
+        "total_s": 0.002089351
+      },
+      {
+        "calls": 50,
+        "category": "gemm",
+        "name": "magma_sgemmEx_kernel<…>",
+        "share": 0.0014616807634676389,
+        "total_s": 0.0019363930000000002
+      },
+      {
+        "calls": 56,
+        "category": "cast",
+        "name": "cast_bf16_f32_bias_act",
+        "share": 0.0014476662710301326,
+        "total_s": 0.0019178270000000002
+      },
+      {
+        "calls": 50,
+        "category": "gemm",
+        "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+        "share": 0.0011790365464145617,
+        "total_s": 0.0015619540000000002
+      },
+      {
+        "calls": 58,
+        "category": "cast",
+        "name": "cast_f32_bf16",
+        "share": 0.0010795907165538272,
+        "total_s": 0.001430211
+      }
+    ],
+    "wall_s": 1.438843822,
+    "window_s": 1.4387501340000002
+  },
+  "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "includes_model_load": false,
+  "inference_time_s": 13.952212513,
+  "load_s": 12.665057725,
+  "max_device_memory_used_mib": 25706,
+  "memory": {
+    "dit_residency": "resident",
+    "stages": [
+      {
+        "end_allocated_gib": 19.68506757542491,
+        "peak_allocated_gib": 19.68506757542491,
+        "peak_reserved_gib": 19.78125,
+        "stage": "text"
+      },
+      {
+        "end_allocated_gib": 19.721694868057966,
+        "peak_allocated_gib": 19.78084508702159,
+        "peak_reserved_gib": 19.90625,
+        "stage": "refine"
+      },
+      {
+        "end_allocated_gib": 19.721527498215437,
+        "peak_allocated_gib": 23.566725313663483,
+        "peak_reserved_gib": 24.46875,
+        "stage": "denoise"
+      },
+      {
+        "end_allocated_gib": 19.804392064921558,
+        "peak_allocated_gib": 19.93604442011565,
+        "peak_reserved_gib": 20.0625,
+        "stage": "audio_decode"
+      },
+      {
+        "end_allocated_gib": 19.80955263506621,
+        "peak_allocated_gib": 20.60445627104491,
+        "peak_reserved_gib": 21.15625,
+        "stage": "video_decode"
+      }
+    ]
+  },
+  "model": "MiniMaxAI/MiniMax-H3",
+  "peak_allocated_gib": 23.566725313663483,
+  "peak_memory_mb": 25056.0,
+  "peak_reserved_gib": 24.46875,
+  "pipeline": "h3",
+  "png_frames_s": 0.053749442,
+  "quantized_linears": {
+    "calls": {
+      "nvfp4_published": 1600
+    },
+    "modules": {
+      "nvfp4_published": 200
+    }
+  },
+  "recipe": null,
+  "schema_version": "fastvideo-rs.benchmark.v1",
+  "stage_seconds": {
+    "audio_decode": 0.1276613,
+    "denoise": 11.484058216,
+    "png_frames": 0.053749442,
+    "refine": 0.053704786,
+    "text": 0.215114102,
+    "video_decode": 2.01930751,
+    "video_encode_tail": 0.000042803,
+    "video_push": 0.000024216,
+    "video_rgb": 0.035087746005234066,
+    "video_vae": 2.0124400213956832,
+    "video_wait": 0.16072618
+  },
+  "step_seconds": [
+    1.485823052,
+    1.438843822,
+    1.426305957,
+    1.430931725,
+    1.431130981,
+    1.421473552,
+    1.421912624,
+    1.4238816380000001
+  ],
+  "task": "t2va",
+  "teacache": {
+    "enabled": false
+  },
+  "text_cache": "hit",
+  "text_encoder": "cache",
+  "text_s": 0.215114102,
+  "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+  "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+  "total_s": 13.952212513,
+  "vsa": {
+    "calls": 400,
+    "density": 0.2841490138787436,
+    "selected_tiles": 557670400.0,
+    "total_tiles": 1962598400.0,
+    "video_density": 0.2,
+    "video_selected_tiles": 351232000.0,
+    "video_total_tiles": 1756160000.0
+  },
+  "warm_steady_state": false,
+  "warmup_requests": 0,
+  "workload": {
+    "duration_s": 5,
+    "height": 480,
+    "measured_steps": 8,
+    "num_frames": 124,
+    "prompt_name": "default",
+    "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+    "seed": 1024,
+    "sequence_length": 15381,
+    "task": "t2va",
+    "text_tokens": 537,
+    "width": 832
+  }
+}

@@ -971,6 +971,31 @@ impl Linear {
         })
     }
 
+    /// The published NVFP4 weight, when this linear runs one.
+    #[cfg(feature = "cuda")]
+    pub fn nvfp4_stack(&self) -> Option<&super::nvfp4_linear::Nvfp4Stack> {
+        self.nvfp4_w.as_deref().map(|w| &w.0)
+    }
+
+    /// The published-NVFP4 forward on an activation its producer already
+    /// wrote as the GEMM's operand (the same bytes [`Self::forward`]'s
+    /// quantizer writes); `out_shape` ends in `out_dim`.
+    #[cfg(feature = "cuda")]
+    pub fn forward_nvfp4_operand(
+        &self,
+        a: &super::nvfp4_linear::Nvfp4Operand,
+        out_shape: Vec<usize>,
+    ) -> Result<CudaTensor> {
+        let w = self
+            .nvfp4_w
+            .as_deref()
+            .ok_or_else(|| msg("forward_nvfp4_operand on a linear without an NVFP4 weight"))?;
+        super::evalstats::quant_call("nvfp4_published");
+        let y = w.0.gemm_operand(a)?;
+        let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
+        self.quant_epilogue(out, false)
+    }
+
     /// The published-NVFP4 forward: the activation (bf16 on the device) is
     /// quantized once per call, every stacked part's GEMM writes its columns.
     #[cfg(feature = "cuda")]

@@ -72,17 +72,21 @@ const FUSED_CHECK_REL_L2: f64 = 1e-2;
 /// them. See docs/perf/h3-vae-decode-speed.md.
 ///
 /// **Default on** (owner decision 2026-10-14) where it was measured: a live
-/// device with block-scaled FP8 (sm_100+, as the DiT's MXFP8 default) and the
-/// 36-block decoder. Unset elsewhere (pre-Blackwell GPUs, CPU runs, the
-/// 26-block lightweight decoder) it means bf16, said once in the log. `=0`
+/// device with block-scaled FP8 (sm_100+, as the DiT's MXFP8 default) and a
+/// decoder of [`MXFP8_DEFAULT_LAYERS`] blocks (the 36-block H3 decoder; the
+/// 26-block lightweight decoder of FastH3 Trim, gate passed 2026-10-14).
+/// Unset elsewhere (pre-Blackwell GPUs, CPU runs, a decoder of another
+/// depth) it means bf16, said once in the log. `=0`
 /// is the bf16 decode exactly (byte-identical to the earlier default); `=1`
 /// asks for MXFP8 on any decoder and is an error on a GPU without
 /// block-scaled FP8 (cuBLASLt has no MXFP8 kernels below sm_100). Any other
 /// value is an error.
 pub const MXFP8_ENV: &str = "FASTVIDEO_H3_VAE_MXFP8";
 
-/// Decoder blocks of the decoder the MXFP8 default was measured on.
-pub const MXFP8_DEFAULT_LAYERS: usize = 36;
+/// Decoder depths the MXFP8 default was measured on and passed the quality
+/// gate with (docs/perf/h3-vae-decode-speed.md §3 and §6): the 36-block H3
+/// decoder and FastH3 Trim's 26-block one.
+pub const MXFP8_DEFAULT_LAYERS: &[usize] = &[36, 26];
 
 /// [`MXFP8_ENV`] resolved for a decoder of `layers` blocks: `explicit` is
 /// the variable's value (`None` when unset), `sm_major` the live device's
@@ -111,10 +115,10 @@ pub fn resolve_mxfp8(
                     "bf16 decoder linears (MXFP8 needs sm_100+, this GPU is sm_{sm}x)"
                 )),
             )),
-            Some(_) if layers != MXFP8_DEFAULT_LAYERS => Ok((
+            Some(_) if !MXFP8_DEFAULT_LAYERS.contains(&layers) => Ok((
                 false,
                 Some(format!(
-                    "bf16 decoder linears (the MXFP8 default is measured on the {MXFP8_DEFAULT_LAYERS}-block decoder, this one has {layers}; {MXFP8_ENV}=1 opts in)"
+                    "bf16 decoder linears (the MXFP8 default is measured on {MXFP8_DEFAULT_LAYERS:?}-block decoders, this one has {layers}; {MXFP8_ENV}=1 opts in)"
                 )),
             )),
             Some(_) => Ok((true, None)),
@@ -263,6 +267,37 @@ const MXFP8_CHECK_REL_L2: f64 = 1e-1;
 
 /// The check found the MXFP8 forward off by more than [`MXFP8_CHECK_REL_L2`].
 static MXFP8_BROKEN: AtomicBool = AtomicBool::new(false);
+
+/// [`with_bf16_linears`] is running: the fused ViT takes its bf16 GEMMs.
+static MXFP8_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// `FASTVIDEO_H3_VAE_AB=1` (measurement only, off by default): after each
+/// clip's video decode, when that decode ran the MXFP8 linears, decode the
+/// same latents again with the bf16 linears (the `=0` arithmetic, from the
+/// bf16 weights kept beside the MXFP8 copies) into `<clip>/vae-bf16/`, so one
+/// process gives both decodes of identical latents (the DiT runs once).
+pub const AB_ENV: &str = "FASTVIDEO_H3_VAE_AB";
+
+/// Whether [`AB_ENV`] asks for the bf16 re-decode.
+pub fn ab_requested() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag(AB_ENV, false))
+}
+
+/// Run `f` with every decoder's block GEMMs in bf16 even where MXFP8 copies
+/// are loaded (for [`AB_ENV`]): the same kernels and weights as a decoder
+/// loaded with `FASTVIDEO_H3_VAE_MXFP8=0`. Not for concurrent decodes.
+pub fn with_bf16_linears<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MXFP8_SUSPENDED.store(false, Ordering::Relaxed);
+        }
+    }
+    MXFP8_SUSPENDED.store(true, Ordering::Relaxed);
+    let _restore = Restore;
+    f()
+}
 
 /// `FASTVIDEO_H3_VAE_VEC` (default on; `=0` restores the scalar kernels):
 /// the vector-access twins of the merge-heads and SwiGLU kernels, whose
@@ -830,6 +865,13 @@ impl H3VideoDecoder {
         &self.cfg
     }
 
+    /// Whether a decode now runs the MXFP8 block linears (loaded, not
+    /// refused by the check, not inside [`with_bf16_linears`]). The fused
+    /// ViT must also take the shape; every H3 decode geometry does.
+    pub fn mxfp8_active(&self) -> bool {
+        self.mx_ready()
+    }
+
     pub fn with_tile_batch(mut self, tiles: usize) -> Self {
         self.tile_batch = tiles.max(1);
         self
@@ -867,7 +909,9 @@ impl H3VideoDecoder {
     fn mx_ready(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
-            !MXFP8_BROKEN.load(Ordering::Relaxed) && self.blocks.iter().all(|b| b.mx.is_some())
+            !MXFP8_BROKEN.load(Ordering::Relaxed)
+                && !MXFP8_SUSPENDED.load(Ordering::Relaxed)
+                && self.blocks.iter().all(|b| b.mx.is_some())
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -1960,11 +2004,12 @@ mod tests {
         assert_eq!((balanced_batch(3, 8), balanced_batch(9, 1)), (3, 1));
     }
 
-    /// MXFP8 decoder linears are the default on sm_100+ for the 36-block
-    /// decoder (owner decision 2026-10-14); `=0` is bf16 everywhere, `=1`
-    /// asks for MXFP8 and fails on a GPU without block-scaled FP8.
+    /// MXFP8 decoder linears are the default on sm_100+ for the measured
+    /// decoders, 36 and 26 blocks (owner decision 2026-10-14); `=0` is bf16
+    /// everywhere, `=1` asks for MXFP8 and fails on a GPU without
+    /// block-scaled FP8.
     #[test]
-    fn vae_mxfp8_defaults_on_for_the_measured_decoder_on_sm100_plus() {
+    fn vae_mxfp8_defaults_on_for_the_measured_decoders_on_sm100_plus() {
         let r = |e: Option<&str>, sm: Option<i32>, layers: usize| resolve_mxfp8(e, sm, layers);
         // Unset.
         assert_eq!(
@@ -1980,10 +2025,21 @@ mod tests {
         );
         let (on, why) = r(None, Some(9), 36).unwrap();
         assert!(!on && why.unwrap().contains("sm_100+"), "H100: bf16, said");
-        let (on, why) = r(None, Some(12), 26).unwrap();
+        assert_eq!(
+            r(None, Some(12), 26).unwrap(),
+            (true, None),
+            "FastH3 Trim's 26-block decoder"
+        );
+        assert_eq!(r(None, Some(10), 26).unwrap(), (true, None), "Trim on B200");
+        let (on, why) = r(None, Some(9), 26).unwrap();
         assert!(
-            !on && why.unwrap().contains("26"),
-            "the lightweight decoder: bf16, said"
+            !on && why.unwrap().contains("sm_100+"),
+            "Trim on H100: bf16, said"
+        );
+        let (on, why) = r(None, Some(12), 30).unwrap();
+        assert!(
+            !on && why.unwrap().contains("30"),
+            "an unmeasured depth: bf16, said"
         );
         assert_eq!(r(None, None, 36).unwrap(), (false, None), "CPU run");
         // =0: bf16 everywhere, nothing to say.
@@ -2016,6 +2072,17 @@ mod tests {
         let e = resolve_nvfp4(true, true, Some(9)).unwrap_err().to_string();
         assert!(e.contains("sm_9"), "{e}");
         assert!(resolve_nvfp4(true, true, None).is_err(), "no device");
+    }
+
+    /// `FASTVIDEO_H3_VAE_AB`'s bf16 re-decode suspends the MXFP8 GEMMs only
+    /// inside the closure, and lifts the suspension even if it panics.
+    #[test]
+    fn bf16_linears_are_scoped_to_the_closure() {
+        assert!(!MXFP8_SUSPENDED.load(Ordering::Relaxed));
+        assert!(with_bf16_linears(|| MXFP8_SUSPENDED.load(Ordering::Relaxed)));
+        assert!(!MXFP8_SUSPENDED.load(Ordering::Relaxed));
+        let r = std::panic::catch_unwind(|| with_bf16_linears(|| panic!("decode failed")));
+        assert!(r.is_err() && !MXFP8_SUSPENDED.load(Ordering::Relaxed));
     }
 
     #[test]
