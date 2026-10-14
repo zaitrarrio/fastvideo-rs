@@ -19,15 +19,9 @@
 export const MIN_DRIVER_MAJOR = 580;
 /** A driver-API symbol of CUDA 13.0 that cudarc binds and older drivers lack (the 2026-10-12 panic). */
 export const CUDA13_SYMBOL = "cuCtxGetDevice_v2";
-/**
- * The default Runpod host filter (allowedCudaVersions) for GPU workers outside the EU volume's data centre: r2
- * serverless endpoints (any DC) and r2 pods placed outside EUR-IS-1. Runpod's REST enum stops at "13.0"
- * (rest.runpod.io/v1/openapi.json, 2026-10-12), the image's minimum. Caveat: "13.0" alone hid the EUR-IS-1 RTX PRO
- * 6000 hosts with driver 595.x on 2026-10-07 (they seem to carry a newer label the enum cannot name), so the filter
- * can leave the newest hosts out; allowed_cuda [] widens it, and the boot's driver check (above) still refuses an old
- * host before its fetch.
- */
-export const R2_DEFAULT_CUDA = ["13.0"] as const;
+// The Runpod host filter (allowedCudaVersions) is enums.ts DEFAULT_ALLOWED_CUDA: none while Runpod's REST enum
+// cannot name the 13.1 / 13.2 hosts (a "13.0"-only filter hid every Secure RTX PRO 6000 on 2026-10-14), so this
+// check is what keeps a pre-CUDA-13 host from running the image.
 /** The line the check prints (and podlogs.ts matches). */
 export const DRIVER_TOO_OLD = "driver_too_old";
 

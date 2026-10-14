@@ -1259,7 +1259,7 @@ await step("standalone Runpod pod with weights_source r2 in a data centre withou
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
   assert.equal(mine().length, 1);
   const p = mine()[0].payload;
-  assert.deepEqual([p.gpuTypeIds, p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE, p.allowedCudaVersions], [["NVIDIA H100 80GB HBM3"], ["US-TX-3"], undefined, "r2", ["13.0"]]);
+  assert.deepEqual([p.gpuTypeIds, p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE, p.allowedCudaVersions], [["NVIDIA H100 80GB HBM3"], ["US-TX-3"], undefined, "r2", undefined]);
   assert.ok(op.log.some((l) => /no NVIDIA H200 in US-TX-3/.test(typeof l === "string" ? l : l.msg || JSON.stringify(l))), JSON.stringify(op.log));
   const sp = (await call("/api/standalone/r2us", { headers: T() })).j.pod;
   assert.deepEqual([sp.definition.weights_source, sp.definition.dc, sp.definition.volume, sp.pod.dc], ["r2", "US-TX-3, any", null, "US-TX-3"]);

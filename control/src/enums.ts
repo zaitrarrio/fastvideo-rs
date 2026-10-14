@@ -25,7 +25,32 @@ export const LOG_SOURCES = ["pod", "op", "audit", "runpod", "archive"] as const;
 /** The edge family Durable Objects (docs/serve/edge-control-plane.md §5.2; cluster/spec.ts modelFamily). */
 export const EDGE_FAMILIES = ["h3", "ltx", "wan", "sfwan", "fake"] as const;
 export const TOKEN_SCOPES = ["read", "admin", "ci"] as const;
+/** The CUDA versions Runpod's REST v1 accepts in allowedCudaVersions / minCudaVersion (pods and endpoints; the
+ * openapi enum, and the live API refused "13.1" and "13.2" with a 400 on 2026-10-14). Newer hosts carry labels
+ * this enum cannot name yet (IMAGE_CUDA). */
 export const CUDA_VERSIONS = ["13.0", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1", "12.0", "11.8"] as const;
+/** The least CUDA version a host's driver must offer: the images ship CUDA 13 runtime libraries, which run on any
+ * CUDA 13.0+ driver (>= 580; driver-check.ts checks it at boot). A filter means "at least this", never "exactly". */
+export const MIN_CUDA = "13.0";
+/** The CUDA labels Runpod hosts report at or above MIN_CUDA, i.e. every host the images run on. GraphQL lowestPrice
+ * by allowedCudaVersions, 2026-10-14: Secure RTX PRO 6000 hosts are "13.2" only, H100 "13.0", H200 "13.0" and
+ * "13.2". When Runpod shows a new label, add it here and in scripts/gpu/runpod-cuda.sh (a unit test keeps them equal). */
+export const IMAGE_CUDA = ["13.0", "13.1", "13.2"] as const;
+/** a >= b for "major.minor" CUDA versions. */
+export function cudaAtLeast(a: string, b: string = MIN_CUDA): boolean {
+  const [am = 0, an = 0] = a.split(".").map(Number);
+  const [bm = 0, bn = 0] = b.split(".").map(Number);
+  return am > bm || (am === bm && an >= bn);
+}
+/**
+ * The default allowedCudaVersions for a Runpod GPU pod or endpoint: every IMAGE_CUDA label when REST v1 can name
+ * them all, else none. A partial list is worse than none: "13.0" alone hides every host labelled 13.1 or 13.2 (all
+ * Secure RTX PRO 6000 hosts on 2026-10-14; "no capacity", or workers that never start). Without a filter the boot's
+ * driver check (driver-check.ts) refuses a pre-13 host and fv-control places a new pod; serverless endpoints also get
+ * minCudaVersion MIN_CUDA, which Runpod applies as a minimum. Once Runpod's REST enum names every IMAGE_CUDA label
+ * (add them to CUDA_VERSIONS), this becomes the full list on its own.
+ */
+export const DEFAULT_ALLOWED_CUDA: readonly string[] = IMAGE_CUDA.every((v) => (CUDA_VERSIONS as readonly string[]).includes(v)) ? [...IMAGE_CUDA] : [];
 
 /** Runpod data centre ids (REST v1 openapi, PodCreateInput.dataCenterIds, 2026-10). */
 export const RUNPOD_DATA_CENTERS = [

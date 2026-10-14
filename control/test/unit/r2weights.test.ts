@@ -187,9 +187,9 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
     const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any;
     expect(p.networkVolumeId).toBeUndefined();
-    // EU-RO-1 (the volume's data centre, hosts known): no CUDA filter
+    // No exact CUDA list (REST cannot name the 13.1 / 13.2 hosts); the boot's driver check refuses a pre-13 host
     expect(p.allowedCudaVersions).toBeUndefined();
-    // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, CUDA 13 hosts only
+    // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, no exact CUDA list either
     const us = { ...pool, data_centers: ["US-TX-3", "US-KS-2"] };
     expect(validate("pool", us).ok).toBe(true);
     expect(validate("pool", { ...h3, data_centers: ["US-TX-3"] }).ok, "data_centers needs r2 (the volume pins its DC)").toBe(false);
@@ -197,8 +197,9 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(pls.map((x) => x.dc)).toEqual(["US-TX-3", "US-KS-2"]);
     expect(pls.every((x) => x.region === undefined)).toBe(true);
     const pu = workerCreatePayload("fv-ctl-x", "img", us, pls[0]!, e) as any;
-    expect([pu.dataCenterIds, pu.allowedCudaVersions, pu.networkVolumeId]).toEqual([["US-TX-3"], ["13.0"], undefined]);
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).allowedCudaVersions, "allowed_cuda [] lifts the filter").toBeUndefined();
+    expect([pu.dataCenterIds, pu.allowedCudaVersions, pu.networkVolumeId]).toEqual([["US-TX-3"], undefined, undefined]);
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).allowedCudaVersions, "allowed_cuda [] sends no filter").toBeUndefined();
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: ["13.0"] }, pls[0]!, e) as any).allowedCudaVersions, "a pool's own list is kept").toEqual(["13.0"]);
     expect(p.containerDiskInGb).toBe(gb);
     expect(p.dockerStartCmd[0]).toContain('export FV_POD_ID="${FV_POD_ID:-${RUNPOD_POD_ID:-}}"');
     expect(p.dockerStartCmd[0].indexOf("r2-fetch.py")).toBeLessThan(p.dockerStartCmd[0].indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));

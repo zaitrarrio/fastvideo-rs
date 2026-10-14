@@ -121,14 +121,18 @@ describe("serverless payloads", () => {
       workersMin: 0, workersMax: 1, idleTimeout: 5, flashboot: false, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
     });
     expect(endpointCreatePayload(gpu, "tpl2")).toEqual({
-      name: "fvc-h3", templateId: "tpl2", computeType: "GPU", gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpuCount: 1,
+      name: "fvc-h3", templateId: "tpl2", computeType: "GPU", gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"], gpuCount: 1, minCudaVersion: "13.0",
       networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], workersMin: 0, workersMax: 2, idleTimeout: 5, flashboot: true, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4,
     });
   });
-  it("CUDA: no filter on create by default; an update clears an old filter; an explicit filter is kept", () => {
-    // "13.0" alone hid the EU-RO-1 RTX PRO 6000 hosts, so workers never started (staging h3-max2, 2026-10-07).
+  it("CUDA: at least 13.0 (minCudaVersion), no exact list by default; an update clears an old list; an explicit list is kept", () => {
+    // "13.0" alone hid the RTX PRO 6000 hosts (labelled 13.2), so workers never started (staging h3-max2, 2026-10-07;
+    // 2026-10-14). Nor may the update send every REST version: that enum stops at 13.0 too.
     expect((endpointCreatePayload(gpu, "t") as any).allowedCudaVersions).toBeUndefined();
-    expect((endpointUpdatePayload(gpu) as any).allowedCudaVersions).toEqual([...CUDA_VERSIONS]);
+    expect((endpointCreatePayload(gpu, "t") as any).minCudaVersion).toBe("13.0");
+    expect((endpointUpdatePayload(gpu) as any).allowedCudaVersions).toBeUndefined();
+    expect((endpointUpdatePayload(gpu) as any).minCudaVersion).toBe("13.0");
+    expect((endpointUpdatePayload(gpu, { ...gpu, allowed_cuda: [...CUDA_VERSIONS] } as any) as any).allowedCudaVersions).toEqual([]);
     const pinned = normalizeEndpointSpec({ name: "pin", variant: "h3-max", allowed_cuda: ["12.8"] } as any);
     expect((endpointCreatePayload(pinned, "t") as any).allowedCudaVersions).toEqual(["12.8"]);
     expect((endpointUpdatePayload(pinned) as any).allowedCudaVersions).toEqual(["12.8"]);

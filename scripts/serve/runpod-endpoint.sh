@@ -42,7 +42,9 @@
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default bz0ofkfx45,
 # fv-weights-h3-ltx-500, EU-RO-1, H3 + LTX trees only; the US volume s2k01690bi was deleted
 # 2026-10 and is refused, scripts/gpu/volumes.sh) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
-# (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
+# (comma list); RUNPOD_ALLOWED_CUDA (an exact space list; default
+# scripts/gpu/runpod-cuda.sh fv_runpod_cuda, none today: REST cannot name the
+# 13.1 / 13.2 hosts; queue endpoints always get minCudaVersion 13.0); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
 # fv-serve as FV_WORKERS_MAX); FV_ENDPOINT_PREFIX (endpoint/template name
 # prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5); FV_FLASHBOOT
@@ -60,6 +62,8 @@ source "$HERE/variants.sh"
 source "$HERE/lib/registry.sh"
 # shellcheck source-path=SCRIPTDIR source=../gpu/volumes.sh
 source "$HERE/../gpu/volumes.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-cuda.sh
+source "$HERE/../gpu/runpod-cuda.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
@@ -78,7 +82,7 @@ pick_image() {
 VOLUME="${RUNPOD_VOLUME_ID:-$FV_EU_VOLUME_ID}"
 fv_check_volume "$VOLUME"
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA GeForce RTX 4090,NVIDIA RTX 6000 Ada Generation}"
-CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
+CUDA="${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}"
 CAP_S="${FV_ENDPOINT_CAP_S:-1800}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 EXEC_MS="${FV_EXECUTION_TIMEOUT_MS:-1800000}"
@@ -173,12 +177,12 @@ template_payload() {
 endpoint_payload() {
   local tpl="$1" name="$2" dc="$3"
   jq -n --arg name "$name" --arg tpl "$tpl" --argjson gpus "$(gpu_json)" --arg vol "$VOLUME" --arg dc "$dc" \
-    --arg cuda "$CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" --argjson fb "$FLASHBOOT_Q" '{
+    --arg cuda "$CUDA" --arg min "$FV_MIN_CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" --argjson fb "$FLASHBOOT_Q" '{
     name: $name, templateId: $tpl, computeType: "GPU", gpuTypeIds: $gpus, gpuCount: 1,
     networkVolumeId: $vol, dataCenterIds: [$dc], workersMin: 0, workersMax: 1, idleTimeout: $idle,
     flashboot: $fb, executionTimeoutMs: ($exec|tonumber), scalerType: "QUEUE_DELAY", scalerValue: 1,
-    allowedCudaVersions: ($cuda | split(" "))
-  }'
+    minCudaVersion: $min
+  } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
 }
 
 # Load-balancer endpoint (REST v2: the only API with `type`). GPU pools come
