@@ -1,0 +1,3 @@
+[fastvideo] h3 nvfp4: ModelOpt /fvw/ours-v2/transformer (50 blocks x 2 NVFP4 FFN linears, 6.06 GiB; attention as FASTVIDEO_H3_QUANT; FFN activation scale static (calibrated); checked in 0.0s)
+[fastvideo] h3 vae=taeh3 (/fvw/auxiliary/tae/taeh3.safetensors)
+[fastvideo] h3: VSA fine stage on sparse FP4 tensor cores (FASTVIDEO_H3_VSA_FP4=unset: NVFP4 default, P two-level)

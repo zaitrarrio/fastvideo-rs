@@ -1,0 +1,1176 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "required": [
+          "benchmark.json"
+        ]
+      },
+      "name": "artifact/benchmark_json",
+      "ok": true,
+      "values": {
+        "baseline": "/srv/cells/v2-mxvae-480/benchmark.json",
+        "baseline_error": null,
+        "candidate": "/srv/cells/v2-nvvae-480/benchmark.json",
+        "candidate_error": null
+      }
+    },
+    {
+      "limits": {
+        "min": 1
+      },
+      "name": "artifact/compare_reports",
+      "ok": true,
+      "values": {
+        "reports": [
+          "/srv/compare/clips/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo.json"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "official_config/prompts",
+      "ok": true,
+      "values": {
+        "baseline": [
+          "h3-demo",
+          "ltx-frogyoga",
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ],
+        "candidate": [
+          "h3-demo",
+          "ltx-frogyoga",
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "same": [
+          "workload.height",
+          "workload.width",
+          "workload.num_frames",
+          "workload.seed",
+          "workload.prompt_sha256",
+          "workload.measured_steps"
+        ]
+      },
+      "name": "official_config/workload",
+      "ok": true,
+      "values": {
+        "differences": []
+      }
+    },
+    {
+      "limits": {
+        "min_speedup_for_experimental": 1.03,
+        "min_speedup_for_promotion": 1.1
+      },
+      "name": "performance/speedup",
+      "ok": false,
+      "values": {
+        "aggregate": "median",
+        "baseline": 11.863800321,
+        "candidate": 11.969923636,
+        "metric": "denoise_s",
+        "secondary_metric": "total_s",
+        "secondary_speedup": 17.07195557476557,
+        "speedup": 0.9911341694210286,
+        "warm": true
+      }
+    },
+    {
+      "limits": {
+        "warmup_required_for_promotion": true
+      },
+      "name": "performance/warm",
+      "ok": true,
+      "values": {
+        "baseline": true,
+        "candidate": true
+      }
+    },
+    {
+      "limits": {
+        "required_for_kinds": [
+          "exact"
+        ]
+      },
+      "name": "off_identity/report",
+      "ok": true,
+      "values": {
+        "kind": "lossy",
+        "off_reports": 0
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0158786073170318
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0286333886576606
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 38.97388051432558,
+          "psnr_min": 37.568044432649295
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.009868051116446489
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.012656532496343798
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0297493377768736
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0193355798063088
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 34.21557340454537,
+          "psnr_min": 31.73313737316867
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.02991065335619935
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.04233851426623656
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.024325693920901
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0340965815736312
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 35.798832104159544,
+          "psnr_min": 33.330061700384455
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.01627322815136388
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.024652172491464668
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0260125420687825
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0033336721064043
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 35.33942567689853,
+          "psnr_min": 33.232982361958655
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.02432813134771109
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.03735177294496335
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0287793163593522
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0146970344920856
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 36.59726678694734,
+          "psnr_min": 34.50382555664809
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.01881609130706817
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.026605979833466967
+        }
+      }
+    },
+    {
+      "limits": {
+        "required": false
+      },
+      "name": "visual_artifact/judge",
+      "ok": true,
+      "values": {
+        "judge": "none in this runtime",
+        "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "mode": "exact",
+    "policy": {
+      "id": "fastvideo-rs-default",
+      "kind": "lossy",
+      "path": "/opt/fv/gpu/gate-policy.toml",
+      "source": "sol-engine@6c2f582 evals/README.md + evals/profiles/official_video_t2v.toml + evals/tiers.toml"
+    },
+    "verdict": {
+      "gates": {
+        "artifact": {
+          "detail": {
+            "compare_reports": 5
+          },
+          "status": "fail"
+        },
+        "off_identity": {
+          "detail": {
+            "reason": "no --off-compare report"
+          },
+          "status": "not_applicable"
+        },
+        "official_config": {
+          "detail": {
+            "fields": [
+              "workload.height",
+              "workload.width",
+              "workload.num_frames",
+              "workload.seed",
+              "workload.prompt_sha256",
+              "workload.measured_steps"
+            ]
+          },
+          "status": "pass"
+        },
+        "performance": {
+          "detail": {
+            "aggregate": "median",
+            "baseline": 11.863800321,
+            "candidate": 11.969923636,
+            "metric": "denoise_s",
+            "secondary_metric": "total_s",
+            "secondary_speedup": 17.07195557476557,
+            "speedup": 0.9911341694210286,
+            "warm": true
+          },
+          "status": "fail"
+        },
+        "quantitative_quality": {
+          "detail": {
+            "checks": [
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "sharpness_ratio_mean": 1.0158786073170318
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0286333886576606
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "psnr_mean": 38.97388051432558,
+                  "psnr_min": 37.568044432649295
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "lpips_mean": 0.009868051116446489
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head",
+                "values": {
+                  "lpips_max": 0.012656532496343798
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "sharpness_ratio_mean": 1.0297493377768736
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0193355798063088
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "psnr_mean": 34.21557340454537,
+                  "psnr_min": 31.73313737316867
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "lpips_mean": 0.02991065335619935
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake",
+                "values": {
+                  "lpips_max": 0.04233851426623656
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "sharpness_ratio_mean": 1.024325693920901
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0340965815736312
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "psnr_mean": 35.798832104159544,
+                  "psnr_min": 33.330061700384455
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "lpips_mean": 0.01627322815136388
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga",
+                "values": {
+                  "lpips_max": 0.024652172491464668
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "sharpness_ratio_mean": 1.0260125420687825
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0033336721064043
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "psnr_mean": 35.33942567689853,
+                  "psnr_min": 33.232982361958655
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "lpips_mean": 0.02432813134771109
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast",
+                "values": {
+                  "lpips_max": 0.03735177294496335
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "sharpness_ratio_mean": 1.0287793163593522
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0146970344920856
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "psnr_mean": 36.59726678694734,
+                  "psnr_min": 34.50382555664809
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "lpips_mean": 0.01881609130706817
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo",
+                "values": {
+                  "lpips_max": 0.026605979833466967
+                }
+              }
+            ],
+            "lpips_max_max": 0.04233851426623656,
+            "lpips_mean_max": 0.02991065335619935,
+            "lpips_mean_median": 0.01881609130706817,
+            "psnr_mean_median": 35.798832104159544,
+            "reports": 5
+          },
+          "status": "pass"
+        },
+        "visual_artifact": {
+          "detail": {
+            "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+          },
+          "status": "deferred"
+        }
+      },
+      "kind": "lossy",
+      "promotion_blockers": [
+        "artifact:fail",
+        "performance:fail"
+      ],
+      "speedup": 0.9911341694210286,
+      "tier": null,
+      "verdict": "fail"
+    }
+  },
+  "elapsed_s": 0.002017394,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: 6 check(s) failed: gate-v2-mxvae-480--v2-nvvae-480/artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-talking-head: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-480--v2-nvvae-480/artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-480--v2-nvvae-480/artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-480--v2-nvvae-480/artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-480--v2-nvvae-480/artifact/compare-clips-v2-mxvae-480--v2-nvvae-480-h3-demo: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-480--v2-nvvae-480/performance/speedup: {\"aggregate\":\"median\",\"baseline\":11.863800321,\"candidate\":11.969923636,\"metric\":\"denoise_s\",\"secondary_metric\":\"total_s\",\"secondary_speedup\":17.07195557476557,\"speedup\":0.9911341694210286,\"warm\":true} vs limits {\"min_speedup_for_experimental\":1.03,\"min_speedup_for_promotion\":1.1}",
+  "git_sha": null,
+  "stage": "gate-v2-mxvae-480--v2-nvvae-480",
+  "status": "fail"
+}

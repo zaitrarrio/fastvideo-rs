@@ -1,0 +1,1176 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "required": [
+          "benchmark.json"
+        ]
+      },
+      "name": "artifact/benchmark_json",
+      "ok": true,
+      "values": {
+        "baseline": "/srv/cells/v2-mxvae-768/benchmark.json",
+        "baseline_error": null,
+        "candidate": "/srv/cells/trim-nvfp4attn-768/benchmark.json",
+        "candidate_error": null
+      }
+    },
+    {
+      "limits": {
+        "min": 1
+      },
+      "name": "artifact/compare_reports",
+      "ok": true,
+      "values": {
+        "reports": [
+          "/srv/compare/clips/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast.json",
+          "/srv/compare/clips/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo.json"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+      "ok": false,
+      "values": {
+        "baseline_clip": "failed",
+        "candidate_clip": "failed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "official_config/prompts",
+      "ok": true,
+      "values": {
+        "baseline": [
+          "h3-demo",
+          "ltx-frogyoga",
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ],
+        "candidate": [
+          "h3-demo",
+          "ltx-frogyoga",
+          "ltx-newsbroadcast",
+          "spark-mountain-lake",
+          "talking-head"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "same": [
+          "workload.height",
+          "workload.width",
+          "workload.num_frames",
+          "workload.seed",
+          "workload.prompt_sha256",
+          "workload.measured_steps"
+        ]
+      },
+      "name": "official_config/workload",
+      "ok": true,
+      "values": {
+        "differences": []
+      }
+    },
+    {
+      "limits": {
+        "min_speedup_for_experimental": 1.03,
+        "min_speedup_for_promotion": 1.1
+      },
+      "name": "performance/speedup",
+      "ok": true,
+      "values": {
+        "aggregate": "median",
+        "baseline": 31.926548656,
+        "candidate": 24.642164329,
+        "metric": "denoise_s",
+        "secondary_metric": "total_s",
+        "secondary_speedup": 1.2519657148187777,
+        "speedup": 1.2956065153103218,
+        "warm": true
+      }
+    },
+    {
+      "limits": {
+        "warmup_required_for_promotion": true
+      },
+      "name": "performance/warm",
+      "ok": true,
+      "values": {
+        "baseline": true,
+        "candidate": true
+      }
+    },
+    {
+      "limits": {
+        "required_for_kinds": [
+          "exact"
+        ]
+      },
+      "name": "off_identity/report",
+      "ok": true,
+      "values": {
+        "kind": "lossy",
+        "off_reports": 0
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0173176591820146
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/temporal_jitter_ratio",
+      "ok": false,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.7949265948465795
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 10.603451174086542,
+          "psnr_min": 10.251504915275342
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.6833717685970923
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.7001214935425694
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 1.0545215251557534
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.062524355231338
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 13.643943652062966,
+          "psnr_min": 12.83183960413786
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.6280031597004977
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.654529770667545
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/sharpness_ratio",
+      "ok": false,
+      "values": {
+        "sharpness_ratio_mean": 1.2368717282999773
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/temporal_jitter_ratio",
+      "ok": false,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.8087594659150464
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 9.589840307968997,
+          "psnr_min": 9.016761969075173
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.7162174916305921
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.7557377729625873
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/sharpness_ratio",
+      "ok": true,
+      "values": {
+        "sharpness_ratio_mean": 0.982467341217696
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.9262212483281592
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 10.029193505293724,
+          "psnr_min": 8.751258388915486
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.726583945602921
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.8275733348644098
+        }
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/sharpness_ratio",
+      "ok": false,
+      "values": {
+        "sharpness_ratio_mean": 0.8110605861152431
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/temporal_jitter_ratio",
+      "ok": false,
+      "values": {
+        "temporal_jitter_ratio_mean": 0.7245177750639096
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 11.088776044263156,
+          "psnr_min": 7.300913040366071
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/lpips_available",
+      "ok": true,
+      "values": {
+        "reason": null,
+        "status": "complete"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": 0.6336414892573314
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": 0.7476610932055966
+        }
+      }
+    },
+    {
+      "limits": {
+        "required": false
+      },
+      "name": "visual_artifact/judge",
+      "ok": true,
+      "values": {
+        "judge": "none in this runtime",
+        "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "mode": "exact",
+    "policy": {
+      "id": "fastvideo-rs-default",
+      "kind": "lossy",
+      "path": "/opt/fv/gpu/gate-policy.toml",
+      "source": "sol-engine@6c2f582 evals/README.md + evals/profiles/official_video_t2v.toml + evals/tiers.toml"
+    },
+    "verdict": {
+      "gates": {
+        "artifact": {
+          "detail": {
+            "compare_reports": 5
+          },
+          "status": "fail"
+        },
+        "off_identity": {
+          "detail": {
+            "reason": "no --off-compare report"
+          },
+          "status": "not_applicable"
+        },
+        "official_config": {
+          "detail": {
+            "fields": [
+              "workload.height",
+              "workload.width",
+              "workload.num_frames",
+              "workload.seed",
+              "workload.prompt_sha256",
+              "workload.measured_steps"
+            ]
+          },
+          "status": "pass"
+        },
+        "performance": {
+          "detail": {
+            "aggregate": "median",
+            "baseline": 31.926548656,
+            "candidate": 24.642164329,
+            "metric": "denoise_s",
+            "secondary_metric": "total_s",
+            "secondary_speedup": 1.2519657148187777,
+            "speedup": 1.2956065153103218,
+            "warm": true
+          },
+          "status": "pass"
+        },
+        "quantitative_quality": {
+          "detail": {
+            "checks": [
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "sharpness_ratio_mean": 1.0173176591820146
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.7949265948465795
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "psnr_mean": 10.603451174086542,
+                  "psnr_min": 10.251504915275342
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "lpips_mean": 0.6833717685970923
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head",
+                "values": {
+                  "lpips_max": 0.7001214935425694
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "sharpness_ratio_mean": 1.0545215251557534
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.062524355231338
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "psnr_mean": 13.643943652062966,
+                  "psnr_min": 12.83183960413786
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "lpips_mean": 0.6280031597004977
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake",
+                "values": {
+                  "lpips_max": 0.654529770667545
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "sharpness_ratio_mean": 1.2368717282999773
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.8087594659150464
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "psnr_mean": 9.589840307968997,
+                  "psnr_min": 9.016761969075173
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "lpips_mean": 0.7162174916305921
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga",
+                "values": {
+                  "lpips_max": 0.7557377729625873
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "sharpness_ratio_mean": 0.982467341217696
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.9262212483281592
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "psnr_mean": 10.029193505293724,
+                  "psnr_min": 8.751258388915486
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "lpips_mean": 0.726583945602921
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast",
+                "values": {
+                  "lpips_max": 0.8275733348644098
+                }
+              },
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "sharpness_ratio_mean": 0.8110605861152431
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "temporal_jitter_ratio_mean": 0.7245177750639096
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "psnr_mean": 11.088776044263156,
+                  "psnr_min": 7.300913040366071
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": true,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "reason": null,
+                  "status": "complete"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "lpips_mean": 0.6336414892573314
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo",
+                "values": {
+                  "lpips_max": 0.7476610932055966
+                }
+              }
+            ],
+            "lpips_max_max": 0.8275733348644098,
+            "lpips_mean_max": 0.726583945602921,
+            "lpips_mean_median": 0.6833717685970923,
+            "psnr_mean_median": 10.603451174086542,
+            "reports": 5
+          },
+          "status": "fail"
+        },
+        "visual_artifact": {
+          "detail": {
+            "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+          },
+          "status": "deferred"
+        }
+      },
+      "kind": "lossy",
+      "promotion_blockers": [
+        "artifact:fail",
+        "quantitative_quality:fail"
+      ],
+      "speedup": 1.2956065153103218,
+      "tier": null,
+      "verdict": "fail"
+    }
+  },
+  "elapsed_s": 0.001973883,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: 10 check(s) failed: gate-v2-mxvae-768--trim-nvfp4attn-768/artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-768--trim-nvfp4attn-768/artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-768--trim-nvfp4attn-768/artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-768--trim-nvfp4attn-768/artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-768--trim-nvfp4attn-768/artifact/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo: {\"baseline_clip\":\"failed\",\"candidate_clip\":\"failed\",\"report_status\":\"pass\"} vs limits {\"clip_status\":\"completed\",\"report_status\":\"pass\"}; gate-v2-mxvae-768--trim-nvfp4attn-768/quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-talking-head/temporal_jitter_ratio: {\"temporal_jitter_ratio_mean\":0.7949265948465795} vs limits {\"max\":1.2,\"min\":0.85}; gate-v2-mxvae-768--trim-nvfp4attn-768/quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/sharpness_ratio: {\"sharpness_ratio_mean\":1.2368717282999773} vs limits {\"max\":1.08,\"min\":0.95}; gate-v2-mxvae-768--trim-nvfp4attn-768/quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga/temporal_jitter_ratio: {\"temporal_jitter_ratio_mean\":0.8087594659150464} vs limits {\"max\":1.2,\"min\":0.85}; gate-v2-mxvae-768--trim-nvfp4attn-768/quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/sharpness_ratio: {\"sharpness_ratio_mean\":0.8110605861152431} vs limits {\"max\":1.08,\"min\":0.95}; gate-v2-mxvae-768--trim-nvfp4attn-768/quality/compare-clips-v2-mxvae-768--trim-nvfp4attn-768-h3-demo/temporal_jitter_ratio: {\"temporal_jitter_ratio_mean\":0.7245177750639096} vs limits {\"max\":1.2,\"min\":0.85}",
+  "git_sha": null,
+  "stage": "gate-v2-mxvae-768--trim-nvfp4attn-768",
+  "status": "fail"
+}
