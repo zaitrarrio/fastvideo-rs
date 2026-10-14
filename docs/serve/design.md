@@ -1978,6 +1978,30 @@ additions and readings; everything is re-exported from the crate root.
   same recipe with the release's NVFP4 DiT (`fasth3-trim-8step-nvfp4` beside the
   Trim tree): every block's attention and FFN linears W4A4 on NVFP4 tensor cores,
   sm_100 / sm_120 only (the load fails elsewhere; docs/ports/h3-trim.md §5).
+  **H3 NVFP4 tier and its options (owner decisions 2026-10-14,
+  docs/perf/h3-nvfp4-tier-options.md "Decisions and what shipped").** Untiered,
+  opt-in `fasth3-v2-nvfp4` (served `h3-v2-nvfp4`, recipe `v2-nvfp4`, preset
+  `fasth3-v2-nvfp4`, `configs/serve/runpod-h3-v2-nvfp4.toml`) and
+  `fasth3-4step-vsa-nvfp4` (served `h3-turbo-nvfp4`, recipe `4step-vsa-nvfp4`,
+  preset `fasth3-4step-nvfp4`) = the FastH3 V2 / 4-step NVFP4 releases from
+  their own R2 trees (ModelOpt NVFP4 DiT, sparse FP4 VSA) decoding with the
+  release's **published NVFP4 VAE by default** (`FASTVIDEO_H3_VAE_NVFP4=0`:
+  h3-base's VAE, MXFP8, the previous decoder); text-to-video, NVFP4 tensor
+  cores only. **Fast preview** = a model id of its own, as `h3-draft` is: the
+  same recipe decoded by TAEH3 at its canvases, `h3-v2-nvfp4-preview`
+  (`fasth3-v2-nvfp4-taeh3`), `h3-turbo-nvfp4-preview`
+  (`fasth3-4step-vsa-nvfp4-taeh3`) and `h3-turbo-preview`
+  (`fasth3-4step-vsa-taeh3`, 768p and 480p), each with its pool / preset; a
+  client picks it by model id on any API (no request field: the protocol's
+  knobs are sampling knobs, and a decoder switch would need a second resident
+  pipeline per process anyway). Never a default: it fails the sharpness gate
+  (0.82-0.91 against the official decoder) and saves about 10-12% end to end.
+  **Fastest** = untiered, opt-in `fasth3-trim-nvfp4-fast` (served
+  `h3-trim-nvfp4-fast`, recipe `trim-8step-nvfp4-fp4attn`, preset
+  `fasth3-trim-nvfp4-fast`): the Trim NVFP4 with the VSA fine stage on sparse
+  FP4 tensor cores, turned on by the recipe (no process variable;
+  `FASTVIDEO_H3_VSA_FP4=0` still turns it off). 9.21 / 24.64 s denoise at 480p /
+  768p, ~20 GiB peak; a different model from V2, not gate-equivalent.
   Untiered `h3-larry-turbo` / `h3-lightx2v-turbo` (pools / control presets of the
   same names, `configs/serve/runpod-h3-{larry,lightx2v}-turbo.toml`) = base
   MiniMax-H3 with a Turbo LoRA folded in at load, as the

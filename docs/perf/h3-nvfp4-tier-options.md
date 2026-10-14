@@ -1,5 +1,9 @@
 # H3 NVFP4 tier: three speed / quality options (2026-10-14)
 
+**Decided (owner, 2026-10-14) and shipped:** the NVFP4 VAE is the NVFP4 tier's default decoder; TAEH3 is an explicit
+"fast preview" choice; Trim NVFP4 + sparse FP4 attention is an opt-in "fastest" tier; the training pilot is declined.
+See [Decisions and what shipped](#decisions-2026-10-14-and-what-shipped). The measurements below are the basis.
+
 The owner asked for three options for the H3 NVFP4 tier, measured against upstream FastVideo, before choosing what
 to ship. All three ran on **one RTX PRO 6000 Blackwell pod** (EU-RO-1, $2.49/hr, image
 `fastvideo-rs-runtime:sha-b564268` for its CUDA libraries, this branch's `fv-gpucheck` at `c56aac4`). Every arm used
@@ -7,7 +11,8 @@ the same image, binary, prompts and seeds. One R2 fetch served all of them: 109 
 the EU volume.
 
 - **Option 5:** TAEH3 decode on V2-NVFP4.
-- **Option 6:** the published NVFP4 VAE decoder linears, new in this branch behind `FASTVIDEO_H3_VAE_NVFP4=1`.
+- **Option 6:** the published NVFP4 VAE decoder linears, measured behind `FASTVIDEO_H3_VAE_NVFP4=1` (now the
+  default of a `vae/` that carries them).
 - **Option 7:** the Trim 8-step NVFP4 checkpoint, with and without sparse FP4 attention.
 
 The base is main plus PR #113 (sparse FP4 VSA attention, the NVFP4 default). PR #114 (`FASTVIDEO_H3_VAE_AB`) had not
@@ -66,7 +71,7 @@ Upstream reference (docs/ports/fasth3-nvfp4.md §5 and docs/ports/fasth3-sparse-
   decode (1.96 / 4.64 s) is already well under upstream's warm ~8.8 s. That makes TAEH3 a preview tool, not
   something parity needs.
 
-## Option 6: the published NVFP4 VAE decoder linears (`FASTVIDEO_H3_VAE_NVFP4=1`)
+## Option 6: the published NVFP4 VAE decoder linears (`FASTVIDEO_H3_VAE_NVFP4`)
 
 **What the checkpoint holds.** The V2-NVFP4 `vae/` header was read from R2 and dequantized against h3-base (numpy, four
 linears of blocks 0 / 5 / 17 / 35):
@@ -83,7 +88,7 @@ linears of blocks 0 / 5 / 17 / 35):
 | | |
 |---|---|
 | `FASTVIDEO_H3_VAE_NVFP4=1` | the block linears are read as published (`h3::nvfp4::PublishedLinear::read_modelopt`, `Nvfp4Operand::from_host_layout`). q / k / v form one `Nvfp4Stack`: the activation is quantized once with the largest of the three calibrated scales, and each part keeps its own global scale. Biases are f32 as published. The GEMM is cuBLASLt `VEC16_UE4M3` W4A4 (the DiT's path), bf16 out, with the bias fused into the next kernel as on the bf16 path (`Linear::gemm_nvfp4_bf16`) |
-| valid only when | the `vae/` carries the weights (`decoder.transformer_blocks.0.attn.to_q.weight_scale` is in the opened files) **and** the GPU is sm_100 / sm_120. `=1` on a bf16 `vae/` is an error; a ModelOpt `vae/` without the flag is refused with what to do, because the tree has no bf16 copy. `MXFP8=1` together with `NVFP4=1` is an error, and MXFP8 is otherwise off with NVFP4 |
+| valid only when | the `vae/` carries the weights (`decoder.transformer_blocks.0.attn.to_q.weight_scale` is in the opened files) **and** the GPU is sm_100 / sm_120. `=1` on a bf16 `vae/` is an error; (as measured; since the decision a ModelOpt `vae/` decodes with them by default and `=0` takes h3-base's `vae/`, see below). `MXFP8=1` together with `NVFP4=1` is an error, and MXFP8 is otherwise off with NVFP4 |
 | `FASTVIDEO_H3_VAE_NVFP4_ACT=dynamic` | measure the activation amax per call instead of using the calibrated `input_scale` |
 | `FASTVIDEO_H3_VAE_CHECK=1` + `FASTVIDEO_H3_VAE_NVFP4_REF=<bf16 vae dir>` | on the first tile batch, the NVFP4 fused output is compared with the NVFP4 unfused output, and with the reference tree's bf16 unfused, bf16 fused and MXFP8 fused outputs. Sanity bound 0.25 rel-L2 |
 | folder | the V2-NVFP4 `vae/` (config, index, shards 1-2) plus h3-base's byte-identical shard 3 |
@@ -123,7 +128,7 @@ scales are as good as measuring the amax, so static stays the default.
   0.010-0.030, 10x the MXFP8 decoder's LPIPS.
 - **Recommendation:** for the NVFP4 tier, **make the published NVFP4 VAE the tier's decoder** when the pool is
   memory-bound (e.g. a 32 GB card, or co-residence). It passes the gate and saves 5 GiB, and it is never slower. As a
-  pure speed lever it is worth ~0.5 s at 768p only; it stays opt-in (`FASTVIDEO_H3_VAE_NVFP4=1`) until the owner picks.
+  pure speed lever it is worth ~0.5 s at 768p only; it was opt-in (`FASTVIDEO_H3_VAE_NVFP4=1`) until the owner picked it (now the default, see the decisions below).
   It needs the V2-NVFP4 `vae/` shards in the tier's tree (1.7 GB, already in R2 under `fasth3-v2-nvfp4`).
 
 ## Option 7: FastH3 Trim 8-step NVFP4 (`fasth3-trim-8step-nvfp4`)
@@ -196,6 +201,60 @@ the reference every option was asked against:
   + FP4 attention "fastest" (1.25x the tier end to end; a different model's sample).
 - Against upstream (V2-NVFP4, 10.25 / 29.3 s denoise, ~8.8 s warm decode): our tier default is 1.16x / 1.09x behind on
   denoise but ahead end to end wherever upstream's decode counts (13.9 s against ~19 s at 480p).
+
+## Decisions (2026-10-14) and what shipped
+
+| decision | what it is now | how to choose it |
+|---|---|---|
+| **1. The NVFP4 VAE is the NVFP4 tier's decoder** | a `vae/` that carries the published NVFP4 decoder linears (the V2 / 4-step NVFP4 releases') decodes with them **by default**; `FASTVIDEO_H3_VAE_NVFP4=0` decodes with h3-base's `vae/` (bf16 + MXFP8 copies), the decoder the tier ran before | served recipes `v2-nvfp4` (catalog `fasth3-v2-nvfp4`, served `h3-v2-nvfp4`, preset `fasth3-v2-nvfp4`) and `4step-vsa-nvfp4` (catalog `fasth3-4step-vsa-nvfp4`, served `h3-turbo-nvfp4`, preset `fasth3-4step-nvfp4`); untiered and opt-in, `h3-turbo` stays the default H3 tier |
+| **2. TAEH3 is an explicit "fast preview"** | the same recipe decoded by TAEH3 at its canvases (768p default, 480p), a model id of its own; never a default. It **fails the sharpness gate** (0.82-0.91 against the official decoder: softer frames of the same picture) and saves **about 10-12% end to end** (option 5) | `h3-v2-nvfp4-preview` (`fasth3-v2-nvfp4-taeh3`), `h3-turbo-nvfp4-preview` (`fasth3-4step-vsa-nvfp4-taeh3`), `h3-turbo-preview` (`fasth3-4step-vsa-taeh3`); presets of the same names (`fasth3-v2-nvfp4-preview`, `fasth3-4step-nvfp4-preview`, `h3-turbo-preview`). `h3-draft` (the 480p draft tier) is unchanged |
+| **3. Trim NVFP4 + sparse FP4 attention is an opt-in "fastest" tier** | recipe `trim-8step-nvfp4-fp4attn` turns the FP4 VSA fine stage on (`FASTVIDEO_H3_VSA_FP4=1` semantics: an error without the sm_120 kernel; `=0` still turns it off), no process-wide variable. **A different model from V2, not gate-equivalent**: 9.21 / 24.64 s denoise at 480p / 768p, about 20 / 27 GiB peak | catalog `fasth3-trim-nvfp4-fast`, served `h3-trim-nvfp4-fast`, preset `fasth3-trim-nvfp4-fast` (R2 trees `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`) |
+| 4. Training pilot | declined | — |
+
+**Why model ids for the preview, not a request field.** The serving API's per-request knobs are sampling knobs
+(`steps`, `guidance`, ...; `SamplingOverrides`), and every draft decoder already is a model id of its own (`h3-draft`,
+`ltx-draft`, `wan-draft`), which every API (native, OpenAI videos, MiniMax, fal) and fv-control's pools, standalone
+pods and serverless endpoints address the same way. A request field would also need a second decoder resident beside
+each pipeline. So a preview is chosen by model id, and its pool runs it alone.
+
+**Decoder resolution** (`crates/fastvideo-cudarc/src/h3/vae.rs` `resolve_nvfp4`, `h3/pipeline.rs`
+`resolve_video_vae`), never a silent fallback:
+
+| `vae/` of the tree | `FASTVIDEO_H3_VAE_NVFP4` | decoder |
+|---|---|---|
+| carries the NVFP4 linears | unset or `1` | the published NVFP4 linears, sm_100 / sm_120; elsewhere an error naming `=0` |
+| carries the NVFP4 linears | `0` | h3-base's `vae/` (the text weights' tree), bf16 + MXFP8; an error naming `--text-weights` when there is none |
+| bf16 (h3-base, the Trim) | unset or `0` | unchanged (bf16 + MXFP8 as `FASTVIDEO_H3_VAE_MXFP8` resolves) |
+| bf16 | `1` | an error (no NVFP4 linears) |
+
+The R2 trees `fasth3-v2-nvfp4` / `fasth3-4step-vsa-nvfp4` carry `vae/` shards 1-2 (the NVFP4 linears), its config and
+index; the index's third shard, byte-identical to h3-base's, is read from h3-base's `vae/`
+(`completed_vae_files`, logged), so no composed folder is needed. A shard in neither is an error that says to fetch
+h3-base beside the tree. `FASTVIDEO_H3_VAE_MXFP8=1` with the NVFP4 decoder is an error.
+
+**Memory plan** (`crates/fastvideo-models/src/h3/memory.rs` `H3VaeLinears`): the video decoder is priced as held.
+
+| decoder | priced | of which block linears |
+|---|---:|---:|
+| bf16 (`MXFP8=0`, pre-sm_100, TAEH3 as the safe side) | 4.50 GiB | 4.50 GiB bf16 |
+| bf16 + MXFP8 copies (the default elsewhere) | 6.83 GiB | + 2.32 GiB MXFP8 |
+| **published NVFP4 (the NVFP4 tier's default)** | **1.27 GiB** | **1.27 GiB** (E2M1 + E4M3 per 16; the load log's "1.27 GiB with biases") |
+
+The NVFP4 decoder's plan is 5.55 GiB under the MXFP8 default's; the measured peak dropped 5.0 / 5.2 GiB at 480p / 768p.
+
+**Trees each preset needs** (`control/src/recipe-trees.ts`, checked against the configs and the Rust sources by
+`control/test/unit/preset-trees.test.ts`): the NVFP4 tier and its previews read their release tree (the config's
+`weights`) plus `h3-base` (text encoder, tokenizer, audio VAE, `vae/` shard 3), prequant `h3-base/text_encoder_fp8`;
+the Trim fastest tier `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`; `h3-turbo-preview` the same as
+`h3-turbo`; TAEH3 is an aux file every boot fetches. The release trees are in R2 only (not on the EU volume), so those
+presets default to `weights_source r2`; `h3-turbo-preview` is all on the EU volume.
+
+**Code:** `fastvideo-models` `h3::config` (`nvfp4_release_contract`, `is_trim_nvfp4_fp4attn_recipe`),
+`h3::memory`; `fastvideo-cudarc` `h3::vae`, `h3::pipeline` (`resolve_video_vae`, `vsa_fp4_choice(.., recipe_fp4)`;
+a release recipe on a non-ModelOpt `transformer/` is refused); `fastvideo-engine-service` `cuda::caps` (catalog
+entries, NVFP4 requirement, T2V only for the releases); `fastvideo-serve` `tokens` (the release trees' tokenizer is
+h3-base's); `configs/serve/runpod-h3-{v2-nvfp4,turbo-nvfp4,v2-nvfp4-preview,turbo-nvfp4-preview,turbo-preview,trim-nvfp4-fast}.toml`;
+fv-control presets, recipe trees, catalog, serverless recipes, `scripts/serve/variants.sh`.
 
 ## Cost and clean-up
 
