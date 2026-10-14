@@ -21,6 +21,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/runpod-price.sh
 source "$ROOT/scripts/gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../gpu/runpod-cuda.sh
+source "$ROOT/scripts/gpu/runpod-cuda.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 : "${RUNPOD_IMAGE:?RUNPOD_IMAGE (the fv-serve image with webrtc) missing}"
@@ -116,13 +118,12 @@ EOF
 create() {
   local gpu="$1" payload
   payload="$(jq -n --arg name "fv-sfwan-whip-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" \
-    --arg cmd "$(pod_cmd)" '{
+    --arg cmd "$(pod_cmd)" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 80, volumeInGb: 0,
-      allowedCudaVersions: ["13.0"],
       env: {NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"},
       ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
-    }')"
+    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
   rest POST /pods "$payload"
 }
 

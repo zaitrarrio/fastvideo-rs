@@ -25,6 +25,8 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 source "$ROOT/scripts/gpu/runpod-price.sh"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
 source "$ROOT/scripts/gpu/volumes.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-cuda.sh
+source "$ROOT/scripts/gpu/runpod-cuda.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:-${TMPDIR:-/tmp}/fv-e2e-wan.state}"
@@ -71,7 +73,7 @@ payload() { # image gpu name keyhash
   dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
   jq -n --arg name "$3" --arg image "$1" --arg gpu "$2" --arg keys "$4" --arg py "$py" --arg run "$run" \
     --arg vol "$VOLUME" --arg dc "$dc" --arg tag "$(date -u +%m%d%H%M)" \
-    --arg cuda "${RUNPOD_ALLOWED_CUDA-13.0}" --arg skip1 "${FV_E2E_SKIP_PHASE1:-0}" --arg live "${FV_E2E_LIVE_S:-300}" '{
+    --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg skip1 "${FV_E2E_SKIP_PHASE1:-0}" --arg live "${FV_E2E_LIVE_S:-300}" '{
     name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
     gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 60, volumeInGb: 0,
     networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],

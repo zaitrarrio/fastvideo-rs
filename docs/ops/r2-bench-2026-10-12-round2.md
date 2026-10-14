@@ -169,6 +169,9 @@ An endpoint's outlook already switches to its own measured rate after one boot: 
    `allowedCudaVersions: ["13.0"]` for r2 pods outside EUR-IS-1 (round-1 caveat: the filter can hide the newest
    hosts), which the stock query does not apply. This is **UNVERIFIED**. A standalone launch cannot set
    `allowed_cuda` (the launch schema has no such field), so `[]` cannot be tried from the CLI.
+   **Cause confirmed 2026-10-14:** RTX PRO 6000 hosts are labelled `"13.2"`, and a `"13.0"` filter shows no
+   Secure stock for them (GraphQL `lowestPrice`). The default list is gone (`claude/cuda-filter-13x`;
+   docs/control/serverless.md §1b).
 5. **The wan fetch's tail is still 47 s on a GPU host.** One part stayed slow over three new connections (see "The
    fetch on a GPU host").
 

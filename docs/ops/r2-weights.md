@@ -163,8 +163,10 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
     `providers.ts weightsSource`, `volumes.ts EU_TREES`): wan, fastwan21, sfwan and longlive pools fetch from R2 in
     the `eu` region (EU-RO-1); H3 and LTX pools mount the volume. Serverless presets follow the same rule.
   - **Any data centre**: the pool's `data_centers` (r2 only) replaces the region's data centre (EU-RO-1), and a standalone launch
-    takes any Runpod `dc` with r2 (`fv-control.sh pod launch … --weights r2 --region US-TX-3`). Outside the volume's data centre the
-    pod gets `allowedCudaVersions: ["13.0"]` (`allowed_cuda` overrides it; finding 2).
+    takes any Runpod `dc` with r2 (`fv-control.sh pod launch … --weights r2 --region US-TX-3`). No data centre gets an exact
+    `allowedCudaVersions` list by default (2026-10-14: `"13.0"` alone hid every RTX PRO 6000, labelled `"13.2"`, and
+    REST refuses `"13.2"`; docs/control/serverless.md §1b). The boot's driver check refuses a pre-CUDA-13 host and
+    fv-control places a new pod (finding 2). A pool's `allowed_cuda` is sent as given.
   - `containerDiskInGb` defaults to the trees' bytes × 1.15 + 30 GB, at most 500 GB. Trees larger than that must
     use the volume.
   - The worker boot runs the same fetch step, then checks the aux files (fetched from R2 with the trees) by
