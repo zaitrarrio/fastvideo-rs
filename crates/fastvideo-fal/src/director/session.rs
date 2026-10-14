@@ -405,7 +405,10 @@ impl Session {
         let msg = msg.into();
         self.send(m::error(code, msg.clone(), version));
         if code.is_session_failure() && self.ending.is_none() {
-            self.ending = Some(EndReason::Error(ApiError::engine_failed(msg)));
+            self.ending = Some(EndReason::Error(match code {
+                ErrorCode::ContentPolicy => ApiError::content_filtered(msg),
+                _ => ApiError::engine_failed(msg),
+            }));
         }
     }
 
@@ -612,6 +615,19 @@ impl Session {
                     return;
                 }
                 let v = Some(c.prompt_version);
+                // `[moderation]` (the NCII guard), before anything is staged:
+                // the opening prompt and every script beat's.
+                let visual = c.image_url.is_some()
+                    || c.end_image_url.is_some()
+                    || c.script.iter().flatten().any(|b| b.end_image_url.is_some());
+                let texts: Vec<&str> = std::iter::once(c.prompt.as_str())
+                    .chain(c.script.iter().flatten().filter_map(|b| b.prompt.as_deref()))
+                    .collect();
+                for t in texts {
+                    if let Err(e) = self.init.ctx.moderate_prompt(t, visual).await {
+                        return self.fail(ErrorCode::ContentPolicy, e.message, v);
+                    }
+                }
                 let (image, image_dims) = match &c.image_url {
                     Some(u) => match self.stage_sized(u, "image_url").await {
                         Ok((p, d)) => (Some(p), d),
@@ -700,6 +716,22 @@ impl Session {
                     return;
                 }
                 let v = p.prompt_version;
+                // `[moderation]`: a session that opened on an image keeps
+                // editing it, so its later prompts count as visual input.
+                let visual = p.end_image_url.is_some()
+                    || p.script.iter().flatten().any(|b| b.end_image_url.is_some())
+                    || self.control.settings().is_some_and(|s| s.has_initial_image);
+                let texts: Vec<&str> = p
+                    .prompt
+                    .as_deref()
+                    .into_iter()
+                    .chain(p.script.iter().flatten().filter_map(|b| b.prompt.as_deref()))
+                    .collect();
+                for t in texts {
+                    if let Err(e) = self.init.ctx.moderate_prompt(t, visual).await {
+                        return self.send(m::prompt_rejected(v, RejectReason::ContentPolicy, e.message));
+                    }
+                }
                 let end_image = match &p.end_image_url {
                     Some(u) => match self.stage(u, "end_image_url").await {
                         Ok(x) => Some(x),

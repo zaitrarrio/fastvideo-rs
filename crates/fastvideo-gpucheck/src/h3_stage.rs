@@ -481,6 +481,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         name: "default".into(),
                         prompt: prompt.clone(),
                         seed: *seed,
+                        size: None,
                     }],
                     false,
                 ),
@@ -1820,7 +1821,12 @@ fn gen(
     let clip_dir = arm_clip.as_path();
     let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
     for (index, spec) in prompts.iter().enumerate() {
-        let mut request = canvas.request(&spec.prompt, spec.seed)?;
+        // A prompt's own `height` / `width` (prompt-set files) override the canvas.
+        let prompt_canvas = match spec.size {
+            Some((h, w)) => GenCanvas { height: Some(h), width: Some(w), ..canvas },
+            None => canvas,
+        };
+        let mut request = prompt_canvas.request(&spec.prompt, spec.seed)?;
         request.references = refs.clone();
         request.mp4 = mp4;
         let clip_dir_owned = if multi {

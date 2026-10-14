@@ -49,6 +49,7 @@
 //! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
 //! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms` |
 //! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
+//! | `FV_MODERATION_NCII` (`off` \| `keyframe` \| `all`), `FV_MODERATION_NCII_DIR`, `FV_MODERATION_NCII_THRESHOLD` | `[moderation]` (the NCII prompt guard; docs/ports/h3-turbo-loras.md) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -992,6 +993,62 @@ impl Default for LogCfg {
     }
 }
 
+/// `[moderation]`: optional prompt admission checks (design §10 R8;
+/// docs/ports/h3-turbo-loras.md "NCII guard"). Off by default.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModerationCfg {
+    /// The NCII prompt guard (`hfmlsoc/ncii-light-guard-v01`, MIT, CPU):
+    /// `off` (default), `keyframe` (requests with an image or video input,
+    /// as the MiniMax-H3-Turbo-Lora Space runs it) or `all`.
+    pub ncii: String,
+    /// Its directory (`config.json`, `model.safetensors`, `tokenizer.json`).
+    /// Default `$FV_WEIGHTS/auxiliary/ncii-light-guard`
+    /// (`/workspace/weights/...`).
+    pub ncii_dir: Option<PathBuf>,
+    /// Refuse when the `ncii` probability reaches this (default 0.5: the
+    /// pipeline's top label, what the Space refuses on).
+    pub ncii_threshold: f32,
+    /// Prompts classified at once (CPU threads are shared with the engine's
+    /// host work; default 2).
+    pub ncii_concurrency: usize,
+}
+
+impl Default for ModerationCfg {
+    fn default() -> Self {
+        Self { ncii: "off".into(), ncii_dir: None, ncii_threshold: 0.5, ncii_concurrency: 2 }
+    }
+}
+
+impl ModerationCfg {
+    pub fn scope(&self) -> Result<fastvideo_protocol::ModerationScope, ConfigError> {
+        fastvideo_protocol::ModerationScope::parse(&self.ncii)
+            .map_err(|e| ConfigError::Invalid(format!("[moderation] ncii: {e}")))
+    }
+
+    /// `ncii_dir`, else `$FV_WEIGHTS/auxiliary/ncii-light-guard`.
+    pub fn ncii_dir(&self, env: &dyn Env) -> PathBuf {
+        self.ncii_dir.clone().unwrap_or_else(|| {
+            PathBuf::from(env.var("FV_WEIGHTS").unwrap_or_else(|| "/workspace/weights".into()))
+                .join(fastvideo_models::ncii::NCII_TREE)
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.scope()?;
+        if !(self.ncii_threshold > 0.0 && self.ncii_threshold <= 1.0) {
+            return Err(ConfigError::Invalid(format!(
+                "[moderation] ncii_threshold = {}: expected (0, 1]",
+                self.ncii_threshold
+            )));
+        }
+        if self.ncii_concurrency == 0 {
+            return Err(ConfigError::Invalid("[moderation] ncii_concurrency must be 1 or more".into()));
+        }
+        Ok(())
+    }
+}
+
 /// The whole `serve.toml`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1013,6 +1070,8 @@ pub struct Config {
     pub reactor: ReactorCfg,
     /// `None`: no prompt upsampling.
     pub upsampler: Option<UpsamplerCfg>,
+    /// Prompt admission checks (the NCII guard); off by default.
+    pub moderation: ModerationCfg,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
@@ -1345,6 +1404,17 @@ impl Config {
             self.dispatch.status_s = v;
         }
         self.apply_upsampler_env(env)?;
+        if let Some(v) = env.var("FV_MODERATION_NCII") {
+            self.moderation.ncii = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_MODERATION_NCII_DIR").filter(|v| !v.trim().is_empty()) {
+            self.moderation.ncii_dir = Some(PathBuf::from(v.trim()));
+        }
+        if let Some(v) = env.var("FV_MODERATION_NCII_THRESHOLD") {
+            self.moderation.ncii_threshold = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!("FV_MODERATION_NCII_THRESHOLD={v} is not a number"))
+            })?;
+        }
         if let Some(v) = env.var("FV_LOG_FORMAT") {
             self.log.format = v;
         }
@@ -1400,6 +1470,7 @@ impl Config {
         if let Some(u) = &self.upsampler {
             u.validate()?;
         }
+        self.moderation.validate()?;
         if self.server.workers_max == 0 {
             return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
         }

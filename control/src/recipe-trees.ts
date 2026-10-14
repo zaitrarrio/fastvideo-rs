@@ -51,6 +51,18 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "Ref2VA base: transformer_ref in h3-ref2va (caps.rs ref_weights)",
   },
+  "h3-larry-turbo": {
+    catalog: "h3-larry-turbo",
+    required: ["h3-turbo-loras/larry"],
+    prequant: [H3_TEXT_FP8],
+    note: "Turbo LoRA larry: the adapter in h3-turbo-loras/larry beside h3-base (crates/fastvideo-models/src/h3/turbo_lora.rs TurboLora::resolve); no DiT tree (merged at load)",
+  },
+  "h3-lightx2v-turbo": {
+    catalog: "h3-lightx2v-turbo",
+    required: ["h3-turbo-loras/lightx2v"],
+    prequant: [H3_TEXT_FP8],
+    note: "Turbo LoRA lightx2v v1.2 768p: the adapter in h3-turbo-loras/lightx2v beside h3-base (turbo_lora.rs TurboLora::resolve); no DiT tree (merged at load)",
+  },
   "h3-trim": {
     catalog: "fasth3-trim-8step",
     required: ["h3-base"],

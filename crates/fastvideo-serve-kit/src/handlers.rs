@@ -143,6 +143,7 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let t_validate = mark();
     ctx.engine().admit()?;
     ctx.safety().check_request(&req)?;
+    ctx.moderate_request(&req).await?;
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
     let caps = resolve_model(&req.model, |n| engine.alias(n), &models)?;

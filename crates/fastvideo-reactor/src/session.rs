@@ -124,6 +124,19 @@ pub struct ReactorConfig {
     /// Opens output copies (`start_session` `output` / `x_fv_output`,
     /// docs/serve/stream-outputs.md); `None`: refused.
     pub outputs: Option<fastvideo_media::output::OutputHook>,
+    /// The prompt moderator (`[moderation]`, the NCII guard): a command's
+    /// `prompt` it refuses stops the session with RT's `moderation` notice.
+    pub moderator: Option<ModeratorHook>,
+}
+
+/// A [`fastvideo_protocol::PromptModerator`] in the config (`Debug` without it).
+#[derive(Clone)]
+pub struct ModeratorHook(pub Arc<dyn fastvideo_protocol::PromptModerator>);
+
+impl std::fmt::Debug for ModeratorHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModeratorHook({})", self.0.scope().as_str())
+    }
 }
 
 impl Default for ReactorConfig {
@@ -149,6 +162,7 @@ impl Default for ReactorConfig {
             mode: None,
             avatar: AvatarSettings::default(),
             outputs: None,
+            moderator: None,
         }
     }
 }

@@ -114,6 +114,26 @@ export const POOL_PRESETS: PoolPreset[] = [
     prequant: ["h3-base/text_encoder_fp8"],
     pool: { id: "fasth3-trim", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim.toml"), models: [{ id: "fasth3-trim-8step", family: "h3", recipe: "h3-trim" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
+  // MiniMax-H3 Turbo LoRAs (docs/ports/h3-turbo-loras.md): base H3 + one adapter folded at load. The adapters are in R2
+  // only (not on the EU volume), so these pools fetch from R2 by default.
+  {
+    id: "h3-larry-turbo",
+    min_vram_gb: 80,
+    title: "MiniMax-H3 Turbo LoRA (larry)",
+    description: "MiniMax-H3 with larryvrh/MiniMax-H3-Turbo-Lora (ckpt850 EMA, Apache-2.0) folded in at load, as the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs it: 6 forwards (4 allowed), dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio.",
+    weights: ["h3-base", "h3-turbo-loras/larry"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "h3-larry-turbo", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-larry-turbo.toml"), models: [{ id: "h3-larry-turbo", family: "h3", recipe: "h3-larry-turbo" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
+    id: "h3-lightx2v-turbo",
+    min_vram_gb: 80,
+    title: "MiniMax-H3 Turbo LoRA (lightx2v)",
+    description: "MiniMax-H3 with lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v1.2 768p (Apache-2.0) folded in at load: 4 forwards at shifts 6 / 3, dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio.",
+    weights: ["h3-base", "h3-turbo-loras/lightx2v"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "h3-lightx2v-turbo", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-lightx2v-turbo.toml"), models: [{ id: "h3-lightx2v-turbo", family: "h3", recipe: "h3-lightx2v-turbo" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
   {
     id: "fastwan21",
     min_vram_gb: 24,
