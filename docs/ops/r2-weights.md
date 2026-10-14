@@ -913,5 +913,17 @@ One tree, published Hub → R2 from one CPU pod with `scripts/gpu/r2-publish-hub
 
 **Shared with h3-base, so not duplicated:** the repository's `h3-base/` is MiniMax-H3: 28 of its 29 files carry the same
 LFS / blob hash as `MiniMaxAI/MiniMax-H3` @ `42ed227` (only the README differs), so the pipeline reads our `h3-base` tree.
-Not published: `stage-dmd-step-250/` (the 8-step model); its branch and default adapter are byte-identical to stage B's,
-and only `adapters/turbo/` (0.85 GB) would be new (docs/ports/vdn-h3.md §0). Not on the 500 GB EU volume.
+Not on the 500 GB EU volume.
+
+**The 8-step model (owner approval 2026-10-14: the turbo adapter).** `stage-dmd-step-250/`'s linear branch and default
+adapter are byte-identical to stage B's (LFS `dec6981c…`, `58558fef…`), so its tree holds only what differs: the turbo
+LoRA and the stage's small JSON files. Published the same way (`r2-publish-hub.sh up vdn-h3-dmd-250-turbo`, $0.48/hr,
+~3 min, upload checked against the Hub LFS SHA-256 `24fc93c8…`, then `verify --deep`; logs
+`artifacts/ports/vdn-h3/publish-turbo/`); the pod and only its own staged bundle were deleted by hand.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `vdn-h3-dmd-250-turbo` | `2ce18deb1d1c6b115d6bb3732f3750fdbac95173` | 7 | 851,503,008 | `4f8779792f8ddfbb8b05d6dd7cc71809fd055c1e467b11c2832f90c2a5c2abb9` |
+
+The served model reads `vdn-h3-dmd-250-turbo/stage-dmd-step-250` with `vdn-h3-stage-b-2000/stage-b-step-2000` as its
+shared directory (`H3Recipe.vdn_shared`; verify cell `vdn-h3-8step`).

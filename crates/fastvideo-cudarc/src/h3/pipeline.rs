@@ -282,10 +282,16 @@ pub struct H3PipelineOptions {
     /// checkpoint directory (`stage-b-step-2000/`, or a tree holding one stage
     /// directory). `None`: `FASTVIDEO_H3_VDN`. The snapshot is h3-base.
     pub vdn: Option<PathBuf>,
+    /// Where the files `vdn`'s config names but its tree does not carry come
+    /// from (the 8-step `stage-dmd-step-250/` reads stage B's byte-identical
+    /// linear branch and default adapter). `None`: `FASTVIDEO_H3_VDN_SHARED`.
+    pub vdn_shared: Option<PathBuf>,
 }
 
 /// `FASTVIDEO_H3_VDN`: the VDN checkpoint directory when the options name none.
 pub const H3_VDN_ENV: &str = "FASTVIDEO_H3_VDN";
+/// `FASTVIDEO_H3_VDN_SHARED`: [`H3PipelineOptions::vdn_shared`] when unset.
+pub const H3_VDN_SHARED_ENV: &str = "FASTVIDEO_H3_VDN_SHARED";
 
 /// Where the multimodal (image-conditioned) text encoder's weights live.
 ///
@@ -360,7 +366,13 @@ pub fn vdn_checkpoint(
             if options.ref2va {
                 return Err(msg("VDN-H3: Ref2VA was not trained (T2VA, I2VA, L2VA, FL2VA only)"));
             }
-            fastvideo_models::h3::vdn::VdnCheckpoint::open(&d).map(Some).map_err(msg)
+            let shared = options
+                .vdn_shared
+                .clone()
+                .or_else(|| std::env::var_os(H3_VDN_SHARED_ENV).map(PathBuf::from));
+            fastvideo_models::h3::vdn::VdnCheckpoint::open_shared(&d, shared.as_deref())
+                .map(Some)
+                .map_err(msg)
         }
     }
 }
@@ -974,6 +986,13 @@ impl H3Pipeline {
         }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
         let vdn_ckpt = vdn_checkpoint(&options)?;
+        // VDN-H3 defaults to bf16 linears (owner decision 2026-10-14; MXFP8
+        // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
+        // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
+        // load (every QuantMode::from_env of the DiT and refiner) only.
+        let _vdn_bf16 = vdn_ckpt
+            .as_ref()
+            .map(|_| crate::wan::quant::QuantMode::scoped_default(crate::wan::quant::QuantMode::Off));
         let cfg = dit_config(root, &options)?;
         let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
         if contract.dense {

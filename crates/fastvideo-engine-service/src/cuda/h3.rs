@@ -87,6 +87,7 @@ impl H3Model {
             )
             .map_err(ApiError::internal)?,
             vdn: recipe.vdn_weights.clone(),
+            vdn_shared: recipe.vdn_shared.clone(),
         })
     }
 

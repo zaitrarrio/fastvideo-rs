@@ -214,6 +214,44 @@ impl VdnCheckpoint {
         })
     }
 
+    /// [`Self::open`], then every file the config names that is missing from
+    /// `dir` taken from the same relative path under `shared`'s stage. The
+    /// 8-step tree (`vdn-h3-dmd-250-turbo`) publishes only what differs from
+    /// stage B (adapters/turbo and the JSON files); its linear branch and
+    /// default adapter are stage B's byte-identical files. `shared` must carry
+    /// the same transform.
+    pub fn open_shared(dir: &Path, shared: Option<&Path>) -> Result<Self, String> {
+        let mut ck = Self::open(dir)?;
+        let Some(shared) = shared else {
+            return Ok(ck);
+        };
+        let other = Self::open(shared)?;
+        if other.transform != ck.transform {
+            return Err(format!(
+                "vdn: {} and {} have different transforms",
+                ck.dir.display(),
+                other.dir.display()
+            ));
+        }
+        ck.relocate_missing(&other.dir, |p| p.is_file());
+        Ok(ck)
+    }
+
+    /// Points each named file `exists` rejects at the same relative path
+    /// under `shared` (tests pass their own `exists`).
+    pub fn relocate_missing(&mut self, shared: &Path, exists: impl Fn(&Path) -> bool) {
+        let stage = self.dir.clone();
+        let fix = |p: &mut PathBuf| {
+            if !exists(p) {
+                if let Ok(rel) = p.strip_prefix(&stage) {
+                    *p = shared.join(rel);
+                }
+            }
+        };
+        fix(&mut self.branch);
+        self.adapters.iter_mut().for_each(fix);
+    }
+
     /// Adapter names (`default`, `turbo`) in merge order.
     pub fn adapter_names(&self) -> Vec<String> {
         self.adapters
@@ -1056,6 +1094,33 @@ mod tests {
             "transformer_blocks.0.adaln_proj.linear"
         );
         assert_eq!(adapter_key("transformer_blocks.0.attn.to_out_linear.weight"), None);
+    }
+
+    /// The 8-step tree holds only adapters/turbo (and JSON files): the branch
+    /// and the default adapter come from stage B at the same relative paths.
+    #[test]
+    fn the_turbo_tree_reads_stage_b_files_it_does_not_carry() {
+        let cfg = r#"{"_class_name":"VDNMiniMaxH3Transformer3DModel","vdn":{
+            "adapters":["adapters/default/adapter_model.safetensors","adapters/turbo/adapter_model.safetensors"],
+            "base":{"revision":null,"source":"OpenVDN/vdn-minimax-h3","subfolder":"h3-base/transformer"},
+            "branch":"linear_branch/model.safetensors",
+            "transform":{"anchor_frames":"both","enable_softmax_gate":true,"linear_attention":{"a_fp32":true,
+            "bridge":"alpha","delta_rule":"vdn_solve","enable_text_state":true,"linear_head_dim":128,
+            "short_conv":{"targets":["k","v"]}},"softmax_attention":{"chunk":5,"radius":1}}}}"#;
+        let dmd = Path::new("/w/vdn-h3-dmd-250-turbo/stage-dmd-step-250");
+        let b = Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000");
+        let mut ck = VdnCheckpoint::from_config_json(dmd, cfg).unwrap();
+        assert!(ck.is_distilled());
+        ck.relocate_missing(b, |p| p.to_str().unwrap().contains("/turbo/"));
+        assert_eq!(ck.branch, b.join("linear_branch/model.safetensors"));
+        assert_eq!(
+            ck.adapters,
+            [
+                b.join("adapters/default/adapter_model.safetensors"),
+                dmd.join("adapters/turbo/adapter_model.safetensors")
+            ]
+        );
+        assert_eq!(ck.adapter_names(), ["default", "turbo"]);
     }
 
     #[test]

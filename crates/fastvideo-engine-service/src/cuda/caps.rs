@@ -151,6 +151,10 @@ pub struct H3Recipe {
     /// `vdn-h3-<N>step` contract.
     #[serde(default)]
     pub vdn_weights: Option<PathBuf>,
+    /// VDN-H3 8-step: the stage directory the files `vdn_weights` does not
+    /// carry come from (stage B's linear branch and default adapter).
+    #[serde(default)]
+    pub vdn_shared: Option<PathBuf>,
 }
 
 fn auto_str() -> String {
@@ -527,8 +531,9 @@ impl CudaModel {
                         .to_owned(),
                     _ if self.recipe_name.starts_with("vdn-h3") => format!(
                         "VDN-H3 (Video DeltaNet on MiniMax-H3): hybrid attention, a chunk-aligned window \
-                         softmax plus a frame-wise delta-rule linear branch in every block, stage-B LoRA; \
-                         {} forwards, official VAE",
+                         softmax plus a frame-wise delta-rule linear branch in every block, {}; \
+                         {} forwards, bf16 linears, official VAE",
+                        if r.vdn_shared.is_some() { "stage-B + DMD turbo LoRA" } else { "stage-B LoRA" },
                         r.steps
                     ),
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
@@ -745,6 +750,13 @@ pub const VDN_H3_ID: &str = "vdn-h3";
 pub const VDN_H3_RECIPE: &str = "vdn-h3-50step";
 pub const VDN_H3_TREE: &str = "vdn-h3-stage-b-2000";
 pub const VDN_H3_STAGE: &str = "stage-b-step-2000";
+/// VDN-H3 8-step (the DMD-distilled model): its id, contract, the tree with
+/// the turbo LoRA and its stage directory; the branch and default LoRA come
+/// from [`VDN_H3_TREE`] (`H3Recipe::vdn_shared`).
+pub const VDN_H3_8STEP_ID: &str = "vdn-h3-8step";
+pub const VDN_H3_8STEP_RECIPE: &str = "vdn-h3-8step";
+pub const VDN_H3_8STEP_TREE: &str = "vdn-h3-dmd-250-turbo";
+pub const VDN_H3_8STEP_STAGE: &str = "stage-dmd-step-250";
 
 /// The FastH3 Trim contract names (`H3InferenceContract::named`).
 pub fn is_trim_recipe(recipe: &str) -> bool {
@@ -1004,6 +1016,7 @@ fn h3(
         warmup_blocking: false,
         hd_1080p: false,
         vdn_weights: None,
+        vdn_shared: None,
     }
 }
 
@@ -1113,6 +1126,16 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         dit_offload: Some("resident".to_owned()),
         vdn_weights: Some(layout.at(VDN_H3_TREE).join(VDN_H3_STAGE)),
         ..h3(layout, "h3-base", VDN_H3_RECIPE, None, 50)
+    };
+    // VDN-H3 8-step: the DMD-distilled model, stage B's branch and default
+    // LoRA (read from `vdn-h3-stage-b-2000`, byte-identical) plus the turbo
+    // LoRA of `vdn-h3-dmd-250-turbo`; 8 forwards on the base grid.
+    let vdn_h3_8step = H3Recipe {
+        recipe: VDN_H3_8STEP_RECIPE.to_owned(),
+        steps: 8,
+        vdn_weights: Some(layout.at(VDN_H3_8STEP_TREE).join(VDN_H3_8STEP_STAGE)),
+        vdn_shared: vdn_h3.vdn_weights.clone(),
+        ..vdn_h3.clone()
     };
     // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
     // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
@@ -1272,6 +1295,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         )
         .with_served_names(&[H3_TRIM]),
         CudaModel::new(VDN_H3_ID, None, VDN_H3_RECIPE, CudaRecipe::H3(vdn_h3)),
+        CudaModel::new(VDN_H3_8STEP_ID, None, VDN_H3_8STEP_RECIPE, CudaRecipe::H3(vdn_h3_8step)),
         // Reference-to-video companions of the H3 max / turbo tiers: the
         // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
         CudaModel::new(
@@ -1422,6 +1446,7 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
         (Family::H3, VDN_H3_ID | VDN_H3_RECIPE) => VDN_H3_ID.to_owned(),
+        (Family::H3, VDN_H3_8STEP_RECIPE) => VDN_H3_8STEP_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
         (_, r) => r.to_owned(),
     };
@@ -1470,6 +1495,9 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("vdn_weights").filter(|_| r.vdn_weights.is_some()) {
                 r.vdn_weights = Some(t.into());
+            }
+            if let Some(t) = x("vdn_shared").filter(|_| r.vdn_shared.is_some()) {
+                r.vdn_shared = Some(t.into());
             }
             if let Some(t) = x("i2v_encoder") {
                 r.i2v_encoder = t;
@@ -2417,6 +2445,46 @@ mod tests {
             let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
             assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_ID, "{rec}");
         }
+    }
+
+    /// VDN-H3 8-step: the turbo tree over stage B's branch and default LoRA,
+    /// 8 forwards on the base grid, its own id.
+    #[test]
+    fn vdn_8step_catalog_entry() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        let m = find(&cat, VDN_H3_8STEP_ID).unwrap();
+        assert!(m.tier.is_none());
+        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        assert_eq!(r.weights, Path::new("/w/h3-base"));
+        assert_eq!(
+            r.vdn_weights.as_deref(),
+            Some(Path::new("/w/vdn-h3-dmd-250-turbo/stage-dmd-step-250"))
+        );
+        assert_eq!(
+            r.vdn_shared.as_deref(),
+            Some(Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000"))
+        );
+        assert_eq!((r.recipe.as_str(), r.steps, r.dense), ("vdn-h3-8step", 8, true));
+        assert_eq!(r.dit_offload.as_deref(), Some("resident"));
+        assert_eq!(
+            h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
+            h3cfg::H3InferenceContract::base(9)
+        );
+        assert_eq!(m.caps().tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+        let d = m.describe();
+        assert_eq!(d.steps, Some(8));
+        assert!(d.summary.contains("turbo"), "{}", d.summary);
+        let e = ModelEntryCfg {
+            family: "h3".into(),
+            recipe: "vdn-h3-8step".into(),
+            resident: true,
+            ..Default::default()
+        };
+        assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_8STEP_ID);
+        // The 50-step entry carries no shared directory.
+        let CudaRecipe::H3(b) = &find(&cat, VDN_H3_ID).unwrap().recipe else { panic!() };
+        assert!(b.vdn_shared.is_none());
     }
 
     fn m_served(cat: &[CudaModel], name: &str) -> bool {
