@@ -11,7 +11,8 @@
 //!
 //! **What is resident.** [`H3Pipeline`] loads once and generates many times:
 //! the DiT (41 GB as bf16 with the VSA gates, 37 GB dense), the text refiner
-//! (1.6 GB), the video VAE (4.9 GB as bf16 linears) and the audio VAE (0.3 GB)
+//! (1.6 GB), the video VAE (4.9 GB as bf16 linears, plus 2.5 GB of MXFP8
+//! copies of its block linears on sm_100+, `FASTVIDEO_H3_VAE_MXFP8`) and the audio VAE (0.3 GB)
 //! stay on the device, about 48 GB. A 5 s clip adds ~12 GB of activations
 //! (measured peak 53.6 GB with the decoders loaded late), a 15 s clip ~25 GB.
 //!
@@ -1284,6 +1285,11 @@ impl H3Pipeline {
         // Gate lives on VSA checkpoints and VSA-DataFree replacements. Sol-H3
         // + MiniMax-H3 is Sol-Attn on a dense backbone (`vsa_sparsity == 0`).
         let with_gate = dit_loads_vsa_gate(&contract, mlx.as_ref().map(|s| s.vsa_capable));
+        // The official video decoder's MXFP8 copies (`FASTVIDEO_H3_VAE_MXFP8`,
+        // default on sm_100+) are part of the memory plan; `=1` on a GPU
+        // without block-scaled FP8 fails here, before anything loads.
+        let vae_mxfp8 = resolve_taeh3(options.taeh3.as_deref()).is_none()
+            && super::vae::mxfp8_wanted(video_vae_config(&root.join("vae"))?.decoder_num_layers)?;
         crate::wan::log::info(format_args!(
             "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
             options.recipe.as_deref().unwrap_or("auto"),
@@ -1501,6 +1507,7 @@ impl H3Pipeline {
                         &g,
                         fastvideo_models::h3::memory::H3PlanOptions {
                             gate: with_gate,
+                            vae_mxfp8,
                             ..Default::default()
                         },
                     )
@@ -1515,6 +1522,7 @@ impl H3Pipeline {
                         fastvideo_models::h3::memory::H3PlanOptions {
                             placement: fastvideo_models::h3::memory::H3Placement::STREAMED,
                             gate: with_gate,
+                            vae_mxfp8,
                             ..Default::default()
                         },
                     )
@@ -1621,6 +1629,7 @@ impl H3Pipeline {
                         &g,
                         fastvideo_models::h3::memory::H3PlanOptions {
                             gate: with_gate,
+                            vae_mxfp8,
                             ..Default::default()
                         },
                     )

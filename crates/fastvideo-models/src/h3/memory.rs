@@ -134,6 +134,21 @@ pub fn video_vae_bytes(v: &H3VideoVaeConfig) -> u64 {
         + 2 * d * 4
 }
 
+/// The MXFP8 copies of the video decoder's block linears
+/// (`FASTVIDEO_H3_VAE_MXFP8`, default on for the 36-block decoder on sm_100+):
+/// one E4M3 byte per weight plus one E8M0 scale per 32, kept beside the bf16
+/// weights (the unfused path and the check still read those). About 2.3 GiB
+/// (measured: 768p peak 72.2 vs 69.8 GB, docs/perf/h3-vae-decode-speed.md).
+/// The activations' MXFP8 staging is smaller than the float32 activations
+/// [`video_decode_transient_bytes`] already prices for the fused ViT, which
+/// keeps them in bf16.
+pub fn video_vae_mxfp8_bytes(v: &H3VideoVaeConfig) -> u64 {
+    let d = v.decoder_dim() as u64;
+    let hid = d * v.decoder_ffn_mult as u64;
+    let params = 4 * d * d + d * 2 * hid + hid * d;
+    v.decoder_num_layers as u64 * (params + params / 32)
+}
+
 /// BigVGAN decoder: float32 weight-normed convs (folded at load), every
 /// stage's transposed conv and nine resblock convs of each kernel size.
 pub fn audio_vae_bytes(a: &H3AudioVaeConfig) -> u64 {
@@ -276,9 +291,11 @@ pub fn measured_working_bytes(geometry: &H3Geometry) -> u64 {
 
 /// The device memory a GPU needs before a server offers the 1080P tier at
 /// all: the resident plan's weights at the denoise ([`plan`], bf16 DiT with
-/// the VSA gate, decoders held; the turbo recipe's MXFP8 linears are
-/// smaller) plus the measured-rate working set of the tier's largest 5 s
-/// clip, 1920x1088x124 ([`measured_working_bytes`]). About 72 GiB: 80 GB
+/// the VSA gate, decoders held with the video decoder's MXFP8 copies; the
+/// turbo recipe's MXFP8 linears are smaller) plus the measured-rate working
+/// set of the tier's largest 5 s clip, 1920x1088x124
+/// ([`measured_working_bytes`]). About 73.5 GiB (71.2 with a bf16-only
+/// video decoder): 80 GB
 /// and 96 GB cards yes, 48 GB cards no. The whole [`plan`] peak (about
 /// 80 GiB) prices the activations well above the 52.7 GiB measured.
 pub fn plan_1080p_min_device_bytes() -> u64 {
@@ -339,6 +356,11 @@ pub struct H3PlanOptions {
     pub vae_tile_batch: usize,
     /// Ladder steps (rows of the output modulation kept on the device).
     pub steps: usize,
+    /// The video decoder also holds MXFP8 copies of its block linears
+    /// ([`video_vae_mxfp8_bytes`]): the default decode on sm_100+. The
+    /// pipeline passes what `FASTVIDEO_H3_VAE_MXFP8` resolves to (off on
+    /// older GPUs, with `=0` or with TAEH3).
+    pub vae_mxfp8: bool,
 }
 
 impl Default for H3PlanOptions {
@@ -349,6 +371,7 @@ impl Default for H3PlanOptions {
             text_tokens: PLAN_TEXT_TOKENS,
             vae_tile_batch: 8,
             steps: 50,
+            vae_mxfp8: true,
         }
     }
 }
@@ -371,7 +394,13 @@ pub fn plan(geometry: &H3Geometry, opts: H3PlanOptions) -> H3MemoryPlan {
     let tcfg = H3TextEncoderConfig::fasth3_8step();
     let streamed = opts.placement.is_streamed();
     let rows = geometry.sequence_length(opts.text_tokens);
-    let (video_vae, audio_vae) = (video_vae_bytes(&vcfg), audio_vae_bytes(&acfg));
+    let video_vae = video_vae_bytes(&vcfg)
+        + if opts.vae_mxfp8 {
+            video_vae_mxfp8_bytes(&vcfg)
+        } else {
+            0
+        };
+    let audio_vae = audio_vae_bytes(&acfg);
     let decoders_held = if streamed { 0 } else { video_vae + audio_vae };
     // Skeletons (and, resident, every block) stay loaded for the whole run;
     // a streamed ring exists only while its model runs.
@@ -466,6 +495,38 @@ mod tests {
         assert!(audio_vae_bytes(&H3AudioVaeConfig::fasth3_8step()) < GIB);
     }
 
+    /// The video decoder's MXFP8 copies (the default decode on sm_100+) are
+    /// about 2.3 GiB, the +2.4 GB of peak the 768p run measured (72.2 vs
+    /// 69.8 GB), priced wherever the decoder is: for the whole run resident,
+    /// for the decode only streamed.
+    #[test]
+    fn the_mxfp8_video_decoder_copies_are_priced() {
+        let v = H3VideoVaeConfig::fasth3_8step();
+        let mx = video_vae_mxfp8_bytes(&v);
+        assert!((2.2..2.4).contains(&gib(mx)), "{:.3}", gib(mx));
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let off = |o: H3PlanOptions| H3PlanOptions {
+            vae_mxfp8: false,
+            ..o
+        };
+        let (on_r, off_r) = (
+            plan(&g, H3PlanOptions::default()),
+            plan(&g, off(H3PlanOptions::default())),
+        );
+        for (a, b) in on_r.stages.iter().zip(&off_r.stages) {
+            assert_eq!(a.total(), b.total() + mx, "resident {}", a.stage);
+        }
+        let (on_s, off_s) = (
+            plan(&g, H3PlanOptions::streamed()),
+            plan(&g, off(H3PlanOptions::streamed())),
+        );
+        for (a, b) in on_s.stages.iter().zip(&off_s.stages) {
+            let extra = if a.stage == "video_decode" { mx } else { 0 };
+            assert_eq!(a.total(), b.total() + extra, "streamed {}", a.stage);
+        }
+        show("768p5s mxfp8 vae streamed", &on_s);
+    }
+
     /// The resident FP8 encoder is 22.7 GiB, what the PRO 6000 run's
     /// `device_gib` reported; the ~45.5 GiB live after its text phase was that
     /// encoder dequantized once and kept as bf16 (twice the size).
@@ -513,8 +574,21 @@ mod tests {
             let resident = plan(&g, H3PlanOptions::default());
             show(name, &resident);
             assert!(resident.peak() > 32 * GIB);
-            // The denoise binds; the decoders never sit beside the ring.
-            assert_eq!(streamed.peak(), streamed.stage("denoise").unwrap().total());
+            // The decoders never sit beside the ring: with bf16 decoder
+            // linears the denoise binds. With the MXFP8 copies (the default
+            // on sm_100+) the 480p video decode (11.9 GiB) passes the 480p
+            // denoise (10.9 GiB), still far under the card.
+            let bf16_vae = plan(
+                &g,
+                H3PlanOptions {
+                    vae_mxfp8: false,
+                    ..H3PlanOptions::streamed()
+                },
+            );
+            assert_eq!(bf16_vae.peak(), bf16_vae.stage("denoise").unwrap().total());
+            let decode = streamed.stage("video_decode").unwrap();
+            assert!(decode.weights < 8 * GIB, "{name}: {:.2}", gib(decode.weights));
+            assert!(decode.total() < 16 * GIB, "{name}: {:.2}", gib(decode.total()));
         }
     }
 
