@@ -900,3 +900,17 @@ config), `tokenizer/` and `processor/` are byte-identical to `h3-base`'s (and Fa
 `h3-base/audio_vae` and `h3-base/tokenizer` (`text_weights`). Its **`vae/` is not** H3's (26 decoder blocks, F16,
 `73fc5a61…`; plus Kijai's INT8 convrot file) and is in the Trim tree. Its NVFP4 `text_encoder/` was not downloaded
 (h3-base's encoder serves it, docs/ports/h3-trim.md §3). Neither tree is on the 500 GB EU volume.
+
+## 13. MiniMax-H3 Turbo LoRAs and the NCII guard (2026-10-14, owner approval of 2026-10-13)
+
+Three Hub trees, published with `r2-weights.py publish-hub` from the agent container (2.7 GB in all, streamed Hub →
+R2 at 22-35 MB/s; no local copy), then `verify --deep --record` (every byte re-read). Hash checks at upload: the Hub
+LFS SHA-256 of each safetensors / tokenizer file, the git blob SHA-1 of each small file, and every
+`weights-sha256.tsv` row of the trees. None is on the EU volume; the presets `h3-larry-turbo` / `h3-lightx2v-turbo`
+fetch them from R2 (docs/ports/h3-turbo-loras.md).
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `h3-turbo-loras/larry` (larryvrh/MiniMax-H3-Turbo-Lora: `minimax_h3_turbo_4step_ema_ckpt850.safetensors`, README) | `43a74557ac3f6539db8e0f2a959d03feb7a81480` | 2 | 779,857,264 | `901f8cf59955cadd8e2a0fa70c366e20e2c811837c627d69671556e16ef0e4e0` |
+| `h3-turbo-loras/lightx2v` (lightx2v/Minimax-h3-Turbo: `minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors`, README) | `3ec17a324ced54151364f24f8b5fb6bf7e26414f` | 2 | 1,383,679,204 | `ffdc68e092e743fe7b87a4e50d02be44b8ecf25ae0b02025d919c3c251de1974` |
+| `auxiliary/ncii-light-guard` (hfmlsoc/ncii-light-guard-v01, MIT) | `6a44e8b4b608078db164b0c946947922b2b98eab` | 5 | 569,621,401 | `9118b8cdace81d4c5a59de856a0d2ca7c641158ea9a36d9494594992f42a049b` |

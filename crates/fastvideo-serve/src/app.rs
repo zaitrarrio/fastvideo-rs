@@ -250,11 +250,14 @@ pub fn catalog_models(entries: &[crate::config::ModelCfg]) -> anyhow::Result<Vec
             let extra = m
                 .extra
                 .iter()
-                // Strings and booleans (`warmup = true`) reach the backend as text.
+                // Strings, booleans (`warmup = true`) and numbers (`steps = 4`,
+                // `lora_strength = 1.1`) reach the backend as text.
                 .filter_map(|(k, v)| {
                     v.as_str()
                         .map(str::to_owned)
                         .or_else(|| v.as_bool().map(|b| b.to_string()))
+                        .or_else(|| v.as_integer().map(|i| i.to_string()))
+                        .or_else(|| v.as_float().map(|f| f.to_string()))
                         .map(|s| (k.clone(), s))
                 })
                 .collect();
@@ -494,6 +497,18 @@ impl App {
         if let Some(u) = upsampler_service(&config) {
             builder = builder.upsampler(u);
         }
+        // `[moderation]`: the NCII prompt guard (CPU), loaded before any
+        // request is admitted; a configured guard that cannot load stops the
+        // start (fail closed).
+        let moderation = config.moderation.clone();
+        let moderator = tokio::task::spawn_blocking(move || {
+            crate::moderation::from_config(&moderation, &crate::config::ProcessEnv)
+        })
+        .await
+        .context("loading the NCII guard")??;
+        if let Some(m) = moderator {
+            builder = builder.moderator(m);
+        }
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
         #[cfg(feature = "http-client")]
@@ -532,11 +547,12 @@ impl App {
         let mut streams = Router::new();
         #[cfg(feature = "reactor")]
         let reactor = match (&rtc_host, config.protocols.reactor) {
-            (Some(host), true) => match crate::reactor::build_on(
+            (Some(host), true) => match crate::reactor::build_on_moderated(
                 &config,
                 gate.engine(),
                 host.clone(),
                 Some(crate::reactor::ingest_auth(ctx.clone())),
+                ctx.moderator().cloned(),
             ) {
                 Ok(r) => {
                     streams = streams.merge(fastvideo_reactor::router(r.clone()));

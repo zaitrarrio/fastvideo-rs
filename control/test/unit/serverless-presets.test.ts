@@ -256,6 +256,8 @@ describe("static data", () => {
     expect([...eu].sort()).toEqual(sh.sort());
     const rows = new Set(readFileSync(`${ROOT}scripts/gpu/weights-r2.tsv`, "utf8").split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")[0]!));
     for (const t of eu) expect(rows.has(t), `${t} is published in R2 (r2-fill-volume.sh filled it from there)`).toBe(true);
-    for (const p of SLS_PRESETS) if (/^(h3|ltx)/.test(p.id)) for (const t of [...p.weights, ...p.prequant]) expect(missingTrees(EU, [t]), `${p.id}: ${t}`).toEqual([]);
+    // The Turbo LoRA presets' adapters are in R2 only (docs/ports/h3-turbo-loras.md); their base trees are on the volume.
+    const r2Only = (t: string) => t.startsWith("h3-turbo-loras/");
+    for (const p of SLS_PRESETS) if (/^(h3|ltx)/.test(p.id)) for (const t of [...p.weights, ...p.prequant].filter((t) => !r2Only(t))) expect(missingTrees(EU, [t]), `${p.id}: ${t}`).toEqual([]);
   });
 });
