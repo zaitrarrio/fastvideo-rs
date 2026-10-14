@@ -121,44 +121,77 @@ nvfp4() { # <bin> <dir> <args...>
 }
 # A CUPTI kernel trace of one generation (benchmark.json `gpu_trace`).
 traced() { (export FASTVIDEO_GPU_TRACE=1; "$@"); }
-[[ -n "$tpid" ]] && wait "$tpid"
-for bin in base new; do
-  b=$B; [[ $bin == new ]] && b=$N
-  step "turbo-$bin" turbo "$b" $SRV/turbo-$bin --prompts $L/prompts.json --warm
-done
-for bin in base new; do
-  b=$B; [[ $bin == new ]] && b=$N
-  step "trace-turbo-$bin" traced turbo "$b" $SRV/trace-turbo-$bin --no-mp4
-done
+glue_off() { (export FASTVIDEO_H3_GLUE=0; "$@"); }
+if [[ "${FV_ONLY_NVFP4:-0}" != 1 ]]; then
+  [[ -n "$tpid" ]] && wait "$tpid"
+  for bin in base new; do
+    b=$B; [[ $bin == new ]] && b=$N
+    step "turbo-$bin" turbo "$b" $SRV/turbo-$bin --prompts $L/prompts.json --warm
+  done
+  for bin in base new; do
+    b=$B; [[ $bin == new ]] && b=$N
+    step "trace-turbo-$bin" traced turbo "$b" $SRV/trace-turbo-$bin --no-mp4
+  done
+fi
 wait "$npid"
 for bin in base new; do
   b=$B; [[ $bin == new ]] && b=$N
   step "nvfp4-$bin" nvfp4 "$b" $SRV/nvfp4-$bin --prompts $L/prompts.json --warm
 done
+# FV_ONLY_NVFP4=1: the new build with its glue off too, for the on / off byte check.
+[[ "${FV_ONLY_NVFP4:-0}" == 1 ]] && step nvfp4-glue0 glue_off nvfp4 "$N" $SRV/nvfp4-glue0 --prompts $L/prompts.json --warm
 for bin in base new; do
   b=$B; [[ $bin == new ]] && b=$N
   step "trace-nvfp4-$bin" traced nvfp4 "$b" $SRV/trace-nvfp4-$bin --no-mp4
 done
 
 # ---- 5. parity: base and new clips, file by file --------------------------------------------------------------------
-parity() {
-  local m c
-  for m in turbo nvfp4; do
-    for c in h3-demo-480p h3-demo-768p; do
-      [[ -d $SRV/$m-base/clips/$c && -d $SRV/$m-new/clips/$c ]] || { echo "$m $c: missing"; continue; }
-      (cd $SRV/$m-base/clips/$c && find . -type f | sort | xargs sha256sum) >$SRV/sha-$m-base-$c.txt
-      (cd $SRV/$m-new/clips/$c && find . -type f | sort | xargs sha256sum) >$SRV/sha-$m-new-$c.txt
-      if cmp -s $SRV/sha-$m-base-$c.txt $SRV/sha-$m-new-$c.txt; then
-        echo "$m $c: identical ($(wc -l <$SRV/sha-$m-base-$c.txt) files)"
-      else
-        echo "$m $c: DIFFERENT"
-        "$N" --out $SRV/cmp-$m-$c --tag "base--new-$m-$c" compare-clips --baseline $SRV/$m-base/clips/$c \
-          --candidate $SRV/$m-new/clips/$c >$SRV/cmp-$m-$c.log 2>&1
-      fi
-    done
+pair() { # <arm a> <arm b>
+  local a="$1" b="$2" c
+  for c in h3-demo-480p h3-demo-768p; do
+    [[ -d $SRV/$a/clips/$c && -d $SRV/$b/clips/$c ]] || { echo "$a vs $b $c: missing"; continue; }
+    (cd $SRV/$a/clips/$c && find . -type f | sort | xargs sha256sum) >$SRV/sha-$a-$c.txt
+    (cd $SRV/$b/clips/$c && find . -type f | sort | xargs sha256sum) >$SRV/sha-$b-$c.txt
+    if cmp -s $SRV/sha-$a-$c.txt $SRV/sha-$b-$c.txt; then
+      echo "$a vs $b $c: identical ($(wc -l <$SRV/sha-$a-$c.txt) files)"
+    else
+      echo "$a vs $b $c: DIFFERENT"
+      "$N" --out $SRV/cmp-$a-$b-$c --tag "$a--$b-$c" compare-clips --baseline $SRV/$a/clips/$c \
+        --candidate $SRV/$b/clips/$c >$SRV/cmp-$a-$b-$c.log 2>&1
+      grep -hiE "psnr" $SRV/cmp-$a-$b-$c.log | head -3
+      [[ $c == h3-demo-480p ]] && echo "$a $b" >>$SRV/bisect.txt
+    fi
   done
 }
+parity() {
+  local m
+  if [[ "${FV_ONLY_NVFP4:-0}" == 1 ]]; then
+    pair nvfp4-base nvfp4-new
+    pair nvfp4-glue0 nvfp4-new
+    pair nvfp4-base nvfp4-glue0
+  else
+    for m in turbo nvfp4; do pair $m-base $m-new; done
+  fi
+}
 step parity parity >$SRV/parity.txt 2>&1
+# Where two arms' 480p clips differ: one 480p generation each with the per-op dumps, then compare-dumps.
+dumped() { # <arm>
+  local b=$N
+  [[ $1 == *base* ]] && b=$B
+  if [[ $1 == *glue0* ]]; then
+    (export FASTVIDEO_DUMP_DIR=$SRV/dump-$1 FASTVIDEO_H3_GLUE=0; nvfp4 "$b" $SRV/dumprun-$1 --no-mp4)
+  else
+    (export FASTVIDEO_DUMP_DIR=$SRV/dump-$1; nvfp4 "$b" $SRV/dumprun-$1 --no-mp4)
+  fi
+}
+if [[ -s $SRV/bisect.txt ]]; then
+  while read -r a b; do
+    [[ -d $SRV/dump-$a ]] || step "dump-$a" dumped "$a"
+    [[ -d $SRV/dump-$b ]] || step "dump-$b" dumped "$b"
+    "$N" compare-dumps --baseline $SRV/dump-$a --candidate $SRV/dump-$b >$SRV/compare-dumps-$a-$b.txt 2>&1
+  done <$SRV/bisect.txt
+  rm -rf $SRV/dump-* $SRV/dumprun-*
+fi
 
 bad="$(awk -F'\t' '$2 != 0' $SRV/status.tsv | wc -l)"
 log "end: $bad step(s) failed"

@@ -14,7 +14,7 @@
 # staging bucket (a presigned URL, checked by SHA-256); no key goes to the pod.
 #
 # Env: RUNPOD_API_KEY; FV_POD_CAP_S (backstop, default 3600); FV_MIN_BALANCE (default 10: refuse unless the balance
-# is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP (passed to the pod script); FV_RUNTIME_IMAGE.
+# is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP, FV_ONLY_NVFP4 (passed to the pod script); FV_RUNTIME_IMAGE.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
@@ -71,7 +71,8 @@ case "$cmd" in
     trap 'rm -rf "$tmp"' EXIT
     mkdir -p "$tmp/b/base" "$tmp/b/new"
     trees=(fasth3-v2-nvfp4)
-    [[ "$mode" == r2 ]] && trees+=(h3-base h3-base/transformer_prequant_4step-vsa_mxfp8 FastH3-4-step-Preview-v1-LoRA)
+    if [[ "$mode" == r2 && "${FV_ONLY_NVFP4:-0}" == 1 ]]; then trees+=(h3-base)
+    elif [[ "$mode" == r2 ]]; then trees+=(h3-base h3-base/transformer_prequant_4step-vsa_mxfp8 FastH3-4-step-Preview-v1-LoRA); fi
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
       python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
@@ -79,6 +80,8 @@ case "$cmd" in
 import fnmatch, json, os, sys
 plan = json.load(open(sys.argv[1]))
 keep = {"fasth3-v2-nvfp4": ("transformer/*",), "FastH3-4-step-Preview-v1-LoRA": ("vsa-datafree/*",)}
+if os.environ.get("FV_ONLY_NVFP4") == "1":  # V2 reads h3-base's encoder, tokenizer and VAEs, not its DiT
+    keep["h3-base"] = ("text_encoder/*", "tokenizer/*", "audio_vae/*", "vae/*", "*.json")
 for t in plan["trees"]:
     if t["dest"] in keep:
         t["files"] = [f for f in t["files"] if any(fnmatch.fnmatch(f["path"], g) for g in keep[t["dest"]])]
@@ -111,11 +114,11 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3glue-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" \
-      --arg mode "$mode" --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" --arg skip "${FV_SKIP:-}" '{
+      --arg mode "$mode" --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" --arg skip "${FV_SKIP:-}" --arg only "${FV_ONLY_NVFP4:-0}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_MODE: $mode}
-              + (if $skip != "" then {FV_SKIP: $skip} else {} end))
+              + (if $skip != "" then {FV_SKIP: $skip} else {} end) + {FV_ONLY_NVFP4: $only})
       } + (if $mode == "volume" then {containerDiskInGb: 150, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 400} end)')"
     unset FVX_URL
