@@ -24,6 +24,7 @@
 # FV_E2E_SECRETS_ALLOW (with FV_E2E_NO_SECRETS=1: a space list of Runpod
 # secret names whose references are kept, e.g. "fv_cf_stream_api_token
 # fv_cf_account_id"; every other secret reference is still dropped),
+# FV_E2E_CPU_FLAVOR / FV_E2E_VCPUS (a CPU pod, e.g. cpu5c / 8: fake engine and ingest checks),
 # FV_E2E_NAME (pod name prefix, default fv-e2e-a-), FV_E2E_ENV_JSON (extra
 # pod env as a JSON object, e.g. '{"FV_REACTOR_MODE":"avatar"}').
 # `up <image> <config>`: the in-image config pod-boot.sh starts from
@@ -74,6 +75,8 @@ cmd_up() {
   fi
   name="${FV_E2E_NAME:-fv-e2e-a-}$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"${RUNPOD_GPU_TYPES:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
+  # FV_E2E_CPU_FLAVOR (e.g. cpu5c): a CPU pod instead (fake engine, ingest checks); FV_E2E_VCPUS (8).
+  [[ -n "${FV_E2E_CPU_FLAVOR:-}" ]] && types=("cpu:$FV_E2E_CPU_FLAVOR")
   for gpu in "${types[@]}"; do
     local payload
     payload="$(jq -n --arg name "$name" --arg image "$image" --arg gpu "$gpu" --arg cfg "$cfg" \
@@ -102,8 +105,12 @@ cmd_up() {
           (.value | tostring) as $v | ($v | startswith("{{ RUNPOD_SECRET_") | not)
           or ([$allow | splits(" +") | select(. != "") | "{{ RUNPOD_SECRET_\(.) }}"] | index($v) != null))) else . end)
       } + $vol')"
+    if [[ "$gpu" == cpu:* ]]; then
+      payload="$(jq --arg f "${gpu#cpu:}" --argjson n "${FV_E2E_VCPUS:-8}" \
+        'del(.gpuTypeIds, .gpuCount) | .computeType = "CPU" | .cpuFlavorIds = [$f] | .vcpuCount = $n' <<<"$payload")"
+    fi
     # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
-    fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
+    [[ "$gpu" == cpu:* ]] || fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
     if ! resp="$(rest POST /pods "$payload" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi
@@ -111,9 +118,11 @@ cmd_up() {
     [[ -n "$pod" ]] || { log "no id: $(head -c 200 <<<"$resp")"; continue; }
     dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
     ledger "pod-created $pod $name gpu=$gpu dph=$dph image=$image"
+    # The marker ($0 of the backstop shell, `fv-e2e-backstop-<pod>`) finds exactly this backstop later
+    # (`pgrep -f fv-e2e-backstop-<pod>`), never another process.
     nohup env POD_ID="$pod" CAP="$CAP_S" API="$API" bash -c \
       'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' \
-      >/dev/null 2>&1 &
+      "fv-e2e-backstop-$pod" >/dev/null 2>&1 &
     jq --arg pod "$pod" --arg gpu "$gpu" --arg dph "$dph" --arg t "$(date +%s)" --arg name "$name" \
       '. + {pod: $pod, gpu: $gpu, dph: $dph, created: ($t|tonumber), name: $name}' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then

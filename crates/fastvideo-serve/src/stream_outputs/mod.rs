@@ -23,6 +23,10 @@
 
 pub mod spec;
 
+/// HLS read-back (playlists, the audio rendition, loudness) for the live
+/// Cloudflare checks.
+pub mod hls;
+
 #[cfg(feature = "http-client")]
 pub mod cloudflare;
 
