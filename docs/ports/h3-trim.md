@@ -10,7 +10,8 @@ VAE. The model card: faster and smaller than FastH3 V2, with some quality cost.
 
 Status (2026-10-13): **ported and in the serve catalog; validated on an RTX PRO 6000 against upstream FastVideo**
 (AdaLN table to 3e-5, step-1 latents 3.8e-4, the same scene and motion; §6.1) and **1.21x faster denoise, 1.23x end to
-end than FastH3 V2** at 480p (§6.2). NVFP4: published to R2, not loaded yet (§5).
+end than FastH3 V2** at 480p (§6.2). NVFP4 (2026-10-14): loaded as published and served opt-in as `fasth3-trim-nvfp4`; 1.18x faster
+denoise than the MXFP8 default, 9.3 GiB of DiT, but it fails the quality gate (§5).
 
 Sources read (FastVideo `main` @ `d5253fd`, 2026-10-09, the first `main` with `adaln_rank`):
 `fastvideo/models/dits/minimax_h3.py` (`F/dit`), `fastvideo/configs/models/dits/minimax_h3.py` (`F/dcfg`),
@@ -147,16 +148,141 @@ Records: `scripts/gpu/weights-manifest.tsv`, `weights-revisions.tsv`, `weights-s
 
 ## 5. NVFP4 (`fastvideo_fasth3_trim_8step_nvfp4.safetensors`)
 
-Published to R2 (`fasth3-trim-8step-nvfp4`), **not loaded**. The file is a ComfyUI single file, not the diffusers
-layout: its own key names (`blocks.N.attn.qkv_proj`, `mlp.fc1/fc2`, `final_layer.*`, `video_patch_proj`,
-`condition_proj`, a precomputed `adaln_t_table [1025, 16]`), fused QKV, and comfy-kitchen NVFP4 linears
-(`weight` U8 `[out, in/2]`, `weight_scale` F8_E4M3 `[out, in/16]`, a scalar `weight_scale_2`, `comfy_quant`
-metadata) for attention, FFN and the VSA gate. The repo's NVFP4 path (`wan/nvfp4_linear.rs`, cuBLASLt `VEC16_UE4M3`,
-TE `static_6`) quantizes bf16 weights at load into cuBLASLt's operand layout; reading this file needs (a) a key map
-and QKV split, (b) the comfy scale layout mapped onto cuBLASLt's 128x4 swizzle (or re-swizzled) and `weight_scale_2`
-onto the operand's global scale, (c) the nibble order checked, and (d) a GPU parity run against the bf16 Trim.
-None of that fit this change's GPU budget. The cheaper route on sm_120 today is the bf16 checkpoint with the
-existing load-time quantization (`FASTVIDEO_NVFP4`, the LTX draft's path), which is untested on H3 Trim.
+Status (2026-10-14): **loaded as published, served opt-in as `fasth3-trim-nvfp4` (served `h3-trim-nvfp4`, recipe
+`trim-8step-nvfp4`), validated on one RTX PRO 6000: 1.18-1.19x faster denoise than the served MXFP8 Trim and 1.49-1.55x
+faster than bf16, 9.3 GiB of resident DiT instead of 20.3 / 33.2 GiB; it FAILS the quality gate** (§5.4). The default
+Trim (`fasth3-trim-8step`, preset `fasth3-trim`) is unchanged: bf16 checkpoint, MXFP8 linears.
+
+### 5.1 The file
+
+A ComfyUI single file (`FastVideo/FastVideo-FastH3-Trim-Comfy` @ `f66c13d`, R2 tree `fasth3-trim-8step-nvfp4`), not
+the diffusers layout. Each block's five big linears are comfy-kitchen NVFP4 tensors (`comfy_quant` =
+`{"format": "nvfp4"}`); everything else is bf16 / F32 under ComfyUI names (`video_patch_proj`, `condition_proj`,
+`token_refiner.*`, `final_layer.*`, a precomputed `adaln_t_table [1025, 16]`, the per-block `adaln_proj` F32).
+
+| key (`blocks.{i}.`) | dtype, shape | ours (`transformer_blocks.{i}.`) |
+|---|---|---|
+| `attn.qkv_proj.weight` | U8 `[21504, 2688]` | `attn.to_q` / `to_k` / `to_v`, in that order |
+| `attn.to_gate_compress.weight` | U8 `[7168, 2688]` | `attn.to_gate_compress` (own global scale) |
+| `attn.out_proj.weight` | U8 `[5376, 3584]` | `attn.to_out.0` |
+| `mlp.fc1.weight` | U8 `[28672, 2688]` | `ff.net.0.proj`, **halves swapped** (file rows 14336.. are ours 0..) |
+| `mlp.fc2.weight` | U8 `[5376, 7168]` | `ff.net.2` |
+| `<l>.weight_scale` | F8_E4M3 `[out, in/16]` | per-16 block scales |
+| `<l>.weight_scale_2` | F32 scalar | the tensor's global decode factor (about `amax / (6 · 448)`) |
+| `norm1`, `norm2`, `attn.q_norm`, `attn.k_norm` | BF16 | `norm1`, `norm2`, `attn.norm_q`, `attn.norm_k` (bit-identical to the bf16 tree) |
+
+Layout, measured on the Hub bytes against the bf16 Trim (block 0 `to_out.0` whole; 128-row tiles of blocks 0, 20 and
+41 for the other four, numpy over HTTP ranges of the Hub files, 2026-10-14): `w = e2m1(code) · e4m3(scale) · weight_scale_2` with
+**the even element in the high nibble** and the scales **already in the 128x4 tiled (`to_blocked`) layout** cuBLASLt
+reads gives rel-L2 0.093-0.101 against the bf16 weight, the same as our own TE `static_6` quantization of it (0.095).
+Low-nibble-first or a row-major scale reading gives 0.72-1.45; `fc1` read in the diffusers order gives 1.2-1.7 and
+0.094 with its halves swapped; `qkv_proj` rows are q, k, v (0.093-0.094 in each third).
+
+### 5.2 Code
+
+| Where | What |
+|---|---|
+| `crates/fastvideo-cudarc/src/h3/nvfp4.rs` | the file: `resolve_file` / `sibling_tree`, `PublishedLinear::read` (dtype, shape and `comfy_quant` checks, nibble swap to low-first), `swap_row_halves` (fc1), `Nvfp4Dit::open` (every block's keys and shapes; the block norms bit-equal to the bf16 tree's, so the two trees are the same model), `device_linears` (a block's `qkvg` = `[qkv; gate]` stack, `to_out`, `ff_in`, `ff_out`); `require_tensor_cores` |
+| `crates/fastvideo-cudarc/src/wan/nvfp4_linear.rs` | `Nvfp4Operand::from_host_layout` (codes and scales as published, the global factor through the operand's amax: `amax = weight_scale_2 · 6 · 448`, which `nvfp4_alpha` turns back into `weight_scale_2`); `gemm_into` (a GEMM into columns of a wider output, `ld` in the plan key); `Nvfp4Stack` (one activation quantization, one GEMM per part, each with its own global scale) |
+| `crates/fastvideo-cudarc/src/wan/nn.rs` | `Linear::from_nvfp4`: W4A4 forward (activation quantized per call with the TE `static_6` rule, a dynamic per-tensor scale as comfy-kitchen without an `input_scale`), the quantized-linear epilogue; never quantized again, snapshotted or LoRA-merged |
+| `crates/fastvideo-cudarc/src/h3/transformer.rs` | `H3Transformer::load_with_nvfp4` / `Block::load_nvfp4`: `QuantMode::Nvfp4` (bf16 activations; `FASTVIDEO_H3_QUANT` not read for the blocks), resident only, no adapter |
+| `crates/fastvideo-cudarc/src/h3/pipeline.rs` | `H3PipelineOptions::nvfp4_dit` / `nvfp4_dit_file`: an NVFP4 recipe reads `../fasth3-trim-8step-nvfp4` beside the snapshot; the check against the bf16 tree; the snapshot's block linears are not prefetched or read; no pre-quantized DiT tree; a streamed `dit_offload` is refused |
+| `crates/fastvideo-models/src/h3/config.rs` | `is_trim_nvfp4_recipe` (`trim-8step-nvfp4`, `fasth3-trim-nvfp4`, `h3-trim-nvfp4`, `fasth3-trim-8step-nvfp4`) = the V2 contract |
+| `crates/fastvideo-engine-service/src/cuda/caps.rs`, `configs/serve/runpod-h3-trim-nvfp4.toml` | catalog `fasth3-trim-nvfp4` (untiered, T2V only, served `h3-trim-nvfp4`); the worker config |
+| `control/` | preset `fasth3-trim-nvfp4` (weights `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`; prequant `h3-base/text_encoder_fp8`; R2 by default), `RECIPE_TREES["h3-trim-nvfp4"]`, catalog / serverless tables, Brev tree size, `scripts/serve/variants.sh` |
+| `fv-gpucheck` | `h3 gen --nvfp4-dit`; `kernels --groups nvfp4_linear` check `nvfp4_published_stack_matches_host` |
+| `scripts/gpu/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` | §5.4 |
+
+**Hardware.** The GEMM is cuBLASLt `VEC16_UE4M3`, which exists on sm_100 / sm_120 only. On any other GPU (or a CPU
+build) the load fails with "the published NVFP4 DiT runs only on NVFP4 tensor cores ... No bf16 fallback"; the
+published weight has no bf16 form to fall back to, and the catalog entry is opt-in.
+
+**Not read from the file**: the patch projections, text refiner, AdaLN (`adaln_proj`, `adaln_t_table`), output head:
+they come from the bf16 Trim tree, which the load needs anyway (`transformer/config.json`, the schedule, the VAE). So a
+pool fetches both trees (44 + 12 GB) plus h3-base. The AdaLN table is computed as for the bf16 Trim (§1.2).
+
+### 5.3 Tests
+
+`cargo test -p fastvideo-cudarc --lib -- h3::nvfp4` (+ `--features cuda`): the blocked-scale offset against a tile
+reshape and cuBLASLt's `swizzle_scales_host`; a file written as the release writes it (our TE quantization,
+high-nibble-first, blocked scales, `weight_scale_2`) dequantizes to the quantized weight, and its swapped halves are
+the other half's rows exactly; other formats / dtypes / shapes refused; the Trim's five linear shapes; recipe names.
+`fastvideo-models h3::config` (the NVFP4 names are the V2 contract), `fastvideo-engine-service`
+`cuda::caps::trim_nvfp4_catalog_entry` (66 passed), `fastvideo-serve --test e2e shipped_configs_parse`. On the GPU:
+`kernels --groups nvfp4_linear` `nvfp4_published_stack_matches_host` (two stacked parts with global scales 100x apart,
+m = 300) PASS, rel-L2 1.66e-3 against exact host math (limit 4e-3). `control`: `gen-configs`, `tsc` (both projects),
+`vitest` 466 passed, integration 38 steps passed.
+
+### 5.4 GPU validation (RTX PRO 6000 Blackwell, EU-RO-1, 2026-10-14)
+
+`scripts/gpu/h3-trim-nvfp4-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b407063` (this branch's runtime
+image; the R2 plan from the read-only key passed in the pod's env, nothing staged in R2), EU volume for h3-base (read
+only), the two Trim trees from R2 (54 GB in 51 s). The bf16 text encoder streamed once per prompt, then from the
+conditioning cache, so every arm runs on bit-identical text (`text_hidden` / `text_refined` rel-L2 0). Arms: **bf16**
+(`FASTVIDEO_H3_QUANT=off`), **MXFP8** (the served default: blocks 2-38), **NVFP4** (`--h3-recipe trim-8step-nvfp4`:
+all 42 blocks). Results: `artifacts/ports/h3-trim/nvfp4/` (`summary.md` from `h3-trim-nvfp4-summary.py`).
+
+There is no upstream NVFP4 reference to compare with: FastVideo does not load this ComfyUI file (its pipeline reads the
+diffusers bf16 checkpoint; the file targets ComfyUI's comfy-kitchen kernels), and running ComfyUI was out of scope. So
+parity is against our bf16 Trim, which §6.1 tied to upstream FastVideo (step-1 latents 3.8e-4).
+
+**Parity** (832 x 480, 124 frames, seed 1024, the matrix prompt; rel-L2 against our bf16 Trim):
+
+| tensor | MXFP8 (served) | NVFP4 |
+|---|---:|---:|
+| step-1 block 0 / 20 / 41 output | 0 / 4.7e-2 / 8.3e-2 | 2.6e-2 / 0.15 / 0.20 |
+| step-1 velocity | 5.9e-2 | 0.18 |
+| **video latents after step 1** / 2 / 4 / 8 | **1.1e-3** / 4.8e-3 / 2.7e-2 / 0.48 | **3.4e-3** / 1.1e-2 / 4.6e-2 / 0.70 |
+| audio latents after step 1 / 8 | 2.1e-3 / 0.42 | 6.8e-3 / 0.67 |
+| decoded clip PSNR (pooled) / LPIPS (alex, all frames) | 18.2 dB / 0.263 | **13.1 dB / 0.443** |
+
+NVFP4 starts about 3x further from bf16 than MXFP8 does at every step (W4A4 in all 42 blocks, against W8A8 with
+E8M0 32-blocks in 37 of them), and the few-step DMD sampler amplifies it to a different sample: the same scene,
+person and framing, different detail and motion (`frame-768p-*-bf16-mxfp8-nvfp4.jpg`, `clips/parity-480p-*.mp4`).
+
+**Speed and memory** (5 s = 124 frames; one process per cell, `--warm`, medians over three prompts of
+`prompts-hd5.json`: talking-head, spark-mountain-lake, ltx-newsbroadcast; peak = nvidia-smi device memory of the
+measured runs, the conditioning cached; DiT = the ledger's resident `dit_nonlinear`):
+
+| canvas | arm | denoise s | s / forward | end to end s | peak GiB | resident DiT GiB |
+|---|---|---:|---:|---:|---:|---:|
+| 832 x 480 | bf16 | 16.86 | 2.11 | 19.2 ¹ | 43.9 | 33.2 |
+| 832 x 480 | MXFP8 (served) | 13.01 | 1.63 | 15.38 | 31.2 | 20.3 |
+| 832 x 480 | **NVFP4** | **10.90** | **1.36** | **13.26** | **20.2** | **9.3** |
+| 1344 x 768 | bf16 | 48.31 | 6.04 | 53.41 | 51.2 | 33.2 |
+| 1344 x 768 | MXFP8 (served) | 38.15 | 4.77 | 43.26 | 38.5 | 20.3 |
+| 1344 x 768 | **NVFP4** | **32.42** | **4.05** | **37.54** | **27.4** | **9.3** |
+
+¹ The talking-head prompt (its text cached); the cell's median total includes streaming the encoder for the two
+prompts it saw first.
+
+NVFP4 against MXFP8: denoise 1.19x (480p) / 1.18x (768p), end to end 1.16x / 1.15x, -11 GiB peak; against bf16:
+1.55x / 1.49x denoise, -24 GiB. The VAE decode is unchanged (2.06 / 4.76 s). The activation is quantized by its own
+two kernels before every NVFP4 GEMM (an amax pass, then codes + scales), not fused into the norm / SwiGLU producers
+as MXFP8's is, so the 4x smaller weights give less than the GEMM ratio.
+
+**Quality gate** (`fv-gpucheck gate`, `scripts/gpu/gate-policy.toml`, kind `lossy`, `compare-clips` with LPIPS per
+prompt; the policy's hard checks are frame count, sharpness ratio 0.95-1.08, temporal-jitter ratio 0.85-1.20, LPIPS
+available; PSNR / LPIPS limits are telemetry):
+
+| baseline -> candidate | verdict | denoise speed-up | failed hard checks |
+|---|---|---:|---|
+| bf16 -> MXFP8, 480p | pass | 1.30 | - |
+| bf16 -> MXFP8, 768p | pass | 1.27 | - |
+| **MXFP8 -> NVFP4, 480p** | **FAIL** | 1.19 | sharpness 1.34 (lake), jitter 1.23 (news) |
+| **MXFP8 -> NVFP4, 768p** | **FAIL** | 1.18 | sharpness 0.91 (news) and 1.24 (lake), jitter 2.08 (news) and 1.24 (talking head) |
+| bf16 -> NVFP4, 480p | FAIL | 1.55 | sharpness 1.43 (lake) |
+| bf16 -> NVFP4, 768p | FAIL | 1.49 | sharpness 0.90 / 1.21, jitter 2.08 / 1.29 |
+
+Per prompt, NVFP4 against MXFP8: PSNR 10.5-15.3 dB, LPIPS 0.44-0.70; MXFP8 against bf16 on the same prompts: PSNR
+12.4-19.0 dB, LPIPS 0.27-0.56. **Verdict: NVFP4 fails the promotion gate at both resolutions** (performance passes;
+quantitative quality fails on sharpness and temporal jitter in two or three of three prompts). The clips are coherent
+and on the prompt, but they move further from the bf16 / MXFP8 samples than MXFP8 moves from bf16, with visibly more
+motion blur on the newsreader (768p jitter 2.08x). It stays opt-in; the bf16 / MXFP8 Trim stays the default.
+
+Cost: two pods (the first stopped at its first step: the resident FP8 text encoder checks its bf16 source shards, which
+an R2-mode pod did not have; deleted after 5 min), the second 28 min; about $1.38 of GPU time at $2.49/hr. Both deleted
+and checked gone (`GET /pods/<id>`: not found).
 
 ## 6. GPU validation (RTX PRO 6000, 2026-10-13)
 
@@ -278,7 +404,9 @@ were removed by each `down`.
 
 ## 7. What is untested
 
-- **NVFP4** (§5): the ComfyUI file is in R2 only.
+- **NVFP4** (§5): not compared with an upstream NVFP4 run (none loads this file but ComfyUI); measured at 480p
+  and 768p, 5 s, three prompts; the served pool (`fasth3-trim-nvfp4`) was not booted on a GPU worker; the activation
+  quantization is not fused into the producers (the speed headroom).
 - **Image conditioning**: FL2VA / I2V / Ref2VA on the Trim DiT run through the same code but were not tried; the
   catalog offers text-to-video only.
 - **768p and 10-15 s**: validated at 832 x 480 x 124 only; the canvas and duration caps are V2's.

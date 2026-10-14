@@ -114,6 +114,17 @@ export const POOL_PRESETS: PoolPreset[] = [
     prequant: ["h3-base/text_encoder_fp8"],
     pool: { id: "fasth3-trim", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim.toml"), models: [{ id: "fasth3-trim-8step", family: "h3", recipe: "h3-trim" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
+  // FastH3 Trim with the release's NVFP4 DiT (docs/ports/h3-trim.md §5): opt-in, the fasth3-trim preset stays the
+  // default. NVFP4 tensor cores only (RTX PRO 6000 / B200): the model fails to load on any other GPU.
+  {
+    id: "fasth3-trim-nvfp4",
+    min_vram_gb: 80,
+    title: "FastH3 Trim 8-step NVFP4",
+    description: "FastH3 Trim with the release's NVFP4 DiT (FastVideo/FastVideo-FastH3-Trim-Comfy): every block's attention and FFN linears W4A4 on NVFP4 tensor cores (RTX PRO 6000 / B200 only, no fallback); text-to-video with audio only. Opt-in; served as h3-trim-nvfp4.",
+    weights: ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "fasth3-trim-nvfp4", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-trim-nvfp4.toml"), models: [{ id: "fasth3-trim-nvfp4", family: "h3", recipe: "h3-trim-nvfp4" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
   // MiniMax-H3 Turbo LoRAs (docs/ports/h3-turbo-loras.md): base H3 + one adapter folded at load. The adapters are in R2
   // only (not on the EU volume), so these pools fetch from R2 by default.
   {

@@ -904,6 +904,8 @@ impl H3InferenceContract {
             "8step" | "v2" | "fasth3-8step" | "trim-8step" | "fasth3-trim-8step" | "fasth3-trim" => {
                 Ok(Self::fasth3_8step())
             }
+            // The Trim's published NVFP4 DiT runs the same contract.
+            n if is_trim_nvfp4_recipe(n) => Ok(Self::fasth3_8step()),
             "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => {
                 Ok(Self::fasth3_preview_lora_vsa())
             }
@@ -925,6 +927,16 @@ impl H3InferenceContract {
 
 /// Forwards of a `base` / `base-<N>step` recipe name (`base` = 49, the
 /// published 50-point grid); `None` for any other name.
+/// FastH3 Trim served from its published NVFP4 DiT (docs/ports/h3-trim.md
+/// §5): the V2 contract on the Trim, the block linears from the
+/// `fasth3-trim-8step-nvfp4` tree.
+pub fn is_trim_nvfp4_recipe(name: &str) -> bool {
+    matches!(
+        name,
+        "trim-8step-nvfp4" | "fasth3-trim-8step-nvfp4" | "fasth3-trim-nvfp4" | "h3-trim-nvfp4"
+    )
+}
+
 pub fn base_recipe_forwards(name: &str) -> Option<usize> {
     if name == "base" {
         return Some(49);
@@ -1592,7 +1604,7 @@ mod tests {
 
     #[test]
     fn trim_recipe_is_the_v2_contract() {
-        for name in ["trim-8step", "fasth3-trim-8step", "fasth3-trim"] {
+        for name in ["trim-8step", "fasth3-trim-8step", "fasth3-trim", "trim-8step-nvfp4", "fasth3-trim-nvfp4"] {
             assert_eq!(
                 H3InferenceContract::named(name).unwrap(),
                 H3InferenceContract::fasth3_8step(),
