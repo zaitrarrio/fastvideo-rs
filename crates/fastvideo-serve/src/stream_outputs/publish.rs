@@ -367,7 +367,6 @@ impl VEnc {
 }
 
 /// Mono tick audio duplicated to stereo for Opus.
-#[cfg(feature = "encoders")]
 fn stereo(a: &[f32], channels: Option<u8>) -> std::borrow::Cow<'_, [f32]> {
     if channels == Some(1) {
         std::borrow::Cow::Owned(a.iter().flat_map(|&s| [s, s]).collect())
@@ -437,7 +436,10 @@ async fn whip_loop(
     let fps = ctx.fps;
     let mut enc: Option<VEnc> = None;
     let mut idr = KeyframePolicy::new(1.0, 1);
-    #[cfg(feature = "encoders")]
+    // Opus comes with `webrtc` (this module's gate), not `encoders`: the
+    // serve images build without `encoders`, and a gate on it left the
+    // offer's audio m-line without packets, so MediaMTX published the copy
+    // video-only (docs/serve/e2e/gpu-check-2026-10-13.md, bug 3).
     let mut opus = if ctx.audio_channels.is_some() {
         Some(
             fastvideo_media::opus::OpusEncoder::new(fastvideo_media::opus::OpusConfig::whip(), 0)
@@ -478,7 +480,6 @@ async fn whip_loop(
             idr.request(t0.elapsed().as_secs_f64());
             ctx.state.set(|s| s.ticks_dropped += 1);
         }
-        #[cfg(feature = "encoders")]
         if let (Some(op), Some(a)) = (opus.as_mut(), t.audio.as_ref()) {
             match op.push(&stereo(a, ctx.audio_channels)) {
                 Ok(pkts) => {
