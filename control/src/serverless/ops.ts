@@ -237,7 +237,7 @@ export async function updateEndpoint(env: SlsEnv, who: Actor, row: SlsRow, input
     applied.push("template");
   }
   if (d.endpoint) {
-    await sls.patchEndpoint(env, row.endpoint_id!, endpointUpdatePayload(next));
+    await sls.patchEndpoint(env, row.endpoint_id!, endpointUpdatePayload(next, prev));
     applied.push("endpoint");
   }
   const deadline = prev.deadline_min !== next.deadline_min ? deadlineFor(next) : row.deadline;

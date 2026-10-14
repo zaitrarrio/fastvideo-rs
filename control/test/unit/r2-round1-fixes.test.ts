@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WORKER_BOOT } from "../../src/cluster/payloads";
-import { DRIVER_CHECK_SH, MIN_DRIVER_MAJOR, R2_DEFAULT_CUDA } from "../../src/driver-check";
+import { DRIVER_CHECK_SH, MIN_DRIVER_MAJOR } from "../../src/driver-check";
+import { DEFAULT_ALLOWED_CUDA, MIN_CUDA } from "../../src/enums";
 import { diagnose } from "../../src/podlogs";
 import { PROVIDER_BOOT } from "../../src/providers";
 import { SLS_BOOT, SLS_R2_BOOT, endpointCreatePayload, endpointUpdatePayload } from "../../src/serverless/payloads";
@@ -81,19 +82,24 @@ describe("the boot's driver check (driver-check.ts)", () => {
   });
 });
 
-describe("the CUDA host filter (allowedCudaVersions) for placements outside the EU volume", () => {
-  it("serverless r2 defaults to CUDA 13.0 hosts; volume endpoints keep no filter; [] lifts it; a switch back resets it", () => {
-    expect([...R2_DEFAULT_CUDA]).toEqual(["13.0"]);
+describe("the CUDA host filter: at least CUDA 13.0, never exactly 13.0", () => {
+  it("r2 and volume endpoints: no allowedCudaVersions (REST cannot name the 13.1 / 13.2 hosts), minCudaVersion 13.0", () => {
+    // "13.0" alone hid every Secure RTX PRO 6000 (labelled 13.2) on 2026-10-14; REST v1 refuses "13.1" and "13.2".
+    expect([MIN_CUDA, [...DEFAULT_ALLOWED_CUDA]]).toEqual(["13.0", []]);
     const r2 = normalizeEndpointSpec({ name: "a", preset: "wan", weights_source: "r2" });
-    expect(r2.allowed_cuda).toEqual(["13.0"]);
-    expect(endpointCreatePayload(r2, "tpl")).toMatchObject({ allowedCudaVersions: ["13.0"] });
+    expect(r2.allowed_cuda).toEqual([]);
+    expect(endpointCreatePayload(r2, "tpl")).toMatchObject({ minCudaVersion: "13.0" });
+    expect(endpointCreatePayload(r2, "tpl")).not.toHaveProperty("allowedCudaVersions");
     expect(endpointCreatePayload(r2, "tpl")).not.toHaveProperty("dataCenterIds");
     const vol = normalizeEndpointSpec({ name: "b", preset: "ltx" });
     expect(vol.allowed_cuda).toEqual([]);
     expect(endpointCreatePayload(vol, "tpl")).not.toHaveProperty("allowedCudaVersions");
+    expect(endpointUpdatePayload(vol)).toMatchObject({ minCudaVersion: "13.0" });
+    expect(endpointUpdatePayload(vol)).not.toHaveProperty("allowedCudaVersions");
     const open = normalizeEndpointSpec({ name: "c", preset: "wan", weights_source: "r2", allowed_cuda: [] });
     expect(open.allowed_cuda).toEqual([]);
-    expect(endpointUpdatePayload(open).allowedCudaVersions!.length).toBeGreaterThan(1); // clears an earlier filter
+    // An endpoint that had a list: [] clears it (Runpod: not set = any version), never the REST enum (it stops at 13.0).
+    expect(endpointUpdatePayload(open, { ...open, allowed_cuda: ["13.0"] } as any).allowedCudaVersions).toEqual([]);
     expect(withWeightsSource(r2, "volume").allowed_cuda).toEqual([]);
     expect(withWeightsSource({ ...r2, allowed_cuda: ["12.8", "13.0"] } as any, "volume").allowed_cuda).toEqual(["12.8", "13.0"]);
   });

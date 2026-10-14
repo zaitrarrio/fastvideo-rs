@@ -20,6 +20,8 @@
 # FV_UP_KERNELS / FV_UP_SOFTMAX (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
+source "$HERE/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
@@ -118,7 +120,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     export FVX_URL="$url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
-    payload="$(jq -n --arg name "fv-vdnh3-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
+    payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-vdnh3-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" \
       --arg prompt "${FV_PROMPT:-}" --arg seed "${FV_SEED:-}" --arg h "${FV_H:-}" --arg w "${FV_W:-}" --arg nf "${FV_FRAMES:-}" --arg skip "${FV_SKIP:-}" \
       --arg steps "${FV_STEPS:-}" --arg upk "${FV_UP_KERNELS:-}" --arg ups "${FV_UP_SOFTMAX:-}" \
@@ -133,7 +135,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
               + (if $model != "" then {FV_VDN_MODEL: $model} else {} end) + (if $arms != "" then {FV_INJ_ARMS: $arms} else {} end)
               + (if $upk != "" then {FV_UP_KERNELS: $upk} else {} end) + (if $ups != "" then {FV_UP_SOFTMAX: $ups} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 200, networkVolumeId: $vol, volumeMountPath: "/workspace"}
-           else {containerDiskInGb: 400, allowedCudaVersions: ["13.0"]} end)')"
+           else {containerDiskInGb: 400} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end) end)')"
     unset FVX_URL
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"

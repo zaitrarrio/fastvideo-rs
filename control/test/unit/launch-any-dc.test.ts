@@ -63,7 +63,9 @@ describe("the request shape: r2 in any data centre, the volume in EU, the fallba
     ]);
     const any = workerCreatePayload("n", "img", pool, pl[4]!, { FV_WEIGHTS_SOURCE: "r2" });
     expect(any).not.toHaveProperty("dataCenterIds");
-    expect(any.allowedCudaVersions).toEqual(["13.0"]);
+    // No exact CUDA list: REST cannot name the 13.1 / 13.2 hosts; the boot's driver check keeps the CUDA 13 minimum.
+    expect(any).not.toHaveProperty("allowedCudaVersions");
+    expect(workerCreatePayload("n", "img", { ...pool, allowed_cuda: ["13.0"] }, pl[4]!, { FV_WEIGHTS_SOURCE: "r2" }).allowedCudaVersions).toEqual(["13.0"]);
   });
   it("none (fake engine) and a CPU pod without the volume: any data centre too", () => {
     const g = launch({ variant: "wan", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], weights_source: "none", gpu_types: [H100], data_centers: ["US-TX-3"] }).spec.pools[0]!;

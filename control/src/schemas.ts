@@ -179,7 +179,7 @@ export const PoolSpecZ = z
     ),
     allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) }))
       .optional()
-      .describe("Runpod GPU pods: CUDA versions a host may offer (allowedCudaVersions). Default: none in the weights volume's data centre (EU-RO-1), 13.0 elsewhere (an older driver crashes the image); [] for no filter."),
+      .describe("Runpod GPU pods: an exact list of CUDA versions a host may offer (allowedCudaVersions). Default: none, in every data centre (the boot refuses a driver older than CUDA 13 and a new pod is placed). Runpod's REST enum stops at 13.0 while hosts report 13.1 / 13.2, so a list leaves those hosts out (all Secure RTX PRO 6000s, 2026-10-14)."),
     upsampler_local: z.boolean().optional().describe("The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server with Qwen3-VL-4B-Instruct (GGUF Q8_0 + its F16 vision projector, 5.1 GB from the R2 weights store; GPU memory: see the doc) next to fv-serve on the same GPU; fv-serve gets FV_UPSAMPLER_BASE_URL. If it fails, fv-serve starts anyway and upsampling falls back. GPU only; default off."),
   })
   .strict()
