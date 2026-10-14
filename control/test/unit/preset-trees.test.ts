@@ -20,7 +20,7 @@ import type { Env } from "../../src/env";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
 /** h3/ltx presets whose trees are not all on the EU volume (R2 only). */
-const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo"]);
+const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01"]);
 const rust = (p: string) => readFileSync(`${ROOT}${p}`, "utf8");
 const configOf = (p: (typeof POOL_PRESETS)[number]) => {
   if (p.pool.config_toml) return p.pool.config_toml;

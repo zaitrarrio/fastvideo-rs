@@ -26,13 +26,14 @@
 #   fasth3-trim h3-max    runpod-h3-trim.toml        inline (FastH3 Trim 8-step, served h3-trim)
 #   h3-larry-turbo h3-max runpod-h3-larry-turbo.toml inline (H3 + larry Turbo LoRA)
 #   h3-lightx2v-turbo h3-max runpod-h3-lightx2v-turbo.toml inline (H3 + lightx2v Turbo LoRA)
+#   h3-lightx2v-turbo-v01 h3-max runpod-h3-lightx2v-turbo-v01.toml inline (H3 + lightx2v v0.1, the Space's)
 #   fastwan21  wan        runpod-wan.toml            in the image
 #   sfwan      sfwan      runpod-sfwan.toml          in the image
 #   longlive   sfwan      runpod-longlive.toml       inline (LongLive-1.3B; NON-COMMERCIAL weights)
 
 FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan cpu"
 # <preset>:<variant>:<config> for every non-standard preset (the table above).
-FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml"
+FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml h3-lightx2v-turbo-v01:h3-max:runpod-h3-lightx2v-turbo-v01.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml"
 FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
 
 # fv_preset <preset> -> "<variant> <config>" (a pool preset), or status 1

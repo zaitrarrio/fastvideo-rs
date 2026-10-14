@@ -99,6 +99,7 @@ export const RECIPES: Record<string, { tasks: string[]; tier: Tier | null }> = {
   "h3-trim": { tasks: ["t2v"], tier: null },
   "h3-larry-turbo": { tasks: H3, tier: null },
   "h3-lightx2v-turbo": { tasks: H3, tier: null },
+  "lightx2v-turbo-v0.1": { tasks: H3, tier: null },
   "fasth3-trim-8step": { tasks: ["t2v"], tier: null },
   "h3-draft": { tasks: H3, tier: "draft" },
   "fasth3-4step-vsa-480p-taeh3": { tasks: H3, tier: "draft" },

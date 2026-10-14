@@ -42,8 +42,8 @@ pub enum TurboLora {
     /// 4-step 768p file; trained at video shift 6 / audio shift 3).
     Lightx2v,
     /// `lightx2v/Minimax-h3-Turbo` FL2VA/T2VA 4-step v0.1 (the file the
-    /// Space folds; trained at 544p, shifts 12 / 3). Not in the R2 store
-    /// (owner approval needed); pass its path with the adapter override.
+    /// Space folds; trained at 544p, shifts 12 / 3). R2 tree
+    /// `h3-turbo-loras/lightx2v-v0.1` (owner approval 2026-10-14).
     Lightx2vV01,
 }
 
@@ -103,7 +103,8 @@ impl TurboLora {
     pub fn subdir(self) -> &'static str {
         match self {
             Self::Larry => "larry",
-            Self::Lightx2v | Self::Lightx2vV01 => "lightx2v",
+            Self::Lightx2v => "lightx2v",
+            Self::Lightx2vV01 => "lightx2v-v0.1",
         }
     }
 
@@ -612,7 +613,7 @@ mod tests {
         let manifest = std::fs::read_to_string(root.join("weights-manifest.tsv")).unwrap();
         let revisions = std::fs::read_to_string(root.join("weights-revisions.tsv")).unwrap();
         let sha = std::fs::read_to_string(root.join("weights-sha256.tsv")).unwrap();
-        for t in [TurboLora::Larry, TurboLora::Lightx2v] {
+        for t in TurboLora::ALL {
             let dest = format!("{TURBO_LORA_TREE}/{}", t.subdir());
             assert!(manifest.contains(&format!("{dest}\t{}\t", t.hub_repo())), "{dest}");
             assert!(manifest.contains(t.file()), "{dest}");

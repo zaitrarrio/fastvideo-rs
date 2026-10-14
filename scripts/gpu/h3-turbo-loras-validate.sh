@@ -61,7 +61,7 @@ case "$cmd" in
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     mkdir -p "$tmp/b/upstream"
-    python3 "$HERE/r2-weights.py" plan h3-base FastH3-4-step-Preview-v1-LoRA h3-turbo-loras/larry h3-turbo-loras/lightx2v auxiliary/lpips \
+    python3 "$HERE/r2-weights.py" plan h3-base FastH3-4-step-Preview-v1-LoRA h3-turbo-loras/larry h3-turbo-loras/lightx2v h3-turbo-loras/lightx2v-v0.1 auxiliary/lpips \
       --ttl 10800 --out "$tmp/plan-all.json"
     # h3-base without what neither side reads (no Ref2VA, no processor).
     python3 - "$tmp/plan-all.json" "$tmp/b/plan.json" <<'PYEOF'
@@ -96,13 +96,14 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3turbolora-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --argjson dcs "$dcs_json" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" \
-      --arg seed "${FV_SEED:-}" --arg skip "${FV_SKIP:-}" --arg pp "${FV_PARITY_PROMPT:-}" '{
+      --arg seed "${FV_SEED:-}" --arg skip "${FV_SKIP:-}" --arg par "${FV_PARITY:-}" --arg cells "${FV_PERF_CELLS:-}" --arg pp "${FV_PARITY_PROMPT:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
         containerDiskInGb: 260, allowedCudaVersions: ["13.0"],
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_MODE: "r2"}
               + (if $seed != "" then {FV_SEED: $seed} else {} end) + (if $skip != "" then {FV_SKIP: $skip} else {} end)
-              + (if $pp != "" then {FV_PARITY_PROMPT: $pp} else {} end))
+              + (if $pp != "" then {FV_PARITY_PROMPT: $pp} else {} end) + (if $par != "" then {FV_PARITY: $par} else {} end)
+              + (if $cells != "" then {FV_PERF_CELLS: $cells} else {} end))
       }')"
     unset FVX_URL
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
@@ -121,12 +122,15 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
   fetch)
     id="${2:?pod id}"; out="${3:?dir}"; u="https://$id-8000.proxy.runpod.net"
     mkdir -p "$out"
-    files=(log.txt status.tsv nvidia-smi.txt nvsmi.csv fetch.log ref-setup.log ref.log ref/meta.json
-           ours-pre.log ours-lightx.log ours-inj.log ours-inj-served.log merged-larry.txt merged-larry.json merged-lightx.txt
-           merged-lightx.json compare-dumps-inj.txt compare-dumps-inj-served.txt av-psnr-inj.json av-psnr-inj-served.json
-           av-psnr-inj.log av-psnr-inj-served.log ref/clip/output.mp4 ours/inj/output.mp4 ours/inj-served/output.mp4)
-    for c in larry6 larry4 lightx4 turbo max base; do
-      files+=("perf-$c.log" "perf/$c/benchmark.json" "perf/$c/report.json")
+    files=(log.txt status.tsv nvidia-smi.txt nvsmi.csv fetch.log ref-setup.log)
+    # The top level's own files (the reports of every parity tag), from the directory listing.
+    for f in $(curl -sS --max-time 30 --fail "$u/" 2>/dev/null | grep -o 'href="[^"/]*"' | cut -d'"' -f2 | grep -E '\.(log|txt|json|tsv)$'); do files+=("$f"); done
+    for t in larry lightx-v01; do
+      files+=("ref/$t/clip/output.mp4" "ref/$t/meta.json" "ours/inj-$t/output.mp4" "ours/inj-served-$t/output.mp4")
+    done
+    files+=(ref/meta.json ref/clip/output.mp4 ours/inj/output.mp4 ours/inj-served/output.mp4)
+    for c in larry6 larry4 lightx4 lightxv01 turbo max base; do
+      files+=("perf/$c/benchmark.json")
       for p in h3-demo-480p spark-mountain-lake-480p h3-demo-768p spark-mountain-lake-768p; do files+=("perf/$c/frames/$p/output.mp4"); done
     done
     for f in "${files[@]}"; do

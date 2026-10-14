@@ -74,22 +74,25 @@ ref_setup() {
 step fetch fetch & fpid=$!
 step ref-setup ref_setup & rpid=$!
 wait "$fpid"
-for f in h3-turbo-loras/larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras/lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors h3-base/transformer/config.json; do
+for f in h3-turbo-loras/larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras/lightx2v-v0.1/minimax_h3_fl2v_turbo_4step_v0.1.safetensors h3-turbo-loras/lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors h3-base/transformer/config.json; do
   [[ -f "$R/$f" ]] || { log "missing $R/$f"; echo 1 >$SRV/DONE; exit 1; }
 done
 LARRY=$R/h3-turbo-loras/larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors
 LIGHTX=$R/h3-turbo-loras/lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors
+LIGHTX01=$R/h3-turbo-loras/lightx2v-v0.1/minimax_h3_fl2v_turbo_4step_v0.1.safetensors
 export RUST_LOG=info FASTVIDEO_TAE_DIR=$R/auxiliary/tae
 TC=$L/text-cache
 GEN=("$BIN" --mode fast)
 H3=(h3 gen --weights "$R/h3-base" --text-weights "$R/h3-base" --text-encoder streamed --text-cache "$TC")
 
 # ---- 2. parity against the Space's stack --------------------------------------------------------------------------
-PARAMS="transformer_blocks.0.attn.to_q,transformer_blocks.0.attn.to_k,transformer_blocks.0.attn.to_v,transformer_blocks.0.attn.to_out.0"
-PARAMS+=",transformer_blocks.0.ff.net.0.proj,transformer_blocks.0.ff.net.2,transformer_blocks.25.attn.to_q,transformer_blocks.25.attn.to_v"
-PARAMS+=",transformer_blocks.25.adaln_proj.linear,transformer_blocks.49.attn.to_k,transformer_blocks.49.attn.to_out.0"
-PARAMS+=",transformer_blocks.49.ff.net.0.proj,transformer_blocks.49.ff.net.2,token_refiner.refiner_blocks.0.attn.to_q"
-PARAMS+=",token_refiner.refiner_blocks.1.ff.net.0.proj,token_refiner.refiner_blocks.1.attn.to_out.0,norm_out.linear"
+# FV_PARITY: which LoRAs (default "lightx-v01 larry"): each runs ours once (text + merged weights dumped), the Space's
+# stack on our text with that set folded alone (lightx: H3_LORA=off), ours again on its noise and text (bf16, then the
+# served MXFP8), merged_parity.py, compare-dumps, av_psnr.py. The Space's `steps = 6` = our 5 forwards.
+PQKV="transformer_blocks.0.attn.to_out.0,transformer_blocks.0.ff.net.0.proj,transformer_blocks.0.ff.net.2"
+PQKV+=",transformer_blocks.49.attn.to_out.0,transformer_blocks.49.ff.net.0.proj,transformer_blocks.49.ff.net.2"
+PQKV+=",token_refiner.refiner_blocks.1.ff.net.0.proj,token_refiner.refiner_blocks.1.attn.to_out.0"
+PARAMS_LARRY="$PQKV,transformer_blocks.25.adaln_proj.linear,norm_out.linear"
 PAR=(--prompt "$P" --seed "$SEED" --height 480 --width 832 --num-frames 124)
 ours() { # <name> <recipe> <profile> <quant> [env...]: one parity run of ours into $SRV/ours/<name>
   local name="$1" recipe="$2" prof="$3" q="$4"; shift 4
@@ -97,8 +100,6 @@ ours() { # <name> <recipe> <profile> <quant> [env...]: one parity run of ours in
     "${H3[@]}" "${PAR[@]}" --h3-recipe "$recipe" --clip-dir $SRV/ours/$name >$SRV/ours-$name.log 2>&1
 }
 mkdir -p $SRV/ours $SRV/ref
-step ours-pre ours pre larry-turbo-5step h3/larry_turbo_dense off FASTVIDEO_DUMP_DIR=$SRV/ours/pre-dump FV_H3_DUMP_MERGED="$PARAMS"
-step ours-lightx-merged ours lightx lightx2v-turbo h3/lightx2v_turbo_dense off FASTVIDEO_DUMP_DIR=$SRV/ours/lightx-dump FV_H3_DUMP_MERGED="$PARAMS"
 wait "$rpid"
 O=$L/h3-diffusers
 mkdir -p $O/scheduler $O/audio_scheduler
@@ -108,23 +109,31 @@ for f in modular_model_index.json scheduler/scheduler_config.json audio_schedule
 done
 # Every component of the index points at the Hub repo: make it this local overlay.
 sed -i "s#\"MiniMaxAI/MiniMax-H3\"#\"$O\"#g" $O/modular_model_index.json
-reference() {
-  PYTHONUNBUFFERED=1 /opt/refpy/bin/python /opt/fv/upstream/h3_turbo_lora_ref.py --base $O --space /opt/space \
-    --larry "$LARRY" --lightx "$LIGHTX" --text-hidden $SRV/ours/pre-dump/text_hidden --out $SRV/ref --clip $SRV/ref/clip \
-    --height 480 --width 832 --num-frames 124 --steps 6 --seed "$SEED" --params "$PARAMS" >$SRV/ref.log 2>&1
-}
-step reference reference
 AVPY=/opt/refpy/bin/python
-step merged-larry $AVPY /opt/fv/upstream/merged_parity.py $SRV/ref/larry $SRV/ours/pre-dump --json $SRV/merged-larry.json >$SRV/merged-larry.txt 2>&1
-step merged-lightx $AVPY /opt/fv/upstream/merged_parity.py $SRV/ref/lightx $SRV/ours/lightx-dump --base $SRV/ref/larry --json $SRV/merged-lightx.json >$SRV/merged-lightx.txt 2>&1
-for arm in inj:off inj-served:mxfp8; do
-  name="${arm%%:*}"
-  step "ours-$name" ours "$name" larry-turbo-5step h3/larry_turbo_dense "${arm#*:}" FASTVIDEO_INJECT_DIR=$SRV/ref/larry FASTVIDEO_DUMP_DIR=$SRV/ours/$name-dump
-  step "compare-dumps-$name" "$BIN" compare-dumps --baseline $SRV/ref/larry --candidate $SRV/ours/$name-dump >$SRV/compare-dumps-$name.txt 2>&1
-  step "av-psnr-$name" $AVPY /opt/fv/upstream/av_psnr.py $SRV/ref/clip $SRV/ours/$name --json $SRV/av-psnr-$name.json >$SRV/av-psnr-$name.log 2>&1
+parity() { # <tag> <active larry|lightx> <recipe, 5 forwards> <profile> <lightx file> <params>
+  local tag="$1" active="$2" recipe="$3" prof="$4" lx="$5" params="$6"
+  step "ours-pre-$tag" ours "pre-$tag" "$recipe" "$prof" off FASTVIDEO_DUMP_DIR=$SRV/ours/pre-$tag-dump FV_H3_DUMP_MERGED="$params"
+  step "reference-$tag" env PYTHONUNBUFFERED=1 /opt/refpy/bin/python /opt/fv/upstream/h3_turbo_lora_ref.py --base $O --space /opt/space \
+    --larry "$LARRY" --lightx "$lx" --active "$active" --text-hidden $SRV/ours/pre-$tag-dump/text_hidden --out $SRV/ref/$tag \
+    --clip $SRV/ref/$tag/clip --height 480 --width 832 --num-frames 124 --steps 6 --seed "$SEED" --params "$params" >$SRV/ref-$tag.log 2>&1
+  local rd=$SRV/ref/$tag/$active
+  step "merged-$tag" $AVPY /opt/fv/upstream/merged_parity.py $rd $SRV/ours/pre-$tag-dump --json $SRV/merged-$tag.json >$SRV/merged-$tag.txt 2>&1
+  local arm name
+  for arm in inj:off inj-served:mxfp8; do
+    name="${arm%%:*}-$tag"
+    step "ours-$name" ours "$name" "$recipe" "$prof" "${arm#*:}" FASTVIDEO_INJECT_DIR=$rd FASTVIDEO_DUMP_DIR=$SRV/ours/$name-dump
+    step "compare-dumps-$name" "$BIN" compare-dumps --baseline $rd --candidate $SRV/ours/$name-dump >$SRV/compare-dumps-$name.txt 2>&1
+    step "av-psnr-$name" $AVPY /opt/fv/upstream/av_psnr.py $SRV/ref/$tag/clip $SRV/ours/$name --json $SRV/av-psnr-$name.json >$SRV/av-psnr-$name.log 2>&1
+  done
+}
+for t in ${FV_PARITY:-lightx-v01 larry}; do
+  case "$t" in
+    lightx-v01) parity lightx-v01 lightx lightx2v-turbo-v0.1-5step h3/lightx2v_turbo_dense "$LIGHTX01" "$PQKV" ;;
+    larry) parity larry larry larry-turbo-5step h3/larry_turbo_dense "$LIGHTX" "$PARAMS_LARRY" ;;
+  esac
 done
 
-# ---- 3. speed and quality -----------------------------------------------------------------------------------------
+# ---- 3. speed and quality (5 s: 124 frames) -----------------------------------------------------------------------
 "$PY" - /opt/fv/prompts-eval.json $L/prompts.json $L/prompts-base.json <<'PYEOF'
 import json, sys
 e = {p["name"]: p for p in json.load(open(sys.argv[1]))["prompts"]}
@@ -134,22 +143,28 @@ for size, (h, w) in (("480", (480, 832)), ("768", (768, 1344))):
     for k in keep:
         rows.append({"name": f"{k}-{size}p", "prompt": e[k]["prompt"], "seed": e[k]["seed"], "height": h, "width": w})
 json.dump({"prompts": rows}, open(sys.argv[2], "w"), indent=1)
-json.dump({"prompts": [r for r in rows if r["name"] == "h3-demo-480p"]}, open(sys.argv[3], "w"), indent=1)
+json.dump({"prompts": [r for r in rows if r["name"].endswith("-480p")]}, open(sys.argv[3], "w"), indent=1)
 PYEOF
-perf() { # <cell> <recipe> <profile> [gen flags...]: one warm process over the prompt set
+perf() { # <cell> <recipe> <profile> [gen flags...]: one warm process over the prompt set (124 frames each)
   local cell="$1" recipe="$2" prof="$3"; shift 3
   "${GEN[@]}" ${prof:+--techniques "$prof"} --out $SRV/perf/$cell --tag "$cell" "${H3[@]}" --prompt unused --prompts $L/prompts.json \
-    --height 480 --width 832 --h3-recipe "$recipe" --clip-dir $SRV/perf/$cell/frames "$@" >$SRV/perf-$cell.log 2>&1
+    --height 480 --width 832 --num-frames 124 --h3-recipe "$recipe" --clip-dir $SRV/perf/$cell/frames "$@" >$SRV/perf-$cell.log 2>&1
 }
 mkdir -p $SRV/perf
-step perf-larry6 perf larry6 larry-turbo h3/larry_turbo_dense --warm
-step perf-larry4 perf larry4 larry-turbo-4step h3/larry_turbo_dense --warm
-step perf-lightx4 perf lightx4 lightx2v-turbo h3/lightx2v_turbo_dense --warm
-step perf-turbo perf turbo 4step-vsa h3/fasth3_4step_vsa --warm
-step perf-max perf max sol-h3 h3/sol_h3_4step_engine_ladder --warm
+CELLS="${FV_PERF_CELLS:-larry6 larry4 lightx4 lightxv01 turbo max}"
+for c in $CELLS; do
+  case "$c" in
+    larry6) step perf-larry6 perf larry6 larry-turbo h3/larry_turbo_dense --warm ;;
+    larry4) step perf-larry4 perf larry4 larry-turbo-4step h3/larry_turbo_dense --warm ;;
+    lightx4) step perf-lightx4 perf lightx4 lightx2v-turbo h3/lightx2v_turbo_dense --warm ;;
+    lightxv01) step perf-lightxv01 perf lightxv01 lightx2v-turbo-v0.1 h3/lightx2v_turbo_dense --warm ;;
+    turbo) step perf-turbo perf turbo 4step-vsa h3/fasth3_4step_vsa --warm ;;
+    max) step perf-max perf max sol-h3 h3/sol_h3_4step_engine_ladder --warm ;;
+  esac
+done
 base() {
   "${GEN[@]}" --out $SRV/perf/base --tag base "${H3[@]}" --prompt unused --prompts $L/prompts-base.json \
-    --h3-recipe base --dense --clip-dir $SRV/perf/base/frames >$SRV/perf-base.log 2>&1
+    --num-frames 124 --h3-recipe base --dense --clip-dir $SRV/perf/base/frames >$SRV/perf-base.log 2>&1
 }
 step perf-base base
 cmp() { # <baseline cell> <candidate cell> <prompt>
@@ -157,11 +172,14 @@ cmp() { # <baseline cell> <candidate cell> <prompt>
   "$BIN" --out $SRV/compare --tag "$1--$2-$3" compare-clips --baseline $SRV/perf/$1/frames/$3 --candidate $SRV/perf/$2/frames/$3 \
     --lpips $R/auxiliary/lpips >$SRV/compare/$1--$2-$3.out 2>&1
 }
-for c in larry6 larry4 lightx4 turbo max; do
-  step "cmp-base-$c" cmp base "$c" h3-demo-480p
+for c in $CELLS; do
+  for p in h3-demo-480p spark-mountain-lake-480p; do step "cmp-base-$c-$p" cmp base "$c" "$p"; done
   for p in h3-demo-768p spark-mountain-lake-768p; do [[ "$c" == max ]] || step "cmp-max-$c-$p" cmp max "$c" "$p"; done
 done
-step cmp-larry6-larry4 cmp larry6 larry4 spark-mountain-lake-480p
+for p in spark-mountain-lake-480p h3-demo-768p; do
+  step "cmp-larry6-larry4-$p" cmp larry6 larry4 "$p"
+  step "cmp-lightx4-lightxv01-$p" cmp lightx4 lightxv01 "$p"
+done
 
 bad="$(awk -F'\t' '$2 != 0' $SRV/status.tsv | wc -l)"
 log "end: $bad step(s) failed"

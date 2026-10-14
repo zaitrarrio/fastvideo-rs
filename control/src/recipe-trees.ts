@@ -63,6 +63,12 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "Turbo LoRA lightx2v v1.2 768p: the adapter in h3-turbo-loras/lightx2v beside h3-base (turbo_lora.rs TurboLora::resolve); no DiT tree (merged at load)",
   },
+  "lightx2v-turbo-v0.1": {
+    catalog: "h3-lightx2v-turbo",
+    required: ["h3-turbo-loras/lightx2v-v0.1"],
+    prequant: [H3_TEXT_FP8],
+    note: "Turbo LoRA lightx2v v0.1 (the Space's file): the catalog's lightx2v model with recipe lightx2v-turbo-v0.1 (caps.rs model_from_config); the adapter in h3-turbo-loras/lightx2v-v0.1 beside h3-base (turbo_lora.rs TurboLora::resolve)",
+  },
   "h3-trim": {
     catalog: "fasth3-trim-8step",
     required: ["h3-base"],
