@@ -4,10 +4,10 @@
 linears are now the **default** for the 36-block video decoder on sm_100+
 GPUs (`FASTVIDEO_H3_VAE_MXFP8` unset); `=0` restores the bf16 decode byte
 for byte. See [§5](#5-default-flip-2026-10-14) for what changed, the memory
-plan and the sanity run. The 26-block decoder of h3-trim stays bf16 for now:
-MXFP8 is −22 % there, but its quality gate covers only 4 of 30 clips
-([§6](#6-the-26-block-decoder-h3-trim-2026-10-14)). The text below is the measurement as written
-before the flip.
+plan and the sanity run. Since the same day the default also covers h3-trim's
+26-block decoder, which passed the same quality gate (−22 % video VAE,
+[§6](#6-the-26-block-decoder-h3-trim-2026-10-14)). The text below is the
+measurement as written before the flip.
 
 **Verdict.** The ≥ 20 % target is reached only with a numerics change:
 `FASTVIDEO_H3_VAE_MXFP8=1` (MXFP8 block linears, then **default off**, the owner
@@ -233,7 +233,8 @@ volume and R2 were only read.
 | setting | sm_100+ (B200, RTX PRO 6000, RTX 5090, GB10) | pre-Blackwell (H100, A100, L40S, ...) | CPU run |
 |---|---|---|---|
 | unset, 36-block decoder | **MXFP8** | bf16, said once in the log | bf16 |
-| unset, 26-block lightweight decoder (h3-trim) | bf16, said once (its quality gate is not complete yet, [§6](#6-the-26-block-decoder-h3-trim-2026-10-14)) | bf16, said once | bf16 |
+| unset, 26-block lightweight decoder (h3-trim) | **MXFP8** (since its gate passed, [§6](#6-the-26-block-decoder-h3-trim-2026-10-14)) | bf16, said once | bf16 |
+| unset, a decoder of any other depth | bf16, said once (not measured) | bf16, said once | bf16 |
 | `=0` | bf16, byte-identical to the old default | bf16 | bf16 |
 | `=1` | MXFP8 on either decoder | **error at load** (cuBLASLt has no MXFP8 kernels below sm_100) | bf16 (no device) |
 | anything else | error | error | error |
@@ -288,98 +289,133 @@ seed 0, `--warm`, the pinned kernels of §Setup; one process per arm; raw:
 
 ## 6. The 26-block decoder (h3-trim, 2026-10-14)
 
-**Decision: the 26-block decoder stays bf16 when `FASTVIDEO_H3_VAE_MXFP8`
-is unset.** The speed and memory numbers below are complete. The quality
-gate is not: it covers 4 of the 30 planned clips (480p only). The measured
-clips match the 36-block decoder (LPIPS 0.0006 against bf16). The pod's
-compare stage hung after four clips (a driver bug, fixed since) and the run
-was stopped at the GPU budget's hard limit before the remaining 26 compares.
-This is not enough to flip the default. `FASTVIDEO_H3_VAE_MXFP8=1` still
-opts in.
+**Verdict: MXFP8 passes the quality gate on the 26-block decoder, and is
+now the default there.** `MXFP8_DEFAULT_LAYERS` in `h3/vae.rs` is
+`[36, 26]`. On sm_100+, an unset `FASTVIDEO_H3_VAE_MXFP8` now loads MXFP8
+copies for h3-trim too. `=0` restores the bf16 decode byte for byte.
+Results against the bf16 decode of the same latents, 15 clips per
+resolution:
 
-**Setup.** One RTX PRO 6000 Blackwell Workstation Edition pod
-(`53q5tp7o0ojzj7`, EU-RO-1, 2 MiB used at boot, $2.59/hr), runtime image
-`fastvideo-rs-runtime:sha-94d6073` with this branch's `fv-gpucheck` from the
-bundle, the Trim tree from R2, h3-base and LPIPS from the EU volume
-`bz0ofkfx45` (read only). Workload: h3-trim as served (`--h3-recipe
-trim-8step`, the MXFP8 DiT, resident, FP8 text encoder resident), 5 s
-(124 frames), the #106 gate set (`prompts-5x3.json`: 5 prompts x 3 seeds),
-`--warm`, `--no-mp4`, the pinned kernels of §Setup. Driver, raw logs and
-tables: `artifacts/perf/h3-trim-vae-mxfp8/` (`driver/pod.sh`,
-`driver/launch.sh`, `driver/summarize.py`, `results.tgz`, `summary.md`,
-`ledger.tsv`).
+| | LPIPS mean (median / worst clip) | PSNR | gate quality checks |
+|---|---|---|---|
+| 480p | 0.0008 / 0.0012 | 49.8 dB | 105 / 105 |
+| 768p | 0.0011 / 0.0017 | 50.4 dB | 105 / 105 |
 
-**Same latents, one DiT pass.** Running the trim's DiT twice per arm (as
-the #106 gate did) would have cost about 33 GPU-minutes, more than the
-budget. Instead, `FASTVIDEO_H3_VAE_AB=1` (measurement only, off by default)
-re-decodes each clip's latents in the same process. It runs after the
-MXFP8 decode and uses the bf16 block linears (`vae::with_bf16_linears`:
-the bf16 weights kept beside the MXFP8 copies, the `=0` kernels). The bf16
-frames go to `<clip>/vae-bf16/`. To check this method, separate
-`FASTVIDEO_H3_VAE_MXFP8=0` processes rendered h3-demo seed 0 at both
-resolutions. Their frames are **byte-identical** to the in-process bf16
-re-decodes (480p `f4059fc94511a7a4`, 768p `8b5916e5425fa05a`, sha256 of all
-124 PNGs). The VAE check on the first decode (rel-L2 vs the unfused ViT):
-fused bf16 1.9e-3 (480p) / 1.6e-3 (768p); MXFP8 1.1e-2 (480p) / 7.1e-3
-(768p), "mxfp8 kept". The 36-block decoder's MXFP8 values are 9.1e-3 and
-5.3e-3.
+These match the 36-block decoder. The video VAE gets 22 % faster, and the
+decoder needs 1.76 GiB more while resident.
 
-**Video VAE time** (`DecodeSplit::vae_s`, the 15 timed clips per
-resolution, both decodes in one warm process):
+**Setup.** Two runs on RTX PRO 6000 Blackwell Workstation Edition pods in
+EU-RO-1 at $2.59/hr, each with 2 MiB used at boot. Run 1 was
+`53q5tp7o0ojzj7`: timing, memory, the identity check, and 4 compares (its
+compare stage then hung, see Cost). Run 2 was `t7m4zmkgitftfs`: the full
+gate.
+- Image: runtime `fastvideo-rs-runtime:sha-94d6073`, with this branch's
+  `fv-gpucheck` from the bundle.
+- Weights: the Trim tree from R2; h3-base and LPIPS from the EU volume
+  `bz0ofkfx45`, read only.
+- Workload: h3-trim as served: `--h3-recipe trim-8step`, the MXFP8 DiT
+  resident, the FP8 text encoder resident.
+- Clips: 5 s (124 frames), the #106 gate set (`prompts-5x3.json`: 5
+  prompts x 3 seeds), `--warm`, `--no-mp4`, the pinned kernels of §Setup.
+- Files in `artifacts/perf/h3-trim-vae-mxfp8/`:
+  - `driver/`: `pod.sh`, `launch.sh`, `summarize.py`;
+  - `results.tgz` (run 2, the full gate) and `results-run1.tgz`;
+  - `summary.md` (the tables of run 2) and `ledger.tsv`.
 
-| resolution | bf16 median | MXFP8 median | change | bf16 range | MXFP8 range |
-|---|---|---|---|---|---|
-| 480p (832x480) | 2.104 s | **1.627 s** | **−22.7 %** | 2.047-2.114 | 1.580-1.637 |
-| 768p (1344x768) | 4.961 s | **3.867 s** | **−22.1 %** | 4.934-4.978 | 3.841-3.881 |
+**Same latents, one DiT pass.** Running the trim's DiT twice per arm, as
+the #106 gate did, would cost about 33 GPU-minutes. Instead,
+`FASTVIDEO_H3_VAE_AB=1` (measurement only, off by default) decodes each
+clip's latents a second time in the same process, right after the MXFP8
+decode. It uses the bf16 block linears, through `vae::with_bf16_linears`:
+the bf16 weights kept beside the MXFP8 copies, with the `=0` kernels. The
+bf16 frames go to `<clip>/vae-bf16/`.
+- Check against `=0`: in run 1, separate `FASTVIDEO_H3_VAE_MXFP8=0`
+  processes rendered h3-demo seed 0 at both resolutions. Their frames are
+  **byte-identical** to the in-process bf16 re-decodes. The sha256 of all
+  124 PNGs is `f4059fc94511a7a4` at 480p and `8b5916e5425fa05a` at 768p.
+  Run 2 reproduced both hashes on another pod.
+- The VAE check on the first decode (rel-L2 vs the unfused ViT):
 
-This is a smaller gain than the 36-block decoder's −25.6 / −25.8 %: the
-block linears are a smaller share of the 26-block decode. For the trim's
-end-to-end time (768p ≈ 49 s, 480p ≈ 19 s) it is −1.1 s and −0.5 s.
+| path | 480p | 768p | 36-block decoder |
+|---|---|---|---|
+| fused bf16 | 1.9e-3 | 1.6e-3 | — |
+| MXFP8 ("mxfp8 kept") | 1.1e-2 | 7.1e-3 | 9.1e-3 (480p) / 5.3e-3 (768p) |
 
-**Peak memory** (`benchmark.json` stage peaks, allocated; h3-demo seed 0;
-nvidia-smi whole-process peak):
+**Video VAE time** (`DecodeSplit::vae_s`, medians of the 15 timed clips
+per resolution, both decodes in one warm process):
+
+| resolution | run | bf16 | MXFP8 | change |
+|---|---|---|---|---|
+| 480p (832x480) | 1 | 2.104 s | **1.627 s** | **−22.7 %** |
+| 480p | 2 | 2.135 s | **1.652 s** | **−22.6 %** |
+| 768p (1344x768) | 1 | 4.961 s | **3.867 s** | **−22.1 %** |
+| 768p | 2 | 5.053 s | **3.944 s** | **−21.9 %** |
+
+This is a smaller gain than the 36-block decoder's −25.6 / −25.8 %:
+the block linears are a smaller share of the 26-block decode. On the
+trim's end-to-end time it saves 1.1 s at 768p (≈ 49 s) and 0.5 s at 480p
+(≈ 19 s).
+
+**Peak memory** (run 1, h3-demo seed 0). The first two columns are
+`benchmark.json` stage peaks (allocated); the last is the whole-process
+peak from nvidia-smi.
 
 | resolution | arm | denoise (run peak) | video_decode stage | nvidia-smi |
 |---|---|---|---|---|
 | 480p | bf16 (`=0`) | 53.84 GiB | 51.91 GiB | 56 870 MiB |
-| 480p | MXFP8 (`=1`) | 55.60 GiB | 51.74 GiB | 58 504 MiB |
+| 480p | MXFP8 | 55.60 GiB | 51.74 GiB | 58 504 MiB |
 | 768p | bf16 (`=0`) | 60.48 GiB | 52.38 GiB | 63 816 MiB |
-| 768p | MXFP8 (`=1`) | 62.24 GiB | 52.33 GiB | 66 568 MiB |
+| 768p | MXFP8 | 62.24 GiB | 52.33 GiB | 66 568 MiB |
 
-The MXFP8 copies add 1.76-1.79 GiB to every stage while the decoder is
-resident (26 blocks x 16 d² x 33/32 bytes = 1.68 GiB, plus allocator
-rounding). The decode stage itself does not grow. The memory plan already
-covers this: `h3::memory::plan` prices the 36-block decoder for every H3
-recipe, the trim included. With MXFP8 that is 2.32 GiB of copies, above
-the trim's 1.68 GiB. The trim's working set (≤ 62.3 GiB at 768p on a 96 GB
-card) stays far below any budget.
+- The MXFP8 copies add 1.76-1.79 GiB to every stage while the decoder is
+  resident. Expected: 26 blocks x 16 d² x 33/32 bytes = 1.68 GiB, plus
+  allocator rounding. The decode stage itself does not grow.
+- **Memory plan: no change needed.** `h3::memory::plan` prices the 36-block
+  decoder for every H3 recipe, the trim included. With MXFP8 on (the
+  pipeline now resolves it on for the trim) that is 2.32 GiB of copies,
+  more than the trim's 1.68 GiB. The new test
+  `the_trim_decoders_mxfp8_copies_fit_the_planned_decoder` checks this.
+- The trim's working set (≤ 62.3 GiB at 768p on a 96 GB card) stays far
+  below every budget.
 
-**Quality, MXFP8 against bf16 on the same latents** (`compare-clips`, LPIPS
-alex; the 4 clips compared, all 480p):
+**Quality gate** (run 2). `compare-clips` (LPIPS alex) compared the bf16
+decode (baseline) with the MXFP8 decode (candidate) for every timed clip.
+Then `fv-gpucheck gate` ran with `scripts/gpu/gate-policy.toml`, kind
+`lossy`. Per-clip rows are in `summary.md`.
 
-| clip | LPIPS mean | LPIPS max | PSNR mean | PSNR min | sharpness | jitter |
-|---|---|---|---|---|---|---|
-| h3-demo-s0 | 0.00061 | 0.00093 | 50.5 dB | 48.7 dB | 0.9998 | 0.9997 |
-| h3-demo-s1000 | 0.00056 | 0.00087 | 50.2 dB | 48.0 dB | 0.9989 | 0.9990 |
-| h3-demo-s2000 | 0.00056 | 0.00079 | 50.4 dB | 48.6 dB | 0.9993 | 0.9994 |
-| ltx-frogyoga-s1042 | 0.00084 | 0.00184 | 49.0 dB | 45.2 dB | 0.9997 | 1.003 |
+| | 480p (15 clips) | 768p (15 clips) |
+|---|---|---|
+| LPIPS mean: median / worst clip | 0.00082 / 0.00119 | 0.00106 / 0.00174 (spark-mountain-lake-s42) |
+| LPIPS worst frame | 0.0024 | 0.0038 |
+| PSNR mean: median / worst clip | 49.8 / 48.0 dB | 50.4 / 49.2 dB |
+| PSNR worst frame | 45.2 dB | 45.0 dB |
+| sharpness ratio | 0.9989-1.001 | 0.9994-1.001 |
+| temporal jitter ratio | 0.999-1.003 | 0.9992-1.004 |
+| gate `quantitative_quality` | **pass, 105 / 105** (60 hard checks + 45 telemetry rows, all ok) | **pass, 105 / 105** |
 
-All four compare reports pass. Their sharpness and jitter sit well inside
-the gate's hard limits (0.95-1.08, 0.85-1.20), and LPIPS and PSNR are at
-the 36-block decoder's level (0.0009-0.0018, 50 dB). The other 11 clips at
-480p and all 15 at 768p were decoded both ways and timed, but not
-compared. Their frames were on the pod only, and `gate` did not run.
+The gate's other verdicts fail **by design**, as in §3:
+- `performance` fails because both sides are the same cell (`denoise_s`
+  1.00x).
+- `artifact` fails because the cells ran `--no-mp4`, so the gate reads the
+  clips as `blocked`. Every compare report passed.
 
-**Finishing it.** Run `driver/launch.sh up <image> <fv-gpucheck>` again.
-The fixed `pod.sh` compares each resolution right after its cell, one clip
-at a time (~7 s each). That is about 30 GPU-minutes, roughly $1.3 at
-$2.59/hr. If the 30 clips and both gates pass, extend the default to the
-26-block decoder: `MXFP8_DEFAULT_LAYERS` in `h3/vae.rs`. The memory plan
-needs no change.
+**Cost.**
 
-**Cost.** One GPU pod, 2040 s at $2.59/hr = **$1.47** (aim $1, hard stop
-$1.5). It was deleted by hand and checked gone (`GET /pods/<id>`: not
-found). Its backstop was stopped, and the staged bundle was removed from
-`fv-weights-staging/tmp/`. Before it, EU-RO-1 had no RTX PRO 6000 stock
-for about 10 minutes (no pod existed then). Builds and tests ran on the
-shared build pod.
+| pod | what | GPU time | cost |
+|---|---|---|---|
+| `53q5tp7o0ojzj7` | run 1 | 2040 s | $1.47 |
+| `t7m4zmkgitftfs` | run 2 | 1639 s | $1.18 |
+| **total** | | | **$2.65** |
+
+- Run 1 was stopped at its budget's hard limit. Its compare stage had hung
+  after four clips: a bare `wait` also waited for the nvidia-smi sampler.
+  The fixed `pod.sh` now compares each resolution right after its cell,
+  one clip at a time.
+- Run 2 skipped the identity cells (`FV_VERIFY=0`).
+- Both pods were deleted by hand and checked gone (`GET /pods/<id>`: not
+  found), and their backstops were stopped by PID.
+- Every staged bundle was removed from `fv-weights-staging/tmp/`. That
+  includes the ones left by pod creates that Runpod refused for lack of
+  instances. EU-RO-1 had no RTX PRO 6000 stock for about 10 and 25
+  minutes before the two runs; no pod existed then.
+- Builds and tests ran on the shared build pod.

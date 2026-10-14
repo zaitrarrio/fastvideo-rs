@@ -10,7 +10,7 @@
 #   launch.sh down POD        delete the pod, check it is gone, drop the staged bundle
 #
 # Env: RUNPOD_API_KEY; FV_POD_CAP_S (backstop, default 2100 = $1.45 at $2.49/hr); FV_MIN_BALANCE (default 10);
-# FV_MAX_DPH (default 2.70).
+# FV_MAX_DPH (default 2.70); FV_VERIFY=0 (passed to pod.sh: skip the =0 identity cells).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 G="$(cd "$HERE/../../../../scripts/gpu" && pwd)"
@@ -84,10 +84,10 @@ sleep 300; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     export FVX_URL="$url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3trim-vaemx-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \
-      --arg dc "$FV_EU_DC" --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" '{
+      --arg dc "$FV_EU_DC" --arg start "$start" --arg sha "$sha" --arg verify "${FV_VERIFY:-}" --argjson gpus "$gpus_json" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: [$dc], ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
-        env: {FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha},
+        env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha} + (if $verify != "" then {FV_VERIFY: $verify} else {} end)),
         containerDiskInGb: 120, networkVolumeId: $vol, volumeMountPath: "/workspace"}')"
     unset FVX_URL
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }

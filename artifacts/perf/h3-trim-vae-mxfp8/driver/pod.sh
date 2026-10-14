@@ -111,6 +111,8 @@ step ab480 cell ab480 480 /opt/fv/prompts-5x3.json 1 "${AB[@]}"
 step compares-480 compares 480
 step ab768 cell ab768 768 /opt/fv/prompts-5x3.json 1 "${AB[@]}"
 step compares-768 compares 768
+# FV_VERIFY=0 skips the =0 cells and the identity check (run once: identical at both resolutions, 2026-10-14).
+if [[ "${FV_VERIFY:-1}" != 0 ]]; then
 CELL_TIMEOUT=600 step v768 cell v768 768 $RUNS/prompts-1.json 0 FASTVIDEO_H3_VAE_MXFP8=0
 CELL_TIMEOUT=600 step v480 cell v480 480 $RUNS/prompts-1.json 0 FASTVIDEO_H3_VAE_MXFP8=0
 
@@ -120,6 +122,7 @@ for r in 480 768; do
   b="$(cat $RUNS/v$r/frames/h3-demo-s0/frame-*.png 2>/dev/null | sha256sum | cut -c1-16)"
   log "identity $r: ab$r vae-bf16 $a, v$r (=0) $b: $([[ "$a" == "$b" ]] && echo IDENTICAL || echo DIFFERENT)"
 done
+fi
 
 for r in 480 768; do
   cmp=()
